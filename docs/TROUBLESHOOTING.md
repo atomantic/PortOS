@@ -435,9 +435,8 @@ For anywhere else, set `PORTOS_WORKSPACE_ROOTS`. Separate entries with `;` on Wi
 **Symptom**: Memory search returns no results, embeddings fail.
 
 **Solution**:
-1. Ensure LM Studio is running on port 1234
-2. Load an embedding model in LM Studio (e.g., `nomic-embed-text`)
-3. Check memory embeddings status: `GET /api/memory/embeddings/status`
+1. Pick a backend + 768-dim model on Models → Embeddings: one setting for catalog and memory (unsaved, memory uses the legacy CoS provider)
+2. Check `GET /api/memory/embeddings/status`
 
 ## PM2 Issues
 

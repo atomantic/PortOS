@@ -76,6 +76,12 @@ vi.mock('./memoryConfig.js', () => ({
   decrementAgentPendingApproval: vi.fn().mockResolvedValue(undefined)
 }));
 
+// The ACTIVE embedding model (from settings.embeddings) differs from the
+// DEFAULT above, so a writer that stamped the default would fail these (#18296).
+vi.mock('./memoryEmbeddings.js', () => ({
+  getActiveEmbeddingModel: vi.fn().mockResolvedValue('active-settings-model')
+}));
+
 import { existsSync } from 'fs';
 import { ensureDirs, readJSONFile, atomicWrite, rmGuarded } from '../lib/fileUtils.js';
 import * as memoryBM25 from './memoryBM25.js';
@@ -229,10 +235,11 @@ describe('memory service', () => {
       const result = await createMemory(data, embedding);
 
       expect(result.embedding).toEqual([0.1, 0.2, 0.3]);
-      expect(result.embeddingModel).toBe('test-embedding-model');
-      // Should save embeddings file
+      expect(result.embeddingModel).toBe('active-settings-model');
+      // Should save embeddings file, stamped with the model that made the vectors
       const embeddingsCall = atomicWrite.mock.calls.find(c => c[0].includes('embeddings.json'));
       expect(embeddingsCall).toBeDefined();
+      expect(JSON.parse(embeddingsCall[1]).model).toBe('active-settings-model');
     });
 
     it('should not save embeddings file when no embedding provided', async () => {
@@ -674,7 +681,7 @@ describe('memory service', () => {
       const result = await updateMemoryEmbedding('mem-1', embedding);
 
       expect(result.embedding).toEqual([0.5, 0.6, 0.7]);
-      expect(result.embeddingModel).toBe('test-embedding-model');
+      expect(result.embeddingModel).toBe('active-settings-model');
     });
 
     it('should return null for non-existent memory', async () => {

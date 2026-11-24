@@ -54,8 +54,12 @@ vi.mock('./memoryEmbeddings.js', async () => {
   return {
     generateQueryEmbedding: vi.fn(async () => embedding.slice()),
     estimateTokens: (text) => Math.ceil(String(text ?? '').length / 4),
+    // Differs from DEFAULT_MEMORY_CONFIG.embeddingModel: writes must stamp the
+    // model that produced the vector, not the default (#18296).
+    getActiveEmbeddingModel: vi.fn(async () => ACTIVE_EMBEDDING_MODEL),
   };
 });
+const ACTIVE_EMBEDDING_MODEL = 'nomic-embed-text';
 vi.mock('./instances.js', async (importOriginal) => mockNoPeers(await importOriginal()));
 vi.mock('./instanceIdentity.js', () =>
   mockTestIdentity({ getInstanceId: () => Promise.resolve(TEST_INSTANCE_ID) }));
@@ -155,7 +159,7 @@ describe.skipIf(!runDb)('memoryDB CRUD (#3447)', () => {
     expect(created.importance).toBeCloseTo(0.7, 6);
     expect(created.status).toBe('active');
     expect(created.accessCount).toBe(0);
-    expect(created.embeddingModel).toBe(DEFAULT_MEMORY_CONFIG.embeddingModel);
+    expect(created.embeddingModel).toBe(ACTIVE_EMBEDDING_MODEL);
     // Federation provenance is stamped at insert time.
     expect(created.originInstanceId).toBe(TEST_INSTANCE_ID);
 
@@ -205,7 +209,7 @@ describe.skipIf(!runDb)('memoryDB CRUD (#3447)', () => {
 
     const embedded = await memoryDB.updateMemoryEmbedding(mem.id, VEC_A);
     expect(embedded.embedding).toHaveLength(DIM);
-    expect(embedded.embeddingModel).toBe(DEFAULT_MEMORY_CONFIG.embeddingModel);
+    expect(embedded.embeddingModel).toBe(ACTIVE_EMBEDDING_MODEL);
     expect((await memoryDB.getMemoryIdsMissingEmbedding()).has(mem.id)).toBe(false);
 
     // A wrong-dimension re-embed clears the column rather than throwing — the

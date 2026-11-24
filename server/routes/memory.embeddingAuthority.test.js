@@ -34,6 +34,7 @@ import { isAuthEnabled } from '../services/auth.js';
 import { createMemory } from '../services/memoryBackend.js';
 import { reinitialize } from '../services/memoryEmbeddings.js';
 import { getConfig } from '../services/cos/cosState.js';
+import { getSettings } from '../services/settings.js';
 import { getProviderById } from '../services/provider/providers.js';
 import { loadMeta } from '../services/brainStorage.js';
 import { runPromptThroughProvider } from '../services/promptRunner.js';
@@ -53,6 +54,8 @@ beforeEach(() => {
   reinitialize();
   inputs = [];
   address = '127.0.0.1';
+  // settings.embeddings unset → memory embeds through the legacy CoS pair below.
+  getSettings.mockResolvedValue({});
   getConfig.mockResolvedValue({ embeddingProviderId: 'embed', embeddingModel: 'example-embed' });
   loadMeta.mockResolvedValue({ defaultProvider: 'summary' });
   getProviderById.mockImplementation(async (id) => id === 'embed' ? embeddingProvider : summaryProvider);

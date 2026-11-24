@@ -19,7 +19,7 @@ it('downloads only on request and saves the recommendation only after explicit s
   expect(screen.getByRole('button', { name: /Downloading/ })).toBeDisabled();
   expect(installLocalLlmModel).toHaveBeenCalledWith('ollama', 'nomic-embed-text', { silent: true });
   finish({ success: true });
-  fireEvent.click(await screen.findByRole('button', { name: 'Use for memory embeddings' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Use for embeddings' }));
   await waitFor(() => expect(onSelect).toHaveBeenCalledWith('ollama', 'nomic-embed-text'));
 });
 

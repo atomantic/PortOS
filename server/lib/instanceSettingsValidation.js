@@ -82,11 +82,14 @@ export const networkSetupPreferenceSchema = z.enum(['tailscale', 'tailcat', 'non
 
 export const hideFirstRunCardSchema = z.boolean();
 
-// Provider-agnostic embeddings settings. `provider: 'none'` is the default and
-// makes embedText() a no-op — rows persist without an embedding and a future
-// admin "Re-embed missing" action backfills. Model is optional so the user can
-// pick provider first and choose a model from the live list in the UI.
+// Provider-agnostic embeddings settings: the one setting that drives BOTH
+// catalog and memory embedding (#18296). `provider: 'none'` disables both —
+// rows persist without an embedding and a re-embed action backfills. While the
+// key is absent the catalog is off and memory keeps the legacy CoS config.
+// Model is optional so the user can pick provider first and choose a model from
+// the live list in the UI; it is stamped into the VARCHAR(100)
+// `embedding_model` columns, hence max(100).
 export const settingsEmbeddingsSchema = z.object({
   provider: z.enum(['ollama', 'lmstudio', 'none']),
-  model: z.string().trim().max(200).optional().nullable(),
+  model: z.string().trim().max(100).optional().nullable(),
 }).strict();

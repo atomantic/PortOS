@@ -30,8 +30,8 @@ import {
   getDomainMode,
   normalizeBudgetLimit,
 } from '../constants';
-import ProviderModelSelector from '../../ProviderModelSelector';
-import useProviderModels from '../../../hooks/useProviderModels';
+import EmbeddingSourceNotice from '../../settings/EmbeddingSourceNotice';
+import { updateSettings } from '../../../services/apiSystem';
 import { coverageSummary, isRiggedAvatarStyle, riggedRecordForStyle } from '../../../hooks/useAvatarCapabilities';
 import { timeAgo } from '../../../utils/formatters';
 
@@ -269,22 +269,15 @@ function PersistentMindStatus({ mind, loaded, error }) {
 }
 
 export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, riggedAvatars = [] }) {
-  const {
-    providers,
-    availableModels,
-    setSelectedProviderId: setProviderHook,
-    setSelectedModel: setModelHook,
-    selectedProviderId: hookProviderId,
-    selectedModel: hookModel,
-  } = useProviderModels();
-  const [embeddingProviderId, setEmbeddingProviderId] = useState(config?.embeddingProviderId || 'lmstudio');
-  const [embeddingModel, setEmbeddingModel] = useState(config?.embeddingModel || '');
   const [formData, setFormData] = useState(() => getDefaultFormData(config, avatarStyle));
   const [domainAutonomyOverrides, setDomainAutonomyOverrides] = useState({});
   const [domainBudgetOverrides, setDomainBudgetOverrides] = useState({});
   const [saveStatus, setSaveStatus] = useState('idle');
   const [profileSaving, setProfileSaving] = useState(false);
   const [budgetUsage, setBudgetUsage] = useState({});
+  // Remounts the embeddings notice after the recommendation saves, so it
+  // re-reads the backend it just switched to.
+  const [embeddingSaves, setEmbeddingSaves] = useState(0);
   const configSaveQueueRef = useRef(Promise.resolve());
   const pendingSaveCountRef = useRef(0);
   const failedSaveKeysRef = useRef(new Set());
@@ -373,32 +366,6 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
       return Object.keys(remaining).length ? [[domainId, remaining]] : [];
     })));
   }, [config, avatarStyle]);
-
-  // Kept apart from the form resync above: this one also re-runs when the
-  // provider hook's setters change identity (they do once its providers load,
-  // and it re-applies the saved embedding pick over the hook's initial one).
-  // Every write here is a primitive, so a re-run with nothing new settles
-  // instead of rebuilding the form object and re-rendering without end.
-  useEffect(() => {
-    const savedProviderId = config?.embeddingProviderId;
-    if (savedProviderId !== undefined) {
-      const pendingProviderId = pendingConfigFieldsRef.current.get('embeddingProviderId');
-      if (!pendingConfigFieldsRef.current.has('embeddingProviderId') || pendingProviderId === savedProviderId) {
-        pendingConfigFieldsRef.current.delete('embeddingProviderId');
-        setEmbeddingProviderId(savedProviderId);
-        setProviderHook(savedProviderId);
-      }
-    }
-    const savedModel = config?.embeddingModel;
-    if (savedModel !== undefined) {
-      const pendingModel = pendingConfigFieldsRef.current.get('embeddingModel');
-      if (!pendingConfigFieldsRef.current.has('embeddingModel') || pendingModel === savedModel) {
-        pendingConfigFieldsRef.current.delete('embeddingModel');
-        setEmbeddingModel(savedModel);
-        setModelHook(savedModel);
-      }
-    }
-  }, [config, setProviderHook, setModelHook]);
 
   const displayConfig = useMemo(() => {
     const domainBudgets = { ...(config?.domainBudgets || {}) };
@@ -609,46 +576,20 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
 
       <section className="space-y-3" aria-labelledby="embeddings-heading">
         <div id="embeddings-heading">
-          <SectionHeading icon={Database} title="Memory embeddings" description="Provider and model used to index CoS memory for semantic retrieval." />
+          <SectionHeading icon={Database} title="Memory embeddings" description="The shared embedding provider and model that index CoS memory and the creative catalog for semantic retrieval." />
         </div>
         <div className="rounded-lg border border-port-border bg-port-card p-4">
-          <ProviderModelSelector
-            providers={providers}
-            selectedProviderId={providers?.some((provider) => provider.id === embeddingProviderId)
-              ? embeddingProviderId
-              : providers?.some((provider) => provider.id === hookProviderId) ? hookProviderId : ''}
-            selectedModel={embeddingModel || hookModel}
-            availableModels={availableModels}
-            onProviderChange={(id) => {
-              pendingConfigFieldsRef.current.set('embeddingProviderId', id);
-              pendingConfigFieldsRef.current.set('embeddingModel', '');
-              setEmbeddingProviderId(id);
-              setProviderHook(id);
-              setEmbeddingModel('');
-              return saveConfigPatch({ embeddingProviderId: id, embeddingModel: '' }, {
-                failureKeys: ['embeddingProviderId', 'embeddingModel'],
-              });
-            }}
-            onModelChange={(model) => {
-              pendingConfigFieldsRef.current.set('embeddingModel', model);
-              setEmbeddingModel(model);
-              setModelHook(model);
-              return saveConfigPatch({ embeddingModel: model }, { failureKeys: ['embeddingModel'] });
-            }}
-            label="Embedding provider"
-          />
+          <EmbeddingSourceNotice key={embeddingSaves} />
           <MemoryEmbeddingRecommendation
-            disabled={saveStatus === 'saving'}
-            onSelect={(id, model) => {
-              pendingConfigFieldsRef.current.set('embeddingProviderId', id);
-              pendingConfigFieldsRef.current.set('embeddingModel', model);
-              setEmbeddingProviderId(id);
-              setProviderHook(id);
-              setEmbeddingModel(model);
-              setModelHook(model);
-              return saveConfigPatch({ embeddingProviderId: id, embeddingModel: model }, {
-                failureKeys: ['embeddingProviderId', 'embeddingModel'],
-              });
+            onSelect={async (provider, model) => {
+              // Writes the shared settings.embeddings store (#18296); the server
+              // re-points memory and catalog embedding on this save.
+              await updateSettings({ embeddings: { provider, model } }, { silent: true })
+                .then(() => {
+                  setEmbeddingSaves((n) => n + 1);
+                  toast.success(`Embeddings now use ${model}`);
+                })
+                .catch((err) => toast.error(`Save failed: ${err?.message || 'unknown error'}`));
             }}
           />
         </div>

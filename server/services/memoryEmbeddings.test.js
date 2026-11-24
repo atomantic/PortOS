@@ -1,12 +1,22 @@
+import { EventEmitter } from 'events';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// Mocks for the config sources memoryEmbeddings reads in initConfig().
+// Mocks for the config sources memoryEmbeddings resolves its backend from:
+// settings.embeddings first, the legacy CoS pair only while that is unset.
 const getCosConfig = vi.fn();
 const getProviderById = vi.fn();
 const summarizeForEmbedding = vi.fn();
+const getSettings = vi.fn();
+const settingsEvents = new EventEmitter();
 
 vi.mock('./cos/cosState.js', () => ({ getConfig: getCosConfig }));
 vi.mock('./provider/providers.js', () => ({ getProviderById }));
+vi.mock('./settings.js', () => ({ getSettings, settingsEvents }));
+// The managers own the base URLs the catalog embedder (embeddings.js) uses.
+const OLLAMA_BASE = 'http://192.0.2.10:11434';
+const LMSTUDIO_BASE = 'http://192.0.2.20:1234';
+vi.mock('./ollamaManager.js', () => ({ getBaseUrl: () => OLLAMA_BASE }));
+vi.mock('./lmStudioManager.js', () => ({ getBaseUrl: () => LMSTUDIO_BASE }));
 // generateMemoryEmbedding dynamically imports this for over-budget records.
 vi.mock('./memorySummarizer.js', () => ({ summarizeForEmbedding }));
 // memoryBackend pulls in the DB; stub it to just the default config export.
@@ -26,6 +36,9 @@ let fetchSpy;
 beforeEach(async () => {
   vi.resetModules();
   vi.clearAllMocks();
+  settingsEvents.removeAllListeners();
+  // Default: settings.embeddings never saved → legacy CoS config resolves.
+  getSettings.mockResolvedValue({});
   embeddings = await import('./memoryEmbeddings.js');
   embeddings.reinitialize(); // clear cached config between tests
 });
@@ -289,5 +302,111 @@ describe('generateMemoryEmbedding — summarize over-budget records', () => {
     // Embedded the (truncated) raw content, not a summary.
     expect(embedBody().input).toContain('zzzz');
     expect(embedBody().input.length).toBeLessThan(40000);
+  });
+});
+
+describe('memoryEmbeddings — settings.embeddings is the single source of truth (#18296)', () => {
+  const embedOk = (vector = [0.4, 0.5, 0.6]) => {
+    const body = JSON.stringify({ data: [{ index: 0, embedding: vector }] });
+    return { ok: true, json: async () => JSON.parse(body), text: async () => body };
+  };
+  const notFound = () => Promise.resolve({ ok: false, status: 404, text: async () => '', json: async () => ({}) });
+  // Non-LM-Studio backend: native probe 404s, /v1/models lists `modelIds`, embeds succeed.
+  const wireOpenAiBackend = (modelIds = []) => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/api/v0/models')) return notFound();
+      if (u.endsWith('/v1/models')) return Promise.resolve(mockModelsResponse(modelIds));
+      return Promise.resolve(embedOk());
+    });
+  };
+  const embedPosts = () => fetchSpy.mock.calls.filter((c) => String(c[0]).endsWith('/v1/embeddings'));
+
+  it('embeds through the settings.embeddings backend + model and ignores the legacy CoS pair', async () => {
+    getSettings.mockResolvedValue({ embeddings: { provider: 'ollama', model: 'nomic-embed-text' } });
+    getCosConfig.mockResolvedValue({ embeddingProviderId: 'lmstudio', embeddingModel: 'text-embedding-nomic-embed-text-v2-moe' });
+    wireOpenAiBackend();
+
+    expect(await embeddings.generateEmbedding('hello')).toEqual([0.4, 0.5, 0.6]);
+
+    const [url, init] = embedPosts()[0];
+    expect(url).toBe(`${OLLAMA_BASE}/v1/embeddings`);
+    expect(JSON.parse(init.body).model).toBe('nomic-embed-text');
+    expect(getCosConfig).not.toHaveBeenCalled();
+    expect(await embeddings.getActiveEmbeddingModel()).toBe('nomic-embed-text');
+  });
+
+  it('falls back to the legacy CoS provider/model only while settings.embeddings is unset', async () => {
+    getSettings.mockResolvedValue({});
+    getCosConfig.mockResolvedValue({ embeddingProviderId: 'ollama', embeddingModel: 'mxbai-embed-large' });
+    getProviderById.mockResolvedValue({ id: 'ollama', endpoint: 'http://192.0.2.30:11434/v1' });
+    wireOpenAiBackend();
+
+    await embeddings.generateEmbedding('hello');
+
+    const [url, init] = embedPosts()[0];
+    expect(url).toBe('http://192.0.2.30:11434/v1/embeddings');
+    expect(JSON.parse(init.body).model).toBe('mxbai-embed-large');
+    expect(await embeddings.resolveEmbeddingSource()).toMatchObject({ source: 'legacy', provider: 'ollama', disabled: false });
+    expect(await embeddings.getActiveEmbeddingModel()).toBe('mxbai-embed-large');
+  });
+
+  it("provider 'none' disables memory and query embedding without touching any backend", async () => {
+    getSettings.mockResolvedValue({ embeddings: { provider: 'none', model: null } });
+    getCosConfig.mockResolvedValue({ embeddingProviderId: 'lmstudio' });
+    wireOpenAiBackend();
+
+    expect(await embeddings.generateEmbedding('hello')).toBeNull();
+    expect(await embeddings.generateQueryEmbedding('hello')).toBeNull();
+    expect(await embeddings.generateBatchEmbeddings(['a', 'b'])).toEqual([null, null]);
+    // Over budget would normally summarize first — disabled must not call the summarizer.
+    expect(await embeddings.generateMemoryEmbedding({ type: 'fact', content: 'q'.repeat(40000) })).toBeNull();
+    expect(summarizeForEmbedding).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const status = await embeddings.checkAvailability();
+    expect(status).toMatchObject({ available: false, disabled: true, source: 'settings', provider: 'none' });
+    expect(await embeddings.getActiveEmbeddingModel()).toBeNull();
+  });
+
+  it('a settings:updated save of settings.embeddings switches the backend without a restart', async () => {
+    getSettings.mockResolvedValue({ embeddings: { provider: 'ollama', model: 'nomic-embed-text' } });
+    wireOpenAiBackend();
+    await embeddings.generateEmbedding('first');
+    expect(embedPosts()[0][0]).toBe(`${OLLAMA_BASE}/v1/embeddings`);
+
+    // An unrelated settings save keeps the cached config (no re-read).
+    const readsBefore = getSettings.mock.calls.length;
+    settingsEvents.emit('settings:updated', { embeddings: { provider: 'ollama', model: 'nomic-embed-text' }, timezone: 'UTC' });
+    await embeddings.generateEmbedding('second');
+    expect(getSettings.mock.calls.length).toBe(readsBefore);
+
+    // Models → Embeddings saves a different backend → the next embed uses it.
+    const next = { embeddings: { provider: 'lmstudio', model: 'text-embedding-nomic-embed-text-v1.5' } };
+    getSettings.mockResolvedValue(next);
+    settingsEvents.emit('settings:updated', next);
+    await embeddings.generateEmbedding('third');
+    const [url, init] = embedPosts().at(-1);
+    expect(url).toBe(`${LMSTUDIO_BASE}/v1/embeddings`);
+    expect(JSON.parse(init.body).model).toBe('text-embedding-nomic-embed-text-v1.5');
+
+    // Saving 'none' turns memory embedding off on the next call.
+    const off = { embeddings: { provider: 'none' } };
+    getSettings.mockResolvedValue(off);
+    settingsEvents.emit('settings:updated', off);
+    const postsBefore = embedPosts().length;
+    expect(await embeddings.generateEmbedding('fourth')).toBeNull();
+    expect(embedPosts().length).toBe(postsBefore);
+  });
+
+  it('discovers an installed embedding model when settings name a backend but no model', async () => {
+    getSettings.mockResolvedValue({ embeddings: { provider: 'ollama', model: null } });
+    wireOpenAiBackend(['llama3.2:latest', 'nomic-embed-text:latest']);
+
+    await embeddings.generateEmbedding('hello');
+
+    // Never the LM Studio DEFAULT model name, which Ollama doesn't have.
+    expect(JSON.parse(embedPosts()[0][1].body).model).toBe('nomic-embed-text:latest');
+    expect(await embeddings.getActiveEmbeddingModel()).toBe('nomic-embed-text:latest');
   });
 });

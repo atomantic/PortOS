@@ -1,9 +1,8 @@
-import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
+import { useState, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import {Trash2, X, Check, XCircle, Pencil, AlertTriangle, Brain, Bot} from 'lucide-react';
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
-import { getCosConfig, updateCosConfig } from '../../../services/apiAgents.js';
 import {
   searchMemories,
   getMemories,
@@ -21,8 +20,7 @@ import MemoryTimeline from './MemoryTimeline';
 // Lazy: MemoryGraph pulls the three.js stack; load it only when rendered.
 const MemoryGraph = lazy(() => import('./MemoryGraph'));
 import MemoryEditModal from './MemoryEditModal';
-import ProviderModelSelector from '../../ProviderModelSelector';
-import useProviderModels from '../../../hooks/useProviderModels';
+import EmbeddingSourceNotice from '../../settings/EmbeddingSourceNotice';
 import BrailleSpinner from '../../BrailleSpinner';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import CopyableId from '../../ui/CopyableId';
@@ -57,31 +55,6 @@ export default function MemoryTab({ apps = [] }) {
     if (linkedMemoryId) navigate('/cos/memory', { replace: true });
   }, [linkedMemoryId, navigate]);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
-
-  // Embedding provider/model configuration
-  const { providers, availableModels, setSelectedProviderId: setProviderHook, setSelectedModel: setModelHook, selectedProviderId: hookProviderId, selectedModel: hookModel } = useProviderModels();
-  const [embeddingProviderId, setEmbeddingProviderId] = useState('');
-  const [embeddingModel, setEmbeddingModel] = useState('');
-  const [embeddingConfigLoaded, setEmbeddingConfigLoaded] = useState(false);
-
-  // Load current embedding config from CoS config
-  useEffect(() => {
-    if (embeddingConfigLoaded) return;
-    let active = true;
-    getCosConfig().then(cfg => {
-      if (!active) return;
-      if (cfg?.embeddingProviderId) {
-        setEmbeddingProviderId(cfg.embeddingProviderId);
-        setProviderHook(cfg.embeddingProviderId);
-      }
-      if (cfg?.embeddingModel) {
-        setEmbeddingModel(cfg.embeddingModel);
-        setModelHook(cfg.embeddingModel);
-      }
-      setEmbeddingConfigLoaded(true);
-    }).catch(() => { if (active) setEmbeddingConfigLoaded(true); });
-    return () => { active = false; };
-  }, [embeddingConfigLoaded, setProviderHook, setModelHook]);
 
   const appId = sourceFilter === 'brain' ? 'brain' : sourceFilter === 'cos' ? '__not_brain' : undefined;
   const queryKey = JSON.stringify([sourceFilter, filters, submittedSearch]);
@@ -397,43 +370,25 @@ export default function MemoryTab({ apps = [] }) {
                 <div className="space-y-4">
                   <p>No memories yet.</p>
                   {!embeddingStatus?.available && (
-                    <Banner tone="warning" size="lg" title="Embedding Service Unavailable" className="text-left max-w-md mx-auto">
-                      <p className="text-sm text-gray-400 mt-2">
-                        Cannot connect to embedding service{embeddingStatus?.endpoint && (
-                          <span>: <code className="text-port-accent">{embeddingStatus.endpoint}</code></span>
-                        )}
-                      </p>
+                    <Banner tone="warning" size="lg" title={embeddingStatus?.disabled ? 'Embeddings Disabled' : 'Embedding Service Unavailable'} className="text-left max-w-md mx-auto">
+                      {!embeddingStatus?.disabled && (
+                        <p className="text-sm text-gray-400 mt-2">
+                          Cannot connect to embedding service{embeddingStatus?.endpoint && (
+                            <span>: <code className="text-port-accent">{embeddingStatus.endpoint}</code></span>
+                          )}
+                        </p>
+                      )}
                       {embeddingStatus?.error && (
                         <p className="text-sm text-gray-500 mt-1">Error: {embeddingStatus.error}</p>
                       )}
-                      <div className="mt-3">
-                        <ProviderModelSelector
-                          providers={providers}
-                          selectedProviderId={
-                            providers?.some((p) => p.id === embeddingProviderId)
-                              ? embeddingProviderId
-                              : providers?.some((p) => p.id === hookProviderId)
-                                ? hookProviderId
-                                : ''
-                          }
-                          selectedModel={embeddingModel || hookModel}
-                          availableModels={availableModels}
-                          onProviderChange={(id) => { setEmbeddingProviderId(id); setProviderHook(id); setEmbeddingModel(''); }}
-                          onModelChange={(m) => { setEmbeddingModel(m); setModelHook(m); }}
-                          label="Embedding Provider"
-                        />
-                      </div>
+                      {/* The backend is the shared settings.embeddings store (#18296), edited on Models → Embeddings. */}
+                      <EmbeddingSourceNotice className="mt-3" />
                       <button
-                        onClick={async () => {
-                          const pid = embeddingProviderId || hookProviderId;
-                          const mid = embeddingModel || hookModel;
-                          await updateCosConfig({ embeddingProviderId: pid, embeddingModel: mid });
-                          toast.success('Embedding config saved');
-                          fetchData();
-                        }}
+                        type="button"
+                        onClick={fetchData}
                         className="mt-3 px-4 py-2 min-h-[40px] text-sm bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
                       >
-                        Save &amp; Retry
+                        Retry
                       </button>
                     </Banner>
                   )}

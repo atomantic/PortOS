@@ -1,16 +1,25 @@
 /**
  * Memory Embeddings Service
  *
- * Generates vector embeddings using LM Studio's OpenAI-compatible API.
- * Provides semantic search capabilities for the memory system.
+ * Generates vector embeddings through an OpenAI-compatible `/v1/embeddings`
+ * endpoint (LM Studio, Ollama, …) for the memory system's semantic search.
+ *
+ * Configuration (#18296): `settings.embeddings` ({ provider, model }, saved from
+ * Models → Embeddings or AI Assignments) is the single source of truth, shared
+ * with the catalog's `embeddings.js`. The legacy CoS `embeddingProviderId` /
+ * `embeddingModel` pair is read ONLY while `settings.embeddings` has never been
+ * saved, so an upgraded install keeps the backend it already had.
  */
 
 import { DEFAULT_MEMORY_CONFIG } from './memoryConfig.js';
 import { getProviderById } from './provider/providers.js';
 import { getConfig as getCosConfig } from './cos/cosState.js';
+import { getSettings, settingsEvents } from './settings.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
 import { estimateTokens, CHARS_PER_TOKEN } from '../lib/contextBudget.js';
+import { isEmbeddingModel } from '../lib/localModelHeuristics.js';
+import { getNavPageForPath } from '../lib/navManifest.js';
 
 // Re-export the canonical token estimator so existing importers
 // (e.g. memoryRetriever.js) keep their `from './memoryEmbeddings.js'` path.
@@ -19,16 +28,146 @@ export { estimateTokens };
 const MODEL_LIST_TIMEOUT_MS = 10000;
 const MODEL_LOAD_TIMEOUT_MS = 60000;
 
-// Cache for embedding config (loaded from CoS config)
-let embeddingConfig = null;
-let initialized = false;
-let modelEnsured = false;
+// Memoized resolved config. `configGeneration` invalidates an in-flight build
+// that a reinitialize() overtook, so a stale settings read never replaces the
+// fresh one. Model-load state (`modelEnsured`) lives on the config object so a
+// stale build can't latch it for the new config.
+let configPromise = null;
+let configGeneration = 0;
+// The `settings.embeddings` value the active config was built from; a
+// `settings:updated` event that changes it reinitializes (no restart needed).
+let activeSettingsKey;
+
+// Names the one editor of settings.embeddings by route, so a page move never
+// leaves stale copy behind (#7419).
+export const embeddingsSettingsPage = () => getNavPageForPath('/models/embeddings')?.breadcrumb ?? 'the Embeddings settings page';
+
+const settingsEmbeddingsKey = (settings) => JSON.stringify(settings?.embeddings ?? null);
+
+// Managers own the base URL `embeddings.js` embeds catalog rows against, so the
+// memory path resolves the very same backend. Lazy: only the chosen one loads.
+const SETTINGS_BACKEND_BASE_URL = {
+  ollama: async () => (await import('./ollamaManager.js')).getBaseUrl(),
+  lmstudio: async () => (await import('./lmStudioManager.js')).getBaseUrl(),
+};
+
+const toEmbeddingsEndpoint = (endpoint) => {
+  const base = String(endpoint).replace(/\/+$/, '');
+  return base.endsWith('/v1') ? `${base}/embeddings` : `${base}/v1/embeddings`;
+};
 
 /**
- * Get the LM Studio base URL from config
+ * Resolve which embedding backend memory uses, without probing it (no network,
+ * no LM Studio auto-load), so read-only status surfaces can call it.
+ *
+ * Returns `{ source, provider, model, endpoint, disabled, error? }`:
+ *   - source `'settings'`: from `settings.embeddings`; `provider: 'none'` (or an
+ *     unknown provider) is `disabled: true`.
+ *   - source `'legacy'`: `settings.embeddings` unset → CoS config fallback.
+ *     `endpoint: null` means the provider has no endpoint and the LM Studio
+ *     default endpoint is used (pre-#18296 behavior).
  */
-function getBaseUrl(config) {
-  return config.embeddingEndpoint.replace(/\/v1\/embeddings$/, '');
+export async function resolveEmbeddingSource(settingsArg) {
+  const settings = settingsArg ?? await getSettings().catch(() => ({}));
+  const cfg = settings?.embeddings;
+  if (cfg?.provider) {
+    const provider = cfg.provider;
+    const model = cfg.model || null;
+    if (provider === 'none') return { source: 'settings', provider, model: null, endpoint: null, disabled: true };
+    const resolveBaseUrl = SETTINGS_BACKEND_BASE_URL[provider];
+    if (!resolveBaseUrl) {
+      return { source: 'settings', provider, model, endpoint: null, disabled: true, error: `Unknown embeddings provider: ${provider}` };
+    }
+    return { source: 'settings', provider, model, endpoint: toEmbeddingsEndpoint(await resolveBaseUrl()), disabled: false };
+  }
+
+  const cosConfig = await getCosConfig().catch(() => ({}));
+  const provider = cosConfig?.embeddingProviderId || 'lmstudio';
+  // The legacy path has always fallen back to the default (LM Studio) model.
+  const model = cosConfig?.embeddingModel || DEFAULT_MEMORY_CONFIG.embeddingModel;
+  // Keys off `endpoint` alone and does NOT gate on `enabled`: embeddings have
+  // always generated from a disabled-but-endpoint'd provider.
+  const record = await getProviderById(provider).catch(() => null);
+  return { source: 'legacy', provider, model, endpoint: record?.endpoint ? toEmbeddingsEndpoint(record.endpoint) : null, disabled: false };
+}
+
+async function buildConfig() {
+  const settings = await getSettings().catch(() => ({}));
+  const settingsKey = settingsEmbeddingsKey(settings);
+  const resolved = await resolveEmbeddingSource(settings);
+  const config = {
+    ...DEFAULT_MEMORY_CONFIG,
+    source: resolved.source,
+    disabled: resolved.disabled,
+    disabledReason: resolved.error || null,
+    // Which provider backs embeddings; the LM-Studio-only auto-load dance is
+    // gated on a capability probe, not this id.
+    embeddingProvider: resolved.provider,
+    embeddingEndpoint: resolved.endpoint || DEFAULT_MEMORY_CONFIG.embeddingEndpoint,
+    // A settings-sourced backend never inherits the DEFAULT model (an LM Studio
+    // model name Ollama doesn't have): `null` there means "discover one".
+    embeddingModel: resolved.model,
+    modelEnsured: false,
+  };
+  if (config.disabled) {
+    console.log(`📚 Memory embeddings disabled (${config.disabledReason || 'settings.embeddings provider is none'})`);
+  } else if (resolved.endpoint) {
+    console.log(`📚 Memory embeddings using ${resolved.source} provider ${resolved.provider} (model: ${config.embeddingModel || 'auto'}): ${config.embeddingEndpoint}`);
+  }
+  return { config, settingsKey };
+}
+
+/**
+ * The active resolved config (memoized until reinitialize()).
+ */
+function loadConfig() {
+  if (!configPromise) {
+    const generation = configGeneration;
+    configPromise = buildConfig().then(({ config, settingsKey }) => {
+      if (generation === configGeneration) activeSettingsKey = settingsKey;
+      return config;
+    });
+  }
+  return configPromise;
+}
+
+/**
+ * Reset so the next embedding call re-reads config.
+ */
+export function reinitialize() {
+  configGeneration++;
+  configPromise = null;
+  activeSettingsKey = undefined;
+}
+
+// Saving `settings.embeddings` (Models → Embeddings, AI Assignments) takes
+// effect immediately. Other settings writes leave the cached config alone.
+settingsEvents.on('settings:updated', (settings) => {
+  if (activeSettingsKey !== undefined && settingsEmbeddingsKey(settings) !== activeSettingsKey) reinitialize();
+});
+settingsEvents.on('settings:invalidated', reinitialize);
+
+/**
+ * The embedding model memory vectors are currently produced with, or `null`
+ * when embeddings are disabled / no model is resolved yet. Writers stamp this
+ * into `embedding_model` so the column names the model that made the vector.
+ */
+export async function getActiveEmbeddingModel() {
+  const config = await loadConfig();
+  return config.disabled ? null : (config.embeddingModel || null);
+}
+
+const getBaseUrl = (config) => config.embeddingEndpoint.replace(/\/v1\/embeddings$/, '');
+
+// First embedding-looking id, for a backend configured without a model.
+const pickEmbeddingModel = (ids) => ids.find((id) => isEmbeddingModel(id)) || null;
+
+async function listOpenAiModelIds(config) {
+  const response = await fetchWithTimeout(`${getBaseUrl(config)}/v1/models`, {}, MODEL_LIST_TIMEOUT_MS)
+    .catch(() => null);
+  if (!response?.ok) return [];
+  const data = await readResponseJson(response);
+  return Array.isArray(data?.data) ? data.data.map((m) => m.id).filter(Boolean) : [];
 }
 
 /**
@@ -62,17 +201,26 @@ async function probeLmStudioModels(config) {
  * Other OpenAI-compatible embedding backends (Ollama, etc.) serve
  * `/v1/embeddings` directly with no load step and don't implement those
  * endpoints — detected here by the native-API probe coming back empty, in which
- * case we skip the dance and trust the configured model id. Without this, an
- * Ollama-backed config would 404 the LMS-only URLs on every call (modelEnsured
- * never latches → repeated failed probes per embed).
+ * case we skip the dance and trust the configured model id (or, when none is
+ * configured, discover one from `/v1/models`). Without this, an Ollama-backed
+ * config would 404 the LMS-only URLs on every call (modelEnsured never latches
+ * → repeated failed probes per embed).
  */
 async function ensureEmbeddingModelLoaded(config) {
-  if (modelEnsured) return;
+  if (config.modelEnsured) return;
 
   const allModels = await probeLmStudioModels(config);
   // Not an LM Studio backend (Ollama, etc.) — no load step exists; trust config.
   if (allModels === null) {
-    modelEnsured = true;
+    if (!config.embeddingModel) {
+      config.embeddingModel = pickEmbeddingModel(await listOpenAiModelIds(config));
+      if (!config.embeddingModel) {
+        console.warn(`⚠️ No embedding model configured or installed at ${config.embeddingEndpoint} — pick one on ${embeddingsSettingsPage()}`);
+        return;
+      }
+      console.log(`📚 Embedding model discovered: ${config.embeddingModel}`);
+    }
+    config.modelEnsured = true;
     return;
   }
 
@@ -82,14 +230,14 @@ async function ensureEmbeddingModelLoaded(config) {
   const loaded = embeddingModels.find(m => m.state === 'loaded');
   if (loaded) {
     config.embeddingModel = loaded.id;
-    modelEnsured = true;
+    config.modelEnsured = true;
     console.log(`📚 Embedding model already loaded: ${loaded.id}`);
     return;
   }
 
   // No embedding model loaded — try to load the configured one first, then any available
   const candidates = [
-    embeddingModels.find(m => m.id.includes(config.embeddingModel)),
+    config.embeddingModel ? embeddingModels.find(m => m.id.includes(config.embeddingModel)) : null,
     ...embeddingModels
   ].filter(Boolean);
 
@@ -110,7 +258,7 @@ async function ensureEmbeddingModelLoaded(config) {
 
   if (loadResponse.ok) {
     config.embeddingModel = modelToLoad.id;
-    modelEnsured = true;
+    config.modelEnsured = true;
     console.log(`✅ Embedding model loaded: ${modelToLoad.id}`);
   } else {
     const err = await loadResponse.text();
@@ -119,49 +267,17 @@ async function ensureEmbeddingModelLoaded(config) {
 }
 
 /**
- * Reset initialization so the next embedding call re-reads config.
+ * Load/discover the model before a request. `false` only when there is no
+ * model id to send at all (nothing configured, nothing discoverable) — posting
+ * `model: null` would just fail on the backend.
  */
-export function reinitialize() {
-  initialized = false;
-  modelEnsured = false;
-  embeddingConfig = null;
-}
-
-/**
- * Initialize embedding config from provider settings
- */
-async function initConfig() {
-  if (initialized) return;
-  initialized = true;
-
-  const cosConfig = await getCosConfig().catch(() => ({}));
-  const providerId = cosConfig.embeddingProviderId || 'lmstudio';
-  const configModel = cosConfig.embeddingModel || '';
-
-  const provider = await getProviderById(providerId).catch(() => null);
-  if (provider?.endpoint) {
-    const endpoint = provider.endpoint.endsWith('/v1')
-      ? `${provider.endpoint}/embeddings`
-      : `${provider.endpoint}/v1/embeddings`;
-    embeddingConfig = {
-      ...DEFAULT_MEMORY_CONFIG,
-      // Track which provider backs embeddings so the LM-Studio-only model
-      // auto-load dance (ensureEmbeddingModelLoaded) is skipped for others.
-      embeddingProvider: providerId,
-      embeddingEndpoint: endpoint,
-      // The model id MUST come from config for a non-LM-Studio provider: the
-      // DEFAULT model is an LM Studio model name that Ollama doesn't have.
-      ...(configModel ? { embeddingModel: configModel } : {})
-    };
-    console.log(`📚 Memory embeddings using provider ${providerId} (model: ${embeddingConfig.embeddingModel}): ${endpoint}`);
+async function ensureModelReady(config) {
+  if (!config.modelEnsured) {
+    await ensureEmbeddingModelLoaded(config).catch(err =>
+      console.warn(`⚠️ Could not ensure embedding model: ${err.message}`)
+    );
   }
-}
-
-/**
- * Get embedding configuration
- */
-function getConfig() {
-  return embeddingConfig || DEFAULT_MEMORY_CONFIG;
+  return !!config.embeddingModel;
 }
 
 /**
@@ -170,8 +286,20 @@ function getConfig() {
  * `GET /v1/models`.
  */
 export async function checkAvailability() {
-  await initConfig();
-  const config = getConfig();
+  const config = await loadConfig();
+  const origin = { source: config.source, provider: config.embeddingProvider };
+
+  if (config.disabled) {
+    return {
+      ...origin,
+      available: false,
+      disabled: true,
+      error: config.disabledReason || `Embeddings are disabled on ${embeddingsSettingsPage()}`,
+      embeddingModel: null,
+      modelPresent: false,
+      endpoint: null
+    };
+  }
 
   const response = await fetch(`${config.embeddingEndpoint.replace('/v1/embeddings', '/v1/models')}`, {
     method: 'GET',
@@ -179,7 +307,7 @@ export async function checkAvailability() {
   }).catch(err => ({ ok: false, _err: err.message }));
 
   if (!response.ok) {
-    return { available: false, error: response._err || `Embedding backend returned ${response.status}`, endpoint: config.embeddingEndpoint };
+    return { ...origin, available: false, error: response._err || `Embedding backend returned ${response.status}`, endpoint: config.embeddingEndpoint };
   }
 
   const data = await readResponseJson(response);
@@ -192,10 +320,13 @@ export async function checkAvailability() {
   if (lmsModels === null) {
     // Non-LM-Studio (Ollama, etc.): the configured model id is authoritative —
     // don't guess from `.includes('embed')` (could latch onto the wrong model).
-    // The load dance is a no-op for these backends.
-    modelEnsured = true;
-    const present = models.some(id => id === config.embeddingModel || id.startsWith(`${config.embeddingModel}:`));
-    return { available: true, models, embeddingModel: config.embeddingModel, modelPresent: present, endpoint: config.embeddingEndpoint };
+    // Only a backend configured WITHOUT a model discovers one. The load dance
+    // is a no-op for these backends.
+    if (!config.embeddingModel) config.embeddingModel = pickEmbeddingModel(models);
+    const present = !!config.embeddingModel
+      && models.some(id => id === config.embeddingModel || id.startsWith(`${config.embeddingModel}:`));
+    if (config.embeddingModel) config.modelEnsured = true;
+    return { ...origin, available: true, models, embeddingModel: config.embeddingModel, modelPresent: present, endpoint: config.embeddingEndpoint };
   }
 
   // LM Studio: auto-load an embedding model if none is loaded, then report
@@ -203,7 +334,7 @@ export async function checkAvailability() {
   const loaded = lmsModels.find(m => m.type === 'embeddings' && m.state === 'loaded');
   if (loaded) {
     config.embeddingModel = loaded.id;
-    modelEnsured = true;
+    config.modelEnsured = true;
   } else {
     await ensureEmbeddingModelLoaded(config).catch(err =>
       console.warn(`⚠️ Could not auto-load embedding model: ${err.message}`)
@@ -211,12 +342,13 @@ export async function checkAvailability() {
   }
 
   return {
+    ...origin,
     available: true,
     models,
     embeddingModel: config.embeddingModel,
     // `modelEnsured` latches true only once an embeddings model is loaded (here
     // or inside ensureEmbeddingModelLoaded) — the honest model-present signal.
-    modelPresent: modelEnsured,
+    modelPresent: config.modelEnsured,
     endpoint: config.embeddingEndpoint
   };
 }
@@ -278,19 +410,13 @@ async function postEmbedding(config, input) {
  * than landing NULL.
  */
 export async function generateEmbedding(text) {
-  await initConfig();
-  const config = getConfig();
+  const config = await loadConfig();
 
-  if (!text || text.trim().length === 0) {
+  if (config.disabled || !text || text.trim().length === 0) {
     return null;
   }
 
-  // Ensure embedding model is loaded before requesting
-  if (!modelEnsured) {
-    await ensureEmbeddingModelLoaded(config).catch(err =>
-      console.warn(`⚠️ Could not ensure embedding model: ${err.message}`)
-    );
-  }
+  if (!await ensureModelReady(config)) return null;
 
   let maxChars = embeddingCharBudget(config);
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -317,19 +443,12 @@ export async function generateEmbedding(text) {
  * (generateEmbedding handles per-item shrink/retry) rather than nulling all.
  */
 export async function generateBatchEmbeddings(texts) {
-  await initConfig();
-  const config = getConfig();
+  const config = await loadConfig();
 
   if (!texts || texts.length === 0) {
     return [];
   }
-
-  // Ensure embedding model is loaded before requesting
-  if (!modelEnsured) {
-    await ensureEmbeddingModelLoaded(config).catch(err =>
-      console.warn(`⚠️ Could not ensure embedding model: ${err.message}`)
-    );
-  }
+  if (config.disabled || !await ensureModelReady(config)) return texts.map(() => null);
 
   const maxChars = embeddingCharBudget(config);
   const truncatedTexts = texts.map(t => clampToChars(t, maxChars));
@@ -371,8 +490,9 @@ export async function generateBatchEmbeddings(texts) {
  * the record still gets some embedding.
  */
 export async function generateMemoryEmbedding(memory, sourceHints = {}) {
-  await initConfig();
-  const config = getConfig();
+  const config = await loadConfig();
+  // Disabled: no vector, and no summarization call to build one.
+  if (config.disabled) return null;
 
   const parts = [
     `Type: ${memory.type}`,

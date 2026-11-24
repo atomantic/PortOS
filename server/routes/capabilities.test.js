@@ -53,9 +53,13 @@ vi.mock('../lib/networkExposure.js', () => ({
 vi.mock('../services/genome.js', () => ({
   getGenomeSummary: vi.fn(async () => ({ uploaded: true, markerCount: 10, statusCounts: {} })),
 }));
-vi.mock('../services/settings.js', () => ({
-  getSettings: vi.fn(async () => ({ telegram: { method: 'manual', chatId: 'c1' }, secrets: { telegram: { token: 't1' } } })),
-}));
+vi.mock('../services/settings.js', async () => {
+  const { EventEmitter } = await import('events');
+  return {
+    getSettings: vi.fn(async () => ({ telegram: { method: 'manual', chatId: 'c1' }, secrets: { telegram: { token: 't1' } } })),
+    settingsEvents: new EventEmitter(),
+  };
+});
 vi.mock('../services/telegram.js', () => ({
   getStatus: vi.fn(() => ({ connected: true })),
 }));
