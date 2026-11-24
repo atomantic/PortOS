@@ -43,6 +43,7 @@ function PortosShellView() {
   const [showPasteInput, setShowPasteInput] = useState(false);
   const pasteInputRef = useRef(null);
   const dropdownRef = useRef(null);
+  const folderTriggerRef = useRef(null);
 
   // All socket/session/terminal state + the attach/detach lifecycle live in the hook.
   const {
@@ -108,7 +109,10 @@ function PortosShellView() {
 
   const closeFolderDropdown = useCallback(() => setFolderDropdownOpen(false), []);
   useClickOutside(dropdownRef, folderDropdownOpen, closeFolderDropdown);
-  useEscapeKey(folderDropdownOpen, closeFolderDropdown);
+  useEscapeKey(folderDropdownOpen, () => {
+    closeFolderDropdown();
+    folderTriggerRef.current?.focus();
+  });
 
   const handlePaste = useCallback(async () => {
     const text = await readClipboard();
@@ -158,11 +162,13 @@ function PortosShellView() {
         <h1 className="text-xl font-semibold text-white min-w-0 truncate">Shell</h1>
         <ShellSourceSwitch source="portos" />
         <div
+          role="status"
+          aria-live="polite"
           className={`flex items-center gap-2 shrink-0 text-sm px-2 py-1 rounded ${
             connected ? 'text-port-success sm:bg-port-success/20' : 'text-gray-400 sm:bg-gray-500/20'
           }`}
         >
-          <div className={`w-2 h-2 rounded-full ${connected ? 'bg-port-success' : 'bg-gray-500'}`} />
+          <div aria-hidden="true" className={`w-2 h-2 rounded-full ${connected ? 'bg-port-success' : 'bg-gray-500'}`} />
           {/* The sr-only twin keeps the state announced when only the dot shows. */}
           <span className="hidden sm:inline">{statusLabel}</span>
           <span className="sr-only sm:hidden">{statusLabel}</span>
@@ -274,26 +280,33 @@ function PortosShellView() {
           {/* App folder cd selector */}
           <div className="relative shrink-0" ref={dropdownRef}>
             <button
+              ref={folderTriggerRef}
+              type="button"
               onClick={() => setFolderDropdownOpen(prev => !prev)}
               className="flex items-center gap-1.5 px-2.5 py-1.5 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded text-xs transition-colors border border-port-border min-h-[40px]"
               title="cd to app folder"
               aria-label="cd to app folder"
               aria-expanded={folderDropdownOpen}
             >
-              <FolderOpen size={14} />
+              <FolderOpen size={14} aria-hidden="true" />
               <span className="hidden sm:inline">cd to app</span>
-              <ChevronDown size={12} className={`transition-transform ${folderDropdownOpen ? 'rotate-180' : ''}`} />
+              <ChevronDown size={12} aria-hidden="true" className={`transition-transform ${folderDropdownOpen ? 'rotate-180' : ''}`} />
             </button>
             {folderDropdownOpen && (
-              <div className="absolute right-0 top-full mt-1 w-64 max-w-[calc(100vw-1rem)] max-h-80 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-xl z-50">
+              <div
+                role="group"
+                aria-label="App folders"
+                className="absolute right-0 top-full mt-1 w-64 max-w-[calc(100vw-1rem)] max-h-80 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-xl z-50"
+              >
                 {appFolders.map(({ name, path }) => (
                   <button
                     key={name}
+                    type="button"
                     onClick={() => {
                       sendCd(path);
                       setFolderDropdownOpen(false);
                     }}
-                    className="w-full text-left px-3 py-2 text-xs font-mono text-gray-300 hover:bg-port-border hover:text-white transition-colors"
+                    className="w-full text-left px-3 py-2 pointer-coarse:min-h-11 text-xs font-mono text-gray-300 hover:bg-port-border hover:text-white transition-colors"
                   >
                     {name}
                   </button>

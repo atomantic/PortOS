@@ -126,17 +126,19 @@ export default function ShellProviderLauncher({ providers, onLaunch, onOpen, loa
         className="flex items-center gap-1.5 px-2.5 py-1.5 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded text-xs transition-colors border border-port-border min-h-[40px] shrink-0"
         title="Launch an AI CLI from your enabled providers"
         aria-label="Launch an AI CLI"
-        aria-haspopup="true"
+        aria-haspopup="dialog"
         aria-expanded={open}
       >
-        <Bot size={14} />
+        <Bot size={14} aria-hidden="true" />
         <span className="hidden sm:inline">Launch AI</span>
-        <ChevronDown size={12} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown size={12} aria-hidden="true" className={`transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
       {open && createPortal(
         <div
           ref={popoverRef}
+          role="dialog"
+          aria-label="Launch an AI CLI"
           className="fixed max-w-[calc(100vw-1rem)] max-h-dvh-cap [--dvh-cap:70dvh] overflow-y-auto overscroll-contain z-[100] bg-port-card border border-port-border rounded-lg shadow-xl"
           style={{
             left: style?.left ?? `${VIEWPORT_PADDING}px`,
@@ -151,7 +153,7 @@ export default function ShellProviderLauncher({ providers, onLaunch, onOpen, loa
             // Focus lands here on open (useFocusTrap) so keyboard users can type
             // straight away.
             <div className="sticky top-0 flex items-center gap-2 px-3 py-2 bg-port-card border-b border-port-border">
-              <Search size={14} className="text-gray-500 shrink-0" />
+              <Search size={14} aria-hidden="true" className="text-gray-500 shrink-0" />
               <input
                 type="text"
                 value={query}
@@ -177,7 +179,7 @@ export default function ShellProviderLauncher({ providers, onLaunch, onOpen, loa
                 title={provider.tuiCommandLine}
               >
                 <div className="flex items-center gap-2">
-                  <Terminal size={12} className="text-port-accent shrink-0" />
+                  <Terminal size={12} aria-hidden="true" className="text-port-accent shrink-0" />
                   <span className="text-sm text-gray-200 truncate">{provider.name || provider.id}</span>
                   {/* The server already told us this provider can't run here (a
                       missing binary, an unset key). Still launchable — the user
@@ -185,14 +187,14 @@ export default function ShellProviderLauncher({ providers, onLaunch, onOpen, loa
                       that instantly prints `command not found` isn't a surprise. */}
                   {provider.prerequisitesMet === false && (
                     <span className="flex items-center gap-1 text-[10px] text-port-warning shrink-0" title="Needs setup — see AI Providers">
-                      <AlertTriangle size={10} />
+                      <AlertTriangle size={10} aria-hidden="true" />
                       setup
                     </span>
                   )}
                 </div>
                 <div className="text-[11px] font-mono text-gray-500 truncate">{provider.tuiCommandLine}</div>
               </button>
-              <button type="button" aria-label={`Execution options for ${provider.name || provider.id}`} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-3 text-gray-400" onClick={() => selectProvider(provider)}><Settings2 size={14} /></button>
+              <button type="button" aria-label={`Execution options for ${provider.name || provider.id}`} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-3 text-gray-400" onClick={() => selectProvider(provider)}><Settings2 size={14} aria-hidden="true" /></button>
               </div>
             ))}
           </div>
@@ -218,7 +220,7 @@ export default function ShellProviderLauncher({ providers, onLaunch, onOpen, loa
           </div>}
 
           {visible.length === 0 && (
-            <div className="px-3 py-3 text-xs text-gray-500">
+            <div role="status" aria-live="polite" className="px-3 py-3 text-xs text-gray-500">
               {loading
                 ? 'Loading providers…'
                 : launchable.length === 0

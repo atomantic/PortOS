@@ -109,7 +109,7 @@ describe('ShellProviderLauncher', () => {
   it('points at the Providers page when nothing is enabled', () => {
     render(<ShellProviderLauncher providers={[tui({ enabled: false })]} onLaunch={vi.fn()} />);
     fireEvent.click(screen.getByLabelText('Launch an AI CLI'));
-    expect(screen.getByText(/No enabled TUI providers/)).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toMatch(/No enabled TUI providers/);
   });
 
   it('flags a provider the server says cannot run here, but still offers it', () => {
@@ -133,7 +133,7 @@ describe('ShellProviderLauncher', () => {
     fireEvent.click(screen.getByLabelText('Launch an AI CLI'));
     expect(onOpen).toHaveBeenCalled();
     // An in-flight load reads as loading, not as "you have no providers".
-    expect(screen.getByText(/Loading providers/)).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toMatch(/Loading providers/);
     expect(screen.queryByText(/No enabled TUI providers/)).toBeNull();
   });
 
@@ -166,7 +166,7 @@ describe('ShellProviderLauncher', () => {
     expect(screen.queryByText('Codex TUI')).toBeNull();
 
     fireEvent.change(filter, { target: { value: 'nothing-matches' } });
-    expect(screen.getByText(/No providers match/)).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toMatch(/No providers match/);
   });
 
   it('closes on Escape', () => {
@@ -177,9 +177,10 @@ describe('ShellProviderLauncher', () => {
 
   it("exposes popup state, moves focus into the panel, and returns it to the trigger on Escape", () => {
     open();
-    const trigger = screen.getByLabelText("Launch an AI CLI");
-    expect(trigger.getAttribute("aria-haspopup")).toBe("true");
+    const trigger = screen.getByRole("button", { name: "Launch an AI CLI" });
+    expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("dialog", { name: "Launch an AI CLI" })).toBeTruthy();
     expect(document.activeElement).toBe(screen.getByText("Claude Code TUI").closest("button"));
 
     fireEvent.keyDown(window, { key: "Escape" });

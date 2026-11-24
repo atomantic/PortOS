@@ -26,6 +26,7 @@ vi.mock('../services/apiShell.js', () => ({
   getItermStatus: vi.fn(() => new Promise(() => {})),
 }));
 
+import { getApps } from '../services/apiApps.js';
 import Shell from './Shell';
 
 beforeEach(() => {
@@ -87,6 +88,7 @@ describe('Shell conditional session controls (#9710)', () => {
     renderAt('/shell/example-session');
     await act(async () => {});
     expect(screen.queryByRole('tablist', { name: 'Terminal source' }) !== null).toBe(iterm);
+    expect(screen.getByRole('status')).toHaveTextContent(connected ? 'Connected' : 'Disconnected');
     expect(screen.getByText(connected ? 'Connected' : 'Disconnected', { selector: '.sr-only' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'About live TUI runs' }) !== null).toBe(badge);
     if (badge) {
@@ -106,5 +108,25 @@ describe('Shell conditional session controls (#9710)', () => {
     expect(screen.getByRole('dialog', { name: 'Terminal fullscreen view' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Exit fullscreen' }));
     expect(screen.getByRole('group', { name: 'Session controls' })).toBeInTheDocument();
+  });
+
+  it('restores focus to the cd to app trigger when Escape closes the folder dropdown', async () => {
+    getApps.mockResolvedValueOnce([{ name: 'example-app', repoPath: '/tmp/example-app' }]);
+    mocks.state = { ...mocks.state, connected: true };
+    renderAt('/shell');
+    await act(async () => {});
+
+    const trigger = screen.getByRole('button', { name: 'cd to app folder' });
+    fireEvent.click(trigger);
+
+    const group = screen.getByRole('group', { name: 'App folders' });
+    const folderBtn = screen.getByRole('button', { name: 'example-app' });
+    expect(group).toContainElement(folderBtn);
+    folderBtn.focus();
+    expect(document.activeElement).toBe(folderBtn);
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('group', { name: 'App folders' })).toBeNull();
+    expect(document.activeElement).toBe(trigger);
   });
 });
