@@ -3,11 +3,15 @@
 // drawer's draft shape (paths as one textarea) out of the save payload.
 import { Plus, Trash2 } from 'lucide-react';
 
-export const FEATURE_PRIORITY_MAX_ENTRIES = 50;
-export const FEATURE_PRIORITY_MAX_PATHS = 20;
-const MAX_LABEL = 80;
-const MAX_PATH = 200;
-const MAX_NOTE = 500;
+import {
+  FEATURE_PRIORITY_MAX_ENTRIES,
+  FEATURE_PRIORITY_MAX_LABEL as MAX_LABEL,
+  FEATURE_PRIORITY_MAX_NOTE as MAX_NOTE,
+  FEATURE_PRIORITY_MAX_PATH as MAX_PATH,
+  FEATURE_PRIORITY_MAX_PATHS,
+  auditPathConflict,
+  hasUnsafePromptChar as hasUnsafeChar,
+} from '../../../../server/lib/appFeaturePriorityRules.js';
 
 const TIER_OPTIONS = [
   { value: 'P0', label: 'P0 · heavy use, audit first' },
@@ -47,9 +51,6 @@ export const fromPriorityRows = (rows) => rows.map((row) => ({
   ...(row.note.trim() ? { note: row.note.trim() } : {}),
 }));
 
-// Mirrors the server's prompt-safety rule: these strings are written into audit prompts, so control characters,
-// quotes and backticks are refused rather than escaped.
-const hasUnsafeChar = (text) => /['`]/.test(text) || [...text].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127);
 
 /** The first problem that would make the server refuse these rows, or null. */
 export function priorityRowsError(rows) {
@@ -63,7 +64,7 @@ export function priorityRowsError(rows) {
     if (paths.length > FEATURE_PRIORITY_MAX_PATHS) return `${name}: at most ${FEATURE_PRIORITY_MAX_PATHS} paths.`;
     if (paths.some((path) => path.length > MAX_PATH || hasUnsafeChar(path))) return `${name}: each path must be at most ${MAX_PATH} characters with no quotes or backticks.`;
   }
-  return null;
+  return auditPathConflict(fromPriorityRows(rows));
 }
 
 const FIELD = 'w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden';

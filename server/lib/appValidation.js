@@ -12,28 +12,30 @@ import { isCronShaped, isValidCronExpression } from './cronValidation.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { WORK_TRACKERS } from './workTracker.js';
 import { nullishString } from './sharedSchemas.js';
+import {
+  FEATURE_PRIORITY_MAX_ENTRIES, FEATURE_PRIORITY_MAX_LABEL, FEATURE_PRIORITY_MAX_NOTE, FEATURE_PRIORITY_MAX_PATH, FEATURE_PRIORITY_MAX_PATHS,
+  auditPathConflict, hasUnsafePromptChar,
+} from './appFeaturePriorityRules.js';
 
-export const FEATURE_PRIORITY_MAX_ENTRIES = 50;
-export const FEATURE_PRIORITY_MAX_PATHS = 20;
-
-// These strings are written into audit prompts: a path glob sits between backticks and inside a single-quoted
-// `--exclude '…'` argument, and a label starts a prompt line, so none may carry a control character (newline
-// included), a quote or a backtick.
-const hasUnsafePromptChar = (value) => /['`]/.test(value) || [...value].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127);
+// These strings are written into audit prompts, so they must be prompt-safe (see appFeaturePriorityRules.js).
 const promptSafeText = (max) => z.string().trim().min(1).max(max)
   .refine((value) => !hasUnsafePromptChar(value), { message: 'must not contain control characters, quotes or backticks' });
 
 // Hand-written path priority for one slice of a managed app. P1 is the default for every path no entry names.
 export const appFeaturePrioritySchema = z.object({
   id: z.string().trim().min(1).max(64),
-  label: promptSafeText(80),
-  paths: z.array(promptSafeText(200)).min(1).max(FEATURE_PRIORITY_MAX_PATHS),
+  label: promptSafeText(FEATURE_PRIORITY_MAX_LABEL),
+  paths: z.array(promptSafeText(FEATURE_PRIORITY_MAX_PATH)).min(1).max(FEATURE_PRIORITY_MAX_PATHS),
   priority: z.enum(['P0', 'P1', 'P2', 'P3']),
-  note: z.string().trim().max(500).optional(),
+  note: z.string().trim().max(FEATURE_PRIORITY_MAX_NOTE).optional(),
 });
 
 export const appFeaturePrioritiesSchema = z.array(appFeaturePrioritySchema).max(FEATURE_PRIORITY_MAX_ENTRIES)
-  .refine((entries) => new Set(entries.map((entry) => entry.id)).size === entries.length, { message: 'Feature priority ids must be unique' });
+  .refine((entries) => new Set(entries.map((entry) => entry.id)).size === entries.length, { message: 'Feature priority ids must be unique' })
+  .superRefine((entries, ctx) => {
+    const message = auditPathConflict(entries);
+    if (message) ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+  });
 
 export const processSchema = z.object({
   name: z.string().min(1),
