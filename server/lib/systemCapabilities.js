@@ -85,10 +85,13 @@ const LOCAL_LLM_HARDWARE_REQUIREMENTS = Object.freeze({
   'qwen3-coder-30b': Object.freeze({ minMemoryGb: 32 }),
   'devstral-small-2-24b': Object.freeze({ minMemoryGb: 32 }),
   'north-mini-code-1.0': Object.freeze({ minMemoryGb: 32 }),
+  'laguna-xs-2.1': Object.freeze({ minMemoryGb: 32 }),
   'ornith-1.5-35b-a3b': Object.freeze({ minMemoryGb: 32 }),
+  'ornith-1.5-122b-a10b': Object.freeze({ minMemoryGb: 96 }),
   'flint-40b-a2b': Object.freeze({ minMemoryGb: 32 }),
   'nex-n2-mini': Object.freeze({ minMemoryGb: 32 }),
   'qwen3.6-35b-a3b': Object.freeze({ minMemoryGb: 32 }),
+  'qwen3-coder-next': Object.freeze({ minMemoryGb: 64 }),
   'qwen3.6-fable-fusion': Object.freeze({ minMemoryGb: 64 }),
   'qwen3-vl-30b-a3b': Object.freeze({ minMemoryGb: 32 }),
 });
@@ -101,6 +104,7 @@ const LOCAL_MODEL_HARDWARE_REQUIREMENTS = Object.freeze({
   'nemotron-3-super': Object.freeze({ minMemoryGb: 96 }),
   'nemotron-3.5-super': Object.freeze({ minMemoryGb: 128 }),
   'ornith-1.5-35b': Object.freeze({ minMemoryGb: 32 }),
+  'ornith-1.5-122b': Object.freeze({ minMemoryGb: 96 }),
   'flint': Object.freeze({ minMemoryGb: 32 }),
   'qwen3.8-27b-mlx': Object.freeze({
     platforms: ['darwin'],

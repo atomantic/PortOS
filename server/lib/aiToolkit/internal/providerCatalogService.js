@@ -224,7 +224,7 @@ const TOOL_USE_RE = new RegExp([
   'gpt-oss',
   'nemotron',
   'olmo-?3',
-  'lfm[23]', 'ornith', 'flint', 'muse-glimmer', 'nex-n2', 'inkling',
+  'lfm[23]', 'ornith', 'flint', 'muse-glimmer', 'nex-n2', 'inkling', 'mimo-?v2', 'laguna',
   'smollm2',
   'dflash',
   'deepseek-v3', 'deepseek-r1', 'deepseek-v4',
