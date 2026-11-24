@@ -119,6 +119,9 @@ export const beeperDdl = [
   // LATERAL: both order on `COALESCE(sent_at, created_at) DESC, id DESC` within a conversation.
   `DROP INDEX IF EXISTS idx_beeper_messages_conversation_sort`,
   `CREATE INDEX IF NOT EXISTS idx_beeper_messages_conversation_order ON beeper_messages (conversation_id, (COALESCE(sent_at, created_at)) DESC, id DESC)`,
+  // Supports per-conversation id-ordered LATERAL probes in reconcileStoredMessages
+  // without scanning other accounts or sorting full account message history.
+  `CREATE INDEX IF NOT EXISTS idx_beeper_messages_conversation_id ON beeper_messages (conversation_id, id)`,
 
   // `observed_via` is required: the API truncates participant lists (20 in a listing, 100 in a
   // single-chat GET, no cursor), so a row set may be a subset and must not read as complete.
