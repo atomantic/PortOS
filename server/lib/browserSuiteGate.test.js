@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { browserSuiteCanRun, chromeWithH264, describeH264Probe, probeChromeH264, resolveClientBundler, resolveTestChrome } from './browserSuiteGate.js';
 
 describe('resolveClientBundler', () => {
@@ -25,6 +25,7 @@ const original = process.env.PORTOS_REQUIRE_BROWSER_SUITES;
 afterEach(() => {
   if (original === undefined) delete process.env.PORTOS_REQUIRE_BROWSER_SUITES;
   else process.env.PORTOS_REQUIRE_BROWSER_SUITES = original;
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
@@ -172,6 +173,47 @@ describe('H.264 probe outcomes', () => {
       '--password-store=basic',
       '--use-mock-keychain',
     ]));
+  });
+
+  posix('isolates and cleans up a short-prefix MAC_CHROMIUM_TMPDIR/TMPDIR when PORTOS_TEST_TEMP_ROOT is unset', async () => {
+    vi.stubEnv('PORTOS_TEST_TEMP_ROOT', undefined);
+    const outFile = join(mkdtempSync(join(tmpdir(), 'portos-fake-env-')), 'env.json');
+    dirs.push(join(outFile, '..'));
+    const chrome = fakeChrome(`
+      const { TMPDIR, TMP, TEMP, MAC_CHROMIUM_TMPDIR } = process.env;
+      require('node:fs').writeFileSync(${JSON.stringify(outFile)}, JSON.stringify({
+        env: { TMPDIR, TMP, TEMP, MAC_CHROMIUM_TMPDIR },
+        userDataDir: process.argv.find((arg) => arg.startsWith('--user-data-dir=')).slice('--user-data-dir='.length),
+      }));
+      process.stdout.write('<body>H264:probably</body>');
+    `);
+    const result = await probeChromeH264(chrome);
+    expect(result).toEqual({ ok: true, chromePath: chrome });
+    const { env, userDataDir } = JSON.parse(readFileSync(outFile, 'utf8'));
+    expect(basename(env.MAC_CHROMIUM_TMPDIR)).toMatch(/^ph2-/);
+    for (const key of ['TMPDIR', 'TMP', 'TEMP', 'MAC_CHROMIUM_TMPDIR']) {
+      expect(env[key]).toBe(env.MAC_CHROMIUM_TMPDIR);
+    }
+    expect(existsSync(env.MAC_CHROMIUM_TMPDIR)).toBe(false);
+    expect(existsSync(userDataDir)).toBe(false);
+  });
+
+  posix('inherits the existing Vitest temp root without nesting ph2- when PORTOS_TEST_TEMP_ROOT is set', async () => {
+    expect(process.env.PORTOS_TEST_TEMP_ROOT).toBeTruthy();
+    const outFile = join(mkdtempSync(join(tmpdir(), 'portos-fake-env-')), 'env.json');
+    dirs.push(join(outFile, '..'));
+    const chrome = fakeChrome(`
+      const { TMPDIR, MAC_CHROMIUM_TMPDIR } = process.env;
+      require('node:fs').writeFileSync(${JSON.stringify(outFile)}, JSON.stringify({ TMPDIR, MAC_CHROMIUM_TMPDIR }));
+      process.stdout.write('<body>H264:probably</body>');
+    `);
+    const result = await probeChromeH264(chrome);
+    expect(result).toEqual({ ok: true, chromePath: chrome });
+    const env = JSON.parse(readFileSync(outFile, 'utf8'));
+    expect(env.TMPDIR).toBe(process.env.TMPDIR);
+    expect(env.MAC_CHROMIUM_TMPDIR).toBe(process.env.MAC_CHROMIUM_TMPDIR);
+    expect(basename(env.TMPDIR)).not.toMatch(/^ph2-/);
+    expect(existsSync(process.env.PORTOS_TEST_TEMP_ROOT)).toBe(true);
   });
 });
 
