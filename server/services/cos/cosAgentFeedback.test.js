@@ -19,6 +19,13 @@ vi.mock('./cosState.js', () => ({
   withStateLock: async (fn) => fn()
 }));
 
+const upsertRef = vi.hoisted(() => vi.fn());
+vi.mock('./cosAgentFeedbackStore.js', async () => {
+  const actual = await vi.importActual('./cosAgentFeedbackStore.js');
+  upsertRef.mockImplementation(actual.upsertPendingAgentFeedbackRef);
+  return { ...actual, upsertPendingAgentFeedbackRef: upsertRef };
+});
+
 vi.mock('./cosAgentIndex.js', () => ({
   loadAgentIndex: vi.fn(async () => mockAgentIndex.entries),
   writeArchivedAgentMetadata: (dir, agent) => writeFile(join(dir, 'metadata.json'), JSON.stringify(agent)),
@@ -80,6 +87,23 @@ describe('getPendingAgentFeedbackCount', () => {
     };
 
     await expect(getPendingAgentFeedbackCount()).resolves.toBe(1);
+  });
+
+  it('enrolls a live reference once and rewrites it only when its archive date moves', async () => {
+    const agent = { id: 'agent-unrated', status: 'completed', metadata: { taskType: 'user' } };
+    mockCosState.state.agents = { [agent.id]: agent };
+    upsertRef.mockClear();
+
+    await getPendingAgentFeedbackCount();
+    await getPendingAgentFeedback();
+    await getPendingAgentFeedbackCount();
+    expect(upsertRef).toHaveBeenCalledTimes(1);
+
+    agent.completedAt = '2026-08-01T10:00:00.000Z';
+    await expect(getPendingAgentFeedback()).resolves.toMatchObject({ count: 1 });
+    await getPendingAgentFeedback();
+    expect(upsertRef).toHaveBeenCalledTimes(2);
+    await expect(listPendingAgentFeedbackRefs()).resolves.toEqual([{ agentId: agent.id, archiveDate: '2026-08-01' }]);
   });
 
   it('excludes system agents identified by id as well as taskId', async () => {
