@@ -534,6 +534,42 @@ export const runnerForTest = (path) => {
   return null;
 };
 
+// Server-owned JSON seeds under `data.reference/` (provider catalog, prompt
+// defaults, shipped hashes, starter configs). Neither client production code nor
+// native Windows contracts consume them, so updates stay scoped to server
+// contract tests + boot smoke rather than forcing a full matrix (#18220).
+const SERVER_SEED_RE = /^data\.reference\/.+\.json$/i;
+export const isServerSeed = (path) => SERVER_SEED_RE.test(path);
+
+export const SERVER_SEED_OWNERS = [
+  {
+    re: /^data\.reference\/providers\.json$/i,
+    tests: [
+      'scripts/generate-provider-samples.test.js',
+      'server/cos-runner/allowedCommands.test.js',
+      'server/lib/aiToolkit/defaults/providersSeedParity.test.js',
+      'server/services/provider/providers.shape.test.js',
+      'server/services/provider/providerPresets.test.js',
+      'server/services/provider/providerReadiness.test.js',
+    ],
+  },
+  {
+    re: /^data\.reference\/prompts\/[^/]+\.json$/i,
+    tests: [
+      'scripts/migrations/shippedPromptHashes.test.js',
+      'scripts/regen-shipped-prompt-hashes.test.js',
+      'server/lib/promptSystemStages.test.js',
+    ],
+  },
+];
+
+export const serverSeedTestsFor = (path, trackedSet) => (
+  SERVER_SEED_OWNERS
+    .filter(({ re }) => re.test(path))
+    .flatMap(({ tests }) => tests)
+    .filter((test) => trackedSet.has(test) && runnerForTest(test))
+);
+
 export const featureDirectory = (path) => {
   for (const rule of FEATURE_DIRECTORY_RULES) {
     const match = path.match(rule);

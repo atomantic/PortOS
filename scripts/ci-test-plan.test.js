@@ -1826,6 +1826,97 @@ describe('CI test impact planner', () => {
     });
   });
 
+  describe('server-owned data.reference JSON seeds (#18220)', () => {
+    it('scopes data.reference/providers.json to server provider contracts + smoke without client/browser/build/windows', () => {
+      const providerTests = [
+        'scripts/generate-provider-samples.test.js',
+        'server/cos-runner/allowedCommands.test.js',
+        'server/lib/aiToolkit/defaults/providersSeedParity.test.js',
+        'server/services/provider/providers.shape.test.js',
+        'server/services/provider/providerPresets.test.js',
+        'server/services/provider/providerReadiness.test.js',
+      ];
+      const seed = 'data.reference/providers.json';
+      const trackedFiles = [...TRACKED, seed, ...providerTests];
+
+      const plan = buildCiTestPlan([seed], { trackedFiles });
+
+      expect(plan.full).toBe(false);
+      expect(plan.reason).toBe('server seed contracts');
+      expect(plan.server.mode).toBe('files');
+      expect(plan.server.files).toEqual(expect.arrayContaining([
+        ...providerTests,
+        'server/services/taskPromptDefaults.test.js',
+      ]));
+      expect(plan.client).toMatchObject({ mode: 'skip', files: [], sources: [] });
+      expect(plan.browserFiles).toEqual([]);
+      expect(plan.build).toBe(false);
+      expect(plan.smoke).toBe(true);
+      expect(plan.db).toBe(false);
+      expect(plan.windows).toBe(false);
+    });
+
+    it('scopes data.reference/prompts/*.json seeds to server prompt contract tests + pathContractTests + smoke', () => {
+      const promptTests = [
+        'scripts/migrations/shippedPromptHashes.test.js',
+        'scripts/regen-shipped-prompt-hashes.test.js',
+        'server/lib/promptSystemStages.test.js',
+      ];
+      const pathHit = 'server/routes/prompts.test.js';
+      const seeds = [
+        'data.reference/prompts/stage-config.json',
+        'data.reference/prompts/shipped-hashes.json',
+      ];
+      const trackedFiles = [...TRACKED, ...seeds, ...promptTests, pathHit];
+
+      for (const seed of seeds) {
+        const plan = buildCiTestPlan([seed], {
+          trackedFiles,
+          pathContractTests: { [seed]: [pathHit] },
+        });
+        expect(plan.full, seed).toBe(false);
+        expect(plan.server.mode, seed).toBe('files');
+        expect(plan.server.files, seed).toEqual(expect.arrayContaining([
+          'server/services/taskPromptDefaults.test.js',
+          'scripts/migrations/shippedPromptHashes.test.js',
+          pathHit,
+        ]));
+        expect(plan.client.mode, seed).toBe('skip');
+        expect(plan.build, seed).toBe(false);
+        expect(plan.browserFiles, seed).toEqual([]);
+        expect(plan.windows, seed).toBe(false);
+        expect(plan.smoke, seed).toBe(true);
+      }
+    });
+
+    it('scopes other data.reference/**/*.json seeds via pathContractTests + smoke and still fails closed for unknown non-JSON files', () => {
+      const seed = 'data.reference/settings.json';
+      const hit = 'scripts/lib/mergeJsonStarter.test.js';
+      const scoped = buildCiTestPlan([seed], {
+        trackedFiles: [...TRACKED, seed, hit],
+        pathContractTests: { [seed]: [hit] },
+      });
+      expect(scoped.full).toBe(false);
+      expect(scoped.server.files).toContain(hit);
+      expect(scoped.smoke).toBe(true);
+      expect(scoped.client.mode).toBe('skip');
+      expect(scoped.build).toBe(false);
+      expect(scoped.windows).toBe(false);
+
+      const unknownBinary = buildCiTestPlan(['data.reference/unknown.bin'], { trackedFiles: TRACKED });
+      expect(unknownBinary.full).toBe(true);
+      expect(unknownBinary.reason).toMatch(/unclassified changed file: data\.reference\/unknown\.bin/);
+
+      const unknownCode = buildCiTestPlan(['data.reference/unexpected.js'], { trackedFiles: [...TRACKED, 'data.reference/unexpected.js'] });
+      expect(unknownCode.full).toBe(true);
+      expect(unknownCode.reason).toMatch(/unmapped executable surface: data\.reference\/unexpected\.js/);
+
+      const outsideSeed = buildCiTestPlan(['unmapped/config.json'], { trackedFiles: [...TRACKED, 'unmapped/config.json'] });
+      expect(outsideSeed.full).toBe(true);
+      expect(outsideSeed.reason).toMatch(/unmapped executable surface: unmapped\/config\.json/);
+    });
+  });
+
   it('runs the tree-scanning route and prompt-stage guards whenever a server source or client API wrapper changes', () => {
     const treeGuards = [
       'server/test/guards/modules.guard.test.js',
