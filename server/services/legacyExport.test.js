@@ -1,9 +1,15 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterAll, describe, it, expect, vi } from 'vitest';
 import { Readable, Writable } from 'stream';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { PERSISTENT_MIND_ID } from '../lib/persistent/persistentMindTrajectory.js';
 
 const memoryMock = vi.hoisted(() => ({ getMemories: vi.fn(async () => ({ total: 0, memories: [] })) }));
 vi.mock('./memoryBackend.js', () => memoryMock);
+// The gather step reads and seeds the digital-twin stores; keep it off the checkout's data/.
+vi.mock('../lib/paths.js', async (original) => makePathsProxy(await original(), {
+  dataRoot: () => lazyTempDataRoot('legacy-export-test-'),
+}));
+afterAll(cleanupTempDataRoots);
 
 import {
   redactSecrets,
