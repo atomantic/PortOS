@@ -195,7 +195,7 @@ A non-dry-run restore requires a reachable DB first (`checkHealth()`), so a rest
 
 ### Backend export and cutover — `POST /api/database/export`, `POST /api/database/maintenance/cutover`
 
-Separate from snapshot restore: `server/routes/database.js` moves data **between** the native (port 5432) and Docker (port 5561) Postgres backends. `POST /api/database/export` produces an on-demand `pg_dump` under `data/db-dumps/`. Backend mode switches go through `POST /api/database/maintenance/cutover` and `recover` (see [STORAGE.md](./STORAGE.md)); `POST /api/database/sync` is retired and returns `409 DATABASE_CUTOVER_UNAVAILABLE`. These are independent of the rsync snapshot backups above.
+Separate from snapshot restore: `server/routes/database.js` moves data **between** the native (port 5432) and Docker (port 5561) Postgres backends. `POST /api/database/export` produces an on-demand `pg_dump` under `data/db-dumps/`. `POST /api/database/sync` copies a snapshot of the active backend into the inactive backend (replacing matching tables without changing the active mode — exposed as **Replace data from …** in Settings → Database). Backend mode switches go through `POST /api/database/maintenance/cutover` and `recover` (see [STORAGE.md](./STORAGE.md)); `POST /api/database/switch` is retired and returns `409 DATABASE_CUTOVER_UNAVAILABLE`. These are independent of the rsync snapshot backups above.
 
 ## Retention & deletion
 

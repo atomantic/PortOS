@@ -112,6 +112,7 @@ export default function GitTab({ appId, appName, repoPath }) {
             remoteBranchesError={repo.remoteBranchesError}
             loadingRemote={repo.loadingRemote}
             onRefresh={() => loadRemoteBranches({ force: true })}
+            localWorktreeMergedCount={branches.filter(b => b.merged && b.worktree).length}
             actions={branchActions}
           />
         </div>
