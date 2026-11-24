@@ -148,10 +148,13 @@ export async function startAutofixerUi(stagedFixes, port = process.env.PORT || P
   });
 
   // Server-Sent Events endpoint for streaming logs
-  app.get('/logs', async (req, res) => {
+  app.get('/logs', auth.requireHostControl, async (req, res) => {
     const processName = req.query.process || 'portos-autofixer';
     if (!isPm2ProcessName(processName)) {
       return res.status(400).json({ error: 'Invalid process name', code: 'INVALID_PROCESS_NAME' });
+    }
+    if (processName !== 'portos-autofixer' && !(await isRegisteredProcess(processName))) {
+      return res.status(400).json({ error: 'Unknown process', code: 'UNKNOWN_PROCESS' });
     }
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');

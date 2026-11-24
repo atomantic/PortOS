@@ -805,7 +805,7 @@
         eventSource.close();
       }
 
-      eventSource = new EventSource('/logs?process=' + selectedProcess);
+      eventSource = new EventSource('/logs?process=' + encodeURIComponent(selectedProcess));
 
       eventSource.onopen = () => {
         statusText.textContent = 'Connected';
