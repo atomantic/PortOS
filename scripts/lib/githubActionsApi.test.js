@@ -178,6 +178,7 @@ describe('fetchRunJobOutcomes', () => {
         { name: 'Slow', steps: [], reason: 'timed out' },
       ],
       neverStarted: ['Never ran'],
+      succeeded: ['Fine'],
     });
   });
 

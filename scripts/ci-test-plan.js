@@ -94,6 +94,22 @@ const skippedRunner = () => ({ mode: 'skip', files: [], sources: [] });
  * while composition roots and test configuration force the complete suite.
  */
 /**
+ * Whether a forced-full push to main may run the generated-data plan: the last green run is this push's first parent (`predecessorGreenSha`, from scripts/ci-base-sha.js) and the complete two-tree diff against it lists only generated data. `gatedChangedFiles` is the --no-renames diff, so moving the snapshot to another path lists that path too and keeps the full plan; a missing, empty or unreadable diff does as well.
+ */
+export function isGeneratedSnapshotPush({
+  forceFull = false, gatedBaseSha, predecessorGreenSha, gatedChangedFiles = null,
+} = {}) {
+  return forceFull && Boolean(gatedBaseSha) && gatedBaseSha === predecessorGreenSha
+    && Array.isArray(gatedChangedFiles) && gatedChangedFiles.length > 0
+    && gatedChangedFiles.every(isGeneratedData);
+}
+
+function snapshotPushPlan({ gatedBaseSha, gatedChangedFiles, trackedFiles = [] }) {
+  const plan = buildSuitePlan(gatedChangedFiles, { trackedFiles });
+  return { ...plan, reason: `generated snapshot push: only ${plan.changedFiles.join(', ')} changed since the green first parent ${gatedBaseSha.slice(0, 9)}` };
+}
+
+/**
  * The CI plan for a diff: the test-suite selection plus whether each
  * path-gated job (Linux containment, SuperCollider live, Docker containment
  * live, macOS native, Node minimum) runs.
@@ -108,7 +124,10 @@ const skippedRunner = () => ({ mode: 'skip', files: [], sources: [] });
  * would decide them, while the primary suites stay full. null keeps them all.
  */
 export function buildCiTestPlan(changedFiles, options = {}) {
-  const plan = buildSuitePlan(changedFiles, options);
+  const snapshotScoped = isGeneratedSnapshotPush(options);
+  const plan = snapshotScoped
+    ? snapshotPushPlan(options)
+    : buildSuitePlan(changedFiles, options);
   const {
     forceFull = false, linuxContainmentInputs = null, supercolliderLiveInputs = null,
     dockerContainmentLiveInputs = null, serverReach = null, clientReach = null, trackedFiles = [],
@@ -143,6 +162,7 @@ export function buildCiTestPlan(changedFiles, options = {}) {
     // A gated push still is not complete-run evidence: ci.yml withholds the
     // Full CI Gate marker that release reuse trusts (scripts/verify-ci-status.js).
     nativeGated: gatedFull,
+    snapshotScoped,
     linuxContainment: gate((files) => touchesJobInputs(files, linuxContainmentInputs, LINUX_CONTAINMENT_PATH_RE)),
     supercolliderLive: gate((files) => touchesJobInputs(files, supercolliderLiveInputs, SUPERCOLLIDER_LIVE_PATH_RE)),
     dockerContainmentLive: gate((files) => touchesJobInputs(files, dockerContainmentLiveInputs, DOCKER_CONTAINMENT_LIVE_PATH_RE)),
@@ -530,6 +550,7 @@ function main() {
     throw new Error('CI_CHANGED_FILES must be a JSON array of repository-relative path strings.');
   }
   const gatedBaseSha = process.env.CI_GATED_BASE_SHA || undefined;
+  const predecessorGreenSha = process.env.CI_PREDECESSOR_GREEN_SHA || undefined;
   const {
     changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, clientTestDependencies,
     dbDependencies, dbLiveRestoreInputs, browserDependencies,
@@ -563,6 +584,8 @@ function main() {
     clientBrowserReach,
     gatedChangedFiles,
     gatedDependencyChanges,
+    gatedBaseSha,
+    predecessorGreenSha,
   });
   emitGitHubPlan(plan, { gatedBaseSha });
 }

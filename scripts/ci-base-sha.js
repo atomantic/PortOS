@@ -93,6 +93,14 @@ export async function resolveGatedBaseSha({ env = process.env, fetchImpl = globa
   return sha;
 }
 
+/**
+ * The gated base when it is exactly this push's first parent, else null: the proof that the green tree is the immediate predecessor, so a diff against it is the whole change this push introduces. A green run further back leaves commits unproven in between.
+ */
+export function resolvePredecessorGreenSha({ gatedBaseSha, revParse = gitRevParse } = {}) {
+  if (!gatedBaseSha) return null;
+  return revParse('HEAD^1') === gatedBaseSha ? gatedBaseSha : null;
+}
+
 async function main() {
   const eventName = process.env.GITHUB_EVENT_NAME;
   const baseSha = resolveBaseSha({ eventName });
@@ -115,6 +123,11 @@ async function main() {
   if (gatedBaseSha) {
     writeStepEnv('CI_GATED_BASE_SHA', gatedBaseSha);
     console.log(`📌 Native jobs gate on the diff since the last green main run: ${gatedBaseSha}`);
+    const predecessor = resolvePredecessorGreenSha({ gatedBaseSha });
+    if (predecessor) {
+      writeStepEnv('CI_PREDECESSOR_GREEN_SHA', predecessor);
+      console.log('📌 The last green main run is this push\'s first parent');
+    }
   }
   console.log('No pull-request merge base to resolve — this run tests the complete suite.');
 }

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { CI_WORKFLOW_FILE, pickGatedBaseSha, resolveBaseSha, resolveGatedBaseSha } from './ci-base-sha.js';
+import { CI_WORKFLOW_FILE, pickGatedBaseSha, resolveBaseSha, resolveGatedBaseSha, resolvePredecessorGreenSha } from './ci-base-sha.js';
 import { readCiJobs } from './lib/ciWorkflowJobs.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 
@@ -325,5 +325,15 @@ describe('ci.yml sidecar dependencies', () => {
     expect(jobs.impact).toContain('ci-impact-diagnostics.js syntax -- node --check server/index.js');
     expect(jobs.server).toContain('uses: ./.github/actions/setup-server');
     expect(WORKFLOW).not.toMatch(/npm ci[^\n]*--prefix autofixer/);
+  });
+});
+
+describe('resolvePredecessorGreenSha', () => {
+  const GREEN_SHA = 'c'.repeat(40);
+  it('names the gated base only when it is exactly the first parent', () => {
+    expect(resolvePredecessorGreenSha({ gatedBaseSha: GREEN_SHA, revParse: (rev) => (rev === 'HEAD^1' ? GREEN_SHA : null) })).toBe(GREEN_SHA);
+    expect(resolvePredecessorGreenSha({ gatedBaseSha: GREEN_SHA, revParse: () => 'd'.repeat(40) })).toBeNull();
+    expect(resolvePredecessorGreenSha({ gatedBaseSha: GREEN_SHA, revParse: () => null })).toBeNull();
+    expect(resolvePredecessorGreenSha({ gatedBaseSha: null, revParse: () => GREEN_SHA })).toBeNull();
   });
 });

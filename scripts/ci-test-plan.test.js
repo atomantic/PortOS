@@ -20,6 +20,7 @@ import {
   collectPlanInputs,
   collectSuperColliderLiveInputs,
   emitGitHubPlan,
+  isGeneratedSnapshotPush,
   formatPlanSummary,
   forceFullReasonFor,
   githubPlanOutput,
@@ -3325,6 +3326,50 @@ describe('native jobs on a push to main', () => {
     expect(gatedPlan(['client/src/App.jsx'], { linuxContainmentInputs: null }).linuxContainment).toBe(true);
     // A pull request never takes the gated path, even if handed a list.
     expect(buildCiTestPlan(['docs/README.md'], { gatedChangedFiles: ['server/lib/darwinAgentSupervisor.py'] }).macosNative).toBe(false);
+  });
+
+  describe('generated snapshot push (#18457)', () => {
+    const GREEN = 'a'.repeat(40);
+    const snapshotPlan = (gatedChangedFiles, extra = {}) => gatedPlan(gatedChangedFiles, {
+      gatedBaseSha: GREEN, predecessorGreenSha: GREEN, ...extra,
+    });
+    const jobsRun = (plan) => githubPlanOutput(plan);
+
+    it.each([
+      ['run 45350192457 diff', ['.quality.json']],
+      ['run 45337587297 diff', ['.quality.json']],
+    ])('runs the generated-data plan for %s and never offers release evidence', (_name, diff) => {
+      const plan = snapshotPlan(diff);
+      const out = jobsRun(plan);
+      expect(out).toMatchObject({
+        full: false, server_mode: 'skip', client_mode: 'skip', db: false, build: false, smoke: false,
+        windows: false, native_gated: true, snapshot_scoped: true, lint_mode: 'skip',
+      });
+      expect(out.reason).toMatch(/^generated snapshot push: only \.quality\.json changed since the green first parent aaaaaaaaa/);
+      expect(gates(plan)).toEqual(none);
+    });
+
+    it.each([
+      ['a concurrent code change', ['.quality.json', 'server/lib/db.js']],
+      ['the snapshot renamed into another path', ['.quality.json', 'docs/quality.json']],
+      ['an empty diff', []],
+      ['an unreadable diff', null],
+    ])('keeps the full plan for %s', (_name, diff) => {
+      const out = jobsRun(snapshotPlan(diff));
+      expect(out).toMatchObject({ full: true, snapshot_scoped: false });
+      expect(out.reason).toBe('full CI requested');
+    });
+
+    it('keeps the full plan without proof the green run is the first parent', () => {
+      expect(jobsRun(snapshotPlan(['.quality.json'], { predecessorGreenSha: undefined })).full).toBe(true);
+      expect(jobsRun(snapshotPlan(['.quality.json'], { predecessorGreenSha: 'b'.repeat(40) })).full).toBe(true);
+      expect(jobsRun(snapshotPlan(['.quality.json'], { gatedBaseSha: undefined })).full).toBe(true);
+    });
+
+    it('never scopes a run that is not forced full', () => {
+      expect(isGeneratedSnapshotPush({ forceFull: false, gatedBaseSha: GREEN, predecessorGreenSha: GREEN,
+        gatedChangedFiles: ['.quality.json'] })).toBe(false);
+    });
   });
 
   it('collects the two-dot tree diff, including both sides of a rename', () => {

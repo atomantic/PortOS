@@ -136,6 +136,7 @@ export function githubPlanOutput(plan) {
     macos_native: plan.macosNative,
     node_minimum: plan.nodeMinimum,
     native_gated: plan.nativeGated,
+    snapshot_scoped: Boolean(plan.snapshotScoped),
     windows: plan.windows,
     windows_mode: plan.windowsMode,
     windows_files: plan.windowsFiles,
