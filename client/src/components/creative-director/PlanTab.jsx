@@ -19,7 +19,7 @@ import {
   COST_CLASS_META,
   TONE_BADGE,
 } from '../../lib/creativeDirectorPlan.js';
-import { formatDateTime, formatDurationMs } from '../../utils/formatters';
+import { formatCount, formatDateTime, formatDurationMs } from '../../utils/formatters';
 
 const Badge = ({ tone, children, title }) => (
   <span title={title} className={`text-xs px-2 py-0.5 rounded ${TONE_BADGE[tone] || TONE_BADGE.muted}`}>{children}</span>
@@ -39,15 +39,16 @@ export default function PlanTab({ project, onProjectUpdate }) {
   const [savingDirective, setSavingDirective] = useState(false);
 
   // Tool catalog drives cost-class badges + the dry-run banner + approval gating.
-  // Fetched once (silent — the board degrades gracefully to no cost badges on
-  // failure rather than toasting on a passive tab open).
+  // Scoped to project.id so a project's daily budgetCap status stays accurate.
+  // Fetched silently (the board degrades gracefully to no cost badges on failure
+  // rather than toasting on a passive tab open).
   useEffect(() => {
     let alive = true;
-    getCreativeToolCatalog({ silent: true })
+    getCreativeToolCatalog({ projectId: project.id, silent: true })
       .then((data) => { if (alive && data) setCatalog(data); })
       .catch(() => {});
     return () => { alive = false; };
-  }, []);
+  }, [project.id, project.directive?.constraints?.budgetCap, project.status, project.runs?.length, project.updatedAt]);
 
   const toolMap = useMemo(() => {
     const m = new Map();
@@ -187,7 +188,15 @@ export default function PlanTab({ project, onProjectUpdate }) {
               </div>
             )}
             {project.directive.constraints?.budgetCap != null && (
-              <div className="text-xs text-port-text-muted mt-2">Budget cap: {project.directive.constraints.budgetCap} actions/day</div>
+              <div className="text-xs text-port-text-muted mt-2">
+                Budget cap: {formatCount(project.directive.constraints.budgetCap, { fallback: '0' })} actions/day
+                {catalog.budget?.project && catalog.budget.project.budgetCap === project.directive.constraints.budgetCap && (
+                  <span className={catalog.budget.project.withinBudget === false ? 'text-port-warning ml-1.5' : 'ml-1.5'}>
+                    ({formatCount(catalog.budget.project.used, { fallback: '0' })}/{formatCount(catalog.budget.project.budgetCap, { fallback: '0' })} used today
+                    {catalog.budget.project.withinBudget === false ? ' — exhausted' : ''})
+                  </span>
+                )}
+              </div>
             )}
           </div>
           <div className="flex gap-1 shrink-0">
@@ -309,7 +318,11 @@ export default function PlanTab({ project, onProjectUpdate }) {
                     )}
                     {needsApproval && (
                       <div className="text-xs text-port-warning mt-1">
-                        {s.destructive ? 'Destructive step — needs approval before it runs.' : 'Over the action budget — raise the cap, then approve.'}
+                        {s.destructive
+                          ? 'Destructive step — needs approval before it runs.'
+                          : (catalog.budget?.reason === 'project-budget' || s.result?.reason === 'project-budget'
+                            ? 'Over the action budget (project daily cap reached) — raise the directive cap, then approve.'
+                            : 'Over the action budget — raise the cap, then approve.')}
                       </div>
                     )}
                   </div>

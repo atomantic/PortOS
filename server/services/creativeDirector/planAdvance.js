@@ -424,11 +424,13 @@ async function runPlanStep(project, step) {
   // Outside the request lifecycle — catch so a throw becomes a settle, never an
   // unhandled rejection.
   const targetAbility = project.directive?.constraints?.targetAbility;
+  const budgetCap = project.directive?.constraints?.budgetCap;
   const dispatch = await loadLateBoundService('creativeToolRegistry')
     .then(({ dispatchCreativeTool }) => dispatchCreativeTool(resolvedStep.toolName, resolvedStep.args, {
       projectId,
       ...(project.workspace === 'video' ? { videoStepId: step.stepId } : {}),
       ...(targetAbility ? { targetAbility } : {}),
+      ...(budgetCap != null ? { budgetCap } : {}),
     }))
     .catch((err) => ({ ok: false, threw: true, error: err.message }));
   return settlePlanStepDispatch(projectId, resolvedStep, run?.runId, dispatch);
@@ -440,12 +442,16 @@ async function settlePlanStepDispatch(projectId, step, runId, dispatch) {
   // autonomy and Resume — the CD never silently retries around a governance stop.
   if (!dispatch || (dispatch.ok !== true && !dispatch.threw)) {
     const reason = dispatch?.reason || 'rejected';
+    const isProjectBudget = reason === 'project-budget' && dispatch?.budgetCap != null;
+    const stepResult = isProjectBudget
+      ? { reason, budgetCap: dispatch.budgetCap, used: dispatch.used ?? 0 }
+      : { reason };
+    const pauseMessage = isProjectBudget
+      ? `Step "${step.stepId}" (${step.toolName}) rejected by the creative gate: ${reason} (${dispatch.used ?? 0}/${dispatch.budgetCap} autonomous actions today — raise the directive budget cap or wait until UTC midnight, then resume)`
+      : `Step "${step.stepId}" (${step.toolName}) rejected by the creative gate: ${reason}`;
     await finishRun(projectId, runId, 'failed', reason);
-    await updatePlanStep(projectId, step.stepId, { ...(step.expectedProductionRevision === undefined ? {} : { expectedProductionRevision: step.expectedProductionRevision }), status: 'blocked', result: { reason } });
-    return pausePlanWithResidual(
-      projectId,
-      `Step "${step.stepId}" (${step.toolName}) rejected by the creative gate: ${reason}`,
-    );
+    await updatePlanStep(projectId, step.stepId, { ...(step.expectedProductionRevision === undefined ? {} : { expectedProductionRevision: step.expectedProductionRevision }), status: 'blocked', result: stepResult });
+    return pausePlanWithResidual(projectId, pauseMessage);
   }
   // Real tool error → mark failed, then bounded re-plan or pause.
   if (dispatch.threw) {

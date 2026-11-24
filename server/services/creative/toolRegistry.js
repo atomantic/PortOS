@@ -22,7 +22,7 @@ import { getCreativeAutonomyMode } from '../../lib/domainAutonomy.js';
 import { getToolMetadata, getToolSpecs as getVoiceToolSpecs } from '../voice/tools.js';
 import { loadState } from '../cos/cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from '../domainUsage.js';
-import { appendCreativeLedgerEntry, argsDigest } from './creativeRunLedger.js';
+import { appendCreativeLedgerEntry, argsDigest, countDailyBudgetedEntries, readCreativeLedger } from './creativeRunLedger.js';
 import { COST_CLASSES, BUDGETED_COST_CLASSES } from './tools/shared.js';
 import { UNIVERSE_TOOLS } from './tools/universe.js';
 import { STORY_BUILDER_TOOLS } from './tools/storyBuilder.js';
@@ -99,6 +99,52 @@ export function assertCreativeToolIntegrity(tools, resolveMeta = getToolMetadata
 assertCreativeToolIntegrity(CREATIVE_TOOLS);
 
 const byName = new Map(CREATIVE_TOOLS.map((t) => [t.name, t]));
+const isSelfBudgetedTool = (toolName) => Boolean(byName.get(toolName)?.selfBudgeted);
+const getToolCostClass = (toolName) => byName.get(toolName)?.costClass ?? null;
+
+/**
+ * Normalize a project's directive `budgetCap` (0 is a valid zero-action cap;
+ * null/undefined/empty/invalid means no per-project cap is set).
+ *
+ * @param {unknown} budgetCap
+ * @returns {number|null}
+ */
+export function normalizeProjectBudgetCap(budgetCap) {
+  if (budgetCap == null || budgetCap === '') return null;
+  const n = typeof budgetCap === 'number' ? budgetCap : Number(budgetCap);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.floor(n);
+}
+
+/**
+ * Evaluate a directive project's per-day action budget from its creative run ledger.
+ * Counts same-UTC-day executed budgeted entries for non-selfBudgeted tools.
+ *
+ * @param {string|undefined} projectId
+ * @param {number|null|undefined} budgetCap
+ * @param {{ledgerDir?: string}} [opts]
+ * @returns {Promise<{withinBudget: boolean, exceeded: 'actions'|null, budgetCap: number|null, used: number}>}
+ */
+export async function getProjectBudgetStatus(projectId, budgetCap, { ledgerDir } = {}) {
+  const cap = normalizeProjectBudgetCap(budgetCap);
+  if (cap == null) {
+    return { withinBudget: true, exceeded: null, budgetCap: null, used: 0 };
+  }
+  const entries = projectId
+    ? await readCreativeLedger(projectId, ledgerDir ? { dir: ledgerDir } : undefined)
+    : [];
+  const used = countDailyBudgetedEntries(entries, {
+    isSelfBudgeted: isSelfBudgetedTool,
+    resolveCostClass: getToolCostClass,
+  });
+  const withinBudget = used < cap;
+  return {
+    withinBudget,
+    exceeded: withinBudget ? null : 'actions',
+    budgetCap: cap,
+    used,
+  };
+}
 
 // Resolve a tool's advertised description + parameters. When a tool declares
 // `hydrateFrom`, pull them from the voice tool's fully-RESOLVED spec of that name
@@ -234,7 +280,7 @@ async function recordLedger(ctx, entry) {
       return;
     }
     if (ctx?.projectId) {
-      await appendCreativeLedgerEntry(ctx.projectId, entry);
+      await appendCreativeLedgerEntry(ctx.projectId, entry, ctx.ledgerDir ? { dir: ctx.ledgerDir } : undefined);
     }
   } catch (err) {
     console.error(`❌ creative ledger append failed for ${entry.tool}: ${err.message}`);
@@ -291,13 +337,29 @@ export async function dispatchCreativeTool(name, args = {}, ctx = {}) {
     };
   }
 
-  // execute mode — charge the daily action budget for llm/render tools first,
-  // EXCEPT self-budgeting tools: a long-running coordinator (Series Autopilot)
+  // execute mode — enforce the per-project daily cap (when set) and the shared
+  // cos daily action budget for llm/render tools before running, EXCEPT
+  // self-budgeting tools: a long-running coordinator (Series Autopilot)
   // budget-gates and records each of its own LLM/render steps against the same
   // cos budget internally, so charging one action here would double-count and,
   // under a tight cap, consume the last action before the run does any work.
   let charged = false;
   if (BUDGETED_COST_CLASSES.has(tool.costClass) && !tool.selfBudgeted) {
+    const projectBudget = await getProjectBudgetStatus(ctx?.projectId, ctx?.budgetCap, { ledgerDir: ctx?.ledgerDir });
+    if (!projectBudget.withinBudget) {
+      console.log(`🚫 creative dispatch ${name} rejected (project budget ${projectBudget.used}/${projectBudget.budgetCap} actions today)`);
+      await recordLedger(ctx, { ...base, outcome: 'budget-exceeded', timingMs: 0, exceeded: 'actions' });
+      return {
+        ok: false,
+        rejected: true,
+        reason: 'project-budget',
+        exceeded: 'actions',
+        budgetCap: projectBudget.budgetCap,
+        used: projectBudget.used,
+        mode,
+        tool: name,
+      };
+    }
     const status = await getDomainBudgetStatus(BUDGET_DOMAIN);
     if (!status.withinBudget) {
       console.warn(`⛔ creative dispatch ${name} over budget (${BUDGET_DOMAIN} ${status.exceeded})`);

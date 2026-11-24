@@ -180,6 +180,47 @@ describe('approval affordances', () => {
     expect(screen.getByText(/Over the action budget/i)).toBeTruthy();
   });
 
+  it('surfaces project-specific budget exhaustion for budgeted steps while keeping free steps clear', async () => {
+    getCreativeToolCatalog.mockResolvedValue({
+      ...CATALOG,
+      budget: {
+        withinBudget: false,
+        exceeded: 'actions',
+        reason: 'project-budget',
+        project: { withinBudget: false, exceeded: 'actions', budgetCap: 2, used: 2 },
+      },
+    });
+    renderTab(directiveProject({
+      directive: { goal: 'Produce a noir series', deliverables: ['story'], constraints: { budgetCap: 2 } },
+      plan: {
+        steps: [
+          { stepId: 'prep', toolName: 'pipeline_createSeries', status: 'pending', dependsOn: [] },
+          { stepId: 'draft', toolName: 'story_generateStep', status: 'blocked', dependsOn: ['prep'], result: { reason: 'project-budget' } },
+        ],
+      },
+    }));
+    await waitFor(() => expect(getCreativeToolCatalog).toHaveBeenCalledWith({ projectId: 'cd-1', silent: true }));
+    expect(await screen.findByText(/2\/2 used today — exhausted/i)).toBeTruthy();
+    expect(await screen.findByText(/project daily cap reached/i)).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /Approve/i })).toHaveLength(1);
+  });
+
+  it('displays budgetCap = 0 and DirectiveComposer stricter-cap label copy', async () => {
+    render(
+      <MemoryRouter initialEntries={['/?directive=edit']}>
+        <PlanTab
+          project={directiveProject({
+            directive: { goal: 'Produce a noir series', deliverables: ['story'], constraints: { budgetCap: 0 } },
+          })}
+          onProjectUpdate={() => {}}
+        />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(getCreativeToolCatalog).toHaveBeenCalled());
+    expect(screen.getByText(/Budget cap: 0 actions\/day/i)).toBeTruthy();
+    expect(screen.getByLabelText(/stricter of project cap and shared CoS daily cap applies/i)).toBeTruthy();
+  });
+
   it('renders an Approve button for a destructive step', async () => {
     renderTab(directiveProject({
       plan: {
