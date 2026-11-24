@@ -1007,6 +1007,17 @@ describe('Review Hub all-clear Today tab (#13005)', () => {
     await waitFor(() => expect(historyDisclosure()).toHaveAttribute('open'));
   });
 
+  it('opens a briefing dated today and shows its day without an invented time', async () => {
+    const now = new Date();
+    const today = [now.getFullYear(), now.getMonth() + 1, now.getDate()].map((n) => String(n).padStart(2, '0')).join('-');
+    getReviewBriefing.mockResolvedValueOnce({ source: 'cos', generatedAt: today, content: 'Dated briefing body' });
+    render(<Review />);
+
+    await screen.findByText('Dated briefing body');
+    await waitFor(() => expect(historyDisclosure()).toHaveAttribute('open'));
+    expect(historyDisclosure()).not.toHaveTextContent('12:00');
+  });
+
   it('keeps the all-clear line off a non-empty canonical queue', async () => {
     getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
       id: 'health:example', source: 'health', sourceLabel: 'Health anomalies', title: 'Required health action',
