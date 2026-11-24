@@ -34,4 +34,4 @@ export const uploadAppleHealthXml = (file, options = {}) => {
 };
 
 // Genome / Health Correlations
-export const getGenomeHealthCorrelations = () => request('/insights/genome-health');
+export const getGenomeHealthCorrelations = (options) => request('/insights/genome-health', options);

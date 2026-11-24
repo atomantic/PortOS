@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import { useValidTab } from '../hooks/useValidTab';
 import { Dna, Palette, Link2, Lightbulb, ArrowRight, Target } from 'lucide-react';
@@ -17,6 +17,7 @@ import GoalScorecardTab from '../components/insights/GoalScorecardTab';
 import ConfidenceBadge from '../components/insights/ConfidenceBadge';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
+import ListLoadError from '../components/ui/ListLoadError';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import { timeAgo } from '../utils/formatters';
 import { getPageNavTabs } from '../../../server/lib/navManifest.js';
@@ -40,6 +41,9 @@ export function OverviewTab() {
   const [genomeData, setGenomeData] = useState(null);
   const [themesData, setThemesData] = useState(null);
   const [narrativeData, setNarrativeData] = useState(null);
+  // Per-read failure, kept apart from `available: false` so a failed read never
+  // offers the generate/upload action that overwrites or duplicates stored content.
+  const [errors, setErrors] = useState({});
 
   // Empty cards carry the action that produces their content, so the user never
   // has to go hunting for a control the copy names (#3787).
@@ -54,18 +58,24 @@ export function OverviewTab() {
     'Failed to analyze cross-domain patterns'
   );
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setLoading(true);
+    const silent = { silent: true };
     Promise.allSettled([
-      getGenomeHealthCorrelations(),
-      getInsightThemes(),
-      getInsightNarrative()
+      getGenomeHealthCorrelations(silent),
+      getInsightThemes(silent),
+      getInsightNarrative(silent)
     ]).then(([genome, themes, narrative]) => {
       setGenomeData(genome.status === 'fulfilled' ? genome.value : null);
       setThemesData(themes.status === 'fulfilled' ? themes.value : null);
       setNarrativeData(narrative.status === 'fulfilled' ? narrative.value : null);
+      const failure = (r) => (r.status === 'rejected' ? (r.reason ?? new Error('Request failed')) : null);
+      setErrors({ genome: failure(genome), themes: failure(themes), narrative: failure(narrative) });
       setLoading(false);
     });
   }, []);
+
+  useEffect(() => { load(); }, [load]);
 
   if (loading) {
     return (
@@ -101,6 +111,8 @@ export function OverviewTab() {
     ? (narrativeData.text ?? '').split(/[.!?]/)[0]?.trim()
     : null;
 
+  const cardErrors = { 'genome-health': errors.genome, 'taste-identity': errors.themes, 'cross-domain': errors.narrative };
+
   const cards = [
     {
       tabId: 'genome-health',
@@ -119,7 +131,7 @@ export function OverviewTab() {
         ? <ConfidenceBadge level={topMarker.confidence?.level ?? 'unknown'} label={topMarker.confidence?.label} />
         : null,
       sources: genomeData?.sources ?? [],
-      action: genomeAvailable
+      action: genomeAvailable || errors.genome
         ? null
         : { label: 'Upload genome', onClick: () => navigate('/meatspace/genome') }
     },
@@ -142,7 +154,7 @@ export function OverviewTab() {
         ? <ConfidenceBadge level={firstTheme.strength === 'tentative' ? 'weak' : firstTheme.strength ?? 'unknown'} label={firstTheme.strength} />
         : null,
       sources: [],
-      action: themesAvailable
+      action: themesAvailable || errors.themes
         ? null
         : needsTasteProfile
           ? { label: 'Complete taste profile', onClick: () => navigate('/digital-twin/taste') }
@@ -165,7 +177,7 @@ export function OverviewTab() {
         : 'Synthesize your genome, health, and taste data into one connected narrative.',
       badge: null,
       sources: [],
-      action: narrativeAvailable
+      action: narrativeAvailable || errors.narrative
         ? null
         : {
           label: analyzing ? 'Analyzing…' : 'Analyze now',
@@ -208,6 +220,10 @@ export function OverviewTab() {
                   inside the <button> this summary sits in. */}
               <span className="block text-xs text-gray-400 leading-relaxed line-clamp-2">{topInsight}</span>
             </button>
+
+            {cardErrors[tabId] && (
+              <ListLoadError what={label} error={cardErrors[tabId]} onRetry={load} className="mt-3" />
+            )}
 
             <div className="flex items-center justify-between mt-3">
               {badge ?? <span />}

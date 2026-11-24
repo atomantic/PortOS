@@ -8,7 +8,9 @@ vi.mock('../../services/apiSystem.js', () => ({
   getGoalScorecardSettings: vi.fn().mockResolvedValue({}),
   getGoalScorecardRules: vi.fn(),
   saveGoalScorecardRules: vi.fn(),
+  computeGoalScorecard: vi.fn(),
   refreshGoalScorecardNarrative: vi.fn(),
+  updateGoalScorecardSettings: vi.fn(),
 }));
 
 vi.mock('../../services/apiProviders.js', () => ({

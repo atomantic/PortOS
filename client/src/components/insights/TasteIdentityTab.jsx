@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useInsightGeneration } from './useInsightGeneration.js';
+import { useInsightRead } from './useInsightRead.js';
+import ListLoadError from '../ui/ListLoadError';
 import { RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
 import { getInsightThemes, refreshInsightThemes } from '../../services/apiSystem.js';
 import InsightCard from './InsightCard';
@@ -77,14 +79,7 @@ function ThemeCard({ theme }) {
 }
 
 export default function TasteIdentityTab() {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    getInsightThemes()
-      .then(setData)
-      .finally(() => setLoading(false));
-  }, []);
+  const { data, setData, error, loading, reload } = useInsightRead(getInsightThemes);
 
   const [handleRefresh, refreshing] = useInsightGeneration(
     refreshInsightThemes,
@@ -106,6 +101,8 @@ export default function TasteIdentityTab() {
       </div>
     );
   }
+
+  if (error) return <ListLoadError what="identity themes" error={error} onRetry={reload} />;
 
   if (!data?.available) {
     if (data?.reason === 'no_taste_data') {
