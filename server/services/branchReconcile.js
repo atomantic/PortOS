@@ -21,7 +21,9 @@
  */
 
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
-import { getBranches, getDefaultBranch, hasBranchMergeEvidence, deleteMergedRemoteBranches } from './git.js';
+import { getBranches, getDefaultBranch } from './git/status.js';
+import { hasBranchMergeEvidence } from './git/branchEvidence.js';
+import { deleteMergedRemoteBranches } from './git/cleanup.js';
 import { readRepoBranchSnapshot } from './repoBranchSnapshot.js';
 import { execGit } from '../lib/execGit.js';
 import { listWorktrees, reapMergedWorktrees } from './worktreeManager.js';

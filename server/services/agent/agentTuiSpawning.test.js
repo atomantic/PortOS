@@ -108,13 +108,15 @@ vi.mock('./agentApiAuth.js', () => ({
   resolveAgentApiEnv: vi.fn().mockResolvedValue({}),
 }));
 
-vi.mock('../git.js', () => ({
+vi.mock('../git/status.js', () => ({
   getDiff: vi.fn().mockResolvedValue('diff content here'),
-  // No owner-matched gh account by default → empty overlay (ambient auth kept).
-  resolveForgeTokenEnv: vi.fn().mockResolvedValue({}),
   // Read by the merge-gate contract check (#5876) to name the branch it
   // probes the forge for.
   getBranch: vi.fn().mockResolvedValue('claim/issue-5876'),
+}));
+vi.mock('../forgeAuth.js', () => ({
+  // No owner-matched gh account by default → empty overlay (ambient auth kept).
+  resolveForgeTokenEnv: vi.fn().mockResolvedValue({}),
 }));
 
 // The forge lookup itself (`resolveForgeForRepo` + gitlab.js/github.js) is
@@ -246,7 +248,9 @@ import * as shellService from '../shell.js';
 import * as agentLifecycle from './agentFinalization.js';
 import { beginOllamaAgentWork, ensureOllamaAgentContext } from '../ollamaAgentContext.js';
 import * as cosAgentLifecycle from '../cos/cosAgentLifecycle.js';
-import * as gitService from '../git.js';
+import * as gitStatusService from '../git/status.js';
+import * as forgeAuthService from '../forgeAuth.js';
+const gitService = { ...gitStatusService, ...forgeAuthService };
 import { probePrForBranch } from '../prProbe.js';
 import { promptOpensOwnPr } from '../promptSections/completion.js';
 import { activeAgents, userTerminatedAgents, pausedAgents, consumePausedAgentExit } from './agentState.js';

@@ -140,3 +140,77 @@ describe('git.js exports the helpers the agent resume path calls', () => {
     }
   });
 });
+
+describe('git service decomposition contracts (#18222)', () => {
+  it('re-exports every focused sub-module symbol through the git.js compatibility facade', async () => {
+    const facade = await vi.importActual('./git.js');
+    const [status, sync, prs, cleanup, fetchMod, evidence] = await Promise.all([
+      vi.importActual('./git/status.js'),
+      vi.importActual('./git/sync.js'),
+      vi.importActual('./git/prs.js'),
+      vi.importActual('./git/cleanup.js'),
+      vi.importActual('./git/fetch.js'),
+      vi.importActual('./git/branchEvidence.js'),
+    ]);
+    for (const mod of [status, sync, prs, cleanup, fetchMod, evidence]) {
+      for (const [name, fn] of Object.entries(mod)) {
+        expect(facade[name], `git.js must re-export ${name}`).toBe(fn);
+      }
+    }
+  });
+
+  it('keeps server/services/git/* <= 650 lines, acyclic, and status.js free of PR/sync/cleanup edges', async () => {
+    const { readdirSync, readFileSync } = await import('node:fs');
+    const { dirname, join, posix } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const { moduleSpecifiers } = await import('../../scripts/lib/moduleGraph.js');
+
+    const serviceDir = dirname(fileURLToPath(import.meta.url));
+    const gitDir = join(serviceDir, 'git');
+    const files = readdirSync(gitDir).filter(f => f.endsWith('.js') && !f.endsWith('.test.js'));
+    expect(files).toEqual(expect.arrayContaining(['status.js', 'sync.js', 'prs.js', 'cleanup.js']));
+
+    const graph = new Map();
+    for (const file of files) {
+      const src = readFileSync(join(gitDir, file), 'utf8');
+      expect(src.split('\n').length, `git/${file} exceeds 650 lines`).toBeLessThanOrEqual(650);
+      const rel = `server/services/git/${file}`;
+      const { statics, deferred } = moduleSpecifiers(src, rel);
+      const edges = [...statics, ...deferred]
+        .filter(spec => spec.startsWith('.'))
+        .map(spec => posix.normalize(posix.join(posix.dirname(rel), spec)));
+      graph.set(rel, edges);
+    }
+
+    // status.js must not drag PR/Copilot, sync, or cleanup helpers into basic status consumers.
+    const statusEdges = graph.get('server/services/git/status.js');
+    for (const forbidden of [
+      'server/services/git/prs.js',
+      'server/services/git/sync.js',
+      'server/services/git/cleanup.js',
+      'server/services/git/fetch.js',
+      'server/services/git/branchEvidence.js',
+      'server/services/forgeAuth.js',
+      'server/services/worktreeManager.js',
+      'server/services/branchReconcile.js',
+    ]) {
+      expect(statusEdges).not.toContain(forbidden);
+    }
+
+    // Zero circular imports across git/*
+    const visiting = new Set();
+    const visited = new Set();
+    const hasCycle = (node) => {
+      if (visiting.has(node)) return true;
+      if (visited.has(node)) return false;
+      visiting.add(node);
+      for (const next of graph.get(node) || []) {
+        if (hasCycle(next)) return true;
+      }
+      visiting.delete(node);
+      visited.add(node);
+      return false;
+    };
+    expect([...graph.keys()].some(hasCycle)).toBe(false);
+  });
+});

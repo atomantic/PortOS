@@ -16,7 +16,7 @@ import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { getActiveApps } from './apps.js';
 import { getActiveAgentIds } from './agent/agentState.js';
 import { gatherBranchState, classifyBranches } from './branchReconcile.js';
-import { getDefaultBranch } from './git.js';
+import { getDefaultBranch } from './git/status.js';
 import { listUserActions } from './userActions.js';
 
 export const LEFTOVER_BRANCH_LOOKBACK_DAYS = 14;

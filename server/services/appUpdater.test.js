@@ -25,7 +25,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, PATHS: mock.paths };
 });
-vi.mock('./git.js', () => ({ updateDefaultBranch: mock.updateDefaultBranch }));
+vi.mock('./git/sync.js', () => ({ updateDefaultBranch: mock.updateDefaultBranch }));
 vi.mock('./pm2.js', () => ({ restartApp: mock.restart, getProcessesToRestartOnUpdate: mock.runningNames }));
 vi.mock('../lib/bufferedSpawn.js', async (importOriginal) => {
   const actual = await importOriginal();

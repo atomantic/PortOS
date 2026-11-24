@@ -35,7 +35,7 @@ async function createPersistentWorktreeUnlocked(featureAgentId, sourceWorkspace,
     });
 
   if (!baseBranch) {
-    const { getDefaultBranch } = await import('../git.js');
+    const { getDefaultBranch } = await import('../git/status.js');
     baseBranch = await getDefaultBranch(sourceWorkspace, { allowRemote: fetchOk }).catch(() => null) || 'main';
   }
 
@@ -46,7 +46,7 @@ async function createPersistentWorktreeUnlocked(featureAgentId, sourceWorkspace,
       const localExists = (await execGit(['branch', '--list', baseBranch], sourceWorkspace, { ignoreExitCode: true })).stdout.trim();
       if (localExists) return baseBranch;
       // Provided baseBranch doesn't exist — re-detect the actual default
-      const { getDefaultBranch } = await import('../git.js');
+      const { getDefaultBranch } = await import('../git/status.js');
       const detected = await getDefaultBranch(sourceWorkspace, { allowRemote: false }).catch(() => null);
       if (detected && detected !== baseBranch) {
         baseBranch = detected;
@@ -133,7 +133,7 @@ export async function mergeBaseIntoFeatureWorktree(featureAgentId, baseBranch) {
     });
 
   if (!baseBranch) {
-    const { getDefaultBranch } = await import('../git.js');
+    const { getDefaultBranch } = await import('../git/status.js');
     baseBranch = await getDefaultBranch(worktreePath, { allowRemote: fetchOk }).catch(() => null) || 'main';
   }
 
@@ -142,7 +142,7 @@ export async function mergeBaseIntoFeatureWorktree(featureAgentId, baseBranch) {
     .then(r => r.exitCode === 0)
     .catch(() => false);
   if (!remoteBranchValid) {
-    const { getDefaultBranch } = await import('../git.js');
+    const { getDefaultBranch } = await import('../git/status.js');
     const detected = await getDefaultBranch(worktreePath, { allowRemote: false }).catch(() => null);
     if (detected && detected !== baseBranch) {
       remoteBranchValid = await execGit(['rev-parse', `origin/${detected}`], worktreePath, { ignoreExitCode: true })

@@ -216,7 +216,7 @@ const isUnshippedReviewObligation = (input, decision) => decision.reason === 'pr
  */
 async function isVacuousReviewObligation(input, decision, tip) {
   if (!isUnshippedReviewObligation(input, decision) || !/^[a-f0-9]{40,64}$/i.test(tip || '')) return false;
-  const { getDefaultBranch } = await import('./git.js');
+  const { getDefaultBranch } = await import('./git/status.js');
   const base = await getDefaultBranch(input.repoPath, { strict: true }).catch(() => null);
   if (!base) return false;
   const { execGit } = await import('../lib/execGit.js');

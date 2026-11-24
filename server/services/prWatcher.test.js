@@ -46,7 +46,7 @@ vi.mock('../lib/childProcess.js', async importOriginal => {
   };
 });
 const mergePrMock = vi.fn();
-vi.mock('./git.js', () => ({
+vi.mock('./git/prs.js', () => ({
   mergePR: (...args) => mergePrMock(...args),
 }));
 

@@ -25,7 +25,7 @@ async function verifyFinding(finding, { workspacePath, repoPath, task }, deps) {
     // audit branch, which was cut before it landed. The source checkout shares
     // refs and objects and outlives a retired worktree.
     if (!await reachableFrom('HEAD', workspacePath)) {
-      const { getDefaultBranch } = await import('./git.js');
+      const { getDefaultBranch } = await import('./git/status.js');
       const branch = await getDefaultBranch(repoPath, { allowRemote: false, strict: true }).catch(() => null);
       if (!branch || !await reachableFrom(`refs/remotes/origin/${branch}`, repoPath)) return false;
     }

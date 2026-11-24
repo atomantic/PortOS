@@ -48,7 +48,7 @@ vi.mock('../services/gsdService.js', () => ({
   scanForGsdProjects: vi.fn(),
 }));
 
-vi.mock('../services/git.js', () => ({
+vi.mock('../services/git/status.js', () => ({
   stageFiles: mocks.stageFiles,
   getStatus: mocks.getStatus,
   commit: mocks.commit,

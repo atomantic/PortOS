@@ -16,10 +16,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const execGitMock = vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 }));
-vi.mock('../lib/execGit.js', () => ({ execGit: (...args) => execGitMock(...args) }));
 
 const gitMocks = {
-  // execGitSafe is git.js's own catch-into-a-failed-result wrapper; the suite
+  // execGitSafe is git's own catch-into-a-failed-result wrapper; the suite
   // routes it at the same mock so argv assertions see every call.
   execGitSafe: vi.fn((...args) => execGitMock(...args)),
   fetchOrigin: vi.fn(async () => undefined),
@@ -31,7 +30,20 @@ const gitMocks = {
   hasBranchMergeEvidence: vi.fn(async () => false),
   isRepo: vi.fn(async () => true)
 };
-vi.mock('./git.js', () => gitMocks);
+vi.mock('../lib/execGit.js', () => ({
+  execGit: (...args) => execGitMock(...args),
+  execGitSafe: (...args) => gitMocks.execGitSafe(...args),
+}));
+vi.mock('./git/status.js', () => ({
+  getBranch: (...args) => gitMocks.getBranch(...args),
+  getBranches: (...args) => gitMocks.getBranches(...args),
+  getDefaultBranch: (...args) => gitMocks.getDefaultBranch(...args),
+  getStatusPorcelain: (...args) => gitMocks.getStatusPorcelain(...args),
+  isRepo: (...args) => gitMocks.isRepo(...args),
+}));
+vi.mock('./git/fetch.js', () => ({ fetchOrigin: (...args) => gitMocks.fetchOrigin(...args) }));
+vi.mock('./git/branchEvidence.js', () => ({ hasBranchMergeEvidence: (...args) => gitMocks.hasBranchMergeEvidence(...args) }));
+vi.mock('./git/cleanup.js', () => ({ findActiveAgentInWorkspace: (...args) => gitMocks.findActiveAgentInWorkspace(...args) }));
 vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: vi.fn(async () => ({ hasOrigin: true, host: 'github.com' }))
 }));

@@ -35,12 +35,14 @@ vi.mock('../cos/cosAgentLifecycle.js', () => ({
   getAgents: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('../apps.js', () => ({ getAppById: vi.fn().mockResolvedValue(null) }));
-vi.mock('../git.js', () => ({
-  ensureLatest: vi.fn(),
+vi.mock('../git/status.js', () => ({
   isRepo: vi.fn().mockResolvedValue(true),
   notGitRepoMessage: (name) => `${name} is not a git repository — run \`git init\``,
-  fetchOrigin: vi.fn().mockResolvedValue(undefined),
   getRepoBranches: vi.fn().mockResolvedValue({ baseBranch: 'main' }),
+}));
+vi.mock('../git/sync.js', () => ({
+  ensureLatest: vi.fn(),
+  fetchOrigin: vi.fn().mockResolvedValue(undefined),
   checkout: vi.fn().mockResolvedValue(undefined),
   createBranch: vi.fn().mockResolvedValue(undefined),
 }));
@@ -102,7 +104,8 @@ import { claimContinuationWorkspace } from '../../lib/claimContinuation.js';
 import { updateTask, addTask } from '../cos/cosTaskStore.js';
 import { getAgents } from '../cos/cosAgentLifecycle.js';
 import { emitLog } from '../cos/cosEvents.js';
-import { ensureLatest, isRepo, fetchOrigin, createBranch } from '../git.js';
+import { isRepo } from '../git/status.js';
+import { ensureLatest, fetchOrigin, createBranch } from '../git/sync.js';
 import { getAppDataForTask } from './agentAppWorkspace.js';
 import { createJiraTicketForTask } from '../promptSections/appContext.js';
 import { getFeatureAgent } from '../featureAgents.js';

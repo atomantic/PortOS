@@ -73,7 +73,7 @@ async function rollBackClaimCheckout(sourceWorkspace, worktreePath, branch, addE
  */
 export async function provisionClaimCheckout({ app, sourceWorkspace, branch, worktreesRoot = PATHS.worktrees }) {
   const [{ getDefaultBranch }, { addWorktreeWithRetry, linkWorktreeDependencies }] = await Promise.all([
-    import('./git.js'), import('./worktreeManager.js'),
+    import('./git/status.js'), import('./worktreeManager.js'),
   ]);
   const issueNumber = branch.replace(/^claim\/issue-/, '');
   const worktreePath = claimCheckoutPath(app, issueNumber, worktreesRoot);

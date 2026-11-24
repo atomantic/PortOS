@@ -31,7 +31,9 @@
 import { isAbsolute } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { execGitSafe } from '../lib/execGit.js';
-import * as gitService from './git.js';
+import { isRepo, getDefaultBranch, getBranch, getStatusPorcelain } from './git/status.js';
+import { fetchOrigin } from './git/fetch.js';
+import { findActiveAgentInWorkspace } from './git/cleanup.js';
 import { countAheadBehind, detectOperationInProgress } from './repoSync.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { inspectPinnedSubmoduleDrift } from './gitPinnedSubmodules.js';
@@ -125,19 +127,19 @@ export async function checkUpdateRepoReadiness({ repoPath, fetch = false, exclud
     };
   };
 
-  if (!(await gitService.isRepo(dir).catch(() => false))) {
+  if (!(await isRepo(dir).catch(() => false))) {
     return verdict({ reasons: ['git-unreadable'] });
   }
-  if (fetch) await gitService.fetchOrigin(dir).catch(() => undefined);
+  if (fetch) await fetchOrigin(dir).catch(() => undefined);
 
   // Five independent reads — nothing below depends on another's answer, and
   // serializing them cost ~110ms of git spawns on a path the Update tab polls.
   // `allowRemote` follows `fetch`: without it `getDefaultBranch` may run
   // `git remote set-head --auto`, a 5s network call, on that same poll.
   const [defaultBranch, branch, porcelain, interrupted, activeAgentId] = await Promise.all([
-    gitService.getDefaultBranch(dir, { strict: true, allowRemote: fetch }).catch(() => null),
-    gitService.getBranch(dir).catch(() => null),
-    gitService.getStatusPorcelain(dir).catch(() => null),
+    getDefaultBranch(dir, { strict: true, allowRemote: fetch }).catch(() => null),
+    getBranch(dir).catch(() => null),
+    getStatusPorcelain(dir).catch(() => null),
     // `'unknown'` = the marker read itself failed, which is not "no operation".
     detectOperationInProgress(dir).catch(() => 'unknown'),
     // A CoS agent working in THIS checkout (a `useWorktree: false` task,
@@ -145,7 +147,7 @@ export async function checkUpdateRepoReadiness({ repoPath, fetch = false, exclud
     // Moving it, or running update.sh's pm2 restart under it, is the branch-jack
     // `repoSync` refuses on for the same reason — and the idle gate alone would
     // not catch a paused agent that still holds the tree.
-    gitService.findActiveAgentInWorkspace(dir, { includePaused: true, failClosed: true, excludeAgentId: excludeAgentId }).catch(() => 'unknown'),
+    findActiveAgentInWorkspace(dir, { includePaused: true, failClosed: true, excludeAgentId: excludeAgentId }).catch(() => 'unknown'),
   ]);
   if (branch === null || porcelain === null) {
     return verdict({ defaultBranch, reasons: ['git-unreadable'] });

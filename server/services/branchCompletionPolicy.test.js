@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { parsePullRequestUrl } from '../lib/gitForge.js';
 import { storedForm } from '../lib/cos/cosTaskRows.js';
 
 const runtime = vi.hoisted(() => ({ dir: null, agents: {}, trusted: true, tip: 'a'.repeat(40), remoteTip: 'a'.repeat(40), prState: 'OPEN', merged: false, closedPr: false }));
@@ -43,7 +42,8 @@ vi.mock('./cos/cosAgentIndex.js', () => ({
   removeDanglingAgentIndexEntries: vi.fn(async ids => ids.length),
   archivedRecordCacheEpoch: () => 0, getCachedArchivedRecord: () => null, cacheArchivedRecord: () => {}, pruneArchivedRecordCache: () => {},
 }));
-vi.mock('./git.js', () => ({ parsePullRequestUrl, getBranches: async () => [{ name: 'feature/handoff', tip: runtime.tip, tracking: 'origin/feature/handoff' }], getDefaultBranch: async () => 'main', hasBranchMergeEvidence: async () => runtime.merged }));
+vi.mock('./git/status.js', () => ({ getBranches: async () => [{ name: 'feature/handoff', tip: runtime.tip, tracking: 'origin/feature/handoff' }], getDefaultBranch: async () => 'main' }));
+vi.mock('./git/branchEvidence.js', () => ({ hasBranchMergeEvidence: async () => runtime.merged }));
 vi.mock('./worktreeManager.js', () => ({ listWorktrees: async () => [], classifyWorktreeDirt: () => ({ hasRealChanges: false, realChangePaths: [] }) }));
 
 import { spawnReviewLoopFollowUp } from './agent/agentWorktreeCleanup.js';

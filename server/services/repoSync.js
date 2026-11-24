@@ -48,10 +48,11 @@
 
 import { existsSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
-import {
-  execGitSafe, fetchOrigin, findActiveAgentInWorkspace, getBranch, getBranches,
-  getDefaultBranch, getStatusPorcelain, hasBranchMergeEvidence, isRepo
-} from './git.js';
+import { execGitSafe } from '../lib/execGit.js';
+import { getBranch, getBranches, getDefaultBranch, getStatusPorcelain, isRepo } from './git/status.js';
+import { fetchOrigin } from './git/fetch.js';
+import { hasBranchMergeEvidence } from './git/branchEvidence.js';
+import { findActiveAgentInWorkspace } from './git/cleanup.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { countWords } from '../lib/textUtils.js';

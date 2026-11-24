@@ -166,34 +166,39 @@ vi.mock('./jira.js', () => ({
   default: {}
 }));
 
-vi.mock('./git.js', () => ({
-  push: vi.fn(),
+vi.mock('./git/status.js', () => ({
   getRepoBranches: vi.fn(),
   getDefaultBranch: vi.fn().mockResolvedValue('main'),
+  getBranchComparison: vi.fn().mockResolvedValue({ ahead: 2, commits: [], stats: {} }),
+  getBranch: vi.fn().mockResolvedValue(''),
+  getStatusPorcelain: vi.fn().mockResolvedValue(''),
+}));
+vi.mock('./git/sync.js', () => ({
+  push: vi.fn(),
+}));
+vi.mock('./git/prs.js', () => ({
   createPR: vi.fn(),
   generatePRDescription: vi.fn(),
   suggestPRTitle: vi.fn(),
-  deleteBranch: vi.fn().mockResolvedValue(undefined),
-  // Default: the branch is 2 commits ahead of the default branch, so
-  // resolveResumePointer reports it as resumable. Tests override per case.
-  getBranchComparison: vi.fn().mockResolvedValue({ ahead: 2, commits: [], stats: {} }),
-  // Read off a SURVIVING worktree when deciding whether a retry can adopt it.
-  getBranch: vi.fn().mockResolvedValue(''),
-  getStatusPorcelain: vi.fn().mockResolvedValue(''),
-  // Default: no branch is claimed by a surviving worktree, so an ahead branch is
-  // attachable. The "still checked out" test overrides this.
-  getWorktreeBranches: vi.fn().mockResolvedValue(new Set()),
-  // Default: NOT already merged, so an ahead branch is resumable. The
-  // rebase/squash-merged case overrides this.
-  hasBranchMergeEvidence: vi.fn().mockResolvedValue(false),
   requestCopilotReview: vi.fn().mockResolvedValue({ success: true }),
+}));
+vi.mock('./git/cleanup.js', () => ({
+  deleteBranch: vi.fn().mockResolvedValue(undefined),
+  getWorktreeBranches: vi.fn().mockResolvedValue(new Set()),
+}));
+vi.mock('./git/branchEvidence.js', () => ({
+  hasBranchMergeEvidence: vi.fn().mockResolvedValue(false),
+}));
+vi.mock('./forgeAuth.js', () => ({
   resolveForgeForRepo: vi.fn().mockResolvedValue({ cli: 'gh', env: process.env, host: 'github.com', owner: null, account: null }),
+}));
+vi.mock('../lib/gitForge.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   parsePullRequestUrl: vi.fn((url) => {
-    // Minimal stand-in: extract host/owner/repo/number from GitHub PR URLs
     const match = url?.match?.(/^https:\/\/([^/]+)\/([^/]+)\/([^/]+)\/(?:pull|merge_requests|-\/merge_requests)\/(\d+)/);
     if (!match) return null;
     return { host: match[1], owner: match[2], repo: match[3], number: Number(match[4]) };
-  })
+  }),
 }));
 
 const queuePendingMergeMock = vi.fn();
@@ -248,7 +253,14 @@ import { getAllTasks, getTaskById, addTask, updateTask } from './cos/cosTaskStor
 import { forceSpawnTask } from './cos/cos.js';
 import { listWorktrees, removeWorktree } from './worktreeManager.js';
 import { PATHS } from '../lib/fileUtils.js';
-import * as git from './git.js';
+import * as gitStatus from './git/status.js';
+import * as gitSync from './git/sync.js';
+import * as gitPrs from './git/prs.js';
+import * as gitCleanup from './git/cleanup.js';
+import * as gitEvidence from './git/branchEvidence.js';
+import * as forgeAuth from './forgeAuth.js';
+import * as gitForge from '../lib/gitForge.js';
+const git = { ...gitStatus, ...gitSync, ...gitPrs, ...gitCleanup, ...gitEvidence, ...forgeAuth, ...gitForge };
 import { resolveReviewerConfig } from '../lib/reviewerConfig.js';
 import { buildReviewLoopFollowUpSection } from './promptSections/reviewLifecycle.js';
 
