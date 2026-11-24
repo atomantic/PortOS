@@ -24,6 +24,15 @@ const enc = encodeURIComponent;
 
 export const getCatalogStats = (options) => request('/catalog/stats', options);
 
+// One batch of the embedding backfill; the caller drains by repeating until
+// `processed` is 0 or nothing embedded.
+export const backfillCatalogEmbeddings = ({ limit, includeStale } = {}, options) =>
+  request('/catalog/embeddings/backfill', {
+    method: 'POST',
+    body: JSON.stringify({ limit, includeStale }),
+    ...options,
+  });
+
 // Faceted counts (#1762) driving the filter dropdowns + album headers:
 // { types, universes, series, tags, unlinkedCount, orphanedCount, total }.
 export const getCatalogFacets = (options) => request('/catalog/facets', options);
