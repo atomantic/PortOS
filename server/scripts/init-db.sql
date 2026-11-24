@@ -2579,6 +2579,10 @@ CREATE TABLE IF NOT EXISTS github_notifications (
 
 CREATE INDEX IF NOT EXISTS idx_github_notifications_account_updated ON github_notifications (account_id, gh_updated_at DESC);
 
+CREATE INDEX IF NOT EXISTS idx_github_notifications_open_updated ON github_notifications (account_id, gh_updated_at DESC) WHERE state = 'open';
+
+CREATE INDEX IF NOT EXISTS idx_github_notifications_account_repo ON github_notifications (account_id, repo_full_name);
+
 ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS latest_comment_api_url TEXT;
 
 ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS decision TEXT;
@@ -2647,6 +2651,8 @@ CREATE TABLE IF NOT EXISTS github_notification_audit_changes (
     applied_at TIMESTAMPTZ DEFAULT NOW(),
     undone_at TIMESTAMPTZ
   );
+
+CREATE INDEX IF NOT EXISTS idx_github_notification_audit_changes_account ON github_notification_audit_changes (account_id, applied_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS github_notification_audit_reports (
     account_id TEXT PRIMARY KEY,
