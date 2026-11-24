@@ -1,5 +1,6 @@
 import { promisify } from 'node:util';
 import { execFile } from '../../lib/childProcess.js';
+import { isSettledProcessState } from '../../lib/processSettledState.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -7,7 +8,7 @@ const execFileAsync = promisify(execFile);
 // more user code: it cannot start a write or act on a signal. Linux ps has no
 // `E` flag. A syscall already in flight may still land, so profile removal retries.
 const isZombie = state => state.startsWith('Z');
-const isExiting = state => !isZombie(state) && state.includes('E');
+const isExiting = state => !isZombie(state) && isSettledProcessState(state);
 
 // Only numeric identity/state are read: command lines can contain private data.
 async function liveMembers(pgid, timeout) {

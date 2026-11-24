@@ -183,3 +183,14 @@ setInterval(() => {}, 1000);
     expect(await readdir(root)).toEqual([]);
   }, 20000);
 });
+
+describe('groupAlive EPERM resolution', () => {
+  const eperm = () => { throw Object.assign(new Error('Synthetic EPERM'), { code: 'EPERM' }); };
+  it('treats a darwin EPERM group with no live member as clear, and keeps a live member or failed observation alive', async () => {
+    const { groupAlive } = await import('./containedWorker.js');
+    expect(await groupAlive(99, { kill: eperm, platform: 'darwin', observe: async () => false })).toBe(false);
+    expect(await groupAlive(99, { kill: eperm, platform: 'darwin', observe: async () => true })).toBe(true);
+    expect(await groupAlive(99, { kill: eperm, platform: 'linux' })).toBe(true);
+    expect(await groupAlive(99, { kill: () => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); }, platform: 'darwin' })).toBe(false);
+  });
+});

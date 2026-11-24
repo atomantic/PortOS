@@ -35,3 +35,17 @@ it.skipIf(process.platform === 'win32')('never signals a reused group leader or 
   expect(unverified).toHaveBeenCalledTimes(2);
   expect(signal).not.toHaveBeenCalled();
 });
+it.skipIf(process.platform === 'win32')('confirms a group whose members enter kernel exit between observation and signal (macOS EPERM)', async () => {
+  const signal = vi.fn(() => { throw Object.assign(new Error('Synthetic EPERM'), { code: 'EPERM' }); });
+  const live = { pid: 1234, pgid: 1234, startedAt: owner.startedAt, state: 'S', command: owner.outputDir };
+  const processes = vi.fn()
+    .mockResolvedValueOnce([live])
+    .mockResolvedValue([{ ...live, state: '?E' }, { pid: 1235, pgid: 1234, startedAt: 11000, state: 'Z', command: 'worker' }]);
+  expect(await cleanupSecurityScanGroup(owner, { processes, marked: async () => true, signal })).toBe(true);
+  expect(signal).toHaveBeenCalledTimes(1);
+});
+it.skipIf(process.platform === 'win32')('stays unconfirmed when a live member refuses the signal with EPERM', async () => {
+  const signal = vi.fn(() => { throw Object.assign(new Error('Synthetic EPERM'), { code: 'EPERM' }); });
+  const live = { pid: 1234, pgid: 1234, startedAt: owner.startedAt, state: 'S', command: owner.outputDir };
+  expect(await cleanupSecurityScanGroup(owner, { processes: async () => [live], marked: async () => true, signal })).toBe(false);
+});
