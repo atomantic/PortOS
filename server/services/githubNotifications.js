@@ -304,6 +304,9 @@ async function syncAccountNow(account, automate) {
  * Fetch one account's GitHub inbox (read and unread), coalescing concurrent requests.
  * `automate: false` (a caller without host control) skips Assist/Autopilot.
  */
+// Independent accounts (separate hosts and tokens) sync side by side; bounded so a many-account install cannot flood `gh`.
+const ACCOUNT_SYNC_CONCURRENCY = 3;
+
 // A 'disabled' account stays configured but this instance never fetches or processes its notifications.
 const isActive = (account) => account.enabled && account.mode !== 'disabled';
 
@@ -319,13 +322,9 @@ export async function syncAccountNotifications(accountId, { automate = true } = 
 /** Sync every enabled account; one account's failure never hides another's result. */
 export async function syncAllNotifications(options = {}) {
   const accounts = (await listAccounts()).filter(isActive);
-  const results = [];
-  for (const account of accounts) {
-    results.push(await syncAccountNotifications(account.id, options)
-      .then((result) => ({ ...result, ok: true }))
-      .catch((error) => ({ accountId: account.id, ok: false, error: error.message })));
-  }
-  return results;
+  return mapWithConcurrency(accounts, ACCOUNT_SYNC_CONCURRENCY, (account) => syncAccountNotifications(account.id, options)
+    .then((result) => ({ ...result, ok: true }))
+    .catch((error) => ({ accountId: account.id, ok: false, error: error.message })));
 }
 
 // The inbox holds unread open threads, whatever their decision. The operator
@@ -755,18 +754,16 @@ export async function runScheduledNotificationCheck({ now = Date.now() } = {}) {
     'SELECT account_id, last_sync_at, poll_interval_seconds FROM github_notification_sync WHERE account_id = ANY($1::text[])',
     [accounts.map((account) => account.id)],
   )).rows.map((row) => [row.account_id, row]));
-  const results = [];
-  for (const account of accounts) {
+  const results = await mapWithConcurrency(accounts, ACCOUNT_SYNC_CONCURRENCY, async (account) => {
     const cursor = cursors.get(account.id);
     const waitMs = Math.max(cursor?.poll_interval_seconds || 0, MIN_POLL_SECONDS) * 1000;
     if (cursor?.last_sync_at && now - new Date(cursor.last_sync_at).getTime() < waitMs) {
-      results.push({ accountId: account.id, ok: true, skipped: 'poll-interval' });
-      continue;
+      return { accountId: account.id, ok: true, skipped: 'poll-interval' };
     }
-    results.push(await syncAccountNotifications(account.id)
+    return syncAccountNotifications(account.id)
       .then((result) => ({ ...result, ok: true }))
-      .catch((error) => ({ accountId: account.id, ok: false, error: error.message })));
-  }
+      .catch((error) => ({ accountId: account.id, ok: false, error: error.message }));
+  });
   lastScheduledSummary = describeScheduledCheck(results);
   // Only the scheduled check sends the opt-in monthly audit report.
   const { sendDueAuditReports } = await import('./githubNotificationAudit.js');

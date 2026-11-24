@@ -20,6 +20,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await im
 vi.mock('./github.js', async (importOriginal) => ({ ...(await importOriginal()), execGh: vi.fn() }));
 vi.mock('./apps.js', () => ({ getAllApps: vi.fn(async () => []) }));
 // Assist's model boundary: the screened, tool-free analysis call.
+vi.mock('./provider/providers.js', async (importOriginal) => ({ ...(await importOriginal()), getAllProviders: vi.fn(async () => ({ providers: [] })) }));
 vi.mock('./untrustedContent.js', () => ({ runUntrustedContentAnalysis: vi.fn() }));
 // Autopilot's boundaries: a managed app's origin remote, and the lanes' own
 // on-demand entry points (the pr-reviewer target reader and the task queue).
@@ -882,6 +883,23 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(await getNotification(account.id, '905')).toMatchObject({ decision: 'surface', rule: 'ai-surface' });
   });
 
+  it('records one skip on every undecided thread in a single batched write when no provider is eligible', async () => {
+    const login = account.login;
+    const threads = [thread('921', { owner: login, reason: 'mention' }), thread('922', { owner: login, reason: 'mention' })];
+    mockGh((args) => githubListing(args, threads), {
+      [`repos/${login}/hello/pulls/921`]: { author: 'alice', association: 'NONE', state: 'open', merged: false },
+      [`repos/${login}/hello/pulls/922`]: { author: 'alice', association: 'NONE', state: 'open', merged: false },
+    });
+    await updateAccount(account.id, { mode: 'assist', trust: 'private' });
+    const result = await syncAccountNotifications(account.id);
+    expect(result.assist.sorted).toBe(0);
+    expect(runUntrustedContentAnalysis).not.toHaveBeenCalled();
+    for (const id of ['921', '922']) {
+      expect(await getNotification(account.id, id)).toMatchObject({ decision: 'needs-you' });
+      expect((await getNotification(account.id, id)).evidence.ai).toMatchObject({ skipped: expect.any(String), retryAfter: expect.any(String) });
+    }
+  });
+
   it('learns to quiet a repo, reason and actor after the same correction twice', async () => {
     const mention = (id, updatedAt) => thread(id, { owner: 'workorg', repo: 'service', reason: 'mention', updatedAt });
     const forge = { 'users/bob': '2019-01-01T00:00:00Z' };
@@ -917,11 +935,13 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     await applyAuditSuggestion(account.id, 'unwatch:acme/noisy');
     const muted = await applyAuditSuggestion(account.id, 'mute-handled:acme/core');
     expect(muted.threadIds).toEqual(['1011', '1012']);
-    expect(actions).toEqual([
-      ['DELETE', 'repos/acme/noisy/subscription'],
+    // The two thread mutes run concurrently, so their relative order is not part of the contract.
+    expect(actions[0]).toEqual(['DELETE', 'repos/acme/noisy/subscription']);
+    expect(actions.slice(1).sort()).toEqual([
       ['PUT', 'notifications/threads/1011/subscription'],
       ['PUT', 'notifications/threads/1012/subscription'],
     ]);
+    expect(actions).toHaveLength(3);
     await expect(applyAuditSuggestion(account.id, 'unwatch:acme/noisy')).rejects.toMatchObject({ status: 409 });
     await expect(applyAuditSuggestion(account.id, 'mute-handled:acme/core')).rejects.toMatchObject({ status: 409 });
     // Audit mutes are not the operator acting, and a later handled thread in
@@ -939,7 +959,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(changes.map((change) => [change.kind, change.repo, change.undone])).toEqual([['mute-handled', 'acme/core', false], ['unwatch', 'acme/noisy', false]]);
     actions.length = 0;
     for (const change of changes) await undoAuditChange(change.id);
-    expect(actions).toEqual([
+    expect([...actions].sort()).toEqual([
       ['PUT', 'notifications/threads/1011/subscription'],
       ['PUT', 'notifications/threads/1012/subscription'],
       ['PUT', 'repos/acme/noisy/subscription'],

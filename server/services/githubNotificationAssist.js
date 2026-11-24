@@ -39,6 +39,8 @@ const ACTIONABLE_DECISIONS = ['handled-by-pr-workflow', 'suggest-mark-read', 'du
 // A skipped sort is retried an hour later (a provider added, a timeout), except
 // when the text itself was refused; new activity re-triages either way.
 const RETRY_SKIPPED_MS = 60 * 60 * 1000;
+// Model calls run on local providers too: keep the overlap small.
+const ASSIST_SORT_CONCURRENCY = 3;
 const FINAL_SKIPS = new Set(['untrusted-content-blocked', 'untrusted-content-too-large']);
 
 const SORT_PROMPT = `Sort one GitHub notification for its recipient's inbox. Answer "surface" when the recipient should read or act on it, "done" when it is purely informational and needs nothing from them, or "suggest-mute" when it is recurring noise from a thread they do not need to follow. When unsure, answer "surface". Return ONLY a JSON object: {"verdict":"surface|done|suggest-mute"}.`;
@@ -57,8 +59,10 @@ async function readText(account, env, path, jq) {
 async function threadContent(account, env, row) {
   const subjectPath = repoApiPath(row.subject_api_url, account.host);
   const commentPath = repoApiPath(row.latest_comment_api_url, account.host);
-  const subject = await readText(account, env, subjectPath, TEXT_JQ);
-  const comment = commentPath && commentPath !== subjectPath ? await readText(account, env, commentPath, COMMENT_JQ) : null;
+  const [subject, comment] = await Promise.all([
+    readText(account, env, subjectPath, TEXT_JQ),
+    commentPath && commentPath !== subjectPath ? readText(account, env, commentPath, COMMENT_JQ) : null,
+  ]);
   return JSON.stringify({
     repo: row.repo_full_name,
     reason: row.reason,
@@ -100,37 +104,57 @@ async function sortUndecided(account, env) {
   // one needs the provider list to enforce its allow-list.
   const providers = account.trust === 'private' ? (await getAllProviders()).providers || [] : [];
   const selection = policy ? selectNotificationProvider({ account, providers, policy }) : { code: 'untrusted-content-policy-invalid' };
-  let sorted = 0;
-  for (const row of rows) {
-    const outcome = await sortThread(account, env, row, selection).catch((error) => {
-      console.error(`❌ Assist could not sort GitHub notification ${row.thread_id}: ${error.message}`);
-      return { skipped: 'untrusted-content-failed' };
-    });
-    const decided = outcome.verdict ? decisionFromVerdict(outcome.verdict) : null;
-    if (!decided && !FINAL_SKIPS.has(outcome.skipped)) outcome.retryAfter = new Date(Date.now() + RETRY_SKIPPED_MS).toISOString();
-    // The model call took seconds: record the verdict only on the row it read.
-    // An operator hand-off, learned decision or fresh triage meanwhile wins.
-    const applied = await withTransaction(async (client) => {
-      const { rowCount } = await client.query(
-        `UPDATE github_notifications SET decision = COALESCE($3, decision),
-           evidence = evidence || jsonb_build_object('rule', COALESCE($4, evidence->>'rule'), 'ai', $5::jsonb), updated_at = NOW()
-         WHERE account_id = $1 AND thread_id = $2
-           AND state = 'open' AND decision IS NOT DISTINCT FROM $6 AND evidence = $7::jsonb`,
-        [account.id, row.thread_id, decided?.decision ?? null, decided?.rule ?? null, toPgJson(outcome), row.decision, toPgJson(row.evidence)],
-      );
-      if (rowCount && decided) {
-        await client.query(
-          `INSERT INTO github_notification_events (account_id, thread_id, actor, kind, detail) VALUES ($1, $2, 'automation', 'triaged', $3::jsonb)`,
-          [account.id, row.thread_id, toPgJson({ decision: decided.decision, rule: decided.rule, mode: account.mode })],
-        );
-      }
-      return rowCount > 0;
-    });
-    if (!applied) console.log(`⏭️ GitHub notification ${row.thread_id} changed while Assist sorted it; its verdict was dropped`);
-    else if (decided) sorted += 1;
-    else console.log(`⏭️ GitHub notification ${row.thread_id} left for the operator: ${outcome.skipped}`);
+  const retryAfterOf = (outcome, decided) => (!decided && !FINAL_SKIPS.has(outcome.skipped) ? new Date(Date.now() + RETRY_SKIPPED_MS).toISOString() : null);
+  if (selection.code) {
+    // No provider is eligible, so every row gets the identical skip payload: one
+    // statement, with the same per-row guard as the model path.
+    const outcome = { skipped: selection.code };
+    const retryAfter = retryAfterOf(outcome, null);
+    if (retryAfter) outcome.retryAfter = retryAfter;
+    const { rowCount } = await query(
+      `UPDATE github_notifications n SET evidence = n.evidence || jsonb_build_object('rule', n.evidence->>'rule', 'ai', $3::jsonb), updated_at = NOW()
+       FROM unnest($2::text[], $4::text[], $5::text[]) AS r(thread_id, decision, evidence)
+       WHERE n.account_id = $1 AND n.thread_id = r.thread_id
+         AND n.state = 'open' AND n.decision IS NOT DISTINCT FROM r.decision AND n.evidence = r.evidence::jsonb`,
+      [account.id, rows.map((row) => row.thread_id), toPgJson(outcome), rows.map((row) => row.decision), rows.map((row) => toPgJson(row.evidence))],
+    );
+    console.log(`⏭️ ${rowCount} of ${rows.length} GitHub notification(s) left for the operator: ${selection.code}`);
+    return 0;
   }
-  return sorted;
+  const applied = await mapWithConcurrency(rows, ASSIST_SORT_CONCURRENCY, (row) => sortAndRecord(account, env, row, selection, retryAfterOf));
+  return applied.filter(Boolean).length;
+}
+
+// Returns true when a verdict was applied to the row.
+async function sortAndRecord(account, env, row, selection, retryAfterOf) {
+  const outcome = await sortThread(account, env, row, selection).catch((error) => {
+    console.error(`❌ Assist could not sort GitHub notification ${row.thread_id}: ${error.message}`);
+    return { skipped: 'untrusted-content-failed' };
+  });
+  const decided = outcome.verdict ? decisionFromVerdict(outcome.verdict) : null;
+  const retryAfter = retryAfterOf(outcome, decided);
+  if (retryAfter) outcome.retryAfter = retryAfter;
+  // The model call took seconds: record the verdict only on the row it read.
+  // An operator hand-off, learned decision or fresh triage meanwhile wins.
+  const wrote = await withTransaction(async (client) => {
+    const { rowCount } = await client.query(
+      `UPDATE github_notifications SET decision = COALESCE($3, decision),
+         evidence = evidence || jsonb_build_object('rule', COALESCE($4, evidence->>'rule'), 'ai', $5::jsonb), updated_at = NOW()
+       WHERE account_id = $1 AND thread_id = $2
+         AND state = 'open' AND decision IS NOT DISTINCT FROM $6 AND evidence = $7::jsonb`,
+      [account.id, row.thread_id, decided?.decision ?? null, decided?.rule ?? null, toPgJson(outcome), row.decision, toPgJson(row.evidence)],
+    );
+    if (rowCount && decided) {
+      await client.query(
+        `INSERT INTO github_notification_events (account_id, thread_id, actor, kind, detail) VALUES ($1, $2, 'automation', 'triaged', $3::jsonb)`,
+        [account.id, row.thread_id, toPgJson({ decision: decided.decision, rule: decided.rule, mode: account.mode })],
+      );
+    }
+    return rowCount > 0;
+  });
+  if (!wrote) console.log(`⏭️ GitHub notification ${row.thread_id} changed while Assist sorted it; its verdict was dropped`);
+  else if (!decided) console.log(`⏭️ GitHub notification ${row.thread_id} left for the operator: ${outcome.skipped}`);
+  return wrote && Boolean(decided);
 }
 
 async function stillAsRead(accountId, row) {
