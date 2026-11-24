@@ -9,15 +9,17 @@
  * the kind gate below.
  */
 
+import { loadMediaRuntimeModule } from '../bootHookRegistry.js';
+
 // The federatable kinds and the adapter each one dispatches to, in one map so
 // the two cannot drift apart. Kinds are listed explicitly rather than inferred
 // from the marker alone: a 'training' job has no federated contract, so a marker
 // on one is corrupt state that must keep taking the local path, not a routing
 // instruction.
 export const REMOTE_MEDIA_MODULES = {
-  audio: () => import('../audioGen/remote.js'),
-  image: () => import('../imageGen/remote.js'),
-  video: () => import('../videoGen/remote.js'),
+  audio: () => loadMediaRuntimeModule('audioRemote'),
+  image: () => loadMediaRuntimeModule('imageRemote'),
+  video: () => loadMediaRuntimeModule('videoRemote'),
 };
 
 // Presence, not truthiness of individual nested fields, selects the remote

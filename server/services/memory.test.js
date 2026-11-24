@@ -756,7 +756,9 @@ describe('memory service', () => {
       });
 
       // Exercise the real approval-count side effect behind the public memory workflow.
+      const { registerLateBoundService } = await import('../lib/lateBoundServices.js');
       const lifecycle = await import('./cos/cosAgentLifecycle.js');
+      registerLateBoundService('cosAgentLifecycle', () => Promise.resolve(lifecycle));
       lifecycle.getAgent.mockResolvedValue({ memoryExtraction: { pendingApproval: 2, created: 4 } });
       lifecycle.updateAgent.mockResolvedValue(undefined);
       const actualConfig = await vi.importActual('./memoryConfig.js');

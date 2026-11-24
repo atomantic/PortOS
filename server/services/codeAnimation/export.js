@@ -139,7 +139,7 @@ async function startAdmittedExport(id, deps) {
   } = deps;
   const record = isCodeAnimationJobId(id) ? await getCodeAnimationJobRecord(id) : null;
   // A soundtrack generated after the animation is the audio the export muxes.
-  const job = record ? await (await import('./soundtrack.js')).withGeneratedSoundtrack(record) : null;
+  const job = record ? await (await import('./soundtrackTrack.js')).withGeneratedSoundtrack(record) : null;
   if (!job) throw new ServerError('Code Animation job not found', { status: 404, code: 'NOT_FOUND' });
   if (job.status !== 'completed') throw new ServerError('Only a completed animation can be exported', { status: 409, code: 'NOT_COMPLETED' });
   const { width, height, durationSeconds } = job.frame || {};

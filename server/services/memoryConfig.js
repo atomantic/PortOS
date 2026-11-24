@@ -6,6 +6,8 @@
  * implementations (memory.js, memoryDB.js) that it imports.
  */
 
+import { loadLateBoundService } from '../lib/lateBoundServices.js';
+
 export const DEFAULT_MEMORY_CONFIG = {
   enabled: true,
   embeddingProvider: 'lmstudio',
@@ -40,7 +42,7 @@ export function generateSummary(content, maxLength = 150) {
 export async function decrementAgentPendingApproval(sourceAgentId) {
   if (!sourceAgentId) return;
 
-  const { getAgent, updateAgent } = await import('./cos/cosAgentLifecycle.js');
+  const { getAgent, updateAgent } = await loadLateBoundService('cosAgentLifecycle');
   const agent = await getAgent(sourceAgentId).catch(() => null);
   if (!agent?.memoryExtraction?.pendingApproval) return;
 

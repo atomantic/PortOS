@@ -342,6 +342,8 @@ describe('sharing round-trip', () => {
     writeFileSync(join(tempBucket, 'manifests', 'example-media.json'), JSON.stringify({
       id: 'example-manifest', senderInstanceId: 'example-peer', kind: 'media', recordIds: [incoming.id], assetRefs: [],
     }));
+    const { MEDIA_RUNTIME_MODULES, registerMediaRuntimeModules } = await import('../bootHookRegistry.js');
+    registerMediaRuntimeModules(Object.fromEntries(MEDIA_RUNTIME_MODULES.map(name => [name, async () => ({ cleanupOrphanTopazStaging: async () => {} })])));
     const queue = await vi.importActual('../mediaJobQueue/index.js');
     mediaQueue.actual = queue;
     await queue.initMediaJobQueue();
@@ -379,6 +381,8 @@ describe('sharing round-trip', () => {
     writeFileSync(join(tempBucket, 'manifests', 'example-media.json'), JSON.stringify({
       id: 'example-manifest', senderInstanceId: 'example-peer', kind: 'media', recordIds: Object.keys(records), assetRefs: [],
     }));
+    const { MEDIA_RUNTIME_MODULES, registerMediaRuntimeModules } = await import('../bootHookRegistry.js');
+    registerMediaRuntimeModules(Object.fromEntries(MEDIA_RUNTIME_MODULES.map(name => [name, async () => ({ cleanupOrphanTopazStaging: async () => {} })])));
     const queue = await vi.importActual('../mediaJobQueue/index.js');
     mediaQueue.actual = queue;
     await queue.initMediaJobQueue();
