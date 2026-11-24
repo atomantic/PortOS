@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { writeFile, rename } from 'node:fs/promises';
+import { writeFile, rename, readdir, rm } from 'node:fs/promises';
 
 const harness = vi.hoisted(() => ({
   apps: vi.fn(), sweep: vi.fn(), index: null, metadataExists: false, validate: vi.fn(), pm2: vi.fn(), list: vi.fn(), provider: vi.fn(),
-  settings: {}, isGit: vi.fn(), startUi: vi.fn(), verify: vi.fn(), apply: vi.fn(),
+  settings: {}, isGit: vi.fn(), startUi: vi.fn(), verify: vi.fn(), apply: vi.fn(), sessionMetadata: {},
 }));
 vi.mock('./ui.js', () => ({ startAutofixerUi: harness.startUi }));
 vi.mock('./shared.js', () => ({
@@ -11,11 +11,19 @@ vi.mock('./shared.js', () => ({
   loadApps: harness.apps, execPm2: harness.pm2, listProcessesStrict: harness.list,
 }));
 vi.mock('node:fs/promises', () => ({
-  readFile: vi.fn(async file => file.endsWith('index.json') ? (harness.index ?? '[]') : file.endsWith('settings.json') ? JSON.stringify(harness.settings) : '{}'),
+  readFile: vi.fn(async file => {
+    if (file.endsWith('index.json')) return harness.index ?? '[]';
+    if (file.endsWith('settings.json')) return JSON.stringify(harness.settings);
+    if (file.endsWith('metadata.json')) return JSON.stringify(harness.sessionMetadata[file] ?? {});
+    return '{}';
+  }),
   writeFile: vi.fn(async () => {}), mkdir: vi.fn(async () => {}),
   // Session metadata exists only when a test marks it recorded (shutdown ran first).
   access: vi.fn(async file => { if (String(file).endsWith('metadata.json') && !harness.metadataExists) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); }),
   rename: vi.fn(async () => {}),
+  lstat: vi.fn(async () => ({ isDirectory: () => true })),
+  readdir: vi.fn(),
+  rm: vi.fn(async () => {}),
 }));
 vi.mock('../server/lib/agentGuard/index.js', () => ({ agentGuardEnv: () => ({}) }));
 vi.mock('../server/lib/cliProviderRun.js', () => ({
@@ -52,6 +60,10 @@ beforeEach(() => {
   harness.startUi.mockReset().mockResolvedValue(vi.fn());
   harness.index = null;
   harness.metadataExists = false;
+  harness.sessionMetadata = {};
+  readdir.mockReset().mockResolvedValue([]);
+  rename.mockReset().mockResolvedValue(undefined);
+  rm.mockClear();
   harness.verify.mockReset();
   harness.apply.mockReset();
 });
@@ -65,6 +77,9 @@ const start = async () => {
   await vi.advanceTimersByTimeAsync(0);
 };
 const nextCycle = () => vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+const indexFile = '/example/index.json';
+const sessionsDir = '/example/autofixer/sessions';
+const directory = name => ({ name, isDirectory: () => true });
 
 describe('Autofixer daemon repair input boundary', () => {
   it('starts the dashboard with the shared staged-fix store before scanning PM2', async () => {
@@ -172,6 +187,59 @@ describe('Autofixer daemon repair input boundary', () => {
     const tmpWrite = writeFile.mock.calls.findIndex(([f]) => f === '/example/index.json.tmp');
     expect(tmpWrite).toBeGreaterThanOrEqual(0);
     expect(rename).toHaveBeenCalledWith('/example/index.json.tmp', '/example/index.json');
+  });
+
+  it.each([true, false])('removes evicted sessions only after a successful index commit (%s)', async commitSucceeds => {
+    harness.index = JSON.stringify([
+      ...Array.from({ length: 99 }, (_, i) => ({ sessionId: `autofixer_recent_${i}` })),
+      { sessionId: 'autofixer_pending' },
+      { sessionId: 'autofixer_discarded', staged: true },
+      { sessionId: 'autofixer_retired' },
+      { sessionId: 'autofixer_recent_0' },
+      { sessionId: 'autofixer_../../outside' },
+    ]);
+    harness.sessionMetadata[`${sessionsDir}/autofixer_pending/metadata.json`] = { staged: true };
+    if (!commitSucceeds) {
+      rename.mockImplementation(async (_, destination) => {
+        if (destination === indexFile) throw new Error('Index rename failed');
+      });
+    }
+    await start();
+    const indexWrite = writeFile.mock.calls.find(([file]) => file === `${indexFile}.tmp`);
+    const rows = JSON.parse(indexWrite[1]);
+    expect(rows).toHaveLength(101);
+    expect(rows.at(-1).sessionId).toBe('autofixer_pending');
+    if (commitSucceeds) {
+      expect(rm.mock.calls).toEqual(['autofixer_discarded', 'autofixer_retired'].map(id => [
+        `${sessionsDir}/${id}`, { recursive: true, force: true },
+      ]));
+      const indexRename = rename.mock.calls.findIndex(([, destination]) => destination === indexFile);
+      expect(rename.mock.invocationCallOrder[indexRename]).toBeLessThan(rm.mock.invocationCallOrder[0]);
+    } else {
+      expect(rm).not.toHaveBeenCalled();
+    }
+  });
+
+  it('sweeps only unindexed, unstaged session directories before starting the dashboard', async () => {
+    harness.apps.mockResolvedValue([]);
+    harness.index = JSON.stringify([{ sessionId: 'autofixer_indexed' }]);
+    harness.sessionMetadata[`${sessionsDir}/autofixer_pending/metadata.json`] = { staged: true };
+    readdir.mockResolvedValue([
+      directory('autofixer_indexed'), directory('autofixer_pending'), directory('autofixer_orphan'),
+      directory('other_directory'), { name: 'autofixer_link', isDirectory: () => false },
+    ]);
+    await start();
+    expect(rm).toHaveBeenCalledExactlyOnceWith(`${sessionsDir}/autofixer_orphan`, { recursive: true, force: true });
+    expect(rm.mock.invocationCallOrder[0]).toBeLessThan(harness.startUi.mock.invocationCallOrder[0]);
+  });
+
+  it('skips startup pruning when the history index is corrupt', async () => {
+    harness.apps.mockResolvedValue([]);
+    harness.index = '[null]';
+    readdir.mockResolvedValue([directory('autofixer_orphan')]);
+    await start();
+    expect(rm).not.toHaveBeenCalled();
+    expect(harness.startUi).toHaveBeenCalledOnce();
   });
 
   it('refuses partial edits from a repair process that exited unsuccessfully', async () => {
