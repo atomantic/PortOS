@@ -22,6 +22,7 @@
  * root AGENTS.md Sensitive Data & Privacy — no real handle, name, or phone.
  */
 import { describe, it, expect, afterAll, vi } from 'vitest';
+import pg from 'pg';
 import { checkHealth, ensureSchema, close, query } from '../../lib/db.js';
 import * as database from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
@@ -664,6 +665,95 @@ describe.skipIf(!runDb)('beeperTribe (#34)', () => {
       });
     } finally {
       transactions.mockRestore();
+    }
+  });
+
+  it('batches conversation participants in <=4 queries while preserving handle-COALESCE, soft-delete, and precedence (#18162)', async () => {
+    await makeAccount();
+    const conversationId = await makeConversation(`${nonce}-batched-chat`, { network: 'whatsapp' });
+    const deletedPerson = await makePerson('Example Deleted Cached');
+    const handleOwner = await makePerson('Example Handle Owner');
+    const beeperUserOwner = await makePerson('Example Beeper User Owner');
+    const phoneOwner = await tribe.createPerson({ name: `${nonce} Phone Fallback Owner`, phones: ['+15550100088'] });
+    createdPersonIds.push(phoneOwner.id);
+
+    // Seed an existing row with a soft-deleted cache and durable phone handle,
+    // and claim a handle + beeper-user identity to exercise precedence.
+    await query(
+      `INSERT INTO beeper_participants (conversation_id, source_user_id, display_name, handle, tribe_person_id, observed_via)
+       VALUES ($1, 'batch-soft-del', 'Old Name', '+1 (555) 010-0088', $2, 'participant-list')`,
+      [conversationId, deletedPerson.id],
+    );
+    await tribe.deletePerson(deletedPerson.id);
+    await tribeIdentities.linkIdentity({ personId: handleOwner.id, kind: 'handle', network: 'whatsapp', handle: 'example_handle_win' });
+    await tribeIdentities.linkIdentity({ personId: beeperUserOwner.id, kind: 'beeper-user', network: ACCOUNT_ID, handle: 'batch-both' });
+    await tribeIdentities.linkIdentity({ personId: beeperUserOwner.id, kind: 'beeper-user', network: ACCOUNT_ID, handle: 'batch-beeper-only' });
+
+    const rosterIndex = await beeperTribe.loadRosterIndex();
+    const sqlLog = [];
+    const original = pg.Client.prototype.query;
+    const spy = vi.spyOn(pg.Client.prototype, 'query').mockImplementation(function spyQuery(...args) {
+      const config = args[0];
+      const text = typeof config === 'string' ? config : config?.text || '';
+      if (text) sqlLog.push(text);
+      return original.apply(this, args);
+    });
+
+    try {
+      // Single-row upsertParticipant reduces reads: 1 participant SELECT, <=1 tribe_identities SELECT.
+      const single = await beeperTribe.upsertParticipant({
+        conversationId,
+        sourceUserId: 'single-check-user',
+        displayName: 'Single Check',
+        handle: '@example_handle_win',
+        observedVia: 'message-sender',
+        personIndex: rosterIndex,
+      });
+      expect(single.tribePersonId).toBe(handleOwner.id);
+      expect(sqlLog.filter((s) => s.includes('FROM beeper_participants'))).toHaveLength(1);
+      expect(sqlLog.filter((s) => s.includes('tribe_identities'))).toHaveLength(1);
+
+      sqlLog.length = 0;
+      const batchInput = [
+        { sourceUserId: 'batch-soft-del', displayName: 'New Sender Name', handle: '', observedVia: 'message-sender' },
+        { sourceUserId: 'batch-both', displayName: 'Roster Name', handle: '@example_handle_win', observedVia: 'participant-list' },
+        { sourceUserId: 'batch-both', displayName: 'Sender Both', handle: '', observedVia: 'message-sender' },
+        { sourceUserId: 'batch-beeper-only', displayName: 'Beeper Only', handle: '', observedVia: 'message-sender' },
+        ...Array.from({ length: 16 }, (_, i) => ({
+          sourceUserId: `batch-unlinked-${i}`,
+          displayName: `Unlinked ${i}`,
+          handle: '',
+          observedVia: 'participant-list',
+        })),
+      ];
+
+      const { participants, resolvedPersonIds } = await beeperTribe.upsertConversationParticipants(
+        conversationId,
+        batchInput,
+        { personIndex: rosterIndex },
+      );
+
+      expect(participants).toHaveLength(19);
+      expect(sqlLog.length).toBeLessThanOrEqual(4);
+      const byId = new Map(participants.map((p) => [p.sourceUserId, p]));
+      expect(byId.get('batch-soft-del').handle).toBe('+1 (555) 010-0088');
+      expect(byId.get('batch-soft-del').tribePersonId).toBe(phoneOwner.id);
+      expect(byId.get('batch-both').handle).toBe('@example_handle_win');
+      expect(byId.get('batch-both').observedVia).toBe('message-sender');
+      expect(byId.get('batch-both').tribePersonId).toBe(handleOwner.id);
+      expect(byId.get('batch-beeper-only').tribePersonId).toBe(beeperUserOwner.id);
+      expect(resolvedPersonIds.get('batch-unlinked-0')).toBeNull();
+
+      // logSenderTouchpoints reuses resolvedPersonIds with zero participant/identity reads.
+      sqlLog.length = 0;
+      const tp = await beeperTribe.logSenderTouchpoints([
+        { conversationId, senderId: 'batch-both', sentAt: '2026-10-04T12:00:00.000Z', network: 'whatsapp' },
+        { conversationId, senderId: 'batch-unlinked-0', sentAt: '2026-10-04T12:05:00.000Z', network: 'whatsapp' },
+      ], { personIndex: rosterIndex, resolvedPersonIds });
+      expect(tp).toEqual({ matched: 1, created: 1 });
+      expect(sqlLog.some((s) => s.includes('beeper_participants') || s.includes('tribe_identities'))).toBe(false);
+    } finally {
+      spy.mockRestore();
     }
   });
 

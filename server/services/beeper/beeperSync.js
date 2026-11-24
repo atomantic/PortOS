@@ -19,7 +19,7 @@
  *      purpose, so it stays eligible while sorting below chats that are
  *      already caught up;
  *   3. for each changed chat: upsert the conversation, upsert participants
- *      (`beeperTribe.upsertParticipant`), page new messages from the stored
+ *      (`beeperTribe.upsertConversationParticipants`), page new messages from the stored
  *      opaque cursor with `direction: 'after'`, log daily Tribe touchpoints
  *      (`beeperTribe.logSenderTouchpoints`), then commit message rows,
  *      attachment references and the cursor row in ONE transaction.
@@ -94,7 +94,7 @@ import {
   getChat,
   createChat,
 } from './beeperClient.js';
-import { upsertParticipant, logSenderTouchpoints, loadRosterIndex } from './beeperTribe.js';
+import { upsertConversationParticipants, logSenderTouchpoints, loadRosterIndex } from './beeperTribe.js';
 import { isInstanceFeatureEnabled } from '../instanceFeatures.js';
 import { getSettings } from '../settings.js';
 import { updateBeeperSweepProgress } from './beeperSweepProgress.js';
@@ -155,16 +155,20 @@ export async function getBeeperSyncConfig() {
  * behind that same function. The token value itself is never returned, logged
  * or stored.
  */
-export async function isBeeperIngestionArmed() {
+async function resolveArmedClientOptions() {
   const featureEnabled = await isInstanceFeatureEnabled('beeper').catch(() => false);
-  if (!featureEnabled) return false;
+  if (!featureEnabled) return null;
   // A vault that cannot be read (corrupt row, rotated key) must not masquerade
   // as "no token": say so once, then decline to arm.
-  const { token } = await resolveBeeperConfig().catch((err) => {
+  const clientOptions = await resolveBeeperConfig().catch((err) => {
     console.error(`❌ Beeper credential unreadable, ingestion not armed: ${err.message}`);
     return { token: null };
   });
-  return Boolean(token);
+  return clientOptions.token ? clientOptions : null;
+}
+
+export async function isBeeperIngestionArmed() {
+  return Boolean(await resolveArmedClientOptions());
 }
 
 // ---------------------------------------------------------------------------
@@ -438,9 +442,9 @@ async function refreshAccounts(clientOptions) {
 }
 
 /**
- * Upsert the conversation row and return its synthetic UUID. Committed on its
+  * Upsert the conversation row and return its synthetic UUID. Committed on its
  * own, BEFORE the message transaction, for two reasons: the participant writer
- * (`beeperTribe.upsertParticipant`) runs on the pool and cannot see an
+ * (`beeperTribe.upsertConversationParticipants`) runs on the pool and cannot see an
  * uncommitted row, and a conversation row carries no cursor, so re-running it
  * is free. The watermark lives in `beeper_sync_cursors`, never here.
  */
@@ -828,40 +832,43 @@ async function sweepChat({
     }
   }
 
-  // Roster first, then senders: a message-sender observation carries a richer
-  // handle than a truncated roster entry, and `upsertParticipant` COALESCEs
-  // the handle rather than overwriting it, so the better one wins either way.
-  //
-  // `personIndex` is `executeSweep`'s ONE Tribe-roster load for the whole
-  // sweep pass, threaded down here and to the sender loop below — without it
-  // `upsertParticipant`'s phone-match fallback would reload and reindex every
-  // Tribe person once per participant, in every chat, on every pass.
-  for (const participant of normalizeParticipants(chat)) {
-    // at most 20 per chat (the list endpoint truncates there)
-    await upsertParticipant({
-      conversationId, ...participant, observedVia: 'participant-list', personIndex,
-    });
-  }
-
   const rows = messages
     .map((message) => ({ message: normalizeMessageRow(message, observedAt), raw: message }))
     .filter(({ message }) => message.id)
     .map(({ message, raw }) => ({ message, raw, attachments: normalizeAttachmentRows(raw) }));
 
-  const seenSenders = new Set();
-  for (const { message, raw } of rows) {
-    if (!message.senderId || seenSenders.has(message.senderId)) continue;
-    seenSenders.add(message.senderId);
-    // one row per distinct sender in this window
-    await upsertParticipant({
-      conversationId,
-      sourceUserId: message.senderId,
-      displayName: String(raw?.senderName ?? ''),
-      handle: '',
-      observedVia: 'message-sender',
-      personIndex,
+  // Merge truncated roster (up to 20) and distinct message senders into one
+  // batch per chat, preserving roster handles while letting message-sender
+  // observations win `observedVia` and populate/refresh display names.
+  //
+  // `personIndex` is `executeSweep`'s ONE Tribe-roster load for the whole
+  // sweep pass, threaded down here and to `logSenderTouchpoints` — without it
+  // the phone-match fallback would reload and reindex every Tribe person.
+  const mergedParticipants = new Map();
+  for (const participant of normalizeParticipants(chat)) {
+    const existing = mergedParticipants.get(participant.sourceUserId);
+    mergedParticipants.set(participant.sourceUserId, {
+      sourceUserId: participant.sourceUserId,
+      displayName: participant.displayName || existing?.displayName || '',
+      handle: participant.handle || existing?.handle || '',
+      observedVia: 'participant-list',
     });
   }
+  for (const { message, raw } of rows) {
+    if (!message.senderId) continue;
+    const existing = mergedParticipants.get(message.senderId);
+    const displayName = String(raw?.senderName ?? '');
+    mergedParticipants.set(message.senderId, {
+      sourceUserId: message.senderId,
+      displayName: displayName || existing?.displayName || '',
+      handle: existing?.handle || '',
+      observedVia: 'message-sender',
+    });
+  }
+
+  const { resolvedPersonIds } = mergedParticipants.size > 0
+    ? await upsertConversationParticipants(conversationId, [...mergedParticipants.values()], { personIndex })
+    : { resolvedPersonIds: new Map() };
 
   // Touchpoints are derived from message SENDERS only, never from the
   // participant roster (which truncates, so iterating it would invent contact
@@ -876,7 +883,7 @@ async function sweepChat({
       senderId: message.senderId,
       sentAt: message.sentAt,
       network: normalized.network,
-    })), { personIndex });
+    })), { personIndex, resolvedPersonIds });
 
   await commitMessages({
     conversationId,
@@ -1137,10 +1144,10 @@ async function drainReconciliationEvents() {
   while (pendingReconciliations.size) {
     const [key, item] = pendingReconciliations.entries().next().value;
     pendingReconciliations.delete(key);
-    // recheck ingestion consent for queued work
+    // recheck ingestion consent and resolve credential once per event
     const config = await getBeeperSyncConfig();
-    // credential/feature gate
-    if (!config.enabled || !await isBeeperIngestionArmed()) {
+    const clientOptions = config.enabled ? await resolveArmedClientOptions() : null;
+    if (!clientOptions) {
       pendingReconciliations.clear();
       return;
     }
@@ -1151,7 +1158,7 @@ async function drainReconciliationEvents() {
            FROM beeper_messages m JOIN beeper_conversations c ON c.id = m.conversation_id
           WHERE m.id = $1 AND c.source_chat_id = $2`, [item.id, item.chatID],
       );
-      if (result.rows[0]) await reconcileStoredRow(result.rows[0], await resolveBeeperConfig());
+      if (result.rows[0]) await reconcileStoredRow(result.rows[0], clientOptions);
     })().catch(() => console.warn('🫧 Beeper event reconciliation deferred to the periodic rotation'));
   }
 }

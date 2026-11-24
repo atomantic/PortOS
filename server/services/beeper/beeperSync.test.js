@@ -74,14 +74,17 @@ vi.mock('../instanceFeatures.js', () => ({
   isInstanceFeatureEnabled: (...args) => isInstanceFeatureEnabledMock(...args),
 }));
 
-const upsertParticipantMock = vi.fn(async () => ({}));
+const upsertConversationParticipantsMock = vi.fn(async () => ({
+  participants: [],
+  resolvedPersonIds: new Map(),
+}));
 const logSenderTouchpointsMock = vi.fn(async () => ({ created: 0, matched: 0 }));
 // A stand-in roster index — its shape only matters to `buildPersonMatchIndex`
-// consumers, and `upsertParticipant` itself is mocked above, so an empty index
-// is enough to prove it is loaded once per sweep and threaded through.
+// consumers, and `upsertConversationParticipants` itself is mocked above, so an
+// empty index is enough to prove it is loaded once per sweep and threaded through.
 const loadRosterIndexMock = vi.fn(async () => ({ byIdentifier: new Map(), byPhone: new Map(), byName: new Map() }));
 vi.mock('./beeperTribe.js', () => ({
-  upsertParticipant: (...args) => upsertParticipantMock(...args),
+  upsertConversationParticipants: (...args) => upsertConversationParticipantsMock(...args),
   logSenderTouchpoints: (...args) => logSenderTouchpointsMock(...args),
   loadRosterIndex: (...args) => loadRosterIndexMock(...args),
 }));
@@ -152,7 +155,8 @@ beforeEach(() => {
   rejectedMessageIds = new Set();
   queryMock.mockClear();
   withTransactionMock.mockClear();
-  upsertParticipantMock.mockClear();
+  upsertConversationParticipantsMock.mockClear();
+  upsertConversationParticipantsMock.mockResolvedValue({ participants: [], resolvedPersonIds: new Map() });
   logSenderTouchpointsMock.mockClear();
   loadRosterIndexMock.mockClear();
   isInstanceFeatureEnabledMock.mockResolvedValue(true);
@@ -478,7 +482,7 @@ describe('watermark-bounded sweep', () => {
     const firstIndex = await loadRosterIndexMock.mock.results[0].value;
     expect(logSenderTouchpointsMock).toHaveBeenCalledTimes(2);
     expect(logSenderTouchpointsMock.mock.calls.every(([, options]) => options.personIndex === firstIndex)).toBe(true);
-    expect(upsertParticipantMock.mock.calls.every(([input]) => input.personIndex === firstIndex)).toBe(true);
+    expect(upsertConversationParticipantsMock.mock.calls.every(([, , options]) => options.personIndex === firstIndex)).toBe(true);
 
     await runBeeperSweep({ reason: 'manual' });
     expect(loadRosterIndexMock).toHaveBeenCalledTimes(2);
@@ -487,7 +491,12 @@ describe('watermark-bounded sweep', () => {
     expect(logSenderTouchpointsMock.mock.calls.slice(2).every(([, options]) => options.personIndex === nextIndex)).toBe(true);
   });
 
-  it('relates senders and participants through beeperTribe rather than writing identity rows itself', async () => {
+  it('deduplicates roster and senders into one batched upsert and passes resolvedPersonIds to logSenderTouchpoints', async () => {
+    const resolvedMap = new Map([['user-1', 'person-1'], ['u-self', null]]);
+    upsertConversationParticipantsMock.mockResolvedValueOnce({
+      participants: [],
+      resolvedPersonIds: resolvedMap,
+    });
     installFetch({
       chatPages: [{ items: [CHAT_PAGE.items[0]], hasMore: false }],
       messagePages: {
@@ -504,16 +513,20 @@ describe('watermark-bounded sweep', () => {
 
     await runBeeperSweep({ reason: 'manual' });
 
-    expect(upsertParticipantMock).toHaveBeenCalledWith(expect.objectContaining({
-      sourceUserId: 'user-1', handle: '+15550100001', observedVia: 'participant-list',
-    }));
-    expect(upsertParticipantMock).toHaveBeenCalledWith(expect.objectContaining({
-      sourceUserId: 'u-self', observedVia: 'message-sender',
-    }));
+    expect(upsertConversationParticipantsMock).toHaveBeenCalledTimes(1);
+    expect(upsertConversationParticipantsMock).toHaveBeenCalledWith(
+      'conv-chat-1',
+      [
+        { sourceUserId: 'user-1', displayName: 'Alice Example', handle: '+15550100001', observedVia: 'message-sender' },
+        { sourceUserId: 'u-self', displayName: '', handle: '', observedVia: 'message-sender' },
+      ],
+      { personIndex: expect.any(Object) },
+    );
     // A message the user SENT is not contact from anyone, so it never becomes a
-    // touchpoint candidate.
-    const [candidates] = logSenderTouchpointsMock.mock.calls[0];
+    // touchpoint candidate; the resolved sender->personId map rides into options.
+    const [candidates, touchpointOptions] = logSenderTouchpointsMock.mock.calls[0];
     expect(candidates.map((c) => c.senderId)).toEqual(['user-1']);
+    expect(touchpointOptions.resolvedPersonIds).toBe(resolvedMap);
   });
 });
 
@@ -1365,6 +1378,46 @@ describe('stored-message event reconciliation', () => {
     await reconcileBeeperEvent({ kind: 'message.deleted', chatID: 'example-chat', ids: ['unknown-message'] });
     expect(fetchedUrls).toEqual([]);
     expect(txWrites).toEqual([]);
+  });
+
+  it('resolves Beeper config once per reconciled event instead of calling isBeeperIngestionArmed and resolveBeeperConfig separately', async () => {
+    getSettingsMock.mockResolvedValue({
+      beeper: { enabled: true, token: 'test-token', baseUrl: 'http://127.0.0.1:23373' },
+    });
+    getSettingsMock.mockClear();
+    dbCalls.length = 0;
+
+    const originalQueryImpl = queryMock.getMockImplementation();
+    queryMock.mockImplementation(async (text, params) => {
+      dbCalls.push({ text, params });
+      if (/FROM beeper_messages m JOIN beeper_conversations/.test(text)) {
+        return { rows: [{ id: 'msg-reconcile', conversation_id: 'conv-1', source_chat_id: 'example-chat' }] };
+      }
+      return { rows: [] };
+    });
+
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      fetchedUrls.push(url);
+      return jsonResponse({
+        id: 'msg-reconcile',
+        senderID: 'user-1',
+        text: 'Updated message',
+        timestamp: '2026-09-02T10:00:00.000Z',
+        sortKey: '1',
+      });
+    }));
+
+    try {
+      await reconcileBeeperEvent({ kind: 'message.upserted', chatID: 'example-chat', ids: ['msg-reconcile'] });
+    } finally {
+      queryMock.mockImplementation(originalQueryImpl);
+    }
+
+    expect(fetchedUrls).toHaveLength(1);
+    expect(new URL(fetchedUrls[0]).pathname).toBe('/v1/chats/example-chat/messages/msg-reconcile');
+    expect(dbCalls.filter(({ text }) => text.includes('beeper_credentials'))).toHaveLength(1);
+    // 1x getBeeperSyncConfig + 1x resolveBeeperConfig (which reads settings once for baseUrl and once for legacy token fallback).
+    expect(getSettingsMock).toHaveBeenCalledTimes(3);
   });
 });
 
