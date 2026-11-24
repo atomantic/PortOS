@@ -27,7 +27,6 @@ const UsagePage = lazyWithReload(() => import('./pages/UsagePage'));
 const ProcessesPage = lazyWithReload(() => import('./pages/ProcessesPage'));
 const AgentsPage = lazyWithReload(() => import('./pages/AgentsPage'));
 const DataDog = lazyWithReload(() => import('./pages/DataDog'));
-const FlowsDoc = lazyWithReload(() => import('./pages/FlowsDoc'));
 const GitHub = lazyWithReload(() => import('./pages/GitHub'));
 const Eidoverse = lazyWithReload(() => import('./pages/Eidoverse'));
 const AppDetail = lazyWithReload(() => import('./pages/AppDetail'));
@@ -299,7 +298,6 @@ export default function App() {
           <Route element={<FullWidthMain />}>
             <Route path="apps" element={<Apps />} />
             <Route path="devtools/datadog" element={<DataDog />} />
-            <Route path="devtools/flows" element={<FlowsDoc />} />
             <Route path="devtools/github" element={<GitHub />} />
             <Route path="devtools/github/:tab" element={<GitHub />} />
             <Route path="devtools/github/:tab/:accountId/:threadId" element={<GitHub />} />

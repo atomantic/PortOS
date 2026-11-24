@@ -58,7 +58,6 @@
   "/decks/:id": "padded",
   "/devtools/agents": "full",
   "/devtools/datadog": "full",
-  "/devtools/flows": "full",
   "/devtools/github": "full",
   "/devtools/github/:tab": "full",
   "/devtools/github/:tab/:accountId/:threadId": "full",

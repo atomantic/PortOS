@@ -365,12 +365,23 @@ describe('Layout — instance feature gating', () => {
   // so its children are queryable without driving the disclosure — and the
   // expansion does not itself depend on a gated row surviving the filter.
   it('shows the DataDog and JIRA rows while those features are on', async () => {
-    await renderLayout('/devtools/flows');
+    await renderLayout('/devtools/image-clean');
 
     expect(screen.getByRole('link', { name: 'DataDog' })).toHaveAttribute('href', '/devtools/datadog');
     expect(screen.getByRole('link', { name: 'JIRA' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'JIRA Reports' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'POST' })).toBeTruthy();
+  });
+
+  it('omits the retired Flows destination from Dev Tools, pinned and recent rows', async () => {
+    localStorage.setItem(PINNED_KEY, JSON.stringify(['/devtools/flows', '/eidoverse']));
+    localStorage.setItem(RECENT_KEY, JSON.stringify(['/devtools/flows', '/goals/list']));
+    await renderLayout('/devtools/image-clean');
+
+    expect(screen.getByRole('link', { name: 'Image Cleaner' })).toBeTruthy();
+    expect(within(pinnedSection()).getByRole('link', { name: 'Eidoverse' })).toBeTruthy();
+    expect(within(screen.getByTestId('recent-section')).getByRole('link', { name: 'Goals' })).toHaveAttribute('href', '/goals/list');
+    expect(screen.queryByRole('link', { name: 'Flows' })).toBeNull();
   });
 
   it('shows API Explorer inside Dev Tools navigation', async () => {
@@ -384,13 +395,13 @@ describe('Layout — instance feature gating', () => {
     featureMock.features = allFeaturesOn()
       .map((f) => (f.id === 'post' ? f : { ...f, enabled: false }));
 
-    await renderLayout('/devtools/flows');
+    await renderLayout('/devtools/image-clean');
 
     expect(screen.queryByRole('link', { name: 'DataDog' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'JIRA' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'JIRA Reports' })).toBeNull();
     // Ungated Dev Tools rows and the POST section stay put.
-    expect(screen.getByRole('link', { name: 'Flows' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Image Cleaner' })).toHaveAttribute('href', '/devtools/image-clean');
     expect(screen.getByRole('button', { name: 'POST' })).toBeTruthy();
   });
 
@@ -430,7 +441,7 @@ describe('Layout — instance feature gating', () => {
     featureMock.features = allFeaturesOn()
       .map((f) => (f.id === 'post' ? { ...f, enabled: false } : f));
 
-    await renderLayout('/devtools/flows');
+    await renderLayout('/devtools/image-clean');
 
     expect(screen.queryByRole('button', { name: 'POST' })).toBeNull();
     expect(screen.getByRole('link', { name: 'DataDog' })).toBeTruthy();
@@ -440,7 +451,7 @@ describe('Layout — instance feature gating', () => {
     featureMock.features = allFeaturesOn()
       .map((f) => (f.id === 'health' ? { ...f, enabled: false } : f));
 
-    await renderLayout('/devtools/flows');
+    await renderLayout('/devtools/image-clean');
 
     expect(screen.queryByRole('button', { name: 'Health' })).toBeNull();
   });
@@ -448,7 +459,7 @@ describe('Layout — instance feature gating', () => {
   it('shows everything when the feature list cannot be read', async () => {
     api.getInstanceFeatures.mockRejectedValueOnce(new Error('offline'));
 
-    await renderLayout('/devtools/flows');
+    await renderLayout('/devtools/image-clean');
 
     expect(screen.getByRole('link', { name: 'DataDog' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'POST' })).toBeTruthy();
