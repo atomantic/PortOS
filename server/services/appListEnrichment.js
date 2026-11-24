@@ -81,16 +81,14 @@ export function computeOverallStatus(statusValues, degraded) {
 export async function enrichAppsWithPm2Status(apps) {
   // Group apps by their PM2_HOME (null = default) so each unique home is
   // queried at most once.
-  const pm2HomeGroups = new Map();
+  const pm2Homes = new Set();
   for (const app of apps) {
-    const home = app.pm2Home || null;
-    if (!pm2HomeGroups.has(home)) pm2HomeGroups.set(home, []);
-    pm2HomeGroups.get(home).push(app);
+    if (usesPm2(app.type)) pm2Homes.add(app.pm2Home || null);
   }
 
   const pm2Maps = new Map();
   const failedHomes = new Set();
-  for (const pm2Home of pm2HomeGroups.keys()) {
+  for (const pm2Home of pm2Homes) {
     const processes = await listProcessesStrict(pm2Home);
     if (processes === null) {
       failedHomes.add(pm2Home);

@@ -298,6 +298,46 @@ describe('Apps CRUD Routes', () => {
       expect(response.body[0].pm2Status).toBeUndefined();
     });
 
+    it('makes zero Git calls for a peer probe even with configured checkouts', async () => {
+      const gitDir = mkdtempSync(join(tmpdir(), 'portos-probe-git-'));
+      try {
+        appsService.getAllApps.mockResolvedValue([{
+          id: 'repo', name: 'Repo', type: 'express', repoPath: gitDir, pm2ProcessNames: ['repo'], processes: [],
+        }]);
+        pm2Service.listProcessesStrict.mockResolvedValue([{ name: 'repo', status: 'online' }]);
+        streamingDetect.parseEcosystemFromPath.mockResolvedValue({ processes: [] });
+
+        const response = await request(app).get('/api/apps?view=probe');
+
+        expect(response.status).toBe(200);
+        expect(response.body[0]).toMatchObject({ id: 'repo', overallStatus: 'online' });
+        expect(response.body[0]).not.toHaveProperty('isGitRepo');
+        expect(execGit).not.toHaveBeenCalled();
+      } finally {
+        rmSync(gitDir, { recursive: true, force: true });
+      }
+    });
+
+    it('reads PM2 only for apps that use it, once per distinct home', async () => {
+      appsService.getAllApps.mockResolvedValue([
+        { id: 'native', name: 'Native', type: 'macos-native', pm2ProcessNames: [] },
+        { id: 'a', name: 'A', type: 'express', pm2ProcessNames: ['a'], processes: [] },
+        { id: 'b', name: 'B', type: 'express', pm2ProcessNames: ['b'], processes: [] },
+        { id: 'c', name: 'C', type: 'express', pm2Home: '/example/pm2', pm2ProcessNames: ['c'], processes: [] },
+        { id: 'native2', name: 'Native2', type: 'xcode', pm2Home: '/example/unused', pm2ProcessNames: [] },
+      ]);
+      pm2Service.listProcessesStrict.mockResolvedValue([]);
+
+      await request(app).get('/api/apps?view=probe');
+      expect(pm2Service.listProcessesStrict.mock.calls.map(([home]) => home ?? null).sort()).toEqual(['/example/pm2', null]);
+
+      pm2Service.listProcessesStrict.mockClear();
+      appsService.getAllApps.mockResolvedValue([{ id: 'native', name: 'Native', type: 'swift', pm2ProcessNames: [] }]);
+      const response = await request(app).get('/api/apps?view=probe');
+      expect(response.body[0].overallStatus).toBe('n/a');
+      expect(pm2Service.listProcessesStrict).not.toHaveBeenCalled();
+    });
+
     it('does not advertise the loopback-only Eidoverse port to peers', async () => {
       appsService.getAllApps.mockResolvedValue([{
         id: 'app-001', name: 'Example World', type: 'bun',
