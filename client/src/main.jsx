@@ -126,7 +126,17 @@ const app = isHostedAudienceRoute
     </ThemeProvider>
   );
 
-ReactDOM.createRoot(document.getElementById('root')).render(
+ReactDOM.createRoot(document.getElementById('root'), {
+  onCaughtError(error, errorInfo) {
+    const boundaryProps = errorInfo.errorBoundary?.props;
+    if (boundaryProps?.fallback !== null && !boundaryProps?.onError
+      && !isStaleChunkError(error, { duringRender: true })) {
+      void reportClientError({ type: 'error', message: error?.message, error });
+    }
+    // Providing onCaughtError replaces React's default console diagnostic.
+    console.error('💥 React caught an error:', error, errorInfo.componentStack);
+  },
+}).render(
   <React.StrictMode>
     <ErrorBoundary>
       {app}
