@@ -54,6 +54,13 @@ const READ_STATE_SUBJECT_CLASS = { unread: 'text-gray-300', unknown: 'text-gray-
 
 const EMPTY_ACTION_CLASS = 'inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm transition-colors disabled:opacity-50';
 
+/** Toast text for the fetch-full response: updated of total, plus a truncation note. */
+export const fetchFullToastMessage = ({ updated = 0, total = 0, truncated = false } = {}) => {
+  if (!total) return 'Nothing to fetch';
+  const base = `Fetched full content for ${updated} of ${pluralize(total, 'message')}`;
+  return truncated ? `${base} — more remain, run again to continue` : base;
+};
+
 /**
  * Newest `lastSyncAt` across the given accounts, or `null` when none has ever
  * synced. `null` here means "never synced" — never "synced and found nothing".
@@ -535,7 +542,7 @@ export default function InboxTab({ accounts }) {
               const result = await fetchFullContent(selectedAccount).catch(() => null);
               setFetchingFull(false);
               if (!result) return;
-              toast.success(`Fetched full content for ${pluralize(result.count || 0, 'message')}`);
+              toast.success(fetchFullToastMessage(result));
               fetchMessages();
             }}
             disabled={fetchingFull}
