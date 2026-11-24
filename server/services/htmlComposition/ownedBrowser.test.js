@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter, getEventListeners } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { basename } from 'node:path';
+import { promisify } from 'node:util';
 import { pinPlatform } from '../../lib/testHelper.js';
 import { access, rm } from 'node:fs/promises';
 
-const launch = vi.hoisted(() => ({ spawn: vi.fn() }));
+const launch = vi.hoisted(() => ({ spawn: vi.fn(), observeProcesses: vi.fn() }));
 vi.mock('./browserProcessGroup.js', async original => ({
   ...await original(), drainBrowserProcessGroup: vi.fn(async () => {}), observeBrowserProcessGroup: vi.fn(async () => 'unavailable'),
 }));
@@ -13,7 +14,10 @@ vi.mock('node:fs/promises', async original => {
   const actual = await original();
   return { ...actual, rm: vi.fn(actual.rm) };
 });
-vi.mock('../../lib/childProcess.js', async original => ({ ...await original(), spawn: launch.spawn }));
+vi.mock('../../lib/childProcess.js', async original => ({
+  ...await original(), spawn: launch.spawn,
+  execFile: Object.assign(() => {}, { [promisify.custom]: launch.observeProcesses }),
+}));
 vi.mock('../browserService.js', () => ({ loadConfig: async () => ({ chromePath: '/synthetic/chrome' }) }));
 const { launchCompositionBrowser } = await import('./ownedBrowser.js');
 const { drainBrowserProcessGroup, observeBrowserProcessGroup } = await import('./browserProcessGroup.js');
@@ -103,7 +107,7 @@ describe('owned composition capture browser lifecycle', () => {
     try {
       await expect(owner.close()).rejects.toBe(error);
       await expect(access(profile)).resolves.toBeUndefined();
-      expect(log).toHaveBeenCalledWith('❌ Composition browser profile cleanup failed (other)');
+      expect(log).toHaveBeenCalledWith('❌ Composition browser profile cleanup failed (other, phase=profile-removal)');
     } finally { await remove(profile, { recursive: true, force: true }); }
   });
 
@@ -592,14 +596,34 @@ it.skipIf(process.platform === 'win32')('waits for the retained group to stop be
   await expect(access(profile)).rejects.toThrow();
 });
 
+// #18434: a helper stuck in kernel exit made macOS refuse the group signal with
+// EPERM, close() reject at its deadline and the profile stay behind.
+it.skipIf(process.platform === 'win32')('removes the profile while helpers that can no longer be signaled finish exiting', async () => {
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const { drainBrowserProcessGroup: drain } = await vi.importActual('./browserProcessGroup.js');
+  vi.mocked(drainBrowserProcessGroup).mockImplementationOnce(drain);
+  const helper = state => ({ stdout: `${process.pid} 1 S\n23456 ${child.pid} ${state}` });
+  launch.observeProcesses.mockReset().mockResolvedValueOnce(helper('S')).mockResolvedValue(helper('?E'));
+  vi.mocked(process.kill).mockReturnValueOnce(true)
+    .mockImplementation(() => { throw Object.assign(new Error('/private/error'), { code: 'EPERM' }); });
+  const owner = await launchCompositionBrowser({ shutdownMs: 500 });
+  await owner.close();
+  expect(process.kill.mock.calls).toEqual([[-child.pid, 'SIGTERM'], [-child.pid, 'SIGTERM']]);
+  await expect(access(profile)).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(log).not.toHaveBeenCalled();
+  expect(warning).not.toHaveBeenCalled();
+});
+
 it.skipIf(process.platform === 'win32')('preserves the profile when group quiescence cannot be established', async () => {
   const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-  vi.mocked(drainBrowserProcessGroup).mockRejectedValueOnce(new Error('Composition browser group observation failed'));
+  vi.mocked(drainBrowserProcessGroup).mockRejectedValueOnce(
+    Object.assign(new Error('Composition browser group observation failed'), { code: 'EPERM' }));
   const owner = await launchCompositionBrowser();
   await expect(owner.close()).rejects.toThrow('Composition browser group observation failed');
   expect(rm).not.toHaveBeenCalled();
   await expect(access(profile)).resolves.toBeUndefined();
-  expect(log).toHaveBeenCalled();
+  expect(log).toHaveBeenCalledExactlyOnceWith('❌ Composition browser profile cleanup failed (EPERM, phase=group-drain)');
   await rm(profile, { recursive: true, force: true });
 });
 

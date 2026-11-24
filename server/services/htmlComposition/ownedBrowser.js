@@ -167,19 +167,23 @@ export async function launchCompositionBrowser({
   // Read by the CDP client when a command fails, before close() changes them.
   const lifecycleFacts = () => ({ childSpawned: spawned, childExited: exited, childClosed: closed, ...childStatus() });
   const safeSignalError = error => ['EPERM', 'ESRCH', 'EINVAL', 'ENOSYS'].includes(error?.code) ? error.code : 'other';
+  // Names the failed step for the log: EPERM alone cannot tell a refused group
+  // signal from a filesystem refusal.
+  let cleanupPhase = 'none';
+  const cleanupStep = (phase, work) => work.catch(error => { cleanupPhase = phase; throw error; });
   const cleanupProfile = () => {
     if (!profileCleanup) {
       profileCleanup = (async () => {
         if (ownsProcessGroup && proc?.pid && closed) {
           // Late child close still owns cleanup, without changing the rejected close verdict.
           const deadline = (closeDeadlineExpired ? performance.now() : terminationStarted ?? performance.now()) + shutdownMs;
-          await drainBrowserProcessGroup(proc.pid, deadline, Math.min(1000, shutdownMs / 2), groupTermination);
+          await cleanupStep('group-drain', drainBrowserProcessGroup(proc.pid, deadline, Math.min(1000, shutdownMs / 2), groupTermination));
         }
         try {
-          await removeProfile(profile);
+          await cleanupStep('profile-removal', removeProfile(profile));
         } finally {
           // A failed profile delete must not leave the Chromium temp root behind.
-          if (browserTemp) await removeProfile(browserTemp);
+          if (browserTemp) await cleanupStep('temp-removal', removeProfile(browserTemp));
         }
       })();
     }
@@ -202,7 +206,7 @@ export async function launchCompositionBrowser({
     proc?.removeListener('error', onError);
     // A deadline can reject close() before the OS reports exit. Retain ownership
     // until the eventual close event and remove only this child's profile then.
-    cleanupProfile().catch(error => console.error(`❌ Composition browser profile cleanup failed (${safeSignalError(error)})`));
+    cleanupProfile().catch(error => console.error(`❌ Composition browser profile cleanup failed (${safeSignalError(error)}, phase=${cleanupPhase})`));
     closeResolve();
   };
   // Child 'error' may also be emitted by kill(). Keep a listener until close.
