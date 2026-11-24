@@ -15,7 +15,10 @@
  * a PortOS-managed Ollama, so that port is refused.
  */
 
-import { chmod, mkdir } from 'fs/promises';
+import { createHash, randomUUID } from 'crypto';
+import { createReadStream } from 'fs';
+import { chmod, copyFile, lstat, mkdir, mkdtemp, rename, rm } from 'fs/promises';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import { commandExists } from '../lib/commandExists.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -46,6 +49,16 @@ import { runStreamingCommand } from '../lib/streamingSpawn.js';
 import { execPm2, getAppStatusStrict, clearJlistCache, getSavedProcessNames } from './pm2.js';
 
 export { SLOTSTREAM_APP };
+
+// Pinned Apple Silicon Slotstream release; digest comes from the release's published SHA-256 asset.
+export const SLOTSTREAM_RELEASE_REPO = 'carloslfu/slotstream';
+export const SLOTSTREAM_RELEASE_TAG = 'v0.2.30';
+export const SLOTSTREAM_RELEASE_TARGETS = Object.freeze({
+  'darwin-arm64': {
+    archive: 'slotstream-arm64.tar.gz',
+    sha256: 'e7a3e6532ae0931ea3538abe1974dead0fc741d9d8a529e1f02517b7ac78335c',
+  },
+});
 
 const PROBE_TIMEOUT_MS = 1500;
 const INSTALL_TIMEOUT_MS = 20 * 60 * 1000;
@@ -195,9 +208,18 @@ export async function getSlotstreamServerStatus() {
   };
 }
 
+async function sha256File(filePath) {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(filePath)) {
+    hash.update(chunk);
+  }
+  return hash.digest('hex');
+}
+
 /**
- * Install the Apple Silicon Slotstream binary from GitHub Releases into
- * `~/.slotstream/bin`. Never pipes a remote script to a shell, and never
+ * Install the pinned Apple Silicon Slotstream binary from GitHub Releases into
+ * `~/.slotstream/bin`. Downloads and verifies SHA-256 in an isolated temp dir
+ * before extracting, never pipes a remote script to a shell, and never
  * fetches model weights.
  */
 export async function installSlotstream({ onProgress = () => {} } = {}) {
@@ -206,9 +228,6 @@ export async function installSlotstream({ onProgress = () => {} } = {}) {
     throw new ServerError(SLOTSTREAM_UNSUPPORTED_REASON, { status: 400, code: 'SLOTSTREAM_UNSUPPORTED_PLATFORM' });
   }
 
-  const binDir = slotstreamBinDir();
-  await mkdir(binDir, { recursive: true });
-
   if (!(await commandExists('gh', ['--version']))) {
     throw new ServerError(
       'PortOS could not install Slotstream because GitHub CLI is not available on this machine.',
@@ -216,27 +235,73 @@ export async function installSlotstream({ onProgress = () => {} } = {}) {
     );
   }
 
-  emit('Downloading Slotstream from GitHub Releases…');
-  const download = await runStreamingCommand('gh', [
-    'release', 'download',
-    '--repo', 'carloslfu/slotstream',
-    '--pattern', 'slotstream-arm64.tar.gz',
-    '--dir', binDir,
-    '--clobber',
-  ], emit, { timeoutMs: INSTALL_TIMEOUT_MS });
-  if (!download.success) throw new ServerError(`Slotstream install failed: ${download.error}`, { status: 500 });
+  const target = SLOTSTREAM_RELEASE_TARGETS['darwin-arm64'];
+  const workDir = await mkdtemp(join(tmpdir(), 'portos-slotstream-install-'));
+  try {
+    const archivePath = join(workDir, target.archive);
+    const extractDir = join(workDir, 'extract');
+    await mkdir(extractDir, { recursive: true });
 
-  const archive = join(binDir, 'slotstream-arm64.tar.gz');
-  emit('Extracting Slotstream…');
-  const extract = await runStreamingCommand('tar', ['-xzf', archive, '-C', binDir], emit, { timeoutMs: 60_000 });
-  if (!extract.success) throw new ServerError(`Slotstream extract failed: ${extract.error}`, { status: 500 });
+    emit(`Downloading Slotstream ${SLOTSTREAM_RELEASE_TAG} from GitHub Releases…`);
+    const download = await runStreamingCommand('gh', [
+      'release', 'download',
+      SLOTSTREAM_RELEASE_TAG,
+      '--repo', SLOTSTREAM_RELEASE_REPO,
+      '--pattern', target.archive,
+      '--dir', workDir,
+      '--clobber',
+    ], emit, { timeoutMs: INSTALL_TIMEOUT_MS });
+    if (!download.success) throw new ServerError(`Slotstream install failed: ${download.error}`, { status: 500 });
 
-  const binary = join(binDir, 'slotstream');
-  await chmod(binary, 0o755).catch(() => {});
-  if (!resolveSlotstreamBinary() && !findCommandOnPath(binary)) {
-    throw new ServerError('Slotstream downloaded but the binary was not found in ~/.slotstream/bin.', { status: 500 });
+    let digest;
+    try {
+      digest = await sha256File(archivePath);
+    } catch (err) {
+      throw new ServerError(
+        `Slotstream download did not produce ${target.archive}: ${err.message}`,
+        { status: 502, code: 'SLOTSTREAM_DOWNLOAD_MISSING' },
+      );
+    }
+    if (digest !== target.sha256) {
+      throw new ServerError(
+        'Slotstream download failed SHA-256 verification and was discarded.',
+        { status: 502, code: 'SLOTSTREAM_DIGEST_MISMATCH' },
+      );
+    }
+
+    emit('Extracting Slotstream…');
+    const extract = await runStreamingCommand('tar', ['-xzf', archivePath, '-C', extractDir], emit, { timeoutMs: 60_000 });
+    if (!extract.success) throw new ServerError(`Slotstream extract failed: ${extract.error}`, { status: 500 });
+
+    const extractedBinary = join(extractDir, 'slotstream');
+    const extractedStat = await lstat(extractedBinary).catch(() => null);
+    if (!extractedStat || extractedStat.isSymbolicLink() || !extractedStat.isFile()) {
+      throw new ServerError(
+        'Slotstream archive did not contain a regular slotstream binary.',
+        { status: 502, code: 'SLOTSTREAM_INVALID_ARCHIVE' },
+      );
+    }
+
+    const binDir = slotstreamBinDir();
+    await mkdir(binDir, { recursive: true });
+    const binary = join(binDir, 'slotstream');
+    const stagedBinary = join(binDir, `.slotstream.tmp-${randomUUID()}`);
+    try {
+      await copyFile(extractedBinary, stagedBinary);
+      await chmod(stagedBinary, 0o755);
+      await rename(stagedBinary, binary);
+    } catch (err) {
+      await rm(stagedBinary, { force: true }).catch(() => {});
+      throw err;
+    }
+
+    if (!resolveSlotstreamBinary() && !findCommandOnPath(binary)) {
+      throw new ServerError('Slotstream downloaded but the binary was not found in ~/.slotstream/bin.', { status: 500 });
+    }
+    return { success: true, message: 'Slotstream installed' };
+  } finally {
+    await rm(workDir, { recursive: true, force: true });
   }
-  return { success: true, message: 'Slotstream installed' };
 }
 
 /**
