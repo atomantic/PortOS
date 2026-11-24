@@ -341,7 +341,7 @@ describe('a11y conventions: landmarks', () => {
     // PageShell.jsx renders the skip-link target <main id="main-content"> for
     // every Layout route; a page rendering its own <main> nests a second
     // landmark inside it (WCAG 1.3.1). Layout-free entry pages own their <main>.
-    const OWN_MAIN = new Set(['src/components/PageShell.jsx', 'src/pages/EidoverseGuest.jsx', 'src/pages/FableLoomHostedJoin.jsx']);
+    const OWN_MAIN = new Set(['src/components/PageShell.jsx', 'src/pages/Ambient.jsx', 'src/pages/Eidoverse.jsx', 'src/pages/EidoverseGuest.jsx', 'src/pages/FableLoomHostedJoin.jsx', 'src/pages/Login.jsx']);
     const offenders = [];
     for (const file of trackedJsxFiles()) {
       if (OWN_MAIN.has(file.replace(/^.*?(src\/)/, '$1'))) continue;
@@ -349,6 +349,14 @@ describe('a11y conventions: landmarks', () => {
       for (const node of forEachOpeningTag(src, 'main')) offenders.push(`${file}:${lineOf(src, node.index)}`);
     }
     expect(offenders, `Nested <main> — use <section> (the app shell's <main id="main-content"> is the only landmark):\n${offenders.join('\n')}`).toEqual([]);
+  });
+
+  it('gives every Layout-free route its own <main> landmark (#18286)', () => {
+    const OWN_MAIN_ROUTES = ['Ambient.jsx', 'Eidoverse.jsx', 'EidoverseGuest.jsx', 'FableLoomHostedJoin.jsx', 'Login.jsx'];
+    for (const file of OWN_MAIN_ROUTES) {
+      const src = maskedSourceOf(`src/pages/${file}`);
+      expect(src, `${file} is a Layout-free route and must render <main id="main-content">`).toMatch(/<main[\s>]/);
+    }
   });
 
   it('floors editable field text at 16px on a coarse pointer, unlayered (#15177)', () => {

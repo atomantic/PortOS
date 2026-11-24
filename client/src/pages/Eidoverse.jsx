@@ -441,6 +441,8 @@ export default function Eidoverse() {
             src={hostUrl}
             title="Eidoverse Worlds"
             className="absolute inset-0 h-full w-full border-0 bg-port-bg"
+            aria-hidden={showLoadingCurtain || undefined}
+            tabIndex={showLoadingCurtain ? -1 : undefined}
             allow="camera; microphone; fullscreen; gamepad; xr-spatial-tracking"
             onLoad={() => { setIframeReady(true); frame.onFrameLoad(); }}
           />
@@ -550,7 +552,9 @@ export default function Eidoverse() {
             Controls
           </Link>
         </header>
-        {frameStage}
+        <main id="main-content" className="flex min-h-0 flex-1 flex-col">
+          {frameStage}
+        </main>
         {worldDrawer}
       </div>
     );
