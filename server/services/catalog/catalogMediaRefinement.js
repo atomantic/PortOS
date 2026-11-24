@@ -7,7 +7,7 @@ import { IMAGE_GEN_MODE, QUEUEABLE_IMAGE_MODES } from '../../lib/generationModes
 import { maxInputImages } from '../../lib/imageGenCapabilities.js';
 import { resolveImageInputPath } from '../../lib/pathSafety.js';
 import { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from '../../lib/imageLimits.js';
-import { isFlux2 } from '../../lib/mediaModels.js';
+import { isFlux2 } from '../../lib/runners.js';
 import { getIngredient } from '../catalogDB/ingredients.js';
 import { listMediaForIngredient } from '../catalogDB/media.js';
 import { assertCatalogIdentityWritable } from '../catalogDB/identityAccess.js';

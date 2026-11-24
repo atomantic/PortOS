@@ -18,7 +18,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { isAppleSilicon } from '../../lib/platform.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { verifyCachedRepoFiles } from '../../lib/hfCache.js';
-import { imageModelDownloadTargets } from '../../lib/mediaModels.js';
+import { imageModelDownloadTargets } from '../../lib/mediaModels/metadata.js';
 import { IMAGE_RUNTIME_REMEDY } from '../../lib/imageRuntimeRemedies.js';
 
 // videoGen/runtimes.js is heavy and resolves paths at load, so it is imported
