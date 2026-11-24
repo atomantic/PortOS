@@ -22,7 +22,7 @@ vi.mock('fs/promises', async (importOriginal) => {
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: disk.root, extraOverrides: { root: disk.root } }));
 vi.mock('./apps.js', () => ({ getAppById: vi.fn(), getAllApps: vi.fn(), PORTOS_APP_ID: 'self' }));
-vi.mock('./git.js', () => ({ getBranch: vi.fn(), getStatus: vi.fn(), isRepo: vi.fn() }));
+vi.mock('./git/status.js', () => ({ getBranch: vi.fn(), getStatus: vi.fn(), isRepo: vi.fn() }));
 vi.mock('./shell.js', () => ({ listAllSessions: vi.fn(() => []) }));
 vi.mock('./cos/cosTaskStore.js', () => ({ getAllTasks: vi.fn() }));
 vi.mock('./cos/cosEvents.js', () => ({ cosEvents: { emit: vi.fn(), on: vi.fn() }, emitLog: vi.fn() }));

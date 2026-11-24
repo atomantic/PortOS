@@ -31,7 +31,7 @@ import { detectAppIcon } from '../../services/appIconDetect.js';
 import { hasDeployScript } from '../../services/appDeployer.js';
 import { checkScripts } from '../../services/xcodeScripts.js';
 import { applyEcosystemPortEdits } from '../../services/appPortConfig.js';
-import { isRepo } from '../../services/git.js';
+import { isRepo } from '../../services/git/status.js';
 import { enrichAppsWithPm2Status } from '../../services/appListEnrichment.js';
 import { loadApp, pathExists, deriveAppPorts, computeOverallStatus } from './shared.js';
 import { EIDOVERSE_PROCESS_NAME } from '../../lib/eidoversePort.js';

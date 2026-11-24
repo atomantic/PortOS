@@ -72,9 +72,13 @@ vi.mock('../branchReconcile.js', () => ({
   cleanupMerged: vi.fn().mockResolvedValue({ cleaned: [] }),
   driveToMerge: (pr, { mergeHandoff = false } = {}) => `merge ${pr} from the repo root once CI is green (handoff ${mergeHandoff ? 'on' : 'off'})`,
 }));
-vi.mock('../git.js', () => ({
+vi.mock('../git/status.js', () => ({
   getDefaultBranch: vi.fn().mockResolvedValue('main'),
+}));
+vi.mock('../git/branchEvidence.js', () => ({
   hasBranchMergeEvidence: vi.fn().mockResolvedValue(true),
+}));
+vi.mock('../forgeAuth.js', () => ({
   resolveForgeForRepo: vi.fn().mockResolvedValue({ cli: 'gh', env: null }),
 }));
 vi.mock('../github.js', () => ({
@@ -127,7 +131,8 @@ import { addTask, getAllTasks } from '../cos/cosTaskStore.js';
 import { ensureTaskThread } from '../brainTaskThreads.js';
 import { listWorktrees } from '../worktreeManager.js';
 import { listRemoteHeads, cleanupMerged } from '../branchReconcile.js';
-import { hasBranchMergeEvidence, resolveForgeForRepo } from '../git.js';
+import { hasBranchMergeEvidence } from '../git/branchEvidence.js';
+import { resolveForgeForRepo } from '../forgeAuth.js';
 import { findPullRequestForBranch, execGh, getPullRequestState } from '../github.js';
 import { findMergeRequestForBranch } from '../gitlab.js';
 import { getAppById } from '../apps.js';

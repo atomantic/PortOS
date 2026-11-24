@@ -30,7 +30,9 @@ vi.mock('../cos/cosAgentLifecycle.js', () => ({
   getAgent: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('../jira.js', () => ({ getInstances: vi.fn(), addComment: vi.fn() }));
-vi.mock('../git.js', () => ({ push: vi.fn(), getRepoBranches: vi.fn(), generatePRDescription: vi.fn(), suggestPRTitle: vi.fn(), createPR: vi.fn(), checkout: vi.fn() }));
+vi.mock('../git/status.js', () => ({ getRepoBranches: vi.fn() }));
+vi.mock('../git/sync.js', () => ({ push: vi.fn(), checkout: vi.fn() }));
+vi.mock('../git/prs.js', () => ({ generatePRDescription: vi.fn(), suggestPRTitle: vi.fn(), createPR: vi.fn() }));
 vi.mock('../codeReview.js', () => ({ resolveReviewLoopOptions: vi.fn().mockResolvedValue({}) }));
 vi.mock('./agentWorktreeCleanup.js', () => ({
   cleanupAgentWorktree: vi.fn().mockResolvedValue([]),
@@ -55,7 +57,10 @@ import { cleanupAgentWorktree, releaseRetryHold, spawnMergeRecoveryTask } from '
 import { resolveReviewLoopOptions } from '../codeReview.js';
 import { promptOpensOwnPr } from '../promptSections/completion.js';
 
-import * as git from '../git.js';
+import * as gitStatus from '../git/status.js';
+import * as gitSync from '../git/sync.js';
+import * as gitPrs from '../git/prs.js';
+const git = { ...gitStatus, ...gitSync, ...gitPrs };
 import * as jira from '../jira.js';
 import { addNotification } from '../notifications.js';
 import { ensureTaskThread } from '../brainTaskThreads.js';

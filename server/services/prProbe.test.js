@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn() }));
 
-vi.mock('./git.js', () => ({
+vi.mock('./forgeAuth.js', () => ({
   resolveForgeForRepo: vi.fn().mockResolvedValue({ cli: 'gh', env: null }),
 }));
 vi.mock('./github.js', () => ({
@@ -18,7 +18,7 @@ vi.mock('./gitlab.js', () => ({
 }));
 
 import { execGit } from '../lib/execGit.js';
-import { resolveForgeForRepo } from './git.js';
+import { resolveForgeForRepo } from './forgeAuth.js';
 import { findPullRequestForBranch, getPullRequestState } from './github.js';
 import { findMergeRequestForBranch } from './gitlab.js';
 import { readMergedPrTip, isMergedPrHead, probeChangeRequestState, probePrForBranch, readPullRequest, readPullRequestOutcome, isOpenSameRepoPr } from './prProbe.js';

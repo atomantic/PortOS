@@ -25,7 +25,9 @@ import { execGit } from '../lib/execGit.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { decideHeldCheckoutRetirement, decideInventoriedBranchRetirement, decideMergedCheckoutOwner, decideMergedDelivery, decidePendingMergeReceipt, decideWith } from './branchRetirementDecision.js';
 import { listWorktrees, forceRemoveWorktreeDir, deleteCompletedLocalBranch, classifyWorktreeDirt } from './worktreeManager.js';
-import { getDefaultBranch, getStatusPorcelain, hasBranchMergeEvidence, resolveForgeForRepo } from './git.js';
+import { getDefaultBranch, getStatusPorcelain } from './git/status.js';
+import { hasBranchMergeEvidence } from './git/branchEvidence.js';
+import { resolveForgeForRepo } from './forgeAuth.js';
 import { withClaimOwnershipLock, readClaimOwnershipAgents } from './cos/cosClaimOwnership.js';
 
 const FULL_OBJECT_ID = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/;

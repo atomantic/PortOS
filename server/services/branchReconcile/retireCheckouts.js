@@ -14,7 +14,8 @@ import {
 } from '../branchRetirementDecision.js';
 import { readClaimIssueReservation, readRepoClaimIssueReservation } from '../claimIssueReservation.js';
 import { readClaimOwnershipAgents, withClaimOwnershipLock } from '../cos/cosClaimOwnership.js';
-import { getDefaultBranch, hasBranchMergeEvidence, readBranchAgeMs, readBranchLineage, readBranchPublished } from '../git.js';
+import { getDefaultBranch } from '../git/status.js';
+import { hasBranchMergeEvidence, readBranchAgeMs, readBranchLineage, readBranchPublished } from '../git/branchEvidence.js';
 import { recordVerdict, sameDirtyPaths } from '../supersededLedger.js';
 import {
   classifyWorktreeDirt, deleteCompletedLocalBranch, forceRemoveWorktreeDir, listWorktrees, readCheckoutPresence,

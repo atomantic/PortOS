@@ -36,7 +36,8 @@ import { updateTask, addTask } from '../cos/cosTaskStore.js';
 import { getAppById } from '../apps.js';
 import { isTruthyMeta, isFalsyMeta, protectedAgentIds } from './agentState.js';
 import { PATHS, ensureDir } from '../../lib/fileUtils.js';
-import * as git from '../git.js';
+import { getRepoBranches, isRepo, notGitRepoMessage } from '../git/status.js';
+import { checkout, createBranch, ensureLatest, fetchOrigin } from '../git/sync.js';
 import { detectConflicts } from '../taskConflict.js';
 import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, listWorktrees, releaseIdleSiblingNextHolder, releaseOwnerlessForeignHolder, unlinkWorktreeDependencies, mergeBaseIntoFeatureWorktree } from '../worktreeManager.js';
 import { resolveSpawnCwd, usesCreativeDirectorScratchCwd, creativeDirectorScratchCwd } from '../../lib/spawnCwd.js';
@@ -236,8 +237,8 @@ async function prepareRequestedWorktree({
 }) {
   // Fail before any git fetch/branch work: a non-git directory can never host a
   // worktree, and the raw `fatal: not a git repository` says nothing actionable.
-  if (!(await git.isRepo(workspacePath))) {
-    const reason = git.notGitRepoMessage(task.metadata?.app || basename(workspacePath));
+  if (!(await isRepo(workspacePath))) {
+    const reason = notGitRepoMessage(task.metadata?.app || basename(workspacePath));
     emitLog('warn', `🌳 ${reason}`, { taskId: task.id });
     await blockTask(task, reason, 'worktree-failed');
     return { outcome: 'blocked', reason };
@@ -253,7 +254,7 @@ async function prepareRequestedWorktree({
   // reads (a git-branches lookup vs. an agent-liveness + worktree-list check) —
   // kick both off before awaiting either so their I/O overlaps instead of
   // serializing on the spawn hot path.
-  const detectedBasePromise = git.getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
+  const detectedBasePromise = getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
   // Resolve the branch holder ONCE before creation. `resumeWorktreePath` is a
   // cache of that answer, not a separate ownership rule: if it is gone or
   // stale, discovery finds the actual holder. This gives resume retries the
@@ -694,7 +695,7 @@ async function pullSharedCheckout({ task, workspacePath, resolvedAppName, wantsW
   // gating it on a clean pull would defer it forever.
   const pullResult = wantsWorktree ? { skipped: 'isolated-task' }
     : isTruthyMeta(task.metadata?.gitConflictResolution) ? { skipped: 'git-conflict-resolver' }
-    : await git.ensureLatest(workspacePath).catch(err => {
+    : await ensureLatest(workspacePath).catch(err => {
       emitLog('warn', `⚠️ Pre-task git pull failed for ${workspacePath}: ${err.message}`, { taskId: task.id, workspace: workspacePath });
       return { success: false, error: err.message };
     });
@@ -737,15 +738,15 @@ async function prepareJiraBranch({ task, workspacePath }) {
   let jiraBranchName = `feature/${jiraTicket.ticketId}-${slug}`;
 
   if (task.metadata?.app) {
-    await git.fetchOrigin(workspacePath).catch(() => {});
-    const { baseBranch: defaultBranch } = await git.getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
+    await fetchOrigin(workspacePath).catch(() => {});
+    const { baseBranch: defaultBranch } = await getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
     if (defaultBranch) {
-      await git.checkout(workspacePath, defaultBranch).catch(() => {});
+      await checkout(workspacePath, defaultBranch).catch(() => {});
       await execGit(['merge', '--ff-only', `origin/${defaultBranch}`], workspacePath).catch(err => { emitLog('warn', `Fast-forward merge of ${defaultBranch} failed: ${err.message}`, { taskId: task.id }); });
     }
   }
 
-  await git.createBranch(workspacePath, jiraBranchName)
+  await createBranch(workspacePath, jiraBranchName)
     // `checkout -b` off a LOCAL branch doesn't auto-track under git's default
     // `branch.autoSetupMerge`, but a repo configured `always` records the base
     // branch as this one's upstream — and a config-derived push

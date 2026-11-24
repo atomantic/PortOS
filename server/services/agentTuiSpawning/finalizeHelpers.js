@@ -10,7 +10,7 @@
 
 import { join } from 'path';
 import { writeFile } from 'fs/promises';
-import * as git from '../git.js';
+import * as git from '../git/status.js';
 import { readFileTail } from '../../lib/fileUtils.js';
 import { commitsSince } from '../../lib/gitCommitProbe.js';
 import { analyzeAgentFailure } from '../agent/agentErrorAnalysis.js';

@@ -16,7 +16,7 @@ import * as gsdService from '../services/gsdService.js'
 import { resolveGsdPath } from '../services/gsdPaths.js'
 import { addTask } from '../services/cos/cosTaskStore.js'
 import { getActiveApps } from '../services/apps.js'
-import * as git from '../services/git.js'
+import * as git from '../services/git/status.js'
 import { documentUpdateSchema } from '../lib/documentValidation.js';
 
 const router = Router()

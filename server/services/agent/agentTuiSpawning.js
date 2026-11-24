@@ -46,7 +46,8 @@ import { leavesPrForHuman } from '../../lib/prDisposition.js';
 import { resolvePrOwnership, PR_OPENED_BY } from '../../lib/slashdoInvocation.js';
 import { mergeGateOwed } from '../../lib/mergeGateContract.js';
 import { probePrForBranch } from '../prProbe.js';
-import * as git from '../git.js';
+import { getBranch } from '../git/status.js';
+import { resolveForgeTokenEnv } from '../forgeAuth.js';
 import { spawnTuiSessionViaRunner, classifyRunnerSpawnFailure, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from '../cos/cosRunnerClient.js';
 import { providerSuppliesGithubToken } from '../../lib/provider/providerModels.js';
 import { isPublicReviewRestrictedProfile } from '../../lib/agent/agentExecutionProfiles.js';
@@ -432,7 +433,7 @@ export async function spawnTuiAgent({
     // a branch or PR probe that fails answers `null`, which the decision table
     // reads as "unreadable" and finalizes normally.
     probeMergeGatePr: async () => {
-      const branchName = await git.getBranch(cwd).catch(() => null);
+      const branchName = await getBranch(cwd).catch(() => null);
       if (!branchName) return null;
       return probePrForBranch(cwd, branchName).catch(() => null);
     },
@@ -446,7 +447,7 @@ export async function spawnTuiAgent({
   // not resolving it means it is never read out of the keychain to begin with).
   const forgeTokenEnv = providerSuppliesGithubToken(provider) || isPublicReviewRestrictedProfile(safetyProfile)
     ? {}
-    : await git.resolveForgeTokenEnv(cwd);
+    : await resolveForgeTokenEnv(cwd);
 
   // The loopback PortOS session token this agent's own `curl` snippets need when
   // the install has an instance password set (agentApiAuth.js). `buildSafeEnv`

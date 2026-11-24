@@ -38,7 +38,7 @@ async function claimedIssueObjective(workspacePath) {
   if (!Number.isSafeInteger(issueNumber) || issueNumber <= 0) return null;
   // Preserve owner-pinned GitHub credentials; a failed resolver must not fall
   // back to an unrelated ambient account.
-  const { resolveForgeForRepo } = await import('../git.js');
+  const { resolveForgeForRepo } = await import('../forgeAuth.js');
   const { cli, env } = await resolveForgeForRepo(workspacePath);
   const tracker = cli === 'gh' ? 'github' : cli === 'glab' ? 'gitlab' : null;
   const target = tracker

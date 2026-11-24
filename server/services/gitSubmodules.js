@@ -18,7 +18,7 @@ import {
   getRepoBranches,
   stageFiles,
   commit
-} from './git.js';
+} from './git/status.js';
 
 /**
  * Get submodule status for a repo.

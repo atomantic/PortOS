@@ -32,7 +32,9 @@ vi.mock('../cos/cosAgentLifecycle.js', () => ({
   },
 }));
 vi.mock('../jira.js', () => ({}));
-vi.mock('../git.js', () => ({}));
+vi.mock('../git/status.js', () => ({}));
+vi.mock('../git/sync.js', () => ({}));
+vi.mock('../git/prs.js', () => ({}));
 vi.mock('../codeReview.js', () => ({ resolveReviewLoopOptions: async () => ({}) }));
 vi.mock('./agentWorktreeCleanup.js', () => ({ cleanupAgentWorktree: vi.fn(async () => []), releaseRetryHold: vi.fn(async () => ({})), spawnMergeRecoveryTask: vi.fn(async () => ({ id: 'existing-recovery' })) }));
 vi.mock('../creativeDirector/completionHook.js', () => ({ handleCreativeDirectorCompletion: vi.fn() }));

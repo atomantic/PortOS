@@ -37,7 +37,7 @@ import { join } from 'path';
 import { atomicWrite, readJSONFile, ensureDir, PATHS } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { getAppById, getAllApps, PORTOS_APP_ID } from './apps.js';
-import { getBranch, getStatus, isRepo } from './git.js';
+import { getBranch, getStatus, isRepo } from './git/status.js';
 import { listAllSessions } from './shell.js';
 import { getAllTasks } from './cos/cosTaskStore.js';
 

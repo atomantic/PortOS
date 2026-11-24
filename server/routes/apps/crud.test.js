@@ -25,7 +25,7 @@ vi.mock('../../lib/execGit.js', async (importOriginal) => {
   }) };
 });
 import { execGit } from '../../lib/execGit.js';
-import { isRepo } from '../../services/git.js';
+import { isRepo } from '../../services/git/status.js';
 import express from 'express';
 import { execFileSync } from 'child_process';
 import { mkdtempSync, rmSync } from 'fs';

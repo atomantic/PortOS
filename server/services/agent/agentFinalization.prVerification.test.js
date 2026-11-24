@@ -50,8 +50,10 @@ vi.mock("../worktreeManager.js", async (importOriginal) => ({
 
 const resolveForgeForRepoMock = vi.fn(async () => ({ cli: 'gh' }));
 const getDefaultBranchMock = vi.fn(async () => 'main');
-vi.mock('../git.js', () => ({
+vi.mock('../forgeAuth.js', () => ({
   resolveForgeForRepo: (...args) => resolveForgeForRepoMock(...args),
+}));
+vi.mock('../git/status.js', () => ({
   getDefaultBranch: (...args) => getDefaultBranchMock(...args),
 }));
 

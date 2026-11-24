@@ -223,7 +223,7 @@ async function attachPinnedHead(sourceWorkspace, worktreePath, branchName, remot
  * pushed to without its own pull request (a release PR's head IS the default branch).
  */
 async function holdsCheckedOutBranch(sourceWorkspace, branch, baseBranch) {
-  const { getDefaultBranch } = await import('../git.js');
+  const { getDefaultBranch } = await import('../git/status.js');
   const defaultBranch = baseBranch || await getDefaultBranch(sourceWorkspace, { allowRemote: false }).catch(() => null);
   if (branch === defaultBranch) return { held: true, isDefault: true };
   const current = (await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], sourceWorkspace, { ignoreExitCode: true }).catch(() => null))?.stdout?.trim();
@@ -374,7 +374,7 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
   // Determine the base: explicit option > remote default branch > current HEAD
   let baseBranch = options.baseBranch;
   if (!baseBranch) {
-    const { getDefaultBranch } = await import('../git.js');
+    const { getDefaultBranch } = await import('../git/status.js');
     baseBranch = await getDefaultBranch(sourceWorkspace, { allowRemote: fetchSucceeded }).catch(() => null);
     if (!baseBranch) {
       baseBranch = (await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], sourceWorkspace)).stdout.trim();

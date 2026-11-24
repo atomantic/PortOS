@@ -37,7 +37,7 @@ vi.mock('../github.js', () => ({
   ensureForgeReachable: vi.fn(async () => ({ ok: true, status: 'ok' })),
 }));
 vi.mock('../gitlab.js', () => ({ findMergeRequestForBranch: vi.fn() }));
-vi.mock('../git.js', () => ({ resolveForgeForRepo: vi.fn(async () => ({ cli: 'gh' })) }));
+vi.mock('../forgeAuth.js', () => ({ resolveForgeForRepo: vi.fn(async () => ({ cli: 'gh' })) }));
 vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn() }));
 vi.mock('../cos/cosAgentLifecycle.js', () => ({
   getAgent: vi.fn(async () => null),

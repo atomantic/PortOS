@@ -15,7 +15,7 @@ import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { readPullRequest } from './prProbe.js';
 import { isForgeNoAccessError, logForgeNoAccessOnce } from '../lib/forgeAccessErrors.js';
 import { getAppById, updateApp, getActiveApps } from './apps.js';
-import * as git from './git.js';
+import { mergePR } from './git/prs.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 import { classifyPrFailure } from './layeredIntelligenceRejections.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
@@ -27,7 +27,7 @@ import { isPlainObject } from '../lib/objects.js';
 import { PR_COMPLETIONS, prHeldForOperator, resolvePrCompletion } from '../lib/prDisposition.js';
 import { isSelfManagedPrActive } from '../lib/selfManagedPrAuthors.js';
 import { listWorktrees } from './worktreeManager.js';
-import { getBranches } from './git.js';
+import { getBranches } from './git/status.js';
 import { loadLateBoundService } from '../lib/lateBoundServices.js';
 
 // Bound the gh query. The high-water mark (computePrCheck) advances to the max
@@ -670,7 +670,7 @@ async function mergeAssessedHead(entry, binding, { app, origin, repoSpec, forgeE
   const ownerPolicy = await currentHandoffOwnerPolicy(binding);
   if (ownerPolicy) return { merge: ownerPolicy, assessed };
   const merge = assessment.ok
-    ? await git.mergePR(app.repoPath, entry.prNumber, {
+    ? await mergePR(app.repoPath, entry.prNumber, {
       forgeAccount: app?.forgeAccount || null, expectedHeadSha,
     }).catch((err) => ({ success: false, error: err.message }))
     : { success: false, error: assessed.reason };
