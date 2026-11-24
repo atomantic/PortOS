@@ -20,7 +20,7 @@ const SW_SOURCE = readFileSync(SW_PATH, 'utf-8');
  * helper; the network `fetch` always rejects, so callers exercise the
  * offline/failure paths.
  */
-export function createSwSandbox() {
+export function createSwSandbox({ fetch: fetchImpl, cachesOverride } = {}) {
   const listeners = {};
   // name -> Map(url -> Response)
   const cacheStores = new Map();
@@ -51,14 +51,14 @@ export function createSwSandbox() {
   };
 
   const sandbox = {
-    caches: cachesApi,
+    caches: cachesOverride ? cachesOverride(cachesApi) : cachesApi,
     console,
     Response,
     Request,
     URL,
-    fetch: async () => {
+    fetch: fetchImpl || (async () => {
       throw new Error('network unavailable');
-    },
+    }),
   };
   sandbox.self = {
     addEventListener: (type, handler) => {
@@ -73,7 +73,7 @@ export function createSwSandbox() {
   vm.createContext(sandbox);
   vm.runInContext(SW_SOURCE, sandbox, { filename: 'sw.js' });
 
-  return { listeners, openCache };
+  return { listeners, openCache, cacheStores };
 }
 
 export function makeNavigationEvent(url) {
@@ -92,4 +92,20 @@ export async function dispatchNavigation(listeners, url) {
   const event = makeNavigationEvent(url);
   listeners.fetch(event);
   return event._responded;
+}
+
+export function dispatchFetch(listeners, url) {
+  const waits = [];
+  const event = {
+    request: { method: 'GET', url, mode: 'cors' },
+    respondWith: (promise) => {
+      event._responded = promise;
+    },
+    waitUntil: (promise) => {
+      waits.push(promise);
+    },
+  };
+  listeners.fetch(event);
+  event._waits = waits;
+  return event;
 }
