@@ -656,11 +656,24 @@ function BibleSidebar({ series, universes, universesError, universesRetry, patch
 // persisted on Save (styleGuide is in ARC_FLUSH_FIELDS). Picking the blank
 // option clears a field to null; the server collapses an all-empty guide to
 // null. Each control is htmlFor/id paired for screen readers + click-to-focus.
+const parseToneList = (text) => text.split(',').map((t) => t.trim()).filter(Boolean);
+
 function StyleGuideSection({ series, patchSeries, onFlushPending }) {
   const sg = series.styleGuide || {};
   const conv = sg.conventions || {};
   const setSG = (patch) => patchSeries({ styleGuide: pruneEmpty({ ...sg, ...patch }) });
   const setConv = (patch) => setSG({ conventions: pruneEmpty({ ...conv, ...patch }) });
+
+  // The tone input keeps the raw text so typing a comma or space is not
+  // trimmed away by the parse; it resyncs only when the stored tone no longer
+  // matches what the draft parses to (initial load, Save response, reset).
+  const storedTone = Array.isArray(sg.tone) ? sg.tone : [];
+  const [toneDraft, setToneDraft] = useState(storedTone.join(', '));
+  const [prevStoredTone, setPrevStoredTone] = useState(storedTone);
+  if (prevStoredTone.join('\u0000') !== storedTone.join('\u0000')) {
+    setPrevStoredTone(storedTone);
+    if (parseToneList(toneDraft).join('\u0000') !== storedTone.join('\u0000')) setToneDraft(storedTone.join(', '));
+  }
 
   const exemplars = Array.isArray(sg.voiceExemplars) ? sg.voiceExemplars : [];
   const antiExemplars = Array.isArray(sg.voiceAntiExemplars) ? sg.voiceAntiExemplars : [];
@@ -752,11 +765,13 @@ function StyleGuideSection({ series, patchSeries, onFlushPending }) {
         <label htmlFor="sg-tone" className="block text-[11px] text-gray-500 mb-1">Tone (comma-separated)</label>
         <input
           id="sg-tone"
-          value={Array.isArray(sg.tone) ? sg.tone.join(', ') : ''}
+          value={toneDraft}
           onChange={(e) => {
-            const tone = e.target.value.split(',').map((t) => t.trim()).filter(Boolean);
+            setToneDraft(e.target.value);
+            const tone = parseToneList(e.target.value);
             setSG({ tone: tone.length ? tone : null });
           }}
+          onBlur={() => setToneDraft(parseToneList(toneDraft).join(', '))}
           placeholder="noir, hopeful, wry"
           className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
         />
