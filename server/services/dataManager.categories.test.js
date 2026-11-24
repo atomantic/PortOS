@@ -136,3 +136,15 @@ describe('dataManager purge scope (#3327)', () => {
     CATEGORIES.screenshots.purgeScope = original;
   });
 });
+
+describe('dataManager secret-bearing category archiving (#18128)', () => {
+  it.each(['spotify', 'openclaw'])('refuses archiving secret-bearing category %s', async (key) => {
+    expect(CATEGORIES[key].archivable).toBe(false);
+    await expect(archiveCategory(key)).rejects.toMatchObject({ status: 403, code: 'CATEGORY_NOT_ARCHIVABLE' });
+  });
+
+  it('excludes calendar/google-auth when archiving calendar', () => {
+    expect(CATEGORIES.calendar.archivable).toBe(true);
+    expect(CATEGORIES.calendar.archiveExcludes).toContain('calendar/google-auth');
+  });
+});
