@@ -23,7 +23,7 @@ vi.mock('../services/pipeline/musicGen.js', async () => {
   const ENGINES = {
     musicgen: { id: 'musicgen', name: 'MusicGen', models: [{ id: 'm', name: 'M' }], defaultModelId: 'm', minDurationSec: 1, maxDurationSec: 30, defaultDurationSec: 12, installEnv: 'INSTALL_MUSICGEN', venvDefault: '/v/mg', resolvePython: () => (gen.ready ? '/v/mg/bin/python3' : null), customModels: true },
     acestep: { id: 'acestep', name: 'ACE-Step', models: [{ id: 'a', name: 'A' }], defaultModelId: 'a', minDurationSec: 1, maxDurationSec: 240, defaultDurationSec: 60, installEnv: 'INSTALL_ACESTEP', venvDefault: '/v/ace', resolvePython: () => (gen.ready ? '/v/ace/bin/python3' : null), lyrics: true, customModels: false },
-    acestep15: { id: 'acestep15', name: 'ACE-Step 1.5', models: [{ id: 'ace-step-v1.5', repo: 'ACE-Step/Ace-Step1.5', name: 'ACE-Step 1.5' }], defaultModelId: 'ace-step-v1.5', minDurationSec: 1, maxDurationSec: 240, defaultDurationSec: 60, installEnv: 'INSTALL_ACESTEP15', venvDefault: '/v/ace15', resolvePython: () => (gen.ready ? '/v/ace15/bin/python3' : null), lyrics: true, customModels: false, fixedModelInstall: true },
+    acestep15: { id: 'acestep15', name: 'ACE-Step 1.5', models: actual.ACESTEP15_MODELS, defaultModelId: 'ace-step-v1.5', minDurationSec: 1, maxDurationSec: 240, defaultDurationSec: 60, installEnv: 'INSTALL_ACESTEP15', venvDefault: '/v/ace15', resolvePython: () => (gen.ready ? '/v/ace15/bin/python3' : null), lyrics: true, customModels: false, fixedModelInstall: true, supportsModelRevision: true },
       'minimax-music3': { id: 'minimax-music3', name: 'MiniMax Music 3', models: [{ id: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3', name: 'MiniMax Music 3', downloadIgnore: ['qwen_7B/*', 'flowmatching_vae.pth', 'dav.pth', 'figures/*'], downloadSizeGb: 29 }], defaultModelId: 'minimax-music3', minDurationSec: 1, maxDurationSec: 300, defaultDurationSec: 60, installEnv: 'INSTALL_MINIMAX_MUSIC3', venvDefault: '/v/minimax', resolvePython: () => (gen.ready ? '/v/minimax/bin/python3' : null), lyrics: true, customModels: false, fixedModelInstall: true, cudaRequired: true, autoDuration: true, executionProfile: 'cuda-bf16-auto-experimental', vramProfiles: { 'cuda-bf16-auto-experimental': { label: 'CUDA BF16 (experimental automatic placement)', minVramGb: null, recommendedVramGb: null } } },
     'minimax-music3-mlx': { id: 'minimax-music3-mlx', name: 'MiniMax Music 3 (MLX)', models: [
       { id: 'minimax-music3-mlx-8bit', repo: 'mlx-community/MiniMax-Music3-8bit', revision: '10aa4ca578d04c6f5256c1bc22fc8405a09602b5', downloadSizeGb: 14, name: 'MiniMax Music 3 MLX 8-bit' },
@@ -551,14 +551,22 @@ describe('music routes', () => {
     ]));
   });
 
-  it('GET /engines exposes ACE-Step 1.5 as a fixed model install distinct from v1', async () => {
-    cache.cached = false;
+  it('GET /engines exposes ACE-Step 1.5 as a fixed model install gated on its pinned revision', async () => {
+    const pinnedRevision = '19671f406d603126926c1b7e2adc169acbcade22';
+    cache.byRevision = {
+      ['b'.repeat(40)]: true,
+      [pinnedRevision]: false,
+    };
     const r = await request(app).get('/api/music/engines');
     expect(r.status).toBe(200);
     expect(r.body.engines.find((e) => e.id === 'acestep15')).toMatchObject({
       lyrics: true, customModels: false, fixedModelInstall: true,
       modelReady: false, runtimeReady: true, ready: false,
       installEnv: 'INSTALL_ACESTEP15',
+    });
+    expect(cache.calls).toContainEqual({
+      repo: 'ACE-Step/Ace-Step1.5',
+      revision: pinnedRevision,
     });
   });
 
@@ -718,6 +726,33 @@ describe('music routes', () => {
       repo: 'mlx-community/MiniMax-Music3-8bit',
       revision: '10aa4ca578d04c6f5256c1bc22fc8405a09602b5',
     });
+  });
+
+  it('POST /models pins ACE-Step 1.5 download and cache inspection to the shipped revision and rejects custom repos', async () => {
+    const pinnedRevision = '19671f406d603126926c1b7e2adc169acbcade22';
+    const r = await request(app).post('/api/music/models').send({
+      engine: 'acestep15', repo: 'ACE-Step/Ace-Step1.5',
+    });
+    expect(r.status).toBe(200);
+    expect(models.add).not.toHaveBeenCalled();
+    expect(sse.run).toHaveBeenCalledWith(expect.objectContaining({
+      repos: [{
+        repo: 'ACE-Step/Ace-Step1.5',
+        ignore: [],
+        revision: pinnedRevision,
+      }],
+    }));
+    expect(cache.calls).toContainEqual({
+      repo: 'ACE-Step/Ace-Step1.5',
+      revision: pinnedRevision,
+    });
+
+    const bad = await request(app).post('/api/music/models').send({
+      engine: 'acestep15', repo: 'someorg/unpinned-acestep15',
+    });
+    expect(bad.status).toBe(400);
+    expect(bad.body.code).toBe('AUDIO_MODEL_ENGINE_FIXED');
+    expect(sse.run).toHaveBeenCalledTimes(1);
   });
 
   it('POST /models forwards a shipped fixed model\'s downloadIgnore to the download stream', async () => {

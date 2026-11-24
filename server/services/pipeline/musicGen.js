@@ -114,11 +114,18 @@ export const ACESTEP_MODELS = Object.freeze([
   { id: 'ace-step-v1-3.5b', repo: 'ACE-Step/ACE-Step-v1-3.5B', name: 'ACE-Step v1 3.5B (full song + vocals)' },
 ]);
 export const DEFAULT_ACESTEP_MODEL_ID = 'ace-step-v1-3.5b';
-// ACE-Step 1.5 stores its DiT, VAE, text encoder, and LM in one HF repository.
+// ACE-Step 1.5 stores its DiT (loaded via transformers `trust_remote_code=True`),
+// VAE, text encoder, and LM in one HF repository, pinned to an immutable commit
+// SHA so upstream edits cannot silently change executed Python code or weights.
 // It is deliberately a separate engine: persisted v1 render metadata must
 // continue to select v1's pip-based runtime instead of silently changing.
 export const ACESTEP15_MODELS = Object.freeze([
-  { id: 'ace-step-v1.5', repo: 'ACE-Step/Ace-Step1.5', name: 'ACE-Step 1.5 (full song + vocals)' },
+  {
+    id: 'ace-step-v1.5',
+    repo: 'ACE-Step/Ace-Step1.5',
+    revision: '19671f406d603126926c1b7e2adc169acbcade22',
+    name: 'ACE-Step 1.5 (full song + vocals)',
+  },
 ]);
 export const DEFAULT_ACESTEP15_MODEL_ID = 'ace-step-v1.5';
 // MiniMax Music 3 weights. The HF repo is ~57 GB, but `ModularPipeline`
@@ -296,6 +303,7 @@ export const ENGINES = Object.freeze({
     instrumentalLyrics: '[Instrumental]',
     customModels: false,
     fixedModelInstall: true,
+    supportsModelRevision: true,
   },
   'minimax-music3': {
     id: 'minimax-music3',
@@ -715,6 +723,8 @@ export async function generateMusic(options = {}) {
     () => generateMusicAdmitted(options), { continuation: true });
 }
 
+const HF_COMMIT_RE = /^[0-9a-f]{40}$/i;
+
 async function generateMusicAdmitted({ prompt, lyrics, engine: engineId = DEFAULT_ENGINE_ID, durationSec, durationMode, modelId, repo, provenance, signal, onActivity }) {
   const text = prompt || '';
   if (!text.trim()) {
@@ -730,6 +740,11 @@ async function generateMusicAdmitted({ prompt, lyrics, engine: engineId = DEFAUL
   const model = repo
     ? { id: modelId || repo, repo, name: modelId || repo }
     : shippedModel;
+  if (engine.supportsModelRevision && !HF_COMMIT_RE.test(model?.revision || '')) {
+    throw new ServerError(`${engine.name} requires a pinned Hugging Face commit revision.`, {
+      status: 400, code: 'PIPELINE_MUSIC_MODEL_UNPINNED',
+    });
+  }
   const resolvedDuration = resolveMusicDuration({ engine: engine.id, lyrics, durationSec, durationMode });
   const pythonPath = engine.resolvePython();
   if (engine.cudaRequired) {

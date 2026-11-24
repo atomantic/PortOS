@@ -11,6 +11,7 @@ snapshot only, so generation never triggers an unannounced model download.
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -22,6 +23,14 @@ from _runner_common import heartbeat  # noqa: E402
 
 MODEL_ID = "ACE-Step/Ace-Step1.5"
 MODEL_VARIANT = "acestep-v15-turbo"
+REVISION_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+
+
+def validate_revision(revision):
+    """Return normalized lowercase 40-char hex commit SHA, or raise ValueError."""
+    if not isinstance(revision, str) or not REVISION_RE.fullmatch(revision):
+        raise ValueError("revision must be a 40-character hex Hugging Face commit SHA")
+    return revision.lower()
 
 
 def stage(name, detail=""):
@@ -33,17 +42,21 @@ def wav_duration_seconds(path):
         return audio.getnframes() / float(audio.getframerate() or 1)
 
 
-def cached_checkpoint_dir(repo):
+def cached_checkpoint_dir(repo, revision):
+    revision = validate_revision(revision)
     from huggingface_hub import snapshot_download
 
     # Model installation is explicit in the Music UI. local_files_only keeps a
-    # direct Generate click from silently downloading this multi-GB snapshot.
-    return snapshot_download(repo_id=repo, local_files_only=True)
+    # direct Generate click from silently downloading this multi-GB snapshot, and
+    # pinning `revision` prevents trust_remote_code from loading a floating or
+    # mismatched cached snapshot.
+    return snapshot_download(repo_id=repo, revision=revision, local_files_only=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description="PortOS ACE-Step 1.5 runner")
     parser.add_argument("--model", default=MODEL_ID)
+    parser.add_argument("--revision", required=True)
     parser.add_argument("--text", required=True)
     parser.add_argument("--lyrics", default="")
     parser.add_argument("--output", required=True)
@@ -58,11 +71,16 @@ def main():
     if args.model != MODEL_ID:
         print(f"ERROR: ACE-Step 1.5 uses the fixed model {MODEL_ID}", file=sys.stderr, flush=True)
         return 2
+    try:
+        args.revision = validate_revision(args.revision)
+    except ValueError as exc:
+        print(f"ERROR: --revision {exc}", file=sys.stderr, flush=True)
+        return 2
 
     stage("resolve-model", args.model)
     try:
         with heartbeat("resolve-model"):
-            checkpoint_dir = cached_checkpoint_dir(args.model)
+            checkpoint_dir = cached_checkpoint_dir(args.model, args.revision)
     except Exception as exc:
         print(f"ERROR: ACE-Step 1.5 model weights are not installed: {exc}", file=sys.stderr, flush=True)
         return 1

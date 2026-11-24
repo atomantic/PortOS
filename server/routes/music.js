@@ -267,6 +267,11 @@ router.post('/models', asyncHandler(async (req, res) => {
   if (!isValidRepoId(body.repo)) throw new ServerError('Invalid HuggingFace repo id', { status: 400, code: 'AUDIO_MODEL_INVALID_REPO' });
   // Register first so it's durable before the stream signals completion.
   if (!fixedModel) await addAudioModel({ engine: body.engine, repo: body.repo, name: body.name });
+  if (engine.supportsModelRevision && !fixedModel?.revision) {
+    throw new ServerError(`${engine.name} requires a pinned Hugging Face commit revision`, {
+      status: 500, code: 'AUDIO_MODEL_REVISION_MISSING',
+    });
+  }
   // Hand the response to the shared SSE driver — it owns writeHead/end + the
   // in-flight dedupe + client-disconnect kill. Resolves after the stream ends.
   // A shipped fixed model may declare `downloadIgnore` to skip repo paths its
