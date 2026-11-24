@@ -79,7 +79,7 @@ export default function ToolsTab({ agentId, agent }) {
   // Auto-resolve the moltbook account for this agent. A failed read sets
   // accountError so it never falls through into the "no account" onboarding copy.
   const accountRequestRef = useRef(0);
-  const viewPostRequestRef = useRef(null);
+  const viewPostRequestRef = useRef(0);
   const loadAccount = useCallback(async () => {
     const requestId = ++accountRequestRef.current;
     setLoading(true);
@@ -193,12 +193,12 @@ export default function ToolsTab({ agentId, agent }) {
     }
   };
 
-  // The platform read can take seconds; only the most recently requested post may land.
+  // The platform read can take seconds; only the most recent request may land.
   const handleViewPost = async (post) => {
-    const requestKey = `${selectedAccountId}:${post.id}`;
-    viewPostRequestRef.current = requestKey;
+    viewPostRequestRef.current += 1;
+    const requestId = viewPostRequestRef.current;
     const details = await getAgentPost(selectedAccountId, post.id);
-    if (viewPostRequestRef.current !== requestKey) return;
+    if (viewPostRequestRef.current !== requestId) return;
     setSelectedPost(details);
     setPostComments(details.comments || []);
     setCommentContent('');
