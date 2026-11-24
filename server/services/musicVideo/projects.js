@@ -88,6 +88,10 @@ export async function listProjectNames() {
   return (await selectBackend()).listProjectNames();
 }
 
+export async function listMidiSourceRows() {
+  return (await selectBackend()).listMidiSourceRows();
+}
+
 export async function listProjectPage(options = {}) {
   const page = await (await selectBackend()).listProjectPage(options);
   if (getBackendName() !== 'postgres' || !page.items.some(hasLinkedSubjects)) return page;

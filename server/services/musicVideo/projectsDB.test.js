@@ -240,6 +240,57 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
     expect((await db.listProjects()).find((item) => item.name === 'Legacy row')?.id).toBe(id);
   });
 
+  it('projects only MIDI source fields in PostgreSQL with file-adapter parity', async () => {
+    const file = await import('./projectsFile.js');
+    const records = [
+      {
+        id: `${PRUNE_PREFIX}midi-archived`, name: 'Archived', trackId: 'track-a', status: 'archived',
+        midiTranscription: { filename: 'archived.mid', model: null, report: 'x'.repeat(128 * 1024) },
+        concept: { subjects: [{ ingredientId: 'cat-example' }] },
+        scenes: Array.from({ length: 100 }, (_, i) => ({
+          sceneId: `scene-${i}`, takes: [{ prompt: 'Example take history. '.repeat(500) }],
+        })),
+      },
+      {
+        id: `${PRUNE_PREFIX}midi-current`, name: null, trackId: 'track-b',
+        midiTranscription: { filename: 'current.mid', createdAt: null },
+      },
+      { id: `${PRUNE_PREFIX}midi-deleted`, trackId: 'track-a', midiTranscription: { filename: 'deleted.mid' }, deleted: true },
+      { id: `${PRUNE_PREFIX}midi-no-file`, trackId: 'track-c', midiTranscription: { model: 'medium' } },
+      { id: `${PRUNE_PREFIX}midi-no-track`, midiTranscription: { filename: 'unlinked.mid' } },
+    ];
+    await writeFile(join(testState.dataRoot, 'music-video-projects.json'), toPgJson(records));
+    for (const [i, { id, ...record }] of [...records.entries()].reverse()) {
+      // Legacy JSONB rows may rely on the table's id. Insertion order is deliberately reversed.
+      await query(`INSERT INTO music_video_projects (id, status, data, created_at, deleted)
+        VALUES ($1, $2, $3::jsonb, $4, $5)`,
+      [id, record.status ?? 'draft', toPgJson(record), `2026-01-0${i + 1}`, record.deleted ?? false]);
+    }
+    const read = vi.spyOn(database, 'query');
+    try {
+      const projected = await db.listMidiSourceRows();
+      expect(projected).toStrictEqual([
+        {
+          id: records[0].id, name: 'Archived', trackId: 'track-a',
+          midiTranscription: { filename: 'archived.mid', model: null, createdAt: undefined },
+        },
+        {
+          id: records[1].id, name: null, trackId: 'track-b',
+          midiTranscription: { filename: 'current.mid', model: undefined, createdAt: null },
+        },
+      ]);
+      expect(await file.listMidiSourceRows()).toStrictEqual(projected);
+      expect(read).toHaveBeenCalledTimes(1);
+      const { rows } = await read.mock.results[0].value;
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        expect(Object.keys(row).sort()).toEqual(['createdAt', 'filename', 'id', 'model', 'name', 'projectId', 'trackId']);
+      }
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   it('hydrates only a requested page while preserving legacy timestamp fallbacks and excluding tombstones', async () => {
     const records = Array.from({ length: 20 }, (_, i) => ({ id: `mv-page-${i}`,
       createdAt: i === 19 ? null : `2026-01-${String(i + 1).padStart(2, '0')}`,

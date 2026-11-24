@@ -22,6 +22,19 @@ export const {
   loadAll, saveAll, loadAllAndIndex, listProjects, listProjectPage, getProject, getProjectsByIds, listProjectIds, listProjectNames,
 } = store;
 
+export async function listMidiSourceRows() {
+  return (await store.loadStoredProjects())
+    .filter(project => !project.deleted && project.trackId !== undefined && project.midiTranscription?.filename !== undefined)
+    .map(({ id, name, trackId, midiTranscription }) => ({
+      id, name, trackId,
+      midiTranscription: {
+        filename: midiTranscription.filename,
+        model: midiTranscription.model,
+        createdAt: midiTranscription.createdAt,
+      },
+    }));
+}
+
 export async function listCompletionCandidateIds(ingredientIds) {
   const wanted = ingredientIds && new Set(ingredientIds);
   return (await listProjects()).filter((project) => {
