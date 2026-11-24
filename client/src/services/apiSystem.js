@@ -631,13 +631,13 @@ export const generateJiraReport = (appId) => request('/jira/reports/generate', {
 export const getJiraReport = (appId, date) => request(`/jira/reports/${appId}/${date}`);
 
 // Insights
-export const getInsightThemes = () => request('/insights/themes');
+export const getInsightThemes = (options) => request('/insights/themes', options);
 export const refreshInsightThemes = (providerId, model, options = {}) => request('/insights/themes/refresh', {
   method: 'POST',
   body: JSON.stringify({ providerId, model }),
   ...options
 });
-export const getInsightNarrative = () => request('/insights/narrative');
+export const getInsightNarrative = (options) => request('/insights/narrative', options);
 export const refreshInsightNarrative = (providerId, model, options = {}) => request('/insights/narrative/refresh', {
   method: 'POST',
   body: JSON.stringify({ providerId, model }),
@@ -645,7 +645,7 @@ export const refreshInsightNarrative = (providerId, model, options = {}) => requ
 });
 
 // Goal effectiveness scorecard (#2157)
-export const getGoalScorecard = () => request('/insights/goal-scorecard');
+export const getGoalScorecard = (options) => request('/insights/goal-scorecard', options);
 export const computeGoalScorecard = (weekStart) => request('/insights/goal-scorecard/compute', {
   method: 'POST',
   body: JSON.stringify(weekStart ? { weekStart } : {})

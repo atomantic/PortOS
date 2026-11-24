@@ -137,14 +137,16 @@ export default function GoalScorecardTab() {
   const [settings, setSettings] = useState(null);
   const [providers, setProviders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [computing, setComputing] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [showRules, setShowRules] = useState(false);
 
   const load = useCallback(() => {
-    Promise.allSettled([getGoalScorecard(), getGoalScorecardSettings(), getProviders({ silent: true })])
+    Promise.allSettled([getGoalScorecard({ silent: true }), getGoalScorecardSettings(), getProviders({ silent: true })])
       .then(([sc, st, pr]) => {
         setData(sc.status === 'fulfilled' ? sc.value : null);
+        setLoadError(sc.status === 'rejected' ? (sc.reason ?? new Error('Request failed')) : null);
         setSettings(st.status === 'fulfilled' ? st.value : null);
         const p = pr.status === 'fulfilled' ? pr.value : null;
         setProviders(p?.providers || (Array.isArray(p) ? p : []));
@@ -187,6 +189,10 @@ export default function GoalScorecardTab() {
         <div className="h-4 bg-gray-700 rounded w-5/6" />
       </div>
     );
+  }
+
+  if (loadError) {
+    return <ListLoadError what="the goal scorecard" error={loadError} onRetry={() => { setLoading(true); load(); }} />;
   }
 
   if (!data?.available) {

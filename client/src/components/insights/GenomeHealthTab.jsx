@@ -1,4 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useInsightRead } from './useInsightRead.js';
+import ListLoadError from '../ui/ListLoadError';
 import { ChevronDown, ChevronRight, Dna, Heart, HeartPulse, Zap, Activity, TestTube, Droplet, Droplets, Sun, Leaf, Sparkles, Apple, Coffee, Shield, ShieldCheck, ShieldAlert, Flame, Brain, BrainCog, Moon, Dumbbell, Salad, Eye, Bone, Pill, Ribbon, Wind, Scissors, Ear } from 'lucide-react';
 import { Link } from 'react-router';
 import { getGenomeHealthCorrelations } from '../../services/apiHealth.js';
@@ -194,14 +196,7 @@ function SkeletonCard() {
 }
 
 export default function GenomeHealthTab() {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    getGenomeHealthCorrelations()
-      .then(setData)
-      .finally(() => setLoading(false));
-  }, []);
+  const { data, error, loading, reload } = useInsightRead(getGenomeHealthCorrelations);
 
   if (loading) {
     return (
@@ -216,6 +211,8 @@ export default function GenomeHealthTab() {
       </div>
     );
   }
+
+  if (error) return <ListLoadError what="genome health" error={error} onRetry={reload} />;
 
   if (!data?.available) {
     return (

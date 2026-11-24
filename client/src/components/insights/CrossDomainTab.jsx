@@ -1,20 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useInsightGeneration } from './useInsightGeneration.js';
+import { useInsightRead } from './useInsightRead.js';
+import ListLoadError from '../ui/ListLoadError';
 import { RefreshCw, GitCompare } from 'lucide-react';
 import { getInsightNarrative, refreshInsightNarrative } from '../../services/apiSystem.js';
 import { formatDate, timeAgo } from '../../utils/formatters';
 import InlineDiff from '../ui/InlineDiff';
 
 export default function CrossDomainTab() {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const { data, setData, error, loading, reload } = useInsightRead(getInsightNarrative);
   const [showDiff, setShowDiff] = useState(false);
-
-  useEffect(() => {
-    getInsightNarrative()
-      .then(setData)
-      .finally(() => setLoading(false));
-  }, []);
 
   const [handleRefresh, refreshing] = useInsightGeneration(
     refreshInsightNarrative,
@@ -37,6 +32,8 @@ export default function CrossDomainTab() {
       </div>
     );
   }
+
+  if (error) return <ListLoadError what="the cross-domain narrative" error={error} onRetry={reload} />;
 
   if (!data?.available) {
     return (
