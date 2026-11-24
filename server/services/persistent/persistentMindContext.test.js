@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
@@ -50,6 +50,7 @@ const {
   recordPersistentMindRecallAccess,
   updatePersistentMindMemory,
   protectPersistentMindMemory,
+  readPersistentMindName,
   preparePersistentMindContext,
   promotePersistentMindMemory,
   readPersistentMindRollups,
@@ -278,6 +279,39 @@ describe('chosen identity continuity', () => {
     expect(context.text).toContain('Current chosen display name: "Étoile"');
     expect(context.text).toContain('mindId=cos-persistent-mind');
     expect(mock.appendMindEvent).not.toHaveBeenCalled();
+  });
+
+  it('cannot be spoofed through ordinary writes or edited directly', async () => {
+    const records = new Map();
+    const store = async (input) => {
+      const memory = { id: `m${records.size}`, ...input };
+      records.set(memory.id, memory);
+      return memory;
+    };
+    mock.memoryApi.createMemory.mockReset().mockImplementation(store);
+    onTestFinished(() => mock.memoryApi.createMemory.mockReset());
+    mock.memoryApi.peekMemory.mockImplementation(async (id) => records.get(id));
+    mock.memoryApi.getMemories.mockImplementation(async ({ tags = [] }) => ({ memories: [...records.values()].filter((m) => tags.every((t) => m.tags?.includes(t))) }));
+    mock.memoryApi.updateMemory.mockImplementation(async (id, updates) => {
+      records.set(id, { ...records.get(id), ...updates });
+      return records.get(id);
+    });
+
+    await createPersistentMindMemory({ content: 'Posing as the name', tags: ['mind:chosen-name'] });
+    await createPersistentMindMemoryFromCandidate({ candidateId: 'turn-1:0', turnId: 'turn-1', content: 'Candidate posing', tags: ['mind:chosen-name'] });
+    await promotePersistentMindMemory({ id: 'promotion-n', approved: true, content: 'Promoted posing', tags: ['mind:chosen-name', 'mind:core-identity'] });
+    for (const memory of records.values()) {
+      expect(memory.tags).not.toContain('mind:chosen-name');
+    }
+    expect(await readPersistentMindName()).toBeNull();
+
+    await choosePersistentMindName({ name: 'Example Star' });
+    const chosen = [...records.values()].find((m) => m.tags?.includes('mind:chosen-name'));
+    expect(chosen.tags).toEqual(['mind:chosen-name', 'name', 'mind:core-identity']);
+    await expect(updatePersistentMindMemory(chosen.id, { tags: ['name'] })).rejects.toMatchObject({ status: 409, code: 'MIND_CHOSEN_NAME_READ_ONLY' });
+    expect(await protectPersistentMindMemory({ memoryId: chosen.id, protection: 'important' })).toMatchObject({ ok: false });
+    expect(records.get(chosen.id).tags).toContain('mind:chosen-name');
+    expect(await readPersistentMindName()).toBe('Example Star');
   });
 });
 
