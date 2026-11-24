@@ -24,8 +24,11 @@ export const TEST_DATABASE = 'portos_test';
 // explicit PGHOST/PGPORT; dropped for the same reason scripts/setup-db.js drops them.
 const ROUTING_ENV = ['PGHOSTADDR', 'PGSERVICE', 'PGSERVICEFILE', 'PGOPTIONS'];
 
-/** The suite whose guard also needs a Chrome that decodes H.264. */
-const H264_SUITE = 'server/services/musicVideo/documentRender.browser.test.js';
+/** Suites whose guards also need a Chrome that decodes H.264. */
+const H264_SUITES = new Set([
+  'server/services/musicVideo/documentRender.browser.test.js',
+  'server/services/musicVideo/documentRenderGeneration.browser.test.js',
+]);
 
 /**
  * Environment for the DB stages, pinned to `portos_test`.
@@ -137,7 +140,7 @@ export async function probeBrowserPrerequisites(files, { repoRoot, env = process
     ffmpeg: await findFfmpeg(),
     'client workspace dependencies': bundler,
   };
-  if (files.includes(H264_SUITE)) prerequisites['Chrome with H.264'] = await chromeWithH264(chrome);
+  if (files.some(file => H264_SUITES.has(file))) prerequisites['Chrome with H.264'] = await chromeWithH264(chrome);
   const reason = browserSuiteBlockReason(prerequisites);
   if (reason === null) return { ok: true, chrome };
   // A probe that ran and failed (timeout, teardown) says nothing about whether the tool is installed.

@@ -20,6 +20,7 @@ const BROWSER_SUITE_OWNERS = {
   'server/services/musicVideo/animaticCapture.browser.test.js': 1,
   'server/services/musicVideo/compositionRender.test.js': 1,
   'server/services/musicVideo/documentRender.browser.test.js': 2,
+  'server/services/musicVideo/documentRenderGeneration.browser.test.js': 2,
   'server/services/musicVideo/documentTemplateParity.browser.test.js': 1,
   'server/services/musicVideo/documentFilmLook.browser.test.js': 2,
   'server/services/musicVideo/documentVignette.browser.test.js': 1,
@@ -39,12 +40,9 @@ const BROWSER_SUITE_OWNERS = {
 };
 export const BROWSER_SUITES = Object.keys(BROWSER_SUITE_OWNERS);
 
-// Four-shard owners (#17748, rebalanced for client-bundling fan-out in #17894):
-// the four heaviest serial capture suites sit on separate shards
-// (documentRender 192s, htmlComposition 141s, animaticCapture 105s, filmLookGpu
-// 83s), the light suites fill the gaps, and the 7 client-bundling suites are
-// distributed across all 4 shards (1/2/2/2) so shared client-style edits do
-// not pile onto shard 3. Smoke needs no override here.
+// Keep the four heaviest serial capture suites on separate shards (#17748).
+// Give document render its own runner and spread the generation and template
+// parity suites across shards 4 and 3 respectively (#18335).
 const FOUR_SHARD_OWNERS = {
   'server/lib/filmLook.browser.test.js': 2,
   'server/lib/filmLookGpu.browser.test.js': 4,
@@ -62,7 +60,8 @@ const FOUR_SHARD_OWNERS = {
   'server/services/musicVideo/animaticCapture.browser.test.js': 3,
   'server/services/musicVideo/compositionRender.test.js': 4,
   'server/services/musicVideo/documentRender.browser.test.js': 1,
-  'server/services/musicVideo/documentTemplateParity.browser.test.js': 1,
+  'server/services/musicVideo/documentRenderGeneration.browser.test.js': 4,
+  'server/services/musicVideo/documentTemplateParity.browser.test.js': 3,
   'server/services/musicVideo/documentFilmLook.browser.test.js': 4,
   'server/services/musicVideo/documentVignette.browser.test.js': 2,
   'server/services/musicVideo/filmLookFinish.browser.test.js': 3,

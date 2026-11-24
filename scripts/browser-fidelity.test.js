@@ -47,7 +47,7 @@ function fixture({ outcome = 'passed', changed = false, dirty = false, wrongTree
     if (outcome === 'missing') report.testResults.pop();
     for (const [name, data] of Object.entries({
       'invocation.json': { completed: outcome !== 'incomplete', status: 0, signal: null },
-      'run.json': { reason: 'passed', errorCount: 0, errors: [], completedCount: 2, activeModules: [], teardownTimeout: outcome === 'teardown' },
+      'run.json': { reason: 'passed', errorCount: 0, errors: [], completedCount: BROWSER_FIDELITY_FILES.length, activeModules: [], teardownTimeout: outcome === 'teardown' },
       'failures.json': report,
     })) writeFileSync(join(dir, name), JSON.stringify(data));
     finished = true;

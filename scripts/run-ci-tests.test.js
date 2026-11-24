@@ -1487,6 +1487,15 @@ describe('browser shard ownership', () => {
     }
   });
 
+  it('gives document render its own runner in both four-shard profiles', () => {
+    for (const profile of ['full', 'smoke']) {
+      const shard = index => browserShardSlice(BROWSER_SUITES, { index, count: 4 }, profile);
+      expect(shard(1)).toEqual(['server/services/musicVideo/documentRender.browser.test.js']);
+      expect(shard(3)).toContain('server/services/musicVideo/documentTemplateParity.browser.test.js');
+      expect(shard(4)).toContain('server/services/musicVideo/documentRenderGeneration.browser.test.js');
+    }
+  });
+
   it('keeps the four heaviest serial capture suites on separate four-shard runners', () => {
     const heavy = [
       'server/services/musicVideo/documentRender.browser.test.js',
