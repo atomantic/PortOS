@@ -3,6 +3,9 @@
 // Storage: regenerable machine-local cache, not app data. `data/cache` is
 // excluded from PortOS backups and these artifacts never federate.
 import { constants } from 'fs';
+import { spawn } from '../lib/childProcess.js';
+import { artifactDownloadEnv } from '../lib/processEnv.js';
+import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { access, mkdir, mkdtemp, readFile, rename, rm } from 'fs/promises';
 import { cpus } from 'os';
 import { join } from 'path';
@@ -65,15 +68,16 @@ export async function readInstalledSplashVersion() {
 // keys, provider configuration or Python injection vars reach the runtime.
 function cleanEnvironment() {
   const home = join(splashRoot(), 'home');
-  return [
-    '-i', `HOME=${home}`, 'PATH=/usr/bin:/bin:/usr/sbin:/sbin',
-    `HF_HOME=${join(home, '.cache', 'huggingface')}`, 'HF_HUB_DISABLE_IMPLICIT_TOKEN=1',
-  ];
+  return {
+    HOME: home, PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+    HF_HOME: join(home, '.cache', 'huggingface'), HF_HUB_DISABLE_IMPLICIT_TOKEN: '1',
+  };
 }
 
 export function splashLaunchPrefix(version) {
   const directory = releaseDirectory(version);
-  return [...cleanEnvironment(), python(directory), splashLauncher(version), 'serve'];
+  const assignments = Object.entries(cleanEnvironment()).map(([key, value]) => `${key}=${value}`);
+  return ['-i', ...assignments, python(directory), splashLauncher(version), 'serve'];
 }
 
 export function splashLaunchArgs(version, model, context, port) {
@@ -84,9 +88,13 @@ export function splashLaunchArgs(version, model, context, port) {
   ];
 }
 
-async function runInstallStep(command, args, { cwd, timeoutMs, onLine, label }) {
-  const result = await runStreamingCommand('/usr/bin/env', [...cleanEnvironment(), command, ...args], onLine, {
+async function runInstallStep(command, args, { cwd, timeoutMs, onLine, label, network = false }) {
+  // Only model preparation needs network settings. Keeping them in env, not
+  // argv, also keeps any proxy credentials out of process arguments.
+  const env = withSpawnCwdEnv({ ...cleanEnvironment(), ...(network ? artifactDownloadEnv() : {}) }, cwd);
+  const result = await runStreamingCommand(command, args, onLine, {
     cwd, timeoutMs, processGroup: true,
+    spawnImpl: (file, argv, options) => spawn(file, argv, { ...options, env }),
   });
   if (!result.success) throw new ServerError(label, { status: 502, code: 'SPLASH_INSTALL_FAILED' });
 }
@@ -123,7 +131,7 @@ export async function installPinnedSplash({ previousVersion, emit }) {
     });
     emit('Preparing Inkling 2 Mini and its DFlash drafter. This can download about 17 GB.');
     await runInstallStep(python(directory), ['-E', 'install/models.py', ...MODEL_ARGS, 'prepare', '--json-progress'], {
-      cwd: directory, timeoutMs: 4 * 60 * 60_000, onLine: downloadProgress(emit),
+      cwd: directory, timeoutMs: 4 * 60 * 60_000, onLine: downloadProgress(emit), network: true,
       label: 'Splash could not prepare Inkling 2 Mini. Check free disk space and access to Hugging Face, then retry Install or Update.',
     });
     if (previousVersion !== SPLASH_VERSION) await publishRelease(directory);

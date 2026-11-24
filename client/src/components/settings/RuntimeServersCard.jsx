@@ -256,8 +256,8 @@ function ServerRow({ row, busy, actionInProgress, selected, hideActions, childre
           </span>
         )}
         {row.detail && <span className="text-xs text-gray-500">{row.detail}</span>}
-        {row.progress && <span role="status" className="text-xs text-port-accent">{row.progress}</span>}
-        {row.error && <span className="text-xs text-port-error break-words">{row.error}</span>}
+        {!hideActions && row.progress && <span role="status" className="text-xs text-port-accent">{row.progress}</span>}
+        {!hideActions && row.error && <span role="alert" className="text-xs text-port-error break-words">{row.error}</span>}
       </div>
       <div className="flex items-center gap-2 flex-wrap shrink-0">
         {!hideActions && row.onInstall && (

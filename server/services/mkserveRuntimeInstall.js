@@ -8,6 +8,7 @@ import { atomicWrite, sha256File, sha256Text } from '../lib/fileCore.js';
 import { PATHS } from '../lib/paths.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
+import { artifactDownloadEnv } from '../lib/processEnv.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 
 export const MKSERVE_VERSION = '95e315c808a7d935c10ef924a8fc0d901bfc3b89';
@@ -96,16 +97,10 @@ export function mkserveLaunchEnvironment() {
   return ['-i', ...Object.entries({ ...cleanEnv(), HF_HUB_OFFLINE: '1' }).map(([key, value]) => key + '=' + value)];
 }
 
-function downloadEnvironment() {
-  return Object.fromEntries(['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy',
-    'all_proxy', 'no_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR']
-    .filter((key) => process.env[key]).map((key) => [key, process.env[key]]));
-}
-
 async function command(bin, args, message, { timeoutMs = 20 * MINUTE, cwd, env = {}, network = false } = {}) {
   // Only fixed curl/uv invocations get the machine's proxy/CA settings. The
   // unpacked engine and daemon never receive them or other server credentials.
-  const exactEnv = withSpawnCwdEnv({ ...cleanEnv(), ...(network ? downloadEnvironment() : {}), ...env }, cwd);
+  const exactEnv = withSpawnCwdEnv({ ...cleanEnv(), ...(network ? artifactDownloadEnv() : {}), ...env }, cwd);
   const result = await runStreamingCommand(bin, args, undefined, {
     cwd, timeoutMs, processGroup: true,
     // The streaming helper's normal env option merges with process.env.

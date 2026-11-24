@@ -8,10 +8,15 @@ const mocks = vi.hoisted(() => ({
   pm2: null,
   download: vi.fn(),
   command: vi.fn(),
+  spawn: vi.fn(),
   pm2Command: vi.fn(),
   pm2Status: vi.fn(),
   portUsed: vi.fn(),
   probe: vi.fn(),
+}));
+vi.mock('../lib/childProcess.js', async (original) => ({
+  ...await original(),
+  spawn: mocks.spawn,
 }));
 vi.mock('../lib/paths.js', () => ({ PATHS: { get data() { return mocks.data; } } }));
 vi.mock('../lib/platform.js', () => ({ isPortInUse: mocks.portUsed }));
@@ -55,8 +60,8 @@ beforeEach(async () => {
     if (args[0] === 'delete') mocks.pm2 = mockedApp();
   });
   mocks.download.mockResolvedValue({});
-  mocks.command.mockImplementation(async (_cmd, args, onLine, { cwd }) => {
-    if (args.includes('/usr/bin/tar')) await stageFakeRelease(join(cwd, `splash-${SPLASH_VERSION}-arm64-macos26`));
+  mocks.command.mockImplementation(async (cmd, args, onLine, { cwd }) => {
+    if (cmd === '/usr/bin/tar') await stageFakeRelease(join(cwd, `splash-${SPLASH_VERSION}-arm64-macos26`));
     if (args.includes('prepare')) {
       onLine('A raw line with an unexpected URL should never be displayed.');
       onLine(JSON.stringify({ event: 'download', repo: 'incoai/Inkling-2-Mini-DFlash2', done: 1, total: 2 }));
@@ -66,6 +71,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await rm(mocks.data, { recursive: true, force: true });
 });
 
@@ -96,6 +102,30 @@ it('installs the verified bundle and checkpoint, starts only from cache, and sto
   await stopSplashServer();
   expect(mocks.pm2Command).toHaveBeenLastCalledWith(['delete', '42']);
   await expect(getSplashManagedState()).resolves.toMatchObject({ installed: true, managed: false, version: SPLASH_VERSION });
+});
+
+it('passes proxy and CA settings to prepare only, without forwarding provider credentials', async () => {
+  vi.stubEnv('HTTPS_PROXY', 'http://example.com:1234');
+  vi.stubEnv('SSL_CERT_FILE', '/tmp/example-ca.pem');
+  vi.stubEnv('OPENAI_API_KEY', 'fake-provider-secret');
+  await installSplashRuntime();
+
+  for (const [command, args, , options] of mocks.command.mock.calls) {
+    options.spawnImpl(command, args, { env: { OPENAI_API_KEY: 'fake-provider-secret' } });
+    const [, , { env }] = mocks.spawn.mock.lastCall;
+    expect(env).not.toHaveProperty('OPENAI_API_KEY');
+    expect(env.PWD).toBe(options.cwd);
+    expect(args.join(' ')).not.toContain('example.com');
+    if (args.includes('prepare')) {
+      expect(env).toMatchObject({ HTTPS_PROXY: 'http://example.com:1234', SSL_CERT_FILE: '/tmp/example-ca.pem' });
+    } else {
+      expect(env).not.toHaveProperty('HTTPS_PROXY');
+      expect(env).not.toHaveProperty('SSL_CERT_FILE');
+    }
+  }
+
+  await startSplashServer();
+  expect(mocks.pm2.args.join(' ')).not.toMatch(/HTTPS_PROXY|SSL_CERT_FILE|OPENAI_API_KEY/);
 });
 
 it('refuses to replace a listening process or delete a reserved-name PM2 process it did not launch', async () => {
