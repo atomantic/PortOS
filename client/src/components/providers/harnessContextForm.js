@@ -52,7 +52,7 @@ function opencodeContextTarget(provider) {
     inherited: typeof limit.context === 'number' ? limit.context : null,
     output: typeof limit.output === 'number' ? limit.output : splash ? 8192 : null,
     input: typeof limit.input === 'number' ? limit.input : null,
-    fallback: splash ? SPLASH_CONTEXT : null,
+    fallback: splash ? SPLASH_CONTEXT : null, splash,
   };
 }
 
@@ -65,7 +65,7 @@ export function getHarnessContextTarget(provider) {
   // and can only affect IDs Claude Code treats as custom.
   if (!provider.envVars?.ANTHROPIC_BASE_URL && value == null) return null;
   return { key: 'claude', kind: 'claude', model: provider.defaultModel, value: !provider.harnessContext?.model ? provider.harnessContext?.tokens ?? '' : '',
-    inherited: parseHarnessContext(value), fallback: provider.splashBacked === true ? SPLASH_CONTEXT : null };
+    inherited: parseHarnessContext(value), fallback: provider.splashBacked === true ? SPLASH_CONTEXT : null, splash: provider.splashBacked === true };
 }
 
 export function harnessContextError(target, value) {

@@ -1,3 +1,4 @@
+import { Link } from 'react-router';
 import { FormField } from '../ui/FormField';
 import { formatCount } from '../../utils/formatters';
 import { CONTEXT_CHOICES, parseHarnessContext } from './harnessContextForm.js';
@@ -30,6 +31,11 @@ export default function ProviderHarnessContext({ target, value, onChange, onUseS
         </button>
       </div>
       <p className="text-xs mt-1 text-gray-500">Enter tokens or shorthand (K = 1,024; M = 1,000,000).</p>
+      {target.splash && (
+        <Link to="/models/llms-runtimes/splash" target="_blank" rel="noreferrer" className="inline-flex min-h-[36px] items-center text-xs text-port-accent hover:underline">
+          Open Splash runtime settings
+        </Link>
+      )}
       {Number.isSafeInteger(servedWindow) && (
         <div className="flex flex-wrap items-center gap-2 text-xs text-gray-400">
           <span>Server currently reports {formatCount(servedWindow)} tokens.</span>
