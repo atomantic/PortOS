@@ -111,7 +111,8 @@ describe('FableLoomHostedJoin', () => {
   it('keeps the transcript as the only inner scroll region of the dynamic shell', () => {
     renderConnectedJoin();
 
-    const shell = screen.getByRole('main');
+    const main = screen.getByRole('main');
+    const shell = main.parentElement;
     expect(shell).toHaveClass('h-dvh-screen', 'overflow-y-auto');
     expect(shell).not.toHaveClass('overflow-hidden');
     expect(shell).not.toHaveClass('min-h-screen');
@@ -119,10 +120,64 @@ describe('FableLoomHostedJoin', () => {
     const scrollRegions = shell.querySelectorAll('.overflow-y-auto');
     expect(scrollRegions).toHaveLength(1);
     expect(scrollRegions[0]).toHaveClass('flex-1', 'min-h-[8rem]');
-    const header = shell.querySelector('header');
+    const header = screen.getByRole('banner');
+    expect(header.parentElement).toBe(shell);
+    expect(main).not.toContainElement(header);
     expect(header).toHaveClass('shrink-0');
-    expect(header.nextElementSibling).toHaveClass('shrink-0');
+    expect(header.nextElementSibling).toBe(main);
+    expect(screen.getByText('Story is playing on computer screen').closest('[role="status"]')).toHaveClass('shrink-0');
     expect(screen.getByPlaceholderText('Or type a message…').closest('form').parentElement).toHaveClass('shrink-0');
+  });
+
+  it('exposes live regions for connection, turn phase and transcript', () => {
+    renderConnectedJoin();
+    const connection = screen.getByText('Connected').closest('[role="status"]');
+    expect(connection).toHaveAttribute('aria-live', 'polite');
+    const phase = screen.getByText('Story is playing on computer screen').closest('[role="status"]');
+    expect(phase).toHaveAttribute('aria-live', 'polite');
+    const log = screen.getByRole('log', { name: 'Conversation transcript' });
+    expect(log).toHaveAttribute('aria-live', 'polite');
+  });
+
+  it('announces a terminal session error as an alert', () => {
+    renderConnectedJoin();
+    act(() => socketHandler('hosted:session:replaced')({ reason: 'Replaced elsewhere.' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Replaced elsewhere.');
+  });
+
+  it.each([' ', 'Enter'])('records via keyboard hold of %j, ignores repeat, and stops on release and blur', async (key) => {
+    const track = { stop: vi.fn() };
+    const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [track] });
+    Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia } });
+    const recorder = { state: 'recording', start: vi.fn(), stop: vi.fn() };
+    vi.stubGlobal('MediaRecorder', class { constructor() { return recorder; } });
+    try {
+      renderConnectedJoin();
+      const button = screen.getByRole('button', { name: 'Hold Talk' });
+      expect(button).toHaveAttribute('aria-pressed', 'false');
+      expect(button).toHaveAccessibleDescription(/Space\/Enter/);
+
+      fireEvent.keyDown(button, { key });
+      await waitFor(() => expect(recorder.start).toHaveBeenCalledOnce());
+      expect(button).toHaveAttribute('aria-pressed', 'true');
+      fireEvent.keyDown(button, { key, repeat: true });
+      fireEvent.keyDown(button, { key, repeat: true });
+      expect(getUserMedia).toHaveBeenCalledOnce();
+      expect(mockSocket.emit).toHaveBeenCalledWith('hosted:mic:start');
+
+      fireEvent.keyUp(button, { key });
+      expect(recorder.stop).toHaveBeenCalledOnce();
+      expect(button).toHaveAttribute('aria-pressed', 'false');
+
+      recorder.state = 'recording';
+      fireEvent.keyDown(button, { key });
+      await waitFor(() => expect(recorder.start).toHaveBeenCalledTimes(2));
+      fireEvent.blur(button);
+      expect(recorder.stop).toHaveBeenCalledTimes(2);
+      expect(button).toHaveAttribute('aria-pressed', 'false');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('sends text input fallback when submitted', async () => {
