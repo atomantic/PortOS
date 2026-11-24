@@ -142,6 +142,11 @@ export default function PipelineSeries() {
 
   useEffect(() => {
     let canceled = false;
+    // Drop the previous series immediately so it can't be edited or saved
+    // under the new series' URL while the next one loads.
+    setLoading(true);
+    setSeries(null);
+    setIssues([]);
     Promise.all([
       getPipelineSeries(seriesId, { silent: true }),
       listPipelineIssues(seriesId, { silent: true }),
@@ -163,6 +168,13 @@ export default function PipelineSeries() {
   const toggleSidebar = () => setSidebarCollapsed((prev) => !prev);
 
   const patchSeries = (patch) => setSeries((prev) => ({ ...prev, ...patch }));
+  // Undo a failed optimistic patch only while the same series still shows the
+  // optimistic values; a later selection or a series switch must survive.
+  const rollbackSeries = (id, optimistic, prior) => setSeries((prev) => (
+    prev?.id === id && Object.keys(optimistic).every((k) => (prev[k] ?? null) === optimistic[k])
+      ? { ...prev, ...prior }
+      : prev
+  ));
 
   // Host-side ArcCanvas wiring (lastSavedRef dirty-check + server-confirmed
   // setters). Flushes the full bible field-set; the API helper's auto-toast is
@@ -368,6 +380,7 @@ export default function PipelineSeries() {
               universesError={universesResource.error}
               universesRetry={universesResource.retry}
               patchSeries={patchSeries}
+              rollbackSeries={rollbackSeries}
               onSeriesUpdate={updateSeriesFromServer}
               onFlushPending={flushPending}
               onCollapse={toggleSidebar}
@@ -380,7 +393,7 @@ export default function PipelineSeries() {
   );
 }
 
-function BibleSidebar({ series, universes, universesError, universesRetry, patchSeries, onSeriesUpdate, onFlushPending, onCollapse }) {
+function BibleSidebar({ series, universes, universesError, universesRetry, patchSeries, rollbackSeries, onSeriesUpdate, onFlushPending, onCollapse }) {
   const [generatingLogo, setGeneratingLogo] = useState(false);
   const handleGenerateLogo = async () => {
     // Server reads from disk — flush dirty edits so the LLM sees fresh fields.
@@ -458,10 +471,12 @@ function BibleSidebar({ series, universes, universesError, universesRetry, patch
             value={series.primaryManuscriptType || ''}
             onChange={async (e) => {
               const value = e.target.value || null;
+              const prior = series.primaryManuscriptType ?? null;
               patchSeries({ primaryManuscriptType: value });
               const updated = await updatePipelineSeries(series.id, { primaryManuscriptType: value }, { silent: true })
                 .catch((err) => { toast.error(err.message || 'Failed to set primary format'); return null; });
               if (updated) onSeriesUpdate?.(updated);
+              else rollbackSeries(series.id, { primaryManuscriptType: value }, { primaryManuscriptType: prior });
             }}
             className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded text-white"
           >
@@ -613,10 +628,12 @@ function BibleSidebar({ series, universes, universesError, universesRetry, patch
             // pipeline render from another page must see the pin without
             // requiring a Save on this one; the other two hosts of this row
             // (universe, sprite) also persist on change.
+            const prior = { imageMode: series.imageMode ?? null, imageModelId: series.imageModelId ?? null };
             patchSeries({ imageMode, imageModelId });
             const updated = await updatePipelineSeries(series.id, { imageMode, imageModelId }, { silent: true })
               .catch((err) => { toast.error(err.message || 'Failed to save render pin'); return null; });
             if (updated) onSeriesUpdate?.(updated);
+            else rollbackSeries(series.id, { imageMode, imageModelId }, prior);
           }}
           autoLabel="Auto (install / surface default)"
         />
