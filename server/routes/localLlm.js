@@ -1272,11 +1272,9 @@ router.post('/slotstream/models/download/cancel', asyncHandler(async (req, res) 
 // startup`, which writes the launchd/systemd unit — is deliberately blocked and
 // stays a one-time operator command.
 //
-// MTPLX and Slotstream are deliberately EXCLUDED. Both are started on demand
-// by the first request that needs them and stopped again when idle, so
-// resurrecting them at boot would pin a multi-gigabyte checkpoint on a machine
-// nobody has asked anything of yet — the exact waste the idle stop exists to
-// end. The running process is left alone; only the boot list drops it.
+// Exclude runtimes that need not pin their checkpoints at boot. MTPLX and
+// Slotstream can start on demand; Splash and mkserve start from their controls.
+// The running processes are left alone; only this saved boot list changes.
 router.post('/save-startup', asyncHandler(async (_req, res) => {
   res.json(await saveProcessList(null, { exclude: [MTPLX_APP, SLOTSTREAM_APP, SPLASH_APP, MKSERVE_APP] }))
 }))

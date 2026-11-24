@@ -2,12 +2,12 @@ export const MANAGED_INKLING_RUNTIMES = {
   splash: {
     label: 'Splash',
     requirement: 'Requires macOS 26.4 or later and an Apple M3 or newer.',
-    download: 'Downloads Inkling 2 Mini and its DFlash drafter on first setup. Allow several tens of GB of free disk space.',
+    download: 'First setup downloads about 17 GB for Inkling 2 Mini and its DFlash drafter. Leave additional room for the prepared cache.',
     provider: 'When it is ready, enable an existing Splash preset under AI Providers.',
   },
   mkserve: {
     label: 'mkserve',
-    requirement: 'This Inkling 2 Mini build requires an Apple M5 Max with at least 36 GiB of unified memory.',
+    requirement: 'Requires macOS 26 or later and an Apple M5 Max with at least 36 GiB of unified memory.',
     download: 'Downloads about 19 GiB of Inkling 2 Mini weights, plus the runtime and its Python environment.',
     provider: 'When it is ready, add an OpenAI-compatible provider using the endpoint and model ID shown here.',
   },
