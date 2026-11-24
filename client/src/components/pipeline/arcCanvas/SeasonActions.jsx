@@ -4,6 +4,7 @@ import toast from '../../ui/Toast';
 import { createPipelineIssue, listPipelineIssues } from '../../../services/apiPipeline.js';
 import VerifyScopeHint from './VerifyScopeHint.jsx';
 import { pluralize } from '../../../lib/textUtils';
+import { useSingleFlight } from '../../../hooks/useSingleFlight';
 
 const VERIFY_VOLUME_SCOPE = {
   depth: 'One volume in depth — reads beat sheets (stages.idea.output) for issues that have them, falls back to synopsis depth for un-expanded issues. Boundary checks against the immediate-neighbor volumes only.',
@@ -42,7 +43,7 @@ export default function SeasonActions({
   const [beatsModePicker, setBeatsModePicker] = useState(false);
   const seasonHasContext = !!(season.logline?.trim() || season.synopsis?.trim());
 
-  const handleAdd = async (e) => {
+  const handleAdd = useSingleFlight(async (e) => {
     e?.preventDefault();
     const title = newTitle.trim();
     if (!title) return;
@@ -62,7 +63,7 @@ export default function SeasonActions({
     setNewTitle('');
     setAdding(false);
     toast.success(`Issue / Episode "${created.title}" added`);
-  };
+  }, () => newTitle.trim());
 
   // Validate volume needs (1) an authored arc on the parent series and
   // (2) at least one issue under this volume — otherwise there is nothing

@@ -19,6 +19,7 @@ import AddToThreadButton from '../threads/AddToThreadButton';
 import { messageReadState, partitionAccountsBySyncMode } from '../../lib/messageSyncModes';
 import LoadFailedState from '../ui/LoadFailedState';
 import { useSocketResource } from '../../hooks/useSocketResource';
+import { useSingleFlight } from '../../hooks/useSingleFlight';
 
 const ACTION_CONFIG = {
   reply:   { icon: Reply,   color: 'text-port-accent',  bg: 'bg-port-accent/10',  hoverBg: 'hover:bg-port-accent/20',  label: 'Reply' },
@@ -352,8 +353,7 @@ export default function InboxTab({ accounts }) {
     }));
   };
 
-  const handleQuickReply = async (msg, e) => {
-    e.stopPropagation();
+  const handleQuickReply = useSingleFlight(async (msg) => {
     const account = accountList.find(a => a.id === msg.accountId) || accountList[0];
     if (!account) return toast.error('No account available');
     toast('Generating AI reply...', { icon: '✨' });
@@ -368,7 +368,7 @@ export default function InboxTab({ accounts }) {
       toast.success('Draft created — opening Drafts');
       navigate('/messages/drafts');
     }
-  };
+  }, (msg) => msg.id);
 
   const handleAction = async (msg, action, e) => {
     e.stopPropagation();
@@ -658,7 +658,7 @@ export default function InboxTab({ accounts }) {
                   const isActionable = ['archive', 'delete'].includes(actionKey) && ACTIONABLE_SOURCES.includes(msgSource);
 
                   const onClick = actionKey === 'reply'
-                    ? (e) => handleQuickReply(msg, e)
+                    ? (e) => { e.stopPropagation(); handleQuickReply(msg); }
                     : actionKey === 'review'
                       ? (e) => { e.stopPropagation(); openMessage(msg); }
                       : isActionable

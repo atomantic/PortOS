@@ -23,6 +23,8 @@ import NicotineChart from '../NicotineChart';
 import NicotineHealthCorrelation from '../NicotineHealthCorrelation';
 import { dayOfWeek } from '../constants';
 import { localDateKey } from '../../../utils/formatters';
+import { useSingleFlight } from '../../../hooks/useSingleFlight';
+import DraftNumberInput from '../../ui/DraftNumberInput';
 
 const DAYS_PER_PAGE = 50;
 
@@ -192,7 +194,7 @@ export default function NicotineTab() {
     return null;
   };
 
-  const handleAddButton = async (e) => {
+  const handleAddButton = useSingleFlight(async (e) => {
     e.preventDefault();
     const error = validateProductButton(buttonForm);
     if (error) { toast.error(error); return; }
@@ -204,7 +206,7 @@ export default function NicotineTab() {
     buttonsReadSeq.current += 1;
     if (Array.isArray(productButtons)) setProductButtons(prev => [...prev, result]);
     else fetchProductButtons();
-  };
+  });
 
   const startEditButton = (idx) => {
     const btn = productButtons[idx];
@@ -424,12 +426,12 @@ export default function NicotineTab() {
                 />
               </FormField>
               <FormField label="Qty" className="w-14" labelClassName="block text-xs text-gray-500 mb-1">
-                <input
-                  type="number"
+                <DraftNumberInput
+                  integer
                   value={count}
-                  onChange={e => setCount(parseInt(e.target.value, 10) || 1)}
+                  onCommit={setCount}
                   className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-white"
-                  min="1"
+                  min={1}
                 />
               </FormField>
               <FormField label="Date" labelClassName="block text-xs text-gray-500 mb-1">

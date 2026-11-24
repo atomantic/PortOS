@@ -55,6 +55,7 @@ import {
   pipelineImageCfgToRenderOpts,
 } from '../../../lib/pipelineImageDefaults';
 import { BIBLE_LIMITS, capImageRefs } from '../../../lib/bibleLimits';
+import { useSingleFlight } from '../../../hooks/useSingleFlight';
 
 // Per-kind metadata. `descFor` picks the most visual field for ref-image
 // generation; `descField`/`descFieldFallback`/`descFieldMax` bind CanonCard's
@@ -377,7 +378,7 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
   // `handleRefCompleted` once the file actually exists. Without that defer,
   // the card would <img src> a not-yet-written /data/images/<jobId>.png and
   // show the OS broken-image icon mid-render.
-  const handleRenderRef = async (kind, entry) => {
+  const handleRenderRef = useSingleFlight(async (kind, entry) => {
     const description = kind.descFor(entry);
     if (!description.trim()) {
       toast.error(`Add a description before generating a reference for ${entry.name}`);
@@ -412,9 +413,9 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
     if (!queued?.jobId || !mountedRef.current) return;
     setRenderingJobs((prev) => ({ ...prev, [entry.id]: queued.jobId }));
     toast.success(`Rendering reference for ${entry.name}`);
-  };
+  }, (_kind, entry) => entry.id);
 
-  const handleRenderCleanPlate = async (kind, entry) => {
+  const handleRenderCleanPlate = useSingleFlight(async (kind, entry) => {
     // Match CanonCard's button-enable predicate (descFor includes palette +
     // recurringDetails for settings) — composeCleanPlatePrompt builds a valid
     // prompt from any of {description, palette, recurringDetails}, so gating
@@ -442,7 +443,7 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
     if (!queued?.jobId || !mountedRef.current) return;
     setRenderingJobs((prev) => ({ ...prev, [entry.id]: queued.jobId }));
     toast.success(`Rendering clean plate for ${entry.name}`);
-  };
+  }, (_kind, entry) => entry.id);
 
   // Clear the spinner + optimistically mirror the completed render onto the
   // entry's `imageRefs[]`. As of #1362 the section-local render carries a

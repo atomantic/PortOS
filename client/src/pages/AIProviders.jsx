@@ -43,6 +43,7 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import OverflowMenu from '../components/ui/OverflowMenu';
 import { providerPageTabForPath } from '../components/providers/ProviderPageTabs';
 import { lazyWithReload } from '../utils/lazyWithReload';
+import { useSingleFlight } from '../hooks/useSingleFlight';
 
 // Routed views and heavy drawers/modals stay out of the entry chunk so visiting
 // `/ai/presets` never downloads Harnesses, Services, Fleet Setup, or the form.
@@ -697,7 +698,7 @@ export default function AIProviders() {
     return updated;
   };
 
-  const handleAddAllSamples = async () => {
+  const handleAddAllSamples = useSingleFlight(async () => {
     if (addableSamples.length === 0) return;
 
     const succeededIds = [];
@@ -723,7 +724,7 @@ export default function AIProviders() {
     } else {
       toast.warning(`Added ${succeededIds.length} provider${succeededIds.length === 1 ? '' : 's'}, ${failedIds.length} failed`);
     }
-  };
+  });
 
   const handleRuntimeInstallComplete = () => {
     toast.success(`${installingRuntime?.label || 'Runtime'} installed and ready to test`);

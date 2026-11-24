@@ -12,6 +12,7 @@ import JobCard, { ScheduleFields, TaskMetadataFields } from '../../cos/JobCard';
 import { filterRunnableProviders } from '../../../utils/providers';
 import TaskDataInputs from '../../cos/TaskDataInputs';
 import { JobFormFieldsEditor, JobFormValueInputs, missingRequiredJobFormFields } from '../../cos/JobFormFields';
+import { useSingleFlight } from '../../../hooks/useSingleFlight';
 
 export function emptyForm() {
   return {
@@ -235,7 +236,7 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
   // silent here), so catches just return null — guarding on the result avoids a
   // second toast and the success-on-error footgun. Deliberate 200 `skipped`
   // outcomes are NOT toasted by the helper, so those branches toast explicitly.
-  const handleCreate = async () => {
+  const handleCreate = useSingleFlight(async () => {
     if (!validate(createForm)) return;
     const created = await createCosJob(toPayload(createForm, appId)).catch(() => null);
     if (!created) return;
@@ -243,7 +244,7 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
     setCreateForm(emptyForm());
     setShowCreate(false);
     fetchTasks();
-  };
+  });
 
   const handleToggle = async (jobId) => {
     const result = await toggleCosJob(jobId).catch(() => null);

@@ -18,6 +18,7 @@ import TimeStats from './calendar/TimeStats';
 import AddActivityForm from './calendar/AddActivityForm';
 import LifeEventsPanel from './calendar/LifeEventsPanel';
 import { formatCount, formatPercent } from '../../../utils/formatters';
+import { useSingleFlight } from '../../../hooks/useSingleFlight';
 
 const isKey = (value) => typeof value === 'string' && value !== '';
 
@@ -73,13 +74,13 @@ export default function CalendarTab() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  const handleAddActivity = async (activity) => {
+  const handleAddActivity = useSingleFlight(async (activity) => {
     const result = await addActivity(activity).catch(() => null);
     if (result) {
       toast.success(`Added ${activity.name}`);
       fetchData();
     }
-  };
+  }, (activity) => activity.name);
 
   const handleRemoveActivity = async (index) => {
     const row = data?.budgets?.[index];
@@ -125,13 +126,13 @@ export default function CalendarTab() {
     }
   };
 
-  const handleAddEvent = async (event) => {
+  const handleAddEvent = useSingleFlight(async (event) => {
     const result = await addLifeEvent(event).catch(() => null);
     if (result) {
       toast.success(`Added ${event.name}`);
       fetchData();
     }
-  };
+  }, (event) => event.name);
 
   const handleToggleEvent = async (id, enabled) => {
     const result = await updateLifeEvent(id, { enabled }).catch(() => null);

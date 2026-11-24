@@ -24,6 +24,8 @@ import AlcoholHrvCorrelation from '../AlcoholHrvCorrelation';
 import StandardDrinkCalculator from '../StandardDrinkCalculator';
 import { dayOfWeek } from '../constants';
 import { localDateKey } from '../../../utils/formatters';
+import { useSingleFlight } from '../../../hooks/useSingleFlight';
+import DraftNumberInput from '../../ui/DraftNumberInput';
 
 const ML_PER_OZ = 29.5735;
 
@@ -228,7 +230,7 @@ export default function AlcoholTab() {
     return null;
   };
 
-  const handleAddButton = async (e) => {
+  const handleAddButton = useSingleFlight(async (e) => {
     e.preventDefault();
     const error = validateDrinkButton(buttonForm);
     if (error) { toast.error(error); return; }
@@ -243,7 +245,7 @@ export default function AlcoholTab() {
     buttonsReadSeq.current += 1;
     if (Array.isArray(drinkButtons)) setDrinkButtons(prev => [...prev, result]);
     else fetchDrinkButtons();
-  };
+  });
 
   const startEditButton = (idx) => {
     const btn = drinkButtons[idx];
@@ -573,12 +575,12 @@ export default function AlcoholTab() {
             />
           </FormField>
           <FormField label="Count" labelClassName="text-xs text-gray-500 block mb-1">
-            <input
-              type="number"
-              min="1"
-              max="20"
+            <DraftNumberInput
+              integer
+              min={1}
+              max={20}
               value={count}
-              onChange={e => setCount(parseInt(e.target.value) || 1)}
+              onCommit={setCount}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white"
             />
           </FormField>

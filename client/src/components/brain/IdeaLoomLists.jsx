@@ -18,6 +18,7 @@ import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import useUrlParams from '../../hooks/useUrlParams';
 import useListResource from '../../hooks/useListResource';
 import ListLoadError from '../ui/ListLoadError';
+import { useSingleFlight } from '../../hooks/useSingleFlight';
 
 // Module-level so useListResource sees a stable fetcher. The row owns the error UI; the route returns a bare array.
 const fetchVaults = () => getNotesVaults({ silent: true });
@@ -105,7 +106,7 @@ export default function IdeaLoomLists() {
   // `overrides` lets a one-click action (completing a list) persist through the
   // same validated path instead of a second endpoint, so it can never drop the
   // edits already sitting in the draft.
-  const save = async (overrides = {}) => {
+  const save = useSingleFlight(async (overrides = {}) => {
     const next = { ...draft, ...overrides };
     const problem = missingField(next);
     if (problem) {
@@ -125,7 +126,7 @@ export default function IdeaLoomLists() {
     setDraft({ ...saved, ideas: [...(saved.ideas || [])] });
     select(saved.id);
     toast.success(next.id ? 'List saved' : 'List created');
-  };
+  }, () => draft?.id);
 
   const remove = async (id) => {
     const result = await deleteIdeaLoomList(id, { silent: true }).catch((error) => {

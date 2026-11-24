@@ -50,6 +50,7 @@ import { universeStylePreset } from '../../lib/universeStylePreset';
 import { descriptorForCanonEntry } from '../../lib/canonPrompt';
 import { BIBLE_LIMITS, capImageRefs } from '../../lib/bibleLimits';
 import { formatCount } from '../../utils/formatters';
+import { useSingleFlight } from '../../hooks/useSingleFlight';
 
 // A universe's canon list for a kind is sometimes absent on a freshly-created
 // record; normalize to [] so callers can spread/map without a guard each time.
@@ -348,7 +349,7 @@ export default function UniverseCanonSection({
       : `${result.entry?.name || 'Character'} already complete — nothing to fill`);
   };
 
-  const handleRenderRef = async (kind, entry) => {
+  const handleRenderRef = useSingleFlight(async (kind, entry) => {
     const description = kind.descFor(entry);
     if (!description.trim()) {
       toast.error(`Add a description before generating a reference for ${entry.name}`);
@@ -378,7 +379,7 @@ export default function UniverseCanonSection({
     if (!queued?.jobId || !mountedRef.current) return;
     setRenderingJobs((prev) => ({ ...prev, [entry.id]: queued.jobId }));
     toast.success(`Rendering reference for ${entry.name}`);
-  };
+  }, (_kind, entry) => entry.id);
 
   // Render All — fires `handleRenderRef` for every entry in the kind that
   // (a) has a non-blank descFor() prompt and (b) doesn't already carry an
@@ -410,7 +411,7 @@ export default function UniverseCanonSection({
     }
   };
 
-  const handleRenderCleanPlate = async (kind, entry) => {
+  const handleRenderCleanPlate = useSingleFlight(async (kind, entry) => {
     // Match CanonCard's button-enable predicate (descFor includes palette +
     // recurringDetails for places) — composeCleanPlatePrompt builds a valid
     // prompt from any of {description, palette, recurringDetails}, so gating
@@ -440,7 +441,7 @@ export default function UniverseCanonSection({
     if (!queued?.jobId || !mountedRef.current) return;
     setRenderingJobs((prev) => ({ ...prev, [entry.id]: queued.jobId }));
     toast.success(`Rendering clean plate for ${entry.name}`);
-  };
+  }, (_kind, entry) => entry.id);
 
   // Optimistically stamp a completed render's filename onto a canon entry's
   // `imageRefs[]` in the parent draft. Used by BOTH section-local and external
