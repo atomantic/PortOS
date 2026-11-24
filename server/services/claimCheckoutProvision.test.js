@@ -116,6 +116,40 @@ describe('provisionClaimCheckout', () => {
     expect(existsSync(claimDir())).toBe(false);
   });
 
+  it('reclaims the target path after Git dropped its registration and marker', async () => {
+    const path = claimDir();
+    await execGit(['worktree', 'add', '--detach', path, 'HEAD'], repo);
+    await execGit(['worktree', 'remove', path], repo);
+    await mkdir(path);
+    await writeFile(join(path, 'cache.txt'), 'leftover cache');
+
+    const result = await provisionClaimCheckout({ app, sourceWorkspace: repo, branch: 'claim/issue-42', worktreesRoot });
+
+    expect(result.claimCheckout?.worktreePath).toBe(path);
+    expect(existsSync(join(path, 'cache.txt'))).toBe(false);
+    expect((await execGit(['branch', '--show-current'], path)).stdout.trim()).toBe('claim/issue-42');
+  });
+
+  it.each(['registered', 'git-marked', 'claim ref exists'])('preserves an occupied path when %s', async (state) => {
+    const path = claimDir();
+    if (state === 'registered') {
+      await execGit(['worktree', 'add', '--detach', path, 'HEAD'], repo);
+      await rm(join(path, '.git'));
+    } else {
+      await mkdir(path, { recursive: true });
+      if (state === 'git-marked') await mkdir(join(path, '.git'));
+      else await execGit(['branch', 'next/issue-42'], repo);
+    }
+    const keep = join(path, 'keep.txt');
+    await writeFile(keep, 'preserve me');
+
+    const result = await provisionClaimCheckout({ app, sourceWorkspace: repo, branch: 'claim/issue-42', worktreesRoot });
+
+    expect(result.refused).toMatch(/already exists/);
+    expect(await readFile(keep, 'utf8')).toBe('preserve me');
+    expect((await execGit(['branch', '--list', 'claim/issue-42'], repo)).stdout.trim()).toBe('');
+  });
+
   // A failed `-b` add used to leave the branch and directory behind, so every
   // later attempt refused on "already exists" and the issue was stuck.
   it('rolls back a failed add so the issue can be claimed again', async () => {

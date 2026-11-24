@@ -16,7 +16,7 @@
  */
 
 import { existsSync } from 'fs';
-import { rm } from 'fs/promises';
+import { lstat, rm } from 'fs/promises';
 import { join } from 'path';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { execGit } from '../lib/execGit.js';
@@ -25,6 +25,7 @@ import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { claimIssueNumber } from '../lib/issueClaimEvidence.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { appWorktreeSlug } from '../lib/worktreeOwnership.js';
+import { queueWorktreeCreate } from './worktree/mutationQueue.js';
 
 /** The claim branch PortOS cuts for this task at spawn, or null when the agent cuts its own. */
 export function serverClaimCheckoutBranch(task) {
@@ -66,14 +67,14 @@ async function rollBackClaimCheckout(sourceWorkspace, worktreePath, branch, addE
 
 /**
  * Fetch the default branch and cut `branch` from it into the claim directory.
- * Refuses, touching nothing, when the branch or directory already exists here
- * or on origin: an existing claim branch is another run's claim.
+ * An existing claim ref or a checkout at the claim path blocks provisioning.
+ * A Git-free residue directory can be removed before a new checkout is cut.
  *
  * @returns {Promise<{ claimCheckout: { repoPath: string, worktreePath: string, branchName: string, baseBranch: string } }|{ refused: string }>}
  */
 export async function provisionClaimCheckout({ app, sourceWorkspace, branch, worktreesRoot = PATHS.worktrees }) {
-  const [{ getDefaultBranch }, { addWorktreeWithRetry, linkWorktreeDependencies }] = await Promise.all([
-    import('./git/status.js'), import('./worktreeManager.js'),
+  const [{ getDefaultBranch }, { addWorktreeWithRetry, linkWorktreeDependencies }, { removeUnregisteredWorktreeResidue }] = await Promise.all([
+    import('./git/status.js'), import('./worktreeManager.js'), import('./worktree/remove.js'),
   ]);
   const issueNumber = branch.replace(/^claim\/issue-/, '');
   const worktreePath = claimCheckoutPath(app, issueNumber, worktreesRoot);
@@ -82,7 +83,6 @@ export async function provisionClaimCheckout({ app, sourceWorkspace, branch, wor
   const fetched = await execGit(['fetch', 'origin', baseBranch], sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
   if (fetched?.exitCode !== 0) return { refused: `fetching origin/${baseBranch} failed` };
 
-  if (existsSync(worktreePath)) return { refused: `${worktreePath} already exists` };
   const targetNum = Number(issueNumber);
   // Check every documented claim ref pattern (claim/issue-<n>, next/issue-<n>,
   // cos/<task>/issue-<n>/<agent>) locally and on origin so the agent does not
@@ -102,15 +102,21 @@ export async function provisionClaimCheckout({ app, sourceWorkspace, branch, wor
     .find(ref => ref === branch || claimIssueNumber(ref) === targetNum);
   if (remoteCollision) return { refused: `${remoteCollision} already exists on origin` };
 
-  await ensureDir(worktreesRoot);
-  // The shared add carries the long worktree timeout and lock retry: a large
-  // repository's checkout outlasts execGit's 30s default under load.
-  const addError = await addWorktreeWithRetry(['worktree', 'add', '--no-track', '-b', branch, worktreePath, `origin/${baseBranch}`],
-    sourceWorkspace).then(() => null, error => error);
-  if (addError) {
+  const refused = await queueWorktreeCreate(sourceWorkspace, async () => {
+    const absent = await lstat(worktreePath).then(() => false, error => error.code === 'ENOENT');
+    if (!absent && !await removeUnregisteredWorktreeResidue(sourceWorkspace, worktreePath, { worktreesRoot })) {
+      return `${worktreePath} already exists or could not be cleared`;
+    }
+    await ensureDir(worktreesRoot);
+    // The shared add carries the long worktree timeout and lock retry: a large
+    // repository's checkout outlasts execGit's 30s default under load.
+    const addError = await addWorktreeWithRetry(['worktree', 'add', '--no-track', '-b', branch, worktreePath, `origin/${baseBranch}`],
+      sourceWorkspace).then(() => null, error => error);
+    if (!addError) return null;
     await rollBackClaimCheckout(sourceWorkspace, worktreePath, branch, addError);
-    return { refused: `git worktree add failed: ${String(addError.message || '').trim().split('\n')[0]}` };
-  }
+    return `git worktree add failed: ${String(addError.message || '').trim().split('\n')[0]}`;
+  });
+  if (refused) return { refused };
 
   const dependencies = await linkWorktreeDependencies(sourceWorkspace, worktreePath, {
     verifyRootLockfile: app.id !== PORTOS_APP_ID,
