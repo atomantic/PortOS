@@ -11,6 +11,8 @@ export const SCOPE_ADHERENCE_FAILURE_CODES = Object.freeze([
   'scope-adherence-corpus-missing',
   'scope-adherence-corpus-unreadable',
   'scope-adherence-no-clause',
+  'scope-adherence-abuse-blocked',
+  'scope-adherence-screening-unavailable',
 ]);
 
 export const SCOPE_ADHERENCE_REASONS = Object.freeze({
@@ -20,6 +22,8 @@ export const SCOPE_ADHERENCE_REASONS = Object.freeze({
   'scope-adherence-corpus-missing': 'This repository has no PRD.md or GOALS.md to score against.',
   'scope-adherence-corpus-unreadable': 'This repository\'s PRD.md / GOALS.md could not be read.',
   'scope-adherence-no-clause': 'No stated goal in this repository is close enough to score against.',
+  'scope-adherence-abuse-blocked': 'No advisory: Abuse Guard flagged the supplied text.',
+  'scope-adherence-screening-unavailable': 'No advisory: Abuse Guard could not screen this text. Check Models > LLMs > Abuse Guard.',
   'jev-not-installed': 'The local scorer is not installed yet — see Models > Decision Classifiers > Jev.',
   'jev-start-failed': 'The local scorer could not start. Check Models > Decision Classifiers > Jev.',
   'jev-timeout': 'The local scorer did not answer in time.',
