@@ -29,7 +29,8 @@ vi.mock('../automationScheduler.js', () => ({
 }));
 
 vi.mock('./agentActivity.js', () => ({
-  logActivity: vi.fn().mockResolvedValue(undefined)
+  logActivity: vi.fn().mockResolvedValue(undefined),
+  getActivities: vi.fn().mockResolvedValue([])
 }));
 
 vi.mock('../platformAccounts.js', () => ({
@@ -59,16 +60,16 @@ vi.mock('./agentContentGenerator.js', () => ({
   assertMoltbookCommentProvider: vi.fn().mockResolvedValue(undefined)
 }));
 
-vi.mock('./agentFeedFilter.js', () => ({
-  findRelevantPosts: vi.fn().mockResolvedValue([]),
-  findReplyOpportunities: vi.fn().mockResolvedValue([])
+// The engage/monitor loops pause 1.5s between platform writes.
+vi.mock('../../lib/fileUtils.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  sleep: vi.fn().mockResolvedValue(undefined)
 }));
 
 import * as agentActivity from './agentActivity.js';
 import * as platformAccounts from '../platformAccounts.js';
 import * as agentPersonalities from './agentPersonalities.js';
 import { generatePost, generateComment, generateReply, assertMoltbookCommentProvider } from './agentContentGenerator.js';
-import { findRelevantPosts, findReplyOpportunities } from './agentFeedFilter.js';
 import { init } from './agentActionExecutor.js';
 
 const makeSchedule = (actionType, params = {}) => ({
@@ -88,9 +89,22 @@ const makeAgent = (overrides = {}) => ({
   id: 'agent-1',
   name: 'TestBot',
   enabled: true,
+  personality: { topics: ['robotics'] },
   aiConfig: { content: { providerId: 'p1', model: 'm1' }, engagement: { providerId: 'p1', model: 'm1' } },
   ...overrides
 });
+
+// Scores +3 for the topic, clearing the comment threshold (2).
+const matchingPost = (id) => ({ id, title: `Robotics update ${id}`, content: '', submolt: 'general' });
+
+async function runAction(type, params = {}) {
+  await executorRegistration.execute({
+    scheduleId: 's1',
+    schedule: makeSchedule(type, params),
+    timestamp: new Date().toISOString()
+  });
+  return agentActivity.logActivity.mock.calls.at(-1)[0];
+}
 
 describe('agentActionExecutor', () => {
   beforeEach(() => {
@@ -101,6 +115,9 @@ describe('agentActionExecutor', () => {
     generatePost.mockResolvedValue({ title: 'AI Title', content: 'AI Content' });
     generateComment.mockResolvedValue({ content: 'AI Comment' });
     generateReply.mockResolvedValue({ content: 'AI Reply' });
+    agentActivity.getActivities.mockResolvedValue([]);
+    mockMoltbookClient.getFeed.mockResolvedValue({ posts: [] });
+    mockMoltbookClient.getComments.mockResolvedValue({ comments: [] });
     init();
   });
 
@@ -413,9 +430,7 @@ describe('agentActionExecutor', () => {
     });
 
     it('should find relevant post and AI-generate comment when no postId', async () => {
-      findReplyOpportunities.mockResolvedValue([
-        { post: { id: 'p1', title: 'Test' }, comments: [], reason: 'relevant' }
-      ]);
+      mockMoltbookClient.getFeed.mockResolvedValue({ posts: [matchingPost('p1')] });
       mockMoltbookClient.createComment.mockResolvedValue({ id: 'c1' });
 
       await executorRegistration.execute({
@@ -425,15 +440,12 @@ describe('agentActionExecutor', () => {
       });
 
       await vi.waitFor(() => {
-        expect(findReplyOpportunities).toHaveBeenCalled();
         expect(generateComment).toHaveBeenCalled();
         expect(mockMoltbookClient.createComment).toHaveBeenCalledWith('p1', 'AI Comment');
       });
     });
 
     it('should return none when no relevant posts found', async () => {
-      findReplyOpportunities.mockResolvedValue([]);
-
       await executorRegistration.execute({
         scheduleId: 's1',
         schedule: makeSchedule('comment', {}),
@@ -490,7 +502,7 @@ describe('agentActionExecutor', () => {
         );
       });
       expect(assertMoltbookCommentProvider).toHaveBeenCalledWith('p1');
-      expect(findReplyOpportunities).not.toHaveBeenCalled();
+      expect(mockMoltbookClient.getFeed).not.toHaveBeenCalled();
       expect(generateComment).not.toHaveBeenCalled();
       expect(mockMoltbookClient.createComment).not.toHaveBeenCalled();
     });
@@ -518,7 +530,7 @@ describe('agentActionExecutor', () => {
           expect.objectContaining({ status: 'skipped', code: 'untrusted-content-provider-unavailable' })
         );
       });
-      expect(findRelevantPosts).not.toHaveBeenCalled();
+      expect(mockMoltbookClient.getFeed).not.toHaveBeenCalled();
       expect(generateComment).not.toHaveBeenCalled();
       expect(mockMoltbookClient.upvote).not.toHaveBeenCalled();
       expect(mockMoltbookClient.createComment).not.toHaveBeenCalled();
@@ -544,6 +556,104 @@ describe('agentActionExecutor', () => {
       expect(generateReply).not.toHaveBeenCalled();
       expect(mockMoltbookClient.upvoteComment).not.toHaveBeenCalled();
       expect(mockMoltbookClient.replyToComment).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('repeat engagement', () => {
+    beforeEach(() => {
+      platformAccounts.getAccountWithCredentials.mockResolvedValue(makeAccount());
+      agentPersonalities.getAgentById.mockResolvedValue(makeAgent());
+      mockMoltbookClient.upvote.mockResolvedValue({});
+      mockMoltbookClient.upvoteComment.mockResolvedValue({});
+      mockMoltbookClient.createComment.mockResolvedValue({ id: 'new-comment' });
+      mockMoltbookClient.replyToComment.mockResolvedValue({ id: 'new-reply' });
+    });
+
+    it.each(['engage', 'comment'])('%s skips a hot post the agent already commented on and takes the next one', async (type) => {
+      mockMoltbookClient.getFeed.mockResolvedValue({ posts: ['a', 'b', 'c', 'd', 'e'].map(matchingPost) });
+      mockMoltbookClient.getComments.mockImplementation(async (postId) => ({
+        comments: postId === 'e' ? [{ author: 'someone-else' }] : [{ author: { name: 'testuser' } }]
+      }));
+
+      await runAction(type, type === 'engage' ? { maxComments: 1, maxVotes: 0 } : {});
+
+      expect(mockMoltbookClient.createComment.mock.calls).toEqual([['e', 'AI Comment']]);
+    });
+
+    it('does not comment on off-topic posts that carry no submolt', async () => {
+      mockMoltbookClient.getFeed.mockResolvedValue({ posts: [{ id: 'off-topic', title: 'Gardening', content: '' }] });
+
+      const logged = await runAction('comment');
+
+      expect(mockMoltbookClient.createComment).not.toHaveBeenCalled();
+      expect(logged.result).toMatchObject({ action: 'none' });
+    });
+
+    it('records only the votes and comments the platform accepted, with the comment id', async () => {
+      mockMoltbookClient.getFeed.mockResolvedValue({ posts: ['a', 'b'].map(matchingPost) });
+      mockMoltbookClient.upvote.mockRejectedValueOnce(new Error('503'));
+      mockMoltbookClient.createComment
+        .mockRejectedValueOnce(new Error('503'))
+        .mockResolvedValueOnce({ id: 'c-b' });
+
+      const logged = await runAction('engage', { maxComments: 2, maxVotes: 2 });
+
+      expect(logged).toMatchObject({ status: 'completed' });
+      expect(logged.result.votes.map(v => v.postId)).toEqual(['b']);
+      expect(logged.result.comments).toEqual([expect.objectContaining({ postId: 'b', commentId: 'c-b' })]);
+    });
+
+    it('logs an unsolved verification challenge instead of a completed publication', async () => {
+      mockMoltbookClient.createPost.mockResolvedValue({ post: { id: 'p1' }, verification_solved: false });
+
+      const logged = await runAction('post', { title: 'T', content: 'C' });
+
+      expect(logged.status).toBe('verification_failed');
+    });
+
+    it('solves challenges with the agent\'s pinned challenge provider', async () => {
+      agentPersonalities.getAgentById.mockResolvedValue(makeAgent({ aiConfig: { challenge: { providerId: 'solver' } } }));
+      mockMoltbookClient.createPost.mockResolvedValue({ post: { id: 'p1' } });
+
+      await runAction('post', { title: 'T', content: 'C' });
+
+      expect(mockMoltbookClient.aiConfig).toEqual({ providerId: 'solver' });
+    });
+
+    it('monitor replies once per comment across runs, even when an earlier run was suspended', async () => {
+      mockMoltbookClient.getPostsByAuthor.mockResolvedValue([
+        { id: 'mine', title: 'Mine', created_at: new Date().toISOString() }
+      ]);
+      mockMoltbookClient.getComments.mockResolvedValue({ comments: [
+        { id: 'logged', author: 'a' },
+        { id: 'threaded', author: 'b' },
+        { id: 'own', author: 'testuser', parent_id: 'threaded' },
+        { id: 'fresh', author: 'c' }
+      ] });
+      agentActivity.getActivities.mockImplementation(async (_agentId, { action, date }) => (
+        action === 'monitor' && date.toDateString() === new Date().toDateString()
+          ? [{ status: 'failed', result: { replied: [{ commentId: 'logged' }], upvoted: [{ commentId: 'logged' }] } }, { status: 'failed', result: null }]
+          : []
+      ));
+
+      const logged = await runAction('monitor', { days: 2, maxReplies: 5, maxUpvotes: 5 });
+
+      expect(mockMoltbookClient.replyToComment.mock.calls).toEqual([['mine', 'fresh', 'AI Reply']]);
+      expect(mockMoltbookClient.upvoteComment.mock.calls.flat()).toEqual(['threaded', 'fresh']);
+      expect(logged.result.replied.map(r => r.commentId)).toEqual(['fresh']);
+    });
+
+    it('monitor keeps a failed reply retryable by not recording it', async () => {
+      mockMoltbookClient.getPostsByAuthor.mockResolvedValue([
+        { id: 'mine', title: 'Mine', created_at: new Date().toISOString() }
+      ]);
+      mockMoltbookClient.getComments.mockResolvedValue({ comments: [{ id: 'c1', author: 'a' }] });
+      mockMoltbookClient.upvoteComment.mockRejectedValueOnce(new Error('503'));
+      mockMoltbookClient.replyToComment.mockRejectedValueOnce(new Error('503'));
+
+      const logged = await runAction('monitor', { maxReplies: 1, maxUpvotes: 1 });
+
+      expect(logged.result).toMatchObject({ replied: [], upvoted: [] });
     });
   });
 

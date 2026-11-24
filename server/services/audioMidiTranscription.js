@@ -35,6 +35,7 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { MUSCRIPTOR_MODELS } from '../lib/muscriptorModels.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { hfChildEnv } from './hfToken.js';
+import { trackedRenderMap } from './renderActivity.js';
 import { isGatedRepoError, extractGatedRepo } from '../lib/hfErrors.js';
 import { resolveMuscriptorPython, isMuscriptorRuntimeReady, MUSCRIPTOR_VENV_DEFAULT } from '../lib/pythonSetup.js';
 import { runSidecarProcess, parseSidecarResult } from '../lib/sidecarProcess.js';
@@ -133,7 +134,7 @@ export function buildMuscriptorArgs({ pythonPath, scriptPath = MUSCRIPTOR_SCRIPT
 }
 
 // jobId -> { clients, lastPayload, process }
-const transcriptionJobs = new Map();
+const transcriptionJobs = trackedRenderMap('midi-transcription', { noun: 'MIDI transcription' });
 
 // ownerKey (e.g. a music-video project id) -> running jobId, so a reloaded page can reattach.
 const activeByOwner = new Map();

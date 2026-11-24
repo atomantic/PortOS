@@ -9,6 +9,7 @@ import { isPlainObject } from '../../lib/objects.js';
 import { emitLog } from './cosEvents.js';
 import { PRIORITY_VALUES } from '../../lib/taskParser.js';
 import { updateAppActivity } from '../appActivity.js';
+import { resolveAuditPriorityScope } from '../featurePriorities.js';
 import { getAppTaskTypeOverrides } from '../apps.js';
 import { resolveAgentProviderPin } from '../appTaskProviderPin.js';
 import { resolveAppPrCompletion } from '../../lib/prDisposition.js';
@@ -513,8 +514,10 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   }
   const planConstraintBlock = buildPlanConstraintBlock(metadata.planId);
 
+  // Resolved here, not inside the prompt builder and not as a task data input: the scope changes the coverage
+  // contract in the same prompt, so the two must come from one place. Null for a managed app or a failed lookup.
   const modeInstructions = isAuditTaskType(taskType)
-    ? `${modeContractFor(fileIssues)}\n\n${auditQualityInstructions(taskType, app)}`
+    ? `${modeContractFor(fileIssues)}\n\n${auditQualityInstructions(taskType, app, { priorityScope: await resolveAuditPriorityScope(app, taskType) })}`
     : '';
   // Resolve completion before rendering reviewers, including claim flows that
   // own their PR while intentionally disabling CoS worktree provisioning.

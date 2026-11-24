@@ -54,6 +54,17 @@ vi.mock('../taskSchedule.js', () => ({
   recordPerpetualDispatch: vi.fn(async () => 1),
 }));
 
+// The feature priority scope a PortOS audit would resolve. Null is what a managed app, or an install whose usage
+// store is unreachable, gets; the resolver itself is covered in featurePriorities.test.js.
+const priorityScope = vi.hoisted(() => ({ value: null }));
+vi.mock('../featurePriorities.js', () => ({
+  resolveAuditPriorityScope: vi.fn(async () => priorityScope.value),
+}));
+vi.mock('../../lib/auditQuality.js', async (importActual) => {
+  const actual = await importActual();
+  return { ...actual, auditQualityInstructions: vi.fn(actual.auditQualityInstructions) };
+});
+
 vi.mock('../appActivity.js', async (importActual) => ({
   ...(await importActual()),
   updateAppActivity: vi.fn(async () => {}),
@@ -150,6 +161,62 @@ const expectNoCodeDelivery = (prompt, label) => {
     expect(pattern.test(prompt), `${label}: emitted a ${name}`).toBe(false);
   }
 };
+
+describe('audit dispatch passes the resolved feature priority scope into the audit contract (#18524)', () => {
+  const SCOPE = {
+    exempt: false,
+    p0: [{ label: 'Daily Area', globs: ['server/services/daily/**'] }],
+    p2: [],
+    p3: [{ label: 'Dormant Area', globs: ['server/services/dormant*'] }],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    promptTemplate.body = AUDIT_TEMPLATE;
+    applicability.inapplicable = {};
+    priorityScope.value = null;
+  });
+
+  it('resolves the scope for the app and task being prepared and hands it over unchanged', async () => {
+    const { resolveAuditPriorityScope } = await import('../featurePriorities.js');
+    const { auditQualityInstructions } = await import('../../lib/auditQuality.js');
+    priorityScope.value = SCOPE;
+    const app = makeApp({ id: 'portos-default', name: 'PortOS' });
+
+    const { task } = await prepareManagedAppImprovementTask('performance-efficiency', app, STATE);
+    expect(resolveAuditPriorityScope).toHaveBeenCalledTimes(1);
+    expect(resolveAuditPriorityScope).toHaveBeenCalledWith(app, 'performance-efficiency');
+    expect(auditQualityInstructions).toHaveBeenCalledTimes(1);
+    expect(auditQualityInstructions).toHaveBeenCalledWith('performance-efficiency', app, { priorityScope: SCOPE });
+    expect(auditQualityInstructions.mock.calls[0][2].priorityScope).toBe(SCOPE);
+
+    const prompt = renderPrompt(task);
+    expect(prompt).toContain('## Feature priority scope');
+    expect(prompt).toContain('  - Dormant Area: `server/services/dormant*`');
+    expect(prompt.indexOf('## Feature priority scope')).toBeLessThan(prompt.indexOf('## Reachability check'));
+  });
+
+  it('renders the unscoped prompt when no scope resolves, as for a managed app or an unreachable usage store', async () => {
+    const { auditQualityInstructions } = await import('../../lib/auditQuality.js');
+    const { auditQualityInstructions: build } = await vi.importActual('../../lib/auditQuality.js');
+    const app = makeApp();
+
+    const { task } = await prepareManagedAppImprovementTask('performance-efficiency', app, STATE);
+    expect(auditQualityInstructions).toHaveBeenCalledWith('performance-efficiency', app, { priorityScope: null });
+    expect(task.description).toContain(build('performance-efficiency', app));
+    expect(task.description).not.toContain('Feature priority scope');
+  });
+
+  it('does not resolve a scope for a task that is not an audit', async () => {
+    const { resolveAuditPriorityScope } = await import('../featurePriorities.js');
+    priorityScope.value = SCOPE;
+    promptTemplate.body = '# Work {appName}';
+    const { task } = await prepareManagedAppImprovementTask('feature-ideas', makeApp({ id: 'portos-default' }), STATE, { skipPreconditions: true });
+    expect(task).not.toBeNull();
+    expect(resolveAuditPriorityScope).not.toHaveBeenCalled();
+    expect(task.description).not.toContain('Feature priority scope');
+  });
+});
 
 describe('issues-only audit dispatch never acquires code-shipping instructions (#6380)', () => {
   beforeEach(() => {

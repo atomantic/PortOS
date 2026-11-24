@@ -66,8 +66,10 @@ import {
   YOUTUBE_INGEST_URL_RE,
   assertYoutubeIngestUrl,
   cancelYoutubeIngest,
+  listActiveYoutubeIngests,
   __testing,
 } from './youtubeIngest.js';
+import { listActiveRenders } from './renderActivity.js';
 
 afterAll(async () => {
   const { cleanupTempDataRoots } = await import('../lib/mockPathsDataRoot.js');
@@ -207,7 +209,7 @@ describe('YouTube ingest audio handoff', () => {
     await Promise.all([...downloadedPaths, unrelatedTempPath].filter(Boolean).map((path) => rm(path, { force: true })));
   });
 
-  async function runAudioIngest() {
+  async function runAudioIngest(input = {}) {
     const { attachIngestSseClient } = await import('./youtubeIngest.js');
     let resolveTerminal;
     const terminal = new Promise((resolve) => { resolveTerminal = resolve; });
@@ -231,6 +233,7 @@ describe('YouTube ingest audio handoff', () => {
       url: 'https://youtu.be/oCnxnaVg0bY',
       captureTranscript: false,
       ingestAudio: true,
+      ...input,
     });
     expect(attachIngestSseClient(jobId, response)).toBe(true);
     return { terminal, response, jobId };
@@ -248,6 +251,24 @@ describe('YouTube ingest audio handoff', () => {
     expect(testDoubles.copyFileGuarded).toHaveBeenCalledWith(downloadedPaths[0], expect.stringContaining('.mp3.part'));
     expect(testDoubles.rename).not.toHaveBeenCalledWith(downloadedPaths[0], audioPath);
     for (const path of downloadedPaths) await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('tells the user when the review task they asked for was not queued', async () => {
+    const { getAppById } = await import('./apps.js');
+    getAppById.mockResolvedValue({ id: 'example', name: 'Example', repoPath: '/example' });
+    const { addTask } = await import('./cos/cosTaskStore.js');
+    addTask.mockRejectedValueOnce(new Error('database unavailable'));
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { terminal } = await runAudioIngest({ agentPrompt: 'Improve search.', targetAppId: 'example', workMode: 'implement' });
+    expect(listActiveYoutubeIngests()).toEqual([{ jobId: expect.any(String), videoId: 'oCnxnaVg0bY' }]);
+    expect(listActiveRenders()).toContainEqual(expect.objectContaining({ kind: 'youtube-ingest' }));
+    const { payload } = await terminal;
+    expect(payload).toMatchObject({
+      type: 'complete', ingest: { taskId: null },
+      warnings: ['The review task could not be queued. Ingest this video again to retry it'],
+    });
+    expect(listActiveYoutubeIngests()).toEqual([]);
+    errorLog.mockRestore();
   });
 
   it('cleans this job after a post-download copy failure and preserves prior audio', async () => {

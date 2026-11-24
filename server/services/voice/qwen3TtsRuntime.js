@@ -61,8 +61,7 @@ export async function resolveQwen3Python() {
   if (existsSync(QWEN3_TTS_VENV_PYTHON)) {
     return QWEN3_TTS_VENV_PYTHON;
   }
-  const sysPython = await whichFirst('python3', 'python');
-  return sysPython || null;
+  return (await whichFirst('python3')) || (await whichFirst('python')) || null;
 }
 
 /**

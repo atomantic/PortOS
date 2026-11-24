@@ -1,5 +1,5 @@
 import { lstatSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 import { parse } from '@babel/parser';
 import { execFileSync } from '../lib/childProcess.js';
 
@@ -143,11 +143,27 @@ function printSection(label, section, limit) {
   if (!entries.length) console.log('  (none)');
 }
 
+// Repeatable `--exclude <glob>` (or `--exclude=<glob>`): path.matchesGlob patterns over repository-relative paths.
+// An unknown argument or a missing value is an error, so a mistyped flag cannot pass as an unfiltered scan.
+function parseExcludes(args) {
+  const globs = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    const glob = arg === '--exclude' ? args[++index] : arg.startsWith('--exclude=') ? arg.slice('--exclude='.length) : null;
+    if (glob === null) throw new Error(`unknown argument ${arg}; usage: complexity-report.js [--exclude <glob>]...`);
+    if (!glob) throw new Error('--exclude needs a glob');
+    globs.push(glob);
+  }
+  return globs;
+}
+
 function run() {
+  const excludes = parseExcludes(process.argv.slice(2));
   const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
   const deleted = new Set(gitLines(root, ['ls-files', '--deleted', '-z']));
-  const paths = [...new Set(gitLines(root, ['ls-files', '--cached', '--others', '--exclude-standard', '-z']))]
+  const candidates = [...new Set(gitLines(root, ['ls-files', '--cached', '--others', '--exclude-standard', '-z']))]
     .filter(path => !deleted.has(path) && eligible(path)).sort();
+  const paths = candidates.filter(path => !excludes.some(glob => posix.matchesGlob(path, glob)));
   const sections = {
     source: { files: 0, scanned: 0, count: 0, limit: SOURCE_LIMIT, entries: [] },
     tests: { files: 0, scanned: 0, count: 0, limit: TEST_LIMIT, entries: [] },
@@ -180,6 +196,7 @@ function run() {
 
   console.log('Cyclomatic complexity: classic variant (report only; a score is not a finding)');
   console.log('Scope: tracked and unignored untracked JS/JSX/MJS/CJS; excludes generated, vendor, build and migration files. Other languages are not scanned.');
+  if (excludes.length) console.log(`Excluded: ${candidates.length - paths.length} file(s) matching ${excludes.length} --exclude glob(s)`);
   printSection('Source', sections.source, SOURCE_LIMIT);
   printSection('Tests and fixtures', sections.tests, TEST_LIMIT);
   if (failures.length) {

@@ -9,7 +9,7 @@
 
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
-import { CONSOLIDATED_AUDIT_DOMAINS, QUALITY_HEALTHY_THRESHOLD, QUALITY_RECENCY_HALF_LIFE_DAYS, auditDomainFor } from './auditDomains.js';
+import { CONSOLIDATED_AUDIT_DOMAINS, QUALITY_HEALTHY_THRESHOLD, QUALITY_RECENCY_HALF_LIFE_DAYS, auditDomainFor, isPriorityExemptAuditType } from './auditDomains.js';
 import { AUDIT_DEFINITIONS, AUDIT_EXECUTION_PROFILES, isAuditTaskType, normalizeAuditTaskType } from './auditCatalog.js';
 import { safeJSONParse } from './jsonIo.js';
 
@@ -89,7 +89,42 @@ ${deploymentModelSource(app)}
 Weigh every candidate by how likely it is to happen under that model, and rank by likelihood times impact. Drop a finding that needs a condition the model rules out, and do not add machinery against it; keep every condition the model allows. For example, a single-user install rules out two different people editing the same record, while a multi-user app keeps those races, permission boundaries and tenant isolation in scope. Even one person produces concurrency, so these stay in scope for every model: the same action fired twice (double click, retry after a timeout), two tabs or devices on one record, background or scheduled jobs running while the user works, parallel jobs sharing a file, record or external resource, sync with the user's other machines, and a restart in the middle of an operation. A race finding names both actors and how they come to overlap in real use; if you cannot name a realistic pair, it is not a finding.`;
 }
 
-export function auditQualityInstructions(taskType, app) {
+const scopeAreas = areas => (Array.isArray(areas) ? areas : [])
+  .filter(entry => typeof entry?.label === 'string' && Array.isArray(entry.globs) && entry.globs.length > 0);
+const scopeAreaLines = areas => areas.map(({ label, globs }) => `  - ${label}: ${globs.map(glob => `\`${glob}\``).join(', ')}`).join('\n');
+
+/**
+ * The install's feature tiers as audit scope (#18524). Reads each area's label and globs only, so a usage count,
+ * date or tier source can never reach a prompt, and returns '' when there is nothing to say so the prompt stays
+ * byte-identical to the unscoped one. An exempt lane (security, privacy, data integrity) keeps dormant areas in
+ * scope; every other lane drops them from the inventory its coverage counts are measured against.
+ */
+function featurePriorityScope(category, priorityScope) {
+  const [p0, p2, p3] = ['p0', 'p2', 'p3'].map(tier => scopeAreas(priorityScope?.[tier]));
+  const exempt = isPriorityExemptAuditType(category);
+  if (exempt ? !p3.length : !(p0.length || p2.length || p3.length)) return '';
+  const rules = exempt
+    ? [`- P3 areas stay fully in scope for this lane and nothing is removed from the inventory: a vulnerability or migration bug in a dormant feature still shares the server, database, credentials and host privileges. Do not skip or down-rank these paths because the feature is unused.\n${scopeAreaLines(p3)}`]
+    : [
+      p3.length ? `- P3, out of scope for this lane: remove every path matching these globs from the step 1 inventory before the signal scan, and never choose one as the slice or name it in AUDIT_SLICE. totalFiles and scannedFiles count only the inventory that remains, so coverage "broad" means every remaining file was scanned. A verified defect in P3 code met while tracing something else is still filed.\n${scopeAreaLines(p3)}` : '',
+      p3.length && AUDIT_DISCOVERY[category].includes('quality:complexity') ? `- Complexity shortlist without the P3 paths (only where the repository has the quality:complexity script): npm run quality:complexity -- ${p3.flatMap(({ globs }) => globs).map(glob => `--exclude '${glob}'`).join(' ')}` : '',
+      p2.length ? `- P2: file or fix verified functional or reliability defects only. No polish, micro-optimization, refactor, copy or speculative test work.\n${scopeAreaLines(p2)}` : '',
+      p0.length ? `- P0: the first tie-break after severity and user impact, ahead of churn and fan-in, and preferred when rotating slices.\n${scopeAreaLines(p0)}` : '',
+      '- A path matching none of the globs above is audited as P1 under the steps above: it belongs to a normally used area or is shared code.',
+    ].filter(Boolean);
+  return `## Feature priority scope
+
+This install ranks its feature areas by tier, from P0 (heavy daily use) to P3 (dormant). The tiers describe this install only: do not restate tiers, these lists or this section in issues, pull requests or commit messages. The patterns are Node path.matchesGlob globs over repository-relative paths (brace lists and !(...) negations included), not git pathspecs.
+${rules.join('\n')}
+
+`;
+}
+
+/**
+ * `priorityScope` is `{ p0, p2, p3 }`, each a list of `{ label, globs }` (see `resolveAuditPriorityScope`); the
+ * caller resolves it so this module stays pure. Absent, null or empty leaves the prompt unchanged.
+ */
+export function auditQualityInstructions(taskType, app, { priorityScope = null } = {}) {
   const category = normalizeAuditTaskType(taskType);
   if (!isAuditTaskType(category)) return '';
   return `## Repository-wide discovery, worst offender first, and quality assessment
@@ -108,7 +143,7 @@ ${category === 'security' ? `   Security assessment: require evidence of attacke
 QUALITY_AUDIT_JSON: {"version":2,"category":"${category}","slice":"top-level paths or area deep-reviewed","sliceScore":null,"worstSeverity":0,"coverage":"unavailable","confidence":"low","summary":"Explain the slice assessment and strongest evidence","scannedFiles":0,"totalFiles":0}
 Allowed coverage: broad, partial, unavailable, not-applicable. Allowed confidence: low, medium, high. coverage describes the signal scan in step 1, not the deep review: scannedFiles counts files actually included in the category signal scan; totalFiles is the eligible inventory. Broad requires the whole inventory to be scanned (deep review remains bounded). Partial assessments are excluded from the overall score. For partial coverage, use sliceScore:null when the inspected evidence cannot support a slice score; explain why rather than inventing one. A numeric partial score is provisional. If unavailable or not-applicable, sliceScore must be null and explain why. Even a zero-finding audit returns this assessment.
 
-${reachabilityCheck(app)}`;
+${featurePriorityScope(category, priorityScope)}${reachabilityCheck(app)}`;
 }
 
 export const appQualityQuerySchema = z.object({ includeQuality: z.enum(['true', 'false']).optional() });

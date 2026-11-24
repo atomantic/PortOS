@@ -40,7 +40,6 @@ const EXTERNAL_CONSUMER_EVENTS = [
 ];
 const TRACKED_UNLISTENED_EVENTS = [
   'calendar:sync:failed', 'calendar:sync:started',
-  'feature-priorities:updated', // consumed by the Settings > Features tier controls (#18525), which removes this entry
   'health:xml:complete',
   'messages:sync:auth-required', 'messages:sync:failed', 'messages:sync:started',
   'provider:error',

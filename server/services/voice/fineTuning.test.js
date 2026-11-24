@@ -46,6 +46,7 @@ vi.mock('./qwen3TtsRuntime.js', async (importOriginal) => {
   return { ...actual, getQwen3RuntimeStatus: async () => runtimeOverride ?? actual.getQwen3RuntimeStatus() };
 });
 
+const { listActiveRenders } = await import('../renderActivity.js');
 const { fineTuningEvents } = await import('./fineTuningEvents.js');
 const {
   validateFineTuningDataset,
@@ -103,15 +104,15 @@ const jobRecordPath = (jobId) => join(voiceProfilesRoot, PROFILE.id, 'fine-tune'
  * are driven by the state machine rather than by however long a real Python
  * interpreter needs to start on a contended CI worker (#6268).
  *
- * It models node's abort contract exactly — `error` with an AbortError on the
- * next tick, then `close(null, 'SIGTERM')` — because that ordering is what
- * decides whether a cancelled job settles as 'cancelled' or 'failed'.
+ * SIGTERM closes it on the next tick, as a trainer with no handler does; a test
+ * that needs one which outlives SIGTERM replaces `kill`.
  */
-const createScriptedChild = ({ signal } = {}) => {
+const createScriptedChild = () => {
   const child = new EventEmitter();
+  Object.assign(child, { pid: 4242, exitCode: null, signalCode: null });
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
-  child.kill = vi.fn();
+  child.kill = vi.fn((signal) => process.nextTick(() => child.exit(null, signal)));
   // Frames mirror the runner's stdout contract (scripts/ml/qwen3_tts_runner.py);
   // they describe the contract a real training adapter must emit.
   child.emitFrames = (...frames) => {
@@ -120,15 +121,6 @@ const createScriptedChild = ({ signal } = {}) => {
     }
   };
   child.exit = (code = 0, signal = null) => child.emit('close', code, signal);
-  signal?.addEventListener('abort', () => {
-    child.kill('SIGTERM');
-    process.nextTick(() => {
-      const err = new Error('The operation was aborted');
-      err.name = 'AbortError';
-      child.emit('error', err);
-      child.emit('close', null, 'SIGTERM');
-    });
-  }, { once: true });
   return child;
 };
 
@@ -294,7 +286,7 @@ describe('fineTuning', () => {
     await drainJobRecord(jobId);
   });
 
-  it('settles a cancelled job as cancelled even though the abort also fires an error', async () => {
+  it('settles a cancelled job as cancelled even though its child closes on a signal', async () => {
     queryMock.mockResolvedValue({ rows: [{ data: PROFILE }] });
     await seedSourceAudio();
     const scripted = useScriptedRunner();
@@ -308,7 +300,7 @@ describe('fineTuning', () => {
     // trainer burning the machine for the rest of its epochs.
     expect(scripted().kill).toHaveBeenCalled();
 
-    // The AbortError arrives AFTER cancel wrote 'cancelled'. Without the
+    // The close arrives AFTER cancel wrote 'cancelled'. Without the
     // first-terminal-event guard it overwrites the outcome with 'failed', both
     // in memory and in the sidecar the operator reads after a restart.
     const record = await drainJobRecord(startRes.jobId);
@@ -433,9 +425,11 @@ describe('fineTuning', () => {
     useScriptedRunner();
     const spawned = [];
     const scriptedSpawn = spawnOverride;
-    // No abort wiring: this test decides when an aborted trainer actually exits.
+    // This test decides when a canceled trainer actually exits.
     spawnOverride = (command, args, options) => {
-      const child = scriptedSpawn(command, args, { ...options, signal: undefined });
+      expect(options.signal).toBeUndefined(); // an abort signal reports 'error' before the exit
+      const child = scriptedSpawn(command, args, options);
+      child.kill = vi.fn();
       spawned.push(child);
       return child;
     };
@@ -457,6 +451,10 @@ describe('fineTuning', () => {
     // hold the GPU until it exits, so the voice stays busy until then.
     const cancelled = cancelFineTuningJob(started[0].value.jobId, PROFILE.id);
     expect(cancelled.job).toMatchObject({ status: 'cancelled', processActive: true });
+    expect(spawned[0].kill).toHaveBeenCalledWith('SIGTERM');
+    // A failed signal is reported on the live child; it is not an exit.
+    spawned[0].emit('error', new Error('kill EPERM'));
+    expect(listActiveRenders()).toContainEqual(expect.objectContaining({ kind: 'voice-fine-tune', to: `/voices/${PROFILE.id}` }));
     await expect(startFineTuningJob({ profileId: PROFILE.id, epochs: 2 }))
       .rejects.toMatchObject({ status: 409, code: 'FINE_TUNE_ALREADY_RUNNING' });
     expect(spawned).toHaveLength(1);

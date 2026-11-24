@@ -35,13 +35,15 @@ export default function VideoDownloaderPage() {
 
   // An outstanding list predates the completed download: supersede that read.
   // Once ready, keep the immediate local update without another request.
-  const { active, percent, stage, start, cancel } = useVideoDownload({
+  const { active, percent, stage, context, start, cancel } = useVideoDownload({
+    reattach: true,
     onComplete: (video) => {
       if (video) {
         if (state !== 'ready') retry();
         else setDownloads((prev) => [video, ...prev.filter((d) => d.id !== video.id)]);
       }
-      setUrl('');
+      // A reattached download did not come from the box.
+      setUrl((current) => (current.trim() === video?.sourceUrl ? '' : current));
     },
   });
 
@@ -132,6 +134,7 @@ export default function VideoDownloaderPage() {
                   Cancel
                 </button>
               </div>
+              {context && context !== url.trim() && <p className="text-[11px] text-gray-500 truncate">{context}</p>}
               <div className="mt-1 h-1 bg-port-border rounded overflow-hidden">
                 <div className="h-full bg-port-accent transition-all" style={{ width: `${percent}%` }} />
               </div>

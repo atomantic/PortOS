@@ -10,8 +10,11 @@
  */
 
 import toast from './ui/Toast';
-import { startYoutubeIngest, cancelYoutubeIngest, youtubeIngestEventsUrl } from '../services/apiBrain.js';
+import { startYoutubeIngest, cancelYoutubeIngest, listActiveYoutubeIngests, youtubeIngestEventsUrl } from '../services/apiBrain.js';
 import useSseJobSlot from '../hooks/useSseJobSlot.js';
+
+// Context of an ingest an earlier page started.
+const REATTACHED = Object.freeze({ reattached: true });
 
 /**
  * One YouTube brain-ingest job slot — start/cancel + SSE progress + terminal
@@ -21,6 +24,9 @@ import useSseJobSlot from '../hooks/useSseJobSlot.js';
  * `start(body)` takes the whole ingest payload (`{ url, captureTranscript,
  * downloadVideo, ingestAudio, note, agentPrompt, tags }`) rather than a bare URL, so
  * `trimStartArg` stays false and the payload passes through untouched.
+ *
+ * An ingest still running when the surface mounts is adopted, so leaving the page
+ * loses neither its progress, its Cancel control nor its warnings.
  *
  * `onKickoffError(err, body)` / `onKickoffSuccess(jobId, body)` hand the host the
  * rejected (or acknowledged) payload so it can keep a failed one recoverable.
@@ -34,9 +40,12 @@ export default function useYoutubeIngest({ onComplete, onKickoffError, onKickoff
     startRequest: (body) => startYoutubeIngest(body, { silent: true }),
     eventsUrl: youtubeIngestEventsUrl,
     cancelRequest: cancelYoutubeIngest,
-    onComplete: (frame) => {
+    findActive: () => listActiveYoutubeIngests({ silent: true })
+      .then(({ jobs }) => (jobs?.[0] ? { jobId: jobs[0].jobId, context: REATTACHED } : null)),
+    onComplete: (frame, context) => {
       for (const message of frame.warnings || []) toast.info(message);
-      onComplete?.(frame.ingest);
+      // The form's fields belong to a later draft, not to the reattached job.
+      if (context !== REATTACHED) onComplete?.(frame.ingest);
     },
     successToast: (frame) => (
       frame.ingest?.taskId

@@ -47,6 +47,8 @@ commands target the PM2 listener.
 | 5566 | jev sidecar (loopback) | - | Loopback openjev entailment scorer. Not a PM2 process: `server/services/jev.js` starts it on the first scoring call and reaps it after ten idle minutes. See [JEV_SETUP.md](./JEV_SETUP.md). |
 | 5568 | portos-llama-server | - | Loopback llama.cpp speculative-decoding server. Optional PM2 process, started/stopped from Models → Runtimes. |
 | 8000 | portos-mtplx | - | Loopback MTPLX OpenAI-compatible API (upstream's own default, kept so the shipped provider presets match). Optional PM2 process, started/stopped from Models → Runtimes. See [features/mtplx.md](./features/mtplx.md). |
+| 8001 | portos-splash | - | Loopback Splash API; managed from Models → Runtimes. |
+| 8002 | portos-mkserve | - | Loopback mkserve API; managed from Models → Runtimes. |
 | 18022 | PortOS model host | - | Opt-in bearer-authenticated inference queue for dedicated hosts; one active generation. See [fleet host](./features/fleet-llm-host.md). |
 | 18020 | vLLM (Docker) | - | Loopback vLLM Qwen3.8-27B / DFlash 2 container on an RTX 3090 host. Started explicitly from host setup or by the operator. Dedicated hosting opts into Docker restart persistence. See [features/qwen38-rtx3090.md](./features/qwen38-rtx3090.md). |
 | 18021 | SGLang (Docker) | - | Loopback SGLang Qwen3.8-27B container on a Hopper/Blackwell host. Operator-started (`docker compose up -d`) — PortOS never brings it up on boot. See [features/sglang-qwen38.md](./features/sglang-qwen38.md). |
@@ -93,6 +95,8 @@ Define all ports in a top-level `PORTS` object as the single source of truth:
 // =============================================================================
 // Port Configuration - All ports defined here as single source of truth
 // =============================================================================
+const path = require('path');
+
 const PORTS = {
   API: 5570,        // REST API server
   UI: 5571,         // Web UI
@@ -112,7 +116,8 @@ module.exports = {
     },
     {
       name: 'my-ui',
-      script: 'node_modules/.bin/vite',
+      script: path.join(__dirname, 'client', 'node_modules', 'vite', 'bin', 'vite.js'),
+      cwd: path.join(__dirname, 'client'),
       args: `--port ${PORTS.UI}`,
       env: {
         VITE_PORT: PORTS.UI
@@ -176,12 +181,12 @@ PortOS automatically detects ports from env vars:
 > That guard covers the Eidoverse bridge only — it is not a general defence, which is
 > why the range rule above still matters.
 
-PostgreSQL in native mode listens on the system default `:5432`, outside these ranges. Two third-party
-local runtimes also sit outside them, each on its own upstream default so an unmodified install works
-against PortOS without editing anything: MTPLX on `:8000` and the vLLM Qwen3.8-27B container on
-`:18020` (`syv-ai/qwen38-27b-rtx3090`'s own compose file). The SGLang Qwen3.8-27B container sits
-next to it on `:18021` — that port is PortOS's own choice rather than an upstream default, since
-SGLang publishes an image but no compose project (its own default is `:30000`).
+PostgreSQL in native mode listens on the system default `:5432`, outside these ranges. Several local
+and dedicated-host runtimes also sit outside them: MTPLX on `:8000` (its upstream default) with
+managed Splash (`:8001`) and mkserve (`:8002`) beside it; the vLLM Qwen3.8-27B container on
+`:18020` (`syv-ai/qwen38-27b-rtx3090`'s own compose file); the SGLang Qwen3.8-27B container on
+`:18021` (PortOS's own choice rather than SGLang's `:30000` default); and the authenticated
+Fleet LLM host on `:18022`.
 
 ## Viewing Port Usage
 

@@ -1,13 +1,17 @@
 import { EventEmitter } from 'node:events';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('../../lib/childProcess.js', () => ({ spawn: vi.fn() }));
 vi.mock('../../lib/processEnv.js', () => ({
   whichFirst: vi.fn().mockResolvedValue('python3'), safeChildProcessOptions: (options) => options,
 }));
+import { existsSync } from 'node:fs';
 import { spawn } from '../../lib/childProcess.js';
+import { whichFirst } from '../../lib/processEnv.js';
 import {
   SUPPORTED_QWEN3_MODELS,
+  QWEN3_TTS_VENV_PYTHON,
   getQwen3RuntimeStatus,
+  resolveQwen3Python,
 } from './qwen3TtsRuntime.js';
 
 describe('qwen3TtsRuntime', () => {
@@ -26,6 +30,24 @@ describe('qwen3TtsRuntime', () => {
   });
 
   beforeEach(() => vi.clearAllMocks());
+
+  // The isolated venv short-circuits system lookup, so these only apply when it is absent.
+  describe.skipIf(existsSync(QWEN3_TTS_VENV_PYTHON))('resolveQwen3Python system fallback', () => {
+    afterEach(() => whichFirst.mockImplementation(async () => 'python3'));
+    const only = (...found) => whichFirst.mockImplementation(async (name) => (found.includes(name) ? '/bin/' + name : null));
+    it('falls back to python when python3 is absent', async () => {
+      only('python');
+      expect(await resolveQwen3Python()).toBe('/bin/python');
+    });
+    it('prefers python3 when both exist', async () => {
+      only('python3', 'python');
+      expect(await resolveQwen3Python()).toBe('/bin/python3');
+    });
+    it('returns null when neither exists', async () => {
+      only();
+      expect(await resolveQwen3Python()).toBeNull();
+    });
+  });
 
   function runnerResponse(data, code = 0) {
     spawn.mockImplementation(() => {

@@ -10,6 +10,7 @@
  * collection bulk add/remove payloads, plus the media sketch save body.
  */
 import { z } from 'zod';
+import { isSplashContextWindow } from './splashRuntime.js';
 import { PORTS } from './ports.js';
 import { ASSESSABLE_RUNTIMES } from './localProviderRuntime.js';
 import { BENCHMARK_PROFILE, SWEEP_SCOPES } from './localModelAssessment.js';
@@ -202,6 +203,14 @@ export const localLlmLmStudioServiceSchema = z.object({ action: z.enum(['start',
 // MTPLX launch. Every field is optional: with none of them PortOS serves the
 // checkpoint already in MTPLX's cache on the port the shipped provider presets
 // point at. `model` is a Hugging Face repo id, which lands in the launch argv.
+// These curated runtimes never accept a host, port, executable, or artifact
+// override from an HTTP request.
+export const managedInklingActionSchema = z.strictObject({});
+
+export const splashContextSchema = z.strictObject({
+  contextWindow: z.number().refine(isSplashContextWindow, 'Choose a supported Splash context window'),
+});
+
 export const localLlmMtplxStartSchema = z.object({
   port: z.coerce.number().int().min(1).max(65535).optional(),
   // No `host`: MTPLX is a loopback daemon and the manager never puts one on the

@@ -1,11 +1,11 @@
 /**
- * Renders this process is running outside the media job queue: music-video
- * final renders, draft excerpts and single-shot renders, video timeline
- * renders, publishing-kit builds, Code Animation production runs and HTML Pages
- * bench runs. Each runs its own ffmpeg, browsers, Blender or local model, so the system idle verdict
- * (lib/systemIdle.js), the update preflight and Live activity read them here;
- * without this, the unattended updater restarted the server through a final
- * render.
+ * Renders and other detached jobs this process runs outside the media job queue:
+ * music-video, film and timeline renders, publishing-kit builds, Code Animation
+ * and HTML Pages runs, yt-dlp downloads, song analysis, voice training, exports
+ * and Homebrew jobs. Any job that outlives its request and would be lost to a
+ * restart holds a slot here: the system idle verdict (lib/systemIdle.js), the
+ * update preflight and Live activity read only this, so without one the updater
+ * restarts the server through it.
  *
  * A leaf on purpose: each render module keeps its in-flight slots in a map made
  * here, so reading the list never imports the render code (a module that never

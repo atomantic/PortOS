@@ -636,3 +636,69 @@ describe('ProviderForm model access', () => {
     });
   });
 });
+
+describe('harness context editor', () => {
+  const claude = {
+    id: 'claude-splash', name: 'Claude Code Splash', type: 'cli', command: 'claude',
+    defaultModel: 'inkling2-mini', splashBacked: true,
+    envVars: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8001', CLAUDE_CODE_MAX_CONTEXT_TOKENS: '65536', KEEP: 'unchanged' },
+  };
+  const original = { permission: 'allow', provider: {
+    vllm: { options: { baseURL: 'http://127.0.0.1:18020/v1' }, models: {
+      'example-model': { name: 'Existing name', limit: { context: 65536, output: 4096 } },
+      'other-model': { limit: { context: 32768, output: 2048 } },
+    } },
+  } };
+  const opencode = {
+    id: 'opencode-vllm', name: 'OpenCode local', type: 'tui', command: 'opencode',
+    defaultModel: 'vllm/example-model', vllmBacked: true, envVars: { OPENCODE_CONFIG_CONTENT: JSON.stringify(original) },
+  };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.updateProvider.mockResolvedValue({});
+  });
+
+  it('saves a friendly Claude context choice without altering other environment or planning limits', async () => {
+    renderForm({ provider: { ...claude, contextWindow: 32768 } });
+    switchTab('Environment');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit context in Generation' }));
+    expect(screen.getByLabelText('Claude Code context')).toHaveAttribute('placeholder', '65,536 (inherited)');
+    fireEvent.click(screen.getByRole('button', { name: '1M' }));
+    switchTab('Connection');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalledWith('claude-splash', expect.objectContaining({
+      contextWindow: 32768,
+      envVars: claude.envVars, harnessContext: { tokens: 1000000 },
+    })));
+  });
+
+  it('can match a running OpenCode backend without replacing other model or output settings', async () => {
+    renderForm({ provider: { ...opencode, presetKind: 'derived' }, daemonReadiness: { contextWindows: { 'example-model': 262144 } } });
+    switchTab('Generation');
+    fireEvent.click(screen.getByRole('button', { name: 'Match server' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalledOnce());
+    const payload = api.updateProvider.mock.calls[0][1];
+    expect(payload.harnessContext).toEqual({ model: 'vllm/example-model', tokens: 262144 });
+    expect(JSON.parse(payload.envVars.OPENCODE_CONFIG_CONTENT)).toEqual(original);
+  });
+
+  it('does not write an invalid shorthand or rewrite settings on unrelated edits', async () => {
+    renderForm({ provider: claude });
+    switchTab('Generation');
+    fireEvent.change(screen.getByLabelText('Claude Code context'), { target: { value: '1e6' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('Enter a context window'));
+    expect(api.updateProvider).not.toHaveBeenCalled();
+  });
+
+  it('does not apply a guessed override to native Claude or native OpenCode', () => {
+    const { unmount } = renderForm({ provider: { ...claude, id: 'claude-code', splashBacked: false, envVars: {}, defaultModel: 'claude-opus-5' } });
+    switchTab('Generation');
+    expect(screen.queryByLabelText('Claude Code context')).not.toBeInTheDocument();
+    unmount();
+    renderForm({ provider: { ...opencode, id: 'opencode-zen', envVars: { OPENCODE_CONFIG_CONTENT: '{"permission":"allow"}' }, vllmBacked: false } });
+    switchTab('Generation');
+    expect(screen.queryByLabelText('OpenCode context')).not.toBeInTheDocument();
+  });
+});

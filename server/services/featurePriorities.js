@@ -14,6 +14,8 @@
 
 import { join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
+import { PORTOS_APP_ID } from '../lib/appIdentity.js';
+import { isPriorityExemptAuditType } from '../lib/auditDomains.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { FEATURE_AREAS, areaForNavPath, getFeatureArea, isOptionalFeatureArea } from '../lib/featureAreas.js';
@@ -182,6 +184,49 @@ export async function getFeaturePriorities({ now = Date.now() } = {}) {
     enabledByFeature,
     now: localClock(now),
   });
+}
+
+// The tiers an audit prompt acts on. P1 is today's behavior and is never listed.
+const AUDIT_SCOPE_TIERS = Object.freeze(['P0', 'P2', 'P3']);
+
+// Stored app metadata can be hand-edited, so an entry that fails the shape the app schema enforces is ignored rather than trusted.
+const isScopeEntry = (entry) => isPlainObject(entry)
+  && typeof entry.label === 'string' && entry.label.trim() !== ''
+  && AUDIT_SCOPE_TIERS.includes(entry.priority)
+  && Array.isArray(entry.paths) && entry.paths.some((glob) => typeof glob === 'string' && glob.trim() !== '');
+
+function managedAppPriorityScope(app, taskType) {
+  if (!Array.isArray(app?.featurePriorities) || !app.featurePriorities.length) return null;
+  const [p0, p2, p3] = AUDIT_SCOPE_TIERS.map((tier) => app.featurePriorities
+    .filter((entry) => isScopeEntry(entry) && entry.priority === tier)
+    .map((entry) => ({ label: entry.label.trim(), globs: entry.paths.filter((glob) => typeof glob === 'string' && glob.trim() !== '') })));
+  return { exempt: isPriorityExemptAuditType(taskType), p0, p2, p3 };
+}
+
+/**
+ * The feature tiers one audit should read, or `null` when there is no scope to apply. PortOS itself resolves its
+ * tiers from the feature catalog; a failed lookup there must never read as "everything is dormant" nor block the
+ * dispatch, so it degrades to the unscoped audit. A managed app carries hand-written path priorities in its own
+ * `featurePriorities` metadata (nothing is learned for it); an app without entries stays unscoped.
+ *
+ * Each area carries its label and catalog globs only. Usage counts, dates and the tier's source stay behind.
+ * `exempt` reports whether the lane ignores narrowing (security, privacy, data integrity); the prompt builder
+ * decides that from the task type again rather than trusting this flag.
+ * @returns {Promise<{ exempt: boolean, p0: { label: string, globs: string[] }[], p2: { label: string, globs: string[] }[], p3: { label: string, globs: string[] }[] }|null>}
+ */
+export async function resolveAuditPriorityScope(app, taskType, { now = Date.now() } = {}) {
+  if (app?.id !== PORTOS_APP_ID) return managedAppPriorityScope(app, taskType);
+  let areas;
+  try {
+    ({ areas } = await getFeaturePriorities({ now }));
+  } catch (error) {
+    console.log(`⏭️ Feature priority scope unavailable for ${taskType}, auditing without it: ${error.message}`);
+    return null;
+  }
+  const [p0, p2, p3] = AUDIT_SCOPE_TIERS.map((tier) => areas
+    .filter((entry) => entry.tier === tier)
+    .map((entry) => ({ label: entry.label, globs: [...getFeatureArea(entry.areaId).codeGlobs] })));
+  return { exempt: isPriorityExemptAuditType(taskType), p0, p2, p3 };
 }
 
 /**

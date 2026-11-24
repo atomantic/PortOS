@@ -31,7 +31,9 @@ import {
   pullMtplxModel,
   removeMtplxModel,
   getSlotstreamServerStatus,
-  getSplashRuntimeStatus,
+  getManagedInklingRuntimeStatus,
+  saveSplashContextWindow,
+  controlManagedInklingRuntime,
   startSlotstreamServer,
   stopSlotstreamServer,
   installSlotstream,
@@ -43,10 +45,11 @@ import { patchSettingsSlice } from '../../services/apiSystem.js';
 import { getFleetLlmHost, stopFleetLlmHost } from '../../services/apiProviders';
 import socket from '../../services/socket';
 import SpecDecodeWeightRow from './SpecDecodeWeightRow.jsx';
-import RuntimeServersCard from './RuntimeServersCard.jsx';
+import RuntimeServersCard, { ManagedInklingRuntimeCard } from './RuntimeServersCard.jsx';
+import { INKLING_CHANGE_LABELS, MANAGED_INKLING_RUNTIMES } from './managedInklingRuntimes.js';
+import Modal from '../ui/Modal';
 import MtplxServerCard from './MtplxServerCard.jsx';
 import SlotstreamServerCard from './SlotstreamServerCard.jsx';
-import SplashRuntimeCard from './SplashRuntimeCard.jsx';
 import HardwareLlmRecommendation from './HardwareLlmRecommendation.jsx';
 import LocalPersistentMindSetupCard from './LocalPersistentMindSetupCard.jsx';
 import LocalLlmBackendCard from './LocalLlmBackendCard.jsx';
@@ -109,7 +112,7 @@ function summarizeMigrate(r) {
 export default function LocalLlmRuntimesView({ view } = {}) {
   const navigate = useNavigate();
   const { search } = useLocation();
-  const runtimeIds = ['ollama', 'lmstudio', 'llama', 'mtplx', 'slotstream', 'splash', 'fleet-host'];
+  const runtimeIds = ['ollama', 'lmstudio', 'llama', 'mtplx', 'slotstream', ...Object.keys(MANAGED_INKLING_RUNTIMES), 'fleet-host'];
   const selectedRuntime = runtimeIds.includes(view) ? view : null;
   const selectRuntime = (id) => navigate(`/models/llms-runtimes${id ? '/' + id : ''}${search}`);
   const detailHeading = useRef(null);
@@ -125,7 +128,9 @@ export default function LocalLlmRuntimesView({ view } = {}) {
   const [llamaStatus, setLlamaStatus] = useState(null);
   const [mtplxStatus, setMtplxStatus] = useState(null);
   const [slotstreamStatus, setSlotstreamStatus] = useState(null);
-  const [splashStatus, setSplashStatus] = useState(null);
+  const [inklingStatuses, setInklingStatuses] = useState({});
+  const inklingRequests = useRef({});
+  const [inklingConfirm, setInklingConfirm] = useState(null);
   // The dedicated Qwen host is a docker container rather than a PM2 process, so
   // it is not part of the shared local-LLM status payload — but it IS a local
   // model server, and this is the page an operator comes to when they want to
@@ -219,11 +224,14 @@ export default function LocalLlmRuntimesView({ view } = {}) {
       .catch(() => null)
   ), []);
 
-  const loadSplashStatus = useCallback(() => (
-    getSplashRuntimeStatus({ silent: true })
-      .then((res) => setSplashStatus(res ?? null))
-      .catch(() => setSplashStatus(null))
-  ), []);
+  const loadInklingStatus = useCallback(async (runtime) => {
+    const requestId = (inklingRequests.current[runtime] ?? 0) + 1;
+    inklingRequests.current[runtime] = requestId;
+    const result = await getManagedInklingRuntimeStatus(runtime, { silent: true }).catch(() => null);
+    if (requestId === inklingRequests.current[runtime]) {
+      setInklingStatuses((previous) => ({ ...previous, [runtime]: result }));
+    }
+  }, []);
 
   // The runtime rows refresh alongside the shared status, so one
   // Refresh — or one completed action — repaints every row on this view.
@@ -241,12 +249,54 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     loadMtplxStatus();
     loadSlotstreamStatus();
     loadFleetHostStatus();
-    loadSplashStatus();
-  }, [loadLlamaStatus, loadMtplxStatus, loadSlotstreamStatus, loadFleetHostStatus, loadSplashStatus]);
+    for (const runtime of Object.keys(MANAGED_INKLING_RUNTIMES)) loadInklingStatus(runtime);
+  }, [loadLlamaStatus, loadMtplxStatus, loadSlotstreamStatus, loadFleetHostStatus, loadInklingStatus]);
+  useEffect(() => {
+    // If a connection dropped while a download was finishing, recover the
+    // operation's terminal state without making the operator reload the page.
+    const recover = () => {
+      for (const runtime of Object.keys(MANAGED_INKLING_RUNTIMES)) loadInklingStatus(runtime);
+    };
+    socket.on('connect', recover);
+    return () => socket.off('connect', recover);
+  }, [loadInklingStatus]);
   const {
     status, loading, loadStatus, runAction, installBackend: installRuntimeBackend,
     actionInProgress, busy, progressMsg, confirmAction, setConfirmAction,
   } = useLocalLlmStatus({ onRefresh: refreshRuntimes });
+  const runInklingAction = (runtime, action) => runAction(
+    `runtime-${action}-${runtime}`,
+    async () => {
+      const result = await controlManagedInklingRuntime(runtime, action);
+      // Invalidate an earlier refresh that read the idle state before this
+      // request was accepted. The socket's terminal frame refreshes again.
+      inklingRequests.current[runtime] = (inklingRequests.current[runtime] ?? 0) + 1;
+      setInklingStatuses((previous) => ({
+        ...previous,
+        [runtime]: { ...previous[runtime], ...result, lastError: null },
+      }));
+      return result;
+    },
+  );
+  const updateSplashContext = (contextWindow) => runAction(
+    'runtime-context-splash',
+    async () => {
+      const result = await saveSplashContextWindow(contextWindow);
+      inklingRequests.current.splash = (inklingRequests.current.splash ?? 0) + 1;
+      setInklingStatuses((previous) => ({ ...previous, splash: { ...previous.splash, ...result } }));
+      return result;
+    },
+    'Saved Splash context for its next start',
+  );
+  const inklingAction = (runtime, action) => {
+    if (Object.hasOwn(INKLING_CHANGE_LABELS, action)) setInklingConfirm({ runtime, action });
+    else runInklingAction(runtime, action);
+  };
+  const confirmInklingAction = () => {
+    const { runtime, action } = inklingConfirm;
+    setInklingConfirm(null);
+    runInklingAction(runtime, action === 'repair' ? 'install' : action);
+  };
 
   // The preset select mounts pre-selected, so the form has to be filled in the
   // moment the presets land — otherwise the recommended preset reads as chosen
@@ -782,6 +832,21 @@ export default function LocalLlmRuntimesView({ view } = {}) {
           labelledby dangled, leaving the panel unnamed. A heading of its own
           survives whatever tab bar happens to be above it. Visually hidden
           because the section header already shows "Models → Runtimes". */}
+      {inklingConfirm && (
+        <Modal open onClose={() => setInklingConfirm(null)} size="sm" usePortal
+          ariaLabel={`${INKLING_CHANGE_LABELS[inklingConfirm.action]} ${MANAGED_INKLING_RUNTIMES[inklingConfirm.runtime].label}`}>
+          <div className="rounded-xl border border-port-border bg-port-card p-5 space-y-4">
+            <p className="text-sm text-white">{MANAGED_INKLING_RUNTIMES[inklingConfirm.runtime].download}</p>
+            <p className="text-xs text-gray-400">This stages the PortOS-supported version. Existing providers and other runtimes are not changed.</p>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button type="button" onClick={() => setInklingConfirm(null)} className="min-h-[44px] rounded border border-port-border px-3 text-sm text-gray-300">Cancel</button>
+              <button type="button" onClick={confirmInklingAction} disabled={busy} className="min-h-[44px] rounded bg-port-accent px-3 text-sm text-white disabled:opacity-50">
+                {inklingConfirm.action === 'install' ? 'Install and download' : INKLING_CHANGE_LABELS[inklingConfirm.action]}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
       <h2 id="llm-runtimes-heading" className="sr-only">Runtimes</h2>
       {/* One start/stop/install surface for every local server PortOS can run */}
       {(progressMsg || busy || llamaLoading || mtplxDownload || slotstreamDownload || Object.keys(llamaDownloads).length > 0) && (
@@ -802,7 +867,8 @@ export default function LocalLlmRuntimesView({ view } = {}) {
         llamaStatus={llamaStatus}
         mtplxStatus={mtplxStatus}
         slotstreamStatus={slotstreamStatus}
-        splashStatus={splashStatus}
+        inklingStatuses={inklingStatuses}
+        onInklingAction={inklingAction}
         loading={loading}
         busy={busy}
         actionInProgress={actionInProgress}
@@ -906,7 +972,17 @@ export default function LocalLlmRuntimesView({ view } = {}) {
         )}
       </div>
 
-      {selectedRuntime === 'splash' && <SplashRuntimeCard status={splashStatus} onRefresh={loadSplashStatus} />}
+      {selectedRuntime && Object.hasOwn(MANAGED_INKLING_RUNTIMES, selectedRuntime) && (
+        <ManagedInklingRuntimeCard
+          id={selectedRuntime}
+          status={inklingStatuses[selectedRuntime]}
+          busy={busy}
+          actionInProgress={actionInProgress}
+          onRefresh={() => loadInklingStatus(selectedRuntime)}
+          onAction={inklingAction}
+          onSaveContext={updateSplashContext}
+        />
+      )}
 
       {/* Slotstream — PM2-managed SSD-streaming MoE runtime (Apple Silicon) */}
       <div hidden={selectedRuntime !== 'slotstream'}>

@@ -10,7 +10,7 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 
 | Class | Bytes live | Searchable metadata | Use when | PortOS examples |
 |---|---|---|---|---|
-| `db-primary` | PostgreSQL | PostgreSQL | App-native relational records: relationships, indexes, status, lineage, sync cursors, tombstones | `catalog_ingredients`, `catalog_ingredient_relations`, `memories`; **target:** universes, series, issues, Creative Director, media metadata |
+| `db-primary` | PostgreSQL | PostgreSQL | App-native relational records: relationships, indexes, status, lineage, sync cursors, tombstones | `catalog_ingredients`, `catalog_ingredient_relations`, `catalog_ingredient_refs`, `memories`, `universes`, `pipeline_series`, `pipeline_issues`, `story_builder_sessions`, `writers_room_works`, `creative_director_projects`, `media_assets`, `cos_tasks`, `cos_agents` |
 | `file-primary` | Filesystem | Filesystem (DB may index) | The record IS an external file, or it must survive in a file-sync workflow (iCloud, Git, hand-editing) | Writers Room draft `.md` bodies, MortalLoom / Health / Meatspace iCloud stores |
 | `asset-file-db-indexed` | Filesystem | PostgreSQL | Large binary payloads whose **metadata** must be queryable/searchable | Generated images/videos/audio + DB asset rows referencing them via `asset_key` / `media_key` |
 | `ephemeral-file` | Filesystem | None (or DB job ref only) | Transient/regenerable runtime state — queues, uploads, caches | `data/uploads/*`, runtime media job queue, browser profile/cache |
@@ -28,7 +28,7 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 **Where it lives.** PostgreSQL via `server/lib/db.js` + `server/scripts/init-db.sql`. Service modules own the storage adapter (e.g. `server/services/catalog/catalogDB.js`, `server/services/memoryDB.js`).
 
 
-**Postgres-First target.** Pipeline series/issues, Story Builder sessions, and searchable media metadata are still `db-primary` targets where they remain in `data/` JSON; the Create-domain schema is designed in [`docs/plans/archive/2026-06-07-create-relational-schema-design.md`](./plans/archive/2026-06-07-create-relational-schema-design.md).
+**Create domains in PostgreSQL.** Universes, pipeline series/issues, Story Builder sessions, Writers Room metadata, Creative Director projects, catalog refs, and `media_assets` are `db-primary` in PostgreSQL (see `server/scripts/init-db.sql`); historical Create-domain schema design notes are archived in [`docs/plans/archive/2026-06-07-create-relational-schema-design.md`](./plans/archive/2026-06-07-create-relational-schema-design.md).
 
 ---
 
@@ -143,7 +143,7 @@ The file backend (`server/services/memory.js`, JSON under `./data/`) is **unsupp
 
 **Why file storage cannot be a supported mode:**
 
-- **No creative-catalog / vector equivalent.** The catalog graph, memory similarity, and hybrid search depend on PostgreSQL + pgvector (HNSW vector search fused with `tsvector` full-text). There is no file-backed implementation of these — a file-backed install would serve a half-broken app the moment a user touched the catalog, memory search, or any `db-primary` Create domain. As each Create domain migrates to Postgres (universes #1014, pipeline #1015, Story Builder #1016, Writers Room #1017, catalog refs #1018), its file path survives **only** under this dev/test escape hatch.
+- **No creative-catalog / vector equivalent.** The catalog graph, memory similarity, and hybrid search depend on PostgreSQL + pgvector (HNSW vector search fused with `tsvector` full-text). There is no file-backed implementation of these — a file-backed install would serve a half-broken app the moment a user touched the catalog, memory search, or any `db-primary` Create domain. For the migrated Create domains (universes #1014, pipeline #1015, Story Builder #1016, Writers Room #1017, catalog refs #1018), any remaining file path survives **only** under this dev/test escape hatch.
 - **Federation assumes Postgres.** Cross-machine sync (snapshot/push + last-writer-wins) and the `db-primary` sequence cursors/tombstones are designed around the database. A file-backed peer is not a supported member of a federation.
 - **Backup assumes Postgres.** The backup/restore contract treats the `pg_dump` logical dump as **required system state** (see [Backup & Restore](./BACKUP.md)) — a file-backed install has no dump to capture or verify.
 

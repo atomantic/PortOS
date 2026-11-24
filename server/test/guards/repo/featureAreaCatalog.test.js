@@ -18,7 +18,6 @@ import {
   expandCodeGlob,
   matchesCodeGlob,
   areasForFile,
-  isOptionalFeatureArea,
 } from '../../../lib/featureAreas.js';
 
 const files = trackedFiles(REPO_ROOT);
@@ -108,9 +107,12 @@ describe('feature area catalog', () => {
     expect([...orphaned].slice(0, 20)).toEqual([]);
   });
 
-  it('never lets a core area claim a file an optional area owns', () => {
+  // An audit drops a dormant area by subtracting its globs from the inventory (auditQuality.js) and from the
+  // complexity shortlist (`complexity-report.js --exclude`). That subtraction is exact only while no other area
+  // claims the same file: a shared file would leave a P1 area's code unaudited.
+  it('gives every file at most one owning area', () => {
     const shared = [...owners()]
-      .filter(([, areas]) => areas.some(isOptionalFeatureArea) && areas.length > 1)
+      .filter(([, areas]) => areas.length > 1)
       .map(([file, areas]) => `${file}: ${areas.map((owner) => owner.id).join(', ')}`);
     expect(shared).toEqual([]);
   });

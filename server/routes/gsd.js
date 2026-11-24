@@ -191,11 +191,13 @@ router.put('/projects/:appId/documents/:docName', asyncHandler(async (req, res) 
   const created = !existsSync(resolved)
 
   await atomicWrite(resolved, content)
+  gsdService.invalidateGsdProject(ctx.app)
   const relPath = `.planning/${docName}`
   await git.stageFiles(ctx.app.repoPath, [relPath])
 
-  // Both scoped to this document: unrelated dirty files must not turn an unchanged
-  // save into a failed commit, nor the user's own staged work join this commit.
+  // Scope the check and the commit to this document (as routes/apps/documents.js
+  // does): the checkout may hold the user's own staged work, which must not be
+  // swept into this commit, and a partial commit of an unchanged path exits 1.
   const status = await git.getStatus(ctx.app.repoPath, { paths: [relPath] })
   if (status.clean) {
     return res.json({ success: true, noChanges: true })

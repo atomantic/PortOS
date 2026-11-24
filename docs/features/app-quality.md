@@ -79,6 +79,13 @@ the bottom of the breakdown with their reason; `totalCategories` keeps the
 catalog size for existing readers. An app with no eligible assessments shows **not assessed**, not zero.
 Database failures show **unavailable** while app management stays usable.
 
+For PortOS itself, scores cover the install's `P0`-`P2` feature scope: an audit drops
+areas this install marks `P3` (dormant) from its inventory, so `totalFiles`,
+`scannedFiles` and **broad** coverage are measured against what remains. The
+security, privacy and data-integrity audits ignore tiers and keep the whole
+repository. The `.quality.json` wire shape is unchanged and carries no tier data.
+Managed apps are not scoped. See [feature priorities](feature-priorities.md#audit-scope).
+
 The completion sentinel summary contains one `QUALITY_AUDIT_JSON: {...}` line
 with the versioned report described in the dispatch prompt. The parser rejects
 out-of-range scores, wrong categories, contradictory coverage counts, duplicate

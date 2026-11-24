@@ -4,6 +4,7 @@
  * surfaces it in the existing media library.
  *
  *   POST   /api/devtools/video-download                → { jobId }  (kick off a download)
+ *   GET    /api/devtools/video-download/active          → { jobs }   (downloads still running)
  *   GET    /api/devtools/video-download/downloads       → Entry[]    (downloaded videos, newest first)
  *   DELETE /api/devtools/video-download/downloads/:id   → { ok }     (delete a downloaded video)
  *   GET    /api/devtools/video-download/yt-dlp           → yt-dlp version + update availability
@@ -19,6 +20,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import {
   startVideoDownload,
+  listActiveVideoDownloads,
   attachDownloadSseClient,
   cancelVideoDownload,
   listDownloads,
@@ -33,6 +35,10 @@ router.post('/', asyncHandler(async (req, res) => {
   const { url } = validateRequest(videoDownloadSchema, req.body ?? {});
   res.status(202).json(await startVideoDownload(url));
 }));
+
+router.get('/active', (_req, res) => {
+  res.json({ jobs: listActiveVideoDownloads() });
+});
 
 // `downloads` is a distinct first segment from a job's `:jobId` (whose routes
 // are always two-segment — `:jobId/events`, `:jobId/cancel`), so no collision.

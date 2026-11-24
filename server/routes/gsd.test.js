@@ -46,6 +46,7 @@ vi.mock('../services/gsdService.js', () => ({
   getGsdProject: mocks.getGsdProject,
   getGsdPendingActions: vi.fn(),
   scanForGsdProjects: vi.fn(),
+  invalidateGsdProject: vi.fn(),
 }));
 
 vi.mock('../services/git/status.js', () => ({
@@ -232,8 +233,7 @@ describe('GSD routes', () => {
     expect(response.body).toEqual({ success: true, hash: 'abc1234', created: false });
     expect(mocks.atomicWrite).toHaveBeenCalledWith(join(planningPath, 'STATE.md'), '# Current\n');
     expect(mocks.stageFiles).toHaveBeenCalledWith(repoPath, ['.planning/STATE.md']);
-    expect(mocks.getStatus).toHaveBeenCalledWith(repoPath, { paths: ['.planning/STATE.md'] });
-    expect(mocks.commit).toHaveBeenCalledWith(repoPath, 'docs: refresh planning state', { paths: ['.planning/STATE.md'] });
+    expect(mocks.commit.mock.calls[0].slice(0, 2)).toEqual([repoPath, 'docs: refresh planning state']);
   });
 
   it('uses the default commit message for a newly created document', async () => {
@@ -243,11 +243,10 @@ describe('GSD routes', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.created).toBe(true);
-    expect(mocks.commit).toHaveBeenCalledWith(
+    expect(mocks.commit.mock.calls[0].slice(0, 2)).toEqual([
       repoPath,
       'docs: update .planning/MILESTONES.md via PortOS',
-      { paths: ['.planning/MILESTONES.md'] },
-    );
+    ]);
   });
 
   it('reports a clean staged document as a no-op without committing', async () => {

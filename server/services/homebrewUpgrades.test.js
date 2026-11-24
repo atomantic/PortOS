@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { listActiveRenders } from './renderActivity.js';
 import { __testing, getHomebrewStatus, setHomebrewHold, startHomebrewJob } from './homebrewUpgrades.js';
 
 const BREW = '/opt/homebrew/bin/brew';
@@ -83,8 +84,10 @@ describe('startHomebrewJob', () => {
     const { io, frames } = makeIo();
     await startHomebrewJob({ kind: 'repair', io, deps: { ...deps, query: slow } });
     await expect(startHomebrewJob({ kind: 'repair', deps })).rejects.toMatchObject({ code: 'HOMEBREW_BUSY' });
+    expect(listActiveRenders()).toEqual([expect.objectContaining({ kind: 'homebrew' })]);
     release({ rows: [] });
     await settled(frames);
+    expect(listActiveRenders()).toEqual([]);
   });
 
   it('repairs a pgvector library an upgrade removed by running the database setup', async () => {

@@ -446,6 +446,8 @@ export const startYoutubeIngest = (body, options = {}) => request('/brain/youtub
   body: JSON.stringify(body),
   ...options
 });
+// `{ jobs: [{ jobId, videoId }] }` — ingests still running, newest first.
+export const listActiveYoutubeIngests = (options = {}) => request('/brain/youtube/ingest/active', options);
 export const cancelYoutubeIngest = (jobId, options = {}) => request(
   `/brain/youtube/ingest/${encodeURIComponent(jobId)}/cancel`,
   { method: 'POST', ...options }

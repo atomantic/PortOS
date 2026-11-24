@@ -212,8 +212,10 @@ API routes support the default passwordless tailnet posture.
 | `GET` | `/api/remote-desktop/status` | Report whether a VNC server is reachable on loopback, whether PortOS auth is enabled, and the host setup command. |
 | `POST` | `/api/remote-desktop/sessions` | Create a five-minute, single-purpose viewer URL. Returns `{ viewerPath, expiresAt }`. |
 
-The native client authenticates the session request with its saved instance
-password, then opens `viewerPath` in an embedded browser. The viewer loads the
+The native client signs in via `POST /api/auth/login` with its saved instance
+password to obtain an operator session cookie (like every `/api/*` write in [§2](#operator-sessions-vs-http-basic),
+`POST /api/remote-desktop/sessions` requires an operator session — HTTP Basic alone
+gets `403 HOST_CONTROL_FORBIDDEN`), then opens `viewerPath` in an embedded browser. The viewer loads the
 vendored noVNC module and connects to `/remote-desktop/ws?token=…`. That
 WebSocket is a byte-for-byte RFB bridge to `127.0.0.1:5900` (or the fixed
 `PORTOS_VNC_PORT` configured for the server process); neither the HTTP request

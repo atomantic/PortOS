@@ -37,6 +37,7 @@ import { loadHistory, mutateVideoHistory } from './videoGen/history.js';
 import { deleteMediaAnywhere } from './mediaRemoteDelete.js';
 import { videoGenEvents } from './videoGen/events.js';
 import { fileExternalMedia } from './externalMediaCollection.js';
+import { trackedRenderMap } from './renderActivity.js';
 
 // Host allowlist: YouTube (watch/shorts/youtu.be) + x.com/Twitter status URLs.
 // Same reasoning as #1945's YOUTUBE_URL_RE — constrains what a shelled-out
@@ -64,7 +65,8 @@ export const VIDEO_DOWNLOAD_MAX_DURATION_SEC = 60 * 60; // 1 hour
 const FILENAME_PREFIX = 'downloaded-';
 
 // jobId -> { id, status, clients, lastPayload, process }
-const downloadJobs = new Map();
+// Tracked: a restart loses the download, which yt-dlp cannot resume.
+const downloadJobs = trackedRenderMap('video-download', { noun: 'video download', link: () => '/devtools/video-download' });
 
 export const attachDownloadSseClient = (jobId, res) => attachSse(downloadJobs, jobId, res);
 
@@ -73,6 +75,10 @@ export const attachDownloadSseClient = (jobId, res) => attachSse(downloadJobs, j
 // unimported killWithEscalation while the whole suite stayed green. Exposing the
 // map lets a test register a fake job and actually run the cancel.
 export const __testing = { downloadJobs };
+
+/** Downloads still running, newest first, so a reloaded page can watch or cancel one. */
+export const listActiveVideoDownloads = () => [...downloadJobs.values()]
+  .filter((job) => job.status === 'running').reverse().map(({ id, url }) => ({ jobId: id, url }));
 
 /** Cancel an in-flight download. Returns false if the job is unknown or already finished. */
 export function cancelVideoDownload(jobId) {
@@ -238,7 +244,7 @@ export async function startVideoDownload(url) {
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
 
   const jobId = randomUUID();
-  const job = { id: jobId, status: 'running', clients: [], process: null };
+  const job = { id: jobId, url, status: 'running', clients: [], process: null };
   downloadJobs.set(jobId, job);
   console.log(`📥 Video download ${shortId(jobId)} — ${url}`);
 
@@ -267,6 +273,7 @@ export async function startVideoDownload(url) {
       console.error(`❌ Video download ${shortId(jobId)} failed: ${err?.message || err}`);
       broadcastSse(job, { type: 'error', error: err?.message || String(err) });
     } finally {
+      job.status = 'done';
       closeJobAfterDelay(downloadJobs, jobId);
     }
   })();

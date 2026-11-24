@@ -15,7 +15,9 @@ import { getLoadedModels, unloadModel } from '../services/ollamaManager.js';
 import { getLoadedModels as getLoadedLmStudioModels, getLastLoadedModelsError as getLmStudioResidencyError } from '../services/lmStudioManager.js';
 import { getSettings, readSettingsStrict, updateSettingsWith } from '../services/settings.js';
 import { localLlmCompareSchema, localLlmTestSchema } from '../lib/mediaValidation.js';
-import { errorEvents } from '../lib/errorHandler.js';
+import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer } from '../services/splashServerManager.js';
+import { installMkserve, startMkserveServer, stopMkserveServer } from '../services/mkserveRuntimeManager.js';
+import { ServerError, errorEvents } from '../lib/errorHandler.js';
 
 const getModelAbuseGuardStatus = vi.fn(async () => ({ ready: false, modelCached: false, runtimeReady: false }));
 const installModelAbuseGuard = vi.fn(async () => ({ ok: true, ready: true }));
@@ -130,6 +132,24 @@ vi.mock('../services/llamaServerManager.js', () => ({
 
 // The launcher's curated presets (and their weights' on-disk state) ride along
 // on the status response so the card can offer a Download button per GGUF.
+vi.mock('../services/splashRuntimeStatus.js', () => ({
+  getSplashRuntimeStatus: vi.fn(async () => ({ supported: true, state: 'stopped', installed: true })),
+}));
+vi.mock('../services/splashServerManager.js', () => ({
+  SPLASH_APP: 'portos-splash',
+  installSplashRuntime: vi.fn(),
+  saveSplashContextWindow: vi.fn(),
+  startSplashServer: vi.fn(),
+  stopSplashServer: vi.fn(),
+}));
+vi.mock('../services/mkserveRuntimeManager.js', () => ({
+  MKSERVE_APP: 'portos-mkserve',
+  getMkserveRuntimeStatus: vi.fn(async () => ({ supported: true, state: 'stopped', installed: true })),
+  installMkserve: vi.fn(),
+  startMkserveServer: vi.fn(),
+  stopMkserveServer: vi.fn(),
+}));
+
 vi.mock('../services/specDecodeModels.js', () => ({
   getSpecDecodePresetStatus: vi.fn(async () => ([{ id: 'test-preset', label: 'Test', specType: 'draft-dspark', model: null, draftModel: null }])),
   downloadSpecDecodeModel: vi.fn(async () => ({ success: true, path: 'models/base.gguf', file: 'base.gguf' })),
@@ -1077,4 +1097,78 @@ describe('local LLM catalog and loaded query validation', () => {
     expect(res.status).toBe(400);
     expect(getLoadedModels).not.toHaveBeenCalled();
   });
+});
+
+describe.each([
+  { id: 'splash', install: installSplashRuntime, start: startSplashServer, stop: stopSplashServer },
+  { id: 'mkserve', install: installMkserve, start: startMkserveServer, stop: stopMkserveServer },
+])('$id lifecycle routes', ({ id, install, start, stop }) => {
+  const url = `/api/local-llm/${id}`;
+  const readStatus = (app) => request(app).get(`${url}/status`);
+  const mutate = (app, action) => request(app).post(`${url}/${action}`);
+
+  it('returns immediately, reports install progress, and rejects concurrent operations', async () => {
+    const app = makeApp();
+    let finish;
+    const transfer = new Promise((resolve) => { finish = resolve; });
+    install.mockImplementationOnce(({ onProgress }) => {
+      onProgress({ event: 'download', message: 'Downloading weights' });
+      return transfer;
+    });
+    try {
+      const accepted = await mutate(app, 'install');
+      expect(accepted.status).toBe(202);
+      expect(accepted.body.operation.action).toBe('install');
+      expect((await readStatus(app)).body.operation).toMatchObject({
+        action: 'install', message: expect.stringContaining('Downloading weights'),
+      });
+      expect((await mutate(app, 'start')).status).toBe(409);
+    } finally {
+      finish();
+    }
+    expect((await readStatus(app)).body).toMatchObject({ operation: null, lastError: null });
+    expect(app.get('io').emit).toHaveBeenCalledWith(
+      'localLlm:progress', expect.objectContaining({ event: 'complete', runtime: id }),
+    );
+  });
+
+  it('routes Update and Stop to the managed service, rejecting launch overrides', async () => {
+    const app = makeApp();
+    install.mockClear().mockResolvedValueOnce({});
+    stop.mockClear().mockResolvedValueOnce({});
+    start.mockClear();
+    const invalid = await mutate(app, 'start').send({ host: '0.0.0.0' });
+    expect(invalid.status).toBe(400);
+    expect(start).not.toHaveBeenCalled();
+    expect((await mutate(app, 'upgrade')).status).toBe(202);
+    expect(install).toHaveBeenCalledOnce();
+    expect((await mutate(app, 'stop')).status).toBe(202);
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it('surfaces actionable refusal after accepting a background start', async () => {
+    const app = makeApp();
+    start.mockRejectedValueOnce(new ServerError('Preset port is occupied. Stop the external process first.', { status: 409 }));
+    expect((await mutate(app, 'start')).status).toBe(202);
+    expect((await readStatus(app)).body).toMatchObject({
+      operation: null, lastError: 'Preset port is occupied. Stop the external process first.',
+    });
+    expect(app.get('io').emit).toHaveBeenCalledWith(
+      'localLlm:progress', expect.objectContaining({ event: 'error', runtime: id }),
+    );
+  });
+});
+
+
+it('validates and saves the Splash next-start context through the runtime route', async () => {
+  const app = makeApp();
+  const save = (contextWindow) => request(app).put('/api/local-llm/splash/context').send({ contextWindow });
+  expect((await save(1010000)).status).toBe(400);
+  expect((await save('1000000')).status).toBe(400);
+  expect(saveSplashContextWindow).not.toHaveBeenCalled();
+  saveSplashContextWindow.mockResolvedValueOnce({ requestedContextWindow: 1000000 });
+  const result = await save(1000000);
+  expect(result.status).toBe(200);
+  expect(result.body).toEqual({ requestedContextWindow: 1000000 });
+  expect(saveSplashContextWindow).toHaveBeenCalledWith(1000000);
 });

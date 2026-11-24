@@ -1,6 +1,7 @@
 import AppQualityRunner from './AppQualityRunner';
 import AppQualityHistory from './AppQualityHistory';
 import AppLaneHealth from './AppLaneHealth';
+import AppAuditScopeSummary from './AppAuditScopeSummary';
 import AppQualityScheduleForm from './AppQualityScheduleForm';
 import QualityPeerWarning, { instancePeerLink } from './QualityPeerWarning';
 import { useId, useState } from 'react';
@@ -157,6 +158,7 @@ export default function AppQuality({ app, detail = false }) {
         </p>}
         {runStatus}
       </section>
+      <AppAuditScopeSummary featurePriorities={app.featurePriorities} />
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
         <AppQualityHistory appId={app.id} categories={quality?.categories} />
         {!!quality?.categories?.length && (

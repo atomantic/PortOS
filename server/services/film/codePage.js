@@ -75,9 +75,9 @@ export function filmCodePage({ entry, space = 'canvas', song, width, height, thr
     ? `<script type="importmap">${scriptJson({ imports: { three: './vendor/three.module.js', 'three/addons/': './vendor/addons/' } })}</script>`
     : '';
   const script = PAGE_SCRIPT
-    .replace('const specSong = SONG;', `const specSong = ${scriptJson(song ?? null)};`)
+    .replace('const specSong = SONG;', () => `const specSong = ${scriptJson(song ?? null)};`)
     .replace('const space = SPACE;', `const space = ${scriptJson(threeSpace ? 'three' : 'canvas')};`)
-    .replace('const entry = ENTRY;', `const entry = ${scriptJson(`./${entry}`)};`);
+    .replace('const entry = ENTRY;', () => `const entry = ${scriptJson(`./${entry}`)};`);
   const w = Number(width);
   const h = Number(height);
   return `<!DOCTYPE html><html><head><meta charset="utf-8">${importMap}</head><body>`

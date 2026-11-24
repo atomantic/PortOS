@@ -370,6 +370,7 @@ export function createProviderServiceState(config = {}) {
       topP: providerData.topP,
       thinking: providerData.thinking,
       contextWindow: providerData.contextWindow || null,
+      ...(providerData.harnessContext ? { harnessContext: providerData.harnessContext } : {}),
       ...modelContextWindowPatch(providerData.modelContextWindows),
       timeout: providerData.timeout || 300000,
       enabled: providerData.enabled !== false,

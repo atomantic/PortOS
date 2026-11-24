@@ -32,7 +32,6 @@ vi.mock('../integrations/moltbook/index.js', () => ({
 }));
 vi.mock('../integrations/moltworld/index.js', () => ({}));
 vi.mock('./agent/agentContentGenerator.js', () => ({}));
-vi.mock('./agent/agentFeedFilter.js', () => ({}));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => 'UTC' }));
 
 function deferred() {

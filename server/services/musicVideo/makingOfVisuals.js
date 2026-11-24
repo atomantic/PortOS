@@ -196,7 +196,7 @@ export async function extractMakingOfVisuals(html, { path, parentId, allowRaster
     .replace(/<[^>]*>/g, '\n');
   cleaned = scrub(entities(cleaned)).replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1 [link omitted]')
     .replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  for (const visual of visuals) cleaned = cleaned.replace(visual.placeholder, visual.markdown);
+  for (const visual of visuals) cleaned = cleaned.replace(visual.placeholder, () => visual.markdown);
   return { status: visuals.some(visual => visual.status !== 'included') ? 'partial' : 'included',
     reason: visuals.some(visual => visual.status !== 'included') ? 'some-visuals-not-exported' : null,
     data: Buffer.from(`${cleaned}\n`), visuals,

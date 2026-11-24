@@ -293,8 +293,10 @@ export async function removeEpigeneticTest(id) {
 // === Eyes ===
 
 const readLocalEyes = async () => {
-  const data = await readJSONFile(EYES_FILE, { exams: [] });
-  return { data, exams: Array.isArray(data?.exams) ? data.exams : [] };
+  // Strict for the same reason as loadLocalRowUnionQueued: every writer persists what this returns.
+  const data = await readJSONFile(EYES_FILE, { exams: [] }, { strict: true });
+  if (!Array.isArray(data?.exams)) throw new Error('Eye exams malformed');
+  return { data, exams: data.exams };
 };
 
 /**
@@ -581,7 +583,7 @@ function stampImportedBloodRow(row, snapshots, now) {
 }
 
 async function mergeLocalReferenceRanges(fhirRanges) {
-  const data = await readJSONFile(BLOOD_TESTS_FILE, { tests: [], referenceRanges: {} });
+  const data = await readJSONFile(BLOOD_TESTS_FILE, { tests: [], referenceRanges: {} }, { strict: true });
   const existing = isPlainObject(data?.referenceRanges) ? data.referenceRanges : {};
   const referenceRanges = { ...existing };
   let changed = false;

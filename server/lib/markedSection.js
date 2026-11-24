@@ -81,7 +81,7 @@ export function replaceMarkedSection(content, body, markers) {
     // Replace in place. Re-attach the blank-line separator the regex consumed so
     // the block stays visually detached from the content above; strip any
     // leading newlines left when the region was at the very top of the document.
-    return base.replace(regionRe, `\n\n${block}`).replace(/^\n+/, '');
+    return base.replace(regionRe, () => `\n\n${block}`).replace(/^\n+/, '');
   }
 
   const head = base.replace(/\s+$/, '');

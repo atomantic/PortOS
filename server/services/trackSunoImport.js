@@ -26,6 +26,7 @@ import { fetchSunoSongPage, resolveSunoSongId, SUNO_FETCH_HEADERS as HEADERS } f
 import { importUploadedTrack, MUSIC_UPLOAD_MAX_BYTES } from './pipeline/musicLibrary.js';
 import { createTrack, listTracks, updateTrack } from './tracks/index.js';
 import { RENDER_SOURCES, selectRenderPatch } from './tracks/logic.js';
+import { trackedRenderMap } from './renderActivity.js';
 
 const AUDIO_TIMEOUT_MS = 5 * 60 * 1000;
 // The song's video carries a picture track too, so it may run well past the audio cap.
@@ -225,7 +226,7 @@ async function trackReadyForSunoSong(track, songId) {
 }
 
 // jobId -> { clients, lastPayload, status, canceled }
-const importJobs = new Map();
+const importJobs = trackedRenderMap('track-suno-import', { noun: 'Suno track import' });
 
 export const attachSunoImportSseClient = (jobId, res) => attachSse(importJobs, jobId, res);
 

@@ -73,14 +73,14 @@ describe('insightsService read paths — disk-only, no provider call', () => {
     const result = await getThemeAnalysis();
     expect(callProviderAISimple).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(result.available === false || result.available === true).toBe(true);
+    expect(result).toEqual({ available: false, reason: 'not_generated' });
   });
 
   it('getCrossDomainNarrative performs no provider call (returns not_generated when uncached)', async () => {
     const result = await getCrossDomainNarrative();
     expect(callProviderAISimple).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(result.available === false || result.available === true).toBe(true);
+    expect(result).toEqual({ available: false, reason: 'not_generated' });
   });
 });
 

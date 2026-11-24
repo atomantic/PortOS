@@ -328,6 +328,7 @@ async function createAppUnlocked(appData) {
     // "infer from the repo owner" — see services/forgeAuth.js.
     ...(appData.forgeAccount?.trim() ? { forgeAccount: appData.forgeAccount.trim() } : {}),
     ...(appData.deploymentModel?.trim() ? { deploymentModel: appData.deploymentModel.trim() } : {}),
+    ...(Array.isArray(appData.featurePriorities) && appData.featurePriorities.length ? { featurePriorities: appData.featurePriorities } : {}),
     // Only persisted when explicitly sent. Absent means ON (see
     // repoStateVerificationEnabled), so writing a default here would freeze the
     // app against a future change of that default — but an explicit `false` on
