@@ -4,6 +4,9 @@ import {
   normalizeBudgetLimit,
   getDomainBudget,
   getDomainMode,
+  CREATIVE_DOMAIN,
+  getCreativeAutonomyOverride,
+  getCreativeAutonomyMode,
   DEFAULT_DOMAIN_MODE,
   AGENT_STATES,
   MUSE_STATE_MOTIONS,
@@ -201,6 +204,23 @@ describe('getDomainMode (existing helper, sanity)', () => {
     expect(getDomainMode(undefined, 'cos')).toBe(DEFAULT_DOMAIN_MODE);
     expect(getDomainMode({ domainAutonomy: { cos: 'bogus' } }, 'cos')).toBe(DEFAULT_DOMAIN_MODE);
     expect(getDomainMode({ domainAutonomy: { cos: 'off' } }, 'cos')).toBe('off');
+  });
+});
+
+describe('creative autonomy helpers (client mirror)', () => {
+  it('returns null override when absent/null/invalid and mirrors cos for effective mode', () => {
+    expect(CREATIVE_DOMAIN.id).toBe('creative');
+    expect(getCreativeAutonomyOverride(undefined)).toBeNull();
+    expect(getCreativeAutonomyOverride({ domainAutonomy: { cos: 'off', creative: null } })).toBeNull();
+    expect(getCreativeAutonomyOverride({ domainAutonomy: { cos: 'off', creative: 'bogus' } })).toBeNull();
+    expect(getCreativeAutonomyMode({ domainAutonomy: { cos: 'off' } })).toBe('off');
+    expect(getCreativeAutonomyMode({ domainAutonomy: { cos: 'dry-run', creative: null } })).toBe('dry-run');
+  });
+
+  it('prefers an explicit valid creative override over cos', () => {
+    const config = { domainAutonomy: { cos: 'off', creative: 'execute' } };
+    expect(getCreativeAutonomyOverride(config)).toBe('execute');
+    expect(getCreativeAutonomyMode(config)).toBe('execute');
   });
 });
 

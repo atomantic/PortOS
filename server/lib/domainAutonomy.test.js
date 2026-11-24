@@ -88,4 +88,18 @@ describe('creative domain (#2183)', () => {
   it('falls back to the cos mirror for an invalid creative value', () => {
     expect(getCreativeAutonomyMode({ domainAutonomy: { cos: 'off', creative: 'haywire' } })).toBe('off');
   });
+
+  it('preserves a valid explicit creative override in normalizeDomainAutonomy while omitting absent/null/invalid', () => {
+    for (const mode of ['off', 'dry-run', 'execute']) {
+      const normalized = normalizeDomainAutonomy({ brain: 'off', cos: 'execute', creative: mode });
+      expect(normalized.creative).toBe(mode);
+      expect(normalized.brain).toBe('off');
+    }
+
+    for (const emptyOrInvalid of [undefined, null, '', 'haywire']) {
+      const normalized = normalizeDomainAutonomy({ cos: 'off', creative: emptyOrInvalid });
+      expect('creative' in normalized).toBe(false);
+      expect(getCreativeAutonomyMode({ domainAutonomy: normalized })).toBe('off');
+    }
+  });
 });

@@ -20,8 +20,12 @@ import MemoryEmbeddingRecommendation from '../MemoryEmbeddingRecommendation';
 import {
   AVATAR_STYLE_LABELS,
   AUTONOMY_DOMAINS,
+  CREATIVE_DOMAIN,
+  CREATIVE_DOMAIN_MODES,
   DOMAIN_AUTONOMY_MODES,
   DOMAIN_BUDGET_FIELDS,
+  getCreativeAutonomyMode,
+  getCreativeAutonomyOverride,
   getDomainBudget,
   getDomainMode,
   normalizeBudgetLimit,
@@ -100,6 +104,10 @@ function SectionHeading({ icon: Icon, title, description }) {
 }
 
 function DomainAutomationControl({ config, usage, onDomainChange, onBudgetChange }) {
+  const creativeOverride = getCreativeAutonomyOverride(config);
+  const effectiveCreativeMode = getCreativeAutonomyMode(config);
+  const effectiveCreativeLabel = DOMAIN_AUTONOMY_MODES.find((mode) => mode.id === effectiveCreativeMode)?.label || effectiveCreativeMode;
+
   return (
     <div className="grid gap-3 md:grid-cols-2">
       {AUTONOMY_DOMAINS.map((domain) => {
@@ -168,9 +176,51 @@ function DomainAutomationControl({ config, usage, onDomainChange, onBudgetChange
           </article>
         );
       })}
+
+      <article className="rounded-lg border border-port-border bg-port-card p-4 md:col-span-2">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h5 className="text-sm font-medium text-port-text">{CREATIVE_DOMAIN.label}</h5>
+            <p className="mt-1 text-xs leading-relaxed text-port-text-muted">{CREATIVE_DOMAIN.description}</p>
+          </div>
+          <span className="shrink-0 rounded-full bg-port-bg px-2 py-1 text-[11px] text-port-text-muted">
+            {creativeOverride
+              ? `Override: ${effectiveCreativeLabel} · Uses CoS budget`
+              : `Inheriting CoS (${effectiveCreativeLabel}) · Uses CoS budget`}
+          </span>
+        </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-1 sm:grid-cols-4" role="group" aria-label={`${CREATIVE_DOMAIN.label} mode`}>
+          {CREATIVE_DOMAIN_MODES.map((mode) => {
+            const active = creativeOverride === mode.id;
+            const colors = mode.id === null
+              ? {
+                  base: 'border-port-accent/30 text-port-accent hover:bg-port-accent/10',
+                  active: 'border-port-accent bg-port-accent text-white',
+                }
+              : DOMAIN_MODE_COLORS[mode.id];
+            return (
+              <button
+                key={mode.id ?? 'inherit'}
+                type="button"
+                aria-pressed={active}
+                title={mode.description}
+                onClick={() => onDomainChange(CREATIVE_DOMAIN.id, mode.id)}
+                className={`rounded-md border px-2 py-1.5 text-xs font-medium transition-colors ${active ? colors.active : colors.base}`}
+              >
+                {mode.label}
+              </button>
+            );
+          })}
+        </div>
+      </article>
     </div>
   );
 }
+
+const getSavedDomainSelection = (config, domainId) => (
+  domainId === CREATIVE_DOMAIN.id ? getCreativeAutonomyOverride(config) : getDomainMode(config, domainId)
+);
 
 const MIND_STATUS_EVENTS = ['cos:mind:event', 'cos:mind:status', 'cos:config:changed'];
 
@@ -315,7 +365,7 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
     })));
 
     setDomainAutonomyOverrides((current) => Object.fromEntries(Object.entries(current).filter(
-      ([domainId, mode]) => getDomainMode(config, domainId) !== mode,
+      ([domainId, mode]) => getSavedDomainSelection(config, domainId) !== mode,
     )));
     setDomainBudgetOverrides((current) => Object.fromEntries(Object.entries(current).flatMap(([domainId, fields]) => {
       const savedBudget = getDomainBudget(config, domainId);
@@ -402,7 +452,7 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
   }, [formData.avatarStyle, riggedAvatars]);
 
   const handleDomainChange = (domainId, mode) => {
-    if (getDomainMode(displayConfig, domainId) === mode) return Promise.resolve();
+    if (getSavedDomainSelection(displayConfig, domainId) === mode) return Promise.resolve();
     setDomainAutonomyOverrides((current) => ({ ...current, [domainId]: mode }));
     return saveConfigPatch({ domainAutonomy: { [domainId]: mode } }, {
       failureKeys: [`domainAutonomy:${domainId}`],

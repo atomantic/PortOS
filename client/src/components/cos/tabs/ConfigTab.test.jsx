@@ -356,6 +356,45 @@ describe('domain guardrails and embedding provider autosave', () => {
     ));
   });
 
+  it('renders Creative orchestrator inheriting CoS by default and saves explicit overrides and Inherit CoS clears', async () => {
+    api.updateCosConfig.mockResolvedValue({ success: true });
+    const { rerender } = renderConfig({
+      config: { ...config, domainAutonomy: { cos: 'dry-run' } },
+    });
+    await screen.findByText('Waiting for the next wake');
+
+    const group = screen.getByRole('group', { name: 'Creative orchestrator mode' });
+    const inheritButton = within(group).getByRole('button', { name: 'Inherit CoS auto-run' });
+    expect(inheritButton).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText(/Inheriting CoS \(Dry-run\)/)).toBeInTheDocument();
+
+    fireEvent.click(within(group).getByRole('button', { name: 'Execute' }));
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
+      { domainAutonomy: { creative: 'execute' } },
+      { silent: true },
+    ));
+
+    rerender(
+      <MemoryRouter>
+        <ConfigTab
+          config={{ ...config, domainAutonomy: { cos: 'dry-run', creative: 'execute' } }}
+          onUpdate={vi.fn()}
+          onEvaluate={vi.fn()}
+          avatarStyle="svg"
+        />
+      </MemoryRouter>,
+    );
+    expect(within(group).getByRole('button', { name: 'Execute' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(group).getByRole('button', { name: 'Inherit CoS auto-run' })).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(within(group).getByRole('button', { name: 'Inherit CoS auto-run' }));
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenLastCalledWith(
+      { domainAutonomy: { creative: null } },
+      { silent: true },
+    ));
+    expect(within(group).getByRole('button', { name: 'Inherit CoS auto-run' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('saves an embedding provider selection immediately', async () => {
     api.updateCosConfig.mockResolvedValue({ success: true });
     renderConfig();

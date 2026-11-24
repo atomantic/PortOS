@@ -212,14 +212,21 @@ export default function PlanTab({ project, onProjectUpdate }) {
       {catalog.mode === 'dry-run' && (
         <div className="bg-port-accent/10 border border-port-accent/40 rounded p-3 text-xs text-port-accent">
           Creative autonomy is in <span className="font-semibold">dry-run</span> mode — plan steps are previewed
-          (cost classes shown below) but not executed. Switch to <span className="font-mono">execute</span> in
-          Settings to run the plan.
+          (cost classes shown below) but not executed. Switch to <span className="font-mono">execute</span> in{' '}
+          <Link to="/cos/config" className="underline font-medium hover:opacity-80">
+            Chief of Staff → Config
+          </Link>{' '}
+          to run the plan.
         </div>
       )}
       {catalog.mode === 'off' && (
         <div className="bg-port-warning/10 border border-port-warning/40 rounded p-3 text-xs text-port-warning">
           Creative autonomy is <span className="font-semibold">off</span> — the plan will not execute until you
-          enable it in Settings. Steps below are shown for review only.
+          enable it in{' '}
+          <Link to="/cos/config" className="underline font-medium hover:opacity-80">
+            Chief of Staff → Config
+          </Link>
+          . Steps below are shown for review only.
         </div>
       )}
 
