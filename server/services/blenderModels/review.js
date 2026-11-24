@@ -156,7 +156,7 @@ async function runReview({ id, buildId, tool, entry, sizeMeters, views }) {
     if (!canceled) console.error(`❌ Blender model ${id.slice(0, 15)} review of ${buildId} failed: ${error.message}`);
     outcome = { status: canceled ? 'canceled' : 'error', error: canceled ? null : error.message };
   } finally {
-    await log?.close();
+    await log?.close().catch((error) => console.error(`❌ Blender model review log could not be closed: ${error.message}`));
     await rm(staged, { recursive: true, force: true }).catch((error) => console.error(`❌ Blender model review files could not be removed: ${error.message}`));
     registry.update(entry, outcome);
   }
