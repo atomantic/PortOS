@@ -118,6 +118,8 @@ async function runReview({ id, buildId, tool, entry, sizeMeters, views }) {
   const { signal } = entry.abort;
   const staged = join(reviewsDir(id), `.staged-${randomUUID()}`);
   let log = null;
+  // Published only after the log is closed and `staged` removed, so a terminal job status guarantees the cleanup is done.
+  let outcome = { status: 'error', error: 'Review ended without a result' };
   try {
     await assertInsideWithoutSymlinks(blenderModelWorkspaceDir(id), staged);
     await mkdir(staged, { recursive: true });
@@ -138,7 +140,7 @@ async function runReview({ id, buildId, tool, entry, sizeMeters, views }) {
     });
     if (result.traceback) for (const line of result.traceback.split('\n')) log.write(line);
     if (!result.ok) {
-      registry.update(entry, { status: result.canceled ? 'canceled' : 'error', error: result.canceled ? null : result.error });
+      outcome = { status: result.canceled ? 'canceled' : 'error', error: result.canceled ? null : result.error };
       return;
     }
     if (!finished) throw new Error('Blender stopped before every view was rendered');
@@ -147,15 +149,16 @@ async function runReview({ id, buildId, tool, entry, sizeMeters, views }) {
     await atomicWrite(join(staged, 'review.json'), `${JSON.stringify(review, null, 2)}\n`);
     signal.throwIfAborted();
     await publishSet({ id, buildId, staged });
-    registry.update(entry, { status: 'done' });
+    outcome = { status: 'done' };
     console.log(`🧊 Blender model ${id.slice(0, 15)} build ${buildId}: ${views.length} review view(s)`);
   } catch (error) {
     const canceled = signal.aborted;
     if (!canceled) console.error(`❌ Blender model ${id.slice(0, 15)} review of ${buildId} failed: ${error.message}`);
-    registry.update(entry, { status: canceled ? 'canceled' : 'error', error: canceled ? null : error.message });
+    outcome = { status: canceled ? 'canceled' : 'error', error: canceled ? null : error.message };
   } finally {
-    await log?.close();
+    await log?.close().catch((error) => console.error(`❌ Blender model review log could not be closed: ${error.message}`));
     await rm(staged, { recursive: true, force: true }).catch((error) => console.error(`❌ Blender model review files could not be removed: ${error.message}`));
+    registry.update(entry, outcome);
   }
 }
 
