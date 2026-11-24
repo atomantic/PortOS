@@ -1,3 +1,4 @@
+// test-memo: never — interpreter availability alone cannot prove NumPy ran.
 // Exercises align_lyrics_ctc.py via its model-free Python boundary tests. The
 // Viterbi cases need numpy, so a numpy-capable interpreter is preferred.
 import { describe, expect, it } from 'vitest';

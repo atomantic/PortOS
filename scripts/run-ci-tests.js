@@ -489,10 +489,11 @@ function warmTestChrome() {
 async function main() {
   const cliArgs = process.argv.slice(2);
   const checkRemaining = cliArgs.includes('--check-remaining');
-  const positionalArgs = cliArgs.filter(arg => arg !== '--check-remaining');
+  const checkCtc = cliArgs.includes('--check-ctc');
+  const positionalArgs = cliArgs.filter(arg => arg !== '--check-remaining' && arg !== '--check-ctc');
   const scope = positionalArgs[0];
-  if (positionalArgs.length !== 1 || !Object.hasOwn(TEST_SCOPES, scope) || cliArgs.some(arg => arg.startsWith('-') && arg !== '--check-remaining')) {
-    console.error('Usage: node scripts/run-ci-tests.js <server|client|db> [--check-remaining]');
+  if (positionalArgs.length !== 1 || !Object.hasOwn(TEST_SCOPES, scope) || (checkCtc && (scope !== 'server' || checkRemaining))) {
+    console.error('Usage: node scripts/run-ci-tests.js <server|client|db> [--check-remaining] or server --check-ctc');
     process.exit(2);
   }
   const workspace = workspaceOf(scope);
@@ -534,11 +535,19 @@ async function main() {
     if (profile !== undefined && !deferredOnly) throw Error('Browser profile selected no executable cases.');
     console.log(`No ${scope} tests selected.${deferredOnly ? ' Fidelity-only inputs require separate evidence.' : ''}`);
     if (checkRemaining) writeStepOutput('remaining', '0');
+    if (checkCtc) writeStepOutput('required', 'false');
     process.exitCode = 0;
     return;
   }
 
   const shard = parseShard(process.env.CI_SHARD);
+  if (checkCtc) {
+    // Related mode can reach beyond CI_TEST_FILES. Use its full candidate
+    // inventory, which the runner partitions before checking related reach.
+    const { slice } = planTestMemo({ scope, mode: mode === 'related' ? 'full' : mode, repoFiles, repoRoot, shard, memoDir: null });
+    writeStepOutput('required', String(slice.includes('scripts/align_lyrics_ctc.test.js')));
+    return;
+  }
   const label = mode === 'full' ? (shard ? `full suite shard ${process.env.CI_SHARD}` : 'full suite')
     : mode === 'files' ? 'selected tests' : 'related and contract tests';
   // process.exitCode, not process.exit(): the runner streams the child's

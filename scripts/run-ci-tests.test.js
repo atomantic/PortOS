@@ -724,6 +724,47 @@ describe('ci.yml shard wiring', () => {
   const CI_JOBS = readCiJobs();
   const runners = Object.entries(CI_JOBS).filter(([, body]) => /(?:run|watch)-ci-tests\.js/.test(body));
 
+  it('uses one server shard selection for both CTC NumPy setup steps', () => {
+    const steps = workflowJobs(WORKFLOW).server.split(/^ {6}- name: /m).slice(1);
+    const ctc = steps.filter(step => /^(Check CTC test selection|Cache CTC numpy virtualenv|Provide numpy for the CTC Viterbi tests)\n/.test(step));
+    expect(ctc).toHaveLength(3);
+    expect(ctc[0]).toContain('id: ctc-selection\n        run: node scripts/run-ci-tests.js server --check-ctc');
+    for (const step of ctc.slice(1)) expect(step).toContain("if: steps.ctc-selection.outputs.required == 'true'");
+    expect(ctc[2]).toContain("-I -c 'import numpy'");
+    expect(ctc[2]).toContain('CI_EXPECT_NUMPY_PYTHON=true');
+  });
+
+  it('requires NumPy for CTC in related, explicit and full plans on its owning shard', () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'portos-check-ctc-'));
+    const output = join(fixture, 'github_output');
+    const ctc = 'scripts/align_lyrics_ctc.test.js';
+    try {
+      const related = JSON.parse(execFileSync(process.execPath, [join(import.meta.dirname, 'ci-test-plan.js')], {
+        cwd: join(import.meta.dirname, '..'),
+        encoding: 'utf8', env: { ...process.env, CI_FORCE_FULL: 'false', CI_BASE_REF: 'main', CI_BASE_SHA: 'HEAD',
+          CI_CHANGED_FILES: '["server/lib/testHelper.js"]', GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
+      }));
+      expect(related.server_mode).toBe('related');
+      expect(related.server_files).toContain(ctc);
+      const requiresNumpy = (mode, files, sources = [], shard = '1/1') => {
+        writeFileSync(output, '');
+        execFileSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server', '--check-ctc'], {
+          env: { ...process.env, CI_TEST_MODE: mode, CI_TEST_FILES: JSON.stringify(files), CI_TEST_SOURCES: JSON.stringify(sources),
+            CI_SHARD: shard, GITHUB_OUTPUT: output, PORTOS_CI_BROWSER_OWNER: 'unit', PORTOS_BROWSER_TEST_PROFILE: undefined },
+        });
+        return readFileSync(output, 'utf8').trim();
+      };
+      expect(requiresNumpy(related.server_mode, related.server_files, related.server_sources)).toBe('required=true');
+      expect(requiresNumpy('related', [], related.server_sources)).toBe('required=true');
+      expect(requiresNumpy('files', [ctc])).toBe('required=true');
+      expect(requiresNumpy('files', ['scripts/run-ci-tests.test.js'])).toBe('required=false');
+      expect(['1/2', '2/2'].map(shard => requiresNumpy('full', [], [], shard)).sort())
+        .toEqual(['required=false', 'required=true']);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
   it('builds every test runner matrix from the planner and hands each slice to the runner', () => {
     expect(runners.map(([id]) => id).sort()).toEqual(['browser', 'client', 'database', 'server', 'windows-server']);
     // Browser ownership has its own balanced canonical partition below.
