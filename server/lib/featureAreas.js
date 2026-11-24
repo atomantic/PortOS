@@ -559,6 +559,32 @@ const literalPrefix = (glob) => {
 /** Brace-free patterns for one catalog glob, each with the literal directory prefix a matching file must start with. */
 export const expandCodeGlob = (glob) => expandBraces(glob).map((pattern) => ({ glob: pattern, prefix: literalPrefix(pattern) }));
 
+// matchesGlob recompiles its pattern on every call, so a few hundred wildcard globs times a 14k-file tree dominated the
+// cost. Globs built only from literal characters, `*`, `?` and a trailing `/**` compile once to an equivalent RegExp
+// (minimatch rules: a wildcard never matches a leading dot or crosses a slash; `**` skips dot-segments). Anything else
+// (brackets, extglobs, a mid-path `**`) keeps using matchesGlob, and featureAreaCatalog.test.js pins the equivalence.
+const SIMPLE_SEGMENT = /^[A-Za-z0-9_.*?-]+$/;
+const segmentSource = (segment) => {
+  const body = [...segment].map((char) => (char === '*' ? '[^/]*' : char === '?' ? '[^/]' : char === '.' ? '\\.' : char)).join('');
+  return /^[*?]/.test(segment) ? '(?!\\.)' + body : body;
+};
+// Node's matchesGlob folds case on Windows and macOS; mirror it so the fast path never disagrees with the fallback.
+const GLOB_FLAGS = process.platform === 'win32' || process.platform === 'darwin' ? 'i' : '';
+const compileCodeGlob = (glob) => {
+  const deep = glob.endsWith('/**');
+  const segments = (deep ? glob.slice(0, -3) : glob).split('/');
+  if (!segments.every((segment) => SIMPLE_SEGMENT.test(segment) && !segment.includes('**'))) return null;
+  const tail = deep ? '/(?:(?!\\.)[^/]+(?:/(?!\\.)[^/]+)*/?)?' : '';
+  return new RegExp('^' + segments.map(segmentSource).join('/') + tail + '$', GLOB_FLAGS);
+};
+
+const REGEX_BY_GLOB = new Map();
+export const matchesCodeGlob = (file, glob) => {
+  if (!REGEX_BY_GLOB.has(glob)) REGEX_BY_GLOB.set(glob, compileCodeGlob(glob));
+  const regex = REGEX_BY_GLOB.get(glob);
+  return regex ? regex.test(file) : posix.matchesGlob(file, glob);
+};
+
 const PATTERNS_BY_PREFIX = new Map();
 for (const entry of FEATURE_AREAS) {
   for (const codeGlob of entry.codeGlobs) {
@@ -580,7 +606,7 @@ export function areasForFile(repoRelativePath) {
   const owners = new Set();
   for (const prefix of ancestorPrefixes(file)) {
     for (const { entry, glob } of PATTERNS_BY_PREFIX.get(prefix) ?? []) {
-      if (!owners.has(entry) && posix.matchesGlob(file, glob)) owners.add(entry);
+      if (!owners.has(entry) && matchesCodeGlob(file, glob)) owners.add(entry);
     }
   }
   return FEATURE_AREAS.filter((entry) => owners.has(entry));
