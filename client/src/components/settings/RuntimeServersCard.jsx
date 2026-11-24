@@ -271,6 +271,12 @@ function ServerRow({ row, busy, actionInProgress, selected, hideActions, childre
             Install
           </button>
         )}
+        {!hideActions && row.onRepair && (
+          <button type="button" onClick={row.onRepair} disabled={busy} className={accentBtn}
+            title={`Repair ${row.label} and its model cache`}>
+            <Download size={12} />Repair
+          </button>
+        )}
         {row.downloadUrl && (
           <a
             href={row.downloadUrl}
@@ -587,7 +593,7 @@ export default function RuntimeServersCard({
         </button>
         <details className="text-xs text-gray-500">
           <summary className="min-h-[44px] content-center cursor-pointer">What is saved for reboot?</summary>
-          <p>llama.cpp, MTPLX and Slotstream run as PM2 processes (<code className="text-gray-400">portos-llama-server</code>, <code className="text-gray-400">portos-mtplx</code>, <code className="text-gray-400">portos-slotstream</code>). Saving snapshots what is running now so it comes back after a reboot — this needs <code className="text-gray-400">pm2 startup</code> to have been run once in a terminal, which is a privileged one-time step PortOS deliberately leaves to you. <span className="text-gray-400">MTPLX, Slotstream, Splash and mkserve are deliberately left out of that snapshot</span>: MTPLX and Slotstream can start on demand; Splash and mkserve are started here. None should pin a checkpoint at boot. Ollama and LM Studio manage their own launch-at-login.</p>
+          <p>llama.cpp, MTPLX and Slotstream run as PM2 processes (<code className="text-gray-400">portos-llama-server</code>, <code className="text-gray-400">portos-mtplx</code>, <code className="text-gray-400">portos-slotstream</code>). Saving snapshots what is running now so it comes back after a reboot — this needs <code className="text-gray-400">pm2 startup</code> to have been run once in a terminal, which is a privileged one-time step PortOS deliberately leaves to you. <span className="text-gray-400">MTPLX, Slotstream, Splash and mkserve are deliberately left out of that snapshot</span>: MTPLX and Slotstream can start on demand; Splash and mkserve are started here. This button does not change those running servers. Ollama and LM Studio manage their own launch-at-login.</p>
         </details>
       </div>
     </div>

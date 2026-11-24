@@ -39,6 +39,7 @@ import {
   localLlmLlamaServerStartSchema,
   localLlmLmStudioServiceSchema,
   localLlmMtplxStartSchema,
+  managedInklingActionSchema,
   localLlmSlotstreamStartSchema,
   localLlmSlotstreamDownloadSchema,
   localLlmMtplxSearchSchema,
@@ -1147,14 +1148,13 @@ router.post('/mtplx/models/remove', asyncHandler(async (req, res) => {
 // available from Status as well as the socket, so reopening the tab is safe.
 const inklingOperations = new Map()
 const inklingErrors = new Map()
-const noRuntimeOverrides = z.strictObject({})
 const runtimeStatusRoute = (runtime, readStatus) => asyncHandler(async (_req, res) => {
   const status = await readStatus()
   res.json({ ...status, operation: inklingOperations.get(runtime) ?? null, lastError: inklingErrors.get(runtime) ?? null })
 })
 
 const runtimeActionRoute = (runtime, label, action, run) => asyncHandler(async (req, res) => {
-  validateRequest(noRuntimeOverrides, req.body ?? {})
+  validateRequest(managedInklingActionSchema, req.body ?? {})
   if (inklingOperations.has(runtime)) {
     throw new ServerError(`${label} already has an operation in progress.`, { status: 409 })
   }

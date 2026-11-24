@@ -282,6 +282,20 @@ describe('runtime selection workflow', () => {
     expect(switchLocalLlmBackend).not.toHaveBeenCalled();
   });
 
+  it('offers to repair a stopped Splash cache after startup fails', async () => {
+    getManagedInklingRuntimeStatus.mockResolvedValue({
+      supported: true, state: 'stopped', installed: true, repairRecommended: true,
+    });
+    controlManagedInklingRuntime.mockResolvedValue({ operation: { action: 'install', message: 'Checking cache…' } });
+    await renderRuntimes('splash');
+    const check = screen.getByRole('button', { name: 'Check Splash status' });
+    const detail = within(check.closest('[role="group"]'));
+    fireEvent.click(detail.getByRole('button', { name: 'Repair' }));
+    const dialog = screen.getByRole('dialog', { name: 'Repair Splash' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Repair' }));
+    await waitFor(() => expect(controlManagedInklingRuntime).toHaveBeenCalledWith('splash', 'install'));
+  });
+
   it('opens configuration from the roster and recovers an invalid deep link', async () => {
     const { getLlamaServerStatus } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue({ installed: false, running: false });

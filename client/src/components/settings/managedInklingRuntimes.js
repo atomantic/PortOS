@@ -13,6 +13,8 @@ export const MANAGED_INKLING_RUNTIMES = {
   },
 };
 
+export const INKLING_CHANGE_LABELS = { install: 'Install', upgrade: 'Update', repair: 'Repair' };
+
 const BUSY_STATES = ['installing', 'updating', 'stopping'];
 const ACTION_STATE = { install: 'installing', upgrade: 'updating', start: 'starting', stop: 'stopping' };
 const OCCUPIED_STATES = ['external', 'unrecognized', 'not-ready', 'starting', 'running', 'online'];
@@ -42,6 +44,7 @@ export function managedInklingRow(id, status, onAction) {
         : state === 'missing' ? download
           : updateAvailable && occupied ? 'Stop the managed runtime before updating it.' : null),
     onInstall: canChangeInstall && !status.installed ? launch('install') : null,
+    onRepair: canChangeInstall && status.repairRecommended && !updateAvailable ? launch('repair') : null,
     onUpgrade: canChangeInstall && updateAvailable ? launch('upgrade') : null,
     onStart: idle && status.installed && !occupied && status.canStart !== false ? launch('start') : null,
     onStop: idle && status.managed === true && occupied ? launch('stop') : null,

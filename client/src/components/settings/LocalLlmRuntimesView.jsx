@@ -45,7 +45,7 @@ import { getFleetLlmHost, stopFleetLlmHost } from '../../services/apiProviders';
 import socket from '../../services/socket';
 import SpecDecodeWeightRow from './SpecDecodeWeightRow.jsx';
 import RuntimeServersCard, { ManagedInklingRuntimeCard } from './RuntimeServersCard.jsx';
-import { MANAGED_INKLING_RUNTIMES } from './managedInklingRuntimes.js';
+import { INKLING_CHANGE_LABELS, MANAGED_INKLING_RUNTIMES } from './managedInklingRuntimes.js';
 import Modal from '../ui/Modal';
 import MtplxServerCard from './MtplxServerCard.jsx';
 import SlotstreamServerCard from './SlotstreamServerCard.jsx';
@@ -278,13 +278,13 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     },
   );
   const inklingAction = (runtime, action) => {
-    if (action === 'install' || action === 'upgrade') setInklingConfirm({ runtime, action });
+    if (Object.hasOwn(INKLING_CHANGE_LABELS, action)) setInklingConfirm({ runtime, action });
     else runInklingAction(runtime, action);
   };
   const confirmInklingAction = () => {
     const { runtime, action } = inklingConfirm;
     setInklingConfirm(null);
-    runInklingAction(runtime, action);
+    runInklingAction(runtime, action === 'repair' ? 'install' : action);
   };
 
   // The preset select mounts pre-selected, so the form has to be filled in the
@@ -823,14 +823,14 @@ export default function LocalLlmRuntimesView({ view } = {}) {
           because the section header already shows "Models → Runtimes". */}
       {inklingConfirm && (
         <Modal open onClose={() => setInklingConfirm(null)} size="sm" usePortal
-          ariaLabel={`${inklingConfirm.action === 'install' ? 'Install' : 'Update'} ${MANAGED_INKLING_RUNTIMES[inklingConfirm.runtime].label}`}>
+          ariaLabel={`${INKLING_CHANGE_LABELS[inklingConfirm.action]} ${MANAGED_INKLING_RUNTIMES[inklingConfirm.runtime].label}`}>
           <div className="rounded-xl border border-port-border bg-port-card p-5 space-y-4">
             <p className="text-sm text-white">{MANAGED_INKLING_RUNTIMES[inklingConfirm.runtime].download}</p>
             <p className="text-xs text-gray-400">This stages the PortOS-supported version. Existing providers and other runtimes are not changed.</p>
             <div className="flex flex-wrap justify-end gap-2">
               <button type="button" onClick={() => setInklingConfirm(null)} className="min-h-[44px] rounded border border-port-border px-3 text-sm text-gray-300">Cancel</button>
               <button type="button" onClick={confirmInklingAction} disabled={busy} className="min-h-[44px] rounded bg-port-accent px-3 text-sm text-white disabled:opacity-50">
-                {inklingConfirm.action === 'install' ? 'Install and download' : 'Update'}
+                {inklingConfirm.action === 'install' ? 'Install and download' : INKLING_CHANGE_LABELS[inklingConfirm.action]}
               </button>
             </div>
           </div>

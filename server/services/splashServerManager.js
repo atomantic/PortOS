@@ -32,6 +32,7 @@ export async function getSplashManagedState() {
   const version = await readInstalledSplashVersion();
   const pm2 = version ? await getAppStatusStrict(SPLASH_APP) : null;
   const owned = ownsProcess(pm2, version);
+  const repairRecommended = owned && ['errored', 'stopped'].includes(pm2.status);
   return {
     installed: Boolean(version),
     version,
@@ -40,8 +41,8 @@ export async function getSplashManagedState() {
     managed: owned && active.has(pm2.status),
     installing: operation === 'install',
     startTimedOut: owned && startTimedOut,
-    ...(owned && ['errored', 'stopped'].includes(pm2.status)
-      ? { reason: 'Splash exited. Check the portos-splash PM2 logs before retrying Start.' } : {}),
+    repairRecommended,
+    ...(repairRecommended ? { reason: 'Splash exited. If its cache is incomplete, use Repair before retrying Start.' } : {}),
   };
 }
 
