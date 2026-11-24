@@ -9,8 +9,11 @@
  *
  * - CoS orphan recovery: `agent/agentManagement.js` imports `cos/cos.js`.
  * - Merged-branch cleanup: branch reconciliation imports `git.js`.
- * - Media runtimes: Topaz/LTX upscale, stitch, vertical reframe and LoRA
- *   training import `mediaJobQueue/index.js` to enqueue or read their jobs.
+ * - Media runtimes & terminal hooks: video/image/audio/SuperCollider/HTML
+ *   generators, remote adapters, policy/staging/settlement helpers, and the
+ *   terminal completion hook table all sit above `mediaJobQueue/` (#17499,
+ *   #18217). Routing them through this leaf keeps `mediaJobQueue` off the
+ *   domain subtrees (CoS, Creative Director, Pipeline, Music Video, FableLoom).
  * - Music Video boot recovery: `render.js` and `excerptRender.js` are the
  *   render pipeline. Boot calls them only to resume interrupted jobs (#17692).
  *
@@ -50,11 +53,22 @@ export function requireMergedBranchCleanup() {
 
 export const QUEUE_IMPORTING_RUNTIMES = Object.freeze(['topazUpscale', 'ltxUpscale', 'stitch', 'vertical', 'training']);
 
+export const MEDIA_RUNTIME_MODULES = Object.freeze([
+  ...QUEUE_IMPORTING_RUNTIMES,
+  'videoLocal', 'videoGrok', 'videoFal', 'videoReactor', 'videoRunway', 'videoGemini', 'videoHiggsfield', 'videoGoogle',
+  'imageLocal', 'imageCodex', 'imageGrok', 'imageAgy', 'imageFal', 'imageRunway', 'imageHiggsfield', 'imageGoogle',
+  'audioLocal', 'sharingCopy', 'htmlComposition', 'superCollider',
+  'audioRemote', 'imageRemote', 'videoRemote',
+  'reviewedReference', 'finishVisualProfile', 'imageVerifier', 'topazStaging', 'videoModelSelection',
+  'creativeDirectorVideoExecution', 'musicVideoProjects', 'musicVideoClipCastReferences',
+  'musicVideoRevisionService', 'musicVideoProductionReview', 'fableLoomRequestInputs',
+]);
+
 let mediaRuntimes = null;
 
-/** @param {Record<string, () => Promise<object>>} loaders - one loader per QUEUE_IMPORTING_RUNTIMES name */
+/** @param {Record<string, () => Promise<object>>} loaders - one loader per MEDIA_RUNTIME_MODULES name */
 export function registerMediaRuntimeModules(loaders) {
-  const missing = QUEUE_IMPORTING_RUNTIMES.filter(name => typeof loaders?.[name] !== 'function');
+  const missing = MEDIA_RUNTIME_MODULES.filter(name => typeof loaders?.[name] !== 'function');
   if (missing.length) throw new Error(`Media runtime loaders missing: ${missing.join(', ')}`);
   mediaRuntimes = loaders;
 }
@@ -64,6 +78,23 @@ export function loadMediaRuntimeModule(name) {
   const load = mediaRuntimes?.[name];
   if (!load) return Promise.reject(notRegistered(`Media runtime "${name}"`));
   return load();
+}
+
+let mediaJobTerminalHooks = null;
+
+/** @param {Array<[Function, () => Promise<unknown>]>} registrations - [matcher, loader] pairs for terminal media job hooks */
+export function registerMediaJobTerminalHooks(registrations) {
+  if (!Array.isArray(registrations)
+    || registrations.some(entry => !Array.isArray(entry) || typeof entry[0] !== 'function' || typeof entry[1] !== 'function')) {
+    throw new Error('Media job terminal hooks must be an array of [matcher, loader] pairs');
+  }
+  mediaJobTerminalHooks = registrations;
+}
+
+/** Terminal listeners attach durable outputs, so an empty slot throws. */
+export function requireMediaJobTerminalHooks() {
+  if (!mediaJobTerminalHooks) throw notRegistered('Media job terminal hooks');
+  return mediaJobTerminalHooks;
 }
 
 let musicVideoRecovery = null;

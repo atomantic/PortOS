@@ -2907,12 +2907,29 @@ describe('path-gated single-purpose jobs', () => {
     expect(gates(realPlan(['docs/README.md'])))
       .toEqual({ linuxContainment: false, supercolliderLive: false });
     // Shared helper reached through the containment suite's import closure.
-    expect(gates(realPlan(['server/lib/fileUtils.js']))).toMatchObject({ linuxContainment: true });
+    expect(gates(realPlan(['server/lib/spawnCwd.js']))).toMatchObject({ linuxContainment: true });
     expect(gates(realPlan(['server/lib/codeAnimationContainment.js'])))
       .toEqual({ linuxContainment: true, supercolliderLive: false });
     expect(gates(realPlan(['server/package-lock.json']))).toMatchObject({ linuxContainment: true, supercolliderLive: true });
     expect(gates(realPlan(['.github/workflows/ci.yml'])))
       .toEqual({ linuxContainment: true, supercolliderLive: true });
+  });
+
+  it('keeps fileUtils/jsonIo/auth/browser barrels out of containment closures (#18218)', () => {
+    const { trackedFiles, linuxContainmentInputs, dockerContainmentLiveInputs } = realTree();
+    for (const excluded of ['server/lib/jsonIo.js', 'server/lib/secureAuthStore.js', 'server/lib/fileUtils.js']) {
+      expect(linuxContainmentInputs).not.toContain(excluded);
+      expect(dockerContainmentLiveInputs).not.toContain(excluded);
+    }
+    for (const excluded of ['server/services/authGate.js', 'server/services/browserService.js', 'server/services/pm2.js']) {
+      expect(linuxContainmentInputs).not.toContain(excluded);
+    }
+    expect(buildCiTestPlan(['server/lib/jsonIo.js'], {
+      trackedFiles, linuxContainmentInputs, dockerContainmentLiveInputs,
+    })).toMatchObject({ linuxContainment: false, dockerContainmentLive: false });
+    expect(buildCiTestPlan(['server/lib/secureAuthStore.js'], {
+      trackedFiles, linuxContainmentInputs, dockerContainmentLiveInputs,
+    })).toMatchObject({ linuxContainment: false });
   });
 
   it('selects the SuperCollider live job for the spawn plumbing its containment cases depend on, not for unrelated files (#12612)', () => {

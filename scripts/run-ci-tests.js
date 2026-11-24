@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { killProcessTree, prepareCliSpawn } from '../server/lib/bufferedSpawn.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
-import { formatErrorAnnotation, formatWarningAnnotation, writeStepSummary } from './lib/githubOutput.js';
+import { formatErrorAnnotation, formatWarningAnnotation, writeStepOutput, writeStepSummary } from './lib/githubOutput.js';
 import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js';
 import { RUN_DIAGNOSTIC_MAX_BYTES, replayContext, replayDiagnostic, diagnosticTestFile, persistTestDiagnostic, processExitDiagnostic } from './ci-test-diagnostics.js';
 import { browserShardSlice } from './lib/browserSuites.js';
@@ -487,9 +487,12 @@ function warmTestChrome() {
 }
 
 async function main() {
-  const scope = process.argv[2];
-  if (!Object.hasOwn(TEST_SCOPES, scope)) {
-    console.error('Usage: node scripts/run-ci-tests.js <server|client|db>');
+  const cliArgs = process.argv.slice(2);
+  const checkRemaining = cliArgs.includes('--check-remaining');
+  const positionalArgs = cliArgs.filter(arg => arg !== '--check-remaining');
+  const scope = positionalArgs[0];
+  if (positionalArgs.length !== 1 || !Object.hasOwn(TEST_SCOPES, scope) || cliArgs.some(arg => arg.startsWith('-') && arg !== '--check-remaining')) {
+    console.error('Usage: node scripts/run-ci-tests.js <server|client|db> [--check-remaining]');
     process.exit(2);
   }
   const workspace = workspaceOf(scope);
@@ -530,6 +533,7 @@ async function main() {
       && inputFiles.every(file => BROWSER_FIDELITY_ONLY_FILES.includes(file));
     if (profile !== undefined && !deferredOnly) throw Error('Browser profile selected no executable cases.');
     console.log(`No ${scope} tests selected.${deferredOnly ? ' Fidelity-only inputs require separate evidence.' : ''}`);
+    if (checkRemaining) writeStepOutput('remaining', '0');
     process.exitCode = 0;
     return;
   }
@@ -544,7 +548,7 @@ async function main() {
   // returns.
   const memoDir = resolveMemoDir();
   const readOnlyMemo = process.env.GITHUB_EVENT_NAME === 'pull_request';
-  if (mode === 'full' && !memoDir && !shard) {
+  if (mode === 'full' && !memoDir && !shard && !checkRemaining) {
     process.exitCode = await spawnNpm(workspace, script, [], label, { name: scope });
     return;
   }
@@ -566,10 +570,18 @@ async function main() {
   if (memoDir) {
     console.log(memoSummaryLine(plan));
     // The next run's planner starts from these parsed facts; a pull request's store is discarded.
-    if (!readOnlyMemo && plan.factsCache) saveFactsCache(memoDir, scope, plan.factsCache);
+    if (!checkRemaining && !readOnlyMemo && plan.factsCache) saveFactsCache(memoDir, scope, plan.factsCache);
     if (process.env.PORTOS_TEST_MEMO_VERBOSE === '1') {
       for (const { test, via, from } of plan.skipped) console.log(`🧠   skipped ${test} (${via} key${from ? `, ${from} verdict` : ''})`);
     }
+  }
+  if (checkRemaining) {
+    console.log(plan.run.length === 0
+      ? `No ${scope} tests left to run${shard ? ' in this shard' : ''}.`
+      : `Remaining ${scope} tests${shard ? ` (shard ${process.env.CI_SHARD})` : ''}: ${plan.run.length}.`);
+    writeStepOutput('remaining', String(plan.run.length));
+    process.exitCode = 0;
+    return;
   }
   // A run that may save its store bounds it first (the cache save follows a green step).
   const pruneMemo = () => {

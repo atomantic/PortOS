@@ -43,6 +43,8 @@ describe('browserSuiteCanRun', () => {
 
     expect(() => browserSuiteCanRun('suite', { Chrome: '/usr/bin/chrome', 'client bundler': undefined }))
       .toThrow('suite: browser suite skipped but PORTOS_REQUIRE_BROWSER_SUITES is set — missing client bundler');
+    expect(() => browserSuiteCanRun('suite', { Chrome: '/usr/bin/chrome', ffmpeg: null }))
+      .toThrow('suite: browser suite skipped but PORTOS_REQUIRE_BROWSER_SUITES is set — missing ffmpeg');
   });
 
   it('runs the cleanup hook before it skips or throws, since Vitest runs no hooks for a skipped file', () => {
