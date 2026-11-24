@@ -8,6 +8,7 @@
 // Both emit 'voice:turn' over Socket.IO and play incoming TTS via Web Audio.
 
 import socket from './socket';
+import { throwApiError } from './apiCore.js';
 import { subscribeVisibility } from '../hooks/useVisibilityEvent.js';
 import { sleep } from '../utils/sleep.js';
 import { resumeAudioContext, acquireAudioSession } from '../lib/audioContext.js';
@@ -753,7 +754,7 @@ export const speakSynthesized = async (text, { engine, voice, rate, signal } = {
     body: JSON.stringify(body),
     signal,
   });
-  if (!res.ok) throw new Error(`synthesize failed: ${res.status}`);
+  if (!res.ok) await throwApiError(res);
   const wav = await res.arrayBuffer();
   // Superseded while the synth was in flight — drop this stale audio rather than
   // playing it over/after the newer turn's reply.

@@ -592,6 +592,37 @@ describe('VoiceWidgetGate — once the widget is listening', () => {
     unmount();
   });
 
+  it('resolves qwen3-tts config key from GET /api/voice/config hydration and voice:config:changed', async () => {
+    mocks.getVoiceConfig.mockResolvedValue({
+      enabled: true,
+      hotkey: 'Space',
+      stt: { engine: 'web-speech', language: 'en' },
+      llm: { fastPath: { enabled: true } },
+      tts: { engine: 'qwen3-tts', qwen3: { voice: 'warm-narrator' }, rate: 1.1 },
+    });
+    localStorage.setItem(HIDDEN_KEY, '0');
+    const { unmount } = renderGate();
+    await screen.findByRole('button', { name: WIDGET_MIC });
+
+    fireEvent.keyDown(window, { code: 'Space' });
+    const capture = mocks.startWebSpeechCapture.mock.calls[0][0];
+    await act(async () => capture.routeFinal('example utterance'));
+    expect(mocks.speakSynthesized).toHaveBeenCalledWith('Example reply', {
+      engine: 'qwen3-tts', voice: 'warm-narrator', rate: 1.1,
+    });
+
+    act(() => emitSocket('voice:config:changed', {
+      ttsEngine: 'qwen3-tts',
+      ttsVoice: 'expressive-alto',
+      ttsRate: 1.25,
+    }));
+    await act(async () => capture.routeFinal('second utterance'));
+    expect(mocks.speakSynthesized).toHaveBeenLastCalledWith('Example reply', {
+      engine: 'qwen3-tts', voice: 'expressive-alto', rate: 1.25,
+    });
+    unmount();
+  });
+
   it('hydrates untouched hotkey and engines after a partial settings event', async () => {
     let resolveConfig;
     mocks.getVoiceConfig.mockReturnValueOnce(new Promise((resolve) => { resolveConfig = resolve; }));
