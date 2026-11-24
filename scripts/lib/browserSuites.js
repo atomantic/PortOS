@@ -33,6 +33,7 @@ const BROWSER_SUITE_OWNERS = {
   'server/services/musicVideo/publish/x.browser.test.js': 1,
   'server/services/musicVideo/publish/sunoHook.browser.test.js': 2,
   'server/routes/manualUpdateRecovery.browser.test.js': 1,
+  'server/routes/autofixerUi.browser.test.js': 1,
   'server/services/musicVideo/overlayTextService.browser.test.js': 2,
   'server/services/codeAnimation/poster.realBrowser.test.js': 1,
 };
@@ -74,6 +75,7 @@ const FOUR_SHARD_OWNERS = {
   'server/services/musicVideo/publish/x.browser.test.js': 2,
   'server/services/musicVideo/publish/sunoHook.browser.test.js': 4,
   'server/routes/manualUpdateRecovery.browser.test.js': 3,
+  'server/routes/autofixerUi.browser.test.js': 3,
   'server/services/musicVideo/overlayTextService.browser.test.js': 4,
   'server/services/codeAnimation/poster.realBrowser.test.js': 2,
 };
