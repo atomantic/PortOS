@@ -216,21 +216,21 @@ async function ensureEgressNetwork(cli) {
 }
 
 /** Start the run's egress proxy on its internal network and wait for it to listen. */
-async function startEgressProxy(cli, { image, runId, network, allowlist, user, sleep }) {
-  const name = `portos-contained-proxy-${runId}`;
+async function startEgressProxy(cli, { image, runId, proxyName, network, allowlist, user, now = Date.now, sleep, signal }) {
   const steps = [
-    buildDockerEgressProxyCreateArgs({ image, containerName: name, runId, network, allowlist, source: DOCKER_EGRESS_PROXY_SOURCE, user }),
-    ['network', 'connect', DOCKER_CONTAINMENT_EGRESS_NETWORK, name],
-    ['start', name],
+    buildDockerEgressProxyCreateArgs({ image, containerName: proxyName, runId, network, allowlist, source: DOCKER_EGRESS_PROXY_SOURCE, user }),
+    ['network', 'connect', DOCKER_CONTAINMENT_EGRESS_NETWORK, proxyName],
+    ['start', proxyName],
   ];
   for (const args of steps) {
     const result = await capture(cli, args);
     if (!result.success) throw new Error(`egress proxy ${args[0]} failed: ${clipDiagnostic(result.stderr || result.stdout)}`);
   }
-  const deadline = Date.now() + PROXY_READY_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const logs = await capture(cli, ['logs', name]);
-    if (`${logs.stdout}${logs.stderr}`.includes(DOCKER_EGRESS_PROXY_READY)) return name;
+  const deadline = now() + PROXY_READY_TIMEOUT_MS;
+  while (now() < deadline) {
+    if (signal?.aborted) return proxyName;
+    const logs = await capture(cli, ['logs', proxyName]);
+    if (`${logs.stdout}${logs.stderr}`.includes(DOCKER_EGRESS_PROXY_READY)) return proxyName;
     await sleep(250);
   }
   throw new Error('the egress proxy did not start listening in time');
@@ -311,12 +311,14 @@ async function executeRun({ engine, worktree, worktreeKey, phase, command, setti
   const controller = new AbortController();
   const onOuterAbort = () => controller.abort();
   const started = now();
+  let markDone;
+  const done = new Promise((resolve) => { markDone = resolve; });
   let runDir = null;
   let proxyName = null;
   let result;
   try {
     signal?.addEventListener?.('abort', onOuterAbort, { once: true });
-    activeRuns.set(runId, { abort: () => controller.abort(), worktreeKey });
+    activeRuns.set(runId, { abort: () => controller.abort(), worktreeKey, done });
     armedThisProcess = true;
     runDir = await realpath(await mkdtemp(join(deps.tmpRoot ?? tmpdir(), 'portos-contained-')));
     const inputDir = join(runDir, 'in');
@@ -341,36 +343,42 @@ async function executeRun({ engine, worktree, worktreeKey, phase, command, setti
       const created = await capture(cli, buildDockerContainmentNetworkArgs({ name: network, runId }));
       if (!created.success) throw new Error(`could not create the run network: ${clipDiagnostic(created.stderr)}`);
       const allowlist = buildEgressAllowlist({ extraHosts: settings?.extraEgressHosts ?? [], npmrcHosts: hints.npmrcHosts });
-      proxyName = await startEgressProxy(cli, { image: node.image, runId, network, allowlist, user, sleep });
+      // Assign before create so finally force-removes the proxy container even if connect/start/readiness fails.
+      proxyName = `portos-contained-proxy-${runId}`;
+      await startEgressProxy(cli, { image: node.image, runId, proxyName, network, allowlist, user, now, sleep, signal: controller.signal });
       onLine?.(`portos-contained: egress allowed to ${allowlist.join(', ')}`);
     }
 
-    const args = buildDockerContainmentRunArgs({
-      phase, image: node.image, containerName, runId, worktree, inputDir, outputDir, workVolume,
-      network, command, user, limits, dataDir, realHome,
-    });
-    const wallMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : (phase === 'install' ? limits.installTimeoutMs : limits.validateTimeoutMs);
-    const ran = await runDocker(cli, args, {
-      timeoutMs: wallMs,
-      signal: controller.signal,
-      onLine,
-      maxBytes: limits.maxLogBytes,
-      spawnImpl: deps.spawnImpl,
-      onTerminate: () => forceRemoveContainer(cli, containerName),
-    });
-    const { patch, patchTruncated } = ran.terminated ? { patch: null, patchTruncated: false } : await readPatch(outputDir, limits.maxPatchBytes);
-    const status = ran.terminated ? 'terminated' : (ran.error || ran.exitCode === 125 ? 'failed' : 'completed');
-    result = {
-      status,
-      ...(ran.terminated ? { reason: ran.terminated } : {}),
-      ...(ran.error ? { error: ran.error } : {}),
-      exitCode: ran.terminated ? null : ran.exitCode,
-      log: ran.tail,
-      logTruncated: ran.truncated,
-      patch,
-      patchTruncated,
-      contained: true,
-    };
+    if (controller.signal.aborted) {
+      result = { status: 'terminated', reason: 'cancelled', exitCode: null, log: '', patch: null, contained: true };
+    } else {
+      const args = buildDockerContainmentRunArgs({
+        phase, image: node.image, containerName, runId, worktree, inputDir, outputDir, workVolume,
+        network, command, user, limits, dataDir, realHome,
+      });
+      const wallMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : (phase === 'install' ? limits.installTimeoutMs : limits.validateTimeoutMs);
+      const ran = await runDocker(cli, args, {
+        timeoutMs: wallMs,
+        signal: controller.signal,
+        onLine,
+        maxBytes: limits.maxLogBytes,
+        spawnImpl: deps.spawnImpl,
+        onTerminate: () => forceRemoveContainer(cli, containerName),
+      });
+      const { patch, patchTruncated } = ran.terminated ? { patch: null, patchTruncated: false } : await readPatch(outputDir, limits.maxPatchBytes);
+      const status = ran.terminated ? 'terminated' : (ran.error || ran.exitCode === 125 ? 'failed' : 'completed');
+      result = {
+        status,
+        ...(ran.terminated ? { reason: ran.terminated } : {}),
+        ...(ran.error ? { error: ran.error } : {}),
+        exitCode: ran.terminated ? null : ran.exitCode,
+        log: ran.tail,
+        logTruncated: ran.truncated,
+        patch,
+        patchTruncated,
+        contained: true,
+      };
+    }
   } catch (err) {
     result = { status: 'failed', error: clipDiagnostic(err.message), exitCode: null, log: '', patch: null, contained: true };
   } finally {
@@ -382,6 +390,7 @@ async function executeRun({ engine, worktree, worktreeKey, phase, command, setti
     if (result?.status === 'terminated') await capture(cli, ['volume', 'rm', '--force', workVolume]).catch(() => null);
     if (runDir) await rm(runDir, { recursive: true, force: true }).catch(() => {});
     activeRuns.delete(runId);
+    markDone();
   }
   return {
     ...result,
@@ -459,9 +468,11 @@ export function reconcileDockerContainment({ enabled, reason = 'unspecified', en
 async function reconcileOnce({ enabled, reason, engine: injected }) {
   if (!enabled) {
     if (!armedThisProcess && reason !== 'feature-toggle') return { enabled: false, changed: false };
-    for (const run of activeRuns.values()) run.abort();
-    const engine = injected ?? await resolveDockerEngine();
+    const running = [...activeRuns.values()];
+    for (const run of running) run.abort();
     armedThisProcess = false;
+    await Promise.allSettled(running.map((run) => run.done));
+    const engine = injected ?? await resolveDockerEngine();
     if (!engine.ready) return { enabled: false, changed: false, state: engine.state };
     const removed = await sweepDockerContainmentOrphans({ engine, all: true });
     const changed = Object.values(removed).some(Boolean);
