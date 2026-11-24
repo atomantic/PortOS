@@ -146,6 +146,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/browser/version',
     '/api/code-animation/packages/validate',
     '/api/code-animation/projects/:id/sound-assets',
+    // Operator/API erasure path for data/contacts-cache.json + sync state (#18130).
+    '/api/contacts/cache',
     '/api/cos/agents/:id/release-candidate',
     '/api/cos/mind/maintainer/watchdog',
     // scripts/portos-acp.js (docs/ACP.md): the ACP stdio adapter's live Persistent Mind feed; the browser uses Socket.IO.

@@ -51,6 +51,13 @@ describe('DEFAULT_EXCLUDES anchoring', () => {
     expect(paths).not.toContain('/image-to-3d/');
     expect(paths.some((x) => x.includes('model.glb'))).toBe(false);
   });
+
+  it('excludes /contacts-cache.json non-overridably', () => {
+    const entry = DEFAULT_EXCLUDES.find((e) => e.path === '/contacts-cache.json');
+    expect(entry).toBeDefined();
+    expect(entry.overridable).toBe(false);
+    expect(computeEffectiveExcludes({ disabledDefaultExcludes: ['/contacts-cache.json'] })).toContain('/contacts-cache.json');
+  });
 });
 
 describe('deployed LoRA backup recovery', () => {
