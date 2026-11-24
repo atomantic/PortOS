@@ -1,7 +1,9 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { DOCKER_EGRESS_PROXY_READY } from '../lib/dockerEgressProxy.js';
 
 const engineState = vi.hoisted(() => ({ resolve: null }));
 vi.mock('./dockerEngine.js', async (importOriginal) => ({
@@ -124,5 +126,135 @@ describe('runContained refusals', () => {
     expect(await runContained({ worktree: repo, phase: 'validate', command: 'npm test', dataDir: repo, deps: { engine } }))
       .toMatchObject({ status: 'refused', state: 'mount-refused' });
     expect(engine.calls).toEqual([]);
+  });
+});
+
+describe('runContained cleanup and disarm teardown', () => {
+  it.runIf(POSIX_HOST).each([
+    { label: 'network connect', failPrefix: 'network connect', expectedError: 'egress proxy network failed' },
+    { label: 'container start', failPrefix: 'start portos-contained-proxy-', expectedError: 'egress proxy start failed' },
+    { label: 'readiness timeout', failPrefix: null, expectedError: 'did not start listening in time' },
+  ])('force-removes the proxy container before the per-run network on $label failure', async ({ failPrefix, expectedError }) => {
+    writeFileSync(join(repo, '.nvmrc'), '24\n');
+    let clock = 1_700_000_000_000;
+    const responses = [
+      ['image inspect', { success: true, stdout: 'sha256:abc\n' }],
+      ['network inspect', { success: true }],
+      ['logs', { success: true, stdout: '' }],
+    ];
+    if (failPrefix) responses.push([failPrefix, { success: false, stderr: `${failPrefix} boom` }]);
+    const engine = fakeEngine(responses);
+
+    const result = await runContained({
+      worktree: repo,
+      phase: 'install',
+      command: 'npm ci',
+      deps: {
+        engine,
+        now: () => clock,
+        sleep: async (ms) => { clock += ms; },
+      },
+    });
+
+    expect(result).toMatchObject({ status: 'failed', contained: true });
+    expect(result.error).toContain(expectedError);
+    const proxyRmIdx = engine.calls.indexOf(`rm --force portos-contained-proxy-${result.runId}`);
+    const netRmIdx = engine.calls.indexOf(`network rm portos-contained-net-${result.runId}`);
+    expect(proxyRmIdx).toBeGreaterThan(-1);
+    expect(netRmIdx).toBeGreaterThan(proxyRmIdx);
+  });
+
+  it.runIf(POSIX_HOST)('waits for active run teardown before removing shared egress network and npm cache on disable', async () => {
+    writeFileSync(join(repo, '.nvmrc'), '24\n');
+    let runContainerActive = false;
+    let proxyContainerActive = false;
+    let containerSpawnedResolve;
+    const containerSpawned = new Promise((resolve) => { containerSpawnedResolve = resolve; });
+    const calls = [];
+
+    const capture = vi.fn(async (args) => {
+      const cmd = args.join(' ');
+      calls.push(cmd);
+      if (cmd.startsWith('image inspect')) return { success: true, stdout: 'sha256:abc\n', stderr: '' };
+      if (cmd.startsWith('network inspect')) return { success: true, stdout: '', stderr: '' };
+      if (cmd.startsWith('create --name portos-contained-proxy-')) {
+        proxyContainerActive = true;
+        return { success: true, stdout: '', stderr: '' };
+      }
+      if (cmd.startsWith('logs portos-contained-proxy-')) {
+        return { success: true, stdout: `${DOCKER_EGRESS_PROXY_READY} on 3128\n`, stderr: '' };
+      }
+      if (cmd.startsWith('rm --force portos-contained-proxy-')) {
+        await new Promise((resolve) => { setTimeout(resolve, 10); });
+        proxyContainerActive = false;
+        return { success: true, stdout: '', stderr: '' };
+      }
+      if (cmd.startsWith('rm --force portos-contained-')) {
+        await new Promise((resolve) => { setTimeout(resolve, 10); });
+        runContainerActive = false;
+        return { success: true, stdout: '', stderr: '' };
+      }
+      if (cmd === 'ps --all --filter label=org.portos.containment.run --format {{.Names}}\t{{.Label "org.portos.containment.run"}}\t{{.State}}') {
+        return { success: true, stdout: '', stderr: '' };
+      }
+      if (cmd.startsWith('network ls')) {
+        return { success: true, stdout: 'portos-contained-egress\tshared\n', stderr: '' };
+      }
+      if (cmd.startsWith('volume ls')) {
+        return { success: true, stdout: `portos-contained-npm-cache\tshared\t\t${Date.now()}\n`, stderr: '' };
+      }
+      if (cmd === 'network rm portos-contained-egress') {
+        if (runContainerActive || proxyContainerActive) return { success: false, stdout: '', stderr: 'network has active endpoints' };
+        return { success: true, stdout: '', stderr: '' };
+      }
+      if (cmd === 'volume rm --force portos-contained-npm-cache') {
+        if (runContainerActive) return { success: false, stdout: '', stderr: 'volume is in use' };
+        return { success: true, stdout: '', stderr: '' };
+      }
+      return { success: true, stdout: '', stderr: '' };
+    });
+
+    const engine = {
+      state: 'ready',
+      ready: true,
+      message: 'ready',
+      engine: { kind: 'native', label: 'Docker Engine', context: 'default' },
+      cli: { bin: 'docker', globalArgs: [], capture },
+      calls,
+    };
+    engineState.resolve = vi.fn(() => engine);
+
+    const spawnImpl = vi.fn(() => {
+      runContainerActive = true;
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = vi.fn(() => {
+        queueMicrotask(() => child.emit('close', 137));
+      });
+      queueMicrotask(() => containerSpawnedResolve());
+      return child;
+    });
+
+    const runPromise = runContained({
+      worktree: repo,
+      phase: 'install',
+      command: 'npm ci',
+      deps: { engine, spawnImpl },
+    });
+
+    await containerSpawned;
+    const off = await reconcileDockerContainment({ enabled: false, reason: 'feature-toggle' });
+    const runResult = await runPromise;
+
+    expect(runResult).toMatchObject({ status: 'terminated', reason: 'cancelled', contained: true });
+    expect(off).toMatchObject({ enabled: false, changed: true, removed: { networks: 1, volumes: 1 } });
+
+    const proxyRmIdx = calls.indexOf(`rm --force portos-contained-proxy-${runResult.runId}`);
+    const egressRmIdx = calls.indexOf('network rm portos-contained-egress');
+    const cacheRmIdx = calls.indexOf('volume rm --force portos-contained-npm-cache');
+    expect(proxyRmIdx).toBeGreaterThan(-1);
+    expect(egressRmIdx).toBeGreaterThan(proxyRmIdx);
+    expect(cacheRmIdx).toBeGreaterThan(proxyRmIdx);
   });
 });
