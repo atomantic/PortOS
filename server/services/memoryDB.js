@@ -163,16 +163,29 @@ async function insertMemory(client, data, embedding, reviewOrigin = null) {
   mem.embedding = embeddingCol.value ? embedding : null;
   // Store related memories as links
   if (data.relatedMemories?.length > 0) {
-    for (const relId of data.relatedMemories) {
-      await client.query(
-        'INSERT INTO memory_links (source_id, target_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-        [id, relId]
-      );
-    }
-    mem.relatedMemories = data.relatedMemories;
+    mem.relatedMemories = await insertSymmetricRelatedLinks(client, id, data.relatedMemories);
   }
 
   return mem;
+}
+
+/**
+ * Insert 'related' links as symmetric (id, relId) + (relId, id) pairs, matching
+ * linkMemories and the getGraphData `source_id < target_id` dedupe. Returns the
+ * unique non-self target ids.
+ */
+async function insertSymmetricRelatedLinks(client, id, relatedIds) {
+  const targets = [...new Set(relatedIds)].filter(relId => relId !== id);
+  if (targets.length) {
+    await client.query(
+      `INSERT INTO memory_links (source_id, target_id)
+       SELECT $1, t FROM unnest($2::uuid[]) AS t
+       UNION ALL SELECT t, $1 FROM unnest($2::uuid[]) AS t
+       ON CONFLICT DO NOTHING`,
+      [id, targets]
+    );
+  }
+  return targets;
 }
 
 export async function createMemory(data, embedding = null) {
@@ -507,12 +520,9 @@ async function updateMemoryWithClient(client, id, updates) {
   )).rows[0] : row;
   if (updates.relatedMemories) {
     // Legacy edits replace only the symmetric relation; preserve typed provenance.
-    await client.query("DELETE FROM memory_links WHERE source_id = $1 AND link_type = 'related'", [id]);
-    if (updates.relatedMemories.length) {
-      const slots = updates.relatedMemories.map((_, i) => `($1, $${i + 2})`).join(', ');
-      await client.query(`INSERT INTO memory_links (source_id, target_id) VALUES ${slots} ON CONFLICT DO NOTHING`,
-        [id, ...updates.relatedMemories]);
-    }
+    // Symmetric pairs are stored as two rows, so clear both directions.
+    await client.query("DELETE FROM memory_links WHERE (source_id = $1 OR target_id = $1) AND link_type = 'related'", [id]);
+    await insertSymmetricRelatedLinks(client, id, updates.relatedMemories);
     // Ask the trigger for a local clock; explicit clocks belong to peer replay.
     updated = (await client.query('UPDATE memories SET updated_at = NULL WHERE id = $1 RETURNING *', [id])).rows[0];
   }
