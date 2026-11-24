@@ -1,6 +1,6 @@
 import { StrictMode, memo } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router';
 import App from './App.jsx';
 import { ThemeProvider } from './components/ThemeContext.jsx';
@@ -83,9 +83,10 @@ it('keeps cold shell requests bounded and isolates bell and rail updates from th
     mock.socket.connected = true;
     mock.socket.deliver('connect');
   });
-  expect(calls.toSorted()).toEqual([
+  // The Actions queue re-reads once the socket burst settles.
+  await waitFor(() => expect(calls.toSorted()).toEqual([
     '/api/notifications', '/api/notifications', '/api/review/queue', '/api/review/queue', '/api/shell/bootstrap',
-  ]);
+  ]));
 
   const renderCount = mock.pageRender.mock.calls.length;
   const contextCount = mock.contextRender.mock.calls.length;
@@ -94,6 +95,7 @@ it('keeps cold shell requests bounded and isolates bell and rail updates from th
       id: 'n1', title: 'Example notification', timestamp: '2026-01-01T00:00:00Z', read: false,
     });
   });
+  await waitFor(() => expect(calls.filter(path => path === '/api/review/queue')).toHaveLength(3));
   const sidebar = within(document.getElementById('app-sidebar'));
   fireEvent.click(sidebar.getByRole('button', { name: /Notifications/ }));
   expect(screen.getByRole('button', { name: /^Unread: Example notification/ })).toBeInTheDocument();
