@@ -94,8 +94,8 @@ export function FeaturePrioritiesSection() {
       return;
     }
     if (tier === null) {
-      // Only a row that still shows a pin needs the server to re-resolve it; this also absorbs the echo of our own clear.
-      if (row.source === 'pinned') void load();
+      // A row that still shows a pin needs the server to re-resolve it, and so does any read in flight, which may have captured the pin about to be cleared; otherwise the echo of our own clear is absorbed.
+      if (row.source === 'pinned' || pendingLoads.current > 0) void load();
       return;
     }
     commit((prev) => ({ ...prev, areas: prev.areas.map((entry) => (entry.areaId === areaId ? pinRow(entry, tier) : entry)) }));

@@ -132,6 +132,19 @@ describe('FeaturePrioritiesSection', () => {
     expect(within(rowOf('Brain')).getByTestId('tier-brain').textContent).toBe('P0');
   });
 
+  it('supersedes a read in flight that captured a pin which is then cleared', async () => {
+    render(<FeaturePrioritiesSection />);
+    await screen.findByText('Brain');
+    let release;
+    mock.get.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+    emit('connect');
+    mock.get.mockResolvedValueOnce(payload([area()]));
+    emit('feature-priorities:updated', { areaId: 'brain', tier: null });
+    await act(async () => { release(payload([area({ tier: 'P2', source: 'pinned' })])); });
+    await waitFor(() => expect(mock.get).toHaveBeenCalledTimes(3));
+    expect(within(rowOf('Brain')).getByText('Learned')).toBeTruthy();
+  });
+
   it('re-reads after a socket reconnect', async () => {
     render(<FeaturePrioritiesSection />);
     await screen.findByText('Brain');
