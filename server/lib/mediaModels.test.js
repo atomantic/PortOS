@@ -1923,3 +1923,25 @@ describe('live snapshot restore ownership', () => {
     expect(registry.setMediaModelEnabled(registry.getImageModels()[0].id, false)).toMatchObject({ enabled: false });
   });
 });
+
+describe('FLUX.3 Klein revision pins', () => {
+  const shipped = 'mflux-community/flux-3-image-klein-mflux-q4';
+  it('ships a 40-hex commit pin on every FLUX.3 Klein entry', async () => {
+    const { getImageModels } = await import('./mediaModels.js');
+    const klein = getImageModels().filter(m => m.runner === 'flux3');
+    expect(klein.map(m => m.id).sort()).toEqual(['flux3-klein-q4', 'flux3-klein-q6', 'flux3-klein-q8']);
+    for (const m of klein) expect(m.revision).toMatch(/^[0-9a-f]{40}$/);
+  });
+  it('backfills persisted shipped entries but never a fork or an explicit revision', async () => {
+    writeFileSync(registryFile, JSON.stringify({ video: {}, image: [
+      { id: 'flux3-klein-q4', runner: 'flux3', repo: shipped },
+      { id: 'flux3-klein-q6', runner: 'flux3', repo: 'my-fork/klein' },
+      { id: 'flux3-klein-q8', runner: 'flux3', repo: 'mflux-community/flux-3-image-klein-mflux-q8', revision: '' },
+    ] }));
+    const { getImageModels } = await import('./mediaModels.js');
+    const byId = Object.fromEntries(getImageModels().map(m => [m.id, m]));
+    expect(byId['flux3-klein-q4'].revision).toMatch(/^[0-9a-f]{40}$/);
+    expect('revision' in byId['flux3-klein-q6']).toBe(false);
+    expect(byId['flux3-klein-q8'].revision).toBe('');
+  });
+});

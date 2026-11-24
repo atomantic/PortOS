@@ -21,7 +21,7 @@ import { optionalUploadFields, optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
 import setupRouter, { streamMossAction } from './imageGenSetup.js';
-import { usesMossSwift } from '../lib/imageRuntimeRemedies.js';
+import { usesMossSwift, usesFlux3 } from '../lib/imageRuntimeRemedies.js';
 import { downloadMossWeights, mossModelCacheStatus, verifyMossWeights, repairMossWeights } from '../services/imageGen/mossWeights.js';
 import { attachSseClient as attachQueueSseClient, cancelJob, listJobs, laneConcurrencyFor } from '../services/mediaJobQueue/index.js';
 import { mediaJobExecutionLane } from '../lib/generationModes.js';
@@ -284,14 +284,16 @@ const imageModelCacheStatus = async (m) => {
   // is `cached: true` only when ALL are cached; sizeBytes is the sum. The
   // `pendingRepos` field lets the UI explain WHICH repos still need a pull
   // so the user isn't surprised when clicking "Download" triggers >1 fetch.
-  const inspections = await Promise.all(required.map((r) => inspectModelCache(r)));
+  // FLUX.3 renders load only its pinned snapshot, so another revision of the repo is not "cached".
+  const pinnedRevision = (r, i) => (i === 0 && usesFlux3(m) ? m.revision || null : null);
+  const inspections = await Promise.all(required.map((r, i) => inspectModelCache(r, { revision: pinnedRevision(r, i) })));
   const cached = inspections.every((i) => i.cached);
   const sizeBytes = inspections.reduce((sum, i) => sum + (i.sizeBytes || 0), 0);
   const pendingRepos = required.filter((_, i) => !inspections[i].cached);
   // Integrity is only meaningful for repos that finished downloading — run
   // the cheap structural check across every cached required repo and report
   // the worst result, so a corrupt aux encoder still surfaces a Repair state.
-  const integrity = cached ? aggregateVerifies(await Promise.all(required.map((r) => verifyModelCache(r)))) : null;
+  const integrity = cached ? aggregateVerifies(await Promise.all(required.map((r, i) => verifyModelCache(r, { revision: pinnedRevision(r, i) })))) : null;
   return { id: m.id, repo: required[0], cached, sizeBytes, requiredRepos: required, pendingRepos, integrity };
 };
 
@@ -372,6 +374,7 @@ router.post('/models/:modelId/download', asyncHandler(async (req, res) => {
   const model = downloadableImageModel(req);
   if (usesMossSwift(model)) return streamMossAction(req, res, downloadMossWeights);
   const repos = imageModelDownloadTargets(model) || requiredReposForModel(model);
+  if (repos && usesFlux3(model) && model.revision) repos[0] = { repo: repos[0], revision: model.revision };
   if (!repos) {
     throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file — cannot pre-download.`, {
       status: 400,
