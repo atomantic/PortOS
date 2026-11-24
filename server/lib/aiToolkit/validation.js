@@ -142,6 +142,12 @@ export const providerSchema = z.object({
   // this provider — distinct from numCtx (what we *ask Ollama for*). For cloud
   // providers numCtx stays null and this reflects the model's real ceiling.
   contextWindow: z.number().int().min(512).max(2097152).nullable().optional(),
+  // Harness budget, not daemon allocation or PortOS planning. OpenCode pins
+  // one explicit model; Claude Code's environment applies across the preset.
+  harnessContext: z.object({
+    tokens: z.number().int().min(512).max(2097152),
+    model: z.string().trim().min(1).max(300).optional(),
+  }).strict().nullable().optional(),
   // Per-model context windows read from the provider's `/models` catalog, written
   // by model refresh; beats the hardcoded table, loses to `contextWindow`. The
   // ceiling is wider than `contextWindow`'s because it must accept whatever a

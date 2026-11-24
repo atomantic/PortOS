@@ -51,6 +51,7 @@ export const MODE_SHARED_SETTINGS_KEYS = Object.freeze([
   'topP',
   'thinking',
   'contextWindow',
+  'harnessContext',
   'textTransport',
 ]);
 

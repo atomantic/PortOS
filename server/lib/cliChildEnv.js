@@ -24,6 +24,7 @@ import {
   opencodeConfigIsLocalOnly,
 } from './provider/providerModels.js';
 import { isLocalInstanceEndpoint } from './localEndpoint.js';
+import { SPLASH_CONTEXT } from './splashRuntime.js';
 import { agentGuardEnv } from './agentGuard/index.js';
 import { join, resolve } from 'path';
 import { buildSafeCliBaseEnv, withTorchCompilerCacheEnv } from './processEnv.js';
@@ -69,14 +70,16 @@ function isLocalBackedClaude(provider) {
  * `claudeLocalEnvDefaults`; `cliChildEnv.test.js` enforces it.
  */
 const CLAUDE_LOCAL_TUNING_ENV_KEYS = [
-  'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'API_TIMEOUT_MS', 'API_FORCE_IDLE_TIMEOUT',
+  'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_MAX_CONTEXT_TOKENS', 'API_TIMEOUT_MS', 'API_FORCE_IDLE_TIMEOUT',
   'CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS', 'CLAUDE_STREAM_IDLE_TIMEOUT_MS', 'MAX_THINKING_TOKENS',
 ];
 
 function claudeLocalEnvDefaults(provider) {
   if (!isLocalBackedClaude(provider)) return {};
   return {
-    CLAUDE_CODE_MAX_OUTPUT_TOKENS: CLAUDE_LOCAL_MAX_OUTPUT_TOKENS,
+    // Splash's usual 64K window needs room for prompts and tool results.
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: provider.splashBacked === true ? '8192' : CLAUDE_LOCAL_MAX_OUTPUT_TOKENS,
+    ...(provider.splashBacked === true ? { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(SPLASH_CONTEXT) } : {}),
     API_TIMEOUT_MS: CLAUDE_LOCAL_API_TIMEOUT_MS,
     API_FORCE_IDLE_TIMEOUT: CLAUDE_LOCAL_FORCE_IDLE_TIMEOUT,
     CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS: CLAUDE_LOCAL_STREAM_IDLE_TIMEOUT_MS,
@@ -90,6 +93,13 @@ function claudeLocalEnvDefaults(provider) {
       ? { MAX_THINKING_TOKENS: '0' }
       : {}),
   };
+}
+
+function claudeContextOverride(provider) {
+  const value = provider?.harnessContext;
+  if (!value || value.model || !isClaudeCommand(provider.command) || !provider.command
+    || !(provider.envVars?.ANTHROPIC_BASE_URL || provider.envVars?.CLAUDE_CODE_MAX_CONTEXT_TOKENS)) return {};
+  return { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(value.tokens) };
 }
 
 /**
@@ -119,6 +129,7 @@ export function composeProviderEnv({ before = null, provider = null, model = nul
     ...(before || {}),
     ...claudeLocalEnvDefaults(provider),
     ...(provider?.envVars || {}),
+    ...claudeContextOverride(provider),
     // Rebuilds OPENCODE_CONFIG_CONTENT with a declared models map so the injected
     // namespaced `--model` is accepted; lands after provider.envVars to override
     // the provider's STATIC copy. `safetyProfile` reaches it because OpenCode's
