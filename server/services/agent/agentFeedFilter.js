@@ -34,18 +34,20 @@ export function scorePosts(agent, posts) {
     // Submolt alignment: +2 if submolt matches a topic
     const submoltRaw = typeof post.submolt === 'object' ? post.submolt?.name : post.submolt;
     const submoltLower = (submoltRaw || '').toLowerCase();
-    if (topics.some(t => submoltLower.includes(t) || t.includes(submoltLower))) {
+    // Every string includes '', so a post without a submolt must not match.
+    if (submoltLower && topics.some(t => submoltLower.includes(t) || t.includes(submoltLower))) {
       score += 2;
     }
 
     // Low comment count: +1 (room for engagement)
-    if ((post.commentCount || 0) < 5) {
+    if ((post.commentCount ?? post.comment_count ?? 0) < 5) {
       score += 1;
     }
 
     // Recency: +1 if posted within last 6 hours
-    if (post.createdAt) {
-      const age = Date.now() - new Date(post.createdAt).getTime();
+    const createdAt = post.createdAt ?? post.created_at;
+    if (createdAt) {
+      const age = Date.now() - new Date(createdAt).getTime();
       if (age < 6 * 60 * 60 * 1000) {
         score += 1;
       }
@@ -53,6 +55,11 @@ export function scorePosts(agent, posts) {
 
     return { ...post, relevanceScore: score, matchedTopics };
   }).sort((a, b) => b.relevanceScore - a.relevanceScore);
+}
+
+/** Author name of a Moltbook post or comment (the API returns a string or an object). */
+export function moltbookAuthorName(item) {
+  return typeof item?.author === 'object' ? item.author?.name : item?.author;
 }
 
 /**
@@ -84,7 +91,9 @@ export async function findRelevantPosts(client, agent, options = {}) {
 }
 
 /**
- * Find posts worth replying to (not already commented on by this agent)
+ * Find posts worth replying to (not already commented on by this agent).
+ * Callers pass `agentUsername`; without it a scheduled run comments again on
+ * the same hot posts.
  */
 export async function findReplyOpportunities(client, agent, options = {}) {
   const {
@@ -104,12 +113,12 @@ export async function findReplyOpportunities(client, agent, options = {}) {
 
   const opportunities = [];
 
-  for (const post of relevantPosts.slice(0, maxCandidates)) {
+  for (const post of relevantPosts) {
     const commentsResponse = await client.getComments(post.id);
     const comments = commentsResponse.comments || commentsResponse || [];
 
     // Skip if agent already commented
-    if (agentUsername && comments.some(c => (typeof c.author === 'object' ? c.author?.name : c.author) === agentUsername)) {
+    if (agentUsername && comments.some(c => moltbookAuthorName(c) === agentUsername)) {
       continue;
     }
 
