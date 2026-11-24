@@ -83,6 +83,9 @@ jobs:
       # workflow_call, which passes inputs.full) it also exports
       # CI_GATED_BASE_SHA, the last green push or schedule run's head, fetched
       # at depth 1; a failed lookup exports nothing and every native job runs.
+      # CI_PREDECESSOR_GREEN_SHA is that sha only when it is this push's first
+      # parent: the planner then runs the generated-data plan for a diff that
+      # is only the quality snapshot (#18457).
       - name: Resolve the pull-request diff base
         env:
           CI_GATED_BASE_LOOKUP: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.full != true }}

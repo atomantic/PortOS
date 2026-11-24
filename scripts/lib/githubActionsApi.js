@@ -200,9 +200,11 @@ export async function fetchJobsWithFailedSteps(fetchImpl, target) {
  *   was never acquired ("The job was not acquired by Runner ... even after
  *   multiple attempts"). That is capacity, not a defect in the tested commit.
  *
+ * - `succeeded`: names of jobs that concluded `success` (a skipped job is not one).
+ *
  * `null` means "could not be read".
  *
- * @returns {Promise<{failed: Array<{name: string, steps: string[], reason?: string}>, neverStarted: string[]}|null>}
+ * @returns {Promise<{failed: Array<{name: string, steps: string[], reason?: string}>, neverStarted: string[], succeeded: string[]}|null>}
  */
 export async function fetchRunJobOutcomes(fetchImpl, target) {
   const { repoPath, runId, runAttempt, token, timeoutMs } = target || {};
@@ -213,8 +215,10 @@ export async function fetchRunJobOutcomes(fetchImpl, target) {
   if (!Array.isArray(body?.jobs) || body.total_count > body.jobs.length) return null;
   const failed = [];
   const neverStarted = [];
+  const succeeded = [];
   for (const job of body.jobs) {
     const name = safeWorkflowText(job?.name, 'unnamed job');
+    if (job?.conclusion === 'success') succeeded.push(name);
     const steps = failedSteps(job).map((step) => safeWorkflowText(step?.name, 'unnamed step'));
     if (steps.length) failed.push({ name, steps });
     else if (job?.conclusion === 'timed_out') failed.push({ name, steps, reason: 'timed out' });
@@ -225,5 +229,5 @@ export async function fetchRunJobOutcomes(fetchImpl, target) {
       } else neverStarted.push(name);
     }
   }
-  return { failed, neverStarted };
+  return { failed, neverStarted, succeeded };
 }

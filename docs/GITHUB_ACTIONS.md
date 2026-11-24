@@ -890,9 +890,9 @@ one Actions API call for the newest successful `push` or `schedule` run of
 `ci.yml` on `main`, fetches its head at depth 1 and exports
 `CI_GATED_BASE_SHA`; the planner diffs it against `HEAD` (two-dot,
 `--no-renames`). Any lookup, fetch or diff failure runs every native job.
-Scheduled, dispatched and release runs are unchanged, so every native job still
-runs twice a day and on the release candidate. A gated push publishes no `Full CI Gate`
+Scheduled, dispatched and release runs are unchanged. A gated push publishes no `Full CI Gate`
 (`native_gated`): it is not complete-run evidence for release reuse.
+Snapshot-only pushes: [CI_SNAPSHOT_PUSHES.md](CI_SNAPSHOT_PUSHES.md).
 
 A merge commit on `main` is tested because a PR gate only proves the PR
 against the base it was built on: two PRs that were each green can merge into a
