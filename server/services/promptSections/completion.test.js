@@ -44,8 +44,7 @@ describe('review-enabled completion merge gate', () => {
     const section = buildClaimFlowCompletionSection({ agentId: 'example-picker' });
     expect(section).toContain('Keep a merged branch bound if you are leaving its checkout for PortOS to clean up at completion.');
     expect(section).toContain('`checkout-present` is expected and needs no retry.');
-    expect(section).toContain('Use `handoff: true` only when another owner is taking over the branch');
-    expect(section).toContain('"action":"release","branch":"BRANCH","handoff":true');
+    expect(section).toContain('Add `"handoff":true` to the release JSON only when another owner is taking over mid-run.');
   });
 
   it('waits for current-head CI and re-runs review after a changed head', () => {
