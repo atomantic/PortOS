@@ -8,7 +8,8 @@ import { useState } from 'react';
 // render state.
 //
 // `onCommit(message, clearDraft)` owns the request and the in-flight flag; it
-// calls `clearDraft` once the commit request settles.
+// calls `clearDraft` only when the commit succeeds, so a failed commit keeps
+// the message for a retry.
 export default function CommitComposer({ draftRef, committing, onCommit }) {
   const [message, setMessage] = useState(() => draftRef.current);
 
