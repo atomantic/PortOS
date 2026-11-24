@@ -134,6 +134,7 @@ export const CREDENTIALS = Object.freeze([
   }),
   Object.freeze({
     id: 'telegram',
+    privateStore: true,
     label: 'Telegram',
     unlocks: 'Outbound Telegram notifications and the MCP bridge bot.',
     tier: 'free',
