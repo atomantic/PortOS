@@ -15,6 +15,7 @@ import { Link } from 'react-router';
 import { useSocketResource } from '../../hooks/useSocketResource';
 import { formatDateTime } from '../../utils/formatters';
 import { formatCount } from '../../utils/formatters';
+import { normalizeMemoryType } from '../../lib/legacyMemoryType';
 
 const EMPTY_MEMORY = {
   content: '', summary: '', type: 'observation', category: 'other', tags: [], importance: 0.5, protection: 'standard',
@@ -309,7 +310,7 @@ function MemoryEditor({ memory, onSaved }) {
   const [draft, setDraft] = useState({
     content: memory.content || '',
     summary: memory.summary || '',
-    type: memory.type || 'observation',
+    type: normalizeMemoryType(memory.type),
     category: memory.category || 'other',
     tags: (memory.tags || []).filter((tag) => !tag.startsWith('mind:')).join(', '),
     importance: memory.importance ?? 0.5,

@@ -554,7 +554,7 @@ export default function MindTab() {
     setLifecycleError(null);
     try {
       await promotePersistentMindEvent(event.eventId, {
-        id: `promotion-${event.eventId}`, approved: true, content, summary: content.slice(0, 500), type: 'insight', category: 'other',
+        id: `promotion-${event.eventId}`, approved: true, content, summary: content.slice(0, 500), type: 'learning', category: 'other',
       }, { silent: true });
       await loadHistory();
     } catch (error) {

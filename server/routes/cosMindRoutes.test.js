@@ -680,8 +680,12 @@ describe('persistent mind routes', () => {
     });
     expect(res.status).toBe(201);
     expect(mocks.promotePersistentMindMemory).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'promotion-1', approved: true, content: 'Safe summary', sourceEventId: 'event-1',
+      id: 'promotion-1', approved: true, content: 'Safe summary', sourceEventId: 'event-1', type: 'learning',
     }));
+    expect((await post('/mind/events/event-1/promote', {
+      id: 'promotion-2', approved: true, content: 'Safe summary', type: 'pattern',
+    })).status).toBe(201);
+    expect(mocks.promotePersistentMindMemory).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'observation' }));
   });
 
   it('refuses action annotations for an event outside the retained mind ledger', async () => {
