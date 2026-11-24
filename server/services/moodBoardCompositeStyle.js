@@ -1,3 +1,4 @@
+import { PROVIDERS_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import { isVisionCapableCodexTuiProvider } from '../lib/codex.js';
 /**
  * Mood board composite style prompt.
@@ -121,7 +122,7 @@ export async function composeBoardPrompt({ board, sourceBoards, providerId, mode
 
   const provider = await resolveComposeProvider(providerId);
   assertProvider(provider, {
-    message: 'Composing a board style needs an API-based provider. Configure one under Settings → Providers.',
+    message: `Composing a board style needs an API-based provider. Configure one under ${PROVIDERS_PAGE_BREADCRUMB}.`,
     code: 'NO_API_PROVIDER',
     status: 503,
   });

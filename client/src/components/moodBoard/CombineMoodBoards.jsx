@@ -1,3 +1,4 @@
+import { PROVIDERS_PAGE_BREADCRUMB } from '../../../../server/lib/navManifest.js';
 import { useCallback, useMemo, useState } from 'react';
 import Modal from '../ui/Modal';
 import ListLoadError from '../ui/ListLoadError';
@@ -70,7 +71,7 @@ export default function CombineMoodBoards({ boards, onClose, onCreated }) {
           effort={effort} onEffortChange={setEffort} disabled={busy} loading={loading}
         />
         {!loading && !providers.length && providersError ? <ListLoadError what="AI providers" error={providersError} onRetry={retryProviders} /> : null}
-        {!loading && !providers.length && !providersError ? <p role="alert" className="text-sm text-port-warning">Enable a vision-capable provider in Settings → Providers to combine boards.</p> : null}
+        {!loading && !providers.length && !providersError ? <p role="alert" className="text-sm text-port-warning">Enable a vision-capable provider in {PROVIDERS_PAGE_BREADCRUMB} to combine boards.</p> : null}
         {error ? <p role="alert" className="text-sm text-port-error">{error}</p> : null}
         <div className="flex justify-end gap-2">
           <button type="button" onClick={onClose} disabled={busy} className="min-h-[44px] px-3 text-sm text-gray-400">Cancel</button>

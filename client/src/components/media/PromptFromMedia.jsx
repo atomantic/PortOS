@@ -1,3 +1,4 @@
+import { PROVIDERS_PAGE_BREADCRUMB } from '../../../../server/lib/navManifest.js';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { ScanEye, ChevronDown, ChevronUp, Image as ImageIcon, Film, X, Copy } from 'lucide-react';
@@ -369,7 +370,7 @@ export default function PromptFromMedia({
             <ListLoadError what="AI providers" error={providersError} onRetry={retryProviders} />
           )}
           {!providersError && providers.length === 0 && !providersLoading && (
-            <p className="text-xs text-port-warning">No vision-capable providers are enabled. Add an API VLM or a Claude/Codex CLI in Settings → Providers.</p>
+            <p className="text-xs text-port-warning">No vision-capable providers are enabled. Add an API VLM or a Claude/Codex CLI in {PROVIDERS_PAGE_BREADCRUMB}.</p>
           )}
 
           <div className="flex justify-end">

@@ -1,3 +1,4 @@
+import { PROVIDERS_PAGE_BREADCRUMB } from '../../../../../server/lib/navManifest.js';
 import { useState, useEffect, useCallback } from 'react';
 import { RefreshCw } from 'lucide-react';
 import toast from '../../ui/Toast';
@@ -144,7 +145,7 @@ export default function VoiceLlmSection({ cfg, patch, inputCls, traitsSyncRef })
       {providersError && (
         <ListLoadError what="the provider registry (LLM and coding-agent pickers)" error={providersError} onRetry={loadProviders} className="md:col-span-2" />
       )}
-      <FormField label="LLM provider" hint="Voice streams tokens, so only API providers (LM Studio, Ollama, OpenAI-compatible) are listed. Configure providers under Settings → Providers.">
+      <FormField label="LLM provider" hint={`Voice streams tokens, so only API providers (LM Studio, Ollama, OpenAI-compatible) are listed. Configure providers under ${PROVIDERS_PAGE_BREADCRUMB}.`}>
         {/* Streaming needs a direct API route, so a composed combination is
             restricted to the `api` method. The model/vision selects below
             carry their own 'auto' sentinel, so this is the provider only. */}
@@ -326,7 +327,7 @@ export default function VoiceLlmSection({ cfg, patch, inputCls, traitsSyncRef })
 
       {cfg.llm.codeAgent?.enabled === true && (
         <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3 pl-7">
-          <FormField label="Coding agent" hint="Which CLI/TUI agent runs the task. 'System default' uses your active AI provider (Settings → Providers).">
+          <FormField label="Coding agent" hint={`Which CLI/TUI agent runs the task. 'System default' uses your active AI provider (${PROVIDERS_PAGE_BREADCRUMB}).`}>
             <ProviderModelSelector
               compact
               label="Coding agent"

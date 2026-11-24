@@ -6,6 +6,7 @@
  * persist it together with the proposed guidance.
  */
 
+import { PROVIDERS_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import { randomUUID } from 'crypto';
 import { parseLLMJSON, resolveAPIProvider } from './aiProvider.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -94,7 +95,7 @@ export async function analyzeUniverseStyleReference({
   }
   const provider = await resolveAPIProvider(providerId);
   assertProvider(provider, {
-    message: 'Analyzing an art reference needs an API-based provider with a vision-capable model. Configure one under Settings → Providers.',
+    message: `Analyzing an art reference needs an API-based provider with a vision-capable model. Configure one under ${PROVIDERS_PAGE_BREADCRUMB}.`,
     code: 'NO_API_PROVIDER',
     status: 503,
   });

@@ -17,6 +17,7 @@
  * it's actually needed.
  */
 
+import { PROVIDERS_PAGE_BREADCRUMB } from '../../../../server/lib/navManifest.js';
 import { useCallback, useEffect } from 'react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import useProviderModels from '../../hooks/useProviderModels';
@@ -65,7 +66,7 @@ export default function VisionProviderPicker({ label = 'Vision provider', onChan
       <p className="text-xs text-port-warning">
         {loading
           ? 'Loading providers…'
-          : 'No API provider with a vision-capable model configured. Add one under Settings → Providers to analyze images.'}
+          : `No API provider with a vision-capable model configured. Add one under ${PROVIDERS_PAGE_BREADCRUMB} to analyze images.`}
       </p>
     );
   }

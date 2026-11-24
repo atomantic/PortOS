@@ -10,6 +10,7 @@
  * through the universe's queued-write adopt endpoint.
  */
 
+import { PROVIDERS_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import { parseLLMJSON, resolveAPIProvider } from './aiProvider.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { assertProvider, runPromptThroughProvider } from './promptRunner.js';
@@ -69,7 +70,7 @@ export async function synthesizeBoardStyle({
 
   const provider = await resolveAPIProvider(providerId);
   assertProvider(provider, {
-    message: 'Synthesizing a style guide needs an API-based provider. Configure one under Settings → Providers.',
+    message: `Synthesizing a style guide needs an API-based provider. Configure one under ${PROVIDERS_PAGE_BREADCRUMB}.`,
     code: 'NO_API_PROVIDER',
     status: 503,
   });

@@ -18,6 +18,7 @@
  * description from nothing.
  */
 
+import { PROVIDERS_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import { resolveAPIProvider, stripCodeFences } from './aiProvider.js';
 import { runPromptThroughProvider, assertProvider, assertVisionRunUsedImages } from './promptRunner.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -164,7 +165,7 @@ export async function describeEntityFromImages({ kind, name, context, screenshot
     model,
     screenshots: images,
     unavailableMessage:
-      'Describing an image needs an API-based AI provider with a vision-capable model (e.g. Ollama with a llava/qwen-vl model, LM Studio, or an OpenAI-compatible endpoint). Configure one under Settings → Providers.',
+      `Describing an image needs an API-based AI provider with a vision-capable model (e.g. Ollama with a llava/qwen-vl model, LM Studio, or an OpenAI-compatible endpoint). Configure one under ${PROVIDERS_PAGE_BREADCRUMB}.`,
     emptyMessage: 'The vision model returned an empty description — try a different model or clearer images.',
   });
 
@@ -258,7 +259,7 @@ export async function correctEntityFromImage({
     model,
     screenshots: [screenshot],
     unavailableMessage:
-      'Correcting from an image needs an API-based AI provider with a vision-capable model (e.g. Ollama with a llava/qwen-vl model, LM Studio, or an OpenAI-compatible endpoint). Configure one under Settings → Providers.',
+      `Correcting from an image needs an API-based AI provider with a vision-capable model (e.g. Ollama with a llava/qwen-vl model, LM Studio, or an OpenAI-compatible endpoint). Configure one under ${PROVIDERS_PAGE_BREADCRUMB}.`,
     emptyMessage: 'The vision model returned an empty correction — try a different model or clearer image.',
   });
 
