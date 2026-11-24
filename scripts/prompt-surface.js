@@ -19,6 +19,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, existsSync, rmSync, 
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DISPOSABLE_ROOT_MARKER } from '../server/lib/dataRoot.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -118,6 +119,8 @@ export function layoutSnapshot(surfaces, scrub = (text) => text) {
 
 export async function renderSnapshot(outDir) {
   const dataRoot = mkdtempSync(join(tmpdir(), 'prompt-surface-'));
+  // A CoS worktree honors only a marked root; unmarked, the render reads the checkout's data/.
+  writeFileSync(join(dataRoot, DISPOSABLE_ROOT_MARKER), '');
   // Set before any server import: path constants resolve at module load.
   Object.assign(process.env, { NODE_ENV: 'test', MEMORY_BACKEND: 'file', PORTOS_DATA_ROOT: dataRoot, TZ: 'UTC' });
   const RealDate = Date;

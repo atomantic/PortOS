@@ -1,10 +1,16 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
-import { rmSync, copyFileSync, existsSync, mkdirSync } from 'fs';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { copyFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from './mockPathsDataRoot.js';
 import { PATHS } from './paths.js';
 import { assertSafeFilename, isSafeFilename, isPathInsideDir, resolveScreenshot, resolveImageInputPath } from './pathSafety.js';
+
+vi.mock('./paths.js', async (original) => makePathsProxy(await original(), {
+  dataRoot: () => join(lazyTempDataRoot('path-safety-test-'), 'data'),
+}));
+afterAll(cleanupTempDataRoots);
 
 const __dirname_test = dirname(fileURLToPath(import.meta.url));
 
@@ -179,15 +185,6 @@ describe('fileUtils', () => {
     });
   });
 
-  // CONVENTION: this block writes fixtures into the REAL `data/images`,
-  // `data/image-refs`, and `data/templates` roots because `PATHS` is module-
-  // evaluated and not easily overridable. Two rules to keep dev/CI worktrees
-  // clean and avoid clobbering shipped assets:
-  //   1. Every fixture name MUST start with the `fileutils-test-` prefix so
-  //      the cleanup below can target it unambiguously (and so the basenames
-  //      don't shadow any real asset the resolver would otherwise find).
-  //   2. Cleanup goes in `afterAll`, NOT a recursive remove of the root —
-  //      the data/ roots hold the user's universe content and shipped templates.
   describe('resolveImageInputPath', () => {
     const sampleTemplate = join(__dirname_test, '..', '..', 'data.reference', 'templates', 'character-reference-sheet.png');
     const galleryName = 'fileutils-test-gallery.png';
@@ -210,15 +207,6 @@ describe('fileUtils', () => {
       }
     });
 
-    afterAll(() => {
-      // Remove ONLY the per-test fixture files (uniquely-named so dev/CI
-      // worktrees aren't polluted and later basename lookups don't keep
-      // finding stale resolver hits). Never recursively remove the real
-      // `data/images` / `data/image-refs` / `data/templates` roots.
-      for (const p of [galleryPath, refsPath, templatePath]) {
-        if (existsSync(p)) rmSync(p, { force: true });
-      }
-    });
 
     it('returns null for non-string / empty input', () => {
       expect(resolveImageInputPath(null)).toBeNull();
@@ -286,10 +274,6 @@ describe('fileUtils', () => {
       if (existsSync(sampleTemplate) && !existsSync(shotPath)) copyFileSync(sampleTemplate, shotPath);
     });
 
-    afterAll(() => {
-      // Remove ONLY the uniquely-named fixture — never the real screenshots root.
-      if (existsSync(shotPath)) rmSync(shotPath, { force: true });
-    });
 
     it('resolves a basename present under the screenshots root', () => {
       const out = resolveScreenshot(shotName);

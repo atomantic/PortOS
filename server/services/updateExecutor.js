@@ -8,6 +8,7 @@ import { NODE_INTERPRETER_ENV_KEY, resolvePinnedNodeInterpreter, withNodeBinOnPa
 import { spawnDetached, isDetachedRunning } from '../lib/detachedSpawn.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { processAbsent, reconcileReusedLaunch } from '../lib/maintenanceDeferredUpdate.js';
+import { isSettledProcessState } from '../lib/processSettledState.js';
 import { escapeRegExp } from '../lib/textUtils.js';
 import { getCurrentVersion, recordUpdateResult } from './updateChecker.js';
 import { isUpdateControlTracked, trackUpdateControl, withUpdateControlLock } from './updateControlActivity.js';
@@ -414,20 +415,24 @@ function watchSupervisor({ admission, ticket, child, completion, emit, targetVer
         if (!gone) {
           const rows = await snapshot().catch(() => []);
           const observed = rows.find(row => row.pid === child.pid);
-          const command = String(observed?.command ?? '');
+          const raw = String(observed?.command ?? '').trim();
+          // ps prints only `(node)` (BSD) or `[node]` (procps) while a process's arguments are
+          // unreadable, as during a slow exec. That names no other program.
+          const command = /^(?:\([^()]*\)|\[[^[\]]*\])$/.test(raw) ? '' : raw;
           const node = /(?:^|[\s"'/\\])node(?:js|\.exe)?(?=$|[\s"'])/i.test(command);
           const expected = join(PATHS.root, 'scripts', 'deferred-update.mjs').replaceAll('\\', '/');
           const escaped = escapeRegExp(expected);
           const exact = new RegExp(`(?:^|[\\s"'=])${escaped}(?=$|[\\s"'])`, process.platform === 'win32' ? 'i' : '')
             .test(command.replaceAll('\\', '/'));
-          const first = /^(?:"([^"]+)"|'([^']+)'|(\S+))/.exec(command.trim());
+          const first = /^(?:"([^"]+)"|'([^']+)'|(\S+))/.exec(command);
           const executable = basename((first?.[1] ?? first?.[2] ?? first?.[3] ?? '').replaceAll('\\', '/')).toLowerCase();
           const expectedName = basename(expectedExecutable.replaceAll('\\', '/')).toLowerCase();
           const bothNode = /^node(?:js|\.exe)?$/.test(executable) && /^node(?:js|\.exe)?$/.test(expectedName);
           const differentExecutable = executable && expectedName && executable !== expectedName && !bothNode;
-          const explicitOther = command && !exact && (differentExecutable || (/\s/.test(command.trim())
+          const explicitOther = command && !exact && (differentExecutable || (/\s/.test(command)
             && (!node || /(?:^|\s)(?:-e|--eval|\S+\.(?:m?js|cjs))(?=$|\s)/i.test(command))));
-          gone = Number.isFinite(observed?.startedAt) && (observed.startedAt > observedAt || explicitOther);
+          gone = Number.isFinite(observed?.startedAt) && (observed.startedAt > observedAt || explicitOther
+            || isSettledProcessState(String(observed.state ?? '')));
         }
         if (done) return;
         if (supersededUpdates.has(ticket)) { await finishSuperseded(); return; }

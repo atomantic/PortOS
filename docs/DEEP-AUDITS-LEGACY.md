@@ -2,7 +2,7 @@
 
 This describes retained certification records from before extended Deep. They remain incomplete history. New launches and normal resume no longer execute this workflow. The descriptions below document the stored evidence format, not current launch instructions.
 
-> **Engine retired (#16910).** The writer, assignment, checkpoint-import and resume code is deleted; nothing creates or mutates `deep_audit_ledgers` rows or `data/cos/deep-audit-checkpoints/` files. Only `GET /api/cos/schedule/deep-audits/:id` remains, returning the stored ledger plus derived progress (`getDeepAuditLedger`, `deepAuditProgress`). Sections below describing launch, resume, assignment and merge behavior are historical context.
+> **Engine retired (#16910).** The writer, assignment, checkpoint-import and resume code is deleted; nothing creates or mutates `deep_audit_ledgers` rows, and migration 466 removed the leftover `data/cos/deep-audit-checkpoints/` files. Only `GET /api/cos/schedule/deep-audits/:id` remains, returning the stored ledger plus derived progress (`getDeepAuditLedger`, `deepAuditProgress`). Sections below describing launch, resume, assignment and merge behavior are historical context.
 
 # Deep audits
 

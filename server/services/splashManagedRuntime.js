@@ -11,10 +11,10 @@ import { cpus } from 'os';
 import { join } from 'path';
 import { promisify } from 'util';
 import { execFile } from '../lib/childProcess.js';
-import { atomicWrite } from '../lib/fileCore.js';
+import { atomicWrite, dirSize } from '../lib/fileCore.js';
 import { PATHS } from '../lib/paths.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { streamResumableDownload } from '../lib/downloadPreflight.js';
+import { assessDownloadPreflight, assertDownloadFits, streamResumableDownload } from '../lib/downloadPreflight.js';
 import { SPLASH_MODEL, SPLASH_ORIGIN } from '../lib/splashRuntime.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
 
@@ -22,6 +22,8 @@ export const SPLASH_VERSION = '1.7.2';
 const FILE = `splash-${SPLASH_VERSION}-arm64-macos26`;
 const ASSET_URL = `https://github.com/incoai/splash/releases/download/${SPLASH_VERSION}/${FILE}.tar.gz`;
 const ASSET_SHA256 = '40a1e6d585ed8f51b2f2e17c331e7d9533a1b666e1e6e418ddd623bdd3a29e2b';
+// Approximate Inkling 2 Mini plus drafter download, the figure Install quotes.
+const MODEL_BYTES = 17e9;
 const MODEL_ARGS = [
   '--model', 'unsloth/Inkling-2-Mini-GGUF:UD-Q4_K_M',
   '--revision', '8078d149286eec7193795413b9e0643da6d11fa1',
@@ -118,7 +120,10 @@ function parseProgress(line) {
 
 export async function installPinnedSplash({ previousVersion, emit }) {
   const root = splashRoot();
-  await mkdir(join(root, 'home'), { recursive: true, mode: 0o700 });
+  const home = join(root, 'home');
+  await mkdir(home, { recursive: true, mode: 0o700 });
+  // Cached and resumable model bytes under the private HOME already occupy disk.
+  assertDownloadFits(await assessDownloadPreflight({ destPath: home, expectedBytes: MODEL_BYTES - await dirSize(home) }));
   const staging = await mkdtemp(join(root, '.install-'));
   try {
     const directory = previousVersion === SPLASH_VERSION ? releaseDirectory(SPLASH_VERSION) : join(staging, FILE);
