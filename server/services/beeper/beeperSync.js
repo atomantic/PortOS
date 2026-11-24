@@ -647,8 +647,9 @@ export async function upsertMirroredMessage(client, conversationId, message, att
       message.isSender, message.observedAt,
     ],
   );
+  const applied = (result.rowCount ?? result.rows?.length ?? 0) > 0;
   // A stale observation or tombstone must not rewrite attachment references.
-  if (result.rowCount === 0 || message.unsentAt) return;
+  if (!applied || message.unsentAt) return applied;
   for (const attachment of attachments) {
     // same transaction, ordered after its message
     await client.query(
@@ -662,6 +663,7 @@ export async function upsertMirroredMessage(client, conversationId, message, att
       ],
     );
   }
+  return applied;
 }
 
 async function commitMessages({ conversationId, accountId, sourceChatId, rows, cursor, lastActivity }) {
@@ -762,7 +764,7 @@ async function commitMessages({ conversationId, accountId, sourceChatId, rows, c
 // ---------------------------------------------------------------------------
 
 async function sweepChat({
-  chat, stored, clientOptions, personIndex,
+  chat, stored, clientOptions, getPersonIndex,
 }) {
   const normalized = normalizeChatRow(chat);
   if (!normalized.accountId || !normalized.sourceChatId) return { messages: 0 };
@@ -841,9 +843,9 @@ async function sweepChat({
   // batch per chat, preserving roster handles while letting message-sender
   // observations win `observedVia` and populate/refresh display names.
   //
-  // `personIndex` is `executeSweep`'s ONE Tribe-roster load for the whole
-  // sweep pass, threaded down here and to `logSenderTouchpoints` — without it
-  // the phone-match fallback would reload and reindex every Tribe person.
+  // `getPersonIndex` resolves `executeSweep`'s ONE Tribe-roster load for the
+  // whole sweep pass, deferred until a chat actually enters `sweepChat` with
+  // participants or inbound senders to resolve so idle passes skip `tribe.listPeople()`.
   const mergedParticipants = new Map();
   for (const participant of normalizeParticipants(chat)) {
     const existing = mergedParticipants.get(participant.sourceUserId);
@@ -866,6 +868,18 @@ async function sweepChat({
     });
   }
 
+  const touchpointCandidates = rows
+    .filter(({ raw }) => raw?.isSender !== true)
+    .map(({ message }) => ({
+      conversationId,
+      senderId: message.senderId,
+      sentAt: message.sentAt,
+      network: normalized.network,
+    }));
+  const personIndex = (mergedParticipants.size > 0 || touchpointCandidates.length > 0)
+    ? await getPersonIndex()
+    : null;
+
   const { resolvedPersonIds } = mergedParticipants.size > 0
     ? await upsertConversationParticipants(conversationId, [...mergedParticipants.values()], { personIndex })
     : { resolvedPersonIds: new Map() };
@@ -876,14 +890,7 @@ async function sweepChat({
   // they are day-deduped on `beeper:<YYYY-MM-DD>`, so a rolled-back sweep
   // re-derives exactly the same ones next pass, whereas writing them after the
   // cursor advanced would lose them for good.
-  await logSenderTouchpoints(rows
-    .filter(({ raw }) => raw?.isSender !== true)
-    .map(({ message }) => ({
-      conversationId,
-      senderId: message.senderId,
-      sentAt: message.sentAt,
-      network: normalized.network,
-    })), { personIndex, resolvedPersonIds });
+  await logSenderTouchpoints(touchpointCandidates, { personIndex, resolvedPersonIds });
 
   await commitMessages({
     conversationId,
@@ -932,7 +939,7 @@ async function sweepChat({
  * resume next run, reserving one page to refresh the head. End-of-list resets
  * the checkpoint so failed chats remain reachable on subsequent traversals.
  */
-async function sweepAccount(account, clientOptions, personIndex) {
+async function sweepAccount(account, clientOptions, getPersonIndex) {
   await reconcileStoredMessages(account.accountId, clientOptions);
   const cursors = await readAccountCursors(account.accountId);
   const checkpoint = await query('SELECT chat_cursor FROM beeper_accounts WHERE account_id = $1', [account.accountId]);
@@ -977,7 +984,7 @@ async function sweepAccount(account, clientOptions, personIndex) {
       }
       // one chat at a time; each is its own transaction
       const result = await sweepChat({
-        chat, stored, clientOptions, personIndex,
+        chat, stored, clientOptions, getPersonIndex,
       }).catch((err) => {
         failedChats++;
         console.error(`❌ ${LOG_PREFIX}: chat ${String(chat?.id ?? 'unknown')} failed: ${err.message}`);
@@ -1043,20 +1050,87 @@ async function sweepAccount(account, clientOptions, personIndex) {
 // a later rotation retries it. No failure is interpreted as a deletion.
 const RECONCILE_LIMIT = 20;
 
+// Mirror the non-observed_at merge rules of MESSAGE_UPSERT_CONFLICT_SQL so
+// unchanged or stale re-observations skip redundant writes and invalidations.
+function hasMessageRowChange(existingRow, message) {
+  const existingMsg = {
+    id: existingRow.id,
+    senderId: existingRow.sender_id ?? '',
+    body: existingRow.body ?? '',
+    sentAt: toIsoOrNull(existingRow.sent_at),
+    editedAt: toIsoOrNull(existingRow.edited_at),
+    unsentAt: toIsoOrNull(existingRow.unsent_at),
+    sortKey: existingRow.sort_key ?? '',
+    isSender: existingRow.is_sender === true,
+    observedAt: toIsoOrNull(existingRow.observed_at),
+  };
+  if (!candidateOutranks(existingMsg, message)) return { canApply: false, changed: false };
+  const changed = (
+    (Boolean(message.senderId) && message.senderId !== existingMsg.senderId)
+    || (!message.unsentAt && !existingMsg.unsentAt && Boolean(message.body) && message.body !== existingMsg.body)
+    || (message.sentAt !== null && message.sentAt !== existingMsg.sentAt)
+    || (Boolean(message.editedAt) && (!existingMsg.editedAt || epochMs(message.editedAt) > epochMs(existingMsg.editedAt)))
+    || (!existingMsg.unsentAt && Boolean(message.unsentAt))
+    || (Boolean(message.sortKey) && message.sortKey !== existingMsg.sortKey)
+    || (!existingMsg.isSender && message.isSender === true)
+  );
+  return { canApply: true, changed };
+}
+
+// Mirror ATTACHMENT_UPSERT_CONFLICT_SQL: BIGINT byte_length arrives from pg as
+// a string, and downloaded attachments keep their measured local size.
+function hasAttachmentRowsChange(existingRows, attachments) {
+  const byIdx = new Map(existingRows.map((row) => [toIntOrNull(row.idx), row]));
+  for (const att of attachments) {
+    const prev = byIdx.get(att.idx);
+    if (!prev) return true;
+    const prevMxcId = prev.mxc_id ?? null;
+    if (att.mxcId && att.mxcId !== prevMxcId) return true;
+    if (att.mimeType && att.mimeType !== (prev.mime_type ?? '')) return true;
+    if (att.fileName && att.fileName !== (prev.file_name ?? '')) return true;
+    const prevByteLength = prev.byte_length === null || prev.byte_length === undefined
+      ? null
+      : toIntOrNull(Number(prev.byte_length));
+    const preservesLocalBytes = prev.local_path != null && prevByteLength !== null;
+    if (!preservesLocalBytes && att.byteLength !== null && att.byteLength !== prevByteLength) return true;
+    if (att.width !== null && att.width !== toIntOrNull(prev.width)) return true;
+    if (att.height !== null && att.height !== toIntOrNull(prev.height)) return true;
+  }
+  return false;
+}
+
 async function reconcileStoredRow(row, clientOptions) {
   const observedAt = new Date().toISOString();
   const raw = await getMessage(row.source_chat_id, row.id, clientOptions);
   if (raw?.id !== row.id) throw new Error('Unexpected Beeper message identity');
-  await withTransaction(async (client) => {
+  const message = normalizeMessageRow(raw, observedAt);
+  const attachments = normalizeAttachmentRows(raw);
+  const changed = await withTransaction(async (client) => {
     // Lock the existing row: purge must not resurrect a message while HTTP was in flight.
     const existing = await client.query(
-      'SELECT id FROM beeper_messages WHERE id = $1 AND conversation_id = $2 FOR UPDATE',
+      `SELECT id, sender_id, body, sent_at, edited_at, unsent_at, sort_key, is_sender, observed_at
+         FROM beeper_messages
+        WHERE id = $1 AND conversation_id = $2
+        FOR UPDATE`,
       [row.id, row.conversation_id],
     );
-    if (!existing.rows.length) return;
-    await upsertMirroredMessage(client, row.conversation_id,
-      normalizeMessageRow(raw, observedAt), normalizeAttachmentRows(raw));
+    if (!existing.rows.length) return false;
+    const { canApply, changed: messageChanged } = hasMessageRowChange(existing.rows[0], message);
+    if (!canApply) return false;
+    let attachmentsChanged = false;
+    if (!messageChanged && attachments.length > 0 && !message.unsentAt) {
+      const existingAttachments = await client.query(
+        `SELECT idx, mxc_id, mime_type, byte_length, file_name, width, height, local_path
+           FROM beeper_attachments
+          WHERE conversation_id = $1 AND message_id = $2`,
+        [row.conversation_id, row.id],
+      );
+      attachmentsChanged = hasAttachmentRowsChange(existingAttachments.rows || [], attachments);
+    }
+    if (!messageChanged && !attachmentsChanged) return false;
+    return upsertMirroredMessage(client, row.conversation_id, message, attachments);
   });
+  if (!changed) return;
   beeperSocketEvents.emit('invalidate', {
     kind: 'beeper-reconciled', chatID: row.source_chat_id, ids: [row.id],
     seq: null, ts: observedAt,
@@ -1208,11 +1282,11 @@ async function executeSweep(reason) {
     updateBeeperSweepProgress({ accountsTotal: accounts.length });
     emitSweepInvalidation();
 
-    // Loaded ONCE for the whole sweep pass, across every account/chat/participant
-    // below — not once per participant. `upsertParticipant`'s phone-match
-    // fallback reindexes the entire Tribe roster on a miss, and a sweep touches
-    // every participant of every changed chat on every account.
-    const personIndex = await loadRosterIndex();
+    // Loaded lazily at most once for the whole sweep pass — only if at least one
+    // chat enters `sweepChat` with participants or inbound senders to resolve,
+    // so idle passes with zero moved chats never call `tribe.listPeople()`.
+    let personIndexPromise = null;
+    const getPersonIndex = () => (personIndexPromise ??= loadRosterIndex());
 
     let chats = 0;
     let messages = 0;
@@ -1223,7 +1297,7 @@ async function executeSweep(reason) {
     let cursorRestarts = 0;
     for (const account of accounts) {
       // accounts are swept in order; each owns its own cursors
-      const result = await sweepAccount(account, clientOptions, personIndex).catch((err) => {
+      const result = await sweepAccount(account, clientOptions, getPersonIndex).catch((err) => {
         failedAccounts++;
         console.error(`❌ ${LOG_PREFIX}: account ${account.accountId} failed: ${err.message}`);
         return null;
