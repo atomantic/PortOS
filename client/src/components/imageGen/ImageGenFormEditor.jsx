@@ -390,7 +390,7 @@ function ImageGenPostProcessOptions({ fields, settings, mode }) {
       </label>
       <label
         className="flex items-center gap-2 cursor-pointer select-none"
-        title="Automated visual quality inspection: verifies hand/finger count, detects spurious limbs, and checks composition before admitting to gallery."
+        title="Checks the generated image for hand and finger counts, extra limbs, and composition."
       >
         <input
           type="checkbox"

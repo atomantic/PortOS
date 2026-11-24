@@ -296,7 +296,6 @@ export function useImageGenPageRuntime() {
       ...(effectiveCloudModel ? { cloudModel: effectiveCloudModel } : {}),
       cleanC2PA: fields.cleanC2PA,
       denoise: fields.denoise,
-      verifyImage: fields.verifyImage,
     } : {
       prompt: composed.prompt,
       negativePrompt: composed.negativePrompt || undefined,
@@ -312,8 +311,8 @@ export function useImageGenPageRuntime() {
       mode: IMAGE_GEN_MODE.LOCAL,
       cleanC2PA: fields.cleanC2PA,
       denoise: fields.denoise,
-      verifyImage: fields.verifyImage,
     };
+    payload.verifyImage = fields.verifyImage;
     Object.assign(payload, musicVideoFilingFields(searchParams), promptAdditionsField(derived.activeStylePresets));
     const hasInitImage = derived.i2iCapable && images.initImage.source != null;
     const hasReferenceImages = derived.populatedRefs.length > 0;
