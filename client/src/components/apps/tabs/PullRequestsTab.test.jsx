@@ -408,6 +408,25 @@ describe('PullRequestsTab', () => {
     expect(await screen.findByRole('link', { name: /Untrusted:Review: Queued/ })).toBeInTheDocument();
   });
 
+  it('shows delivered feedback without preventing review of a corrected patch', async () => {
+    await renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: /Untrusted:Review/ }));
+    await screen.findByRole('link', { name: /Untrusted:Review: Queued/ });
+
+    act(() => socketHandlers.get('cos:tasks:changed')({ task: {
+      id: 'preflight-demand-1', status: 'completed',
+      metadata: { app: 'app-1', analysisType: 'pr-reviewer', targetPullRequest: 17,
+        preflight: { outcome: 'programmatic', reason: 'patch-conflict-markers', note: 'Posted a comment review.' } },
+    } }));
+    expect(screen.getByText('Posted a comment review.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'View feedback record' }))
+      .toHaveAttribute('href', '/cos/tasks?task=preflight-demand-1&source=internal');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run Untrusted:Review again' }));
+    await waitFor(() => expect(reviewAppPullRequest).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole('link', { name: /Untrusted:Review: Queued/ })).toBeInTheDocument();
+  });
+
   // #7258: the preflight card is the programmatic phase of this row's run, and
   // it COMPLETES the moment the review agent task is created. Reading that as
   // the row's own completion would freeze it at "Completed" and ignore every

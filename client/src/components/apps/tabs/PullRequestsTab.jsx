@@ -33,7 +33,7 @@ import { DEFAULT_MERGE_METHOD, MergeAction, PullRequestReviewButton, ACTION_STAT
 
 const FORGE_LABEL = { github: 'GitHub', gitlab: 'GitLab' };
 
-const ACTION_STATUS_RANK = { queuing: 0, queued: 1, active: 2, completed: 3, blocked: 3, failed: 3 };
+const ACTION_STATUS_RANK = { queuing: 0, queued: 1, active: 2, completed: 3, blocked: 3, failed: 3, feedback: 3 };
 // The three per-row agent actions. They share every piece of state machinery —
 // only the CoS task that backs each one differs, so the kind is data rather
 // than a duplicated block of hooks.
@@ -338,7 +338,9 @@ export default function PullRequestsTab({ appId, appName }) {
     // every update the real review task emits, because a row binds to one task
     // id for good.
     const handedOff = task.metadata?.preflightResultTaskId || null;
-    const nextStatus = task.metadata?.preflightFailure
+    const preflight = task.metadata?.preflight;
+    const feedbackPosted = preflight?.outcome === 'programmatic' && preflight.reason === 'patch-conflict-markers';
+    const nextStatus = feedbackPosted ? 'feedback' : task.metadata?.preflightFailure
       ? 'failed'
       : handedOff ? 'active' : actionStatusForTask(task.status);
     if (!nextStatus) return;
@@ -358,7 +360,7 @@ export default function PullRequestsTab({ appId, appName }) {
             ...action,
             taskId: handedOff || action.taskId || task.id,
             status: nextStatus,
-            error: task.metadata?.note,
+            error: feedbackPosted ? preflight.note : task.metadata?.note,
           };
           changed = true;
         }
@@ -789,6 +791,15 @@ export default function PullRequestsTab({ appId, appName }) {
                       const taskHref = action?.taskId
                         ? `/cos/tasks?task=${encodeURIComponent(action.taskId)}&source=${kind === 'doReview' ? 'user' : 'internal'}`
                         : null;
+                      if (actionStatus === 'feedback') return (
+                        <div key={kind} className="max-w-md text-xs text-port-success space-y-2">
+                          <p>{action.error || 'Posted review feedback; no agent started.'}</p>
+                          <div className="flex flex-wrap gap-3">
+                            <Link className="underline" to={taskHref}>View feedback record</Link>
+                            <button type="button" className="underline" onClick={() => queueAction(kind, pullRequest)}>Run {label} again</button>
+                          </div>
+                        </div>
+                      );
                       if (actionStatus === 'failed') {
                         return (
                           <div key={kind} className="max-w-md text-xs text-port-error space-y-2" role="alert">

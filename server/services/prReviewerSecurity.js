@@ -299,6 +299,8 @@ async function readExternalOpenPullRequests(app, forgeExec) {
     ok: true,
     repoSpec,
     repoFullName,
+    hostname,
+    selfLogin: scope.selfLogin,
     defaultBranch: defaultBranch.trim(),
     prs,
   };
@@ -382,7 +384,7 @@ async function fetchPullRequestCommits(number, repoSpec, runGh) {
  * or malformed verdict fails closed; reports collected before that point remain
  * generic and are useful to the human-facing status view only.
  */
-export async function runPrReviewerSecurityScan({ app, target = null, largeInputFallback = null } = {}) {
+export async function runPrReviewerSecurityScan({ app, target = null, largeInputFallback = null, detectPatchDefects = false } = {}) {
   const forgeExec = await resolveForgeExecOptions(app?.repoPath, { forgeAccount: app?.forgeAccount });
   const runGh = forgeReader(forgeExec);
   const resolvedTarget = target || await readExternalOpenPullRequests(app, forgeExec);
@@ -424,6 +426,7 @@ export async function runPrReviewerSecurityScan({ app, target = null, largeInput
     }
     if (!diff.trim()) return failure('security-scan-empty-diff', { reviewedPrs, scanKey });
 
+
     // The linked issue's own text is contributor-authored public content, and it
     // is about to be quoted to a downstream reviewer as the requirement the diff
     // is judged against. It crosses the boundary in the same pass as the PR — an
@@ -449,6 +452,13 @@ export async function runPrReviewerSecurityScan({ app, target = null, largeInput
       ? { screening: structuralVerdict(structural) }
       : await screenUntrustedContent({ content, source: 'github-pr' });
     const verdict = screened.screening || screened;
+    // This is feedback for a review already withheld, not a new gate. A
+    // literal conflict example in valid source does not stop a passed scan.
+    if (!verdict.ok && verdict.code === 'security-model-uncertain'
+      && detectPatchDefects && resolvedTarget.prs.length === 1) {
+      const { findAddedConflictMarkers } = await import('../lib/prConflictMarkers.js');
+      if (findAddedConflictMarkers(diff).length) return failure('patch-conflict-markers');
+    }
     if (!verdict.ok) return failure(verdict.code || 'security-scan-verdict-unavailable', { reviewedPrs, scanKey, ...(typeof verdict.message === 'string' ? { message: verdict.message } : {}) });
     guardModel = verdict.model || guardModel;
     guardRevision = verdict.revision ?? null;

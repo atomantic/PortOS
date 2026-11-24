@@ -108,6 +108,36 @@ describe('idle review forwards ignoreTaskId (#3179)', () => {
 });
 
 describe('idle review stealing a queued on-demand request', () => {
+  it.each([
+    ['user', true],
+    ['github-notification', false],
+    ['refill', false],
+    [undefined, false],
+  ])('only an explicit operator queue receipt can enable patch feedback (%s)', async (origin, allowed) => {
+    scheduleMocks.requests = [JSON.parse(JSON.stringify(request({ targetPullRequest: 42, origin })))];
+    await generateIdleReviewTask(STATE);
+    const options = pipeline.securityPreflight.mock.calls.at(-1)?.at(-1);
+    expect(options).toBeDefined();
+    expect(options.allowPatchFeedback === true).toBe(allowed);
+  });
+
+  it('closes a delivered deterministic review as completed without an agent', async () => {
+    scheduleMocks.requests = [request({ targetPullRequest: 42, origin: 'user' })];
+    pipeline.securityPreflight.mockResolvedValue({
+      skipped: true,
+      reason: 'patch-conflict-markers',
+      patchFeedback: { delivered: true, detail: 'Posted a comment review.' },
+    });
+    const result = await generateIdleReviewTask(STATE);
+    expect(result.task).toBeNull();
+    expect(preflight.finish).toHaveBeenCalledWith('preflight-demand-1', {
+      outcome: 'programmatic',
+      reason: 'patch-conflict-markers',
+      note: 'Posted a comment review.',
+    });
+    expect(recordExecution).not.toHaveBeenCalled();
+  });
+
   it('leaves another owner or cancelled receipt alone', async () => {
     scheduleMocks.requests = [request()];
     scheduleMocks.clearOnDemandRequest.mockResolvedValue(null);

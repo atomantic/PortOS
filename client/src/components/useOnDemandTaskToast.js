@@ -147,6 +147,10 @@ export function useOnDemandTaskToast() {
           });
           return;
         }
+        if (data?.taskType === 'pr-reviewer' && data?.reason === 'patch-feedback-delivered') {
+          toast.success('Conflict-marker feedback is available in the GitHub PR reviews.');
+          return;
+        }
         if (data?.taskType === 'pr-reviewer' && data?.reason) {
           toast(`${task}${scope}: ${PR_REVIEWER_REASON_LABELS[data.reason] || data.reason}.`, {
             duration: 8000,
