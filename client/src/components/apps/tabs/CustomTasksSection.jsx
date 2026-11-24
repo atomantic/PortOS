@@ -6,7 +6,7 @@ import ListLoadError from '../../ui/ListLoadError';
 import useUserTimezone from '../../../hooks/useUserTimezone.js';
 import { getCosJobs, createCosJob, toggleCosJob, triggerCosJob, deleteCosJob } from '../../../services/apiAgents.js';
 import { getProviders } from '../../../services/apiProviders.js';
-import { parseCronToRecurrence, buildCronFromRecurrence } from '../../../utils/cronHelpers';
+import { buildCronFromRecurrence } from '../../../utils/cronHelpers';
 import AgentJobProviderFields from '../../cos/AgentJobProviderFields';
 import JobCard, { ScheduleFields, TaskMetadataFields } from '../../cos/JobCard';
 import { filterRunnableProviders } from '../../../utils/providers';
@@ -34,29 +34,6 @@ export function emptyForm() {
     formFields: [],
     formValues: {},
     taskMetadata: { useWorktree: true, openPR: true, simplify: true }
-  };
-}
-
-export function formFromJob(job) {
-  return {
-    name: job.name || '',
-    description: job.description || '',
-    promptTemplate: job.promptTemplate || '',
-    scheduleMode: job.cronExpression || job.cronSchedule ? 'cron' : 'interval',
-    interval: job.interval || 'weekly',
-    scheduledTime: job.scheduledTime || '',
-    scheduleAnchor: job.scheduleAnchor ?? null,
-    cronExpression: job.cronExpression || '',
-    cronSchedule: job.cronSchedule || (job.cronExpression ? parseCronToRecurrence(job.cronExpression) : null),
-    priority: job.priority || 'MEDIUM',
-    autonomyLevel: job.autonomyLevel || 'manager',
-    providerId: job.providerId || '',
-    model: job.model || '',
-    effort: job.effort || '',
-    dataInputs: job.dataInputs || [],
-    formFields: job.formFields || [],
-    formValues: job.formValues || {},
-    taskMetadata: { useWorktree: false, openPR: false, simplify: false, ...(job.taskMetadata || {}) }
   };
 }
 

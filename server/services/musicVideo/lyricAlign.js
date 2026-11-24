@@ -73,6 +73,60 @@ function compressedWords(words) {
   return words.length >= 3 && Math.round((words.at(-1).endSec - words[0].startSec) * 1000) < words.length * 150;
 }
 
+// Two accepted repairs can each fit the whole-song pass and still overlap each other.
+// Reverting one can expose another, so repeat until every accepted line fits.
+function revertOverlappingRepairs(words, wholeSongWords, accepted) {
+  let changed;
+  do {
+    changed = false;
+    for (const index of accepted) {
+      const retry = words[index];
+      if (retry[0]?.startSec < words[index - 1]?.at(-1)?.endSec
+        || retry.at(-1)?.endSec > words[index + 1]?.[0]?.startSec) {
+        words[index] = wholeSongWords[index];
+        accepted.delete(index);
+        changed = true;
+      }
+    }
+  } while (changed);
+}
+
+/** Re-align each run of compressed or silent lines in its own window; keep a retry only where it improves the line. */
+async function repairStemLines(cues, wholeSongWords, { alignStemCues, silentCount, checkCancel, songEndSec }) {
+  const words = [...wholeSongWords];
+  const quality = wholeSongWords.map((line) => ({ compressed: compressedWords(line), silent: silentCount(line) }));
+  const suspect = (index) => quality[index].compressed || quality[index].silent > 0;
+  for (let first = 0, end; first < cues.length; first = end) {
+    end = first + 1;
+    if (!suspect(first)) continue;
+    while (end < cues.length && suspect(end)) end++;
+    checkCancel();
+    const startSec = cues[first - 1]?.endSec ?? wholeSongWords[first - 1]?.at(-1)?.endSec ?? 0;
+    const endSec = cues[end]?.startSec ?? wholeSongWords[end]?.[0]?.startSec ?? songEndSec;
+    if (!(endSec > startSec)) continue;
+    const retries = await alignStemCues(cues.slice(first, end), { startSec, endSec }).catch((err) => {
+      if (err.canceled || !['LYRIC_ALIGN_CTC_FAILED', 'LYRIC_ALIGN_CTC_WINDOW_TOO_SHORT'].includes(err.code)) throw err;
+      console.log(`⏭️ Skipped lyric repair for lines ${first + 1}-${end}: ${err.code}`);
+      return null;
+    });
+    checkCancel();
+    if (!retries) continue;
+    const accepted = new Set();
+    for (let index = first; index < end; index++) {
+      const retry = retries[index - first];
+      const { compressed, silent } = quality[index];
+      if (!retry || retry.length !== wholeSongWords[index].length || compressedWords(retry)) continue;
+      const retrySilent = silentCount(retry);
+      if (retrySilent < silent || (compressed && retrySilent <= silent)) {
+        words[index] = retry;
+        accepted.add(index);
+      }
+    }
+    revertOverlappingRepairs(words, wholeSongWords, accepted);
+  }
+  return words;
+}
+
 /**
  * Align one project's lyric cues. `cueId` re-aligns that line only: a timed
  * line uses its own slice; an untimed line uses full-song CTC context so a
@@ -153,55 +207,7 @@ export async function alignProjectLyrics(projectId, options = {}) {
     });
     forcedWords = await alignStemCues(promptCues, region);
     if (!cueId) {
-      const wholeSongWords = forcedWords;
-      forcedWords = [...wholeSongWords];
-      const quality = wholeSongWords.map((words) => ({ compressed: compressedWords(words), silent: silentCount(words) }));
-      for (let first = 0; first < cues.length;) {
-        if (!quality[first].compressed && quality[first].silent === 0) { first++; continue; }
-        let end = first + 1;
-        while (end < cues.length && (quality[end].compressed || quality[end].silent > 0)) end++;
-        checkCancel();
-        const startSec = cues[first - 1]?.endSec ?? wholeSongWords[first - 1]?.at(-1)?.endSec ?? 0;
-        const endSec = cues[end]?.startSec ?? wholeSongWords[end]?.[0]?.startSec ?? wavDurationSec(wav);
-        if (endSec > startSec) {
-          const retries = await alignStemCues(cues.slice(first, end), { startSec, endSec }).catch((err) => {
-            if (err.canceled || !['LYRIC_ALIGN_CTC_FAILED', 'LYRIC_ALIGN_CTC_WINDOW_TOO_SHORT'].includes(err.code)) throw err;
-            console.log(`⏭️ Skipped lyric repair for lines ${first + 1}-${end}: ${err.code}`);
-            return null;
-          });
-          checkCancel();
-          if (retries) {
-            const accepted = new Set();
-            for (let index = first; index < end; index++) {
-              const retry = retries[index - first];
-              const original = wholeSongWords[index];
-              const { compressed, silent } = quality[index];
-              if (!retry || retry.length !== original.length || compressedWords(retry)) continue;
-              const retrySilent = silentCount(retry);
-              if (retrySilent < silent || (compressed && retrySilent <= silent)) {
-                forcedWords[index] = retry;
-                accepted.add(index);
-              }
-            }
-            // Evaluate the combined result: reverting a conflicting line can expose
-            // another conflict, so keep checking until all accepted lines fit.
-            let changed;
-            do {
-              changed = false;
-              for (const index of accepted) {
-                const retry = forcedWords[index];
-                if (retry[0]?.startSec < forcedWords[index - 1]?.at(-1)?.endSec
-                  || retry.at(-1)?.endSec > forcedWords[index + 1]?.[0]?.startSec) {
-                  forcedWords[index] = wholeSongWords[index];
-                  accepted.delete(index);
-                  changed = true;
-                }
-              }
-            } while (changed);
-          }
-        }
-        first = end;
-      }
+      forcedWords = await repairStemLines(cues, forcedWords, { alignStemCues, silentCount, checkCancel, songEndSec: wavDurationSec(wav) });
     }
     kind = 'MMS_FA';
   } else {

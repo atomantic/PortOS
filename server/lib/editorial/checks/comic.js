@@ -1,5 +1,6 @@
 // Editorial checks — comic group. Extracted from checkRegistry.js (#1829).
 // Each entry is a declarative check; see ../README.md and ../checkInfra.js.
+import { findingCapField, findingCapSchema } from '../checkInfra/findingCap.js';
 import {
   COMIC_PAGE_TURN_STAGE,
   COMIC_PROSE_SYNC_STAGE,
@@ -147,8 +148,7 @@ export const comicChecks = [
     severityDefault: 'medium',
     defaultEnabled: true,
     configSchema: z.object({
-      // Cap findings per issue so a long issue can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
+      maxFindings: findingCapSchema(12),
       // Cap how many hybrid issues are cross-checked per run (one LLM call each),
       // so a long series can't fan out into an unbounded number of calls. 0 = no cap.
       maxIssues: z.number().int().min(0).max(500).default(40),
@@ -223,14 +223,13 @@ export const comicChecks = [
       splashRatioWarn: z.number().min(0.05).max(1).default(0.25),
       // Identical multi-panel count repeated for this many pages reads as grid monotony.
       monotonyRunLength: z.number().int().min(2).max(12).default(4),
-      // Cap findings per run so a long run of issues can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(20),
+      maxFindings: findingCapSchema(20),
     }),
     configFields: [
       { key: 'maxPanelsPerPage', label: 'Max panels per page', type: 'number', min: 2, max: 20, step: 1, help: 'Panels above this on one page reads as overcrowded — too many beats compressed onto a single page.' },
       { key: 'splashRatioWarn', label: 'Splash overuse ratio', type: 'number', min: 0.05, max: 1, step: 0.05, help: 'Share of full-page splashes (with more than one splash) at/above which the issue is flagged for splash overuse.' },
       { key: 'monotonyRunLength', label: 'Grid monotony run length', type: 'number', min: 2, max: 12, step: 1, help: 'The same multi-panel page count repeated for this many pages in a row reads as a monotonous grid.' },
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a long run of comic issues can not flood the review.' },
+      findingCapField('a long run of comic issues'),
     ],
     // Needs at least one issue with analyzable comic content — shares the
     // cheap presence test with the lettering-density check (#1313).
@@ -295,13 +294,8 @@ export const comicChecks = [
     category: 'pacing',
     severityDefault: 'low',
     defaultEnabled: true,
-    configSchema: z.object({
-      // Cap findings per run so a long run of issues can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a long run of comic issues can not flood the review.' },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField('a long run of comic issues')],
     // Needs at least one issue with analyzable comic content — shares the
     // cheap presence test with the lettering-density check (#1313).
     gate: (ctx) => hasComicContent(ctx.issues),

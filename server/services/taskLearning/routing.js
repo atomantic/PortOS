@@ -236,34 +236,6 @@ function tiersWithRecentFailures(data, taskType, { now = Date.now(), maxAgeMs = 
 }
 
 /**
- * Get suggested priority boost for a task type based on historical success
- * Returns a multiplier: >1 for boost, <1 for demotion
- *
- * Reads the EFFECTIVE success rate (issue #2617): the recency-windowed rate
- * when the outcome ring has enough samples, else the lifetime rate — so a type
- * that recovered from a since-fixed failure burst stops being demoted.
- */
-export async function getTaskTypePriorityMultiplier(taskType) {
-  const data = await loadLearningData();
-
-  const metrics = data.byTaskType[taskType];
-  if (!metrics || metrics.completed < 3) {
-    return 1.0; // Not enough data, use default priority
-  }
-
-  const { successRate } = computeEffectiveSuccessRate(metrics);
-
-  // High success rate = boost priority
-  if (successRate >= 90) return 1.2;
-  if (successRate >= 75) return 1.1;
-
-  // Low success rate = demote priority slightly (but not too much, as we want to retry)
-  if (successRate !== null && successRate < 50) return 0.9;
-
-  return 1.0;
-}
-
-/**
  * Suggest model tier based on historical performance for a task type
  * Enhanced with negative signal awareness: avoids tiers that consistently fail
  * and prefers tiers with proven success for the task type.

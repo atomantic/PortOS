@@ -372,7 +372,6 @@ describe('persistent mind supervisor', () => {
       memoryRecall: { state: 'included', includedIds: ['recalled-1'], omittedIds: [] },
     });
     await supervisor.registerPersistentMindTurnAdapter({ prepare, run });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     await supervisor.enqueuePersistentMindMessage({ id: 'recall-message', text: 'What about the zebra migration?' });
 
@@ -395,7 +394,6 @@ describe('persistent mind supervisor', () => {
     const prepare = vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' }, model: 'example-model', effort: 'high' }));
     const run = vi.fn(() => pending.promise);
     await supervisor.registerPersistentMindTurnAdapter({ prepare, run });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
 
     expect(await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Please review this.' }))
@@ -450,7 +448,6 @@ describe('persistent mind supervisor', () => {
         },
       })),
     });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     await supervisor.drainPersistentMind();
 
@@ -546,7 +543,6 @@ describe('persistent mind supervisor', () => {
     const prepare = vi.fn();
     await supervisor.registerPersistentMindTurnAdapter({ prepare, run: vi.fn() });
     mock.profile = { ok: false, error: 'Pinned provider unavailable' };
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     await supervisor.drainPersistentMind();
 
@@ -601,7 +597,6 @@ describe('persistent mind supervisor', () => {
   });
 
   it('keeps the last wake failure separate from a later pause reason', async () => {
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     mock.root.persistentMind.lastError = 'Provider process was killed (SIGKILL)';
     await supervisor.pausePersistentMind('Agent API pause: OOM safety');
@@ -612,8 +607,7 @@ describe('persistent mind supervisor', () => {
     });
   });
 
-  it('records pause, stop, and disable boundaries even without an active provider turn', async () => {
-    await supervisor.setPersistentMindEnabled(true);
+  it('records pause and stop boundaries even without an active provider turn', async () => {
     await supervisor.startPersistentMind();
     await supervisor.pausePersistentMind('Pause for inspection');
     expect(mock.appendMindEvent).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -627,12 +621,6 @@ describe('persistent mind supervisor', () => {
       kind: 'mind.paused',
       data: expect.objectContaining({ status: 'idle', error: 'Persistent mind stopped' }),
     }));
-
-    await supervisor.setPersistentMindEnabled(false);
-    expect(mock.appendMindEvent).toHaveBeenLastCalledWith(expect.objectContaining({
-      kind: 'mind.paused',
-      data: expect.objectContaining({ status: 'disabled', error: 'Persistent mind disabled' }),
-    }));
   });
 
   it('can wait for an aborted active turn to settle before cleanup starts', async () => {
@@ -641,7 +629,6 @@ describe('persistent mind supervisor', () => {
       prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' } })),
       run: vi.fn(() => pending.promise),
     });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     await supervisor.enqueuePersistentMindMessage({ id: 'message-cleanup', text: 'This turn will be interrupted.' });
     const drain = supervisor.drainPersistentMind();
@@ -665,7 +652,6 @@ describe('persistent mind supervisor', () => {
       prepare: vi.fn(async () => ({ ok: false, error: 'Pinned provider unavailable' })),
       run: vi.fn(),
     });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Wait for the configured provider.' });
     await supervisor.drainPersistentMind();
@@ -705,7 +691,6 @@ describe('persistent mind supervisor', () => {
     const prepare = vi.fn();
     const run = vi.fn();
     await supervisor.registerPersistentMindTurnAdapter({ prepare, run });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Wait for tomorrow.' });
     mock.budget = { withinBudget: false, exceeded: 'actions' };
@@ -723,7 +708,6 @@ describe('persistent mind supervisor', () => {
     const prepare = vi.fn();
     const run = vi.fn();
     await supervisor.registerPersistentMindTurnAdapter({ prepare, run });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Wait for a global slot.' });
     mock.root.config.maxConcurrentAgents = 1;
@@ -745,7 +729,6 @@ describe('persistent mind supervisor', () => {
       run: vi.fn(async () => ({})),
     });
     mock.root.config.maxConcurrentAgents = 1;
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     const drain = supervisor.drainPersistentMind();
     await vi.waitFor(() => expect(mock.root.persistentMind.activeTurn).not.toBeNull());
@@ -768,7 +751,6 @@ describe('persistent mind supervisor', () => {
       run: vi.fn(() => running.promise),
     });
     mock.root.config.maxConcurrentAgents = 1;
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Think locally.' });
     const drain = supervisor.drainPersistentMind();
@@ -804,7 +786,6 @@ describe('persistent mind supervisor', () => {
       prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' } })),
       run,
     });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
 
     await supervisor.drainPersistentMind();
@@ -829,7 +810,6 @@ describe('persistent mind supervisor', () => {
       run,
     });
     mock.acquireSlot.mockResolvedValueOnce({ ok: false, reason: 'local endpoint localhost:1234 is at capacity (1/1)' });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Wait for capacity.' });
 
@@ -853,7 +833,6 @@ describe('persistent mind supervisor', () => {
       summarize: vi.fn(async () => 'summary'),
       run,
     });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     const drain = supervisor.drainPersistentMind();
     await vi.waitFor(() => expect(mock.prepareContext).toHaveBeenCalled());
@@ -875,7 +854,6 @@ describe('persistent mind supervisor', () => {
       prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' } })),
       run,
     });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     mock.scheduled.clear();
     mock.root.paused = true;
@@ -898,7 +876,6 @@ describe('persistent mind supervisor', () => {
       prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' } })),
       run: vi.fn(async () => ({})),
     });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     const firstWake = mock.scheduled.get(supervisor.PERSISTENT_MIND_WAKE_EVENT_ID);
 
@@ -920,7 +897,6 @@ describe('persistent mind supervisor', () => {
       prepare: vi.fn(() => prepared.promise),
       run,
     });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Cancel before inference.' });
     const drain = supervisor.drainPersistentMind();
@@ -993,7 +969,6 @@ describe('persistent mind supervisor', () => {
     const run = vi.fn(async () => ({}));
     const prepare = vi.fn(async ({ profile }) => ({ ok: true, provider: profile.provider }));
     await supervisor.registerPersistentMindTurnAdapter({ prepare, run });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     const { reached, skipped = null, requestEvents = 0, restore = () => {} } = await arrange(gate, prepare);
     try {
@@ -1026,7 +1001,6 @@ describe('persistent mind supervisor', () => {
       prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' } })),
       run,
     });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Watch this turn.' });
     const drain = supervisor.drainPersistentMind();
@@ -1061,7 +1035,6 @@ describe('persistent mind supervisor', () => {
         prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud', ollamaBacked: true, endpoint: 'http://127.0.0.1:11434/v1' } })),
         run,
       });
-      await supervisor.setPersistentMindEnabled(true);
       await supervisor.startPersistentMind();
       await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Think for a long time.' });
       const drain = supervisor.drainPersistentMind();
@@ -1096,7 +1069,6 @@ describe('persistent mind supervisor', () => {
       prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' } })),
       run,
     });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Survive a host suspend.' });
     const drain = supervisor.drainPersistentMind();
@@ -1163,23 +1135,6 @@ describe('persistent mind supervisor', () => {
     expect(mock.root.persistentMind.status).toBe('thinking');
   });
 
-  it('coalesces self-wakes and rejects a recursive wake without a completed source turn', async () => {
-    mock.root.persistentMind = {
-      ...createDefaultPersistentMindState(),
-      enabled: true,
-      started: true,
-      status: 'idle',
-      lastCompletedTurnId: 'turn-1',
-    };
-    expect(await supervisor.requestPersistentMindWake({ sourceTurnId: 'turn-0', reason: 'stale' }))
-      .toEqual({ success: false, error: 'Self-wake must reference the last completed turn' });
-    const first = await supervisor.requestPersistentMindWake({ sourceTurnId: 'turn-1', reason: 'first' });
-    const second = await supervisor.requestPersistentMindWake({ sourceTurnId: 'turn-1', reason: 'newest' });
-    expect(first.success).toBe(true);
-    expect(second.success).toBe(true);
-    expect(mock.root.persistentMind.selfWake.reason).toBe('newest');
-  });
-
   const withDeepPreset = () => {
     mock.root.config.persistentMindThinkingPresets = {
       presets: [{ id: 'deep', label: 'Deep pass', providerId: 'example-alt', model: 'alt-model', effort: 'max' }],
@@ -1207,7 +1162,6 @@ describe('persistent mind supervisor', () => {
       return {};
     });
     await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     await supervisor.enqueuePersistentMindMessage({ id: 'default-message', text: 'Think about this.' });
     await supervisor.drainPersistentMind();
@@ -1231,7 +1185,6 @@ describe('persistent mind supervisor', () => {
       return {};
     });
     await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     await supervisor.enqueuePersistentMindMessage({ id: 'requesting', text: 'Think.' });
     await supervisor.drainPersistentMind();
@@ -1256,7 +1209,6 @@ describe('persistent mind supervisor', () => {
     withDeepPreset();
     const run = vi.fn(async () => ({}));
     await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
 
     expect(await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Deep pass please.', thinkingPresetId: 'deep' }))
@@ -1281,7 +1233,6 @@ describe('persistent mind supervisor', () => {
   it('refuses a message naming a preset the user removed, and will not let a retry swap models', async () => {
     withDeepPreset();
     await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run: vi.fn() });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
 
     expect(await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Deep pass please.', thinkingPresetId: 'removed' }))
@@ -1300,7 +1251,6 @@ describe('persistent mind supervisor', () => {
     mock.thinkingSession = { ok: false, error: 'Temporary thinking preset "Deep pass" model "alt-model" is not available from provider "example-alt"' };
     const run = vi.fn();
     await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Deep pass please.', thinkingPresetId: 'deep' });
     await supervisor.drainPersistentMind();
@@ -1321,7 +1271,6 @@ describe('persistent mind supervisor', () => {
     mock.providerOverride = { id: 'example-alt', type: 'api', models: ['alt-model', 'other-model'] };
     const run = vi.fn(async () => ({}));
     await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     await supervisor.pausePersistentMind();
     const input = { id: 'accepted-route', text: 'Use this exact route.', thinkingPresetId: 'deep', thinkingPreset: selection };
@@ -1364,7 +1313,6 @@ describe('persistent mind supervisor', () => {
     mock.providerOverride = { id: 'example-alt', type: 'api', models: ['alt-model'] };
     const run = vi.fn(async () => ({}));
     await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     const input = { id: 'id-only', text: 'Keep the accepted model.', thinkingPresetId: 'deep' };
     await supervisor.enqueuePersistentMindMessage(input);
@@ -1385,7 +1333,6 @@ describe('persistent mind supervisor', () => {
     mock.useActualThinkingSession = true;
     const run = vi.fn();
     await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     mock.root.persistentMind.queuedMessages = [{ id: 'legacy', text: 'Saved before snapshots.', thinkingPresetId: 'deep' }];
     await supervisor.drainPersistentMind();
@@ -1412,7 +1359,6 @@ describe('persistent mind supervisor', () => {
     const run = vi.fn();
     const summarize = vi.fn();
     await supervisor.registerPersistentMindTurnAdapter({ prepare, run, summarize });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     await supervisor.enqueuePersistentMindMessage({ id: 'revoke-during-prepare', text: 'Use the alternate.', thinkingPresetId: 'deep' });
     const drain = supervisor.drainPersistentMind();
@@ -1442,7 +1388,6 @@ describe('persistent mind supervisor', () => {
     });
     const run = vi.fn(async () => ({}));
     await supervisor.registerPersistentMindTurnAdapter({ prepare, run });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     const input = { id: 'temporary-outage', text: 'Keep this accepted request.', thinkingPresetId: 'deep' };
     await supervisor.enqueuePersistentMindMessage(input);
@@ -1468,7 +1413,6 @@ describe('persistent mind supervisor', () => {
       signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
     }));
     await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run });
-    await supervisor.setPersistentMindEnabled(true);
     await supervisor.startPersistentMind();
     await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Deep pass please.', thinkingPresetId: 'deep' });
     const drain = supervisor.drainPersistentMind();
@@ -1524,11 +1468,6 @@ describe('persistent mind supervisor', () => {
     expect(mock.root.persistentMind.queuedMessages).toEqual([]);
     expect(mock.root.persistentMind.recentMessageIds).toEqual(['paid-stop']);
 
-    startedWith(temporaryTurn('mind-turn-disable', 'paid-disable'));
-    await supervisor.setPersistentMindEnabled(false);
-    expect(mock.root.persistentMind.queuedMessages).toEqual([]);
-    expect(mock.root.persistentMind.recentMessageIds).toEqual(['paid-disable']);
-
     // An ordinary message keeps its free automatic recovery on every path.
     const ordinaryTurn = {
       id: 'mind-turn-plain',
@@ -1569,7 +1508,6 @@ describe('persistent mind supervisor', () => {
         return {};
       });
       await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run, summarize });
-      await supervisor.setPersistentMindEnabled(true);
       await supervisor.startPersistentMind();
       await supervisor.enqueuePersistentMindMessage({ id: 'message-calls', text: 'Do the work.' });
       await supervisor.drainPersistentMind();
@@ -1603,7 +1541,6 @@ describe('persistent mind supervisor', () => {
         return {};
       });
       await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run });
-      await supervisor.setPersistentMindEnabled(true);
       await supervisor.startPersistentMind();
       await supervisor.enqueuePersistentMindMessage({ id: 'message-budget', text: 'Keep going.' });
       await supervisor.drainPersistentMind();
@@ -1631,7 +1568,6 @@ describe('persistent mind supervisor', () => {
         return { output: 'Finished after an hour' };
       });
       await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run });
-      await supervisor.setPersistentMindEnabled(true);
       await supervisor.startPersistentMind();
       await supervisor.drainPersistentMind();
       expect(mock.root.persistentMind).toMatchObject({ status: 'idle', activeTurn: null, pauseReason: null });
@@ -1649,7 +1585,6 @@ describe('persistent mind supervisor', () => {
         },
       ));
       await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run });
-      await supervisor.setPersistentMindEnabled(true);
       await supervisor.startPersistentMind();
       await supervisor.enqueuePersistentMindMessage({ id: 'message-failed', text: 'Try this.' });
       await supervisor.drainPersistentMind();
@@ -1681,7 +1616,6 @@ describe('persistent mind supervisor', () => {
         return {};
       });
       await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run });
-      await supervisor.setPersistentMindEnabled(true);
       await supervisor.startPersistentMind();
       await supervisor.enqueuePersistentMindMessage({ id: 'message-revoked', text: 'Deep pass please.', thinkingPresetId: 'deep' });
       await supervisor.drainPersistentMind();
@@ -1718,7 +1652,6 @@ describe('persistent mind supervisor', () => {
         prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' } })),
         run,
       });
-      await supervisor.setPersistentMindEnabled(true);
       await supervisor.startPersistentMind();
       await supervisor.enqueuePersistentMindMessage({ id: 'message-quota', text: 'Think.' });
       await supervisor.drainPersistentMind();
@@ -1760,7 +1693,6 @@ describe('persistent mind supervisor', () => {
         prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' } })),
         run,
       });
-      await supervisor.setPersistentMindEnabled(true);
       await supervisor.startPersistentMind();
       await supervisor.enqueuePersistentMindMessage({ id: 'message-429', text: 'Retry me.' });
       await supervisor.drainPersistentMind();
@@ -1781,7 +1713,6 @@ describe('persistent mind supervisor', () => {
         },
       ));
       await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run });
-      await supervisor.setPersistentMindEnabled(true);
       await supervisor.startPersistentMind();
       await supervisor.enqueuePersistentMindMessage({ id: 'message-soft', text: 'Try this.' });
       await supervisor.drainPersistentMind();
@@ -1798,7 +1729,6 @@ describe('persistent mind supervisor', () => {
         prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' } })),
         run,
       });
-      await supervisor.setPersistentMindEnabled(true);
       await supervisor.startPersistentMind();
       await supervisor.enqueuePersistentMindMessage({ id: 'message-still-limited', text: 'Think.' });
       await supervisor.drainPersistentMind();
@@ -1829,7 +1759,6 @@ describe('persistent mind supervisor', () => {
         prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' } })),
         run,
       });
-      await supervisor.setPersistentMindEnabled(true);
       await supervisor.startPersistentMind();
       await supervisor.enqueuePersistentMindMessage({ id: 'message-recover', text: 'Think.' });
       await supervisor.drainPersistentMind();
@@ -1860,7 +1789,6 @@ describe('persistent mind supervisor', () => {
     });
 
 it('does not auto-resume pauses that are not usage-limit autopauses', async () => {
-      await supervisor.setPersistentMindEnabled(true);
       await supervisor.startPersistentMind();
       await supervisor.pausePersistentMind('Paused by user');
 
@@ -1900,7 +1828,6 @@ it('does not auto-resume pauses that are not usage-limit autopauses', async () =
         prepare: echoProfileAdapter(),
         run,
       });
-      await supervisor.setPersistentMindEnabled(true);
       await supervisor.startPersistentMind();
       await supervisor.enqueuePersistentMindMessage({ id: 'message-budget', text: 'Think.' });
       await supervisor.drainPersistentMind();
@@ -1930,7 +1857,6 @@ it('does not auto-resume pauses that are not usage-limit autopauses', async () =
     const drainDeniedTurn = async (denial) => {
       const run = vi.fn(async () => { throw denial; });
       await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run });
-      await supervisor.setPersistentMindEnabled(true);
       await supervisor.startPersistentMind();
       await supervisor.enqueuePersistentMindMessage({ id: 'message-denied', text: 'Think.' });
       await supervisor.drainPersistentMind();
@@ -2013,7 +1939,6 @@ describe('usage-limit retry time', () => {
         prepare: vi.fn(async () => ({ ok: false, error: longReason })),
         run: vi.fn(),
       });
-      await supervisor.setPersistentMindEnabled(true);
       await supervisor.startPersistentMind();
       await supervisor.enqueuePersistentMindMessage({ id: 'msg-degraded', text: 'Degraded test' });
       await supervisor.drainPersistentMind();
@@ -2038,7 +1963,6 @@ describe('usage-limit retry time', () => {
         run,
       });
       mock.acquireSlot.mockResolvedValueOnce({ ok: false, reason: 'local endpoint localhost:1234 is at capacity (1/1)' });
-      await supervisor.setPersistentMindEnabled(true);
       await supervisor.startPersistentMind();
       await supervisor.enqueuePersistentMindMessage({ id: 'msg-waiting', text: 'Wait for capacity.' });
       await supervisor.drainPersistentMind();

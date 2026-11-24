@@ -399,6 +399,17 @@ function createDependencyReader(project) {
   };
 }
 
+const DEPENDENCY_LABELS = new Map([
+  ['song', 'Master audio, lyrics or alignment'],
+  ['plate', 'Selected plate or its crop/mask inputs'],
+  ['endPlate', 'Selected end frame'],
+  ['clip', 'Selected clip'],
+  ['clipReferences', 'Selected clip references'],
+  ['layer', 'Shot timing or composition layer'],
+  ['colorMatch', 'Shot color match'],
+  ['finish', 'Video finish settings (film look, title card, credits, cameras, overscan, sound bed or lyric overlay)'],
+]);
+
 function dependencyChanges(dependencies, readCurrent, matchFinalLayer = null) {
   if (!dependencies || dependencies.version !== MUSIC_VIDEO_DEPENDENCY_VERSION || !Array.isArray(dependencies.references)) {
     return [{ role: 'unknown', reason: 'Dependency evidence was not recorded; review again' }];
@@ -422,7 +433,7 @@ function dependencyChanges(dependencies, readCurrent, matchFinalLayer = null) {
       ? matchFinalLayer(ref)
       : current?.revision === ref.revision || current?.legacyRevision === ref.revision || matchFinalLayer?.(ref);
     if (!current || !sameAsset || current.catalogUnavailable || !sameRevision) {
-      changes.push({ ...ref, reason: `${ref.role === 'song' ? 'Master audio, lyrics or alignment' : ref.role === 'plate' ? 'Selected plate or its crop/mask inputs' : ref.role === 'endPlate' ? 'Selected end frame' : ref.role === 'clip' ? 'Selected clip' : ref.role === 'clipReferences' ? 'Selected clip references' : ref.role === 'layer' ? 'Shot timing or composition layer' : ref.role === 'colorMatch' ? 'Shot color match' : ref.role === 'finish' ? 'Video finish settings (film look, title card, credits, cameras, overscan, sound bed or lyric overlay)' : 'Composition'} changed` });
+      changes.push({ ...ref, reason: `${DEPENDENCY_LABELS.get(ref.role) || 'Composition'} changed` });
     }
   }
   return changes;

@@ -42,7 +42,6 @@ import {
   isReviewablePullRequest,
   runPrReviewerSecurityScan,
   securityScanFingerprint,
-  summarizeSecurityScanReport,
 } from './prReviewerSecurity.js'
 import { screenedPullRequestFingerprint } from '../lib/prReviewContent.js'
 
@@ -399,19 +398,6 @@ describe('pr-reviewer model-abuse preflight', () => {
     expect(runModelAbuseScanMock).not.toHaveBeenCalled()
   })
 
-  it('summarizes a report without exposing source content', () => {
-    expect(summarizeSecurityScanReport({
-      number: 12,
-      safe: false,
-      securityFindings: [{ severity: 'blocking', reason: 'generic' }],
-      diff: 'must not be returned',
-    })).toEqual({
-      number: 12,
-      safe: false,
-      findingCount: 1,
-      guardId: 'llama-prompt-guard-2-86m',
-    })
-  })
 })
 
 /**

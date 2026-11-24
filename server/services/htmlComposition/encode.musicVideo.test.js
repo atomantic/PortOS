@@ -44,25 +44,13 @@ const page = {
 };
 const contract = (durationSec) => ({ fps: 12, durationSec, width: 1280, height: 720, motionBlur: 1 });
 
-describe('encodeComposition music-video audio', () => {
+describe('encodeComposition soundtrack and encode args', () => {
   it('keeps the launch-video loop and tail fade when given a library bed', async () => {
     spawned.length = 0;
     await encodeComposition(page, contract(1), '/tmp/launch.mp4', { musicPath: '/library/bed.wav' });
     const args = spawned[0].args;
     expect(args).toContain('-stream_loop');
     expect(args.join(' ')).toContain('afade=t=out:st=0.5:d=0.5');
-    expect(args).not.toContain('-ss');
-  });
-
-  it('cuts the master at the in-point with no loop and no fade', async () => {
-    spawned.length = 0;
-    await encodeComposition(page, contract(15), '/tmp/excerpt.mp4', { audio: { path: '/masters/song.wav', startSec: 60 } });
-    const args = spawned[0].args;
-    const audioAt = args.indexOf('/masters/song.wav');
-    expect(args.slice(audioAt - 5, audioAt + 1)).toEqual(['-ss', '60', '-t', '15', '-i', '/masters/song.wav']);
-    expect(args).not.toContain('-stream_loop');
-    expect(args.join(' ')).not.toContain('afade');
-    expect(args).toContain('-frames:v');
   });
 
   it('replaces the master CRF with the rate-controlled social encode', async () => {

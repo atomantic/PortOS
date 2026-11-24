@@ -9,7 +9,7 @@ vi.mock('./memoryBackend.js', () => ({
 }));
 vi.mock('./memoryEmbeddings.js', () => ({
   estimateTokens: text => Math.ceil(String(text ?? '').length / 4),
-  generateQueryEmbedding: vi.fn(), truncateToTokens: vi.fn(),
+  generateQueryEmbedding: vi.fn(),
 }));
 import { getMemories, getMemory, hybridSearchMemories, peekMemories, recordMemoryAccess, searchMemories } from './memoryBackend.js';
 import { generateQueryEmbedding } from './memoryEmbeddings.js';

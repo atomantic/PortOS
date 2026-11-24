@@ -1,5 +1,6 @@
 // Editorial checks — pov group. Extracted from checkRegistry.js (#1829).
 // Each entry is a declarative check; see ../README.md and ../checkInfra.js.
+import { findingCapField, findingCapSchema } from '../checkInfra/findingCap.js';
 import { hasManuscript } from '../checkInfra/gates.js';
 import {
   HEAD_HOPPING_STAGE,
@@ -318,21 +319,8 @@ export const povChecks = [
     // Reads the stitched manuscript corpus — so the runner only pays the
     // section-collection I/O when a manuscript-consuming check is enabled.
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long manuscript can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     // Skip when there's no prose, OR when the style guide declares third-person
     // omniscient — an omniscient narrator may freely roam between heads, so
     // "head-hopping" is intentional and there's nothing to police (#1311).

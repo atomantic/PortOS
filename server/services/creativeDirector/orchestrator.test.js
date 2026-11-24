@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { nextPendingScene, nextTaskKind, buildTimelineClips } from './orchestrator.js';
+import { nextPendingScene, buildTimelineClips } from './orchestrator.js';
 import { presetToRenderParams } from '../../lib/creativeDirectorPresets.js';
 
 // Mocks for advanceAfterSceneSettled integration test.
@@ -129,62 +129,6 @@ describe('orchestrator', () => {
         },
       };
       expect(nextPendingScene(project)).toBeNull();
-    });
-  });
-
-  describe('nextTaskKind', () => {
-    it('returns "treatment" when no treatment exists', () => {
-      expect(nextTaskKind({ ...baseProject, treatment: null })).toBe('treatment');
-    });
-
-    it('returns "scene" when at least one scene is pending', () => {
-      const project = {
-        ...baseProject,
-        treatment: { scenes: [{ sceneId: 's1', order: 0, status: 'pending' }] },
-      };
-      expect(nextTaskKind(project)).toBe('scene');
-    });
-
-    it('returns "stitch" when every scene accepted and no final video', () => {
-      const project = {
-        ...baseProject,
-        treatment: {
-          scenes: [
-            { sceneId: 's1', order: 0, status: 'accepted' },
-            { sceneId: 's2', order: 1, status: 'accepted' },
-          ],
-        },
-      };
-      expect(nextTaskKind(project)).toBe('stitch');
-    });
-
-    it('returns null when finalVideoId is already set', () => {
-      const project = {
-        ...baseProject,
-        finalVideoId: 'final-uuid',
-        treatment: { scenes: [{ sceneId: 's1', order: 0, status: 'accepted' }] },
-      };
-      expect(nextTaskKind(project)).toBeNull();
-    });
-
-    it('returns null when project is paused or failed', () => {
-      const paused = { ...baseProject, status: 'paused', treatment: null };
-      const failed = { ...baseProject, status: 'failed', treatment: null };
-      expect(nextTaskKind(paused)).toBeNull();
-      expect(nextTaskKind(failed)).toBeNull();
-    });
-
-    it('returns null when no scenes were ever accepted (full failure)', () => {
-      const project = {
-        ...baseProject,
-        treatment: {
-          scenes: [
-            { sceneId: 's1', order: 0, status: 'failed' },
-            { sceneId: 's2', order: 1, status: 'failed' },
-          ],
-        },
-      };
-      expect(nextTaskKind(project)).toBeNull();
     });
   });
 

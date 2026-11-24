@@ -640,15 +640,3 @@ export const getTextEncoderRepo = () => {
   }
   return entry.repo;
 };
-
-export const getTextEncoderEntries = () => {
-  const reg = loadMediaModels();
-  return (reg.textEncoders || []).map((t) => ({
-    id: t.id,
-    label: t.label,
-    repo: t.repo,
-    localPath: t.localPath ? expandHome(t.localPath) : null,
-    localAvailable: t.localPath ? existsSync(expandHome(t.localPath)) : false,
-    selected: t.id === reg.selectedTextEncoder,
-  }));
-};

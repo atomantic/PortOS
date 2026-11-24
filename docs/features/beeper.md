@@ -61,14 +61,9 @@ Live verification against a real instance was done on **Beeper Desktop 4.3.89**;
 "[What is not verified live](#what-is-not-verified-live)" section below says what that pass did
 and did not cover.
 
-Two non-obvious response shapes the client encodes, both confirmed live:
-
-- `GET`/`HEAD /v1/assets/serve` answers **502**, not 404, for media the source network has aged
-  out. A generic "5xx is transient" retry policy would loop forever on it, so an asset-endpoint
-  502 maps to a terminal `ASSET_UNAVAILABLE`.
-- `POST /v1/assets/download` does *not* share that. It answers **200** with `{ error: "…" }` and
-  no `srcURL`, so `downloadAsset` validates the 200 body itself and converges on the same
-  terminal error.
+One non-obvious response shape the client encodes, confirmed live: `GET`/`HEAD /v1/assets/serve` answers **502**, not 404, for media the source network has aged
+out. A generic "5xx is transient" retry policy would loop forever on it, so an asset-endpoint 502
+maps to a terminal `ASSET_UNAVAILABLE`.
 
 Reads may retry once on a replayable connection failure. **Writes never retry** — Beeper has no
 idempotency key on send, so a retried POST delivers a second real message to a real person.

@@ -1,5 +1,6 @@
 // Editorial checks — cast group. Extracted from checkRegistry.js (#1829).
 // Each entry is a declarative check; see ../README.md and ../checkInfra.js.
+import { findingCapField, findingCapSchema } from '../checkInfra/findingCap.js';
 import { hasManuscript } from '../checkInfra/gates.js';
 import {
   UNMODELED_NAMES_STAGE,
@@ -239,21 +240,8 @@ export const castChecks = [
     // Reads the stitched manuscript corpus — so the runner only pays the
     // section-collection I/O when a manuscript-consuming check is enabled.
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a large unmodeled cast can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a large unmodeled cast can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField('a large unmodeled cast')],
     // Needs prose to scan. Unlike roster.economy this does NOT require a populated
     // canon — an EMPTY bible is the strongest case (every named proper noun is
     // unmodeled), and the prompt's {{^knownCharacters}} branch handles it.

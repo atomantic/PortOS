@@ -17,7 +17,7 @@ import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
  * imported by:
  *
  *   - `agentFinalization.js`       — finalizeAgent (both spawners)
- *   - `agentSummaryExtraction.js`  — extractFinalSummary / extractSimplifySummaries
+ *   - `agentSummaryExtraction.js`  — extractFinalSummary
  *   - `agentRunnerSync.js`         — syncRunnerAgents (agentManagement, subAgentSpawner)
  *   - `agentState.js`              — the shared in-memory agent maps
  *

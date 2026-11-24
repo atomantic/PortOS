@@ -536,11 +536,6 @@ export function invalidateEngineHealth(engineId = null) {
   else engineHealthCache.clear();
 }
 
-// Back-compat: MusicGen readiness probe.
-export function isMusicGenReady() {
-  return resolveMusicgenPython() !== null;
-}
-
 // Clamp a requested duration into an engine's usable window. Non-finite input
 // falls back to that engine's default rather than throwing — the route
 // validates shape, this guards the math. `engineId` defaults to the module's

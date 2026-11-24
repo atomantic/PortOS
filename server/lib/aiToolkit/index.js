@@ -4,8 +4,6 @@
  * matching Express routes. See server/index.js for the wiring.
  */
 
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
 import {
   canRefreshModels,
   createProviderService,
@@ -21,10 +19,6 @@ import { createPromptsRoutes } from './routes/prompts.js';
 import { createProviderStatusRoutes } from './routes/providerStatus.js';
 import { defaultAsyncHandler } from './internal/httpError.js';
 import * as errorDetection from './errorDetection.js';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-export const DEFAULT_PROVIDERS_SAMPLE = join(__dirname, 'defaults/providers.sample.json');
 
 export * from './validation.js';
 export * from './errorDetection.js';

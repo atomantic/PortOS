@@ -247,22 +247,6 @@ export async function setOrgHoldings(orgId, holdings) {
 }
 
 /**
- * Batch status flip across ALL orgs holding a given vault record — used by
- * the Phase 4 change-of-address workflow ("mark every org holding my old
- * address as update_pending"). Only rows currently in `fromStatus` flip.
- */
-export async function setHoldingsStatus(vaultRecordId, fromStatus, toStatus) {
-  const { rows } = await query(
-    `UPDATE privacy_org_holdings SET status = $1, updated_at = NOW()
-     WHERE vault_record_id = $2 AND status = $3
-     RETURNING org_id, vault_record_id`,
-    [toStatus, vaultRecordId, fromStatus],
-  );
-  console.log(`🔁 Flipped ${rows.length} holdings for vault record ${vaultRecordId} (${fromStatus} → ${toStatus})`);
-  return { updated: rows.length };
-}
-
-/**
  * Reverse index for the Digital Twin ↔ org cross-link (issue #2147): every org
  * that references one of the twin's social accounts. Keyed by the Twin's
  * Accounts tab so it can badge "in org registry" without N per-account calls.
@@ -288,35 +272,4 @@ export async function getOrgsBySocialAccounts({ subjectId } = {}) {
     orgId: row.id,
     orgName: row.name,
   }));
-}
-
-/** Per-org holding counts + per-vault-record org counts — powers the inventory view. */
-export async function getHoldingsSummary({ subjectId } = {}) {
-  const resolvedSubjectId = resolveSubjectId(subjectId);
-  const [byOrg, byRecord] = await Promise.all([
-    query(
-      `SELECT o.id AS org_id, o.name AS org_name, COUNT(h.vault_record_id)::int AS holding_count
-       FROM privacy_orgs o
-       LEFT JOIN privacy_org_holdings h ON h.org_id = o.id
-       WHERE o.subject_id = $1
-       GROUP BY o.id, o.name
-       ORDER BY o.name`,
-      [resolvedSubjectId],
-    ),
-    query(
-      `SELECT v.id AS vault_record_id, v.type, v.label, COUNT(h.org_id)::int AS org_count
-       FROM privacy_vault_records v
-       LEFT JOIN privacy_org_holdings h ON h.vault_record_id = v.id
-       WHERE v.subject_id = $1
-       GROUP BY v.id, v.type, v.label
-       ORDER BY v.type, v.label`,
-      [resolvedSubjectId],
-    ),
-  ]);
-  return {
-    byOrg: byOrg.rows.map((r) => ({ orgId: r.org_id, orgName: r.org_name, holdingCount: r.holding_count })),
-    byVaultRecord: byRecord.rows.map((r) => ({
-      vaultRecordId: r.vault_record_id, type: r.type, label: r.label, orgCount: r.org_count,
-    })),
-  };
 }

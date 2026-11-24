@@ -4,9 +4,8 @@
  * The person writes each page's brief (by default generic creative guidelines that leave the subject to the model); PortOS asks the model to plan the page from it first, then to build the page from the brief and that plan, adding only fixed text that is shown beside the brief before a run. Every model in a comparison gets the same briefs so galleries compare page for page. The checks only establish that a page is a complete, self-contained document; whether it looks good is left to the person looking at the frames.
  */
 
-/** The most pages one run may ask for; the default is what the form pre-selects. */
+/** The most pages one run may ask for. */
 export const HTML_PAGES_MAX = 5;
-export const HTML_PAGES_DEFAULT = 3;
 
 /** The longest page brief accepted; the prompt carries it verbatim, never truncated. */
 export const HTML_BRIEF_MAX_CHARS = 2000;

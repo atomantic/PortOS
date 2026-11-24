@@ -442,23 +442,6 @@ export async function getAgentDates() {
     .sort((a, b) => b.date.localeCompare(a.date));
 }
 
-// Agent ids grouped by date bucket for the requested dates, read straight from
-// the in-memory id→date index (strings only, no disk I/O) in a single pass no
-// matter how many dates are asked for. Returns a Map keyed by every requested
-// date, with `[]` for dates the index doesn't know.
-//
-// Callers that already hold live agent records use this to learn WHICH ids a
-// date owns before deciding whether the on-disk bucket is worth reading — see
-// `collectCompletedAgents` in cosReports.js.
-export async function getAgentIdsForDates(dates) {
-  const byDate = new Map(dates.map(date => [date, []]));
-  const idx = await loadAgentIndex();
-  for (const [agentId, bucket] of idx.entries()) {
-    byDate.get(bucket)?.push(agentId);
-  }
-  return byDate;
-}
-
 // Read one archived record from its date bucket, normalized the way every
 // archive reader expects: the transcript is dropped (it is hydrated on demand by
 // GET /agents/:id), a missing id falls back to the directory name, and a record

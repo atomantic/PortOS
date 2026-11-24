@@ -45,7 +45,3 @@ export function useSocket() {
   useSocketConnected();
   return socket;
 }
-
-export function getSocket() {
-  return socket;
-}

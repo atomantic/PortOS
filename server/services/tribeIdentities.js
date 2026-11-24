@@ -65,33 +65,6 @@ export function identityLookupKey({ kind, network = '', handle }) {
 }
 
 /**
- * Look up the Tribe person currently claiming a `(kind, network, handle)`
- * identity, or `null`. `network` defaults to `''` (the network-less scope
- * `classifyNetworkHandle`'s `'phone'` kind uses — the same phone number means
- * the same person regardless of which network reported it). A `kind='handle'`
- * or `kind='beeper-user'` identity is always scoped (`NETWORK_SCOPED_KINDS`) —
- * an empty network can never resolve one, since `linkIdentity` refuses to
- * write such a row (see below).
- *
- * Joined against `tribe_people` and filtered to `deleted = FALSE`:
- * `tribe.deletePerson` is a SOFT delete, so `ON DELETE CASCADE` on this
- * table's `person_id` FK never fires for it, and an unfiltered lookup would
- * keep resolving a Beeper participant onto a person the user deleted.
- */
-export async function resolvePersonByIdentity({ kind, network = '', handle }) {
-  if (!isValidLookupScope({ kind, network, handle })) return null;
-  await ensureReady();
-  const result = await query(
-    `SELECT ti.person_id
-     FROM tribe_identities ti
-     JOIN tribe_people tp ON tp.id = ti.person_id
-     WHERE ti.kind = $1 AND ti.network = $2 AND ti.handle = $3 AND tp.deleted = FALSE`,
-    [kind, network, handle],
-  );
-  return result.rows[0]?.person_id || null;
-}
-
-/**
  * Batch-resolve `(kind, network, handle)` identity claims to live
  * (`deleted = FALSE`) Tribe person IDs in one query. Returns a `Map` keyed by
  * `identityLookupKey(scope) -> personId`.

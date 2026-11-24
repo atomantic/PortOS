@@ -1,5 +1,6 @@
 // Editorial checks — proseStyle group. Extracted from checkRegistry.js (#1829).
 // Each entry is a declarative check; see ../README.md and ../checkInfra.js.
+import { findingCapField, findingCapSchema } from '../checkInfra/findingCap.js';
 import { hasManuscript } from '../checkInfra/gates.js';
 import {
   ADVERSARIAL_CUTS_STAGE,
@@ -59,21 +60,8 @@ export const proseStyleChecks = [
     // Reads the stitched manuscript corpus — so the runner only pays the
     // section-collection I/O when a manuscript-consuming check is enabled.
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long manuscript can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     gate: hasManuscript,
     run: (ctx) => runManuscriptLlmCheck(ctx, {
       stage: INFO_DUMPING_STAGE,
@@ -229,21 +217,8 @@ export const proseStyleChecks = [
     severityDefault: 'medium',
     defaultEnabled: true,
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long manuscript can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     // Skip unless there's prose AND the style guide declares at least one
     // conformance-relevant field (tense / POV / rating / profanity / audience).
     gate: (ctx) => hasManuscript(ctx)
@@ -284,8 +259,7 @@ export const proseStyleChecks = [
     // Reads the stitched manuscript (per-issue sections) to anchor each cliché.
     needsManuscript: true,
     configSchema: z.object({
-      // Cap findings per run so a cliché-heavy draft can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(20),
+      maxFindings: findingCapSchema(20),
       // House-style allowlist: clichés to leave alone (one per line or comma-separated)
       // — an intentional cliché in a character's voice or a genre beat.
       allowPhrases: z.string().default(''),
@@ -293,15 +267,7 @@ export const proseStyleChecks = [
       extraPhrases: z.string().default(''),
     }),
     configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a cliché-heavy draft can not flood the review.',
-      },
+      findingCapField('a cliché-heavy draft'),
       {
         key: 'allowPhrases',
         label: 'House-style allowlist',
@@ -365,8 +331,7 @@ export const proseStyleChecks = [
       // Run length (consecutive modifiers) to flag. 3 is the classic "too many
       // adjectives" threshold; raise it to only catch the most egregious piles.
       minStack: z.number().int().min(3).max(8).default(3),
-      // Cap findings per run so an adjective-heavy draft can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(20),
+      maxFindings: findingCapSchema(20),
     }),
     configFields: [
       {
@@ -378,15 +343,7 @@ export const proseStyleChecks = [
         step: 1,
         help: 'How many consecutive single-word modifiers (with no commas between them) before a noun trips the check. 3 catches "big red shiny new"; raise it for only the worst piles.',
       },
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so an adjective-heavy draft can not flood the review.',
-      },
+      findingCapField('an adjective-heavy draft'),
     ],
     gate: hasManuscript,
     run: (ctx) => {
@@ -431,15 +388,14 @@ export const proseStyleChecks = [
     configSchema: z.object({
       // Per-1000-word rate at/above which a section is flagged.
       densityPer1000: z.number().min(0).max(50).default(6),
-      // Cap findings per run so a heavy draft can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(20),
+      maxFindings: findingCapSchema(20),
       // House-style allowlist / extra filter words (comma- or newline-separated).
       allowWords: z.string().default(''),
       extraWords: z.string().default(''),
     }),
     configFields: [
       { key: 'densityPer1000', label: 'Filter-word rate to flag (per 1000 words)', type: 'number', min: 0, max: 50, step: 1, help: 'Flag a section whose filter-word frequency per 1000 words is at or above this. One "saw" is fine; a steady drumbeat is the tic.' },
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
+      findingCapField('a heavy draft'),
       { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Filter words to leave alone (comma-separated or one per line).' },
       { key: 'extraWords', label: 'Extra filter words to flag', type: 'text', help: 'Series-specific distancing verbs to add (comma-separated or one per line).' },
     ],
@@ -466,15 +422,14 @@ export const proseStyleChecks = [
     configSchema: z.object({
       // Per-1000-word rate at/above which a section is flagged.
       densityPer1000: z.number().min(0).max(50).default(7),
-      // Cap findings per run so a heavy draft can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(20),
+      maxFindings: findingCapSchema(20),
       // House-style allowlist / extra hedge words (comma- or newline-separated).
       allowWords: z.string().default(''),
       extraWords: z.string().default(''),
     }),
     configFields: [
       { key: 'densityPer1000', label: 'Hedge-word rate to flag (per 1000 words)', type: 'number', min: 0, max: 50, step: 1, help: 'Flag a section whose hedge/weasel-word frequency per 1000 words is at or above this. One "perhaps" is fine; a steady drumbeat is the tic.' },
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
+      findingCapField('a heavy draft'),
       { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Hedge words to leave alone (comma-separated or one per line).' },
       { key: 'extraWords', label: 'Extra hedge words to flag', type: 'text', help: 'Series-specific hedges/weasel words to add (comma-separated or one per line).' },
     ],
@@ -500,7 +455,7 @@ export const proseStyleChecks = [
     needsManuscript: true,
     configSchema: z.object({
       densityPer1000: z.number().min(0).max(50).default(8),
-      maxFindings: z.number().int().min(1).max(50).default(20),
+      maxFindings: findingCapSchema(20),
       // Include bare "that" (the deletable relative-clause "that"). Off by default
       // — grammatical "that" is common enough to swamp the density signal.
       includeThat: z.boolean().default(false),
@@ -509,7 +464,7 @@ export const proseStyleChecks = [
     }),
     configFields: [
       { key: 'densityPer1000', label: 'Crutch-word rate to flag (per 1000 words)', type: 'number', min: 0, max: 50, step: 1, help: 'Flag a section whose crutch-word frequency per 1000 words is at or above this.' },
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
+      findingCapField('a heavy draft'),
       { key: 'includeThat', label: 'Include deletable "that"', type: 'boolean', help: 'Count bare "that" as a crutch word. Off by default — grammatical "that" is common and would swamp the signal.' },
       { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Crutch words to leave alone (comma-separated or one per line).' },
       { key: 'extraWords', label: 'Extra crutch words to flag', type: 'text', help: 'Series-specific fillers to add (comma-separated or one per line).' },
@@ -536,14 +491,14 @@ export const proseStyleChecks = [
     needsManuscript: true,
     configSchema: z.object({
       densityPer1000: z.number().min(0).max(80).default(15),
-      maxFindings: z.number().int().min(1).max(50).default(20),
+      maxFindings: findingCapSchema(20),
       allowWords: z.string().default(''),
       extraWords: z.string().default(''),
       flagReportingTags: z.boolean().default(false),
     }),
     configFields: [
       { key: 'densityPer1000', label: 'Adverb rate to flag (per 1000 words)', type: 'number', min: 0, max: 80, step: 1, help: 'Flag a section whose -ly adverb frequency per 1000 words is at or above this.' },
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
+      findingCapField('a heavy draft'),
       { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Adverbs to leave alone (comma-separated or one per line).' },
       { key: 'extraWords', label: 'Extra adverbs to flag', type: 'text', help: 'Series-specific adverbs the -ly heuristic misses, e.g. "fast", "well", "hard" (comma-separated or one per line).' },
       { key: 'flagReportingTags', label: 'Also flag reporting tags', type: 'boolean', help: 'By default only emotion-telling dialogue tags ("said angrily") are flagged; reporting tags ("said quietly") are treated as invisible stage directions. Enable to flag every adverb-laden tag.' },
@@ -622,14 +577,14 @@ export const proseStyleChecks = [
     needsManuscript: true,
     configSchema: z.object({
       densityPer1000: z.number().min(0).max(50).default(10),
-      maxFindings: z.number().int().min(1).max(50).default(20),
+      maxFindings: findingCapSchema(20),
       suppressIntentional: z.boolean().default(true),
       allowWords: z.string().default(''),
       extraWords: z.string().default(''),
     }),
     configFields: [
       { key: 'densityPer1000', label: 'Passive-voice rate to flag (per 1000 words)', type: 'number', min: 0, max: 50, step: 1, help: 'Flag a section whose passive-construction frequency per 1000 words is at or above this. Advisory — passive voice is sometimes the right choice.' },
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
+      findingCapField('a heavy draft'),
       { key: 'suppressIntentional', label: 'Suppress intentional passive', type: 'boolean', help: 'On by default — skip predicate-adjective states ("she was exhausted") and setting/weather mood images ("the sky was streaked"), which are rarely weak passive. Turn off to count every be-verb + participle (the raw heuristic).' },
       { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Participles to never treat as passive — archaic/adjectival "-ed" forms like "blessed", "beloved" (comma-separated or one per line).' },
       { key: 'extraWords', label: 'Extra participles to flag', type: 'text', help: 'Series-specific irregular participles the heuristic misses, e.g. "begun", "hewn" (comma-separated or one per line).' },
@@ -666,13 +621,13 @@ export const proseStyleChecks = [
     configSchema: z.object({
       // A gesture tallied this many times across the manuscript is flagged.
       maxPerGesture: z.number().int().min(2).max(50).default(8),
-      maxFindings: z.number().int().min(1).max(50).default(20),
+      maxFindings: findingCapSchema(20),
       allowWords: z.string().default(''),
       extraWords: z.string().default(''),
     }),
     configFields: [
       { key: 'maxPerGesture', label: 'Gesture count to flag', type: 'number', min: 2, max: 50, step: 1, help: 'Flag a gesture verb (nodded, smiled, shrugged…) once its total count across the manuscript reaches this.' },
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
+      findingCapField('a heavy draft'),
       { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Gesture verbs to leave alone (comma-separated or one per line).' },
       { key: 'extraWords', label: 'Extra gestures to track', type: 'text', help: 'Series-specific gestures to add (comma-separated or one per line).' },
     ],
@@ -748,12 +703,12 @@ export const proseStyleChecks = [
       windowWords: z.number().int().min(5).max(200).default(50),
       // Sentences in a row sharing an opener before it's flagged.
       minOpenerRun: z.number().int().min(2).max(8).default(3),
-      maxFindings: z.number().int().min(1).max(50).default(20),
+      maxFindings: findingCapSchema(20),
     }),
     configFields: [
       { key: 'windowWords', label: 'Echo window (words)', type: 'number', min: 5, max: 200, step: 5, help: 'A distinctive word repeated within this many words counts as an echo.' },
       { key: 'minOpenerRun', label: 'Repeated-opener run to flag', type: 'number', min: 2, max: 8, step: 1, help: 'How many sentences in a row starting with the same word trips the repeated-opener flag.' },
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
+      findingCapField('a heavy draft'),
     ],
     gate: hasManuscript,
     run: (ctx) => {
@@ -813,12 +768,12 @@ export const proseStyleChecks = [
       minVariation: z.number().min(0).max(1).default(0.35),
       // Don't judge rhythm on a passage shorter than this many sentences.
       minSentences: z.number().int().min(3).max(50).default(8),
-      maxFindings: z.number().int().min(1).max(50).default(20),
+      maxFindings: findingCapSchema(20),
     }),
     configFields: [
       { key: 'minVariation', label: 'Variation threshold', type: 'number', min: 0, max: 1, step: 0.05, help: 'Flag an issue whose sentence-length variation (stddev / mean) is at or below this. Lower = only the flattest, most uniform passages.' },
       { key: 'minSentences', label: 'Minimum sentences to judge', type: 'number', min: 3, max: 50, step: 1, help: 'Skip passages shorter than this many sentences (too few to judge rhythm).' },
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
+      findingCapField('a heavy draft'),
     ],
     gate: hasManuscript,
     run: (ctx) => {
@@ -859,12 +814,8 @@ export const proseStyleChecks = [
     severityDefault: 'low',
     defaultEnabled: true,
     needsManuscript: true,
-    configSchema: z.object({
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a long manuscript can not flood the review.' },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     gate: hasManuscript,
     // Localized prose-level findings (one told emotion = one spot), so this stays
     // a plain per-chunk run with no cross-chunk digest — mirrors prose.dead-metaphor.
@@ -887,13 +838,8 @@ export const proseStyleChecks = [
     severityDefault: 'low',
     defaultEnabled: true,
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a long manuscript can not flood the review.' },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     gate: hasManuscript,
     // Localized prose-level findings (one essayistic thought = one spot), so this
     // stays a plain per-chunk run with no cross-chunk digest — mirrors
@@ -918,21 +864,8 @@ export const proseStyleChecks = [
     severityDefault: 'low',
     defaultEnabled: true,
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long manuscript can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     gate: hasManuscript,
     // Localized prose-level findings (one tired phrase = one spot), so this stays
     // a plain per-chunk run with no cross-chunk digest — mirrors prose.info-dumping.
@@ -955,21 +888,8 @@ export const proseStyleChecks = [
     severityDefault: 'medium',
     defaultEnabled: true,
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long manuscript can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     gate: hasManuscript,
     // Each mirror moment is a localized spot — plain per-chunk run, no digest.
     run: (ctx) => runManuscriptLlmCheck(ctx, {
@@ -996,21 +916,8 @@ export const proseStyleChecks = [
     // Reads the stitched manuscript corpus — so the runner only pays the
     // section-collection I/O when a manuscript-consuming check is enabled.
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long manuscript can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     gate: hasManuscript,
     run: (ctx) => {
       // The intended-voice block is fixed per-call overhead (re-sent on each chunk)
@@ -1065,8 +972,7 @@ export const proseStyleChecks = [
       // threshold, so a 3-issue series could never flag. An explicit 3 is honored
       // (useful only with a lower threshold).
       minIssues: z.number().int().min(3).max(30).default(4),
-      // Cap findings per run so a wildly-uneven series can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
+      maxFindings: findingCapSchema(12),
       // Optional vocabulary "wells" — register categories to track coverage of,
       // as `name: word, word; name2: word` (series-configurable per-check).
       vocabularyWells: z.string().max(2000).default(''),
@@ -1189,21 +1095,8 @@ export const proseStyleChecks = [
     severityDefault: 'low',
     defaultEnabled: true,
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long manuscript can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     gate: hasManuscript,
     // Localized prose-level findings (one precious passage = one spot) — plain
     // per-chunk run, no cross-chunk digest.
@@ -1234,7 +1127,7 @@ export const proseStyleChecks = [
       // Maximum cuts per run.
       maxCuts: z.number().int().min(10).max(50).default(20),
       // Cap findings so a long manuscript can not flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(20),
+      maxFindings: findingCapSchema(20),
     }),
     configFields: [
       {
@@ -1264,15 +1157,7 @@ export const proseStyleChecks = [
         step: 1,
         help: 'Maximum number of cut passages to identify.',
       },
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long manuscript can not flood the review.',
-      },
+      findingCapField(),
     ],
     gate: hasManuscript,
     run: async (ctx) => {
@@ -1362,8 +1247,7 @@ export const proseStyleChecks = [
     configSchema: z.object({
       // Minimum word count for an italic span to count as a thought (vs emphasis).
       minWords: z.number().int().min(1).max(20).default(4),
-      // Cap findings per run so a thought-italics-heavy draft can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(20),
+      maxFindings: findingCapSchema(20),
     }),
     configFields: [
       {
@@ -1375,15 +1259,7 @@ export const proseStyleChecks = [
         step: 1,
         help: 'How many words an italic span must have before it is treated as an internal thought rather than emphasis. 4 skips single stressed words, titles, and foreign terms.',
       },
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a thought-italics-heavy draft can not flood the review.',
-      },
+      findingCapField('a thought-italics-heavy draft'),
     ],
     gate: hasManuscript,
     run: (ctx) => {

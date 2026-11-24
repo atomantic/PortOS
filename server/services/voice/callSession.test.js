@@ -32,6 +32,7 @@ import {
   __setCallSessionDeps,
   attachHost,
   callStateEvents,
+  clearCallOpeningLine,
   detachHost,
   endCall,
   getCallContext,
@@ -39,12 +40,12 @@ import {
   markListening,
   markSpeaking,
   noteCallerSpeech,
+  peekCallOpeningLine,
   pollCall,
   pollIncoming,
   recordTurn,
   setCallStateListener,
   startCall,
-  takeCallOpeningLine,
 } from './callSession.js';
 
 const socket = (id = 'host-1') => ({ id, connected: true, emit: vi.fn() });
@@ -379,14 +380,14 @@ describe('FaceTime call session', () => {
     expect(noteCallerSpeech()).toMatchObject({ active: false });
   });
 
-  it('hands the opening line over exactly once, however often state is broadcast', async () => {
-    // `voice:call:state` is a broadcast and fires on every transition, so a
-    // non-consuming read would make the call host say the line twice.
+  it('keeps the opening line pending until it is delivered, then retires it', async () => {
     attachHost(socket());
     await startCall({ openingLine: '  This is PortOS about your backups.  ', origin: 'mind' });
 
-    expect(takeCallOpeningLine()).toBe('This is PortOS about your backups.');
-    expect(takeCallOpeningLine()).toBe('');
+    expect(peekCallOpeningLine()).toBe('This is PortOS about your backups.');
+    expect(peekCallOpeningLine()).toBe('This is PortOS about your backups.');
+    clearCallOpeningLine();
+    expect(peekCallOpeningLine()).toBe('');
   });
 
   it('carries a mind briefing only for the call the mind placed', async () => {
@@ -487,7 +488,7 @@ describe('FaceTime incoming-call watcher', () => {
     expect(result).toMatchObject({ incoming: true, answered: true });
     expect(answer).toHaveBeenCalledTimes(1);
     expect(getCallState()).toMatchObject({ state: 'listening', active: true });
-    expect(takeCallOpeningLine()).toBe("Hi, this is Alfred. Go ahead.");
+    expect(peekCallOpeningLine()).toBe("Hi, this is Alfred. Go ahead.");
     expect(addNotification).not.toHaveBeenCalled();
   });
 
@@ -522,7 +523,7 @@ describe('FaceTime incoming-call watcher', () => {
 
     expect(result).toMatchObject({ answered: true });
     expect(answer).toHaveBeenCalledTimes(1);
-    expect(takeCallOpeningLine()).toMatch(/it's late/i);
+    expect(peekCallOpeningLine()).toMatch(/it's late/i);
   });
 
   it('records a missed call, and never presses answer, when no host is attached', async () => {

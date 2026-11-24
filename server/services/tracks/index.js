@@ -41,7 +41,7 @@ export {
 
 // Shared dispatcher (#2909). ensureSchema() runs inside the selector so the
 // backend is self-sufficient regardless of boot ordering.
-const { selectBackend, getBackendName } = createRecordStoreBackendSelector({
+const { selectBackend } = createRecordStoreBackendSelector({
   label: 'Tracks',
   loadFileBackend: () => import('./file.js'),
   loadDbBackend: () => import('./db.js'),
@@ -85,11 +85,6 @@ export function appendActiveTake(trackId, { audioFilename, engine, prompt, durat
 
 // The shared mutation boundary prepares both stores before reserving a client.
 export { selectBackend as prepareTracksBackend };
-
-/** Name of the active backend, or null before first call (for diagnostics/tests). */
-export function getTracksBackendName() {
-  return getBackendName();
-}
 
 export async function listTracks(options = {}) {
   return (await selectBackend()).listTracks({ ...options, client: musicMutationClient() });

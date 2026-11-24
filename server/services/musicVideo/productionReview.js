@@ -1169,11 +1169,3 @@ export function productionProofNeedsRender(project, basis) {
   if (excerpt?.status === 'rendering') return false;
   return !proof || proof.basis !== basis || excerpt?.status !== 'complete' || !excerpt.filename;
 }
-
-/** Keep the chorus in frame even when it starts near the end of the master. */
-export function productionProofWindow(project) {
-  const duration = project.audioAnalysis.durationSec;
-  const chorus = project.audioAnalysis.sections?.find(s => /chorus|hook/i.test(s.label || s.type || ''));
-  const startSec = Math.min(Math.max(0, chorus?.startSec || 0), Math.max(0, duration - 20));
-  return { startSec, endSec: Math.min(startSec + 20, duration) };
-}

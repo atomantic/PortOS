@@ -2,6 +2,7 @@
 // review-side companion to the Sanderson's-Laws doctrine injected into the
 // universe-expansion generation prompt. Each entry is a declarative check; see
 // ../README.md and ../checkInfra.js.
+import { findingCapField, findingCapSchema } from '../checkInfra/findingCap.js';
 import { hasManuscript } from '../checkInfra/gates.js';
 import {
   WORLD_COST_FREE_POWER_STAGE,
@@ -24,18 +25,10 @@ const worldRuleFacts = (continuityBible) =>
 
 // Shared config: cap findings per run so a long manuscript can't flood the review.
 const maxFindingsSchema = z.object({
-  maxFindings: z.number().int().min(1).max(50).default(12),
+  maxFindings: findingCapSchema(12),
 });
 const maxFindingsFields = [
-  {
-    key: 'maxFindings',
-    label: 'Max findings per run',
-    type: 'number',
-    min: 1,
-    max: 50,
-    step: 1,
-    help: 'Cap findings so a long manuscript can not flood the review.',
-  },
+  findingCapField(),
 ];
 
 export const worldChecks = [

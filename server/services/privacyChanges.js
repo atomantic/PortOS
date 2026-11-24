@@ -20,9 +20,8 @@
  *
  * The declare path runs as ONE transaction (atomic): a partial failure must not
  * leave the old record `previous` with holdings un-flipped, or an orphaned
- * replacement record. It uses the transaction client for every write rather
- * than the pool-level `privacyOrgs.setHoldingsStatus`, so the flip both sees the
- * FOR UPDATE lock and rolls back with the rest on error.
+ * replacement record. It uses the transaction client for every write, so the
+ * holdings flip both sees the FOR UPDATE lock and rolls back with the rest on error.
  */
 
 import { randomUUID } from 'crypto';

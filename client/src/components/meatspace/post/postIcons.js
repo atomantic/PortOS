@@ -19,5 +19,3 @@ const ICONS = {
 
 /** The component for an icon name, falling back to Compass for an unmapped one. */
 export const postIcon = (name) => ICONS[name] || Compass;
-
-export const POST_ICON_NAMES = Object.keys(ICONS);

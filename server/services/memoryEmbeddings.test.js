@@ -235,19 +235,6 @@ describe('memoryEmbeddings — context-budget truncation + overflow retry', () =
     await expect(embeddings.generateQueryEmbedding('short text')).resolves.toBeNull();
   });
 
-  it('batch: falls back to per-item embedding when the batch overflows', async () => {
-    // Batch POST overflows; then each of the 2 items embeds individually.
-    wireFetch([contextOverflow, embedOk, embedOk]);
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    const out = await embeddings.generateBatchEmbeddings(['a', 'b']);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('falling back to per-item embedding'));
-    expect(warn).not.toHaveBeenCalled();
-
-    expect(out).toEqual([[0.1, 0.2, 0.3], [0.1, 0.2, 0.3]]);
-    expect(embedCalls().length).toBe(3);
-  });
 });
 
 describe('generateMemoryEmbedding — summarize over-budget records', () => {
@@ -358,7 +345,6 @@ describe('memoryEmbeddings — settings.embeddings is the single source of truth
 
     expect(await embeddings.generateEmbedding('hello')).toBeNull();
     expect(await embeddings.generateQueryEmbedding('hello')).toBeNull();
-    expect(await embeddings.generateBatchEmbeddings(['a', 'b'])).toEqual([null, null]);
     // Over budget would normally summarize first — disabled must not call the summarizer.
     expect(await embeddings.generateMemoryEmbedding({ type: 'fact', content: 'q'.repeat(40000) })).toBeNull();
     expect(summarizeForEmbedding).not.toHaveBeenCalled();

@@ -187,18 +187,6 @@ export function clearCallOpeningLine() {
 }
 
 /**
- * Take the pending opening line, clearing it. Consume-once on purpose: the
- * host speaks it on the first `connected` observation, and `voice:call:state`
- * is broadcast more than once per call.
- */
-export function takeCallOpeningLine() {
-  if (!publicState().active) return '';
-  const line = peekCallOpeningLine();
-  clearCallOpeningLine();
-  return line;
-}
-
-/**
  * Claim the single call-host slot.
  *
  * Returns `{ ok: false, reason: 'host-taken' }` rather than displacing the

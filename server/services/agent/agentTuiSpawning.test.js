@@ -37,7 +37,6 @@ vi.mock('../cos/cosAgentLifecycle.js', () => ({
 
 vi.mock('../provider/providerStatus.js', () => ({
   markProviderUsageLimit: vi.fn().mockResolvedValue(undefined),
-  markProviderRateLimited: vi.fn().mockResolvedValue(undefined)
 }));
 
 vi.mock('../cos/cosTaskStore.js', () => ({

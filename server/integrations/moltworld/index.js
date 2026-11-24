@@ -44,8 +44,3 @@ export function createMoltworldClient(apiKey, agentId) {
     getRateLimitStatus: () => getRateLimitStatus(agentId),
   };
 }
-
-/**
- * Register a new agent on Moltworld (doesn't require an existing agent ID)
- */
-export const registerMoltworldAgent = api.register;

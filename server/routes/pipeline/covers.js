@@ -77,7 +77,7 @@ const comicCoverConceptsSchema = z.object({
 // =====================
 // Volume (season) covers — front + back illustration on the season record.
 // Stored on series.seasons[].cover / .backCover, sanitized by sanitizeSeason,
-// rendered by enqueueVolumeCover{,BackCover}, stamped on completion by
+// rendered by renderVolumeCover{,BackCover}, stamped on completion by
 // seasonCoverFilenameHook. Compiled with all child issues into a trade-
 // paperback PDF by the volume.pdf route below.
 // =====================
@@ -106,7 +106,7 @@ const makeCoverRenderHandler = ({ schema, render, buildResponse }) => asyncHandl
 // render slot onto season.cover through updateSeasonOnSeries (queue-serialized)
 // — the season-cover filename hook stamps the completed filename later.
 // (Missing series / season surface as PIPELINE_SEASON_NOT_FOUND from
-// enqueueVolumeCover's loadSeasonContext, mapped to 404 by mapServiceError.)
+// enqueueVolumeCoverLike's loadSeasonContext, mapped to 404 by mapServiceError.)
 router.post('/series/:id/seasons/:seasonId/cover/render', makeCoverRenderHandler({
   schema: volumeCoverRenderSchema,
   render: (req, body) => renderVolumeCover(req.params.id, req.params.seasonId, body),

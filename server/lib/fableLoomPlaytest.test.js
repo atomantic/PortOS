@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   analyzeLoomPlaythroughs,
   buildLoomPlaythroughPromptDigest,
-  describeLoomPlaythroughsForPrompt,
   enumerateEpisodePlaythroughs,
   PLAYTEST_ISSUE_CODES,
   PLAYTEST_PROMPT_TRUNCATION_MARKER,
@@ -155,21 +154,16 @@ describe('enumerateEpisodePlaythroughs', () => {
 });
 
 describe('analyzeLoomPlaythroughs', () => {
-  it('aggregates episode coverage and renders compact story traces', () => {
+  it('aggregates episode coverage', () => {
     const episode = branchingEpisode();
     const loom = { participationMode: 'helper', episodes: [episode] };
     const report = analyzeLoomPlaythroughs(loom);
-    const digest = describeLoomPlaythroughsForPrompt(loom, report);
 
     expect(report).toMatchObject({
       passed: true,
       complete: true,
       stats: { episodeCount: 1, variationCount: 2, visitedTransitionCount: 4 },
     });
-    expect(digest).toContain('## Episode 1: Example Episode');
-    expect(digest).toContain('C1 = [take-left] N1 -> N2; choice; intent: Take the left route');
-    expect(digest).toContain('[path-1] N1 -C1-> N2');
-    expect(digest).toContain('END N3');
   });
 
   it('bounds maximal authored labels and reports when every trace cannot fit', () => {

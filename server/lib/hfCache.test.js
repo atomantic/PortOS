@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   inspectModelCache, getHfCacheRoot, isModelCached,
-  verifyModelCache, repairModelCache, findCachedRepoFile, findCachedRepoSnapshot, repairCachedFile,
+  verifyModelCache, repairModelCache, findCachedRepoFile, repairCachedFile,
   verifyCachedRepoFiles, repairCachedRepoFiles,
 } from './hfCache.js';
 
@@ -542,8 +542,6 @@ describe('exact-file aggregate verification', () => {
     cleanup.push(root);
     process.env.HF_HUB_CACHE = root;
 
-    const pinned = (await findCachedRepoSnapshot('org/pinned', wanted)).split('\\').join('/');
-    expect(pinned).toMatch(new RegExp(`/snapshots/${wanted}$`));
     expect(await findCachedRepoFile('org/pinned', 'wanted.safetensors', { revision: wanted })).toBeTruthy();
     expect(await findCachedRepoFile('org/pinned', 'other.safetensors', { revision: wanted })).toBeNull();
     expect((await inspectModelCache('org/pinned', { revision: wanted })).sizeBytes).toBe(1024);

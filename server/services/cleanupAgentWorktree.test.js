@@ -96,7 +96,6 @@ vi.mock('./usage.js', () => ({
 vi.mock('./provider/providerStatus.js', () => ({
   isProviderAvailable: vi.fn(() => true),
   markProviderUsageLimit: vi.fn(),
-  markProviderRateLimited: vi.fn(),
   getFallbackProvider: vi.fn(),
   getProviderStatus: vi.fn(),
   initProviderStatus: vi.fn()

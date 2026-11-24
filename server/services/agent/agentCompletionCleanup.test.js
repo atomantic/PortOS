@@ -44,7 +44,6 @@ vi.mock('../notifications.js', () => ({
   NOTIFICATION_TYPES: { PLAN_QUESTION: 'plan_question', AGENT_WARNING: 'agent_warning' },
   PRIORITY_LEVELS: { MEDIUM: 'medium', HIGH: 'high' },
 }));
-vi.mock('../brainTaskThreads.js', () => ({ ensureTaskThread: vi.fn().mockResolvedValue({}) }));
 vi.mock('../creativeDirector/completionHook.js', () => ({ handleCreativeDirectorCompletion: vi.fn().mockResolvedValue({}) }));
 vi.mock('../taskPromptService.js', () => ({ getStagePrompt: vi.fn().mockResolvedValue('do stage work in {appName}') }));
 
@@ -63,7 +62,6 @@ import * as gitPrs from '../git/prs.js';
 const git = { ...gitStatus, ...gitSync, ...gitPrs };
 import * as jira from '../jira.js';
 import { addNotification } from '../notifications.js';
-import { ensureTaskThread } from '../brainTaskThreads.js';
 import { updateAgent } from '../cos/cosAgentLifecycle.js';
 import { handleCreativeDirectorCompletion } from '../creativeDirector/completionHook.js';
 
@@ -896,7 +894,6 @@ describe.each(['runner', 'spawner'])('%s completion side effects', (path) => {
     await complete({ appName: 'Example App' });
     expect(updateAgent).toHaveBeenCalledWith('a1', { result: { success: true, warnings } });
     expect(addNotification).not.toHaveBeenCalled();
-    expect(ensureTaskThread).not.toHaveBeenCalled();
     expect(spawnMergeRecoveryTask).toHaveBeenCalledWith(warnings, 'a1', expect.objectContaining({ id: 't' }), 'Example App', '/example/repo');
   });
 

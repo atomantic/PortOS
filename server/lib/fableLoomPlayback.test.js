@@ -6,13 +6,10 @@ import {
   FABLELOOM_PLAYBACK_PHASES,
   FABLELOOM_PROTAGONIST_PRESENCE,
   asFableLoomPlaybackMode,
-  computeAudioMix,
-  createAudioOccupancyManifest,
   inspectEpisodeProductionReadiness,
   inspectNodeProductionReadiness,
   isAssetSafeForLiveVoice,
   isFableLoomPlaybackMode,
-  muxAudioTracks,
   resolvePlaybackPhaseAsset,
   resolveFableLoomProtagonistPresence,
   sanitizeAudioInterval,
@@ -112,44 +109,6 @@ describe('FableLoom audio occupancy and validation', () => {
     expect(isAssetSafeForLiveVoice(safeManifest)).toBe(true);
   });
 
-  it('muxes audio tracks and calculates total lane durations', () => {
-    const muxed = muxAudioTracks({
-      durationMs: 10000,
-      characterDialogue: [{ startMs: 0, endMs: 3000 }],
-      music: [{ startMs: 0, endMs: 10000 }],
-      effects: [{ startMs: 1000, endMs: 2000 }],
-    });
-    expect(muxed.totalDialogueMs).toBe(3000);
-    expect(muxed.totalMusicMs).toBe(10000);
-    expect(muxed.totalEffectsMs).toBe(1000);
-    expect(muxed.safeForLiveVoice).toBe(false);
-  });
-
-  it('computes audio ducking levels when live voice is active', () => {
-    const manifest = createAudioOccupancyManifest({
-      durationMs: 8000,
-      music: [{ startMs: 0, endMs: 8000 }],
-    });
-
-    const inactiveMix = computeAudioMix({
-      assetManifest: manifest,
-      liveVoiceActive: false,
-      baseDuckDb: -8,
-    });
-    expect(inactiveMix.duckFactor).toBe(1.0);
-    expect(inactiveMix.musicLevel).toBe(1.0);
-    expect(inactiveMix.canOpenLiveVoice).toBe(true);
-
-    const activeMix = computeAudioMix({
-      assetManifest: manifest,
-      liveVoiceActive: true,
-      baseDuckDb: -8,
-    });
-    expect(activeMix.duckDb).toBe(-8);
-    expect(activeMix.duckFactor).toBeCloseTo(0.398, 2);
-    expect(activeMix.musicLevel).toBeCloseTo(0.398, 2);
-    expect(activeMix.canOpenLiveVoice).toBe(true);
-  });
 });
 
 describe('FableLoom playbackAssets and interactionWindow sanitizers', () => {

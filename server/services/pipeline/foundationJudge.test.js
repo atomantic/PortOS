@@ -79,7 +79,6 @@ const {
   restoreFoundationState,
   applyFoundationFix,
   establishCharacterFoundation,
-  thinnestCharacter,
   rankFoundationCharacters,
   seriesFoundationCharacters,
   countFoundationCharacterBlanks,
@@ -355,25 +354,6 @@ describe('foundationInputsHash + staleness — fast-pass pinning', () => {
     expect(isFoundationStale({ status: 'complete', sourceInputsHash: 'a' }, 'a')).toBe(false);
     expect(isFoundationStale({ status: 'pending' }, 'b')).toBe(false);
     expect(isFoundationStale(null, 'b')).toBe(false);
-  });
-});
-
-describe('thinnestCharacter — character fix target', () => {
-  it('picks the unlocked character missing the most framework fields', () => {
-    const chars = [
-      { id: 'full', name: 'A', ghost: 'g', wound: 'w', lie: 'l', want: 'wa', need: 'n', coreTheme: 't', motivations: 'm', speechPattern: 's', arcType: 'positive', secrets: ['x'] },
-      { id: 'thin', name: 'B' }, // all blank
-      { id: 'mid', name: 'C', wound: 'w', lie: 'l' },
-    ];
-    expect(thinnestCharacter(chars)).toBe('thin');
-  });
-  it('skips locked characters (locked = constraint, not target)', () => {
-    const chars = [{ id: 'locked', name: 'A', locked: true }, { id: 'ok', name: 'B', wound: 'w' }];
-    expect(thinnestCharacter(chars)).toBe('ok');
-  });
-  it('returns null when every character is complete or locked', () => {
-    expect(thinnestCharacter([{ id: 'locked', name: 'A', locked: true }])).toBeNull();
-    expect(thinnestCharacter([])).toBeNull();
   });
 });
 

@@ -4,7 +4,7 @@
  *
  * Covers the hardware filters (server-annotated, fail-open), the agent-harness
  * runnability filter, and the fail-closed policies security-sensitive pickers
- * apply (tool-free local, and pr-reviewer public-review postures).
+ * apply (tool-free one-shot, and pr-reviewer public-review postures).
  *
  * The posture half MIRRORS `server/lib/agent/agentExecutionProfiles.js`: a stage names a
  * POSTURE, the server publishes each provider's `publicReviewPostures` /
@@ -12,27 +12,12 @@
  * what this install can run; no vendor is named on either side.
  */
 
-import { isLocalInstanceProvider, localBackendForProvider } from './providerEndpoints.js';
-import { isProcessProvider, isApiProvider } from './providerTypes.js';
+import { localBackendForProvider } from './providerEndpoints.js';
+import { isProcessProvider } from './providerTypes.js';
 import { isHardwareCompatible } from './systemCapabilities.js';
 import { CALLER_MODE_POLICIES } from '../../../server/lib/callerModePolicy.js';
 
-// Only direct local HTTP providers can be tool-free by construction; a CLI/TUI
-// harness keeps filesystem/process authority even on a local model.
-export const TOOL_FREE_LOCAL_PROVIDER_IDS = Object.freeze(['ollama', 'lmstudio']);
-
 export const TOOL_FREE_LOCAL_TEXT_CAPABILITIES = Object.freeze(['chat', 'completion']);
-
-/**
- * True only for PortOS's canonical local HTTP backends on this machine. Explicit
- * ids keep a custom provider from inheriting a security policy because its
- * endpoint mentions Ollama; `isLocalInstanceProvider` keeps a renamed canonical
- * record pointed at another machine out.
- */
-export const isToolFreeLocalProvider = (provider) =>
-  isApiProvider(provider)
-  && TOOL_FREE_LOCAL_PROVIDER_IDS.includes(String(provider?.id || '').toLowerCase())
-  && isLocalInstanceProvider(provider);
 
 /**
  * Whether a local model has an authoritative, explicit capability report that
@@ -41,8 +26,7 @@ export const isToolFreeLocalProvider = (provider) =>
  * model-name heuristic. `capabilitiesByBackend` is the `useLocalModels` shape;
  * object model entries with their own `capabilities` are accepted too.
  */
-const isToolFreeLocalModelForProvider = (model, provider, capabilitiesByBackend, providerPredicate) => {
-  if (!providerPredicate(provider)) return false;
+const isToolFreeLocalModel = (model, provider, capabilitiesByBackend) => {
   const id = typeof model === 'string' ? model : model?.id || model?.name;
   if (typeof id !== 'string' || !id.trim()) return false;
   const reported = Array.isArray(model?.capabilities)
@@ -53,23 +37,6 @@ const isToolFreeLocalModelForProvider = (model, provider, capabilitiesByBackend,
   return normalized.some((capability) => TOOL_FREE_LOCAL_TEXT_CAPABILITIES.includes(capability))
     && !normalized.includes('tools');
 };
-
-export const isToolFreeLocalModel = (model, provider, capabilitiesByBackend = {}) =>
-  isToolFreeLocalModelForProvider(model, provider, capabilitiesByBackend, isToolFreeLocalProvider);
-
-/** Shared selection policy for security-sensitive AI pickers; `ProviderModelSelector` applies all three predicates, the caller supplies the capability source. */
-export const toolFreeLocalSelectionPolicy = (
-  capabilitiesByBackend = {},
-  { providerPredicate = isToolFreeLocalProvider } = {},
-) => ({
-  provider: providerPredicate,
-  model: (model, provider) => isToolFreeLocalModelForProvider(
-    model,
-    provider,
-    capabilitiesByBackend,
-    providerPredicate,
-  ),
-});
 
 /** One-shot authoring permits direct APIs or a server-verified tool-free CLI.
  * Never infer CLI support from a command name, and never admit a TUI session.
@@ -134,12 +101,7 @@ export const publicReviewSelectionPolicy = (posture, capabilitiesByBackend = {})
   model: (model, provider) => {
     if (!supportsPublicReviewPosture(provider, posture)) return false;
     if (posture !== PUBLIC_REVIEW_NO_TOOL_POSTURE || !localBackendForProvider(provider)) return true;
-    return isToolFreeLocalModelForProvider(
-      model,
-      provider,
-      capabilitiesByBackend,
-      () => true,
-    );
+    return isToolFreeLocalModel(model, provider, capabilitiesByBackend);
   },
 });
 

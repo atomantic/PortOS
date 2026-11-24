@@ -235,13 +235,6 @@ export async function updateAgent(agentId, updates) {
       updates = { ...updates, metadata: { ...updates.metadata, securityScan: previousScan } };
     }
 
-    // Each claim-swarm branch has its own recovery. Merge these server-written
-    // backlinks under the state lock so sibling audits cannot revoke one another.
-    if (updates.metadata?.repoStateRecoveries) {
-      updates = { ...updates, metadata: { ...updates.metadata, repoStateRecoveries: {
-        ...state.agents[agentId].metadata?.repoStateRecoveries, ...updates.metadata.repoStateRecoveries,
-      } } };
-    }
     // Merge metadata if present in updates
     if (updates.metadata) {
       state.agents[agentId] = {
@@ -473,13 +466,6 @@ function metadataWithCleanupOutcome(metadata, outcome) {
   const aggregate = incomplete.find(row => row.status === 'blocked') || incomplete[0] || rows[0];
   return { ...metadata, cleanupOutcomes, cleanupOutcome: { ...aggregate,
     status: incomplete.length ? aggregate.status : 'verified', total: rows.length, unresolved: incomplete.length } };
-}
-
-/** Server-only recovery backlink; works after the parent leaves live retention. */
-export function recordRepoStateRecovery(agentId, link, { claimRun = false } = {}) {
-  return updateCompletionReceipt(agentId, metadata => ({ ...metadata, repoStateRecovery: link,
-    ...(claimRun ? { repoStateRecoveries: { ...metadata?.repoStateRecoveries, [link.branch]: link } } : {}),
-  }));
 }
 
 // Deferred delivery is a domain outcome, not a failed provider execution.

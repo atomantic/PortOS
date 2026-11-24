@@ -531,26 +531,6 @@ export async function getFoundationJudge(seriesId) {
 
 // ---------- fix router (dimension → owning service) ----------
 
-// The thinnest unlocked character to expand for a `character`-dimension fix: the
-// one missing the MOST framework fields (most leverage), skipping locked
-// records (locked entries are constraints, not fix targets). Pure — takes the
-// canon character list, returns the entry id or null.
-export function thinnestCharacter(characters) {
-  const list = Array.isArray(characters) ? characters : [];
-  let best = null;
-  for (const c of list) {
-    if (!c || c.locked === true) continue;
-    const blanks = FRAMEWORK_STRING_FIELDS.filter((f) => isBlankString(c[f])).length
-      + PROFILE_STRING_FIELDS.filter((field) => isBlankString(c[field])).length
-      + (isBlankArray(c.secrets) ? 1 : 0)
-      + VISUAL_FOUNDATION_STRING_FIELDS.filter((field) => isBlankString(c[field])).length
-      + VISUAL_FOUNDATION_LIST_FIELDS.filter((field) => isBlankArray(c[field])).length;
-    if (blanks === 0) continue;
-    if (best === null || blanks > best.blanks) best = { id: c.id, blanks };
-  }
-  return best ? best.id : null;
-}
-
 const REPAIRABLE_CHARACTER_FIELDS = Object.freeze([
   ...FRAMEWORK_STRING_FIELDS,
   ...PROFILE_STRING_FIELDS,

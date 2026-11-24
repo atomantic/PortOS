@@ -186,11 +186,6 @@ describe('sharing/subscriptions', () => {
       .rejects.toMatchObject({ code: subs.ERR_NOT_FOUND });
   });
 
-  it('findSubscription returns null when none exists', async () => {
-    const bucket = await buckets.createBucket({ name: 'B', path: tempBucket });
-    expect(await subs.findSubscription(bucket.id, 'universe', 'no-such-id')).toBeNull();
-  });
-
   it('unsubscribeAllForRecord drops every matching subscription', async () => {
     const bucket1 = await buckets.createBucket({ name: 'A', path: tempBucket });
     const bucket2Path = mkdtempSync(join(tmpdir(), 'portos-subs-b2-'));

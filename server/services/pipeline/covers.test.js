@@ -30,7 +30,6 @@ const {
 const {
   composeComicCoverPrompt,
   composeVolumeCoverPrompt,
-  composeTitleScreenPrompt,
   enqueueComicCover,
   renderComicCover,
   renderComicBackCover,
@@ -166,41 +165,6 @@ describe('composeVolumeCoverPrompt', () => {
     expect(prompt).toMatch(/volume tag reading "VOL\. 2"/);
     expect(prompt).toMatch(/volume title "The Long Sweep"/);
     expect(prompt).toMatch(/author byline reading "By J\. Doe"/);
-  });
-});
-
-describe('composeTitleScreenPrompt', () => {
-  it('builds a TV title card prompt that injects titleLogo + author + episode metadata', () => {
-    const prompt = composeTitleScreenPrompt({
-      series: {
-        name: 'Bone Walker',
-        styleNotes: 'gritty ink-wash',
-        titleLogo: 'Hand-lettered slab serif in salt-crusted iron.',
-        author: 'A. Foundryworker',
-      },
-      issue: { number: 3, title: 'The Long Sweep' },
-    });
-    expect(prompt).toMatch(/TV episode title screen/);
-    expect(prompt).toMatch(/series masthead "Bone Walker"/);
-    expect(prompt).toMatch(/Logo design: Hand-lettered slab serif in salt-crusted iron/);
-    expect(prompt).toMatch(/EPISODE 3/);
-    expect(prompt).toMatch(/episode title "The Long Sweep"/);
-    expect(prompt).toMatch(/author byline reading "By A\. Foundryworker"/);
-    expect(prompt).toMatch(/Art style: gritty ink-wash/);
-  });
-
-  it('falls back gracefully when only a series name is set', () => {
-    const prompt = composeTitleScreenPrompt({
-      series: { name: 'Bone Walker', styleNotes: '' },
-      issue: { number: 1, title: '' },
-    });
-    expect(prompt).toMatch(/series masthead "Bone Walker"/);
-    expect(prompt).toMatch(/EPISODE 1/);
-    // No `episode title "<value>"` secondary banner clause is emitted when the
-    // issue title is empty — the broader phrase "TV episode title screen" in
-    // the layout intro is expected, so scope the assertion to the banner.
-    expect(prompt).not.toMatch(/episode title "/);
-    expect(prompt).not.toMatch(/author byline/);
   });
 });
 

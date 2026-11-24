@@ -1,5 +1,6 @@
 // Editorial checks — dialogue group. Extracted from checkRegistry.js (#1829).
 // Each entry is a declarative check; see ../README.md and ../checkInfra.js.
+import { findingCapField, findingCapSchema } from '../checkInfra/findingCap.js';
 import { hasManuscript } from '../checkInfra/gates.js';
 import {
   DIALOGUE_PLEASANTRIES_STAGE,
@@ -30,21 +31,8 @@ export const dialogueChecks = [
     severityDefault: 'low',
     defaultEnabled: true,
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long manuscript can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     gate: hasManuscript,
     // Localized to scene openings — plain per-chunk run, no digest.
     run: (ctx) => runManuscriptLlmCheck(ctx, {
@@ -68,14 +56,13 @@ export const dialogueChecks = [
     // Reads the stitched manuscript (per-issue sections) to anchor each tag.
     needsManuscript: true,
     configSchema: z.object({
-      // Cap findings per run so a tag-heavy draft can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(20),
+      maxFindings: findingCapSchema(20),
       // House-style allowlist / extra bookism verbs (comma- or newline-separated).
       allowWords: z.string().default(''),
       extraWords: z.string().default(''),
     }),
     configFields: [
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a tag-heavy draft can not flood the review.' },
+      findingCapField('a tag-heavy draft'),
       { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Speech-tag verbs to leave alone (comma-separated or one per line) — a genre voice may keep some.' },
       { key: 'extraWords', label: 'Extra bookisms to flag', type: 'text', help: 'Series-specific ornate tags to add (comma-separated or one per line).' },
     ],
@@ -131,13 +118,12 @@ export const dialogueChecks = [
       minRun: z.number().int().min(2).max(20).default(6),
       // Non-quoted chars in a dialogue paragraph that count as a grounding beat.
       beatChars: z.number().int().min(0).max(80).default(16),
-      // Cap findings per run so a dialogue-heavy draft can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(20),
+      maxFindings: findingCapSchema(20),
     }),
     configFields: [
       { key: 'minRun', label: 'Untagged lines in a row to flag', type: 'number', min: 2, max: 20, step: 1, help: 'How many consecutive dialogue lines with no tag or action beat before the speaker becomes hard to track. Two speakers alternating stay trackable for a few exchanges; a longer run is where it fails.' },
       { key: 'beatChars', label: 'Action-beat threshold (characters)', type: 'number', min: 0, max: 80, step: 1, help: 'How many non-quoted characters a dialogue paragraph needs to count as carrying a grounding action beat (which re-anchors the speaker).' },
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a dialogue-heavy draft can not flood the review.' },
+      findingCapField('a dialogue-heavy draft'),
     ],
     gate: hasManuscript,
     run: (ctx) => {
@@ -190,8 +176,7 @@ export const dialogueChecks = [
       // Over-variation: distinct verbs ÷ tags must exceed this with ≥ minDistinct verbs.
       overVariationRatio: z.number().min(0.5).max(1).default(0.85),
       minDistinct: z.number().int().min(2).max(20).default(5),
-      // Cap findings per run so a dialogue-heavy draft can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(20),
+      maxFindings: findingCapSchema(20),
       // House-style allowlist (mute a tag verb) / extra ornate tags to count.
       allowWords: z.string().default(''),
       extraWords: z.string().default(''),
@@ -202,7 +187,7 @@ export const dialogueChecks = [
       { key: 'monotonyRatio', label: 'Monotony: dominant-verb share', type: 'number', min: 0.4, max: 1, step: 0.05, help: 'Fraction of the scene\'s tags the dominant verb must own (0–1) to flag monotony.' },
       { key: 'overVariationRatio', label: 'Over-variation: distinct share', type: 'number', min: 0.5, max: 1, step: 0.05, help: 'Distinct-verbs ÷ total-tags above this (0–1) reads as thesaurus churn.' },
       { key: 'minDistinct', label: 'Over-variation: min distinct verbs', type: 'number', min: 2, max: 20, step: 1, help: 'At least this many distinct tag verbs before over-variation can fire.' },
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a dialogue-heavy draft can not flood the review.' },
+      findingCapField('a dialogue-heavy draft'),
       { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Tag verbs to leave out of the inventory (comma-separated or one per line).' },
       { key: 'extraWords', label: 'Extra ornate tags to count', type: 'text', help: 'Series-specific ornate tags to include in the inventory (comma-separated or one per line).' },
     ],
@@ -262,13 +247,8 @@ export const dialogueChecks = [
     severityDefault: 'low',
     defaultEnabled: true,
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a long manuscript can not flood the review.' },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     gate: hasManuscript,
     // Localized prose-level findings (one on-the-nose line = one spot), so this
     // stays a plain per-chunk run with no cross-chunk digest — mirrors prose.info-dumping.
@@ -296,13 +276,8 @@ export const dialogueChecks = [
     severityDefault: 'low',
     defaultEnabled: true,
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a long manuscript can not flood the review.' },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     gate: hasManuscript,
     // Localized prose-level findings (one reported beat = one spot), so this stays
     // a plain per-chunk run with no cross-chunk digest — mirrors dialogue.on-the-nose.
@@ -326,13 +301,8 @@ export const dialogueChecks = [
     defaultEnabled: true,
     // Reads the stitched manuscript corpus AND the canon voice fields.
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a large cast can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a large cast can not flood the review.' },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField('a large cast')],
     gate: hasManuscript,
     run: (ctx) => {
       // The authored voice profiles are fixed per-call overhead (re-sent on each

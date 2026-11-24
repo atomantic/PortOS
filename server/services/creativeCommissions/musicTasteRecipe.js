@@ -20,12 +20,6 @@ export const MUSIC_TASTE_RECIPE_VERSION = 1;
 export const MUSIC_TASTE_RECIPE_MAX_CONTEXT = 500;
 export const MUSIC_TASTE_RECIPE_MAX_SOURCE_VERSION = 240;
 export const MUSIC_TASTE_RECIPE_MAX_CANDIDATES = 50;
-export const MUSIC_TASTE_FEEDBACK_TAGS = Object.freeze([
-  'more-familiar',
-  'more-experimental',
-  'keep-anchors',
-  'change-anchors',
-]);
 
 const clampInt = (value, min, max, fallback) => Number.isInteger(value)
   ? Math.min(max, Math.max(min, value)) : fallback;

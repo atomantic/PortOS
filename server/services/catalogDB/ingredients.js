@@ -652,31 +652,6 @@ export async function getIngredientCards(ids) {
 }
 
 /**
- * Cosine-similarity search over the ingredient embedding column.
- * `threshold` is a similarity floor (1 - cosine_distance), default 0.5.
- */
-export async function searchIngredientsByEmbedding(vector, { type, limit = 20, threshold = 0.5 } = {}) {
-  if (!vector) return [];
-  const conditions = ['deleted = false', 'id = catalog_canonical_ingredient_id(id)', 'embedding IS NOT NULL'];
-  const params = [arrayToPgvector(vector), threshold, limit];
-  let idx = 4;
-  if (type) {
-    conditions.push(`type = $${idx++}`);
-    params.push(type);
-  }
-  const result = await query(
-    `SELECT ${INGREDIENT_LIGHT_COLS}, 1 - (embedding <=> $1) AS score
-       FROM catalog_ingredients
-       WHERE ${conditions.join(' AND ')}
-         AND 1 - (embedding <=> $1) >= $2
-       ORDER BY embedding <=> $1
-       LIMIT $3`,
-    params,
-  );
-  return result.rows.map((row) => ({ ingredient: rowToIngredient(row), score: parseFloat(row.score) }));
-}
-
-/**
  * Live records of `type` whose name or one of whose aliases equals one of
  * `names` (trimmed, case-insensitive), oldest first. Used to link to an
  * existing record instead of creating a same-named duplicate. With
@@ -697,26 +672,6 @@ export async function findIngredientsByName(type, names, { firstWord = false } =
     [type, keys],
   );
   return result.rows.map(rowToIngredient);
-}
-
-export async function searchIngredientsByText(q, { type, limit = 20 } = {}) {
-  if (!q) return [];
-  const conditions = ['deleted = false', 'id = catalog_canonical_ingredient_id(id)', `search_tsv @@ websearch_to_tsquery('english', $1)`];
-  const params = [q, limit];
-  let idx = 3;
-  if (type) {
-    conditions.push(`type = $${idx++}`);
-    params.push(type);
-  }
-  const result = await query(
-    `SELECT ${INGREDIENT_LIGHT_COLS}, ts_rank_cd(search_tsv, websearch_to_tsquery('english', $1)) AS rank
-       FROM catalog_ingredients
-       WHERE ${conditions.join(' AND ')}
-       ORDER BY rank DESC
-       LIMIT $2`,
-    params,
-  );
-  return result.rows.map((row) => ({ ingredient: rowToIngredient(row), rank: parseFloat(row.rank) }));
 }
 
 // Hybrid search: Reciprocal Rank Fusion over FTS (`search_tsv`) + vector

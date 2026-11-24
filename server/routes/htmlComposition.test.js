@@ -42,15 +42,12 @@ app.use('/api/html-composition', router);
 app.use(errorMiddleware);
 
 describe('HTML composition admission', () => {
-  it('drops the music-video owner option from the public render body', async () => {
+  it('drops options the render body does not declare', async () => {
     enqueueJob.mockClear();
     const response = await request(app).post('/api/html-composition/render').send({
       directory: 'compositions/example',
-      owner: 'music-video',
       audio: { path: '/tmp/master.wav', startSec: 60 },
-      maxDurationSec: 900,
       durationSec: 180,
-      song: { features: [] },
     });
     expect(response.status).toBe(202);
     expect(enqueueJob).toHaveBeenCalledWith({ kind: 'html-composition', params: { directory: 'compositions/example' } });

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
-import { tmpdir, homedir } from 'os';
+import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { pinPlatform } from './testHelper.js';
@@ -642,33 +642,6 @@ describe('mediaModels registry', () => {
     expect(ids).toContain('works');
     expect(ids).toContain('broken-other');
     expect(ids).not.toContain('broken-here');
-  });
-
-  it('expandHome resolves ~/ correctly without dropping the home dir', async () => {
-    writeFileSync(registryFile, JSON.stringify({
-      video: { mlx: [], cuda: [], defaultMlx: 'x', defaultCuda: 'x' },
-      image: [],
-      textEncoders: [
-        { id: 'tilde-only', label: 't', repo: 'r1', localPath: '~' },
-        { id: 'tilde-slash', label: 't', repo: 'r2', localPath: '~/some/nonexistent/path' },
-      ],
-      selectedTextEncoder: 'tilde-slash',
-    }));
-    const { getTextEncoderEntries } = await import('./mediaModels.js');
-    const entries = getTextEncoderEntries();
-    const tilde = entries.find((e) => e.id === 'tilde-only');
-    const slash = entries.find((e) => e.id === 'tilde-slash');
-    // The bug being guarded against: `path.join(homedir(), '/.foo')` discards
-    // the homedir because the second segment starts with /. The fix strips
-    // the `~/` prefix before joining. Result MUST start with the user's
-    // actual home directory, not just `/`.
-    expect(slash.localPath.startsWith(homedir())).toBe(true);
-    // Use path.join to assemble the expected suffix so the assertion
-    // works on Windows (where the joined path uses backslashes) as well
-    // as POSIX. The earlier `toContain('/some/nonexistent/path')` would
-    // fail under win32's backslash-separated paths.
-    expect(slash.localPath.endsWith(join('some', 'nonexistent', 'path'))).toBe(true);
-    expect(tilde.localPath).toBe(homedir());
   });
 
   it('getTextEncoderRepo prefers existing localPath over repo', async () => {
