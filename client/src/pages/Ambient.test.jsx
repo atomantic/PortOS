@@ -212,7 +212,7 @@ describe('Ambient accessibility', () => {
     expect(screen.queryAllByRole('heading', { level: 3 })).toHaveLength(0);
     expect(screen.getAllByRole('heading', { level: 2 }).map(h => h.textContent)).toEqual(['Today', 'Goals', 'Agent Activity']);
     expect(screen.getByRole('status')).toHaveTextContent('System Online');
-    const fs = screen.getByRole('button', { name: 'Enter fullscreen' });
+    const fs = screen.getByRole('button', { name: 'Fullscreen' });
     expect(fs).toHaveAttribute('aria-pressed', 'false');
     // always-dark keeps day themes from remapping the white-on-black text.
     expect(screen.getByRole('main').parentElement.className).toContain('always-dark');
@@ -220,14 +220,19 @@ describe('Ambient accessibility', () => {
 
   it('does not leak a rejected fullscreen request', async () => {
     await mount();
+    const original = document.documentElement.requestFullscreen;
     document.documentElement.requestFullscreen = vi.fn(() => Promise.reject(new Error('denied')));
     const unhandled = vi.fn();
     process.on('unhandledRejection', unhandled);
-    await flush(() => fireEvent.click(screen.getByRole('button', { name: 'Enter fullscreen' })));
-    await flush(() => vi.advanceTimersByTime(10));
-    process.off('unhandledRejection', unhandled);
-    expect(document.documentElement.requestFullscreen).toHaveBeenCalled();
-    expect(unhandled).not.toHaveBeenCalled();
+    try {
+      await flush(() => fireEvent.click(screen.getByRole('button', { name: 'Fullscreen' })));
+      await flush(() => vi.advanceTimersByTime(10));
+      expect(document.documentElement.requestFullscreen).toHaveBeenCalled();
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+      document.documentElement.requestFullscreen = original;
+    }
   });
 
   it('only a bare Escape leaves the page', async () => {
