@@ -26,6 +26,13 @@ describe('replaceMarkedSection', () => {
     expect(out).toBe(`My hand-written notes.\n\n${M.start}\nAUTO BODY\n${M.end}`);
   });
 
+  it('rewrites a region with replacement patterns in its body verbatim', () => {
+    const body = "Paid $$5, ran echo $' and $& and $`";
+    const first = replaceMarkedSection('Notes above.', 'FIRST', M);
+    const out = replaceMarkedSection(`${first}\n\nNotes below.`, body, M);
+    expect(out).toBe(`Notes above.\n\n${M.start}\n${body}\n${M.end}\n\nNotes below.`);
+  });
+
   it('inserts into empty content with no leading whitespace', () => {
     const out = replaceMarkedSection('', 'AUTO BODY', M);
     expect(out).toBe(`${M.start}\nAUTO BODY\n${M.end}`);

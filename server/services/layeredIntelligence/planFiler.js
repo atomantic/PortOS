@@ -32,7 +32,7 @@ export async function appendProposalToPlan({ repoPath, appName, slug, title, bod
     // Insert right after the "## Next Up" heading line, normalizing the heading's
     // line ending first so a file that ENDS at `## Next Up` (no trailing newline)
     // gets the item on its own line rather than a second section appended below.
-    const updated = existing.replace(nextUpRe, `$1\n${item}\n`);
+    const updated = existing.replace(nextUpRe, (_match, heading) => `${heading}\n${item}\n`);
     await writeFile(planPath, updated.endsWith('\n') ? updated : `${updated}\n`);
     return { success: true, duplicate: false };
   }

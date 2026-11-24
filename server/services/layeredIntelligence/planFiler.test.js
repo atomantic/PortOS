@@ -74,6 +74,13 @@ describe('appendProposalToPlan', () => {
     expect(content).toContain('\n- [ ] [lil-add-x]');
   });
 
+  it('files a proposal containing replacement patterns verbatim', async () => {
+    await writeFile(join(dir, 'PLAN.md'), '# Plan\n\n## Next Up\n- [ ] older\n');
+    await appendProposalToPlan({ repoPath: dir, appName: 'App', slug: 'add-x', title: 'Escape $&', body: "Keep $1, $$ and $' as typed" });
+    expect(await readFile(join(dir, 'PLAN.md'), 'utf-8'))
+      .toBe("# Plan\n\n## Next Up\n- [ ] [lil-add-x] **Escape $&** Keep $1, $$ and $' as typed\n- [ ] older\n");
+  });
+
   it('appends a Next Up section when the file exists without one', async () => {
     await writeFile(join(dir, 'PLAN.md'), '# Plan\n\nSome notes.\n');
     await appendProposalToPlan({ repoPath: dir, appName: 'App', slug: 'add-x', title: 'Add X', body: 'b' });
