@@ -54,3 +54,20 @@ export function canonicalizePath(target) {
     }
   }
 }
+
+/**
+ * Compare two filesystem paths via `canonicalizePath`, returning `false` unless
+ * both inputs are non-empty strings. Case-folded on Windows/macOS.
+ *
+ * @param {unknown} left
+ * @param {unknown} right
+ * @returns {boolean}
+ */
+export function sameCheckoutPath(left, right) {
+  if (typeof left !== 'string' || typeof right !== 'string' || !left || !right) {
+    return false;
+  }
+  const a = canonicalizePath(left);
+  const b = canonicalizePath(right);
+  return CASE_INSENSITIVE_FS ? a.toLowerCase() === b.toLowerCase() : a === b;
+}

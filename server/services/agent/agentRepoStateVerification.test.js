@@ -2961,3 +2961,110 @@ describe('completion after its originating task was removed', () => {
     expect(settleAbsentTaskCompletion).not.toHaveBeenCalled();
   });
 });
+
+describe('canonical checkout path comparisons', () => {
+  const ALT_WORKTREE = '/repo/data/cos/worktrees/../worktrees/agent-1/';
+  const ALT_REPO = '/repo/.';
+
+  it('probeWorktree matches prunable worktree registrations across normalized path spellings', async () => {
+    readCheckoutPathPresence.mockResolvedValue(false);
+    listWorktrees.mockResolvedValue([{ branch: `refs/heads/${BRANCH}`, path: ALT_WORKTREE, head: HEAD }]);
+    const result = await run({ task: task({ prCompletion: 'leave-open' }) });
+    expect(result.observed.worktreePresent).toBe(true);
+    expect(result.issues.length).toBeGreaterThan(0);
+  });
+
+  it('settleAbsentScope blocks retirement when listWorktrees holds a normalized path spelling', async () => {
+    const pointer = { dev: '1', ino: '2', birthtimeNs: '3' };
+    const handedOff = {
+      id: 'handed-off',
+      taskId: 'task-1',
+      status: 'completed',
+      startedAt: CREATED_AT,
+      completedAt: '2026-01-01T00:02:00.000Z',
+      result: manualCleanupResult(),
+      metadata: {
+        instanceId: 'fixture-local',
+        isWorktree: true,
+        sourceWorkspace: '/repo',
+        workspacePath: WORKTREE,
+        worktreeBranch: BRANCH,
+        checkoutCapture: { status: 'captured' },
+        repoStateVerification: { status: 'pending' },
+        completionCleanup: { status: 'pending' },
+        completedCheckouts: [{
+          version: 1, agentId: 'handed-off', startedAt: CREATED_AT, capturedAt: '2026-01-01T00:01:00.000Z',
+          repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD, incarnation: { pointer },
+        }],
+      },
+    };
+    getAgentRecord.mockResolvedValue(handedOff);
+    readBranchCompletionPolicies.mockResolvedValue([handedOff]);
+    getTaskById.mockResolvedValue({ ...task(), status: 'completed' });
+    listWorktrees.mockResolvedValue([{ branch: 'refs/heads/other-branch', path: ALT_WORKTREE, head: HEAD }]);
+    await sweepRepoStateVerifications();
+    expect(recordAbsentCheckoutRetirement).not.toHaveBeenCalled();
+  });
+
+  it('resolveCheckoutHold matches completedCheckouts via normalized paths and avoids TypeError on null or missing paths', async () => {
+    listWorktrees.mockResolvedValue([{ branch: `refs/heads/${BRANCH}`, path: ALT_WORKTREE, head: HEAD }]);
+    readCompletedCheckoutIdentity.mockResolvedValue({ head: HEAD });
+    const mismatched = agentState({
+      completedCheckouts: [{ branch: BRANCH, path: `${WORKTREE}/`, head: '9'.repeat(40) }],
+    });
+    expect(await run({ agentState: mismatched })).toMatchObject({ verified: false, skipReason: 'checkout-changed' });
+
+    listWorktrees.mockResolvedValue([{ path: '/repo', branch: 'main', head: HEAD }]);
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/11', detail: 'MERGED' });
+    const pathless = agentState({
+      isWorktree: false,
+      worktreeBranch: null,
+      workspacePath: null,
+      claimPicksOwnBranch: true,
+      claimBranches: ['claim/issue-11'],
+      completedCheckouts: [{ branch: 'claim/issue-11', path: null, head: HEAD }],
+    });
+    const res = await run({ agentState: pathless });
+    expect(res.branches).toEqual([expect.objectContaining({ branch: 'claim/issue-11', verified: true, skipReason: null })]);
+  });
+
+  it('checkout:retired wakes pending agents across normalized repoPath and worktree path spellings', async () => {
+    const pointer = { dev: '1', ino: '2', birthtimeNs: '3' };
+    const completed = {
+      version: 1, agentId: 'agent-1', repoPath: ALT_REPO, branch: BRANCH, path: ALT_WORKTREE,
+      head: '4'.repeat(40), startedAt: CREATED_AT, capturedAt: CREATED_AT, incarnation: { pointer },
+    };
+    const state = {
+      ...agentState({
+        instanceId: 'fixture-local',
+        sourceWorkspace: ALT_REPO,
+        workspacePath: ALT_WORKTREE,
+        completedCheckouts: [completed],
+        reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' },
+        repoStateVerification: { status: 'pending' },
+        completionCleanup: { status: 'completed', version: 1 },
+      }),
+      id: 'agent-1',
+      taskId: 'task-1',
+      status: 'completed',
+      completedAt: CREATED_AT,
+      result: { success: true, executionSuccess: true },
+    };
+    getAppById.mockResolvedValue({ id: 'demo-app', name: 'Demo App', repoPath: '/repo' });
+    getAgentRecord.mockResolvedValue(state);
+    readBranchCompletionPolicies.mockResolvedValue([state]);
+    execGh.mockResolvedValue(openView({ state: 'MERGED' }));
+    const events = new EventEmitter();
+    const unbind = bindCompletionRetirementEvents(events);
+    try {
+      await events.listeners('checkout:retired')[0]({
+        appId: 'demo-app',
+        path: WORKTREE,
+        branch: BRANCH,
+        head: HEAD,
+        checkoutIdentity: retirementCheckoutIdentityFromPointer(pointer),
+      });
+    } finally { unbind(); }
+    expect(recordRepoStateVerification).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({ status: 'completed' }));
+  });
+});
