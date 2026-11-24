@@ -33,11 +33,12 @@ export default function GsdProjectHeader({ project, appId, repoPath, onRefresh }
   };
 
   const handleNewMilestone = async () => {
-    await addCosTask({
+    const task = await addCosTask({
       description: 'Run /gsd:new-milestone to start a new milestone cycle',
       app: appId,
       priority: 'MEDIUM',
     }).catch(() => null);
+    if (!task) return;
     toast.success('New milestone task created');
   };
 
