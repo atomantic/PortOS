@@ -87,8 +87,8 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
     setStarting(true);
     const firstLyricSec = (project.lyricCues || []).map((cue) => cue?.startSec).filter((s) => typeof s === 'number').sort((a, b) => a - b)[0] ?? null;
     return getMusicVideoPublishPlatforms({ silent: true }).catch(() => null)
-      .then((platforms) => {
-        const distrokid = platforms?.distrokid;
+      .then((response) => {
+        const distrokid = response?.platforms?.distrokid;
         const next = titleCardPrefill(project, { artist: distrokid?.account || distrokid?.defaults?.artistName || '', firstLyricSec });
         onEditLocal({ titleCard: next });
         return onSave({ titleCard: next });

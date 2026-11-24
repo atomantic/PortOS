@@ -15,6 +15,7 @@ import Modal from '../ui/Modal';
 import ProviderModelSelector from '../ProviderModelSelector';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
 import toast from '../ui/Toast';
+import ListLoadError from '../ui/ListLoadError';
 import useMounted from '../../hooks/useMounted';
 import useProviderModels from '../../hooks/useProviderModels';
 import useVisionModelIds from '../../hooks/useVisionModelIds';
@@ -95,6 +96,8 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
     setSelectedProviderId,
     setSelectedModel,
     loading: providersLoading,
+    error: providersError,
+    retry: retryProviders,
   } = useProviderModels({
     filter: visionProviderFilter,
     silent: true,
@@ -423,7 +426,9 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
           </div>
         ) : null}
       </div>
-      {providers.length === 0 && !providersLoading ? (
+      {providersError && providers.length === 0 && !providersLoading ? (
+        <ListLoadError what="AI providers" error={providersError} onRetry={retryProviders} />
+      ) : providers.length === 0 && !providersLoading ? (
         <p className="text-xs text-port-warning">No vision-capable provider is enabled. Add one under Settings → Providers to analyze items. Composing from analyses you already have still works.</p>
       ) : null}
       {plan.skipped > 0 ? (

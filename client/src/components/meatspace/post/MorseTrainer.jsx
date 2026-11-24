@@ -18,6 +18,7 @@ import { safeReadJsonStorage, safeWriteStorage } from '../../../lib/safeStorage'
 import { resumeAudioContext } from '../../../lib/audioContext.js';
 import { MORSE_MATERIAL_MODES, canAdvanceMorseLevel, selectMorsePrompt } from '../../../lib/morsePractice.js';
 import { isPressKey, noPointerFocusSurfaceProps } from '../../../lib/a11yKeyboard.js';
+import ListLoadError from '../../ui/ListLoadError';
 import PostCompletionActions from './PostCompletionActions';
 import { startRetryableSaves } from './completionSave';
 
@@ -418,6 +419,11 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, claimSession, releaseSession,
 export default function MorseTrainer({ mode = null, onSelectMode, onExitMode, onBack, onContinue }) {
   const [prefs, setPrefs] = useState(loadPrefs);
   const [morseProgress, setMorseProgress] = useState(null);
+  // Whether the authoritative server Koch level has been read (or adopted) this
+  // session. Until 'ready', a finished round must not write a level: an advance
+  // computed from a stale/default local level would clobber the real server one.
+  const [levelState, setLevelState] = useState('loading'); // 'loading' | 'ready' | 'error'
+  const [levelRetry, setLevelRetry] = useState(0);
   const [trainingStats, setTrainingStats] = useState(null);
   // Bumped after each round submit so the progress panel refetches its trends /
   // confusion matrix without a manual reload.
@@ -446,34 +452,47 @@ export default function MorseTrainer({ mode = null, onSelectMode, onExitMode, on
     let cancelled = false;
     getMorseProgress(30, { silent: true })
       .then(async (p) => {
-        if (cancelled || !p) return;
+        if (cancelled) return;
+        if (!p) { setLevelState('error'); return; }
         setMorseProgress(p);
         if (!p.kochLevelSet) {
           const cachedLevel = loadPrefs().kochLevel;
           if (cachedLevel > DEFAULT_KOCH_LEVEL) {
             const res = await updateMorseLevel({ kochLevel: cachedLevel, adopt: true }, { silent: true }).catch(() => null);
-            if (!cancelled && res?.kochLevel) {
+            if (cancelled) return;
+            if (res?.kochLevel) {
               setPrefs((prev) => { const n = { ...prev, kochLevel: res.kochLevel }; savePrefs(n); return n; });
+              setLevelState('ready');
+            } else {
+              setLevelState('error');
             }
             return;
           }
         }
         if (typeof p.kochLevel === 'number') {
           setPrefs((prev) => { const n = { ...prev, kochLevel: p.kochLevel }; savePrefs(n); return n; });
+          setLevelState('ready');
+        } else {
+          setLevelState('error');
         }
       })
-      .catch(() => {});
+      .catch(() => { if (!cancelled) setLevelState('error'); });
     return () => { cancelled = true; };
-  }, []);
+  }, [levelRetry]);
 
-  function updatePrefs(patch) {
+  function retryLevelLoad() {
+    setLevelState('loading');
+    setLevelRetry((n) => n + 1);
+  }
+
+  function updatePrefs(patch, { force = false } = {}) {
     setPrefs((prev) => {
       const next = { ...prev, ...patch };
       if (next.effectiveWpm > next.wpm) next.effectiveWpm = next.wpm;
       savePrefs(next);
       // Persist a level change to the server (write-through). Settings ride along
       // so a level advance/reset also syncs the current speed/tone across devices.
-      if (patch.kochLevel != null && patch.kochLevel !== prev.kochLevel) {
+      if (patch.kochLevel != null && patch.kochLevel !== prev.kochLevel && (force || levelState === 'ready')) {
         updateMorseLevel(
           { kochLevel: patch.kochLevel, settings: { wpm: next.wpm, farnsworthWpm: next.effectiveWpm, toneHz: next.hz } },
           { silent: true },
@@ -484,7 +503,7 @@ export default function MorseTrainer({ mode = null, onSelectMode, onExitMode, on
   }
 
   function resetProgress() {
-    updatePrefs({ kochLevel: DEFAULT_KOCH_LEVEL, bestAccuracy: 0 });
+    updatePrefs({ kochLevel: DEFAULT_KOCH_LEVEL, bestAccuracy: 0 }, { force: true });
   }
 
   // Persist per-item sent→guessed results for trends + confusion analysis.
@@ -549,7 +568,7 @@ export default function MorseTrainer({ mode = null, onSelectMode, onExitMode, on
         {...(mode === 'send' ? noPointerFocusSurfaceProps : null)}
       >
         <div className="space-y-6 min-w-0 max-w-2xl">
-          <SettingsPanel prefs={prefs} updatePrefs={updatePrefs} onResetProgress={resetProgress} trainingStats={trainingStats} progress={morseProgress} />
+          <SettingsPanel prefs={prefs} updatePrefs={updatePrefs} onResetProgress={resetProgress} trainingStats={trainingStats} progress={morseProgress} levelState={levelState} onRetryLevel={retryLevelLoad} />
           {!mode && <ModeGrid onPick={onSelectMode} />}
           {mode === 'copy' && (
             <CopyDrill prefs={prefs} progress={morseProgress} updatePrefs={updatePrefs} ensureCtx={ensureCtx} claimSession={claimSession} releaseSession={releaseSession} onExit={onExitMode} onContinue={onContinue} onSessionComplete={logTraining} onRoundSubmit={submitRound} />
@@ -568,7 +587,7 @@ export default function MorseTrainer({ mode = null, onSelectMode, onExitMode, on
   );
 }
 
-function SettingsPanel({ prefs, updatePrefs, onResetProgress, trainingStats, progress }) {
+function SettingsPanel({ prefs, updatePrefs, onResetProgress, trainingStats, progress, levelState, onRetryLevel }) {
   const adaptiveId = useId();
   const materialId = useId();
   return (
@@ -615,10 +634,16 @@ function SettingsPanel({ prefs, updatePrefs, onResetProgress, trainingStats, pro
         Adaptive practice
       </label>
       <div className="sm:col-span-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 text-xs text-gray-500 border-t border-port-border pt-3">
-        <span>
-          Koch level: <span className="text-white font-mono">{prefs.kochLevel}</span> /{' '}
-          <span className="text-gray-400">{KOCH_ORDER.length}</span> ·{' '}
-          Best round: <span className="text-white font-mono">{prefs.bestAccuracy}%</span>
+        <div>
+          {levelState === 'error' ? (
+            <ListLoadError what="Koch level" onRetry={onRetryLevel} className="mb-2" />
+          ) : (
+            <>
+              Koch level: <span className="text-white font-mono">{prefs.kochLevel}</span> /{' '}
+              <span className="text-gray-400">{KOCH_ORDER.length}</span> ·{' '}
+              Best round: <span className="text-white font-mono">{prefs.bestAccuracy}%</span>
+            </>
+          )}
           {trainingStats && (
             <>
               {' '}· <span aria-hidden="true">{streakGlyph(trainingStats.currentStreak)}</span> Training streak:{' '}
@@ -636,7 +661,7 @@ function SettingsPanel({ prefs, updatePrefs, onResetProgress, trainingStats, pro
           {progress?.practiceAccuracy?.targeted?.attempts > 0 && (
             <> · Targeted: <span className="text-white font-mono">{progress.practiceAccuracy.targeted.accuracy}%</span> vs coverage <span className="text-white font-mono">{progress.practiceAccuracy.coverage.accuracy == null ? '—' : `${progress.practiceAccuracy.coverage.accuracy}%`}</span></>
           )}
-        </span>
+        </div>
         <button
           onClick={onResetProgress}
           className="flex items-center gap-1 pointer-coarse:min-h-11 text-gray-400 hover:text-port-error transition-colors"

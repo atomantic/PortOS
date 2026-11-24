@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Brain, ChevronLeft, Plus, Trash2, BookOpen, Zap, FlaskConical, Eye, X, Save, CalendarClock } from 'lucide-react';
 import { getMemoryItems, createMemoryItem, deleteMemoryItem } from '../../../services/apiMeatspace.js';
+import ListLoadError from '../../ui/ListLoadError';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { FormField } from '../../ui/FormField';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
@@ -44,6 +45,8 @@ function mostOverdueFirst(a, b) {
 // only ever renders the list — `onSelectItem` navigates (issue #3249).
 export default function MemoryBuilder({ onBack, onSelectItem, onReviewItem = onSelectItem }) {
   const [items, setItems] = useState([]);
+  // 'loading' → first read in flight; 'error' → first read failed; 'ready' → a read succeeded.
+  const [loadState, setLoadState] = useState('loading');
   const [creating, setCreating] = useState(false);
 
   // Create form state
@@ -64,9 +67,20 @@ export default function MemoryBuilder({ onBack, onSelectItem, onReviewItem = onS
   // return value to fall back to a local update when the refresh fails.
   async function loadItems() {
     const data = await getMemoryItems().catch(err => { console.warn('⚠️ Failed to load memory items: ' + err.message); return null; });
-    if (!Array.isArray(data)) return false;
+    if (!Array.isArray(data)) {
+      // Only the first read surfaces an error; a failed refresh after a
+      // delete keeps the known-good list (handled by the caller).
+      setLoadState(s => (s === 'ready' ? s : 'error'));
+      return false;
+    }
     setItems(data);
+    setLoadState('ready');
     return true;
+  }
+
+  async function retryLoad() {
+    setLoadState('loading');
+    await loadItems();
   }
 
   async function handleDelete(id) {
@@ -135,6 +149,7 @@ export default function MemoryBuilder({ onBack, onSelectItem, onReviewItem = onS
 
       {/* Due Today — spaced repetition. Recomputes reactively as `items` update. */}
       {(() => {
+        if (loadState !== 'ready') return null;
         const dueItems = items.filter(isItemDue).sort(mostOverdueFirst);
         if (dueItems.length === 0) {
           return (
@@ -303,7 +318,13 @@ export default function MemoryBuilder({ onBack, onSelectItem, onReviewItem = onS
           </div>
         ))}
 
-        {items.length === 0 && (
+        {loadState === 'loading' && (
+          <div className="col-span-full text-center text-gray-500 py-8 text-sm">Loading memory items...</div>
+        )}
+        {loadState === 'error' && (
+          <ListLoadError className="col-span-full" what="memory items" onRetry={retryLoad} />
+        )}
+        {loadState === 'ready' && items.length === 0 && (
           <div className="col-span-full bg-port-card border border-port-border rounded-lg p-8 text-center">
             <Brain size={32} className="text-gray-600 mx-auto mb-3" />
             <p className="text-gray-500">No memory items yet. The Elements Song will be added automatically.</p>

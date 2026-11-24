@@ -112,8 +112,9 @@ const { cosEvents } = await import('./cosEvents.js');
 const { isDaemonRunning } = await import('./cosState.js');
 
 const cosEventIds = () => [...scheduled].filter(id => id.startsWith('cos-') || id.startsWith('job:'));
-const waitFor = async (predicate, spins = 200) => {
-  for (let i = 0; i < spins && !predicate(); i++) await new Promise(r => setImmediate(r));
+const waitFor = async (predicate) => {
+  const deadline = performance.now() + 10_000;
+  while (!predicate() && performance.now() < deadline) await new Promise(resolve => setImmediate(resolve));
   expect(predicate()).toBe(true);
 };
 
@@ -267,7 +268,7 @@ describe('CoS daemon start/stop lifecycle (#11860)', () => {
     expect(isDaemonRunning()).toBe(false);
     const initializing = init();
     // init() dynamically imports real listener modules before reaching start().
-    await waitFor(() => typeof releaseRecovery === 'function', 20000);
+    await waitFor(() => typeof releaseRecovery === 'function');
     releaseRecovery();
     await initializing;
     expect(isDaemonRunning()).toBe(true);

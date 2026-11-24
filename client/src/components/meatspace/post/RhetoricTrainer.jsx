@@ -6,6 +6,7 @@ import useProviderModels from '../../../hooks/useProviderModels';
 import { isEmbeddingModel, isLocalEndpoint, isLocalInstanceProvider, isOllamaBackedProvider, localBackendForProvider, mergeModelLists } from '../../../utils/providers';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import toast from '../../ui/Toast';
+import ListLoadError from '../../ui/ListLoadError';
 import { uuidv4 } from '../../../lib/uuid';
 import { RHETORIC_MODES } from './trainerModes';
 
@@ -143,6 +144,8 @@ function EvaluatorReport({ results, enabled }) {
 function RhetoricEvaluatorConfig({
   config,
   providers,
+  providersError,
+  onRetryProviders,
   providerId,
   model,
   effort,
@@ -219,7 +222,8 @@ function RhetoricEvaluatorConfig({
         layout="stacked"
         disabled={saving}
       />
-      {providers.length === 0 && <p className="text-xs text-gray-500">No enabled providers are available yet. You can save the active-provider choice and configure one later.</p>}
+      {providers.length === 0 && providersError && <ListLoadError what="AI providers" error={providersError} onRetry={onRetryProviders} />}
+      {providers.length === 0 && !providersError && <p className="text-xs text-gray-500">No enabled providers are available yet. You can save the active-provider choice and configure one later.</p>}
       <div className="flex items-center gap-3 flex-wrap">
         <button
           type="button"
@@ -260,6 +264,8 @@ export default function RhetoricTrainer({ mode, onSelectMode, onExitMode, onBack
     availableModels: evaluatorModels,
     setSelectedProviderId: setEvaluatorProviderId,
     setSelectedModel: setEvaluatorModel,
+    error: providersError,
+    retry: retryProviders,
   } = useProviderModels({ filter: evaluatorProviderFilter, allowDefault: true, silent: true, withEffort: true });
   const evaluatorBackend = backendForProvider(providers.find((provider) => provider.id === evaluatorProviderId));
   const evaluatorAvailableModels = useMemo(() => mergeModelLists(
@@ -504,6 +510,8 @@ export default function RhetoricTrainer({ mode, onSelectMode, onExitMode, onBack
         <RhetoricEvaluatorConfig
           config={config}
           providers={providers}
+          providersError={providersError}
+          onRetryProviders={retryProviders}
           providerId={evaluatorProviderId}
           model={evaluatorModel}
           effort={evaluatorEffort}

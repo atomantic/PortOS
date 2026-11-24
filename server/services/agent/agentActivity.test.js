@@ -10,7 +10,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
   return makeProxy(actual);
 });
 
-const { getActivityTimeline, getTodayActionCount, logActivity } = await import('./agentActivity.js');
+const { getAgentStats, getActivityTimeline, getTodayActionCount, logActivity } = await import('./agentActivity.js');
 
 const activityRoot = join(tempRoot, 'agents', 'activity');
 
@@ -121,5 +121,33 @@ describe('logActivity concurrency', () => {
     expect(activities).toHaveLength(20);
     expect(new Set(activities.map(a => a.params.index)).size).toBe(20);
     await expect(getTodayActionCount(accountId, 'burst-action')).resolves.toBe(20);
+  });
+});
+
+describe('getAgentStats totals', () => {
+  beforeEach(async () => {
+    await rm(activityRoot, { recursive: true, force: true });
+  });
+
+  it('counts posts, comments and votes from completed records only', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const rec = (action, status, result) => ({ id: `${action}-${status}`, action, status, result, timestamp: `${today}T00:00:00.000Z` });
+    await writeDay('agent-s', today, [
+      rec('post', 'started'),
+      rec('post', 'completed', {}),
+      rec('post', 'failed'),
+      rec('comment', 'completed', { action: 'commented' }),
+      rec('comment', 'completed', { action: 'none' }),
+      rec('comment', 'skipped'),
+      rec('vote', 'completed', {}),
+      rec('vote', 'completed', { action: 'none' }),
+      rec('engage', 'completed', { votes: [1, 2], comments: [1] }),
+      rec('engage', 'completed', {}),
+      rec('monitor', 'completed', { upvoted: [1], replied: [1, 2, 3] })
+    ]);
+    const stats = await getAgentStats('agent-s', 1);
+    expect(stats).toMatchObject({ totalPosts: 1, totalComments: 5, totalVotes: 4, totalActivities: 11 });
+    expect(stats.byAction.post).toBe(3);
+    expect(stats.byStatus.completed).toBe(8);
   });
 });
