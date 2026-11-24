@@ -358,11 +358,10 @@ describe('classifyWorktreeDirt (real exported helper)', () => {
 // These pin the properties the module RELIES ON from the shared helpers, so a
 // change to either one surfaces here rather than as silent dead cleanup.
 describe('git-vs-PortOS path comparison', () => {
-  it('matches a git-reported POSIX path against a Windows worktrees dir', () => {
-    // win32-only: `resolvePath` folds `/` to `\` on Windows, which is what makes
-    // the mixed-separator comparison work. On POSIX a backslash is a legal
-    // filename character, so this case can't arise and isn't asserted.
-    if (process.platform !== 'win32') return;
+  // win32-only: `resolvePath` folds `/` to `\` on Windows, which is what makes
+  // the mixed-separator comparison work. On POSIX a backslash is a legal
+  // filename character, so this case can't arise.
+  it.runIf(process.platform === 'win32')('matches a git-reported POSIX path against a Windows worktrees dir', () => {
     expect(isPathInsideDir('H:\\repo\\data\\cos\\worktrees', 'H:/repo/data/cos/worktrees/agent-abc')).toBe(true);
   });
 
