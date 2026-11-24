@@ -24,6 +24,12 @@ function setCache(key, data) {
   projectCache.set(key, { data, ts: Date.now() })
 }
 
+/** Drop a cached project after PortOS writes one of its planning documents. */
+export function invalidateGsdProject(app) {
+  projectCache.delete(`project:${app.id}`)
+  projectCache.delete(`project:${app.repoPath}`)
+}
+
 // Severity mapping for CONCERNS.md sections
 const SEVERITY_MAP = {
   'security considerations': 'CRITICAL',

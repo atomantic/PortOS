@@ -131,12 +131,11 @@ async function buildClassificationPrompt(task, agentOutput, config) {
     existingMemories: existingMemories || 'No existing memories yet.'
   };
 
-  let prompt = template;
-  for (const [key, value] of Object.entries(variables)) {
-    prompt = prompt.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), value);
-  }
-
-  return prompt;
+  // One pass with a replacer function: agent output is inserted verbatim, so its
+  // `$'` / `$&` is not expanded and its own `{{…}}` is not substituted again.
+  return template.replace(/\{\{(\w+)\}\}/g, (match, key) => (
+    Object.hasOwn(variables, key) ? variables[key] : match
+  ));
 }
 
 /**

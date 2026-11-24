@@ -32,14 +32,14 @@ const effects = vi.hoisted(() => ({
   createComment: vi.fn(async () => ({ id: 'example-comment' })),
   replyToComment: vi.fn(async () => ({ id: 'example-reply' })),
   upvote: vi.fn(async () => ({})), upvoteComment: vi.fn(async () => ({})),
-  getFeed: vi.fn(async () => ({ posts: [] })),
+  getFeed: vi.fn(async () => ({ posts: [{ id: 'example-post', title: 'Example title' }] })),
   getProfile: vi.fn(async () => ({ id: 'example-profile', is_claimed: true })),
   getComments: vi.fn(async () => ({ comments: [{ id: 'example-comment', author: 'Other Bot', content: 'Example comment' }] })),
   getPostsByAuthor: vi.fn(async () => [{ id: 'example-post', title: 'Example title', created_at: new Date().toISOString() }]),
   getAccountWithCredentials: vi.fn(), getAccountById: vi.fn(),
   createAccount: vi.fn(async data => ({ id: 'example-account', ...data })),
   updateAccountStatus: vi.fn(async () => ({ id: 'example-account', platform: 'moltbook' })),
-  recordActivity: vi.fn(async () => {}), logActivity: vi.fn(async () => {}),
+  recordActivity: vi.fn(async () => {}), logActivity: vi.fn(async () => {}), getActivities: vi.fn(async () => []),
   schedule: vi.fn(), cancel: vi.fn(),
   generatePost: vi.fn(async () => ({ title: 'Generated title', content: 'Generated content' })),
 }));
@@ -65,11 +65,6 @@ vi.mock('../services/agent/agentContentGenerator.js', () => ({
   assertMoltbookCommentProvider: vi.fn(async () => {}),
 }));
 vi.mock('../services/agent/agentPersonalityGenerator.js', () => ({}));
-vi.mock('../services/agent/agentFeedFilter.js', () => ({
-  findRelevantPosts: vi.fn(async () => [{ id: 'example-post', title: 'Example title' }]),
-  findReplyOpportunities: vi.fn(async () => []),
-}));
-vi.mock('../services/agent/agentPublished.js', () => ({}));
 vi.mock('../services/agent/agentDrafts.js', () => ({
   createDraft: vi.fn(async data => ({ id: 'example-draft', ...data })),
 }));
