@@ -14,7 +14,8 @@ const INSTANCE_IDENTITY_SRC = readFileSync(
 // Mock dependencies before importing the module
 vi.mock('fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),
-  rename: vi.fn().mockResolvedValue(undefined)
+  rename: vi.fn().mockResolvedValue(undefined),
+  chmod: vi.fn().mockResolvedValue(undefined)
 }));
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
@@ -31,6 +32,7 @@ vi.mock('../lib/asyncMutex.js', () => ({
   createMutex: () => (fn) => fn()
 }));
 
+import { chmod } from 'fs/promises';
 import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import {
   ensureSelf,
@@ -64,6 +66,7 @@ describe('instanceIdentity.js', () => {
     await withData(data => { data.peers[0].status = 'offline'; });
     expect(guard).not.toHaveBeenCalled();
     expect(atomicWrite).toHaveBeenCalledOnce();
+    expect(chmod).toHaveBeenCalledWith('/mock/data/instances.json', 0o600);
   });
 
   describe('ensureSelf', () => {

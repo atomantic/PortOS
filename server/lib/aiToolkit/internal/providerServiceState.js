@@ -1,4 +1,4 @@
-import { readFile, rename } from 'fs/promises';
+import { chmod, readFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { atomicWrite } from './atomicWrite.js';
@@ -265,6 +265,14 @@ export function createProviderServiceState(config = {}) {
     }
   }
 
+  async function writeProvidersFile(data) {
+    await atomicWrite(providersPath, data);
+    // Best-effort owner-only mode: chmod is a no-op on Windows and must not break provider saves.
+    await chmod(providersPath, 0o600).catch((err) => {
+      if (err?.code !== 'ENOENT') console.log(`⚠️ Could not set permissions on providers store (${err?.code || 'error'})`);
+    });
+  }
+
   async function readProvidersFromDisk() {
     if (!existsSync(providersPath)) {
       if (sampleFile && existsSync(sampleFile)) {
@@ -277,7 +285,7 @@ export function createProviderServiceState(config = {}) {
           return { activeProvider: null, providers: {} };
         }
         unifyProviderModes(parsed);
-        await atomicWrite(providersPath, parsed);
+        await writeProvidersFile(parsed);
         return parsed;
       }
       return { activeProvider: null, providers: {} };
@@ -291,7 +299,7 @@ export function createProviderServiceState(config = {}) {
     const migratedContextWindows = migrateProviderContextWindows(data);
     const migratedModes = unifyProviderModes(data);
     if (migratedModes || migratedCodex || migratedAntigravity || migratedAntigravityModels || migratedContextWindows) {
-      await atomicWrite(providersPath, data);
+      await writeProvidersFile(data);
       if (migratedCodex) console.log('🔧 Migrated Codex providers to the selectable model catalog');
       if (migratedAntigravity) console.log('🔧 Migrated Gemini provider config to Antigravity CLI (agy)');
       if (migratedAntigravityModels) console.log('🔧 Migrated Antigravity providers to the selectable agy model catalog');
@@ -324,7 +332,7 @@ export function createProviderServiceState(config = {}) {
 
   async function saveProviders(data) {
     invalidateProvidersCache();
-    await atomicWrite(providersPath, data);
+    await writeProvidersFile(data);
     refreshProvidersCache(data);
     await notifyProvidersSaved(data);
   }

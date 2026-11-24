@@ -9,7 +9,8 @@ import { createHttpClient } from '../lib/httpClient.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import path from 'path';
-import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { writeSecureJson } from '../lib/secureAuthStore.js';
 import { hostFromOriginUrl } from '../lib/workTracker.js';
 import { countConfiguredInstances } from '../lib/instanceFeatureRegistry.js';
 
@@ -78,7 +79,7 @@ export async function getInstances() {
  * Save JIRA instances configuration
  */
 export async function saveInstances(config) {
-  await atomicWrite(JIRA_CONFIG_FILE, config);
+  await writeSecureJson(JIRA_CONFIG_FILE, config);
 }
 
 /**

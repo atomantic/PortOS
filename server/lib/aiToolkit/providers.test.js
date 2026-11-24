@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { delimiter, join } from 'path';
 import { createProviderService, isOllamaBackedProvider } from './providers.js';
@@ -2543,6 +2543,20 @@ rl.on('line', (line) => {
       }
       const { activeProvider } = await providerService.getAllProviders();
       expect(['__proto__', 'constructor', 'toString', 'hasOwnProperty']).not.toContain(activeProvider);
+    });
+  });
+
+  describe.skipIf(process.platform === 'win32')('providers.json file permissions (#18129)', () => {
+    it('writes new files and tightens existing world-readable providers.json to 0o600', async () => {
+      const providersPath = join(TEST_DATA_DIR, 'providers.json');
+      await providerService.createProvider({ id: 'p1', name: 'P1', type: 'api', apiKey: 'secret' });
+      expect((await stat(providersPath)).mode & 0o777).toBe(0o600);
+
+      await chmod(providersPath, 0o644);
+      expect((await stat(providersPath)).mode & 0o777).toBe(0o644);
+
+      await providerService.updateProvider('p1', { name: 'P1 Updated' });
+      expect((await stat(providersPath)).mode & 0o777).toBe(0o600);
     });
   });
 });

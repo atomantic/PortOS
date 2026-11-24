@@ -1,13 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const state = vi.hoisted(() => ({ data: { accounts: {} } }));
+const state = vi.hoisted(() => ({ data: { accounts: {} }, storeOptions: null }));
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { agentPersonalities: '/unused' },
-  createCachedStore: () => ({
-    load: async () => state.data,
-    mutate: async (fn) => fn(state.data),
-    invalidateCache: () => {},
-  }),
+  createCachedStore: (_path, _def, options) => {
+    state.storeOptions = options;
+    return {
+      load: async () => state.data,
+      mutate: async (fn) => fn(state.data),
+      invalidateCache: () => {},
+    };
+  },
 }));
 
 import * as platformAccounts from './platformAccounts.js';
@@ -50,5 +53,9 @@ describe('platform account credential masking', () => {
 
     expect(account.credentials.agentId).toBe(MW_AGENT_ID);
     expect(account.credentials.apiKey).toBe(API_KEY);
+  });
+
+  it('configures the backing store with 0o600 file permissions (#18129)', () => {
+    expect(state.storeOptions).toMatchObject({ mode: 0o600 });
   });
 });
