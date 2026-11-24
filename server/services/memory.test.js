@@ -1649,6 +1649,21 @@ describe('memory service', () => {
       expect(result.updated).toBeGreaterThanOrEqual(0);
     });
 
+    it('decays but never archives Persistent Mind memories (#18322)', async () => {
+      const oldDate = new Date(Date.now() - 400 * 24 * 60 * 60 * 1000).toISOString();
+      const rec = (id, sourceAgentId) => ({ id, status: 'active', importance: 0.15, createdAt: oldDate, lastAccessed: null, sourceAgentId });
+      const records = { mind: rec('mind', 'cos-persistent-mind'), other: rec('other', 'other-agent') };
+      readJSONFile.mockImplementation((path, def) => {
+        if (path.includes('index.json')) return Promise.resolve({ version: 1, lastUpdated: '', count: 2, memories: Object.values(records) });
+        const id = Object.keys(records).find(k => path.includes(`/${k}/`));
+        return Promise.resolve(id ? { ...records[id] } : def);
+      });
+      await applyDecay(0.01);
+      const archivedPaths = atomicWrite.mock.calls.filter(c => String(c[0]).endsWith('memory.json') && c[1]?.status === 'archived').map(c => String(c[0]));
+      expect(archivedPaths.some(p => p.includes('/mind/'))).toBe(false);
+      expect(archivedPaths.some(p => p.includes('/other/'))).toBe(true);
+    });
+
     it('should return zero updates when no memories exist', async () => {
       readJSONFile.mockImplementation((path, def) => {
         if (path.includes('index.json')) return Promise.resolve({ version: 1, lastUpdated: '', count: 0, memories: [] });
