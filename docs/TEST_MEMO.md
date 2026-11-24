@@ -429,6 +429,10 @@ The runner determines shard ownership from the complete memo-independent
 candidate inventory, including explicit files. Unit jobs use Vitest's
 hash-sort-and-range algorithm (`vitestShardSlice`, checked against a real
 `vitest run --shard`), and browser jobs use the browser suite registry order.
+The two-shard server unit matrix pins heavy suites and all non-capture serial
+suites to balance the two jobs. Its regression checks the pinned duration spread
+with shard 1's Smoke-boot step and the distribution of always-run guards and
+non-capture serial suites.
 The runner then evaluates related reach and subtracts memo hits within each
 shard's own candidates. Each file has one owner even when sibling shards
 restore different memo records. Vitest receives the final selection directly.
