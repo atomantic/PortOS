@@ -32,4 +32,13 @@ describe('Stacker News account identity', () => {
     const insert = transactionQuery.mock.calls.find(([sql]) => sql.includes('INSERT INTO stacker_news_accounts'));
     expect(insert[1][2]).toBe('mixed_case');
   });
+
+  it('maps a duplicate username to a safe 409 without the raw constraint name', async () => {
+    transactionQuery.mockRejectedValueOnce(Object.assign(new Error('duplicate key value violates unique constraint "stacker_news_accounts_username_key"'), { code: '23505' }));
+    await expect(createAccount({ label: 'Example', username: 'dupe' })).rejects.toMatchObject({
+      status: 409,
+      code: 'CONFLICT',
+      message: 'A Stacker News account with that username already exists',
+    });
+  });
 });
