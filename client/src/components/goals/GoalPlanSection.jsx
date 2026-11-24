@@ -42,8 +42,33 @@ export default function GoalPlanSection({
               <p className="text-[10px] text-gray-500">{proposedPhases.length} phases proposed</p>
               {proposedPhases.map((phase, idx) => (
                 <div key={phase._key ?? idx} className="p-2 rounded bg-port-bg border border-port-border space-y-1">
-                  <div className="flex items-center gap-2">
-                    <div className="flex flex-col gap-0.5">
+                  <div className="space-y-1">
+                    <input
+                      type="text"
+                      value={phase.title}
+                      onChange={e => {
+                        const next = [...proposedPhases];
+                        next[idx] = { ...next[idx], title: e.target.value };
+                        setProposedPhases(next);
+                      }}
+                      aria-label={`Phase ${idx + 1} title`}
+                      className="w-full bg-port-card border border-port-border rounded px-2 py-0.5 text-xs text-white"
+                    />
+                    <input
+                      type="text"
+                      value={phase.description || ''}
+                      onChange={e => {
+                        const next = [...proposedPhases];
+                        next[idx] = { ...next[idx], description: e.target.value };
+                        setProposedPhases(next);
+                      }}
+                      placeholder="Description..."
+                      aria-label={`Phase ${idx + 1} description`}
+                      className="w-full bg-port-card border border-port-border rounded px-2 py-0.5 text-xs text-gray-400"
+                    />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex items-center gap-0.5">
                       <button
                         onClick={() => {
                           if (idx === 0) return;
@@ -71,51 +96,24 @@ export default function GoalPlanSection({
                         <ArrowDown className="w-2.5 h-2.5" />
                       </button>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <input
-                        type="text"
-                        value={phase.title}
-                        onChange={e => {
-                          const next = [...proposedPhases];
-                          next[idx] = { ...next[idx], title: e.target.value };
-                          setProposedPhases(next);
-                        }}
-                        aria-label={`Phase ${idx + 1} title`}
-                        className="w-full bg-port-card border border-port-border rounded px-2 py-0.5 text-xs text-white"
-                      />
-                      <input
-                        type="text"
-                        value={phase.description || ''}
-                        onChange={e => {
-                          const next = [...proposedPhases];
-                          next[idx] = { ...next[idx], description: e.target.value };
-                          setProposedPhases(next);
-                        }}
-                        placeholder="Description..."
-                        aria-label={`Phase ${idx + 1} description`}
-                        className="w-full bg-port-card border border-port-border rounded px-2 py-0.5 text-xs text-gray-400 mt-0.5"
-                      />
-                    </div>
-                    <div className="flex flex-col items-end gap-0.5">
-                      <input
-                        type="date"
-                        value={phase.targetDate}
-                        onChange={e => {
-                          const next = [...proposedPhases];
-                          next[idx] = { ...next[idx], targetDate: e.target.value };
-                          setProposedPhases(next);
-                        }}
-                        aria-label={`Phase ${idx + 1} target date`}
-                        className="bg-port-card border border-port-border rounded px-1 py-0.5 text-[10px] text-white"
-                      />
-                      <button
-                        onClick={() => setProposedPhases(proposedPhases.filter((_, i) => i !== idx).map((p, i) => ({ ...p, order: i })))}
-                        aria-label="Delete"
-                        className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-600 hover:text-red-400"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
+                    <input
+                      type="date"
+                      value={phase.targetDate}
+                      onChange={e => {
+                        const next = [...proposedPhases];
+                        next[idx] = { ...next[idx], targetDate: e.target.value };
+                        setProposedPhases(next);
+                      }}
+                      aria-label={`Phase ${idx + 1} target date`}
+                      className="min-w-0 max-w-full bg-port-card border border-port-border rounded px-1 py-0.5 text-[10px] text-white"
+                    />
+                    <button
+                      onClick={() => setProposedPhases(proposedPhases.filter((_, i) => i !== idx).map((p, i) => ({ ...p, order: i })))}
+                      aria-label="Delete"
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-600 hover:text-red-400"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
                   </div>
                 </div>
               ))}

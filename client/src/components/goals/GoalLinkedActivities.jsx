@@ -17,7 +17,7 @@ export default function GoalLinkedActivities({
         <div className="space-y-1 mb-2">
           {goal.linkedActivities.map(link => (
             <div key={link.activityName} className="flex items-center gap-2 text-xs">
-              <span className="text-gray-300 flex-1">{link.activityName}</span>
+              <span className="text-gray-300 flex-1 min-w-0 wrap-anywhere">{link.activityName}</span>
               {link.note && <span className="text-gray-600 truncate max-w-[100px]" title={link.note}>{link.note}</span>}
               <button
                 onClick={() => handleUnlinkActivity(link.activityName)}
@@ -44,7 +44,7 @@ export default function GoalLinkedActivities({
             aria-label="Activity"
             value={selectedActivity}
             onChange={e => setSelectedActivity(e.target.value)}
-            className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
+            className="flex-1 min-w-0 w-full truncate bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
           >
             <option value="">Link activity...</option>
             {activities
@@ -54,7 +54,7 @@ export default function GoalLinkedActivities({
           <button
             onClick={handleLinkActivity}
             disabled={!selectedActivity || pendingActions.has('link-activity')}
-            className="px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent disabled:opacity-50"
+            className="shrink-0 px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent disabled:opacity-50"
           >
             Link
           </button>
