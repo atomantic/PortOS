@@ -5,7 +5,7 @@ import { assertFlux2InputsCompatible } from '../../lib/flux2Inputs.js';
 import { FLUX2_VENV_DEFAULT, resolveFlux2Python } from '../../lib/pythonSetup.js';
 import { usesFlux3, usesMinimaxH3Image, usesMossSwift } from '../../lib/imageRuntimeRemedies.js';
 import { isErnie, isFlux2, isHiDream, isQwen } from '../../lib/mediaModels.js';
-import { flux2Bf16BaseRepo, usesDiffusersRunner } from '../../lib/runners.js';
+import { flux2Bf16BaseRepo, flux2RepoRevision, usesDiffusersRunner } from '../../lib/runners.js';
 import { flux3RenderArgs } from './flux3Runtime.js';
 import { minimaxH3ImageRenderArgs } from './minimaxH3ImageRuntime.js';
 import { mossRenderArgs } from './mossRuntime.js';
@@ -82,7 +82,7 @@ const flux2LoraRoute = (model, { loraPaths, referenceImagePaths, referenceImageS
   const modelId = model?.id;
   let repo = model.repo;
   let quantization = model.quantization || 'sdnq';
-  let { tokenizerRepo, basePipelineRepo, kvRepo } = model;
+  let { tokenizerRepo, basePipelineRepo, kvRepo, revision, tokenizerRevision, basePipelineRevision, kvRevision } = model;
   const refImagePaths = referenceImagePaths;
   const refImageStrengths = referenceImageStrengths;
   // LoRA + quantized base is incompatible: PEFT can't inject an adapter into
@@ -100,13 +100,18 @@ const flux2LoraRoute = (model, { loraPaths, referenceImagePaths, referenceImageS
     }
     console.log(`🎚️  flux2 LoRA render → routing ${modelId} (${quantization}) onto bf16 base ${bf16}`);
     repo = bf16;
+    // Pin the rerouted base too; the quantized entry's revisions belong to other repos.
+    revision = flux2RepoRevision(bf16);
+    tokenizerRevision = null;
+    basePipelineRevision = null;
+    kvRevision = null;
     quantization = 'none';
     tokenizerRepo = null;
     basePipelineRepo = null;
     // The rerouted base has no KV sibling; references were refused up front.
     kvRepo = null;
   }
-  return { repo, quantization, tokenizerRepo, basePipelineRepo, kvRepo, refImagePaths, refImageStrengths };
+  return { repo, quantization, tokenizerRepo, basePipelineRepo, kvRepo, revision, tokenizerRevision, basePipelineRevision, kvRevision, refImagePaths, refImageStrengths };
 };
 
 const flux2RenderArgs = (model, inputs) => {
@@ -122,7 +127,7 @@ const flux2RenderArgs = (model, inputs) => {
       { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
     );
   }
-  const { repo, quantization, tokenizerRepo, basePipelineRepo, kvRepo, refImagePaths, refImageStrengths } = flux2LoraRoute(model, inputs);
+  const { repo, quantization, tokenizerRepo, basePipelineRepo, kvRepo, revision, tokenizerRevision, basePipelineRevision, kvRevision, refImagePaths, refImageStrengths } = flux2LoraRoute(model, inputs);
   if (quantization !== 'sdnq' && quantization !== 'int8' && quantization !== 'none') {
     throw new ServerError(
       `FLUX.2 model "${modelId}" has unsupported quantization "${quantization}" (supported: sdnq, int8, none)`,
@@ -168,13 +173,18 @@ const flux2RenderArgs = (model, inputs) => {
     '--seed', String(seed),
     '--output', outputPath,
   ];
+  // Immutable commit pins (absent on user forks, which float on their own revision).
+  if (revision) args.push('--revision', revision);
   if (tokenizerRepo) args.push('--tokenizer-repo', tokenizerRepo);
+  if (tokenizerRepo && tokenizerRevision) args.push('--tokenizer-revision', tokenizerRevision);
   if (basePipelineRepo) args.push('--base-pipeline-repo', basePipelineRepo);
+  if (basePipelineRepo && basePipelineRevision) args.push('--base-pipeline-revision', basePipelineRevision);
   // bf16 multi-reference editing loads the `-kv` sibling repo (whose
   // transformer is tuned for reference editing) instead of `repo`.
   // The runner only uses --kv-repo when --reference-images is also present;
   // the plain text/i2i bf16 path stays on the base repo.
   if (kvRepo) args.push('--kv-repo', kvRepo);
+  if (kvRepo && kvRevision) args.push('--kv-revision', kvRevision);
   if (negativePrompt) args.push('--negative-prompt', negativePrompt);
   if (initImagePath) args.push('--image-path', initImagePath);
   if (initImagePath && initImageStrength != null) args.push('--image-strength', String(initImageStrength));

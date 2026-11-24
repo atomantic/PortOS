@@ -89,7 +89,7 @@ import {
   readVideoDefault,
   resolveVideoBucketKey,
 } from './mediaModelBuckets.js';
-import { RUNNER_FAMILIES } from './runners.js';
+import { RUNNER_FAMILIES, flux2RepoRevision } from './runners.js';
 import { ServerError } from './errorHandler.js';
 import { applyVideoDisclosures } from './videoDisclosure.js';
 import { applyVideoFinishProfiles, sanitizeFinishProfiles } from './videoFinishProfiles.js';
@@ -1138,7 +1138,9 @@ const DEFAULT_REGISTRY = {
       runner: 'flux2',
       quantization: 'sdnq',
       repo: 'Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic',
+      revision: flux2RepoRevision('Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic'),
       tokenizerRepo: 'black-forest-labs/FLUX.2-klein-4B',
+      tokenizerRevision: flux2RepoRevision('black-forest-labs/FLUX.2-klein-4B'),
       steps: 8,
       guidance: 3.5,
       cfgDisabled: true,
@@ -1149,11 +1151,13 @@ const DEFAULT_REGISTRY = {
       runner: 'flux2',
       quantization: 'sdnq',
       repo: 'Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32',
+      revision: flux2RepoRevision('Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32'),
       // KV repo's tokenizer is the same Qwen3 tokenizer as the base 9B repo,
       // but the multi-reference editing path in scripts/ml/flux2_macos.py probes
       // HF auth against this value — pinning to the KV repo means accepting
       // its license once enables both single-ref + multi-ref renders.
       tokenizerRepo: 'black-forest-labs/FLUX.2-klein-9B-kv',
+      tokenizerRevision: flux2RepoRevision('black-forest-labs/FLUX.2-klein-9B-kv'),
       steps: 8,
       guidance: 3.5,
       cfgDisabled: true,
@@ -1164,7 +1168,9 @@ const DEFAULT_REGISTRY = {
       runner: 'flux2',
       quantization: 'int8',
       repo: 'aydin99/FLUX.2-klein-4B-int8',
+      revision: flux2RepoRevision('aydin99/FLUX.2-klein-4B-int8'),
       basePipelineRepo: 'black-forest-labs/FLUX.2-klein-4B',
+      basePipelineRevision: flux2RepoRevision('black-forest-labs/FLUX.2-klein-4B'),
       steps: 8,
       guidance: 3.5,
       cfgDisabled: true,
@@ -1180,12 +1186,14 @@ const DEFAULT_REGISTRY = {
       runner: 'flux2',
       quantization: 'none',
       repo: 'black-forest-labs/FLUX.2-klein-9B',
+      revision: flux2RepoRevision('black-forest-labs/FLUX.2-klein-9B'),
       // Multi-reference editing loads this `-kv` sibling repo instead of the
       // base 9B (its transformer is tuned for the K/V reference-editing task).
       // The plain text/i2i bf16 path stays on `repo`. Same FLUX.2-klein
       // license — accept once at huggingface.co. Threaded to the runner as
       // `--kv-repo`; see scripts/ml/flux2_macos.py.
       kvRepo: 'black-forest-labs/FLUX.2-klein-9B-kv',
+      kvRevision: flux2RepoRevision('black-forest-labs/FLUX.2-klein-9B-kv'),
       steps: 20,
       guidance: 3.5,
       cfgDisabled: true,
@@ -1495,6 +1503,30 @@ const backfillKvRepo = (list) => {
   });
 };
 
+// Commit-pin backfill for persisted FLUX.2 entries: each `<x>Repo` gets its
+// `<x>Revision` only while that repo is still a shipped one with a known pin,
+// so a user fork is never clobbered and an explicit revision (including '') wins.
+const FLUX2_REVISION_FIELDS = [
+  ['repo', 'revision'],
+  ['tokenizerRepo', 'tokenizerRevision'],
+  ['basePipelineRepo', 'basePipelineRevision'],
+  ['kvRepo', 'kvRevision'],
+];
+
+const backfillFlux2Revisions = (list) => {
+  if (!Array.isArray(list)) return list;
+  return list.map((entry) => {
+    if (!isPlainObject(entry) || entry.runner !== RUNNER_FAMILIES.FLUX2) return entry;
+    let next = entry;
+    for (const [repoKey, revKey] of FLUX2_REVISION_FIELDS) {
+      if (revKey in entry) continue;
+      const pin = typeof entry[repoKey] === 'string' ? flux2RepoRevision(entry[repoKey]) : null;
+      if (pin) next = { ...next, [revKey]: pin };
+    }
+    return next;
+  });
+};
+
 export const isFlux2 = (model) => model?.runner === RUNNER_FAMILIES.FLUX2;
 export const isZImage = (model) => model?.runner === RUNNER_FAMILIES.Z_IMAGE;
 export const isErnie = (model) => model?.runner === RUNNER_FAMILIES.ERNIE;
@@ -1747,9 +1779,9 @@ const normalizeRegistry = (parsed) => {
   // (treat as fresh install — let the new entries land).
   const shippedImage = isPlainObject(safe._shippedDefaults?.image) ? safe._shippedDefaults.image : null;
   const isImageBootstrap = shippedImage === null;
-  const upgradedImage = backfillKvRepo(backfillEditOnly(backfillCfgDisabled(
+  const upgradedImage = backfillFlux2Revisions(backfillKvRepo(backfillEditOnly(backfillCfgDisabled(
     upgradeImageEntries(arrayOrDefault(safe.image, DEFAULT_REGISTRY.image)),
-  )));
+  ))));
   // Image bootstrap deliberately uses userIds ONLY (not union with defaults).
   // Image is getting `_shippedDefaults` for the first time in this release, so
   // there's no prior history of deletions to preserve via the union trick the

@@ -110,8 +110,21 @@ export const FLUX2_BF16_BASE_REPOS = Object.freeze({
   '9b': 'black-forest-labs/FLUX.2-klein-9B',
 });
 
+// Immutable Hugging Face commit SHAs for every shipped FLUX.2 repo. A floating `main` would let a compromised or silently re-pushed repo (three are personal community accounts) swap tokenizer/config/quantization maps/weights under every install. Keyed by repo so model entries, the LoRA bf16 reroute and the load-time backfill share one table; bump a SHA only after reviewing the upstream diff.
+export const FLUX2_REPO_REVISIONS = Object.freeze({
+  'Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic': '45e9cc76cb70f84473ce5c6c2e2282d0ef3c6ecd',
+  'Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32': '94ef5985edc982fa93f87df6e1c0faf94d9e9004',
+  'aydin99/FLUX.2-klein-4B-int8': 'f38839c94b597211dea83b1326f1bb4ce4142524',
+  'black-forest-labs/FLUX.2-klein-4B': 'e7b7dc27f91deacad38e78976d1f2b499d76a294',
+  'black-forest-labs/FLUX.2-klein-9B': '1498bcb8aaebb230bae82c34b02ecc4087beebac',
+  'black-forest-labs/FLUX.2-klein-9B-kv': '6c882f3fd7da58b360c43079d32affdc953d8670',
+});
+
 // The bf16 base repo to render a LoRA against for a (quantized or not) FLUX.2 model, from its size variant; null when unknown.
 export const flux2Bf16BaseRepo = (model) => FLUX2_BF16_BASE_REPOS[flux2VariantFromModel(model)] || null;
+
+// Pinned commit for a shipped FLUX.2 repo; null for a user fork / unknown repo (those float unless the entry sets its own revision).
+export const flux2RepoRevision = (repo) => FLUX2_REPO_REVISIONS[repo] || null;
 
 // Encode a (runner family, size variant) pair into the compat-key string the LoRA picker matches on: FLUX.2 with a known size → `flux2-4b` / `flux2-9b`, any family without a variant → the bare family.
 // The ONE place the `<family>-<variant>` convention is written, so the model-side key (loraCompatKey) and LoRA-side key (server/services/loras.js) can't drift; `LoraPicker.familyOf` decodes.
