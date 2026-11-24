@@ -58,6 +58,8 @@ describe('app featurePriorities validation', () => {
       ['a P3 file inside a P0 directory', 'src/a.js', './src/**'],
       ['a repository-wide P3 glob over a P0 directory', '**', 'src/api/**'],
       ['a repository-wide P3 glob with a trailing wildcard', '**/*', 'src/api/**'],
+      ['a P3 directory under a repository-wide P0 glob', 'legacy/**', '**'],
+      ['a P3 directory under a repository-wide P2 glob', 'legacy/**', '**/*'],
       ['a P3 glob with a nested wildcard prefix', 'src/**/*.test.js', 'src/checkout/**'],
     ])('rejects %s', (_name, dormantPath, raisedPath) => {
       const tier = _name.includes('P2') ? 'P2' : 'P0';
