@@ -7,6 +7,7 @@
  *   POST /api/code-animation/brief          write a brief from the universe → { brief }
  *   POST /api/code-animation/prompt         resolve configurations → { prompt, attachments, frame }
  *   POST /api/code-animation/generate       start a provider run → 202 job
+ *   POST /api/code-animation/generate/:id/cancel  cancel an active generation → job
  *   GET  /api/code-animation/jobs           list saved jobs for the gallery
  *   GET  /api/code-animation/jobs/:id/poster   a completed job's gallery poster (JPEG)
  *   POST /api/code-animation/jobs/:id/poster   capture a missing poster → { posterVersion } (null when it could not be drawn)
@@ -34,6 +35,7 @@ import { filmStyleIdSchema } from '../lib/filmStyleGrammarValidation.js';
 import { getFilmStyleGrammar } from '../lib/filmStyleGrammars.js';
 import {
   buildCodeAnimationRequest,
+  cancelCodeAnimationGeneration,
   captureCodeAnimationJobPoster,
   codeAnimationPosterPath,
   deleteCodeAnimationJob,
@@ -226,6 +228,11 @@ router.get('/generate/:id', asyncHandler(async (req, res) => {
   const job = await getCodeAnimationJob(req.params.id);
   if (!job) throw new ServerError('Generation job not found', { status: 404, code: 'NOT_FOUND' });
   res.json(job);
+}));
+
+router.post('/generate/:id/cancel', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(exportParamsSchema, req.params);
+  res.json(await cancelCodeAnimationGeneration(id));
 }));
 
 // Delete a gallery item: its files go to the system Trash, then the row.

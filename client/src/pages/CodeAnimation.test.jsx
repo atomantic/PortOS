@@ -42,6 +42,7 @@ vi.mock('../services/apiCodeAnimation.js', () => ({
   codeAnimationPosterUrl: (id, version) => `/posters/${id}.jpg?v=${version}`,
   requestCodeAnimationPoster: vi.fn(),
   startCodeAnimationGeneration: vi.fn(),
+  cancelCodeAnimationGeneration: vi.fn(),
 }));
 vi.mock('../services/apiMusic.js', () => ({
   listMusicEngines: vi.fn().mockResolvedValue({ engines: [] }),
@@ -91,6 +92,7 @@ import {
   getFilmStyle,
   listFilmStyles,
   startCodeAnimationGeneration,
+  cancelCodeAnimationGeneration,
 } from '../services/apiCodeAnimation.js';
 import { listMoodBoardNames } from '../services/apiMoodBoard.js';
 import { listTracks } from '../services/apiTracks.js';
@@ -625,5 +627,24 @@ describe('Code Animation page', () => {
     expect(screen.getByText('Ambient Drone')).toBeInTheDocument();
     expect(screen.getByText('60.0s')).toBeInTheDocument();
     expect(screen.getByText('Library track')).toBeInTheDocument();
+  });
+
+  it('cancels a running generation from the job view and displays canceled status', async () => {
+    const user = userEvent.setup();
+    let resolveCancel;
+    cancelCodeAnimationGeneration.mockImplementationOnce(() => new Promise((resolve) => { resolveCancel = resolve; }));
+    getCodeAnimationJob.mockResolvedValue(runningJob);
+    await renderPage('/code-animation/job-1');
+
+    const cancelButton = screen.getByRole('button', { name: 'Cancel generation' });
+    expect(cancelButton).toBeEnabled();
+    await user.click(cancelButton);
+    expect(cancelCodeAnimationGeneration).toHaveBeenCalledWith('job-1', { silent: true });
+    expect(screen.getByRole('button', { name: 'Canceling…' })).toBeDisabled();
+
+    await act(async () => resolveCancel({ ...runningJob, status: 'canceled', error: null }));
+    expect(screen.getByText('Generation canceled.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /cancel/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Generate animation' })).toBeEnabled();
   });
 });

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Clock3, FileCode2, ImageOff, LoaderCircle, Sparkles, Trash2 } from 'lucide-react';
+import { AlertTriangle, Ban, CheckCircle2, Clock3, FileCode2, ImageOff, LoaderCircle, Sparkles, Trash2, X } from 'lucide-react';
 import { Link } from 'react-router';
 import useMounted from '../../hooks/useMounted';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
@@ -7,6 +7,7 @@ import { usePagedCollection } from '../../hooks/usePagedCollection';
 import { useSocketSubscription } from '../../hooks/useSocketSubscription';
 import socket from '../../services/socket';
 import {
+  cancelCodeAnimationGeneration,
   codeAnimationPosterUrl,
   deleteCodeAnimationJob,
   listCodeAnimationJobPage,
@@ -20,6 +21,7 @@ import toast from '../ui/Toast';
 const STATUS = {
   running: { icon: Clock3, label: 'In progress', tone: 'text-port-accent' },
   completed: { icon: CheckCircle2, label: 'Completed', tone: 'text-port-success' },
+  canceled: { icon: Ban, label: 'Canceled', tone: 'text-port-warning' },
   failed: { icon: AlertTriangle, label: 'Failed', tone: 'text-port-error' },
 };
 
@@ -27,6 +29,7 @@ function PosterPlaceholder({ item, capturing }) {
   if (item.status === 'running') {
     return <LoaderCircle className="h-8 w-8 animate-spin text-port-accent" aria-hidden="true" />;
   }
+  if (item.status === 'canceled') return <Ban className="h-8 w-8 text-port-warning" aria-hidden="true" />;
   if (item.status === 'failed') return <AlertTriangle className="h-8 w-8 text-port-error" aria-hidden="true" />;
   if (capturing) {
     return (
@@ -38,7 +41,7 @@ function PosterPlaceholder({ item, capturing }) {
   return <ImageOff className="h-8 w-8 text-gray-600" aria-hidden="true" />;
 }
 
-function GalleryCard({ item, capturing, confirming, deleting, onRequestDelete, onCancelDelete, onConfirmDelete }) {
+function GalleryCard({ item, capturing, canceling, confirming, deleting, onCancel, onRequestDelete, onCancelDelete, onConfirmDelete }) {
   const status = STATUS[item.status] || STATUS.failed;
   const StatusIcon = status.icon;
   const title = item.title || 'Untitled animation';
@@ -66,7 +69,15 @@ function GalleryCard({ item, capturing, confirming, deleting, onRequestDelete, o
           </div>
         </div>
       </Link>
-      {/* A generating animation can't be deleted until it finishes. */}
+      {item.status === 'running' && (
+        <button type="button" onClick={() => onCancel(item)} disabled={canceling}
+          aria-label={`Cancel ${title}`}
+          title={`Cancel ${title}`}
+          className="port-media-overlay absolute right-2 top-2 inline-flex h-11 w-11 items-center justify-center rounded-lg text-gray-200 hover:text-port-warning disabled:opacity-40">
+          {canceling ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <X className="h-4 w-4" aria-hidden="true" />}
+        </button>
+      )}
+      {/* A generating animation can't be deleted until it finishes or is canceled. */}
       {item.status !== 'running' && !confirming && (
         <button type="button" onClick={() => onRequestDelete(item.id)} disabled={deleting}
           aria-label={`Delete ${title}`}
@@ -137,7 +148,18 @@ export default function CodeAnimationGallery() {
   }, [items, setItems, mounted]);
 
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
+  const [canceling, setCanceling] = useState(() => new Set());
   const [deleting, setDeleting] = useState(() => new Set());
+  const handleCancel = async (item) => {
+    setCanceling((previous) => new Set(previous).add(item.id));
+    const canceled = await cancelCodeAnimationGeneration(item.id, { silent: true })
+      .catch((error) => { toast.error(error.message || 'Could not cancel the animation'); return null; });
+    if (!mounted.current) return;
+    setCanceling((previous) => { const next = new Set(previous); next.delete(item.id); return next; });
+    if (!canceled) return;
+    setItems((previous) => previous.map((entry) => (entry.id === item.id ? { ...entry, status: canceled.status || 'canceled' } : entry)));
+    toast.success(`Canceled ${item.title || 'the animation'}`);
+  };
   const handleDelete = (item) => confirmDelete(async () => {
     setDeleting((previous) => new Set(previous).add(item.id));
     const done = await deleteCodeAnimationJob(item.id, { silent: true })
@@ -174,8 +196,8 @@ export default function CodeAnimationGallery() {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
           {items.map((item) => (
             <GalleryCard key={item.id} item={item} capturing={capturing.has(item.id)}
-              confirming={isConfirming(item.id)} deleting={deleting.has(item.id)}
-              onRequestDelete={requestDelete} onCancelDelete={cancelDelete} onConfirmDelete={handleDelete} />
+              canceling={canceling.has(item.id)} confirming={isConfirming(item.id)} deleting={deleting.has(item.id)}
+              onCancel={handleCancel} onRequestDelete={requestDelete} onCancelDelete={cancelDelete} onConfirmDelete={handleDelete} />
           ))}
         </div>
       )}
