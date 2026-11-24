@@ -36,6 +36,23 @@ describe('PrivacyOverviewTab', () => {
     });
   });
 
+  it('shows per-read errors and retries to genuine empty summaries', async () => {
+    const failure = new Error('Unavailable');
+    api.getPrivacyStatus.mockRejectedValueOnce(failure).mockResolvedValue({ keyConfigured: false, recordCounts: {} });
+    api.getPrivacyOrgs.mockRejectedValueOnce(failure).mockResolvedValue([]);
+    api.getPrivacyScanStatus.mockRejectedValueOnce(failure).mockResolvedValue({ enabledBrokers: 0, caseCounts: {} });
+    render(<PrivacyOverviewTab />);
+
+    expect(await screen.findAllByRole('alert')).toHaveLength(3);
+    expect(screen.queryByText(/No records yet|None tracked yet|no scan run yet|Engaged/)).toBeNull();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Retry' })[0]);
+
+    expect(await screen.findByText('No records yet')).toBeInTheDocument();
+    expect(screen.getByText('None tracked yet')).toBeInTheDocument();
+    expect(screen.getByText(/no scan run yet/)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('renders a single-sentence intro paragraph', async () => {
     render(<PrivacyOverviewTab />);
     await waitFor(() => expect(screen.getByText('Vault values stay hidden until you reveal them.')).toBeInTheDocument());

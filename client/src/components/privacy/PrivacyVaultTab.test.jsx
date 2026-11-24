@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({
   getVaultRecords: vi.fn(),
@@ -68,6 +68,20 @@ describe('PrivacyVaultTab website logins (#17397)', () => {
     loginSectionMounts.length = 0;
     api.getPrivacyStatus.mockResolvedValue({ keyConfigured: true });
     api.getVaultRecords.mockResolvedValue([]);
+  });
+
+  it('keeps encryption and records unknown after failed reads, then renders empty on retry', async () => {
+    api.getPrivacyStatus.mockRejectedValueOnce(new Error('Unavailable'));
+    api.getVaultRecords.mockRejectedValueOnce(new Error('Unavailable'));
+    render(<PrivacyVaultTab />);
+
+    expect(await screen.findAllByRole('alert')).toHaveLength(2);
+    expect(screen.queryByText(/Encryption engaged|No vault records yet/)).toBeNull();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Retry' })[0]);
+
+    expect(await screen.findByText(/No vault records yet/)).toBeInTheDocument();
+    expect(screen.getByText('Encryption engaged')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('remounts the Website logins section per subject so no state crosses scopes', async () => {

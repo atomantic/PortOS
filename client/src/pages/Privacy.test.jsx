@@ -99,6 +99,7 @@ import {
   getVaultRecords,
   getWebsiteLogins,
   getPrivacyStatus,
+  getPrivacyChanges,
   getPrivacySubjects,
   createPrivacySubject,
 } from '../services/apiPrivacy.js';
@@ -119,6 +120,20 @@ describe('Privacy Center', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getPrivacySubjects.mockResolvedValue(SUBJECTS);
+  });
+
+  it('shows both Changes read errors and recovers the empty state on retry', async () => {
+    getPrivacyChanges.mockRejectedValueOnce(new Error('Unavailable')).mockResolvedValueOnce([]);
+    getVaultRecords.mockRejectedValueOnce(new Error('Unavailable'));
+    renderAt('/privacy/changes');
+
+    expect(await screen.findAllByRole('alert')).toHaveLength(2);
+    expect(screen.queryByText(/No changes declared yet/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Declare change' })).toBeDisabled();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Retry' })[0]);
+
+    expect(await screen.findByText(/No changes declared yet/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Declare change' })).toBeEnabled();
   });
 
   it('renders the Overview tab with encryption status and counts', async () => {
@@ -201,13 +216,13 @@ describe('Privacy Center', () => {
       const select = await screen.findByLabelText('Subject');
       expect(select).toHaveValue(SELF_ID);
       expect(screen.getByRole('option', { name: /Alex · Partner/ })).toBeInTheDocument();
-      expect(getVaultRecords).toHaveBeenCalledWith(undefined, { subjectId: SELF_ID });
+      expect(getVaultRecords).toHaveBeenCalledWith(undefined, { subjectId: SELF_ID, silent: true });
     });
 
     it('scopes every read to the subject named in the URL', async () => {
       renderAt('/privacy/vault?subject=sub-2');
-      await waitFor(() => expect(getVaultRecords).toHaveBeenCalledWith(undefined, { subjectId: 'sub-2' }));
-      expect(getPrivacyStatus).toHaveBeenCalledWith({ subjectId: 'sub-2' });
+      await waitFor(() => expect(getVaultRecords).toHaveBeenCalledWith(undefined, { subjectId: 'sub-2', silent: true }));
+      expect(getPrivacyStatus).toHaveBeenCalledWith({ subjectId: 'sub-2', silent: true });
       await waitFor(() => expect(getWebsiteLogins).toHaveBeenCalledWith({ subjectId: 'sub-2', silent: true }));
     });
 
@@ -221,7 +236,7 @@ describe('Privacy Center', () => {
       renderAt('/privacy/vault');
       await waitFor(() => screen.getByLabelText('Subject'));
       fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'sub-2' } });
-      await waitFor(() => expect(getVaultRecords).toHaveBeenCalledWith(undefined, { subjectId: 'sub-2' }));
+      await waitFor(() => expect(getVaultRecords).toHaveBeenCalledWith(undefined, { subjectId: 'sub-2', silent: true }));
       expect(screen.getByLabelText('Subject')).toHaveValue('sub-2');
     });
 
