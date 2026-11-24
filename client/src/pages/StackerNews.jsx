@@ -379,12 +379,15 @@ export default function StackerNews() {
     if (!selected) return;
     const isPost = draft.kind.endsWith('_post');
     const isComment = draft.kind.endsWith('_comment');
+    const isBrowserHandoff = draft.kind === 'open_browser';
+    const needsTerritory = isPost || (isBrowserHandoff && draft.destination === 'territory_settings');
+    const needsItem = isComment || (isBrowserHandoff && draft.destination === 'item');
     const data = {
       accountId: selected.id,
       kind: draft.kind,
-      ...(isPost || draft.destination === 'territory_settings' ? { territoryId: draft.territoryId } : {}),
-      ...(isComment || draft.destination === 'item' ? { itemId: draft.itemId } : {}),
-      ...(draft.kind === 'open_browser' ? { destination: draft.destination, payload: draft.destination === 'item' ? { intent: draft.intent } : {} } : {}),
+      ...(needsTerritory && draft.territoryId ? { territoryId: draft.territoryId } : {}),
+      ...(needsItem && draft.itemId ? { itemId: draft.itemId } : {}),
+      ...(isBrowserHandoff ? { destination: draft.destination, payload: draft.destination === 'item' ? { intent: draft.intent } : {} } : {}),
       ...(isPost ? { payload: { title: draft.title, body: draft.body } } : {}),
       ...(isComment ? { payload: { body: draft.body } } : {}),
     };

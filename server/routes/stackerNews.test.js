@@ -58,6 +58,22 @@ describe('Stacker News routes', () => {
     expect(stackerNews.createAction).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['draft_post', { territoryId: '10000000-0000-4000-8000-000000000002', payload: { title: 'New post', body: 'Post body' } }],
+    ['publish_post', { territoryId: '10000000-0000-4000-8000-000000000002', payload: { title: 'New post', body: 'Post body' } }],
+    ['draft_comment', { itemId: '10000000-0000-4000-8000-000000000003', payload: { body: 'Comment body' } }],
+    ['publish_comment', { itemId: '10000000-0000-4000-8000-000000000003', payload: { body: 'Comment body' } }],
+  ])('accepts a %s with only its own target', async (kind, fields) => {
+    const data = { accountId: '10000000-0000-4000-8000-000000000001', kind, ...fields };
+    stackerNews.createAction.mockResolvedValueOnce({ ...data, id: 'queued-action', state: 'pending_review' });
+
+    const response = await request(app).post('/api/stacker-news/actions').send(data);
+
+    expect(response.status).toBe(201);
+    expect(stackerNews.createAction).toHaveBeenCalledExactlyOnceWith(data);
+    expect(response.body).toMatchObject({ id: 'queued-action', state: 'pending_review' });
+  });
+
   it('accepts only named manual item handoff intents', async () => {
     stackerNews.createAction.mockResolvedValue({ id: 'action', accountId: '00000000-0000-4000-8000-000000000001' });
     const accepted = await request(app).post('/api/stacker-news/actions').send({
