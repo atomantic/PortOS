@@ -325,9 +325,14 @@ export default function LegacyReviewSection({
   briefing,
   filter,
   onFilterChange,
+  pendingItems: pendingRows,
+  page,
+  onPageChange,
   loading,
   error,
   onRetry,
+  pendingError,
+  onRetryPending,
 }) {
   const [editingId, setEditingId] = useState(null);
 
@@ -368,7 +373,7 @@ export default function LegacyReviewSection({
     return acc;
   }, {}), [visibleItems]);
 
-  const pendingItems = useMemo(() => items.filter(i => i.status === 'pending'), [items]);
+  const pendingItems = useMemo(() => pendingRows.filter(i => i.status === 'pending'), [pendingRows]);
   const showBriefing = Boolean(briefing && briefing.source !== 'none');
   const genericCompletableCount = pendingItems.filter(isGenericCompletableItem).length;
 
@@ -386,6 +391,7 @@ export default function LegacyReviewSection({
   const topActionItems = actionableItems.slice(0, 8);
   const pendingCount = pendingItems.length;
   const remainingActionCount = Math.max(0, actionableItems.length - topActionItems.length);
+  const lastPageOffset = page ? Math.floor(Math.max(0, page.total - 1) / page.limit) * page.limit : 0;
 
   return (
     <>
@@ -457,7 +463,7 @@ export default function LegacyReviewSection({
               />
             ))}
           </div>
-          {remainingActionCount > 0 && (
+          {remainingActionCount > 0 && filter === 'pending' && (
             <p className="text-xs text-gray-500">
               {formatCount(remainingActionCount)} more actionable item{remainingActionCount !== 1 ? 's' : ''} below.
             </p>
@@ -472,6 +478,37 @@ export default function LegacyReviewSection({
         <p role="alert" className="text-sm text-port-warning">
           Stored review items are unavailable. <button onClick={onRetry} className="underline">Retry</button>
         </p>
+      )}
+      {pendingError && (
+        <p role="alert" className="text-sm text-port-warning">
+          Pending actions are unavailable. <button onClick={onRetryPending} className="underline">Retry</button>
+        </p>
+      )}
+
+      {page && (page.offset > 0 || page.total > page.limit) && (
+        <nav aria-label="Stored review pages" className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={page.offset === 0}
+            onClick={() => onPageChange(Math.min(page.offset - page.limit, lastPageOffset))}
+            className="rounded-lg border border-port-border bg-port-card px-3 py-2 text-sm hover:border-port-accent disabled:opacity-40"
+          >
+            Previous page
+          </button>
+          <button
+            type="button"
+            disabled={page.offset + page.limit >= page.total}
+            onClick={() => onPageChange(page.offset + page.limit)}
+            className="rounded-lg border border-port-border bg-port-card px-3 py-2 text-sm hover:border-port-accent disabled:opacity-40"
+          >
+            Next page
+          </button>
+          {items.length > 0 && (
+            <span className="text-sm text-port-text-muted">
+              {formatCount(page.offset + 1)}–{formatCount(page.offset + items.length)} of {formatCount(page.total)}
+            </span>
+          )}
+        </nav>
       )}
 
       {/* Detailed sections — tiled two-up on wide screens so the per-type

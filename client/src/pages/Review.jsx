@@ -54,6 +54,7 @@ const queueItemKey = (itemOrId) => {
 };
 
 const REVIEW_ITEM_EVENTS = ['review:item:created', 'review:item:updated', 'review:item:deleted', 'review:items:bulk-updated'];
+const REVIEW_HISTORY_PAGE_SIZE = 50;
 const EMPTY_ITEMS = [];
 
 export default function Review() {
@@ -65,6 +66,7 @@ export default function Review() {
   const [briefing, setBriefing] = useState(null);
   const [newTodo, setNewTodo] = useState('');
   const [filter, setFilter] = useState('pending');
+  const [offset, setOffset] = useState(0);
 
   // Cross-domain live queue (M42 P5). Source payloads remain live projections;
   // presentation decisions are durable server-side markers keyed by the row's
@@ -102,13 +104,24 @@ export default function Review() {
   // rendering the old lists as well would show the same obligation twice.
   const showLegacyReviewSurface = queue && !queueError && queueItems.length === 0 && queueSourceErrors.length === 0 && !queue.partial;
 
-  // The stored list is keyed by the status filter; global counts are one read independent of it.
-  // Gate legacy item fetching and socket subscriptions on the fallback surface being active.
-  const { data: itemsData, loading, error: itemsError, refetch: fetchItems } = useSocketResource(
-    () => getReviewItems(filter === 'all' ? {} : { status: filter }, { silent: true }),
-    { events: REVIEW_ITEM_EVENTS, resourceKey: filter, enabled: Boolean(showLegacyReviewSurface) }
+  const paged = filter !== 'pending';
+  const history = useSocketResource(
+    ({ signal }) => getReviewItems({
+      ...(filter === 'all' ? {} : { status: filter }),
+      limit: REVIEW_HISTORY_PAGE_SIZE,
+      offset,
+    }, { silent: true, signal }),
+    { events: REVIEW_ITEM_EVENTS, resourceKey: `${filter}:${offset}`, enabled: Boolean(showLegacyReviewSurface && paged) }
   );
-  const items = itemsData ?? EMPTY_ITEMS;
+  // The All list is paged, but triage and bulk actions still cover every pending row.
+  const pending = useSocketResource(
+    ({ signal }) => getReviewItems({ status: 'pending' }, { silent: true, signal }),
+    { events: REVIEW_ITEM_EVENTS, enabled: Boolean(showLegacyReviewSurface && (!paged || filter === 'all')) }
+  );
+  const list = paged ? history : pending;
+  const page = paged ? history.data : null;
+  const items = (paged ? page?.items : pending.data) ?? EMPTY_ITEMS;
+  const pendingItems = (!paged || filter === 'all' ? pending.data : null) ?? EMPTY_ITEMS;
   const { data: counts } = useSocketResource(() => getReviewCounts({ silent: true }), { events: REVIEW_ITEM_EVENTS });
 
   useEffect(() => {
@@ -221,7 +234,7 @@ export default function Review() {
     updateParams({ view });
   };
 
-  const pendingCount = useMemo(() => items.filter(i => i.status === 'pending').length, [items]);
+  const pendingCount = counts?.total ?? 0;
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -344,10 +357,18 @@ export default function Review() {
               counts={counts}
               briefing={briefing}
               filter={filter}
-              onFilterChange={setFilter}
-              loading={loading}
-              error={itemsError}
-              onRetry={fetchItems}
+              onFilterChange={(status) => {
+                setFilter(status);
+                setOffset(0);
+              }}
+              pendingItems={pendingItems}
+              page={page}
+              onPageChange={setOffset}
+              loading={list.loading}
+              error={list.error}
+              onRetry={list.refetch}
+              pendingError={filter === 'all' ? pending.error : null}
+              onRetryPending={pending.refetch}
             />
           )}
         </div>

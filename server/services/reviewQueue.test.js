@@ -14,6 +14,7 @@ const proactiveAlerts = { generateNonProductAlerts: vi.fn(), resolveHealthAlert:
 const productMetrics = { getProductEngagement: vi.fn() };
 const backup = { getState: vi.fn(), saveState: vi.fn() };
 const settingsMock = { getSettings: vi.fn() };
+const storedItems = vi.fn();
 const reviewService = { reviewEvents: { emit: vi.fn() }, getItems: vi.fn(), dismissByReferenceId: vi.fn(), dismissItem: vi.fn(), completeItem: vi.fn(), reopenItem: vi.fn() };
 const notifications = { getNotifications: vi.fn(), removeNotification: vi.fn(), removeByMetadata: vi.fn() };
 const memoryService = { approveMemory: vi.fn(), rejectMemory: vi.fn() };
@@ -99,7 +100,12 @@ function resetEmpty() {
   proactiveAlerts.generateNonProductAlerts.mockResolvedValue([]);
   productMetrics.getProductEngagement.mockResolvedValue({ actions: [] });
   backup.getState.mockResolvedValue({ status: 'ok', error: null });
-  reviewService.getItems.mockResolvedValue([]);
+  storedItems.mockReturnValue([]);
+  reviewService.getItems.mockImplementation(async ({ status, type, matches, limit } = {}) => {
+    const items = storedItems().filter(item =>
+      (!status || item.status === status) && (!type || item.type === type) && (!matches || matches(item)));
+    return limit === undefined ? items : { items: items.slice(0, limit), total: items.length };
+  });
   reviewService.dismissByReferenceId.mockResolvedValue([]);
   reviewService.completeItem.mockResolvedValue({ id: 'todo-1', status: 'completed' });
   reviewService.reopenItem.mockResolvedValue({ id: 'todo-1', status: 'pending' });
@@ -467,7 +473,7 @@ describe('reviewQueue.buildQueue', () => {
       { id: 'thread-local', title: 'Local commitment', status: 'open' },
       { id: 'thread-done', title: 'Finished loop', status: 'done' },
     ]);
-    reviewService.getItems.mockResolvedValue([
+    storedItems.mockReturnValue([
       { id: 'todo-1', type: 'todo', title: 'Call the example office', status: 'pending', createdAt: '2026-09-20T09:00:00.000Z' },
     ]);
 
@@ -567,7 +573,7 @@ describe('reviewQueue.buildQueue', () => {
       { id: 'thread-done', title: 'Finished loop', status: 'done', updatedAt: '2026-09-20T10:00:00.000Z' },
       { id: 'thread-open', title: 'Open loop', status: 'open' },
     ]);
-    reviewService.getItems.mockResolvedValue([
+    storedItems.mockReturnValue([
       { id: 'todo-done', type: 'todo', title: 'Completed personal item', status: 'completed', updatedAt: '2026-09-20T09:00:00.000Z' },
       { id: 'alert-done', type: 'alert', title: 'Past alert', status: 'dismissed', updatedAt: '2026-09-20T08:00:00.000Z' },
     ]);
@@ -580,6 +586,31 @@ describe('reviewQueue.buildQueue', () => {
     ]);
     expect(history.items.find((item) => item.id === 'todo:todo-done').operations)
       .toEqual([{ id: 'reopen', label: 'Reopen', available: true }]);
+  });
+
+  it('bounds stored history after excluding pending rows and manual todos', async () => {
+    const historyRows = Array.from({ length: REVIEW_QUEUE_SOURCE_READ_LIMIT + 2 }, (_, index) => ({
+      id: `alert-${index}`, type: 'alert', title: 'Past alert', status: 'completed',
+    }));
+    storedItems.mockReturnValue([
+      { id: 'pending', type: 'alert', status: 'pending' },
+      { id: 'manual', type: 'todo', status: 'completed' },
+      ...historyRows,
+    ]);
+
+    const queue = await buildQueue({ query: { view: 'history' } });
+
+    expect(reviewService.getItems).toHaveBeenCalledWith({
+      matches: expect.any(Function),
+      limit: REVIEW_QUEUE_SOURCE_READ_LIMIT + 1,
+    });
+    expect(queue.sources.history).toMatchObject({
+      total: null,
+      truncation: true,
+      lowerBound: REVIEW_QUEUE_SOURCE_READ_LIMIT,
+    });
+    expect(queue.items.filter(item => item.source === 'history').map(item => item.id).sort())
+      .toEqual(historyRows.slice(0, REVIEW_QUEUE_SOURCE_READ_LIMIT).map(item => `history:${item.id}`).sort());
   });
 
   it('surfaces pending Stacker News approvals with an account-specific drill-down', async () => {
@@ -675,7 +706,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('adapts stored obligations and notifications, deduplicating only proven references', async () => {
-    reviewService.getItems.mockResolvedValue([
+    storedItems.mockReturnValue([
       {
         id: 'review-memory',
         type: 'alert',
