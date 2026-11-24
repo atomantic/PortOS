@@ -3,8 +3,9 @@ vi.mock('./fleetLlmStartup.js', () => ({
   isFleetHostLoginTaskInstalled: async () => true,
   removeFleetHostLoginTask: async () => { state.loginTaskRemoved = true; return { success: true }; },
 }));
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const state = vi.hoisted(() => ({ providers: [], writes: [], enabled: '', loginTaskRemoved: false, specs: { platform: 'win32', cuda: { gpus: [{ name: 'NVIDIA RTX 3090', vramGb: 24 }] } }, servedModels: ['qwen3.8-27b'], peers: [], peerResponses: new Map() }));
+const state = vi.hoisted(() => ({ providers: [], writes: [], chmods: [], enabled: '', loginTaskRemoved: false, specs: { platform: 'win32', cuda: { gpus: [{ name: 'NVIDIA RTX 3090', vramGb: 24 }] } }, servedModels: ['qwen3.8-27b'], peers: [], peerResponses: new Map() }));
 // The usage ledger has its own suite and its own disk; here it would only pull
 // `readJSONFile` into the narrow `fileUtils` double this file already declares.
 vi.mock('./fleetLlmUsage.js', () => ({
@@ -28,7 +29,10 @@ vi.mock('../lib/systemCapabilities.js', () => ({ detectSystemCapabilities: async
 vi.mock('../lib/cudaCapability.js', () => ({ getCudaUtilization: async () => ({ gpus: [{ memoryUsedMib: 1000 }] }) }));
 vi.mock('../lib/tailscale.js', () => ({ getTailscaleStatus: async () => ({ running: true, dnsName: 'host-XXXX.example.ts.net' }) }));
 vi.mock('../lib/fileUtils.js', () => ({ PATHS: { root: '/example' }, atomicWrite: async (path, value) => state.writes.push({ path, value }), tryReadFile: async () => state.enabled }));
-vi.mock('node:fs/promises', () => ({ readFile: async () => { if (state.readError) throw state.readError; return 'VLLM_API_KEY=example-api-key-with-32-characters\n'; } }));
+vi.mock('node:fs/promises', () => ({
+  readFile: async () => { if (state.readError) throw state.readError; return 'VLLM_API_KEY=example-api-key-with-32-characters\n'; },
+  chmod: async (path, mode) => { state.chmods.push({ path, mode }); },
+}));
 vi.mock('../lib/portosEnv.js', async (original) => {
   const env = await original();
   return { ...env, upsertPortosEnvLine: async (key, value) => { state.enabled = env.upsertEnvLine(state.enabled, key, value); } };
@@ -42,7 +46,7 @@ vi.mock('./provider/providers.js', () => ({ getAllProviders: async () => ({ prov
 vi.mock('./fleetLlmGateway.js', () => ({ createFleetLlmGateway: () => ({ server: { once(_evt, fail) { this.fail = fail; }, on() {}, listen(_port, _host, done) { if (state.listenError) this.fail(state.listenError); else done(); } }, status: () => ({ active: 0, queued: 0 }), close: async () => {} }) }));
 import { configureFleetLlmHost, describeFleetHostError, disableFleetLlmHost, startFleetLlmHost, getFleetLlmHostStatus, getFleetPeerHosts, revealFleetPeerHostKey, stopFleetLlmHost } from './fleetLlmHost.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
-beforeEach(async () => { await stopFleetLlmHost(); state.writes = []; state.enabled = ''; state.loginTaskRemoved = false; state.providers = []; state.servedModels = ['qwen3.8-27b']; state.peers = []; state.peerResponses.clear(); vi.clearAllMocks(); });
+beforeEach(async () => { await stopFleetLlmHost(); state.writes = []; state.chmods = []; state.enabled = ''; state.loginTaskRemoved = false; state.providers = []; state.servedModels = ['qwen3.8-27b']; state.peers = []; state.peerResponses.clear(); vi.clearAllMocks(); });
 describe('dedicated host setup workflow', () => {
   it('pins the prepared image, keeps the runtime private and routes only local providers through the queue', async () => {
     state.providers = [
@@ -53,6 +57,7 @@ describe('dedicated host setup workflow', () => {
     await expect(configureFleetLlmHost()).resolves.toEqual({ success: true });
     expect(state.writes.find(w => w.path.endsWith('.yaml')).value).toContain('127.0.0.1:18020:18020');
     expect(state.writes.find(w => w.path.endsWith('.yaml')).value).toContain('image: sha256:');
+    expect(state.chmods).toContainEqual({ path: join('/example', '.env'), mode: 0o600 });
     expect(runStreamingCommand.mock.calls.at(-1)[1]).toEqual(expect.arrayContaining(['--no-build', '--pull', 'never']));
     expect(state.providers[0].endpoint).toBe('http://127.0.0.1:18022/v1');
     expect(state.providers[1]).toMatchObject({ endpoint: 'http://host-XXXX.example.ts.net:18020/v1', apiKey: 'remote-secret' });

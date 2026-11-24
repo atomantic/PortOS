@@ -1,6 +1,6 @@
 import { noteFleetHostChanged } from './fleetHostSignal.js';
 import { join } from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { chmod, readFile } from 'node:fs/promises';
 import { detectSystemCapabilities } from '../lib/systemCapabilities.js';
 import { getCudaUtilization } from '../lib/cudaCapability.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
@@ -331,9 +331,13 @@ async function configure({ emit, isCancelled }) {
       throw new Error(`Another application is holding GPU memory. Unload its model${page ? ` on ${page}` : ''}, then retry.`);
     }
   }
-  let contents = await readFile(join(project.dir, '.env'), 'utf8');
+  const envPath = join(project.dir, '.env');
+  let contents = await readFile(envPath, 'utf8');
   for (const [key, value] of [['SPEC', 'dflash2'], ['PREFIX_CACHE', '1'], ['MAX_SEQS', '1']]) contents = upsertEnvLine(contents, key, value);
-  await atomicWrite(join(project.dir, '.env'), contents);
+  await atomicWrite(envPath, contents);
+  await chmod(envPath, 0o600).catch((err) => {
+    if (err?.code !== 'ENOENT') console.log(`⚠️ Could not set permissions on vLLM .env (${err?.code || 'error'})`);
+  });
   // !override replaces the public mapping, rather than appending another.
   const composeText = await commandOutput('docker', ['compose', '-f', project.composeFile, '--profile', 'single', 'config', '--format', 'json'], { cwd: project.dir, env: { ...process.env, PORT: String(PORTS.VLLM_QWEN) }, timeoutMs: 10000 });
   const compose = JSON.parse(composeText || '{}');
