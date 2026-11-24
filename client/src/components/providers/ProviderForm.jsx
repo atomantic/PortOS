@@ -14,6 +14,7 @@ import ProviderConnectionTab from './ProviderConnectionTab';
 import ProviderModelsTab from './ProviderModelsTab';
 import ProviderGenerationTab from './ProviderGenerationTab';
 import ProviderEnvironmentTab from './ProviderEnvironmentTab';
+import { getHarnessContextTarget, harnessContextError, harnessContextPayload } from './harnessContextForm.js';
 
 // The provider editor's Drawer tabs. `connection` is the default, so a bare
 // /ai/edit/:providerId deep link opens on the identity/transport fields; the
@@ -29,6 +30,7 @@ const PROVIDER_FORM_TAB_IDS = PROVIDER_FORM_TABS.map(t => t.id);
 export default function ProviderForm({ provider, daemonReadiness = null, onClose, onSave, onEditProvider, allProviders = [], localModels = { ollama: [], lmstudio: [], ctxById: {}, hardwareCompatibilityByBackend: {} }, runnerAllowedCommands = null }) {
   const [modelsText, setModelsText] = useState(() => providerModelCatalog(provider).join(', '));
   const [formData, setFormData] = useState(() => initialProviderFormData(provider));
+  const [harnessContextDraft, setHarnessContextDraft] = useState(null);
 
   const [activeTab, setActiveTab] = useDrawerTab('providerTab', 'connection', PROVIDER_FORM_TAB_IDS);
   // Preset structure (#7565). A DERIVED preset takes its program, endpoint,
@@ -118,8 +120,22 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
   // `capabilityProvider` for the same reason `showsNumCtx` does: `llamaBacked`
   // and friends are record markers, not form fields.
   const generationControls = generationControlsFor(capabilityProvider);
+  const harnessTarget = getHarnessContextTarget(capabilityProvider);
+  const editingHarnessContext = harnessTarget && harnessContextDraft?.key === harnessTarget.key;
+  const harnessContext = editingHarnessContext ? harnessContextDraft.value : harnessTarget?.value;
+  const servedHarnessContext = daemonReadiness?.contextWindows?.[harnessTarget?.model]
+    ?? daemonReadiness?.contextWindows?.[harnessTarget?.id] ?? null;
 
-  const [handleSubmit, saving] = useAsyncAction(async (e) => {
+  const [save, saving] = useAsyncAction(async (data) => {
+    try {
+      await (provider ? updateProvider(provider.id, data) : createProvider(data));
+    } catch {
+      return; // The request helper toasted it; the form stays open with the edits.
+    }
+    onSave();
+  });
+
+  const handleSubmit = (e) => {
     e.preventDefault();
 
     const invalid = findProviderFormError({ formData, createsModePair, showsNumCtx, generationControls });
@@ -129,14 +145,18 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
       return;
     }
 
-    const data = buildProviderPayload({ provider, formData, modelsText, showsNumCtx, generationControls, createsModePair, tuiArgs });
-    try {
-      await (provider ? updateProvider(provider.id, data) : createProvider(data));
-    } catch {
-      return; // The request helper toasted it; the form stays open with the edits.
+    if (editingHarnessContext) {
+      const error = harnessContextError(harnessTarget, harnessContext);
+      if (error) {
+        setActiveTab('generation');
+        toast.error(error);
+        return;
+      }
     }
-    onSave();
-  });
+    const data = buildProviderPayload({ provider, formData, modelsText, showsNumCtx, generationControls, createsModePair, tuiArgs });
+    if (editingHarnessContext) data.harnessContext = harnessContextPayload(harnessTarget, harnessContext);
+    save(data);
+  };
 
   return (
     <Drawer
@@ -207,6 +227,10 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
               formData={formData}
               setFormData={setFormData}
               capabilityProvider={capabilityProvider}
+              harnessTarget={harnessTarget}
+              harnessContext={harnessContext}
+              setHarnessContext={(value) => setHarnessContextDraft({ key: harnessTarget.key, value })}
+              servedHarnessContext={servedHarnessContext}
               showsNumCtx={showsNumCtx}
               generationControls={generationControls}
             />
@@ -216,6 +240,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
             <ProviderEnvironmentTab
               formData={formData}
               setFormData={setFormData}
+              onEditHarnessContext={harnessTarget ? () => setActiveTab('generation') : null}
               newEnvKey={newEnvKey}
               setNewEnvKey={setNewEnvKey}
               newEnvValue={newEnvValue}

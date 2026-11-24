@@ -90,9 +90,12 @@ function RemoteBranchRow({ rb, actions }) {
 
 // Remote branches with checkout-locally and delete, plus the remote side of
 // the shared merged-branch cleanup (only one cleanup confirm shows at a time).
-export default function RemoteBranchesPanel({ remoteBranches, remoteBranchesError, loadingRemote, onRefresh, actions }) {
+export default function RemoteBranchesPanel({ remoteBranches, remoteBranchesError, loadingRemote, onRefresh, localWorktreeMergedCount = 0, actions }) {
   const { cleaningUp, cleanupConfirm, setCleanupConfirm, handleCleanupMerged } = actions;
   const mergedBranchCount = remoteBranches.filter(rb => rb.merged && !rb.isDefault && !rb.isProtected).length;
+  const cleanupTitle = localWorktreeMergedCount > 0
+    ? `Deletes merged branches locally and on the remote, removing the ${localWorktreeMergedCount} worktree${localWorktreeMergedCount === 1 ? '' : 's'} holding one — unless it still has uncommitted or unmerged work, or is in use`
+    : 'Deletes merged branches both locally and on the remote';
 
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-4">
@@ -109,6 +112,7 @@ export default function RemoteBranchesPanel({ remoteBranches, remoteBranchesErro
             <button
               onClick={() => setCleanupConfirm('remote')}
               disabled={!!cleaningUp}
+              title={cleanupTitle}
               className={`flex items-center gap-1 text-xs ${touchBtnCls} text-port-warning hover:text-port-error disabled:opacity-50`}
             >
               <Trash2 size={12} />
@@ -120,10 +124,14 @@ export default function RemoteBranchesPanel({ remoteBranches, remoteBranchesErro
               <button
                 onClick={() => handleCleanupMerged()}
                 disabled={!!cleaningUp}
-                title="Deletes merged branches both locally and on the remote"
+                title={cleanupTitle}
                 className={`px-2 py-1 ${touchBtnCls} text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30 disabled:opacity-50`}
               >
-                {cleaningUp === true ? 'Deleting...' : 'Delete all merged (local + remote)'}
+                {cleaningUp === true
+                  ? 'Deleting...'
+                  : localWorktreeMergedCount > 0
+                    ? 'Delete all merged (local + remote + worktrees)'
+                    : 'Delete all merged (local + remote)'}
               </button>
               <button
                 onClick={() => setCleanupConfirm(false)}

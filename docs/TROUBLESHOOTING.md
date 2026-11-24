@@ -388,7 +388,7 @@ Pregate relinks bare ones. Never `npm install` there.
 
 ### Agent Writes Files Into the PortOS Folder Instead of My App
 
-**Symptom**: You pick an app as the workspace (in a CoS task, or **Settings → Providers → Run Prompt**) and ask the agent to create a file. It lands in the PortOS directory instead of the app's repo. Giving the agent an **absolute** path in the prompt works fine.
+**Symptom**: You pick an app as the workspace (in a CoS task, or **Models → Providers** → Run Prompt) and ask the agent to create a file. It lands in the PortOS directory instead of the app's repo. Giving the agent an **absolute** path in the prompt works fine.
 
 **Cause**: There were two, and they look identical from the outside.
 
@@ -820,14 +820,14 @@ boundary, so process-level mitigations alone do not prevent it.
   (`scripts/ml/generate_fastvideo.py`); the run log shows
   `STATUS:watchdog mitigation · AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1`. Set it to `0` in the
   environment to disable.
-- Video Gen sleeps the display automatically for local MLX runtimes while keeping the
-  system awake. This is on by default; disable **Sleep display during local MLX video
-  renders** in Settings > Image Gen > Defaults only when another headless workflow
-  manages it.
+- Video Gen can sleep the display during local MLX renders while keeping the system awake.
+  This is **off by default** (`settings.videoGen.displaySleep`); opt in via **Sleep display
+  during local MLX video renders** in **Create → Image Gen → Settings → Defaults**
+  (`/media/image?settings=1`) or per-render on **Video Gen**.
 
-**What to do**: keep the display off the GPU. If the automatic display sleep is
-disabled, run `pmset displaysleepnow` after launching, or drive the box headless over
-SSH. `caffeinate -s` alone does not turn the display off, and closing the lid sleeps
+**What to do**: keep the display off the GPU — enable display sleep above, run
+`pmset displaysleepnow` after launching, or drive headless over SSH. `caffeinate -s` alone
+does not turn the display off, and closing the lid sleeps
 the whole machine (suspending the render) unless an external display is attached.
 Update macOS and the MLX runtime if panics persist. The historical incident record
 (from the retired LoRA trainer) is in

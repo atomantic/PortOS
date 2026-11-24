@@ -15,7 +15,7 @@ import { atomicWrite } from '../lib/fileCore.js';
 import { PATHS } from '../lib/paths.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { streamResumableDownload } from '../lib/downloadPreflight.js';
-import { SPLASH_ORIGIN } from '../lib/splashRuntime.js';
+import { SPLASH_MODEL, SPLASH_ORIGIN } from '../lib/splashRuntime.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
 
 export const SPLASH_VERSION = '1.7.2';
@@ -183,8 +183,14 @@ export async function probeSplashEndpoint() {
     const listing = await probe('/v1/models');
     const body = listing?.ok ? await listing.json().catch(() => null) : null;
     if (listing && !listing.ok) await listing.body?.cancel().catch(() => null);
-    const model = Array.isArray(body?.data) && body.data.find((item) => item?.owned_by === 'splash' && typeof item.id === 'string' && item.id)?.id;
-    if (model) return { state: 'external', model };
+    const models = Array.isArray(body?.data)
+      ? body.data.filter((item) => item?.owned_by === 'splash' && typeof item.id === 'string' && item.id)
+      : [];
+    const model = models.find((item) => item.id === SPLASH_MODEL) ?? models[0];
+    if (model) {
+      const window = [model.max_model_len, model.context_length].find((value) => Number.isSafeInteger(value) && value > 0);
+      return { state: 'external', model: model.id, ...(window && { servedContextWindow: window }) };
+    }
   }
   if (ready) return { state: 'unrecognized' };
   return { state: 'missing' };

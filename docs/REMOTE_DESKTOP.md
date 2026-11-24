@@ -4,7 +4,7 @@ PortDeck can view and control a PortOS machine through a VNC server running on t
 
 ## Security model
 
-- Remote desktop sessions require PortOS instance authentication to be enabled. PortDeck uses the instance password already stored in its Keychain to request a short-lived, single-purpose viewer URL.
+- Remote desktop sessions require PortOS instance authentication to be enabled. PortDeck signs in via `POST /api/auth/login` with the instance password stored in its Keychain to obtain an operator session cookie, then calls `POST /api/remote-desktop/sessions` for a short-lived, single-purpose viewer URL (HTTP Basic alone is refused with `403 HOST_CONTROL_FORBIDDEN`).
 - The broker connects only to `127.0.0.1`. A request cannot choose another VNC host or turn PortOS into a general TCP proxy.
 - The VNC password is entered in the viewer, is passed to the local VNC server through the RFB connection, and is not stored by PortDeck or PortOS.
 - The viewer token expires after five minutes if unused. Once activated, it supports reconnects until a fixed eight-hour deadline and allows only one connection at a time.

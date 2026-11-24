@@ -27,6 +27,7 @@ it('reports the model only after the external engine is ready, never generates o
   expect(fetch).toHaveBeenCalledTimes(2);
   expect(await getSplashRuntimeStatus(host)).toMatchObject({ supported: true, state: 'unrecognized' });
   expect(await getSplashRuntimeStatus(host)).toMatchObject({ supported: true, state: 'external', model: 'inkling2-mini' });
+  expect(getSplashManagedState).toHaveBeenCalledTimes(4);
   expect(fetch.mock.calls.map(([url]) => new URL(url).pathname)).toEqual(['/ready', '/ready', '/ready', '/v1/models', '/ready', '/v1/models']);
   expect(fetch.mock.calls.every(([, init]) => init?.redirect === 'error' && init.method === undefined)).toBe(true);
 });
@@ -39,13 +40,18 @@ it('does not connect from an unsupported host', async () => {
 });
 
 it('distinguishes a managed warmup from a ready managed endpoint', async () => {
-  getSplashManagedState.mockResolvedValue({ installed: true, managed: true });
+  getSplashManagedState.mockResolvedValue({ installed: true, managed: true, requestedContextWindow: 1000000 });
   const fetch = vi.fn().mockRejectedValueOnce(new Error('not bound'))
     .mockResolvedValueOnce(Response.json({ status: 'ready' }))
-    .mockResolvedValueOnce(Response.json({ data: [{ id: 'inkling2-mini', owned_by: 'splash' }] }));
+    .mockResolvedValueOnce(Response.json({ data: [
+      { id: 'alias', owned_by: 'splash', max_model_len: 65536 },
+      { id: 'inkling2-mini', owned_by: 'splash', context_length: 524288 },
+    ] }));
   vi.stubGlobal('fetch', fetch);
   expect(await getSplashRuntimeStatus(host)).toMatchObject({ state: 'starting', managed: true });
-  expect(await getSplashRuntimeStatus(host)).toMatchObject({ state: 'running', managed: true, model: 'inkling2-mini' });
+  expect(await getSplashRuntimeStatus(host)).toMatchObject({
+    state: 'running', managed: true, model: 'inkling2-mini', requestedContextWindow: 1000000, servedContextWindow: 524288,
+  });
 });
 
 it.each([

@@ -5,6 +5,7 @@
  */
 
 import { z } from 'zod';
+import { isSplashContextWindow } from './splashRuntime.js';
 import {
   AUTO_UPDATE_CHANNELS, AUTO_UPDATE_MIN_INTERVAL_HOURS_MIN, AUTO_UPDATE_MIN_INTERVAL_HOURS_MAX,
   cloudModelIdString, GOOGLE_CREDENTIAL_MAX_LENGTH
@@ -326,6 +327,7 @@ export const imageGenGeminiSettingsSchema = z.object({
 // the user intentionally does not run that backend; it does not remove any
 // installed models or prevent an explicit model-management action.
 export const localLlmSettingsSchema = z.object({
+  splash: z.object({ contextWindow: z.number().refine(isSplashContextWindow).optional() }).strict().optional(),
   ollama: z.object({ disabled: z.boolean().optional() }).strict().optional(),
   lmstudio: z.object({ disabled: z.boolean().optional() }).strict().optional(),
   // Idle windows for the two PM2-managed model servers, in minutes. `0` = never

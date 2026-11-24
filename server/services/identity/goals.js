@@ -945,35 +945,29 @@ export async function applyGoalOrganization(organization) {
     if (longevity.timeHorizons) goals.timeHorizons = longevity.timeHorizons;
     const now = new Date().toISOString();
     const goalMap = new Map(goals.goals.map(g => [g.id, g]));
+    const before = new Map(goals.goals.map(g => [g.id, { goalType: g.goalType, parentId: g.parentId }]));
+    const known = organization.filter(item => goalMap.has(item.id));
+    const moves = known.filter(({ suggestedParentId: parentId }) => (
+      parentId === null || (parentId !== undefined && goalMap.has(parentId))
+    ));
+
+    for (const { id, goalType } of known) {
+      if (goalTypeEnum.options.includes(goalType)) goalMap.get(id).goalType = goalType;
+    }
+    // Detach every moved goal before attaching any: checked against the old
+    // links, promoting a child above its parent looks like a cycle and is dropped.
+    for (const { id } of moves) goalMap.get(id).parentId = null;
+    for (const { id, suggestedParentId } of moves) {
+      goalMap.get(id).parentId = [suggestedParentId, before.get(id).parentId]
+        .find(parentId => !parentId || !hasAncestorCycle(goals.goals, id, parentId)) ?? null;
+    }
+
     let changed = 0;
-
-    for (const item of organization) {
-      const goal = goalMap.get(item.id);
-      if (!goal) continue;
-
-      let goalChanged = false;
-
-      if (item.goalType && goalTypeEnum.options.includes(item.goalType)) {
-        if (goal.goalType !== item.goalType) {
-          goal.goalType = item.goalType;
-          goalChanged = true;
-        }
-      }
-      if (item.suggestedParentId !== undefined) {
-        const newParentId = item.suggestedParentId;
-        if (newParentId === null || goalMap.has(newParentId)) {
-          if (!newParentId || !hasAncestorCycle(goals.goals, goal.id, newParentId)) {
-            if (goal.parentId !== newParentId) {
-              goal.parentId = newParentId;
-              goalChanged = true;
-            }
-          }
-        }
-      }
-      if (goalChanged) {
-        goal.updatedAt = now;
-        changed++;
-      }
+    for (const goal of goals.goals) {
+      const prior = before.get(goal.id);
+      if (goal.goalType === prior.goalType && goal.parentId === prior.parentId) continue;
+      goal.updatedAt = now;
+      changed++;
     }
 
     if (changed > 0) goals.updatedAt = now;

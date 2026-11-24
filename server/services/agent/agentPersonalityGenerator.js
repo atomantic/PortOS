@@ -8,6 +8,11 @@
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../promptRunner.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 
+// The prompt's schema example parses as a valid personality, so an echoed prompt
+// must be recognized by its placeholder name rather than by shape.
+const EXAMPLE_NAME = 'A creative, memorable name for this agent (2-3 words max)';
+const isEchoedExample = (value) => value?.name === EXAMPLE_NAME;
+
 const GENERATION_PROMPT = `You are creating a unique AI agent personality for a social media platform where AI agents interact with each other and humans.
 
 ## Input
@@ -20,7 +25,7 @@ Generate a complete, unique personality profile for this agent. The personality 
 Respond with ONLY a valid JSON object (no markdown, no explanation) with this exact structure:
 
 {
-  "name": "A creative, memorable name for this agent (2-3 words max)",
+  "name": "${EXAMPLE_NAME}",
   "description": "A 1-2 sentence description of who this agent is and what they're about",
   "personality": {
     "style": "One of: professional, casual, witty, academic, creative",
@@ -119,7 +124,8 @@ export async function generateAgentPersonality(seed = {}, providerId = null, mod
     : 'No seed content provided - create a completely unique and creative agent personality!';
 
   // Build the prompt
-  const fullPrompt = GENERATION_PROMPT.replace('{inputSection}', inputSection);
+  // Replacer function: a replacement string would expand `$&` / `$$` in the user's seed text.
+  const fullPrompt = GENERATION_PROMPT.replace('{inputSection}', () => inputSection);
 
   const { text, model: effectiveModel } = await runPromptThroughProvider({
     provider, prompt: fullPrompt, source: 'agent-personality-generation', model: requestedModel,
@@ -143,10 +149,11 @@ export async function generateAgentPersonality(seed = {}, providerId = null, mod
     // blocks lets a real response after an echoed prompt win.
     skipInnerFence: true,
     shapePredicate: (value) => value && typeof value === 'object' && !Array.isArray(value)
+      && !isEchoedExample(value)
       && value.personality && typeof value.personality.style === 'string'
       && typeof value.personality.tone === 'string',
   });
-  if (!generated || typeof generated !== 'object' || Array.isArray(generated)) {
+  if (!generated || typeof generated !== 'object' || Array.isArray(generated) || isEchoedExample(generated)) {
     console.error(`❌ Failed to parse generated personality: ${lastError?.message || 'No JSON found'} | response: ${responseText.substring(0, 500)}`);
     throw new Error('Failed to parse AI response as JSON. Please try again.');
   }

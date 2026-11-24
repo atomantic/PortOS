@@ -175,6 +175,9 @@ const inklingRequests = {
 export const getManagedInklingRuntimeStatus = (runtime, options) =>
   inklingRequests[runtime].status(options);
 
+export const saveSplashContextWindow = (contextWindow, options) =>
+  request('/local-llm/splash/context', { ...options, method: 'PUT', body: JSON.stringify({ contextWindow }) });
+
 export const controlManagedInklingRuntime = (runtime, action, options) =>
   inklingRequests[runtime][action](options);
 

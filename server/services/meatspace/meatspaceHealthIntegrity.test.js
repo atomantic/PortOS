@@ -4,6 +4,7 @@ import { dirname, join } from 'path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 const hooks = vi.hoisted(() => ({ afterRead: null }));
+const settings = vi.hoisted(() => ({ enabled: false }));
 vi.mock('../../lib/fileUtils.js', async (original) => {
   const actual = await original();
   return makePathsProxy(actual, {
@@ -24,13 +25,13 @@ vi.mock('../../lib/paths.js', async (original) => makePathsProxy(await original(
 vi.mock('../settings.js', async () => {
   const { EventEmitter } = await import('events');
   return { settingsEvents: new EventEmitter(), getSettings: async () => ({
-    mortalloom: { enabled: false, path: join(lazyTempDataRoot('portos-mortalloom-import-'), 'source.json') },
+    mortalloom: { enabled: settings.enabled, path: join(lazyTempDataRoot('portos-mortalloom-import-'), 'source.json') },
   }) };
 });
 
 import { PATHS } from '../../lib/fileUtils.js';
 import { importToPortOS } from '../mortalLoomStore.js';
-import { addBloodTest, addBloodPressureReading, addWorkout, getBloodTests, getEpigeneticTests, getEyeExams, getBloodPressureHistory, getWorkouts } from './meatspaceHealth.js';
+import { addBloodTest, addBloodPressureReading, addEpigeneticTest, addEyeExam, addWorkout, commitClinicalBloodImport, getBloodTests, getEpigeneticTests, getEyeExams, getBloodPressureHistory, getWorkouts } from './meatspaceHealth.js';
 
 const localPath = (name) => join(PATHS.meatspace, name);
 async function seed(path, value) {
@@ -42,6 +43,7 @@ const read = async (name) => JSON.parse(await readFile(localPath(name), 'utf8'))
 
 beforeEach(async () => {
   hooks.afterRead = null;
+  settings.enabled = false;
   await rm(PATHS.data, { recursive: true, force: true });
   await mkdir(PATHS.data, { recursive: true });
 });
@@ -129,4 +131,35 @@ it.each([
   await expect(importToPortOS()).rejects.toThrow(/malformed/i);
   expect(JSON.parse(await readFile(join(PATHS.digitalTwin, 'goals.json'), 'utf8'))).toEqual(goals);
   expect(await read('blood-tests.json')).toEqual(local);
+});
+
+it.each([
+  ['blood-tests.json', () => addBloodTest({ date: '2026-01-02', glucose: 90 })],
+  ['epigenetic-tests.json', () => addEpigeneticTest({ date: '2026-01-02', biologicalAge: 30 })],
+  ['eyes.json', () => addEyeExam({ date: '2026-01-02', leftSphere: -1 })],
+  ['health-metrics.json', () => addBloodPressureReading({ date: '2026-01-02', systolic: 120, diastolic: 80 })],
+  ['workouts.json', () => addWorkout({ date: '2026-01-02', type: 'Example exercise' })],
+])('refuses to add a record over an unreadable %s', async (name, add) => {
+  const damaged = '{"exams":[{"id":"kept","date":"2026-01-01"';
+  await mkdir(PATHS.meatspace, { recursive: true });
+  await writeFile(localPath(name), damaged);
+  await expect(add()).rejects.toMatchObject({ code: 'UNREADABLE_STORE' });
+  expect(await readFile(localPath(name), 'utf8')).toBe(damaged);
+});
+
+it('refuses an eye exam list of the wrong shape instead of replacing it', async () => {
+  const wrong = { exams: { kept: { date: '2026-01-01' } } };
+  await seed(localPath('eyes.json'), wrong);
+  await expect(addEyeExam({ date: '2026-01-02' })).rejects.toThrow(/malformed/i);
+  expect(await read('eyes.json')).toEqual(wrong);
+});
+
+it('refuses a clinical import over an unreadable local blood file while MortalLoom is on', async () => {
+  settings.enabled = true;
+  await source({ bloodTests: [] });
+  await mkdir(PATHS.meatspace, { recursive: true });
+  await writeFile(localPath('blood-tests.json'), '{"tests":[{"id":"kept"');
+  await expect(commitClinicalBloodImport({ tests: [], referenceRanges: { glucose: [70, 99] } }, () => ({ tests: [] })))
+    .rejects.toMatchObject({ code: 'UNREADABLE_STORE' });
+  expect(await readFile(localPath('blood-tests.json'), 'utf8')).toBe('{"tests":[{"id":"kept"');
 });

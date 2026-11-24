@@ -13,12 +13,30 @@ import * as agentPersonalities from './agentPersonalities.js';
 import { createMoltbookClient, checkRateLimit, isAccountSuspended } from '../../integrations/moltbook/index.js';
 import { createMoltworldClient } from '../../integrations/moltworld/index.js';
 import { generatePost, generateComment, generateReply, assertMoltbookCommentProvider } from './agentContentGenerator.js';
-import { findRelevantPosts, findReplyOpportunities } from './agentFeedFilter.js';
+import { findRelevantPosts, findReplyOpportunities, moltbookAuthorName } from './agentFeedFilter.js';
+import { collectHandledComments, ownReplyParentIds } from './agentPublished.js';
 import { sleep as delay } from '../../lib/fileUtils.js';
 
 // Throttle between successive platform writes (votes/comments/replies) so a
 // single agent run doesn't burst the platform API.
 const INTER_ACTION_DELAY_MS = 1500;
+
+/**
+ * Settle one platform write of a compound run. `ok` means the platform accepted
+ * it; `delivered` also means it is not held behind an unsolved verification
+ * challenge. A failed write must never be recorded as a vote or comment: the
+ * activity log is what Published and the repeat-reply guard read.
+ */
+async function attempt(write, failureLabel, onSuspended) {
+  return write.then(
+    value => ({ ok: true, delivered: value?.verification_solved !== false, value }),
+    error => {
+      if (isAccountSuspended(error)) onSuspended();
+      else console.log(`⚠️ ${failureLabel}: ${error.message}`);
+      return { ok: false, delivered: false };
+    },
+  );
+}
 
 /**
  * Execute an action based on type
@@ -32,6 +50,9 @@ async function executeAction(schedule, account, agent) {
   }
 
   const client = createMoltbookClient(account.credentials.apiKey);
+  // Publishing can answer with a verification challenge; solve it on the agent's pin.
+  client.aiConfig = agent.aiConfig?.challenge || agent.aiConfig;
+  const agentUsername = account.credentials.username;
 
   switch (action.type) {
     case 'heartbeat':
@@ -41,16 +62,16 @@ async function executeAction(schedule, account, agent) {
       return executePost(client, agent, action.params);
 
     case 'comment':
-      return executeComment(client, agent, action.params);
+      return executeComment(client, agent, agentUsername, action.params);
 
     case 'vote':
       return executeVote(client, action.params);
 
     case 'engage':
-      return executeEngage(client, agent, action.params);
+      return executeEngage(client, agent, agentUsername, action.params);
 
     case 'monitor':
-      return executeMonitor(client, agent, schedule, action.params);
+      return executeMonitor(client, agent, agentUsername, schedule, action.params);
 
     default:
       throw new Error(`Unknown action type: ${action.type}`);
@@ -101,7 +122,8 @@ async function executePost(client, agent, params) {
     postId: post?.id || post?._id || post?.post_id,
     submolt,
     title,
-    generated: !params.title || !params.content
+    generated: !params.title || !params.content,
+    verificationFailed: result?.verification_solved === false
   };
 }
 
@@ -109,7 +131,7 @@ async function executePost(client, agent, params) {
  * Execute a comment action
  * When postId missing, finds relevant post. When content missing, uses AI generation.
  */
-async function executeComment(client, agent, params) {
+async function executeComment(client, agent, agentUsername, params) {
   let { postId, content, parentId } = params;
   const contentConfig = agent.aiConfig?.content || agent.aiConfig;
 
@@ -122,7 +144,7 @@ async function executeComment(client, agent, params) {
   // Find a relevant post if no postId specified
   if (!postId) {
     console.log(`🔍 Finding relevant post for "${agent.name}" to comment on`);
-    const opportunities = await findReplyOpportunities(client, agent, { maxCandidates: 3 });
+    const opportunities = await findReplyOpportunities(client, agent, { maxCandidates: 3, agentUsername });
 
     if (opportunities.length === 0) {
       return { type: 'comment', action: 'none', reason: 'no relevant posts found' };
@@ -177,7 +199,8 @@ async function executeComment(client, agent, params) {
     commentId: result?.id || result?._id || result?.comment_id,
     postId,
     isReply: !!parentId,
-    generated: !params.content
+    generated: !params.content,
+    verificationFailed: result?.verification_solved === false
   };
 }
 
@@ -225,7 +248,7 @@ async function executeVote(client, params) {
 /**
  * Execute an engage action - compound autonomous browsing, voting, and commenting
  */
-async function executeEngage(client, agent, params) {
+async function executeEngage(client, agent, agentUsername, params) {
   const { maxComments = 1, maxVotes = 3 } = params;
 
   const engagementConfig = agent.aiConfig?.engagement || agent.aiConfig;
@@ -256,11 +279,9 @@ async function executeEngage(client, agent, params) {
     const rateCheck = checkRateLimit(client.apiKey, 'vote');
     if (!rateCheck.allowed) break;
 
-    await client.upvote(post.id).catch(e => {
-      if (isAccountSuspended(e)) suspended = true;
-    });
+    const voted = await attempt(client.upvote(post.id), `Upvote failed for post ${post.id}`, () => { suspended = true; });
     if (suspended) break;
-    votes.push({ postId: post.id, title: post.title });
+    if (voted.ok) votes.push({ postId: post.id, title: post.title });
     await delay(INTER_ACTION_DELAY_MS);
   }
 
@@ -269,7 +290,8 @@ async function executeEngage(client, agent, params) {
     const opportunities = await findReplyOpportunities(client, agent, {
       sort: 'hot',
       minScore: 2,
-      maxCandidates: maxComments + 2
+      maxCandidates: maxComments + 2,
+      agentUsername
     });
 
     for (const opportunity of opportunities) {
@@ -279,16 +301,21 @@ async function executeEngage(client, agent, params) {
       if (!rateCheck.allowed) break;
 
       const generated = await generateComment(agent, opportunity.post, opportunity.comments, null, engagementConfig?.providerId, engagementConfig?.model);
-      await client.createComment(opportunity.post.id, generated.content).catch(e => {
-        if (isAccountSuspended(e)) suspended = true;
-      });
+      const posted = await attempt(
+        client.createComment(opportunity.post.id, generated.content),
+        `Comment failed on post ${opportunity.post.id}`, () => { suspended = true; },
+      );
       if (suspended) break;
 
-      comments.push({
-        postId: opportunity.post.id || opportunity.post._id,
-        postTitle: opportunity.post.title,
-        reason: opportunity.reason
-      });
+      if (posted.delivered) {
+        const { value } = posted;
+        comments.push({
+          postId: opportunity.post.id || opportunity.post._id,
+          postTitle: opportunity.post.title,
+          commentId: value?.id || value?._id || value?.comment_id,
+          reason: opportunity.reason
+        });
+      }
       await delay(INTER_ACTION_DELAY_MS);
     }
   }
@@ -311,7 +338,7 @@ async function executeEngage(client, agent, params) {
 /**
  * Execute a monitor action - check engagement on published posts and respond
  */
-async function executeMonitor(client, agent, schedule, params) {
+async function executeMonitor(client, agent, agentUsername, schedule, params) {
   const { days = 7, maxReplies = 2, maxUpvotes = 10 } = params;
 
   const engagementConfig = agent.aiConfig?.engagement || agent.aiConfig;
@@ -324,9 +351,6 @@ async function executeMonitor(client, agent, schedule, params) {
 
   console.log(`👀 Starting monitor for "${agent.name}" (days=${days}, maxReplies=${maxReplies}, maxUpvotes=${maxUpvotes})`);
 
-  const account = await platformAccounts.getAccountWithCredentials(schedule.accountId);
-  const agentUsername = account?.credentials?.username;
-
   // Fetch posts directly from Moltbook API
   const allPosts = await client.getPostsByAuthor(agentUsername);
   const cutoff = new Date();
@@ -335,6 +359,7 @@ async function executeMonitor(client, agent, schedule, params) {
 
   console.log(`👀 Found ${allPosts.length} total posts for account ${schedule.accountId}, ${posts.length} within ${days} days`);
 
+  const handled = await collectHandledComments(schedule.agentId, days);
   const upvoted = [];
   const replied = [];
   let totalComments = 0;
@@ -354,40 +379,40 @@ async function executeMonitor(client, agent, schedule, params) {
     const allComments = Array.isArray(commentsResponse?.comments) ? commentsResponse.comments : Array.isArray(commentsResponse) ? commentsResponse : [];
     totalComments += allComments.length;
 
-    const otherComments = allComments.filter(c => {
-      const authorName = typeof c.author === 'object' ? c.author?.name : c.author;
-      return authorName !== agentUsername;
-    });
+    const answered = ownReplyParentIds(allComments, agentUsername);
+    const otherComments = allComments.filter(c => moltbookAuthorName(c) !== agentUsername);
     newComments += otherComments.length;
 
     for (const comment of otherComments) {
       if (suspended) break;
 
-      if (upvoted.length < maxUpvotes) {
+      if (upvoted.length < maxUpvotes && !handled.upvoted.has(comment.id)) {
         const rateCheck = checkRateLimit(client.apiKey, 'vote');
         if (rateCheck.allowed) {
-          await client.upvoteComment(comment.id).catch(e => {
-            if (isAccountSuspended(e)) suspended = true;
-          });
+          const voted = await attempt(client.upvoteComment(comment.id), `Upvote failed for comment ${comment.id}`, () => { suspended = true; });
           if (suspended) break;
-          upvoted.push({ commentId: comment.id, postId, postTitle: post.title });
+          if (voted.ok) upvoted.push({ commentId: comment.id, postId, postTitle: post.title });
           await delay(INTER_ACTION_DELAY_MS);
         }
       }
 
-      if (!suspended && replied.length < maxReplies) {
+      const unanswered = !handled.replied.has(comment.id) && !answered.has(comment.id);
+      if (!suspended && unanswered && replied.length < maxReplies) {
         const rateCheck = checkRateLimit(client.apiKey, 'comment');
         if (rateCheck.allowed) {
           const generated = await generateReply(agent, post, comment, null, engagementConfig?.providerId, engagementConfig?.model);
-          await client.replyToComment(postId, comment.id, generated.content).catch(e => {
-            if (isAccountSuspended(e)) suspended = true;
-          });
+          const posted = await attempt(
+            client.replyToComment(postId, comment.id, generated.content),
+            `Reply failed on post ${postId}`, () => { suspended = true; },
+          );
           if (suspended) break;
-          replied.push({
-            commentId: comment.id,
-            postId,
-            postTitle: post.title
-          });
+          if (posted.delivered) {
+            replied.push({
+              commentId: comment.id,
+              postId,
+              postTitle: post.title
+            });
+          }
           await delay(INTER_ACTION_DELAY_MS);
         }
       }
@@ -689,7 +714,7 @@ async function executeScheduledAction({ scheduleId, schedule, timestamp }) {
     scheduleId,
     action: schedule.action.type,
     params: schedule.action.params,
-    status: failure ? (skipped ? 'skipped' : 'failed') : 'completed',
+    status: failure ? (skipped ? 'skipped' : 'failed') : result?.verificationFailed ? 'verification_failed' : 'completed',
     result,
     error,
     ...(code ? { code } : {}),

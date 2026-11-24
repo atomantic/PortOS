@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   pm2Status: vi.fn(),
   portUsed: vi.fn(),
   probe: vi.fn(),
+  settings: {},
+  saveSettings: vi.fn(),
 }));
 vi.mock('../lib/childProcess.js', async (original) => ({
   ...await original(),
@@ -27,13 +29,17 @@ vi.mock('./pm2.js', () => ({
   execPm2: mocks.pm2Command,
   getAppStatusStrict: mocks.pm2Status,
 }));
+vi.mock('./settings.js', () => ({
+  readSettingsStrict: async () => ({ settings: mocks.settings, corrupt: false }),
+  updateSettingsWith: mocks.saveSettings,
+}));
 vi.mock('./splashManagedRuntime.js', async (original) => ({
   ...await original(),
   supportsManagedSplash: () => true,
   probeSplashEndpoint: mocks.probe,
 }));
 
-import { getSplashManagedState, installSplashRuntime, SPLASH_APP, startSplashServer, stopSplashServer } from './splashServerManager.js';
+import { getSplashManagedState, installSplashRuntime, saveSplashContextWindow, SPLASH_APP, startSplashServer, stopSplashServer } from './splashServerManager.js';
 import { SPLASH_VERSION, splashRoot } from './splashManagedRuntime.js';
 
 const mockedApp = (rest = {}) => ({ name: SPLASH_APP, status: 'not_found', ...rest });
@@ -52,6 +58,8 @@ beforeEach(async () => {
   vi.resetAllMocks();
   mocks.data = await mkdtemp(join(tmpdir(), 'splash-manager-'));
   mocks.pm2 = mockedApp();
+  mocks.settings = { localLlm: { backend: 'ollama' }, theme: 'dark' };
+  mocks.saveSettings.mockImplementation(async (mutate) => { mocks.settings = mutate(mocks.settings); });
   mocks.portUsed.mockResolvedValue(false);
   mocks.probe.mockResolvedValue({ state: 'external', model: 'inkling2-mini' });
   mocks.pm2Status.mockImplementation(async () => mocks.pm2);
@@ -76,7 +84,7 @@ afterEach(async () => {
 });
 
 it('installs the verified bundle and checkpoint, starts only from cache, and stops only the owned PM2 instance', async () => {
-  await expect(getSplashManagedState()).resolves.toMatchObject({ installed: false, managed: false });
+  await expect(getSplashManagedState()).resolves.toMatchObject({ installed: false, managed: false, requestedContextWindow: 65536 });
   await expect(startSplashServer()).rejects.toMatchObject({ code: 'SPLASH_NOT_INSTALLED' });
   expect(mocks.pm2Command).not.toHaveBeenCalled();
 
@@ -93,7 +101,7 @@ it('installs the verified bundle and checkpoint, starts only from cache, and sto
 
   await startSplashServer();
   expect(mocks.pm2Command.mock.calls[0][0]).toEqual(expect.arrayContaining([
-    'start', '/usr/bin/env', SPLASH_APP, '--offline', '--host', '127.0.0.1', '--port', '8001', '--no-autorestart',
+    'start', '/usr/bin/env', SPLASH_APP, '--offline', '--host', '127.0.0.1', '--port', '8001', '--no-autorestart', '--max-context', '65536',
   ]));
   expect(mocks.pm2.args.slice(0, 2)).toEqual(['-i', `HOME=${join(splashRoot(), 'home')}`]);
   await expect(getSplashManagedState()).resolves.toMatchObject({ installed: true, managed: true });
@@ -179,4 +187,19 @@ it('requires verified model readiness before declaring Start complete', async ()
   await checkedStart;
   expect(mocks.probe).toHaveBeenCalledTimes(2);
   expect(completion).toHaveBeenCalledWith({ success: true, message: 'Splash is ready with Inkling 2 Mini.' });
+});
+
+it('saves a per-machine next-start context and does not alter a running or external Splash instance', async () => {
+  await expect(saveSplashContextWindow(262144)).resolves.toEqual({ requestedContextWindow: 262144 });
+  expect(mocks.settings).toEqual({ localLlm: { backend: 'ollama', splash: { contextWindow: 262144 } }, theme: 'dark' });
+  expect(mocks.pm2Command).not.toHaveBeenCalled();
+  await installSplashRuntime();
+  await startSplashServer();
+  expect(mocks.pm2.args).toEqual(expect.arrayContaining(['--max-context', '262144']));
+  await expect(saveSplashContextWindow(1000000)).rejects.toThrow('Stop Splash');
+  await stopSplashServer();
+  mocks.portUsed.mockResolvedValue(true);
+  await expect(saveSplashContextWindow(1000000)).rejects.toThrow('external server');
+  await expect(saveSplashContextWindow(1010000)).rejects.toMatchObject({ code: 'SPLASH_INVALID_CONTEXT' });
+  expect(mocks.saveSettings).toHaveBeenCalledTimes(1);
 });

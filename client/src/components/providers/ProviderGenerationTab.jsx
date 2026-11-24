@@ -13,9 +13,10 @@ import { PROVIDER_FIELD_RANGES } from './providerFormData';
 import ProviderRoutingSection from './ProviderRoutingSection';
 import { isOpenRouterEndpoint } from './providerRoutingForm';
 import ContextWindowPlanner from './ContextWindowPlanner';
+import ProviderHarnessContext from './ProviderHarnessContext.jsx';
 import { isOllamaBackedProvider } from '../../utils/providerTypes';
 
-export default function ProviderGenerationTab({ formData, setFormData, capabilityProvider, showsNumCtx, generationControls }) {
+export default function ProviderGenerationTab({ formData, setFormData, capabilityProvider, showsNumCtx, generationControls, harnessTarget, harnessContext, setHarnessContext, servedHarnessContext }) {
   // `capabilityProvider`, not `formData`: the per-model windows model refresh
   // recorded (`modelContextWindows`) live on the RECORD and are not form fields,
   // so reading formData alone reported the assumed 128K for a model whose real
@@ -53,6 +54,17 @@ export default function ProviderGenerationTab({ formData, setFormData, capabilit
 
       <div className="border-t border-port-border pt-4 mt-4">
         <h4 className="text-sm font-medium text-gray-300 mb-3">Context Window</h4>
+        {harnessTarget && (
+          <div className="mb-4">
+            <ProviderHarnessContext
+              target={harnessTarget}
+              value={harnessContext}
+              onChange={setHarnessContext}
+              onUseServed={() => setHarnessContext(String(servedHarnessContext))}
+              servedWindow={servedHarnessContext}
+            />
+          </div>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <FormField label="Planning Window">
             <input

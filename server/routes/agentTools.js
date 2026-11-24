@@ -15,9 +15,9 @@ import * as agentPersonalities from '../services/agent/agentPersonalities.js';
 import * as agentActivity from '../services/agent/agentActivity.js';
 import * as agentDrafts from '../services/agent/agentDrafts.js';
 import { generatePost, generateComment, generateReply, assertMoltbookCommentProvider } from '../services/agent/agentContentGenerator.js';
-import { findRelevantPosts, findReplyOpportunities } from '../services/agent/agentFeedFilter.js';
+import { findRelevantPosts, findReplyOpportunities, moltbookAuthorName } from '../services/agent/agentFeedFilter.js';
 import { createMoltbookClient, checkRateLimit, isAccountSuspended } from '../integrations/moltbook/index.js';
-import { collectPublishedPosts } from '../services/agent/agentPublished.js';
+import { collectHandledComments, collectPublishedPosts, ownReplyParentIds } from '../services/agent/agentPublished.js';
 import { sleep } from '../lib/fileUtils.js';
 import { agentToolsFeedQuerySchema, agentToolsRelevantPostsQuerySchema } from '../lib/agentToolsValidation.js';
 
@@ -45,6 +45,8 @@ async function getClientAndAgent(accountId, agentId) {
   }
 
   const client = createMoltbookClient(account.credentials.apiKey);
+  // Publishing can answer with a verification challenge; solve it on the agent's pin.
+  client.aiConfig = agent.aiConfig?.challenge || agent.aiConfig;
   return { client, agent, account };
 }
 
@@ -91,8 +93,7 @@ router.post('/publish-post', asyncHandler(async (req, res) => {
 
   console.log(`🛠️ POST /api/agents/tools/publish-post agent=${data.agentId} submolt=${data.submolt}`);
 
-  const { client, agent } = await getClientAndAgent(data.accountId, data.agentId);
-  client.aiConfig = agent.aiConfig?.challenge || agent.aiConfig;
+  const { client } = await getClientAndAgent(data.accountId, data.agentId);
   const result = await client.createPost(data.submolt, data.title, data.content);
   const post = result?.post || result;
   const postId = post?.id || post?._id || post?.post_id;
@@ -118,8 +119,7 @@ router.post('/publish-comment', asyncHandler(async (req, res) => {
 
   console.log(`🛠️ POST /api/agents/tools/publish-comment agent=${data.agentId} post=${data.postId}`);
 
-  const { client, agent } = await getClientAndAgent(data.accountId, data.agentId);
-  client.aiConfig = agent.aiConfig?.challenge || agent.aiConfig;
+  const { client } = await getClientAndAgent(data.accountId, data.agentId);
 
   let result;
   if (data.parentId) {
@@ -150,7 +150,7 @@ router.post('/engage', asyncHandler(async (req, res) => {
 
   console.log(`🛠️ POST /api/agents/tools/engage agent=${data.agentId}`);
 
-  const { client, agent } = await getClientAndAgent(data.accountId, data.agentId);
+  const { client, agent, account } = await getClientAndAgent(data.accountId, data.agentId);
   const engagementConfig = agent.aiConfig?.engagement || agent.aiConfig;
   if (data.maxComments > 0) {
     await assertMoltbookCommentProvider(engagementConfig?.providerId);
@@ -185,7 +185,8 @@ router.post('/engage', asyncHandler(async (req, res) => {
     const opportunities = await findReplyOpportunities(client, agent, {
       sort: 'hot',
       minScore: 2,
-      maxCandidates: data.maxComments + 2
+      maxCandidates: data.maxComments + 2,
+      agentUsername: account.credentials.username
     });
 
     for (const opportunity of opportunities) {
@@ -197,13 +198,16 @@ router.post('/engage', asyncHandler(async (req, res) => {
       const generated = await generateComment(agent, opportunity.post, opportunity.comments, null, engagementConfig?.providerId, engagementConfig?.model);
       const result = await client.createComment(opportunity.post.id, generated.content);
 
-      comments.push({
-        postId: opportunity.post.id || opportunity.post._id,
-        postTitle: opportunity.post.title,
-        commentId: result?.id || result?._id || result?.comment_id,
-        content: generated.content,
-        reason: opportunity.reason
-      });
+      // A comment held behind a failed verification challenge is not public.
+      if (result?.verification_solved !== false) {
+        comments.push({
+          postId: opportunity.post.id || opportunity.post._id,
+          postTitle: opportunity.post.title,
+          commentId: result?.id || result?._id || result?.comment_id,
+          content: generated.content,
+          reason: opportunity.reason
+        });
+      }
       await sleep(MOLTBOOK_ACTION_DELAY_MS);
     }
   }
@@ -335,7 +339,7 @@ router.get('/published', asyncHandler(async (req, res) => {
     return {
       ...post,
       score: live?.score ?? null,
-      commentCount: live?.commentCount ?? null,
+      commentCount: live?.commentCount ?? live?.comment_count ?? null,
       url: post.postId ? `https://www.moltbook.com/post/${post.postId}` : null
     };
   }).sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
@@ -387,6 +391,7 @@ router.post('/check-posts', asyncHandler(async (req, res) => {
   const posts = allPosts.filter(p => new Date(p.created_at) >= cutoff);
 
   console.log(`👀 Found ${allPosts.length} total posts by ${agentUsername}, ${posts.length} within ${data.days} days`);
+  const handled = await collectHandledComments(data.agentId, data.days);
   const upvoted = [];
   const replied = [];
   const skipped = [];
@@ -408,17 +413,15 @@ router.post('/check-posts', asyncHandler(async (req, res) => {
     totalComments += allComments.length;
 
     // Filter to comments NOT by the agent
-    const otherComments = allComments.filter(c => {
-      const authorName = typeof c.author === 'object' ? c.author?.name : c.author;
-      return authorName !== agentUsername;
-    });
+    const answered = ownReplyParentIds(allComments, agentUsername);
+    const otherComments = allComments.filter(c => moltbookAuthorName(c) !== agentUsername);
     newComments += otherComments.length;
 
     for (const comment of otherComments) {
       if (suspended) break;
 
       // Upvote positive comments
-      if (upvoted.length < data.maxUpvotes) {
+      if (upvoted.length < data.maxUpvotes && !handled.upvoted.has(comment.id)) {
         const rateCheck = checkRateLimit(client.apiKey, 'vote');
         if (rateCheck.allowed) {
           const voted = await client.upvoteComment(comment.id).catch(e => {
@@ -440,7 +443,8 @@ router.post('/check-posts', asyncHandler(async (req, res) => {
       }
 
       // Generate replies for top comments
-      if (!suspended && replied.length < data.maxReplies) {
+      const unanswered = !handled.replied.has(comment.id) && !answered.has(comment.id);
+      if (!suspended && unanswered && replied.length < data.maxReplies) {
         const rateCheck = checkRateLimit(client.apiKey, 'comment');
         if (rateCheck.allowed) {
           const generated = await generateReply(agent, post, comment, null, engagementConfig?.providerId, engagementConfig?.model);
@@ -450,7 +454,7 @@ router.post('/check-posts', asyncHandler(async (req, res) => {
             return null;
           });
           if (suspended) break;
-          if (replyResult) {
+          if (replyResult && replyResult.verification_solved !== false) {
             replied.push({
               commentId: comment.id,
               replyId: replyResult?.id || replyResult?._id || replyResult?.comment_id,

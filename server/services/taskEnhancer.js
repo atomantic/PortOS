@@ -109,8 +109,9 @@ export async function enhanceTaskPrompt(description, context = '') {
     // Fallback to hardcoded template
     const contextSection = context ? `## Additional Context\n${context}` : '';
     fullPrompt = FALLBACK_PROMPT
-      .replace('{description}', description)
-      .replace('{contextSection}', contextSection);
+      // Replacer functions: a replacement string would expand `$&` / `$$` in the user's text.
+      .replace('{contextSection}', () => contextSection)
+      .replace('{description}', () => description);
   }
 
   const { text, model: effectiveModel } = await runPromptThroughProvider({

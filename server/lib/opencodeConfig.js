@@ -175,7 +175,7 @@ function localModelEntry(providerKey, id, existing) {
     };
   }
   if (providerKey !== 'ollama' || !/^inkling-2-mini(?::[^/]+)?$/.test(id)) {
-    return { name: id, tool_call: true };
+    return { name: id, ...asObject(existing), tool_call: true };
   }
   return {
     name: id,
@@ -420,6 +420,23 @@ function generationForModel(provider, model) {
   return resolved === stored ? provider : { ...provider, effort: resolved || null };
 }
 
+function applyOpenCodeContext(config, namespace, override) {
+  const { model, tokens } = override ?? {};
+  if (!model || !Number.isSafeInteger(tokens)) return;
+  const slash = model.indexOf('/');
+  const key = namespace || (slash > 0 ? model.slice(0, slash) : null);
+  if (!key || !Object.hasOwn(asObject(config.provider), key)) return;
+  const id = namespace ? stripProviderPrefix(model, namespace) : model.slice(slash + 1);
+  if (!id) return;
+  const entry = config.provider[key];
+  const models = asObject(entry.models);
+  const existing = asObject(models[id]);
+  const limit = asObject(existing.limit);
+  const output = limit.output ?? Math.min(4096, Math.floor(tokens / 4));
+  if (output >= tokens || limit.input > tokens) return; // A later environment edit can invalidate the saved override.
+  entry.models = { ...models, [id]: { ...existing, limit: { ...limit, context: tokens, output } } };
+}
+
 /**
  * Build dynamic env vars for an OpenCode spawn: `OPENCODE_CONFIG_CONTENT` for a
  * provider naming a backend namespace (Ollama, MTPLX, llama.cpp, vLLM, SGLang, or a
@@ -455,6 +472,7 @@ export function buildOpencodeEnvVars(provider, model, { safetyProfile = null } =
     model,
   ];
   const config = buildOpencodeConfig(ids, base, providerKey, generationForModel(provider, model));
+  applyOpenCodeContext(config, providerKey, provider?.harnessContext);
   // Pin the auxiliary model for OpenCode's OWN side work (titles, summarization):
   // unset, it falls back to a built-in hosted model nobody chose (paid calls, or a
   // cloud provider via an inherited API key), which the AI Provider Usage Policy

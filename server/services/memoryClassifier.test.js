@@ -41,6 +41,33 @@ describe('memoryClassifier getConfig — env-derived endpoint', () => {
     expect(config.endpoint).toBe('http://localhost:1234/v1/chat/completions');
   });
 
+  it('sends agent output verbatim, without expanding patterns or placeholders inside it', async () => {
+    const fetchWithTimeout = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: '{"memories":[],"rejected":[]}' } }] }),
+      text: async () => ''
+    });
+    vi.doMock('../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout }));
+    vi.doMock('./promptService.js', () => ({
+      getStageTemplate: vi.fn().mockResolvedValue('Out: {{agentOutput}} | Known: {{existingMemories}} | {{unknown}}')
+    }));
+    vi.doMock('./memoryBackend.js', () => ({ getMemories: vi.fn().mockResolvedValue({ memories: [] }) }));
+    const output = `printf $'a' && echo $& $$ {{existingMemories}} ${'x'.repeat(100)}`;
+
+    try {
+      const { classifyMemories } = await import('./memoryClassifier.js');
+      await classifyMemories({ id: 'task-1', description: 'd' }, output);
+    } finally {
+      vi.doUnmock('../lib/fetchWithTimeout.js');
+      vi.doUnmock('./promptService.js');
+      vi.doUnmock('./memoryBackend.js');
+    }
+
+    const chat = fetchWithTimeout.mock.calls.find(([url]) => url.endsWith('/chat/completions'));
+    const prompt = JSON.parse(chat[1].body).messages.at(-1).content;
+    expect(prompt).toBe(`Out: ${output} | Known: No existing memories yet. | {{unknown}}`);
+  });
+
   it('omits raw model response text from parse-failure logs (#17199)', async () => {
     const fixtureSentence = 'Personal note about a private appointment';
     const rawResponse = `Not valid JSON: ${fixtureSentence}`;

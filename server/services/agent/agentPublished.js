@@ -6,6 +6,7 @@
  */
 
 import * as agentActivity from './agentActivity.js';
+import { moltbookAuthorName } from './agentFeedFilter.js';
 
 /**
  * Collect published posts and comments from activity logs over N days
@@ -60,4 +61,34 @@ export async function collectPublishedPosts(agentId, numDays) {
   }
 
   return { postMap, commentMap };
+}
+
+/**
+ * Comments earlier monitor runs already replied to or upvoted. A monitor run
+ * re-reads every comment on every post in its window, so without this the agent
+ * publishes another reply to the same comment on each run.
+ */
+export async function collectHandledComments(agentId, numDays) {
+  const replied = new Set();
+  const upvoted = new Set();
+  // Inclusive of the partial day at the far edge of the window.
+  for (let i = 0; i <= numDays; i++) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    const runs = await agentActivity.getActivities(agentId, { date, action: 'monitor', limit: Infinity });
+    // Count every run that recorded a delivery, including one halted by a suspension.
+    for (const { result } of runs) {
+      for (const entry of result?.replied ?? []) replied.add(entry.commentId);
+      for (const entry of result?.upvoted ?? []) upvoted.add(entry.commentId);
+    }
+  }
+  return { replied, upvoted };
+}
+
+/** Parent ids the agent already answered in this thread, for a run that failed before logging. */
+export function ownReplyParentIds(comments, agentUsername) {
+  return new Set(comments
+    .filter(c => agentUsername && moltbookAuthorName(c) === agentUsername)
+    .map(c => c.parentId ?? c.parent_id)
+    .filter(Boolean));
 }
