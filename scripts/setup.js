@@ -19,7 +19,8 @@ import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
-import { installWorkspace, writeDependencyHashes } from './ensure-deps.js';
+import { installWorkspace } from './ensure-deps.js';
+import { writeDependencyHashes } from './lib/dependencyReceipts.js';
 import { dependencyWorkspaces, hasLinkedDependencies } from './lib/workspaceDependencies.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');

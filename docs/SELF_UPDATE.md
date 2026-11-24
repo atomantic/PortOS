@@ -362,6 +362,17 @@ If a run fails, retain `data/update.log` and its terminal result; do not merge o
 failed recovery. Restore the disposable instance from its known-good snapshot
 rather than guessing which partial setup or migration ran.
 
+## When the updater reuses dependencies
+
+The updater checks root, client and server separately. It skips a workspace's
+npm install when the last install receipt matches its manifest, lockfile and
+project `.npmrc`, and the packages on disk match the lockfile. Older v2 receipts
+still identify the manifest and lockfile, but workspaces with a project
+`.npmrc` acquire configuration evidence on their next install. Changed inputs,
+missing or stale packages, forced repair and pending reconciliation take the
+repair path. The server's trusted native rebuilds, client build, PM2 restart
+and health verification still run when all three trees are reused.
+
 ## Running a customized fork
 
 The `UpdateTab` fork panel states this in short form. The full loop is here, because that panel is

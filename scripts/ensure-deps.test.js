@@ -22,7 +22,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readFileSync
 import { tmpdir } from 'os';
 import { dirname, join, relative } from 'path';
 import { fileURLToPath } from 'url';
-import { cleanWorkspaceDeps, installWorkspace, WORKSPACES, writeDependencyHashes } from './ensure-deps.js';
+import { cleanWorkspaceDeps, installWorkspace, WORKSPACES } from './ensure-deps.js';
+import { writeDependencyHashes } from './lib/dependencyReceipts.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -114,6 +115,7 @@ describe('startup dependency reconciliation', () => {
     copyFileSync(join(REPO_ROOT, 'scripts', 'ensure-deps.js'), join(root, 'scripts', 'ensure-deps.js'));
     copyFileSync(join(REPO_ROOT, 'scripts', 'lib', 'directInvocation.js'), join(root, 'scripts', 'lib', 'directInvocation.js'));
     copyFileSync(join(REPO_ROOT, 'scripts', 'lib', 'workspaceDependencies.js'), join(root, 'scripts', 'lib', 'workspaceDependencies.js'));
+    copyFileSync(join(REPO_ROOT, 'scripts', 'lib', 'dependencyReceipts.js'), join(root, 'scripts', 'lib', 'dependencyReceipts.js'));
     writeFileSync(join(root, 'scripts', 'trusted-rebuilds.js'), `
       export const rebuildTrusted = () => true;
     `);
@@ -227,6 +229,24 @@ describe('startup dependency reconciliation', () => {
       f.run();
       expect(existsSync(join(f.client, 'node_modules', 'stale'))).toBe(false);
       expect(f.run()).not.toContain('reinstall');
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('repairs a changed project npm config once when startup has recorded install evidence', () => {
+    const f = fixture();
+    try {
+      f.run();
+      writeFileSync(join(f.client, '.npmrc'), 'ignore-scripts=true\n');
+      for (const dir of [f.root, f.client, join(f.root, 'server')]) {
+        rmSync(join(dir, 'node_modules', 'npm-ran'));
+      }
+      expect(f.run()).toContain('client dependency inputs changed');
+      expect(existsSync(join(f.client, 'node_modules', 'npm-ran'))).toBe(true);
+      expect(existsSync(join(f.root, 'node_modules', 'npm-ran'))).toBe(false);
+      expect(existsSync(join(f.root, 'server', 'node_modules', 'npm-ran'))).toBe(false);
+      expect(f.run()).not.toMatch(/reinstall|installing/i);
     } finally {
       rmSync(f.root, { recursive: true, force: true });
     }

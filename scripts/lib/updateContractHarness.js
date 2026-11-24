@@ -30,7 +30,8 @@ command('--terminal', id, String(process.pid), '0');
 /** Use the actual updater and its builtin-only imports in an offline test checkout. */
 export function installUpdateContract(root) {
   installUpdateTestSupervisor(root, { standalone: true });
-  for (const path of [...shimFiles, 'scripts/update.mjs', 'server/lib/gitStaleLock.js',
+  for (const path of [...shimFiles, 'scripts/update.mjs', 'scripts/lib/dependencyReceipts.js',
+    'scripts/lib/workspaceDependencies.js', 'server/lib/gitStaleLock.js',
     'server/lib/homePath.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js']) copyFromSource(root, path);
   // This fixture stops before setup, network, or service work. No downloaded
   // dependencies or platform-specific tooling is required beyond Git + Node.

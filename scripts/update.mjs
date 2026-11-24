@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { accessSync, appendFileSync, closeSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { accessSync, appendFileSync, closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { dependencyHash, npmConfigHash, readDependencyHashes, writeDependencyHashes } from './lib/dependencyReceipts.js';
+import { dependencyWorkspaces, hasLinkedDependencies, inspectWorkspaceDependencies } from './lib/workspaceDependencies.js';
 import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../server/lib/aiToolkit/internal/windowsSafeSpawn.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -13,11 +14,12 @@ const updateId = process.env.PORTOS_DEFERRED_UPDATE_ID;
 const peerId = process.env.PORTOS_PEER_UPDATE_OPERATION_ID;
 const peerTarget = process.env.PORTOS_PEER_UPDATE_TARGET_SHA;
 const peerExpected = process.env.PORTOS_PEER_UPDATE_EXPECTED_SHA;
-const workspaces = ['.', 'client', 'server'];
+const workspaces = dependencyWorkspaces(root);
 const productionApps = 'portos-server,portos-cos,portos-autofixer,portos-browser';
 const dataDir = join(root, 'data');
 const updateLog = join(dataDir, 'update.log');
 const marker = join(dataDir, 'update-complete.json');
+const pendingReconcile = join(dataDir, 'dependency-reconcile-pending.json');
 const pm2Local = [process.execPath, join(root, 'node_modules', 'pm2', 'bin', 'pm2')];
 const pm2Start = ['start', 'ecosystem.config.cjs', '--only', productionApps];
 const signals = { SIGTERM: 143, SIGINT: 130, SIGHUP: 129 };
@@ -209,67 +211,55 @@ async function checkPulledNode(previous) {
 // left previous === HEAD, so `git diff` cannot see them (#17511, #17606).
 function pendingReconcileLockfiles() {
   try {
-    const parsed = JSON.parse(readFileSync(join(dataDir, 'dependency-reconcile-pending.json'), 'utf8'));
-    if (!Array.isArray(parsed?.lockfiles)) return [];
-    return parsed.lockfiles.filter(lockfile => typeof lockfile === 'string' && lockfile.length > 0);
-  } catch {
-    return [];
+    const { lockfiles } = JSON.parse(readFileSync(pendingReconcile, 'utf8'));
+    if (Array.isArray(lockfiles) && lockfiles.every(path => typeof path === 'string' && path.length)) return lockfiles;
+    return null;
+  } catch (error) {
+    return error.code === 'ENOENT' ? [] : null;
   }
-}
-
-// Same digest as scripts/ensure-deps.js `dependencyHash`: v2:sha256(package.json
-// NUL package-lock.json), with '<no-lockfile>' when the lock is absent. Duplicated
-// because this updater must stay builtin-only (scripts/pre-install-entrypoints.test.js);
-// importing ensure-deps would pull server/lib into the bare-checkout closure.
-function workspaceDependencyHash(dir) {
-  const manifest = join(dir, 'package.json');
-  if (!existsSync(manifest)) return null;
-  const lockfile = join(dir, 'package-lock.json');
-  const hash = createHash('sha256').update(readFileSync(manifest)).update('\0');
-  hash.update(existsSync(lockfile) ? readFileSync(lockfile) : '<no-lockfile>');
-  return `v2:${hash.digest('hex')}`;
-}
-
-function writeDependencyReceipts() {
-  const hashes = {};
-  for (const workspace of workspaces) {
-    const label = workspace === '.' ? 'root' : workspace;
-    const hash = workspaceDependencyHash(workspace === '.' ? root : join(root, workspace));
-    if (hash) hashes[label] = hash;
-  }
-  mkdirSync(dataDir, { recursive: true });
-  const receipt = join(dataDir, 'deps-hashes.json');
-  const temporary = `${receipt}.tmp`;
-  writeFileSync(temporary, JSON.stringify(hashes, null, 2));
-  renameSync(temporary, receipt);
 }
 
 async function install(previous) {
-  step('npm-install', 'running', 'Installing all dependencies...');
-  const known = previous && !(await git('cat-file', '-e', `${previous}^{commit}`)).code;
-  const changed = new Set(known
-    ? (await capture('git', ['diff', '--name-only', previous, 'HEAD'])).stdout.split(/\r?\n/).filter(Boolean).map(path => path.replaceAll('\\', '/'))
-    : []);
-  // Read before the marker is removed. A fast-forward reconcile has an empty
-  // diff (previous === HEAD) and would otherwise skip the clean wipe.
-  for (const lockfile of pendingReconcileLockfiles()) changed.add(lockfile.replaceAll('\\', '/'));
+  step('npm-install', 'running', 'Checking workspace dependencies...');
+  const diff = previous && await capture('git', ['diff', '--name-only', '--no-renames', '-z', previous, 'HEAD']);
+  const pending = pendingReconcileLockfiles();
+  const known = diff?.code === 0 && pending !== null;
+  const changed = new Set(known ? diff.stdout.split('\0').filter(Boolean) : []);
+  // A fast-forward reconcile can leave an empty diff (previous === HEAD).
+  for (const lockfile of pending ?? []) changed.add(lockfile.replaceAll('\\', '/'));
   const forced = new Set((process.env.PORTOS_FORCE_CLEAN_WORKSPACES || '').split(',').filter(Boolean));
+  const hashes = readDependencyHashes(root);
+  const vite = join(root, 'client/node_modules/vite/bin/vite.js');
+  let installed = 0;
   for (const workspace of workspaces) {
-    const cwd = workspace === '.' ? root : join(root, workspace);
-    const label = workspace === '.' ? 'root' : workspace;
-    const manifest = workspace === '.' ? 'package.json' : `${workspace}/package.json`;
-    const lockfile = workspace === '.' ? 'package-lock.json' : `${workspace}/package-lock.json`;
+    const { dir: cwd, label } = workspace;
+    const key = label === 'root' ? '.' : label;
+    const inputs = ['package.json', 'package-lock.json', '.npmrc']
+      .filter(file => changed.has(label === 'root' ? file : `${label}/${file}`));
+    const hash = dependencyHash(cwd);
+    const config = npmConfigHash(cwd);
+    const recordedConfig = hashes.npmrc[label];
+    const configChanged = recordedConfig !== undefined && recordedConfig !== config;
+    const receiptMatches = hash !== null && hashes[label] === hash && (recordedConfig ?? null) === config;
     const clean = () => rmSync(join(cwd, 'node_modules'), { recursive: true, force: true });
-    const manifestChanged = changed.has(manifest);
-    const lockChanged = changed.has(lockfile);
-    if (!known || manifestChanged || lockChanged || forced.has(workspace)) {
-      const inputs = [manifestChanged && 'package.json', lockChanged && 'package-lock.json'].filter(Boolean);
-      const reason = !known ? 'dependency baseline unknown'
-        : inputs.length ? `${inputs.join(' and ')} changed`
-          : 'clean reinstall forced';
+    let reason;
+    if (!known) reason = 'dependency baseline unknown';
+    else if (inputs.length) reason = `${inputs.join(' and ')} changed`;
+    else if (forced.has(key)) reason = 'clean reinstall forced';
+    else if (configChanged || (hashes[label] != null && hashes[label] !== hash)) reason = 'dependency receipt changed';
+    else if (receiptMatches) {
+      const { issues } = inspectWorkspaceDependencies(workspace);
+      if (!issues.length && (label !== 'client' || existsSync(vite))) {
+        log(`✅ Reusing verified deps (${label})`);
+        continue;
+      }
+      reason = 'installed dependency tree could not be verified';
+    }
+    if (reason) {
       log(`🧹 ${label} ${reason} in this update — clean reinstall (wiping node_modules)`);
       clean();
     }
+    installed++;
     log(`📦 Installing deps (${label})...`);
     const npmInstall = () => run('npm', ['install', '--no-save'], { cwd });
     if ((await npmInstall()).code) {
@@ -283,17 +273,14 @@ async function install(previous) {
   }
   log('🔧 Rebuilding trusted native dependencies...');
   await required(node('scripts/trusted-rebuilds.js', 'server'));
-  if (!existsSync(join(root, 'client/node_modules/vite/bin/vite.js'))) {
+  if (!existsSync(vite)) {
     log('❌ Critical dependency missing: client/node_modules/vite. Try npm run install:all.');
     fail();
   }
-  // Receipt first: a crash before the marker is cleared retries the wipe
-  // instead of letting the next start discover a stale hash and install twice.
-  writeDependencyReceipts();
-  // The updater runs without application imports (headless-install guard), so it
-  // clears the marker scripts/lib/dependencyReconcile.js writes by file name (#17511).
-  rmSync(join(dataDir, 'dependency-reconcile-pending.json'), { force: true });
-  step('npm-install', 'done', 'Dependencies installed');
+  // Preserve pending repair evidence until the install receipts are in place.
+  writeDependencyHashes(root);
+  rmSync(pendingReconcile, { force: true });
+  step('npm-install', 'done', installed ? `Dependencies installed in ${installed} of ${workspaces.length} workspaces` : 'Verified existing workspace dependencies');
 }
 
 async function prepareData() {
@@ -393,7 +380,7 @@ async function main() {
   log('===================================\n  PortOS Update\n===================================\n');
   // Do not let npm repair a CoS worktree whose dependencies are symlinked to a
   // live checkout, even when no manifest changed and no clean install is due.
-  if (workspaces.some(dir => lstatSync(join(root, dir, 'node_modules'), { throwIfNoEntry: false })?.isSymbolicLink())) {
+  if (workspaces.some(({ dir }) => hasLinkedDependencies(dir))) {
     log('❌ Refusing update: node_modules is linked to another checkout.');
     fail();
   }
