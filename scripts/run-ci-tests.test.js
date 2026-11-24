@@ -740,6 +740,7 @@ describe('ci.yml shard wiring', () => {
     const ctc = 'scripts/align_lyrics_ctc.test.js';
     try {
       const related = JSON.parse(execFileSync(process.execPath, [join(import.meta.dirname, 'ci-test-plan.js')], {
+        cwd: join(import.meta.dirname, '..'),
         encoding: 'utf8', env: { ...process.env, CI_FORCE_FULL: 'false', CI_BASE_REF: 'main', CI_BASE_SHA: 'HEAD',
           CI_CHANGED_FILES: '["server/lib/testHelper.js"]', GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
       }));
