@@ -176,6 +176,7 @@ function buildSuitePlan(changedFiles, {
   clientTestDependencies = {},
   // Includes literal deferred imports; null means discovery was inconclusive.
   dbDependencies = [],
+  dbLiveRestoreInputs = [],
   // Registered suite → reachable files; null retains that suite conservatively.
   browserDependencies = {},
   // Changed dependency manifest → classifyDependencyChange() verdict. A
@@ -240,6 +241,7 @@ function buildSuitePlan(changedFiles, {
       client: alwaysRunClient.length > 0 ? { mode: 'files', files: alwaysRunClient, sources: [] } : skippedRunner(),
       browserFiles: browserSuitesIn(alwaysRun),
       db: false,
+      dbLiveRestore: false,
       lint: { mode: 'skip', files: [] },
       build: false,
       smoke: false,
@@ -393,8 +395,9 @@ function buildSuitePlan(changedFiles, {
       : skippedRunner();
 
   const dbTests = new Set(resolveDbTestFiles(trackedFiles));
-  const db = selectedTests.some((path) => dbTests.has(path))
-    || executable.some((path) => DB_RISK_RULES.some((rule) => rule.test(path)))
+  const dbLiveRestore = executable.some((path) => DB_RISK_RULES.some((rule) => rule.test(path)))
+    || serverSources.some((path) => dbLiveRestoreInputs === null || dbLiveRestoreInputs.includes(path));
+  const db = dbLiveRestore || selectedTests.some((path) => dbTests.has(path))
     || serverSources.some((path) => dbDependencies === null || dbDependencies.includes(path));
 
   const windows = hasWindowsRiskFile(changed);
@@ -419,6 +422,7 @@ function buildSuitePlan(changedFiles, {
           || browserDependencies[suite]?.includes(source))),
     ]),
     db,
+    dbLiveRestore,
     lint: {
       // Same deleted-path guard as directTests above — ESLint given a
       // nonexistent explicit path exits non-zero instead of skipping it.
@@ -479,6 +483,7 @@ function fullPlan(changedFiles, reason, options = {}) {
     client: { mode: 'full', files: [], sources: [] },
     browserFiles: browserSuitesIn([...trackedSet]),
     db: true,
+    dbLiveRestore: true,
     lint: { mode: 'full', files: [] },
     build: true,
     smoke: true,
@@ -526,7 +531,8 @@ function main() {
   }
   const gatedBaseSha = process.env.CI_GATED_BASE_SHA || undefined;
   const {
-    changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, clientTestDependencies, dbDependencies, browserDependencies,
+    changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, clientTestDependencies,
+    dbDependencies, dbLiveRestoreInputs, browserDependencies,
     dependencyChanges, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach,
     clientReach, clientBrowserReach, gatedChangedFiles, gatedDependencyChanges,
   } = collectPlanInputs({
@@ -546,6 +552,7 @@ function main() {
     clientDependencies,
     clientTestDependencies,
     dbDependencies,
+    dbLiveRestoreInputs,
     browserDependencies,
     dependencyChanges,
     linuxContainmentInputs,

@@ -921,6 +921,7 @@ it('follows DB-only deferred dependencies through the pre-install CLI and preser
   };
   const leaf = 'server/services/example/leaf.js';
   const contract = 'server/routes/decks.db.test.js';
+  const liveRestore = 'server/services/backupDatabaseDump.restore.live.test.js';
   const plan = (changedFiles) => JSON.parse(execFileSync(process.execPath, [planner], {
     cwd: root,
     encoding: 'utf8', stdio: PLANNER_STDIO,
@@ -936,16 +937,25 @@ it('follows DB-only deferred dependencies through the pre-install CLI and preser
       "export const load = () => import('./example/leaf.js');",
     ].join('\n'));
     write(contract, "import '../services/bridge.js';\n");
+    write(liveRestore, '// No shared dependencies.\n');
     write('server/services/unrelated.js', 'export const value = 2;\n');
     git('add', '--all');
 
     // The contract neither names leaf.js nor shares its feature; only the
     // dependency walk can request the otherwise excluded database suite.
     const related = plan([leaf]);
-    expect(related).toMatchObject({ full: false, db: true, server_mode: 'related' });
+    expect(related).toMatchObject({ full: false, db: true, db_live_restore: false, server_mode: 'related' });
     expect(related.server_files).not.toContain(contract);
     expect(plan(['server/services/unrelated.js'])).toMatchObject({ full: false, db: false });
     expect(plan(['docs/README.md'])).toMatchObject({ full: false, db: false });
+
+    const restoreOnly = 'server/services/restoreInput.js';
+    write(restoreOnly, 'export const value = 3;\n');
+    write(liveRestore, "import './restoreInput.js';\n");
+    expect(plan([restoreOnly])).toMatchObject({ full: false, db: true, db_live_restore: true });
+    write(liveRestore, "import './missing.js';\n");
+    expect(plan([restoreOnly])).toMatchObject({ full: false, db: true, db_live_restore: true });
+    write(liveRestore, '// No shared dependencies.\n');
 
     // Basename and feature selectors must trigger DB coverage too.
     write('server/services/bridge.js', 'export const value = 2;\n');
@@ -3304,9 +3314,16 @@ describe('native jobs on a push to main', () => {
   });
 });
 
-// Database maintenance sources select the DB job by path.
-it.each(['scripts/rehearsal-scratch-db.js', 'scripts/lib/migrationFiles.js', 'server/lib/databaseMaintenanceSchema.js',
-  'server/services/backupDatabaseDump.js', 'server/services/backupDatabaseDump.restore.live.test.js', 'scripts/lib/dbImage.js', 'docker-compose.yml'])
-('selects the DB job for %s', source => {
-  expect(buildCiTestPlan([source], { trackedFiles: [source], clientDependencies: [] }).db).toBe(true);
+it('selects live restore for DB risks and its real closure, separately from general DB dependencies', () => {
+  const inputs = realTree();
+  const planFor = (source) => githubPlanOutput(buildCiTestPlan([source], inputs));
+  for (const source of ['scripts/rehearsal-scratch-db.js', 'scripts/lib/migrationFiles.js', 'server/lib/databaseMaintenanceSchema.js',
+    'server/services/backupDatabaseDump.js', 'server/services/backupDatabaseDump.restore.live.test.js', 'scripts/lib/dbImage.js',
+    'server/scripts/init-db.sql', 'server/services/backupDatabaseReset.js']) {
+    expect(planFor(source), source).toMatchObject({ full: false, db: true, db_live_restore: true });
+  }
+  expect(planFor('docker-compose.yml')).toMatchObject({ full: true, db: true, db_live_restore: true });
+  expect(planFor('server/services/catalog/catalogSync.js')).toMatchObject({ full: false, db: true, db_live_restore: false });
+  expect(planFor('docs/README.md')).toMatchObject({ db: false, db_live_restore: false });
+  expect(githubPlanOutput(buildCiTestPlan([], { forceFull: true }))).toMatchObject({ full: true, db: true, db_live_restore: true });
 });
