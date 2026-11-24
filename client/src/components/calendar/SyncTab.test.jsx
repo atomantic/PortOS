@@ -152,6 +152,21 @@ describe('Calendar sync lifecycle', () => {
 describe('Calendar token clearing', () => {
   const present = { providers: [{ provider: 'outlook', hasToken: true }] };
 
+  it('requires inline confirmation naming the provider and Messages before clearing, and allows cancel', async () => {
+    api.getCalendarTokenStatus.mockResolvedValue(present);
+    render(<SyncTab accounts={[account]} onRefresh={vi.fn()} />);
+    const button = await screen.findByRole('button', { name: 'Clear' });
+
+    fireEvent.click(button);
+    expect(screen.getByText(/Clear outlook token\? This token is shared with Messages\./)).toBeTruthy();
+    expect(api.clearCalendarToken).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByText(/shared with Messages/)).toBeNull();
+    expect(api.clearCalendarToken).not.toHaveBeenCalled();
+    expect(screen.getByText('Token present')).toBeTruthy();
+  });
+
   it('blocks duplicate clears and refreshes only after a bodyless success', async () => {
     let resolve;
     api.getCalendarTokenStatus.mockResolvedValue(present);
@@ -160,6 +175,7 @@ describe('Calendar token clearing', () => {
     const button = await screen.findByRole('button', { name: 'Clear' });
     api.getCalendarTokenStatus.mockResolvedValue({ providers: [{ provider: 'outlook', hasToken: false }] });
     fireEvent.click(button);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear token' }));
     expect(button).toBeDisabled();
     fireEvent.click(button);
     expect(api.clearCalendarToken).toHaveBeenCalledExactlyOnceWith('outlook');
@@ -178,6 +194,7 @@ describe('Calendar token clearing', () => {
     render(<SyncTab accounts={[account]} onRefresh={vi.fn()} />);
     const button = await screen.findByRole('button', { name: 'Clear' });
     fireEvent.click(button);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear token' }));
     await waitFor(() => expect(button).toBeEnabled());
     expect(screen.getByText('Token present')).toBeTruthy();
     expect(api.getCalendarTokenStatus).toHaveBeenCalledTimes(1);
@@ -185,9 +202,27 @@ describe('Calendar token clearing', () => {
     expect(toast.error).not.toHaveBeenCalled();
 
     fireEvent.click(button);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear token' }));
     await waitFor(() => expect(toast.success).toHaveBeenCalledExactlyOnceWith('outlook token cleared'));
     expect(api.clearCalendarToken).toHaveBeenCalledTimes(2);
     expect(api.getCalendarTokenStatus).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Token status load failure', () => {
+  it('calls getCalendarTokenStatus silently, renders ListLoadError with Retry, and recovers on retry', async () => {
+    api.getCalendarTokenStatus
+      .mockRejectedValueOnce(new Error('Token service unavailable'))
+      .mockResolvedValueOnce({ providers: [{ provider: 'outlook', hasToken: true }] });
+    render(<MemoryRouter><SyncTab accounts={[account]} onRefresh={vi.fn()} /></MemoryRouter>);
+
+    expect(await screen.findByText(/Could not load token status — Token service unavailable/)).toBeTruthy();
+    expect(api.getCalendarTokenStatus).toHaveBeenCalledWith({ silent: true });
+    expect(toast.error).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByText('Token present');
+    expect(screen.queryByText(/Could not load token status/)).toBeNull();
   });
 });
 

@@ -94,7 +94,7 @@ export async function createAccount(accountData) {
 
   await store.mutate((data) => { data.accounts[id] = account; });
 
-  console.log(`🔗 Created platform account: ${account.platform}/${account.credentials.username} (${id})`);
+  console.log(`🔗 Created platform account: ${account.platform} (${id})`);
   return {
     id,
     ...account,
@@ -156,7 +156,7 @@ export async function deleteAccount(id) {
 
   if (!account) return false;
 
-  console.log(`🗑️ Deleted platform account: ${account.platform}/${account.credentials.username} (${id})`);
+  console.log(`🗑️ Deleted platform account: ${account.platform} (${id})`);
   return true;
 }
 

@@ -52,6 +52,18 @@ export function rowToIdentity(row) {
   };
 }
 
+function isValidLookupScope(scope) {
+  const kind = scope?.kind;
+  const network = scope?.network ?? '';
+  const handle = scope?.handle;
+  return Boolean(kind && handle && (!NETWORK_SCOPED_KINDS.has(kind) || network));
+}
+
+/** Stable map key for batch identity lookups across `(kind, network, handle)`. */
+export function identityLookupKey({ kind, network = '', handle }) {
+  return JSON.stringify([kind, network || '', handle]);
+}
+
 /**
  * Look up the Tribe person currently claiming a `(kind, network, handle)`
  * identity, or `null`. `network` defaults to `''` (the network-less scope
@@ -67,8 +79,7 @@ export function rowToIdentity(row) {
  * keep resolving a Beeper participant onto a person the user deleted.
  */
 export async function resolvePersonByIdentity({ kind, network = '', handle }) {
-  if (!kind || !handle) return null;
-  if (NETWORK_SCOPED_KINDS.has(kind) && !network) return null;
+  if (!isValidLookupScope({ kind, network, handle })) return null;
   await ensureReady();
   const result = await query(
     `SELECT ti.person_id
@@ -78,6 +89,45 @@ export async function resolvePersonByIdentity({ kind, network = '', handle }) {
     [kind, network, handle],
   );
   return result.rows[0]?.person_id || null;
+}
+
+/**
+ * Batch-resolve `(kind, network, handle)` identity claims to live
+ * (`deleted = FALSE`) Tribe person IDs in one query. Returns a `Map` keyed by
+ * `identityLookupKey(scope) -> personId`.
+ */
+export async function resolvePeopleByIdentities(scopes = []) {
+  const unique = new Map();
+  for (const scope of scopes) {
+    if (!isValidLookupScope(scope)) continue;
+    const normalized = { kind: scope.kind, network: scope.network || '', handle: scope.handle };
+    unique.set(identityLookupKey(normalized), normalized);
+  }
+  if (unique.size === 0) return new Map();
+
+  await ensureReady();
+  const entries = [...unique.values()];
+  const result = await query(
+    `SELECT ti.kind, ti.network, ti.handle, ti.person_id
+       FROM unnest($1::text[], $2::text[], $3::text[]) AS s(kind, network, handle)
+       JOIN tribe_identities ti
+         ON ti.kind = s.kind AND ti.network = s.network AND ti.handle = s.handle
+       JOIN tribe_people tp ON tp.id = ti.person_id
+      WHERE tp.deleted = FALSE`,
+    [
+      entries.map((s) => s.kind),
+      entries.map((s) => s.network),
+      entries.map((s) => s.handle),
+    ],
+  );
+  const resolved = new Map();
+  for (const row of result.rows) {
+    resolved.set(
+      identityLookupKey({ kind: row.kind, network: row.network || '', handle: row.handle }),
+      row.person_id,
+    );
+  }
+  return resolved;
 }
 
 /**

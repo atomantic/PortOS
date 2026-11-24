@@ -6,12 +6,14 @@
 import { readdir } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { isLoopbackEndpoint } from '../lib/localEndpoint.js';
 import { getInstances, createJiraClient, resolveCustomFieldIds } from './jira.js';
 import { getActiveApps } from './apps.js';
 import { callProviderAISimple } from './aiProvider.js';
 import { getActiveProvider, getAllProviders } from './provider/providers.js';
 
 const REPORTS_DIR = join(PATHS.data, 'jira-reports');
+const isEnabledApiProvider = (p) => p?.type === 'api' && p.enabled !== false;
 
 function mapIssue(issue, baseUrl, storyPointsField) {
   return {
@@ -97,16 +99,24 @@ async function generateNarrativeSummary(appName, completed, inProgress, blocked,
 
   const ticketData = sections.join('\n\n');
 
-  // Collect candidate API providers (active first, then all others)
+  // Collect enabled candidate API providers (active first, then all others).
+  // Keep local-LLM Jira summaries off external cloud providers if the active local endpoint fails.
   const candidates = [];
   const [active, providersResult] = await Promise.all([
     getActiveProvider().catch(() => null),
     getAllProviders().catch(() => ({ providers: [] }))
   ]);
-  if (active?.type === 'api') candidates.push(active);
+  if (isEnabledApiProvider(active)) candidates.push(active);
+  const localOnly = active?.type === 'api' && isLoopbackEndpoint(active.endpoint);
   const allProviders = Array.isArray(providersResult) ? providersResult : (providersResult?.providers || []);
   for (const p of allProviders) {
-    if (p.type === 'api' && !candidates.some(c => c.id === p.id)) candidates.push(p);
+    if (
+      isEnabledApiProvider(p)
+      && (!localOnly || isLoopbackEndpoint(p.endpoint))
+      && !candidates.some(c => c.id === p.id)
+    ) {
+      candidates.push(p);
+    }
   }
 
   if (candidates.length === 0) {

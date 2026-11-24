@@ -24,7 +24,7 @@ vi.mock('../services/pipeline/musicGen.js', async () => {
     musicgen: { id: 'musicgen', name: 'MusicGen', models: [{ id: 'm', name: 'M' }], defaultModelId: 'm', minDurationSec: 1, maxDurationSec: 30, defaultDurationSec: 12, installEnv: 'INSTALL_MUSICGEN', venvDefault: '/v/mg', resolvePython: () => (gen.ready ? '/v/mg/bin/python3' : null), customModels: true },
     acestep: { id: 'acestep', name: 'ACE-Step', models: [{ id: 'a', name: 'A' }], defaultModelId: 'a', minDurationSec: 1, maxDurationSec: 240, defaultDurationSec: 60, installEnv: 'INSTALL_ACESTEP', venvDefault: '/v/ace', resolvePython: () => (gen.ready ? '/v/ace/bin/python3' : null), lyrics: true, customModels: false },
     acestep15: { id: 'acestep15', name: 'ACE-Step 1.5', models: actual.ACESTEP15_MODELS, defaultModelId: 'ace-step-v1.5', minDurationSec: 1, maxDurationSec: 240, defaultDurationSec: 60, installEnv: 'INSTALL_ACESTEP15', venvDefault: '/v/ace15', resolvePython: () => (gen.ready ? '/v/ace15/bin/python3' : null), lyrics: true, customModels: false, fixedModelInstall: true, supportsModelRevision: true },
-      'minimax-music3': { id: 'minimax-music3', name: 'MiniMax Music 3', models: [{ id: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3', name: 'MiniMax Music 3', downloadIgnore: ['qwen_7B/*', 'flowmatching_vae.pth', 'dav.pth', 'figures/*'], downloadSizeGb: 29 }], defaultModelId: 'minimax-music3', minDurationSec: 1, maxDurationSec: 300, defaultDurationSec: 60, installEnv: 'INSTALL_MINIMAX_MUSIC3', venvDefault: '/v/minimax', resolvePython: () => (gen.ready ? '/v/minimax/bin/python3' : null), lyrics: true, customModels: false, fixedModelInstall: true, cudaRequired: true, autoDuration: true, executionProfile: 'cuda-bf16-auto-experimental', vramProfiles: { 'cuda-bf16-auto-experimental': { label: 'CUDA BF16 (experimental automatic placement)', minVramGb: null, recommendedVramGb: null } } },
+      'minimax-music3': { id: 'minimax-music3', name: 'MiniMax Music 3', models: actual.MINIMAX_MUSIC3_MODELS, defaultModelId: 'minimax-music3', minDurationSec: 1, maxDurationSec: 300, defaultDurationSec: 60, installEnv: 'INSTALL_MINIMAX_MUSIC3', venvDefault: '/v/minimax', resolvePython: () => (gen.ready ? '/v/minimax/bin/python3' : null), lyrics: true, customModels: false, fixedModelInstall: true, supportsModelRevision: true, cudaRequired: true, autoDuration: true, executionProfile: 'cuda-bf16-auto-experimental', vramProfiles: { 'cuda-bf16-auto-experimental': { label: 'CUDA BF16 (experimental automatic placement)', minVramGb: null, recommendedVramGb: null } } },
     'minimax-music3-mlx': { id: 'minimax-music3-mlx', name: 'MiniMax Music 3 (MLX)', models: [
       { id: 'minimax-music3-mlx-8bit', repo: 'mlx-community/MiniMax-Music3-8bit', revision: '10aa4ca578d04c6f5256c1bc22fc8405a09602b5', downloadSizeGb: 14, name: 'MiniMax Music 3 MLX 8-bit' },
       { id: 'minimax-music3-mlx-bf16', repo: 'mlx-community/MiniMax-Music3-bf16', revision: '83a5f2d365673689df5c8f36e21e108751fd92ea', downloadSizeGb: 29, name: 'MiniMax Music 3 MLX BF16' },
@@ -755,7 +755,8 @@ describe('music routes', () => {
     expect(sse.run).toHaveBeenCalledTimes(1);
   });
 
-  it('POST /models forwards a shipped fixed model\'s downloadIgnore to the download stream', async () => {
+  it('POST /models forwards a shipped fixed model\'s downloadIgnore and pinned revision to the download stream', async () => {
+    const pinnedRevision = '1b525ccb685ae809f33027c51c351eeb5833cf72';
     const r = await request(app).post('/api/music/models').send({ engine: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3' });
     expect(r.status).toBe(200);
     // Skipping the bundled captioner and original-format checkpoints keeps the
@@ -764,8 +765,13 @@ describe('music routes', () => {
       repos: [{
         repo: 'MiniMaxAI/MiniMax-Music3',
         ignore: ['qwen_7B/*', 'flowmatching_vae.pth', 'dav.pth', 'figures/*'],
+        revision: pinnedRevision,
       }],
     }));
+    expect(cache.calls).toContainEqual({
+      repo: 'MiniMaxAI/MiniMax-Music3',
+      revision: pinnedRevision,
+    });
     // A shipped model is already in the engine's list — nothing to register.
     expect(models.add).not.toHaveBeenCalled();
   });

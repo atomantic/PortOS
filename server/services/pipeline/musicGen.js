@@ -140,6 +140,7 @@ export const MINIMAX_MUSIC3_MODELS = Object.freeze([
   {
     id: 'minimax-music3',
     repo: 'MiniMaxAI/MiniMax-Music3',
+    revision: '1b525ccb685ae809f33027c51c351eeb5833cf72',
     name: 'MiniMax-Music3 (CUDA, up to 5 minutes)',
     downloadIgnore: Object.freeze(['qwen_7B/*', 'flowmatching_vae.pth', 'dav.pth', 'figures/*']),
     downloadSizeGb: 29,
@@ -341,6 +342,7 @@ export const ENGINES = Object.freeze({
     autoDuration: true,
     customModels: false,
     fixedModelInstall: true,
+    supportsModelRevision: true,
     cudaRequired: true,
     executionProfile: 'cuda-bf16-auto-experimental',
     vramProfiles: MINIMAX_MUSIC3_VRAM_PROFILES,

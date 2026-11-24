@@ -482,7 +482,7 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
     }).catch((err) => ({ error: err.message }));
     if (stitched?.error) {
       await setHistoryItemsHidden(chunkIds, true);
-      await finishFail(`Stitch failed: ${stitched.error}`);
+      await finishFail(chainState.stopped ? 'Canceled mid-chain' : `Stitch failed: ${stitched.error}`);
       return;
     }
     await setHistoryItemsHidden(chunkIds, true);
@@ -495,6 +495,7 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
   })().catch(async (err) => {
     const log = chainState.stopped ? console.log : console.error;
     log(`${chainState.stopped ? '🚫' : '❌'} chain orchestration stopped [${outerJobId.slice(0, 8)}]: ${err.message}`);
+    await setHistoryItemsHidden(chunkIds, true);
     await finishFail(err.message, normalizeVideoFailure(err, failureOptions));
   });
 

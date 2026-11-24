@@ -49,21 +49,49 @@ describe('Docker containment routes', () => {
     const status = await request(app).get('/api/docker-containment/status');
     expect(status.status).toBe(200);
     expect(status.body).toMatchObject({ enabled: false, state: 'disabled', ready: false });
+    const expectedOff = {
+      status: 'refused',
+      code: 'CONTAINMENT_UNAVAILABLE',
+      state: 'disabled',
+      reason: 'Docker containment is off. Turn it on in Settings > Features first.',
+      error: 'Docker containment is off. Turn it on in Settings > Features first.',
+      contained: false,
+      timestamp: expect.any(Number),
+    };
     const run = await request(app).post('/api/docker-containment/run').send({ worktree, phase: 'validate', command: 'npm test' });
     expect(run.status).toBe(409);
-    expect(run.body).toMatchObject({ status: 'refused', code: 'CONTAINMENT_UNAVAILABLE', state: 'disabled', contained: false });
+    expect(run.body).toMatchObject(expectedOff);
+    const pull = await request(app).post('/api/docker-containment/pull').send({ major: 22 });
+    expect(pull.status).toBe(409);
+    expect(pull.body).toMatchObject(expectedOff);
     expect(gate.resolveEngine).not.toHaveBeenCalled();
     expect(gate.spawn).not.toHaveBeenCalled();
   });
 
-  it.each([['absent', 'docker-missing'], ['stopped', 'docker-stopped'], ['remote', 'docker-remote-refused']])('refuses a run with the resolver reason when Docker is %s, executing nothing', async (kind, state) => {
+  it.each([['absent', 'docker-missing'], ['stopped', 'docker-stopped'], ['remote', 'docker-remote-refused']])('refuses a run and pull with the resolver reason when Docker is %s, executing nothing', async (kind, state) => {
     gate.enabled = true;
     const verdict = await dockerVerdict(kind);
     expect(verdict.state).toBe(state);
     gate.resolveEngine = vi.fn(() => verdict);
     const res = await request(app).post('/api/docker-containment/run').send({ worktree, phase: 'install', command: 'npm ci' });
     expect(res.status).toBe(409);
-    expect(res.body).toMatchObject({ status: 'refused', code: 'CONTAINMENT_UNAVAILABLE', reason: verdict.message, contained: false });
+    expect(res.body).toMatchObject({
+      status: 'refused',
+      code: 'CONTAINMENT_UNAVAILABLE',
+      reason: verdict.message,
+      error: verdict.message,
+      contained: false,
+      timestamp: expect.any(Number),
+    });
+    const pull = await request(app).post('/api/docker-containment/pull').send({ major: 22 });
+    expect(pull.status).toBe(409);
+    expect(pull.body).toMatchObject({
+      ok: false,
+      code: 'CONTAINMENT_UNAVAILABLE',
+      state,
+      error: verdict.message,
+      timestamp: expect.any(Number),
+    });
     expect(gate.spawn).not.toHaveBeenCalled();
   });
 

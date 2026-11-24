@@ -388,9 +388,17 @@ describe('Voice Routes', () => {
       expect(emit).toHaveBeenLastCalledWith('voice:config:changed', expect.objectContaining({ personality: null }));
     });
 
-    it('accepts Qwen3-TTS engine and voice configuration', async () => {
-      config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG });
+    it('accepts Qwen3-TTS engine and voice configuration and resolves ttsVoice on voice:config:changed', async () => {
+      const qwenCfg = {
+        ...DEFAULT_CFG,
+        tts: {
+          engine: 'qwen3-tts',
+          qwen3: { modelId: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign', voice: 'warm-narrator' },
+        },
+      };
+      config.updateVoiceConfig.mockResolvedValue(qwenCfg);
       bootstrap.reconcile.mockResolvedValue({ skipped: true });
+      const emit = vi.fn();
       const patch = {
         tts: {
           engine: 'qwen3-tts',
@@ -398,10 +406,14 @@ describe('Voice Routes', () => {
         },
       };
 
-      const res = await request(buildApp()).put('/api/voice/config').send(patch);
+      const res = await request(buildApp({ io: { emit } })).put('/api/voice/config').send(patch);
 
       expect(res.status).toBe(200);
       expect(config.updateVoiceConfig).toHaveBeenCalledWith(patch);
+      expect(emit).toHaveBeenLastCalledWith('voice:config:changed', expect.objectContaining({
+        ttsEngine: 'qwen3-tts',
+        ttsVoice: 'warm-narrator',
+      }));
     });
 
     it('accepts a facetime.autoAnswer patch', async () => {
@@ -706,11 +718,41 @@ describe('Voice Routes', () => {
       expect(facetimeBridge.call).not.toHaveBeenCalled();
     });
 
-    it.each(['no-call-host', 'call-in-progress'])('POST /api/voice/facetime/call returns 409 on refusal %s', async (reason) => {
-      callSession.startCall.mockResolvedValue({ ok: false, reason });
+    it.each([
+      {
+        reason: 'no-call-host',
+        result: { ok: false, reason: 'no-call-host' },
+        code: 'NO_CALL_HOST',
+        error: 'No FaceTime call host tab is attached',
+      },
+      {
+        reason: 'call-in-progress',
+        result: { ok: false, reason: 'call-in-progress' },
+        code: 'CALL_IN_PROGRESS',
+        error: 'A FaceTime call is already in progress',
+      },
+      {
+        reason: 'dial-failed',
+        result: { ok: false, reason: 'dial-failed', message: 'FaceTime helper timed out' },
+        code: 'DIAL_FAILED',
+        error: 'FaceTime helper timed out',
+      },
+      {
+        reason: 'dial-failed (fallback)',
+        result: { ok: false, reason: 'dial-failed' },
+        code: 'DIAL_FAILED',
+        error: 'FaceTime dial failed',
+      },
+    ])('POST /api/voice/facetime/call returns standard 409 ServerError envelope on refusal $reason', async ({ result, code, error }) => {
+      callSession.startCall.mockResolvedValue(result);
       const res = await request(buildApp()).post('/api/voice/facetime/call').send({});
       expect(res.status).toBe(409);
-      expect(res.body.reason).toBe(reason);
+      expect(res.body).toEqual({
+        error,
+        code,
+        timestamp: expect.any(Number),
+        context: { command: 'call', reason: result.reason },
+      });
     });
 
     it('POST /api/voice/facetime/hangup ends an active session call', async () => {

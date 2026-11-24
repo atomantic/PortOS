@@ -14,8 +14,9 @@ from pathlib import Path
 spec = importlib.util.spec_from_file_location("qwen_runner", sys.argv[1])
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
-model_id = runner.SUPPORTED_MODELS[0]
-revision = "a" * 40
+model_ids = list(runner.SUPPORTED_MODELS)
+model_id = model_ids[0]
+revision = runner.SUPPORTED_MODELS[model_id]
 payloads = {name: ("fixture:" + name).encode() for name in runner.REQUIRED_FILES}
 entries = []
 for name, data in payloads.items():
@@ -26,13 +27,19 @@ for name, data in payloads.items():
         blob_id=hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest(),
     ))
 info = types.SimpleNamespace(sha=revision, siblings=entries)
+info_calls = []
+info_sha_override = None
 calls = []
 corrupt = None
 hub = types.ModuleType("huggingface_hub")
-hub.HfApi = lambda **kwargs: types.SimpleNamespace(model_info=lambda *args, **kwargs: info)
+def fake_model_info(repo_id, **kwargs):
+    info_calls.append({"repo_id": repo_id, **kwargs})
+    sha = info_sha_override if info_sha_override is not None else runner.SUPPORTED_MODELS[repo_id]
+    return types.SimpleNamespace(sha=sha, siblings=info.siblings)
+hub.HfApi = lambda **kwargs: types.SimpleNamespace(model_info=fake_model_info)
 def download(**kwargs):
     calls.append(kwargs)
-    assert kwargs["revision"] == revision
+    assert kwargs["revision"] == runner.SUPPORTED_MODELS[kwargs["repo_id"]]
     assert kwargs["endpoint"] == "https://huggingface.co"
     path = kwargs["local_dir"] / kwargs["filename"]
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -121,7 +128,7 @@ class MlxModel:
         events.append({"mlxClone": kwargs})
         yield types.SimpleNamespace(audio=[1], sample_rate=24000)
 def load_mlx(path, **kwargs):
-    assert isinstance(path, Path) and path.name == revision
+    assert isinstance(path, Path) and path.name == runner.SUPPORTED_MODELS[model_id]
     assert os.environ["HF_HUB_OFFLINE"] == "1"
     assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
     assert kwargs == {"strict": True}
@@ -172,17 +179,34 @@ with tempfile.TemporaryDirectory() as temp:
     assert runner.installed_snapshot(model_dir, model_id) is None
     codec.unlink()
     assert runner.installed_snapshot(model_dir, model_id) is None
-    print(json.dumps({"ok": result["ok"], "revision": result["revision"]}))
+    print(json.dumps({"ok": result["ok"], "revision": result["revision"], "infoCalls": info_calls}))
 `);
-    expect(result).toEqual({ ok: true, revision: 'a'.repeat(40) });
+    expect(result).toEqual({
+      ok: true,
+      revision: '5ecdb67327fd37bb2e042aab12ff7391903235d3',
+      infoCalls: [{
+        repo_id: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
+        revision: '5ecdb67327fd37bb2e042aab12ff7391903235d3',
+        files_metadata: true,
+      }],
+    });
   });
 
-  it('rejects corrupt content and incomplete upstream repositories without publishing readiness', () => {
+  it('rejects corrupt content, unexpected commit SHA, and incomplete upstream repositories without publishing readiness', () => {
     const result = run(String.raw`
 with tempfile.TemporaryDirectory() as temp:
     root = Path(temp)
     model_dir = root / model_id.replace("/", "--")
     failures = []
+    info_sha_override = "b" * 40
+    try:
+        runner.download_model(model_id, root)
+        raise AssertionError("accepted mismatched commit SHA")
+    except ValueError as error:
+        failures.append(str(error))
+    assert calls == []
+    assert not (model_dir / "verified.json").exists()
+    info_sha_override = None
     for name in ("config.json", "model.safetensors"):
         corrupt = name
         try:
@@ -202,6 +226,7 @@ with tempfile.TemporaryDirectory() as temp:
     print(json.dumps(failures))
 `);
     expect(result).toEqual([
+      'Model repository did not return the pinned revision',
       'Model file checksum mismatch: config.json',
       'Model file checksum mismatch: model.safetensors',
       'Model repository is missing required Qwen3-TTS files',
@@ -228,7 +253,7 @@ with tempfile.TemporaryDirectory() as temp:
         assert audio.getnframes() == 240 and audio.getframerate() == 24000
     reference = root / "reference.wav"
     reference.write_bytes(b"explicit test fixture")
-    model_id = runner.SUPPORTED_MODELS[1]
+    model_id = model_ids[1]
     runner.download_model(model_id, root)
     events.clear()
     output = io.StringIO()
@@ -240,8 +265,8 @@ with tempfile.TemporaryDirectory() as temp:
     assert events[2]["clone"]["x_vector_only_mode"] is False
     print(json.dumps({"design": design_result, "clone": clone_result}))
 `);
-    expect(result.design).toMatchObject({ ok: true, modelRevision: `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign@${'a'.repeat(40)}`, effectiveControls: { mode: 'design', rate: 1 } });
-    expect(result.clone).toMatchObject({ ok: true, modelRevision: `Qwen/Qwen3-TTS-12Hz-1.7B-Base@${'a'.repeat(40)}`, effectiveControls: { mode: 'clone' } });
+    expect(result.design).toMatchObject({ ok: true, modelRevision: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign@5ecdb67327fd37bb2e042aab12ff7391903235d3', effectiveControls: { mode: 'design', rate: 1 } });
+    expect(result.clone).toMatchObject({ ok: true, modelRevision: 'Qwen/Qwen3-TTS-12Hz-1.7B-Base@fd4b254389122332181a7c3db7f27e918eec64e3', effectiveControls: { mode: 'clone' } });
   });
 
   it('refuses missing weights, unsupported controls/variants and missing MLX dependencies without calling the model', () => {
@@ -315,7 +340,7 @@ with tempfile.TemporaryDirectory() as temp:
     assert events == [{"mlxSeed": 42}, {"mlxLoad": True}, {"mlxDesign": {
         "text": "An invented sentence.", "language": "auto", "instruct": "Warm natural alto",
         "stream": False, "verbose": False}}, {"evaluated": True}]
-    model_id = runner.SUPPORTED_MODELS[1]
+    model_id = model_ids[1]
     runner.download_model(model_id, root)
     reference = root / "reference.wav"
     reference.write_bytes(b"explicit test fixture")
@@ -332,14 +357,14 @@ with tempfile.TemporaryDirectory() as temp:
     print(json.dumps({"design": design, "clone": clone}))
 `);
     expect(result.design).toMatchObject({ ok: true, effectiveControls: { mode: 'design', seed: 42 } });
-    expect(result.clone).toMatchObject({ ok: true, modelRevision: `Qwen/Qwen3-TTS-12Hz-1.7B-Base@${'a'.repeat(40)}`, effectiveControls: { mode: 'clone' } });
+    expect(result.clone).toMatchObject({ ok: true, modelRevision: 'Qwen/Qwen3-TTS-12Hz-1.7B-Base@fd4b254389122332181a7c3db7f27e918eec64e3', effectiveControls: { mode: 'clone' } });
   });
 
   it('refuses cloning without transcript or encoder instead of publishing unconditioned speech', () => {
     const result = run(inferenceFixture + mlxFixture + String.raw`
 with tempfile.TemporaryDirectory() as temp:
     root = Path(temp)
-    model_id = runner.SUPPORTED_MODELS[1]
+    model_id = model_ids[1]
     runner.download_model(model_id, root)
     reference = root / "reference.wav"
     reference.write_bytes(b"explicit test fixture")
@@ -397,7 +422,7 @@ def custom_voice(self, **kwargs):
         raise RuntimeError("private checkpoint failure")
     return [[1]], 24000
 Model.generate_custom_voice = custom_voice
-base_model = runner.SUPPORTED_MODELS[1]
+base_model = model_ids[1]
 def training_args(root, dataset, **kwargs):
     return types.SimpleNamespace(model_id=kwargs.get("model_id", base_model), models_dir=str(root),
         dataset_manifest=str(dataset), output_dir=str(root / "job"), epochs=1, checkpoint_interval=1, seed=7)
@@ -486,7 +511,7 @@ with tempfile.TemporaryDirectory() as temp:
     assert events == []
     print(json.dumps({"checkpoint": checkpoints[0], "synthesis": synthesis}))
 `);
-    const digest = /^Qwen\/Qwen3-TTS-12Hz-1\.7B-Base@a{40}\+sha256\.[0-9a-f]{64}$/;
+    const digest = /^Qwen\/Qwen3-TTS-12Hz-1\.7B-Base@fd4b254389122332181a7c3db7f27e918eec64e3\+sha256\.[0-9a-f]{64}$/;
     expect(result.checkpoint).toMatchObject({ checkpoint: 'checkpoint-step-2', model_revision: expect.stringMatching(digest) });
     expect(result.synthesis).toMatchObject({ ok: true, modelRevision: result.checkpoint.model_revision, effectiveControls: { mode: 'fine-tuned', seed: 42 } });
   });
@@ -504,7 +529,7 @@ with tempfile.TemporaryDirectory() as temp:
         failures.append(json.loads(error.getvalue().splitlines()[-1])["code"])
     attempt(training_args(root, dataset))  # base weights not downloaded
     runner.download_model(base_model, root)
-    attempt(training_args(root, dataset, model_id=runner.SUPPORTED_MODELS[0]))
+    attempt(training_args(root, dataset, model_id=model_ids[0]))
     (root / "clip.wav").unlink()
     attempt(training_args(root, dataset))
     torch.cuda.is_available = lambda: False

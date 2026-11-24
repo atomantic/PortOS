@@ -10,7 +10,7 @@ import { voiceEngineQuerySchema } from '../lib/queryValidation.js';
  */
 
 import { Router } from 'express';
-import { TTS_ENGINE_IDS } from '../lib/voiceEngines.js';
+import { TTS_ENGINE_IDS, TTS_ENGINE_CONFIG_KEYS } from '../lib/voiceEngines.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
@@ -177,7 +177,7 @@ router.put('/config', asyncHandler(async (req, res) => {
     sttEngine: next.stt?.engine,
     sttLanguage: next.stt?.language,
     ttsEngine: next.tts?.engine,
-    ttsVoice: next.tts?.[next.tts?.engine]?.voice,
+    ttsVoice: next.tts?.[TTS_ENGINE_CONFIG_KEYS[next.tts?.engine] ?? next.tts?.engine]?.voice,
     ttsRate: next.tts?.rate,
     hotkey: next.hotkey,
     vad: { endOfSpeechMs: next.vad?.endOfSpeechMs, minUtteranceMs: next.vad?.minUtteranceMs },
@@ -201,6 +201,12 @@ router.post('/facetime/probe', asyncHandler(async (req, res) => {
   res.json(await facetimeBridge.probe());
 }));
 
+const FACETIME_CALL_REFUSALS = {
+  'no-call-host': { code: 'NO_CALL_HOST', message: 'No FaceTime call host tab is attached' },
+  'call-in-progress': { code: 'CALL_IN_PROGRESS', message: 'A FaceTime call is already in progress' },
+  'dial-failed': { code: 'DIAL_FAILED', message: 'FaceTime dial failed' },
+};
+
 // Call/hangup go through callSession so the attached Call Host's PCM frames are
 // accepted (sockets/voice.js drops frames while the session is idle) and
 // transcript journaling stays in sync with the FaceTime window.
@@ -208,7 +214,12 @@ router.post('/facetime/call', asyncHandler(async (req, res) => {
   validateRequest(facetimeActionSchema, req.body || {});
   const result = await callSession.startCall({ origin: 'user' });
   if (!result.ok) {
-    return res.status(409).json({ ok: false, command: 'call', reason: result.reason, message: result.message });
+    const mapped = FACETIME_CALL_REFUSALS[result.reason];
+    throw new ServerError(result.message || mapped?.message || 'FaceTime call refused', {
+      status: 409,
+      code: mapped?.code || 'FACETIME_CALL_REFUSED',
+      context: { command: 'call', reason: result.reason },
+    });
   }
   res.json({ ok: true, command: 'call', state: result.state });
 }));

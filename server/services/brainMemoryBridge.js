@@ -396,7 +396,7 @@ export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMi
         continue;
       }
       if (dryRun) {
-        console.log(`🧠🔗 [dry-run] Would sync ${type}/${record.id}: ${record.name || record.title || '(untitled)'}`);
+        console.log(`🧠🔗 [dry-run] Would sync ${type}/${record.id}`);
         stats.synced++;
         continue;
       }

@@ -136,23 +136,32 @@ export function planStatusSummary(annotated) {
   return counts;
 }
 
+const CREATED_RECORD_ROUTES = Object.freeze({
+  pipeline_createSeries: (id) => ({ to: `/pipeline/series/${id}`, label: 'Open series' }),
+  universe_createUniverse: (id) => ({ to: `/universes/${id}`, label: 'Open universe' }),
+  writersRoom_createWork: (id) => ({ to: `/writers-room/works/${id}`, label: 'Open work' }),
+});
+
 /**
  * Resolve a deep link into the owning surface from a step's `result` summary
  * (the compact id-only digest the advance loop writes). Returns `{ to, label }`
- * or null. Series/issue/universe/work/project links mirror the design record's
- * "per-step results with links into the owning surface".
+ * or null. Resolves primary created-record links from `toolName + r.id` before
+ * falling back to secondary keys (so e.g. a series created inside a universe
+ * links to the series, not its parent universe).
  */
 export function stepResultLink(step) {
   const r = step?.result;
   if (!r || typeof r !== 'object') return null;
+  const toolName = typeof step.toolName === 'string' ? step.toolName : '';
+  if (r.id) {
+    if (Object.hasOwn(CREATED_RECORD_ROUTES, toolName)) return CREATED_RECORD_ROUTES[toolName](r.id);
+    // A minted CD sub-project (cd.* tools return an `id`).
+    if (toolName.startsWith('cd')) return { to: `/creative-director/${r.id}/overview`, label: 'Open project' };
+  }
   if (r.seriesId) return { to: `/pipeline/series/${r.seriesId}`, label: 'Open series' };
   if (r.issueId) return { to: `/pipeline/issues/${r.issueId}`, label: 'Open issue' };
   if (r.universeId) return { to: `/universes/${r.universeId}`, label: 'Open universe' };
   if (r.workId) return { to: `/writers-room/works/${r.workId}`, label: 'Open work' };
-  // A minted CD sub-project (cd.* tools return an `id`).
-  if (r.id && typeof step.toolName === 'string' && step.toolName.startsWith('cd')) {
-    return { to: `/creative-director/${r.id}/overview`, label: 'Open project' };
-  }
   return null;
 }
 

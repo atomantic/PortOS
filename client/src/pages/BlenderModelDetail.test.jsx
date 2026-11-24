@@ -36,6 +36,7 @@ vi.mock('../services/apiMoodBoard.js', () => ({ listMoodBoardNames: vi.fn(async 
 import * as api from '../services/apiBlenderModels.js';
 import { createShowcaseFilm } from '../services/apiCodeAnimationFilm.js';
 import { copyToClipboard } from '../lib/clipboard.js';
+import toast from '../components/ui/Toast';
 import BlenderModelDetail from './BlenderModelDetail';
 
 const ID = 'bmodel-1';
@@ -89,8 +90,39 @@ describe('BlenderModelDetail', () => {
     serve(modelState({ status: 'published', publishedBuildId: A, builds: [build(A)] }));
     renderAt();
     await user.click(await screen.findByRole('button', { name: 'Make showcase film' }));
-    expect(createShowcaseFilm).toHaveBeenCalledWith(ID);
+    expect(createShowcaseFilm).toHaveBeenCalledWith(ID, { silent: true });
     await waitFor(() => expect(screen.getByLabelText('Current location')).toHaveTextContent('/code-animation/production/films/film-1'));
+  });
+
+  it('shows a single error toast when making a showcase film fails and does not navigate after unmount', async () => {
+    const user = userEvent.setup();
+    const errorSpy = vi.spyOn(toast, 'error').mockImplementation(() => {});
+    try {
+      serve(modelState({ status: 'published', publishedBuildId: A, builds: [build(A)] }));
+      createShowcaseFilm.mockRejectedValueOnce(new Error('Film creation failed'));
+      renderAt();
+      await user.click(await screen.findByRole('button', { name: 'Make showcase film' }));
+      expect(createShowcaseFilm).toHaveBeenCalledWith(ID, { silent: true });
+      await waitFor(() => expect(errorSpy).toHaveBeenCalledTimes(1));
+      expect(errorSpy).toHaveBeenCalledWith('Film creation failed');
+      expect(screen.getByLabelText('Current location')).toHaveTextContent(`/3d/blender/${ID}`);
+
+      errorSpy.mockClear();
+      createShowcaseFilm.mockRejectedValueOnce(Object.assign(new Error('Host control forbidden'), { code: 'HOST_CONTROL_FORBIDDEN' }));
+      await user.click(screen.getByRole('button', { name: 'Make showcase film' }));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Make showcase film' })).toBeEnabled());
+      expect(errorSpy).not.toHaveBeenCalled();
+
+      let resolveFilm;
+      createShowcaseFilm.mockImplementationOnce(() => new Promise((resolve) => { resolveFilm = resolve; }));
+      await user.click(screen.getByRole('button', { name: 'Make showcase film' }));
+      await user.click(screen.getByRole('link', { name: 'Back to 3D' }));
+      expect(screen.getByLabelText('Current location')).toHaveTextContent(/^\/3d$/);
+      await act(async () => { resolveFilm({ id: 'film-late' }); });
+      expect(screen.getByLabelText('Current location')).toHaveTextContent(/^\/3d$/);
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it('has no showcase film button until a build is published', async () => {
@@ -418,6 +450,31 @@ describe('BlenderModelDetail', () => {
       expect(api.updateBlenderModelCamera).toHaveBeenCalledWith(ID, 'camera-1', expect.objectContaining({ orbit: { ...hinge.orbit, azimuth: 45 } }), { silent: true });
     });
 
+    it('updates the reference full-size link when the fallback /data/image-refs/ URL loads', async () => {
+      serve(compared());
+      renderAt(`/3d/blender/${ID}/compare`);
+      const img = await screen.findByRole('img', { name: 'Overall sheet reference' });
+      const link = screen.getByRole('link', { name: 'Open the reference full size' });
+      expect(link).toHaveAttribute('href', '/data/images/sheet.png');
+      fireEvent.error(img);
+      expect(img).toHaveAttribute('src', '/data/image-refs/sheet.png');
+      fireEvent.load(img);
+      expect(link).toHaveAttribute('href', '/data/image-refs/sheet.png');
+    });
+
+    it('initializes New camera with overall when ?ref= names a removed reference plate', async () => {
+      const user = userEvent.setup();
+      serve(compared());
+      renderAt(`/3d/blender/${ID}/compare?ref=closeup-removed`);
+      await user.click(await screen.findByRole('button', { name: 'New camera' }));
+      const form = screen.getByRole('form', { name: 'New camera' });
+      expect(within(form).getByLabelText('Reference')).toHaveValue('overall');
+      await user.type(within(form).getByLabelText('Camera name'), 'Front fallback');
+      api.addBlenderModelCamera.mockResolvedValue(compared({ cameras: [hinge, { ...hinge, id: 'camera-2', label: 'Front fallback', referenceId: 'overall', view: 'front', orbit: null, crop: null }] }));
+      await user.click(within(form).getByRole('button', { name: 'Save camera' }));
+      expect(api.addBlenderModelCamera).toHaveBeenCalledWith(ID, { label: 'Front fallback', referenceId: 'overall', crop: null, view: 'front' }, { silent: true });
+    });
+
     it('records a difference, closes it on the shown build, and puts open ones in the brief', async () => {
       const user = userEvent.setup();
       serve(compared());
@@ -527,6 +584,19 @@ describe('BlenderModelDetail', () => {
       renderAt(`/3d/blender/${ID}/references`);
       await user.click(await screen.findByRole('button', { name: 'Edit PARTS.md' }));
       expect(screen.getByLabelText('Current location')).toHaveTextContent(`/3d/blender/${ID}/files?bfile=PARTS.md`);
+    });
+
+    it('updates the full-size link in a reference slot when the fallback /data/image-refs/ URL loads', async () => {
+      api.previewBlenderModelReference.mockResolvedValue({ sentPrompt: 'SHEET', promptAdditions: [], referenceImages: [], refusal: null });
+      serve(withReferences([slot({ approvedImageId: 'img-1', file: 'refs/overall.png', images: [image('approved')] })]));
+      renderAt(`/3d/blender/${ID}/references`);
+      const img = await screen.findByRole('img', { name: 'Approved reference' });
+      const link = screen.getByRole('link', { name: 'Open sheet.png full size' });
+      expect(link).toHaveAttribute('href', '/data/images/sheet.png');
+      fireEvent.error(img);
+      expect(img).toHaveAttribute('src', '/data/image-refs/sheet.png');
+      fireEvent.load(img);
+      expect(link).toHaveAttribute('href', '/data/image-refs/sheet.png');
     });
   });
 });

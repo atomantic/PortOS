@@ -7,6 +7,7 @@ vi.mock('../services/contactsSync.js', () => ({
   checkSetup: vi.fn(async () => ({ ok: true, sourceCount: 2, rawContactRows: 100 })),
   getStatus: vi.fn(async () => ({ cache: { contactCount: 50, syncedAt: null }, state: {}, setup: { ok: true } })),
   runSync: vi.fn(async () => ({ ok: true, contactCount: 50, sourceCount: 2 })),
+  clearContactCache: vi.fn(async () => ({ ok: true, cleared: true, cacheRemoved: true, stateRemoved: true })),
 }));
 
 vi.mock('../services/tribeContacts.js', () => ({
@@ -39,6 +40,12 @@ describe('contacts routes (#2415)', () => {
     const res = await request(makeApp()).post('/api/contacts/sync');
     expect(res.status).toBe(200);
     expect(res.body.contactCount).toBe(50);
+  });
+
+  it('DELETE /cache', async () => {
+    const res = await request(makeApp()).delete('/api/contacts/cache');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, cleared: true, cacheRemoved: true, stateRemoved: true });
   });
 
   it('POST /enrich-tribe dry run', async () => {
