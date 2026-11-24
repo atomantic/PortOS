@@ -38,6 +38,8 @@ export const SECTION_FEATURE = new Map([
   ['POST', 'post'],
 ]);
 
+export const PROVIDERS_PAGE_PATH = '/ai/presets';
+
 const RAW_NAV_COMMANDS = [
   { id: 'nav.dashboard', path: '/', label: 'Dashboard', section: 'Main' },
   { id: 'nav.review-hub', path: '/review', label: 'Review Hub', section: 'Main' },
@@ -136,7 +138,7 @@ const RAW_NAV_COMMANDS = [
   // (instances of a service definition: plan, credential, catalog). Each is its
   // own URL so a card can be linked and reached from ⌘K and voice; the retired
   // Backend Connections drawer (#6369) redirects onto Services.
-  { id: 'nav.settings.providers', path: '/ai/presets', label: 'Providers', section: 'Models', tabId: 'providers', navGroup: 'Connect', previousPaths: ['/ai'] },
+  { id: 'nav.settings.providers', path: PROVIDERS_PAGE_PATH, label: 'Providers', section: 'Models', tabId: 'providers', navGroup: 'Connect', previousPaths: ['/ai'] },
   { id: 'nav.ai.harnesses', path: '/ai/harnesses', label: 'Harnesses', section: 'Models', tabId: 'harnesses', navGroup: 'Connect', previousPaths: ['/models/harnesses'] },
   { id: 'nav.ai.services', path: '/ai/services', label: 'AI Services', section: 'Models', tabId: 'services', navGroup: 'Connect', previousPaths: ['/ai/connections', '/ai/connections/:connectionId'] },
   { id: 'nav.settings.fleet-llm', path: '/ai/fleet', label: 'Fleet LLM Setup', section: 'Settings' },
@@ -574,6 +576,8 @@ export const getNavPageForPath = (pathname) => {
   if (!command) return null;
   return { label: command.label, section: command.section, breadcrumb: `${command.section} → ${command.label}` };
 };
+
+export const PROVIDERS_PAGE_BREADCRUMB = getNavPageForPath(PROVIDERS_PAGE_PATH)?.breadcrumb ?? 'the Providers page';
 
 // Expand the `{page}` token user-facing copy writes instead of a breadcrumb,
 // resolved from `runtime.manageUrl` (or any object carrying that field) via

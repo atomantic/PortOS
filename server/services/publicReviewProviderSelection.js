@@ -19,6 +19,7 @@
  * provider fails closed instead.
  */
 
+import { PROVIDERS_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import { getAllProviders } from './provider/providers.js';
 import { isProviderAvailable } from './provider/providerStatus.js';
 import {
@@ -86,8 +87,8 @@ export async function resolvePublicReviewProvider({ posture, pinnedProviderId = 
       ok: false,
       code: 'public-review-no-eligible-provider',
       error: posture === PUBLIC_REVIEW_ACTIONS_POSTURE
-        ? `No enabled CLI or TUI provider on this install can run the '${posture}' public-review stage. Enable one in Settings > Providers.`
-        : `No enabled AI provider on this install has a maintained '${posture}' public-review posture. Add or enable one of these CLI providers in Settings > Providers: ${publicReviewCapableVendorIds(posture).join(', ')}.`,
+        ? `No enabled CLI or TUI provider on this install can run the '${posture}' public-review stage. Enable one in ${PROVIDERS_PAGE_BREADCRUMB}.`
+        : `No enabled AI provider on this install has a maintained '${posture}' public-review posture. Add or enable one of these CLI providers in ${PROVIDERS_PAGE_BREADCRUMB}: ${publicReviewCapableVendorIds(posture).join(', ')}.`,
     };
   }
   const activeId = activeProviderId || activeProvider?.id || activeProvider || null;

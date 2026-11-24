@@ -225,6 +225,9 @@ describe('PipelineStageConfig — posture-driven eligibility', () => {
       { id: 'actions-only', name: 'Actions Only', type: 'cli', command: 'example', models: ['example-model'], publicReviewPostures: ['sandboxed-actions'] },
     ]);
     expect(screen.getAllByText(/No enabled AI provider on this install can enforce the tool-free posture/)).toHaveLength(2);
+    const providerLinks = screen.getAllByRole('link', { name: 'Models → Providers' });
+    expect(providerLinks).toHaveLength(2);
+    for (const link of providerLinks) expect(link).toHaveAttribute('href', '/ai/presets');
   });
 
   it('excludes worktree-only providers from both PR stages despite a legacy action profile', () => {

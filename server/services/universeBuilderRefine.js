@@ -11,6 +11,7 @@
  * overwrite the draft, so the LLM never silently mutates a saved universe.
  */
 
+import { PROVIDERS_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import { runCreativeRefinement } from "./creativeRefinement.js";
 import { ServerError } from "../lib/errorHandler.js";
 import { extractNonPlaceholderJson } from "../lib/jsonExtract.js";
@@ -367,7 +368,7 @@ export async function refineWorldPrompts({
     provider = await resolveAPIProvider(providerId);
     assertProvider(provider, {
       message:
-        "Refining with a reference image needs an API-based AI provider with a vision-capable model (e.g. Ollama with a llava/qwen-vl model, LM Studio, or an OpenAI-compatible endpoint). Configure one under Settings → Providers.",
+        `Refining with a reference image needs an API-based AI provider with a vision-capable model (e.g. Ollama with a llava/qwen-vl model, LM Studio, or an OpenAI-compatible endpoint). Configure one under ${PROVIDERS_PAGE_BREADCRUMB}.`,
       code: "NO_API_PROVIDER",
       status: 503,
     });
@@ -382,7 +383,7 @@ export async function refineWorldPrompts({
   });
   if (provider.enabled === false) {
     throw new ServerError(
-      `Provider "${provider.name || provider.id}" is disabled — enable it in Settings → Providers first`,
+      `Provider "${provider.name || provider.id}" is disabled — enable it in ${PROVIDERS_PAGE_BREADCRUMB} first`,
       { status: 400, code: "PROVIDER_DISABLED" },
     );
   }

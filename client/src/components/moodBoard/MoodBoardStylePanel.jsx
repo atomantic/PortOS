@@ -8,6 +8,7 @@
  * any enabled image service and is the board's reference image — the same
  * role a universe's base-style probe plays.
  */
+import { PROVIDERS_PAGE_BREADCRUMB } from '../../../../server/lib/navManifest.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import socket from '../../services/socket';
 import { ScanEye, Sparkles, ImageIcon, ChevronDown, Cpu, X } from 'lucide-react';
@@ -429,7 +430,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
       {providersError && providers.length === 0 && !providersLoading ? (
         <ListLoadError what="AI providers" error={providersError} onRetry={retryProviders} />
       ) : providers.length === 0 && !providersLoading ? (
-        <p className="text-xs text-port-warning">No vision-capable provider is enabled. Add one under Settings → Providers to analyze items. Composing from analyses you already have still works.</p>
+        <p className="text-xs text-port-warning">No vision-capable provider is enabled. Add one under {PROVIDERS_PAGE_BREADCRUMB} to analyze items. Composing from analyses you already have still works.</p>
       ) : null}
       {plan.skipped > 0 ? (
         <p className="text-[11px] text-gray-500">

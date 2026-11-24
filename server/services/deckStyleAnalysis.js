@@ -15,6 +15,7 @@
  * image-grounded output.
  */
 
+import { PROVIDERS_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../lib/errorHandler.js';
 import { trimTo } from '../lib/textUtils.js';
@@ -73,7 +74,7 @@ export async function analyzeDeckSample({ deck, imagePath, imageFilename, title,
   ]);
   const provider = await resolveAPIProvider(providerId);
   assertProvider(provider, {
-    message: 'Analyzing a sample design needs an API-based provider with a vision-capable model. Configure one under Settings → Providers.',
+    message: `Analyzing a sample design needs an API-based provider with a vision-capable model. Configure one under ${PROVIDERS_PAGE_BREADCRUMB}.`,
     code: 'NO_API_PROVIDER',
     status: 503,
   });

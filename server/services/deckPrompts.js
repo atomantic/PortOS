@@ -16,6 +16,7 @@
  * the universe-variation contract.
  */
 
+import { PROVIDERS_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { stripPromptControlChars, buildUniverseStyleContext } from './universeBuilder/compile.js';
@@ -40,7 +41,7 @@ const promptRunner = () => import('./promptRunner.js');
 const safe = (v) => stripPromptControlChars(typeof v === 'string' ? v : '');
 
 const noProvider = () => ({
-  message: 'No AI provider is configured for prompt generation. Add one under Settings → Providers.',
+  message: `No AI provider is configured for prompt generation. Add one under ${PROVIDERS_PAGE_BREADCRUMB}.`,
   code: 'NO_PROVIDER',
   status: 503,
 });
