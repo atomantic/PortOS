@@ -1,6 +1,6 @@
 import { copyFile, mkdir, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
-import { readLyricOverlayDocumentFiles } from './compositionDocument.js';
+import { readLyricOverlayDocumentFiles } from './compositionDocumentRead.js';
 import { lyricOverlayDocumentData } from './lyricPlaythrough.js';
 
 /**

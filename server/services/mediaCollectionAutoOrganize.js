@@ -8,7 +8,7 @@ import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { itemKey, parseKey } from '../lib/mediaItemKey.js';
 import { listJobs } from './mediaJobQueue/state.js';
 import { listCollections } from './mediaCollections.js';
-import { collectionItems, fileOwnedMedia, imageItem, jobCollectionItems, jobCollectionSources, videoItem } from './mediaCollectionRules.js';
+import { collectionItems, fileCollectionMedia, fileOwnedMedia, imageItem, jobCollectionItems, jobCollectionSources, videoItem } from './mediaCollectionRules.js';
 
 async function inventory() {
   const [decks, moodBoards, music, storyboards, fable, director, timeline, writers, external, history, sprites, universeCrud, seriesStore, issueCrud] = await Promise.all([
@@ -170,7 +170,11 @@ async function organize() {
 
   for (const { source, owner, items } of buckets.values()) {
     try {
-      const filed = await fileOwnedMedia(source, owner, items.filter(item => available.has(itemKey(item))), { preserveRemovals: true });
+      const add = items.filter(item => available.has(itemKey(item)));
+      const options = { preserveRemovals: true };
+      const filed = source === 'writersRoom'
+        ? await fileCollectionMedia(async () => (await import('./writersRoom/local.js')).ensureWorkMediaCollection(owner.id), add, options)
+        : await fileOwnedMedia(source, owner, add, options);
       if (!filed?.added) continue;
       result.added += filed.added;
       result.updatedCollections += 1;

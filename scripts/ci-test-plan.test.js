@@ -2668,6 +2668,29 @@ describe('cross-workspace browser suites (#10312)', () => {
     }
   });
 
+  it('keeps unrelated catalog edits out of composition and music-video browser suites (#18337)', () => {
+    const suites = [
+      'server/services/htmlComposition/index.test.js',
+      'server/services/musicVideo/animaticCapture.browser.test.js',
+      'server/services/musicVideo/documentTemplateParity.browser.test.js',
+      'server/services/musicVideo/documentFilmLook.browser.test.js',
+      'server/services/musicVideo/lyricPlaythrough.browser.test.js',
+    ];
+    const catalogFiles = [
+      'server/lib/localLlmCatalog.js', 'server/lib/aiToolkit/internal/providerCatalogService.js',
+      'server/lib/localModelHeuristics.js', 'server/lib/systemCapabilities.js',
+    ];
+    const inputs = realTree();
+    const trackedFiles = inputs.trackedFiles.filter((path) =>
+      !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
+    const plan = buildCiTestPlan(catalogFiles, { ...inputs, trackedFiles });
+    expect(plan.full).toBe(false);
+    for (const suite of [...suites, 'server/services/codeAnimation/export.realBrowser.test.js']) {
+      expect(inputs.browserDependencies[suite]?.length, suite).toBeLessThan(400);
+    }
+    for (const suite of suites) expect(plan.browserFiles).not.toContain(suite);
+  });
+
   it('selects only the music-video browser suites that mount ProductionReviewPanel when it changes', () => {
     const source = 'client/src/components/musicVideo/ProductionReviewPanel.jsx';
     const inputs = realTree();
