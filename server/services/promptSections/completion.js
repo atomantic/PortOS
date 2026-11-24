@@ -637,7 +637,7 @@ function buildClaimOwnershipSection(agentId) {
     'Before this run (the parent, never a fan-out child) creates, adopts or checks out ANY claim worktree, bind that exact branch to this run — the pinned issue’s own `claim/…` branch, a tracking epic’s child, a slice split from an oversized issue, each issue a picker or swarm selects, or a claim worktree you are resuming. Replace BRANCH with the branch name and require a parsed JSON response with bound:true:',
     '```bash', command('bind'), '```',
     'Immediately after creating that worktree, repeat the same bind command and require bound:true BEFORE editing or running work there; a refusal means preserve it and report the blocker.',
-    'If bind fails or its response is unreadable, do not create or enter that worktree. Report the failure. Release after the PR/MR is confirmed MERGED and its checkout and local branch are removed, freeing the branch for a later slice:',
+    'If bind fails or is unreadable, do not create or enter that worktree. Report it. Release a branch the moment its own PR/MR is confirmed MERGED and its checkout and local branch are removed, freeing the name for a later slice:',
     '```bash', command('release'), '```',
     'Keep a merged branch bound if you are leaving its checkout for PortOS to clean up at completion. `checkout-present` is expected and needs no retry. Keep open or unmerged branches bound. Add `"handoff":true` to the release JSON only when another owner is taking over mid-run.',
   ].join('\n');
