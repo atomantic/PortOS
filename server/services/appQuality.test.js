@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { recordAuditQuality, enrichAppsWithQuality, readRecentAuditSlices, AUDIT_SLICE_HISTORY_RUNS } from './appQuality.js';
+import { recordAuditQuality, enrichAppsWithQuality, getAppQualityHistory, readRecentAuditSlices, AUDIT_SLICE_HISTORY_RUNS } from './appQuality.js';
 import { AUDIT_DEFINITIONS, AUDIT_EXECUTION_PROFILES } from '../lib/auditCatalog.js';
 import { AUDIT_DISCOVERY, auditQualityInstructions, parseAuditQualityReport, parseRecommendedAudits, summarizeAppQuality, AUDIT_FRESHNESS_MS, buildAppQualityHistory, dailyQualityRecords, numericQualityReport, parseAuditSlice, QUALITY_WINDOW_RUNS, QUALITY_HEALTHY_THRESHOLD } from '../lib/auditQuality.js';
 import { buildQualitySnapshot, exportPortosQuality, readQualityRecords } from './appQualityFederation.js';
@@ -180,7 +180,7 @@ describe('scheduled audit measurement workflow', () => {
 
   // The same run reaches the window as the local row and again through the
   // day-only release snapshot it was published into; it must count once.
-  it('collapses each category to its newest run per UTC day before rolling', () => {
+  it('deduplicates a run against its same-day release snapshot without dropping distinct same-day local runs', () => {
     const now = Date.parse('2026-09-10T12:00:00Z');
     const local = { category: 'security', agentId: 'run-a', assessedAt: '2026-09-10T10:00:00Z', report: sliceReport({ category: 'security', slice: 'server/services', sliceScore: 80 }) };
     const release = { category: 'security', measurementId: 'f'.repeat(64), assessedAt: '2026-09-10T00:00:00.000Z', sourcePeerName: 'Release snapshot', report: report({ category: 'security', score: 80 }) };
@@ -188,6 +188,80 @@ describe('scheduled audit measurement workflow', () => {
     const daily = dailyQualityRecords([release, local, older, { ...local, agentId: 'run-c', assessedAt: '2026-09-08T09:00:00Z', report: sliceReport({ category: 'security', slice: 'server/lib', sliceScore: 20 }) }]);
     expect(daily.map(r => [r.category, r.agentId])).toEqual([['security', 'run-c'], ['ui-lifecycle', 'run-b'], ['security', 'run-a']]);
     expect(summarizeAppQuality(daily, now).categories.find(c => c.id === 'security')).toMatchObject({ score: 52, window: { runs: 2 } });
+  });
+
+  // #18216: same-day slice re-verification and same-day partial/low-confidence
+  // runs must not collapse distinct local runs before selectCategoryWindow().
+  it('keeps same-day slice re-verifications so older pre-fix runs stay superseded across live summary and history', async () => {
+    const now = Date.parse('2026-09-10T16:00:00Z');
+    const day1 = { app_id: 'portos-default', category: 'security', agent_id: 'run-day1-a', assessed_at: '2026-09-09T10:00:00Z',
+      slice: 'server/services', report: sliceReport({ category: 'security', slice: 'server/services', sliceScore: 55, worstSeverity: 8 }) };
+    const day2a = { app_id: 'portos-default', category: 'security', agent_id: 'run-day2-a', assessed_at: '2026-09-10T09:00:00Z',
+      slice: 'server/services', report: sliceReport({ category: 'security', slice: 'server/services', sliceScore: 95, worstSeverity: 1 }) };
+    const day2b = { app_id: 'portos-default', category: 'security', agent_id: 'run-day2-b', assessed_at: '2026-09-10T15:00:00Z',
+      slice: 'server/lib', report: sliceReport({ category: 'security', slice: 'server/lib', sliceScore: 88, worstSeverity: 1 }) };
+    const dailyRows = [day2b, day1];
+    const allRows = [day2b, day2a, day1];
+    const query = vi.fn(async sql => ({ rows: /rank\(\) OVER/i.test(sql) ? dailyRows : allRows }));
+    const getOriginInfo = async () => ({ host: 'github.com', fullName: 'owner/app' });
+    const snapshot = await buildQualitySnapshot({ id: 'portos-default', repoPath: '/repo' }, null, { now, query, getOriginInfo });
+    expect(snapshot.measurements.map(m => m.report.score)).toEqual([88, 55]);
+    expect(JSON.stringify(snapshot)).not.toMatch(/slice|server\/services|server\/lib/i);
+
+    const peer = { id: 'peer-a', instanceId: 'instance-a', enabled: true, address: '192.0.2.1', port: 5555 };
+    const exported = await exportPortosQuality(peer.instanceId, 30, { now, query, getOriginInfo, getPeers: async () => [peer] });
+    expect(exported.measurements.map(m => m.report.score)).toEqual([88, 55]);
+    expect(JSON.stringify(exported)).not.toMatch(/slice|server\/services|server\/lib/i);
+
+    const snapshotFile = serializeQualitySnapshot(snapshot.repository,
+      snapshot.measurements.map(m => ({ ...m.report, assessedAt: m.assessedAt, measurementId: m.measurementId })));
+    const readFile = async () => snapshotFile;
+    const deps = { now, query, readFile, getOriginInfo, getPeers: async () => [] };
+    const [enriched] = await enrichAppsWithQuality([{ id: 'portos-default', repoPath: '/repo' }], deps);
+    const sec = enriched.quality.categories.find(c => c.id === 'security');
+    expect(sec).toMatchObject({ score: 91, runScore: 88, slice: 'server/lib', window: { runs: 2, worstSeverity: 1 } });
+
+    const history = await getAppQualityHistory({ id: 'portos-default', repoPath: '/repo' }, 30, deps);
+    expect(history.points.at(-1)).toMatchObject({ score: 91, ratedCategories: 1, categories: { security: { score: 91, coverage: 'broad' } } });
+  });
+
+  it('preserves same-day qualifying broad runs when followed by a partial or low-confidence run', async () => {
+    const now = Date.parse('2026-09-10T16:00:00Z');
+    const secBroad = { app_id: 'portos-default', category: 'security', agent_id: 'sec-broad', assessed_at: '2026-09-10T09:00:00Z',
+      slice: 'server/services', report: sliceReport({ category: 'security', slice: 'server/services', sliceScore: 90, worstSeverity: 1 }) };
+    const secPartial = { app_id: 'portos-default', category: 'security', agent_id: 'sec-partial', assessed_at: '2026-09-10T15:00:00Z',
+      slice: 'server/lib', report: sliceReport({ category: 'security', slice: 'server/lib', sliceScore: 40, worstSeverity: 7, coverage: 'partial', scannedFiles: 10, totalFiles: 100 }) };
+    const privBroad = { app_id: 'portos-default', category: 'privacy', agent_id: 'priv-broad', assessed_at: '2026-09-10T09:00:00Z',
+      slice: null, report: report({ category: 'privacy', score: 90, worstSeverity: 1 }) };
+    const privLow = { app_id: 'portos-default', category: 'privacy', agent_id: 'priv-low', assessed_at: '2026-09-10T15:00:00Z',
+      slice: null, report: report({ category: 'privacy', score: 30, worstSeverity: 6, confidence: 'low' }) };
+    const rows = [secPartial, secBroad, privLow, privBroad];
+    const query = vi.fn(async sql => ({ rows: /rank\(\) OVER/i.test(sql) ? [secBroad, privBroad] : rows }));
+    const getOriginInfo = async () => ({ host: 'github.com', fullName: 'owner/app' });
+    const snapshot = await buildQualitySnapshot({ id: 'portos-default', repoPath: '/repo' }, null, { now, query, getOriginInfo });
+    const snapshotFile = serializeQualitySnapshot(snapshot.repository,
+      snapshot.measurements.map(m => ({ ...m.report, assessedAt: m.assessedAt, measurementId: m.measurementId })));
+    const deps = { now, query, readFile: async () => snapshotFile, getOriginInfo, getPeers: async () => [] };
+
+    const [enriched] = await enrichAppsWithQuality([{ id: 'portos-default', repoPath: '/repo' }], deps);
+    expect(enriched.quality).toMatchObject({ score: 90, ratedCategories: 2 });
+    expect(enriched.quality.categories.find(c => c.id === 'security')).toMatchObject({
+      score: 90, runScore: 40, coverage: 'partial', worstSeverity: 7, slice: 'server/lib', agentId: 'sec-partial',
+      window: { runs: 1, worstSeverity: 1 },
+    });
+    expect(enriched.quality.categories.find(c => c.id === 'privacy')).toMatchObject({
+      score: 90, runScore: 30, coverage: 'broad', confidence: 'low', worstSeverity: 6, agentId: 'priv-low',
+      window: { runs: 1, worstSeverity: 1 },
+    });
+
+    const history = await getAppQualityHistory({ id: 'portos-default', repoPath: '/repo' }, 30, deps);
+    expect(history.points.at(-1)).toMatchObject({
+      score: 90, ratedCategories: 2,
+      categories: {
+        security: { score: 90, coverage: 'partial', confidence: 'high' },
+        privacy: { score: 90, coverage: 'broad', confidence: 'low' },
+      },
+    });
   });
 
   it('supersedes older pre-fix runs for the same normalized slice while leaving slice-less rows unaffected', () => {
@@ -327,9 +401,10 @@ describe('scheduled audit measurement workflow', () => {
       report: { version: 1, ...saved, summary: 'Published' } };
     delete release.report.assessedAt;
     delete release.report.measurementId;
-    const select = rows => dailyQualityRecords(rows)[0].report.score;
+    const select = rows => summarizeAppQuality(dailyQualityRecords(rows), Date.parse(at)).categories.find(c => c.id === 'security').score;
     expect(select([a, b, release])).toBe(saved.score);
     expect(select([release, b, a])).toBe(saved.score);
+    expect(dailyQualityRecords([a, b, release]).every(r => !r.sourcePeerName)).toBe(true);
   });
 
   it('keeps a local applicability ruling when the same run is present in the release snapshot', () => {

@@ -261,10 +261,18 @@ function normalizeSliceKey(run) {
   return normalizeSliceText(raw) ?? (run?.report?.version === 2 ? normalizeSliceText(run.report.slice) : null);
 }
 
+function utcDay(assessedAt) {
+  const time = Date.parse(assessedAt);
+  return Number.isFinite(time) ? new Date(time).toISOString().slice(0, 10) : String(assessedAt);
+}
+
+function isQualifyingReport(report) {
+  return Boolean(report) && report.coverage === 'broad' && report.confidence !== 'low' && qualityRunScore(report) !== null;
+}
+
 /** Whether one run's parsed report qualifies for the category window: fresh, broad signal scan, not hedged, scored. */
 function qualifiesForWindow(run, now) {
-  return run.valid && isFreshAssessment(run.record.assessedAt, now) && run.report.coverage === 'broad'
-    && run.report.confidence !== 'low' && qualityRunScore(run.report) !== null;
+  return run.valid && isFreshAssessment(run.record.assessedAt, now) && isQualifyingReport(run.report);
 }
 
 /**
@@ -273,6 +281,7 @@ function qualifiesForWindow(run, now) {
  *   legacy member runs whose `assessedAt` is strictly earlier than the earliest domain-native run.
  * - Skip any older run whose non-empty normalized slice key already appeared in a newer qualifying
  *   run, so re-auditing a remediated slice supersedes its older pre-fix run.
+ * - Keep at most one slice-less daily winner per category and UTC day for v1, peer, and snapshot rows.
  */
 function selectCategoryWindow(id, runs, now) {
   const qualifying = runs.filter(run => qualifiesForWindow(run, now));
@@ -287,12 +296,17 @@ function selectCategoryWindow(id, runs, now) {
     }
   }
   const seenSlices = new Set();
+  const seenSlicelessDays = new Set();
   const window = [];
   for (const run of eligible) {
     const sliceKey = normalizeSliceKey(run);
     if (sliceKey !== null) {
       if (seenSlices.has(sliceKey)) continue;
       seenSlices.add(sliceKey);
+    } else {
+      const dayKey = `${normalizeAuditTaskType(run.record.category)}|${utcDay(run.record.assessedAt)}`;
+      if (seenSlicelessDays.has(dayKey)) continue;
+      seenSlicelessDays.add(dayKey);
     }
     window.push(run);
     if (window.length >= QUALITY_WINDOW_RUNS) break;
@@ -452,23 +466,66 @@ export function buildAppQualityHistory(records, days, now = Date.now()) {
   return { days, totalCategories: Object.keys(AUDIT_DEFINITIONS).length, additionalCategories, points };
 }
 
+function isReleaseSnapshotRecord(record) {
+  return !record?.sourcePeerId && Boolean(record?.sourcePeerName);
+}
+
+function isDayOnlyTimestamp(assessedAt) {
+  return /^\d{4}-\d{2}-\d{2}(?:T00:00:00(?:\.000)?Z)?$/.test(String(assessedAt));
+}
+
+function numericReportFields(record) {
+  const report = record.report ? numericQualityReport(record.report) : record;
+  return [
+    normalizeAuditTaskType(record.category ?? report?.category),
+    qualityRunScore(report),
+    report?.worstSeverity,
+    report?.coverage,
+    report?.confidence,
+    report?.scannedFiles,
+    report?.totalFiles,
+  ];
+}
+
+function releaseCoveredByDayRecords(release, dayRecords) {
+  if (!dayRecords.length) return false;
+  const tieKey = qualityTieKey(release);
+  if (dayRecords.some(other => qualityTieKey(other) === tieKey)) return true;
+  if (release.measurementId && dayRecords.some(other => other.measurementId === release.measurementId)) return true;
+  if (!isDayOnlyTimestamp(release.assessedAt)) return false;
+  const reportKey = JSON.stringify(numericReportFields(release));
+  if (dayRecords.some(other => JSON.stringify(numericReportFields(other)) === reportKey)) return true;
+  if (isQualifyingReport(release.report)) return dayRecords.some(other => isQualifyingReport(other.report));
+  return dayRecords.some(other => other.report?.coverage === release.report?.coverage);
+}
+
 /**
- * One measurement per category per UTC day — the newest run that day, with a
- * stable run tie-break across all installs — in ascending order. The same run
- * can reach a reader twice: as the local row and again through the release
- * snapshot it was published into, which keeps only the day. Collapsing to the
- * day is what stops the rolling window counting that run twice, and matches the
- * daily winners the history query and the wire export already select.
+ * Normalize categories, deduplicate a local or peer run against its same-day
+ * release snapshot (`.quality.json`) so published evidence is never counted
+ * twice, and return remaining runs in ascending order. Distinct local runs
+ * from the same UTC day stay intact so `selectCategoryWindow` can apply
+ * `qualifiesForWindow` and `normalizeSliceKey` superseding across all of them.
  */
 export function dailyQualityRecords(records) {
-  const byDay = new Map();
+  const nonReleaseByDay = new Map();
+  const releaseByDay = new Map();
+  const kept = [];
   for (const record of [...records].sort(compareQualityRecords)) {
     const normalized = { ...record, category: normalizeAuditTaskType(record.category) };
-    const time = Date.parse(normalized.assessedAt);
-    const day = Number.isFinite(time) ? new Date(time).toISOString().slice(0, 10) : String(normalized.assessedAt);
-    byDay.set(`${normalized.category}|${day}`, normalized);
+    const key = `${normalized.category}|${utcDay(normalized.assessedAt)}`;
+    if (isReleaseSnapshotRecord(normalized)) {
+      releaseByDay.set(key, normalized);
+    } else {
+      if (!nonReleaseByDay.has(key)) nonReleaseByDay.set(key, []);
+      nonReleaseByDay.get(key).push(normalized);
+      kept.push(normalized);
+    }
   }
-  return [...byDay.values()].sort(compareQualityRecords);
+  for (const [key, release] of releaseByDay) {
+    const dayRecords = nonReleaseByDay.get(key) || [];
+    if (!releaseCoveredByDayRecords(release, dayRecords)) kept.push(release);
+  }
+  return kept.sort(compareQualityRecords);
 }
 
 export function compareQualityRecords(a, b) {
@@ -476,8 +533,8 @@ export function compareQualityRecords(a, b) {
   const bDate = /^\d{4}-\d{2}-\d{2}$/.test(b.assessedAt);
   const timeA = Date.parse(a.assessedAt);
   const timeB = Date.parse(b.assessedAt);
-  const dayA = Number.isFinite(timeA) ? new Date(timeA).toISOString().slice(0, 10) : String(a.assessedAt);
-  const dayB = Number.isFinite(timeB) ? new Date(timeB).toISOString().slice(0, 10) : String(b.assessedAt);
+  const dayA = utcDay(a.assessedAt);
+  const dayB = utcDay(b.assessedAt);
   return dayA.localeCompare(dayB) || (aDate !== bDate ? (aDate ? -1 : 1) : 0)
     || timeA - timeB
     || qualityTieKey(a).localeCompare(qualityTieKey(b))
@@ -486,14 +543,10 @@ export function compareQualityRecords(a, b) {
 
 /** Stable numeric tie-break shared by local, peer and checked-in records. */
 export function qualityTieKey(record) {
-  const report = record.report ? numericQualityReport(record.report) : record;
   const value = record.assessedAt;
   const time = Date.parse(value);
   const assessedAt = /^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(time) ? value : new Date(time).toISOString();
-  return createHash('sha256').update(JSON.stringify([
-    assessedAt, normalizeAuditTaskType(record.category ?? report.category), qualityRunScore(report),
-    report.worstSeverity, report.coverage, report.confidence, report.scannedFiles, report.totalFiles,
-  ])).digest('hex');
+  return createHash('sha256').update(JSON.stringify([assessedAt, ...numericReportFields(record)])).digest('hex');
 }
 
 /** How many repository hashes one `repositories=` pull may name. */
