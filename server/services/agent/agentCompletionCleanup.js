@@ -392,6 +392,8 @@ async function performCompletionCleanupSteps(context, onStepError) {
   const durable = state?.status === 'completed' && typeof state.startedAt === 'string';
   if (durable && ['completed', 'failed', 'abandoned'].includes(state.metadata?.completionCleanup?.status)) return;
   const stages = { ...state?.metadata?.completionCleanup?.stages };
+  // Finalization can save replay input before cleanup ever runs.
+  const priorSentinel = stages[COMPLETION_STAGE.SENTINEL];
   const persist = async patch => {
     if (durable && !await recordCompletionCleanup(context.agentId, state.startedAt, patch)) throw new Error('completion-cleanup-write-unverified');
   };
@@ -485,10 +487,10 @@ async function performCompletionCleanupSteps(context, onStepError) {
   // A terminal rejection is not proof that its audit artifacts were consumed.
   // Keep the checkout and original signal available for explicit recovery.
   const preserveAuditEvidence = auditEvidencePending(context);
-  if (preserveAuditEvidence && !priorReplay) {
+  if (preserveAuditEvidence && !priorSentinel) {
     emitLog('warn', `Audit disposition incomplete for ${context.agentId}; preserving worktree and completion evidence`, { agentId: context.agentId });
   }
-  const evidenceAbsent = preserveAuditEvidence && priorReplay && await auditCheckoutAbsent(state?.metadata);
+  const evidenceAbsent = preserveAuditEvidence && priorSentinel && await auditCheckoutAbsent(state?.metadata);
   const abandonedStages = {};
   if (evidenceAbsent) {
     const abandoned = { status: 'abandoned', retryable: false, reason: 'audit-evidence-absent' };
