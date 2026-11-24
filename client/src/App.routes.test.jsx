@@ -55,8 +55,8 @@ describe('page shells', () => {
     expect(page.textContent).toBe('/settings/general');
   });
 
-  it('renders an unknown path as NotFound in the padded shell', () => {
-    const page = renderAt('/no-such-page/at/all');
+  it.each(['/no-such-page/at/all', '/devtools/flows?flow=peer-sync'])('renders %s as NotFound in the padded shell', (path) => {
+    const page = renderAt(path);
     expect(page.dataset.page).toBe('NotFound');
     expect(page.closest('main')?.dataset.shell).toBe('padded');
   });

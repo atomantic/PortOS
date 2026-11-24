@@ -218,7 +218,6 @@ export const NAV_PRESENTATION = {
   '/devtools/runner': { icon: Code2 },
   '/data': { icon: HardDrive },
   '/devtools/datadog': { icon: Dog },
-  '/devtools/flows': { icon: WorkflowIcon },
   '/devtools/github': { icon: GitBranch },
   '/devtools/history': { icon: History },
   '/devtools/image-clean': { icon: Eraser },
