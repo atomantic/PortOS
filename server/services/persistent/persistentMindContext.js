@@ -53,6 +53,8 @@ import {
   persistentMindContinuationNoteTags,
   persistentMindMemoryProtection,
   persistentMindMemoryTags,
+  persistentMindChosenNameTags,
+  isPersistentMindChosenNameRecord,
   persistentMindProtectMemorySchema,
   validatePersistentMindReview,
   projectPersistentMindMemory,
@@ -493,7 +495,7 @@ export function choosePersistentMindName(input, mindId = PERSISTENT_MIND_ID) {
     const fields = {
       content: name,
       summary: `Current chosen display name: ${name}`,
-      tags: persistentMindMemoryTags([PERSISTENT_MIND_CHOSEN_NAME_TAG, 'name'], 'core-identity'),
+      tags: persistentMindChosenNameTags(),
       importance: 1,
     };
     const memory = existing
@@ -585,6 +587,9 @@ export function updatePersistentMindMemory(memoryId, updates, mindId = PERSISTEN
     if (isPersistentMindContinuationNote(existing)) {
       throw new ServerError('The continuation note is written only by the mind', { status: 409, code: 'MIND_CONTINUATION_NOTE_READ_ONLY' });
     }
+    if (isPersistentMindChosenNameRecord(existing)) {
+      throw new ServerError('The chosen name is changed only by choosing a new name', { status: 409, code: 'MIND_CHOSEN_NAME_READ_ONLY' });
+    }
     const { protection, ...fields } = updates;
     // Older clients send tags without a protection field. Keep the protection
     // unless the user explicitly selects a different level.
@@ -603,6 +608,9 @@ export function protectPersistentMindMemory(input, mindId = PERSISTENT_MIND_ID) 
     }
     if (isPersistentMindContinuationNote(existing)) {
       return { ok: false, success: false, error: 'The continuation note already has its fixed protection' };
+    }
+    if (isPersistentMindChosenNameRecord(existing)) {
+      return { ok: false, success: false, error: 'The chosen name already has its fixed protection' };
     }
     const level = persistentMindMemoryProtection(existing) === 'core-identity' ? 'core-identity' : protection;
     await memoryBackend.updateMemory(memoryId, { tags: persistentMindMemoryTags(existing.tags, level) });
@@ -669,7 +677,7 @@ async function performPersistentMindPromotion({
     content: content.trim().slice(0, 10_240),
     summary: typeof summary === 'string' ? summary.trim().slice(0, 500) : undefined,
     category,
-    tags: [...new Set(Array.isArray(tags) ? tags.filter((tag) => typeof tag === 'string' && tag && tag !== PERSISTENT_MIND_CONTINUATION_TAG) : [])].slice(0, 20),
+    tags: persistentMindMemoryTags(tags, 'standard'),
     sourceTaskId: turnId,
     sourceAgentId: mindId,
     status: 'active',
