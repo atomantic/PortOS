@@ -1,6 +1,7 @@
-import { readFile, writeFile, rename } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { validateProposedDiff, applyDiffToLive, revertDiffFromLive } from './sandbox.js';
+import { writeHistoryJson } from './historyFiles.js';
 
 // Session metadata is the authority for patch disposition. The history index is
 // written by the monitor. Manual and automatic promotion share this queue so
@@ -73,11 +74,7 @@ export function createStagedFixStore({ root, loadApps, execPm2 }) {
     await save(id, updated);
     return { success: true, disposition };
   };
-  const save = async (id, record) => {
-    const destination = join(sessionDir(id), 'metadata.json');
-    await writeFile(`${destination}.tmp`, JSON.stringify(record, null, 2));
-    await rename(`${destination}.tmp`, destination);
-  };
+  const save = (id, record) => writeHistoryJson(join(sessionDir(id), 'metadata.json'), record);
   return {
     read,
     serialize,

@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, access, rename } from 'node:fs/promises';
+import { readFile, mkdir, access, chmod } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 // Dependency-light shared module (node builtins + pure arg builder only), so
 // importing it from this standalone process doesn't pull in the AI toolkit.
@@ -6,6 +6,7 @@ import { join, basename } from 'node:path';
 // of hardcoding `claude -p`.
 import { runCliProviderPrompt } from '../server/lib/cliProviderRun.js';
 import { signalDetachedGroups } from '../server/lib/credentialBootstrap.js';
+import { scrubSecretTokens } from '../server/lib/secretText.js';
 import { agentGuardEnv } from '../server/lib/agentGuard/index.js';
 import {
   sanitizeChildEnv,
@@ -24,6 +25,7 @@ import {
   runVerifyCommand,
 } from './sandbox.js';
 import { createStagedFixStore } from './stagedFixes.js';
+import { writeHistoryFile, writeHistoryJson } from './historyFiles.js';
 import { startAutofixerUi } from './ui.js';
 import { execPm2, listProcessesStrict, DATA_DIR, AUTOFIXER_DIR, INDEX_FILE, loadApps } from './shared.js';
 
@@ -139,9 +141,13 @@ async function sweepInterruptedRepairs() {
 }
 
 async function ensureHistoryDir() {
-  await mkdir(SESSIONS_DIR, { recursive: true });
-  await access(INDEX_FILE).catch(async () => {
-    await writeFile(INDEX_FILE, JSON.stringify([], null, 2));
+  await mkdir(SESSIONS_DIR, { recursive: true, mode: 0o700 });
+  // Restrict access to existing session artifacts and abandoned temp files too.
+  await chmod(AUTOFIXER_DIR, 0o700);
+  await chmod(SESSIONS_DIR, 0o700);
+  await chmod(INDEX_FILE, 0o600).catch(async error => {
+    if (error.code !== 'ENOENT') throw error;
+    await writeHistoryJson(INDEX_FILE, []);
   });
 }
 
@@ -156,13 +162,6 @@ async function loadIndex() {
   return index;
 }
 
-async function saveIndex(index) {
-  // Temp + rename: a signal mid-write must not truncate the live index.
-  const tmp = `${INDEX_FILE}.tmp`;
-  await writeFile(tmp, JSON.stringify(index, null, 2));
-  await rename(tmp, INDEX_FILE);
-}
-
 function saveSession(sessionId, prompt, output, metadata, patch) {
   const write = historyTail.then(() => writeSession(sessionId, prompt, output, metadata, patch));
   historyTail = write.catch(() => {});
@@ -171,21 +170,21 @@ function saveSession(sessionId, prompt, output, metadata, patch) {
 
 async function writeSession(sessionId, prompt, output, metadata, patch) {
   const sessionDir = join(SESSIONS_DIR, sessionId);
-  await mkdir(sessionDir, { recursive: true });
+  await mkdir(sessionDir, { recursive: true, mode: 0o700 });
+  await chmod(sessionDir, 0o700);
 
-  await writeFile(join(sessionDir, 'prompt.txt'), prompt);
-  await writeFile(join(sessionDir, 'output.txt'), output);
+  const scrubbedOutput = scrubSecretTokens(output);
+  await writeHistoryFile(join(sessionDir, 'prompt.txt'), prompt);
+  await writeHistoryFile(join(sessionDir, 'output.txt'), scrubbedOutput);
   // The staged/applied patch is the human-reviewable artifact of the fix — keep
   // it beside the session so a user can inspect (and, when auto-promote is off,
   // manually apply) exactly what the agent proposed.
   if (typeof patch === 'string' && patch.trim().length > 0) {
-    await writeFile(join(sessionDir, 'fix.patch'), patch);
+    await writeHistoryFile(join(sessionDir, 'fix.patch'), patch);
   }
 
   // Publish metadata only once the patch is readable.
-  const metadataPath = join(sessionDir, 'metadata.json');
-  await writeFile(`${metadataPath}.tmp`, JSON.stringify(metadata, null, 2));
-  await rename(`${metadataPath}.tmp`, metadataPath);
+  await writeHistoryJson(join(sessionDir, 'metadata.json'), metadata);
 
   const index = await loadIndex();
   const indexEntry = {
@@ -198,8 +197,7 @@ async function writeSession(sessionId, prompt, output, metadata, patch) {
     staged: metadata.staged || false,
     processName: metadata.processName,
     appName: metadata.appName,
-    promptPreview: prompt.substring(0, 200),
-    outputSize: output.length
+    outputSize: scrubbedOutput.length
   };
 
   // One row per session: a re-save replaces the earlier row instead of duplicating it.
@@ -210,7 +208,7 @@ async function writeSession(sessionId, prompt, output, metadata, patch) {
     index.splice(100);
   }
 
-  await saveIndex(index);
+  await writeHistoryJson(INDEX_FILE, index.map(({ promptPreview, ...entry }) => entry));
 }
 
 async function getProcessLogs(processName) {

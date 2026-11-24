@@ -168,6 +168,28 @@ describe('buildFixPrompt — untrusted log fencing', () => {
     expect(prompt).toContain('(no error logs available)');
     expect(prompt).toContain('(no output logs available)');
   });
+
+  it('redacts credentials and machine identity inside both evidence blocks', () => {
+    const values = [
+      'Bearer fake-header-value-1234567890', 'sk-fakeAutofixerApiKeyForTests',
+      'ghp_fakeTokenForAutofixerTestsOnly', 'AKIAEXAMPLE012345678',
+      'eyJfakeheader.partOfFakePayload.fakeSignature',
+      '/home/example-user/project.js', 'file:///Users/example-user/project.js',
+      'machine.example.ts.net', 'printer.local', '192.0.2.10',
+      'example@example.com', '202-555-0147',
+    ];
+    const logs = values.join('\n');
+    const prompt = buildFixPrompt({ processName: 'demo', app, errorLogs: logs, outputLogs: logs });
+    const blocks = [...prompt.matchAll(/UNTRUSTED_LOG_[0-9A-F]+:BEGIN — [^\n]+\n([\s\S]*?)\nUNTRUSTED_LOG_[0-9A-F]+:END/g)];
+    expect(blocks).toHaveLength(2);
+    for (const [, block] of blocks) {
+      expect(block.split('\n')).toEqual([
+        '[REDACTED]', '[REDACTED]', '[REDACTED]', '[REDACTED]', '[REDACTED]',
+        '/home/<user>/project.js', 'file:///Users/<user>/project.js',
+        '<host>', '<host>', '<ip>', '<email>', '<phone>',
+      ]);
+    }
+  });
 });
 
 describe('pickRepairProvider — only an enforced restricted mode runs a repair', () => {
