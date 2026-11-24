@@ -650,9 +650,10 @@ export const computeGoalScorecard = (weekStart) => request('/insights/goal-score
   method: 'POST',
   body: JSON.stringify(weekStart ? { weekStart } : {})
 });
-export const refreshGoalScorecardNarrative = (providerId, model) => request('/insights/goal-scorecard/narrative', {
+export const refreshGoalScorecardNarrative = (providerId, model, options = {}) => request('/insights/goal-scorecard/narrative', {
   method: 'POST',
-  body: JSON.stringify({ providerId, model })
+  body: JSON.stringify({ providerId, model }),
+  ...options
 });
 export const getGoalScorecardRules = () => request('/insights/goal-scorecard/rules');
 export const saveGoalScorecardRules = (overrides) => request('/insights/goal-scorecard/rules', {

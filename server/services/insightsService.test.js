@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import express from 'express';
+import { request } from '../lib/testHelper.js';
+import insightsRoutes from '../routes/insights.js';
 
 // Mock the shared managed-runtime wake (issue #8104) so any code path that
 // touches it runs offline instead of reaching the real Ollama/MTPLX/Slotstream
@@ -103,7 +106,13 @@ describe('insightsService generation — a provider error never overwrites the c
     getTasteProfile.mockResolvedValue({
       sections: [{ label: 'Music', summary: 'Prefers sparse arrangements.' }],
     });
-    readJSONFile.mockResolvedValue(CACHED_THEMES);
+    readJSONFile.mockImplementation(async (file) => {
+      if (/[/\\]themes\.json$/.test(file)) return CACHED_THEMES;
+      if (/[/\\]narrative\.json$/.test(file)) {
+        return { text: 'Prior narrative.', generatedAt: CACHED_THEMES.generatedAt };
+      }
+      return null;
+    });
     callProviderAISimple.mockResolvedValue({ error: 'Provider returned an empty completion' });
   });
 
@@ -123,16 +132,27 @@ describe('insightsService generation — a provider error never overwrites the c
     expect(atomicWrite).not.toHaveBeenCalled();
   });
 
-  it('generateThemeAnalysis writes themes.json on a usable completion', async () => {
-    callProviderAISimple.mockResolvedValue({ text: '[{"title":"New theme","strength":"strong"}]' });
-
-    const result = await generateThemeAnalysis();
-
-    expect(atomicWrite).toHaveBeenCalledTimes(1);
-    expect(atomicWrite.mock.calls[0][1]).toMatchObject({
+  it.each([
+    ['/themes/refresh', '[{"title":"New theme","strength":"strong"}]', {
       themes: [{ title: 'New theme', strength: 'strong' }],
-    });
-    expect(result.themes).toHaveLength(1);
+    }],
+    ['/narrative/refresh', 'New cross-domain narrative.', {
+      text: 'New cross-domain narrative.',
+      previousText: 'Prior narrative.',
+      previousGeneratedAt: CACHED_THEMES.generatedAt,
+    }],
+  ])('POST %s returns a displayable record and persists only its content', async (path, text, content) => {
+    callProviderAISimple.mockResolvedValue({ text });
+    const app = express();
+    app.use(express.json());
+    app.use('/api/insights', insightsRoutes);
+
+    const response = await request(app).post(`/api/insights${path}`).send({});
+
+    const stored = { ...content, generatedAt: expect.any(String), model: 'model-1' };
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ ...stored, available: true });
+    expect(atomicWrite).toHaveBeenCalledExactlyOnceWith(expect.any(String), stored);
   });
 });
 

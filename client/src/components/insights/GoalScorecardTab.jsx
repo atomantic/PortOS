@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useInsightGeneration } from './useInsightGeneration.js';
 import { RefreshCw, Target, TrendingUp, TrendingDown, Minus, Sparkles, SlidersHorizontal, Users } from 'lucide-react';
 import {
   getGoalScorecard,
@@ -124,7 +125,6 @@ export default function GoalScorecardTab() {
   const [providers, setProviders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [computing, setComputing] = useState(false);
-  const [generating, setGenerating] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [showRules, setShowRules] = useState(false);
 
@@ -159,12 +159,11 @@ export default function GoalScorecardTab() {
       .finally(() => setComputing(false));
   };
 
-  const handleNarrative = () => {
-    setGenerating(true);
-    refreshGoalScorecardNarrative()
-      .then((res) => { if (res?.available) setData(res); })
-      .finally(() => setGenerating(false));
-  };
+  const [handleNarrative, generating] = useInsightGeneration(
+    refreshGoalScorecardNarrative,
+    setData,
+    'Failed to generate the scorecard narrative'
+  );
 
   if (loading) {
     return (

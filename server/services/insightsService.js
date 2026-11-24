@@ -382,7 +382,7 @@ Example format:
 
   console.log(`🧠 Taste-identity themes generated: ${themes.length} themes`);
 
-  return { themes, generatedAt: output.generatedAt };
+  return { ...output, available: true };
 }
 
 /**
@@ -503,5 +503,5 @@ Respond with only the narrative text, no JSON, no headings, no markdown.`;
 
   console.log(`🔮 Cross-domain narrative generated (${newText.length} chars)`);
 
-  return output;
+  return { ...output, available: true };
 }
