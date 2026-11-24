@@ -76,12 +76,12 @@ function GoalRow({ goal, depth, expandedIds, onToggle, onSelect, selectedId, onA
     <>
       <div
         ref={(node) => { setDragRef(node); setDropRef(node); }}
-        className={`flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-2 cursor-pointer transition-colors border-b border-port-border/50 ${
+        className={`flex items-center gap-1 @md/goal-list:gap-1.5 @xl/goal-list:gap-2 pr-2 py-2 pl-[calc(8px+var(--goal-depth)*4px)] @xl/goal-list:pl-[calc(8px+var(--goal-depth)*16px)] cursor-pointer transition-colors border-b border-port-border/50 ${
           isSelected ? 'bg-port-accent/10' : ''
         } ${isOver && !isDragging ? 'bg-port-accent/20 border-port-accent' : 'hover:bg-port-border/30'} ${
           isDragging ? 'opacity-30' : ''
         }`}
-        style={{ paddingLeft: `${depth * 20 + 8}px` }}
+        style={{ '--goal-depth': Math.min(depth, 4) }}
         onClick={() => onSelect(goal)}
         {...clickableProps(() => onSelect(goal))}
         onKeyDown={onActivateKeyDown(() => onSelect(goal))}
@@ -90,7 +90,7 @@ function GoalRow({ goal, depth, expandedIds, onToggle, onSelect, selectedId, onA
             needs a name of its own — otherwise it is announced as an unlabeled
             button sitting in front of every goal in the tree. */}
         <div
-          className="shrink-0 cursor-grab active:cursor-grabbing touch-none hidden sm:block"
+          className="shrink-0 cursor-grab active:cursor-grabbing touch-none hidden sm:@md/goal-list:block"
           aria-label={`Reparent ${goal.title}`}
           {...attributes}
           {...listeners}
@@ -109,7 +109,7 @@ function GoalRow({ goal, depth, expandedIds, onToggle, onSelect, selectedId, onA
             {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
           </button>
         ) : (
-          <div className="w-4.5 shrink-0" />
+          <div className="w-11 shrink-0" />
         )}
 
         <div className={`p-1 rounded ${cat.bg} shrink-0`}>
@@ -121,12 +121,12 @@ function GoalRow({ goal, depth, expandedIds, onToggle, onSelect, selectedId, onA
         {goal.goalType && goal.goalType !== 'standard' && (
           <span className={`shrink-0 text-xs px-1.5 py-0.5 rounded ${GOAL_TYPE_CONFIG[goal.goalType]?.bg} ${GOAL_TYPE_CONFIG[goal.goalType]?.color}`}>
             {goal.goalType === 'apex' ? <Crown className="w-3 h-3 inline mr-0.5" /> : <Star className="w-3 h-3 inline mr-0.5" />}
-            <span className="hidden sm:inline">{GOAL_TYPE_CONFIG[goal.goalType]?.label}</span>
+            <span className="hidden @2xl/goal-list:inline">{GOAL_TYPE_CONFIG[goal.goalType]?.label}</span>
           </span>
         )}
 
         {(goal.progress > 0 || goal.todos?.length > 0) && (
-          <span className="shrink-0 flex items-center gap-1 text-xs text-gray-500 hidden sm:flex">
+          <span className="hidden @2xl/goal-list:flex shrink-0 items-center gap-1 text-xs text-gray-500">
             <div className="w-12 h-1.5 rounded-full bg-gray-700 overflow-hidden">
               <div
                 className={`h-full rounded-full transition-all ${
@@ -139,25 +139,25 @@ function GoalRow({ goal, depth, expandedIds, onToggle, onSelect, selectedId, onA
           </span>
         )}
 
-        <span className="text-xs text-gray-500 shrink-0 px-1 sm:px-1.5 py-0.5 rounded bg-gray-800">
+        <span className="hidden @md/goal-list:inline text-xs text-gray-500 shrink-0 px-1.5 py-0.5 rounded bg-gray-800">
           {HORIZON_OPTIONS.find(h => h.value === goal.horizon)?.label}
         </span>
 
         {urgencyIndicator(goal.urgency)}
 
         {goal.linkedActivities?.length > 0 && (
-          <span className="hidden sm:flex items-center gap-0.5 text-xs text-gray-500 shrink-0" title={`${goal.linkedActivities.length} linked ${goal.linkedActivities.length === 1 ? 'activity' : 'activities'}`}>
+          <span className="hidden @2xl/goal-list:flex items-center gap-0.5 text-xs text-gray-500 shrink-0" title={`${goal.linkedActivities.length} linked ${goal.linkedActivities.length === 1 ? 'activity' : 'activities'}`}>
             <Link2 className="w-3 h-3" />
             {goal.linkedActivities.length}
           </span>
         )}
 
         {goal.tags?.length > 0 && (
-          <div className="hidden md:flex items-center gap-1 shrink-0">
+          <div className="hidden @min-[60rem]/goal-list:flex items-center gap-1 shrink-0">
             {goal.tags.slice(0, 3).map(tag => (
-              <span key={tag} className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-port-accent/10 text-port-accent text-xs">
-                <Tag className="w-2.5 h-2.5" />
-                {tag}
+              <span key={tag} title={tag} className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-port-accent/10 text-port-accent text-xs">
+                <Tag className="w-2.5 h-2.5 shrink-0" />
+                <span className="max-w-16 truncate">{tag}</span>
               </span>
             ))}
             {goal.tags.length > 3 && (
@@ -363,8 +363,8 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
   }, []);
 
   return (
-    <div className="h-full flex flex-col sm:flex-row relative">
-      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+    <div className="@container/goals h-full flex relative">
+      <div className="@container/goal-list flex-1 flex flex-col overflow-hidden min-w-0">
         {/* Toolbar */}
         <div className="flex flex-wrap items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2 sm:py-3 border-b border-port-border bg-port-card/50">
           <div className="relative flex-1 min-w-[140px] max-w-xs">
@@ -449,23 +449,23 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
                   : 'New root goal'}
               </span>
             </div>
-            <div className="flex flex-col sm:flex-row gap-2">
+            <div className="flex flex-wrap gap-2">
               <input
                 type="text"
                 value={newGoal.title}
                 onChange={e => setNewGoal({ ...newGoal, title: e.target.value })}
                 placeholder="Goal title..."
                 aria-label="New goal title"
-                className="flex-1 bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white"
+                className="min-w-0 flex-1 basis-48 bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white"
                 onKeyDown={e => e.key === 'Enter' && handleCreateGoal()}
                 autoFocus
               />
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2 min-w-0">
                 <select
                   aria-label="Horizon"
                   value={newGoal.horizon}
                   onChange={e => setNewGoal({ ...newGoal, horizon: e.target.value })}
-                  className="flex-1 sm:flex-none bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
+                  className="min-w-0 max-w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
                 >
                   {HORIZON_OPTIONS.map(h => <option key={h.value} value={h.value}>{h.label}</option>)}
                 </select>
@@ -473,7 +473,7 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
                   aria-label="Category"
                   value={newGoal.category}
                   onChange={e => setNewGoal({ ...newGoal, category: e.target.value })}
-                  className="flex-1 sm:flex-none bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
+                  className="min-w-0 max-w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
                 >
                   {Object.entries(CATEGORY_CONFIG).map(([k, v]) => (
                     <option key={k} value={k}>{v.label}</option>
@@ -559,9 +559,9 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
         </DndContext>
       </div>
 
-      {/* Detail panel — full overlay on mobile, side panel on desktop */}
+      {/* Detail panel — overlay until the workspace can fit both panes */}
       {(selectedGoal || goalNotFound) && (
-        <div className="absolute inset-0 sm:relative sm:inset-auto z-20 sm:z-auto">
+        <div className="absolute inset-0 z-20 @min-[900px]/goals:relative @min-[900px]/goals:inset-auto @min-[900px]/goals:z-auto @min-[900px]/goals:w-80 shrink-0">
           {selectedGoal ? (
             <GoalDetailPanel
               key={selectedGoal.id}
@@ -574,7 +574,7 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
               }}
             />
           ) : (
-            <div className="w-full sm:w-80 bg-port-card border-l border-port-border h-full overflow-y-auto p-4">
+            <div className="w-full bg-port-card border-l border-port-border h-full overflow-y-auto p-4">
               <EmptyState
                 icon={AlertTriangle}
                 title="Goal not found"

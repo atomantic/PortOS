@@ -48,7 +48,7 @@ export default function GoalLinkedCalendars({
               value={selectedCalendar}
               onChange={e => setSelectedCalendar(e.target.value)}
               aria-label="Calendar to link"
-              className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
+              className="flex-1 min-w-0 w-full truncate bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
             >
               <option value="">Link calendar...</option>
               {subcalendars
@@ -58,7 +58,7 @@ export default function GoalLinkedCalendars({
             <button
               onClick={handleLinkCalendar}
               disabled={!selectedCalendar}
-              className="px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent disabled:opacity-50"
+              className="shrink-0 px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent disabled:opacity-50"
             >
               Link
             </button>

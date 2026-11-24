@@ -351,7 +351,7 @@ export default function GoalsTreeView({ data, onRefresh, selectedGoalId }) {
   const handleOrganize = () => requestOrganize({ providerId: selectedProviderId, model: selectedModel });
 
   return (
-    <div className="h-full flex relative">
+    <div className="@container/goals h-full flex relative">
       <div className="flex-1 min-w-0 min-h-0 relative flex flex-col">
         {/* Filter bar */}
         <div className="relative z-10 shrink-0 m-2 sm:m-3">
@@ -583,9 +583,9 @@ export default function GoalsTreeView({ data, onRefresh, selectedGoalId }) {
         )}
       </div>
 
-      {/* Detail panel — full overlay on mobile, side panel on desktop */}
+      {/* Detail panel — overlay until the workspace can fit both panes */}
       {selectedGoal && (
-        <div className="absolute inset-0 sm:relative sm:inset-auto z-20 sm:z-auto">
+        <div className="absolute inset-0 z-20 @min-[900px]/goals:relative @min-[900px]/goals:inset-auto @min-[900px]/goals:z-auto @min-[900px]/goals:w-80 shrink-0">
           <GoalDetailPanel
             key={selectedGoal.id}
             goal={selectedGoal}

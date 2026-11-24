@@ -13,7 +13,7 @@ const require = createRequire(import.meta.url);
 const { chromium } = require('playwright-core');
 const chrome = resolveTestChrome();
 
-describe.skipIf(!chrome)('Goals organization responsive controls (#9712)', () => {
+describe.skipIf(!chrome)('Goals responsive controls', () => {
   let browser;
   let fixture;
   let origin;
@@ -46,22 +46,55 @@ describe.skipIf(!chrome)('Goals organization responsive controls (#9712)', () =>
           return `
             import React from 'react';
             import { createRoot } from 'react-dom/client';
-            import { MemoryRouter } from 'react-router';
+            import { MemoryRouter, Routes, Route, useParams } from 'react-router';
             import GoalsListView from '/src/components/goals/GoalsListView.jsx';
             import GoalsTreeView from '/src/components/goals/GoalsTreeView.jsx';
             import '/src/index.css';
+            const params = new URLSearchParams(location.search);
+            const view = params.has('tree') ? 'tree' : 'list';
+            const layout = params.has('layout');
+            const View = view === 'tree' ? GoalsTreeView : GoalsListView;
             const goals = [
               { id: 'g1', title: 'Example apex', goalType: 'apex', category: 'mastery', children: [] },
               { id: 'g2', title: 'Example project', category: 'creative', children: [] },
             ];
-            const View = location.search.includes('tree') ? GoalsTreeView : GoalsListView;
+            const flat = [...goals];
+            if (layout) {
+              let parent = goals[0];
+              for (let depth = 1; depth <= 9; depth++) {
+                const child = {
+                  id: 'child-' + depth, parentId: parent.id, title: 'Nested example ' + depth,
+                  category: 'mastery', goalType: 'sub-apex', horizon: 'lifetime', progress: 75,
+                  targetDate: '2030-01-01', urgency: 0.8, linkedActivities: [{ activityName: 'Practice' }],
+                  tags: ['W'.repeat(50), 'M'.repeat(50), 'N'.repeat(50)], children: [],
+                };
+                parent.children.push(child);
+                flat.push(child);
+                if (depth === 1) {
+                  const leaf = { ...child, id: 'leaf', title: 'Sibling leaf', children: [] };
+                  parent.children.push(leaf);
+                  flat.push(leaf);
+                }
+                parent = child;
+              }
+            }
+            const h = React.createElement;
+            function Fixture() {
+              const { goalId } = useParams();
+              return h(View, { data: { roots: goals, flat }, selectedGoalId: goalId, onRefresh: () => {} });
+            }
             // Pin the bundled Inter webfont (#10628): the default --port-font-ui is the
             // host's system stack, so content-sized widths otherwise vary by machine.
             document.documentElement.style.setProperty('--port-font-ui', "'Inter', sans-serif");
             createRoot(document.getElementById('root')).render(
-              React.createElement(MemoryRouter, null,
-                React.createElement('div', { className: 'h-screen p-4 md:p-6' },
-                  React.createElement(View, { data: { roots: goals, flat: goals }, onRefresh: () => {} })))
+              h(MemoryRouter, { initialEntries: ['/goals/' + view + (params.has('detail') ? '/child-9' : '')] },
+                h('div', { className: layout ? 'h-screen flex' : 'h-screen p-4 md:p-6' },
+                  layout && h('div', { className: 'hidden lg:block w-64 shrink-0' }),
+                  h('main', { className: 'min-w-0 flex-1 h-full', 'aria-label': 'Goals workspace' },
+                    h(Routes, null, h(Route, { path: '/goals/:tab/:goalId?', element: h(Fixture) }))
+                  )
+                )
+              )
             );
           `;
         },
@@ -121,4 +154,123 @@ describe.skipIf(!chrome)('Goals organization responsive controls (#9712)', () =>
       }
     } finally { await page.close(); }
   }, 60000);
+
+  it('keeps deep rows and sub-goal form controls usable across pane widths (#18340)', async () => {
+    const page = await browser.newPage();
+    try {
+      await page.route('**/api/**', route => route.fulfill({ json: [] }));
+      await page.goto(`${origin}goals-test?list&layout`);
+      const workspace = page.getByRole('main', { name: 'Goals workspace' });
+      const title = page.getByText('Nested example 9', { exact: true });
+      const addAction = page.getByRole('button', { name: 'Add sub-goal' });
+      const row = page.getByRole('button').filter({ has: title }).filter({ has: addAction });
+      const deepTitle = row.getByText('Nested example 9', { exact: true });
+      await deepTitle.waitFor({ timeout: ASYNC_UTIL_TIMEOUT_MS });
+      const addSubGoal = row.getByRole('button', { name: 'Add sub-goal' });
+      const parentTitle = page.getByText('Nested example 1', { exact: true });
+      const leafTitle = page.getByText('Sibling leaf', { exact: true });
+      for (const [width, height] of [[320, 800], [360, 800], [768, 1024], [1024, 768], [1155, 900], [1156, 900], [1440, 900], [1536, 900]]) {
+        await page.setViewportSize({ width, height });
+        expect((await parentTitle.boundingBox()).x).toBe((await leafTitle.boundingBox()).x);
+        expect((await deepTitle.boundingBox()).width, `title width at ${width}px viewport`).toBeGreaterThanOrEqual(120);
+        await expectInside(addSubGoal, workspace);
+        if (width <= 360) {
+          await addSubGoal.click();
+          await page.getByRole('textbox', { name: 'New goal title' }).fill('Example sub-goal');
+          for (const control of [
+            page.getByRole('combobox', { name: 'Horizon' }),
+            page.getByRole('combobox', { name: 'Category' }),
+            page.getByRole('button', { name: 'Create', exact: true }),
+            page.getByRole('button', { name: 'Cancel', exact: true }),
+          ]) {
+            await expectInside(control, workspace);
+            expect(await control.isEnabled()).toBe(true);
+          }
+          await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+        }
+        if (width >= 768) {
+          await deepTitle.click();
+          const panel = page.getByRole('region', { name: 'Goal details' });
+          const workspaceWidth = (await workspace.boundingBox()).width;
+          const panelBox = await panel.boundingBox();
+          expect(panelBox.width).toBe(workspaceWidth < 900 ? workspaceWidth : 320);
+          expect((await deepTitle.boundingBox()).width, `title width at ${width}px viewport`).toBeGreaterThanOrEqual(120);
+          if (workspaceWidth >= 900) {
+            const action = await addSubGoal.boundingBox();
+            expect(action.x + action.width).toBeLessThanOrEqual(panelBox.x);
+            await addSubGoal.click({ trial: true });
+          }
+          await page.getByRole('button', { name: 'Close panel' }).click();
+        }
+      }
+    } finally { await page.close(); }
+  }, 60000);
+
+  it('fits long link options and phase fields in the tree detail overlay and rail (#18340)', async () => {
+    const page = await browser.newPage();
+    const activityName = 'W'.repeat(58);
+    const calendarName = 'Example calendar with a long name for a recurring practice session';
+    const linkRequests = [];
+    const responses = {
+      'meatspace/activities': [{ name: activityName }],
+      'calendar/accounts': [{ subcalendars: [{ calendarId: 'calendar-1', name: calendarName, enabled: true }] }],
+      'digital-twin/identity/goals/child-9/generate-phases': [
+        { title: 'First phase', description: 'Practice regularly', targetDate: '2029-04-01', order: 0 },
+      ],
+    };
+    try {
+      await page.route('**/api/**', route => {
+        const endpoint = new URL(route.request().url()).pathname.slice('/api/'.length);
+        if (/child-9\/(activities|calendars)$/.test(endpoint)) {
+          linkRequests.push(route.request().postDataJSON());
+        }
+        return route.fulfill({ json: responses[endpoint] ?? [] });
+      });
+      await page.goto(`${origin}goals-test?tree&layout&detail`);
+      const panel = page.getByRole('region', { name: 'Goal details' });
+      const workspace = page.getByRole('main', { name: 'Goals workspace' });
+      const activity = page.getByRole('combobox', { name: 'Activity', exact: true });
+      const calendar = page.getByRole('combobox', { name: 'Calendar to link' });
+      await panel.waitFor({ timeout: ASYNC_UTIL_TIMEOUT_MS });
+      await page.getByRole('button', { name: 'Plan', exact: true }).click();
+      await page.getByRole('button', { name: 'Generate Plan' }).click();
+      const phaseTitle = page.getByRole('textbox', { name: 'Phase 1 title' });
+      const phaseDescription = page.getByRole('textbox', { name: 'Phase 1 description' });
+      await phaseTitle.waitFor();
+      for (const [width, height] of [[320, 800], [768, 1024], [1024, 768], [1440, 900]]) {
+        await page.setViewportSize({ width, height });
+        expect((await panel.boundingBox()).width).toBe(width < 1440 ? (await workspace.boundingBox()).width : 320);
+        for (const select of [activity, calendar]) {
+          await expectInside(select, panel);
+          await expectInside(select.locator('..').getByRole('button', { name: 'Link', exact: true }), panel);
+        }
+        const date = await page.getByLabel('Phase 1 target date').boundingBox();
+        for (const field of [phaseTitle, phaseDescription]) {
+          const box = await field.boundingBox();
+          expect(box.width).toBeGreaterThanOrEqual((await panel.boundingBox()).width - 52);
+          expect(box.y + box.height).toBeLessThanOrEqual(date.y);
+        }
+        expect(await panel.evaluate(el => el.scrollWidth)).toBeLessThanOrEqual(await panel.evaluate(el => el.clientWidth));
+      }
+      await phaseTitle.fill('Updated title');
+      await phaseDescription.fill('Updated description');
+      await activity.selectOption(activityName);
+      await activity.locator('..').getByRole('button', { name: 'Link', exact: true }).click();
+      await calendar.selectOption('calendar-1');
+      await calendar.locator('..').getByRole('button', { name: 'Link', exact: true }).click();
+      expect(linkRequests).toEqual([
+        { activityName },
+        { subcalendarId: 'calendar-1', subcalendarName: calendarName, matchPattern: '' },
+      ]);
+    } finally { await page.close(); }
+  }, 60000);
 });
+
+
+async function expectInside(control, container) {
+  const box = await control.boundingBox();
+  const bounds = await container.boundingBox();
+  expect(box.width).toBeGreaterThan(0);
+  expect(box.x).toBeGreaterThanOrEqual(bounds.x);
+  expect(box.x + box.width).toBeLessThanOrEqual(bounds.x + bounds.width);
+}
