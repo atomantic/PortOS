@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 import { hashPassword, hashToken } from '../lib/portosAuthCore.js';
 
 const harness = vi.hoisted(() => ({ routes: new Map(), gates: [], auth: null, listen: vi.fn(), execPm2: vi.fn(), loadApps: vi.fn(), spawn: vi.fn(), listProcessesStrict: vi.fn() }));
@@ -81,6 +82,7 @@ const response = () => {
   const res = { statusCode: 200, body: null, headers: {} };
   res.status = (code) => { res.statusCode = code; return res; };
   res.json = (body) => { res.body = body; return res; };
+  res.send = (body) => { res.body = body; return res; };
   res.setHeader = (name, value) => { res.headers[name] = value; };
   return res;
 };
@@ -416,5 +418,345 @@ describe('Autofixer log child lifecycle and authority', () => {
     expect(live.kill.mock.calls).toEqual([['SIGTERM']]);
     expect(live.stdout.listenerCount('data')).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+function createDomStub() {
+  const docListeners = new Map();
+  const byId = new Map();
+  const intervals = [];
+
+  const doc = {
+    body: { nodeName: 'BODY' },
+    activeElement: null,
+    addEventListener(type, fn) {
+      if (!docListeners.has(type)) docListeners.set(type, []);
+      docListeners.get(type).push(fn);
+    },
+    dispatchEvent(event) {
+      for (const fn of docListeners.get(event.type) ?? []) fn(event);
+    },
+    getElementById(id) { return byId.get(id) ?? null; },
+    querySelector(selector) {
+      if (selector === 'header') return header;
+      if (selector === '.container') return container;
+      return null;
+    },
+    contains(target) {
+      return Boolean(target && (target === doc.body || walk(root).includes(target)));
+    },
+    createElement(tagName) { return makeElement(tagName); },
+    createTextNode(text) { return { nodeType: 3, textContent: text, parentNode: null }; },
+  };
+
+  function walk(node) {
+    const out = [node];
+    for (const child of node.children ?? []) {
+      if (child.nodeType !== 3) out.push(...walk(child));
+    }
+    return out;
+  }
+
+  function makeElement(tagName, { id = '', className = '', hidden = false, disabled = false, attrs = {} } = {}) {
+    const listeners = new Map();
+    const attrsMap = new Map(Object.entries(attrs));
+    const classes = new Set(className ? className.split(/\s+/).filter(Boolean) : []);
+    const el = {
+      tagName: tagName.toUpperCase(),
+      id,
+      hidden,
+      disabled,
+      inert: false,
+      value: '',
+      href: '',
+      type: '',
+      textContent: '',
+      dataset: {},
+      style: {},
+      parentNode: null,
+      children: [],
+      classList: {
+        add(...names) { names.forEach(n => classes.add(n)); },
+        remove(...names) { names.forEach(n => classes.delete(n)); },
+        toggle(name, force) {
+          const next = force === undefined ? !classes.has(name) : Boolean(force);
+          if (next) classes.add(name);
+          else classes.delete(name);
+          return next;
+        },
+        contains(name) { return classes.has(name); },
+      },
+      set className(val) {
+        classes.clear();
+        String(val).split(/\s+/).filter(Boolean).forEach(n => classes.add(n));
+      },
+      get className() { return [...classes].join(' '); },
+      setAttribute(name, value) { attrsMap.set(name, String(value)); },
+      getAttribute(name) { return attrsMap.get(name) ?? null; },
+      appendChild(child) {
+        child.parentNode = el;
+        el.children.push(child);
+        return child;
+      },
+      append(...nodes) { nodes.forEach(n => el.appendChild(n)); },
+      replaceChildren(...nodes) {
+        el.children.forEach(c => { c.parentNode = null; });
+        el.children.length = 0;
+        nodes.forEach(n => el.appendChild(n));
+      },
+      remove() {
+        if (!el.parentNode) return;
+        el.parentNode.children = el.parentNode.children.filter(c => c !== el);
+        el.parentNode = null;
+      },
+      addEventListener(type, fn) {
+        if (!listeners.has(type)) listeners.set(type, []);
+        listeners.get(type).push(fn);
+      },
+      async dispatchEvent(event) {
+        for (const fn of listeners.get(event.type) ?? []) await fn(event);
+      },
+      async click() { await el.dispatchEvent({ type: 'click', preventDefault() {} }); },
+      focus() { doc.activeElement = el; },
+      contains(other) { return walk(el).includes(other); },
+      closest(selector) {
+        let cur = el;
+        while (cur) {
+          if (selector === '[hidden]' && cur.hidden) return cur;
+          if (selector === 'button.process-item' && cur.tagName === 'BUTTON' && cur.classList.contains('process-item')) return cur;
+          cur = cur.parentNode;
+        }
+        return null;
+      },
+      querySelectorAll(selector) {
+        const nodes = walk(el).slice(1);
+        if (selector === 'button.process-item') {
+          return nodes.filter(n => n.tagName === 'BUTTON' && n.classList.contains('process-item'));
+        }
+        if (selector.includes('button:not([disabled])')) {
+          return nodes.filter(n => (n.tagName === 'INPUT' || n.tagName === 'BUTTON') && !n.disabled);
+        }
+        return [];
+      },
+    };
+    if (id) byId.set(id, el);
+    return el;
+  }
+
+  const root = makeElement('div');
+  const header = makeElement('header');
+  const container = makeElement('div', { className: 'container' });
+  const portosDashboardLink = makeElement('a', { id: 'portosDashboardLink' });
+  const logsTab = makeElement('button', { id: 'logsTab', className: 'active', attrs: { 'aria-selected': 'true', tabindex: '0' } });
+  const historyTab = makeElement('button', { id: 'historyTab', attrs: { 'aria-selected': 'false', tabindex: '-1' } });
+  const logoutLink = makeElement('button', { id: 'logoutLink', hidden: true });
+  header.append(portosDashboardLink, logsTab, historyTab, logoutLink);
+
+  const processList = makeElement('ul', { id: 'processList' });
+  const currentProcess = makeElement('span', { id: 'currentProcess' });
+  const restartBtn = makeElement('button', { id: 'restartBtn', disabled: true });
+  const stopBtn = makeElement('button', { id: 'stopBtn', disabled: true });
+  const clearBtn = makeElement('button', { id: 'clearBtn' });
+  const pauseBtn = makeElement('button', { id: 'pauseBtn', attrs: { 'aria-pressed': 'false' } });
+  const logs = makeElement('div', { id: 'logs' });
+  const historyPanel = makeElement('div', { id: 'historyPanel', hidden: true });
+  const statusDot = makeElement('div', { id: 'statusDot', attrs: { 'aria-hidden': 'true' } });
+  const statusText = makeElement('span', { id: 'statusText' });
+  const lineCount = makeElement('span', { id: 'lineCount' });
+  container.append(processList, currentProcess, restartBtn, stopBtn, clearBtn, pauseBtn, logs, historyPanel, statusDot, statusText, lineCount);
+
+  const toast = makeElement('div', { id: 'toast', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
+  const loginOverlay = makeElement('div', { id: 'loginOverlay', hidden: true, attrs: { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'loginTitle' } });
+  const loginForm = makeElement('form', { id: 'loginForm' });
+  const loginPassword = makeElement('input', { id: 'loginPassword' });
+  const loginSubmit = makeElement('button', { id: 'loginSubmit' });
+  const loginError = makeElement('div', { id: 'loginError', attrs: { role: 'alert' } });
+  loginForm.append(loginPassword, loginSubmit, loginError);
+  loginOverlay.append(loginForm);
+  root.append(header, container, toast, loginOverlay);
+
+  return { doc, header, container, loginOverlay, loginForm, loginPassword, loginSubmit, loginError, logoutLink, processList, restartBtn, stopBtn, pauseBtn, logsTab, historyTab, logs, historyPanel, toast, intervals };
+}
+
+function mountUiScript(html, fetchImpl) {
+  const match = html.match(/<script>([\s\S]*?)<\/script>/);
+  if (!match) throw new Error('Expected inline script in autofixer UI HTML');
+  const dom = createDomStub();
+  const win = { location: { protocol: 'http:', hostname: 'localhost' } };
+  const context = {
+    document: dom.doc,
+    window: win,
+    fetch: fetchImpl,
+    EventSource: function FakeEventSource() { this.close = () => {}; },
+    setInterval: (fn) => { dom.intervals.push(fn); return dom.intervals.length; },
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    requestAnimationFrame: (fn) => fn(),
+    encodeURIComponent,
+    Map,
+    Array,
+    Date,
+    Math,
+    JSON,
+    String,
+    Boolean,
+  };
+  runInNewContext(match[1], context);
+  return { dom, context };
+}
+
+describe('Autofixer UI accessibility DOM and markup contracts', () => {
+  it('ships semantic landmarks, tablist/tabpanel, dialog, live regions, contrast tokens, and zoom flex layout', async () => {
+    await loadUi();
+    const res = response();
+    harness.routes.get('/').at(-1)({}, res);
+    const html = res.body;
+
+    expect(html).toContain('<nav class="nav-links"');
+    expect(html).toContain('<main class="main-content">');
+    expect(html).toContain('<ul class="process-list" id="processList">');
+    expect(html).toContain('role="tablist"');
+    expect(html).toContain('<button type="button" class="active" id="logsTab" role="tab" aria-selected="true" aria-controls="logs" tabindex="0">Logs</button>');
+    expect(html).toContain('<button type="button" id="historyTab" role="tab" aria-selected="false" aria-controls="historyPanel" tabindex="-1">History</button>');
+    expect(html).toContain('<button type="button" id="logoutLink" hidden>Log out</button>');
+    expect(html).toContain('<button type="button" id="pauseBtn" aria-pressed="false">Pause</button>');
+    expect(html).toContain('<span aria-hidden="true">🔧</span>');
+    expect(html).toContain('<span aria-hidden="true">🔒</span>');
+    expect(html).toContain('<div class="status-indicator" role="status" aria-live="polite">');
+    expect(html).toContain('<div class="status-dot" id="statusDot" aria-hidden="true"></div>');
+    expect(html).toContain('<div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>');
+    expect(html).toContain('<div class="login-overlay" id="loginOverlay" role="dialog" aria-modal="true" aria-labelledby="loginTitle" hidden>');
+    expect(html).toContain('<div class="login-error" id="loginError" role="alert"></div>');
+
+    expect(html).not.toContain('#666');
+    expect(html).not.toContain('calc(100vh');
+    expect(html).not.toContain('outline: none');
+    expect(html).not.toMatch(/\.history-item\s*\{[^}]*cursor:\s*pointer/);
+    expect(html).toContain('#9ca3af');
+    expect(html).toContain('#fca5a5');
+    expect(html).toContain('#4f46e5');
+    expect(html).toContain('height: 100dvh;');
+    expect(html).toContain('@media (prefers-reduced-motion: reduce)');
+  });
+
+  it('renders native process buttons with status text and preserves focus across selection and status polls', async () => {
+    await loadUi();
+    const res = response();
+    harness.routes.get('/').at(-1)({}, res);
+
+    const fetchMock = vi.fn(async (url) => {
+      if (url === '/api/auth/status') return { ok: true, status: 200, json: async () => ({ enabled: false }) };
+      if (url === '/api/apps') return { ok: true, status: 200, json: async () => [{ name: 'Example App', pm2ProcessNames: ['example-api', 'example-worker'] }] };
+      if (url === '/api/status') return { ok: true, status: 200, json: async () => [{ name: 'example-api', status: 'online' }, { name: 'example-worker', status: 'errored' }] };
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+
+    const { dom, context } = mountUiScript(res.body, fetchMock);
+    await vi.waitFor(() => {
+      expect(dom.processList.querySelectorAll('button.process-item')).toHaveLength(2);
+    });
+
+    const buttons = dom.processList.querySelectorAll('button.process-item');
+    expect(buttons[0].parentNode.tagName).toBe('LI');
+    expect(buttons[0].type).toBe('button');
+    expect(buttons[0].children[0].children[0].getAttribute('aria-hidden')).toBe('true');
+    expect(buttons[0].children[0].children[2].textContent).toBe(' (online)');
+    expect(buttons[1].children[0].children[2].textContent).toBe(' (errored)');
+
+    buttons[0].focus();
+    await buttons[0].click();
+
+    expect(dom.restartBtn.disabled).toBe(false);
+    expect(dom.stopBtn.disabled).toBe(false);
+    expect(dom.doc.activeElement.dataset.name).toBe('example-api');
+    expect(dom.doc.activeElement.getAttribute('aria-current')).toBe('true');
+
+    await context.fetchStatus();
+    expect(dom.doc.activeElement.dataset.name).toBe('example-api');
+    expect(dom.doc.activeElement).not.toBe(buttons[0]);
+  });
+
+  it('isolates background with inert, traps Tab/Shift+Tab inside #loginOverlay, and updates toast/pause/tabs/history focus', async () => {
+    await loadUi();
+    const res = response();
+    harness.routes.get('/').at(-1)({}, res);
+
+    let authenticated = false;
+    const fetchMock = vi.fn(async (url) => {
+      if (url === '/api/auth/status') return { ok: true, status: 200, json: async () => ({ enabled: true, authenticated }) };
+      if (url === '/api/auth/login') {
+        authenticated = true;
+        return { ok: true, status: 200, json: async () => ({ success: true }) };
+      }
+      if (url === '/api/apps') return { ok: true, status: 200, json: async () => [] };
+      if (url === '/api/status') return { ok: true, status: 200, json: async () => [] };
+      if (url === '/api/history') {
+        return { ok: true, status: 200, json: async () => [{ sessionId: 's1', processName: 'example-api', appName: 'Example', startTime: '2026-01-01T00:00:00Z', duration: 1000, success: true, staged: true }] };
+      }
+      if (url === '/api/fixes/s1') return { ok: true, status: 200, json: async () => ({ patch: '+fix' }) };
+      if (url === '/api/fixes/s1/discard') return { ok: true, status: 200, json: async () => ({ disposition: 'discarded' }) };
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+
+    const { dom, context } = mountUiScript(res.body, fetchMock);
+    await vi.waitFor(() => {
+      expect(dom.loginOverlay.hidden).toBe(false);
+    });
+
+    expect(dom.header.inert).toBe(true);
+    expect(dom.container.inert).toBe(true);
+    expect(dom.doc.activeElement).toBe(dom.loginPassword);
+
+    const shiftTab = { type: 'keydown', key: 'Tab', shiftKey: true, prevented: false, preventDefault() { this.prevented = true; } };
+    await dom.doc.dispatchEvent(shiftTab);
+    expect(shiftTab.prevented).toBe(true);
+    expect(dom.doc.activeElement).toBe(dom.loginSubmit);
+
+    const forwardTab = { type: 'keydown', key: 'Tab', shiftKey: false, prevented: false, preventDefault() { this.prevented = true; } };
+    await dom.doc.dispatchEvent(forwardTab);
+    expect(forwardTab.prevented).toBe(true);
+    expect(dom.doc.activeElement).toBe(dom.loginPassword);
+
+    dom.loginPassword.value = 'example-password';
+    await dom.loginForm.dispatchEvent({ type: 'submit', preventDefault() {} });
+    await vi.waitFor(() => {
+      expect(dom.loginOverlay.hidden).toBe(true);
+    });
+    expect(dom.header.inert).toBe(false);
+    expect(dom.container.inert).toBe(false);
+    expect(dom.logoutLink.hidden).toBe(false);
+
+    await dom.pauseBtn.click();
+    expect(dom.pauseBtn.getAttribute('aria-pressed')).toBe('true');
+    expect(dom.pauseBtn.textContent).toBe('Resume');
+
+    context.showToast('Action failed', 'error');
+    expect(dom.toast.getAttribute('role')).toBe('alert');
+    expect(dom.toast.getAttribute('aria-live')).toBe('assertive');
+
+    await dom.logsTab.dispatchEvent({ type: 'keydown', key: 'ArrowRight', preventDefault() {} });
+    expect(dom.historyTab.getAttribute('aria-selected')).toBe('true');
+    expect(dom.logsTab.getAttribute('tabindex')).toBe('-1');
+    expect(dom.historyTab.getAttribute('tabindex')).toBe('0');
+    expect(dom.logs.hidden).toBe(true);
+    expect(dom.historyPanel.hidden).toBe(false);
+
+    await vi.waitFor(() => {
+      expect(dom.historyPanel.children).toHaveLength(1);
+    });
+    const historyItem = dom.historyPanel.children[0];
+    const reviewBtn = historyItem.children[3];
+    expect(reviewBtn.type).toBe('button');
+    await reviewBtn.click();
+    await vi.waitFor(() => {
+      expect(dom.doc.activeElement.textContent).toBe('Apply and restart');
+    });
+    const discardBtn = historyItem.children.at(-1);
+    expect(discardBtn.type).toBe('button');
+    await discardBtn.click();
+    await vi.waitFor(() => {
+      expect(dom.doc.activeElement.textContent).toBe('Discarded');
+    });
+    expect(dom.doc.activeElement.getAttribute('tabindex')).toBe('-1');
   });
 });

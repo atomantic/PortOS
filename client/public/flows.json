@@ -14,7 +14,7 @@
     { "id": "sse", "label": "SSE stream", "color": "#f59e0b", "dash": "2 4" },
     { "id": "socket", "label": "Socket.IO", "color": "#22c55e", "dash": "8 4" },
     { "id": "call", "label": "Direct call", "color": "#9ca3af" },
-    { "id": "emitter", "label": "EventEmitter (in-process)", "color": "#a855f7", "dash": "10 3 2 3" },
+    { "id": "emitter", "label": "EventEmitter (in-process)", "color": "#c084fc", "dash": "10 3 2 3" },
     { "id": "spawn", "label": "Process spawn", "color": "#ef4444", "dash": "14 4" },
     { "id": "storage", "label": "File / DB I/O", "color": "#14b8a6", "dash": "1 3" }
   ],

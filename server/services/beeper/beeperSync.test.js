@@ -15,6 +15,8 @@ const txCalls = [];
 // rather than inside it.
 const txWrites = [];
 let storedCursorRows = [];
+let storedMessageRows = [];
+let storedAttachmentRows = [];
 let accountCheckpoint = null;
 let checkpointFailure = false;
 let txFailPattern = null;
@@ -42,6 +44,21 @@ const withTransactionMock = vi.fn(async (fn) => {
       txCalls.push(text.trim().split('\n')[0].trim());
       txWrites.push({ text, params });
       if (txFailPattern && txFailPattern.test(text)) throw new Error('simulated write failure');
+      if (text.includes('FROM beeper_messages') && text.includes('FOR UPDATE')) {
+        return {
+          rows: storedMessageRows.filter(
+            (row) => row.id === params?.[0] && (!row.conversation_id || row.conversation_id === params?.[1]),
+          ),
+        };
+      }
+      if (text.includes('FROM beeper_attachments')) {
+        return {
+          rows: storedAttachmentRows.filter(
+            (row) => (!row.conversation_id || row.conversation_id === params?.[0])
+              && (!row.message_id || row.message_id === params?.[1]),
+          ),
+        };
+      }
       if (text.includes('INSERT INTO beeper_messages') && text.includes('RETURNING id')) {
         const ids = Array.isArray(params?.[1]) ? params[1] : [params?.[0]];
         return { rows: ids.filter((id) => !rejectedMessageIds.has(id)).map((id) => ({ id })) };
@@ -149,6 +166,8 @@ beforeEach(() => {
   txWrites.length = 0;
   fetchedUrls.length = 0;
   storedCursorRows = [];
+  storedMessageRows = [];
+  storedAttachmentRows = [];
   accountCheckpoint = null;
   checkpointFailure = false;
   txFailPattern = null;
@@ -489,6 +508,23 @@ describe('watermark-bounded sweep', () => {
     const nextIndex = await loadRosterIndexMock.mock.results[1].value;
     expect(nextIndex).not.toBe(firstIndex);
     expect(logSenderTouchpointsMock.mock.calls.slice(2).every(([, options]) => options.personIndex === nextIndex)).toBe(true);
+  });
+
+  it('does not call loadRosterIndex on a caught-up sweep with zero changed chats', async () => {
+    storedCursorRows = [
+      { chat_id: 'chat-1', cursor: 'cur-chat-1', last_activity: '2026-09-02T10:00:00.000Z', has_conversation: true, snooze_until: null },
+      { chat_id: 'chat-2', cursor: 'cur-chat-2', last_activity: '2026-08-01T00:00:00.000Z', has_conversation: true, snooze_until: null },
+      { chat_id: 'chat-3', cursor: 'cur-chat-3', last_activity: '2026-07-01T00:00:00.000Z', has_conversation: true, snooze_until: null },
+    ];
+    installFetch({
+      chatPages: [CHAT_PAGE, { items: [], hasMore: false }],
+    });
+
+    const result = await runBeeperSweep({ reason: 'scheduler' });
+
+    expect(result).toMatchObject({ skipped: false, accounts: 1, chats: 0, messages: 0 });
+    expect(messageRequests()).toHaveLength(0);
+    expect(loadRosterIndexMock).not.toHaveBeenCalled();
   });
 
   it('deduplicates roster and senders into one batched upsert and passes resolvedPersonIds to logSenderTouchpoints', async () => {
@@ -1418,6 +1454,309 @@ describe('stored-message event reconciliation', () => {
     expect(dbCalls.filter(({ text }) => text.includes('beeper_credentials'))).toHaveLength(1);
     // 1x getBeeperSyncConfig + 1x resolveBeeperConfig (which reads settings once for baseUrl and once for legacy token fallback).
     expect(getSettingsMock).toHaveBeenCalledTimes(3);
+  });
+
+  function setupReconcileFixture(messageRow, attachmentRows = [], upstreamOverrides = {}) {
+    storedMessageRows = messageRow ? [messageRow] : [];
+    storedAttachmentRows = attachmentRows;
+    const originalQueryImpl = queryMock.getMockImplementation();
+    queryMock.mockImplementation(async (text, params) => {
+      dbCalls.push({ text, params });
+      if (/FROM beeper_messages m JOIN beeper_conversations/.test(text)) {
+        return { rows: [{ id: 'msg-reconcile', conversation_id: 'conv-1', source_chat_id: 'example-chat' }] };
+      }
+      return { rows: [] };
+    });
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      fetchedUrls.push(url);
+      return jsonResponse({
+        id: 'msg-reconcile',
+        senderID: 'user-1',
+        text: 'Same message',
+        timestamp: '2026-09-02T10:00:00.000Z',
+        sortKey: '1',
+        ...upstreamOverrides,
+      });
+    }));
+    const reconciledFrames = [];
+    const listener = (frame) => {
+      if (frame.kind === 'beeper-reconciled') reconciledFrames.push(frame);
+    };
+    beeperSocketEvents.on('invalidate', listener);
+    return {
+      reconciledFrames,
+      cleanup: () => {
+        beeperSocketEvents.off('invalidate', listener);
+        queryMock.mockImplementation(originalQueryImpl);
+      },
+    };
+  }
+
+  it('skips writes and invalidation when upstream matches the stored message row with no attachments', async () => {
+    const { reconciledFrames, cleanup } = setupReconcileFixture({
+      id: 'msg-reconcile',
+      conversation_id: 'conv-1',
+      sender_id: 'user-1',
+      body: 'Same message',
+      sent_at: new Date('2026-09-02T10:00:00.000Z'),
+      edited_at: null,
+      unsent_at: null,
+      sort_key: '1',
+      is_sender: false,
+      observed_at: new Date('2026-09-02T10:00:00.000Z'),
+    });
+    try {
+      await reconcileBeeperEvent({ kind: 'message.upserted', chatID: 'example-chat', ids: ['msg-reconcile'] });
+    } finally {
+      cleanup();
+    }
+    expect(txWrites.some(({ text }) => text.includes('INSERT INTO beeper_messages'))).toBe(false);
+    expect(txWrites.some(({ text }) => text.includes('INSERT INTO beeper_attachments'))).toBe(false);
+    expect(txWrites.some(({ text }) => text.includes('FROM beeper_attachments'))).toBe(false);
+    expect(reconciledFrames).toHaveLength(0);
+  });
+
+  it('skips writes and invalidation when stored attachments match upstream (including BIGINT string byte_length and preserved local_path)', async () => {
+    const baseMsg = {
+      id: 'msg-reconcile',
+      conversation_id: 'conv-1',
+      sender_id: 'user-1',
+      body: 'Same message',
+      sent_at: new Date('2026-09-02T10:00:00.000Z'),
+      edited_at: null,
+      unsent_at: null,
+      sort_key: '1',
+      is_sender: true,
+      observed_at: new Date('2026-09-02T10:00:00.000Z'),
+    };
+    const attachment = {
+      id: 'mxc://example.invalid/att-1',
+      mimeType: 'Image/PNG',
+      fileSize: 2048,
+      fileName: 'photo.png',
+      size: { width: 800, height: 600 },
+    };
+    // Case A: non-downloaded attachment with BIGINT byte_length returned as string by pg,
+    // and upstream omitting optional isSender while stored row already has is_sender=true.
+    const caseA = setupReconcileFixture(
+      baseMsg,
+      [{
+        conversation_id: 'conv-1',
+        message_id: 'msg-reconcile',
+        idx: 0,
+        mxc_id: 'mxc://example.invalid/att-1',
+        mime_type: 'image/png',
+        byte_length: '2048',
+        file_name: 'photo.png',
+        width: 800,
+        height: 600,
+        local_path: null,
+      }],
+      { attachments: [attachment] },
+    );
+    try {
+      await reconcileBeeperEvent({ kind: 'message.upserted', chatID: 'example-chat', ids: ['msg-reconcile'] });
+    } finally {
+      caseA.cleanup();
+    }
+    expect(txWrites.some(({ text }) => text.includes('FROM beeper_attachments'))).toBe(true);
+    expect(txWrites.some(({ text }) => text.includes('INSERT INTO beeper_messages'))).toBe(false);
+    expect(txWrites.some(({ text }) => text.includes('INSERT INTO beeper_attachments'))).toBe(false);
+    expect(caseA.reconciledFrames).toHaveLength(0);
+
+    // Case B: downloaded attachment preserves measured local_path byte_length even if upstream fileSize differs.
+    txWrites.length = 0;
+    const caseB = setupReconcileFixture(
+      baseMsg,
+      [{
+        conversation_id: 'conv-1',
+        message_id: 'msg-reconcile',
+        idx: 0,
+        mxc_id: 'mxc://example.invalid/att-1',
+        mime_type: 'image/png',
+        byte_length: '5000',
+        file_name: 'photo.png',
+        width: 800,
+        height: 600,
+        local_path: 'ab/photo.png',
+      }],
+      { attachments: [attachment] },
+    );
+    try {
+      await reconcileBeeperEvent({ kind: 'message.upserted', chatID: 'example-chat', ids: ['msg-reconcile'] });
+    } finally {
+      caseB.cleanup();
+    }
+    expect(txWrites.some(({ text }) => text.includes('INSERT INTO beeper_messages'))).toBe(false);
+    expect(txWrites.some(({ text }) => text.includes('INSERT INTO beeper_attachments'))).toBe(false);
+    expect(caseB.reconciledFrames).toHaveLength(0);
+  });
+
+  it('returns without writing or emitting beeper-reconciled when the row was purged mid-flight', async () => {
+    const { reconciledFrames, cleanup } = setupReconcileFixture(null);
+    try {
+      await reconcileBeeperEvent({ kind: 'message.upserted', chatID: 'example-chat', ids: ['msg-reconcile'] });
+    } finally {
+      cleanup();
+    }
+    expect(txWrites.some(({ text }) => text.includes('FROM beeper_messages'))).toBe(true);
+    expect(txWrites.some(({ text }) => text.includes('INSERT INTO beeper_messages'))).toBe(false);
+    expect(txWrites.some(({ text }) => text.includes('INSERT INTO beeper_attachments'))).toBe(false);
+    expect(reconciledFrames).toHaveLength(0);
+  });
+
+  it('persists and emits beeper-reconciled on genuine edits, new unsends, and attachment changes', async () => {
+    const baseMsg = {
+      id: 'msg-reconcile',
+      conversation_id: 'conv-1',
+      sender_id: 'user-1',
+      body: 'Original message',
+      sent_at: new Date('2026-09-02T10:00:00.000Z'),
+      edited_at: null,
+      unsent_at: null,
+      sort_key: '1',
+      is_sender: false,
+      observed_at: new Date('2026-09-02T10:00:00.000Z'),
+    };
+
+    // 1. Genuine edit
+    const editRun = setupReconcileFixture(baseMsg, [], {
+      text: 'Edited message',
+      editedTimestamp: '2026-09-02T10:05:00.000Z',
+    });
+    try {
+      await reconcileBeeperEvent({ kind: 'message.upserted', chatID: 'example-chat', ids: ['msg-reconcile'] });
+    } finally {
+      editRun.cleanup();
+    }
+    expect(txWrites.filter(({ text }) => text.includes('INSERT INTO beeper_messages'))).toHaveLength(1);
+    expect(editRun.reconciledFrames).toEqual([{
+      kind: 'beeper-reconciled', chatID: 'example-chat', ids: ['msg-reconcile'], seq: null, ts: expect.any(String),
+    }]);
+
+    // 2. First unsend tombstone writes message only and emits, while repeated identical tombstone skips
+    txWrites.length = 0;
+    const unsendRun = setupReconcileFixture(
+      baseMsg,
+      [],
+      { isDeleted: true, text: '', attachments: [{ id: 'mxc://example.invalid/att-1', mimeType: 'image/png' }] },
+    );
+    try {
+      await reconcileBeeperEvent({ kind: 'message.deleted', chatID: 'example-chat', ids: ['msg-reconcile'] });
+    } finally {
+      unsendRun.cleanup();
+    }
+    expect(txWrites.filter(({ text }) => text.includes('INSERT INTO beeper_messages'))).toHaveLength(1);
+    expect(txWrites.filter(({ text }) => text.includes('INSERT INTO beeper_attachments'))).toHaveLength(0);
+    expect(unsendRun.reconciledFrames).toHaveLength(1);
+
+    txWrites.length = 0;
+    const repeatUnsendRun = setupReconcileFixture(
+      { ...baseMsg, unsent_at: new Date('2026-09-02T10:06:00.000Z') },
+      [],
+      { isDeleted: true, text: '' },
+    );
+    try {
+      await reconcileBeeperEvent({ kind: 'message.deleted', chatID: 'example-chat', ids: ['msg-reconcile'] });
+    } finally {
+      repeatUnsendRun.cleanup();
+    }
+    expect(txWrites.filter(({ text }) => text.includes('INSERT INTO beeper_messages'))).toHaveLength(0);
+    expect(repeatUnsendRun.reconciledFrames).toHaveLength(0);
+
+    // 3. Attachment replacement with unchanged message columns persists and emits
+    txWrites.length = 0;
+    const attChangeRun = setupReconcileFixture(
+      { ...baseMsg, body: 'Same message' },
+      [{
+        conversation_id: 'conv-1',
+        message_id: 'msg-reconcile',
+        idx: 0,
+        mxc_id: 'mxc://example.invalid/old',
+        mime_type: 'image/png',
+        byte_length: '100',
+        file_name: 'old.png',
+        width: 100,
+        height: 100,
+        local_path: null,
+      }],
+      {
+        attachments: [{
+          id: 'mxc://example.invalid/new',
+          mimeType: 'image/png',
+          fileSize: 200,
+          fileName: 'new.png',
+          size: { width: 100, height: 100 },
+        }],
+      },
+    );
+    try {
+      await reconcileBeeperEvent({ kind: 'message.upserted', chatID: 'example-chat', ids: ['msg-reconcile'] });
+    } finally {
+      attChangeRun.cleanup();
+    }
+    expect(txWrites.filter(({ text }) => text.includes('INSERT INTO beeper_messages'))).toHaveLength(1);
+    expect(txWrites.filter(({ text }) => text.includes('INSERT INTO beeper_attachments'))).toHaveLength(1);
+    expect(attChangeRun.reconciledFrames).toHaveLength(1);
+  });
+
+  it('skips redundant writes and invalidations for unchanged rows during periodic sweep rotation', async () => {
+    storedMessageRows = [{
+      id: 'msg-rot-1',
+      conversation_id: 'conv-rot',
+      sender_id: 'user-1',
+      body: 'Unchanged body',
+      sent_at: new Date('2026-09-02T10:00:00.000Z'),
+      edited_at: null,
+      unsent_at: null,
+      sort_key: '1',
+      is_sender: false,
+      observed_at: new Date('2026-09-02T10:00:00.000Z'),
+    }];
+    const originalQueryImpl = queryMock.getMockImplementation();
+    queryMock.mockImplementation(async (text, params) => {
+      dbCalls.push({ text, params });
+      if (/FROM beeper_reconcile_cursors/.test(text)) {
+        return { rows: [{ message_id: '', upper_bound: 'msg-rot-1' }] };
+      }
+      if (/FROM beeper_conversations c/.test(text) && /CROSS JOIN LATERAL/.test(text)) {
+        return { rows: [{ id: 'msg-rot-1', conversation_id: 'conv-rot', source_chat_id: 'chat-rot' }] };
+      }
+      return originalQueryImpl(text, params);
+    });
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      fetchedUrls.push(url);
+      const parsed = new URL(url);
+      if (parsed.pathname === '/v1/accounts') return jsonResponse(ACCOUNTS);
+      if (parsed.pathname === '/v1/bridges') return jsonResponse(BRIDGES);
+      if (parsed.pathname === '/v1/chats') return jsonResponse({ items: [], hasMore: false });
+      if (parsed.pathname === '/v1/chats/chat-rot/messages/msg-rot-1') {
+        return jsonResponse({
+          id: 'msg-rot-1',
+          senderID: 'user-1',
+          text: 'Unchanged body',
+          timestamp: '2026-09-02T10:00:00.000Z',
+          sortKey: '1',
+        });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+    const reconciledFrames = [];
+    const listener = (frame) => {
+      if (frame.kind === 'beeper-reconciled') reconciledFrames.push(frame);
+    };
+    beeperSocketEvents.on('invalidate', listener);
+    try {
+      await runBeeperSweep({ reason: 'scheduler' });
+    } finally {
+      beeperSocketEvents.off('invalidate', listener);
+      queryMock.mockImplementation(originalQueryImpl);
+    }
+
+    expect(txWrites.some(({ text }) => text.includes('INSERT INTO beeper_messages'))).toBe(false);
+    expect(reconciledFrames).toHaveLength(0);
+    expect(dbCalls.some(({ text, params }) => text.includes('UPDATE beeper_reconcile_cursors') && params[1] === 'msg-rot-1')).toBe(true);
+    expect(loadRosterIndexMock).not.toHaveBeenCalled();
   });
 });
 

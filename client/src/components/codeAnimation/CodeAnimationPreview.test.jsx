@@ -410,6 +410,12 @@ describe('CodeAnimationPreview playhead', () => {
 });
 
 describe('CodeAnimationPreview frame-exact export', () => {
+  beforeEach(() => {
+    useSseProgress.mockReset();
+    useSseProgress.mockReturnValue({ latest: null, closed: false });
+    toast.error.mockReset();
+  });
+
   it('retains sound limitations beside the completed export and clears them when switching animations', async () => {
     const user = userEvent.setup();
     const note = 'Procedural Web Audio is not rendered offline; the frame-exact export is silent.';
@@ -450,5 +456,53 @@ describe('CodeAnimationPreview frame-exact export', () => {
     await user.click(screen.getByRole('button', { name: /export mp4/i }));
     expect(exportCodeAnimation).toHaveBeenCalledWith('job-1', { silent: true });
     expect(useSseProgress).toHaveBeenLastCalledWith('/api/html-composition/media-1/events', { enabled: true });
+  });
+
+  it.each([
+    ['immediately without frames', { latest: null, closed: true }],
+    ['mid-progress without a terminal frame', { latest: { type: 'progress', progress: 0.4 }, closed: true }],
+  ])('recovers export state when the SSE stream closes %s', async (_label, sseState) => {
+    const user = userEvent.setup();
+    exportCodeAnimation
+      .mockResolvedValueOnce({ jobId: 'media-1', notes: [] })
+      .mockResolvedValueOnce({ jobId: 'media-2', notes: [] });
+    const preview = () => <MemoryRouter><CodeAnimationPreview html={HTML} jobId="job-1" /></MemoryRouter>;
+    const { rerender } = render(preview());
+
+    await user.click(screen.getByRole('button', { name: /export mp4/i }));
+    expect(screen.getByRole('button', { name: /exporting 0%/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /cancel export/i })).toBeInTheDocument();
+
+    useSseProgress.mockReturnValue(sseState);
+    rerender(preview());
+
+    const exportBtn = screen.getByRole('button', { name: /export mp4 \(frame-exact\)/i });
+    expect(exportBtn).toBeEnabled();
+    expect(screen.queryByRole('button', { name: /cancel export/i })).toBeNull();
+    expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/lost connection to mp4 export/i));
+    expect(screen.getByRole('alert')).toHaveTextContent(/lost connection to mp4 export/i);
+    expect(screen.getByRole('link', { name: 'Media History' })).toHaveAttribute('href', '/media/history');
+
+    // Retrying clears the inline diagnostic and subscribes to the new job.
+    useSseProgress.mockReturnValue({ latest: null, closed: false });
+    await user.click(exportBtn);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(useSseProgress).toHaveBeenLastCalledWith('/api/html-composition/media-2/events', { enabled: true });
+  });
+
+  it('treats cancelled (double-l) as a clean terminal state without surfacing a stream-loss error', async () => {
+    const user = userEvent.setup();
+    exportCodeAnimation.mockResolvedValueOnce({ jobId: 'media-1', notes: [] });
+    const preview = () => <MemoryRouter><CodeAnimationPreview html={HTML} jobId="job-1" /></MemoryRouter>;
+    const { rerender } = render(preview());
+
+    await user.click(screen.getByRole('button', { name: /export mp4/i }));
+    useSseProgress.mockReturnValue({ latest: { type: 'cancelled' }, closed: true });
+    rerender(preview());
+
+    expect(screen.getByRole('button', { name: /export mp4 \(frame-exact\)/i })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: /cancel export/i })).toBeNull();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

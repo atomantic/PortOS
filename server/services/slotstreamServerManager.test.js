@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { createHash } from 'crypto';
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
@@ -26,6 +27,9 @@ import {
   isSlotstreamProvider,
   slotstreamCachedModelIds,
   SLOTSTREAM_APP,
+  SLOTSTREAM_RELEASE_REPO,
+  SLOTSTREAM_RELEASE_TAG,
+  SLOTSTREAM_RELEASE_TARGETS,
 } from './slotstreamServerManager.js';
 import * as processEnv from '../lib/processEnv.js';
 import * as platform from '../lib/platform.js';
@@ -252,20 +256,131 @@ describe('slotstreamServerManager', () => {
   });
 
   describe('installSlotstream', () => {
+    const archiveBytes = Buffer.from('verified-slotstream-archive');
+    let binDir;
+    let capturedWorkDir;
+    let capturedExtractDir;
+    let extractSetup;
+
     beforeEach(() => {
-      vi.spyOn(streamingSpawn, 'runStreamingCommand').mockResolvedValue({ success: true });
-      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(BINARY);
-      vi.spyOn(slotstreamModels, 'slotstreamBinDir').mockReturnValue(testLogDir);
+      binDir = join(testLogDir, 'slotstream-bin');
+      capturedWorkDir = null;
+      capturedExtractDir = null;
+      extractSetup = async (extractDir) => {
+        await writeFile(join(extractDir, 'slotstream'), '#!/bin/sh\necho slotstream\n', { mode: 0o644 });
+        await writeFile(join(extractDir, 'mlx.metallib'), 'metallib');
+        await writeFile(join(extractDir, 'build-identity.json'), '{}');
+      };
+
+      const realFindCommandOnPath = processEnv.findCommandOnPath;
+      vi.spyOn(processEnv, 'findCommandOnPath').mockImplementation(
+        (name, opts) => (name === join(binDir, 'slotstream') ? realFindCommandOnPath(name, opts) : null),
+      );
+      vi.spyOn(slotstreamModels, 'slotstreamBinDir').mockReturnValue(binDir);
+      vi.spyOn(commandExistsModule, 'commandExists').mockResolvedValue(true);
+      vi.spyOn(streamingSpawn, 'runStreamingCommand').mockImplementation(async (cmd, args) => {
+        if (cmd === 'gh') {
+          capturedWorkDir = args[args.indexOf('--dir') + 1];
+          await writeFile(join(capturedWorkDir, 'slotstream-arm64.tar.gz'), archiveBytes);
+          return { success: true };
+        }
+        if (cmd === 'tar') {
+          capturedExtractDir = args[args.indexOf('-C') + 1];
+          await extractSetup(capturedExtractDir);
+          return { success: true };
+        }
+        return { success: false, error: `unexpected command: ${cmd}` };
+      });
     });
 
-    it('installs the Apple Silicon release via GitHub CLI, never a remote shell script', async () => {
-      vi.spyOn(commandExistsModule, 'commandExists').mockResolvedValue(true);
-      const result = await installSlotstream();
+    const withPatchedArchiveDigest = async (digest, fn) => {
+      const target = SLOTSTREAM_RELEASE_TARGETS['darwin-arm64'];
+      const original = target.sha256;
+      Object.defineProperty(target, 'sha256', { value: digest, configurable: true });
+      try {
+        return await fn();
+      } finally {
+        Object.defineProperty(target, 'sha256', { value: original, configurable: true });
+      }
+    };
+
+    it('pins an explicit release tag and SHA-256 digest and keeps remote install scripts out of the module', async () => {
+      expect(SLOTSTREAM_RELEASE_TAG).toMatch(/^v\d+\.\d+\.\d+/);
+      expect(SLOTSTREAM_RELEASE_TARGETS['darwin-arm64']).toEqual({
+        archive: 'slotstream-arm64.tar.gz',
+        sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      });
+      const source = await readFile(new URL('./slotstreamServerManager.js', import.meta.url), 'utf8');
+      expect(source).not.toMatch(/install\.sh|curl\s+-/);
+    });
+
+    it('downloads the pinned tag into an isolated temp dir, verifies SHA-256, installs only the regular binary with 0o755, and cleans up', async () => {
+      const digest = createHash('sha256').update(archiveBytes).digest('hex');
+      const result = await withPatchedArchiveDigest(digest, () => installSlotstream());
       expect(result.success).toBe(true);
-      const [cmd, args] = streamingSpawn.runStreamingCommand.mock.calls[0];
-      expect(cmd).toBe('gh');
-      expect(args).toEqual(expect.arrayContaining(['release', 'download', '--repo', 'carloslfu/slotstream']));
-      expect(streamingSpawn.runStreamingCommand.mock.calls.flat().join(' ')).not.toMatch(/install\.sh/);
+
+      const [ghCmd, ghArgs] = streamingSpawn.runStreamingCommand.mock.calls[0];
+      expect(ghCmd).toBe('gh');
+      expect(ghArgs).toEqual([
+        'release', 'download',
+        SLOTSTREAM_RELEASE_TAG,
+        '--repo', SLOTSTREAM_RELEASE_REPO,
+        '--pattern', 'slotstream-arm64.tar.gz',
+        '--dir', capturedWorkDir,
+        '--clobber',
+      ]);
+      expect(capturedWorkDir).toMatch(/^.*portos-slotstream-install-/);
+      expect(capturedWorkDir).not.toBe(binDir);
+
+      const [tarCmd, tarArgs] = streamingSpawn.runStreamingCommand.mock.calls[1];
+      expect(tarCmd).toBe('tar');
+      expect(tarArgs).toEqual(['-xzf', join(capturedWorkDir, 'slotstream-arm64.tar.gz'), '-C', capturedExtractDir]);
+      expect(capturedExtractDir.startsWith(`${capturedWorkDir}/`) || capturedExtractDir.startsWith(`${capturedWorkDir}\\`)).toBe(true);
+
+      expect(await readdir(binDir)).toEqual(['slotstream']);
+      const installedPath = join(binDir, 'slotstream');
+      const installedStat = await lstat(installedPath);
+      expect(installedStat.isSymbolicLink()).toBe(false);
+      expect(installedStat.isFile()).toBe(true);
+      expect(installedStat.mode & 0o777).toBe(0o755);
+      expect(await readFile(installedPath, 'utf8')).toBe('#!/bin/sh\necho slotstream\n');
+
+      await expect(stat(capturedWorkDir)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('refuses a SHA-256 mismatch without extracting or writing to binDir and cleans up the temp dir', async () => {
+      await expect(installSlotstream()).rejects.toMatchObject({ code: 'SLOTSTREAM_DIGEST_MISMATCH' });
+
+      expect(streamingSpawn.runStreamingCommand).toHaveBeenCalledTimes(1);
+      expect(streamingSpawn.runStreamingCommand.mock.calls[0][0]).toBe('gh');
+      await expect(stat(binDir)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(stat(capturedWorkDir)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('rejects a symlinked slotstream entry in the archive without writing to binDir and cleans up the temp dir', async () => {
+      const digest = createHash('sha256').update(archiveBytes).digest('hex');
+      const decoyTarget = join(testLogDir, 'outside-binary');
+      await writeFile(decoyTarget, 'decoy');
+      extractSetup = async (extractDir) => {
+        await symlink(decoyTarget, join(extractDir, 'slotstream'));
+      };
+
+      await expect(withPatchedArchiveDigest(digest, () => installSlotstream()))
+        .rejects.toMatchObject({ code: 'SLOTSTREAM_INVALID_ARCHIVE' });
+
+      await expect(stat(binDir)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(stat(capturedWorkDir)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('cleans up the temp dir when gh download fails', async () => {
+      streamingSpawn.runStreamingCommand.mockImplementationOnce(async (_cmd, args) => {
+        capturedWorkDir = args[args.indexOf('--dir') + 1];
+        return { success: false, error: 'download error' };
+      });
+
+      await expect(installSlotstream()).rejects.toThrow(/Slotstream install failed/);
+      await expect(stat(binDir)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(stat(capturedWorkDir)).rejects.toMatchObject({ code: 'ENOENT' });
     });
 
     it('refuses on a host that cannot run it', async () => {
