@@ -211,7 +211,7 @@ describe('startBrowserFixture', () => {
     const owned = ownedServer({ close: stalls });
     const chromium = ownedChromium(owned.server);
     const fixture = await startBrowserFixture({ name: 'example', createServer, viteConfig: () => SCOPED, chromium, phaseMs: PHASE_MS });
-    expect(chromium.launchServer).toHaveBeenCalledWith(expect.objectContaining({ chromiumSandbox: true, env: expect.objectContaining({ TMPDIR: fixture.temp }) }));
+    expect(chromium.launchServer).toHaveBeenCalledWith(expect.objectContaining({ chromiumSandbox: true, env: expect.objectContaining({ TMPDIR: fixture.temp, MAC_CHROMIUM_TMPDIR: fixture.temp }) }));
 
     let settled = false;
     const closing = fixture.close().finally(() => { settled = true; });

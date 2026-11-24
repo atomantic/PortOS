@@ -1,7 +1,8 @@
-import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { execFile, execFileSync } from 'node:child_process';
+import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
 const ownershipKeys = new Set(['PORTOS_TEST_TEMP_ROOT', 'TMPDIR', 'VITEST', 'NODE_ENV']);
 
@@ -46,19 +47,38 @@ function validProcessRecords(records) {
 // The Darwin reader uses the existing system Python, with no installation or
 // cache. Missing capabilities fail closed as null; raw metadata and OS error
 // payloads never leave this boundary.
+const DARWIN_READER = ['/usr/bin/python3', ['-I', '-S', join(dirname(fileURLToPath(import.meta.url)), 'darwinTestProcesses.py')]];
+const DARWIN_READ_LIMITS = { encoding: 'utf8', timeout: 5000, maxBuffer: 16 * 1024 * 1024 };
+
 export function readTestProcesses(pids = null, { platform = process.platform, exec = execFileSync } = {}) {
   try {
     let records = null;
     if (platform === 'darwin') {
-      const reader = join(dirname(fileURLToPath(import.meta.url)), 'darwinTestProcesses.py');
-      records = JSON.parse(exec('/usr/bin/python3', ['-I', '-S', reader], {
-        input: JSON.stringify(pids), encoding: 'utf8', timeout: 5000,
-        maxBuffer: 16 * 1024 * 1024, stdio: ['pipe', 'pipe', 'ignore'],
+      records = JSON.parse(exec(...DARWIN_READER, {
+        ...DARWIN_READ_LIMITS, input: JSON.stringify(pids), stdio: ['pipe', 'pipe', 'ignore'],
       }));
     } else if (platform === 'linux') {
       const ids = pids ?? readdirSync('/proc').filter(name => /^\d+$/.test(name)).map(Number);
       records = ids.map(linuxProcess).filter(Boolean);
     }
+    return validProcessRecords(records) ? records : null;
+  } catch { return null; }
+}
+
+/**
+ * `readTestProcesses` for callers racing their own deadlines: the Darwin reader
+ * runs without blocking the event loop those timers live on.
+ */
+export async function readTestProcessesAsync(pids = null, { timeoutMs = DARWIN_READ_LIMITS.timeout } = {}) {
+  if (process.platform !== 'darwin') return readTestProcesses(pids);
+  try {
+    const reading = promisify(execFile)(...DARWIN_READER, {
+      ...DARWIN_READ_LIMITS, timeout: Math.min(DARWIN_READ_LIMITS.timeout, timeoutMs), killSignal: 'SIGKILL',
+    });
+    // A reader that dies before reading its request already rejects `reading`.
+    reading.child.stdin.on('error', () => {});
+    reading.child.stdin.end(JSON.stringify(pids));
+    const records = JSON.parse((await reading).stdout);
     return validProcessRecords(records) ? records : null;
   } catch { return null; }
 }
@@ -71,6 +91,17 @@ function rootUnder(path, parent, prefix) {
   return name.startsWith(prefix) ? join(parent, name) : null;
 }
 
+// Chrome resolves its crash database path, and macOS reaches temp roots through
+// a symlink, so a detached handler names the same root by its resolved parent.
+function databaseRootUnder(path, parent, prefix) {
+  const named = rootUnder(path, parent, prefix);
+  if (named) return named;
+  try {
+    const resolved = rootUnder(path, realpathSync(parent), prefix);
+    return resolved && join(parent, basename(resolved));
+  } catch { return null; }
+}
+
 export function testProcessRoot({ args = [], env = {} }, parent, prefix) {
   const roots = new Set();
   if (env.NODE_ENV === 'test' || env.VITEST === 'true') {
@@ -81,7 +112,8 @@ export function testProcessRoot({ args = [], env = {} }, parent, prefix) {
     const arg = args[index];
     // Script text is data, even when it happens to be an absolute path.
     if (['--eval', '--print', '--command'].includes(arg) || /^-[A-Za-z]*[ecp][A-Za-z]*$/.test(arg)) { index++; continue; }
-    const root = rootUnder(arg.startsWith('--user-data-dir=') ? arg.slice(16) : arg, parent, prefix);
+    const root = arg.startsWith('--database=') ? databaseRootUnder(arg.slice(11), parent, prefix)
+      : rootUnder(arg.startsWith('--user-data-dir=') ? arg.slice(16) : arg, parent, prefix);
     if (root) roots.add(root);
   }
   return roots.size === 1 ? [...roots][0] : null;
