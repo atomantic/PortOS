@@ -52,6 +52,16 @@ describe('JiraConfigPanel', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
+  it('defaults the assignee when an instance is picked and lets it be cleared', async () => {
+    api.getJiraInstances.mockResolvedValue({ instances: { i1: { id: 'i1', name: 'Example', baseUrl: 'https://jira.example.com', email: 'bot@example.com' } } });
+    renderPanel();
+    fireEvent.change(await screen.findByLabelText('JIRA Instance'), { target: { value: 'i1' } });
+    const assignee = await screen.findByLabelText('Assignee');
+    expect(assignee).toHaveValue('bot@example.com');
+    fireEvent.change(assignee, { target: { value: '' } });
+    expect(assignee).toHaveValue('');
+  });
+
   describe('with an instance selected', () => {
     const instance = { instances: { i1: { id: 'i1', name: 'Example', baseUrl: 'https://jira.example.com' } } };
     const savedApp = (jira) => ({ id: 'app-1', jira: { enabled: true, instanceId: 'i1', ...jira } });

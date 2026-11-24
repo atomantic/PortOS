@@ -889,10 +889,10 @@ describe('handleAddAllSamples partial failure handling', () => {
     const addAllBtn = await screen.findByRole('button', { name: 'Add All (3)' });
     fireEvent.click(addAllBtn);
 
-    expect(await screen.findByText('Sample AI 2')).toBeInTheDocument();
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledWith('Added 2 providers, 1 failed'));
+    expect(screen.getByText('Sample AI 2')).toBeInTheDocument();
     expect(screen.queryByText('Sample AI 1')).not.toBeInTheDocument();
     expect(screen.queryByText('Sample AI 3')).not.toBeInTheDocument();
-    expect(toast.warning).toHaveBeenCalledWith('Added 2 providers, 1 failed');
     expect(api.getProviders).toHaveBeenCalledTimes(2);
   });
 });

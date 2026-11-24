@@ -321,6 +321,18 @@ describe('portless / desktop apps (#2991)', () => {
 
 });
 
+describe('cleared app process names', () => {
+  it.each([
+    ['express', ['my-app']],
+    ['xcode', []],
+  ])('stores the default name for a %s app only when PM2 runs it', async (type, expected) => {
+    readJSONFile.mockResolvedValue({ apps: { 'app-1': { name: 'My App', type, pm2ProcessNames: ['old-name'] } } });
+    invalidateCache();
+    expect((await updateApp('app-1', { pm2ProcessNames: [] })).pm2ProcessNames).toEqual(expected);
+    expect((await updateApp('app-1', { description: 'x' })).pm2ProcessNames).toEqual(expected);
+  });
+});
+
 describe('managed app PR completion settings', () => {
   beforeEach(() => {
     invalidateCache();

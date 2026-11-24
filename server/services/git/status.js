@@ -1,12 +1,18 @@
 import { existsSync } from 'fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'path';
-import { safeJSONParse } from '../../lib/fileUtils.js';
 import { execGit, execGitSafe } from '../../lib/execGit.js';
 import { readRepoBranchSnapshot } from '../repoBranchSnapshot.js';
 import { parseStatus, parseDiffStat } from '../../lib/gitOutputParsers.js';
 import { PROTECTED_BRANCHES, validateFilePaths, toLiteralPathspec, assertSafeRef } from '../../lib/gitArgs.js';
 import { withCheckoutMutation } from './checkoutMutation.js';
+
+// Unit-separated, not JSON: git does not escape a quote or backslash in a subject or author name.
+const COMMIT_LOG_FORMAT = '--format=%h%x1f%s%x1f%an%x1f%cI';
+const parseCommitLog = (stdout) => stdout.split('\n').filter(Boolean).map((line) => {
+  const [hash, message, author, date] = line.split('\x1f');
+  return { hash, message, author, date };
+});
 
 /**
  * Get git status for a directory.
@@ -18,25 +24,30 @@ import { withCheckoutMutation } from './checkoutMutation.js';
  */
 export async function getStatus(dir, { paths = [] } = {}) {
   const result = await execGit(
-    ['status', '--porcelain', ...(paths.length ? ['--', ...paths] : [])],
+    ['status', '--porcelain', '-z', ...(paths.length ? ['--', ...paths] : [])],
     dir,
     { env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } },
   );
-  // trimEnd (not trim): porcelain status codes use leading spaces (e.g. ' M' = unstaged)
-  const lines = result.stdout.trimEnd().split('\n').filter(Boolean);
 
-  const files = lines.map(line => {
-    const status = line.substring(0, 2);
-    const path = line.substring(3);
-    return {
+  // -z: without it git quotes a path holding a space or special character and
+  // writes a rename as `old -> new`, and neither is a path git accepts back.
+  const entries = result.stdout.split('\0').filter(Boolean);
+  const files = [];
+  for (let i = 0; i < entries.length; i += 1) {
+    const status = entries[i].substring(0, 2);
+    const path = entries[i].substring(3);
+    const renamed = /[RC]/.test(status);
+    if (renamed) i += 1; // the next entry is this one's original path
+    files.push({
       path,
+      ...(renamed ? { origPath: entries[i] } : {}),
       status: parseStatus(status),
       staged: status[0] !== ' ' && status[0] !== '?',
       modified: status[1] === 'M',
       added: status[0] === 'A' || status === '??',
       deleted: status[0] === 'D' || status[1] === 'D'
-    };
-  });
+    });
+  }
 
   return {
     clean: files.length === 0,
@@ -72,18 +83,12 @@ export async function getBranch(dir) {
 export async function getCommits(dir, limit = 10) {
   // Validate limit is a positive integer to prevent injection
   const safeLimit = Math.max(1, Math.min(100, parseInt(limit, 10) || 10));
-  const format = '--format={"hash":"%h","message":"%s","author":"%an","date":"%cI"}';
-  const result = await execGit(['log', format, '-n', String(safeLimit)], dir);
-
-  const commits = result.stdout.trim().split('\n').filter(Boolean)
-    .map(line => safeJSONParse(line, null))
-    .filter(Boolean);
-
-  return commits;
+  const result = await execGit(['log', COMMIT_LOG_FORMAT, '-n', String(safeLimit)], dir);
+  return parseCommitLog(result.stdout);
 }
 
 /**
- * Get diff for unstaged changes
+ * Get diff for unstaged changes, or for the index when `staged`
  */
 export async function getDiff(dir, staged = false) {
   const args = staged ? ['diff', '--cached'] : ['diff'];
@@ -92,10 +97,10 @@ export async function getDiff(dir, staged = false) {
 }
 
 /**
- * Get diff stats
+ * Get diff stats for every tracked change, staged or not
  */
 export async function getDiffStats(dir) {
-  const result = await execGit(['diff', '--stat'], dir);
+  const result = await execGit(['diff', '--stat', 'HEAD'], dir);
   return parseDiffStat(result.stdout);
 }
 
@@ -248,16 +253,10 @@ export async function getRemote(dir) {
 export async function getBranchComparison(dir, baseBranch = 'main', headBranch = 'dev') {
   assertSafeRef(baseBranch);
   assertSafeRef(headBranch);
-  const format = '--format={"hash":"%h","message":"%s","author":"%an","date":"%cI"}';
   const logResult = await execGit(
-    ['log', format, `${baseBranch}..${headBranch}`], dir, { ignoreExitCode: true }
+    ['log', COMMIT_LOG_FORMAT, `${baseBranch}..${headBranch}`], dir, { ignoreExitCode: true }
   );
-
-  const commits = logResult.stdout.trim()
-    .split('\n')
-    .filter(Boolean)
-    .map(line => safeJSONParse(line, null))
-    .filter(Boolean);
+  const commits = parseCommitLog(logResult.stdout);
 
   const statResult = await execGit(
     ['diff', '--stat', `${baseBranch}...${headBranch}`], dir, { ignoreExitCode: true }

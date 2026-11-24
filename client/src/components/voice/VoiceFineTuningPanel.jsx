@@ -22,6 +22,7 @@ import {
   startFineTuningJob,
 } from '../../services/apiVoice';
 import { formatCount, formatPercent, timeAgo } from '../../utils/formatters';
+import DraftNumber from '../ui/DraftNumber';
 
 const FINE_TUNE_EVENTS = ['voice:fine-tune:updated'];
 
@@ -222,15 +223,9 @@ export default function VoiceFineTuningPanel({ profileId, disabled, activeModelR
       <div className="flex flex-wrap items-end gap-2">
         <div className="w-24">
           <label htmlFor={epochsId} className="block text-[10px] text-gray-400">Epochs</label>
-          <input
-            id={epochsId}
-            type="number"
-            value={epochs}
-            onChange={(e) => setEpochs(parseInt(e.target.value, 10) || 5)}
-            min="1"
-            max="20"
-            className="mt-0.5 w-full rounded border border-port-border bg-port-bg px-2 py-1 text-xs text-white"
-          />
+          <DraftNumber integer value={epochs} onCommit={setEpochs} min={1} max={20}>
+            {(field) => <input type="number" id={epochsId} className="mt-0.5 w-full rounded border border-port-border bg-port-bg px-2 py-1 text-xs text-white" {...field} />}
+          </DraftNumber>
         </div>
         <button
           type="button"

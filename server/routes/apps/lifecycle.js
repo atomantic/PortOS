@@ -145,7 +145,7 @@ router.post('/:id/start', loadApp, asyncHandler(async (req, res) => {
     }
   } else {
     // Fallback to command-based start for apps without ecosystem config
-    const commands = app.startCommands || ['npm run dev'];
+    const commands = app.startCommands?.length ? app.startCommands : ['npm run dev'];
     // Pin the app's own port so PortOS's PORT can't leak in through the
     // inherited environment (see startWithCommand). Only a single-process app
     // has an unambiguous port — for a multi-process app the recorded ports

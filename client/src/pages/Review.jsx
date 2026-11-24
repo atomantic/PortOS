@@ -31,6 +31,7 @@ import {
 } from '../services/apiReview.js';
 import { createThread } from '../services/apiBrainThreads.js';
 import { useSocketResource } from '../hooks/useSocketResource';
+import { useSingleFlight } from '../hooks/useSingleFlight';
 
 const HARNESS_WARNING_KEY = 'portos-harness-release-warning-days';
 const WARNING_DAYS = [0, 1, 3, 7];
@@ -114,7 +115,7 @@ export default function Review() {
     getReviewBriefing().catch(() => null).then(setBriefing);
   }, []);
 
-  const handleCreateTodo = async (e) => {
+  const handleCreateTodo = useSingleFlight(async (e) => {
     e.preventDefault();
     if (!newTodo.trim()) return;
     // Failure toasts via the shared request wrapper; keep the typed text so it can be retried.
@@ -126,7 +127,7 @@ export default function Review() {
       const threadView = actionView === 'all' || actionView === 'today' ? actionView : 'today';
       navigate(`/review/${encodeURIComponent(`threads:${thread.id}`)}?view=${threadView}`);
     }
-  };
+  }, () => newTodo.trim());
 
   const handleQueueDismiss = (itemOrId) => {
     const key = queueItemKey(itemOrId);

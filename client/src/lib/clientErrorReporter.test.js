@@ -195,6 +195,17 @@ describe('reportClientError', () => {
   });
 });
 
+describe('reports that are not defects', () => {
+  it('drops the ResizeObserver notice and a request failure the user was shown, but not a silent one', async () => {
+    expect(await reportClientError({ type: 'error', message: 'ResizeObserver loop completed with undelivered notifications.' }))
+      .toEqual({ sent: false, reason: 'benign' });
+    const shown = Object.assign(new Error('Notification not found'), { toasted: true });
+    expect(await reportClientError({ type: 'unhandledrejection', reason: shown })).toEqual({ sent: false, reason: 'shown' });
+    const silent = Object.assign(new Error('Notification not found'), { toasted: false });
+    expect(await reportClientError({ type: 'unhandledrejection', reason: silent })).toEqual({ sent: true });
+  });
+});
+
 describe('browser-extension errors', () => {
   it('never POSTs an error thrown by an injected content script', async () => {
     const result = await reportClientError({

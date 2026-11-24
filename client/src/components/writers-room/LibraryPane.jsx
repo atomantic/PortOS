@@ -19,6 +19,7 @@ import {
 } from '../../services/apiWritersRoom';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { KIND_LABELS } from './labels';
+import { useSingleFlight } from '../../hooks/useSingleFlight';
 
 const UNFILED_DROP_ID = 'wr-unfiled';
 
@@ -64,7 +65,7 @@ export default function LibraryPane({
 
   const toggleFolder = (id) => setOpenFolders((s) => ({ ...s, [id]: !s[id] }));
 
-  const submitFolder = async (e) => {
+  const submitFolder = useSingleFlight(async (e) => {
     e.preventDefault();
     if (!folderName.trim()) return;
     const folder = await createWritersRoomFolder({ name: folderName.trim() }, { silent: true }).catch((err) => {
@@ -76,9 +77,9 @@ export default function LibraryPane({
     setCreatingFolder(false);
     setOpenFolders((s) => ({ ...s, [folder.id]: true }));
     onRefresh?.({ folder });
-  };
+  });
 
-  const submitWork = async (e) => {
+  const submitWork = useSingleFlight(async (e) => {
     e.preventDefault();
     if (!workTitle.trim()) return;
     const folderId = creatingWork === 'unfiled' ? null : creatingWork;
@@ -92,7 +93,7 @@ export default function LibraryPane({
     onCreatingWorkChange(null);
     onRefresh?.({ work });
     onSelectWork?.(work.id);
-  };
+  });
 
   const handleDeleteFolder = (id) => confirmDelete(async () => {
     const result = await deleteWritersRoomFolder(id, { silent: true }).catch((err) => {

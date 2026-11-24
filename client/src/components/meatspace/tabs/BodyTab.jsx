@@ -8,6 +8,7 @@ import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { localDateKey } from '../../../utils/formatters';
 import BodyCompChart from '../BodyCompChart';
 import BloodPressureCard from '../BloodPressureCard';
+import { useSingleFlight } from '../../../hooks/useSingleFlight';
 
 const EMPTY_EYE_FORM = {
   date: '', leftSphere: '', leftCylinder: '', leftAxis: '',
@@ -56,13 +57,13 @@ export default function BodyTab() {
     fetchEyes();
   }, [fetchEyes]);
 
-  const handleAddEye = async () => {
+  const handleAddEye = useSingleFlight(async () => {
     if (!eyeForm.date) return;
     const exam = await addEyeExam(buildEyePayload(eyeForm));
     setEyeData(prev => ({ ...prev, exams: sortEyeExams([...(prev?.exams || []), exam]) }));
     setEyeForm(EMPTY_EYE_FORM);
     setShowEyeForm(false);
-  };
+  });
 
   const startEditEye = (exam) => {
     setEditingEyeId(exam.id);

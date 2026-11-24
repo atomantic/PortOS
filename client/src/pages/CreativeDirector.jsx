@@ -26,6 +26,7 @@ import VideoDraftDrawer from '../components/creative-director/VideoDraftDrawer.j
 import ProjectLibrary from '../components/creative-director/ProjectLibrary.jsx';
 import ProjectPreview from '../components/creative-director/ProjectPreview.jsx';
 import { describeCreativeDirectorStatus } from '../lib/creativeDirectorStatus.js';
+import { useSingleFlight } from '../hooks/useSingleFlight';
 
 const ASPECT_RATIOS = ['16:9', '9:16', '1:1'];
 const QUALITIES = ['draft', 'standard', 'high'];
@@ -140,7 +141,7 @@ export default function CreativeDirector() {
     return next;
   }, { replace: true });
 
-  const handleCreate = async (e) => {
+  const handleCreate = useSingleFlight(async (e) => {
     e.preventDefault();
     if (!form.name.trim() || !form.modelId) {
       toast.error('Name and model are required');
@@ -176,7 +177,7 @@ export default function CreativeDirector() {
     } catch (err) {
       toast.error(err.message || 'Failed to create project');
     }
-  };
+  });
 
   const openDirective = () => {
     setDirectiveName('');

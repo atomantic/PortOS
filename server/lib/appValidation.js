@@ -193,8 +193,8 @@ export const appSchema = z.object({
   buildCommand: z.string().max(200).optional(),
   // Explicit lifecycle hook for managed-app updates. PortOS runs its own
   // update.sh/update.ps1; other apps must opt in instead of inheriting that
-  // lifecycle from their package.json.
-  updateCommand: z.string().trim().min(1).max(500).optional(),
+  // lifecycle from their package.json. Empty clears it.
+  updateCommand: z.string().trim().max(500).optional(),
   uiUrl: z.string().url().optional(),
   startCommands: z.array(z.string()).optional(),
   pm2ProcessNames: z.array(z.string()).optional(),

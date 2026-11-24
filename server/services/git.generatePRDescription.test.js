@@ -38,7 +38,7 @@ const diff = [
 beforeEach(() => {
   vi.clearAllMocks();
   execGit.mockImplementation(async args => ({ stdout: args[0] === 'log'
-    ? JSON.stringify({ hash: 'abc1234', message: 'fix: improve draft descriptions' })
+    ? ['abc1234', 'fix: improve draft descriptions', 'Example', '2026-01-01T00:00:00Z'].join('\x1f')
     : '1 file changed, 1 insertion(+)', stderr: '', exitCode: 0 }));
 });
 

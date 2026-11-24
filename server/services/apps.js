@@ -8,7 +8,7 @@ import {
   expandPortosRootInApp,
 } from '../lib/portosRootPlaceholder.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
-import { NON_PM2_TYPES } from './appProcessTypes.js';
+import { NON_PM2_TYPES, usesPm2 } from './appProcessTypes.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from './taskScheduleRegistry.js';
 import { sanitizeTaskMetadata } from '../lib/cos/cosTaskMetadata.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -306,7 +306,7 @@ async function createAppUnlocked(appData) {
     buildCommand: appData.buildCommand || undefined,
     updateCommand: appData.updateCommand || undefined,
     startCommands: appData.startCommands || ['npm run dev'],
-    pm2ProcessNames: appData.pm2ProcessNames || [appData.name.toLowerCase().replace(/\s+/g, '-')],
+    pm2ProcessNames: appData.pm2ProcessNames || defaultProcessNames(appData.name),
     nativeLaunch: appData.nativeLaunch || null,
     envFile: appData.envFile || '.env',
     icon: appData.icon || null,
@@ -378,6 +378,8 @@ export function updateApp(id, updates) {
   return withAppsWrite(() => updateAppUnlocked(id, updates));
 }
 
+const defaultProcessNames = (name) => [name.toLowerCase().replace(/\s+/g, '-')];
+
 async function updateAppUnlocked(id, updates) {
   const data = await loadApps();
 
@@ -403,6 +405,8 @@ async function updateAppUnlocked(id, updates) {
     createdAt: data.apps[id].createdAt, // Preserve creation date
     updatedAt: new Date().toISOString()
   };
+  // Cleared process names go back to the default: Start, Stop and status must name the same process.
+  if (cleanUpdates.pm2ProcessNames?.length === 0 && usesPm2(app.type)) app.pm2ProcessNames = defaultProcessNames(app.name);
 
   data.apps[id] = app;
   await saveApps(data);

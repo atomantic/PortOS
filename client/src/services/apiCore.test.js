@@ -33,6 +33,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe('request failures the user was shown', () => {
+  it('marks a toasted failure so it is not reported as a client defect, and leaves a silent one unmarked', async () => {
+    const refused = () => makeResponse({ status: 404, json: { error: 'not found', code: 'NOT_FOUND' } });
+    fetch.mockResolvedValueOnce(refused()).mockResolvedValueOnce(refused());
+    expect((await request('/x').catch((e) => e)).toasted).toBe(true);
+    expect((await request('/x', { silent: true }).catch((e) => e)).toasted).not.toBe(true);
+  });
+});
+
 describe('throwApiError', () => {
   it('throws with the server message, code, and status', async () => {
     const response = makeResponse({ status: 404, json: { error: 'not found', code: 'NOT_FOUND' } });

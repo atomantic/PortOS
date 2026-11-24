@@ -14,6 +14,7 @@ import {
 } from '../../services/apiReferenceRepos.js';
 import { getAppWorkTracker } from '../../services/apiApps.js';
 import { formatDateTime, formatDurationMs } from '../../utils/formatters';
+import { useSingleFlight } from '../../hooks/useSingleFlight';
 
 // The add-reference form is dense, so its labels sit a step below FormField's
 // default size rather than the config-page default.
@@ -98,13 +99,13 @@ export default function ReferenceReposPanel({ appId, appName }) {
     return () => { cancelled = true; };
   }, [appId]);
 
-  const handleAdd = async (form) => {
+  const handleAdd = useSingleFlight(async (form) => {
     const created = await addReferenceRepo(appId, form, { silent: true }).catch((e) => { toast.error(e.message || 'Add failed'); return null; });
     if (!created) return;
     toast.success(`Added "${created.name}"`);
     setShowAdd(false);
     setRefs((prev) => [...prev.filter((r) => r.id !== created.id), created]);
-  };
+  });
 
   // Replace one row with the record a mutation returned; no list refetch.
   const applyRef = (updated) => setRefs((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
@@ -227,12 +228,13 @@ export default function ReferenceReposPanel({ appId, appName }) {
       )}
 
       {fetchError && (
-        <div role="status" className="bg-port-error/10 border border-port-error/40 text-port-error text-xs rounded p-2 inline-flex items-center gap-2">
-          <AlertCircle size={12} /> Failed to refresh references: {fetchError}. Showing last known data.
+        <div role="status" className="bg-port-error/10 border border-port-error/40 text-port-error text-xs rounded p-2 flex flex-wrap items-center gap-2">
+          <AlertCircle size={12} /> Failed to load references: {fetchError}.{refs.length > 0 && ' Showing last known data.'}
+          <button type="button" onClick={loadRefs} className="rounded border border-port-error/40 px-2 py-1 hover:bg-port-error/20">Retry</button>
         </div>
       )}
 
-      {refs.length === 0 ? (
+      {refs.length === 0 ? !fetchError && (
         <div className="bg-port-card border border-port-border rounded-lg p-4 text-center text-gray-500 text-sm">
           No reference repos configured.
         </div>

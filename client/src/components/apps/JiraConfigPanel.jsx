@@ -86,14 +86,6 @@ export default function JiraConfigPanel({ app, onSaved }) {
   const [epicDropdownOpen, setEpicDropdownOpen] = useState(false);
   const [epicValidation, setEpicValidation] = useState({ state: 'idle' });
 
-  // Default the assignee to the instance's own account so the common case needs
-  // no typing — only when the field is still empty, never overwriting a choice.
-  useEffect(() => {
-    if (!form.instanceId || form.assignee) return;
-    const inst = instances.find(i => i.id === form.instanceId);
-    if (inst?.email) setForm(prev => ({ ...prev, assignee: inst.email }));
-  }, [form.instanceId, form.assignee, instances]);
-
   // Validate the configured epic key still resolves as an Epic on this instance.
   useEffect(() => {
     const key = form.epicKey.trim();
@@ -162,8 +154,14 @@ export default function JiraConfigPanel({ app, onSaved }) {
   // call site forgets the reset. Deliberately interaction-driven, NOT a projectKey
   // effect: an effect would fire on mount with the saved projectKey and wipe the
   // saved boardId before the boards fetch resolves, defeating stale-board detection.
+  // Picking an instance also defaults an empty assignee to that instance's own
+  // account. Only then: refilling whenever the field is empty would make "unassigned"
+  // impossible to keep.
   const changeInstance = (instanceId) =>
-    setForm(prev => ({ ...prev, instanceId, projectKey: '', boardId: '' }));
+    setForm(prev => ({
+      ...prev, instanceId, projectKey: '', boardId: '',
+      assignee: prev.assignee || instances.find(i => i.id === instanceId)?.email || '',
+    }));
   const selectProject = (projectKey) =>
     setForm(prev => ({ ...prev, projectKey, boardId: '' }));
 

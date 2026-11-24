@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const api = vi.hoisted(() => ({
@@ -133,6 +133,20 @@ describe('CustomTasksSection trigger outcomes', () => {
       effort: 'high',
       dataInputs: ['open-issues']
     })));
+  });
+
+  it('creates one task when Create is clicked twice', async () => {
+    api.createCosJob.mockReturnValue(new Promise(() => {}));
+    render(<CustomTasksSection appId="app-1" appName="Example App" />);
+    await screen.findByText('Example Task');
+    fireEvent.click(screen.getByRole('button', { name: /New Custom Task/ }));
+    fireEvent.change(screen.getByPlaceholderText('Task name *'), { target: { value: 'Once' } });
+    fireEvent.change(screen.getByPlaceholderText('Prompt for the agent *'), { target: { value: 'Do the thing' } });
+    const create = screen.getByRole('button', { name: 'Create' });
+    fireEvent.click(create);
+    fireEvent.click(create);
+    await act(async () => {});
+    expect(api.createCosJob).toHaveBeenCalledTimes(1);
   });
 
   it('edits the saved task pins through the shared controls', async () => {

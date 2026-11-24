@@ -4,7 +4,8 @@
  *
  * `reportClientError({ type, error?, message?, ... })` handles window errors,
  * unhandled rejections and errors caught by React's root. It drops browser-extension
- * errors (see `extensionErrors.js`) before throttle and dedup. Wired from `main.jsx`;
+ * errors (see `extensionErrors.js`), the ResizeObserver notice and request failures the user
+ * was already shown, all before throttle and dedup. Wired from `main.jsx`;
  * never call directly from React components.
  *
  * In-memory dedup (60s window per message+stack hash) plus a 1/sec throttle
@@ -21,6 +22,9 @@ const ENDPOINT = '/api/client-errors';
 const MIN_SEND_INTERVAL_MS = 1000;
 const DEDUP_WINDOW_MS = 60 * 1000;
 const MAX_RECENT = 64;
+
+// Not a fault: the spec has the browser deliver the leftover notifications on the next frame.
+const RESIZE_OBSERVER_NOTICE = /^ResizeObserver loop (completed with undelivered notifications|limit exceeded)/;
 
 const recentHashes = new Map(); // hash -> firstSentAt
 let lastSentAt = 0;
@@ -148,7 +152,7 @@ function safeBody(payload) {
 /**
  * Report a client-side error. Resolves to:
  *   - `{ sent: true }` — sent to the server.
- *   - `{ sent: false, reason: 'duplicate' | 'extension' | 'rate-limited' | 'no-fetch' | 'transport-error' | 'caught' | 'empty' }`
+ *   - `{ sent: false, reason: 'duplicate' | 'extension' | 'benign' | 'shown' | 'rate-limited' | 'no-fetch' | 'transport-error' | 'caught' | 'empty' }`
  *
  * Never throws — any synchronous exception while building the payload or any
  * fetch failure resolves to `{ sent: false, reason }`. This is critical because
@@ -169,6 +173,10 @@ export async function reportClientError(input) {
     // slot and drop a real PortOS error arriving behind it. See
     // lib/extensionErrors.js for why we filter these at all.
     if (isExtensionError(payload)) return { sent: false, reason: 'extension' };
+    if (RESIZE_OBSERVER_NOTICE.test(payload.message)) return { sent: false, reason: 'benign' };
+    if (input.type === 'unhandledrejection' && input.reason instanceof Error && safeGet(input.reason, 'toasted') === true) {
+      return { sent: false, reason: 'shown' };
+    }
 
     if (now - lastSentAt < MIN_SEND_INTERVAL_MS) {
       return { sent: false, reason: 'rate-limited' };

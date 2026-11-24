@@ -13,6 +13,7 @@ import {
 } from '../../services/apiMessages.js';
 import useListResource from '../../hooks/useListResource';
 import ListLoadError from '../ui/ListLoadError';
+import { useSingleFlight } from '../../hooks/useSingleFlight';
 
 // Any src/href/poster/url()/@import that points at a remote http(s) or
 // protocol-relative (`//host/...`) resource — the load vectors a tracking
@@ -214,7 +215,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
     }
   };
 
-  const handleCreateDraft = async () => {
+  const handleCreateDraft = useSingleFlight(async () => {
     if (!account) return toast.error('No account available');
     const to = [displayedMessage.from?.email].filter(Boolean);
     const subject = `Re: ${displayedMessage.subject || ''}`;
@@ -232,7 +233,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
     setShowReply(false);
     setReplyBody('');
     setGeneratedDraftId(null);
-  };
+  });
 
   const handleAction = (action) => {
     if (!displayedMessage.accountId) return;

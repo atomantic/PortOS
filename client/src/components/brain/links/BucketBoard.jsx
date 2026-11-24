@@ -3,6 +3,7 @@ import { Plus, FolderPlus, X } from 'lucide-react';
 import { createBrainBucket, updateBrainBucket, deleteBrainBucket } from '../../../services/apiBrain.js';
 import toast from '../../ui/Toast';
 import BucketCard from './BucketCard';
+import { useSingleFlight } from '../../../hooks/useSingleFlight';
 
 /**
  * The bucket board: a responsive grid of bucket cards plus a "new bucket"
@@ -16,7 +17,7 @@ export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, 
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
 
-  const handleCreate = async (e) => {
+  const handleCreate = useSingleFlight(async (e) => {
     e.preventDefault();
     const name = newName.trim();
     if (!name) return;
@@ -29,7 +30,7 @@ export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, 
       setNewName('');
       setCreating(false);
     }
-  };
+  });
 
   const handleUpdate = useCallback(async (id, patch) => {
     const updated = await updateBrainBucket(id, patch, { silent: true }).catch(err => {

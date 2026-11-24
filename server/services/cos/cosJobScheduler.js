@@ -96,6 +96,27 @@ function computeNextJobFireTime(job, timezone) {
   return nextIntervalJobFireTime(job, timezone);
 }
 
+const JOB_DEFER_MS = 60 * 1000;
+
+/** Arm a job's one-shot timer. A one-shot is gone once it fires, so a handler that throws must leave a replacement behind. */
+function armJobTimer(jobId, delayMs, description, handler = () => executeScheduledJob(jobId)) {
+  scheduleEvent({
+    id: `job:${jobId}`,
+    type: 'once',
+    delayMs,
+    handler: async () => {
+      try {
+        await handler();
+      } catch (err) {
+        // Recompute from the stored lastRun instead of re-running: the throw may have come after the job's work.
+        armJobTimer(jobId, JOB_DEFER_MS, 'Autonomous job: schedule recovery', () => registerSingleJobSchedule(jobId));
+        throw err;
+      }
+    },
+    metadata: { description, jobId }
+  });
+}
+
 /**
  * Register a single autonomous job as a one-shot scheduled event.
  * After execution, re-registers for the next fire time.
@@ -117,13 +138,7 @@ export async function registerSingleJobSchedule(jobId) {
   }
   const delayMs = Math.max(nextFire - Date.now(), 1000);
 
-  scheduleEvent({
-    id: `job:${jobId}`,
-    type: 'once',
-    delayMs,
-    handler: () => executeScheduledJob(jobId),
-    metadata: { description: `Autonomous job: ${job.name}`, jobId }
-  });
+  armJobTimer(jobId, delayMs, `Autonomous job: ${job.name}`);
 }
 
 // Track jobs currently being spawned (between task:ready emit and agent registration)
@@ -205,13 +220,7 @@ export async function handleJobSpawnFailed(jobId, reason, error = null) {
   clearSpawningJob(jobId);
   if (reason === 'held') {
     emitLog('debug', `Job spawn held, retrying in 60s: ${jobId}`, { jobId });
-    scheduleEvent({
-      id: `job:${jobId}`,
-      type: 'once',
-      delayMs: 60000,
-      handler: () => executeScheduledJob(jobId),
-      metadata: { description: 'Autonomous job (dispatch held)', jobId }
-    });
+    armJobTimer(jobId, JOB_DEFER_MS, 'Autonomous job (dispatch held)');
     return;
   }
   if (await scheduleUnreachableRetry(jobId, error)) return;
@@ -264,13 +273,7 @@ async function scheduleUnreachableRetry(jobId, error) {
   if (delayMs == null) return false;
   await setJobUnreachableRetryStep(jobId, step + 1);
   emitLog('info', `Job ${job.name} unreachable before any model call, retry ${step + 1}/3 in ${formatDuration(delayMs)}`, { jobId, retryStep: step + 1 });
-  scheduleEvent({
-    id: `job:${jobId}`,
-    type: 'once',
-    delayMs,
-    handler: () => executeScheduledJob(jobId),
-    metadata: { description: `Autonomous job (unreachable retry ${step + 1}/3)`, jobId }
-  });
+  armJobTimer(jobId, delayMs, `Autonomous job (unreachable retry ${step + 1}/3)`);
   return true;
 }
 
@@ -291,15 +294,15 @@ export async function handleJobAgentCompleted(agent) {
  */
 export async function executeScheduledJob(jobId) {
   if (maintenance.held()) {
-    scheduleEvent({ id: `job:${jobId}`, type: 'once', delayMs: 60000, handler: () => executeScheduledJob(jobId), metadata: { jobId, description: 'Maintenance hold' } });
+    armJobTimer(jobId, JOB_DEFER_MS, 'Maintenance hold');
     return;
   }
   if (!isDaemonRunning()) return;
 
   const paused = (await loadState()).paused || false;
   if (paused) {
-    // Re-register for later
-    await registerSingleJobSchedule(jobId);
+    // Keep the due occurrence for resume. Re-registering from a past-due lastRun would re-fire every second.
+    armJobTimer(jobId, JOB_DEFER_MS, 'Autonomous job (CoS paused)');
     return;
   }
 
@@ -308,8 +311,8 @@ export async function executeScheduledJob(jobId) {
 
   const state = await loadState();
   if (!state.config.autonomousJobsEnabled) {
-    // Re-register so it fires when re-enabled
-    await registerSingleJobSchedule(jobId);
+    // Check again so it fires when re-enabled; same past-due reason as the pause above.
+    armJobTimer(jobId, JOB_DEFER_MS, 'Autonomous job (scheduled jobs off)');
     return;
   }
 
@@ -432,7 +435,7 @@ export async function executeScheduledJob(jobId) {
         return false;
       });
       if (scriptOk === null) {
-        scheduleEvent({ id: `job:${jobId}`, type: 'once', delayMs: 60000, handler: () => executeScheduledJob(jobId), metadata: { jobId } });
+        armJobTimer(jobId, JOB_DEFER_MS, 'Maintenance hold');
         return;
       }
       // Count the fired attempt against the budget whether it succeeded or failed —
@@ -460,7 +463,7 @@ export async function executeScheduledJob(jobId) {
         return false;
       });
       if (shellOk === null) {
-        scheduleEvent({ id: `job:${jobId}`, type: 'once', delayMs: 60000, handler: () => executeScheduledJob(jobId), metadata: { jobId } });
+        armJobTimer(jobId, JOB_DEFER_MS, 'Maintenance hold');
         return;
       }
       await recordDomainUsage('cos', { actions: 1, ms: Date.now() - startedAt })
@@ -476,12 +479,15 @@ export async function executeScheduledJob(jobId) {
         );
       }
     } else {
-      // Check if this job is already being spawned or has a running agent.
-      // Don't re-register the timer here — the job:spawned handler will do it
-      // after recordJobExecution updates lastRun. Re-registering with stale
-      // lastRun causes a 1-second re-fire loop.
       if (isJobFireInFlight(jobId, state)) {
         emitLog('debug', `Job ${job.name} skipped - a fire is already in flight`, { jobId });
+        // A fire still spawning re-arms itself from job:spawned / job:spawn-failed once it settles, and re-arming
+        // here with its stale lastRun would loop every second. A running agent re-armed when it spawned, and this
+        // timer is that arm: skip the overlapped occurrence and arm the next one, or the schedule ends here.
+        if (!spawningJobIds.has(jobId)) {
+          await recordJobGateSkip(jobId);
+          await registerSingleJobSchedule(jobId);
+        }
         return;
       }
 
@@ -490,13 +496,7 @@ export async function executeScheduledJob(jobId) {
       if (runningAgents >= state.config.maxConcurrentAgents) {
         emitLog('debug', `Job ${job.name} deferred - no agent slots`, { jobId });
         // Retry in 60s
-        scheduleEvent({
-          id: `job:${jobId}`,
-          type: 'once',
-          delayMs: 60000,
-          handler: () => executeScheduledJob(jobId),
-          metadata: { description: `Autonomous job: ${job.name} (retry)`, jobId }
-        });
+        armJobTimer(jobId, JOB_DEFER_MS, `Autonomous job: ${job.name} (retry)`);
         return;
       }
 

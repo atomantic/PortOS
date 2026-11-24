@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import DocumentsTab from './DocumentsTab';
 
@@ -9,7 +9,7 @@ vi.mock('../../../services/apiApps.js', () => ({
   saveAppDocument: vi.fn(),
 }));
 
-import { getAppDocument, getAppDocuments } from '../../../services/apiApps.js';
+import { getAppDocument, getAppDocuments, saveAppDocument } from '../../../services/apiApps.js';
 
 // Assert on the requested path only — the third arg is the shared request()
 // options bag ({ silent: true }), not part of this component's contract.
@@ -98,5 +98,45 @@ describe('DocumentsTab', () => {
     expect(await screen.findByText(/Could not load the document list/)).toBeInTheDocument();
     expect(screen.queryByText('No documents found')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
+
+  it('asks before another document drops unsaved edits', async () => {
+    renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const editor = screen.getByRole('textbox', { name: 'Document content' });
+    fireEvent.change(editor, { target: { value: 'typed text' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /README\.md/ }));
+    expect(editor).toHaveValue('typed text');
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(requestedPaths()).not.toContain('README.md');
+
+    fireEvent.click(screen.getByRole('button', { name: /README\.md/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    expect(await screen.findByRole('heading', { name: 'README.md' })).toBeInTheDocument();
+  });
+
+  it('returns to the open document when creating another is cancelled', async () => {
+    renderTab();
+    await screen.findByRole('button', { name: 'Edit' });
+    fireEvent.click(await screen.findByRole('button', { name: /AGENTS\.md/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Cancel/ }));
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+  });
+
+  it('keeps a slow save out of the document opened meanwhile', async () => {
+    let finish;
+    saveAppDocument.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Document content' }), { target: { value: '# Saved text' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save & Commit/ }));
+    fireEvent.click(screen.getByRole('button', { name: /README\.md/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    await screen.findByRole('heading', { name: 'README.md' });
+
+    await act(async () => { finish({ hash: 'abc1234' }); });
+    expect(screen.getByRole('heading', { name: 'README.md' })).toBeInTheDocument();
+    expect(screen.queryByText('Saved text')).not.toBeInTheDocument();
   });
 });

@@ -21,6 +21,7 @@ import ListLoadError from '../../ui/ListLoadError';
 import useListResource from '../../../hooks/useListResource';
 import { useSocketSubscription } from '../../../hooks/useSocketSubscription';
 import socket from '../../../services/socket';
+import { useSingleFlight } from '../../../hooks/useSingleFlight';
 
 const fetchApps = () => getApps({ silent: true }).then(data => data?.apps || data || []);
 
@@ -111,7 +112,7 @@ export default function JobsTab() {
     [rawProviders, jobs]
   );
 
-  const handleCreate = async () => {
+  const handleCreate = useSingleFlight(async () => {
     if (!newJob.name.trim()) {
       toast.error('Name is required');
       return;
@@ -144,7 +145,7 @@ export default function JobsTab() {
     setNewJob(INITIAL_JOB);
     setShowCreate(false);
     fetchJobs();
-  };
+  });
 
   const handleToggle = async (jobId) => {
     const result = await toggleCosJob(jobId, { silent: true }).catch(err => {
