@@ -89,8 +89,10 @@ async function collectPendingFeedbackRefs() {
   for (const [agentId, agent] of liveById) {
     if (!isAgentFeedbackEligible(agent)) continue;
     const ref = { agentId, archiveDate: feedbackArchiveDate(agent) };
+    const stored = refsById.get(agentId);
     refsById.set(agentId, ref);
-    await upsertPendingAgentFeedbackRef(ref);
+    // Every Review Queue build reads here, so only a new or moved reference is a write.
+    if (!stored || stored.archiveDate !== (ref.archiveDate || null)) await upsertPendingAgentFeedbackRef(ref);
   }
 
   return { refsById, liveById };

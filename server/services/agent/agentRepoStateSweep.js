@@ -76,12 +76,22 @@ function selectPendingCompletionAudits(agents, { onlyAgentIds, recheckClaimHolds
     .sort((a, b) => lastCompletionAuditAttempt(a).localeCompare(lastCompletionAuditAttempt(b)));
 }
 
-// Back off exponentially from one minute, capped at 30 minutes.
+// Back off exponentially from one minute to 30 minutes, then double the wait for
+// each further day of failed attempts, up to one day. Some audits can never settle
+// (their task was deleted), and each attempt costs git and forge reads; retirement,
+// ownership and follow-up events still wake a record whatever its backoff.
+const REPLAY_ATTEMPTS_PER_DAY = 48;
+const MAX_REPLAY_DELAY_MS = 24 * 60 * 60_000;
+function completionReplayDelayMs(attempt) {
+  const base = Math.min(30 * 60_000, 60_000 * 2 ** Math.min(attempt - 1, 5));
+  return Math.min(MAX_REPLAY_DELAY_MS, base * 2 ** Math.min(Math.floor((attempt - 1) / REPLAY_ATTEMPTS_PER_DAY), 6));
+}
+
 async function recordCompletionReplayAttempt(original) {
   const { recordCompletionCleanup } = await import('../cos/cosAgentLifecycle.js');
   const attempt = (original.metadata.completionCleanup?.replayAttempts || 0) + 1;
   await recordCompletionCleanup(agentIdOf(original), original.startedAt, { lastAttemptAt: new Date().toISOString(),
-    replayAttempts: attempt, retryAt: new Date(Date.now() + Math.min(30 * 60_000, 60_000 * 2 ** Math.min(attempt - 1, 5))).toISOString() });
+    replayAttempts: attempt, retryAt: new Date(Date.now() + completionReplayDelayMs(attempt)).toISOString() });
 }
 
 // Older receipts already proved delivery and cleanup, but left the deferred

@@ -2769,7 +2769,7 @@ describe('durable completion replay', () => {
     expect(replayAgentCompletionCleanup).not.toHaveBeenCalled();
   });
 
-  it.each([[undefined, 60_000], [9, 30 * 60_000]])('backs off replay attempt after %s prior attempts by %i ms', async (replayAttempts, delay) => {
+  it.each([[undefined, 60_000], [9, 30 * 60_000], [48, 60 * 60_000], [340, 24 * 60 * 60_000]])('backs off replay attempt after %s prior attempts by %i ms', async (replayAttempts, delay) => {
     const prior = archived();
     if (replayAttempts !== undefined) prior.metadata.completionCleanup = { replayAttempts };
     readBranchCompletionPolicies.mockResolvedValue([prior]);

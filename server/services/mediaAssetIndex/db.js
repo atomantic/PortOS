@@ -60,6 +60,14 @@ const UPSERT_CONFLICT = `ON CONFLICT (media_key) DO UPDATE SET
        created_at = EXCLUDED.created_at,
        indexed_at = NOW()`;
 
+// A boot reconcile re-reads every asset and almost none changed, so leave those rows
+// alone. Only the bulk sweep may skip: its prune spares every key it upserted, while
+// a live single-row write must refresh indexed_at so a concurrent prune spares it.
+const ROW_COLUMNS = ['kind', 'ref', 'data', 'provenance_refs', 'created_at'];
+const UPSERT_CHANGED = `${UPSERT_CONFLICT}
+     WHERE (${ROW_COLUMNS.map((column) => `media_assets.${column}`).join(', ')})
+       IS DISTINCT FROM (${ROW_COLUMNS.map((column) => `EXCLUDED.${column}`).join(', ')})`;
+
 /** Upsert one index row. `row` is the shape produced by logic.js. */
 export async function upsertAsset(row) {
   if (!row) return;
@@ -96,7 +104,7 @@ async function upsertAssets(rows, runQuery = query) {
     await runQuery(
       `INSERT INTO media_assets (media_key, kind, ref, data, provenance_refs, created_at, indexed_at)
        VALUES ${values.join(', ')}
-       ${UPSERT_CONFLICT}`,
+       ${UPSERT_CHANGED}`,
       params,
     );
   }
@@ -484,7 +492,7 @@ async function reconcileNow(deps) {
     });
   }
 
-  // Rows WRITTEN, which is below the rows read when disk repeated a ref.
+  // Rows RECONCILED, which is below the rows read when disk repeated a ref.
   const indexed = await upsertAssets([...imageRows, ...videoRows]);
 
   // Per-kind prune, gated on a successful read for that kind. Pruning one kind
