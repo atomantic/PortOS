@@ -241,10 +241,13 @@ describe('Ambient accessibility', () => {
       <Route path="/ambient" element={<Ambient />} /><Route path="/" element={<div>Home page</div>} />
     </Routes></MemoryRouter>));
     const press = (init) => flush(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, ...init })));
-    Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: document.body });
-    await press();
-    expect(screen.queryByText('Home page')).toBeNull();
-    Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: null });
+    try {
+      Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: document.body });
+      await press();
+      expect(screen.queryByText('Home page')).toBeNull();
+    } finally {
+      delete document.fullscreenElement;
+    }
     await flush(() => window.addEventListener('keydown', (e) => e.preventDefault(), { once: true, capture: true }));
     await press();
     expect(screen.queryByText('Home page')).toBeNull();
