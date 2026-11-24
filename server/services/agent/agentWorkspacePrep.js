@@ -825,7 +825,7 @@ async function provisionConflictWorktree({ agentId, task, workspacePath }) {
   }
   if (conflictResult.recommendation !== 'worktree') return null;
 
-  emitLog('info', `🌳 Conflict detected for task ${task.id}: ${conflictResult.reason} — creating worktree`, {
+  emitLog('info', `🌳 Same-workspace conflict for task ${task.id} with agents ${(conflictResult.conflictingAgents || []).join(', ')} — creating worktree`, {
     taskId: task.id,
     conflictingAgents: conflictResult.conflictingAgents,
     reason: conflictResult.reason

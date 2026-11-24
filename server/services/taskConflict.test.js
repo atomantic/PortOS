@@ -2,47 +2,19 @@ import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
-import { detectConflicts, extractKeywords } from './taskConflict.js';
+import { detectConflicts } from './taskConflict.js';
 
 vi.mock('fs', () => ({ existsSync: vi.fn() }));
 vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn() }));
 
 const workspace = '/example/workspace';
-let porcelain;
 
 beforeEach(() => {
-  porcelain = '';
   existsSync.mockReset().mockImplementation(path => path === join(workspace, '.git'));
   execGit.mockReset().mockImplementation(async (args, cwd) => {
     expect(cwd).toBe(workspace);
     if (args.join(' ') === 'rev-parse --is-inside-work-tree') return { stdout: 'true\n' };
-    if (args.join(' ') === 'status --porcelain') return { stdout: porcelain };
     throw new Error('Unexpected git subcommand');
-  });
-});
-
-describe('extractKeywords', () => {
-  it('should extract meaningful words and filter stop words', () => {
-    const keywords = extractKeywords('fix the authentication bug in login component');
-    expect(keywords).not.toContain('the');
-    expect(keywords).toContain('authentication');
-    expect(keywords).toContain('bug');
-    expect(keywords).toContain('login');
-    expect(keywords).toContain('component');
-  });
-
-  it('should filter short words (<=2 chars)', () => {
-    const keywords = extractKeywords('a go to do it');
-    expect(keywords).toHaveLength(0);
-  });
-
-  it('should handle file paths', () => {
-    const keywords = extractKeywords('update server/services/cos/cos.js');
-    expect(keywords).toContain('server/services/cos/cos.js');
-  });
-
-  it('should return empty for empty string', () => {
-    expect(extractKeywords('')).toHaveLength(0);
   });
 });
 
@@ -58,6 +30,7 @@ describe('detectConflicts', () => {
         conflictingAgents: [],
         recommendation: 'proceed'
       });
+      expect(execGit).not.toHaveBeenCalled();
     });
 
     it('should return proceed when agents are in different workspaces', async () => {
@@ -78,7 +51,8 @@ describe('detectConflicts', () => {
     it('should skip conflict detection for non-git repos', async () => {
       const task = { description: 'Run something', metadata: {} };
       existsSync.mockReturnValue(false);
-      const result = await detectConflicts(task, workspace, []);
+      const agents = [{ id: 'agent-1', metadata: { workspacePath: workspace } }];
+      const result = await detectConflicts(task, workspace, agents);
 
       expect(execGit).not.toHaveBeenCalled();
 
@@ -92,59 +66,20 @@ describe('detectConflicts', () => {
   });
 
   describe('Conflict scenarios', () => {
-    it('should detect conflict when workspace has uncommitted changes', async () => {
-      const task = { description: 'Add feature', metadata: {} };
+    it('should recommend a worktree for an occupied checkout regardless of task prose', async () => {
+      const task = { description: 'update readme file', metadata: { app: 'my-app' } };
       const agents = [
-        { id: 'agent-1', metadata: { workspacePath: workspace, taskDescription: 'Working on stuff' } }
-      ];
-      porcelain = ' M server/index.js\nM  client/App.jsx\n?? notes.txt\n';
-      const result = await detectConflicts(task, workspace, agents);
-
-      expect(result.modifiedFiles).toEqual(['server/index.js', 'client/App.jsx', 'notes.txt']);
-
-      expect(result.hasConflict).toBe(true);
-      expect(result.reason).toBe('workspace-has-uncommitted-changes');
-      expect(result.recommendation).toBe('worktree');
-      expect(result.conflictingAgents).toEqual(['agent-1']);
-    });
-
-    it('should detect overlap when tasks target the same app', async () => {
-      const task = { description: 'Improve dashboard', metadata: { app: 'my-app' } };
-      const agents = [
-        { id: 'agent-1', metadata: { workspacePath: workspace, taskDescription: 'Review my-app', app: 'my-app' } }
+        { id: 'agent-1', metadata: { workspacePath: workspace, taskDescription: 'update readme file', app: 'my-app' } }
       ];
       const result = await detectConflicts(task, workspace, agents);
 
-      expect(result.hasConflict).toBe(true);
-      expect(result.reason).toBe('concurrent-agents-likely-overlap');
-      expect(result.recommendation).toBe('worktree');
-      expect(result.conflictingAgents).toEqual(['agent-1']);
-    });
-
-    it('should detect overlap when descriptions share keywords', async () => {
-      const task = { description: 'refactor authentication middleware logic', metadata: {} };
-      const agents = [
-        { id: 'agent-1', metadata: { workspacePath: workspace, taskDescription: 'improve authentication middleware performance' } }
-      ];
-      const result = await detectConflicts(task, workspace, agents);
-
-      expect(result.hasConflict).toBe(true);
-      expect(result.reason).toBe('concurrent-agents-likely-overlap');
-      expect(result.recommendation).toBe('worktree');
-      expect(result.conflictingAgents).toEqual(['agent-1']);
-    });
-
-    it('should still flag conflict for agents in same workspace with no keyword overlap', async () => {
-      const task = { description: 'update readme file', metadata: {} };
-      const agents = [
-        { id: 'agent-1', metadata: { workspacePath: workspace, taskDescription: 'deploy kubernetes cluster' } }
-      ];
-      const result = await detectConflicts(task, workspace, agents);
-
-      expect(result.hasConflict).toBe(true);
-      expect(result.reason).toBe('concurrent-agents-in-same-workspace');
-      expect(result.recommendation).toBe('worktree');
-      expect(result.conflictingAgents).toEqual(['agent-1']);
+      expect(result).toEqual({
+        hasConflict: true,
+        reason: 'concurrent-agents-in-same-workspace',
+        conflictingAgents: ['agent-1'],
+        recommendation: 'worktree'
+      });
+      expect(execGit.mock.calls.map(c => c[0].join(' '))).toEqual(['rev-parse --is-inside-work-tree']);
     });
   });
 
