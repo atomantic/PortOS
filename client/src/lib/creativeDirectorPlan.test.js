@@ -120,6 +120,22 @@ describe('planCostSummary / planStatusSummary', () => {
 });
 
 describe('stepResultLink', () => {
+  it('links a created universe from universe_createUniverse by id', () => {
+    expect(stepResultLink({ toolName: 'universe_createUniverse', result: { id: 'u-1', name: 'World' } }))
+      .toEqual({ to: '/universes/u-1', label: 'Open universe' });
+  });
+  it('links a created series from pipeline_createSeries by id even when parent universeId is present', () => {
+    expect(stepResultLink({ toolName: 'pipeline_createSeries', result: { id: 'ser-1', universeId: 'u-1', name: 'Arc' } }))
+      .toEqual({ to: '/pipeline/series/ser-1', label: 'Open series' });
+  });
+  it('links a created Writers Room work from writersRoom_createWork by id', () => {
+    expect(stepResultLink({ toolName: 'writersRoom_createWork', result: { id: 'w-1' } }))
+      .toEqual({ to: '/writers-room/works/w-1', label: 'Open work' });
+  });
+  it('links a Writers Room analysis from writersRoom_runAnalysis via workId', () => {
+    expect(stepResultLink({ toolName: 'writersRoom_runAnalysis', result: { id: 'story-craft', workId: 'w-1', status: 'complete' } }))
+      .toEqual({ to: '/writers-room/works/w-1', label: 'Open work' });
+  });
   it('links a series result to the pipeline series route', () => {
     expect(stepResultLink({ toolName: 'pipeline_createSeries', result: { seriesId: 's1' } }))
       .toEqual({ to: '/pipeline/series/s1', label: 'Open series' });

@@ -388,6 +388,26 @@ describe('advanceAfterPlanStepSettled — executor', () => {
     expect(p.plan.steps[0].result).toEqual({ id: 's1', seriesId: 's1' });
   });
 
+  it('retains workId alongside id/status/universeId in summarized step results', async () => {
+    const read = makeStore(planProject([
+      step('u', { toolName: 'universe_createUniverse' }),
+      step('s', { toolName: 'pipeline_createSeries', dependsOn: ['u'] }),
+      step('w', { toolName: 'writersRoom_createWork', dependsOn: ['s'] }),
+      step('a', { toolName: 'writersRoom_runAnalysis', dependsOn: ['w'] }),
+    ]));
+    mockDispatch
+      .mockResolvedValueOnce({ ok: true, mode: 'execute', result: { id: 'u-1', name: 'World', premise: 'ignored' } })
+      .mockResolvedValueOnce({ ok: true, mode: 'execute', result: { id: 'ser-1', universeId: 'u-1', name: 'Arc', logline: 'ignored' } })
+      .mockResolvedValueOnce({ ok: true, mode: 'execute', result: { id: 'work-1', title: 'Draft', drafts: [] } })
+      .mockResolvedValueOnce({ ok: true, mode: 'execute', result: { id: 'story-craft', workId: 'work-1', status: 'complete', result: { score: 9 } } });
+    await advanceAfterPlanStepSettled('cd-1');
+    const steps = read().plan.steps;
+    expect(steps[0].result).toEqual({ id: 'u-1', name: 'World' });
+    expect(steps[1].result).toEqual({ id: 'ser-1', universeId: 'u-1', name: 'Arc' });
+    expect(steps[2].result).toEqual({ id: 'work-1' });
+    expect(steps[3].result).toEqual({ id: 'story-craft', workId: 'work-1', status: 'complete' });
+  });
+
   it('pauses with residuals when the gate rejects a step (over budget)', async () => {
     const read = makeStore(planProject([step('a', { toolName: 'pipeline_generateStage' })]));
     mockDispatch.mockResolvedValue({ ok: false, rejected: true, reason: 'budget' });
