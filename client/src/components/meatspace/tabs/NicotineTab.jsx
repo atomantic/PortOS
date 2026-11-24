@@ -24,7 +24,7 @@ import NicotineHealthCorrelation from '../NicotineHealthCorrelation';
 import { dayOfWeek } from '../constants';
 import { localDateKey } from '../../../utils/formatters';
 import { useSingleFlight } from '../../../hooks/useSingleFlight';
-import DraftNumberInput from '../../ui/DraftNumberInput';
+import DraftNumber from '../../ui/DraftNumber';
 
 const DAYS_PER_PAGE = 50;
 
@@ -425,15 +425,13 @@ export default function NicotineTab() {
                   required
                 />
               </FormField>
-              <FormField label="Qty" className="w-14" labelClassName="block text-xs text-gray-500 mb-1">
-                <DraftNumberInput
-                  integer
-                  value={count}
-                  onCommit={setCount}
-                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-white"
-                  min={1}
-                />
-              </FormField>
+              <DraftNumber integer value={count} onCommit={setCount} min={1}>
+                {(field) => (
+                  <FormField label="Qty" className="w-14" labelClassName="block text-xs text-gray-500 mb-1">
+                    <input type="number" className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-white" {...field} />
+                  </FormField>
+                )}
+              </DraftNumber>
               <FormField label="Date" labelClassName="block text-xs text-gray-500 mb-1">
                 <input
                   type="date"

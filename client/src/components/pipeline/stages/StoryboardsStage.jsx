@@ -46,7 +46,7 @@ import { matchCharactersInText } from '../../../lib/scenePrompt';
 import MediaJobThumb from '../MediaJobThumb';
 import ImagePromptCandidates, { PromptCountInput } from '../ImagePromptCandidates';
 import { genConfigToImageOptions, genConfigToRefineOptions, IMAGE_PROMPT_COUNT_DEFAULT } from './VisualGenSettings';
-import DraftNumberInput from '../../ui/DraftNumberInput';
+import DraftNumber from '../../ui/DraftNumber';
 
 const STORYBOARD_CHANGE_EVENTS = ['storyboard:changed'];
 
@@ -864,16 +864,9 @@ function ShotList({
                   </div>
                 </div>
                 <div className="flex flex-col gap-1 w-24">
-                  <DraftNumberInput
-                    min={1}
-                    max={30}
-                    value={shot.durationSeconds ?? 4}
-                    onCommit={(durationSeconds) => onUpdateShot(j, { durationSeconds })}
-                    onBlur={onBlurShot}
-                    title="Duration in seconds"
-                    aria-label={`Shot ${j + 1} duration in seconds`}
-                    className="px-1 py-1 bg-port-bg border border-port-border rounded text-white text-[10px] text-center"
-                  />
+                  <DraftNumber min={1} max={30} value={shot.durationSeconds ?? 4} onCommit={(durationSeconds) => onUpdateShot(j, { durationSeconds })} onBlur={onBlurShot}>
+                    {(field) => <input type="number" title="Duration in seconds" aria-label={`Shot ${j + 1} duration in seconds`} className="px-1 py-1 bg-port-bg border border-port-border rounded text-white text-[10px] text-center" {...field} />}
+                  </DraftNumber>
                   <button
                     type="button"
                     onClick={() => onRenderShot(j)}

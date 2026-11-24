@@ -25,7 +25,7 @@ import StandardDrinkCalculator from '../StandardDrinkCalculator';
 import { dayOfWeek } from '../constants';
 import { localDateKey } from '../../../utils/formatters';
 import { useSingleFlight } from '../../../hooks/useSingleFlight';
-import DraftNumberInput from '../../ui/DraftNumberInput';
+import DraftNumber from '../../ui/DraftNumber';
 
 const ML_PER_OZ = 29.5735;
 
@@ -574,16 +574,13 @@ export default function AlcoholTab() {
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white placeholder-gray-600"
             />
           </FormField>
-          <FormField label="Count" labelClassName="text-xs text-gray-500 block mb-1">
-            <DraftNumberInput
-              integer
-              min={1}
-              max={20}
-              value={count}
-              onCommit={setCount}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white"
-            />
-          </FormField>
+          <DraftNumber integer min={1} max={20} value={count} onCommit={setCount}>
+            {(field) => (
+              <FormField label="Count" labelClassName="text-xs text-gray-500 block mb-1">
+                <input type="number" className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white" {...field} />
+              </FormField>
+            )}
+          </DraftNumber>
           <FormField label="Date" labelClassName="text-xs text-gray-500 block mb-1">
             <input
               type="date"

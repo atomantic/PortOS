@@ -11,7 +11,7 @@ import {
   parseCronToRecurrence,
 } from '../utils/cronHelpers';
 import { shiftDayKey, todayKeyInTimezone } from '../utils/timezone.js';
-import DraftNumberInput from './ui/DraftNumberInput';
+import DraftNumber from './ui/DraftNumber';
 
 const WEEKDAY_SET = WEEKDAYS.filter(day => day.value >= 1 && day.value <= 5).map(day => day.value);
 
@@ -270,15 +270,9 @@ function RecurrenceRulePicker({ value, onChange, className, showAdvanced = true,
             <>
               <label className="flex flex-wrap items-center gap-2 text-xs text-gray-400">
                 Every
-                <DraftNumberInput
-                  integer
-                  min={1}
-                  max={365}
-                  value={rule.interval || 1}
-                  onCommit={interval => update({ interval })}
-                  className="w-20 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm text-white"
-                  aria-label="Repeat every number of days"
-                />
+                <DraftNumber integer min={1} max={365} value={rule.interval || 1} onCommit={interval => update({ interval })}>
+                  {(field) => <input type="number" className="w-20 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm text-white" aria-label="Repeat every number of days" {...field} />}
+                </DraftNumber>
                 day(s)
               </label>
               <div className="space-y-1">
@@ -291,15 +285,9 @@ function RecurrenceRulePicker({ value, onChange, className, showAdvanced = true,
             <>
               <label className="flex flex-wrap items-center gap-2 text-xs text-gray-400">
                 Every
-                <DraftNumberInput
-                  integer
-                  min={1}
-                  max={52}
-                  value={rule.interval || 1}
-                  onCommit={interval => update({ interval })}
-                  className="w-20 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm text-white"
-                  aria-label="Repeat every number of weeks"
-                />
+                <DraftNumber integer min={1} max={52} value={rule.interval || 1} onCommit={interval => update({ interval })}>
+                  {(field) => <input type="number" className="w-20 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm text-white" aria-label="Repeat every number of weeks" {...field} />}
+                </DraftNumber>
                 week(s) on
               </label>
               <DayButtons
@@ -312,25 +300,15 @@ function RecurrenceRulePicker({ value, onChange, className, showAdvanced = true,
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <label className="block text-xs text-gray-400">
                 Day of month
-                <DraftNumberInput
-                  integer
-                  min={1}
-                  max={31}
-                  value={rule.dayOfMonth || 1}
-                  onCommit={dayOfMonth => update({ dayOfMonth })}
-                  className="mt-1.5 w-full rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm text-white"
-                />
+                <DraftNumber integer min={1} max={31} value={rule.dayOfMonth || 1} onCommit={dayOfMonth => update({ dayOfMonth })}>
+                  {(field) => <input type="number" className="mt-1.5 w-full rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm text-white" {...field} />}
+                </DraftNumber>
               </label>
               <label className="block text-xs text-gray-400">
                 Every N months
-                <DraftNumberInput
-                  integer
-                  min={1}
-                  max={12}
-                  value={rule.interval || 1}
-                  onCommit={interval => update({ interval })}
-                  className="mt-1.5 w-full rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm text-white"
-                />
+                <DraftNumber integer min={1} max={12} value={rule.interval || 1} onCommit={interval => update({ interval })}>
+                  {(field) => <input type="number" className="mt-1.5 w-full rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm text-white" {...field} />}
+                </DraftNumber>
               </label>
             </div>
           )}
@@ -350,14 +328,9 @@ function RecurrenceRulePicker({ value, onChange, className, showAdvanced = true,
               </label>
               <label className="block text-xs text-gray-400">
                 Every N months
-                <DraftNumberInput
-                  integer
-                  min={1}
-                  max={12}
-                  value={rule.interval || 1}
-                  onCommit={interval => update({ interval })}
-                  className="mt-1.5 w-full rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm text-white"
-                />
+                <DraftNumber integer min={1} max={12} value={rule.interval || 1} onCommit={interval => update({ interval })}>
+                  {(field) => <input type="number" className="mt-1.5 w-full rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm text-white" {...field} />}
+                </DraftNumber>
               </label>
             </div>
           )}

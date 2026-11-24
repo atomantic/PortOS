@@ -63,7 +63,8 @@
         "useAltText": "error",
         "useAriaPropsForRole": "error",
         "useValidAriaProps": "error",
-        "noLabelWithoutControl": { "level": "error", "options": { "inputComponents": ["DraftNumberInput"] } },
+        // DraftNumber renders the caller's <input> through a render prop the rule cannot follow.
+        "noLabelWithoutControl": { "level": "error", "options": { "inputComponents": ["DraftNumber"] } },
         "useKeyWithClickEvents": "error",
         "noNoninteractiveElementToInteractiveRole": "error",
         "useFocusableInteractive": "error",

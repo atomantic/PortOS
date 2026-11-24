@@ -28,7 +28,7 @@ import { FormField } from '../components/ui/FormField';
 import { formatBytes, formatDateTime, formatDurationMs } from '../utils/formatters';
 import { pluralize } from '../lib/textUtils';
 import { PORTS } from '../lib/ports.js';
-import DraftNumberInput from '../components/ui/DraftNumberInput';
+import DraftNumber from '../components/ui/DraftNumber';
 
 const STATUS_EVENTS = ['browser:changed'];
 // Mirrors HOST_CONTROL_FORBIDDEN_MESSAGE; the status read stays open but omits
@@ -250,15 +250,13 @@ export default function BrowserPage() {
         <div className="mb-6 p-4 bg-port-card border border-port-border rounded-xl">
           <h3 className="text-lg font-semibold text-white mb-4">Browser Configuration</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <FormField label="CDP Port">
-              <DraftNumberInput
-                integer
-                min={1}
-                value={configDraft.cdpPort}
-                onCommit={cdpPort => setConfigDraft(d => ({ ...d, cdpPort }))}
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:outline-hidden focus:border-port-accent"
-              />
-            </FormField>
+            <DraftNumber integer min={1} value={configDraft.cdpPort} onCommit={cdpPort => setConfigDraft(d => ({ ...d, cdpPort }))}>
+              {(field) => (
+                <FormField label="CDP Port">
+                  <input type="number" className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:outline-hidden focus:border-port-accent" {...field} />
+                </FormField>
+              )}
+            </DraftNumber>
             <FormField label="CDP Host">
               <input
                 type="text"
@@ -267,15 +265,13 @@ export default function BrowserPage() {
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:outline-hidden focus:border-port-accent"
               />
             </FormField>
-            <FormField label="Health Port">
-              <DraftNumberInput
-                integer
-                min={1}
-                value={configDraft.healthPort}
-                onCommit={healthPort => setConfigDraft(d => ({ ...d, healthPort }))}
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:outline-hidden focus:border-port-accent"
-              />
-            </FormField>
+            <DraftNumber integer min={1} value={configDraft.healthPort} onCommit={healthPort => setConfigDraft(d => ({ ...d, healthPort }))}>
+              {(field) => (
+                <FormField label="Health Port">
+                  <input type="number" className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:outline-hidden focus:border-port-accent" {...field} />
+                </FormField>
+              )}
+            </DraftNumber>
             <div className="flex items-center gap-2">
               <input
                 type="checkbox"

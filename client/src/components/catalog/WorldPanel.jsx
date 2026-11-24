@@ -13,7 +13,7 @@ import { formatCount } from '../../utils/formatters';
 import {
   WORLD_LIMITS, WORLD_PATH_DEFAULT_WIDTH, WORLD_PATH_KINDS, WORLD_PATH_SIDES, WORLD_POLE_SIDES, WORLD_POLE_SPACING, WORLD_ROAD_INFRASTRUCTURE, WORLD_SETTINGS, blankWorld, placeWorld, worldClockText, worldProblems,
 } from '../../../../server/lib/worldMap.js';
-import DraftNumberInput from '../ui/DraftNumberInput';
+import DraftNumber from '../ui/DraftNumber';
 
 // three.js stays out of the main chunk: the 3D view loads when it is opened.
 const WorldViewer = lazy(() => import('./WorldViewer'));
@@ -185,11 +185,13 @@ export default function WorldPanel({ record, readOnly = false, disabled = false,
               <span className="font-medium text-port-text">{places[set.ingredientId]?.ingredient?.name || 'Set'}</span>
               {places[set.ingredientId]?.ingredient && <Link className="text-xs underline" to={`${ingredientPath(places[set.ingredientId].ingredient)}/greybox`}>Open its greybox</Link>}
               <label htmlFor="world-set-x" className="text-port-text-muted">Position X (m)</label>
-              <DraftNumberInput id="world-set-x" min={-WORLD_LIMITS.COORD} max={WORLD_LIMITS.COORD} step={1} value={set.position[0]} className="min-h-[44px] w-24 rounded border border-port-border bg-port-bg px-2 text-sm"
-                onCommit={(x) => patchSet(set.id, { position: [clampCoord(x), set.position[1]] })} />
+              <DraftNumber min={-WORLD_LIMITS.COORD} max={WORLD_LIMITS.COORD} value={set.position[0]} onCommit={(x) => patchSet(set.id, { position: [clampCoord(x), set.position[1]] })}>
+                {(field) => <input type="number" id="world-set-x" step={1} className="min-h-[44px] w-24 rounded border border-port-border bg-port-bg px-2 text-sm" {...field} />}
+              </DraftNumber>
               <label htmlFor="world-set-z" className="text-port-text-muted">Position Z (m)</label>
-              <DraftNumberInput id="world-set-z" min={-WORLD_LIMITS.COORD} max={WORLD_LIMITS.COORD} step={1} value={set.position[1]} className="min-h-[44px] w-24 rounded border border-port-border bg-port-bg px-2 text-sm"
-                onCommit={(z) => patchSet(set.id, { position: [set.position[0], clampCoord(z)] })} />
+              <DraftNumber min={-WORLD_LIMITS.COORD} max={WORLD_LIMITS.COORD} value={set.position[1]} onCommit={(z) => patchSet(set.id, { position: [set.position[0], clampCoord(z)] })}>
+                {(field) => <input type="number" id="world-set-z" step={1} className="min-h-[44px] w-24 rounded border border-port-border bg-port-bg px-2 text-sm" {...field} />}
+              </DraftNumber>
               <button type="button" className={`${iconCls} ml-auto`} aria-label="Turn left 15°" onClick={() => patchSet(set.id, { rotationDegrees: ((set.rotationDegrees + 15 + 360) % 360) })}><RotateCcw size={16} aria-hidden="true" /></button>
               <label htmlFor="world-set-turn" className="sr-only">Turn (degrees)</label>
               <input id="world-set-turn" type="number" min={0} max={359} value={Math.round(set.rotationDegrees)} className="min-h-[44px] w-20 rounded border border-port-border bg-port-bg px-2 text-sm"
@@ -224,15 +226,17 @@ export default function WorldPanel({ record, readOnly = false, disabled = false,
                         {WORLD_POLE_SIDES.map((value) => <option key={value} value={value}>{value === 'right' ? 'Right' : 'Left'}</option>)}
                       </select>
                       <label htmlFor="world-street-pole-spacing" className="text-port-text-muted">Spacing (m)</label>
-                      <DraftNumberInput id="world-street-pole-spacing" min={WORLD_POLE_SPACING.min} max={WORLD_POLE_SPACING.max} step={1} placeholder="auto" value={path.poleSpacing ?? ''} className="min-h-[44px] w-20 rounded border border-port-border bg-port-bg px-2"
-                        blankable onCommit={(poleSpacing) => patchPath(path.id, { poleSpacing })} />
+                      <DraftNumber min={WORLD_POLE_SPACING.min} max={WORLD_POLE_SPACING.max} value={path.poleSpacing ?? ''} blankable onCommit={(poleSpacing) => patchPath(path.id, { poleSpacing })}>
+                        {(field) => <input type="number" id="world-street-pole-spacing" step={1} placeholder="auto" className="min-h-[44px] w-20 rounded border border-port-border bg-port-bg px-2" {...field} />}
+                      </DraftNumber>
                     </>
                   )}
                 </>
               )}
               <label htmlFor="world-street-width" className="text-port-text-muted">Width (m)</label>
-              <DraftNumberInput id="world-street-width" min={1} max={WORLD_LIMITS.WIDTH_MAX} step={0.5} value={path.width} className="min-h-[44px] w-20 rounded border border-port-border bg-port-bg px-2"
-                onCommit={(width) => patchPath(path.id, { width })} />
+              <DraftNumber min={1} max={WORLD_LIMITS.WIDTH_MAX} value={path.width} onCommit={(width) => patchPath(path.id, { width })}>
+                {(field) => <input type="number" id="world-street-width" step={0.5} className="min-h-[44px] w-20 rounded border border-port-border bg-port-bg px-2" {...field} />}
+              </DraftNumber>
               <button type="button" className={`${iconCls} ml-auto`} aria-label="Remove this path" onClick={() => { edit((t) => ({ ...t, paths: t.paths.filter((entry) => entry.id !== path.id) })); select(''); }}><Trash2 size={16} aria-hidden="true" /></button>
             </div>
             <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
@@ -240,13 +244,13 @@ export default function WorldPanel({ record, readOnly = false, disabled = false,
                 <span key={index} className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
                   <span className="text-xs text-port-text-muted">Point {index + 1}</span>
                   <label htmlFor={`world-path-point-${index}-x`} className="text-xs text-port-text-muted">X (m)</label>
-                  <DraftNumberInput id={`world-path-point-${index}-x`} aria-label={`Point ${index + 1} X (m)`} min={-WORLD_LIMITS.COORD} max={WORLD_LIMITS.COORD} step={1} value={point[0]}
-                    className="min-h-[44px] w-24 rounded border border-port-border bg-port-bg px-2 text-sm"
-                    onCommit={(x) => movePathPoint(path.id, index, [clampCoord(x), point[1]])} />
+                  <DraftNumber min={-WORLD_LIMITS.COORD} max={WORLD_LIMITS.COORD} value={point[0]} onCommit={(x) => movePathPoint(path.id, index, [clampCoord(x), point[1]])}>
+                    {(field) => <input type="number" id={`world-path-point-${index}-x`} aria-label={`Point ${index + 1} X (m)`} step={1} className="min-h-[44px] w-24 rounded border border-port-border bg-port-bg px-2 text-sm" {...field} />}
+                  </DraftNumber>
                   <label htmlFor={`world-path-point-${index}-z`} className="text-xs text-port-text-muted">Z (m)</label>
-                  <DraftNumberInput id={`world-path-point-${index}-z`} aria-label={`Point ${index + 1} Z (m)`} min={-WORLD_LIMITS.COORD} max={WORLD_LIMITS.COORD} step={1} value={point[1]}
-                    className="min-h-[44px] w-24 rounded border border-port-border bg-port-bg px-2 text-sm"
-                    onCommit={(z) => movePathPoint(path.id, index, [point[0], clampCoord(z)])} />
+                  <DraftNumber min={-WORLD_LIMITS.COORD} max={WORLD_LIMITS.COORD} value={point[1]} onCommit={(z) => movePathPoint(path.id, index, [point[0], clampCoord(z)])}>
+                    {(field) => <input type="number" id={`world-path-point-${index}-z`} aria-label={`Point ${index + 1} Z (m)`} step={1} className="min-h-[44px] w-24 rounded border border-port-border bg-port-bg px-2 text-sm" {...field} />}
+                  </DraftNumber>
                 </span>
               ))}
             </div>

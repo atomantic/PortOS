@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import DraftNumberInput from './DraftNumberInput';
+import DraftNumber from './DraftNumber';
 
 function Host({ start, ...props }) {
   const [value, setValue] = useState(start);
-  return <><DraftNumberInput aria-label="n" value={value} onCommit={setValue} {...props} /><output>{String(value)}</output></>;
+  return <><DraftNumber value={value} onCommit={setValue} {...props}>{(field) => <input type="number" aria-label="n" {...field} />}</DraftNumber><output>{String(value)}</output></>;
 }
 const box = () => screen.getByLabelText('n');
 const type = (text) => fireEvent.change(box(), { target: { value: text } });

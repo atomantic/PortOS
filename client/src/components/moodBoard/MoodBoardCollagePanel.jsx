@@ -3,7 +3,7 @@ import { LayoutGrid, Download } from 'lucide-react';
 import toast from '../ui/Toast';
 import { composeMoodBoardCollage } from '../../services/apiMoodBoard.js';
 import { moodBoardCollageSrc } from '../../lib/moodBoardItemSrc';
-import DraftNumberInput from '../ui/DraftNumberInput';
+import DraftNumber from '../ui/DraftNumber';
 
 /**
  * Board-level "Collage" control: compiles every image (plus sampled video
@@ -47,15 +47,9 @@ export default function MoodBoardCollagePanel({ board, onBoardChange }) {
           <>
             <div>
               <label htmlFor="collage-frames" className="block text-xs text-gray-400 mb-1">Frames per video</label>
-              <DraftNumberInput
-                id="collage-frames"
-                integer
-                min={1}
-                max={24}
-                value={framesPerVideo}
-                onCommit={setFramesPerVideo}
-                className="w-20 bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
-              />
+              <DraftNumber integer min={1} max={24} value={framesPerVideo} onCommit={setFramesPerVideo}>
+                {(field) => <input type="number" id="collage-frames" className="w-20 bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none" {...field} />}
+              </DraftNumber>
             </div>
             <label htmlFor="collage-add-frames" className="flex items-center gap-2 text-sm text-gray-300 min-h-[40px]">
               <input

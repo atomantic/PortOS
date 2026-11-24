@@ -63,7 +63,7 @@ import {
 import { isHttpUrl } from '../utils/urlNormalize';
 import { formatCount, timeAgo } from '../utils/formatters';
 import useMounted from '../hooks/useMounted';
-import DraftNumberInput from '../components/ui/DraftNumberInput';
+import DraftNumber from '../components/ui/DraftNumber';
 
 // Board tools share one panel: a side rail on wide boards, a sheet on phones.
 // The open tool is `?tool=` so it is linkable; the last one used is remembered.
@@ -1199,15 +1199,9 @@ function MoodBoardEditor({ id }) {
                         {/* Keep the frame count with its extraction action when wrapping. */}
                         {videoSrc ? (
                           <span className="inline-flex shrink-0 items-center gap-1 mr-auto">
-                            <DraftNumberInput
-                              integer
-                              min={1}
-                              max={24}
-                              value={frameCount}
-                              aria-label="Frames to extract"
-                              onCommit={setFrameCount}
-                              className="w-14 min-h-[44px] bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs outline-none focus:border-port-accent"
-                            />
+                            <DraftNumber integer min={1} max={24} value={frameCount} onCommit={setFrameCount}>
+                              {(field) => <input type="number" aria-label="Frames to extract" className="w-14 min-h-[44px] bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs outline-none focus:border-port-accent" {...field} />}
+                            </DraftNumber>
                             <button
                               type="button"
                               onClick={() => handleExtractFrames(item.id)}
