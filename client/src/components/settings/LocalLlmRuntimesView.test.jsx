@@ -19,6 +19,7 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
   stopMtplxServer: vi.fn(),
   installMtplx: vi.fn(),
   getManagedInklingRuntimeStatus: vi.fn(),
+  saveSplashContextWindow: vi.fn(),
   controlManagedInklingRuntime: vi.fn(),
   getSlotstreamServerStatus: vi.fn().mockResolvedValue({ installed: false, running: false, supported: true, cachedModels: [], memoryPlan: { targetGb: 22, expectedPeakGb: 22, expectedWarmDecodeToks: 8, auto: true } }),
   startSlotstreamServer: vi.fn(),
@@ -72,6 +73,7 @@ import {
   getLocalLlmStatus,
   getLocalLlmCatalog,
   getManagedInklingRuntimeStatus,
+  saveSplashContextWindow,
   controlManagedInklingRuntime,
   switchLocalLlmBackend,
   installLocalLlmBackend,
@@ -231,6 +233,34 @@ describe('runtime selection workflow', () => {
     }
     expect(controlManagedInklingRuntime).not.toHaveBeenCalled();
     expect(switchLocalLlmBackend).not.toHaveBeenCalled();
+  });
+
+  it('saves the requested Splash window when stopped and separately displays the live served window', async () => {
+    getManagedInklingRuntimeStatus.mockResolvedValue({ supported: true, state: 'stopped', installed: true, requestedContextWindow: 65536 });
+    let finishSave;
+    saveSplashContextWindow.mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve; }));
+    await renderRuntimes('splash');
+
+    const context = screen.getByRole('combobox', { name: 'Splash context window' });
+    expect(context).toHaveValue('65536');
+    expect(within(context).getByRole('option', { name: '1M' })).toBeInTheDocument();
+    fireEvent.change(context, { target: { value: '1000000' } });
+    expect(saveSplashContextWindow).toHaveBeenCalledWith(1000000);
+    expect(context).toBeDisabled();
+    expect(screen.getByTitle('Start the local Splash server')).toBeDisabled();
+    getManagedInklingRuntimeStatus.mockResolvedValue({ supported: true, state: 'stopped', installed: true, requestedContextWindow: 1000000 });
+    await act(async () => finishSave({ requestedContextWindow: 1000000 }));
+    expect(context).toHaveValue('1000000');
+
+    getManagedInklingRuntimeStatus.mockResolvedValueOnce({
+      supported: true, state: 'running', managed: true, installed: true,
+      requestedContextWindow: 1000000, servedContextWindow: 524288,
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Check Splash status' }));
+    expect(await screen.findByText('Currently serving: 512K tokens')).toBeVisible();
+    expect(context).toBeDisabled();
+    expect(context).toHaveValue('1000000');
+    expect(controlManagedInklingRuntime).not.toHaveBeenCalled();
   });
 
   it.each([['splash', 'Splash'], ['mkserve', 'mkserve']])('installs, updates and controls %s from the Runtimes page', async (id, label) => {

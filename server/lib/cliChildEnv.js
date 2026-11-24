@@ -24,6 +24,7 @@ import {
   opencodeConfigIsLocalOnly,
 } from './provider/providerModels.js';
 import { isLocalInstanceEndpoint } from './localEndpoint.js';
+import { SPLASH_CONTEXT } from './splashRuntime.js';
 import { agentGuardEnv } from './agentGuard/index.js';
 import { join, resolve } from 'path';
 import { buildSafeCliBaseEnv, withTorchCompilerCacheEnv } from './processEnv.js';
@@ -69,14 +70,16 @@ function isLocalBackedClaude(provider) {
  * `claudeLocalEnvDefaults`; `cliChildEnv.test.js` enforces it.
  */
 const CLAUDE_LOCAL_TUNING_ENV_KEYS = [
-  'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'API_TIMEOUT_MS', 'API_FORCE_IDLE_TIMEOUT',
+  'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_MAX_CONTEXT_TOKENS', 'API_TIMEOUT_MS', 'API_FORCE_IDLE_TIMEOUT',
   'CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS', 'CLAUDE_STREAM_IDLE_TIMEOUT_MS', 'MAX_THINKING_TOKENS',
 ];
 
 function claudeLocalEnvDefaults(provider) {
   if (!isLocalBackedClaude(provider)) return {};
   return {
-    CLAUDE_CODE_MAX_OUTPUT_TOKENS: CLAUDE_LOCAL_MAX_OUTPUT_TOKENS,
+    // Splash's usual 64K window needs room for prompts and tool results.
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: provider.splashBacked === true ? '8192' : CLAUDE_LOCAL_MAX_OUTPUT_TOKENS,
+    ...(provider.splashBacked === true ? { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(SPLASH_CONTEXT) } : {}),
     API_TIMEOUT_MS: CLAUDE_LOCAL_API_TIMEOUT_MS,
     API_FORCE_IDLE_TIMEOUT: CLAUDE_LOCAL_FORCE_IDLE_TIMEOUT,
     CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS: CLAUDE_LOCAL_STREAM_IDLE_TIMEOUT_MS,
@@ -88,6 +91,22 @@ function claudeLocalEnvDefaults(provider) {
     // `generationControlsFor` in client/src/utils/providerModels.js).
     ...(provider.ollamaBacked === true && provider.thinking === false
       ? { MAX_THINKING_TOKENS: '0' }
+      : {}),
+  };
+}
+
+function claudeContextOverride(provider) {
+  const value = provider?.harnessContext;
+  if (!value || value.model || !Number.isSafeInteger(value.tokens) || !provider.command || !isClaudeCommand(provider.command)
+    || !(provider.envVars?.ANTHROPIC_BASE_URL || provider.envVars?.CLAUDE_CODE_MAX_CONTEXT_TOKENS)) return {};
+  const output = provider.splashBacked === true ? 8192 : isLocalBackedClaude(provider) ? Number(CLAUDE_LOCAL_MAX_OUTPUT_TOKENS) : 32000;
+  const outputCap = Math.floor(value.tokens / 4);
+  // Leave at least three quarters of a chosen window for input unless the
+  // user explicitly sets a different output reserve.
+  return {
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(value.tokens),
+    ...(provider.envVars?.CLAUDE_CODE_MAX_OUTPUT_TOKENS == null && output > outputCap
+      ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(outputCap) }
       : {}),
   };
 }
@@ -119,6 +138,7 @@ export function composeProviderEnv({ before = null, provider = null, model = nul
     ...(before || {}),
     ...claudeLocalEnvDefaults(provider),
     ...(provider?.envVars || {}),
+    ...claudeContextOverride(provider),
     // Rebuilds OPENCODE_CONFIG_CONTENT with a declared models map so the injected
     // namespaced `--model` is accepted; lands after provider.envVars to override
     // the provider's STATIC copy. `safetyProfile` reaches it because OpenCode's

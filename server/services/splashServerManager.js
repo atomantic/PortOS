@@ -1,6 +1,6 @@
 /** Owns user-triggered Splash install/update/start/stop without taking over an external server. */
 
-import { SPLASH_CONTEXT, SPLASH_MODEL, SPLASH_ORIGIN } from '../lib/splashRuntime.js';
+import { isSplashContextWindow, SPLASH_CONTEXT, SPLASH_MODEL, SPLASH_ORIGIN } from '../lib/splashRuntime.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { setTimeout as sleep } from 'timers/promises';
 import { isPortInUse } from '../lib/platform.js';
@@ -17,7 +17,15 @@ const active = new Set(['online', 'launching', 'waiting restart', 'stopping']);
 let operation = null;
 let startTimedOut = false;
 const fail = (message, status = 409, code = 'SPLASH_CONFLICT') => new ServerError(message, { status, code });
-const launchArgs = (version) => splashLaunchArgs(version, SPLASH_MODEL, SPLASH_CONTEXT, PORT);
+const settingsService = () => import('./settings.js');
+
+async function configuredContextWindow({ forStart = false } = {}) {
+  const { readSettingsStrict } = await settingsService();
+  const { settings, corrupt } = await readSettingsStrict();
+  if (corrupt && forStart) throw fail('Splash context settings could not be read.', 503, 'SPLASH_SETTINGS_UNAVAILABLE');
+  const value = settings?.localLlm?.splash?.contextWindow;
+  return isSplashContextWindow(value) ? value : SPLASH_CONTEXT;
+}
 
 function ownsProcess(processInfo, version) {
   if (!version || !Number.isInteger(processInfo?.pm_id)) return false;
@@ -29,12 +37,13 @@ function ownsProcess(processInfo, version) {
 }
 
 export async function getSplashManagedState() {
-  const version = await readInstalledSplashVersion();
+  const [version, requestedContextWindow] = await Promise.all([readInstalledSplashVersion(), configuredContextWindow()]);
   const pm2 = version ? await getAppStatusStrict(SPLASH_APP) : null;
   const owned = ownsProcess(pm2, version);
   const repairRecommended = owned && ['errored', 'stopped'].includes(pm2.status);
   return {
     installed: Boolean(version),
+    requestedContextWindow,
     version,
     targetVersion: SPLASH_VERSION,
     updateAvailable: version !== null && version !== SPLASH_VERSION,
@@ -82,6 +91,25 @@ export function installSplashRuntime({ onProgress = () => {} } = {}) {
   });
 }
 
+export function saveSplashContextWindow(contextWindow) {
+  return withOperation('context', async () => {
+    if (!isSplashContextWindow(contextWindow)) throw fail('Choose a supported Splash context window.', 400, 'SPLASH_INVALID_CONTEXT');
+    const pm2 = await checkedPm2();
+    if (active.has(pm2.status) || await isPortInUse(PORT)) {
+      throw fail('Stop Splash before changing its context window. PortOS will not stop an external server.');
+    }
+    const { updateSettingsWith } = await settingsService();
+    await updateSettingsWith((settings) => ({
+      ...settings,
+      localLlm: {
+        ...settings.localLlm,
+        splash: { ...settings.localLlm?.splash, contextWindow },
+      },
+    }), { actor: 'user' });
+    return { requestedContextWindow: contextWindow };
+  });
+}
+
 export function startSplashServer({ onProgress = () => {} } = {}) {
   return withOperation('start', async () => {
     const version = await readInstalledSplashVersion();
@@ -93,24 +121,28 @@ export function startSplashServer({ onProgress = () => {} } = {}) {
     if (await isPortInUse(PORT)) {
       throw fail(`Port ${PORT} is in use. PortOS will not replace an external server.`, 409, 'SPLASH_PORT_IN_USE');
     }
+    const contextWindow = await configuredContextWindow({ forStart: true });
     if (owned) await execPm2(['delete', String(pm2.pm_id)]);
     guardedProgress(onProgress)('Starting Splash with cached Inkling 2 Mini weights.');
     startTimedOut = false;
     await execPm2([
       'start', '/usr/bin/env', '--name', SPLASH_APP, '--interpreter', 'none', '--no-autorestart',
-      '--kill-timeout', '10000', '--force', '--', ...launchArgs(version),
+      '--kill-timeout', '10000', '--force', '--', ...splashLaunchArgs(version, SPLASH_MODEL, contextWindow, PORT),
     ]);
-    await waitForSplashReady(version);
+    await waitForSplashReady(version, contextWindow);
     return { success: true, message: 'Splash is ready with Inkling 2 Mini.' };
   });
 }
 
-async function waitForSplashReady(version) {
+async function waitForSplashReady(version, contextWindow) {
   const deadline = performance.now() + 120_000;
   while (performance.now() < deadline) {
     const started = await checkedPm2();
     if (!ownsProcess(started, version) || !active.has(started.status)) {
-      throw fail('Splash exited during startup. Use Repair to check the local cache, or check the portos-splash logs.', 502, 'SPLASH_START_FAILED');
+      const hint = contextWindow > SPLASH_CONTEXT
+        ? ' Try a smaller context window, or check the portos-splash logs for memory or SSD limits.'
+        : ' Use Repair to check the local cache, or check the portos-splash logs.';
+      throw fail(`Splash exited during startup.${hint}`, 502, 'SPLASH_START_FAILED');
     }
     const endpoint = await probeSplashEndpoint();
     if (endpoint.state === 'external' && endpoint.model === SPLASH_MODEL) return;

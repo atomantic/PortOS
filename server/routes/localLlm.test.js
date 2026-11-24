@@ -15,7 +15,7 @@ import { getLoadedModels, unloadModel } from '../services/ollamaManager.js';
 import { getLoadedModels as getLoadedLmStudioModels, getLastLoadedModelsError as getLmStudioResidencyError } from '../services/lmStudioManager.js';
 import { getSettings, readSettingsStrict, updateSettingsWith } from '../services/settings.js';
 import { localLlmCompareSchema, localLlmTestSchema } from '../lib/mediaValidation.js';
-import { installSplashRuntime, startSplashServer, stopSplashServer } from '../services/splashServerManager.js';
+import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer } from '../services/splashServerManager.js';
 import { installMkserve, startMkserveServer, stopMkserveServer } from '../services/mkserveRuntimeManager.js';
 import { ServerError, errorEvents } from '../lib/errorHandler.js';
 
@@ -138,6 +138,7 @@ vi.mock('../services/splashRuntimeStatus.js', () => ({
 vi.mock('../services/splashServerManager.js', () => ({
   SPLASH_APP: 'portos-splash',
   installSplashRuntime: vi.fn(),
+  saveSplashContextWindow: vi.fn(),
   startSplashServer: vi.fn(),
   stopSplashServer: vi.fn(),
 }));
@@ -1156,4 +1157,18 @@ describe.each([
       'localLlm:progress', expect.objectContaining({ event: 'error', runtime: id }),
     );
   });
+});
+
+
+it('validates and saves the Splash next-start context through the runtime route', async () => {
+  const app = makeApp();
+  const save = (contextWindow) => request(app).put('/api/local-llm/splash/context').send({ contextWindow });
+  expect((await save(1010000)).status).toBe(400);
+  expect((await save('1000000')).status).toBe(400);
+  expect(saveSplashContextWindow).not.toHaveBeenCalled();
+  saveSplashContextWindow.mockResolvedValueOnce({ requestedContextWindow: 1000000 });
+  const result = await save(1000000);
+  expect(result.status).toBe(200);
+  expect(result.body).toEqual({ requestedContextWindow: 1000000 });
+  expect(saveSplashContextWindow).toHaveBeenCalledWith(1000000);
 });

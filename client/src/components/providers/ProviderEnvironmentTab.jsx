@@ -1,10 +1,16 @@
 // The new-variable row's state is owned by ProviderForm: the drawer remounts
 // this panel on every tab switch, so state held here would be lost.
 export default function ProviderEnvironmentTab({
-  formData, setFormData, newEnvKey, setNewEnvKey, newEnvValue, setNewEnvValue, newEnvSecret, setNewEnvSecret,
+  formData, setFormData, onEditHarnessContext, newEnvKey, setNewEnvKey, newEnvValue, setNewEnvValue, newEnvSecret, setNewEnvSecret,
 }) {
   return (
     <div className="space-y-4">
+      {onEditHarnessContext && (
+        <button type="button" onClick={onEditHarnessContext}
+          className="min-h-[36px] rounded border border-port-border px-3 text-sm text-port-accent hover:bg-port-border">
+          Edit context in Generation
+        </button>
+      )}
       {/* Consumed only when spawning CLI/TUI child processes; API runs
           never read them (auth is the API Key field on the Connection
           tab). For API type the add-row is hidden so a key can't be

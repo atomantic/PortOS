@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { posixPath } from './testHelper.js';
 
-import { buildCliChildEnv, buildPublicReviewCliEnv, composeProviderEnv } from './cliChildEnv.js';
+import { buildCliChildEnv, buildPublicReviewActionsCliEnv, buildPublicReviewCliEnv, composeProviderEnv } from './cliChildEnv.js';
 import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE, PUBLIC_REVIEW_EXECUTION_PROFILE } from './agent/agentExecutionProfiles.js';
 import { cliProviderAuthDescriptor } from './processEnv.js';
 import { supportsPublicReviewProvider } from './provider/providerVendors.js';
@@ -538,6 +538,38 @@ describe('composeProviderEnv — delta for sites that do not spawn directly', ()
     // The marker alone isn't enough: an OpenCode wrapper is not a Claude harness.
     expect(composeProviderEnv({ provider: { command: 'opencode', sglangBacked: true, envVars: {} } })
       .CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBeUndefined();
+  });
+
+  it('reserves room for Splash prompts and preserves explicit harness budgets through review filtering', () => {
+    const provider = { command: 'claude', splashBacked: true };
+    const defaults = composeProviderEnv({ provider });
+    expect(defaults).toMatchObject({
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '65536', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8192',
+    });
+    const settings = { CLAUDE_CODE_MAX_CONTEXT_TOKENS: '262144', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '16000' };
+    expect(composeProviderEnv({ provider: { ...provider, envVars: settings } })).toMatchObject(settings);
+    const userPreset = { ...provider, presetKind: 'derived', envVars: {
+      ANTHROPIC_BASE_URL: 'http://127.0.0.1:8001', CLAUDE_CODE_MAX_CONTEXT_TOKENS: '65536',
+    }, harnessContext: { tokens: 1000000 } };
+    expect(composeProviderEnv({ provider: userPreset }).CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('1000000');
+    expect(composeProviderEnv({ provider: { ...userPreset, harnessContext: null } }).CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('65536');
+    expect(buildPublicReviewCliEnv(settings)).toMatchObject(settings);
+    expect(buildPublicReviewActionsCliEnv(settings)).toMatchObject(settings);
+  });
+
+  it.each([
+    [32768, '8192'],
+    [73728, '18432'],
+    [131072, '32768'],
+    [262144, '65536'],
+  ])('leaves input room in a chosen local Claude window of %i tokens', (tokens, output) => {
+    const provider = { command: 'claude', ollamaBacked: true, harnessContext: { tokens },
+      envVars: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:11434' } };
+    expect(composeProviderEnv({ provider })).toMatchObject({
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(tokens), CLAUDE_CODE_MAX_OUTPUT_TOKENS: output,
+    });
+    provider.envVars.CLAUDE_CODE_MAX_OUTPUT_TOKENS = '48000';
+    expect(composeProviderEnv({ provider }).CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('48000');
   });
 
   it('emits MAX_THINKING_TOKENS only where an omitted thinking field means OFF', () => {

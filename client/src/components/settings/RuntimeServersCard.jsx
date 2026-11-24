@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { Cpu, Box, Zap, Gauge, HardDrive, Play, Square, Download, ArrowUpCircle, Power, PowerOff, RefreshCw, Save, Settings2, ExternalLink, Server } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
-import { formatCount } from '../../utils/formatters';
+import { formatContextTokens, formatCount } from '../../utils/formatters';
+import { SPLASH_CONTEXT, SPLASH_CONTEXT_WINDOWS } from '../../../../server/lib/splashRuntime.js';
 import { MANAGED_INKLING_RUNTIMES, managedInklingRow } from './managedInklingRuntimes.js';
 
 /**
@@ -600,7 +601,39 @@ export default function RuntimeServersCard({
   );
 }
 
-export function ManagedInklingRuntimeCard({ id, status, busy, actionInProgress, onAction, onRefresh }) {
+function SplashContextPicker({ status, busy, onSave }) {
+  const contextWindow = status.requestedContextWindow;
+  const editable = ['stopped', 'missing'].includes(status.state) && !status.operation;
+  return (
+    <div className="space-y-1.5">
+      <label htmlFor="splash-context" className="block text-sm font-medium text-gray-300">Splash context window</label>
+      <select
+        id="splash-context"
+        className="rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white disabled:opacity-60"
+        value={contextWindow}
+        disabled={busy || !editable}
+        onChange={(event) => onSave(Number(event.target.value))}
+        aria-describedby="splash-context-help"
+      >
+        {SPLASH_CONTEXT_WINDOWS.map((window) => (
+          <option key={window} value={window}>
+            {formatContextTokens(window)}{window === SPLASH_CONTEXT ? ' (default)' : ''}
+          </option>
+        ))}
+      </select>
+      <p id="splash-context-help" className="text-xs text-gray-400">
+        {editable
+          ? 'Applies the next time you start Splash. Larger windows need more free memory or SSD space and can slow down long prompts.'
+          : 'Stop Splash before changing its next-start context window.'}
+      </p>
+      {status.servedContextWindow != null && (
+        <p className="text-xs text-gray-300">Currently serving: {formatContextTokens(status.servedContextWindow)} tokens</p>
+      )}
+    </div>
+  );
+}
+
+export function ManagedInklingRuntimeCard({ id, status, busy, actionInProgress, onAction, onRefresh, onSaveContext }) {
   const { label, requirement, download, provider } = MANAGED_INKLING_RUNTIMES[id];
   return (
     <section className="@container bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-3">
@@ -610,6 +643,9 @@ export function ManagedInklingRuntimeCard({ id, status, busy, actionInProgress, 
         PortOS manages its own copy on this machine, binds it to loopback, and leaves the default backend unchanged.
         {' '}{provider} <Link className="text-port-accent hover:underline" to="/ai">Open AI Providers</Link>.
       </p>
+      {id === 'splash' && status?.supported && status.requestedContextWindow != null && (
+        <SplashContextPicker status={status} busy={busy} onSave={onSaveContext} />
+      )}
       <ServerRow row={{ ...managedInklingRow(id, status, onAction), icon: Zap }} busy={busy} actionInProgress={actionInProgress}>
         <button type="button" onClick={onRefresh} className={neutralBtn}><RefreshCw size={12} />Check {label} status</button>
       </ServerRow>
