@@ -28,6 +28,8 @@ describe('restoreSnapshot manifest verification', () => {
     ['creative-director', 'creative-director-projects.json', [{ id: 'project-example' }]],
     ['cos-tasks', 'TASKS.md', '# User Tasks'],
     ['cos-tasks', 'COS-TASKS.md', '# Internal Tasks'],
+    ['cos-agents', 'cos/state.json', { agents: {} }],
+    ['cos-agents', 'cos/state.json', '{invalid-json'],
   ])('refuses %s legacy metadata at %s before preview or execution (#12397)', async (domain, path, record) => {
     getBackendName.mockReturnValue('postgres');
     const savedBackend = process.env.MEMORY_BACKEND;
@@ -76,7 +78,7 @@ describe('restoreSnapshot manifest verification', () => {
         'story-builder.imported/stb-example/index.json', 'writers-room/folders.imported.json',
         'writers-room/exercises.imported.json', 'writers-room/works/wr-work-aabb/manifest.imported.json',
         'writers-room/works/wr-work-aabb/drafts/draft-example.md', 'creative-director-projects.imported.json',
-        'TASKS.md.imported', 'COS-TASKS.md.imported-123',
+        'TASKS.md.imported', 'COS-TASKS.md.imported-123', 'cos/state.json',
       ];
       const files = {};
       for (const path of paths) files[path] = await writeSnapshotFile(path, '{}');
@@ -224,19 +226,27 @@ describe('restoreSnapshot manifest verification', () => {
   });
 
   // A pre-#6182 snapshot keeps the CoS config in state.json's `config` slice.
+  // Pre-021 snapshots carry `agents`, so PostgreSQL mode refuses them; exercise under the file escape hatch.
   it.each([
     { name: 'pre-split snapshot, full restore', files: ['cos/state.json'], subdirFilter: undefined, expected: { maxConcurrentAgents: 7 } },
     { name: 'pre-split snapshot, state.json scope', files: ['cos/state.json'], subdirFilter: 'cos/state.json', expected: { maxConcurrentAgents: 7 } },
     { name: 'pre-split snapshot, agents scope', files: ['cos/state.json'], subdirFilter: 'cos/agents', expected: null },
     { name: 'snapshot with config.json', files: ['cos/state.json', 'cos/config.json'], subdirFilter: undefined, expected: null },
   ])('hands CoS restore the legacy config slice the snapshot installs: $name', async ({ files, subdirFilter, expected }) => {
-    const bodies = { 'cos/state.json': '{"agents":{},"config":{"maxConcurrentAgents":7}}', 'cos/config.json': '{"maxConcurrentAgents":5}' };
-    const manifest = {};
-    for (const file of files) manifest[file] = await writeSnapshotFile(file, bodies[file]);
-    await writeManifest(manifest);
-    withLiveCosRestore.mockClear();
-    await finishRestore({ dryRun: false, subdirFilter });
-    expect(withLiveCosRestore).toHaveBeenCalledWith(expect.any(Function), { snapshotLegacyConfig: expected });
+    const savedBackend = process.env.MEMORY_BACKEND;
+    process.env.MEMORY_BACKEND = 'file';
+    try {
+      const bodies = { 'cos/state.json': '{"agents":{},"config":{"maxConcurrentAgents":7}}', 'cos/config.json': '{"maxConcurrentAgents":5}' };
+      const manifest = {};
+      for (const file of files) manifest[file] = await writeSnapshotFile(file, bodies[file]);
+      await writeManifest(manifest);
+      withLiveCosRestore.mockClear();
+      await finishRestore({ dryRun: false, subdirFilter });
+      expect(withLiveCosRestore).toHaveBeenCalledWith(expect.any(Function), { snapshotLegacyConfig: expected });
+    } finally {
+      if (savedBackend === undefined) delete process.env.MEMORY_BACKEND;
+      else process.env.MEMORY_BACKEND = savedBackend;
+    }
   });
 
 });
