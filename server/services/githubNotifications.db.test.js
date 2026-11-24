@@ -293,12 +293,17 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(runUntrustedContentAnalysis).not.toHaveBeenCalled();
     // A pre-existing informational verdict cannot discard a PR the merge rule is waiting on.
     await query("UPDATE github_notifications SET decision = 'suggest-done' WHERE account_id = $1 AND thread_id = '2011'", [account.id]);
+    // The PR retry cooldown holds the next attempt back; lapse it as if the schedule had waited.
+    const lapseCooldown = () => query(`UPDATE github_notifications SET evidence = jsonb_set(evidence, '{pullRequestAttempt,at}', to_jsonb($2::text))
+      WHERE account_id = $1 AND thread_id = '2011' AND evidence ? 'pullRequestAttempt'`, [account.id, new Date(Date.now() - 6 * 60 * 1000).toISOString()]);
+    await lapseCooldown();
     passing = true;
     verifiedBot = false;
     await syncAccountNotifications(account.id);
     expect(merges).toEqual([]);
     expect(await getNotification(account.id, '2011')).toMatchObject({ state: 'open' });
     verifiedBot = true;
+    await lapseCooldown();
     await syncAccountNotifications(account.id);
     expect(merges).toEqual([['pr', 'merge', '2011', '--repo', `github.com/${repo}`, '--squash', '--match-head-commit', head]]);
     const result = await getNotification(account.id, '2011');
@@ -380,6 +385,13 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(await automateNotificationPullRequests(account, env)).toMatchObject({ merged: 0 });
     expect(await automateNotificationPullRequests(account, env)).toMatchObject({ merged: 1 });
     expect([...merged]).toEqual([2200]);
+
+    // Refused PRs stay quiet inside the cooldown and are retried once it lapses.
+    vi.mocked(execGh).mockClear();
+    await automateNotificationPullRequests(account, env);
+    expect(vi.mocked(execGh)).not.toHaveBeenCalled();
+    await automateNotificationPullRequests(account, env, { now: Date.now() + 6 * 60 * 1000 });
+    expect(vi.mocked(execGh)).toHaveBeenCalled();
   });
 
   it('keeps normal Assist sorting when a saved PR merge rule only runs in Autopilot', async () => {
