@@ -1,3 +1,4 @@
+import { once } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 
 const calls = vi.hoisted(() => ({
@@ -9,6 +10,16 @@ const calls = vi.hoisted(() => ({
   importTopaz: vi.fn(),
   importBlenderHook: vi.fn(),
   initBlenderHook: vi.fn(),
+  initCharacterSheetHook: vi.fn(),
+  readJSONFile: vi.fn(),
+  atomicWrite: vi.fn(),
+}));
+vi.mock('./apps.js', () => ({ getAppById: vi.fn() }));
+vi.mock('../lib/fileUtils.js', async importOriginal => ({
+  ...(await importOriginal()),
+  ensureDir: vi.fn(),
+  readJSONFile: calls.readJSONFile,
+  atomicWrite: calls.atomicWrite,
 }));
 vi.mock('./agent/agentManagement.js', () => ({
   cleanupOrphanedAgents: (...args) => calls.cleanupOrphanedAgents(...args),
@@ -23,6 +34,7 @@ vi.mock('./blenderModels/referenceImageHook.js', () => {
   calls.importBlenderHook();
   return { initBlenderModelReferenceHook: calls.initBlenderHook };
 });
+vi.mock('./universeCharacterSheet.js', () => ({ initCharacterSheetCompletionHook: calls.initCharacterSheetHook }));
 vi.mock('./videoGen/upscaleJob.js', () => ({ runVideoUpscale: () => 'ltx' }));
 vi.mock('./videoGen/stitchJob.js', () => ({ runVideoStitch: () => 'stitch' }));
 vi.mock('./videoGen/verticalJob.js', () => ({ runVideoVertical: () => 'vertical' }));
@@ -43,6 +55,7 @@ const ENTRY = {
 };
 
 import { registerBootHooks, warmMediaBootHooks } from './bootHooks.js';
+import { cosEvents } from './cos/cosEvents.js';
 import { createMediaJobHookLoader } from './mediaJobQueue/hookRegistry.js';
 import {
   MEDIA_RUNTIME_MODULES, QUEUE_IMPORTING_RUNTIMES, loadMediaRuntimeModule,
@@ -69,6 +82,7 @@ describe('boot hook registration (#17499, #18217)', () => {
     expect(calls.importTopaz).toHaveBeenCalledOnce();
     expect(calls.importBlenderHook).toHaveBeenCalledOnce();
     expect(calls.initBlenderHook).not.toHaveBeenCalled();
+    expect(calls.initCharacterSheetHook).not.toHaveBeenCalled();
 
     const recovery = requireCosOrphanRecoveryHandlers();
     await expect(recovery.cleanupOrphanedAgents()).resolves.toBe(2);
@@ -93,7 +107,7 @@ describe('boot hook registration (#17499, #18217)', () => {
     });
 
     const hooks = requireMediaJobTerminalHooks();
-    expect(hooks).toHaveLength(27);
+    expect(hooks).toHaveLength(28);
     expect(hooks.filter(([matches]) => matches({ params: { blenderModelReference: { modelId: 'm1' } } }))).toHaveLength(1);
     expect(hooks.filter(([matches]) => matches({ params: { deckCard: { deckId: 'd1' } } }))).toHaveLength(2);
     expect(hooks.filter(([matches]) => matches({ owner: 'pipeline:issue-1:comicPages:page1:proof', params: {} }))).toHaveLength(1);
@@ -104,6 +118,24 @@ describe('boot hook registration (#17499, #18217)', () => {
     await Promise.all([ensureHooks(job), ensureHooks(job)]);
     expect(calls.importBlenderHook).toHaveBeenCalledOnce();
     expect(calls.initBlenderHook).toHaveBeenCalledOnce();
+  });
+
+  it('clears a restored feature-agent run without a route import or scheduled dequeue', async () => {
+    const agent = { id: 'fa-example', name: 'Example feature', currentAgentId: 'restored-agent', runCount: 1 };
+    calls.readJSONFile.mockResolvedValue({ version: 1, agents: [agent] });
+    registerBootHooks();
+
+    const recorded = once(cosEvents, 'feature-agent:run-complete');
+    expect(cosEvents.emit('agent:completed', {
+      id: agent.currentAgentId,
+      metadata: { featureAgentId: agent.id, featureAgentRun: true },
+      result: { success: true },
+    })).toBe(true);
+
+    expect(await recorded).toEqual([expect.objectContaining({ id: agent.id })]);
+    expect(calls.atomicWrite).toHaveBeenCalledWith(expect.stringMatching(/feature-agents\.json$/), expect.objectContaining({
+      agents: [expect.objectContaining({ currentAgentId: null, runCount: 2 })],
+    }));
   });
 
   it('refuses a runtime loader set that omits a kind the queue dispatches and rejects malformed terminal hooks', () => {

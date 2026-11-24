@@ -17,6 +17,7 @@ import { promisify } from 'util';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
+import { registerAutoReviewCompletionListeners } from '../services/musicVideo/autoReviewCompletionListeners.js';
 
 const ROOT = () => lazyTempDataRoot('mv-auto-review-route-test-');
 vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot: ROOT }));
@@ -133,6 +134,7 @@ const { runPromptThroughProvider } = await import('../services/promptRunner.js')
 const { mediaJobEvents } = await import('../services/mediaJobQueue/index.js');
 const { __testing: autoReviewBackground } = await import('../services/musicVideo/autoReviewService.js');
 
+registerAutoReviewCompletionListeners();
 const app = express();
 app.use(express.json());
 app.use('/api/music-video', musicVideoRoutes);
@@ -222,10 +224,16 @@ beforeEach(() => {
   h.temporalCalls.length = 0;
   vi.clearAllMocks();
 });
-// A run advances in the background; let it go quiet before the next test
+async function settleAutoReviewBackground() {
+  await vi.dynamicImportSettled();
+  await autoReviewBackground.settleBackground();
+}
+
+// The boot listener imports the review service before advancing in the background.
+// Let both settle before the next test
 // resets the shared doubles, so one test's late step can never land in the
 // next test's queue (#10467).
-afterEach(() => autoReviewBackground.settleBackground());
+afterEach(settleAutoReviewBackground);
 afterAll(cleanupTempDataRoots);
 
 describe('opt-in automatic review/retries (#8988)', () => {
@@ -310,7 +318,7 @@ describe('opt-in automatic review/retries (#8988)', () => {
     // The take the board already paid for still lands — but a stopped run
     // does not advance on it: no re-render, no review.
     await landTake(p.id, 's2', 'clip-2b');
-    await autoReviewBackground.settleBackground();
+    await settleAutoReviewBackground();
     expect(h.procs).toHaveLength(1);
 
     // Resume: the revision renders (its section already holds a take — no

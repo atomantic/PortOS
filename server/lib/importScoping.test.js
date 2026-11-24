@@ -323,6 +323,11 @@ describe('CI-selection cuts stay cut (#12285)', () => {
     expect(importTargets('services/musicVideo/processPins.js')).toContain('services/musicVideo/castAndSets.js');
   });
 
+  it('keeps the auto-review orchestrator out of boot hook registration', () => {
+    expect(reaches('services/bootHooks.js', 'services/musicVideo/autoReviewCompletionListeners.js')).toBe(true);
+    expect(reaches('services/bootHooks.js', 'services/musicVideo/autoReviewService.js')).toBe(false);
+  });
+
   // Positive control for the media scan: the boot owner still names every runtime and helper.
   it('still sees the runtime loaders bootHooks.js registers', () => {
     const bootTargets = importTargets('services/bootHooks.js');

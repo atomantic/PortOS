@@ -10,7 +10,8 @@
  * `bootstrapServices()` calls `registerBootHooks()` before it initializes any
  * consumer (the CoS daemon, the media queue, or the routes that serve git
  * cleanup). A suite that runs one of those consumers calls it too, or registers
- * doubles in the leaf directly. Loaders stay lazy so their targets stay off the static boot closure.
+ * doubles in the leaf directly. Feature-agent lifecycle listeners must already
+ * be present when CoS reattaches agents. Media loaders stay lazy.
  */
 import { warmModuleLoads } from '../lib/moduleWarmup.js';
 import {
@@ -18,6 +19,8 @@ import {
   registerMergedBranchCleanup, registerMusicVideoRecovery,
 } from './bootHookRegistry.js';
 import { parseComicPagesOwner, parseSeasonCoverOwner, parseStoryboardsShotOwner } from './pipeline/owners.js';
+import './featureAgents.js';
+import { registerAutoReviewCompletionListeners } from './musicVideo/autoReviewCompletionListeners.js';
 
 const agentManagement = () => import('./agent/agentManagement.js');
 const tag = key => job => job.params?.[key];
@@ -72,6 +75,7 @@ const mediaRuntimeLoaders = {
 const mediaTerminalHooks = [
   [collectionOwned, () => import('./mediaCollectionCompletionHook.js'), m => m.initMediaCollectionCompletionHook()],
   [tag('universeRun'), () => import('./universeBuilderCollectionHook.js'), m => m.initUniverseBuilderCollectionHook()],
+  [tag('characterSheet'), () => import('./universeCharacterSheet.js'), m => m.initCharacterSheetCompletionHook()],
   [tag('catalogAttach'), () => import('./catalog/catalogImageAttachHook.js'), m => m.initCatalogImageAttachHook()],
   [tag('blenderModelReference'), () => import('./blenderModels/referenceImageHook.js'), m => m.initBlenderModelReferenceHook()],
   [tag('writersRoom'), () => import('./writersRoomSceneImageHook.js'), m => m.initWritersRoomSceneImageHook()],
@@ -105,6 +109,7 @@ export const warmMediaBootHooks = () => warmModuleLoads([
 ]);
 
 export function registerBootHooks() {
+  registerAutoReviewCompletionListeners();
   registerCosOrphanRecoveryHandlers({
     cleanupOrphanedAgents: async (...args) => (await agentManagement()).cleanupOrphanedAgents(...args),
     handleOrphanedTask: async (...args) => (await agentManagement()).handleOrphanedTask(...args),
