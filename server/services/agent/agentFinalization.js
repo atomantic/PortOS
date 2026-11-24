@@ -9,6 +9,7 @@ import { prClaimWasVerified } from '../../lib/prDisposition.js';
 import { isAuditTaskType } from '../../lib/auditCatalog.js';
 import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
 import { isTruthyMeta } from '../../lib/metadataFlags.js';
+import { PREREQUISITE_BLOCKED_CATEGORIES, DELIVERY_RECOVERY_BLOCKED_CATEGORIES } from '../../lib/taskBlockCategories.js';
 import { getAppDataForTask } from './agentAppWorkspace.js';
 /**
  * Agent Finalization
@@ -306,12 +307,6 @@ async function persistRecoveredTaskUpdate({ task, agent, recoveryUpdate }) {
   return { recoveryUpdate, recoveryOwnershipLost: false };
 }
 
-// Shared with finalizeAgent. Hoisted above retirement so a recovered
-// dependency wait uses the same retry-hold categories as a live completion
-// (internal-dependency and internal-dependency-unverified included).
-const PREREQUISITE_BLOCKED_CATEGORIES = ['runtime-verification', 'internal-dependency', 'internal-dependency-unverified'];
-const DELIVERY_RECOVERY_BLOCKED_CATEGORIES = ['task-approval', 'task-recovery-exhausted', ...PREREQUISITE_BLOCKED_CATEGORIES];
-
 /**
  * The six-step forge completion pipeline shared by live finalization and
  * dead-agent recovery: persist the summary, then review follow-up, claim
@@ -504,16 +499,22 @@ async function recordRetiredAgent(state, { exitCode, duration, errorMessage, age
   return { ...state, recoveryUpdate, taskOutcome, effectiveSuccess };
 }
 
-async function releaseRetiredAgent({ agent, task, recoveryUpdate }) {
+async function releaseRetiredAgent({ agent, task, recoveryUpdate, recoveredHook }) {
   // Recovery retires the run without reaching finalizeAgent's completion
   // cleanup, so the sentinel has no other owner. Persist the outcome before
   // removing evidence. Lazy: completion cleanup imports worktree/PR orchestration,
   // while agentFinalization is on the static path of nearly every agent service.
   const { removeCompletionSentinel } = await import('./agentCompletionCleanup.js');
-  await removeCompletionSentinel({ agentId: agent.id, agentState: agent })
+  const needsAuditRefresh = Number(task?.metadata?.auditDispositionVersion ?? agent.metadata?.auditDispositionVersion) === 1;
+  const freshAgent = needsAuditRefresh ? await getAgentRecord(agent.id).catch(() => null) : null;
+  const baseAgent = freshAgent || agent;
+  const agentState = recoveredHook?.auditDisposition?.status === 'complete'
+    ? { ...baseAgent, metadata: { ...baseAgent.metadata, auditFindings: { ...baseAgent.metadata?.auditFindings, status: 'complete' } } }
+    : baseAgent;
+  await removeCompletionSentinel({ agentId: agent.id, agentState, task })
     .catch(err => emitLog('warn', `Completion sentinel removal failed for ${agent.id}: ${err.message}`, { agentId: agent.id }));
   if (recoveryUpdate?.metadata?.retryPendingCleanup
-    || DELIVERY_RECOVERY_BLOCKED_CATEGORIES.includes(recoveryUpdate?.metadata?.blockedCategory)) {
+    || DELIVERY_RECOVERY_BLOCKED_CATEGORIES.has(recoveryUpdate?.metadata?.blockedCategory)) {
     const { releaseRetryHold } = await import('./agentWorktreeCleanup.js');
     await releaseRetryHold({ agentId: agent.id, task, success: false, agentMetadata: agent.metadata })
       .catch(err => emitLog('warn', `Recovered delivery retry deferred for ${agent.id}: ${err.message}`, { agentId: agent.id }));
@@ -904,7 +905,7 @@ async function recordCompletionCleanupIntent({ agentId, cleanupOwner, task, deli
 function completionRecoveryOwnership(metadata, agentId) {
   const recoveryAgent = metadata?.deliveryRecoveryAgentId === agentId;
   return {
-    ...(DELIVERY_RECOVERY_BLOCKED_CATEGORIES.includes(metadata?.blockedCategory)
+    ...(DELIVERY_RECOVERY_BLOCKED_CATEGORIES.has(metadata?.blockedCategory)
       || metadata?.retryPendingCleanup === agentId || recoveryAgent ? { deliveryRecoveryOwned: true } : {}),
     ...(recoveryAgent ? { cleanupPending: true } : {}),
   };
@@ -1405,7 +1406,7 @@ export async function recordCompletionArtifacts(ctx, forgeOutcome, settlement) {
   }
   // Persist the prerequisite BEFORE retiring execution. A crash between the
   // agent and task writes must never expose this dispatch to generic retry.
-  const prerequisiteTaskResult = PREREQUISITE_BLOCKED_CATEGORIES.includes(taskUpdate.metadata?.blockedCategory)
+  const prerequisiteTaskResult = PREREQUISITE_BLOCKED_CATEGORIES.has(taskUpdate.metadata?.blockedCategory)
     ? await updateTask(task.id, taskUpdate, taskType, ...completionTaskFence(taskUpdate, cleanupOwner)) : null;
   if (prerequisiteTaskResult?.error || prerequisiteTaskResult?.statusChanged) {
     throw new Error('Delivery prerequisite task ownership changed before completion');

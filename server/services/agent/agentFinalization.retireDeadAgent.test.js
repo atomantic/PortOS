@@ -22,12 +22,16 @@ afterAll(cleanupTempDataRoots);
 
 vi.mock('../cos/cosAgentLifecycle.js', () => ({
   getAgent: vi.fn(async () => null),
+  getAgentRecord: vi.fn(async () => null),
   updateAgent: vi.fn(async () => null),
   completeAgent: vi.fn(async () => null),
 }));
-vi.mock('./agentCompletionCleanup.js', () => ({
-  removeCompletionSentinel: vi.fn(async () => undefined),
-}));
+const actualRemoveSentinel = vi.hoisted(() => ({ fn: null }));
+vi.mock('./agentCompletionCleanup.js', async importOriginal => {
+  const actual = await importOriginal();
+  actualRemoveSentinel.fn = actual.removeCompletionSentinel;
+  return { removeCompletionSentinel: vi.fn(async () => undefined) };
+});
 vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn(async () => null) }));
 vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})), addTask: vi.fn(async () => ({ id: 'investigation-test' })) }));
 vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(), on: vi.fn() } }));
@@ -65,8 +69,9 @@ vi.mock('../codeReview.js', async (importOriginal) => ({
 
 import { verifyMergedReviewFollowUp } from '../reviewFollowUpCompletion.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
-import { completeAgent } from '../cos/cosAgentLifecycle.js';
+import { completeAgent, getAgentRecord, updateAgent } from '../cos/cosAgentLifecycle.js';
 import { updateTask } from '../cos/cosTaskStore.js';
+import { existsSync } from 'node:fs';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -82,6 +87,8 @@ const TASK = { id: 'task-1', taskType: 'user', metadata: {} };
 describe('retireDeadAgent (#8440)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getAgentRecord.mockResolvedValue(null);
+    updateAgent.mockResolvedValue(null);
     removeCompletionSentinel.mockResolvedValue(undefined);
     completeAgentRun.mockResolvedValue(undefined);
     completeAgent.mockResolvedValue(undefined);
@@ -247,8 +254,53 @@ describe('retireDeadAgent (#8440)', () => {
       duration: 0,
     });
 
-    expect(removeCompletionSentinel).toHaveBeenCalledWith({ agentId: 'agent-dead', agentState: expect.objectContaining({ id: 'agent-dead' }) });
+    expect(removeCompletionSentinel).toHaveBeenCalledWith({ agentId: 'agent-dead', agentState: expect.objectContaining({ id: 'agent-dead' }), task: TASK });
     expect(order).toEqual(['hook', 'run', 'agent', 'sentinel-removed']);
+  });
+
+  it.each(['persisted', 'fallback'])('removes .agent-done-<agentId> when auditDispositionVersion is 1 and recoveredHook reports complete (%s)', async mode => {
+    const workspacePath = await mkdtemp(join(tmpdir(), 'retire-audit-complete-'));
+    const sentinelPath = join(workspacePath, '.agent-done-agent-dead');
+    const auditTask = { ...TASK, metadata: { analysisType: 'observability', auditDispositionVersion: 1 } };
+    const agent = { ...AGENT, metadata: { workspacePath, auditDispositionVersion: 1, auditFindings: { status: 'incomplete' } } };
+    updateAgent.mockResolvedValue({});
+    getAgentRecord.mockResolvedValueOnce(null).mockResolvedValueOnce(
+      mode === 'persisted' ? { ...agent, metadata: { ...agent.metadata, auditFindings: { status: 'complete' } } } : null
+    );
+    removeCompletionSentinel.mockImplementationOnce(actualRemoveSentinel.fn);
+    try {
+      await writeFile(sentinelPath, JSON.stringify({ summary: 'Reviewed.\nAUDIT_FINDINGS_JSON: {"version":1,"findings":[]}' }));
+      const result = await retireDeadAgent({ agent, task: auditTask, success: true, exitCode: 0, duration: 100 });
+      expect(result.success).toBe(true);
+      expect(removeCompletionSentinel).toHaveBeenCalledWith({
+        agentId: AGENT.id,
+        agentState: expect.objectContaining({
+          metadata: expect.objectContaining({ auditFindings: expect.objectContaining({ status: 'complete' }) }),
+        }),
+        task: auditTask,
+      });
+      expect(existsSync(sentinelPath)).toBe(false);
+    } finally { await rm(workspacePath, { recursive: true, force: true }); }
+  });
+
+  it('preserves .agent-done-<agentId> when task auditDispositionVersion is 1 (absent from agent) and recoveredHook is incomplete', async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), 'retire-audit-incomplete-'));
+    const sentinelPath = join(workspacePath, '.agent-done-agent-dead');
+    const auditTask = { ...TASK, metadata: { analysisType: 'observability', auditDispositionVersion: 1 } };
+    const agent = { ...AGENT, metadata: { workspacePath } };
+    updateAgent.mockResolvedValue({});
+    removeCompletionSentinel.mockImplementationOnce(actualRemoveSentinel.fn);
+    try {
+      await writeFile(sentinelPath, JSON.stringify({ summary: 'Partial run without findings JSON.' }));
+      const result = await retireDeadAgent({ agent, task: auditTask, success: true, exitCode: 0, duration: 100 });
+      expect(result.success).toBe(false);
+      expect(removeCompletionSentinel).toHaveBeenCalledWith({
+        agentId: AGENT.id,
+        agentState: expect.objectContaining({ id: AGENT.id }),
+        task: auditTask,
+      });
+      expect(existsSync(sentinelPath)).toBe(true);
+    } finally { await rm(workspacePath, { recursive: true, force: true }); }
   });
 
   // No immutable source inventory survives to validate a recovered private-security

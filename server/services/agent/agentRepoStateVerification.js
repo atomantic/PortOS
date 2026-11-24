@@ -55,7 +55,7 @@ import { isMergeHandoffEnabled } from '../../lib/mergeGateContract.js';
 import { readAllTasksFlat } from '../investigationTaskProducer.js';
 import { execGit } from '../../lib/execGit.js';
 import { PATHS } from '../../lib/fileUtils.js';
-import { isTruthyMeta, getActiveAgentIds } from './agentState.js';
+import { isTruthyMeta } from './agentState.js';
 import { RECOVERY_TASK_PREFIX } from '../recoveryTasks.js';
 import { resolveTaskTargetBranch } from '../../lib/taskTargetBranch.js';
 import { leavesPrForHuman, prStaysOpen, resolvePrCompletion, PR_COMPLETIONS } from '../../lib/prDisposition.js';
@@ -1554,7 +1554,7 @@ async function settleUndeliveredBranch({ agentId, app, sourceWorkspace, branchNa
   return blockWith(review?.reason || delivery.reason || 'completed-review-target-unverified', { issues, observed });
 }
 
-async function fileDivergenceRecovery({ agentId, task, appId, metadata, sourceWorkspace, branchName, worktreePath, observed, issues, record, blockWith, agentState }, retirement) {
+async function fileDivergenceRecovery({ agentId, task, appId, sourceWorkspace, branchName, worktreePath, observed, issues, record, blockWith, agentState }, retirement) {
   const stateConfig = (await loadState().catch(() => null))?.config;
   if (stateConfig && stateConfig.autoApproveInvestigations !== true) {
     emitLog('info', `🔎 Diverged branch ${branchName} after ${agentId} deferred to scheduled branch-reconcile`, { agentId, branchName, taskId: task?.id });
@@ -1567,7 +1567,7 @@ async function fileDivergenceRecovery({ agentId, task, appId, metadata, sourceWo
   emitLog('info', `🔎 Repo state diverged after ${agentId}: ${issues.map(i => i.code).join(', ')}`, { agentId, branchName, taskId: task?.id });
 
   const recoveryTaskId = await fileRepoStateRecoveryTask({
-    agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, retirement, claimRun: isTruthyMeta(metadata.claimPicksOwnBranch),
+    agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, retirement,
   }).catch(err => {
     emitLog('warn', `Failed to file repo-state recovery task for ${agentId}: ${err.message}`, { agentId, branchName });
     return null;
@@ -1603,10 +1603,6 @@ async function prepareRecoveryRetirement({ agentId, appId, app: taskApp, sourceW
   const { recordBranchReconcileOutcome, recordBranchReconcileCheckout } = await import('../branchReconcileOutcome.js');
   const outcome = await recordBranchReconcileCheckout(app.id, release);
   if (!outcome?.remaining?.some(row => row.path === release.path && row.head === release.head)) return { reason: 'retirement-inventory-unavailable' };
-  // Terminal ingestion releases the registry verdict before every spawn path
-  // has finished teardown. Preserve the durable obligation until its exact
-  // execution owner has actually left the local active maps.
-  if (getActiveAgentIds().filter(id => id !== agentId).includes(agentId)) return { reason: 'completion-execution-active' };
   if (release.locked) {
     await recordBranchReconcileOutcome(app.id, { status: 'incomplete', reason: 'retirement-worktree-locked',
       nextAction: 'Keep the checkout locked; its owner must explicitly release it before another retirement attempt.' });
@@ -1655,7 +1651,7 @@ export const REPO_STATE_REMEDIATIONS = Object.freeze({
  *
  * @returns {Promise<string|null>} the task id, or null when it was a duplicate
  */
-async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, retirement = null, claimRun = false }) {
+async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWorkspace, worktreePath, issues, observed, appId, retirement = null }) {
   const appName = task?.metadata?.appName || appId || 'PortOS';
   const base = observed.defaultBranch || 'the default branch';
   // The handoff is opt-in per app; a lookup failure keeps it off (the safe default).
@@ -1700,7 +1696,7 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
     || (retirement && retirement.release.head !== head)) return null;
   const observation = processAuditFingerprint({ branchName, worktreePath, head, prUrl: observed.prUrl,
     codes: issues.map(issue => issue.code).sort(), merged: observed.branchMerged,
-    remotePresent: observed.remoteBranchPresent, prState: observed.prState, deliveryRepair: observed.deliveryRepair,
+    remotePresent: observed.remoteBranchPresent, prState: observed.prState,
     // Stable observation: periodic checks alone do not create new work.
     work: 'delivery-repair' });
   const { reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome } = await import('../cos/cosAgentLifecycle.js');
@@ -1710,22 +1706,16 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
     return null;
   }
 
-  // The PR this recovery may land through the forge: its
-  // own answer for this branch, never the agent's report or the task prose.
-  const mergeTarget = issues.some(issue => issue.code === REPO_STATE_ISSUES.PR_UNMERGED) && parsePullRequestUrl(observed.prUrl)
-    ? { url: observed.prUrl, branch: branchName } : null;
   // Completion observes this exact inventoried target; without it a
   // retirement-only recovery has no deterministic criterion (#16059).
-  // An unmerged PR stays on delivery gates even when its URL is unparseable.
-  const cleanupTarget = retirement && appId && !issues.some(issue => issue.code === REPO_STATE_ISSUES.PR_UNMERGED)
-    ? { appId, release: retirement.release } : null;
+  const cleanupTarget = retirement && appId ? { appId, release: retirement.release } : null;
   const created = await addTask({
     description: `${RECOVERY_TASK_PREFIX} Finish incomplete cleanup for branch ${branchName} in ${appName}`,
     priority: 'HIGH',
     app: appId || undefined,
     isRecovery: true,
     metadata: repositoryCleanupRecoveryMetadata({ parentAgentId: agentId, parentTaskId: task?.id || null,
-      attempt: reservation.attempt, observation, mergeTarget, target: cleanupTarget }),
+      attempt: reservation.attempt, observation, target: cleanupTarget }),
     context,
     useWorktree: false,
   }, 'internal');
@@ -1734,23 +1724,12 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
   await recordCleanupOutcome(agentId, { status: 'pending', reason: 'cognitive-review-pending', branch: branchName, path: worktreePath, taskId: created?.id || null });
   if (created?.duplicate) {
     emitLog('info', `🔎 Repo-state recovery for ${branchName} already queued as ${created.id}`, { agentId, branchName });
-    // Repair an interruption between task creation and backlink persistence,
-    // but never bind an unrelated task returned by description deduplication.
+    // Never bind an unrelated task matched only by description deduplication.
     const duplicate = await getTaskById(created.id).catch(() => null);
     const origin = duplicate?.metadata?.recoveryOrigin;
-    const target = duplicate?.metadata?.recoveryMergeTarget;
-    const sameScope = mergeTarget ? target?.url === mergeTarget.url && target?.branch === branchName
-      : !!cleanupTarget && isDeepStrictEqual(duplicate?.metadata?.retirementReview, cleanupTarget);
+    const sameScope = !!cleanupTarget && isDeepStrictEqual(duplicate?.metadata?.retirementReview, cleanupTarget);
     if (origin?.parentAgentId !== agentId || origin?.parentTaskId !== task?.id
       || origin?.subsystem !== 'repository-cleanup' || !sameScope) return null;
-  }
-  if (mergeTarget && created?.id) {
-    // Admission's trust anchor: task metadata is API-writable, so only this
-    // server-written backlink on the parent names which task may land its PR.
-    const { recordRepoStateRecovery } = await import('../cos/cosAgentLifecycle.js');
-    const bound = await recordRepoStateRecovery(agentId, { taskId: created.id, ...mergeTarget }, { claimRun })
-      .catch(error => { emitLog('warn', `Could not bind repo-state recovery to ${agentId}: ${error.message}`, { agentId, branchName }); return null; });
-    if (!bound) emitLog('warn', `Repo-state recovery ${created.id} cannot merge ${branchName}: parent ${agentId} was not bound`, { agentId, branchName });
   }
   emitLog('info', `🔧 Filed repo-state recovery task for ${branchName} (${issues.length} issue(s))`, { agentId, branchName, appName });
   return created?.id || null;
