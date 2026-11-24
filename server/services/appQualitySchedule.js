@@ -343,9 +343,11 @@ const CLAIM_OFFSET_CHOICES = [1, 2, 3, 4, 5, 6, 8, 12];
 /**
  * Read the form state back out of the overrides a previous Apply wrote.
  *
- * Pure inverse of `applyQualitySchedulePlan`: any saved audit override means the
- * app has a schedule, so reopening the form must show it instead of the factory
- * layout. Fields the overrides cannot answer fall back to the planner defaults.
+ * Pure inverse of `applyQualitySchedulePlan`: an enabled cron-scheduled audit
+ * override means the app has a schedule, so reopening the form must show it
+ * instead of the factory layout. Non-cron Schedule-page toggles and disabled-only
+ * entries do not count as a saved weekly schedule. Fields the overrides cannot
+ * answer fall back to the planner defaults.
  *
  * @param {object} existingOverrides - `getAppTaskTypeOverrides(app.id)`
  * @param {string[]} [auditTypes] - The audit task types the planner owns
@@ -353,12 +355,14 @@ const CLAIM_OFFSET_CHOICES = [1, 2, 3, 4, 5, 6, 8, 12];
  */
 export function inferSavedQualitySchedule(existingOverrides = {}, auditTypes = AUDIT_TASK_TYPE_LIST) {
   const saved = auditTypes.filter(type => existingOverrides[type]);
-  if (!saved.length) return { hasExistingSchedule: false };
+  const scheduledEnabled = saved.filter(
+    type => existingOverrides[type].enabled === true && isCronExpression(existingOverrides[type].interval)
+  );
+  if (!scheduledEnabled.length) return { hasExistingSchedule: false };
 
-  const enabled = saved.filter(type => existingOverrides[type].enabled === true);
   const fileIssuesByType = {};
   const checkHours = [];
-  for (const type of enabled) {
+  for (const type of scheduledEnabled) {
     const { fileIssues } = existingOverrides[type].taskMetadata || {};
     if (typeof fileIssues === 'boolean') fileIssuesByType[type] = fileIssues;
     checkHours.push(...(cronWeekdayHours(existingOverrides[type].interval)?.hours || []));
@@ -379,7 +383,7 @@ export function inferSavedQualitySchedule(existingOverrides = {}, auditTypes = A
     const gaps = checkHours.map(hour => claimStart - hour).filter(gap => CLAIM_OFFSET_CHOICES.includes(gap));
     if (gaps.length) options.claimOffsetHours = Math.min(...gaps);
   }
-  return { hasExistingSchedule: true, taskTypes: enabled, fileIssuesByType, options };
+  return { hasExistingSchedule: true, taskTypes: scheduledEnabled, fileIssuesByType, options };
 }
 
 /**
