@@ -18,7 +18,8 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
   startMtplxServer: vi.fn(),
   stopMtplxServer: vi.fn(),
   installMtplx: vi.fn(),
-  getSplashRuntimeStatus: vi.fn().mockResolvedValue({ supported: true, state: 'stopped' }),
+  getManagedInklingRuntimeStatus: vi.fn(),
+  controlManagedInklingRuntime: vi.fn(),
   getSlotstreamServerStatus: vi.fn().mockResolvedValue({ installed: false, running: false, supported: true, cachedModels: [], memoryPlan: { targetGb: 22, expectedPeakGb: 22, expectedWarmDecodeToks: 8, auto: true } }),
   startSlotstreamServer: vi.fn(),
   stopSlotstreamServer: vi.fn(),
@@ -70,6 +71,9 @@ import {
   deleteLocalLlmModel,
   getLocalLlmStatus,
   getLocalLlmCatalog,
+  getManagedInklingRuntimeStatus,
+  controlManagedInklingRuntime,
+  switchLocalLlmBackend,
   installLocalLlmBackend,
 } from '../../services/apiLocalLlm.js';
 import { getSystemCapabilities, patchSettingsSlice } from '../../services/apiSystem.js';
@@ -138,6 +142,7 @@ beforeEach(() => {
     lmstudio: { installed: false, available: false, modelCount: 0, models: [] },
   });
   getLocalLlmCatalog.mockResolvedValue({ models: [] });
+  getManagedInklingRuntimeStatus.mockResolvedValue({ supported: true, state: 'missing', installed: false });
   getSystemCapabilities.mockResolvedValue({
     platform: 'darwin',
     appleSilicon: true,
@@ -211,17 +216,84 @@ describe('LocalLlmRuntimesView information architecture', () => {
 });
 
 describe('runtime selection workflow', () => {
-  it('rechecks the externally managed Splash pilot without changing the default or starting anything', async () => {
-    const { getSplashRuntimeStatus, switchLocalLlmBackend } = await import('../../services/apiLocalLlm.js');
-    getSplashRuntimeStatus.mockResolvedValue({ supported: true, state: 'not-ready' });
+  it('detects external Splash without offering to start, stop, or swap it', async () => {
+    getManagedInklingRuntimeStatus.mockImplementation(async (id) => id === 'splash'
+      ? { supported: true, state: 'not-ready' } : { supported: false, state: 'unsupported' });
     await renderRuntimes('splash');
-    expect(await screen.findByText(/Splash is listening but not ready/)).toBeVisible();
-    expect(screen.getByText(/--host 127\.0\.0\.1 --port 8001/)).toBeVisible();
-    getSplashRuntimeStatus.mockResolvedValueOnce({ supported: true, state: 'external', model: 'inkling2-mini' });
-    fireEvent.click(screen.getByRole('button', { name: 'Check Splash status' }));
-    expect(await screen.findByText('Ready: serving inkling2-mini.')).toBeVisible();
-    expect(screen.queryByRole('button', { name: /stop splash|start splash|install splash/i })).not.toBeInTheDocument();
+    const check = screen.getByRole('button', { name: 'Check Splash status' });
+    const detail = within(check.closest('[role="group"]'));
+    expect(detail.getByText('Not ready')).toBeVisible();
+    getManagedInklingRuntimeStatus.mockResolvedValueOnce({ supported: true, state: 'external', model: 'inkling2-mini' });
+    fireEvent.click(check);
+    expect(await detail.findByText('Running (external)')).toBeVisible();
+    for (const name of ['Stop', 'Start', 'Install']) {
+      expect(detail.queryByRole('button', { name })).not.toBeInTheDocument();
+    }
+    expect(controlManagedInklingRuntime).not.toHaveBeenCalled();
     expect(switchLocalLlmBackend).not.toHaveBeenCalled();
+  });
+
+  it.each([['splash', 'Splash'], ['mkserve', 'mkserve']])('installs, updates and controls %s from the Runtimes page', async (id, label) => {
+    const missing = { supported: true, state: 'missing', installed: false };
+    let runtimeStatus = missing;
+    getManagedInklingRuntimeStatus.mockImplementation(async () => runtimeStatus);
+    controlManagedInklingRuntime.mockImplementation(async (_id, action) => {
+      runtimeStatus = { ...runtimeStatus, operation: { action, message: 'Working…' }, lastError: null };
+      return { operation: runtimeStatus.operation };
+    });
+    await renderRuntimes(id);
+    const check = screen.getByRole('button', { name: `Check ${label} status` });
+    const detail = within(check.closest('[role="group"]'));
+    const complete = async (status, event = 'complete') => {
+      runtimeStatus = status;
+      const listener = socket.on.mock.calls.findLast(([name]) => name === 'localLlm:progress')[1];
+      await act(async () => { listener({ event, message: 'Finished', runtime: id }); });
+    };
+
+    fireEvent.click(detail.getByRole('button', { name: 'Install' }));
+    const dialog = screen.getByRole('dialog', { name: `Install ${label}` });
+    expect(within(dialog).getByText(/downloads/i)).toBeInTheDocument();
+    expect(controlManagedInklingRuntime).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Install and download' }));
+    expect(await detail.findByText('Installing')).toBeVisible();
+    expect(detail.queryByRole('button', { name: 'Start' })).not.toBeInTheDocument();
+    expect(controlManagedInklingRuntime).toHaveBeenLastCalledWith(id, 'install');
+
+    const installed = { supported: true, state: 'stopped', installed: true, version: '1', availableVersion: '2', updateAvailable: true };
+    await complete(installed);
+    fireEvent.click(detail.getByRole('button', { name: 'Update to v2' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: `Update ${label}` })).getByRole('button', { name: 'Update' }));
+    expect(await detail.findByText('Updating')).toBeVisible();
+    expect(controlManagedInklingRuntime).toHaveBeenLastCalledWith(id, 'upgrade');
+
+    const updated = { ...installed, version: '2', updateAvailable: false };
+    await complete(updated);
+    fireEvent.click(detail.getByRole('button', { name: 'Start' }));
+    expect(await detail.findByText('Starting')).toBeVisible();
+    expect(controlManagedInklingRuntime).toHaveBeenLastCalledWith(id, 'start');
+
+    await complete({ ...updated, lastError: 'Port is occupied' }, 'error');
+    expect(detail.getByText('Port is occupied')).toBeVisible();
+    expect(detail.getByRole('button', { name: 'Start' })).toBeEnabled();
+    await complete({ ...updated, state: 'running', managed: true });
+    fireEvent.click(detail.getByRole('button', { name: 'Stop' }));
+    expect(await detail.findByText('Stopping')).toBeVisible();
+    expect(controlManagedInklingRuntime).toHaveBeenLastCalledWith(id, 'stop');
+    expect(switchLocalLlmBackend).not.toHaveBeenCalled();
+  });
+
+  it('offers to repair a stopped Splash cache after startup fails', async () => {
+    getManagedInklingRuntimeStatus.mockResolvedValue({
+      supported: true, state: 'stopped', installed: true, repairRecommended: true,
+    });
+    controlManagedInklingRuntime.mockResolvedValue({ operation: { action: 'install', message: 'Checking cache…' } });
+    await renderRuntimes('splash');
+    const check = screen.getByRole('button', { name: 'Check Splash status' });
+    const detail = within(check.closest('[role="group"]'));
+    fireEvent.click(detail.getByRole('button', { name: 'Repair' }));
+    const dialog = screen.getByRole('dialog', { name: 'Repair Splash' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Repair' }));
+    await waitFor(() => expect(controlManagedInklingRuntime).toHaveBeenCalledWith('splash', 'install'));
   });
 
   it('opens configuration from the roster and recovers an invalid deep link', async () => {

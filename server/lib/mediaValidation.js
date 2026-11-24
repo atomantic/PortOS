@@ -202,6 +202,10 @@ export const localLlmLmStudioServiceSchema = z.object({ action: z.enum(['start',
 // MTPLX launch. Every field is optional: with none of them PortOS serves the
 // checkpoint already in MTPLX's cache on the port the shipped provider presets
 // point at. `model` is a Hugging Face repo id, which lands in the launch argv.
+// These curated runtimes never accept a host, port, executable, or artifact
+// override from an HTTP request.
+export const managedInklingActionSchema = z.strictObject({});
+
 export const localLlmMtplxStartSchema = z.object({
   port: z.coerce.number().int().min(1).max(65535).optional(),
   // No `host`: MTPLX is a loopback daemon and the manager never puts one on the

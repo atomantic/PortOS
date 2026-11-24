@@ -29,6 +29,14 @@ export function safeChildProcessEnv(extra = {}) {
   return withTorchCompilerCacheEnv(stripDebugMallocEnv({ ...process.env, ...extra }));
 }
 
+// For a fixed artifact-fetch subprocess, keep configured proxy and trust-store
+// knobs without inheriting provider tokens, package hooks or Python overrides.
+export function artifactDownloadEnv(env = process.env) {
+  const keys = ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy',
+    'all_proxy', 'no_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE'];
+  return Object.fromEntries(keys.filter((key) => env[key]).map((key) => [key, env[key]]));
+}
+
 // PyTorch's Windows default cache asks getpass for an account name, which a
 // projected agent environment need not contain. Keep compiled artifacts local
 // without inventing an identity or expanding credential inheritance.

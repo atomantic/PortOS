@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { Cpu, Box, Zap, Gauge, HardDrive, Play, Square, Download, ArrowUpCircle, Power, PowerOff, RefreshCw, Save, Settings2, ExternalLink, Server } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatCount } from '../../utils/formatters';
+import { MANAGED_INKLING_RUNTIMES, managedInklingRow } from './managedInklingRuntimes.js';
 
 /**
  * One control surface for every local LLM server PortOS can run.
@@ -21,6 +22,11 @@ import { formatCount } from '../../utils/formatters';
 
 /** Uniform lifecycle state for a row, from each runtime's own status shape. */
 const STATE_META = {
+  installing: { label: 'Installing', cls: 'bg-port-accent/20 text-port-accent', dot: 'bg-port-accent animate-pulse' },
+  updating: { label: 'Updating', cls: 'bg-port-accent/20 text-port-accent', dot: 'bg-port-accent animate-pulse' },
+  starting: { label: 'Starting', cls: 'bg-port-accent/20 text-port-accent', dot: 'bg-port-accent animate-pulse' },
+  stopping: { label: 'Stopping', cls: 'bg-port-accent/20 text-port-accent', dot: 'bg-port-accent animate-pulse' },
+  error: { label: 'Needs attention', cls: 'bg-port-error/20 text-port-error', dot: 'bg-port-error' },
   unknown: { label: 'Status unavailable', cls: 'bg-gray-500/20 text-gray-400', dot: 'bg-gray-500' },
   running: { label: 'Running', cls: 'bg-port-success/20 text-port-success', dot: 'bg-port-success animate-pulse' },
   external: { label: 'Running (external)', cls: 'bg-blue-500/20 text-blue-300', dot: 'bg-blue-400' },
@@ -212,7 +218,7 @@ function IdleWindowField({ id, value, onSave, busy, note }) {
  * handler that takes a launch config (MTPLX's start) would serialize the event
  * into the request body instead of the config.
  */
-function ServerRow({ row, busy, actionInProgress, selected, children }) {
+function ServerRow({ row, busy, actionInProgress, selected, hideActions, children }) {
   const Icon = row.icon;
   const meta = STATE_META[row.state] || STATE_META.missing;
   return (
@@ -250,9 +256,11 @@ function ServerRow({ row, busy, actionInProgress, selected, children }) {
           </span>
         )}
         {row.detail && <span className="text-xs text-gray-500">{row.detail}</span>}
+        {!hideActions && row.progress && <span role="status" className="text-xs text-port-accent">{row.progress}</span>}
+        {!hideActions && row.error && <span role="alert" className="text-xs text-port-error break-words">{row.error}</span>}
       </div>
       <div className="flex items-center gap-2 flex-wrap shrink-0">
-        {row.onInstall && (
+        {!hideActions && row.onInstall && (
           <button
             onClick={() => row.onInstall()}
             disabled={busy}
@@ -261,6 +269,12 @@ function ServerRow({ row, busy, actionInProgress, selected, children }) {
           >
             {actionInProgress === `runtime-install-${row.id}` ? <BrailleSpinner /> : <Download size={12} />}
             Install
+          </button>
+        )}
+        {!hideActions && row.onRepair && (
+          <button type="button" onClick={row.onRepair} disabled={busy} className={accentBtn}
+            title={`Repair ${row.label} and its model cache`}>
+            <Download size={12} />Repair
           </button>
         )}
         {row.downloadUrl && (
@@ -275,7 +289,7 @@ function ServerRow({ row, busy, actionInProgress, selected, children }) {
             Download
           </a>
         )}
-        {row.onStart && (
+        {!hideActions && row.onStart && (
           <button
             onClick={() => row.onStart()}
             disabled={busy}
@@ -289,7 +303,7 @@ function ServerRow({ row, busy, actionInProgress, selected, children }) {
         {row.startBlockedReason && (
           <span className="text-xs text-gray-500 max-w-xs">{row.startBlockedReason}</span>
         )}
-        {row.onStop && (
+        {!hideActions && row.onStop && (
           <button
             onClick={() => row.onStop()}
             disabled={busy}
@@ -300,7 +314,7 @@ function ServerRow({ row, busy, actionInProgress, selected, children }) {
             Stop
           </button>
         )}
-        {row.onUpgrade && (
+        {!hideActions && row.onUpgrade && (
           <button
             onClick={() => row.onUpgrade()}
             disabled={busy}
@@ -334,7 +348,8 @@ export default function RuntimeServersCard({
   llamaStatus,
   mtplxStatus,
   slotstreamStatus,
-  splashStatus,
+  inklingStatuses,
+  onInklingAction,
   loading,
   busy,
   actionInProgress,
@@ -459,15 +474,10 @@ export default function RuntimeServersCard({
           && `${formatCount(slotstreamStatus.cachedModels.length)} checkpoint${slotstreamStatus.cachedModels.length === 1 ? '' : 's'} cached`,
       ].filter(Boolean).join(' · ') || null,
     }),
-    {
-      id: 'splash',
-      label: 'Splash',
+    ...Object.keys(MANAGED_INKLING_RUNTIMES).map((id) => ({
+      ...managedInklingRow(id, inklingStatuses?.[id], onInklingAction),
       icon: Zap,
-      state: splashStatus?.state ?? 'unknown',
-      endpoint: splashStatus?.endpoint,
-      model: splashStatus?.model,
-      detail: splashStatus?.supported === false ? 'Requires macOS 26.4+ on Apple M3 or later' : 'Started in a terminal',
-    },
+    })),
     // Last, and only once its status has landed: an absent payload would
     // otherwise render a "Not installed" row for a host that is serving.
     ...(fleetHostStatus ? [fleetHostRow({ status: fleetHostStatus, onStop: onStopFleetHost })] : []),
@@ -493,8 +503,9 @@ export default function RuntimeServersCard({
 
       <div className="space-y-2">
         {rows.map((row) => (
-          <ServerRow key={row.id} row={row} busy={busy} actionInProgress={actionInProgress} selected={selectedRuntime === row.id}>
-            {onSelectRuntime && (row.id === 'ollama' || row.id === 'lmstudio' || row.id === 'fleet-host' || row.id === 'splash') && (
+          <ServerRow key={row.id} row={row} busy={busy} actionInProgress={actionInProgress} selected={selectedRuntime === row.id}
+            hideActions={selectedRuntime === row.id && Object.hasOwn(MANAGED_INKLING_RUNTIMES, row.id)}>
+            {onSelectRuntime && (row.id === 'ollama' || row.id === 'lmstudio' || row.id === 'fleet-host' || Object.hasOwn(MANAGED_INKLING_RUNTIMES, row.id)) && (
               <button onClick={() => onSelectRuntime(row.id)} className={neutralBtn} aria-pressed={selectedRuntime === row.id}><Settings2 size={12} />Configure</button>
             )}
             {row.id === 'fleet-host' && (
@@ -582,9 +593,26 @@ export default function RuntimeServersCard({
         </button>
         <details className="text-xs text-gray-500">
           <summary className="min-h-[44px] content-center cursor-pointer">What is saved for reboot?</summary>
-          <p>llama.cpp, MTPLX and Slotstream run as PM2 processes (<code className="text-gray-400">portos-llama-server</code>, <code className="text-gray-400">portos-mtplx</code>, <code className="text-gray-400">portos-slotstream</code>). Saving snapshots what is running now so it comes back after a reboot — this needs <code className="text-gray-400">pm2 startup</code> to have been run once in a terminal, which is a privileged one-time step PortOS deliberately leaves to you. <span className="text-gray-400">MTPLX and Slotstream are deliberately left out of that snapshot</span>: they start on demand when a request needs them, so resurrecting them at boot would only pin a checkpoint on an idle machine. Ollama and LM Studio manage their own launch-at-login.</p>
+          <p>llama.cpp, MTPLX and Slotstream run as PM2 processes (<code className="text-gray-400">portos-llama-server</code>, <code className="text-gray-400">portos-mtplx</code>, <code className="text-gray-400">portos-slotstream</code>). Saving snapshots what is running now so it comes back after a reboot — this needs <code className="text-gray-400">pm2 startup</code> to have been run once in a terminal, which is a privileged one-time step PortOS deliberately leaves to you. <span className="text-gray-400">MTPLX, Slotstream, Splash and mkserve are deliberately left out of that snapshot</span>: MTPLX and Slotstream can start on demand; Splash and mkserve are started here. This button does not change those running servers. Ollama and LM Studio manage their own launch-at-login.</p>
         </details>
       </div>
     </div>
+  );
+}
+
+export function ManagedInklingRuntimeCard({ id, status, busy, actionInProgress, onAction, onRefresh }) {
+  const { label, requirement, download, provider } = MANAGED_INKLING_RUNTIMES[id];
+  return (
+    <section className="@container bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-3">
+      <h3 className="text-sm font-medium text-white">{label} · Inkling 2 Mini</h3>
+      <p className="text-xs text-gray-400">{requirement} {download}</p>
+      <p className="text-xs text-gray-400">
+        PortOS manages its own copy on this machine, binds it to loopback, and leaves the default backend unchanged.
+        {' '}{provider} <Link className="text-port-accent hover:underline" to="/ai">Open AI Providers</Link>.
+      </p>
+      <ServerRow row={{ ...managedInklingRow(id, status, onAction), icon: Zap }} busy={busy} actionInProgress={actionInProgress}>
+        <button type="button" onClick={onRefresh} className={neutralBtn}><RefreshCw size={12} />Check {label} status</button>
+      </ServerRow>
+    </section>
   );
 }

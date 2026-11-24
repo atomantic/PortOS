@@ -39,6 +39,7 @@ import {
   localLlmLlamaServerStartSchema,
   localLlmLmStudioServiceSchema,
   localLlmMtplxStartSchema,
+  managedInklingActionSchema,
   localLlmSlotstreamStartSchema,
   localLlmSlotstreamDownloadSchema,
   localLlmMtplxSearchSchema,
@@ -58,6 +59,8 @@ import {
 } from '../services/llamaServerManager.js'
 import { MTPLX_APP, getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx } from '../services/mtplxServerManager.js'
 import { getSplashRuntimeStatus } from '../services/splashRuntimeStatus.js'
+import { SPLASH_APP, installSplashRuntime, startSplashServer, stopSplashServer } from '../services/splashServerManager.js'
+import { MKSERVE_APP, getMkserveRuntimeStatus, installMkserve, startMkserveServer, stopMkserveServer } from '../services/mkserveRuntimeManager.js'
 import { SLOTSTREAM_APP, getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream } from '../services/slotstreamServerManager.js'
 import { cancelSlotstreamModelDownload, downloadSlotstreamModel, previewSlotstreamDownload } from '../services/slotstreamModelManager.js'
 import { searchMtplxCatalog, pullMtplxModel, previewMtplxPull, removeMtplxModel } from '../services/mtplxModelManager.js'
@@ -1141,9 +1144,62 @@ router.post('/mtplx/models/remove', asyncHandler(async (req, res) => {
   res.json(result)
 }))
 
-router.get('/splash/status', asyncHandler(async (_req, res) => {
-  res.json(await getSplashRuntimeStatus())
-}))
+// Downloads outlive a browser request. Keep progress and the last failure
+// available from Status as well as the socket, so reopening the tab is safe.
+const inklingOperations = new Map()
+const inklingErrors = new Map()
+const runtimeStatusRoute = (runtime, readStatus) => asyncHandler(async (_req, res) => {
+  const status = await readStatus()
+  res.json({ ...status, operation: inklingOperations.get(runtime) ?? null, lastError: inklingErrors.get(runtime) ?? null })
+})
+
+const runtimeActionRoute = (runtime, label, action, run) => asyncHandler(async (req, res) => {
+  validateRequest(managedInklingActionSchema, req.body ?? {})
+  if (inklingOperations.has(runtime)) {
+    throw new ServerError(`${label} already has an operation in progress.`, { status: 409 })
+  }
+  const emit = emitter(req)
+  const scope = { runtime }
+  const operation = { action, message: '' }
+  inklingErrors.delete(runtime)
+  inklingOperations.set(runtime, operation)
+  const report = (progress) => {
+    const message = typeof progress === 'string' ? progress : progress?.message
+    if (!message || inklingOperations.get(runtime) !== operation) return
+    operation.message = `${label}: ${message}`
+    emit('progress', operation.message, scope)
+  }
+  report({ install: 'Preparing installation', upgrade: 'Preparing update', start: 'Starting', stop: 'Stopping' }[action])
+  res.status(202).json({ operation })
+  void Promise.resolve().then(() => run({ onProgress: report })).then(
+    () => {
+      inklingOperations.delete(runtime)
+      resetProviderReadinessCache()
+      const done = { install: 'installation complete', upgrade: 'update complete', start: 'start completed', stop: 'stopped' }[action]
+      emit('complete', `${label}: ${done}.`, scope)
+    },
+    (err) => {
+      inklingOperations.delete(runtime)
+      resetProviderReadinessCache()
+      const message = err instanceof ServerError ? (err.responseMessage || err.message) : 'Operation failed. See PortOS server logs for details.'
+      if (!(err instanceof ServerError)) console.error(`❌ ${label} ${action} failed: ${err?.message ?? 'Unknown error'}`)
+      inklingErrors.set(runtime, message)
+      emit('error', `${label}: ${message}`, scope)
+    },
+  )
+})
+
+router.get('/splash/status', runtimeStatusRoute('splash', getSplashRuntimeStatus))
+router.post('/splash/install', runtimeActionRoute('splash', 'Splash', 'install', installSplashRuntime))
+router.post('/splash/upgrade', runtimeActionRoute('splash', 'Splash', 'upgrade', installSplashRuntime))
+router.post('/splash/start', runtimeActionRoute('splash', 'Splash', 'start', startSplashServer))
+router.post('/splash/stop', runtimeActionRoute('splash', 'Splash', 'stop', stopSplashServer))
+
+router.get('/mkserve/status', runtimeStatusRoute('mkserve', getMkserveRuntimeStatus))
+router.post('/mkserve/install', runtimeActionRoute('mkserve', 'mkserve', 'install', installMkserve))
+router.post('/mkserve/upgrade', runtimeActionRoute('mkserve', 'mkserve', 'upgrade', installMkserve))
+router.post('/mkserve/start', runtimeActionRoute('mkserve', 'mkserve', 'start', startMkserveServer))
+router.post('/mkserve/stop', runtimeActionRoute('mkserve', 'mkserve', 'stop', stopMkserveServer))
 
 // GET /api/local-llm/slotstream/status — binary, process, memory plan, cache, logs.
 router.get('/slotstream/status', asyncHandler(async (_req, res) => {
@@ -1216,13 +1272,11 @@ router.post('/slotstream/models/download/cancel', asyncHandler(async (req, res) 
 // startup`, which writes the launchd/systemd unit — is deliberately blocked and
 // stays a one-time operator command.
 //
-// MTPLX and Slotstream are deliberately EXCLUDED. Both are started on demand
-// by the first request that needs them and stopped again when idle, so
-// resurrecting them at boot would pin a multi-gigabyte checkpoint on a machine
-// nobody has asked anything of yet — the exact waste the idle stop exists to
-// end. The running process is left alone; only the boot list drops it.
+// Exclude runtimes that need not pin their checkpoints at boot. MTPLX and
+// Slotstream can start on demand; Splash and mkserve start from their controls.
+// The running processes are left alone; only this saved boot list changes.
 router.post('/save-startup', asyncHandler(async (_req, res) => {
-  res.json(await saveProcessList(null, { exclude: [MTPLX_APP, SLOTSTREAM_APP] }))
+  res.json(await saveProcessList(null, { exclude: [MTPLX_APP, SLOTSTREAM_APP, SPLASH_APP, MKSERVE_APP] }))
 }))
 
 export default router

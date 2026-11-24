@@ -40,7 +40,8 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | System design: React client, Express server, PM2 satellites, PostgreSQL + `data/` files |
 | [GREYBOX.md](./GREYBOX.md) | Environment starter layouts, Blender exports, camera shots, reference captures and AI editing |
 | [features/feature-priorities.md](./features/feature-priorities.md) | Feature area priority tiers: the focused-page-visit usage signal, machine-local storage, pins and the API |
-| [features/splash.md](./features/splash.md) | Opt-in Apple Silicon Splash with Inkling 2 Mini, runtime readiness, and local OpenCode and Claude Code presets |
+| [features/splash.md](./features/splash.md) | PortOS-managed Apple Silicon Splash with Inkling 2 Mini and local OpenCode and Claude Code presets |
+| [features/mkserve.md](./features/mkserve.md) | PortOS-managed mkserve with Inkling 2 Mini on Apple M5 Max |
 | [features/mixture-of-agents.md](./features/mixture-of-agents.md) | Mixture of Agents presets: parallel tool-free advisors, the acting aggregator, cache-safe tail injection, privacy filter and run attribution |
 | [features/image-verifier.md](./features/image-verifier.md) | Image Verifier: defect standards, evaluation profiles, model benchmarks, and integration with media jobs and imports |
 | [features/catalog-ingest.md](./features/catalog-ingest.md) | Catalog extraction graph, context budgets, coverage, and review draft contract |

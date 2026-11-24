@@ -1,4 +1,10 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+const getSplashManagedState = vi.hoisted(() => vi.fn());
+vi.mock('./splashServerManager.js', () => ({ getSplashManagedState }));
+
+const host = { platform: 'darwin', arch: 'arm64', macVersion: '27.2.0', cpuModel: 'Apple M5 Max' };
+beforeEach(() => getSplashManagedState.mockReset().mockResolvedValue({ installed: false, managed: false }));
+
 import { getSplashRuntimeStatus } from './splashRuntimeStatus.js';
 
 afterEach(() => {
@@ -7,7 +13,6 @@ afterEach(() => {
 });
 
 it('reports the model only after the external engine is ready, never generates or follows a redirect', async () => {
-  const host = { platform: 'darwin', arch: 'arm64' };
   const fetch = vi.fn()
     .mockResolvedValueOnce(new Response(null, { status: 503 }))
     .mockResolvedValueOnce(Response.json({ status: 'unavailable' }, { status: 503 }))
@@ -30,5 +35,25 @@ it('does not connect from an unsupported host', async () => {
   const fetch = vi.fn();
   vi.stubGlobal('fetch', fetch);
   expect(await getSplashRuntimeStatus({ platform: 'linux' })).toMatchObject({ supported: false, state: 'unsupported' });
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it('distinguishes a managed warmup from a ready managed endpoint', async () => {
+  getSplashManagedState.mockResolvedValue({ installed: true, managed: true });
+  const fetch = vi.fn().mockRejectedValueOnce(new Error('not bound'))
+    .mockResolvedValueOnce(Response.json({ status: 'ready' }))
+    .mockResolvedValueOnce(Response.json({ data: [{ id: 'inkling2-mini', owned_by: 'splash' }] }));
+  vi.stubGlobal('fetch', fetch);
+  expect(await getSplashRuntimeStatus(host)).toMatchObject({ state: 'starting', managed: true });
+  expect(await getSplashRuntimeStatus(host)).toMatchObject({ state: 'running', managed: true, model: 'inkling2-mini' });
+});
+
+it.each([
+  { ...host, cpuModel: 'Apple M2 Ultra' },
+  { ...host, macVersion: '26.3.0' },
+])('explains unsupported Apple Silicon versions without probing them', async (unsupported) => {
+  const fetch = vi.fn();
+  vi.stubGlobal('fetch', fetch);
+  expect(await getSplashRuntimeStatus(unsupported)).toMatchObject({ supported: false, state: 'unsupported' });
   expect(fetch).not.toHaveBeenCalled();
 });

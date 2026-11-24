@@ -1,29 +1,20 @@
-/** Read-only Splash readiness on the default loopback endpoint; PortOS never owns this process. */
+/** Combines Splash readiness on the default loopback endpoint with PortOS process ownership. */
 
 import { findCommandOnPath } from '../lib/processEnv.js';
-import { SPLASH_ORIGIN } from '../lib/splashRuntime.js';
+import { SPLASH_MODEL, SPLASH_ORIGIN } from '../lib/splashRuntime.js';
+import { probeSplashEndpoint, SPLASH_UNSUPPORTED_REASON, supportsManagedSplash } from './splashManagedRuntime.js';
+import { getSplashManagedState } from './splashServerManager.js';
 
-export async function getSplashRuntimeStatus({ platform = process.platform, arch = process.arch } = {}) {
-  const supported = platform === 'darwin' && arch === 'arm64';
+export async function getSplashRuntimeStatus(host) {
+  const supported = await supportsManagedSplash(host);
   const base = { supported, endpoint: `${SPLASH_ORIGIN}/v1` };
-  if (!supported) return { ...base, state: 'unsupported' };
-  const probe = (path) => fetch(`${SPLASH_ORIGIN}${path}`, {
-    redirect: 'error',
-    signal: AbortSignal.timeout(1500),
-  }).catch(() => null);
-
-  // Do not infer readiness from a model listing alone: Splash exposes that
-  // route even when its engine is recovering.
-  const ready = await probe('/ready');
-  const readiness = await ready?.json().catch(() => null);
-  if (ready?.status === 503 && readiness?.status === 'unavailable') return { ...base, state: 'not-ready' };
-  if (ready?.ok && readiness?.status === 'ready') {
-    const listing = await probe('/v1/models');
-    const body = listing?.ok ? await listing.json().catch(() => null) : null;
-    if (listing && !listing.ok) await listing.body?.cancel().catch(() => null);
-    const model = Array.isArray(body?.data) && body.data.find((item) => item?.owned_by === 'splash' && typeof item.id === 'string' && item.id)?.id;
-    if (model) return { ...base, state: 'external', model };
+  if (!supported) return { ...base, state: 'unsupported', reason: SPLASH_UNSUPPORTED_REASON };
+  const [managedState, endpointState] = await Promise.all([getSplashManagedState(), probeSplashEndpoint()]);
+  const status = { ...base, ...managedState, ...endpointState };
+  if (managedState.managed) {
+    if (endpointState.state === 'external' && endpointState.model === SPLASH_MODEL) return { ...status, state: 'running' };
+    return { ...status, state: managedState.startTimedOut ? 'not-ready' : 'starting' };
   }
-  if (ready) return { ...base, state: 'unrecognized' };
-  return { ...base, state: findCommandOnPath('splash') ? 'stopped' : 'missing' };
+  if (endpointState.state === 'missing' && (managedState.installed || findCommandOnPath('splash'))) return { ...status, state: 'stopped' };
+  return status;
 }
