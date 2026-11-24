@@ -271,10 +271,56 @@ describe('Catalog page', () => {
     await waitFor(() => expect(screen.getByText(/Your catalog is empty/i)).toBeTruthy());
   });
 
-  it('surfaces a toast when the list fetch fails', async () => {
-    listCatalogIngredients.mockRejectedValue(new Error('load failed'));
+  it('shows a retryable first-page error and unknown counts until the reads recover', async () => {
+    listCatalogIngredients.mockRejectedValueOnce(new Error('load failed'));
+    getCatalogStats.mockRejectedValueOnce(new Error('stats failed'));
+    getCatalogFacets.mockRejectedValueOnce(new Error('facets failed'));
     renderCatalog();
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('load failed'));
+
+    expect((await screen.findByRole('alert')).textContent).toContain('load failed');
+    expect(screen.queryByText(/Your catalog is empty/i)).toBeNull();
+    expect(screen.getByText('— ingredients')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'All —' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Character.*—$/i })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Echo Saint')).toBeTruthy();
+    expect(screen.getByText('2 ingredients')).toBeTruthy();
+    expect(screen.getByText('Showing 2 of 2')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('removes stale cards and their bulk selection when a filter read fails', async () => {
+    renderCatalog();
+    await screen.findByText('Echo Saint');
+    fireEvent.click(screen.getByLabelText('Select Echo Saint'));
+    expect(screen.getByText('1 selected')).toBeTruthy();
+    listCatalogIngredients.mockRejectedValueOnce(new Error('filter failed'));
+
+    fireEvent.click(screen.getByRole('button', { name: /^Character/i }));
+    expect((await screen.findByRole('alert')).textContent).toContain('filter failed');
+    expect(screen.queryByText('Echo Saint')).toBeNull();
+    expect(screen.queryByLabelText('Select Echo Saint')).toBeNull();
+    expect(screen.queryByText('1 selected')).toBeNull();
+    expect(screen.queryByText('No ingredients match the current filter.')).toBeNull();
+  });
+
+  it('keeps the loaded cards and pagination when Load more fails', async () => {
+    const firstPage = Array.from({ length: 60 }, (_, i) => ({
+      ...sample[0], id: `page-${i}`, name: `Ingredient ${i}`,
+    }));
+    listCatalogIngredients.mockResolvedValueOnce({ items: firstPage })
+      .mockRejectedValueOnce(new Error('page failed'));
+    renderCatalog();
+    await screen.findByText('Ingredient 59');
+
+    const loadMore = screen.getByRole('button', { name: 'Load more' });
+    await act(async () => { fireEvent.click(loadMore); });
+    expect(toast.error).toHaveBeenCalledWith('page failed');
+    expect(screen.getByText('Ingredient 0')).toBeTruthy();
+    expect(screen.getByText('Ingredient 59')).toBeTruthy();
+    expect(loadMore.disabled).toBe(false);
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('syncs from universes and reloads the list when items were promoted', async () => {
