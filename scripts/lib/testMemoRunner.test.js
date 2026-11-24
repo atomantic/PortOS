@@ -16,11 +16,13 @@ import {
   clearVitestDependencies, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, pruneTestMemo, readVitestDependencies,
   SERVER_HEAVY_SHARD_OWNERS, recordTestMemo, seedVitestDependencies, serverShardSlice, vitestDependenciesPath, vitestShardHashInput, vitestShardRange, vitestShardSlice, writeSelectionFile,
 } from './testMemoRunner.js';
-import { vitestCaptureProjects } from '../vitestCiPool.js';
+import { EXCLUSIVE_CAPTURE_TESTS, EXCLUSIVE_TESTS, vitestCaptureProjects } from '../vitestCiPool.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
 import { buildCiTestPlan } from '../ci-test-plan.js';
 import { browserProfileAcceptedVerdicts, browserTestProfileArgs } from './browserTestProfiles.js';
 import { BROWSER_SUITES, browserShardSlice } from './browserSuites.js';
+import { getAlwaysRunTests } from './ciPlanRules.js';
+import { listWorkspaceTests, toRepoPath } from './workspaceTests.js';
 
 const FILES = {
   'server/vitest.config.js': 'export default {};\n',
@@ -761,7 +763,31 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(serverShardSlice(extras, { repoRoot: '/repo', scope: 'server', index: 1, count: 2 })).toEqual(
       vitestShardSlice(extras, { repoRoot: '/repo', scope: 'server', index: 1, count: 2 }),
     );
-    // Measured seconds from #17618 and #17778, plus shard 1's 7s Smoke-boot step outside Vitest.
+  });
+
+  it('balances pinned duration, non-capture serial suites and always-run guards in the server CI inventory', () => {
+    const scope = 'server';
+    const repoRoot = repoRootDir;
+    const files = listWorkspaceTests(scope, { repoRoot, env: { PORTOS_CI_BROWSER_OWNER: 'unit' } })
+      .map((file) => toRepoPath(scope, file));
+    const slices = [1, 2].map((index) => serverShardSlice(files, { repoRoot, scope, index, count: 2 }));
+    expect(slices.flat().sort()).toEqual([...files].sort());
+
+    const heavy = Object.keys(SERVER_HEAVY_SHARD_OWNERS);
+    expect(files).toEqual(expect.arrayContaining(heavy));
+    const serial = EXCLUSIVE_TESTS.filter((file) => !EXCLUSIVE_CAPTURE_TESTS.includes(file))
+      .map((file) => toRepoPath(scope, file));
+    expect(heavy).toEqual(expect.arrayContaining(serial));
+    const [serial1, serial2] = slices.map((slice) => slice.filter((file) => serial.includes(file)).length);
+    expect(serial1 + serial2).toBe(serial.length);
+    expect(Math.abs(serial1 - serial2)).toBeLessThanOrEqual(1);
+
+    const guards = getAlwaysRunTests();
+    const [guards1, guards2] = slices.map((slice) => slice.filter((file) => guards.includes(file)).length);
+    expect(guards1 + guards2).toBe(guards.length);
+    expect(Math.abs(guards1 - guards2)).toBeLessThanOrEqual(1);
+
+    // Hosted seconds from #17618 and #17778, plus local serial suite timings for #18336.
     const seconds = {
       'server/test/guards/repo.guard.test.js': 9.1,
       'server/scripts/run-local-code-review.test.js': 7,
@@ -789,15 +815,20 @@ describe('planTestMemo and recordTestMemo', () => {
       'server/routes/musicVideoDcp.test.js': 10.1,
       'scripts/vitestTempRoot.test.js': 18.7,
       'scripts/generate_ltx2.test.js': 19.4,
+      'server/lib/workTracker.trackerInstructions.test.js': 0.4,
+      'server/services/databaseMaintenanceCutover.test.js': 24.7,
+      'server/services/creativeDirector/videoAssembly.test.js': 6.1,
+      'scripts/workspaceCaches.test.js': 2.2,
+      'server/routes/cosAgentRoutes.ownershipResponse.test.js': 0.2,
+      'server/services/git.sharedRecovery.test.js': 12.7,
+      'server/services/musicVideo/publishKit.test.js': 15.7,
+      'server/services/musicVideo/sharingCopy.test.js': 1.8,
     };
     expect(Object.keys(seconds).sort()).toEqual(heavy.sort());
     const pinned = (owner) => heavy.filter((file) => SERVER_HEAVY_SHARD_OWNERS[file] === owner)
       .reduce((sum, file) => sum + seconds[file], 0);
     const smokeBootSec = 7;
-    // Pins alone no longer balance the cold run (the hashed slice carries the
-    // rest); the #17778 hosted cold-run check lives in CI timing, not here. Shard 1
-    // must stay the lighter pinned shard because it also runs the Smoke-boot step.
-    expect(pinned(1) + smokeBootSec).toBeLessThanOrEqual(pinned(2));
+    expect(Math.abs(pinned(1) + smokeBootSec - pinned(2))).toBeLessThanOrEqual(25);
   });
 
   it('partitions all four Windows slices exactly like Vitest\'s sequencer', () => {
