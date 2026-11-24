@@ -2934,10 +2934,11 @@ describe('completion after its originating task was removed', () => {
     expect(updateTask).not.toHaveBeenCalled();
   });
 
-  it('does not settle ambiguous captures or a corrupt immutable replay', async () => {
-    for (const kind of ['capture', 'replay']) {
+  it('does not settle ambiguous captures, invalid-length SHAs, or a corrupt immutable replay', async () => {
+    for (const kind of ['capture', 'invalid-sha', 'replay']) {
       const { state, captured } = fixture();
       if (kind === 'capture') state.metadata.completedCheckouts.push({ ...captured, head: 'f'.repeat(40) });
+      if (kind === 'invalid-sha') state.metadata.completedCheckouts = [{ ...captured, head: 'a'.repeat(48) }];
       if (kind === 'replay') readCompletionData.mockRejectedValue(new Error('completion-data-changed'));
       expect(await resumeAgentCompletionRetirement('agent-1')).toMatchObject({ verified: false,
         skipReason: 'cleanup-task-unavailable' });

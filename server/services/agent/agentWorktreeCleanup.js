@@ -15,7 +15,7 @@ import { isLegacyDeepAudit } from '../../lib/auditWorkflow.js';
 import { existsSync } from 'fs';
 import { realpath, rm } from 'node:fs/promises';
 import { PORTOS_APP_ID } from '../../lib/appIdentity.js';
-import { join, resolve } from 'path';
+import { join } from 'path';
 import { emitLog } from '../cos/cosEvents.js';
 import { addTask, updateTask, getTaskById, getAllTasks } from '../cos/cosTaskStore.js';
 import { forceSpawnTask } from '../cos/cos.js';
@@ -41,7 +41,7 @@ import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SE
 import { findPullRequestForBranch } from '../github.js';
 import { readClaimOwnershipAgents } from '../cos/cosClaimOwnership.js';
 import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
-import { completedCheckoutReceiptValid, readCompletedCheckoutIdentity } from '../completedCheckoutEvidence.js';
+import { findValidCheckoutCaptures, isGitCommitSha, readCompletedCheckoutIdentity } from '../completedCheckoutEvidence.js';
 import { withClaimOwnershipLock, readClaimOwnershipAgents as readClaimOwnershipStateAgents } from '../cos/cosClaimOwnershipState.js';
 
 // In-flight cleanup per agentId, so two completion paths racing to clean the
@@ -79,7 +79,7 @@ const publicationHolds = new Map();
  * `reviewers` is the ordered reviewer list (e.g. `[codex, antigravity, copilot]`); the native
  * GitHub Copilot review is pre-requested here only when copilot LEADS the list (otherwise
  * the follow-up requests it at its turn so Copilot sees the post-fix diff). `reviewStopMode`
- * (`all`/`on-findings`/`on-clean`) and `reviewerApplies` are threaded into the follow-up's
+ * (`all`/`on-findings`/`on-clean`) is threaded into the follow-up's
  * metadata. CLI reviewers (claude/antigravity/codex/grok) are always driven by the follow-up agent,
  * which works on any forge; copilot is GitHub-only and dropped on non-GitHub remotes.
  * When skipMerge is true (review-loop follow-up agents), the cleanup never auto-merges
@@ -224,6 +224,112 @@ async function worktreeCleanupContext(agentId, options) {
   };
 }
 
+function reconcileClaimRemoteBranch({ sourceWorkspace, branch, head, merged, ownerHold, remoteOpts }) {
+  return merged
+    ? deleteClaimRemoteBranch(sourceWorkspace, branch, head, ownerHold, remoteOpts)
+    : retainedClaimRemoteBranch(sourceWorkspace, branch, remoteOpts);
+}
+
+async function cleanupUncapturedClaimBranch({ sourceWorkspace, branch, remoteOpts, getSnapshot, listWorktrees, readLocalBranchPresence, held }) {
+  // An observed holder or ref is enough to retain work without further
+  // probes. Only a fresh targeted read can establish clean absence, including
+  // malformed loose refs that Git omits from enumeration.
+  const snapshot = await getSnapshot();
+  const couldBeAbsent = snapshot && !snapshot.tips.has(branch)
+    && !snapshot.worktrees.some(tree => tree.branch === `refs/heads/${branch}`);
+  const [trees, refPresent] = couldBeAbsent ? await Promise.all([
+    listWorktrees(sourceWorkspace).catch(() => null), readLocalBranchPresence(sourceWorkspace, branch),
+  ]) : [null, null];
+  if (!trees || refPresent !== false || trees.some(tree => tree.branch === `refs/heads/${branch}`)) {
+    return held(branch, 'checkout identity unavailable');
+  }
+  const remote = await retainedClaimRemoteBranch(sourceWorkspace, branch, remoteOpts);
+  return remote ? held(branch, remote) : null;
+}
+
+async function verifyClaimWorktreeRemoval({ sourceWorkspace, branch, capture, merged, owner, holder, trees }) {
+  const reason = await owner();
+  if (reason) return reason;
+  if (!holder || holder.branch !== `refs/heads/${branch}` || holder.head !== capture.head) return 'checkout-changed';
+  const current = await readCompletedCheckoutIdentity({
+    repoPath: sourceWorkspace, branch, path: capture.path, head: capture.head, worktrees: trees,
+  }).catch(() => null);
+  if (!current) return 'checkout-changed';
+  if (!merged) {
+    const base = await git.getDefaultBranch(sourceWorkspace, { strict: true, allowRemote: false }).catch(() => null);
+    const [status, contained] = await Promise.all([
+      execGit(['status', '--porcelain', '--untracked-files=all'], capture.path, { ignoreExitCode: true }).catch(() => null),
+      base ? execGit(['merge-base', '--is-ancestor', capture.head, `refs/remotes/origin/${base}`], sourceWorkspace, { ignoreExitCode: true }).catch(() => null) : null,
+    ]);
+    if (status?.exitCode !== 0 || status.stdout.trim() || contained?.exitCode !== 0) return 'unmerged work retained';
+  }
+  return null;
+}
+
+async function cleanupCapturedClaimBranch({ agentId, sourceWorkspace, branch, capture, merged, remoteOpts, deps, held }) {
+  const { listWorktrees, readCheckoutPathPresence, readLocalBranchPresence, forceRemoveWorktreeDir, deleteCompletedLocalBranch } = deps;
+  const owner = () => readClaimOwnershipStateAgents().then(agents => claimCheckoutOwnerReason({
+    branchName: branch, holderPath: capture.path, sourceWorkspace, agents, ignoreIds: [agentId],
+  }));
+  const ownerHold = () => withClaimOwnershipLock(owner).catch(() => 'claim-ownership-unreadable');
+  const initialHold = await ownerHold();
+  if (initialHold) return held(branch, initialHold);
+
+  // Each local mutation is one ownership section: a bind lands before its owner
+  // read or after it settles. Remote calls stay outside, behind `ownerHold`.
+  const deleteLocal = async () => {
+    let reason;
+    const deleted = await withClaimOwnershipLock(() => deleteCompletedLocalBranch(sourceWorkspace, branch, capture.head, {
+      beforeMutation: async () => {
+        reason = await owner().catch(() => 'claim-ownership-unreadable');
+        if (reason) throw new Error(reason);
+      },
+    })).catch(() => false);
+    return deleted ? null : reason || 'local branch deletion unverified';
+  };
+
+  try {
+    const [trees, pathPresent, refPresent] = await Promise.all([
+      listWorktrees(sourceWorkspace).catch(() => null), readCheckoutPathPresence(capture.path), readLocalBranchPresence(sourceWorkspace, branch),
+    ]);
+    if (!trees || pathPresent === null || refPresent === null) return held(branch, 'checkout state unavailable');
+    const holder = trees.find(tree => canonicalizePath(tree.path) === canonicalizePath(capture.path));
+    if (!holder) {
+      if (pathPresent || trees.some(tree => tree.branch === `refs/heads/${branch}`)) return held(branch, 'checkout changed');
+      if (refPresent) {
+        const local = merged ? await deleteLocal() : 'unmerged work retained';
+        if (local) return held(branch, local);
+      }
+      const remote = await reconcileClaimRemoteBranch({ sourceWorkspace, branch, head: capture.head, merged, ownerHold, remoteOpts });
+      return remote ? held(branch, remote) : null;
+    }
+
+    const removal = await withClaimOwnershipLock(async () => {
+      const reason = await owner();
+      if (reason) return { removed: false, reason };
+      // A claim that ran inside this checkout (server-provisioned, #15517) left
+      // its consumed completion sentinel here; it is not work, and an untracked
+      // file would make the non-forced removal of a clean stand-down refuse.
+      if (!merged) await Promise.all(doneSentinelCandidateNames(agentId).map(name => rm(join(capture.path, name), { force: true }).catch(() => null)));
+      return forceRemoveWorktreeDir(sourceWorkspace, capture.path, {
+        verifyRemoval: (currentHolder, currentTrees) => verifyClaimWorktreeRemoval({
+          sourceWorkspace, branch, capture, merged, owner, holder: currentHolder, trees: currentTrees,
+        }),
+        force: merged,
+      });
+    }).catch(() => ({ removed: false, reason: 'claim-ownership-unreadable' }));
+    if (!removal.removed) return held(branch, removal.reason || 'worktree removal unverified');
+    const local = await deleteLocal();
+    if (local) return held(branch, local);
+    const remote = await reconcileClaimRemoteBranch({ sourceWorkspace, branch, head: capture.head, merged, ownerHold, remoteOpts });
+    if (remote) return held(branch, remote);
+    emitLog('info', `🌳 Cleaned up claim branch ${branch} for ${agentId} (${merged ? 'PR merged' : 'empty clean branch'})`, { agentId, branchName: branch });
+    return null;
+  } catch {
+    return held(branch, 'cleanup failed or is unverified');
+  }
+}
+
 async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBranches, agentState, remoteTimeoutMs }) {
   if (!sourceWorkspace || !Array.isArray(claimBranches) || !claimBranches.length) return [];
   const remoteOpts = remoteTimeoutMs ? { timeout: remoteTimeoutMs } : {};
@@ -234,35 +340,24 @@ async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBran
   ] = await Promise.all([
     import('../prProbe.js'), import('../repoCleanupObservation.js'), import('../worktreeManager.js'),
   ]);
+  const deps = { listWorktrees, readCheckoutPathPresence, readLocalBranchPresence, forceRemoveWorktreeDir, deleteCompletedLocalBranch };
   const warnings = [];
   const held = (branch, reason) => `Claim cleanup ${branch} incomplete — ${reason}`;
   const repository = await realpath(sourceWorkspace).catch(() => null);
   if (!repository) return claimBranches.map(branch => held(branch, 'repository unavailable'));
   let uncapturedInventory;
+  const getSnapshot = () => {
+    uncapturedInventory ??= import('../repoBranchSnapshot.js')
+      .then(({ readRepoBranchSnapshot }) => readRepoBranchSnapshot(sourceWorkspace))
+      .catch(() => null);
+    return uncapturedInventory;
+  };
   for (const branch of claimBranches) {
-    const captures = (agentState?.metadata?.completedCheckouts || []).filter(row => row.branch === branch
-      && completedCheckoutReceiptValid(agentState, row) && typeof row.repoPath === 'string'
-      && typeof row.path === 'string' && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(row.head || '')
-      && resolve(row.repoPath) === resolve(repository));
+    const captures = findValidCheckoutCaptures(agentState, { branch, repoPath: repository });
     const capture = captures.length === 1 ? captures[0] : null;
     if (!capture) {
-      // An observed holder or ref is enough to retain work without further
-      // probes. Only a fresh targeted read can establish clean absence, including
-      // malformed loose refs that Git omits from enumeration.
-      uncapturedInventory ??= import('../repoBranchSnapshot.js')
-        .then(({ readRepoBranchSnapshot }) => readRepoBranchSnapshot(sourceWorkspace))
-        .catch(() => null);
-      const snapshot = await uncapturedInventory;
-      const couldBeAbsent = snapshot && !snapshot.tips.has(branch)
-        && !snapshot.worktrees.some(tree => tree.branch === `refs/heads/${branch}`);
-      const [trees, refPresent] = couldBeAbsent ? await Promise.all([
-        listWorktrees(sourceWorkspace).catch(() => null), readLocalBranchPresence(sourceWorkspace, branch),
-      ]) : [null, null];
-      if (!trees || refPresent !== false || trees.some(tree => tree.branch === `refs/heads/${branch}`)) warnings.push(held(branch, 'checkout identity unavailable'));
-      else {
-        const remote = await retainedClaimRemoteBranch(sourceWorkspace, branch, remoteOpts);
-        if (remote) warnings.push(held(branch, remote));
-      }
+      const warning = await cleanupUncapturedClaimBranch({ sourceWorkspace, branch, remoteOpts, getSnapshot, listWorktrees, readLocalBranchPresence, held });
+      if (warning) warnings.push(warning);
       continue;
     }
     const probe = await probePrForBranch(sourceWorkspace, branch).catch(() => null);
@@ -275,82 +370,8 @@ async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBran
       warnings.push(held(branch, 'merged head not verified'));
       continue;
     }
-    const owner = () => readClaimOwnershipStateAgents().then(agents => claimCheckoutOwnerReason({
-      branchName: branch, holderPath: capture.path, sourceWorkspace, agents, ignoreIds: [agentId],
-    }));
-    const ownerHold = () => withClaimOwnershipLock(owner).catch(() => 'claim-ownership-unreadable');
-    // Each local mutation is one ownership section: a bind lands before its owner
-    // read or after it settles. Remote calls stay outside, behind `ownerHold`.
-    const deleteLocal = async () => {
-      let reason;
-      const deleted = await withClaimOwnershipLock(() => deleteCompletedLocalBranch(sourceWorkspace, branch, capture.head, { beforeMutation: async () => {
-        reason = await owner().catch(() => 'claim-ownership-unreadable');
-        if (reason) throw new Error(reason);
-      } })).catch(() => false);
-      return deleted ? null : reason || 'local branch deletion unverified';
-    };
-    const performCleanup = async () => {
-      const [trees, pathPresent, refPresent] = await Promise.all([
-        listWorktrees(sourceWorkspace).catch(() => null), readCheckoutPathPresence(capture.path), readLocalBranchPresence(sourceWorkspace, branch),
-      ]);
-      if (!trees || pathPresent === null || refPresent === null) return held(branch, 'checkout state unavailable');
-      const holder = trees.find(tree => canonicalizePath(tree.path) === canonicalizePath(capture.path));
-      if (!holder) {
-        if (pathPresent || trees.some(tree => tree.branch === `refs/heads/${branch}`)) return held(branch, 'checkout changed');
-        if (refPresent) {
-          const local = merged ? await deleteLocal() : 'unmerged work retained';
-          if (local) return held(branch, local);
-        }
-        if (merged) {
-          const remote = await deleteClaimRemoteBranch(sourceWorkspace, branch, capture.head, ownerHold, remoteOpts);
-          if (remote) return held(branch, remote);
-        } else {
-          const remote = await retainedClaimRemoteBranch(sourceWorkspace, branch, remoteOpts);
-          if (remote) return held(branch, remote);
-        }
-        return null;
-      }
-      const verifyRemoval = async (holder, trees) => {
-        const reason = await owner();
-        if (reason) return reason;
-        if (!holder || holder.branch !== `refs/heads/${branch}` || holder.head !== capture.head) return 'checkout-changed';
-        const current = await readCompletedCheckoutIdentity({ repoPath: sourceWorkspace, branch, path: capture.path, head: capture.head, worktrees: trees }).catch(() => null);
-        if (!current) return 'checkout-changed';
-        if (!merged) {
-          const base = await git.getDefaultBranch(sourceWorkspace, { strict: true, allowRemote: false }).catch(() => null);
-          const [status, contained] = await Promise.all([
-            execGit(['status', '--porcelain', '--untracked-files=all'], capture.path, { ignoreExitCode: true }).catch(() => null),
-            base ? execGit(['merge-base', '--is-ancestor', capture.head, `refs/remotes/origin/${base}`], sourceWorkspace, { ignoreExitCode: true }).catch(() => null) : null,
-          ]);
-          if (status?.exitCode !== 0 || status.stdout.trim() || contained?.exitCode !== 0) return 'unmerged work retained';
-        }
-        return null;
-      };
-      const removal = await withClaimOwnershipLock(async () => {
-        const reason = await owner();
-        if (reason) return { removed: false, reason };
-        // A claim that ran inside this checkout (server-provisioned, #15517) left
-        // its consumed completion sentinel here; it is not work, and an untracked
-        // file would make the non-forced removal of a clean stand-down refuse.
-        if (!merged) await Promise.all(doneSentinelCandidateNames(agentId).map(name => rm(join(capture.path, name), { force: true }).catch(() => null)));
-        return forceRemoveWorktreeDir(sourceWorkspace, capture.path, { verifyRemoval, force: merged });
-      }).catch(() => ({ removed: false, reason: 'claim-ownership-unreadable' }));
-      if (!removal.removed) return held(branch, removal.reason || 'worktree removal unverified');
-      const local = await deleteLocal();
-      if (local) return held(branch, local);
-      if (merged) {
-        const remote = await deleteClaimRemoteBranch(sourceWorkspace, branch, capture.head, ownerHold, remoteOpts);
-        if (remote) return held(branch, remote);
-      } else {
-        const remote = await retainedClaimRemoteBranch(sourceWorkspace, branch, remoteOpts);
-        if (remote) return held(branch, remote);
-      }
-      emitLog('info', `🌳 Cleaned up claim branch ${branch} for ${agentId} (${merged ? 'PR merged' : 'empty clean branch'})`, { agentId, branchName: branch });
-      return null;
-    };
-    const reason = await ownerHold();
-    const result = reason ? held(branch, reason) : await performCleanup().catch(() => held(branch, 'cleanup failed or is unverified'));
-    if (result) warnings.push(result);
+    const warning = await cleanupCapturedClaimBranch({ agentId, sourceWorkspace, branch, capture, merged, remoteOpts, deps, held });
+    if (warning) warnings.push(warning);
   }
   return warnings;
 }
@@ -366,7 +387,7 @@ async function retainedClaimRemoteBranch(repo, branch, opts = {}) {
   const lines = remote.stdout.trim().split('\n').filter(Boolean);
   if (!lines.length) return null;
   const [head, actualRef, ...extra] = lines[0].split('\t');
-  if (lines.length !== 1 || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(head) || actualRef !== ref || extra.length) return 'remote branch state unavailable';
+  if (lines.length !== 1 || !isGitCommitSha(head) || actualRef !== ref || extra.length) return 'remote branch state unavailable';
   return 'remote branch retained';
 }
 
@@ -505,9 +526,9 @@ function reportWorktreeDisposition({ agentId, worktreeBranch, prCreation, warnin
   }
 }
 
-function cleanupOptions({ prCreation = PR_CREATION.NEVER, prCompletion = null, requestCopilotReview: legacyRequestCopilotReview = false, reviewers, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, reviewerEfforts = null, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {
+function cleanupOptions({ prCreation = PR_CREATION.NEVER, prCompletion = null, requestCopilotReview: legacyRequestCopilotReview = false, reviewers, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerModels = null, reviewerEfforts = null, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {
   return { prCreation, prCompletion, legacyRequestCopilotReview, reviewers, usernames,
-    optionalReviewers, reviewerMaxRounds, reviewStopMode, reviewerApplies,
+    optionalReviewers, reviewerMaxRounds, reviewStopMode,
     reviewerModels, reviewerEfforts, skipMerge, description, agentOutput, originalTask };
 }
 
@@ -850,11 +871,11 @@ function deferFollowUpWhileBranchHeld({ agentId, worktreeBranch, worktreePath, w
 async function handoffFollowUpAfterRelease(context, prUrl, overrides, failureKind = 'created') {
   const { agentId, worktreeBranch, sourceWorkspace, warnings, originalTask,
     prCompletion, reviewers, usernames, optionalReviewers, reviewerMaxRounds,
-    reviewStopMode, reviewerApplies, reviewerModels, reviewerEfforts } = context;
+    reviewStopMode, reviewerModels, reviewerEfforts } = context;
   await spawnReviewLoopFollowUp({
     originalAgentId: agentId, originalTask, prUrl, prBranch: worktreeBranch,
     sourceWorkspace, prCompletion, reviewers, usernames, optionalReviewers,
-    reviewerMaxRounds, reviewStopMode, reviewerApplies, reviewerModels, reviewerEfforts,
+    reviewerMaxRounds, reviewStopMode, reviewerModels, reviewerEfforts,
     leaveOpen: leavesPrForHuman(originalTask),
     ...overrides,
   }).catch(err => {
@@ -1201,6 +1222,78 @@ export async function recordTaskResumePointer({ task, agentId, agentMetadata }) 
  * @param {{agentId: string, task: object, success: boolean, agentMetadata?: object}} params
  * @returns {Promise<object>} the metadata patch that was written (empty when nothing was)
  */
+async function loadAgentMetadata(agentId, agentMetadata, { tolerateFailure = true } = {}) {
+  if (agentMetadata !== undefined) return agentMetadata;
+  const record = tolerateFailure
+    ? await getAgentRecord(agentId).catch(() => null)
+    : await getAgentRecord(agentId);
+  return record?.metadata;
+}
+
+async function releaseBlockedDeliveryHold({ agentId, task, persisted, agentMetadata, recoveryOwner }) {
+  if (persisted.metadata.deliveryDecisionAgentId !== agentId) return {};
+  const metadata = await loadAgentMetadata(agentId, agentMetadata, { tolerateFailure: false });
+  const isRuntimeVerification = persisted.metadata.blockedCategory === 'runtime-verification';
+  const patch = isRuntimeVerification
+    ? await runtimeResumePatch({ task: persisted, agentId, agentMetadata: metadata })
+    : await resolveTaskResumePatch({ task, agentId, agentMetadata: metadata });
+  const result = await updateTask(task.id, {
+    metadata: { ...patch, ...(isRuntimeVerification ? { runtimeVerificationReadyAgentId: agentId } : {}) },
+  }, task.taskType || persisted.taskType || 'user', {
+    expectedStatus: 'blocked',
+    expectedMetadata: {
+      blockedCategory: persisted.metadata.blockedCategory,
+      blockedAt: persisted.metadata.blockedAt,
+      deliveryDecisionAgentId: agentId,
+    },
+    ...(recoveryOwner ? { recoveryOwner, expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata } } : {}),
+  });
+  return result?.error || result?.statusChanged ? {} : patch;
+}
+
+async function releaseLegacyDeepAuditHold({ agentId, task, persisted, agentMetadata }) {
+  if (persisted.status !== 'in_progress' || !isRetryHoldOwner(persisted.metadata, agentId)) return {};
+  const metadata = await loadAgentMetadata(agentId, agentMetadata);
+  const patch = await resolveTaskResumePatch({ task, agentId, agentMetadata: metadata });
+  const result = await updateTask(task.id, { status: 'blocked', metadata: {
+    ...patch, ...clearedRetryHoldMetadata(), blockedCategory: 'deep-audit-partial',
+    blockedReason: 'Deep audit checkpoint; resume explicitly', blockedAt: new Date().toISOString(),
+  } }, task.taskType || persisted.taskType || 'user', {
+    expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: agentId },
+  });
+  return result?.error || result?.statusChanged ? {} : patch;
+}
+
+// Cleanup may already have handed this exact deliverable to a durable
+// review/merge coordinator. Releasing a second implementation retry races
+// that coordinator for the same branch and spends another task budget.
+async function handoffExistingDeliveryFollowUp({ agentId, task, persisted, metadata }) {
+  const queues = await getAllTasks();
+  const followUps = (queues.cos?.tasks || []).filter(candidate => candidate.id !== persisted.id
+    && isTruthyMeta(candidate.metadata?.reviewLoopFollowUp)
+    && candidate.metadata.sourceTaskId === persisted.id && candidate.metadata.sourceAgentId === agentId
+    && typeof metadata?.worktreeBranch === 'string' && !!git.parsePullRequestUrl(candidate.metadata.reviewLoopPRUrl)
+    && candidate.metadata.reviewLoopPRBranch === metadata.worktreeBranch
+    && candidate.metadata.app === persisted.metadata?.app && !leavesPrForHuman(candidate)
+    && ['pending', 'approved', 'in_progress', 'blocked', 'completed'].includes(candidate.status));
+  if (followUps.length > 1) throw new Error('Multiple delivery follow-up owners require reconciliation');
+  if (followUps.length !== 1) return false;
+  const current = await getAgentRecord(agentId);
+  if (current?.status !== 'completed' || current.taskId !== persisted.id
+    || current.result?.executionSuccess !== true || current.result?.validationPassed === false) return true;
+  const recorded = await recordRepoStateVerification(agentId, { status: 'pending', reason: 'existing-delivery-follow-up',
+    followUpTaskId: followUps[0].id, checkedAt: new Date().toISOString() });
+  if (recorded !== true) throw new Error('Delivery follow-up receipt could not be recorded');
+  await updateAgent(agentId, { result: { ...current.result, cleanupPending: true } });
+  const result = await updateTask(persisted.id, { status: 'in_progress', metadata: {
+    ...clearedRetryHoldMetadata(), deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: agentId,
+    deliveryFollowUpTaskId: followUps[0].id,
+  } }, task.taskType || persisted.taskType || 'user', { expectedStatus: 'in_progress',
+    expectedTask: { description: persisted.description, priority: persisted.priority, metadata: persisted.metadata } });
+  if (result?.error) throw new Error(result.error);
+  return true;
+}
+
 export async function releaseRetryHold({ agentId, task, success, agentMetadata, recoveryOwner }) {
   if (!agentId || !task?.id) return {};
   if (success && !isLegacyDeepAudit(task.metadata)) return {};
@@ -1212,31 +1305,11 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata, 
   if (!persisted) return {};
 
   if (persisted.status === 'blocked' && DELIVERY_RECOVERY_BLOCKED_CATEGORIES.has(persisted.metadata?.blockedCategory)) {
-    if (persisted.metadata.deliveryDecisionAgentId !== agentId) return {};
-    const metadata = agentMetadata === undefined ? (await getAgentRecord(agentId))?.metadata : agentMetadata;
-    const patch = persisted.metadata.blockedCategory === 'runtime-verification'
-      ? await runtimeResumePatch({ task: persisted, agentId, agentMetadata: metadata })
-      : await resolveTaskResumePatch({ task, agentId, agentMetadata: metadata });
-    const result = await updateTask(task.id, { metadata: { ...patch,
-      ...(persisted.metadata.blockedCategory === 'runtime-verification' ? { runtimeVerificationReadyAgentId: agentId } : {}) } }, task.taskType || persisted.taskType || 'user', {
-      expectedStatus: 'blocked', expectedMetadata: { blockedCategory: persisted.metadata.blockedCategory, blockedAt: persisted.metadata.blockedAt, deliveryDecisionAgentId: agentId },
-      ...(recoveryOwner ? { recoveryOwner, expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata } } : {}),
-    });
-    return result?.error || result?.statusChanged ? {} : patch;
+    return releaseBlockedDeliveryHold({ agentId, task, persisted, agentMetadata, recoveryOwner });
   }
 
   if (isLegacyDeepAudit(task.metadata)) {
-    if (persisted.status !== 'in_progress' || !isRetryHoldOwner(persisted.metadata, agentId)) return {};
-    const metadata = agentMetadata === undefined
-      ? (await getAgentRecord(agentId).catch(() => null))?.metadata : agentMetadata;
-    const patch = await resolveTaskResumePatch({ task, agentId, agentMetadata: metadata });
-    const result = await updateTask(task.id, { status: 'blocked', metadata: {
-      ...patch, ...clearedRetryHoldMetadata(), blockedCategory: 'deep-audit-partial',
-      blockedReason: 'Deep audit checkpoint; resume explicitly', blockedAt: new Date().toISOString(),
-    } }, task.taskType || persisted.taskType || 'user', {
-      expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: agentId },
-    });
-    return result?.error || result?.statusChanged ? {} : patch;
+    return releaseLegacyDeepAuditHold({ agentId, task, persisted, agentMetadata });
   }
 
   // Release only OUR hold, and only while the task is still held `in_progress`.
@@ -1250,40 +1323,10 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata, 
   // those are pending.
   if (!held && (persisted.status ?? 'pending') !== 'pending') return {};
 
-  const metadata = agentMetadata === undefined
-    ? (await getAgentRecord(agentId).catch(() => null))?.metadata
-    : agentMetadata;
-
+  const metadata = await loadAgentMetadata(agentId, agentMetadata);
   if (!held) return await recordTaskResumePointer({ task, agentId, agentMetadata: metadata });
 
-  // Cleanup may already have handed this exact deliverable to a durable
-  // review/merge coordinator. Releasing a second implementation retry races
-  // that coordinator for the same branch and spends another task budget.
-  const queues = await getAllTasks();
-  const followUps = (queues.cos?.tasks || []).filter(candidate => candidate.id !== persisted.id
-    && isTruthyMeta(candidate.metadata?.reviewLoopFollowUp)
-    && candidate.metadata.sourceTaskId === persisted.id && candidate.metadata.sourceAgentId === agentId
-    && typeof metadata?.worktreeBranch === 'string' && !!git.parsePullRequestUrl(candidate.metadata.reviewLoopPRUrl)
-    && candidate.metadata.reviewLoopPRBranch === metadata.worktreeBranch
-    && candidate.metadata.app === persisted.metadata?.app && !leavesPrForHuman(candidate)
-    && ['pending', 'approved', 'in_progress', 'blocked', 'completed'].includes(candidate.status));
-  if (followUps.length > 1) throw new Error('Multiple delivery follow-up owners require reconciliation');
-  if (followUps.length === 1) {
-    const current = await getAgentRecord(agentId);
-    if (current?.status !== 'completed' || current.taskId !== persisted.id
-      || current.result?.executionSuccess !== true || current.result?.validationPassed === false) return {};
-    const recorded = await recordRepoStateVerification(agentId, { status: 'pending', reason: 'existing-delivery-follow-up',
-      followUpTaskId: followUps[0].id, checkedAt: new Date().toISOString() });
-    if (recorded !== true) throw new Error('Delivery follow-up receipt could not be recorded');
-    await updateAgent(agentId, { result: { ...current.result, cleanupPending: true } });
-    const result = await updateTask(persisted.id, { status: 'in_progress', metadata: {
-      ...clearedRetryHoldMetadata(), deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: agentId,
-      deliveryFollowUpTaskId: followUps[0].id,
-    } }, task.taskType || persisted.taskType || 'user', { expectedStatus: 'in_progress',
-      expectedTask: { description: persisted.description, priority: persisted.priority, metadata: persisted.metadata } });
-    if (result?.error) throw new Error(result.error);
-    return {};
-  }
+  if (await handoffExistingDeliveryFollowUp({ agentId, task, persisted, metadata })) return {};
 
   // Fails open to "start clean" for the same reason `handleOrphanedTask` does:
   // requeueing the task matters far more than resuming it, and a throw here would
@@ -1427,8 +1470,7 @@ function inheritProviderPins(sourceMeta) {
  *
  * `reviewers` is the ordered list (e.g. `[codex, antigravity, copilot]`); the follow-up
  * runs each in order — invoking the CLI reviewers itself and requesting Copilot at
- * its turn — honoring `reviewStopMode` (`all`/`on-findings`/`on-clean`) and
- * `reviewerApplies`. Copilot is GitHub-only, so it is stripped here on non-GitHub
+ * its turn — honoring `reviewStopMode` (`all`/`on-findings`/`on-clean`). Copilot is GitHub-only, so it is stripped here on non-GitHub
  * forges. `usernames` are arbitrary GitHub reviewer usernames the follow-up
  * requests as PR reviewers to gate the merge — forge-agnostic, so never stripped.
  *
@@ -1474,86 +1516,24 @@ function inheritProviderPins(sourceMeta) {
  * whether an agent actually started or the task is still waiting (no slots,
  * daemon stopped, …) rather than guessing.
  */
-export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, forkHead = null, sourceWorkspace, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, reviewerEfforts = null, leaveOpen = false, selfReview = false, dispatch = 'queue', reviewTarget = null }) {
-  if (!prUrl || !prBranch) return null;
-  if (prCompletion === PR_COMPLETIONS.LEAVE_OPEN) return null;
+function narrowReviewerPins(effectiveReviewers, pins, roster) {
+  const out = Object.fromEntries(effectiveReviewers
+    .filter(r => (roster.includes(r) || isProviderReviewer(r)) && pins?.[r])
+    .map(r => [r, pins[r]]));
+  return Object.keys(out).length ? out : null;
+}
 
-  if (reviewTarget) {
-    const { validateCleanupReviewTarget } = await import('../cos/cosMergeHandoff.js');
-    if (reviewTarget.prUrl !== prUrl || reviewTarget.branch !== prBranch
-      || reviewTarget.ownerTaskId !== originalTask?.id || reviewTarget.ownerId !== originalAgentId) return { blocked: 'Review recovery identity changed' };
-    const refused = await validateCleanupReviewTarget({ target: reviewTarget, workspacePath: sourceWorkspace });
-    if (refused) return { blocked: refused };
-  }
-
-  // Recovery belongs to the same durable task. A fresh sys-rl task resets the
-  // spawn budget on every CI/conflict handoff and recursively nests its title.
-  // The id hint also recovers receipts written before the marker was retained.
-  if (isTruthyMeta(originalTask?.metadata?.reviewLoopFollowUp) || originalTask?.id?.startsWith('sys-rl-')) {
-    return resumeReviewLoopCoordinator(originalTask.id, prUrl, prBranch, reviewTarget);
-  }
-
-  const parsedPr = git.parsePullRequestUrl(prUrl);
-  // Copilot is GitHub-only. Classify with the shared detector rather than
-  // `host !== 'github.com'` — a GitHub Enterprise host still has Copilot, and
-  // misreading it as non-GitHub would strip the only reviewer and silently
-  // downgrade the run to merge-only.
-  const isNonGithubForge = !!parsedPr?.host && detectForgeCli(parsedPr.host) !== 'gh';
-  const roster = resolveReviewRoster({ reviewers, usernames, optionalReviewers, selfReview, isNonGithubForge });
-  const effectiveReviewers = roster.reviewers;
-  const { usernames: effectiveUsernames, optionalReviewers: effectiveOptionalReviewers, faults: reviewerIdentityFaults } = await preflightReviewerRoster({
-    usernames: roster.usernames, optionalReviewers: roster.optionalReviewers, isNonGithubForge, parsedPr,
-  });
-  // Per-reviewer iteration caps (`~max=<n>`) — forge-agnostic, threaded verbatim
-  // so the follow-up's `--review-with` carries the same budgets. Entries for
-  // reviewers that were stripped are inert (the emitter only marks tokens it
-  // actually emits), so no narrowing is needed here.
-  const effectiveReviewerMaxRounds = normalizeReviewerMaxRounds(reviewerMaxRounds) || {};
-  // A review WAS asked for, but nothing is left to perform it — a legacy review
-  // loop whose GitHub-only reviewer vanished on another forge (which retains its
-  // prior merge-only fallback rather than leaving an orphaned PR), or a caller
-  // that deliberately resolved no roster. Named rather than inlined into
-  // `mergeOnly`, because the self-review branch below is exactly this case and
-  // re-deriving it by conjunction reads as a condition that might contradict it.
-  const noRosterMerge = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE
-    && effectiveReviewers.length === 0 && effectiveUsernames.length === 0;
-  // Merge-on-green deliberately skips every reviewer.
-  const mergeOnly = prCompletion === PR_COMPLETIONS.MERGE_ON_GREEN || noRosterMerge;
-  // The follow-up reviews the change ITSELF before the CI gate. Only meaningful
-  // on the no-roster path — with reviewers configured the review loop already
-  // runs — and never on a `merge-on-green` run, where the caller asked for no
-  // review at all rather than for an undelegated one.
-  const selfReviewMerge = selfReview && noRosterMerge;
-  // ...and with nothing to review AND nothing to merge there is no follow-up at
-  // all (a JIRA-tracked task whose reviewers were all stripped). The caller
-  // normally catches this; the guard keeps the invariant local to this function.
-  if (mergeOnly && leaveOpen) return null;
-
-  // Reviewer-keyed model map, narrowed to the model-selectable reviewers actually
-  // in this loop's list (e.g. `{ codex: 'gpt-5.6-sol', ollama: 'qwen2.5:7b' }`).
-  // The prompt threads a CLI reviewer's model as `<reviewer> --model <id>` and a
-  // local-LLM reviewer's as the `model` field of its `/api/code-review/local` body.
-  // `reviewerModels` is already coerced to string values upstream
-  // (resolveReviewLoopOptions).
-  // Empty → null so the prompt builder's "nothing configured" path is unambiguous.
-  const narrowPins = (pins, roster) => {
-    const out = Object.fromEntries(effectiveReviewers
-      .filter(r => (roster.includes(r) || isProviderReviewer(r)) && pins?.[r])
-      .map(r => [r, pins[r]]));
-    return Object.keys(out).length ? out : null;
-  };
-  const narrowedReviewerModels = narrowPins(reviewerModels, MODEL_SELECTABLE_REVIEWERS);
-  // Reviewer-keyed reasoning-effort map, narrowed the same way. The prompt turns a
-  // CLI reviewer's effort into a flag on its command line (`--effort high` /
-  // `-c model_reasoning_effort=high`, or a folded `--model gpt-5[effort=max]` for
-  // cursor, whose CLI has no effort flag) and a local-LLM reviewer's into the
-  // `reasoning_effort` field of its `/api/code-review/local` body.
-  const narrowedReviewerEfforts = narrowPins(reviewerEfforts, EFFORT_SELECTABLE_REVIEWERS);
-
-  // One place that names the mode, so the title, the log line, and the warning
-  // can't drift apart as the two follow-up kinds evolve.
-  const kind = describeFollowUpKind({ mergeOnly, selfReviewMerge, reviewers: effectiveReviewers, usernames: effectiveUsernames });
-
+function buildFollowUpTaskPayload({
+  followUpTaskId, originalAgentId, originalTask, prUrl, prBranch, forkHead, parsedPr,
+  prCompletion, kind, effectiveReviewers, effectiveUsernames, effectiveOptionalReviewers,
+  reviewerIdentityFaults, effectiveReviewerMaxRounds, reviewStopMode, reviewerModels,
+  reviewerEfforts, mergeOnly, selfReviewMerge, leaveOpen, reviewTarget, reviewLoopForkTarget,
+}) {
+  // Reviewer-keyed model and reasoning-effort maps, narrowed to the selectable
+  // reviewers actually in this loop's list (empty -> null so the prompt builder's
+  // "nothing configured" path is unambiguous).
+  const narrowedReviewerModels = narrowReviewerPins(effectiveReviewers, reviewerModels, MODEL_SELECTABLE_REVIEWERS);
+  const narrowedReviewerEfforts = narrowReviewerPins(effectiveReviewers, reviewerEfforts, EFFORT_SELECTABLE_REVIEWERS);
   const providerPins = inheritProviderPins(originalTask?.metadata || {});
 
   // Routing key, and the one field here that turns a serialization slip into a
@@ -1566,12 +1546,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   const firstLine = sourceTaskDesc.split(/[\r\n]/).find(l => l.trim()) || sourceTaskDesc;
   const followUpTitle = `[${kind.title}] ${firstLine.trim().substring(0, 80)} (${prUrl})`;
 
-  const reviewLoopForkTarget = forkHead && !leaveOpen
-    ? await (await import('../forkReviewMergeTarget.js')).captureForkReviewMergeTarget({ prUrl, prBranch, forkHead, sourceWorkspace })
-    : null;
-
-  const followUpTaskId = `sys-rl-${Date.now().toString(36)}`;
-  const followUpTask = {
+  return {
     id: followUpTaskId,
     status: 'pending',
     priority: (originalTask?.priority || 'MEDIUM').toUpperCase(),
@@ -1642,11 +1617,80 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       // This follow-up may legitimately exit with zero new commits when every
       // reviewer comes back clean — completion handling must not treat a
       // zero-commit exit as a failure.
-      readOnly: false
+      readOnly: false,
     },
     autoApproved: true,
-    section: 'pending'
+    section: 'pending',
   };
+}
+
+export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, forkHead = null, sourceWorkspace, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerModels = null, reviewerEfforts = null, leaveOpen = false, selfReview = false, dispatch = 'queue', reviewTarget = null }) {
+  if (!prUrl || !prBranch) return null;
+  if (prCompletion === PR_COMPLETIONS.LEAVE_OPEN) return null;
+
+  if (reviewTarget) {
+    const { validateCleanupReviewTarget } = await import('../cos/cosMergeHandoff.js');
+    if (reviewTarget.prUrl !== prUrl || reviewTarget.branch !== prBranch
+      || reviewTarget.ownerTaskId !== originalTask?.id || reviewTarget.ownerId !== originalAgentId) return { blocked: 'Review recovery identity changed' };
+    const refused = await validateCleanupReviewTarget({ target: reviewTarget, workspacePath: sourceWorkspace });
+    if (refused) return { blocked: refused };
+  }
+
+  // Recovery belongs to the same durable task. A fresh sys-rl task resets the
+  // spawn budget on every CI/conflict handoff and recursively nests its title.
+  // The id hint also recovers receipts written before the marker was retained.
+  if (isTruthyMeta(originalTask?.metadata?.reviewLoopFollowUp) || originalTask?.id?.startsWith('sys-rl-')) {
+    return resumeReviewLoopCoordinator(originalTask.id, prUrl, prBranch, reviewTarget);
+  }
+
+  const parsedPr = git.parsePullRequestUrl(prUrl);
+  // Copilot is GitHub-only. Classify with the shared detector rather than
+  // `host !== 'github.com'` — a GitHub Enterprise host still has Copilot, and
+  // misreading it as non-GitHub would strip the only reviewer and silently
+  // downgrade the run to merge-only.
+  const isNonGithubForge = !!parsedPr?.host && detectForgeCli(parsedPr.host) !== 'gh';
+  const roster = resolveReviewRoster({ reviewers, usernames, optionalReviewers, selfReview, isNonGithubForge });
+  const effectiveReviewers = roster.reviewers;
+  const { usernames: effectiveUsernames, optionalReviewers: effectiveOptionalReviewers, faults: reviewerIdentityFaults } = await preflightReviewerRoster({
+    usernames: roster.usernames, optionalReviewers: roster.optionalReviewers, isNonGithubForge, parsedPr,
+  });
+  // Per-reviewer iteration caps (`~max=<n>`) — forge-agnostic, threaded verbatim
+  // so the follow-up's `--review-with` carries the same budgets. Entries for
+  // reviewers that were stripped are inert (the emitter only marks tokens it
+  // actually emits), so no narrowing is needed here.
+  const effectiveReviewerMaxRounds = normalizeReviewerMaxRounds(reviewerMaxRounds) || {};
+  // A review WAS asked for, but nothing is left to perform it — a legacy review
+  // loop whose GitHub-only reviewer vanished on another forge (which retains its
+  // prior merge-only fallback rather than leaving an orphaned PR), or a caller
+  // that deliberately resolved no roster. Named rather than inlined into
+  // `mergeOnly`, because the self-review branch below is exactly this case and
+  // re-deriving it by conjunction reads as a condition that might contradict it.
+  const noRosterMerge = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE
+    && effectiveReviewers.length === 0 && effectiveUsernames.length === 0;
+  // Merge-on-green deliberately skips every reviewer.
+  const mergeOnly = prCompletion === PR_COMPLETIONS.MERGE_ON_GREEN || noRosterMerge;
+  // The follow-up reviews the change ITSELF before the CI gate. Only meaningful
+  // on the no-roster path — with reviewers configured the review loop already
+  // runs — and never on a `merge-on-green` run, where the caller asked for no
+  // review at all rather than for an undelegated one.
+  const selfReviewMerge = selfReview && noRosterMerge;
+  // ...and with nothing to review AND nothing to merge there is no follow-up at
+  // all (a JIRA-tracked task whose reviewers were all stripped). The caller
+  // normally catches this; the guard keeps the invariant local to this function.
+  if (mergeOnly && leaveOpen) return null;
+
+  const kind = describeFollowUpKind({ mergeOnly, selfReviewMerge, reviewers: effectiveReviewers, usernames: effectiveUsernames });
+  const reviewLoopForkTarget = forkHead && !leaveOpen
+    ? await (await import('../forkReviewMergeTarget.js')).captureForkReviewMergeTarget({ prUrl, prBranch, forkHead, sourceWorkspace })
+    : null;
+
+  const followUpTaskId = `sys-rl-${Date.now().toString(36)}`;
+  const followUpTask = buildFollowUpTaskPayload({
+    followUpTaskId, originalAgentId, originalTask, prUrl, prBranch, forkHead, parsedPr,
+    prCompletion, kind, effectiveReviewers, effectiveUsernames, effectiveOptionalReviewers,
+    reviewerIdentityFaults, effectiveReviewerMaxRounds, reviewStopMode, reviewerModels,
+    reviewerEfforts, mergeOnly, selfReviewMerge, leaveOpen, reviewTarget, reviewLoopForkTarget,
+  });
 
   // An immediate dispatch owns the spawn, so the automatic dequeue is suppressed:
   // otherwise it races this force-spawn for the same task and whichever loses
