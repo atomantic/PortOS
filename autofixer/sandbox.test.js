@@ -411,6 +411,141 @@ index 111..222 100644
     expect(validateProposedDiff(goodDiff.replace(/src\/index\.js/g, path)).ok).toBe(false);
   });
 
+  it.each([
+    '.Npmrc',
+    'packages/app/.Npmrc',
+    '.GitHub/workflows/pwn.yml',
+    '.Claude/settings.local.json',
+    '.Codex/hooks.json',
+    '.Agents/skills/example/SKILL.md',
+    '.Mcp.json',
+    '.Env',
+    '.Env.local',
+    '.Ssh/authorized_keys',
+    '.Aws/credentials',
+    'ID_RSA',
+    'certs/server.PEM',
+    '.Git/config',
+  ])('rejects case-variant forbidden path %s', path => {
+    const r = validateProposedDiff(goodDiff.replace(/src\/index\.js/g, path));
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/forbidden/);
+  });
+
+  it.each([
+    ['new symlink (mode 120000)', `diff --git a/link b/link
+new file mode 120000
+index 0000000..1234567
+--- /dev/null
++++ b/link
+@@ -0,0 +1 @@
++/etc/passwd
+`],
+    ['mode change to symlink (new mode 120000)', `diff --git a/src/index.js b/src/index.js
+old mode 100644
+new mode 120000
+index 1111111..2222222
+--- a/src/index.js
++++ b/src/index.js
+@@ -1 +1 @@
+-const x = 1
++/etc/passwd
+`],
+    ['modified existing symlink (index mode 120000)', `diff --git a/link b/link
+index 12a8d8a..3b7781e 120000
+--- a/link
++++ b/link
+@@ -1 +1 @@
+-safe
++/etc/passwd
+`],
+    ['deleted symlink (deleted file mode 120000)', `diff --git a/link b/link
+deleted file mode 120000
+index 12a8d8a..0000000
+--- a/link
++++ /dev/null
+@@ -1 +0,0 @@
+-safe
+`],
+    ['new gitlink/submodule (mode 160000)', `diff --git a/sub b/sub
+new file mode 160000
+index 0000000..1234567
+--- /dev/null
++++ b/sub
+@@ -0,0 +1 @@
++Subproject commit 1234567890abcdef1234567890abcdef12345678
+`],
+    ['GIT binary patch', `diff --git a/src/payload.bin b/src/payload.bin
+new file mode 100644
+index 0000000..1234567
+GIT binary patch
+literal 4
+LcmZQzU|<5P002M$
+
+`],
+    ['Binary files summary', `diff --git a/src/payload.bin b/src/payload.bin
+new file mode 100644
+index 0000000..1234567
+Binary files /dev/null and b/src/payload.bin differ
+`],
+  ])('rejects %s', (_label, diff) => {
+    expect(validateProposedDiff(diff).ok).toBe(false);
+  });
+
+  it('rejects C-quoted forbidden paths, quoted 100% renames, copies, and unparseable diff --git headers', () => {
+    const quotedNpmrc = `diff --git "a/caf\\303\\251/.npmrc" "b/caf\\303\\251/.npmrc"
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ "b/caf\\303\\251/.npmrc"
+@@ -0,0 +1 @@
++registry=https://evil.example/
+`;
+    expect(validateProposedDiff(quotedNpmrc).ok).toBe(false);
+
+    // 100%-similarity quoted rename paired with an innocuous edit must still reject.
+    const quotedRename = `${goodDiff}diff --git "a/caf\\303\\251/ok.txt" "b/caf\\303\\251/.npmrc"
+similarity index 100%
+rename from "caf\\303\\251/ok.txt"
+rename to "caf\\303\\251/.npmrc"
+`;
+    expect(validateProposedDiff(quotedRename).ok).toBe(false);
+
+    const copyForbidden = `diff --git a/src/ok.js b/.env
+similarity index 100%
+copy from src/ok.js
+copy to .env
+`;
+    expect(validateProposedDiff(copyForbidden).ok).toBe(false);
+
+    // Unparseable diff --git header paired with a valid section must fail closed.
+    const unparseable = `${goodDiff}diff --git i/ok.js w/.npmrc
+--- i/ok.js
++++ w/.npmrc
+@@ -1 +1 @@
+-a
++b
+`;
+    expect(validateProposedDiff(unparseable).ok).toBe(false);
+  });
+
+  it('accepts normal C-quoted source paths and hunk lines resembling headers or mode strings', () => {
+    const quotedSource = `diff --git "a/caf\\303\\251/fix.js" "b/caf\\303\\251/fix.js"
+index 111..222 100644
+--- "a/caf\\303\\251/fix.js"
++++ "b/caf\\303\\251/fix.js"
+@@ -1,2 +1,3 @@
+-const old = 1;
+-- note: mode 120000 in comment
++const fixed = 2;
+++ "literal plus-plus in source"
++const label = "GIT binary patch";
+`;
+    const r = validateProposedDiff(quotedSource);
+    expect(r.ok).toBe(true);
+    expect(r.files).toEqual(['café/fix.js']);
+  });
+
   it('rejects a path that escapes the repo (adversarial traversal)', () => {
     const diff = goodDiff.replace(/src\/index\.js/g, '../../etc/cron.d/pwn');
     expect(validateProposedDiff(diff).ok).toBe(false);
@@ -485,6 +620,36 @@ new file mode 100644
     const paths = extractDiffPaths(diff);
     expect(paths).toContain('new.js');
     expect(paths).not.toContain('/dev/null');
+  });
+
+  it('unquotes git C-quoted UTF-8, quote, and tab escapes in headers', () => {
+    const diff = `diff --git "a/caf\\303\\251/\\"quoted\\"\\t.js" "b/caf\\303\\251/\\"quoted\\"\\t.js"
+index 111..222 100644
+--- "a/caf\\303\\251/\\"quoted\\"\\t.js"\t
++++ "b/caf\\303\\251/\\"quoted\\"\\t.js"\t
+@@ -1 +1 @@
+-a
++b
+`;
+    expect(extractDiffPaths(diff)).toEqual(['café/"quoted"\t.js']);
+  });
+
+  it('extracts rename and copy headers including quoted paths', () => {
+    const diff = `diff --git a/src/a.js "b/caf\\303\\251/.npmrc"
+similarity index 100%
+rename from src/a.js
+rename to "caf\\303\\251/.npmrc"
+diff --git a/src/b.js b/src/c.js
+similarity index 100%
+copy from src/b.js
+copy to src/c.js
+`;
+    expect(extractDiffPaths(diff)).toEqual(['src/a.js', 'café/.npmrc', 'src/b.js', 'src/c.js']);
+  });
+
+  it('fails closed (returns []) if any diff --git header cannot be parsed', () => {
+    expect(extractDiffPaths('diff --git a/ok.js b/ok.js\n--- a/ok.js\n+++ b/ok.js\n@@ -1 +1 @@\n-a\n+b\ndiff --git "a/unterminated b/ok.js\n')).toEqual([]);
+    expect(extractDiffPaths('diff --git c/foo d/bar\n')).toEqual([]);
   });
 });
 

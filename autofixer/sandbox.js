@@ -270,37 +270,214 @@ const DEFAULT_MAX_DIFF_BYTES = 200 * 1024; // 200 KB — a bug fix, not a rewrit
 
 // Files the autofixer must never modify on the live checkout, even if the diff
 // applies cleanly. Secrets, VCS internals, and CI/hook config are out of scope.
+// Case-insensitive so variants like .Npmrc or .GitHub/ cannot bypass the gate
+// on case-insensitive filesystems (macOS APFS, Windows NTFS).
 const FORBIDDEN_PATH_PATTERNS = [
-  /(^|[\\/])\.git([\\/]|$)/,
-  /(^|[\\/])\.env(\.|$)/,
-  /(^|[\\/])\.npmrc$/,
-  /(^|[\\/])\.aws([\\/]|$)/,
-  /(^|[\\/])\.ssh([\\/]|$)/,
-  /(^|[\\/])id_rsa/,
-  /\.pem$/,
-  /(^|[\\/])\.github([\\/]|$)/,
-  /(^|[\\/])\.claude([\\/]|$)/,
-  /(^|[\\/])\.(codex|agents)([\\/]|$)/,
-  /(^|[\\/])\.mcp\.json$/,
+  /(^|[\\/])\.git([\\/]|$)/i,
+  /(^|[\\/])\.env(\.|$)/i,
+  /(^|[\\/])\.npmrc$/i,
+  /(^|[\\/])\.aws([\\/]|$)/i,
+  /(^|[\\/])\.ssh([\\/]|$)/i,
+  /(^|[\\/])id_rsa/i,
+  /\.pem$/i,
+  /(^|[\\/])\.github([\\/]|$)/i,
+  /(^|[\\/])\.claude([\\/]|$)/i,
+  /(^|[\\/])\.(codex|agents)([\\/]|$)/i,
+  /(^|[\\/])\.mcp\.json$/i,
 ];
 
-/**
- * Parse the `+++`/`---`/`diff --git` headers of a unified diff to the set of
- * touched paths (excluding /dev/null).
- */
-export function extractDiffPaths(diff) {
-  if (typeof diff !== 'string' || !diff) return [];
+// Reject symlinks (120000) and gitlinks/submodules (160000) across creations,
+// deletions, mode changes, and in-place symlink target edits (index line only).
+const DISALLOWED_MODE_PATTERNS = [
+  /(?:^|\n)(?:new file |deleted file |old |new )?mode (?:120000|160000)\b/,
+  /(?:^|\n)index [0-9a-f]+\.\.[0-9a-f]+ (?:120000|160000)\b/i,
+];
+
+const BINARY_DIFF_PATTERNS = [
+  /(?:^|\n)GIT binary patch\r?(?:\n|$)/,
+  /(?:^|\n)Binary files .+ differ\r?(?:\n|$)/,
+];
+
+const C_ESCAPE_BYTES = {
+  '\\': 0x5c,
+  '"': 0x22,
+  a: 0x07,
+  b: 0x08,
+  t: 0x09,
+  n: 0x0a,
+  v: 0x0b,
+  f: 0x0c,
+  r: 0x0d,
+};
+
+// Decode one git C-quoted path token starting at `startIdx`, buffering raw
+// bytes so multi-byte UTF-8 octal sequences (e.g. `\303\251` -> `é`) stay intact.
+function readGitPathToken(str, startIdx = 0) {
+  if (str[startIdx] !== '"') return null;
+  const bytes = [];
+  for (let i = startIdx + 1; i < str.length; i++) {
+    const ch = str[i];
+    if (ch === '"') {
+      return { value: Buffer.from(bytes).toString('utf8'), nextIndex: i + 1 };
+    }
+    if (ch === '\\') {
+      i += 1;
+      if (i >= str.length) return null;
+      const esc = str[i];
+      if (Object.hasOwn(C_ESCAPE_BYTES, esc)) {
+        bytes.push(C_ESCAPE_BYTES[esc]);
+        continue;
+      }
+      const oct = str.slice(i, i + 3);
+      if (/^[0-7]{3}$/.test(oct)) {
+        const byte = Number.parseInt(oct, 8);
+        if (byte > 0xff) return null;
+        bytes.push(byte);
+        i += 2;
+        continue;
+      }
+      return null;
+    }
+    const cp = str.codePointAt(i);
+    const fullChar = String.fromCodePoint(cp);
+    bytes.push(...Buffer.from(fullChar, 'utf8'));
+    i += fullChar.length - 1;
+  }
+  return null;
+}
+
+function stripGitPrefix(rawPath, prefix) {
+  return rawPath.startsWith(prefix) && rawPath.length > prefix.length ? rawPath.slice(prefix.length) : null;
+}
+
+function parseDiffGitHeader(rest) {
+  if (!rest) return null;
+  let leftRaw;
+  let rightRaw;
+  if (rest.startsWith('"')) {
+    const left = readGitPathToken(rest, 0);
+    if (!left || rest[left.nextIndex] !== ' ') return null;
+    leftRaw = left.value;
+    const rightPart = rest.slice(left.nextIndex + 1);
+    if (rightPart.startsWith('"')) {
+      const right = readGitPathToken(rightPart, 0);
+      if (!right || right.nextIndex !== rightPart.length) return null;
+      rightRaw = right.value;
+    } else {
+      if (rightPart.includes('"')) return null;
+      rightRaw = rightPart;
+    }
+  } else if (rest.includes('"')) {
+    const sep = rest.indexOf(' "');
+    if (sep === -1) return null;
+    leftRaw = rest.slice(0, sep);
+    const right = readGitPathToken(rest, sep + 1);
+    if (!right || right.nextIndex !== rest.length) return null;
+    rightRaw = right.value;
+  } else {
+    // Unquoted paths: check identical-path midpoint first so paths containing
+    // " b/" do not split ambiguously.
+    const mid = (rest.length - 1) / 2;
+    if (Number.isInteger(mid) && rest[mid] === ' ' && rest.startsWith('a/') && rest.slice(mid + 1, mid + 3) === 'b/' && rest.slice(2, mid) === rest.slice(mid + 3)) {
+      const p = rest.slice(2, mid);
+      return p ? [p, p] : null;
+    }
+    const m = /^(a\/.+?) (b\/.+)$/.exec(rest);
+    if (!m) return null;
+    leftRaw = m[1];
+    rightRaw = m[2];
+  }
+  const left = stripGitPrefix(leftRaw, 'a/');
+  const right = stripGitPrefix(rightRaw, 'b/');
+  return left && right ? [left, right] : null;
+}
+
+function parseHeaderPath(raw, { stripPrefix = false, allowTabSuffix = false } = {}) {
+  let path;
+  if (raw.startsWith('"')) {
+    const tok = readGitPathToken(raw, 0);
+    if (!tok) return { ok: false };
+    const trailing = raw.slice(tok.nextIndex);
+    if (trailing && (!allowTabSuffix || !trailing.startsWith('\t'))) return { ok: false };
+    path = tok.value;
+  } else {
+    path = allowTabSuffix ? raw.replace(/\t.*$/, '').trim() : raw.trim();
+  }
+  if (!path || path === '/dev/null') return { ok: true, path: null };
+  if (stripPrefix) path = path.replace(/^(?:a|b)\//, '');
+  return path ? { ok: true, path } : { ok: true, path: null };
+}
+
+function parseDiffPaths(diff) {
+  if (typeof diff !== 'string' || !diff) return { ok: true, files: [] };
   const paths = new Set();
-  for (const line of diff.split('\n')) {
-    let m = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
-    if (m) { paths.add(m[1]); paths.add(m[2]); continue; }
-    m = /^(?:\+\+\+|---) (?:a\/|b\/)?(.+)$/.exec(line);
-    if (m) {
-      const p = m[1].replace(/\t.*$/, '').trim();
-      if (p && p !== '/dev/null') paths.add(p);
+  let oldRem = 0;
+  let newRem = 0;
+
+  for (const rawLine of diff.split('\n')) {
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+
+    if (line.startsWith('diff --git ')) {
+      oldRem = 0;
+      newRem = 0;
+      const pair = parseDiffGitHeader(line.slice('diff --git '.length));
+      if (!pair) return { ok: false, reason: 'unparseable diff --git header', files: [] };
+      paths.add(pair[0]);
+      paths.add(pair[1]);
+      continue;
+    }
+
+    if (oldRem > 0 || newRem > 0) {
+      if (line.startsWith(' ')) {
+        if (oldRem > 0) oldRem -= 1;
+        if (newRem > 0) newRem -= 1;
+        continue;
+      }
+      if (line.startsWith('-')) {
+        if (oldRem > 0) oldRem -= 1;
+        continue;
+      }
+      if (line.startsWith('+')) {
+        if (newRem > 0) newRem -= 1;
+        continue;
+      }
+      if (line.startsWith('\\')) continue;
+      oldRem = 0;
+      newRem = 0;
+    }
+
+    const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (hunk) {
+      oldRem = hunk[2] !== undefined ? Number.parseInt(hunk[2], 10) : 1;
+      newRem = hunk[4] !== undefined ? Number.parseInt(hunk[4], 10) : 1;
+      continue;
+    }
+
+    if (line.startsWith('--- ') || line.startsWith('+++ ')) {
+      const parsed = parseHeaderPath(line.slice(4), { stripPrefix: true, allowTabSuffix: true });
+      if (!parsed.ok) return { ok: false, reason: 'unparseable diff file header', files: [] };
+      if (parsed.path) paths.add(parsed.path);
+      continue;
+    }
+
+    const renameCopy = /^(?:rename|copy) (?:from|to) (.+)$/.exec(line);
+    if (renameCopy) {
+      const parsed = parseHeaderPath(renameCopy[1]);
+      if (!parsed.ok) return { ok: false, reason: 'unparseable rename/copy header', files: [] };
+      if (parsed.path) paths.add(parsed.path);
     }
   }
-  return Array.from(paths);
+  return { ok: true, files: Array.from(paths) };
+}
+
+/**
+ * Parse the `diff --git`, `+++`/`---`, and `rename`/`copy` headers of a
+ * unified diff (unquoting git C-quoted paths) to the set of touched paths
+ * (excluding /dev/null). Fails closed (returns []) if any header is malformed.
+ */
+export function extractDiffPaths(diff) {
+  const parsed = parseDiffPaths(diff);
+  return parsed.ok ? parsed.files : [];
 }
 
 // Secret markers that must never be introduced INTO a source file by the agent.
@@ -347,9 +524,10 @@ export function scanDiffForSecrets(diff, secretValues = []) {
 
 /**
  * Validate an agent-proposed diff before it can be promoted to the live
- * checkout. Rejects: empty diffs, oversized diffs, absolute paths, `..`
- * traversal, edits to forbidden files (secrets, .git, CI config), and diffs
- * that introduce credentials (pattern or a live env secret value).
+ * checkout. Rejects: empty diffs, oversized diffs, malformed headers,
+ * symlink/gitlink/binary entries, absolute paths, `..` traversal, edits to
+ * forbidden files (secrets, .git, CI config), and diffs that introduce
+ * credentials (pattern or a live env secret value).
  *
  * @param {string} diff  unified diff (git diff output)
  * @param {{ maxBytes?: number, secretValues?: string[] }} [opts]
@@ -363,15 +541,28 @@ export function validateProposedDiff(diff, opts = {}) {
   if (Buffer.byteLength(diff, 'utf8') > maxBytes) {
     return { ok: false, reason: `diff exceeds ${maxBytes} bytes`, files: [] };
   }
-  const files = extractDiffPaths(diff);
+  const parsed = parseDiffPaths(diff);
+  if (!parsed.ok) {
+    return { ok: false, reason: parsed.reason, files: [] };
+  }
+  const { files } = parsed;
   if (files.length === 0) {
     return { ok: false, reason: 'diff touches no files', files: [] };
+  }
+  if (DISALLOWED_MODE_PATTERNS.some((re) => re.test(diff))) {
+    return { ok: false, reason: 'symlink and gitlink entries are not allowed', files };
+  }
+  if (BINARY_DIFF_PATTERNS.some((re) => re.test(diff))) {
+    return { ok: false, reason: 'binary diffs are not allowed', files };
   }
   const secret = scanDiffForSecrets(diff, opts.secretValues);
   if (secret) {
     return { ok: false, reason: `diff introduces a credential (${secret})`, files };
   }
   for (const file of files) {
+    if (file.includes('\0')) {
+      return { ok: false, reason: 'null byte in path not allowed', files };
+    }
     if (isAbsolute(file) || file.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(file)) {
       return { ok: false, reason: `absolute path not allowed: ${file}`, files };
     }
@@ -450,7 +641,11 @@ export async function createDisposableWorktree(repoPath, parentDir, id) {
  */
 export async function collectWorktreeDiff(worktreePath) {
   await execGit(['add', '-A'], worktreePath);
-  const { stdout } = await execGit(['--no-pager', 'diff', '--cached', '--no-color'], worktreePath);
+  const { stdout } = await execGit([
+    '-c', 'core.quotePath=false',
+    '--no-pager', 'diff', '--cached', '--no-color',
+    '--no-ext-diff', '--no-textconv', '--no-renames',
+  ], worktreePath);
   return stdout;
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile, readFile, mkdir } from 'fs/promises';
+import { mkdtemp, rm, writeFile, readFile, mkdir, symlink } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -11,6 +11,7 @@ import {
   isGitRepo,
   createDisposableWorktree,
   collectWorktreeDiff,
+  validateProposedDiff,
   removeWorktree,
   sweepStaleWorktrees,
   applyDiffToLive,
@@ -85,6 +86,7 @@ describe('git worktree isolation (integration)', () => {
     const diff = await collectWorktreeDiff(wt.path);
     expect(diff).toContain('app.js');
     expect(diff).toContain('+const x = 2');
+    expect(validateProposedDiff(diff)).toEqual({ ok: true, files: ['app.js'] });
 
     // The live checkout is untouched until we explicitly promote. Compare
     // newline-normalized: git checks files out through core.autocrlf, so a
@@ -98,6 +100,50 @@ describe('git worktree isolation (integration)', () => {
     await removeWorktree(repo, wt.path);
     const list = await execGit(['worktree', 'list'], repo);
     expect(list.stdout).not.toContain('sess1');
+  });
+
+  it('rejects case-variant forbidden files, symlinks, and non-ASCII/renamed forbidden paths collected from a worktree', async () => {
+    // Seed an existing file + symlink in the repo so we test both new and modified symlinks + renames.
+    await mkdir(join(repo, 'café'), { recursive: true });
+    await writeFile(join(repo, 'café', 'safe.js'), 'const ok = 1;\n');
+    await symlink('safe.js', join(repo, 'existing-link'));
+    await execGit(['add', '-A'], repo);
+    await execGit(['commit', '-q', '-m', 'seed'], repo);
+
+    // 1) Case-variant .Npmrc
+    const wtCase = await createDisposableWorktree(repo, join(scratch, 'worktrees'), 'case');
+    await writeFile(join(wtCase.path, '.Npmrc'), 'registry=https://evil.example/\n');
+    expect(validateProposedDiff(await collectWorktreeDiff(wtCase.path)).ok).toBe(false);
+    await removeWorktree(repo, wtCase.path);
+
+    // 2) New symlink and modified existing symlink (mode 120000)
+    const wtLink = await createDisposableWorktree(repo, join(scratch, 'worktrees'), 'symlink');
+    await symlink('/etc/passwd', join(wtLink.path, 'new-link'));
+    expect(validateProposedDiff(await collectWorktreeDiff(wtLink.path)).ok).toBe(false);
+    await removeWorktree(repo, wtLink.path);
+
+    const wtModLink = await createDisposableWorktree(repo, join(scratch, 'worktrees'), 'mod-symlink');
+    await rm(join(wtModLink.path, 'existing-link'));
+    await symlink('/etc/passwd', join(wtModLink.path, 'existing-link'));
+    expect(validateProposedDiff(await collectWorktreeDiff(wtModLink.path)).ok).toBe(false);
+    await removeWorktree(repo, wtModLink.path);
+
+    // 3) Non-ASCII path + 100%-similarity rename to .npmrc (collected with --no-renames and core.quotePath=false)
+    const wtRename = await createDisposableWorktree(repo, join(scratch, 'worktrees'), 'rename');
+    await rm(join(wtRename.path, 'café', 'safe.js'));
+    await writeFile(join(wtRename.path, 'café', '.npmrc'), 'const ok = 1;\n');
+    const renameDiff = await collectWorktreeDiff(wtRename.path);
+    expect(validateProposedDiff(renameDiff).ok).toBe(false);
+    await removeWorktree(repo, wtRename.path);
+
+    // 4) Legitimate non-ASCII source fix still validates and promotes cleanly
+    const wtValid = await createDisposableWorktree(repo, join(scratch, 'worktrees'), 'valid-utf8');
+    await writeFile(join(wtValid.path, 'café', 'safe.js'), 'const ok = 2;\n');
+    const validDiff = await collectWorktreeDiff(wtValid.path);
+    expect(validateProposedDiff(validDiff)).toEqual({ ok: true, files: ['café/safe.js'] });
+    expect((await applyDiffToLive(repo, validDiff, scratch)).ok).toBe(true);
+    expect(lf(await readFile(join(repo, 'café', 'safe.js'), 'utf8'))).toBe('const ok = 2;\n');
+    await removeWorktree(repo, wtValid.path);
   });
 
   it('discarding the worktree leaves the live checkout unchanged (rollback boundary)', async () => {
