@@ -48,6 +48,7 @@ import { AVATAR_STYLE_IDS } from '../../lib/avatarStyles.js';
 import { normalizePersistentMindProfile } from '../../lib/persistent/persistentMindProfile.js';
 import { normalizePersistentMindPrompt } from '../../lib/persistent/persistentMindPrompt.js';
 import { normalizePersistentMindPlaybook } from '../../lib/persistent/persistentMindPlaybook.js';
+import { PERSISTENT_MIND_CHOSEN_NAME_TAG } from '../../lib/persistent/persistentMindChosenName.js';
 import { PERSISTENT_MIND_ID } from '../../lib/persistent/persistentMindTrajectory.js';
 import { openMindBundle, sealMindBundle } from '../../lib/mindBundleCrypto.js';
 import {
@@ -63,7 +64,7 @@ import { loadState } from '../cos/cosState.js';
 import {
   choosePersistentMindName,
   createPersistentMindMemory,
-  readPersistentMindMemories,
+  readAllProtectedPersistentMindMemories,
   readPersistentMindName,
 } from './persistentMindContext.js';
 
@@ -74,10 +75,9 @@ export const MIND_BUNDLE_ENTRY_NAMES = Object.freeze({
 });
 
 /**
- * `readPersistentMindMemories` returns at most this many records. Protected
- * memories sort ahead of ordinary ones, so the protected set is complete unless
- * it fills the page — at which point the export refuses rather than shipping a
- * truncated identity (see `collectMemories`).
+ * The most memories one bundle carries (also the import-side cap). An export
+ * with more protected records refuses rather than shipping a truncated identity
+ * (see `collectMemories`).
  */
 const MIND_MEMORY_PAGE_LIMIT = 100;
 
@@ -120,13 +120,13 @@ async function collectAvatar() {
 }
 
 async function collectMemories() {
-  const memories = await readPersistentMindMemories(PERSISTENT_MIND_ID);
-  const protectedMemories = memories.filter((memory) => EXPORTABLE_PROTECTIONS.has(memory.protection));
-  if (protectedMemories.length >= MIND_MEMORY_PAGE_LIMIT) {
-    // The reader is paged; a full page of protected records means there may be
-    // more behind it, and a silently short memories scope is exactly the
-    // failure this export refuses to produce.
-    throw new Error(`this Mind has at least ${MIND_MEMORY_PAGE_LIMIT} protected memories, more than one bundle page can carry without dropping some`);
+  const memories = await readAllProtectedPersistentMindMemories(PERSISTENT_MIND_ID);
+  // The chosen-name record is owned by the `identity` group (profile scope);
+  // shipping it here would plant the bare name as an untagged identity memory.
+  const protectedMemories = memories.filter((memory) => EXPORTABLE_PROTECTIONS.has(memory.protection)
+    && !memory.tags?.includes(PERSISTENT_MIND_CHOSEN_NAME_TAG));
+  if (protectedMemories.length > MIND_MEMORY_PAGE_LIMIT) {
+    throw new Error(`this Mind has ${protectedMemories.length} protected memories, more than one bundle page can carry without dropping some (limit ${MIND_MEMORY_PAGE_LIMIT})`);
   }
   return {
     // Meaning only: no ids, no source agent/task, no embeddings, no importance
@@ -319,7 +319,7 @@ async function readCurrentGroups() {
   const style = root.config?.avatarStyle;
   const [chosenName, memories] = await Promise.all([
     readPersistentMindName(PERSISTENT_MIND_ID),
-    readPersistentMindMemories(PERSISTENT_MIND_ID),
+    readAllProtectedPersistentMindMemories(PERSISTENT_MIND_ID),
   ]);
   return {
     identity: { chosenName: chosenName || null },
@@ -406,15 +406,19 @@ function planMemoryImport(incomingMemories, currentMemories, incomingName) {
   const seen = new Set();
   const additions = [];
   let duplicates = 0;
+  let total = 0;
   for (const memory of incomingMemories) {
-    if (memoryIsTheChosenName(memory, incomingName) || existing.has(memory.content) || seen.has(memory.content)) {
+    // Owned by the `identity` group: neither importable nor "already here".
+    if (memoryIsTheChosenName(memory, incomingName)) continue;
+    total += 1;
+    if (existing.has(memory.content) || seen.has(memory.content)) {
       duplicates += 1;
       continue;
     }
     seen.add(memory.content);
     additions.push(memory);
   }
-  return { additions, duplicates };
+  return { additions, duplicates, total };
 }
 
 /**
@@ -431,13 +435,13 @@ export async function previewPersistentMindBundle({ text, passphrase }) {
     .filter((group) => incoming[group] !== undefined)
     .map((group) => {
       if (group === 'memories') {
-        const { additions, duplicates } = planMemoryImport(incoming.memories, current.memories, incomingName);
+        const { additions, duplicates, total } = planMemoryImport(incoming.memories, current.memories, incomingName);
         return {
           group,
           scope: MIND_BUNDLE_GROUP_SCOPES[group],
           additive: true,
           identical: additions.length === 0,
-          incoming: { total: incoming.memories.length, importable: additions.length, alreadyHere: duplicates, memories: additions },
+          incoming: { total, importable: additions.length, alreadyHere: duplicates, memories: additions },
           current: { protectedCount: (current.memories || []).filter((memory) => EXPORTABLE_PROTECTIONS.has(memory.protection)).length },
         };
       }
@@ -514,7 +518,7 @@ export async function applyPersistentMindBundle({ text, passphrase, choices }) {
   let imported = 0;
   let skipped = 0;
   if (taking.includes('memories')) {
-    const current = await readPersistentMindMemories(PERSISTENT_MIND_ID);
+    const current = await readAllProtectedPersistentMindMemories(PERSISTENT_MIND_ID);
     const { additions, duplicates } = planMemoryImport(incoming.memories, current, incoming.identity?.chosenName || null);
     skipped = duplicates;
     for (const memory of additions) {

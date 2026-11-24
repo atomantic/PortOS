@@ -3,7 +3,7 @@ import { openMindBundle, readMindBundleHeader, sealMindBundle } from '../../lib/
 import { MIND_BUNDLE_REFUSALS } from '../../lib/mindBundleFormat.js';
 
 const loadState = vi.fn();
-const readPersistentMindMemories = vi.fn();
+const readAllProtectedPersistentMindMemories = vi.fn();
 const readPersistentMindName = vi.fn();
 const choosePersistentMindName = vi.fn();
 const createPersistentMindMemory = vi.fn();
@@ -13,7 +13,7 @@ vi.mock('../cos/cosState.js', () => ({ loadState: (...args) => loadState(...args
 vi.mock('./persistentMindContext.js', () => ({
   choosePersistentMindName: (...args) => choosePersistentMindName(...args),
   createPersistentMindMemory: (...args) => createPersistentMindMemory(...args),
-  readPersistentMindMemories: (...args) => readPersistentMindMemories(...args),
+  readAllProtectedPersistentMindMemories: (...args) => readAllProtectedPersistentMindMemories(...args),
   readPersistentMindName: (...args) => readPersistentMindName(...args),
 }));
 // `applyPersistentMindBundle` reaches `updateConfig` through a lazy
@@ -68,7 +68,7 @@ beforeEach(() => {
     },
   });
   readPersistentMindName.mockResolvedValue('Example Mind');
-  readPersistentMindMemories.mockResolvedValue([
+  readAllProtectedPersistentMindMemories.mockResolvedValue([
     coreMemory(),
     coreMemory({ content: 'The example user is learning bass guitar.', protection: 'important' }),
     coreMemory({ content: 'Ordinary chatter nobody needs on another machine.', protection: 'standard' }),
@@ -166,24 +166,34 @@ describe('persistentMindBundle privacy boundary', () => {
 
 describe('persistentMindBundle refusal', () => {
   it('refuses the whole export when a selected scope cannot be read', async () => {
-    readPersistentMindMemories.mockRejectedValue(new Error('memory backend is unavailable'));
+    readAllProtectedPersistentMindMemories.mockRejectedValue(new Error('memory backend is unavailable'));
     await expect(exportPersistentMindBundle({ scopes: ['profile', 'memories'], passphrase: PASSPHRASE }))
       .rejects.toMatchObject({ code: 'MIND_BUNDLE_SCOPE_UNREADABLE', status: 409 });
   });
 
   it('names every scope that failed, not just the first', async () => {
     loadState.mockRejectedValue(new Error('cos state is unreadable'));
-    readPersistentMindMemories.mockRejectedValue(new Error('memory backend is unavailable'));
+    readAllProtectedPersistentMindMemories.mockRejectedValue(new Error('memory backend is unavailable'));
     await expect(collectPersistentMindBundleEntries(['profile', 'avatar', 'memories']))
       .rejects.toThrow(/profile .*avatar .*memories/s);
   });
 
   it('refuses rather than shipping a truncated protected-memory set', async () => {
-    readPersistentMindMemories.mockResolvedValue(
-      Array.from({ length: 100 }, (_unused, index) => coreMemory({ content: `Example protected memory ${index}` })),
+    readAllProtectedPersistentMindMemories.mockResolvedValue(
+      Array.from({ length: 101 }, (_unused, index) => coreMemory({ content: `Example protected memory ${index}` })),
     );
     await expect(collectPersistentMindBundleEntries(['memories']))
       .rejects.toThrow(/more than one bundle page can carry/);
+  });
+
+  it('leaves the chosen-name record out of a memories-only export', async () => {
+    readAllProtectedPersistentMindMemories.mockResolvedValue([
+      coreMemory({ content: 'Example Mind', tags: ['mind:chosen-name', 'mind:core-identity'] }),
+      coreMemory(),
+    ]);
+    const { documents } = await openExport(['memories']);
+    expect(documents['memories.json'].memories.map(({ content }) => content))
+      .toEqual(['The example user reviews plans on Friday afternoons.']);
   });
 
   it('refuses an empty scope selection', async () => {
@@ -388,6 +398,28 @@ describe('persistentMindBundle apply', () => {
 
     expect(result.memories).toEqual({ imported: 2, skipped: 1 });
     expect(createPersistentMindMemory.mock.calls.map(([input]) => input.content)).not.toContain(shared.content);
+  });
+
+  it('is idempotent against a destination holding more than 100 protected memories', async () => {
+    readAllProtectedPersistentMindMemories.mockResolvedValue([
+      ...Array.from({ length: 120 }, (_unused, index) => coreMemory({ content: `Filler protected memory ${index}` })),
+      ...OTHER_MEMORIES,
+    ]);
+    const result = await applyPersistentMindBundle({
+      text: await sealOther({ scopes: ['memories'] }),
+      passphrase: PASSPHRASE,
+      choices: { memories: 'use-imported' },
+    });
+    expect(result.memories).toEqual({ imported: 0, skipped: 2 });
+    expect(createPersistentMindMemory).not.toHaveBeenCalled();
+  });
+
+  it('does not count a legacy chosen-name record as already-here in the preview', async () => {
+    const nameRecord = { type: 'fact', content: OTHER_MIND.chosenName, protection: 'core-identity' };
+    const text = await sealOther({ memories: [nameRecord, ...OTHER_MEMORIES], scopes: ['profile', 'memories'] });
+    const { incoming } = (await previewPersistentMindBundle({ text, passphrase: PASSPHRASE }))
+      .groups.find(({ group }) => group === 'memories');
+    expect(incoming).toMatchObject({ total: 2, importable: 2, alreadyHere: 0 });
   });
 
   it('does not plant the chosen name a second time as an ordinary memory', async () => {
