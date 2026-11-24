@@ -247,9 +247,9 @@ export async function generateContinuousVideoEpisode({
     };
   }
 
-  const continuation = await resolveEpisodeContinuity({ backend, renderOptions });
-  const runtimeContract = continuationContract(continuation?.runtime);
-  const { generateVideo: generate } = await BACKEND_MODULES[backend]();
+  // Register before the first await so an immediate SSE attach after POST
+  // returns 200 never 404s during cold backend import or continuity checks,
+  // and pre-loop setup throws reach the SSE error broadcast below.
   const outerJob = { id: outerJobId, clients: [], status: 'running' };
   episodeJobs.set(outerJobId, outerJob);
 
@@ -264,30 +264,34 @@ export async function generateContinuousVideoEpisode({
     broadcastSse(outerJob, { type: 'progress', progress, message: fullMessage });
   };
 
-  const runOneClip = async (clip, conditioning) => {
-    const innerJobId = randomUUID();
-    const params = backendJobParams({
-      backend, clip, conditioning, renderOptions, continuation, jobId: innerJobId,
-    });
-    // Listeners are registered BEFORE `generate` is even invoked, so no
-    // completion event it emits can fire before we're listening for it. If
-    // `generate` itself throws/rejects (a synchronous validation error, never
-    // reaching its own 'failed' emit), detach here — otherwise these
-    // listeners would leak on videoGenEvents forever.
-    const { promise: completion, detach } = awaitClipCompletion(innerJobId);
-    await generate(params).catch((err) => {
-      detach();
-      throw err;
-    });
-    await completion;
-    return { innerJobId };
-  };
-
   const clipIds = [];
   const scratchPaths = [];
   const trims = new Map();
   let previousClip = null;
   try {
+    const continuation = await resolveEpisodeContinuity({ backend, renderOptions });
+    const runtimeContract = continuationContract(continuation?.runtime);
+    const { generateVideo: generate } = await BACKEND_MODULES[backend]();
+
+    const runOneClip = async (clip, conditioning) => {
+      const innerJobId = randomUUID();
+      const params = backendJobParams({
+        backend, clip, conditioning, renderOptions, continuation, jobId: innerJobId,
+      });
+      // Listeners are registered BEFORE `generate` is even invoked, so no
+      // completion event it emits can fire before we're listening for it. If
+      // `generate` itself throws/rejects (a synchronous validation error, never
+      // reaching its own 'failed' emit), detach here — otherwise these
+      // listeners would leak on videoGenEvents forever.
+      const { promise: completion, detach } = awaitClipCompletion(innerJobId);
+      await generate(params).catch((err) => {
+        detach();
+        throw err;
+      });
+      await completion;
+      return { innerJobId };
+    };
+
     for (let i = 0; i < clips.length; i++) {
       const clip = clips[i];
       emitProgress(i, clip.cutType === 'continue' ? 'continuing' : 'establishing');

@@ -276,6 +276,12 @@ export default function EpisodeComposer({ initialScenes, onQueued }) {
     }
   }, [sse.latest, onQueued]);
 
+  useEffect(() => {
+    if (queuedJobId && sse.closed && sse.latest?.type !== 'complete' && sse.latest?.type !== 'error') {
+      toast.error('Episode progress stream closed unexpectedly');
+    }
+  }, [queuedJobId, sse.closed, sse.latest]);
+
   const [handleQueue, queuing] = useAsyncAction(async () => {
     const result = await generateContinuousVideoEpisode({
       scenes: sanitizedScenes, bible, framings: framingsArrayFor(preview.clips, framings), backend,
@@ -299,6 +305,12 @@ export default function EpisodeComposer({ initialScenes, onQueued }) {
 
   const streaming = !!queuedJobId && !sse.closed;
   const busy = queuing || streaming;
+  const streamCompleted = !streaming && sse.latest?.type === 'complete';
+  const streamError = !streaming && !streamCompleted
+    ? (sse.latest?.type === 'error'
+        ? (sse.latest.error?.message || sse.latest.error || 'Episode generation failed')
+        : 'Episode progress stream closed unexpectedly')
+    : null;
 
   return (
     <div className="space-y-4">
@@ -357,10 +369,18 @@ export default function EpisodeComposer({ initialScenes, onQueued }) {
       </div>
 
       {queuedJobId ? (
-        <div className="border border-port-border/50 rounded-lg p-2.5 space-y-1.5">
-          <div className="flex items-center gap-1.5 text-xs text-gray-300">
-            <Film className="w-3.5 h-3.5" />
-            {streaming ? (sse.latest?.message || 'Generating…') : 'Episode generation finished'}
+        <div className={`border rounded-lg p-2.5 space-y-1.5 ${streamError ? 'border-port-error/60' : 'border-port-border/50'}`}>
+          <div className={`flex items-center gap-1.5 text-xs ${streamError ? 'text-port-error' : 'text-gray-300'}`}>
+            {streamError ? (
+              <XCircle className="w-3.5 h-3.5 shrink-0" />
+            ) : streamCompleted ? (
+              <CheckCircle2 className="w-3.5 h-3.5 text-port-success shrink-0" />
+            ) : (
+              <Film className="w-3.5 h-3.5 shrink-0" />
+            )}
+            <span>
+              {streaming ? (sse.latest?.message || 'Generating…') : (streamError || 'Episode generation finished')}
+            </span>
           </div>
           {typeof sse.latest?.progress === 'number' && (
             <div className="w-full h-1.5 bg-port-border rounded overflow-hidden">

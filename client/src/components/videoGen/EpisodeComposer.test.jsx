@@ -9,8 +9,10 @@ vi.mock('../../services/apiContinuousVideo.js', () => ({
   generateContinuousVideoEpisode: vi.fn(),
   continuousVideoEpisodeEventsUrl: (jobId) => `/api/continuous-video/${jobId}/events`,
 }));
+vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
 import { lintContinuousVideoEpisode, generateContinuousVideoEpisode } from '../../services/apiContinuousVideo.js';
+import toast from '../ui/Toast';
 
 const FAILING_PREVIEW = {
   clips: [{
@@ -85,6 +87,46 @@ describe('EpisodeComposer', () => {
 
     act(() => lastEventSource().emit({ type: 'complete', result: { jobId: 'job-1' } }));
     expect(await screen.findByText(/Compose another episode/i)).toBeTruthy();
+    expect(screen.getByText('Episode generation finished')).toBeTruthy();
+    expect(toast.success).toHaveBeenCalledWith('Episode generated');
+  });
+
+  it('renders an explicit error banner and toasts on an SSE error frame', async () => {
+    lintContinuousVideoEpisode.mockResolvedValue(PASSING_PREVIEW);
+    generateContinuousVideoEpisode.mockResolvedValue({ jobId: 'job-err', generationId: 'job-err', status: 'running' });
+    render(<EpisodeComposer />);
+    await writeScene();
+    await waitFor(() => expect(lintContinuousVideoEpisode).toHaveBeenCalled(), { timeout: 2000 });
+
+    const queueButton = await screen.findByRole('button', { name: /Queue episode/i });
+    await awaitEnabled(queueButton);
+    fireEvent.click(queueButton);
+    await waitFor(() => expect(lastEventSource()).toBeTruthy());
+
+    act(() => lastEventSource().emit({ type: 'error', error: 'Backend crashed during setup' }));
+    expect(await screen.findByText('Backend crashed during setup')).toBeTruthy();
+    expect(screen.queryByText('Episode generation finished')).toBeNull();
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith('Backend crashed during setup');
+    expect(screen.getByText(/Compose another episode/i)).toBeTruthy();
+  });
+
+  it('renders an explicit error state and error toast when the stream closes without a complete frame', async () => {
+    lintContinuousVideoEpisode.mockResolvedValue(PASSING_PREVIEW);
+    generateContinuousVideoEpisode.mockResolvedValue({ jobId: 'job-404', generationId: 'job-404', status: 'running' });
+    render(<EpisodeComposer />);
+    await writeScene();
+    await waitFor(() => expect(lintContinuousVideoEpisode).toHaveBeenCalled(), { timeout: 2000 });
+
+    const queueButton = await screen.findByRole('button', { name: /Queue episode/i });
+    await awaitEnabled(queueButton);
+    fireEvent.click(queueButton);
+    await waitFor(() => expect(lastEventSource()).toBeTruthy());
+
+    act(() => lastEventSource().fail());
+    expect(await screen.findByText('Episode progress stream closed unexpectedly')).toBeTruthy();
+    expect(screen.queryByText('Episode generation finished')).toBeNull();
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith('Episode progress stream closed unexpectedly');
+    expect(screen.getByText(/Compose another episode/i)).toBeTruthy();
   });
 
   it('applies a FableLoom import that arrives after mount (async loom fetch)', async () => {
