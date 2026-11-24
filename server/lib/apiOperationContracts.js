@@ -63,7 +63,8 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
       ],
       responses: {
         200: { description: 'Process log tail or server-sent log stream' },
-        400: { description: 'Invalid process name or query', 'x-portos-error-codes': ['INVALID_PROCESS_NAME', 'VALIDATION_ERROR'] },
+        400: { description: 'Invalid process name, unknown process, or invalid query', 'x-portos-error-codes': ['INVALID_PROCESS_NAME', 'UNKNOWN_PROCESS', 'VALIDATION_ERROR'] },
+        403: { description: 'Caller lacks host authority', 'x-portos-error-codes': ['HOST_CONTROL_FORBIDDEN'] },
       },
     },
   },

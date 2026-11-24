@@ -58,5 +58,18 @@ describe('isHostControlRoute (#16018)', () => {
     expect(hostControlGetRouteFor('GET', '/api/browser/downloads/example.zip')).toBe('GET /api/browser/downloads/:name');
     expect(hostControlGetRouteFor('GET', '/api/browser/downloads/example.zip/extra')).toBeNull();
     expect(hostControlGetRouteFor('POST', '/api/scaffold/directories')).toBeNull();
+    expect(hostControlGetRouteFor('GET', '/api/logs/portos-server')).toBe('GET /api/logs/:processName');
+    expect(hostControlGetRouteFor('GET', '/api/browser/logs')).toBe('GET /api/browser/logs');
+    expect(hostControlGetRouteFor('GET', '/api/apps/app-001/logs')).toBe('GET /api/apps/:id/logs');
+    expect(hostControlGetRouteFor('GET', '/api/update/software/homebrew')).toBe('GET /api/update/software/homebrew');
+    for (const path of [
+      '/api/logs/portos-server',
+      '/api/browser/logs',
+      '/api/apps/app-001/logs',
+      '/api/update/software/homebrew',
+    ]) {
+      expect(isHostControlRoute('GET', path), path).toBe(true);
+      expect(isHostControlRoute('HEAD', `${path.toUpperCase()}//`), path).toBe(true);
+    }
   });
 });
