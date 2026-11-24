@@ -283,7 +283,7 @@ export default function FableLoomHostedJoin() {
 
   if (authError) {
     return (
-      <main className="h-dvh-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center">
+      <main id="main-content" className="h-dvh-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center">
         <div className="w-16 h-16 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center mb-4">
           <AlertCircle className="w-8 h-8 text-red-400" />
         </div>
@@ -294,7 +294,7 @@ export default function FableLoomHostedJoin() {
   }
 
   return (
-    <main className="h-dvh-screen bg-slate-950 text-white flex flex-col justify-between max-w-md mx-auto relative overflow-y-auto shadow-2xl">
+    <main id="main-content" className="h-dvh-screen bg-slate-950 text-white flex flex-col justify-between max-w-md mx-auto relative overflow-y-auto shadow-2xl">
       {recordingError && <p role="alert" className="px-4 text-sm text-red-400">{recordingError}</p>}
       <audio ref={audioPlayerRef} className="hidden" />
 
