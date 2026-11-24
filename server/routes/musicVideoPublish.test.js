@@ -20,7 +20,6 @@ vi.mock('../services/auth.js', () => ({
 }));
 
 const sinks = vi.hoisted(() => ({
-  preparePublishDraft: vi.fn(async () => ({ draftId: 'synthetic-draft' })),
   previewPublishPost: vi.fn(async () => ({ rows: [], missing: [] })),
   prepareCrossLinkEdit: vi.fn(async () => ({ target: 'youtube', links: [] })),
   capturePublishKitFrame: vi.fn(async () => ({ project: { id: 'synthetic' } })),
@@ -31,7 +30,7 @@ const sinks = vi.hoisted(() => ({
   removeYoutubeThumbnailTest: vi.fn(async () => ({ project: { removed: true } })),
 }));
 vi.mock('../services/musicVideo/publish/index.js', async original => ({ ...await original(),
-  preparePublishDraft: sinks.preparePublishDraft, previewPublishPost: sinks.previewPublishPost, prepareCrossLinkEdit: sinks.prepareCrossLinkEdit }));
+  previewPublishPost: sinks.previewPublishPost, prepareCrossLinkEdit: sinks.prepareCrossLinkEdit }));
 vi.mock('../services/musicVideo/publishKit.js', async original => ({ ...await original(),
   capturePublishKitFrame: sinks.capturePublishKitFrame, draftPublishKitCopy: sinks.draftPublishKitCopy, updatePublishKitCopy: sinks.updatePublishKitCopy }));
 vi.mock('../services/musicVideo/youtubeThumbnail.js', async original => ({ ...await original(),
@@ -45,10 +44,10 @@ app.use(express.json());
 app.use('/api/music-video', musicVideoRoutes);
 app.use(errorMiddleware);
 
-let base;
+let base, projectId;
 beforeAll(async () => {
-  const { id } = await projects.createProject({ name: 'Example Song' });
-  base = `/api/music-video/${id}`;
+  ({ id: projectId } = await projects.createProject({ name: 'Example Song' }));
+  base = `/api/music-video/${projectId}`;
 });
 beforeEach(() => { auth.authenticated = true; vi.clearAllMocks(); });
 afterAll(cleanupTempDataRoots);
@@ -63,9 +62,10 @@ describe('POST /:id/publish/:target/cross-links', () => {
   });
 
   it('strips the password before strict validation for an authorized caller', async () => {
+    auth.authenticated = false; // only the bearer credential authorizes this call
     const res = await request(app).post(`${base}/publish/youtube/cross-links`).set('authorization', 'Bearer agent').send({ password: 'synthetic-password' });
     expect(res.status).toBe(200);
-    expect(sinks.prepareCrossLinkEdit).toHaveBeenCalledWith(expect.any(String), 'youtube');
+    expect(sinks.prepareCrossLinkEdit).toHaveBeenCalledWith(projectId, 'youtube');
   });
 
   it('rejects a target without an edit form and unknown body keys', async () => {
@@ -105,7 +105,7 @@ describe('post records and cross-link toggle', () => {
   it('previews a post read-only and refuses a bad target or option', async () => {
     const res = await request(app).post(`${base}/publish/reddit/preview`).send({ subreddit: 'example' });
     expect(res.status).toBe(200);
-    expect(sinks.previewPublishPost).toHaveBeenCalledWith(expect.any(String), 'reddit', { subreddit: 'example' });
+    expect(sinks.previewPublishPost).toHaveBeenCalledWith(projectId, 'reddit', { subreddit: 'example' });
     expect((await request(app).post(`${base}/publish/myspace/preview`).send({})).status).toBe(400);
     expect((await request(app).post(`${base}/publish/reddit/preview`).send({ bogus: 1 })).status).toBe(400);
   });
@@ -127,7 +127,7 @@ describe('publish kit routes', () => {
   it('captures a frame and refuses a negative or unknown-key body', async () => {
     const ok = await request(app).post(`${base}/publish-kit/frame`).send({ atSec: 3.5 });
     expect(ok.status).toBe(200);
-    expect(sinks.capturePublishKitFrame).toHaveBeenCalledWith(expect.any(String), 3.5);
+    expect(sinks.capturePublishKitFrame).toHaveBeenCalledWith(projectId, 3.5);
     expect((await request(app).post(`${base}/publish-kit/frame`).send({ atSec: -1 })).status).toBe(400);
     expect((await request(app).post(`${base}/publish-kit/frame`).send({ atSec: 1, extra: 1 })).status).toBe(400);
     expect(sinks.capturePublishKitFrame).toHaveBeenCalledTimes(1);
@@ -137,11 +137,11 @@ describe('publish kit routes', () => {
     const draft = await request(app).post(`${base}/publish-kit/copy`).send({ notes: 'Synthetic notes', length: 'short' });
     expect(draft.status).toBe(200);
     expect(draft.body.project).toEqual({ drafted: true });
-    expect(sinks.draftPublishKitCopy).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ notes: 'Synthetic notes', length: 'short' }));
+    expect(sinks.draftPublishKitCopy).toHaveBeenCalledWith(projectId, expect.objectContaining({ notes: 'Synthetic notes', length: 'short' }));
     expect((await request(app).post(`${base}/publish-kit/copy`).send({ length: 'huge' })).status).toBe(400);
     const patch = await request(app).patch(`${base}/publish-kit/copy`).send({ youtube: { title: 'Example title' } });
     expect(patch.status).toBe(200);
-    expect(sinks.updatePublishKitCopy).toHaveBeenCalledWith(expect.any(String), { youtube: { title: 'Example title' } });
+    expect(sinks.updatePublishKitCopy).toHaveBeenCalledWith(projectId, { youtube: { title: 'Example title' } });
     expect((await request(app).patch(`${base}/publish-kit/copy`).send({ youtube: { bogus: 'x' } })).status).toBe(400);
   });
 
@@ -154,9 +154,13 @@ describe('publish kit routes', () => {
   });
 
   it('adds and removes Test & Compare thumbnail variants', async () => {
-    expect((await request(app).post(`${base}/publish-kit/youtube-thumbnail/tests`)).body.project).toEqual({ added: true });
+    const add = await request(app).post(`${base}/publish-kit/youtube-thumbnail/tests`);
+    expect(add.status).toBe(200);
+    expect(add.body.project).toEqual({ added: true });
+    expect(sinks.addYoutubeThumbnailTest).toHaveBeenCalledWith(projectId);
     const del = await request(app).delete(`${base}/publish-kit/youtube-thumbnail/tests/variant-1.jpg`);
+    expect(del.status).toBe(200);
     expect(del.body.project).toEqual({ removed: true });
-    expect(sinks.removeYoutubeThumbnailTest).toHaveBeenCalledWith(expect.any(String), 'variant-1.jpg');
+    expect(sinks.removeYoutubeThumbnailTest).toHaveBeenCalledWith(projectId, 'variant-1.jpg');
   });
 });
