@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
 import express from 'express';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { closeLoopbackServer, startLoopbackServer } from '../lib/testHelper.js';
@@ -12,9 +13,14 @@ import * as spotifyAuth from '../services/spotifyAuth.js';
 import calendarRoutes from './calendar.js';
 import spotifyRoutes from './spotify.js';
 
-vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
-  dataRoot: () => lazyTempDataRoot('portos-oauth-flows-'),
-}));
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
+  const dataRoot = () => lazyTempDataRoot('portos-oauth-flows-');
+  return makePathsProxy(await importOriginal(), {
+    dataRoot,
+    // dataPath closes over the original PATHS. Spotify uses it directly.
+    overrides: { dataPath: (...parts) => join(dataRoot(), ...parts) },
+  });
+});
 
 const { googleToken, spotifyToken } = vi.hoisted(() => ({ googleToken: vi.fn(), spotifyToken: vi.fn() }));
 vi.mock('../lib/googleOAuthClient.js', async (importOriginal) => {
