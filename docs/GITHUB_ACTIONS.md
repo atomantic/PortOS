@@ -74,12 +74,6 @@ unknown artifacts, or wide diffs.
 PRs into `release` skip the planner entirely and force the full suite: that PR
 is the single gate a release ships behind.
 
-The Linux server job provisions the pinned NumPy virtualenv on any shard that
-can run the lyric CTC contract. Related mode checks the shard's full candidate
-inventory because import reach can select tests beyond the explicit file list.
-The contract always runs fresh. Local runs without NumPy still execute the
-model-free boundary checks and skip the Viterbi cases.
-
 ### Composite actions
 
 Setup blocks that several `ci.yml` jobs share live once, with their rationale,
