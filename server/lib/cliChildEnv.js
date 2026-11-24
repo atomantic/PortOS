@@ -127,9 +127,10 @@ function claudeContextOverride(provider) {
  *   other layer including `provider.envVars` (TERM/COLORTERM for a PTY).
  * @param {string|null} [options.safetyProfile] - a public-review execution
  *   profile, which hardens the OpenCode config (see `buildOpencodeEnvVars`).
+ * @param {boolean} [options.toolFree=false] - apply OpenCode tool restrictions for a private one-shot.
  * @returns {object} a fresh object holding only these layers
  */
-export function composeProviderEnv({ before = null, provider = null, model = null, extra = null, safetyProfile = null } = {}) {
+export function composeProviderEnv({ before = null, provider = null, model = null, extra = null, safetyProfile = null, toolFree = false } = {}) {
   // `authOnly` is an identity-only provider view (`cliProviderAuthDescriptor`),
   // NOT a record to generate env from: generators below sit ABOVE `before` and
   // would overwrite the already-composed env (e.g. OpenCode's declared-models map).
@@ -143,7 +144,7 @@ export function composeProviderEnv({ before = null, provider = null, model = nul
     // namespaced `--model` is accepted; lands after provider.envVars to override
     // the provider's STATIC copy. `safetyProfile` reaches it because OpenCode's
     // tool posture lives in that config (`hardenOpencodeConfigForNoTool`).
-    ...buildOpencodeEnvVars(provider, model, { safetyProfile }),
+    ...buildOpencodeEnvVars(provider, model, { safetyProfile, toolFree }),
     // A Pi record on a custom endpoint hands it to the PortOS endpoint extension.
     ...buildPiEndpointEnvVars(provider, model),
     ...(extra || {}),
@@ -256,6 +257,7 @@ export function buildPublicReviewActionsCliEnv(env = {}) {
  *   whenever the spawn names a cwd; `server/test/guards/runtime/spawnCwd.test.js` only counts such a call.
  * @param {object|null} [options.extra] - see `composeProviderEnv`.
  * @param {object|null} [options.bootstrapEnv] - Explicit credential-command output; only recognized auth keys pass, in ordinary runs or an opted-in no-tool review.
+ * @param {boolean} [options.toolFree=false] - see `composeProviderEnv`.
  * @param {boolean} [options.guard=false] - prepend the pm2 guard shim onto the
  *   final `PATH` so an unrestricted agent can't `pm2 kill` the shared daemon.
  *   Only agent-spawning sites opt in.
@@ -271,9 +273,10 @@ export function buildCliChildEnv({
   guard = false,
   bootstrapEnv = null,
   safetyProfile = null,
+  toolFree = false,
 } = {}) {
   const composed = withTorchCompilerCacheEnv(withSpawnCwdEnv(
-    { ...buildSafeCliBaseEnv(baseEnv, provider), ...composeProviderEnv({ before, provider, model, extra, safetyProfile }) },
+    { ...buildSafeCliBaseEnv(baseEnv, provider), ...composeProviderEnv({ before, provider, model, extra, safetyProfile, toolFree }) },
     cwd,
   ), join(resolve(cwd || process.cwd()), '.cache'));
 
