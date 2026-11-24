@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../../../services/apiMeatspace.js', () => ({
@@ -203,5 +203,18 @@ describe('PostProgress — benchmark trend', () => {
     renderProgress();
     await waitFor(() => expect(screen.getByText('Score Trend')).toBeInTheDocument());
     expect(screen.queryByText(/Benchmark Trend/)).not.toBeInTheDocument();
+  });
+});
+
+describe('PostProgress load failure', () => {
+  it('shows a load error with Retry instead of the empty copy, and Retry recovers', async () => {
+    getPostProgress.mockReset();
+    getPostProgress.mockRejectedValueOnce(new Error('boom')).mockResolvedValue(PROGRESS);
+    render(<MemoryRouter><PostProgress /></MemoryRouter>);
+    await screen.findByText(/Could not load POST progress/);
+    expect(screen.queryByText(/No training activity yet/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByText(/Could not load POST progress/)).toBeNull());
+    expect(screen.queryByText(/No training activity yet/)).toBeNull();
   });
 });
