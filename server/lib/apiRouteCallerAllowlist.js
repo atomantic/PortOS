@@ -245,6 +245,7 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/brain/youtube/ingest/:jobId/events',
     '/api/blender-models/:id/asset',
     '/api/browser/downloads',
+    '/api/catalog/export',
     '/api/catalog/scraps/:id',
     '/api/continuous-video/:jobId/events',
     '/api/cos/decisions',
@@ -335,7 +336,6 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
   'server-reference': Object.freeze([
     '/api/api-docs/tools.min.json',
     '/api/catalog/embeddings/backfill',
-    '/api/catalog/export',
     '/api/catalog/ingredients/:id/photoreal/blend',
     '/api/git/status',
     '/api/html-composition/render',
