@@ -14,6 +14,7 @@
 import { z } from 'zod';
 import { query, withTransaction } from '../lib/db.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { repoApiPath } from '../lib/githubNotificationParse.js';
 import {
   AGENT_RULE_KINDS, ASSIST_VERDICTS, KIND_SQL, PINNED_TRIAGE_RULES, REASON_KIND_SQL, REASON_RULE_KINDS, reasonRuledFilter, agentRuleScopeSql, assistAction, decisionFromVerdict, ruleAction, ruleActionScope, selectNotificationProvider, pullRequestAutomationFilter,
@@ -29,6 +30,9 @@ const GH_TIMEOUT_MS = 20_000;
 // Each sort is one screened model call; the rest wait for the next run.
 const MAX_SORTS_PER_RUN = 10;
 const MAX_ACTIONS_PER_RUN = 50;
+// Concurrent gh writes per Assist pass (this module cannot import the shared
+// bulk constant from githubNotifications.js, which imports it).
+const ASSIST_GH_CONCURRENCY = 5;
 // Autopilot includes everything Assist does.
 const ASSIST_MODES = new Set(['assist', 'autopilot']);
 const ACTIONABLE_DECISIONS = ['handled-by-pr-workflow', 'suggest-mark-read', 'duplicate', 'suggest-done', 'suggest-mute'];
@@ -140,7 +144,8 @@ async function stillAsRead(accountId, row) {
 
 /**
  * Sort and act for one account in Assist mode. `act(threadId, action, detail)`
- * applies a GitHub write and records it as an automation event.
+ * applies a GitHub write and records it as an automation event; a fourth
+ * argument carries `applyNotificationAction` options (the `evidencePatch`).
  */
 export async function assistAccountNotifications(account, env, { act }) {
   if (!ASSIST_MODES.has(account.mode)) return { sorted: 0, acted: 0 };
@@ -167,26 +172,24 @@ export async function assistAccountNotifications(account, env, { act }) {
      ORDER BY gh_updated_at DESC LIMIT ${MAX_ACTIONS_PER_RUN}`,
     [account.id, ACTIONABLE_DECISIONS, PINNED_TRIAGE_RULES, ...scopes.flatMap(({ all, except, only }) => [all, except, only]), ...reasonRuled.params, ...prActions.params],
   );
-  let acted = 0;
-  for (const row of rows) {
+  const outcomes = await mapWithConcurrency(rows, ASSIST_GH_CONCURRENCY, async (row) => {
     // An automation rule is the operator's own choice, so it needs no trusted
     // actor; `leave` and `agent` fall back to the fixed table (a closed thread
     // is still done).
     const action = ruleAction({ account, row }) || (ACTIONABLE_DECISIONS.includes(row.decision) ? assistAction(row) : null);
-    if (!action) continue;
+    if (!action) return false;
     // The batch was read before earlier GitHub writes in this loop; an operator
     // hand-off or manual decision since then must not be marked done over.
-    if (!(await stillAsRead(account.id, row))) continue;
-    const ok = await act(row.thread_id, action, { decision: row.decision, rule: row.rule })
+    if (!(await stillAsRead(account.id, row))) return false;
+    // `assisted` marks the thread once per activity (a re-triage on new
+    // activity rebuilds the evidence), written in the action's own transaction.
+    return act(row.thread_id, action, { decision: row.decision, rule: row.rule }, { evidencePatch: { assisted: true } })
       .then(() => true)
       .catch((error) => {
         console.error(`❌ Assist could not ${action} GitHub notification ${row.thread_id} for ${account.host}: ${error.message}`);
         return false;
       });
-    if (!ok) continue;
-    acted += 1;
-    // Once per activity: a re-triage on new activity rebuilds the evidence.
-    await query(`UPDATE github_notifications SET evidence = evidence || '{"assisted":true}'::jsonb WHERE account_id = $1 AND thread_id = $2`, [account.id, row.thread_id]);
-  }
+  });
+  const acted = outcomes.filter(Boolean).length;
   return { sorted, acted };
 }

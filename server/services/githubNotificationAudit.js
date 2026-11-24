@@ -12,7 +12,9 @@ import { AUDIT_WINDOW_DAYS, buildAuditSuggestions } from '../lib/githubNotificat
 import { toPgJson } from '../lib/pgJson.js';
 import { execGh } from './github.js';
 import { getAccount, listAccounts, resolveGitHubAccountEnv } from './githubAccounts.js';
-import { applyNotificationAction } from './githubNotifications.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
+import { githubNotificationEvents } from './githubNotificationEvents.js';
+import { applyNotificationAction, BULK_GH_CONCURRENCY } from './githubNotifications.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 
 const GH_TIMEOUT_MS = 30_000;
@@ -117,18 +119,17 @@ export async function applyAuditSuggestion(accountId, suggestionId) {
     const env = await accountEnv(account);
     await execGh(['api', '--hostname', account.host, '--method', 'DELETE', `repos/${suggestion.repo}/subscription`], GH_TIMEOUT_MS, { env });
   } else {
-    const muted = [];
     const env = await accountEnv(account);
-    for (const threadId of suggestion.threadIds) {
-      // A thread that is already gone from the inbox is skipped, not fatal.
-      const ok = await applyNotificationAction(account.id, threadId, 'mute', { detail: { via: 'audit' }, learn: false, account, env })
+    // A thread that is already gone from the inbox is skipped, not fatal.
+    const outcomes = await mapWithConcurrency(suggestion.threadIds, BULK_GH_CONCURRENCY, (threadId) =>
+      applyNotificationAction(account.id, threadId, 'mute', { detail: { via: 'audit' }, learn: false, emit: false, account, env })
         .then(() => true)
         .catch((error) => {
           console.log(`⏭️ Audit mute skipped thread ${threadId}: ${error.message}`);
           return false;
-        });
-      if (ok) muted.push(threadId);
-    }
+        }));
+    const muted = suggestion.threadIds.filter((_, index) => outcomes[index]);
+    if (muted.length) githubNotificationEvents.emit('changed', { accountId: account.id });
     detail = { threadIds: muted };
   }
   suggestion.applied = true;
@@ -170,11 +171,14 @@ export async function undoAuditChange(id) {
   } else {
     const threadIds = change.detail?.threadIds || [];
     const env = threadIds.length ? await accountEnv(account) : null;
-    for (const threadId of threadIds) {
-      await applyNotificationAction(account.id, threadId, 'resubscribe', { detail: { via: 'audit-undo' }, learn: false, account, env }).catch((error) => {
-        console.log(`⏭️ Audit undo skipped thread ${threadId}: ${error.message}`);
-      });
-    }
+    const outcomes = await mapWithConcurrency(threadIds, BULK_GH_CONCURRENCY, (threadId) =>
+      applyNotificationAction(account.id, threadId, 'resubscribe', { detail: { via: 'audit-undo' }, learn: false, emit: false, account, env })
+        .then(() => true)
+        .catch((error) => {
+          console.log(`⏭️ Audit undo skipped thread ${threadId}: ${error.message}`);
+          return false;
+        }));
+    if (outcomes.some(Boolean)) githubNotificationEvents.emit('changed', { accountId: account.id });
   }
   await query('UPDATE github_notification_audit_changes SET undone_at = NOW() WHERE id = $1', [id]);
   return { id: String(id), undone: true };
