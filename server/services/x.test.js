@@ -7,7 +7,7 @@ vi.mock('./xBrowser.js', () => ({ openXHandoff: vi.fn() }));
 const { query, withTransaction } = await import('../lib/db.js');
 const { executeXBrowserRead } = await import('../integrations/x/index.js');
 const { openXHandoff } = await import('./xBrowser.js');
-const { buildXReadError, deriveXDiagnostics, syncAccount, reviewDraft, openApprovedDraft } = await import('./x.js');
+const { buildXReadError, deriveXDiagnostics, syncAccount, reviewDraft, openApprovedDraft, createAccount, updateAccount, createDraft, openAccountDestination } = await import('./x.js');
 
 describe('X diagnostics', () => {
   it('distinguishes observable public/search reach from unknown recommendation eligibility', () => {
@@ -435,5 +435,37 @@ describe('openApprovedDraft approval gates', () => {
 
     const reads = query.mock.calls.filter(([sql]) => /FROM x_drafts/.test(sql));
     expect(reads).toHaveLength(2);
+  });
+});
+
+describe('X service refusals are 4xx, not 500', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    query.mockReset();
+    query.mockResolvedValue({ rows: [] });
+  });
+
+  it('maps unique and foreign-key violations to safe 409 and 404 errors', async () => {
+    query.mockRejectedValueOnce(Object.assign(new Error('duplicate key value violates unique constraint "x_accounts_username_key"'), { code: '23505' }));
+    await expect(createAccount({ label: 'A', username: 'example_user' })).rejects.toMatchObject({
+      status: 409,
+      code: 'CONFLICT',
+      message: 'An X account with that username already exists',
+    });
+
+    query.mockResolvedValueOnce({ rows: [{ id: 'a', username: 'example_user' }] });
+    query.mockRejectedValueOnce(Object.assign(new Error('violates foreign key constraint "x_accounts_pkey"'), { code: '23503' }));
+    await expect(updateAccount('a', { label: 'B' })).rejects.toMatchObject({ status: 404, message: 'X account not found' });
+  });
+
+  it('answers 404 for an unknown draft account and 409 for a disabled account', async () => {
+    query.mockResolvedValueOnce({ rows: [] });
+    await expect(createDraft({ accountId: 'missing', body: 'hi' })).rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' });
+
+    query.mockResolvedValueOnce({ rows: [{ id: 'a', username: 'example_user', enabled: false }] });
+    await expect(openAccountDestination('a', 'profile')).rejects.toMatchObject({ status: 409, code: 'CONFLICT' });
+
+    query.mockResolvedValueOnce({ rows: [{ id: 'a', username: 'example_user', enabled: false }] });
+    await expect(syncAccount('a')).rejects.toMatchObject({ status: 409, code: 'CONFLICT' });
   });
 });

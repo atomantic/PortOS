@@ -440,7 +440,9 @@ agent-tool resource advertises):
 | 403 | `FORBIDDEN` | Refused, including a shell command outside the allowlist |
 | 404 | `NOT_FOUND` | Resource not found |
 | 409 | `CONFLICT` | State conflict (duplicate, stale, or already running) |
+| 412 | `PRECONDITION_FAILED` | A required setup step is missing (for example an unconfigured API key) |
 | 422 | `VALIDATION_ERROR` | Request understood but invalid |
+| 429 | `RATE_LIMITED` | A configured action budget or spacing limit was reached |
 | 500 | `INTERNAL_ERROR` | Server error (also the fallback for any unlisted status) |
 | 502 | `BAD_GATEWAY` | An upstream service failed |
 | 503 | `SERVICE_UNAVAILABLE` | A dependency is not available |

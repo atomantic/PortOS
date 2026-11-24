@@ -3,6 +3,7 @@ import { query, withTransaction } from '../lib/db.js';
 import { executeXBrowserRead } from '../integrations/x/index.js';
 import { openXHandoff } from './xBrowser.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { mapPgConstraintErrors } from '../lib/pgConstraintErrors.js';
 
 const USERNAME_PATTERN = /^[A-Za-z0-9_]{1,15}$/;
 const DRAFT_STATES = new Set(['draft', 'pending_review', 'approved', 'rejected', 'opened']);
@@ -88,13 +89,18 @@ async function getAccountRow(id, client = { query }) {
   return result.rows[0] || null;
 }
 
+const ACCOUNT_CONSTRAINT_MESSAGES = {
+  conflict: 'An X account with that username already exists',
+  missing: 'X account not found',
+};
+
 export async function createAccount({ label, username, enabled = true, notes = '' }) {
   const id = randomUUID();
-  await query(
+  await mapPgConstraintErrors(() => query(
     `INSERT INTO x_accounts (id,label,username,enabled,notes)
      VALUES ($1,$2,$3,$4,$5)`,
     [id, boundedText(label, 120).trim(), normalizeUsername(username), enabled, boundedText(notes, 4_000)],
-  );
+  ), ACCOUNT_CONSTRAINT_MESSAGES);
   console.log(`🐦 Added X account ${id}`);
   return getAccount(id);
 }
@@ -102,10 +108,10 @@ export async function createAccount({ label, username, enabled = true, notes = '
 export async function updateAccount(id, updates) {
   const existing = await getAccountRow(id);
   if (!existing) return null;
-  await query(
+  await mapPgConstraintErrors(() => query(
     `UPDATE x_accounts SET label=$2,username=$3,enabled=$4,notes=$5,updated_at=NOW() WHERE id=$1`,
     [id, boundedText(updates.label ?? existing.label, 120).trim(), normalizeUsername(updates.username ?? existing.username), updates.enabled ?? existing.enabled, boundedText(updates.notes ?? existing.notes, 4_000)],
-  );
+  ), ACCOUNT_CONSTRAINT_MESSAGES);
   return getAccount(id);
 }
 
@@ -194,7 +200,7 @@ const mergePosts = (username, ...lists) => {
 async function syncAccountUnlocked(accountId) {
   const account = await getAccountRow(accountId);
   if (!account) return null;
-  if (!account.enabled) throw new Error('Selected X account is disabled');
+  if (!account.enabled) throw new ServerError('Selected X account is disabled', { status: 409 });
 
   const [profileResult, latestResult, peopleResult] = await Promise.all([
     executeXBrowserRead('profile', { username: account.username }),
@@ -261,7 +267,7 @@ export async function listPosts(accountId) {
 export async function openAccountDestination(accountId, kind) {
   const account = await getAccountRow(accountId);
   if (!account) return null;
-  if (!account.enabled) throw new Error('Selected X account is disabled');
+  if (!account.enabled) throw new ServerError('Selected X account is disabled', { status: 409 });
   if (!['profile', 'latest', 'people', 'settings'].includes(kind)) throw new Error('Unsupported X handoff destination');
   const value = kind === 'settings' ? '' : account.username;
   return openXHandoff({ kind, value });
@@ -279,7 +285,7 @@ export async function listDrafts(accountId) {
 
 export async function createDraft({ accountId, body }) {
   const account = await getAccountRow(accountId);
-  if (!account) throw new Error('X account not found');
+  if (!account) throw new ServerError('X account not found', { status: 404 });
   const result = await query(
     'INSERT INTO x_drafts (id,account_id,body) VALUES ($1,$2,$3) RETURNING *',
     [randomUUID(), accountId, boundedText(body, 4_000).trim()],
@@ -327,8 +333,8 @@ async function openApprovedDraftUnlocked(id) {
   const draft = result.rows[0];
   if (!draft) throw new ServerError('X draft not found', { status: 404 });
   if (draft.state !== 'approved') return null;
-  if (!draft.approved_at || Date.now() - new Date(draft.approved_at).getTime() > MAX_DRAFT_AGE_MS) throw new Error('X draft approval is stale; review a fresh draft');
-  if (!draft.enabled) throw new Error('Selected X account is disabled');
+  if (!draft.approved_at || Date.now() - new Date(draft.approved_at).getTime() > MAX_DRAFT_AGE_MS) throw new ServerError('X draft approval is stale; review a fresh draft', { status: 409 });
+  if (!draft.enabled) throw new ServerError('Selected X account is disabled', { status: 409 });
   const handoff = await openXHandoff({ kind: 'compose', value: draft.body });
   const updated = await query(
     `UPDATE x_drafts SET state='opened',result=$2,updated_at=NOW() WHERE id=$1 AND state='approved' RETURNING *`,
