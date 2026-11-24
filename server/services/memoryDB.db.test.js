@@ -272,6 +272,37 @@ describe.skipIf(!runDb)('memoryDB CRUD (#3447)', () => {
     expect((await memoryDB.getMemory(a.id)).relatedMemories).toEqual([]);
   });
 
+  it('keeps createMemory/updateMemory related links symmetric for both id orderings', async () => {
+    const made = await Promise.all([1, 2, 3].map(n => memoryDB.createMemory({ type: 'fact', content: `Sym ${n}.` })));
+    const [lo, mid, hi] = made.sort((x, y) => (x.id < y.id ? -1 : 1));
+    const ids = new Set(made.map(m => m.id));
+    const pairEdges = async () => (await memoryDB.getGraphData()).edges
+      .filter(e => ids.has(e.source) && ids.has(e.target) && e.linkType === 'related')
+      .map(e => [e.source, e.target].sort().join('|')).sort();
+    const pair = (x, y) => [x.id, y.id].sort().join('|');
+
+    // Create from both the lower and higher id side; duplicates and self-links are dropped.
+    const fromHi = await memoryDB.createMemory({ type: 'fact', content: 'Sym created.', relatedMemories: [lo.id, lo.id] });
+    expect(fromHi.relatedMemories).toEqual([lo.id]);
+    expect((await memoryDB.getMemory(lo.id)).relatedMemories).toContain(fromHi.id);
+    ids.add(fromHi.id);
+    expect(await pairEdges()).toEqual([pair(fromHi, lo)]);
+
+    // Update from the highest id (reverse rows would be missed) and from the lowest.
+    await memoryDB.updateMemory(hi.id, { relatedMemories: [lo.id, mid.id, hi.id] });
+    await memoryDB.updateMemory(lo.id, { relatedMemories: [hi.id, mid.id] });
+    expect((await memoryDB.getMemory(mid.id)).relatedMemories.sort()).toEqual([lo.id, hi.id].sort());
+    expect(await pairEdges()).toEqual([pair(lo, mid), pair(lo, hi), pair(mid, hi)].sort());
+
+    // Clearing from either side removes the edge fully (no orphaned reverse rows).
+    await memoryDB.updateMemory(hi.id, { relatedMemories: [] });
+    expect((await memoryDB.getMemory(lo.id)).relatedMemories).toEqual([mid.id]);
+    expect(await pairEdges()).toEqual([pair(lo, mid)]);
+    await memoryDB.updateMemory(lo.id, { relatedMemories: [] });
+    expect(await pairEdges()).toEqual([]);
+    expect((await memoryDB.getMemory(mid.id)).relatedMemories).toEqual([]);
+  });
+
   it('links two memories bidirectionally and refuses an unknown id', async () => {
     const [a, b] = await Promise.all([
       memoryDB.createMemory({ type: 'fact', content: 'Bidirectional A.' }),
