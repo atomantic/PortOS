@@ -9,7 +9,7 @@
 
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
-import { CONSOLIDATED_AUDIT_DOMAINS, QUALITY_HEALTHY_THRESHOLD, auditDomainFor } from './auditDomains.js';
+import { CONSOLIDATED_AUDIT_DOMAINS, QUALITY_HEALTHY_THRESHOLD, QUALITY_RECENCY_HALF_LIFE_DAYS, auditDomainFor } from './auditDomains.js';
 import { AUDIT_DEFINITIONS, AUDIT_EXECUTION_PROFILES, isAuditTaskType, normalizeAuditTaskType } from './auditCatalog.js';
 import { safeJSONParse } from './jsonIo.js';
 
@@ -245,8 +245,7 @@ const CONFIDENCE_WEIGHT = Object.freeze({ high: 1, medium: 0.5 });
 export { QUALITY_HEALTHY_THRESHOLD };
 /** The pragmatic target band: reaching it means done, chasing 100 invites over-engineering. */
 export const QUALITY_TARGET_BAND = Object.freeze({ min: 85, max: 95 });
-/** A run's weight halves every this many days, so remediated pre-fix runs stop pinning the score. */
-export const QUALITY_RECENCY_HALF_LIFE_DAYS = 14;
+export { QUALITY_RECENCY_HALF_LIFE_DAYS };
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function normalizeSliceText(value) {
