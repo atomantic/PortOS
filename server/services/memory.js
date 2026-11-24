@@ -13,6 +13,7 @@
 
 import { ServerError } from '../lib/errorHandler.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
+import { PERSISTENT_MIND_ID } from '../lib/persistent/persistentMindTrajectory.js';
 import { persistentMindMemoryProtection, existingPersistentMindReview, createPersistentMindReview, mergePersistentMindReview, createPersistentMindReviewOrigin } from '../lib/persistent/persistentMindMemory.js';
 import { DEFAULT_MEMORY_LINK_TYPE, isSymmetricMemoryLinkType } from '../lib/memoryLinkTypes.js';
 import { cosEvents } from './cos/cosEvents.js';
@@ -874,7 +875,8 @@ export async function applyDecay(decayRate = 0.01) {
     const newImportance = Math.max(0.1, memory.importance * (1 - decayRate * Math.sqrt(ageInDays)) + accessBoost);
 
     // Archive if importance falls below threshold and old enough
-    if (newImportance < 0.15 && ageInDays > 30) {
+    // Mind-owned memories are archived only by the Mind's own review, never by background decay.
+    if (newImportance < 0.15 && ageInDays > 30 && memory.sourceAgentId !== PERSISTENT_MIND_ID) {
       await updateMemory(meta.id, { status: 'archived', archivedReason: 'decay' });
       updated++;
     } else if (Math.abs(newImportance - memory.importance) > 0.01) {

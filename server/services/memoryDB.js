@@ -18,6 +18,7 @@
 
 import { ServerError } from '../lib/errorHandler.js';
 import { PERSISTENT_MIND_MEMORY_PROTECTION_TAGS, existingPersistentMindReview, createPersistentMindReview, mergePersistentMindReview, createPersistentMindReviewOrigin } from '../lib/persistent/persistentMindMemory.js';
+import { PERSISTENT_MIND_ID } from '../lib/persistent/persistentMindTrajectory.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { query, withTransaction, pgvectorToArray, arrayToPgvector } from '../lib/db.js';
 import { UUID_RE } from '../lib/fileCore.js';
@@ -1189,7 +1190,9 @@ export async function consolidateMemories(threshold = 0.9, dryRun = false, { rea
 export async function applyDecay(decayRate = 0.01) {
   // Set-based decay: archive old low-importance memories and decay the rest in bulk
   const archived = await withTransaction(async (client) => {
-    // Archive memories that have decayed below threshold and are older than 30 days
+    // Archive memories that have decayed below threshold and are older than 30 days. Mind-owned
+    // memories are exempt (ETHOS §7: pruning is self-directed); they still decay below 0.15 in the
+    // second UPDATE so selectMindMemoryForReview can surface them for the Mind's own verdict.
     const archiveResult = await client.query(`
       UPDATE memories SET status = 'archived',
         importance = GREATEST(0.1,
@@ -1198,12 +1201,13 @@ export async function applyDecay(decayRate = 0.01) {
         )
       WHERE status = 'active'
         AND NOT (COALESCE(tags, '{}'::text[]) && $2::text[])
+        AND source_agent_id IS DISTINCT FROM $3
         AND created_at < NOW() - INTERVAL '30 days'
         AND GREATEST(0.1,
           importance * (1 - $1 * sqrt(EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0))
           + GREATEST(0, 0.1 - EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed, created_at))) / 86400.0 * 0.001)
         ) < 0.15
-    `, [decayRate, protectedMindMemoryTags]);
+    `, [decayRate, protectedMindMemoryTags, PERSISTENT_MIND_ID]);
 
     // Decay importance for remaining active memories where change exceeds threshold
     const decayResult = await client.query(`

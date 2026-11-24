@@ -884,6 +884,22 @@ describe.skipIf(!runDb)('memoryDB applyDecay boundaries (#3447)', () => {
     expect((await memoryDB.peekMemory(core.id)).tags).toEqual(['mind:core-identity']);
   });
 
+  it('never auto-archives Persistent Mind memories, reviewed or not, yet decays them into review range (#18322)', async () => {
+    await resetMemories();
+    const mindId = 'cos-persistent-mind';
+    const reviewed = await memoryDB.createMemory({ type: 'observation', content: 'Reviewed fading note.', importance: 0.15, sourceAgentId: mindId });
+    const unreviewed = await memoryDB.createMemory({ type: 'observation', content: 'Unreviewed fading note.', importance: 0.15, sourceAgentId: mindId });
+    const foreign = await memoryDB.createMemory({ type: 'observation', content: 'Foreign fading note.', importance: 0.15, sourceAgentId: 'other-agent' });
+    for (const m of [reviewed, unreviewed, foreign]) await backdate(m.id, 400);
+    await memoryDB.reviewMindMemory({ memoryId: reviewed.id, expectedVersion: 1, verdict: 'keep' }, { mindId, turnId: 'synthetic-turn', providerId: 'example-provider', model: 'example-model' });
+    await memoryDB.applyDecay(0.01);
+    expect(await statusOf(reviewed.id)).toBe('active');
+    expect(await statusOf(unreviewed.id)).toBe('active');
+    expect(await importanceOf(unreviewed.id)).toBeLessThan(0.15);
+    expect(await statusOf(foreign.id)).toBe('archived');
+    expect((await memoryDB.selectMindMemoryForReview(mindId))?.id).toBe(unreviewed.id);
+  });
+
   it('is a no-op at decayRate 0 for memories past the recency-bonus window', async () => {
     await resetMemories();
     // The recency bonus is GREATEST(0, 0.1 - daysSinceAccess * 0.001) — zero once
