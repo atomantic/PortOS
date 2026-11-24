@@ -24,7 +24,7 @@ import {
   revertDiffFromLive,
   runVerifyCommand,
 } from './sandbox.js';
-import { createStagedFixStore, isAutofixerSessionId } from './stagedFixes.js';
+import { createStagedFixStore, isAutofixerSessionId, buildAutofixerSessionId, processNameFromSessionId } from './stagedFixes.js';
 import { writeHistoryFile, writeHistoryJson } from './historyFiles.js';
 import { startAutofixerUi } from './ui.js';
 import { execPm2, listProcessesStrict, DATA_DIR, AUTOFIXER_DIR, INDEX_FILE, loadApps } from './shared.js';
@@ -132,7 +132,7 @@ async function sweepInterruptedRepairs() {
     // partial output; a second empty write would destroy that evidence.
     const alreadyRecorded = await access(join(SESSIONS_DIR, sessionId, 'metadata.json')).then(() => true, () => false);
     if (alreadyRecorded) continue;
-    const processName = sessionId.match(/^autofixer_(.+)_\d+_[a-z0-9]+$/)?.[1] || 'unknown';
+    const processName = processNameFromSessionId(sessionId) || 'unknown';
     const now = new Date().toISOString();
     await recordInterrupted({ sessionId, processName, startTime: now }).catch((err) => {
       console.error(`❌ [Autofixer] Could not record interrupted session ${sessionId}: ${err.message}`);
@@ -294,7 +294,7 @@ function markAsFixed(processName) {
 //      the diff to the live checkout and restart the process; otherwise the
 //      validated patch is staged beside the session for manual review.
 async function fixProcess(processName, app, errorLogs, outputLogs) {
-  const sessionId = `autofixer_${processName}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const sessionId = buildAutofixerSessionId(processName);
   const startTime = new Date().toISOString();
 
   console.log(`🔧 [Autofixer] Starting isolated fix for ${processName}: ${sessionId}`);

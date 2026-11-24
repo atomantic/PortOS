@@ -3,7 +3,7 @@ import { chmod, mkdtemp, mkdir, stat, writeFile, readFile, rm } from 'fs/promise
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execFileSync } from 'child_process';
-import { createStagedFixStore } from './stagedFixes.js';
+import { createStagedFixStore, isAutofixerSessionId, buildAutofixerSessionId, processNameFromSessionId } from './stagedFixes.js';
 let root, repo, store, restart;
 const id = 'autofixer_example_123';
 // git apply/checkout on Windows applies autocrlf, so compare with LF endings.
@@ -123,5 +123,37 @@ describe('staged repair lifecycle', () => {
     expect((await store.read(id)).status).toBe(404);
     expect(await readExample(repo)).toBe('old\n');
     expect(restart).not.toHaveBeenCalled();
+  });
+});
+
+describe('session IDs for dotted PM2 process names', () => {
+  it('encodes new IDs to a filesystem-safe grammar and recovers the name', () => {
+    const generated = buildAutofixerSessionId('example.worker', 1700000000000, 0.123456789);
+    expect(generated).toMatch(/^autofixer_example_2e_worker_1700000000000_[a-z0-9]+$/);
+    expect(isAutofixerSessionId(generated)).toBe(true);
+    expect(processNameFromSessionId(generated)).toBe('example.worker');
+  });
+
+  it('keeps pre-encoding dotted IDs operable but rejects malformed, traversal and unrelated names', () => {
+    expect(isAutofixerSessionId('autofixer_example.worker_1700000000000_abc123def')).toBe(true);
+    for (const bad of ['autofixer_example.worker', 'autofixer_a/../b.c_1_x', 'autofixer_a.b_1_x/..',
+      'autofixer_a\\b.c_1_x', '../autofixer_a.b_1_x', 'other_a.b_1_x', 'autofixer_.._1_x', '', null]) {
+      expect(isAutofixerSessionId(bad)).toBe(false);
+    }
+  });
+
+  it.each([
+    ['encoded', 'autofixer_example_2e_worker_1700000000000_abc123def'],
+    ['legacy', 'autofixer_example.worker_1700000000000_abc123def'],
+  ])('reads, discards and prunes a %s dotted session', async (_label, dotted) => {
+    await mkdir(join(root, 'sessions', dotted), { recursive: true });
+    await writeFile(join(root, 'sessions', dotted, 'metadata.json'), JSON.stringify({
+      sessionId: dotted, appId: 'example', repoPath: repo, processName: 'example.worker', staged: true,
+    }));
+    await writeFile(join(root, 'sessions', dotted, 'fix.patch'), patch);
+    expect((await store.read(dotted)).patch).toBe(patch);
+    expect(await store.canPrune(dotted)).toBe(false);
+    expect(await store.mutate(dotted, 'discard')).toEqual({ success: true, disposition: 'discarded' });
+    expect(await store.canPrune(dotted)).toBe(true);
   });
 });

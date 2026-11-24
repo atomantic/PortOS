@@ -3,7 +3,26 @@ import { join } from 'path';
 import { validateProposedDiff, applyDiffToLive, revertDiffFromLive } from './sandbox.js';
 import { writeHistoryJson } from './historyFiles.js';
 
-export const isAutofixerSessionId = id => typeof id === 'string' && /^autofixer_[A-Za-z0-9_-]+$/.test(id);
+// Session IDs name a directory under sessions/, so they stay inside one
+// filesystem-safe segment. PM2 names may contain dots (lib/pm2ProcessName.js);
+// new IDs encode each dot as `_2e_` and keep the real name in metadata.
+const SESSION_ID_RE = /^autofixer_[A-Za-z0-9_-]+$/;
+// Compatibility for IDs generated before the encoding, which embedded the raw
+// name. Anchored on the generated `_<epoch ms>_<base36>` suffix and still free
+// of any path separator, so malformed or unrelated directories stay ineligible.
+const LEGACY_DOTTED_SESSION_ID_RE = /^autofixer_[A-Za-z0-9_][A-Za-z0-9._-]*\.[A-Za-z0-9._-]*_\d+_[a-z0-9]+$/;
+
+export const isAutofixerSessionId = id => typeof id === 'string'
+  && (SESSION_ID_RE.test(id) || LEGACY_DOTTED_SESSION_ID_RE.test(id));
+
+export const buildAutofixerSessionId = (processName, now = Date.now(), random = Math.random()) =>
+  `autofixer_${processName.replaceAll('.', '_2e_')}_${now}_${random.toString(36).slice(2, 11)}`;
+
+// Best-effort inverse for recovering a name from an ID when no metadata exists.
+export const processNameFromSessionId = (id) => {
+  const encoded = typeof id === 'string' ? id.match(/^autofixer_(.+)_\d+_[a-z0-9]+$/)?.[1] : null;
+  return encoded ? encoded.replaceAll('_2e_', '.') : null;
+};
 
 // Session metadata is the authority for patch disposition. The history index is
 // written by the monitor. Manual and automatic promotion share this queue so
