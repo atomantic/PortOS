@@ -50,11 +50,12 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
 // POST / - Create/link new platform account
 router.post('/', asyncHandler(async (req, res) => {
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
   // Check if this is a registration request (for new Moltbook accounts)
   // or a direct account creation (with existing credentials)
-  if (req.body.credentials) {
+  if (body.credentials) {
     // Direct account creation with credentials
-    const data = validateRequest(platformAccountSchema, req.body);
+    const data = validateRequest(platformAccountSchema, body);
 
     // Verify agent exists
     const agent = await agentPersonalities.getAgentById(data.agentId);
@@ -71,7 +72,7 @@ router.post('/', asyncHandler(async (req, res) => {
     res.status(201).json(account);
   } else {
     // Registration request - create new account on platform
-    const data = validateRequest(accountRegistrationSchema, req.body);
+    const data = validateRequest(accountRegistrationSchema, body);
 
     // Verify agent exists
     const agent = await agentPersonalities.getAgentById(data.agentId);
