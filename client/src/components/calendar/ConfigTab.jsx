@@ -335,7 +335,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                   <div className="flex items-center gap-2 shrink-0">
                     <button
                       onClick={() => handleToggle(account)}
-                      className={`px-2 py-1 rounded text-xs transition-colors ${
+                      className={`pointer-coarse:min-h-11 inline-flex items-center px-2 py-1 rounded text-xs transition-colors ${
                         account.enabled
                           ? 'bg-port-success/20 text-port-success'
                           : 'bg-gray-700 text-gray-400'
@@ -346,7 +346,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                     <button
                       onClick={() => requestDelete(account.id)}
                       disabled={deleting === account.id}
-                      className="p-1 text-gray-500 hover:text-port-error transition-colors"
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
                       title="Delete account"
                     >
                       {deleting === account.id ? (
@@ -409,23 +409,35 @@ export default function ConfigTab({ accounts, setAccounts }) {
                           ) : googleAuthState === 'loading' ? (
                             <BrailleSpinner text="Checking Google authorization" />
                           ) : googleAuth?.hasCredentials && googleAuth?.hasTokens ? (
-                            <div className="flex flex-wrap items-center justify-between gap-2 px-2 py-1.5 bg-port-success/5 rounded">
-                              <div className="flex flex-wrap items-center gap-1.5 text-xs text-port-success min-w-0">
-                                <Key size={12} className="shrink-0" />
-                                <span>Google API authenticated</span>
-                                {googleAuth.expiryDate && (
-                                  <span className="text-gray-600">
-                                    (expires {formatDateNumeric(googleAuth.expiryDate)})
-                                  </span>
-                                )}
+                            <div className="space-y-2">
+                              <div className="flex flex-wrap items-center justify-between gap-2 px-2 py-1.5 bg-port-success/5 rounded">
+                                <div className="flex flex-wrap items-center gap-1.5 text-xs text-port-success min-w-0">
+                                  <Key size={12} className="shrink-0" />
+                                  <span>Google API authenticated</span>
+                                  {googleAuth.expiryDate && (
+                                    <span className="text-gray-600">
+                                      (expires {formatDateNumeric(googleAuth.expiryDate)})
+                                    </span>
+                                  )}
+                                </div>
+                                <button
+                                  onClick={() => requestDelete('google-auth')}
+                                  disabled={clearingGoogleAuth}
+                                  className="pointer-coarse:min-h-11 inline-flex items-center px-2 py-0.5 text-xs rounded text-gray-600 hover:text-port-error hover:bg-gray-800 shrink-0 disabled:opacity-50"
+                                >
+                                  Clear
+                                </button>
                               </div>
-                              <button
-                                onClick={handleClearGoogleAuth}
-                                disabled={clearingGoogleAuth}
-                                className="px-2 py-0.5 text-xs rounded text-gray-600 hover:text-port-error hover:bg-gray-800 shrink-0"
-                              >
-                                Clear
-                              </button>
+                              {isConfirming('google-auth') && (
+                                <InlineConfirmRow
+                                  question="Clear Google API authorization? You will need to re-authorize to sync."
+                                  confirmText="Clear auth"
+                                  confirmTitle="Clear Google API authorization"
+                                  cancelTitle="Cancel"
+                                  onConfirm={() => confirmDelete(handleClearGoogleAuth)}
+                                  onCancel={cancelDelete}
+                                />
+                              )}
                             </div>
                           ) : googleAuth?.hasCredentials ? (
                             <div className="space-y-2 px-2 py-1.5 bg-port-warning/5 rounded">
@@ -539,7 +551,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                             <button
                               onClick={() => handleEnableAll(account)}
                               disabled={savingSubcals === account.id}
-                              className="px-2 py-0.5 text-xs rounded text-gray-500 hover:text-white hover:bg-gray-800"
+                              className="pointer-coarse:min-h-11 inline-flex items-center px-2 py-0.5 text-xs rounded text-gray-500 hover:text-white hover:bg-gray-800"
                             >
                               Enable All
                             </button>
@@ -547,7 +559,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                           <button
                             onClick={() => handleDiscoverCalendars(account)}
                             disabled={discovering === account.id}
-                            className="flex items-center gap-1 px-2 py-0.5 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 disabled:opacity-50"
+                            className="flex items-center gap-1 pointer-coarse:min-h-11 px-2 py-0.5 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 disabled:opacity-50"
                           >
                             {discovering === account.id ? (
                               <RefreshCw size={12} className="animate-spin" />
@@ -596,7 +608,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                               <button
                                 onClick={() => handleSubcalendarToggle(account, sc.calendarId, 'dormant', false)}
                                 disabled={savingSubcals === account.id}
-                                className="px-2 py-0.5 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30"
+                                className="pointer-coarse:min-h-11 inline-flex items-center px-2 py-0.5 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30"
                               >
                                 Activate
                               </button>
@@ -605,7 +617,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                                 <button
                                   onClick={() => handleSubcalendarToggle(account, sc.calendarId, 'enabled', !sc.enabled)}
                                   disabled={savingSubcals === account.id}
-                                  className="p-0.5"
+                                  className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center p-0.5"
                                   title={sc.enabled ? 'Disable' : 'Enable'}
                                 >
                                   {sc.enabled ? (
@@ -617,7 +629,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                                 <button
                                   onClick={() => handleSubcalendarToggle(account, sc.calendarId, 'dormant', true)}
                                   disabled={savingSubcals === account.id}
-                                  className="px-1.5 py-0.5 text-xs rounded text-gray-600 hover:text-gray-400 hover:bg-gray-800"
+                                  className="pointer-coarse:min-h-11 inline-flex items-center px-1.5 py-0.5 text-xs rounded text-gray-600 hover:text-gray-400 hover:bg-gray-800"
                                   title="Mark dormant"
                                 >
                                   Dormant

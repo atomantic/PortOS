@@ -15,7 +15,7 @@ export const getCalendarEvents = (params = {}, options = {}) => {
   return request(`/calendar/events${str ? `?${str}` : ''}`, options);
 };
 export const getCalendarAgenda = (options = {}) => request('/calendar/agenda', options);
-export const getCalendarTokenStatus = () => request('/calendar/debug/token-status');
+export const getCalendarTokenStatus = (options = {}) => request('/calendar/debug/token-status', options);
 export const testCalendarToken = (provider) => request('/calendar/debug/test-token', { method: 'POST', body: JSON.stringify({ provider }) });
 export const clearCalendarToken = (provider) => request('/calendar/debug/clear-token', { method: 'POST', body: JSON.stringify({ provider }) });
 export const updateSubcalendars = (accountId, data, options = {}) => request(`/calendar/accounts/${accountId}/subcalendars`, { method: 'PUT', body: JSON.stringify(data), ...options });

@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // Mirrors GET /calendar/review/:date: one bounded page plus full-day metadata.
@@ -51,6 +51,65 @@ describe('ReviewTab', () => {
 
     await waitFor(() => expect(getDailyReview).toHaveBeenCalledWith('2026-01-02', expect.objectContaining({ limit: 200, offset: 0 }), expect.anything()));
     expect(screen.getByLabelText('Review date').value).toBe('2026-01-02');
+  });
+
+  it('persists selected date in URL params, restores on Back/refresh, and falls back to today when cleared or invalid', async () => {
+    vi.setSystemTime(new Date(2026, 0, 10, 12));
+    getDailyReview.mockClear();
+
+    function LocationHarness() {
+      const location = useLocation();
+      const navigate = useNavigate();
+      return (
+        <>
+          <div data-testid="location-search">{location.search}</div>
+          <button type="button" onClick={() => navigate(-1)}>Back</button>
+          <ReviewTab />
+        </>
+      );
+    }
+
+    render(
+      <MemoryRouter initialEntries={['/calendar/review?reviewDate=2026-01-05']}>
+        <LocationHarness />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(getDailyReview).toHaveBeenCalledWith('2026-01-05', expect.objectContaining({ limit: 200, offset: 0 }), expect.anything()));
+    expect(screen.getByLabelText('Review date').value).toBe('2026-01-05');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(getDailyReview).toHaveBeenCalledWith('2026-01-06', expect.objectContaining({ limit: 200, offset: 0 }), expect.anything()));
+    expect(screen.getByTestId('location-search').textContent).toBe('?reviewDate=2026-01-06');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    await waitFor(() => expect(screen.getByLabelText('Review date').value).toBe('2026-01-05'));
+    expect(screen.getByTestId('location-search').textContent).toBe('?reviewDate=2026-01-05');
+
+    // Clearing the native date input falls back to today without requesting /calendar/review/ or breaking Previous/Next.
+    fireEvent.change(screen.getByLabelText('Review date'), { target: { value: '' } });
+    await waitFor(() => expect(screen.getByLabelText('Review date').value).toBe('2026-01-10'));
+    expect(screen.getByTestId('location-search').textContent).toBe('');
+    expect(getDailyReview).not.toHaveBeenCalledWith('', expect.anything(), expect.anything());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
+    await waitFor(() => expect(screen.getByLabelText('Review date').value).toBe('2026-01-09'));
+    expect(screen.getByTestId('location-search').textContent).toBe('?reviewDate=2026-01-09');
+  });
+
+  it('falls back to today when the URL reviewDate query param is invalid', async () => {
+    vi.setSystemTime(new Date(2026, 0, 10, 12));
+    getDailyReview.mockClear();
+
+    render(
+      <MemoryRouter initialEntries={['/calendar/review?reviewDate=not-a-date']}>
+        <ReviewTab />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(getDailyReview).toHaveBeenCalledWith('2026-01-10', expect.objectContaining({ limit: 200, offset: 0 }), expect.anything()));
+    expect(screen.getByLabelText('Review date').value).toBe('2026-01-10');
+    expect(getDailyReview).not.toHaveBeenCalledWith('not-a-date', expect.anything(), expect.anything());
   });
 
   it('shows a connect-calendar empty state with 0 accounts instead of a generic no-events message', async () => {
