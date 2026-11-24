@@ -103,10 +103,13 @@ function offlineFallbackResponse() {
 }
 
 // Cap the immutable-asset cache so many rebuilds don't grow it without bound.
-// Old build chunks accumulate here (their hashed names never collide); trim to
-// the most-recently-added entries. Generous because a single build's chunk set
-// is well under this.
-const ASSET_CACHE_MAX_ENTRIES = 120;
+// Old build chunks accumulate here (their hashed names never collide). One
+// build is ~830 files (~32 MB uncompressed) but only chunks the user actually
+// requests get cached, so the cap must exceed a full build or shared chunks
+// of pages visited this session get evicted (breaking offline revisits). It
+// bounds leftovers from older builds; trim evicts oldest-first, skipping the
+// current shell's pinned boot assets.
+const ASSET_CACHE_MAX_ENTRIES = 1500;
 
 // Same-origin static assets that are safe to serve stale-while-revalidate:
 // fonts, icons, the PWA manifest, sky textures, the logo. Matched by path.
@@ -232,13 +235,13 @@ self.addEventListener('fetch', (event) => {
 
   // Content-hashed, immutable build output: cache-first.
   if (url.pathname.startsWith('/assets/')) {
-    event.respondWith(cacheFirst(request, ASSET_CACHE, ASSET_CACHE_MAX_ENTRIES));
+    event.respondWith(cacheFirst(event, ASSET_CACHE, ASSET_CACHE_MAX_ENTRIES));
     return;
   }
 
   // Static public assets (icons, fonts, manifest, textures): stale-while-revalidate.
   if (STATIC_PATH_RE.test(url.pathname) || STATIC_FILE_RE.test(url.pathname)) {
-    event.respondWith(staleWhileRevalidate(request, STATIC_CACHE));
+    event.respondWith(staleWhileRevalidate(event, STATIC_CACHE));
     return;
   }
 
@@ -334,27 +337,39 @@ async function cachedShellBootAssets() {
   return new Set(parseBootAssetPaths(await cached.text()));
 }
 
-async function cacheFirst(request, cacheName, maxEntries) {
-  const cache = await caches.open(cacheName);
-  const cached = await cache.match(request);
+// Cache Storage is optional for both strategies below: quota exhaustion or
+// blocked/partitioned storage must never fail a response the network already
+// delivered (navigationHandler guards the same case).
+async function cacheFirst(event, cacheName, maxEntries) {
+  const request = event.request;
+  const cache = await caches.open(cacheName).catch(() => null);
+  const cached = cache ? await cache.match(request).catch(() => null) : null;
   if (cached) return cached;
   const response = await fetch(request);
   // Every caller is same-origin now (the cross-origin font hosts are gone —
   // the webfonts are self-hosted), so responses are always inspectable and
   // `ok` is the whole test; an opaque response can no longer reach here.
-  if (response && response.ok) {
-    await cache.put(request, response.clone());
-    if (maxEntries) trimCache(cache, maxEntries);
+  if (cache && response && response.ok) {
+    const copy = response.clone();
+    event.waitUntil(
+      (async () => {
+        await cache.put(request, copy);
+        if (maxEntries) await trimCache(cache, maxEntries);
+      })().catch(() => {}),
+    );
   }
   return response;
 }
 
-async function staleWhileRevalidate(request, cacheName) {
-  const cache = await caches.open(cacheName);
-  const cached = await cache.match(request);
+async function staleWhileRevalidate(event, cacheName) {
+  const request = event.request;
+  const cache = await caches.open(cacheName).catch(() => null);
+  const cached = cache ? await cache.match(request).catch(() => null) : null;
   const network = fetch(request)
     .then((response) => {
-      if (response && response.ok) cache.put(request, response.clone()).catch(() => {});
+      if (cache && response && response.ok) {
+        event.waitUntil(cache.put(request, response.clone()).catch(() => {}));
+      }
       return response;
     })
     .catch(() => null);

@@ -1,5 +1,6 @@
 import { promisify } from 'util';
 import { execFile } from '../lib/childProcess.js';
+import { isSettledProcessState } from '../lib/processSettledState.js';
 
 const exec = promisify(execFile);
 
@@ -22,7 +23,7 @@ export async function cleanupSecurityScanGroup(owner, { processes = snapshot, ma
   signal = (pid, value) => process.kill(-pid, value), signalName = 'SIGKILL' } = {}) {
   if (!owner || !Number.isInteger(owner.pid) || owner.pid <= 1 || !/^[a-f0-9-]{36}$/.test(owner.marker || '')) return false;
   if (process.platform === 'win32') return false;
-  const members = (await processes()).filter(p => p.pgid === owner.pid && !p.state.startsWith('Z'));
+  const members = (await processes()).filter(p => p.pgid === owner.pid && !isSettledProcessState(p.state));
   if (!members.length) return true;
   const leader = members.find(p => p.pid === owner.pid);
   const timeMatches = leader && leader.startedAt >= owner.startedAt - 2000 && leader.startedAt <= owner.startedAt + 2000;
@@ -33,12 +34,14 @@ export async function cleanupSecurityScanGroup(owner, { processes = snapshot, ma
     : (await Promise.all(members.map(p => marked(p.pid, owner.marker).catch(() => false)))).every(Boolean);
   // A member can exit while its marker is read. Only a freshly empty group
   // confirms cleanup here; an unproven live group must never be signaled.
-  if (!proven) return !(await processes()).some(p => p.pgid === owner.pid && !p.state.startsWith('Z'));
-  try { signal(owner.pid, signalName); } catch (err) { if (err.code !== 'ESRCH') throw err; }
+  if (!proven) return !(await processes()).some(p => p.pgid === owner.pid && !isSettledProcessState(p.state));
+  // ESRCH: gone. EPERM: macOS refuses once every member is exiting or a zombie;
+  // either way the quiescence loop below re-observes and a live member still fails.
+  try { signal(owner.pid, signalName); } catch (err) { if (err.code !== 'ESRCH' && err.code !== 'EPERM') throw err; }
   // A sent signal is not evidence of cleanup. Confirm quiescence separately.
   const deadline = Date.now() + 1000;
   do {
-    const remaining = (await processes()).filter(p => p.pgid === owner.pid && !p.state.startsWith('Z'));
+    const remaining = (await processes()).filter(p => p.pgid === owner.pid && !isSettledProcessState(p.state));
     if (!remaining.length) return true;
     await new Promise(resolve => setTimeout(resolve, 25));
   } while (Date.now() < deadline);

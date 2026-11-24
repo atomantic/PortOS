@@ -20,6 +20,13 @@ vi.mock('../../../services/apiMeatspace.js', () => ({
   updateMorseLevel: vi.fn(() => Promise.resolve({ kochLevel: 2, kochLevelSet: true, adopted: false, settings: null })),
 }));
 
+// Lets a test force "good round" without knowing the randomly chosen prompts.
+vi.mock('../../../lib/morsePractice.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, canAdvanceMorseLevel: vi.fn(actual.canAdvanceMorseLevel) };
+});
+
+import { canAdvanceMorseLevel } from '../../../lib/morsePractice.js';
 import MorseTrainer, { MORSE_TABLE, KeyPad, isNodeOnPath, resultsToItems } from './MorseTrainer';
 import { MORSE_MODES as MODES, MORSE_MODE_IDS } from './trainerModes';
 import {
@@ -468,6 +475,84 @@ describe('MorseTrainer server Koch-level hydration', () => {
     await renderMorse({ mode: null, onSelectMode: vi.fn() });
     await waitFor(() => expect(getMorseProgress).toHaveBeenCalled());
     expect(updateMorseLevel).not.toHaveBeenCalled();
+  });
+});
+
+describe('MorseTrainer failed Koch-level load', () => {
+  beforeEach(() => {
+    getMorseProgress.mockClear();
+    updateMorseLevel.mockClear();
+    submitMorseRound.mockClear();
+    window.localStorage.clear();
+    window.AudioContext = MockAudioContext;
+  });
+  afterEach(() => { delete window.AudioContext; });
+
+  async function playPerfectRound() {
+    // Level 2 pool is K/M: answer from the audible prompt is unknowable here, so
+    // use the head-copy verdict-free path and a guess that is always right is
+    // not possible; instead drive the round through finishRound via 10 answers
+    // and rely on canAdvance being mocked by the caller when needed.
+    fireEvent.click(await screen.findByRole('button', { name: /Start Round/i }));
+    for (let i = 0; i < 10; i++) {
+      const input = await screen.findByPlaceholderText('????');
+      fireEvent.change(input, { target: { value: 'ZZZZZ' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      if (i < 9) fireEvent.click(await screen.findByRole('button', { name: /Next/i }));
+    }
+  }
+
+  it('shows an error with Retry, then the server level after Retry succeeds', async () => {
+    getMorseProgress.mockRejectedValue(new Error('boom'));
+    await renderMorse({ mode: null, onSelectMode: vi.fn() });
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Could not load Koch level/);
+    expect(screen.queryByText(/Best round/)).toBeNull();
+
+    getMorseProgress.mockReset();
+    getMorseProgress.mockResolvedValue({
+      days: 30, kochLevel: 20, kochLevelSet: true, settings: null, totalRounds: 0,
+      series: { copy: [], 'head-copy': [], send: [] }, confusionMatrix: {}, confusionPairs: [], charAccuracy: [],
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Retry/i }));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(screen.getByText('20')).toBeTruthy();
+    getMorseProgress.mockReset();
+    getMorseProgress.mockResolvedValue({
+      days: 30, kochLevel: 2, kochLevelSet: false, settings: null, totalRounds: 0,
+      series: { copy: [], 'head-copy': [], send: [] }, confusionMatrix: {}, confusionPairs: [], charAccuracy: [],
+    });
+  });
+
+  it('advances the level from a good round once the server level has loaded', async () => {
+    canAdvanceMorseLevel.mockReturnValue(true);
+    try {
+      await renderMorse({ mode: 'head-copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+      await playPerfectRound();
+      await waitFor(() => expect(updateMorseLevel).toHaveBeenCalledWith(
+        expect.objectContaining({ kochLevel: 3 }),
+        expect.objectContaining({ silent: true }),
+      ));
+    } finally {
+      canAdvanceMorseLevel.mockReset();
+    }
+  });
+
+  it('sends no level write from a finished round while the load failed, but still submits the round', async () => {
+    getMorseProgress.mockRejectedValue(new Error('boom'));
+    canAdvanceMorseLevel.mockReturnValue(true);
+    try {
+      await renderMorse({ mode: 'head-copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+      await playPerfectRound();
+      await waitFor(() => expect(submitMorseRound).toHaveBeenCalled());
+      expect(updateMorseLevel).not.toHaveBeenCalled();
+    } finally {
+      canAdvanceMorseLevel.mockReset();
+      getMorseProgress.mockReset();
+      getMorseProgress.mockResolvedValue({
+        days: 30, kochLevel: 2, kochLevelSet: false, settings: null, totalRounds: 0,
+        series: { copy: [], 'head-copy': [], send: [] }, confusionMatrix: {}, confusionPairs: [], charAccuracy: [],
+      });
+    }
   });
 });
 

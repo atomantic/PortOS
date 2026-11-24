@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 
@@ -39,6 +39,7 @@ function renderTab(route = '/messages/imessage') {
     <MemoryRouter initialEntries={[route]}>
       <Routes>
         <Route path="/messages/imessage" element={<><IMessageTab /><LocationProbe /></>} />
+        <Route path="/messages/imessage/:chatKey" element={<><IMessageTab /><LocationProbe /></>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -165,5 +166,30 @@ describe('IMessageTab — two-pane layout on phones', () => {
     for (const pane of Array.from(grid.children)) {
       expect(pane.className).toContain('min-w-0');
     }
+  });
+});
+
+// The timeline page reads /timeline/<day> as a calendar day in the viewer's
+// timezone, so the link must not use the UTC day.
+describe('IMessageTab — timeline link day', () => {
+  const originalTz = process.env.TZ;
+  const linkFor = async (tz) => {
+    process.env.TZ = tz;
+    api.getImessageConversations.mockResolvedValueOnce({
+      conversations: [{ chatKey: 'chat-1', title: 'Example Chat', eventCount: 1, lastAt: '2026-01-02T05:00:00Z' }],
+    });
+    renderTab('/messages/imessage/chat-1');
+    return (await screen.findAllByRole('link')).map((a) => a.getAttribute('href')).find((h) => h?.startsWith('/timeline/'));
+  };
+  afterEach(() => {
+    if (originalTz === undefined) delete process.env.TZ; else process.env.TZ = originalTz;
+  });
+
+  it('uses the local day west of UTC', async () => {
+    expect(await linkFor('America/Los_Angeles')).toBe('/timeline/2026-01-01');
+  });
+
+  it('uses the same day in UTC', async () => {
+    expect(await linkFor('UTC')).toBe('/timeline/2026-01-02');
   });
 });

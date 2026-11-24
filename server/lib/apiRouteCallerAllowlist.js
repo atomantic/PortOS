@@ -164,6 +164,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/docker-containment/run',
     '/api/eidoverse/world/controllers/:id/riddle',
     '/api/eidoverse/world/foundations/:id/adopt',
+    // docs/API.md: the resolved tiers for API callers until the Settings > Features tier controls read them (#18525), which removes this entry.
+    '/api/feature-priorities',
     '/api/film-styles/:id/prompt',
     '/api/git/commits',
     '/api/lora-training/runs/:id/cancel',

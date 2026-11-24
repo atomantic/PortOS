@@ -389,22 +389,11 @@ jobs:
         run: node scripts/run-ci-lint.js
 
       # GitHub silently skips a workflow it rejects, so a bad file never fails a
-      # check; actionlint is the only pre-merge proof. Pinned like the scanner
-      # binaries in the image scan workflow. Mirrors scripts/lib/actionlint.js:
-      # the parity test in scripts/run-actionlint.test.js fails if they drift.
+      # check; actionlint is the only pre-merge proof. The pinned version and
+      # archive checksum live only in scripts/lib/actionlint.js.
       - name: Install pinned actionlint
         if: fromJSON(needs.impact.outputs.plan).workflow_lint
-        env:
-          ACTIONLINT_VERSION: 1.7.12
-          ACTIONLINT_SHA256_LINUX_AMD64: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
-        run: |
-          bin="$RUNNER_TEMP/actionlint-bin"
-          mkdir -p "$bin"
-          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-          curl -fsSL --retry 5 -o "$RUNNER_TEMP/$archive" "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
-          echo "${ACTIONLINT_SHA256_LINUX_AMD64}  $RUNNER_TEMP/$archive" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/$archive" -C "$bin" actionlint
-          echo "$bin" >> "$GITHUB_PATH"
+        run: node scripts/install-actionlint.js
 
       - name: Lint workflows with actionlint
         if: fromJSON(needs.impact.outputs.plan).workflow_lint

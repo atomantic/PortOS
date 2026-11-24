@@ -46,6 +46,7 @@ export const DB_TEST_INCLUDE = [
   'services/goalScorecard.db.test.js',
   'services/postRunDb.db.test.js',
   'services/userActions.db.test.js',
+  'services/featureUsageDb.db.test.js',
   'services/memoryDB.db.test.js',
   'services/memorySync.db.test.js',
   'services/privacySubjects.db.test.js',

@@ -37,6 +37,7 @@ import MusicGenPanel from './MusicGenPanel';
 import WaveformPanel from './WaveformPanel';
 import { FIELD_CLASS, GHOST_BTN, LABEL_CLASS, PRIMARY_BTN } from './designerStyles';
 import ProviderModelSelector from '../ProviderModelSelector';
+import ListLoadError from '../ui/ListLoadError';
 import TabPills from '../ui/TabPills';
 import SentPromptPanel from '../media/SentPromptPanel';
 import toast from '../ui/Toast';
@@ -108,6 +109,8 @@ export default function MusicDesigner() {
   const [title, setTitle] = useState('');
   const [trackId, setTrackId] = useState('');
   const [draftLoading, setDraftLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const draftSaveTailRef = useRef(Promise.resolve());
 
   // Meta-prompt overrides. Blank = "use the shipped default" (resolved
@@ -155,6 +158,8 @@ export default function MusicDesigner() {
     };
 
     if (storedDraftId) {
+      setDraftLoading(true);
+      setLoadError(null);
       getTrack(storedDraftId, { silent: true }).then((track) => {
         if (cancelled || !mountedRef.current) return;
         if (track) {
@@ -163,15 +168,24 @@ export default function MusicDesigner() {
             navigate(`/music/generate/${stepFromUrl}?trackId=${encodeURIComponent(track.id)}`, { replace: true });
           }
           setDraftLoading(false);
+        } else if (requestedTrackId) {
+          setLoadError({ notFound: true });
         } else {
           createDraft();
         }
-      }).catch(() => createDraft());
+      }).catch((err) => {
+        if (cancelled || !mountedRef.current) return;
+        // Only a stored draft that was deleted (404) is replaced. An explicit
+        // ?trackId= 404 and every other failure keep the id and URL: a blank
+        // draft would silently displace the track being edited.
+        if (err?.status === 404 && !requestedTrackId) createDraft();
+        else setLoadError({ notFound: err?.status === 404, error: err });
+      });
     } else {
       createDraft();
     }
     return () => { cancelled = true; };
-  }, []);
+  }, [reloadKey]);
 
   const {
     providers, selectedProviderId, selectedModel, availableModels,
@@ -315,6 +329,22 @@ export default function MusicDesigner() {
   const step = id || FIRST_STEP;
   if (!STEP_IDS.includes(step)) return <Navigate to={`/music/generate/${FIRST_STEP}`} replace />;
 
+  const startNewTrack = () => {
+    setLoadError(null);
+    navigate(`/music/generate/${stepFromUrl}`, { replace: true });
+    setReloadKey((k) => k + 1);
+  };
+  const loadFailed = loadError && (
+    loadError.notFound ? (
+      <div role="alert" className="flex flex-wrap items-center gap-2 rounded-lg border border-port-border bg-port-card px-3 py-2 text-sm text-gray-300">
+        <span>Track not found.</span>
+        <button type="button" onClick={startNewTrack} className={GHOST_BTN}>Start a new track</button>
+      </div>
+    ) : (
+      <ListLoadError what="this track" error={loadError.error} onRetry={() => setReloadKey((k) => k + 1)} />
+    )
+  );
+
   return (
     <section className="max-w-4xl space-y-4">
       <div>
@@ -324,6 +354,7 @@ export default function MusicDesigner() {
         </p>
       </div>
 
+      {loadFailed || (<>
       <TabPills
         tabs={STEPS}
         activeTab={step}
@@ -649,6 +680,7 @@ export default function MusicDesigner() {
           )}
         </div>
       )}
+      </>)}
     </section>
   );
 }

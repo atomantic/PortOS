@@ -9,6 +9,7 @@ import {
 } from '../../../services/apiMeatspace.js';
 import { RapidReaderModal } from '../../RapidReader';
 import { shouldIgnoreGlobalKey } from '../../../lib/a11yKeyboard';
+import ListLoadError from '../../ui/ListLoadError';
 import PostCompletionActions from './PostCompletionActions';
 import { ELEMENTS_PRACTICE_MODES as PRACTICE_MODES } from './trainerModes';
 
@@ -51,17 +52,25 @@ const ROW_LABELS = [null, null, null, null, null, null, null, 'Lanthanides', 'Ac
 
 export default function ElementsSong({ item: itemProp, onBack, loadItemOnMount, mode, onSelectMode, onExitMode, onContinue }) {
   const [loadedItem, setLoadedItem] = useState(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const item = itemProp || loadedItem;
   const [mastery, setMastery] = useState(item?.mastery || { overallPct: 0, chunks: {}, elements: {} });
 
   useEffect(() => {
     if (itemProp || !loadItemOnMount) return undefined;
     let active = true;
+    setLoadFailed(false);
     getMemoryItem('elements-song').then(data => {
-      if (data && active) { setLoadedItem(data); setMastery(data.mastery || { overallPct: 0, chunks: {}, elements: {} }); }
-    }).catch(err => console.warn('⚠️ Failed to load elements song: ' + err.message));
+      if (!active) return;
+      if (data) { setLoadedItem(data); setMastery(data.mastery || { overallPct: 0, chunks: {}, elements: {} }); }
+      else setLoadFailed(true);
+    }).catch(err => {
+      console.warn('⚠️ Failed to load elements song: ' + err.message);
+      if (active) setLoadFailed(true);
+    });
     return () => { active = false; };
-  }, [itemProp, loadItemOnMount]);
+  }, [itemProp, loadItemOnMount, loadAttempt]);
 
   useEffect(() => {
     if (!item?.id) return undefined;
@@ -80,6 +89,10 @@ export default function ElementsSong({ item: itemProp, onBack, loadItemOnMount, 
     const result = await attestMemoryMastery(item.id, { silent: true });
     if (result?.mastery) setMastery(result.mastery);
     return result;
+  }
+
+  if (!item && loadFailed) {
+    return <ListLoadError className="m-4" what="elements" onRetry={() => setLoadAttempt(n => n + 1)} />;
   }
 
   if (!item) {

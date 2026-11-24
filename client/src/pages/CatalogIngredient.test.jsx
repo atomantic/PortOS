@@ -1160,7 +1160,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
 
   beforeEach(async () => {
     const api = await import('../services/apiCatalog');
-    getCatalogIngredientDetails.mockImplementation(async () => ({ ...detailsOf(HERO), media: MEDIA }));
+    getCatalogIngredientDetails.mockReset().mockImplementation(async () => ({ ...detailsOf(HERO), media: MEDIA }));
     api.listCatalogSheetVariants.mockImplementation(async () => ({ variants: SHEET_VARIANTS }));
     api.previewCatalogSheet.mockImplementation(async (_id, body) => {
       const missing = ['camera', 'lighting', 'environment'].filter((key) => !body.visualDirection?.[key]?.trim());
@@ -1672,13 +1672,19 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /Generate sheet/ })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: /Generate sheet/ }));
     await screen.findByTestId('job-thumb-manual-canon-exp');
+    await act(async () => {});
 
     const first = Promise.withResolvers();
     const second = Promise.withResolvers();
     getCatalogIngredientDetails.mockReset().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
-    await act(async () => { emitSocket('reference-sheet:changed', { jobId: 'manual-canon-std', status: 'ready' }); });
-    await act(async () => { emitSocket('reference-sheet:changed', { jobId: 'manual-canon-exp', status: 'ready' }); });
-    expect(getCatalogIngredientDetails).toHaveBeenCalledTimes(2);
+    await waitFor(async () => {
+      await act(async () => { emitSocket('reference-sheet:changed', { jobId: 'manual-canon-std', status: 'ready' }); });
+      expect(getCatalogIngredientDetails).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(async () => {
+      await act(async () => { emitSocket('reference-sheet:changed', { jobId: 'manual-canon-exp', status: 'ready' }); });
+      expect(getCatalogIngredientDetails).toHaveBeenCalledTimes(2);
+    });
 
     const firstPayload = { ...HERO.payload, referenceSheetImageRef: 'hero-standard-v2.png' };
     const latestPayload = { ...firstPayload, referenceSheets: { expressions: 'hero-expressions-v2.png' } };
@@ -1694,17 +1700,17 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     await renderPage('/casting/cat-chr-hero/sheets');
     fireEvent.click(await screen.findByRole('button', { name: /Generate sheet/ }));
     await screen.findByTestId('job-thumb-canon-job');
+    await act(async () => {});
     expect(api.attachCatalogIngredientMedia).not.toHaveBeenCalled();
 
     getCatalogIngredientDetails.mockImplementation(async () => ({
       ...detailsOf({ ...HERO, payload: { ...HERO.payload, referenceSheetImageRef: 'hero-standard-v2.png' } }),
       media: MEDIA,
     }));
-    await act(async () => {
-      emitSocket('reference-sheet:changed', { jobId: 'canon-job', status: 'ready' });
+    await waitFor(async () => {
+      await act(async () => { emitSocket('reference-sheet:changed', { jobId: 'canon-job', status: 'ready' }); });
+      expect(screen.getByAltText('standard reference sheet')).toHaveAttribute('src', '/data/image-refs/hero-standard-v2.png');
     });
-    await waitFor(() => expect(screen.getByAltText('standard reference sheet').getAttribute('src'))
-      .toBe('/data/image-refs/hero-standard-v2.png'));
   });
 
   it('identifies a delegated sheet whose publication failed', async () => {
@@ -1713,9 +1719,11 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     await renderPage('/casting/cat-chr-hero/sheets');
     fireEvent.click(await screen.findByRole('button', { name: /Generate sheet/ }));
     await screen.findByTestId('job-thumb-manual-canon-fail');
-    await waitFor(() => expect(socketHandlers.has('reference-sheet:changed')).toBe(true));
-    await act(async () => { emitSocket('reference-sheet:changed', { jobId: 'manual-canon-fail', status: 'failed' }); });
-    expect(screen.getByText(/The render finished, but its sheet link could not be saved/)).toBeInTheDocument();
+    await act(async () => {});
+    await waitFor(async () => {
+      await act(async () => { emitSocket('reference-sheet:changed', { jobId: 'manual-canon-fail', status: 'failed' }); });
+      expect(screen.getByText(/The render finished, but its sheet link could not be saved/)).toBeInTheDocument();
+    });
     expect(screen.getByRole('link', { name: 'Open image queue' })).toHaveAttribute('href', '/media/image');
     expect(screen.getByTestId('job-thumb-manual-canon-fail')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Generate sheet/ })).toBeEnabled();

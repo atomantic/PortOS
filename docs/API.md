@@ -26,7 +26,7 @@ and the current-vs-proposed boundary.
 
 Inferred entries are marked `generated` until a runtime-backed payload contract exists; detailed entries are marked `modeled`. Both inventories are derived from source on first use (`server/lib/apiRouteGraph.js`, `server/lib/socketEventInventory.js`), so there is no checked-in manifest or regeneration step.
 
-When adding an HTTP route, keep its request Zod schema in a reusable server library and register the detailed documentation in `server/lib/apiOperationContracts.js`; the route and OpenAPI should consume the same schema object. Add an `x-portos-tool` annotation to that contract entry to also publish the operation as an agent-callable tool in `tools.min.json`, and declare the codes its error responses really throw in `x-portos-error-codes` — the HTTP status alone does not identify the code, since `errorHandler` prefers an explicit `err.code` over the status map. Socket payload schemas follow the same pattern in `server/lib/socketEventContracts.js`. The live HTTP and Socket.IO source inventories guarantee coverage, while these small registries make richer contracts incremental without maintaining a second handwritten list of paths or events.
+When adding an HTTP route, keep its request Zod schema in a reusable server library and register the detailed documentation in `server/lib/apiOperationContracts.js`; the route and OpenAPI consume the same schema object. Add an `x-portos-tool` annotation to that contract entry to publish the operation as an agent-callable tool in `tools.min.json`, and declare the codes its error responses really throw in `x-portos-error-codes` — the HTTP status alone does not identify the code, since `errorHandler` prefers an explicit `err.code` over the status map. Socket payload schemas follow the same pattern in `server/lib/socketEventContracts.js`. The live HTTP and Socket.IO source inventories guarantee coverage; these registries add richer contracts incrementally.
 
 Building a native companion client? See [COMPANION_APP_API.md](./COMPANION_APP_API.md) — the stable, pre-auth-discoverable contract (discovery/identity, HTTP Basic auth vs. operator sessions, instance management, palette actions, daily-log, POST progress, and the iCloud-sync precedent) that the PortDeck app consumes. Basic auth alone does not grant peer management or host control — those need an operator session obtained via `POST /api/auth/login`, same as this section's [Security Model](#security-model) describes for host control below.
 
@@ -145,6 +145,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | `/api/catalog` | Creative ingredients catalog |
 | `/api/tribe` | Tribe relationship graph |
 | `/api/user-actions` | Read-only, machine-local operator-action ledger |
+| `/api/feature-priorities` | Area tiers, pins, visits |
 | `/api/skills` | Agent skill registry |
 | `/api/notes` | Notes |
 | `/api/calendar` | Calendar integration |

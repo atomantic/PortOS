@@ -279,6 +279,8 @@ export default function ConfigTab({ accounts, setAccounts, accountsUnavailable =
       <p className="text-xs text-gray-500 mb-3">{description}</p>
       {hook.loading ? (
         <RefreshCw size={16} className="text-port-accent animate-spin" />
+      ) : hook.error && hook.providers.length === 0 ? (
+        <ListLoadError what="AI providers" error={hook.error} onRetry={hook.retry} />
       ) : hook.providers.length === 0 ? (
         <p className="text-sm text-gray-500">No AI providers configured. Add one in AI Providers.</p>
       ) : (

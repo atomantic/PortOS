@@ -55,6 +55,7 @@ import {
   apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema,
   instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema
 } from '../lib/instanceSettingsValidation.js';
+import { featurePrioritySettingsSchema } from '../lib/featurePriorityValidation.js';
 import { layeredIntelligenceSettingsSchema } from '../lib/appValidation.js';
 import { subscriptionCostsMapSchema, subscriptionPlanTiersMapSchema, usageApiBilledInstanceIdsSchema } from '../lib/usageValidation.js';
 
@@ -494,6 +495,7 @@ const SETTINGS_SLICE_VALIDATORS = [
   ['codeAnimationExecutionArmed', codeAnimationExecutionArmedSchema.nullable()],
   ['instanceFeatures', instanceFeatureSettingsSchema],
   ['instanceFeatureGroups', instanceFeatureGroupSettingsSchema],
+  ['featurePriorities', featurePrioritySettingsSchema],
   ['agentContext', agentContextSettingsSchema],
   ['pipelineEditorialChecks', pipelineEditorialChecksSettingsSchema.partial()],
   ['privacy', privacySettingsSchema.partial()],

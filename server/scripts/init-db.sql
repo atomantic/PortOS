@@ -425,6 +425,13 @@ CREATE INDEX IF NOT EXISTS idx_user_action_type_time ON user_action_events (type
 
 CREATE INDEX IF NOT EXISTS idx_user_action_actor_time ON user_action_events (actor, happened_at DESC);
 
+CREATE TABLE IF NOT EXISTS feature_usage_days (
+      area_id TEXT NOT NULL,
+      day DATE NOT NULL,
+      visits INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (area_id, day)
+    );
+
 CREATE TABLE IF NOT EXISTS review_queue_triage (
     action_key TEXT NOT NULL,
     occurrence TEXT NOT NULL DEFAULT '',

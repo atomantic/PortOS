@@ -20,7 +20,7 @@ function Harness({ initial, onSave }) {
 
 beforeEach(() => {
   api.getMusicVideoPublishPlatforms.mockReset();
-  api.getMusicVideoPublishPlatforms.mockResolvedValue({ distrokid: { enabled: true, account: 'Example Artist' } });
+  api.getMusicVideoPublishPlatforms.mockResolvedValue({ platforms: { distrokid: { enabled: true, account: 'Example Artist' } }, history: [] });
 });
 
 describe('TitleCardPanel', () => {
