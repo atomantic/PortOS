@@ -38,6 +38,20 @@ export const MOCK_PATHS = {
   loras: '/mock/data/loras',
 };
 
+// This install's own federation identity, so a suite that saves a new history
+// row stamps a known origin instead of failing the lazy identity import.
+export const FIXTURE_INSTANCE_ID = 'fixture-instance';
+export const FIXTURE_INSTANCE = { self: { instanceId: FIXTURE_INSTANCE_ID, name: 'fixture-host' }, peers: [] };
+
+// `readJSONFile` answers the two files these suites touch: the history rows a
+// test set, and the fixture identity for instances.json. Returning the rows for
+// instances.json (the old blanket mock) left `data.self` undefined, so origin
+// stamping silently fell back to "no origin".
+export const mockReadJSONFile = (rows = []) => vi.fn(async (path) => {
+  const file = String(path);
+  return file.endsWith('instances.json') ? FIXTURE_INSTANCE : rows;
+});
+
 export const isLtx2Python = (bin) => String(bin)
   .includes(join('.portos', 'ltx-2-mlx', '.venv', 'bin', 'python3'));
 export const isLtx25Python = (bin) => String(bin)
@@ -150,7 +164,10 @@ export const fileUtilsFactory = () => ({
   sha256File: vi.fn(async (path) => createHash('sha256').update(path).digest('hex')),
   ensureDir: vi.fn(async () => {}),
   PATHS: MOCK_PATHS,
-  readJSONFile: vi.fn(async () => []),
+  // instanceIdentity.js imports dataPath from this facade; without it the lazy
+  // identity read throws and origin stamping is skipped.
+  dataPath: (...segments) => join(MOCK_PATHS.data, ...segments),
+  readJSONFile: mockReadJSONFile(),
   atomicWrite: vi.fn(async () => {}),
   copyFileGuarded: fsPromisesMock.copyFile,
   writeFileGuarded: fsPromisesMock.writeFile,

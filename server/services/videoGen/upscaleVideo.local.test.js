@@ -55,11 +55,11 @@ describe('upscaleHistoryItem — render duration', () => {
 
   const upscaleFrom = async (sourceFields) => {
     const { readJSONFile } = await import('../../lib/fileUtils.js');
-    vi.mocked(readJSONFile).mockResolvedValue([{
+    vi.mocked(readJSONFile).mockImplementation(fx.mockReadJSONFile([{
       id: SOURCE_ID, filename: `${SOURCE_ID}.mp4`, prompt: 'a lighthouse',
       modelId: 'ltx2_unified', width: 768, height: 512, numFrames: 49, fps: 24,
       ...sourceFields,
-    }]);
+    }]));
     const { upscaleHistoryItem } = await import('./local.js');
     return upscaleHistoryItem(SOURCE_ID);
   };
@@ -74,6 +74,13 @@ describe('upscaleHistoryItem — render duration', () => {
     expect(upscaled.renderMs).not.toBe(900_000);
     expect(upscaled.renderMs).toBeLessThan(900_000);
     expect(Date.parse(upscaled.renderStartedAt)).toBeGreaterThan(Date.parse('2026-09-02T00:15:00.000Z'));
+  });
+
+  it('stamps the upscaled row with this install\'s origin', async () => {
+    const upscaled = await upscaleFrom({});
+
+    expect(upscaled.originInstanceId).toBe(fx.FIXTURE_INSTANCE_ID);
+    expect(upscaled).not.toHaveProperty('suppliedByInstanceId');
   });
 
   it('still times the pass when the source carried no timing of its own', async () => {
