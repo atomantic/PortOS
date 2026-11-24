@@ -9,7 +9,7 @@ import {
   refreshInsightThemes,
   refreshInsightNarrative,
 } from '../services/apiSystem.js';
-import { useAsyncAction } from '../hooks/useAsyncAction';
+import { useInsightGeneration } from '../components/insights/useInsightGeneration.js';
 import GenomeHealthTab from '../components/insights/GenomeHealthTab';
 import TasteIdentityTab from '../components/insights/TasteIdentityTab';
 import CrossDomainTab from '../components/insights/CrossDomainTab';
@@ -43,13 +43,15 @@ export function OverviewTab() {
 
   // Empty cards carry the action that produces their content, so the user never
   // has to go hunting for a control the copy names (#3787).
-  const [generateThemes, generatingThemes] = useAsyncAction(
-    () => refreshInsightThemes(undefined, undefined, { silent: true }).then(setThemesData),
-    { errorMessage: 'Failed to generate identity themes' }
+  const [generateThemes, generatingThemes] = useInsightGeneration(
+    refreshInsightThemes,
+    setThemesData,
+    'Failed to generate identity themes'
   );
-  const [analyzePatterns, analyzing] = useAsyncAction(
-    () => refreshInsightNarrative(undefined, undefined, { silent: true }).then(setNarrativeData),
-    { errorMessage: 'Failed to analyze cross-domain patterns' }
+  const [analyzePatterns, analyzing] = useInsightGeneration(
+    refreshInsightNarrative,
+    setNarrativeData,
+    'Failed to analyze cross-domain patterns'
   );
 
   useEffect(() => {

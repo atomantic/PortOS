@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useInsightGeneration } from './useInsightGeneration.js';
 import { RefreshCw, GitCompare } from 'lucide-react';
 import { getInsightNarrative, refreshInsightNarrative } from '../../services/apiSystem.js';
 import { formatDate, timeAgo } from '../../utils/formatters';
@@ -7,7 +8,6 @@ import InlineDiff from '../ui/InlineDiff';
 export default function CrossDomainTab() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
 
   useEffect(() => {
@@ -16,15 +16,14 @@ export default function CrossDomainTab() {
       .finally(() => setLoading(false));
   }, []);
 
-  const handleRefresh = () => {
-    setRefreshing(true);
-    setShowDiff(false);
-    refreshInsightNarrative()
-      .then(result => {
-        setData(result);
-      })
-      .finally(() => setRefreshing(false));
-  };
+  const [handleRefresh, refreshing] = useInsightGeneration(
+    refreshInsightNarrative,
+    (result) => {
+      setData(result);
+      setShowDiff(false);
+    },
+    'Failed to analyze cross-domain patterns'
+  );
 
   if (loading) {
     return (

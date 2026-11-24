@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useInsightGeneration } from './useInsightGeneration.js';
 import { RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
 import { getInsightThemes, refreshInsightThemes } from '../../services/apiSystem.js';
 import InsightCard from './InsightCard';
@@ -78,7 +79,6 @@ function ThemeCard({ theme }) {
 export default function TasteIdentityTab() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     getInsightThemes()
@@ -86,12 +86,11 @@ export default function TasteIdentityTab() {
       .finally(() => setLoading(false));
   }, []);
 
-  const handleRefresh = () => {
-    setRefreshing(true);
-    refreshInsightThemes()
-      .then(setData)
-      .finally(() => setRefreshing(false));
-  };
+  const [handleRefresh, refreshing] = useInsightGeneration(
+    refreshInsightThemes,
+    setData,
+    'Failed to generate identity themes'
+  );
 
   if (loading) {
     return (
