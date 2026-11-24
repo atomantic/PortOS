@@ -230,6 +230,7 @@ function dataTree(a, dirRel) {
     files.add(rel);
     if (!JS_EXT.test(rel)) continue;
     const f = factsFor(a, rel);
+    if (f.inputs.has(CLIENT_LOCKFILE)) files.add(CLIENT_LOCKFILE);
     for (const target of f.edgeTargets) if (!files.has(target)) pending.push(target);
     for (const missing of f.absent) absent.add(missing);
     for (const [name, version] of f.packages) packageVersions.set(name, version);
@@ -308,6 +309,7 @@ function servedTree(a, dir, servedFiles) {
     if (rel.endsWith('.css')) { pending.push(...cssReferences(a, rel)); continue; }
     if (!JS_EXT.test(rel)) continue;
     const f = factsFor(a, rel);
+    if (f.inputs.has(CLIENT_LOCKFILE)) files.add(CLIENT_LOCKFILE);
     if (!served.has(rel)) pending.push(...f.edgeTargets);
     for (const missing of f.absent) absent.add(missing);
     for (const [name, version] of f.packages) packages.set(name, version);
@@ -362,8 +364,8 @@ function packageVersion(a, fromRel, spec) {
   }
   roots.push(a.workspaceRel);
   let found = null;
+  const packagePath = `node_modules/${name}`;
   for (const root of roots) {
-    const packagePath = `node_modules/${name}`;
     const bytes = a.fs.read(`${root === '' ? '' : `${root}/`}${packagePath}/package.json`);
     if (bytes === null) {
       const locked = root === 'client' ? a.clientPackages?.[packagePath] : null;
@@ -371,10 +373,10 @@ function packageVersion(a, fromRel, spec) {
       // integrity-pinned packages. Execution always reads installed manifests.
       if (typeof locked?.version !== 'string' || !locked.version || typeof locked.integrity !== 'string'
         || !locked.integrity || locked.link || locked.optional || locked.devOptional || locked.os || locked.cpu || locked.libc) continue;
-      found = { name, version: locked.version };
+      found = { name, version: locked.version, client: true };
       break;
     }
-    try { found = { name, version: String(JSON.parse(bytes.toString('utf8')).version ?? '') }; } catch { found = null; }
+    try { found = { name, version: String(JSON.parse(bytes.toString('utf8')).version ?? ''), client: root === 'client' }; } catch { found = null; }
     break;
   }
   a.packages.set(cacheKey, found);
@@ -564,7 +566,12 @@ function resolveCwdLiterals(r, cwdLiterals) {
 
 function addPackage(r, spec, { mock = false } = {}) {
   const pkg = packageVersion(r.a, r.rel, spec);
-  if (pkg) { r.resolved.packages.set(pkg.name, pkg.version); return; }
+  if (pkg) {
+    r.resolved.packages.set(pkg.name, pkg.version);
+    // Preflight and execution bind client package versions to the same lock.
+    if (pkg.client && r.a.fs.kind(CLIENT_LOCKFILE) === 'file') r.resolved.inputs.add(CLIENT_LOCKFILE);
+    return;
+  }
   if (mock) { r.resolved.packages.set(packageNameOf(spec), 'absent'); return; }
   r.resolved.unresolvedEdges.push(`package not installed: ${packageNameOf(spec)}`);
 }
@@ -928,9 +935,6 @@ function verdict(a, testRel, gathered, extra, baseClosure, { requireEdges }) {
   // A served-narrowed key never equals the whole-tree key of the same inputs.
   for (const dir of [...(gathered.servedRoots ?? [])].sort()) lines.push(`served ${dir}`);
   const files = new Set([...gathered.members, ...gathered.inputs, ...extra.inputs, ...snapshotInputs(a, testRel), ...baseClosure.files]);
-  // Bind any projected package version to the precise lock used to resolve
-  // it. Served client roots already key this file, so their hits stay valid.
-  if (a.clientPackages && [...files].some(rel => rel.startsWith('client/'))) files.add(CLIENT_LOCKFILE);
   for (const rel of [...files].sort()) {
     const digest = fileHash(a, rel);
     if (digest === null) return { key: null, memoizable: false, reason: `unreadable input ${rel}`, reasons: [`unreadable input ${rel}`] };

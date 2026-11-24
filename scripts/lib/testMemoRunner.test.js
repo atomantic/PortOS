@@ -79,7 +79,7 @@ describe('planTestMemo and recordTestMemo', () => {
     const independent = 'server/lib/c.test.js';
     writeRepo(root, {
       ...FILES,
-      [audio]: "import { execFileSync } from 'node:child_process';\nexecFileSync('ffmpeg', ['-version']);\n",
+      [audio]: "import { execFileSync } from 'node:child_process';\nconst ffmpeg = await findFfmpeg();\nexecFileSync(ffmpeg, ['-version']);\n",
     });
     const inputs = { repoFiles: [audio] };
     const version = (value) => (tool) => tool === 'ffmpeg' ? value : null;
@@ -133,6 +133,21 @@ describe('planTestMemo and recordTestMemo', () => {
     rmSync(join(root, 'client/node_modules'), { recursive: true });
     writeRepo(root, { 'client/package-lock.json': JSON.stringify({ ...lock, name: 'changed' }) });
     expect(check(true).run).toEqual([test]);
+  });
+
+  it('does not change coverage for a test that reads client source without resolving client packages', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-browser-source-plan-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-browser-source-memo-'));
+    const test = 'server/lib/view.test.js';
+    writeRepo(root, {
+      ...FILES,
+      'client/package-lock.json': '{"lockfileVersion":3,"packages":{"":{}}}',
+      'client/src/plain.js': 'export const plain = true;\n',
+      [test]: "import { plain } from '../../client/src/plain.js';\n",
+    });
+    const installed = plan({ repoFiles: [test] });
+    expect(recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: installed, passed: [test], source: 'ci' }).written).toBe(1);
+    expect(plan({ repoFiles: [test], planBeforeClientSetup: true }).run).toEqual([]);
   });
 
   // #17616: a real-Chromium suite's record carries what its fixture served, so an

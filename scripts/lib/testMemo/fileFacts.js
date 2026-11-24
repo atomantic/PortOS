@@ -111,6 +111,8 @@ function scanCodeText({ tokens, facts }) {
   if (/\bimport \. meta \. glob\b/.test(code)) facts.unresolvedEdges.push('import.meta.glob');
   // The browser suites resolve Chrome through CHROME_PATH or playwright-core.
   if (/\bCHROME_PATH\b/.test(code) || facts.edges.some((edge) => packageNameOf(edge.spec) === 'playwright-core')) facts.tools.add('chrome');
+  // The suites pass a resolved path to execFile, so there may be no literal command.
+  if (/\bawait findFfmpeg \(/.test(code)) facts.tools.add('ffmpeg');
 }
 
 function literalArg(source, brackets, open) {
