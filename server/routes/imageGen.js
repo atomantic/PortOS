@@ -21,11 +21,11 @@ import { optionalUploadFields, optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
 import setupRouter, { streamMossAction } from './imageGenSetup.js';
-import { usesMossSwift, usesFlux3 } from '../lib/imageRuntimeRemedies.js';
+import { usesMossSwift } from '../lib/imageRuntimeRemedies.js';
 import { downloadMossWeights, mossModelCacheStatus, verifyMossWeights, repairMossWeights } from '../services/imageGen/mossWeights.js';
 import { attachSseClient as attachQueueSseClient, cancelJob, listJobs, laneConcurrencyFor } from '../services/mediaJobQueue/index.js';
 import { mediaJobExecutionLane } from '../lib/generationModes.js';
-import { getImageModels, requiredReposForModel, imageModelDownloadTargets } from '../lib/mediaModels.js';
+import { getImageModels, requiredRepoSpecsForModel, imageModelDownloadTargets } from '../lib/mediaModels.js';
 import {
   inspectModelCache, verifyModelCache, repairModelCache, aggregateVerifies, verifyCachedRepoFiles, repairCachedRepoFiles,
 } from '../lib/hfCache.js';
@@ -278,23 +278,18 @@ const imageModelCacheStatus = async (m) => {
       integrity: cached ? aggregateVerifies(verifies) : null,
     };
   }
-  const required = requiredReposForModel(m);
+  const required = requiredRepoSpecsForModel(m);
   if (!required) return { id: m.id, repo: null, cached: null, sizeBytes: 0 };
-  // Inspect every required repo (main + any aux text encoders). The badge
-  // is `cached: true` only when ALL are cached; sizeBytes is the sum. The
-  // `pendingRepos` field lets the UI explain WHICH repos still need a pull
-  // so the user isn't surprised when clicking "Download" triggers >1 fetch.
-  // FLUX.3 renders load only its pinned snapshot, so another revision of the repo is not "cached".
-  const pinnedRevision = (r, i) => (i === 0 && usesFlux3(m) ? m.revision || null : null);
-  const inspections = await Promise.all(required.map((r, i) => inspectModelCache(r, { revision: pinnedRevision(r, i) })));
+  const inspections = await Promise.all(required.map(({ repo, revision }) => inspectModelCache(repo, { revision })));
   const cached = inspections.every((i) => i.cached);
   const sizeBytes = inspections.reduce((sum, i) => sum + (i.sizeBytes || 0), 0);
-  const pendingRepos = required.filter((_, i) => !inspections[i].cached);
+  const requiredRepos = required.map(({ repo }) => repo);
+  const pendingRepos = requiredRepos.filter((_, i) => !inspections[i].cached);
   // Integrity is only meaningful for repos that finished downloading — run
   // the cheap structural check across every cached required repo and report
   // the worst result, so a corrupt aux encoder still surfaces a Repair state.
-  const integrity = cached ? aggregateVerifies(await Promise.all(required.map((r, i) => verifyModelCache(r, { revision: pinnedRevision(r, i) })))) : null;
-  return { id: m.id, repo: required[0], cached, sizeBytes, requiredRepos: required, pendingRepos, integrity };
+  const integrity = cached ? aggregateVerifies(await Promise.all(required.map(({ repo, revision }) => verifyModelCache(repo, { revision })))) : null;
+  return { id: m.id, repo: requiredRepos[0], cached, sizeBytes, requiredRepos, pendingRepos, integrity };
 };
 
 router.get('/models/status', asyncHandler(async (_req, res) => {
@@ -320,8 +315,8 @@ router.post('/models/verify', asyncHandler(async (req, res) => {
     if (usesMossSwift(m)) return { id: m.id, ...aggregateVerifies([await verifyMossWeights({ deep })]) };
     const targets = imageModelDownloadTargets(m);
     if (targets) return { id: m.id, ...(aggregateVerifies(await verifyPinnedTargets(targets, deep)) || { status: 'missing', checkedDeep: deep, badFiles: [] }) };
-    const required = requiredReposForModel(m) || [];
-    const verifies = await Promise.all(required.map((r) => verifyModelCache(r, { deep })));
+    const required = requiredRepoSpecsForModel(m) || [];
+    const verifies = await Promise.all(required.map(({ repo, revision }) => verifyModelCache(repo, { deep, revision })));
     return { id: m.id, ...(aggregateVerifies(verifies) || { status: 'missing', checkedDeep: deep, badFiles: [] }) };
   }));
   res.json({ deep, models: results });
@@ -344,13 +339,13 @@ router.post('/models/:modelId/repair', asyncHandler(async (req, res) => {
     const deleted = repaired.flatMap((r, i) => (r.deleted || []).map((name) => ({ repo: targets[i].repo, name })));
     return res.json({ deep, deleted, repos: targets.map((t) => t.repo) });
   }
-  const required = requiredReposForModel(model);
+  const required = requiredRepoSpecsForModel(model);
   if (!required) {
     throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
   }
-  const repaired = await Promise.all(required.map((repo) => repairModelCache(repo, { deep })));
+  const repaired = await Promise.all(required.map(({ repo, revision }) => repairModelCache(repo, { deep, revision })));
   const deleted = repaired.flatMap((r) => r.deleted.map((name) => ({ repo: r.repoId, name })));
-  res.json({ deep, deleted, repos: required });
+  res.json({ deep, deleted, repos: required.map(({ repo }) => repo) });
 }));
 
 // SSE-driven model download. Cancels the python child if the client
@@ -373,17 +368,15 @@ router.post('/models/:modelId/download', asyncHandler(async (req, res) => {
   const { force } = validateRequest(modelDownloadQuerySchema, req.query);
   const model = downloadableImageModel(req);
   if (usesMossSwift(model)) return streamMossAction(req, res, downloadMossWeights);
-  const repos = imageModelDownloadTargets(model) || requiredReposForModel(model);
-  if (repos && usesFlux3(model) && model.revision) repos[0] = { repo: repos[0], revision: model.revision };
+  const repos = imageModelDownloadTargets(model) || requiredRepoSpecsForModel(model);
   if (!repos) {
     throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file — cannot pre-download.`, {
       status: 400,
       code: 'NO_REPO_FOR_MODEL',
     });
   }
-  // Sequentially fetch every required repo (main + aux text encoders for
-  // HiDream). The SSE stream tags each event with `repo` so the client can
-  // show per-repo progress / log lines. `?force=1` (repair-initiated) re-fetches
+  // Sequentially fetch the required snapshots. SSE events carry `repo` so the
+  // client can show per-repo progress. `?force=1` (repair-initiated) re-fetches
   // even when the repo still looks cached, so a deleted shard isn't skipped.
   await startHfDownloadStream({ req, res, repos, force });
 }));

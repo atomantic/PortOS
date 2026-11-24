@@ -4,13 +4,42 @@ import { tmpdir, homedir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { pinPlatform } from './testHelper.js';
-import { getShippedMediaRegistry } from './mediaModels.js';
+import { getShippedMediaRegistry, requiredRepoSpecsForModel, requiredReposForModel } from './mediaModels.js';
 
 const __dirname_self = dirname(fileURLToPath(import.meta.url));
 
 let tmpDir;
 let registryFile;
 const priorRegistryFile = process.env.PORTOS_MEDIA_MODELS_FILE;
+
+describe('required image repo specs', () => {
+  it('preserves distinct snapshots and deduplicates repeated repo and revision pairs', () => {
+    const revision = 'a'.repeat(40);
+    const kvRevision = 'b'.repeat(40);
+    const model = {
+      runner: 'flux2', repo: 'org/model', revision,
+      textEncoderRepo: 'org/encoder', textEncoderRevision: revision,
+      tokenizerRepo: 'org/aux', tokenizerRevision: revision,
+      basePipelineRepo: 'org/aux', basePipelineRevision: revision,
+      kvRepo: 'org/aux', kvRevision,
+    };
+    const specs = [
+      { repo: 'org/model', revision },
+      { repo: 'org/encoder', revision },
+      { repo: 'org/aux', revision },
+      { repo: 'org/aux', revision: kvRevision },
+    ];
+    expect(requiredRepoSpecsForModel(model)).toEqual(specs);
+    expect(requiredReposForModel(model)).toEqual(specs.map(({ repo }) => repo));
+  });
+
+  it('keeps fallback repos, floating revisions, and unknown models compatible', () => {
+    expect(requiredRepoSpecsForModel({ id: 'dev', revision: '', textEncoderRepo: '  ' }))
+      .toEqual([{ repo: 'black-forest-labs/FLUX.1-dev', revision: null }]);
+    expect(requiredRepoSpecsForModel({ id: 'custom', textEncoderRepo: 'org/encoder' })).toBeNull();
+    expect(requiredReposForModel(null)).toBeNull();
+  });
+});
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'portos-media-models-'));
