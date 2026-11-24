@@ -76,6 +76,10 @@ const H264_PROBE_PAGE = `data:text/html,<body><script>document.body.textContent=
 // `vi.mock('./paths.js')` factories, and that import graph reaches paths.js.
 const IS_WIN32 = process.platform === 'win32';
 const MAX_OUTPUT_BYTES = 64 * 1024;
+// macOS Chrome can hit its teardown watchdog while waiting for the network
+// utility process, which can then keep the probe's stdout open (#18373).
+// The synthetic data page can run the network service in the browser process.
+const MAC_PROBE_ARGS = process.platform === 'darwin' ? ['--enable-features=NetworkServiceInProcess2'] : [];
 
 // Signals the probe's whole process group (it was spawned detached) so Chrome's
 // helper processes go with it; Windows takes the tree down with taskkill.
@@ -109,7 +113,7 @@ function runOwnedProbe(file, args, { timeoutMs, graceMs, removeProfile, env }) {
     let child;
     const timers = [];
     const started = performance.now();
-    const observed = { spawnMs: null, answerMs: null, exitMs: null, closeMs: null,
+    const observed = { spawnMs: null, answerMs: null, exitMs: null, exitStatus: null, stdoutEndMs: null, closeMs: null,
       term: 'not-attempted', kill: 'not-attempted', childError: 'none' };
     const elapsed = () => Math.max(0, Math.round(performance.now() - started));
     const stamp = key => { observed[key] ??= elapsed(); };
@@ -143,8 +147,12 @@ function runOwnedProbe(file, args, { timeoutMs, graceMs, removeProfile, env }) {
       stdout = (stdout + chunk).slice(-MAX_OUTPUT_BYTES);
       if (/H264:(\w*)/.test(stdout)) stamp('answerMs');
     });
+    child.stdout.on('end', () => stamp('stdoutEndMs'));
     child.on('spawn', () => stamp('spawnMs'));
-    child.on('exit', () => stamp('exitMs'));
+    child.on('exit', (code, signal) => {
+      stamp('exitMs');
+      observed.exitStatus = code ?? signal;
+    });
     child.on('error', (error) => {
       observed.childError = ['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error.code) ? error.code : 'other';
       if (!child.pid) finish({ spawnErrorCode: error.code ?? 'UNKNOWN', cleanupVerified: true });
@@ -190,7 +198,7 @@ function applyOwnedTemp(env, probeTemp) {
  * Resolves `{ ok: true, chromePath }` or `{ ok: false, cause, ... }` with cause:
  * - `missing-executable` — no path, or the file does not exist
  * - `codec-unavailable` — Chrome answered cleanly and reported no H.264
- * - `probe-timeout` — no exit within the deadline (`cleanupVerified` says whether
+ * - `probe-timeout` — no close within the deadline (`cleanupVerified` says whether
  *   the child was observed to close after the kill ladder)
  * - `teardown-failed` — Chrome answered but then exited nonzero or by signal;
  *   the codec answer is NOT trusted from a probe that did not shut down cleanly
@@ -224,6 +232,7 @@ export async function probeChromeH264(chromePath, { timeoutMs = PROBE_TIMEOUT_MS
     '--disable-background-networking', '--disable-component-update',
     '--disable-sync', '--disable-breakpad',
     '--password-store=basic', '--use-mock-keychain',
+    ...MAC_PROBE_ARGS,
     `--user-data-dir=${profile}`, '--virtual-time-budget=2000', '--dump-dom', H264_PROBE_PAGE,
   ], { timeoutMs, graceMs, removeProfile, env: applyOwnedTemp(process.env, probeTemp) });
   const evidence = { cleanupVerified: run.cleanupVerified, diagnostics: run.diagnostics };
