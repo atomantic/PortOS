@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { spawn } from '../lib/childProcess.js';
 import { atomicWrite, sha256File, sha256Text } from '../lib/fileCore.js';
+import { assessDownloadPreflight, assertDownloadFits } from '../lib/downloadPreflight.js';
 import { PATHS } from '../lib/paths.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
@@ -134,6 +135,18 @@ async function downloadVerified({ url, final, expectedHash, expectedSize, emit, 
   await rename(partial, final);
 }
 
+// Finished files and resumable partials already occupy their share of the disk.
+async function assertCheckpointFits(weights) {
+  const remaining = await Promise.all(CHECKPOINT_FILES.map(async ([name, size]) => {
+    const path = join(weights, name);
+    if (await fileSize(path) === size) return 0;
+    return Math.max(0, size - ((await fileSize(path + '.part')) ?? 0));
+  }));
+  assertDownloadFits(await assessDownloadPreflight({
+    destPath: weights, expectedBytes: remaining.reduce((total, bytes) => total + bytes, 0),
+  }));
+}
+
 async function installCheckpoint(weights, emit) {
   for (const [name, expectedSize, expectedHash] of CHECKPOINT) {
     await downloadVerified({
@@ -185,6 +198,7 @@ async function installRuntime(paths, emit) {
 
 export async function installPinnedMkserve(emit, previous) {
   const paths = mkserveInstallPaths(MKSERVE_BUNDLE, MODEL_REVISION);
+  await assertCheckpointFits(paths.weights);
   await installRuntime(paths, emit);
   await installCheckpoint(paths.weights, emit);
   // Local pull checks the engine without a model call, daemon launch or

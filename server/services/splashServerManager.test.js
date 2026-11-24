@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   data: '',
   pm2: null,
   download: vi.fn(),
+  preflight: vi.fn(),
   command: vi.fn(),
   spawn: vi.fn(),
   pm2Command: vi.fn(),
@@ -22,7 +23,11 @@ vi.mock('../lib/childProcess.js', async (original) => ({
 }));
 vi.mock('../lib/paths.js', () => ({ PATHS: { get data() { return mocks.data; } } }));
 vi.mock('../lib/platform.js', () => ({ isPortInUse: mocks.portUsed }));
-vi.mock('../lib/downloadPreflight.js', () => ({ streamResumableDownload: mocks.download }));
+vi.mock('../lib/downloadPreflight.js', async (original) => ({
+  ...await original(),
+  assessDownloadPreflight: mocks.preflight,
+  streamResumableDownload: mocks.download,
+}));
 vi.mock('../lib/streamingSpawn.js', () => ({ runStreamingCommand: mocks.command }));
 vi.mock('./pm2.js', () => ({
   clearJlistCache: vi.fn(),
@@ -68,6 +73,7 @@ beforeEach(async () => {
     if (args[0] === 'delete') mocks.pm2 = mockedApp();
   });
   mocks.download.mockResolvedValue({});
+  mocks.preflight.mockResolvedValue({ verdict: 'ok' });
   mocks.command.mockImplementation(async (cmd, args, onLine, { cwd }) => {
     if (cmd === '/usr/bin/tar') await stageFakeRelease(join(cwd, `splash-${SPLASH_VERSION}-arm64-macos26`));
     if (args.includes('prepare')) {
@@ -172,6 +178,19 @@ it('keeps install/update mutually exclusive with another install or start, even 
   await vi.waitFor(() => expect(finishDownload).toBeTypeOf('function'));
   finishDownload({});
   await installing;
+});
+
+it('refuses an install the volume cannot hold before downloading, counting model bytes already cached', async () => {
+  const home = join(splashRoot(), 'home');
+  await mkdir(home, { recursive: true });
+  await writeFile(join(home, 'cached-blob'), 'x'.repeat(8192));
+  mocks.preflight.mockResolvedValue({ verdict: 'insufficient', freeBytes: 1 });
+  await expect(installSplashRuntime()).rejects.toMatchObject({ code: 'DISK_INSUFFICIENT' });
+  const { destPath, expectedBytes } = mocks.preflight.mock.calls[0][0];
+  expect(destPath).toBe(home);
+  expect(expectedBytes).toBeLessThan(17e9);
+  expect(mocks.download).not.toHaveBeenCalled();
+  expect(mocks.command).not.toHaveBeenCalled();
 });
 
 it('requires verified model readiness before declaring Start complete', async () => {
