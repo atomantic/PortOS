@@ -92,7 +92,8 @@ const COMMISSION = {
 };
 
 const renderPage = async () => {
-  render(<MemoryRouter><CreativeCommissionDetail /></MemoryRouter>);
+  // The heading can render before the effect that initializes the form and its saved snapshot.
+  await act(async () => { render(<MemoryRouter><CreativeCommissionDetail /></MemoryRouter>); });
   await screen.findByRole('heading', { name: COMMISSION.name });
 };
 
@@ -413,8 +414,7 @@ describe('CreativeCommissionDetail Run now gating', () => {
   it('blocks Run now on unsaved edits and while saving, and re-enables after the save lands', async () => {
     let finishSave;
     updateCommission.mockReturnValue(new Promise((resolve) => { finishSave = resolve; }));
-    render(<MemoryRouter><CreativeCommissionDetail /></MemoryRouter>);
-    await screen.findByRole('heading', { name: COMMISSION.name });
+    await renderPage();
     expect(runButton().disabled).toBe(false);
 
     fireEvent.click(screen.getByText('edit-name'));
@@ -433,8 +433,7 @@ describe('CreativeCommissionDetail Run now gating', () => {
 
   it('does not treat Pause/Resume as an unsaved edit', async () => {
     updateCommission.mockResolvedValue({ ...COMMISSION, enabled: false });
-    render(<MemoryRouter><CreativeCommissionDetail /></MemoryRouter>);
-    await screen.findByRole('heading', { name: COMMISSION.name });
+    await renderPage();
 
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Pause commission/i })); });
     expect(runButton().disabled).toBe(false);

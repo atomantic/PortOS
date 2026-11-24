@@ -79,8 +79,8 @@ export const videoLoraFamily = (model) => {
   return null;
 };
 
-// Convenience predicates matching the `isFlux2()` / `isZImage()` / `isErnie()` exports in `mediaModels.js` (kept for back-compat); new code can import either.
 export const isMflux = (model) => model?.runner === RUNNER_FAMILIES.MFLUX;
+// mediaModels.js re-exports these five predicates for existing registry consumers.
 export const isFlux2 = (model) => model?.runner === RUNNER_FAMILIES.FLUX2;
 export const isZImage = (model) => model?.runner === RUNNER_FAMILIES.Z_IMAGE;
 export const isErnie = (model) => model?.runner === RUNNER_FAMILIES.ERNIE;
