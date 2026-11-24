@@ -19,8 +19,8 @@ const AUK_REVISION = '6943a1e967409e8c73139a7a345f2a611cfb3dd6';
 // The runtime reads both of these at start (`config.yaml`, the Qwen preprocessor).
 // Neither is prunable. The converted MLX files are a separate directory.
 export const AUK_WEIGHT_SOURCES = Object.freeze([
-  { directory: 'AuK-Flash', repo: 'tencent/AuK-Flash', prunable: false },
-  { directory: 'Qwen2.5-Omni-3B', repo: 'Qwen/Qwen2.5-Omni-3B', prunable: false },
+  { directory: 'AuK-Flash', repo: 'tencent/AuK-Flash', revision: '575b92f0895f75180bf2cbd35f2e176c5732b8ed', prunable: false },
+  { directory: 'Qwen2.5-Omni-3B', repo: 'Qwen/Qwen2.5-Omni-3B', revision: 'f75b40e3da2003cdd6e1829b1f420ca70797c34e', prunable: false },
 ]);
 // scripts/ml/requirements/requirements-auk-mlx.lock.txt is resolved for CPython 3.11+ (3.10 would need a different filelock).
 const AUK_PYTHON = '3.11';
@@ -78,12 +78,13 @@ export function startAukSetup(notify = () => {}) {
     const timer = setTimeout(locked.kill, INSTALL_TIMEOUT_MS);
     const installed = await locked.promise.finally(() => clearTimeout(timer));
     if (!installed.ok) throw new Error('Dependency installation failed');
-    for (const { repo, directory } of AUK_WEIGHT_SOURCES) {
+    for (const { repo, directory, revision } of AUK_WEIGHT_SOURCES) {
       await stage(`Downloading ${directory} weights`, python, ['-c',
-        'from huggingface_hub import snapshot_download, HfApi; import json, sys; from pathlib import Path; repo, dest = sys.argv[1], Path(sys.argv[2]); snapshot_download(repo_id=repo, local_dir=str(dest)); rev=None\n'
-        + 'try:\n rev=HfApi().model_info(repo).sha\nexcept Exception:\n rev=None\n'
+        'from huggingface_hub import snapshot_download; import json, sys; from pathlib import Path; '
+        + 'repo, dest, rev = sys.argv[1], Path(sys.argv[2]), sys.argv[3]; '
+        + 'snapshot_download(repo_id=repo, revision=rev, local_dir=str(dest)); '
         + '(dest / "portos-source.json").write_text(json.dumps({"sourceRepo": repo, "sourceRevision": rev, "prunable": False}))',
-        repo, join(root, 'ckpts', directory)]);
+        repo, join(root, 'ckpts', directory), revision]);
     }
     for (const args of [
       ['vae', 'ckpts/AuK-Flash/vae.safetensors', 'ckpts/mlx/vae.safetensors'],
