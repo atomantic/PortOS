@@ -30,7 +30,7 @@ import {
 import { execGh } from './github.js';
 import { getAccount, listAccounts, resolveGitHubAccountEnv } from './githubAccounts.js';
 import { githubNotificationEvents } from './githubNotificationEvents.js';
-import { refreshOpenPullRequestStatus, triageAccountNotifications } from './githubNotificationTriage.js';
+import { createManagedAppsLoader, refreshOpenPullRequestStatus, triageAccountNotifications } from './githubNotificationTriage.js';
 import { assistAccountNotifications } from './githubNotificationAssist.js';
 import {
   agentHandoff, agentRunPin, DEFAULT_AGENT_RULES, FINISHED_DECISIONS, KIND_SQL, learnedDecisionForAction, normalizeAgentRules, PINNED_TRIAGE_RULES, REASON_KIND_SQL, threadAgentKind, threadReasonKind,
@@ -187,7 +187,7 @@ const SKIPPED_AUTOMATION = Object.freeze({ sorted: 0, acted: 0, handedOff: 0, ag
 // Autopilot hands threads to their lanes first, so a thread a lane now owns
 // is not also sorted by Assist. Loaded lazily: the hand-off reaches the CoS
 // task schedule, which itself registers this module's scheduled check.
-async function runAutomation(account, env, automate) {
+async function runAutomation(account, env, automate, managedApps) {
   if (!automate) return SKIPPED_AUTOMATION;
   // Observe still clears threads with nothing left to do, so a closed or
   // merged thread never waits on the operator; Assist does the same below.
@@ -196,7 +196,7 @@ async function runAutomation(account, env, automate) {
     return { sorted: 0, acted: cleared, handedOff: 0, agentRuns: 0 };
   }
   const autopilot = account.mode === 'autopilot'
-    ? await (await import('./githubNotificationAutopilot.js')).autopilotAccountNotifications(account, env)
+    ? await (await import('./githubNotificationAutopilot.js')).autopilotAccountNotifications(account, env, { managedApps })
     : { handedOff: 0, agentRuns: 0 };
   const assist = await assistAccountNotifications(account, env, {
     // emit: false, because syncAccountNow announces the whole pass once.
@@ -238,6 +238,7 @@ async function syncAccountNow(account, automate) {
   const env = await requireAccountEnv(account);
   const cursor = (await query('SELECT last_modified FROM github_notification_sync WHERE account_id = $1', [account.id])).rows[0];
   const listedAt = new Date();
+  const managedApps = createManagedAppsLoader();
   const inbox = await fetchListing(account, env, { all: true, ifModifiedSince: listingCursor(cursor?.last_modified) });
   if (inbox.notModified) {
     // The cursor only moves on new activity, not on reads: re-read the small
@@ -250,8 +251,8 @@ async function syncAccountNow(account, automate) {
     });
     const refreshed = await refreshOpenPullRequestStatus(account, env);
     // Threads past the last run's triage cap still need a decision.
-    const triage = await triageAccountNotifications(account, env);
-    const assist = await runAutomation(account, env, automate);
+    const triage = await triageAccountNotifications(account, env, { managedApps });
+    const assist = await runAutomation(account, env, automate, managedApps);
     if (readOnGithub || refreshed || triage.triaged || assist.sorted || assist.acted || assist.handedOff) githubNotificationEvents.emit('changed', { accountId: account.id });
     return { accountId: account.id, changed: false, fetched: 0, triage, assist };
   }
@@ -292,8 +293,8 @@ async function syncAccountNow(account, automate) {
     );
   });
   await refreshOpenPullRequestStatus(account, env);
-  const triage = await triageAccountNotifications(account, env);
-  const assist = await runAutomation(account, env, automate);
+  const triage = await triageAccountNotifications(account, env, { managedApps });
+  const assist = await runAutomation(account, env, automate, managedApps);
   githubNotificationEvents.emit('changed', { accountId: account.id });
   console.log(`📬 Synced ${records.length} GitHub notifications for ${account.host}${truncated ? ' (listing truncated)' : ''}, triaged ${triage.triaged}, sorted ${assist.sorted}, acted on ${assist.acted}, handed off ${assist.handedOff}`);
   return { accountId: account.id, changed: true, fetched: records.length, truncated, triage, assist };

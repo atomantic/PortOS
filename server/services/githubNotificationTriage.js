@@ -81,7 +81,16 @@ export async function managedAppsByRepoKey() {
   return byKey;
 }
 
-const managedRepoKeys = async () => new Set((await managedAppsByRepoKey()).keys());
+/**
+ * Memoizes managedAppsByRepoKey for one sync pass: it spawns `git remote get-url`
+ * per managed app, and triage, PR automation and Autopilot hand-offs all need it.
+ */
+export function createManagedAppsLoader() {
+  let loaded = null;
+  return () => (loaded ||= managedAppsByRepoKey());
+}
+
+const managedRepoKeys = async (loadApps) => new Set((await loadApps()).keys());
 
 /** Per-run, per-account reader that caches each forge answer once. */
 function createReader(account, env) {
@@ -187,9 +196,9 @@ export async function threadDiscussionVouched(account, env, row) {
   if (kind === 'pulls') paths.push(`repos/${repo}/pulls/${number}/comments`, `repos/${repo}/pulls/${number}/reviews`);
   // login → the forge's user.type (Bot/User), which GitHub-native bot trust needs.
   const actors = new Map();
-  for (const path of paths) {
-    const out = await execGh(['api', '--hostname', account.host, '--method', 'GET', path, '--paginate', '--jq', '.[] | "\\(.user.login)\\t\\(.user.type)"'], GH_TIMEOUT_MS, { env })
-      .catch(() => null);
+  const outputs = await Promise.all(paths.map((path) => execGh(['api', '--hostname', account.host, '--method', 'GET', path, '--paginate', '--jq', '.[] | "\\(.user.login)\\t\\(.user.type)"'], GH_TIMEOUT_MS, { env })
+    .catch(() => null)));
+  for (const out of outputs) {
     if (out === null) return false;
     for (const line of out.split('\n').map((entry) => entry.trim()).filter(Boolean)) {
       const [login, type] = line.split('\t');
@@ -202,12 +211,14 @@ export async function threadDiscussionVouched(account, env, row) {
   const ctx = { account, reader, ownLogins: await ownLoginsFor(account, reader), repo, repoOwned: row.evidence?.repoOwned === true, repoOwner: row.repo_owner };
   // On your own PR the repo's owner reviewing it is the work, as in agentHandoff.
   const ownPullRequest = kind === 'pulls' && row.trust === 'yours';
-  for (const [login, type] of actors) {
-    if (VOUCHED_TRUST.has(await rateActor(ctx, login, type))) continue;
-    if (ownPullRequest && type === 'User' && await isRepoOwner(reader, row.repo_owner, login)) continue;
-    return false;
-  }
-  return true;
+  let untrusted = false;
+  await mapWithConcurrency([...actors], GH_READ_CONCURRENCY, async ([login, type]) => {
+    if (untrusted) return;
+    if (VOUCHED_TRUST.has(await rateActor(ctx, login, type))) return;
+    if (ownPullRequest && type === 'User' && await isRepoOwner(reader, row.repo_owner, login)) return;
+    untrusted = true;
+  });
+  return !untrusted;
 }
 
 // GitHub uses the same notification reason for personal and group requests.
@@ -456,7 +467,7 @@ async function countThreadsByRepo(accountId, rows) {
  * Triage this account's threads that are new or have new activity since their
  * last decision. Returns `{ triaged, decisions: { [decision]: n } }`.
  */
-export async function triageAccountNotifications(account, env, { now = Date.now() } = {}) {
+export async function triageAccountNotifications(account, env, { now = Date.now(), managedApps = managedAppsByRepoKey } = {}) {
   const { rows } = await query(
     `SELECT * FROM github_notifications WHERE account_id = $1 AND (triaged_for IS NULL OR triaged_for < gh_updated_at
        OR (${REDECIDE_SQL} AND COALESCE((evidence->>'rulesVersion')::int, 0) < $2) OR ${WAITING_DEPLOYMENT_SQL})
@@ -469,7 +480,7 @@ export async function triageAccountNotifications(account, env, { now = Date.now(
   const held = rows.filter((row) => row.decision === 'handed-off' && isSameActivity(row));
   const pending = rows.filter((row) => !held.includes(row));
   const ctx = {
-    account, reader, ownLogins: await ownLoginsFor(account, reader), managedKeys: await managedRepoKeys(), learnedRules: await loadLearnedRules(account.id),
+    account, reader, ownLogins: await ownLoginsFor(account, reader), managedKeys: await managedRepoKeys(managedApps), learnedRules: await loadLearnedRules(account.id),
     repoThreadCounts: await countThreadsByRepo(account.id, pending), now,
   };
   const results = await mapWithConcurrency(pending, GH_READ_CONCURRENCY, async (row) => ({ row, result: await triageThread(row, ctx) }));
