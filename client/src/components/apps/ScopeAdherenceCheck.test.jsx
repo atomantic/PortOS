@@ -78,6 +78,19 @@ describe('ScopeAdherenceCheck', () => {
     await waitFor(() => expect(screen.getByText(/not installed yet/i)).toBeInTheDocument());
   });
 
+  it.each([
+    ['scope-adherence-abuse-blocked', /Abuse Guard flagged/i],
+    ['scope-adherence-screening-unavailable', /Abuse Guard could not screen/i],
+  ])('shows a useful reason when scope screening returns %s', async (code, label) => {
+    scoreAppScopeAdherence.mockResolvedValue({ ok: false, code });
+
+    await userEvent.click(render(<ScopeAdherenceCheck {...props} />)
+      .getByRole('button', { name: /check scope/i }));
+
+    expect(await screen.findByText(label)).toBeInTheDocument();
+    expect(screen.queryByText(/Works against|Advances|Unrelated/)).not.toBeInTheDocument();
+  });
+
   it('swallows a failed request into "no advisory" rather than a toast', async () => {
     scoreAppScopeAdherence.mockRejectedValue(new Error('network'));
 

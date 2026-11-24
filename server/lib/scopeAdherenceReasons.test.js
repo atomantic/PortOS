@@ -38,9 +38,6 @@ describe('scope-adherence failure labels', () => {
 
   it('labels nothing it does not need to', () => {
     const owned = new Set([...SCOPE_ADHERENCE_FAILURE_CODES, ...JEV_FAILURE_CODES]);
-    // An untrusted-content block is forwarded too, but that vocabulary is the
-    // abuse guard's and is deliberately left to the shared fallback rather
-    // than restated here — so anything else is a stale key from a rename.
     for (const code of Object.keys(SCOPE_ADHERENCE_REASONS)) {
       expect(owned.has(code), `${code} is labelled but no longer returned`).toBe(true);
     }
