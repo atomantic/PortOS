@@ -5,7 +5,7 @@ import LookReferencesPanel from './LookReferencesPanel.jsx';
 import { getMoodBoard } from '../../services/apiMoodBoard.js';
 import { labelMusicVideoReferencesFromCatalog } from '../../services/apiMusicVideo.js';
 
-vi.mock('../../services/apiMoodBoard.js', () => ({ getMoodBoard: vi.fn() , listMoodBoards: vi.fn(async () => []), createMoodBoard: vi.fn() }));
+vi.mock('../../services/apiMoodBoard.js', () => ({ getMoodBoard: vi.fn() , listMoodBoards: vi.fn(async () => []), listMoodBoardNames: vi.fn(async () => []), createMoodBoard: vi.fn() }));
 vi.mock('../../services/apiMusicVideo.js', () => ({ labelMusicVideoReferencesFromCatalog: vi.fn() }));
 vi.mock('../../services/apiUniverseBuilder.js', () => ({ getUniverse: vi.fn() }));
 vi.mock('../../services/apiSystem.js', () => ({ uploadGalleryImage: vi.fn(async () => ({ filename: 'uploaded.png' })) }));

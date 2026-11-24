@@ -83,11 +83,21 @@ async function persist(exec, board) {
   return board;
 }
 
-export async function listBoards({ includeDeleted = false } = {}) {
+export async function listBoards({ includeDeleted = false, omitItemAnalysis = false } = {}) {
+  const projection = omitItemAnalysis
+    ? `CASE WHEN jsonb_typeof(data->'items') = 'array' THEN
+         jsonb_set(data, '{items}', COALESCE((
+           SELECT jsonb_agg(
+             CASE WHEN jsonb_typeof(item) = 'object' THEN item - 'analysis' ELSE item END
+             ORDER BY position
+           )
+           FROM jsonb_array_elements(data->'items') WITH ORDINALITY AS entries(item, position)
+         ), '[]'::jsonb))
+       ELSE data END`
+    : 'data';
+  const filter = includeDeleted ? '' : 'WHERE deleted = FALSE';
   // updated_at DESC — most-recently-touched first (the board grid's default).
-  const result = includeDeleted
-    ? await query(`SELECT data FROM mood_boards ORDER BY updated_at DESC`)
-    : await query(`SELECT data FROM mood_boards WHERE deleted = FALSE ORDER BY updated_at DESC`);
+  const result = await query(`SELECT ${projection} AS data FROM mood_boards ${filter} ORDER BY updated_at DESC`);
   return result.rows.map(rowToBoard);
 }
 

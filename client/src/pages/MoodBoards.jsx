@@ -186,7 +186,7 @@ function MoodBoardCard({ board, onDelete, isConfirming, onConfirmDelete, onCance
   );
 }
 
-const fetchBoards = () => listMoodBoards({ silent: true });
+const fetchBoards = () => listMoodBoards({ view: 'summary', silent: true });
 
 export default function MoodBoards() {
   const navigate = useNavigate();

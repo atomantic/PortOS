@@ -84,6 +84,13 @@ describe('mood-board routes', () => {
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body)).toBe(true);
       expect(res.body).toHaveLength(1);
+      expect(svc.listBoards).toHaveBeenCalledWith({ omitItemAnalysis: false });
+    });
+
+    it('requests the analysis-free projection for the summary view', async () => {
+      const res = await request(makeApp()).get('/api/mood-boards?view=summary');
+      expect(res.status).toBe(200);
+      expect(svc.listBoards).toHaveBeenCalledWith({ omitItemAnalysis: true });
     });
 
     it('returns a bounded envelope when pagination is requested', async () => {

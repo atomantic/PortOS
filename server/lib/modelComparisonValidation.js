@@ -6,6 +6,8 @@
 
 import { z } from 'zod';
 
+export const modelComparisonQuerySchema = z.object({ view: z.string().optional() });
+
 // Reference prices and PortOS-run benchmark observations. A source is attached
 // to each metric because prices, scores and runtime measurements differ.
 const isAllowedComparisonSourceUrl = value => {
