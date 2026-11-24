@@ -60,6 +60,8 @@ function run(mirror, cache, { includePostgres = true } = {}) {
   mkdirSync(join(root, 'etc/apt/sources.list.d'), { recursive: true });
   writeFileSync(join(root, 'etc/os-release'), 'VERSION_CODENAME=noble\n');
   writeFileSync(sourcesFile, RUNNER_SOURCES);
+  writeFileSync(join(root, 'etc/apt/sources.list.d/microsoft-prod.list'), 'deb [arch=amd64] https://packages.microsoft.com/ubuntu/24.04/prod noble main\n');
+  writeFileSync(join(root, 'etc/apt/sources.list.d/microsoft-prod.sources'), 'Types: deb\nURIs: https://packages.microsoft.com/ubuntu/24.04/prod\nSuites: noble\nComponents: main\n');
   const fake = (name, body) => writeFileSync(join(bin, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
   fake('sudo', 'exec "$@"');
   // Keep the production GNU sed invocation intact while adapting its in-place
@@ -86,6 +88,14 @@ fi
 exit "$status"`);
   fake('apt-get', `
 echo "apt-get $*" >> '${log}'
+if [[ " $* " = *" update "* ]]; then
+  for arg in "$@"; do
+    if [[ "$arg" == Dir::Etc::sourceparts=* ]]; then
+      sp="\${arg#Dir::Etc::sourceparts=}"
+      echo "sourceparts $(ls -1 "$sp" | tr '\\n' ',')" >> '${log}'
+    fi
+  done
+fi
 if ${stall}; then exit 124; fi
 if [[ " $* " = *" --print-uris "* ]]; then
   echo "'https://example.com/${PACKAGE_FILE}' ${PACKAGE_FILE} ${PACKAGE_BYTES.length} SHA256:${PACKAGE_HASH}"
@@ -117,7 +127,9 @@ fi`);
   const out = {
     ...result,
     budgets: read(log).split('\n').filter((line) => line.startsWith('timeout ')).map((line) => Number(line.split(' ')[1])),
+    rawCalls: read(log).split('\n').filter((line) => line.startsWith('apt-get ')),
     calls: read(log).split('\n').filter((line) => line.startsWith('apt-get ')).map((line) => line.replace(/ -o \S+/g, '')),
+    sourceparts: read(log).split('\n').filter((line) => line.startsWith('sourceparts ')).map((line) => line.slice('sourceparts '.length).split(',').filter(Boolean).sort()),
     sources: read(sourcesFile),
     pgdg: existsSync(pgdg) ? read(pgdg) : null,
     fetchedPgKey: read(log).includes('curl'),
@@ -137,6 +149,8 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     const result = run('ok');
     expect(result.status, result.stderr).toBe(0);
     expect(result.pgdg).toBe('deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main\n');
+    expect(result.rawCalls[0]).toContain('-o Acquire::Languages=none');
+    expect(result.sourceparts).toEqual([]);
     expect(result.calls).toEqual([
       'apt-get update',
       'apt-get install -y --download-only postgresql-client-17 ffmpeg',
@@ -151,6 +165,8 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.fetchedPgKey).toBe(false);
     expect(result.pgdg).toBeNull();
+    expect(result.rawCalls[0]).toContain('-o Acquire::Languages=none');
+    expect(result.sourceparts).toEqual([['ubuntu.sources']]);
     expect(result.calls).toEqual([
       'apt-get update',
       'apt-get --print-uris install -y ffmpeg',
@@ -173,10 +189,16 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
       'apt-get install -y --download-only postgresql-client-17 ffmpeg',
       INSTALL_FROM_CACHE,
     ]);
-    // The primary stall spends 180s of fake time, leaving 210s of the one
+    // The primary stall spends 45s of fake time, leaving 345s of the one
     // total deadline for all fallback commands (no per-command reset).
-    expect(result.budgets).toEqual([180, 210, 210, 210]);
+    expect(result.budgets).toEqual([45, 345, 345, 345]);
     expect(result.githubPath).toBe('/usr/lib/postgresql/17/bin\n');
+
+    // Mirror failover also works with Ubuntu-only source filtering.
+    const browser = run('slowRunner', 'cold', { includePostgres: false });
+    expect(browser.status, browser.stderr).toBe(0);
+    expect(browser.sourceparts).toEqual([['ubuntu.sources'], ['ubuntu.sources']]);
+    expect(browser.budgets).toEqual([45, 345, 345, 345]);
   });
 
   it('fails as an installation failure once the whole budget is spent', () => {
@@ -184,7 +206,7 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('::error title=CI tool installation failed::');
     expect(result.stderr).toContain('within 390s');
-    expect(result.budgets).toEqual([180, 210]);
+    expect(result.budgets).toEqual([45, 345]);
     expect(result.calls).not.toContain(INSTALL_FROM_CACHE);
     expect(result.githubPath).toBe('');
   });
@@ -206,7 +228,7 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
       'apt-get install -y --download-only postgresql-client-17 ffmpeg',
       INSTALL_FROM_CACHE,
     ]);
-    expect(warm.budgets).toEqual([180, 180, 180]);
+    expect(warm.budgets).toEqual([45, 45, 45]);
     expect(warm.pgdg).toContain('[signed-by=');
   });
 
@@ -228,9 +250,9 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     for (const id of ['database', 'browser']) {
       const body = jobs[id];
       expect(body, id).toContain('uses: ./.github/actions/db-tools');
-      const identify = body.split('- name: Identify APT package cache\n')[1].split('\n      - name:')[0];
-      const cache = body.split('- name: Cache APT package downloads\n')[1].split('\n      - name:')[0];
-      const install = body.split('- name: Install the selected tools\n')[1].split('\n      - name:')[0];
+      const identify = body.split('- name: Identify APT package cache\n')[1].split(/\n {6}- /)[0];
+      const cache = body.split('- name: Cache APT package downloads\n')[1].split(/\n {6}- /)[0];
+      const install = body.split('- name: Install the selected tools\n')[1].split(/\n {6}- /)[0];
       for (const step of [identify, install]) {
         if (id === 'database') {
           expect(step).toContain(`PG_MAJOR: '${serviceMajor}'`);

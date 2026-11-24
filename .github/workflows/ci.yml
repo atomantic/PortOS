@@ -519,19 +519,6 @@ jobs:
         with:
           vitest-key-suffix: -browser-${{ matrix.shard }}of${{ strategy.job-total }}
 
-      # The step timeout backs up the helper's download budget.
-      - name: Install audio verification tools
-        timeout-minutes: 9
-        uses: ./.github/actions/db-tools
-        with:
-          include-postgres: 'false'
-
-      # The test runner reads the runner's Chrome tree into the page cache
-      # (scripts/ci-warm-test-chrome.sh, #9641) only when a suite will run (#17750).
-      - uses: ./.github/actions/setup-client
-        with:
-          setup-node: 'false'
-
       # Smoke uses both trusted full-run lineages because its shard owners
       # differ. Per-test keys still require compatible inputs and coverage.
       - name: Restore the test memo
@@ -542,11 +529,41 @@ jobs:
           partition: browser-${{ matrix.shard }}of${{ strategy.job-total }}
           merge-shards: ${{ env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '4' || '0' }}
 
+      # Plan before installing ffmpeg/client deps so shards 100% covered by the
+      # memo skip both. Uses the same env keys as the test step below.
+      - name: Check remaining browser suites
+        id: browser-plan
+        env:
+          PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
+          CI_TEST_MODE: files
+          CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+          PORTOS_CI_BROWSER_OWNER: browser
+          CI_TEST_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).browser_files) }}
+          PORTOS_REQUIRE_BROWSER_SUITES: '1'
+          PORTOS_TEST_QUIET: 1
+        run: node scripts/run-ci-tests.js server --check-remaining
+
+      # The step timeout backs up the helper's download budget.
+      - name: Install audio verification tools
+        if: fromJSON(steps.browser-plan.outputs.remaining) > 0
+        timeout-minutes: 9
+        uses: ./.github/actions/db-tools
+        with:
+          include-postgres: 'false'
+
+      # The test runner reads the runner's Chrome tree into the page cache
+      # (scripts/ci-warm-test-chrome.sh, #9641) only when a suite will run (#17750).
+      - uses: ./.github/actions/setup-client
+        if: fromJSON(steps.browser-plan.outputs.remaining) > 0
+        with:
+          setup-node: 'false'
+
       # Fail-closed: PORTOS_REQUIRE_BROWSER_SUITES makes the suites' canRun guard
       # throw (see server/lib/browserSuiteGate.js) when Chrome, ffmpeg or the
       # client bundler is missing, so a skip can never pass this step.
       - name: Run cross-workspace browser suites
         id: browser-tests
+        if: fromJSON(steps.browser-plan.outputs.remaining) > 0
         # The independent supervisor emits progress and owns a 12m deadline;
         # this 15m step limit is only a fallback before the 20m job boundary.
         timeout-minutes: 15

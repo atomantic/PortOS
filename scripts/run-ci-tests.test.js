@@ -220,6 +220,61 @@ describe('test memo through the real runner', () => {
     }
   }, 200_000);
 
+  it('reports remaining un-memoized count via --check-remaining without running tests', () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'portos-check-remaining-'));
+    const memoDir = join(fixture, 'memo');
+    const outputFile = join(fixture, 'github_output');
+    try {
+      installFakeNpm(fixture, [
+        'const fs = require("fs");',
+        'const selection = JSON.parse(fs.readFileSync(process.env.PORTOS_CI_TEST_SELECTION, "utf8"));',
+        'const out = process.argv.find(a => a.startsWith("--outputFile.json=")).slice("--outputFile.json=".length);',
+        `const repo = ${JSON.stringify(join(import.meta.dirname, '..'))};`,
+        'const testResults = selection.include.map(rel => ({ name: require("path").resolve(repo, "server", rel), status: "passed", assertionResults: [{ status: "passed" }] }));',
+        'fs.writeFileSync(out, JSON.stringify({ testResults }));',
+        'fs.writeFileSync(process.env.PORTOS_CI_DIAGNOSTICS_PATH, JSON.stringify({ reason: "passed", errorCount: 0, errors: [] }));',
+        'process.stdout.write("RAN " + JSON.stringify(selection.include) + "\\n");',
+      ].join('\n'));
+      const test = 'scripts/lib/releaseTitle.test.js';
+      const invoke = (args, extraEnv = {}) => spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server', ...args], {
+        encoding: 'utf8', timeout: 120000,
+        env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
+          CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify([test]), CI_TEST_SOURCES: '[]',
+          PORTOS_TEST_MEMO: '', CI_SHARD: '', PORTOS_TEST_MEMO_DIR: memoDir,
+          GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', GITHUB_OUTPUT: outputFile, GITHUB_EVENT_NAME: 'push', ...extraEnv },
+      });
+
+      writeFileSync(outputFile, '');
+      const coldPlan = invoke(['--check-remaining']);
+      expect(coldPlan.status, coldPlan.stderr).toBe(0);
+      expect(coldPlan.stdout).not.toContain('RAN ');
+      expect(readFileSync(outputFile, 'utf8')).toBe('remaining=1\n');
+
+      const record = invoke([]);
+      expect(record.status, record.stderr).toBe(0);
+      expect(record.stdout).toContain('RAN ');
+
+      writeFileSync(outputFile, '');
+      const warmPlan = invoke(['--check-remaining'], { GITHUB_EVENT_NAME: 'pull_request' });
+      expect(warmPlan.status, warmPlan.stderr).toBe(0);
+      expect(warmPlan.stdout).toContain('skipped 1 of 1 selected files');
+      expect(warmPlan.stdout).toContain('No server tests left to run.');
+      expect(warmPlan.stdout).not.toContain('RAN ');
+      expect(readFileSync(outputFile, 'utf8')).toBe('remaining=0\n');
+
+      writeFileSync(outputFile, '');
+      const deferred = invoke(['--check-remaining'], {
+        PORTOS_BROWSER_TEST_PROFILE: 'smoke',
+        CI_TEST_FILES: JSON.stringify(['server/routes/musicVideoRichAuthoring.browser.test.js']),
+      });
+      expect(deferred.status, deferred.stderr).toBe(0);
+      expect(deferred.stdout).toContain('Fidelity-only inputs require separate evidence.');
+      expect(readFileSync(outputFile, 'utf8')).toBe('remaining=0\n');
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  }, 150_000);
+
   it('selects the same files as `vitest related` on a fixture graph with a dynamic import', () => {
     const fixture = mkdtempSync(join(tmpdir(), 'portos-related-parity-'));
     try {
@@ -709,6 +764,25 @@ describe('ci.yml shard wiring', () => {
     // The client workspace must be installed before the suites bundle it.
     expect(body.indexOf('npm ci --prefix client')).toBeGreaterThan(0);
     expect(body.indexOf('npm ci --prefix client')).toBeLessThan(start);
+    // Restore the test memo and check remaining suites before paying for db-tools or setup-client.
+    const memoIndex = body.indexOf('- name: Restore the test memo');
+    const planIndex = body.indexOf('- name: Check remaining browser suites');
+    const toolsIndex = body.indexOf('- name: Install audio verification tools');
+    const clientIndex = body.indexOf('uses: ./.github/actions/setup-client');
+    expect(memoIndex).toBeGreaterThan(0);
+    expect(memoIndex).toBeLessThan(planIndex);
+    expect(planIndex).toBeLessThan(toolsIndex);
+    expect(toolsIndex).toBeLessThan(clientIndex);
+    expect(clientIndex).toBeLessThan(start);
+    const planStep = body.slice(planIndex, toolsIndex);
+    expect(planStep).toContain('id: browser-plan');
+    expect(planStep).toContain('run: node scripts/run-ci-tests.js server --check-remaining');
+    expect(planStep).toContain('PORTOS_CI_BROWSER_OWNER: browser');
+    expect(planStep).toContain("PORTOS_REQUIRE_BROWSER_SUITES: '1'");
+    const gate = 'if: fromJSON(steps.browser-plan.outputs.remaining) > 0';
+    expect(body.slice(toolsIndex, clientIndex)).toContain(gate);
+    expect(body.slice(clientIndex, start)).toContain(gate);
+    expect(step).toContain(gate);
   });
 
   it('uploads every failed synthetic template comparison without including arbitrary diagnostics', () => {
