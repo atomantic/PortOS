@@ -99,26 +99,38 @@ export async function probeRiggingReadiness({ exists, env, execFileImpl, platfor
   return describeRiggingReadiness({ supportedPlatform, platform, python, probe });
 }
 
-// A real `import bpy` costs seconds and this answer is read on every `GET /api/settings/features`;
-// memoize briefly. The Settings card's explicit recheck passes `refresh` to bypass it.
+// Importing bpy costs seconds. Reuse recent answers and share work across callers.
 const CACHE_TTL_MS = 60_000;
 let cached = null;
+let inflight = null;
 
-/** Drop the memoized readiness answer. Test-only seam. */
-export const __resetRiggingReadinessCache = () => { cached = null; };
+/** Reset readiness state. Test-only seam. */
+export const __resetRiggingReadinessCache = () => {
+  cached = null;
+  inflight = null;
+};
 
 /**
  * The cached readiness answer; `probe`/`now` are injectable so the cache is testable without Blender.
  * @param {{refresh?: boolean, now?: () => number, probe?: () => Promise<object>}} [opts]
  * @returns {Promise<object>}
  */
-export async function getRiggingReadiness({ refresh = false, now = Date.now, probe = probeRiggingReadiness } = {}) {
-  const at = now();
-  if (!refresh && cached && at - cached.at < CACHE_TTL_MS) return cached.value;
-  const value = await probe();
-  cached = { at, value };
-  console.log(`🦴 Rigging readiness: ${value.ready ? 'ready' : value.reason}`);
-  return value;
+export function getRiggingReadiness({ refresh = false, now = Date.now, probe = probeRiggingReadiness } = {}) {
+  if (!refresh && inflight) return inflight;
+  if (!refresh && cached && now() - cached.at < CACHE_TTL_MS) return Promise.resolve(cached.value);
+
+  const pending = Promise.resolve().then(() => probe()).then((value) => {
+    // A superseded probe still answers its caller, but only the latest can update the cache.
+    if (inflight === pending) {
+      cached = value.reason === 'runtime-probe-failed' ? null : { at: now(), value };
+    }
+    console.log(`🦴 Rigging readiness: ${value.ready ? 'ready' : value.reason}`);
+    return value;
+  }).finally(() => {
+    if (inflight === pending) inflight = null;
+  });
+  inflight = pending;
+  return pending;
 }
 
 /**

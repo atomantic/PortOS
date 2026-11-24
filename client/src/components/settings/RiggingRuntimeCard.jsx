@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import useMounted from '../../hooks/useMounted.js';
 import BrailleSpinner from '../BrailleSpinner';
 import { copyToClipboard } from '../../lib/clipboard.js';
 import { riggingReasonLabel } from '../../lib/riggingReasons.js';
@@ -19,18 +20,23 @@ export function RiggingRuntimeCard() {
   const [error, setError] = useState(null);
   const [checking, setChecking] = useState(false);
 
+  const mounted = useMounted();
+  const requestId = useRef(0);
+
   const load = useCallback(async ({ refresh = false } = {}) => {
+    const id = ++requestId.current;
     setChecking(true);
     // Silent: an unreadable probe is reported inline on the card, not as a toast —
     // this tab renders on every Settings visit and a toast would fire unprompted.
     const result = await getRiggingReadiness({ refresh, silent: true }).catch((err) => err);
+    if (!mounted.current || id !== requestId.current) return;
     if (result instanceof Error) setError(result);
     else {
       setError(null);
       setReadiness(result);
     }
     setChecking(false);
-  }, []);
+  }, [mounted]);
 
   useEffect(() => { load(); }, [load]);
 
