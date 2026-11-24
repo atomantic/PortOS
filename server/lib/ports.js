@@ -33,6 +33,8 @@ export const PORTS = Object.freeze({
   SLOTSTREAM: 5564,   // Loopback SSD-streaming MoE runtime (never 11434 — that collides with Ollama)
   JEV: 5566,        // Loopback openjev entailment scorer — on-demand sidecar, never bound at boot
   LLAMA_SERVER: 5568, // Loopback llama.cpp speculative-decoding server
+  SPLASH: 8001,       // Managed loopback Splash / Inkling 2 Mini API
+  MKSERVE: 8002,      // Managed loopback mkserve / Inkling 2 Mini API
   FLEET_LLM: 18022, // Authenticated shared inference queue for dedicated hosts
 
   VLLM_QWEN: 18020, // Loopback vLLM Qwen3.8-27B (DFlash 2) container — opt-in dedicated host setup

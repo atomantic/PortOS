@@ -153,11 +153,16 @@ export const stopMtplxServer = () =>
 export const installMtplx = () =>
   request('/local-llm/mtplx/install', { method: 'POST' });
 
+// Managed Inkling runtimes. Mutations enqueue work; status and the runtime
+// progress event report completion independently of the request.
+export const getManagedInklingRuntimeStatus = (runtime, options) =>
+  request(`/local-llm/${runtime}/status`, options);
+
+export const controlManagedInklingRuntime = (runtime, action, options) =>
+  request(`/local-llm/${runtime}/${action}`, { ...options, method: 'POST' });
+
 // Slotstream (SSD-streaming MoE on Apple Silicon) — a PM2-managed process,
 // same lifecycle shape as MTPLX. A start never downloads weights.
-export const getSplashRuntimeStatus = (options) =>
-  request('/local-llm/splash/status', options);
-
 export const getSlotstreamServerStatus = (options) =>
   request('/local-llm/slotstream/status', options);
 

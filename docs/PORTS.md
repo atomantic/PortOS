@@ -47,6 +47,8 @@ commands target the PM2 listener.
 | 5566 | jev sidecar (loopback) | - | Loopback openjev entailment scorer. Not a PM2 process: `server/services/jev.js` starts it on the first scoring call and reaps it after ten idle minutes. See [JEV_SETUP.md](./JEV_SETUP.md). |
 | 5568 | portos-llama-server | - | Loopback llama.cpp speculative-decoding server. Optional PM2 process, started/stopped from Models → Runtimes. |
 | 8000 | portos-mtplx | - | Loopback MTPLX OpenAI-compatible API (upstream's own default, kept so the shipped provider presets match). Optional PM2 process, started/stopped from Models → Runtimes. See [features/mtplx.md](./features/mtplx.md). |
+| 8001 | portos-splash | - | Loopback Splash API; managed from Models → Runtimes. |
+| 8002 | portos-mkserve | - | Loopback mkserve API; managed from Models → Runtimes. |
 | 18022 | PortOS model host | - | Opt-in bearer-authenticated inference queue for dedicated hosts; one active generation. See [fleet host](./features/fleet-llm-host.md). |
 | 18020 | vLLM (Docker) | - | Loopback vLLM Qwen3.8-27B / DFlash 2 container on an RTX 3090 host. Started explicitly from host setup or by the operator. Dedicated hosting opts into Docker restart persistence. See [features/qwen38-rtx3090.md](./features/qwen38-rtx3090.md). |
 | 18021 | SGLang (Docker) | - | Loopback SGLang Qwen3.8-27B container on a Hopper/Blackwell host. Operator-started (`docker compose up -d`) — PortOS never brings it up on boot. See [features/sglang-qwen38.md](./features/sglang-qwen38.md). |
