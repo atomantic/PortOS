@@ -190,16 +190,21 @@ describe('owned server browser fixture lifecycle', () => {
 
   it.each(['fails', 'stalls', 'leaves root'])('rejects when private root removal %s despite confirmed exit', async mode => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    lstat.mockImplementation(async path => lstatSync(path));
     const fixture = owned();
     const started = await fixture.start();
     const temp = recordRoot(fixture);
-    rm.mockImplementation(mode === 'stalls' ? stalls : mode === 'fails'
-      ? async () => { throw new Error('synthetic removal failure'); } : async () => {});
+    const removing = deferred();
+    rm.mockImplementation(async () => {
+      removing.resolve();
+      if (mode === 'stalls') return stalls();
+      if (mode === 'fails') throw new Error('synthetic removal failure');
+    });
     const closing = started.close();
     const result = closing.catch(error => error);
-    // Reach the removal this mode names: expiring the deadline while the real
-    // profile check is still pending would strand it in a later test.
-    await flushUntil(() => rm.mock.calls.length > 0);
+    // Wait for the operation itself before advancing its fake deadline.
+    await removing.promise;
+    expect(rm).toHaveBeenCalledExactlyOnceWith(temp, { recursive: true, force: true });
     await vi.advanceTimersByTimeAsync(100);
     expect(await result).toBeInstanceOf(Error);
     expect(started.close()).toBe(closing);
@@ -238,8 +243,13 @@ describe('owned server browser fixture lifecycle', () => {
     const fixture = owned();
     const other = owned();
     if (path === 'kill') fixture.server.close.mockImplementation(stalls);
+    const settlingStarted = deferred();
     const settling = deferred();
-    fixture.crashHandlers.settle.mockImplementation(async () => { await settling.promise; return 'found=2 signalled=2 settled=2'; });
+    fixture.crashHandlers.settle.mockImplementation(async () => {
+      settlingStarted.resolve();
+      await settling.promise;
+      return 'found=2 signalled=2 settled=2';
+    });
     const started = await fixture.start();
     const temp = recordRoot(fixture);
     expect(fixture.chromium.launchServer.mock.calls[0][0].env).toMatchObject(fixture.crashHandlers.env);
@@ -247,7 +257,7 @@ describe('owned server browser fixture lifecycle', () => {
     expect(fixture.crashHandlers.identify).toHaveBeenCalledExactlyOnceWith(100);
     const closing = started.close();
     await vi.advanceTimersByTimeAsync(30);
-    await flushUntil(() => fixture.crashHandlers.settle.mock.calls.length > 0);
+    await settlingStarted.promise;
     expect(fixture.child.exitCode ?? fixture.child.signalCode).not.toBeNull();
     const [budget] = fixture.crashHandlers.settle.mock.calls[0];
     expect(budget).toBeGreaterThan(0);
