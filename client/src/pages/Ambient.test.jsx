@@ -203,3 +203,47 @@ it('invalidates pending calendar reads, preserves stale content on failure, and 
   expect(screen.queryByRole('alert')).toBeNull();
   expect(reads()).toEqual([1, 1, 1, 4]);
 });
+
+describe('Ambient accessibility', () => {
+  it('exposes landmarks, one h1, h2 panel headings, status role and pressed fullscreen state', async () => {
+    await mount();
+    expect(screen.getByRole('main')).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('PortOS Ambient');
+    expect(screen.queryAllByRole('heading', { level: 3 })).toHaveLength(0);
+    expect(screen.getAllByRole('heading', { level: 2 }).map(h => h.textContent)).toEqual(['Today', 'Goals', 'Agent Activity']);
+    expect(screen.getByRole('status')).toHaveTextContent('System Online');
+    const fs = screen.getByRole('button', { name: 'Enter fullscreen' });
+    expect(fs).toHaveAttribute('aria-pressed', 'false');
+    // always-dark keeps day themes from remapping the white-on-black text.
+    expect(screen.getByRole('main').parentElement.className).toContain('always-dark');
+  });
+
+  it('does not leak a rejected fullscreen request', async () => {
+    await mount();
+    document.documentElement.requestFullscreen = vi.fn(() => Promise.reject(new Error('denied')));
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    await flush(() => fireEvent.click(screen.getByRole('button', { name: 'Enter fullscreen' })));
+    await flush(() => vi.advanceTimersByTime(10));
+    process.off('unhandledRejection', unhandled);
+    expect(document.documentElement.requestFullscreen).toHaveBeenCalled();
+    expect(unhandled).not.toHaveBeenCalled();
+  });
+
+  it('only a bare Escape leaves the page', async () => {
+    const { Routes, Route } = await import('react-router');
+    await flush(() => render(<MemoryRouter initialEntries={['/ambient']}><Routes>
+      <Route path="/ambient" element={<Ambient />} /><Route path="/" element={<div>Home page</div>} />
+    </Routes></MemoryRouter>));
+    const press = (init) => flush(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, ...init })));
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: document.body });
+    await press();
+    expect(screen.queryByText('Home page')).toBeNull();
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: null });
+    await flush(() => window.addEventListener('keydown', (e) => e.preventDefault(), { once: true, capture: true }));
+    await press();
+    expect(screen.queryByText('Home page')).toBeNull();
+    await press();
+    expect(screen.getByText('Home page')).toBeTruthy();
+  });
+});

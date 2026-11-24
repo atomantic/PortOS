@@ -23,12 +23,14 @@ const goalColor = (rate) =>
 const goalColorClass = (rate) =>
   rate >= 80 ? 'text-port-success' : rate >= 50 ? 'text-port-warning' : 'text-port-error';
 
+// Fullscreen can be refused (no user gesture, iframe policy, unsupported
+// browser); the button state follows `fullscreenchange`, so a rejection
+// needs no recovery beyond not surfacing as an unhandled rejection.
 function toggleFullscreen() {
-  if (document.fullscreenElement) {
-    document.exitFullscreen();
-  } else {
-    document.documentElement.requestFullscreen();
-  }
+  const request = document.fullscreenElement
+    ? document.exitFullscreen?.()
+    : document.documentElement.requestFullscreen?.();
+  request?.catch(() => {});
 }
 
 export default function Ambient() {
@@ -94,7 +96,8 @@ export default function Ambient() {
 
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (e.key === 'Escape') navigate('/');
+      // Escape also leaves fullscreen (browser-handled); only a bare Escape exits the page.
+      if (e.key === 'Escape' && !e.defaultPrevented && !document.fullscreenElement) navigate('/');
       if ((e.key === 'f' || e.key === 'F') && !shouldIgnoreGlobalKey(e)) toggleFullscreen();
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -144,36 +147,38 @@ export default function Ambient() {
     // Ambient mode is a full-screen always-on display for a dim room, so it
     // stays black rather than following the theme — every layer below is white
     // text on black, and a day theme's light surface would leave it unreadable.
-    <div className={`fixed inset-0 bg-black text-white z-[9999] overflow-hidden flex flex-col ${idle ? 'cursor-none' : ''}`}>
-      <div className={`absolute top-4 left-4 right-4 flex justify-between items-center z-10 transition-opacity duration-500 ${
+    <div className={`always-dark fixed inset-0 bg-black text-white z-[9999] overflow-hidden flex flex-col ${idle ? 'cursor-none' : ''}`}>
+      <h1 className="sr-only">PortOS Ambient</h1>
+      <header className={`absolute top-4 left-4 right-4 flex justify-between items-center z-10 transition-opacity duration-500 ${
         idle ? 'opacity-0 pointer-events-none focus-within:opacity-100 focus-within:pointer-events-auto' : 'opacity-100'
       }`}>
         <button
           onClick={() => navigate('/')}
           className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors text-sm text-gray-400 hover:text-white min-h-[40px]"
         >
-          <ArrowLeft size={16} />
+          <ArrowLeft size={16} aria-hidden="true" />
           <span>Exit</span>
         </button>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-600">ESC to exit &middot; F for fullscreen</span>
+          <span className="text-xs text-gray-400">ESC to exit &middot; F for fullscreen</span>
           <button
             onClick={toggleFullscreen}
             aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+            aria-pressed={isFullscreen}
             className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors text-gray-400 hover:text-white min-h-[40px] min-w-[40px] flex items-center justify-center"
           >
-            {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
+            {isFullscreen ? <Minimize size={16} aria-hidden="true" /> : <Maximize size={16} aria-hidden="true" />}
           </button>
         </div>
-      </div>
+      </header>
 
       <main id="main-content" className="flex-1 overflow-y-auto min-h-0 overscroll-contain">
         <div className="min-h-full flex flex-col items-center justify-center p-8 gap-8">
         <div className="text-center">
-          <div className="text-7xl sm:text-8xl md:text-9xl font-mono font-light tracking-wider text-white/90 tabular-nums">
+          <div className="text-7xl sm:text-8xl md:text-9xl font-mono font-light tracking-wider text-white tabular-nums">
             {formatClockTime(time)}
           </div>
-          <div className="text-lg sm:text-xl text-gray-500 mt-2 tracking-wide">
+          <div className="text-lg sm:text-xl text-gray-400 mt-2 tracking-wide">
             {formatDateFull(time)}
           </div>
         </div>
@@ -186,7 +191,7 @@ export default function Ambient() {
               align="center"
             />
             {deathData.percentComplete != null && (
-              <div className="text-xs text-gray-700 mt-1">
+              <div className="text-xs text-gray-400 mt-1">
                 {deathData.percentComplete}% of est. meatspace time elapsed
               </div>
             )}
@@ -202,7 +207,7 @@ export default function Ambient() {
               </div>
             )}
             {upcomingEvents.length === 0 ? (
-              <div className="text-gray-600 text-sm">{calendarError ? 'Calendar unavailable' : 'No upcoming events'}</div>
+              <div className="text-gray-400 text-sm">{calendarError ? 'Calendar unavailable' : 'No upcoming events'}</div>
             ) : (
               <div className="space-y-2">
                 {upcomingEvents.map((event, i) => (
@@ -213,7 +218,7 @@ export default function Ambient() {
                     />
                     <div className="min-w-0">
                       <div className="text-sm text-gray-300 truncate">{event.summary || event.title}</div>
-                      <div className="text-xs text-gray-600">
+                      <div className="text-xs text-gray-400">
                         {(event.isAllDay ?? event.allDay) ? 'All day' : `${formatTimeOfDay(event.startTime || event.start)} – ${formatTimeOfDay(event.endTime || event.end)}`}
                       </div>
                     </div>
@@ -225,7 +230,7 @@ export default function Ambient() {
 
           <AmbientPanel title="Goals" count={goals?.goals?.length}>
             {!goals?.goals?.length ? (
-              <div className="text-gray-600 text-sm">No active goals</div>
+              <div className="text-gray-400 text-sm">No active goals</div>
             ) : (
               <div className="space-y-3">
                 {goals.goals.slice(0, 5).map((goal) => (
@@ -261,8 +266,8 @@ export default function Ambient() {
             </div>
             {cosSummary?.status?.running && (
               <div className="mt-3 flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-port-accent animate-pulse" />
-                <span className="text-xs text-gray-500">CoS is active</span>
+                <div aria-hidden="true" className="w-2 h-2 rounded-full bg-port-accent animate-pulse" />
+                <span className="text-xs text-gray-400">CoS is active</span>
               </div>
             )}
           </AmbientPanel>
@@ -270,15 +275,15 @@ export default function Ambient() {
         </div>
       </main>
 
-      <div className={`px-6 py-3 flex justify-between items-center text-xs text-gray-700 transition-opacity duration-500 ${
-        idle ? 'opacity-30' : 'opacity-100'
+      <footer className={`px-6 py-3 flex justify-between items-center text-xs text-gray-400 transition-opacity duration-500 ${
+        idle ? 'opacity-70' : 'opacity-100'
       }`}>
         <span>PortOS Ambient</span>
-        <span className="flex items-center gap-2">
-          <span className={`w-1.5 h-1.5 rounded-full ${socket.connected ? 'bg-port-success' : 'bg-gray-700'}`} />
+        <span role="status" className="flex items-center gap-2">
+          <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${socket.connected ? 'bg-port-success' : 'bg-gray-700'}`} />
           {socket.connected ? 'System Online' : 'Connecting...'}
         </span>
-      </div>
+      </footer>
     </div>
   );
 }
@@ -287,9 +292,9 @@ function AmbientPanel({ title, count, children }) {
   return (
     <div className="bg-white/[0.02] border border-white/[0.04] rounded-2xl p-5">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider">{title}</h3>
+        <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider">{title}</h2>
         {count != null && count > 0 && (
-          <span className="text-xs text-gray-600 tabular-nums">{count}</span>
+          <span className="text-xs text-gray-400 tabular-nums">{count}</span>
         )}
       </div>
       {children}
@@ -300,10 +305,10 @@ function AmbientPanel({ title, count, children }) {
 function AmbientStat({ label, value, color }) {
   return (
     <div className="text-center">
-      <div className="text-2xl font-light tabular-nums" style={{ color: color || '#6b7280' }}>
+      <div className="text-2xl font-light tabular-nums" style={{ color: color || '#9ca3af' }}>
         {value}
       </div>
-      <div className="text-[10px] text-gray-700 uppercase tracking-wider">{label}</div>
+      <div className="text-[10px] text-gray-400 uppercase tracking-wider">{label}</div>
     </div>
   );
 }
