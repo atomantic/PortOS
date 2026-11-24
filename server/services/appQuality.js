@@ -84,8 +84,8 @@ export async function enrichAppsWithQuality(apps, deps = {}) {
   // newest run per category is kept past it as the row's evidence (#12076).
   const now = deps.now ?? Date.now();
   const result = await (deps.query || query)(
-    `SELECT app_id, category, agent_id, assessed_at, report FROM (
-       SELECT app_id, category, agent_id, assessed_at, report,
+    `SELECT app_id, category, agent_id, assessed_at, report, slice FROM (
+       SELECT app_id, category, agent_id, assessed_at, report, slice,
          row_number() OVER (PARTITION BY app_id, category ORDER BY assessed_at DESC, agent_id DESC) AS run_rank
        FROM app_quality_measurements WHERE app_id = ANY($1::text[])) runs
      WHERE run_rank = 1 OR assessed_at >= $2`,

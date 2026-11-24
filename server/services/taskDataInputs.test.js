@@ -8,6 +8,7 @@ import {
 } from './taskDataInputs.js';
 import { getTaskDataInputCatalog } from '../lib/taskDataInputCatalog.js';
 import { DISPATCH_HINT_READING_GUIDANCE } from '../lib/dispatchLabels.js';
+import { QUALITY_HEALTHY_THRESHOLD } from '../lib/auditDomains.js';
 
 const APP = { id: 'app-1', name: 'Example App', repoPath: '/repo' };
 
@@ -77,7 +78,7 @@ describe('taskDataInputs', () => {
     const options = { app: APP, taskType: 'better-runtime-safety', dependencies: { resolveTracker, listAuditSlices } };
     const [section] = await resolveTaskDataInputs(['audit-slice-history'], options);
     expect(section.label).toBe('Recent audit slices');
-    expect(section.content).toContain('Recently audited by this lane (rotate to uncovered areas, OR re-verify a slice that scored below 75 once its filed issues are closed):');
+    expect(section.content).toContain(`Recently audited by this lane (rotate to uncovered areas, OR re-verify a slice that scored below ${QUALITY_HEALTHY_THRESHOLD} once its filed issues are closed):`);
     expect(section.content).toContain('- 2026-09-10 (score: 60): server/services/auth, server/lib/commandSecurity.js');
     expect(section.content).toContain('- 2026-09-03: client/src/components/apps');
     expect(listAuditSlices).toHaveBeenCalledWith('app-1', 'better-runtime-safety');
