@@ -137,6 +137,17 @@ vi.mock('./agentCompletionCleanup.js', () => ({
   runSpawnerCompletionCleanup: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Unit tests must not hit the real maintenance journal (disk locks, lstatSync on the fs mock below).
+vi.mock('../../lib/maintenanceAdmission.js', () => ({ maintenance: {
+  withResource: (_kind, _id, fn) => fn(), finishResource: vi.fn(), markResourceUnsettled: vi.fn(),
+  continueSettlement: fn => fn(), recoverOwned: vi.fn(),
+} }));
+
+vi.mock('../../lib/backupSnapshotBoundary.js', async importOriginal => ({
+  ...(await importOriginal()),
+  withBackupAssetPublication: async work => work(),
+}));
+
 vi.mock('fs', () => ({
   readdirSync: vi.fn().mockReturnValue([]),
   // Default: no .agent-done sentinel on disk. The completion-sentinel test
