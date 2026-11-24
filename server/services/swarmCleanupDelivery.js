@@ -4,56 +4,98 @@ import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { matchesCompletionTaskDispatch } from './agent/agentCompletionTaskHandoff.js';
-import { completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
+import { findValidCheckoutCaptures } from './completedCheckoutEvidence.js';
+import { spawnBudgetCount } from './cos/cosSpawnBudget.js';
 
-// A swarm may leave its original task in cleanup recovery while its next batch
-// starts. The task and every checkout remain owned by the recovery service.
-// This predicate never treats an agent's summary as proof of delivery.
-function cleanupOnlySwarmCaptures(task, agent, instanceId) {
+const SWARM_CLAIM_ANALYSIS_TYPES = new Set(['claim-issue', 'claim-issue-gitlab', 'claim-work']);
+const REQUIRED_DISPATCH_KEYS = ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'];
+const SETTLED_CLEARED_KEYS = new Set(['claimedBy', 'claimedAt']);
+const ACTIVE_OWNER_STATUSES = new Set(['running', 'queued', 'finalizing', 'paused']);
+
+function matchesSwarmTaskIdentity(task, agent, instanceId) {
+  const meta = agent?.metadata;
+  const taskMeta = task?.metadata;
+  const swarmCount = Number(taskMeta?.swarmCount);
+  return !!instanceId && instanceId !== 'unknown' && meta?.instanceId === instanceId
+    && taskMeta?.app === meta.taskApp && isTruthyMeta(taskMeta?.perpetual)
+    && taskMeta.analysisType === meta.taskAnalysisType && meta.configClaimFlow === true
+    && isTruthyMeta(taskMeta.onDemand) === Boolean(meta.taskOnDemand)
+    && (!meta.taskOnDemand || (taskMeta.onDemandOrigin || 'user') === (meta.taskOnDemandOrigin || 'user'))
+    && isTruthyMeta(taskMeta.claimFlow) && !taskMeta.claimTarget
+    && SWARM_CLAIM_ANALYSIS_TYPES.has(taskMeta.analysisType)
+    && Number.isSafeInteger(swarmCount) && swarmCount >= 1 && swarmCount <= 50
+    && meta.isWorktree === false;
+}
+
+function matchesCleanupRecoveryState(task, agent, { settled }) {
   const meta = agent?.metadata;
   const result = agent?.result;
-  const binding = meta?.completionTaskDispatch;
-  const swarmCount = Number(task?.metadata?.swarmCount);
-  if (task?.status !== 'in_progress' || task.metadata?.deliveryRecovery !== 'cleanup'
-    || task.metadata.deliveryRecoveryAgentId !== agent?.id || agent?.status !== 'completed'
-    || !instanceId || instanceId === 'unknown' || meta?.instanceId !== instanceId
-    || task.metadata.app !== meta.taskApp || !isTruthyMeta(task.metadata.perpetual)
-    || task.metadata.analysisType !== meta.taskAnalysisType || meta.configClaimFlow !== true
-    || isTruthyMeta(task.metadata.onDemand) !== Boolean(meta.taskOnDemand)
-    || (meta.taskOnDemand && (task.metadata.onDemandOrigin || 'user') !== (meta.taskOnDemandOrigin || 'user'))
-    || !isTruthyMeta(task.metadata.claimFlow) || task.metadata.claimTarget
-    || !['claim-issue', 'claim-issue-gitlab', 'claim-work'].includes(task.metadata.analysisType)
-    || !Number.isSafeInteger(swarmCount) || swarmCount < 1 || swarmCount > 50 || meta.isWorktree !== false
-    || result?.executionSuccess !== true || result.validationPassed === false
-    || result.cleanupPending !== true || result.deliveryRecoveryOwned !== true
-    || result.taskOutcome?.status !== 'incomplete' || result.taskOutcome.recovery?.mode !== 'cleanup'
-    || task.metadata.taskOutcome?.status !== 'incomplete' || task.metadata.taskOutcome.recovery?.mode !== 'cleanup'
-    || result.executionInterruption || meta.executionInterruption || meta.blocker
-    || meta.checkoutCapture?.status !== 'captured' || !Array.isArray(binding?.expected)
-    || binding.expected.length !== 4 || binding.expected.some(row => !Array.isArray(row) || row.length !== 2)
-    || !matchesCompletionTaskDispatch(agent, task)
-    || binding.expected.find(row => row?.[0] === 'claimedBy')?.[1] !== instanceId
-    || ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].some(key =>
-      binding.expected.filter(row => Array.isArray(row) && row[0] === key && row[1] != null).length !== 1)) return null;
-  const branches = meta.claimBranches;
-  const captures = meta.completedCheckouts;
-  const repo = meta.sourceWorkspace || meta.workspacePath;
+  if (agent?.status !== 'completed' || result?.executionSuccess !== true
+    || result.validationPassed === false || result.deliveryRecoveryOwned !== true
+    || result.executionInterruption || meta?.executionInterruption || meta?.blocker
+    || meta?.checkoutCapture?.status !== 'captured') return false;
+  if (settled) {
+    return task?.status === 'completed' && result.success === true
+      && result.deferredDeliveryOutcome?.status === 'incomplete'
+      && result.deferredDeliveryOutcome?.recovery?.mode === 'cleanup'
+      && meta.repoStateVerification?.status === 'completed'
+      && meta.cleanupOutcome?.status === 'verified' && meta.cleanupOutcome.unresolved === 0;
+  }
+  return task?.status === 'in_progress' && task.metadata?.deliveryRecovery === 'cleanup'
+    && task.metadata.deliveryRecoveryAgentId === agent.id && result.cleanupPending === true
+    && result.taskOutcome?.status === 'incomplete' && result.taskOutcome.recovery?.mode === 'cleanup'
+    && task.metadata.taskOutcome?.status === 'incomplete' && task.metadata.taskOutcome.recovery?.mode === 'cleanup';
+}
+
+function matchesSwarmDispatchBinding(task, agent, instanceId, { settled }) {
+  const binding = agent?.metadata?.completionTaskDispatch;
+  if (!Array.isArray(binding?.expected) || binding.expected.length !== REQUIRED_DISPATCH_KEYS.length
+    || binding.expected.some(row => !Array.isArray(row) || row.length !== 2)
+    || binding.expected.find(row => row[0] === 'claimedBy')?.[1] !== instanceId
+    || REQUIRED_DISPATCH_KEYS.some(key => binding.expected.filter(row => row[0] === key && row[1] != null).length !== 1)) {
+    return false;
+  }
+  if (!settled) return matchesCompletionTaskDispatch(agent, task);
+  // Settling the task clears its lease fields (claimedBy/claimedAt); the other
+  // binding keys (and any still-present lease field) must still match the live task.
+  if (binding.taskId !== task?.id || binding.taskId !== agent.taskId
+    || binding.taskType !== (task.taskType || 'user')) return false;
+  return binding.expected.every(([key, value]) => {
+    if (SETTLED_CLEARED_KEYS.has(key) && task.metadata?.[key] == null) return true;
+    return key === 'totalSpawnCount'
+      ? spawnBudgetCount(value) !== null && spawnBudgetCount(task.metadata?.[key]) === spawnBudgetCount(value)
+      : (task.metadata?.[key] ?? null) === value;
+  });
+}
+
+function readValidSwarmCheckoutCaptures(agent) {
+  const meta = agent?.metadata;
+  const branches = meta?.claimBranches;
+  const captures = meta?.completedCheckouts;
+  const repo = meta?.sourceWorkspace || meta?.workspacePath;
   if (!Array.isArray(branches) || !branches.length || new Set(branches).size !== branches.length
     || !Array.isArray(captures) || captures.length !== branches.length
     || (meta.claimReleasedBranches != null && (!Array.isArray(meta.claimReleasedBranches) || meta.claimReleasedBranches.length))
     || typeof repo !== 'string' || !repo) return null;
   for (const branch of branches) {
-    const rows = captures.filter(row => row.branch === branch);
-    if (typeof branch !== 'string' || !branch || rows.length !== 1 || !completedCheckoutReceiptValid(agent, rows[0])
-      || typeof rows[0].repoPath !== 'string' || resolve(rows[0].repoPath) !== resolve(repo)
-      || typeof rows[0].path !== 'string' || !rows[0].path
-      || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(rows[0].head || '')) return null;
+    if (typeof branch !== 'string' || !branch
+      || findValidCheckoutCaptures(agent, { branch, repoPath: repo }).length !== 1) return null;
   }
   return captures;
 }
 
-export function cleanupDeliveryProofMatches(task, agent, instanceId) {
-  const captures = cleanupOnlySwarmCaptures(task, agent, instanceId);
+// A swarm may leave its original task in cleanup recovery while its next batch
+// starts. The task and every checkout remain owned by the recovery service.
+// This predicate never treats an agent's summary as proof of delivery.
+function cleanupOnlySwarmCaptures(task, agent, instanceId, { settled = false } = {}) {
+  if (!matchesSwarmTaskIdentity(task, agent, instanceId)
+    || !matchesCleanupRecoveryState(task, agent, { settled })
+    || !matchesSwarmDispatchBinding(task, agent, instanceId, { settled })) return null;
+  return readValidSwarmCheckoutCaptures(agent);
+}
+
+export function cleanupDeliveryProofMatches(task, agent, instanceId, options = {}) {
+  const captures = cleanupOnlySwarmCaptures(task, agent, instanceId, options);
   const proof = agent?.metadata?.swarmCleanupDelivery;
   if (!captures || proof?.version !== 1 || !Array.isArray(proof.branches)
     || proof.branches.length !== captures.length) return false;
@@ -63,18 +105,8 @@ export function cleanupDeliveryProofMatches(task, agent, instanceId) {
 
 /** A queued refill may outlive physical retirement of its source checkout. */
 export function cleanupRefillSourceMatches(task, agent, instanceId) {
-  if (cleanupDeliveryProofMatches(task, agent, instanceId)) return true;
-  if (task?.status !== 'completed' || agent?.result?.success !== true
-    || agent.result.deferredDeliveryOutcome?.recovery?.mode !== 'cleanup'
-    || agent.metadata?.repoStateVerification?.status !== 'completed'
-    || agent.metadata?.cleanupOutcome?.status !== 'verified' || agent.metadata.cleanupOutcome.unresolved !== 0) return false;
-  // Settling the task clears its claim fields; restore them from the agent's own dispatch binding
-  // (the other binding keys must still match the live task) or a settled source never refills.
-  const claim = Object.fromEntries((agent.metadata?.completionTaskDispatch?.expected || [])
-    .filter(row => Array.isArray(row) && (row[0] === 'claimedBy' || row[0] === 'claimedAt') && task.metadata?.[row[0]] == null));
-  return cleanupDeliveryProofMatches({ ...task, status: 'in_progress', metadata: { ...task.metadata, ...claim,
-    deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: agent.id, taskOutcome: agent.result.deferredDeliveryOutcome } }, { ...agent, result: { ...agent.result,
-    cleanupPending: true, taskOutcome: agent.result.deferredDeliveryOutcome } }, instanceId);
+  return cleanupDeliveryProofMatches(task, agent, instanceId)
+    || cleanupDeliveryProofMatches(task, agent, instanceId, { settled: true });
 }
 
 /** Read fresh forge evidence for each server-captured checkout. No Git or file
@@ -124,6 +156,12 @@ async function hasExactGitlabMerge(app, repo, capture, probe) {
     && typeof mr.target_branch === 'string' && mr.target_branch.length > 0 && Number.isFinite(Date.parse(mr.merged_at));
 }
 
+function hasLiveTaskOrAgentOwner({ taskId, agentId, owners, activeIds, hasActiveTaskOwner }) {
+  return activeIds.has(agentId)
+    || hasActiveTaskOwner(taskId, owners.agents)
+    || Object.values(owners.agents).some(owner => owner.taskId === taskId && ACTIVE_OWNER_STATUSES.has(owner.status));
+}
+
 /** Only server-persisted proof for the current dispatch releases a queue slot. */
 export async function verifiedCleanupSwarmTaskIds(tasks, { allowSourceAgentId = null } = {}) {
   const candidates = tasks.filter(task => task.status === 'in_progress'
@@ -138,10 +176,8 @@ export async function verifiedCleanupSwarmTaskIds(tasks, { allowSourceAgentId = 
   const verified = await Promise.all(candidates.map(async task => {
     const agent = await getAgentRecord(task.metadata.deliveryRecoveryAgentId).catch(() => null);
     const scopedTask = { ...task, taskType: task.taskType || 'internal' };
-    const activeOwner = Object.values(owners.agents).some(owner => owner.taskId === task.id
-      && ['running', 'queued', 'finalizing', 'paused'].includes(owner.status));
     return (agent?.metadata?.swarmCleanupDelivery?.continuationIssued === true || agent?.id === allowSourceAgentId)
-      && !activeIds.has(agent?.id) && !activeOwner && !hasActiveTaskOwner(task.id, owners.agents)
+      && !hasLiveTaskOrAgentOwner({ taskId: task.id, agentId: agent?.id, owners, activeIds, hasActiveTaskOwner })
       && cleanupDeliveryProofMatches(scopedTask, agent, instance) ? task.id : null;
   }));
   return new Set(verified.filter(Boolean));
@@ -160,8 +196,9 @@ export async function validCleanupRefillSource(agentId, taskType, appId) {
     import('./cos/cosState.js'), import('./agent/agentState.js'),
   ]);
   const owners = await readAgentsStateForSafetyCheck();
-  return owners.trusted && !getActiveAgentIds().includes(agentId) && !hasActiveTaskOwner(task.id, owners.agents)
-    && !Object.values(owners.agents).some(owner => owner.taskId === task.id && ['running', 'queued', 'finalizing', 'paused'].includes(owner.status));
+  if (!owners.trusted) return false;
+  const activeIds = new Set(getActiveAgentIds());
+  return !hasLiveTaskOrAgentOwner({ taskId: task.id, agentId, owners, activeIds, hasActiveTaskOwner });
 }
 
 export function sameSwarmCleanupSnapshot(left, right) {

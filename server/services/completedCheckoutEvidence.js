@@ -6,7 +6,9 @@ import { resolve } from 'node:path';
 import { execGit } from '../lib/execGit.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 
-const shortBranch = branch => branch?.replace(/^refs\/heads\//, '');
+const GIT_COMMIT_SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+export const isGitCommitSha = value => typeof value === 'string' && GIT_COMMIT_SHA_RE.test(value);
+export const shortBranch = branch => branch?.replace(/^refs\/heads\//, '');
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 export const hasClaimCheckoutBindings = meta => meta?.isWorktree !== true
   && (isTruthyMeta(meta?.claimPicksOwnBranch) || Array.isArray(meta?.claimBranches));
@@ -33,7 +35,7 @@ export async function readCompletedCheckoutIdentity({ repoPath, branch, path, he
   const { listWorktrees } = await import('./worktreeManager.js');
   const repository = await realpath(repoPath);
   const checkout = await realpath(path);
-  if (checkout === repository || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(head || '')) return null;
+  if (checkout === repository || !isGitCommitSha(head)) return null;
   const trees = worktrees || await listWorktrees(repository);
   const holders = trees.filter(tree => shortBranch(tree.branch) === branch);
   if (holders.length !== 1 || (!allowLocked && holders[0].locked === true) || await realpath(holders[0].path) !== checkout || holders[0].head !== head) return null;
@@ -66,6 +68,29 @@ export function completedCheckoutReceiptValid(agent, receipt) {
     || !Number.isFinite(Date.parse(receipt.capturedAt)) || Date.parse(receipt.capturedAt) < Date.parse(agent.startedAt)) return false;
   if (receipt.version === 1) return Date.parse(receipt.capturedAt) <= Date.parse(agent.completedAt);
   return receipt.version === 2 && Date.parse(receipt.capturedAt) <= Date.now();
+}
+
+/** Return completed-checkout receipts on `agent` that pass validity, canonical
+ * repository, non-empty checkout path, strict Git commit SHA, and optional
+ * branch/path filters.
+ */
+export function findValidCheckoutCaptures(agent, { branch, excludeBranch, repoPath, path } = {}) {
+  const captures = agent?.metadata?.completedCheckouts;
+  if (!Array.isArray(captures) || !captures.length) return [];
+  if (repoPath !== undefined && (typeof repoPath !== 'string' || !repoPath)) return [];
+  if (path !== undefined && (typeof path !== 'string' || !path)) return [];
+  const expectedRepo = repoPath !== undefined ? resolve(repoPath) : null;
+  const expectedPath = path !== undefined ? resolve(path) : null;
+  return captures.filter(row => {
+    if (!row || !completedCheckoutReceiptValid(agent, row)) return false;
+    if (branch !== undefined && row.branch !== branch) return false;
+    if (excludeBranch !== undefined && row.branch === excludeBranch) return false;
+    if (typeof row.repoPath !== 'string' || !row.repoPath) return false;
+    if (expectedRepo !== null && resolve(row.repoPath) !== expectedRepo) return false;
+    if (typeof row.path !== 'string' || !row.path) return false;
+    if (expectedPath !== null && resolve(row.path) !== expectedPath) return false;
+    return isGitCommitSha(row.head);
+  });
 }
 
 /** Called under the agent-state lock while the run still owns its current
