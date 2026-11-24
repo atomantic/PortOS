@@ -99,6 +99,21 @@ describe('useVideoGenForm', () => {
     extractLastFrame.mockReset();
   });
 
+  it('restores a resumed fal job’s resolution and provider audio', async () => {
+    const { result } = render();
+    act(() => result.current.applyResumedParams({ mode: 'fal', modelId: 'fal-ai/example-video', prompt: 'a fox', resolution: '720p', generateAudio: true }));
+    await waitFor(() => expect(result.current.backend).toBe('fal'));
+    await waitFor(() => expect(result.current.falResolution).toBe('720p'));
+    expect(result.current.falGenerateAudio).toBe(true);
+    expect(result.current.falModelId).toBe('fal-ai/example-video');
+  });
+
+  it('restores a resumed local warm batch size', async () => {
+    const { result } = render();
+    act(() => result.current.applyResumedParams({ prompt: 'a fox', batchSize: 3 }));
+    await waitFor(() => expect(result.current.batchSize).toBe(3));
+  });
+
   it('loads a music-library render from an Audio-to-Video handoff URL', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(new Blob(['audio bytes'], { type: 'audio/mpeg' }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
