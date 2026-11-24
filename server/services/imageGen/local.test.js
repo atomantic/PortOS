@@ -257,6 +257,53 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
       .toThrow(expect.objectContaining({ code: 'IMAGE_GEN_FLUX2_INPUTS_INCOMPATIBLE' }));
   });
 
+  it('threads immutable revisions for every FLUX.2 repo flag', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const sha = (c) => c.repeat(40);
+    const { args } = buildArgs({
+      ...baseInput,
+      model: {
+        id: 'flux2-klein-9b-bf16', runner: 'flux2', quantization: 'none',
+        repo: 'black-forest-labs/FLUX.2-klein-9B', revision: sha('a'),
+        kvRepo: 'black-forest-labs/FLUX.2-klein-9B-kv', kvRevision: sha('b'),
+        tokenizerRepo: 't/t', tokenizerRevision: sha('c'),
+        basePipelineRepo: 'b/b', basePipelineRevision: sha('d'),
+      },
+    });
+    const val = (f) => args[args.indexOf(f) + 1];
+    expect(val('--revision')).toBe(sha('a'));
+    expect(val('--kv-revision')).toBe(sha('b'));
+    expect(val('--tokenizer-revision')).toBe(sha('c'));
+    expect(val('--base-pipeline-revision')).toBe(sha('d'));
+  });
+
+  it('omits revision flags for an unpinned fork', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const { args } = buildArgs({
+      ...baseInput,
+      model: { id: 'flux2-klein-9b-bf16', runner: 'flux2', quantization: 'none', repo: 'my-fork/FLUX.2-klein-9B' },
+    });
+    expect(args.some((a) => a.endsWith('-revision') || a === '--revision')).toBe(false);
+  });
+
+  it('pins the bf16 base on the LoRA reroute and drops the quantized entry revisions', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const { args } = buildArgs({
+      ...baseInput,
+      loraPaths: ['/data/loras/x.safetensors'],
+      loraScales: [1.0],
+      model: {
+        id: 'flux2-klein-4b', runner: 'flux2', quantization: 'sdnq',
+        repo: 'Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic', revision: '1'.repeat(40),
+        tokenizerRepo: 'black-forest-labs/FLUX.2-klein-4B', tokenizerRevision: '2'.repeat(40),
+      },
+    });
+    expect(args[args.indexOf('--repo') + 1]).toBe('black-forest-labs/FLUX.2-klein-4B');
+    expect(args[args.indexOf('--revision') + 1]).toMatch(/^[0-9a-f]{40}$/);
+    expect(args[args.indexOf('--revision') + 1]).not.toBe('1'.repeat(40));
+    expect(args).not.toContain('--tokenizer-revision');
+  });
+
   it('leaves a LoRA render on a bf16 model untouched (already unquantized)', () => {
     mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
     const { args } = buildArgs({

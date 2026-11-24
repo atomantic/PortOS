@@ -1205,6 +1205,52 @@ describe('mediaModels registry', () => {
     expect('kvRepo' in bf16).toBe(false);
   });
 
+  // FLUX.2 immutable commit pins (#18292): shipped entries carry 40-hex SHAs, persisted
+  // entries get them backfilled only while the repo is still the shipped one.
+  const SHA = /^[0-9a-f]{40}$/;
+  const writeImageRegistry = (image) => writeFileSync(registryFile, JSON.stringify({
+    video: { mlx: [], cuda: [], defaultMlx: 'x', defaultCuda: 'x' },
+    image,
+    textEncoders: [{ id: 't', label: 't', repo: 'r' }],
+    selectedTextEncoder: 't',
+  }));
+
+  it('fresh install: every shipped FLUX.2 repo is pinned to a 40-hex commit', async () => {
+    const { loadMediaModels, getImageModels } = await import('./mediaModels.js');
+    loadMediaModels();
+    const flux2 = getImageModels().filter((m) => m.runner === 'flux2');
+    expect(flux2).toHaveLength(4);
+    for (const m of flux2) {
+      expect(m.revision).toMatch(SHA);
+      if (m.tokenizerRepo) expect(m.tokenizerRevision).toMatch(SHA);
+      if (m.basePipelineRepo) expect(m.basePipelineRevision).toMatch(SHA);
+      if (m.kvRepo) expect(m.kvRevision).toMatch(SHA);
+    }
+  });
+
+  it('backfills revisions onto persisted unpinned shipped FLUX.2 entries', async () => {
+    writeImageRegistry([
+      { id: 'flux2-klein-4b-int8', runner: 'flux2', quantization: 'int8', repo: 'aydin99/FLUX.2-klein-4B-int8', basePipelineRepo: 'black-forest-labs/FLUX.2-klein-4B', steps: 8, guidance: 3.5 },
+    ]);
+    const { getImageModels } = await import('./mediaModels.js');
+    const m = getImageModels().find((x) => x.id === 'flux2-klein-4b-int8');
+    expect(m.revision).toMatch(SHA);
+    expect(m.basePipelineRevision).toMatch(SHA);
+  });
+
+  it('does not pin forks or overwrite explicit revisions', async () => {
+    writeImageRegistry([
+      { id: 'flux2-klein-4b', runner: 'flux2', quantization: 'sdnq', repo: 'my-fork/FLUX.2-klein-4B-sdnq', tokenizerRepo: 'black-forest-labs/FLUX.2-klein-4B', tokenizerRevision: 'main', steps: 8, guidance: 3.5 },
+      { id: 'flux2-klein-9b-bf16', runner: 'flux2', quantization: 'none', repo: 'black-forest-labs/FLUX.2-klein-9B', revision: '', steps: 20, guidance: 3.5 },
+    ]);
+    const { getImageModels } = await import('./mediaModels.js');
+    const fork = getImageModels().find((x) => x.id === 'flux2-klein-4b');
+    expect('revision' in fork).toBe(false);
+    expect(fork.tokenizerRevision).toBe('main');
+    const bf16 = getImageModels().find((x) => x.id === 'flux2-klein-9b-bf16');
+    expect(bf16.revision).toBe('');
+  });
+
   it('existing install without _shippedDefaults.image gains the new z-image entries on upgrade', async () => {
     // Simulate a pre-z-image registry: only flux2 and Flux 1 entries, no
     // _shippedDefaults.image at all.

@@ -97,6 +97,11 @@ class QuantizedDiffusersModel(ModelHubMixin):
         if os.path.isdir(pretrained_model_name_or_path):
             working_dir = pretrained_model_name_or_path
         else:
+            # A remote Hub id must be pinned to an immutable commit; floating `main` is a supply-chain hole.
+            if not kwargs.get("revision"):
+                raise ValueError(
+                    f"Refusing to download {pretrained_model_name_or_path} without an immutable `revision` commit SHA."
+                )
             working_dir = snapshot_download(pretrained_model_name_or_path, **kwargs)
 
         qmap_path = os.path.join(working_dir, cls._qmap_name())
