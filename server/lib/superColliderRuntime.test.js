@@ -9,6 +9,7 @@ import {
   SUPERCOLLIDER_RECIPE_DIR,
   SUPERCOLLIDER_RUNTIME_VERSION,
   SUPERCOLLIDER_VERSION,
+  buildSuperColliderBuildArgs,
   buildSuperColliderRunArgs,
   evaluateSuperColliderStatus,
   hashSuperColliderRecipe,
@@ -20,6 +21,40 @@ const runArgs = (overrides = {}) => buildSuperColliderRunArgs({
   containerName: 'portos-sc-test', inputDir: '/srv/jobs/a/in', outputDir: '/srv/jobs/a/out', user: '1000:1000', ...overrides,
 });
 const flagValues = (args, flag) => args.flatMap((arg, i) => (arg === flag ? [args[i + 1]] : []));
+
+describe('SuperCollider build layer cache', () => {
+  const recipeDir = '/repo/docker/supercollider';
+  const recipeHash = 'recipe-1';
+  const options = { recipeDir, recipeHash };
+  const buildArgs = [
+    '--tag', SUPERCOLLIDER_IMAGE,
+    '--label', `org.portos.supercollider.runtime-version=${SUPERCOLLIDER_RUNTIME_VERSION}`,
+    '--label', `org.portos.supercollider.recipe-sha256=${recipeHash}`,
+    recipeDir,
+  ];
+
+  it('keeps the default local Docker build', () => {
+    expect(buildSuperColliderBuildArgs(options)).toEqual(['build', ...buildArgs]);
+  });
+
+  it('loads the image into the local Docker engine when importing layers', () => {
+    expect(buildSuperColliderBuildArgs({ ...options, cacheFrom: '/cache/layers' })).toEqual([
+      'buildx', 'build', '--load', '--cache-from', 'type=local,src=/cache/layers', ...buildArgs,
+    ]);
+  });
+
+  it('can export intermediate layers on a cold build', () => {
+    expect(buildSuperColliderBuildArgs({ ...options, cacheTo: '/cache/layers' })).toEqual([
+      'buildx', 'build', '--load', '--cache-to', 'type=local,dest=/cache/layers,mode=max', ...buildArgs,
+    ]);
+  });
+
+  it('bypasses both external cache paths for a repair build', () => {
+    expect(buildSuperColliderBuildArgs({ ...options, noCache: true, cacheFrom: '/cache/in', cacheTo: '/cache/out' })).toEqual([
+      'build', '--no-cache', ...buildArgs,
+    ]);
+  });
+});
 
 describe('SuperCollider containment policy', () => {
   it('runs generated source with no network, privileges, writable root, host env or docker socket', () => {

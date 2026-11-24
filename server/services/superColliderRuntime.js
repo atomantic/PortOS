@@ -242,7 +242,7 @@ export function setupSuperColliderRuntime(options = {}) {
   return setupInFlight;
 }
 
-async function runSetup({ rebuild = false, confirmBuild = async () => true, onLine, ...options }) {
+async function runSetup({ rebuild = false, cacheFrom, cacheTo, confirmBuild = async () => true, onLine, ...options }) {
   const deps = resolveDeps(options);
   const docker = await dockerFor(deps);
   const statusDeps = { ...options, docker };
@@ -254,7 +254,13 @@ async function runSetup({ rebuild = false, confirmBuild = async () => true, onLi
   if (rebuild || !status.image?.current) {
     if (!await confirmBuild(status)) return done('declined');
     const recipeHash = await readSuperColliderRecipeHash(deps);
-    const args = buildSuperColliderBuildArgs({ recipeDir: join(deps.codeRoot, SUPERCOLLIDER_RECIPE_DIR), recipeHash, noCache: rebuild });
+    const args = buildSuperColliderBuildArgs({
+      recipeDir: join(deps.codeRoot, SUPERCOLLIDER_RECIPE_DIR),
+      recipeHash,
+      noCache: rebuild,
+      cacheFrom,
+      cacheTo,
+    });
     const result = await docker.stream(args, onLine, { timeoutMs: BUILD_TIMEOUT_MS });
     status = await getSuperColliderStatus(statusDeps);
     if (!result.success) return done('build-failed', { error: clipDiagnostic(result.error) });
