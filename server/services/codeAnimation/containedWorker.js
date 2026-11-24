@@ -15,6 +15,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { promisify } from 'node:util';
 import { ServerError } from '../../lib/errorHandler.js';
 import { execFile, spawn } from '../../lib/childProcess.js';
+import { isSettledProcessState } from '../../lib/processSettledState.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
 import {
   CODE_ANIMATION_SEATBELT, CODE_ANIMATION_BUBBLEWRAP, codeAnimationContainmentMechanism, codeAnimationSeatbeltProfile,
@@ -161,9 +162,23 @@ export function processAlive(pid) {
   return !stat || !isZombie(stat[0]);
 }
 
-function groupAlive(pgid) {
-  try { process.kill(-pgid, 0); } catch (error) { return error.code === 'EPERM'; }
-  if (process.platform !== 'linux') return true;
+// macOS reports EPERM for a group whose members are all exiting or zombies, so
+// there one `ps` observation decides; a failed observation stays "alive".
+async function darwinGroupHasLiveMember(pgid) {
+  try {
+    const { stdout } = await execFileAsync('/bin/ps', ['-axo', 'pgid=,stat='], { timeout: 1000, maxBuffer: 8 * 1024 * 1024 });
+    const rows = stdout.split('\n').flatMap((line) => { const m = line.trim().match(/^(\d+)\s+(\S+)$/); return m ? [[Number(m[1]), m[2]]] : []; });
+    if (!rows.length) return true;
+    return rows.some(([group, state]) => group === pgid && !isSettledProcessState(state));
+  } catch { return true; }
+}
+
+export async function groupAlive(pgid, { kill = process.kill.bind(process), platform = process.platform, observe = darwinGroupHasLiveMember } = {}) {
+  try { kill(-pgid, 0); } catch (error) {
+    if (error.code !== 'EPERM') return false;
+    return platform === 'darwin' ? observe(pgid) : true;
+  }
+  if (platform !== 'linux') return true;
   let pids;
   try { pids = readdirSync('/proc').filter((name) => /^\d+$/.test(name)); } catch { return true; }
   return pids.some((pid) => {
@@ -337,12 +352,12 @@ async function runOwnedWorker({
     // bwrap's info fd names that host PID before allowing it to run; verify it
     // too, so an empty launcher group cannot masquerade as completed teardown.
     const namespacePid = linux ? Number(namespaceInfo.get().match(/"child-pid":\s*(\d+)/)?.[1]) : null;
-    const cleared = () => !groupAlive(child.pid) && (!namespacePid || !processAlive(namespacePid));
-    let processGroupClear = cleared();
+    const cleared = async () => !(await groupAlive(child.pid)) && (!namespacePid || !processAlive(namespacePid));
+    let processGroupClear = await cleared();
     for (let attempt = 0; !processGroupClear && attempt < 20; attempt += 1) {
       try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ }
       await new Promise((resolve) => setTimeout(resolve, 50));
-      processGroupClear = cleared();
+      processGroupClear = await cleared();
     }
     if (exit.signal === 'SIGXFSZ') terminated ??= 'file-size';
     const usage = await measure(writable, limits);
