@@ -139,14 +139,14 @@ export default function EnrichTab({ onRefresh }) {
         title: 'Writing Style',
         category: 'core',
         content: writingAnalysis.suggestedContent
-      }, { silent: true }).catch(async () => {
+      }, { silent: true }).catch(async (createError) => {
         const docs = await getDigitalTwinDocuments({ silent: true });
         const existing = docs.find(d => d.filename === 'WRITING_STYLE.md');
-        if (existing) {
-          return updateDigitalTwinDocument(existing.id, {
-            content: writingAnalysis.suggestedContent
-          }, { silent: true });
-        }
+        // No existing document means the create failure was real, not "already exists".
+        if (!existing) throw createError;
+        return updateDigitalTwinDocument(existing.id, {
+          content: writingAnalysis.suggestedContent
+        }, { silent: true });
       });
       toast.success('Writing style saved');
     } catch (err) {
