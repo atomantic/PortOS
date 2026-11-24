@@ -187,13 +187,13 @@ describe('Wiki vault URL wiring', () => {
     // scanNotesVault is fired by a separate effect keyed on the selected vault id;
     // wait for that async side-effect rather than asserting it synchronously — the
     // passive effect can lag the committed overview render under full-suite load (#2643).
-    await waitFor(() => expect(scanNotesVault).toHaveBeenCalledWith('vault-a', { limit: 1000 }));
+    await waitFor(() => expect(scanNotesVault).toHaveBeenCalledWith('vault-a', { limit: 1000, silent: true }));
   });
 
   it('restores the selected vault from the ?vault= param', async () => {
     renderWiki('/wiki/overview?vault=vault-b');
     await waitFor(() => expect(screen.getByTestId('overview')).toHaveTextContent('overview:vault-b'));
-    await waitFor(() => expect(scanNotesVault).toHaveBeenCalledWith('vault-b', { limit: 1000 }));
+    await waitFor(() => expect(scanNotesVault).toHaveBeenCalledWith('vault-b', { limit: 1000, silent: true }));
   });
 
   it('preserves ?vault= through the base /wiki redirect', async () => {
@@ -235,5 +235,28 @@ describe('Wiki vault load failure (#10279)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(screen.queryByText('Could not load Obsidian vaults.')).not.toBeInTheDocument());
     expect(getNotesVaults).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Wiki vault scan', () => {
+  const wikiNotes = (from, count) => Array.from({ length: count }, (_, i) => ({
+    name: `Page ${from + i}`, path: `wiki/concepts/page-${from + i}.md`, folder: 'wiki/concepts',
+  }));
+
+  it('counts wiki pages past the first scan page', async () => {
+    scanNotesVault.mockImplementation(async (_id, { offset = 0 }) => ({
+      notes: offset ? wikiNotes(1000, 5) : wikiNotes(0, 1000), total: 1005,
+    }));
+    renderWiki('/wiki/overview?vault=vault-a');
+    expect(await screen.findByText('1005 wiki pages')).toBeInTheDocument();
+  });
+
+  it('offers Retry when the scan fails instead of only showing zero pages', async () => {
+    scanNotesVault.mockRejectedValueOnce(new Error('offline')).mockResolvedValue({ notes: wikiNotes(0, 2), total: 2 });
+    renderWiki('/wiki/overview?vault=vault-a');
+    expect(await screen.findByRole('alert')).toHaveTextContent("Could not load this vault's notes");
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('2 wiki pages')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
