@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { realpath } from 'node:fs/promises';
-import { canonicalizePath } from '../../lib/pathContainment.js';
+import { sameCheckoutPath } from '../../lib/pathContainment.js';
 import { hasClaimFlowContract } from '../../lib/claimFlowTaskTypes.js';
 import { readGitCommonDirectory } from '../../lib/gitRepositoryIdentity.js';
 import { recoverCompletionTaskHandoff } from './agentCompletionTaskHandoff.js';
@@ -188,7 +188,7 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
     if (present !== false) return present;
     const worktrees = await listWorktrees(sourceWorkspace).catch(() => null);
     if (!worktrees) return null;
-    return worktrees.some(wt => (worktreePath ? wt.path === worktreePath : shortBranch(wt.branch) === branchName));
+    return worktrees.some(wt => (worktreePath ? sameCheckoutPath(wt.path, worktreePath) : shortBranch(wt.branch) === branchName));
   };
 
   const probeLocalBranch = () => readLocalBranchPresence(sourceWorkspace, branchName);
@@ -691,7 +691,7 @@ async function settleAbsentScope(agent, { repoPath, branch, paths }, proof = {})
     if (!worktrees) return false;
     for (const path of paths) if (await readCheckoutPathPresence(path) !== false) return false;
     if (await readLocalBranchPresence(repoPath, branch) !== false
-      || worktrees.some(row => paths.includes(row.path) || shortBranch(row.branch) === branch)) return false;
+      || worktrees.some(row => paths.some(path => sameCheckoutPath(row.path, path)) || shortBranch(row.branch) === branch)) return false;
     return recordAbsentCheckoutRetirement(agent.id, agent, { path: paths[0], branch, ...proof });
   });
 }
@@ -791,7 +791,7 @@ async function verifyRunBranches(input) {
     const capture = captures.length === 1 ? captures[0] : null;
     const previous = capture && meta.cleanupOutcomes?.[JSON.stringify([branch, capture.path])];
     if (previous?.status === 'verified'
-      && !trees.some(tree => shortBranch(tree.branch) === branch || canonicalizePath(tree.path) === canonicalizePath(capture.path))
+      && !trees.some(tree => shortBranch(tree.branch) === branch || sameCheckoutPath(tree.path, capture.path))
       && await readCheckoutPathPresence(capture.path).catch(() => null) === false
       && await readLocalBranchPresence(sourceWorkspace, branch).catch(() => null) === false) {
       results.push({ branch, verified: true, issues: [], skipReason: null });
@@ -961,18 +961,20 @@ async function resolveCheckoutHold({ agentId, metadata, sourceWorkspace, branchN
   const holders = inventory.filter(tree => shortBranch(tree.branch) === branchName);
   // Git porcelain uses forward slashes on Windows; registration spelling is
   // not a checkout change. Compare native lexical paths and the recorded head.
-  const samePath = tree => !!worktreePath && canonicalizePath(tree.path) === canonicalizePath(worktreePath);
+  const samePath = tree => sameCheckoutPath(tree.path, worktreePath);
   const pathHolder = inventory.find(samePath);
   if (holders.some(tree => !samePath(tree))
     || (pathHolder && shortBranch(pathHolder.branch) !== branchName)) {
     return { reason: 'checkout-changed' };
   }
-  const completed = metadata.completedCheckouts?.find(row => row.branch === branchName && resolve(row.path) === resolve(worktreePath));
-  if (completed && pathHolder) {
-    const identity = await readCompletedCheckoutIdentity({ repoPath: sourceWorkspace, branch: branchName,
-      path: worktreePath, head: pathHolder.head }).catch(() => null);
-    if (!identity || identity.head !== completed.head) {
-      return { reason: 'checkout-changed' };
+  if (pathHolder && typeof worktreePath === 'string' && worktreePath) {
+    const completed = metadata.completedCheckouts?.find(row => row?.branch === branchName && sameCheckoutPath(row.path, worktreePath));
+    if (completed) {
+      const identity = await readCompletedCheckoutIdentity({ repoPath: sourceWorkspace, branch: branchName,
+        path: worktreePath, head: pathHolder.head }).catch(() => null);
+      if (!identity || identity.head !== completed.head) {
+        return { reason: 'checkout-changed' };
+      }
     }
   }
   const owner = claimCheckoutOwner({ branchName, sourceWorkspace,

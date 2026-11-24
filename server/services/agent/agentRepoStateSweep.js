@@ -8,6 +8,7 @@
  * `agentRepoStateVerification.js`'s public export surface and `vi.mock` targets.
  */
 import { resolve } from 'path';
+import { sameCheckoutPath } from '../../lib/pathContainment.js';
 import { outsideGitMutationLifetime } from '../../lib/gitMutationLifetime.js';
 import { createSingleFlight } from '../../lib/singleFlight.js';
 import { isHumanClaimWorktree, worktreeAgentId } from '../../lib/worktreeOwnership.js';
@@ -298,10 +299,10 @@ export function createRepoStateSweep({
       const matches = agents.filter(agent => agent.status === 'completed'
         && agent.metadata?.repoStateVerification?.status === 'pending'
         && agent.metadata.completedCheckouts?.some(row => completedCheckoutReceiptValid(agent, row)
-          && row.repoPath === app.repoPath && row.path === receipt.path && row.branch === receipt.branch));
+          && sameCheckoutPath(row.repoPath, app.repoPath) && sameCheckoutPath(row.path, receipt.path) && row.branch === receipt.branch));
       const pending = agents.filter(agent => agent.status === 'completed' && agent.metadata?.checkoutCapture?.status === 'pending'
-        && agent.metadata.sourceWorkspace === app.repoPath && agent.metadata.worktreeBranch === receipt.branch
-        && agent.metadata.workspacePath === receipt.path);
+        && sameCheckoutPath(agent.metadata.sourceWorkspace, app.repoPath) && agent.metadata.worktreeBranch === receipt.branch
+        && sameCheckoutPath(agent.metadata.workspacePath, receipt.path));
       for (const agent of new Set([...matches, ...pending])) await resumeAgentCompletionRetirement(agentIdOf(agent));
     };
     const onReceipt = receipt => onRetirement(receipt)
