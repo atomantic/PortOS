@@ -342,13 +342,19 @@ const HAS_MUTE_SQL = `NOT github_notifications.suspect AND EXISTS (
     AND m.reason = github_notifications.reason
 )`;
 const VISIBLE_SQL = `NOT (${HAS_MUTE_SQL})`;
+// The counts query joins mutes once per row and exposes the result as this
+// column, instead of repeating the correlated EXISTS in every FILTER clause.
+const JOINED_MUTE_COLUMN = 'muted_in_portos';
+const JOINED_VISIBLE_SQL = `NOT ${JOINED_MUTE_COLUMN}`;
 
-const VIEW_FILTERS = {
-  'needs-you': `${OPEN_UNREAD_SQL} AND NOT suspect AND ${VISIBLE_SQL}`,
+const viewFilters = (visibleSql) => ({
+  'needs-you': `${OPEN_UNREAD_SQL} AND NOT suspect AND ${visibleSql}`,
   suspect: `${OPEN_UNREAD_SQL} AND suspect`,
-  handled: `(state <> 'open' OR NOT unread OR read_on_github_at IS NOT NULL) AND ${VISIBLE_SQL}`,
+  handled: `(state <> 'open' OR NOT unread OR read_on_github_at IS NOT NULL) AND ${visibleSql}`,
   all: 'TRUE',
-};
+});
+const VIEW_FILTERS = viewFilters(VISIBLE_SQL);
+const COUNT_VIEW_FILTERS = viewFilters(JOINED_VISIBLE_SQL);
 
 const toIso = (value) => (value instanceof Date ? value.toISOString() : value);
 
@@ -469,11 +475,17 @@ export async function listNotifications({ accountId = null, view = 'needs-you' }
     query('SELECT account_id, last_sync_at, last_error, poll_interval_seconds FROM github_notification_sync WHERE account_id = ANY($1::text[])', [ids]),
     // Every view's size for the inbox's summary, plus the open threads an agent has.
     query(
-      `SELECT ${NOTIFICATION_VIEWS.map((name) => `COUNT(*) FILTER (WHERE ${VIEW_FILTERS[name]})::int AS "${name}"`).join(', ')},
-         COUNT(*) FILTER (WHERE state = 'open' AND decision = 'handed-off' AND ${VISIBLE_SQL})::int AS "with-agents",
+      `SELECT ${NOTIFICATION_VIEWS.map((name) => `COUNT(*) FILTER (WHERE ${COUNT_VIEW_FILTERS[name]})::int AS "${name}"`).join(', ')},
+         COUNT(*) FILTER (WHERE state = 'open' AND decision = 'handed-off' AND ${JOINED_VISIBLE_SQL})::int AS "with-agents",
          COUNT(*) FILTER (WHERE state = 'open' AND NOT suspect AND ${FINISHED_SQL})::int AS finished,
-         COUNT(*) FILTER (WHERE ${CLEARABLE_SQL} AND ${VISIBLE_SQL})::int AS clearable
-       FROM github_notifications WHERE account_id = ANY($1::text[])`,
+         COUNT(*) FILTER (WHERE ${CLEARABLE_SQL} AND ${JOINED_VISIBLE_SQL})::int AS clearable
+       FROM (
+         SELECT n.*, (NOT n.suspect AND m.account_id IS NOT NULL) AS ${JOINED_MUTE_COLUMN}
+         FROM github_notifications n
+         LEFT JOIN github_notification_mutes m ON m.account_id = n.account_id
+           AND m.repo_full_name = lower(n.repo_full_name) AND m.reason = n.reason
+         WHERE n.account_id = ANY($1::text[])
+       ) github_notifications`,
       [ids],
     ),
     query(`SELECT account_id, repo_full_name, reason FROM github_notification_mutes

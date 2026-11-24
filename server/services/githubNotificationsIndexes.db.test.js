@@ -52,8 +52,46 @@ describe.skipIf(!runDb)('github notification partial indexes (#17278)', () => {
     expect(plan).toContain('idx_github_notification_events_automation');
   });
 
+  it('open-lane reads use the open partial index', async () => {
+    const plan = await planWithoutSeqScan(
+      `SELECT * FROM github_notifications WHERE account_id = ANY($1::text[]) AND state = 'open' AND unread
+       ORDER BY gh_updated_at DESC LIMIT 100`,
+      [['acct-1']],
+    );
+    expect(plan).toContain('idx_github_notifications_open_updated');
+  });
+
+  it('per-repo thread counts use the account+repo index', async () => {
+    const plan = await planWithoutSeqScan(
+      'SELECT repo_full_name, COUNT(*)::int AS n FROM github_notifications WHERE account_id = $1 AND repo_full_name = ANY($2::text[]) GROUP BY repo_full_name',
+      ['acct-1', ['o/r']],
+    );
+    expect(plan).toContain('idx_github_notifications_account_repo');
+  });
+
+  it('audit change listing uses the account index', async () => {
+    const plan = await planWithoutSeqScan(
+      'SELECT * FROM github_notification_audit_changes WHERE account_id = ANY($1::text[]) ORDER BY applied_at DESC, id DESC LIMIT 100',
+      [['acct-1']],
+    );
+    expect(plan).toContain('idx_github_notification_audit_changes_account');
+  });
+
+  it('inbox counts evaluate mutes with one join and no correlated SubPlans', async () => {
+    const plan = await planWithoutSeqScan(
+      `SELECT COUNT(*) FILTER (WHERE NOT muted_in_portos)::int
+       FROM (SELECT n.*, (NOT n.suspect AND m.account_id IS NOT NULL) AS muted_in_portos
+         FROM github_notifications n
+         LEFT JOIN github_notification_mutes m ON m.account_id = n.account_id
+           AND m.repo_full_name = lower(n.repo_full_name) AND m.reason = n.reason
+         WHERE n.account_id = ANY($1::text[])) github_notifications`,
+      [['acct-1']],
+    );
+    expect(plan).not.toContain('SubPlan');
+  });
+
   it('index definitions exist', async () => {
-    const { rows } = await query(`SELECT indexname FROM pg_indexes WHERE indexname IN ('idx_github_notifications_resolve_task','idx_github_notification_events_automation')`);
-    expect(rows).toHaveLength(2);
+    const { rows } = await query(`SELECT indexname FROM pg_indexes WHERE indexname IN ('idx_github_notifications_resolve_task','idx_github_notification_events_automation','idx_github_notifications_open_updated','idx_github_notifications_account_repo','idx_github_notification_audit_changes_account')`);
+    expect(rows).toHaveLength(5);
   });
 });
