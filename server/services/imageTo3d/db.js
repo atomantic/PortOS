@@ -141,37 +141,55 @@ export async function deleteModel(id) {
 }
 
 /**
- * A render child cannot survive the PortOS process. Mark interrupted records
- * failed-retryable on boot without launching any new render work (the GLB
- * render is user-triggered only — AGENTS.md no-cold-bootstrap policy).
+ * A render/rig/retarget child cannot survive the PortOS process. Mark interrupted
+ * records failed-retryable on boot without launching any new work (the GLB render,
+ * rig and retarget are user-triggered only — AGENTS.md no-cold-bootstrap policy).
+ * A rig/retarget sub-record is failed independently of the top-level status, so a
+ * `ready` mesh keeps its mesh fields and only its stuck rig/retarget flips.
  */
 export async function recoverInterruptedModels() {
   const result = await query(
-    `SELECT data FROM image_to_3d_models WHERE deleted = FALSE AND status = 'generating'`,
+    `SELECT data FROM image_to_3d_models WHERE deleted = FALSE AND (status = 'generating'
+       OR data->'rig'->>'status' = 'rigging' OR data->'retarget'->>'status' = 'retargeting')`,
   );
   let recovered = 0;
   for (const row of result.rows) {
     const current = rowToModel(row);
     await mutateModel(current.id, (fresh) => {
-      if (fresh.status !== 'generating') return null;
-      recovered += 1;
-      const runs = Array.isArray(fresh.runs) ? [...fresh.runs] : [];
-      const activeIndex = runs.findLastIndex((run) => run.status === 'running');
-      if (activeIndex !== -1) {
-        runs[activeIndex] = {
-          ...runs[activeIndex],
+      const now = new Date().toISOString();
+      let next = fresh;
+      let changed = false;
+      if (fresh.status === 'generating') {
+        const runs = Array.isArray(fresh.runs) ? [...fresh.runs] : [];
+        const activeIndex = runs.findLastIndex((run) => run.status === 'running');
+        if (activeIndex !== -1) {
+          runs[activeIndex] = {
+            ...runs[activeIndex],
+            status: 'failed',
+            error: 'Render was interrupted by a server restart',
+            completedAt: now,
+          };
+        }
+        next = {
+          ...next,
           status: 'failed',
-          error: 'Render was interrupted by a server restart',
-          completedAt: new Date().toISOString(),
+          error: 'Render was interrupted by a server restart. Generate again to retry.',
+          generationOperationId: null,
+          runs,
         };
+        changed = true;
       }
-      return {
-        ...fresh,
-        status: 'failed',
-        error: 'Render was interrupted by a server restart. Generate again to retry.',
-        generationOperationId: null,
-        runs,
-      };
+      if (fresh.rig?.status === 'rigging') {
+        next = { ...next, rig: { ...fresh.rig, status: 'failed', error: 'Rigging was interrupted by a server restart. Rig again to retry.', completedAt: now } };
+        changed = true;
+      }
+      if (fresh.retarget?.status === 'retargeting') {
+        next = { ...next, retarget: { ...fresh.retarget, status: 'failed', error: 'Animation retarget was interrupted by a server restart. Retarget again to retry.', completedAt: now } };
+        changed = true;
+      }
+      if (!changed) return null;
+      recovered += 1;
+      return next;
     });
   }
   return { recovered };
