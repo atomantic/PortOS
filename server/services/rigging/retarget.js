@@ -54,6 +54,7 @@ import {
   RIG_STAGING_DIR_NAME,
 } from './autoSkin.js';
 import { resolveClipSource } from './clipLibrary.js';
+import { acquireRigLane, releaseRigLane } from './inFlight.js';
 import { requireRiggingInterpreter } from './readiness.js';
 import {
   DEFAULT_RETARGET_MODE,
@@ -312,11 +313,6 @@ export async function runRetarget({
   }
 }
 
-// One retarget per record at a time. A double-click would otherwise put two Blender
-// processes on the same rig — a re-entrancy guard, not a multi-actor lock
-// (AGENTS.md single-user trust model).
-const retargetsInFlight = new Set();
-
 /**
  * Retarget a clip onto a stored image-to-3D record's published rig and persist the
  * result on it. The record's `retarget` field is the user-visible evidence: on success
@@ -342,18 +338,18 @@ export async function retargetImageTo3dModel(modelId, options = {}, {
   if (!clipPath) {
     throw retargetError('That animation clip is not in the clip library.', 'RIGGING_CLIP_NOT_FOUND');
   }
-  if (retargetsInFlight.has(modelId)) {
-    throw new ServerError('This model is already being animated.', { status: 409, code: 'RIGGING_IN_FLIGHT' });
-  }
 
   const mode = options.mode || DEFAULT_RETARGET_MODE;
-  retargetsInFlight.add(modelId);
+  acquireRigLane(modelId, 'retarget');
   const startedAt = now();
-  await mutateModel(modelId, (current) => ({
-    ...current,
-    retarget: { ...(current.retarget || {}), status: 'retargeting', startedAt, error: null, reason: null },
-  }));
+  // False until the `retargeting` transition commits (see autoSkin.js).
+  let entered = false;
   try {
+    await mutateModel(modelId, (current) => ({
+      ...current,
+      retarget: { ...(current.retarget || {}), status: 'retargeting', startedAt, error: null, reason: null },
+    }));
+    entered = true;
     const result = await run({
       modelId,
       recordDir: join(PATHS.imageTo3d, modelId),
@@ -387,6 +383,7 @@ export async function retargetImageTo3dModel(modelId, options = {}, {
       },
     })));
   } catch (error) {
+    if (!entered) throw error;
     await mutateModel(modelId, (current) => ({
       ...current,
       retarget: {
@@ -403,6 +400,6 @@ export async function retargetImageTo3dModel(modelId, options = {}, {
     })).catch(() => {});
     throw error;
   } finally {
-    retargetsInFlight.delete(modelId);
+    releaseRigLane(modelId, 'retarget');
   }
 }
