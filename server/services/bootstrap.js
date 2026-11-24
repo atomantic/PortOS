@@ -277,7 +277,15 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
     // worktree still resolves to the real install; runMigrations also skips a
     // worktree-rooted path as a backstop (#1947).
     applyDataMigrations: async () => {
-      await runMigrations({ rootDir: resolveInstallRoot(join(serverDir, '..')) });
+      try {
+        await runMigrations({ rootDir: resolveInstallRoot(join(serverDir, '..')) });
+      } catch (err) {
+        // Boot normally logs this and keeps going, which would let the smoke
+        // report readiness after abandoning its migration sweep.
+        if (!smokeBoot) throw err;
+        console.error(`❌ Smoke boot: migration run failed, refusing to report ready: ${err?.stack ?? err}`);
+        process.exit(1);
+      }
       // Local recovery only: no mail, browser, or LLM provider calls.
       await initializeMessageDrafts();
     },

@@ -3,6 +3,8 @@ import { withTransaction } from '../../server/lib/db.js';
 import { REALITY_STARTER_V1 } from '../../server/lib/realityStarterV1.js';
 
 export default {
+  // Opens PostgreSQL directly; the disposable boot smoke has no database, so its runner skips this (never recording it).
+  requiresPostgres: true,
   async up() {
     await withTransaction(async (client) => {
       const { rows } = await client.query('SELECT data, deleted FROM universes WHERE id = $1 FOR UPDATE', ['universe-reality']);
