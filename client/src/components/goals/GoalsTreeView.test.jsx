@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router';
 
 // jsdom has no WebGL context, so the three.js stack can't mount. The stub drops
 // `children` deliberately: rendering the scene would mount <mesh>/<bufferGeometry>
@@ -102,8 +103,12 @@ const DATA = {
   ],
 };
 
-const renderTree = async (data = DATA) => {
-  render(<GoalsTreeView data={data} onRefresh={vi.fn()} />);
+const renderTree = async (data = DATA, selectedGoalId) => {
+  render(
+    <MemoryRouter>
+      <GoalsTreeView data={data} onRefresh={vi.fn()} selectedGoalId={selectedGoalId} />
+    </MemoryRouter>,
+  );
   await act(async () => {});
 };
 
@@ -154,6 +159,19 @@ describe('empty state', () => {
     await renderTree({ flat: [] });
     expect(screen.queryByTestId('goal-tree-canvas')).not.toBeInTheDocument();
     expect(screen.getByText(/no goals to display/i)).toBeInTheDocument();
+  });
+});
+
+describe('filtered-empty state', () => {
+  it('distinguishes filtered-out goals from a first-run empty tree and recovers', async () => {
+    const user = userEvent.setup();
+    await renderTree();
+    await user.type(screen.getByRole('textbox'), 'zzz-no-match');
+    expect(screen.getByText(/no goals match/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no goals to display/i)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /reset filters/i }));
+    expect(screen.queryByText(/no goals match/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId('goal-tree-canvas')).toBeInTheDocument();
   });
 });
 

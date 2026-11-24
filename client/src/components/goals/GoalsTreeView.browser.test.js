@@ -54,6 +54,7 @@ describe.skipIf(!chrome)('Goals Tree touch targets', () => {
           return `
             import React from 'react';
             import { createRoot } from 'react-dom/client';
+            import { MemoryRouter } from 'react-router';
             import GoalsTreeView from '/src/components/goals/GoalsTreeView.jsx';
             import '/src/index.css';
             const data = { flat: [
@@ -61,7 +62,7 @@ describe.skipIf(!chrome)('Goals Tree touch targets', () => {
               { id: 'example-2', title: 'Example craft', category: 'creative', horizon: '3-year', parentId: 'example-1' },
               { id: 'example-3', title: 'Example practice', category: 'mastery', horizon: '5-year', parentId: 'example-1' },
             ] };
-            createRoot(document.getElementById('root')).render(React.createElement(GoalsTreeView, { data, onRefresh: () => {} }));
+            createRoot(document.getElementById('root')).render(React.createElement(MemoryRouter, null, React.createElement(GoalsTreeView, { data, onRefresh: () => {} })));
           `;
         },
         configureServer(vite) {

@@ -518,8 +518,15 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
             <RootDropZone />
             {filteredRoots.length === 0 ? (
               searchQuery ? (
-                <div className="flex items-center justify-center h-full text-gray-500 text-sm">
-                  No matching goals found.
+                <div className="flex flex-col items-center justify-center gap-3 h-full text-gray-500 text-sm">
+                  <span>No matching goals found.</span>
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="px-3 py-1.5 min-h-[40px] rounded-lg bg-port-accent/20 text-port-accent hover:bg-port-accent/30"
+                  >
+                    Clear search
+                  </button>
                 </div>
               ) : (
                 <EmptyState

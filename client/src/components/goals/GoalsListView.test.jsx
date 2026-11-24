@@ -395,3 +395,14 @@ it('organizes with the chosen provider and model only after submission', async (
   expect(screen.getByText('Goal Organization')).toBeInTheDocument();
   expect(createGoal).not.toHaveBeenCalled();
 });
+
+describe('filtered-empty state', () => {
+  it('offers Clear search when a search matches nothing', async () => {
+    const user = userEvent.setup();
+    await renderList();
+    await user.type(screen.getByPlaceholderText('Search goals...'), 'zzz-no-match');
+    expect(screen.getByText('No matching goals found.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Clear search' }));
+    expect(screen.queryByText('No matching goals found.')).not.toBeInTheDocument();
+  });
+});
