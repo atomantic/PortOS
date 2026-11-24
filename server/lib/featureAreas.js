@@ -142,6 +142,7 @@ export const FEATURE_AREAS = Object.freeze([
       'client/src/pages/MeatSpace.jsx',
       'client/src/components/meatspace/!(post|tabs)',
       'client/src/components/meatspace/tabs/!(PostTab*)',
+      'client/src/components/meatspace/tabs/*/**',
       'client/src/components/{MortalLoomBanner,DeathClockCountdown,DeathClockWidget,useDeathClock}*',
       'client/src/components/dashboard/builtins/MeatSpaceStreakWidget.jsx',
       'client/src/components/settings/MortalLoomTab.jsx',
@@ -257,6 +258,7 @@ export const FEATURE_AREAS = Object.freeze([
     navPathPrefixes: ['/create/media', '/media', '/video', '/html-pages', '/code-animation', '/sprites', '/3d'],
     codeGlobs: [
       'server/routes/{image,media,video,htmlPages,htmlComposition,codeAnimation,sprites,threejs,loras,loraTraining,sdapi}*',
+      'server/lib/mediaModels/**',
       'server/lib/{image,media,video,threejs,sprite,html,lora,flux,runway,higgsfield,grok,fal,photoreal}*',
       'server/services/{image,media,video,htmlPages,codeAnimation,loraTraining,lora,sprite,threejs,runway,higgsfield,fal,grok}*',
       'server/services/{imageGen,imageTo3d,mediaJobQueue,mediaAssetIndex,videoGen,videoTimeline,htmlPages,htmlComposition,codeAnimation,loraTraining,sprites,threejsModels,blenderModels,blenderWorkspace,generatedPreview}/**',
@@ -273,6 +275,7 @@ export const FEATURE_AREAS = Object.freeze([
       '/importer', '/authors', '/universes', '/decks', '/mood-boards', '/storyboards', '/voices', '/fableloom', '/game',
     ],
     codeGlobs: [
+      'server/routes/{pipeline,universeBuilder}/**',
       'server/routes/{pipeline,rounds,writersRoom,storyBuilder,universeBuilder,storyboards,decks,moodBoard,fableLoom,games,importer,authors,sharing}*',
       'server/lib/{story,storyboard,universe,fable,series,editorial,manuscript,deck,mood,pipeline,writers,rounds,bible}*',
       'server/lib/editorial/**',
@@ -350,7 +353,8 @@ export const FEATURE_AREAS = Object.freeze([
       'server/lib/db/schema/tribe.js',
       'server/services/tribe*',
       'client/src/pages/Tribe*',
-      'client/src/components/{tribe,TribeCareWidget}*',
+      'client/src/components/tribe/!(BeeperIdentitiesPanel*)',
+      'client/src/components/TribeCareWidget*',
       'client/src/lib/tribe*',
     ],
   }),
@@ -395,7 +399,7 @@ export const FEATURE_AREAS = Object.freeze([
     codeGlobs: [
       'server/routes/{cos,agent,featureAgents,runs,review,codeReview,humanActions}*',
       'server/lib/{cos,task,audit,autonomous,agent,reviewer,slashdo,claim,issue,release}*',
-      'server/lib/cos/**',
+      'server/lib/{cos,agent,agentGuard}/**',
       'server/services/cos/**',
       'server/services/{taskLearning,taskPromptDefaults,autonomousJobs,agent,agentTuiSpawning,branchReconcile,worktree,scheduledHandlers,skills}/**',
       'server/services/{prDo,prProbe,prRemediation,prReviewer,prView,prWatcher}*',
@@ -403,6 +407,7 @@ export const FEATURE_AREAS = Object.freeze([
       'client/src/pages/{ChiefOfStaff,Agents,AgentsPage,FeatureAgent,Review,PersistentMind}*',
       'client/src/components/cos/!(tabs)',
       'client/src/components/cos/tabs/!(Gsd*)',
+      'client/src/components/cos/tabs/*/**',
       'client/src/components/{agents,feature-agents,review}/**',
       'client/src/lib/{cos,agent,reviewer}*',
     ],
@@ -413,6 +418,7 @@ export const FEATURE_AREAS = Object.freeze([
     codeGlobs: [
       'server/routes/{scaffold,git,github,history,loops,instances,dataManager,dataMaintenance,dataSync,referenceRepos,workspaceContexts,managed,apiDocs}*',
       'server/routes/apps/**',
+      'server/services/git/**',
       'server/services/app!(leHealth*)',
       'server/services/{git,forge,repo,pm2,loops,instances,dataManager,managed,xcode,workspaceContext}*',
       'server/lib/app!(leHealth*)',
@@ -421,6 +427,7 @@ export const FEATURE_AREAS = Object.freeze([
       'client/src/pages/{Apps,AppDetail,CreateApp,GitHub,History,Loops,Instances,DataManager,Runner,Processes,Workspace,ApiExplorer,Ambient,Security}*',
       'client/src/components/apps/!(JiraConfigPanel*|tabs)',
       'client/src/components/apps/tabs/!(Datadog*|Gsd*|Jira*)',
+      'client/src/components/apps/tabs/*/**',
       'client/src/components/{github,instances,dataManager}/**',
     ],
   }),
@@ -431,7 +438,7 @@ export const FEATURE_AREAS = Object.freeze([
       'server/routes/{providers,provider,harnesses,model,lmstudio,localLlm,quotaBurn,usage,moaPresets}*',
       'server/lib/local!(Memory*)',
       'server/lib/{provider,model,quota,usage,codex,llm,ollama,vllm,sglang,mtplx,slotstream,subscription,aiToolkit}*',
-      'server/lib/{aiToolkit,provider,mediaModels}/**',
+      'server/lib/{aiToolkit,provider}/**',
       'server/services/{provider,aiProvider,ai,harness,model,ollama,lmStudio,llama,vllm,sglang,mtplx,slotstream,quota,usage,codex,claude,subscription,embeddings,fleet,moa}*',
       'server/services/local!(Memory*)',
       'server/services/{provider,quotaBurn}/**',
@@ -518,7 +525,63 @@ export function areaForNavPath(pathname) {
   return AREA_BY_INSTANCE_FEATURE.get(command.feature) ?? AREA_BY_SECTION.get(command.section) ?? null;
 }
 
+// path.posix.matchesGlob recompiles its pattern on every call, so matching every glob against a 14k-file tree is
+// seconds of work. Expanding braces up front and bucketing each pattern by its literal directory prefix lets a file
+// consult only the patterns whose directory is one of its own ancestors.
+function expandBraces(glob) {
+  const open = glob.indexOf('{');
+  if (open === -1) return [glob];
+  let depth = 0;
+  const parts = [];
+  let start = open + 1;
+  for (let index = open; index < glob.length; index += 1) {
+    const char = glob[index];
+    if (char === '{') depth += 1;
+    else if (char === '}' || (char === ',' && depth === 1)) {
+      if (char === '}') depth -= 1;
+      if (char === ',' || depth === 0) {
+        parts.push(glob.slice(start, index));
+        start = index + 1;
+      }
+      if (depth === 0) return parts.flatMap((part) => expandBraces(`${glob.slice(0, open)}${part}${glob.slice(index + 1)}`));
+    }
+  }
+  throw new Error(`Unbalanced braces in feature area glob: ${glob}`);
+}
+
+// The directory part of a glob before its first wildcard, with the trailing slash ('' when the glob starts with one).
+const literalPrefix = (glob) => {
+  const magic = glob.search(/[*?[\]()!]/);
+  const literal = magic === -1 ? glob : glob.slice(0, magic);
+  return literal.slice(0, literal.lastIndexOf('/') + 1);
+};
+
+/** Brace-free patterns for one catalog glob, each with the literal directory prefix a matching file must start with. */
+export const expandCodeGlob = (glob) => expandBraces(glob).map((pattern) => ({ glob: pattern, prefix: literalPrefix(pattern) }));
+
+const PATTERNS_BY_PREFIX = new Map();
+for (const entry of FEATURE_AREAS) {
+  for (const codeGlob of entry.codeGlobs) {
+    for (const { glob, prefix } of expandCodeGlob(codeGlob)) {
+      if (!PATTERNS_BY_PREFIX.has(prefix)) PATTERNS_BY_PREFIX.set(prefix, []);
+      PATTERNS_BY_PREFIX.get(prefix).push({ entry, glob });
+    }
+  }
+}
+
+const ancestorPrefixes = (file) => {
+  const prefixes = [''];
+  for (let slash = file.indexOf('/'); slash !== -1; slash = file.indexOf('/', slash + 1)) prefixes.push(file.slice(0, slash + 1));
+  return prefixes;
+};
+
 export function areasForFile(repoRelativePath) {
   const file = String(repoRelativePath ?? '').replaceAll('\\', '/');
-  return FEATURE_AREAS.filter((entry) => entry.codeGlobs.some((glob) => posix.matchesGlob(file, glob)));
+  const owners = new Set();
+  for (const prefix of ancestorPrefixes(file)) {
+    for (const { entry, glob } of PATTERNS_BY_PREFIX.get(prefix) ?? []) {
+      if (!owners.has(entry) && posix.matchesGlob(file, glob)) owners.add(entry);
+    }
+  }
+  return FEATURE_AREAS.filter((entry) => owners.has(entry));
 }

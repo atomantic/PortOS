@@ -3,6 +3,7 @@ import {
   FEATURE_AREAS,
   areaForNavPath,
   areasForFile,
+  expandCodeGlob,
   getFeatureArea,
   isOptionalFeatureArea,
 } from './featureAreas.js';
@@ -45,6 +46,13 @@ describe('areasForFile', () => {
     expect(areasForFile('server/lib/musicDuration.js').map((entry) => entry.id)).toEqual(['music']);
   });
 
+  it('owns files nested under a named directory', () => {
+    expect(areasForFile('client/src/components/tribe/CareQueue.jsx').map((entry) => entry.id)).toEqual(['tribe']);
+    expect(areasForFile('server/routes/pipeline/series.js').map((entry) => entry.id)).toEqual(['story-studio']);
+    expect(areasForFile('client/src/components/cos/tabs/schedule/ScheduleTab.jsx').map((entry) => entry.id)).toEqual(['cos']);
+    expect(areasForFile('client/src/components/meatspace/tabs/calendar/CalendarDay.jsx').map((entry) => entry.id)).toEqual(['health']);
+  });
+
   it('treats a file in no area as shared code', () => {
     expect(areasForFile('package.json')).toEqual([]);
     expect(areasForFile('server/lib/objects.js')).toEqual([]);
@@ -67,5 +75,27 @@ describe('area accessors', () => {
     expect(Object.isFrozen(FEATURE_AREAS)).toBe(true);
     expect(Object.isFrozen(FEATURE_AREAS[0])).toBe(true);
     expect(Object.isFrozen(FEATURE_AREAS[0].codeGlobs)).toBe(true);
+  });
+});
+
+describe('expandCodeGlob', () => {
+  it('expands braces into plain patterns, each with its literal directory prefix', () => {
+    expect(expandCodeGlob('server/{routes,services}/x.*')).toEqual([
+      { glob: 'server/routes/x.*', prefix: 'server/routes/' },
+      { glob: 'server/services/x.*', prefix: 'server/services/' },
+    ]);
+    expect(expandCodeGlob('a/{b.js,c/**}').map(({ glob }) => glob)).toEqual(['a/b.js', 'a/c/**']);
+    expect(expandCodeGlob('a/{b,{c,d}}/e').map(({ glob }) => glob)).toEqual(['a/b/e', 'a/c/e', 'a/d/e']);
+  });
+
+  it('stops the literal prefix at the first wildcard, extglob or character class', () => {
+    expect(expandCodeGlob('server/lib/music!(Video*)')[0].prefix).toBe('server/lib/');
+    expect(expandCodeGlob('server/lib/post[ab]*')[0].prefix).toBe('server/lib/');
+    expect(expandCodeGlob('server/services/rigging/**')[0].prefix).toBe('server/services/rigging/');
+    expect(expandCodeGlob('package.json')[0].prefix).toBe('');
+  });
+
+  it('rejects unbalanced braces instead of silently dropping a pattern', () => {
+    expect(() => expandCodeGlob('server/{routes,services/x.*')).toThrow(/Unbalanced braces/);
   });
 });

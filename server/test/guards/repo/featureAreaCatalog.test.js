@@ -15,12 +15,17 @@ import {
   INSTANCE_FEATURES_WITHOUT_AREA,
   NAV_PATHS_WITHOUT_AREA,
   areaForNavPath,
+  expandCodeGlob,
   areasForFile,
   isOptionalFeatureArea,
 } from '../../../lib/featureAreas.js';
 
 const files = trackedFiles(REPO_ROOT);
-const matches = (glob) => files.filter((file) => posix.matchesGlob(file, glob));
+// Ownership of the whole tree is computed once; each guard below reads it.
+let ownersByFile;
+const owners = () => ownersByFile ??= new Map(files.map((file) => [file, areasForFile(file)]));
+const matches = (glob) => expandCodeGlob(glob).flatMap(({ glob: pattern, prefix }) => files
+  .filter((file) => file.startsWith(prefix) && posix.matchesGlob(file, pattern)));
 
 describe('feature area catalog', () => {
   it('has unique kebab-case ids and one owner per nav path prefix', () => {
@@ -75,11 +80,26 @@ describe('feature area catalog', () => {
     expect(risky).toEqual([]);
   });
 
+  it('owns the contents of every directory an area claims, not just the directory entry', () => {
+    const directoryOwners = new Map();
+    const orphaned = new Set();
+    for (const [file, fileOwners] of owners()) {
+      const parts = file.split('/');
+      for (let depth = 2; depth < parts.length; depth += 1) {
+        const dir = parts.slice(0, depth).join('/');
+        if (!directoryOwners.has(dir)) directoryOwners.set(dir, areasForFile(dir));
+        for (const entry of directoryOwners.get(dir)) {
+          if (!fileOwners.includes(entry)) orphaned.add(`${entry.id}: claims directory ${dir} but not ${file}`);
+        }
+      }
+    }
+    expect([...orphaned].slice(0, 20)).toEqual([]);
+  });
+
   it('never lets a core area claim a file an optional area owns', () => {
-    const shared = files
-      .map((file) => ({ file, owners: areasForFile(file) }))
-      .filter(({ owners }) => owners.some(isOptionalFeatureArea) && owners.length > 1)
-      .map(({ file, owners }) => `${file}: ${owners.map((owner) => owner.id).join(', ')}`);
+    const shared = [...owners()]
+      .filter(([, areas]) => areas.some(isOptionalFeatureArea) && areas.length > 1)
+      .map(([file, areas]) => `${file}: ${areas.map((owner) => owner.id).join(', ')}`);
     expect(shared).toEqual([]);
   });
 
