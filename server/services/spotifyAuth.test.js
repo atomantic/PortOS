@@ -9,6 +9,10 @@ const mocks = {
   getHttpsEnabledAtBoot: vi.fn(),
 };
 
+vi.mock('../lib/fileCore.js', () => ({
+  atomicWrite: (...args) => mocks.atomicWrite(...args),
+}));
+
 vi.mock('../lib/fileUtils.js', () => ({
   dataPath: (...parts) => `/tmp/${parts.join('/')}`,
   ensureDir: (...args) => mocks.ensureDir(...args),

@@ -11,6 +11,11 @@ const INSTANCE_IDENTITY_SRC = readFileSync(
   fileURLToPath(new URL('./instanceIdentity.js', import.meta.url)), 'utf8'
 );
 
+const { ensureDirMock, atomicWriteMock } = vi.hoisted(() => ({
+  ensureDirMock: vi.fn().mockResolvedValue(undefined),
+  atomicWriteMock: vi.fn().mockResolvedValue(undefined),
+}));
+
 // Mock dependencies before importing the module
 vi.mock('fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),
@@ -18,13 +23,19 @@ vi.mock('fs/promises', () => ({
   chmod: vi.fn().mockResolvedValue(undefined)
 }));
 
+vi.mock('../lib/fileCore.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  ensureDir: ensureDirMock,
+  atomicWrite: atomicWriteMock,
+}));
+
 vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
   ...(await importOriginal()),
   tryReadFile: vi.fn().mockResolvedValue(null),
   dataPath: (name) => `/mock/data/${name}`,
   readJSONFile: vi.fn(),
-  ensureDir: vi.fn().mockResolvedValue(undefined),
-  atomicWrite: vi.fn().mockResolvedValue(undefined),
+  ensureDir: ensureDirMock,
+  atomicWrite: atomicWriteMock,
   PATHS: { data: '/mock/data' }
 }));
 
