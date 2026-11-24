@@ -12,6 +12,7 @@ const store = await import('../imageTo3d/db.js');
 const { rigImageTo3dModel } = await import('./autoSkin.js');
 const { retargetImageTo3dModel } = await import('./retarget.js');
 const { cancelRiggingForModel } = await import('./inFlight.js');
+const { listActiveRenders } = await import('../renderActivity.js');
 
 const MODEL_ID = 'image3d-example';
 const rigResult = { rigId: 'rig-example', assetPath: '/rig.glb', sha256: 'a'.repeat(64), bytes: 1, summary: {} };
@@ -112,5 +113,26 @@ describe.each([
     await expect(running).rejects.toMatchObject({ code: 'RIGGING_CANCELLED' });
     expect(field(current).status).toBe('failed');
     expect(cancelRiggingForModel(MODEL_ID)).toBe(false);
+  });
+});
+
+describe.each([
+  ['rig', rig, rigResult],
+  ['retarget', retarget, retargetResult],
+])('%s lane live activity registration', (_name, start, result) => {
+  it('reports the run with its /3d link while running and clears it once settled', async () => {
+    const held = gate();
+    const running = start(async () => { await held.promise; return result; });
+    await vi.waitFor(() => expect(listActiveRenders()).toEqual([
+      expect.objectContaining({ kind: 'rigging', to: `/3d/${MODEL_ID}` }),
+    ]));
+    held.release();
+    await running;
+    expect(listActiveRenders()).toEqual([]);
+  });
+
+  it('clears the registration when the run fails', async () => {
+    await expect(start(async () => { throw new Error('blender exploded'); })).rejects.toThrow('blender exploded');
+    expect(listActiveRenders()).toEqual([]);
   });
 });

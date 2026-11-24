@@ -7,8 +7,11 @@
  * human's double-click, not a multi-actor lock (AGENTS.md single-user trust model).
  */
 import { ServerError } from '../../lib/errorHandler.js';
+import { trackedRenderMap } from '../renderActivity.js';
 
-const held = new Map();
+// Tracked so Live Activity, the idle verdict and the update preflight see a multi-minute
+// Blender run and don't restart the server through it (a restart strands the record).
+const held = trackedRenderMap('rigging', { noun: 'rigging run', link: (modelId) => `/3d/${encodeURIComponent(modelId)}` });
 
 const BUSY_MESSAGES = {
   rig: 'This model is already being rigged.',

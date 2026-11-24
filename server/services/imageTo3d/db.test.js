@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as connection from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
-import { listGeneratingModelSummaries, listModels, listModelsPage } from './db.js';
+import { getModel, listGeneratingModelSummaries, listModels, listModelsPage, recoverInterruptedModels } from './db.js';
 
 const health = await connection.checkHealth();
 const runDb = requireDbOrSkip('image-to-3D summaries', health.connected, health.error);
@@ -62,5 +62,39 @@ describe.skipIf(!runDb)('image-to-3D activity projection', () => {
     const page = await listModelsPage({ limit: 10, offset: 5 });
     expect(page.items).toHaveLength(10);
     expect(page.total).toBe(1004);
+  });
+
+  it('boot recovery fails stuck rig/retarget runs without touching a ready mesh', async () => {
+    await connection.query('DELETE FROM image_to_3d_models');
+    const base = { name: 'Example mesh', updatedAt: '2026-01-01T00:00:00Z', deleted: false, assetPath: '/mesh.glb' };
+    const records = [
+      { ...base, id: 'rigging', status: 'ready', rig: { status: 'rigging', startedAt: 't' } },
+      { ...base, id: 'both', status: 'ready', rig: { status: 'ready', rigId: 'r' }, retarget: { status: 'retargeting' } },
+      { ...base, id: 'fine', status: 'ready', rig: { status: 'ready' } },
+      { ...base, id: 'gone', status: 'ready', deleted: true, rig: { status: 'rigging' } },
+    ];
+    await connection.query(
+      `INSERT INTO image_to_3d_models (id, name, status, deleted, updated_at, data)
+       SELECT value->>'id', value->>'name', value->>'status',
+              (value->>'deleted')::boolean, (value->>'updatedAt')::timestamptz, value
+       FROM jsonb_array_elements($1::jsonb)`,
+      [JSON.stringify(records)],
+    );
+
+    expect(await recoverInterruptedModels()).toEqual({ recovered: 2 });
+
+    const rigging = await getModel('rigging');
+    expect(rigging).toMatchObject({ status: 'ready', assetPath: '/mesh.glb' });
+    expect(rigging.rig).toMatchObject({ status: 'failed', startedAt: 't' });
+    expect(rigging.rig.error).toMatch(/interrupted by a server restart/);
+    expect(rigging.rig.completedAt).toBeTruthy();
+
+    const both = await getModel('both');
+    expect(both.rig.status).toBe('ready');
+    expect(both.retarget).toMatchObject({ status: 'failed' });
+    expect(both.retarget.error).toMatch(/interrupted by a server restart/);
+
+    expect((await getModel('fine')).rig.status).toBe('ready');
+    expect((await getModel('gone', { includeDeleted: true })).rig.status).toBe('rigging');
   });
 });
