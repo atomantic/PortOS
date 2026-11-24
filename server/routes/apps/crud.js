@@ -85,9 +85,10 @@ router.get('/', asyncHandler(async (req, res) => {
     return;
   }
 
-  const apps = await Promise.all((await enrichAppsWithPm2Status(rawApps)).map(withGitRepoFlag));
+  const pm2Apps = await enrichAppsWithPm2Status(rawApps);
   if (view === 'probe') {
-    res.json(apps.map(({ id, name, icon, overallStatus, uiPort, apiPort, type, pm2ProcessNames }) => ({
+    // The probe projection drops isGitRepo, so skip the per-checkout Git calls.
+    res.json(pm2Apps.map(({ id, name, icon, overallStatus, uiPort, apiPort, type, pm2ProcessNames }) => ({
       // A null uiPort keeps peers from linking to a port only this machine can reach.
       id, name, icon, overallStatus, apiPort, type,
       uiPort: pm2ProcessNames?.includes(EIDOVERSE_PROCESS_NAME) ? null : uiPort,
@@ -95,6 +96,7 @@ router.get('/', asyncHandler(async (req, res) => {
     return;
   }
 
+  const apps = await Promise.all(pm2Apps.map(withGitRepoFlag));
   // The bare list is the frozen peer-probe contract. Local UI opts into
   // assessment prose explicitly so it never rides automatic federation probes.
   res.json(includeQuality === 'true' ? await enrichAppsWithQuality(apps) : apps);
