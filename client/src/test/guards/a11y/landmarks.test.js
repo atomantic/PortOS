@@ -9,6 +9,15 @@ import { attributeValue, normalizedAttributeValue, maskComments } from '../../a1
 import { guardExpressionBefore, JUSTIFIED_SILENT_ERROR_RENDERS, silentErrorRenders } from '../../a11yScanRules.js';
 import { readText } from '../../../../../scripts/lib/guardCorpus.js';
 
+const LAYOUT_FREE_MAIN_FILES = [
+  'src/components/PageShell.jsx',
+  'src/pages/Ambient.jsx',
+  'src/pages/Eidoverse.jsx',
+  'src/pages/EidoverseGuest.jsx',
+  'src/pages/FableLoomHostedJoin.jsx',
+  'src/pages/Login.jsx',
+];
+
 describe('a11y conventions: landmarks', () => {
   // Every element whose `role` attribute literally reads "tablist", wherever
   // one is written. Reading the answer off the parsed tag covers
@@ -337,11 +346,33 @@ describe('a11y conventions: landmarks', () => {
     expect(offenders, `Interactive element inside a CollapsibleSection label — pass it as headerActions so it sits beside the toggle button, not inside it:\n${offenders.join('\n')}`).toEqual([]);
   });
 
+  it('gives every Layout-free top-level route its own <main id="main-content"> (#18286)', () => {
+    // Routes declared before the `<Route path="/" element={<Layout />}>` parent
+    // skip PageShell, so their page component must render the landmark itself.
+    const app = maskedSourceOf('src/App.jsx');
+    const layoutAt = app.search(/<Route\s+path="\/"\s+element=\{<Layout\s*\/>\}/);
+    expect(layoutAt, 'App.jsx no longer declares the Layout parent route').toBeGreaterThan(0);
+    const components = [...app.slice(0, layoutAt).matchAll(/<Route\s+path="[^"]+"\s+element=\{<(\w+)\s*\/>\}/g)].map((m) => m[1]);
+    expect(components.length).toBeGreaterThan(0);
+    const importPath = (name) => app.match(new RegExp(`const ${name} = lazyWithReload\\(\\(\\) => import\\('\\./([^']+)'\\)\\)`))?.[1];
+    const offenders = [];
+    for (const name of components) {
+      const rel = importPath(name);
+      const file = rel && `src/${rel}.jsx`;
+      if (!file) { offenders.push(`${name}: not a lazyWithReload import in App.jsx`); continue; }
+      const src = maskedSourceOf(file);
+      const ownsMain = [...forEachOpeningTag(src, 'main')].some((node) => /id=["']main-content["']/.test(node.tag));
+      if (!ownsMain) offenders.push(`${file} (<${name} />)`);
+      if (!LAYOUT_FREE_MAIN_FILES.includes(file)) offenders.push(`${file} missing from the nested-<main> allowlist`);
+    }
+    expect(offenders, `Layout-free route without <main id="main-content"> (WCAG 1.3.1, 2.4.1):\n${offenders.join('\n')}`).toEqual([]);
+  });
+
   it('renders exactly one <main> landmark — the app shell owns it (#9163)', () => {
     // PageShell.jsx renders the skip-link target <main id="main-content"> for
     // every Layout route; a page rendering its own <main> nests a second
     // landmark inside it (WCAG 1.3.1). Layout-free entry pages own their <main>.
-    const OWN_MAIN = new Set(['src/components/PageShell.jsx', 'src/pages/EidoverseGuest.jsx', 'src/pages/FableLoomHostedJoin.jsx']);
+    const OWN_MAIN = new Set(LAYOUT_FREE_MAIN_FILES);
     const offenders = [];
     for (const file of trackedJsxFiles()) {
       if (OWN_MAIN.has(file.replace(/^.*?(src\/)/, '$1'))) continue;

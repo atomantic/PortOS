@@ -64,11 +64,15 @@ export default function Login() {
   };
 
   if (authEnabled === null) {
-    return <div className="min-h-dvh-cap bg-port-bg" />;
+    return (
+      <main id="main-content" className="min-h-dvh-cap bg-port-bg">
+        <span role="status" className="sr-only">Checking sign-in status…</span>
+      </main>
+    );
   }
 
   return (
-    <div className="min-h-dvh-cap bg-port-bg flex items-center justify-center p-4">
+    <main id="main-content" className="min-h-dvh-cap bg-port-bg flex items-center justify-center p-4">
       <form
         onSubmit={submit}
         className="w-full max-w-sm bg-port-card border border-port-border rounded-lg p-6 space-y-4"
@@ -100,6 +104,6 @@ export default function Login() {
           {submitting ? 'Signing in…' : 'Sign in'}
         </button>
       </form>
-    </div>
+    </main>
   );
 }
