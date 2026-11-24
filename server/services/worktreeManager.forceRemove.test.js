@@ -45,9 +45,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('forceRemoveWorktreeDir', () => {
     await rm(repo, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
-  async function addWorktree() {
-    const path = join(repo, '.claude', 'worktrees', `wt-${++n}`);
-    await mkdir(join(repo, '.claude', 'worktrees'), { recursive: true });
+  async function addWorktree(root = join(repo, '.claude', 'worktrees')) {
+    const path = join(root, `wt-${++n}`);
+    await mkdir(root, { recursive: true });
     await execGit(['worktree', 'add', '-b', `br-${n}`, path, 'main'], repo);
     return (await execGit(['rev-parse', '--show-toplevel'], path)).stdout.trim() || path;
   }
@@ -101,6 +101,39 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('forceRemoveWorktreeDir', () => {
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('cleanup incomplete'));
   });
 
+  it.each([
+    ['managed residue', true],
+    ['an unmanaged location', false],
+    ['a replacement .git entry', false],
+    ['an unreadable registry', false],
+  ])('reports removal of %s only when safe', async (scenario, removed) => {
+    const worktreesRoot = join(repo, 'managed');
+    const path = await addWorktree(scenario === 'an unmanaged location' ? undefined : worktreesRoot);
+    const residue = join(path, 'cache.txt');
+    let registrationDropped = false;
+    injected.gitFails = async (args) => {
+      if (args[0] !== 'worktree') return false;
+      if (args[1] === 'list') return registrationDropped && scenario === 'an unreadable registry';
+      if (args[1] !== 'remove' || args[2] !== path) return false;
+      // Deterministically leave the filesystem state of Git's partial deletion.
+      await execGit(['worktree', 'remove', '--force', path], repo);
+      registrationDropped = true;
+      await mkdir(path);
+      await writeFile(residue, 'leftover cache');
+      if (scenario === 'a replacement .git entry') await mkdir(join(path, '.git'));
+      return true;
+    };
+    const outcome = await forceRemoveWorktreeDir(repo, path, {
+      worktreesRoot, verifyRemoval: async holder => holder ? null : 'worktree-holder-changed',
+    });
+
+    expect(outcome).toMatchObject({ removed, directory: removed ? 'absent' : 'present',
+      registration: scenario === 'an unreadable registry' ? 'unknown' : 'absent' });
+    expect(existsSync(residue)).toBe(!removed);
+    injected.gitFails = () => false;
+    expect(await registered(path)).toBe(false);
+  });
+
   // Callers retire only merged deliveries or throwaway checkouts: ignored files go with them.
   it('discards ignored files with the checkout', async () => {
     const path = await addWorktree();
@@ -114,12 +147,25 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('forceRemoveWorktreeDir', () => {
   });
 
   it('preserves a locked directory and registration', async () => {
-    const path = await addWorktree();
+    const worktreesRoot = join(repo, 'managed');
+    const path = await addWorktree(worktreesRoot);
     await execGit(['worktree', 'lock', path], repo);
-    const outcome = await forceRemoveWorktreeDir(repo, path);
+    const outcome = await forceRemoveWorktreeDir(repo, path, { worktreesRoot });
     expect(outcome).toMatchObject({ removed: false, directory: 'present', registration: 'registered', reason: 'worktree-locked' });
     expect(existsSync(path)).toBe(true);
     expect(await registered(path)).toBe(true);
+  });
+
+  it('keeps a directory that was unregistered before the removal attempt', async () => {
+    const worktreesRoot = join(repo, 'managed');
+    const path = join(worktreesRoot, 'unregistered');
+    await mkdir(path, { recursive: true });
+    await writeFile(join(path, 'keep.txt'), 'preserve me');
+
+    const outcome = await forceRemoveWorktreeDir(repo, path, { worktreesRoot });
+
+    expect(outcome).toMatchObject({ removed: false, directory: 'present', registration: 'absent' });
+    expect(existsSync(join(path, 'keep.txt'))).toBe(true);
   });
 
   it('lets Git protect a lock acquired after the final safety read', async () => {
