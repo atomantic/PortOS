@@ -26,6 +26,12 @@ router.post('/sync', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+// Clear cached Contacts PII and reset sync state idempotently.
+router.delete('/cache', asyncHandler(async (req, res) => {
+  const result = await contactsSync.clearContactCache();
+  res.json(result);
+}));
+
 const enrichBodySchema = z.object({
   dryRun: z.boolean().optional().default(false),
 });

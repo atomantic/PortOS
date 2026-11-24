@@ -75,6 +75,7 @@ export const DEFAULT_EXCLUDES = [
   { path: '/database-restore-recovery.json', reason: 'In-flight database restore recovery journal — a machine-local admission fence for one restore operation, never data to restore', overridable: false },
   { path: '/.database-restore-recovery-*.pending', reason: 'Unpublished database restore recovery journal bytes — scratch from an interrupted journal write', overridable: false },
   { path: '/model-manifest.json', reason: 'Tracked downloaded-model inventory — machine-local and re-derivable by rescanning the model stores; a restored copy would describe another machine\'s disks', overridable: false },
+  { path: '/contacts-cache.json', reason: 'Regenerable macOS Contacts lookup cache — re-synced from AddressBook on demand', overridable: false },
   // Anchored, like every entry here. Readiness evidence is bound to THIS
   // machine's local image id (a restored copy would read as stale anyway) and
   // the rest is in-flight render scratch; setup re-derives all of it.
