@@ -5,7 +5,7 @@ import { MemoryRouter, useNavigate } from 'react-router';
 vi.mock('../../services/apiFeaturePriorities', () => ({ postFeatureVisit: vi.fn() }));
 
 import { postFeatureVisit } from '../../services/apiFeaturePriorities';
-import useFeatureUsageBeacon, { FEATURE_VISIT_DWELL_MS } from './useFeatureUsageBeacon';
+import useFeatureUsageBeacon, { FEATURE_VISIT_DWELL_MS, FEATURE_VISIT_REPORT_INTERVAL_MS } from './useFeatureUsageBeacon';
 
 let visibility;
 let focused;
@@ -87,19 +87,32 @@ describe('useFeatureUsageBeacon', () => {
     expect(postFeatureVisit).toHaveBeenCalledTimes(1);
   });
 
-  it('reports the same route again on a later calendar day when attention returns', () => {
-    vi.setSystemTime(new Date(2026, 0, 5, 12, 0, 0));
+  it('reports a route again when continuous use outlasts the report interval', () => {
     mount();
     advance(FEATURE_VISIT_DWELL_MS);
     expect(postFeatureVisit).toHaveBeenCalledTimes(1);
-    vi.setSystemTime(new Date(2026, 0, 6, 9, 0, 0));
+    advance(FEATURE_VISIT_REPORT_INTERVAL_MS - 1);
+    expect(postFeatureVisit).toHaveBeenCalledTimes(1);
+    advance(1 + FEATURE_VISIT_DWELL_MS);
+    expect(postFeatureVisit).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports again after a refocus once the interval has passed, but not before', () => {
+    mount();
+    advance(FEATURE_VISIT_DWELL_MS);
     setAttention('visible', false);
+    advance(FEATURE_VISIT_REPORT_INTERVAL_MS - 60_000);
+    setAttention('visible', true);
+    advance(FEATURE_VISIT_DWELL_MS);
+    expect(postFeatureVisit).toHaveBeenCalledTimes(1);
+    setAttention('visible', false);
+    advance(120_000);
     setAttention('visible', true);
     advance(FEATURE_VISIT_DWELL_MS);
     expect(postFeatureVisit).toHaveBeenCalledTimes(2);
   });
 
-  it('resets on a route change and posts each route at most once per day', () => {
+  it('resets on a route change and posts each route once per interval', () => {
     const { result } = mount();
     advance(6_000);
     act(() => result.current('/jira'));

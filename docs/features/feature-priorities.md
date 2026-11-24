@@ -4,7 +4,7 @@ Each feature area gets a tier, `P0` (heavy daily use) to `P3` (dormant), that sc
 
 ## Usage signal
 
-A hook mounted once beside the router (`client/src/components/featureUsage/useFeatureUsageBeacon.js`) posts `POST /api/feature-priorities/visit { path }` when the current route has been continuously visible and focused for 10 seconds, at most once per route per page session. A failed post is dropped without a retry or a toast. API traffic is not counted: dashboard widgets and sidebar badges call most feature APIs on every load, and an agent crawling a background tab has no focus.
+A hook mounted once beside the router (`client/src/components/featureUsage/useFeatureUsageBeacon.js`) posts `POST /api/feature-priorities/visit { path }` when the current route has been continuously visible and focused for 10 seconds, then at most once per route every 6 hours (a tab left open across days keeps contributing, and the server counts extra posts harmlessly because only distinct days score). A failed post is dropped without a retry or a toast. API traffic is not counted: dashboard widgets and sidebar badges call most feature APIs on every load, and an agent crawling a background tab has no focus.
 
 The server maps the path to an area through `areaForNavPath`; a path no area owns is a no-op. A visit is one upsert on `feature_usage_days (area_id, day)` (the server's local calendar day), followed by deleting rows older than 90 days.
 
