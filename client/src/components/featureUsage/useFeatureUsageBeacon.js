@@ -32,7 +32,7 @@ export default function useFeatureUsageBeacon(enabled = true) {
       Promise.resolve(postFeatureVisit(pathname)).catch(() => undefined);
     };
     const sync = () => {
-      if (!isAttended()) cancel();
+      if (!isAttended() || reported.current.has(pathname)) cancel();
       else if (timer === null) timer = setTimeout(report, FEATURE_VISIT_DWELL_MS);
     };
     sync();

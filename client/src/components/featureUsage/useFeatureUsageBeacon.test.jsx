@@ -77,6 +77,16 @@ describe('useFeatureUsageBeacon', () => {
     expect(postFeatureVisit).toHaveBeenCalledTimes(1);
   });
 
+  it('does not schedule another post when attention returns after the route was reported', () => {
+    mount();
+    advance(FEATURE_VISIT_DWELL_MS);
+    expect(postFeatureVisit).toHaveBeenCalledTimes(1);
+    setAttention('visible', false);
+    setAttention('visible', true);
+    advance(60_000);
+    expect(postFeatureVisit).toHaveBeenCalledTimes(1);
+  });
+
   it('resets on a route change and posts each route at most once per page session', () => {
     const { result } = mount();
     advance(6_000);

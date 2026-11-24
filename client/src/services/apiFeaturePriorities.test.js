@@ -14,6 +14,7 @@ describe('postFeatureVisit', () => {
       method: 'POST',
       body: JSON.stringify({ path: '/brain' }),
       silent: true,
+      hostControlOptional: true,
     });
   });
 });
