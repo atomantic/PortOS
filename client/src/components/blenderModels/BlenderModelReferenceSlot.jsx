@@ -23,9 +23,25 @@ function ReferenceImage({ model, slot, image }) {
     if (result.ok) { setRedoing(false); setNote(''); }
   };
   const [src, fallback] = image.filename ? referenceImageUrls(image.filename) : [];
+  const [resolvedSrc, setResolvedSrc] = useState(null);
+  const href = src && resolvedSrc?.forSrc === src ? resolvedSrc.url : src;
   return (
     <li className="min-w-0 space-y-1.5 rounded border border-port-border p-2">
-      {image.filename && <a href={src} target="_blank" rel="noreferrer" aria-label={`Open ${image.filename} full size`}><MediaImage src={src} fallbackSrc={fallback} alt={`${label} reference`} loading="lazy" className="max-h-96 w-full object-contain" /></a>}
+      {image.filename && (
+        <a href={href} target="_blank" rel="noreferrer" aria-label={`Open ${image.filename} full size`}>
+          <MediaImage
+            src={src}
+            fallbackSrc={fallback}
+            alt={`${label} reference`}
+            loading="lazy"
+            className="max-h-96 w-full object-contain"
+            onLoad={(event) => {
+              const loaded = event.currentTarget.getAttribute('src');
+              if (loaded) setResolvedSrc({ forSrc: src, url: loaded });
+            }}
+          />
+        </a>
+      )}
       {image.status === 'rendering' && image.jobId && <MediaJobThumb jobId={image.jobId} label="Reference image" size="md" />}
       <Pill size="xs" tone={tone}>{label}</Pill>
       {image.error && <p role="status" className="break-words text-xs text-port-error">{image.error}</p>}

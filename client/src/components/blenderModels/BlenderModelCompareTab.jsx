@@ -53,6 +53,7 @@ export default function BlenderModelCompareTab({ model, build, report, params, u
   const { state } = model;
   // null closed, 'new', or a camera id.
   const [editing, setEditing] = useState(null);
+  const [resolvedSrc, setResolvedSrc] = useState(null);
   const complete = blenderModelBuilds(state).filter((entry) => entry.status === 'complete');
   const shown = comparedCamera(state, params.get('cam'));
   const look = params.get('look') === 'clay' ? 'clay' : 'textured';
@@ -65,6 +66,7 @@ export default function BlenderModelCompareTab({ model, build, report, params, u
   const sizes = [reviewOf(build), reviewOf(other)].map((review) => JSON.stringify(review?.sizeMeters ?? null));
   const buildName = (entry) => `${formatDateTime(entry.startedAt)} · ${entry.quality}${entry.id === state.publishedBuildId ? ' · published' : ''}`;
   const [src, fallback] = filename ? referenceImageUrls(filename) : [];
+  const href = src && resolvedSrc?.forSrc === src ? resolvedSrc.url : src;
   const lastReview = build && [...state.jobs].reverse().find((job) => job.kind === 'review' && job.buildId === build.id);
 
   if (!build) {
@@ -113,7 +115,7 @@ export default function BlenderModelCompareTab({ model, build, report, params, u
       </div>
       {editing && (
         <BlenderModelCameraEditor key={editing} model={model} camera={editing === 'new' ? null : state.cameras.find((camera) => camera.id === editing) ?? null}
-          referenceId={referenceId} parts={parts} onClose={() => setEditing(null)} onSaved={(cameraId) => { setEditing(null); updateParams({ cam: cameraId }); }} />
+          referenceId={slot?.id ?? 'overall'} parts={parts} onClose={() => setEditing(null)} onSaved={(cameraId) => { setEditing(null); updateParams({ cam: cameraId }); }} />
       )}
       {other && sizes[0] !== 'null' && sizes[1] !== 'null' && sizes[0] !== sizes[1] && (
         <p role="status" className="text-xs text-port-warning">These builds declare different sizes, so they are not framed at the same scale.</p>
@@ -128,8 +130,12 @@ export default function BlenderModelCompareTab({ model, build, report, params, u
         <figure aria-label="Reference image" className="min-w-0 space-y-1.5">
           <figcaption className="text-xs text-port-text-muted">{slot ? referenceLabel(slot) : 'Reference'}{shown.camera?.crop ? ` · ${shown.camera.label}` : ''}</figcaption>
           {filename ? (
-            <a href={src} target="_blank" rel="noreferrer" aria-label="Open the reference full size">
-              <BlenderModelCroppedImage key={src} src={src} fallbackSrc={fallback} alt={`${referenceLabel(slot)} reference`} crop={shown.camera?.crop ?? null} />
+            <a href={href} target="_blank" rel="noreferrer" aria-label="Open the reference full size">
+              <BlenderModelCroppedImage key={src} src={src} fallbackSrc={fallback} alt={`${referenceLabel(slot)} reference`} crop={shown.camera?.crop ?? null}
+                onLoad={(event) => {
+                  const loaded = event.currentTarget.getAttribute('src');
+                  if (loaded) setResolvedSrc({ forSrc: src, url: loaded });
+                }} />
             </a>
           ) : (
             <div className="space-y-2 rounded border border-dashed border-port-border p-4 text-sm">

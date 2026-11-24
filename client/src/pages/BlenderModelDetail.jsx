@@ -17,6 +17,7 @@ import BlenderModelReadiness from '../components/blenderModels/BlenderModelReadi
 import useBlenderModel, { BLENDER_MODEL_FILM_API } from '../components/blenderModels/useBlenderModel.js';
 import { buttonCls, primaryCls } from '../components/musicVideo/blender/blenderStyles.js';
 import { useValidTab } from '../hooks/useValidTab';
+import useMounted from '../hooks/useMounted';
 import useUrlParams from '../hooks/useUrlParams';
 import { useSocketResource } from '../hooks/useSocketResource';
 import { getBlenderModelBuildReport } from '../services/apiBlenderModels.js';
@@ -49,6 +50,7 @@ export default function BlenderModelDetail() {
 
 function BlenderModelPage({ id }) {
   const navigate = useNavigate();
+  const mountedRef = useMounted();
   const tab = useValidTab(BLENDER_MODEL_TABS, 'model');
   const [params, updateParams] = useUrlParams();
   const [makingFilm, setMakingFilm] = useState(false);
@@ -69,10 +71,11 @@ function BlenderModelPage({ id }) {
   // Starts no job: it makes an editable film from the published build and opens it.
   const makeShowcaseFilm = async () => {
     setMakingFilm(true);
-    const film = await createShowcaseFilm(id).catch((err) => {
+    const film = await createShowcaseFilm(id, { silent: true }).catch((err) => {
       if (err?.code !== 'HOST_CONTROL_FORBIDDEN') toast.error(err?.message || 'Could not make the showcase film');
       return null;
     });
+    if (!mountedRef.current) return;
     setMakingFilm(false);
     if (film) navigate(`/code-animation/production/films/${encodeURIComponent(film.id)}`);
   };
