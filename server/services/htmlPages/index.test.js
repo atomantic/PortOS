@@ -42,8 +42,14 @@ vi.mock('../mtplxServerManager.js', () => ({
   getMtplxServerStatus: vi.fn(async () => ({ running: true, config: { model: 'Example/Served-MTPLX' }, cachedModels: ['Example/Served-MTPLX', 'Example/Other-MTPLX'] })),
   runOnMtplxCheckpoint: vi.fn(async (_model, fn) => fn('mtplx-example-other')),
 }));
+const providers = {
+  'example-api': { name: 'Example API', type: 'api' },
+  'example-cli': { name: 'Example CLI', type: 'cli', command: 'claude' },
+  'example-tui': { name: 'Example TUI', type: 'tui', command: 'claude' },
+  'example-sandbox': { name: 'Example Sandbox', type: 'cli', command: 'codex' },
+};
 vi.mock('../provider/providers.js', () => ({
-  getProviderById: vi.fn(async (id) => (id === 'example-cli' ? { id, name: 'Example CLI', type: 'cli', enabled: true, defaultModel: 'example-default' } : null)),
+  getProviderById: vi.fn(async (id) => (Object.hasOwn(providers, id) ? { id, enabled: true, defaultModel: 'example-default', ...providers[id] } : null)),
 }));
 vi.mock('../promptRunner.js', () => ({ runPromptThroughProvider: vi.fn() }));
 vi.mock('../runner.js', () => ({ stopRun: vi.fn(async () => {}) }));
@@ -54,6 +60,7 @@ import { listActiveRenders } from '../renderActivity.js';
 import { ensurePageFile, removeRunFiles, writePageFile } from './pageFiles.js';
 import { getMtplxServerStatus, runOnMtplxCheckpoint } from '../mtplxServerManager.js';
 import { runPromptThroughProvider } from '../promptRunner.js';
+import { getProviderById } from '../provider/providers.js';
 import { htmlPagePromptParts, htmlPagePrompt } from '../../lib/htmlPageBench.js';
 import { createRun, mutateRun } from './db.js';
 import { listRuns, listSelectableModels, pageFile, readRun, removeRun, resumeRun, startRuns } from './index.js';
@@ -220,16 +227,17 @@ describe('other targets', () => {
     expect(generate.mock.calls[0][0]).toMatchObject({ backend: 'mtplx', modelId: 'mtplx-example-other' });
   });
 
-  it('runs a provider route with its model and effort, no fallback, and the prompts exactly as recorded', async () => {
+  it.each(['example-cli', 'example-api'])('runs %s with its model and effort, no fallback, and the prompts exactly as recorded', async (providerId) => {
     runPromptThroughProvider.mockImplementation(async ({ prompt }) => ({ text: `${prompt}\n${isPlanRequest(prompt) ? PLAN : goodPage}` }));
-    const [queued] = await startRuns({ routes: [{ providerId: 'example-cli', model: null, effort: 'high' }], pages: PAGES.slice(0, 1) });
-    expect(queued).toMatchObject({ backend: 'provider', modelId: 'example-default', route: { providerId: 'example-cli', providerName: 'Example CLI', model: 'example-default', effort: 'high' } });
+    const [queued] = await startRuns({ routes: [{ providerId, model: null, effort: 'high' }], pages: PAGES.slice(0, 1) });
+    expect(queued).toMatchObject({ backend: 'provider', modelId: 'example-default', route: { providerId, providerName: providers[providerId].name, model: 'example-default', effort: 'high' } });
     const run = await settled(queued.id);
     expect(run.pages[0]).toMatchObject({ html: goodPage, plan: PLAN });
     // A provider route reports no token count; null, never a made-up zero.
     expect(run.pages[0]).toMatchObject({ completionTokens: null, tokensPerSecond: null });
     expect(runPromptThroughProvider.mock.calls.map(([args]) => args.prompt)).toEqual([queued.planPrompts[0], htmlPagePrompt(PAGES[0], PLAN)]);
     expect(runPromptThroughProvider.mock.calls[1][0]).toMatchObject({
+      provider: expect.objectContaining({ id: providerId, type: providers[providerId].type }),
       prompt: run.pages[0].prompt, model: 'example-default', effort: 'high', allowFallback: false, toolFree: true, source: 'html-pages-bench',
     });
     expect(generate).not.toHaveBeenCalled();
@@ -238,6 +246,23 @@ describe('other targets', () => {
   it('refuses a provider that is not configured before queueing anything', async () => {
     await expect(startRuns({ routes: [{ providerId: 'gone' }], pages: PAGES })).rejects.toMatchObject({ status: 409, code: 'HTML_PAGES_PROVIDER_UNAVAILABLE' });
     expect(store.size).toBe(0);
+  });
+
+  it.each(['example-tui', 'example-sandbox'])('refuses %s before queueing any target in the batch', async (providerId) => {
+    await expect(startRuns({ models: [model], routes: [{ providerId }], pages: PAGES })).rejects.toMatchObject({
+      status: 409, code: 'HTML_PAGES_PROVIDER_NOT_TOOL_FREE', message: expect.stringContaining('Start a new run with an API provider'),
+    });
+    expect(createRun).not.toHaveBeenCalled();
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
+  });
+
+  it('fails the saved route before dispatch if the provider becomes ineligible after admission', async () => {
+    getProviderById.mockResolvedValueOnce({ id: 'example-tui', ...providers['example-cli'] });
+    const [queued] = await startRuns({ routes: [{ providerId: 'example-tui' }], pages: PAGES });
+    await expect(settled(queued.id)).resolves.toMatchObject({
+      status: 'failed', pages: [], error: expect.stringContaining('Start a new run with an API provider'),
+    });
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
   });
 });
 
@@ -372,6 +397,18 @@ describe('resumeRun', () => {
   const cutOff = (pages) => store.set('cut', {
     id: 'cut', ...model, pageCount: 2, themes: PAGES, prompts: ['first prompt', 'second prompt'], status: 'generating',
     progress: { done: pages.length, total: 2 }, pages, detail: null, error: null, deleted: false,
+  });
+
+  it('refuses to requeue a saved TUI route and keeps its stored result', async () => {
+    cutOff([{ theme: PAGES[0], html: goodPage }]);
+    const saved = { ...store.get('cut'), status: 'failed', route: { providerId: 'example-tui', model: 'example-default', effort: 'high' } };
+    store.set('cut', saved);
+    await expect(resumeRun('cut')).rejects.toMatchObject({
+      status: 409, code: 'HTML_PAGES_PROVIDER_NOT_TOOL_FREE', message: expect.stringContaining('Start a new run with an API provider'),
+    });
+    expect(store.get('cut')).toEqual(saved);
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
+    expect(listActiveRenders().filter((r) => r.kind === 'html-pages')).toHaveLength(0);
   });
 
   it('re-queues a run a restart cut off from its first unfinished page, with the prompts it recorded', async () => {
