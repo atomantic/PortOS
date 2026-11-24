@@ -84,6 +84,27 @@ describe('staged repair lifecycle', () => {
     expect(await readExample(repo)).toBe('old\n');
     expect((await store.read(id)).patch).toBe(patch);
   });
+
+  it('protects a self-restart session until the staged fix is restored after a restart failure', async () => {
+    const processName = 'portos-autofixer';
+    await writeFile(join(root, 'sessions', id, 'metadata.json'), JSON.stringify({
+      sessionId: id, appId: 'example', repoPath: repo, processName, staged: true,
+    }));
+    const result = Promise.withResolvers();
+    restart.mockReturnValue(result.promise);
+    store = createStagedFixStore({ root, execPm2: restart,
+      loadApps: async () => [{ id: 'example', repoPath: repo, pm2ProcessNames: [processName] }] });
+
+    expect(await store.mutate(id, 'apply')).toMatchObject({ status: 202 });
+    try {
+      expect(await store.canPrune(id)).toBe(false);
+    } finally {
+      result.reject(new Error('example restart failure'));
+    }
+    await vi.waitFor(async () => expect((await store.read(id)).patch).toBe(patch));
+    expect(await store.canPrune(id)).toBe(false);
+  });
+
   it('discards without applying and rejects traversal IDs', async () => {
     expect((await store.read('../outside')).status).toBe(404);
     expect(await store.mutate(id, 'discard')).toEqual({ success: true, disposition: 'discarded' });
