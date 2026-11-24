@@ -87,8 +87,7 @@ import { isMiniMaxH3SpeedProfileRequest } from '../../lib/minimaxH3SpeedProfiles
 import { resolveVideoLoras } from './renderArgs.js';
 
 // A hosted renderer is picked with `backend`, not `modelId`; say so to an API caller who sends its name.
-const HOSTED_VIDEO_BACKENDS = ['grok', 'fal', 'reactor', 'runway', 'gemini', 'higgsfield', 'google'];
-export const unknownVideoModelMessage = (modelId) => (HOSTED_VIDEO_BACKENDS.includes(modelId)
+export const unknownVideoModelMessage = (modelId) => (CLOUD_VIDEO_GEN_MODES.includes(modelId)
   ? `Unknown modelId: ${modelId}. ${modelId} is a renderer: send backend: "${modelId}" instead of modelId`
   : `Unknown modelId: ${modelId}`);
 

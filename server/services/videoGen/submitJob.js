@@ -27,7 +27,8 @@ import {
   compileFableLoomVisualRequest,
   fableLoomVideoCapabilities,
 } from '../fableLoom/visualConditioning.js';
-import { VIDEO_GEN_MODE } from './modes.js';
+import { CLOUD_VIDEO_GEN_MODES, VIDEO_GEN_MODE } from './modes.js';
+import { GENERATION_MODE_LABELS } from '../../lib/generationModes.js';
 import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { preparePerformanceShot } from '../musicVideo/performanceShot.js';
@@ -100,8 +101,8 @@ async function prepareVideoSubmissionInputs(body, uploads, inputs) {
       ['chained chunks', body.chunks > 1],
       ['an explicit continuation strategy', body.continuityStrategy != null],
       ['warm render batches', body.batchSize > 1],
-      ['the Grok backend', body.backend === 'grok'],
-      ['the Gemini backend', body.backend === 'gemini'],
+      // Hosted backends are never forwarded by buildFederatedMediaRequest.
+      [`the ${GENERATION_MODE_LABELS[body.backend] ?? body.backend} backend`, CLOUD_VIDEO_GEN_MODES.includes(body.backend)],
       ['a FableLoom scene tag', body.fableLoom],
       // Inspire is a per-runtime capability the caller cannot prove for a peer.
       // Refuse it instead of returning an anchored clip under an Inspire label.

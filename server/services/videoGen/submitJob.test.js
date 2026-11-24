@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { PATHS } from '../../lib/paths.js';
+import { CLOUD_VIDEO_GEN_MODES } from '../../lib/generationModes.js';
 
 vi.mock('../../lib/paths.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-greybox-video-') }));
@@ -134,6 +135,13 @@ describe('submitVideoGenJob', () => {
 
   it('refuses temporal intent that the federated wire cannot express', async () => {
     await expect(submitVideoGenJob({ prompt: 'a clip', mediaProviderPeerId: 'peer-1', continuityStrategy: 'window' }, {}))
+      .rejects.toMatchObject({ status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' });
+    expect(mocks.prepareRemoteMediaJob).not.toHaveBeenCalled();
+    expect(mocks.enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it.each(CLOUD_VIDEO_GEN_MODES)('refuses the %s hosted backend on a federated submission', async (backend) => {
+    await expect(submitVideoGenJob({ prompt: 'a clip', mediaProviderPeerId: 'peer-1', backend }, {}))
       .rejects.toMatchObject({ status: 400, code: 'MEDIA_PROVIDER_INPUT_UNSUPPORTED' });
     expect(mocks.prepareRemoteMediaJob).not.toHaveBeenCalled();
     expect(mocks.enqueueJob).not.toHaveBeenCalled();
