@@ -4,6 +4,7 @@ import { ensureSecureDir, writeSecureJson } from '../lib/secureAuthStore.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { createGoogleOAuthClient } from '../lib/googleOAuthClient.js';
+import { createOAuthStateStore, INVALID_OAUTH_STATE_MESSAGE } from '../lib/oauthState.js';
 import { PORTS } from '../lib/ports.js';
 
 const AUTH_DIR = join(PATHS.calendar, 'google-auth');
@@ -17,6 +18,7 @@ export const GOOGLE_API_TIMEOUT_MS = 30_000;
 export const OAUTH_REDIRECT_URI = `http://${process.env.PUBLIC_HOST || 'localhost'}:${process.env.PORT || PORTS.API}/api/calendar/google/oauth/callback`;
 
 let oAuth2Client = null;
+const oauthState = createOAuthStateStore();
 
 async function ensureAuthDir() {
   await ensureSecureDir(AUTH_DIR);
@@ -112,15 +114,12 @@ export async function getAuthUrl(returnTo = 'calendar') {
     access_type: 'offline',
     prompt: 'consent',
     scope: SCOPES,
-    // The callback is shared by Calendar and Messages. Keep the return target
-    // in Google's round trip so authorization started in Messages lands back
-    // on the Messages config tab.
-    state: returnTo === 'messages' ? 'messages' : 'calendar'
+    state: oauthState.issue({ returnTo: returnTo === 'messages' ? 'messages' : 'calendar' }),
   });
   return { url };
 }
 
-export async function handleCallback(code) {
+async function exchangeAuthorizationCode(code) {
   const credentials = await getCredentials();
   if (!credentials) throw new ServerError('No credentials configured', { status: 400 });
 
@@ -133,7 +132,19 @@ export async function handleCallback(code) {
   attachTokenPersistence(oAuth2Client);
 
   console.log('📅 Google OAuth callback processed, tokens stored');
-  return { success: true };
+}
+
+export async function handleCallback({ code, state, error }) {
+  const pending = oauthState.consume(state);
+  if (!pending) return { error: INVALID_OAUTH_STATE_MESSAGE };
+  const { returnTo } = pending;
+  if (error || !code) return { returnTo, error: error || 'Missing authorization code' };
+
+  return exchangeAuthorizationCode(code).then(() => ({ returnTo, success: true }))
+    .catch((err) => {
+      console.error(`❌ Google OAuth callback failed: ${err.message}`);
+      return { returnTo, error: err.message || 'Google OAuth callback failed' };
+    });
 }
 
 export async function getAuthenticatedClient() {
