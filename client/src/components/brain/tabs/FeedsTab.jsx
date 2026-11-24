@@ -22,6 +22,7 @@ import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 import { timeAgo } from '../../../utils/formatters';
+import { pluralize } from '../../../lib/textUtils';
 import { normalizeUrl } from '../../../utils/urlNormalize';
 import LoadFailedState from '../../ui/LoadFailedState';
 import ListLoadError from '../../ui/ListLoadError';
@@ -107,7 +108,11 @@ export default function FeedsTab({ onRefresh }) {
     const result = await refreshAllFeeds().catch(() => null);
     setRefreshing(false);
     if (result) {
-      toast.success(`Refreshed ${result.refreshed} feeds (+${result.newItems} new)`);
+      // `refreshed` counts every subscription attempted, failures included.
+      const failures = result.failures || 0;
+      const succeeded = result.refreshed - failures;
+      if (succeeded > 0 || !failures) toast.success(`Refreshed ${pluralize(succeeded, 'feed')} (+${result.newItems} new)`);
+      if (failures > 0) toast.error(`Could not refresh ${pluralize(failures, 'feed')}`);
       fetchFeeds();
       fetchItems();
     }

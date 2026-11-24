@@ -54,6 +54,11 @@ describe('parseWhatsappChat', () => {
     expect(msgs[2]).toMatchObject({ sender: 'Bob', body: '<Media omitted>' });
   });
 
+  it('reads the spaced "p. m." clock some locales export', () => {
+    const [msg] = parseWhatsappChat('15/1/24, 6:30\u00a0p.\u00a0m. - Alice: hola');
+    expect(msg).toMatchObject({ sender: 'Alice', body: 'hola', hour24: 18, minute: 30 });
+  });
+
   it('converts 12 AM/PM edge hours correctly', () => {
     const msgs = parseWhatsappChat([
       '[2024-01-15, 12:00:00 AM] A: midnight',

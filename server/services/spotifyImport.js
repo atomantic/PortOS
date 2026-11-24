@@ -14,7 +14,8 @@
  *     master_metadata_album_artist_name, master_metadata_album_album_name,
  *     spotify_track_uri, episode_name, ... }`
  *   - Legacy "Account data" `StreamingHistory*.json`: `{ endTime, artistName,
- *     trackName, msPlayed }` (endTime is UTC "YYYY-MM-DD HH:MM").
+ *     trackName, msPlayed }`, or `{ endTime, podcastName, episodeName, msPlayed }`
+ *     for podcasts (endTime is UTC "YYYY-MM-DD HH:MM").
  *
  * Idempotent: every candidate carries a stable `dedupeKey` (track uri + ISO
  * timestamp), so re-importing the same export — or an overlapping newer export —
@@ -63,8 +64,8 @@ export function spotifyRecordToCandidate(record) {
   const trackName = record.master_metadata_track_name ?? record.trackName ?? null;
   const artist = record.master_metadata_album_artist_name ?? record.artistName ?? null;
   const album = record.master_metadata_album_album_name ?? null;
-  const episodeName = record.episode_name ?? null;
-  const showName = record.episode_show_name ?? null;
+  const episodeName = record.episode_name ?? record.episodeName ?? null;
+  const showName = record.episode_show_name ?? record.podcastName ?? null;
   const title = trackName || episodeName;
   if (!title) return null;
 

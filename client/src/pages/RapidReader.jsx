@@ -56,6 +56,8 @@ export default function RapidReaderPage() {
   const textareaRef = useRef(null);
   const latestProgressRef = useRef(null);
   const lastAutoSavedWordRef = useRef(-1);
+  const activeRef = useRef(active);
+  activeRef.current = active;
 
   const documentText = useMemo(() => text.trim(), [text]);
   const wordCount = useMemo(() => rapidReaderWords(documentText).length, [documentText]);
@@ -98,9 +100,23 @@ export default function RapidReaderPage() {
     return book;
   });
 
+  const persistProgress = useCallback((document, progress, updateBookmark = true) => {
+    if (!document?.text || !progress || progress.wordIndex <= 0) return;
+    if (progress.wordIndex >= progress.wordCount - 1) {
+      clearRapidReaderProgress(document.text, document);
+      if (updateBookmark) setBookmark(null);
+      return;
+    }
+    const saved = writeRapidReaderProgress(document.text, progress, document);
+    if (saved && updateBookmark) setBookmark(saved);
+  }, []);
+
   // The URL owns which shelf entry is open, so the row click only navigates —
-  // the effect below is the single place that loads the record's text.
-  const openShelf = (id) => navigate(`/rapid-reader/${id}`);
+  // the effect below is the single place that loads the record's text. Closing
+  // the reader leaves the URL on its entry, so clicking that entry again has
+  // nowhere to navigate and re-runs the load instead.
+  const [openNonce, setOpenNonce] = useState(0);
+  const openShelf = (id) => (id === shelfId ? setOpenNonce((value) => value + 1) : navigate(`/rapid-reader/${id}`));
   // A book's text is large and its request slow, so the user can pick another
   // shelf entry (or leave the route) before this one resolves. The guard drops a
   // superseded response so it can't open the wrong book under the current URL.
@@ -110,12 +126,24 @@ export default function RapidReaderPage() {
     getRapidReaderLibraryEntry(shelfId, { silent: true })
       .catch((error) => { if (current) setShelfError(error?.message || 'Could not open shelf entry'); return null; })
       .then((entry) => {
-        if (!current || !entry?.text) return;
-        setText(entry.text);
-        setActive({ text: entry.text, initialWordIndex: 0, documentId: rapidReaderDocumentId(entry.text), wordCount: entry.wordCount });
+        const entryText = entry?.text?.trim();
+        if (!current || !entryText) return;
+        // Progress is keyed by the reader's own word count; the record's
+        // `wordCount` is a plain whitespace split and differs on punctuation.
+        const identity = { documentId: rapidReaderDocumentId(entryText), wordCount: rapidReaderWords(entryText).length };
+        const saved = readRapidReaderProgress(entryText, identity);
+        if (saved) {
+          setWpm(saved.wpm);
+          setChunkSize(saved.chunkSize);
+        }
+        persistProgress(activeRef.current, latestProgressRef.current, false);
+        latestProgressRef.current = null;
+        lastAutoSavedWordRef.current = -1;
+        setText(entryText);
+        setActive({ text: entryText, initialWordIndex: saved?.wordIndex ?? 0, ...identity });
       });
     return () => { current = false; };
-  }, [shelfId]);
+  }, [shelfId, openNonce, persistProgress]);
   const addToShelf = (entry) => setShelf((previous) => [Object.fromEntries(Object.entries(entry).filter(([key]) => key !== 'text')), ...previous]);
   const [saveToShelf, savingShelf] = useAsyncAction(async () => {
     const entry = await createRapidReaderLibraryEntry({ title: saveTitle, text: documentText }, { silent: true }).catch((error) => { setShelfError(error?.message || 'Could not save to shelf'); return null; });
@@ -145,17 +173,6 @@ export default function RapidReaderPage() {
       ...documentIdentity,
     });
   };
-
-  const persistProgress = useCallback((document, progress, updateBookmark = true) => {
-    if (!document?.text || !progress || progress.wordIndex <= 0) return;
-    if (progress.wordIndex >= progress.wordCount - 1) {
-      clearRapidReaderProgress(document.text, document);
-      if (updateBookmark) setBookmark(null);
-      return;
-    }
-    const saved = writeRapidReaderProgress(document.text, progress, document);
-    if (saved && updateBookmark) setBookmark(saved);
-  }, []);
 
   const handlePositionChange = useCallback((progress) => {
     latestProgressRef.current = progress;
@@ -205,6 +222,7 @@ export default function RapidReaderPage() {
       {active ? (
         <div className="space-y-4">
           <RapidReader
+            key={active.documentId}
             text={active.text}
             wpm={wpm}
             chunkSize={chunkSize}

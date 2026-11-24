@@ -31,6 +31,17 @@ const DIGESTS_DIR = PATHS.digests;
 const agentsCompletedInWeek = (agents, weekId) => agents.filter(a =>
   a.completedAt && !isAgentHandoff(a) && getWeekId(new Date(a.completedAt)) === weekId);
 
+// Live state keeps a completed agent for about a day, so the rest of the week
+// comes from the date archive. Only dates inside the week are read.
+async function loadWeekAgents(weekId, stateAgents) {
+  const weekDates = (await getAgentDates())
+    .map(d => d.date)
+    .filter(d => getWeekId(new Date(d + 'T12:00:00')) === weekId);
+  const archived = (await Promise.all(weekDates.map(d => getAgentsByDate(d)))).flat();
+  const archivedIds = new Set(archived.map(a => a.id));
+  return agentsCompletedInWeek([...archived, ...stateAgents.filter(a => !archivedIds.has(a.id))], weekId);
+}
+
 /**
  * Get the start of a week (Monday) for a given date
  */
@@ -97,19 +108,7 @@ export async function generateWeeklyDigest(weekId = null) {
 
   emitLog('info', `Generating weekly digest for ${targetWeekId}`, { weekId: targetWeekId }, '📊 WeeklyDigest');
 
-  // Load only agents from dates in this week (not all agents)
-  const dates = await getAgentDates();
-  const weekDates = dates
-    .map(d => d.date)
-    .filter(d => getWeekId(new Date(d + 'T12:00:00')) === targetWeekId);
-  const flatDateAgents = (await Promise.all(weekDates.map(d => getAgentsByDate(d)))).flat();
-  const dateAgentIds = new Set(flatDateAgents.map(a => a.id));
-  // Also include state agents not yet in the date index (avoid double-counting)
-  const stateAgents = await getAgents();
-  const dedupedStateAgents = stateAgents.filter(a => !dateAgentIds.has(a.id));
-  const allAgents = [...flatDateAgents, ...dedupedStateAgents];
-
-  const weekAgents = agentsCompletedInWeek(allAgents, targetWeekId);
+  const weekAgents = await loadWeekAgents(targetWeekId, await getAgents());
 
   // Calculate basic stats
   const totalTasks = weekAgents.length;
@@ -427,10 +426,8 @@ export async function getCurrentWeekProgress() {
   const weekStart = getWeekStart();
   weekStart.setHours(0, 0, 0, 0);
 
-  // Get all agents
   const agents = await getAgents();
-
-  const weekAgents = agentsCompletedInWeek(agents, weekId);
+  const weekAgents = await loadWeekAgents(weekId, agents);
 
   // Currently running agents
   const runningAgents = agents.filter(a => a.status === 'running');

@@ -149,32 +149,40 @@ const now = () => Date.now();
 
 // Fetch + build curated cards. Each curated entry hits the metadata
 // endpoint independently; one failure (404 / network) doesn't poison the
-// rest. Returns the cards in CURATED_SUGGESTIONS order.
-const fetchCurated = async ({ fetchImpl }) => {
+// rest: a failed entry keeps its previous card, and one Civitai answers is gone
+// or gated is dropped. Returns the cards in CURATED_SUGGESTIONS order plus whether
+// every read got an answer.
+const UNAVAILABLE = Symbol('unavailable on Civitai');
+const fetchCurated = async ({ fetchImpl, previous }) => {
   const apiKey = await resolveCivitaiKey();
-  const out = await Promise.all(CURATED_SUGGESTIONS.map(async ({ modelId, note }) => {
+  let complete = true;
+  const items = await Promise.all(CURATED_SUGGESTIONS.map(async ({ modelId, note }) => {
     const model = await fetchCivitaiModel(modelId, { apiKey, fetchImpl })
       .catch((err) => {
         console.log(`⚠️ Curated suggestion ${modelId} fetch failed: ${err?.message || err}`);
-        return null;
+        return ['CIVITAI_NOT_FOUND', 'CIVITAI_AUTH'].includes(err?.code) ? UNAVAILABLE : null;
       });
-    if (!model) return null;
-    return buildCuratedCard(model, note);
+    if (model === UNAVAILABLE) return null;
+    if (model) return buildCuratedCard(model, note);
+    complete = false;
+    return previous.find((card) => card.modelId === modelId) || null;
   }));
-  return out.filter(Boolean);
+  return { items: items.filter(Boolean), complete };
 };
 
-// Curated cache is independent from the per-runner cache — same TTL, same
-// stale-fallback behavior on a fetch failure.
+// Curated cache is independent from the per-runner cache — same TTL. An
+// incomplete read is served but not cached, so the next request tries again
+// instead of showing the gap for an hour.
 let curatedCache = null;
 
 const getCurated = async ({ fetchImpl, force = false }) => {
   if (!force && curatedCache && now() - curatedCache.fetchedAt < TTL_MS) return curatedCache.items;
-  const items = await fetchCurated({ fetchImpl }).catch((err) => {
+  const previous = curatedCache?.items || [];
+  const { items, complete } = await fetchCurated({ fetchImpl, previous }).catch((err) => {
     console.log(`⚠️ Curated suggestions fetch failed: ${err?.message || err}`);
-    return curatedCache?.items || [];
+    return { items: previous, complete: false };
   });
-  curatedCache = { fetchedAt: now(), items };
+  if (complete) curatedCache = { fetchedAt: now(), items };
   return items;
 };
 

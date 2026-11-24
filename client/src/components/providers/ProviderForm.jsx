@@ -2,6 +2,7 @@ import { hardwareUnavailableReason } from '../../utils/systemCapabilities';
 import { useState } from 'react';
 import { AlertTriangle, Braces, Cpu, Plug, SlidersHorizontal } from 'lucide-react';
 import toast from '../ui/Toast';
+import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { deriveProviderPreset, updateProvider, createProvider } from '../../services/apiProviders.js';
 import { mergeModelLists, mergeObservedContextWindows, withRuntimeContextWindow, isOllamaBackedProvider, generationControlsFor } from '../../utils/providers';
 import Banner from '../ui/Banner';
@@ -125,7 +126,16 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
   const servedHarnessContext = daemonReadiness?.contextWindows?.[harnessTarget?.model]
     ?? daemonReadiness?.contextWindows?.[harnessTarget?.id] ?? null;
 
-  const handleSubmit = async (e) => {
+  const [save, saving] = useAsyncAction(async (data) => {
+    try {
+      await (provider ? updateProvider(provider.id, data) : createProvider(data));
+    } catch {
+      return; // The request helper toasted it; the form stays open with the edits.
+    }
+    onSave();
+  });
+
+  const handleSubmit = (e) => {
     e.preventDefault();
 
     const invalid = findProviderFormError({ formData, createsModePair, showsNumCtx, generationControls });
@@ -145,13 +155,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     }
     const data = buildProviderPayload({ provider, formData, modelsText, showsNumCtx, generationControls, createsModePair, tuiArgs });
     if (editingHarnessContext) data.harnessContext = harnessContextPayload(harnessTarget, harnessContext);
-    if (provider) {
-      await updateProvider(provider.id, data);
-    } else {
-      await createProvider(data);
-    }
-
-    onSave();
+    save(data);
   };
 
   return (
@@ -256,7 +260,8 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
             </button>
             <button
               type="submit"
-              className="px-6 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
+              disabled={saving}
+              className="px-6 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors disabled:opacity-50"
             >
               {provider ? 'Save' : 'Create'}
             </button>

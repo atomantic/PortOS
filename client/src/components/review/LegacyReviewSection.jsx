@@ -255,7 +255,10 @@ function ReviewItem({ item, config, idScope, isEditing, onComplete, onDismiss, o
 // briefing older than a day is context, not news, so it starts closed.
 export function ReviewHistoryDisclosure({ briefing, counts, showBriefing }) {
   const [briefingFullscreen, setBriefingFullscreen] = useState(false);
-  const briefingIsFresh = Boolean(showBriefing) && Date.now() - new Date(briefing.generatedAt).getTime() < BRIEFING_FRESH_MS;
+  // A CoS briefing is dated by calendar day, which has no time to show and starts at local midnight.
+  const briefingIsDayOnly = Boolean(showBriefing) && /^\d{4}-\d{2}-\d{2}$/.test(briefing.generatedAt);
+  const briefingStart = showBriefing && new Date(briefingIsDayOnly ? `${briefing.generatedAt}T00:00:00` : briefing.generatedAt);
+  const briefingIsFresh = Boolean(showBriefing) && Date.now() - briefingStart.getTime() < BRIEFING_FRESH_MS;
   const historySummary = showBriefing
     ? `Daily briefing · ${formatDateShort(briefing.generatedAt)} · history counts`
     : 'Stored review history counts';
@@ -271,7 +274,7 @@ export function ReviewHistoryDisclosure({ briefing, counts, showBriefing }) {
         </h2>
         <div className="flex items-center gap-2">
           <span className="text-[11px] text-gray-400">
-            {briefing.source} &middot; {formatDateTime(briefing.generatedAt)}
+            {briefing.source} &middot; {briefingIsDayOnly ? formatDateShort(briefing.generatedAt) : formatDateTime(briefing.generatedAt)}
           </span>
           <button
             onClick={() => setBriefingFullscreen(prev => !prev)}

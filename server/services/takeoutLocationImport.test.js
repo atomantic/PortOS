@@ -142,6 +142,20 @@ describe('extractVisits', () => {
     });
   });
 
+  it('extracts visits from the iPhone export, a bare array of segments', () => {
+    const visits = extractVisits([
+      {
+        startTime: '2024-09-09T09:00:00.000-07:00',
+        endTime: '2024-09-09T10:00:00.000-07:00',
+        visit: { hierarchyLevel: '0', topCandidate: { semanticType: 'Unknown', placeID: 'ChIJ-park', placeLocation: 'geo:37.5,-122.25' } },
+      },
+      { startTime: '2024-09-09T10:00:00.000-07:00', endTime: '2024-09-09T10:30:00.000-07:00', activity: { distanceMeters: '900' } },
+    ]);
+    expect(visits).toEqual([expect.objectContaining({
+      startTime: '2024-09-09T09:00:00.000-07:00', placeId: 'ChIJ-park', lat: 37.5, lng: -122.25,
+    })]);
+  });
+
   it('returns [] for junk / missing arrays', () => {
     expect(extractVisits(null)).toEqual([]);
     expect(extractVisits({})).toEqual([]);

@@ -10,6 +10,7 @@ import {FileText,
 import { getJiraReport, getJiraReports, generateJiraReport } from '../services/apiSystem.js';
 import { getApps } from '../services/apiApps.js';
 import BrailleSpinner from '../components/BrailleSpinner';
+import { pluralize } from '../lib/textUtils';
 import { copyToClipboard } from '../lib/clipboard';
 
 function ReportCard({ report, onClick, isSelected }) {
@@ -183,7 +184,10 @@ export default function JiraReports() {
     // A failed generation must re-enable the Generate buttons (request() toasts the error).
     const result = await generateJiraReport(appId).catch(() => null);
     if (result) {
-      toast.success(appId ? 'Report generated' : `Generated ${Array.isArray(result) ? result.length : 1} report(s)`);
+      const generated = Array.isArray(result) ? result.length : 1;
+      const missed = appId ? 0 : apps.filter(a => a.jira.instanceId && a.jira.projectKey).length - generated;
+      if (generated > 0 || missed <= 0) toast.success(appId ? 'Report generated' : `Generated ${pluralize(generated, 'report')}`);
+      if (missed > 0) toast.error(`${pluralize(missed, 'project')} could not be reported. Check its JIRA instance.`);
       loadReports();
       if (!Array.isArray(result) && result.appId) {
         // Set the full record directly (avoids a redundant re-fetch — the effect's

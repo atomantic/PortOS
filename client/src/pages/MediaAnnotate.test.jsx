@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Routes, Route, Link } from 'react-router';
+import { useState } from 'react';
+import { createMemoryRouter, RouterProvider, Routes, Route, Link } from 'react-router';
 import MediaAnnotate from './MediaAnnotate';
 import { awaitEnabled } from '../test/enabledBarrier.js';
 
@@ -54,6 +55,12 @@ vi.mock('react-router', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, useNavigate: () => navigate };
 });
+
+// The unsaved-drawing guard needs a data router.
+function MemoryRouter({ initialEntries, children }) {
+  const [router] = useState(() => createMemoryRouter([{ path: '*', element: children }], { initialEntries }));
+  return <RouterProvider router={router} />;
+}
 
 const renderPage = async () => {
   const result = render(
@@ -264,6 +271,29 @@ describe('MediaAnnotate saved-state safety', () => {
     fireEvent.click(screen.getByText('go-a'));
     await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
     expect(screen.getByTitle('Save sketch')).toBeDisabled();
+  });
+
+  it('asks before leaving with unsaved strokes, and leaves freely once they are saved', async () => {
+    getMediaSketch.mockResolvedValue({ sketch: null });
+    render(
+      <MemoryRouter initialEntries={['/media/annotate/sketch:11111111-1111-1111-1111-111111111111']}>
+        <Routes>
+          <Route path="/media/annotate/:mediaKey" element={<MediaAnnotate />} />
+          <Route path="/media/history" element={<div>Media History page</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await awaitEnabled(() => screen.getByTitle('Save sketch'));
+    fireEvent.click(screen.getByText('stub-draw'));
+    fireEvent.click(screen.getByRole('link', { name: 'Media History' }));
+    expect(await screen.findByText('Discard your unsaved sketch?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(screen.getByTestId('stub-canvas')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle('Save sketch'));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith('Sketch saved'));
+    fireEvent.click(screen.getByRole('link', { name: 'Media History' }));
+    expect(await screen.findByText('Media History page')).toBeInTheDocument();
   });
 
   it('keeps an annotated image saveable after Retry (the image does not re-report its size)', async () => {

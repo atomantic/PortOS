@@ -46,6 +46,21 @@ describe('ProviderForm', () => {
     request.mockResolvedValue({ options: [{ key: 'serviceTier', label: 'Speed', values: ['standard', 'fast'] }] });
   });
 
+  it('sends one save for a repeated click and stays open when that save fails', async () => {
+    let fail;
+    api.updateProvider.mockReturnValue(new Promise((_, reject) => { fail = reject; }));
+    const onSave = vi.fn();
+    renderForm({ onSave, provider: { id: 'example', name: 'Example', type: 'cli', command: 'example' } });
+    const save = screen.getByRole('button', { name: 'Save' });
+    fireEvent.click(save);
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    await act(async () => { fail(new Error('offline')); });
+    expect(api.updateProvider).toHaveBeenCalledTimes(1);
+    expect(onSave).not.toHaveBeenCalled();
+    expect(save).toBeEnabled();
+  });
+
   it('requires saved connection settings before offering execution capabilities and keeps old defaults clearable', async () => {
     renderForm({ provider: {
       id: 'example-codex', name: 'Example Codex', type: 'cli', command: 'codex',

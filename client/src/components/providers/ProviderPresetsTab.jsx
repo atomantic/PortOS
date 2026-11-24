@@ -62,6 +62,7 @@ export default function ProviderPresetsTab({
   runOutput,
   runProviderIsTui,
   onExecuteRun,
+  startingRun,
   onStopRun,
   compositionCatalog,
   onCompose,
@@ -270,7 +271,7 @@ export default function ProviderPresetsTab({
           <div className="flex justify-between items-center">
             <button
               onClick={onExecuteRun}
-              disabled={!runPrompt.trim() || !activeProviderId || activeRun}
+              disabled={!runPrompt.trim() || !activeProviderId || activeRun || startingRun}
               className="px-6 py-2 bg-port-success hover:bg-port-success/80 text-white rounded-lg transition-colors disabled:opacity-50"
             >
               {activeRun ? 'Running...' : 'Execute'}

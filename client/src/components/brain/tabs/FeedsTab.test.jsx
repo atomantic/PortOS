@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({
-  getFeeds: vi.fn(), getFeedItems: vi.fn(), removeFeed: vi.fn(),
+  getFeeds: vi.fn(), refreshAllFeeds: vi.fn(), getFeedItems: vi.fn(), removeFeed: vi.fn(),
   markFeedItemRead: vi.fn(), markAllFeedItemsRead: vi.fn(),
 }));
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }));
@@ -89,6 +89,14 @@ describe('FeedsTab rejected mutations', () => {
     await Promise.resolve();
     expect(toast.success).not.toHaveBeenCalled();
     expect(screen.getByText('Example Item')).toBeInTheDocument();
+  });
+
+  it('does not report feeds that could not be fetched as refreshed', async () => {
+    api.refreshAllFeeds.mockResolvedValueOnce({ refreshed: 1, newItems: 0, failures: 1 });
+    render(<FeedsTab />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not refresh 1 feed'));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it('keeps items unread and shows no success toast when markAllFeedItemsRead rejects', async () => {
