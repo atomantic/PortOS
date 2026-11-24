@@ -690,13 +690,12 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
 
       const enforced = run({ CI_GUARD_BUDGET: 'enforce' });
       expect(enforced.status).toBe(1);
-      expect(enforced.stderr).toContain(`❌ Always-run guard over its time budget: ${over}`);
-      // The selected manifest scan shares the scheduled guard pass.
-      expect(ranSets(enforced.stdout)).toEqual([[`../${scheduled}`, `../${guard}`, 'test/guards/repo.guard.test.js'], [`../${other}`]]);
+      expect(enforced.stderr).toContain(`❌ Guard over its time budget: ${over}`);
+      expect(ranSets(enforced.stdout)).toEqual([[`../${guard}`, 'test/guards/repo.guard.test.js'], [`../${scheduled}`], [`../${other}`]]);
 
       const slowScheduled = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: scheduled });
       expect(slowScheduled.status).toBe(1);
-      expect(slowScheduled.stderr).toContain(`${scheduled} 6.5s; ${runner} > fastCheck 4.6s; ${runner} > slowCheck 4.5s over the 4.0s per-guard budget.`);
+      expect(slowScheduled.stderr).toContain(`❌ Guard over its time budget: ${scheduled} 6.5s over the 4.0s per-guard budget.`);
 
       // Without enforcement (PR, push, release, local pregate, Windows, browser) an over-budget guard only warns:
       // it stays in the one normal pass with the rest of the selection and never fails the run.
@@ -704,13 +703,14 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
         const reported = run(extraEnv);
         expect(reported.status, reported.stderr).toBe(0);
         expect(ranSets(reported.stdout)).toEqual([[`../${guard}`, `../${other}`, `../${scheduled}`, 'test/guards/repo.guard.test.js'].sort()]);
-        expect(reported.stdout).toContain(`::warning title=Always-run guard over its time budget::${over}`);
-        expect(reported.stderr).not.toContain('Always-run guard over its time budget');
+        expect(reported.stdout).toContain(`::warning title=Guard over its time budget::${over}`);
+        expect(reported.stderr).not.toContain('Guard over its time budget');
       }
 
       const fast = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: 'no-such-file' });
       expect(fast.status, fast.stderr).toBe(0);
-      expect(fast.stdout).toContain(`⏱️ Always-run guards, slowest of 4: ${scheduled} 0.0s; ${guard} 0.0s; ${runner} > fastCheck 0.0s (budget 4.0s).`);
+      expect(fast.stdout).toContain(`⏱️ Guards, slowest of 3: ${guard} 0.0s; ${runner} > fastCheck 0.0s; ${runner} > slowCheck 0.0s (budget 4.0s).`);
+      expect(fast.stdout).toContain(`⏱️ Guards, slowest of 1: ${scheduled} 0.0s (budget 4.0s).`);
     } finally {
       rmSync(fixture, { recursive: true, force: true });
     }

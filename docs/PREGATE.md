@@ -70,9 +70,9 @@ over the 2.5s per-guard target (`scripts/lib/guardBudget.js`) gets a `🐢` line
 naming it. Local runs, PRs, pushes and releases warn about slow guards.
 The scheduled Linux server job enforces a 4s budget
 (`CI_GUARD_BUDGET=enforce`) and runs the always-run guards in a separate Vitest
-pass. The prompt-stage call-site manifest test joins that pass when selected,
-so its source scan is timed away from the broader test shard. Its selection
-on PRs and pushes follows the usual impact plan.
+pass. When selected, the prompt-stage call-site manifest test gets its own
+budgeted pass so its source scan does not compete with the other scanners or the
+broader test shard. Its selection on PRs and pushes follows the usual impact plan.
 `scripts/ensure-deps.test.js` is selected by changes to `ensure-deps.js`,
 `update.sh`, `update.ps1` and the lockfiles. Persistent test memo rules and
 worker caps still apply.
