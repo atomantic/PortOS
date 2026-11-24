@@ -48,6 +48,7 @@ import { handleCreativeDirectorCompletion } from '../creativeDirector/completion
 import { updateTask, addTask, getTaskById } from '../cos/cosTaskStore.js';
 import { updateAgent } from '../cos/cosAgentLifecycle.js';
 import { settleAuditFindings } from '../auditFindings.js';
+import { emitLog } from '../cos/cosEvents.js';
 
 describe('durable post-ingestion cleanup replay', () => {
   let root;
@@ -181,6 +182,51 @@ describe('durable post-ingestion cleanup replay', () => {
     expect(cleanupAgentWorktree).toHaveBeenCalledTimes(1);
     expect((await saved()).metadata.completionCleanup.status).toBe('completed');
   });
+
+  it.each(['gone', 'checkout', 'registration', 'branch', 'unreadable inventory', 'unreadable path'])(
+    'preserves incomplete audit evidence until its absence can be verified (%s)', async mode => {
+      const checkout = join(root, 'audit-checkout');
+      const branch = 'audit-evidence';
+      await execGit(['worktree', 'add', '-b', branch, checkout], workspace);
+      const auditFindings = { version: 1, status: 'incomplete', finalReportReceived: false };
+      const record = await saved();
+      Object.assign(record.metadata, {
+        auditFindings, workspacePath: checkout, sourceWorkspace: workspace, worktreeBranch: branch, isWorktree: true,
+      });
+      await writeFile(fixture.recordPath, JSON.stringify(record));
+      await finish({ ...task, status: 'completed', metadata: { auditDispositionVersion: '1' } });
+      expect((await saved()).metadata.completionCleanup.status).toBe('pending');
+
+      if (mode === 'registration') await rm(checkout, { recursive: true });
+      else if (mode !== 'checkout') await execGit(['worktree', 'remove', checkout], workspace);
+      if (['gone', 'unreadable inventory', 'unreadable path'].includes(mode)) await execGit(['branch', '-D', branch], workspace);
+      if (mode === 'unreadable inventory') await rm(join(workspace, '.git'), { recursive: true });
+      if (mode === 'unreadable path') {
+        const pending = await saved();
+        pending.metadata.workspacePath = join(marker, 'checkout'); // ENOTDIR, since marker is a file.
+        await writeFile(fixture.recordPath, JSON.stringify(pending));
+      }
+
+      await replayAgentCompletionCleanup(await saved());
+      const after = await saved();
+      expect(after.metadata.auditFindings).toEqual(auditFindings);
+      if (mode === 'gone') {
+        const abandoned = { status: 'abandoned', retryable: false, reason: 'audit-evidence-absent' };
+        expect(after.metadata.completionCleanup).toMatchObject({
+          status: 'failed', stages: { worktree: abandoned, sentinel: abandoned },
+        });
+      } else {
+        expect(after.metadata.completionCleanup).toMatchObject({
+          status: 'pending', stages: { sentinel: { status: 'held' } },
+        });
+        expect(after.metadata.completionCleanup.stages).not.toHaveProperty('worktree');
+      }
+      await replayAgentCompletionCleanup(after);
+      if (mode === 'gone') expect(await saved()).toEqual(after);
+      expect(cleanupAgentWorktree).not.toHaveBeenCalled();
+      expect(emitLog.mock.calls.filter(([level, message]) => level === 'warn' && message.startsWith('Audit disposition incomplete'))).toHaveLength(1);
+    },
+  );
 
   it('settles a blocked audit task when replay verifies its findings, and leaves a moved task alone', async () => {
     const claim = {
