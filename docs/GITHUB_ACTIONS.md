@@ -292,6 +292,10 @@ worktrees may share. The server key hashes the lockfile, both server Vitest
 configs and `scripts/vitestCiPool.js`, plus a per-job/per-shard suffix from the
 `setup-server` caller so parallel saves never race; restore-keys keep it warm
 across a lockfile bump.
+Pull requests only restore the Vitest transform caches and the APT download cache
+(`actions/cache/restore`); push, schedule and dispatch runs save them. A PR-saved
+entry is scoped to its merge ref and is never read again, and those writes had
+pushed the repository past its 10 GB cache limit, evicting main's entries.
 `scripts/run-ci-tests.js`
 writes Vitest wall time to the job summary so later runs can be compared
 against the pre-change full-suite job wall on `main` (2026-08-16, run
