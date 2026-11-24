@@ -637,8 +637,9 @@ function buildClaimOwnershipSection(agentId) {
     'Before this run (the parent, never a fan-out child) creates, adopts or checks out ANY claim worktree, bind that exact branch to this run — the pinned issue’s own `claim/…` branch, a tracking epic’s child, a slice split from an oversized issue, each issue a picker or swarm selects, or a claim worktree you are resuming. Replace BRANCH with the branch name and require a parsed JSON response with bound:true:',
     '```bash', command('bind'), '```',
     'Immediately after creating that worktree, repeat the same bind command and require bound:true BEFORE editing or running work there; a refusal means preserve it and report the blocker.',
-    'A refusal, HTTP/auth/transport error or unreadable JSON means the branch is not yours: do not create or enter that worktree; report the reason. A binding lasts through that branch\'s publication, CI, merge or leave-open handoff and cleanup. Release a branch the moment its own PR/MR is confirmed MERGED and its checkout and local branch are removed, even while this run (a swarm parent, or any run holding several claims) keeps working on others: a later slice of the same issue reuses that branch name and stays refused while you hold it. Also release a branch you deliberately leave for another owner mid-run. Never release an open, unmerged, pending-merge or not-yet-retired branch:',
+    'If bind fails or is unreadable, do not create or enter that worktree. Report it. Release a branch the moment its own PR/MR is confirmed MERGED and its checkout and local branch are removed, freeing the name for a later slice:',
     '```bash', command('release'), '```',
+    'Keep a merged branch bound if you are leaving its checkout for PortOS to clean up at completion. `checkout-present` is expected and needs no retry. Keep open or unmerged branches bound. Add `"handoff":true` to the release JSON only when another owner is taking over mid-run.',
   ].join('\n');
 }
 

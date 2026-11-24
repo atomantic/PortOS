@@ -18,7 +18,7 @@ import { isDeliveryCleanupHeld, retryHoldOwnerId } from '../lib/taskRetryHold.js
 import { getDeliveryActivity } from '../services/agent/agentDeliveryActivity.js';
 import { securityScanRequestSchema } from '../lib/securityScanEvidence.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { resumeCosAgentSchema, relaunchCosAgentSchema, cosAgentFeedbackBodySchema, cosAgentBtwBodySchema } from '../lib/cos/cosValidation.js';
+import { resumeCosAgentSchema, relaunchCosAgentSchema, cosAgentFeedbackBodySchema, cosAgentBtwBodySchema, claimOwnershipSchema } from '../lib/cos/cosValidation.js';
 
 import { releasePublicationRequestSchema, releaseCandidateRequestSchema } from '../lib/releasePublication.js';
 import { updateReleaseSynchronizationOwnership, updateReleaseCandidateOwnership, updateClaimOwnership, checkReconcileOwnership } from '../services/cos/cosClaimOwnership.js';
@@ -73,18 +73,6 @@ router.post('/merge-handoff', asyncHandler(async (req, res) => {
 
 // A claim run binds (or hands off) the concrete branch it checks out; a
 // branch-reconcile worker rechecks live ownership right before mutating (#10089).
-const claimBranchSchema = z.string().min(1).max(200);
-const claimOwnershipSchema = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('bind'), agentId: z.string().min(1).max(200), branch: claimBranchSchema }),
-  z.object({ action: z.literal('release'), agentId: z.string().min(1).max(200), branch: claimBranchSchema }),
-  z.object({
-    action: z.literal('check'),
-    appId: z.string().min(1).max(200),
-    branch: claimBranchSchema,
-    worktreePath: z.string().min(1).max(4096).optional(),
-    agentId: z.string().min(1).max(200).optional(),
-  }),
-]);
 router.post('/claim-ownership', asyncHandler(async (req, res) => {
   const input = validateRequest(claimOwnershipSchema, req.body ?? {});
   res.json(input.action === 'check' ? await checkReconcileOwnership(input) : await updateClaimOwnership(input));
