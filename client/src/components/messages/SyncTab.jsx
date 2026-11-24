@@ -366,13 +366,15 @@ export default function SyncTab({ accounts, onRefresh, accountsUnavailable = fal
                 <div>
                   <div className="text-sm font-medium text-white capitalize">{status.provider}</div>
                   <div className="text-xs text-gray-500">
-                    {status.hasToken ? (
-                      <span className="text-port-success">Token present</span>
+                    {status.cached ? (
+                      <span className={status.valid ? 'text-port-success' : 'text-port-warning'}>
+                        {status.valid ? 'Token present' : 'Token expired'}
+                      </span>
                     ) : (
                       <span className="text-gray-500">No token</span>
                     )}
-                    {status.expiresAt && (
-                      <span className="ml-2">Expires: {formatDateTime(status.expiresAt)}</span>
+                    {status.cached && status.expires && status.expires !== 'unknown' && (
+                      <span className="ml-2">Expires: {formatDateTime(status.expires)}</span>
                     )}
                   </div>
                 </div>
@@ -385,7 +387,7 @@ export default function SyncTab({ accounts, onRefresh, accountsUnavailable = fal
                   >
                     <TestTube size={12} /> Test token
                   </button>
-                  {status.hasToken && (
+                  {status.cached && (
                     <button
                       onClick={() => handleClearToken(status.provider)}
                       disabled={clearingTokens[status.provider]}

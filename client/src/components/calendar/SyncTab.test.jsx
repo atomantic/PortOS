@@ -150,7 +150,18 @@ describe('Calendar sync lifecycle', () => {
 });
 
 describe('Calendar token clearing', () => {
-  const present = { providers: [{ provider: 'outlook', hasToken: true }] };
+  const present = { providers: [{ provider: 'outlook', cached: true, valid: true, expires: '2026-11-21T12:00:00.000Z' }] };
+
+  it('offers Clear for an expired token with unknown expiry', async () => {
+    api.getCalendarTokenStatus.mockResolvedValue({
+      providers: [{ provider: 'outlook', cached: true, valid: false, expires: 'unknown' }],
+    });
+    render(<SyncTab accounts={[account]} onRefresh={vi.fn()} />);
+
+    expect(await screen.findByText('Token expired')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Clear' })).toBeTruthy();
+    expect(screen.queryByText(/Expires:/)).toBeNull();
+  });
 
   it('requires inline confirmation naming the provider and Messages before clearing, and allows cancel', async () => {
     api.getCalendarTokenStatus.mockResolvedValue(present);
@@ -165,6 +176,7 @@ describe('Calendar token clearing', () => {
     expect(screen.queryByText(/shared with Messages/)).toBeNull();
     expect(api.clearCalendarToken).not.toHaveBeenCalled();
     expect(screen.getByText('Token present')).toBeTruthy();
+    expect(screen.getByText(/Expires:/)).toBeTruthy();
   });
 
   it('blocks duplicate clears and refreshes only after a bodyless success', async () => {
@@ -173,7 +185,7 @@ describe('Calendar token clearing', () => {
     api.clearCalendarToken.mockImplementation(() => new Promise(done => { resolve = done; }));
     render(<SyncTab accounts={[account]} onRefresh={vi.fn()} />);
     const button = await screen.findByRole('button', { name: 'Clear' });
-    api.getCalendarTokenStatus.mockResolvedValue({ providers: [{ provider: 'outlook', hasToken: false }] });
+    api.getCalendarTokenStatus.mockResolvedValue({ providers: [{ provider: 'outlook', cached: false }] });
     fireEvent.click(button);
     fireEvent.click(screen.getByRole('button', { name: 'Clear token' }));
     expect(button).toBeDisabled();
@@ -184,6 +196,7 @@ describe('Calendar token clearing', () => {
 
     await act(async () => resolve(undefined));
     await screen.findByText('No token');
+    expect(screen.queryByRole('button', { name: 'Clear' })).toBeNull();
     expect(toast.success).toHaveBeenCalledExactlyOnceWith('outlook token cleared');
     expect(api.getCalendarTokenStatus).toHaveBeenCalledTimes(2);
   });
@@ -213,7 +226,7 @@ describe('Token status load failure', () => {
   it('calls getCalendarTokenStatus silently, renders ListLoadError with Retry, and recovers on retry', async () => {
     api.getCalendarTokenStatus
       .mockRejectedValueOnce(new Error('Token service unavailable'))
-      .mockResolvedValueOnce({ providers: [{ provider: 'outlook', hasToken: true }] });
+      .mockResolvedValueOnce({ providers: [{ provider: 'outlook', cached: true, valid: true, expires: '2026-11-21T12:00:00.000Z' }] });
     render(<MemoryRouter><SyncTab accounts={[account]} onRefresh={vi.fn()} /></MemoryRouter>);
 
     expect(await screen.findByText(/Could not load token status — Token service unavailable/)).toBeTruthy();
@@ -229,7 +242,7 @@ describe('Token status load failure', () => {
 describe('SyncTab narrow-viewport layout', () => {
   it('applies flex-wrap and min-w-0 on account, sync-progress, and token status rows', async () => {
     api.getCalendarTokenStatus.mockResolvedValue({
-      providers: [{ provider: 'google-calendar-with-long-name', hasToken: true }],
+      providers: [{ provider: 'google-calendar-with-long-name', cached: true, valid: true, expires: '2026-11-21T12:00:00.000Z' }],
     });
     const longAccount = {
       ...account,
