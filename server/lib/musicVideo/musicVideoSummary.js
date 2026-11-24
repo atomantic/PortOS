@@ -11,11 +11,11 @@
  * / spend / preview rules mirror `client/src/lib/musicVideoStages.js` and
  * `musicVideoPreview.js`, which still derive them for a full record.
  */
-import { composedDrawsLyrics, isLayeredComposition, sceneRenderReady } from './musicVideoLayers.js';
 import { latestMusicVideoReviewDraft } from './musicVideoReviewDraft.js';
 import { supersededStillsCheckpoint } from './musicVideoAutonomous.js';
-import { finishedOutsideCovers } from './musicVideoFinishedOutside.js';
-import { blenderShotsReady } from './musicVideoBlender.js';
+import { currentRun, selectCurrentStage, shotsFacts } from './musicVideoStageSelection.js';
+
+export { currentRun };
 import { projectSpend } from './musicVideoSpend.js';
 import { musicVideoCompletionOverride } from './musicVideoCompletion.js';
 
@@ -37,34 +37,12 @@ function isLyricAlignStale(project) {
 }
 
 
-// The required steps in order (Song, Plan, Look, Shots, Final render, Publish); the optional Story is never "current".
-const STAGE_IDS = ['setup', 'board', 'cast-sets', 'produce', 'review', 'publish'];
 // Plan comes before Look, so the storyboard gate's art prerequisite does not hold Plan open (mirrors the client's deriveStages).
 const ART_APPROVAL_PROBLEM = /^Review and approve the current art direction/;
-const RESUMABLE_RUN_STATUSES = new Set(['running', 'stopped', 'limit-reached', 'blocked', 'needs-replan']);
-const FOOTAGE_OPTIONAL_MODES = new Set(['code', 'document', 'eidoverse', 'blender']);
 
 const nonEmptyString = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 const imageSrc = (assetId) => (/^(https?:|data:|blob:)/i.test(assetId) || assetId.startsWith('/') ? assetId : `/data/images/${assetId}`);
 const imageFallback = (assetId) => (assetId.includes('.') ? null : `/data/images/${assetId}.png`);
-
-/** The live production run, else the latest: the run whose cap and status a project shows. */
-export const currentRun = (project) => {
-  const runs = Array.isArray(project.productionRuns) ? project.productionRuns : [];
-  return runs.find((r) => RESUMABLE_RUN_STATUSES.has(r.status)) || runs[runs.length - 1] || null;
-};
-
-function composeDone(project, mode) {
-  const composition = project.composition || {};
-  if (mode === 'composed') return composition.noTypography === true || (composition.textCues || []).length > 0 || composedDrawsLyrics(project);
-  if (mode === 'document') return Boolean(composition.document);
-  if (mode === 'eidoverse') return Boolean(composition.eidoverseScene?.inlineScript);
-  // A Blender film's shots are done when each has a complete, current final render. The renders
-  // are on this machine's disk, so the server attaches the count at read time (`blenderShots`).
-  if (mode === 'blender') return blenderShotsReady(project.blenderShots);
-  if (mode === 'code') return Boolean(composition.codeVideo?.generatedAt || (composition.codeVideo?.sections || []).length > 0);
-  return true;
-}
 
 // Song is done once its lyrics are in and their timing verified, or the song
 // is an explicit instrumental — mirrors the client's lyricSetupState.
@@ -77,26 +55,20 @@ function lyricsReady(project, readiness) {
   return Boolean(readiness?.storyboard?.approved) || ((instrumental || lines > 0) && verified);
 }
 
-// The first step not yet done; a live production run pins Make.
+// The first step not yet done; a live production run pins Make. Footage, run and shot-sheet rules are shared with the client.
 function currentStage(project, readiness, run) {
-  if (run && RESUMABLE_RUN_STATUSES.has(run.status)) return 'produce';
   const scenes = project.scenes || [];
-  const mode = project.composition?.mode || 'concat';
-  const layered = isLayeredComposition(project);
   const planned = Boolean(readiness?.storyboard?.approved);
-  const footageReady = FOOTAGE_OPTIONAL_MODES.has(mode) || scenes.every((scene) => sceneRenderReady(scene, { layered, scenes }));
-  const done = {
+  const { produceDone, liveRun } = shotsFacts(project, { planned, run });
+  return selectCurrentStage(project, {
     setup: Boolean(project.trackId || project.uploadedAudioFilename) && Boolean(project.audioAnalysis) && lyricsReady(project, readiness),
     'cast-sets': Boolean(readiness?.art?.approved),
     board: !project.storyboardReopenedAt && (planned || (scenes.length > 0 && Boolean(readiness) && !(readiness.storyboard?.problems || []).some((text) => !ART_APPROVAL_PROBLEM.test(text)))),
-    // Make needs footage and the composition over it; the animated proof is optional (mirrors the client's deriveStages).
-    produce: planned && footageReady && composeDone(project, mode),
+    produce: produceDone,
     // A render made before later scene edits no longer counts as the final video — mirrors the client's isFinalRenderStale.
     review: Boolean(project.renderHistoryId) && project.renderDependencyState?.status !== 'stale',
     publish: Object.keys(project.publishKit?.posts || {}).length > 0,
-  };
-  // Finished outside PortOS — mirrors the client's deriveStages.
-  return STAGE_IDS.find((id) => !done[id] && !finishedOutsideCovers(project, id)) || 'publish';
+  }, { liveRun });
 }
 
 function projectPreview(project) {
