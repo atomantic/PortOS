@@ -116,18 +116,24 @@ describe('Autofixer process-control authority', () => {
     expect(harness.execPm2.mock.calls).toEqual([[['delete', '9']], [['save']]]);
   });
 
-  it('returns sanitized unavailability for app reads and blocks controls before PM2', async () => {
+  it('returns sanitized unavailability for app reads and blocks controls and logs before PM2', async () => {
     await loadUi();
     harness.loadApps.mockRejectedValue(Object.assign(new Error('App registry unavailable'), { code: 'APPS_UNAVAILABLE' }));
     const errorBoundary = harness.gates.find(handler => handler.length === 4);
-    for (const path of ['/api/apps', '/api/restart/:process', '/api/stop/:process']) {
+    for (const [path, req] of [
+      ['/api/apps', { params: {} }],
+      ['/api/restart/:process', { params: { process: 'example-process' } }],
+      ['/api/stop/:process', { params: { process: 'example-process' } }],
+      ['/logs', { query: { process: 'example-process' } }],
+    ]) {
       const handler = harness.routes.get(path).at(-1);
       const res = response();
-      await handler({ params: { process: 'example-process' } }, res).catch(error => errorBoundary(error, {}, res, vi.fn()));
+      await handler(req, res).catch(error => errorBoundary(error, {}, res, vi.fn()));
       expect(res.statusCode).toBe(503);
       expect(res.body).toEqual({ error: 'App registry unavailable', code: 'APPS_UNAVAILABLE' });
     }
     expect(harness.execPm2).not.toHaveBeenCalled();
+    expect(harness.spawn).not.toHaveBeenCalled();
   });
 
   it('gates both staged patch actions before touching session files', async () => {
@@ -210,7 +216,7 @@ describe('Autofixer process-control authority', () => {
 });
 
 
-describe('Autofixer log child lifecycle', () => {
+describe('Autofixer log child lifecycle and authority', () => {
   const child = () => {
     const proc = new EventEmitter();
     proc.stdout = Object.assign(new EventEmitter(), { destroy: vi.fn() });
@@ -219,16 +225,112 @@ describe('Autofixer log child lifecycle', () => {
     proc.unref = vi.fn();
     return proc;
   };
-  const openLogs = (query = {}) => {
-    const req = Object.assign(new EventEmitter(), { query });
+  const nextSpawn = (proc) => {
+    let resolve;
+    const spawned = new Promise((r) => { resolve = r; });
+    harness.spawn.mockImplementationOnce((...args) => {
+      resolve(args);
+      return proc;
+    });
+    return spawned;
+  };
+  const openLogs = (query = {}, { address = '127.0.0.1', headers = {} } = {}) => {
+    const req = Object.assign(new EventEmitter(), {
+      path: '/logs',
+      query,
+      headers,
+      socket: { remoteAddress: address },
+    });
     const res = Object.assign(new EventEmitter(), response(), { write: vi.fn(), end: vi.fn() });
     res.status = (code) => { res.statusCode = code; return res; };
     res.json = (body) => { res.body = body; return res; };
-    const done = harness.routes.get('/logs')[0](req, res);
+    const handlers = [...harness.gates.filter(handler => handler.length !== 4), ...harness.routes.get('/logs')];
+    const done = (async () => {
+      for (const handler of handlers) {
+        let nexted = false;
+        await handler(req, res, () => { nexted = true; });
+        if (!nexted) break;
+      }
+    })();
     return { req, res, done };
   };
 
-  it('refuses an option-shaped or repeated process name before spawning pm2', async () => {
+  it('refuses remote, forged forwarding, remote dev-proxy, and originless cross-site callers before spawn', async () => {
+    await loadUi();
+    for (const [address, headers] of [
+      ['192.0.2.10', {}],
+      ['192.0.2.10', { 'x-portos-dev-proxy-client-address': '127.0.0.1', 'x-forwarded-for': '127.0.0.1' }],
+      ['127.0.0.1', { 'x-portos-dev-proxy-client-address': '192.0.2.10' }],
+      ['127.0.0.1', { host: 'localhost:5560', 'sec-fetch-site': 'cross-site' }],
+      ['127.0.0.1', { host: 'localhost:5560', 'sec-fetch-site': 'same-site' }],
+    ]) {
+      const { res, done } = openLogs({ process: 'example-process' }, { address, headers });
+      await done;
+      expect(res.statusCode).toBe(403);
+      expect(res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+      expect(res.write).not.toHaveBeenCalled();
+    }
+    expect(harness.spawn).not.toHaveBeenCalled();
+  });
+
+  it('refuses Basic-auth-only and originless cross-site session GETs while allowing primary, sidecar, and Bearer agent sessions', async () => {
+    await loadUi(true);
+    const basic = `Basic ${Buffer.from(`:${PASSWORD}`).toString('base64')}`;
+    for (const headers of [
+      { authorization: basic },
+      { host: 'localhost:5560', cookie: 'portos_auth_5555=example-session', 'sec-fetch-site': 'cross-site' },
+      { host: 'localhost:5560', cookie: 'portos_auth_5555=example-session', 'sec-fetch-site': 'same-site' },
+    ]) {
+      const { res, done } = openLogs({ process: 'example-process' }, { address: '127.0.0.1', headers });
+      await done;
+      expect(res.statusCode).toBe(403);
+      expect(res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+      expect(res.write).not.toHaveBeenCalled();
+    }
+    expect(harness.spawn).not.toHaveBeenCalled();
+
+    const loginRes = response();
+    await harness.auth.handleLogin({ headers: {}, body: { password: PASSWORD } }, loginRes);
+    const sidecarCookie = loginRes.headers['Set-Cookie'].split(';')[0];
+
+    for (const [headers, query] of [
+      [{ host: 'portos.example.ts.net:5560', cookie: 'portos_auth_5555=example-session', 'sec-fetch-site': 'same-origin' }, { process: 'example-process' }],
+      [{ host: 'portos.example.ts.net:5560', cookie: sidecarCookie, 'sec-fetch-site': 'same-origin' }, {}],
+      [{ authorization: 'Bearer example-session' }, { process: 'example-process' }],
+      [{ authorization: 'Bearer example-session' }, {}],
+    ]) {
+      const initial = child();
+      const spawned = nextSpawn(initial);
+      const { res, done } = openLogs(query, { address: '192.0.2.10', headers });
+      await spawned;
+      initial.emit('close', 1);
+      await done;
+      expect(res.statusCode).toBe(200);
+      expect(res.write.mock.calls[0][0]).toBe(': connected\n\n');
+    }
+    expect(harness.spawn).toHaveBeenCalledTimes(4);
+  }, 30_000);
+
+  it('allows genuine loopback password-free browsers and dev-proxy origins to stream logs', async () => {
+    await loadUi();
+    for (const [address, headers] of [
+      ['127.0.0.1', { host: 'localhost:5560', 'sec-fetch-site': 'same-origin' }],
+      ['::1', { host: 'localhost:5560', 'sec-fetch-site': 'none' }],
+      ['::ffff:127.0.0.1', { origin: 'http://localhost:5554', host: 'localhost:5560', 'sec-fetch-site': 'same-site' }],
+    ]) {
+      const initial = child();
+      const spawned = nextSpawn(initial);
+      const { res, done } = openLogs({}, { address, headers });
+      await spawned;
+      initial.emit('close', 1);
+      await done;
+      expect(res.statusCode).toBe(200);
+      expect(res.write.mock.calls[0][0]).toBe(': connected\n\n');
+    }
+    expect(harness.spawn).toHaveBeenCalledTimes(3);
+  });
+
+  it('refuses an option-shaped, repeated, or unregistered process name before spawning pm2', async () => {
     await loadUi();
     for (const name of ['--no-daemon', '-s', ['example-process', '--json']]) {
       const { res, done } = openLogs({ process: name });
@@ -237,14 +339,20 @@ describe('Autofixer log child lifecycle', () => {
       expect(res.body).toMatchObject({ code: 'INVALID_PROCESS_NAME' });
       expect(res.write).not.toHaveBeenCalled();
     }
+    const { res, done } = openLogs({ process: 'unregistered-process' });
+    await done;
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toEqual({ error: 'Unknown process', code: 'UNKNOWN_PROCESS' });
+    expect(res.write).not.toHaveBeenCalled();
     expect(harness.spawn).not.toHaveBeenCalled();
   });
 
-  it('streams a named process as the positional pm2 argument', async () => {
+  it('streams a named registered process as the positional pm2 argument', async () => {
     await loadUi();
     const initial = child();
-    harness.spawn.mockReturnValue(initial);
+    const spawned = nextSpawn(initial);
     const { done } = openLogs({ process: 'example-process' });
+    await spawned;
     initial.emit('close', 1);
     await done;
     expect(harness.spawn.mock.calls[0][1].slice(0, 3)).toEqual(['example-pm2', 'logs', 'example-process']);
@@ -253,8 +361,9 @@ describe('Autofixer log child lifecycle', () => {
   it('reports an initial spawn error and ends SSE without starting a live stream', async () => {
     await loadUi();
     const initial = child();
-    harness.spawn.mockReturnValue(initial);
+    const spawned = nextSpawn(initial);
     const { res, done } = openLogs();
+    await spawned;
     initial.emit('error', new Error('example spawn failure'));
     initial.emit('close', -1);
     await done;
@@ -268,8 +377,9 @@ describe('Autofixer log child lifecycle', () => {
     await loadUi();
     vi.useFakeTimers();
     const initial = child();
-    harness.spawn.mockReturnValue(initial);
+    const spawned = nextSpawn(initial);
     const { res, done } = openLogs();
+    await spawned;
     res.destroyed = true;
     res.emit('close');
     await vi.advanceTimersByTimeAsync(2000);
@@ -287,11 +397,13 @@ describe('Autofixer log child lifecycle', () => {
     vi.useFakeTimers();
     const initial = child();
     const live = child();
-    harness.spawn.mockReturnValueOnce(initial).mockReturnValueOnce(live);
+    const initialSpawned = nextSpawn(initial);
+    const liveSpawned = nextSpawn(live);
     const { req, res, done } = openLogs();
+    await initialSpawned;
     initial.stdout.emit('data', 'initial log\n');
     initial.emit('close', 0);
-    await Promise.resolve();
+    await liveSpawned;
     // A completed request body does not close an SSE response.
     req.emit('close');
     live.stdout.emit('data', 'live log\n');
