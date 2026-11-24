@@ -14,7 +14,8 @@
  *   - On-device Timeline export (2024+): a top-level `{ semanticSegments: [{
  *     startTime, endTime, visit: { topCandidate: { placeId, semanticType,
  *     placeLocation: { latLng } } } }] }`, where `latLng` is a
- *     `"37.4°, -122.0°"` (or `"geo:lat,lng"`) string.
+ *     `"37.4°, -122.0°"` string. The iPhone app writes the same segments as a
+ *     bare top-level array, with `placeID` and `placeLocation: "geo:lat,lng"`.
  *
  * We map every place VISIT (not travel/activity segments) to a `place.visit`
  * activity event under source `location`. Travel segments carry no
@@ -186,13 +187,15 @@ function normalizeClassicPlaceVisit(placeVisit) {
 function normalizeSegmentVisit(segment) {
   if (!segment || typeof segment !== 'object' || !segment.visit) return null;
   const cand = segment.visit.topCandidate || {};
-  const { lat, lng } = resolveLatLng({ latLng: cand.placeLocation?.latLng }) || {};
+  // iOS writes the location as a bare `geo:` string and spells the id `placeID`.
+  const latLng = typeof cand.placeLocation === 'string' ? cand.placeLocation : cand.placeLocation?.latLng;
+  const { lat, lng } = resolveLatLng({ latLng }) || {};
   return {
     startTime: segment.startTime ?? null,
     endTime: segment.endTime ?? null,
     name: cand.name || null,
     address: cand.address || null,
-    placeId: cand.placeId || null,
+    placeId: cand.placeId || cand.placeID || null,
     semanticType: cand.semanticType || null,
     lat: lat ?? null,
     lng: lng ?? null,
@@ -213,8 +216,14 @@ export function extractVisits(parsed) {
       }
     }
   }
-  if (Array.isArray(parsed.semanticSegments)) {
-    for (const seg of parsed.semanticSegments) {
+  const segments = Array.isArray(parsed) ? parsed : parsed.semanticSegments;
+  if (Array.isArray(segments)) {
+    for (const seg of segments) {
+      if (seg?.placeVisit) {
+        const classic = normalizeClassicPlaceVisit(seg.placeVisit);
+        if (classic) out.push(classic);
+        continue;
+      }
       const v = normalizeSegmentVisit(seg);
       if (v) out.push(v);
     }
