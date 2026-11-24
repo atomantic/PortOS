@@ -1382,7 +1382,7 @@ describe('supportsModelRefresh', () => {
       // but the cached catalog is first-party ids, so a refresh would overwrite
       // the Bedrock catalog and strand defaultModel. The card keeps the stored list.
       'claude-ollama', 'claude-ollama-tui',
-      'claude-sglang', 'claude-sglang-tui', 'codex', 'codex-lmstudio',
+      'claude-sglang', 'claude-sglang-tui', 'claude-splash', 'codex', 'codex-lmstudio',
       'codex-ollama', 'codex-tui',
       'cursor-cli',
       'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-nim', 'ollama',
@@ -1393,7 +1393,7 @@ describe('supportsModelRefresh', () => {
       'opencode-ollama',
       'opencode-ollama-tui', 'opencode-openrouter', 'opencode-openrouter-tui',
       'opencode-orcarouter', 'opencode-orcarouter-tui',
-      'opencode-sglang', 'opencode-sglang-tui',
+      'opencode-sglang', 'opencode-sglang-tui', 'opencode-splash',
       'opencode-vllm', 'opencode-vllm-tui',
       // The Zen API record is an ordinary OpenAI-compatible endpoint. Its CLI/TUI
       // wrappers are deliberately ABSENT: they carry no namespace marker, which
@@ -1401,7 +1401,7 @@ describe('supportsModelRefresh', () => {
       // provider — nothing here can enumerate that, and Models → Harnesses
       // ("Refresh models") is where their catalog comes from instead.
       'opencode-zen',
-      'openrouter', 'orcarouter', 'pi-cli', 'pi-tui', 'slotstream',
+      'openrouter', 'orcarouter', 'pi-cli', 'pi-tui', 'slotstream', 'splash',
     ]);
   });
 });

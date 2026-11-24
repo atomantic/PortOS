@@ -31,6 +31,7 @@ import {
   pullMtplxModel,
   removeMtplxModel,
   getSlotstreamServerStatus,
+  getSplashRuntimeStatus,
   startSlotstreamServer,
   stopSlotstreamServer,
   installSlotstream,
@@ -45,6 +46,7 @@ import SpecDecodeWeightRow from './SpecDecodeWeightRow.jsx';
 import RuntimeServersCard from './RuntimeServersCard.jsx';
 import MtplxServerCard from './MtplxServerCard.jsx';
 import SlotstreamServerCard from './SlotstreamServerCard.jsx';
+import SplashRuntimeCard from './SplashRuntimeCard.jsx';
 import HardwareLlmRecommendation from './HardwareLlmRecommendation.jsx';
 import LocalPersistentMindSetupCard from './LocalPersistentMindSetupCard.jsx';
 import LocalLlmBackendCard from './LocalLlmBackendCard.jsx';
@@ -107,7 +109,7 @@ function summarizeMigrate(r) {
 export default function LocalLlmRuntimesView({ view } = {}) {
   const navigate = useNavigate();
   const { search } = useLocation();
-  const runtimeIds = ['ollama', 'lmstudio', 'llama', 'mtplx', 'slotstream', 'fleet-host'];
+  const runtimeIds = ['ollama', 'lmstudio', 'llama', 'mtplx', 'slotstream', 'splash', 'fleet-host'];
   const selectedRuntime = runtimeIds.includes(view) ? view : null;
   const selectRuntime = (id) => navigate(`/models/llms-runtimes${id ? '/' + id : ''}${search}`);
   const detailHeading = useRef(null);
@@ -123,6 +125,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
   const [llamaStatus, setLlamaStatus] = useState(null);
   const [mtplxStatus, setMtplxStatus] = useState(null);
   const [slotstreamStatus, setSlotstreamStatus] = useState(null);
+  const [splashStatus, setSplashStatus] = useState(null);
   // The dedicated Qwen host is a docker container rather than a PM2 process, so
   // it is not part of the shared local-LLM status payload — but it IS a local
   // model server, and this is the page an operator comes to when they want to
@@ -216,7 +219,13 @@ export default function LocalLlmRuntimesView({ view } = {}) {
       .catch(() => null)
   ), []);
 
-  // The three managed runtimes refresh alongside the shared status, so one
+  const loadSplashStatus = useCallback(() => (
+    getSplashRuntimeStatus({ silent: true })
+      .then((res) => setSplashStatus(res ?? null))
+      .catch(() => setSplashStatus(null))
+  ), []);
+
+  // The runtime rows refresh alongside the shared status, so one
   // Refresh — or one completed action — repaints every row on this view.
   const loadFleetHostStatus = useCallback(() => (
     getFleetLlmHost({ silent: true })
@@ -232,7 +241,8 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     loadMtplxStatus();
     loadSlotstreamStatus();
     loadFleetHostStatus();
-  }, [loadLlamaStatus, loadMtplxStatus, loadSlotstreamStatus, loadFleetHostStatus]);
+    loadSplashStatus();
+  }, [loadLlamaStatus, loadMtplxStatus, loadSlotstreamStatus, loadFleetHostStatus, loadSplashStatus]);
   const {
     status, loading, loadStatus, runAction, installBackend: installRuntimeBackend,
     actionInProgress, busy, progressMsg, confirmAction, setConfirmAction,
@@ -792,6 +802,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
         llamaStatus={llamaStatus}
         mtplxStatus={mtplxStatus}
         slotstreamStatus={slotstreamStatus}
+        splashStatus={splashStatus}
         loading={loading}
         busy={busy}
         actionInProgress={actionInProgress}
@@ -894,6 +905,8 @@ export default function LocalLlmRuntimesView({ view } = {}) {
           <p className="text-sm text-gray-500">Unable to load local LLM status</p>
         )}
       </div>
+
+      {selectedRuntime === 'splash' && <SplashRuntimeCard status={splashStatus} onRefresh={loadSplashStatus} />}
 
       {/* Slotstream — PM2-managed SSD-streaming MoE runtime (Apple Silicon) */}
       <div hidden={selectedRuntime !== 'slotstream'}>

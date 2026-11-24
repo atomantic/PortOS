@@ -24,6 +24,8 @@ const STATE_META = {
   unknown: { label: 'Status unavailable', cls: 'bg-gray-500/20 text-gray-400', dot: 'bg-gray-500' },
   running: { label: 'Running', cls: 'bg-port-success/20 text-port-success', dot: 'bg-port-success animate-pulse' },
   external: { label: 'Running (external)', cls: 'bg-blue-500/20 text-blue-300', dot: 'bg-blue-400' },
+  'not-ready': { label: 'Not ready', cls: 'bg-port-warning/20 text-port-warning', dot: 'bg-port-warning' },
+  unrecognized: { label: 'Endpoint not verified', cls: 'bg-port-warning/20 text-port-warning', dot: 'bg-port-warning' },
   stopped: { label: 'Stopped', cls: 'bg-port-warning/20 text-port-warning', dot: 'bg-port-warning' },
   missing: { label: 'Not installed', cls: 'bg-gray-500/20 text-gray-400', dot: 'bg-gray-500' },
   disabled: { label: 'Disabled', cls: 'bg-gray-500/20 text-gray-400', dot: 'bg-gray-600' },
@@ -332,6 +334,7 @@ export default function RuntimeServersCard({
   llamaStatus,
   mtplxStatus,
   slotstreamStatus,
+  splashStatus,
   loading,
   busy,
   actionInProgress,
@@ -456,6 +459,15 @@ export default function RuntimeServersCard({
           && `${formatCount(slotstreamStatus.cachedModels.length)} checkpoint${slotstreamStatus.cachedModels.length === 1 ? '' : 's'} cached`,
       ].filter(Boolean).join(' · ') || null,
     }),
+    {
+      id: 'splash',
+      label: 'Splash',
+      icon: Zap,
+      state: splashStatus?.state ?? 'unknown',
+      endpoint: splashStatus?.endpoint,
+      model: splashStatus?.model,
+      detail: splashStatus?.supported === false ? 'Requires macOS 26.4+ on Apple M3 or later' : 'Started in a terminal',
+    },
     // Last, and only once its status has landed: an absent payload would
     // otherwise render a "Not installed" row for a host that is serving.
     ...(fleetHostStatus ? [fleetHostRow({ status: fleetHostStatus, onStop: onStopFleetHost })] : []),
@@ -482,7 +494,7 @@ export default function RuntimeServersCard({
       <div className="space-y-2">
         {rows.map((row) => (
           <ServerRow key={row.id} row={row} busy={busy} actionInProgress={actionInProgress} selected={selectedRuntime === row.id}>
-            {onSelectRuntime && (row.id === 'ollama' || row.id === 'lmstudio' || row.id === 'fleet-host') && (
+            {onSelectRuntime && (row.id === 'ollama' || row.id === 'lmstudio' || row.id === 'fleet-host' || row.id === 'splash') && (
               <button onClick={() => onSelectRuntime(row.id)} className={neutralBtn} aria-pressed={selectedRuntime === row.id}><Settings2 size={12} />Configure</button>
             )}
             {row.id === 'fleet-host' && (

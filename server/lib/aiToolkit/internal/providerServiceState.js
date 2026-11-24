@@ -382,6 +382,7 @@ export function createProviderServiceState(config = {}) {
       ...(providerData.llamaBacked === true ? { llamaBacked: true } : {}),
       ...(providerData.vllmBacked === true ? { vllmBacked: true } : {}),
       ...(providerData.sglangBacked === true ? { sglangBacked: true } : {}),
+      ...(providerData.splashBacked === true ? { splashBacked: true } : {}),
       ...(typeof providerData.gatewayBacked === 'string' && providerData.gatewayBacked ? { gatewayBacked: providerData.gatewayBacked } : {}),
       ...(providerData.orcarouterBacked === true ? { orcarouterBacked: true } : {}),
       ...(modelAccess ? { modelAccess } : {}),

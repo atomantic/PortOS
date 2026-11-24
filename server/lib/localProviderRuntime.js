@@ -94,6 +94,16 @@ export const LOCAL_RUNTIMES = Object.freeze({
     // One container, one checkpoint; the recipe picks the repo from the card class.
     servesOneModel: true,
   }),
+  splash: Object.freeze({
+    id: 'splash',
+    label: 'Splash',
+    command: 'splash',
+    defaultBaseUrl: opencodeLocalBaseUrl('splash'),
+    manageUrl: LOCAL_RUNTIME_MANAGE_URLS.splash,
+    docsUrl: 'https://github.com/incoai/splash/blob/1.7.2/docs/server.md',
+    modelsHint: 'Start Splash in a terminal using the command on {page} and wait for its model to load.',
+    servesOneModel: true,
+  }),
   slotstream: Object.freeze({
     id: 'slotstream',
     label: 'Slotstream',

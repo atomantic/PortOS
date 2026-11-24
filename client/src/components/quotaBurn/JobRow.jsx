@@ -34,7 +34,7 @@ function providersForFamily(providers, familyId) {
     && provider?.ollamaBacked !== true && provider?.lmstudioBacked !== true
     && provider?.mtplxBacked !== true
     && provider?.llamaBacked !== true && provider?.vllmBacked !== true
-    && provider?.sglangBacked !== true
+    && provider?.sglangBacked !== true && provider?.splashBacked !== true
     && (provider?.type === 'cli' || provider?.type === 'tui')
     && (commandBasename(provider?.command) === familyId
       || String(provider?.id || '').toLowerCase().includes(familyId || '')

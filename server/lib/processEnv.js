@@ -76,7 +76,7 @@ const CLI_PROVIDER_AUTH_RULES = Object.freeze({
   hermes: { keys: ['HERMES_HOME'], prefixes: [] },
 });
 
-const LOCAL_PROVIDER_MARKERS = ['ollamaBacked', 'lmstudioBacked', 'mtplxBacked', 'llamaBacked', 'vllmBacked', 'sglangBacked'];
+const LOCAL_PROVIDER_MARKERS = ['ollamaBacked', 'lmstudioBacked', 'mtplxBacked', 'llamaBacked', 'vllmBacked', 'sglangBacked', 'splashBacked'];
 
 /**
  * Build the non-secret provider metadata needed to classify ambient CLI auth

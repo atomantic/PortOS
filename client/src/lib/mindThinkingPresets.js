@@ -42,7 +42,7 @@ export const MIND_ROUTE_BILLING = Object.freeze({
 const isLocalBackedRecord = (provider) => Boolean(
   localBackendForProvider(provider) || isOllamaBackedProvider(provider)
   || provider?.llamaBacked === true || provider?.mtplxBacked === true
-  || provider?.vllmBacked === true || provider?.sglangBacked === true,
+  || provider?.vllmBacked === true || provider?.sglangBacked === true || provider?.splashBacked === true,
 );
 
 /**

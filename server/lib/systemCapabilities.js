@@ -119,6 +119,7 @@ const LOCAL_MODEL_REQUIREMENT_KEYS = Object.freeze(
 );
 
 const providerRuntimeRequirements = Object.freeze({
+  splash: Object.freeze({ platforms: ['darwin'], requiresAppleSilicon: true }),
   mtplx: Object.freeze({
     platforms: ['darwin'],
     requiresAppleSilicon: true,
@@ -147,6 +148,7 @@ const localProvider = (provider) => provider?.ollamaBacked
   || provider?.mtplxBacked
   || provider?.vllmBacked
   || provider?.sglangBacked
+  || provider?.splashBacked
   || localRuntimeKind(provider) === 'mtplx';
 
 const localModelHardwareRequirements = (model) => {
@@ -405,13 +407,14 @@ export function hardwareRequirementsForLocalLlm(entry) {
 
 /** Resolve inferred and user-configured provider requirements. */
 export function hardwareRequirementsForProvider(provider) {
-  const runtime = localRuntimeKind(provider) === 'mtplx'
+  const kind = localRuntimeKind(provider);
+  const runtime = kind === 'mtplx'
     ? 'mtplx'
     : provider?.vllmBacked
       ? 'vllm'
       : provider?.sglangBacked
         ? 'sglang'
-        : null;
+        : kind === 'splash' && isLocalInstanceEndpoint(provider?.endpoint) ? 'splash' : null;
   return mergeHardwareRequirements(providerRuntimeRequirements[runtime], provider?.hardwareRequirements);
 }
 

@@ -49,7 +49,7 @@ const finiteCount = (...values) => {
 export const isLocalProvider = provider => Boolean(provider && (
   provider.servicePlan === 'local'
   || provider.ollamaBacked || provider.lmstudioBacked || provider.mtplxBacked
-  || provider.llamaBacked || provider.vllmBacked || provider.sglangBacked
+  || provider.llamaBacked || provider.vllmBacked || provider.sglangBacked || provider.splashBacked
   || isLoopbackEndpoint(provider.endpoint)
   || /^(?:ollama|lm[-_]?studio|mtplx|llama|vllm|sglang)(?:[-_.]|$)/i.test(provider.id || '')
   || /^(?:ollama|lm[-_]?studio|mtplx|llama|vllm|sglang)(?:[-_.]|$)/i.test(commandBasename(provider.command))

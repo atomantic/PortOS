@@ -57,6 +57,7 @@ const LOCAL_RUNTIME_MARKERS = Object.freeze({
   llama: 'llamaBacked',
   vllm: 'vllmBacked',
   sglang: 'sglangBacked',
+  splash: 'splashBacked',
 });
 
 /**

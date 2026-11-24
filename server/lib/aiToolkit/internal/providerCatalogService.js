@@ -534,6 +534,11 @@ export function createProviderCatalogService({
       throw new Error('Model list response had no recognizable "data" or "models" array');
     },
 
+    async _fetchSplashModels(provider) {
+      const root = (provider.endpoint || provider.envVars?.ANTHROPIC_BASE_URL)?.replace(/\/+$/, '').replace(/\/v1$/, '');
+      return this._refreshAPIProviderModels({ ...provider, endpoint: root ? `${root}/v1` : null });
+    },
+
     async _fetchMtplxModels(provider) {
       return this._refreshAPIProviderModels(provider);
     },

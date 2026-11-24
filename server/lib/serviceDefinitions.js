@@ -282,6 +282,7 @@ export const SERVICE_DEFINITIONS = Object.freeze([
   localRuntime('vllm', 'vLLM'),
   localRuntime('sglang', 'SGLang', { anthropic: true }),
   localRuntime('slotstream', 'Slotstream'),
+  localRuntime('splash', 'Splash', { anthropic: true }),
 
   // --- fleet ----------------------------------------------------------------
   definition({
