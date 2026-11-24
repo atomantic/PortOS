@@ -280,18 +280,17 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       devUiPort: formData.devUiPort ? parseInt(formData.devUiPort, 10) : null,
       apiPort: formData.apiPort ? parseInt(formData.apiPort, 10) : null,
       tlsPort: formData.tlsPort ? parseInt(formData.tlsPort, 10) : null,
-      buildCommand: formData.buildCommand || undefined,
-      updateCommand: formData.updateCommand || undefined,
+      // Sent blank, not omitted: the server merges the patch, so an absent key keeps the old value.
+      buildCommand: formData.buildCommand.trim(),
+      updateCommand: formData.updateCommand.trim(),
       startCommands: formData.startCommands.split('\n').filter(Boolean),
-      pm2ProcessNames: formData.pm2ProcessNames
-        ? formData.pm2ProcessNames.split(',').map(s => s.trim()).filter(Boolean)
-        : undefined,
+      pm2ProcessNames: formData.pm2ProcessNames.split(',').map(s => s.trim()).filter(Boolean),
       nativeLaunch: formData.nativeLaunchEnabled ? {
         label: formData.nativeLaunchLabel.trim(),
         command: formData.nativeLaunchCommand.trim(),
         processName: formData.nativeLaunchProcessName.trim()
       } : null,
-      editorCommand: formData.editorCommand || undefined,
+      editorCommand: formData.editorCommand.trim(),
       workTracker: formData.workTracker || 'auto',
       forgeAccount: formData.forgeAccount.trim(),
       defaultUseWorktree: formData.defaultUseWorktree || formData.defaultOpenPR,
@@ -331,22 +330,19 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     const liUpdate = buildLayeredIntelligenceUpdate(liBaseline, liConfig);
     if (liUpdate) data.layeredIntelligence = liUpdate;
 
-    await updateApp(app.id, data).catch(err => {
+    const failSave = (err) => {
       setError(err.message);
       setSaving(false);
-      throw err;
-    });
+      return null;
+    };
+    if (!await updateApp(app.id, data, { silent: true }).catch(failSave)) return;
 
     // Scheduling (enabled/interval/provider/model) is stored on the per-app task
     // override (#2322), NOT app.layeredIntelligence — PUT it separately when the
     // user changed a scheduling field.
     const schedUpdate = buildLayeredIntelligenceScheduleUpdate(liBaseline, liConfig);
     if (schedUpdate) {
-      await updateAppTaskTypeOverride(app.id, 'layered-intelligence', schedUpdate, { silent: true }).catch(err => {
-        setError(err.message);
-        setSaving(false);
-        throw err;
-      });
+      if (!await updateAppTaskTypeOverride(app.id, 'layered-intelligence', schedUpdate, { silent: true }).catch(failSave)) return;
     }
 
     setSaving(false);

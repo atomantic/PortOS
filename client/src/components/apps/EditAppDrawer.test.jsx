@@ -355,6 +355,36 @@ describe('EditAppDrawer update command', () => {
   });
 });
 
+describe('EditAppDrawer cleared fields', () => {
+  it('sends cleared commands and process names so the server drops the stored values', async () => {
+    renderDrawer({ app: {
+      id: 'app-1', name: 'My App', repoPath: '/repo/my-app',
+      buildCommand: 'npm run build', updateCommand: 'npm run update', pm2ProcessNames: ['my-app'],
+    } });
+    await openTab('Commands');
+    for (const label of ['Build Command', 'Update Command', 'PM2 Process Names (comma-separated)']) {
+      fireEvent.change(screen.getByLabelText(label), { target: { value: '' } });
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(updateApp).toHaveBeenCalled());
+    expect(JSON.parse(JSON.stringify(updateApp.mock.calls[0][1]))).toMatchObject({
+      buildCommand: '', updateCommand: '', pm2ProcessNames: [],
+    });
+  });
+
+  it('keeps the drawer open with the error when the save fails', async () => {
+    updateApp.mockRejectedValue(new Error('Port in use'));
+    const onSave = vi.fn();
+    renderDrawer({ onSave });
+    fireEvent.click(await screen.findByRole('button', { name: 'Save Changes' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Port in use');
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Save Changes' })).toBeEnabled();
+  });
+});
+
 describe('EditAppDrawer required-field validation across tabs', () => {
   // The required Name/Repository Path inputs live on the General tab and are
   // unmounted while another tab is active, so browser `required` validation

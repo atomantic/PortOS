@@ -4,6 +4,7 @@ import { RefreshCw, FileText, Pencil, Save, X, Plus, AlertTriangle } from 'lucid
 import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
 import MarkdownOutput from '../../cos/MarkdownOutput';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { getAppDocument, getAppDocuments, saveAppDocument } from '../../../services/apiApps.js';
 
 const DOCS_ROOT = 'docs';
@@ -40,7 +41,13 @@ export default function DocumentsTab({ appId, repoPath }) {
   // dir → explicit open/closed, overriding the default-open rule below
   const [groupOverrides, setGroupOverrides] = useState({});
 
+  // A sidebar pick held back until the unsaved edit it would drop is confirmed.
+  const [pendingPick, setPendingPick] = useState(null);
+
   const activeDoc = creating || selectedDoc;
+  const activeDocRef = useRef(activeDoc);
+  activeDocRef.current = activeDoc;
+  const dirty = editing && editContent !== (creating ? '' : docContent ?? '');
 
   const selectDoc = useCallback((filename) => {
     setCreating(null);
@@ -55,6 +62,9 @@ export default function DocumentsTab({ appId, repoPath }) {
   // Load whatever the URL points at, so a deep link, a sidebar click, and the
   // browser Back button all take the same path.
   useEffect(() => {
+    // An edit belongs to the document it was opened on: kept open across a URL
+    // change it would save that document's text into this one.
+    setEditing(false);
     if (!selectedDoc) {
       setDocContent(null);
       return undefined;
@@ -98,6 +108,17 @@ export default function DocumentsTab({ appId, repoPath }) {
     setEditing(true);
   };
 
+  // Every sidebar pick goes through here so none drops typed text unasked.
+  const pick = (next) => {
+    if (dirty) setPendingPick(next);
+    else applyPick(next);
+  };
+  const applyPick = ({ filename, create }) => {
+    setPendingPick(null);
+    if (create) enterCreateMode(filename);
+    else selectDoc(filename);
+  };
+
   const enterCreateMode = (filename) => {
     setCreating(filename);
     setDocContent(null);
@@ -106,6 +127,7 @@ export default function DocumentsTab({ appId, repoPath }) {
   };
 
   const cancelEdit = () => {
+    setPendingPick(null);
     setEditing(false);
     setCreating(null);
     setEditContent('');
@@ -113,10 +135,14 @@ export default function DocumentsTab({ appId, repoPath }) {
 
   const handleSave = async () => {
     const saved = activeDoc;
+    const content = editContent;
     setSaving(true);
-    const result = await saveAppDocument(appId, saved, editContent, undefined, { silent: true })
+    const result = await saveAppDocument(appId, saved, content, undefined, { silent: true })
       .catch(() => null);
     setSaving(false);
+    // The commit can take seconds (hooks), long enough to open another document,
+    // whose editor and content this result must not touch.
+    const stillOpen = activeDocRef.current === saved;
 
     if (!result) {
       toast.error('Failed to save document');
@@ -125,15 +151,18 @@ export default function DocumentsTab({ appId, repoPath }) {
 
     if (result.noChanges) {
       toast('No changes to commit', { icon: 'ℹ️' });
-      setEditing(false);
+      if (stillOpen) setEditing(false);
       return;
     }
 
     toast.success(`Committed ${result.created ? 'new' : 'updated'} ${saved} (${result.hash})`);
-    setEditing(false);
-    setDocContent(editContent);
-    // A newly created document now exists — hand it to the URL-driven path.
-    if (creating) selectDoc(saved);
+    if (stillOpen) {
+      setPendingPick(null);
+      setEditing(false);
+      setDocContent(content);
+      // A newly created document now exists — hand it to the URL-driven path.
+      if (creating) selectDoc(saved);
+    }
     fetchDocuments();
   };
 
@@ -231,7 +260,7 @@ export default function DocumentsTab({ appId, repoPath }) {
             {existingDocs.map(doc => (
               <button
                 key={doc.filename}
-                onClick={() => selectDoc(doc.filename)}
+                onClick={() => pick({ filename: doc.filename })}
                 className={docButtonClass(doc.filename)}
               >
                 <FileText size={14} className="inline mr-2" />
@@ -257,7 +286,7 @@ export default function DocumentsTab({ appId, repoPath }) {
                   {paths.map(path => (
                     <button
                       key={path}
-                      onClick={() => selectDoc(path)}
+                      onClick={() => pick({ filename: path })}
                       title={path}
                       className={`w-full truncate ${docButtonClass(path)}`}
                     >
@@ -275,7 +304,7 @@ export default function DocumentsTab({ appId, repoPath }) {
                 {missingDocs.map(doc => (
                   <button
                     key={doc.filename}
-                    onClick={() => enterCreateMode(doc.filename)}
+                    onClick={() => pick({ filename: doc.filename, create: true })}
                     className="w-full px-3 py-1.5 rounded-lg text-xs text-left text-gray-500 hover:text-port-accent hover:bg-port-card border border-transparent hover:border-port-border transition-colors flex items-center gap-1"
                   >
                     <Plus size={12} /> {doc.filename}
@@ -291,6 +320,15 @@ export default function DocumentsTab({ appId, repoPath }) {
               <BrailleSpinner text="Loading document" />
             ) : editing ? (
               <div className="space-y-3">
+                {pendingPick && (
+                  <InlineConfirmRow
+                    question={`Discard your unsaved changes to ${activeDoc}?`}
+                    confirmText="Discard"
+                    cancelText="Keep editing"
+                    onConfirm={() => applyPick(pendingPick)}
+                    onCancel={() => setPendingPick(null)}
+                  />
+                )}
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-gray-400">Editing {activeDoc}</span>
                   <div className="flex gap-2">
@@ -315,6 +353,7 @@ export default function DocumentsTab({ appId, repoPath }) {
                   aria-label="Document content"
                   value={editContent}
                   onChange={e => setEditContent(e.target.value)}
+                  disabled={saving}
                   className="w-full h-[500px] bg-[var(--port-terminal-bg)] text-[var(--port-terminal-text)] border border-port-border rounded-lg p-3 font-mono text-sm resize-y focus:outline-hidden focus:border-port-accent/50"
                   spellCheck={false}
                 />
