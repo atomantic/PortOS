@@ -57,7 +57,10 @@ def build_shot(ctx, shot):
     options = plan.read_options(ctx.options)
     entry = next(item for item in plan.layout(ctx, data) if item["id"] == shot["id"])
     current["stage"] = stage.build(ctx, data, options, entry)
-    current.update(stage_module=stage, data=data, options=options, entry={**entry, "start": shot["start"], "end": shot["end"]})
+    entry = {**entry, "start": shot["start"], "end": shot["end"]}
+    if entry["kind"] == "controls":
+        data = {**data, "posedBounds": plan.posed_bounds(data, options, entry, lambda pose: stage.corners(current["stage"], pose))}
+    current.update(stage_module=stage, data=data, options=options, entry=entry)
 
 
 def frame(ctx, shot, t, frame):

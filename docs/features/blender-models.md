@@ -180,7 +180,7 @@ there is one, is copied to `src/showcase/sheet.<ext>`. The `showcase` starter (`
 
 1. **Turntable**: one full turn, framed from the model's size.
 2. **Assembly**: each part moves in along its offset from the model center, in declared part order.
-3. **Controls**: each control goes 0 to 1 to 0 in turn (a control's dependencies are held satisfied), then each choreographed action. Skipped when there are none.
+3. **Controls**: each control goes 0 to 1 to 0 in turn (a control's dependencies are held satisfied), then each choreographed action. The camera frames everything the parts reach, measured from the model in Blender when the shot is built. Skipped when there are none.
 4. **Close-ups**: one per saved compare camera.
 5. **Reference to model**: the approved sheet cross-dissolves to the render from the three-quarter view. Skipped without an approved sheet.
 

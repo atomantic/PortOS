@@ -275,16 +275,20 @@ def _fit_sheet(stage, ctx, cam):
     stage.sheet.plane.location = (0.0, 0.0, -distance)
 
 
+def _seek_pose(stage, pose_dict):
+    for ident, value in pose_dict["controls"].items():
+        _seek(stage.controls.get(ident, []), timing_value(value))
+    action = pose_dict.get("action")
+    if action:
+        _seek(stage.actions.get(action["id"], []), action["seconds"])
+
+
 def pose(stage, ctx, pose_dict):
     """Place everything for `pose_dict`."""
     cam = pose_dict["camera"]
     _aim(stage, cam)
     if "controls" in pose_dict:
-        for ident, value in pose_dict["controls"].items():
-            _seek(stage.controls.get(ident, []), timing_value(value))
-        action = pose_dict.get("action")
-        if action:
-            _seek(stage.actions.get(action["id"], []), action["seconds"])
+        _seek_pose(stage, pose_dict)
     if "parts" in pose_dict:
         _displace(stage, pose_dict["parts"])
     if stage.sheet is not None:
@@ -304,6 +308,15 @@ def pose(stage, ctx, pose_dict):
                 low = Vector(min(low[axis], point[axis]) for axis in range(3))
                 high = Vector(max(high[axis], point[axis]) for axis in range(3))
             label.location = ((low + high) / 2.0) + Vector((0.0, 0.0, (high.z - low.z) / 2.0 + stage.label_size * 1.6))
+
+
+def corners(stage, pose_dict):
+    """World corners of every mesh box of the model in a controls pose, for `plan.posed_bounds`."""
+    _seek_pose(stage, pose_dict)
+    bpy.context.view_layer.update()
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    meshes = [obj.evaluated_get(depsgraph) for obj in stage.root.children_recursive if obj.type == "MESH"]
+    return [obj.matrix_world @ Vector(corner) for obj in meshes for corner in obj.bound_box]
 
 
 def timing_value(value):
