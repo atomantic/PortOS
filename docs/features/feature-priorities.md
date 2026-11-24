@@ -25,3 +25,20 @@ First match wins: a pin, then the feature-off rule (an optional area whose insta
 - `GET /api/feature-priorities` returns `{ areas, evidenceDays, minEvidenceDays }`; each area is `{ areaId, label, instanceFeatureId, tier, source, activeDays30, lastActiveDay }` and `source` is `pinned`, `feature-off`, `learned` or `default`.
 - `PUT /api/feature-priorities/:areaId` with `{ tier: 'P0'|'P1'|'P2'|'P3'|null }` sets or clears a pin (`null` clears it) and emits `feature-priorities:updated` with `{ areaId, tier }`.
 - `POST /api/feature-priorities/visit` with `{ path }` is the beacon above and answers `{ recorded }`.
+
+## Audit scope
+
+When a scheduled audit of PortOS itself is prepared, `resolveAuditPriorityScope(app, taskType)` turns the resolved tiers into `{ exempt, p0, p2, p3 }`, each a list of `{ label, globs }` from the catalog. `auditQualityInstructions(taskType, app, { priorityScope })` renders it as a `Feature priority scope` section ahead of the reachability check. The scope carries tiers and globs only: no usage count, date or tier source reaches a prompt, and the section tells the agent not to restate tiers in issues, pull requests or commit messages.
+
+| Tier | Security, privacy and data-integrity audits | Every other audit |
+| :--- | :--- | :--- |
+| `P0` | Not mentioned | First tie-break after severity and user impact, ahead of churn and fan-in; preferred when rotating slices |
+| `P1`, and every file in no area | Not mentioned | Unchanged |
+| `P2` | Not mentioned | Verified functional or reliability defects only |
+| `P3` | Listed as fully in scope | Removed from the inventory and from slice rotation, so `totalFiles`, `scannedFiles` and `coverage: "broad"` count `P0`-`P2`; a verified defect met while tracing other code is still filed |
+
+A scope with nothing to say (no `P0`, `P2` or `P3` area, or no `P3` area for an exempt audit) adds no section, and the prompt is byte-identical to the unscoped one. A managed app gets no scope and its prompt is unchanged. If the tiers cannot be resolved (the usage store is unreachable), the audit is dispatched unscoped and the skip is logged; a failed lookup never reads as "everything is dormant".
+
+The complexity audits (`better-complexity`, `code-simplification`) also get a ready command that leaves the `P3` paths out of the shortlist: `npm run quality:complexity -- --exclude '<glob>'`, one `--exclude` per glob. `--exclude` takes the same `path.matchesGlob` patterns the catalog uses, drops matching files from the source and test shortlists and prints how many it excluded.
+
+Subtracting an area's globs is exact because no tracked file belongs to two areas (guarded in `server/test/guards/repo/featureAreaCatalog.test.js`).

@@ -7,7 +7,8 @@
 //   - `areaForNavPath` tries the longest `navPathPrefixes` match, then the nav command's `feature`, then its
 //     section via `navSections`; a path no area owns (the dashboard) is `null`.
 //   - `areasForFile` returns every area whose `codeGlobs` match a repo-relative path. A file in no area is shared
-//     code; a file in several areas takes the highest tier of them (featurePriorityScoring.tierForFile).
+//     code. Globs of two areas must not claim the same tracked file (guarded in featureAreaCatalog.test.js): an audit
+//     drops a dormant area by subtracting its globs, which would take a shared file away from the other area too.
 //
 // path.posix.matchesGlob matches case-insensitively on macOS and Windows but case-sensitively on Linux, so a glob must
 // give the same answer either way: no letter ranges (`[A-Z]`), and carve a sibling out with `!(Prefix*)` instead.
@@ -15,7 +16,7 @@
 // API traffic is deliberately NOT a field here: dashboard widgets and sidebar badges call most feature APIs on every
 // load, and a password-free install cannot tell an agent's request from a human's. Usage is page dwell on a nav route.
 //
-// featureAreas.test.js is the contract: every nav path resolves, every instance feature has an area (or is listed in
+// test/guards/repo/featureAreaCatalog.test.js is the contract: every nav path resolves, every instance feature has an area (or is listed in
 // INSTANCE_FEATURES_WITHOUT_AREA), and every glob still matches a tracked file, so a rename fails a test instead of
 // silently emptying an area.
 import { posix } from 'node:path';
