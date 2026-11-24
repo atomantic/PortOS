@@ -228,6 +228,8 @@ vi.mock('fs/promises', async (importOriginal) => {
   return { ...actual, stat: (path) => mockStat(path) };
 });
 
+import { MEDIA_RUNTIME_MODULES, registerMediaRuntimeModules } from '../services/bootHookRegistry.js';
+
 import * as imageGen from '../services/imageGen/index.js';
 import * as characterService from '../services/character.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
@@ -238,6 +240,14 @@ import { getSettings } from '../services/settings.js';
 import { AGY_IMAGEGEN_DEFAULT_MODEL } from '../lib/imageGenCapabilities.js';
 import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
+
+const verifyImageAsync = vi.fn();
+registerMediaRuntimeModules(Object.fromEntries(
+  MEDIA_RUNTIME_MODULES.map(name => [name, async () => {
+    if (name === 'imageVerifier') return { verifyImageAsync };
+    throw new Error(`Unexpected media runtime: ${name}`);
+  }]),
+));
 
 describe('Image Gen Routes', () => {
   let app;
@@ -1034,6 +1044,20 @@ describe('Image Gen Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.path).toBe('/data/images/test.png');
       expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'a fantasy landscape' }));
+    });
+
+    it.each([true, false])('starts external image verification only when requested (%s)', async verifyImage => {
+      imageGen.generateImage.mockResolvedValue({ generationId: 'gen-verify', filename: 'render.png' });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ mode: 'external', prompt: 'a fantasy landscape', verifyImage });
+
+      expect(response.status).toBe(200);
+      expect(verifyImageAsync).toHaveBeenCalledTimes(verifyImage ? 1 : 0);
+      if (verifyImage) {
+        expect(verifyImageAsync).toHaveBeenCalledWith('render.png', { prompt: 'a fantasy landscape', isImport: false });
+      }
     });
 
     it('durably attaches a synchronous FableLoom scene render', async () => {

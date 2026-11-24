@@ -33,6 +33,7 @@ const noNulPrompt = z.string().max(MAX_PROMPT_LENGTH)
 export const generateSchema = z.object({
   promptAdditions: promptAdditionsSchema,
   quickEdit: z.boolean().optional(),
+  verifyImage: z.boolean().optional(),
   reviewedPromptDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   // Empty prompt allowed — i2i / edit / unconditional generation don't require
   // one. The multipart FormData builder drops empty-string fields, so an empty
@@ -255,7 +256,7 @@ export function coerceFormFields(body) {
   }
   // Multipart sends checkbox values as 'true' / 'false' strings; coerce to
   // bool so Zod's `z.boolean()` accepts them.
-  for (const f of ['cleanC2PA', 'denoise', 'autoClean']) {
+  for (const f of ['cleanC2PA', 'denoise', 'autoClean', 'verifyImage']) {
     if (typeof body[f] === 'string') body[f] = body[f] === 'true';
   }
   // Legacy single-flag clients: an explicit `autoClean` on the wire maps to

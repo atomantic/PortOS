@@ -19,6 +19,7 @@ import { previewQuickImageEdit } from './promptPreview.js';
 import { assertReviewedReference } from './reviewedReference.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { recordUserAction } from '../userActions.js';
+import { loadMediaRuntimeModule } from '../bootHookRegistry.js';
 import { buildUniverseRunTag } from '../universeRunTag.js';
 import { prepareRemoteMediaJob } from '../federatedMedia/remoteSubmission.js';
 import { collectRemoteInputAssets } from '../federatedMedia/inputAssets.js';
@@ -315,6 +316,11 @@ async function completeSynchronousImage(params, result) {
       kind: params.catalogAttach.kind || 'reference',
     }).catch(() => {});
     catalogEvents.emit('primitive-changed', { ingredientId: params.catalogAttach.ingredientId });
+  }
+  if (params.verifyImage === true && result?.filename) {
+    await loadMediaRuntimeModule('imageVerifier')
+      .then(({ verifyImageAsync }) => verifyImageAsync(result.filename, { prompt: params.prompt, isImport: false }))
+      .catch((err) => console.error(`❌ Could not start verification for ${result.filename}: ${err.message}`));
   }
   return result;
 }
