@@ -295,6 +295,7 @@ export default function ToolsTab({ agentId, agent }) {
 
   const handlePublishComment = async () => {
     if (!selectedPost || !commentContent) return;
+    const viewSeq = viewPostRequestRef.current;
     setPublishingComment(true);
     const result = await publishAgentComment({
       agentId, accountId: selectedAccountId, postId: selectedPost.id, content: commentContent, parentId: replyToId || undefined
@@ -322,12 +323,14 @@ export default function ToolsTab({ agentId, agent }) {
       toast.success('Comment published');
     }
 
-    if (!result?.verificationFailed) {
+    // Another post was opened while publishing: its view and typed reply are not ours to refresh or clear.
+    const stillViewing = viewPostRequestRef.current === viewSeq;
+    if (!result?.verificationFailed && stillViewing) {
       setCommentContent('');
       setReplyToId(null);
     }
     setPublishingComment(false);
-    handleViewPost(selectedPost);
+    if (stillViewing) handleViewPost(selectedPost);
     getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
   };
 
