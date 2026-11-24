@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, readFile, writeFile, rm } from 'fs/promises';
+import { mkdtemp, chmod, readFile, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -87,5 +87,16 @@ describe('appendProposalToPlan', () => {
     const content = await readFile(join(dir, 'PLAN.md'), 'utf-8');
     expect(content).toContain('## Next Up');
     expect(content).toContain('[lil-add-x]');
+  });
+
+  // Write-only mode: the read fails (EACCES) while a write would succeed, so an
+  // overwrite regression is observable. Root and Windows ignore POSIX modes.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('rejects without overwriting when an existing PLAN.md cannot be read', async () => {
+    const planPath = join(dir, 'PLAN.md');
+    await writeFile(planPath, '# Real plan\n');
+    await chmod(planPath, 0o200);
+    await expect(appendProposalToPlan({ repoPath: dir, appName: 'App', slug: 'add-x', title: 'Add X', body: 'b' })).rejects.toThrow();
+    await chmod(planPath, 0o600);
+    expect(await readFile(planPath, 'utf-8')).toBe('# Real plan\n');
   });
 });
