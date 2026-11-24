@@ -79,8 +79,34 @@ describe('ShellSessionTabs labels', () => {
     const onKill = vi.fn();
     const onSwitch = vi.fn();
     renderTabs([session()], { onKill, onSwitch });
-    fireEvent.click(screen.getByRole('button', { name: /kill session/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Kill session example-app' }));
     expect(onKill).toHaveBeenCalledWith('abcdef123456');
     expect(onSwitch).not.toHaveBeenCalled();
+  });
+
+  it('uses non-nested native buttons with group, aria-current, live sr-only text, and session-specific close names', () => {
+    const onSwitch = vi.fn();
+    renderTabs([
+      session({ sessionId: 's1', label: 'alpha' }),
+      session({ sessionId: 's2', label: 'beta-run', external: true }),
+    ], { activeSessionId: 's1', onSwitch });
+
+    const group = screen.getByRole('group', { name: 'Shell sessions' });
+    const buttons = group.querySelectorAll('button');
+    for (const btn of buttons) {
+      expect(btn.parentElement.closest('button, [role="button"]')).toBeNull();
+    }
+
+    const alphaTab = screen.getByRole('button', { name: /^alpha\b/ });
+    const betaTab = screen.getByRole('button', { name: /^beta-run\b/ });
+    expect(alphaTab.getAttribute('aria-current')).toBe('true');
+    expect(betaTab.hasAttribute('aria-current')).toBe(false);
+    expect(betaTab.textContent).toContain('Live');
+
+    expect(screen.getByRole('button', { name: 'Kill session alpha' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Stop run beta-run' })).toBeTruthy();
+
+    fireEvent.click(betaTab);
+    expect(onSwitch).toHaveBeenCalledWith('s2');
   });
 });

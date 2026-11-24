@@ -1,5 +1,4 @@
 import { AppWindow } from 'lucide-react';
-import { clickableProps, onActivateKeyDown } from '../../lib/a11yKeyboard.js';
 
 // Separator-agnostic basename, as in ShellSessionTabs.
 const folderName = (cwd) => cwd?.split(/[\\/]/).filter(Boolean).pop();
@@ -19,7 +18,7 @@ export const itermLocation = (s) => [
 // so it never reads as a PortOS shell.
 export default function ItermSessionTabs({ sessions, activeSessionId, onSelect }) {
   return (
-    <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide touch-pan-x" aria-label="iTerm2 sessions">
+    <div role="group" className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide touch-pan-x" aria-label="iTerm2 sessions">
       {sessions.map((s, idx) => {
         const isActive = s.id === activeSessionId;
         const newWindow = idx === 0 || sessions[idx - 1].windowIndex !== s.windowIndex;
@@ -33,7 +32,8 @@ export default function ItermSessionTabs({ sessions, activeSessionId, onSelect }
                 W{s.windowIndex}
               </span>
             )}
-            <div
+            <button
+              type="button"
               data-testid="iterm-session-tab"
               className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-mono transition-colors cursor-pointer min-h-[40px] ${
                 isActive
@@ -41,8 +41,6 @@ export default function ItermSessionTabs({ sessions, activeSessionId, onSelect }
                   : 'bg-port-card hover:bg-port-border text-gray-400 hover:text-white border border-port-border'
               }`}
               onClick={() => !isActive && onSelect(s.id)}
-              {...clickableProps(() => !isActive && onSelect(s.id))}
-              onKeyDown={onActivateKeyDown(() => !isActive && onSelect(s.id))}
               aria-current={isActive ? 'true' : undefined}
               title={`iTerm2 — ${where} — ${label}${s.cwd ? ` — ${s.cwd}` : ''}`}
             >
@@ -52,7 +50,7 @@ export default function ItermSessionTabs({ sessions, activeSessionId, onSelect }
               </span>
               <span className="truncate max-w-[9rem] sm:max-w-[16rem]">{label}</span>
               {folder && <span className="hidden sm:inline text-[10px] opacity-60 truncate max-w-[8rem]">{folder}</span>}
-            </div>
+            </button>
           </div>
         );
       })}
