@@ -32,7 +32,7 @@ vi.mock('../lib/db.js', () => ({ query, withTransaction }));
 vi.mock('../lib/vaultCrypto.js', () => ({ decryptValue: vi.fn(), encryptValue: vi.fn(), ensureVaultKey: vi.fn() }));
 vi.mock('../integrations/stackerNews/index.js', () => ({ executeStackerNewsOperation: vi.fn(), stackerNewsCapabilities: {} }));
 
-const { createAction, executeApprovedAction } = await import('./stackerNews.js');
+const { createAction, createActionWithOutcome, executeApprovedAction } = await import('./stackerNews.js');
 
 describe('Stacker News reviewed actions', () => {
   it('persists the reviewed external account and destination', async () => {
@@ -78,9 +78,10 @@ describe('Stacker News reviewed actions', () => {
   it('fails a stale executing action so it cannot wedge the idempotency key', async () => {
     const stale = { id: 'zombie', state: 'executing', updated_at: new Date(Date.now() - 2 * 60 * 60 * 1000) };
     transactionQuery.mockImplementationOnce(async () => ({ rows: [stale] }));
-    const action = await createAction({
+    const { action, created, changed } = await createActionWithOutcome({
       accountId: account.id, itemId: item.id, kind: 'publish_comment', payload: { body: 'Retry after crash.' },
     });
+    expect({ created, changed }).toEqual({ created: true, changed: true });
     expect(action.state).toBe('pending_review');
     expect(action.id).not.toBe('zombie');
     const calls = transactionQuery.mock.calls.map(([sql, params]) => ({ sql, params }));
@@ -90,12 +91,26 @@ describe('Stacker News reviewed actions', () => {
     expect(event.params).toContain('zombie');
   });
 
-  it('keeps returning a recently started executing action', async () => {
+  it('keeps returning a recently started executing action without reporting a change', async () => {
     const fresh = { id: 'running', account_id: account.id, state: 'executing', updated_at: new Date() };
     transactionQuery.mockImplementationOnce(async () => ({ rows: [fresh] }));
-    const action = await createAction({
+    const outcome = await createActionWithOutcome({
       accountId: account.id, itemId: item.id, kind: 'publish_comment', payload: { body: 'In flight.' },
     });
-    expect(action.id).toBe('running');
+    expect(outcome).toMatchObject({ action: { id: 'running' }, created: false, changed: false });
+  });
+
+  it('reports the winning action as a replay after a concurrent insert', async () => {
+    const winner = { id: 'winner', account_id: account.id, state: 'pending_review' };
+    transactionQuery
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [winner] });
+
+    const outcome = await createActionWithOutcome({
+      accountId: account.id, itemId: item.id, kind: 'publish_comment', payload: { body: 'Example reply.' },
+    });
+
+    expect(outcome).toMatchObject({ action: { id: 'winner' }, created: false, changed: false });
   });
 });

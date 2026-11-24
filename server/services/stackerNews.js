@@ -677,7 +677,12 @@ async function actionContext({ accountId, itemId, territoryId }) {
   return { account, item, territory: territoryResult.rows[0] || null, resolvedTerritoryId };
 }
 
-export async function createAction({ accountId, itemId = null, territoryId = null, kind, destination = '', payload = {} }) {
+export async function createAction(input) {
+  const { action } = await createActionWithOutcome(input);
+  return action;
+}
+
+export async function createActionWithOutcome({ accountId, itemId = null, territoryId = null, kind, destination = '', payload = {} }) {
   if (!ACTION_KINDS.has(kind)) throw new Error('Unsupported Stacker News action kind');
   if (kind === 'open_browser' && destination === 'item' && !ITEM_HANDOFF_INTENTS.has(payload?.intent || 'inspect')) {
     throw new Error('Unsupported Stacker News item handoff intent');
@@ -696,11 +701,12 @@ export async function createAction({ accountId, itemId = null, territoryId = nul
   };
   const idempotencyKey = stableHash({ accountId, itemId, territoryId: resolvedTerritoryId, kind, destination, payload, sourceContentHash, rulesHash, reviewedTarget });
   const id = randomUUID();
-  const row = await withTransaction(async (client) => {
+  const { row, created, changed } = await withTransaction(async (client) => {
+    // Hold the active row through stale-state checks so overlapping requests cannot both record its transition.
     const active = await client.query(
       `SELECT * FROM stacker_news_actions
        WHERE idempotency_key=$1 AND state IN ('pending_review','approved','executing')
-       ORDER BY created_at DESC LIMIT 1`,
+       ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
       [idempotencyKey],
     );
     const existing = active.rows[0];
@@ -708,7 +714,9 @@ export async function createAction({ accountId, itemId = null, territoryId = nul
       && (!existing.approved_at || Date.now() - new Date(existing.approved_at).getTime() > ACTION_MAX_AGE_MS);
     const executionInterrupted = existing?.state === 'executing'
       && (!existing.updated_at || Date.now() - new Date(existing.updated_at).getTime() > ACTION_EXECUTION_TIMEOUT_MS);
-    if (existing && !approvalExpired && !executionInterrupted) return existing;
+    if (existing && !approvalExpired && !executionInterrupted) {
+      return { row: existing, created: false, changed: false };
+    }
     if (executionInterrupted) {
       // Release the active-idempotency unique index; the outcome is unknown, so a fresh human review is required.
       await client.query(
@@ -733,7 +741,7 @@ export async function createAction({ accountId, itemId = null, territoryId = nul
     );
     if (result.rows[0]) {
       await eventInsert(client, id, null, 'pending_review', 'Created for human review');
-      return result.rows[0];
+      return { row: result.rows[0], created: true, changed: true };
     }
     const conflicted = await client.query(
       `SELECT * FROM stacker_news_actions
@@ -741,9 +749,10 @@ export async function createAction({ accountId, itemId = null, territoryId = nul
        ORDER BY created_at DESC LIMIT 1`,
       [idempotencyKey],
     );
-    return conflicted.rows[0];
+    if (!conflicted.rows[0]) throw new Error('Concurrent Stacker News action is no longer active; retry to queue a new action');
+    return { row: conflicted.rows[0], created: false, changed: approvalExpired || executionInterrupted };
   });
-  return actionView(row);
+  return { action: actionView(row), created, changed };
 }
 
 export async function listActions(accountId) {
