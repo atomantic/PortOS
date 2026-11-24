@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isStaleShippedHelper, isUpgradableLayeredEngine } from './compositionDocumentRead.js';
 import { installLayeredPreviewPlayback } from './previewPlaybackRuntime.js';
 
 const ROOT = fileURLToPath(new URL('./documentTemplates/', import.meta.url));
@@ -97,7 +98,6 @@ async function shippedEntrypoint(directory) {
   } catch { return { reason: 'unrecognized-entrypoint' }; }
   if (digest(original) !== ENGINE_SHA256) {
     // An older shipped engine plays only by exact per-frame seeks; the player offers its one-tap update.
-    const { isUpgradableLayeredEngine } = await import('./compositionDocument.js');
     return { reason: 'unrecognized-engine', ...(isUpgradableLayeredEngine(original) ? { upgradable: true } : {}) };
   }
   const marker = '<script src="engine.js"></script>';
@@ -118,7 +118,6 @@ async function shippedHelpersMismatch(directory, template) {
     ['lyricType.js', join(ROOT, 'shared')], ['lyricType.css', join(ROOT, 'shared')],
     ['musicVideoImageEffects.js', SHARED_BROWSER_ROOT],
   ];
-  const { isStaleShippedHelper } = await import('./compositionDocument.js');
   try {
     for (const [name, root] of helpers) {
       const found = await read(directory, name);

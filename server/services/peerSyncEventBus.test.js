@@ -18,7 +18,7 @@ vi.mock('./instanceIdentity.js', async () => ({
   getInstanceId: async () => 'self-example-instance',
 }));
 
-const { deliverPeerSyncEvent, registerPeerSyncSubscriber } = await import('./peerSyncEventBus.js');
+const { deliverPeerSyncEvent, registerPeerSyncSubscriber } = await import('./peerSyncDelivery.js');
 
 const FRAME = { v: 1, category: 'videoHistory', op: 'upsert', id: 'v1', record: { id: 'v1' }, originInstanceId: 'self-example-instance' };
 const peer = (instanceId, videoHistory) => ({ id: `rec-${instanceId}`, name: instanceId, instanceId, enabled: true, syncCategories: { videoHistory } });

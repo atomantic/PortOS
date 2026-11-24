@@ -21,7 +21,7 @@ import { isNonBlankStr } from '../../lib/textUtils.js';
 import { normalizeTitleCard, titleCardVisible } from '../../lib/musicVideo/musicVideoTitleCard.js';
 import { sceneVisualLayer } from '../../lib/musicVideo/musicVideoLayers.js';
 import { buildDocumentPreview } from './documentPreview.js';
-import { readLyricOverlayDocumentFiles, readTemplateDocumentFiles } from './compositionDocument.js';
+import { readLyricOverlayDocumentFiles, readTemplateDocumentFiles } from './compositionDocumentRead.js';
 import { buildDocumentData, documentRenderClock, documentSongDuration } from './documentRender.js';
 
 const LINES_PER_SCENE = 4;
