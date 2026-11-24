@@ -207,9 +207,9 @@ router.get('/accounts/:id/actions', asyncHandler(async (req, res) => {
 }));
 
 router.post('/actions', asyncHandler(async (req, res) => {
-  const action = await stackerNews.createAction(validateRequest(actionSchema, req.body));
-  emitChanged(req, action.accountId);
-  res.status(201).json(action);
+  const { action, created, changed } = await stackerNews.createActionWithOutcome(validateRequest(actionSchema, req.body));
+  if (changed) emitChanged(req, action.accountId);
+  res.status(created ? 201 : 200).json(action);
 }));
 
 router.post('/actions/:id/review', asyncHandler(async (req, res) => {

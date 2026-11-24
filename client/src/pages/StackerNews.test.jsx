@@ -294,6 +294,49 @@ describe('StackerNews', () => {
     expect(currentUrl()).toBe('/stacker-news/a1/drafts');
   });
 
+  it('replaces an existing action when Compose returns the same ID', async () => {
+    const user = userEvent.setup();
+    const item = { id: 'i1', accountId: 'a1', kind: 'post', title: 'Example item' };
+    const action = { id: 'action', accountId: 'a1', itemId: item.id, kind: 'draft_comment', state: 'pending_review', payload: { body: 'Example reply' } };
+    api.getStackerNewsItems.mockResolvedValue({ items: [item] });
+    api.getStackerNewsActions.mockResolvedValue({ actions: [action] });
+    api.createStackerNewsAction.mockResolvedValueOnce({ ...action, policyVersion: 'review-v2' });
+
+    renderPage('/stacker-news/a1/drafts');
+    const source = await screen.findByLabelText('Source item');
+    await screen.findByRole('option', { name: 'Example item' });
+    await user.selectOptions(source, item.id);
+    await user.type(screen.getByLabelText('Draft text'), action.payload.body);
+    await user.click(screen.getByRole('button', { name: 'Send to approval queue' }));
+
+    expect(await screen.findByText(/review-v2/)).toBeInTheDocument();
+    expect(screen.getAllByText('Example reply')).toHaveLength(1);
+    await user.click(screen.getByRole('tab', { name: 'Activity' }));
+    expect(screen.getAllByText('draft comment · pending_review')).toHaveLength(1);
+  });
+
+  it('keeps one handoff when a socket refresh includes it before submission returns', async () => {
+    const user = userEvent.setup();
+    const pending = deferred();
+    const item = { id: 'i1', accountId: 'a1', kind: 'post', title: 'Example item' };
+    const action = { id: 'action', accountId: 'a1', itemId: item.id, kind: 'open_browser', state: 'pending_review', destination: 'item', payload: { intent: 'zap' } };
+    api.getStackerNewsItems.mockResolvedValue({ items: [item] });
+    api.createStackerNewsAction.mockReturnValueOnce(pending.promise);
+
+    renderPage('/stacker-news/a1/review');
+    await user.click(await findEnabledByRole('button', { name: 'Queue zap' }));
+    expect(api.createStackerNewsAction).toHaveBeenCalledTimes(1);
+
+    const [, onChanged] = socket.on.mock.calls.find(([name]) => name === 'stacker-news:changed');
+    api.getStackerNewsActions.mockResolvedValueOnce({ actions: [action] });
+    await act(async () => onChanged({ accountId: 'a1' }));
+    expect(screen.getByText('zap handoff')).toBeInTheDocument();
+
+    await act(async () => pending.resolve(action));
+    expect(screen.getByText(/Zap handoff queued for human review/)).toBeInTheDocument();
+    expect(screen.getAllByText('zap handoff')).toHaveLength(1);
+  });
+
   it('keeps entered account values across drawer tab switches and deep-links the open tab', async () => {
     const user = userEvent.setup();
     renderPage('/stacker-news/a1/accounts?snAccount=edit&snAccountTab=stewardship');

@@ -10,7 +10,7 @@ vi.mock('../services/stackerNews.js', () => ({
     username,
     apiKeyConfigured: true,
   })),
-  createAction: vi.fn(),
+  createActionWithOutcome: vi.fn(),
   executeApprovedAction: vi.fn(),
   listAccounts: vi.fn(async () => []),
   verifyConnection: vi.fn(async () => ({ configured: true, connected: true, transport: 'browser', username: 'example_steward' })),
@@ -55,11 +55,15 @@ describe('Stacker News routes', () => {
     });
 
     expect(response.status).toBe(400);
-    expect(stackerNews.createAction).not.toHaveBeenCalled();
+    expect(stackerNews.createActionWithOutcome).not.toHaveBeenCalled();
   });
 
   it('accepts only named manual item handoff intents', async () => {
-    stackerNews.createAction.mockResolvedValue({ id: 'action', accountId: '00000000-0000-4000-8000-000000000001' });
+    stackerNews.createActionWithOutcome.mockResolvedValue({
+      action: { id: 'action', accountId: '00000000-0000-4000-8000-000000000001' },
+      created: true,
+      changed: true,
+    });
     const accepted = await request(app).post('/api/stacker-news/actions').send({
       accountId: '00000000-0000-4000-8000-000000000001',
       itemId: '00000000-0000-4000-8000-000000000002',
@@ -68,7 +72,7 @@ describe('Stacker News routes', () => {
       payload: { intent: 'moderate' },
     });
     expect(accepted.status).toBe(201);
-    expect(stackerNews.createAction).toHaveBeenCalledWith(expect.objectContaining({ payload: { intent: 'moderate' } }));
+    expect(stackerNews.createActionWithOutcome).toHaveBeenCalledWith(expect.objectContaining({ payload: { intent: 'moderate' } }));
 
     const rejected = await request(app).post('/api/stacker-news/actions').send({
       accountId: '00000000-0000-4000-8000-000000000001',
@@ -78,6 +82,36 @@ describe('Stacker News routes', () => {
       payload: { intent: 'delete-account' },
     });
     expect(rejected.status).toBe(400);
+  });
+
+  it('returns the same action body on replay and broadcasts only when the transaction changed state', async () => {
+    const emit = vi.fn();
+    app.set('io', { emit });
+    const accountId = '00000000-0000-4000-8000-000000000001';
+    const action = { id: 'action', accountId };
+    stackerNews.createActionWithOutcome
+      .mockResolvedValueOnce({ action, created: true, changed: true })
+      .mockResolvedValueOnce({ action, created: false, changed: false })
+      .mockResolvedValueOnce({ action, created: false, changed: true });
+    const submit = () => request(app).post('/api/stacker-news/actions').send({
+      accountId, kind: 'draft_post', territoryId: '00000000-0000-4000-8000-000000000002',
+      payload: { title: 'Example post', body: 'Example text' },
+    });
+
+    const created = await submit();
+    expect(created.status).toBe(201);
+    expect(created.body).toEqual(action);
+    expect(emit).toHaveBeenCalledExactlyOnceWith('stacker-news:changed', { accountId });
+
+    emit.mockClear();
+    const replay = await submit();
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(action);
+    expect(emit).not.toHaveBeenCalled();
+
+    const transitioned = await submit();
+    expect(transitioned.status).toBe(200);
+    expect(emit).toHaveBeenCalledExactlyOnceWith('stacker-news:changed', { accountId });
   });
 
   it('executes only through the dedicated approved-action primitive', async () => {

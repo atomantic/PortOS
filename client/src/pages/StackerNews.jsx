@@ -374,6 +374,10 @@ export default function StackerNews() {
     });
   };
 
+  const upsertAction = (action) => {
+    setActions((previous) => [action, ...previous.filter((candidate) => candidate.id !== action.id)]);
+  };
+
   const createAction = (event) => {
     event.preventDefault();
     if (!selected) return;
@@ -389,7 +393,9 @@ export default function StackerNews() {
       ...(isComment ? { payload: { body: draft.body } } : {}),
     };
     finish('create-action', createStackerNewsAction(data, { silent: true }), (result) => {
-      setActions((previous) => [result, ...previous]); setDraft(emptyDraft); navigate(accountPath(selected.id, 'review'));
+      upsertAction(result);
+      setDraft(emptyDraft);
+      navigate(accountPath(selected.id, 'review'));
     });
   };
 
@@ -415,7 +421,7 @@ export default function StackerNews() {
       destination: 'item',
       payload: { intent },
     }, { silent: true }), (result) => {
-      setActions((previous) => [result, ...previous]);
+      upsertAction(result);
       setNotice(`${intent === 'zap' ? 'Zap' : 'Moderation'} handoff queued for human review.`);
     });
   };
