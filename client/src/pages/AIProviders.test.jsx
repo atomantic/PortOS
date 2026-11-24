@@ -1881,6 +1881,19 @@ describe('Launch in Shell button on TUI provider cards', () => {
     expect(await screen.findByTestId('shell-location')).toHaveTextContent('/shell?provider=codex&cwd=%2Frepos%2Fbeta+app');
   });
 
+  it('keeps the home-folder link when every app with a repo path is archived', async () => {
+    baseMocks();
+    api.getApps.mockResolvedValue([{ id: 'app-old', name: 'Old App', repoPath: '/repos/old', archived: true }]);
+    api.getProviders.mockResolvedValue({
+      providers: [{ id: 'codex', name: 'Codex TUI', type: 'tui', command: 'codex', args: [], enabled: true, tuiCommandLine: 'codex' }],
+      activeProvider: null,
+    });
+
+    await renderPage();
+
+    expect(await screen.findByRole('link', { name: /Launch in Shell/ })).toHaveAttribute('href', '/shell?provider=codex');
+  });
+
   it('renders no button for a CLI provider, or when the server sent no command line', async () => {
     baseMocks();
     api.getProviders.mockResolvedValue({

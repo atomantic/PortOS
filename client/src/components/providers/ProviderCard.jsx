@@ -821,7 +821,7 @@ const SHELL_LAUNCH_CLASS = 'flex items-center gap-1.5 px-3 py-1.5 pointer-coarse
 // or none registered) it degrades to the plain home-folder launch.
 function ShellLaunchControl({ provider, apps, onLaunch }) {
   const title = `Launch TUI in Shell: ${provider.tuiCommandLine}`;
-  const launchable = apps.filter(app => app.repoPath);
+  const launchable = apps.filter(app => app.repoPath && !app.archived);
   if (launchable.length === 0) {
     return (
       <Link to={shellLaunchPath(provider.id)} className={SHELL_LAUNCH_CLASS} title={title}>
