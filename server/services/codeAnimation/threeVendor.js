@@ -13,6 +13,7 @@ import { createHash } from 'crypto';
 import { createRequire } from 'module';
 import { readFile } from 'fs/promises';
 import { dirname, join, posix } from 'path';
+import { injectPreviewHead } from '../../lib/htmlPreviewHead.js';
 
 // Addon modules (under three/examples/jsm) a film may import. Every relative
 // import inside them must itself be listed — readThreeVendor() enforces it.
@@ -127,8 +128,5 @@ export function importsThree(html) {
 export function injectThreeImportMap(html) {
   const stripped = String(html).replace(IMPORT_MAP_TAG, '');
   const tag = `<script type="importmap">${scriptJson(THREE_IMPORT_MAP)}</script>`;
-  const head = stripped.match(/<head[^>]*>/i);
-  if (!head) return `${tag}${stripped}`;
-  const at = head.index + head[0].length;
-  return `${stripped.slice(0, at)}${tag}${stripped.slice(at)}`;
+  return injectPreviewHead(stripped, tag);
 }

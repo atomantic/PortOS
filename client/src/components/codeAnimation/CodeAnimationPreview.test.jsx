@@ -47,7 +47,7 @@ vi.mock('../../lib/downloadBlob', () => ({ downloadBlob: vi.fn() }));
 vi.mock('../ui/Toast', () => ({ default: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }) }));
 vi.mock('../../hooks/useSseProgress', () => ({ useSseProgress: vi.fn(() => ({ latest: null })) }));
 
-import CodeAnimationPreview, { prepareAnimationHtml } from './CodeAnimationPreview';
+import CodeAnimationPreview from './CodeAnimationPreview';
 import {
   exportCodeAnimation,
   getCodeAnimationPackage,
@@ -67,49 +67,6 @@ const renderPreview = ({ audioUrl = null, jobId, html = HTML, frame = { width: 1
 );
 
 const previewOpens = () => socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:open');
-
-describe('prepareAnimationHtml', () => {
-  it('installs a restrictive policy before page scripts and the audio global', () => {
-    const output = prepareAnimationHtml(HTML, 'ANIMATION_AUDIO_URL', 'data:audio/mpeg;base64,AA');
-    expect(output).toContain('<head><meta http-equiv="Content-Security-Policy"');
-    expect(output).toContain("connect-src 'none'");
-    expect(output).toContain("form-action 'none'");
-    expect(output).toContain('img-src data: blob:');
-    expect(output).toContain('media-src data: blob:');
-    expect(output).toContain('<script>window["ANIMATION_AUDIO_URL"] = "data:audio/mpeg;base64,AA";</script><title>');
-  });
-
-  it('installs the policy without a <head> and when no audio is supplied', () => {
-    expect(prepareAnimationHtml('<canvas></canvas>', 'G', 'data:x'))
-      .toContain('<meta http-equiv="Content-Security-Policy"');
-    expect(prepareAnimationHtml(HTML, 'G', null)).toContain('<head><meta http-equiv="Content-Security-Policy"');
-  });
-
-  it.each([
-    '<!-- <head> --><canvas></canvas>',
-    '<html data-example="<head>"><body><canvas></canvas></body></html>',
-    `<script>const label = '<head>';</script>`,
-    '<img src="preview.png"><head></head>',
-  ])('places the policy and audio global in a head before %s', (page) => {
-    const output = prepareAnimationHtml(`<!DOCTYPE html>${page}`, 'G', 'data:x');
-    expect(output).toMatch(/^<!DOCTYPE html><head><meta http-equiv="Content-Security-Policy" content="[^"]+"><script>window\["G"\] = "data:x";<\/script><\/head>/);
-    expect(output.slice(output.indexOf('</head>') + '</head>'.length)).toBe(page);
-  });
-
-  it('keeps the vendored import map active after the policy and before the document', () => {
-    const page = '<!-- <head> --><script type="module">import "three";</script>';
-    const output = prepareAnimationHtml(`<!doctype html>${page}`, 'G', null, [{ path: 'three.module.js', text: 'export {};' }]);
-    expect(output).toMatch(/^<!doctype html><head><meta http-equiv="Content-Security-Policy" [^>]+><script type="importmap">/);
-    expect(output).toContain("script-src 'unsafe-inline' data:");
-    expect(output.endsWith(`</head>${page}`)).toBe(true);
-  });
-
-  it('cannot break out of the script tag through the data URL', () => {
-    const out = prepareAnimationHtml(HTML, 'G', 'data:x"</script><script>alert(1)//');
-    expect(out).not.toContain('</script><script>alert');
-    expect(out).toContain('"data:x\\"\\u003c/script>\\u003cscript>alert(1)//"');
-  });
-});
 
 // Frames decode off screen before the visible element takes them. happy-dom
 // loads no blob images, so these tests show each frame directly.
