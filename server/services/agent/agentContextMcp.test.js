@@ -20,8 +20,8 @@ vi.mock('../legacyExport.js', () => ({
   previewLegacyExport: mocks.previewLegacyExport,
   redactSecrets: (text) => text.replace(/sk-[A-Za-z0-9_-]{20,}/g, '[REDACTED]'),
 }));
-vi.mock('../../lib/navManifest.js', () => ({
-  NAV_COMMANDS: [{ id: 'nav.dashboard', path: '/', label: 'Dashboard', section: 'Main', aliases: ['home'], keywords: ['overview'] }],
+vi.mock('../../lib/navSearchMetadata.js', () => ({
+  NAV_COMMANDS_WITH_SEARCH: [{ id: 'nav.dashboard', path: '/', label: 'Dashboard', section: 'Main', aliases: ['home'], keywords: ['overview'] }],
   resolveNavCommand: (query) => query.toLowerCase().includes('home')
     ? { path: '/', matched: 'home', command: { id: 'nav.dashboard', path: '/', label: 'Dashboard', section: 'Main', aliases: ['home'] } }
     : null,

@@ -14,7 +14,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { NAV_COMMANDS } from '../lib/navManifest.js';
+import { NAV_COMMANDS_WITH_SEARCH } from '../lib/navSearchMetadata.js';
 import { dispatchTool, getToolMetadata } from '../services/voice/tools.js';
 
 const router = Router();
@@ -62,7 +62,7 @@ const PALETTE_ACTION_IDS = new Set(PALETTE_ACTIONS.map((a) => a.id));
 // Computed once at module load — the nav manifest and voice tool registry
 // are both module-scoped and do not change at runtime.
 const MANIFEST = Object.freeze({
-  nav: NAV_COMMANDS,
+  nav: NAV_COMMANDS_WITH_SEARCH,
   actions: PALETTE_ACTIONS.map((a) => {
     const meta = getToolMetadata(a.id);
     return {

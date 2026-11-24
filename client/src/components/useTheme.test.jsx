@@ -35,17 +35,52 @@ describe('useTheme applies the manifest to <html>', () => {
     expect(document.documentElement.dataset.portThemeEffects).toBeUndefined();
   });
 
-  it('removes custom properties the next theme does not declare', () => {
+  it('removes custom properties the next theme does not declare', async () => {
     expect(privateToken in withEffects.tokens).toBe(true);
     expect(privateToken in withoutEffects.tokens).toBe(false);
     const { result } = renderHook(() => useTheme());
     act(() => result.current.setTheme(withEffects.id));
-    expect(document.documentElement.style.getPropertyValue(privateToken)).not.toBe('');
+    await waitFor(() => {
+      expect(document.documentElement.style.getPropertyValue(privateToken)).not.toBe('');
+    });
 
     act(() => result.current.setTheme(withoutEffects.id));
-    expect(document.documentElement.style.getPropertyValue(privateToken)).toBe('');
+    await waitFor(() => {
+      expect(document.documentElement.style.getPropertyValue(privateToken)).toBe('');
+      expect(document.documentElement.style.getPropertyValue('--port-accent'))
+        .toBe(withoutEffects.colors['--port-accent']);
+    });
+  });
+
+  it('applies cached saved theme variables synchronously on cold boot with zero flash', () => {
+    const vars = { ...withoutEffects.colors, ...withoutEffects.tokens };
+    window.localStorage.setItem('portos-theme', withoutEffects.id);
+    window.localStorage.setItem('portos-theme-cache', JSON.stringify({
+      id: withoutEffects.id,
+      version: null,
+      vars,
+    }));
+
+    const { result } = renderHook(() => useTheme());
+    expect(result.current.themeId).toBe(withoutEffects.id);
+    expect(document.documentElement.dataset.portTheme).toBe(withoutEffects.id);
     expect(document.documentElement.style.getPropertyValue('--port-accent'))
       .toBe(withoutEffects.colors['--port-accent']);
+  });
+
+  it('hydrates an uncached saved non-default theme dynamically and caches it', async () => {
+    window.localStorage.setItem('portos-theme', withoutEffects.id);
+    const { result } = renderHook(() => useTheme());
+    expect(result.current.themeId).toBe(withoutEffects.id);
+    expect(document.documentElement.dataset.portTheme).toBe(withoutEffects.id);
+
+    await waitFor(() => {
+      expect(document.documentElement.style.getPropertyValue('--port-accent'))
+        .toBe(withoutEffects.colors['--port-accent']);
+    });
+    const cached = JSON.parse(window.localStorage.getItem('portos-theme-cache'));
+    expect(cached.id).toBe(withoutEffects.id);
+    expect(cached.vars['--port-accent']).toBe(withoutEffects.colors['--port-accent']);
   });
 });
 

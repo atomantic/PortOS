@@ -858,13 +858,14 @@ describe('Layout — keyboard navigation shell', () => {
     fireEvent.click(opener);
     const themeButton = within(sidebar).getByRole('button', { name: 'Switch theme. Current theme: Test' });
     fireEvent.click(themeButton);
-    const option = screen.getByRole('menuitemradio', { name: /Test/ });
+    const option = await screen.findByRole('menuitemradio', { name: /Test/ });
     expect(option).toHaveFocus();
     fireEvent.keyDown(option, { key: 'Escape' });
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
-    expect(themeButton).toHaveFocus();
+    const activeThemeButton = within(sidebar).getByRole('button', { name: 'Switch theme. Current theme: Test' });
+    expect(activeThemeButton).toHaveFocus();
     expect(opener).toHaveAttribute('aria-expanded', 'true');
-    fireEvent.keyDown(themeButton, { key: 'Escape' });
+    fireEvent.keyDown(activeThemeButton, { key: 'Escape' });
     expect(opener).toHaveFocus();
     expect(sidebar).toHaveAttribute('inert');
   });
