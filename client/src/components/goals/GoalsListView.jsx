@@ -109,7 +109,7 @@ function GoalRow({ goal, depth, expandedIds, onToggle, onSelect, selectedId, onA
             {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
           </button>
         ) : (
-          <div className="w-11 shrink-0" />
+          <div className="w-[44px] shrink-0" />
         )}
 
         <div className={`p-1 rounded ${cat.bg} shrink-0`}>

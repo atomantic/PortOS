@@ -203,6 +203,8 @@ describe.skipIf(!chrome)('Goals responsive controls', () => {
           await page.getByRole('button', { name: 'Close panel' }).click();
         }
       }
+      await page.addStyleTag({ content: 'html { font-size: 20px; }' });
+      expect((await parentTitle.boundingBox()).x).toBe((await leafTitle.boundingBox()).x);
     } finally { await page.close(); }
   }, 60000);
 
