@@ -102,6 +102,7 @@ export default function useProviderModels({ filter, allowDefault = false, presel
   const [selectedProviderId, setSelectedProviderId] = useState('');
   const [selectedModel, setSelectedModel] = useState('');
   const [loading, setLoading] = useState(enabled);
+  const [error, setError] = useState(null);
   const loadGenerationRef = useRef(0);
   const hasSetInitialRef = useRef(false);
   // Latched once the model is chosen deliberately — a picker change, or a
@@ -150,13 +151,23 @@ export default function useProviderModels({ filter, allowDefault = false, presel
   const load = useCallback(async () => {
     const loadGeneration = ++loadGenerationRef.current;
     setLoading(true);
+    let failure = null;
     const data = await getProviders(silent ? { silent: true } : undefined).catch((err) => {
       // Log even when `silent` suppresses the toast, so a failed fetch leaves
       // a breadcrumb (matches the prior inline console.warn behavior).
       console.warn(`⚠️ Provider list fetch failed: ${err?.message || err}`);
-      return { activeProvider: '', providers: [] };
+      failure = err instanceof Error ? err : new Error(String(err));
+      return null;
     });
     if (loadGeneration !== loadGenerationRef.current) return;
+    if (failure) {
+      // Keep the last good list and selection; callers tell "read failed" from
+      // "nothing configured" via `error`.
+      setError(failure);
+      setLoading(false);
+      return;
+    }
+    setError(null);
     setActiveProviderId(typeof data?.activeProvider === 'string' ? data.activeProvider : '');
     const filterFn = filter || (p => p.enabled);
     const filtered = (data.providers || [])
@@ -179,6 +190,7 @@ export default function useProviderModels({ filter, allowDefault = false, presel
       loadGenerationRef.current += 1;
       setProviders([]);
       setActiveProviderId('');
+      setError(null);
       setLoading(false);
       return;
     }
@@ -284,6 +296,8 @@ export default function useProviderModels({ filter, allowDefault = false, presel
     setSelectedProviderId: handleProviderChange,
     setSelectedModel: handleModelChange,
     loading,
+    error,
+    retry: load,
     resolveRef: catalog.resolveRef,
   };
 }
