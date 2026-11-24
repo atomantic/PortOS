@@ -1,9 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import express from 'express';
-import { createServer, request } from 'node:http';
-import { Server } from 'socket.io';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { request } from 'node:http';
 import { io as connect } from 'socket.io-client';
-import { runnerRequestGuard, runnerRequestRefusal } from './requestGuard.js';
+import { createCosRunner } from './index.js';
+import { runnerRequestRefusal } from './requestGuard.js';
 
 const headers = (extra = {}) => ({ host: 'localhost:5558', ...extra });
 
@@ -39,57 +38,65 @@ describe('runner native-client boundary', () => {
   });
 });
 
-// Real transports with harmless echo handlers: never contact the installed
-// runner or spawn/control an agent to test admission.
+// Real runner transports from createCosRunner with no real agents spawned:
+// verifies the actual Express middleware ordering and Socket.IO engine guard.
 describe('runner HTTP and Socket.IO admission', () => {
-  let io;
+  let runner;
   const clients = [];
+
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
   afterEach(async () => {
     for (const client of clients.splice(0)) client.close();
-    if (io) await new Promise(resolve => io.close(resolve));
+    if (runner) {
+      await new Promise(resolve => runner.io.close(resolve));
+      runner.server.closeAllConnections?.();
+      runner = null;
+    }
+    vi.restoreAllMocks();
   });
 
   const fixture = async () => {
-    const app = express();
-    app.use(runnerRequestGuard);
-    app.use(express.json());
-    app.post('/terminate-all', (_req, res) => res.json({ reached: true }));
-    const server = createServer(app);
-    io = new Server(server, {
-      allowRequest: (req, callback) => callback(null, runnerRequestRefusal(req) === null)
+    runner = createCosRunner({
+      port: 0,
+      host: '127.0.0.1',
+      orphanCleanupDelayMs: -1,
+      existsSync: () => true,
+      ensureDir: async () => {},
+      adoptNpmGlobalBinDir: vi.fn(async () => {}),
     });
-    io.engine.use(runnerRequestGuard);
-    io.on('connection', socket => socket.on('tui:input', (payload, acknowledge) => acknowledge(payload)));
-    await new Promise((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(0, '127.0.0.1', resolve);
-    });
-    return `http://127.0.0.1:${server.address().port}`;
+    const { port } = await runner.start(0, '127.0.0.1');
+    return { runner, url: `http://127.0.0.1:${port}` };
   };
 
-  const httpRequest = (url, extra, path = '/terminate-all', method = 'POST') => new Promise((resolve, reject) => {
+  const httpRequest = (url, extra, path = '/terminate-all', method = 'POST', rawBody = '') => new Promise((resolve, reject) => {
     const req = request(`${url}${path}`, { method, headers: extra }, res => {
       let body = '';
       res.on('data', chunk => { body += chunk; });
       res.on('end', () => resolve({ status: res.statusCode, body }));
     });
     req.on('error', reject);
-    req.end();
+    req.end(rawBody);
   });
 
   it('refuses no-preflight POSTs and rebind Hosts before routes or JSON parsing', async () => {
-    const url = await fixture();
+    const { url } = await fixture();
     for (const extra of [{ Origin: 'https://attacker.example' }, { 'Sec-Fetch-Site': 'same-origin' }, { Host: 'attacker.example:5558' }]) {
-      const response = await httpRequest(url, extra);
+      // Malformed JSON still gets 403 from runnerRequestGuard, proving it runs ahead of express.json().
+      const response = await httpRequest(url, { 'Content-Type': 'application/json', ...extra }, '/terminate-all', 'POST', '{bad json');
       expect(response.status).toBe(403);
       expect(JSON.parse(response.body).code).toMatch(/REJECTED|NOT_ALLOWED/);
     }
     const native = await fetch(`${url}/terminate-all`, { method: 'POST' });
-    expect(await native.json()).toEqual({ reached: true });
+    expect(native.status).toBe(200);
+    expect(await native.json()).toEqual({ success: true, killed: 0 });
   });
 
   it.each(['polling', 'websocket'])('rejects browser and rebind %s handshakes; preserves native TUI relay', async transport => {
-    const url = await fixture();
+    const { runner: instance, url } = await fixture();
     const hostileHeaders = [{ Origin: 'https://attacker.example' }, { Origin: 'http://localhost:5555' }, { 'Sec-Fetch-Site': 'same-origin' }];
     // The polling client's XMLHttpRequest implementation strips Host overrides.
     // Use raw HTTP for that handshake so the hostile header reaches the server.
@@ -105,11 +112,28 @@ describe('runner HTTP and Socket.IO admission', () => {
       });
       expect(result, JSON.stringify(extraHeaders)).toBe('refused');
     }
+
+    const write = vi.fn();
+    instance.activeAgents.set('synthetic-agent', {
+      kind: 'tui',
+      sessionId: 'synthetic-session',
+      promptSubmitted: null,
+      process: { write },
+    });
+
+    const serverSocketReady = new Promise(resolve => instance.io.once('connection', resolve));
     const client = connect(url, { transports: [transport], reconnection: false, timeout: 2000 });
     clients.push(client);
     await new Promise((resolve, reject) => { client.once('connect', resolve); client.once('connect_error', reject); });
-    const payload = { sessionId: 'synthetic-session', data: 'synthetic-input' };
-    expect(await client.timeout(2000).emitWithAck('tui:input', payload)).toEqual(payload);
+    const serverSocket = await serverSocketReady;
+
+    const relayed = new Promise(resolve => {
+      serverSocket.once('tui:input', () => queueMicrotask(resolve));
+    });
+    client.emit('tui:input', { sessionId: 'synthetic-session', data: 'synthetic-input' });
+    await relayed;
+    expect(write).toHaveBeenCalledWith('synthetic-input');
+
     // An already-issued sid does not bypass the HTTP guard on later packets.
     const response = await httpRequest(url, { Origin: 'https://attacker.example' }, `/socket.io/?EIO=4&transport=polling&sid=${client.io.engine.id}`);
     expect(response.status).toBe(403);

@@ -1,40 +1,21 @@
-import { runnerRequestGuard, runnerRequestRefusal } from './requestGuard.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { readFileSync } from 'node:fs';
-import { join, basename } from 'node:path';
-import { runInNewContext } from 'node:vm';
-import { maintenance } from '../lib/maintenanceAdmission.js';
-import { createHttpDrain } from '../lib/httpDrain.js';
-import { parseSentinelPayload } from '../lib/agent/agentSentinel.js';
-import { SENTINEL_COMPLETION_MARKER } from '../lib/agent/agentOutputMarkers.js';
-import { createSecurityScanManager } from './securityScan.js';
-import { securityScanRequestSchema } from '../lib/securityScanEvidence.js';
-import { createTuiExitHandler } from './tuiExit.js';
-import { armForceKill } from './forceKill.js';
-import { createRunnerShutdown, registerRunnerShutdownSignals } from './shutdown.js';
-import * as requestSchemas from './requestSchemas.js';
-import { usableAgentPid, runnerAgentLivenessFields } from '../lib/runnerAgentLiveness.js';
-
-// index.js binds a server at module load, so (like shutdown.test.js) it is
-// executed in a VM with its imports replaced by injected fakes. Nothing listens,
-// spawns or touches runner data.
-const source = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
-  .replace(/\r\n/g, '\n').replace(/^import (?:.+ from )?['"][^'"]+['"];\n/gm, '');
+import { io as connect } from 'socket.io-client';
+import { createCosRunner } from './index.js';
 
 const SENTINEL_PATH = '/example/workspace/.agent-done-agent-1';
 
-// `sentinel` overrides the fake access object; `watch` captures the handler the
-// runner registers so a test can fire the "sentinel appeared" event itself.
+const activeCleanups = [];
+
+// Spawn a real runner over loopback HTTP + Socket.IO with injectable PTY and
+// sentinel access; no real CLI binary, listening well-known port, or data/ tree
+// is touched.
 async function spawnTui(sentinel = {}, { trackPromptSubmission = true } = {}) {
-  const routes = new Map();
-  const app = { use: vi.fn(), get: (path, handler) => routes.set(path, handler), post: (path, handler) => routes.set(path, handler) };
-  const server = Object.assign(new EventEmitter(), {
-    listen: vi.fn(), close: vi.fn(cb => cb?.()), closeAllConnections: vi.fn(),
-  });
-  const io = Object.assign(new EventEmitter(), { engine: { use: vi.fn() }, use: vi.fn(), close: vi.fn(cb => cb?.()) });
   const child = Object.assign(new EventEmitter(), {
-    pid: 123, kill: vi.fn(), write: vi.fn(), resize: vi.fn(),
+    pid: 123,
+    kill: vi.fn(),
+    write: vi.fn(),
+    resize: vi.fn(),
     onData: fn => child.on('data', fn),
     onExit: fn => child.on('exit', fn),
   });
@@ -50,53 +31,98 @@ async function spawnTui(sentinel = {}, { trackPromptSubmission = true } = {}) {
   };
   const state = { agents: {}, stats: { spawned: 0, completed: 0, failed: 0 } };
   const killProcessTree = vi.fn();
-  runInNewContext(source, {
-    runnerRequestGuard, runnerRequestRefusal,
-    assertDatabaseAdmission: vi.fn(), maintenance,
-    withBackupAssetPublication: vi.fn(), persistRunnerCompletion: vi.fn(),
-    express: Object.assign(() => app, { json: vi.fn() }),
-    http: { createServer: () => server }, SocketServer: function () { return io; },
-    process: Object.assign(new EventEmitter(), { env: {}, exit: vi.fn() }),
-    console, Buffer, Date, setTimeout, clearTimeout, join, basename,
-    PATHS: { root: '/example', cosAgents: '/example/agents' }, PORTS: { COS: 0 },
-    setupProcessErrorHandlers: vi.fn(), existsSync: () => true, ensureDir: async () => {},
-    readFile: vi.fn(), writeFile: vi.fn(),
-    withState: async fn => fn(state), drainState: async () => {},
-    ...requestSchemas,
-    createRunnerShutdown, registerRunnerShutdownSignals, createTuiExitHandler, createHttpDrain,
-    createSecurityScanManager, securityScanRequestSchema,
-    armForceKillShared: armForceKill, killProcessTree,
-    usableAgentPid, runnerAgentLivenessFields, getProcessStats: vi.fn(async () => ({})),
-    spawn: vi.fn(), pty: { spawn: vi.fn(() => child) },
+  const armForceKill = vi.fn();
+
+  const runner = createCosRunner({
+    rootDir: '/example',
+    agentsDir: '/example/agents',
+    port: 0,
+    host: '127.0.0.1',
+    orphanCleanupDelayMs: -1,
+    assertDatabaseAdmission: vi.fn(),
+    withBackupAssetPublication: vi.fn(),
+    persistRunnerCompletion: vi.fn(),
+    existsSync: () => true,
+    ensureDir: async () => {},
+    adoptNpmGlobalBinDir: vi.fn(async () => {}),
+    readFile: vi.fn(),
+    writeFile: vi.fn(),
+    withState: async fn => fn(state),
+    drainState: async () => {},
+    killProcessTree,
+    armForceKill,
+    getProcessStats: vi.fn(async () => ({})),
+    spawn: vi.fn(),
+    pty: { spawn: vi.fn(() => child) },
     createAgentSentinelAccess: vi.fn(() => access),
-    parseSentinelPayload, SENTINEL_COMPLETION_MARKER,
-    buildCliChildEnv: () => ({}), prepareCliSpawn: (command, args) => ({ command, args }),
+    buildCliChildEnv: () => ({}),
+    prepareCliSpawn: (command, args) => ({ command, args }),
     prepareWindowsAgentLaunch: (_agentId, command, args) => ({ command, args }),
-    watchWindowsAgentProcess: child => child,
-    commandExists: vi.fn(async () => true), findCommandOnPath: command => command,
-    isAllowedCommand: () => true, ALLOWED_COMMANDS: ['example-cli'],
+    watchWindowsAgentProcess: c => c,
+    commandExists: vi.fn(async () => true),
+    findCommandOnPath: command => command,
+    isAllowedCommand: () => true,
+    allowedCommands: new Set(['example-cli']),
   });
-  const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json: vi.fn() };
-  await routes.get('/spawn-tui')({ body: {
-    agentId: 'agent-1', taskId: 'task-1', command: 'example-cli', doneSentinelPath: SENTINEL_PATH, trackPromptSubmission,
-  } }, res);
-  expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+  const { port } = await runner.start(0, '127.0.0.1');
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  const serverSocketReady = new Promise(resolve => runner.io.once('connection', resolve));
+  const client = connect(baseUrl, { transports: ['websocket'], reconnection: false });
+  await new Promise((resolve, reject) => {
+    client.once('connect', resolve);
+    client.once('connect_error', reject);
+  });
+  const serverSocket = await serverSocketReady;
+
+  activeCleanups.push(async () => {
+    client.close();
+    for (const agent of runner.activeAgents.values()) {
+      if (agent.killTimer) clearTimeout(agent.killTimer);
+    }
+    await new Promise(resolve => runner.io.close(resolve));
+    runner.server.closeAllConnections?.();
+  });
+
+  const spawnRes = await fetch(`${baseUrl}/spawn-tui`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      command: 'example-cli',
+      doneSentinelPath: SENTINEL_PATH,
+      trackPromptSubmission,
+    }),
+  });
+  expect(spawnRes.status).toBe(200);
+  expect(await spawnRes.json()).toEqual(expect.objectContaining({ success: true }));
+
   // The runner hands its handler to watch(); firing it returns the tracked work.
   const fireSentinel = () => access.watch.mock.calls.at(-1)[0]();
-  const socket = new EventEmitter();
-  socket.use = vi.fn();
-  io.emit('connection', socket);
+
+  const sendInput = (payload) => new Promise((resolve) => {
+    serverSocket.once('tui:input', () => queueMicrotask(resolve));
+    client.emit('tui:input', { sessionId: 'agent-1', ...payload });
+  });
+
   const listing = async () => {
-    const response = { json: vi.fn() };
-    await routes.get('/agents')({}, response);
-    return response.json.mock.calls[0][0][0];
+    const res = await fetch(`${baseUrl}/agents`);
+    const rows = await res.json();
+    return rows[0];
   };
+
   const stopStartup = async (onlyIfPromptUnsubmitted = true) => {
-    const response = { json: vi.fn(), status: vi.fn().mockReturnThis() };
-    await routes.get('/terminate/:agentId')({ params: { agentId: 'agent-1' }, body: { onlyIfPromptUnsubmitted } }, response);
-    return response.json.mock.calls[0][0];
+    const res = await fetch(`${baseUrl}/terminate/agent-1`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ onlyIfPromptUnsubmitted }),
+    });
+    return { status: res.status, body: await res.json() };
   };
-  return { access, child, stopWatching, fireSentinel, socket, listing, stopStartup, killProcessTree };
+
+  return { access, child, stopWatching, fireSentinel, sendInput, listing, stopStartup, killProcessTree };
 }
 
 beforeEach(() => {
@@ -104,31 +130,32 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
-describe('cos-runner TUI startup recovery receipt', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
-  afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+afterEach(async () => {
+  for (const cleanup of activeCleanups.splice(0)) await cleanup();
+  vi.restoreAllMocks();
+});
 
+describe('cos-runner TUI startup recovery receipt', () => {
   it('counts only a successful task-submit Enter, preserving it across a server reconnect', async () => {
     const run = await spawnTui();
-    const input = data => run.socket.emit('tui:input', { sessionId: 'agent-1', ...data });
-    input({ data: '\r' }); // startup dialog, not the task
-    input({ data: '\x1b[200~task body\x1b[201~' });
+    await run.sendInput({ data: '\r' }); // startup dialog, not the task
+    await run.sendInput({ data: '\x1b[200~task body\x1b[201~' });
     expect((await run.listing()).promptSubmitted).toBe(false);
     run.child.write.mockImplementationOnce(() => { throw new Error('PTY write failed'); });
-    input({ data: '\r', promptSubmission: true });
+    await run.sendInput({ data: '\r', promptSubmission: true });
     expect((await run.listing()).promptSubmitted).toBe(false);
-    input({ data: '\r', promptSubmission: true });
+    await run.sendInput({ data: '\r', promptSubmission: true });
     expect((await run.listing()).promptSubmitted).toBe(true);
     // A stale GET /agents from the old server must not authorize this kill.
-    expect(await run.stopStartup()).toMatchObject({ terminated: false });
+    expect((await run.stopStartup()).body).toMatchObject({ terminated: false });
     expect(run.killProcessTree).not.toHaveBeenCalled();
   });
 
   it('stops an unsubmitted composer and refuses a late submission after the cancellation decision', async () => {
     const run = await spawnTui();
-    expect(await run.stopStartup()).toMatchObject({ terminated: true });
+    expect((await run.stopStartup()).body).toMatchObject({ terminated: true });
     expect(run.killProcessTree).toHaveBeenCalledWith(run.child, 'SIGTERM');
-    run.socket.emit('tui:input', { sessionId: 'agent-1', data: '\r', promptSubmission: true });
+    await run.sendInput({ data: '\r', promptSubmission: true });
     expect(run.child.write).not.toHaveBeenCalled();
     expect((await run.listing()).promptSubmitted).toBe(false);
   });
@@ -136,13 +163,15 @@ describe('cos-runner TUI startup recovery receipt', () => {
   it('preserves terminals spawned by an older server without the tracking protocol', async () => {
     const run = await spawnTui({}, { trackPromptSubmission: false });
     expect((await run.listing()).promptSubmitted).toBeNull();
-    expect(await run.stopStartup()).toMatchObject({ terminated: false });
+    expect((await run.stopStartup()).body).toMatchObject({ terminated: false });
     expect(run.killProcessTree).not.toHaveBeenCalled();
   });
 
   it('rejects a malformed guard instead of falling through to unconditional termination', async () => {
     const run = await spawnTui();
-    expect(await run.stopStartup('true')).toMatchObject({ error: expect.stringContaining('onlyIfPromptUnsubmitted') });
+    const res = await run.stopStartup('true');
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: expect.stringContaining('onlyIfPromptUnsubmitted') });
     expect(run.killProcessTree).not.toHaveBeenCalled();
   });
 });
