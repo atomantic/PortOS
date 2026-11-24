@@ -30,6 +30,8 @@ vi.mock('../localMemory.js', () => ({
     return { blockers: [], unloaded: [] };
   },
 }));
+const mockInspectModelCache = vi.hoisted(() => vi.fn());
+vi.mock('../../lib/hfCache.js', async (original) => ({ ...await original(), inspectModelCache: (...args) => mockInspectModelCache(...args) }));
 vi.mock('../hfToken.js', () => ({ hfChildEnv: vi.fn(async () => ({})) }));
 vi.mock('../../lib/fileUtils.js', async (original) => ({ ...await original(), ensureDir: vi.fn() }));
 
@@ -1704,7 +1706,10 @@ describe('local render launch unwind (#11862)', () => {
 
 
 describe('FLUX.3 dispatch', () => {
-  const base = { model: { id: 'flux3-klein-q4', runner: 'flux3', repo: 'mflux-community/flux-3-image-klein-mflux-q4' },
+  const snapshot = '/hf-cache/snapshots/79c0034de040c460e9685bf0127f40af042a2abe';
+  beforeEach(() => { mockInspectModelCache.mockReset().mockResolvedValue({ cached: true, sizeBytes: 1, snapshotPath: snapshot }); });
+  const base = { flux3ModelPath: snapshot,
+    model: { id: 'flux3-klein-q4', runner: 'flux3', repo: 'mflux-community/flux-3-image-klein-mflux-q4' },
     prompt: 'An illustrated puffin on a rocky cliff in soft morning light', width: 1024, height: 1024,
     steps: 16, seed: 42, outputPath: '/tmp/example.png', quantize: '8', guidance: 3.5, pythonPath: '/legacy/python3' };
 
@@ -1727,21 +1732,36 @@ describe('FLUX.3 dispatch', () => {
       const completed = new Promise(resolve => imageGenEvents.once('completed', resolve));
       child.emit('close', 0);
       await completed;
-      expect(mockSpawn.mock.calls[0][2].env).toMatchObject({ HF_TOKEN: 'fixture-stored-token', PYTHONPATH: undefined, PYTHONNOUSERSITE: '1' });
+      expect(mockSpawn.mock.calls[0][2].env).toMatchObject({ HF_TOKEN: 'fixture-stored-token', HF_HUB_OFFLINE: '1', PYTHONPATH: undefined, PYTHONNOUSERSITE: '1' });
+      expect(mockInspectModelCache).toHaveBeenCalledWith('mflux-community/flux-3-image-klein-mflux-q4', { revision: '79c0034de040c460e9685bf0127f40af042a2abe' });
+      expect(mockSpawn.mock.calls[0][1]).toContain(snapshot);
       const sidecar = JSON.parse(readFileSync(join(PATHS.images, `${job.jobId}.metadata.json`), 'utf8'));
       expect(sidecar).toMatchObject({ modelId: 'flux3-klein-q4', quantization: 'q4', quantize: '4', guidance: 0,
-        sentPrompt: base.prompt, modelRepo: base.model.repo,
+        sentPrompt: base.prompt, modelRepo: base.model.repo, modelRevision: '79c0034de040c460e9685bf0127f40af042a2abe',
         provenance: { sources: [expect.objectContaining({ license: 'flux-kommunity-license' })] } });
     } finally {
       spy.mockRestore();
       if (previousToken === undefined) delete process.env.HF_TOKEN; else process.env.HF_TOKEN = previousToken;
     }
   });
+  it('refuses an uncached pinned snapshot before spawning so mflux never pulls from the Hub', async () => {
+    mockInspectModelCache.mockResolvedValue({ cached: false, sizeBytes: 0, snapshotPath: null });
+    mockSpawn.mockReset();
+    const capabilities = await import('../../lib/systemCapabilities.js');
+    const spy = vi.spyOn(capabilities, 'captureSystemCapabilities').mockReturnValue({
+      version: 1, platform: 'darwin', arch: 'arm64', appleSilicon: true, cpuCount: 8, totalMemoryGb: 64,
+    });
+    try {
+      await expect(generateImage({ modelId: 'flux3-klein-q4', prompt: base.prompt, width: 1024, height: 1024, seed: 42 }))
+        .rejects.toMatchObject({ code: 'FLUX3_WEIGHTS_NOT_CACHED' });
+      expect(mockSpawn).not.toHaveBeenCalled();
+    } finally { spy.mockRestore(); }
+  });
   it('uses the isolated FLUX.3 CLI and checkpoint quantization for text and all ten reference images', () => {
     const text = buildArgs(base);
     expect(text.bin).toMatch(/venv-flux3\/bin\/python3$/);
     expect(text.bin).not.toBe(base.pythonPath);
-    expect(text.args).toEqual(['-I', '-m', 'mflux.models.flux3.cli.flux3_generate', '--model', base.model.repo,
+    expect(text.args).toEqual(['-I', '-m', 'mflux.models.flux3.cli.flux3_generate', '--model', snapshot,
       '--base-model', 'flux3-image-klein', '--prompt', base.prompt, '--width', '1024', '--height', '1024',
       '--steps', '16', '--seed', '42', '--output', base.outputPath, '--metadata', '--low-ram']);
     const refs = Array.from({ length: 10 }, (_, i) => `/tmp/ref-${i}.png`);

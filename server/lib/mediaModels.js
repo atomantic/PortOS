@@ -637,6 +637,16 @@ export const upgradeLtx25AudioControls = (list) => {
   });
 };
 
+// Immutable commits of the community FLUX.3 Klein MLX conversions. They are
+// third-party repos, so the render loads the verified local snapshot of exactly
+// this commit instead of letting mflux follow a mutable `main`.
+const flux3Repo = (bits) => `mflux-community/flux-3-image-klein-mflux-q${bits}`;
+const FLUX3_KLEIN_REVISIONS = Object.freeze({
+  [flux3Repo(4)]: '79c0034de040c460e9685bf0127f40af042a2abe',
+  [flux3Repo(6)]: 'ace05578b60f0185b0c1212d23fb13616d88d6c7',
+  [flux3Repo(8)]: '7e46237dea3999a9792959f5e000aeb1b9f9e7df',
+});
+
 const DEFAULT_REGISTRY = {
   _doc: 'PortOS media model registry. Edit to add models, tune defaults, or switch the text encoder. Restart the server to apply changes.',
   video: {
@@ -1118,7 +1128,7 @@ const DEFAULT_REGISTRY = {
     // availability does not certify acceptance of BFL's upstream terms.
     ...[4, 6, 8].map(bits => ({
       id: `flux3-klein-q${bits}`, name: `FLUX.3 Klein Q${bits} (MLX, 32+ GB RAM)`,
-      runner: 'flux3', repo: `mflux-community/flux-3-image-klein-mflux-q${bits}`,
+      runner: 'flux3', repo: flux3Repo(bits), revision: FLUX3_KLEIN_REVISIONS[flux3Repo(bits)],
       steps: 16, guidance: 0, cfgDisabled: true, quantization: `q${bits}`,
       supportsImg2Img: false, supportsLoras: false, supportsNegativePrompt: false,
       license: 'flux-kommunity-license',
@@ -1537,6 +1547,17 @@ const backfillFlux2Revisions = (list) => {
   });
 };
 
+// Fork-safe commit-pin backfill for persisted FLUX.3 entries: the pin lands only
+// while the repo is still a shipped one, and an explicit revision (including '') wins.
+const backfillFlux3Revisions = (list) => {
+  if (!Array.isArray(list)) return list;
+  return list.map((entry) => {
+    if (!isPlainObject(entry) || entry.runner !== 'flux3' || 'revision' in entry) return entry;
+    const pin = FLUX3_KLEIN_REVISIONS[entry.repo];
+    return pin ? { ...entry, revision: pin } : entry;
+  });
+};
+
 // Same fork-safe commit-pin backfill for persisted diffusers-runner entries
 // (HiDream/Qwen/Z-Image/ERNIE): a revision lands only while the repo is still a
 // shipped one with a known pin; an explicit revision (including '') wins.
@@ -1814,9 +1835,9 @@ const normalizeRegistry = (parsed) => {
   // (treat as fresh install — let the new entries land).
   const shippedImage = isPlainObject(safe._shippedDefaults?.image) ? safe._shippedDefaults.image : null;
   const isImageBootstrap = shippedImage === null;
-  const upgradedImage = backfillDiffusersRevisions(backfillFlux2Revisions(backfillKvRepo(backfillEditOnly(backfillCfgDisabled(
+  const upgradedImage = backfillFlux3Revisions(backfillDiffusersRevisions(backfillFlux2Revisions(backfillKvRepo(backfillEditOnly(backfillCfgDisabled(
     upgradeImageEntries(arrayOrDefault(safe.image, DEFAULT_REGISTRY.image)),
-  )))));
+  ))))));
   // Image bootstrap deliberately uses userIds ONLY (not union with defaults).
   // Image is getting `_shippedDefaults` for the first time in this release, so
   // there's no prior history of deletions to preserve via the union trick the
