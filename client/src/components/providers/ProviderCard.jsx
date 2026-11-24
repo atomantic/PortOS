@@ -13,7 +13,8 @@
 
 import { useState } from 'react';
 import { hardwareUnavailableReason } from '../../utils/systemCapabilities';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
+import AppContextPicker from '../AppContextPicker';
 import { ExternalLink, Network, Terminal } from 'lucide-react';
 import {
   CONTEXT_WINDOW_SOURCE,
@@ -95,6 +96,7 @@ export const CARD_STATE_STYLES = {
 
 export default function ProviderCard({
   provider,
+  apps = [],
   cardState,
   daemonReadiness,
   runtime,
@@ -140,6 +142,7 @@ export default function ProviderCard({
   // One card, one record: a plain boolean, not the id-keyed useConfirmDelete
   // that a component owning several rows needs.
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const navigate = useNavigate();
   const modes = (provider.executionModes || []).map(mode => providersById?.[mode.id]).filter(Boolean);
   const unified = modes.length > 1;
   const isCardDefault = isDefault || (unified && modes.some(m => m.id === activeProviderId));
@@ -287,16 +290,15 @@ export default function ProviderCard({
               the command itself would leave that env behind — and those values
               are secret, so they can't ride a URL anyway. `tuiCommandLine` is
               the display half of the same resolution: it shows what will run,
-              and an older server that omits it simply renders no button. */}
+              and an older server that omits it simply renders no button.
+              The managed-app picker adds only `cwd` (the app's repo path), so
+              the TUI starts inside that app's checkout. */}
           {isLaunchableTuiProvider(shellProvider) && (
-            <Link
-              to={`/shell?provider=${encodeURIComponent(shellProvider.id)}`}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded transition-colors"
-              title={`Launch TUI in Shell: ${shellProvider.tuiCommandLine}`}
-            >
-              <Terminal size={14} />
-              Launch in Shell
-            </Link>
+            <ShellLaunchControl
+              provider={shellProvider}
+              apps={apps}
+              onLaunch={(cwd) => navigate(shellLaunchPath(shellProvider.id, cwd))}
+            />
           )}
 
           <button
@@ -802,6 +804,48 @@ function CodexSubscriptionPanel({
           <button type="button" className={BUTTON_CLASS} disabled={loading} onClick={onCheck}>{loading ? 'Checking…' : 'Check account'}</button>
         )}
       </div>
+    </div>
+  );
+}
+
+function shellLaunchPath(providerId, cwd) {
+  const params = new URLSearchParams({ provider: providerId });
+  if (cwd) params.set('cwd', cwd);
+  return `/shell?${params}`;
+}
+
+const SHELL_LAUNCH_CLASS = 'flex items-center gap-1.5 px-3 py-1.5 pointer-coarse:min-h-11 text-sm bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded transition-colors';
+
+// Picking a managed app IS the launch, so the select's empty value is a prompt,
+// never a destination. With no app that has a repo path (still loading, failed,
+// or none registered) it degrades to the plain home-folder launch.
+function ShellLaunchControl({ provider, apps, onLaunch }) {
+  const title = `Launch TUI in Shell: ${provider.tuiCommandLine}`;
+  const launchable = apps.filter(app => app.repoPath && !app.archived);
+  if (launchable.length === 0) {
+    return (
+      <Link to={shellLaunchPath(provider.id)} className={SHELL_LAUNCH_CLASS} title={title}>
+        <Terminal size={14} />
+        Launch in Shell
+      </Link>
+    );
+  }
+  return (
+    <div className="relative" title={title}>
+      <Terminal size={14} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-port-accent" />
+      <AppContextPicker
+        apps={launchable}
+        value=""
+        label={null}
+        ariaLabel="Launch in Shell in app"
+        placeholder="Launch in Shell…"
+        showRepoPath={false}
+        selectClassName={`${SHELL_LAUNCH_CLASS} pl-8 max-w-[14rem] cursor-pointer border-0`}
+        onChange={(appId) => {
+          const app = launchable.find(a => a.id === appId);
+          if (app) onLaunch(app.repoPath);
+        }}
+      />
     </div>
   );
 }
