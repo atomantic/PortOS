@@ -1,4 +1,4 @@
-import { readFile, mkdir, access, chmod } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, access, chmod, lstat, readdir, rm } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 // Dependency-light shared module (node builtins + pure arg builder only), so
 // importing it from this standalone process doesn't pull in the AI toolkit.
@@ -24,7 +24,7 @@ import {
   revertDiffFromLive,
   runVerifyCommand,
 } from './sandbox.js';
-import { createStagedFixStore } from './stagedFixes.js';
+import { createStagedFixStore, isAutofixerSessionId } from './stagedFixes.js';
 import { writeHistoryFile, writeHistoryJson } from './historyFiles.js';
 import { startAutofixerUi } from './ui.js';
 import { execPm2, listProcessesStrict, DATA_DIR, AUTOFIXER_DIR, INDEX_FILE, loadApps } from './shared.js';
@@ -42,6 +42,7 @@ const stagedFixes = createStagedFixStore({ root: AUTOFIXER_DIR, loadApps, execPm
 const PROVIDERS_FILE = join(DATA_DIR, 'providers.json');
 const SETTINGS_FILE = join(DATA_DIR, 'settings.json');
 const SESSIONS_DIR = join(AUTOFIXER_DIR, 'sessions');
+const SESSION_HISTORY_LIMIT = 100;
 // Disposable worktrees for isolated repair runs (gitignored under data/).
 const WORKTREES_DIR = join(AUTOFIXER_DIR, 'worktrees');
 // Bound the agent-proposed patch before it can reach the live checkout.
@@ -147,7 +148,8 @@ async function ensureHistoryDir() {
   await chmod(SESSIONS_DIR, 0o700);
   await chmod(INDEX_FILE, 0o600).catch(async error => {
     if (error.code !== 'ENOENT') throw error;
-    await writeHistoryJson(INDEX_FILE, []);
+    await writeFile(INDEX_FILE, '[]', { flag: 'wx', mode: 0o600 });
+    await chmod(INDEX_FILE, 0o600);
   });
 }
 
@@ -159,7 +161,35 @@ async function loadIndex() {
   if (!Array.isArray(index)) {
     throw new Error('Autofixer history index must be an array');
   }
+  if (index.some(entry => typeof entry?.sessionId !== 'string')) {
+    throw new Error('Autofixer history index contains an invalid session entry');
+  }
   return index;
+}
+
+async function canPruneSession(sessionId) {
+  return stagedFixes.canPrune(sessionId).catch(() => {
+    console.error('❌ [Autofixer] Could not determine a session’s staged disposition during cleanup');
+    return false;
+  });
+}
+
+async function removeSessionDirectory(sessionId) {
+  await rm(join(SESSIONS_DIR, sessionId), { recursive: true, force: true }).catch(() => {
+    console.error('❌ [Autofixer] Could not remove a retired session directory');
+  });
+}
+
+async function sweepOrphanedSessions() {
+  const indexed = new Set((await loadIndex()).map(entry => entry.sessionId));
+  if (!(await lstat(SESSIONS_DIR)).isDirectory()) return;
+  // Remove one session at a time so a legacy backlog cannot fan out I/O.
+  for (const entry of await readdir(SESSIONS_DIR, { withFileTypes: true })) {
+    if (entry.isDirectory() && isAutofixerSessionId(entry.name)
+      && !indexed.has(entry.name) && await canPruneSession(entry.name)) {
+      await removeSessionDirectory(entry.name);
+    }
+  }
 }
 
 function saveSession(sessionId, prompt, output, metadata, patch) {
@@ -204,11 +234,28 @@ async function writeSession(sessionId, prompt, output, metadata, patch) {
   const existing = index.findIndex(entry => entry.sessionId === sessionId);
   if (existing >= 0) index.splice(existing, 1);
   index.unshift(indexEntry);
-  if (index.length > 100) {
-    index.splice(100);
+  const evicted = new Set();
+  if (index.length > SESSION_HISTORY_LIMIT) {
+    const overflow = index.splice(SESSION_HISTORY_LIMIT);
+    // Metadata reflects manual apply/discard; the staged flag in the index
+    // records only the original repair outcome.
+    for (const entry of overflow) {
+      if (!isAutofixerSessionId(entry.sessionId)) continue;
+      if (!await canPruneSession(entry.sessionId)) {
+        index.push(entry);
+      } else {
+        evicted.add(entry.sessionId);
+      }
+    }
   }
 
   await writeHistoryJson(INDEX_FILE, index.map(({ promptPreview, ...entry }) => entry));
+  if (evicted.size && (await lstat(SESSIONS_DIR)).isDirectory()) {
+    const retained = new Set(index.map(entry => entry.sessionId));
+    for (const id of evicted) {
+      if (!retained.has(id) && await canPruneSession(id)) await removeSessionDirectory(id);
+    }
+  }
 }
 
 async function getProcessLogs(processName) {
@@ -548,6 +595,10 @@ async function main() {
   if (shuttingDown) return;
   await sweepInterruptedRepairs().catch((err) => {
     console.error(`❌ [Autofixer] Worktree sweep failed: ${err.message}`);
+  });
+  if (shuttingDown) return;
+  await sweepOrphanedSessions().catch(() => {
+    console.error('❌ [Autofixer] Could not sweep orphaned session directories');
   });
 
   if (shuttingDown) return;

@@ -16,6 +16,10 @@
  *   npm run setup:supercollider -- --verbose       # stream the full docker build log
  *   npm run setup:supercollider -- --status [--json]
  *
+ * CI can set PORTOS_SUPERCOLLIDER_BUILDX_CACHE_FROM or
+ * PORTOS_SUPERCOLLIDER_BUILDX_CACHE_TO to a local BuildKit cache directory.
+ * --rebuild bypasses both.
+ *
  * Idempotent: a built, current image is not rebuilt, and current passing probe
  * evidence is not re-run. Exit codes: see SETUP_EXIT_CODES.
  */
@@ -106,6 +110,8 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const retainedLines = [];
   const result = await setupRuntime({
     rebuild: options.rebuild,
+    cacheFrom: process.env.PORTOS_SUPERCOLLIDER_BUILDX_CACHE_FROM,
+    cacheTo: process.env.PORTOS_SUPERCOLLIDER_BUILDX_CACHE_TO,
     confirmBuild: io.confirmBuild ?? (() => confirmBuild(options)),
     onLine: (line) => {
       if (options.verbose || isBuildStepLine(line)) {

@@ -4,7 +4,7 @@ import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { PRIORITY_BADGE } from './goalConstants';
 
 export default function GoalTodoList({
-  goal, newTodoTitle, setNewTodoTitle, newTodoPriority, setNewTodoPriority,
+  goal, pendingActions, newTodoTitle, setNewTodoTitle, newTodoPriority, setNewTodoPriority,
   newTodoEstimate, setNewTodoEstimate, todoSubmitting, handleAddTodo, handleToggleTodo, handleDeleteTodo
 }) {
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
@@ -24,8 +24,9 @@ export default function GoalTodoList({
               <button
                 type="button"
                 onClick={() => handleToggleTodo(todo)}
+                disabled={pendingActions.has(`todo:${todo.id}`)}
                 aria-label={todo.status === 'done' ? `Mark ${todo.title} as pending` : `Mark ${todo.title} as done`}
-                className="group/toggle pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center justify-center shrink-0"
+                className="group/toggle pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center justify-center shrink-0 disabled:opacity-50"
               >
                 <span aria-hidden="true" className={`w-4 h-4 rounded border flex items-center justify-center ${
                   todo.status === 'done'

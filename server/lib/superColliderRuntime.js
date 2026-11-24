@@ -222,14 +222,20 @@ export function hashSuperColliderRecipe(files) {
 }
 
 /**
- * `docker build` argv that stamps the runtime version and recipe hash on the
- * image. `noCache` is the repair path: rebuild every layer instead of reusing
- * a cached (possibly broken) one.
+ * Docker build argv that stamps the runtime version and recipe hash on the
+ * image. CI can opt into Buildx's local layer cache. `noCache` bypasses both
+ * Docker's build cache and any external cache during repair.
  */
-export function buildSuperColliderBuildArgs({ recipeDir, recipeHash, noCache = false }) {
+export function buildSuperColliderBuildArgs({ recipeDir, recipeHash, noCache = false, cacheFrom, cacheTo }) {
+  const build = !noCache && (cacheFrom || cacheTo)
+    ? [
+      'buildx', 'build', '--load',
+      ...(cacheFrom ? ['--cache-from', `type=local,src=${cacheFrom}`] : []),
+      ...(cacheTo ? ['--cache-to', `type=local,dest=${cacheTo},mode=max`] : []),
+    ]
+    : ['build', ...(noCache ? ['--no-cache'] : [])];
   return [
-    'build',
-    ...(noCache ? ['--no-cache'] : []),
+    ...build,
     '--tag', SUPERCOLLIDER_IMAGE,
     '--label', `${SUPERCOLLIDER_IMAGE_LABELS.runtimeVersion}=${SUPERCOLLIDER_RUNTIME_VERSION}`,
     '--label', `${SUPERCOLLIDER_IMAGE_LABELS.recipeHash}=${recipeHash}`,

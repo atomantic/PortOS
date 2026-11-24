@@ -2,7 +2,7 @@ import { CalendarDays, Unlink } from 'lucide-react';
 import ListLoadError from '../ui/ListLoadError';
 
 export default function GoalLinkedCalendars({
-  goal, subcalendars, subcalendarsState, subcalendarsError, retrySubcalendars, selectedCalendar, setSelectedCalendar,
+  goal, pendingActions, subcalendars, subcalendarsState, subcalendarsError, retrySubcalendars, selectedCalendar, setSelectedCalendar,
   calendarMatchPattern, setCalendarMatchPattern, handleLinkCalendar, handleUnlinkCalendar
 }) {
   return (
@@ -25,7 +25,8 @@ export default function GoalLinkedCalendars({
               )}
               <button
                 onClick={() => handleUnlinkCalendar(lc.subcalendarId)}
-                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-0.5 text-gray-600 hover:text-red-400"
+                disabled={pendingActions.has(`unlink-calendar:${lc.subcalendarId}`)}
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-0.5 text-gray-600 hover:text-red-400 disabled:opacity-50"
                 title="Unlink" aria-label="Unlink"
               >
                 <Unlink className="w-3 h-3" />
@@ -57,7 +58,7 @@ export default function GoalLinkedCalendars({
             </select>
             <button
               onClick={handleLinkCalendar}
-              disabled={!selectedCalendar}
+              disabled={!selectedCalendar || pendingActions.has('link-calendar')}
               className="px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent disabled:opacity-50"
             >
               Link
