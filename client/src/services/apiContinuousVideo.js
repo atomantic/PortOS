@@ -26,3 +26,14 @@ export const generateContinuousVideoEpisode = (body, options = {}) => request('/
 // EventSource URL for an episode job's progress stream (consumed by useSseProgress).
 export const continuousVideoEpisodeEventsUrl = (jobId) =>
   `/api/continuous-video/${encodeURIComponent(jobId)}/events`;
+
+// Discover currently running continuous-video episodes so EpisodeComposer can
+// reattach after a drawer close/reopen or page reload.
+export const getActiveContinuousVideoEpisodes = (options = {}) => request('/continuous-video/active', {
+  silent: true, ...options,
+});
+
+// Request cancellation of an active continuous-video episode.
+export const cancelContinuousVideoEpisode = (jobId, options = {}) => request(`/continuous-video/${encodeURIComponent(jobId)}/cancel`, {
+  method: 'POST', ...options,
+});
