@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Trash2, Loader2, ChevronRight, ChevronDown, Lock, Unlock } from 'lucide-react';
 import toast from '../../ui/Toast';
 import { useLockToggle } from '../../../hooks/useLockToggle';
@@ -21,7 +21,11 @@ import SeasonEditor from './SeasonEditor.jsx';
 import SeasonActions from './SeasonActions.jsx';
 import IssueRow from './IssueRow.jsx';
 
-export default function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUpdate }) {
+export default function SeasonRow(props) {
+  return <SeasonRowContent key={JSON.stringify([props.series.id, props.season.id])} {...props} />;
+}
+
+function SeasonRowContent({ series, season, seasons, issues, onSeriesUpdate, onIssuesUpdate }) {
   const [collapsed, setCollapsed] = useState(false);
   const [generatingEpisodes, setGeneratingEpisodes] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -42,7 +46,13 @@ export default function SeasonRow({ series, season, seasons, issues, onSeriesUpd
   // frame drives the per-issue label on the button.
   const [beatsActive, setBeatsActive] = useState(false);
   const [beatsStarting, setBeatsStarting] = useState(false);
-  const { latest: beatsLatest } = usePipelineProgress(pipelineVolumeBeatsSseUrl, [series.id, season.id], { enabled: beatsActive });
+  const beatsRunIdRef = useRef(null);
+  const { latest: beatsLatest, closed: beatsClosed } = usePipelineProgress(pipelineVolumeBeatsSseUrl, [series.id, season.id], { enabled: beatsActive });
+  const mountedRef = useRef(false);
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   // Stable ref over the parent's setter — `handleIssuesUpdate` in
   // PipelineSeries is re-allocated every render, so depending on it would
@@ -50,18 +60,18 @@ export default function SeasonRow({ series, season, seasons, issues, onSeriesUpd
   const onIssuesUpdateRef = useRef(onIssuesUpdate);
   onIssuesUpdateRef.current = onIssuesUpdate;
 
-  // Refresh issues + toast when the run lands on a terminal frame and tear
-  // the SSE subscription down. Per-issue frames just drive the button
-  // label — refetching the whole list per issue would cost N+1 reads per
-  // run for no benefit (the button already shows live ordinal/total).
+  // The hook retains the previous frame across disables, but resets closed.
+  // Refresh once on closure, even if the stream never delivers a terminal frame.
   useEffect(() => {
-    if (!beatsActive || !beatsLatest) return;
-    const type = beatsLatest.type;
-    if (type !== 'complete' && type !== 'canceled' && type !== 'error') return;
+    if (!beatsActive || !beatsClosed) return;
     setBeatsActive(false);
     listPipelineIssues(series.id)
-      .then((refreshed) => onIssuesUpdateRef.current(refreshed))
+      .then((refreshed) => {
+        if (mountedRef.current) onIssuesUpdateRef.current(refreshed);
+      })
       .catch(() => null);
+    if (beatsLatest?.runId && beatsRunIdRef.current && beatsLatest.runId !== beatsRunIdRef.current) return;
+    const type = beatsLatest?.type;
     if (type === 'complete') {
       const n = beatsLatest.generated || 0;
       const s = beatsLatest.skipped || 0;
@@ -72,10 +82,10 @@ export default function SeasonRow({ series, season, seasons, issues, onSeriesUpd
       (e > 0 ? toast.error : toast.success)(`Volume ${season.number} beat sheets — ${parts.join(', ')}`);
     } else if (type === 'canceled') {
       toast.success(`Volume ${season.number} beat-sheet run canceled`);
-    } else {
+    } else if (type === 'error') {
       toast.error(beatsLatest.error || 'Beat-sheet run failed');
     }
-  }, [beatsActive, beatsLatest, series.id, season.number]);
+  }, [beatsActive, beatsClosed, beatsLatest, series.id, season.number]);
 
   const startBeats = async (mode) => {
     setBeatsStarting(true);
@@ -84,11 +94,13 @@ export default function SeasonRow({ series, season, seasons, issues, onSeriesUpd
       providerOverride: series.llm?.provider || undefined,
       modelOverride: series.llm?.model || undefined,
     }, { silent: true }).catch((err) => {
-      toast.error(err.message || 'Failed to start beat-sheet run');
+      if (mountedRef.current) toast.error(err.message || 'Failed to start beat-sheet run');
       return null;
     });
+    if (!mountedRef.current) return;
     setBeatsStarting(false);
     if (!result) return;
+    beatsRunIdRef.current = result.runId;
     setBeatsActive(true);
   };
 
