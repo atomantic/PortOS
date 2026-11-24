@@ -43,9 +43,22 @@ import imageGenRoutes from './imageGen.js';
 import * as fileUtils from '../lib/fileUtils.js';
 import * as regen from '../services/imageGen/regen.js';
 import * as mediaSketches from '../services/mediaSketches.js';
-import { access, mkdir, writeFile, rm } from 'fs/promises';
+import { access, mkdir, mkdtemp, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { basename, join as pathJoin } from 'path';
+import { getImageModels } from '../lib/mediaModels.js';
+import { repoToDirName } from '../lib/hfCache.js';
+import { downloadHfRepo } from '../services/hfDownload.js';
+
+vi.mock('../lib/mediaModels.js', async original => {
+  const actual = await original();
+  return { ...actual, getImageModels: vi.fn(actual.getImageModels) };
+});
+vi.mock('../services/hfDownload.js', () => ({ downloadHfRepo: vi.fn() }));
+vi.mock('../services/modelManifest.js', async original => ({
+  ...await original(),
+  recordModelInstall: vi.fn(async () => null),
+}));
 
 const attachNodeImage = vi.hoisted(() => vi.fn(async () => ({})));
 const getLoom = vi.hoisted(() => vi.fn(async () => null));
@@ -246,6 +259,84 @@ describe('Image Gen Routes', () => {
     app.use('/api/image-gen', imageGenRoutes);
     app.use(errorMiddleware);
     vi.clearAllMocks();
+  });
+
+  describe('pinned Hugging Face snapshots', () => {
+    const modelsPath = '/api/image-gen/models';
+    const revision = 'a'.repeat(40);
+    const otherRevision = 'b'.repeat(40);
+    const model = { id: 'example-model', runner: 'z-image', repo: 'org/model', revision };
+    const flux2 = {
+      ...model, runner: 'flux2',
+      textEncoderRepo: 'org/encoder', textEncoderRevision: 'c'.repeat(40),
+      tokenizerRepo: 'org/tokenizer', tokenizerRevision: 'd'.repeat(40),
+      basePipelineRepo: 'org/base', basePipelineRevision: 'e'.repeat(40),
+      kvRepo: 'org/kv', kvRevision: 'f'.repeat(40),
+    };
+    let cache;
+    let previousCache;
+    beforeEach(async () => {
+      cache = await mkdtemp(pathJoin(tmpdir(), 'portos-image-hf-'));
+      previousCache = process.env.HF_HUB_CACHE;
+      process.env.HF_HUB_CACHE = cache;
+    });
+    afterEach(async () => {
+      if (previousCache === undefined) delete process.env.HF_HUB_CACHE;
+      else process.env.HF_HUB_CACHE = previousCache;
+      downloadHfRepo.mockReset();
+      await rm(cache, { recursive: true, force: true });
+    });
+
+    const weightName = 'weights.bin';
+    const snapshot = (repo, pin) => pathJoin(cache, repoToDirName(repo), 'snapshots', pin);
+    const writeWeights = async (repo, pin, contents = 'fixture') => {
+      await mkdir(snapshot(repo, pin), { recursive: true });
+      await writeFile(pathJoin(snapshot(repo, pin), weightName), contents);
+    };
+
+    it.each([
+      ['a whole repo', model, [[model.repo, revision]]],
+      ['FLUX.2 with auxiliaries', flux2, [
+        [flux2.repo, revision], [flux2.textEncoderRepo, flux2.textEncoderRevision],
+        [flux2.tokenizerRepo, flux2.tokenizerRevision], [flux2.basePipelineRepo, flux2.basePipelineRevision],
+        [flux2.kvRepo, flux2.kvRevision],
+      ]],
+    ])('uses exact revisions for %s across status, download, verify, and repair', async (_name, entry, sources) => {
+      const repos = sources.map(([repo]) => repo);
+      const pending = sources.length > 1 ? sources.slice(1) : sources;
+      for (const repo of repos) await writeWeights(repo, otherRevision);
+      if (sources.length > 1) await writeWeights(entry.repo, entry.revision);
+      getImageModels.mockReturnValue([entry]);
+      try {
+        const status = await request(app).get(`${modelsPath}/status`);
+        expect(status.body).toEqual([expect.objectContaining({
+          id: entry.id, cached: false, requiredRepos: repos, pendingRepos: pending.map(([repo]) => repo), integrity: null,
+        })]);
+
+        downloadHfRepo.mockImplementation(({ repo, revision: pin }) => ({
+          promise: writeWeights(repo, pin).then(() => ({ ok: true, sizeBytes: 7 })),
+          kill: vi.fn(),
+        }));
+        const downloaded = await request(app).post(`${modelsPath}/${entry.id}/download`);
+        expect(downloaded.text).toContain('"type":"complete"');
+        expect(downloadHfRepo.mock.calls.map(([spec]) => [spec.repo, spec.revision])).toEqual(pending);
+        const cached = await request(app).get(`${modelsPath}/status`);
+        expect(cached.body[0]).toMatchObject({ cached: true, pendingRepos: [], integrity: { status: 'ok' } });
+
+        for (const [repo, pin] of sources) await writeWeights(repo, pin, '');
+        const verified = await request(app).post(`${modelsPath}/verify`).send({ modelId: entry.id, deep: true });
+        expect(verified.body).toMatchObject({ deep: true, models: [{ id: entry.id, status: 'bad' }] });
+        expect(verified.body.models[0].badFiles).toHaveLength(sources.length);
+        const repaired = await request(app).post(`${modelsPath}/${entry.id}/repair`).send({ deep: true });
+        expect(repaired.body).toEqual({ deep: true, repos, deleted: repos.map(repo => ({ repo, name: weightName })) });
+        for (const [repo, pin] of sources) {
+          await expect(access(pathJoin(snapshot(repo, pin), weightName))).rejects.toMatchObject({ code: 'ENOENT' });
+          await expect(access(pathJoin(snapshot(repo, otherRevision), weightName))).resolves.toBeUndefined();
+        }
+      } finally {
+        getImageModels.mockImplementation((await vi.importActual('../lib/mediaModels.js')).getImageModels);
+      }
+    });
   });
 
   it('removes both the multipart upload and its staged copy when queue submission fails', async () => {

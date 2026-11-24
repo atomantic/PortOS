@@ -2403,25 +2403,36 @@ export const repoForModel = (model) => {
   return null;
 };
 
-// Full list of HF repos a model needs cached on disk before the runner can
-// inference. For HiDream entries this includes the separate Llama-3.1 text
-// encoder (`textEncoderRepo`) the Diffusers pipeline loads as `text_encoder_4`
-// — otherwise the cache-status badge says "Available" while the renderer
-// silently kicks off a second multi-GB gated download at start-up. Result is
-// `null` when the main repo itself isn't known (model is misconfigured / a
-// custom mflux third-party entry).
-export const requiredReposForModel = (model) => {
+// Cache operations must use the same revisions as the runner, including any
+// auxiliary weights. A repo can supply components from distinct snapshots.
+export const requiredRepoSpecsForModel = (model) => {
   const main = repoForModel(model);
   if (!main) return null;
-  const aux = [];
-  if (isNonBlankStr(model?.textEncoderRepo)) aux.push(model.textEncoderRepo);
-  return [main, ...aux];
+  const sources = [
+    [main, model.revision],
+    [model.textEncoderRepo, model.textEncoderRevision],
+  ];
+  if (isFlux2(model)) {
+    for (const [repoKey, revisionKey] of FLUX2_REVISION_FIELDS.slice(1)) {
+      sources.push([model[repoKey], model[revisionKey]]);
+    }
+  }
+  const specs = [];
+  for (const [repo, pin] of sources) {
+    const revision = pin || null;
+    if (isNonBlankStr(repo) && !specs.some(spec => spec.repo === repo && spec.revision === revision)) {
+      specs.push({ repo, revision });
+    }
+  }
+  return specs;
 };
+
+export const requiredReposForModel = (model) => requiredRepoSpecsForModel(model)?.map(({ repo }) => repo) ?? null;
 
 // Pinned `{ repo, revision, only }` download targets for an image model that
 // narrows its repos to exact files (`repoFiles` / `requiredWeights[].files`).
 // `null` means the model is a whole-repo snapshot and uses
-// `requiredReposForModel` instead.
+// `requiredRepoSpecsForModel` instead.
 export const imageModelDownloadTargets = (model) => {
   const deps = Array.isArray(model?.requiredWeights) ? model.requiredWeights : [];
   if (!Array.isArray(model?.repoFiles) && !deps.length) return null;

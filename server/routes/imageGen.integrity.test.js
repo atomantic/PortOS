@@ -13,7 +13,7 @@ vi.mock('../lib/mediaModels.js', () => ({
   isFlux2: vi.fn(() => true),
   isEditOnly: vi.fn(() => false),
   repoForModel: vi.fn((m) => `org/${m.id}`),
-  requiredReposForModel: vi.fn((m) => [`org/${m.id}`]),
+  requiredRepoSpecsForModel: vi.fn((m) => [{ repo: `org/${m.id}`, revision: null }]),
   imageModelDownloadTargets: vi.fn(() => null),
 }));
 
@@ -157,14 +157,14 @@ describe('Image Gen integrity routes', () => {
     expect(res.body.deep).toBe(true);
     expect(res.body.models[0].status).toBe('bad');
     // deep:true must reach verifyModelCache
-    expect(verifyModelCache).toHaveBeenCalledWith('org/flux2', { deep: true });
+    expect(verifyModelCache).toHaveBeenCalledWith('org/flux2', { deep: true, revision: null });
   });
 
   it('POST /models/:id/repair deletes flagged files and reports them', async () => {
     const res = await request(app).post('/api/image-gen/models/flux2/repair').send({});
     expect(res.status).toBe(200);
     expect(res.body.deleted).toEqual([{ repo: 'org/flux2', name: 'model.safetensors' }]);
-    expect(repairModelCache).toHaveBeenCalledWith('org/flux2', { deep: false });
+    expect(repairModelCache).toHaveBeenCalledWith('org/flux2', { deep: false, revision: null });
   });
 
   it('POST /models/:id/repair 404s for an unknown model', async () => {
