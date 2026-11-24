@@ -1,6 +1,6 @@
 /**
- * Shared canonical Actions snapshot, socket invalidation, reconnect/tab re-show reconciliation and
- * explicit stale/error state.
+ * Shared canonical Actions snapshot, coalesced socket invalidation while visible, reconnect/tab
+ * re-show reconciliation and explicit stale/error state.
  *
  * Use when: Bell, dashboard previews and Actions.
  */
@@ -9,6 +9,7 @@ import { useCallback, useSyncExternalStore } from 'react';
 import { getReviewQueue } from '../services/apiReview.js';
 import socket from '../services/socket';
 import { subscribeVisibility } from './useVisibilityEvent';
+import { coalesce } from '../utils/coalesce';
 import { ACTION_QUEUE_CHANGED, INSTANCE_FEATURES_CHANGED } from '../constants/events';
 
 // Shared by the bell, dashboard previews, and Actions page. These events carry
@@ -24,6 +25,10 @@ const EVENTS = [
   'review:items:bulk-updated', 'review:queue:changed',
   'notifications:added', 'notifications:removed', 'notifications:cleared',
 ];
+// One server change often emits several of these together (a task change sends both
+// cos:tasks:changed and review:queue:changed), and each read rebuilds the whole queue.
+const EVENT_COALESCE_MS = 150;
+const isHidden = () => document.visibilityState === 'hidden';
 const stores = new Map();
 
 function queueStore(view) {
@@ -54,15 +59,23 @@ function queueStore(view) {
       if (started === generation) publish({ ...state, loading: false, error });
     }).finally(() => {
       inFlight = null;
-      if (started !== generation && listeners.size) refresh(true);
+      if (started !== generation && listeners.size && !isHidden() && !refreshAfterBurst.pending()) refresh(true);
     });
     return inFlight;
   };
-  const invalidate = () => { generation++; refresh(true); };
+  const refreshAfterBurst = coalesce(() => {
+    if (!isHidden()) refresh(true);
+  }, EVENT_COALESCE_MS);
+  const invalidate = () => { generation++; refreshAfterBurst.cancel(); refresh(true); };
+  // A hidden tab only marks its snapshot stale: showing it again always re-reads.
+  const invalidateFromEvent = () => {
+    generation++;
+    if (!isHidden()) refreshAfterBurst();
+  };
   const subscribe = (notify) => {
     listeners.add(notify);
     if (listeners.size === 1) {
-      for (const event of EVENTS) socket.on(event, invalidate);
+      for (const event of EVENTS) socket.on(event, invalidateFromEvent);
       window.addEventListener(ACTION_QUEUE_CHANGED, invalidate);
       window.addEventListener(INSTANCE_FEATURES_CHANGED, invalidate);
       unsubscribeVisibility = subscribeVisibility((visibility) => {
@@ -73,7 +86,8 @@ function queueStore(view) {
     return () => {
       listeners.delete(notify);
       if (!listeners.size) {
-        for (const event of EVENTS) socket.off(event, invalidate);
+        refreshAfterBurst.cancel();
+        for (const event of EVENTS) socket.off(event, invalidateFromEvent);
         window.removeEventListener(ACTION_QUEUE_CHANGED, invalidate);
         window.removeEventListener(INSTANCE_FEATURES_CHANGED, invalidate);
         unsubscribeVisibility?.();
