@@ -1,4 +1,6 @@
 import { Outlet } from 'react-router';
+import { Suspense } from 'react';
+import PageLoader from './PageLoader';
 import PageErrorBoundary from './PageErrorBoundary';
 
 // The two `<main>` shells a page can render inside, chosen by where its <Route>
@@ -16,7 +18,9 @@ function MainShell({ shell, className }) {
   return (
     <main id="main-content" tabIndex={-1} data-shell={shell} className={`${MAIN_BASE_CLASS} ${className}`}>
       <PageErrorBoundary>
-        <Outlet />
+        <Suspense fallback={<PageLoader />}>
+          <Outlet />
+        </Suspense>
       </PageErrorBoundary>
     </main>
   );

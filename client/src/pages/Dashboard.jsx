@@ -114,7 +114,7 @@ export default function Dashboard() {
       .catch(() => null)
       .then((value) => setStreams((prev) => ({ ...prev, [name]: value }))))), []);
 
-  const fetchApps = useCallback(() => getApps({ includeQuality: true })
+  const fetchApps = useCallback(() => getApps()
     .then((appsData) => {
       setDataError(null);
       if (Array.isArray(appsData)) setApps(appsData);
