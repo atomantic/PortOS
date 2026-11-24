@@ -17,6 +17,7 @@ import numpy
 from mathutils import Matrix, Vector
 from mathutils.bvhtree import BVHTree
 
+import portos_bake
 import portos_model_poses as poses
 
 ARMATURE = "portos_controls"
@@ -89,7 +90,7 @@ def set_bone(bone, control, value):
 def carriers(controls, declared):
     """`{object name: control id or None}`: the last control of the nearest part up the declared (else built) parents."""
     last = {control["partId"]: control["id"] for control in controls}
-    objects = {obj.name: obj for obj in bpy.context.scene.objects}
+    objects = {obj.name: obj for obj in bpy.context.scene.objects if not portos_bake.is_bake_only(obj)}
 
     def parent_name(name):
         if declared.get(name) in objects:
@@ -242,7 +243,7 @@ def probe(rig, control, action):
 def scene_bounds():
     low, high = Vector((math.inf,) * 3), Vector((-math.inf,) * 3)
     for obj in bpy.context.scene.objects:
-        if obj.type == "MESH":
+        if obj.type == "MESH" and not portos_bake.is_bake_only(obj):
             for corner in obj.bound_box:
                 point = obj.matrix_world @ Vector(corner)
                 low, high = Vector(map(min, low, point)), Vector(map(max, high, point))
@@ -320,7 +321,7 @@ class Sweep:
         self.rig, self.emit, self.seconds = rig, emit, seconds
         self.started = time.monotonic()
         depsgraph = bpy.context.evaluated_depsgraph_get()
-        parts = [Part(obj, depsgraph) for obj in bpy.context.scene.objects if obj.type == "MESH"]
+        parts = [Part(obj, depsgraph) for obj in bpy.context.scene.objects if obj.type == "MESH" and not portos_bake.is_bake_only(obj)]
         self.empty = [part.name for part in parts if not len(part.faces)]
         carried = {}
         for part in parts:
@@ -403,7 +404,7 @@ def rig_model(description, emit):
         part["id"]: part.get("parent") for part in poses.items(description.get("parts"))
         if isinstance(part, dict) and isinstance(part.get("id"), str)
     }
-    built = {obj.name for obj in bpy.context.scene.objects if obj.type == "MESH"}
+    built = {obj.name for obj in bpy.context.scene.objects if obj.type == "MESH" and not portos_bake.is_bake_only(obj)}
     controls, skipped = poses.clean_controls(description.get("controls"), {name for name in declared if name in built})
     for control_id, reason in skipped:
         emit("control-skipped", id=control_id, reason=reason)
