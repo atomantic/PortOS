@@ -2,7 +2,8 @@ import express from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { limitQuerySchema, parsePagination } from '../lib/queryValidation.js';
+import { limitQuerySchema, oauthCallbackQuerySchema, parsePagination } from '../lib/queryValidation.js';
+import { INVALID_OAUTH_STATE_MESSAGE } from '../lib/oauthState.js';
 import { UUID_RE } from '../lib/fileUtils.js';
 import * as calendarAccounts from '../services/calendarAccounts.js';
 import * as calendarSync from '../services/calendarSync.js';
@@ -235,37 +236,27 @@ router.post('/google/auth/credentials', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-router.get('/google/auth/url', asyncHandler(async (req, res) => {
+router.post('/google/auth/url', asyncHandler(async (req, res) => {
   const { returnTo } = validateRequest(
     z.object({ returnTo: z.enum(['calendar', 'messages']).optional().default('calendar') }),
     req.query
   );
   const result = await googleAuth.getAuthUrl(returnTo);
+  res.set('Cache-Control', 'no-store');
   res.json(result);
 }));
 
-const oauthCallbackQuerySchema = z.object({ state: z.string().optional(), code: z.string().optional() });
-
 router.get('/google/oauth/callback', asyncHandler(async (req, res) => {
-  // This endpoint is hit by a BROWSER redirect from Google, not by the SPA —
-  // render every outcome as a redirect to the config page (which toasts the
-  // oauthError param) instead of the JSON envelope the middleware would send.
-  // A malformed query (repeated keys) is treated as absent: every outcome here must stay a redirect.
+  // The config page displays OAuth errors after the browser follows this redirect.
+  res.set('Cache-Control', 'no-store');
   const parsed = oauthCallbackQuerySchema.safeParse(req.query);
-  const { state, code } = parsed.success ? parsed.data : {};
-  const configPath = state === 'messages' ? '/messages/config' : '/calendar/config';
-  const configUrl = (error) => error
+  const { returnTo, error } = parsed.success
+    ? await googleAuth.handleCallback(parsed.data)
+    : { error: INVALID_OAUTH_STATE_MESSAGE };
+  const configPath = returnTo === 'messages' ? '/messages/config' : '/calendar/config';
+  res.redirect(error
     ? `${configPath}?oauthError=${encodeURIComponent(error)}`
-    : configPath;
-  if (!code) return res.redirect(configUrl('Missing authorization code'));
-  const error = await googleAuth.handleCallback(code).then(() => null)
-    .catch((err) => {
-      // This catch replaces asyncHandler's logging (the redirect swallows the
-      // throw), so keep the failure visible in server logs.
-      console.error(`❌ Google OAuth callback failed: ${err.message}`);
-      return err.message || 'Google OAuth callback failed';
-    });
-  res.redirect(configUrl(error));
+    : configPath);
 }));
 
 router.post('/google/auth/clear', asyncHandler(async (req, res) => {

@@ -25,7 +25,7 @@ export const getGoogleAuthStatus = (options = {}) => request('/calendar/google/a
 export const saveGoogleAuthCredentials = (data, options = {}) => request('/calendar/google/auth/credentials', { method: 'POST', body: JSON.stringify(data), ...options });
 export const getGoogleAuthUrl = ({ returnTo, ...options } = {}) => {
   const query = returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : '';
-  return request(`/calendar/google/auth/url${query}`, options);
+  return request(`/calendar/google/auth/url${query}`, { method: 'POST', ...options });
 };
 export const clearGoogleAuth = () => request('/calendar/google/auth/clear', { method: 'POST' });
 export const apiSyncGoogleCalendar = (accountId, options = {}) => request(`/calendar/sync/${accountId}/api`, { method: 'POST', ...options });

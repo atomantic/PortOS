@@ -40,14 +40,16 @@ function makeApp() {
   const app = express();
   app.use(express.json());
   app.use('/api/spotify', spotifyRoutes);
+  app.get('/brain/spotify', (req, res) => res.json(req.query));
   app.use(errorMiddleware);
   return app;
 }
 
 describe('Spotify routes', () => {
-  it('rejects a repeated query key with 400 (oauth callback, #16428)', async () => {
-    const res = await request(makeApp()).get('/api/spotify/oauth/callback?code=a&code=b');
-    expect(res.status).toBe(400);
+  it('redirects with oauthError for a repeated callback query key', async () => {
+    const res = await request(makeApp()).get(`/api/spotify/oauth/callback?code=a&code=b&state=${'a'.repeat(32)}`);
+    expect(res.body).toEqual({ oauthError: expect.stringMatching(/OAuth state/) });
+    expect(mocks.handleCallback).not.toHaveBeenCalled();
   });
 
   beforeEach(() => {
@@ -72,7 +74,7 @@ describe('Spotify routes', () => {
 
   it('uses the request origin for the OAuth authorize URL', async () => {
     await request(makeApp())
-      .get('/api/spotify/auth/url')
+      .post('/api/spotify/auth/url')
       .set('X-Forwarded-Proto', 'https')
       .set('X-Forwarded-Host', 'host-example.ts.net:5555');
 
