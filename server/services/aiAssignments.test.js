@@ -162,6 +162,8 @@ describe('getAiAssignments', () => {
     // Every other assignment that requires a CLI/TUI provider because it runs
     // agentic tool work carries it as well.
     expect(byId['settings.autofixer'].needsTools).toBe(true);
+    expect(byId['settings.autofixer'].link).toBe('/settings/autofixer');
+    expect(byId['settings.calendarSync'].link).toBe('/calendar/config');
     expect(byId['settings.voice.codeAgent'].needsTools).toBe(true);
     expect(byId['cos.task.morning-brief'].needsTools).toBe(true);
     // A vision call and a plain chat pin are NOT agent runs — a non-tool model

@@ -144,7 +144,7 @@ const addSettingsEntries = async (entries) => {
       model: settings[key]?.model || null,
       ...agentEntry,
       notes: 'Requires a CLI/TUI provider because it runs agentic tool work.',
-      link: key === 'autofixer' ? '/settings/autofixer' : '/settings/general',
+      link: key === 'autofixer' ? '/settings/autofixer' : '/calendar/config',
     }));
   }
 
