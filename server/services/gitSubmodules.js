@@ -191,7 +191,8 @@ async function commitSubmoduleBump(root, subPath, newCommit) {
   }
 
   const message = `chore: update ${subPath} submodule${newCommit ? ` to ${newCommit}` : ''}`;
-  const { hash } = await commit(root, message);
+  // Scoped, so the user's own staged work is never swept into the bump.
+  const { hash } = await commit(root, message, { paths: [subPath] });
   console.log(`📝 Committed submodule bump ${subPath} on ${defaultBranch} (${hash || 'unknown sha'})`);
   return {
     committed: true,

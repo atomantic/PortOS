@@ -9,26 +9,31 @@ function StatusIcon({ file }) {
   return <FileText size={14} className="text-port-warning" />;
 }
 
+const ROW_ACTION_CLASS = 'opacity-100 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 text-xs text-gray-400 hover:text-white';
+
 // Current branch summary, the changed-file list with stage/unstage, and the
 // working-tree diff dialog.
 export default function GitStatusPanel({ repoPath, gitInfo, loadGitInfo }) {
-  const [diff, setDiff] = useState('');
+  const [diffs, setDiffs] = useState([]);
   const [showDiff, setShowDiff] = useState(false);
 
   const loadDiff = async () => {
     if (!repoPath) return;
-    const result = await getGitDiff(repoPath).catch(() => ({ diff: '' }));
-    setDiff(result.diff || '');
+    // A failed read toasts and opens nothing: an empty dialog would say there are no changes.
+    const results = await Promise.all([getGitDiff(repoPath, true), getGitDiff(repoPath)]).catch(() => null);
+    if (!results) return;
+    setDiffs(['Staged', 'Not staged'].map((label, i) => ({ label, diff: results[i].diff })).filter(({ diff }) => diff));
     setShowDiff(true);
   };
 
+  // A failure is toasted by the request; the reload shows what the index holds now.
   const handleStage = async (file) => {
-    await stageFiles(repoPath, [file]);
+    await stageFiles(repoPath, [file.path]).catch(() => null);
     await loadGitInfo();
   };
 
   const handleUnstage = async (file) => {
-    await unstageFiles(repoPath, [file]);
+    await unstageFiles(repoPath, file.origPath ? [file.path, file.origPath] : [file.path]).catch(() => null);
     await loadGitInfo();
   };
 
@@ -71,20 +76,21 @@ export default function GitStatusPanel({ repoPath, gitInfo, loadGitInfo }) {
             <div key={i} className="flex items-center gap-2 text-sm py-1 group">
               <StatusIcon file={file} />
               <span className={`flex-1 font-mono text-xs ${file.staged ? 'text-port-success' : 'text-gray-300'}`}>
-                {file.path}
+                {file.origPath ? `${file.origPath} → ${file.path}` : file.path}
               </span>
               <span className="text-xs text-gray-500">{file.status}</span>
-              {file.staged ? (
+              {file.staged && (
                 <button
-                  onClick={() => handleUnstage(file.path)}
-                  className="opacity-100 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 text-xs text-gray-400 hover:text-white"
+                  onClick={() => handleUnstage(file)}
+                  className={ROW_ACTION_CLASS}
                 >
                   Unstage
                 </button>
-              ) : (
+              )}
+              {(!file.staged || file.modified) && (
                 <button
-                  onClick={() => handleStage(file.path)}
-                  className="opacity-100 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 text-xs text-gray-400 hover:text-white"
+                  onClick={() => handleStage(file)}
+                  className={ROW_ACTION_CLASS}
                 >
                   Stage
                 </button>
@@ -111,14 +117,19 @@ export default function GitStatusPanel({ repoPath, gitInfo, loadGitInfo }) {
           <button onClick={() => setShowDiff(false)} aria-label="Close" className="text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center">×</button>
         </div>
         <pre className="p-4 overflow-auto max-h-[70vh] text-sm font-mono">
-          {diff.split('\n').map((line, i) => {
-            let color = 'text-gray-300';
-            if (line.startsWith('+') && !line.startsWith('+++')) color = 'text-port-success';
-            if (line.startsWith('-') && !line.startsWith('---')) color = 'text-port-error';
-            if (line.startsWith('@@')) color = 'text-port-accent';
-            return <div key={i} className={color}>{line}</div>;
-          })}
-          {!diff && <span className="text-gray-500">No changes to display</span>}
+          {diffs.map(({ label, diff }) => (
+            <div key={label}>
+              <div className="text-gray-400">{label}</div>
+              {diff.split('\n').map((line, i) => {
+                let color = 'text-gray-300';
+                if (line.startsWith('+') && !line.startsWith('+++')) color = 'text-port-success';
+                if (line.startsWith('-') && !line.startsWith('---')) color = 'text-port-error';
+                if (line.startsWith('@@')) color = 'text-port-accent';
+                return <div key={i} className={color}>{line}</div>;
+              })}
+            </div>
+          ))}
+          {diffs.length === 0 && <span className="text-gray-500">No changes to display</span>}
         </pre>
       </Modal>
     </>

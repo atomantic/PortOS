@@ -194,13 +194,15 @@ router.put('/projects/:appId/documents/:docName', asyncHandler(async (req, res) 
   const relPath = `.planning/${docName}`
   await git.stageFiles(ctx.app.repoPath, [relPath])
 
-  const status = await git.getStatus(ctx.app.repoPath)
+  // Both scoped to this document: unrelated dirty files must not turn an unchanged
+  // save into a failed commit, nor the user's own staged work join this commit.
+  const status = await git.getStatus(ctx.app.repoPath, { paths: [relPath] })
   if (status.clean) {
     return res.json({ success: true, noChanges: true })
   }
 
   const message = commitMessage || `docs: update .planning/${docName} via PortOS`
-  const result = await git.commit(ctx.app.repoPath, message)
+  const result = await git.commit(ctx.app.repoPath, message, { paths: [relPath] })
   console.log(`📝 ${created ? 'Created' : 'Updated'} .planning/${docName} in ${ctx.app.name} (${result.hash})`)
 
   res.json({ success: true, hash: result.hash, created })
