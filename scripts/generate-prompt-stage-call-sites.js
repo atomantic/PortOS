@@ -182,23 +182,21 @@ export function collectServerSources(repoRoot = REPO_ROOT, { diagnostics = creat
   return diagnostics.measure('read', () => tracked.map((path) => ({ path, source: readFileSync(join(repoRoot, path), 'utf8') })));
 }
 
-/** Keys babel hangs off a node that are never child AST nodes worth walking. */
-const NON_AST_KEYS = new Set(['loc', 'leadingComments', 'trailingComments', 'innerComments', 'extra']);
-
 /** Visit each node once without materializing or retaining the corpus's ASTs. */
 function walkNodes(root, visit) {
   const pending = [root];
   while (pending.length) {
     const node = pending.pop();
-    if (!node || typeof node !== 'object') continue;
-    if (Array.isArray(node)) {
-      for (const child of node) pending.push(child);
-      continue;
-    }
-    if (typeof node.type !== 'string') continue;
     visit(node);
-    for (const key of Object.keys(node)) {
-      if (!NON_AST_KEYS.has(key) && typeof node[key] === 'object') pending.push(node[key]);
+    // Babel's node metadata has no type and cannot contain references.
+    for (const child of Object.values(node)) {
+      if (Array.isArray(child)) {
+        for (const item of child) {
+          if (typeof item?.type === 'string') pending.push(item);
+        }
+      } else if (typeof child?.type === 'string') {
+        pending.push(child);
+      }
     }
   }
 }
@@ -214,7 +212,8 @@ function parseSource(path, source) {
   // Outside any request lifecycle, and babel's message names a line/column but
   // not the file — which of 500 sources broke is the only useful half.
   try {
-    return parse(source, { sourceType: 'module', plugins: ['jsx'] }).program;
+    // References come from syntax nodes, so attaching comments to them is wasted work.
+    return parse(source, { sourceType: 'module', plugins: ['jsx'], attachComment: false }).program;
   } catch (err) {
     throw new Error(`${path}: ${err.message}`, { cause: err });
   }
