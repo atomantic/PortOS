@@ -11,12 +11,14 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  CheckCircle2, XCircle, Loader2, Plus, Trash2, Sparkles, Film,
+  CheckCircle2, XCircle, Loader2, Plus, Trash2, Sparkles, Film, Square,
 } from 'lucide-react';
 import {
   lintContinuousVideoEpisode,
   generateContinuousVideoEpisode,
   continuousVideoEpisodeEventsUrl,
+  getActiveContinuousVideoEpisodes,
+  cancelContinuousVideoEpisode,
 } from '../../services/apiContinuousVideo.js';
 import { useSseProgress } from '../../hooks/useSseProgress';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
@@ -236,6 +238,23 @@ export default function EpisodeComposer({ initialScenes, onQueued }) {
 
   const sse = useSseProgress(queuedJobId ? continuousVideoEpisodeEventsUrl(queuedJobId) : null);
 
+  // Reattach to an already-running episode on mount (e.g. after closing and
+  // reopening the drawer or reloading the page).
+  useEffect(() => {
+    let active = true;
+    getActiveContinuousVideoEpisodes({ silent: true })
+      .then((data) => {
+        if (!active) return;
+        const running = data?.activeEpisode || data?.activeEpisodes?.[0];
+        if (running?.jobId) {
+          setQueuedJobId((prev) => prev || running.jobId);
+          if (running.backend) setBackend(running.backend);
+        }
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
+
   // Debounced live preview — recompiles + relints on every scene/bible/framing
   // edit. Skipped once queued: the composer is read-only during generation.
   // `sanitizedScenes`/`bible` are already fresh-only-on-change via useMemo, so
@@ -268,16 +287,26 @@ export default function EpisodeComposer({ initialScenes, onQueued }) {
   }, [sanitizedScenes, bible, framings, queuedJobId]);
 
   useEffect(() => {
+    if (!queuedJobId) return;
     if (sse.latest?.type === 'complete') {
       toast.success('Episode generated');
       onQueued?.(sse.latest.result);
     } else if (sse.latest?.type === 'error') {
       toast.error(sse.latest.error?.message || sse.latest.error || 'Episode generation failed');
+    } else if (sse.latest?.type === 'canceled' || sse.latest?.type === 'cancelled') {
+      toast.info('Episode generation canceled');
     }
-  }, [sse.latest, onQueued]);
+  }, [queuedJobId, sse.latest, onQueued]);
 
   useEffect(() => {
-    if (queuedJobId && sse.closed && sse.latest?.type !== 'complete' && sse.latest?.type !== 'error') {
+    if (
+      queuedJobId
+      && sse.closed
+      && sse.latest?.type !== 'complete'
+      && sse.latest?.type !== 'error'
+      && sse.latest?.type !== 'canceled'
+      && sse.latest?.type !== 'cancelled'
+    ) {
       toast.error('Episode progress stream closed unexpectedly');
     }
   }, [queuedJobId, sse.closed, sse.latest]);
@@ -288,6 +317,11 @@ export default function EpisodeComposer({ initialScenes, onQueued }) {
     }, { silent: true }); // useAsyncAction owns the error toast
     setQueuedJobId(result.jobId);
   }, { errorMessage: 'Failed to queue episode' });
+
+  const [handleCancel, canceling] = useAsyncAction(async () => {
+    if (!queuedJobId) return;
+    await cancelContinuousVideoEpisode(queuedJobId, { silent: true });
+  }, { errorMessage: 'Failed to cancel episode' });
 
   // `!previewLoading` matters: without it, editing a passing draft into a
   // failing one leaves the OLD passing preview (and its stale `preview.clips`)
@@ -306,7 +340,8 @@ export default function EpisodeComposer({ initialScenes, onQueued }) {
   const streaming = !!queuedJobId && !sse.closed;
   const busy = queuing || streaming;
   const streamCompleted = !streaming && sse.latest?.type === 'complete';
-  const streamError = !streaming && !streamCompleted
+  const streamCanceled = !streaming && (sse.latest?.type === 'canceled' || sse.latest?.type === 'cancelled');
+  const streamError = !streaming && !streamCompleted && !streamCanceled
     ? (sse.latest?.type === 'error'
         ? (sse.latest.error?.message || sse.latest.error || 'Episode generation failed')
         : 'Episode progress stream closed unexpectedly')
@@ -369,18 +404,35 @@ export default function EpisodeComposer({ initialScenes, onQueued }) {
       </div>
 
       {queuedJobId ? (
-        <div className={`border rounded-lg p-2.5 space-y-1.5 ${streamError ? 'border-port-error/60' : 'border-port-border/50'}`}>
-          <div className={`flex items-center gap-1.5 text-xs ${streamError ? 'text-port-error' : 'text-gray-300'}`}>
-            {streamError ? (
-              <XCircle className="w-3.5 h-3.5 shrink-0" />
-            ) : streamCompleted ? (
-              <CheckCircle2 className="w-3.5 h-3.5 text-port-success shrink-0" />
-            ) : (
-              <Film className="w-3.5 h-3.5 shrink-0" />
+        <div className={`border rounded-lg p-2.5 space-y-2 ${streamError ? 'border-port-error/60' : 'border-port-border/50'}`}>
+          <div className="flex items-center justify-between gap-2">
+            <div className={`flex items-center gap-1.5 text-xs ${streamError ? 'text-port-error' : 'text-gray-300'}`}>
+              {streamError ? (
+                <XCircle className="w-3.5 h-3.5 shrink-0" />
+              ) : streamCompleted ? (
+                <CheckCircle2 className="w-3.5 h-3.5 text-port-success shrink-0" />
+              ) : streamCanceled ? (
+                <XCircle className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+              ) : (
+                <Film className="w-3.5 h-3.5 shrink-0" />
+              )}
+              <span>
+                {streaming
+                  ? (sse.latest?.message || (canceling ? 'Canceling…' : 'Generating…'))
+                  : (streamError || (streamCanceled ? 'Episode generation canceled' : 'Episode generation finished'))}
+              </span>
+            </div>
+            {streaming && (
+              <button
+                type="button"
+                onClick={handleCancel}
+                disabled={canceling}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-port-error/50 text-xs text-port-error hover:bg-port-error/10 focus:outline-none focus:ring-1 focus:ring-port-error disabled:opacity-50 shrink-0"
+              >
+                {canceling ? <Loader2 className="w-3 h-3 animate-spin" /> : <Square className="w-3 h-3" />}
+                {canceling ? 'Canceling…' : 'Cancel'}
+              </button>
             )}
-            <span>
-              {streaming ? (sse.latest?.message || 'Generating…') : (streamError || 'Episode generation finished')}
-            </span>
           </div>
           {typeof sse.latest?.progress === 'number' && (
             <div className="w-full h-1.5 bg-port-border rounded overflow-hidden">

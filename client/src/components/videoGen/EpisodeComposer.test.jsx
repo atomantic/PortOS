@@ -8,10 +8,17 @@ vi.mock('../../services/apiContinuousVideo.js', () => ({
   lintContinuousVideoEpisode: vi.fn(),
   generateContinuousVideoEpisode: vi.fn(),
   continuousVideoEpisodeEventsUrl: (jobId) => `/api/continuous-video/${jobId}/events`,
+  getActiveContinuousVideoEpisodes: vi.fn(),
+  cancelContinuousVideoEpisode: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
-import { lintContinuousVideoEpisode, generateContinuousVideoEpisode } from '../../services/apiContinuousVideo.js';
+import {
+  lintContinuousVideoEpisode,
+  generateContinuousVideoEpisode,
+  getActiveContinuousVideoEpisodes,
+  cancelContinuousVideoEpisode,
+} from '../../services/apiContinuousVideo.js';
 import toast from '../ui/Toast';
 
 const FAILING_PREVIEW = {
@@ -38,6 +45,8 @@ describe('EpisodeComposer', () => {
     vi.clearAllMocks();
     MockEventSource.reset();
     global.EventSource = MockEventSource;
+    getActiveContinuousVideoEpisodes.mockResolvedValue({ activeEpisodes: [], activeEpisode: null });
+    cancelContinuousVideoEpisode.mockResolvedValue({ ok: true, status: 'canceling' });
   });
   afterEach(() => {
     delete global.EventSource;
@@ -126,6 +135,29 @@ describe('EpisodeComposer', () => {
     expect(await screen.findByText('Episode progress stream closed unexpectedly')).toBeTruthy();
     expect(screen.queryByText('Episode generation finished')).toBeNull();
     expect(toast.error).toHaveBeenCalledExactlyOnceWith('Episode progress stream closed unexpectedly');
+    expect(screen.getByText(/Compose another episode/i)).toBeTruthy();
+  });
+
+  it('reattaches to an active episode on mount and cancels it cleanly while streaming', async () => {
+    getActiveContinuousVideoEpisodes.mockResolvedValueOnce({
+      activeEpisodes: [{ jobId: 'job-reattach', backend: 'fal', status: 'running' }],
+      activeEpisode: { jobId: 'job-reattach', backend: 'fal', status: 'running' },
+    });
+    render(<EpisodeComposer />);
+
+    await waitFor(() => expect(lastEventSource()?.url).toBe('/api/continuous-video/job-reattach/events'));
+    act(() => lastEventSource().emit({ type: 'progress', progress: 0.5, message: 'Clip 2/2 — continuing' }));
+    expect(await screen.findByText('Clip 2/2 — continuing')).toBeTruthy();
+
+    const cancelButton = screen.getByRole('button', { name: /Cancel/i });
+    fireEvent.click(cancelButton);
+    await waitFor(() => expect(cancelContinuousVideoEpisode).toHaveBeenCalledExactlyOnceWith('job-reattach', { silent: true }));
+
+    act(() => lastEventSource().emit({ type: 'canceled', jobId: 'job-reattach', message: 'Episode canceled' }));
+    expect(await screen.findByText('Episode generation canceled')).toBeTruthy();
+    expect(screen.queryByText('Episode generation finished')).toBeNull();
+    expect(toast.info).toHaveBeenCalledExactlyOnceWith('Episode generation canceled');
+    expect(toast.error).not.toHaveBeenCalled();
     expect(screen.getByText(/Compose another episode/i)).toBeTruthy();
   });
 
