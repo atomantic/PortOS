@@ -20,7 +20,7 @@ const SW_SOURCE = readFileSync(SW_PATH, 'utf-8');
  * helper; the network `fetch` always rejects, so callers exercise the
  * offline/failure paths.
  */
-export function createSwSandbox() {
+export function createSwSandbox({ fetch: fetchImpl } = {}) {
   const listeners = {};
   // name -> Map(url -> Response)
   const cacheStores = new Map();
@@ -29,7 +29,8 @@ export function createSwSandbox() {
     if (!cacheStores.has(name)) cacheStores.set(name, new Map());
     const store = cacheStores.get(name);
     return {
-      match: async (req) => store.get(typeof req === 'string' ? req : req.url),
+      // Clone like real Cache Storage, so a body can be read on every match.
+      match: async (req) => store.get(typeof req === 'string' ? req : req.url)?.clone(),
       put: async (req, res) => store.set(typeof req === 'string' ? req : req.url, res),
       keys: async () => [...store.keys()].map((url) => ({ url })),
       delete: async (req) => store.delete(typeof req === 'string' ? req : req.url),
@@ -56,9 +57,11 @@ export function createSwSandbox() {
     Response,
     Request,
     URL,
-    fetch: async () => {
-      throw new Error('network unavailable');
-    },
+    fetch:
+      fetchImpl ||
+      (async () => {
+        throw new Error('network unavailable');
+      }),
   };
   sandbox.self = {
     addEventListener: (type, handler) => {

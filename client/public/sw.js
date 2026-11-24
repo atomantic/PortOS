@@ -103,10 +103,13 @@ function offlineFallbackResponse() {
 }
 
 // Cap the immutable-asset cache so many rebuilds don't grow it without bound.
-// Old build chunks accumulate here (their hashed names never collide); trim to
-// the most-recently-added entries. Generous because a single build's chunk set
-// is well under this.
-const ASSET_CACHE_MAX_ENTRIES = 120;
+// Old build chunks accumulate here (their hashed names never collide). One
+// build is ~830 files (~32 MB uncompressed) but only chunks the user actually
+// requests get cached, so the cap must exceed a full build or shared chunks
+// of pages visited this session get evicted (breaking offline revisits). It
+// bounds leftovers from older builds; trim evicts oldest-first, skipping the
+// current shell's pinned boot assets.
+const ASSET_CACHE_MAX_ENTRIES = 1500;
 
 // Same-origin static assets that are safe to serve stale-while-revalidate:
 // fonts, icons, the PWA manifest, sky textures, the logo. Matched by path.

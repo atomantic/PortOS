@@ -43,3 +43,40 @@ describe('sw.js navigationHandler — offline fallback branches', () => {
     expect(body).toMatch(/retry|reload/i);
   });
 });
+
+describe('sw.js asset cache cap', () => {
+  const ORIGIN = 'https://portos.example';
+  const assetUrl = (i) => `${ORIGIN}/assets/chunk-${i}.js`;
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  async function requestAssets(listeners, urls) {
+    for (const url of urls) {
+      const event = { request: { method: 'GET', url, mode: 'cors' }, respondWith: (p) => { event._responded = p; }, waitUntil: () => {} };
+      listeners.fetch(event);
+      await event._responded;
+    }
+    // cacheFirst fires trimCache without awaiting it.
+    await settle();
+    await settle();
+  }
+
+  const okFetch = async () => new Response('x', { status: 200 });
+
+  it('keeps every asset of a full ~831-file build cached', async () => {
+    const { listeners, openCache } = createSwSandbox({ fetch: okFetch });
+    await requestAssets(listeners, Array.from({ length: 831 }, (_, i) => assetUrl(i)));
+    expect((await openCache('portos-assets-v1').keys()).length).toBe(831);
+  });
+
+  it('trims oldest first past the cap without evicting the shell boot assets', async () => {
+    const { listeners, openCache } = createSwSandbox({ fetch: okFetch });
+    const assets = openCache('portos-assets-v1');
+    await openCache('portos-shell-v1').put('/index.html', new Response('<script src="/assets/chunk-0.js"></script>'));
+    await requestAssets(listeners, Array.from({ length: 1501 }, (_, i) => assetUrl(i)));
+    const urls = (await assets.keys()).map((k) => k.url);
+    expect(urls.length).toBe(1500);
+    expect(urls).toContain(assetUrl(0));
+    expect(urls).not.toContain(assetUrl(1));
+    expect(urls).toContain(assetUrl(1500));
+  });
+});
