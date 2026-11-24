@@ -110,7 +110,7 @@ async function waitForSplashReady(version) {
   while (performance.now() < deadline) {
     const started = await checkedPm2();
     if (!ownsProcess(started, version) || !active.has(started.status)) {
-      throw fail('Splash exited during startup. Check the portos-splash PM2 logs, or retry Install to repair the cache.', 502, 'SPLASH_START_FAILED');
+      throw fail('Splash exited during startup. Use Repair to check the local cache, or check the portos-splash logs.', 502, 'SPLASH_START_FAILED');
     }
     const endpoint = await probeSplashEndpoint();
     if (endpoint.state === 'external' && endpoint.model === SPLASH_MODEL) return;
