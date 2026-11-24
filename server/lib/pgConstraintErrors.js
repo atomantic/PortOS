@@ -1,8 +1,9 @@
 /**
- * Map PostgreSQL constraint violations to the standard 4xx envelope so a duplicate
- * or dangling reference is a client refusal, not a 500 that leaks the raw
- * constraint name. 23505 (unique) -> 409 CONFLICT, 23503 (foreign key) -> 404.
- * Anything else rethrows untouched.
+ * Maps PostgreSQL constraint violations to 4xx errors with safe messages.
+ *
+ * 23505 (unique) becomes 409 CONFLICT and 23503 (foreign key) becomes 404, so a
+ * duplicate or dangling reference never leaks a raw constraint name as a 500.
+ * Other errors rethrow untouched.
  */
 import { ServerError } from './errorHandler.js';
 
