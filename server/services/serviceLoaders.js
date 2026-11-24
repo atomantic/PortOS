@@ -17,6 +17,7 @@ export const SERVICE_LOADERS = Object.freeze({
   eidoverseRuntime: () => import('./eidoverseRuntime.js'),
   eidoverseWorld: () => import('./eidoverseWorld.js'),
   managedVisitors: () => import('./managedVisitors.js'),
+  musicGen: () => import('./pipeline/musicGen.js'),
   persistentMindAdapter: () => import('./persistent/persistentMindAdapter.js'),
 });
 

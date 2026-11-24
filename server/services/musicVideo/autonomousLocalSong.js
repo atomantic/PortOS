@@ -21,6 +21,7 @@ import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { sleep as defaultSleep } from '../../lib/fileCore.js';
 import { trimTo } from '../../lib/textUtils.js';
+import { loadLateBoundService } from '../../lib/lateBoundServices.js';
 
 // A full song, not the engines' short default clip. Clamped to each engine's own window.
 const LOCAL_SONG_TARGET_SEC = 180;
@@ -35,8 +36,8 @@ const TERMINAL = ['completed', 'failed', 'canceled'];
 const fail = (status, code, message, context) => new ServerError(message, { status, code, ...(context ? { context } : {}) });
 
 const defaults = {
-  listEngines: async () => (await import('../pipeline/musicGen.js')).ENGINES,
-  isEngineHealthy: async (id) => (await import('../pipeline/musicGen.js')).isEngineHealthy(id),
+  listEngines: async () => (await loadLateBoundService('musicGen')).ENGINES,
+  isEngineHealthy: async (id) => (await loadLateBoundService('musicGen')).isEngineHealthy(id),
   queueGeneration: async (body) => (await import('../musicGeneration.js')).queueMusicGeneration(body),
   writeMusicCode: async (args) => (await import('../musicCode.js')).writeMusicCode(args),
   renderSuperColliderSource: async (args) => (await import('../superColliderRender.js')).renderSuperColliderSource(args),
