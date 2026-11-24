@@ -87,7 +87,19 @@ describe('useFeatureUsageBeacon', () => {
     expect(postFeatureVisit).toHaveBeenCalledTimes(1);
   });
 
-  it('resets on a route change and posts each route at most once per page session', () => {
+  it('reports the same route again on a later calendar day when attention returns', () => {
+    vi.setSystemTime(new Date(2026, 0, 5, 12, 0, 0));
+    mount();
+    advance(FEATURE_VISIT_DWELL_MS);
+    expect(postFeatureVisit).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(new Date(2026, 0, 6, 9, 0, 0));
+    setAttention('visible', false);
+    setAttention('visible', true);
+    advance(FEATURE_VISIT_DWELL_MS);
+    expect(postFeatureVisit).toHaveBeenCalledTimes(2);
+  });
+
+  it('resets on a route change and posts each route at most once per day', () => {
     const { result } = mount();
     advance(6_000);
     act(() => result.current('/jira'));
