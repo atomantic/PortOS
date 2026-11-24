@@ -3,16 +3,17 @@
  * user types, store the parsed list, and normalize on blur.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import PipelineSeries from './PipelineSeries';
 
 const getPipelineSeries = vi.fn();
+const updatePipelineSeries = vi.fn();
 
 vi.mock('../services/apiPipeline.js', () => ({
   getPipelineSeries: (...args) => getPipelineSeries(...args),
-  updatePipelineSeries: vi.fn(),
+  updatePipelineSeries: (...args) => updatePipelineSeries(...args),
   listPipelineIssues: vi.fn().mockResolvedValue([]),
   generateSeriesTitleLogo: vi.fn(),
   discoverSeriesVoice: vi.fn(),
@@ -46,6 +47,7 @@ function renderPage() {
     { initialEntries: ['/pipeline/series/series-a'] },
   );
   render(<RouterProvider router={router} />);
+  return router;
 }
 
 describe('Pipeline series — style guide Tone input', () => {
@@ -65,5 +67,29 @@ describe('Pipeline series — style guide Tone input', () => {
     expect(input.value).toBe('dark humor,  dry wit');
     await user.tab();
     expect(input.value).toBe('dark humor, dry wit');
+  });
+
+  it('rolls back the primary manuscript format when the PATCH fails', async () => {
+    const user = userEvent.setup();
+    updatePipelineSeries.mockRejectedValue(new Error('boom'));
+    renderPage();
+    const select = await screen.findByLabelText('Primary manuscript format');
+    expect(select.value).toBe('');
+    await user.selectOptions(select, 'teleplay');
+    await waitFor(() => expect(screen.getByLabelText('Primary manuscript format').value).toBe(''));
+    expect(updatePipelineSeries).toHaveBeenCalled();
+  });
+
+  it('hides the previous series while the next one loads', async () => {
+    let resolveB;
+    getPipelineSeries.mockImplementation((id) => (id === 'series-a'
+      ? Promise.resolve({ id: 'series-a', name: 'Series A' })
+      : new Promise((r) => { resolveB = () => r({ id: 'series-b', name: 'Series B' }); })));
+    const router = renderPage();
+    await screen.findByLabelText(/Tone \(comma-separated\)/);
+    await act(async () => { await router.navigate('/pipeline/series/series-b'); });
+    expect(screen.queryByLabelText(/Tone \(comma-separated\)/)).toBeNull();
+    await act(async () => { resolveB(); });
+    expect(await screen.findByLabelText(/Tone \(comma-separated\)/)).toBeTruthy();
   });
 });
