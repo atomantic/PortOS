@@ -1,5 +1,10 @@
+import { execFileSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  DOCKER_CONTAINMENT_DRIVER,
   DOCKER_CONTAINMENT_NODE_IMAGES,
   DOCKER_CONTAINMENT_PROXY_ALIAS,
   assertDockerMountSource,
@@ -156,7 +161,137 @@ describe('selectApplicablePatch', () => {
     expect(selectApplicablePatch(`${hook}${lock}`)).toEqual({ patch: lock, applied: ['server/package-lock.json'], withheld: ['.husky/pre-commit'] });
     expect(selectApplicablePatch(hook)).toMatchObject({ patch: null, applied: [], withheld: ['.husky/pre-commit'] });
     expect(selectApplicablePatch('--- a/yarn.lock\n+++ b/evil.sh\n')).toMatchObject({ patch: null, malformed: true });
-    expect(selectApplicablePatch('--- a/../yarn.lock\n+++ b/../yarn.lock\n@@ -1 +1 @@\n-a\n+b\n')).toMatchObject({ patch: null, withheld: ['../yarn.lock'] });
+  });
+
+  it.each([
+    ['tab-comment spoofing package.json', '--- a/package.json\t/package-lock.json\n+++ b/package.json\t/package-lock.json\n@@ -1 +1 @@\n-a\n+b\n'],
+    ['tab-comment spoofing hook', '--- a/.husky/pre-commit\t/package-lock.json\n+++ b/.husky/pre-commit\t/package-lock.json\n@@ -1 +1 @@\n-a\n+b\n'],
+    ['tab timestamp suffix', '--- a/package-lock.json\t2026-01-01\n+++ b/package-lock.json\t2026-01-01\n@@ -1 +1 @@\n-a\n+b\n'],
+    ['space in path', '--- a/package.json /package-lock.json\n+++ b/package.json /package-lock.json\n@@ -1 +1 @@\n-a\n+b\n'],
+    ['carriage return in path', '--- a/package-lock.json\r\n+++ b/package-lock.json\r\n@@ -1 +1 @@\n-a\n+b\n'],
+    ['NUL byte in path', '--- a/package.json\0/package-lock.json\n+++ b/package.json\0/package-lock.json\n@@ -1 +1 @@\n-a\n+b\n'],
+    ['escape control character in path', '--- a/package.json\x1b/package-lock.json\n+++ b/package.json\x1b/package-lock.json\n@@ -1 +1 @@\n-a\n+b\n'],
+    ['double quote in path', '--- a/"package-lock.json"\n+++ b/"package-lock.json"\n@@ -1 +1 @@\n-a\n+b\n'],
+    ['backslash in path', '--- a/server\\package-lock.json\n+++ b/server\\package-lock.json\n@@ -1 +1 @@\n-a\n+b\n'],
+    ['leading slash', '--- a//package-lock.json\n+++ b//package-lock.json\n@@ -1 +1 @@\n-a\n+b\n'],
+    ['trailing slash', '--- a/package-lock.json/\n+++ b/package-lock.json/\n@@ -1 +1 @@\n-a\n+b\n'],
+    ['empty segment', '--- a/server//package-lock.json\n+++ b/server//package-lock.json\n@@ -1 +1 @@\n-a\n+b\n'],
+    ['dot segment', '--- a/./package-lock.json\n+++ b/./package-lock.json\n@@ -1 +1 @@\n-a\n+b\n'],
+    ['nested dot segment', '--- a/server/./package-lock.json\n+++ b/server/./package-lock.json\n@@ -1 +1 @@\n-a\n+b\n'],
+    ['parent traversal segment', '--- a/../yarn.lock\n+++ b/../yarn.lock\n@@ -1 +1 @@\n-a\n+b\n'],
+    ['nested parent traversal segment', '--- a/server/../package.json\n+++ b/server/../package.json\n@@ -1 +1 @@\n-a\n+b\n'],
+    ['git extended header symlink mode', 'diff --git a/package-lock.json b/package-lock.json\nnew file mode 120000\n--- a/package-lock.json\n+++ b/package-lock.json\n@@ -1 +1 @@\n-a\n+b\n'],
+    ['git extended header between headers and hunk', '--- a/package-lock.json\n+++ b/package-lock.json\nnew mode 120000\n@@ -1 +1 @@\n-a\n+b\n'],
+    ['git extended header after section', '--- a/package-lock.json\n+++ b/package-lock.json\n@@ -1 +1 @@\n-a\n+b\nold mode 100644\nnew mode 120000\n'],
+    ['section without hunks', '--- a/package-lock.json\n+++ b/package-lock.json\n'],
+    ['truncated hunk', '--- a/package-lock.json\n+++ b/package-lock.json\n@@ -1,2 +1,2 @@\n-a\n+b\n'],
+  ])('rejects %s as malformed with null patch', (_label, patch) => {
+    expect(selectApplicablePatch(patch)).toEqual({ patch: null, applied: [], withheld: [], malformed: true });
+  });
+
+  it('rejects tab-comment spoofing that real git apply would accept while allowing real lockfile patches', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'portos-patch-git-'));
+    try {
+      mkdirSync(join(repo, 'server'), { recursive: true });
+      mkdirSync(join(repo, '.husky'), { recursive: true });
+      writeFileSync(join(repo, 'package.json'), '{"name":"example","version":"1.0.0"}\n');
+      writeFileSync(join(repo, 'package-lock.json'), '{"lockfileVersion":3,"version":"1.0.0"}\n');
+      writeFileSync(join(repo, 'server', 'package-lock.json'), '{"lockfileVersion":3,"version":"1.0.0"}\n');
+      writeFileSync(join(repo, 'yarn.lock'), '# yarn v1\n');
+      writeFileSync(join(repo, '.husky', 'pre-commit'), 'npm test\n');
+      execFileSync('git', ['init', '-q'], { cwd: repo });
+      execFileSync('git', ['add', '.'], { cwd: repo });
+
+      const forged = [
+        '--- a/package.json\t/package-lock.json',
+        '+++ b/package.json\t/package-lock.json',
+        '@@ -1 +1 @@',
+        '-{"name":"example","version":"1.0.0"}',
+        '+{"name":"example","scripts":{"test":"echo pwn"}}',
+        '',
+      ].join('\n');
+      const forgedFile = join(repo, 'forged.patch');
+      writeFileSync(forgedFile, forged);
+      // Confirm the exploit premise: git apply itself accepts the tab-comment spoofed header.
+      expect(() => execFileSync('git', ['-C', repo, 'apply', '--check', forgedFile], { stdio: 'pipe' })).not.toThrow();
+      expect(selectApplicablePatch(forged)).toEqual({ patch: null, applied: [], withheld: [], malformed: true });
+
+      const legitimate = [
+        '--- a/package.json\n+++ b/package.json\n@@ -1 +1 @@\n-{"name":"example","version":"1.0.0"}\n+{"name":"example","version":"9.9.9"}\n',
+        '--- a/package-lock.json\n+++ b/package-lock.json\n@@ -1 +1 @@\n-{"lockfileVersion":3,"version":"1.0.0"}\n+{"lockfileVersion":3,"version":"1.0.1"}\n',
+        '--- a/server/package-lock.json\n+++ b/server/package-lock.json\n@@ -1 +1 @@\n-{"lockfileVersion":3,"version":"1.0.0"}\n+{"lockfileVersion":3,"version":"1.0.2"}\n',
+        '--- a/yarn.lock\n+++ b/yarn.lock\n@@ -1 +1 @@\n-# yarn v1\n+# yarn v2\n',
+      ].join('');
+      const selected = selectApplicablePatch(legitimate);
+      expect(selected.malformed).toBeUndefined();
+      expect(selected.applied).toEqual(['package-lock.json', 'server/package-lock.json', 'yarn.lock']);
+      expect(selected.withheld).toEqual(['package.json']);
+      const selectedFile = join(repo, 'selected.patch');
+      writeFileSync(selectedFile, selected.patch);
+      execFileSync('git', ['-C', repo, 'apply', '--check', selectedFile], { stdio: 'pipe' });
+      execFileSync('git', ['-C', repo, 'apply', selectedFile], { stdio: 'pipe' });
+      expect(readFileSync(join(repo, 'package.json'), 'utf8')).toBe('{"name":"example","version":"1.0.0"}\n');
+      expect(readFileSync(join(repo, 'package-lock.json'), 'utf8')).toBe('{"lockfileVersion":3,"version":"1.0.1"}\n');
+      expect(readFileSync(join(repo, 'server', 'package-lock.json'), 'utf8')).toBe('{"lockfileVersion":3,"version":"1.0.2"}\n');
+      expect(readFileSync(join(repo, 'yarn.lock'), 'utf8')).toBe('# yarn v2\n');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('DOCKER_CONTAINMENT_DRIVER patch creation', () => {
+  const runDriver = (root, command) => {
+    const script = DOCKER_CONTAINMENT_DRIVER.replace(/\/(src|work|in|out)(?![.\w])/g, (_, dir) => join(root, dir));
+    return execFileSync('/bin/sh', ['-c', script, 'portos-contained', 'install', command], {
+      env: { PATH: process.env.PATH, HOME: join(root, 'tmp', 'home'), TMPDIR: join(root, 'tmp') },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  };
+
+  const setupDriverRoot = () => {
+    const root = mkdtempSync(join(tmpdir(), 'portos-driver-'));
+    for (const dir of ['src', 'work', 'in', 'out', 'tmp']) mkdirSync(join(root, dir), { recursive: true });
+    writeFileSync(join(root, 'src', 'package-lock.json'), '{"v":1}\n');
+    writeFileSync(join(root, 'in', 'tracked.lst'), 'package-lock.json\n');
+    return root;
+  };
+
+  it.runIf(process.platform !== 'win32')('removes a pre-existing read-only forged patch file before writing the real diff', () => {
+    const root = setupDriverRoot();
+    try {
+      const outPatch = join(root, 'out', 'changes.patch');
+      const cmd = `printf '%s\\n' '--- a/package.json\t/package-lock.json' > '${outPatch}' && chmod 444 '${outPatch}' && printf '%s\\n' '{"v":2}' > package-lock.json`;
+      runDriver(root, cmd);
+      const written = readFileSync(outPatch, 'utf8');
+      expect(written).not.toContain('package.json');
+      expect(written).toContain('--- a/package-lock.json');
+      expect(written).toContain('+{"v":2}');
+    } finally {
+      chmodSync(join(root, 'out'), 0o755);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform !== 'win32')('exits 125 when /out/changes.patch cannot be removed or rewritten', () => {
+    const root = setupDriverRoot();
+    try {
+      const outDir = join(root, 'out');
+      const outPatch = join(outDir, 'changes.patch');
+      const cmd = `printf '%s\\n' '--- a/package.json\t/package-lock.json' > '${outPatch}' && chmod 555 '${outDir}'`;
+      let failure = null;
+      try {
+        runDriver(root, cmd);
+      } catch (err) {
+        failure = err;
+      }
+      expect(failure?.status).toBe(125);
+      expect(String(failure?.stderr ?? '')).toContain('could not write the patch');
+    } finally {
+      chmodSync(join(root, 'out'), 0o755);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

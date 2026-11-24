@@ -145,14 +145,18 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
       console.error(`📝 contained-run: wrote the tracked-file patch to ${options.patchOut}`);
     }
     if (options.applyPatch) {
-      const selected = selectApplicablePatch(result.patch);
-      if (selected.patch) {
-        (deps.applyPatch ?? applyPatch)(worktree, selected.patch);
-        console.error(`📝 contained-run: applied lockfile changes to the worktree: ${selected.applied.join(', ')}`);
-      }
-      if (selected.malformed) console.error('⚠️ contained-run: the change patch is malformed; nothing was applied');
-      if (selected.withheld.length) {
-        console.error(`⚠️ contained-run: withheld changes to ${selected.withheld.join(', ')} — code run in the container edited them; review with --patch-out before applying anything by hand`);
+      if (result.exitCode !== 0) {
+        console.error(`⚠️ contained-run: refused --apply-patch because the contained command exited ${result.exitCode}`);
+      } else {
+        const selected = selectApplicablePatch(result.patch);
+        if (selected.patch) {
+          (deps.applyPatch ?? applyPatch)(worktree, selected.patch);
+          console.error(`📝 contained-run: applied lockfile changes to the worktree: ${selected.applied.join(', ')}`);
+        }
+        if (selected.malformed) console.error('⚠️ contained-run: the change patch is malformed; nothing was applied');
+        if (selected.withheld.length) {
+          console.error(`⚠️ contained-run: withheld changes to ${selected.withheld.join(', ')} — code run in the container edited them; review with --patch-out before applying anything by hand`);
+        }
       }
     } else if (!options.patchOut) {
       console.error('📝 contained-run: the step changed tracked files; rerun with --apply-patch or --patch-out <file> to keep them');
