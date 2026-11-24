@@ -25,6 +25,8 @@ const store = createProjectDbStore({
   logEmoji: '🎞️',
   logLabel: 'Music Video',
   logic,
+  // Keep the manual override's inputs available before the page is selected.
+  pageHeaderFields: ['completion', 'renderHistoryId'],
 });
 
 const { withLockedProject, rowToProject } = store;
