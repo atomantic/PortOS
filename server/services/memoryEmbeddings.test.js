@@ -399,6 +399,22 @@ describe('memoryEmbeddings — settings.embeddings is the single source of truth
     expect(embedPosts().length).toBe(postsBefore);
   });
 
+  it('a save that lands while the first config build is in flight is not lost to the stale read', async () => {
+    wireOpenAiBackend();
+    let releaseStaleRead;
+    getSettings.mockImplementationOnce(() => new Promise((resolve) => { releaseStaleRead = resolve; }));
+    const first = embeddings.generateEmbedding('first');
+
+    const next = { embeddings: { provider: 'lmstudio', model: 'text-embedding-nomic-embed-text-v1.5' } };
+    getSettings.mockResolvedValue(next);
+    settingsEvents.emit('settings:updated', next);
+    releaseStaleRead({ embeddings: { provider: 'ollama', model: 'nomic-embed-text' } });
+    await first;
+
+    await embeddings.generateEmbedding('second');
+    expect(embedPosts().at(-1)[0]).toBe(`${LMSTUDIO_BASE}/v1/embeddings`);
+  });
+
   it('discovers an installed embedding model when settings name a backend but no model', async () => {
     getSettings.mockResolvedValue({ embeddings: { provider: 'ollama', model: null } });
     wireOpenAiBackend(['llama3.2:latest', 'nomic-embed-text:latest']);

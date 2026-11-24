@@ -141,9 +141,11 @@ export function reinitialize() {
 }
 
 // Saving `settings.embeddings` (Models → Embeddings, AI Assignments) takes
-// effect immediately. Other settings writes leave the cached config alone.
+// effect immediately. Other settings writes leave the cached config alone. A
+// save landing while the first build is still in flight (no key recorded yet)
+// also reinitializes, so that build's possibly-stale read is never cached.
 settingsEvents.on('settings:updated', (settings) => {
-  if (activeSettingsKey !== undefined && settingsEmbeddingsKey(settings) !== activeSettingsKey) reinitialize();
+  if (configPromise && settingsEmbeddingsKey(settings) !== activeSettingsKey) reinitialize();
 });
 settingsEvents.on('settings:invalidated', reinitialize);
 
