@@ -12,6 +12,11 @@ vi.mock('../services/stackerNews.js', () => ({
   })),
   createActionWithOutcome: vi.fn(),
   executeApprovedAction: vi.fn(),
+  getAccount: vi.fn(),
+  listTerritories: vi.fn(async () => []),
+  listItems: vi.fn(async () => []),
+  listActions: vi.fn(async () => []),
+  updateActionState: vi.fn(),
   listAccounts: vi.fn(async () => []),
   verifyConnection: vi.fn(async () => ({ configured: true, connected: true, transport: 'browser', username: 'example_steward' })),
 }));
@@ -143,6 +148,29 @@ describe('Stacker News routes', () => {
     const response = await request(app).post('/api/stacker-news/actions/00000000-0000-4000-8000-000000000010/execute').send({});
     expect(response.status).toBe(200);
     expect(stackerNews.executeApprovedAction).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000010');
+  });
+
+  it('answers 404 for a missing action and 409 only for a wrong-state one', async () => {
+    const id = '00000000-0000-4000-8000-000000000010';
+    const missing = Object.assign(new Error('Stacker News action not found'), { status: 404 });
+    stackerNews.updateActionState.mockRejectedValueOnce(missing);
+    expect((await request(app).post(`/api/stacker-news/actions/${id}/review`).send({ state: 'approved' })).status).toBe(404);
+    stackerNews.updateActionState.mockResolvedValueOnce(null);
+    expect((await request(app).post(`/api/stacker-news/actions/${id}/review`).send({ state: 'approved' })).status).toBe(409);
+    stackerNews.executeApprovedAction.mockRejectedValueOnce(missing);
+    expect((await request(app).post(`/api/stacker-news/actions/${id}/execute`).send({})).status).toBe(404);
+    stackerNews.executeApprovedAction.mockResolvedValueOnce(null);
+    expect((await request(app).post(`/api/stacker-news/actions/${id}/execute`).send({})).status).toBe(409);
+  });
+
+  it.each(['territories', 'items', 'actions'])('404s %s for an unknown account and 200s an empty list for a real one', async (kind) => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    stackerNews.getAccount.mockResolvedValueOnce(null);
+    expect((await request(app).get(`/api/stacker-news/accounts/${id}/${kind}`)).status).toBe(404);
+    stackerNews.getAccount.mockResolvedValueOnce({ id });
+    const ok = await request(app).get(`/api/stacker-news/accounts/${id}/${kind}`);
+    expect(ok.status).toBe(200);
+    expect(ok.body[kind]).toEqual([]);
   });
 
   it('accepts a read transport on create and rejects one outside the two named transports', async () => {
