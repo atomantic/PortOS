@@ -59,6 +59,19 @@ describe('planTestMemo and recordTestMemo', () => {
     env: { NODE_ENV: 'test' }, platform: 'linux', arch: 'x64', nodeVersion: '24.1.0', listTests: () => TESTS, ...overrides,
   });
 
+  it('runs the CTC contract in strict related CI even when a permissive verdict is available', () => {
+    const test = 'scripts/align_lyrics_ctc.test.js';
+    const source = 'server/lib/testHelper.js';
+    const result = plan({
+      repoRoot: repoRootDir, memoDir: 'unused', mode: 'related', repoFiles: [test], repoSources: [source],
+      env: { CI: 'true', CI_EXPECT_NUMPY_PYTHON: 'true' }, listTests: () => [`../${test}`],
+      readRecord: () => ({ modules: [test, source], digests: null }), readEntry: () => true,
+    });
+    expect(result.verdicts.get(test).floor.reasons).toContain('test-memo: never marker');
+    expect(result.skipped).toEqual([]);
+    expect(result.run).toEqual([test]);
+  });
+
   // #17616: a real-Chromium suite's record carries what its fixture served, so an
   // unrelated client page neither selects it nor misses its memo entry.
   it('records what a browser fixture served and narrows the suite to it', () => {
