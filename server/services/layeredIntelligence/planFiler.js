@@ -11,12 +11,13 @@ import { readFile, writeFile, appendFile } from 'fs/promises';
 /**
  * Append a slug-tagged proposal to the app's PLAN.md (the `plan` tracker path).
  * Dedups by scanning for the `[lil-<slug>]` tag. Creates PLAN.md with a heading
- * + `## Next Up` section if absent. Returns `{ success, duplicate }`.
+ * + `## Next Up` section if absent. An existing but unreadable PLAN.md throws —
+ * it must never be mistaken for an absent file and overwritten with a template. Returns `{ success, duplicate }`.
  */
 export async function appendProposalToPlan({ repoPath, appName, slug, title, body } = {}) {
   const planPath = join(repoPath, 'PLAN.md');
   const tag = `[lil-${slug}]`;
-  const existing = existsSync(planPath) ? await readFile(planPath, 'utf-8').catch(() => '') : '';
+  const existing = existsSync(planPath) ? await readFile(planPath, 'utf-8') : '';
   if (existing.includes(tag)) return { success: true, duplicate: true };
 
   const oneLine = (body || '').replace(/\s+/g, ' ').trim().slice(0, 500);
