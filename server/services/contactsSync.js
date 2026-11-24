@@ -527,12 +527,10 @@ async function doRunSync() {
   return result;
 }
 
+// Reads only machine-local cache and state files. Never calls checkSetup(): that
+// opens every AddressBook database and can spawn `ps` probes (#18279).
 export async function getStatus() {
-  const [cache, state, setup] = await Promise.all([
-    readContactCache(),
-    readSyncState(),
-    checkSetup().catch(() => ({ ok: false })),
-  ]);
+  const [cache, state] = await Promise.all([readContactCache(), readSyncState()]);
   return {
     cache: {
       contactCount: cache.contacts.length,
@@ -540,13 +538,6 @@ export async function getStatus() {
       sourceCount: cache.sourceCount,
     },
     state,
-    setup: {
-      ok: setup.ok,
-      sourceCount: setup.sourceCount,
-      root: setup.root,
-      fullDiskAccessRequired: setup.fullDiskAccessRequired,
-      error: setup.error,
-    },
   };
 }
 
