@@ -26,7 +26,7 @@ vi.mock('../../lib/icLoraWeights.js', () => ({
   icLoraRepos: vi.fn(() => []),
 }));
 
-vi.mock('./local.js', () => ({ listVideoModels: vi.fn() }));
+vi.mock('./modelCatalog.js', () => ({ listVideoModels: vi.fn() }));
 
 vi.mock('../../lib/hfCache.js', async (original) => ({ ...(await original()),
   verifyCachedRepoFiles: vi.fn(async () => ({ status: 'ok', sizeBytes: 100 })),
@@ -37,7 +37,7 @@ vi.mock('../../lib/hfCache.js', async (original) => ({ ...(await original()),
 
 import { MINIMAX_H3_FLEX_MLX_PROFILE as flex, MINIMAX_H3_LIGHTX2V_MLX_PROFILE as light } from '../../lib/minimaxH3SpeedProfiles.js';
 import { modelDownloadTargets, modelCacheStatus, targetKey, reposToVerify } from './modelCache.js';
-import { listVideoModels } from './local.js';
+import { listVideoModels } from './modelCatalog.js';
 
 const REV_A = 'a'.repeat(40);
 const REV_B = 'b'.repeat(40);

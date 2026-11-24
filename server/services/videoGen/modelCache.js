@@ -22,9 +22,8 @@ import {
   verifyCachedRepoFiles, repairCachedRepoFiles, summarizeVerify, aggregateVerifies,
   isSafeHfRepoRelativePath,
 } from '../../lib/hfCache.js';
-// Through the local facade the routes already use, so a caller that mocks
-// `videoGen/local.js` sees one model registry across the route and this module.
-import { listVideoModels } from './local.js';
+// Straight from the catalog leaf so this module does not pull in the render engine.
+import { listVideoModels } from './modelCatalog.js';
 
 // One definition of "a valid `only` list" for every download target this file
 // builds — model repos, their required weights, and the substitutable prompt

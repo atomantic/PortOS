@@ -33,7 +33,7 @@ vi.mock('../creativeDirector/local.js', () => ({
 }));
 const deleteCollection = vi.fn();
 vi.mock('../mediaCollections.js', () => ({ deleteCollection: (...a) => deleteCollection(...a) }));
-vi.mock('../videoGen/local.js', () => ({ defaultVideoModelId: () => 'ltxv-default' }));
+vi.mock('../videoGen/modelCatalog.js', () => ({ defaultVideoModelId: () => 'ltxv-default' }));
 
 const local = await import('./local.js');
 const { createWork, updateWork, getWork } = local;

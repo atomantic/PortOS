@@ -25,7 +25,7 @@ const mockStartProject = vi.fn();
 vi.mock('../stageRunner.js', () => ({ runStagedLLM: (...a) => mockRunStagedLLM(...a) }));
 vi.mock('../pipeline/issues.js', () => ({ getIssue: (...a) => mockGetIssue(...a) }));
 vi.mock('../pipeline/series.js', () => ({ getSeries: (...a) => mockGetSeries(...a) }));
-vi.mock('../videoGen/local.js', () => ({ defaultVideoModelId: () => 'ltx-model' }));
+vi.mock('../videoGen/modelCatalog.js', () => ({ defaultVideoModelId: () => 'ltx-model' }));
 // './local.js' from here === '../creativeDirector/local.js' from liveDirector —
 // one mock covers both importers.
 vi.mock('./local.js', () => ({

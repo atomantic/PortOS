@@ -4,6 +4,7 @@ import { resolveA2vLoraStageCapable } from './runtimes.js';
 vi.mock('./runtimes.js', async (importOriginal) => ({
   ...(await importOriginal()),
   resolveA2vLoraStageCapable: vi.fn(async () => true),
+  BYOV_VIDEO_RUNTIMES: new Set(['ltx2', 'ltx25', 'wan22', 'minimax_h3']),
 }));
 
 // These assertions describe the COMPOSITION of a staged path, not its
@@ -26,11 +27,16 @@ vi.mock('../settings.js', () => ({
 vi.mock('../musicVideo/projects.js', () => ({ getProject: vi.fn() }));
 vi.mock('../tracks/index.js', () => ({ getTrack: vi.fn() }));
 
-vi.mock('./local.js', () => ({
+vi.mock('./modelCatalog.js', () => ({
   listVideoModels: vi.fn(() => [{ id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2' }]),
   defaultVideoModelId: vi.fn(() => 'ltx2_unified'),
+}));
+vi.mock('./history.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   loadHistory: vi.fn(async () => []),
-  BYOV_VIDEO_RUNTIMES: new Set(['ltx2', 'ltx25', 'wan22', 'minimax_h3']),
+}));
+vi.mock('./renderArgs.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   DEFAULT_NUM_FRAMES: 121,
 }));
 
@@ -76,7 +82,8 @@ import { resolveGalleryImage } from '../../lib/fileUtils.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
 import { getTrack } from '../tracks/index.js';
 import { getSettings } from '../settings.js';
-import { listVideoModels, defaultVideoModelId, loadHistory } from './local.js';
+import { listVideoModels, defaultVideoModelId } from './modelCatalog.js';
+import { loadHistory } from './history.js';
 import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
 import {
   prepareVideoGenParams,

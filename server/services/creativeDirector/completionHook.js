@@ -437,7 +437,7 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
         // the persisted row may already name. Hold one backup admission from
         // the first frame write through the row update (as sceneRunner does).
         frames = await withBackupAssetPublication(async () => {
-          const { sampleEvaluationFrames } = await import('../videoGen/local.js');
+          const { sampleEvaluationFrames } = await import('../videoGen/frameExtraction.js');
           const sampled = await sampleEvaluationFrames(orphanedEvaluating.renderedJobId)
             .catch((err) => {
               console.error(`❌ CD resume sampleEvaluationFrames failed for ${orphanedEvaluating.renderedJobId.slice(0, 8)}: ${err.message}`);

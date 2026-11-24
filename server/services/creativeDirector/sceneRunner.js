@@ -35,7 +35,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { verifyVideoPlayable } from '../../lib/ffmpeg.js';
 import { presetToRenderParams } from '../../lib/creativeDirectorPresets.js';
 import { CD_MAX_SCENE_RETRIES } from '../creativeDirectorPrompts.js';
-import { extractLastFrame, sampleEvaluationFrames } from '../videoGen/local.js';
+import { extractLastFrame, sampleEvaluationFrames } from '../videoGen/frameExtraction.js';
 import { VIDEO_GEN_MODE } from '../videoGen/modes.js';
 import { videoBackendJobParams, resolveVideoBackendPin } from '../videoGen/backendPin.js';
 import { mediaJobEvents, getJob } from '../mediaJobQueue/index.js';

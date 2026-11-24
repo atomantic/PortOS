@@ -35,7 +35,7 @@ vi.mock('./planAdvance.js', () => ({ advanceAfterPlanStepSettled: (...a) => mock
 vi.mock('./sceneEvaluator.js', () => ({ dispatchSceneEvaluation: vi.fn(async () => undefined) }));
 vi.mock('./sceneRunner.js', () => ({ runSceneRender: (...a) => mockRunSceneRender(...a) }));
 vi.mock('./stitchRunner.js', () => ({ runStitch: vi.fn(async () => undefined) }));
-vi.mock('../videoGen/local.js', () => ({ sampleEvaluationFrames: vi.fn(async () => []) }));
+vi.mock('../videoGen/frameExtraction.js', () => ({ sampleEvaluationFrames: vi.fn(async () => []) }));
 vi.mock('../mediaJobQueue/index.js', () => ({
   listJobs: vi.fn(() => []),
   mediaJobEvents: { on: vi.fn(), off: vi.fn() },
