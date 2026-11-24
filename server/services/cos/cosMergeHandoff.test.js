@@ -55,7 +55,7 @@ vi.mock('../codeReview.js', () => ({
   resolveReviewLoopOptions: async () => ({ reviewers: f.reviewers, usernames: [], optionalReviewers: f.optionalReviewers, reviewerMaxRounds: {} }),
 }));
 const mergePrMock = vi.fn();
-vi.mock('../git.js', () => ({ mergePR: (...args) => mergePrMock(...args) }));
+vi.mock('../git/prs.js', () => ({ mergePR: (...args) => mergePrMock(...args) }));
 const notifyMock = vi.fn(async () => ({ id: 'notification-1' }));
 vi.mock('../notifications.js', () => ({
   addNotification: (...args) => notifyMock(...args),

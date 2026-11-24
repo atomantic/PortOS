@@ -52,6 +52,11 @@ export const startCodeAnimationGeneration = (brief, options) => request('/code-a
   ...options,
 });
 
+export const cancelCodeAnimationGeneration = (id, options) => request(`/code-animation/generate/${encodeURIComponent(id)}/cancel`, {
+  method: 'POST',
+  ...options,
+});
+
 export const listCodeAnimationJobPage = ({ cursor, signal, limit = 50 } = {}) =>
   request(`/code-animation/jobs?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
     { signal, silent: true });

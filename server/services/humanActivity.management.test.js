@@ -101,3 +101,29 @@ it('uses the message thread fallback consistently for listing, viewing and purgi
   await listEvents({ source: 'signal', conversationId: 'thread-a' });
   expect(query.mock.lastCall[0]).not.toContain("metadata->>'threadId'");
 });
+
+it('scopes calendar subcalendar deletion to accountId + source=calendar and refuses empty or unscoped filters (#18229)', async () => {
+  for (const invalid of [
+    { subcalendarIds: ['cal-1'] },
+    { source: 'calendar', subcalendarIds: ['cal-1'] },
+    { accountId: 'acct-1', source: 'gmail', subcalendarIds: ['cal-1'] },
+    { accountId: 'acct-1', subcalendarIds: [] },
+    { accountId: 'acct-1', subcalendarIds: [''], calendarEventIds: [] },
+  ]) {
+    expect(await deleteEvents(invalid)).toEqual({ deleted: 0 });
+  }
+  expect(query).not.toHaveBeenCalled();
+
+  query.mockResolvedValueOnce({ rowCount: 3 });
+  expect(await deleteEvents({
+    accountId: 'acct-1',
+    subcalendarIds: ['cal-off', 'cal-off'],
+    calendarEventIds: ['evt-1'],
+  })).toEqual({ deleted: 3 });
+  expect(query.mock.lastCall[0]).toContain("source = $1");
+  expect(query.mock.lastCall[0]).toContain("account_id = $2");
+  expect(query.mock.lastCall[0]).toContain(
+    "(metadata->>'subcalendarId' = ANY($3::text[]) OR (NULLIF(metadata->>'subcalendarId', '') IS NULL AND metadata->>'externalId' = ANY($4::text[])))",
+  );
+  expect(query.mock.lastCall[1]).toEqual(['calendar', 'acct-1', ['cal-off'], ['evt-1']]);
+});

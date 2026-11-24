@@ -98,12 +98,15 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
   const [exportJob, setExportJob] = useState(null);
   const [exportNotes, setExportNotes] = useState([]);
   const [exportStarting, setExportStarting] = useState(false);
+  const [exportStreamError, setExportStreamError] = useState(null);
   const exportRequestRef = useRef(0);
   const exportUrl = exportJob ? `/api/html-composition/${encodeURIComponent(exportJob)}/events` : null;
-  const { latest: exportFrame } = useSseProgress(exportUrl, { enabled: !!exportUrl });
+  const { latest: exportFrame, closed: exportClosed } = useSseProgress(exportUrl, { enabled: !!exportUrl });
   const exportResult = exportFrame?.type === 'complete' ? exportFrame.result : null;
   const exportError = exportFrame?.type === 'error' ? exportFrame.error : null;
-  const exporting = !!exportJob && !exportResult && !exportError && exportFrame?.type !== 'canceled';
+  const exportCanceled = exportFrame?.type === 'canceled' || exportFrame?.type === 'cancelled';
+  const exportStreamLost = !!exportJob && Boolean(exportClosed) && !exportResult && !exportError && !exportCanceled;
+  const exporting = !!exportJob && !exportResult && !exportError && !exportCanceled && !exportClosed;
   const exportPercent = exportFrame?.type === 'progress' ? Math.round((exportFrame.progress || 0) * 100) : 0;
 
   useEffect(() => {
@@ -111,9 +114,18 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
   }, [exportError]);
 
   useEffect(() => {
+    if (!exportStreamLost) return;
+    const message = 'Lost connection to MP4 export — retry export or check Media History.';
+    toast.error(message);
+    setExportStreamError(message);
+    setExportJob(null);
+  }, [exportStreamLost]);
+
+  useEffect(() => {
     setExportJob(null);
     setExportNotes([]);
     setExportStarting(false);
+    setExportStreamError(null);
     return () => { exportRequestRef.current += 1; };
   }, [jobId]);
 
@@ -217,6 +229,7 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
   const handleExport = async () => {
     if (!jobId || exporting || exportStarting) return;
     const request = ++exportRequestRef.current;
+    setExportStreamError(null);
     setExportStarting(true);
     const queued = await exportCodeAnimation(jobId, { silent: true }).catch((error) => {
       if (request === exportRequestRef.current) toast.error(error.message || 'Failed to start the export');
@@ -361,6 +374,13 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
       {exportNotes.length > 0 && (
         <div role="status" aria-label="Export notes" className="space-y-1 rounded-lg border border-port-border bg-port-card p-3 text-sm text-gray-400">
           {exportNotes.map((note) => <p key={note}>{note}</p>)}
+        </div>
+      )}
+
+      {exportStreamError && (
+        <div role="alert" className="flex flex-wrap items-center gap-2 rounded-lg border border-port-error/40 bg-port-error/10 p-3 text-sm text-port-error">
+          <span>{exportStreamError}</span>
+          <Link to="/media/history" className="text-xs text-port-accent hover:underline">Media History</Link>
         </div>
       )}
 

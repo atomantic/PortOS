@@ -27,7 +27,8 @@ import { MAX_PR_REMEDIATION_ATTEMPTS, PR_HANDBACK, PR_REVIEW_OUTCOME, resolveHan
 import { forkHeadFromGithubPr } from '../lib/forkHead.js';
 import { getAppById, updateApp } from './apps.js';
 import { execGh, ensureForgeReachable } from './github.js';
-import { mergePR, resolveForgeForRepo } from './git.js';
+import { mergePR } from './git/prs.js';
+import { resolveForgeForRepo } from './forgeAuth.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 import { normalizeEligibilityFacts } from './modelAbuseGuard.js';
 import { issuePrerequisiteWaived, linkedIssueIntentFingerprint } from '../lib/modelAbuseGuard.js';

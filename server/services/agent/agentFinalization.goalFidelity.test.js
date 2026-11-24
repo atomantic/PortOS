@@ -31,7 +31,7 @@ vi.mock('../github.js', () => ({
   getPullRequestState: vi.fn(async () => ({ status: 'known', state: 'MERGED', detail: null })),
 }));
 vi.mock('../gitlab.js', () => ({ findMergeRequestForBranch: vi.fn(), execGlab: vi.fn() }));
-vi.mock('../git.js', () => ({ resolveForgeForRepo: vi.fn(async () => ({ cli: 'gh' })) }));
+vi.mock('../forgeAuth.js', () => ({ resolveForgeForRepo: vi.fn(async () => ({ cli: 'gh' })) }));
 vi.mock('../../lib/workTracker.js', async (importOriginal) => ({
   ...(await importOriginal()), resolveRepoForgeTarget: vi.fn(async () => null),
 }));
@@ -124,7 +124,7 @@ vi.mock('../codeReview.js', async (importOriginal) => ({
 import { execGit } from '../../lib/execGit.js';
 import { execGh, findPullRequestForBranch, getPullRequestState } from '../github.js';
 import { execGlab } from '../gitlab.js';
-import { resolveForgeForRepo } from '../git.js';
+import { resolveForgeForRepo } from '../forgeAuth.js';
 import { getAgentRecord, getAgents } from '../cos/cosAgentLifecycle.js';
 import { detectPrimaryCheckoutDrift, PRIMARY_CHECKOUT_MUTATED_REASON } from '../../lib/primaryCheckoutGuard.js';
 import { finalizeAgent } from './agentFinalization.js';

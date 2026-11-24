@@ -5,7 +5,7 @@ import { join } from 'path';
 
 // git + failure analyzer are mocked; fs/promises stays REAL so readFileTail /
 // captureWorktreeDiff are exercised against actual temp files.
-vi.mock('../git.js', () => ({
+vi.mock('../git/status.js', () => ({
   getDiff: vi.fn(),
 }));
 vi.mock('../agent/agentErrorAnalysis.js', () => ({
@@ -17,7 +17,7 @@ vi.mock('../../lib/gitCommitProbe.js', () => ({
   commitsSince: vi.fn(),
 }));
 
-import * as git from '../git.js';
+import * as git from '../git/status.js';
 import { analyzeAgentFailure } from '../agent/agentErrorAnalysis.js';
 import { commitsSince as commitsSinceMock } from '../../lib/gitCommitProbe.js';
 import {

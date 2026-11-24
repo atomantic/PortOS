@@ -3,29 +3,33 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import gitRoutes from './git.js';
 
-// Mock the git service — tests are guard-focused, not service-coverage.
-vi.mock('../services/git.js', () => ({
+// Mock the git service modules — tests are guard-focused, not service-coverage.
+vi.mock('../services/git/status.js', () => ({
   getStatus: vi.fn().mockResolvedValue({ files: [] }),
   getDiff: vi.fn().mockResolvedValue(''),
   getCommits: vi.fn().mockResolvedValue([]),
   stageFiles: vi.fn().mockResolvedValue(undefined),
   unstageFiles: vi.fn().mockResolvedValue(undefined),
   commit: vi.fn().mockResolvedValue({ sha: 'abc123' }),
-  push: vi.fn().mockResolvedValue({ pushed: true }),
   getGitInfo: vi.fn().mockResolvedValue({}),
   getBranches: vi.fn().mockResolvedValue([]),
-  updateBranches: vi.fn().mockResolvedValue({}),
   getBranchComparison: vi.fn().mockResolvedValue({}),
+  getDefaultBranch: vi.fn().mockResolvedValue('main'),
+}));
+vi.mock('../services/git/sync.js', () => ({
+  push: vi.fn().mockResolvedValue({ pushed: true }),
+  updateBranches: vi.fn().mockResolvedValue({}),
   pushAll: vi.fn().mockResolvedValue({}),
   rebaseAndPushDefaultBranch: vi.fn().mockResolvedValue({ success: true }),
-  getDefaultBranch: vi.fn().mockResolvedValue('main'),
   checkout: vi.fn().mockResolvedValue({}),
   syncBranch: vi.fn().mockResolvedValue({}),
   getRemoteBranches: vi.fn().mockResolvedValue([]),
   mergeBranch: vi.fn().mockResolvedValue({}),
   checkoutRemoteBranch: vi.fn().mockResolvedValue({}),
+}));
+vi.mock('../services/git/cleanup.js', () => ({
   deleteMergedBranches: vi.fn().mockResolvedValue({}),
-  deleteBranch: vi.fn().mockResolvedValue({})
+  deleteBranch: vi.fn().mockResolvedValue({}),
 }));
 
 vi.mock('../services/gitSubmodules.js', () => ({
@@ -64,7 +68,10 @@ vi.mock('fs', async (importOriginal) => {
 import { existsSync, statSync, realpathSync } from 'fs';
 import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
 import * as cosAgentLifecycleService from '../services/cos/cosAgentLifecycle.js';
-import * as gitService from '../services/git.js';
+import * as gitStatusService from '../services/git/status.js';
+import * as gitSyncService from '../services/git/sync.js';
+import * as gitCleanupService from '../services/git/cleanup.js';
+const gitService = { ...gitStatusService, ...gitSyncService, ...gitCleanupService };
 import * as gitSubmoduleService from '../services/gitSubmodules.js';
 
 function makeApp() {

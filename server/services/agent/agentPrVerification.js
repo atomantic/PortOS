@@ -111,7 +111,7 @@ export async function resolveWorkspaceBranch(workspacePath) {
  * for a check that exists to recognize "this agent wrote nothing".
  */
 async function countCommitsAhead(workspacePath) {
-  const { getDefaultBranch } = await import('../git.js');
+  const { getDefaultBranch } = await import('../git/status.js');
   // `allowRemote: false` — finalize must not block on a network round-trip to
   // answer a bookkeeping question; the local fallbacks resolve main/master fine.
   const defaultBranch = await getDefaultBranch(workspacePath, { allowRemote: false }).catch(() => null);
@@ -336,7 +336,7 @@ export async function observePrClaim({ task, workspacePath, success, prExpected,
   // verified — say nothing rather than invent a failure.
   if (!branch) return prObservation(PR_OBSERVATION.BRANCH_UNAVAILABLE, { inconclusive: true });
 
-  const { resolveForgeForRepo } = await import('../git.js');
+  const { resolveForgeForRepo } = await import('../forgeAuth.js');
   // `env` carries the repo-owner-pinned `GH_TOKEN` the agent's own `gh pr create`
   // used. Dropping it would query as whatever ambient account `gh` happens to be
   // on, which on a multi-login host may not even see the PR — reading as

@@ -20,7 +20,7 @@ import { isGitStageableFilePath } from '../../lib/gitArgs.js';
 import { isPathInsideDir, isSafeFilename, isTopLevelEntryName } from '../../lib/pathSafety.js';
 import { validateRequest } from '../../lib/validateRequest.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import * as git from '../../services/git.js';
+import * as git from '../../services/git/status.js';
 import { loadApp, pathExists } from './shared.js';
 import { documentUpdateSchema } from '../../lib/documentValidation.js';
 

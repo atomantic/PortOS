@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { realpath } from 'node:fs/promises';
-import { canonicalizePath } from '../../lib/pathContainment.js';
+import { sameCheckoutPath } from '../../lib/pathContainment.js';
 import { hasClaimFlowContract } from '../../lib/claimFlowTaskTypes.js';
 import { readGitCommonDirectory } from '../../lib/gitRepositoryIdentity.js';
 import { recoverCompletionTaskHandoff } from './agentCompletionTaskHandoff.js';
@@ -46,7 +46,8 @@ import { repositoryCleanupRecoveryMetadata } from '../cleanupOnlyCompletion.js';
 import { join, resolve } from 'path';
 import { cosEvents, emitLog } from '../cos/cosEvents.js';
 import { addTask, updateTask, getTaskById } from '../cos/cosTaskStore.js';
-import * as git from '../git.js';
+import { getDefaultBranch } from '../git/status.js';
+import { hasBranchMergeEvidence } from '../git/branchEvidence.js';
 import { listWorktrees } from '../worktreeManager.js';
 import { listRemoteHeads, driveToMerge } from '../branchReconcile.js';
 import { isMergeHandoffEnabled } from '../../lib/mergeGateContract.js';
@@ -154,7 +155,7 @@ async function probeBranchMerged(repoPath, branch, target) {
     .catch(() => false);
   const [hasBranch, hasTarget] = await Promise.all([resolvable(branch), resolvable(target)]);
   if (!hasBranch || !hasTarget) return null;
-  return git.hasBranchMergeEvidence(repoPath, branch, target).catch(() => null);
+  return hasBranchMergeEvidence(repoPath, branch, target).catch(() => null);
 }
 
 /**
@@ -188,7 +189,7 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
     if (present !== false) return present;
     const worktrees = await listWorktrees(sourceWorkspace).catch(() => null);
     if (!worktrees) return null;
-    return worktrees.some(wt => (worktreePath ? wt.path === worktreePath : shortBranch(wt.branch) === branchName));
+    return worktrees.some(wt => (worktreePath ? sameCheckoutPath(wt.path, worktreePath) : shortBranch(wt.branch) === branchName));
   };
 
   const probeLocalBranch = () => readLocalBranchPresence(sourceWorkspace, branchName);
@@ -221,7 +222,7 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
   // `allowRemote: false` — a bookkeeping question must not block on `git remote
   // set-head origin --auto`, the network call the default path can trigger.
   const probeDefaultBranch = () => (branchShouldBeGone
-    ? git.getDefaultBranch(sourceWorkspace, { allowRemote: false }).catch(() => null)
+    ? getDefaultBranch(sourceWorkspace, { allowRemote: false }).catch(() => null)
     : Promise.resolve(null));
 
   const [worktreePresent, localBranchPresent, remoteBranchPresent, defaultBranch, pr] = await Promise.all([
@@ -691,7 +692,7 @@ async function settleAbsentScope(agent, { repoPath, branch, paths }, proof = {})
     if (!worktrees) return false;
     for (const path of paths) if (await readCheckoutPathPresence(path) !== false) return false;
     if (await readLocalBranchPresence(repoPath, branch) !== false
-      || worktrees.some(row => paths.includes(row.path) || shortBranch(row.branch) === branch)) return false;
+      || worktrees.some(row => paths.some(path => sameCheckoutPath(row.path, path)) || shortBranch(row.branch) === branch)) return false;
     return recordAbsentCheckoutRetirement(agent.id, agent, { path: paths[0], branch, ...proof });
   });
 }
@@ -791,7 +792,7 @@ async function verifyRunBranches(input) {
     const capture = captures.length === 1 ? captures[0] : null;
     const previous = capture && meta.cleanupOutcomes?.[JSON.stringify([branch, capture.path])];
     if (previous?.status === 'verified'
-      && !trees.some(tree => shortBranch(tree.branch) === branch || canonicalizePath(tree.path) === canonicalizePath(capture.path))
+      && !trees.some(tree => shortBranch(tree.branch) === branch || sameCheckoutPath(tree.path, capture.path))
       && await readCheckoutPathPresence(capture.path).catch(() => null) === false
       && await readLocalBranchPresence(sourceWorkspace, branch).catch(() => null) === false) {
       results.push({ branch, verified: true, issues: [], skipReason: null });
@@ -961,18 +962,20 @@ async function resolveCheckoutHold({ agentId, metadata, sourceWorkspace, branchN
   const holders = inventory.filter(tree => shortBranch(tree.branch) === branchName);
   // Git porcelain uses forward slashes on Windows; registration spelling is
   // not a checkout change. Compare native lexical paths and the recorded head.
-  const samePath = tree => !!worktreePath && canonicalizePath(tree.path) === canonicalizePath(worktreePath);
+  const samePath = tree => sameCheckoutPath(tree.path, worktreePath);
   const pathHolder = inventory.find(samePath);
   if (holders.some(tree => !samePath(tree))
     || (pathHolder && shortBranch(pathHolder.branch) !== branchName)) {
     return { reason: 'checkout-changed' };
   }
-  const completed = metadata.completedCheckouts?.find(row => row.branch === branchName && resolve(row.path) === resolve(worktreePath));
-  if (completed && pathHolder) {
-    const identity = await readCompletedCheckoutIdentity({ repoPath: sourceWorkspace, branch: branchName,
-      path: worktreePath, head: pathHolder.head }).catch(() => null);
-    if (!identity || identity.head !== completed.head) {
-      return { reason: 'checkout-changed' };
+  if (pathHolder && typeof worktreePath === 'string' && worktreePath) {
+    const completed = metadata.completedCheckouts?.find(row => row?.branch === branchName && sameCheckoutPath(row.path, worktreePath));
+    if (completed) {
+      const identity = await readCompletedCheckoutIdentity({ repoPath: sourceWorkspace, branch: branchName,
+        path: worktreePath, head: pathHolder.head }).catch(() => null);
+      if (!identity || identity.head !== completed.head) {
+        return { reason: 'checkout-changed' };
+      }
     }
   }
   const owner = claimCheckoutOwner({ branchName, sourceWorkspace,
@@ -982,7 +985,7 @@ async function resolveCheckoutHold({ agentId, metadata, sourceWorkspace, branchN
 }
 
 async function containedInDefaultBranch(sourceWorkspace, head) {
-  const branch = await git.getDefaultBranch(sourceWorkspace, { allowRemote: false, strict: true }).catch(() => null);
+  const branch = await getDefaultBranch(sourceWorkspace, { allowRemote: false, strict: true }).catch(() => null);
   if (!branch) return false;
   const result = await execGit(['merge-base', '--is-ancestor', head, `refs/remotes/origin/${branch}`], sourceWorkspace,
     { ignoreExitCode: true, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null);

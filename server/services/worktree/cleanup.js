@@ -145,7 +145,9 @@ export async function reapMergedWorktrees(sourceWorkspace, {
   includeClaudeTrees = true,
   appId = null
 } = {}) {
-  const { getDefaultBranch, hasBranchMergeEvidence, readBranchAgeMs, readBranchLineage, readBranchPublished } = await import('../git.js');
+  const [{ getDefaultBranch }, { hasBranchMergeEvidence, readBranchAgeMs, readBranchLineage, readBranchPublished }] = await Promise.all([
+    import('../git/status.js'), import('../git/branchEvidence.js'),
+  ]);
   const { readClaimOwnershipAgents, withClaimOwnershipLock } = await import('../cos/cosClaimOwnershipState.js');
   const { readBranchCompletionHold } = await import('../branchCompletionPolicy.js');
   // Every entry point (scheduled or reconcile) needs a trusted
@@ -250,7 +252,9 @@ export async function reapMergedWorktrees(sourceWorkspace, {
  * worktrees directory. They're invisible to PortOS's `git worktree list`.
  */
 async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readOwners, retainedPaths) {
-  const { getDefaultBranch, hasBranchMergeEvidence } = await import('../git.js');
+  const [{ getDefaultBranch }, { hasBranchMergeEvidence }] = await Promise.all([
+    import('../git/status.js'), import('../git/branchEvidence.js'),
+  ]);
   const { withClaimOwnershipLock } = await import('../cos/cosClaimOwnershipState.js');
   const { readBranchCompletionHold } = await import('../branchCompletionPolicy.js');
   const entries = await readdir(WORKTREES_DIR, { withFileTypes: true }).catch(() => []);

@@ -20,7 +20,7 @@ import SidebarContext from './SidebarContext.jsx';
 import SidebarNav from './SidebarNav.jsx';
 import SocketReconnectingPill from './SocketReconnectingPill.jsx';
 import ThemeModeToggle from './ThemeModeToggle.jsx';
-import ThemeSwitcher from './ThemeSwitcher';
+import ThemeSwitcherGate from './ThemeSwitcherGate';
 import UpdateBanners from './UpdateBanners';
 import VoiceToggleButton from './voice/VoiceToggleButton';
 import VoiceWidgetGate from './voice/VoiceWidgetGate';
@@ -134,7 +134,7 @@ export default function Layout() {
                     <Search size={18} />
                   </button>
                   <ThemeModeToggle />
-                  <ThemeSwitcher position="below" />
+                  <ThemeSwitcherGate position="below" />
                   <VoiceToggleButton />
                   <NotificationBell position="below" />
                 </div>

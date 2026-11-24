@@ -6,15 +6,19 @@ import {
   NAV_COMMANDS,
   NAV_FEATURE_IDS,
   SECTION_FEATURE,
-  getNavAliasMap,
   getNavCommandForPath,
   getNavPageForPath,
   getNavSectionForPath,
   getSectionNavGroups,
   getSectionNavTabForPath,
   getSectionNavTabs,
-  resolveNavCommand,
 } from './navManifest.js';
+import {
+  NAV_COMMANDS_WITH_SEARCH,
+  NAV_SEARCH_METADATA,
+  getNavAliasMap,
+  resolveNavCommand,
+} from './navSearchMetadata.js';
 import { INSTANCE_FEATURE_IDS } from './instanceFeatureRegistry.js';
 import { PORTOS_APP_ID } from './appIdentity.js';
 
@@ -126,6 +130,20 @@ describe('navManifest — shape invariants', () => {
     ]);
     const bad = NAV_COMMANDS.filter((c) => !ALLOWED_SECTIONS.has(c.section));
     expect(bad.map((c) => `${c.id}:${c.section}`)).toEqual([]);
+  });
+
+  it('omits aliases and keywords from cold-load NAV_COMMANDS and maintains 1:1 ID parity with NAV_SEARCH_METADATA', () => {
+    for (const cmd of NAV_COMMANDS) {
+      expect(cmd.aliases, `${cmd.id} leaked aliases`).toBeUndefined();
+      expect(cmd.keywords, `${cmd.id} leaked keywords`).toBeUndefined();
+    }
+    expect(Object.keys(NAV_SEARCH_METADATA)).toEqual(NAV_COMMANDS.map((c) => c.id));
+    for (const [id, meta] of Object.entries(NAV_SEARCH_METADATA)) {
+      expect(Array.isArray(meta.aliases) && meta.aliases.length > 0, `${id} aliases`).toBe(true);
+      if (meta.keywords !== undefined) {
+        expect(Array.isArray(meta.keywords) && meta.keywords.length > 0, `${id} keywords`).toBe(true);
+      }
+    }
   });
 
   it('every parentPath references a declared command path', () => {
@@ -346,8 +364,8 @@ describe('nav contract — instance-feature gating', () => {
 
 describe('resolveNavCommand — fuzzy matching', () => {
   it('disambiguates security settings from the security camera monitor', () => {
-    const settings = NAV_COMMANDS.find((command) => command.id === 'nav.settings.security');
-    const camera = NAV_COMMANDS.find((command) => command.id === 'nav.security');
+    const settings = NAV_COMMANDS_WITH_SEARCH.find((command) => command.id === 'nav.settings.security');
+    const camera = NAV_COMMANDS_WITH_SEARCH.find((command) => command.id === 'nav.security');
 
     expect(settings).toMatchObject({
       path: '/settings/security',
@@ -369,7 +387,7 @@ describe('resolveNavCommand — fuzzy matching', () => {
   });
 
   it('resolves every declared alias to its owning command', () => {
-    for (const command of NAV_COMMANDS) {
+    for (const command of NAV_COMMANDS_WITH_SEARCH) {
       for (const alias of command.aliases || []) {
         const hit = resolveNavCommand(alias);
         expect(hit?.path, alias).toBe(command.path);
@@ -590,7 +608,7 @@ describe('getNavAliasMap — voice-agent compatibility', () => {
 
   it('has no alias collisions (first-declared-wins guarantees deterministic resolution if any are introduced)', () => {
     const counts = {};
-    for (const cmd of NAV_COMMANDS) {
+    for (const cmd of NAV_COMMANDS_WITH_SEARCH) {
       for (const a of (cmd.aliases || [])) counts[a] = (counts[a] || 0) + 1;
     }
     const collisions = Object.entries(counts).filter(([, n]) => n > 1);

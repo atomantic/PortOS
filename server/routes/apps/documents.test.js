@@ -15,14 +15,14 @@ import { request } from '../../lib/testHelper.js';
 import { pathExists } from './shared.js';
 
 vi.mock('../../services/apps.js', () => ({ getAppById: vi.fn() }));
-vi.mock('../../services/git.js', () => ({
+vi.mock('../../services/git/status.js', () => ({
   stageFiles: vi.fn().mockResolvedValue(undefined),
   getStatus: vi.fn().mockResolvedValue({ clean: false }),
   commit: vi.fn().mockResolvedValue({ hash: 'abc1234' })
 }));
 
 import * as appsService from '../../services/apps.js';
-import * as git from '../../services/git.js';
+import * as git from '../../services/git/status.js';
 import documentRoutes from './documents.js';
 
 describe('Apps Document Routes', () => {

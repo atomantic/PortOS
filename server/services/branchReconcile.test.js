@@ -21,7 +21,7 @@ vi.mock('./heldCheckoutRecovery.js', () => ({}));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
 
-vi.mock('./git.js', () => ({
+const gitMocks = vi.hoisted(() => ({
   getBranches: vi.fn(),
   deleteMergedRemoteBranches: vi.fn(async (_repo, names) => ({ deleted: names, skipped: [] })),
   getDefaultBranch: vi.fn(async () => 'main'),
@@ -33,6 +33,17 @@ vi.mock('./git.js', () => ({
   readBranchPublished: vi.fn(async () => false),
   deleteBranch: vi.fn(async () => ({ branch: 'x', results: { local: 'deleted' } }))
 }));
+vi.mock('./git/status.js', () => ({ getBranches: gitMocks.getBranches, getDefaultBranch: gitMocks.getDefaultBranch }));
+vi.mock('./git/branchEvidence.js', () => ({
+  hasBranchMergeEvidence: gitMocks.hasBranchMergeEvidence,
+  readBranchLineage: gitMocks.readBranchLineage,
+  readBranchPublished: gitMocks.readBranchPublished,
+}));
+vi.mock('./git/cleanup.js', () => ({
+  deleteMergedRemoteBranches: gitMocks.deleteMergedRemoteBranches,
+  deleteBranch: gitMocks.deleteBranch,
+}));
+vi.mock('./forgeAuth.js', () => ({ resolveForgeForRepo: gitMocks.resolveForgeForRepo }));
 vi.mock('../lib/execGit.js', () => ({
   execGit: vi.fn(async () => ({ stdout: '', exitCode: 0 }))
 }));
@@ -141,7 +152,7 @@ import {
   listRemoteHeads, upstreamBranchName, parseRemoteHeads, partitionRemoteOrphans, reapOrphanedRemotes,
   reapSupersededBranches, buildActiveOwnerIds, readBranchUnshipped, retireMergedCheckouts
 } from './branchReconcile.js';
-import * as git from './git.js';
+const git = gitMocks;
 import * as wt from './worktreeManager.js';
 import { recordHeldCheckoutRetirement, recordWorkspaceCheckoutRetirement } from './branchReconcileOutcome.js';
 import { hasCompletedCheckoutEvidence, readMergedClaimEvidence } from './completedCheckoutEvidence.js';

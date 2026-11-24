@@ -244,6 +244,32 @@ describe('Calendar Routes — normalized error handling', () => {
       expect(response.status).toBe(200);
       expect(googleAuth.getAuthUrl).toHaveBeenCalledWith('messages');
     });
+
+    it('PUT /accounts/:id/subcalendars updates subcalendars, triggers purge, and fails closed on purge errors (#18229)', async () => {
+      const io = { emit: vi.fn() };
+      app.set('io', io);
+      const subcalendars = [
+        { calendarId: 'work', name: 'Work', enabled: true, dormant: false },
+        { calendarId: 'personal', name: 'Personal', enabled: false, dormant: false },
+      ];
+      const updated = { id: ACCOUNT_ID, subcalendars };
+      calendarAccounts.updateSubcalendars.mockResolvedValue(updated);
+      calendarSync.purgeDisabledSubcalendars.mockResolvedValueOnce({ purged: 2, remaining: 1 });
+
+      const ok = await request(app).put(`/api/calendar/accounts/${ACCOUNT_ID}/subcalendars`).send({ subcalendars });
+      expect(ok.status).toBe(200);
+      expect(ok.body).toEqual(updated);
+      expect(calendarSync.purgeDisabledSubcalendars).toHaveBeenCalledWith(ACCOUNT_ID);
+      expect(io.emit).toHaveBeenCalledWith('calendar:changed', {});
+
+      io.emit.mockClear();
+      errorEvents.once('error', observeError);
+      calendarSync.purgeDisabledSubcalendars.mockRejectedValueOnce(new Error('Synthetic DB outage'));
+      const failed = await request(app).put(`/api/calendar/accounts/${ACCOUNT_ID}/subcalendars`).send({ subcalendars });
+      expect(failed.status).toBe(500);
+      expect(observeError).toHaveBeenCalledWith(expect.objectContaining({ status: 500 }), expect.any(Object));
+      expect(io.emit).not.toHaveBeenCalledWith('calendar:changed', {});
+    });
   });
 
   describe('POST /google/auth/credentials', () => {

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Check, Palette } from 'lucide-react';
 import { useThemeContext } from './ThemeContext';
 import { getFamilyIcon } from '../themes/familyIcons';
+import { loadFullThemes } from '../themes/themeCatalog';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../hooks/usePopoverPosition.js';
 import useClickOutside from '../hooks/useClickOutside.js';
 import { useEscLayer } from './ui/Modal';
@@ -11,9 +12,13 @@ const MENU_WIDTH = 288;
 const ITEM_SELECTOR = '[role="menuitemradio"]';
 const TABBABLE_SELECTOR = 'a[href],button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex]:not([tabindex="-1"])';
 
-export default function ThemeSwitcher({ position = 'above', className = '' }) {
+export default function ThemeSwitcher({ position = 'above', className = '', initialOpen = false }) {
   const { themeId, theme, themeList, setTheme } = useThemeContext();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initialOpen);
+
+  useEffect(() => {
+    if (open) void loadFullThemes().catch(() => {});
+  }, [open]);
   const containerRef = useRef(null);
   const {
     triggerRef,

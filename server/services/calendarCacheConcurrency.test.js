@@ -35,7 +35,7 @@ import { pickCliProvider, runCliProviderPrompt } from '../lib/cliProviderRun.js'
 import { readdir, unlink } from 'fs/promises';
 import { createCalendarApi } from './calendarApi.js';
 import calendarRoutes from '../routes/calendar.js';
-import { deleteAccount, getAccount, listAccounts, updateSyncStatus } from './calendarAccounts.js';
+import { deleteAccount, getAccount, listAccounts, updateSubcalendars, updateSyncStatus } from './calendarAccounts.js';
 import { syncOutlookCalendarApi } from './calendarApiSync.js';
 import { deleteCache, getEvent, getEvents, loadCache, purgeDisabledSubcalendars, syncAccount } from './calendarSync.js';
 import { mcpSyncAccount, pushSyncEvents } from './calendarGoogleSync.js';
@@ -215,18 +215,49 @@ describe.each(['Google', 'Outlook'])('%s derived calendar records', provider => 
 
   beforeEach(() => {
     app = express();
+    app.use(express.json());
     app.use('/calendar', calendarRoutes);
     timeline = new Map();
     touchpoints = new Map();
     recordEvents.mockImplementation(async rows => {
-      for (const row of rows) timeline.set(row.accountId, row);
+      for (const row of rows) timeline.set(row.dedupeKey, row);
     });
     autoLogTouchpoints.mockImplementation(async rows => {
-      for (const row of rows) touchpoints.set(row.calendarAccountId, row);
+      for (const row of rows) touchpoints.set(row.dedupeKey, row);
       return { created: rows.length, matched: rows.length };
     });
-    deleteEvents.mockImplementation(async ({ accountId }) => timeline.delete(accountId));
-    deleteAutoTouchpoints.mockImplementation(async ({ accountId }) => touchpoints.delete(accountId));
+    deleteEvents.mockImplementation(async ({ accountId, subcalendarIds, calendarEventIds }) => {
+      if (!subcalendarIds && !calendarEventIds) {
+        for (const [k, v] of timeline) if (v.accountId === accountId) timeline.delete(k);
+        return;
+      }
+      const subs = new Set(subcalendarIds || []);
+      const evts = new Set(calendarEventIds || []);
+      for (const [k, v] of timeline) {
+        if (v.accountId === accountId && (subs.has(v.metadata?.subcalendarId) || (!v.metadata?.subcalendarId && evts.has(v.metadata?.externalId)))) {
+          timeline.delete(k);
+        }
+      }
+    });
+    deleteAutoTouchpoints.mockImplementation(async ({ accountId, subcalendarIds, calendarEventIds }) => {
+      if (!subcalendarIds && !calendarEventIds) {
+        for (const [k, v] of touchpoints) if (v.calendarAccountId === accountId) touchpoints.delete(k);
+        return;
+      }
+      const subs = new Set(subcalendarIds || []);
+      const evts = new Set(calendarEventIds || []);
+      for (const [k, v] of touchpoints) {
+        if (v.calendarAccountId === accountId && (subs.has(v.metadata?.subcalendarId) || (!v.metadata?.subcalendarId && evts.has(v.calendarEventId)))) {
+          touchpoints.delete(k);
+        }
+      }
+    });
+    updateSubcalendars.mockImplementation(async (id, subcalendars) => {
+      const account = accounts.get(id);
+      if (!account) return null;
+      account.subcalendars = subcalendars;
+      return structuredClone(account);
+    });
   });
 
   function syncFinishedEvent(beforeResponse = async () => {}) {
@@ -254,8 +285,8 @@ describe.each(['Google', 'Outlook'])('%s derived calendar records', provider => 
 
   it.each(['Tribe', 'Timeline'])('writes finished events and drains a paused %s write before deletion', async store => {
     expect(await syncFinishedEvent()).toMatchObject({ status: 'success', newEvents: 1 });
-    expect(timeline.get(ACCOUNT)).toMatchObject({ title: 'Finished meeting' });
-    expect(touchpoints.get(ACCOUNT)).toMatchObject({ summary: 'Finished meeting' });
+    expect([...timeline.values()]).toMatchObject([{ accountId: ACCOUNT, title: 'Finished meeting' }]);
+    expect([...touchpoints.values()]).toMatchObject([{ calendarAccountId: ACCOUNT, summary: 'Finished meeting' }]);
 
     const writing = barrier();
     const resume = barrier();
@@ -287,8 +318,8 @@ describe.each(['Google', 'Outlook'])('%s derived calendar records', provider => 
     expect(unlinkedWhileWriting).toBe(false);
     expect(accounts.has(ACCOUNT)).toBe(false);
     expect(persisted.has(ACCOUNT)).toBe(false);
-    expect(timeline.has(ACCOUNT)).toBe(false);
-    expect(touchpoints.has(ACCOUNT)).toBe(false);
+    expect(timeline.size).toBe(0);
+    expect(touchpoints.size).toBe(0);
   });
 
   it('refuses provider results returned after deletion without writing any copies', async () => {
@@ -312,13 +343,56 @@ describe.each(['Google', 'Outlook'])('%s derived calendar records', provider => 
   it('keeps sync successful when either derived store fails', async () => {
     autoLogTouchpoints.mockRejectedValueOnce(new Error('Synthetic Tribe write failure'));
     expect(await syncFinishedEvent()).toMatchObject({ status: 'success' });
-    expect(timeline.has(ACCOUNT)).toBe(true);
-    expect(touchpoints.has(ACCOUNT)).toBe(false);
+    expect(timeline.size).toBe(1);
+    expect(touchpoints.size).toBe(0);
 
     recordEvents.mockRejectedValueOnce(new Error('Synthetic Timeline write failure'));
     expect(await syncFinishedEvent()).toMatchObject({ status: 'success' });
-    expect(touchpoints.has(ACCOUNT)).toBe(true);
+    expect(touchpoints.size).toBe(1);
   });
+
+  if (provider === 'Google') {
+    it('PUT /calendar/accounts/:id/subcalendars erases cache, Timeline, and Tribe rows for disabled subcalendars while keeping enabled ones (#18229)', async () => {
+      const endTime = new Date(Date.now() - 60_000).toISOString();
+      const startTime = new Date(Date.now() - 120_000).toISOString();
+      accounts.get(ACCOUNT).subcalendars = [
+        { calendarId: 'a', name: 'Work', enabled: true, dormant: false },
+        { calendarId: 'b', name: 'Personal', enabled: true, dormant: false },
+      ];
+      getAuthenticatedClient.mockResolvedValueOnce({});
+      createCalendarApi.mockReturnValueOnce({
+        listEvents: async ({ calendarId }) => ({
+          data: {
+            items: [{
+              id: `evt-${calendarId}`,
+              summary: `Meeting on ${calendarId}`,
+              start: { dateTime: startTime },
+              end: { dateTime: endTime },
+              organizer: { email: 'alice@example.com' },
+            }],
+          },
+        }),
+      });
+      await apiSyncAccount(ACCOUNT, null);
+      expect(persisted.get(ACCOUNT).events.map(e => e.subcalendarId).sort()).toEqual(['a', 'b']);
+      expect(timeline.size).toBe(2);
+      expect(touchpoints.size).toBe(2);
+
+      const response = await request(app)
+        .put(`/calendar/accounts/${ACCOUNT}/subcalendars`)
+        .send({
+          subcalendars: [
+            { calendarId: 'a', name: 'Work', enabled: true, dormant: false },
+            { calendarId: 'b', name: 'Personal', enabled: false, dormant: false },
+          ],
+        });
+
+      expect(response.status).toBe(200);
+      expect(persisted.get(ACCOUNT).events.map(e => e.subcalendarId)).toEqual(['a']);
+      expect([...timeline.values()].map(e => e.metadata.subcalendarId)).toEqual(['a']);
+      expect([...touchpoints.values()].map(t => t.metadata.subcalendarId)).toEqual(['a']);
+    });
+  }
 });
 
 describe('Google provider event identity', () => {

@@ -34,10 +34,13 @@ const VOICE_STACK_MODULES = [
 const LAZY_SHELL_MODULES = [
   'components/CmdKSearch.jsx',
   'components/KeyboardHelp.jsx',
+  'components/ThemeSwitcher.jsx',
   'components/cos/OutputBlocks.jsx',
   'components/cos/MarkdownOutput.jsx',
   'lib/creativeLibraries.js',
   'lib/catalogTypes.js',
+  'themes/portosThemes.js',
+  '../../server/lib/navSearchMetadata.js',
   '../../server/lib/greyboxVocabulary.js',
   '../../server/lib/bibleLimits.js',
 ];
@@ -130,6 +133,7 @@ describe('cold-load entry closure (#16562)', () => {
     expect(chainFromEntry('components/voice/VoiceWidgetGate.jsx')).not.toBeNull();
     expect(chainFromEntry('components/CmdKSearchGate.jsx')).not.toBeNull();
     expect(chainFromEntry('components/KeyboardHelpGate.jsx')).not.toBeNull();
+    expect(chainFromEntry('components/ThemeSwitcherGate.jsx')).not.toBeNull();
   });
 
   it('follows static imports and re-exports, but not dynamic import()', () => {

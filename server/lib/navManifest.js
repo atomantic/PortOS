@@ -8,8 +8,9 @@
 // shipping a literal `{page}` (#7419).
 //
 // Single source of truth for PortOS navigation. Consumed by the sidebar,
-// server/services/voice/tools.js#ui_navigate, and the Cmd+K palette.
-// Entry: { id, path, label, section, tabId?, tabGroup?, navGroup?, parentPath?, tabLabel?, aliases?, keywords?, previousPaths?, preservePreviousPathSuffix? }.
+// App.jsx redirects, and (via navSearchMetadata.js) voice/Cmd+K search.
+// Entry: { id, path, label, section, tabId?, tabGroup?, navGroup?, parentPath?, tabLabel?, previousPaths?, preservePreviousPathSuffix? }.
+// Search aliases and keywords live in `server/lib/navSearchMetadata.js` keyed by `id`.
 // See AGENTS.md "Command Palette & Voice Nav" for the contract.
 //
 // `previousPaths` lists every path this page has ANSWERED TO BEFORE — including
@@ -38,176 +39,176 @@ export const SECTION_FEATURE = new Map([
 ]);
 
 const RAW_NAV_COMMANDS = [
-  { id: 'nav.dashboard', path: '/', label: 'Dashboard', section: 'Main', aliases: ['dashboard', 'home'], keywords: ['overview', 'start'] },
-  { id: 'nav.review-hub', path: '/review', label: 'Review Hub', section: 'Main', aliases: ['review', 'review-hub'] },
-  { id: 'nav.eidoverse.guest', path: '/eidoverse/guest', label: 'Eidoverse Guest', section: 'Main', feature: 'eidoverse', aliases: ['eidoverse-guest'], keywords: ['travel', 'teleport', 'visitor'] },
-  { id: 'nav.eidoverse.solo', path: '/eidoverse/solo', label: 'Eidoverse World Only', section: 'Main', feature: 'eidoverse', aliases: ['eidoverse-solo', 'world-only', 'eidoverse-alone'], keywords: ['fullscreen', 'solo', 'without controls', 'chromeless'] },
-  { id: 'nav.eidoverse', path: '/eidoverse', label: 'Eidoverse', section: 'Main', feature: 'eidoverse', previousPaths: ['/openworld', '/openworld/*', '/city', '/city/*'], preservePreviousPathSuffix: false, aliases: ['eidoverse', 'eidoverse-worlds', 'worlds', 'openworld', 'open-world', 'city'], keywords: ['3d', 'world', 'agents', 'spatial', 'managed app', 'private environment'] },
-  { id: 'nav.apps', path: '/apps', label: 'Apps', section: 'Main', aliases: ['apps'] },
+  { id: 'nav.dashboard', path: '/', label: 'Dashboard', section: 'Main' },
+  { id: 'nav.review-hub', path: '/review', label: 'Review Hub', section: 'Main' },
+  { id: 'nav.eidoverse.guest', path: '/eidoverse/guest', label: 'Eidoverse Guest', section: 'Main', feature: 'eidoverse' },
+  { id: 'nav.eidoverse.solo', path: '/eidoverse/solo', label: 'Eidoverse World Only', section: 'Main', feature: 'eidoverse' },
+  { id: 'nav.eidoverse', path: '/eidoverse', label: 'Eidoverse', section: 'Main', feature: 'eidoverse', previousPaths: ['/openworld', '/openworld/*', '/city', '/city/*'], preservePreviousPathSuffix: false },
+  { id: 'nav.apps', path: '/apps', label: 'Apps', section: 'Main' },
   // Submodules are per-app (a tab on the app detail page), so this entry is
   // explicitly PortOS's own — the only repo whose app id is a fixed constant.
   // Every other app reaches its tab from /apps/<id>/submodules.
-  { id: 'nav.apps.submodules', path: `/apps/${PORTOS_APP_ID}/submodules`, label: 'PortOS Submodules', section: 'Apps', previousPaths: ['/devtools/submodules'], aliases: ['submodules', 'devtools-submodules', 'portos-submodules'], keywords: ['git', 'slashdo', 'vendored', 'update submodule'] },
-  { id: 'nav.templates', path: '/templates', label: 'Templates', section: 'Main', aliases: ['templates', 'app-templates'], keywords: ['app template', 'create app', 'pre-configured', 'starter'] },
+  { id: 'nav.apps.submodules', path: `/apps/${PORTOS_APP_ID}/submodules`, label: 'PortOS Submodules', section: 'Apps', previousPaths: ['/devtools/submodules'] },
+  { id: 'nav.templates', path: '/templates', label: 'Templates', section: 'Main' },
 
-  { id: 'nav.create.media-studio', path: '/create/media', label: 'Media Studio', section: 'Create', aliases: ['media-studio'], keywords: ['video', 'visual', 'animation', 'production'] },
-  { id: 'nav.create.story-studio', path: '/create/story', label: 'Story Studio', section: 'Create', aliases: ['story-studio'], keywords: ['writing', 'series', 'narrative', 'fiction'] },
-  { id: 'nav.catalog', path: '/catalog', label: 'Catalog', section: 'Create', aliases: ['catalog', 'ingredients', 'creative-catalog'], keywords: ['character', 'place', 'object', 'idea', 'scene', 'concept', 'inventory', 'reference', 'creative'] },
-  { id: 'nav.catalog.ingest', path: '/catalog/ingest', label: 'Catalog Ingest', section: 'Create', aliases: ['catalog-ingest', 'ingest', 'paste-scrap', 'extract-ingredients'], keywords: ['paste', 'snippet', 'scene', 'idea', 'extract', 'scrap', 'import-catalog'] },
-  { id: 'nav.catalog.settings', path: '/catalog?settings=1', label: 'Catalog Types', section: 'Create', previousPaths: ['/settings/catalog'], aliases: ['catalog settings', 'catalog-settings', 'settings-catalog', 'catalog-types'], keywords: ['catalog', 'types', 'labels', 'character', 'place', 'object', 'taxonomy'] },
-  { id: 'nav.create.casting', path: '/catalog/casting', label: 'Casting', section: 'Create', parentPath: '/catalog', previousPaths: ['/casting'], aliases: ['casting', 'cast', 'characters', 'actors', 'casting-sheets', 'cast-list'], keywords: ['character', 'casting sheet', 'turnaround', 'wardrobe', 'looks', 'performer', 'actor', 'reference'] },
+  { id: 'nav.create.media-studio', path: '/create/media', label: 'Media Studio', section: 'Create' },
+  { id: 'nav.create.story-studio', path: '/create/story', label: 'Story Studio', section: 'Create' },
+  { id: 'nav.catalog', path: '/catalog', label: 'Catalog', section: 'Create' },
+  { id: 'nav.catalog.ingest', path: '/catalog/ingest', label: 'Catalog Ingest', section: 'Create' },
+  { id: 'nav.catalog.settings', path: '/catalog?settings=1', label: 'Catalog Types', section: 'Create', previousPaths: ['/settings/catalog'] },
+  { id: 'nav.create.casting', path: '/catalog/casting', label: 'Casting', section: 'Create', parentPath: '/catalog', previousPaths: ['/casting'] },
   // ⌘K / voice only — no sidebar row: reached from the Casting, Environments and Objects headers.
-  { id: 'nav.create.casting-import', path: '/casting/import', label: 'Import Cast from Music Videos', section: 'Create', aliases: ['import-cast', 'cast-import', 'import-sets', 'backfill-cast'], keywords: ['music video', 'casting sheet', 'set plate', 'catalog', 'backfill', 'import'] },
-  { id: 'nav.create.environments', path: '/catalog/environments', label: 'Environments', section: 'Create', parentPath: '/catalog', previousPaths: ['/environments'], aliases: ['environments', 'environment', 'sets', 'locations', 'places', 'set-list'], keywords: ['place', 'set', 'location', 'clean plate', 'background', 'scene setting', 'reference'] },
-  { id: 'nav.create.objects', path: '/catalog/objects', label: 'Objects', section: 'Create', parentPath: '/catalog', previousPaths: ['/objects'], aliases: ['objects', 'props', 'prop-list', 'items'], keywords: ['object', 'prop', 'artifact', 'talisman', 'macguffin', 'reference'] },
-  { id: 'nav.media', path: '/media', label: 'Media Gen', section: 'Create', parentPath: '/create/media', aliases: ['media', 'media-gen', 'mediagen', 'generate'], keywords: ['image', 'video', 'render', 'art', 'movie'] },
-  { id: 'nav.media.image', path: '/media/image', label: 'Image', section: 'Create', tabGroup: 'media', tabId: 'image', previousPaths: ['/image-gen'], aliases: ['image-gen', 'imagegen', 'generate-image', 'sd', 'stable-diffusion'], keywords: ['stable diffusion', 'render', 'art', 'picture', 'photo', 'draw', 'flux', 'mflux'] },
-  { id: 'nav.media.video', path: '/video/generate', label: 'Generate Video', tabLabel: 'Video', section: 'Create', tabGroup: 'media', tabId: 'video', previousPaths: ['/video-gen', '/media/video'], aliases: ['video-gen', 'videogen', 'generate-video', 'ltx'], keywords: ['video', 'animate', 'movie', 'clip', 'ltx', 'episode composer', 'continuous video', 'multi-scene'] },
-  { id: 'nav.media.prompt', path: '/media/prompt', label: 'Prompt from Media', tabLabel: 'Prompt', section: 'Create', tabGroup: 'media', tabId: 'prompt', aliases: ['prompt-from-media', 'analyze-media-prompt'], keywords: ['vision', 'reverse prompt', 'describe media', 'image prompt', 'video prompt'] },
-  { id: 'nav.media.threejs', path: '/media/threejs', label: 'Three.js Models', section: 'Create', tabGroup: 'media', tabId: 'threejs', tabLabel: 'Three.js', aliases: ['threejs', 'three-js', '3d-models', 'image-to-3d', 'img2threejs'], keywords: ['procedural', '3d', 'mesh', 'model', 'gallery', 'webgl', 'preview'] },
-  { id: 'nav.media.pages', path: '/html-pages', label: 'HTML Pages', section: 'Create', previousPaths: ['/media/pages'], aliases: ['html-pages', 'html-bench', 'page-bench', 'web-design-bench', 'compare-html'], keywords: ['html', 'web design', 'frontend', 'creative', 'model comparison', 'side by side', 'iframe', 'gallery', 'local model'] },
-  { id: 'nav.media.pages.runs', path: '/html-pages/runs', label: 'HTML Pages Runs', section: 'Create', aliases: ['html-pages-runs', 'html-bench-runs'], keywords: ['runs', 'retry', 'compare', 'model comparison', 'html'] },
-  { id: 'nav.media.pages.gallery', path: '/html-pages/gallery', label: 'HTML Pages Gallery', section: 'Create', aliases: ['html-pages-gallery', 'html-gallery'], keywords: ['gallery', 'pages', 'prompt', 'plan', 'copy prompt', 'html'] },
-  { id: 'nav.media.annotate', path: '/media/annotate', label: 'Annotate', section: 'Create', tabGroup: 'media', tabId: 'annotate', previousPaths: ['/annotate', '/annotate/:mediaKey'], aliases: ['annotate', 'media-annotate', 'sketch', 'draw-over', 'markup'], keywords: ['annotation', 'sketch', 'draw', 'markup', 'scribble', 'label', 'canvas', 'overlay', 'stroke'] },
-  { id: 'nav.media.timeline', path: '/media/timeline', label: 'Timeline', section: 'Create', tabGroup: 'media', tabId: 'timeline', aliases: ['timeline', 'video-timeline', 'editor'], keywords: ['edit', 'trim', 'composite', 'stitch', 'cut', 'compose'] },
-  { id: 'nav.media.history', path: '/media/history', label: 'Media History', section: 'Create', tabGroup: 'media', tabId: 'history', tabLabel: 'History', previousPaths: ['/media-history'], aliases: ['media-history', 'video-history'], keywords: ['videos', 'gallery', 'stitch'] },
-  { id: 'nav.media.collections', path: '/media/collections', label: 'Collections', section: 'Create', tabGroup: 'media', tabId: 'collections', aliases: ['collections', 'media-collections', 'stacks', 'projects'], keywords: ['bucket', 'group', 'project', 'album', 'organize'] },
-  { id: 'nav.create.code-animation', path: '/code-animation', label: 'Code Animation', section: 'Create', parentPath: '/create/media', aliases: ['code-animation', 'codeanimation', 'code-video', 'procedural-animation', 'animation-prompt'], keywords: ['animation', 'canvas', 'webgl', 'procedural', 'no assets', 'llm prompt', 'motion graphics', 'universe style', 'mood board', 'audio reactive', 'record video', 'html animation'] },
-  { id: 'nav.create.code-animation.gallery', path: '/code-animation/gallery', label: 'Code Animation Gallery', section: 'Create', aliases: ['code-animation-gallery', 'animation-gallery', 'past-animations'], keywords: ['gallery', 'thumbnails', 'posters', 'past animations', 'history', 'reopen animation', 'saved animations'] },
-  { id: 'nav.create.code-animation.production', path: '/code-animation/production', label: 'Code Animation Production', section: 'Create', aliases: ['code-animation-production', 'animation-production', 'production-animation', 'blender-film-projects'], keywords: ['film projects', 'accepted output', 'compare runs', 'evidence', 'source packages', 'immutable revisions', 'animation history'] },
-  { id: 'nav.create.creative-director', path: '/creative-director', label: 'Creative Director', section: 'Create', parentPath: '/create/media', previousPaths: ['/video', '/video/:id', '/video/:id/:tab', '/video/:id/:tab/:sceneId', '/media/creative-director', '/media/creative-director/:id', '/media/creative-director/:id/:tab', '/media/creative-director/:id/:tab/:sceneId'], aliases: ['creative-director', 'video', 'browse-video', 'creative', 'director', 'producer', 'orchestrator', 'long-form', 'episode', 'video-production', 'create-video', 'video-workspace'], keywords: ['story', 'episode', 'narrative', 'agent', 'auto-video', 'long-form', 'directive', 'production plan', 'plan board', 'orchestrator', 'studio', 'producer'] },
-  { id: 'nav.create.creative-commission', path: '/creative-commission', label: 'Creative Commissions', section: 'Create', parentPath: '/create/media', aliases: ['creative-commission', 'commissions', 'commission', 'creation-engine', 'autonomous-creation', 'standing-brief', 'recurring-brief'], keywords: ['schedule', 'recurring', 'nightly', 'brief', 'autonomous', 'creation engine', 'cron', 'feedback', 'taste', 'standing commission', 'auto-generate'] },
-  { id: 'nav.create.fableloom', path: '/fableloom', label: 'FableLoom', section: 'Create', parentPath: '/create/story', aliases: ['fableloom', 'fable-loom', 'loom', 'branching-narrative', 'interactive-story', 'branching-story'], keywords: ['branching', 'interactive', 'narrative', 'intent', 'endings', 'reader', 'scene', 'node', 'graph', 'nonlinear', 'play', 'story graph'] },
-  { id: 'nav.create.game', path: '/game', label: 'Game', section: 'Create', aliases: ['game', 'games', 'game-studio'], keywords: ['managed app', 'sprite', 'atlas', 'music', 'asset bundle', 'manifest', 'feedback'] },
-  { id: 'nav.create.music-video', path: '/music-video', label: 'Music Video', section: 'Create', parentPath: '/create/media', previousPaths: ['/media/music-video', '/media/music-video/:projectId', '/media/music-video/*'], aliases: ['music-video', 'musicvideo', 'music video', 'mv', 'sync-to-beat'], keywords: ['music', 'beat', 'sync', 'audio-reactive', 'director', 'scene board', 'tempo', 'choreography', 'autonomous', 'suno', 'one prompt', 'lyrics'] },
-  { id: 'nav.create.music-video.new', path: '/music-video?new=project', label: 'New Music Video', section: 'Create', aliases: ['new-music-video', 'create-music-video', 'new music video', 'create music video'], keywords: ['music video', 'new', 'create', 'project', 'draft'] },
-  { id: 'nav.create.music-video.setup', path: '/music-video/setup', label: 'Music Video Song', section: 'Create', aliases: ['music-video-setup', 'mv-setup', 'music video setup', 'music-video-song', 'mv-song'], keywords: ['music video', 'song', 'setup', 'track', 'audio', 'lyrics'] },
-  { id: 'nav.create.music-video.cast-sets', path: '/music-video/cast-sets', label: 'Music Video Look', section: 'Create', aliases: ['cast-and-sets', 'cast-sets', 'cast and sets', 'music-video-cast-sets', 'music-video-look', 'mv-look'], keywords: ['music video', 'look', 'cast', 'sets', 'characters', 'visual spec', 'art direction'] },
-  { id: 'nav.create.music-video.board', path: '/music-video/board', label: 'Music Video Storyboard', section: 'Create', aliases: ['music-video-plan', 'mv-plan', 'mv-storyboard', 'board', 'open-the-board', 'open the board', 'music-video-board', 'music-video-storyboard'], keywords: ['music video', 'plan', 'storyboard', 'timeline', 'treatment', 'beat timeline'] },
-  { id: 'nav.create.music-video.previz', path: '/music-video/previz', label: 'Music Video Previz', section: 'Create', aliases: ['music-video-previz', 'mv-previz', 'previz', 'previs', 'greybox-previz', 'music video previz'], keywords: ['music video', 'previz', 'greybox', 'blocking', 'camera', 'three.js', '3d', 'animatic'] },
-  { id: 'nav.create.music-video.produce', path: '/music-video/produce', label: 'Music Video Shots', section: 'Create', aliases: ['music-video-shots', 'mv-shots', 'scene-board', 'produce', 'music-video-produce', 'mv-produce', 'music-video-make', 'mv-make', 'compose', 'music-video-compose', 'mv-compose'], keywords: ['music video', 'shots', 'scenes', 'stills', 'clips', 'locks', 'make', 'footage', 'typography', 'takes', 'production'] },
-  { id: 'nav.create.music-video.review', path: '/music-video/review', label: 'Music Video Final Render', section: 'Create', aliases: ['music-video-review', 'mv-review', 'music video review', 'music-video-render', 'mv-render'], keywords: ['music video', 'final render', 'render', 'review', 'export', 'drafts'] },
-  { id: 'nav.create.music-video.publish', path: '/music-video/publish', label: 'Music Video Publish', section: 'Create', aliases: ['music-video-publish', 'mv-publish', 'music video publish'], keywords: ['music video', 'publish', 'release', 'kit', 'social'] },
-  { id: 'nav.create.music-video.editor', path: '/music-video/editor', label: 'Music Video Editor', section: 'Create', aliases: ['music-video-editor', 'mv-editor', 'music video editor', 'video-editor', 'shot-timeline', 'shot timeline'], keywords: ['music video', 'editor', 'timeline', 'shots', 'cut', 'trim', 'reorder', 'playhead', 'nle', 'edit'] },
-  { id: 'nav.create.music-video.assets', path: '/music-video/assets', label: 'Music Video Assets', section: 'Create', aliases: ['music-video-assets', 'mv-assets', 'music video assets', 'asset-manager', 'asset manager'], keywords: ['music video', 'assets', 'stills', 'clips', 'takes', 'ingredients', 'bad', 'cleanup', 'media'] },
-  { id: 'nav.create.music-video-cleanup', path: '/music-video/cleanup', label: 'Music Video Cleanup', section: 'Create', aliases: ['music-video-cleanup', 'mv-cleanup', 'music video cleanup'], keywords: ['superseded', 'renders', 'film looks', 'disk', 'cleanup'] },
-  { id: 'nav.create.decks', path: '/decks', label: 'Decks', section: 'Create', aliases: ['decks', 'deck', 'card-deck', 'playing-cards', 'tarot', 'tarot-deck', 'cards'], keywords: ['playing cards', 'tarot', 'card deck', 'card design', 'suits', 'arcana', 'style guide', 'batch render', 'card art'] },
-  { id: 'nav.create.mood-boards', path: '/mood-boards', label: 'Mood Boards', section: 'Create', aliases: ['mood-boards', 'mood-board', 'moodboard', 'mood', 'inspiration', 'references'], keywords: ['inspiration', 'reference', 'pin', 'visual', 'canvas', 'collect', 'pinboard', 'palette', 'ideas'] },
-  { id: 'nav.create.storyboards', path: '/storyboards', label: 'Storyboards', section: 'Create', parentPath: '/create/media', aliases: ['storyboards', 'storyboard', 'story-board', 'shot-planner', 'beat-board'], keywords: ['story beats', 'panels', 'shots', 'animatic', 'plan', 'film', 'music video', 'sketch', 'shot list', 'previs'] },
+  { id: 'nav.create.casting-import', path: '/casting/import', label: 'Import Cast from Music Videos', section: 'Create' },
+  { id: 'nav.create.environments', path: '/catalog/environments', label: 'Environments', section: 'Create', parentPath: '/catalog', previousPaths: ['/environments'] },
+  { id: 'nav.create.objects', path: '/catalog/objects', label: 'Objects', section: 'Create', parentPath: '/catalog', previousPaths: ['/objects'] },
+  { id: 'nav.media', path: '/media', label: 'Media Gen', section: 'Create', parentPath: '/create/media' },
+  { id: 'nav.media.image', path: '/media/image', label: 'Image', section: 'Create', tabGroup: 'media', tabId: 'image', previousPaths: ['/image-gen'] },
+  { id: 'nav.media.video', path: '/video/generate', label: 'Generate Video', tabLabel: 'Video', section: 'Create', tabGroup: 'media', tabId: 'video', previousPaths: ['/video-gen', '/media/video'] },
+  { id: 'nav.media.prompt', path: '/media/prompt', label: 'Prompt from Media', tabLabel: 'Prompt', section: 'Create', tabGroup: 'media', tabId: 'prompt' },
+  { id: 'nav.media.threejs', path: '/media/threejs', label: 'Three.js Models', section: 'Create', tabGroup: 'media', tabId: 'threejs', tabLabel: 'Three.js' },
+  { id: 'nav.media.pages', path: '/html-pages', label: 'HTML Pages', section: 'Create', previousPaths: ['/media/pages'] },
+  { id: 'nav.media.pages.runs', path: '/html-pages/runs', label: 'HTML Pages Runs', section: 'Create' },
+  { id: 'nav.media.pages.gallery', path: '/html-pages/gallery', label: 'HTML Pages Gallery', section: 'Create' },
+  { id: 'nav.media.annotate', path: '/media/annotate', label: 'Annotate', section: 'Create', tabGroup: 'media', tabId: 'annotate', previousPaths: ['/annotate', '/annotate/:mediaKey'] },
+  { id: 'nav.media.timeline', path: '/media/timeline', label: 'Timeline', section: 'Create', tabGroup: 'media', tabId: 'timeline' },
+  { id: 'nav.media.history', path: '/media/history', label: 'Media History', section: 'Create', tabGroup: 'media', tabId: 'history', tabLabel: 'History', previousPaths: ['/media-history'] },
+  { id: 'nav.media.collections', path: '/media/collections', label: 'Collections', section: 'Create', tabGroup: 'media', tabId: 'collections' },
+  { id: 'nav.create.code-animation', path: '/code-animation', label: 'Code Animation', section: 'Create', parentPath: '/create/media' },
+  { id: 'nav.create.code-animation.gallery', path: '/code-animation/gallery', label: 'Code Animation Gallery', section: 'Create' },
+  { id: 'nav.create.code-animation.production', path: '/code-animation/production', label: 'Code Animation Production', section: 'Create' },
+  { id: 'nav.create.creative-director', path: '/creative-director', label: 'Creative Director', section: 'Create', parentPath: '/create/media', previousPaths: ['/video', '/video/:id', '/video/:id/:tab', '/video/:id/:tab/:sceneId', '/media/creative-director', '/media/creative-director/:id', '/media/creative-director/:id/:tab', '/media/creative-director/:id/:tab/:sceneId'] },
+  { id: 'nav.create.creative-commission', path: '/creative-commission', label: 'Creative Commissions', section: 'Create', parentPath: '/create/media' },
+  { id: 'nav.create.fableloom', path: '/fableloom', label: 'FableLoom', section: 'Create', parentPath: '/create/story' },
+  { id: 'nav.create.game', path: '/game', label: 'Game', section: 'Create' },
+  { id: 'nav.create.music-video', path: '/music-video', label: 'Music Video', section: 'Create', parentPath: '/create/media', previousPaths: ['/media/music-video', '/media/music-video/:projectId', '/media/music-video/*'] },
+  { id: 'nav.create.music-video.new', path: '/music-video?new=project', label: 'New Music Video', section: 'Create' },
+  { id: 'nav.create.music-video.setup', path: '/music-video/setup', label: 'Music Video Song', section: 'Create' },
+  { id: 'nav.create.music-video.cast-sets', path: '/music-video/cast-sets', label: 'Music Video Look', section: 'Create' },
+  { id: 'nav.create.music-video.board', path: '/music-video/board', label: 'Music Video Storyboard', section: 'Create' },
+  { id: 'nav.create.music-video.previz', path: '/music-video/previz', label: 'Music Video Previz', section: 'Create' },
+  { id: 'nav.create.music-video.produce', path: '/music-video/produce', label: 'Music Video Shots', section: 'Create' },
+  { id: 'nav.create.music-video.review', path: '/music-video/review', label: 'Music Video Final Render', section: 'Create' },
+  { id: 'nav.create.music-video.publish', path: '/music-video/publish', label: 'Music Video Publish', section: 'Create' },
+  { id: 'nav.create.music-video.editor', path: '/music-video/editor', label: 'Music Video Editor', section: 'Create' },
+  { id: 'nav.create.music-video.assets', path: '/music-video/assets', label: 'Music Video Assets', section: 'Create' },
+  { id: 'nav.create.music-video-cleanup', path: '/music-video/cleanup', label: 'Music Video Cleanup', section: 'Create' },
+  { id: 'nav.create.decks', path: '/decks', label: 'Decks', section: 'Create' },
+  { id: 'nav.create.mood-boards', path: '/mood-boards', label: 'Mood Boards', section: 'Create' },
+  { id: 'nav.create.storyboards', path: '/storyboards', label: 'Storyboards', section: 'Create', parentPath: '/create/media' },
   // Promoted out of the Media Gen tabs to a top-level Create page (#2930).
   // The id stays `nav.media.sprites` — it's opaque and stored in palette
   // history, so renaming it would orphan those entries.
-  { id: 'nav.media.sprites', path: '/sprites', label: 'Sprites', section: 'Create', previousPaths: ['/media/sprites', '/media/sprites/:id'], aliases: ['sprites', 'sprite', 'sprite-manager', 'sprite-sheets'], keywords: ['sprite sheet', 'atlas', 'game art', 'pixel art', 'character animation', 'walk cycle', 'anchors'] },
-  { id: 'nav.create.3d', path: '/3d', label: '3D', section: 'Create', previousPaths: ['/media/3d', '/media/3d/:id'], aliases: ['3d', 'image-to-mesh', 'mesh', 'trellis', 'pixal3d', 'neural-3d', 'blender-models', 'blender-model'], keywords: ['blender model', 'blender python', 'parts', 'game asset', 'trellis', 'pixal3d', 'pixal', 'glb', 'mesh', 'photogrammetry', 'neural', 'image to 3d', 'render', 'generate', 'pbr'] },
-  { id: 'nav.create.authors', path: '/authors', label: 'Authors', section: 'Create', aliases: ['authors', 'author', 'byline', 'author-persona', 'writer-persona'], keywords: ['author', 'byline', 'pen name', 'persona', 'writing style', 'bio', 'headshot', 'cover', 'book author'] },
-  { id: 'nav.create.voice-studio', path: '/voices', label: 'Voice Studio', section: 'Create', aliases: ['voice-studio', 'character-voices', 'voice-lab'], keywords: ['auk', 'speech', 'timbre', 'pitch', 'design', 'characters', 'tts'] },
-  { id: 'nav.create.universe-builder', path: '/universes', label: 'Universes', section: 'Create', previousPaths: ['/media/universe-builder', '/media/universe-builder/:universeId', '/universe-builder', '/universe-builder/:universeId'], aliases: ['universes', 'universe', 'universe-builder', 'worldbuilder', 'worldbuild', 'world', 'lore', 'universe-canon', 'canon'], keywords: ['style template', 'sci-fi', 'fantasy', 'concept art', 'batch render', 'variations', 'characters', 'settings', 'objects', 'canon entries', 'list', 'manage'] },
-  { id: 'nav.create.importer', path: '/importer', label: 'Importer', section: 'Create', parentPath: '/create/story', aliases: ['importer', 'import'], keywords: ['paste', 'screenplay', 'novel', 'short story', 'comic script', 'analyze', 'reverse-engineer', 'extract'] },
-  { id: 'nav.create.pipeline', path: '/pipeline', label: 'Series Pipeline', section: 'Create', parentPath: '/create/story', aliases: ['series', 'pipeline', 'production', 'series-pipeline', 'production-pipeline'], keywords: ['series', 'issue', 'episode', 'comic', 'script', 'prose', 'storyboard', 'narrative', 'workflow'] },
-  { id: 'nav.create.pipeline.editorial-checks', path: '/pipeline/editorial-checks', label: 'Editorial Checks', section: 'Create', parentPath: '/create/story', aliases: ['editorial-checks', 'editorial', 'checks', 'editorial-review', 'content-checks', 'manuscript-checks'], keywords: ['editorial', 'check', 'review', 'naming', 'exposition', 'info-dumping', 'continuity', 'quality', 'lint', 'triage', 'findings', 'deterministic', 'llm'] },
-  { id: 'nav.create.pipeline-continuity-bible', path: '/pipeline', label: 'Series Continuity', section: 'Create', aliases: ['continuity-bible', 'continuity', 'series-continuity', 'facts-ledger', 'established-facts', 'canon-ledger'], keywords: ['continuity', 'bible', 'facts', 'ledger', 'established', 'knowledge-leak', 'contradiction', 'timeline', 'wardrobe', 'prop', 'physical-traits', 'who-knows-what'] },
-  { id: 'nav.create.pipeline-voice-fingerprint', path: '/pipeline', label: 'Voice Fingerprint', section: 'Create', aliases: ['voice-fingerprint', 'voice-drift', 'fingerprint', 'voice-matrix', 'prose-fingerprint'], keywords: ['voice', 'drift', 'fingerprint', 'matrix', 'style', 'prose', 'sentence-rhythm', 'outlier', 'metrics', 'deterministic', 'editorial', 'consistency', 'register', 'vocabulary-wells'] },
-  { id: 'nav.create.pipeline-export', path: '/pipeline', label: 'Prose Series Export', section: 'Create', aliases: ['export', 'prose-export', 'series-export', 'manuscript-export', 'epub', 'ebook', 'publish'], keywords: ['export', 'manuscript', 'epub', 'ebook', 'pdf', 'print', 'interior', 'trade paperback', 'compiled', 'download', 'publish', 'trim size', 'title page', 'book'] },
-  { id: 'nav.create.sharing', path: '/sharing', label: 'Sharing', section: 'Create', tabGroup: 'sharing', tabId: 'buckets', tabLabel: 'Buckets', aliases: ['sharing', 'share', 'buckets', 'share-buckets'], keywords: ['google drive', 'dropbox', 'icloud', 'syncthing', 'export', 'import', 'collaborate', 'federation', 'peer', 'cross-network'] },
-  { id: 'nav.create.sharing-duplicates', path: '/sharing/duplicates', label: 'Duplicates', section: 'Create', tabGroup: 'sharing', tabId: 'duplicates', aliases: ['duplicates', 'duplicate-universes', 'duplicate-series', 'dedupe', 'merge-duplicates'], keywords: ['duplicate', 'merge', 'rename', 'same name', 'two copies', 'reconcile', 'collision'] },
-  { id: 'nav.create.sharing-conflicts', path: '/sharing/conflicts', label: 'Conflicts', section: 'Create', tabGroup: 'sharing', tabId: 'conflicts', aliases: ['conflicts', 'sync-conflicts', 'edit-conflicts', 'conflict-journal'], keywords: ['conflict', 'overwrite', 'lost edit', 'restore', 'merge fields', 'last write wins', 'diverged', 'recover'] },
-  { id: 'nav.create.start-story', path: '/start-story', label: 'Start a Story', section: 'Create', parentPath: '/create/story', aliases: ['start-story', 'start-a-story', 'start', 'begin-story', 'create-story', 'onramp'], keywords: ['start here', 'begin', 'idea', 'import', 'prose', 'story builder', 'writers room', 'importer', 'how to start', 'new', 'front door', 'choose'] },
-  { id: 'nav.create.story-builder', path: '/story-builder', label: 'Story Builder', section: 'Create', parentPath: '/create/story', aliases: ['story-builder', 'storybuilder', 'guided', 'new-story', 'story-wizard'], keywords: ['idea', 'universe', 'arc', 'reader map', 'guided', 'wizard', 'linear', 'lock', 'front door', 'episode', 'series'] },
-  { id: 'nav.create.rounds', path: '/rounds', label: 'Rounds', section: 'Create', aliases: ['rounds', 'round', 'songs', 'song', 'a-cappella', 'acappella', 'sing'], keywords: ['round', 'song', 'lyrics', 'melody', 'harmony', 'dirge', 'ballad', 'a cappella', 'vocal', 'choir', 'singing', 'arrangement', 'quodlibet', '500 miles'] },
-  { id: 'nav.create.rounds-guide', path: '/rounds/guide', label: 'Rounds Guide', section: 'Create', aliases: ['rounds-guide', 'round-guide', 'songs-guide', 'song-guide', 'singing-guide', 'round-learning'], keywords: ['rhythm shapes', 'dirge', 'voice layers', 'harmony', 'notation', 'lead sheet', 'solfege', 'learn round', 'learn song', 'a cappella', 'singing help'] },
-  { id: 'nav.create.music', path: '/music', label: 'Music', section: 'Create', aliases: ['music', 'music-studio', 'generate-music'], keywords: ['music generation', 'ace-step', 'acestep', 'musicgen', 'audioldm', 'album', 'track', 'single', 'album art', 'artist', 'song generation', 'audio', 'beat', 'producer'] },
-  { id: 'nav.create.music-generate', path: '/music/generate', label: 'Music Designer', section: 'Create', tabGroup: 'music', tabId: 'generate', tabLabel: 'Generate', aliases: ['music-generate', 'music-designer', 'design-music', 'write-a-song', 'make-music'], keywords: ['generate music', 'music designer', 'describe music', 'enrich prompt', 'write lyrics', 'lyrics', 'ace-step', 'reference track', 'vibe', 'step by step', 'wizard', 'draw waveform', 'drawn waveform', 'wavetable', 'strudel', 'live code', 'music code'] },
-  { id: 'nav.create.music-artists', path: '/music/artists', label: 'Music Artists', section: 'Create', tabGroup: 'music', tabId: 'artists', tabLabel: 'Artists', aliases: ['music-artists', 'artists', 'artist', 'artist-persona', 'musician', 'band'], keywords: ['artist persona', 'musician', 'band', 'byline', 'portrait', 'genre', 'musical style', 'stage name'] },
-  { id: 'nav.create.music-albums', path: '/music/albums', label: 'Music Albums', section: 'Create', tabGroup: 'music', tabId: 'albums', tabLabel: 'Albums', aliases: ['albums', 'album', 'music-albums', 'discography', 'lp', 'ep'], keywords: ['album', 'cover art', 'tracklist', 'release', 'discography', 'record'] },
-  { id: 'nav.create.music-tracks', path: '/music/tracks', label: 'Music Tracks', section: 'Create', tabGroup: 'music', tabId: 'tracks', tabLabel: 'Tracks', aliases: ['tracks', 'track', 'music-tracks', 'singles', 'songs-audio'], keywords: ['track', 'single', 'audio', 'recording', 'lyrics', 'mp3', 'wav', 'generate track'] },
-  { id: 'nav.media.settings', path: '/media/image?settings=1', label: 'Media Gen Settings', section: 'Create', aliases: ['media-settings', 'image-gen-settings', 'sd-settings', 'video-gen-settings'] },
-  { id: 'nav.writers-room', path: '/writers-room', label: 'Writers Room', section: 'Create', parentPath: '/create/story', aliases: ['writers-room', 'writersroom', 'writer', 'write', 'studio', 'novel'], keywords: ['prose', 'screenplay', 'story', 'draft', 'manuscript', 'literary', 'novel', 'short story'] },
-  { id: 'nav.writers-room.guide', path: '/writers-room/guide', label: 'Writers Room Guide', section: 'Create', aliases: ['writers-room-guide', 'writing-guide', 'writing-rules', 'word-count', 'length-targets'], keywords: ['microfiction', 'flash fiction', 'short story', 'novelette', 'novella', 'novel length', 'word count', 'character count', 'book length', 'craft', 'writing advice', 'emotional roadmap', 'documentation', 'help'] },
+  { id: 'nav.media.sprites', path: '/sprites', label: 'Sprites', section: 'Create', previousPaths: ['/media/sprites', '/media/sprites/:id'] },
+  { id: 'nav.create.3d', path: '/3d', label: '3D', section: 'Create', previousPaths: ['/media/3d', '/media/3d/:id'] },
+  { id: 'nav.create.authors', path: '/authors', label: 'Authors', section: 'Create' },
+  { id: 'nav.create.voice-studio', path: '/voices', label: 'Voice Studio', section: 'Create' },
+  { id: 'nav.create.universe-builder', path: '/universes', label: 'Universes', section: 'Create', previousPaths: ['/media/universe-builder', '/media/universe-builder/:universeId', '/universe-builder', '/universe-builder/:universeId'] },
+  { id: 'nav.create.importer', path: '/importer', label: 'Importer', section: 'Create', parentPath: '/create/story' },
+  { id: 'nav.create.pipeline', path: '/pipeline', label: 'Series Pipeline', section: 'Create', parentPath: '/create/story' },
+  { id: 'nav.create.pipeline.editorial-checks', path: '/pipeline/editorial-checks', label: 'Editorial Checks', section: 'Create', parentPath: '/create/story' },
+  { id: 'nav.create.pipeline-continuity-bible', path: '/pipeline', label: 'Series Continuity', section: 'Create' },
+  { id: 'nav.create.pipeline-voice-fingerprint', path: '/pipeline', label: 'Voice Fingerprint', section: 'Create' },
+  { id: 'nav.create.pipeline-export', path: '/pipeline', label: 'Prose Series Export', section: 'Create' },
+  { id: 'nav.create.sharing', path: '/sharing', label: 'Sharing', section: 'Create', tabGroup: 'sharing', tabId: 'buckets', tabLabel: 'Buckets' },
+  { id: 'nav.create.sharing-duplicates', path: '/sharing/duplicates', label: 'Duplicates', section: 'Create', tabGroup: 'sharing', tabId: 'duplicates' },
+  { id: 'nav.create.sharing-conflicts', path: '/sharing/conflicts', label: 'Conflicts', section: 'Create', tabGroup: 'sharing', tabId: 'conflicts' },
+  { id: 'nav.create.start-story', path: '/start-story', label: 'Start a Story', section: 'Create', parentPath: '/create/story' },
+  { id: 'nav.create.story-builder', path: '/story-builder', label: 'Story Builder', section: 'Create', parentPath: '/create/story' },
+  { id: 'nav.create.rounds', path: '/rounds', label: 'Rounds', section: 'Create' },
+  { id: 'nav.create.rounds-guide', path: '/rounds/guide', label: 'Rounds Guide', section: 'Create' },
+  { id: 'nav.create.music', path: '/music', label: 'Music', section: 'Create' },
+  { id: 'nav.create.music-generate', path: '/music/generate', label: 'Music Designer', section: 'Create', tabGroup: 'music', tabId: 'generate', tabLabel: 'Generate' },
+  { id: 'nav.create.music-artists', path: '/music/artists', label: 'Music Artists', section: 'Create', tabGroup: 'music', tabId: 'artists', tabLabel: 'Artists' },
+  { id: 'nav.create.music-albums', path: '/music/albums', label: 'Music Albums', section: 'Create', tabGroup: 'music', tabId: 'albums', tabLabel: 'Albums' },
+  { id: 'nav.create.music-tracks', path: '/music/tracks', label: 'Music Tracks', section: 'Create', tabGroup: 'music', tabId: 'tracks', tabLabel: 'Tracks' },
+  { id: 'nav.media.settings', path: '/media/image?settings=1', label: 'Media Gen Settings', section: 'Create' },
+  { id: 'nav.writers-room', path: '/writers-room', label: 'Writers Room', section: 'Create', parentPath: '/create/story' },
+  { id: 'nav.writers-room.guide', path: '/writers-room/guide', label: 'Writers Room Guide', section: 'Create' },
   // /prompts lands on its Stages tab; each editor is its own `/prompts/:tab`
   // route, and a pre-route `/prompts?tab=` link redirects onto it in the page.
-  { id: 'nav.settings.prompts', path: '/prompts', label: 'Prompts', section: 'Settings', tabId: 'prompts', navGroup: 'Agents', aliases: ['prompts', 'prompt-stages'], keywords: ['stage', 'template', 'prompt manager'] },
-  { id: 'nav.settings.prompts.variables', path: '/prompts/variables', label: 'Prompt Variables', section: 'Settings', aliases: ['prompt-variables'], keywords: ['variable', 'snippet', 'prompt manager'] },
-  { id: 'nav.settings.prompts.agent-skills', path: '/prompts/agent-skills', label: 'Agent Skills', section: 'Settings', aliases: ['agent-skills', 'skill-curator', 'procedural-skills'], keywords: ['skill', 'curator', 'pin', 'lock', 'archive', 'rollback', 'agentskills', 'prompt manager'] },
-  { id: 'nav.settings.prompts.job-skills', path: '/prompts/job-skills', label: 'Job Skills', section: 'Settings', aliases: ['job-skills', 'prompt-job-skills'], keywords: ['job skill', 'autonomous job', 'skill template', 'prompt manager'] },
+  { id: 'nav.settings.prompts', path: '/prompts', label: 'Prompts', section: 'Settings', tabId: 'prompts', navGroup: 'Agents' },
+  { id: 'nav.settings.prompts.variables', path: '/prompts/variables', label: 'Prompt Variables', section: 'Settings' },
+  { id: 'nav.settings.prompts.agent-skills', path: '/prompts/agent-skills', label: 'Agent Skills', section: 'Settings' },
+  { id: 'nav.settings.prompts.job-skills', path: '/prompts/job-skills', label: 'Job Skills', section: 'Settings' },
   // The AI Providers page is three views over the composed model (#7567, epic
   // #7561): Presets (the stored records, the page's index), Harnesses (the
   // programs and their enablement, plus credential-bootstrap apps) and Services
   // (instances of a service definition: plan, credential, catalog). Each is its
   // own URL so a card can be linked and reached from ⌘K and voice; the retired
   // Backend Connections drawer (#6369) redirects onto Services.
-  { id: 'nav.settings.providers', path: '/ai/presets', label: 'Providers', section: 'Models', tabId: 'providers', navGroup: 'Connect', previousPaths: ['/ai'], aliases: ['providers', 'ai-providers', 'presets', 'ai-presets', 'provider-presets'], keywords: ['preset', 'harness', 'service', 'model', 'effort', 'compose', 'compatibility matrix', 'default provider'] },
-  { id: 'nav.ai.harnesses', path: '/ai/harnesses', label: 'Harnesses', section: 'Models', tabId: 'harnesses', navGroup: 'Connect', previousPaths: ['/models/harnesses'], aliases: ['harnesses', 'harness', 'ai-harnesses', 'agent-harnesses', 'coding-clis', 'cli-harnesses', 'provider-harnesses', 'harness-enablement', 'credential-bootstraps', 'bootstraps'], keywords: ['enable harness', 'disable harness', 'claude code', 'codex', 'opencode', 'pi', 'direct api', 'cli', 'tui', 'bootstrap', 'launch wrapper', 'sign in', 'quota', 'antigravity', 'agy', 'grok', 'kimi', 'hermes', 'cursor', 'install cli', 'update cli', 'upgrade', 'version', 'refresh models'] },
-  { id: 'nav.ai.services', path: '/ai/services', label: 'AI Services', section: 'Models', tabId: 'services', navGroup: 'Connect', previousPaths: ['/ai/connections', '/ai/connections/:connectionId'], aliases: ['ai-services', 'services', 'provider-services', 'backends', 'connections', 'backend-connections', 'provider-connections', 'harness-connections'], keywords: ['endpoint', 'api key', 'plan', 'free', 'paid', 'subscription', 'model catalog', 'refresh catalog', 'ollama', 'nvidia', 'openrouter', 'add service'] },
-  { id: 'nav.settings.fleet-llm', path: '/ai/fleet', label: 'Fleet LLM Setup', section: 'Settings', aliases: ['fleet-llm', 'gpu-host', 'remote-ai-provider'], keywords: ['3090', 'tailscale', 'vllm', 'qwen', 'coding model', 'dedicated host'] },
+  { id: 'nav.settings.providers', path: '/ai/presets', label: 'Providers', section: 'Models', tabId: 'providers', navGroup: 'Connect', previousPaths: ['/ai'] },
+  { id: 'nav.ai.harnesses', path: '/ai/harnesses', label: 'Harnesses', section: 'Models', tabId: 'harnesses', navGroup: 'Connect', previousPaths: ['/models/harnesses'] },
+  { id: 'nav.ai.services', path: '/ai/services', label: 'AI Services', section: 'Models', tabId: 'services', navGroup: 'Connect', previousPaths: ['/ai/connections', '/ai/connections/:connectionId'] },
+  { id: 'nav.settings.fleet-llm', path: '/ai/fleet', label: 'Fleet LLM Setup', section: 'Settings' },
 
-  { id: 'nav.brain.inbox', path: '/brain/inbox', label: 'Inbox', section: 'Brain', tabGroup: 'brain', tabId: 'inbox', aliases: ['brain', 'brain-inbox', 'inbox'] },
-  { id: 'nav.brain.threads', path: '/brain/threads', label: 'Threads', section: 'Brain', tabGroup: 'brain', tabId: 'threads', aliases: ['threads', 'brain-threads', 'bullet-journal', 'open-loops'], keywords: ['todo', 'tracking', 'next action', 'open loops', 'bullet journal'] },
-  { id: 'nav.brain.ideas', path: '/brain/ideas', label: 'Ideas', section: 'Brain', tabGroup: 'brain', tabId: 'ideas', aliases: ['brain-ideas', 'ideas'], keywords: ['brainstorm', 'creative', 'thought', 'concept'] },
-  { id: 'nav.brain.daily-log', path: '/brain/daily-log', label: 'Daily Log', section: 'Brain', tabGroup: 'brain', tabId: 'daily-log', aliases: ['daily-log', 'journal'] },
-  { id: 'nav.brain.links', path: '/brain/links', label: 'Links', section: 'Brain', tabGroup: 'brain', tabId: 'links', aliases: ['brain-links'] },
-  { id: 'nav.brain.meditation', path: '/brain/meditation', label: 'Meditation', section: 'Brain', tabGroup: 'brain', tabId: 'meditation', aliases: ['meditation', 'brain-meditation', '40-hz'], keywords: ['sound', 'audio', 'forty hertz'] },
-  { id: 'nav.brain.memory', path: '/brain/memory', label: 'Memory', section: 'Brain', tabGroup: 'brain', tabId: 'memory', aliases: ['brain-memory', 'memory'] },
-  { id: 'nav.brain.notes', path: '/brain/notes', label: 'Notes', section: 'Brain', tabGroup: 'brain', tabId: 'notes', aliases: ['brain-notes', 'notes'] },
-  { id: 'nav.brain.graph', path: '/brain/graph', label: 'Graph', section: 'Brain', tabGroup: 'brain', tabId: 'graph', aliases: ['brain-graph'] },
-  { id: 'nav.brain.digest', path: '/brain/digest', label: 'Digest', section: 'Brain', tabGroup: 'brain', tabId: 'digest', aliases: ['brain-digest'] },
-  { id: 'nav.brain.feeds', path: '/brain/feeds', label: 'Feeds', section: 'Brain', tabGroup: 'brain', tabId: 'feeds', aliases: ['brain-feeds', 'feeds', 'rss'], keywords: ['rss', 'subscriptions'] },
-  { id: 'nav.brain.trust', path: '/brain/trust', label: 'Trust', section: 'Brain', tabGroup: 'brain', tabId: 'trust', aliases: ['brain-trust'] },
-  { id: 'nav.brain.import', path: '/brain/import', label: 'Import', section: 'Brain', tabGroup: 'brain', tabId: 'import', aliases: ['brain-import', 'import-chatgpt', 'chatgpt-import'], keywords: ['chatgpt', 'openai', 'export', 'third-party'] },
+  { id: 'nav.brain.inbox', path: '/brain/inbox', label: 'Inbox', section: 'Brain', tabGroup: 'brain', tabId: 'inbox' },
+  { id: 'nav.brain.threads', path: '/brain/threads', label: 'Threads', section: 'Brain', tabGroup: 'brain', tabId: 'threads' },
+  { id: 'nav.brain.ideas', path: '/brain/ideas', label: 'Ideas', section: 'Brain', tabGroup: 'brain', tabId: 'ideas' },
+  { id: 'nav.brain.daily-log', path: '/brain/daily-log', label: 'Daily Log', section: 'Brain', tabGroup: 'brain', tabId: 'daily-log' },
+  { id: 'nav.brain.links', path: '/brain/links', label: 'Links', section: 'Brain', tabGroup: 'brain', tabId: 'links' },
+  { id: 'nav.brain.meditation', path: '/brain/meditation', label: 'Meditation', section: 'Brain', tabGroup: 'brain', tabId: 'meditation' },
+  { id: 'nav.brain.memory', path: '/brain/memory', label: 'Memory', section: 'Brain', tabGroup: 'brain', tabId: 'memory' },
+  { id: 'nav.brain.notes', path: '/brain/notes', label: 'Notes', section: 'Brain', tabGroup: 'brain', tabId: 'notes' },
+  { id: 'nav.brain.graph', path: '/brain/graph', label: 'Graph', section: 'Brain', tabGroup: 'brain', tabId: 'graph' },
+  { id: 'nav.brain.digest', path: '/brain/digest', label: 'Digest', section: 'Brain', tabGroup: 'brain', tabId: 'digest' },
+  { id: 'nav.brain.feeds', path: '/brain/feeds', label: 'Feeds', section: 'Brain', tabGroup: 'brain', tabId: 'feeds' },
+  { id: 'nav.brain.trust', path: '/brain/trust', label: 'Trust', section: 'Brain', tabGroup: 'brain', tabId: 'trust' },
+  { id: 'nav.brain.import', path: '/brain/import', label: 'Import', section: 'Brain', tabGroup: 'brain', tabId: 'import' },
   // Spotify and YouTube moved out of Settings into Brain (alongside Timeline,
   // which these feed) — ids kept stable since they're opaque, persisted
   // palette-history values; only the path and section move.
-  { id: 'nav.settings.spotify', path: '/brain/spotify', label: 'Spotify', section: 'Brain', tabGroup: 'brain', tabId: 'spotify', previousPaths: ['/settings/spotify'], aliases: ['settings-spotify', 'spotify', 'spotify-settings', 'brain-spotify'], keywords: ['spotify', 'music', 'listening', 'recently played', 'oauth', 'timeline', 'taste', 'media'] },
-  { id: 'nav.settings.youtube', path: '/brain/youtube', label: 'YouTube', section: 'Brain', tabGroup: 'brain', tabId: 'youtube', previousPaths: ['/settings/youtube'], aliases: ['settings-youtube', 'youtube', 'youtube-settings', 'brain-youtube'], keywords: ['youtube', 'watch history', 'video', 'scrape', 'takeout', 'timeline', 'taste', 'media'] },
-  { id: 'nav.brain.config', path: '/brain/config', label: 'Config', section: 'Brain', tabGroup: 'brain', tabId: 'config', aliases: ['brain-config'] },
-  { id: 'nav.brain.idealoom', path: '/brain/ideas?view=lists', label: 'IdeaLoom Lists', section: 'Brain', aliases: ['idealoom', 'idea-loom', 'idealoom-lists'], keywords: ['obsidian', 'vault', 'ordered list', 'local lists'] },
-  { id: 'nav.rapid-reader', path: '/rapid-reader', label: 'Rapid Reader', section: 'Brain', aliases: ['rapid-reader', 'speed-reader', 'rsvp', 'spritz'], keywords: ['speed reading', 'rapid reading', 'rsvp', 'spritz', 'word per minute', 'wpm', 'focal'] },
+  { id: 'nav.settings.spotify', path: '/brain/spotify', label: 'Spotify', section: 'Brain', tabGroup: 'brain', tabId: 'spotify', previousPaths: ['/settings/spotify'] },
+  { id: 'nav.settings.youtube', path: '/brain/youtube', label: 'YouTube', section: 'Brain', tabGroup: 'brain', tabId: 'youtube', previousPaths: ['/settings/youtube'] },
+  { id: 'nav.brain.config', path: '/brain/config', label: 'Config', section: 'Brain', tabGroup: 'brain', tabId: 'config' },
+  { id: 'nav.brain.idealoom', path: '/brain/ideas?view=lists', label: 'IdeaLoom Lists', section: 'Brain' },
+  { id: 'nav.rapid-reader', path: '/rapid-reader', label: 'Rapid Reader', section: 'Brain' },
   // No 'songs'/'song' aliases — those already resolve to nav.create.rounds (first-declared wins).
-  { id: 'nav.brain.songbook', path: '/songbook', label: 'SongBook', section: 'Brain', aliases: ['songbook', 'song-book', 'tabs', 'chords', 'guitar-tabs'], keywords: ['guitar', 'tab', 'tablature', 'chord chart', 'lyrics', 'sheet music', 'repertoire', 'autoscroll'] },
+  { id: 'nav.brain.songbook', path: '/songbook', label: 'SongBook', section: 'Brain' },
 
-  { id: 'nav.calendar.agenda', path: '/calendar/agenda', label: 'Agenda', section: 'Calendar', tabGroup: 'calendar', tabId: 'agenda', aliases: ['calendar', 'agenda'] },
-  { id: 'nav.calendar.day', path: '/calendar/day', label: 'Day', section: 'Calendar', tabGroup: 'calendar', tabId: 'day', aliases: ['calendar-day'] },
-  { id: 'nav.calendar.week', path: '/calendar/week', label: 'Week', section: 'Calendar', tabGroup: 'calendar', tabId: 'week', aliases: ['calendar-week'] },
-  { id: 'nav.calendar.month', path: '/calendar/month', label: 'Month', section: 'Calendar', tabGroup: 'calendar', tabId: 'month', aliases: ['calendar-month'] },
-  { id: 'nav.calendar.lifetime', path: '/calendar/lifetime', label: 'Lifetime', section: 'Calendar', tabGroup: 'calendar', tabId: 'lifetime', aliases: ['calendar-lifetime'] },
-  { id: 'nav.calendar.review', path: '/calendar/review', label: 'Review', section: 'Calendar', tabGroup: 'calendar', tabId: 'review', aliases: ['calendar-review'] },
-  { id: 'nav.calendar.sync', path: '/calendar/sync', label: 'Sync', section: 'Calendar', tabGroup: 'calendar', tabId: 'sync', aliases: ['calendar-sync'] },
-  { id: 'nav.calendar.config', path: '/calendar/config', label: 'Config', section: 'Calendar', tabGroup: 'calendar', tabId: 'config', aliases: ['calendar-config'] },
+  { id: 'nav.calendar.agenda', path: '/calendar/agenda', label: 'Agenda', section: 'Calendar', tabGroup: 'calendar', tabId: 'agenda' },
+  { id: 'nav.calendar.day', path: '/calendar/day', label: 'Day', section: 'Calendar', tabGroup: 'calendar', tabId: 'day' },
+  { id: 'nav.calendar.week', path: '/calendar/week', label: 'Week', section: 'Calendar', tabGroup: 'calendar', tabId: 'week' },
+  { id: 'nav.calendar.month', path: '/calendar/month', label: 'Month', section: 'Calendar', tabGroup: 'calendar', tabId: 'month' },
+  { id: 'nav.calendar.lifetime', path: '/calendar/lifetime', label: 'Lifetime', section: 'Calendar', tabGroup: 'calendar', tabId: 'lifetime' },
+  { id: 'nav.calendar.review', path: '/calendar/review', label: 'Review', section: 'Calendar', tabGroup: 'calendar', tabId: 'review' },
+  { id: 'nav.calendar.sync', path: '/calendar/sync', label: 'Sync', section: 'Calendar', tabGroup: 'calendar', tabId: 'sync' },
+  { id: 'nav.calendar.config', path: '/calendar/config', label: 'Config', section: 'Calendar', tabGroup: 'calendar', tabId: 'config' },
 
-  { id: 'nav.cos.briefing', path: '/cos/briefing', label: 'Briefing', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'briefing', aliases: ['briefing', 'cos-briefing'] },
-  { id: 'nav.cos.tasks', path: '/cos/tasks', label: 'Tasks', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'tasks', aliases: ['tasks', 'cos', 'cos-tasks', 'chief-of-staff'] },
-  { id: 'nav.cos.agents', path: '/cos/agents', label: 'Agents', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'agents', aliases: ['agents', 'cos-agents'] },
-  { id: 'nav.cos.jobs', path: '/cos/jobs', label: 'System Tasks', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'jobs', aliases: ['cos-jobs', 'system-tasks'] },
-  { id: 'nav.cos.runs', path: '/cos/runs', label: 'Runs', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'runs', previousPaths: ['/devtools/runs'], aliases: ['runs', 'ai-runs', 'cos-runs', 'recent-runs', 'run-history'], keywords: ['runs', 'run history', 'recent runs', 'ai runs', 'agent runs', 'failed runs'] },
-  { id: 'nav.cos.run-events', path: '/cos/runs/events', label: 'Run Events', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'run-events', previousPaths: ['/cos/run-events'], aliases: ['run-events', 'cos-run-events', 'run-event-ledger', 'lifecycle-events'], keywords: ['run events', 'lifecycle', 'ledger', 'replay', 'diagnostics', 'orphaned', 'handoff', 'reconnect', 'interrupted', 'why did this run fail'] },
-  { id: 'nav.cos.schedule', path: '/cos/schedule', label: 'Schedule', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'schedule', aliases: ['schedule', 'cos-schedule'] },
+  { id: 'nav.cos.briefing', path: '/cos/briefing', label: 'Briefing', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'briefing' },
+  { id: 'nav.cos.tasks', path: '/cos/tasks', label: 'Tasks', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'tasks' },
+  { id: 'nav.cos.agents', path: '/cos/agents', label: 'Agents', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'agents' },
+  { id: 'nav.cos.jobs', path: '/cos/jobs', label: 'System Tasks', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'jobs' },
+  { id: 'nav.cos.runs', path: '/cos/runs', label: 'Runs', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'runs', previousPaths: ['/devtools/runs'] },
+  { id: 'nav.cos.run-events', path: '/cos/runs/events', label: 'Run Events', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'run-events', previousPaths: ['/cos/run-events'] },
+  { id: 'nav.cos.schedule', path: '/cos/schedule', label: 'Schedule', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'schedule' },
   // Keep the workflow aliases for the Schedule Timeline. Bare timeline belongs to Media Gen.
-  { id: 'nav.cos.workflow', path: '/cos/schedule/timeline', label: 'Timeline', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'workflow', previousPaths: ['/cos/workflow'], aliases: ['workflow', 'cos-workflow', 'cos-timeline', 'schedule-timeline'], keywords: ['timeline', 'schedule', 'launch order', 'run order', 'gantt', 'upcoming runs', 'overlap', 'dependencies'] },
-  { id: 'nav.cos.digest', path: '/cos/briefing/digest', label: 'Digest', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'digest', previousPaths: ['/cos/digest'], aliases: ['cos-digest'] },
-  { id: 'nav.cos.gsd', path: '/cos/gsd', label: 'GSD', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'gsd', feature: 'gsd', aliases: ['gsd', 'cos-gsd'] },
-  { id: 'nav.cos.learning', path: '/cos/learning', label: 'Learning', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'learning', aliases: ['cos-learning'] },
-  { id: 'nav.cos.memory', path: '/cos/memory', label: 'Memory', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'memory', aliases: ['cos-memory'] },
-  { id: 'nav.cos.mind', path: '/cos/mind', label: 'Mind', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'mind', aliases: ['cos-mind', 'persistent-mind', 'mind-chat'], keywords: ['persistent mind', 'chat', 'annotation', 'resident mind', 'conversation'] },
-  { id: 'nav.cos.health', path: '/cos/health', label: 'Health', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'health', aliases: ['cos-health', 'health'] },
-  { id: 'nav.cos.config', path: '/cos/config', label: 'Config', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'config', aliases: ['cos-config'] },
-  { id: 'nav.feature-agents', path: '/feature-agents', label: 'Feature Agents', section: 'Chief of Staff', aliases: ['feature-agents'] },
-  { id: 'nav.cos.mind-tools', path: '/cos/mind?panel=tools', label: 'Mind Tools', section: 'Chief of Staff', previousPaths: ['/cos/tools', '/cos/mind/tools'], aliases: ['mind-tools', 'persistent-mind-tools', 'tools-access'], keywords: ['persistent mind', 'tools', 'access', 'permissions', 'authority', 'capabilities'] },
-  { id: 'nav.social-agents', path: '/agents', label: 'Social Agents', section: 'Chief of Staff', aliases: ['social-agents'] },
+  { id: 'nav.cos.workflow', path: '/cos/schedule/timeline', label: 'Timeline', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'workflow', previousPaths: ['/cos/workflow'] },
+  { id: 'nav.cos.digest', path: '/cos/briefing/digest', label: 'Digest', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'digest', previousPaths: ['/cos/digest'] },
+  { id: 'nav.cos.gsd', path: '/cos/gsd', label: 'GSD', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'gsd', feature: 'gsd' },
+  { id: 'nav.cos.learning', path: '/cos/learning', label: 'Learning', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'learning' },
+  { id: 'nav.cos.memory', path: '/cos/memory', label: 'Memory', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'memory' },
+  { id: 'nav.cos.mind', path: '/cos/mind', label: 'Mind', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'mind' },
+  { id: 'nav.cos.health', path: '/cos/health', label: 'Health', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'health' },
+  { id: 'nav.cos.config', path: '/cos/config', label: 'Config', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'config' },
+  { id: 'nav.feature-agents', path: '/feature-agents', label: 'Feature Agents', section: 'Chief of Staff' },
+  { id: 'nav.cos.mind-tools', path: '/cos/mind?panel=tools', label: 'Mind Tools', section: 'Chief of Staff', previousPaths: ['/cos/tools', '/cos/mind/tools'] },
+  { id: 'nav.social-agents', path: '/agents', label: 'Social Agents', section: 'Chief of Staff' },
 
-  { id: 'nav.messages.inbox', path: '/messages/inbox', label: 'Inbox', section: 'Comms', tabGroup: 'messages', tabId: 'inbox', aliases: ['messages', 'comms', 'comms-inbox'], keywords: ['comms', 'email', 'inbox'] },
-  { id: 'nav.messages.drafts', path: '/messages/drafts', label: 'Drafts', section: 'Comms', tabGroup: 'messages', tabId: 'drafts', aliases: ['drafts', 'comms-drafts'], keywords: ['comms'] },
+  { id: 'nav.messages.inbox', path: '/messages/inbox', label: 'Inbox', section: 'Comms', tabGroup: 'messages', tabId: 'inbox' },
+  { id: 'nav.messages.drafts', path: '/messages/drafts', label: 'Drafts', section: 'Comms', tabGroup: 'messages', tabId: 'drafts' },
   // Comms feature group (#40): iMessage and Signal join the existing FaceTime
   // Audio toggle under the `comms` group in instanceFeatureRegistry.js. The
   // `<Route>` itself keeps resolving with the feature off, so bookmarks, direct
   // links, and voice `ui_navigate` still land — only ⌘K/sidebar visibility gates.
   // `feature` rides through `getPageNavTabs` onto the Messages tab strip, so the
   // pill is gated by the same field the sidebar reads.
-  { id: 'nav.messages.imessage', path: '/messages/imessage', label: 'iMessage', section: 'Comms', tabGroup: 'messages', tabId: 'imessage', feature: 'imessage', previousPaths: ['/imessage'], aliases: ['imessage', 'i-message', 'apple-messages', 'comms-imessage'], keywords: ['comms', 'imessage', 'sms', 'text messages', 'chat.db', 'blocklist', 'spam'] },
-  { id: 'nav.messages.signal', path: '/messages/signal', label: 'Signal', section: 'Comms', tabGroup: 'messages', tabId: 'signal', feature: 'signal', previousPaths: ['/settings/signal'], aliases: ['signal', 'signal-desktop', 'comms-signal', 'signal-settings'], keywords: ['comms', 'signal', 'signal desktop', 'messages', 'sqlcipher', 'chat', 'tribe', 'timeline', 'encrypted', 'keychain'] },
+  { id: 'nav.messages.imessage', path: '/messages/imessage', label: 'iMessage', section: 'Comms', tabGroup: 'messages', tabId: 'imessage', feature: 'imessage', previousPaths: ['/imessage'] },
+  { id: 'nav.messages.signal', path: '/messages/signal', label: 'Signal', section: 'Comms', tabGroup: 'messages', tabId: 'signal', feature: 'signal', previousPaths: ['/settings/signal'] },
   // Beeper (#30, fork issue #1): a local Beeper Desktop bridge fronting
   // WhatsApp/Discord/Telegram/Instagram/X/Slack and more, joining the Comms
   // group #40 stood up. Off by default (no detector — #11) — the route keeps
   // resolving with the feature off, so bookmarks and voice ui_navigate still land.
-  { id: 'nav.messages.beeper', path: '/messages/beeper', label: 'Beeper', section: 'Comms', tabGroup: 'messages', tabId: 'beeper', feature: 'beeper', aliases: ['beeper', 'beeper-chat', 'comms-beeper'], keywords: ['comms', 'beeper', 'bridge', 'whatsapp', 'discord', 'telegram', 'instagram', 'slack', 'chat', 'unified inbox'] },
+  { id: 'nav.messages.beeper', path: '/messages/beeper', label: 'Beeper', section: 'Comms', tabGroup: 'messages', tabId: 'beeper', feature: 'beeper' },
   // #35 turned /messages/beeper into the chat surface itself, so the ingestion
   // settings + status card moved into a drawer over it (?settings=1) — the same
   // shape iMessage uses. The entry exists so "open beeper settings" still lands
@@ -217,46 +218,46 @@ const RAW_NAV_COMMANDS = [
   // entry of its own: NAV_COMMANDS enumerates navigable PAGES, and a per-record
   // path would need a parameter the fuzzy resolver has no way to supply
   // (iMessage's :chatKey is absent for the same reason).
-  { id: 'nav.messages.beeper-settings', path: '/messages/beeper?settings=1', label: 'Beeper Settings', section: 'Comms', feature: 'beeper', aliases: ['beeper-settings', 'settings-beeper', 'beeper-sync'], keywords: ['beeper', 'settings', 'token', 'sync', 'bridge', 'status', 'connection', 'interval'] },
-  { id: 'nav.messages.contacts', path: '/messages/contacts', label: 'Contacts', section: 'Comms', tabGroup: 'messages', tabId: 'contacts', previousPaths: ['/settings/contacts'], aliases: ['contacts', 'address-book', 'comms-contacts', 'settings-contacts'], keywords: ['comms', 'contacts', 'address book', 'phone', 'email', 'tribe', 'imessage', 'names', 'resolve'] },
+  { id: 'nav.messages.beeper-settings', path: '/messages/beeper?settings=1', label: 'Beeper Settings', section: 'Comms', feature: 'beeper' },
+  { id: 'nav.messages.contacts', path: '/messages/contacts', label: 'Contacts', section: 'Comms', tabGroup: 'messages', tabId: 'contacts', previousPaths: ['/settings/contacts'] },
   // Ingestion config is a drawer over the iMessage manager (?settings=1), not a
   // Settings page — the settings-* aliases stay so "open iMessage settings" still lands.
-  { id: 'nav.messages.imessage-settings', path: '/messages/imessage?settings=1', label: 'iMessage Settings', section: 'Comms', feature: 'imessage', aliases: ['settings-imessage', 'imessage-settings', 'imessage-sync'], keywords: ['imessage', 'sync', 'chat.db', 'sms', 'texts', 'tribe', 'timeline', 'full disk access'] },
-  { id: 'nav.messages.sync', path: '/messages/sync', label: 'Sync', section: 'Comms', tabGroup: 'messages', tabId: 'sync', aliases: ['messages-sync', 'comms-sync'], keywords: ['comms'] },
-  { id: 'nav.messages.config', path: '/messages/config', label: 'Config', section: 'Comms', tabGroup: 'messages', tabId: 'config', aliases: ['messages-config', 'comms-config'], keywords: ['comms'] },
+  { id: 'nav.messages.imessage-settings', path: '/messages/imessage?settings=1', label: 'iMessage Settings', section: 'Comms', feature: 'imessage' },
+  { id: 'nav.messages.sync', path: '/messages/sync', label: 'Sync', section: 'Comms', tabGroup: 'messages', tabId: 'sync' },
+  { id: 'nav.messages.config', path: '/messages/config', label: 'Config', section: 'Comms', tabGroup: 'messages', tabId: 'config' },
   // X and Stacker News join the Comms feature group alongside iMessage,
   // Signal, and Beeper — default ON, so an existing install sees no change;
   // only ⌘K/sidebar visibility gates on the flag, the `<Route>` itself keeps
   // resolving with the feature off.
-  { id: 'nav.stacker-news', path: '/stacker-news', label: 'Stacker News', section: 'Comms', feature: 'stacker-news', aliases: ['stacker-news', 'stacker', 'sn'], keywords: ['comms', 'community', 'territory', 'moderation', 'stewardship'] },
-  { id: 'nav.x', path: '/x', label: 'X', section: 'Comms', feature: 'x', aliases: ['x', 'x-com', 'twitter', 'comms-x'], keywords: ['comms', 'social', 'reach', 'engagement', 'shadowban', 'diagnostics'] },
-  { id: 'nav.timeline', path: '/timeline', label: 'Timeline', section: 'Brain', aliases: ['activity-timeline', 'activity', 'my-day', 'life-log', 'life-timeline'], keywords: ['human activity', 'life log', 'timeline', 'messages', 'calendar', 'history', 'what did i do', 'daily', 'import', 'backfill', 'whatsapp', 'spotify', 'discord', 'youtube'] },
-  { id: 'nav.tribe', path: '/tribe', label: 'Tribe', section: 'Brain', aliases: ['tribe', 'relationships', 'relationship-manager', 'people'], keywords: ['dunbar', 'friends', 'family', 'network', 'social graph', 'care cadence'] },
+  { id: 'nav.stacker-news', path: '/stacker-news', label: 'Stacker News', section: 'Comms', feature: 'stacker-news' },
+  { id: 'nav.x', path: '/x', label: 'X', section: 'Comms', feature: 'x' },
+  { id: 'nav.timeline', path: '/timeline', label: 'Timeline', section: 'Brain' },
+  { id: 'nav.tribe', path: '/tribe', label: 'Tribe', section: 'Brain' },
 
-  { id: 'nav.devtools.agents', path: '/devtools/agents', label: 'AI Agents', section: 'Dev Tools', aliases: ['ai-agents', 'devtools'] },
-  { id: 'nav.browser', path: '/browser', label: 'Browser', section: 'Dev Tools', aliases: ['browser'] },
-  { id: 'nav.devtools.runner', path: '/devtools/runner', label: 'Code', section: 'Dev Tools', aliases: ['devtools-runner'] },
-  { id: 'nav.devtools.datadog', path: '/devtools/datadog', label: 'DataDog', section: 'Dev Tools', feature: 'datadog', previousPaths: ['/datadog'], aliases: ['datadog', 'devtools-datadog'] },
-  { id: 'nav.devtools.flows', path: '/devtools/flows', label: 'Flows', section: 'Dev Tools', aliases: ['flows', 'integration-flows', 'workflows'], keywords: ['architecture', 'diagram', 'data flow', 'integrations', 'how it works'] },
-  { id: 'nav.devtools.github', path: '/devtools/github', label: 'GitHub', section: 'Dev Tools', aliases: ['github', 'devtools-github'] },
+  { id: 'nav.devtools.agents', path: '/devtools/agents', label: 'AI Agents', section: 'Dev Tools' },
+  { id: 'nav.browser', path: '/browser', label: 'Browser', section: 'Dev Tools' },
+  { id: 'nav.devtools.runner', path: '/devtools/runner', label: 'Code', section: 'Dev Tools' },
+  { id: 'nav.devtools.datadog', path: '/devtools/datadog', label: 'DataDog', section: 'Dev Tools', feature: 'datadog', previousPaths: ['/datadog'] },
+  { id: 'nav.devtools.flows', path: '/devtools/flows', label: 'Flows', section: 'Dev Tools' },
+  { id: 'nav.devtools.github', path: '/devtools/github', label: 'GitHub', section: 'Dev Tools' },
   // ⌘K / voice only — no sidebar row: tabs of the GitHub page.
-  { id: 'nav.devtools.github-accounts', path: '/devtools/github/accounts', label: 'GitHub Accounts', section: 'Dev Tools', aliases: ['github-accounts', 'github-enterprise'], keywords: ['github', 'enterprise', 'ghes', 'gh auth', 'login', 'trust', 'notifications'] },
-  { id: 'nav.devtools.github-inbox', path: '/devtools/github/inbox', label: 'GitHub Inbox', section: 'Dev Tools', aliases: ['github-inbox', 'github-notifications'], keywords: ['github', 'notifications', 'inbox', 'mentions', 'review requests', 'mute', 'unsubscribe'] },
-  { id: 'nav.devtools.github-audit', path: '/devtools/github/audit', label: 'GitHub Notification Audit', section: 'Dev Tools', aliases: ['github-audit', 'notification-audit'], keywords: ['github', 'notifications', 'unwatch', 'unsubscribe', 'subscriptions', 'noise'] },
-  { id: 'nav.devtools.github-automations', path: '/devtools/github/automations', label: 'GitHub Automations', section: 'Dev Tools', aliases: ['github-automations', 'github-triage'], keywords: ['github', 'notifications', 'schedule', 'triage', 'observe', 'run now'] },
-  { id: 'nav.devtools.github-repos', path: '/devtools/github/repos', label: 'GitHub Repos', section: 'Dev Tools', aliases: ['github-repos', 'github-secrets'], keywords: ['github', 'repositories', 'secrets', 'archive', 'npm'] },
-  { id: 'nav.devtools.history', path: '/devtools/history', label: 'History', section: 'Dev Tools', aliases: ['devtools-history'] },
-  { id: 'nav.devtools.image-clean', path: '/devtools/image-clean', label: 'Image Cleaner', section: 'Dev Tools', aliases: ['image-clean', 'image-cleaner'], keywords: ['metadata', 'c2pa', 'content-credentials', 'sharp', 'denoise'] },
-  { id: 'nav.devtools.jira', path: '/devtools/jira', label: 'JIRA', section: 'Dev Tools', feature: 'jira', previousPaths: ['/jira'], aliases: ['jira', 'devtools-jira'] },
-  { id: 'nav.devtools.jira-reports', path: '/devtools/jira/reports', label: 'JIRA Reports', section: 'Dev Tools', feature: 'jira', aliases: ['jira-reports'] },
-  { id: 'nav.devtools.quota-burn', path: '/devtools/quota-burn', label: 'Quota Burn', section: 'Models', tabId: 'quota-burn', navGroup: 'Operate', aliases: ['quota-burn', 'burn-quota', 'quota'], keywords: ['subscription', 'usage', 'reset window', 'spend quota', 'claude', 'codex', 'grok', 'agy', 'burn'] },
-  { id: 'nav.shell', path: '/shell', label: 'Shell', section: 'Dev Tools', aliases: ['shell', 'terminal'] },
+  { id: 'nav.devtools.github-accounts', path: '/devtools/github/accounts', label: 'GitHub Accounts', section: 'Dev Tools' },
+  { id: 'nav.devtools.github-inbox', path: '/devtools/github/inbox', label: 'GitHub Inbox', section: 'Dev Tools' },
+  { id: 'nav.devtools.github-audit', path: '/devtools/github/audit', label: 'GitHub Notification Audit', section: 'Dev Tools' },
+  { id: 'nav.devtools.github-automations', path: '/devtools/github/automations', label: 'GitHub Automations', section: 'Dev Tools' },
+  { id: 'nav.devtools.github-repos', path: '/devtools/github/repos', label: 'GitHub Repos', section: 'Dev Tools' },
+  { id: 'nav.devtools.history', path: '/devtools/history', label: 'History', section: 'Dev Tools' },
+  { id: 'nav.devtools.image-clean', path: '/devtools/image-clean', label: 'Image Cleaner', section: 'Dev Tools' },
+  { id: 'nav.devtools.jira', path: '/devtools/jira', label: 'JIRA', section: 'Dev Tools', feature: 'jira', previousPaths: ['/jira'] },
+  { id: 'nav.devtools.jira-reports', path: '/devtools/jira/reports', label: 'JIRA Reports', section: 'Dev Tools', feature: 'jira' },
+  { id: 'nav.devtools.quota-burn', path: '/devtools/quota-burn', label: 'Quota Burn', section: 'Models', tabId: 'quota-burn', navGroup: 'Operate' },
+  { id: 'nav.shell', path: '/shell', label: 'Shell', section: 'Dev Tools' },
   // ⌘K / voice only — no sidebar row: the view is reached from the Shell page's
   // PortOS | iTerm2 switch (#8114).
-  { id: 'nav.shell-iterm', path: '/shell/iterm', label: 'iTerm2 Sessions', section: 'Dev Tools', feature: 'iterm', aliases: ['iterm', 'iterm2'], keywords: ['terminal', 'mac', 'sessions'] },
-  { id: 'nav.devtools.usage', path: '/devtools/usage', label: 'Usage', section: 'Models', tabId: 'usage', navGroup: 'Operate', aliases: ['devtools-usage'] },
-  { id: 'nav.devtools.video-download', path: '/devtools/video-download', label: 'Video Downloader', section: 'Dev Tools', aliases: ['video-download', 'video-downloader', 'download-video'], keywords: ['youtube', 'x.com', 'twitter', 'yt-dlp', 'download', 'clip'] },
-  { id: 'nav.workspace-contexts', path: '/workspace-contexts', label: 'Workspaces', section: 'Dev Tools', aliases: ['workspaces', 'workspace-contexts', 'project-contexts', 'project-switcher'], keywords: ['project', 'context', 'switch project', 'branch', 'shell', 'tasks', 'restore', 'working context'] },
+  { id: 'nav.shell-iterm', path: '/shell/iterm', label: 'iTerm2 Sessions', section: 'Dev Tools', feature: 'iterm' },
+  { id: 'nav.devtools.usage', path: '/devtools/usage', label: 'Usage', section: 'Models', tabId: 'usage', navGroup: 'Operate' },
+  { id: 'nav.devtools.video-download', path: '/devtools/video-download', label: 'Video Downloader', section: 'Dev Tools' },
+  { id: 'nav.workspace-contexts', path: '/workspace-contexts', label: 'Workspaces', section: 'Dev Tools' },
 
   // Digital Twin's 19 sections render as five groups in-page — Profile,
   // Sources, Assessment, Presence, Legacy (see
@@ -268,170 +269,170 @@ const RAW_NAV_COMMANDS = [
   // Declaration order below is the page's tab order, which runs group by group
   // (Profile → Sources → Assessment → Presence → Legacy) — getPageNavTabs
   // preserves it, and SECTION_GROUPS slices the same ids back into headers.
-  { id: 'nav.twin.overview', path: '/digital-twin/overview', label: 'Overview', section: 'Identity', tabGroup: 'digital-twin', tabId: 'overview', aliases: ['twin-profile', 'digital-twin', 'twin'], keywords: ['profile'] },
-  { id: 'nav.twin.identity', path: '/digital-twin/identity', label: 'Identity', section: 'Identity', tabGroup: 'digital-twin', tabId: 'identity', aliases: ['twin-identity', 'identity'], keywords: ['profile'] },
-  { id: 'nav.twin.personas', path: '/digital-twin/personas', label: 'Personas', section: 'Identity', tabGroup: 'digital-twin', tabId: 'personas', aliases: ['twin-personas', 'personas', 'persona'], keywords: ['profile', 'context', 'professional', 'casual', 'voice', 'mode'] },
-  { id: 'nav.twin.goals', path: '/digital-twin/goals', label: 'Twin Goals', section: 'Identity', tabGroup: 'digital-twin', tabId: 'goals', tabLabel: 'Goals', aliases: ['twin-goals'], keywords: ['profile'] },
-  { id: 'nav.twin.taste', path: '/digital-twin/taste', label: 'Taste', section: 'Identity', tabGroup: 'digital-twin', tabId: 'taste', aliases: ['twin-taste'], keywords: ['profile'] },
-  { id: 'nav.twin.documents', path: '/digital-twin/documents', label: 'Documents', section: 'Identity', tabGroup: 'digital-twin', tabId: 'documents', aliases: ['twin-sources', 'twin-documents'], keywords: ['sources'] },
-  { id: 'nav.twin.import', path: '/digital-twin/import', label: 'Import', section: 'Identity', tabGroup: 'digital-twin', tabId: 'import', aliases: ['twin-import'], keywords: ['sources'] },
-  { id: 'nav.twin.accounts', path: '/digital-twin/accounts', label: 'Accounts', section: 'Identity', tabGroup: 'digital-twin', tabId: 'accounts', aliases: ['twin-accounts'], keywords: ['sources'] },
-  { id: 'nav.twin.interview', path: '/digital-twin/interview', label: 'Interview', section: 'Identity', tabGroup: 'digital-twin', tabId: 'interview', aliases: ['twin-interview'], keywords: ['sources'] },
-  { id: 'nav.twin.autobiography', path: '/digital-twin/autobiography', label: 'Autobiography', section: 'Identity', feature: 'autobiography', tabGroup: 'digital-twin', tabId: 'autobiography', aliases: ['twin-autobiography', 'autobiography'], keywords: ['sources'] },
-  { id: 'nav.twin.enrich', path: '/digital-twin/enrich', label: 'Enrich', section: 'Identity', tabGroup: 'digital-twin', tabId: 'enrich', aliases: ['twin-enrich'], keywords: ['sources'] },
-  { id: 'nav.twin.test', path: '/digital-twin/test', label: 'Test', section: 'Identity', tabGroup: 'digital-twin', tabId: 'test', aliases: ['twin-assessment', 'twin-test'], keywords: ['assessment'] },
-  { id: 'nav.twin.personality', path: '/digital-twin/personality', label: 'Personality', section: 'Identity', tabGroup: 'digital-twin', tabId: 'personality', aliases: ['twin-personality', 'personality', 'model-personality'], keywords: ['assessment', 'llm', 'model', 'traits', 'radar', 'alignment', 'self-profile', 'compare', 'sycophancy'] },
-  { id: 'nav.twin.voice', path: '/digital-twin/voice', label: 'Voice', section: 'Identity', tabGroup: 'digital-twin', tabId: 'voice', aliases: ['twin-presence', 'twin-voice', 'voice-style', 'spoken-written'], keywords: ['presence', 'speech', 'spoken', 'written', 'transcript', 'style', 'comparison', 'communication'] },
-  { id: 'nav.twin.appearance', path: '/digital-twin/appearance', label: 'Appearance', section: 'Identity', tabGroup: 'digital-twin', tabId: 'appearance', aliases: ['twin-appearance', 'appearance', 'photo'], keywords: ['presence', 'image', 'photo', 'vision', 'face', 'identity', 'presentation', 'look', 'avatar'] },
-  { id: 'nav.twin.avatar-bio', path: '/digital-twin/avatar-bio', label: 'Avatar Bio', section: 'Identity', tabGroup: 'digital-twin', tabId: 'avatar-bio', aliases: ['avatar-bio', 'twin-avatar-bio', 'avatar', 'live-avatar'], keywords: ['presence', 'heygen', 'tavus', 'simli', 'elevenlabs', 'persona', 'bio', 'voice', 'live avatar', 'who i am', 'how i speak', 'what i know'] },
-  { id: 'nav.twin.export', path: '/digital-twin/export', label: 'Export', section: 'Identity', tabGroup: 'digital-twin', tabId: 'export', aliases: ['twin-export'], keywords: ['legacy'] },
-  { id: 'nav.twin.legacy', path: '/digital-twin/legacy', label: 'Legacy Bundle', section: 'Identity', tabGroup: 'digital-twin', tabId: 'legacy', tabLabel: 'Legacy', aliases: ['twin-legacy', 'legacy-export', 'legacy-bundle', 'legacy'], keywords: ['legacy', 'bundle', 'backup', 'portable', 'pdf', 'archive', 'time capsule', 'export'] },
-  { id: 'nav.twin.time-capsule', path: '/digital-twin/time-capsule', label: 'Time Capsule', section: 'Identity', tabGroup: 'digital-twin', tabId: 'time-capsule', aliases: ['time-capsule', 'twin-time-capsule', 'capsule'], keywords: ['legacy', 'archive', 'snapshot'] },
-  { id: 'nav.ask', path: '/ask', label: 'Ask Yourself', section: 'Identity', aliases: ['ask', 'ask-yourself', 'twin-chat'], keywords: ['chat', 'twin', 'conversation', 'advise', 'draft'] },
-  { id: 'nav.character', path: '/character', label: 'Character', section: 'Identity', aliases: ['character'] },
-  { id: 'nav.goals', path: '/goals/list', label: 'Goals', section: 'Goals', tabGroup: 'goals', tabId: 'list', tabLabel: 'List', aliases: ['goals'] },
-  { id: 'nav.goals.tree', path: '/goals/tree', label: 'Goals Tree', section: 'Goals', tabGroup: 'goals', tabId: 'tree', tabLabel: 'Tree', aliases: ['goals-tree', 'goal-tree'], keywords: ['hierarchy', 'decomposition', 'subgoals', 'breakdown'] },
-  { id: 'nav.insights', path: '/insights/overview', label: 'Insights', section: 'Identity', tabGroup: 'insights', tabId: 'overview', tabLabel: 'Overview', aliases: ['insights'] },
-  { id: 'nav.insights.genome-health', path: '/insights/genome-health', label: 'Genome-Health', section: 'Identity', tabGroup: 'insights', tabId: 'genome-health', aliases: ['genome-health', 'insights-genome-health'], keywords: ['genome', 'dna', 'health', 'longevity', 'genetic'] },
-  { id: 'nav.insights.taste-identity', path: '/insights/taste-identity', label: 'Taste & Identity', section: 'Identity', tabGroup: 'insights', tabId: 'taste-identity', aliases: ['taste-identity', 'insights-taste-identity'], keywords: ['taste', 'identity', 'preferences', 'aesthetic'] },
-  { id: 'nav.insights.cross-domain', path: '/insights/cross-domain', label: 'Cross-Domain Patterns', section: 'Identity', tabGroup: 'insights', tabId: 'cross-domain', aliases: ['cross-domain', 'insights-cross-domain', 'cross-domain-patterns'], keywords: ['cross domain', 'patterns', 'correlations', 'connections'] },
-  { id: 'nav.insights.goal-scorecard', path: '/insights/goal-scorecard', label: 'Goal Scorecard', section: 'Identity', tabGroup: 'insights', tabId: 'goal-scorecard', aliases: ['goal-scorecard', 'insights-goal-scorecard', 'scorecard'], keywords: ['goal', 'scorecard', 'time allocation', 'effectiveness', 'goal alignment', 'time vs goals'] },
-  { id: 'nav.identity.privacy-overview', path: '/privacy/overview', label: 'Privacy', section: 'Identity', tabGroup: 'privacy', tabId: 'overview', tabLabel: 'Overview', aliases: ['privacy', 'privacy-center', 'my-data'], keywords: ['pii', 'privacy', 'personal data', 'identity facts', 'who has my data'] },
-  { id: 'nav.identity.privacy-vault', path: '/privacy/vault', label: 'Vault', section: 'Identity', tabGroup: 'privacy', tabId: 'vault', aliases: ['vault', 'pii-vault', 'privacy-vault'], keywords: ['pii', 'vault', 'encrypted', 'ssn', 'address', 'passport', 'identity'] },
-  { id: 'nav.identity.privacy-organizations', path: '/privacy/organizations', label: 'Organizations', section: 'Identity', tabGroup: 'privacy', tabId: 'organizations', aliases: ['organizations', 'orgs', 'trusted-orgs'], keywords: ['organizations', 'banks', 'utilities', 'who holds my data', 'registry', 'holdings'] },
-  { id: 'nav.identity.privacy-changes', path: '/privacy/changes', label: 'Changes', section: 'Identity', tabGroup: 'privacy', tabId: 'changes', aliases: ['changes', 'change-of-address', 'address-change', 'privacy-changes'], keywords: ['change of address', 'moved', 'update address', 'inventory', 'who needs updating', 'new phone', 'new email'] },
-  { id: 'nav.identity.privacy-brokers', path: '/privacy/brokers', label: 'Brokers', section: 'Identity', tabGroup: 'privacy', tabId: 'brokers', aliases: ['brokers', 'data brokers', 'opt out', 'remove my data', 'privacy-brokers'], keywords: ['data brokers', 'opt out', 'remove my data', 'people search', 'exposure', 'spokeo', 'whitepages', 'ccpa', 'delete my data'] },
+  { id: 'nav.twin.overview', path: '/digital-twin/overview', label: 'Overview', section: 'Identity', tabGroup: 'digital-twin', tabId: 'overview' },
+  { id: 'nav.twin.identity', path: '/digital-twin/identity', label: 'Identity', section: 'Identity', tabGroup: 'digital-twin', tabId: 'identity' },
+  { id: 'nav.twin.personas', path: '/digital-twin/personas', label: 'Personas', section: 'Identity', tabGroup: 'digital-twin', tabId: 'personas' },
+  { id: 'nav.twin.goals', path: '/digital-twin/goals', label: 'Twin Goals', section: 'Identity', tabGroup: 'digital-twin', tabId: 'goals', tabLabel: 'Goals' },
+  { id: 'nav.twin.taste', path: '/digital-twin/taste', label: 'Taste', section: 'Identity', tabGroup: 'digital-twin', tabId: 'taste' },
+  { id: 'nav.twin.documents', path: '/digital-twin/documents', label: 'Documents', section: 'Identity', tabGroup: 'digital-twin', tabId: 'documents' },
+  { id: 'nav.twin.import', path: '/digital-twin/import', label: 'Import', section: 'Identity', tabGroup: 'digital-twin', tabId: 'import' },
+  { id: 'nav.twin.accounts', path: '/digital-twin/accounts', label: 'Accounts', section: 'Identity', tabGroup: 'digital-twin', tabId: 'accounts' },
+  { id: 'nav.twin.interview', path: '/digital-twin/interview', label: 'Interview', section: 'Identity', tabGroup: 'digital-twin', tabId: 'interview' },
+  { id: 'nav.twin.autobiography', path: '/digital-twin/autobiography', label: 'Autobiography', section: 'Identity', feature: 'autobiography', tabGroup: 'digital-twin', tabId: 'autobiography' },
+  { id: 'nav.twin.enrich', path: '/digital-twin/enrich', label: 'Enrich', section: 'Identity', tabGroup: 'digital-twin', tabId: 'enrich' },
+  { id: 'nav.twin.test', path: '/digital-twin/test', label: 'Test', section: 'Identity', tabGroup: 'digital-twin', tabId: 'test' },
+  { id: 'nav.twin.personality', path: '/digital-twin/personality', label: 'Personality', section: 'Identity', tabGroup: 'digital-twin', tabId: 'personality' },
+  { id: 'nav.twin.voice', path: '/digital-twin/voice', label: 'Voice', section: 'Identity', tabGroup: 'digital-twin', tabId: 'voice' },
+  { id: 'nav.twin.appearance', path: '/digital-twin/appearance', label: 'Appearance', section: 'Identity', tabGroup: 'digital-twin', tabId: 'appearance' },
+  { id: 'nav.twin.avatar-bio', path: '/digital-twin/avatar-bio', label: 'Avatar Bio', section: 'Identity', tabGroup: 'digital-twin', tabId: 'avatar-bio' },
+  { id: 'nav.twin.export', path: '/digital-twin/export', label: 'Export', section: 'Identity', tabGroup: 'digital-twin', tabId: 'export' },
+  { id: 'nav.twin.legacy', path: '/digital-twin/legacy', label: 'Legacy Bundle', section: 'Identity', tabGroup: 'digital-twin', tabId: 'legacy', tabLabel: 'Legacy' },
+  { id: 'nav.twin.time-capsule', path: '/digital-twin/time-capsule', label: 'Time Capsule', section: 'Identity', tabGroup: 'digital-twin', tabId: 'time-capsule' },
+  { id: 'nav.ask', path: '/ask', label: 'Ask Yourself', section: 'Identity' },
+  { id: 'nav.character', path: '/character', label: 'Character', section: 'Identity' },
+  { id: 'nav.goals', path: '/goals/list', label: 'Goals', section: 'Goals', tabGroup: 'goals', tabId: 'list', tabLabel: 'List' },
+  { id: 'nav.goals.tree', path: '/goals/tree', label: 'Goals Tree', section: 'Goals', tabGroup: 'goals', tabId: 'tree', tabLabel: 'Tree' },
+  { id: 'nav.insights', path: '/insights/overview', label: 'Insights', section: 'Identity', tabGroup: 'insights', tabId: 'overview', tabLabel: 'Overview' },
+  { id: 'nav.insights.genome-health', path: '/insights/genome-health', label: 'Genome-Health', section: 'Identity', tabGroup: 'insights', tabId: 'genome-health' },
+  { id: 'nav.insights.taste-identity', path: '/insights/taste-identity', label: 'Taste & Identity', section: 'Identity', tabGroup: 'insights', tabId: 'taste-identity' },
+  { id: 'nav.insights.cross-domain', path: '/insights/cross-domain', label: 'Cross-Domain Patterns', section: 'Identity', tabGroup: 'insights', tabId: 'cross-domain' },
+  { id: 'nav.insights.goal-scorecard', path: '/insights/goal-scorecard', label: 'Goal Scorecard', section: 'Identity', tabGroup: 'insights', tabId: 'goal-scorecard' },
+  { id: 'nav.identity.privacy-overview', path: '/privacy/overview', label: 'Privacy', section: 'Identity', tabGroup: 'privacy', tabId: 'overview', tabLabel: 'Overview' },
+  { id: 'nav.identity.privacy-vault', path: '/privacy/vault', label: 'Vault', section: 'Identity', tabGroup: 'privacy', tabId: 'vault' },
+  { id: 'nav.identity.privacy-organizations', path: '/privacy/organizations', label: 'Organizations', section: 'Identity', tabGroup: 'privacy', tabId: 'organizations' },
+  { id: 'nav.identity.privacy-changes', path: '/privacy/changes', label: 'Changes', section: 'Identity', tabGroup: 'privacy', tabId: 'changes' },
+  { id: 'nav.identity.privacy-brokers', path: '/privacy/brokers', label: 'Brokers', section: 'Identity', tabGroup: 'privacy', tabId: 'brokers' },
 
-  { id: 'nav.meatspace.overview', path: '/meatspace/overview', label: 'Overview', section: 'Health', tabGroup: 'meatspace', tabId: 'overview', aliases: ['meatspace'] },
-  { id: 'nav.meatspace.age', path: '/meatspace/age', label: 'Age', section: 'Health', tabGroup: 'meatspace', tabId: 'age', aliases: ['meatspace-age'] },
-  { id: 'nav.meatspace.alcohol', path: '/meatspace/alcohol', label: 'Alcohol', section: 'Health', tabGroup: 'meatspace', tabId: 'alcohol', aliases: ['meatspace-alcohol', 'alcohol'] },
-  { id: 'nav.meatspace.blood', path: '/meatspace/blood', label: 'Blood', section: 'Health', tabGroup: 'meatspace', tabId: 'blood', aliases: ['meatspace-blood', 'blood'] },
-  { id: 'nav.meatspace.body', path: '/meatspace/body', label: 'Body', section: 'Health', tabGroup: 'meatspace', tabId: 'body', aliases: ['meatspace-body', 'body'] },
-  { id: 'nav.meatspace.export', path: '/meatspace/export', label: 'Export', section: 'Health', tabGroup: 'meatspace', tabId: 'export', aliases: ['meatspace-export', 'clinician-export', 'health-export'], keywords: ['clinician', 'doctor', 'print', 'pdf', 'summary', 'report', 'blood', 'lifestyle'] },
-  { id: 'nav.meatspace.genome', path: '/meatspace/genome', label: 'Genome', section: 'Health', tabGroup: 'meatspace', tabId: 'genome', aliases: ['meatspace-genome', 'genome'] },
-  { id: 'nav.meatspace.health', path: '/meatspace/health', label: 'Body Health', section: 'Health', tabGroup: 'meatspace', tabId: 'health', tabLabel: 'Health', aliases: ['meatspace-health', 'body-health'], keywords: ['health', 'vitals', 'wellbeing', 'biometrics'] },
-  { id: 'nav.meatspace.settings', path: '/meatspace/settings', label: 'Settings', section: 'Health', tabGroup: 'meatspace', tabId: 'settings', aliases: ['meatspace-settings'] },
-  { id: 'nav.meatspace.lifestyle', path: '/meatspace/lifestyle', label: 'Lifestyle', section: 'Health', tabGroup: 'meatspace', tabId: 'lifestyle', aliases: ['meatspace-lifestyle', 'lifestyle'] },
-  { id: 'nav.meatspace.nicotine', path: '/meatspace/nicotine', label: 'Nicotine', section: 'Health', tabGroup: 'meatspace', tabId: 'nicotine', aliases: ['meatspace-nicotine', 'nicotine'] },
+  { id: 'nav.meatspace.overview', path: '/meatspace/overview', label: 'Overview', section: 'Health', tabGroup: 'meatspace', tabId: 'overview' },
+  { id: 'nav.meatspace.age', path: '/meatspace/age', label: 'Age', section: 'Health', tabGroup: 'meatspace', tabId: 'age' },
+  { id: 'nav.meatspace.alcohol', path: '/meatspace/alcohol', label: 'Alcohol', section: 'Health', tabGroup: 'meatspace', tabId: 'alcohol' },
+  { id: 'nav.meatspace.blood', path: '/meatspace/blood', label: 'Blood', section: 'Health', tabGroup: 'meatspace', tabId: 'blood' },
+  { id: 'nav.meatspace.body', path: '/meatspace/body', label: 'Body', section: 'Health', tabGroup: 'meatspace', tabId: 'body' },
+  { id: 'nav.meatspace.export', path: '/meatspace/export', label: 'Export', section: 'Health', tabGroup: 'meatspace', tabId: 'export' },
+  { id: 'nav.meatspace.genome', path: '/meatspace/genome', label: 'Genome', section: 'Health', tabGroup: 'meatspace', tabId: 'genome' },
+  { id: 'nav.meatspace.health', path: '/meatspace/health', label: 'Body Health', section: 'Health', tabGroup: 'meatspace', tabId: 'health', tabLabel: 'Health' },
+  { id: 'nav.meatspace.settings', path: '/meatspace/settings', label: 'Settings', section: 'Health', tabGroup: 'meatspace', tabId: 'settings' },
+  { id: 'nav.meatspace.lifestyle', path: '/meatspace/lifestyle', label: 'Lifestyle', section: 'Health', tabGroup: 'meatspace', tabId: 'lifestyle' },
+  { id: 'nav.meatspace.nicotine', path: '/meatspace/nicotine', label: 'Nicotine', section: 'Health', tabGroup: 'meatspace', tabId: 'nicotine' },
 
-  { id: 'nav.post.launcher', path: '/post/launcher', label: 'Launcher', section: 'POST', aliases: ['post', 'post-launcher'] },
-  { id: 'nav.post.config', path: '/post/config', label: 'Config', section: 'POST', aliases: ['post-config'] },
-  { id: 'nav.post.explore', path: '/post/explore', label: 'Explore', section: 'POST', aliases: ['post-explore', 'practice-library', 'practice library', 'explore-post', 'all-drills', 'all drills', 'browse-practice'], keywords: ['catalog', 'library', 'browse', 'directory', 'what can i practice', 'test types', 'every drill', 'find a drill'] },
-  { id: 'nav.post.history', path: '/post/history', label: 'History', section: 'POST', aliases: ['post-history'] },
-  { id: 'nav.post.memory', path: '/post/memory', label: 'Memory', section: 'POST', aliases: ['post-memory'] },
-  { id: 'nav.post.memory.elements', path: '/post/memory/elements', label: 'Elements', section: 'POST', aliases: ['post-elements', 'elements', 'periodic-table', 'elements-song'], keywords: ['periodic table', 'chemistry', 'symbols', 'flash cards', 'tom lehrer', 'atomic number'] },
+  { id: 'nav.post.launcher', path: '/post/launcher', label: 'Launcher', section: 'POST' },
+  { id: 'nav.post.config', path: '/post/config', label: 'Config', section: 'POST' },
+  { id: 'nav.post.explore', path: '/post/explore', label: 'Explore', section: 'POST' },
+  { id: 'nav.post.history', path: '/post/history', label: 'History', section: 'POST' },
+  { id: 'nav.post.memory', path: '/post/memory', label: 'Memory', section: 'POST' },
+  { id: 'nav.post.memory.elements', path: '/post/memory/elements', label: 'Elements', section: 'POST' },
   // Elements practice modes are individually navigable, the way each Morse mode
   // is — so ⌘K and voice can start a drill instead of only opening the page
   // (issue #3249). Per-item memory routes (`/post/memory/:itemId`) stay dynamic
   // and unregistered, like other `:id` detail routes.
-  { id: 'nav.post.memory.elements.study', path: '/post/memory/elements/element-study', label: 'Elements Flash Cards', section: 'POST', aliases: ['elements-study', 'element-study', 'elements flash cards', 'flash-cards'], keywords: ['study', 'flip', 'reveal', 'symbols', 'pairings', 'periodic table'] },
-  { id: 'nav.post.memory.elements.flash', path: '/post/memory/elements/element-flash', label: 'Element Flash', section: 'POST', aliases: ['element-flash', 'elements-flash', 'element flash'], keywords: ['recall', 'quiz', 'test', 'symbols', 'name the element', 'periodic table'] },
-  { id: 'nav.post.memory.elements.lyrics', path: '/post/memory/elements/fill-blank', label: 'Elements Fill the Lyrics', section: 'POST', aliases: ['elements-fill-blank', 'fill-the-lyrics', 'elements lyrics'], keywords: ['lyrics', 'fill in the blank', 'recall', 'tom lehrer', 'song'] },
-  { id: 'nav.post.memory.elements.learn', path: '/post/memory/elements/learn', label: 'Elements Learn Lyrics', section: 'POST', aliases: ['elements-learn', 'learn-lyrics', 'elements learn'], keywords: ['read', 'verses', 'study', 'lyrics', 'tom lehrer', 'song'] },
-  { id: 'nav.post.morse', path: '/post/morse', label: 'Morse', section: 'POST', aliases: ['post-morse', 'morse', 'morse-code'], keywords: ['cw', 'ham', 'radio', 'koch', 'cognitive'] },
-  { id: 'nav.post.plan', path: '/post/plan', label: 'Practice Plan', section: 'POST', aliases: ['post-plan', 'practice-plan', 'practice plan', 'plan'], keywords: ['topics', 'enable', 'disable', 'opt out', 'what am i studying', 'study plan', 'subjects'] },
-  { id: 'nav.post.morse.copy', path: '/post/morse/copy', label: 'Morse Copy', section: 'POST', aliases: ['morse-copy', 'morse copy', 'copy-morse', 'morse-listen'], keywords: ['cw', 'koch', 'listen', 'decode', 'receive', 'ear'] },
-  { id: 'nav.post.morse.head-copy', path: '/post/morse/head-copy', label: 'Morse Head Copy', section: 'POST', aliases: ['morse-head-copy', 'morse head copy', 'head-copy', 'head copy'], keywords: ['cw', 'koch', 'audio only', 'no reference', 'memory', 'recall'] },
-  { id: 'nav.post.morse.send', path: '/post/morse/send', label: 'Morse Send', section: 'POST', aliases: ['morse-send', 'morse send', 'send-morse', 'morse-key', 'keying'], keywords: ['cw', 'key', 'straight key', 'transmit', 'dit', 'dah', 'spacebar'] },
-  { id: 'nav.post.morse.tree', path: '/post/morse?ref=tree', label: 'Morse Tree', section: 'POST', aliases: ['morse-tree', 'morse tree', 'morse-chart', 'dichotomic'], keywords: ['cw', 'binary tree', 'chart', 'reference', 'dit dah'] },
-  { id: 'nav.post.morse.length', path: '/post/morse?ref=length', label: 'Morse Length', section: 'POST', aliases: ['morse-length', 'morse length', 'morse-by-length'], keywords: ['cw', 'reference', 'symbol length', 'chart'] },
-  { id: 'nav.post.morse.list', path: '/post/morse?ref=list', label: 'Morse List', section: 'POST', aliases: ['morse-list', 'morse list', 'morse-table', 'morse-alphabet'], keywords: ['cw', 'reference', 'alphabet', 'table', 'chart'] },
-  { id: 'nav.post.progress', path: '/post/progress', label: 'Progress', section: 'POST', aliases: ['post-progress', 'progress'], keywords: ['trends', 'stats', 'streak', 'dashboard', 'time in training', 'accuracy', 'speed'] },
-  { id: 'nav.post.progress.sessions', path: '/post/progress/sessions', label: 'Progress Sessions', section: 'POST', aliases: ['post-progress-sessions', 'progress-sessions', 'progress sessions', 'session-log'], keywords: ['session list', 'log', 'past runs', 'per-session', 'scores'] },
-  { id: 'nav.post.rhetoric', path: '/post/rhetoric', label: 'Rhetoric', section: 'POST', aliases: ['post-rhetoric', 'rhetoric', 'rhetorical practice'], keywords: ['writing', 'brainstorming', 'iambic pentameter', 'diacope', 'chiasmus', 'progressia', 'figures of speech'] },
-  { id: 'nav.post.rhetoric.meter', path: '/post/rhetoric/meter', label: 'Rhetoric Iambic Pentameter', section: 'POST', aliases: ['rhetoric-meter', 'iambic-pentameter', 'iambic pentameter', 'meter'], keywords: ['ten syllables', 'da-dum', 'verse', 'poetry', 'line'] },
-  { id: 'nav.post.rhetoric.diacope', path: '/post/rhetoric/diacope', label: 'Rhetoric Diacope', section: 'POST', aliases: ['rhetoric-diacope', 'diacope'], keywords: ['repetition', 'emphasis', 'figure of speech'] },
-  { id: 'nav.post.rhetoric.chiasmus', path: '/post/rhetoric/chiasmus', label: 'Rhetoric Chiasmus', section: 'POST', aliases: ['rhetoric-chiasmus', 'chiasmus'], keywords: ['reversal', 'mirror', 'crossed', 'figure of speech'] },
-  { id: 'nav.post.rhetoric.progressia', path: '/post/rhetoric/progressia', label: 'Rhetoric Progressia', section: 'POST', aliases: ['rhetoric-progressia', 'progressia'], keywords: ['escalation', 'build', 'climax', 'figure of speech'] },
-  { id: 'nav.post.rhetoric.brainstorm', path: '/post/rhetoric/brainstorm', label: 'Rhetorical Brainstorm', section: 'POST', aliases: ['rhetoric-brainstorm', 'rhetorical brainstorm', 'brainstorm'], keywords: ['angles', 'ideation', 'openings', 'metaphors'] },
-  { id: 'nav.post.wordplay', path: '/post/wordplay', label: 'Wordplay', section: 'POST', aliases: ['post-wordplay'] },
-  { id: 'nav.post.wordplay.compound-chain', path: '/post/wordplay/compound-chain', label: 'Compound Chain', section: 'POST', aliases: ['wordplay-compound-chain', 'compound-chain', 'compound chain'], keywords: ['compound words', 'seed word', 'chain'] },
-  { id: 'nav.post.wordplay.bridge-word', path: '/post/wordplay/bridge-word', label: 'Bridge Word', section: 'POST', aliases: ['wordplay-bridge-word', 'bridge-word', 'bridge word'], keywords: ['linking word', 'connector', 'puzzle'] },
-  { id: 'nav.post.wordplay.double-meaning', path: '/post/wordplay/double-meaning', label: 'Double Meaning', section: 'POST', aliases: ['wordplay-double-meaning', 'double-meaning', 'double meaning'], keywords: ['homonym', 'two meanings', 'pun'] },
-  { id: 'nav.post.wordplay.idiom-twist', path: '/post/wordplay/idiom-twist', label: 'Idiom Twist', section: 'POST', aliases: ['wordplay-idiom-twist', 'idiom-twist', 'idiom twist'], keywords: ['idiom', 'phrase', 'twist', 'domain swap'] },
+  { id: 'nav.post.memory.elements.study', path: '/post/memory/elements/element-study', label: 'Elements Flash Cards', section: 'POST' },
+  { id: 'nav.post.memory.elements.flash', path: '/post/memory/elements/element-flash', label: 'Element Flash', section: 'POST' },
+  { id: 'nav.post.memory.elements.lyrics', path: '/post/memory/elements/fill-blank', label: 'Elements Fill the Lyrics', section: 'POST' },
+  { id: 'nav.post.memory.elements.learn', path: '/post/memory/elements/learn', label: 'Elements Learn Lyrics', section: 'POST' },
+  { id: 'nav.post.morse', path: '/post/morse', label: 'Morse', section: 'POST' },
+  { id: 'nav.post.plan', path: '/post/plan', label: 'Practice Plan', section: 'POST' },
+  { id: 'nav.post.morse.copy', path: '/post/morse/copy', label: 'Morse Copy', section: 'POST' },
+  { id: 'nav.post.morse.head-copy', path: '/post/morse/head-copy', label: 'Morse Head Copy', section: 'POST' },
+  { id: 'nav.post.morse.send', path: '/post/morse/send', label: 'Morse Send', section: 'POST' },
+  { id: 'nav.post.morse.tree', path: '/post/morse?ref=tree', label: 'Morse Tree', section: 'POST' },
+  { id: 'nav.post.morse.length', path: '/post/morse?ref=length', label: 'Morse Length', section: 'POST' },
+  { id: 'nav.post.morse.list', path: '/post/morse?ref=list', label: 'Morse List', section: 'POST' },
+  { id: 'nav.post.progress', path: '/post/progress', label: 'Progress', section: 'POST' },
+  { id: 'nav.post.progress.sessions', path: '/post/progress/sessions', label: 'Progress Sessions', section: 'POST' },
+  { id: 'nav.post.rhetoric', path: '/post/rhetoric', label: 'Rhetoric', section: 'POST' },
+  { id: 'nav.post.rhetoric.meter', path: '/post/rhetoric/meter', label: 'Rhetoric Iambic Pentameter', section: 'POST' },
+  { id: 'nav.post.rhetoric.diacope', path: '/post/rhetoric/diacope', label: 'Rhetoric Diacope', section: 'POST' },
+  { id: 'nav.post.rhetoric.chiasmus', path: '/post/rhetoric/chiasmus', label: 'Rhetoric Chiasmus', section: 'POST' },
+  { id: 'nav.post.rhetoric.progressia', path: '/post/rhetoric/progressia', label: 'Rhetoric Progressia', section: 'POST' },
+  { id: 'nav.post.rhetoric.brainstorm', path: '/post/rhetoric/brainstorm', label: 'Rhetorical Brainstorm', section: 'POST' },
+  { id: 'nav.post.wordplay', path: '/post/wordplay', label: 'Wordplay', section: 'POST' },
+  { id: 'nav.post.wordplay.compound-chain', path: '/post/wordplay/compound-chain', label: 'Compound Chain', section: 'POST' },
+  { id: 'nav.post.wordplay.bridge-word', path: '/post/wordplay/bridge-word', label: 'Bridge Word', section: 'POST' },
+  { id: 'nav.post.wordplay.double-meaning', path: '/post/wordplay/double-meaning', label: 'Double Meaning', section: 'POST' },
+  { id: 'nav.post.wordplay.idiom-twist', path: '/post/wordplay/idiom-twist', label: 'Idiom Twist', section: 'POST' },
 
-  { id: 'nav.settings.ai-assignments', path: '/settings/ai-assignments', label: 'AI Assignments', section: 'Settings', tabId: 'ai-assignments', navGroup: 'Agents', aliases: ['ai-assignments', 'assignments', 'settings-ai-assignments', 'ai-inventory'], keywords: ['provider', 'model', 'pin', 'inventory', 'migration', 'llm'] },
-  { id: 'nav.settings.api-access', path: '/settings/api-access', label: 'API Access', section: 'Settings', tabId: 'api-access', navGroup: 'Access', aliases: ['api-access', 'settings-api-access', 'public-api', 'swagger', 'openapi'], keywords: ['rest', 'external', 'tts api', 'sdapi', 'voice api', 'docs', 'curl', 'expose', 'passwordless', 'auth gating'] },
-  { id: 'nav.devtools.api-explorer', path: '/api-reference/catalog', label: 'API Explorer', section: 'Dev Tools', aliases: ['api-explorer', 'api-reference', 'swagger-ui', 'rest-reference'], keywords: ['openapi', 'rest', 'endpoints', 'routes', 'agent tools', 'contracts', 'developer docs'] },
-  { id: 'nav.settings.autofixer', path: '/settings/autofixer', label: 'Autofixer', section: 'Settings', tabId: 'autofixer', navGroup: 'Agents', aliases: ['autofixer', 'settings-autofixer', 'auto-fixer'], keywords: ['crash', 'fix', 'pm2', 'repair', 'ai provider', 'restart'] },
-  { id: 'nav.settings.backup', path: '/settings/backup', label: 'Backup', section: 'Settings', tabId: 'backup', navGroup: 'System', aliases: ['backup', 'settings-backup'] },
-  { id: 'nav.settings.credentials', path: '/settings/credentials', label: 'Credentials', section: 'Settings', tabId: 'credentials', navGroup: 'Access', aliases: ['settings-credentials', 'credentials', 'api-keys', 'tokens'], keywords: ['configured', 'unconfigured', 'env', 'huggingface', 'civitai', 'jira', 'datadog', 'telegram'] },
-  { id: 'nav.settings.database', path: '/settings/database', label: 'Database', section: 'Settings', tabId: 'database', navGroup: 'System', aliases: ['settings-database', 'database'] },
-  { id: 'nav.settings.features', path: '/settings/features', label: 'Features', section: 'Settings', tabId: 'features', navGroup: 'System', aliases: ['settings-features', 'instance-features', 'feature-usage'], keywords: ['enabled', 'disabled', 'instance', 'optional', 'participation', 'metrics', 'reminders'] },
-  { id: 'nav.settings.general', path: '/settings/general', label: 'General', section: 'Settings', tabId: 'general', navGroup: 'System', aliases: ['settings', 'settings-general', 'general'] },
+  { id: 'nav.settings.ai-assignments', path: '/settings/ai-assignments', label: 'AI Assignments', section: 'Settings', tabId: 'ai-assignments', navGroup: 'Agents' },
+  { id: 'nav.settings.api-access', path: '/settings/api-access', label: 'API Access', section: 'Settings', tabId: 'api-access', navGroup: 'Access' },
+  { id: 'nav.devtools.api-explorer', path: '/api-reference/catalog', label: 'API Explorer', section: 'Dev Tools' },
+  { id: 'nav.settings.autofixer', path: '/settings/autofixer', label: 'Autofixer', section: 'Settings', tabId: 'autofixer', navGroup: 'Agents' },
+  { id: 'nav.settings.backup', path: '/settings/backup', label: 'Backup', section: 'Settings', tabId: 'backup', navGroup: 'System' },
+  { id: 'nav.settings.credentials', path: '/settings/credentials', label: 'Credentials', section: 'Settings', tabId: 'credentials', navGroup: 'Access' },
+  { id: 'nav.settings.database', path: '/settings/database', label: 'Database', section: 'Settings', tabId: 'database', navGroup: 'System' },
+  { id: 'nav.settings.features', path: '/settings/features', label: 'Features', section: 'Settings', tabId: 'features', navGroup: 'System' },
+  { id: 'nav.settings.general', path: '/settings/general', label: 'General', section: 'Settings', tabId: 'general', navGroup: 'System' },
   // Local-model management is its own top-level section (#4736), which grew to
   // cover every KIND of model this install manages (#4728) — image/video
   // checkpoints, LoRAs and their training datasets, embeddings, and the
   // image-to-3D runtimes. Several ids keep a `nav.settings.*` / `nav.media.*`
   // prefix: they are opaque and stored in palette history, so renaming them
   // would orphan those entries — only the path, label and section move.
-  { id: 'nav.models.comparison', path: '/models/comparison', label: 'Comparison', section: 'Models', tabId: 'comparison', navGroup: 'Evaluate', aliases: ['model-comparison', 'model-cost', 'model-intelligence'], keywords: ['benchmark', 'effort', 'cost', 'quota', 'compare', 'intelligence'] },
-  { id: 'nav.models.fallbacks', path: '/models/fallbacks', label: 'Fallbacks', section: 'Models', tabId: 'fallbacks', navGroup: 'Connect', aliases: ['fallbacks', 'provider-fallbacks', 'fallback-list', 'fallback-order'], keywords: ['failover', 'preset order', 'retry', 'next provider', 'usage limit', 'ordered list', 'wrap'] },
-  { id: 'nav.models.3d', path: '/models/3d', label: '3D', section: 'Models', tabId: '3d', navGroup: 'Library', aliases: ['3d-runtimes', 'image-to-3d-runtimes', 'trellis-install', 'pixal3d-install'], keywords: ['trellis', 'pixal3d', 'install', 'repair', 'runtime', 'mesh', 'image to 3d', 'on-device'] },
-  { id: 'nav.models.decision-classifiers', path: '/models/decision-classifiers', label: 'Decision Classifiers', section: 'Models', tabId: 'decision-classifiers', navGroup: 'Policies', aliases: ['decision-classifiers', 'classifiers'], keywords: ['jev', 'laya', 'mlx', 'decision systems', 'experiments'] },
-  { id: 'nav.models.laya-mlx', path: '/models/decision-classifiers/laya-mlx', label: 'Laya-MLX', section: 'Models', aliases: ['laya', 'laya-mlx', 'layla'], keywords: ['classifier', 'apple silicon', 'typed decisions'] },
-  { id: 'nav.models.code-reviewers', path: '/models/code-reviewers', label: 'Code Reviewers', section: 'Models', tabId: 'code-reviewers', navGroup: 'Policies', previousPaths: ['/settings/code-reviewers'], aliases: ['code-reviewers', 'settings-code-reviewers', 'code-review', 'review-defaults', 'reviewers'], keywords: ['review loop', 'reviewer chain', 'codex', 'copilot', 'ollama', 'stop mode', 'max rounds', 'defaults'] },
+  { id: 'nav.models.comparison', path: '/models/comparison', label: 'Comparison', section: 'Models', tabId: 'comparison', navGroup: 'Evaluate' },
+  { id: 'nav.models.fallbacks', path: '/models/fallbacks', label: 'Fallbacks', section: 'Models', tabId: 'fallbacks', navGroup: 'Connect' },
+  { id: 'nav.models.3d', path: '/models/3d', label: '3D', section: 'Models', tabId: '3d', navGroup: 'Library' },
+  { id: 'nav.models.decision-classifiers', path: '/models/decision-classifiers', label: 'Decision Classifiers', section: 'Models', tabId: 'decision-classifiers', navGroup: 'Policies' },
+  { id: 'nav.models.laya-mlx', path: '/models/decision-classifiers/laya-mlx', label: 'Laya-MLX', section: 'Models' },
+  { id: 'nav.models.code-reviewers', path: '/models/code-reviewers', label: 'Code Reviewers', section: 'Models', tabId: 'code-reviewers', navGroup: 'Policies', previousPaths: ['/settings/code-reviewers'] },
   // A task view of Code Reviewers, not a second sidebar destination. No tabId,
   // so the section navigator stays on Code Reviewers while ⌘K and voice can
   // still open the follow-up check directly.
-  { id: 'nav.models.code-reviewers.follow-up', path: '/models/code-reviewers/follow-up', label: 'Reviewer follow-up', section: 'Models', aliases: ['reviewer-follow-up', 'goal-fidelity', 'code-review-follow-up'], keywords: ['objective', 'fidelity', 'rethink', 'file issue', 'finished run', 'follow-up'] },
-  { id: 'nav.settings.embeddings', path: '/models/embeddings', label: 'Embeddings', section: 'Models', tabId: 'embeddings', navGroup: 'Library', previousPaths: ['/settings/embeddings'], aliases: ['settings-embeddings', 'embeddings', 'embedding'], keywords: ['vector', 'pgvector', 'semantic search', 'nomic', 'ollama', 'lm studio'] },
-  { id: 'nav.settings.local-llm', path: '/models/llms', label: 'Model Library', section: 'Models', tabId: 'llms', navGroup: 'Library', previousPaths: ['/settings/local-llm'], aliases: ['local-llm', 'local-llms', 'llms', 'models-llms', 'ollama', 'lm-studio', 'lmstudio'], keywords: ['ollama', 'lm studio', 'local model', 'local llm', 'gguf', 'pull model', 'install model', 'migrate', 'switch backend', 'llama.cpp'] },
-  { id: 'nav.models.llms.abuse', path: '/models/llms/abuse', label: 'Abuse Guard', section: 'Models', tabId: 'abuse', navGroup: 'Policies', aliases: ['abuse-guard', 'model-abuse', 'model-abuse-guard', 'prompt-guard', 'prompt guard'], keywords: ['classifier', 'prompt injection', 'security scan', 'llama prompt guard', 'install guard'] },
-  { id: 'nav.models.llms.jev', path: '/models/decision-classifiers/jev', label: 'Jev', section: 'Models', parentPath: '/models/decision-classifiers', previousPaths: ['/models/llms/jev'], aliases: ['jev', 'openjev', 'entailment', 'nli', 'decision-scorer'], keywords: ['entailment', 'nli', 'closed set', 'abstain', 'margin', 'scorer', 'decision', 'install jev'] },
-  { id: 'nav.models.jev.try', path: '/models/decision-classifiers/jev/try', label: 'Jev Try a decision', section: 'Models', aliases: ['jev-try'], keywords: ['jev', 'try'] },
-  { id: 'nav.models.jev.integrations', path: '/models/decision-classifiers/jev/integrations', label: 'Jev Integrations', section: 'Models', aliases: ['jev-integrations'], keywords: ['jev', 'integrations'] },
-  { id: 'nav.models.jev.results', path: '/models/decision-classifiers/jev/results', label: 'Jev Results', section: 'Models', aliases: ['jev-results'], keywords: ['jev', 'results'] },
-  { id: 'nav.models.jev.training', path: '/models/decision-classifiers/jev/training', label: 'Jev Training', section: 'Models', aliases: ['jev-training'], keywords: ['jev', 'training'] },
-  { id: 'nav.models.jev.setup', path: '/models/decision-classifiers/jev/setup', label: 'Jev Setup', section: 'Models', aliases: ['jev-setup'], keywords: ['jev', 'setup'] },
+  { id: 'nav.models.code-reviewers.follow-up', path: '/models/code-reviewers/follow-up', label: 'Reviewer follow-up', section: 'Models' },
+  { id: 'nav.settings.embeddings', path: '/models/embeddings', label: 'Embeddings', section: 'Models', tabId: 'embeddings', navGroup: 'Library', previousPaths: ['/settings/embeddings'] },
+  { id: 'nav.settings.local-llm', path: '/models/llms', label: 'Model Library', section: 'Models', tabId: 'llms', navGroup: 'Library', previousPaths: ['/settings/local-llm'] },
+  { id: 'nav.models.llms.abuse', path: '/models/llms/abuse', label: 'Abuse Guard', section: 'Models', tabId: 'abuse', navGroup: 'Policies' },
+  { id: 'nav.models.llms.jev', path: '/models/decision-classifiers/jev', label: 'Jev', section: 'Models', parentPath: '/models/decision-classifiers', previousPaths: ['/models/llms/jev'] },
+  { id: 'nav.models.jev.try', path: '/models/decision-classifiers/jev/try', label: 'Jev Try a decision', section: 'Models' },
+  { id: 'nav.models.jev.integrations', path: '/models/decision-classifiers/jev/integrations', label: 'Jev Integrations', section: 'Models' },
+  { id: 'nav.models.jev.results', path: '/models/decision-classifiers/jev/results', label: 'Jev Results', section: 'Models' },
+  { id: 'nav.models.jev.training', path: '/models/decision-classifiers/jev/training', label: 'Jev Training', section: 'Models' },
+  { id: 'nav.models.jev.setup', path: '/models/decision-classifiers/jev/setup', label: 'Jev Setup', section: 'Models' },
   // Split out of the LLMs page (#7414): managing the SERVERS that run models is
   // a different job from browsing the weights they serve, and it was the LLMs
   // default view, not a drill-down — so it gets a sibling tab rather than a
   // pill. Declared AFTER `nav.settings.local-llm` on purpose: alias collisions
   // resolve first-declared-wins, so "ollama"/"llms" keep landing on the
   // catalog page even though this page starts those servers too.
-  { id: 'nav.models.llms-runtimes', path: '/models/llms-runtimes', label: 'Runtimes', section: 'Models', tabId: 'llms-runtimes', navGroup: 'Connect', previousPaths: ['/models/llms/runtimes'], aliases: ['runtimes', 'llm-runtimes', 'local-runtimes', 'model-runtimes', 'llama-server', 'llama-cpp', 'slotstream', 'mtplx'], keywords: ['llama.cpp', 'llama-server', 'mtplx', 'slotstream', 'start server', 'stop server', 'local server', 'model server', 'speculative decoding', 'draft model', 'checkpoint', 'idle release'] },
-  { id: 'nav.media.loras', path: '/models/loras', label: 'LoRAs', section: 'Models', tabId: 'loras', navGroup: 'Library', previousPaths: ['/media/loras', '/settings/data-maintenance', '/media/training', '/media/training/:datasetId', '/models/training', '/models/training/:recordId'], preservePreviousPathSuffix: false, aliases: ['loras', 'lora', 'lora-manager', 'civitai', 'data-maintenance', 'retired-data', 'lora-training', 'training', 'datasets', 'train-lora', 'character-lora'], keywords: ['cleanup', 'obsolete', 'storage', 'delete', 'retired training', 'lora', 'civitai', 'fine-tune', 'style adapter', 'realstagram', 'photoreal', 'flux lora'] },
-  { id: 'nav.media.models', path: '/models/media', label: 'Media', section: 'Models', tabId: 'media', navGroup: 'Library', previousPaths: ['/media/models', '/media-models'], aliases: ['media-models', 'image-models', 'video-models', 'huggingface'], keywords: ['hf cache', 'model storage', 'disk', 'add model', 'install model', 'custom model'] },
-  { id: 'nav.models.performance', path: '/models/performance', label: 'Performance', section: 'Models', tabId: 'performance', navGroup: 'Evaluate', aliases: ['model-performance', 'performance', 'assessments', 'model-assessments', 'benchmark-models', 'tuning'], keywords: ['measure', 'assessment', 'benchmark', 'throughput', 'chars per second', 'ttft', 'context', 'tuning', 'llama.cpp', 'mtplx', 'vllm', 'which model', 'fastest model'] },
-  { id: 'nav.models.performance.results', path: '/models/performance/results', label: 'Performance Results', section: 'Models', aliases: ['performance-results', 'assessment-results'], keywords: ['measured results', 'model evidence', 'selected evidence', 'rankings'] },
-  { id: 'nav.models.performance.capabilities', path: '/models/performance/capabilities', label: 'Performance Capabilities', section: 'Models', aliases: ['performance-capabilities', 'model-capability-tests'], keywords: ['capability tests', 'model abilities', 'saved capability results'] },
-  { id: 'nav.models.performance.agent-checks', path: '/models/performance/agent-checks', label: 'Performance Agent Checks', section: 'Models', aliases: ['performance-agent-checks', 'model-agent-checks'], keywords: ['opencode', 'tui', 'agent task', 'pty'] },
-  { id: 'nav.models.performance.tuning', path: '/models/performance/tuning', label: 'Performance Tuning', section: 'Models', aliases: ['performance-tuning', 'assessment-tuning'], keywords: ['tuning comparison', 'sweep', 'launch knobs', 'tokens per second'] },
+  { id: 'nav.models.llms-runtimes', path: '/models/llms-runtimes', label: 'Runtimes', section: 'Models', tabId: 'llms-runtimes', navGroup: 'Connect', previousPaths: ['/models/llms/runtimes'] },
+  { id: 'nav.media.loras', path: '/models/loras', label: 'LoRAs', section: 'Models', tabId: 'loras', navGroup: 'Library', previousPaths: ['/media/loras', '/settings/data-maintenance', '/media/training', '/media/training/:datasetId', '/models/training', '/models/training/:recordId'], preservePreviousPathSuffix: false },
+  { id: 'nav.media.models', path: '/models/media', label: 'Media', section: 'Models', tabId: 'media', navGroup: 'Library', previousPaths: ['/media/models', '/media-models'] },
+  { id: 'nav.models.performance', path: '/models/performance', label: 'Performance', section: 'Models', tabId: 'performance', navGroup: 'Evaluate' },
+  { id: 'nav.models.performance.results', path: '/models/performance/results', label: 'Performance Results', section: 'Models' },
+  { id: 'nav.models.performance.capabilities', path: '/models/performance/capabilities', label: 'Performance Capabilities', section: 'Models' },
+  { id: 'nav.models.performance.agent-checks', path: '/models/performance/agent-checks', label: 'Performance Agent Checks', section: 'Models' },
+  { id: 'nav.models.performance.tuning', path: '/models/performance/tuning', label: 'Performance Tuning', section: 'Models' },
   // Absorbed the Dev Tools 'Model Resources' page (#4728), so its aliases and
   // keywords live here — 'model resources' and 'downloaded models' must keep
   // resolving after the fold.
-  { id: 'nav.models.status', path: '/models/status', label: 'Status', section: 'Models', tabId: 'status', navGroup: 'Operate', previousPaths: ['/system-resources/models'], aliases: ['model-status', 'models-status', 'memory-management', 'resident-models', 'model-resources', 'loaded-models', 'downloaded-models', 'model-memory'], keywords: ['memory', 'resident', 'loaded', 'unload', 'ram', 'vram', 'free memory', 'what is loaded', 'ollama', 'lm studio', 'hugging face', 'lora', 'delete model', 'disk'] },
-  { id: 'nav.models.subscriptions', path: '/models/subscriptions', label: 'Subscriptions', section: 'Models', tabId: 'subscriptions', navGroup: 'Operate', aliases: ['subscriptions', 'subscription', 'plans', 'ai-subscriptions', 'my-plans', 'model-subscriptions', 'billing', 'ai-billing'], keywords: ['plan', 'price', 'spend', 'cost', 'billing', 'enable', 'disable', 'claude max', 'chatgpt plus', 'pro', 'tier', 'savings', 'quota', 'usage', 'quotas'] },
-  { id: 'nav.settings.local-llm-playground', path: '/local-llm/playground', label: 'Playground', section: 'Models', tabId: 'playground', navGroup: 'Evaluate', aliases: ['llm-playground', 'playground', 'model-playground', 'compare-models'], keywords: ['ollama', 'lm studio', 'compare', 'benchmark', 'chat', 'test model', 'ttft', 'tokens per second', 'local llm'] },
-  { id: 'nav.settings.mortalloom', path: '/settings/mortalloom', label: 'MortalLoom', section: 'Settings', tabId: 'mortalloom', navGroup: 'Integrations', feature: 'health', aliases: ['settings-mortalloom', 'mortalloom'] },
-  { id: 'nav.settings.openclaw', path: '/openclaw', label: 'OpenClaw', section: 'Settings', tabId: 'openclaw', navGroup: 'Integrations', feature: 'openclaw', aliases: ['openclaw', 'settings-openclaw'], keywords: ['operator', 'chat', 'agent', 'runtime', 'sessions', 'streaming'] },
-  { id: 'nav.settings.orchestration', path: '/settings/orchestration', label: 'Orchestration Profiles', section: 'Settings', tabId: 'orchestration', navGroup: 'Agents', aliases: ['orchestration', 'orchestration-profiles', 'cos-orchestration', 'agent-roles'], keywords: ['orchestration', 'roles', 'architect', 'implementer', 'reviewer', 'profiles', 'cos', 'reasoning'] },
-  { id: 'nav.settings.security', path: '/settings/security', label: 'Security', section: 'Settings', tabId: 'security', navGroup: 'Access', aliases: ['security', 'password', 'auth', 'settings-security', 'login-password', 'auth-password', 'password-settings'], keywords: ['security', 'password', 'instance password', 'login', 'auth', 'authentication', 'sign-in', 'lock', 'tailnet', 'network security', 'sidecar'] },
-  { id: 'nav.capabilities', path: '/capabilities', label: 'Setup', section: 'Settings', aliases: ['setup', 'onboarding', 'walkthrough', 'capabilities', 'capability-map', 'integrations'], keywords: ['first run', 'status', 'setup', 'checklist', 'tailscale', 'https', 'dns', 'providers', 'connected systems', 'integrations', 'health overview'] },
-  { id: 'nav.settings.sharing', path: '/settings/sharing', label: 'Sharing', section: 'Settings', tabId: 'sharing', navGroup: 'Access', aliases: ['settings-sharing', 'sharing-settings'], keywords: ['display name', 'bio', 'attribution', 'identity', 'source'] },
-  { id: 'nav.settings.software', path: '/settings/software', label: 'Software', section: 'Settings', tabId: 'software', navGroup: 'System', aliases: ['software', 'installed-software', 'software-updates', 'components', 'settings-software', 'dependencies'], keywords: ['installed', 'version', 'update', 'upgrade', 'node', 'nvm', 'pm2', 'chrome', 'browser', 'harness', 'cli', 'ollama', 'lm studio', 'yt-dlp', 'blender', 'supercollider', 'docker', 'conda'] },
-  { id: 'nav.settings.telegram', path: '/settings/telegram', label: 'Telegram', section: 'Settings', tabId: 'telegram', navGroup: 'Integrations', aliases: ['settings-telegram', 'telegram'] },
-  { id: 'nav.settings.voice', path: '/settings/voice', label: 'Voice', section: 'Settings', tabId: 'voice', navGroup: 'Integrations', aliases: ['settings-voice', 'voice', 'voice-settings'], keywords: ['mic', 'microphone', 'speech', 'tts', 'whisper', 'kokoro'] },
-  { id: 'nav.settings.facetime', path: '/settings/voice', label: 'FaceTime Audio', section: 'Settings', feature: 'facetime', aliases: ['facetime', 'facetime-audio', 'call-settings'], keywords: ['facetime', 'audio call', 'call', 'hang up', 'blackhole'] },
-  { id: 'nav.settings.call-host', path: '/voice/call-host', label: 'Call Host', section: 'Settings', feature: 'facetime', aliases: ['call-host', 'voice-call-host', 'facetime-call-host', 'audio-bridge', 'meeting-capture', 'capture-audio'], keywords: ['facetime', 'call audio', 'blackhole', 'bridge', 'attach', 'microphone', 'speaker', 'call host', 'meeting capture', 'transcribe meeting', 'record meeting'] },
+  { id: 'nav.models.status', path: '/models/status', label: 'Status', section: 'Models', tabId: 'status', navGroup: 'Operate', previousPaths: ['/system-resources/models'] },
+  { id: 'nav.models.subscriptions', path: '/models/subscriptions', label: 'Subscriptions', section: 'Models', tabId: 'subscriptions', navGroup: 'Operate' },
+  { id: 'nav.settings.local-llm-playground', path: '/local-llm/playground', label: 'Playground', section: 'Models', tabId: 'playground', navGroup: 'Evaluate' },
+  { id: 'nav.settings.mortalloom', path: '/settings/mortalloom', label: 'MortalLoom', section: 'Settings', tabId: 'mortalloom', navGroup: 'Integrations', feature: 'health' },
+  { id: 'nav.settings.openclaw', path: '/openclaw', label: 'OpenClaw', section: 'Settings', tabId: 'openclaw', navGroup: 'Integrations', feature: 'openclaw' },
+  { id: 'nav.settings.orchestration', path: '/settings/orchestration', label: 'Orchestration Profiles', section: 'Settings', tabId: 'orchestration', navGroup: 'Agents' },
+  { id: 'nav.settings.security', path: '/settings/security', label: 'Security', section: 'Settings', tabId: 'security', navGroup: 'Access' },
+  { id: 'nav.capabilities', path: '/capabilities', label: 'Setup', section: 'Settings' },
+  { id: 'nav.settings.sharing', path: '/settings/sharing', label: 'Sharing', section: 'Settings', tabId: 'sharing', navGroup: 'Access' },
+  { id: 'nav.settings.software', path: '/settings/software', label: 'Software', section: 'Settings', tabId: 'software', navGroup: 'System' },
+  { id: 'nav.settings.telegram', path: '/settings/telegram', label: 'Telegram', section: 'Settings', tabId: 'telegram', navGroup: 'Integrations' },
+  { id: 'nav.settings.voice', path: '/settings/voice', label: 'Voice', section: 'Settings', tabId: 'voice', navGroup: 'Integrations' },
+  { id: 'nav.settings.facetime', path: '/settings/voice', label: 'FaceTime Audio', section: 'Settings', feature: 'facetime' },
+  { id: 'nav.settings.call-host', path: '/voice/call-host', label: 'Call Host', section: 'Settings', feature: 'facetime' },
 
-  { id: 'nav.ambient', path: '/ambient', label: 'Ambient', section: 'Dev Tools', aliases: ['ambient', 'ambient-mode', 'ambient mode'], keywords: ['idle', 'background', 'display', 'screensaver', 'fullscreen'] },
-  { id: 'nav.data', path: '/data', label: 'Data', section: 'Dev Tools', aliases: ['data'] },
-  { id: 'nav.instances', path: '/instances', label: 'Instances', section: 'Dev Tools', aliases: ['instances'] },
-  { id: 'nav.loops', path: '/loops', label: 'Loops', section: 'Dev Tools', aliases: ['loops'] },
-  { id: 'nav.devtools.processes', path: '/devtools/processes', label: 'Processes', section: 'Dev Tools', aliases: ['devtools-processes', 'processes'] },
-  { id: 'nav.security', path: '/security', label: 'Security Camera', section: 'Dev Tools', aliases: ['security-camera', 'camera-monitor', 'security-feed'], keywords: ['camera', 'webcam', 'microphone', 'audio level', 'feed'] },
-  { id: 'nav.system-health', path: '/system-resources/overview', label: 'System Resources', section: 'Dev Tools', tabGroup: 'system-resources', tabId: 'overview', tabLabel: 'Overview', previousPaths: ['/system-health', '/system-resources'], aliases: ['system-resources', 'system-health', 'system-status', 'memory-usage', 'cpu-usage'], keywords: ['health', 'memory', 'cpu', 'disk', 'thresholds', 'top processes', 'resource usage', 'build', 'commit', 'running build', 'stale build', 'which code is running'] },
-  { id: 'nav.system-resources.storage', path: '/system-resources/storage', label: 'Storage Report', section: 'Dev Tools', tabGroup: 'system-resources', tabId: 'storage', tabLabel: 'Storage', aliases: ['disk-usage', 'storage-report', 'disk-cleanup'], keywords: ['disk', 'storage', 'space', 'cleanup', 'cache', 'data usage', 'ai triage'] },
-  { id: 'nav.system-resources.queues', path: '/system-resources/queues', label: 'Active Queues', section: 'Dev Tools', tabGroup: 'system-resources', tabId: 'queues', tabLabel: 'Queues', aliases: ['active-queues', 'job-queues', 'pending-jobs', 'render-queue'], keywords: ['media jobs', 'agent tasks', 'pending', 'running', 'cancel', 'run now'] },
-  { id: 'nav.uploads', path: '/uploads', label: 'Uploads', section: 'Dev Tools', aliases: ['uploads'] },
+  { id: 'nav.ambient', path: '/ambient', label: 'Ambient', section: 'Dev Tools' },
+  { id: 'nav.data', path: '/data', label: 'Data', section: 'Dev Tools' },
+  { id: 'nav.instances', path: '/instances', label: 'Instances', section: 'Dev Tools' },
+  { id: 'nav.loops', path: '/loops', label: 'Loops', section: 'Dev Tools' },
+  { id: 'nav.devtools.processes', path: '/devtools/processes', label: 'Processes', section: 'Dev Tools' },
+  { id: 'nav.security', path: '/security', label: 'Security Camera', section: 'Dev Tools' },
+  { id: 'nav.system-health', path: '/system-resources/overview', label: 'System Resources', section: 'Dev Tools', tabGroup: 'system-resources', tabId: 'overview', tabLabel: 'Overview', previousPaths: ['/system-health', '/system-resources'] },
+  { id: 'nav.system-resources.storage', path: '/system-resources/storage', label: 'Storage Report', section: 'Dev Tools', tabGroup: 'system-resources', tabId: 'storage', tabLabel: 'Storage' },
+  { id: 'nav.system-resources.queues', path: '/system-resources/queues', label: 'Active Queues', section: 'Dev Tools', tabGroup: 'system-resources', tabId: 'queues', tabLabel: 'Queues' },
+  { id: 'nav.uploads', path: '/uploads', label: 'Uploads', section: 'Dev Tools' },
 
-  { id: 'nav.wiki.overview', path: '/wiki/overview', label: 'Wiki', section: 'Brain', tabGroup: 'wiki', tabId: 'overview', tabLabel: 'Overview', aliases: ['wiki'] },
-  { id: 'nav.wiki.browse', path: '/wiki/browse', label: 'Browse', section: 'Brain', tabGroup: 'wiki', tabId: 'browse', aliases: ['wiki-browse'] },
-  { id: 'nav.wiki.search', path: '/wiki/search', label: 'Search', section: 'Brain', tabGroup: 'wiki', tabId: 'search', aliases: ['wiki-search'] },
-  { id: 'nav.wiki.graph', path: '/wiki/graph', label: 'Graph', section: 'Brain', tabGroup: 'wiki', tabId: 'graph', aliases: ['wiki-graph'] },
-  { id: 'nav.wiki.log', path: '/wiki/log', label: 'Log', section: 'Brain', tabGroup: 'wiki', tabId: 'log', aliases: ['wiki-log'] },
+  { id: 'nav.wiki.overview', path: '/wiki/overview', label: 'Wiki', section: 'Brain', tabGroup: 'wiki', tabId: 'overview', tabLabel: 'Overview' },
+  { id: 'nav.wiki.browse', path: '/wiki/browse', label: 'Browse', section: 'Brain', tabGroup: 'wiki', tabId: 'browse' },
+  { id: 'nav.wiki.search', path: '/wiki/search', label: 'Search', section: 'Brain', tabGroup: 'wiki', tabId: 'search' },
+  { id: 'nav.wiki.graph', path: '/wiki/graph', label: 'Graph', section: 'Brain', tabGroup: 'wiki', tabId: 'graph' },
+  { id: 'nav.wiki.log', path: '/wiki/log', label: 'Log', section: 'Brain', tabGroup: 'wiki', tabId: 'log' },
 ];
 
 // A gated entry carries `feature`: the id of the optional instance feature it
@@ -590,181 +591,62 @@ export const expandPageToken = (text, runtime) => (
 // Every feature id this manifest gates on, for the registry-drift guard.
 export const NAV_FEATURE_IDS = [...new Set(NAV_COMMANDS.map((c) => c.feature).filter(Boolean))].sort();
 
-const seenIds = new Set();
-for (const cmd of NAV_COMMANDS) {
-  if (!cmd.id || !cmd.path || !cmd.label || !cmd.section) {
-    throw new Error(`navManifest: malformed entry ${JSON.stringify(cmd)}`);
-  }
-  if (!cmd.path.startsWith('/')) {
-    throw new Error(`navManifest: path must start with / — got "${cmd.path}" for ${cmd.id}`);
-  }
-  if (cmd.tabId !== undefined && (typeof cmd.tabId !== 'string' || !cmd.tabId.trim())) {
-    throw new Error(`navManifest: tabId must be a non-empty string — got "${cmd.tabId}" for ${cmd.id}`);
-  }
-  if (cmd.tabGroup !== undefined && (typeof cmd.tabGroup !== 'string' || !cmd.tabGroup.trim())) {
-    throw new Error(`navManifest: tabGroup must be a non-empty string — got "${cmd.tabGroup}" for ${cmd.id}`);
-  }
-  if (cmd.tabGroup !== undefined && !cmd.tabId) {
-    throw new Error(`navManifest: tabGroup requires tabId — ${cmd.id} declares tabGroup "${cmd.tabGroup}" with no tabId`);
-  }
-  if (cmd.navGroup !== undefined && (typeof cmd.navGroup !== 'string' || !cmd.navGroup.trim())) {
-    throw new Error(`navManifest: navGroup must be a non-empty string — got "${cmd.navGroup}" for ${cmd.id}`);
-  }
-  if (cmd.tabLabel !== undefined && (typeof cmd.tabLabel !== 'string' || !cmd.tabLabel.trim())) {
-    throw new Error(`navManifest: tabLabel must be a non-empty string — got "${cmd.tabLabel}" for ${cmd.id}`);
-  }
-  if (cmd.parentPath !== undefined) {
-    if (typeof cmd.parentPath !== 'string' || !cmd.parentPath.startsWith('/')) {
-      throw new Error(`navManifest: parentPath must start with / — got "${cmd.parentPath}" for ${cmd.id}`);
+if (!import.meta.env?.PROD) {
+  const seenIds = new Set();
+  for (const cmd of NAV_COMMANDS) {
+    if (!cmd.id || !cmd.path || !cmd.label || !cmd.section) {
+      throw new Error(`navManifest: malformed entry ${JSON.stringify(cmd)}`);
     }
-    if (!RAW_NAV_COMMANDS.some((c) => c.path === cmd.parentPath)) {
-      throw new Error(`navManifest: parentPath "${cmd.parentPath}" not found for ${cmd.id}`);
+    if (!cmd.path.startsWith('/')) {
+      throw new Error(`navManifest: path must start with / — got "${cmd.path}" for ${cmd.id}`);
     }
+    if (cmd.tabId !== undefined && (typeof cmd.tabId !== 'string' || !cmd.tabId.trim())) {
+      throw new Error(`navManifest: tabId must be a non-empty string — got "${cmd.tabId}" for ${cmd.id}`);
+    }
+    if (cmd.tabGroup !== undefined && (typeof cmd.tabGroup !== 'string' || !cmd.tabGroup.trim())) {
+      throw new Error(`navManifest: tabGroup must be a non-empty string — got "${cmd.tabGroup}" for ${cmd.id}`);
+    }
+    if (cmd.tabGroup !== undefined && !cmd.tabId) {
+      throw new Error(`navManifest: tabGroup requires tabId — ${cmd.id} declares tabGroup "${cmd.tabGroup}" with no tabId`);
+    }
+    if (cmd.navGroup !== undefined && (typeof cmd.navGroup !== 'string' || !cmd.navGroup.trim())) {
+      throw new Error(`navManifest: navGroup must be a non-empty string — got "${cmd.navGroup}" for ${cmd.id}`);
+    }
+    if (cmd.tabLabel !== undefined && (typeof cmd.tabLabel !== 'string' || !cmd.tabLabel.trim())) {
+      throw new Error(`navManifest: tabLabel must be a non-empty string — got "${cmd.tabLabel}" for ${cmd.id}`);
+    }
+    if (cmd.parentPath !== undefined) {
+      if (typeof cmd.parentPath !== 'string' || !cmd.parentPath.startsWith('/')) {
+        throw new Error(`navManifest: parentPath must start with / — got "${cmd.parentPath}" for ${cmd.id}`);
+      }
+      if (!RAW_NAV_COMMANDS.some((c) => c.path === cmd.parentPath)) {
+        throw new Error(`navManifest: parentPath "${cmd.parentPath}" not found for ${cmd.id}`);
+      }
+    }
+    if (seenIds.has(cmd.id)) throw new Error(`navManifest: duplicate id ${cmd.id}`);
+    seenIds.add(cmd.id);
   }
-  if (seenIds.has(cmd.id)) throw new Error(`navManifest: duplicate id ${cmd.id}`);
-  seenIds.add(cmd.id);
-}
 
-// `tabId` uniqueness is scoped to whichever axis owns it: a page's `tabGroup`
-// when it has one (Insights and Privacy can both use id "overview" — they're
-// different groups sharing the "Identity" section), otherwise the legacy
-// per-section scope `getSectionNavTabs` relies on (Settings/Models).
-const tabIdScopes = new Map();
-for (const command of NAV_COMMANDS) {
-  if (!command.tabId) continue;
-  const scopeKey = command.tabGroup ? `group:${command.tabGroup}` : `section:${command.section}`;
-  const scopedIds = tabIdScopes.get(scopeKey) || new Set();
-  if (scopedIds.has(command.tabId)) {
-    const scopeDesc = command.tabGroup ? `tabGroup "${command.tabGroup}"` : `section ${command.section}`;
-    throw new Error(`navManifest: duplicate tabId "${command.tabId}" in ${scopeDesc}`);
-  }
-  scopedIds.add(command.tabId);
-  tabIdScopes.set(scopeKey, scopedIds);
-}
-
-// Alias collisions resolve to the first-declared entry; ordering is load-bearing.
-const aliasToPath = {};
-for (const cmd of NAV_COMMANDS) {
-  for (const alias of (cmd.aliases || [])) {
-    if (!aliasToPath[alias]) aliasToPath[alias] = cmd.path;
+  // `tabId` uniqueness is scoped to whichever axis owns it: a page's `tabGroup`
+  // when it has one (Insights and Privacy can both use id "overview" — they're
+  // different groups sharing the "Identity" section), otherwise the legacy
+  // per-section scope `getSectionNavTabs` relies on (Settings/Models).
+  const tabIdScopes = new Map();
+  for (const command of NAV_COMMANDS) {
+    if (!command.tabId) continue;
+    const scopeKey = command.tabGroup ? `group:${command.tabGroup}` : `section:${command.section}`;
+    const scopedIds = tabIdScopes.get(scopeKey) || new Set();
+    if (scopedIds.has(command.tabId)) {
+      const scopeDesc = command.tabGroup ? `tabGroup "${command.tabGroup}"` : `section ${command.section}`;
+      throw new Error(`navManifest: duplicate tabId "${command.tabId}" in ${scopeDesc}`);
+    }
+    scopedIds.add(command.tabId);
+    tabIdScopes.set(scopeKey, scopedIds);
   }
 }
-
-export const getNavAliasMap = () => ({ ...aliasToPath });
 
 export const normalizeLabel = (s) => (s || '')
   .toLowerCase()
   .replace(/\s+/g, ' ')
   .trim()
   .replace(/[.!?:;,"']+$/, '');
-
-// Derive lookup keys using the same normalization as spoken input. Keep the
-// original alias for getNavAliasMap(), matched, and command ownership lookup.
-const normalizeNavAlias = (alias) => normalizeLabel(alias).replace(/\s+/g, '-');
-const normalizedAliases = new Map();
-for (const alias of Object.keys(aliasToPath)) {
-  const key = normalizeNavAlias(alias);
-  if (!normalizedAliases.has(key)) normalizedAliases.set(key, alias);
-}
-const ALIAS_KEYS = [...normalizedAliases.keys()];
-
-// "<section> <label>" as shown in the sidebar and ⌘K ("chief of staff agents",
-// "brain daily log"). Without this, the prefix tier below matches the section's
-// own short alias (`chief-of-staff`, `brain`) and lands on that section's first
-// page. Declared aliases keep precedence; first-declared phrase wins.
-const sectionLabelCommands = new Map();
-for (const cmd of NAV_COMMANDS) {
-  if (!cmd.section || !cmd.label) continue;
-  const key = normalizeNavAlias(`${cmd.section} ${cmd.label}`);
-  if (!normalizedAliases.has(key) && !sectionLabelCommands.has(key)) sectionLabelCommands.set(key, cmd);
-}
-
-const commandsByPath = new Map();
-for (const cmd of NAV_COMMANDS) {
-  if (!commandsByPath.has(cmd.path)) commandsByPath.set(cmd.path, cmd);
-}
-
-export const resolveNavCommand = (input) => {
-  if (!input || typeof input !== 'string') return null;
-  const norm = normalizeNavAlias(input);
-  if (!norm) return null;
-  const sectionLabelHit = sectionLabelCommands.get(norm);
-  if (sectionLabelHit) {
-    return { path: sectionLabelHit.path, matched: `${sectionLabelHit.section} ${sectionLabelHit.label}`, command: sectionLabelHit };
-  }
-
-  // Exact declared alias match keeps precedence.
-  const exactAlias = normalizedAliases.get(norm);
-  if (exactAlias) {
-    const path = aliasToPath[exactAlias];
-    const command = NAV_COMMANDS.find((c) => c.path === path && (c.aliases || []).includes(exactAlias))
-      || NAV_COMMANDS.find((c) => c.path === path);
-    return { path, matched: exactAlias, command };
-  }
-
-  // Section-alias + subpath ("digital twin goals" -> /digital-twin/goals).
-  // Runs before the prefix tier so the section alias doesn't hijack the page.
-  // Applies only to section-root aliases whose segment matches the alias, keeping
-  // the longest matching prefix when multiple section aliases qualify.
-  let subpathHit = null;
-  for (const a of ALIAS_KEYS) {
-    if (norm.startsWith(`${a}-`)) {
-      const rest = norm.slice(a.length + 1);
-      const origAlias = normalizedAliases.get(a);
-      const targetPath = aliasToPath[origAlias];
-      const base = targetPath?.split('?')[0].split('/').filter(Boolean)[0];
-      if (base && base === a) {
-        const candidatePath = `/${base}/${rest}`;
-        const command = commandsByPath.get(candidatePath);
-        if (command && (!subpathHit || a.length > subpathHit.alias.length)) {
-          subpathHit = {
-            path: candidatePath,
-            matched: `${origAlias.replace(/-/g, ' ')} ${rest.replace(/-/g, ' ')}`,
-            command,
-            alias: a,
-          };
-        }
-      }
-    }
-  }
-  if (subpathHit) {
-    return { path: subpathHit.path, matched: subpathHit.matched, command: subpathHit.command };
-  }
-
-  const tail = norm.split('-').filter(Boolean).pop();
-  // Each tier is { test, longest? }. `longest:true` picks the longest matching
-  // alias (so "meatspace health" prefers `meatspace-health` over the shorter
-  // `health` that also ends/contains-matches the input). Other tiers keep
-  // first-declared-wins ordering because shorter aliases there are intentional
-  // (e.g. `cos` should match before `cos-tasks` when input is bare "cos").
-  const tiers = [
-    { test: (a) => a === norm },
-    { test: (a) => norm.startsWith(a) && a.length >= 3 },
-    { test: (a) => a.startsWith(norm) },
-    { test: (a) => norm.endsWith(`-${a}`) && a.length >= 3, longest: true },
-    { test: (a) => norm.includes(a) && a.length >= 4, longest: true },
-    { test: (a) => a.includes(norm) },
-    { test: (a) => tail && tail !== norm && a === tail },
-  ];
-
-  let matched = null;
-  for (const { test, longest } of tiers) {
-    if (longest) {
-      const candidates = ALIAS_KEYS.filter(test);
-      if (candidates.length) {
-        matched = candidates.reduce((a, b) => (b.length > a.length ? b : a));
-        break;
-      }
-    } else {
-      matched = ALIAS_KEYS.find(test);
-      if (matched) break;
-    }
-  }
-  if (!matched) return null;
-
-  matched = normalizedAliases.get(matched);
-  const path = aliasToPath[matched];
-  const command = NAV_COMMANDS.find((c) => c.path === path && (c.aliases || []).includes(matched))
-    || NAV_COMMANDS.find((c) => c.path === path);
-  return { path, matched, command };
-};

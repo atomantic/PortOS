@@ -8,10 +8,11 @@ vi.mock('../../hooks/useSocketSubscription', () => ({ useSocketSubscription: vi.
 vi.mock('../../services/apiCodeAnimation.js', () => ({
   listCodeAnimationJobPage: vi.fn(),
   deleteCodeAnimationJob: vi.fn(),
+  cancelCodeAnimationGeneration: vi.fn(),
   requestCodeAnimationPoster: vi.fn(),
   codeAnimationPosterUrl: (id) => `/posters/${id}.jpg`,
 }));
-import { deleteCodeAnimationJob, listCodeAnimationJobPage } from '../../services/apiCodeAnimation.js';
+import { cancelCodeAnimationGeneration, deleteCodeAnimationJob, listCodeAnimationJobPage } from '../../services/apiCodeAnimation.js';
 import socket from '../../services/socket';
 import { useSocketSubscription } from '../../hooks/useSocketSubscription';
 import toast from '../ui/Toast';
@@ -95,5 +96,21 @@ describe('CodeAnimationGallery', () => {
     await user.click(screen.getByRole('button', { name: 'Load older animations' }));
     await screen.findByText('Older animation');
     expect(listCodeAnimationJobPage.mock.calls.at(-1)[0].cursor).toBe('older-again');
+  });
+
+  it('cancels a running card from the gallery and renders canceled status instead of failed', async () => {
+    const user = userEvent.setup();
+    cancelCodeAnimationGeneration.mockResolvedValue({ id: 'b', status: 'canceled', title: 'Still generating' });
+    render(<MemoryRouter><CodeAnimationGallery /></MemoryRouter>);
+    await screen.findByText('Still generating');
+
+    const cancelButton = screen.getByRole('button', { name: 'Cancel Still generating' });
+    await user.click(cancelButton);
+    expect(cancelCodeAnimationGeneration).toHaveBeenCalledWith('b', { silent: true });
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Cancel Still generating' })).toBeNull());
+    expect(screen.getAllByText('Canceled')).toHaveLength(2);
+    expect(screen.queryByText('Failed')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Delete Still generating' })).toBeInTheDocument();
   });
 });

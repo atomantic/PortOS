@@ -35,7 +35,9 @@ import { getBeeperRealtimeState } from './beeperSocket.js';
 import {
   probeBeeperInfo, getInfo, BeeperApiError, __setLastBeeperSuccessAtForTests,
 } from './beeperClient.js';
-import { getBeeperStatus, checkBeeperConnection, listBeeperAccounts } from './beeperStatus.js';
+import {
+  getBeeperStatus, checkBeeperConnection, listBeeperAccounts, __resetBeeperProbeCacheForTests,
+} from './beeperStatus.js';
 import { updateBeeperSweepProgress, __resetBeeperSweepProgressForTests } from './beeperSweepProgress.js';
 
 const DOWN_REALTIME_STATE = {
@@ -105,6 +107,8 @@ describe('listBeeperAccounts', () => {
 describe('getBeeperStatus', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
+    __resetBeeperProbeCacheForTests();
     __setLastBeeperSuccessAtForTests(null);
     vi.mocked(getSettings).mockResolvedValue({});
     // `clearAllMocks()` resets call history, not a mock's return value —
@@ -389,6 +393,8 @@ describe('getBeeperStatus', () => {
 describe('checkBeeperConnection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
+    __resetBeeperProbeCacheForTests();
     vi.mocked(getSettings).mockResolvedValue({});
   });
 
@@ -414,5 +420,136 @@ describe('checkBeeperConnection', () => {
     credential();
     vi.mocked(getInfo).mockResolvedValue({ app: { name: 'Beeper' }, server: { status: 'running' } });
     await expect(checkBeeperConnection()).resolves.toMatchObject({ reachable: true });
+  });
+
+  it('bypasses cached probe results and refreshes the cache on success', async () => {
+    credential();
+    vi.mocked(probeBeeperInfo).mockResolvedValue({
+      reachable: false, info: null, error: 'connection refused', timedOut: false, latencyMs: 4,
+    });
+
+    const initial = await getBeeperStatus();
+    expect(initial.reachable).toBe(false);
+    expect(probeBeeperInfo).toHaveBeenCalledTimes(1);
+
+    vi.mocked(getInfo).mockResolvedValue({
+      app: { name: 'Beeper', version: '4.4.0' }, server: { status: 'running' },
+    });
+    const live = await checkBeeperConnection();
+    expect(live.reachable).toBe(true);
+    expect(getInfo).toHaveBeenCalledTimes(1);
+
+    const refreshed = await getBeeperStatus();
+    expect(refreshed.reachable).toBe(true);
+    expect(refreshed.appVersion).toBe('4.4.0');
+    expect(probeBeeperInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it('invalidates a prior cached probe when the live check fails', async () => {
+    credential();
+    vi.mocked(probeBeeperInfo).mockResolvedValueOnce({
+      reachable: true, info: { app: { name: 'Beeper', version: '4.3.0' } }, error: null, timedOut: false, latencyMs: 5,
+    });
+
+    const initial = await getBeeperStatus();
+    expect(initial.reachable).toBe(true);
+
+    vi.mocked(getInfo).mockRejectedValue(new BeeperApiError('Beeper request failed', { status: 0, code: 'NETWORK_ERROR', retryable: false }));
+    await expect(checkBeeperConnection()).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+
+    vi.mocked(probeBeeperInfo).mockResolvedValueOnce({
+      reachable: false, info: null, error: 'connection refused', timedOut: false, latencyMs: 3,
+    });
+    const afterFailure = await getBeeperStatus();
+    expect(afterFailure.reachable).toBe(false);
+    expect(probeBeeperInfo).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('getBeeperStatus probe caching and coalescing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+    __resetBeeperProbeCacheForTests();
+    __setLastBeeperSuccessAtForTests(null);
+    vi.mocked(getSettings).mockResolvedValue({});
+    vi.mocked(getBeeperRealtimeState).mockReturnValue(DOWN_REALTIME_STATE);
+    __resetBeeperSweepProgressForTests();
+  });
+
+  it('coalesces concurrent probeBeeperInfo calls for the same baseUrl', async () => {
+    credential();
+    let resolveProbe;
+    vi.mocked(probeBeeperInfo).mockImplementation(() => new Promise((resolve) => {
+      resolveProbe = resolve;
+    }));
+
+    const p1 = getBeeperStatus();
+    const p2 = getBeeperStatus();
+    const p3 = getBeeperStatus();
+
+    await vi.waitFor(() => expect(probeBeeperInfo).toHaveBeenCalledTimes(1));
+    resolveProbe({
+      reachable: true, info: { app: { name: 'Beeper', version: '4.3.73' } }, error: null, timedOut: false, latencyMs: 9,
+    });
+
+    const [s1, s2, s3] = await Promise.all([p1, p2, p3]);
+    expect(probeBeeperInfo).toHaveBeenCalledTimes(1);
+    expect(s1.reachable).toBe(true);
+    expect(s2.appVersion).toBe('4.3.73');
+    expect(s3.probeLatencyMs).toBe(9);
+  });
+
+  it('reuses a cached probe within the short TTL and re-probes after expiry', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-24T00:00:00.000Z'));
+    credential();
+    vi.mocked(probeBeeperInfo)
+      .mockResolvedValueOnce({
+        reachable: true, info: { app: { name: 'Beeper', version: '4.3.73' } }, error: null, timedOut: false, latencyMs: 6,
+      })
+      .mockResolvedValueOnce({
+        reachable: false, info: null, error: 'connection refused', timedOut: false, latencyMs: 3,
+      });
+
+    const first = await getBeeperStatus();
+    expect(first.reachable).toBe(true);
+    expect(probeBeeperInfo).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(2500);
+    const cached = await getBeeperStatus();
+    expect(cached.reachable).toBe(true);
+    expect(probeBeeperInfo).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(2500);
+    const expired = await getBeeperStatus();
+    expect(expired.reachable).toBe(false);
+    expect(probeBeeperInfo).toHaveBeenCalledTimes(2);
+  });
+
+  it('keys the probe cache by baseUrl and skips cached probes when disconnected', async () => {
+    credential();
+    vi.mocked(getSettings).mockResolvedValue({ beeper: { baseUrl: 'http://127.0.0.1:23373' } });
+    vi.mocked(probeBeeperInfo)
+      .mockResolvedValueOnce({
+        reachable: true, info: { app: { name: 'Beeper', version: '1.0.0' } }, error: null, timedOut: false, latencyMs: 5,
+      })
+      .mockResolvedValueOnce({
+        reachable: true, info: { app: { name: 'Beeper', version: '2.0.0' } }, error: null, timedOut: false, latencyMs: 7,
+      });
+
+    const first = await getBeeperStatus();
+    expect(first.appVersion).toBe('1.0.0');
+
+    vi.mocked(getSettings).mockResolvedValue({ beeper: { baseUrl: 'http://127.0.0.1:23374' } });
+    const changedBaseUrl = await getBeeperStatus();
+    expect(changedBaseUrl.appVersion).toBe('2.0.0');
+    expect(probeBeeperInfo).toHaveBeenCalledTimes(2);
+
+    noCredential();
+    const disconnected = await getBeeperStatus();
+    expect(disconnected.reachable).toBeNull();
+    expect(disconnected.probeState).toBe('unknown');
+    expect(probeBeeperInfo).toHaveBeenCalledTimes(2);
   });
 });

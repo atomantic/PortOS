@@ -22,6 +22,7 @@ vi.mock('../services/apiCatalog.js', () => ({
 
 import CmdKSearchGate from './CmdKSearchGate.jsx';
 import KeyboardHelpGate from './KeyboardHelpGate.jsx';
+import ThemeSwitcherGate from './ThemeSwitcherGate.jsx';
 import { openCmdKSearch } from '../hooks/useCmdKSearch.js';
 
 beforeEach(() => {
@@ -62,5 +63,18 @@ describe('lazy shell overlay gates (#17007)', () => {
 
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByText('Keyboard Shortcuts')).not.toBeInTheDocument());
+  });
+
+  it('mounts ThemeSwitcher lazily when the theme trigger is clicked', async () => {
+    render(<ThemeSwitcherGate />);
+
+    const trigger = screen.getByRole('button', { name: /Switch theme/ });
+    expect(screen.queryByRole('menu', { name: 'Interface theme' })).not.toBeInTheDocument();
+
+    fireEvent.click(trigger);
+    expect(await screen.findByRole('menu', { name: 'Interface theme' })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('menu', { name: 'Interface theme' })).not.toBeInTheDocument());
   });
 });
