@@ -636,6 +636,7 @@ export function getOpencodeLocalProviderNamespace(provider) {
   if (provider?.llamaBacked === true) return 'llama';
   if (provider?.vllmBacked === true) return 'vllm';
   if (provider?.sglangBacked === true) return 'sglang';
+  if (provider?.splashBacked === true) return 'splash';
   // Hosted gateways (`providerGateways.js`) come LAST so a malformed record carrying both a local
   // marker and a gateway marker keeps its legacy local outcome, exactly as the old if-chain did
   // with `orcarouterBacked`.

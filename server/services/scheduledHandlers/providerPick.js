@@ -32,7 +32,7 @@ export function providerForFamily(providers, { familyId, providerId, prefer = 't
   const localRuntimeAllowed = unfamilied === true && !familyId && Boolean(providerId);
   const available = (providers || []).filter((provider) =>
     provider?.enabled
-    && (localRuntimeAllowed || (provider.ollamaBacked !== true && provider.lmstudioBacked !== true && provider.mtplxBacked !== true && provider.llamaBacked !== true && provider.vllmBacked !== true && provider.sglangBacked !== true))
+    && (localRuntimeAllowed || (provider.ollamaBacked !== true && provider.lmstudioBacked !== true && provider.mtplxBacked !== true && provider.llamaBacked !== true && provider.vllmBacked !== true && provider.sglangBacked !== true && provider.splashBacked !== true))
     && isProcessProvider(provider));
   if (providerId) return available.find((provider) => provider.id === providerId) || null;
   const inFamily = available.filter((provider) => !(provider.executionSourceProviderId || provider.executionSelectionRoot) && matchesFamily(provider, familyId));

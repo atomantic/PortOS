@@ -182,6 +182,7 @@ export const providerSchema = z.object({
   llamaBacked: z.boolean().optional(),
   vllmBacked: z.boolean().optional(),
   sglangBacked: z.boolean().optional(),
+  splashBacked: z.boolean().optional(),
   // Wrapper for a hosted OpenAI-compatible gateway (see internal/gateways.js);
   // its API key is read from the sibling API record of the SAME id at
   // spawn/refresh time and never stored here.

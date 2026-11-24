@@ -13,7 +13,7 @@ const methodNames = [
   'createProvider', 'createProviderModes', 'createProviderTuiMode', 'updateProvider',
   'applyProviderPatches', 'deleteProvider', 'testProvider', 'fetchProviderModelCatalog',
   'fetchProviderModels', 'refreshProviderModels', 'refreshProviderModelsBatch',
-  '_refreshAPIProviderModels', '_fetchMtplxModels', '_withCachedCheckpoints',
+  '_refreshAPIProviderModels', '_fetchSplashModels', '_fetchMtplxModels', '_withCachedCheckpoints',
   '_fetchLmstudioModels', '_fetchLlamaModels', '_fetchVllmModels', '_fetchSglangModels',
   '_fetchGatewayModels', '_refreshCLIProviderModels', '_fetchAntigravityModels',
   '_execCliModelList', '_fetchPiModels', '_fetchCursorModels', '_fetchCodexModels',

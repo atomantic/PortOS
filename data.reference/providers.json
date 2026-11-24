@@ -560,6 +560,66 @@
       "tuiPromptDelayMs": 2500,
       "tuiIdleTimeoutMs": 180000
     },
+    "opencode-splash": {
+      "id": "opencode-splash",
+      "name": "OpenCode · Splash (local)",
+      "type": "cli",
+      "command": "opencode",
+      "args": [
+        "run"
+      ],
+      "endpoint": "http://127.0.0.1:8001/v1",
+      "apiKey": "",
+      "splashBacked": true,
+      "models": [
+        "inkling2-mini"
+      ],
+      "defaultModel": "inkling2-mini",
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {
+        "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"allow\",\"provider\":{\"splash\":{\"npm\":\"@ai-sdk/openai-compatible\",\"name\":\"Splash (local)\",\"options\":{\"baseURL\":\"http://127.0.0.1:8001/v1\"}}}}"
+      },
+      "secretEnvVars": [],
+      "headlessArgs": []
+    },
+    "claude-splash": {
+      "id": "claude-splash",
+      "name": "Claude Code · Splash (local)",
+      "type": "cli",
+      "command": "claude",
+      "args": [
+        "--print"
+      ],
+      "endpoint": "http://127.0.0.1:8001/v1",
+      "splashBacked": true,
+      "models": [
+        "inkling2-mini"
+      ],
+      "defaultModel": "inkling2-mini",
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {
+        "ANTHROPIC_BASE_URL": "http://127.0.0.1:8001",
+        "ANTHROPIC_AUTH_TOKEN": "splash",
+        "ANTHROPIC_MODEL": "inkling2-mini",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "inkling2-mini",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "inkling2-mini",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "inkling2-mini",
+        "ANTHROPIC_SMALL_FAST_MODEL": "inkling2-mini",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "65536"
+      },
+      "secretEnvVars": [
+        "ANTHROPIC_AUTH_TOKEN"
+      ],
+      "headlessArgs": [
+        "--no-session-persistence",
+        "--disable-slash-commands",
+        "--tools",
+        ""
+      ]
+    },
     "orcarouter": {
       "id": "orcarouter",
       "name": "OrcaRouter",
@@ -1154,6 +1214,22 @@
       ],
       "defaultModel": "mtplx-qwen38-27b-optimized-speed",
       "timeout": 300000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": []
+    },
+    "splash": {
+      "id": "splash",
+      "name": "Splash (local)",
+      "type": "api",
+      "endpoint": "http://127.0.0.1:8001/v1",
+      "apiKey": "",
+      "splashBacked": true,
+      "models": [
+        "inkling2-mini"
+      ],
+      "defaultModel": "inkling2-mini",
+      "timeout": 600000,
       "enabled": false,
       "envVars": {},
       "secretEnvVars": []

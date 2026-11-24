@@ -18,6 +18,7 @@ export const LOCAL_RUNTIME_MANAGE_URLS = Object.freeze({
   vllm: null,
   sglang: null,
   slotstream: '/models/llms-runtimes',
+  splash: '/models/llms-runtimes/splash',
   mtplx: '/models/llms-runtimes',
 });
 

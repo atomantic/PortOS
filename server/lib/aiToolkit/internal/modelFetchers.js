@@ -52,6 +52,12 @@ export const MODEL_FETCHERS = [
     fetch: '_fetchLmstudioModels',
   },
   {
+    key: 'splash',
+    cliMatch: (p) => p?.splashBacked === true,
+    tuiMatch: (p) => p?.splashBacked === true,
+    fetch: '_fetchSplashModels',
+  },
+  {
     key: 'mtplx',
     // OpenAI-compatible endpoint probe, not `opencode models` (which describes the harness).
     cliMatch: (p) => p?.mtplxBacked === true,

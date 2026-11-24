@@ -33,8 +33,10 @@ const finiteNumber = (value, min, max) => {
 export function apiGenerationOptions(provider) {
   const ollama = isOllamaBackedProvider(provider);
   const lmstudio = provider?.lmstudioBacked === true;
+  const splash = provider?.splashBacked === true;
   if (!ollama
     && !lmstudio
+    && !splash
     && provider?.llamaBacked !== true
     && provider?.mtplxBacked !== true
     && provider?.vllmBacked !== true
@@ -48,7 +50,7 @@ export function apiGenerationOptions(provider) {
     // Ollama takes a native `think` boolean; llama.cpp / MTPLX / vLLM / SGLang
     // use the chat template. LM Studio takes neither (reasoning is a property of
     // the loaded model instance).
-    ...(typeof provider.thinking !== 'boolean' || lmstudio
+    ...(typeof provider.thinking !== 'boolean' || lmstudio || splash
       ? {}
       : ollama
         ? { think: provider.thinking }

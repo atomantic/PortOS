@@ -27,6 +27,7 @@ import { PROVIDER_GATEWAYS, PROVIDER_GATEWAY_IDS, gatewayById, isGatewayNamespac
 import { isPublicReviewNoToolProfile } from './agent/agentExecutionProfiles.js';
 import { isPlainObject } from './objects.js';
 import { PORTS } from './ports.js';
+import { SPLASH_CONTEXT, SPLASH_MODEL, SPLASH_ORIGIN } from './splashRuntime.js';
 
 import { isTruthyMeta } from './metadataFlags.js';
 const LLAMA_SERVER_BASE_URL = `http://127.0.0.1:${PORTS.LLAMA_SERVER}/v1`;
@@ -50,6 +51,11 @@ const OPENCODE_LOCAL_BASE_PROVIDERS = {
     npm: '@ai-sdk/openai-compatible',
     name: 'MTPLX (local MTP)',
     options: { baseURL: 'http://127.0.0.1:8000/v1' },
+  },
+  splash: {
+    npm: '@ai-sdk/openai-compatible',
+    name: 'Splash (local)',
+    options: { baseURL: `${SPLASH_ORIGIN}/v1` },
   },
   llama: {
     npm: '@ai-sdk/openai-compatible',
@@ -137,6 +143,8 @@ const THINKING_STYLE = {
   ollama: 'think',
   // LM Studio reasoning is a LOAD-TIME model property, not a documented per-request field; a toggle would pin a value nothing reads.
   lmstudio: null,
+  // Inkling chooses its own reasoning; do not translate the toggle into an Ollama field.
+  splash: null,
   mtplx: 'chatTemplate',
   llama: 'chatTemplate',
   vllm: 'chatTemplate',
@@ -154,6 +162,18 @@ const asObject = (value) => (isPlainObject(value) ? value : {});
 // renderer never sees on the next tool step. OpenCode 2 also migrates this
 // legacy model-level field when reading the `provider` config shape.
 function localModelEntry(providerKey, id, existing) {
+  if (providerKey === 'splash') {
+    // OpenCode otherwise assumes 0 context for a custom ID and never compacts.
+    const limits = id === SPLASH_MODEL ? { limit: { context: SPLASH_CONTEXT, output: 8192 } } : {};
+    return {
+      name: id,
+      reasoning: true,
+      interleaved: { field: 'reasoning_content' },
+      ...limits,
+      ...asObject(existing),
+      tool_call: true,
+    };
+  }
   if (providerKey !== 'ollama' || !/^inkling-2-mini(?::[^/]+)?$/.test(id)) {
     return { name: id, tool_call: true };
   }

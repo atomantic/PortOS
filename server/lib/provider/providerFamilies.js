@@ -52,7 +52,7 @@ export const familyLabel = (id) => PROVIDER_FAMILIES.find((f) => f.id === id)?.l
 
 /** The family id a single provider config belongs to, or null (a local-runtime wrapper, a pay-as-you-go API provider); the inverse of `resolveEnabledFamilies`, so cost reporting attributes spend to the subscription that covered it. */
 export function familyForProvider(provider) {
-  if (!provider || provider.ollamaBacked === true || provider.lmstudioBacked === true || provider.mtplxBacked === true || provider.llamaBacked === true || provider.vllmBacked === true || provider.sglangBacked === true) return null;
+  if (!provider || provider.ollamaBacked === true || provider.lmstudioBacked === true || provider.mtplxBacked === true || provider.llamaBacked === true || provider.vllmBacked === true || provider.sglangBacked === true || provider.splashBacked === true) return null;
   return PROVIDER_FAMILIES.find((f) => f.matches(provider))?.id ?? null;
 }
 

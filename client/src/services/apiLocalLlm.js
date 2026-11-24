@@ -155,6 +155,9 @@ export const installMtplx = () =>
 
 // Slotstream (SSD-streaming MoE on Apple Silicon) — a PM2-managed process,
 // same lifecycle shape as MTPLX. A start never downloads weights.
+export const getSplashRuntimeStatus = (options) =>
+  request('/local-llm/splash/status', options);
+
 export const getSlotstreamServerStatus = (options) =>
   request('/local-llm/slotstream/status', options);
 

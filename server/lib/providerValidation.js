@@ -59,6 +59,7 @@ export const providerSchema = z.object({
   // Marks an OpenCode CLI/TUI wrapper for a separately started local SGLang
   // container (Qwen3.8-27B on a Hopper/Blackwell card).
   sglangBacked: z.boolean().optional(),
+  splashBacked: z.boolean().optional(),
   // Marks an OpenCode CLI/TUI wrapper for a hosted OpenAI-compatible gateway
   // ('orcarouter', 'openrouter', 'nvidia-nim' — see server/lib/provider/providerGateways.js). The
   // sibling API record whose id equals this value owns the key.

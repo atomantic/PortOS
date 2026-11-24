@@ -18,6 +18,7 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
   startMtplxServer: vi.fn(),
   stopMtplxServer: vi.fn(),
   installMtplx: vi.fn(),
+  getSplashRuntimeStatus: vi.fn().mockResolvedValue({ supported: true, state: 'stopped' }),
   getSlotstreamServerStatus: vi.fn().mockResolvedValue({ installed: false, running: false, supported: true, cachedModels: [], memoryPlan: { targetGb: 22, expectedPeakGb: 22, expectedWarmDecodeToks: 8, auto: true } }),
   startSlotstreamServer: vi.fn(),
   stopSlotstreamServer: vi.fn(),
@@ -210,6 +211,19 @@ describe('LocalLlmRuntimesView information architecture', () => {
 });
 
 describe('runtime selection workflow', () => {
+  it('rechecks the externally managed Splash pilot without changing the default or starting anything', async () => {
+    const { getSplashRuntimeStatus, switchLocalLlmBackend } = await import('../../services/apiLocalLlm.js');
+    getSplashRuntimeStatus.mockResolvedValue({ supported: true, state: 'not-ready' });
+    await renderRuntimes('splash');
+    expect(await screen.findByText(/Splash is listening but not ready/)).toBeVisible();
+    expect(screen.getByText(/--host 127\.0\.0\.1 --port 8001/)).toBeVisible();
+    getSplashRuntimeStatus.mockResolvedValueOnce({ supported: true, state: 'external', model: 'inkling2-mini' });
+    fireEvent.click(screen.getByRole('button', { name: 'Check Splash status' }));
+    expect(await screen.findByText('Ready: serving inkling2-mini.')).toBeVisible();
+    expect(screen.queryByRole('button', { name: /stop splash|start splash|install splash/i })).not.toBeInTheDocument();
+    expect(switchLocalLlmBackend).not.toHaveBeenCalled();
+  });
+
   it('opens configuration from the roster and recovers an invalid deep link', async () => {
     const { getLlamaServerStatus } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue({ installed: false, running: false });

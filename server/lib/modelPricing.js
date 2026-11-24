@@ -539,7 +539,7 @@ export function isFreeProvider(providerOrId) {
   if (typeof providerOrId === 'string') return FREE_ID.test(providerOrId) || ZEN_PROVIDER_ID.test(providerOrId);
   const p = providerOrId;
   if (typeof p.servicePlan === 'string') return FREE_SERVICE_PLANS.has(p.servicePlan);
-  if (p.ollamaBacked === true || p.lmstudioBacked === true || p.mtplxBacked === true || p.llamaBacked === true || p.vllmBacked === true || p.sglangBacked === true) return true;
+  if (p.ollamaBacked === true || p.lmstudioBacked === true || p.mtplxBacked === true || p.llamaBacked === true || p.vllmBacked === true || p.sglangBacked === true || p.splashBacked === true) return true;
   if (FREE_ID.test(p.id || '') || FREE_ID.test(p.command || '')) return true;
   if (ZEN_PROVIDER_ID.test(p.id || '')) return true;
   if (typeof p.endpoint === 'string' && (isLoopbackEndpoint(p.endpoint) || ZEN_ENDPOINT.test(p.endpoint.trim()))) return true;

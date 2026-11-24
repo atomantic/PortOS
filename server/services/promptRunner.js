@@ -1133,6 +1133,7 @@ function isLocalInferenceProvider(provider) {
     || provider.mtplxBacked === true
     || provider.vllmBacked === true
     || provider.sglangBacked === true
+    || provider.splashBacked === true
     || isLocalEndpoint(provider.endpoint);
 }
 

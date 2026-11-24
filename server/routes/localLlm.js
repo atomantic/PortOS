@@ -57,6 +57,7 @@ import {
   upgradeLlamaServer,
 } from '../services/llamaServerManager.js'
 import { MTPLX_APP, getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx } from '../services/mtplxServerManager.js'
+import { getSplashRuntimeStatus } from '../services/splashRuntimeStatus.js'
 import { SLOTSTREAM_APP, getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream } from '../services/slotstreamServerManager.js'
 import { cancelSlotstreamModelDownload, downloadSlotstreamModel, previewSlotstreamDownload } from '../services/slotstreamModelManager.js'
 import { searchMtplxCatalog, pullMtplxModel, previewMtplxPull, removeMtplxModel } from '../services/mtplxModelManager.js'
@@ -1138,6 +1139,10 @@ router.post('/mtplx/models/remove', asyncHandler(async (req, res) => {
   const result = await removeMtplxModel(model)
   resetProviderReadinessCache()
   res.json(result)
+}))
+
+router.get('/splash/status', asyncHandler(async (_req, res) => {
+  res.json(await getSplashRuntimeStatus())
 }))
 
 // GET /api/local-llm/slotstream/status — binary, process, memory plan, cache, logs.

@@ -237,6 +237,7 @@ describe('LOCAL_RUNTIMES — user-facing copy names its page by route, never by 
     expect(LOCAL_RUNTIME_MANAGE_URLS).toEqual({
       llama: '/models/llms-runtimes',
       slotstream: '/models/llms-runtimes',
+      splash: '/models/llms-runtimes/splash',
       mtplx: '/models/llms-runtimes',
       ollama: '/models/llms',
       lmstudio: '/models/llms',

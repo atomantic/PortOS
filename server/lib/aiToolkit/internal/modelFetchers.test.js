@@ -51,6 +51,7 @@ const SHIPPED_REFRESHABLE = [
   // `/v1/messages` endpoint, but the catalog still comes from the OpenAI-side
   // listing — the `sglangBacked` marker selects that fetcher, not the command.
   'claude-sglang', 'claude-sglang-tui',
+  'splash', 'opencode-splash', 'claude-splash',
 ];
 const SHIPPED_NOT_REFRESHABLE = [
   'claude-code-tui-bedrock',

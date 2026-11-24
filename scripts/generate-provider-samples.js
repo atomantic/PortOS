@@ -60,12 +60,21 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { materializeRoute } from '../server/lib/provider/providerRouteRecipes.js';
+import { SPLASH_CONTEXT, SPLASH_MODEL, SPLASH_ORIGIN } from '../server/lib/splashRuntime.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(HERE, '..');
 
 export const SAMPLE_PATH = join(REPO_ROOT, 'server/lib/aiToolkit/defaults/providers.sample.json');
 export const REFERENCE_PATH = join(REPO_ROOT, 'data.reference/providers.json');
+
+const SPLASH_SEED = {
+  service: {
+    definitionId: 'splash',
+    transports: { openai: { baseUrl: `${SPLASH_ORIGIN}/v1` }, anthropic: { baseUrl: SPLASH_ORIGIN } },
+  },
+  overrides: { enabled: false, models: [SPLASH_MODEL], defaultModel: SPLASH_MODEL, timeout: 600000 },
+};
 
 /** The `activeProvider` both shipped files select on a fresh install. */
 const ACTIVE_PROVIDER = 'claude-code-tui';
@@ -80,7 +89,7 @@ const ACTIVE_PROVIDER = 'claude-code-tui';
 const KEY_ORDER = [
   'id', 'name', 'type', 'harnessId', 'method', 'serviceId', 'servicePlan',
   'command', 'args', 'endpoint', 'apiKey',
-  'ollamaBacked', 'lmstudioBacked', 'mtplxBacked', 'llamaBacked', 'vllmBacked', 'sglangBacked', 'gatewayBacked', 'orcarouterBacked',
+  'ollamaBacked', 'lmstudioBacked', 'mtplxBacked', 'llamaBacked', 'vllmBacked', 'sglangBacked', 'splashBacked', 'gatewayBacked', 'orcarouterBacked',
   'models', 'defaultModel', 'lightModel', 'mediumModel', 'heavyModel', 'ultraModel', 'memoryClassifierModel', 'fallbackProvider',
   'contextWindow', 'numCtx', 'temperature', 'thinking',
   'textTransport', 'ignoreUserConfig',
@@ -395,6 +404,32 @@ const TUPLES = [
     },
   },
 
+  {
+    id: 'opencode-splash', harnessId: 'opencode', method: 'cli', service: SPLASH_SEED.service,
+    overrides: {
+      ...SPLASH_SEED.overrides,
+      name: 'OpenCode · Splash (local)',
+      envVars: { OPENCODE_CONFIG_CONTENT: opencodeConfigContent('splash', 'Splash (local)', `${SPLASH_ORIGIN}/v1`) },
+    },
+  },
+  {
+    id: 'claude-splash', harnessId: 'claude', method: 'cli',
+    service: { ...SPLASH_SEED.service, credentials: { apiKey: 'splash' } },
+    overrides: {
+      ...SPLASH_SEED.overrides,
+      name: 'Claude Code · Splash (local)',
+      envVars: {
+        ANTHROPIC_MODEL: SPLASH_MODEL,
+        ANTHROPIC_DEFAULT_OPUS_MODEL: SPLASH_MODEL,
+        ANTHROPIC_DEFAULT_SONNET_MODEL: SPLASH_MODEL,
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: SPLASH_MODEL,
+        ANTHROPIC_SMALL_FAST_MODEL: SPLASH_MODEL,
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+        CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(SPLASH_CONTEXT),
+      },
+    },
+  },
+
   // --- Hosted gateways ---------------------------------------------------------
   {
     id: 'orcarouter', harnessId: 'direct', method: 'api', service: { definitionId: 'orcarouter', credentials: { apiKey: '' } },
@@ -652,6 +687,10 @@ const TUPLES = [
     },
   },
   {
+    id: 'splash', harnessId: 'direct', method: 'api', service: SPLASH_SEED.service,
+    overrides: { ...SPLASH_SEED.overrides, name: 'Splash (local)' },
+  },
+  {
     id: 'slotstream', harnessId: 'direct', method: 'api', service: { definitionId: 'slotstream', slug: 'slotstream', credentials: { apiKey: '' }, transports: { openai: { baseUrl: 'http://127.0.0.1:5564/v1' } } },
     overrides: {
       name: 'Slotstream (SSD-streaming MoE)', enabled: false, timeout: 300000, endpoint: 'http://127.0.0.1:5564/v1', apiKey: '',
@@ -710,13 +749,14 @@ export const PROVIDER_ORDER = [
   'opencode-mtplx', 'opencode-mtplx-tui', 'opencode-llama-tui',
   'opencode-vllm', 'opencode-vllm-tui', 'opencode-sglang', 'opencode-sglang-tui',
   'claude-sglang', 'claude-sglang-tui',
+  'opencode-splash', 'claude-splash',
   'orcarouter', 'opencode-orcarouter', 'openrouter', 'opencode-openrouter', 'opencode-openrouter-tui',
   'nvidia-nim', 'opencode-nvidia-nim', 'opencode-nvidia-nim-tui', 'opencode-orcarouter-tui',
   'opencode-zen', 'opencode-zen-cli', 'opencode-zen-tui',
   'codex', 'codex-tui', 'codex-ollama', 'codex-lmstudio',
   'claude-code-tui', 'claude-code-tui-bedrock',
   'antigravity-tui', 'antigravity-cli',
-  'cerebras', 'lmstudio', 'ollama', 'mtplx', 'slotstream',
+  'cerebras', 'lmstudio', 'ollama', 'mtplx', 'splash', 'slotstream',
   'grok', 'grok-cli', 'grok-tui', 'kimi-cli', 'kimi-tui', 'cursor-cli', 'cursor-tui',
 ];
 
