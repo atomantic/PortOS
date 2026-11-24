@@ -79,11 +79,9 @@ export function OverviewTab() {
 
   // Genome-Health card data
   const genomeAvailable = genomeData?.available;
-  const topMarker = genomeAvailable
-    ? genomeData.categories
-        ?.flatMap(c => c.markers)
-        .find(m => m.status === 'elevated_risk' || m.status === 'moderate_risk')
-    : null;
+  const markers = genomeAvailable ? genomeData.categories?.flatMap(category => category.markers) : undefined;
+  const topMarker = markers?.find(marker => marker.status === 'major_concern')
+    ?? markers?.find(marker => marker.status === 'concern');
 
   // Taste-Identity card data
   const themesAvailable = themesData?.available;
