@@ -98,7 +98,7 @@ describe('runBackup lifecycle', () => {
 
   // Unlike restore-only checks, this catches an unusable snapshot being
   // announced and persisted as healthy even though its SQL dump succeeded.
-  it.each(['legacy metadata', 'legacy universe config', 'legacy CoS config', 'converted', 'file escape hatch'])(
+  it.each(['legacy metadata', 'legacy universe config', 'legacy CoS config', 'legacy CoS agents', 'converted', 'file escape hatch'])(
     'reports restore compatibility through the backup response and durable status: %s', async (scenario) => {
       const fsp = await actualFs();
       const { getState, restoreSnapshot } = await import('./backup.js');
@@ -127,6 +127,7 @@ describe('runBackup lifecycle', () => {
           'cos/config.json': JSON.stringify({ userTasksFile: 'data/queues/user.md' }),
           'queues/user.md': '# User Tasks',
         },
+        'legacy CoS agents': { 'cos/state.json': JSON.stringify({ agents: {} }) },
       };
       const paths = scenarioPaths[scenario] ?? (legacy ? {
           'universes/universe-example/index.json': '{}',
@@ -142,6 +143,7 @@ describe('runBackup lifecycle', () => {
           'universes/universe-example/assets/sheet.png': 'synthetic asset',
           'writers-room/folders.imported.json': '[]',
           'TASKS.md.imported': '# User Tasks',
+          'cos/state.json': JSON.stringify({ stats: { totalTasks: 1 } }),
         });
       for (const [path, content] of Object.entries(paths)) {
         const target = joinPath(snapshotDir, 'data', path);
@@ -166,6 +168,7 @@ describe('runBackup lifecycle', () => {
         const scenarioDomains = {
           'legacy universe config': ['universes'],
           'legacy CoS config': ['cos-tasks'],
+          'legacy CoS agents': ['cos-agents'],
         };
         const domains = scenarioDomains[scenario]
           ?? ['universes', 'pipeline-issues', 'pipeline-series', 'story-builder', 'writers-room', 'creative-director', 'cos-tasks'];

@@ -760,6 +760,12 @@ export async function legacyDbMetadataDomains(srcDir, paths) {
     const index = await readJSONFileStrict(join(srcDir, 'universes', 'index.json'), null, { logError: false });
     if (!index.ok || index.value?.config?.runs !== undefined) domains.add('universes');
   }
+  if (paths.includes('cos/state.json')) {
+    const state = await readJSONFileStrict(join(srcDir, 'cos', 'state.json'), null, { logError: false });
+    if (!state.ok || (state.value && typeof state.value === 'object' && !Array.isArray(state.value) && Object.hasOwn(state.value, 'agents'))) {
+      domains.add('cos-agents');
+    }
+  }
   if (paths.length && !domains.has('cos-tasks') && (await snapshotLegacyCosTaskPaths(srcDir)).some(path => paths.includes(path))) {
     domains.add('cos-tasks');
   }
