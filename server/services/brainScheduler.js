@@ -14,6 +14,7 @@
 import * as storage from './brainStorage.js';
 import { runDailyDigest, runWeeklyReview, TOOL_FREE_REQUIRED } from './brain.js';
 import { getUserTimezone } from './userTimezone.js';
+import { maintenance, isMaintenanceHold } from '../lib/maintenanceAdmission.js';
 import { addLocalDays, getLocalParts, isLocalDay, todayInTimezone } from '../lib/timezone.js';
 
 let schedulerInterval = null;
@@ -136,10 +137,17 @@ function isWeeklyReviewMissed(settings, now, parts, timezone) {
 function logRunFailure(err, label, isCatchUp) {
   const refused = err.code === TOOL_FREE_REQUIRED;
   const log = refused ? console.log : console.error;
-  log(`🧠 Scheduler: ${refused ? '🚫 ' : ''}${label} ${refused ? 'skipped' : 'failed'}: ${err.message}${isCatchUp ? ' (retry in 30min)' : ''}`);
+  log(`🧠 Scheduler: ${refused ? '🚫 ' : ''}${label} ${refused ? 'skipped' : 'failed'}: ${err.message}${isCatchUp ? ' (no retry until restart)' : ''}`);
+}
+
+// A maintenance hold (every update boots into one) refuses the run before any
+// provider call, so it must not spend the one catch-up this boot allows.
+function logHeldRun(label) {
+  console.log(`🧠 Scheduler: ⏸️ ${label} waiting for maintenance to finish`);
 }
 
 async function checkSchedule() {
+  if (maintenance.held()) return;
   const now = new Date();
   const settings = await storage.loadMeta();
   const timezone = await getUserTimezone();
@@ -161,6 +169,11 @@ async function checkSchedule() {
     if (isCatchUp) dailyCatchUpAttempted = true;
     runDailyDigest()
       .catch(err => {
+        if (isMaintenanceHold(err)) {
+          if (isCatchUp) dailyCatchUpAttempted = false;
+          logHeldRun('Daily digest');
+          return;
+        }
         lastDailyFailure = new Date();
         logRunFailure(err, `${isCatchUp ? 'Catch-up d' : 'D'}aily digest`, isCatchUp);
       })
@@ -175,6 +188,11 @@ async function checkSchedule() {
     if (isCatchUp) weeklyCatchUpAttempted = true;
     runWeeklyReview()
       .catch(err => {
+        if (isMaintenanceHold(err)) {
+          if (isCatchUp) weeklyCatchUpAttempted = false;
+          logHeldRun('Weekly review');
+          return;
+        }
         lastWeeklyFailure = new Date();
         logRunFailure(err, `${isCatchUp ? 'Catch-up w' : 'W'}eekly review`, isCatchUp);
       })
