@@ -3,7 +3,7 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 
-const progress = vi.hoisted(() => ({ latest: null, frames: [] }));
+const progress = vi.hoisted(() => ({ latest: null, latestUrl: '/sse', closed: false, frames: [] }));
 vi.mock('../hooks/usePipelineProgress', () => ({ usePipelineProgress: () => progress }));
 vi.mock('../services/apiPipeline.js', async (importOriginal) => ({
   ...(await importOriginal()),
