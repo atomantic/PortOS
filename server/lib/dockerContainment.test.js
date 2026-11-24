@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -163,7 +163,34 @@ describe('selectApplicablePatch', () => {
     expect(selectApplicablePatch('--- a/yarn.lock\n+++ b/evil.sh\n')).toMatchObject({ patch: null, malformed: true });
   });
 
+  it('withholds binary diff entries instead of failing a mixed lockfile patch as malformed', () => {
+    const lock = '--- a/package-lock.json\n+++ b/package-lock.json\n@@ -1,2 +1,2 @@\n {\n-  "v": 1\n+  "v": 2\n';
+    const mixed = [
+      'Binary files a/assets/logo.png and b/assets/logo.png differ\n',
+      lock,
+      'Binary files a/assets/old.bin and /dev/null differ\n',
+    ].join('');
+    expect(selectApplicablePatch(mixed)).toEqual({
+      patch: lock,
+      applied: ['package-lock.json'],
+      withheld: ['assets/logo.png', 'assets/old.bin'],
+    });
+    expect(selectApplicablePatch('Binary files a/assets/logo.png and b/assets/logo.png differ\n')).toEqual({
+      patch: null,
+      applied: [],
+      withheld: ['assets/logo.png'],
+    });
+    expect(selectApplicablePatch('Binary files a/package-lock.json and b/package-lock.json differ\n')).toEqual({
+      patch: null,
+      applied: [],
+      withheld: ['package-lock.json'],
+    });
+  });
+
   it.each([
+    ['mismatched binary diff paths', 'Binary files a/foo.bin and b/bar.bin differ\n'],
+    ['tab-comment spoofing in binary diff', 'Binary files a/foo.bin\t/package-lock.json and b/foo.bin\t/package-lock.json differ\n'],
+    ['parent traversal in binary diff', 'Binary files a/../evil.bin and b/../evil.bin differ\n'],
     ['tab-comment spoofing package.json', '--- a/package.json\t/package-lock.json\n+++ b/package.json\t/package-lock.json\n@@ -1 +1 @@\n-a\n+b\n'],
     ['tab-comment spoofing hook', '--- a/.husky/pre-commit\t/package-lock.json\n+++ b/.husky/pre-commit\t/package-lock.json\n@@ -1 +1 @@\n-a\n+b\n'],
     ['tab timestamp suffix', '--- a/package-lock.json\t2026-01-01\n+++ b/package-lock.json\t2026-01-01\n@@ -1 +1 @@\n-a\n+b\n'],
@@ -241,10 +268,10 @@ describe('selectApplicablePatch', () => {
 });
 
 describe('DOCKER_CONTAINMENT_DRIVER patch creation', () => {
-  const runDriver = (root, command) => {
+  const runDriver = (root, command, extraEnv = {}) => {
     const script = DOCKER_CONTAINMENT_DRIVER.replace(/\/(src|work|in|out)(?![.\w])/g, (_, dir) => join(root, dir));
     return execFileSync('/bin/sh', ['-c', script, 'portos-contained', 'install', command], {
-      env: { PATH: process.env.PATH, HOME: join(root, 'tmp', 'home'), TMPDIR: join(root, 'tmp') },
+      env: { PATH: process.env.PATH, HOME: join(root, 'tmp', 'home'), TMPDIR: join(root, 'tmp'), ...extraEnv },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -257,6 +284,51 @@ describe('DOCKER_CONTAINMENT_DRIVER patch creation', () => {
     writeFileSync(join(root, 'in', 'tracked.lst'), 'package-lock.json\n');
     return root;
   };
+
+  it.runIf(process.platform !== 'win32')('diffs changed and deleted text files without forking cmp and skips binary files', () => {
+    const root = setupDriverRoot();
+    try {
+      mkdirSync(join(root, 'bin'), { recursive: true });
+      const cmpShim = join(root, 'bin', 'cmp');
+      writeFileSync(cmpShim, '#!/bin/sh\necho "cmp should not be called" >&2\nexit 99\n');
+      chmodSync(cmpShim, 0o755);
+
+      mkdirSync(join(root, 'src', 'submod'), { recursive: true });
+      writeFileSync(join(root, 'src', 'unchanged.txt'), 'same\n');
+      writeFileSync(join(root, 'src', 'deleted.txt'), 'gone\n');
+      writeFileSync(join(root, 'src', 'asset.bin'), Buffer.from([0x89, 0x50, 0x00, 0x01]));
+      writeFileSync(join(root, 'src', 'deleted.bin'), Buffer.from([0x00, 0x02, 0x03]));
+      symlinkSync('unchanged.txt', join(root, 'src', 'link.txt'));
+      writeFileSync(
+        join(root, 'in', 'tracked.lst'),
+        ['package-lock.json', 'unchanged.txt', 'deleted.txt', 'asset.bin', 'deleted.bin', 'submod', 'link.txt', 'missing.txt'].join('\n') + '\n',
+      );
+
+      const cmd = [
+        "printf '%s\\n' '{\"v\":2}' > package-lock.json",
+        "node -e 'require(\"fs\").writeFileSync(\"asset.bin\", Buffer.from([0x89, 0x50, 0x00, 0x99, 0xaa]))'",
+        'rm -f deleted.txt deleted.bin',
+      ].join(' && ');
+      runDriver(root, cmd, { PATH: `${join(root, 'bin')}:${process.env.PATH}` });
+
+      const written = readFileSync(join(root, 'out', 'changes.patch'), 'utf8');
+      expect(written).toContain('--- a/package-lock.json');
+      expect(written).toContain('+{"v":2}');
+      expect(written).toContain('--- a/deleted.txt');
+      expect(written).toContain('+++ /dev/null');
+      expect(written).not.toContain('unchanged.txt');
+      expect(written).not.toContain('asset.bin');
+      expect(written).not.toContain('deleted.bin');
+      expect(written).not.toContain('Binary files');
+      expect(selectApplicablePatch(written)).toEqual({
+        patch: expect.stringContaining('--- a/package-lock.json'),
+        applied: ['package-lock.json'],
+        withheld: ['deleted.txt'],
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it.runIf(process.platform !== 'win32')('removes a pre-existing read-only forged patch file before writing the real diff', () => {
     const root = setupDriverRoot();

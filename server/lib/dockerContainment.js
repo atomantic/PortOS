@@ -278,20 +278,36 @@ patch_fail() { echo "portos-contained: could not write the patch" >&2; exit 125;
 patch=${DOCKER_CONTAINMENT_PATHS.output}/${DOCKER_CONTAINMENT_PATCH_FILE}
 rm -f "$patch" && : > "$patch" || patch_fail
 if [ -f ${DOCKER_CONTAINMENT_PATHS.input}/${DOCKER_CONTAINMENT_TRACKED_LIST} ]; then
-  {
-    while IFS= read -r f; do
-      [ -n "$f" ] || continue
-      if [ -e "${DOCKER_CONTAINMENT_PATHS.work}/$f" ]; then
-        if ! cmp -s "${DOCKER_CONTAINMENT_PATHS.src}/$f" "${DOCKER_CONTAINMENT_PATHS.work}/$f"; then
-          diff -u --label "a/$f" --label "b/$f" "${DOCKER_CONTAINMENT_PATHS.src}/$f" "${DOCKER_CONTAINMENT_PATHS.work}/$f"
-          [ $? -le 1 ] || patch_fail
-        fi
-      elif [ -e "${DOCKER_CONTAINMENT_PATHS.src}/$f" ]; then
-        diff -u --label "a/$f" --label /dev/null "${DOCKER_CONTAINMENT_PATHS.src}/$f" /dev/null
-        [ $? -le 1 ] || patch_fail
-      fi
-    done < ${DOCKER_CONTAINMENT_PATHS.input}/${DOCKER_CONTAINMENT_TRACKED_LIST}
-  } >> "$patch" || patch_fail
+  node -e '
+const fs = require("fs"), path = require("path"), { spawnSync } = require("child_process");
+const [srcDir, workDir, trackedFile, patchFile] = process.argv.slice(1);
+const fd = fs.openSync(patchFile, "w");
+try {
+  const diff = (args) => {
+    const r = spawnSync("diff", args, { stdio: ["ignore", fd, "inherit"] });
+    if (r.error || (r.status !== 0 && r.status !== 1)) throw new Error("diff failed");
+  };
+  for (const f of fs.readFileSync(trackedFile, "utf8").split("\\n")) {
+    if (!f) continue;
+    const s = path.join(srcDir, f), w = path.join(workDir, f);
+    const ss = fs.lstatSync(s, { throwIfNoEntry: false });
+    if (!ss || !ss.isFile()) continue;
+    const ws = fs.lstatSync(w, { throwIfNoEntry: false });
+    if (ws) {
+      if (!ws.isFile()) continue;
+      const sb = fs.readFileSync(s), wb = fs.readFileSync(w);
+      if (ss.size === ws.size && sb.equals(wb)) continue;
+      if (sb.includes(0) || wb.includes(0)) continue;
+      diff(["-u", "--label", "a/" + f, "--label", "b/" + f, "--", s, w]);
+    } else {
+      if (fs.readFileSync(s).includes(0)) continue;
+      diff(["-u", "--label", "a/" + f, "--label", "/dev/null", "--", s, "/dev/null"]);
+    }
+  }
+} finally {
+  fs.closeSync(fd);
+}
+' "${DOCKER_CONTAINMENT_PATHS.src}" "${DOCKER_CONTAINMENT_PATHS.work}" "${DOCKER_CONTAINMENT_PATHS.input}/${DOCKER_CONTAINMENT_TRACKED_LIST}" "$patch" || patch_fail
 fi
 exit $status
 `;
@@ -324,6 +340,13 @@ export function selectApplicablePatch(text) {
   const sections = [];
   let i = 0;
   while (i < lines.length) {
+    const binary = /^Binary files a\/(.+) and (?:b\/(.+)|\/dev\/null) differ$/.exec(lines[i]);
+    if (binary) {
+      if ((binary[2] !== undefined && binary[2] !== binary[1]) || !isSafePatchPath(binary[1])) return malformedPatch();
+      sections.push({ path: binary[1], text: lines[i], binary: true });
+      i += 1;
+      continue;
+    }
     const from = /^--- a\/(.+)$/.exec(lines[i]);
     const to = /^\+\+\+ (?:b\/(.+)|\/dev\/null)$/.exec(lines[i + 1] ?? '');
     if (!from || !to || (to[1] !== undefined && to[1] !== from[1])) return malformedPatch();
@@ -360,14 +383,14 @@ export function selectApplicablePatch(text) {
       while (lines[i]?.startsWith('\\')) i += 1;
     }
     if (hunkCount === 0) return malformedPatch();
-    sections.push({ path: from[1], text: lines.slice(start, i).join('\n') });
+    sections.push({ path: from[1], text: lines.slice(start, i).join('\n'), binary: false });
   }
-  const applicable = (path) => DOCKER_CONTAINMENT_APPLY_BASENAMES.includes(posix.basename(path));
-  const kept = sections.filter((section) => applicable(section.path));
+  const applicable = (section) => !section.binary && DOCKER_CONTAINMENT_APPLY_BASENAMES.includes(posix.basename(section.path));
+  const kept = sections.filter(applicable);
   return {
     patch: kept.length ? `${kept.map((section) => section.text).join('\n')}\n` : null,
     applied: kept.map((section) => section.path),
-    withheld: sections.filter((section) => !applicable(section.path)).map((section) => section.path),
+    withheld: sections.filter((section) => !applicable(section)).map((section) => section.path),
   };
 }
 
