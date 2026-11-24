@@ -15,6 +15,7 @@ vi.mock('../../voice/VoicePicker', () => ({ default: () => null }));
 vi.mock('../../ui/Toast', () => ({ default: Object.assign(vi.fn(), { error: vi.fn() }) }));
 
 import ManuscriptReadAloud from './ManuscriptReadAloud';
+import toast from '../../ui/Toast';
 
 const CONTENT = 'The AI woke. Dawn came.';
 const segment = (index, start, end, verification) => ({
@@ -59,5 +60,24 @@ describe('ManuscriptReadAloud segment review', () => {
     fireEvent.click(screen.getByText('Re-render'));
     await waitFor(() => expect(screen.queryByText(/need a listen/)).not.toBeInTheDocument());
     expect(api.rerenderNarrationSegment).toHaveBeenCalledWith('The AI woke.', undefined, undefined, { silent: true });
+  });
+  it('resumes playback on the new file when the playing sentence is re-rendered', async () => {
+    api.rerenderNarrationSegment.mockResolvedValue({
+      filename: 'fresh.wav', durationMs: 600, verification: { status: 'matched', similarity: 1, heard: 'The AI woke' },
+    });
+    await open();
+    const playCalls = window.HTMLMediaElement.prototype.play.mock.calls.length;
+    expect(playCalls).toBeGreaterThan(0);
+    fireEvent.click(screen.getByText('Re-render'));
+    await waitFor(() => expect(document.querySelector('audio').getAttribute('src')).toContain('fresh.wav'));
+    await waitFor(() => expect(window.HTMLMediaElement.prototype.play.mock.calls.length).toBeGreaterThan(playCalls));
+  });
+
+  it('stops playback and toasts when the audio element errors', async () => {
+    await open();
+    expect(screen.getByText('Pause')).toBeInTheDocument();
+    fireEvent.error(document.querySelector('audio'));
+    await waitFor(() => expect(screen.queryByText('Pause')).not.toBeInTheDocument());
+    expect(toast.error).toHaveBeenCalledWith('Audio playback failed for this sentence');
   });
 });

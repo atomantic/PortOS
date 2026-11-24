@@ -96,9 +96,15 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
     [segments],
   );
 
+  const currentSrc = (currentIndex >= 0 && segments?.[currentIndex])
+    ? `/data/audio/${encodeURIComponent(segments[currentIndex].filename)}`
+    : undefined;
+
   // Drive the <audio> element from (currentIndex, isPlaying). The src is bound
   // in JSX from currentIndex, so changing index reloads + plays from the start
-  // of that segment; toggling isPlaying without an index change pauses/resumes.
+  // of that segment; currentSrc is a dep so re-rendering the active sentence
+  // (new filename, same index) reloads the element and resumes; toggling
+  // isPlaying without an index change pauses/resumes.
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -112,7 +118,7 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
     } else {
       audio.pause();
     }
-  }, [currentIndex, isPlaying]);
+  }, [currentIndex, isPlaying, currentSrc]);
 
   const runNarration = async () => {
     if (!content.trim()) {
@@ -275,9 +281,13 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
     return nodes;
   }, [segments, content, currentIndex, jumpTo]);
 
-  const currentSrc = (currentIndex >= 0 && segments?.[currentIndex])
-    ? `/data/audio/${encodeURIComponent(segments[currentIndex].filename)}`
-    : undefined;
+  // A 404/undecodable segment never fires `ended`; without this the Pause button
+  // would stay active over silence.
+  const onAudioError = () => {
+    if (!currentSrc) return;
+    setIsPlaying(false);
+    toast.error('Audio playback failed for this sentence');
+  };
 
   const progressPct = totalMs > 0 ? Math.min(100, (elapsedMs / totalMs) * 100) : 0;
 
@@ -411,7 +421,7 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
       </div>
 
       {/* Hidden engine — playback is driven by the controls above. */}
-      <audio ref={audioRef} src={currentSrc} onEnded={onEnded} onTimeUpdate={onTimeUpdate} className="hidden">
+      <audio ref={audioRef} src={currentSrc} onEnded={onEnded} onTimeUpdate={onTimeUpdate} onError={onAudioError} className="hidden">
         <track kind="captions" />
       </audio>
     </Modal>
