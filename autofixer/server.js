@@ -1,5 +1,5 @@
 import { readFile, writeFile, mkdir, access, rename } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 // Dependency-light shared module (node builtins + pure arg builder only), so
 // importing it from this standalone process doesn't pull in the AI toolkit.
 // Lets the autofixer honor the user's configured CLI provider/model instead
@@ -66,7 +66,7 @@ async function readJsonSafe(file, fallback) {
   try {
     return JSON.parse(data);
   } catch (err) {
-    console.error(`❌ [Autofixer] Corrupt JSON in ${file}: ${err.message}`);
+    console.error(`❌ [Autofixer] Corrupt JSON in ${basename(file)} (${err.code || 'parse error'})`);
     return fallback;
   }
 }
@@ -320,7 +320,7 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   // ISOLATION REQUIREMENT: no git checkout ⇒ no rollback boundary ⇒ we refuse
   // to run an autonomous, file-editing agent driven by untrusted logs.
   if (!(await isGitRepo(app.repoPath))) {
-    const reason = `refusing autonomous repair: ${app.repoPath} is not a git checkout (no rollback boundary)`;
+    const reason = `refusing autonomous repair for ${processName}: app checkout is not a git repository (no rollback boundary)`;
     console.error(`🛑 [Autofixer] ${reason}`);
     return finalize({ success: false, exitCode: -1, error: reason, extra: { isolated: false } });
   }
