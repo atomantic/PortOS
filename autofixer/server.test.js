@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { writeFile, rename, readdir, rm } from 'node:fs/promises';
+import { chmod, mkdir, writeFile, rename, readdir, rm } from 'node:fs/promises';
 
 const harness = vi.hoisted(() => ({
   apps: vi.fn(), sweep: vi.fn(), index: null, metadataExists: false, validate: vi.fn(), pm2: vi.fn(), list: vi.fn(), provider: vi.fn(),
   settings: {}, isGit: vi.fn(), startUi: vi.fn(), verify: vi.fn(), apply: vi.fn(), sessionMetadata: {},
+  diff: '',
 }));
 vi.mock('./ui.js', () => ({ startAutofixerUi: harness.startUi }));
 vi.mock('./shared.js', () => ({
@@ -18,6 +19,7 @@ vi.mock('node:fs/promises', () => ({
     return '{}';
   }),
   writeFile: vi.fn(async () => {}), mkdir: vi.fn(async () => {}),
+  chmod: vi.fn(async () => {}),
   // Session metadata exists only when a test marks it recorded (shutdown ran first).
   access: vi.fn(async file => { if (String(file).endsWith('metadata.json') && !harness.metadataExists) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); }),
   rename: vi.fn(async () => {}),
@@ -26,16 +28,17 @@ vi.mock('node:fs/promises', () => ({
   rm: vi.fn(async () => {}),
 }));
 vi.mock('../server/lib/agentGuard/index.js', () => ({ agentGuardEnv: () => ({}) }));
-vi.mock('../server/lib/cliProviderRun.js', () => ({
+vi.mock('../server/lib/cliProviderRun.js', async importOriginal => ({
+  ...await importOriginal(),
   runCliProviderPrompt: harness.provider,
 }));
-vi.mock('./sandbox.js', () => ({
+vi.mock('./sandbox.js', async importOriginal => ({
+  buildFixPrompt: (await importOriginal()).buildFixPrompt,
   sanitizeChildEnv: () => ({}), collectSecretEnvValues: () => [],
-  buildFixPrompt: ({ errorLogs, outputLogs }) => JSON.stringify({ errorLogs, outputLogs }),
   pickRepairProvider: () => ({ provider: { id: 'example-cli' }, mode: 'claude-disallowed-tools' }), isGitRepo: (...args) => harness.isGit(...args),
   repairWorkspaceHold: async () => null,
   createDisposableWorktree: async () => ({ path: '/example/worktree' }),
-  collectWorktreeDiff: async () => '', removeWorktree: vi.fn(),
+  collectWorktreeDiff: async () => harness.diff, removeWorktree: vi.fn(),
   sweepStaleWorktrees: harness.sweep,
   validateProposedDiff: harness.validate,
   applyDiffToLive: harness.apply, revertDiffFromLive: vi.fn(), runVerifyCommand: harness.verify,
@@ -57,6 +60,7 @@ beforeEach(() => {
   harness.provider.mockReset().mockResolvedValue({ error: 'Example agent stopped', exitCode: 1 });
   harness.settings = {};
   harness.isGit.mockReset().mockResolvedValue(true);
+  harness.diff = '';
   harness.startUi.mockReset().mockResolvedValue(vi.fn());
   harness.index = null;
   harness.metadataExists = false;
@@ -128,7 +132,57 @@ describe('Autofixer daemon repair input boundary', () => {
     harness.pm2.mockResolvedValue({ stdout: '' });
     await nextCycle();
     expect(harness.provider).toHaveBeenCalledOnce();
-    expect(JSON.parse(harness.provider.mock.calls[0][0].prompt)).toEqual({ errorLogs: '', outputLogs: '' });
+    const { prompt } = harness.provider.mock.calls[0][0];
+    expect(prompt).toContain('(no error logs available)');
+    expect(prompt).toContain('(no output logs available)');
+  });
+
+  it('sends and stores scrubbed crash evidence and keeps repair artifacts private', async () => {
+    const err = 'crash at file:///Users/example-user/app.js:8 with Bearer fake-token-only-for-tests';
+    const out = 'connected to example-machine.tailnet.ts.net for example@example.com at 202-555-0147';
+    const transcriptToken = 'ghp_fakeTokenForAutofixerTestsOnly';
+    harness.pm2.mockImplementation(async args => ({ stdout: args.includes('--err') ? err : out }));
+    harness.diff = 'example validated patch';
+    harness.validate.mockReturnValue({ ok: true, files: ['example.js'] });
+    harness.provider.mockImplementation(async ({ onData }) => {
+      onData(`transcript ${transcriptToken}`, 'stdout');
+      return { exitCode: 0, partial: false };
+    });
+    vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    harness.index = JSON.stringify([{ sessionId: 'legacy', promptPreview: 'old preview' }]);
+
+    await start();
+
+    expect(harness.provider).toHaveBeenCalledOnce();
+    const { prompt } = harness.provider.mock.calls[0][0];
+    expect(prompt).toContain('crash at file:///Users/<user>/app.js:8 with [REDACTED]');
+    expect(prompt).toContain('connected to <host> for <email> at <phone>');
+    for (const original of ['example-user', 'fake-token-only-for-tests', 'example-machine', 'example@example.com', '202-555-0147']) {
+      expect(prompt).not.toContain(original);
+    }
+    const artifact = (name) => writeFile.mock.calls.find(([path]) => path.endsWith(`/${name}`));
+    expect(artifact('prompt.txt')[1]).toBe(prompt);
+    expect(artifact('output.txt')[1]).toBe('transcript [REDACTED]');
+    expect(artifact('fix.patch')[1]).toBe(harness.diff);
+    const rows = JSON.parse(artifact('index.json.tmp')[1]);
+    expect(rows).toEqual([expect.objectContaining({ staged: true, outputSize: 'transcript [REDACTED]'.length }), { sessionId: 'legacy' }]);
+    expect(rows[0]).not.toHaveProperty('promptPreview');
+    for (const name of ['prompt.txt', 'output.txt', 'fix.patch', 'metadata.json.tmp', 'index.json.tmp']) {
+      const [path, , options] = artifact(name);
+      expect(options.mode).toBe(0o600);
+      expect(chmod).toHaveBeenCalledWith(path, 0o600);
+      const chmodCalls = chmod.mock.calls.flatMap((args, i) =>
+        args[0] === path ? [chmod.mock.invocationCallOrder[i]] : []);
+      const writeCall = writeFile.mock.invocationCallOrder[writeFile.mock.calls.indexOf(artifact(name))];
+      expect(chmodCalls[0]).toBeLessThan(writeCall);
+      if (name.endsWith('.tmp')) {
+        const renameCall = rename.mock.calls.findIndex(([source]) => source === path);
+        expect(chmodCalls.at(-1)).toBeLessThan(rename.mock.invocationCallOrder[renameCall]);
+      }
+    }
+    const sessions = '/example/autofixer/sessions';
+    expect(mkdir).toHaveBeenCalledWith(sessions, { recursive: true, mode: 0o700 });
+    expect(mkdir).toHaveBeenCalledWith(`${sessions}/${rows[0].sessionId}`, { recursive: true, mode: 0o700 });
   });
 
   it('reports registry failure without a false empty-installation message and retries', async () => {
@@ -187,6 +241,21 @@ describe('Autofixer daemon repair input boundary', () => {
     const tmpWrite = writeFile.mock.calls.findIndex(([f]) => f === '/example/index.json.tmp');
     expect(tmpWrite).toBeGreaterThanOrEqual(0);
     expect(rename).toHaveBeenCalledWith('/example/index.json.tmp', '/example/index.json');
+  });
+
+  it('creates a missing history index exclusively with private permissions', async () => {
+    harness.apps.mockResolvedValue([]);
+    let indexCreated = false;
+    chmod.mockImplementation(async path => {
+      if (path === '/example/index.json' && !indexCreated) {
+        indexCreated = true;
+        throw Object.assign(new Error('missing index'), { code: 'ENOENT' });
+      }
+    });
+    await start();
+    expect(writeFile).toHaveBeenCalledExactlyOnceWith('/example/index.json', '[]', { flag: 'wx', mode: 0o600 });
+    expect(rename).not.toHaveBeenCalled();
+    expect(harness.startUi).toHaveBeenCalledOnce();
   });
 
   it.each([true, false])('removes evicted sessions only after a successful index commit (%s)', async commitSucceeds => {

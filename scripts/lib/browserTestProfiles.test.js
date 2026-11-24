@@ -6,11 +6,13 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES, BROWSER_FIDELITY_TESTS, browserProfileAcceptedVerdicts, browserTestProfileArgs, browserTestProfileFiles, localPerformanceTagViolations } from './browserTestProfiles.js';
 
-const smokeNames = [
-  'generates and exports a Three.js scene with visible authored content',
-  'renders a generated 3-second card/still/clip document with the selected performance in-point',
-  'propagates a deadline through a pending seek and waits for owned Chrome cleanup',
-];
+const smokeNames = {
+  'server/services/musicVideo/documentRender.browser.test.js': ['propagates a deadline through a pending seek and waits for owned Chrome cleanup'],
+  'server/services/musicVideo/documentRenderGeneration.browser.test.js': [
+    'generates and exports a Three.js scene with visible authored content',
+    'renders a generated 3-second card/still/clip document with the selected performance in-point',
+  ],
+};
 const completeReport = () => ({
   numPassedTests: Object.values(BROWSER_FIDELITY_TESTS).flat().length, numFailedTests: 0,
   testResults: Object.entries(BROWSER_FIDELITY_TESTS).map(([name, titles]) => ({
@@ -104,7 +106,7 @@ export default { test: { globals: true, maxWorkers: 1, include: ['server/**/*.te
 globalSetup: [${JSON.stringify(new URL('../vitestTempRootSetup.js', import.meta.url).href)}] } };`);
       for (const [file, titles] of Object.entries(BROWSER_FIDELITY_TESTS)) {
         const path = join(temp, file); mkdirSync(dirname(path), { recursive: true });
-        const names = file.includes('documentRender') ? [...smokeNames, ...titles] : titles;
+        const names = [...(smokeNames[file] ?? []), ...titles];
         writeFileSync(path, names.map(title => `it(${JSON.stringify(title)}, () => {});`).join('\n'));
       }
       const passed = {};
@@ -122,7 +124,7 @@ globalSetup: [${JSON.stringify(new URL('../vitestTempRootSetup.js', import.meta.
         passed[profile] = report.testResults.flatMap(suite => suite.assertionResults)
           .filter(assertion => assertion.status === 'passed').map(assertion => assertion.title).sort();
       }
-      expect(passed.smoke).toEqual([...smokeNames].sort());
+      expect(passed.smoke).toEqual(Object.values(smokeNames).flat().sort());
       expect(passed.fidelity).toEqual(Object.values(BROWSER_FIDELITY_TESTS).flat().sort());
       expect([...passed.smoke, ...passed.fidelity.filter(title => !title.includes('[local-performance]'))].sort()).toEqual(passed.full);
       expect(passed.fidelity.filter(title => title.includes('[local-performance]'))).toHaveLength(1);

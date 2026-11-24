@@ -55,7 +55,7 @@ describe('database image is pinned to a manifest digest', () => {
   });
 });
 
-it('requires the live pg_dump restore in the hosted DB job without a memo or availability skip', () => {
+it('runs the selected live pg_dump restore without a memo or availability skip', () => {
   const workflow = readText(join(ROOT, '.github/workflows/ci.yml'));
-  expect(workflow).toMatch(/name: Restore a real pg_dump into a scratch database\n\s+timeout-minutes: \d+\n\s+env:\n\s+PORTOS_DB_RESTORE_LIVE: '1'\n\s+PGMODE: native\n\s+run: cd server && npx --no-install vitest run services\/backupDatabaseDump\.restore\.live\.test\.js\n/);
+  expect(workflow).toMatch(/name: Restore a real pg_dump into a scratch database\n\s+if: fromJSON\(needs\.impact\.outputs\.plan\)\.db_live_restore\n\s+timeout-minutes: \d+\n\s+env:\n\s+PORTOS_DB_RESTORE_LIVE: '1'\n\s+PGMODE: native\n\s+run: cd server && npx --no-install vitest run services\/backupDatabaseDump\.restore\.live\.test\.js\n/);
 });

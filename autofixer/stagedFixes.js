@@ -1,6 +1,7 @@
-import { readFile, writeFile, rename } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { validateProposedDiff, applyDiffToLive, revertDiffFromLive } from './sandbox.js';
+import { writeHistoryJson } from './historyFiles.js';
 
 // Session IDs name a directory under sessions/, so they stay inside one
 // filesystem-safe segment. PM2 names may contain dots (lib/pm2ProcessName.js);
@@ -101,11 +102,7 @@ export function createStagedFixStore({ root, loadApps, execPm2 }) {
     await save(id, updated);
     return { success: true, disposition };
   };
-  const save = async (id, record) => {
-    const destination = join(sessionDir(id), 'metadata.json');
-    await writeFile(`${destination}.tmp`, JSON.stringify(record, null, 2));
-    await rename(`${destination}.tmp`, destination);
-  };
+  const save = (id, record) => writeHistoryJson(join(sessionDir(id), 'metadata.json'), record);
   return {
     read,
     serialize,

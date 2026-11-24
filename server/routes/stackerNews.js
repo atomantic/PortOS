@@ -83,6 +83,9 @@ const feedbackSchema = z.object({ feedback: z.string().trim().min(1).max(4_000) 
 const requireId = (value, label = 'ID') => {
   if (!uuid.safeParse(value).success) throw new ServerError(`Invalid ${label}`, { status: 400 });
 };
+const requireAccount = async (id) => {
+  if (!(await stackerNews.getAccount(id))) throw new ServerError('Stacker News account not found', { status: 404 });
+};
 const emitChanged = (req, accountId) => req.app.get('io')?.emit('stacker-news:changed', { accountId });
 
 router.get('/accounts', asyncHandler(async (_req, res) => res.json({ accounts: await stackerNews.listAccounts() })));
@@ -144,6 +147,7 @@ router.post('/accounts/:id/sync', asyncHandler(async (req, res) => {
 
 router.get('/accounts/:id/territories', asyncHandler(async (req, res) => {
   requireId(req.params.id, 'account ID');
+  await requireAccount(req.params.id);
   res.json({ territories: await stackerNews.listTerritories(req.params.id) });
 }));
 
@@ -176,6 +180,7 @@ router.delete('/territories/:id', asyncHandler(async (req, res) => {
 
 router.get('/accounts/:id/items', asyncHandler(async (req, res) => {
   requireId(req.params.id, 'account ID');
+  await requireAccount(req.params.id);
   res.json({ items: await stackerNews.listItems(req.params.id) });
 }));
 
@@ -203,6 +208,7 @@ router.post('/analyses/:id/feedback', asyncHandler(async (req, res) => {
 
 router.get('/accounts/:id/actions', asyncHandler(async (req, res) => {
   requireId(req.params.id, 'account ID');
+  await requireAccount(req.params.id);
   res.json({ actions: await stackerNews.listActions(req.params.id) });
 }));
 

@@ -56,7 +56,10 @@ export function useVideoGenBackendCaps({ enabled, mode }) {
   const [reactorAspect, setReactorAspect] = useState('');
 
   // Each fal model has its own resolution and audio capabilities.
+  const falModelPickRef = useRef(falModelId);
   useEffect(() => {
+    if (falModelPickRef.current === falModelId) return;
+    falModelPickRef.current = falModelId;
     setFalResolution('');
     setFalGenerateAudio(false);
   }, [falModelId]);
@@ -133,7 +136,12 @@ export function useVideoGenBackendCaps({ enabled, mode }) {
     if (p.mode === 'fal') {
       setBackend('fal');
       if (p.duration) setFalDuration(p.duration);
-      if (p.modelId) setFalModelId(p.modelId);
+      if (p.modelId) {
+        falModelPickRef.current = p.modelId;
+        setFalModelId(p.modelId);
+      }
+      setFalResolution(p.resolution || '');
+      setFalGenerateAudio(p.generateAudio === true);
       return imageOrText(p);
     }
     if (p.mode === 'higgsfield') {

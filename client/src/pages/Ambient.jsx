@@ -167,7 +167,7 @@ export default function Ambient() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto min-h-0 overscroll-contain">
+      <main id="main-content" className="flex-1 overflow-y-auto min-h-0 overscroll-contain">
         <div className="min-h-full flex flex-col items-center justify-center p-8 gap-8">
         <div className="text-center">
           <div className="text-7xl sm:text-8xl md:text-9xl font-mono font-light tracking-wider text-white/90 tabular-nums">
@@ -268,7 +268,7 @@ export default function Ambient() {
           </AmbientPanel>
         </div>
         </div>
-      </div>
+      </main>
 
       <div className={`px-6 py-3 flex justify-between items-center text-xs text-gray-700 transition-opacity duration-500 ${
         idle ? 'opacity-30' : 'opacity-100'

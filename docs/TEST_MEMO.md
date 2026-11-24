@@ -527,6 +527,12 @@ newest trusted lineage. The DB job runs the `db` scope
 its own `-db-` lineage. The DB config, `server/scripts/init-db.sql` and
 `server/scripts/setup-db-test.mjs` are base inputs (a schema change
 invalidates every key) and `PGDATABASE` is a keyed env var.
+The DB job restores the memo and counts remaining tests before provisioning
+`portos_test` or installing verification tools. It skips those steps and the
+DB runner when the count is zero and the impact plan does not request a live
+restore. The real `pg_dump` restore runs outside the memo on full plans,
+changes matching database risk rules, or changes in the restore suite's import
+closure. An inconclusive closure also selects the restore on server-source changes.
 
 ## Disable
 

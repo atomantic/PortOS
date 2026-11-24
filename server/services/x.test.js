@@ -323,9 +323,14 @@ describe('reviewDraft state transitions', () => {
     expect(params[4]).toBe(24 * 60 * 60 * 1000);
   });
 
-  it('returns null when the draft was no longer in the expected state', async () => {
-    const { draft } = await runReview('draft-1', 'approved', []);
-    expect(draft).toBeNull();
+  it('returns null when the draft exists but is no longer in the expected state', async () => {
+    query.mockImplementation(async (sql) => (/SELECT 1 FROM x_drafts/.test(sql) ? { rows: [{ '?column?': 1 }] } : { rows: [] }));
+    await expect(reviewDraft('draft-1', 'approved')).resolves.toBeNull();
+  });
+
+  it('throws 404 when the draft does not exist', async () => {
+    query.mockResolvedValue({ rows: [] });
+    await expect(reviewDraft('draft-gone', 'approved')).rejects.toMatchObject({ status: 404 });
   });
 
   it.each(['draft', 'opened', 'deleted'])('rejects %s as a review target state', async (state) => {
@@ -370,9 +375,9 @@ describe('openApprovedDraft approval gates', () => {
     expect(bound).toEqual(['draft-1', 'draft-1']);
   });
 
-  it('returns null for a draft id that does not exist', async () => {
+  it('throws 404 for a draft id that does not exist', async () => {
     mockDraft(null);
-    await expect(openApprovedDraft('draft-missing')).resolves.toBeNull();
+    await expect(openApprovedDraft('draft-missing')).rejects.toMatchObject({ status: 404 });
     expect(openXHandoff).not.toHaveBeenCalled();
   });
 

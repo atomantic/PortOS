@@ -3319,6 +3319,18 @@ describe('videoGen routes', () => {
       expect(r.body.activeJob.params.prompt).toBe('P running');
     });
 
+    it('echoes batchSize, resolution and generateAudio for reload restore', async () => {
+      mediaJobQueue.listJobs.mockImplementation(listJobsByFilter([
+        { id: 'local-1', kind: 'video', status: 'running', params: { prompt: 'p', batchSize: 3 } },
+        { id: 'fal-1', kind: 'video', status: 'running', params: { prompt: 'p', mode: 'fal', resolution: '720p', generateAudio: true } },
+      ]));
+      const r = await request(app).get('/api/video-gen/active');
+      expect(r.status).toBe(200);
+      const byId = Object.fromEntries(r.body.activeJobs.map((j) => [j.jobId, j.params]));
+      expect(byId['local-1'].batchSize).toBe(3);
+      expect(byId['fal-1']).toMatchObject({ resolution: '720p', generateAudio: true });
+    });
+
     it('restores only gallery-backed reference images into the editable picker', async () => {
       mediaJobQueue.listJobs.mockImplementation(listJobsByFilter([{
         id: 'running-refs', kind: 'video', status: 'running', params: {

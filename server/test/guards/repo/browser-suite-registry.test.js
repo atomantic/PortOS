@@ -37,12 +37,10 @@ describe('cross-workspace browser suite registry', () => {
       }
     }
     const documentSource = readText(join(root, 'server/services/musicVideo/documentRender.browser.test.js'));
-    const smokeNames = [
-      'generates and exports a Three.js scene with visible authored content',
-      'renders a generated 3-second card/still/clip document with the selected performance in-point',
-      'propagates a deadline through a pending seek and waits for owned Chrome cleanup',
-    ];
-    for (const name of smokeNames) expect(documentSource).toContain(`('${name}',`);
+    const generationSource = readText(join(root, 'server/services/musicVideo/documentRenderGeneration.browser.test.js'));
+    expect(documentSource).toContain("('propagates a deadline through a pending seek and waits for owned Chrome cleanup',");
+    expect(generationSource).toContain("('generates and exports a Three.js scene with visible authored content',");
+    expect(generationSource).toContain("('renders a generated 3-second card/still/clip document with the selected performance in-point',");
   });
 
   // Smoke reuses a full-profile memo verdict (browserProfileAcceptedVerdicts),

@@ -70,8 +70,12 @@ export const reviewItemsQuerySchema = z.object({ status: scalar, type: scalar })
 /** GET /api/sharing/subscriptions. */
 export const sharingSubscriptionsQuerySchema = z.object({ bucketId: scalar, recordKind: scalar, recordId: scalar });
 
-/** GET /api/spotify/oauth/callback (provider redirect: `code` on success, `error` on denial). */
-export const spotifyOauthCallbackQuerySchema = z.object({ code: scalar, error: scalar });
+/** Google and Spotify send a state nonce with both successful and denied authorizations. */
+export const oauthCallbackQuerySchema = z.object({
+  state: z.string().regex(/^[A-Za-z0-9_-]{32}$/),
+  code: scalar,
+  error: scalar,
+});
 
 /** GET /api/voice/voices and the public voice listing. */
 export const voiceEngineQuerySchema = z.object({ engine: scalar });

@@ -68,7 +68,8 @@ import { bindSystemActivityIo } from './systemActivityNotify.js';
 import { armSystemActivityWatchers } from './systemActivityWatchers.js';
 import { armReadinessWatchers, registerReadinessSocket } from './readinessNotify.js';
 import { closeGeneratedPreviewsForSocket, registerGeneratedPreviewHandlers } from './generatedPreview/sessions.js';
-import { peerSyncBus, deliverPeerSyncEvent, registerPeerSyncSubscriber, PEER_SYNC_ROOM } from './peerSyncEventBus.js';
+import { peerSyncBus } from './peerSyncEventBus.js';
+import { deliverPeerSyncEvent, registerPeerSyncSubscriber, PEER_SYNC_ROOM } from './peerSyncDelivery.js';
 import { broadcastToCommandSubscribers, commandSubscribers, emitToOperators, getIo, setIo, PEER_SOCKET_ROOM } from './socketIo.js';
 import { PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 

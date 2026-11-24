@@ -8,8 +8,8 @@
  */
 
 export const PII_PATTERNS = Object.freeze([
-  // `/Users/<name>/…`, `/home/<name>/…`: the OS username by another name; matches ONLY the leading segment so a caller can drop the username while keeping the rest legible.
-  Object.freeze({ code: 'home-path', pattern: /(?<=^|[\s"'`(])\/(Users|home)\/[^/\s"'`]+/i, replacement: '/$1/<user>' }),
+  // Home directories, including file URLs in Node stack frames. Keep the rest of the path legible.
+  Object.freeze({ code: 'home-path', pattern: /(?<=^|[\s"'`(]|file:\/\/)\/(Users|home)\/[^/\s"'`]+/i, replacement: '/$1/<user>' }),
   // Any Windows drive-absolute path (`C:\Users\<name>\…`, `D:\secrets\…`).
   Object.freeze({ code: 'windows-path', pattern: /\b[A-Za-z]:[\\/](?:Users[\\/])?[^\s"'`]+/, replacement: '<path>' }),
   Object.freeze({

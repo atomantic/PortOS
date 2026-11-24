@@ -64,7 +64,7 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
     || (goal.feasibility && Array.isArray(goal.feasibility.links));
 
   return (
-    <div className="w-full sm:w-80 bg-port-card border-l border-port-border h-full overflow-y-auto p-4 space-y-4">
+    <section aria-label="Goal details" className="w-full bg-port-card border-l border-port-border h-full overflow-y-auto p-4 space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 min-w-0">
@@ -170,7 +170,7 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
           {goal.tags?.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {goal.tags.map(tag => (
-                <Pill key={tag} tone="bare" bordered={false} icon={Tag} className="bg-port-accent/20 text-port-accent">
+                <Pill key={tag} tone="bare" bordered={false} icon={Tag} className="max-w-full wrap-anywhere bg-port-accent/20 text-port-accent">
                   {tag}
                 </Pill>
               ))}
@@ -323,6 +323,6 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
           )}
         </>
       )}
-    </div>
+    </section>
   );
 }

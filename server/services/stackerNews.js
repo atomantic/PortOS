@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'crypto';
 import { query, withTransaction } from '../lib/db.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { decryptValue, encryptValue, ensureVaultKey } from '../lib/vaultCrypto.js';
 import { executeStackerNewsBrowserRead, executeStackerNewsOperation } from '../integrations/stackerNews/index.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
@@ -788,6 +789,9 @@ export async function updateActionState(id, state, reviewNote = '') {
       [id, state, reviewNote],
     );
     if (result.rows[0]) await eventInsert(client, id, 'pending_review', state, reviewNote || `Human ${state}`);
+    else if (!(await client.query('SELECT 1 FROM stacker_news_actions WHERE id=$1', [id])).rows[0]) {
+      throw new ServerError('Stacker News action not found', { status: 404 });
+    }
     return result.rows[0] || null;
   });
   return row ? actionView(row) : null;
@@ -835,7 +839,8 @@ async function runApprovedAction(action, account, item, territory, apiKey) {
 export async function executeApprovedAction(id) {
   const result = await query('SELECT * FROM stacker_news_actions WHERE id=$1', [id]);
   const action = result.rows[0];
-  if (!action || action.state !== 'approved') return null;
+  if (!action) throw new ServerError('Stacker News action not found', { status: 404 });
+  if (action.state !== 'approved') return null;
   if (!action.approved_at || Date.now() - new Date(action.approved_at).getTime() > ACTION_MAX_AGE_MS) throw new Error('Approval is stale; create and review a fresh action');
   const { account, item, territory } = await actionContext({
     accountId: action.account_id,

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'crypto';
 import { query, withTransaction } from '../lib/db.js';
 import { executeXBrowserRead } from '../integrations/x/index.js';
 import { openXHandoff } from './xBrowser.js';
+import { ServerError } from '../lib/errorHandler.js';
 
 const USERNAME_PATTERN = /^[A-Za-z0-9_]{1,15}$/;
 const DRAFT_STATES = new Set(['draft', 'pending_review', 'approved', 'rejected', 'opened']);
@@ -307,7 +308,12 @@ export async function reviewDraft(id, state, reviewNote = '') {
     [id, state, boundedText(reviewNote, 2_000), expectedState, MAX_DRAFT_AGE_MS],
   );
   const row = result.rows[0];
-  if (!row) return null;
+  if (!row) {
+    // Zero rows means either no such draft (404) or one in a state this transition can't leave (null -> route 409).
+    const exists = await query('SELECT 1 FROM x_drafts WHERE id=$1', [id]);
+    if (!exists.rows[0]) throw new ServerError('X draft not found', { status: 404 });
+    return null;
+  }
   const account = await getAccountRow(row.account_id);
   return draftView({ ...row, account_label: account?.label, username: account?.username });
 }
@@ -319,7 +325,8 @@ async function openApprovedDraftUnlocked(id) {
     [id],
   );
   const draft = result.rows[0];
-  if (!draft || draft.state !== 'approved') return null;
+  if (!draft) throw new ServerError('X draft not found', { status: 404 });
+  if (draft.state !== 'approved') return null;
   if (!draft.approved_at || Date.now() - new Date(draft.approved_at).getTime() > MAX_DRAFT_AGE_MS) throw new Error('X draft approval is stale; review a fresh draft');
   if (!draft.enabled) throw new Error('Selected X account is disabled');
   const handoff = await openXHandoff({ kind: 'compose', value: draft.body });

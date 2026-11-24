@@ -36,6 +36,8 @@ import { join, isAbsolute, normalize, resolve, dirname } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { pickCliProvider } from '../server/lib/cliProviderRun.js';
+import { redactPii } from '../server/lib/piiRedactionPatterns.js';
+import { scrubSecretTokens } from '../server/lib/secretText.js';
 import { restrictedRepairArgs } from '../server/lib/provider/providerVendors.js';
 import {
   CODE_ANIMATION_BUBBLEWRAP, codeAnimationContainmentMechanism,
@@ -181,8 +183,11 @@ export function defuseSentinel(text, token) {
  */
 export function buildFixPrompt({ processName, app, errorLogs, outputLogs }) {
   const token = `UNTRUSTED_LOG_${randomBytes(9).toString('hex').toUpperCase()}`;
-  const err = defuseSentinel(errorLogs, token) || '(no error logs available)';
-  const out = defuseSentinel(outputLogs, token) || '(no output logs available)';
+  const fenceLogs = (logs) => typeof logs === 'string'
+    ? defuseSentinel(redactPii(scrubSecretTokens(logs)), token)
+    : '';
+  const err = fenceLogs(errorLogs) || '(no error logs available)';
+  const out = fenceLogs(outputLogs) || '(no output logs available)';
 
   return `You are an autonomous autofixer for PortOS. A PM2-managed process has crashed. Your ONLY job is to edit source files in the CURRENT working directory to fix the bug that caused the crash.
 

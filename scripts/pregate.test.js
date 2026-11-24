@@ -264,6 +264,10 @@ describe('pregate hidden-content invocation', () => {
       write(join(workspace, 'package-lock.json'), JSON.stringify({ packages: { '': {} } }));
     }
     write('server/lib/bufferedSpawn.test.js', '// Native inventory fixture\n');
+    // Keep the live restore closure resolvable so unrelated fixture edits do
+    // not select the DB job through the planner's fail-closed path.
+    mkdirSync(join(root, 'server/services'), { recursive: true });
+    write('server/services/backupDatabaseDump.restore.live.test.js', '// Live restore inventory fixture\n');
     mkdirSync(join(root, 'docs'));
     write(trackedPath, clean);
     git('add', '--all');

@@ -20,7 +20,7 @@ vi.mock('../lib/secureAuthStore.js', () => ({
 import * as googleOAuthClient from '../lib/googleOAuthClient.js';
 import { atomicWrite, tryReadFile } from '../lib/fileUtils.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
-import { clearAuth, getAuthenticatedClient, handleCallback, saveCredentials } from './googleAuth.js';
+import { clearAuth, getAuthenticatedClient, getAuthUrl, handleCallback, saveCredentials } from './googleAuth.js';
 
 function atomicWriteMock(...args) { return atomicWrite(...args); }
 
@@ -201,14 +201,32 @@ describe('googleAuth callback', () => {
       return client;
     });
 
-    const result = await handleCallback('auth-code');
+    const { url } = await getAuthUrl('messages');
+    const state = new URL(url).searchParams.get('state');
+    const result = await handleCallback({ code: 'auth-code', state });
 
-    expect(result).toEqual({ success: true });
+    expect(result).toEqual({ success: true, returnTo: 'messages' });
     expect(exchange).toHaveBeenCalledWith('auth-code');
     expect(lastTokenWrite()).toMatchObject({ access_token: 'fresh-access', refresh_token: 'fresh-refresh' });
 
     stubFiles({ tokens: { access_token: 'fresh-access', refresh_token: 'fresh-refresh', expiry_date: Date.now() + 3_600_000 } });
     expect((await getAuthenticatedClient()).credentials.access_token).toBe('fresh-access');
+  });
+
+  it('keeps the verified return target on exchange failure and consumes the nonce', async () => {
+    const exchange = vi.fn().mockRejectedValue(new Error('invalid_grant'));
+    vi.spyOn(googleOAuthClient, 'createGoogleOAuthClient').mockImplementation((options) => ({
+      ...createGoogleOAuthClient(options),
+      getToken: exchange,
+    }));
+    const state = new URL((await getAuthUrl('messages')).url).searchParams.get('state');
+
+    await expect(handleCallback({ code: 'bad-code', state })).resolves.toEqual({
+      returnTo: 'messages', error: 'invalid_grant',
+    });
+    await expect(handleCallback({ code: 'bad-code', state })).resolves.toEqual({ error: expect.stringMatching(/OAuth state/) });
+    expect(exchange).toHaveBeenCalledTimes(1);
+    expect(lastTokenWrite()).toBeUndefined();
   });
 });
 

@@ -258,6 +258,9 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, ga
   const dbDependencies = hasRelatedServerSource
     ? collectSuiteDependencies(graph, resolveDbTestFiles(dependencyFiles))
     : [];
+  const dbLiveRestoreInputs = hasRelatedServerSource
+    ? graph.suiteClosure('server/services/backupDatabaseDump.restore.live.test.js')
+    : [];
   const browserDependencies = hasRelatedServerSource
     ? Object.fromEntries(browserSuitesIn(presentFiles).map((suite) => [suite,
       graph.suiteClosure(suite)]))
@@ -342,7 +345,7 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, ga
   const dockerContainmentLiveInputs = walkGates ? collectDockerContainmentLiveInputs(cwd, graph) : null;
 
   return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests,
-    clientDependencies, clientTestDependencies, dbDependencies, browserDependencies, dependencyChanges,
+    clientDependencies, clientTestDependencies, dbDependencies, dbLiveRestoreInputs, browserDependencies, dependencyChanges,
     linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach, clientReach, clientBrowserReach,
     gatedChangedFiles, gatedDependencyChanges };
 }

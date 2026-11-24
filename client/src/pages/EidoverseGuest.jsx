@@ -30,7 +30,7 @@ export default function EidoverseGuest() {
       }).catch((failure) => { if (!controller.signal.aborted) setError(failure.message); });
     return () => controller.abort();
   }, []);
-  return <main className="flex h-dvh flex-col bg-port-bg text-white">
+  return <div className="flex h-dvh flex-col bg-port-bg text-white">
     <header className="flex flex-wrap items-center justify-between gap-3 border-b border-port-border px-4 py-3">
       <div><h1 className="font-semibold">Eidoverse guest visit</h1><p className="text-sm text-gray-400">Visitor access · Chat is visible to people and agents in this world</p><p className="text-sm text-gray-400">Most of what you see is the shared PortOS world design every install renders the same way. Only this host's own local vernacular — its private style and builds — is unique to this world.</p></div>
       {!left && <button type="button" disabled={leaving} className="min-h-10 rounded-lg border border-port-border px-3" onClick={async () => {
@@ -46,9 +46,11 @@ export default function EidoverseGuest() {
         if (window.history.length > 1) window.history.back();
       }}>Leave world</button>}
     </header>
-    {left ? <p className="p-6">You left the guest world.</p>
+    <main id="main-content" className="flex min-h-0 flex-1 flex-col">
+    {left ? <p role="status" className="p-6">You left the guest world.</p>
       : error ? <div role="alert" className="p-6">{error} <Link to="/eidoverse" className="underline">Open this instance</Link></div>
       : hostUrl ? <iframe ref={frame.frameRef} onLoad={frame.onFrameLoad} src={hostUrl} title="Guest Eidoverse world" className="min-h-0 flex-1 border-0" allow="microphone; fullscreen; autoplay" />
         : <p role="status" className="p-6">Entering guest world…</p>}
-  </main>;
+    </main>
+  </div>;
 }

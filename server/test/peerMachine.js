@@ -39,6 +39,7 @@ const [
   { default: mediaCollectionsRoutes },
   { default: videoGenRoutes },
   bus,
+  { deliverPeerSyncEvent, registerPeerSyncSubscriber, PEER_SYNC_ROOM },
   relay,
   orchestrator,
   { deleteMediaAnywhere },
@@ -61,6 +62,7 @@ const [
   import('../routes/mediaCollections.js'),
   import('../routes/videoGen.js'),
   import('../services/peerSyncEventBus.js'),
+  import('../services/peerSyncDelivery.js'),
   import('../services/peerSocketRelay.js'),
   import('../services/syncOrchestrator.js'),
   import('../services/mediaRemoteDelete.js'),
@@ -93,16 +95,16 @@ app.use(errorMiddleware);
 const httpServer = createServer(app);
 const io = new Server(httpServer);
 io.use(socketAuthGate);
-io.on('connection', (socket) => bus.registerPeerSyncSubscriber(socket));
+io.on('connection', (socket) => registerPeerSyncSubscriber(socket));
 // socket.js setupPeerSyncEventForwarding, recording what each frame reached.
 bus.peerSyncBus.on('event', (event) => {
-  void bus.deliverPeerSyncEvent(io, event).then((sockets) => {
+  void deliverPeerSyncEvent(io, event).then((sockets) => {
     const entry = { op: event.op, id: event.id, sockets };
     delivered.push(entry);
     deliveries.emit('delivered', entry);
   });
 });
-bus.peerSyncBus.on('media-history-changed', (payload) => io.except(bus.PEER_SYNC_ROOM).emit('media:history:changed', payload));
+bus.peerSyncBus.on('media-history-changed', (payload) => io.except(PEER_SYNC_ROOM).emit('media:history:changed', payload));
 
 const registryFile = () => join(PATHS.data, 'instances.json');
 const peerById = async (peerId) => {

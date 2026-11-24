@@ -54,6 +54,7 @@ export const EXCLUSIVE_CAPTURE_TESTS = [
   'lib/musicVideo/musicVideoTitleCard.browser.test.js',
   'services/htmlComposition/index.test.js',
   'services/musicVideo/documentRender.browser.test.js',
+  'services/musicVideo/documentRenderGeneration.browser.test.js',
   'services/musicVideo/documentFilmLook.browser.test.js',
   'services/musicVideo/documentVignette.browser.test.js',
   'services/musicVideo/documentTemplates/layered/engine.controls.browser.test.js',
