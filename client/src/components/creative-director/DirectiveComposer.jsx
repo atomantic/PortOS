@@ -143,7 +143,7 @@ export default function DirectiveComposer({
 
       <div>
         <label htmlFor={`${idPrefix}-budget`} className="block text-sm text-port-text-muted mb-1">
-          Budget cap (autonomous actions/day — blank = use the shared default)
+          Budget cap (autonomous actions/day — stricter of project cap and shared CoS daily cap applies; blank = shared cap only)
         </label>
         <input
           id={`${idPrefix}-budget`}

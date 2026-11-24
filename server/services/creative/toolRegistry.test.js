@@ -1,5 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { z } from 'zod';
+import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
+
+vi.mock('../../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-tool-registry-') }));
+afterAll(cleanupTempDataRoots);
 
 // Mock the voice registry so hydration + the hydrateFrom guard resolve without
 // pulling the heavy voice/tool graph into this unit test.
@@ -106,8 +111,10 @@ import {
   getCommissionPlanError,
   isToolAllowedForTargetAbility,
   assertCreativeToolIntegrity,
+  getProjectBudgetStatus,
   dispatchCreativeTool,
 } from './toolRegistry.js';
+import { appendCreativeLedgerEntry } from './creativeRunLedger.js';
 
 const setMode = (mode) => loadState.mockResolvedValue({ config: { domainAutonomy: { cos: mode } } });
 
@@ -542,5 +549,115 @@ describe('run ledger append', () => {
     const appendLedger = vi.fn(async () => { throw new Error('disk full'); });
     const out = await dispatchCreativeTool('pipeline_createSeries', { name: 'S' }, { projectId: 'p1', appendLedger });
     expect(out.ok).toBe(true);
+  });
+});
+
+describe('per-project directive budgetCap enforcement', () => {
+  it('budgetCap = 0 blocks budgeted tools immediately without executing or charging cos', async () => {
+    setMode('execute');
+    const out = await dispatchCreativeTool(
+      'pipeline_generateStage',
+      { issueId: 'i1', stageId: 'st1' },
+      { projectId: 'cap-zero', budgetCap: 0 },
+    );
+    expect(out).toEqual({
+      ok: false,
+      rejected: true,
+      reason: 'project-budget',
+      exceeded: 'actions',
+      budgetCap: 0,
+      used: 0,
+      mode: 'execute',
+      tool: 'pipeline_generateStage',
+    });
+    expect(generateStage).not.toHaveBeenCalled();
+    expect(recordDomainUsage).not.toHaveBeenCalled();
+    expect(getDomainBudgetStatus).not.toHaveBeenCalled();
+  });
+
+  it('budgetCap = 0 leaves free and self-budgeted tools unaffected', async () => {
+    setMode('execute');
+    const freeOut = await dispatchCreativeTool('pipeline_createSeries', { name: 'S' }, { projectId: 'cap-zero-free', budgetCap: 0 });
+    expect(freeOut.ok).toBe(true);
+    expect(createSeries).toHaveBeenCalled();
+
+    const autopilotOut = await dispatchCreativeTool('pipeline_startSeriesAutopilot', { seriesId: 'ser1' }, { projectId: 'cap-zero-free', budgetCap: 0 });
+    expect(autopilotOut.ok).toBe(true);
+    expect(startSeriesAutopilot).toHaveBeenCalled();
+  });
+
+  it('enforces budgetCap < global cos cap by counting same-UTC-day executed budgeted entries', async () => {
+    setMode('execute');
+    getDomainBudgetStatus.mockResolvedValue({ withinBudget: true, exceeded: null });
+
+    // Free and self-budgeted executions must not consume the project's budgetCap=2.
+    await dispatchCreativeTool('pipeline_createSeries', { name: 'S' }, { projectId: 'cap-two', budgetCap: 2 });
+    await dispatchCreativeTool('pipeline_startSeriesAutopilot', { seriesId: 'ser1' }, { projectId: 'cap-two', budgetCap: 2 });
+
+    const first = await dispatchCreativeTool('pipeline_generateStage', { issueId: 'i1', stageId: 'st1' }, { projectId: 'cap-two', budgetCap: 2 });
+    const second = await dispatchCreativeTool('media_enqueueImageJob', { params: { prompt: 'p' } }, { projectId: 'cap-two', budgetCap: 2 });
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(recordDomainUsage).toHaveBeenCalledTimes(2);
+
+    const third = await dispatchCreativeTool('pipeline_generateStage', { issueId: 'i1', stageId: 'st2' }, { projectId: 'cap-two', budgetCap: 2 });
+    expect(third).toEqual({
+      ok: false,
+      rejected: true,
+      reason: 'project-budget',
+      exceeded: 'actions',
+      budgetCap: 2,
+      used: 2,
+      mode: 'execute',
+      tool: 'pipeline_generateStage',
+    });
+    expect(generateStage).toHaveBeenCalledTimes(1);
+    expect(recordDomainUsage).toHaveBeenCalledTimes(2);
+    expect(await getProjectBudgetStatus('cap-two', 2)).toEqual({
+      withinBudget: false,
+      exceeded: 'actions',
+      budgetCap: 2,
+      used: 2,
+    });
+  });
+
+  it('defers solely to global cos budget when budgetCap is null', async () => {
+    setMode('execute');
+    await appendCreativeLedgerEntry('cap-null', { tool: 'pipeline_generateStage', costClass: 'llm', outcome: 'executed' });
+    getDomainBudgetStatus.mockResolvedValueOnce({ withinBudget: true, exceeded: null });
+    const okOut = await dispatchCreativeTool('pipeline_generateStage', { issueId: 'i1', stageId: 'st1' }, { projectId: 'cap-null', budgetCap: null });
+    expect(okOut.ok).toBe(true);
+
+    getDomainBudgetStatus.mockResolvedValueOnce({ withinBudget: false, exceeded: 'actions' });
+    const blockedOut = await dispatchCreativeTool('pipeline_generateStage', { issueId: 'i1', stageId: 'st2' }, { projectId: 'cap-null', budgetCap: null });
+    expect(blockedOut).toMatchObject({ ok: false, rejected: true, reason: 'budget', exceeded: 'actions' });
+  });
+
+  it('still honors the global cos budget when it is stricter than budgetCap', async () => {
+    setMode('execute');
+    getDomainBudgetStatus.mockResolvedValue({ withinBudget: false, exceeded: 'actions' });
+    const out = await dispatchCreativeTool('pipeline_generateStage', { issueId: 'i1', stageId: 'st1' }, { projectId: 'cap-high', budgetCap: 50 });
+    expect(out).toMatchObject({ ok: false, rejected: true, reason: 'budget', exceeded: 'actions' });
+    expect(generateStage).not.toHaveBeenCalled();
+  });
+
+  it('resets the project daily action count at UTC midnight rollover', async () => {
+    setMode('execute');
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-11-23T23:59:59.000Z'));
+      const first = await dispatchCreativeTool('pipeline_generateStage', { issueId: 'i1', stageId: 'st1' }, { projectId: 'cap-rollover', budgetCap: 1 });
+      expect(first.ok).toBe(true);
+
+      vi.setSystemTime(new Date('2026-11-23T23:59:59.500Z'));
+      const sameDayBlocked = await dispatchCreativeTool('pipeline_generateStage', { issueId: 'i1', stageId: 'st2' }, { projectId: 'cap-rollover', budgetCap: 1 });
+      expect(sameDayBlocked).toMatchObject({ ok: false, rejected: true, reason: 'project-budget', budgetCap: 1, used: 1 });
+
+      vi.setSystemTime(new Date('2026-11-24T00:00:00.000Z'));
+      const nextDayAllowed = await dispatchCreativeTool('pipeline_generateStage', { issueId: 'i1', stageId: 'st2' }, { projectId: 'cap-rollover', budgetCap: 1 });
+      expect(nextDayAllowed.ok).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

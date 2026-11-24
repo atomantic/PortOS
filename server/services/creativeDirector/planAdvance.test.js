@@ -398,6 +398,39 @@ describe('advanceAfterPlanStepSettled — executor', () => {
     expect(p.failureReason).toMatch(/budget/);
   });
 
+  it('forwards directive budgetCap (including 0) into dispatchCreativeTool and pauses clearly on project-budget', async () => {
+    const read = makeStore(planProject(
+      [step('a', { toolName: 'pipeline_generateStage' })],
+      { directive: { goal: 'do it', deliverables: [], constraints: { budgetCap: 0 } } },
+    ));
+    mockDispatch.mockResolvedValue({
+      ok: false,
+      rejected: true,
+      reason: 'project-budget',
+      exceeded: 'actions',
+      budgetCap: 0,
+      used: 0,
+    });
+    await advanceAfterPlanStepSettled('cd-1');
+    expect(mockDispatch).toHaveBeenCalledWith('pipeline_generateStage', {}, { projectId: 'cd-1', budgetCap: 0 });
+    const p = read();
+    expect(p.status).toBe('paused');
+    expect(p.plan.steps[0].status).toBe('blocked');
+    expect(p.plan.steps[0].result).toEqual({ reason: 'project-budget', budgetCap: 0, used: 0 });
+    expect(p.failureReason).toMatch(/project-budget/);
+    expect(p.failureReason).toMatch(/0\/0 autonomous actions today/);
+  });
+
+  it('omits budgetCap from dispatchCreativeTool ctx when directive budgetCap is null', async () => {
+    makeStore(planProject(
+      [step('a', { toolName: 'pipeline_createSeries' })],
+      { directive: { goal: 'do it', deliverables: [], constraints: { budgetCap: null } } },
+    ));
+    mockDispatch.mockResolvedValue({ ok: true, mode: 'execute', result: { id: 's1' } });
+    await advanceAfterPlanStepSettled('cd-1');
+    expect(mockDispatch).toHaveBeenCalledWith('pipeline_createSeries', {}, { projectId: 'cd-1' });
+  });
+
   it('bounded re-plan: a failed step re-enqueues the planner until MAX_REPLAN_ROUNDS, then pauses', async () => {
     // replanRounds already at the max → the failure must pause, not re-plan.
     const read = makeStore(planProject([step('a', { toolName: 'pipeline_generateStage' })], { plan: { steps: [step('a', { toolName: 'pipeline_generateStage' })], replanRounds: 2 } }));
