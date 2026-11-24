@@ -152,15 +152,17 @@ const annotationSchema = z.object({
 const pauseSchema = z.object({ reason: z.string().trim().min(1).max(PERSISTENT_MIND_LIMITS.MAX_REASON_CHARS).optional() }).strict();
 const acknowledgementSchema = z.object({ id: idempotencyId }).strict();
 const eventParamsSchema = z.object({ eventId }).strict();
+// Legacy promotion types predate memoryTypeEnum; map them so stored records stay editable.
+const LEGACY_PROMOTION_TYPES = { insight: 'learning', pattern: 'observation' };
 const promotionSchema = z.object({
   id: idempotencyId,
   approved: z.literal(true),
   content: z.string().trim().min(1).max(10_240),
   summary: z.string().trim().max(500).optional(),
   turnId: z.string().trim().min(1).max(128).nullable().optional(),
-  type: z.enum(['fact', 'preference', 'pattern', 'insight', 'context']).optional(),
+  type: z.preprocess((value) => LEGACY_PROMOTION_TYPES[value] ?? value, z.enum(['fact', 'learning', 'observation', 'decision', 'preference', 'context'])).optional(),
   category: z.string().trim().min(1).max(100).optional(),
-  tags: z.array(z.string().trim().min(1).max(100)).max(20).optional(),
+  tags: z.array(z.string().trim().min(1).max(50)).max(20).optional(),
 }).strict();
 const memoryType = z.enum(['fact', 'learning', 'observation', 'decision', 'preference', 'context']);
 const memoryFields = {
