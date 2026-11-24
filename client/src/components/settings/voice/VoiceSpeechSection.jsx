@@ -29,6 +29,8 @@ export default function VoiceSpeechSection({ cfg, patch, inputCls, onRegisterRet
   const [ttsEngines, setTtsEngines] = useState([]);
   const [ttsEngineError, setTtsEngineError] = useState(null);
   const [previewingVoice, setPreviewingVoice] = useState(null);
+  // Text being typed into Speech rate, so "0." on the way to "0.8" is not snapped back to 1.
+  const [rateDraft, setRateDraft] = useState(null);
   const [downloadingVoice, setDownloadingVoice] = useState(null);
 
   const currentEngine = cfg?.tts?.engine;
@@ -220,8 +222,13 @@ export default function VoiceSpeechSection({ cfg, patch, inputCls, onRegisterRet
       <FormField label="Speech rate" hint="0.5 = slow, 1.0 = normal, 2.0 = fast">
         <input
           type="number" min="0.5" max="2" step="0.1"
-          value={cfg.tts.rate ?? 1.0}
-          onChange={(e) => patch('tts.rate', parseFloat(e.target.value) || 1.0)}
+          value={rateDraft ?? cfg.tts.rate ?? 1.0}
+          onChange={(e) => {
+            setRateDraft(e.target.value);
+            const rate = parseFloat(e.target.value);
+            if (rate >= 0.5 && rate <= 2) patch('tts.rate', rate);
+          }}
+          onBlur={() => setRateDraft(null)}
           className={inputCls}
         />
       </FormField>
