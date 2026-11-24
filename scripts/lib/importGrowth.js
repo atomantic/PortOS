@@ -48,6 +48,7 @@ import { spawnSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join, isAbsolute, posix, relative } from 'path';
 import { staticImportSpecifiersFromSource } from '../../server/lib/staticImportGraph.js';
+import { createGuardCorpus } from './guardCorpus.js';
 
 /** Proxy counts recorded for the heavy edges this guard is calibrated against. */
 export const HISTORICAL_PROXY_TOTALS = Object.freeze({
@@ -86,9 +87,10 @@ export const MIN_SERVER_TESTS = 1_000;
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
 const SOURCE_EXT = /\.(?:[cm]?js|jsx|tsx?)$/;
 
-// Head and base walk nearly identical sources, so parse each distinct text once.
+// Head, base and the parity walker use the same parser. Cache by text so
+// different source at the same path in two revisions still gets parsed.
 const specifierCache = new Map();
-function specifiersOf(text) {
+export function cachedStaticImportSpecifiers(text) {
   let specs = specifierCache.get(text);
   if (!specs) {
     specs = staticImportSpecifiersFromSource(text);
@@ -109,7 +111,7 @@ export function importGrowthBaseError(message) {
 /** Repo-relative POSIX path for a specifier, or null when it leaves the repo. */
 export function resolveRepoSpecifier(fromRel, spec) {
   if (!spec.startsWith('.')) return null;
-  const next = posix.normalize(posix.join(posix.dirname(fromRel), spec));
+  const next = posix.join(posix.dirname(fromRel), spec);
   if (next === '..' || next.startsWith('../') || next.startsWith('/')) return null;
   return next;
 }
@@ -154,7 +156,7 @@ export function measureClosures(testFiles, readText, { bootEntry = BOOT_ENTRY } 
     }
     const next = [];
     const seen = new Set();
-    for (const spec of specifiersOf(text)) {
+    for (const spec of cachedStaticImportSpecifiers(text)) {
       const target = resolveRepoSpecifier(rel, spec);
       if (!target || seen.has(target)) continue;
       if (read(target) == null) continue;
@@ -494,35 +496,17 @@ export function resolveImportGrowthBase({
   return { sha, source: `merge-base ${ref}` };
 }
 
-function gitPaths(repoRoot, args) {
-  const result = git(repoRoot, args);
-  if (result.error || result.status !== 0) {
-    throw importGrowthBaseError(`git ${args[0]} failed (exit ${result.status ?? 'spawn'}). The import-growth guard does not pass when the file list cannot be read.`);
-  }
-  return result.stdout.split('\0').filter(Boolean);
-}
-
-/**
- * Files the head measurement may read: tracked blobs plus untracked files.
- * Submodule contents are neither, so base (parent tree) and head agree on
- * them instead of the working tree inventing a closure the base commit
- * cannot see. Untracked server tests still count — that is new-suite growth.
- */
-function listHeadPaths(repoRoot) {
-  const tracked = gitPaths(repoRoot, ['ls-files', '-z']);
-  const untracked = gitPaths(repoRoot, ['ls-files', '-z', '--others', '--exclude-standard']);
-  return new Set([...tracked, ...untracked]);
-}
-
-function diskRead(repoRoot) {
+function diskRead(repoRoot, readText = (abs) => readFileSync(abs, 'utf8')) {
   return (rel) => {
-    if (!rel || rel.includes('\0') || rel.startsWith('/') || rel.split('/').includes('..')) return null;
-    const abs = join(repoRoot, ...rel.split('/'));
+    if (!rel || rel.includes('\0') || rel.startsWith('/')) return null;
+    const parts = rel.split('/');
+    if (parts.includes('..')) return null;
+    const abs = join(repoRoot, ...parts);
     const back = relative(repoRoot, abs);
     if (back.startsWith('..') || isAbsolute(back)) return null;
     // One syscall instead of exists + stat + read; absent and non-file stay null.
     try {
-      return readFileSync(abs, 'utf8');
+      return readText(abs);
     } catch (error) {
       if (error.code === 'ENOENT' || error.code === 'EISDIR' || error.code === 'ENOTDIR') return null;
       throw error;
@@ -530,9 +514,16 @@ function diskRead(repoRoot) {
   };
 }
 
-export function measureWorkingTree(repoRoot) {
-  const paths = listHeadPaths(repoRoot);
-  const readDisk = diskRead(repoRoot);
+export function measureWorkingTree(repoRoot, corpus = createGuardCorpus(repoRoot)) {
+  // Untracked tests count toward new-suite growth. A parent repository's
+  // inventory omits submodule contents on both sides of the comparison.
+  let paths;
+  try {
+    paths = new Set(corpus.workingTreeCandidates());
+  } catch (error) {
+    throw importGrowthBaseError(`git ls-files failed (exit ${error.status ?? 'spawn'}). The import-growth guard does not pass when the file list cannot be read.`);
+  }
+  const readDisk = diskRead(repoRoot, corpus.read);
   const testFiles = [...paths].filter(isServerTest).sort();
   return measureClosures(testFiles, (rel) => (paths.has(rel) ? readDisk(rel) : null));
 }
