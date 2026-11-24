@@ -35,6 +35,18 @@ const ignoredInput = (rel) => IGNORED_INPUT_PREFIXES.some((prefix) => rel === pr
 const localState = (target) => target === 'data' || target.startsWith('data/');
 const underGit = (rel) => rel === '.git' || rel.startsWith('.git/');
 
+const CLIENT_LOCKFILE = 'client/package-lock.json';
+
+function lockedClientPackages(fs) {
+  if (fs.kind('client/node_modules') !== null) return null;
+  try {
+    const lock = JSON.parse(fs.read(CLIENT_LOCKFILE)?.toString('utf8'));
+    return lock.lockfileVersion === 3 && lock.packages?.[''] ? lock.packages : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The analyzer over an abstract filesystem (`read(rel) -> Buffer|null`,
  * `kind(rel) -> 'file'|'dir'|null`, `list(rel) -> string[]`), so the whole
@@ -57,7 +69,7 @@ const underGit = (rel) => rel === '.git' || rel.startsWith('.git/');
  * earlier run when a file's bytes, the setup's replaced sources and every
  * cross-file constant it looked up are unchanged; null extracts every file.
  */
-export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = process.platform, arch = process.arch, nodeVersion = process.versions.node, toolVersion = () => null, requireToolVersions = false, caseFilter = [], acceptVerdictsFrom = [], listFiles = null, factsCache = null }) {
+export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = process.platform, arch = process.arch, nodeVersion = process.versions.node, toolVersion = () => null, requireToolVersions = false, planBeforeClientSetup = false, caseFilter = [], acceptVerdictsFrom = [], listFiles = null, factsCache = null }) {
   const host = { nodeVersion, platform, arch };
   const a = {
     fs,
@@ -65,6 +77,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     workspaceRel,
     toolVersion,
     requireToolVersions,
+    clientPackages: planBeforeClientSetup ? lockedClientPackages(fs) : null,
     listFiles,
     hashes: new Map(),
     facts: new Map(),
@@ -350,8 +363,17 @@ function packageVersion(a, fromRel, spec) {
   roots.push(a.workspaceRel);
   let found = null;
   for (const root of roots) {
-    const bytes = a.fs.read(`${root === '' ? '' : `${root}/`}node_modules/${name}/package.json`);
-    if (bytes === null) continue;
+    const packagePath = `node_modules/${name}`;
+    const bytes = a.fs.read(`${root === '' ? '' : `${root}/`}${packagePath}/package.json`);
+    if (bytes === null) {
+      const locked = root === 'client' ? a.clientPackages?.[packagePath] : null;
+      // An npm ci from this lock can be predicted only for unconditional,
+      // integrity-pinned packages. Execution always reads installed manifests.
+      if (typeof locked?.version !== 'string' || !locked.version || typeof locked.integrity !== 'string'
+        || !locked.integrity || locked.link || locked.optional || locked.devOptional || locked.os || locked.cpu || locked.libc) continue;
+      found = { name, version: locked.version };
+      break;
+    }
     try { found = { name, version: String(JSON.parse(bytes.toString('utf8')).version ?? '') }; } catch { found = null; }
     break;
   }
@@ -906,6 +928,9 @@ function verdict(a, testRel, gathered, extra, baseClosure, { requireEdges }) {
   // A served-narrowed key never equals the whole-tree key of the same inputs.
   for (const dir of [...(gathered.servedRoots ?? [])].sort()) lines.push(`served ${dir}`);
   const files = new Set([...gathered.members, ...gathered.inputs, ...extra.inputs, ...snapshotInputs(a, testRel), ...baseClosure.files]);
+  // Bind any projected package version to the precise lock used to resolve
+  // it. Served client roots already key this file, so their hits stay valid.
+  if (a.clientPackages && [...files].some(rel => rel.startsWith('client/'))) files.add(CLIENT_LOCKFILE);
   for (const rel of [...files].sort()) {
     const digest = fileHash(a, rel);
     if (digest === null) return { key: null, memoizable: false, reason: `unreadable input ${rel}`, reasons: [`unreadable input ${rel}`] };

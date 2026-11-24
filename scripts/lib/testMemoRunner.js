@@ -90,7 +90,7 @@ const reachesClosure = (info, sources) => sources.some((rel) => info.closure.has
  * @returns {{ selected: string[], run: string[], skipped: Array<{test: string, via: 'recorded'|'floor', from?: string}>,
  *   unsettled: number, unmemoizable: Set<string>, analyze: (test: string, recorded: string[]) => object, verdicts: Map }}
  */
-export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, freshToolVersion = toolVersion, requireToolVersions = false, provisionableTool, caseFilter = [], acceptVerdictsFrom = [], listFiles = listRepositoryFiles, shardSlice = serverShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry, factsCache = memoDir ? loadFactsCache(memoDir, scope) : null }) {
+export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, freshToolVersion = toolVersion, requireToolVersions = false, provisionableTool, planBeforeClientSetup = false, caseFilter = [], acceptVerdictsFrom = [], listFiles = listRepositoryFiles, shardSlice = serverShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry, factsCache = memoDir ? loadFactsCache(memoDir, scope) : null }) {
   const candidates = mode === 'files' ? uniqueSorted(repoFiles)
     : uniqueSorted([...listTests(scope, { repoRoot, platform, env }).map((rel) => toRepoPath(scope, rel)), ...repoFiles]);
   // Related reach can differ between sibling shards with different memo records.
@@ -100,7 +100,7 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   const alwaysRun = new Set(getAlwaysRunTests());
   const unmemoizable = new Set(mode === 'files' || (mode === 'full' && memoDir)
     ? owned.filter((test) => neverMemoized(test, repoRoot, alwaysRun)) : []);
-  const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, requireToolVersions, caseFilter, acceptVerdictsFrom, listFiles: () => listFiles(repoRoot), factsCache };
+  const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, requireToolVersions, planBeforeClientSetup, caseFilter, acceptVerdictsFrom, listFiles: () => listFiles(repoRoot), factsCache };
   // Built on first use: a plan whose candidates are all unmemoizable never pays for the base closure.
   let primary = null;
   const analyze = (test, recorded, digests = null, served = null) => {

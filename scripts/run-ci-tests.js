@@ -570,6 +570,7 @@ async function main() {
     ...(browserJob ? {
       shardSlice: (files, shard) => browserShardSlice(files, shard, profile),
       requireToolVersions: true,
+      planBeforeClientSetup: checkRemaining,
       freshToolVersion: createToolVersionResolver({ verifyAudioPair: true }),
     } : {}),
     provisionableTool: beforeAudioSetup && hasMemoEntries(memoDir) ? 'ffmpeg' : undefined,

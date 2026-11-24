@@ -424,7 +424,10 @@ never holds: a `smoke` entry skipped the fidelity cases, so `full` and
 skip `(recorded key, full profile verdict)`.
 
 Browser shards check the memo before provisioning audio tools. A shard with
-verified hits for every suite skips audio and client setup. If provisioning
+verified hits for every suite skips audio and client setup. Before a client
+install exists, the check can use unconditional package versions from the
+integrity-pinned client lockfile, which must match the lockfile in the memo
+key. Test execution still keys the installed package manifests. If provisioning
 ffmpeg could turn every remaining verdict into a hit, the shard checks again
 before client setup and browser startup. A cold memo or a definite miss goes
 straight from audio provisioning to the usual client setup and test runner.

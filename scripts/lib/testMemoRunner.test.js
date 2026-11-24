@@ -104,6 +104,37 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(record(check('ffmpeg version 5', { freshToolVersion: version('ffmpeg version 7') }))).toBe(0);
   });
 
+  it('reuses a client browser fixture verdict before installing its exact locked packages', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-browser-lock-plan-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-browser-lock-memo-'));
+    const test = 'server/lib/view.test.js';
+    const panel = 'client/src/Panel.jsx';
+    const lock = { lockfileVersion: 3, packages: { '': {}, 'node_modules/react': { version: '19.2.0', integrity: 'sha512-example' } } };
+    const manifest = 'client/node_modules/react/package.json';
+    writeRepo(root, {
+      ...FILES,
+      'client/package.json': '{"name":"client"}',
+      'client/package-lock.json': JSON.stringify(lock),
+      'server/node_modules/playwright-core/package.json': '{"name":"playwright-core","version":"1.0.0"}',
+      [manifest]: '{"version":"19.2.0"}',
+      [panel]: "import { createElement } from 'react';\nexport const Panel = () => createElement('div');\n",
+      [test]: "import { it } from 'vitest';\nimport { chromium } from 'playwright-core';\nconst client = join(import.meta.dirname, '../../client');\n"
+        + 'fixture = await startBrowserFixture({ createServer, chromium, viteConfig: () => ({ configFile: false, root: client }) });\n',
+    });
+    const check = (planBeforeClientSetup = false) => plan({ repoFiles: [test], planBeforeClientSetup, toolVersion: () => 'Chrome test build' });
+    const served = new Map([[test, { roots: ['client'], files: [panel] }]]);
+    expect(recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: check(), passed: [test],
+      dependencies: new Map([[test, [test]]]), served, source: 'ci' }).written).toBeGreaterThan(0);
+    rmSync(join(root, 'client/node_modules'), { recursive: true });
+    expect(check().run).toEqual([test]);
+    expect(check(true).skipped).toEqual([{ test, via: 'recorded' }]);
+    writeRepo(root, { [manifest]: '{"version":"19.3.0"}' });
+    expect(check(true).run).toEqual([test]);
+    rmSync(join(root, 'client/node_modules'), { recursive: true });
+    writeRepo(root, { 'client/package-lock.json': JSON.stringify({ ...lock, name: 'changed' }) });
+    expect(check(true).run).toEqual([test]);
+  });
+
   // #17616: a real-Chromium suite's record carries what its fixture served, so an
   // unrelated client page neither selects it nor misses its memo entry.
   it('records what a browser fixture served and narrows the suite to it', () => {
