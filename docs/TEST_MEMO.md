@@ -429,6 +429,10 @@ The runner determines shard ownership from the complete memo-independent
 candidate inventory, including explicit files. Unit jobs use Vitest's
 hash-sort-and-range algorithm (`vitestShardSlice`, checked against a real
 `vitest run --shard`), and browser jobs use the browser suite registry order.
+The two-shard server unit matrix pins heavy suites and all non-capture serial
+suites to balance the two jobs. Its regression checks the pinned duration spread
+with shard 1's Smoke-boot step and the distribution of always-run guards and
+non-capture serial suites.
 The runner then evaluates related reach and subtracts memo hits within each
 shard's own candidates. Each file has one owner even when sibling shards
 restore different memo records. Vitest receives the final selection directly.
@@ -523,6 +527,12 @@ newest trusted lineage. The DB job runs the `db` scope
 its own `-db-` lineage. The DB config, `server/scripts/init-db.sql` and
 `server/scripts/setup-db-test.mjs` are base inputs (a schema change
 invalidates every key) and `PGDATABASE` is a keyed env var.
+The DB job restores the memo and counts remaining tests before provisioning
+`portos_test` or installing verification tools. It skips those steps and the
+DB runner when the count is zero and the impact plan does not request a live
+restore. The real `pg_dump` restore runs outside the memo on full plans,
+changes matching database risk rules, or changes in the restore suite's import
+closure. An inconclusive closure also selects the restore on server-source changes.
 
 ## Disable
 

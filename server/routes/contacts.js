@@ -14,7 +14,7 @@ router.get('/setup-check', asyncHandler(async (req, res) => {
   res.json(report);
 }));
 
-// Status — cache counts + last sync (no AddressBook open unless setup block).
+// Status — cache counts + last sync; never opens AddressBook (setup-check does).
 router.get('/status', asyncHandler(async (req, res) => {
   const status = await contactsSync.getStatus();
   res.json(status);

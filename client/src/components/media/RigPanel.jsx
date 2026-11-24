@@ -107,10 +107,10 @@ export default function RigPanel({ record, onRecordChange }) {
   const blockedReason = readiness && !readiness.ready ? riggingReasonLabel(readiness.reason) : null;
 
   const retarget = record.retarget || null;
+  const retargetBusy = retargeting || retarget?.status === 'retargeting';
   const canRetarget = rig?.status === 'ready';
   const clipsLoaded = clipsState === 'ready';
   const hasClips = clips.length > 0;
-  const retargetBusy = retargeting || retarget?.status === 'retargeting';
   const diagnosticReady = retarget?.status === 'ready' && retarget.mode === 'diagnostic';
   const writeReady = retarget?.status === 'ready' && retarget.mode === 'write';
   const overCap = diagnosticReady && Boolean(retarget.summary?.cleanupOverCap);
@@ -126,7 +126,7 @@ export default function RigPanel({ record, onRecordChange }) {
         <button
           type="button"
           onClick={handleRig}
-          disabled={!canRig || rigging}
+          disabled={!canRig || rigging || retargetBusy}
           title={blockedReason || (record.status === 'ready' ? undefined : 'Render this model first')}
           className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border border-port-border px-3 py-1.5 text-xs text-gray-300 hover:border-port-accent hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
         >
@@ -202,7 +202,7 @@ export default function RigPanel({ record, onRecordChange }) {
               aria-label="Animation clip"
               value={selectedClip}
               onChange={(e) => setSelectedClip(e.target.value)}
-              disabled={retargetBusy}
+              disabled={retargetBusy || rigging}
               className="min-h-[44px] flex-1 rounded-md border border-port-border bg-port-bg px-2 py-1 text-xs text-white disabled:opacity-40"
             >
               <option value="">Select a clip…</option>
@@ -213,7 +213,7 @@ export default function RigPanel({ record, onRecordChange }) {
             <button
               type="button"
               onClick={handlePreviewRetarget}
-              disabled={!selectedClip || retargetBusy}
+              disabled={!selectedClip || retargetBusy || rigging}
               title={!selectedClip ? 'Pick a clip first' : undefined}
               className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border border-port-border px-3 py-1.5 text-xs text-gray-300 hover:border-port-accent hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
             >
@@ -249,7 +249,7 @@ export default function RigPanel({ record, onRecordChange }) {
               <button
                 type="button"
                 onClick={handleApplyCleanup}
-                disabled={retargetBusy}
+                disabled={retargetBusy || rigging}
                 className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border border-port-accent px-3 py-1.5 text-xs text-port-accent hover:bg-port-accent/10 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {retargetBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bone className="h-3.5 w-3.5" />}

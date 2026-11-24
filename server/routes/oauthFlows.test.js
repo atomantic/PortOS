@@ -151,9 +151,9 @@ describe.each(providers)('$name OAuth', ({ start, callback, success, fallback, s
   it('completes an authorization started locally and rejects a replay', async () => {
     const params = await authorize(localServer, start);
     const path = `${callback}?code=example-code&state=${params.get('state')}&returnTo=calendar`;
-    const response = await call(localServer, path, {
-      headers: { ...crossSite, 'X-Forwarded-Host': 'different.example.test', 'X-Forwarded-Proto': 'https' },
-    });
+    // The second listener has a different origin, so re-deriving Spotify's
+    // redirect URI from the callback would change the token request.
+    const response = await call(remoteServer, path, { headers: crossSite });
     expect(response.status).toBe(302);
     expect(response.headers.get('location')).toBe(success);
     const [, options] = tokenEndpoint.mock.calls[0];

@@ -50,7 +50,7 @@ import { songClipSound } from '../../lib/musicVideo/musicVideoClipSound.js';
 import { clipSpeedRate, clipOffsetSec, documentSceneVisualLayer, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_LYRIC_SIZES, MUSIC_VIDEO_TEXT_ZONES } from '../../lib/musicVideo/musicVideoLayers.js';
 import { musicVideoAspect, musicVideoLyricLayout } from '../../lib/musicVideo/musicVideoAspect.js';
 import { lyricAnchorOnset } from '../../lib/musicVideo/musicVideoLyricAnchors.js';
-import { availableDocumentDirectory, documentDirectoryForRender, unsupportedDocumentEffects } from './compositionDocument.js';
+import { availableDocumentDirectory, documentDirectoryForRender, unsupportedDocumentEffects } from './compositionDocumentRead.js';
 import { musicVideoSongDocument } from './compositionRender.js';
 import { buildSongDocument } from './codeTimeline.js';
 import { resolveNarrativeEvents, narrativeFrameState } from '../../lib/musicVideo/musicVideoNarrativeEvents.js';

@@ -5,22 +5,14 @@ import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { INVALID_OAUTH_STATE_MESSAGE } from '../lib/oauthState.js';
 import { validateRequest } from '../lib/validateRequest.js';
+import { requestOriginFrom as requestOrigin } from '../lib/beeperOAuthOrigin.js';
 import * as spotifyAuth from '../services/spotifyAuth.js';
 import * as spotifySync from '../services/spotifySync.js';
 import * as spotifyPlaylists from '../services/spotifyPlaylists.js';
 
 const router = Router();
 
-// OAuth must use the same public origin the browser used to reach this request.
-// Certificate metadata is not guaranteed to be present on every HTTPS install,
-// while the request host is authoritative for the current callback round-trip.
-function requestOrigin(req) {
-  const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'http')
-    .toString().split(',')[0].trim();
-  const host = (req.headers['x-forwarded-host'] || req.headers.host || '')
-    .toString().split(',')[0].trim();
-  return ['http', 'https'].includes(proto) && host ? `${proto}://${host}` : null;
-}
+// OAuth uses the origin the request arrived on (Host + socket scheme), never X-Forwarded-*.
 
 function requestRedirectOptions(req) {
   return { origin: requestOrigin(req) };

@@ -1,5 +1,5 @@
-import { readFile, writeFile, mkdir, access, rename } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFile, writeFile, mkdir, access, rename, lstat, readdir, rm } from 'node:fs/promises';
+import { join, basename } from 'node:path';
 // Dependency-light shared module (node builtins + pure arg builder only), so
 // importing it from this standalone process doesn't pull in the AI toolkit.
 // Lets the autofixer honor the user's configured CLI provider/model instead
@@ -23,7 +23,7 @@ import {
   revertDiffFromLive,
   runVerifyCommand,
 } from './sandbox.js';
-import { createStagedFixStore } from './stagedFixes.js';
+import { createStagedFixStore, isAutofixerSessionId } from './stagedFixes.js';
 import { startAutofixerUi } from './ui.js';
 import { execPm2, listProcessesStrict, DATA_DIR, AUTOFIXER_DIR, INDEX_FILE, loadApps } from './shared.js';
 
@@ -40,6 +40,7 @@ const stagedFixes = createStagedFixStore({ root: AUTOFIXER_DIR, loadApps, execPm
 const PROVIDERS_FILE = join(DATA_DIR, 'providers.json');
 const SETTINGS_FILE = join(DATA_DIR, 'settings.json');
 const SESSIONS_DIR = join(AUTOFIXER_DIR, 'sessions');
+const SESSION_HISTORY_LIMIT = 100;
 // Disposable worktrees for isolated repair runs (gitignored under data/).
 const WORKTREES_DIR = join(AUTOFIXER_DIR, 'worktrees');
 // Bound the agent-proposed patch before it can reach the live checkout.
@@ -66,7 +67,7 @@ async function readJsonSafe(file, fallback) {
   try {
     return JSON.parse(data);
   } catch (err) {
-    console.error(`❌ [Autofixer] Corrupt JSON in ${file}: ${err.message}`);
+    console.error(`❌ [Autofixer] Corrupt JSON in ${basename(file)} (${err.code || 'parse error'})`);
     return fallback;
   }
 }
@@ -140,8 +141,9 @@ async function sweepInterruptedRepairs() {
 
 async function ensureHistoryDir() {
   await mkdir(SESSIONS_DIR, { recursive: true });
-  await access(INDEX_FILE).catch(async () => {
-    await writeFile(INDEX_FILE, JSON.stringify([], null, 2));
+  await access(INDEX_FILE).catch(async (error) => {
+    if (error.code !== 'ENOENT') throw error;
+    await writeFile(INDEX_FILE, '[]', { flag: 'wx' });
   });
 }
 
@@ -153,7 +155,35 @@ async function loadIndex() {
   if (!Array.isArray(index)) {
     throw new Error('Autofixer history index must be an array');
   }
+  if (index.some(entry => typeof entry?.sessionId !== 'string')) {
+    throw new Error('Autofixer history index contains an invalid session entry');
+  }
   return index;
+}
+
+async function canPruneSession(sessionId) {
+  return stagedFixes.canPrune(sessionId).catch(() => {
+    console.error('❌ [Autofixer] Could not determine a session’s staged disposition during cleanup');
+    return false;
+  });
+}
+
+async function removeSessionDirectory(sessionId) {
+  await rm(join(SESSIONS_DIR, sessionId), { recursive: true, force: true }).catch(() => {
+    console.error('❌ [Autofixer] Could not remove a retired session directory');
+  });
+}
+
+async function sweepOrphanedSessions() {
+  const indexed = new Set((await loadIndex()).map(entry => entry.sessionId));
+  if (!(await lstat(SESSIONS_DIR)).isDirectory()) return;
+  // Remove one session at a time so a legacy backlog cannot fan out I/O.
+  for (const entry of await readdir(SESSIONS_DIR, { withFileTypes: true })) {
+    if (entry.isDirectory() && isAutofixerSessionId(entry.name)
+      && !indexed.has(entry.name) && await canPruneSession(entry.name)) {
+      await removeSessionDirectory(entry.name);
+    }
+  }
 }
 
 async function saveIndex(index) {
@@ -206,11 +236,28 @@ async function writeSession(sessionId, prompt, output, metadata, patch) {
   const existing = index.findIndex(entry => entry.sessionId === sessionId);
   if (existing >= 0) index.splice(existing, 1);
   index.unshift(indexEntry);
-  if (index.length > 100) {
-    index.splice(100);
+  const evicted = new Set();
+  if (index.length > SESSION_HISTORY_LIMIT) {
+    const overflow = index.splice(SESSION_HISTORY_LIMIT);
+    // Metadata reflects manual apply/discard; the staged flag in the index
+    // records only the original repair outcome.
+    for (const entry of overflow) {
+      if (!isAutofixerSessionId(entry.sessionId)) continue;
+      if (!await canPruneSession(entry.sessionId)) {
+        index.push(entry);
+      } else {
+        evicted.add(entry.sessionId);
+      }
+    }
   }
 
   await saveIndex(index);
+  if (evicted.size && (await lstat(SESSIONS_DIR)).isDirectory()) {
+    const retained = new Set(index.map(entry => entry.sessionId));
+    for (const id of evicted) {
+      if (!retained.has(id) && await canPruneSession(id)) await removeSessionDirectory(id);
+    }
+  }
 }
 
 async function getProcessLogs(processName) {
@@ -320,7 +367,7 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   // ISOLATION REQUIREMENT: no git checkout ⇒ no rollback boundary ⇒ we refuse
   // to run an autonomous, file-editing agent driven by untrusted logs.
   if (!(await isGitRepo(app.repoPath))) {
-    const reason = `refusing autonomous repair: ${app.repoPath} is not a git checkout (no rollback boundary)`;
+    const reason = `refusing autonomous repair for ${processName}: app checkout is not a git repository (no rollback boundary)`;
     console.error(`🛑 [Autofixer] ${reason}`);
     return finalize({ success: false, exitCode: -1, error: reason, extra: { isolated: false } });
   }
@@ -550,6 +597,10 @@ async function main() {
   if (shuttingDown) return;
   await sweepInterruptedRepairs().catch((err) => {
     console.error(`❌ [Autofixer] Worktree sweep failed: ${err.message}`);
+  });
+  if (shuttingDown) return;
+  await sweepOrphanedSessions().catch(() => {
+    console.error('❌ [Autofixer] Could not sweep orphaned session directories');
   });
 
   if (shuttingDown) return;

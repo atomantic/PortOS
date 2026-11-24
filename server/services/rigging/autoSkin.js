@@ -50,6 +50,7 @@ import {
   summarizeAutoSkin,
   thresholdsForWorker,
 } from './autoSkinReport.js';
+import { acquireRigLane, releaseRigLane } from './inFlight.js';
 import { requireRiggingInterpreter } from './readiness.js';
 import { buildHumanoidArmatureSpec } from './skeletonMapping.js';
 import { runRiggingWorker } from './workerProcess.js';
@@ -241,11 +242,6 @@ export async function runAutoSkin({
   }
 }
 
-// One rig per record at a time. A double-click would otherwise put two Blender
-// processes on the same mesh — a re-entrancy guard, not a multi-actor lock
-// (AGENTS.md single-user trust model).
-const rigsInFlight = new Set();
-
 /**
  * Rig a stored image-to-3D record and persist the result on it. The record's `rig`
  * field is the user-visible evidence: on success the published pair plus the measured
@@ -262,14 +258,15 @@ export async function rigImageTo3dModel(modelId, options = {}, { run = runAutoSk
   if (model.status !== 'ready' || !model.assetPath) {
     throw rigError('Render this model before rigging it.', 'RIGGING_NO_SOURCE_MESH');
   }
-  if (rigsInFlight.has(modelId)) {
-    throw new ServerError('This model is already being rigged.', { status: 409, code: 'RIGGING_IN_FLIGHT' });
-  }
-
-  rigsInFlight.add(modelId);
+  // One rig OR retarget per record at a time (shared with retarget.js).
+  acquireRigLane(modelId, 'rig');
   const startedAt = now();
-  await mutateModel(modelId, (current) => ({ ...current, rig: { ...(current.rig || {}), status: 'rigging', startedAt, error: null, reason: null } }));
+  // False until the `rigging` transition commits, so a failed initial write neither
+  // strands the lane nor overwrites the record with a `failed` it never entered.
+  let entered = false;
   try {
+    await mutateModel(modelId, (current) => ({ ...current, rig: { ...(current.rig || {}), status: 'rigging', startedAt, error: null, reason: null } }));
+    entered = true;
     const result = await run({
       modelId,
       recordDir: join(PATHS.imageTo3d, modelId),
@@ -297,6 +294,7 @@ export async function rigImageTo3dModel(modelId, options = {}, { run = runAutoSk
       },
     })));
   } catch (error) {
+    if (!entered) throw error;
     await mutateModel(modelId, (current) => ({
       ...current,
       rig: {
@@ -311,6 +309,6 @@ export async function rigImageTo3dModel(modelId, options = {}, { run = runAutoSk
     })).catch(() => {});
     throw error;
   } finally {
-    rigsInFlight.delete(modelId);
+    releaseRigLane(modelId, 'rig');
   }
 }

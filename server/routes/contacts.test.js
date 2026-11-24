@@ -5,7 +5,7 @@ import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
 
 vi.mock('../services/contactsSync.js', () => ({
   checkSetup: vi.fn(async () => ({ ok: true, sourceCount: 2, rawContactRows: 100 })),
-  getStatus: vi.fn(async () => ({ cache: { contactCount: 50, syncedAt: null }, state: {}, setup: { ok: true } })),
+  getStatus: vi.fn(async () => ({ cache: { contactCount: 50, syncedAt: null }, state: {} })),
   runSync: vi.fn(async () => ({ ok: true, contactCount: 50, sourceCount: 2 })),
   clearContactCache: vi.fn(async () => ({ ok: true, cleared: true, cacheRemoved: true, stateRemoved: true })),
 }));

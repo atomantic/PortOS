@@ -243,4 +243,26 @@ describe('RigPanel retarget lane', () => {
     render(<RigPanel record={failed} onRecordChange={() => {}} />);
     expect(await screen.findByText(/3 bones could not be matched \(LeftHand, RightHand, Spine2\)/)).toBeInTheDocument();
   });
+
+  it('locks the retarget controls while a rig request is in flight', async () => {
+    mock.listRiggingClips.mockResolvedValue({ clips: [{ filename: 'wave.glb', label: 'Wave' }] });
+    mock.rigImageTo3dModel.mockReturnValue(new Promise(() => {}));
+    render(<RigPanel record={RIGGED_RECORD} onRecordChange={() => {}} />);
+
+    fireEvent.click(await findEnabledByRole('button', { name: /rig this character/i }));
+
+    await waitFor(() => expect(screen.getByLabelText(/animation clip/i)).toBeDisabled());
+    expect(screen.getByRole('button', { name: /preview retarget/i })).toBeDisabled();
+  });
+
+  it('locks the rig button while a retarget request is in flight', async () => {
+    mock.listRiggingClips.mockResolvedValue({ clips: [{ filename: 'wave.glb', label: 'Wave' }] });
+    mock.retargetImageTo3dModel.mockReturnValue(new Promise(() => {}));
+    render(<RigPanel record={RIGGED_RECORD} onRecordChange={() => {}} />);
+
+    fireEvent.change(await screen.findByLabelText(/animation clip/i), { target: { value: 'wave.glb' } });
+    fireEvent.click(await findEnabledByRole('button', { name: /preview retarget/i }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /rig this character/i })).toBeDisabled());
+  });
 });

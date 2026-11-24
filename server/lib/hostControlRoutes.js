@@ -75,6 +75,9 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/fableloom/:id/export/:jobId/download',
   // Reads the Signal Safe Storage keychain secret and the database it decrypts.
   'GET /api/signal/setup-check',
+  // Open the TCC-protected chat.db and AddressBook databases and return host paths (#18279).
+  'GET /api/imessage/setup-check',
+  'GET /api/contacts/setup-check',
   // Decodes the song master with ffmpeg; the client shows a refusal as unavailable.
   'GET /api/music-video/:id/dependency-impact',
   // Re-encodes the video with ffmpeg on every request (#13156).

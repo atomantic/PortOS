@@ -232,3 +232,11 @@ describe('contactsSync cache security and erasure (#18130)', () => {
     expect(secondClear).toEqual({ ok: true, cleared: true, cacheRemoved: false, stateRemoved: false });
   });
 });
+
+describe('contactsSync.getStatus (#18279)', () => {
+  it('reports cache and state without any setup probe or host paths', async () => {
+    const { getStatus } = await import('./contactsSync.js');
+    const status = await getStatus();
+    expect(Object.keys(status).sort()).toEqual(['cache', 'state']);
+  });
+});
