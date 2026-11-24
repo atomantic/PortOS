@@ -16,6 +16,7 @@
  * failure comes back as a value the caller turns into a terminal frame.
  */
 
+import { chmod } from 'fs/promises';
 import { totalmem } from 'os';
 import { join } from 'path';
 
@@ -125,6 +126,9 @@ async function ensureVllmEnvFile(dir, emit) {
     // Atomic and mode-preserving: the file holds the container's bearer token and a truncate in
     // place is readable half-written by a concurrent `docker compose`.
     await atomicWrite(envPath, merged.contents);
+    await chmod(envPath, 0o600).catch((err) => {
+      if (err?.code !== 'ENOENT') console.log(`⚠️ Could not set permissions on vLLM .env (${err?.code || 'error'})`);
+    });
     emit(`Wrote ${merged.added.length} missing setting${merged.added.length === 1 ? '' : 's'} to .env: ${merged.added.join(', ')}.`);
   }
   if (merged.kept.length > 0) {

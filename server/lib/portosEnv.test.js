@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import * as fileUtils from './fileUtils.js';
@@ -131,5 +131,12 @@ describe('shared installation .env transactions', () => {
     expect(readFileSync(envPath, 'utf8')).toBe(original);
     await upsertPortosEnvLine('NEXT', 'saved', envPath);
     expect(readFileSync(envPath, 'utf8')).toBe(`${original}NEXT=saved\n`);
+  });
+
+  it.skipIf(process.platform === 'win32')('creates a new .env with 0600 permissions and preserves 0600 when ensureVaultKey() appends', async () => {
+    await upsertPortosEnvLine('LLM_BACKEND', 'ollama', envPath);
+    expect(statSync(envPath).mode & 0o777).toBe(0o600);
+    await ensureVaultKey({ envPath });
+    expect(statSync(envPath).mode & 0o777).toBe(0o600);
   });
 });

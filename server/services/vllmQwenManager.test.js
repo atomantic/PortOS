@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { pinPlatform } from '../lib/testHelper.js';
 import { vllmExtraArgs } from '../lib/qwenAgentParsers.js';
 
@@ -249,6 +252,29 @@ describe('provisionVllmQwenProject', () => {
     // The .env is still topped up — EXTRA_ARGS is exactly the setting a project
     // prepared before this existed is most likely to be missing.
     expect(files.atomicWrite).toHaveBeenCalled();
+  });
+
+  it.skipIf(process.platform === 'win32')('enforces 0600 permissions when creating or updating <projectDir>/.env', async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'vllm-env-mode-'));
+    const envPath = join(tmpDir, '.env');
+    try {
+      project.inspectVllmQwenProject.mockResolvedValue({ ...preparedProject, dir: tmpDir, weightsRoot: `${tmpDir}/models` });
+      files.atomicWrite.mockImplementation(async (target, data) => {
+        writeFileSync(target, data, { mode: 0o644 });
+      });
+
+      await provision();
+      expect(statSync(envPath).mode & 0o777).toBe(0o600);
+
+      // Existing 0644 .env missing a setting must also be tightened to 0600 after update.
+      chmodSync(envPath, 0o644);
+      files.tryReadFile.mockImplementation(async (p) => (p === envPath ? 'VLLM_API_KEY=existing-key\n' : null));
+      await provision();
+      expect(statSync(envPath).mode & 0o777).toBe(0o600);
+    } finally {
+      files.atomicWrite.mockImplementation(async () => {});
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it('asks WSL where to put the project on Windows, and records the answer', async () => {
