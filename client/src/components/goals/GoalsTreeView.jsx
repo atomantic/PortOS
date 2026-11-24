@@ -531,7 +531,7 @@ export default function GoalsTreeView({ data, onRefresh }) {
                 </span>
               )}
               {CATEGORY_CONFIG[hoveredNode.category]?.label} &middot; {HORIZON_OPTIONS.find(h => h.value === hoveredNode.horizon)?.label}
-              {hoveredNode.urgency != null && ` &middot; ${Math.round(hoveredNode.urgency * 100)}% urgency`}
+              {hoveredNode.urgency != null && ` · ${Math.round(hoveredNode.urgency * 100)}% urgency`}
             </div>
           </div>
         )}

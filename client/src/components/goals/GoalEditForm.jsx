@@ -165,7 +165,7 @@ export default function GoalEditForm({
               <span className="text-[10px] text-gray-600">min</span>
             </div>
           </div>
-          {form.timeBlockConfig?.preferredDays?.length > 0 && (
+          {form.timeBlockConfig && (
             <button
               type="button"
               onClick={() => setForm({ ...form, timeBlockConfig: null })}
