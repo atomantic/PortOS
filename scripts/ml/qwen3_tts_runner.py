@@ -28,11 +28,12 @@ from pathlib import Path
 
 HUB_ENDPOINT = "https://huggingface.co"
 
-SUPPORTED_MODELS = (
-    "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
-    "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
-    "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
-)
+# Immutable HF revisions so shipped voice models do not drift across installs.
+SUPPORTED_MODELS = {
+    "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+    "Qwen/Qwen3-TTS-12Hz-1.7B-Base": "fd4b254389122332181a7c3db7f27e918eec64e3",
+    "Qwen/Qwen3-TTS-12Hz-0.6B-Base": "5d83992436eae1d760afd27aff78a71d676296fc",
+}
 # Both the language model and speech codec are required. A directory, old
 # metadata.json, or a lone language-model weight is not an installed snapshot.
 REQUIRED_FILES = (
@@ -149,12 +150,19 @@ def download_model(model_id: str, models_dir: Path) -> dict:
     """
     if model_id not in SUPPORTED_MODELS:
         raise ValueError("Unsupported Qwen3-TTS model")
+    pinned_revision = SUPPORTED_MODELS[model_id]
     from huggingface_hub import HfApi, hf_hub_download
 
-    info = HfApi(endpoint=HUB_ENDPOINT).model_info(model_id, files_metadata=True)
+    info = HfApi(endpoint=HUB_ENDPOINT).model_info(
+        model_id, revision=pinned_revision, files_metadata=True
+    )
     revision = info.sha
-    if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
-        raise ValueError("Model repository did not return an immutable revision")
+    if (
+        not isinstance(revision, str)
+        or not re.fullmatch(r"[0-9a-f]{40}", revision)
+        or revision != pinned_revision
+    ):
+        raise ValueError("Model repository did not return the pinned revision")
     files = {entry.rfilename: entry for entry in info.siblings}
     if not all(filename in files for filename in REQUIRED_FILES):
         raise ValueError("Model repository is missing required Qwen3-TTS files")

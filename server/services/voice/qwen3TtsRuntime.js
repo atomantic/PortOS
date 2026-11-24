@@ -25,6 +25,7 @@ export const QWEN3_TTS_RUNNER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'qwen3_
 export const SUPPORTED_QWEN3_MODELS = Object.freeze([
   {
     id: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
+    revision: '5ecdb67327fd37bb2e042aab12ff7391903235d3',
     label: 'Qwen3-TTS 1.7B Voice Design',
     description: 'Instruction-controlled natural voice design, synthesis, and streaming',
     sizeGb: 3.5,
@@ -32,6 +33,7 @@ export const SUPPORTED_QWEN3_MODELS = Object.freeze([
   },
   {
     id: 'Qwen/Qwen3-TTS-12Hz-1.7B-Base',
+    revision: 'fd4b254389122332181a7c3db7f27e918eec64e3',
     label: 'Qwen3-TTS 1.7B Base',
     description: 'Consented rapid voice cloning, full fidelity synthesis, and fine-tuning',
     sizeGb: 3.5,
@@ -39,6 +41,7 @@ export const SUPPORTED_QWEN3_MODELS = Object.freeze([
   },
   {
     id: 'Qwen/Qwen3-TTS-12Hz-0.6B-Base',
+    revision: '5d83992436eae1d760afd27aff78a71d676296fc',
     label: 'Qwen3-TTS 0.6B Base',
     description: 'Lightweight low-latency model optimized for interactive routes',
     sizeGb: 1.2,

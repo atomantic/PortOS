@@ -30,6 +30,7 @@ import {
   MUSICGEN_MODELS,
   AUDIOLDM2_MODELS,
   ACESTEP15_MODELS,
+  MINIMAX_MUSIC3_MODELS,
   MINIMAX_MUSIC3_MLX_MODELS,
   DEFAULT_MUSICGEN_MODEL_ID,
   DEFAULT_AUDIOLDM2_MODEL_ID,
@@ -148,8 +149,16 @@ describe('ENGINES backend registry', () => {
     expect(ENGINES.musicgen.defaultDurationSec).toBe(DEFAULT_DURATION_SEC);
   });
 
-  it('declares MiniMax VRAM requirements per execution profile', () => {
+  it('declares MiniMax VRAM requirements per execution profile and pins its immutable HF revision', () => {
     const engine = ENGINES['minimax-music3'];
+    expect(engine.supportsModelRevision).toBe(true);
+    expect(MINIMAX_MUSIC3_MODELS).toEqual([
+      expect.objectContaining({
+        id: 'minimax-music3',
+        repo: 'MiniMaxAI/MiniMax-Music3',
+        revision: expect.stringMatching(/^[0-9a-f]{40}$/),
+      }),
+    ]);
     expect(engine.executionProfile).toBe('cuda-bf16-auto-experimental');
     expect(engine.vramProfiles[engine.executionProfile]).toMatchObject({
       label: 'CUDA BF16 (automatic full-residency/offload placement)',
@@ -258,12 +267,14 @@ describe('buildSidecarArgs', () => {
     expect(args.slice(args.indexOf('--lyrics'), args.indexOf('--lyrics') + 2)).toEqual(['--lyrics', '[Verse] Example']);
   });
 
-  it('builds MiniMax Music 3 args with lyrics and clamps to five minutes', () => {
+  it('builds MiniMax Music 3 args with pinned revision, lyrics, and clamps to five minutes', () => {
+    const pinnedRevision = MINIMAX_MUSIC3_MODELS[0].revision;
     const { args } = buildSidecarArgs({
       engineId: 'minimax-music3', pythonPath: '/venv/python', repo: 'MiniMaxAI/MiniMax-Music3',
-      prompt: 'cinematic synthwave', lyrics: 'Example lyrics', durationSec: 999, outputPath: '/tmp/out.wav',
+      revision: pinnedRevision, prompt: 'cinematic synthwave', lyrics: 'Example lyrics', durationSec: 999, outputPath: '/tmp/out.wav',
     });
     expect(args).toContain('MiniMaxAI/MiniMax-Music3');
+    expect(args.slice(args.indexOf('--revision'), args.indexOf('--revision') + 2)).toEqual(['--revision', pinnedRevision]);
     expect(args.slice(args.indexOf('--duration'), args.indexOf('--duration') + 2)).toEqual(['--duration', '300']);
     // A sheet with no closing section gets an [outro] cue appended so the model
     // resolves its ending; the caller's words still lead the sheet.
@@ -649,13 +660,18 @@ describe('generateMusic backend selection', () => {
     expect(spawnCalls).toHaveLength(1);
   });
 
-  it('runs MiniMax on a card meeting its measured VRAM floor', async () => {
+  it('runs MiniMax on a card meeting its measured VRAM floor and pins its HF revision', async () => {
+    const pinnedRevision = MINIMAX_MUSIC3_MODELS[0].revision;
     await generateMusic({
       prompt: 'warm cinematic pop',
       lyrics: '[verse]\nExample words\n[outro]',
       engine: 'minimax-music3',
     });
+    expect(inspectModelCache).toHaveBeenCalledWith('MiniMaxAI/MiniMax-Music3', { revision: pinnedRevision });
     expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0].args.slice(spawnCalls[0].args.indexOf('--revision'), spawnCalls[0].args.indexOf('--revision') + 2)).toEqual([
+      '--revision', pinnedRevision,
+    ]);
   });
 
   it('blocks MiniMax on a card below its measured VRAM floor', async () => {
