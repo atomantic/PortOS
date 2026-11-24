@@ -124,7 +124,7 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/quotaBurn/StepSettings.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/settings/AiAssignmentsTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/settings/OrchestrationTab.jsx` | Shared structured options or saved provider reference |
-| `client/src/components/settings/VoiceTab.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/settings/voice/VoiceLlmSection.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/songs/SongScoreParts.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/storyBuilder/ProviderModelPicker.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/system-resources/StoragePanel.jsx` | Shared structured options or saved provider reference |

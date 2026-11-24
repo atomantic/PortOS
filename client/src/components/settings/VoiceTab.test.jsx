@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router';
 import VoiceTab from './VoiceTab';
 import { getProviders } from '../../services/apiProviders';
+import { nanoAvailability } from '../../services/browserLlm';
 import toast from '../ui/Toast';
 
 vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
@@ -452,5 +453,34 @@ describe('VoiceTab initial load failures', () => {
     render(<MemoryRouter><VoiceTab /></MemoryRouter>);
     await waitFor(() => expect(screen.queryByText(/Loading voice settings/)).toBeNull());
     expect(screen.queryByText(/Could not load voice settings/)).toBeNull();
+  });
+});
+
+describe('VoiceTab fast-path and footer refresh', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    voiceApi.getVoiceConfig.mockResolvedValue({
+      ...structuredClone(config),
+      llm: { ...structuredClone(config.llm), fastPath: { enabled: true, browserLlm: true } },
+    });
+    voiceApi.getVoiceStatus.mockResolvedValue({ services: {} });
+    voiceApi.listVoiceEngines.mockResolvedValue({ engines: [] });
+    voiceApi.listVoices.mockResolvedValue({ engine: 'qwen3-tts', voices: [] });
+    nanoAvailability.mockResolvedValue('available');
+  });
+
+  it('probes Gemini Nano status in the fast-path section and refreshes voices from footer Refresh', async () => {
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+    expect(await screen.findByText('On-device model ready')).toBeTruthy();
+
+    nanoAvailability.mockResolvedValue('downloadable');
+    fireEvent.click(screen.getByLabelText(/Tier 2 — on-device browser model/));
+    fireEvent.click(screen.getByLabelText(/Tier 2 — on-device browser model/));
+    expect(await screen.findByText('Available — downloads on first use')).toBeTruthy();
+
+    const callsBefore = voiceApi.listVoices.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(voiceApi.listVoices.mock.calls.length).toBeGreaterThan(callsBefore));
+    expect(voiceApi.getVoiceStatus).toHaveBeenCalledTimes(2);
   });
 });
