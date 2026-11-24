@@ -9,6 +9,7 @@ vi.mock('../../services/apiFeaturePriorities.js', () => ({
 }));
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 
+import { INSTANCE_FEATURES_CHANGED } from '../../constants/events.js';
 import socket from '../../services/socket';
 import { FeaturePrioritiesSection } from './FeaturePrioritiesSection';
 
@@ -94,6 +95,26 @@ describe('FeaturePrioritiesSection', () => {
     await act(async () => { release(payload([area({ tier: 'P0' })])); });
     await waitFor(() => expect(within(rowOf('Brain')).getByTestId('tier-brain').textContent).toBe('P3'));
     expect(mock.get).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps a pin announced while the first read is still in flight', async () => {
+    let release;
+    mock.get.mockReset();
+    mock.get.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+    mock.get.mockResolvedValueOnce(payload([area({ tier: 'P2', source: 'pinned' })]));
+    render(<FeaturePrioritiesSection />);
+    emit('feature-priorities:updated', { areaId: 'brain', tier: 'P2' });
+    await act(async () => { release(payload([area()])); });
+    await waitFor(() => expect(within(rowOf('Brain')).getByTestId('tier-brain').textContent).toBe('P2'));
+    expect(within(rowOf('Brain')).getByText('Pinned')).toBeTruthy();
+  });
+
+  it('re-resolves tiers when an instance feature is toggled', async () => {
+    render(<FeaturePrioritiesSection />);
+    await screen.findByText('Beeper');
+    mock.get.mockResolvedValueOnce(payload([area(), area({ areaId: 'beeper', label: 'Beeper', tier: 'P1', source: 'default' })]));
+    act(() => { window.dispatchEvent(new CustomEvent(INSTANCE_FEATURES_CHANGED)); });
+    await waitFor(() => expect(within(rowOf('Beeper')).getByText('Default')).toBeTruthy());
   });
 
   it('keeps the previous value when a save fails', async () => {

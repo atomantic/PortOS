@@ -1,10 +1,11 @@
 /**
  * Settings > Features "Audit priority" section: each feature area's effective P0-P3 tier, where it came from, recent activity, and a pin control.
  *
- * Own pin changes apply from the PUT response; a cleared pin needs the server to re-resolve the tier, so it (and a clear announced by another tab on `feature-priorities:updated`) does one targeted reload. No timer.
+ * A toggle on `INSTANCE_FEATURES_CHANGED` also reloads, since the feature-off tier follows the toggle. Own pin changes apply from the PUT response; a cleared pin needs the server to re-resolve the tier, so it (and a clear announced by another tab on `feature-priorities:updated`) does one targeted reload. No timer.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { INSTANCE_FEATURES_CHANGED } from '../../constants/events.js';
 import socket from '../../services/socket';
 import BrailleSpinner from '../BrailleSpinner';
 import { getFeaturePriorities, setFeaturePriorityPin } from '../../services/apiFeaturePriorities.js';
@@ -85,12 +86,16 @@ export function FeaturePrioritiesSection() {
 
   const applyPin = useCallback(({ areaId, tier }) => {
     const row = dataRef.current?.areas?.find((entry) => entry.areaId === areaId);
-    if (tier === null) {
-      // Only a row that still shows a pin needs the server to re-resolve it; this also absorbs the echo of our own clear.
-      if (!row || row.source === 'pinned') void load();
+    if (!row) {
+      // A pin announced while the first read is in flight would be missing from that older snapshot.
+      if (pendingLoads.current > 0) void load();
       return;
     }
-    if (!row) return;
+    if (tier === null) {
+      // Only a row that still shows a pin needs the server to re-resolve it; this also absorbs the echo of our own clear.
+      if (row.source === 'pinned') void load();
+      return;
+    }
     commit((prev) => ({ ...prev, areas: prev.areas.map((entry) => (entry.areaId === areaId ? pinRow(entry, tier) : entry)) }));
     // A read already in flight may predate this pin and would overwrite it; supersede it with a fresh read rather than dropping it, since it may also carry another area's cleared pin.
     if (pendingLoads.current > 0) void load();
@@ -104,6 +109,13 @@ export function FeaturePrioritiesSection() {
     socket.on('feature-priorities:updated', applyPin);
     return () => socket.off('feature-priorities:updated', applyPin);
   }, [applyPin]);
+
+  // Toggling an optional feature changes its feature-off tier without any pin event.
+  useEffect(() => {
+    const reload = () => { void load(); };
+    window.addEventListener(INSTANCE_FEATURES_CHANGED, reload);
+    return () => window.removeEventListener(INSTANCE_FEATURES_CHANGED, reload);
+  }, [load]);
 
   const choose = async (row, tier) => {
     if (savingIds.has(row.areaId)) return;
