@@ -11,7 +11,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { PATHS, createCachedStore } from '../lib/fileUtils.js';
 
 const ACCOUNTS_FILE = join(PATHS.agentPersonalities, 'accounts.json');
-const store = createCachedStore(ACCOUNTS_FILE, { accounts: {} }, { context: 'platformAccounts' });
+const store = createCachedStore(ACCOUNTS_FILE, { accounts: {} }, { context: 'platformAccounts', mode: 0o600 });
 const loadAccounts = store.load;
 
 /**

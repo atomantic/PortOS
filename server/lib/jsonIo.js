@@ -6,7 +6,7 @@
  * `load()` is strict (#4115) so a corrupt file rejects instead of being overwritten by the next
  * `mutate`.
  */
-import { open, readFile, readdir, stat } from 'fs/promises';
+import { chmod, open, readFile, readdir, stat } from 'fs/promises';
 import { basename, dirname } from 'path';
 import { appendFileGuarded, atomicWrite, ensureDir, sleep } from './fileCore.js';
 import { createFileWriteQueue } from './fileWriteQueue.js';
@@ -433,6 +433,7 @@ export async function writeJSONLines(filePath, values) {
  * @param {Object} options
  * @param {number} [options.ttl=2000] - Cache TTL in milliseconds
  * @param {string} [options.context=''] - Context label for error logging
+ * @param {number|null} [options.mode=null] - Optional POSIX file mode (e.g. 0o600) applied after writes
  * @returns {{ load, save, mutate, invalidateCache }}
  *
  * `load()` is STRICT: a present-but-unreadable or corrupt file rejects, because
@@ -446,7 +447,7 @@ export async function writeJSONLines(filePath, values) {
  * pair has no such guarantee; use `mutate()` when the new value depends on the
  * current one.
  */
-export function createCachedStore(filePath, defaultValue, { ttl = 2000, context = '' } = {}) {
+export function createCachedStore(filePath, defaultValue, { ttl = 2000, context = '', mode = null } = {}) {
   let cache = null;
   let cacheTimestamp = 0;
   let writeSeq = 0;
@@ -474,6 +475,11 @@ export function createCachedStore(filePath, defaultValue, { ttl = 2000, context 
   // Shared write body; callers go through the serialized `save`/`mutate`.
   const persist = async (data) => {
     await atomicWrite(filePath, data);
+    if (mode != null) {
+      await chmod(filePath, mode).catch((err) => {
+        if (err?.code !== 'ENOENT') console.log(`⚠️ Could not set permissions on ${context || basename(filePath)} (${err?.code || 'error'})`);
+      });
+    }
     writeSeq += 1;
     cache = data;
     cacheTimestamp = Date.now();
