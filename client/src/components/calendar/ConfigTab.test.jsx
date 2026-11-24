@@ -53,12 +53,25 @@ describe('Google API status read', () => {
 });
 
 describe('Google credential clearing', () => {
+  it('requires inline confirmation before clearing Google auth and allows cancel', async () => {
+    const button = await openAuth();
+    fireEvent.click(button);
+    expect(screen.getByText(/Clear Google API authorization\?/)).toBeTruthy();
+    expect(api.clearGoogleAuth).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByText(/Clear Google API authorization\?/)).toBeNull();
+    expect(api.clearGoogleAuth).not.toHaveBeenCalled();
+    expect(screen.getByText('Google API authenticated')).toBeTruthy();
+  });
+
   it('blocks duplicate clears and confirms a bodyless success before refreshing auth', async () => {
     let resolve;
     api.clearGoogleAuth.mockImplementation(() => new Promise(done => { resolve = done; }));
     const button = await openAuth();
     api.getGoogleAuthStatus.mockResolvedValue({ hasCredentials: true, hasTokens: false });
     fireEvent.click(button);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear auth' }));
     expect(button).toBeDisabled();
     fireEvent.click(button);
     expect(api.clearGoogleAuth).toHaveBeenCalledTimes(1);
@@ -75,6 +88,7 @@ describe('Google credential clearing', () => {
     api.clearGoogleAuth.mockRejectedValueOnce(new Error('Synthetic clear failure')).mockResolvedValueOnce(undefined);
     const button = await openAuth();
     fireEvent.click(button);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear auth' }));
     await waitFor(() => expect(button).toBeEnabled());
     expect(screen.getByText('Google API authenticated')).toBeTruthy();
     expect(api.getGoogleAuthStatus).toHaveBeenCalledTimes(1);
@@ -82,6 +96,7 @@ describe('Google credential clearing', () => {
     expect(toast.error).not.toHaveBeenCalled(); // API request owns the error notice.
 
     fireEvent.click(button);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear auth' }));
     await waitFor(() => expect(toast.success).toHaveBeenCalledExactlyOnceWith('Google auth cleared'));
     expect(api.clearGoogleAuth).toHaveBeenCalledTimes(2);
     expect(api.getGoogleAuthStatus).toHaveBeenCalledTimes(2);

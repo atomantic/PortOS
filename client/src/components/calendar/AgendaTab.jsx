@@ -199,7 +199,7 @@ export default function AgendaTab({ accounts }) {
       {failed && (
         <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-port-error">
           Could not load events.
-          <button onClick={retry} className="underline">Retry</button>
+          <button type="button" onClick={retry} className="min-h-[44px] rounded border border-port-border px-3 py-2 text-port-accent hover:bg-port-border">Retry</button>
         </div>
       )}
 
