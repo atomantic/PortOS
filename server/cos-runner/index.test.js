@@ -329,8 +329,12 @@ describe('cos-runner /spawn — CLI shim, prompt delivery, stdin guard, and outp
     expect(cleanup).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects missing fields and disallowed commands on /spawn', async () => {
+  it('rejects invalid schema types, missing fields, and disallowed commands on /spawn', async () => {
     const { post, deps } = await bootTestRunner();
+    const badSchema = await post('/spawn', { agentId: 'a1', taskId: 't1', prompt: 'hi', cliArgs: 123 });
+    expect(badSchema.status).toBe(400);
+    expect(badSchema.body.error).toContain('Invalid request body');
+
     const missing = await post('/spawn', { agentId: 'a1' });
     expect(missing.status).toBe(400);
     expect(missing.body.error).toContain('Missing required fields');
@@ -343,6 +347,115 @@ describe('cos-runner /spawn — CLI shim, prompt delivery, stdin guard, and outp
     });
     expect(disallowed.status).toBe(400);
     expect(disallowed.body.error).toContain('Command not allowed: rm');
+    expect(deps.spawn).not.toHaveBeenCalled();
+  });
+
+  it('rejects duplicate active agentId on /spawn with 409 without invoking prepareCliPrompt, securityScans.register, or spawn', async () => {
+    const register = vi.fn(async () => {});
+    const { post, runner, deps, children } = await bootTestRunner({
+      securityScans: {
+        register,
+        read: vi.fn(async () => null),
+        start: vi.fn(async () => ({})),
+        stop: vi.fn(async () => null),
+        recover: vi.fn(async () => {}),
+      },
+    });
+
+    const first = await post('/spawn', {
+      agentId: 'agent-dup',
+      taskId: 't-first',
+      prompt: 'first',
+      cliCommand: 'claude',
+      cliArgs: ['--print'],
+    });
+    expect(first.status).toBe(200);
+    const originalEntry = runner.activeAgents.get('agent-dup');
+
+    deps.prepareCliPrompt.mockClear();
+    deps.spawn.mockClear();
+    register.mockClear();
+
+    const duplicate = await post('/spawn', {
+      agentId: 'agent-dup',
+      taskId: 't-second',
+      prompt: 'second',
+      cliCommand: 'claude',
+      cliArgs: ['--print'],
+    });
+    expect(duplicate.status).toBe(409);
+    expect(duplicate.body.error).toContain('Agent agent-dup is already running');
+    expect(deps.prepareCliPrompt).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
+    expect(deps.spawn).not.toHaveBeenCalled();
+    expect(runner.activeAgents.get('agent-dup')).toBe(originalEntry);
+    expect(children).toHaveLength(1);
+  });
+
+  it('builds legacy Claude args with optional --model when cliCommand is omitted', async () => {
+    const { post, deps } = await bootTestRunner();
+
+    const withoutModel = await post('/spawn', {
+      agentId: 'a-legacy-1',
+      taskId: 't-legacy-1',
+      prompt: 'legacy run',
+    });
+    expect(withoutModel.status).toBe(200);
+    expect(deps.prepareCliPrompt).toHaveBeenNthCalledWith(
+      1,
+      'claude',
+      ['--dangerously-skip-permissions', '--print', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'],
+      'legacy run',
+      { cwd: '/example/root' },
+    );
+
+    const withModel = await post('/spawn', {
+      agentId: 'a-legacy-2',
+      taskId: 't-legacy-2',
+      prompt: 'legacy model run',
+      model: 'claude-sonnet-4-6',
+    });
+    expect(withModel.status).toBe(200);
+    expect(deps.prepareCliPrompt).toHaveBeenNthCalledWith(
+      2,
+      'claude',
+      ['--dangerously-skip-permissions', '--print', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--model', 'claude-sonnet-4-6'],
+      'legacy model run',
+      { cwd: '/example/root' },
+    );
+  });
+
+  it('cleans up prompt temp file when shutdown starts before spawn commits', async () => {
+    const cleanup = vi.fn();
+    const register = vi.fn(async () => {});
+    let runnerRef;
+    const { runner, post, deps } = await bootTestRunner({
+      exit: vi.fn(),
+      shutdownDeadlineMs: 200,
+      securityScans: {
+        register,
+        read: vi.fn(async () => null),
+        start: vi.fn(async () => ({})),
+        stop: vi.fn(async () => null),
+        recover: vi.fn(async () => {}),
+      },
+      prepareCliPrompt: vi.fn((_cmd, args) => {
+        void runnerRef.lifecycle.shutdown();
+        return { args, useStdin: true, cleanup };
+      }),
+    });
+    runnerRef = runner;
+
+    const res = await post('/spawn', {
+      agentId: 'a-shutting-down',
+      taskId: 't-sd',
+      prompt: 'abort me',
+      cliCommand: 'claude',
+    });
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ error: 'Runner is shutting down', code: 'SHUTTING_DOWN' });
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(register).not.toHaveBeenCalled();
     expect(deps.spawn).not.toHaveBeenCalled();
   });
 
@@ -412,6 +525,58 @@ describe('cos-runner /spawn — CLI shim, prompt delivery, stdin guard, and outp
       'a-stream',
       'final parsed summary',
       expect.objectContaining({ taskId: 't-stream', exitCode: 0, success: true }),
+    );
+  });
+
+  it('handles split stream-json NDJSON chunks, caps rawStreamBuffer at 512 KiB, and flushes trailing text on close', async () => {
+    const { post, connectClient, runner, deps, children } = await bootTestRunner();
+    const client = await connectClient();
+    const outputs = [];
+    const completed = new Promise(resolve => client.once('agent:completed', resolve));
+    client.on('agent:output', payload => outputs.push(payload));
+
+    await post('/spawn', {
+      agentId: 'a-stream-chunk',
+      taskId: 't-stream-chunk',
+      prompt: 'stream chunks',
+      cliCommand: 'claude',
+      cliArgs: ['--print', '--output-format', 'stream-json'],
+    });
+
+    const child = children[0];
+    const line1 = `${JSON.stringify({
+      type: 'stream_event',
+      event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'split line\n' } },
+    })}\n`;
+    const splitAt = Math.floor(line1.length / 2);
+    child.stdout.emit('data', Buffer.from(line1.slice(0, splitAt)));
+    child.stdout.emit('data', Buffer.from(line1.slice(splitAt)));
+
+    // Exceed 512 KiB with ignored non-JSON filler to verify sliding-window cap.
+    const filler = `${'x'.repeat(300 * 1024)}\n`;
+    child.stdout.emit('data', Buffer.from(filler));
+    child.stdout.emit('data', Buffer.from(filler));
+
+    const tailLine = `${JSON.stringify({
+      type: 'stream_event',
+      event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'trailing without newline' } },
+    })}\n`;
+    child.stdout.emit('data', Buffer.from(tailLine));
+
+    const agent = runner.activeAgents.get('a-stream-chunk');
+    expect(agent.rawStreamBuffer.length).toBe(512 * 1024);
+    expect(agent.rawStreamBuffer.endsWith(tailLine)).toBe(true);
+
+    child.emit('close', 0);
+    await completed;
+
+    expect(outputs).toContainEqual({ agentId: 'a-stream-chunk', text: 'split line\n' });
+    expect(outputs).toContainEqual({ agentId: 'a-stream-chunk', text: 'trailing without newline\n' });
+    expect(deps.persistRunnerCompletion).toHaveBeenCalledWith(
+      '/example/agents',
+      'a-stream-chunk',
+      'split line\ntrailing without newline\n',
+      expect.objectContaining({ taskId: 't-stream-chunk', exitCode: 0, success: true }),
     );
   });
 
@@ -669,6 +834,212 @@ describe('cos-runner termination, pause, and tui:kill delegation', () => {
       expect.objectContaining({ dropState: false }),
     );
   });
+
+  it('handles POST /pause/:agentId 400/404, SIGKILL escalation, repeated-pause timer replacement, and throwing killProcessTree survival', async () => {
+    const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+    let throwOnSigkill = false;
+    const { post, get, runner, deps, children } = await bootTestRunner({
+      sigkillGraceMs: 40,
+      killProcessTree: vi.fn((child, signal) => {
+        if (throwOnSigkill && signal === 'SIGKILL') throw new Error('handle already disposed');
+        child.kill(signal);
+      }),
+    });
+
+    expect((await post('/pause/missing', {})).status).toBe(404);
+    await post('/spawn', { agentId: 'a-pause', taskId: 't-pause', prompt: 'work', cliCommand: 'claude' });
+    expect((await post('/pause/a-pause', { reason: 123 })).status).toBe(400);
+
+    const firstPause = await post('/pause/a-pause', { reason: 'pause 1' });
+    expect(firstPause.status).toBe(200);
+    expect(firstPause.body).toMatchObject({ success: true, agentId: 'a-pause', pid: 1000, pausedAt: expect.any(String) });
+    expect(deps.killProcessTree).toHaveBeenCalledWith(children[0], 'SIGTERM');
+    const firstTimer = runner.activeAgents.get('a-pause').killTimer;
+    expect(firstTimer).toBeTruthy();
+
+    clearSpy.mockClear();
+    const secondPause = await post('/pause/a-pause', { reason: 'pause 2' });
+    expect(secondPause.status).toBe(200);
+    expect(clearSpy).toHaveBeenCalledWith(firstTimer);
+    expect(runner.activeAgents.get('a-pause').killTimer).not.toBe(firstTimer);
+
+    await vi.waitFor(() => {
+      expect(deps.killProcessTree).toHaveBeenCalledWith(children[0], 'SIGKILL');
+    });
+    // Wait long enough that a leaked first timer would have fired a second SIGKILL.
+    await new Promise(resolve => setTimeout(resolve, 60));
+    const sigkillCalls = deps.killProcessTree.mock.calls.filter(([c, sig]) => c === children[0] && sig === 'SIGKILL');
+    expect(sigkillCalls).toHaveLength(1);
+    expect(runner.activeAgents.has('a-pause')).toBe(true);
+
+    // A throwing killProcessTree inside the pause timer must log and keep portos-cos alive.
+    await post('/spawn', { agentId: 'a-pause-throw', taskId: 't-throw', prompt: 'work', cliCommand: 'claude' });
+    throwOnSigkill = true;
+    console.error.mockClear();
+    expect((await post('/pause/a-pause-throw', {})).status).toBe(200);
+
+    await vi.waitFor(() => {
+      expect(console.error).toHaveBeenCalledWith('❌ Pause force kill failed for a-pause-throw: handle already disposed');
+    });
+    expect(runner.activeAgents.get('a-pause-throw').killTimer).toBeNull();
+    expect((await get('/health')).status).toBe(200);
+  });
+
+  it('persists paused CLI output without metadata.json or agent:completed and preserves state.agents on close', async () => {
+    const { post, runner, state, deps, children, connectClient } = await bootTestRunner({ sigkillGraceMs: 5000 });
+    const client = await connectClient();
+    const completed = [];
+    client.on('agent:completed', payload => completed.push(payload));
+
+    await post('/spawn', { agentId: 'a-pause-close', taskId: 't-pause-close', prompt: 'work', cliCommand: 'claude' });
+    children[0].stdout.emit('data', Buffer.from('paused partial work\n'));
+    await post('/pause/a-pause-close', { reason: 'user paused' });
+
+    console.log.mockClear();
+    console.error.mockClear();
+    children[0].emit('close', 143);
+
+    await vi.waitFor(() => expect(runner.activeAgents.has('a-pause-close')).toBe(false));
+    expect(deps.persistRunnerCompletion).toHaveBeenCalledWith(
+      '/example/agents',
+      'a-pause-close',
+      'paused partial work\n',
+      null,
+    );
+    expect(completed).toEqual([]);
+    expect(state.agents['a-pause-close']).toBeDefined();
+    expect(state.stats.completed).toBe(0);
+    expect(console.error).not.toHaveBeenCalled();
+    expect(console.log).toHaveBeenCalledWith('⏸️ Agent a-pause-close exited with code 143 after pause');
+  });
+
+  it('handles POST /kill/:agentId 404, immediate SIGKILL, and removes both activeAgents and state.agents', async () => {
+    const stop = vi.fn(async () => null);
+    const { post, runner, state, deps, children } = await bootTestRunner({
+      securityScans: {
+        register: vi.fn(async () => {}),
+        read: vi.fn(async () => null),
+        start: vi.fn(async () => ({})),
+        stop,
+        recover: vi.fn(async () => {}),
+      },
+    });
+
+    expect((await post('/kill/missing', {})).status).toBe(404);
+    await post('/spawn', { agentId: 'a-kill', taskId: 't-kill', prompt: 'work', cliCommand: 'claude' });
+    expect(state.agents['a-kill']).toBeDefined();
+
+    const res = await post('/kill/a-kill', {});
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, agentId: 'a-kill', pid: 1000, signal: 'SIGKILL' });
+    expect(stop).toHaveBeenCalledWith('a-kill');
+    expect(deps.killProcessTree).toHaveBeenCalledWith(children[0], 'SIGKILL');
+    expect(runner.activeAgents.has('a-kill')).toBe(false);
+    expect(state.agents['a-kill']).toBeUndefined();
+  });
+
+  it('covers POST /terminate/:agentId 400/404, onlyIfPromptUnsubmitted gating, and real force-kill escalation', async () => {
+    const { post, runner, deps, ptyChildren, connectClient } = await bootTestRunner({
+      armForceKill: undefined,
+      sigkillGraceMs: 40,
+    });
+
+    expect((await post('/terminate/missing', {})).status).toBe(404);
+    await post('/spawn', { agentId: 'a-cli', taskId: 't-cli', prompt: 'p', cliCommand: 'claude' });
+    expect((await post('/terminate/a-cli', { onlyIfPromptUnsubmitted: 'nope' })).status).toBe(400);
+
+    // Non-TUI agent is ignored when onlyIfPromptUnsubmitted is true.
+    expect((await post('/terminate/a-cli', { onlyIfPromptUnsubmitted: true })).body).toEqual({
+      success: true,
+      agentId: 'a-cli',
+      terminated: false,
+    });
+    expect(deps.killProcessTree).not.toHaveBeenCalled();
+
+    // Submitted TUI is ignored when onlyIfPromptUnsubmitted is true.
+    await post('/spawn-tui', { agentId: 'tui-sub', taskId: 't-sub', command: 'claude', trackPromptSubmission: true });
+    const client = await connectClient();
+    client.emit('tui:input', { sessionId: 'tui-sub', data: '\r', promptSubmission: true });
+    await vi.waitFor(() => expect(runner.activeAgents.get('tui-sub').promptSubmitted).toBe(true));
+    expect((await post('/terminate/tui-sub', { onlyIfPromptUnsubmitted: true })).body).toEqual({
+      success: true,
+      agentId: 'tui-sub',
+      terminated: false,
+    });
+
+    // Unsubmitted TUI is terminated, flagged startupInterrupted, and force-killed after grace.
+    await post('/spawn-tui', { agentId: 'tui-unsub', taskId: 't-unsub', command: 'claude', trackPromptSubmission: true });
+    const termRes = await post('/terminate/tui-unsub', { onlyIfPromptUnsubmitted: true });
+    expect(termRes.body).toEqual({ success: true, agentId: 'tui-unsub', terminated: true });
+    expect(runner.activeAgents.get('tui-unsub').startupInterrupted).toBe(true);
+    expect(deps.killProcessTree).toHaveBeenCalledWith(ptyChildren[1], 'SIGTERM');
+
+    await vi.waitFor(() => {
+      expect(ptyChildren[1].kill).toHaveBeenCalledWith('SIGKILL');
+    });
+    expect(runner.activeAgents.has('tui-unsub')).toBe(false);
+  });
+
+  it('arms independent per-agent SIGKILL escalation timers in POST /terminate-all', async () => {
+    const { post, runner, children } = await bootTestRunner({
+      armForceKill: undefined,
+      sigkillGraceMs: 45,
+    });
+
+    await post('/spawn', { agentId: 'a-fast', taskId: 't-fast', prompt: 'p1', cliCommand: 'claude' });
+    await post('/spawn', { agentId: 'a-stuck', taskId: 't-stuck', prompt: 'p2', cliCommand: 'claude' });
+
+    const res = await post('/terminate-all', {});
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, killed: 2 });
+
+    // First agent exits cleanly before grace expires; second agent ignores SIGTERM.
+    children[0].emit('close', 0);
+    await vi.waitFor(() => expect(runner.activeAgents.has('a-fast')).toBe(false));
+
+    await vi.waitFor(() => {
+      expect(children[1].kill).toHaveBeenCalledWith('SIGKILL');
+    });
+    expect(children[0].kill).not.toHaveBeenCalledWith('SIGKILL');
+    expect(runner.activeAgents.has('a-stuck')).toBe(false);
+  });
+
+  it('enforces TUI_SIGNALS allowlist and non-TUI refusal on tui:kill and validates tui:resize', async () => {
+    const { post, deps, ptyChildren, connectClient } = await bootTestRunner();
+    await post('/spawn', { agentId: 'cli-1', taskId: 't1', prompt: 'p1', cliCommand: 'claude' });
+    await post('/spawn-tui', { agentId: 'tui-1', taskId: 't2', command: 'claude' });
+    const client = await connectClient();
+
+    // Disallowed signal and non-TUI / unknown sessionIds are ignored.
+    client.emit('tui:kill', { sessionId: 'tui-1', signal: 'SIGHUP' });
+    client.emit('tui:kill', { sessionId: 'cli-1', signal: 'SIGTERM' });
+    client.emit('tui:kill', { sessionId: 'unknown', signal: 'SIGTERM' });
+    await new Promise(resolve => setTimeout(resolve, 25));
+    expect(deps.killProcessTree).not.toHaveBeenCalled();
+    expect(deps.armForceKill).not.toHaveBeenCalled();
+
+    // Valid TUI_SIGNALS entry (SIGINT) is relayed.
+    client.emit('tui:kill', { sessionId: 'tui-1', signal: 'SIGINT' });
+    await vi.waitFor(() => expect(deps.killProcessTree).toHaveBeenCalledWith(ptyChildren[0], 'SIGINT'));
+
+    // tui:resize accepts positive integers for TUI agents and rejects invalid dimensions or non-TUI targets.
+    client.emit('tui:resize', { sessionId: 'tui-1', cols: 120, rows: 40 });
+    await vi.waitFor(() => expect(ptyChildren[0].resize).toHaveBeenCalledWith(120, 40));
+
+    ptyChildren[0].resize.mockClear();
+    for (const invalid of [
+      { sessionId: 'tui-1', cols: 0, rows: 24 },
+      { sessionId: 'tui-1', cols: 80, rows: -1 },
+      { sessionId: 'tui-1', cols: 80.5, rows: 24 },
+      { sessionId: 'tui-1', cols: 80, rows: '24' },
+      { sessionId: 'cli-1', cols: 80, rows: 24 },
+      { sessionId: 'missing', cols: 80, rows: 24 },
+    ]) {
+      client.emit('tui:resize', invalid);
+    }
+    await new Promise(resolve => setTimeout(resolve, 25));
+    expect(ptyChildren[0].resize).not.toHaveBeenCalled();
+  });
 });
 
 describe('cos-runner /btw/:agentId operational log redaction (#17199)', () => {
@@ -695,8 +1066,19 @@ describe('cos-runner /btw/:agentId operational log redaction (#17199)', () => {
       agentId: 'agent-btw',
       btwPath: join('/example/btw-workspace', 'BTW.md'),
     });
-    expect(files.get(join('/example/btw-workspace', 'BTW.md'))).toContain(secretMessage);
+    const btwFile = join('/example/btw-workspace', 'BTW.md');
+    expect(files.get(btwFile)).toContain('# Additional Context from User');
+    expect(files.get(btwFile)).toContain(secretMessage);
     expect(await btwEvent).toMatchObject({ agentId: 'agent-btw', message: secretMessage });
+
+    // Second write appends without duplicating the header and ignores any body workspacePath.
+    const secondRes = await post('/btw/agent-btw', { message: 'follow-up note', workspacePath: '/attacker/override' });
+    expect(secondRes.status).toBe(200);
+    expect(secondRes.body.btwPath).toBe(btwFile);
+    const updated = files.get(btwFile);
+    expect(updated.match(/# Additional Context from User/g)).toHaveLength(1);
+    expect(updated).toContain(secretMessage);
+    expect(updated).toContain('follow-up note');
 
     const loggedLines = console.log.mock.calls.map(args => args.join(' '));
     expect(loggedLines).toContain(`💬 BTW message delivered to agent agent-btw (${secretMessage.length} chars)`);
@@ -714,7 +1096,7 @@ describe('cos-runner /btw/:agentId operational log redaction (#17199)', () => {
 });
 
 describe('cos-runner cleanupOrphanedAgents', () => {
-  it('reaps dead PIDs, preserves running PIDs, recovers security scans, and emits agents:orphaned', async () => {
+  it('reaps dead PIDs, preserves running PIDs, recovers granted security scans only, and emits single agents:orphaned batch', async () => {
     const recover = vi.fn(async () => {});
     const { runner, state, connectClient } = await bootTestRunner({
       checkProcessRunning: vi.fn(async (pid) => pid === 222),
@@ -726,19 +1108,191 @@ describe('cos-runner cleanupOrphanedAgents', () => {
         recover,
       },
     });
-    state.agents['dead-1'] = { pid: 111, taskId: 'task-dead', securityScanGrant: { id: 'g1' } };
+    state.agents['dead-1'] = { pid: 111, taskId: 'task-dead-1', securityScanGrant: { id: 'g1' } };
+    state.agents['dead-2'] = { pid: 333, taskId: 'task-dead-2' };
     state.agents['alive-1'] = { pid: 222, taskId: 'task-alive' };
 
     const client = await connectClient();
-    const orphanedEvent = new Promise(resolve => client.once('agents:orphaned', resolve));
+    const orphanedEvents = [];
+    client.on('agents:orphaned', payload => orphanedEvents.push(payload));
 
     const orphaned = await runner.cleanupOrphanedAgents();
-    expect(orphaned).toEqual([{ agentId: 'dead-1', taskId: 'task-dead' }]);
+    expect(orphaned).toEqual([
+      { agentId: 'dead-1', taskId: 'task-dead-1' },
+      { agentId: 'dead-2', taskId: 'task-dead-2' },
+    ]);
+    expect(recover).toHaveBeenCalledTimes(1);
     expect(recover).toHaveBeenCalledWith('dead-1');
     expect(state.agents).toEqual({ 'alive-1': { pid: 222, taskId: 'task-alive' } });
-    expect(await orphanedEvent).toMatchObject({
-      count: 1,
-      agents: [expect.objectContaining({ agentId: 'dead-1', taskId: 'task-dead', orphaned: true, exitCode: -1, success: false })],
+
+    await vi.waitFor(() => expect(orphanedEvents).toHaveLength(1));
+    expect(orphanedEvents[0]).toMatchObject({
+      count: 2,
+      agents: [
+        expect.objectContaining({ agentId: 'dead-1', taskId: 'task-dead-1', orphaned: true, exitCode: -1, success: false }),
+        expect.objectContaining({ agentId: 'dead-2', taskId: 'task-dead-2', orphaned: true, exitCode: -1, success: false }),
+      ],
+    });
+  });
+
+  it('does not emit agents:orphaned or prune state when all persisted PIDs are alive', async () => {
+    const { runner, state, connectClient } = await bootTestRunner({
+      checkProcessRunning: vi.fn(async () => true),
+    });
+    state.agents['alive-1'] = { pid: 222, taskId: 'task-alive-1' };
+    state.agents['alive-2'] = { pid: 444, taskId: 'task-alive-2' };
+
+    const client = await connectClient();
+    const orphanedEvents = [];
+    client.on('agents:orphaned', payload => orphanedEvents.push(payload));
+
+    const orphaned = await runner.cleanupOrphanedAgents();
+    await new Promise(resolve => setTimeout(resolve, 25));
+    expect(orphaned).toEqual([]);
+    expect(orphanedEvents).toEqual([]);
+    expect(state.agents).toEqual({
+      'alive-1': { pid: 222, taskId: 'task-alive-1' },
+      'alive-2': { pid: 444, taskId: 'task-alive-2' },
+    });
+  });
+});
+
+describe('cos-runner /agents/:agentId stats, output, and security-scan routes', () => {
+  it('returns stats and output for active agents and 404 for unknown agents', async () => {
+    const { post, get, deps, children } = await bootTestRunner({
+      getProcessStats: vi.fn(async () => ({ active: true, cpu: 1.5, memoryKb: 2048, memoryMb: 2, state: 'S' })),
+      pty: {
+        spawn: vi.fn(() => makeFakeChild(0)),
+      },
+    });
+
+    expect((await get('/agents/missing/stats')).status).toBe(404);
+    expect((await get('/agents/missing/output')).status).toBe(404);
+
+    await post('/spawn', { agentId: 'a-stats', taskId: 't-stats', prompt: 'hi', cliCommand: 'opencode' });
+    children[0].stdout.emit('data', Buffer.from('stats output\n'));
+
+    const stats = await get('/agents/a-stats/stats');
+    expect(stats.status).toBe(200);
+    expect(stats.body).toEqual({
+      agentId: 'a-stats',
+      pid: 1000,
+      active: true,
+      cpu: 1.5,
+      memoryKb: 2048,
+      memoryMb: 2,
+      state: 'S',
+      liveness: 'pid',
+    });
+
+    const out = await get('/agents/a-stats/output');
+    expect(out.status).toBe(200);
+    expect(out.body).toEqual({ agentId: 'a-stats', output: 'stats output\n' });
+
+    // Pid 0 TUI agent reports memoryKb: 0 without invoking getProcessStats.
+    deps.getProcessStats.mockClear();
+    await post('/spawn-tui', { agentId: 'tui-pid0', taskId: 't-pid0', command: 'claude' });
+    const tuiStats = await get('/agents/tui-pid0/stats');
+    expect(tuiStats.status).toBe(200);
+    expect(tuiStats.body).toMatchObject({ agentId: 'tui-pid0', pid: 0, memoryKb: 0, active: true, liveness: 'pty' });
+    expect(deps.getProcessStats).not.toHaveBeenCalled();
+  });
+
+  it('validates /agents/:agentId/security-scan* routes, enforces admission, and maps err.status', async () => {
+    const start = vi.fn();
+    const stop = vi.fn();
+    const read = vi.fn();
+    let admissionError = null;
+    let releaseDrain;
+    const drainHold = new Promise(resolve => { releaseDrain = resolve; });
+
+    const { post, get, runner } = await bootTestRunner({
+      exit: vi.fn(),
+      shutdownDeadlineMs: 2000,
+      drainState: vi.fn(() => drainHold),
+      assertDatabaseAdmission: vi.fn(() => { if (admissionError) throw admissionError; }),
+      securityScans: { register: vi.fn(async () => {}), start, stop, read, recover: vi.fn(async () => {}) },
+    });
+
+    // Schema 400 on POST /security-scan
+    const badSchema = await post('/agents/a1/security-scan', { prompt: '', paths: [] });
+    expect(badSchema.status).toBe(400);
+    expect(badSchema.body.error).toContain('Invalid request body');
+    expect(start).not.toHaveBeenCalled();
+
+    // Database admission failure maps err.status (503)
+    admissionError = Object.assign(new Error('Database maintenance active'), { status: 503 });
+    const blocked = await post('/agents/a1/security-scan', { prompt: 'audit diff', paths: ['server'] });
+    expect(blocked.status).toBe(503);
+    expect(blocked.body).toEqual({ error: 'Database maintenance active' });
+    expect(start).not.toHaveBeenCalled();
+    admissionError = null;
+
+    // Success and err.status / 500 fallback across start, stop, and read
+    start.mockResolvedValueOnce({ evidence: { status: 'completed' }, artifactDirectory: null });
+    const okStart = await post('/agents/a1/security-scan', { prompt: 'audit diff', paths: ['server'] });
+    expect(okStart.status).toBe(200);
+    expect(okStart.body).toEqual({ evidence: { status: 'completed' }, artifactDirectory: null });
+    expect(start).toHaveBeenCalledWith('a1', { prompt: 'audit diff', paths: ['server'], knowledgeBase: [] });
+
+    start.mockRejectedValueOnce(Object.assign(new Error('No active grant'), { status: 409 }));
+    expect(await post('/agents/a1/security-scan', { prompt: 'audit', paths: ['server'] })).toEqual({
+      status: 409,
+      body: { error: 'No active grant' },
+    });
+
+    start.mockRejectedValueOnce(new Error('unexpected failure'));
+    expect(await post('/agents/a1/security-scan', { prompt: 'audit', paths: ['server'] })).toEqual({
+      status: 500,
+      body: { error: 'unexpected failure' },
+    });
+
+    stop.mockResolvedValueOnce({ status: 'interrupted' });
+    expect(await post('/agents/a1/security-scan/stop', {})).toEqual({
+      status: 200,
+      body: { evidence: { status: 'interrupted' } },
+    });
+    stop.mockRejectedValueOnce(Object.assign(new Error('Invalid agent id'), { status: 400 }));
+    expect(await post('/agents/bad/security-scan/stop', {})).toEqual({
+      status: 400,
+      body: { error: 'Invalid agent id' },
+    });
+
+    read.mockResolvedValueOnce({ status: 'not-run' });
+    expect(await get('/agents/a1/security-scan')).toEqual({
+      status: 200,
+      body: { evidence: { status: 'not-run' } },
+    });
+    read.mockRejectedValueOnce(Object.assign(new Error('Invalid agent id'), { status: 400 }));
+    expect(await get('/agents/bad/security-scan')).toEqual({
+      status: 400,
+      body: { error: 'Invalid agent id' },
+    });
+
+    // Shutdown 503 on POST /security-scan via an in-flight chunked request entering express.json before shutdown()
+    const addr = runner.server.address();
+    const shutdownPromise = new Promise((resolve, reject) => {
+      const payload = JSON.stringify({ prompt: 'audit', paths: ['server'] });
+      const req = httpRequest(`http://127.0.0.1:${addr.port}/agents/a1/security-scan`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) },
+      }, (res) => {
+        let text = '';
+        res.on('data', chunk => { text += chunk; });
+        res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(text) }));
+      });
+      req.on('error', reject);
+      req.write(payload.slice(0, 5));
+      setTimeout(() => {
+        void runner.lifecycle.shutdown();
+        req.end(payload.slice(5));
+      }, 20);
+    });
+    const shutdownRes = await shutdownPromise;
+    releaseDrain();
+    expect(shutdownRes).toEqual({
+      status: 503,
+      body: { error: 'Runner is shutting down', code: 'SHUTTING_DOWN' },
     });
   });
 });
