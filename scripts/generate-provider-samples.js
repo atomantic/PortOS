@@ -133,6 +133,25 @@ const opencodeConfigContent = (namespace, label, baseUrl) => JSON.stringify({
   provider: { [namespace]: { npm: '@ai-sdk/openai-compatible', name: label, options: { baseURL: baseUrl } } },
 });
 
+const ANTIGRAVITY_SAMPLE_MODELS = [
+  'antigravity-configured-default',
+  'gemini-4-neon-high', 'gemini-4-neon-xhigh', 'gemini-4-neon-medium', 'gemini-4-neon-low',
+  'gemini-4-argon-medium', 'gemini-4-argon-high', 'gemini-4-argon-low',
+  'gemini-4-hydrogen-high', 'gemini-4-hydrogen-xhigh', 'gemini-4-hydrogen-medium', 'gemini-4-hydrogen-low',
+  'gemini-pro-orchestrator-neon', 'gemini-pro-orchestrator-g1-pro',
+  'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low',
+  'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high',
+  'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high',
+  'gpt-oss-120b-medium',
+];
+const ANTIGRAVITY_SAMPLE_TIERS = {
+  defaultModel: 'gemini-4-neon-medium',
+  lightModel: 'gemini-3.8-flash-medium',
+  mediumModel: 'gemini-4-neon-medium',
+  heavyModel: 'gemini-4-neon-high',
+  ultraModel: 'gemini-4-neon-xhigh',
+};
+
 /**
  * The (harness, method, service) tuple table. Each entry composes its record
  * with `materializeRoute`, then applies `overrides` — the display name,
@@ -543,8 +562,8 @@ const TUPLES = [
     id: 'antigravity-tui', harnessId: 'antigravity', method: 'tui', service: 'antigravity',
     overrides: {
       name: 'Antigravity TUI',
-      models: ['antigravity-configured-default', 'gemini-4-argon-medium', 'gemini-4-argon-high', 'gemini-4-argon-low', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', 'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high', 'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high', 'gpt-oss-120b-medium'],
-      defaultModel: 'antigravity-configured-default', lightModel: 'antigravity-configured-default', mediumModel: 'antigravity-configured-default', heavyModel: 'antigravity-configured-default',
+      models: [...ANTIGRAVITY_SAMPLE_MODELS],
+      ...ANTIGRAVITY_SAMPLE_TIERS,
       contextWindow: 1048576, enabled: false,
     },
   },
@@ -552,8 +571,8 @@ const TUPLES = [
     id: 'antigravity-cli', harnessId: 'antigravity', method: 'cli', service: 'antigravity',
     overrides: {
       name: 'Antigravity CLI',
-      models: ['antigravity-configured-default', 'gemini-4-argon-medium', 'gemini-4-argon-high', 'gemini-4-argon-low', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', 'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high', 'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high', 'gpt-oss-120b-medium'],
-      defaultModel: 'antigravity-configured-default', lightModel: 'antigravity-configured-default', mediumModel: 'antigravity-configured-default', heavyModel: 'antigravity-configured-default',
+      models: [...ANTIGRAVITY_SAMPLE_MODELS],
+      ...ANTIGRAVITY_SAMPLE_TIERS,
       contextWindow: 1048576, timeout: 300000, enabled: true,
       headlessArgs: OMIT,
     },

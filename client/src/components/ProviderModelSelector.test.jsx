@@ -253,18 +253,51 @@ describe('ProviderModelSelector', () => {
     expect(modelSelect.value).toBe('gpt-6.1-sol');
   });
 
-  it('renders every current Antigravity fallback choice, including Gemini 4 Argon', () => {
-    const agyModels = SHIPPED_PROVIDERS.providers['antigravity-cli'].models;
-    expect(agyModels).toContain('gemini-4-argon-medium');
+  it('renders every current Antigravity fallback choice, including Gemini 4 Neon and Argon', () => {
+    const agyProvider = SHIPPED_PROVIDERS.providers['antigravity-cli'];
+    const agyModels = agyProvider.models;
+    expect(agyModels).toEqual(expect.arrayContaining([
+      'gemini-4-neon-medium',
+      'gemini-4-neon-xhigh',
+      'gemini-4-hydrogen-xhigh',
+      'gemini-pro-orchestrator-neon',
+      'gemini-4-argon-medium',
+    ]));
+    expect(agyProvider).toMatchObject({
+      defaultModel: 'gemini-4-neon-medium',
+      lightModel: 'gemini-3.8-flash-medium',
+      mediumModel: 'gemini-4-neon-medium',
+      heavyModel: 'gemini-4-neon-high',
+      ultraModel: 'gemini-4-neon-xhigh',
+    });
     renderSelector({
       providers: [{ id: 'antigravity-cli', name: 'Antigravity CLI', type: 'cli', models: agyModels }],
       selectedProviderId: 'antigravity-cli',
-      selectedModel: 'gemini-4-argon-medium',
+      selectedModel: 'gemini-4-neon-medium',
       availableModels: agyModels,
     });
     const modelSelect = screen.getAllByRole('combobox')[1];
     expect([...modelSelect.querySelectorAll('option')].map((option) => option.value)).toEqual([...agyModels].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' })));
-    expect(modelSelect.value).toBe('gemini-4-argon-medium');
+    expect(modelSelect.value).toBe('gemini-4-neon-medium');
+  });
+
+  it('offers Gemini 4 Neon base model with xhigh effort from shipped Antigravity catalog', () => {
+    const provider = { ...SHIPPED_PROVIDERS.providers['antigravity-cli'], command: 'agy' };
+    renderSelector({
+      providers: [provider],
+      selectedProviderId: 'antigravity-cli',
+      selectedModel: 'gemini-4-neon',
+      availableModels: selectableModelsForProvider(provider, provider.models),
+      effort: 'xhigh',
+      onEffortChange: () => {},
+    });
+    const modelOptions = [...screen.getByLabelText('Model').options].map((option) => option.value);
+    expect(modelOptions).toContain('gemini-4-neon');
+    expect(modelOptions).toContain('gemini-pro-orchestrator-neon');
+    expect([...screen.getByLabelText('Thinking effort').options].map((option) => option.value)).toEqual([
+      '', 'low', 'medium', 'high', 'xhigh',
+    ]);
+    expect(screen.getByLabelText('Thinking effort').value).toBe('xhigh');
   });
 
   it('prepends empty options with value "" when emptyProviderOption/emptyModelOption are set', () => {
