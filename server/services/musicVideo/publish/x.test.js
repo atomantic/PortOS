@@ -13,7 +13,6 @@ const fakePage = ({ dialog, dialogDelay = 0 }) => {
     goto: async () => {},
     url: () => 'https://x.com/compose/post',
     waitForTimeout: async () => {},
-    waitForURL: async () => { throw new Error('stop here'); },
     evaluate: async (fn, arg) => {
       if (Array.isArray(arg) && typeof arg[0] === 'number') return Array.from({ length: arg[0] }, () => 5);
       return 'example';
@@ -71,9 +70,9 @@ describe('X composer scope', () => {
     expect(page.calls.typed).toEqual(['[data-testid=tweetTextarea_0]']);
   });
 
-  it('presses the modal\'s Post button on submit, not the timeline\'s', async () => {
+  it('fills the composer without ever pressing the Post button', async () => {
     const page = fakePage({ dialog: true });
-    await xAdapter.submit(page, { posts: [{ text: 'one' }] }).catch(() => {});
-    expect(page.calls.clicked).toEqual(['[role=dialog] [data-testid=tweetButton]']);
+    await xAdapter.prepare(page, { posts: [{ text: 'one' }, { text: 'two' }] });
+    expect(page.calls.clicked.filter((c) => c.includes('tweetButton'))).toEqual([]);
   });
 });
