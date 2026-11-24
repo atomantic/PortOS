@@ -6,7 +6,7 @@
  * Best-effort: chmod is a no-op on Windows and must not break the auth flow.
  */
 import { mkdir, chmod } from 'fs/promises';
-import { atomicWrite } from './fileUtils.js';
+import { atomicWrite } from './fileCore.js';
 
 async function tighten(path, mode) {
   await chmod(path, mode).catch((err) => {

@@ -8,7 +8,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { statSync } from 'fs';
 import { rm } from 'fs/promises';
-import { expandHome } from './fileUtils.js';
+import { expandHome } from './paths.js';
 import { isTruthyMeta } from './metadataFlags.js';
 
 /**

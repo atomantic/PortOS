@@ -1,12 +1,22 @@
 import { describe, it, expect, vi } from 'vitest';
 
+const { ensureDirMock, atomicWriteMock } = vi.hoisted(() => ({
+  ensureDirMock: vi.fn().mockResolvedValue(undefined),
+  atomicWriteMock: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.unmock('./instances.js');
+vi.mock('../lib/fileCore.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  ensureDir: ensureDirMock,
+  atomicWrite: atomicWriteMock,
+}));
 vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
   ...(await importOriginal()),
   dataPath: (name) => `/mock/data/${name}`,
   readJSONFile: vi.fn(),
-  ensureDir: vi.fn().mockResolvedValue(undefined),
-  atomicWrite: vi.fn().mockResolvedValue(undefined),
+  ensureDir: ensureDirMock,
+  atomicWrite: atomicWriteMock,
   PATHS: { data: '/mock/data' }
 }));
 vi.mock('./instanceEvents.js', () => ({ instanceEvents: { emit: vi.fn() } }));
