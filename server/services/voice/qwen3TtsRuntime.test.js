@@ -20,6 +20,9 @@ describe('qwen3TtsRuntime', () => {
     expect(designModel).toBeDefined();
     expect(cloneModel).toBeDefined();
     expect(interactiveModel).toBeDefined();
+    for (const model of SUPPORTED_QWEN3_MODELS) {
+      expect(model.revision).toMatch(/^[0-9a-f]{40}$/);
+    }
   });
 
   beforeEach(() => vi.clearAllMocks());
