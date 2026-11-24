@@ -18,6 +18,7 @@ let storedCursorRows = [];
 let accountCheckpoint = null;
 let checkpointFailure = false;
 let txFailPattern = null;
+let rejectedMessageIds = new Set();
 
 const queryMock = vi.fn(async (text, params) => {
   dbCalls.push({ text, params });
@@ -41,6 +42,10 @@ const withTransactionMock = vi.fn(async (fn) => {
       txCalls.push(text.trim().split('\n')[0].trim());
       txWrites.push({ text, params });
       if (txFailPattern && txFailPattern.test(text)) throw new Error('simulated write failure');
+      if (text.includes('INSERT INTO beeper_messages') && text.includes('RETURNING id')) {
+        const ids = Array.isArray(params?.[1]) ? params[1] : [params?.[0]];
+        return { rows: ids.filter((id) => !rejectedMessageIds.has(id)).map((id) => ({ id })) };
+      }
       return { rows: [] };
     },
   };
@@ -144,6 +149,7 @@ beforeEach(() => {
   accountCheckpoint = null;
   checkpointFailure = false;
   txFailPattern = null;
+  rejectedMessageIds = new Set();
   queryMock.mockClear();
   withTransactionMock.mockClear();
   upsertParticipantMock.mockClear();
@@ -586,12 +592,119 @@ describe('cursor transactionality', () => {
 
     const insert = txWrites.find(({ text }) => text.includes('INSERT INTO beeper_messages'));
     expect(insert).toBeTruthy();
-    expect(insert.params[8]).toBe(true);
+    expect(insert.params[8]).toEqual([true]);
     // A later page may omit the optional field; the upsert must not flip a
     // message the user actually sent onto the other side of the thread. This is
     // the guard's SHAPE against a mocked client — the row-level proof that a
     // stored TRUE survives a second sweep lives in `beeperSync.db.test.js`.
     expect(insert.text).toContain('is_sender = beeper_messages.is_sender OR EXCLUDED.is_sender');
+  });
+
+  it('batches multi-message and multi-attachment upserts via UNNEST, deduplicates duplicates, and skips rejected/tombstone attachments', async () => {
+    storedCursorRows = [{
+      chat_id: 'chat-1',
+      cursor: 'cur-prev',
+      last_activity: '2026-09-01T00:00:00.000Z',
+      has_conversation: true,
+      snooze_until: null,
+    }];
+    rejectedMessageIds = new Set(['msg-stale']);
+    let msgPage = 0;
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      fetchedUrls.push(url);
+      const parsed = new URL(url);
+      if (parsed.pathname === '/v1/accounts') return jsonResponse(ACCOUNTS);
+      if (parsed.pathname === '/v1/bridges') return jsonResponse(BRIDGES);
+      if (parsed.pathname === '/v1/chats') return jsonResponse(ONE_CHAT);
+      if (/\/messages$/.test(parsed.pathname)) {
+        msgPage++;
+        if (msgPage === 1) {
+          return jsonResponse({
+            items: [
+              {
+                id: 'msg-dup',
+                senderID: 'user-1',
+                text: 'stale edit',
+                editedTimestamp: '2026-09-02T08:00:00.000Z',
+                timestamp: '2026-09-02T07:00:00.000Z',
+                attachments: [{ id: 'mxc://example.invalid/old', mimeType: 'image/png', fileName: 'old.png' }],
+              },
+              {
+                id: 'msg-stale',
+                senderID: 'user-1',
+                text: 'rejected by db',
+                timestamp: '2026-09-02T07:05:00.000Z',
+                attachments: [{ id: 'mxc://example.invalid/stale', mimeType: 'image/png', fileName: 'stale.png' }],
+              },
+              {
+                id: 'msg-tombstone',
+                senderID: 'user-1',
+                text: 'body before unsend',
+                timestamp: '2026-09-02T07:10:00.000Z',
+                attachments: [{ id: 'mxc://example.invalid/keep', mimeType: 'image/png', fileName: 'keep.png' }],
+              },
+            ],
+            hasMore: true,
+            newestCursor: 'cur-mid',
+          });
+        }
+        return jsonResponse({
+          items: [
+            {
+              id: 'msg-dup',
+              senderID: 'user-1',
+              text: 'winning edit',
+              editedTimestamp: '2026-09-02T09:00:00.000Z',
+              isSender: true,
+              timestamp: '2026-09-02T07:00:00.000Z',
+              attachments: [{ id: 'mxc://example.invalid/new', mimeType: 'image/jpeg', fileName: 'new.jpg' }],
+            },
+            {
+              id: 'msg-tombstone',
+              senderID: 'user-1',
+              isDeleted: true,
+              text: '',
+              timestamp: '2026-09-02T07:10:00.000Z',
+              attachments: [],
+            },
+            {
+              id: 'msg-fresh',
+              senderID: 'user-2',
+              text: 'fresh message',
+              timestamp: '2026-09-02T09:30:00.000Z',
+              attachments: [
+                { id: 'mxc://example.invalid/a0', mimeType: 'image/png', fileName: 'a0.png' },
+                { id: 'mxc://example.invalid/a1', mimeType: 'image/png', fileName: 'a1.png' },
+              ],
+            },
+          ],
+          hasMore: false,
+          newestCursor: 'cur-final',
+        });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+
+    await runBeeperSweep({ reason: 'manual' });
+
+    const msgInserts = txWrites.filter(({ text }) => text.includes('INSERT INTO beeper_messages'));
+    const attInserts = txWrites.filter(({ text }) => text.includes('INSERT INTO beeper_attachments'));
+    expect(msgInserts).toHaveLength(1);
+    expect(attInserts).toHaveLength(1);
+
+    // Deduplicated to 4 unique messages; winning edit and tombstone preservation applied in JS.
+    expect(msgInserts[0].params[1]).toEqual(['msg-dup', 'msg-stale', 'msg-tombstone', 'msg-fresh']);
+    expect(msgInserts[0].params[3]).toEqual(['winning edit', 'rejected by db', 'body before unsend', 'fresh message']);
+    expect(msgInserts[0].params[8]).toEqual([true, false, false, false]);
+
+    // Rejected ('msg-stale') and tombstone ('msg-tombstone') attachments are excluded.
+    expect(attInserts[0].params[1]).toEqual(['msg-dup', 'msg-fresh', 'msg-fresh']);
+    expect(attInserts[0].params[2]).toEqual([0, 0, 1]);
+    expect(attInserts[0].params[3]).toEqual([
+      'mxc://example.invalid/new',
+      'mxc://example.invalid/a0',
+      'mxc://example.invalid/a1',
+    ]);
   });
 
   it('leaves the cursor unmoved when a row write throws before the commit', async () => {
@@ -1188,7 +1301,7 @@ describe('account enumeration continuation', () => {
     expect(await restarted.runBeeperSweep()).toMatchObject({ unfinishedAccounts: 0, enumerationComplete: true, messages: 2 });
     expect(visits.slice(20)).toEqual([1, 21]);
     expect(accountCheckpoint).toBeNull();
-    expect(txWrites.filter(({ text }) => text.includes('INSERT INTO beeper_messages')).map(({ params }) => params[0])).toContain('msg-chat-21');
+    expect(txWrites.filter(({ text }) => text.includes('INSERT INTO beeper_messages')).flatMap(({ params }) => params[1])).toContain('msg-chat-21');
   });
 
   it('retains a failed page checkpoint and retries it on the next run', async () => {
@@ -1219,7 +1332,7 @@ describe('account enumeration continuation', () => {
     expect(await runBeeperSweep()).toMatchObject({ enumerationComplete: true, messages: 1 });
     const writes = txWrites.filter(({ text }) => text.includes('INSERT INTO beeper_messages'));
     expect(writes).toHaveLength(2);
-    expect(writes[0].params[0]).toBe(writes[1].params[0]);
+    expect(writes[0].params[1]).toEqual(writes[1].params[1]);
     expect(writes.every(({ text }) => text.includes('ON CONFLICT'))).toBe(true);
   });
 
@@ -1230,7 +1343,7 @@ describe('account enumeration continuation', () => {
     await runBeeperSweep();
     await runBeeperSweep();
     expect(visits.slice(0, 4)).toEqual([1, 21, 1, 2]);
-    expect(txWrites.some(({ text, params }) => text.includes('INSERT INTO beeper_messages') && params[0] === 'msg-chat-2')).toBe(true);
+    expect(txWrites.some(({ text, params }) => text.includes('INSERT INTO beeper_messages') && params[1].includes('msg-chat-2'))).toBe(true);
   });
 
   it('reports a stalled hasMore page as a failure and preserves its checkpoint', async () => {
@@ -1257,24 +1370,78 @@ describe('stored-message event reconciliation', () => {
 
 
 describe('Later scope mirror', () => {
-  it('mirrors and clears snoozes on caught-up chats without rereading message history', async () => {
+  it('issues zero UPDATE queries on unchanged caught-up chats and batches changed snoozes per page', async () => {
     const lastActivity = '2026-09-01T00:00:00.000Z';
     const snoozeUntil = '2030-09-01T00:00:00.000Z';
-    storedCursorRows = [{ chat_id: 'chat-later', cursor: 'cursor-later', last_activity: lastActivity }];
-    const chat = { id: 'chat-later', accountID: 'acct-a', network: 'Example Net', lastActivity,
-      snooze: { snoozeUntil } };
-    installFetch({ chatPages: [{ items: [chat], hasMore: false }] });
+    storedCursorRows = [
+      { chat_id: 'chat-unchanged-null', cursor: 'cur-1', last_activity: lastActivity, has_conversation: true, snooze_until: null },
+      { chat_id: 'chat-unchanged-snoozed', cursor: 'cur-2', last_activity: lastActivity, has_conversation: true, snooze_until: new Date(snoozeUntil) },
+      { chat_id: 'chat-gain-snooze', cursor: 'cur-3', last_activity: lastActivity, has_conversation: true, snooze_until: null },
+      { chat_id: 'chat-clear-snooze', cursor: 'cur-4', last_activity: lastActivity, has_conversation: true, snooze_until: snoozeUntil },
+    ];
+    const makeChat = (id, snooze) => ({
+      id, accountID: 'acct-a', network: 'Example Net', lastActivity, snooze,
+    });
+
+    // Steady state: all caught-up chats match preloaded snooze state -> 0 UPDATE queries.
+    installFetch({
+      chatPages: [{
+        items: [
+          makeChat('chat-unchanged-null', null),
+          makeChat('chat-unchanged-snoozed', { snoozeUntil }),
+        ],
+        hasMore: false,
+      }],
+    });
     await runBeeperSweep({ reason: 'manual' });
-    let writes = dbCalls.filter(({ text }) => text.includes('UPDATE beeper_conversations SET snooze_until'));
-    expect(writes.at(-1).text).toContain('snooze_until IS DISTINCT FROM $3::timestamptz');
-    expect(writes.at(-1).params).toEqual(['acct-a', 'chat-later', snoozeUntil]);
+    expect(dbCalls.filter(({ text }) => text.includes('UPDATE beeper_conversations'))).toHaveLength(0);
     expect(messageRequests()).toHaveLength(0);
 
-    installFetch({ chatPages: [{ items: [{ ...chat, snooze: null }], hasMore: false }] });
+    // Mixed page: two unchanged chats are skipped, two changed snoozes batch into ONE UPDATE.
+    dbCalls.length = 0;
+    installFetch({
+      chatPages: [{
+        items: [
+          makeChat('chat-unchanged-null', null),
+          makeChat('chat-unchanged-snoozed', { snoozeUntil }),
+          makeChat('chat-gain-snooze', { snoozeUntil }),
+          makeChat('chat-clear-snooze', null),
+        ],
+        hasMore: false,
+      }],
+    });
     await runBeeperSweep({ reason: 'manual' });
-    writes = dbCalls.filter(({ text }) => text.includes('UPDATE beeper_conversations SET snooze_until'));
-    expect(writes.at(-1).params[2]).toBeNull();
+    const writes = dbCalls.filter(({ text }) => text.includes('UPDATE beeper_conversations'));
+    expect(writes).toHaveLength(1);
+    expect(writes[0].text).toContain('FROM unnest($2::text[], $3::timestamptz[])');
+    expect(writes[0].text).toContain('snooze_until IS DISTINCT FROM u.snooze_until');
+    expect(writes[0].params).toEqual([
+      'acct-a',
+      ['chat-gain-snooze', 'chat-clear-snooze'],
+      [snoozeUntil, null],
+    ]);
     expect(messageRequests()).toHaveLength(0);
+  });
+
+  it('updates in-memory snooze state after a batch UPDATE so a repeated page in the same sweep skips re-updating', async () => {
+    const lastActivity = '2026-09-01T00:00:00.000Z';
+    const snoozeUntil = '2030-09-01T00:00:00.000Z';
+    accountCheckpoint = 'page-2';
+    storedCursorRows = [
+      { chat_id: 'chat-later', cursor: 'cur-1', last_activity: lastActivity, has_conversation: true, snooze_until: null },
+    ];
+    const chat = { id: 'chat-later', accountID: 'acct-a', network: 'Example Net', lastActivity, snooze: { snoozeUntil } };
+    installFetch({
+      chatPages: [
+        { items: [chat], hasMore: true, oldestCursor: 'page-2' },
+        { items: [chat], hasMore: false },
+      ],
+    });
+
+    await runBeeperSweep({ reason: 'manual' });
+    const writes = dbCalls.filter(({ text }) => text.includes('UPDATE beeper_conversations'));
+    expect(writes).toHaveLength(1);
+    expect(writes[0].params).toEqual(['acct-a', ['chat-later'], [snoozeUntil]]);
   });
 });
 

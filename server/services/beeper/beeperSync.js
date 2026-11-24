@@ -325,13 +325,22 @@ export function chatNeedsSweep(chat, stored) {
 /** Every stored cursor for one account, as a `Map` keyed on the Beeper chat id. */
 async function readAccountCursors(accountId) {
   const result = await query(
-    `SELECT chat_id, cursor, last_activity FROM beeper_sync_cursors WHERE account_id = $1`,
+    `SELECT sc.chat_id, sc.cursor, sc.last_activity,
+            (c.id IS NOT NULL) AS has_conversation, c.snooze_until
+       FROM beeper_sync_cursors sc
+       LEFT JOIN beeper_conversations c
+         ON c.account_id = sc.account_id AND c.source_chat_id = sc.chat_id
+      WHERE sc.account_id = $1`,
     [accountId],
   );
   const rows = Array.isArray(result?.rows) ? result.rows : [];
   return new Map(rows.map((row) => [row.chat_id, {
     cursor: row.cursor || null,
-    lastActivity: row.last_activity ? new Date(row.last_activity).toISOString() : null,
+    lastActivity: toIsoOrNull(row.last_activity),
+    // Distinguish a missing conversation row (NULL from LEFT JOIN) from a loaded non-snoozed row.
+    snoozeLoaded: row.has_conversation === true
+      || (row.has_conversation === undefined && Object.hasOwn(row, 'snooze_until')),
+    snoozeUntil: toIsoOrNull(row.snooze_until),
   }]));
 }
 
@@ -478,6 +487,148 @@ export async function createBeeperConversation({ accountId, participantId }) {
   return { id };
 }
 
+const MESSAGE_UPSERT_CONFLICT_SQL = `ON CONFLICT (id) DO UPDATE SET
+  body = CASE WHEN EXCLUDED.unsent_at IS NOT NULL OR beeper_messages.unsent_at IS NOT NULL
+    THEN beeper_messages.body ELSE COALESCE(NULLIF(EXCLUDED.body, ''), beeper_messages.body) END,
+  sender_id = COALESCE(NULLIF(EXCLUDED.sender_id, ''), beeper_messages.sender_id),
+  sent_at = COALESCE(EXCLUDED.sent_at, beeper_messages.sent_at),
+  edited_at = GREATEST(EXCLUDED.edited_at, beeper_messages.edited_at),
+  unsent_at = COALESCE(beeper_messages.unsent_at, EXCLUDED.unsent_at),
+  sort_key = COALESCE(NULLIF(EXCLUDED.sort_key, ''), beeper_messages.sort_key),
+  -- Never downgrades a stored TRUE to FALSE: the field is optional on
+  -- the inbound Message, so a later page that omits it must not flip a
+  -- message the user actually sent onto the other side of the thread.
+  is_sender = beeper_messages.is_sender OR EXCLUDED.is_sender,
+  observed_at = GREATEST(beeper_messages.observed_at, EXCLUDED.observed_at), updated_at = NOW()
+WHERE beeper_messages.conversation_id = EXCLUDED.conversation_id
+  AND ((EXCLUDED.unsent_at IS NOT NULL AND EXCLUDED.observed_at >= beeper_messages.observed_at) OR
+    (beeper_messages.unsent_at IS NULL
+     AND COALESCE(EXCLUDED.edited_at, 'epoch'::timestamptz) >= COALESCE(beeper_messages.edited_at, 'epoch'::timestamptz)
+     AND (EXCLUDED.edited_at > COALESCE(beeper_messages.edited_at, 'epoch'::timestamptz)
+          OR EXCLUDED.observed_at >= beeper_messages.observed_at)))
+RETURNING id`;
+
+const ATTACHMENT_UPSERT_CONFLICT_SQL = `-- A different mxc_id is a replaced attachment: take upstream metadata and
+-- reset fetch state (the old file is left for sweepAttachmentOrphans).
+-- Otherwise upstream often omits fileSize, so never let NULL/stale
+-- metadata overwrite the measured or HEAD-probed byte_length.
+ON CONFLICT (conversation_id, message_id, idx) DO UPDATE SET
+  mxc_id = COALESCE(EXCLUDED.mxc_id, beeper_attachments.mxc_id),
+  mime_type = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+           AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+    THEN EXCLUDED.mime_type
+    ELSE COALESCE(NULLIF(EXCLUDED.mime_type, ''), beeper_attachments.mime_type) END,
+  byte_length = CASE
+    WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+           AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+      THEN EXCLUDED.byte_length
+    WHEN beeper_attachments.local_path IS NOT NULL AND beeper_attachments.byte_length IS NOT NULL
+      THEN beeper_attachments.byte_length
+    ELSE COALESCE(EXCLUDED.byte_length, beeper_attachments.byte_length) END,
+  file_name = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+           AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+    THEN EXCLUDED.file_name
+    ELSE COALESCE(NULLIF(EXCLUDED.file_name, ''), beeper_attachments.file_name) END,
+  width = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+           AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+    THEN EXCLUDED.width ELSE COALESCE(EXCLUDED.width, beeper_attachments.width) END,
+  height = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+           AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+    THEN EXCLUDED.height ELSE COALESCE(EXCLUDED.height, beeper_attachments.height) END,
+  local_path = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+           AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+    THEN NULL ELSE beeper_attachments.local_path END,
+  fetched_at = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+           AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+    THEN NULL ELSE beeper_attachments.fetched_at END,
+  unavailable_at = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+           AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+    THEN NULL ELSE beeper_attachments.unavailable_at END,
+  fetch_error = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+           AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+    THEN NULL ELSE beeper_attachments.fetch_error END,
+  updated_at = NOW()`;
+
+function epochMs(iso) {
+  if (!iso) return 0;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function maxIso(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  return Date.parse(a) >= Date.parse(b) ? a : b;
+}
+
+function candidateOutranks(cur, cand) {
+  const curObs = epochMs(cur.observedAt);
+  const candObs = epochMs(cand.observedAt);
+  if (cand.unsentAt) return candObs >= curObs;
+  if (cur.unsentAt) return false;
+  const curEdited = epochMs(cur.editedAt);
+  const candEdited = epochMs(cand.editedAt);
+  if (candEdited < curEdited) return false;
+  return (Boolean(cand.editedAt) && candEdited > curEdited) || candObs >= curObs;
+}
+
+function mergeAttachmentsByIdx(baseAttachments, nextAttachments) {
+  if (!nextAttachments.length) return baseAttachments;
+  if (!baseAttachments.length) return nextAttachments;
+  const byIdx = new Map(baseAttachments.map((att) => [att.idx, att]));
+  for (const att of nextAttachments) {
+    const prev = byIdx.get(att.idx);
+    if (!prev) {
+      byIdx.set(att.idx, att);
+      continue;
+    }
+    const replaced = Boolean(att.mxcId && prev.mxcId && prev.mxcId !== att.mxcId);
+    byIdx.set(att.idx, {
+      idx: att.idx,
+      mxcId: att.mxcId ?? prev.mxcId,
+      mimeType: replaced ? att.mimeType : (att.mimeType || prev.mimeType),
+      byteLength: replaced ? att.byteLength : (att.byteLength ?? prev.byteLength),
+      fileName: replaced ? att.fileName : (att.fileName || prev.fileName),
+      width: replaced ? att.width : (att.width ?? prev.width),
+      height: replaced ? att.height : (att.height ?? prev.height),
+    });
+  }
+  return [...byIdx.values()];
+}
+
+function mergeMirroredEntry(current, candidate) {
+  const cur = current.message;
+  const cand = candidate.message;
+  if (!candidateOutranks(cur, cand)) return current;
+  const isTombstone = Boolean(cur.unsentAt || cand.unsentAt);
+  return {
+    message: {
+      id: cur.id,
+      senderId: cand.senderId || cur.senderId,
+      body: isTombstone ? cur.body : (cand.body || cur.body),
+      sentAt: cand.sentAt ?? cur.sentAt,
+      editedAt: maxIso(cur.editedAt, cand.editedAt),
+      unsentAt: cur.unsentAt ?? cand.unsentAt,
+      sortKey: cand.sortKey || cur.sortKey,
+      isSender: cur.isSender || cand.isSender,
+      observedAt: maxIso(cur.observedAt, cand.observedAt),
+    },
+    attachments: cand.unsentAt
+      ? []
+      : mergeAttachmentsByIdx(current.attachments || [], candidate.attachments || []),
+  };
+}
+
+function deduplicateMessageRows(rows) {
+  const byId = new Map();
+  for (const row of rows) {
+    const entry = { message: row.message, attachments: row.attachments || [] };
+    const existing = byId.get(entry.message.id);
+    byId.set(entry.message.id, existing ? mergeMirroredEntry(existing, entry) : entry);
+  }
+  return [...byId.values()];
+}
+
 /** Shared transaction writer: source edit versions outrank fetch-start time.
  * Tombstones are terminal and preserve the archived body and attachments.
  */
@@ -485,26 +636,7 @@ export async function upsertMirroredMessage(client, conversationId, message, att
   const result = await client.query(
     `INSERT INTO beeper_messages (id, conversation_id, sender_id, body, sent_at, edited_at, unsent_at, sort_key, is_sender, observed_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-     ON CONFLICT (id) DO UPDATE SET
-       body = CASE WHEN EXCLUDED.unsent_at IS NOT NULL OR beeper_messages.unsent_at IS NOT NULL
-         THEN beeper_messages.body ELSE COALESCE(NULLIF(EXCLUDED.body, ''), beeper_messages.body) END,
-       sender_id = COALESCE(NULLIF(EXCLUDED.sender_id, ''), beeper_messages.sender_id),
-       sent_at = COALESCE(EXCLUDED.sent_at, beeper_messages.sent_at),
-       edited_at = GREATEST(EXCLUDED.edited_at, beeper_messages.edited_at),
-       unsent_at = COALESCE(beeper_messages.unsent_at, EXCLUDED.unsent_at),
-       sort_key = COALESCE(NULLIF(EXCLUDED.sort_key, ''), beeper_messages.sort_key),
-       -- Never downgrades a stored TRUE to FALSE: the field is optional on
-       -- the inbound Message, so a later page that omits it must not flip a
-       -- message the user actually sent onto the other side of the thread.
-       is_sender = beeper_messages.is_sender OR EXCLUDED.is_sender,
-       observed_at = GREATEST(beeper_messages.observed_at, EXCLUDED.observed_at), updated_at = NOW()
-     WHERE beeper_messages.conversation_id = EXCLUDED.conversation_id
-       AND ((EXCLUDED.unsent_at IS NOT NULL AND EXCLUDED.observed_at >= beeper_messages.observed_at) OR
-         (beeper_messages.unsent_at IS NULL
-          AND COALESCE(EXCLUDED.edited_at, 'epoch'::timestamptz) >= COALESCE(beeper_messages.edited_at, 'epoch'::timestamptz)
-          AND (EXCLUDED.edited_at > COALESCE(beeper_messages.edited_at, 'epoch'::timestamptz)
-               OR EXCLUDED.observed_at >= beeper_messages.observed_at)))
-     RETURNING id`,
+     ${MESSAGE_UPSERT_CONFLICT_SQL}`,
     [
       message.id, conversationId, message.senderId, message.body,
       message.sentAt, message.editedAt, message.unsentAt, message.sortKey,
@@ -519,46 +651,7 @@ export async function upsertMirroredMessage(client, conversationId, message, att
       `INSERT INTO beeper_attachments (conversation_id, message_id, idx, mxc_id, mime_type,
          byte_length, file_name, width, height)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       -- A different mxc_id is a replaced attachment: take upstream metadata and
-       -- reset fetch state (the old file is left for sweepAttachmentOrphans).
-       -- Otherwise upstream often omits fileSize, so never let NULL/stale
-       -- metadata overwrite the measured or HEAD-probed byte_length.
-       ON CONFLICT (conversation_id, message_id, idx) DO UPDATE SET
-         mxc_id = COALESCE(EXCLUDED.mxc_id, beeper_attachments.mxc_id),
-         mime_type = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
-                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
-           THEN EXCLUDED.mime_type
-           ELSE COALESCE(NULLIF(EXCLUDED.mime_type, ''), beeper_attachments.mime_type) END,
-         byte_length = CASE
-           WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
-                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
-             THEN EXCLUDED.byte_length
-           WHEN beeper_attachments.local_path IS NOT NULL AND beeper_attachments.byte_length IS NOT NULL
-             THEN beeper_attachments.byte_length
-           ELSE COALESCE(EXCLUDED.byte_length, beeper_attachments.byte_length) END,
-         file_name = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
-                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
-           THEN EXCLUDED.file_name
-           ELSE COALESCE(NULLIF(EXCLUDED.file_name, ''), beeper_attachments.file_name) END,
-         width = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
-                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
-           THEN EXCLUDED.width ELSE COALESCE(EXCLUDED.width, beeper_attachments.width) END,
-         height = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
-                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
-           THEN EXCLUDED.height ELSE COALESCE(EXCLUDED.height, beeper_attachments.height) END,
-         local_path = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
-                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
-           THEN NULL ELSE beeper_attachments.local_path END,
-         fetched_at = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
-                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
-           THEN NULL ELSE beeper_attachments.fetched_at END,
-         unavailable_at = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
-                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
-           THEN NULL ELSE beeper_attachments.unavailable_at END,
-         fetch_error = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
-                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
-           THEN NULL ELSE beeper_attachments.fetch_error END,
-         updated_at = NOW()`,
+       ${ATTACHMENT_UPSERT_CONFLICT_SQL}`,
       [
         conversationId, message.id, attachment.idx, attachment.mxcId, attachment.mimeType,
         attachment.byteLength, attachment.fileName, attachment.width, attachment.height,
@@ -568,10 +661,64 @@ export async function upsertMirroredMessage(client, conversationId, message, att
 }
 
 async function commitMessages({ conversationId, accountId, sourceChatId, rows, cursor, lastActivity }) {
+  const dedupedRows = deduplicateMessageRows(rows);
   return withTransaction(async (client) => {
-    for (const { message, attachments } of rows) {
-      // ordered writes inside one transaction
-      await upsertMirroredMessage(client, conversationId, message, attachments);
+    if (dedupedRows.length > 0) {
+      const msgResult = await client.query(
+        `INSERT INTO beeper_messages (
+           id, conversation_id, sender_id, body, sent_at, edited_at, unsent_at, sort_key, is_sender, observed_at
+         )
+         SELECT t.id, $1::uuid, t.sender_id, t.body, t.sent_at, t.edited_at, t.unsent_at, t.sort_key, t.is_sender, t.observed_at
+           FROM unnest(
+             $2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::timestamptz[],
+             $7::timestamptz[], $8::text[], $9::boolean[], $10::timestamptz[]
+           ) AS t(id, sender_id, body, sent_at, edited_at, unsent_at, sort_key, is_sender, observed_at)
+         ${MESSAGE_UPSERT_CONFLICT_SQL}`,
+        [
+          conversationId,
+          dedupedRows.map(({ message }) => message.id),
+          dedupedRows.map(({ message }) => message.senderId),
+          dedupedRows.map(({ message }) => message.body),
+          dedupedRows.map(({ message }) => message.sentAt),
+          dedupedRows.map(({ message }) => message.editedAt),
+          dedupedRows.map(({ message }) => message.unsentAt),
+          dedupedRows.map(({ message }) => message.sortKey),
+          dedupedRows.map(({ message }) => message.isSender),
+          dedupedRows.map(({ message }) => message.observedAt),
+        ],
+      );
+      const returnedIds = new Set((msgResult.rows || []).map((row) => row.id));
+      const eligibleAttachments = [];
+      for (const { message, attachments } of dedupedRows) {
+        if (!returnedIds.has(message.id) || message.unsentAt) continue;
+        for (const attachment of attachments) {
+          eligibleAttachments.push({ messageId: message.id, attachment });
+        }
+      }
+      if (eligibleAttachments.length > 0) {
+        await client.query(
+          `INSERT INTO beeper_attachments (
+             conversation_id, message_id, idx, mxc_id, mime_type, byte_length, file_name, width, height
+           )
+           SELECT $1::uuid, t.*
+             FROM unnest(
+               $2::text[], $3::integer[], $4::text[], $5::text[], $6::bigint[],
+               $7::text[], $8::integer[], $9::integer[]
+             ) AS t(message_id, idx, mxc_id, mime_type, byte_length, file_name, width, height)
+           ${ATTACHMENT_UPSERT_CONFLICT_SQL}`,
+          [
+            conversationId,
+            eligibleAttachments.map((item) => item.messageId),
+            eligibleAttachments.map((item) => item.attachment.idx),
+            eligibleAttachments.map((item) => item.attachment.mxcId),
+            eligibleAttachments.map((item) => item.attachment.mimeType),
+            eligibleAttachments.map((item) => item.attachment.byteLength),
+            eligibleAttachments.map((item) => item.attachment.fileName),
+            eligibleAttachments.map((item) => item.attachment.width),
+            eligibleAttachments.map((item) => item.attachment.height),
+          ],
+        );
+      }
     }
 
     // The cursor moves LAST and only inside this transaction, so a failure
@@ -808,23 +955,16 @@ async function sweepAccount(account, clientOptions, personIndex) {
     if (!page) continue;
     assertPagedShape(page, '/v1/chats');
 
+    const pendingSnoozes = new Map();
     for (const chat of page.items) {
       const stored = cursors.get(String(chat?.id ?? ''));
       if (!chatNeedsSweep(chat, stored)) {
-        // Snooze state can change without message activity. Refresh it on every
-        // enumerated chat without refetching history or rewriting unchanged rows.
+        // Snooze state can change without message activity. Skip unchanged
+        // caught-up chats using the preloaded state and batch changed ones.
         const normalized = normalizeChatRow(chat);
         if (normalized.accountId && normalized.sourceChatId) {
-          // one mirrored chat at a time
-          await query(
-            `UPDATE beeper_conversations SET snooze_until = $3, updated_at = NOW()
-              WHERE account_id = $1 AND source_chat_id = $2
-                AND snooze_until IS DISTINCT FROM $3::timestamptz`,
-            [normalized.accountId, normalized.sourceChatId, normalized.snoozeUntil],
-          ).catch((err) => {
-            failedChats++;
-            console.error(`❌ ${LOG_PREFIX}: chat state refresh failed: ${err.message}`);
-          });
+          const snoozeUnchanged = stored?.snoozeLoaded && stored.snoozeUntil === normalized.snoozeUntil;
+          if (!snoozeUnchanged) pendingSnoozes.set(normalized.sourceChatId, normalized.snoozeUntil);
         }
         continue;
       }
@@ -839,6 +979,31 @@ async function sweepAccount(account, clientOptions, personIndex) {
       if (!result) continue;
       chatsSwept++;
       messagesWritten += result.messages;
+    }
+
+    if (pendingSnoozes.size > 0) {
+      const sourceChatIds = [...pendingSnoozes.keys()];
+      const snoozeUntils = [...pendingSnoozes.values()];
+      await query(
+        `UPDATE beeper_conversations c
+            SET snooze_until = u.snooze_until, updated_at = NOW()
+           FROM unnest($2::text[], $3::timestamptz[]) AS u(source_chat_id, snooze_until)
+          WHERE c.account_id = $1
+            AND c.source_chat_id = u.source_chat_id
+            AND c.snooze_until IS DISTINCT FROM u.snooze_until`,
+        [account.accountId, sourceChatIds, snoozeUntils],
+      ).then(() => {
+        for (const [sourceChatId, snoozeUntil] of pendingSnoozes) {
+          const existing = cursors.get(sourceChatId);
+          if (existing) {
+            existing.snoozeUntil = snoozeUntil;
+            existing.snoozeLoaded = true;
+          }
+        }
+      }).catch((err) => {
+        failedChats += pendingSnoozes.size;
+        console.error(`❌ ${LOG_PREFIX}: chat state refresh failed: ${err.message}`);
+      });
     }
 
     // The head refresh spends one page of the same budget but never overwrites
@@ -898,8 +1063,17 @@ async function reconcileStoredMessages(accountId, clientOptions) {
   let position = checkpoint.rows[0];
   if (!position?.upper_bound) {
     const boundary = await query(
-      `SELECT MAX(m.id) AS upper_bound FROM beeper_messages m
-       JOIN beeper_conversations c ON c.id = m.conversation_id WHERE c.account_id = $1`, [accountId],
+      `SELECT MAX(lm.id) AS upper_bound
+         FROM beeper_conversations c
+         CROSS JOIN LATERAL (
+           SELECT m.id
+             FROM beeper_messages m
+            WHERE m.conversation_id = c.id
+            ORDER BY m.id DESC
+            LIMIT 1
+         ) lm
+        WHERE c.account_id = $1`,
+      [accountId],
     );
     if (!boundary.rows[0]?.upper_bound) return;
     position = { message_id: '', upper_bound: boundary.rows[0].upper_bound };
@@ -910,9 +1084,20 @@ async function reconcileStoredMessages(accountId, clientOptions) {
     );
   }
   const result = await query(
-    `SELECT m.id, m.conversation_id, c.source_chat_id
-       FROM beeper_messages m JOIN beeper_conversations c ON c.id = m.conversation_id
-      WHERE c.account_id = $1 AND m.id > $2 AND m.id <= $4 ORDER BY m.id LIMIT $3`,
+    `SELECT lm.id, c.id AS conversation_id, c.source_chat_id
+       FROM beeper_conversations c
+       CROSS JOIN LATERAL (
+         SELECT m.id
+           FROM beeper_messages m
+          WHERE m.conversation_id = c.id
+            AND m.id > $2
+            AND m.id <= $4
+          ORDER BY m.id ASC
+          LIMIT $3
+       ) lm
+      WHERE c.account_id = $1
+      ORDER BY lm.id ASC
+      LIMIT $3`,
     [accountId, position.message_id, RECONCILE_LIMIT, position.upper_bound],
   );
   for (const row of result.rows) {

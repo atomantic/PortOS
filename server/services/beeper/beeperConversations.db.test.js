@@ -127,6 +127,11 @@ beforeAll(async () => {
        ($1, $5, 0, 'mxc://example/evict-d', 'image/png', 'd.png', 'ev/d.png', TRUE, '2019-01-01T00:00:00Z', NULL)`,
     [conversationIds[1], msgId(1, 0), msgId(1, 1), msgId(1, 2), msgId(1, 3)],
   );
+
+  // Refresh planner statistics for seeded rows so Postgres does not assume 1 row
+  // per conversation and choose idx_beeper_messages_conversation_id + Sort over
+  // idx_beeper_messages_conversation_order.
+  await query('ANALYZE beeper_messages');
 });
 
 afterAll(async () => {

@@ -2451,6 +2451,8 @@ DROP INDEX IF EXISTS idx_beeper_messages_conversation_sort;
 
 CREATE INDEX IF NOT EXISTS idx_beeper_messages_conversation_order ON beeper_messages (conversation_id, (COALESCE(sent_at, created_at)) DESC, id DESC);
 
+CREATE INDEX IF NOT EXISTS idx_beeper_messages_conversation_id ON beeper_messages (conversation_id, id);
+
 CREATE TABLE IF NOT EXISTS beeper_participants (
     conversation_id UUID NOT NULL REFERENCES beeper_conversations (id) ON DELETE CASCADE,
     source_user_id TEXT NOT NULL,
