@@ -178,7 +178,7 @@ export default function AgendaTab({ accounts }) {
             aria-label="Filter by account"
             value={accountFilter}
             onChange={(e) => setAccountFilter(e.target.value)}
-            className="px-3 py-2 bg-port-card border border-port-border rounded-lg text-sm text-white focus:outline-none focus:border-port-accent"
+            className="max-w-full px-3 py-2 bg-port-card border border-port-border rounded-lg text-sm text-white focus:outline-none focus:border-port-accent"
           >
             <option value="">All accounts</option>
             {accounts.map(a => (
@@ -256,34 +256,34 @@ export default function AgendaTab({ accounts }) {
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium text-white truncate">{event.title}</span>
                         {event.isAllDay && (
-                          <span className="px-1.5 py-0.5 text-[10px] font-medium bg-port-accent/20 text-port-accent rounded">
+                          <span className="shrink-0 px-1.5 py-0.5 text-[10px] font-medium bg-port-accent/20 text-port-accent rounded">
                             All day
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-gray-500">
                         {!event.isAllDay && (
-                          <span className="flex items-center gap-1">
-                            <Clock size={12} />
+                          <span className="shrink-0 flex items-center gap-1">
+                            <Clock size={12} className="shrink-0" />
                             {formatTime(event.startTime)} - {formatTime(event.endTime)}
                           </span>
                         )}
                         {event.location && (
-                          <span className="flex items-center gap-1 truncate">
-                            <MapPin size={12} />
-                            {event.location}
+                          <span className="flex items-center gap-1 min-w-0 max-w-full">
+                            <MapPin size={12} className="shrink-0" />
+                            <span className="truncate">{event.location}</span>
                           </span>
                         )}
                         {event.attendees?.length > 0 && (
-                          <span className="flex items-center gap-1">
-                            <Users size={12} />
+                          <span className="shrink-0 flex items-center gap-1">
+                            <Users size={12} className="shrink-0" />
                             {event.attendees.length}
                           </span>
                         )}
                       </div>
                     </div>
                     {event.myStatus && event.myStatus !== 'none' && event.myStatus !== 'unknown' && (
-                      <span className={`px-2 py-0.5 text-[10px] font-medium rounded ${RSVP_STYLES[event.myStatus] || RSVP_STYLES.none}`}>
+                      <span className={`shrink-0 px-2 py-0.5 text-[10px] font-medium rounded ${RSVP_STYLES[event.myStatus] || RSVP_STYLES.none}`}>
                         {event.myStatus}
                       </span>
                     )}
