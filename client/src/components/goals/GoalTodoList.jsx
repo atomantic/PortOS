@@ -4,7 +4,7 @@ import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { PRIORITY_BADGE } from './goalConstants';
 
 export default function GoalTodoList({
-  goal, newTodoTitle, setNewTodoTitle, newTodoPriority, setNewTodoPriority,
+  goal, pendingActions, newTodoTitle, setNewTodoTitle, newTodoPriority, setNewTodoPriority,
   newTodoEstimate, setNewTodoEstimate, todoSubmitting, handleAddTodo, handleToggleTodo, handleDeleteTodo
 }) {
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
@@ -23,7 +23,8 @@ export default function GoalTodoList({
             <div className="flex items-center gap-2 text-xs group">
               <button
                 onClick={() => handleToggleTodo(todo)}
-                className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                disabled={pendingActions.has(`todo:${todo.id}`)}
+                className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 disabled:opacity-50 ${
                   todo.status === 'done'
                     ? 'bg-port-success/20 border-port-success text-port-success'
                     : todo.status === 'in-progress'
