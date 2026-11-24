@@ -17,7 +17,7 @@
  *     while the worker mutates it; the run's completion releases it.
  */
 import { resolve } from 'path';
-import { bindClaimBranch, releaseClaimBranch, reserveReconcileBranch, reconcileAssignedTarget, reconcileMergeTarget, claimCheckoutOwnerReason } from '../../lib/claimContinuation.js';
+import { bindClaimBranch, ownsClaimBranch, releaseClaimBranch, reserveReconcileBranch, reconcileAssignedTarget, reconcileMergeTarget, claimCheckoutOwnerReason } from '../../lib/claimContinuation.js';
 import { isTruthyMeta } from '../../lib/metadataFlags.js';
 import { advanceCandidateLifecycle } from '../releaseCandidateLifecycle.js';
 import { withGitMutationLifetime } from '../../lib/gitMutationLifetime.js';
@@ -102,10 +102,10 @@ export async function ownershipTransaction(operation, done, work) {
 const agentRepoPath = agent => agent?.sourceWorkspace || agent?.metadata?.sourceWorkspace || agent?.workspacePath || agent?.metadata?.workspacePath;
 
 /**
- * @param {{ agentId: string, action: 'bind'|'release', branch: string }} input
+ * @param {{ agentId: string, action: 'bind'|'release', branch: string, handoff?: true }} input
  * @returns {Promise<{ bound: true, branch: string }|{ released: true, branch: string }|{ bound?: false, released?: false, reason: string }>}
  */
-export async function updateClaimOwnership({ agentId, action, branch }) {
+export async function updateClaimOwnership({ agentId, action, branch, handoff }) {
   const done = action === 'bind' ? 'bound' : 'released';
   const { cosEvents } = await import('./cosEvents.js');
   let wakeRecovery = false;
@@ -123,6 +123,15 @@ export async function updateClaimOwnership({ agentId, action, branch }) {
     return withGitMutationLifetime(async () => {
       const patch = action === 'bind' ? bindClaimBranch(agent, branch, Object.values(state.agents)) : releaseClaimBranch(agent, branch);
       if (patch.refused) return { [done]: false, reason: patch.refused };
+      const reserved = Array.isArray(meta.reconcileReservations)
+        && meta.reconcileReservations.some(target => target?.branch === branch);
+      if (action === 'release' && handoff !== true && ownsClaimBranch(agent, branch)
+        && !reserved) {
+        // Completion can only retire a checkout if the run still owns its branch.
+        const { listWorktrees } = await import('../worktreeManager.js');
+        const trees = await listWorktrees(repoPath).catch(() => null);
+        if (trees?.some(tree => branchOf(tree) === branch)) return { released: false, reason: 'checkout-present' };
+      }
       const updated = { ...agent, metadata: { ...agent.metadata, ...patch } };
       state.agents[agentId] = updated;
       await save();

@@ -626,8 +626,8 @@ export function buildClaimResumeOverride({ priorAgentId, branchName, worktreePat
  */
 function buildClaimOwnershipSection(agentId) {
   if (!agentId) return 'Claim ownership binding requires a registered agent ID. None was supplied, so PortOS treats every claim checkout in this repository as possibly yours until this run ends; do not hand a claim branch to another run while you are live.';
-  const command = (action) => agentApiCurl({ apiBase: localApiBaseUrl(), path: '/api/cos/claim-ownership',
-    payload: JSON.stringify({ agentId, action, branch: 'BRANCH' }) });
+  const command = (action, options) => agentApiCurl({ apiBase: localApiBaseUrl(), path: '/api/cos/claim-ownership',
+    payload: JSON.stringify({ agentId, action, branch: 'BRANCH', ...options }) });
   return [
     '## Claim ownership binding',
     'When an unpinned issue picker stands down on a specific checked issue because it is operator-parked or resolved, record that issue BEFORE reporting no-action-needed, without creating a branch, worktree, assignment or claim markers. That includes an issue this run parked itself with `blocked` or `needs-input`. When every remaining candidate is skipped only because it depends on unshipped work, an unmarked skip never converges, so park each one: add a `Blocked by #N` line naming every open blocker issue (or GitHub PR; GitLab resolves `#N` only as an issue) to its body, apply `blocked` (the blocked-issue reconciler removes it once they all close), then record it. Do not record in-flight or otherwise skipped candidates. Replace 123 with the checked issue number and require parsed JSON with recorded:true:',
@@ -637,8 +637,11 @@ function buildClaimOwnershipSection(agentId) {
     'Before this run (the parent, never a fan-out child) creates, adopts or checks out ANY claim worktree, bind that exact branch to this run — the pinned issue’s own `claim/…` branch, a tracking epic’s child, a slice split from an oversized issue, each issue a picker or swarm selects, or a claim worktree you are resuming. Replace BRANCH with the branch name and require a parsed JSON response with bound:true:',
     '```bash', command('bind'), '```',
     'Immediately after creating that worktree, repeat the same bind command and require bound:true BEFORE editing or running work there; a refusal means preserve it and report the blocker.',
-    'A refusal, HTTP/auth/transport error or unreadable JSON means the branch is not yours: do not create or enter that worktree; report the reason. A binding lasts through that branch\'s publication, CI, merge or leave-open handoff and cleanup. Release a branch the moment its own PR/MR is confirmed MERGED and its checkout and local branch are removed, even while this run (a swarm parent, or any run holding several claims) keeps working on others: a later slice of the same issue reuses that branch name and stays refused while you hold it. Also release a branch you deliberately leave for another owner mid-run. Never release an open, unmerged, pending-merge or not-yet-retired branch:',
+    'A bind refusal, HTTP/auth/transport error or unreadable JSON means the branch is not yours: do not create or enter that worktree; report the reason. Release a branch after its own PR/MR is confirmed MERGED and its checkout and local branch are removed. This frees the branch name for a later slice of the same issue.',
     '```bash', command('release'), '```',
+    'Keep a merged branch bound if you are leaving its checkout for PortOS to clean up at completion. For that checkout, `checkout-present` is expected and needs no retry. Keep open, unmerged and pending-merge branches bound through completion unless another owner takes over.',
+    'Use `handoff: true` only when another owner is taking over the branch mid-run:',
+    '```bash', command('release', { handoff: true }), '```',
   ].join('\n');
 }
 
