@@ -104,9 +104,8 @@ export const htmlCompositionRenderSchema = z.object({
   .refine(value => !(value.proof && (value.synthesizeMusic || value.musicTrack || value.audioUpload)), 'A proof is silent; omit synthesizeMusic, musicTrack and audioUpload')
   .refine(value => !(value.proof && value.formats), 'A proof checks one framing; use proof.format instead of formats');
 
-// Public renders stay capped at 120s. A music-video owner passes a higher
-// ceiling (the song length, hard-capped by the caller at 900s) and gets the
-// same frame rules. superRefine lives on this factory because the exported
+// Public renders stay capped at 120s. A music-video document passes its song
+// length as a higher ceiling and gets the same frame rules. superRefine lives on this factory because the exported
 // schema is a ZodEffects and cannot be extended in place.
 export function htmlCompositionContractSchemaFor(maxDurationSec = 120) {
   return z.object({
