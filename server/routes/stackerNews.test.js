@@ -65,12 +65,16 @@ describe('Stacker News routes', () => {
     ['publish_comment', { itemId: '10000000-0000-4000-8000-000000000003', payload: { body: 'Comment body' } }],
   ])('accepts a %s with only its own target', async (kind, fields) => {
     const data = { accountId: '10000000-0000-4000-8000-000000000001', kind, ...fields };
-    stackerNews.createAction.mockResolvedValueOnce({ ...data, id: 'queued-action', state: 'pending_review' });
+    stackerNews.createActionWithOutcome.mockResolvedValueOnce({
+      action: { ...data, id: 'queued-action', state: 'pending_review' },
+      created: true,
+      changed: true,
+    });
 
     const response = await request(app).post('/api/stacker-news/actions').send(data);
 
     expect(response.status).toBe(201);
-    expect(stackerNews.createAction).toHaveBeenCalledExactlyOnceWith(data);
+    expect(stackerNews.createActionWithOutcome).toHaveBeenCalledExactlyOnceWith(data);
     expect(response.body).toMatchObject({ id: 'queued-action', state: 'pending_review' });
   });
 
