@@ -485,6 +485,62 @@ describe('handleJobSpawnFailed — no 1s re-fire loop after a failed dispatch', 
     generateTaskFromJob.mockClear();
   });
 
+  it('arms the next occurrence when its timer lands while the previous run is still going', async () => {
+    sharedState.agents = { 'agent-1': { status: 'running', metadata: { jobId: 'job-a' } } };
+    const defaultGetJob = getJob.getMockImplementation();
+    getJob.mockResolvedValue({ id: 'job-a', name: 'job-a', enabled: true, intervalMs: 3_600_000, lastRun: new Date().toISOString() });
+
+    await executeScheduledJob('job-a');
+    getJob.mockImplementation(defaultGetJob);
+
+    expect(generateTaskFromJob).not.toHaveBeenCalled();
+    expect(recordJobGateSkip).toHaveBeenCalledWith('job-a');
+    expect(scheduleEvent).toHaveBeenCalledTimes(1);
+    expect(scheduleEvent.mock.calls[0][0].delayMs).toBeGreaterThan(60000);
+  });
+
+  it('leaves the timer to the spawn events while a fire is still spawning', async () => {
+    getDomainBudgetStatus.mockResolvedValue({ withinBudget: true, exceeded: null, budget: {}, usage: { actions: 0, ms: 0 } });
+    await executeScheduledJob('job-a');
+    scheduleEvent.mockClear();
+    recordJobGateSkip.mockClear();
+
+    await executeScheduledJob('job-a');
+
+    expect(scheduleEvent).not.toHaveBeenCalled();
+    expect(recordJobGateSkip).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['CoS is paused', () => { sharedState.paused = true; }],
+    ['scheduled jobs are off', () => { sharedState.config.autonomousJobsEnabled = false; }],
+  ])('checks a past-due job once a minute, not every second, while %s', async (_label, arrange) => {
+    arrange();
+    await executeScheduledJob('job-a');
+    sharedState.paused = false;
+    sharedState.config.autonomousJobsEnabled = true;
+
+    expect(generateTaskFromJob).not.toHaveBeenCalled();
+    expect(scheduleEvent.mock.calls.map(([event]) => event.delayMs)).toEqual([60000]);
+  });
+
+  it('a throw inside a fire leaves a timer that recomputes the schedule instead of re-running the job', async () => {
+    await handleJobSpawnFailed('job-a', 'held');
+    const { handler } = scheduleEvent.mock.calls[0][0];
+    scheduleEvent.mockClear();
+    getDomainBudgetStatus.mockRejectedValueOnce(new Error('database unavailable'));
+
+    await expect(handler()).rejects.toThrow('database unavailable');
+
+    expect(scheduleEvent).toHaveBeenCalledTimes(1);
+    const recovery = scheduleEvent.mock.calls[0][0];
+    expect(recovery).toMatchObject({ id: 'job:job-a', type: 'once', delayMs: 60000 });
+    scheduleEvent.mockClear();
+    await recovery.handler();
+    expect(generateTaskFromJob).not.toHaveBeenCalled();
+    expect(scheduleEvent).toHaveBeenCalledTimes(1);
+  });
+
   it('a held dispatch retries on the 60s defer and re-runs the job at most once per minute', async () => {
     await handleJobSpawnFailed('job-held', 'held');
 
