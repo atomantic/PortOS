@@ -9,6 +9,7 @@
  * the LWW clock would out-race real remote edits. Idempotent; tombstoned issues are included.
  */
 
+import { toPgJson } from '../../lib/pgJson.js';
 import { ensureStoryboardIds } from '../../lib/storyboardScenes.js';
 
 export async function up(client) {
@@ -27,7 +28,7 @@ export async function up(client) {
       `UPDATE pipeline_issues
        SET data = jsonb_set(data, '{stages,storyboards,scenes}', $1::jsonb, false)
        WHERE id = $2`,
-      [JSON.stringify(stamped), row.id],
+      [toPgJson(stamped), row.id],
     );
     touched += 1;
   }

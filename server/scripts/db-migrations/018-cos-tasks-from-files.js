@@ -18,6 +18,7 @@
  */
 import { readFile } from 'node:fs/promises';
 import { parseTasksMarkdown } from '../../lib/legacyTaskMarkdown.js';
+import { toPgJson } from '../../lib/pgJson.js';
 import { resolveCosTaskFiles } from './_cosTaskFiles.js';
 
 const POSITION_STEP = 1024;
@@ -45,7 +46,7 @@ async function insertTasks(client, source, tasks) {
        ON CONFLICT (source, task_id) DO NOTHING`,
       [source, rows.map((r) => r.task.id), rows.map((r) => r.status), rows.map((r) => r.priorityValue),
         rows.map((r) => r.position), rows.map((r) => r.completedAt), rows.map((r) => r.description),
-        rows.map((r) => JSON.stringify(r.task))],
+        rows.map((r) => toPgJson(r.task))],
     );
   }
 }

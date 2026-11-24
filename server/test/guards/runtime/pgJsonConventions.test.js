@@ -1,5 +1,5 @@
 /**
- * Rule: Values bound to a `::json`/`::jsonb` parameter must be serialized with `toPgJson` (`lib/pgJson.js`), never bare `JSON.stringify` (frozen `scripts/db-migrations/` skipped).
+ * Rule: Values bound to a `::json`/`::jsonb` parameter must be serialized with `toPgJson` (`lib/pgJson.js`), never bare `JSON.stringify` (only the documented `::json` byte-exact migrations are exempt from `::json`; `::jsonb` is enforced everywhere including `scripts/db-migrations/`).
  * Fix: Replace `JSON.stringify(…)` with `toPgJson(…)`.
  * What this guard cannot see:
  *   - Lexer-assisted scan (`lib/sourceScan.js`): misses a stringified value bound to a `json`/`jsonb` column with no `::json` cast in its block, or stringified in one function and bound in another.
@@ -13,11 +13,18 @@ import { readText, REPO_ROOT, trackedFiles } from '../../../../scripts/lib/guard
 const SERVER_ROOT = join(REPO_ROOT, 'server');
 const SCANNED_DIRS = ['services/', 'lib/', 'routes/', 'scripts/'];
 const JSON_CAST = /::jsonb?\b/;
+const JSONB_CAST = /::jsonb\b/;
+// These ::json migrations assert byte-exact equality against JSON.stringify (020/021).
+// They are still checked for ::jsonb parameters via JSONB_CAST.
+const BYTE_EXACT_JSON_MIGRATIONS = new Set([
+  'scripts/db-migrations/020-cos-agents-from-state.js',
+  'scripts/db-migrations/032-strip-release-candidate-transfer-state.js',
+]);
 const STRINGIFY = /JSON\.stringify\s*\(/g;
 const QUERY_CALLEE = /(?:^|[^\w$])(?:query|queryFn|execute|exec|run|q)\s*$/;
 
 /** Every violating `JSON.stringify(` in `src`, as `line N`. */
-export function findPgJsonViolations(src) {
+export function findPgJsonViolations(src, castPattern = JSON_CAST) {
   const code = blankLiterals(src);
   const text = blankCommentBodies(src);
   const line = (index) => code.slice(0, index).split('\n').length;
@@ -38,7 +45,7 @@ export function findPgJsonViolations(src) {
   function violates(enclosing) {
     // Shape 1: inside a query-style call, whose own text is the statement.
     const queryCall = enclosing.find((open) => code[open] === '(' && QUERY_CALLEE.test(calleeOf(open)));
-    if (queryCall !== undefined) return JSON_CAST.test(text.slice(queryCall, matchBracket(code, queryCall)));
+    if (queryCall !== undefined) return castPattern.test(text.slice(queryCall, matchBracket(code, queryCall)));
     // Shape 2: a bind-parameter list assembled apart from the SQL.
     const innermost = enclosing[enclosing.length - 1];
     if (innermost === undefined) return false;
@@ -46,29 +53,31 @@ export function findPgJsonViolations(src) {
       || (code[innermost] === '(' && /\.push\s*$/.test(calleeOf(innermost)));
     if (!isParamList) return false;
     const block = [...enclosing].reverse().find((open) => code[open] === '{');
-    if (block === undefined) return JSON_CAST.test(text);
+    if (block === undefined) return castPattern.test(text);
     const end = matchBracket(code, block);
-    return end !== -1 && JSON_CAST.test(text.slice(block, end));
+    return end !== -1 && castPattern.test(text.slice(block, end));
   }
 }
 
 const trackedSources = () => trackedFiles(SERVER_ROOT, ['*.js', '*.mjs']).filter((f) => f
   && SCANNED_DIRS.some((dir) => f.startsWith(dir))
-  && !f.includes('.test.')
-  && !f.includes('db-migrations/'));
+  && !f.includes('.test.'));
 
 describe('json/jsonb parameters are serialized with toPgJson (#12815)', () => {
-  it('scans the server tree', () => {
+  it('scans the server tree including db-migrations', () => {
     // A broken `git ls-files` would otherwise let every assertion pass by scanning nothing.
-    expect(trackedSources().length).toBeGreaterThan(200);
+    const files = trackedSources();
+    expect(files.length).toBeGreaterThan(200);
+    expect(files.some((f) => f.startsWith('scripts/db-migrations/'))).toBe(true);
   });
 
   it('has no bare JSON.stringify feeding a json/jsonb parameter', () => {
     const violations = [];
     for (const file of trackedSources()) {
+      const castPattern = BYTE_EXACT_JSON_MIGRATIONS.has(file) ? JSONB_CAST : JSON_CAST;
       const src = readText(join(SERVER_ROOT, file));
-      if (!src.includes('JSON.stringify') || !JSON_CAST.test(src)) continue;
-      for (const hit of findPgJsonViolations(src)) violations.push(`server/${file} ${hit}`);
+      if (!src.includes('JSON.stringify') || !castPattern.test(src)) continue;
+      for (const hit of findPgJsonViolations(src, castPattern)) violations.push(`server/${file} ${hit}`);
     }
     expect(
       violations,
@@ -89,6 +98,13 @@ describe('the pgJson recognizer', () => {
       'INSERT INTO t SELECT u.d::jsonb FROM unnest($1::text[]) AS u(d)',
       [rows.map((row) => JSON.stringify(row.task))],
     );`)).toEqual(['line 3']);
+  });
+
+  it('supports narrowing to ::jsonb for byte-exact ::json exemptions', () => {
+    expect(findPgJsonViolations("await query('UPDATE t SET d = $1::json', [JSON.stringify(record)]);", /::jsonb\b/))
+      .toEqual([]);
+    expect(findPgJsonViolations("await query('UPDATE t SET d = $1::jsonb', [JSON.stringify(record)]);", /::jsonb\b/))
+      .toEqual(['line 1']);
   });
 
   it('flags a parameter list assembled apart from the SQL', () => {
