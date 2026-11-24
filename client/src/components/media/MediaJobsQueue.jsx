@@ -1145,7 +1145,8 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
     // provider's own params, and every field below is a local-render knob that
     // would rewrite them.
     if (isHosted) return onSubmit(Object.keys(overrides).length ? overrides : null);
-    if (textChanged(modelId, p.modelId)) overrides.modelId = modelId.trim();
+    const modelChanged = textChanged(modelId, p.modelId);
+    if (modelChanged) overrides.modelId = modelId.trim();
     if (numberChanged(width, p.width) && width !== '') overrides.width = Number(width);
     if (numberChanged(height, p.height) && height !== '') overrides.height = Number(height);
     if (numFrames !== '' && numberChanged(numFrames, p.numFrames)) overrides.numFrames = Number(numFrames);
@@ -1180,13 +1181,13 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
     // A model switch can normalize an inherited encoder to stock locally;
     // submit that reset explicitly so the retry does not retain the old,
     // incompatible encoder from the failed job.
-    if (modelId !== p.modelId || textEncoderId !== originalEncoder) overrides.textEncoderId = textEncoderId;
+    if (modelChanged || textEncoderId !== originalEncoder) overrides.textEncoderId = textEncoderId;
     // Same model-switch clause its sibling above carries: switching to a model
     // that declares no profiles snaps BOTH the local value and
     // its baseline to the default, so they compare equal and no
     // override would be sent — leaving the old job's `speedProfileId` in the
     // inherited params for the queue to echo as a profile the render never used.
-    if (modelId !== p.modelId || speedProfileId !== originalSpeedProfileForModel) {
+    if (modelChanged || speedProfileId !== originalSpeedProfileForModel) {
       overrides.speedProfileId = speedProfileId === DEFAULT_SPEED_PROFILE_ID ? null : speedProfileId;
     }
     if (currentModel?.speedProfiles?.some((profile) => profile.id === speedProfileId && isMiniMaxH3SpeedProfile(profile))) {
@@ -1197,10 +1198,7 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
     // `null` resets the inherited request to Full, because an explicit 'full'
     // and an absent field are the same request — sending the sentinel would
     // leave the requeued job carrying a knob that changed nothing.
-    // `textChanged` rather than the siblings' raw `!==`: a job stored without a
-    // modelId leaves state at '' against an undefined param, which compares
-    // unequal and would make an UNTOUCHED requeue send a decode override.
-    if (textChanged(modelId, p.modelId) || draftDecode !== originalDraftDecode) {
+    if (modelChanged || draftDecode !== originalDraftDecode) {
       overrides.draftDecode = isFullDecodeId(draftDecode) ? null : draftDecode;
     }
     if (JSON.stringify(a2vLoraStageStrengths) !== JSON.stringify(p.a2vLoraStageStrengths ?? [1, 1])) {
