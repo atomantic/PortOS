@@ -46,7 +46,7 @@ const renderOverview = () => render(
   </MemoryRouter>,
 );
 
-describe('Insights OverviewTab empty cards', () => {
+describe('Insights OverviewTab cards', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getGenomeHealthCorrelations.mockResolvedValue({ available: false });
@@ -110,6 +110,28 @@ describe('Insights OverviewTab empty cards', () => {
     await waitFor(() => expect(refreshInsightNarrative).toHaveBeenCalled());
     expect(await screen.findByText('Your sleep debt tracks your training load.')).toBeTruthy();
     expect(screen.queryByText('Analyze now')).toBeNull();
+  });
+
+  it.each([
+    [['typical', 'concern'], 'Marker 2', 'Evidence 2'],
+    [['concern', 'major_concern', 'major_concern'], 'Marker 2', 'Evidence 2'],
+    [['beneficial', 'typical'], 'All markers reviewed', null],
+  ])('summarizes genome marker statuses %j', async (statuses, summary, confidenceLabel) => {
+    getGenomeHealthCorrelations.mockResolvedValue({
+      available: true,
+      totalMarkers: statuses.length,
+      categories: statuses.map((status, index) => ({
+        markers: [{
+          status,
+          name: `Marker ${index + 1}`,
+          confidence: { level: 'moderate', label: `Evidence ${index + 1}` },
+        }],
+      })),
+    });
+
+    renderOverview();
+    expect(await screen.findByText(summary)).toBeTruthy();
+    if (confidenceLabel) expect(screen.getByText(confidenceLabel)).toBeTruthy();
   });
 
   it('drops the action button once a card has content', async () => {
