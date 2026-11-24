@@ -38,8 +38,8 @@ const lyricAt = (cues, t) => {
   return line?.text || '';
 };
 
-// The shot effect inputs a document session stages at open, including what
-// makes an end-frame effect eligible (its still's media and medium). A change
+// The shot pictures and effect inputs a document session stages at open (its
+// selected clip or still is copied in), including what makes an end-frame effect eligible (its still's media and medium). A change
 // reopens it, so a new effect draws (or is named as unsupported) and a removed one clears.
 const shotEffectsKey = (project) => JSON.stringify([project.audioAnalysis?.durationSec ?? null, project.productionPolicy?.strategy ?? null,
   project.overscan ?? null, project.templateEffects ?? null,
@@ -47,7 +47,7 @@ const shotEffectsKey = (project) => JSON.stringify([project.audioAnalysis?.durat
   (project.treatment?.shotDirections || []).map((d) => [d.sceneId, d.medium]),
   (project.scenes || []).map((s) => [s.sceneId, s.startSec, s.endSec,
     s.transitionIn, s.transitionOut, s.glitches, s.imageEffect, s.endImageId, s.visualLayer,
-    s.referenceImageId, s.photoSequence, s.direction?.medium, s.filmLook, s.templateEffects])]);
+    s.videoHistoryId, s.sourceTake, s.referenceImageId, s.photoSequence, s.direction?.medium, s.filmLook, s.templateEffects])]);
 const shotEffectsVersion = (project) => {
   const key = shotEffectsKey(project);
   return `fx-${key.length.toString(36)}-${hashString(key).toString(36)}`;

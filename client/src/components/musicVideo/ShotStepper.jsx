@@ -15,8 +15,16 @@ const FPS = 24;
  * The song time of a shot's first frame. A start between frames (5.37 s at 24
  * fps sits inside frame 128, which still shows the shot before) rounds up to
  * the next frame, so a jump to a shot shows that shot.
+ *
+ * A media element keeps whole microseconds and truncates (1109 / 24 reads back
+ * as 46.208333), which floors to the frame before: the shot before under this
+ * shot's number. A frame time it cannot hold exactly rounds up to a millisecond.
  */
-export const shotStartFrameSec = (startSec, fps = FPS) => Math.max(0, Math.ceil(startSec * fps - 1e-6)) / fps;
+export const shotStartFrameSec = (startSec, fps = FPS) => {
+  const t = Math.max(0, Math.ceil(startSec * fps - 1e-6)) / fps;
+  // Multiples of 1/8 s are exact in both binary and microseconds.
+  return Number.isInteger(t * 8) ? t : Math.ceil(t * 1000 + 0.1) / 1000;
+};
 
 // A shot before the song (the cold open) keeps no place on the song's clock.
 const onSongClock = (scene) => Number.isFinite(scene?.startSec) && !isPreMusicShot(scene);
