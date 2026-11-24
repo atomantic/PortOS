@@ -58,7 +58,7 @@ async function findReusable({ id, builds, buildId, spec, hash, size, samples }) 
     const manifest = await readJson(join(dir, MANIFEST));
     if (manifest?.hash !== hash || manifest.size !== size || manifest.samples !== samples) continue;
     const images = await inspectImages(dir, manifest);
-    if (complete(images)) return { buildId: build.id, dir, manifest };
+    if (complete(images) && images.every((image) => image.max !== 0)) return { buildId: build.id, dir, manifest };
   }
   return null;
 }

@@ -540,6 +540,24 @@ describe('Blender Models: baking worn materials into textures (#17879)', () => {
     if (code === 'bake-uv-overlap') expect(bakedSets()).toEqual(['cloth']);
   });
 
+  it('rebakes an all-black set on the next full build instead of reusing it', async () => {
+    const id = await newModel();
+    blender.fake.control.bakeFault = { metal: 'black' };
+    const { buildId: first, record: firstRecord } = await fullBuild(id);
+    expect(firstRecord).toMatchObject({ status: 'complete', publishable: false });
+    expect(bakedSets()).toEqual(['metal', 'cloth']);
+
+    blender.fake.control.bakeFault = {};
+    blender.fake.control.bakes.length = 0;
+    const { buildId: second, record: secondRecord } = await fullBuild(id);
+    expect(bakedSets()).toEqual(['metal']);
+    expect(secondRecord).toMatchObject({ status: 'complete', publishable: true, bake: { sets: 2, reused: 1 } });
+    expect((await report(id, second)).checks.bake.sets).toMatchObject([
+      { id: 'metal', reused: false, reusedFrom: null },
+      { id: 'cloth', reused: true, reusedFrom: first },
+    ]);
+  });
+
   it.each([
     ['a size Blender textures do not use', { size: 999 }, 'bake-size-invalid'],
     ['a sample count of zero', { samples: 0 }, 'bake-samples-invalid'],
