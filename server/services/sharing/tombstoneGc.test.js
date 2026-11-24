@@ -945,6 +945,22 @@ describe('sweepTombstones — per-record confirmed-push clamp (peer-sync-per-rec
     expect(cutoff).toBe(createdAt + 1);
   });
 
+  it('does not let a never-confirmed series row clamp the universe cutoff (per-kind cohort filter)', async () => {
+    const universeConfirmed = NOW - 5 * 60 * 1000;
+    getMinAckAcrossPeers.mockResolvedValue(NOW);
+    getPeers.mockResolvedValue([{ instanceId: 'peer-a', enabled: true }]);
+    mockSubs({
+      universe: [
+        { peerId: 'peer-a', recordId: 'u-A', createdAt: new Date(NOW - 60 * 60 * 1000).toISOString(), lastConfirmedPushedAt: universeConfirmed },
+      ],
+      series: [
+        { peerId: 'peer-a', recordId: 's-old', createdAt: new Date(NOW - 3 * 60 * 60 * 1000).toISOString(), lastConfirmedPushedAt: null },
+      ],
+    });
+    await sweepTombstones({ now: NOW, graceMs: 0 });
+    expect(pruneTombstonedUniverses.mock.calls[0][0]).toBe(universeConfirmed + 1);
+  });
+
   it('issues inherit the series rows confirmed-push clamp (issue tombstones ride series pushes)', async () => {
     // An issue tombstone is bundled into its parent series push, so its
     // protection comes from the series row's confirmed-push mark — not a
