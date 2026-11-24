@@ -262,8 +262,17 @@ describe('localLlmCatalog', () => {
       expect(ollama.find((m) => m.key === 'mistral-small-24b')?.id).toBe('mistral-small3.2:24b');
       expect(ollama.find((m) => m.key === 'ornith-1.5-9b')?.id).toBe('ornith-1.5:9b');
       expect(ollama.find((m) => m.key === 'ornith-1.5-35b-a3b')?.id).toBe('ornith-1.5:35b');
+      expect(ollama.find((m) => m.key === 'ornith-1.5-122b-a10b')?.id).toBe('ornith-1.5:122b');
+      expect(ollama.find((m) => m.key === 'mimo-v2.6-9b')?.id).toBe('mimo-v2.6:9b');
+      expect(ollama.find((m) => m.key === 'laguna-xs-2.1')?.id).toBe('laguna-xs-2.1');
+      expect(ollama.find((m) => m.key === 'qwen3-coder-next')?.id).toBe('qwen3-coder-next');
+      expect(ollama.find((m) => m.key === 'glm-ocr')?.id).toBe('glm-ocr');
       expect(ollama.find((m) => m.key === 'flint-40b-a2b')?.id).toBe('flint:40b');
-      expect(ollama.find((m) => m.key === 'embeddinggemma-2-270m')?.id).toBe('embeddinggemma-2:270m');
+      expect(ollama.find((m) => m.key === 'embeddinggemma-2-270m')).toMatchObject({
+        id: 'embeddinggemma-2:270m',
+        contextLength: 262144,
+      });
+      expect(ollama.some((m) => m.key === 'llama3.2-vision-11b')).toBe(false);
     });
   });
 
@@ -289,7 +298,9 @@ describe('localLlmCatalog', () => {
       expect(mapModelToBackend('ollama', 'gemma4:e4b', 'lmstudio'))
         .toEqual({ targetId: 'lmstudio-community/gemma-4-E4B-it-GGUF', exact: true });
       expect(mapModelToBackend('ollama', 'translategemma:12b', 'lmstudio'))
-        .toEqual({ targetId: 'lmstudio-community/TranslateGemma-12B-IT-GGUF', exact: true });
+        .toEqual({ targetId: 'mradermacher/translategemma-12b-it-GGUF', exact: true });
+      expect(mapModelToBackend('lmstudio', 'lmstudio-community/TranslateGemma-12B-IT-GGUF', 'ollama'))
+        .toEqual({ targetId: 'translategemma:12b', exact: true });
       expect(mapModelToBackend('ollama', 'qwen3.6:27b', 'lmstudio'))
         .toEqual({ targetId: 'lmstudio-community/Qwen3.6-27B-GGUF', exact: true });
       expect(mapModelToBackend('ollama', 'magistral:24b', 'lmstudio'))
@@ -328,6 +339,16 @@ describe('localLlmCatalog', () => {
         .toEqual({ targetId: 'bartowski/Ornith-1.5-9B-GGUF', exact: true });
       expect(mapModelToBackend('ollama', 'ornith-1.5:35b', 'lmstudio'))
         .toEqual({ targetId: 'bartowski/Ornith-1.5-35B-A3B-GGUF', exact: true });
+      expect(mapModelToBackend('ollama', 'ornith-1.5:122b', 'lmstudio'))
+        .toEqual({ targetId: 'unsloth/Ornith-1.5-122B-GGUF', exact: true });
+      expect(mapModelToBackend('ollama', 'mimo-v2.6:9b', 'lmstudio'))
+        .toEqual({ targetId: 'bartowski/MiMo-V2.6-Distill-Qwen-9B-GGUF', exact: true });
+      expect(mapModelToBackend('ollama', 'laguna-xs-2.1', 'lmstudio'))
+        .toEqual({ targetId: 'lmstudio-community/Laguna-XS-2.1-GGUF', exact: true });
+      expect(mapModelToBackend('ollama', 'qwen3-coder-next', 'lmstudio'))
+        .toEqual({ targetId: 'lmstudio-community/Qwen3-Coder-Next-GGUF', exact: true });
+      expect(mapModelToBackend('ollama', 'glm-ocr', 'lmstudio'))
+        .toEqual({ targetId: 'ggml-org/GLM-OCR-GGUF', exact: true });
       expect(mapModelToBackend('ollama', 'flint:40b', 'lmstudio'))
         .toEqual({ targetId: 'lmstudio-community/flint-GGUF', exact: true });
       expect(mapModelToBackend('ollama', 'embeddinggemma-2:270m', 'lmstudio'))
