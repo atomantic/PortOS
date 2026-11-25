@@ -55,6 +55,13 @@ export default function useTaskScheduleEdit({ config, runUpdate }) {
     if (ok !== false) setRecheckEditing(false);
   };
 
+  // recheckCron has no empty CronInput state, so "back to the default
+  // interval-based recheck" is its own action (null clears the override).
+  const handleRecheckReset = async () => {
+    const ok = await runUpdate({ recheckCron: null }).catch(() => false);
+    if (ok !== false) setRecheckEditing(false);
+  };
+
   const isPaused = !config.enabled;
   const handleToggleEnabled = () => runUpdate({ enabled: isPaused });
 
@@ -75,6 +82,7 @@ export default function useTaskScheduleEdit({ config, runUpdate }) {
     handleCronSave,
     handleCronCancel,
     handleRecheckCronSave,
+    handleRecheckReset,
     handleToggleEnabled,
   };
 }

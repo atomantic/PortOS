@@ -71,6 +71,23 @@ describe('ScheduleEditor task schedule', () => {
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
   });
 
+  it('shows a saved change at once, before the graph refetch lands', async () => {
+    api.updateCosTaskInterval.mockResolvedValue({ success: true, interval: { perpetual: true } });
+    renderEditor();
+
+    await act(async () => fireEvent.click(screen.getByRole('switch', { name: 'Enable perpetual drain' })));
+
+    expect(screen.getByRole('switch', { name: 'Disable perpetual drain' })).toBeInTheDocument();
+  });
+
+  it('clears a saved recheck schedule back to the default cadence', async () => {
+    renderEditor(taskNode({ type: 'on-demand', cronExpression: null, perpetual: true, autoStart: true, recheckCron: '0 11 * * *' }));
+
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Use the default daily recheck' })));
+
+    expect(api.updateCosTaskInterval).toHaveBeenCalledWith('review', { recheckCron: null }, { silent: true });
+  });
+
   it('clears the cron expression only when switching to on demand', async () => {
     renderEditor(taskNode({ perpetual: true, recheckCron: '0 11 * * *' }));
 
