@@ -175,6 +175,11 @@ export const coreDdl = [
     `ALTER TABLE memories ADD COLUMN IF NOT EXISTS origin_instance_id VARCHAR(36)`,
     `CREATE INDEX IF NOT EXISTS idx_memories_origin_instance ON memories (origin_instance_id)`,
     `CREATE INDEX IF NOT EXISTS idx_memories_sync_sequence ON memories (sync_sequence)`,
+    `CREATE TABLE IF NOT EXISTS memory_tombstones (
+      id UUID PRIMARY KEY,
+      deleted_at TIMESTAMPTZ NOT NULL,
+      sync_sequence BIGSERIAL NOT NULL UNIQUE
+    )`,
     ...memoryTimestampDdl,
     // Versioned DB-migration tracker (#1029). Records which ordered migration
     // files in server/scripts/db-migrations/ have been applied on THIS install.

@@ -27,6 +27,8 @@ import * as notifications from './notifications.js';
 import { DEFAULT_MEMORY_CONFIG, generateSummary, decrementAgentPendingApproval } from './memoryConfig.js';
 import { getInstanceId } from './instanceIdentity.js';
 import { DEFAULT_MEMORY_LINK_TYPE, isSymmetricMemoryLinkType } from '../lib/memoryLinkTypes.js';
+import { finishMemoryPurge } from './memory/purgeEffects.js';
+import { canFederate, lockPurgeMarkers, recordDeletions } from './memory/federatedPurge.js';
 import { toPgJson } from '../lib/pgJson.js';
 
 const protectedMindMemoryTags = Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS);
@@ -609,18 +611,17 @@ export async function archiveMemory(id, options = {}) {
  * Purge a memory: DELETE the row (cascades to memory_links) and its embedding. Not restorable.
  */
 export async function purgeMemory(id) {
-  const { rows: [removed] } = await query(
-    'DELETE FROM memories WHERE id = $1 RETURNING status, source_agent_id',
-    [id]
-  );
-  if (removed?.status === 'pending_approval') {
-    await decrementAgentPendingApproval(removed.source_agent_id);
-  }
-  await notifications.removeByMetadata('memoryId', id);
-
-  console.log(`🧠 Memory purged: ${id}`);
-  cosEvents.emit('memory:deleted', { id, hard: true });
-
+  const removed = await withTransaction(async client => {
+    await lockPurgeMarkers(client);
+    const { rows: [row] } = await client.query(
+      `DELETE FROM memories WHERE id = $1 RETURNING status, source_agent_id, tags,
+       GREATEST(updated_at, clock_timestamp()) AS deleted_at`, [id]);
+    if (row && canFederate(row.source_agent_id, row.tags)) {
+      await recordDeletions(client, [{ id, deletedAt: row.deleted_at.toISOString() }]);
+    }
+    return row;
+  });
+  await finishMemoryPurge(id, removed);
   return { success: true, id };
 }
 

@@ -339,6 +339,7 @@ export const FEATURE_AREAS = Object.freeze([
       'server/lib/brain*',
       'server/lib/{memory,spaced}*',
       'server/services/{brain,memory,feeds,rapidReader,spotify,youtube,ytdlp,thread,obsidian,localMemory,contextMemory,idealoom}*',
+      'server/services/memory/**',
       'client/src/pages/{Brain,Wiki,Timeline,RapidReader}*',
       'client/src/components/{brain,notes,threads,timeline,wiki}/**',
       'client/src/components/{RapidReader,QuickBrainCapture,QuickIdeaCapture}*',

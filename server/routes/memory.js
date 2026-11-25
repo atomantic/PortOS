@@ -84,13 +84,11 @@ router.get('/sync', asyncHandler(async (req, res) => {
   if (name !== 'postgres') {
     throw new ServerError('Sync requires PostgreSQL backend', { status: 400 });
   }
-  const { since, limit, schemaVersion } = validateRequest(memorySyncQuerySchema, req.query);
+  const { since, limit, schemaVersion, tombstoneVersion } = validateRequest(memorySyncQuerySchema, req.query);
   // Peers pull this (PEER_API_SURFACE): honor the per-peer `memory` category.
   const { authorizePeerPull } = await import('../services/sharing/peerPullAuthorization.js');
   await authorizePeerPull(req, { syncCategory: 'memory', alwaysEnforce: true, allowOperator: true, route: 'memory sync' });
-  const result = schemaVersion === undefined
-    ? await memorySync.getChangesSince(since, limit)
-    : await memorySync.getChangesSince(since, limit, schemaVersion);
+  const result = await memorySync.getChangesSince(since, limit, schemaVersion, tombstoneVersion === '1');
   res.json(result);
 }));
 
@@ -100,10 +98,8 @@ router.post('/sync', asyncHandler(async (req, res) => {
   if (name !== 'postgres') {
     throw new ServerError('Sync requires PostgreSQL backend', { status: 400 });
   }
-  const { memories, schemaVersion } = validateRequest(memorySyncSchema, req.body);
-  const result = schemaVersion === undefined
-    ? await memorySync.applyRemoteChanges(memories)
-    : await memorySync.applyRemoteChanges(memories, schemaVersion);
+  const { memories, schemaVersion, deletedIds } = validateRequest(memorySyncSchema, req.body);
+  const result = await memorySync.applyRemoteChanges(memories, schemaVersion, deletedIds);
   res.json(result);
 }));
 

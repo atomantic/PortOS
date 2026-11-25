@@ -49,6 +49,7 @@ export const SYNC_FEED_LOCK_KEY = 8315001;
 // feed stream name IS the table name.
 export const syncFeedTables = [
   'memories',
+  'memory_tombstones',
   'catalog_scraps',
   'catalog_ingredients',
   'catalog_ingredient_sources',
@@ -58,7 +59,8 @@ export const syncFeedTables = [
   'catalog_ingredient_media',
 ];
 
-export const syncFeedSequenceName = (table) => `${table}_sync_feed_seq`;
+// Live memories and their deletions page through ONE wire cursor.
+export const syncFeedSequenceName = (table) => `${table === 'memory_tombstones' ? 'memories' : table}_sync_feed_seq`;
 
 export const syncFeedDdl = [
   `CREATE TABLE IF NOT EXISTS sync_feed (
@@ -68,8 +70,8 @@ export const syncFeedDdl = [
       PRIMARY KEY (stream, row_sequence)
     )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_feed_position ON sync_feed (stream, position)`,
-  ...syncFeedTables.map((t) =>
-    `CREATE SEQUENCE IF NOT EXISTS ${syncFeedSequenceName(t)} START WITH ${SYNC_FEED_POSITION_BASE} MINVALUE ${SYNC_FEED_POSITION_BASE}`),
+  ...Array.from(new Set(syncFeedTables.map(syncFeedSequenceName)), (sequence) =>
+    `CREATE SEQUENCE IF NOT EXISTS ${sequence} START WITH ${SYNC_FEED_POSITION_BASE} MINVALUE ${SYNC_FEED_POSITION_BASE}`),
   `CREATE OR REPLACE FUNCTION sync_feed_capture()
      RETURNS TRIGGER AS $$
      BEGIN
@@ -79,7 +81,7 @@ export const syncFeedDdl = [
        END IF;
        IF TG_OP <> 'DELETE' THEN
          INSERT INTO sync_feed (stream, row_sequence, position)
-         VALUES (TG_TABLE_NAME, NEW.sync_sequence, nextval(format('%I', TG_TABLE_NAME || '_sync_feed_seq')::regclass))
+         VALUES (TG_TABLE_NAME, NEW.sync_sequence, nextval(COALESCE(TG_ARGV[0], TG_TABLE_NAME || '_sync_feed_seq')::regclass))
          ON CONFLICT (stream, row_sequence) DO UPDATE SET position = EXCLUDED.position;
        END IF;
        RETURN NULL;
@@ -94,13 +96,14 @@ export const syncFeedDdl = [
 export function buildSyncFeedTriggers() {
   const stmts = [];
   for (const t of syncFeedTables) {
+    const sequenceArg = t === 'memory_tombstones' ? `'${syncFeedSequenceName(t)}'` : '';
     stmts.push(`DROP TRIGGER IF EXISTS trg_${t}_sync_feed ON ${t}`);
     stmts.push(
-      `CREATE CONSTRAINT TRIGGER trg_${t}_sync_feed AFTER INSERT OR DELETE ON ${t} DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture()`,
+      `CREATE CONSTRAINT TRIGGER trg_${t}_sync_feed AFTER INSERT OR DELETE ON ${t} DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture(${sequenceArg})`,
     );
     stmts.push(`DROP TRIGGER IF EXISTS trg_${t}_sync_feed_update ON ${t}`);
     stmts.push(
-      `CREATE CONSTRAINT TRIGGER trg_${t}_sync_feed_update AFTER UPDATE ON ${t} DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture()`,
+      `CREATE CONSTRAINT TRIGGER trg_${t}_sync_feed_update AFTER UPDATE ON ${t} DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture(${sequenceArg})`,
     );
   }
   return stmts;

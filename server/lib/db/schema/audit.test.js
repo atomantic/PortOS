@@ -17,7 +17,7 @@ const UNAUDITED_PRIVACY = [
 ];
 const UNAUDITED_SYSTEM = [
   // Audit/sync/migration infrastructure
-  'record_audit', 'sync_feed', 'schema_migrations', 'restore_receipts', 'deep_audit_ledgers',
+  'record_audit', 'sync_feed', 'memory_tombstones', 'schema_migrations', 'restore_receipts', 'deep_audit_ledgers',
   'catalog_commit_receipts', 'catalog_pending_applies', 'catalog_identity_operations',
   'peer_execution_operations', 'peer_execution_generation_floors',
   // Derived links, versions, caches, cursors, ledgers
