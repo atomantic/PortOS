@@ -2,8 +2,10 @@ import http from 'node:http';
 import { once } from 'node:events';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
+import { hasUnattributedMedia } from './mediaOriginReconcile.js';
 
 // Mock all dependencies
+vi.mock('./mediaOriginReconcile.js', () => ({ hasUnattributedMedia: vi.fn().mockResolvedValue(false) }));
 vi.mock('./instances.js', async () => ({
   // Keep the REAL resolveEffectiveCategories (and the default map it resolves
   // against): a hand-written stand-in would let the shipped defaults drift from
@@ -1446,6 +1448,7 @@ describe('syncOrchestrator', () => {
       return { ok: false };
     });
     await syncWithPeer(peer);
+    expect(vi.mocked(hasUnattributedMedia).mock.calls).toEqual(kind === 'image' ? [['image', { peerId: peer.instanceId }]] : []);
     expect(dataSync.applyRemote).toHaveBeenCalledWith(category, evidence, expect.objectContaining({ peerId: peer.instanceId, inventory: true, inventoryKind: kind }));
     expect(mockFetch.mock.calls.some(([url]) => url.includes(`/${category}/snapshot`))).toBe(false);
     dataSync.applyRemote.mockClear();
