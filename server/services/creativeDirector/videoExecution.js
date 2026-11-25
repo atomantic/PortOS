@@ -263,7 +263,12 @@ export async function reserveVideoAttempt(projectId, details) {
     if (isClip && attempts.filter(attempt => attempt.kind === 'clip').length >= limits.maxClips) blocker = 'The clip limit is exhausted. Review limits before Resume.';
     if (isClip && sameKey.length > limits.maxRetries) blocker = 'The retry limit for this shot is exhausted. Review limits before Resume.';
     if (!isClip && !isAudio && attempts.filter(attempt => !isMediaAttempt(attempt)).length >= limits.maxAgentCalls) blocker = 'The agent-call limit is exhausted. Review limits before Resume.';
-    if (isAudio && (attempts.filter(attempt => attempt.kind === 'audio').length >= (limits.maxAudioJobs ?? 1) || sameKey.length > limits.maxRetries)) blocker = 'The audio job limit is exhausted. Review limits before Resume.';
+    if (isAudio) {
+      const audioAttempts = attempts.filter(attempt => attempt.kind === 'audio' && attempt.notSubmitted !== true);
+      if (audioAttempts.length >= (limits.maxAudioJobs ?? 1) || audioAttempts.filter(attempt => attempt.key === details.key).length > limits.maxRetries) {
+        blocker = 'The audio job limit is exhausted. Review limits before Resume.';
+      }
+    }
     if (details.kind === 'plan' && attempts.filter(attempt => attempt.kind === 'plan').length > limits.maxReplans) blocker = 'The replan limit is exhausted. Review limits before Resume.';
     // Only media is metered against the dollar cap; agent calls stay bounded by
     // maxAgentCalls. A clip is charged its catalog estimate, and every earlier

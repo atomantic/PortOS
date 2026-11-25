@@ -69,7 +69,11 @@ export async function prepareVideoSoundtrack(project, isCurrent) {
   if (!attempt) {
     attempt = await reserveVideoAttempt(project.id, { kind: 'audio', key, expectedProductionRevision: project.videoWorkRevision || 0 });
     if (!attempt) return null;
-    await assertVideoAttemptDispatch(project.id, attempt.id);
+    const failBeforeSubmission = () => settleVideoAttempt(project.id, attempt.id, { status: 'failed', notSubmitted: true });
+    await assertVideoAttemptDispatch(project.id, attempt.id).catch(async error => {
+      await failBeforeSubmission();
+      throw error;
+    });
     // Persist before enqueue; the queue worker checks this receipt again.
     const { jobId } = await enqueueJob({ kind: 'audio', owner: `creative-director:${project.id}`,
       params: { engine: audio.providerId, modelId: audio.model, prompt: audio.prompt, durationSec: audio.durationSec,
@@ -78,7 +82,7 @@ export async function prepareVideoSoundtrack(project, isCurrent) {
         // A refused admission (#8325 failed snapshot, #8326 full queue) submitted
         // nothing; fail the receipt so the next Resume retries instead of
         // treating it as an uncertain submission.
-        if (isMediaAdmissionRefusal(error)) await settleVideoAttempt(project.id, attempt.id, { status: 'failed' });
+        if (error?.code === 'VIDEO_DISPATCH_BLOCKED' || isMediaAdmissionRefusal(error)) await failBeforeSubmission();
         throw error;
       });
     await settleVideoAttempt(project.id, attempt.id, { status: 'queued', jobId });
