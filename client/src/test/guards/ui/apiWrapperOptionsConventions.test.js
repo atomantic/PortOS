@@ -89,6 +89,9 @@ export function forwardsOptionsAt(wrapper, index) {
 }
 
 const SILENT_KEY = /^(?:silent\s*(?::|$)|(['"])silent\1\s*:)/;
+// A property can be quoted or shorthand, and comments can precede its
+// delimiter. If none of those spellings is possible, there is nothing to lex.
+const POSSIBLE_SILENT_KEY = /\bsilent(?=['"]|\s*[:,}/])/;
 
 /** Read keys only at property starts; literal values cannot invent those boundaries. */
 function hasSilentKey(blanked, code, start, end) {
@@ -113,7 +116,7 @@ function hasSilentKey(blanked, code, start, end) {
  * as a parameter owns its own contract); `api.name(…)` always counts.
  */
 export function silentCalls(src, names) {
-  if (!src.includes('silent')) return [];
+  if (!POSSIBLE_SILENT_KEY.test(src)) return [];
   const { code, blanked } = measure('lex', () => blankLiterals(src, { includeCommentOnly: true }));
   const imported = new Set([...code.matchAll(/import\s*\{([^}]*)\}\s*from/g)]
     .flatMap((m) => m[1].split(',').map((part) => part.trim().split(/\s+as\s+/).pop())));
@@ -251,6 +254,12 @@ describe('silent options reach the API wrapper that reads them (#9951)', () => {
   });
 
   it('recognizes silent property keys without reading literal values as properties (#11535)', () => {
+    // Probe each spelling in isolation so another key can't satisfy the prefilter.
+    for (const key of ["'silent' /* note */: true", 'silent /* note */: true', 'silent /* note */']) {
+      expect(silentCalls(`api.dynamic({ ${key} });`, new Set(['dynamic'])))
+        .toEqual([{ line: 1, name: 'dynamic', index: 0 }]);
+    }
+
     const wrappers = wrapperExports(`
       export const dynamic = (id, data, extra) =>
         request(\`/things/\${id}\`, { body: JSON.stringify(data), ...extra });

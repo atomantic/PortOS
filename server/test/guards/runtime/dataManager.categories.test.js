@@ -22,11 +22,11 @@
 
 import { describe, it, expect } from 'vitest';
 import { readdirSync } from 'fs';
-import { join, relative, sep } from 'path';
-import { PATHS } from '../../../lib/fileUtils.js';
-import { DEFAULT_EXCLUDES } from '../../../services/backup.js';
-import { CATEGORIES } from '../../../services/dataManager.js';
-import { readText } from '../../../../scripts/lib/guardCorpus.js';
+import { join, sep } from 'path';
+import { PATHS } from '../../../lib/paths.js';
+import { DEFAULT_EXCLUDES } from '../../../services/backup/excludes.js';
+import { CATEGORIES } from '../../../services/dataManagerCategories.js';
+import { guardCorpus } from '../../../../scripts/lib/guardCorpus.js';
 
 // A path segment that is a file, not a directory (`settings.json`, `TASKS.md`).
 const isFileSegment = (segment) => segment.includes('.');
@@ -51,25 +51,23 @@ function resolveConstant(source, identifier) {
   return source.match(declaration)?.[1] ?? null;
 }
 
-// Parallel test workers create and delete temp dirs under server/test/fixtures
-// while this walk runs, so a directory listed a moment ago may be gone (ENOENT).
-function listDir(dir) {
-  try {
-    return readdirSync(dir, { withFileTypes: true });
-  } catch (err) {
-    if (err.code === 'ENOENT') return [];
-    throw err;
-  }
-}
+const SOURCE_PATH = /^(?:server|scripts)\/[\s\S]+\.js$/;
+const SKIP_PATH = /(?:^|\/)(?:\.|node_modules\/)/;
 
-function walkJsFiles(dir, out = []) {
-  for (const entry of listDir(dir)) {
-    if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) walkJsFiles(full, out);
-    else if (entry.name.endsWith('.js') && !entry.name.includes('.test.')) out.push(full);
+function* workingSources(corpus) {
+  // The index also contains deleted files, and another worker can remove a
+  // pending fixture after listing it. Read each candidate once without a stat pass.
+  for (const file of corpus.workingTreeCandidates()) {
+    if (!SOURCE_PATH.test(file) || SKIP_PATH.test(file) || file.split('/').at(-1).includes('.test.')) continue;
+    let source;
+    try {
+      source = corpus.read(file);
+    } catch (error) {
+      if (['ENOENT', 'ENOTDIR', 'EISDIR'].includes(error.code)) continue;
+      throw error;
+    }
+    yield [file, source];
   }
-  return out;
 }
 
 /** @returns {Map<string, string>} data dir name → where it was discovered */
@@ -90,17 +88,15 @@ function discoverDataDirs() {
     add(path.replace(/^\//, '').split('/')[0], 'backup.js DEFAULT_EXCLUDES');
   }
 
-  for (const dir of ['server', 'scripts']) {
-    for (const file of walkJsFiles(join(PATHS.root, dir))) {
-      const source = readText(file);
-      for (const pattern of DATA_DIR_PATTERNS) {
-        for (const match of source.matchAll(pattern)) {
-          add(match[1], relative(PATHS.root, file));
-        }
+  for (const [file, source] of workingSources(guardCorpus())) {
+    if (!/dataPath\(|PATHS\.data|'data'/.test(source)) continue;
+    for (const pattern of DATA_DIR_PATTERNS) {
+      for (const match of source.matchAll(pattern)) {
+        add(match[1], file);
       }
-      for (const match of source.matchAll(INDIRECT_DATA_DIR_PATTERN)) {
-        add(resolveConstant(source, match[1]), relative(PATHS.root, file));
-      }
+    }
+    for (const match of source.matchAll(INDIRECT_DATA_DIR_PATTERN)) {
+      add(resolveConstant(source, match[1]), file);
     }
   }
 
@@ -112,6 +108,23 @@ function discoverDataDirs() {
 }
 
 describe('dataManager CATEGORIES coverage (#3285)', () => {
+  it('scans pending JavaScript sources and skips missing and excluded paths', () => {
+    const pending = 'server/pending.js';
+    const gone = 'scripts/gone.js';
+    const corpus = {
+      workingTreeCandidates: () => [
+        pending, gone, 'server/.hidden.js', 'scripts/node_modules/vendor/index.js',
+        'server/pending.test.js', 'client/pending.js',
+      ],
+      read(file) {
+        if (file === gone) throw Object.assign(new Error('File removed'), { code: 'ENOENT' });
+        expect(file).toBe(pending);
+        return "dataPath('example')";
+      },
+    };
+    expect([...workingSources(corpus)]).toEqual([[pending, "dataPath('example')"]]);
+  });
+
   it('discovers literal data paths without treating domain-name arrays as paths', () => {
     const source = `
       const a = join(rootDir, 'data', 'example-one');
@@ -133,6 +146,6 @@ describe('dataManager CATEGORIES coverage (#3285)', () => {
       .filter(([name]) => !CATEGORIES[name])
       .map(([name, source]) => `${name} (from ${source})`);
 
-    expect(unclassified, 'Add a CATEGORIES entry in server/services/dataManager.js for each of these').toEqual([]);
+    expect(unclassified, 'Add a CATEGORIES entry in server/services/dataManagerCategories.js for each of these').toEqual([]);
   });
 });

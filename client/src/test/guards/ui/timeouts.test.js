@@ -153,7 +153,8 @@ function testCalls(source, masked) {
  * every case, which is the one that actually shipped.
  */
 export function inertTimeoutBounds(source, budgetMs = TEST_TIMEOUT_MS) {
-  if (RAISES_OWN_BUDGET.test(source)) return [];
+  // Every candidate must spell this key before the call scanner runs.
+  if (!source.includes('timeout:') || RAISES_OWN_BUDGET.test(source)) return [];
   const calls = testCalls(source, maskNonCode(source));
   return [...source.matchAll(FLAT_OBJECT)]
     .filter((m) => [...m[1].matchAll(OBJECT_KEYS)].every(([, key]) => WAIT_FOR_OPTIONS.has(key)))
