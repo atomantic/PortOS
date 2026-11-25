@@ -34,6 +34,8 @@ import { nearestReactorAspect } from '../../lib/reactorVideoClip.js';
 import { getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
 import { getHiggsfieldVideoModel } from '../../lib/higgsfieldVideoModels.js';
 import { getGoogleVideoModel } from '../../lib/googleVideoModels.js';
+import { GEMINI_WEB_ASPECTS, geminiWebRendersCanvas } from '../../lib/geminiWebVideo.js';
+import { resolveImageInputPath } from '../../lib/pathSafety.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { renderTargetDefaults } from '../imageGen/cloudProviderConfig.js';
 import { VIDEO_GEN_MODE, VIDEO_GEN_MODES, resolveVideoMode, hasVideoPin, isVideoModeUsable } from './modes.js';
@@ -154,6 +156,15 @@ export function grokVideoJobParams(settings, { sourceImagePath = null, durationS
  * requests before enqueue instead of producing an unconditioned paid clip.
  * Backend workers retain their own duration/prompt validation before submission
  * (in particular Reactor's shared short-clip limits, never a project-length clip).
+ *
+ * This is also where planner output crosses to a third party: a hosted worker
+ * reads the files its params name and sends them to its provider, and the
+ * planner writes those params freehand. So the start frame is re-anchored to
+ * the approved image roots (`resolveImageInputPath`, the rule the cloud image
+ * tools and the federated uploader apply) and refused when it resolves to
+ * nothing, and every other path-bearing input is refused outright: neither
+ * creative surface stages uploads or builds cast sheets, so one here was never
+ * resolved by this server.
  */
 export function videoBackendJobParams(settings, pin, params = {}, { durationSeconds } = {}) {
   if (pin.mode === VIDEO_GEN_MODE.LOCAL) {
@@ -169,7 +180,10 @@ export function videoBackendJobParams(settings, pin, params = {}, { durationSeco
     'keyframes', 'lastImagePath', 'lastImageFile', 'audioFilePath', 'audioFile',
     'extendFromVideoId', 'extendFromVideoPath', 'icReferencePaths',
     'icReferenceVideoIds', 'icReferenceImageFiles', 'referenceImageFiles', 'referenceImagePaths', 'referenceVideoIds', 'referenceVideoPaths', 'referenceAudioPaths', 'loras', 'loraPaths', 'loraFilenames',
+    'castReferences', 'guidanceImagePath', 'sourceVideoPath', 'runwayVideoPath', 'runwayCharacterVideoPath', 'uploadedTempPath', 'uploadedTempPaths',
   ].filter((key) => hasInput(params[key]));
+  const sourceImagePath = hasInput(params.sourceImagePath) ? resolveImageInputPath(params.sourceImagePath) : null;
+  if (hasInput(params.sourceImagePath) && !sourceImagePath) unsupported.push('a start frame that is missing or outside the image library');
   if (!isDefaultA2vLoraStages(params.a2vLoraStageStrengths)) unsupported.push('per-stage user LoRA strengths');
   if (semantic && semantic !== 'text' && semantic !== 'image') unsupported.push(`mode ${semantic}`);
   if (Number(params.chunks) > 1) unsupported.push('chained chunks');
@@ -177,9 +191,17 @@ export function videoBackendJobParams(settings, pin, params = {}, { durationSeco
   if (params.disableAudio === true) unsupported.push('audio-disabled output');
   if (params.i2vReferenceMode && params.i2vReferenceMode !== 'anchor') unsupported.push('inspire reference mode');
   if (params.continueFromClipId && pin.mode !== VIDEO_GEN_MODE.REACTOR) unsupported.push('Reactor clip continuation');
+  if (pin.mode === VIDEO_GEN_MODE.GEMINI) {
+    // The composer has no negative-prompt field and two canvases. The worker would drop the
+    // first and answer any other shape with Landscape, so neither is left for it to decide.
+    if (String(params.negativePrompt ?? '').trim()) unsupported.push('a negative prompt');
+    if (!geminiWebRendersCanvas(params.frameAspect || params.aspectRatio, params.width, params.height)) {
+      unsupported.push(`this canvas (it renders ${GEMINI_WEB_ASPECTS.join(' or ')} only)`);
+    }
+  }
   if (unsupported.length) {
     throw new ServerError(
-      `The ${pin.mode} video backend cannot honor ${unsupported.join(', ')}. Remove those inputs or choose a compatible local render backend.`,
+      `The ${pin.mode} video backend cannot honor ${unsupported.join(', ')}. Remove those inputs or choose a compatible render backend.`,
       { status: 400, code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED' },
     );
   }
@@ -189,9 +211,9 @@ export function videoBackendJobParams(settings, pin, params = {}, { durationSeco
   const {
     modelId: _model, pythonPath: _python, numFrames: _frames, fps: _fps,
     steps: _steps, guidanceScale: _guidance, tiling: _tiling,
-    imageStrength: _strength, disableAudio: _audio, ...base
+    imageStrength: _strength, disableAudio: _audio, ...rest
   } = params;
-  const sourceImagePath = params.sourceImagePath || null;
+  const base = sourceImagePath ? { ...rest, sourceImagePath } : rest;
   const duration = params.duration ?? params.durationSeconds ?? durationSeconds;
   if (pin.mode === VIDEO_GEN_MODE.GROK) {
     return { ...base, ...grokVideoJobParams(settings, { sourceImagePath, durationSeconds: duration }) };
@@ -215,7 +237,7 @@ export function videoBackendJobParams(settings, pin, params = {}, { durationSeco
     };
   }
   if (pin.mode === VIDEO_GEN_MODE.GEMINI) {
-    // Gemini web renders take only the prompt, geometry and an optional start frame; it sets its own clip length.
+    // Gemini takes the prompt, one of its two canvases and an optional start frame, and sets its own clip length.
     return {
       ...base,
       mode: VIDEO_GEN_MODE.GEMINI,

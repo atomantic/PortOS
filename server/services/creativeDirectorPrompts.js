@@ -26,6 +26,8 @@ import {
 } from '../lib/creativeDirectorPresets.js';
 import { GROK_VIDEO_DURATIONS } from '../lib/grokVideoClip.js';
 import { REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS, REACTOR_MAX_PROMPT_LENGTH, REACTOR_ASPECTS } from '../lib/reactorVideoClip.js';
+import { GEMINI_OMNI_WEB_MODEL, GEMINI_WEB_ASPECTS } from '../lib/geminiWebVideo.js';
+import { GENERATION_MODE_LABELS, VIDEO_GEN_MODE } from '../lib/generationModes.js';
 import { buildPrompt } from './promptService.js';
 import { PORTOS_API_URL_TOKEN } from '../lib/portosUrls.js';
 
@@ -58,7 +60,12 @@ function buildProjectView(project) {
   };
 }
 
-function buildTreatmentView(project) {
+// Backends whose request has no negative-prompt field. The enqueue boundary refuses one
+// (videoGen/backendPin.js), so the writer is told not to author it rather than having a
+// finished treatment fail scene by scene.
+const takesNoNegativePrompt = (videoBackend) => videoBackend === VIDEO_GEN_MODE.GEMINI;
+
+function buildTreatmentView(project, videoBackend) {
   const aspect = resolveAspectDimensions(project.aspectRatio);
   const quality = QUALITY_PRESETS[project.quality] || { steps: 0, guidance: 0, fps: 0 };
   // The example block in the JSON output contract shows a literal value
@@ -78,6 +85,10 @@ function buildTreatmentView(project) {
     apiUrl: PORTOS_API_URL_TOKEN,
     startingImageFileLiteral,
     hasCast,
+    render: {
+      noNegativePrompt: takesNoNegativePrompt(videoBackend),
+      backendLabel: GENERATION_MODE_LABELS[videoBackend] || videoBackend || '',
+    },
     standaloneVideo: project.workspace === 'video',
     video: {
       durationRangeJson: JSON.stringify(project.videoDraft?.durationRange || {}),
@@ -86,7 +97,10 @@ function buildTreatmentView(project) {
         ? { durationSeconds: GROK_VIDEO_DURATIONS }
         : project.renderBackend?.video?.mode === 'reactor'
           ? { minSeconds: REACTOR_MIN_CLIP_SECONDS, maxSeconds: Math.min(10, REACTOR_MAX_CLIP_SECONDS), maxPromptCharacters: REACTOR_MAX_PROMPT_LENGTH, aspectRatios: REACTOR_ASPECTS }
-          : { minSeconds: 1, maxSeconds: 10, backendCompatibility: 'unresolved' }),
+          : project.renderBackend?.video?.mode === VIDEO_GEN_MODE.GEMINI
+            // Every clip comes back at the fixed length and is trimmed to its shot.
+            ? { minSeconds: 1, maxSeconds: GEMINI_OMNI_WEB_MODEL.clipSeconds, aspectRatios: GEMINI_WEB_ASPECTS }
+            : { minSeconds: 1, maxSeconds: 10, backendCompatibility: 'unresolved' }),
       sourcesJson: JSON.stringify(project.videoDraft?.sources || []),
       currentTreatmentJson: JSON.stringify(project.treatment ? {
         script: project.treatment.script,
@@ -99,8 +113,9 @@ function buildTreatmentView(project) {
   };
 }
 
-export async function buildTreatmentPrompt(project) {
-  const view = buildTreatmentView(project);
+/** `videoBackend` is the backend the project's clips resolve to, when the caller knows it. */
+export async function buildTreatmentPrompt(project, { videoBackend = null } = {}) {
+  const view = buildTreatmentView(project, videoBackend);
   return buildPrompt('cd-treatment', view);
 }
 
@@ -110,7 +125,7 @@ export async function buildTreatmentPrompt(project) {
 // module and lib must not import it (nor pull its heavy import-time tool graph
 // into every prompt build). The template iterates `tools` + renders the
 // directive brief + the current plan (present only on a re-plan).
-function buildPlanView(project, toolSpecs, videoModels) {
+function buildPlanView(project, toolSpecs, videoModels, videoBackend) {
   const directive = project.directive && typeof project.directive === 'object' ? project.directive : {};
   const deliverables = Array.isArray(directive.deliverables) ? directive.deliverables : [];
   const tools = (Array.isArray(toolSpecs) ? toolSpecs : []).map((s) => ({
@@ -133,7 +148,7 @@ function buildPlanView(project, toolSpecs, videoModels) {
     targetDurationSeconds: project.targetDurationSeconds,
     modelId: project.modelId,
     modelName: videoModel?.name || project.modelId,
-    supportsNegativePrompt: videoModel?.supportsNegativePrompt !== false,
+    supportsNegativePrompt: !takesNoNegativePrompt(videoBackend) && videoModel?.supportsNegativePrompt !== false,
     modelOptionsJson: JSON.stringify({
       resolutions: videoModel?.resolutionOptions || [],
       frameCounts: videoModel?.frameOptions || [],
@@ -173,13 +188,13 @@ function buildPlanView(project, toolSpecs, videoModels) {
   };
 }
 
-export async function buildPlanPrompt(project, { toolSpecs } = {}) {
+export async function buildPlanPrompt(project, { toolSpecs, videoBackend = null } = {}) {
   // Keep the media registry off the treatment/evaluation import path. Several
   // focused consumers intentionally mock only the PATHS keys they use; loading
   // the on-disk model catalog is specific to planning and should happen only
   // when a plan prompt is actually requested.
   const { getVideoModels } = await import('../lib/mediaModels.js');
-  const view = buildPlanView(project, toolSpecs, getVideoModels());
+  const view = buildPlanView(project, toolSpecs, getVideoModels(), videoBackend);
   return buildPrompt('cd-plan', view);
 }
 

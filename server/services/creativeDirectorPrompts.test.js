@@ -273,6 +273,29 @@ describe('buildEvaluatePrompt — imageStrength surfacing', () => {
   });
 });
 
+// #18683: Gemini has no negative-prompt field and the enqueue boundary refuses one, so the
+// writer is told not to author it instead of having its treatment fail scene by scene.
+describe('negative prompts on a backend that takes none', () => {
+  it('tells the treatment writer to leave it out on Gemini, and offers it everywhere else', async () => {
+    const gemini = await buildTreatmentPrompt(baseProject, { videoBackend: 'gemini' });
+    expect(gemini).toContain('(Gemini) has no negative-prompt field');
+    expect(gemini).not.toContain('"negativePrompt": "<optional>"');
+    expect(gemini).toMatch(/"prompt": "<full render prompt with style spec inlined>",\n {6}"durationSeconds": 5,/);
+    expect(gemini).not.toMatch(/{{[#/^]?[a-zA-Z]/);
+    for (const other of [await buildTreatmentPrompt(baseProject), await buildTreatmentPrompt(baseProject, { videoBackend: 'fal' })]) {
+      expect(other).not.toContain('has no negative-prompt field');
+      expect(other).toMatch(/"negativePrompt": "<optional>",\n {6}"durationSeconds": 5,/);
+    }
+  });
+
+  it('tells the planner not to set it on Gemini', async () => {
+    const gemini = await buildPlanPrompt({ ...baseProject, aspectRatio: '9:16' }, { toolSpecs: [], videoBackend: 'gemini' });
+    expect(gemini).toContain('Do NOT set `negativePrompt`');
+    expect(gemini).not.toContain('You may also set `negativePrompt`');
+    expect(await buildPlanPrompt({ ...baseProject, aspectRatio: '9:16' }, { toolSpecs: [] })).toContain('You may also set `negativePrompt`');
+  });
+});
+
 describe('standalone Video treatment planning', () => {
   it('requires an exact timed script and preserves revision context without authorizing renders', async () => {
     const project = {
@@ -299,6 +322,9 @@ describe('standalone Video treatment planning', () => {
     const project = { ...baseProject, workspace: 'video' };
     const grok = await buildTreatmentPrompt({ ...project, renderBackend: { video: { mode: 'grok' } } });
     expect(grok).toContain('"durationSeconds":[6,10,15]');
+    const gemini = await buildTreatmentPrompt({ ...project, renderBackend: { video: { mode: 'gemini' } } }, { videoBackend: 'gemini' });
+    expect(gemini).toContain('"maxSeconds":10,"aspectRatios":["16:9","9:16"]}');
+    expect(gemini).toContain('(Gemini) has no negative-prompt field');
     const inherited = await buildTreatmentPrompt(project);
     expect(inherited).toContain('"backendCompatibility":"unresolved"');
     expect(inherited).toContain('source record IDs are not image filenames');

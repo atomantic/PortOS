@@ -13,6 +13,7 @@
 import { ServerError } from './errorHandler.js';
 import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
 import { REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS, REACTOR_MAX_PROMPT_LENGTH, REACTOR_ASPECTS } from './reactorVideoClip.js';
+import { GEMINI_WEB_ASPECTS } from './geminiWebVideo.js';
 
 export function validateVideoShot(project, scene, isFirst) {
   const backend = project.renderBackend?.video?.mode;
@@ -27,6 +28,11 @@ export function validateVideoShot(project, scene, isFirst) {
     }
     if (scene.prompt.length > REACTOR_MAX_PROMPT_LENGTH) unsupported.push(`prompt (maximum ${REACTOR_MAX_PROMPT_LENGTH} characters)`);
     if (!REACTOR_ASPECTS.includes(project.aspectRatio)) unsupported.push('aspect ratio');
+  }
+  if (backend === 'gemini') {
+    // Its composer offers two canvases and no negative-prompt field (videoGen/backendPin.js refuses both at enqueue).
+    if (!GEMINI_WEB_ASPECTS.includes(project.aspectRatio)) unsupported.push(`aspect ratio (Gemini renders ${GEMINI_WEB_ASPECTS.join(' or ')})`);
+    if (String(scene.negativePrompt ?? '').trim()) unsupported.push('negative prompt (Gemini takes none; state exclusions in the prompt)');
   }
   if (unsupported.length) {
     throw new ServerError(`Video shot ${scene.sceneId} has incompatible ${unsupported.join(', ')}. Revise the shot or choose a compatible backend.`, {

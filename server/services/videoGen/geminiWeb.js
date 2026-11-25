@@ -9,9 +9,10 @@
  */
 import { randomUUID } from 'crypto';
 import { unlink } from 'fs/promises';
-import { isAbsolute, join, relative, resolve } from 'path';
+import { basename, isAbsolute, join, relative, resolve } from 'path';
+import { ServerError } from '../../lib/errorHandler.js';
 import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
-import { ensureDir, PATHS } from '../../lib/fileUtils.js';
+import { ensureDir, PATHS, resolveImageInputPath } from '../../lib/fileUtils.js';
 import { probeVideoGeometry } from '../../lib/ffmpeg.js';
 import { attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
@@ -64,6 +65,23 @@ const isStagedUpload = (path) => {
   const rel = relative(PATHS.uploads, resolve(path));
   return !!rel && !rel.startsWith('..') && !isAbsolute(rel);
 };
+
+/**
+ * The files the browser hands to Google, each re-anchored the way the cloud image tools
+ * re-anchor theirs (imageGen/inputImages.js): an upload this job staged, or an image under
+ * the approved roots. Job params are persisted queue state and can be written by a planner,
+ * so a path that is neither is refused here, before the browser opens.
+ */
+function approvedUploadFiles(files, stagedInputs) {
+  return files.map((path) => {
+    const approved = stagedInputs.has(path) && isStagedUpload(path) ? path : resolveImageInputPath(path);
+    if (approved) return approved;
+    const name = typeof path === 'string' ? basename(path) : 'unnamed';
+    throw new ServerError(`A start frame or reference for this render is unavailable or outside the allowed image roots: ${name}`, {
+      status: 400, code: 'IMAGE_INPUT_UNAVAILABLE',
+    });
+  });
+}
 
 export const generateVideo = (params) => preparations.run(params, generateVideoPrepared);
 
@@ -149,10 +167,10 @@ async function runGeminiWebVideo(job, jobId, { prompt, aspectChoice, files, file
   const outputPath = join(PATHS.videos, filename);
   const entry = { controller: new AbortController(), aborted: preparations.take(jobId) };
   const publication = {};
+  const stagedInputs = new Set([uploadedTempPath, ...(Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [])]);
   let inputCleanup;
   const settleInputs = () => (inputCleanup ??= (async () => {
-    const inputs = new Set([uploadedTempPath, ...(Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [])]);
-    for (const path of inputs) {
+    for (const path of stagedInputs) {
       if (!path || !isStagedUpload(path)) continue;
       await unlink(path).catch((error) => {
         if (error.code === 'ENOENT') return;
@@ -170,11 +188,12 @@ async function runGeminiWebVideo(job, jobId, { prompt, aspectChoice, files, file
   activeRequests.set(jobId, entry);
   try {
     if (entry.aborted) return finishFailure('Canceled');
+    const uploads = approvedUploadFiles(files, stagedInputs);
     let sentAtMs = Date.now();
     const signal = entry.controller.signal;
     // Gemini answers "at capacity" in the chat without rendering; each resend opens a fresh chat.
     const { chatUrl } = await runWithTransientRetry(() => renderOnGeminiWeb({
-      prompt, files, aspectChoice, outputPath,
+      prompt, files: uploads, aspectChoice, outputPath,
       deadline: Date.now() + GEMINI_WEB_TIMEOUT_MS,
       signal,
       onPhase: (name) => {

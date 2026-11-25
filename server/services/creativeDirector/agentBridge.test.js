@@ -48,6 +48,27 @@ const { enqueueTreatmentTask, enqueuePlanTask, enqueueEvaluateTask } = await imp
 
 const project = { id: 'cd-1', name: 'Test project', treatment: { scenes: [] } };
 
+describe('the backend the writer plans for', () => {
+  it('hands the treatment and plan prompts the backend the pin ladder resolves to', async () => {
+    mocks.getSettings.mockResolvedValue({ videoGen: { mode: 'gemini' } });
+    await enqueueTreatmentTask(project);
+    expect(mocks.buildTreatmentPrompt).toHaveBeenCalledWith(expect.objectContaining({ id: 'cd-1' }), { videoBackend: 'gemini' });
+    await enqueuePlanTask({ ...project, renderBackend: { video: { mode: 'local' } } });
+    expect(mocks.buildPlanPrompt.mock.calls[0][1]).toMatchObject({ videoBackend: 'local' });
+  });
+
+  it('reads a Video production its saved choice without re-resolving an unusable pin', async () => {
+    mocks.getSettings.mockResolvedValue({});
+    const video = { ...project, workspace: 'video', renderBackend: { video: { mode: 'gemini' } }, videoDraft: { sources: [], audio: { mode: 'silent' } } };
+    await enqueueTreatmentTask(video);
+    expect(mocks.buildTreatmentPrompt.mock.calls[0][1]).toEqual({ videoBackend: 'gemini' });
+    mocks.buildTreatmentPrompt.mockClear();
+    // A fal pin with no key would throw from the strict resolver; planning does not consult it.
+    await enqueueTreatmentTask({ ...video, renderBackend: { video: { mode: 'fal' } } });
+    expect(mocks.buildTreatmentPrompt.mock.calls[0][1]).toEqual({ videoBackend: 'fal' });
+  });
+});
+
 describe('Video planning source context', () => {
   it('keeps the bounded video tool specification and retires a failed enqueue reservation', async () => {
     mocks.getToolSpecs.mockReturnValue([

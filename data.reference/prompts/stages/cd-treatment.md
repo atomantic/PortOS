@@ -69,6 +69,10 @@ The user did not supply a story. Invent one that suits the style spec and target
 7. Current saved treatment (null on first draft): {{video.currentTreatmentJson}}. Use it to preserve script and scene identity while revising the requested content.
 
 {{/standaloneVideo}}
+{{#render.noNegativePrompt}}
+The video backend for this project ({{render.backendLabel}}) has no negative-prompt field. Leave `negativePrompt` out of every scene and state any exclusion in the scene's own prompt; a scene that carries a negative prompt is refused before it renders.
+
+{{/render.noNegativePrompt}}
 ## Output contract
 
 Issue ONE HTTP request to update the project with the treatment, then exit:
@@ -89,8 +93,8 @@ Content-Type: application/json
       "order": 0,
       "intent": "<what this scene does narratively/visually>",
       "prompt": "<full render prompt with style spec inlined>",
-      "negativePrompt": "<optional>",
-      "durationSeconds": {{#standaloneVideo}}6{{/standaloneVideo}}{{^standaloneVideo}}5{{/standaloneVideo}},
+{{^render.noNegativePrompt}}      "negativePrompt": "<optional>",
+{{/render.noNegativePrompt}}      "durationSeconds": {{#standaloneVideo}}6{{/standaloneVideo}}{{^standaloneVideo}}5{{/standaloneVideo}},
       "useContinuationFromPrior": false,
       "sourceImageFile": {{startingImageFileLiteral}},
       "imageStrength": null{{#hasCast}},
