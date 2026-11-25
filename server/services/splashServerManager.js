@@ -1,6 +1,7 @@
 /** Owns user-triggered Splash install/update/start/stop without taking over an external server. */
 
 import { isSplashContextWindow, SPLASH_CONTEXT, SPLASH_MODEL, SPLASH_ORIGIN } from '../lib/splashRuntime.js';
+import { MANAGED_RUNTIME_APPS } from '../lib/managedRuntimeApps.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { setTimeout as sleep } from 'timers/promises';
 import { isPortInUse } from '../lib/platform.js';
@@ -10,7 +11,7 @@ import {
   SPLASH_VERSION, supportsManagedSplash,
 } from './splashManagedRuntime.js';
 
-export const SPLASH_APP = 'portos-splash';
+export const SPLASH_APP = MANAGED_RUNTIME_APPS.splash.app;
 const PORT = Number(new URL(SPLASH_ORIGIN).port);
 const active = new Set(['online', 'launching', 'waiting restart', 'stopping']);
 

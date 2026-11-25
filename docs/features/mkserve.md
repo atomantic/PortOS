@@ -28,3 +28,5 @@ excluded from PortOS backups. The engine is pinned to the reviewed upstream
 [megakernel-zoo commit](https://github.com/dangxingyu/megakernel-zoo/tree/95e315c808a7d935c10ef924a8fc0d901bfc3b89).
 The [model files](https://huggingface.co/thinkingmachines/Inkling-2-Mini/tree/c9d028302cd0f035fdf8e7e91f089a4ce94d2195)
 are verified against pinned SHA-256 digests, including the DSpark draft head.
+
+mkserve can be measured on **Models → Performance**, and its PM2 log (`portos-mkserve`) is readable through the PortOS logs API.

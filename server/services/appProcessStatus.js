@@ -1,3 +1,4 @@
+import { managedRuntimeAppNames } from '../lib/managedRuntimeApps.js';
 import { getAllApps } from './apps.js';
 import { isDesktopType, usesPm2 } from './appProcessTypes.js';
 import { listProcessesStrict } from './pm2.js';
@@ -22,10 +23,8 @@ export const PORTOS_MANAGED_DAEMONS = new Set([
   'portos-ui',
   'portos-autofixer',
   'portos-browser',
-  'portos-llama-server',
-  'portos-mtplx',
-  'portos-slotstream',
   'portos-whisper',
+  ...managedRuntimeAppNames(),
 ]);
 
 const findAppForProcess = (apps, processName) => apps.find(candidate =>

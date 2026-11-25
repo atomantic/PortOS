@@ -3,6 +3,7 @@
 import { cpus, release, totalmem } from 'node:os';
 import { PORTS } from '../lib/ports.js';
 import { sleep } from '../lib/fileCore.js';
+import { MANAGED_RUNTIME_APPS } from '../lib/managedRuntimeApps.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { isPortInUse } from '../lib/platform.js';
 import {
@@ -12,7 +13,7 @@ import {
 import { clearJlistCache, execPm2, getAppStatusStrict } from './pm2.js';
 
 export { MKSERVE_MODEL };
-export const MKSERVE_APP = 'portos-mkserve';
+export const MKSERVE_APP = MANAGED_RUNTIME_APPS.mkserve.app;
 const HOST = '127.0.0.1';
 const PORT = PORTS.MKSERVE;
 const ORIGIN = 'http://' + HOST + ':' + PORT;
