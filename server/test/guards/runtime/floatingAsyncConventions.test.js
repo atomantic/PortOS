@@ -24,16 +24,16 @@ const NO_STATEMENTS = new Set([
   'ImportDeclaration', 'ExportAllDeclaration', 'ExportSpecifier', 'ExportNamespaceSpecifier',
 ]);
 
-function walk(node, visit) {
+function walkStatements(node, visit) {
   if (!node || typeof node.type !== 'string' || NO_STATEMENTS.has(node.type)) return;
-  visit(node);
+  if (node.type === 'ExpressionStatement') visit(node);
   for (const key in node) {
     if (key === 'loc' || key === 'extra' || key === 'comments' || key === 'errors') continue;
     const child = node[key];
     if (Array.isArray(child)) {
-      for (const c of child) walk(c, visit);
+      for (const c of child) walkStatements(c, visit);
     }
-    else if (child && typeof child === 'object') walk(child, visit);
+    else if (child && typeof child === 'object') walkStatements(child, visit);
   }
 }
 
@@ -72,22 +72,9 @@ function moduleBindings(body, dir) {
   return { local, exported, imports };
 }
 
-/** Retain recognition facts rather than every imported module's AST. */
 function summarizeSource(src, dir) {
   const { program } = parseSource(src);
-  const { local, exported, imports } = moduleBindings(program.body, dir);
-  const calls = [];
-  if (local.size > 0 || imports.size > 0) {
-    walk(program, (node) => {
-      if (node.type !== 'ExpressionStatement') return;
-      const call = node.expression;
-      if (call.type === 'CallExpression' && call.callee.type === 'Identifier') {
-        const name = call.callee.name;
-        if (local.has(name) || imports.has(name)) calls.push({ name, line: node.loc.start.line });
-      }
-    });
-  }
-  return { local, exported, imports, calls };
+  return { ...moduleBindings(program.body, dir), program };
 }
 
 /**
@@ -119,7 +106,8 @@ function relativeLiteralValues(src) {
   return values;
 }
 
-// Import spellings share the resolved file's summary within a scan.
+// Import spellings share a binding summary. Only a caller visit walks its
+// program, which is then discarded while the async exports stay cached.
 function createFloatingAsyncScanner(readSource = (file) => readText(file)) {
   const summaries = new Map();
   const resolutions = new Map();
@@ -152,21 +140,28 @@ function createFloatingAsyncScanner(readSource = (file) => readText(file)) {
     const values = relativeLiteralValues(src);
     return values === null || values.some((value) => asyncExportsOf(resolve(dir, value)).size > 0);
   };
-  const findCalls = ({ local, imports, calls }, dir) => {
+  const findCalls = ({ local, imports, program }, dir) => {
     const importedAsync = new Map();
-    const hits = [];
-    for (const { name, line } of calls) {
-      if (local.has(name)) {
-        hits.push(`line ${line}: ${name}()`);
-        continue;
-      }
-      // Resolve a binding only when a bare call can use it, once per caller.
+    const isAsyncImport = (name) => {
       if (!importedAsync.has(name)) {
         importedAsync.set(name, imports.get(name).some(({ source, imported }) =>
           asyncExportsOf(resolve(dir, source)).has(imported)));
       }
-      if (importedAsync.get(name)) hits.push(`line ${line}: ${name}()`);
-    }
+      return importedAsync.get(name);
+    };
+
+    const hits = [];
+    // A sync export from a module that also exports async functions cannot yield a hit.
+    if (local.size === 0 && !imports.keys().some(isAsyncImport)) return hits;
+
+    walkStatements(program, (node) => {
+      const call = node.expression;
+      if (call.type !== 'CallExpression' || call.callee.type !== 'Identifier') return;
+      const name = call.callee.name;
+      if (local.has(name) || (imports.has(name) && isAsyncImport(name))) {
+        hits.push(`line ${node.loc.start.line}: ${name}()`);
+      }
+    });
     return hits;
   };
   return {
@@ -244,7 +239,7 @@ describe('the floating-async recognizer', () => {
       .toEqual(['line 2: log()']);
   });
 
-  it('resolves only called bindings, including a forward export alias', () => {
+  it('resolves a forward export alias without reading later unused imports', () => {
     const scanner = createFloatingAsyncScanner((file) => {
       if (file !== join(SERVER_ROOT, 'services/history.js')) throw new Error('unneeded import read');
       return 'export { run as renamed }; const run = async () => {};';
@@ -253,6 +248,17 @@ describe('the floating-async recognizer', () => {
 import { getAllowedCommands } from './services/commands.js';
 function check() { run(); run(); }`;
     expect(scanner.findInSource(source, SERVER_ROOT)).toEqual(['line 3: run()', 'line 3: run()']);
+  });
+
+  it('checks named imports against the async exports of a mixed module', () => {
+    const caller = join(SERVER_ROOT, 'floating-async-caller.js');
+    const check = (imports) => createFloatingAsyncScanner((file) => (
+      file === caller
+        ? `${imports}\nsync();\nrun();`
+        : 'export function sync() {} export async function run() {}'
+    )).findInFile(caller);
+    expect(check("import { sync } from './services/history.js';")).toEqual([]);
+    expect(check("import { sync, run } from './services/history.js';")).toEqual(['line 3: run()']);
   });
 
   it('reuses one file summary across import spellings and the whole-tree visit', () => {
