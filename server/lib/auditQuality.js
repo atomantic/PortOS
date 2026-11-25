@@ -4,7 +4,7 @@
  *
  * Category discovery strategies, slice-scored assessment prompt and v1/v2 report schema, sentinel
  * parsing, and freshness-aware app quality aggregation: per-category rolling window of recent run
- * scores over daily winners across peers.
+ * scores across local, peer and snapshot evidence.
  */
 
 import { z } from 'zod';
@@ -313,7 +313,9 @@ function qualifiesForWindow(run, now) {
  *   legacy member runs whose `assessedAt` is strictly earlier than the earliest domain-native run.
  * - Skip any older run whose non-empty normalized slice key already appeared in a newer qualifying
  *   run, so re-auditing a remediated slice supersedes its older pre-fix run.
- * - Keep at most one slice-less daily winner per category and UTC day for v1, peer, and snapshot rows.
+ * - Give distinct slices precedence over slice-less runs from the same category and UTC day.
+ * - Keep one slice-less winner per eligible day. Peer and snapshot rows must also be at
+ *   least as recent as the newest qualifying local slice in the window's eligible set.
  */
 function selectCategoryWindow(id, runs, now) {
   const qualifying = runs.filter(run => qualifiesForWindow(run, now));
@@ -328,17 +330,29 @@ function selectCategoryWindow(id, runs, now) {
     }
   }
   const seenSlices = new Set();
-  const seenSlicelessDays = new Set();
-  const window = [];
+  const seenDays = new Set();
+  const candidates = [];
+  let newestLocalSliceMs = -Infinity;
+  // Reserve each retained slice's day before considering slice-less candidates,
+  // since a newer timestamp on the same day does not give them precedence.
   for (const run of eligible) {
+    const { assessedAt, category, sourcePeerId, sourcePeerName } = run.record;
     const sliceKey = normalizeSliceKey(run);
+    const dayKey = `${normalizeAuditTaskType(category)}|${utcDay(assessedAt)}`;
+    const imported = Boolean(sourcePeerId || sourcePeerName);
     if (sliceKey !== null) {
       if (seenSlices.has(sliceKey)) continue;
       seenSlices.add(sliceKey);
-    } else {
-      const dayKey = `${normalizeAuditTaskType(run.record.category)}|${utcDay(run.record.assessedAt)}`;
-      if (seenSlicelessDays.has(dayKey)) continue;
-      seenSlicelessDays.add(dayKey);
+      seenDays.add(dayKey);
+      if (!imported) newestLocalSliceMs = Math.max(newestLocalSliceMs, Date.parse(assessedAt));
+    }
+    candidates.push({ run, sliceKey, dayKey, imported });
+  }
+  const window = [];
+  for (const { run, sliceKey, dayKey, imported } of candidates) {
+    if (sliceKey === null) {
+      if (seenDays.has(dayKey) || (imported && Date.parse(run.record.assessedAt) < newestLocalSliceMs)) continue;
+      seenDays.add(dayKey);
     }
     window.push(run);
     if (window.length >= QUALITY_WINDOW_RUNS) break;

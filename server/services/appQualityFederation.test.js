@@ -177,9 +177,16 @@ it('exports a slice-scored v2 record in the v1 numeric wire shape and reads it b
   expect(payload).toMatchObject({ schemaVersion: 1, measurements: [{ report: { version: 1, category: 'security', score: 64, worstSeverity: 5, coverage: 'broad', confidence: 'high', scannedFiles: 12, totalFiles: 12 } }] });
   expect(JSON.stringify(payload)).not.toMatch(/slice|Users|narrative|summary/i);
   expect(qualityFileFromWireSnapshot(payload)).toContain(',64,');
-  const local = { ...deps([v2]), peerFetch: async () => response({ ...payload, measurements: [{ ...payload.measurements[0], measurementId: 'a'.repeat(64), assessedAt: '2026-09-09T10:00:00Z' }] }) };
-  const [app] = await enrichAppsWithQuality([{ id: 'portos-default' }], local);
-  expect(app.quality.categories.find(c => c.id === 'security')).toMatchObject({ score: 64, runScore: 64, slice: v2.report.slice, window: { runs: 2 } });
+  const peerPayload = { ...payload, measurements: [{ ...payload.measurements[0], measurementId: 'a'.repeat(64), assessedAt: '2026-09-10T09:00:00Z' }] };
+  const peerFetch = async () => response(peerPayload);
+  const apps = [{ id: 'portos-default' }];
+  const [peerOnly] = await enrichAppsWithQuality(apps, { ...deps([]), peerFetch });
+  expect(peerOnly.quality.categories.find(c => c.id === 'security'))
+    .toMatchObject({ score: 64, sourcePeerId: peer.id, slice: null, window: { runs: 1 } });
+
+  const [app] = await enrichAppsWithQuality(apps, { ...deps([v2]), peerFetch });
+  expect(app.quality.categories.find(c => c.id === 'security'))
+    .toMatchObject({ score: 64, runScore: 64, slice: v2.report.slice, window: { runs: 1 } });
 });
 
 // PortOS's own release evidence goes through the same `.quality.json` path as

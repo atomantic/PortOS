@@ -56,7 +56,14 @@ Stored v1 reports stay readable; their `score` is read as that run's score.
 A category's score is derived server-side: the confidence- and recency-weighted
 mean (high 1, medium 0.5, each further halved per 14 days of age so remediated
 pre-fix runs stop pinning the figure) of its newest five eligible runs — **broad** discovery coverage,
-medium/high confidence, scored, and at most 30 days old — one run per UTC day.
+medium/high confidence, scored, and at most 30 days old. The newest qualifying
+run for each normalized slice supersedes its earlier runs. Distinct slices may
+contribute on the same UTC day. For each audit category and UTC day, the window
+takes at most one slice-less run and gives a retained slice precedence, even
+over a later slice-less run that day. Peer and release snapshot rows omit slice
+names. These rows can fill otherwise eligible days when there is no qualifying
+local slice or their timestamp is at least as recent as the newest qualifying
+local slice in the category window's eligible set.
 The pragmatic target band is **85–95**; the audit rubric tells agents not to
 chase 100/100 with speculative hardening. The `audit-slice-history` input shows each
 prior slice's score so a lane can re-verify a remediated slice that scored below 75.
