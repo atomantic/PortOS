@@ -18,6 +18,7 @@ import { localLlmCompareSchema, localLlmTestSchema } from '../lib/mediaValidatio
 import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer } from '../services/splashServerManager.js';
 import { installMkserve, startMkserveServer, stopMkserveServer } from '../services/mkserveRuntimeManager.js';
 import { ServerError, errorEvents } from '../lib/errorHandler.js';
+import { saveProcessList } from '../services/pm2.js';
 
 const getModelAbuseGuardStatus = vi.fn(async () => ({ ready: false, modelCached: false, runtimeReady: false }));
 const installModelAbuseGuard = vi.fn(async () => ({ ok: true, ready: true }));
@@ -132,6 +133,10 @@ vi.mock('../services/llamaServerManager.js', () => ({
 
 // The launcher's curated presets (and their weights' on-disk state) ride along
 // on the status response so the card can offer a Download button per GGUF.
+vi.mock('../services/pm2.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  saveProcessList: vi.fn(async () => ({ saved: true })),
+}));
 vi.mock('../services/splashRuntimeStatus.js', () => ({
   getSplashRuntimeStatus: vi.fn(async () => ({ supported: true, state: 'stopped', installed: true })),
 }));
@@ -1171,4 +1176,12 @@ it('validates and saves the Splash next-start context through the runtime route'
   expect(result.status).toBe(200);
   expect(result.body).toEqual({ requestedContextWindow: 1000000 });
   expect(saveSplashContextWindow).toHaveBeenCalledWith(1000000);
+});
+
+it('save-startup leaves every on-demand runtime out of the boot dump', async () => {
+  const res = await request(makeApp()).post('/api/local-llm/save-startup');
+  expect(res.status).toBe(200);
+  expect(saveProcessList).toHaveBeenCalledWith(null, {
+    exclude: ['portos-mtplx', 'portos-slotstream', 'portos-splash', 'portos-mkserve'],
+  });
 });

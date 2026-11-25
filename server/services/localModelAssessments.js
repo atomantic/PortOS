@@ -84,7 +84,7 @@ import {
 } from './llamaServerManager.js';
 import { getMtplxServerEndpoint, getMtplxServerStatus, relaunchMtplxServerWithTuning } from './mtplxServerManager.js';
 import { getSlotstreamServerEndpoint } from './slotstreamServerManager.js';
-import { LLAMA_APP, MTPLX_APP, SLOTSTREAM_APP } from '../lib/managedDaemon.js';
+import { MANAGED_RUNTIME_APPS } from '../lib/managedRuntimeApps.js';
 import { readProcessTreeResidentBytes } from '../lib/processTreeMemory.js';
 import { getAppStatus } from './pm2.js';
 import { getSpecDecodePresetStatus } from './specDecodeModels.js';
@@ -261,7 +261,7 @@ export function toSample(contextTokens, result) {
 
 // PM2 app per runtime PortOS runs as a managed daemon. Their footprint is the process's own: each
 // serves the model it was launched with, so the whole process is what that model costs to hold.
-const MANAGED_DAEMON_APPS = { llama: LLAMA_APP, mtplx: MTPLX_APP, slotstream: SLOTSTREAM_APP };
+const MANAGED_DAEMON_APPS = Object.fromEntries(Object.entries(MANAGED_RUNTIME_APPS).map(([id, row]) => [id, row.app]));
 
 // A reading that rounds to 0.00 GB (a wrapper-only tree) is not a measured footprint of the model;
 // stored as `0` it would score the memory axis as free.

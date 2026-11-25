@@ -6,6 +6,7 @@
 import { writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { MANAGED_RUNTIME_APPS } from './managedRuntimeApps.js';
 import { getMemoryStats } from './memoryStats.js';
 import { localEndpointPort } from './localEndpoint.js';
 import { isLocalEndpointBusy, localEndpointsSharePort, onLocalEndpointSettled } from './localLlmConcurrency.js';
@@ -41,9 +42,9 @@ import { createSingleFlight } from './singleFlight.js';
  * `slotstreamServerManager.js` re-export these as `LLAMA_APP` / `MTPLX_APP` /
  * `SLOTSTREAM_APP`.
  */
-export const LLAMA_APP = 'portos-llama-server';
-export const MTPLX_APP = 'portos-mtplx';
-export const SLOTSTREAM_APP = 'portos-slotstream';
+export const LLAMA_APP = MANAGED_RUNTIME_APPS.llama.app;
+export const MTPLX_APP = MANAGED_RUNTIME_APPS.mtplx.app;
+export const SLOTSTREAM_APP = MANAGED_RUNTIME_APPS.slotstream.app;
 
 /** Same cap both managers used, and what the launcher cards render. */
 const DEFAULT_MAX_LINES = 100;

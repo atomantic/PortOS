@@ -238,6 +238,7 @@ describe('LOCAL_RUNTIMES — user-facing copy names its page by route, never by 
       llama: '/models/llms-runtimes',
       slotstream: '/models/llms-runtimes',
       splash: '/models/llms-runtimes/splash',
+      mkserve: '/models/llms-runtimes/mkserve',
       mtplx: '/models/llms-runtimes',
       ollama: '/models/llms',
       lmstudio: '/models/llms',

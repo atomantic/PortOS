@@ -58,11 +58,12 @@ import {
   installLlamaServer,
   upgradeLlamaServer,
 } from '../services/llamaServerManager.js'
-import { MTPLX_APP, getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx } from '../services/mtplxServerManager.js'
+import { onDemandRuntimeAppNames } from '../lib/managedRuntimeApps.js'
+import { getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx } from '../services/mtplxServerManager.js'
 import { getSplashRuntimeStatus } from '../services/splashRuntimeStatus.js'
-import { SPLASH_APP, installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer } from '../services/splashServerManager.js'
-import { MKSERVE_APP, getMkserveRuntimeStatus, installMkserve, startMkserveServer, stopMkserveServer } from '../services/mkserveRuntimeManager.js'
-import { SLOTSTREAM_APP, getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream } from '../services/slotstreamServerManager.js'
+import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer } from '../services/splashServerManager.js'
+import { getMkserveRuntimeStatus, installMkserve, startMkserveServer, stopMkserveServer } from '../services/mkserveRuntimeManager.js'
+import { getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream } from '../services/slotstreamServerManager.js'
 import { cancelSlotstreamModelDownload, downloadSlotstreamModel, previewSlotstreamDownload } from '../services/slotstreamModelManager.js'
 import { searchMtplxCatalog, pullMtplxModel, previewMtplxPull, removeMtplxModel } from '../services/mtplxModelManager.js'
 import { saveProcessList } from '../services/pm2.js'
@@ -1284,7 +1285,7 @@ router.post('/slotstream/models/download/cancel', asyncHandler(async (req, res) 
 // Slotstream can start on demand; Splash and mkserve start from their controls.
 // The running processes are left alone; only this saved boot list changes.
 router.post('/save-startup', asyncHandler(async (_req, res) => {
-  res.json(await saveProcessList(null, { exclude: [MTPLX_APP, SLOTSTREAM_APP, SPLASH_APP, MKSERVE_APP] }))
+  res.json(await saveProcessList(null, { exclude: onDemandRuntimeAppNames() }))
 }))
 
 export default router

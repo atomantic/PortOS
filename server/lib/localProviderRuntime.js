@@ -104,6 +104,16 @@ export const LOCAL_RUNTIMES = Object.freeze({
     modelsHint: 'Start Splash in a terminal using the command on {page} and wait for its model to load.',
     servesOneModel: true,
   }),
+  mkserve: Object.freeze({
+    id: 'mkserve',
+    label: 'mkserve',
+    command: 'mkserve',
+    defaultBaseUrl: `http://127.0.0.1:${PORTS.MKSERVE}/v1`,
+    manageUrl: LOCAL_RUNTIME_MANAGE_URLS.mkserve,
+    docsUrl: 'https://github.com/atomantic/PortOS/blob/main/docs/features/mkserve.md',
+    modelsHint: 'Install and start mkserve on {page}; it serves one fixed model.',
+    servesOneModel: true,
+  }),
   slotstream: Object.freeze({
     id: 'slotstream',
     label: 'Slotstream',
@@ -136,7 +146,7 @@ export const LOCAL_RUNTIMES = Object.freeze({
  * OpenAI-compatible protocol. MANAGED runtimes have a provider record and installed-model catalog (run lands in `/runs`); ENDPOINT runtimes are bare loopback
  * daemons whose models are whatever `GET /v1/models` reports and are measured directly.
  */
-export const ASSESSABLE_RUNTIMES = Object.freeze(['ollama', 'lmstudio', 'llama', 'mtplx', 'vllm', 'sglang', 'slotstream']);
+export const ASSESSABLE_RUNTIMES = Object.freeze(['ollama', 'lmstudio', 'llama', 'mtplx', 'vllm', 'sglang', 'slotstream', 'splash', 'mkserve']);
 
 /** Assessable runtimes PortOS holds a provider record and model catalog for. */
 export const MANAGED_ASSESSMENT_BACKENDS = Object.freeze(['ollama', 'lmstudio']);
