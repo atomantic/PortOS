@@ -15,7 +15,12 @@ vi.mock('../services/shell.js', () => ({
 }));
 vi.mock('../lib/aiToolkit/internal/codexModelListProbe.js', () => ({ probeCodexModelsViaAppServer: vi.fn() }));
 vi.mock('../services/provider/providers.js', () => ({ getProviderById: vi.fn() }));
+vi.mock('../lib/commandExists.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  commandOutput: vi.fn(),
+}));
 
+const { commandOutput } = await import('../lib/commandExists.js');
 const { getProviderById } = await import('../services/provider/providers.js');
 const { probeCodexModelsViaAppServer } = await import('../lib/aiToolkit/internal/codexModelListProbe.js');
 const { registerShellHandlers } = await import('./shell.js');
@@ -28,7 +33,10 @@ const setup = () => {
 };
 
 describe('shell:start payload validation', () => {
-  beforeEach(() => createShellSession.mockClear());
+  beforeEach(() => {
+    createShellSession.mockClear();
+    commandOutput.mockReset();
+  });
 
   it('validates the saved shell speed, records only the request and refuses unsupported authentication', async () => {
     const provider = { id: 'codex-tui', type: 'tui', command: 'codex', codexAuthMode: 'chatgpt', defaultModel: 'alpha', executionOptions: { serviceTier: 'fast' } };
@@ -42,6 +50,69 @@ describe('shell:start payload validation', () => {
     await handlers['shell:start']({ providerId: provider.id });
     expect(createShellSession).not.toHaveBeenCalled();
     expect(socket.emit).toHaveBeenCalledWith('shell:error', expect.objectContaining({ error: expect.stringContaining('ChatGPT') }));
+  });
+
+  it('opens OpenCode 2 full-screen with the selected agent, model and local endpoint in private server config', async () => {
+    getProviderById.mockResolvedValue({
+      id: 'opencode-splash-tui', type: 'tui', command: 'opencode', splashBacked: true, defaultModel: 'inkling2-mini',
+      args: ['--agent=plan', '--continue'], contextWindow: 65_536,
+      envVars: {
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({
+          permission: 'ask',
+          provider: { splash: { options: { baseURL: 'http://127.0.0.1:8001/v1', apiKey: 'fixture-key' } } },
+        }),
+      },
+    });
+    commandOutput.mockResolvedValue('opencode v2.4.1');
+    const { handlers, socket } = setup();
+    await handlers['shell:start']({ providerId: 'opencode-splash-tui', cwd: '/tmp/project' });
+    expect(commandOutput).toHaveBeenCalledWith(expect.stringMatching(/opencode(?:\.exe|\.cmd)?$/i), ['--version'], expect.objectContaining({ cwd: '/tmp/project' }));
+    const [, opts] = createShellSession.mock.calls[0];
+    expect(opts.initialCommand).toMatch(/ --standalone --continue$/);
+    expect(opts.initialCommand).not.toMatch(/--(?:agent|model)|fixture-key/);
+    expect(JSON.parse(opts.env.OPENCODE_CONFIG_CONTENT)).toMatchObject({
+      default_agent: 'plan',
+      model: 'splash/inkling2-mini',
+      permission: { '*': 'ask', plan_enter: 'deny' },
+      provider: {
+        splash: {
+          options: { baseURL: 'http://127.0.0.1:8001/v1', apiKey: 'fixture-key' },
+          models: { 'inkling2-mini': expect.anything() },
+        },
+      },
+    });
+    expect(socket.emit).toHaveBeenCalledWith('shell:started', { sessionId: 'sess-1' });
+  });
+
+  it('retains a saved v2 model pin and defaults the role to build', async () => {
+    getProviderById.mockResolvedValue({
+      id: 'opencode-tui', type: 'tui', command: 'opencode',
+      defaultModel: 'test/default', args: ['--standalone', '-m', 'test/pinned'],
+    });
+    commandOutput.mockResolvedValue('2.0.0');
+    const { handlers } = setup();
+    await handlers['shell:start']({ providerId: 'opencode-tui' });
+    const [, opts] = createShellSession.mock.calls[0];
+    expect(opts.initialCommand.match(/--standalone/g)).toHaveLength(1);
+    expect(opts.initialCommand).not.toContain('test/pinned');
+    expect(JSON.parse(opts.env.OPENCODE_CONFIG_CONTENT)).toEqual({ model: 'test/pinned', default_agent: 'build' });
+  });
+
+  it.each(['1.19.5', null])('keeps the existing OpenCode TUI invocation for %s', async (version) => {
+    getProviderById.mockResolvedValue({ id: 'opencode-tui', type: 'tui', command: 'opencode', defaultModel: 'test/default' });
+    commandOutput.mockResolvedValue(version);
+    const { handlers } = setup();
+    await handlers['shell:start']({ providerId: 'opencode-tui' });
+    expect(createShellSession.mock.calls[0][1].initialCommand).toBe('opencode --agent build --model test/default');
+  });
+
+  it('does not silently route a v2 preset through a server that ignores its inline config', async () => {
+    getProviderById.mockResolvedValue({ id: 'opencode-tui', type: 'tui', command: 'opencode', args: ['--server=https://example.invalid'] });
+    commandOutput.mockResolvedValue('opencode v2.4.1');
+    const { handlers, socket } = setup();
+    await handlers['shell:start']({ providerId: 'opencode-tui' });
+    expect(createShellSession).not.toHaveBeenCalled();
+    expect(socket.emit).toHaveBeenCalledWith('shell:error', { error: expect.stringContaining('Remove --server') });
   });
 
   it('hands a plain initialCommand to the service to inject after the shell is ready', async () => {

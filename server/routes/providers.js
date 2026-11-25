@@ -131,8 +131,8 @@ const sanitizeProvider = (provider) => {
 };
 
 /**
- * Decorate a TUI provider with the command line the Shell page will run for it,
- * so the card can render a "Launch in Shell" button and show what it will type.
+ * Decorate a TUI provider with its launch command preview so the card can
+ * render a "Launch in Shell" button without probing installed CLIs.
  *
  * DISPLAY ONLY — the launch itself goes through `shell:start { providerId }`,
  * which re-resolves this server-side and pairs it with the provider's env (see
