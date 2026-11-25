@@ -180,6 +180,41 @@ describe('RunsTab ?run= deep link', () => {
     expect(within(screen.getByTestId('pinned-run')).getAllByText('Succeeded').length).toBeGreaterThan(0);
   });
 
+  it('coalesces a burst of invalidations into at most two pinned reads and still renders the run', async () => {
+    let resolveFirst;
+    api.getRun.mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }));
+    api.getRun.mockResolvedValue({ id: 'run-old', prompt: 'old prompt', providerName: 'demo', success: true, startTime: '2025-01-01T00:00:00Z' });
+    renderTab('/cos/runs?run=run-old');
+    await act(async () => {});
+    expect(api.getRun).toHaveBeenCalledTimes(1);
+
+    await act(async () => { for (let i = 0; i < 10; i++) socket.fire('connect'); });
+    await act(async () => { resolveFirst({ id: 'run-old', prompt: 'old prompt', providerName: 'demo', success: null, startTime: '2025-01-01T00:00:00Z' }); });
+
+    expect(await screen.findByTestId('pinned-run')).toBeInTheDocument();
+    expect(api.getRun.mock.calls.length).toBeLessThanOrEqual(2);
+    await act(async () => {});
+    expect(within(screen.getByTestId('pinned-run')).getAllByText('Succeeded').length).toBeGreaterThan(0);
+  });
+
+  it('ignores totals from a response for a previous source filter', async () => {
+    let resolveAll;
+    api.getRuns.mockImplementation((_limit, _offset, source) => {
+      if (source === 'cos-agent') return Promise.resolve({ runs: [RUNS[0]], total: 5 });
+      return Promise.resolve({ runs: RUNS, total: 250 });
+    });
+    renderTab('/cos/runs');
+    expect(await screen.findByText('Showing the newest 2 of 250 runs')).toBeInTheDocument();
+
+    api.getRuns.mockImplementationOnce(() => new Promise((resolve) => { resolveAll = resolve; }));
+    await act(async () => { socket.fire('connect'); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'CoS' })); });
+    expect(await screen.findByText('Showing the newest 1 of 5 runs')).toBeInTheDocument();
+
+    await act(async () => { resolveAll({ runs: RUNS, total: 999 }); });
+    expect(screen.getByText('Showing the newest 1 of 5 runs')).toBeInTheDocument();
+  });
+
   it('shows a not-found notice for an unknown ?run= id', async () => {
     api.getRun.mockRejectedValue(Object.assign(new Error('not found'), { status: 404 }));
     renderTab('/cos/runs?run=run-missing');
