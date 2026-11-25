@@ -19,6 +19,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { appendFile, writeFile } from 'fs/promises';
 import { appendAgentOutputLines, updateAgent } from '../cos/cosAgentLifecycle.js';
 import { OUTPUT_BUFFER_CAP, OUTPUT_BUFFER_HEADROOM, RAW_SPOOL_MAX_BYTES } from '../../lib/tuiHandshake.js';
+import { withRuntimeFileTurn } from '../../lib/runtimeFilePublication.js';
 
 // Status updates stay responsive; raw recovery output can tolerate a longer
 // batching window. Neither timer delays an explicit final drain.
@@ -201,14 +202,14 @@ export function createOutputSpooler({ agentId, outputFile, rawFile }) {
       // Only update the byte counter on successful write — a failed write
       // would otherwise inflate rawBytesWritten and make subsequent flush
       // decisions race the actual on-disk state.
-      const wrote = await writeFile(rawFile, writeBuf).then(() => true).catch(async (err) => {
+      const wrote = await withRuntimeFileTurn(rawFile, () => writeFile(rawFile, writeBuf)).then(() => true).catch(async (err) => {
         await reporter.report('raw.txt', err);
         return false;
       });
       if (wrote) rawBytesWritten = writeBytes;
       return;
     }
-    const wrote = await appendFile(rawFile, batch).then(() => true).catch(async (err) => {
+    const wrote = await withRuntimeFileTurn(rawFile, () => appendFile(rawFile, batch)).then(() => true).catch(async (err) => {
       await reporter.report('raw.txt', err);
       return false;
     });

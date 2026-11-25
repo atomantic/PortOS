@@ -15,12 +15,14 @@ import { createReadStream } from 'node:fs';
 import { lstat, readdir, readFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
-import { createGzip, createGunzip } from 'node:zlib';
+import { createGzip, createGunzip, gzip, gunzip } from 'node:zlib';
+import { promisify } from 'node:util';
 import { pipeline } from 'node:stream/promises';
 import { Writable, Transform } from 'node:stream';
 import { z } from 'zod';
 import { atomicWrite, createWriteStreamGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { publishRuntimeFiles, withRuntimeFileTurn } from '../../lib/runtimeFilePublication.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { AGENTS_DIR, loadConfig, saveConfig, withConfigLock, withStateLock, readAgentsStateForSafetyCheck } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
@@ -30,6 +32,8 @@ const SAFE_ID = /^[a-zA-Z0-9_-]+$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const TEMP_RECORDING = /^raw\.txt\.gz\.[0-9a-f-]{36}\.tmp$/;
 const MANIFEST = 'raw-storage.json';
+const zipRecording = promisify(gzip);
+const unzipRecording = promisify(gunzip);
 export const agentStoragePolicySchema = z.object({
   autoCompress: z.boolean().default(true),
   compressAfterDays: z.number().int().min(1).max(36500).default(7),
@@ -54,11 +58,47 @@ const json = async path => {
   if (!st.isFile()) throw new Error('Non-regular metadata file');
   return JSON.parse(await readFile(path, 'utf8'));
 };
-async function manifest(dir) {
+async function readManifest(dir) {
   const value = await json(join(dir, MANIFEST)).catch(missing);
-  if (value === null) return { version: 1, pinned: false };
+  if (value === null) return null;
   if (value.version !== 1 || typeof value.pinned !== 'boolean') throw new Error('Recording manifest is invalid');
   return value;
+}
+async function manifest(dir) {
+  return await readManifest(dir) ?? { version: 1, pinned: false };
+}
+
+// The scrubber holds backup admission and the CoS state lock across directory
+// discovery and this rewrite so maintenance cannot republish an older recording.
+export async function scrubAgentRecordings(dir, scrubValue) {
+  const plainPath = join(dir, 'raw.txt');
+  await withRuntimeFileTurn(plainPath, async () => {
+    if (!(await info(plainPath))?.isFile()) return;
+    const original = await readFile(plainPath, 'utf8');
+    const cleaned = scrubValue(original);
+    if (cleaned !== original) await atomicWrite(plainPath, cleaned);
+  });
+
+  const gzipPath = `${plainPath}.gz`;
+  if (!(await info(gzipPath))?.isFile()) return;
+  const original = (await unzipRecording(await readFile(gzipPath))).toString('utf8');
+  const cleaned = scrubValue(original);
+  if (cleaned === original) return;
+
+  const bytes = Buffer.from(cleaned);
+  const compressed = await zipRecording(bytes);
+  const storage = await readManifest(dir);
+  if (!storage) {
+    await atomicWrite(gzipPath, compressed);
+    return;
+  }
+  const manifestPath = join(dir, MANIFEST);
+  await publishRuntimeFiles([gzipPath, manifestPath], async () => {
+    await atomicWrite(gzipPath, compressed);
+    await atomicWrite(manifestPath, {
+      ...storage, sha256: createHash('sha256').update(bytes).digest('hex'), originalBytes: bytes.length,
+    });
+  });
 }
 function location(date, id) {
   if (!DATE.test(date) || !SAFE_ID.test(id)) throw new ServerError('Invalid run locator', { status: 400, code: 'VALIDATION_ERROR' });
