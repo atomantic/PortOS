@@ -35,6 +35,38 @@ import {
 } from '../../services/apiMessages.js';
 beforeEach(() => vi.clearAllMocks());
 
+describe('DraftsTab Teams recipients', () => {
+  it.each([
+    ['pending_review', [], 'Approve'],
+    ['approved', ['Alice'], 'Send'],
+    ['draft', ['alice@example.com', 'Bob'], 'Approve'],
+  ])('guides users to edit the To field on a %s draft with recipients %j', async (status, to, action) => {
+    const draft = { id: 'd1', accountId: 'acc1', status, sendVia: 'playwright', subject: 'Teams reply', body: 'Example reply', to };
+    getMessageDrafts.mockResolvedValueOnce([draft]);
+    const fixed = { ...draft, to: ['alice@example.com'], status: 'draft' };
+    updateMessageDraft.mockResolvedValueOnce(fixed);
+    approveMessageDraft.mockResolvedValueOnce({ ...fixed, status: 'approved' });
+    render(<DraftsTab accounts={[{ id: 'acc1', name: 'Teams', type: 'teams', canSend: true }]} />);
+
+    const blockedAction = await screen.findByRole('button', { name: action });
+    expect(screen.getByText(/Choose Edit.*To field/)).toBeInTheDocument();
+    expect(blockedAction).toBeDisabled();
+    fireEvent.click(blockedAction);
+    expect(approveMessageDraft).not.toHaveBeenCalled();
+    expect(sendMessageDraft).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'To' }), { target: { value: 'alice@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+    expect(updateMessageDraft).toHaveBeenCalledWith('d1', expect.objectContaining({ to: ['alice@example.com'] }));
+    const approve = await screen.findByRole('button', { name: 'Approve' });
+    expect(approve).toBeEnabled();
+    expect(screen.queryByText(/valid Teams recipient email/)).not.toBeInTheDocument();
+    fireEvent.click(approve);
+    expect(await screen.findByRole('button', { name: 'Send' })).toBeEnabled();
+  });
+});
+
 // jsdom doesn't do layout, so domIndex's isVisible() geometry checks would
 // drop every element — same stub domIndex.test.jsx uses.
 const makeVisible = () => {

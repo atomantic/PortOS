@@ -449,13 +449,18 @@ describe('Messages Routes', () => {
       expect(messageDrafts.createDraft).toHaveBeenLastCalledWith(expect.objectContaining({ subject: 'RE: Lunch?' }));
     });
 
-    it('leaves delivery fields empty for Teams replies', async () => {
+    it.each([
+      ['', []],
+      ['Alice', []],
+      ['Alice <alice@example.com>', ['alice@example.com']],
+    ])('uses the Teams sender email when available (%j)', async (email, to) => {
       messageAccounts.getAccount.mockResolvedValue({ id: VALID_UUID, type: 'teams' });
-      messageSync.getMessage.mockResolvedValue({ id: 'message-example', subject: 'Chat', from: { email: 'alice@example.com' } });
+      messageSync.getMessage.mockResolvedValue({ id: 'message-example', subject: 'Chat', from: { email } });
       generateReplyBody.mockResolvedValue({ body: 'Synthetic generated reply' });
       messageDrafts.createDraft.mockImplementation(async (d) => ({ id: DRAFT_UUID, ...d }));
-      await request(app).post('/api/messages/drafts/generate').send({ accountId: VALID_UUID, replyToMessageId: 'message-example' });
-      expect(messageDrafts.createDraft).toHaveBeenCalledWith(expect.objectContaining({ to: [], subject: '' }));
+      const response = await request(app).post('/api/messages/drafts/generate').send({ accountId: VALID_UUID, replyToMessageId: 'message-example' });
+      expect(response.status).toBe(201);
+      expect(messageDrafts.createDraft).toHaveBeenCalledWith(expect.objectContaining({ to, subject: '' }));
     });
 
     it('returns typed errors and creates no draft when the original or its sender is unavailable', async () => {
