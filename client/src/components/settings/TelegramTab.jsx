@@ -37,7 +37,8 @@ export function TelegramTab() {
 
   const testHintId = useId();
   const isDirty = Boolean(tgToken) || tgChatId !== savedChatId;
-  const testBusy = tgTesting || tgSaving || tgDisconnecting || switching;
+  const configBusy = tgTesting || tgSaving || tgDisconnecting || switching;
+  const forwardTypesDisabled = forwardTypesSaving || switching || tgDisconnecting || confirmDisconnect;
 
   const loadSettings = useCallback(async () => {
     setLoading(true);
@@ -139,7 +140,7 @@ export function TelegramTab() {
   };
 
   const toggleForwardType = async (type) => {
-    if (forwardTypesSaving || tgDisconnecting || confirmDisconnect) return;
+    if (forwardTypesDisabled) return;
     const previous = tgForwardTypes;
     const updated = previous.includes(type)
       ? previous.filter(t => t !== type)
@@ -172,7 +173,7 @@ export function TelegramTab() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <button
             onClick={() => method !== 'manual' && handleMethodChange('manual')}
-            disabled={switching || tgSaving || tgDisconnecting || tgTesting}
+            disabled={configBusy || forwardTypesDisabled}
             className={`p-4 rounded-lg border text-left transition-colors ${
               method === 'manual'
                 ? 'border-port-accent bg-port-accent/10'
@@ -186,7 +187,7 @@ export function TelegramTab() {
           </button>
           <button
             onClick={() => method !== 'mcp-bridge' && handleMethodChange('mcp-bridge')}
-            disabled={switching || tgSaving || tgDisconnecting || tgTesting}
+            disabled={configBusy || forwardTypesDisabled}
             className={`p-4 rounded-lg border text-left transition-colors ${
               method === 'mcp-bridge'
                 ? 'border-port-accent bg-port-accent/10'
@@ -266,7 +267,7 @@ export function TelegramTab() {
           <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             <button
               onClick={handleTelegramSave}
-              disabled={testBusy || confirmDisconnect || (!tgToken && !tgStatus?.hasToken)}
+              disabled={configBusy || confirmDisconnect || (!tgToken && !tgStatus?.hasToken)}
               className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
             >
               {tgSaving ? <BrailleSpinner /> : <Save size={16} />}
@@ -275,7 +276,7 @@ export function TelegramTab() {
             {tgStatus?.connected && (
               <button
                 onClick={handleTelegramTest}
-                disabled={testBusy || isDirty || confirmDisconnect}
+                disabled={configBusy || isDirty || confirmDisconnect}
                 aria-describedby={isDirty ? testHintId : undefined}
                 className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-border hover:bg-port-border/70 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
               >
@@ -297,7 +298,7 @@ export function TelegramTab() {
               ) : (
                 <button
                   onClick={() => setConfirmDisconnect(true)}
-                  disabled={testBusy || forwardTypesSaving}
+                  disabled={configBusy || forwardTypesSaving}
                   className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-error/20 hover:bg-port-error/30 text-port-error text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
                 >
                   <Trash2 size={16} />
@@ -350,7 +351,7 @@ export function TelegramTab() {
             <div className="flex items-center gap-3">
               <button
                 onClick={handleTelegramTest}
-                disabled={testBusy}
+                disabled={configBusy}
                 className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
               >
                 {tgTesting ? <BrailleSpinner /> : <Send size={16} />}
@@ -376,7 +377,7 @@ export function TelegramTab() {
                 <input
                   type="checkbox"
                   checked={tgForwardTypes.includes(key)}
-                  disabled={forwardTypesSaving || tgDisconnecting || confirmDisconnect}
+                  disabled={forwardTypesDisabled}
                   onChange={() => toggleForwardType(key)}
                   className="rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
                 />

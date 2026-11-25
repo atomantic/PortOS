@@ -59,7 +59,9 @@ describe('Telegram forwarding settings', () => {
     expect(updateTelegramForwardTypes).toHaveBeenLastCalledWith(
       ['unknown_saved_type', 'health_issue', 'autopilot_paused'], { silent: true }
     );
-    fireEvent.click(screen.getByRole('button', { name: /Claude MCP Bridge/ }));
+    const bridge = screen.getByRole('button', { name: /Claude MCP Bridge/ });
+    await waitFor(() => expect(bridge).toBeEnabled());
+    fireEvent.click(bridge);
     await waitFor(() => expect(updateTelegramMethod).toHaveBeenCalledWith('mcp-bridge', { silent: true }));
     expect(screen.getByRole('checkbox', { name: 'Autopilot Paused' })).toBeChecked();
     await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Health Issues' })).toBeEnabled());
@@ -109,6 +111,7 @@ describe('Telegram mutations', () => {
     expect(health).toBeChecked();
     expect(health).toBeDisabled();
     expect(autopilot).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Claude MCP Bridge/ })).toBeDisabled();
     fireEvent.click(autopilot);
     expect(updateTelegramForwardTypes).toHaveBeenCalledTimes(1);
 
@@ -164,6 +167,7 @@ describe('Telegram mutations', () => {
 
     openConfirmation();
     expect(screen.getByText('Disconnect Telegram?')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Claude MCP Bridge/ })).toBeDisabled();
     expect(deleteTelegramConfig).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByText('Disconnect Telegram?')).not.toBeInTheDocument();
