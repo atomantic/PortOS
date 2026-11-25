@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * A finished separation replaces the board's stem together with its
  * provenance, so the Song step's "earlier version of the song" notice reads

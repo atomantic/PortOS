@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * The act-warning diagnostic distinguishes the test active when a warning
  * fires from the test whose afterEach reports it. Neither proves where the

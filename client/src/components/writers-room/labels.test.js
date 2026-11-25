@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { WORK_KINDS, WORK_STATUSES } from '../../../../server/lib/writersRoomPresets.js';
 import { KIND_LABELS, STATUS_LABELS } from './labels.js';

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, expect, it, vi } from 'vitest';
 import toast from '../components/ui/Toast';
 import { startMaintenanceRun, hydrateCosAgentDescription, triggerCosJob, getFeatureAgents } from './apiAgents';

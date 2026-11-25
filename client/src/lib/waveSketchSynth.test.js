@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createSketchSynthesizer } from './waveSketchSynth.js';
 import { renderSketchPreview } from './waveSketchSynthWorker.js';

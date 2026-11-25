@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * The GLB a real Blender 5.3 build exported (box-with-lid.gltf.json), posed the way the viewer poses it, against a plain
  * three.js AnimationMixer and against where the hinge puts the lid.

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { reviewFrameLabel, summarizeReviewProgress, REVIEW_STEP_LABELS } from './seriesReviewProgress.js';
 

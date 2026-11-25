@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { problem, withProblems } from '../test/musicVideoProblems.js';
 import { describe, it, expect } from 'vitest';
 import { summarizeMusicVideoProject } from '../../../server/lib/musicVideo/musicVideoSummary.js';

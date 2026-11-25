@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import {
   INSTRUMENTS, SONG_FORMATS, DRUM_FORMAT, DRUM_INSTRUMENT, SONG_STAGES,
