@@ -359,6 +359,31 @@ describe('review service', () => {
   });
 
   describe('cosEvents bridge', () => {
+    it('erases memory approval items from both stores only on hard deletion', async () => {
+      const metadata = { referenceId: 'mem-1', category: 'memory-approval' };
+      const live = { id: 'live', status: 'pending', metadata };
+      const archived = { id: 'archived', status: 'dismissed', metadata };
+      const unrelated = { id: 'unrelated', metadata: { ...metadata, category: 'task-approval' } };
+      readFile.mockResolvedValueOnce(JSON.stringify([live, unrelated]));
+      readFile.mockResolvedValueOnce(JSON.stringify([archived, live]));
+      const emit = vi.spyOn(reviewEvents, 'emit');
+
+      try {
+        await registeredHandlers['memory:deleted']({ id: 'mem-1', hard: false });
+        expect(atomicWrite).not.toHaveBeenCalled();
+
+        await registeredHandlers['memory:deleted']({ id: 'mem-1', hard: true });
+        expect(atomicWrite).toHaveBeenCalledWith('/test/data/review/items.json', [unrelated]);
+        expect(atomicWrite).toHaveBeenCalledWith('/test/data/review/archive.json', []);
+        expect(emit.mock.calls).toEqual([
+          ['item:deleted', { id: 'live' }],
+          ['item:deleted', { id: 'archived' }]
+        ]);
+      } finally {
+        emit.mockRestore();
+      }
+    });
+
     it('does not auto-resolve task obligations from execution outcomes', () => {
       expect(registeredHandlers['agent:completed']).toBeUndefined();
       expect(registeredHandlers['tasks:changed']).toBeUndefined();

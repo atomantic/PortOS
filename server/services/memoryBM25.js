@@ -18,7 +18,9 @@ import {
   getIndexStats
 } from '../lib/bm25.js'
 import { atomicWrite, ensureDir, PATHS } from '../lib/fileUtils.js'
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js'
 
+const queueIndexIO = createFileWriteQueue()
 const DATA_DIR = PATHS.memory
 const INDEX_FILE = path.join(DATA_DIR, 'bm25-index.json')
 
@@ -32,7 +34,10 @@ let isDirty = false
  */
 async function loadIndex() {
   if (indexCache) return indexCache
+  return queueIndexIO(() => indexCache ?? readIndex())
+}
 
+async function readIndex() {
   await ensureDir(DATA_DIR)
 
   const exists = await fs.access(INDEX_FILE).then(() => true).catch(() => false)
@@ -72,12 +77,16 @@ async function loadIndex() {
  * Save the BM25 index to disk
  * @returns {Promise<void>}
  */
-async function saveIndex() {
+function saveIndex() {
+  return queueIndexIO(writeIndex)
+}
+
+// The caller holds queueIndexIO so an older snapshot cannot replace a purge.
+async function writeIndex() {
   if (!indexCache || !isDirty) return
 
   await ensureDir(DATA_DIR)
-  const serialized = serializeIndex(indexCache)
-  await atomicWrite(INDEX_FILE, serialized)
+  await atomicWrite(INDEX_FILE, serializeIndex(indexCache))
   isDirty = false
 
   console.log(`💾 BM25 index saved: ${indexCache.totalDocs} docs, ${Object.keys(indexCache.terms).length} terms`)
@@ -88,22 +97,22 @@ async function saveIndex() {
  * @param {Array<{id: string, content: string, type: string, tags: string[]}>} memories
  * @returns {Promise<Object>} - Index statistics
  */
-async function rebuildIndex(memories) {
-  await ensureDir(DATA_DIR)
+function rebuildIndex(memories) {
+  return queueIndexIO(async () => {
+    // Convert memories to documents for indexing
+    const documents = memories.map(m => ({
+      id: m.id,
+      text: buildIndexableText(m)
+    }))
 
-  // Convert memories to documents for indexing
-  const documents = memories.map(m => ({
-    id: m.id,
-    text: buildIndexableText(m)
-  }))
+    indexCache = buildInvertedIndex(documents)
+    isDirty = true
 
-  indexCache = buildInvertedIndex(documents)
-  isDirty = true
+    await writeIndex()
 
-  await saveIndex()
-
-  console.log(`🔄 BM25 index rebuilt: ${indexCache.totalDocs} memories indexed`)
-  return getIndexStats(indexCache)
+    console.log(`🔄 BM25 index rebuilt: ${indexCache.totalDocs} memories indexed`)
+    return getIndexStats(indexCache)
+  })
 }
 
 /**
@@ -140,17 +149,19 @@ function buildIndexableText(memory) {
  * @param {Object} memory - Memory object with id, content, type, tags
  * @returns {Promise<void>}
  */
-async function indexMemory(memory) {
-  const index = await loadIndex()
+function indexMemory(memory) {
+  return queueIndexIO(async () => {
+    const index = indexCache ?? await readIndex()
 
-  const text = buildIndexableText(memory)
-  addDocument(index, memory.id, text)
-  isDirty = true
+    const text = buildIndexableText(memory)
+    addDocument(index, memory.id, text)
+    isDirty = true
 
-  // Save periodically (every 10 changes) or on explicit flush
-  if (isDirty && index.totalDocs % 10 === 0) {
-    await saveIndex()
-  }
+    // Save periodically (every 10 changes) or on explicit flush
+    if (isDirty && index.totalDocs % 10 === 0) {
+      await writeIndex()
+    }
+  })
 }
 
 /**
@@ -158,10 +169,15 @@ async function indexMemory(memory) {
  * @param {string} memoryId - Memory ID to remove
  * @returns {Promise<void>}
  */
-async function removeMemoryFromIndex(memoryId) {
-  const index = await loadIndex()
-  removeDocument(index, memoryId)
-  isDirty = true
+function removeMemoryFromIndex(memoryId) {
+  return queueIndexIO(async () => {
+    const index = indexCache ?? await readIndex()
+    if (index.docIds.has(memoryId)) {
+      removeDocument(index, memoryId)
+      isDirty = true
+    }
+    await writeIndex()
+  })
 }
 
 /**
@@ -210,11 +226,13 @@ async function flush() {
  * Clear the entire index
  * @returns {Promise<void>}
  */
-async function clearIndex() {
-  indexCache = createEmptyIndex()
-  isDirty = true
-  await saveIndex()
-  console.log('🗑️ BM25 index cleared')
+function clearIndex() {
+  return queueIndexIO(async () => {
+    indexCache = createEmptyIndex()
+    isDirty = true
+    await writeIndex()
+    console.log('🗑️ BM25 index cleared')
+  })
 }
 
 /**
@@ -232,18 +250,20 @@ async function hasMemory(memoryId) {
  * @param {Array<Object>} memories - Memories to index
  * @returns {Promise<number>} - Number of memories indexed
  */
-async function batchIndex(memories) {
-  const index = await loadIndex()
+function batchIndex(memories) {
+  return queueIndexIO(async () => {
+    const index = indexCache ?? await readIndex()
 
-  for (const memory of memories) {
-    const text = buildIndexableText(memory)
-    addDocument(index, memory.id, text)
-  }
+    for (const memory of memories) {
+      const text = buildIndexableText(memory)
+      addDocument(index, memory.id, text)
+    }
 
-  isDirty = true
-  await saveIndex()
+    isDirty = true
+    await writeIndex()
 
-  return memories.length
+    return memories.length
+  })
 }
 
 export {

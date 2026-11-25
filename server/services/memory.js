@@ -347,22 +347,13 @@ export async function archiveMemory(id) {
  */
 export async function purgeMemory(id) {
   return withMemoryLock(async () => {
+    const memory = await loadMemory(id);
     await deleteMemoryFiles(id);
-
-    // Remove from index
-    const index = await loadIndex();
-    index.memories = index.memories.filter(m => m.id !== id);
-    index.count = index.memories.length;
-    await saveIndex(index);
-
-    // Remove embedding
-    const embeddings = await loadEmbeddings();
-    delete embeddings.vectors[id];
-    await saveEmbeddings(embeddings);
-
-    // Remove from BM25 index
-    memoryBM25.removeMemoryFromIndex(id)
-      .catch(err => console.error(`⚠️ BM25 remove error: ${err.message}`));
+    if (memory?.status === 'pending_approval') {
+      await decrementAgentPendingApproval(memory.sourceAgentId);
+    }
+    await removeMemoryFromIndexes(id);
+    await notifications.removeByMetadata('memoryId', id);
 
     console.log(`🧠 Memory purged: ${id}`);
     cosEvents.emit('memory:deleted', { id, hard: true });
@@ -418,26 +409,8 @@ export async function rejectMemory(id) {
       return { success: false, error: 'Memory is not pending approval' };
     }
 
-    // Store sourceAgentId before deletion
-    const sourceAgentId = memory.sourceAgentId;
-
-    // Hard delete - remove files
     await deleteMemoryFiles(id);
-
-    // Remove from index
-    const index = await loadIndex();
-    index.memories = index.memories.filter(m => m.id !== id);
-    index.count = index.memories.length;
-    await saveIndex(index);
-
-    // Remove embedding
-    const embeddings = await loadEmbeddings();
-    delete embeddings.vectors[id];
-    await saveEmbeddings(embeddings);
-
-    // Remove from BM25 index
-    memoryBM25.removeMemoryFromIndex(id)
-      .catch(err => console.error(`⚠️ BM25 remove error: ${err.message}`));
+    await removeMemoryFromIndexes(id);
 
     console.log(`🧠 Memory rejected: ${id}`);
     cosEvents.emit('memory:rejected', { id });
@@ -446,10 +419,24 @@ export async function rejectMemory(id) {
     await notifications.removeByMetadata('memoryId', id);
 
     // Decrement agent's pendingApproval count
-    await decrementAgentPendingApproval(sourceAgentId);
+    await decrementAgentPendingApproval(memory.sourceAgentId);
 
     return { success: true, id };
   });
+}
+
+// The caller holds the memory lock while updating the file-backed indexes.
+async function removeMemoryFromIndexes(id) {
+  const index = await loadIndex();
+  index.memories = index.memories.filter(m => m.id !== id);
+  index.count = index.memories.length;
+  await saveIndex(index);
+
+  const embeddings = await loadEmbeddings();
+  delete embeddings.vectors[id];
+  await saveEmbeddings(embeddings);
+
+  await memoryBM25.removeMemoryFromIndex(id);
 }
 
 /**

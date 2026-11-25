@@ -628,3 +628,27 @@ cosEvents.on('memory:approved', (data) => {
 cosEvents.on('memory:rejected', (data) => {
   if (data?.id) dismissByReferenceId(data.id).catch(err => console.error(`❌ Failed to dismiss rejected memory review item: ${err.message}`));
 });
+
+function removeByReferenceId(referenceId) {
+  return runMutation(async () => {
+    const items = await loadItems();
+    const archive = await loadArchive();
+    const matches = item => item.metadata?.category === 'memory-approval'
+      && item.metadata.referenceId === referenceId;
+
+    const removed = [...items.filter(matches), ...archive.filter(matches)];
+    const keptArchive = archive.filter(item => !matches(item));
+    if (keptArchive.length !== archive.length) await atomicWrite(ARCHIVE_FILE, keptArchive);
+    const keptItems = items.filter(item => !matches(item));
+    if (keptItems.length !== items.length) await saveItems(keptItems);
+
+    const ids = new Set(removed.map(item => item.id));
+    return { result: ids.size, events: [...ids].map(id => ['item:deleted', { id }]) };
+  });
+}
+
+cosEvents.on('memory:deleted', ({ id, hard } = {}) => {
+  if (hard === true && id) {
+    return removeByReferenceId(id).catch(err => console.error(`❌ Failed to remove purged memory review item: ${err.message}`));
+  }
+});
