@@ -39,6 +39,8 @@ describe('test-memo: git-fixture declarations', () => {
   it.each([
     ['names no directory', "execFileSync('git', ['rev-parse', 'HEAD']);", /starts git without naming the directory/],
     ['gives a nullish directory', "execFileSync('git', ['rev-parse', 'HEAD'], { cwd: undefined });", /nullish directory/],
+    ['names git through a constant', "const __probeProgram = 'git';\nexecFileSync(__probeProgram, ['rev-parse', 'HEAD']);", /starts git without naming the directory/],
+    ['hands git to a runner as its program', "const __probe = (__probeProgram, __probeArgs) => execFileSync(__probeProgram, __probeArgs);\n__probe('git', ['rev-parse', 'HEAD']);", /starts git without naming the directory/],
     ['calls a wrapper without its directory', `${WRAPPER}\n__probe();`, /__probe\(\) is called without the directory/],
     ['calls a wrapper with an undefined directory', `${WRAPPER}\n__probe(undefined);`, /nullish directory/],
     ['calls a wrapper with a relative directory', `${WRAPPER}\n__probe('.');`, /relative to the test process/],

@@ -15,7 +15,7 @@ import {
   bindingValue, collectBindings, evaluate, evaluateArgs, importsNamed, mockedSpecifiers, namedImports, namedInImportList, replacedSources, widestPathExpression,
 } from './evaluator.js';
 import { CLIMBS, isCryptoModule, isGuardModule, normalizeRel, openReadReason, unfollowedReason, variableCombinations } from './pathValues.js';
-import { gitFixtureDeclaration } from './gitFixture.js';
+import { gitFixtureDeclaration, startsGitThroughName } from './gitFixture.js';
 import { packageNameOf } from './specifiers.js';
 import { isPunct, isWord, matchBrackets, tokenArrays, tokenizeModule } from './tokens.js';
 
@@ -48,6 +48,9 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null, export
   for (let i = 0; i < tokens.length; i += 1) {
     if (!checkedBodies.some(([from, to]) => from < i && i < to)) scanToken(x, i);
   }
+  // Last, so these readings change nothing the scan recorded. A program that is a name holding
+  // 'git', or a parameter a caller passes it as, starts git like a literal one (#18634).
+  if (!facts.git && startsGitThroughName(x)) facts.git = true;
   if (GIT_FIXTURE_MARKER.test(src)) noteGitFixture(x, src);
   return facts;
 }
@@ -121,8 +124,7 @@ function scanCodeText({ tokens, facts }) {
 
 /**
  * A file that declares its git repositories fixtures: the declaration stands
- * only when at least one git call was read and none contradicts it. Last, so
- * its evaluations change nothing the scan recorded.
+ * only when at least one git call was read and none contradicts it.
  */
 function noteGitFixture({ tokens, match, ctx, facts }, src) {
   const { declared, problem, calls } = gitFixtureDeclaration({ src, tokens, match, ctx });

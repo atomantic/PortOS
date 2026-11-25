@@ -52,7 +52,12 @@ as `spawns git (git-fixture declaration refused: …)`, wherever its own text
 contradicts it (`scripts/lib/testMemo/gitFixture.js`):
 
 - a git call that is not the literal program `git` with its arguments apart
-  (a command line hides the directory it runs in);
+  (a command line hides the directory it runs in). A spawn call is a git
+  call when its program can spell git: written in the call, held by the
+  name the call reads (`const command = 'git'`, `tool || 'git'`), or passed
+  by a caller as that parameter (`run('git', …)` into `(program, args) =>
+  spawn(program, args)`). The git rule reads the program the same way for a
+  file that declares nothing;
 - a git call that names no directory: no `cwd` in a literal options object
   no spread can replace, and no leading `-C <dir>` in a literal argument
   array. Without one git runs where the test process does, inside the
@@ -86,7 +91,8 @@ contradicts it (`scripts/lib/testMemo/gitFixture.js`):
 What stays on the declaration's word is a value the source does not spell: a
 call's result, a property of something that is no parameter, the parameter
 of a callback (its caller is not this file's to read), an argument behind a
-spread, an options object that is no literal. So the marker goes on a
+spread, an options object that is no literal, and whatever another program
+the suite starts (a shell script, a node child) goes on to run. So the marker goes on a
 suite only after it has been read end to end, with every repository it makes
 accounted for, and it is reviewed as a claim about the suite. Three kinds of
 suite stay unmarked even though each git call names a temp directory: one

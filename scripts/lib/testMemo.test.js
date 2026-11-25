@@ -651,6 +651,14 @@ describe('git-fixture declaration', () => {
     ['a defaulted options parameter whose caller gives nothing', ["const git = (args, options = {}) => execFileSync('git', args, { cwd: options.cwd });", "git(['status']);"], /git\(\) is called without the directory/],
     ['an options parameter whose caller gives an undefined cwd', ["const git = (args, options) => execFileSync('git', args, { cwd: options.cwd });", "git(['status'], { cwd: undefined });"], /nullish directory/],
     ['a directory name declared and never given a value', ['let dir;', "execFileSync('git', ['status'], { cwd: dir });"], /nullish directory.*dir is declared and never assigned/],
+    // A program that is a name holding 'git', or a parameter a caller passes it as, is a git call like a literal one.
+    ['git named through a constant', ['const scratch = mkdtempSync(tmpdir());', "execFileSync('git', ['init'], { cwd: scratch });", "const command = 'git';", "execFileSync(command, ['rev-parse', 'HEAD']);"], /starts git without naming the directory/],
+    ['git named through a constant, with no literal git call at all', ["const command = 'git';", "execFileSync(command, ['rev-parse', 'HEAD']);"], /starts git without naming the directory/],
+    ['git as a fallback program', ["execFileSync(process.env.EXAMPLE_GIT || 'git', ['rev-parse', 'HEAD']);"], /starts git without naming the directory/],
+    ['git passed to a runner as its program', ['const run = (program, args) => execFileSync(program, args);', "run('git', ['rev-parse', 'HEAD']);"], /starts git without naming the directory/],
+    ['git passed to a runner called without its directory', ['const run = (program, args, dir) => execFileSync(program, args, { cwd: dir });', "run('git', ['status']);"], /run\(\) is called without the directory/],
+    ['git passed to a runner with a relative directory', ['const run = (program, args, dir) => execFileSync(program, args, { cwd: dir });', "run('git', ['status'], '.');"], /relative to the test process \(\.\)/],
+    ['a git command line named through a constant', ['const scratch = mkdtempSync(tmpdir());', "const command = 'git status';", 'execSync(command, { cwd: scratch });'], /runs git through a command line/],
     ['the home directory', ["import { homedir } from 'node:os';", "execFileSync('git', ['status'], { cwd: homedir() });"], /home directory/],
     ['a repository path among the arguments', ['const scratch = mkdtempSync(tmpdir());', "execFileSync('git', ['clone', process.cwd(), 'copy'], { cwd: scratch });"], /hands git a path in this repository/],
     ['a repository path in the environment', ['const scratch = mkdtempSync(tmpdir());', "execFileSync('git', ['status'], { cwd: scratch, env: { GIT_WORK_TREE: process.cwd() } });"], /hands git a path in this repository/],
@@ -702,6 +710,11 @@ describe('git-fixture declaration', () => {
       // Behind a spread, or in an object that is no literal, the directory is not spelled: the declaration's word.
       "  const forward = (...args) => runGit(...args);",
       "  forward(repo, 'status'); at(launch.options);",
+      // A program named through a constant or passed to a runner is read like a literal one, and may stand.
+      "  const program = 'git';",
+      "  execFileSync(program, ['status'], { cwd: repo });",
+      "  const run = (tool, args, dir) => execFileSync(tool, args, { cwd: dir });",
+      "  run('git', ['status'], repo); run(process.execPath, ['-e', ''], repo);",
       // A property that only shares a function's name is no use of that function.
       "  expect(facts.runGit).toBeUndefined();",
       "  execFileSync('git', ['commit', '--allow-empty', '-m', 'example'], { cwd: launch.cwd });",
@@ -724,6 +737,22 @@ describe('git-fixture declaration', () => {
     const files = { ...TREE, 'server/node_modules/simple-git/package.json': '{"name":"simple-git","version":"3.0.0"}' };
     expect(refusal(FIXTURE.replace(HEAD[0], `${HEAD[0]}\nimport { simpleGit } from 'simple-git';`), files))
       .toBe('spawns git (git-fixture declaration refused: imports the git library simple-git)');
+  });
+
+  // The git rule itself reads the program the same way, declaration or not: a wrapper that is
+  // handed 'git' spawns git as surely as a call that writes it.
+  it('refuses an undeclared file that starts git through a name or a runner', () => {
+    const runner = "import { spawnSync } from 'node:child_process';\nexport const capture = (command, args) => spawnSync(command, args, { encoding: 'utf8' });\n";
+    const reading = `${runner}export const head = () => capture('git', ['rev-parse', 'HEAD']);\n`;
+    const importing = (spec) => `import { it } from 'vitest';\nimport { head } from '${spec}';\nit('x', () => {});\n`;
+    for (const [label, source] of Object.entries({
+      'a constant': "import { it } from 'vitest';\nimport { execFileSync } from 'node:child_process';\nconst command = 'git';\nexecFileSync(command, ['status']);\nit('x', () => {});\n",
+      'a runner': `import { it } from 'vitest';\n${reading}it('x', () => {});\n`,
+    })) expect(floorOf(source), label).toMatchObject({ memoizable: false, reason: 'spawns git' });
+    expect(floorOf(importing('../../scripts/tool.js'), {}, { ...TREE, 'scripts/tool.js': reading })).toMatchObject({ memoizable: false, reason: 'spawns git' });
+    // A product module's git use was never the refusal, and a runner nobody hands git is no git call.
+    expect(floorOf(importing('./tool.js'), {}, { ...TREE, 'server/lib/tool.js': reading })).toMatchObject({ memoizable: true });
+    expect(floorOf(`import { it } from 'vitest';\n${runner}capture(process.execPath, ['-e', '']);\nit('x', () => {});\n`)).toMatchObject({ memoizable: true });
   });
 
   it('keeps the recorded key under the same rule', () => {
