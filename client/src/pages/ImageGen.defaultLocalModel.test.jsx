@@ -60,6 +60,15 @@ describe('ImageGen default local model', () => {
     await waitFor(() => expect(screen.getByTestId('qwen-refs').textContent).toBe('10:false'));
   });
 
+  it('can switch from Codex to a pinned FLUX.2 runtime without a configured Python path', async () => {
+    state.settings = { imageGen: { mode: 'codex', codex: { enabled: true }, local: { modelId: KLEIN.id } } };
+    await renderImageGenPage();
+    const local = await screen.findByRole('button', { name: 'Local' });
+    await waitFor(() => expect(local).toBeEnabled());
+    fireEvent.click(local);
+    await waitFor(() => expect(modelSelect().value).toBe(KLEIN.id));
+  });
+
   it('opens on the model pinned in settings, not the first catalog entry', async () => {
     state.getSettings.mockResolvedValue(settingsWith({ modelId: 'flux2-klein-4b' }));
     await renderImageGenPage();

@@ -46,6 +46,31 @@ export const imageRuntimeFor = (model) =>
     : model?.runner === IMAGE_RUNTIME.MOSS_SWIFT ? IMAGE_RUNTIME.MOSS_SWIFT
     : (isFlux2(model) || usesDiffusersRunner(model)) ? IMAGE_RUNTIME.TORCH_VENV : IMAGE_RUNTIME.MFLUX_PYTHON;
 
+// Settings can identify a shipped pin before the model catalog loads.
+// Keep this browser-safe list in sync with the shipped registry via the parity test.
+const SELF_MANAGED_LOCAL_IMAGE_MODEL_IDS = new Set([
+  MOSS_IMAGE_MODEL_ID,
+  MINIMAX_H3_IMAGE_MODEL_ID,
+  'flux3-klein-q4',
+  'flux3-klein-q6',
+  'flux3-klein-q8',
+  'flux2-klein-4b',
+  'flux2-klein-9b',
+  'flux2-klein-4b-int8',
+  'flux2-klein-9b-bf16',
+  'hidream-i1-full',
+  'hidream-i1-fast',
+  'qwen-image',
+  'qwen-image-edit',
+  'qwen-image-2.1',
+  'z-image-turbo-bf16',
+  'z-image-turbo-quant',
+  'ernie-image',
+  'ernie-image-turbo',
+]);
+
+export const isSelfManagedLocalImageModelId = (modelId) => SELF_MANAGED_LOCAL_IMAGE_MODEL_IDS.has(modelId);
+
 export const usesFlux3 = (model) => imageRuntimeFor(model) === IMAGE_RUNTIME.FLUX3;
 
 export const usesMinimaxH3Image = (model) => imageRuntimeFor(model) === IMAGE_RUNTIME.MINIMAX_H3_IMAGE;

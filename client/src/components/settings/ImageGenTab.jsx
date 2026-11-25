@@ -501,9 +501,9 @@ export function ImageGenTab() {
     const { mode, pythonPath, codexEnabled, grokEnabled, agyEnabled } = next;
     const url = next.sdapiUrl || undefined;
     const sdEnabled = mode === IMAGE_GEN_MODE.EXTERNAL ? !!url
-      : (mode === IMAGE_GEN_MODE.LOCAL ? isLocalImageConfigured({ pythonPath, modelId: next.localModelId }) : false);
+      : mode === IMAGE_GEN_MODE.LOCAL && isLocalImageConfigured({ pythonPath, modelId: next.localModelId }, mode);
     const sdToolData = {
-      name: mode === IMAGE_GEN_MODE.EXTERNAL ? 'Stable Diffusion (External)' : (mode === IMAGE_GEN_MODE.LOCAL ? 'Stable Diffusion (Local mflux)' : 'Stable Diffusion'),
+      name: mode === IMAGE_GEN_MODE.EXTERNAL ? 'Stable Diffusion (External)' : (mode === IMAGE_GEN_MODE.LOCAL ? 'Image Generation (Local)' : 'Stable Diffusion'),
       category: 'image-generation',
       description: 'Generate images via the active PortOS image gen backend',
       enabled: sdEnabled,

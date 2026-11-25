@@ -9,6 +9,7 @@ import {
   referenceSlotsFor,
   supportsReferenceStrength,
   deriveAvailableBackends,
+  isLocalImageConfigured,
   imageGenReadiness,
   applyRecordRenderPin,
   renderPinLadder,
@@ -123,6 +124,30 @@ describe('pickI2iMode', () => {
 });
 
 describe('deriveAvailableBackends', () => {
+  it.each(['flux3-klein-q8', 'minimax-h3-image-bf16', 'moss-image-sft-bf16', 'qwen-image-2.1', 'flux2-klein-9b'])(
+    'keeps Local and its render pins available with %s and no configured interpreter',
+    (modelId) => {
+      const local = { modelId, pythonPath: '' };
+      const available = deriveAvailableBackends({ imageGen: { local, codex: { enabled: true } } });
+      expect(available.map((backend) => backend.id)).toEqual([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX]);
+      expect(renderPinLadder([{ imageMode: IMAGE_GEN_MODE.LOCAL, imageModelId: modelId }], available))
+        .toEqual({ mode: IMAGE_GEN_MODE.LOCAL, modelId });
+    },
+  );
+
+  it('offers the shipped default when Local is selected without a model pin', () => {
+    const available = deriveAvailableBackends({ imageGen: { mode: IMAGE_GEN_MODE.LOCAL, local: { modelId: '' } } });
+    expect(available.map((backend) => backend.id)).toEqual([IMAGE_GEN_MODE.LOCAL]);
+  });
+
+  it('still requires an interpreter for explicit mflux and unknown model IDs', () => {
+    for (const modelId of ['dev', 'unknown-model']) {
+      expect(isLocalImageConfigured({ modelId, pythonPath: ' ' })).toBe(false);
+      expect(isLocalImageConfigured({ modelId, pythonPath: '/usr/bin/python3' })).toBe(true);
+      expect(deriveAvailableBackends({ imageGen: { mode: IMAGE_GEN_MODE.LOCAL, local: { modelId } } })).toEqual([]);
+    }
+  });
+
   it('includes only configured backends and respects excludeExternal', () => {
     const settings = {
       imageGen: {

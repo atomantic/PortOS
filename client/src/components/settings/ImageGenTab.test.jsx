@@ -772,11 +772,14 @@ describe('ImageGenTab — Grok CLI section (#2859)', () => {
     expect(sentSlices()).toEqual({ 'imageGen.grok': { grokPath: '/usr/local/bin/grok' } });
   });
 
-  it('falls the mode back to local when grok is disabled while active', async () => {
+  it.each([
+    { pythonPath: '/usr/bin/python3' },
+    { modelId: 'flux3-klein-q8' },
+  ])('falls back to Local and registers its tool when active Grok is disabled (%j)', async (local) => {
     getSettings.mockResolvedValue({
       imageGen: {
         mode: 'grok',
-        local: { pythonPath: '/usr/bin/python3' },
+        local,
         grok: { enabled: true },
       },
     });
@@ -786,6 +789,9 @@ describe('ImageGenTab — Grok CLI section (#2859)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
     await awaitSave();
     expect(sentSlices()).toEqual({ imageGen: { mode: 'local' }, 'imageGen.grok': { enabled: false } });
+    await waitFor(() => expect(registerTool).toHaveBeenCalledWith(expect.objectContaining({
+      category: 'image-generation', enabled: true, config: expect.objectContaining({ mode: 'local' }),
+    }), { silent: true }));
   });
 
   it('loads and saves grok image and video parallel limits', async () => {
@@ -871,6 +877,20 @@ describe('ImageGenTab local runtime card', () => {
 
     fireEvent.change(screen.getByLabelText('Default model'), { target: { value: 'flux2-klein-4b' } });
     await waitFor(() => expect(getImageGenStatus).toHaveBeenCalledWith('local', 'flux2-klein-4b', expect.anything()));
+  });
+
+  it('registers the Local tool when saving the default model without a Python path', async () => {
+    getSettings.mockResolvedValue({ imageGen: { mode: 'local', local: { modelId: 'flux2-klein-4b' } } });
+    await renderTab(['/media/image?mediaTab=local']);
+    const model = await screen.findByLabelText('Default model');
+    await waitFor(() => expect(model).toBeEnabled());
+    fireEvent.change(model, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await awaitSave();
+    expect(sentSlices()).toEqual({ 'imageGen.local': { modelId: null } });
+    await waitFor(() => expect(registerTool).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'Image Generation (Local)', enabled: true,
+    }), { silent: true }));
   });
 });
 
