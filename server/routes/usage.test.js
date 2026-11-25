@@ -95,8 +95,8 @@ const fleetResult = (overrides = {}) => ({
 });
 
 describe('usage routes', () => {
-  it('rejects a repeated query key with 400 (claude-code, #16428)', async () => {
-    const res = await request(buildApp()).get('/api/usage/claude-code?refresh=1&refresh=1');
+  it('rejects a repeated query key with 400 (claude-code/models, #16428)', async () => {
+    const res = await request(buildApp()).get('/api/usage/claude-code/models?period=7d&period=7d');
     expect(res.status).toBe(400);
   });
 

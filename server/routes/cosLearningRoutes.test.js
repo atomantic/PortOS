@@ -14,7 +14,6 @@ vi.mock('../services/taskLearning.js', () => ({
   getLearningSummary: vi.fn(),
   getRecentInsights: vi.fn(),
   recordLearningInsight: vi.fn(),
-  getAllPromptRecommendations: vi.fn(),
   getPromptImprovementRecommendations: vi.fn(),
   getConfidenceLevels: vi.fn(),
   getDismissedRecommendations: vi.fn(),
@@ -142,22 +141,6 @@ describe('CoS Learning Routes', () => {
         .send({ type: 'observation' });
 
       expect(response.status).toBe(400);
-    });
-  });
-
-  describe('GET /api/cos/learning/recommendations', () => {
-    it('should return prompt recommendations with summary', async () => {
-      taskLearning.getAllPromptRecommendations.mockResolvedValue([
-        { status: 'critical', taskType: 'deploy' },
-        { status: 'good', taskType: 'review' }
-      ]);
-
-      const response = await request(app).get('/api/cos/learning/recommendations');
-
-      expect(response.status).toBe(200);
-      expect(response.body.count).toBe(2);
-      expect(response.body.summary.critical).toBe(1);
-      expect(response.body.summary.good).toBe(1);
     });
   });
 

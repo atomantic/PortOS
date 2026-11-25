@@ -142,12 +142,6 @@ router.post('/clinvar/scan', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// DELETE /api/meatspace/genome/clinvar — Delete ClinVar data
-router.delete('/clinvar', asyncHandler(async (req, res) => {
-  await clinvarService.deleteClinvar();
-  res.status(204).end();
-}));
-
 // === Epigenetic Lifestyle Tracking Routes ===
 
 // GET /api/meatspace/genome/epigenetic — Get tracked interventions

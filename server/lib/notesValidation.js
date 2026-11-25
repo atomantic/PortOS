@@ -37,11 +37,6 @@ export const vaultInputSchema = z.object({
   path: z.string().min(1).max(1000)
 });
 
-export const vaultUpdateSchema = z.object({
-  name: z.string().min(1).max(200).optional(),
-  path: z.string().min(1).max(1000).optional()
-});
-
 export const notePathSchema = z.object({
   path: safeRelativePath
 });

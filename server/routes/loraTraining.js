@@ -7,7 +7,7 @@ import { validateRequest } from '../lib/validateRequest.js';
 import { assertSafeFilename } from '../lib/fileUtils.js';
 import { refuseRetiredTraining } from '../lib/retiredLoraTraining.js';
 import { cancelJob } from '../services/mediaJobQueue/index.js';
-import { cancel as cancelTrainer, getRunRequired, listCheckpoints, listRuns, promoteCheckpoint, runSamplesDir } from '../services/loraTraining/index.js';
+import { cancel as cancelTrainer, getRunRequired, listCheckpoints, promoteCheckpoint, runSamplesDir } from '../services/loraTraining/index.js';
 
 const router = Router();
 router.use((req, _res, next) => {
@@ -17,13 +17,6 @@ router.use((req, _res, next) => {
 // Explicit tombstone preserves legacy route authorization and returns 410. Any other write
 // (resume, delete) is refused with 410 by the guard above.
 router.post('/runs', refuseRetiredTraining);
-const listQuerySchema = z.object({
-  status: z.enum(['queued', 'running', 'completed', 'failed', 'canceled']).optional(),
-  characterId: z.string().max(128).optional(), datasetId: z.string().max(128).optional(),
-  limit: z.coerce.number().int().min(1).max(500).optional(),
-});
-router.get('/runs', asyncHandler(async (req, res) => res.json(await listRuns(validateRequest(listQuerySchema, req.query)))));
-router.get('/runs/:id', asyncHandler(async (req, res) => res.json(await getRunRequired(req.params.id))));
 router.post('/runs/:id/cancel', asyncHandler(async (req, res) => {
   const run = await getRunRequired(req.params.id);
   const result = run.jobId ? await cancelJob(run.jobId) : { ok: false, code: 'NOT_FOUND', error: 'Run has no queue job' };

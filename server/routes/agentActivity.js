@@ -7,13 +7,13 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { runEventsQuerySchema, runEventProjectionsQuerySchema, runEventProjectionIdSchema, runEventReconcileSchema } from '../lib/cos/cosValidation.js';
+import { runEventProjectionsQuerySchema, runEventProjectionIdSchema, runEventReconcileSchema } from '../lib/cos/cosValidation.js';
 import * as agentActivity from '../services/agent/agentActivity.js';
 import * as runEventLog from '../services/agent/agentRunEventLog.js';
 import * as runReconciler from '../services/agent/agentRunReconciler.js';
 import {
   agentActivityQuerySchema, agentActivityTimelineQuerySchema, agentActivityAgentParamsSchema,
-  agentActivityAgentQuerySchema, agentActivityStatsQuerySchema
+  agentActivityStatsQuerySchema
 } from '../lib/agentActivityValidation.js';
 
 const router = Router();
@@ -30,16 +30,6 @@ router.get('/timeline', asyncHandler(async (req, res) => {
   const { limit, agentIds, action, before } = validateRequest(agentActivityTimelineQuerySchema, req.query);
 
   res.json(await agentActivity.getActivityTimeline({ limit, agentIds, actions: action, beforeTimestamp: before }));
-}));
-
-// GET /agent/:agentId - Get activities for specific agent
-router.get('/agent/:agentId', asyncHandler(async (req, res) => {
-  const { agentId } = validateRequest(agentActivityAgentParamsSchema, req.params);
-  const { date, limit, offset, action } = validateRequest(agentActivityAgentQuerySchema, req.query);
-
-  // `date` stays a `YYYY-MM-DD` string, which getActivityFilePath consumes
-  // as-is; absent fields fall through to the service's own defaults.
-  res.json(await agentActivity.getActivities(agentId, { date, limit, offset, action }));
 }));
 
 // GET /agent/:agentId/stats - Get activity stats for agent
@@ -61,12 +51,6 @@ router.get('/agent/:agentId/stats', asyncHandler(async (req, res) => {
 // (see `lib/agent/agentRunEvents.js`), so nothing here re-redacts — a route that had
 // to redact on read would mean unredacted bytes were already on disk.
 // ---------------------------------------------------------------------------
-
-// GET /run-events - Raw lifecycle events in append order (newest-N window)
-router.get('/run-events', asyncHandler(async (req, res) => {
-  const query = validateRequest(runEventsQuerySchema, req.query);
-  res.json(await runEventLog.readRunEvents(query));
-}));
 
 // GET /run-events/stats - Ledger size + the retention bound it is held to
 router.get('/run-events/stats', asyncHandler(async (req, res) => {

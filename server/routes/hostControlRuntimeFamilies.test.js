@@ -217,7 +217,7 @@ describe('operator authority for browser, harness and local-runtime management',
     await expectAuthorizedWorkflows({ auth, mounts, workflows: [
       ...writes.map(([method, path, body, effect]) => [method, path, body, effect, 200]),
       ['post', '/api/local-llm/install', { backend: 'ollama', modelId: 'example-model' }, installModel, 200],
-      ['post', '/api/local-llm/test', { backend: 'ollama', modelId: 'example-model', prompt: 'Example' }, runLocalLlmTest, 200],
+      ['post', '/api/local-llm/test/stream', { backend: 'ollama', modelId: 'example-model', prompt: 'Example' }, runLocalLlmTest, 200],
     ] });
   });
 

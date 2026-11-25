@@ -260,14 +260,6 @@ router.post('/:id/audio/attach', asyncHandler(async (req, res) => {
   res.json({ track: await attachAudioAsRender(track.id, filename) });
 }));
 
-// Clear the audio pointer (leaves the library file in place — it may be shared).
-// Does NOT touch the render history — to drop a specific take, use the
-// per-render delete below.
-router.delete('/:id/audio', asyncHandler(async (req, res) => {
-  await requireTrack(req.params.id);
-  res.json({ track: await tracks.updateTrack(req.params.id, { audioFilename: '' }) });
-}));
-
 // --- Chiptune scores (#2911) — prompt-based looping 8-bit background music.
 // Generation is synchronous (a single LLM call, seconds) and strictly
 // user-triggered from the Track editor, per the AI-provider usage policy.

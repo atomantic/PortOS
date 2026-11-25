@@ -1,7 +1,5 @@
 import { Router } from 'express';
-import { refreshQuerySchema } from '../lib/queryValidation.js';
 import * as usage from '../services/usage.js';
-import { getClaudeCodeUsage } from '../services/claudeCodeUsage.js';
 import { readLocalTranscriptUsage, refreshLocalTranscriptUsage } from '../services/claudeCodeTranscriptUsage.js';
 import { nativeUsageEvents } from '../services/nativeUsageEvents.js';
 import { describeNativeUsageSources, refreshNativeUsageHistory } from '../services/nativeUsageHistory.js';
@@ -175,20 +173,6 @@ router.get('/providers', asyncHandler(async (req, res) => {
     ...(scope ? { scope } : {}),
   });
   res.json(Array.isArray(providers) ? { providers } : providers);
-}));
-
-// GET /api/usage/claude-code - Claude Code SUBSCRIPTION rate-limit usage,
-// parsed from the CLI's `/usage` output. Kept for back-compat — the usage page
-// now reads the generalized /providers endpoint. `?refresh=1` bypasses cache.
-//
-// This one still BLOCKS on a cold cache: its response is the reading itself,
-// with no card shape to carry a `pending` flag, so a caller has nothing to
-// render or poll on. The wait is bounded by the CLI's own spawn timeout.
-router.get('/claude-code', asyncHandler(async (req, res) => {
-  const { refresh: refreshParam } = validateRequest(refreshQuerySchema, req.query);
-  const refresh = refreshParam === '1' || refreshParam === 'true';
-  const data = await getClaudeCodeUsage({ wait: refresh ? WAIT.FRESH : WAIT.CACHED });
-  res.json(data);
 }));
 
 // GET /api/usage/claude-code/models - Claude Code tokens per model, priced at

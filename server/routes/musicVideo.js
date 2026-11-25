@@ -422,13 +422,6 @@ router.get('/:id/treatment/apply-preview', asyncHandler(async (req, res) => {
   res.json(await previewTreatmentApply(req.params.id));
 }));
 
-// Read-only (#14241): which cutaway runs a `coverage: 'sequence'` scene set would
-// generate in one timed request, with the exact prompt and request fields.
-router.get('/:id/sequence-coverage', asyncHandler(async (req, res) => {
-  const { previewSequenceCoverage } = await import('../services/musicVideo/sequenceCoverage.js');
-  res.json(previewSequenceCoverage(await requireProject(req.params.id)));
-}));
-
 // Queue one planned run as a single fal request; the clip is cut onto its scenes on completion.
 router.post('/:id/sequence-coverage/render', asyncHandler(async (req, res) => {
   const { sceneIds } = validateRequest(musicVideoSequenceRenderSchema, req.body ?? {});

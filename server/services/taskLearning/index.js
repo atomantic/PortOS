@@ -95,8 +95,7 @@ export {
 } from './insights.js';
 
 export {
-  getPromptImprovementRecommendations,
-  getAllPromptRecommendations
+  getPromptImprovementRecommendations
 } from './promptRecommendations.js';
 
 export {

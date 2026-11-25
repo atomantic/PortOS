@@ -84,7 +84,7 @@ describe('GSD planning workflow', () => {
   });
 
   it('turns parsed concerns into app-scoped tasks, reading a just-saved document', async () => {
-    const before = await request(app).get(`${base}/concerns`);
+    const before = await request(app).get(base);
     expect(before.body.concerns.sections.map(s => [s.title, s.severity])).toEqual([
       ['Security Considerations', 'CRITICAL'], ['Scaling Limits', 'LOW'],
     ]);

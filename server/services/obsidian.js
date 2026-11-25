@@ -62,34 +62,6 @@ export async function addVault({ name, path }) {
   return vault;
 }
 
-export async function removeVault(id) {
-  const vaults = await getVaults();
-  const index = vaults.findIndex(v => v.id === id);
-  if (index === -1) return false;
-
-  const removed = vaults.splice(index, 1)[0];
-  await saveVaults(vaults);
-  console.log(`📓 Removed Obsidian vault: ${removed.id}`);
-  return true;
-}
-
-export async function updateVault(id, updates) {
-  const vaults = await getVaults();
-  const vault = vaults.find(v => v.id === id);
-  if (!vault) return null;
-
-  if (updates.name) vault.name = updates.name;
-  if (updates.path) {
-    if (!await pathExists(updates.path)) {
-      return { error: 'PATH_NOT_FOUND', message: `Directory not found: ${updates.path}` };
-    }
-    vault.path = updates.path;
-  }
-
-  await saveVaults(vaults);
-  return vault;
-}
-
 // Resolve `notePath` against `vault.path` and confirm the result is still
 // contained within the vault after symlinks are followed. Returns the
 // containable full path or null if the path escapes (including via symlinks,
