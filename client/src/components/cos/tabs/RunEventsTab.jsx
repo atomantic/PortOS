@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useSearchParams } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
+import { agentPath, taskPath } from '../crossLinks.js';
 import { RefreshCw, ScrollText, Wrench } from 'lucide-react';
 import {
   getRunEventStats,
@@ -427,8 +428,8 @@ function RunDiagnostic({ detail }) {
       {projection && (
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
           <Field label="Status" value={projection.status} />
-          <Field label="Agent" value={projection.agentId} />
-          <Field label="Task" value={projection.taskId} />
+          <Field label="Agent" value={projection.agentId} to={projection.agentId ? agentPath(projection.agentId) : null} />
+          <Field label="Task" value={projection.taskId} to={projection.taskId ? taskPath(projection.taskId) : null} />
           <Field label="Owner" value={projection.owner} />
           <Field label="Started" value={projection.startedAt ? formatDateTime(projection.startedAt) : null} />
           <Field label="Ended" value={projection.endedAt ? formatDateTime(projection.endedAt) : null} />
@@ -463,11 +464,13 @@ function RunDiagnostic({ detail }) {
   );
 }
 
-function Field({ label, value }) {
+function Field({ label, value, to }) {
   return (
     <>
       <dt className="text-port-text-muted">{label}</dt>
-      <dd className="truncate text-port-text">{value ?? '—'}</dd>
+      <dd className="truncate text-port-text">
+        {value != null && to ? <Link to={to} className="text-port-accent hover:underline">{value}</Link> : (value ?? '—')}
+      </dd>
     </>
   );
 }
