@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { throwApiError } from '../services/apiCore';
+import { openStreamResponse, readStreamFrames } from '../services/streamResponse.js';
 
 // Both cancel spellings are terminal. Every emitter normalizes on `canceled`
 // (single l); `cancelled` stays tolerated defensively so a stream from an
@@ -110,42 +110,26 @@ export function useSseProgress(url, { enabled = true, method = 'GET', maxFrames 
         }
       };
       const run = async () => {
-        let reader;
         try {
-          const response = await fetch(url, { method: 'POST', signal: controller.signal });
+          const response = await openStreamResponse(fetch(url, { method: 'POST', signal: controller.signal }).then((result) => {
+            controller.signal.throwIfAborted();
+            return result;
+          }));
           if (!isCurrent()) return;
-          if (!response.ok) await throwApiError(response);
-          if (!response.body?.getReader) throw new Error('This browser cannot read a streamed response');
           setIsOpen(true);
-          reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = '';
-          const consume = (frame) => {
-            const json = frame.split(/\r?\n/).filter(line => line.startsWith('data:'))
-              .map(line => line.slice(5).trimStart()).join('\n');
-            if (!json) return;
-            let data;
-            try { data = JSON.parse(json); } catch { return; }
-            receive(data);
-          };
-          while (isCurrent()) {
-            const { done, value } = await reader.read();
-            if (!isCurrent()) break;
-            if (done) {
-              buffer += decoder.decode();
-              if (buffer.trim()) consume(buffer);
-              break;
-            }
-            buffer += decoder.decode(value, { stream: true });
-            const frames = buffer.split(/\r?\n\r?\n/);
-            buffer = frames.pop() || '';
-            for (const frame of frames) consume(frame);
-          }
+          await readStreamFrames(response, {
+            format: 'sse',
+            onFrame: ({ data: json }) => {
+              if (!isCurrent()) return true;
+              let data;
+              try { data = JSON.parse(json); } catch { return; }
+              receive(data);
+              return !isCurrent();
+            },
+          });
           if (isCurrent()) receive({ type: 'error', message: 'Download connection lost. Try again.', kind: 'connection_lost' });
         } catch (error) {
           if (isCurrent()) receive({ type: 'error', message: error.message || 'Download connection lost. Try again.', kind: 'connection_lost' });
-        } finally {
-          if (reader) await reader.cancel().catch(() => {});
         }
       };
       const startTimer = setTimeout(run, 0);

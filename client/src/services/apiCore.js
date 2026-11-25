@@ -109,6 +109,12 @@ export function singleFlightRead(endpoint, start, options = {}) {
   return pending.then((value) => (value && typeof value === 'object' ? structuredClone(value) : value));
 }
 
+export function createServerUnreachableError() {
+  return Object.assign(new Error('Server unreachable — check your connection and try again'), {
+    code: 'SERVER_UNREACHABLE',
+  });
+}
+
 async function performRequest(endpoint, options = {}) {
   // `hostControlOptional` marks a background read whose caller renders its own
   // "needs operator authority" state, so a host-control refusal does not toast.
@@ -134,10 +140,8 @@ async function performRequest(endpoint, options = {}) {
     return null;
   });
   if (!response) {
-    const msg = 'Server unreachable — check your connection and try again';
-    if (!silent) toast.error(msg);
-    const err = new Error(msg);
-    err.code = 'SERVER_UNREACHABLE';
+    const err = createServerUnreachableError();
+    if (!silent) toast.error(err.message);
     err.toasted = !silent;
     throw err;
   }

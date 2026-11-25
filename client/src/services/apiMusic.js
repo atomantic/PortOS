@@ -8,7 +8,8 @@
  * SuperCollider runtime (status, setup, render, cancel).
  */
 
-import { request, maybeRedirectToLogin } from './apiCore.js';
+import { request } from './apiCore.js';
+import { openStreamResponse, readStreamFrames } from './streamResponse.js';
 
 // ---- Music generation (on-device) ----
 // The Music studio's generator surface over server/services/pipeline/musicGen.js
@@ -84,64 +85,33 @@ export const removeAudioModel = (engine, id, requestOptions = {}) =>
   });
 
 // Install an additional audio model from HuggingFace into an engine. The server
-// streams the download as Server-Sent Events; this helper drives an EventSource
-// and invokes `onEvent({ type, progress, message, ... })` per frame, resolving
-// only after a complete frame. Error frames or interrupted streams reject.
-// (POST-with-SSE: we use fetch + a manual reader since
-// EventSource is GET-only.) Returns a Promise<void>.
+// streams the download as Server-Sent Events and invokes
+// `onEvent({ type, progress, message, ... })` per frame, resolving only after a
+// complete frame. Error frames or interrupted streams reject.
 export const installAudioModel = ({ engine, repo, name }, onEvent) => postForSseFrames('/api/music/models', { engine, repo, name }, onEvent);
 
 async function postForSseFrames(url, payload, onEvent) {
-  const res = await fetch(url, {
+  const response = await openStreamResponse(fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+  }));
+  const completed = await readStreamFrames(response, {
+    format: 'sse',
+    fatal: true,
+    onFrame: ({ data }) => {
+      if (!data) return false;
+      const event = JSON.parse(data);
+      if (!event || typeof event !== 'object') return false;
+      onEvent?.(event);
+      if (event.type === 'error') throw new Error(event.message || event.error || 'Installation failed');
+      return event.type === 'complete';
+    },
+  }).catch((cause) => {
+    if (cause?.code !== 'INVALID_STREAM_UTF8') throw cause;
+    throw new Error('Installation stream contained invalid UTF-8. Check installation status before retrying.', { cause });
   });
-  if (!res.ok || !res.body) {
-    // This streaming fetch bypasses request(), so it must honor session expiry
-    // itself (apiCore contract): on a 401 AUTH_REQUIRED, redirect to /login like
-    // request() does instead of surfacing raw error text in the panel.
-    const raw = await res.text().catch(() => '');
-    let parsed = null;
-    try { parsed = raw ? JSON.parse(raw) : null; } catch { /* not JSON */ }
-    // Match request()'s convention: the parsed body IS the error object (code at
-    // top level). maybeRedirectToLogin bounces to /login on 401 AUTH_REQUIRED.
-    maybeRedirectToLogin(res, parsed || {});
-    throw new Error((typeof parsed?.error === 'string' ? parsed.error : parsed?.error?.message) || raw || `Request failed (${res.status})`);
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  let buf = '';
-  const handleFrame = (frame) => {
-    const data = frame.split(/\r?\n/).filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice('data:'.length).trimStart()).join('\n');
-    if (!data) return false;
-    const event = JSON.parse(data);
-    if (!event || typeof event !== 'object') return false;
-    onEvent?.(event);
-    if (event.type === 'error') throw new Error(event.message || event.error || 'Installation failed');
-    return event.type === 'complete';
-  };
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      try {
-        buf += done ? decoder.decode() : decoder.decode(value, { stream: true });
-      } catch (cause) {
-        throw new Error('Installation stream contained invalid UTF-8. Check installation status before retrying.', { cause });
-      }
-      const frames = buf.split(/\r?\n\r?\n/);
-      buf = frames.pop() || '';
-      if (done && buf) frames.push(buf);
-      for (const frame of frames) {
-        if (handleFrame(frame)) return;
-      }
-      if (done) throw new Error('Installation connection ended before completion. Check installation status before retrying.');
-    }
-  } finally {
-    await reader.cancel().catch(() => {});
-    reader.releaseLock();
-  }
+  if (!completed) throw new Error('Installation connection ended before completion. Check installation status before retrying.');
 }
 
 // ---- SuperCollider (contained offline renders for the Code engine, #9414) ----

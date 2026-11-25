@@ -2,7 +2,8 @@
  * Ask page (chat-like).
  */
 
-import { request, API_BASE, throwStreamApiError } from './apiCore.js';
+import { request, API_BASE } from './apiCore.js';
+import { openStreamResponse, readStreamFrames } from './streamResponse.js';
 
 export const listAskConversations = (options) => request('/ask', options);
 export const getAskConversation = (id) => request(`/ask/${encodeURIComponent(id)}`);
@@ -36,69 +37,18 @@ export const promoteAskTurn = (conversationId, turnId, payload, options = {}) =>
  * Events: 'open' | 'sources' | 'delta' | 'error' | 'done'
  */
 export async function streamAskTurn(payload, { onEvent, signal } = {}) {
-  // Mirror the apiCore / apiOpenClaw fetch pattern: catch transport-layer
-  // failures (network down, DNS, TLS) and rethrow as a consistent message
-  // rather than letting the browser's "TypeError: Failed to fetch" surface
-  // verbatim. Preserve AbortError so caller-side cancellation isn't masked.
-  const response = await fetch(`${API_BASE}/ask`, {
+  const response = await openStreamResponse(fetch(`${API_BASE}/ask`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
     body: JSON.stringify(payload),
     signal,
-  }).catch((err) => {
-    if (err?.name === 'AbortError') throw err;
-    return null;
+  }));
+  await readStreamFrames(response, {
+    format: 'sse',
+    onFrame: ({ event, data: raw }) => {
+      let data;
+      try { data = JSON.parse(raw); } catch { data = { raw }; }
+      onEvent?.({ event, data });
+    },
   });
-  if (!response) {
-    throw new Error('Server unreachable — check your connection and try again');
-  }
-  if (!response.ok) await throwStreamApiError(response);
-  if (!response.body) throw new Error(`HTTP ${response.status}`);
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  // Match the SSE parser used in `apiOpenClaw.js`: tolerate `\r\n\r\n`
-  // separators (some proxies normalise line endings), preserve multi-line
-  // `data:` frames by joining with `\n`, and strip the optional single
-  // leading space from each data line per the SSE spec.
-  const flushFrame = (frame) => {
-    const lines = frame.split(/\r?\n/);
-    let eventName = 'message';
-    const dataLines = [];
-    for (const line of lines) {
-      if (line.startsWith('event:')) eventName = line.slice(6).trim() || 'message';
-      else if (line.startsWith('data:')) {
-        const raw = line.slice(5);
-        dataLines.push(raw.startsWith(' ') ? raw.slice(1) : raw);
-      }
-    }
-    if (!dataLines.length) return;
-    const rawData = dataLines.join('\n');
-    let data;
-    try { data = JSON.parse(rawData); } catch { data = { raw: rawData }; }
-    onEvent?.({ event: eventName, data });
-  };
-
-  // Wrap the read loop so an abort or a thrown error still cancels the
-  // underlying ReadableStream — otherwise the connection can stay half-open
-  // longer than necessary. Mirrors the pattern in `apiOpenClaw.js`.
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const parts = buffer.split(/\r?\n\r?\n/);
-      buffer = parts.pop() || '';
-      for (const part of parts) flushFrame(part);
-    }
-
-    // Flush any final un-terminated frame (server closed without a
-    // trailing double newline).
-    buffer += decoder.decode();
-    if (buffer.trim()) flushFrame(buffer);
-  } finally {
-    await reader.cancel().catch(() => {});
-  }
 }
