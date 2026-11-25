@@ -8,7 +8,7 @@
  * picks, and model limits determine how many extra images accompany a source frame.
  */
 
-import { activeMusicVideoSubjects, isActiveMusicVideoReference } from './musicVideoCastSelection.js';
+import { activeMusicVideoSubjects, isActiveMusicVideoReference, isIncludedShotReference } from './musicVideoCastSelection.js';
 import { isGoodReference, pickGuideMedia, rejectedReferenceKeys, matchesReferenceVariant } from '../catalog/catalogMediaLibrary.js';
 import { isEditCapableMode, maxInputImages } from '../imageGenCapabilities.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT, MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT, MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT } from '../referenceLimits.js';
@@ -524,16 +524,16 @@ export function resolvedFramePickIds(project, scene, castMedia = null, linked = 
 }
 
 function baseConditioningReferences(project, scene, castMedia = null, limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES) {
-  const research = musicVideoResearchReferences(scene).filter((ref) => !isLegacyCatalogReference(project, ref));
+  const included = ref => !isLegacyCatalogReference(project, ref) && isIncludedShotReference(project, scene, ref);
+  const research = musicVideoResearchReferences(scene).filter(included);
   // A roster cameo's photos (#14821) are the shot's identity references, ahead of any cast guide.
-  const guides = [...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia)]
-    .filter((ref) => !isLegacyCatalogReference(project, ref));
+  const guides = [...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia)].filter(included);
   const panel = musicVideoPanelArtReferences(scene).filter((ref) => !isLegacyCatalogReference(project, ref));
   // The director's own pick for this shot (the shot card's References row) wins over the automatic set.
   if (Array.isArray(scene?.frameReferenceIds)) {
     const linked = musicVideoLinkedCastReferences(project, castMedia);
     const choices = [...research, ...guides, ...panel, ...musicVideoReferenceChoices(project), ...linked]
-      .filter((ref) => !isLegacyCatalogReference(project, ref));
+      .filter(included);
     // A pick of a character's replaced canonical image renders as the current one (catalogPickResolver).
     const ids = resolvedFramePickIds(project, scene, castMedia, linked);
     return ids.map((id) => choices.find((ref) => ref.id === id)).filter(Boolean)
@@ -584,6 +584,7 @@ export function sceneCatalogSubjectIds(project, scene) {
     ? direction?.songMap?.find(entry => entry.section === scene.sectionIndex)?.setId : null;
   const mappedSet = direction?.sets?.find(set => set.id === mappedSetId);
   const matches = items.filter(item => {
+    if (scene?.omittedCatalogSubjectIds?.includes(item.subjectId)) return false;
     const subject = project?.concept?.subjects?.find(entry => entry.id === item.subjectId);
     if (subject && !activeMusicVideoSubjects(project?.concept).includes(subject)) return false;
     const names = [item.name, subject?.name].filter(Boolean);
@@ -615,7 +616,7 @@ export function sceneCatalogSubjectIds(project, scene) {
 
 function automaticConditioningReferences(project, scene, limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES) {
   if (project?.castAndSets?.source === 'catalog') {
-    const choices = musicVideoReferenceChoices(project).filter((ref) => ref.condition);
+    const choices = musicVideoReferenceChoices(project).filter((ref) => ref.condition && isIncludedShotReference(project, scene, ref));
     const subjects = new Map();
     for (const subjectId of sceneCatalogSubjectIds(project, scene)) {
       subjects.set(subjectId, choices.filter(ref => ref.catalogSubjectId === subjectId));
@@ -721,12 +722,12 @@ export function musicVideoStyleImages(project, identityImages, capacity) {
 export function musicVideoConditioningReferences(project, scene, castMedia = null, greybox = null, { limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES } = {}) {
   const references = baseConditioningReferences(project, scene, castMedia, limit);
   // The chosen camera replaces the section's generic set plate, which shows the place from another side.
-  const leading = musicVideoGreyboxReferences(greybox);
+  const leading = scene?.omittedCatalogSubjectIds?.includes(scene.setReference?.subjectId) ? [] : musicVideoGreyboxReferences(greybox);
   const leadingIds = new Set(leading.map((r) => r.imageId));
   const ordered = leading.length
     ? [...leading, ...references.filter((r) => !leadingIds.has(r.imageId) && !r.id?.startsWith('mvr-cs-set-') && !(r.catalogSubjectId && r.role === 'set'))]
     : references;
-  const current = ordered.filter((ref) => !isLegacyCatalogReference(project, ref) && isActiveMusicVideoReference(project, ref));
+  const current = ordered.filter((ref) => !isLegacyCatalogReference(project, ref) && isActiveMusicVideoReference(project, ref) && isIncludedShotReference(project, scene, ref));
   const panel = !Array.isArray(scene?.frameReferenceIds) && current.find((ref) => ref.panelArt);
   const ids = musicVideoLimitReferenceFiles(current.map((ref) => ref.imageId), limit, {
     panelImageId: panel?.imageId, protectedCount: leading.length,

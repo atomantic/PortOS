@@ -70,6 +70,23 @@ export function musicVideoReferenceSubjectIds(project, reference) {
   return [];
 }
 
+/** Keep shared sheets if any of their owners is still in the shot. */
+export function isIncludedShotReference(project, scene, reference) {
+  const omitted = scene?.omittedCatalogSubjectIds;
+  if (!omitted?.length) return true;
+  const owners = musicVideoReferenceSubjectIds(project, reference);
+  return !owners.length || owners.some(id => !omitted.includes(id));
+}
+
+/** Use only structured names; never rewrite any free-text prompt. */
+export function omittedShotSubjectNames(project, scene, kind) {
+  const ids = scene?.omittedCatalogSubjectIds || [];
+  const subjects = (project?.concept?.subjects || []).filter(subject => subject.kind === kind && ids.includes(subject.id));
+  const items = project?.castAndSets?.catalogCheckin?.items || [];
+  return new Set(subjects.flatMap(subject => [subject.id, subject.ingredientId, subject.name,
+    items.find(item => item.subjectId === subject.id)?.name]).filter(Boolean).map(name => name.trim().toLowerCase()));
+}
+
 /**
  * The project's previz (`project.previz`) as the active cast sees it: every id of
  * a character's unused alternate (a cast entry with the same name) reads as the

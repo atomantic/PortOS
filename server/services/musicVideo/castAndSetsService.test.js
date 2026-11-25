@@ -15,7 +15,7 @@ import { join } from 'path';
 import { EventEmitter } from 'node:events';
 import { request } from '../../lib/testHelper.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
-import { musicVideoCatalogReferenceId, musicVideoConditioningReferences, musicVideoLinkedReferenceId } from '../../lib/musicVideo/musicVideoConditioning.js';
+import { musicVideoCatalogReferenceId, musicVideoClipConditioningReferences, musicVideoConditioningReferences, musicVideoLinkedReferenceId } from '../../lib/musicVideo/musicVideoConditioning.js';
 import { MOOD_BOARD_LOOK_LABEL, musicVideoCreativeContext, musicVideoDirectorLook } from '../../lib/musicVideo/musicVideoCreativeContext.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
 
@@ -3401,6 +3401,7 @@ it('reports resolvable picks that disagree with the shot sheet and repairs only 
     ...current, castAndSets: { source: 'catalog', status: 'review' },
     scenes: [
       shot('wrong', [mina]),
+      shot('place', [ada], { setReference: { subjectId: 'street' } }),
       shot('end', [ada], { endFramePrompt: 'Mina waits by the curb.', referenceImageId: 'selected-start.png', endImageId: 'selected-end.png' }),
       shot('prop', [ada], { framePrompt: 'Ada steps around the dropped bikes.', clipReferenceIds: [bike] }),
       shot('reverse-prop', [ada, bike], { shotSheet: { characters: ['Ada'], action: 'Ada drops the bike.' }, clipReferenceIds: [] }),
@@ -3414,7 +3415,7 @@ it('reports resolvable picks that disagree with the shot sheet and repairs only 
   const initial = await read();
   expect(initial.problems).toEqual([]);
   expect(initial.shotReferenceProblems.map(({ sceneId, code }) => [sceneId, code])).toEqual([
-    ['wrong', 'missing-character'], ['wrong', 'extra-character'], ['end', 'missing-character'], ['prop', 'missing-prop'],
+    ['wrong', 'missing-character'], ['wrong', 'extra-character'], ['place', 'missing-place'], ['end', 'missing-character'], ['prop', 'missing-prop'],
     ['reverse-prop', 'missing-prop'], ['old', 'different-plate'], ['edited', 'shot-derived-plate'],
   ]);
   expect(initial.shotReferenceProblems.find(row => row.sceneId === 'end').message).toContain('end frame');
@@ -3431,11 +3432,33 @@ it('reports resolvable picks that disagree with the shot sheet and repairs only 
   expect((await repair(end.id)).status).toBe(409);
   const edited = (await read()).shotReferenceProblems.find(row => row.sceneId === 'edited');
   expect((await repair(edited.id)).body.patch).toEqual({ frameReferenceIds: [ada, plate('new-street.png')] });
+  const missingCast = (await read()).shotReferenceProblems.find(row => row.sceneId === 'wrong' && row.code === 'missing-character');
+  expect((await repair(missingCast.omit.id)).body.patch).toEqual({ omittedCatalogSubjectIds: ['ada'] });
+  const restoreCast = (await read()).shotReferenceProblems.find(row => row.sceneId === 'wrong' && row.code === 'omitted-subject');
+  expect((await repair(restoreCast.id)).body.patch).toEqual({ omittedCatalogSubjectIds: [] });
   const wrong = (await read()).shotReferenceProblems.find(row => row.sceneId === 'wrong');
   expect((await repair(wrong.id)).body.patch).toEqual({ frameReferenceIds: [ada] });
   const reverseProp = (await read()).shotReferenceProblems.find(row => row.sceneId === 'reverse-prop');
   expect((await repair(reverseProp.id)).body.patch).toEqual({ clipReferenceIds: [bike] });
-  expect((await read()).shotReferenceProblems.map(row => row.sceneId)).toEqual(['prop', 'old']);
+  expect((await read()).shotReferenceProblems.map(row => row.sceneId)).toEqual(['place', 'prop', 'old']);
+  const warnings = (await read()).shotReferenceProblems;
+  const prop = warnings.find(row => row.sceneId === 'prop');
+  expect(prop.omit).toMatchObject({ label: 'Remove Bike from shot' });
+  expect(prop.omit.patch).toBeUndefined();
+  expect((await repair(prop.omit.id)).body).toMatchObject({ sceneId: 'prop', patch: { omittedCatalogSubjectIds: ['bike'] } });
+  expect((await repair(prop.omit.id)).status).toBe(409);
+  const propAfter = (await projects.getProject(project.id)).scenes.find(scene => scene.sceneId === 'prop');
+  expect(propAfter.framePrompt).toBe('Ada steps around the dropped bikes.');
+  expect(propAfter.clipReferenceIds).toEqual([bike]);
+  expect(musicVideoClipConditioningReferences(await projects.getProject(project.id), propAfter).map(ref => ref.id)).not.toContain(bike);
+  const restore = (await read()).shotReferenceProblems.find(row => row.sceneId === 'prop');
+  expect(restore).toMatchObject({ code: 'omitted-subject', fix: 'Restore Bike' });
+  expect((await repair(restore.id)).body.patch).toEqual({ omittedCatalogSubjectIds: [] });
+  expect((await read()).shotReferenceProblems.find(row => row.sceneId === 'prop').code).toBe('missing-prop');
+  const place = (await read()).shotReferenceProblems.find(row => row.sceneId === 'place');
+  expect((await repair(place.omit.id)).body.patch).toEqual({ omittedCatalogSubjectIds: ['street'] });
+  expect((await read()).shotReferenceProblems.find(row => row.sceneId === 'place').code).toBe('omitted-subject');
+
   expect(runPrompt).not.toHaveBeenCalled();
   expect(enqueue).not.toHaveBeenCalled();
 });

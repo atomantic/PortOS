@@ -20,9 +20,12 @@ export default function CatalogShotReferenceProblems({ checkin, disabled = false
         <ul className="max-h-48 space-y-1 overflow-y-auto">
           {problems.map((problem) => (
             <li key={problem.id || problem.sceneId} className="flex flex-wrap items-center gap-2">
-              <span className="min-w-0 flex-1 basis-48">{problem.message}</span>
+              <span className={`min-w-0 flex-1 basis-48 ${problem.code === 'omitted-subject' ? 'text-port-text-muted' : ''}`}>{problem.message}</span>
               {problem.fix && onRepair && <button type="button" disabled={disabled} onClick={() => onRepair(problem.id)}
                 className="min-h-11 shrink-0 rounded border border-port-border px-3 text-port-text disabled:opacity-50 pointer-fine:sm:min-h-8">{problem.fix}</button>}
+              {problem.omit && onRepair && <button type="button" disabled={disabled} onClick={() => onRepair(problem.omit.id)}
+                title="Remove from this shot’s automatic inputs. The catalog, existing media, and your written prompts stay unchanged."
+                className="min-h-11 rounded border border-port-border px-3 text-port-text disabled:opacity-50 pointer-fine:sm:min-h-8">{problem.omit.label}</button>}
               <button type="button" onClick={() => onOpenShot(problem.sceneId)} aria-label={`Open shot ${formatCount(problem.shot)}`} className="min-h-11 shrink-0 rounded border border-port-border px-3 text-port-text pointer-fine:sm:min-h-8">Open shot</button>
             </li>
           ))}

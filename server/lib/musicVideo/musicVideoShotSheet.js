@@ -3,7 +3,7 @@
  * in song order, and `shotSheetMapRows` resolves map-tap selections.
  */
 
-import { activeMusicVideoSubjects } from './musicVideoCastSelection.js';
+import { activeMusicVideoSubjects, omittedShotSubjectNames } from './musicVideoCastSelection.js';
 /**
  * The shot sheet: every shot's plan on one screen, read and edited without
  * rendering anything. A shot's sheet (`scene.shotSheet`) names what the shot is
@@ -110,8 +110,10 @@ export function shotSheetPromptLines(project, scene) {
   // One Camera chip: the sheet line carries the rule, so the composer does not add a second one.
   if (cameraText && camera.kind !== 'observer' && owner) cameraText += '. This camera is the one taking the picture, so it is not in the frame';
   if (cameraText && rule) cameraText += `. ${rule}`;
-  const place = [sheetText(sheet.location), sheetText(sheet.timeOfDay), sheetText(sheet.light) ? `lit by ${sheetText(sheet.light)}` : ''].filter(Boolean).join(', ');
-  const who = (Array.isArray(sheet.characters) ? sheet.characters : []).map(sheetText).filter(Boolean);
+  const location = sheetText(sheet.location);
+  const place = [omittedShotSubjectNames(project, scene, 'place').has(location.toLowerCase()) ? '' : location, sheetText(sheet.timeOfDay), sheetText(sheet.light) ? `lit by ${sheetText(sheet.light)}` : ''].filter(Boolean).join(', ');
+  const omittedCast = omittedShotSubjectNames(project, scene, 'character');
+  const who = (Array.isArray(sheet.characters) ? sheet.characters : []).map(sheetText).filter(name => name && !omittedCast.has(name.toLowerCase()));
   return [
     ['camera', 'Camera', cameraText],
     ['view', 'View', sheetText(sheet.view)],

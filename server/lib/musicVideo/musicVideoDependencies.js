@@ -92,10 +92,11 @@ function clipReferenceDependency(project, scene, catalogUnavailable = false) {
   const stored = { castAndSets: storedStage, visualSpec: project?.visualSpec };
   const isLocal = (ref) => ref.imageId && !String(ref.id).startsWith('mvr-catalog-')
     && !isCatalogMediaReferenceId(ref.id) && !isLegacyCatalogReference(stored, ref);
+  const omissions = scene.omittedCatalogSubjectIds?.length ? { omissions: [...scene.omittedCatalogSubjectIds].sort() } : {};
   const dependency = { role: 'clipReferences', sceneId: scene.sceneId, assetId: scene.sceneId, untrackedCastGuides,
-    revision: checksum({ ids, selected, characterVariant }),
+    revision: checksum({ ids, selected, characterVariant, ...omissions }),
     // Keep the original hash and role readable by older installs.
-    localSelectionRevision: checksum({ ids, characterVariant, selected: ids ? selected.filter(isLocal) : [] }),
+    localSelectionRevision: checksum({ ids, characterVariant, selected: ids ? selected.filter(isLocal) : [], ...omissions }),
   };
   if (!catalogUnavailable) return dependency;
   // Auto can inherit an explicit frame list. With no such list, the catalog
@@ -189,7 +190,10 @@ export function restampLegacyFrameCasts(project) {
   });
   return changed ? { ...project, scenes } : project;
 }
-const frameReferenceValue = (scene) => (Array.isArray(scene?.frameReferenceIds) ? scene.frameReferenceIds.slice().sort() : null);
+const frameReferenceValue = (scene) => {
+  const picks = Array.isArray(scene?.frameReferenceIds) ? scene.frameReferenceIds.slice().sort() : null;
+  return scene?.omittedCatalogSubjectIds?.length ? { picks, omitted: [...scene.omittedCatalogSubjectIds].sort() } : picks;
+};
 const frameRef = (scene, slot, role, value) => ({
   role, sceneId: scene.sceneId, assetId: frameSlot(slot), revision: checksum(value),
 });

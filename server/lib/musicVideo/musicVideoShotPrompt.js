@@ -227,7 +227,7 @@ function shotSubjects(project, scene, { panel = null, references } = {}) {
   const attachable = (subject) => Boolean(subject?.ingredientId) || String(subject?.id || '').startsWith('cs-') || checkedIn.has(subject?.id);
   const inShot = (subject) => ids.has(subject.id) || (Boolean(subject.ingredientId)
     && (subject.ingredientId === variant || (panel?.[PANEL_SUBJECT_IDS[subject.kind]] || []).includes(subject.ingredientId)));
-  return subjects.filter((subject) => !attachable(subject) || inShot(subject));
+  return subjects.filter((subject) => !scene?.omittedCatalogSubjectIds?.includes(subject.id) && (!attachable(subject) || inShot(subject)));
 }
 
 /**

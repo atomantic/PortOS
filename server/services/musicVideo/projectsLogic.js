@@ -618,6 +618,7 @@ function buildScene(input, { order }) {
     visualIntent: input.visualIntent ?? null,
     ...(input.frameReferenceIds ? { frameReferenceIds: input.frameReferenceIds } : {}),
     ...(input.clipReferenceIds ? { clipReferenceIds: input.clipReferenceIds } : {}),
+    ...(input.omittedCatalogSubjectIds?.length ? { omittedCatalogSubjectIds: input.omittedCatalogSubjectIds } : {}),
     ...(input.researchReferences?.length ? { researchReferences: input.researchReferences } : {}),
     ...(input.setReference ? { setReference: input.setReference } : {}),
     ...(input.characterVariant ? { characterVariant: input.characterVariant } : {}),
@@ -924,7 +925,7 @@ export function applyStoryboardShotSync(project, plan) {
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'pacingCut', 'label', 'prompt', 'framePrompt', 'visualIntent',
   'referenceImageId', 'videoHistoryId', 'endImageId', 'endFrameOff', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'clipLengthSec', 'clipModelId', 'reverse', 'holdLastFrame', 'filmLook', 'templateEffects', 'transitionIn', 'transitionOut', 'wipeIn', 'wipeOut', 'glitches', 'cutEffect',
-  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'imageTreatments', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'clipSound', 'coverage', 'sourceTake', 'lyricAnchor',
+  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'imageTreatments', 'frameReferenceIds', 'clipReferenceIds', 'omittedCatalogSubjectIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'clipSound', 'coverage', 'sourceTake', 'lyricAnchor',
   'cameoId', 'cameoVariantId', 'cameoLabel', 'shotSheet'];
 
 /**

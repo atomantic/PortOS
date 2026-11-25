@@ -17,6 +17,19 @@ describe('catalog check-in shot references', () => {
     expect(onOpenShot).toHaveBeenCalledWith('shot-c');
   });
 
+  it('offers add and remove for the same warning, invoking the exact selected repair', () => {
+    const onRepair = vi.fn();
+    const checkin = { shotReferenceProblems: [{ id: 'add-id', sceneId: 'shot-a', shot: 1,
+      message: 'Shot 1: Add a character reference for Ada.', fix: 'Add Ada',
+      omit: { id: 'omit-id', label: 'Remove Ada from shot' } }] };
+    const { rerender } = render(<CatalogShotReferenceProblems checkin={checkin} onRepair={onRepair} onOpenShot={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add Ada' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Ada from shot' }));
+    expect(onRepair.mock.calls).toEqual([['add-id'], ['omit-id']]);
+    rerender(<CatalogShotReferenceProblems checkin={checkin} onRepair={onRepair} onOpenShot={vi.fn()} disabled />);
+    expect(screen.getByRole('button', { name: 'Remove Ada from shot' }).disabled).toBe(true);
+  });
+
   it('renders nothing while every saved reference reaches renders', () => {
     const { container } = render(<CatalogShotReferenceProblems checkin={{ movableShotReferences: 0, shotReferenceProblems: [] }} />);
     expect(container.firstChild).toBeNull();

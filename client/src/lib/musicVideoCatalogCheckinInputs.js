@@ -13,7 +13,7 @@ import { shotNumbers } from '../../../server/lib/musicVideo/musicVideoColdOpen.j
 // Scene fields the check reads as they are.
 const SCENE_FIELDS = [
   'sceneId', 'label', 'description', 'framePrompt', 'prompt', 'visualIntent', 'endFramePrompt', 'endFrameOff',
-  'sectionIndex', 'setReference', 'characterVariant', 'frameReferenceIds', 'clipReferenceIds',
+  'sectionIndex', 'setReference', 'characterVariant', 'frameReferenceIds', 'clipReferenceIds', 'omittedCatalogSubjectIds',
   'researchReferences', 'panelArt', 'panelId', 'cameoId', 'cameoVariantId',
 ];
 const FRAME_TAKE_KINDS = new Set(['image', 'endImage']);
