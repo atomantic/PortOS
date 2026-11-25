@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { parseSceneFilter, sceneAttention, sceneMatchesFilter, sceneMediaKind, selectedFrameReadiness } from './musicVideoSceneAttention.js';
 

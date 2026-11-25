@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { MAX_IMAGE_EDGE as SERVER_MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS as SERVER_MAX_IMAGE_PIXELS } from '../../../server/lib/imageLimits.js';
 import { describe, it, expect } from 'vitest';
 import {

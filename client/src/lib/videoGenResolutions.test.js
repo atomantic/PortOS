@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import {
   VIDEO_RESOLUTIONS, DEFAULT_VIDEO_RESOLUTION,

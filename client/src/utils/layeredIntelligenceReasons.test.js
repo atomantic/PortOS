@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { formatLiReason, liReasonTone, LI_NEUTRAL_REASONS } from './layeredIntelligenceReasons';
 

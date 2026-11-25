@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { parseScore, keySignature } from './scoreNotation.js';
 import { noteToFrequency, frequencyToNote } from './pitchDetect.js';

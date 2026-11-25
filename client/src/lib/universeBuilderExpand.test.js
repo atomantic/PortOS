@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { BIBLE_LIMITS } from './bibleLimits.js';
 import {

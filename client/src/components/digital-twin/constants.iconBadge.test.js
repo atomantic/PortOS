@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { ENRICHMENT_CATEGORIES, ICON_BADGE_CLASSES, iconBadgeClasses } from './constants';
 

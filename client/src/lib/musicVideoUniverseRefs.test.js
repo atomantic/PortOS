@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { pullUniverseCanonReferences, MUSIC_VIDEO_MAX_REFERENCES } from './musicVideoUniverseRefs.js';
 

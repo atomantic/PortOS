@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { TASK_READINESS_REASONS } from '../../../../../../server/lib/taskReadinessReasons.js';
 import { describe, it, expect } from 'vitest';
 import { isManualOnlyCadence, getTaskStatusGroup, TASK_READINESS_REASON_RENDERING, taskSortKey, TASK_FILTERS, STATUS_GROUPS, describeNextRun, coverageTone, setMetadataOverride, toggleMetadataField, fileIssuesEffective, managedAgentOptionsFor, toggleFileIssuesMetadata, prReviewerStageRole, stagePublicReviewPosture, togglePrReviewerActions, suggestedOrderSteps, compareBySuggestedOrder } from './scheduleConstants';

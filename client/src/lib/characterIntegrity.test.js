@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * The presentation tables must cover the server's vocabulary exactly: a finding
  * kind the server can emit but `FINDING_KIND_META` lacks renders as an

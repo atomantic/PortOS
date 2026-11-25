@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import editingParts from '../../../server/lib/fixtures/greyboxEditing.json';
 import { aspectRatio, blankGreybox, captureForShot, fovFromFocalLength, shotFromCamera, withShot, withoutShot, greyboxEditErrors, newGreyboxItem } from './greybox';

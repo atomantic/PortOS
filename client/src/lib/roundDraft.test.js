@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import {
   parseTempo, clampTempo, stripTempId, localId, buildRoundPatch, TEMPO_MIN, TEMPO_MAX,

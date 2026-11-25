@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { FALLBACK_COLUMNS, ticketInColumn, bucketTickets, columnConfig } from './kanbanColumns.js';
 

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { composeCleanPlatePrompt, CLEAN_PLATE_PREFIX, CLEAN_PLATE_NEGATIVE } from './cleanPlatePrompt.js';
 

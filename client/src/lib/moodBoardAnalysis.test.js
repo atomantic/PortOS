@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { IMAGE_GEN_MODE } from './imageGenModes';
 import {

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { expect, it, vi } from 'vitest';
 import { request } from './apiCore.js';
 import { markMusicVideoPoolAssets, selectMusicVideoSceneTake } from './apiMusicVideo.js';

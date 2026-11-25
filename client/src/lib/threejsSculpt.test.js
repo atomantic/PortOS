@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { createSculptBufferGeometry, needsSculptBufferGeometry, sculptMaterialProps } from './threejsSculpt.js';

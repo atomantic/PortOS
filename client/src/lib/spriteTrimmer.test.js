@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import {
   WALK_PHASES, stripFrameGeometry, phaseLabelFor, allColumns, invertColumns,

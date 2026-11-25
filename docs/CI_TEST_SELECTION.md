@@ -60,14 +60,15 @@ the largest phase of the client suite. Two levers cut it, both applied.
 **Lever 1 — don't build a DOM you don't need.** A test file that never touches
 the DOM opts out with a `// @vitest-environment node` pragma on line 1, and pays
 ~0ms instead of ~0.35s (local) / ~0.7s (CI runner) for its environment. Every
-file under `client/src/{lib,utils,services}` that passes in `node` carries the
-pragma.
+pure-JavaScript test under `client/src/` that passes in `node` carries the
+pragma, including tests under `lib`, `utils`, `services`, `components`, `pages`,
+and `test`.
 
-When adding a test under `client/src/{lib,utils,services}`, default to the
-pragma and only drop it if the file (or the module it imports) genuinely needs
-`document`/`window`. The 13 files in that tree that legitimately keep a DOM do
-so because the *module under test* reaches for a browser global — e.g.
-`apiApps.js` navigates via `window.location`, `webglSupport.js` calls
+When adding a test under `client/src/`, default to the pragma and only drop it
+if the file (or the module it imports) genuinely needs `document`/`window` or
+another browser global. A test that imports a module using browser APIs stays
+in happy-dom even if the test itself never names those APIs — e.g. `apiApps.js`
+navigates via `window.location`, `webglSupport.js` calls
 `document.createElement('canvas')`.
 
 **Lever 2 — a cheaper DOM.** `client/vitest.config.js` runs on happy-dom

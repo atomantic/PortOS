@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { UNSORTED_ID, buildUnsortedCollection } from './unsorted.js';
 

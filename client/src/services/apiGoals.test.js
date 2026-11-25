@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // The real `request()` from apiCore runs here on purpose: the bug this guards
