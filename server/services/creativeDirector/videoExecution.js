@@ -324,15 +324,8 @@ export async function assertVideoAttemptDispatch(projectId, attemptId, { jobId }
   return effective;
 }
 
-/**
- * The clip length a job will render, for the backends whose length is known here: Reactor
- * renders its `seconds`, fal and Grok their `duration`, Gemini always its fixed length (it
- * takes none), and the local lane frames over fps. Runway, Higgsfield and Google snap a
- * request to their model's own lengths (a 10-second shot can come back as 8), so they stay
- * unadmitted until admission can read the delivered length (#18701): assembly refuses a
- * clip shorter than its shot, after the render is paid for.
- */
-function submittedClipSeconds(params) {
+function submittedClipSeconds(params, clip) {
+  if (clip) return clip.coerceSeconds(params.duration);
   if (params.mode === 'reactor') return Number(params.seconds);
   if (params.mode === 'gemini') return GEMINI_OMNI_WEB_MODEL.clipSeconds;
   if (['fal', 'grok'].includes(params.mode)) return Number(params.duration);
@@ -341,12 +334,20 @@ function submittedClipSeconds(params) {
 
 export async function enqueueVideoProductionJob(project, { kind = 'video', params, sceneId, stepId, workRevision }) {
   if (kind !== 'video') throw new ServerError('Video plans currently render bounded video clips. Use attached references and the saved audio choice for other media.', { status: 409, code: 'VIDEO_PLAN_TOOL_UNSUPPORTED' });
-  const seconds = submittedClipSeconds(params);
-  if (!Number.isFinite(seconds) || seconds < 1 || seconds > 10.1 || Number(params.chunks || 1) !== 1 || Number(params.batchSize || 1) !== 1) {
+  const { validateVideoShot, videoShotClipOptions } = await import('../../lib/creativeDirectorVideoCompiler.js');
+  const clip = videoShotClipOptions(params, Boolean(params.sourceImagePath));
+  const requested = Number(params.duration);
+  const seconds = submittedClipSeconds(params, clip);
+  const boundedSeconds = clip ? (params.duration != null ? requested : undefined) : seconds;
+  if (Number(params.chunks || 1) !== 1 || Number(params.batchSize || 1) !== 1
+      || (boundedSeconds !== undefined && (!Number.isFinite(boundedSeconds) || boundedSeconds < 1 || boundedSeconds > 10.1))) {
     throw new ServerError('A Video submission must contain one clip of at most 10 seconds.', { status: 409, code: 'VIDEO_PLAN_CLIP_BOUNDS' });
   }
-  const { validateVideoShot } = await import('../../lib/creativeDirectorVideoCompiler.js');
-  validateVideoShot(project, { sceneId: sceneId || stepId, prompt: String(params.prompt || ''), durationSeconds: seconds }, false);
+  const shot = sceneId
+    ? project.treatment?.scenes?.find(scene => scene.sceneId === sceneId)
+    : project.plan?.steps?.find(step => step.stepId === stepId)?.args?.params;
+  validateVideoShot(project, { sceneId: sceneId || stepId, prompt: String(params.prompt || ''),
+    durationSeconds: clip ? shot?.durationSeconds ?? params.durationSeconds ?? requested : seconds }, false, { clip, clipSeconds: seconds });
   const { hasConfiguredMediaRoute, enqueueUnattendedMediaJob } = await import('../federatedMedia/defaultRouting.js');
   if (await hasConfiguredMediaRoute(kind)) throw new ServerError('A standing peer route would change the reviewed video backend. Change Settings before Resume.', { status: 409, code: 'VIDEO_ROUTE_CHANGED' });
   const costUsd = params.mode === 'fal'
@@ -356,7 +357,10 @@ export async function enqueueVideoProductionJob(project, { kind = 'video', param
   const marker = { projectId: project.id, attemptId: attempt.id, executionId: attempt.executionId };
   try {
     await assertVideoAttemptDispatch(project.id, attempt.id);
-    const result = await enqueueUnattendedMediaJob({ kind, params: { ...params, videoProduction: marker },
+    // Send the chosen catalog length explicitly. In particular, Google and Higgsfield
+    // round raw requests to the nearest length, which can be shorter than the shot.
+    const clipParams = clip ? { modelId: clip.model.id, duration: seconds } : {};
+    const result = await enqueueUnattendedMediaJob({ kind, params: { ...params, ...clipParams, videoProduction: marker },
       owner: sceneId ? `cd:${project.id}:${sceneId}` : `creative-director:${project.id}` });
     await settleVideoAttempt(project.id, attempt.id, { status: 'queued', jobId: result.jobId });
     return { ...result, attemptId: attempt.id };

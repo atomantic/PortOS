@@ -225,6 +225,20 @@ describe('applyProjectPatch', () => {
 });
 
 describe('applyTreatment — status preservation', () => {
+  it('refuses a Video treatment whose pinned model cannot cover its shot', () => {
+    const project = { id: 'cd-1', status: 'draft', workspace: 'video', aspectRatio: '16:9',
+      targetDurationSeconds: 10, renderBackend: { video: { mode: 'google' } } };
+    const treatment = { ...VALID_TREATMENT, script: 'A cat walks in.',
+      scenes: [{ ...VALID_TREATMENT.scenes[0], durationSeconds: 10 }] };
+
+    expect(() => applyTreatment(project, treatment)).toThrow(expect.objectContaining({
+      code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED', message: expect.stringContaining('renders 4, 6, 8 seconds'),
+    }));
+    expect(applyTreatment({ ...project, targetDurationSeconds: 7 }, {
+      ...treatment, scenes: [{ ...treatment.scenes[0], durationSeconds: 7 }],
+    }).treatment.scenes[0].durationSeconds).toBe(7);
+  });
+
   it('preserves paused status', () => {
     const next = applyTreatment({ id: 'cd-1', status: 'paused' }, VALID_TREATMENT);
     expect(next.status).toBe('paused');
