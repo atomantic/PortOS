@@ -262,9 +262,7 @@ export const PROVIDER_MODE_OVERRIDE_KEYS = Object.freeze(Object.keys(providerMod
  * POST /api/providers — the create body, which may declare BOTH execution modes
  * of one harness. Both keys are required: the map's presence IS the "make me a
  * pair" request (an empty `cli: {}` is normal; the body's own args describe the
- * CLI record). A per-mode MAP, unlike `POST /api/providers/bindings`' array,
- * because a provider added here has no command recipe, so the user's per-mode
- * arguments need somewhere to land.
+ * CLI record). The optional per-mode arguments belong to their own map entry.
  *
  * Create-only and absent from `providerSchema`: a PATCH of one existing record
  * cannot mean "mint a pair", so `providerSchema.partial()` drops the key.

@@ -29,7 +29,7 @@ const { prepareGenerateParams } = await import('../imageGen/prepareParams.js');
 const { buildSceneFrameGenerateBody } = await import('./sceneFrameReferences.js');
 const { musicVideoLinkedReferenceId } = await import('../../lib/musicVideo/musicVideoConditioning.js');
 const { validateRequest } = await import('../../lib/validateRequest.js');
-const { musicVideoSceneClipRenderSchema, musicVideoSceneClipsRenderSchema, musicVideoSceneFrameRenderSchema } = await import('../../lib/musicVideo/musicVideoRouteValidation.js');
+const { musicVideoSceneClipRenderSchema, musicVideoSceneFrameRenderSchema } = await import('../../lib/musicVideo/musicVideoRouteValidation.js');
 const { renderSceneClips } = await import('./sceneCardRender.js');
 
 const names = (result) => result.data.referenceImagePaths.map((file) => file.split(/[\\/]/).at(-1));
@@ -125,14 +125,9 @@ describe('shot-card clip body validation', () => {
     musicVideo: JSON.stringify({ projectId: 'mv-card', sceneId: 's1', compose: true }),
   };
 
-  it('keeps a prepared video body, including on the bulk form', () => {
+  it('keeps a prepared video body', () => {
     const one = validateRequest(musicVideoSceneClipRenderSchema, videoBody);
     expect(one).toMatchObject(videoBody);
-    const bulk = validateRequest(musicVideoSceneClipsRenderSchema, { ...videoBody, sceneIds: ['s1', 's2'] });
-    expect(bulk.sceneIds).toEqual(['s1', 's2']);
-    expect(bulk.mode).toBe('image');
-    expect(bulk.sourceImageFile).toBe('start.png');
-    expect(bulk.musicVideo).toBe(videoBody.musicVideo);
   });
 });
 
@@ -142,18 +137,6 @@ describe('draft and final clip renders (#16136)', () => {
     { sceneId: 'b', startSec: 4, endSec: 8, referenceImageId: 'b.png', prompt: 'The rider waves' },
   ] });
   const sent = () => clipQueue.submit.mock.calls.map(([body]) => body);
-
-  it('renders each shot of a batch at the tier resolution and tags it for the take', async () => {
-    clipQueue.submit.mockClear();
-    const input = validateRequest(musicVideoSceneClipsRenderSchema, { sceneIds: ['a', 'b'], tier: 'draft' });
-    const result = await renderSceneClips(tierProject({ backend: 'higgsfield', higgsfieldResolution: '1080p' }), input);
-    expect(result.results.map((row) => row.ok)).toEqual([true, true]);
-    for (const body of sent()) {
-      expect(body.higgsfieldResolution).toBe('480p');
-      expect(body.musicVideo.tier).toBe('draft');
-      expect(body).not.toHaveProperty('tier');
-    }
-  });
 
   it('honours the project ceiling, and a resolution the request names', async () => {
     clipQueue.submit.mockClear();

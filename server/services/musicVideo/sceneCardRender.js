@@ -33,27 +33,16 @@ function sceneOrThrow(project, sceneId) {
   return scene;
 }
 
-/** One shot, or every listed shot. A per-shot failure stays in `results`. */
-export async function renderSceneFrames(project, { sceneId, sceneIds, ...input } = {}) {
-  const ids = sceneIds || [sceneId];
-  const results = [];
-  for (const id of ids) {
-    try {
-      const scene = sceneOrThrow(project, id);
-      const built = await buildSceneFrameGenerateBody(project, scene, input);
-      const { castInputs, ...body } = built;
-      const { generateSchema } = await import('../../lib/imageGenValidation.js');
-      const { executeImageGenerate } = await import('../imageGen/submitJob.js');
-      const { validateRequest } = await import('../../lib/validateRequest.js');
-      const data = validateRequest(generateSchema, body);
-      const rendered = await executeImageGenerate(data);
-      results.push({ sceneId: id, ok: true, ...rendered.body, castInputs: rendered.params?.musicVideo?.castInputs || castInputs });
-    } catch (error) {
-      if (!sceneIds) throw error;
-      results.push({ sceneId: id, ok: false, error: error.message, code: error.code || null });
-    }
-  }
-  return sceneIds ? { results } : results[0];
+export async function renderSceneFrames(project, { sceneId, ...input } = {}) {
+  const scene = sceneOrThrow(project, sceneId);
+  const built = await buildSceneFrameGenerateBody(project, scene, input);
+  const { castInputs, ...body } = built;
+  const { generateSchema } = await import('../../lib/imageGenValidation.js');
+  const { executeImageGenerate } = await import('../imageGen/submitJob.js');
+  const { validateRequest } = await import('../../lib/validateRequest.js');
+  const data = validateRequest(generateSchema, body);
+  const rendered = await executeImageGenerate(data);
+  return { sceneId, ok: true, ...rendered.body, castInputs: rendered.params?.musicVideo?.castInputs || castInputs };
 }
 
 const preparedClipBody = (input) => Boolean(input?.mode || input?.backend || input?.sourceImageFile || input?.modelId || input?.falModelId || input?.grokDuration);
@@ -213,23 +202,13 @@ async function buildSceneClipSubmission(project, scene, input = {}) {
   return ensureSceneClipReferences(body, project, scene);
 }
 
-export async function renderSceneClips(project, { sceneId, sceneIds, ...input } = {}) {
-  const ids = sceneIds || [sceneId];
-  const results = [];
-  for (const id of ids) {
-    try {
-      const scene = sceneOrThrow(project, id);
-      const body = await buildSceneClipSubmission(project, scene, input);
-      const { generateBodySchema } = await import('../../lib/videoGenValidation.js');
-      const { submitVideoGenJob } = await import('../videoGen/submitJob.js');
-      const parsed = generateBodySchema.safeParse(body);
-      if (!parsed.success) failValidation(parsed);
-      const queued = await submitVideoGenJob(parsed.data, {});
-      results.push({ sceneId: id, ok: true, ...queued });
-    } catch (error) {
-      if (!sceneIds) throw error;
-      results.push({ sceneId: id, ok: false, error: error.message, code: error.code || null });
-    }
-  }
-  return sceneIds ? { results } : results[0];
+export async function renderSceneClips(project, { sceneId, ...input } = {}) {
+  const scene = sceneOrThrow(project, sceneId);
+  const body = await buildSceneClipSubmission(project, scene, input);
+  const { generateBodySchema } = await import('../../lib/videoGenValidation.js');
+  const { submitVideoGenJob } = await import('../videoGen/submitJob.js');
+  const parsed = generateBodySchema.safeParse(body);
+  if (!parsed.success) failValidation(parsed);
+  const queued = await submitVideoGenJob(parsed.data, {});
+  return { sceneId, ok: true, ...queued };
 }

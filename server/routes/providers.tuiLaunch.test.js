@@ -164,8 +164,7 @@ describe('POST /api/providers/:id/modes/tui', () => {
   it('answers 409 and writes NOTHING when the sibling id is taken by something unrelated', async () => {
     // Distinct from the already-paired refusal below: this record runs a
     // DIFFERENT command, so it does not group with `claude-code` — it is simply
-    // squatting the id. `mintRouteIds` suffixes a whole set on collision
-    // because it owns both halves; here the CLI id is fixed, so a
+    // squatting the id. The existing CLI id is fixed, so a
     // `claude-code-tui-2` would be a record nothing ever groups.
     const squatter = { ...CLAUDE_TUI_RECORD, name: 'Something Else', command: 'other' };
     const createProviderTuiMode = vi.fn();

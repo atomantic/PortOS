@@ -519,8 +519,7 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
     res.json(await updateService(req.params.slug, input));
   }));
 
-  // Refused with a 409 while a binding still names the row — the same rule as
-  // the connection delete, because it IS the connection delete.
+  // Refused with a 409 while a binding still names the connection row.
   router.delete('/services/:slug', asyncHandler(async (req, res) => {
     res.json(await removeConnection(req.params.slug));
   }));

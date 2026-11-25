@@ -116,23 +116,6 @@ export async function listRawBySeriesIds(seriesIds, { withHistory = true } = {})
 }
 
 /**
- * Limit in PostgreSQL before transferring records. Summary reads extract only
- * the recent HTTP endpoint's fields; title has no mirrored column.
- */
-export async function listRecentRaw({ limit, withHistory = true, includeDeleted = false, summary = false }) {
-  const projection = summary
-    ? "jsonb_build_object('id', id, 'title', data->'title', 'number', number, 'seriesId', series_id, 'updatedAt', data->'updatedAt', 'createdAt', data->'createdAt')"
-    : withHistory ? 'data' : LEAN_DATA;
-  const { rows } = await query(
-    `SELECT ${projection} AS data FROM pipeline_issues
-     ${includeDeleted ? '' : 'WHERE deleted IS NOT TRUE'}
-     ORDER BY updated_at DESC NULLS LAST, id DESC LIMIT $1`,
-    [limit],
-  );
-  return rows.map((r) => r.data);
-}
-
-/**
  * Upsert one record. `data` is written verbatim (lossless); the typed mirror
  * columns are bind-sanitized so a hand-edited/legacy record can't make the
  * write throw. `created_at` preserved on conflict.

@@ -116,31 +116,6 @@ describe.skipIf(!runDb)('pipeline issues DB adapter round-trip', () => {
     queries.mockRestore();
   });
 
-  it('recent reads limit in SQL and summaries never transfer stage data', async () => {
-    for (let n = 0; n < 60; n += 1) {
-      await db.writeRaw(`iss-${n}`, I(`iss-${n}`, {
-        updatedAt: new Date(Date.UTC(2026, 0, 1, 0, n)).toISOString(),
-        stages: { idea: { output: 'active', runHistory: [{ output: 'older' }] } },
-        deleted: n === 59,
-      }));
-    }
-    const querySpy = vi.spyOn(dbConnection, 'query');
-    const summaries = await db.listRecentRaw({ limit: 2, summary: true });
-    expect(summaries.map((r) => r.id)).toEqual(['iss-58', 'iss-57']);
-    expect(Object.keys(summaries[0]).sort()).toEqual(['createdAt', 'id', 'number', 'seriesId', 'title', 'updatedAt']);
-    expect(querySpy).toHaveBeenCalledTimes(1);
-    const [sql, params] = querySpy.mock.calls[0];
-    expect(sql).toMatch(/WHERE deleted IS NOT TRUE\s+ORDER BY updated_at DESC NULLS LAST, id DESC LIMIT \$1/);
-    expect(sql).toContain('jsonb_build_object');
-    expect(params).toEqual([2]);
-    querySpy.mockRestore();
-    const full = await db.listRecentRaw({ limit: 1, includeDeleted: true });
-    expect(full[0].id).toBe('iss-59');
-    expect(full[0].stages.idea.runHistory).toHaveLength(1);
-    const lean = await db.listRecentRaw({ limit: 1, withHistory: false });
-    expect(lean[0].stages.idea).toEqual({ output: 'active' });
-  });
-
   it('public PG lists project before transfer while detail keeps history', async () => {
     const svc = await import('../issueCrud.js');
     const record = I('iss-service', { stages: { idea: {
@@ -154,7 +129,6 @@ describe.skipIf(!runDb)('pipeline issues DB adapter round-trip', () => {
       await svc.listAllIssues({ withHistory: false }),
       await svc.listAllIssues({ seriesIds: ['ser-1'], withHistory: false }),
       await svc.listIssuesForSeries('ser-1', { withHistory: false }),
-      await svc.listRecentIssues({ withHistory: false }),
     ];
     for (const list of lists) {
       expect(list[0].stages.idea).toMatchObject({ output: 'active', runHistory: [] });
@@ -166,33 +140,14 @@ describe.skipIf(!runDb)('pipeline issues DB adapter round-trip', () => {
     querySpy.mockRestore();
     expect((await svc.getIssue(record.id)).stages.idea.runHistory).toHaveLength(1);
     expect((await svc.listAllIssues())[0].stages.idea.runHistory).toHaveLength(1);
-    expect(await svc.listRecentIssues({ limit: 1, summary: true })).toEqual([{
-      id: record.id, title: record.title, number: record.number,
-      seriesId: record.seriesId, updatedAt: record.updatedAt,
-    }]);
   });
 
-  it('lean SQL tolerates malformed stage containers and recent summaries sanitize legacy fields', async () => {
+  it('lean SQL tolerates malformed stage containers', async () => {
     const svc = await import('../issueCrud.js');
     for (const [n, stages] of [[], 'invalid', { idea: [] }, { idea: 'invalid' }].entries()) {
       await db.writeRaw(`iss-malformed-${n}`, I(`iss-malformed-${n}`, { stages }));
     }
     expect(await svc.listIssues({ withHistory: false })).toHaveLength(4);
-    await db.writeRaw('iss-legacy', I('iss-legacy', {
-      title: '  Legacy title  ', number: null, updatedAt: '2026-02-01T00:00:00.000Z',
-    }));
-    await query("UPDATE pipeline_issues SET deleted = NULL WHERE id = 'iss-legacy'");
-    const summary = await svc.listRecentIssues({ limit: 1, summary: true });
-    expect(summary).toEqual([{
-      id: 'iss-legacy', title: 'Legacy title', number: 0, seriesId: 'ser-1',
-      updatedAt: '2026-02-01T00:00:00.000Z',
-    }]);
-    await query("UPDATE pipeline_issues SET updated_at = NULL WHERE id = 'iss-legacy'");
-    expect((await svc.listRecentIssues({ limit: 1 }))[0].id).not.toBe('iss-legacy');
-    await db.writeRaw('iss-invalid-title', I('iss-invalid-title', {
-      title: 123, updatedAt: '2026-03-01T00:00:00.000Z',
-    }));
-    expect(await svc.listRecentIssues({ limit: 1, summary: true })).toEqual([]);
   });
 
   it('upsert updates the record and the mirror columns (series_id/number/status)', async () => {
