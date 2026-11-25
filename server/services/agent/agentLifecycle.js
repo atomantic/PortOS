@@ -686,9 +686,10 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, reportedSuccess,
 
     // Analyze failure if applicable. Same precedence as the direct spawner's resolveCliErrorAnalysis: a fallback
     // signal the run already raised outranks a keyword sweep, which reads the raw stream-json payload when the
-    // runner sent it (output.txt holds only the parsed transcript).
+    // runner sent it, joined with the transcript so a stderr-only diagnostic (an auth error printed after stdout
+    // initialization events) still classifies; output.txt holds only the parsed transcript.
     const errorAnalysis = effectiveSuccess ? null
-      : agent.startupErrorAnalysis || fallbackAnalysis || analyzeAgentFailure(rawStreamTail || outputBuffer, task, model);
+      : agent.startupErrorAnalysis || fallbackAnalysis || analyzeAgentFailure(rawStreamTail ? `${rawStreamTail}\n${outputBuffer}` : outputBuffer, task, model);
 
     // The gate for finalizeAgent's PR-claim verification (#3358): a PortOS-owned
     // PR is created by `runAgentCompletionCleanup` below, i.e. AFTER finalize, so

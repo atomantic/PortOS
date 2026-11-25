@@ -35,6 +35,23 @@ vi.mock('./agentCompletionCleanup.js', () => ({
   replayAgentCompletionCleanup: vi.fn().mockResolvedValue(undefined),
 }));
 
+const { analyzeAgentFailure } = vi.hoisted(() => ({ analyzeAgentFailure: vi.fn() }));
+vi.mock('./agentErrorAnalysis.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  analyzeAgentFailure.mockImplementation(actual.analyzeAgentFailure);
+  return { ...actual, analyzeAgentFailure };
+});
+// The transcript the server reads for a runner agent is output.txt; stand in a stderr-only diagnostic for it.
+const TRANSCRIPT = '[stderr] API Error: 401 invalid authentication credentials\n';
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, existsSync: (p) => String(p).endsWith('output.txt') || actual.existsSync(p) };
+});
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, readFile: (p, ...rest) => (String(p).endsWith('output.txt') ? Promise.resolve(TRANSCRIPT) : actual.readFile(p, ...rest)) };
+});
+
 import { handleAgentCompletion, normalizeRunnerCompletionExtras } from './agentLifecycle.js';
 import { runnerAgents, completingAgents, pausedAgents } from './agentState.js';
 import { getAgentRecord, getAgent } from '../cos/cosAgentLifecycle.js';
@@ -77,6 +94,12 @@ describe('handleAgentCompletion — runner output-parser verdict', () => {
     expect(input.success).toBe(false);
     expect(input.errorAnalysis).toBeTruthy();
     expect(input.errorAnalysis.message).not.toBe('');
+  });
+
+  it('analyzes the raw stream tail together with the transcript so a stderr-only diagnostic still classifies', async () => {
+    const tail = `${JSON.stringify({ type: 'system', subtype: 'init' })}\n`;
+    await complete(1, false, { rawStreamTail: tail });
+    expect(analyzeAgentFailure).toHaveBeenCalledWith(`${tail}\n${TRANSCRIPT}`, expect.anything(), undefined);
   });
 
   it('finalizes an event without the new fields exactly as before', async () => {
