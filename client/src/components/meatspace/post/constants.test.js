@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  computeDomainAverages, domainLabel, computeGoalProgress, hasGoals,
+  computeDomainAverages, domainLabel, computeGoalProgress,
   POST_TOPICS, TOPIC_IDS, TOPIC_UI, DOMAINS, DRILL_TO_DOMAIN, composedSessionDrillTypes,
   appliedNumeracyAnswerCorrect,
   effectiveCognitiveDrillConfig,
@@ -90,19 +90,6 @@ describe('computeDomainAverages', () => {
   it('returns an empty list for empty stats', () => {
     expect(computeDomainAverages({})).toEqual([]);
     expect(computeDomainAverages()).toEqual([]);
-  });
-});
-
-describe('hasGoals (issue #2100)', () => {
-  it('is false for absent/empty/legacy goals', () => {
-    expect(hasGoals(undefined)).toBe(false);
-    expect(hasGoals(null)).toBe(false);
-    expect(hasGoals({})).toBe(false);
-    expect(hasGoals({ dailyMinutes: 0 })).toBe(false);
-  });
-
-  it('is true once any positive target is set', () => {
-    expect(hasGoals({ streakTarget: 10 })).toBe(true);
   });
 });
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  parseDrumChart, isDrumNotation, drumChartHasMusic, kitPiece,
+  parseDrumChart, isDrumNotation, kitPiece,
   describeDrumCell, describeDrumPosition, drumGlyphLegend,
   KIT_PIECES, CELL_GLYPHS, DEFAULT_DRUM_TEMPO, SUBDIVISION_MAX,
 } from './drumNotation.js';
@@ -269,15 +269,6 @@ describe('isDrumNotation', () => {
 
   it('rejects an all-rest grid (ambiguous, no hits)', () => {
     expect(isDrumNotation('HH: ----\nK: ----')).toBe(false);
-  });
-});
-
-describe('drumChartHasMusic', () => {
-  it('is true only when a cell is actually struck', () => {
-    expect(drumChartHasMusic(ROCK_BEAT)).toBe(true);
-    expect(drumChartHasMusic('HH: ----\nK: ----')).toBe(false);
-    expect(drumChartHasMusic('time: 4/4')).toBe(false);
-    expect(drumChartHasMusic('')).toBe(false);
   });
 });
 

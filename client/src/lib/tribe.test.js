@@ -6,7 +6,6 @@ import {
   ENERGY,
   STATUS_HEX,
   contactStatus,
-  daysBetween,
   ringFor,
   energyFor,
   tagsToArray,
@@ -73,19 +72,13 @@ describe('initialsFor', () => {
   });
 });
 
-describe('contactStatus / daysBetween', () => {
+describe('contactStatus', () => {
   // Pin "today" so cadence math is deterministic.
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-19T12:00:00'));
   });
   afterEach(() => vi.useRealTimers());
-
-  it('returns null days for missing/unparseable dates', () => {
-    expect(daysBetween(null)).toBeNull();
-    expect(daysBetween('not-a-date')).toBeNull();
-    expect(daysBetween('2026-06-09')).toBe(10);
-  });
 
   it('flags missing when no last contact', () => {
     const s = contactStatus({ cadenceDays: 7 });

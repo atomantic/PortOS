@@ -86,17 +86,3 @@ socket.on('build:id', ({ buildId } = {}) => buildWatcher.onBuildId(buildId));
 socket.on('connect', () => { buildWatcher.refreshIdentity(); });
 
 export default socket;
-
-/**
- * Check if socket is connected
- */
-export function isConnected() {
-  return socket.connected;
-}
-
-/**
- * The build id the running client was served with. Components that want to
- * key per-session state to a specific bundle version (e.g. anti-loop guards
- * in stale-chunk reload) can import this.
- */
-export const CLIENT_BUILD_ID = EMBEDDED_BUILD_ID;

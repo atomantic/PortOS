@@ -3,7 +3,6 @@ import {
   PRACTICE_GROUPS,
   PRACTICE_ENTRIES,
   TAG_LABELS,
-  entryMatchesQuery,
   filterPracticeGroups,
 } from './practiceCatalog';
 import { POST_TOPICS, DRILL_LABELS, DRILL_DESCRIPTIONS, DRILL_PRACTICE_LINKS } from './constants';
@@ -81,34 +80,6 @@ describe('practice catalog coverage', () => {
       const ids = group.entries.map(e => e.id);
       expect(new Set(ids).size, group.id).toBe(ids.length);
     }
-  });
-});
-
-describe('entryMatchesQuery', () => {
-  // A real catalog entry, so the test exercises the haystack the catalog builds
-  // rather than a hand-shaped stand-in.
-  const entry = PRACTICE_ENTRIES.find(e => e.drillType === 'memory-element-flash');
-
-  it('matches everything on an empty or whitespace query', () => {
-    expect(entryMatchesQuery(entry, '')).toBe(true);
-    expect(entryMatchesQuery(entry, '   ')).toBe(true);
-  });
-
-  it('matches label, description, drill type, and group label case-insensitively', () => {
-    expect(entryMatchesQuery(entry, 'ELEMENT')).toBe(true);
-    expect(entryMatchesQuery(entry, 'symbols')).toBe(true);
-    expect(entryMatchesQuery(entry, 'memory-element')).toBe(true);
-    expect(entryMatchesQuery(entry, 'memory')).toBe(true);
-  });
-
-  it('ANDs the tokens, so word order does not matter', () => {
-    expect(entryMatchesQuery(entry, 'flash element')).toBe(true);
-    expect(entryMatchesQuery(entry, 'element flash')).toBe(true);
-    expect(entryMatchesQuery(entry, 'element morse')).toBe(false);
-  });
-
-  it('rejects a non-match', () => {
-    expect(entryMatchesQuery(entry, 'morse')).toBe(false);
   });
 });
 

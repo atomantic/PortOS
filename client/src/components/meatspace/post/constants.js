@@ -407,11 +407,6 @@ export const GOAL_DEFS = [
   { key: 'morseWpmTarget', label: 'Morse WPM', unit: 'wpm', metric: 'morseWpm', max: 100 },
 ];
 
-export function hasGoals(goals) {
-  if (!goals || typeof goals !== 'object') return false;
-  return GOAL_DEFS.some(({ key }) => typeof goals[key] === 'number' && goals[key] > 0);
-}
-
 /**
  * Progress toward each set goal. `goals` is the config's `goals` block; `metrics`
  * supplies the current values (`todayMinutes`, `weekSessions`, `currentStreak`,

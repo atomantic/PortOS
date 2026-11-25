@@ -111,7 +111,3 @@ export function dayOfWeek(dateStr) {
   const [y, m, d] = dateStr.split('-').map(Number);
   return DAY_LABELS[new Date(y, m - 1, d).getDay()];
 }
-
-// LEV 2045 constants
-export const LEV_TARGET_YEAR = 2045;
-export const LEV_START_YEAR = 2000; // Research timeline start
