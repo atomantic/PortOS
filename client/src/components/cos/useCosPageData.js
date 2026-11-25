@@ -157,7 +157,9 @@ export default function useCosPageData({ activeTab, selectedTask }) {
   const [agentState, setAgentState] = useState('sleeping');
   const agentStateRef = useRef(agentState);
   agentStateRef.current = agentState;
-  const providersLoadedRef = useRef(false);
+  // False until the latest provider read succeeded; a failed invalidation after a
+  // good load keeps the last list but stays retryable on the next tab switch.
+  const providersCurrentRef = useRef(false);
   const lastTabRef = useRef(activeTab);
   const [statusReadFailed, setStatusReadFailed] = useState(false);
   const [speaking, setSpeaking] = useState(false);
@@ -269,9 +271,14 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     setProviders(prev => (sameJsonShape(prev, data.providers || []) ? prev : data.providers || []));
     setActiveProviderId(data.activeProvider || null);
     setProvidersLoaded(true);
-    providersLoadedRef.current = true;
+    providersCurrentRef.current = true;
     return data;
   }, []);
+
+  const readProviders = useCallback(
+    () => getProviders().then(applyProviders).catch(() => { providersCurrentRef.current = false; }),
+    [applyProviders],
+  );
 
   // Same self-committing-read fix as `applyProviders`, for the same reason: apps
   // feeds the Schedule/Tasks/Agents app pickers, so bundling it into
@@ -310,10 +317,13 @@ export default function useCosPageData({ activeTab, selectedTask }) {
   // status, agents and health. Every transition that changes one of those inputs
   // without a richer message of its own calls this, so no state depends on a tab
   // switch's full refresh to be corrected.
-  const settleAgentState = useCallback(() => {
+  // `ifChanged` is for reconciliation: it leaves the richer message of a socket
+  // event (`Running: <task>`) alone unless the derived state actually differs.
+  const settleAgentState = useCallback(({ ifChanged = false } = {}) => {
     const liveStatus = statusRef.current;
     const liveHealth = healthRef.current;
     const nextState = deriveAgentState(liveStatus, needsRef.current.agents ? agentsRef.current : [], liveHealth);
+    if (ifChanged && nextState === agentStateRef.current) return;
     setAgentState(nextState);
     // Default state message — richer messages come from socket events. The one
     // state whose default is useless is `investigating`: only a health issue
@@ -411,7 +421,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
         return data;
       });
       // The API shares its provider snapshot across all pages and pickers.
-      const providersRead = needs.providers ? getProviders().then(applyProviders).catch(() => {}) : Promise.resolve();
+      const providersRead = needs.providers ? readProviders() : Promise.resolve();
       // Same rationale as providersRead above: apps commits on its own settle
       // instead of waiting on the slower siblings in secondaryRead.
       const appsRead = needs.apps ? readApps() : Promise.resolve();
@@ -471,7 +481,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       if (pending.dirty && !controller.signal.aborted) refreshPageData();
     });
     return pending.promise;
-  }, [deriveAgentState, applyHealth, markHealthUnavailable, applyProviders, readApps, readAgents, awaitSlice, applyStatus, settleAgentState]);
+  }, [deriveAgentState, applyHealth, markHealthUnavailable, readApps, readAgents, awaitSlice, applyStatus, settleAgentState, readProviders]);
 
   // Coalesce event bursts into a read of the visible queue and scalar shell
   // status. Insights use persisted health; invalidation never runs PM2 repair.
@@ -499,10 +509,11 @@ export default function useCosPageData({ activeTab, selectedTask }) {
         applyStatus(summary);
         // A failed first status read is recovered by any later successful one.
         setStatusReadFailed(typeof summary.running !== 'boolean');
-        // Coding is the one state that outlives its cause silently (the agent was
-        // paused or stopped while this tab ignored agent events), and the summary's
-        // activeAgents is what reveals it.
-        if (agentStateRef.current === 'coding') settleAgentState();
+        // Coding and Thinking are the states a missed agent event leaves wrong (an
+        // agent paused or started while this tab ignored agent events), and the
+        // summary's activeAgents is what reveals it. Reviewing is a transient
+        // completion flash and is left to expire at the next tab switch.
+        if (['coding', 'thinking'].includes(agentStateRef.current)) settleAgentState({ ifChanged: true });
       }
       if (tasksData && tasksCurrent()) setTasks(tasksData);
       const insightsData = await insightsRead;
@@ -540,7 +551,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     const data = await readAgents(controller);
     if (!Array.isArray(data) || controller.signal.aborted) return;
     setActiveAgentMeta(data.find(agent => agent.status === 'running')?.metadata || null);
-    if (agentStateRef.current === 'coding') settleAgentState();
+    if (['coding', 'thinking'].includes(agentStateRef.current)) settleAgentState({ ifChanged: true });
   }, [readAgents, settleAgentState]);
 
   // All page insight reads use cached health. Explicit Run Check owns repairs;
@@ -582,10 +593,13 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     // that still needs providers; once loaded, providers:changed keeps it current.
     const tabChanged = lastTabRef.current !== activeTab;
     lastTabRef.current = activeTab;
-    if (next.providers && (!prev.providers || (tabChanged && !providersLoadedRef.current))) getProviders().then(applyProviders).catch(() => {});
+    // Leaving a tab ends the completion flash: derive the resting state locally,
+    // with no read (the status summary kept the inputs current).
+    if (tabChanged && ['coding', 'reviewing', 'thinking'].includes(agentStateRef.current)) settleAgentState({ ifChanged: true });
+    if (next.providers && (!prev.providers || (tabChanged && !providersCurrentRef.current))) readProviders();
     // `readApps` serves its cached snapshot, so this only re-reads after a failure.
     if (next.apps && (!prev.apps || tabChanged)) readApps();
-  }, [activeTab, needsTasks, needsAgents, needsProviders, needsApps, readTasksSlice, readAgentsSlice, applyProviders, readApps]);
+  }, [activeTab, needsTasks, needsAgents, needsProviders, needsApps, readTasksSlice, readAgentsSlice, readProviders, readApps, settleAgentState]);
 
   // The selection-dependent read. The mount read already carries `selected`,
   // so a deep link costs nothing extra; a later selection that is not in the
@@ -794,7 +808,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       if (needsRef.current.apps) readApps();
     }, 400);
     const handleProvidersChanged = coalesce(() => {
-      if (needsRef.current.providers) getProviders().then(applyProviders).catch(() => {});
+      if (needsRef.current.providers) readProviders();
     }, 400);
     const handleConfigChanged = () => fetchData();
     socket.on('providers:changed', handleProvidersChanged);
@@ -827,7 +841,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       refreshQueue.cancel();
       refreshLearning.cancel();
     };
-  }, [socket, fetchData, fetchQueue, refreshLearningSummary, readAgentsSlice, readApps, applyProviders, setSpeakingFor, settleAgentState]);
+  }, [socket, fetchData, fetchQueue, refreshLearningSummary, readAgentsSlice, readApps, readProviders, setSpeakingFor, settleAgentState]);
 
   const handleStart = async () => {
     const result = await startCos({ silent: true }).catch(err => {
