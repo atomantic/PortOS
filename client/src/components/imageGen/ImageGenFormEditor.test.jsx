@@ -71,7 +71,7 @@ describe('ImageGenFormEditor submit guard', () => {
   });
 
   it.each([
-    [{ derived: { unsupportedLocalInputs: true }, loraTest: { pending: true } }, /Remove unsupported LoRAs/],
+    [{ derived: { unsupportedLocalInputs: true }, loraTest: { pending: true } }, /Clear unsupported LoRAs, input images, or negative prompts/],
     [{ derived: { loraHandoffBlocked: true }, loraTest: { pending: true } }, /Preparing this LoRA test/],
     [{ derived: { loraHandoffBlocked: true }, loraTest: { error: 'LoRA unavailable' } }, /LoRA unavailable/],
     [{ remix: { pending: true } }, /Restoring this image’s settings/],

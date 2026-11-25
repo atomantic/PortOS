@@ -302,7 +302,7 @@ export function useImageGenPageRuntime() {
       modelId: fields.modelId || undefined,
       width,
       height,
-      steps: fields.steps ? Number(fields.steps) : undefined,
+      ...(derived.currentModel?.samplerLocked !== true && fields.steps ? { steps: Number(fields.steps) } : {}),
       guidance: fields.guidance ? Number(fields.guidance) : undefined,
       seed: fields.seed && Number(fields.seed) >= 0 ? Number(fields.seed) : undefined,
       quantize: derived.currentModel?.runner === 'moss-swift' ? undefined : fields.quantize,
@@ -352,7 +352,8 @@ export function useImageGenPageRuntime() {
     };
   })();
   const modelInputPreview = useModelInputPreview(previewImagePrompt, previewBody, {
-    enabled: !form.remix.pending && !derived.cloudNeedsPrompt && !derived.editImageMissing && !derived.unsupportedCloudInputs,
+    enabled: !form.remix.pending && !derived.cloudNeedsPrompt && !derived.editImageMissing
+      && !derived.unsupportedCloudInputs && !derived.unsupportedLocalInputs && !derived.invalidLocalResolution,
   });
 
   const submitGenerationPayload = async () => {
@@ -422,7 +423,7 @@ export function useImageGenPageRuntime() {
   const handleGenerate = async (event) => {
     event?.preventDefault?.();
     if (form.cloudModelPicker.unavailable || form.remix.pending || derived.loraHandoffBlocked || derived.unsupportedLocalInputs) return;
-    if (derived.editImageMissing || derived.cloudNeedsPrompt || derived.unsupportedCloudInputs) return;
+    if (derived.editImageMissing || derived.cloudNeedsPrompt || derived.unsupportedCloudInputs || derived.invalidLocalResolution) return;
     if (derived.localBackendPending || (!remoteTargetActive && derived.notConnected)) return;
     if (remoteTargetActive) {
       if (derived.remoteUnsupportedInputs) {
