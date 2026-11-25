@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, NavLink } from 'react-router';
 
 const api = vi.hoisted(() => ({
   getRuns: vi.fn(),
@@ -213,6 +213,52 @@ describe('RunsTab ?run= deep link', () => {
 
     await act(async () => { resolveAll({ runs: RUNS, total: 999 }); });
     expect(screen.getByText('Showing the newest 1 of 5 runs')).toBeInTheDocument();
+  });
+
+  it('does not let a stale All response overwrite the total after All, CoS, All', async () => {
+    let resolveStale;
+    api.getRuns.mockResolvedValue({ runs: RUNS, total: 251 });
+    renderTab('/cos/runs');
+    expect(await screen.findByText('Showing the newest 2 of 251 runs')).toBeInTheDocument();
+
+    api.getRuns.mockImplementationOnce(() => new Promise((resolve) => { resolveStale = resolve; }));
+    await act(async () => { socket.fire('connect'); });
+    api.getRuns.mockResolvedValue({ runs: [RUNS[0]], total: 200 });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'CoS' })); });
+    api.getRuns.mockResolvedValue({ runs: RUNS, total: 251 });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'All' })); });
+    expect(await screen.findByText('Showing the newest 2 of 251 runs')).toBeInTheDocument();
+
+    await act(async () => { resolveStale({ runs: RUNS, total: 999 }); });
+    expect(screen.getByText('Showing the newest 2 of 251 runs')).toBeInTheDocument();
+  });
+
+  it('lowers the total after a confirmed delete', async () => {
+    api.getRuns.mockResolvedValue({ runs: RUNS, total: 3 });
+    api.deleteRun.mockResolvedValue({ success: true });
+    renderTab('/cos/runs');
+    expect(await screen.findByText('Showing the newest 2 of 3 runs')).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByTestId('delete-run-run-a')); });
+    expect(screen.getByText('Showing the newest 1 of 2 runs')).toBeInTheDocument();
+  });
+
+  it('reopens a listed run after navigating to another selection and back', async () => {
+    const view = render(
+      <MemoryRouter initialEntries={['/cos/runs?run=run-a']}>
+        <RunsTab />
+        <NavLink to="/cos/runs?run=run-b">go-b</NavLink>
+        <NavLink to="/cos/runs?run=run-a">go-a</NavLink>
+      </MemoryRouter>
+    );
+    await act(async () => {});
+    expect(await screen.findByText('full output for run-b')).toBeInTheDocument();
+    api.getRunPrompt.mockClear();
+    api.getRunOutput.mockClear();
+    api.getRunPrompt.mockResolvedValue('prompt b');
+    await act(async () => { fireEvent.click(screen.getByText('go-b')); });
+    await act(async () => { fireEvent.click(screen.getByText('go-a')); });
+    expect(screen.getByRole('button', { name: 'Collapse run details' })).toBeInTheDocument();
+    view.unmount();
   });
 
   it('shows a not-found notice for an unknown ?run= id', async () => {

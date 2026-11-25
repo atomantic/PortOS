@@ -49,18 +49,29 @@ export default function RunsTab() {
   // A deep-linked run outside the loaded page: { status: 'loading'|'ready'|'missing', run }.
   const [pinned, setPinned] = useState(null);
   // The totals are a side effect of the fetcher, which useListResource cannot
-  // drop with the rows: apply them only while their source filter is still current.
-  const sourceFilterRef = useRef(sourceFilter);
-  sourceFilterRef.current = sourceFilter;
+  // drop with the rows: only the newest read (and no read that predates a local
+  // delete, which also bumps totalGen) may write them.
+  const totalGen = useRef(0);
   const fetchRuns = useCallback(
-    () => getRuns(100, 0, sourceFilter, { silent: true }).then(data => {
-      if (sourceFilterRef.current === sourceFilter) {
+    () => {
+      const gen = ++totalGen.current;
+      return getRuns(100, 0, sourceFilter, { silent: true }).then(data => {
+      if (gen === totalGen.current) {
         setTotalRuns({ source: sourceFilter, total: Number.isFinite(data?.total) ? data.total : null });
       }
       return data?.runs || [];
-    }),
+      });
+    },
     [sourceFilter]
   );
+  // A confirmed local delete lowers the server total by `count`; null when the
+  // count is unknown for this source filter, which hides the note until a re-read.
+  const adjustTotal = (count) => {
+    totalGen.current += 1;
+    setTotalRuns(prev => (prev && count !== null && prev.total !== null
+      ? { ...prev, total: Math.max(0, prev.total - count) }
+      : null));
+  };
   const { items: runs, state: runsState, error: runsError, retry: loadRuns, setItems: setRuns } = useListResource(fetchRuns);
   const loading = runsState === 'loading';
 
@@ -140,6 +151,7 @@ export default function RunsTab() {
     const deleted = await deleteRun(id).catch(() => null);
     if (!deleted && deleted !== undefined) return;
     supersedeRefresh();
+    adjustTotal(1);
     setRuns(prev => prev.filter(run => run.id !== id));
     if (expandedId === id) setExpandedId(null);
     if (pinRef.current?.run?.id === id) dropPin();
@@ -254,6 +266,7 @@ export default function RunsTab() {
   // and the read in flight for the previous one.
   useEffect(() => () => {
     dropPin();
+    deepLinkOpened.current = null;
     pinTarget.current = null;
     pinFlight.current = false;
     pinPending.current = false;
@@ -340,9 +353,11 @@ export default function RunsTab() {
   const logProc = logModalRun ? runLogProcessName(logModalRun.source) : '';
 
   const handleClearFailed = async () => {
-    const ok = await deleteFailedRuns().then(() => true).catch(() => false);
-    if (ok) {
+    const result = await deleteFailedRuns().catch(() => null);
+    if (result !== null) {
       supersedeRefresh();
+      // deletedCount spans every source, so it only adjusts the unfiltered total.
+      adjustTotal(sourceFilter === 'all' && Number.isFinite(result?.deletedCount) ? result.deletedCount : null);
       setRuns(prev => prev.filter(r => r.success !== false));
       if (pinRef.current?.run?.success === false) dropPin();
       else if (pinRef.current?.status === 'loading') refreshPinned();
