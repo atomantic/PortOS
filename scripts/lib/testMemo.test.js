@@ -659,6 +659,13 @@ describe('git-fixture declaration', () => {
     ['git passed to a runner called without its directory', ['const run = (program, args, dir) => execFileSync(program, args, { cwd: dir });', "run('git', ['status']);"], /run\(\) is called without the directory/],
     ['git passed to a runner with a relative directory', ['const run = (program, args, dir) => execFileSync(program, args, { cwd: dir });', "run('git', ['status'], '.');"], /relative to the test process \(\.\)/],
     ['a git command line named through a constant', ['const scratch = mkdtempSync(tmpdir());', "const command = 'git status';", 'execSync(command, { cwd: scratch });'], /runs git through a command line/],
+    // git started by a shell the suite hands a command line, and by code it hands the checkout.
+    ['a git command line handed to a shell', ["execFileSync('sh', ['-c', 'git rev-parse HEAD']);"], /runs git through a command line/],
+    ['a git command line handed to a shell in a fixture directory', ['const scratch = mkdtempSync(tmpdir());', "execFileSync('sh', ['-c', 'cd nested && git log -1'], { cwd: scratch });"], /runs git through a command line/],
+    ['a git command line a shell is handed through a name', ["const script = 'echo $(git rev-parse HEAD)';", "execFileSync('bash', ['-c', script]);"], /runs git through a command line/],
+    ['the repository directory handed to imported code', ["import { commit } from './git.js';", 'const scratch = mkdtempSync(tmpdir());', "execFileSync('git', ['init'], { cwd: scratch });", "await commit(process.cwd(), 'example');"], /hands the repository directory server to code that may run git there/],
+    ['the repository directory handed on in an options object', ["import { checkReadiness } from './readiness.js';", 'const scratch = mkdtempSync(tmpdir());', "execFileSync('git', ['init'], { cwd: scratch });",
+      "const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');", 'await checkReadiness({ repoPath: ROOT });'], /hands the repository directory <repo root> to code that may run git there/],
     ['the home directory', ["import { homedir } from 'node:os';", "execFileSync('git', ['status'], { cwd: homedir() });"], /home directory/],
     ['a repository path among the arguments', ['const scratch = mkdtempSync(tmpdir());', "execFileSync('git', ['clone', process.cwd(), 'copy'], { cwd: scratch });"], /hands git a path in this repository/],
     ['a repository path in the environment', ['const scratch = mkdtempSync(tmpdir());', "execFileSync('git', ['status'], { cwd: scratch, env: { GIT_WORK_TREE: process.cwd() } });"], /hands git a path in this repository/],
@@ -715,6 +722,10 @@ describe('git-fixture declaration', () => {
       "  execFileSync(program, ['status'], { cwd: repo });",
       "  const run = (tool, args, dir) => execFileSync(tool, args, { cwd: dir });",
       "  run('git', ['status'], repo); run(process.execPath, ['-e', ''], repo);",
+      // Another program with no git in what it is handed, and a repository file (not a directory) handed on.
+      "  execFileSync('sh', ['-c', 'printf %s done'], { cwd: repo });",
+      "  execFileSync(process.execPath, [fileURLToPath(new URL('./a.js', import.meta.url))], { cwd: repo });",
+      "  execFileSync('git', ['commit', '-m', 'explain git status output'], { cwd: repo });",
       // A property that only shares a function's name is no use of that function.
       "  expect(facts.runGit).toBeUndefined();",
       "  execFileSync('git', ['commit', '--allow-empty', '-m', 'example'], { cwd: launch.cwd });",
