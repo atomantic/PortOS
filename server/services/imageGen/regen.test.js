@@ -176,6 +176,18 @@ describe('buildRegenParams', () => {
     });
     expect(params.prompt).toBe('a neon city');
     expect(params.negativePrompt).toBe('blurry');
+    // The carry is declared, so the UI chip, the preview and the sidecar name it (#18642).
+    expect(params.promptAdditions).toEqual([{ id: 'source-negative-prompt', label: "Source image's negative prompt", text: 'blurry' }]);
+  });
+
+  it('declares no addition without a typed prompt or without a source negative prompt', () => {
+    const withNegative = { prompt: 'x', negativePrompt: 'blurry', width: 64, height: 64 };
+    expect(buildRegenParams({ ...base, sourceMeta: withNegative })).not.toHaveProperty('promptAdditions');
+    expect(buildRegenParams({ ...base, promptOverride: '   ', sourceMeta: withNegative })).not.toHaveProperty('promptAdditions');
+    const noNegative = buildRegenParams({ ...base, promptOverride: 'typed words', sourceMeta: { width: 64, height: 64 } });
+    expect(noNegative).not.toHaveProperty('promptAdditions');
+    expect(noNegative.negativePrompt).toBe('');
+    expect(noNegative.prompt).toBe('typed words');
   });
 
   it('anchors regenOf at the root original when regenerating a cleaned variant', () => {

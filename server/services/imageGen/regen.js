@@ -24,6 +24,7 @@ import { usesDiffusersRunner } from '../../lib/runners.js';
 import { usesTorchVenv } from '../../lib/imageRuntimeRemedies.js';
 import { isFlux2VenvHealthy } from '../../lib/pythonSetup.js';
 import { IMAGE_GEN_MODE } from './modes.js';
+import { promptAddition } from '../../lib/modelInput.js';
 import { REGEN_STRENGTH_MIN, REGEN_STRENGTH_MAX } from '../../lib/imageGenCapabilities.js';
 
 export { REGEN_STRENGTH_MIN, REGEN_STRENGTH_MAX };
@@ -215,7 +216,8 @@ export async function readImageDimensions(absPath) {
 // Minimal-mutation default: NO prompt and NO negative prompt. A text prompt steers img2img toward described
 // content; an empty one makes the pass a near-pure VAE round-trip + `strength` worth of resample, overwriting the
 // SynthID signal with the LEAST visible change. A caller wanting a creative re-roll passes an explicit
-// `promptOverride` (the source's negative prompt is then carried along too).
+// `promptOverride` (the source's negative prompt is then carried along too, declared as a labeled
+// `promptAdditions` entry so the UI chip, the Show-full-prompt preview and the finished sidecar all name it).
 //
 // Render dimensions are clamped to a FLUX-sane megapixel budget; when that changes the dims, `upscaleTo` carries
 // the source's exact dimensions so `generateImage` resizes the result back up.
@@ -233,12 +235,15 @@ export function buildRegenParams({ filename, sourceAbsPath, sourceMeta = {}, sou
   const groupRoot = typeof sourceMeta.cleanedFrom === 'string' && sourceMeta.cleanedFrom
     ? sourceMeta.cleanedFrom
     : filename;
+  const carriedNegative = trimmedPrompt && typeof sourceMeta.negativePrompt === 'string' ? sourceMeta.negativePrompt : '';
+  const negativeAddition = promptAddition('source-negative-prompt', "Source image's negative prompt", carriedNegative);
   const params = {
     mode: IMAGE_GEN_MODE.LOCAL,
     pythonPath,
     modelId: model.id,
     prompt: trimmedPrompt,
-    negativePrompt: trimmedPrompt && typeof sourceMeta.negativePrompt === 'string' ? sourceMeta.negativePrompt : '',
+    negativePrompt: carriedNegative,
+    ...(negativeAddition ? { promptAdditions: [negativeAddition] } : {}),
     initImagePath: initPath,
     initImageStrength: strength,
     regenOf: groupRoot,
