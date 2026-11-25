@@ -25,6 +25,7 @@ import { getUniverse } from '../universeBuilder.js';
 import { resolveCharacterLoras } from '../characterLoraResolver.js';
 import { getSeries } from '../pipeline/series.js';
 import { getLoom } from './records.js';
+import { assertReactorNegativePromptSupported } from '../videoGen/negativePrompt.js';
 
 export const FABLELOOM_VISUAL_COMPILER_VERSION = '1.2.0';
 
@@ -358,6 +359,7 @@ export async function compileFableLoomVisualRequest({
   hashFile = sha256File, resolveAsset = resolveImageInputPath,
   now = () => new Date().toISOString(),
 }) {
+  if (kind === 'video') assertReactorNegativePromptSupported(capability.backend, authoredNegativePrompt);
   if (!tag?.loomId || !tag.episodeId || !tag.nodeId) return null;
   const loom = await loadLoom(tag.loomId);
   const episode = loom?.episodes?.find((item) => item.id === tag.episodeId);

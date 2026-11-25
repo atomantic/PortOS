@@ -368,7 +368,9 @@ function exactConditioningMismatches(recorded, current) {
       mismatches.push(`Recorded visual conditioning ${key} changed.`);
     }
   }
-  for (const key of ['compiledPrompt', 'compiledNegativePrompt']) {
+  // Older Reactor manifests listed automatic exclusions that never reached the model.
+  const reactorVideo = recordedCapability.kind === 'video' && recordedCapability.backend === VIDEO_GEN_MODE.REACTOR;
+  for (const key of reactorVideo ? ['compiledPrompt'] : ['compiledPrompt', 'compiledNegativePrompt']) {
     if (recorded[key] !== undefined && recorded[key] !== current[key]) {
       mismatches.push(`Recorded ${key} changed.`);
     }

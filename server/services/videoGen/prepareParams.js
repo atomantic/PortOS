@@ -57,6 +57,7 @@ import { isPerformanceScene } from '../../lib/musicVideo/musicVideoShotTiming.js
 import { getTrack } from '../tracks/index.js';
 import { CLOUD_VIDEO_GEN_MODES, VIDEO_GEN_MODE, resolveVideoMode } from './modes.js';
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
+import { assertReactorNegativePromptSupported } from './negativePrompt.js';
 import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
 import { resolveStoryboardGuidanceInputs, storyboardGuidanceRequestError } from './storyboardGuidance.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
@@ -368,6 +369,7 @@ export function resolveRequestedVideoBackend({ body, uploads, settings, localOnl
 export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys }) {
   const settings = await getSettings();
   const backend = resolveRequestedVideoBackend({ body, uploads, settings, localOnlyParamKeys });
+  assertReactorNegativePromptSupported(backend, body.negativePrompt);
   if (backend !== VIDEO_GEN_MODE.LOCAL && body.continuityStrategy != null) {
     await cleanupMultipartTemp(uploads);
     throw new ServerError('Explicit continuation strategy requires a local video backend.', {

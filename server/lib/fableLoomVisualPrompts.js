@@ -71,7 +71,7 @@ export function buildFableLoomVisualPrompts({
       : `Framing constraint: ${protagonistName}, the canonical protagonist, is speaking through the communicator off-screen. The camera is the remote witness: show the obstacle or environment the protagonist cannot see around a corner, beyond a bend, at a distance, or otherwise outside their sightline. The communicator stays on the protagonist's person and completely out of frame; never use a standalone comms device as the subject. Do not show their face, body, silhouette, or duplicate presence in this storyboard image.`
     : '';
   const authored = text(authoredBody) || text(kind === 'video' ? node.videoPrompt || node.prose : node.imagePrompt);
-  let blocks = [
+  const blocks = [
     block('universe-style', 'Universe style', universeStyle && `Universe style: ${universeStyle}`),
     block('environment', 'Environment', placePrompt),
     ...characterPrompts.map((value, index) => block(`character-${index + 1}`, `Character: ${bindings.boundCharacters[index].character.name}`, value)),
@@ -92,11 +92,10 @@ export function buildFableLoomVisualPrompts({
     block('shot-script', 'Shot length and script', kind === 'video' && node.shot && `Shot duration: ${node.shot.durationSeconds} seconds. Play only this shot's current script, preserving each named speaker's voice: ${node.prose}`),
     block('shot-continuity', 'Shot continuity', node.visualCanon?.shotNotes && `Shot continuity: ${node.visualCanon.shotNotes}`),
   ];
-  let separator = '\n\n';
   if (kind === 'video' && capability.backend === 'reactor') {
     if (!references.some((asset) => asset.role === 'storyboard-first-frame')) throw new ServerError('Review and approve the current storyboard reference before rendering with Reactor.', { status: 422, code: 'FABLELOOM_REACTOR_REFERENCE_REQUIRED' });
     const reactorAuthored = text(authoredBody) || text(node.videoPrompt);
-    blocks = [
+    const reactorBlocks = [
       block('reactor-animate', 'Animate the storyboard', 'Animate this reference as one continuous shot. Preserve its cast, room, props, lighting and screen direction. No subtitles, captions, speech balloons or text overlays. Dialogue is audio only.'),
       block('camera-framing', 'Camera framing', node.shot?.framing),
       reactorAuthored ? { authored: true, text: reactorAuthored } : null,
@@ -104,12 +103,12 @@ export function buildFableLoomVisualPrompts({
       block('shot-continuity', 'Shot continuity', node.visualCanon?.shotNotes),
       block('framing-constraint', 'Off-screen protagonist', bindings.protagonistPresence === 'offscreen' && `Keep ${protagonistName} off-screen.`),
     ];
-    separator = '\n';
-  }
-  const positive = joinBlocks(blocks, separator);
-  // The model's own limit: refused with the count, never cut (#11317).
-  if (kind === 'video' && capability.backend === 'reactor' && positive.length > REACTOR_MAX_PROMPT_LENGTH) {
-    throw new ServerError(`Reactor requires a complete shot prompt within ${REACTOR_MAX_PROMPT_LENGTH} characters (this one is ${positive.length}). Shorten the shot direction or split the dialogue; no render was queued.`, { status: 422, code: 'FABLELOOM_REACTOR_PROMPT_TOO_LONG' });
+    const prompt = joinBlocks(reactorBlocks, '\n');
+    // The model's own limit: refused with the count, never cut (#11317).
+    if (prompt.length > REACTOR_MAX_PROMPT_LENGTH) {
+      throw new ServerError(`Reactor requires a complete shot prompt within ${REACTOR_MAX_PROMPT_LENGTH} characters (this one is ${prompt.length}). Shorten the shot direction or split the dialogue; no render was queued.`, { status: 422, code: 'FABLELOOM_REACTOR_PROMPT_TOO_LONG' });
+    }
+    return { prompt, negativePrompt: '', promptAdditions: reactorBlocks.filter((item) => item && !item.authored) };
   }
   const identityAvoid = bindings.boundCharacters.flatMap(({ character }) => character.identityPack?.avoid || []);
   const addedAvoid = [
@@ -124,7 +123,7 @@ export function buildFableLoomVisualPrompts({
     const exclusions = mergeNegativePromptTokens(addedAvoid).join(', ');
     blocks.push(block('canon-avoid', 'Visual exclusions', `Avoid: ${exclusions}.`));
     return {
-      prompt: joinBlocks(blocks, separator),
+      prompt: joinBlocks(blocks, '\n\n'),
       negativePrompt: authoredNegativePrompt,
       promptAdditions: blocks.filter((item) => item && !item.authored),
     };
@@ -134,7 +133,7 @@ export function buildFableLoomVisualPrompts({
   // The authored negative leads the merge, so what follows it is what the compiler added.
   const avoid = merged.slice(mergeNegativePromptTokens([authoredNegativePrompt]).length).join(', ');
   return {
-    prompt: positive,
+    prompt: joinBlocks(blocks, '\n\n'),
     negativePrompt,
     promptAdditions: [...blocks.filter((item) => item && !item.authored), block('canon-avoid', 'Added to the negative prompt', avoid)].filter(Boolean),
   };

@@ -1180,13 +1180,13 @@ describe('videoGen routes', () => {
       const musicVideo = { projectId: 'mv-example', sceneId: 'scene-example' };
       const fableLoom = { loomId: 'loom-example', episodeId: 'ep-example', nodeId: 'node-example' };
       const r = await request(app).post('/api/video-gen/').send({
-        backend, prompt: 'a fox', negativePrompt: 'blur', sourceImageFile: 'frame.png',
+        backend, prompt: 'a fox', ...(backend === 'reactor' ? {} : { negativePrompt: 'blur' }), sourceImageFile: 'frame.png',
         musicVideo, fableLoom, ...input,
       });
       expect(r.status).toBe(200);
       expect(mediaJobQueue.enqueueJob.mock.calls[0][0]).toStrictEqual({
         kind: 'video', params: {
-          mode: backend, videoMode: 'image', prompt: 'a fox', negativePrompt: 'blur',
+          mode: backend, videoMode: 'image', prompt: 'a fox', negativePrompt: backend === 'reactor' ? '' : 'blur',
           sourceImagePath: '/mock/images/frame.png', uploadedTempPath: null,
           musicVideo, fableLoom,
           visualConditioning: {
@@ -1238,6 +1238,59 @@ describe('videoGen routes', () => {
       expect(unlink.mock.calls.filter(([path]) => path === durable)).toHaveLength(1);
       expect(unlink).toHaveBeenCalledWith('/tmp/hosted-frame.png');
       if (failureStage === 'conditioning') expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['an explicit backend', { backend: 'reactor' }],
+      ['the configured backend', {}],
+      ['a tagged FableLoom scene', { backend: 'reactor', fableLoom: { loomId: 'loom-example', episodeId: 'episode-example', nodeId: 'node-example' } }],
+    ])('refuses authored Reactor exclusions with %s before staging or queueing', async (_, fields) => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ ...settings, videoGen: { ...settings.videoGen, mode: 'reactor' } });
+      const source = { fieldname: 'sourceImage', path: '/tmp/hosted-frame.png', originalname: 'frame.png' };
+      setPendingUpload(source);
+      const response = await request(app).post('/api/video-gen/').send({
+        ...fields, prompt: 'a fox running', negativePrompt: '  fog  ',
+      });
+      expect(response.status).toBe(400);
+      expect(response.body).toMatchObject({
+        code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED', error: expect.stringMatching(/Reactor.*exclusions in the main prompt.*compatible video backend/),
+      });
+      expect(copyFile).not.toHaveBeenCalled();
+      expect(unlink).toHaveBeenCalledWith(source.path);
+      expect(compileFableLoomVisualRequest).not.toHaveBeenCalled();
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it.each([undefined, '', ' \t '])('submits and previews Reactor with a blank negative prompt (%j)', async (negativePrompt) => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce(settings).mockResolvedValueOnce(settings);
+      const body = { backend: 'reactor', prompt: '  a fox running  ', negativePrompt };
+      const response = await request(app).post('/api/video-gen/').send(body);
+      expect(response.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledTimes(1);
+      const [{ params }] = mediaJobQueue.enqueueJob.mock.calls[0];
+      expect(params.mode).toBe('reactor');
+      expect(params.negativePrompt).toBe('');
+
+      const preview = await request(app).post('/api/video-gen/prompt-preview').send(body);
+      expect(preview.status).toBe(200);
+      expect(preview.body).toMatchObject({ backend: 'reactor', sentPrompt: 'a fox running' });
+      expect(preview.body).not.toHaveProperty('sentNegativePrompt');
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses to preview an authored Reactor negative prompt', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce(settings);
+      const response = await request(app).post('/api/video-gen/prompt-preview').send({
+        backend: 'reactor', prompt: 'a fox running', negativePrompt: 'fog',
+      });
+      expect(response.status).toBe(400);
+      expect(response.body).toMatchObject({
+        code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED', error: expect.stringMatching(/Reactor.*exclusions in the main prompt/),
+      });
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 
     it('hands a successful hosted upload to the worker and discards it on conditioning downgrade', async () => {
