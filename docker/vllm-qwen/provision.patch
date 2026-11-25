@@ -29,9 +29,24 @@
  RUN set -e; SP=$(venv/bin/python -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' | tail -n1); \
 --- a/docker/prepare.sh
 +++ b/docker/prepare.sh
-@@ -32,7 +32,8 @@
+@@ -15,6 +15,11 @@ HF_REPO=${HF_REPO:-dbirks/Qwen3.8-27B-W4A16-AutoRound}
+ state() {  # prints the steps still to do
+ python - "$BASE" <<'EOF'
+ import json, os, sys
++from pathlib import Path
++
++sys.path.insert(0, "/app/docker/portos")
++from fast_checkpoint import ready as fast_ready
++
+ d = sys.argv[1].rstrip("/") + "/"
+ todo = []
+ # tokenizer.json belongs in this list: without it transformers builds an empty
+@@ -30,9 +35,10 @@ if "lm_head.weight_packed" not in idx: todo.append("lm_head")
+ if not any(k.endswith("embed_tokens.weight_packed") for k in idx): todo.append("embed")
+ if "mtp.layers.0.mlp.down_proj.weight_packed" not in idx: todo.append("mtp")
  if "mtp.draft_lm_head.weight_packed" not in idx or not os.path.exists(d + "mtp_draft_vocab_ids.pt"): todo.append("draft")
- if os.environ.get("FAST_VARIANT", "1") != "0" and not os.path.exists(d[:-1] + "-fast/model.safetensors.index.json"):
+-if os.environ.get("FAST_VARIANT", "1") != "0" and not os.path.exists(d[:-1] + "-fast/model.safetensors.index.json"):
++if os.environ.get("FAST_VARIANT", "1") != "0" and not fast_ready(Path(d[:-1] + "-fast")):
      todo.append("fast")
 -if os.environ.get("DFLASH2", "1") != "0" and not os.path.exists(os.path.dirname(d[:-1]) + "/Qwen3.8-27B-DFlash2-W4A16/model.safetensors"):
 +drafter = os.path.join(os.path.dirname(d[:-1]), "Qwen3.8-27B-DFlash2-W4A16")
@@ -39,7 +54,7 @@
      todo.append("dflash2")
  print(" ".join(todo))
  EOF
-@@ -41,7 +42,7 @@
+@@ -41,7 +47,7 @@ EOF
  TODO=$(state)
  if [ "$TODO" = "download" ]; then
    echo "== downloading $HF_REPO -> $BASE (~19.5 GB, resumable)"
@@ -48,9 +63,14 @@
    TODO=$(state)
  fi
  [ "$TODO" = "download" ] && { echo "prepare: download incomplete (shards missing after hf download)"; exit 1; }
-@@ -55,10 +56,9 @@
-     fast)    echo "== fetch_fast_variant.py (int4-GPTQ lm_head/MTP + own-output draft vocab, ~1 GB)"
-              python prepare/fetch_fast_variant.py "$BASE" "$BASE-fast" ;;
+@@ -52,13 +58,12 @@ for step in $TODO; do
+     mtp)     echo "== quant_mtp.py (int8 MTP module)";       python prepare/quant_mtp.py "$BASE" ;;
+     draft)   echo "== build_draft_vocab.py (40k draft head)"
+              python prepare/build_draft_vocab.py "$BASE" --ids prepare/draft_vocab_ids.json ;;
+-    fast)    echo "== fetch_fast_variant.py (int4-GPTQ lm_head/MTP + own-output draft vocab, ~1 GB)"
+-             python prepare/fetch_fast_variant.py "$BASE" "$BASE-fast" ;;
++    fast)    echo "== assembling the fast checkpoint (int4-GPTQ lm_head/MTP + own-output draft vocab, ~1 GB)"
++             python docker/portos/fast_checkpoint.py "$BASE" ;;
      dflash2) echo "== fetch_dflash2.py (W4A16 DFlash2 drafter for SPEC=dflash2, ~1 GB; optional)"
 -             python prepare/fetch_dflash2.py "$(dirname "$BASE")/Qwen3.8-27B-DFlash2-W4A16" \
 -               || echo "prepare: DFlash2 drafter not fetched (optional: SPEC=dflash2 unavailable; DFLASH2=0 silences this)" ;;

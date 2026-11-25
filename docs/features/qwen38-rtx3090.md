@@ -88,7 +88,10 @@ Before publishing the checkout, PortOS verifies its artifact manifest and applie
 its build and prepare patch. A Compose override binds the API to loopback and
 uses a local image tagged with the manifest's SHA-256 digest. PortOS then writes the settings below, builds
 the image, runs `prepare`, and starts the container. It reuses existing project
-directories with their packaging and operator overrides intact.
+directories with their packaging and operator overrides intact. If the selected
+fast checkpoint is incomplete, explicit Prepare restores missing shards from the
+prepared base and the pinned Hub snapshot. It verifies the selected weights before
+reporting success.
 
 It is idempotent: re-running skips whatever already landed, and `prepare`'s
 download resumes, so a cancelled run costs minutes rather than the 20 GB. An
@@ -134,7 +137,7 @@ The compose project and its 20 GB of weights belong on the Linux filesystem.
   git checkout --detach FETCH_HEAD
   test "$(git rev-parse HEAD)" = "$revision"
   mkdir docker/portos
-  cp "$recipe"/{manifest.sha256,provision.patch,install-apt.sh,cuda-packages.sha256,requirements.lock} docker/portos/
+  cp "$recipe"/{manifest.sha256,provision.patch,install-apt.sh,cuda-packages.sha256,requirements.lock,fast_checkpoint.py} docker/portos/
   test "$(head -n 1 docker/portos/manifest.sha256)" = "# HyperQwen $revision"
   (cd docker/portos && sha256sum --strict --check manifest.sha256)
   git apply --index docker/portos/provision.patch
@@ -170,8 +173,8 @@ weights on disk before it starts the server.
 
 #### Reviewing a provisioning update
 
-The PortOS manifest binds the source revision to the packaging patch and its
-three installation inputs. The patch selects the Linux amd64 CUDA 13.0.1 base
+The PortOS manifest binds the source revision to the packaging patch, its
+installation inputs, and the fast checkpoint repair script. The patch selects the Linux amd64 CUDA 13.0.1 base
 by digest. APT verifies the signed Noble, Noble Updates and Noble Security
 indexes from the 2026-08-27 Ubuntu snapshot and checks their recorded SHA-256
 digests. The NVIDIA compiler and development packages are downloaded by exact

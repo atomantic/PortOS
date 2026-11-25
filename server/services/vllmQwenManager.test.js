@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'fs';
+import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { createHash } from 'crypto';
 import { readFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -85,8 +85,10 @@ const dockerCalls = () => streaming.runStreamingCommand.mock.calls
 
 /** A run against a host with nothing cloned yet. */
 const stageFreshProject = () => project.inspectVllmQwenProject
-  .mockResolvedValueOnce(emptyProject)     // the provisioning step's own look
-  .mockResolvedValue(clonedProject);       // the re-read after the clone
+  .mockResolvedValueOnce(emptyProject)
+  .mockResolvedValueOnce(clonedProject)  // after the clone
+  .mockResolvedValueOnce(clonedProject)  // after populating .env
+  .mockResolvedValue(preparedProject);   // after Docker prepare
 
 const provision = async (lines = []) => provisionVllmQwenProject({
   emit: (line) => lines.push(line),
@@ -107,14 +109,15 @@ function repin(platform) {
 beforeEach(() => {
   restorePlatform = pinPlatform('linux');
   pathLookup.findCommandOnPath.mockImplementation((cmd) => (cmd === 'docker' || cmd === 'git' ? `/usr/bin/${cmd}` : null));
-  project.inspectVllmQwenProject.mockResolvedValue(preparedProject);
+  project.inspectVllmQwenProject.mockReset().mockResolvedValue(preparedProject);
   project.vllmStartBlockedReason.mockReturnValue(null);
   project.vllmProjectDirIsSettled.mockImplementation(() => Boolean(process.env.VLLM_QWEN_PROJECT_DIR));
   wsl.detectWslProjectDir.mockResolvedValue({ dir: WSL_DIR, distro: 'Ubuntu', home: '\\\\wsl.localhost\\Ubuntu\\home\\example' });
   files.tryReadFile.mockResolvedValue(null);
   providers.getAllProviders.mockResolvedValue({ activeProvider: null, providers: [] });
   streaming.runStreamingCommand.mockResolvedValue({ success: true });
-  buffered.bufferedSpawnOrThrow.mockResolvedValue({ stdout: `${VLLM_UPSTREAM_REVISION}\n` });
+  buffered.bufferedSpawnOrThrow.mockReset().mockResolvedValue({ stdout: `${VLLM_UPSTREAM_REVISION}\n` });
+  readFile.mockReset();
   sourceFiles.mkdtemp.mockResolvedValue(STAGING);
 });
 
@@ -246,7 +249,10 @@ describe('provisionVllmQwenProject', () => {
   });
 
   it('reuses an existing operator checkout without running Git', async () => {
-    project.inspectVllmQwenProject.mockResolvedValue(clonedProject);
+    project.inspectVllmQwenProject
+      .mockResolvedValueOnce(clonedProject)
+      .mockResolvedValueOnce(clonedProject)
+      .mockResolvedValue(preparedProject);
 
     expect(await provision()).toEqual({ success: true });
     expect(sourceFiles.mkdtemp).not.toHaveBeenCalled();
@@ -258,6 +264,83 @@ describe('provisionVllmQwenProject', () => {
       'compose build',
       'compose run --rm prepare',
     ]);
+  });
+
+
+  it.each([
+    ['missing shard', true, true],
+    ['unrestored shard', true, false],
+    ['healthy checkpoint', false, false],
+  ])('provisions an existing operator checkout with a %s', async (_layout, missing, restores) => {
+    const dir = mkdtempSync(join(tmpdir(), 'vllm-fast-provision-'));
+    const base = join(dir, 'models', 'Qwen3.8-27B-W4A16-AutoRound');
+    const fast = `${base}-fast`;
+    const envPath = join(dir, '.env');
+    const composePath = join(dir, 'compose.yaml');
+    const shard = 'model-00001-of-00007.safetensors';
+    const extra = 'model_extra_tensors.safetensors';
+    const settings = 'SPEC=off\nGPU_UTIL=0.9\n';
+    const compose = 'services: {}\n';
+    try {
+      const actual = await vi.importActual('../lib/vllmQwenProject.js');
+      const script = await readFile(new URL('../../docker/vllm-qwen/fast_checkpoint.py', import.meta.url), 'utf8');
+      project.inspectVllmQwenProject.mockImplementation(() => actual.inspectVllmQwenProject({
+        HOME: dir,
+        VLLM_QWEN_PROJECT_DIR: dir,
+      }));
+      writeFileSync(envPath, settings);
+      writeFileSync(composePath, compose);
+      files.tryReadFile.mockImplementation(async (path) => path === envPath ? readFileSync(path, 'utf8') : null);
+      files.atomicWrite.mockImplementation(async (path, contents) => writeFileSync(path, contents));
+
+      const header = Buffer.from(JSON.stringify({ weight: { dtype: 'U8', shape: [1], data_offsets: [0, 1] } }));
+      const length = Buffer.alloc(8);
+      length.writeBigUInt64LE(BigInt(header.length));
+      const tensor = Buffer.concat([length, header, Buffer.of(1)]);
+      for (const checkpoint of [base, fast]) {
+        mkdirSync(checkpoint, { recursive: true });
+        for (const name of ['config.json', 'tokenizer.json', 'tokenizer_config.json']) {
+          writeFileSync(join(checkpoint, name), '{}');
+        }
+        writeFileSync(join(checkpoint, 'mtp_draft_vocab_ids.pt'), 'vocab');
+      }
+      writeFileSync(join(base, shard), tensor);
+      writeFileSync(join(base, 'model.safetensors.index.json'), JSON.stringify({ weight_map: {
+        'lm_head.weight_packed': shard,
+        'model.embed_tokens.weight_packed': shard,
+        'mtp.layers.0.mlp.down_proj.weight_packed': shard,
+        'mtp.draft_lm_head.weight_packed': shard,
+      } }));
+      writeFileSync(join(fast, extra), tensor);
+      writeFileSync(join(fast, 'model.safetensors.index.json'), JSON.stringify({ weight_map: { shared: shard, fast: extra } }));
+      if (!missing) linkSync(join(base, shard), join(fast, shard));
+
+      const repair = ['compose', 'run', '--rm', '-T', '--entrypoint', '/app/venv/bin/python', 'prepare', '-c', script];
+      streaming.runStreamingCommand.mockImplementation(async (_cmd, args) => {
+        // The Docker double restores the shard only when explicit provision
+        // invokes the actual shipped script inside the existing prepare service.
+        if (restores && args.at(-1) === script) linkSync(join(base, shard), join(fast, shard));
+        return { success: true };
+      });
+
+      expect(await readVllmQwenSetupState()).toBe(missing ? 'empty' : 'ready');
+      const expectedReady = !missing || restores;
+      expect(await provision()).toEqual(expectedReady
+        ? { success: true }
+        : { success: false, error: expect.stringMatching(/selected fast checkpoint is still incomplete.*indexed shards/) });
+      expect(await readVllmQwenSetupState()).toBe(expectedReady ? 'ready' : 'empty');
+      expect(streaming.runStreamingCommand.mock.calls.map(([, args]) => args)).toEqual([
+        ['version', '--format', '{{.Server.Version}}'],
+        ...(missing ? [['compose', 'build'], ['compose', 'run', '--rm', '--env', 'FAST_VARIANT=0', 'prepare'], repair] : []),
+      ]);
+      expect(readFileSync(composePath, 'utf8')).toBe(compose);
+      expect(readFileSync(envPath, 'utf8')).toContain(settings);
+      expect(readFileSync(join(fast, extra))).toEqual(tensor);
+      expect(buffered.bufferedSpawnOrThrow).not.toHaveBeenCalled();
+    } finally {
+      files.atomicWrite.mockImplementation(async () => {});
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('writes the tool-parser line every time, and the WSL2 pair only on a WSL2 engine', async () => {
