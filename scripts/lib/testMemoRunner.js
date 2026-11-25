@@ -501,7 +501,8 @@ const GIT_CONFIG_SOURCES_LIMIT = 32;
  *   condition: which of them a fixture repository meets depends on where and
  *   how the suite makes it, so each one counts;
  * - the global ignore and attributes files, at their default place and
- *   wherever any of that configuration puts them;
+ *   wherever any of that configuration puts them, and the system-wide
+ *   attributes file, which no configuration names (`git var`, 2.42);
  * - every `GIT_*` environment variable.
  *
  * Only the digest leaves this function, so no setting or credential reaches
@@ -511,9 +512,11 @@ const GIT_CONFIG_SOURCES_LIMIT = 32;
  * Null, which the analyzer never keys (`TEST_MEMO_REQUIRED_TOOLS`), wherever
  * this cannot be established. A failed probe is never read as an empty
  * answer: git cannot be run or is too old to say where a setting came from
- * (`--show-origin`, 2.8); the configuration cannot be listed (malformed,
- * unreadable, a probe that timed out); a file it names cannot be placed or
- * read; the include chain does not end; or the directory the fixtures are
+ * (`--show-origin`, 2.8) or where its system-wide attributes are; the
+ * configuration cannot be listed (malformed, unreadable, a probe that timed
+ * out); a file it names cannot be placed (a path relative to each
+ * repository, git's own `%(prefix)` interpolation) or read; the include
+ * chain does not end; or the directory the fixtures are
  * made under is itself inside a repository, so git started in a fixture
  * directory that is no repository of its own would find that one, whose
  * state is in no key.
@@ -536,6 +539,11 @@ function gitToolIdentity({ env, run, scratch, read }) {
     try { return sha256Hex(read(file)); } catch (error) { return error?.code === 'ENOENT' || error?.code === 'ENOTDIR' ? 'absent' : null; }
   };
   const files = new Set([join(defaults, 'ignore'), join(defaults, 'attributes')]);
+  // Only git knows where its system-wide attributes file is; `GIT_ATTR_NOSYSTEM` is the one way it has none.
+  const systemAttributes = git(['var', 'GIT_ATTR_SYSTEM']);
+  const attributesPath = systemAttributes.error || systemAttributes.status !== 0 ? '' : String(systemAttributes.stdout).trim();
+  if (attributesPath !== '') files.add(attributesPath);
+  else if (systemAttributes.error || systemAttributes.status !== 1 || !env.GIT_ATTR_NOSYSTEM) return null;
   const sources = [[]];
   const listings = [];
   for (let at = 0; at < sources.length; at += 1) {
@@ -558,7 +566,8 @@ function gitToolIdentity({ env, run, scratch, read }) {
       // `~/` is the home directory. An include is otherwise read beside the file that names it; an
       // ignore or attributes file beside whichever repository reads the setting, which is no one place.
       const beside = include && fields[i].startsWith('file:') ? dirname(fields[i].slice('file:'.length)) : null;
-      const named = /^~[\\/]/.test(value) ? join(home, value.slice(2)) : isAbsolute(value) ? value : beside === null || value.startsWith('~') ? null : join(beside, value);
+      // `~user/` and git's own `%(prefix)/` are places this cannot name.
+      const named = /^~[\\/]/.test(value) ? join(home, value.slice(2)) : isAbsolute(value) ? value : beside === null || /^(?:~|%\()/.test(value) ? null : join(beside, value);
       if (named === null) return null;
       if (!include) files.add(named);
       else if (!sources.some(([, file]) => file === named)) sources.push(['--file', named]);

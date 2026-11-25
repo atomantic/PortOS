@@ -74,12 +74,13 @@ describe('git tool identity', () => {
    * A machine: `settings` is what git lists outside a repository (null: the listing fails), `included`
    * the conditional include targets by path (null: git cannot list that one), `files` what can be read.
    */
-  const machine = ({ settings = [['core.autocrlf', 'false', 'file:/etc/gitconfig'], ['user.name', 'Example']], included = {}, files = {}, unreadable = [], enclosing = 128, version = 'git version 2.50.1', env = { HOME } } = {}) => {
+  const machine = ({ settings = [['core.autocrlf', 'false', 'file:/etc/gitconfig'], ['user.name', 'Example']], included = {}, files = {}, unreadable = [], enclosing = 128, version = 'git version 2.50.1', systemAttributes = { status: 0, stdout: '/etc/gitattributes\n' }, env = { HOME } } = {}) => {
     const calls = [];
     const run = (program, args, options) => {
       calls.push({ program, args, options });
       if (args[0] === '--version') return version === null ? { status: 127, stdout: '', stderr: '' } : { status: 0, stdout: `${version}\n`, stderr: '' };
       if (args[0] === 'rev-parse') return { status: enclosing, stdout: enclosing === 0 ? '.git\n' : '', stderr: '' };
+      if (args[0] === 'var') return { stderr: '', stdout: '', ...systemAttributes };
       const listed = args[1] === '--file' ? included[args[2]] ?? null : settings;
       return listed === null ? { status: 128, stdout: '', stderr: 'fatal: bad config' } : { status: 0, stdout: listing(listed, `file:${args[1] === '--file' ? args[2] : GLOBAL}`), stderr: '' };
     };
@@ -103,7 +104,7 @@ describe('git tool identity', () => {
     expect(machine(secret).identity).toBe(identity);
     // Every probe runs where the fixtures are made, never in the checkout.
     expect(calls.every(({ program, options }) => program === 'git' && options.cwd === '/scratch')).toBe(true);
-    expect(calls.map(({ args }) => args.join(' '))).toEqual(['--version', 'rev-parse --git-dir', `config ${LIST}`]);
+    expect(calls.map(({ args }) => args.join(' '))).toEqual(['--version', 'rev-parse --git-dir', 'var GIT_ATTR_SYSTEM', `config ${LIST}`]);
   });
 
   it('moves with every setting a new repository inherits', () => {
@@ -113,6 +114,8 @@ describe('git tool identity', () => {
       'no configuration': machine({ settings: [] }),
       'default global ignore file': machine({ files: { [join(HOME, '.config', 'git', 'ignore')]: '*.log\n' } }),
       'configured ignore file': machine({ settings: [...base, ['core.excludesfile', '~/ignored']], files: { [join(HOME, 'ignored')]: 'dist/\n' } }),
+      'system-wide attributes file': machine({ files: { '/etc/gitattributes': '*.txt -diff\n' } }),
+      'system-wide attributes switched off': machine({ systemAttributes: { status: 1 }, env: { HOME, GIT_ATTR_NOSYSTEM: '1' } }),
       'configured attributes file': machine({ settings: [...base, ['core.attributesfile', '/etc/example-attributes']], files: { '/etc/example-attributes': '* text=auto\n' } }),
       // GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS settings are listed with the rest, from no file.
       'ignore file the environment names': machine({ settings: [...base, ['core.excludesfile', '/etc/example-ignore', 'command line:']], files: { '/etc/example-ignore': 'README.md\n' } }),
@@ -151,6 +154,9 @@ describe('git tool identity', () => {
     ['an ignore file is named relative to each repository', { settings: [...base, ['core.excludesfile', 'ignored']] }],
     ['an include is named relative to no file', { settings: [...base, ['includeif.gitdir:/work/.path', 'work.inc', 'command line:']] }],
     ['a path is in another home directory', { settings: [...base, ['core.attributesfile', '~other/attributes']] }],
+    ['an include is under git\'s own install prefix', { settings: [...base, ['includeif.gitdir:/work/.path', '%(prefix)/etc/example.inc']] }],
+    ['git cannot say where its system-wide attributes are', { systemAttributes: { status: 129 } }],
+    ['git has no system-wide attributes file and nothing switched it off', { systemAttributes: { status: 1 } }],
     ['the include chain does not end', { settings: [...base, ['includeif.gitdir:/work/.path', '/etc/example.inc']],
       included: new Proxy({}, { has: () => true, get: (_, path) => [['includeif.gitdir:/work/.path', `${String(path)}x`]] }) }],
   ])('is unresolved when %s', (_label, state) => {

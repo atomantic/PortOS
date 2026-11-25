@@ -23,7 +23,7 @@ verdict depends on, and where the key holds it:
 | --- | --- |
 | The suite, the modules it loads, the files they name, installed packages | the `file` and `pkg` lines every key has |
 | The git binary | `tool git`: the first line of `git --version` |
-| What every repository on the machine inherits: the configuration git reads outside any repository (the system and global files and what `GIT_CONFIG_COUNT`/`GIT_CONFIG_PARAMETERS` supply, includes followed), every file a conditional include names, the global ignore and attributes files, every `GIT_*` environment variable | a digest in the same `tool git` line (`gitToolIdentity` in `scripts/lib/testMemoRunner.js`; only the digest leaves the function) |
+| What every repository on the machine inherits: the configuration git reads outside any repository (the system and global files and what `GIT_CONFIG_COUNT`/`GIT_CONFIG_PARAMETERS` supply, includes followed), every file a conditional include names, the global ignore and attributes files and the system-wide attributes file, every `GIT_*` environment variable | a digest in the same `tool git` line (`gitToolIdentity` in `scripts/lib/testMemoRunner.js`; only the digest leaves the function) |
 | Node, platform, arch, `TEST_MEMO_ENV` | the environment lines every key has |
 
 Repository state is not in that list because the declaration says there is
@@ -36,11 +36,12 @@ machine's, as its shell and the rest of its userland are to every key.
 Where the runner cannot stand behind the identity, the tool has no version
 and nothing is keyed (`TEST_MEMO_REQUIRED_TOOLS`: a required tool is never
 keyed as `absent`). A failed probe is never read as an empty answer: git
-cannot be run or is too old to say where a setting came from
-(`--show-origin`, 2.8); the configuration cannot be listed (malformed,
-unreadable, timed out); a file it names cannot be placed or read (an ignore
-file named relative to each repository, for one); the include chain does not
-end; or the temp directory is itself inside a repository, so git started in
+cannot be run, or is too old to say where a setting came from
+(`--show-origin`, 2.8) or where its system-wide attributes are (`git var`,
+2.42); the configuration cannot be listed (malformed, unreadable, timed
+out); a file it names cannot be placed or read (an ignore file named
+relative to each repository, a path under git's own `%(prefix)`); the
+include chain does not end; or the temp directory is itself inside a repository, so git started in
 a fixture directory that is no repository of its own would find that one.
 
 The marker is honored for the test file only. A `scripts/` module that
@@ -56,8 +57,9 @@ contradicts it (`scripts/lib/testMemo/gitFixture.js`):
   no spread can replace, and no leading `-C <dir>` in a literal argument
   array. Without one git runs where the test process does, inside the
   checkout;
-- a relative literal that can become that directory (the test process runs
-  inside the checkout): written in place, assigned to a name the directory
+- a relative literal, or a spelled `null`/`undefined`, that can become that
+  directory (git then runs where the test process does, inside the
+  checkout): written in place, assigned to a name the directory
   is read from, passed by a caller as the parameter it is read from, or the
   first segment of a `join()`/`resolve()` there. The repository's own
   `execGit(args, dir)` is read the same way, and a call of it with no

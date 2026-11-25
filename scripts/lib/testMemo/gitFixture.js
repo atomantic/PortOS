@@ -16,8 +16,8 @@
  *   (one a spread cannot replace) and no leading `-C <dir>` in a literal
  *   argument array. Without one, git runs where the test process does,
  *   inside this checkout;
- * - a relative literal that can become that directory, for the same reason:
- *   written in place, assigned to a name the directory is read from, passed
+ * - a relative literal, or a spelled `null`/`undefined`, that can become
+ *   that directory, for the same reason: written in place, assigned to a name the directory is read from, passed
  *   by a caller as the parameter it is read from, or the first segment of a
  *   `join()`/`resolve()` there;
  * - a repository or home path anywhere a git process can take it from:
@@ -184,6 +184,7 @@ function rangeProblem(w, arr, m, from, to) {
 }
 
 const NO_DIRECTORY = 'starts git without naming the directory it runs in (a `cwd` option or a leading `-C`)';
+const NULLISH_DIRECTORY = 'gives git a nullish directory, which runs it where the test process is';
 const relativeReason = (text) => `runs git in a directory relative to the test process (${text || 'an empty path'})`;
 
 /**
@@ -193,8 +194,10 @@ const relativeReason = (text) => `runs git in a directory relative to the test p
  * absolute. Read are the literals the expression can evaluate to on its own
  * (`'.'`, `dir || 'fixtures'`), the first segment of a `join()` or
  * `resolve()` (later segments only extend it), and each name it can take its
- * value from (`directoryNameProblem`). A call's result, a property and
- * anything else the source does not spell stay on the declaration's word.
+ * value from (`directoryNameProblem`). A spelled `null`, `undefined` or
+ * `void` is no directory either: Node then starts git where the process is.
+ * A call's result, a property and anything else the source does not spell
+ * stay on the declaration's word.
  */
 function directoryProblem(w, arr, m, from, to) {
   const whole = evaluate(arr, m, from, w.ctx);
@@ -217,6 +220,7 @@ function directoryProblem(w, arr, m, from, to) {
       if (problem !== null) return problem;
       i = m[i];
     } else if (token.t === 'id' && !isPunct(arr[i - 1], '.', '?.') && !isPunct(arr[i + 1], '(', '.', '?.', '[')) {
+      if (isWord(token, 'null', 'undefined', 'void')) return NULLISH_DIRECTORY;
       const problem = directoryNameProblem(w, token);
       if (problem !== null) return problem;
     }
