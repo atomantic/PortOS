@@ -25,7 +25,7 @@
  */
 
 import { performanceCapability } from '../../lib/musicVideo/musicVideoShotTiming.js';
-import { normalizeMusicVideoProductionPolicy } from '../../lib/musicVideo/musicVideoMediumPlan.js';
+import { musicVideoGenerationAllowance } from '../../lib/musicVideo/musicVideoMediumPlan.js';
 import { deliveryNotesWithin } from '../../lib/lyricMarkers.js';
 import { singerWithin } from '../../lib/musicVideo/musicVideoLyricAnchors.js';
 import { snapSectionsToGrid } from './audioAnalysis.js';
@@ -289,12 +289,14 @@ const codeIntent = (shot) => (shot.visualIntent || shot.lyricText || shot.sectio
  * video allowed, every footage shot becomes a code shot with a short intent
  * (no generation prose); with generated video allowed, footage shots stay
  * footage and carry `codeOverlay` so the composition layers code over them.
- * Cards and stills are left alone.
+ * "Allowed" is the shared resolver's answer (media mode, brief tools and the
+ * allowance together), so a footage shot is never planned for a clip dispatch
+ * will refuse. Cards and stills are left alone.
  */
 function applyCodePolicy(shots, project) {
-  const policy = normalizeMusicVideoProductionPolicy(project.productionPolicy);
-  if (policy.strategy !== 'code-first') return shots;
-  const codeOnly = policy.maxGeneratedVideoPercent <= 0;
+  const allowance = musicVideoGenerationAllowance(project);
+  if (allowance.strategy !== 'code-first') return shots;
+  const codeOnly = !allowance.video;
   return shots.map((shot) => {
     if ((shot.visualLayer ?? 'footage') !== 'footage') return shot;
     if (!codeOnly) return { ...shot, codeOverlay: true };

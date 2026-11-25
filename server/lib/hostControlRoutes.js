@@ -67,7 +67,6 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   // to the gated installers (#8798).
   'GET /api/browser/update-preflight',
   'GET /api/browser/pages',
-  'GET /api/browser/downloads',
   'GET /api/browser/downloads/:name',
   'GET /api/browser/logs',
   'GET /api/harnesses/update-reference',

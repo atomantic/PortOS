@@ -330,7 +330,7 @@ export default function SceneCard({
                   scene={scene} project={project} layer={layer} codeShot={codeShot} fromSheet={fromSheet} loops={loops}
                   sourceWindow={sourceWindow} renderPlan={renderPlan}
                   position={position} composition={composition} actions={actions} fieldId={fieldId}
-                  applyPatch={applyPatch} applySaved={applySaved} markDirty={markDirty} saveIfDirty={saveIfDirty}
+                  applyPatch={applyPatch} applySaved={applySaved} markDirty={markDirty} saveIfDirty={saveIfDirty} saveShot={saveShot}
                   moveStart={moveStart} moveEnd={moveEnd}
                   setSpeakerDirty={setSpeakerDirty} setSpeakerSaving={setSpeakerSaving}
                 /></Suspense>

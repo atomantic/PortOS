@@ -7,6 +7,7 @@ import { MemoryRouter } from 'react-router';
 
 vi.mock('../services/apiLocalLlm.js', () => ({
   getLocalLlmStatus: vi.fn(),
+  getLocalRuntimeModels: vi.fn(),
   getLocalLlmCatalog: vi.fn(),
   getLoadedLlmModels: vi.fn(),
   streamLocalLlmTest: vi.fn(),
@@ -22,7 +23,9 @@ import {
   getLoadedLlmModels,
   getLocalLlmCatalog,
   getLocalLlmStatus,
+  getLocalRuntimeModels,
   streamLocalLlmTest,
+  compareLocalLlmModels,
 } from '../services/apiLocalLlm.js';
 
 const renderPlayground = (entry = '/local-llm/playground?backend=ollama&model=command-r-plus%3A104b') => render(
@@ -58,6 +61,7 @@ beforeEach(() => {
     lmstudio: { models: [] },
   });
   getLoadedLlmModels.mockResolvedValue({ ollama: [] });
+  getLocalRuntimeModels.mockResolvedValue({ runtimes: [] });
   getLocalLlmCatalog.mockResolvedValue({
     backend: 'ollama',
     models: [
@@ -311,4 +315,119 @@ it('reconciles loaded models on events, reconnect and tab show without polling',
     visibility.mockRestore();
     vi.useRealTimers();
   }
+});
+
+describe('LocalLlmPlayground endpoint runtimes', () => {
+  const runtimes = [
+    { id: 'llama', label: 'llama.cpp', models: [{ id: 'dflash' }], offline: false, error: null },
+    { id: 'mtplx', label: 'MTPLX', models: [{ id: 'mlx-community/qwen' }], offline: false, error: null },
+    { id: 'splash', label: 'Splash', models: [], offline: true, error: 'not reachable at http://127.0.0.1:1/v1 (refused)' },
+  ];
+
+  it('groups a running runtime under its response label, sends its backend id and links stopped runtimes to the Runtimes page', async () => {
+    getLocalRuntimeModels.mockResolvedValue({ runtimes });
+    streamLocalLlmTest.mockResolvedValue({ backend: 'llama', modelId: 'dflash', text: 'hi', timings: {} });
+    renderPlayground();
+
+    expect((await screen.findAllByText('dflash')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('llama.cpp').length).toBeGreaterThan(0);
+    const offline = screen.getByTestId('local-llm-offline-runtimes');
+    expect(offline.textContent).toContain('Splash');
+    expect(offline.textContent).toContain('not running');
+    expect(offline.querySelector('a')).toHaveAttribute('href', '/models/llms-runtimes');
+
+    // Select dflash, deselect the URL-selected Ollama model, and run a chat.
+    fireEvent.click(screen.getAllByText('dflash')[0]);
+    fireEvent.click(screen.getAllByText('command-r-plus:104b')[0]);
+    fireEvent.click(screen.getByText('Run chat'));
+    await waitFor(() => expect(streamLocalLlmTest).toHaveBeenCalled());
+    expect(streamLocalLlmTest.mock.calls[0][0]).toMatchObject({ backend: 'llama', modelId: 'dflash' });
+  });
+
+  it('keeps a ?targets= runtime target through the stale-selection prune and compares it', async () => {
+    getLocalRuntimeModels.mockResolvedValue({ runtimes });
+    const targets = encodeURIComponent(JSON.stringify([{ backend: 'mtplx', modelId: 'mlx-community/qwen' }]));
+    compareLocalLlmModels.mockResolvedValue({ mode: 'round-robin', prompt: 'p', results: [] });
+    renderPlayground(`/local-llm/playground?mode=compare&targets=${targets}`);
+
+    await screen.findAllByText('mlx-community/qwen');
+    fireEvent.click(screen.getByText('Run comparison'));
+    await waitFor(() => expect(compareLocalLlmModels).toHaveBeenCalled());
+    expect(compareLocalLlmModels.mock.calls[0][0].targets).toEqual([{ backend: 'mtplx', modelId: 'mlx-community/qwen' }]);
+  });
+
+  it('names a listing error and an empty catalog instead of calling every runtime stopped', async () => {
+    getLocalRuntimeModels.mockResolvedValue({ runtimes: [
+      { id: 'vllm', label: 'vLLM', models: [], offline: true, error: 'HTTP 401 from the model listing' },
+      { id: 'sglang', label: 'SGLang', models: [], offline: false, error: null },
+    ] });
+    renderPlayground();
+    const panel = await screen.findByTestId('local-llm-offline-runtimes');
+    expect(panel.textContent).toContain('(HTTP 401 from the model listing)');
+    expect(panel.textContent).toContain('SGLang');
+    expect(panel.textContent).toContain('serves no models');
+  });
+
+  it('keeps a runtime target selected when the runtime listing request fails', async () => {
+    getLocalRuntimeModels.mockRejectedValue(new Error('boom'));
+    const targets = encodeURIComponent(JSON.stringify([{ backend: 'llama', modelId: 'dflash' }]));
+    streamLocalLlmTest.mockResolvedValue({ backend: 'llama', modelId: 'dflash', text: 'x', timings: {} });
+    renderPlayground(`/local-llm/playground?targets=${targets}`);
+    await screen.findByText(/could not be listed: boom/);
+    fireEvent.click(screen.getByText('Run chat'));
+    await waitFor(() => expect(streamLocalLlmTest).toHaveBeenCalled());
+    expect(streamLocalLlmTest.mock.calls[0][0]).toMatchObject({ backend: 'llama', modelId: 'dflash' });
+  });
+
+  it('keeps a selected runtime target whose own listing errored', async () => {
+    getLocalRuntimeModels.mockResolvedValue({ runtimes: [
+      { id: 'vllm', label: 'vLLM', models: [], offline: true, error: 'HTTP 401 from the model listing' },
+      { id: 'llama', label: 'llama.cpp', models: [{ id: 'dflash' }], offline: false, error: null },
+    ] });
+    streamLocalLlmTest.mockResolvedValue({ backend: 'vllm', modelId: 'm', text: 'x', timings: {} });
+    const targets = encodeURIComponent(JSON.stringify([{ backend: 'vllm', modelId: 'm' }]));
+    renderPlayground(`/local-llm/playground?targets=${targets}`);
+    await screen.findByTestId('local-llm-offline-runtimes');
+    fireEvent.click(screen.getByText('Run chat'));
+    await waitFor(() => expect(streamLocalLlmTest).toHaveBeenCalled());
+    expect(streamLocalLlmTest.mock.calls[0][0]).toMatchObject({ backend: 'vllm', modelId: 'm' });
+  });
+
+  it('lets the user remove a retained unavailable target and run a listed model instead', async () => {
+    getLocalRuntimeModels.mockResolvedValue({ runtimes: [
+      { id: 'vllm', label: 'vLLM', models: [], offline: true, error: 'HTTP 401 from the model listing' },
+      { id: 'llama', label: 'llama.cpp', models: [{ id: 'dflash' }], offline: false, error: null },
+    ] });
+    streamLocalLlmTest.mockResolvedValue({ backend: 'llama', modelId: 'dflash', text: 'x', timings: {} });
+    const targets = encodeURIComponent(JSON.stringify([{ backend: 'vllm', modelId: 'm' }]));
+    renderPlayground(`/local-llm/playground?targets=${targets}`);
+    const row = await screen.findByTestId('local-llm-unavailable-selected');
+    fireEvent.click(screen.getAllByText('dflash')[0]);
+    fireEvent.click(row.querySelector('button'));
+    fireEvent.click(screen.getByText('Run chat'));
+    await waitFor(() => expect(streamLocalLlmTest).toHaveBeenCalled());
+    expect(streamLocalLlmTest.mock.calls[0][0]).toMatchObject({ backend: 'llama', modelId: 'dflash' });
+  });
+
+  it('renders Ollama models while the runtime listing is still pending', async () => {
+    getLocalRuntimeModels.mockReturnValue(new Promise(() => {}));
+    renderPlayground();
+    await waitFor(() => expect(screen.getAllByText('command-r-plus:104b').length).toBeGreaterThan(0));
+  });
+
+  it('renders runtime models and names the error when the managed status request fails', async () => {
+    getLocalLlmStatus.mockRejectedValue(new Error('status down'));
+    getLocalRuntimeModels.mockResolvedValue({ runtimes });
+    renderPlayground();
+    expect((await screen.findAllByText('dflash')).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Ollama and LM Studio could not be listed: status down/)).toBeTruthy();
+  });
+
+  it('still lists Ollama models when the runtime listing fails', async () => {
+    getLocalRuntimeModels.mockRejectedValue(new Error('boom'));
+    renderPlayground();
+    await waitFor(() => expect(screen.getAllByText('command-r-plus:104b').length).toBeGreaterThan(0));
+    expect(screen.queryByTestId('local-llm-offline-runtimes')).toBeNull();
+    expect(screen.getByText(/could not be listed: boom/)).toBeTruthy();
+  });
 });

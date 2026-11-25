@@ -25,23 +25,17 @@ import { verifyImageNow } from '../services/apiImageVerifier';
 import { normalizeImage, normalizeMediaRow, normalizeVideo } from '../components/media/normalize';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
+import { useMediaDelete } from '../hooks/useMediaDelete';
 import { useMediaHideToggle } from '../hooks/useMediaHideToggle';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import useHydratedPreviewRoute from '../hooks/useHydratedPreviewRoute';
 import { useGalleryPage } from '../hooks/useGalleryPage';
-import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
 import socket from '../services/socket';
 import useMounted from '../hooks/useMounted';
-import usePendingDeletePeerNames from '../hooks/usePendingDeletePeerNames';
-import { refreshMediaUsages } from '../hooks/useMediaUsages';
 import { getMediaJob } from '../services/apiMediaJobs';
 import {
-  deleteVideoHistoryItem,
-  cancelVideoPendingDelete,
-  cancelImagePendingDelete,
   stitchVideos,
   makeVideoVertical,
-  deleteImage,
 } from '../services/apiImageVideo.js';
 
 const FILTERS = [
@@ -218,59 +212,26 @@ export default function MediaHistory() {
     }
   };
 
-  const { peerNames, rememberPeerName } = usePendingDeletePeerNames(items);
+  const removeFromPage = useCallback((item) => {
+    setItems((all) => all.filter((entry) => entry.key !== item.key));
+    page.setTotal(total => Math.max(0, total - 1));
+    refresh();
+  }, [setItems, page.setTotal, refresh]);
 
-  const withPendingDelete = useCallback((key, pendingDelete) => setItems((all) => all.map((x) => {
-    if (x.key !== key) return x;
-    const { pendingDelete: _previous, ...raw } = x.raw;
-    return { ...x, pendingDelete, raw: pendingDelete ? { ...raw, pendingDelete } : raw };
-  })), [setItems]);
-
-  const handleDelete = useCallback(async (item, { force = false } = {}) => {
-    try {
-      const result = await (item.kind === 'image'
-        ? deleteImage(item.filename, { silent: true, force })
-        : deleteVideoHistoryItem(item.id, { silent: true, force }));
-      void refreshMediaUsages();
-      const outcome = mediaDeleteOutcome(result, item.kind);
-      // A delete that waits on, or did not reach, this machine's copy keeps the row.
-      if (!outcome.remove) {
-        const peerId = outcome.pendingDelete?.peerId;
-        rememberPeerName(peerId, result.peerName);
-        withPendingDelete(item.key, outcome.pendingDelete);
-        toast(outcome.notice);
-        return;
-      }
-      setItems((all) => all.filter((x) => x.key !== item.key));
-      page.setTotal(total => Math.max(0, total - 1));
-      refresh();
-      if (outcome.tone === 'info') toast(outcome.notice);
-    } catch (err) {
-      // Used since this page loaded: refresh so the card lists where.
-      if (err.code === 'MEDIA_IN_USE') void refreshMediaUsages();
-      toast.error(err.message || 'Delete failed');
-    }
-  }, [setItems, withPendingDelete, rememberPeerName, page.setTotal, refresh]);
+  const { deleteItem: handleDelete, cancelPendingDelete, pendingPeerNames } = useMediaDelete({
+    rows: items,
+    onPending: useCallback((item, pendingDelete) => setItems((all) => all.map((entry) => {
+      if (entry.key !== item.key) return entry;
+      const { pendingDelete: _previous, ...raw } = entry.raw;
+      return { ...entry, pendingDelete, raw: pendingDelete ? { ...raw, pendingDelete } : raw };
+    })), [setItems]),
+    onRemoved: removeFromPage,
+  });
 
   // This page lists visible items only, so a hidden one leaves the list.
   const handleToggleHidden = useMediaHideToggle(useCallback((item, hidden) => {
-    if (!hidden) return;
-    setItems((all) => all.filter((x) => x.key !== item.key));
-    page.setTotal(total => Math.max(0, total - 1));
-    refresh();
-  }, [setItems, page.setTotal, refresh]));
-
-  const handleCancelPendingDelete = useCallback(async (item) => {
-    try {
-      await (item.kind === 'image'
-        ? cancelImagePendingDelete(item.filename, { silent: true })
-        : cancelVideoPendingDelete(item.id, { silent: true }));
-      withPendingDelete(item.key, null);
-      toast.success('Pending delete cancelled');
-    } catch (err) {
-      toast.error(err.message || 'Cancel failed');
-    }
-  }, [withPendingDelete]);
+    if (hidden) removeFromPage(item);
+  }, [removeFromPage]));
 
   const handlePromptSaved = useCallback((item, prompt) => {
     setItems((all) => all.map((current) => current.key === item.key ? { ...current, prompt } : current));
@@ -509,9 +470,9 @@ export default function MediaHistory() {
                   onUpscale={!selectionActive && it.kind === 'video' ? handleUpscale : undefined}
                   onMakeVertical={!selectionActive && it.kind === 'video' ? handleMakeVertical : undefined}
                   onDelete={!selectionActive ? handleDelete : undefined}
-                  onCancelPendingDelete={!selectionActive ? handleCancelPendingDelete : undefined}
+                  onCancelPendingDelete={!selectionActive ? cancelPendingDelete : undefined}
                   onToggleHidden={!selectionActive ? handleToggleHidden : undefined}
-                  pendingPeerName={it.pendingDelete?.peerId ? peerNames[it.pendingDelete.peerId] : null}
+                  pendingPeerName={it.pendingDelete?.peerId ? pendingPeerNames[it.pendingDelete.peerId] : null}
                   selectionLabel={selectionLabel}
                   selected={isSelected}
                   disabled={(stitchMode && it.kind !== 'video') || (verifyMode && it.kind !== 'image')}

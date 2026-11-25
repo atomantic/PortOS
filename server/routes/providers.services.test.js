@@ -33,7 +33,6 @@ const store = {
   deleteConnection: vi.fn(),
   mergeServiceInstances: vi.fn().mockResolvedValue(undefined),
   saveConnectionSettings: vi.fn().mockResolvedValue(2),
-  saveBindingSettings: vi.fn().mockResolvedValue(2),
 };
 vi.mock('../services/provider/providerGraphStore.js', () => store);
 
@@ -457,22 +456,5 @@ describe('managed MTPLX before a derived-preset catalog refresh', () => {
     expect(res.status).toBe(200);
     expect(mtplxManager.ensureMtplxRunning).not.toHaveBeenCalled();
     expect(probe).toHaveBeenCalled();
-  });
-});
-
-describe('slug and UUID address one row on both surfaces', () => {
-  it('lets the older connection routes take a slug', async () => {
-    const res = await request(app()).patch('/api/providers/connections/nvidia-nim')
-      .send({ expectedRevision: 1, label: 'Renamed' });
-    expect(res.status).toBe(200);
-    expect(res.body.connectionId).toBe(NIM_FREE);
-    expect(store.saveConnectionSettings).toHaveBeenCalledWith(expect.objectContaining({ id: NIM_FREE, label: 'Renamed' }));
-  });
-
-  it('publishes the instance columns on the management graph too', async () => {
-    const res = await request(app()).get('/api/providers/management');
-    const zen = res.body.connections.find((connection) => connection.id === ZEN_FREE);
-    expect(zen).toMatchObject({ slug: 'opencode-zen', definitionId: 'opencode-zen', plan: 'free', enabled: true, credentialVia: 'stored', hasCredentials: true });
-    expect(res.body.connections.find((connection) => connection.id === BOOTSTRAP).hasCredentials).toBe(false);
   });
 });

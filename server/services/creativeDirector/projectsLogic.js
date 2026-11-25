@@ -558,7 +558,7 @@ export function applyPlan(project, planInput) {
           || Number(params.chunks || 1) !== 1 || Number(params.batchSize || 1) !== 1) {
         throw new ServerError('Each Video plan step must render one clip with durationSeconds between 1 and 10.', { status: 400, code: 'VIDEO_PLAN_CLIP_BOUNDS' });
       }
-      validateVideoShot(project, { sceneId: step.stepId, prompt: String(params.prompt || ''), durationSeconds: params.durationSeconds }, false);
+      validateVideoShot(project, { sceneId: step.stepId, prompt: String(params.prompt || ''), negativePrompt: params.negativePrompt, durationSeconds: params.durationSeconds }, false);
     }
   }
   const prevSteps = Array.isArray(project.plan?.steps) ? project.plan.steps : [];

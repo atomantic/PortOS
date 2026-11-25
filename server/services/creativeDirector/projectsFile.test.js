@@ -8,7 +8,7 @@ vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => '
  * seeding on insert, `maybeJournalBeforeOverwrite` archiving the losing local
  * version on a true 3-way divergence, soft-delete tombstone, prune eviction)
  * without touching real `data/` or needing Postgres. The Postgres backend shares
- * the same `mergeProjectRecord` decision, so its round-trip in projectsDB.test.js
+ * the same `mergeProjectRecord` decision, so its round-trip in projectsDB.db.test.js
  * doesn't need to re-pin these.
  */
 

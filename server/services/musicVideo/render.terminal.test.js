@@ -910,7 +910,9 @@ describe('a song change during a footage render (#15154)', () => {
 describe('unsettled finalization recovery', () => {
   it('persists a bounded finalization error while releasing the render slot', async () => {
     const pid = 'finalize-failure';
-    retainedBlockers = [{ kind: 'music-video', resource: pid, unsettled: true }];
+    // The publication boundary's own row for the lease that threw (backupSnapshotBoundary.js). The fake
+    // child used to emit `close` outside the render's async context, which hid this row from the suite.
+    retainedBlockers = [{ kind: 'settlement', resource: 'Output publication', unsettled: true }];
     prime(pid);
     const failure = `poster write failed ${'x'.repeat(3000)}`;
     generateThumbnail.mockRejectedValueOnce(new Error(failure));

@@ -14,7 +14,6 @@ vi.mock('../services/taskLearning.js', () => ({
   getLearningSummary: vi.fn(),
   getRecentInsights: vi.fn(),
   recordLearningInsight: vi.fn(),
-  getAllPromptRecommendations: vi.fn(),
   getPromptImprovementRecommendations: vi.fn(),
   getConfidenceLevels: vi.fn(),
   getDismissedRecommendations: vi.fn(),
@@ -27,9 +26,7 @@ vi.mock('../services/weeklyDigest.js', () => ({
   getWeeklyDigest: vi.fn(),
   listWeeklyDigests: vi.fn(),
   getCurrentWeekProgress: vi.fn(),
-  generateTextSummary: vi.fn(),
-  generateWeeklyDigest: vi.fn(),
-  compareWeeks: vi.fn()
+  generateWeeklyDigest: vi.fn()
 }));
 
 vi.mock('../services/cos/cosState.js', () => ({
@@ -145,22 +142,6 @@ describe('CoS Learning Routes', () => {
     });
   });
 
-  describe('GET /api/cos/learning/recommendations', () => {
-    it('should return prompt recommendations with summary', async () => {
-      taskLearning.getAllPromptRecommendations.mockResolvedValue([
-        { status: 'critical', taskType: 'deploy' },
-        { status: 'good', taskType: 'review' }
-      ]);
-
-      const response = await request(app).get('/api/cos/learning/recommendations');
-
-      expect(response.status).toBe(200);
-      expect(response.body.count).toBe(2);
-      expect(response.body.summary.critical).toBe(1);
-      expect(response.body.summary.good).toBe(1);
-    });
-  });
-
   describe('GET /api/cos/learning/recommendations/:taskType', () => {
     it('should return recommendations for specific task type', async () => {
       taskLearning.getPromptImprovementRecommendations.mockResolvedValue({ suggestions: [] });
@@ -252,17 +233,6 @@ describe('CoS Learning Routes', () => {
     });
   });
 
-  describe('GET /api/cos/digest/text', () => {
-    it('should return text summary', async () => {
-      weeklyDigest.generateTextSummary.mockResolvedValue('Weekly summary text');
-
-      const response = await request(app).get('/api/cos/digest/text');
-
-      expect(response.status).toBe(200);
-      expect(response.text).toContain('Weekly summary text');
-    });
-  });
-
   describe('GET /api/cos/digest/:weekId', () => {
     it('should return digest for specific week', async () => {
       weeklyDigest.getWeeklyDigest.mockResolvedValue({ weekId: '2026-W13', stats: {} });
@@ -323,23 +293,4 @@ describe('CoS Learning Routes', () => {
     });
   });
 
-  describe('GET /api/cos/digest/compare', () => {
-    it('should return 400 when week params are missing', async () => {
-      const response = await request(app).get('/api/cos/digest/compare');
-      expect(response.status).toBe(400);
-    });
-
-    it('should return comparison for two weeks', async () => {
-      weeklyDigest.compareWeeks.mockResolvedValue({ week1: '2026-W01', week2: '2026-W02', changes: [] });
-      const response = await request(app).get('/api/cos/digest/compare?week1=2026-W01&week2=2026-W02');
-      expect(response.status).toBe(200);
-      expect(weeklyDigest.compareWeeks).toHaveBeenCalledWith('2026-W01', '2026-W02');
-    });
-
-    it('should return 404 when weeks not found', async () => {
-      weeklyDigest.compareWeeks.mockResolvedValue(null);
-      const response = await request(app).get('/api/cos/digest/compare?week1=2026-W01&week2=2026-W02');
-      expect(response.status).toBe(404);
-    });
-  });
 });

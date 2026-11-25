@@ -15,19 +15,11 @@ import {
 } from '../../lib/musicVideoAutomation.js';
 import { RESUMABLE_RUN_STATUSES, boardJobEstimate, currentProductionRun, productionReviewStopGuidance } from '../../lib/musicVideoStages.js';
 import { formatCount, formatUsd } from '../../utils/formatters.js';
+import { RUN_STATUS_LABELS, RUN_STATUS_TONES } from '../../lib/musicVideoRunStatus.js';
 
 const POOL_TOOLS = MUSIC_VIDEO_AUTOMATION_TOOLS.filter((t) => t.group === 'image' || t.group === 'video');
 const POOL_TOOL_IDS = new Set(POOL_TOOLS.map((t) => t.id));
 
-const STATUS_LABELS = {
-  running: 'Running', stopped: 'Paused', 'limit-reached': 'Stopped at a limit', blocked: 'Blocked',
-  'needs-replan': 'Setup changed', 'awaiting-video': 'Stills done', completed: 'Finished', 'needs-human': 'Needs you', failed: 'Failed', canceled: 'Cancelled',
-};
-const STATUS_TONES = {
-  running: 'text-port-accent', stopped: 'text-port-warning', 'limit-reached': 'text-port-warning', blocked: 'text-port-warning',
-  'needs-replan': 'text-port-warning', 'awaiting-video': 'text-port-warning', completed: 'text-port-success', 'needs-human': 'text-port-warning',
-  failed: 'text-port-error', canceled: 'text-port-text-muted',
-};
 const STEP_TONES = { completed: 'text-port-success', failed: 'text-port-error', canceled: 'text-port-text-muted', refused: 'text-port-text-muted' };
 const inputCls = 'w-24 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
 const SHOWN_STEPS = 8;
@@ -90,7 +82,7 @@ function RunView({ run, production, codeFirst, project, readiness }) {
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span className={`font-medium ${STATUS_TONES[run.status] || ''}`}>{run.interrupted ? 'Interrupted' : STATUS_LABELS[run.status] || run.status}</span>
+        <span className={`font-medium ${RUN_STATUS_TONES[run.status] || ''}`}>{run.interrupted ? 'Interrupted' : RUN_STATUS_LABELS[run.status] || run.status}</span>
         <span className="text-port-text-muted">
           {run.usage.generations}/{run.limits.maxGenerations} generations · {formatUsd(run.usage.spentUsd)}{cap != null ? ` of ${formatUsd(cap)}` : ' spent (no cap)'}
         </span>

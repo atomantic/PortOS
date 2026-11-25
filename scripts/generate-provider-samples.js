@@ -60,6 +60,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { materializeRoute } from '../server/lib/provider/providerRouteRecipes.js';
+import { LOCAL_RUNTIME_MARKER_KEYS } from '../server/lib/aiToolkit/internal/localRuntimeMarkers.js';
 import { SPLASH_MODEL, SPLASH_ORIGIN } from '../server/lib/splashRuntime.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -89,7 +90,7 @@ const ACTIVE_PROVIDER = 'claude-code-tui';
 const KEY_ORDER = [
   'id', 'name', 'type', 'harnessId', 'method', 'serviceId', 'servicePlan',
   'command', 'args', 'endpoint', 'apiKey',
-  'ollamaBacked', 'lmstudioBacked', 'mtplxBacked', 'llamaBacked', 'vllmBacked', 'sglangBacked', 'splashBacked', 'gatewayBacked', 'orcarouterBacked',
+  ...LOCAL_RUNTIME_MARKER_KEYS, 'gatewayBacked', 'orcarouterBacked',
   'models', 'defaultModel', 'lightModel', 'mediumModel', 'heavyModel', 'ultraModel', 'memoryClassifierModel', 'fallbackProvider',
   'contextWindow', 'numCtx', 'temperature', 'thinking',
   'textTransport', 'ignoreUserConfig',

@@ -14,9 +14,8 @@
  * with no extra Sort node, which this reveals whether or not the planner
  * would have picked it unprompted at this row count.
  *
- * `*.db.test.js` → runs ONLY via `npm run test:db` against `portos_test`
- * (registered in vitest.config.db.js's DB_TEST_INCLUDE — a `<name>.db.test.js`
- * file is not auto-globbed). Every fixture value is invented per root
+ * `*.db.test.js` → runs ONLY via `npm run test:db` against `portos_test`.
+ * Every fixture value is invented per root
  * AGENTS.md Sensitive Data & Privacy — no real handle, name, or content.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';

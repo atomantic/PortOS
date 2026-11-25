@@ -680,7 +680,7 @@ export const cancelAutonomousMusicVideo = (id, options = {}) =>
 
 // ---- Pre-production treatment (#8980) ----
 // A structured brief, a compiled whole-song arc, per-shot direction keyed to the
-// board's scene ids and a proof checklist. Every write names the treatment
+// board's scene ids. Every write names the treatment
 // revision it was made against; a stale one is a 409 (`TREATMENT_REVISION_CONFLICT`).
 export const getMusicVideoProject = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}`, options);
 // Body: { baseRevision, brief?, beats?, motifs?, shotDirections?, rebase? } → { project, treatment }.
@@ -703,11 +703,6 @@ export const applyMusicVideoTreatment = (id, body, options = {}) => request(`/mu
 export const syncMusicVideoTreatmentFromShotSheet = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/treatment/sync-shot-sheet`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
-// Body: { baseRevision, status, evidence?: { videoHistoryId?, imageId?, note } } → { project, treatment }.
-export const reviewMusicVideoTreatmentProof = (id, proofId, body, options = {}) =>
-  request(`/music-video/${encodeURIComponent(id)}/treatment/proofs/${encodeURIComponent(proofId)}/review`, {
-    method: 'POST', body: JSON.stringify(body), ...options,
-  });
 
 // ---- Development artifacts ("ingredients") ----
 // Reviewable development files attached to a project: a Cast & Sets sheet, an

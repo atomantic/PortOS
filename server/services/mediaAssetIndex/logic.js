@@ -96,13 +96,33 @@ export function videoToRow(entry, { now } = {}) {
   };
 }
 
+/**
+ * Lower-cased text a gallery search matches for one record: its JSON plus the
+ * derived kind / WxH / lineage words. JS twin of the `search_text` generated
+ * column (server/lib/db/schema/media.js), used for videos, whose records live
+ * in video-history rather than the index. Search tokens are whitespace-free,
+ * so the indented form (`"key": value`, as jsonb prints it) matches the same
+ * tokens the column does, except a token that glues a bracket to its neighbor
+ * (`[1,`): jsonb prints those on one line.
+ */
+export function recordSearchText(kind, data) {
+  const set = field => data?.[field] != null;
+  return [
+    JSON.stringify(data, null, 1), kind,
+    set('width') && set('height') ? `${data.width}x${data.height}` : null,
+    set('extractedFromVideoId') ? 'extracted frame' : null,
+    set('stitchedFrom') ? 'stitched' : null,
+    set('upscaledFrom') ? 'upscaled 2x' : null,
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
 // Card fields a compact list row keeps: identity, file addressing, lineage
 // badges and the chips MediaCard renders. Everything else — full prompts,
 // negative prompts, provider payloads — stays on the record and is read on
 // demand (`/gallery/lookup`, `/video-gen/history/:id`).
 const COMPACT_FIELDS = ['id', 'filename', 'path', 'thumbnail', 'createdAt', 'hidden', 'width', 'height',
   'appId', 'model', 'modelId', 'mode', 'seed', 'steps', 'numFrames', 'fps', 'fileSizeBytes', 'renderMs', 'loraFilenames',
-  'lora_filenames', 'loraPaths', 'lora_paths', 'stitchedFrom', 'upscaledFrom', 'extractedFromVideoId',
+  'lora_filenames', 'loraPaths', 'lora_paths', 'stitchedFrom', 'upscaledFrom', 'trimmedFrom', 'extractedFromVideoId',
   'cleanedFrom', 'autoCleaned', 'regenerated', 'watermarkRemoved', 'pendingDelete'];
 export const COMPACT_PROMPT_CHARS = 240;
 // Scalars the list predicates read (db.js assetFilter) that are not card
@@ -119,9 +139,9 @@ const nonBlank = value => typeof value === 'string' && value.trim() ? value : nu
 
 /**
  * Bounded projection of a full record: card fields, filter-only scalars and
- * the bounded preview source. This is what a compact no-search list sends to
- * SQL in place of the full video-history record (#9676); db.js builds the
- * same shape for indexed images in SQL.
+ * the bounded preview source. This is what a compact list sends to SQL in
+ * place of the full video-history record (#9676); db.js builds the same shape
+ * for indexed images in SQL.
  */
 export function compactSource(data) {
   if (!data || typeof data !== 'object') return data;
@@ -151,6 +171,7 @@ export function compactSourceToRow(source) {
  * Opt-in list projection (#8292). `compact: true` marks the row as a PREVIEW:
  * its prompt is cut to a display label, so a consumer must hydrate the full
  * record before editing it or handing its prompt/settings to a generation
- * action. Search and counts still run over the full stored metadata.
+ * action. Search and counts still run over the full stored metadata
+ * (recordSearchText above).
  */
 export const compactGalleryRecord = data => compactSourceToRow(compactSource(data));

@@ -193,7 +193,7 @@ export default function ImageGenBackendSections({ mediaTab, form, credentials })
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2 sm:items-center border border-port-border rounded-lg px-3 py-2 bg-port-bg/40">
           <FormField
-            label={<>Default video backend<span className="block text-xs text-gray-500 mt-0.5">Used when a video render names no backend and its surface has no pin. Grok clips render at 6, 10 or 15 seconds on xAI&rsquo;s fixed video backend.</span></>}
+            label={<>Default video backend<span className="block text-xs text-gray-500 mt-0.5">Used when a video render names no backend and its surface has no pin. Grok clips render at 6, 10 or 15 seconds on xAI&rsquo;s fixed video backend. Gemini renders 16:9 or 9:16 only and takes no negative prompt.</span></>}
             labelClassName="text-sm text-gray-300"
             className="contents"
           >

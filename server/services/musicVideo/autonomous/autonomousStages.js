@@ -1,10 +1,10 @@
 /** Executors for each autonomous stage and the dependencies each stage calls. */
 
-import { musicVideoMediaMode, musicVideoAllowsMedia } from '../../../lib/musicVideo/musicVideoMediaPolicy.js';
+import { musicVideoMediaMode } from '../../../lib/musicVideo/musicVideoMediaPolicy.js';
 import { prepareProductionReview } from '../productionReviewService.js';
 import { assertProductionApproval, productionReadiness } from '../productionReview.js';
 import { CAST_SETS_WORKING } from '../castAndSets.js';
-import { codeFirstProductionAssets } from '../../../lib/musicVideo/musicVideoMediumPlan.js';
+import { codeFirstProductionAssets, musicVideoGenerationAllowance } from '../../../lib/musicVideo/musicVideoMediumPlan.js';
 import { trimTo } from '../../../lib/textUtils.js';
 import { getMusicVideoCharacterStyle } from '../../../lib/musicVideo/musicVideoCharacterStyles.js';
 import { RENDER_TARGET } from '../../../lib/renderTargets.js';
@@ -189,9 +189,11 @@ async function transcribeRunMidi(projectId, run) {
 }
 
 
-/** The production pool a brief allows on this project. */
-export const briefProductionPool = (brief, project) => autonomousPool(brief.tools, brief.models)
-  .filter((route) => musicVideoAllowsMedia(project, route.kind));
+/** The production pool a brief allows on this project: each route's kind must be generable under the project's allowance. */
+export const briefProductionPool = (brief, project) => {
+  const allowance = musicVideoGenerationAllowance(project);
+  return autonomousPool(brief.tools, brief.models).filter((route) => allowance[route.kind]);
+};
 
 /** Production stops before its clips: the plan needs clips, and the run asked to stop or has no video route. */
 function stopsBeforeClips(project, run, pool) {

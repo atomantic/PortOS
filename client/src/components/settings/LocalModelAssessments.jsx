@@ -47,6 +47,7 @@ import {
   deleteLocalLlmAssessment,
   getModelCapabilityTests,
 } from '../../services/apiLocalLlm.js';
+import { LOCAL_RUNTIME_LABELS } from '../../../../server/lib/modelPinMembership.js';
 
 // Heavy, tab-gated panels: PortosModelBenchmarkPanel pulls vendor-charts, the
 // capability matrix is ~1,000 lines, and the sweep panel is only used on its tab.
@@ -77,7 +78,7 @@ const PERFORMANCE_PATH = '/models/performance';
 // catalog) rides on the report as `runtimes` — a hardcoded list here would drift
 // the moment the server learns a sixth runtime.
 const BACKEND_LABEL = {
-  ollama: 'Ollama', lmstudio: 'LM Studio', llama: 'llama.cpp', mtplx: 'MTPLX', vllm: 'vLLM',
+  ollama: LOCAL_RUNTIME_LABELS.ollama, lmstudio: LOCAL_RUNTIME_LABELS.lmstudio, llama: LOCAL_RUNTIME_LABELS.llama, mtplx: LOCAL_RUNTIME_LABELS.mtplx, vllm: 'vLLM',
 };
 
 const OPENCODE_AGENT_TARGETS = [

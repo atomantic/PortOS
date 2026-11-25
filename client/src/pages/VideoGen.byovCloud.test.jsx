@@ -33,4 +33,13 @@ describe('VideoGen enqueue policy — cloud render with a BYOV local model selec
     expect(generate()).not.toHaveAttribute('title');
     expect(screen.getByRole('button', { name: 'Add to queue', exact: true })).toBeEnabled();
   });
+
+  it('starts the BYOV runtime probe from the model context while /status is still pending', async () => {
+    state.getVideoGenModelContext.mockResolvedValue(videoGenModelContext([MODEL], { byovRuntimes: ['example_byov'] }));
+    state.getVideoGenStatus.mockReturnValue(new Promise(() => {}));
+    await renderVideoGenPage();
+    fireEvent.change(await screen.findByLabelText('Prompt'), { target: { value: 'a fox in the rain' } });
+    // Only the runtime probe can report the venv missing, so this title proves it ran without /status.
+    await waitFor(() => expect(generate()).toHaveAttribute('title', expect.stringContaining('runtime is not installed')));
+  });
 });

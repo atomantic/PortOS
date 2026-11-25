@@ -20,6 +20,10 @@ vi.mock('../../ReviewerPicker', () => ({
   default: () => <div data-testid="reviewer-picker" />,
 }));
 
+vi.mock('../../../../hooks/useToolUseModelIds.js', () => ({
+  default: () => ({ idsByProvider: null, loaded: false }),
+}));
+
 import GlobalConfigControls from './GlobalConfigControls';
 
 const BASE_CONFIG = {
@@ -83,7 +87,7 @@ it('keeps secondary settings collapsed and shows active filter overrides', () =>
   });
 
   expect(screen.getByRole('combobox', { name: 'Interval Type' })).toBeVisible();
-  expect(screen.getByRole('combobox', { name: 'Provider (optional)' })).toBeVisible();
+  expect(screen.getByRole('combobox', { name: 'Provider' })).toBeVisible();
   expect(screen.getByRole('button', { name: 'Run on App' })).toBeVisible();
   expect(screen.queryByRole('textbox', { name: 'Cron expression' })).toBeNull();
   expect(screen.queryByRole('combobox', { name: 'Issue author filter' })).toBeNull();
@@ -608,11 +612,11 @@ describe('GlobalConfigControls — external issue isolation', () => {
         { id: 'another-cli', name: 'Another CLI', type: 'cli', enabled: true },
       ],
     });
-    expect(screen.getByRole('option', { name: 'Coding CLI (API provider required)' })).toBeDisabled();
+    expect(screen.getByRole('option', { name: 'Coding CLI (not permitted here)' })).toBeDisabled();
     expect(screen.getByRole('option', { name: 'Local API' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'Another CLI' })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Abuse Guard source settings' })).toHaveAttribute('href', '/models/llms/abuse');
-    await act(async () => { fireEvent.change(screen.getByLabelText('Provider (optional)'), { target: { value: '' } }); });
+    await act(async () => { fireEvent.change(screen.getByLabelText('Provider'), { target: { value: '' } }); });
     expect(onUpdate).toHaveBeenCalledWith('issue-watcher', { providerId: null, model: null, effort: null });
   });
 });

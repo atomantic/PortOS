@@ -1,7 +1,7 @@
 /**
  * Postgres-backed round-trip for the media asset index.
  *
- * Like projectsDB.test.js, this needs a live PostgreSQL with the schema applied.
+ * Like projectsDB.db.test.js, this needs a live PostgreSQL with the schema applied.
  * If no DB is reachable (CI, fresh checkout), it SKIPS cleanly rather than
  * failing red. When a DB IS reachable it exercises upsert/list/remove and the
  * full reconcile (upsert-everything + prune-stale), using INJECTED disk readers
@@ -107,6 +107,48 @@ describe.skipIf(!runDb)('media asset index DB round-trip', () => {
     expect((await read()).sort()).toEqual([`${PFX}req.png`, `${PFX}up.png`]);
     const nullable = await query(`SELECT is_nullable FROM information_schema.columns WHERE table_name = 'media_assets' AND column_name = 'provenance_refs'`);
     expect(nullable.rows[0].is_nullable).toBe('NO');
+  });
+
+  it('ensureSchema adds the gallery read columns to a populated pre-upgrade table, once, with no reconcile', async () => {
+    const { imageToRow, videoToRow } = await import('./logic.js');
+    const columns = ['search_text', 'is_hidden', 'universe_id', 'universe_name', 'entry_category', 'entry_kind'];
+    const present = async () => (await query(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'media_assets' AND column_name = ANY($1)`, [columns],
+    )).rows.map(row => row.column_name).sort();
+    await query(`ALTER TABLE media_assets ${columns.map(column => `DROP COLUMN IF EXISTS ${column}`).join(', ')}`);
+    expect(await present()).toEqual([]);
+    // The writers name their columns, so they work unchanged on the pre-upgrade shape.
+    await db.upsertAsset(imageToRow({ filename: `${PFX}cols.png`, createdAt: '2026-01-01T00:00:00.000Z', prompt: 'Red FOX', hidden: true,
+      universeId: 'example-u', universeName: 'Example', entryCategory: 'places', entryKind: 7, width: 64, height: 32, upscaledFrom: 'source.png' }));
+    await db.upsertAsset(videoToRow({ id: `${PFX}cols-video`, createdAt: '2026-01-02T00:00:00.000Z', stitchedFrom: ['a'] }));
+
+    await ensureSchema({ force: true });
+    expect(await present()).toEqual([...columns].sort());
+    const unset = await query('SELECT COUNT(*)::int AS n FROM media_assets WHERE search_text IS NULL OR is_hidden IS NULL');
+    expect(unset.rows[0].n).toBe(0);
+    const read = async ref => (await query(
+      `SELECT search_text, is_hidden, universe_id, universe_name, entry_category, entry_kind FROM media_assets WHERE ref = $1`, [ref])).rows[0];
+    const image = await read(`${PFX}cols.png`);
+    expect(image.search_text).toContain('"prompt": "red fox"');
+    expect(image.search_text.endsWith(' image 64x32 upscaled 2x')).toBe(true);
+    // Facets mirror strings only, as the facet reader always did.
+    expect(image).toMatchObject({ is_hidden: true, universe_id: 'example-u', universe_name: 'Example', entry_category: 'places', entry_kind: null });
+    const video = await read(`${PFX}cols-video`);
+    expect(video.search_text.endsWith(' video stitched')).toBe(true);
+    expect(video.is_hidden).toBe(false);
+
+    // A second pass skips every column: the table is not rewritten again.
+    const storage = async () => (await query(`SELECT pg_relation_filenode('media_assets') AS node`)).rows[0].node;
+    const before = await storage();
+    await ensureSchema({ force: true });
+    expect(await storage()).toBe(before);
+
+    // PostgreSQL keeps the columns current on later writes, including the skip-unchanged sweep.
+    await db.upsertAsset(imageToRow({ filename: `${PFX}cols.png`, createdAt: '2026-01-01T00:00:00.000Z', prompt: 'blue heron', entryKind: 'canon' }));
+    expect(await read(`${PFX}cols.png`)).toMatchObject({ is_hidden: false, universe_id: null, entry_kind: 'canon' });
+    expect((await read(`${PFX}cols.png`)).search_text).not.toContain('fox');
+    await db.removeAsset(`image:${PFX}cols.png`);
+    await db.removeAsset(`video:${PFX}cols-video`);
   });
 
   it('countAssets matches listAssets().length without materializing rows', async () => {

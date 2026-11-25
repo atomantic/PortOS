@@ -1,8 +1,10 @@
 // Pure logic behind the queue's inline "Edit and retry" forms: the shared
-// change-detection helpers, the video retry override builder, and the single
+// change-detection helpers, the image and video retry override builders, and the single
 // model-compatibility reconciliation the video form applies when its model
 // (or the async model catalog) changes. Kept free of React so the diffing is
 // unit-testable without rendering the form.
+import { IMAGE_GEN_MODE, supportsCloudModelOverride } from '../../lib/imageGenBackends';
+import { isConfiguredDefaultModel } from '../../utils/providers';
 import { isDefaultA2vLoraStages } from '../../lib/videoLoraStages';
 import {
   DEFAULT_I2V_REFERENCE_MODE, isDefaultI2vReferenceMode, normalizeI2vReferenceMode,
@@ -146,5 +148,69 @@ export function buildVideoRetryOverrides(draft, p, context) {
   Object.assign(overrides, numericOverrides(draft, p), chainingOverrides(draft, p, context));
   Object.assign(overrides, flagOverrides(draft, p));
   Object.assign(overrides, modelBoundOverrides(draft, p, context, modelChanged, overrides));
+  return orNull(overrides);
+}
+
+// Clear-to-default sentinel for the Codex reasoning-effort control — mirrors the
+// server's EFFORT_CLEAR_SENTINEL in routes/mediaJobs.js. A job with no explicit
+// effort is "using the shipped default", represented in the <select> by this
+// value; submitting it against a job that HAD an explicit effort tells the server
+// to reset to the default (drop params.effort).
+export const EFFORT_DEFAULT_OPTION = 'default';
+
+// Which wire key the image retry editor's model control writes, or null when the
+// backend has none (Grok runs on a fixed xAI backend). Codex, Agy and every other
+// CLI/cloud backend that takes a model carry it on `params.model`; a local job
+// carries a registry id on `params.modelId`. Editing the wrong key would change a
+// field the backend never reads and leave its real model unchangeable.
+export function imageRetryModelKey(mode) {
+  if (supportsCloudModelOverride(mode)) return 'model';
+  if (mode === IMAGE_GEN_MODE.GROK) return null;
+  return 'modelId';
+}
+
+// A configured-default sentinel means "let the CLI's own config pick": shown as an
+// empty field, and compared as one, so an untouched sentinel never reads as an edit.
+export const originalImageModel = (p) => {
+  const key = imageRetryModelKey(p.mode);
+  if (!key) return '';
+  const raw = p[key];
+  return key === 'model' && isConfiguredDefaultModel(raw) ? '' : (raw || '');
+};
+
+// A blank number field against a stored value clears it with `null` (seed and
+// steps accept it); a blank against nothing is no change.
+function clearableNumber(draftValue, original, overrides, key) {
+  if (draftValue === '' || draftValue == null) {
+    if (original != null) overrides[key] = null;
+  } else if (numberChanged(draftValue, original)) {
+    overrides[key] = Number(draftValue);
+  }
+}
+
+// Diff the image retry draft against the original job params and return only the
+// keys the user changed (null when nothing changed). Prompt text is sent exactly
+// as edited, trimmed the way the retry schema trims it.
+export function buildImageRetryOverrides(draft, p) {
+  const overrides = {};
+  if (textChanged(draft.prompt, p.prompt) && draft.prompt.trim()) overrides.prompt = draft.prompt.trim();
+  if (textChanged(draft.negativePrompt, p.negativePrompt)) overrides.negativePrompt = draft.negativePrompt.trim();
+  const modelKey = imageRetryModelKey(p.mode);
+  if (modelKey && textChanged(draft.model, originalImageModel(p))) overrides[modelKey] = draft.model.trim();
+  if (numberChanged(draft.width, p.width) && draft.width !== '') overrides.width = Number(draft.width);
+  if (numberChanged(draft.height, p.height) && draft.height !== '') overrides.height = Number(draft.height);
+  clearableNumber(draft.seed, p.seed, overrides, 'seed');
+  // A locked sampler (MiniMax H3-Image) hides Steps and fixes its own count, so an
+  // inherited value would be stranded behind a hidden control and fail the render.
+  if (draft.stepsLocked) {
+    if (p.steps != null) overrides.steps = null;
+  } else clearableNumber(draft.steps, p.steps, overrides, 'steps');
+  // `guidance` has no clear on the wire (the retry schema is non-nullable), so a
+  // blank field is no change rather than a reset.
+  if (draft.guidance !== '' && draft.guidance != null && numberChanged(draft.guidance, p.guidance)) overrides.guidance = Number(draft.guidance);
+  if (p.mode === IMAGE_GEN_MODE.CODEX) {
+    const originalEffort = codexEffortOf(p.effort) || EFFORT_DEFAULT_OPTION;
+    if (draft.effort !== originalEffort) overrides.effort = draft.effort;
+  }
   return orNull(overrides);
 }

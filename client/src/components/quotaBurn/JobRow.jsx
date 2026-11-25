@@ -18,7 +18,7 @@ import TaskRefPicker from './TaskRefPicker';
 import { quotaBurnJobIsSpent } from '../../lib/quotaBurnPatch';
 import { findTaskEntry, stepFromTaskEntry, taskEntryNeedsApp, taskRefKey } from '../../lib/quotaBurnTasks';
 import { timeAgo } from '../../utils/formatters';
-import { commandBasename } from '../../utils/providers';
+import { commandBasename, hasLocalRuntimeMarker } from '../../utils/providers';
 import { inputClass } from './fields';
 
 /**
@@ -31,10 +31,7 @@ import { inputClass } from './fields';
 function providersForFamily(providers, familyId) {
   return (providers || []).filter((provider) =>
     provider?.enabled !== false
-    && provider?.ollamaBacked !== true && provider?.lmstudioBacked !== true
-    && provider?.mtplxBacked !== true
-    && provider?.llamaBacked !== true && provider?.vllmBacked !== true
-    && provider?.sglangBacked !== true && provider?.splashBacked !== true
+    && !hasLocalRuntimeMarker(provider)
     && (provider?.type === 'cli' || provider?.type === 'tui')
     && (commandBasename(provider?.command) === familyId
       || String(provider?.id || '').toLowerCase().includes(familyId || '')

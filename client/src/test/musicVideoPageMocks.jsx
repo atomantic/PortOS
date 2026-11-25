@@ -147,7 +147,6 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   previewMusicVideoTreatmentApply: vi.fn(),
   applyMusicVideoTreatment: vi.fn(),
   syncMusicVideoTreatmentFromShotSheet: vi.fn(),
-  reviewMusicVideoTreatmentProof: vi.fn(),
   renderMusicVideoExcerpt: vi.fn(async () => ({ jobId: 'mve-job-1', excerptId: 'mve-job-1' })),
   musicVideoExcerptRenderEventsUrl: (jobId) => `/api/music-video/excerpt/${jobId}/events`,
   inspectMusicVideoDcp: vi.fn(),
@@ -331,7 +330,6 @@ vi.mock('../services/apiImageVideo.js', () => ({
       { id: 'wan22_t2v_a14b', name: 'Wan T2V', mode: 't2v' },
     ],
   })),
-  listVideoHistory: vi.fn(async () => [{ id: 'rh-9', filename: 'final.mp4' }]),
   // Sidecar lookup behind useHydratedPreviewRoute: the board's scene prompt is
   // only a label — `useMusicVideoSceneMedia` suffixes `concept.style` onto it
   // before rendering, so only the sidecar knows what the renderer was sent.
@@ -346,7 +344,9 @@ vi.mock('../services/apiImageVideo.js', () => ({
   // Scene refs are a projection, so the lightbox resolves variant lineage and
   // any variant it opens through the gallery rather than this page's list.
   listImageVariants: vi.fn(async () => ({ items: [] })),
-  listMediaGalleryPage: vi.fn(async () => ({ items: [] })),
+  listMediaGalleryPage: vi.fn(async ({ kind } = {}) => kind === 'video'
+    ? { items: [{ kind: 'video', data: { id: 'rh-9', filename: 'final.mp4', compact: true } }], total: 1 }
+    : { items: [], total: 0 }),
 }));
 vi.mock('../services/apiTracks.js', () => ({
   listTracks: vi.fn(async () => []),

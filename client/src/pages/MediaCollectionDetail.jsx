@@ -14,7 +14,7 @@ import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import useGalleryPreviewResolver from '../hooks/useGalleryPreviewResolver';
 import { UNSORTED_ID, buildUnsortedCollection } from '../lib/unsorted';
-import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
+import { useMediaDelete } from '../hooks/useMediaDelete';
 import { verifyImageNow } from '../services/apiImageVerifier';
 import {
   getMediaCollection,
@@ -22,8 +22,6 @@ import {
   listMediaCollections,
   addMediaCollectionItem,
   removeMediaCollectionItem,
-  deleteImage,
-  deleteVideoHistoryItem,
   localizeMediaCollection,
 } from '../services/apiImageVideo.js';
 import { pullMissingMetadata } from '../services/apiPeerSync.js';
@@ -32,9 +30,11 @@ import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import usePreviewRoute from '../hooks/usePreviewRoute';
 import { useGalleryPage } from '../hooks/useGalleryPage';
 import useListResource from '../hooks/useListResource';
-import { refreshMediaUsages } from '../hooks/useMediaUsages';
 
 const loadCollections = () => listMediaCollections({ silent: true });
+
+const matchesGalleryRow = (row, item) => row.kind === item.kind
+  && (row.kind === 'image' ? row.data.filename === item.filename : row.data.id === item.id);
 
 // Local-vs-remote state of one collection item. Local files (the normal case)
 // carry no badge; the header summarizes the peer-hosted count.
@@ -143,7 +143,7 @@ function MediaCollectionDetailContent() {
     const present = new Set(page.items.filter(row => row.kind === 'image').map(row => row.data.filename));
     const remoteStubs = (collection?.items || [])
       .filter(item => item.kind === 'image' && item.location === 'remote' && !present.has(item.ref))
-      .map(item => ({ kind: 'image', data: { filename: item.ref, prompt: '', createdAt: item.addedAt } }));
+      .map(item => ({ kind: 'image', data: { filename: item.ref, prompt: '', createdAt: item.addedAt, pendingDelete: item.pendingDelete } }));
     return remoteStubs.length ? [...page.items, ...remoteStubs] : page.items;
   }, [page.items, collection, isUnsorted]);
   const items = useMemo(() => galleryRows.filter(row => isUnsorted || collection?.items?.some(ref => ref.kind === row.kind && ref.ref === (row.kind === 'image' ? row.data.filename : row.data.id)))
@@ -229,45 +229,43 @@ function MediaCollectionDetailContent() {
   // it in select-mode and uses the bulk "Remove" action. Dropping the file
   // from the loaded page removes it immediately; refreshing then restores
   // a contiguous page after the server changes its ordering.
-  const handleDelete = useCallback(async (item, { force = false } = {}) => {
-    const ok = await (item.kind === 'image'
-      ? deleteImage(item.filename, { silent: true, force })
-      : deleteVideoHistoryItem(item.id, { silent: true, force })
-    ).catch((err) => {
-      if (err.code === 'MEDIA_IN_USE') void refreshMediaUsages();
-      toast.error(err.message || 'Delete failed');
-      return null;
-    });
-    if (!ok) return;
-    void refreshMediaUsages();
-    const matches = row => row.kind === item.kind && (row.kind === 'image' ? row.data.filename === item.filename : row.data.id === item.id);
-    const outcome = mediaDeleteOutcome(ok, item.kind);
-    // A delete that waits on, or did not reach, this machine's copy keeps the row.
-    if (!outcome.remove) {
-      // A hosted item is annotated from the collection, not the gallery row.
-      setCollection(c => c && ({
-        ...c,
-        items: c.items.map(member => (item.kind === 'image' && member.kind === 'image' && member.ref === item.filename && member.location === 'remote'
-          ? { ...member, pendingDelete: outcome.pendingDelete || undefined }
-          : member)),
-      }));
+  const { deleteItem: handleDelete, cancelPendingDelete, pendingPeerNames } = useMediaDelete({
+    rows: items,
+    notifyOnDelete: true,
+    onPending: useCallback((item, pendingDelete) => {
+      // The collection member supplies the pending marker for a peer-only image stub.
+      if (item.kind === 'image' && locationByKey.get(item.key)?.location === 'remote') {
+        setCollection(current => current && ({
+          ...current,
+          items: current.items.map(member => member.kind === 'image' && member.ref === item.filename
+            ? { ...member, pendingDelete: pendingDelete ?? undefined }
+            : member),
+        }));
+      }
       page.setItems(rows => rows.map((row) => {
-        if (!matches(row)) return row;
+        if (!matchesGalleryRow(row, item)) return row;
         const { pendingDelete: _previous, ...data } = row.data;
-        return { ...row, data: outcome.pendingDelete ? { ...data, pendingDelete: outcome.pendingDelete } : data };
+        return { ...row, data: pendingDelete ? { ...data, pendingDelete } : data };
       }));
-      toast(outcome.notice);
-      return;
-    }
-    page.setItems(rows => rows.filter(row => !matches(row)));
-    page.setTotal(total => Math.max(0, total - 1));
-    page.refresh();
-    if (outcome.tone === 'info') toast(outcome.notice);
-    else toast.success(`Deleted ${item.kind === 'image' ? item.filename : 'video'}`);
-  }, [page.setItems, page.setTotal, page.refresh]);
+    }, [locationByKey, page.setItems]),
+    onRemoved: useCallback((item) => {
+      page.setItems(rows => rows.filter(row => !matchesGalleryRow(row, item)));
+      if (page.items.some(row => matchesGalleryRow(row, item))) {
+        page.setTotal(total => Math.max(0, total - 1));
+      }
+      if (item.kind === 'image' && locationByKey.get(item.key)?.location === 'remote') {
+        // Removing only the indexed row would immediately recreate the hosted stub.
+        setCollection(current => current && ({
+          ...current,
+          items: current.items.filter(member => member.kind !== 'image' || member.ref !== item.filename),
+        }));
+      }
+      page.refresh();
+    }, [locationByKey, page.items, page.setItems, page.setTotal, page.refresh]),
+  });
 
   const handlePromptSaved = useCallback((item, prompt) => {
-    page.setItems(rows => rows.map(row => row.kind === item.kind && (row.kind === 'image' ? row.data.filename === item.filename : row.data.id === item.id)
+    page.setItems(rows => rows.map(row => matchesGalleryRow(row, item)
       ? { ...row, data: { ...row.data, prompt: prompt === '(no prompt)' ? '' : prompt } } : row));
     page.refresh();
   }, [page.setItems, page.refresh]);
@@ -711,6 +709,10 @@ function MediaCollectionDetailContent() {
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
           {items.map((item) => {
             const key = item.key;
+            const location = locationByKey.get(key);
+            const pendingPeerId = item.pendingDelete?.peerId;
+            const hostName = pendingPeerId && location?.hostPeerId === pendingPeerId ? location.hostPeerName : null;
+            const pendingPeerName = pendingPeerId ? hostName || pendingPeerNames[pendingPeerId] : null;
             const isCover = collection.coverKey === key;
             const isSelected = selected.has(key);
             return (
@@ -724,13 +726,15 @@ function MediaCollectionDetailContent() {
                   onSendToVideo={!selectMode && item.kind === 'image' ? handleSendToVideo : undefined}
                   onContinue={!selectMode && item.kind === 'video' ? handleContinue : undefined}
                   onDelete={!selectMode ? handleDelete : undefined}
+                  onCancelPendingDelete={!selectMode ? cancelPendingDelete : undefined}
+                  pendingPeerName={pendingPeerName}
                   hideActions={selectMode}
                   selected={isSelected}
                   {...getCardProps(key)}
                   onToggleStar={!selectMode ? toggleStar : undefined}
                   onAnnotate={!selectMode && item.kind === 'image' ? handleAnnotate : undefined}
                 />
-                <LocationBadge entry={locationByKey.get(key)} />
+                <LocationBadge entry={location} />
                 {!selectMode && !isUnsorted && (
                   <button
                     type="button"

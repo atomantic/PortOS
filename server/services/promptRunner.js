@@ -28,6 +28,7 @@ import { isSchemaTypeCategory, resolveProviderBench } from '../lib/provider/prov
 import { isGenerationModel, isVisionCapableCliProvider } from '../lib/localModelHeuristics.js';
 import { contextWindowRejection, knownContextWindow } from '../lib/aiToolkit/providerStatus.js';
 import { isOllamaBackedProvider } from '../lib/aiToolkit/internal/ollamaBacked.js';
+import { hasLocalRuntimeMarker } from '../lib/aiToolkit/internal/localRuntimeMarkers.js';
 import { apiRunAbsoluteTimeoutMs } from '../lib/aiToolkit/internal/runTimeouts.js';
 import { withOllamaRuntimeContextWindow } from '../lib/ollamaContext.js';
 import { getAIToolkitInstance } from '../lib/aiToolkitState.js';
@@ -1129,12 +1130,7 @@ function stripFallbackContext(err) {
 function isLocalInferenceProvider(provider) {
   if (provider?.type !== PROVIDER_TYPES.API) return false;
   return isOllamaBackedProvider(provider)
-    || provider.llamaBacked === true
-    || provider.lmstudioBacked === true
-    || provider.mtplxBacked === true
-    || provider.vllmBacked === true
-    || provider.sglangBacked === true
-    || provider.splashBacked === true
+    || hasLocalRuntimeMarker(provider)
     || isLocalEndpoint(provider.endpoint);
 }
 

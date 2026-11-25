@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import {
   getLlamaServerStatus,
+  getLlamaServerEndpoint,
   startLlamaServer,
   stopLlamaServer,
   relaunchLlamaServerWithTuning,
@@ -542,6 +543,31 @@ describe('llamaServerManager', () => {
     await expect(startLlamaServer({ model: modelPath, specType: 'draft-nope' })).rejects.toThrow(
       /llama-server exited immediately/i
     );
+  });
+
+  it('omits the previous launch output when a PM2 log cannot be truncated', async () => {
+    resetForTest({ logFiles: { ...TEST_LOG_FILES, stderr: join(modelPath, 'unwritable.log') } });
+    vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue('/usr/local/bin/llama-server');
+    vi.spyOn(pm2Module, 'getAppStatusStrict').mockResolvedValue({ name: LLAMA_APP, status: 'errored' });
+    const execPm2 = vi.spyOn(pm2Module, 'execPm2').mockImplementation(async ([action]) =>
+      ({ stdout: '', stderr: action === 'logs' ? 'previous launch error' : '' }));
+
+    await expect(startLlamaServer({ model: modelPath })).rejects.toMatchObject({
+      code: 'LLAMA_SERVER_EXITED',
+      status: 500,
+      message: expect.stringMatching(/^llama-server exited immediately \(PM2 status: errored\)\. Last output: .*Starting: llama-server /),
+    });
+    expect(execPm2).not.toHaveBeenCalledWith(['logs', LLAMA_APP, '--nostream', '--lines', '15']);
+  });
+
+  it('clears the failed launch port from the reported endpoint', async () => {
+    vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue('/usr/local/bin/llama-server');
+    vi.spyOn(pm2Module, 'getAppStatusStrict').mockResolvedValue({ name: LLAMA_APP, status: 'errored' });
+
+    await expect(startLlamaServer({ model: modelPath, port: 49876 })).rejects.toMatchObject({
+      code: 'LLAMA_SERVER_EXITED',
+    });
+    await expect(getLlamaServerEndpoint()).resolves.toBe(`http://127.0.0.1:${PORTS.LLAMA_SERVER}/v1`);
   });
 
   it('stops managed process cleanly', async () => {

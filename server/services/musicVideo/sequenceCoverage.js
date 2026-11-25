@@ -56,15 +56,14 @@ const refuse = (status, code, message) => { throw new ServerError(message, { sta
  * run no longer matches the plan. Returns `{ jobId, sceneIds, prompt }`.
  */
 export async function submitSequenceCoverage(projectId, { sceneIds } = {}) {
-  const [{ requireProject }, { musicVideoBriefAllowsVideo }, { captureTakeDependencies },
+  const [{ requireProject }, { musicVideoGenerationAllowance, musicVideoNoVideoMessage }, { captureTakeDependencies },
     { resolveGalleryImage }, { musicVideoAspect }] = await Promise.all([
     import('./requireProject.js'), import('../../lib/musicVideo/musicVideoMediumPlan.js'),
     import('../../lib/musicVideo/musicVideoDependencies.js'), import('../../lib/pathSafety.js'), import('../../lib/musicVideo/musicVideoAspect.js'),
   ]);
   const project = await requireProject(projectId);
-  if (!musicVideoBriefAllowsVideo(project)) {
-    refuse(409, 'MUSIC_VIDEO_NO_VIDEO_TOOL', 'No video tool is selected in this project\'s brief, so generated footage is not dispatched.');
-  }
+  const allowance = musicVideoGenerationAllowance(project);
+  if (!allowance.video) refuse(409, 'MUSIC_VIDEO_NO_VIDEO_TOOL', musicVideoNoVideoMessage(allowance));
   const backend = project?.videoSettings?.backend || null;
   const modelId = sequenceModelId(project);
   if (backend !== 'grok' && backend !== 'local' && !modelId) {
@@ -79,12 +78,14 @@ export async function submitSequenceCoverage(projectId, { sceneIds } = {}) {
 
   // fal records the prompt-expansion chip on the clip itself (videoGen/fal.js falVideoSentPrompt).
   const { members, prompt, resolution, spans } = sequenceGroupInput(project, group);
-  const referenceImagePaths = members.map((scene) => {
+  const referenceImagePaths = await Promise.all(members.map(async (scene) => {
     assertShotActionContract(scene);
     const path = scene.referenceImageId ? resolveGalleryImage(scene.referenceImageId) : null;
     if (!path) refuse(409, 'PRODUCTION_FRAME_MISSING', `"${scene.label || scene.sceneId}" has no reference frame yet`);
-    return path;
-  });
+    if (!scene.imageTreatments?.length) return path;
+    const { resolveTreatedShotImage } = await import('./imageTreatments.js');
+    return resolveTreatedShotImage(scene, scene.referenceImageId, path, musicVideoAspect(project));
+  }));
   const sequence = { sceneIds: group.sceneIds, startSec: group.startSec, durationSec: group.durationSec, spans };
   const dependencies = Object.fromEntries(members.map((s) => [s.sceneId, captureTakeDependencies(s, basename(s.referenceImageId))]));
   const aspect = musicVideoAspect(project);

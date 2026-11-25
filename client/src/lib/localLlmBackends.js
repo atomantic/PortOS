@@ -7,10 +7,11 @@
  */
 
 import { Box, Cpu } from 'lucide-react';
+import { LOCAL_RUNTIME_LABELS } from '../../../server/lib/modelPinMembership.js';
 
 export const LOCAL_LLM_BACKENDS = [
-  { id: 'ollama', label: 'Ollama', icon: Cpu },
-  { id: 'lmstudio', label: 'LM Studio', icon: Box }
+  { id: 'ollama', label: LOCAL_RUNTIME_LABELS.ollama, icon: Cpu },
+  { id: 'lmstudio', label: LOCAL_RUNTIME_LABELS.lmstudio, icon: Box }
 ];
 
 export const localLlmBackendLabel = (id) => LOCAL_LLM_BACKENDS.find((b) => b.id === id)?.label || id;

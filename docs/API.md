@@ -39,7 +39,7 @@ replace that key; explicit null/empty values clear fields where their schema all
 Unreadable/malformed persisted settings and failed writes return errors.
 
 Supported paths are `localLlm.{ollama,lmstudio,llama,mtplx,slotstream}`,
-`imageGen`, `imageGen.{external,local,codex,grok,agy,fal,runway,higgsfield,google,gemini,expose}`,
+`imageGen`, `imageGen.{external,local,codex,grok,agy,fal,runway,higgsfield,google,expose}`,
 `renderDefaults`, `videoGen`, `videoGen.{grok,gemini,fal,runway,higgsfield,google,reactor}`,
 `pipeline`, `writersRoom`, `seriesAutopilot`, `pipelineEditorialChecks`,
 `autoUpdate`, and `music.{chiptune,designer}` (see `settingsSlicePartialSchemas` in `server/lib/settingsValidation.js`). The Media settings drawer, Chiptune panel and Music Designer each save only the fields the user changed, one slice per request, so a stale snapshot never overwrites a sibling panel's value. A `loraTraining` slice stored by an older install is retired: it is not validated or patchable, but it is read and preserved. A `renderDefaults` target sent

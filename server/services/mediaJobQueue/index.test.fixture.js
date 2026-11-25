@@ -95,6 +95,7 @@ export const stubs = {
   generateVideo: vi.fn(async () => ({ jobId: 'whatever' })),
   generateVideoGrok: vi.fn(async () => ({ jobId: 'whatever' })),
   generateVideoFal: vi.fn(async () => ({ jobId: 'whatever' })),
+  generateVideoGemini: vi.fn(async () => ({ jobId: 'whatever' })),
   generateChainedVideo: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImage: vi.fn(async () => ({ jobId: 'whatever' })),
   getVerifierSettings: vi.fn(),
@@ -139,6 +140,11 @@ vi.mock('../musicVideo/revisionService.js', () => ({ assertPerformanceRepairDisp
 vi.mock('../creativeDirector/videoExecution.js', () => ({
   assertVideoAttemptDispatch: vi.fn().mockResolvedValue(undefined),
   settleVideoAttempt: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../videoGen/geminiWeb.js', () => ({
+  generateVideo: (...args) => stubs.generateVideoGemini(...args),
+  cancel: (...args) => stubs.cancelVideo(...args),
 }));
 
 vi.mock('../videoGen/local.js', () => ({

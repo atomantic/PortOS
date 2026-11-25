@@ -21,6 +21,7 @@ import { ensureEidoverseHost } from '../services/eidoverseHost.js';
 import { isGitHubRepoUrl } from '../lib/repoUrl.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { isAllowedPython } from '../lib/pythonSetup.js';
+import { CLOUD_IMAGE_GEN_MODES, CLOUD_VIDEO_GEN_MODES, HOSTED_MEDIA_BACKENDS, IMAGE_GEN_MODE } from '../lib/generationModes.js';
 import { isPlainObject } from '../lib/objects.js';
 import { resolveBackupConfig } from '../lib/backupConfig.js';
 import { storableAutoUpdateConfig } from '../lib/sharedSchemas.js';
@@ -42,7 +43,7 @@ import {
   localLlmSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, seriesAutopilotSettingsSchema,
   imageGenGrokSettingsSchema, imageGenAgySettingsSchema, imageGenFalSettingsSchema,
   imageGenRunwaySettingsSchema, imageGenHiggsfieldSettingsSchema, imageGenGoogleSettingsSchema,
-  imageGenGeminiSettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema
+  renderDefaultsSettingsSchema, videoGenSettingsSchema
 } from '../lib/settingsValidation.js';
 import {
   privateCredentialParamsSchema, privateCredentialInputSchemaFor, harnessSettingsSchema,
@@ -92,12 +93,14 @@ const LOCAL_PARALLEL_BOUNDS = Object.freeze({
 // Backends whose settings slice carries a render-lane parallelLimitBounds
 // decoration. imageGen.codex is always decorated (even when absent); the rest
 // only when the stored slice exists. `local` uses the memory-governed bounds.
-const IMAGE_GEN_BOUNDED_BACKENDS = ['grok', 'agy', 'fal', 'runway', 'higgsfield', 'google', 'gemini'];
-const VIDEO_GEN_BOUNDED_BACKENDS = ['grok', 'gemini', 'fal', 'runway', 'higgsfield', 'google', 'reactor'];
+const IMAGE_GEN_BOUNDED_BACKENDS = CLOUD_IMAGE_GEN_MODES.filter(mode => mode !== IMAGE_GEN_MODE.CODEX);
 
 // Backends whose `videoGen.<backend>.apiKey` is write-only (#8997): redacted on
 // read and re-injected on write when the incoming slice omits it.
-const VIDEO_GEN_API_KEY_BACKENDS = ['fal', 'reactor', 'runway', 'higgsfield', 'google', 'topaz'];
+const VIDEO_GEN_API_KEY_BACKENDS = [
+  ...HOSTED_MEDIA_BACKENDS.filter(({ video, credentialId }) => video && credentialId).map(({ id }) => id),
+  'topaz',
+];
 
 const withParallelBounds = (parent, backends) => {
   const out = { ...parent };
@@ -118,7 +121,7 @@ const decorateBounds = (settings) => ({
       parallelLimitBounds: PARALLEL_BOUNDS,
     },
   },
-  ...(settings.videoGen ? { videoGen: withParallelBounds(settings.videoGen, VIDEO_GEN_BOUNDED_BACKENDS) } : {}),
+  ...(settings.videoGen ? { videoGen: withParallelBounds(settings.videoGen, CLOUD_VIDEO_GEN_MODES) } : {}),
 });
 
 // Third-party API tokens that live OUTSIDE the `secrets.*` hierarchy but must
@@ -506,7 +509,6 @@ const SETTINGS_SLICE_VALIDATORS = [
   ['imageGen.fal', imageGenFalSettingsSchema.partial()],
   ['imageGen.higgsfield', imageGenHiggsfieldSettingsSchema.partial()],
   ['imageGen.google', imageGenGoogleSettingsSchema.partial()],
-  ['imageGen.gemini', imageGenGeminiSettingsSchema.partial()],
   ['renderDefaults', renderDefaultsSettingsSchema],
   ['videoGen', videoGenSettingsSchema],
   ['layeredIntelligence', layeredIntelligenceSettingsSchema.partial()],

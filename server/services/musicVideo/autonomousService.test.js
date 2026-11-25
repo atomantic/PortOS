@@ -2548,3 +2548,18 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     });
   });
 });
+
+describe('briefProductionPool', () => {
+  const brief = { tools: ['image:local', 'video:local'], models: {} };
+  it('offers a route only for what the project may generate under its media mode, tools and allowance together', async () => {
+    const { briefProductionPool } = await import('./autonomous/autonomousStages.js');
+    const kinds = (project) => briefProductionPool(brief, project).map((route) => route.kind);
+    expect(kinds({ mediaMode: 'code-images-video', automation: { tools: brief.tools } })).toEqual(['image', 'video']);
+    expect(kinds({ mediaMode: 'code-images', automation: { tools: brief.tools } })).toEqual(['image']);
+    expect(kinds({ mediaMode: 'code-images-video', automation: { tools: brief.tools },
+      productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } })).toEqual(['image']);
+    expect(kinds({ mediaMode: 'code-images-video', automation: { tools: brief.tools },
+      productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 30 } })).toEqual(['image', 'video']);
+    expect(kinds({ mediaMode: 'code-only', automation: { tools: brief.tools } })).toEqual([]);
+  });
+});

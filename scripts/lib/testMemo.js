@@ -39,7 +39,9 @@
  *
  * Fail closed. A test is not memoizable when a member reads a path the
  * analyzer cannot resolve, when a test or `scripts/` member spawns `git`
- * (repository state is not in the key), when a directory input exceeds the
+ * (repository state is not in the key; a test file that declares its
+ * repositories fixtures, `testMemo/gitFixture.js`, is keyed by git itself
+ * instead), when a directory input exceeds the
  * limit and the listing cannot stand in for it (the repository root, a tree
  * that is spawned or may be loaded natively, a nested repository), when a
  * test or `scripts/` member reads machine-local state (`data/`,
@@ -66,8 +68,9 @@
  * This file is the public facade. The implementation lives in `testMemo/`:
  * `constants.js` (tables), `tokens.js` (token helpers), `pathValues.js`
  * (path algebra), `evaluator.js` (path expressions), `scopes.js`
- * (`createScopes`), `fileFacts.js` (`extractFileFacts`), `specifiers.js` and
- * `analyzer.js` (closures and keys). Every module stays builtins-only so the
+ * (`createScopes`), `fileFacts.js` (`extractFileFacts`), `gitFixture.js`
+ * (the git-fixture declaration), `specifiers.js` and `analyzer.js` (closures
+ * and keys). Every module stays builtins-only so the
  * memo runs before `npm ci`.
  */
 

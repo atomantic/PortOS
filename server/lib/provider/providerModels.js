@@ -6,6 +6,7 @@ import { gatewayIdForProvider, isGatewayNamespace } from './providerGateways.js'
 import { isLocalInstanceEndpoint } from '../localEndpoint.js';
 import { isPlainObject } from '../objects.js';
 import { isOllamaBackedProvider, ollamaThinkingLevelsForModel } from '../aiToolkit/internal/ollamaBacked.js';
+import { markedLocalRuntime } from '../aiToolkit/internal/localRuntimeMarkers.js';
 
 export const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
@@ -630,17 +631,10 @@ export function bareLocalModelId(model, kind) {
  * @returns {'ollama'|'lmstudio'|'mtplx'|'llama'|'vllm'|'sglang'|string|null}
  */
 export function getOpencodeLocalProviderNamespace(provider) {
-  if (provider?.ollamaBacked === true) return 'ollama';
-  if (provider?.lmstudioBacked === true) return 'lmstudio';
-  if (provider?.mtplxBacked === true) return 'mtplx';
-  if (provider?.llamaBacked === true) return 'llama';
-  if (provider?.vllmBacked === true) return 'vllm';
-  if (provider?.sglangBacked === true) return 'sglang';
-  if (provider?.splashBacked === true) return 'splash';
   // Hosted gateways (`providerGateways.js`) come LAST so a malformed record carrying both a local
   // marker and a gateway marker keeps its legacy local outcome, exactly as the old if-chain did
   // with `orcarouterBacked`.
-  return gatewayIdForProvider(provider);
+  return markedLocalRuntime(provider) ?? gatewayIdForProvider(provider);
 }
 
 /**

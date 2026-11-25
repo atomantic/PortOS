@@ -2,10 +2,8 @@
  * Taste questionnaire — profile status, section definitions, per-section
  * question/answer flow, summaries, personalized follow-ups, and section reset.
  *
- * The static `/taste/sections` route is single-segment while the parameterized
- * routes are two-segment (`/taste/:section/...`), and `/taste/answer` /
- * `/taste/summary` are POST-only — so no route shadows another. Keeping them all
- * in this one file preserves that ordering regardless of mount order.
+ * The parameterized routes are two-segment (`/taste/:section/...`) and
+ * `/taste/answer` / `/taste/summary` are POST-only — so no route shadows another.
  */
 
 import { Router } from 'express';
@@ -28,22 +26,6 @@ const router = Router();
 router.get('/taste', asyncHandler(async (req, res) => {
   const profile = await tasteService.getTasteProfile();
   res.json(profile);
-}));
-
-/**
- * GET /api/digital-twin/taste/sections
- * Get available taste sections with question definitions
- */
-router.get('/taste/sections', asyncHandler(async (req, res) => {
-  const sections = Object.entries(tasteService.TASTE_SECTIONS).map(([id, config]) => ({
-    id,
-    label: config.label,
-    description: config.description,
-    icon: config.icon,
-    color: config.color,
-    questionCount: config.questions.length
-  }));
-  res.json(sections);
 }));
 
 /**

@@ -2,13 +2,16 @@
  * #14039 — "Run now" on a pending task whose `running` agent record is older
  * than the spawn window. forceSpawnTask used to fall through and report success
  * while prepareAgentSpawn's ownership gate (hasActiveTaskOwner) refused the
- * spawn downstream. It must now settle the holder through the zombie sweep and
- * admit only when that shared gate agrees, otherwise answer with a named hold.
+ * spawn downstream. It must now settle the holder through the one dead-agent
+ * reaper (#18637) and admit only when that shared gate agrees, otherwise answer
+ * with a named hold.
  *
- * Drives the real forceSpawnTask and the real hasActiveTaskOwner; the zombie
- * sweep is doubled so each case controls whether liveness evidence proves the
- * holder dead. Own file because the module-wide state mocks would replace the
- * helpers cos.test.js exercises for real.
+ * Drives the real forceSpawnTask and the real hasActiveTaskOwner; the reaper is
+ * doubled at the boot hook registry (its own liveness predicate is pinned in
+ * agentManagement.test.js) so each case controls whether the holder is proven
+ * dead and what its orphan recovery did to the task. Own file because the
+ * module-wide state mocks would replace the helpers cos.test.js exercises for
+ * real.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -24,23 +27,16 @@ vi.mock('./cosState.js', async (importOriginal) => ({
   loadState: vi.fn(async () => structuredClone(persisted)),
 }));
 
-const sweep = vi.hoisted(() => ({ provesDead: false }));
+// `taskAfter` is what the reaper's orphan recovery left the holder's task as;
+// null leaves it pending, as a holder that is not the task's latest dispatch does.
+const sweep = vi.hoisted(() => ({ provesDead: false, taskAfter: null }));
 const releaseDisposition = vi.hoisted(() => vi.fn(async () => null));
 vi.mock('../releaseSynchronization.js', async original => ({ ...(await original()), releaseTaskDispatchDisposition: releaseDisposition }));
-vi.mock('./cosAgentLifecycle.js', async (importOriginal) => ({
-  ...(await importOriginal()),
-  cleanupZombieAgents: vi.fn(async () => {
-    const agent = persisted.agents[HOLDER_ID];
-    if (!sweep.provesDead || agent?.status !== 'running') return { cleaned: [], count: 0 };
-    persisted.agents[HOLDER_ID] = { ...agent, status: 'completed', result: { success: false } };
-    return { cleaned: [HOLDER_ID], count: 1 };
-  }),
-}));
 
 // A freshly created task: no spawn charged yet, so only ownership decides.
 vi.mock('./cosTaskStore.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  getTaskById: vi.fn(async (id) => ({ id, status: 'pending', taskType: 'user', metadata: {} })),
+  getTaskById: vi.fn(),
   updateTask: vi.fn(),
 }));
 vi.mock('../agent/agentProviderResolution.js', () => ({
@@ -53,8 +49,18 @@ vi.mock('./cosLocalEndpointSlots.js', async (importOriginal) => ({
 
 const { forceSpawnTask } = await import('./cos.js');
 const { cosEvents } = await import('./cosEvents.js');
-const { cleanupZombieAgents } = await import('./cosAgentLifecycle.js');
 const { getTaskById, updateTask } = await import('./cosTaskStore.js');
+const { registerCosOrphanRecoveryHandlers } = await import('../bootHookRegistry.js');
+
+const pendingTask = (id = TASK_ID) => ({ id, status: 'pending', taskType: 'user', metadata: {} });
+const cleanupOrphanedAgents = vi.fn(async () => {
+  const agent = persisted.agents[HOLDER_ID];
+  if (!sweep.provesDead || agent?.status !== 'running') return 0;
+  persisted.agents[HOLDER_ID] = { ...agent, status: 'completed', result: { success: false, orphaned: true } };
+  if (sweep.taskAfter) vi.mocked(getTaskById).mockResolvedValue(sweep.taskAfter);
+  return 1;
+});
+registerCosOrphanRecoveryHandlers({ cleanupOrphanedAgents, handleOrphanedTask: vi.fn() });
 const { MAX_TOTAL_SPAWNS } = await import('../../lib/cos/cosTaskMetadata.js');
 const { setUseRunner, useRunner, activeAgents } = await import('../agent/agentState.js');
 
@@ -70,9 +76,11 @@ beforeEach(() => {
   releaseDisposition.mockReset().mockResolvedValue(null);
   setUseRunner(false);
   sweep.provesDead = false;
+  sweep.taskAfter = null;
+  vi.mocked(getTaskById).mockReset().mockImplementation(async (id) => pendingTask(id));
   persisted = { paused: false, agents: { [HOLDER_ID]: holder() }, config: { maxConcurrentAgents: 1 } };
   emit = vi.spyOn(cosEvents, 'emit');
-  vi.mocked(cleanupZombieAgents).mockClear();
+  cleanupOrphanedAgents.mockClear();
   vi.mocked(updateTask).mockReset();
 });
 
@@ -87,7 +95,7 @@ describe('forceSpawnTask — stale running holder (#14039)', () => {
   it('answers with a named hold and launches nothing when the holder cannot be proven dead', async () => {
     const result = await forceSpawnTask(TASK_ID);
 
-    expect(cleanupZombieAgents).toHaveBeenCalledTimes(1);
+    expect(cleanupOrphanedAgents).toHaveBeenCalledTimes(1);
     expect(result.success).toBeUndefined();
     expect(result.code).toBe('TASK_OWNER_HELD');
     expect(result.error).toContain(HOLDER_ID);
@@ -109,15 +117,94 @@ describe('forceSpawnTask — stale running holder (#14039)', () => {
     expect(taskReadyEmits(emit)).toEqual([]);
   });
 
-  it('retries a holder the zombie sweep settled as dead', async () => {
+  it('retries a holder the reaper settled as dead, in the same call', async () => {
     sweep.provesDead = true;
 
     const result = await forceSpawnTask(TASK_ID);
 
     expect(result).toEqual({ success: true, taskId: TASK_ID });
+    expect(cleanupOrphanedAgents).toHaveBeenCalledTimes(1);
     expect(taskReadyEmits(emit)).toHaveLength(1);
     // The freed slot counts: at a limit of 1 the zombie no longer blocks capacity.
     expect(persisted.agents[HOLDER_ID].status).toBe('completed');
+  });
+
+  // Retiring the holder also runs its orphan recovery, which owns the task's
+  // AUTOMATIC retry. The spawn must carry what that recovery wrote (the retry
+  // charge, the resume pointer), not the copy read before the sweep.
+  it('spawns the task as the orphan recovery requeued it', async () => {
+    sweep.provesDead = true;
+    sweep.taskAfter = { ...pendingTask(), metadata: { orphanRetryCount: 1, lastOrphanedAgentId: HOLDER_ID, existingBranch: 'cos/task-stuck/agent-holder' } };
+
+    expect(await forceSpawnTask(TASK_ID)).toEqual({ success: true, taskId: TASK_ID });
+
+    expect(taskReadyEmits(emit)).toEqual([['task:ready', sweep.taskAfter]]);
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  // The backoff paces automatic retries. "Run now" is the user asking for this
+  // one, so the block the reaper just wrote for this holder is lifted.
+  it('lifts the orphan cooldown the reaper just set and spawns', async () => {
+    sweep.provesDead = true;
+    const cooling = { ...pendingTask(), status: 'blocked', metadata: {
+      orphanRetryCount: 2, lastOrphanedAgentId: HOLDER_ID, lastOrphanedAt: '2026-01-01T00:00:00.000Z',
+      blockedCategory: 'orphan-cooldown', blockedReason: 'Orphan retry cooldown (12m remaining)',
+      blockedAt: '2026-01-01T00:18:00.000Z', cooldownUntil: '2026-01-01T00:30:00.000Z',
+    } };
+    sweep.taskAfter = cooling;
+    const revived = { ...cooling, status: 'pending', metadata: { orphanRetryCount: 2, lastOrphanedAgentId: HOLDER_ID, lastOrphanedAt: cooling.metadata.lastOrphanedAt } };
+    vi.mocked(updateTask).mockResolvedValueOnce(revived);
+
+    expect(await forceSpawnTask(TASK_ID)).toEqual({ success: true, taskId: TASK_ID });
+
+    // Only the block is cleared, under a fence naming it: the store merges
+    // metadata, so a task edit that landed since the read is neither overwritten
+    // nor allowed to hand a different block to this lift.
+    expect(vi.mocked(updateTask).mock.calls).toEqual([[TASK_ID, {
+      status: 'pending',
+      metadata: { blockedReason: undefined, blockedCategory: undefined, blockedAt: undefined, cooldownUntil: undefined },
+    }, 'user', {
+      expectedStatus: 'blocked',
+      expectedMetadata: { blockedCategory: 'orphan-cooldown', lastOrphanedAgentId: HOLDER_ID },
+      suppressDequeue: true,
+    }]]);
+    expect(taskReadyEmits(emit)).toEqual([['task:ready', revived]]);
+  });
+
+  it('reports a lost cooldown lift instead of spawning a task that changed underneath it', async () => {
+    sweep.provesDead = true;
+    sweep.taskAfter = { ...pendingTask(), status: 'blocked', metadata: { lastOrphanedAgentId: HOLDER_ID, blockedCategory: 'orphan-cooldown' } };
+    vi.mocked(updateTask).mockResolvedValueOnce({ statusChanged: true });
+
+    expect(await forceSpawnTask(TASK_ID)).toEqual({ error: 'Task changed while its dead agent was being retired' });
+    expect(taskReadyEmits(emit)).toEqual([]);
+  });
+
+  // Every other outcome is a verdict, not a wait: the retry budget is spent, the
+  // dead run had already committed, or the block belongs to someone else.
+  it.each([
+    ['blocked at the orphan retry ceiling', { status: 'blocked', metadata: { lastOrphanedAgentId: HOLDER_ID, blockedCategory: 'max-retries', blockedReason: 'orphan retries exceeded (3/3)' } },
+      `Agent ${HOLDER_ID} is no longer running and its task is now blocked (orphan retries exceeded (3/3))`],
+    ['completed from the dead run\'s own commit', { status: 'completed', metadata: {} },
+      `Agent ${HOLDER_ID} is no longer running and its task is now completed`],
+    ['cooling down for a different agent', { status: 'blocked', metadata: { lastOrphanedAgentId: 'agent-other', blockedCategory: 'orphan-cooldown', blockedReason: 'Orphan retry cooldown (5m remaining)' } },
+      `Agent ${HOLDER_ID} is no longer running and its task is now blocked (Orphan retry cooldown (5m remaining))`],
+  ])('reports a task the recovery left %s and launches nothing', async (_label, after, error) => {
+    sweep.provesDead = true;
+    sweep.taskAfter = { ...pendingTask(), ...after };
+
+    expect(await forceSpawnTask(TASK_ID)).toEqual({ error });
+
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(taskReadyEmits(emit)).toEqual([]);
+  });
+
+  it('reports a task deleted while its holder was being retired', async () => {
+    sweep.provesDead = true;
+    vi.mocked(getTaskById).mockResolvedValueOnce(pendingTask()).mockResolvedValueOnce(null);
+
+    expect(await forceSpawnTask(TASK_ID)).toEqual({ error: 'Task not found' });
+    expect(taskReadyEmits(emit)).toEqual([]);
   });
 
   it('holds while an in-process owner is still finishing, even after its record completed', async () => {
@@ -129,7 +216,7 @@ describe('forceSpawnTask — stale running holder (#14039)', () => {
     expect(result.code).toBe('TASK_OWNER_HELD');
     expect(taskReadyEmits(emit)).toEqual([]);
     // No running record means nothing for the sweep to settle.
-    expect(cleanupZombieAgents).not.toHaveBeenCalled();
+    expect(cleanupOrphanedAgents).not.toHaveBeenCalled();
   });
 
   it('keeps refusing a holder still inside the spawn window without sweeping', async () => {
@@ -138,7 +225,7 @@ describe('forceSpawnTask — stale running holder (#14039)', () => {
     const result = await forceSpawnTask(TASK_ID);
 
     expect(result.error).toBe(`Agent ${HOLDER_ID} is already running this task`);
-    expect(cleanupZombieAgents).not.toHaveBeenCalled();
+    expect(cleanupOrphanedAgents).not.toHaveBeenCalled();
     expect(taskReadyEmits(emit)).toEqual([]);
   });
 
@@ -148,7 +235,7 @@ describe('forceSpawnTask — stale running holder (#14039)', () => {
     const result = await forceSpawnTask('preflight-demand-1', { resetSpawnBudget: true });
     expect(result.error).toMatch(/preflight progress cards cannot be spawned/i);
     expect(taskReadyEmits(emit)).toEqual([]);
-    expect(cleanupZombieAgents).not.toHaveBeenCalled();
+    expect(cleanupOrphanedAgents).not.toHaveBeenCalled();
   });
 });
 

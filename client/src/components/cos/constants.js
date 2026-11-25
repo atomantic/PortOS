@@ -22,6 +22,7 @@ import { getNavPageForPath, getPageNavTabs } from '../../../../server/lib/navMan
 import { PR_REVIEW_MODES, DEFAULT_PR_REVIEW_MODE, DEFAULT_PR_COMPLETION, resolveUseAutoMerge, resolveAutoApprovePR, resolveAdminMerge } from '../../../../server/lib/prDisposition.js';
 import { buildPageNavTabs } from '../../lib/pageNavTabs.js';
 import { isFalsyMeta, isTruthyMeta } from '../../../../server/lib/metadataFlags.js';
+import { LOCAL_RUNTIME_LABELS } from '../../../../server/lib/modelPinMembership.js';
 
 // Icon per tab id. The manifest (`tabGroup: 'cos'`) owns id/label/order — this
 // file owns only how each tab looks. Throws at import time on drift.
@@ -329,9 +330,9 @@ const REVIEWER_COPY = {
   cursor: { label: 'Cursor Agent', description: 'Cursor Agent CLI (cursor-agent) reviews the PR diff' },
   opencode: { label: 'OpenCode', description: `OpenCode CLI reviews the PR diff (optional provider/model on ${CODE_REVIEWERS_PAGE})` },
   kimi: { label: 'Kimi', description: `Kimi CLI reviews the PR diff (optional model on ${CODE_REVIEWERS_PAGE})` },
-  lmstudio: { label: 'LM Studio', description: 'Local LM Studio model reviews the diff (set model on AI Providers)' },
-  ollama: { label: 'Ollama', description: 'Local Ollama model reviews the diff (set model on AI Providers)' },
-  mtplx: { label: 'MTPLX', description: 'Local MTPLX model reviews the diff (set model on AI Providers)' }
+  lmstudio: { label: LOCAL_RUNTIME_LABELS.lmstudio, description: 'Local LM Studio model reviews the diff (set model on AI Providers)' },
+  ollama: { label: LOCAL_RUNTIME_LABELS.ollama, description: 'Local Ollama model reviews the diff (set model on AI Providers)' },
+  mtplx: { label: LOCAL_RUNTIME_LABELS.mtplx, description: 'Local MTPLX model reviews the diff (set model on AI Providers)' }
 };
 
 // Derived from the roster rather than mirroring it, so a reviewer added

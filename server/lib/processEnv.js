@@ -15,6 +15,7 @@ import { promisify } from 'util';
 import { accessSync, constants, existsSync, statSync } from 'fs';
 import { delimiter, isAbsolute, join, resolve, win32 } from 'path';
 import { PATHS } from './paths.js';
+import { LOCAL_RUNTIME_MARKER_KEYS, hasLocalRuntimeMarker } from './aiToolkit/internal/localRuntimeMarkers.js';
 
 const execFileAsync = promisify(execFile);
 const IS_WIN = process.platform === 'win32';
@@ -84,8 +85,6 @@ const CLI_PROVIDER_AUTH_RULES = Object.freeze({
   hermes: { keys: ['HERMES_HOME'], prefixes: [] },
 });
 
-const LOCAL_PROVIDER_MARKERS = ['ollamaBacked', 'lmstudioBacked', 'mtplxBacked', 'llamaBacked', 'vllmBacked', 'sglangBacked', 'splashBacked'];
-
 /**
  * Build the non-secret provider metadata needed to classify ambient CLI auth
  * in another process. Provider envVars are deliberately excluded: those may
@@ -106,7 +105,7 @@ export function cliProviderAuthDescriptor(provider) {
   const descriptor = {};
   if (typeof provider.id === 'string' && provider.id) descriptor.id = provider.id;
   if (typeof provider.command === 'string' && provider.command) descriptor.command = provider.command;
-  for (const marker of LOCAL_PROVIDER_MARKERS) {
+  for (const marker of LOCAL_RUNTIME_MARKER_KEYS) {
     if (provider[marker] === true) descriptor[marker] = true;
   }
   return Object.keys(descriptor).length ? { ...descriptor, authOnly: true } : null;
@@ -117,8 +116,7 @@ function cliProviderAuthRule(provider) {
     ? provider.command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '')
     : '';
   const id = String(provider?.id || '').toLowerCase();
-  const local = LOCAL_PROVIDER_MARKERS.some((marker) => provider?.[marker] === true);
-  if (local) return null;
+  if (hasLocalRuntimeMarker(provider)) return null;
   if (command === 'claude' || id.startsWith('claude-code')) return CLI_PROVIDER_AUTH_RULES.claude;
   if (command === 'codex' || id === 'codex' || id === 'codex-tui') return CLI_PROVIDER_AUTH_RULES.codex;
   if (command === 'agy' || command === 'antigravity' || id.startsWith('antigravity')) return CLI_PROVIDER_AUTH_RULES.agy;

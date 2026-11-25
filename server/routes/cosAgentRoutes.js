@@ -4,10 +4,11 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { cleanupZombieAgents, deleteAgent, getAgent, getAgentPrompt, getAgentRecord, getAgents, sendBtwToAgent } from '../services/cos/cosAgentLifecycle.js';
+import { deleteAgent, getAgent, getAgentPrompt, getAgentRecord, getAgents, sendBtwToAgent } from '../services/cos/cosAgentLifecycle.js';
+import { requireCosOrphanRecoveryHandlers } from '../services/bootHookRegistry.js';
 import { getTaskView } from '../services/cos/cosTaskStore.js';
 import { clearCompletedAgents } from '../services/cos/cosAgentArchive.js';
-import { getAgentDates, getAgentsByDate, getCompletedAgentPage } from '../services/cos/cosAgentIndex.js';
+import { getCompletedAgentPage } from '../services/cos/cosAgentIndex.js';
 import { getFeedbackStats, getPendingAgentFeedback, getPendingAgentFeedbackCount, getPendingAgentFeedbackPage, submitAgentFeedback } from '../services/cos/cosAgentFeedback.js';
 import { getHealthStatus, runHealthCheck } from '../services/cos/cosHealthMonitor.js';
 // Lifecycle transitions go through the facade (#3450).
@@ -110,18 +111,42 @@ router.post('/health/check', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// GET /api/cos/agents - Get state-resident agents (running + recently completed, auto-cleans zombies)
+// How often an agent list read may start the dead-agent sweep. The page reads
+// the list on every load and socket-driven refresh; the sweep probes the
+// runner, reads the host-shutdown marker and reconciles reservations, which is
+// worth doing a few times a minute, not once per read.
+const DEAD_AGENT_SWEEP_INTERVAL_MS = 15_000;
+let lastDeadAgentSweepAt = Number.NEGATIVE_INFINITY;
+
+/**
+ * Start the dead-agent sweep without waiting for it. It probes the standalone
+ * runner (up to its transport timeout while that process restarts) and awaits
+ * forge and git work for each record it retires, and the listing is useful
+ * before any of that lands: `completeAgent` pushes `cos:agent:completed` for
+ * each retired record, so the page updates without another read.
+ *
+ * Reached through the boot hook registry, so the route keeps no static edge
+ * into the agent orchestration graph. The sweep is single-flight, so a read
+ * that arrives while one is running joins it.
+ */
+function sweepDeadAgentsInBackground() {
+  const now = Date.now();
+  if (now - lastDeadAgentSweepAt < DEAD_AGENT_SWEEP_INTERVAL_MS) return;
+  lastDeadAgentSweepAt = now;
+  // The promise chain owns an unregistered slot too: that is a wiring defect
+  // to log, not a reason to fail the listing.
+  void Promise.resolve()
+    .then(() => requireCosOrphanRecoveryHandlers().cleanupOrphanedAgents())
+    .catch((err) => {
+      console.error(`🧹 Background dead-agent sweep failed: ${err.message}`);
+    });
+}
+
+// GET /api/cos/agents - Get state-resident agents (running + recently completed)
 // Output arrays and over-long task descriptions are stripped from every listing
 // here — both are loaded on demand via GET /agents/:id. See cosAgentListProjection.js.
 router.get('/agents', asyncHandler(async (req, res) => {
-  // Zombie cleanup probes the standalone runner and can wait up to its
-  // transport timeout when that optional process is restarting or offline.
-  // The state listing is still useful while that repair runs, so keep cleanup
-  // off the response critical path and let it complete independently; the next
-  // normal refresh will see any repaired records.
-  void cleanupZombieAgents().catch((err) => {
-    console.error(`🧹 Background zombie cleanup failed: ${err.message}`);
-  });
+  sweepDeadAgentsInBackground();
   const { active } = validateRequest(z.object({ active: z.literal('1').optional() }), req.query);
   const [agents, taskView] = await Promise.all([
     getAgents(),
@@ -162,42 +187,6 @@ router.get('/agents/completed', asyncHandler(async (req, res) => {
   const page = await getCompletedAgentPage({ ...query, liveAgents: await getAgents() });
   const { getProjectedAgentList } = await import('../services/releaseSynchronizationProjection.js');
   res.json({ ...page, items: toAgentListItems(await getProjectedAgentList(page.items)) });
-}));
-
-// GET /api/cos/agents/history - Get available date buckets with counts
-//
-// `?hydrate=1` also returns the newest bucket's agents. The Agents tab always
-// wants them, but it cannot ask for them until this response names the date —
-// so without this the tab pays two SERIAL round trips before a single archived
-// card appears, which is the whole visible delay on a high-latency link.
-// It stays opt-in because hydrating reads a whole date bucket off disk, which a
-// caller that only wants the counts should not pay for.
-const historyQuerySchema = z.object({ hydrate: z.literal('1').optional() });
-
-router.get('/agents/history', asyncHandler(async (req, res) => {
-  const { hydrate } = validateRequest(historyQuerySchema, req.query);
-  const dates = await getAgentDates();
-  if (!hydrate) return res.json({ dates });
-  // `latest: null` is the answer for an install with no archived runs at all —
-  // distinct from a bucket that read back empty, which the client must not
-  // mistake for "not hydrated" and re-request.
-  const latestDate = dates[0]?.date;
-  const { getProjectedAgentList } = await import('../services/releaseSynchronizationProjection.js');
-  const latest = latestDate
-    ? { date: latestDate, agents: toAgentListItems(await getProjectedAgentList(await getAgentsByDate(latestDate))) }
-    : null;
-  res.json({ dates, latest });
-}));
-
-// GET /api/cos/agents/history/:date - Get completed agents for a date
-router.get('/agents/history/:date', asyncHandler(async (req, res) => {
-  const { date } = req.params;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    throw new ServerError('Invalid date format (expected YYYY-MM-DD)', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  const agents = await getAgentsByDate(date);
-  const { getProjectedAgentList } = await import('../services/releaseSynchronizationProjection.js');
-  res.json(toAgentListItems(await getProjectedAgentList(agents)));
 }));
 
 // GET /api/cos/agents/feedback/pending - Reconciled durable feedback actions.

@@ -99,8 +99,10 @@ describe('the provider graph builder contacts no AI provider and launches no run
     expect([...closure.files].filter((file) => file.includes('/services/'))).toEqual([]);
 
     // Positive control: the walk really does see packages, so a resolver gap
-    // cannot make the negative assertions above pass vacuously.
-    expect(closure.packages.has('zod')).toBe(true);
+    // cannot make the negative assertions above pass vacuously. It names a
+    // builtin because the closure no longer reaches the OpenCode config builder
+    // (and through it zod) now that runtime checks read a leaf table (#18697).
+    expect(closure.packages.has('node:util')).toBe(true);
     expect(closure.files.has(abs('lib/provider/providerConnections.js'))).toBe(true);
   });
 });

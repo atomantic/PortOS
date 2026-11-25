@@ -41,7 +41,7 @@ import {
   enginePlatformLabel, resolveEngineVramReadiness, MUSIC_VRAM_READINESS,
   formatEngineVramReadinessMessage,
 } from '../services/pipeline/musicGen.js';
-import { listEngineModels, addAudioModel, removeAudioModel, isValidRepoId } from '../services/audioModels.js';
+import { addAudioModel, removeAudioModel, isValidRepoId } from '../services/audioModels.js';
 import { listMusicEngineCapabilities } from '../services/musicEngineCapabilities.js';
 import { describeMusic, writeLyrics } from '../services/musicDesigner.js';
 import { MUSIC_CODE_LANGUAGES, MUSIC_CODE_MAX, previewMusicCodePrompt, writeMusicCode } from '../services/musicCode.js';
@@ -244,13 +244,6 @@ const installSchema = z.object({
   repo: z.string().trim().min(1).max(200),
   name: z.string().trim().max(200).optional(),
 });
-
-// GET /api/music/models/:engine → the merged shipped+user model list for one
-// engine (also exposed via /engines, but handy for a focused refresh).
-router.get('/models/:engine', asyncHandler(async (req, res) => {
-  if (!findEngine(req.params.engine)) throw new ServerError('Unknown audio engine', { status: 404, code: 'AUDIO_MODEL_UNKNOWN_ENGINE' });
-  res.json({ models: await listEngineModels(req.params.engine) });
-}));
 
 // POST /api/music/models — register the repo, STREAM its HF download as SSE
 // (text/event-stream), then ROLL BACK the registration if the download didn't

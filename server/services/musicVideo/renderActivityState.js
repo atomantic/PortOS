@@ -6,7 +6,7 @@ import { trackedRenderMap } from '../renderActivity.js';
 import { musicVideoEvents } from './events.js';
 
 // Keyed by projectId so two projects can render in parallel; the value is the
-// live jobId, or render.js's pending marker while preparation owns the slot.
+// live jobId, or finalRenderJob.js's pending marker while preparation owns the slot.
 export const projectRenders = trackedRenderMap('music-video-final', { noun: 'music video render', link: (key) => `/music-video/${encodeURIComponent(key)}` });
 
 export function releaseProjectRender(projectId) {

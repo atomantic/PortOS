@@ -8,7 +8,8 @@ import { getCosJobs, createCosJob, toggleCosJob, triggerCosJob, deleteCosJob } f
 import { getProviders } from '../../../services/apiProviders.js';
 import { buildCronFromRecurrence } from '../../../utils/cronHelpers';
 import AgentJobProviderFields from '../../cos/AgentJobProviderFields';
-import JobCard, { ScheduleFields, TaskMetadataFields } from '../../cos/JobCard';
+import JobCard, { TaskMetadataFields } from '../../cos/JobCard';
+import { ScheduleFields } from '../../cos/JobScheduleFields';
 import { filterRunnableProviders } from '../../../utils/providers';
 import TaskDataInputs from '../../cos/TaskDataInputs';
 import { JobFormFieldsEditor, JobFormValueInputs, missingRequiredJobFormFields } from '../../cos/JobFormFields';
@@ -23,6 +24,7 @@ export function emptyForm() {
     interval: 'weekly',
     scheduledTime: '',
     scheduleAnchor: null,
+    weekdaysOnly: false,
     cronExpression: '',
     cronSchedule: null,
     priority: 'MEDIUM',
@@ -53,7 +55,8 @@ export function toPayload(form, appId) {
     dataInputs: form.dataInputs || [],
     formFields: form.formFields || [],
     formValues: form.formValues || {},
-    taskMetadata: form.taskMetadata
+    taskMetadata: form.taskMetadata,
+    weekdaysOnly: !!form.weekdaysOnly
   };
   if (form.scheduleMode === 'cron') {
     payload.cronExpression = buildCronFromRecurrence(form.cronSchedule) || form.cronExpression?.trim() || null;

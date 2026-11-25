@@ -28,6 +28,8 @@
  * board, the provider and the autopilot price a take identically.
  */
 
+import { coverOrLongest, durationLengths, matchResolution } from './hostedVideoClipRules.js';
+
 /** Date the schemas and prices below were last verified against fal.ai. */
 export const FAL_VIDEO_PRICING_VERIFIED_AT = '2026-10-13';
 
@@ -316,11 +318,11 @@ export const falVideoResolutions = (model) => (model?.resolution?.options ? [...
  * '1080P' for MiniMax and '1080p' for Seedance/Veo), else its default. Null when
  * the model has no resolution parameter.
  */
-export function resolveFalVideoResolution(model, requested) {
-  if (!model?.resolution) return null;
-  const want = typeof requested === 'string' ? requested.trim().toLowerCase() : '';
-  return model.resolution.options.find((o) => o.toLowerCase() === want) || model.resolution.default;
-}
+export const resolveFalVideoResolution = (model, requested) =>
+  matchResolution(falVideoResolutions(model), model?.resolution?.default ?? null, requested);
+
+/** Clip lengths a model renders, for a length picker. */
+export const falVideoLengths = (model) => durationLengths(model?.duration);
 
 /**
  * The clip length (seconds) `model` will render for a request of `seconds`: the
@@ -330,16 +332,7 @@ export function resolveFalVideoResolution(model, requested) {
  * request gets the model's default. Null for a source-audio model, whose length
  * follows its audio.
  */
-export function coerceFalVideoSeconds(model, seconds) {
-  const rule = model?.duration;
-  if (!rule || rule.kind === 'audio') return null;
-  const n = Number(seconds);
-  if (seconds == null || seconds === '' || !Number.isFinite(n) || n <= 0) return rule.defaultSec;
-  if (rule.kind === 'enum') {
-    return rule.values.find((v) => v >= n - 1e-6) ?? rule.values[rule.values.length - 1];
-  }
-  return Math.min(rule.max, Math.max(rule.min, Math.ceil(n - 1e-6)));
-}
+export const coerceFalVideoSeconds = (model, seconds) => coverOrLongest(model?.duration, seconds);
 
 const wireDuration = (rule, sec) => (
   rule.wire === 'integer' ? sec : rule.wire === 'seconds-suffix' ? `${sec}s` : String(sec)

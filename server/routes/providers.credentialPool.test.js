@@ -26,7 +26,6 @@ const store = {
   deleteConnection: vi.fn(),
   mergeServiceInstances: vi.fn().mockResolvedValue(undefined),
   saveConnectionSettings: vi.fn(),
-  saveBindingSettings: vi.fn().mockResolvedValue(2),
 };
 vi.mock('../services/provider/providerGraphStore.js', () => store);
 

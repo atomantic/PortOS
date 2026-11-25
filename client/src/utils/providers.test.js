@@ -1042,6 +1042,12 @@ describe('localToolUseHint', () => {
     expect(localToolUseHint('gemma2:9b', ollama)).toEqual({ toolCapable: false });
   });
 
+  it('annotates every local-runtime marker, Splash included', () => {
+    // `inkling` is a tool-use family, so a Splash preset must get the hint like the other runtimes.
+    expect(localToolUseHint('inkling-1', { name: 'Splash', splashBacked: true })).toEqual({ toolCapable: true });
+    expect(localToolUseHint('gemma3:4b', { name: 'Splash', splashBacked: true })).toEqual({ toolCapable: false });
+  });
+
   it('returns null for cloud providers (their ids do not encode family)', () => {
     const cloud = { name: 'OpenAI', endpoint: 'https://api.openai.com/v1' };
     expect(localToolUseHint('gpt-4o', cloud)).toBeNull();

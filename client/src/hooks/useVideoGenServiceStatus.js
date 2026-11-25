@@ -1,18 +1,21 @@
 /**
  * VideoGen page connectivity: the python `/status` probe, the probe-free model context, and which hosted render lanes are usable.
  *
- * Use when: The /media/video page's fetched context. The model list comes from
- * `/model-context`, never `/status`, so the Model picker paints without waiting on the
- * interpreter probe.
+ * Use when: The /media/video page's fetched context. The model list, the hosted-lane flags,
+ * the BYOV runtime list and the render disclosures come from `/model-context`, never
+ * `/status`, so the form paints without waiting on the interpreter probe.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getSettings } from '../services/apiSystem.js';
 import { getVideoGenModelContext, getVideoGenStatus } from '../services/apiImageVideo.js';
 
+const EMPTY_LIST = [];
+
 export function useVideoGenServiceStatus() {
-  // `/status` owns connectivity ONLY. It shells out to python on every call
-  // (~1-2s), so nothing the form needs to render may wait on it.
+  // `/status` owns legacy-interpreter connectivity ONLY. A cold probe takes
+  // 2-4s (the server memoizes it for 30s), so nothing the form needs to render
+  // may wait on it.
   const [status, setStatus] = useState(null);
   const [statusLoading, setStatusLoading] = useState(true);
   // The model list plus the numbers its auto-select reads, off the probe-free
@@ -33,9 +36,12 @@ export function useVideoGenServiceStatus() {
   }, []);
   useEffect(() => { refreshGrokEnabled(); }, [refreshGrokEnabled]);
 
-  const refreshStatus = useCallback(() => {
+  // `fresh` is for the manual Refresh button and install completion; other
+  // callers accept the server's 30s memo. Strictly `=== true` so a click event
+  // handed straight to this function can't force a probe.
+  const refreshStatus = useCallback((options) => {
     setStatusLoading(true);
-    getVideoGenStatus()
+    getVideoGenStatus({ fresh: options?.fresh === true })
       .then(setStatus)
       .catch(() => setStatus({ connected: false, reason: 'Status check failed' }))
       .finally(() => setStatusLoading(false));
@@ -55,25 +61,28 @@ export function useVideoGenServiceStatus() {
     refreshModelContext();
   }, [refreshStatus, refreshModelContext]);
 
-  // fal.ai (#6213) / reactor.inc (#6214) usability comes off GET /status
-  // instead of the raw settings object — the server-side `isVideoModeUsable`
-  // it's computed from also honors the FAL_KEY/REACTOR_API_KEY env vars, which
-  // the client can't see, so a key set only via env var (no Settings-form
-  // entry) still surfaces the backend switcher.
+  // Hosted-lane usability comes off the server (`isVideoModeUsable`, which also
+  // honors env-var keys the client can't see), from the probe-free
+  // /model-context. `?? status` keeps a newer client working against a server
+  // that predates those fields on /model-context.
+  const fromContext = (key) => modelContext?.[key] ?? status?.[key];
   const laneEnabled = {
     grok: grokEnabled,
-    fal: status?.falEnabled === true,
-    reactor: status?.reactorEnabled === true,
-    runway: status?.runwayEnabled === true,
-    gemini: status?.geminiEnabled === true,
-    higgsfield: status?.higgsfieldEnabled === true,
-    google: status?.googleEnabled === true,
+    fal: fromContext('falEnabled') === true,
+    reactor: fromContext('reactorEnabled') === true,
+    runway: fromContext('runwayEnabled') === true,
+    gemini: fromContext('geminiEnabled') === true,
+    higgsfield: fromContext('higgsfieldEnabled') === true,
+    google: fromContext('googleEnabled') === true,
   };
+  const byovRuntimes = fromContext('byovRuntimes') || EMPTY_LIST;
+  const backendDisclosures = fromContext('backendDisclosures');
+  const displaySleepOnRender = fromContext('displaySleepOnRender') === true;
 
   return {
     status, statusLoading, refreshStatus, refreshGrokEnabled,
     modelContextRequest, modelContext, models, refreshModelContext,
-    laneEnabled,
+    laneEnabled, byovRuntimes, backendDisclosures, displaySleepOnRender,
   };
 }
 

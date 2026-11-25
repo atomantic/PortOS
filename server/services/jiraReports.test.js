@@ -21,7 +21,7 @@ vi.mock('./aiProvider.js', () => ({ callProviderAISimple: vi.fn() }));
 vi.mock('./provider/providers.js', () => ({ getActiveProvider: vi.fn(async () => null), getAllProviders: vi.fn(async () => ({ providers: [] })) }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: vi.fn(async () => 'America/Los_Angeles') }));
 
-const { generateAllReports, generateReport, getLatestReport, listReports } = await import('./jiraReports.js');
+const { generateAllReports, generateReport, listReports } = await import('./jiraReports.js');
 
 const app = (id) => ({ id, name: `App ${id}`, jira: { enabled: true, instanceId: 'jira', projectKey: 'EX' } });
 const storeReport = (appId, date) => {
@@ -43,7 +43,7 @@ describe('report dates', () => {
     vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-03-18T01:30:00Z') });
     const report = await generateReport('one', app('one'));
     expect(report.date).toBe('2026-03-17');
-    expect((await getLatestReport('one')).date).toBe('2026-03-17');
+    expect((await listReports('one'))[0].date).toBe('2026-03-17');
   });
 });
 
@@ -68,7 +68,7 @@ describe('stored reports', () => {
     storeReport('site', '2026-03-01');
     storeReport('site-admin', '2026-03-09');
     expect((await listReports('site')).map(r => r.appId)).toEqual(['site']);
-    expect(await getLatestReport('site')).toMatchObject({ appId: 'site', date: '2026-03-01' });
+    expect((await listReports('site'))[0]).toMatchObject({ appId: 'site', date: '2026-03-01' });
     expect((await listReports()).map(r => r.appId)).toEqual(['site-admin', 'site']);
   });
 });

@@ -1,3 +1,4 @@
+// test-memo: git-fixture — git only ever runs in repositories this suite creates under the temp directory (docs/TEST_MEMO_GIT_FIXTURES.md).
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -41,7 +42,7 @@ function makeRepo() {
   const clone = mkdtempSync(join(tmpdir(), 'portos-clone-'));
   repos.push(origin, clone);
   git(origin, 'init', '--bare', '--initial-branch=main');
-  git(process.cwd(), 'clone', origin, clone);
+  git(clone, 'clone', origin, '.');
   git(clone, 'config', 'user.email', 'test@example.com');
   git(clone, 'config', 'user.name', 'Example Tester');
   writeFileSync(join(clone, 'README.md'), 'seed\n');

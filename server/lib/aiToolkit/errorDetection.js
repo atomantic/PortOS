@@ -121,6 +121,49 @@ const LOCAL_RUNTIME_OOM_PATTERN = new RegExp([
   'CUDA_ERROR_OUT_OF_MEMORY',
 ].join('|'), 'i');
 
+// Vendor-banner signatures shared with the CoS agent failure analysis
+// (services/agent/agentErrorAnalysis.js imports them, since this directory
+// cannot import out). Declared once so a banner fix lands in both tables.
+export const RATE_LIMIT_SIGNATURE = /API Error: 429|rate.?limit|too many requests/i;
+
+// `upgrade your subscription to increase your limits` is Antigravity's
+// quota banner (see AGY_QUOTA_BANNER). Claude Code reports its rolling
+// subscription exhaustion as a `You've hit your <kind> limit` banner, which
+// is a usage limit too even though it does not contain the older
+// `usage limit` wording. The existing usage-limit category is also used by
+// the immediate-fallback signals; the CLI path needs this post-hoc match to
+// bench the provider and reach a fallback rather than falling through to
+// UNKNOWN. Kept to vendor/billing phrasing — a bare "quota reached" is a
+// phrase story text can legitimately contain, and this scan reads the
+// model's entire screen.
+//
+// `hit your [<modifier> ]<kind> limit` is ONE alternative covering the whole
+// banner family regardless of separator. The kind slot is a closed
+// vocabulary (session, usage, weekly, monthly, daily, hourly, spend, N-hour)
+// with one optional leading modifier (a model name, `monthly spend`): an
+// open `<word> limit` slot matched `hit your tool call limit` in tool logs
+// and file contents, which would bench a healthy provider. A new CLI kind
+// needs one word added here. At least one kind word is REQUIRED: every real banner names the kind
+// (`session`, `usage`, `weekly`, `5-hour`, `monthly spend`, `Opus usage`),
+// while a bare `hit your limit` is reachable by ordinary prose — "he had
+// hit your limit of patience" matched when the kind was optional.
+// The earlier `your session limit resets?` required `limit` to be adjacent
+// to `resets`, which only holds for the LONG combined banner
+// (`... monthly spend limit · ... · your session limit resets 7:15am (UTC)`).
+// Claude Code's standalone short form puts a `·` between them —
+// `You've hit your session limit · resets 12:40am (UTC)` — so it fell
+// through to UNKNOWN, which benched nothing and escalated a spent
+// subscription to a tier-4 investigation task instead of a fallback. The
+// `5-hour`/`weekly`/`Opus` kinds the CLI also emits were missing for the
+// same reason. Anchored on the second-person `hit your … limit` so the
+// bound wildcard cannot be reached by prose about a limit.
+// The vendor-banner half: wording a provider CLI prints and prose does not.
+// Kept separate because the agent table promotes ONLY this half to a provider
+// signal (a bench) — a bare `usage limit` also appears in tests and docs an
+// agent prints, so it may classify a failure but must not bench a provider.
+export const USAGE_LIMIT_BANNER_SIGNATURE = /(?:hit your (?:[\w-]+ )?(?:session|usage|weekly|monthly|daily|hourly|spend|\d+-hour) limit\b|Upgrade to Pro|upgrade your subscription to increase your limits|(?:^|\n)\s*(?:\[stderr\]\s*)?Now using extra usage\s*(?:\r?\n|$))/i;
+export const USAGE_LIMIT_SIGNATURE = new RegExp(`${USAGE_LIMIT_BANNER_SIGNATURE.source}|usage limit`, 'i');
+
 // Order matters — more specific patterns first.
 const ERROR_PATTERNS = [
   {
@@ -184,45 +227,14 @@ const ERROR_PATTERNS = [
     suggestedFix: 'Check billing status and add credits to the provider account'
   },
   {
-    pattern: /API Error: 429|rate.?limit|too many requests/i,
+    pattern: RATE_LIMIT_SIGNATURE,
     category: ERROR_CATEGORIES.RATE_LIMIT,
     requiresFallback: false,
     actionable: false,
     suggestedFix: 'Wait and retry - temporary rate limiting'
   },
   {
-    // `upgrade your subscription to increase your limits` is Antigravity's
-    // quota banner (see AGY_QUOTA_BANNER). Claude Code reports its rolling
-    // subscription exhaustion as a `You've hit your <kind> limit` banner, which
-    // is a usage limit too even though it does not contain the older
-    // `usage limit` wording. The existing usage-limit category is also used by
-    // the immediate-fallback signals; the CLI path needs this post-hoc match to
-    // bench the provider and reach a fallback rather than falling through to
-    // UNKNOWN. Kept to vendor/billing phrasing — a bare "quota reached" is a
-    // phrase story text can legitimately contain, and this scan reads the
-    // model's entire screen.
-    //
-    // `hit your [<modifier> ]<kind> limit` is ONE alternative covering the whole
-    // banner family regardless of separator. The kind slot is a closed
-    // vocabulary (session, usage, weekly, monthly, daily, hourly, spend, N-hour)
-    // with one optional leading modifier (a model name, `monthly spend`): an
-    // open `<word> limit` slot matched `hit your tool call limit` in tool logs
-    // and file contents, which would bench a healthy provider. A new CLI kind
-    // needs one word added here. At least one kind word is REQUIRED: every real banner names the kind
-    // (`session`, `usage`, `weekly`, `5-hour`, `monthly spend`, `Opus usage`),
-    // while a bare `hit your limit` is reachable by ordinary prose — "he had
-    // hit your limit of patience" matched when the kind was optional.
-    // The earlier `your session limit resets?` required `limit` to be adjacent
-    // to `resets`, which only holds for the LONG combined banner
-    // (`... monthly spend limit · ... · your session limit resets 7:15am (UTC)`).
-    // Claude Code's standalone short form puts a `·` between them —
-    // `You've hit your session limit · resets 12:40am (UTC)` — so it fell
-    // through to UNKNOWN, which benched nothing and escalated a spent
-    // subscription to a tier-4 investigation task instead of a fallback. The
-    // `5-hour`/`weekly`/`Opus` kinds the CLI also emits were missing for the
-    // same reason. Anchored on the second-person `hit your … limit` so the
-    // bound wildcard cannot be reached by prose about a limit.
-    pattern: /(?:hit your (?:[\w-]+ )?(?:session|usage|weekly|monthly|daily|hourly|spend|\d+-hour) limit\b|usage limit|Upgrade to Pro|upgrade your subscription to increase your limits|(?:^|\n)\s*(?:\[stderr\]\s*)?Now using extra usage\s*(?:\r?\n|$))/i,
+    pattern: USAGE_LIMIT_SIGNATURE,
     category: ERROR_CATEGORIES.USAGE_LIMIT,
     requiresFallback: true,
     actionable: true,

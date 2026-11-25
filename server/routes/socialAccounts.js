@@ -8,9 +8,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, validate } from '../lib/validateRequest.js';
+import { validateRequest, } from '../lib/validateRequest.js';
 import * as socialAccounts from '../services/socialAccounts.js';
-import { socialAccountSchema, socialAccountBulkBodySchema, socialAccountUpdateSchema } from '../lib/socialAccountValidation.js';
+import { socialAccountSchema, socialAccountUpdateSchema } from '../lib/socialAccountValidation.js';
 
 const router = Router();
 
@@ -61,28 +61,6 @@ router.post('/', asyncHandler(async (req, res) => {
   const data = validateRequest(socialAccountSchema, req.body);
   const account = await socialAccounts.createAccount(data);
   res.status(201).json(account);
-}));
-
-// POST /bulk - Create multiple social accounts at once
-router.post('/bulk', asyncHandler(async (req, res) => {
-  const { accounts: accountsData } = validateRequest(socialAccountBulkBodySchema, req.body);
-
-  const results = [];
-  for (const accountData of accountsData) {
-    const validation = validate(socialAccountSchema, accountData);
-    if (!validation.success) {
-      results.push({ success: false, errors: validation.errors, input: accountData });
-      continue;
-    }
-    const account = await socialAccounts.createAccount(validation.data);
-    results.push({ success: true, account });
-  }
-
-  const created = results.filter(r => r.success).length;
-  const failed = results.filter(r => !r.success).length;
-  console.log(`🔗 Bulk social accounts: ${created} created, ${failed} failed`);
-
-  res.status(201).json({ results, summary: { created, failed } });
 }));
 
 // PUT /:id - Update a social account

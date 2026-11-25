@@ -54,6 +54,10 @@ const ENTRY = {
   creativeDirectorVideoExecution: 'settleVideoAttempt', musicVideoProjects: 'getProject',
 };
 
+import { CLOUD_VIDEO_GEN_MODES } from '../lib/generationModes.js';
+import { getGenModuleForJob } from './mediaJobQueue/execution.js';
+import { videoBackendJobParams } from './videoGen/backendPin.js';
+import { HOSTED_VIDEO_SUBMISSIONS } from './videoGen/hostedSubmission.js';
 import { registerBootHooks, warmMediaBootHooks } from './bootHooks.js';
 import { cosEvents } from './cos/cosEvents.js';
 import { createMediaJobHookLoader } from './mediaJobQueue/hookRegistry.js';
@@ -118,6 +122,17 @@ describe('boot hook registration (#17499, #18217)', () => {
     await Promise.all([ensureHooks(job), ensureHooks(job)]);
     expect(calls.importBlenderHook).toHaveBeenCalledOnce();
     expect(calls.initBlenderHook).toHaveBeenCalledOnce();
+  });
+
+  it.each(CLOUD_VIDEO_GEN_MODES)('wires %s through creative pins, hosted submissions and queue dispatch', async (mode) => {
+    registerBootHooks();
+    const params = videoBackendJobParams({}, { mode }, { prompt: 'A lighthouse', mode: 'text' });
+    expect(params).toMatchObject({ mode, videoMode: 'text' });
+    expect(HOSTED_VIDEO_SUBMISSIONS).toHaveProperty(mode);
+    const runtime = await getGenModuleForJob({ kind: 'video', params });
+    const expectedRuntime = await loadMediaRuntimeModule(`video${mode[0].toUpperCase()}${mode.slice(1)}`);
+    expect(runtime).toBe(expectedRuntime);
+    expect(runtime.generateVideo).toBeTypeOf('function');
   });
 
   it('clears a restored feature-agent run without a route import or scheduled dequeue', async () => {

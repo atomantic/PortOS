@@ -29,6 +29,7 @@ import {
   unloadOllamaModel,
 } from '../../services/apiLocalLlm.js';
 import { controlWhisper, getVoiceStatus } from '../../services/apiVoice.js';
+import { LOCAL_RUNTIME_LABELS } from '../../../../server/lib/modelPinMembership.js';
 
 const SILENT = { silent: true };
 
@@ -44,8 +45,8 @@ const EMPTY_SNAPSHOT = {
 };
 
 const SOURCE_LABELS = {
-  ollama: 'Ollama',
-  lmstudio: 'LM Studio',
+  ollama: LOCAL_RUNTIME_LABELS.ollama,
+  lmstudio: LOCAL_RUNTIME_LABELS.lmstudio,
   voice: 'voice services',
 };
 

@@ -148,7 +148,7 @@ OpenCode route may require `ollama/example-model`). Never rewrite existing saved
 strings by stripping a prefix heuristically. Import exact existing strings as aliases;
 ambiguous aliases remain visible as unresolved pins and cannot be auto-selected.
 
-Add a proposed local endpoint `GET /api/providers/management` returning
+The original proposal called for a local management read returning
 `{schemaVersion:1, connections:[], bindings:[], routes:[], activeProvider:null}`.
 `activeProvider` is the executable providerId string (or null), identical to the flat API.
 Connection DTOs substitute `hasCredentials` booleans for credentials and omit snapshots.
@@ -158,17 +158,17 @@ Keep `GET /api/providers` and existing mutation payloads backward compatible.
 A new client talking to a server without management support falls back to the flat
 list on an explicit unsupported/404 response, not on arbitrary request failures.
 
-Proposed mutations, all Zod-validated and local-only:
+The original proposal covered these local, Zod-validated mutations. The standalone connection and binding routes have since been retired.
 
 | Request | Contract |
 | --- | --- |
-| `POST /api/providers/connections` | kind, name, transports, optional credentials; returns sanitized connection; no generation or discovery |
-| `POST /api/providers/bindings` | connectionId, harnessId (nullable for API), requested modes; create fresh route IDs and disabled routes without changing activeProvider |
-| `PATCH /api/providers/connections/:id` | expectedRevision + explicit changed fields; omitted credentials preserve, explicit clear removes; return 409 on stale edits |
-| `POST /api/providers/bindings/:id/link` | targetConnectionId + expectedRevisions {binding, sourceConnection, targetConnection} + explicit conflict choices; return affected route preview before applying confirmation |
-| `POST /api/providers/bindings/:id/unlink` | expectedRevisions {binding, sourceConnection}; clone connection/catalog/credentials to new identity, retain all route IDs and settings |
+| Create connection | kind, name, transports, optional credentials; returns sanitized connection; no generation or discovery |
+| Create binding | connectionId, harnessId (nullable for API), requested modes; create fresh route IDs and disabled routes without changing activeProvider |
+| Update connection | expectedRevision + explicit changed fields; omitted credentials preserve, explicit clear removes; return 409 on stale edits |
+| Link binding | targetConnectionId + expectedRevisions {binding, sourceConnection, targetConnection} + explicit conflict choices; return affected route preview before applying confirmation |
+| Unlink binding | expectedRevisions {binding, sourceConnection}; clone connection/catalog/credentials to new identity, retain all route IDs and settings |
 | `PATCH /api/providers/:id` | existing mode editor remains valid; connection-owned legacy edits detach that binding before changing them |
-| `POST /api/providers/connections/:id/refresh-models` | explicit discovery request only; never prompt generation; retain data on failure |
+| Refresh connection models | explicit discovery request only; never prompt generation; retain data on failure |
 
 Link preview is a read-only request using the same validation shape; applying requires
 the preview revisions for every named row and explicit user confirmation in the product.

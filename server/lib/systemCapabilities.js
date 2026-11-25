@@ -16,6 +16,7 @@
 import os from 'os';
 import { isLocalInstanceEndpoint } from './localEndpoint.js';
 import { localRuntimeKind } from './localProviderRuntime.js';
+import { hasLocalRuntimeMarker } from './aiToolkit/internal/localRuntimeMarkers.js';
 import { isAppleSilicon } from './platform.js';
 import { getCudaCapability, getCudaComputeCapability } from './cudaCapability.js';
 
@@ -142,13 +143,7 @@ const providerRuntimeRequirements = Object.freeze({
 // a plain API endpoint with no `mtplxBacked` marker to read. #6466 gave
 // `localRuntimeKind` an id-based fallback for exactly that record, so the
 // shortcut here is now a call to it instead of a hand-rolled copy.
-const localProvider = (provider) => provider?.ollamaBacked
-  || provider?.lmstudioBacked
-  || provider?.llamaBacked
-  || provider?.mtplxBacked
-  || provider?.vllmBacked
-  || provider?.sglangBacked
-  || provider?.splashBacked
+const localProvider = (provider) => hasLocalRuntimeMarker(provider)
   || localRuntimeKind(provider) === 'mtplx';
 
 const localModelHardwareRequirements = (model) => {

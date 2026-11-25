@@ -84,7 +84,8 @@ export async function reorderProjectScenes(id, orderedIds) {
 /**
  * Split a shot longer than its backend renders in one take into contiguous
  * scenes on lyric/phrase boundaries (#8977, projectsLogic.splitScene), or in
- * two at `options.atSec`. A locked still stays locked on every piece. Answers `{ project, scenes, edit }`.
+ * two at `options.atSec`. Later pieces of a manual split inherit the original
+ * still's lock while they show that still. Answers `{ project, scenes, edit }`.
  */
 export async function splitProjectScene(id, sceneId, options = {}) {
   const [{ splitScene }, { carryShotLocks }, followShots] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js'), import('../storyboards/followShots.js')]);
@@ -95,13 +96,16 @@ export async function splitProjectScene(id, sceneId, options = {}) {
     ? await followShots.reservePanelsForSplit(stored, sceneId, splitScene(stored, sceneId, options).scenes.length - 1) : [];
   const { outcome, edit } = await editWrite(id, (current) => {
     const split = splitScene(current, sceneId, options);
-    const from = Object.fromEntries(split.scenes.slice(1).map((piece) => [piece.sceneId, sceneId]));
-    if (!panelIds.length) return { ...split, project: carryShotLocks(current, split.project, { from }) };
+    const locks = {
+      from: Object.fromEntries(split.scenes.slice(1).map((piece) => [piece.sceneId, sceneId])),
+      inheritStillOnly: options.atSec != null,
+    };
+    if (!panelIds.length) return { ...split, project: carryShotLocks(current, split.project, locks) };
     if (split.scenes.length - 1 !== panelIds.length) throw new ServerError('The shot changed while it was being split. Try again.', { status: 409, code: 'SHOTS_CHANGED' });
     // Each later piece gets a panel of its own, so the shots stay 1:1 with the board.
     const ownPanel = new Map(split.scenes.slice(1).map((piece, i) => [piece.sceneId, panelIds[i]]));
     const scenes = split.project.scenes.map((scene) => (ownPanel.has(scene.sceneId) ? { ...scene, panelId: ownPanel.get(scene.sceneId) } : scene));
-    const project = carryShotLocks(current, { ...split.project, scenes }, { from });
+    const project = carryShotLocks(current, { ...split.project, scenes }, locks);
     return { project, scenes: split.scenes.map((piece) => (ownPanel.has(piece.sceneId) ? { ...piece, panelId: ownPanel.get(piece.sceneId) } : piece)) };
   });
   if (!panelIds.length) return withEditResult(outcome, edit);

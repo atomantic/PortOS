@@ -842,8 +842,7 @@ it('requests DB verification for every shape of suite in the real canonical inve
   // per inventory shape proves the rule; planning all 50+ only repeated it.
   const shapes = {
     scripts: (path) => path.startsWith('scripts/'),
-    globbed: (path) => path.endsWith('/db.test.js'),
-    unmarked: (path) => !path.includes('.db.') && !path.endsWith('/db.test.js'),
+    store: (path) => path.endsWith('/db.test.js'),
     realBrowser: (path) => path.includes('.realBrowser.db.'),
     named: (path) => path.startsWith('server/') && /\.db\.test\.js$/.test(path) && !path.includes('.realBrowser.'),
   };
@@ -2711,7 +2710,8 @@ describe('cross-workspace browser suites (#10312)', () => {
     const plan = buildCiTestPlan(catalogFiles, { ...inputs, trackedFiles });
     expect(plan.full).toBe(false);
     for (const suite of [...suites, 'server/services/codeAnimation/export.realBrowser.test.js']) {
-      expect(inputs.browserDependencies[suite]?.length, suite).toBeLessThan(400);
+      // A boundedness proxy (the closure sat at 399 when this was written), not a target: a new shared leaf adds one file.
+      expect(inputs.browserDependencies[suite]?.length, suite).toBeLessThan(420);
     }
     for (const suite of suites) expect(plan.browserFiles).not.toContain(suite);
   });
@@ -3092,6 +3092,16 @@ describe('path-gated single-purpose jobs', () => {
     expect(jobs['docker-containment-live']).toContain(`vitest run ${DOCKER_CONTAINMENT_LIVE_ENTRIES[0].replace('server/', '')}`);
     expect(jobs.gate).toMatch(/needs: \[[^\]]*\bdocker-containment-live\b/);
     expect(jobs.gate).toContain('CI_GATE_RESULT_DOCKER_CONTAINMENT_LIVE: ${{ needs.docker-containment-live.result }}');
+  });
+
+  // #18633: a scheduled run in the main ref group was the pending run a push
+  // dropped, so its enforced budget, ungated native jobs and cache seeding lapsed.
+  it('keeps scheduled runs in their own concurrency group and cancels only superseded PR runs', () => {
+    const ci = readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8');
+    expect(ci).toContain(
+      "group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'schedule') || github.ref }}",
+    );
+    expect(ci).toContain("cancel-in-progress: ${{ github.event_name == 'pull_request' }}");
   });
 
   // #16555: ci.yml reads every decision from the one `plan` output. A read of

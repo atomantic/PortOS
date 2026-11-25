@@ -14,7 +14,7 @@
  *   issues     — open GitHub/GitLab issues for the Issues tab
  *   pullRequests — open GitHub/GitLab PRs/MRs and review-loop actions
  *   forgeAuth  — repair a forge token's missing OAuth scope via `gh auth refresh`
- *   launch     — open-editor, open-claude, open-folder, open-xcode
+ *   launch     — open-editor, open-folder, open-xcode
  *   documents  — planning-doc read/list/commit
  *   agents     — recent CoS agent history
  *   repositorySources — checkout origin/upstream status and fork synchronization

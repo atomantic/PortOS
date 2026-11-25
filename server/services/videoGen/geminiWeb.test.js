@@ -11,6 +11,8 @@ vi.mock('../../lib/fileUtils.js', async () => {
   actual.PATHS.data = join(TEST_ROOT, 'data');
   actual.PATHS.videoThumbnails = join(TEST_ROOT, 'thumbnails');
   actual.PATHS.uploads = join(TEST_ROOT, 'uploads');
+  actual.PATHS.images = join(TEST_ROOT, 'images');
+  actual.PATHS.imageRefs = join(TEST_ROOT, 'image-refs');
   return { ...actual, ensureDir: vi.fn(async (dir) => mkdir(dir, { recursive: true })) };
 });
 
@@ -50,6 +52,8 @@ const finished = (jobId) => new Promise((resolve) => {
 });
 
 let staged;
+let sheet;
+let bikes;
 beforeEach(async () => {
   videoGenEvents.removeAllListeners();
   renderOnGeminiWeb.mockReset();
@@ -58,6 +62,12 @@ beforeEach(async () => {
   await mkdir(join(TEST_ROOT, 'uploads'), { recursive: true });
   staged = join(TEST_ROOT, 'uploads', 'frame.png');
   await writeFile(staged, 'frame');
+  // Cast sheets live in the image library: a gallery image and a reference image.
+  await mkdir(join(TEST_ROOT, 'images'), { recursive: true });
+  await mkdir(join(TEST_ROOT, 'image-refs'), { recursive: true });
+  sheet = join(TEST_ROOT, 'images', 'sheet.png');
+  bikes = join(TEST_ROOT, 'image-refs', 'bikes.png');
+  for (const path of [sheet, bikes]) await writeFile(path, 'image');
 });
 afterAll(() => rm(TEST_ROOT, { recursive: true, force: true }));
 
@@ -73,13 +83,13 @@ describe('Gemini web video lane', () => {
     const done = finished('job-1');
     await gemini.generateVideo({
       jobId: 'job-1', prompt: 'she rides past', frameAspect: '9:16', sourceImagePath: staged, uploadedTempPath: staged,
-      castReferences: [{ path: '/example/sheet.png', label: 'Ada' }, { path: '/example/bikes.png', label: 'Bikes' }],
+      castReferences: [{ path: sheet, label: 'Ada' }, { path: bikes, label: 'Bikes' }],
     });
     expect((await done).type).toBe('completed');
 
     // The start frame goes first, and the prompt and aspect reach the composer as chosen.
     expect(renderOnGeminiWeb).toHaveBeenCalledWith(expect.objectContaining({
-      prompt: 'she rides past', aspectChoice: 'Portrait (9:16)', files: [staged, '/example/sheet.png', '/example/bikes.png'],
+      prompt: 'she rides past', aspectChoice: 'Portrait (9:16)', files: [staged, sheet, bikes],
     }));
     const record = (await loadHistory()).find((item) => item.id === 'job-1');
     expect(record).toMatchObject({ modelId: 'gemini:gemini-omni-1.2-flash', sentPrompt: 'she rides past',
@@ -88,6 +98,28 @@ describe('Gemini web video lane', () => {
     expect(progress).toEqual([...progress].sort((a, b) => a - b));
     expect(progress.at(-1)).toBeGreaterThan(0.9);
     await expect(access(staged)).rejects.toThrow();
+  });
+
+  // The browser uploads whatever it is handed, and job params are persisted state a planner
+  // can author: only this job's own staged uploads and library images may reach it.
+  it.each([
+    ['a start frame outside the image library', (outside) => ({ sourceImagePath: outside })],
+    ['a reference outside the image library', (outside) => ({ sourceImagePath: staged, uploadedTempPath: staged, castReferences: [{ path: outside, label: 'Ada' }] })],
+    ['a staged upload this job does not own', () => ({ sourceImagePath: staged })],
+  ])('refuses %s before the browser opens', async (_label, inputs) => {
+    const outside = join(TEST_ROOT, 'private-notes.png');
+    await writeFile(outside, 'private');
+    const params = inputs(outside);
+    const done = finished('job-9');
+    await gemini.generateVideo({ jobId: 'job-9', prompt: 'x', ...params });
+    const outcome = await done;
+    expect(outcome.type).toBe('failed');
+    expect(outcome.error).toContain('outside the allowed image roots');
+    expect(renderOnGeminiWeb).not.toHaveBeenCalled();
+    // The refused file is untouched. A staged input is removed only by the job that owns it.
+    await expect(access(outside)).resolves.toBeUndefined();
+    if (params.uploadedTempPath) await expect(access(staged)).rejects.toThrow();
+    else await expect(access(staged)).resolves.toBeUndefined();
   });
 
   it('fails the job with what the driver reported and removes the staged input', async () => {

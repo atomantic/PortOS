@@ -38,7 +38,6 @@ describe('loops routes — caller errors are 4xx', () => {
 
   it('404s an unknown id on resume, trigger and put', async () => {
     expect((await request(app).post('/api/loops/nope/resume')).status).toBe(404);
-    expect((await request(app).put('/api/loops/nope').send({ name: 'x' })).status).toBe(404);
     expect((await request(app).post('/api/loops/nope/trigger')).status).toBe(404);
   });
 

@@ -69,15 +69,6 @@ router.get('/projects/:appId', asyncHandler(async (req, res) => {
   res.json(project)
 }))
 
-// GET /projects/:appId/concerns — parsed CONCERNS.md with severity
-router.get('/projects/:appId/concerns', asyncHandler(async (req, res) => {
-  const project = await gsdService.getGsdProject(req.params.appId)
-  if (!project) {
-    throw new ServerError('GSD project not found', { status: 404, code: 'GSD_PROJECT_NOT_FOUND' })
-  }
-  res.json({ concerns: project.concerns })
-}))
-
 // GET /projects/:appId/phases — phase list with status
 router.get('/projects/:appId/phases', asyncHandler(async (req, res) => {
   const project = await gsdService.getGsdProject(req.params.appId)
@@ -86,19 +77,6 @@ router.get('/projects/:appId/phases', asyncHandler(async (req, res) => {
   }
   const pendingActions = await gsdService.getGsdPendingActions(req.params.appId)
   res.json({ phases: project.phases, pendingActions })
-}))
-
-// GET /projects/:appId/phases/:phaseId — phase detail
-router.get('/projects/:appId/phases/:phaseId', asyncHandler(async (req, res) => {
-  const project = await gsdService.getGsdProject(req.params.appId)
-  if (!project) {
-    throw new ServerError('GSD project not found', { status: 404, code: 'GSD_PROJECT_NOT_FOUND' })
-  }
-  const phase = project.phases.find(p => p.id === req.params.phaseId)
-  if (!phase) {
-    throw new ServerError('Phase not found', { status: 404, code: 'GSD_PHASE_NOT_FOUND' })
-  }
-  res.json(phase)
 }))
 
 // POST /projects/:appId/concerns/tasks — create CoS tasks from selected concerns

@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   CLOUD_IMAGE_GEN_MODES,
   CLOUD_VIDEO_GEN_MODES,
+  GENERATION_MODE_LABELS,
+  HOSTED_MEDIA_BACKENDS,
   IMAGE_GEN_MODE,
   IMAGE_GEN_MODES,
+  METERED_IMAGE_GEN_MODES,
   QUEUEABLE_IMAGE_MODES,
   VIDEO_GEN_MODE,
   VIDEO_GEN_MODES,
@@ -20,6 +23,16 @@ describe('generation mode alphabets', () => {
       CLOUD_IMAGE_GEN_MODES,
       QUEUEABLE_IMAGE_MODES,
     ].every(Object.isFrozen)).toBe(true);
+  });
+
+  it('preserves the shared labels and metered image modes', () => {
+    expect(Object.entries(GENERATION_MODE_LABELS)).toEqual([
+      ['local', 'Local'], ['codex', 'Codex'], ['grok', 'Grok'], ['agy', 'Agy'],
+      ['external', 'External'], ['fal', 'fal.ai'], ['reactor', 'Reactor.inc'],
+      ['runway', 'Runway'], ['gemini', 'Gemini'], ['higgsfield', 'Higgsfield'], ['google', 'Google'],
+    ]);
+    expect(METERED_IMAGE_GEN_MODES).toEqual(['fal', 'runway', 'higgsfield', 'google']);
+    expect([GENERATION_MODE_LABELS, HOSTED_MEDIA_BACKENDS, ...HOSTED_MEDIA_BACKENDS].every(Object.isFrozen)).toBe(true);
   });
 
   it('keeps the video backend alphabet in the image discriminator namespace, plus reactor as a video-only extra', () => {

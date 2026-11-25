@@ -179,7 +179,7 @@ router.post('/install', asyncHandler(async (req, res) => {
 
 // Confirm-step disk preflight for a LoRA install. `source` picks Civitai vs
 // HuggingFace; the URL is the same shape the install endpoints already take.
-// `family`/`file` are the same optional overrides `hfInstallSchema` takes —
+// `family`/`file` are the same optional overrides the HF install stream takes —
 // a caller that already knows them (the curated video quick-install cards)
 // forwards them so the previewed file matches what installFromHuggingface
 // will actually pick, rather than re-guessing from the bare URL.
@@ -199,23 +199,7 @@ router.post('/install/preflight', asyncHandler(async (req, res) => {
 }));
 
 // Install an image or video LoRA from a HuggingFace repo (Flux.2 Klein,
-// fal / Lightricks LTX, MiniMax H3). `family` is an optional override;
-// absence auto-detects from the repo id / tags / filenames.
-const hfInstallSchema = z.object({
-  url: z.string().min(1).max(1024),
-  family: z.enum(HF_LORA_FAMILIES).optional(),
-  file: z.string().min(1).max(512).regex(/\.safetensors$/i).optional(),
-  // One-shot token override; absence falls back to the stored/env/CLI HF token.
-  token: z.string().min(1).max(256).optional(),
-});
-router.post('/install/huggingface', asyncHandler(async (req, res) => {
-  const data = validateRequest(hfInstallSchema, req.body);
-  const sidecar = await installFromHuggingface(data);
-  res.status(201).json(sidecar);
-}));
-
-// Streaming variant of the HF install for the manager UI. Same install, but
-// streams byte-level download `progress` frames (SSE-encoded) so the form can
+// fal / Lightricks LTX, MiniMax H3), streaming byte-level download `progress` frames (SSE-encoded) so the form can
 // show a percentage instead of a static "Downloading…" (matching the image/video
 // model download badge UX). POST, not GET: this endpoint mutates state (downloads
 // + writes a LoRA), and the client reads the stream body with fetch() (not

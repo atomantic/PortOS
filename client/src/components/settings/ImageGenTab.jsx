@@ -144,8 +144,6 @@ const EMPTY_MEDIA_FORM = Object.freeze({
   googleLocation: '',
   googleImageParallelLimit: 1,
   googleVideoParallelLimit: 1,
-  geminiImageParallelLimit: 1,
-  geminiVideoParallelLimit: 1,
   // Per-provider cleaner toggles (see CleanersToggles in the provider sections).
   cleanC2PAByMode: { external: true, local: true, codex: true, grok: false, agy: false, fal: false, runway: false, higgsfield: false, google: false },
   denoiseByMode: { external: false, local: false, codex: false, grok: false, agy: false, fal: false, runway: false, higgsfield: false, google: false },
@@ -219,8 +217,6 @@ const mediaFormFromSettings = (s) => {
     googleLocation: vg.google?.location || '',
     googleImageParallelLimit: clampParallel(vx.parallelLimit, vx.parallelLimitBounds || bounds),
     googleVideoParallelLimit: clampParallel(vg.google?.parallelLimit, vg.google?.parallelLimitBounds || bounds),
-    geminiImageParallelLimit: clampParallel(ig.gemini?.parallelLimit, ig.gemini?.parallelLimitBounds || bounds),
-    geminiVideoParallelLimit: clampParallel(vg.gemini?.parallelLimit, vg.gemini?.parallelLimitBounds || bounds),
     cleanC2PAByMode: Object.fromEntries(Object.entries(cleaners).map(([m, c]) => [m, c.cleanC2PA])),
     denoiseByMode: Object.fromEntries(Object.entries(cleaners).map(([m, c]) => [m, c.denoise])),
     // Load every target entry whole (including videoModel keys this tab
@@ -270,8 +266,6 @@ const normalizeMediaForm = (f, parallelBounds) => ({
   googleVideoParallelLimit: clampParallel(f.googleVideoParallelLimit, parallelBounds),
   googleProjectId: f.googleProjectId.trim(),
   googleLocation: f.googleLocation.trim(),
-  geminiImageParallelLimit: clampParallel(f.geminiImageParallelLimit, parallelBounds),
-  geminiVideoParallelLimit: clampParallel(f.geminiVideoParallelLimit, parallelBounds),
   renderDefaults: pruneRenderDefaults(f.renderDefaults),
 });
 
@@ -328,14 +322,8 @@ const sliceFieldsOf = (f) => ({
     parallelLimit: f.googleImageParallelLimit,
     cleanC2PA: f.cleanC2PAByMode.google, denoise: f.denoiseByMode.google,
   },
-  'imageGen.gemini': {
-    parallelLimit: f.geminiImageParallelLimit,
-  },
   'videoGen.grok': {
     parallelLimit: f.grokVideoParallelLimit,
-  },
-  'videoGen.gemini': {
-    parallelLimit: f.geminiVideoParallelLimit,
   },
   'videoGen.fal': {
     parallelLimit: f.falVideoParallelLimit,

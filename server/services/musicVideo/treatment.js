@@ -16,9 +16,6 @@ import { shotActionContractProblem } from '../../lib/musicVideo/musicVideoAction
  *     (focal subject, framing, reserved negative space, typography role,
  *     emphasis, entry/exit transition, route). Timing stays authoritative on
  *     the scenes the planner produced — a direction never moves a cut;
- *   - `proofs`: a bounded proof checklist (the highest-risk shot and one short
- *     transition/text sequence) whose entries stay `proposed` until a review
- *     names a real artifact of this project;
  *   - `capabilityGaps`: what the treatment asks for that this install cannot
  *     do yet (source-audio lip-sync, footage-to-vector rotoscoping, …), stated
  *     instead of promised.
@@ -40,7 +37,6 @@ import { shotActionContractProblem } from '../../lib/musicVideo/musicVideoAction
  * against older writers that would discard them during treatment edits.
  */
 
-import { captureMusicVideoEvidence, musicVideoDependencyChanges, musicVideoTakeChanges, remapMusicVideoDependencies } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { createHash, randomUUID } from 'crypto';
 import { MUSIC_VIDEO_MEDIA, normalizeMusicVideoProductionPolicy, summarizeMusicVideoMediumPlan } from '../../lib/musicVideo/musicVideoMediumPlan.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -53,8 +49,6 @@ import {
   MUSIC_VIDEO_SHOT_ROUTES as SHOT_ROUTES,
   MUSIC_VIDEO_NEGATIVE_SPACE as NEGATIVE_SPACE,
   MUSIC_VIDEO_TYPOGRAPHY_ROLES as TYPOGRAPHY_ROLES,
-  MUSIC_VIDEO_PROOF_CHECKS as PROOF_CHECKS,
-  MUSIC_VIDEO_PROOF_STATUSES as PROOF_STATUSES,
 } from '../../lib/musicVideo/musicVideoValidation.js';
 import { performanceCapability } from '../../lib/musicVideo/musicVideoShotTiming.js';
 import { musicVideoAllowsMedia } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
@@ -218,38 +212,6 @@ function normalizeShotDirections(list) {
     .slice(0, 500);
 }
 
-function normalizeEvidence(evidence) {
-  if (!evidence || typeof evidence !== 'object') return null;
-  return {
-    videoHistoryId: isNonBlankStr(evidence.videoHistoryId) ? evidence.videoHistoryId.slice(0, 64) : null,
-    imageId: isNonBlankStr(evidence.imageId) ? evidence.imageId.slice(0, 256) : null,
-    note: text(evidence.note, 2000),
-    reviewedAt: typeof evidence.reviewedAt === 'string' ? evidence.reviewedAt : null,
-    ...(evidence.dependencies ? { dependencies: structuredClone(evidence.dependencies) } : {}),
-    ...(evidence.dependencyState ? { dependencyState: evidence.dependencyState } : {}),
-  };
-}
-
-function normalizeProofs(list) {
-  return (Array.isArray(list) ? list : []).filter((p) => p && typeof p === 'object').map((p) => {
-    const status = pick(p.status, PROOF_STATUSES, 'proposed');
-    const evidence = normalizeEvidence(p.evidence);
-    return {
-      id: typeof p.id === 'string' && p.id ? p.id : `mvp-${randomUUID()}`,
-      kind: p.kind === 'transition-text' ? 'transition-text' : 'risk-shot',
-      sceneIds: (Array.isArray(p.sceneIds) ? p.sceneIds : []).filter(isNonBlankStr).slice(0, 4),
-      artifact: text(p.artifact, 500),
-      risk: text(p.risk, 1000),
-      route: text(p.route, 500),
-      checks: (Array.isArray(p.checks) ? p.checks : []).filter((c) => PROOF_CHECKS.includes(c)),
-      passCriteria: (Array.isArray(p.passCriteria) ? p.passCriteria : []).map((c) => text(c, 500)).filter(Boolean).slice(0, 8),
-      // A passed/failed verdict without its evidence record is not a verdict.
-      status: status !== 'proposed' && !evidence ? 'proposed' : status,
-      evidence: status === 'proposed' ? null : evidence,
-    };
-  }).slice(0, 4);
-}
-
 function normalizeGaps(list) {
   const seen = new Set();
   return (Array.isArray(list) ? list : [])
@@ -278,7 +240,9 @@ function normalizeTreatment(input, now = new Date().toISOString()) {
     arc: normalizeArc(input.arc),
     ...(typeof input.styleLook === 'string' ? { styleLook: input.styleLook.slice(0, 1000), styleReferencesBasis: input.styleReferencesBasis } : {}),
     shotDirections: normalizeShotDirections(input.shotDirections),
-    proofs: normalizeProofs(input.proofs),
+    // Retired checklist, always written empty: an older peer's panel reads `treatment.proofs.length`
+    // and throws when a synced record lacks the array. Any stored or peer-sent entries are discarded.
+    proofs: [],
     capabilityGaps: normalizeGaps(input.capabilityGaps),
     basis: normalizeBasis(input.basis),
     compiledAt: typeof input.compiledAt === 'string' ? input.compiledAt : null,
@@ -452,9 +416,6 @@ export function writeCompiledTreatment(project, { baseRevision, draft, basis, co
       const previous = existing?.shotDirections.find((entry) => entry.sceneId === direction.sceneId);
       return previous?.actionContract !== undefined ? { ...direction, actionContract: previous.actionContract } : direction;
     })),
-    // A new compile proposes a fresh checklist: earlier verdicts reviewed
-    // different shots/direction.
-    proofs: normalizeProofs(draft.proofs),
     capabilityGaps: normalizeGaps(draft.capabilityGaps),
     basis,
     compiledAt: now,
@@ -462,90 +423,6 @@ export function writeCompiledTreatment(project, { baseRevision, draft, basis, co
   };
   assertMediumAllowance(project, next.shotDirections);
   return stamp(project, next, now);
-}
-
-// ---- proofs -----------------------------------------------------------------
-
-// Which evidence each check can accept. A still frame or a contact sheet never
-// proves motion; audio alignment and lip-sync can only be judged in the final
-// render, the one artifact that carries the song; composited text only exists
-// in the final render too.
-const RENDER_ONLY_CHECKS = new Set(['audio-alignment', 'lip-sync', 'readable-text']);
-const MOTION_CHECKS = new Set(['continuous-motion', 'cut-continuity']);
-
-function proofArtifacts(project, proof) {
-  const scenes = (project.scenes || []).filter((s) => proof.sceneIds.includes(s.sceneId));
-  const clips = new Set();
-  const frames = new Set();
-  for (const scene of scenes) {
-    if (isNonBlankStr(scene.videoHistoryId)) clips.add(scene.videoHistoryId);
-    if (isNonBlankStr(scene.referenceImageId)) frames.add(scene.referenceImageId);
-    for (const take of Array.isArray(scene.takes) ? scene.takes : []) {
-      if (take?.kind === 'video') clips.add(take.assetId);
-      if (take?.kind === 'image') frames.add(take.assetId);
-    }
-  }
-  return { clips, frames, render: isNonBlankStr(project.renderHistoryId) ? project.renderHistoryId : null };
-}
-
-/**
- * Record a proof review. Either verdict needs a note of what was reviewed, and
- * any artifact it cites must belong to the proof. `passed` must cite a real artifact of this project
- * that can actually show every check: the final render for audio alignment,
- * lip-sync and composited text; a clip (or the render) for motion and cut
- * continuity; any frame or clip for identity. Lip-sync cannot pass while the
- * treatment records that this install has no lip-sync capability.
- */
-export function reviewTreatmentProof(project, proofId, { baseRevision, status, evidence }, now = new Date().toISOString()) {
-  assertRevision(project, baseRevision);
-  const treatment = normalizeTreatment(project.treatment, now);
-  const idx = treatment.proofs.findIndex((p) => p.id === proofId);
-  if (idx < 0) throw treatmentError(404, 'NOT_FOUND', 'Proof checklist entry not found');
-  const proof = treatment.proofs[idx];
-  let recorded = null;
-  if (status !== 'proposed') {
-    recorded = normalizeEvidence({ ...(evidence || {}), reviewedAt: now });
-    // Either verdict records what was reviewed, and any artifact it cites must
-    // really belong to this proof.
-    if (!recorded.note) throw treatmentError(422, 'PROOF_EVIDENCE_REQUIRED', `Describe what you reviewed before marking a proof ${status}`);
-    const { clips, frames, render } = proofArtifacts(project, proof);
-    const isRender = !!recorded.videoHistoryId && recorded.videoHistoryId === render;
-    const isClip = !!recorded.videoHistoryId && (clips.has(recorded.videoHistoryId) || isRender);
-    const isFrame = !!recorded.imageId && frames.has(recorded.imageId);
-    if (recorded.videoHistoryId && !isClip) {
-      throw treatmentError(422, 'PROOF_EVIDENCE_NOT_FOUND', 'That video is not a clip of this proof\'s scenes or the project\'s final render');
-    }
-    if (recorded.imageId && !isFrame) {
-      throw treatmentError(422, 'PROOF_EVIDENCE_NOT_FOUND', 'That image is not a frame of this proof\'s scenes');
-    }
-    if (status === 'passed') {
-      const selectedArtifact = isRender || (project.scenes || []).some((scene) => proof.sceneIds.includes(scene.sceneId)
-        && (recorded.videoHistoryId ? scene.videoHistoryId === recorded.videoHistoryId : scene.referenceImageId === recorded.imageId));
-      if (!selectedArtifact || (isRender && musicVideoDependencyChanges(project, project.renderDependencies).length)) {
-        throw treatmentError(409, 'PROOF_DEPENDENCIES_STALE', 'Historical or untracked artifacts cannot pass the current proof — select or rebuild and review current evidence');
-      }
-      const stale = (project.scenes || []).filter((scene) => proof.sceneIds.includes(scene.sceneId))
-        .some((scene) => musicVideoTakeChanges(project, scene, (scene.takes || []).find((take) => take.assetId === scene.videoHistoryId && take.kind === 'video')).length);
-      if (stale) throw treatmentError(409, 'PROOF_DEPENDENCIES_STALE', 'Repair the derived clip before passing its proof');
-      if (proof.checks.includes('lip-sync') && treatment.capabilityGaps.some((g) => g.id === 'lip-sync')) {
-        throw treatmentError(422, 'PROOF_CAPABILITY_MISSING', 'This install has no source-audio lip-sync, so a lip-sync check cannot pass');
-      }
-      const needsRender = proof.checks.filter((c) => RENDER_ONLY_CHECKS.has(c));
-      if (needsRender.length > 0 && !isRender) {
-        throw treatmentError(422, 'PROOF_EVIDENCE_INSUFFICIENT', `${needsRender.join(', ')} can only be judged in the final render with the song — cite the project's render`);
-      }
-      const needsMotion = proof.checks.filter((c) => MOTION_CHECKS.has(c));
-      if (needsMotion.length > 0 && !isClip) {
-        throw treatmentError(422, 'PROOF_EVIDENCE_INSUFFICIENT', `${needsMotion.join(', ')} needs a played clip or render — a still frame or contact sheet cannot prove motion`);
-      }
-      if (!isClip && !isFrame) {
-        throw treatmentError(422, 'PROOF_EVIDENCE_REQUIRED', 'Cite the frame, clip or render you reviewed');
-      }
-    }
-  }
-  if (recorded) recorded.dependencies = recorded.videoHistoryId === project.renderHistoryId ? project.renderDependencies : captureMusicVideoEvidence(project, { sceneIds: proof.sceneIds, composition: recorded.videoHistoryId === project.renderHistoryId });
-  treatment.proofs[idx] = { ...proof, status, evidence: recorded };
-  return stamp(project, treatment, now);
 }
 
 // ---- apply ------------------------------------------------------------------
@@ -894,25 +771,15 @@ export function syncShotSheetDirections(project, { baseRevision } = {}, now = ne
 
 /**
  * Carry a treatment into a cloned project whose scenes got new ids. Directions
- * and proofs are re-keyed; evidence that points at media the clone does not
- * keep (the final render always, every take on a media-free clone) is dropped
- * with its verdict, because the clone has nothing to back it.
+ * are re-keyed. A legacy `proofs` checklist (retired) is dropped by normalizing.
  */
-export function remapTreatmentForClone(treatment, sceneIdMap, { includeGeneratedMedia, sourceRenderId, sourceScenesFingerprint, cloneScenesFingerprint }) {
+export function remapTreatmentForClone(treatment, sceneIdMap, { sourceScenesFingerprint, cloneScenesFingerprint }) {
   const t = normalizeTreatment(treatment);
   if (!t) return treatment ?? null;
   const remap = (id) => sceneIdMap.get(id) ?? id;
   return {
     ...t,
     shotDirections: t.shotDirections.map((d) => ({ ...d, sceneId: remap(d.sceneId) })),
-    proofs: t.proofs.map((p) => {
-      const lost = !includeGeneratedMedia || (p.evidence?.videoHistoryId && p.evidence.videoHistoryId === sourceRenderId);
-      return {
-        ...p,
-        sceneIds: p.sceneIds.map(remap),
-        ...(lost ? { status: 'proposed', evidence: null } : p.evidence ? { evidence: { ...p.evidence, dependencies: remapMusicVideoDependencies(p.evidence.dependencies, sceneIdMap) } } : {}),
-      };
-    }),
     // The scene-set fingerprint covers ids; keep a clean basis clean.
     basis: t.basis && t.basis.scenes === sourceScenesFingerprint
       ? { ...t.basis, scenes: cloneScenesFingerprint }

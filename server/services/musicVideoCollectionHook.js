@@ -29,7 +29,7 @@ function musicVideoCollectionTarget(job) {
   const sceneId = params.musicVideo?.sceneId || null;
   // A clip from a storyboard panel files the first frame it built too (videoGen/grok.js).
   const firstFrame = job.kind === 'video' ? storyboardFirstFrameFile(job.result) : null;
-  const sourceImageId = firstFrame || (job.kind === 'video' && typeof params.sourceImagePath === 'string' ? basename(params.sourceImagePath) : null);
+  const sourceImageId = firstFrame || params.musicVideoDependencies?.references?.find(ref => ref.role === 'plate')?.assetId || (job.kind === 'video' && typeof params.sourceImagePath === 'string' ? basename(params.sourceImagePath) : null);
   return {
     projectId,
     assets: [

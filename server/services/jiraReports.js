@@ -343,11 +343,3 @@ export async function listReports(appId = null) {
 
   return results.filter(Boolean);
 }
-
-/**
- * Get the latest report for an app
- */
-export async function getLatestReport(appId) {
-  const [latest] = await reportFiles(appId);
-  return latest ? readJSONFile(join(REPORTS_DIR, latest.filename), null) : null;
-}

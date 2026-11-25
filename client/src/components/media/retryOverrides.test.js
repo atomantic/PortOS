@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { DEFAULT_SPEED_PROFILE_ID } from '../../lib/videoGenParams';
-import { buildVideoRetryOverrides, reconcileModelBoundParams, textChanged, numberChanged, codexEffortOf } from './retryOverrides';
+import { buildImageRetryOverrides, buildVideoRetryOverrides, reconcileModelBoundParams, textChanged, numberChanged, codexEffortOf } from './retryOverrides';
 
 const baseParams = { prompt: 'a cat', negativePrompt: '', modelId: 'm1', width: 512, height: 512, numFrames: 49, fps: 24, chunks: 1, seed: 7, steps: 20 };
 
@@ -103,5 +103,63 @@ describe('reconcileModelBoundParams', () => {
     const model = { id: 'm1', runtime: 'ltx' };
     const once = reconcileModelBoundParams(model, [model], draft);
     expect(reconcileModelBoundParams(model, [model], once)).toEqual(once);
+  });
+});
+
+describe('buildImageRetryOverrides', () => {
+  const local = { prompt: 'a fox', negativePrompt: '', mode: 'local', modelId: 'flux-dev', width: 750, height: 1050, seed: 7, steps: 25, guidance: 3.5 };
+  const codex = { prompt: 'a fox', mode: 'codex', model: 'gpt-6-luna', effort: 'high', width: 1024, height: 1024 };
+  const draftOf = (p, patch = {}) => ({
+    prompt: p.prompt, negativePrompt: p.negativePrompt || '', model: p.model || p.modelId || '',
+    width: p.width ?? '', height: p.height ?? '', seed: p.seed ?? '', steps: p.steps ?? '', guidance: p.guidance ?? '',
+    effort: p.effort || 'default', ...patch,
+  });
+
+  it('returns null for an unchanged draft, even on an off-grid shipped size', () => {
+    expect(buildImageRetryOverrides(draftOf(local), local)).toBeNull();
+    expect(buildImageRetryOverrides(draftOf(codex), codex)).toBeNull();
+  });
+
+  it('sends only the changed keys, trimming prompt text', () => {
+    expect(buildImageRetryOverrides(draftOf(local, { prompt: ' a red fox ', width: 704, steps: '30' }), local))
+      .toEqual({ prompt: 'a red fox', width: 704, steps: 30 });
+  });
+
+  it('writes the model to the wire key its backend reads', () => {
+    expect(buildImageRetryOverrides(draftOf(local, { model: 'z-image-turbo' }), local)).toEqual({ modelId: 'z-image-turbo' });
+    expect(buildImageRetryOverrides(draftOf(codex, { model: 'gpt-6-sol' }), codex)).toEqual({ model: 'gpt-6-sol' });
+  });
+
+  it('never sends a model for a backend with no model knob', () => {
+    const grok = { prompt: 'a fox', mode: 'grok', modelId: 'stale' };
+    expect(buildImageRetryOverrides(draftOf(grok, { model: 'edited' }), grok)).toBeNull();
+  });
+
+  it('treats a configured-default model sentinel as blank, not as an edit', () => {
+    const agy = { prompt: 'a fox', mode: 'agy', model: 'antigravity-configured-default' };
+    expect(buildImageRetryOverrides(draftOf(agy, { model: '' }), agy)).toBeNull();
+  });
+
+  it('clears seed and steps with null when blanked, and leaves absent ones alone', () => {
+    expect(buildImageRetryOverrides(draftOf(local, { seed: '', steps: '' }), local)).toEqual({ seed: null, steps: null });
+    const bare = { prompt: 'a fox', mode: 'local', modelId: 'm' };
+    expect(buildImageRetryOverrides(draftOf(bare, { seed: '', steps: '' }), bare)).toBeNull();
+  });
+
+  it('drops an inherited steps value when the picked model locks its sampler', () => {
+    expect(buildImageRetryOverrides(draftOf(local, { stepsLocked: true }), local)).toEqual({ steps: null });
+    const bare = { prompt: 'a fox', mode: 'local', modelId: 'm' };
+    expect(buildImageRetryOverrides(draftOf(bare, { stepsLocked: true }), bare)).toBeNull();
+  });
+
+  it('does not send a blank guidance (the wire has no clear for it)', () => {
+    expect(buildImageRetryOverrides(draftOf(local, { guidance: '' }), local)).toBeNull();
+    expect(buildImageRetryOverrides(draftOf(local, { guidance: '5' }), local)).toEqual({ guidance: 5 });
+  });
+
+  it('sends the effort level or the default sentinel only for Codex and only when changed', () => {
+    expect(buildImageRetryOverrides(draftOf(codex, { effort: 'medium' }), codex)).toEqual({ effort: 'medium' });
+    expect(buildImageRetryOverrides(draftOf(codex, { effort: 'default' }), codex)).toEqual({ effort: 'default' });
+    expect(buildImageRetryOverrides(draftOf(local, { effort: 'medium' }), local)).toBeNull();
   });
 });

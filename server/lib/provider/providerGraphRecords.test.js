@@ -26,7 +26,7 @@ import {
   importGraphFromProviders,
   planGraphReconciliation,
   reconciliationIsNoop,
-  toManagementGraphDto,
+  toConnectionDto,
   nextConnectionCatalog,
 } from './providerGraphRecords.js';
 
@@ -126,26 +126,13 @@ describe('importing an install into durable rows', () => {
   });
 });
 
-describe('the client DTO', () => {
-  const dto = () => toManagementGraphDto({ ...imported().graph, activeProvider: 'claude-ollama' });
-
-  it('publishes credential presence and never a credential or a snapshot', () => {
-    const serialized = JSON.stringify(dto());
+describe('the connection DTO', () => {
+  it('publishes credential presence without exposing credential values', () => {
+    const connections = imported().graph.connections.map(toConnectionDto);
+    const serialized = JSON.stringify(connections);
     expect(serialized).not.toContain('example-token');
     expect(serialized).not.toContain('example-remote-key');
-    expect(serialized).not.toContain('projected');
-    expect(dto().connections.every((connection) => connection.hasCredentials)).toBe(true);
-  });
-
-  it('publishes the same executable activeProvider string as the flat API', () => {
-    expect(dto().activeProvider).toBe('claude-ollama');
-  });
-
-  it('marks a binding blocked while one of its routes has an unsettled projection', () => {
-    const graph = imported().graph;
-    graph.routes[0].pending = { fields: {}, envVars: {}, hasEnvVars: true };
-    const blocked = toManagementGraphDto(graph).bindings.filter((binding) => binding.blocked);
-    expect(blocked.map((binding) => binding.id)).toEqual([graph.routes[0].bindingId]);
+    expect(connections.every((connection) => connection.hasCredentials)).toBe(true);
   });
 });
 

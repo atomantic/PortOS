@@ -439,7 +439,7 @@ describe('editable code revisions and footage variants', () => {
       castAndSets: { status: 'approved', direction: { medium: 'procedural' } },
       publishKit: { master: { filename: 'source-final.mp4' }, posts: { youtube: { url: 'https://example.com/source' } } },
       devArtifacts: [{ id: 'sheet-original', kind: 'cast-sets', file: 'music-video/example/dev/sheet/v1.html', versions: [{ version: 1 }] }],
-      treatment: { revision: 1, appliedRevision: 1, shotDirections: [{ sceneId: scene.sceneId, route: 'code-2d', medium: 'procedural', focalSubject: 'Traveler' }], proofs: [] },
+      treatment: { revision: 1, appliedRevision: 1, shotDirections: [{ sceneId: scene.sceneId, route: 'code-2d', medium: 'procedural', focalSubject: 'Traveler' }] },
     } }));
     const original = await file.getProject(source.id);
     const fork = await file.cloneProject(source.id, { variant: 'video-generation', includeGeneratedMedia: true });

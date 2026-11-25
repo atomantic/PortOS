@@ -1,7 +1,10 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Wand2 } from 'lucide-react';
 import FooterAction from './FooterAction.jsx';
 import { runBusyAction } from './lightboxBusy.js';
+import ModelInputPreview from './ModelInputPreview.jsx';
+import { useModelInputPreview } from '../../hooks/useModelInputPreview.js';
+import { previewRegenerate } from '../../services/apiImageVideo.js';
 
 // SynthID-defeat regeneration. The toggle opens an inline panel (strength
 // slider + optional prompt) so a pass can be tuned without leaving the
@@ -23,6 +26,12 @@ export default function LightboxRegenControls({ item, onClose, onRegenerate, reg
   // make that adaptive default unreachable from the UI.
   const [strengthTouched, setStrengthTouched] = useState(false);
   const [regenPrompt, setRegenPrompt] = useState('');
+  const typedPrompt = regenPrompt.trim();
+  // The server shows the typed prompt plus the source image's carried negative prompt before the send (#18642).
+  const previewRegen = useCallback((body, options) => previewRegenerate(item.filename, body, options), [item.filename]);
+  const modelInputPreview = useModelInputPreview(previewRegen, { prompt: typedPrompt }, {
+    enabled: regenOpen && regenAvailable && !!item.filename && typedPrompt.length > 0,
+  });
   const runLight = runBusyAction({ item, onClose, busy: lightRegenerating, setBusy: setLightRegenerating, action: (it) => onRegenerate(it, { method: 'light' }) });
 
   if (!onRegenerate) return null;
@@ -94,6 +103,7 @@ export default function LightboxRegenControls({ item, onClose, onRegenerate, reg
               placeholder="Leave empty for minimal change"
               className="w-full px-2 py-1 text-xs rounded bg-port-card border border-port-border text-gray-100 placeholder:text-gray-600 focus:outline-none focus:border-port-accent"
             />
+            <ModelInputPreview preview={modelInputPreview} prompt={regenPrompt} />
           </div>
           <button
             type="button"

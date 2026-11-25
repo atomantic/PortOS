@@ -1,6 +1,6 @@
 /** Defines Music Video stages and derives project progress, header status, and the next action. */
 import {
-  AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LYRICS_STEP_LABELS, AUTONOMOUS_SONG_STEP_LABELS, AUTONOMOUS_STATUS_LABELS,
+  AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LYRICS_STEP_LABELS, AUTONOMOUS_SONG_STEP_LABELS,
 } from './musicVideoAutonomous.js';
 import { formatCount } from '../utils/formatters.js';
 import { isNonBlankStr } from './textUtils';
@@ -13,6 +13,7 @@ import { previzCoversShots } from '../../../server/lib/musicVideo/musicVideoPrev
 import {
   RESUMABLE_RUN_STATUSES, FOOTAGE_OPTIONAL_MODES, currentRun, footageReady, codeComposed, blenderShotsDone, selectCurrentStage, shotsFacts,
 } from '../../../server/lib/musicVideo/musicVideoStageSelection.js';
+import { RUN_STATUS_LABELS } from './musicVideoRunStatus.js';
 
 /**
  * The steps of a music video, in the order the director decides them: the
@@ -140,7 +141,7 @@ function shouldJumpToReview(project, { run, art, board, pilotParked, busy, ownAc
 
 const autonomousChipLabel = (auto, { phase, step }) => {
   if (phase === 'running') return step ? `Autonomous run: ${step.toLowerCase()}` : 'Autonomous run running';
-  return `Autonomous run ${auto.interrupted ? 'interrupted' : (AUTONOMOUS_STATUS_LABELS[auto.status] || auto.status).toLowerCase()}`;
+  return `Autonomous run ${auto.interrupted ? 'interrupted' : (RUN_STATUS_LABELS[auto.status] || auto.status).toLowerCase()}`;
 };
 
 /**

@@ -10,6 +10,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
   return makeProxy(actual);
 });
 
+const { getDateString } = await import('../../lib/fileUtils.js');
 const { getAgentStats, getActivityTimeline, getTodayActionCount, logActivity } = await import('./agentActivity.js');
 
 const activityRoot = join(tempRoot, 'agents', 'activity');
@@ -130,8 +131,11 @@ describe('getAgentStats totals', () => {
   });
 
   it('counts posts, comments and votes from completed records only', async () => {
-    const today = new Date().toISOString().slice(0, 10);
-    const rec = (action, status, result) => ({ id: `${action}-${status}`, action, status, result, timestamp: `${today}T00:00:00.000Z` });
+    // getAgentStats walks local-date day files, so the fixture must use the same local date, not the UTC one.
+    const now = new Date();
+    const today = getDateString(now);
+    const localNoon = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12).toISOString();
+    const rec = (action, status, result) => ({ id: `${action}-${status}`, action, status, result, timestamp: localNoon });
     await writeDay('agent-s', today, [
       rec('post', 'started'),
       rec('post', 'completed', {}),

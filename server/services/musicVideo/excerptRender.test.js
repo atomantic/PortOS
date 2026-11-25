@@ -186,6 +186,31 @@ describe('excerpt render cancellation', () => {
     await vi.waitFor(() => expect(terminalFrames(second.jobId)).toHaveLength(1));
   });
 
+  it('keeps a finished excerpt through a backup cut longer than the default wait, then publishes it once the cut releases (#18718)', async () => {
+    const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
+    const id = 'excerpt-backup-cut';
+    prime(id);
+    const { jobId, excerptId } = await startExcerptRender(id, { startSec: 0, endSec: 2 });
+    lastProc().emit('spawn');
+    const releaseCut = await acquireBackupSnapshotCut();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      lastProc().emit('close', 0, null);
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(excerpt(id, excerptId).status).toBe('rendering');
+      expect(terminalFrames(jobId)).toHaveLength(0);
+      expect(unlink).not.toHaveBeenCalledWith(expect.stringContaining(excerpt(id, excerptId).filename ?? 'no-output-yet'));
+      releaseCut();
+      await vi.advanceTimersByTimeAsync(1000);
+    } finally {
+      vi.useRealTimers();
+      releaseCut();
+    }
+    await vi.waitFor(() => expect(terminalFrames(jobId)).toHaveLength(1));
+    expect(terminalFrames(jobId)[0].type).toBe('complete');
+    expect(excerpt(id, excerptId).status).toBe('complete');
+  });
+
   it('honors a cancellation that raced a clean ffmpeg exit: no completion, settles as canceled', async () => {
     const id = 'excerpt-cancel-success';
     prime(id);

@@ -50,9 +50,8 @@ export const spawnBodySchema = z.object({
   model: optionalString,
   envVars: looseRecord,
   providerAuth: looseRecord,
-  cliCommand: optionalString,
+  cliCommand: z.string().min(1, 'cliCommand is required'),
   cliArgs: z.union([z.array(z.string()), z.string()]).nullish(),
-  claudePath: optionalString,
 });
 
 export const pauseBodySchema = z.object({ reason: optionalString });

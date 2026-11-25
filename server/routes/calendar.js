@@ -166,15 +166,6 @@ router.get('/events', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-router.get('/events/:accountId/:eventId', asyncHandler(async (req, res) => {
-  if (!UUID_RE.test(req.params.accountId)) {
-    throw new ServerError('Invalid accountId format', { status: 400 });
-  }
-  const event = await calendarSync.getEvent(req.params.accountId, req.params.eventId);
-  if (!event) throw new ServerError('Event not found', { status: 404 });
-  res.json(event);
-}));
-
 // === Subcalendar Routes ===
 router.get('/accounts/:id/subcalendars', asyncHandler(async (req, res) => {
   if (!UUID_RE.test(req.params.id)) {
@@ -298,15 +289,6 @@ router.post('/sync/:accountId/discover-api', asyncHandler(async (req, res) => {
 }));
 
 // === Daily Review Routes ===
-// NOTE: /review/history must come before /review/:date so Express doesn't match "history" as a date param
-const reviewHistoryQuerySchema = z.object({ startDate: z.string().optional(), endDate: z.string().optional() });
-
-router.get('/review/history', asyncHandler(async (req, res) => {
-  const { startDate, endDate } = validateRequest(reviewHistoryQuerySchema, req.query);
-  const history = await dailyReview.getDailyReviewHistory(startDate, endDate);
-  res.json(history);
-}));
-
 router.get('/review/:date', asyncHandler(async (req, res) => {
   const dateStr = req.params.date;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {

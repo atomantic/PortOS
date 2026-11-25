@@ -869,34 +869,6 @@ describe('pipeline routes', () => {
     expect(r.status).toBe(400);
   });
 
-  it('GET /issues/recent?limit=0 clamps to 1 (route forwards to service which owns coercion)', async () => {
-    const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
-    await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'A' });
-    await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'B' });
-    const r = await request(app).get('/api/pipeline/issues/recent?limit=0');
-    expect(r.status).toBe(200);
-    // Without alignment, the route's `Number(...) || 10` would return up
-    // to 10 issues even when the caller explicitly passed 0.
-    expect(r.body).toHaveLength(1);
-  });
-
-  it('GET /issues/recent returns the most-recently-updated issues with denormalized seriesName', async () => {
-    const app = makeApp();
-    const ser1 = await request(app).post('/api/pipeline/series').send({ name: 'Alpha', universeId: 'u-test' });
-    const ser2 = await request(app).post('/api/pipeline/series').send({ name: 'Beta', universeId: 'u-test' });
-    const iss1 = await request(app).post(`/api/pipeline/series/${ser1.body.id}/issues`).send({ title: 'Old' });
-    // Bump iss1's updatedAt back so iss2 is unambiguously the most recent.
-    await new Promise((r) => setTimeout(r, 10));
-    const iss2 = await request(app).post(`/api/pipeline/series/${ser2.body.id}/issues`).send({ title: 'Newer' });
-    const r = await request(app).get('/api/pipeline/issues/recent?limit=10');
-    expect(r.status).toBe(200);
-    expect(Array.isArray(r.body)).toBe(true);
-    expect(r.body[0].id).toBe(iss2.body.id);
-    expect(r.body[0].seriesName).toBe('Beta');
-    expect(r.body.find((i) => i.id === iss1.body.id)?.seriesName).toBe('Alpha');
-  });
-
   // Service-layer tests cover withHistory:true/false; these pin the route
   // wiring on the endpoints UI lists hit so a future change can't silently
   // re-introduce stage runHistory on list payloads.
@@ -925,22 +897,6 @@ describe('pipeline routes', () => {
       const items = pickItems(r.body);
       expect(Array.isArray(items)).toBe(true);
       expect(items.find((i) => i.id === issueId).stages.idea.runHistory).toEqual([]);
-      spy.mockRestore();
-    });
-
-    it('GET /issues/recent forwards withHistory:false and projects stages out of the response', async () => {
-      const issuesSvc = await import('../services/pipeline/issues.js');
-      const app = makeApp();
-      // Tiny seed so the response is non-empty and we can assert the
-      // route's `stages`-dropping projection actually holds.
-      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
-      await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'T' });
-      const spy = vi.spyOn(issuesSvc, 'listRecentIssues');
-      const r = await request(app).get('/api/pipeline/issues/recent?limit=5');
-      expect(r.status).toBe(200);
-      expect(spy).toHaveBeenCalledTimes(1);
-      expect(spy).toHaveBeenCalledWith(expect.objectContaining({ withHistory: false, summary: true }));
-      expect(r.body[0]).not.toHaveProperty('stages');
       spy.mockRestore();
     });
   });

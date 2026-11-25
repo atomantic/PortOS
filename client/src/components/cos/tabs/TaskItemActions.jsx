@@ -22,8 +22,8 @@ export default function TaskItemActions({ task, agent, unconfirmed, editing, del
         ) : (
           <>
             {/* Deliberately gated on the PERSISTED status, not `displayStatus`:
-                an agent record stuck at `running` (the zombie state
-                cleanupZombieAgents exists to clear) would otherwise take this
+                an agent record stuck at `running` (the dead-process state
+                the orphan sweep exists to clear) would otherwise take this
                 row's only recovery affordance away with it. forceSpawnTask
                 refuses a task a live agent already holds, so a click during a
                 real spawn gets an honest error rather than a duplicate run. */}

@@ -1,4 +1,4 @@
-import { open, readdir, rename } from 'fs/promises';
+import { open, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
@@ -242,20 +242,3 @@ export function cacheImageSha256(filename, entry) {
 }
 registerGallerySha256Writer(cacheImageSha256);
 
-// Returns just `{ filename, name }` — clients send `filename` back in the
-// generate payload's `loraFilenames` and the server resolves it against
-// PATHS.loras. Avoids leaking absolute server paths into the API surface.
-//
-// Distinct from `services/loras.js#listLoras` which returns the rich
-// Civitai-aware shape (civitai, runnerFamily, triggerWords, etc.) for the
-// `/api/loras` manager UI. The two used to share the name `listLoras`;
-// rename here makes the shape distinction explicit so a future caller
-// can't import the wrong one and silently lose `civitai`/`runnerFamily`.
-export async function listLoraFilenames() {
-  await ensureDir(PATHS.loras);
-  const files = await readdir(PATHS.loras).catch(() => []);
-  return files.filter((f) => f.endsWith('.safetensors')).map((f) => ({
-    filename: f,
-    name: f.replace(/^lora-/, '').replace(/\.safetensors$/, ''),
-  }));
-}

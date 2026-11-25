@@ -126,6 +126,17 @@ export const regenerateGalleryImage = (filename, { strength, steps, prompt, meth
     }),
     silent: true,
   });
+// What a regenerate / annotation re-render would send to the model, built by the server's own route code
+// (#18642): the typed prompt plus the source image's carried negative prompt. Same body as the regenerate POST.
+export const previewRegenerate = (filename, { prompt, annotated } = {}, options = {}) =>
+  request(`/image-gen/${encodeURIComponent(filename)}/regenerate/preview`, {
+    method: 'POST',
+    body: JSON.stringify({
+      ...(prompt != null ? { prompt } : {}),
+      ...(annotated ? { annotated: true } : {}),
+    }),
+    ...options,
+  });
 // Whether the local FLUX regen backend is installed (hardware gate). Also carries
 // the strength slider bounds: `{ available, modelId, reason, strengthMin, strengthMax, strengthDefault }`.
 // Pass a source `filename` (issue #2036) to get the EXACT model a regen of that
@@ -210,7 +221,8 @@ export async function createImageGenVenv() {
 }
 
 // Video gen
-export const getVideoGenStatus = (options = {}) => request('/video-gen/status', options)
+// `fresh` drops the server's 30s interpreter-health memo before probing (manual Refresh, install completion).
+export const getVideoGenStatus = ({ fresh, ...options } = {}) => request(`/video-gen/status${fresh ? '?fresh=true' : ''}`, options)
   .then((status) => ({
     ...status,
     models: filterHardwareCompatibleModels(status?.models),

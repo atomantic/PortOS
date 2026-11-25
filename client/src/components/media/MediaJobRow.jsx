@@ -198,7 +198,9 @@ export default function JobRow({ job, snapshotRequestedAt, onCancel, onRetry, on
   // marker, so a prompt/model edit here would never reach the peer — and the
   // server re-normalizes the retry anyway. Offer the plain Retry, not the
   // editor, rather than showing a form whose edits are silently discarded.
-  const canEdit = canRetry && job.renderer !== 'remote';
+  // The editors exist for image and video jobs only; the other kinds (audio,
+  // stitch, composition, ...) have no knob grid, so they keep the plain Retry.
+  const canEdit = canRetry && job.renderer !== 'remote' && (job.kind === 'image' || job.kind === 'video');
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const badge = modelLabel(job.params, job.renderer);
   return (

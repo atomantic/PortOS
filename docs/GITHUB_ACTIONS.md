@@ -272,7 +272,8 @@ The complete server, client, DB, lint, build, and smoke suite runs:
   and the memo records that related selection narrows with were never saved
   (#16424). A miss is caught by the next run that completes, which covers every
   merge since the previous one started;
-- on the schedule, 09:17 and 21:17 UTC;
+- on the schedule, 09:17 and 21:17 UTC, in a concurrency group of its own so a
+  push to `main` never replaces a scheduled run waiting behind it;
 - from manual workflow dispatch;
 - as a reusable workflow called by a release whose tree has no verifiable gate.
 
@@ -285,6 +286,15 @@ A failing job does not cancel its siblings, and every matrix sets
 and the rest concluded on their own results, so **Re-run failed jobs** repeats
 only the red shard. Runners on this public repository are not billed, so the
 siblings that keep running cost concurrency, not money.
+
+**The launcher bounds itself.** A step timeout did not end a hung Windows test run
+on 2026-11-24 and the job log was lost (#18636). `scripts/run-ci-tests.js` therefore reads
+`PORTOS_CI_TEST_DEADLINE_MINUTES` (Windows 20, Linux server 25, client 25, DB 15, each below
+its step or job limit). One deadline covers every pass and the crash retry; when it expires the launcher
+logs the deadline, ends the test process tree, prints the diagnostics and the Vitest output tail,
+and exits non-zero even if a detached descendant holds a handle. The step and job timeouts stay
+as the outer fallback, and the browser job keeps its own watchdog. A runner that stops executing
+entirely cannot be reported by any in-process deadline.
 
 **Cancelled is not mergeable.** Every consumer allowlists green results:
 branch protection requires `CI Gate` to conclude `success`; the gate accepts
@@ -481,7 +491,7 @@ finalization. Interpret the first unconfirmed boundary in order: stage start →
 command exit → command close → owned-process snapshot → checkout post-action →
 runner `Complete job` → overall job result. A successful repository checkpoint
 cannot attest the later runner/result-service handoff. Keep the ten-minute impact
-timeout, fail-closed `CI Gate`, and real-job-timeout exclusion in cancel recovery.
+timeout, and fail-closed `CI Gate`.
 
 #### Retained evidence rule
 

@@ -16,6 +16,7 @@ import { filmLookSchema } from '../filmLookValidation.js';
 import { TEMPLATE_EFFECT_CONTROLS } from './musicVideoTemplateEffects.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT, MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT, MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT } from '../referenceLimits.js';
 import { z } from 'zod';
+import { musicVideoImageTreatmentsSchema } from './musicVideoImageTreatmentValidation.js';
 
 export const musicVideoTemplateEffectsSchema = z.object(Object.fromEntries(TEMPLATE_EFFECT_CONTROLS.map(({ id }) => [id, z.number().min(0).max(1).nullable().optional()]))).strict();
 import { TIMELINE_BEAT_KINDS, TIMELINE_BEATS_MAX, TIMELINE_LENGTH_MAX_MIN, TIMELINE_PACES, PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLOR_IDS, PREVIZ_POSES, PREVIZ_TRACKS_MAX, PREVIZ_VEHICLES_MAX, PREVIZ_VISIBLE_MAX, VEHICLE_SPEED_MAX_METERS_PER_MIN } from './musicVideoPrevizLimits.js';
@@ -616,6 +617,7 @@ const sceneLayerFields = {
   // it takes to finish; null clears it.
   imageEffect: z.enum(MUSIC_VIDEO_IMAGE_EFFECTS).nullable().optional(),
   imageEffectSec: z.number().min(IMAGE_EFFECT_SEC_RANGE.min).max(IMAGE_EFFECT_SEC_RANGE.max).nullable().optional(),
+  imageTreatments: musicVideoImageTreatmentsSchema.optional(),
   photoSequence: z.object({
     enabled: z.boolean().optional(),
     imageIds: z.array(z.string().min(1).max(256).regex(/^[^/\\\\]+$/)).max(PHOTO_SEQUENCE_LIMIT),
@@ -654,7 +656,7 @@ const sceneLayerFields = {
 
 // The treatment sits between the director's concept/visual spec and the timed
 // shot planner: a structured brief, a compiled whole-song arc, per-shot
-// direction keyed to the board's real scene ids, and a proof checklist. Its own
+// direction keyed to the board's real scene ids. Its own
 // routes edit it (never the generic project PATCH) so every write carries the
 // revision it was based on. See services/musicVideo/treatment.js.
 export const MUSIC_VIDEO_ASPECT_RATIOS = ['16:9', '9:16', '1:1', '4:5', '2.39:1'];
@@ -667,8 +669,6 @@ export const MUSIC_VIDEO_TREATMENT_SHOT_MODES = ['performance', 'cutaway', 'grap
 export const MUSIC_VIDEO_SHOT_ROUTES = ['generated', 'supplied-asset', 'code-2d'];
 export const MUSIC_VIDEO_NEGATIVE_SPACE = ['none', 'upper', 'center', 'lower'];
 export const MUSIC_VIDEO_TYPOGRAPHY_ROLES = ['none', 'subtitle', 'hero'];
-export const MUSIC_VIDEO_PROOF_CHECKS = ['identity-continuity', 'readable-text', 'cut-continuity', 'audio-alignment', 'continuous-motion', 'lip-sync'];
-export const MUSIC_VIDEO_PROOF_STATUSES = ['proposed', 'passed', 'failed'];
 
 // A manually supplied reference note/URL. The URL is provenance the director
 // typed — PortOS never fetches it, and its text is treated as untrusted data.

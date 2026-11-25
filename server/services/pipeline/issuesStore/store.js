@@ -137,7 +137,6 @@ function makePgBackend(db, sanitizeRecord) {
     listRaw: db.listRaw,
     listRawBySeries: db.listRawBySeries,
     listRawBySeriesIds: db.listRawBySeriesIds,
-    listRecentRaw: db.listRecentRaw,
     writeRaw: db.writeRaw,
     deleteRaw: db.deleteRaw,
     verify: async () => ({ ok: true, type: 'pipelineIssues', onDisk: null, expected: null,
@@ -216,25 +215,6 @@ function createFacade({ dir, sanitizeRecord }) {
       const raw = await (await getBackend()).listRawBySeriesIds(seriesIds, options);
       return sanitizeList(raw, options);
     },
-
-    loadRecent: async ({ limit = 10, ...options } = {}) => {
-      const backend = await getBackend();
-      let recent;
-      if (backend.listRecentRaw) {
-        recent = sanitizeList(await backend.listRecentRaw({ ...options, limit }), options);
-      } else {
-        // Dev/test file backend has no timestamp index. Sanitize before sorting
-        // to retain its legacy-record behavior, then match the HTTP projection.
-        const live = sanitizeList(await backend.listRaw(), options)
-          .filter((r) => options.includeDeleted || !r.deleted);
-        recent = live.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
-          .slice(0, limit);
-      }
-      return options.summary
-        ? recent.map(({ id, title, number, seriesId, updatedAt }) => ({ id, title, number, seriesId, updatedAt }))
-        : recent;
-    },
-
     saveOneNow,
     deleteOneNow,
     deleteOne: deleteOneNow, // issues delete from inside queueTypeIndexWrite / Promise.all batches

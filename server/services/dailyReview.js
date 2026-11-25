@@ -198,38 +198,3 @@ export function confirmEvent(date, { eventId, happened, goalId, durationMinutes,
   });
 }
 
-export async function getDailyReviewHistory(startDate, endDate) {
-  await ensureDir(REVIEW_DIR);
-  const { readdir } = await import('fs/promises');
-  const files = await readdir(REVIEW_DIR).catch(() => []);
-
-  // Filter to the requested date window first (cheap, no I/O), then read the
-  // surviving review files in parallel instead of serializing one disk read
-  // per day across the whole history.
-  const inRange = files
-    .filter(file => file.endsWith('.json'))
-    .map(file => file.replace('.json', ''))
-    .filter(reviewDate => {
-      if (startDate && reviewDate < startDate) return false;
-      if (endDate && reviewDate > endDate) return false;
-      return true;
-    });
-
-  const loaded = await Promise.all(
-    inRange.map(async reviewDate => {
-      // Read-only history projection; confirmations use the strict loadReview path.
-      const data = await readJSONFile(join(REVIEW_DIR, `${reviewDate}.json`), null);
-      if (!data) return null;
-      const confirmations = Object.values(data.confirmations || {});
-      return {
-        date: reviewDate,
-        confirmed: confirmations.filter(c => c.happened).length,
-        skipped: confirmations.filter(c => c.happened === false).length,
-        total: confirmations.length,
-        updatedAt: data.updatedAt
-      };
-    })
-  );
-
-  return loaded.filter(Boolean).sort((a, b) => b.date.localeCompare(a.date));
-}

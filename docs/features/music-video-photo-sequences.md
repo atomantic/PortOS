@@ -55,3 +55,40 @@ The docked composition preview keeps smooth playback when a shot uses a photo
 sequence: the photo or stack changes on the frame its step begins, and the
 other shots play unaffected. A step whose photo could not load in time is
 skipped rather than shown late, so the picture never steps backward.
+
+## Image Treatments
+
+Open **Image Treatments** next to **Transitions & effects** in the shot
+editor. Pick the start frame, end frame, a sequence photo, or another image
+take. Choose a treatment, adjust its controls in the live preview, and use
+**Save treatment**. **Compare original** toggles the preview. Save **None** to
+remove the treatment completely. Settings follow that image within the shot,
+not the start/end slot or its position in the sequence. The same gallery image
+can look different in another shot without changing the original.
+
+- **Quartz Date Imprint** simulates a seven-segment exposure typical of later
+  date backs. The original exposure affects imprint contrast; intensity controls
+  the bloom. Try orange, red, or yellow in the lower right.
+  [Canon Quartz Date Back E manual](https://en.apertureonepointfour.com/_files/ugd/b35e48_f75db1d5e1884feaa3a82ac3b44aeb8d.pdf?index=true)
+- **Early Camera Date Imprint** uses smaller, softer block numerals inspired by
+  manually set optical data backs, not a modern timecode overlay.
+  [Canon Camera Museum](https://global.canon/en/c-museum/history/story05.html) ·
+  [Canon Data Back A instructions](https://flynngraphics.ca/wp-content/uploads/2016/10/DataBack-FN-and-A.pdf)
+- **Photofinisher Date Stamp** adds a simulated lab print border and a
+  processing date. Lab and era varied; the Image Permanence Institute documents
+  border dates from 1960 as well as backstamps. The treatment fits the whole
+  source into the paper border without changing the image's aspect ratio.
+  [Image Permanence Institute, Graphics Atlas](https://new.graphicsatlas.org/chromogenic/object-view)
+
+When a treated photo does not match the film's aspect ratio, PortOS fits it
+whole into the frame so a center crop doesn't remove the stamp. Intentional
+camera moves and crops still apply.
+
+The dates initially shown are examples. Enter the story's exposure or processing
+date, rather than the file's creation date. These are period-inspired looks,
+not replicas of a specific camera or lab. The processor does not call an image
+model. It feeds treated pixels into still previews, composed and document
+renders, and new video generation that uses the image. An existing generated
+clip is not rewritten; generate a new take to use a changed input. A video
+model may alter or lose the imprint as the image animates. For exactly
+reproduced lettering, use the image as a still or a photo-sequence entry.

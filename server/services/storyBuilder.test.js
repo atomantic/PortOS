@@ -37,7 +37,7 @@ vi.mock('./stageRunner.js', () => ({
 // catalogDB is Postgres-backed — mock it so the service test never touches the
 // real DB (#1761). listIngredients (the batch resolve) and linkIngredientsToSeries
 // (the batch link) are spies the tests program per case; the type→role vocabulary
-// itself is covered in catalogDB.test.js.
+// itself is covered in catalogDB.db.test.js.
 const catalogMocks = vi.hoisted(() => {
   const listIngredients = vi.fn();
   return {

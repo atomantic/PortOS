@@ -182,6 +182,8 @@ function stillLockBasis(project, scene) {
 }
 
 const STILL_LOCK_VERSION = 2;
+const SHOT_APPROVER_FIELDS = ['approvedAt', 'approvedBy', 'reviewer'];
+const BOARD_SHOT_LOCK_FIELDS = [...SHOT_APPROVER_FIELDS, 'fromBoardApproval', 'basis', 'v', 'inheritedStillId'];
 const stillLock = (project, scene, fields) => ({ ...fields, basis: stillLockBasis(project, scene), v: STILL_LOCK_VERSION });
 const stillLockHolds = (project, scene, approval) => approval.v === STILL_LOCK_VERSION
   ? approval.basis === stillLockBasis(project, scene) : approval.basis === shotApprovalBasis(project, scene);
@@ -200,7 +202,11 @@ export function shotLocks(project) {
   const covered = (project.scenes || []).some(scene => !approvals[scene.sceneId]) && boardApprovalCovers(project);
   return Object.fromEntries((project.scenes || []).map(scene => {
     const approval = approvals[scene.sceneId];
-    return [scene.sceneId, !approval ? (covered ? 'locked' : 'open') : stillLockHolds(project, scene, approval) ? 'locked' : 'changed'];
+    if (!approval) return [scene.sceneId, covered ? 'locked' : 'open'];
+    // A manual split lends the original still's lock to the new piece. Its
+    // replacement has no per-shot approval, even when the board is current.
+    if (approval.inheritedStillId !== undefined && approval.inheritedStillId !== (scene.referenceImageId ?? null)) return [scene.sceneId, 'open'];
+    return [scene.sceneId, stillLockHolds(project, scene, approval) ? 'locked' : 'changed'];
   }));
 }
 
@@ -267,15 +273,15 @@ export function nameShots(project, entries) {
  * the board (a new shot, a split). Every shot locked before stays locked by its
  * own timing-free lock, even one covered only by a whole-board approval the
  * change stales; `from` maps a new shot to the shot it was cut from, and a new
- * piece of a locked still is locked too. Clip locks are not copied: a new piece
- * has no clip of its own.
+ * piece of a locked still is locked too. Manual cut pieces borrow that lock
+ * only for the still they inherit. Clip locks stay with their original shot.
  */
-export function carryShotLocks(before, after, { from = {} } = {}) {
+export function carryShotLocks(before, after, { from = {}, inheritStillOnly = false } = {}) {
   const locks = shotLocks(before);
   if (!locks) return after;
   const held = before.productionReview?.shotApprovals || {};
   const board = before.productionReview?.approvals?.storyboard;
-  const lockOf = scene => held[scene.sceneId] || { ...board, fromBoardApproval: true };
+  const lockOf = scene => held[scene.sceneId] || { ...pick(board, SHOT_APPROVER_FIELDS), fromBoardApproval: true };
   const shotApprovals = { ...after.productionReview?.shotApprovals };
   let carried = false;
   for (const scene of before.scenes || []) {
@@ -289,7 +295,8 @@ export function carryShotLocks(before, after, { from = {} } = {}) {
     const source = before.scenes?.find(s => s.sceneId === sourceId);
     const piece = after.scenes?.find(s => s.sceneId === pieceId);
     if (!source || !piece || locks[sourceId] !== 'locked') continue;
-    shotApprovals[pieceId] = stillLock(after, piece, lockOf(source));
+    const inherited = inheritStillOnly ? { inheritedStillId: source.referenceImageId ?? null } : {};
+    shotApprovals[pieceId] = stillLock(after, piece, { ...lockOf(source), ...inherited });
     carried = true;
   }
   return carried ? { ...after, productionReview: { ...after.productionReview, shotApprovals } } : after;
@@ -1063,7 +1070,7 @@ const MAX_RECENT_REVISIONS = 5;
 const REVIEWED_SCENE_FIELDS = ['sceneId', 'order', 'label', 'sectionIndex', 'startSec', 'endSec', 'lyricText', 'lyricAnchor',
   'visualIntent', 'prompt', 'framePrompt', 'camera', 'shotSheet', 'shotMode', 'performanceSpeaker', 'coverage', 'transitionIn', 'transitionOut',
   'frameReferenceIds', 'clipReferenceIds', 'setReference', 'characterVariant', 'referenceImageId', 'videoHistoryId',
-  'performanceEdit', 'direction', 'visualLayer', 'preMusic', 'photoSequence', 'templateEffects'];
+  'performanceEdit', 'direction', 'visualLayer', 'preMusic', 'photoSequence', 'imageTreatments', 'templateEffects'];
 const REVIEWED_SCENE_FIELD_SET = new Set(REVIEWED_SCENE_FIELDS);
 
 /** One shot as a reviewed revision stores it: the plan a reviewer saw, without takes or render bookkeeping. */
@@ -1093,11 +1100,9 @@ function slimApprovalHistory(history) {
 }
 
 /**
- * Shrink a review record written before #16210: reviewed snapshots keep only
- * the reviewed shot plan and older history entries lose their input hashes and
- * values. Approvals, feedback, the draft and the proof are untouched, so every
- * approval current before is current after. Returns the same object when there
- * is nothing to slim, so it is idempotent and cheap on every write.
+ * Shrink older review records on write (#16210, #18706). Keep the reviewed
+ * shot plan, drop input hashes and values from older history entries, and
+ * remove copied board data from shot locks while preserving their bindings.
  */
 function slimProductionReview(review) {
   if (!review || typeof review !== 'object') return review;
@@ -1107,9 +1112,16 @@ function slimProductionReview(review) {
       [basis, Array.isArray(r?.scenes) && !r.scenes.every(sceneIsSlim) ? { ...r, scenes: reviewedScenes(r.scenes) } : r]));
   }
   const approvalHistory = slimApprovalHistory(review.approvalHistory);
-  if (revisions === review.reviewedRevisions && approvalHistory === review.approvalHistory) return review;
+  let shotApprovals = review.shotApprovals;
+  for (const [id, lock] of Object.entries(review.shotApprovals || {})) {
+    if (!lock?.fromBoardApproval || Object.keys(lock).every(key => BOARD_SHOT_LOCK_FIELDS.includes(key))) continue;
+    if (shotApprovals === review.shotApprovals) shotApprovals = { ...shotApprovals };
+    shotApprovals[id] = pick(lock, BOARD_SHOT_LOCK_FIELDS);
+  }
+  if (revisions === review.reviewedRevisions && approvalHistory === review.approvalHistory && shotApprovals === review.shotApprovals) return review;
   return { ...review, ...(revisions !== review.reviewedRevisions ? { reviewedRevisions: revisions } : {}),
-    ...(approvalHistory !== review.approvalHistory ? { approvalHistory } : {}) };
+    ...(approvalHistory !== review.approvalHistory ? { approvalHistory } : {}),
+    ...(shotApprovals !== review.shotApprovals ? { shotApprovals } : {}) };
 }
 
 /** A whole project with `slimProductionReview` applied; the same object when nothing changed. */

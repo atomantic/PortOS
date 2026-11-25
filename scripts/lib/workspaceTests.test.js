@@ -7,7 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DB_TEST_INCLUDE } from './dbTestFiles.js';
+import { resolveDbTestFiles } from './dbTestFiles.js';
 import { globToRegExp, listWorkspaceTests, toRepoPath, toWorkspacePath } from './workspaceTests.js';
 
 const REPO_ROOT = join(import.meta.dirname, '..', '..');
@@ -47,7 +47,9 @@ describe('workspace test enumeration', () => {
   // The client half lives in client/src/test/workspaceTests.test.js: the server
   // CI job installs no client workspace, so a client `vitest list` cannot run here.
   it('collects the same files as `vitest list` for server', () => {
-    expect(listWorkspaceTests('server', { repoRoot: REPO_ROOT, env: {} })).toEqual(vitestListedFiles(REPO_ROOT, 'server'));
+    const found = listWorkspaceTests('server', { repoRoot: REPO_ROOT, env: {} });
+    expect(found).toEqual(vitestListedFiles(REPO_ROOT, 'server'));
+    expect(found.filter((file) => /(?:^|[/.])db\.test\.js$/.test(file))).toEqual([]);
   }, 120_000);
 
   it('collects the same files as `vitest list --config vitest.config.db.js` for the db scope', () => {
@@ -58,9 +60,16 @@ describe('workspace test enumeration', () => {
     }).split('\n').map((line) => line.trim().replace(/^\[[^\]]+\] /, '')).filter(Boolean);
     const found = listWorkspaceTests('db', { repoRoot: REPO_ROOT, env: {} });
     expect(found).toEqual([...new Set(listed)].sort());
-    expect(found.length).toBeGreaterThanOrEqual(DB_TEST_INCLUDE.filter((glob) => !glob.includes('*')).length);
+    expect(found.length).toBeGreaterThanOrEqual(80);
     expect(toRepoPath('db', found[0])).toMatch(/^(server|scripts)\//);
   }, 120_000);
+
+  it('only plans DB suites that the DB runner can collect', () => {
+    const included = ['server/services/store.db.test.js', 'server/services/store/db.test.js', 'scripts/setup.db.test.js'];
+    expect(resolveDbTestFiles([
+      ...included, 'scripts/db.test.js', 'client/src/store.db.test.js', 'docs/example.db.test.js',
+    ])).toEqual(included);
+  });
 
   it('drops the registered browser suites for an explicit unit owner on every platform', () => {
     const all = listWorkspaceTests('server', { repoRoot: REPO_ROOT, platform: 'linux', env: {} });

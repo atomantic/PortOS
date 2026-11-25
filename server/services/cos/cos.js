@@ -137,7 +137,6 @@ import {
   unregisterPersistentMindTurnAdapter,
 } from '../persistent/persistentMindSupervisor.js';
 import { closeStalePreflightCard, isPreflightCard, isStalePreflightCard } from '../preflightTaskCard.js';
-import { cleanupZombieAgents } from './cosAgentLifecycle.js';
 import { requireCosOrphanRecoveryHandlers } from '../bootHookRegistry.js';
 import { approvePersistentMindThinkingPresets, cancelPersistentMindThinkingRequest } from '../persistent/persistentMindThinkingRequests.js';
 // `../persistent/persistentMindAdapter.js` is late-bound where the daemon registers the
@@ -676,6 +675,48 @@ export async function isPaused() {
   return state.paused || false;
 }
 
+/** A stopped task is spawnable only through an explicit budget reset, which has its own ownership fence. */
+const isStoppedForReset = (task, resetSpawnBudget) => resetSpawnBudget && ['in_progress', 'blocked'].includes(task.status);
+
+/**
+ * The task as its stale holder's retirement left it, ready for an explicit spawn.
+ *
+ * The reaper hands a dead run's task to `handleOrphanedTask`, which decides
+ * the AUTOMATIC retry: requeue, an `orphan-cooldown` block, a `max-retries`
+ * block, or `completed` when the dead run had already committed. "Run now" is
+ * the user asking for this retry, so it lifts the timed backoff that exists to
+ * pace automatic ones. The other outcomes are verdicts, and it reports them.
+ *
+ * @returns {Promise<{ task: object } | { error: string }>}
+ */
+async function taskAfterHolderRetired(taskId, holder, resetSpawnBudget) {
+  const task = await getTaskById(taskId);
+  if (!task) return { error: 'Task not found' };
+  if (task.status === 'pending' || isStoppedForReset(task, resetSpawnBudget)) return { task };
+  const { blockedCategory, blockedReason, lastOrphanedAgentId } = task.metadata || {};
+  if (task.status !== 'blocked' || blockedCategory !== 'orphan-cooldown' || lastOrphanedAgentId !== holder.id) {
+    return { error: `Agent ${holder.id} is no longer running and its task is now ${task.status}${blockedReason ? ` (${blockedReason})` : ''}` };
+  }
+  const taskType = task.taskType || 'user';
+  // Same field set the cooldown sweeper clears (unblockExpiredCooldowns), and
+  // only that: the store merges metadata, so an edit that landed since the read
+  // above (a re-pinned provider, new context) survives and is what gets
+  // spawned. The fence names the block being lifted, so one that changed hands
+  // in that time is left alone. The dequeue is suppressed because this call
+  // dispatches the task itself.
+  const revived = await updateTask(taskId, {
+    status: 'pending',
+    metadata: { blockedReason: undefined, blockedCategory: undefined, blockedAt: undefined, cooldownUntil: undefined },
+  }, taskType, {
+    expectedStatus: 'blocked',
+    expectedMetadata: { blockedCategory: 'orphan-cooldown', lastOrphanedAgentId: holder.id },
+    suppressDequeue: true,
+  });
+  if (revived?.error) return { error: revived.error };
+  if (!revived || revived.statusChanged) return { error: 'Task changed while its dead agent was being retired' };
+  return { task: { ...revived, taskType } };
+}
+
 /**
  * Force-spawn a pending task by ID, bypassing cooldowns and evaluation intervals.
  */
@@ -687,7 +728,7 @@ export async function forceSpawnTask(taskId, { resetSpawnBudget = false } = {}) 
   let task = await getTaskById(taskId);
   if (!task) return { error: 'Task not found' };
   if (task.metadata?.preflight?.requestId) return { error: 'Preflight progress cards cannot be spawned' };
-  const resetStopped = resetSpawnBudget && ['in_progress', 'blocked'].includes(task.status);
+  let resetStopped = isStoppedForReset(task, resetSpawnBudget);
   if (task.status !== 'pending' && !resetStopped) return { error: `Task is ${task.status}, not pending` };
   if (task.approvalRequired) return { error: 'Task requires approval before it can be spawned' };
 
@@ -729,12 +770,13 @@ export async function forceSpawnTask(taskId, { resetSpawnBudget = false } = {}) 
   // `running` agent is either a zombie record or a live run whose task write
   // lagged. Age is not evidence of death, and prepareAgentSpawn refuses every
   // active owner, so falling through would report a spawn that never happens
-  // (#14039). Settle through the zombie sweep's liveness evidence (pid, runner
-  // listing, in-process handles) — the same sweep GET /agents runs — then
-  // admit only if the shared ownership gate now agrees.
+  // (#14039). Settle through the one reaper's liveness evidence (pid, runner
+  // listing, in-process handles) — the same sweep GET /agents starts — then
+  // admit only if the shared ownership gate now agrees. The sweep is
+  // single-flight: this joins one already running rather than racing it.
   let ownerAgents = state.agents;
   if (holder) {
-    await cleanupZombieAgents();
+    await requireCosOrphanRecoveryHandlers().cleanupOrphanedAgents();
     ownerAgents = (await loadState()).agents;
     running = Object.values(ownerAgents).filter(a => a.status === 'running');
   }
@@ -746,6 +788,12 @@ export async function forceSpawnTask(taskId, { resetSpawnBudget = false } = {}) 
       error: `${ownerNote} — stop that agent or wait for it to finish before running the task again`,
       code: 'TASK_OWNER_HELD',
     };
+  }
+  if (holder) {
+    const settled = await taskAfterHolderRetired(taskId, holder, resetSpawnBudget);
+    if (settled.error) return { error: settled.error };
+    task = settled.task;
+    resetStopped = isStoppedForReset(task, resetSpawnBudget);
   }
   if (running.length >= state.config.maxConcurrentAgents) {
     return { error: `No available agent slots (${running.length}/${state.config.maxConcurrentAgents})` };

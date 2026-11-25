@@ -46,6 +46,9 @@ const ENQUEUE_ROWS = [
     optionsHint: (c) => c.modelContextUnavailable,
   },
   { scope: 'local', active: (c) => c.notConnected },
+  // A legacy-interpreter render must not be submitted on an unknown health
+  // verdict; hosted lanes skip local rows and BYOV runtimes have their own gate.
+  { scope: 'local', active: (c) => c.interpreterPending, reason: () => 'Checking the Python runtime…' },
   { scope: 'local', active: (c) => c.byovGateBlocked, reason: byovReason },
   {
     scope: 'local',

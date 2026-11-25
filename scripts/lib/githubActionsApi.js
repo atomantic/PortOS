@@ -1,6 +1,6 @@
 /**
  * Shared GitHub Actions REST plumbing for the CI gates in `scripts/`
- * (`ci-gate-report.js`, `ci-retry-cancelled-run.js`). The shared piece is a
+ * (`ci-gate-report.js`, `ci-nightly-report.js`). The shared piece is a
  * SECURITY check: `resolveApiBase` decides which host a step-scoped
  * `GITHUB_TOKEN` is sent to, so it must not exist in two copies.
  *
@@ -142,10 +142,6 @@ const FAILING_CONCLUSIONS = new Set(['failure', 'timed_out']);
 const failedSteps = (job) => (Array.isArray(job?.steps) ? job.steps : [])
   .filter((step) => FAILING_CONCLUSIONS.has(step?.conclusion));
 
-/** True when this job carries a real failure, at the job or the step level. */
-export const jobFailed = (job) => FAILING_CONCLUSIONS.has(job?.conclusion)
-  || failedSteps(job).length > 0;
-
 /**
  * One culprit as both reporting surfaces render it, shared so the Checks-tab
  * annotation and the gate summary can't describe the same failure differently.
@@ -165,9 +161,7 @@ const RUN_JOBS_PER_PAGE = 100;
  * stdout, where Actions parses a leading `::` as a command.
  *
  * Single-page and NOT attempt-scoped: both callers are diagnostics inside the run
- * they describe, where an incomplete answer beats a slow one. The retry guard in
- * `ci-retry-cancelled-run.js` needs the opposite trade and keeps its own
- * paginated, fail-closed listing.
+ * they describe, where an incomplete answer beats a slow one.
  *
  * @param {{repoPath: string, runId: string, token: string, timeoutMs?: number}} [target]
  * @returns {Promise<Array<{name: string, steps: string[]}>|null>}

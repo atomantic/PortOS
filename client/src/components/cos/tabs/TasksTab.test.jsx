@@ -3,6 +3,9 @@ import { fireEvent, render, screen, waitFor, act, within } from '@testing-librar
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../../../hooks/useAssignableInstances', () => ({ default: () => ({ instances: [{ instanceId: 'self', isSelf: true }], isFederated: false }) }));
+vi.mock('../../../hooks/useToolUseModelIds.js', () => ({
+  default: () => ({ idsByProvider: null, loaded: false }),
+}));
 const api = vi.hoisted(() => ({
   getCosTasks: vi.fn(),
   getCosLearningDurations: vi.fn(),
@@ -323,7 +326,7 @@ describe('TasksTab spawning window', () => {
 
     await waitFor(() => expect(screen.getByText('Active (1)')).toBeInTheDocument());
     fireEvent.click(screen.getByText('Task details and actions'));
-    // An agent stuck at `running` (the zombie state cleanupZombieAgents clears)
+    // An agent stuck at `running` (the dead-process state the orphan sweep clears)
     // would otherwise leave the row with no way to re-dispatch it. Duplicate
     // dispatch is refused server-side by forceSpawnTask, not by hiding this.
     expect(screen.getByRole('button', { name: /Process task now/i })).toBeInTheDocument();

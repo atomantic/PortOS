@@ -6,6 +6,7 @@ import { isMediaAdmissionRefusal } from '../mediaJobQueue/admission.js';
 import { creativeDirectorVideoLimitsSchema } from '../../lib/creativeDirectorValidation.js';
 import { assertVideoOwner } from '../../lib/creativeDirectorVideoReview.js';
 import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, coerceFalVideoSeconds, estimateFalVideoCostUsd, getFalVideoModel } from '../../lib/falVideoModels.js';
+import { GEMINI_OMNI_WEB_MODEL, GEMINI_WEB_ASPECTS } from '../../lib/geminiWebVideo.js';
 
 const ACTIVE = new Set(['planning', 'rendering', 'stitching']);
 const isMediaAttempt = attempt => ['clip', 'audio'].includes(attempt.kind);
@@ -78,6 +79,10 @@ async function resolveChoices(project) {
   if (pin.mode === 'fal' && !pin.modelId) {
     const { FAL_DEFAULT_TEXT_MODEL, FAL_DEFAULT_IMAGE_MODEL } = await import('../videoGen/fal.js');
     video.modelDescription = `${FAL_DEFAULT_TEXT_MODEL} (text) / ${FAL_DEFAULT_IMAGE_MODEL} (image)`;
+  }
+  // Every clip of the run would be refused at enqueue (videoGen/backendPin.js), so say it before Start.
+  if (pin.mode === 'gemini' && !GEMINI_WEB_ASPECTS.includes(project.aspectRatio)) {
+    throw new ServerError(`Gemini renders ${GEMINI_WEB_ASPECTS.join(' or ')} only. Change the aspect ratio or the production backend before Start.`, { status: 409, code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED' });
   }
   if (pin.mode === 'local') {
     const { hasConfiguredMediaRoute } = await import('../federatedMedia/defaultRouting.js');
@@ -319,11 +324,24 @@ export async function assertVideoAttemptDispatch(projectId, attemptId, { jobId }
   return effective;
 }
 
+/**
+ * The clip length a job will render, for the backends whose length is known here: Reactor
+ * renders its `seconds`, fal and Grok their `duration`, Gemini always its fixed length (it
+ * takes none), and the local lane frames over fps. Runway, Higgsfield and Google snap a
+ * request to their model's own lengths (a 10-second shot can come back as 8), so they stay
+ * unadmitted until admission can read the delivered length (#18701): assembly refuses a
+ * clip shorter than its shot, after the render is paid for.
+ */
+function submittedClipSeconds(params) {
+  if (params.mode === 'reactor') return Number(params.seconds);
+  if (params.mode === 'gemini') return GEMINI_OMNI_WEB_MODEL.clipSeconds;
+  if (['fal', 'grok'].includes(params.mode)) return Number(params.duration);
+  return Number(params.numFrames / params.fps);
+}
+
 export async function enqueueVideoProductionJob(project, { kind = 'video', params, sceneId, stepId, workRevision }) {
   if (kind !== 'video') throw new ServerError('Video plans currently render bounded video clips. Use attached references and the saved audio choice for other media.', { status: 409, code: 'VIDEO_PLAN_TOOL_UNSUPPORTED' });
-  const seconds = Number(params.mode === 'reactor' ? params.seconds
-    : ['fal', 'grok'].includes(params.mode) ? params.duration
-    : params.numFrames / params.fps);
+  const seconds = submittedClipSeconds(params);
   if (!Number.isFinite(seconds) || seconds < 1 || seconds > 10.1 || Number(params.chunks || 1) !== 1 || Number(params.batchSize || 1) !== 1) {
     throw new ServerError('A Video submission must contain one clip of at most 10 seconds.', { status: 409, code: 'VIDEO_PLAN_CLIP_BOUNDS' });
   }

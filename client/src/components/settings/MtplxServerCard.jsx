@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { Gauge, RefreshCw, ExternalLink, Save, Square, Download, Terminal } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import MtplxCheckpoints from './MtplxCheckpoints.jsx';
+import RuntimeLogDisclosure from './RuntimeLogDisclosure.jsx';
 
 /**
  * MTPLX launcher — the same shape as the llama.cpp launcher below it, because
@@ -37,7 +38,6 @@ export default function MtplxServerCard({
   // checklist's one-click setup does).
   const [model, setModel] = useState('');
   const [port, setPort] = useState('');
-  const [showLogs, setShowLogs] = useState(false);
 
   const cached = status?.cachedModels || [];
   // Rows carry size/verification for the manage-checkpoints list; older status
@@ -234,23 +234,7 @@ export default function MtplxServerCard({
         />
       )}
 
-      {status?.recentLogs?.length > 0 && (
-        <div className="space-y-1">
-          <button
-            type="button"
-            onClick={() => setShowLogs((prev) => !prev)}
-            className="text-[11px] text-gray-500 hover:text-gray-300 flex items-center gap-1"
-          >
-            <Terminal size={11} />
-            {showLogs ? 'Hide server logs' : `View server logs (${status.recentLogs.length} lines)`}
-          </button>
-          {showLogs && (
-            <pre className="text-[10px] text-gray-400 bg-port-bg border border-port-border/60 p-2.5 rounded max-h-40 overflow-y-auto font-mono whitespace-pre-wrap break-all">
-              {status.recentLogs.join('\n')}
-            </pre>
-          )}
-        </div>
-      )}
+      <RuntimeLogDisclosure logs={status?.recentLogs} />
     </div>
   );
 }

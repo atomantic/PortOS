@@ -1,3 +1,4 @@
+// test-memo: git-fixture — git only ever runs in repositories this suite creates under the temp directory (docs/TEST_MEMO_GIT_FIXTURES.md).
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -74,8 +75,10 @@ const fakeCommands = String.raw`
 `;
 
 function runMerge(scenario, key = 'claim-issue', { registered = true, token = true } = {}) {
-  scratch = mkdtempSync(join(tmpdir(), 'managed-merge-guard-'));
-  const git = (...args) => execFileSync('git', args, { cwd: scratch, encoding: 'utf8' }).trim();
+  // Bound locally: `scratch` is reset to null between tests, and git must never run with that as its directory.
+  const dir = mkdtempSync(join(tmpdir(), 'managed-merge-guard-'));
+  scratch = dir;
+  const git = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
   git('init', '-q');
   git('-c', 'user.name=Example', '-c', 'user.email=example@example.com', 'commit', '-q', '--allow-empty', '-m', 'reviewed');
   const head = git('rev-parse', 'HEAD');
@@ -83,11 +86,11 @@ function runMerge(scenario, key = 'claim-issue', { registered = true, token = tr
   const admission = completion.match(/portos_check_merge_admission\(\) \{[\s\S]*?\n\}/)?.[0] || '';
   const block = [...DEFAULT_TASK_PROMPTS[key].matchAll(/```bash\n([\s\S]*?)```/g)]
     .find(([, body]) => body.includes('# CI_VERIFIED_HEAD'))[1];
-  const paths = Object.fromEntries(['EVENTS', 'MUTATIONS', 'READ_COUNT', 'PR_STATE', 'HEAD_CHANGED'].map(name => [name, join(scratch, name)]));
+  const paths = Object.fromEntries(['EVENTS', 'MUTATIONS', 'READ_COUNT', 'PR_STATE', 'HEAD_CHANGED'].map(name => [name, join(dir, name)]));
   writeFileSync(paths.READ_COUNT, '0');
   writeFileSync(paths.PR_STATE, scenario === 'already-merged' ? 'MERGED' : 'OPEN');
   const result = spawnSync('bash', ['-eu', '-c', `${fakeCommands}\n${admission}\n${block}`], {
-    cwd: scratch, encoding: 'utf8', timeout: 10_000,
+    cwd: dir, encoding: 'utf8', timeout: 10_000,
     env: { ...process.env, ...paths, SCENARIO: scenario, CI_VERIFIED_HEAD: head, MERGE_ADMISSION_TOKEN: token ? '00000000-0000-4000-8000-000000000001' : '' },
   });
   const lines = path => existsSync(path) ? readFileSync(path, 'utf8').trim().split('\n').filter(Boolean) : [];

@@ -254,6 +254,30 @@ describe('mediaJobs routes', () => {
     });
   });
 
+  it('POST /:id/retry rejects an image size override past the compose limits', async () => {
+    jobStore.set('j-big', {
+      id: 'j-big', kind: 'image', owner: null, status: 'failed',
+      params: { prompt: 'p', mode: 'local', modelId: 'm', width: 512, height: 512 },
+    });
+    const retry = (params) => request(makeApp()).post('/api/media-jobs/j-big/retry').send({ params });
+    const tooWide = await retry({ width: 4096 });
+    expect(tooWide.status).toBe(400);
+    expect(tooWide.body.code).toBe('VALIDATION_ERROR');
+    const tooManyPixels = await retry({ width: 3840, height: 3840 });
+    expect(tooManyPixels.status).toBe(400);
+    expect(stubs.enqueueJob).not.toHaveBeenCalled();
+    expect((await retry({ width: 750, height: 1050 })).status).toBe(200);
+  });
+
+  it('POST /:id/retry still retries an image job already past the pixel cap when only the prompt changes', async () => {
+    jobStore.set('j-legacy-big', {
+      id: 'j-legacy-big', kind: 'image', owner: null, status: 'failed',
+      params: { prompt: 'p', mode: 'local', modelId: 'm', width: 4096, height: 4096 },
+    });
+    const r = await request(makeApp()).post('/api/media-jobs/j-legacy-big/retry').send({ params: { prompt: 'q' } });
+    expect(r.status).toBe(200);
+  });
+
   it('POST /:id/retry treats empty model/modelId override as "keep original" rather than clobbering with ""', async () => {
     jobStore.set('j-clear', {
       id: 'j-clear', kind: 'image', owner: null, status: 'failed',

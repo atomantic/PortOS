@@ -9,7 +9,7 @@ import { musicVideoCreativeContext, musicVideoSongStyleContext } from '../../lib
  * `buildTreatmentDraft` is deterministic and makes no provider call: it maps
  * the analyzed sections to an opening → build → contrast → payoff → release
  * arc by position and energy, maps every timed board scene to its section's
- * beat, and derives per-shot direction, the proof checklist and the capability
+ * beat, and derives per-shot direction and the capability
  * gaps from that. It is a complete, usable treatment on its own (the "Draft
  * without AI" path) and the skeleton an AI compile fills in.
  *
@@ -17,7 +17,7 @@ import { musicVideoCreativeContext, musicVideoSongStyleContext } from '../../lib
  * `mergeAiTreatment`) only ever refines that skeleton: beat roles and scene ids
  * stay deterministic, every enum is validated, a shot with no lyrics never
  * gains a typography role (no lyric text is invented), and a malformed answer
- * leaves the deterministic draft in place. Proofs and capability gaps are
+ * leaves the deterministic draft in place. Capability gaps are
  * recomputed from the merged directions so a model can't talk its way past a
  * missing capability.
  *
@@ -213,79 +213,6 @@ function draftShotDirections(project, sections, beats, motifs) {
   return { directions, scenes: mapped.map((m) => m.scene) };
 }
 
-const PASS_CRITERIA = {
-  'identity-continuity': 'The same character, wardrobe and set read as identical between the frame and the clip.',
-  'readable-text': 'The composited text sits in its reserved region over low-detail background and is readable at phone size for its whole hold.',
-  'cut-continuity': 'The cut lands on the beat with screen direction and motif continuity — no jump in subject identity.',
-  'audio-alignment': 'In the final render with the song, cuts and text land within a frame or two of the beat and the sung line.',
-  'continuous-motion': 'The clip plays start to end without morphing, frozen frames or a visible loop seam.',
-  'lip-sync': 'Mouth shapes match the sung syllables in the render with the source audio.',
-};
-
-function riskOf(direction, beat) {
-  let score = beat.energy ?? 0.5;
-  const reasons = [];
-  if (direction.mode === 'performance') { score += 3; reasons.push('a performer on a sung line — identity and non-synced mouth motion are the most visible failure'); }
-  if (direction.typographyRole === 'hero') { score += 2; reasons.push('a hero title must stay readable over the image'); }
-  if (direction.route === 'code-2d') { score += 1; reasons.push('routed to 2D/code motion'); }
-  if (beat.role === 'payoff') { score += 1; reasons.push('the payoff is the image the whole arc builds to'); }
-  if (beat.role === 'opening') { score += 1.5; reasons.push('the opening hook decides whether the viewer stays'); }
-  return { score, reasons };
-}
-
-/** The bounded proof checklist: the riskiest shot, plus one short transition/text sequence. */
-function draftProofs(directions, scenes, beatsById, gaps, codeFirst = false) {
-  if (directions.length === 0) return [];
-  const sceneById = new Map(scenes.map((s) => [s.sceneId, s]));
-  const labelOf = (id) => sceneById.get(id)?.label || sceneById.get(id)?.sectionLabel || id;
-  const lipSyncGap = gaps.some((g) => g.id === 'lip-sync');
-  let best = null;
-  for (const d of directions) {
-    const risk = riskOf(d, beatsById.get(d.beatId));
-    if (!best || risk.score > best.risk.score) best = { d, risk };
-  }
-  const checks = ['identity-continuity', 'continuous-motion'];
-  if (best.d.typographyRole !== 'none') checks.push('readable-text');
-  // A lip-sync lane (#8977) makes sync a real, provable requirement.
-  if (best.d.mode === 'performance' && !lipSyncGap) checks.push('lip-sync');
-  const riskShot = {
-    kind: 'risk-shot',
-    sceneIds: [best.d.sceneId],
-    artifact: codeFirst
-      ? `Final-render proof of "${labelOf(best.d.sceneId)}" using its planned ${best.d.medium} medium after authoring and asset preparation.`
-      : `Reference frame and generated clip for "${labelOf(best.d.sceneId)}", reviewed in the final render.`,
-    risk: best.risk.reasons.join('; ') || 'the highest-energy shot in the song',
-    route: codeFirst ? `${best.d.medium} — planned only; verify against an actual final render` : best.d.mode === 'performance' && lipSyncGap
-      ? `${best.d.route} — performance framed as non-sync (wide, silhouette, hands, backs); cut away on sung lines if mouth motion reads wrong`
-      : best.d.route === 'code-2d' ? 'code-2d — a code-rendered title card or moved still in a composed render' : best.d.route,
-    checks,
-    passCriteria: checks.map((c) => PASS_CRITERIA[c]),
-    status: 'proposed',
-  };
-  // The sequence: prefer the cut INTO the payoff, then any cut with text on it.
-  let pair = null;
-  for (let i = 1; i < directions.length; i++) {
-    const [a, b] = [directions[i - 1], directions[i]];
-    const intoPayoff = beatsById.get(b.beatId)?.role === 'payoff' && a.beatId !== b.beatId;
-    const withText = a.typographyRole !== 'none' || b.typographyRole !== 'none';
-    const score = (intoPayoff ? 2 : 0) + (withText ? 1 : 0);
-    if (!pair || score > pair.score) pair = { a, b, score, withText };
-  }
-  if (!pair) return [riskShot];
-  const seqChecks = ['cut-continuity', 'audio-alignment'];
-  if (pair.withText) seqChecks.splice(1, 0, 'readable-text');
-  return [riskShot, {
-    kind: 'transition-text',
-    sceneIds: [pair.a.sceneId, pair.b.sceneId],
-    artifact: `The cut from "${labelOf(pair.a.sceneId)}" to "${labelOf(pair.b.sceneId)}"${pair.withText ? ' with its composited text cue' : ''}, reviewed in the final render.`,
-    risk: 'A cut and its text timing are only judged correctly against the song.',
-    route: codeFirst ? 'Review the planned medium transition in the final render' : pair.withText ? 'composed render: typography layer over the generated clips' : 'plain cut in the final render',
-    checks: seqChecks,
-    passCriteria: seqChecks.map((c) => PASS_CRITERIA[c]),
-    status: 'proposed',
-  }];
-}
-
 /** What the treatment asks for that this install cannot do (yet). */
 function deriveCapabilityGaps(project, brief, directions) {
   const gaps = [];
@@ -318,12 +245,11 @@ function deriveCapabilityGaps(project, brief, directions) {
   return gaps;
 }
 
-function finalize(project, brief, arc, directions, scenes) {
+function finalize(project, brief, arc, directions) {
   directions = planMusicVideoMedia(project, directions);
   const gaps = deriveCapabilityGaps(project, brief, directions);
-  const beatsById = new Map(arc.beats.map((b) => [b.id, b]));
   return { graphicLanguage: brief.graphicLanguage || 'Bold lyric keywords, pictograms and counters on one-beat graphic cards.',
-    arc, shotDirections: directions, proofs: draftProofs(directions, scenes, beatsById, gaps, normalizeMusicVideoProductionPolicy(project.productionPolicy).strategy === 'code-first'), capabilityGaps: gaps };
+    arc, shotDirections: directions, capabilityGaps: gaps };
 }
 
 /**
@@ -351,7 +277,7 @@ export function buildTreatmentDraft(project) {
   const hasLyrics = (project.lyricCues || []).some((c) => isNonBlankStr(c?.text));
   const hasMotionReference = (project.visualSpec?.references || []).some((r) => r.use === 'motion-reference');
   const motifs = deriveMotifs(project, brief);
-  const { directions, scenes } = draftShotDirections(project, sections, beats, motifs);
+  const { directions } = draftShotDirections(project, sections, beats, motifs);
   const arc = {
     rationale: [
       brief.premise ? `Premise: ${brief.premise}` : 'A visual arc built on the song\'s own structure, without a literal plot.',
@@ -362,7 +288,7 @@ export function buildTreatmentDraft(project) {
     motifs,
     balance: defaultBalance(hasLyrics, hasMotionReference, directions.some((d) => d.mode === 'performance')),
   };
-  return finalize(project, brief, arc, directions, scenes);
+  return finalize(project, brief, arc, directions);
 }
 
 /** Build the provider prompt that refines a deterministic draft. */
@@ -528,9 +454,8 @@ export function mergeAiTreatment(project, draft, parsed) {
   for (let i = 0; i < directions.length; i++) {
     directions[i] = sheetDirectionOverlay(project, scenesById.get(directions[i].sceneId), directions[i]);
   }
-  const scenes = directions.map((d) => scenesById.get(d.sceneId)).filter(Boolean);
   const graphicLanguage = brief.graphicLanguage || strField(parsed.graphicLanguage, 1000) || draft.graphicLanguage;
-  return { ...finalize(project, brief, arc, directions, scenes), graphicLanguage,
+  return { ...finalize(project, brief, arc, directions), graphicLanguage,
     ...(project.styleReferences?.length ? { styleLook: strField(parsed.styleLook, 1000) ?? '', styleReferencesBasis: musicVideoStyleBasis(project) } : {}),
   };
 }

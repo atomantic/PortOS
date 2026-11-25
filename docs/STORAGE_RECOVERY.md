@@ -220,20 +220,24 @@ to each command. This explicit target does not depend on the inherited
 
 Generic reservations contain no parent, destination, run, or batch identity. The
 operator must trace the owning workflow and explain how its records relate to
-the **selected** reservation; never assign evidence merely by PID or age. Diagnose
-lists admitted owner IDs and their source modules from `backupAssetOwners.js`.
-Relevant examples:
+the **selected** reservation. Use the repository's
+[backup publication guide](BACKUP_PUBLICATION_ADMISSION.md) or search the
+source for `withBackupAssetPublication` to trace the owner's lease boundary.
+For toolkit writers, follow the injected `withAssetPublication` callback from
+`server/services/bootstrap.js`. For delegated runtime writes, trace
+`publishRuntimeFiles` callers to `server/lib/runtimeFilePublication.js`. Use PID
+and age only as supporting evidence.
 
 | Owner | Evidence to inspect |
 |---|---|
-| `toolkit-recording-publication`, `runtime-recording-publication-tails`, `agent-run-recording-publication` | Matching run metadata, output, retained agent spools (`output.txt` / `raw.txt`), and durable failure/warning records. Trace recording creation, spool writes and finalization; terminal metadata alone does not prove a complete transcript. |
-| `cos-agent-archive-and-index-publication` | Agent/archive identity, archive/index records, retained output and the publication failure. |
-| `media-job-completion`, `image-generation-completion-tails`, `generated-video-shared-finalizer` | Exact job/run identity, sidecars/history or inspected database-record evidence, and output integrity or the durable publication failure. A provider completion alone does not prove local publication. |
+| Toolkit and runtime recordings, agent usage runs | Matching run metadata, output, retained agent spools (`output.txt` / `raw.txt`), and durable failure/warning records. Trace recording creation, spool writes and finalization; terminal metadata alone does not prove a complete transcript. |
+| CoS agent archival and index publication | Agent/archive identity, archive/index records, retained output and the publication failure. |
+| Media job completion, image generation and video finalization | Exact job/run identity, sidecars/history or inspected database-record evidence, and output integrity or the durable publication failure. A provider completion alone does not prove local publication. |
 
-Other admitted owners require the same record-plus-output/failure inspection of
-their listed source modules. If the relationship cannot be established, keep the
-reservation and recover through its owning service. For DB-primary records, save
-a bounded, private inspection artifact with exact record identity under `data/`;
+For each workflow, inspect its records and output or durable failure evidence
+in the modules that own publication. If the relationship cannot be established,
+keep the reservation and recover through its owning service. For DB-primary
+records, save a bounded, private inspection artifact with exact record identity under `data/`;
 do not copy credentials or a whole database into an evidence file. Preserve large
 media separately and use its owning service's integrity/failure evidence here.
 

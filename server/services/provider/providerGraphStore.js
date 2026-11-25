@@ -330,24 +330,4 @@ export async function applyServiceColumnBackfill(entries) {
   });
 }
 
-/**
- * Write a binding's management settings and bump its revision.
- *
- * Deliberately NOT `enabled`: route enablement is an executable-record field
- * that `PATCH /api/providers/:id` owns, and projecting a binding-level toggle
- * into it would turn a management edit into an execution consent grant.
- *
- * @returns {Promise<number|null>} the new revision, or `null` if the row is gone
- */
-export async function saveBindingSettings({ id, label, selectedModels }) {
-  const { rows } = await query(
-    `UPDATE ai_harness_bindings
-        SET label = $2, selected_models = $3, revision = revision + 1, updated_at = NOW()
-      WHERE id = $1
-      RETURNING revision`,
-    [id, label ?? '', toPgJson(selectedModels || [])],
-  );
-  return rows[0]?.revision ?? null;
-}
-
 /** Record the canonical→executable model aliases a refresh observed on a route. */

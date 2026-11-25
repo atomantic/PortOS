@@ -62,7 +62,9 @@ export function prepareCodeRender(project, { windowStart = null, windowEnd = nul
     durationSec = quantizeSongDuration(span, song.fps).durationSec;
   }
   const doc = buildCodeDocument({
-    song, palette, sources, ...size, fps: song.fps, windowStart: start, windowDuration: durationSec,
+    // The page seeks SONG time (the encoder passes `offsetSec`), like a document's, so the init-script
+    // runtimes that wrap `seek` (film look, title card, wipes) see the same clock as in the final render.
+    song, palette, sources, ...size, fps: song.fps, windowStart: 0, windowDuration: durationSec,
   });
   const sectionTimes = song.sections
     .map((section) => section.startSec - start)
@@ -89,7 +91,7 @@ export async function encodeCodeComposition({
     // `initScripts` (the project's film look runtime) run before the page's own code.
     page = await openComposition(directory, { signal, initScripts });
     await encodeComposition(page, { durationSec, fps, width, height }, silent, {
-      signal, videoArgs, onProgress: (fraction) => onProgress?.(fraction * 0.9),
+      signal, videoArgs, offsetSec: audioStartSec, onProgress: (fraction) => onProgress?.(fraction * 0.9),
     });
     signal?.throwIfAborted();
     const mux = await runFfmpegProcess({

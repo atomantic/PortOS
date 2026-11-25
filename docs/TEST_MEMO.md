@@ -36,9 +36,11 @@ members reach (so a lockfile bump invalidates exactly the suites that reach
 the bumped packages); a Python sidecar's resolvable sibling imports; the
 version of an external program a member reaches (`TEST_MEMO_TOOLS`: the
 python the sidecar tests spawn — a literal, `PORTOS_TEST_PYTHON`, or an
-interpreter bound from `resolveTestPython()`; ffmpeg/ffprobe; and Chrome for
+interpreter bound from `resolveTestPython()`; ffmpeg/ffprobe; Chrome for
 the browser suites, found with the suites' own candidate list,
-`resolveTestChrome` in `scripts/lib/testChrome.js`); an unknown program
+`resolveTestChrome` in `scripts/lib/testChrome.js`; and git, with the
+settings its repositories inherit, for a suite that declares its repositories
+fixtures: [TEST_MEMO_GIT_FIXTURES.md](./TEST_MEMO_GIT_FIXTURES.md)); an unknown program
 handed a `.py` file fails closed; the workspace Vitest config closure, setup files,
 `scripts/vitestCiPool.js`, `package.json` and lockfile (the workspace base,
 below); the full Node
@@ -277,9 +279,12 @@ suffix, see [CI_HIDDEN_CONTENT_GATE.md](CI_HIDDEN_CONTENT_GATE.md#guard-selectio
 planner's always-run set or in `TEST_MEMO_NEVER` (the catalog and enumeration
 tests another selector reaches); a
 file whose closure contains the `// test-memo: never` marker; a test file or
-`scripts/` module that spawns `git` (repository state is not in the key —
+`scripts/` module that spawns `git`, named in the call, by a name that holds
+it or by a caller of a runner (repository state is not in the key —
 product modules that run git on their own targets are under the test's
-control); a test file or `scripts/` member that reads machine-local state
+control; a test file that declares its repositories fixtures with
+`// test-memo: git-fixture` is keyed by git itself instead:
+[TEST_MEMO_GIT_FIXTURES.md](./TEST_MEMO_GIT_FIXTURES.md)); a test file or `scripts/` member that reads machine-local state
 (`data/`, the home directory); any member that reads
 a path whose variable segment nothing bounds
 ([Variable path segments](#variable-path-segments)); a member that reads a path the analyzer

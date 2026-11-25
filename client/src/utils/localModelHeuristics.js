@@ -10,7 +10,7 @@
 
 import { isLocalEndpoint, isLocalInstanceProvider, localBackendForProvider } from './providerEndpoints.js';
 import { filterSelectableModels } from './providerModels.js';
-import { commandBasename, isOllamaBackedProvider } from './providerTypes.js';
+import { commandBasename, hasLocalRuntimeMarker, isOllamaBackedProvider } from './providerTypes.js';
 import { isEmbeddingModel, isToolUseModel, isVisionModel } from '../../../server/lib/localModelHeuristics.js';
 
 export { isVisionCapableCodexTuiProvider } from '../../../server/lib/codex.js';
@@ -58,7 +58,7 @@ const capabilityProviderId = (provider) => {
  * that merely shares its name.
  */
 export const localToolUseHint = (id, provider, toolUseIdsByProvider = null) =>
-  (localBackendForProvider(provider) || isOllamaBackedProvider(provider) || provider?.lmstudioBacked === true || provider?.mtplxBacked === true || provider?.llamaBacked === true || provider?.vllmBacked === true || provider?.sglangBacked === true)
+  (localBackendForProvider(provider) || isOllamaBackedProvider(provider) || hasLocalRuntimeMarker(provider))
     && typeof id === 'string' && id.length > 0
     ? { toolCapable: toolUseIdsByProvider?.[capabilityProviderId(provider)]?.has(id) === true || isToolUseModel(id) }
     : null;

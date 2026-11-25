@@ -27,74 +27,17 @@ import {
   OPENCODE_BUILD_AGENT,
   OPENCODE_PUBLIC_REVIEW_AGENT,
 } from './provider/providerModels.js';
-import { PROVIDER_GATEWAYS, PROVIDER_GATEWAY_IDS, gatewayById, isGatewayNamespace } from './provider/providerGateways.js';
+import { PROVIDER_GATEWAY_IDS, gatewayById, isGatewayNamespace } from './provider/providerGateways.js';
 import { isPublicReviewNoToolProfile } from './agent/agentExecutionProfiles.js';
 import { isPlainObject } from './objects.js';
-import { PORTS } from './ports.js';
-import { SPLASH_CONTEXT, SPLASH_MODEL, SPLASH_ORIGIN } from './splashRuntime.js';
+import { SPLASH_CONTEXT, SPLASH_MODEL } from './splashRuntime.js';
 
 import { isTruthyMeta } from './metadataFlags.js';
 import { isLocalInstanceEndpoint } from './localEndpoint.js';
 import { isGenerationModel } from './localModelHeuristics.js';
-import { executionOptionsError } from './executionOptions.js';
-const LLAMA_SERVER_BASE_URL = `http://127.0.0.1:${PORTS.LLAMA_SERVER}/v1`;
-const VLLM_QWEN_BASE_URL = `http://127.0.0.1:${PORTS.VLLM_QWEN}/v1`;
-const SGLANG_QWEN_BASE_URL = `http://127.0.0.1:${PORTS.SGLANG_QWEN}/v1`;
-
-/** Base provider entries for local OpenAI-compatible daemons; `buildOpencodeConfig` adds the per-run models map. */
-const OPENCODE_LOCAL_BASE_PROVIDERS = {
-  ollama: {
-    npm: '@ai-sdk/openai-compatible',
-    name: 'Ollama (local)',
-    options: { baseURL: 'http://localhost:11434/v1' },
-  },
-  lmstudio: {
-    npm: '@ai-sdk/openai-compatible',
-    name: 'LM Studio (local)',
-    // LM Studio's own app default, not a PortOS port (like Ollama's 11434).
-    options: { baseURL: 'http://localhost:1234/v1' },
-  },
-  mtplx: {
-    npm: '@ai-sdk/openai-compatible',
-    name: 'MTPLX (local MTP)',
-    options: { baseURL: 'http://127.0.0.1:8000/v1' },
-  },
-  splash: {
-    npm: '@ai-sdk/openai-compatible',
-    name: 'Splash (local)',
-    options: { baseURL: `${SPLASH_ORIGIN}/v1` },
-  },
-  llama: {
-    npm: '@ai-sdk/openai-compatible',
-    name: 'llama.cpp (local)',
-    options: { baseURL: LLAMA_SERVER_BASE_URL },
-  },
-  vllm: {
-    npm: '@ai-sdk/openai-compatible',
-    name: 'vLLM Qwen3.8-27B (local)',
-    options: { baseURL: VLLM_QWEN_BASE_URL },
-  },
-  sglang: {
-    npm: '@ai-sdk/openai-compatible',
-    name: 'SGLang Qwen3.8-27B (local)',
-    options: { baseURL: SGLANG_QWEN_BASE_URL },
-  },
-  // Hosted gateways share the OpenAI-compatible shape; rows are generated from the registry.
-  ...Object.fromEntries(PROVIDER_GATEWAYS.map((gateway) => [gateway.id, {
-    npm: '@ai-sdk/openai-compatible',
-    name: gateway.label,
-    options: { baseURL: gateway.baseURL },
-  }])),
-};
-
-/**
- * The canonical base URL PortOS declares for one local OpenCode provider entry;
- * read by `lib/localProviderRuntime.js` so readiness and spawn agree.
- * @param {'ollama'|'lmstudio'|'mtplx'|'llama'|'vllm'|'sglang'|string} providerKey
- * @returns {string|null}
- */
-export const opencodeLocalBaseUrl = (providerKey) =>
-  OPENCODE_LOCAL_BASE_PROVIDERS[providerKey]?.options?.baseURL || null;
+import { executionOptionsError } from './aiToolkit/internal/executionOptions.js';
+import { OPENCODE_LOCAL_BASE_PROVIDERS } from './opencodeLocalProviders.js';
+export { opencodeLocalBaseUrl } from './opencodeLocalProviders.js';
 
 /** OpenCode local namespaces whose backend authenticates the request; keys are never attached to unauthenticated loopback daemons. */
 const KEY_BEARING_NAMESPACES = new Set(['vllm', 'sglang', ...PROVIDER_GATEWAY_IDS]);

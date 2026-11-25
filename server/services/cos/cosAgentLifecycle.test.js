@@ -89,7 +89,6 @@ vi.mock('fs/promises', async (importOriginal) => {
 });
 
 vi.mock('./cosRunnerClient.js', () => ({
-  getActiveAgentsFromRunner: vi.fn().mockResolvedValue([]),
   requestSecurityScanViaRunner: vi.fn(),
 }));
 
@@ -104,18 +103,18 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
   dataRoot: () => lazyTempDataRoot('portos-cos-lifecycle-'),
 }));
 
-import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, readProtectedCleanupOwners, recordAuditFindingsReceipt, recordCompletionCleanup, recordAbsentCheckoutRetirement, settleAbsentTaskCompletion, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, recordSwarmCleanupDelivery, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
+import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, readProtectedCleanupOwners, recordAuditFindingsReceipt, recordCompletionCleanup, recordAbsentCheckoutRetirement, settleAbsentTaskCompletion, retryCompletionCheckoutCapture, recordRepoStateVerification, reserveRepoCleanupRecovery, recordRepoCleanupRecovery, recordCleanupOutcome, recordSwarmCleanupDelivery, updateAgent, registerAgent, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
 import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.js';
 import { recordDomainUsage } from '../domainUsage.js';
 import { cosEvents } from './cosEvents.js';
 import { loadAgentIndex } from './cosAgentIndex.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
-import { getActiveAgentsFromRunner, requestSecurityScanViaRunner } from './cosRunnerClient.js';
+import { requestSecurityScanViaRunner } from './cosRunnerClient.js';
 import { persistAgentSecurityScan } from '../agent/agentSecurityScan.js';
 import { captureCompletedCheckouts, completedCheckoutReceiptValid } from '../completedCheckoutEvidence.js';
 import { materializeGitRepo } from '../../lib/gitTestRepo.js';
 import { execGit } from '../../lib/execGit.js';
-import { activeAgents, runnerAgents, completingAgents, spawningTasks } from '../agent/agentState.js';
+import { activeAgents, runnerAgents } from '../agent/agentState.js';
 
 afterAll(cleanupTempDataRoots);
 
@@ -226,7 +225,6 @@ describe('cosAgentLifecycle', () => {
     await rm(mockCosState.agentsDir, { recursive: true, force: true });
     await mkdir(mockCosState.agentsDir, { recursive: true });
     mockCosState.state = { agents: {} };
-    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([]);
     activeAgents.clear();
     runnerAgents.clear();
   });
@@ -1380,206 +1378,6 @@ describe('createAgentOutputBatcher', () => {
   });
 });
 
-describe('cleanupZombieAgents — runner listing is not proof of life', () => {
-  beforeEach(async () => {
-    await rm(mockCosState.agentsDir, { recursive: true, force: true });
-    await mkdir(mockCosState.agentsDir, { recursive: true });
-    mockCosState.state = { agents: {} };
-    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([]);
-    activeAgents.clear();
-    runnerAgents.clear();
-    spawningTasks.clear();
-  });
-
-  afterEach(async () => {
-    spawningTasks.clear();
-    await rm(mockCosState.agentsDir, { recursive: true, force: true });
-  });
-
-  it('leaves an exited runner to its in-flight completion, then reaps if completion failed', async () => {
-    await writeFile(join(mockCosState.agentsDir, 'index.json'), '{}');
-    mockCosState.state.agents['agent-finishing'] = {
-      id: 'agent-finishing', status: 'running', pid: 2147483646,
-      startedAt: new Date(Date.now() - 60_000).toISOString(),
-    };
-    completingAgents.add('agent-finishing');
-    try {
-      expect((await cleanupZombieAgents()).cleaned).toEqual([]);
-      expect(mockCosState.state.agents['agent-finishing'].status).toBe('running');
-    } finally {
-      completingAgents.delete('agent-finishing');
-    }
-    expect((await cleanupZombieAgents()).cleaned).toEqual(['agent-finishing']);
-  });
-
-  it('does not reap a pid-less record while its task is still being dispatched', async () => {
-    await writeFile(join(mockCosState.agentsDir, 'index.json'), '{}');
-    mockCosState.state.agents['agent-slow'] = {
-      id: 'agent-slow',
-      taskId: 'task-slow',
-      status: 'running',
-      startedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
-    };
-    spawningTasks.add('task-slow');
-
-    expect((await cleanupZombieAgents()).cleaned).toEqual([]);
-    expect(mockCosState.state.agents['agent-slow'].status).toBe('running');
-
-    // Once the dispatch gives up the task without ever recording a pid, the
-    // record really is a never-started zombie again.
-    spawningTasks.delete('task-slow');
-    expect((await cleanupZombieAgents()).cleaned).toEqual(['agent-slow']);
-    expect(mockCosState.state.agents['agent-slow'].result.error).toMatch(/never started/);
-  });
-
-  it('does not reap a runner-owned TUI while the runner probe is unavailable', async () => {
-    mockCosState.state.agents['agent-tui'] = {
-      id: 'agent-tui',
-      status: 'running',
-      pid: 0,
-      startedAt: new Date(Date.now() - 60_000).toISOString(),
-      metadata: { useRunner: true, executionMode: 'runner-tui' },
-    };
-    vi.mocked(getActiveAgentsFromRunner).mockRejectedValueOnce(new Error('runner is booting'));
-
-    const result = await cleanupZombieAgents();
-    expect(result.cleaned).toEqual([]);
-    expect(mockCosState.state.agents['agent-tui'].status).toBe('running');
-  });
-
-  it('leaves a live runner-owned TUI whose onExit liveness is true', async () => {
-    mockCosState.state.agents['agent-tui'] = {
-      id: 'agent-tui',
-      status: 'running',
-      pid: 0,
-      startedAt: new Date(Date.now() - 60_000).toISOString(),
-    };
-    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([{
-      id: 'agent-tui',
-      pid: 0,
-      kind: 'tui',
-      processActive: true,
-      liveness: 'pty',
-    }]);
-
-    const result = await cleanupZombieAgents();
-    expect(result.cleaned).toEqual([]);
-    expect(mockCosState.state.agents['agent-tui'].status).toBe('running');
-  });
-
-  it('retires a stale listing even if runnerAgents already adopted the id', async () => {
-    await writeFile(join(mockCosState.agentsDir, 'index.json'), '{}');
-    runnerAgents.set('agent-stale', { taskId: 'task-1' });
-    mockCosState.state.agents['agent-stale'] = {
-      id: 'agent-stale',
-      status: 'running',
-      pid: 2147483646,
-      startedAt: new Date(Date.now() - 60_000).toISOString(),
-    };
-    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([{
-      id: 'agent-stale',
-      pid: 2147483646,
-      kind: 'cli',
-      processActive: false,
-      liveness: 'pid',
-    }]);
-
-    const result = await cleanupZombieAgents();
-    expect(result.cleaned).toEqual(['agent-stale']);
-    expect(mockCosState.state.agents['agent-stale'].status).toBe('completed');
-  });
-
-  it('retires a durable running record whose runner listing is stale', async () => {
-    await writeFile(join(mockCosState.agentsDir, 'index.json'), '{}');
-    mockCosState.state.agents['agent-stale'] = {
-      id: 'agent-stale',
-      status: 'running',
-      pid: 2147483646,
-      startedAt: new Date(Date.now() - 60_000).toISOString(),
-    };
-    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([{
-      id: 'agent-stale',
-      pid: 2147483646,
-      kind: 'cli',
-      processActive: false,
-      liveness: 'pid',
-    }]);
-
-    const result = await cleanupZombieAgents();
-    expect(result.cleaned).toEqual(['agent-stale']);
-    expect(mockCosState.state.agents['agent-stale'].status).toBe('completed');
-    expect(mockCosState.state.agents['agent-stale'].result.error).toMatch(/terminated unexpectedly/);
-  });
-
-  describe('agent:completed emission (#11766)', () => {
-    const completedEvents = [];
-    const onCompleted = (agent) => completedEvents.push(agent);
-
-    beforeEach(() => {
-      completedEvents.length = 0;
-      cosEvents.on('agent:completed', onCompleted);
-    });
-
-    afterEach(() => {
-      cosEvents.off('agent:completed', onCompleted);
-    });
-
-    it('emits exactly one agent:completed for a reaped zombie, and none on a second sweep', async () => {
-      await writeFile(join(mockCosState.agentsDir, 'index.json'), '{}');
-      mockCosState.state.agents['agent-dead'] = {
-        id: 'agent-dead',
-        taskId: 'task-dead',
-        status: 'running',
-        pid: 2147483646,
-        startedAt: new Date(Date.now() - 60_000).toISOString(),
-        metadata: { taskType: 'scheduled' },
-      };
-      // Listeners that re-read state must already see the finalized record.
-      let statusSeenByListener;
-      cosEvents.once('agent:completed', () => {
-        statusSeenByListener = mockCosState.state.agents['agent-dead'].status;
-      });
-
-      expect((await cleanupZombieAgents()).cleaned).toEqual(['agent-dead']);
-
-      expect(statusSeenByListener).toBe('completed');
-      expect(completedEvents).toHaveLength(1);
-      expect(completedEvents[0]).toMatchObject({
-        id: 'agent-dead',
-        taskId: 'task-dead',
-        metadata: { taskType: 'scheduled' },
-        result: { success: false },
-      });
-
-      expect((await cleanupZombieAgents()).cleaned).toEqual([]);
-      expect(completedEvents).toHaveLength(1);
-    });
-
-    it('emits nothing for live, dispatching or runner-shielded records', async () => {
-      mockCosState.state.agents['agent-owned'] = {
-        id: 'agent-owned', status: 'running', pid: 2147483646,
-        startedAt: new Date(Date.now() - 60_000).toISOString(),
-      };
-      activeAgents.set('agent-owned', {});
-      mockCosState.state.agents['agent-spawning'] = {
-        id: 'agent-spawning', taskId: 'task-spawning', status: 'running',
-        startedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
-      };
-      spawningTasks.add('task-spawning');
-      mockCosState.state.agents['agent-tui'] = {
-        id: 'agent-tui', status: 'running', pid: 0,
-        startedAt: new Date(Date.now() - 60_000).toISOString(),
-      };
-      vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([{
-        id: 'agent-tui', pid: 0, kind: 'tui', processActive: true, liveness: 'pty',
-      }]);
-
-      expect((await cleanupZombieAgents()).cleaned).toEqual([]);
-      expect(completedEvents).toEqual([]);
-    });
-  });
-});
-
 describe('deleteAgent directory cleanup (#11446)', () => {
   beforeEach(async () => {
     await rm(mockCosState.agentsDir, { recursive: true, force: true });
@@ -1616,24 +1414,12 @@ describe('agent maintenance reservations on terminal transitions (#12737)', () =
     await mkdir(mockCosState.agentsDir, { recursive: true });
     await writeFile(join(mockCosState.agentsDir, 'index.json'), '{}');
     mockCosState.state = { agents: {} };
-    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([]);
     activeAgents.clear();
     runnerAgents.clear();
-    spawningTasks.clear();
   });
   afterEach(async () => {
-    for (const id of ['agent-zombie', 'agent-purged', 'agent-live']) await maintenance.finishResource('agent', id);
+    for (const id of ['agent-purged', 'agent-live']) await maintenance.finishResource('agent', id);
     await rm(mockCosState.agentsDir, { recursive: true, force: true });
-  });
-
-  it('releases the reservation of a reaped zombie', async () => {
-    maintenance.admit('agent', 'agent-zombie');
-    mockCosState.state.agents['agent-zombie'] = {
-      id: 'agent-zombie', status: 'running', pid: 2147483646,
-      startedAt: new Date(Date.now() - 60_000).toISOString(),
-    };
-    expect((await cleanupZombieAgents()).cleaned).toEqual(['agent-zombie']);
-    expect(reserved('agent-zombie')).toBe(false);
   });
 
   it('releases the reservation of a purged completed agent but keeps a running one', async () => {

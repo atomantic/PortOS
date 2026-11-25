@@ -10,6 +10,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
 import { safeUnder, runFfmpegProcess, findFfprobe } from '../../lib/ffmpeg.js';
 import { broadcastSse, attachSseClient, closeJobAfterDelay } from '../../lib/sseUtils.js';
+import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { admittedRenderMap } from '../renderActivity.js';
 import { requireProject } from './requireProject.js';
@@ -191,7 +192,10 @@ export async function startDcp(projectId, { grade, renderHistoryId, sourceSha256
         job.committing = true;
         await rm(join(root, DCP_BUILDING_MARKER), { force: true });
         publicationAttempted = true;
-        await withBackupAssetPublication(() => mutateProjectRecord(projectId, current => ({ project: { ...current, dcpExports: [...(current.dcpExports || []), artifact] } }))).catch(() => { active.markUnsettled(projectId); throw new Error(`Could not save the package record. The output was retained at ${root}; inspect it before removing it.`); });
+        await withBackupAssetPublication(() => mutateProjectRecord(projectId, current => ({ project: { ...current, dcpExports: [...(current.dcpExports || []), artifact] } })), {
+          timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
+          onWait: () => console.log(`⏸️ Music-video cinema package ${artifact.id ? String(artifact.id).slice(0, 8) : ''} waiting for the backup to finish before saving`),
+        }).catch(() => { active.markUnsettled(projectId); throw new Error(`Could not save the package record. The output was retained at ${root}; inspect it before removing it.`); });
         committed = true;
         return artifact;
       } finally {

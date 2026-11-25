@@ -167,8 +167,6 @@ function createTestRunner(assertDatabaseAdmission = vi.fn()) {
     allowedCommands: new Set(['example-cli']),
     guardChildStdin: vi.fn(),
     deliverChildStdin: vi.fn(),
-    createStreamingAnsiStripper: () => text => text,
-    isKnownCliStderrNoise: () => false,
   });
 
   registerRunnerShutdownSignals(proc, instance.lifecycle);

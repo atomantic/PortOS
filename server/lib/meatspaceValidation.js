@@ -80,7 +80,6 @@ export const configSchema = z.object({
 export const configUpdateSchema = configSchema.partial().extend({
   lifestyle: partialWithoutDefaults(lifestyleSchema).optional(),
 });
-export const lifestyleUpdateSchema = partialWithoutDefaults(lifestyleSchema);
 
 // =============================================================================
 // ALCOHOL

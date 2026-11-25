@@ -17,7 +17,7 @@ import { isDeliveryVideoModel } from '../../lib/videoFinish.js';
 export default function VideoGenRenderSettingsPanel({
   lane, providers, model, sampler, promptFields, keyframesActive,
   weights, catalog, loraLibrary, remoteTarget, remoteUnsupportedInputs,
-  rendersOffMachine, status, systemMemoryGb, runwayCatalog, reactorContinuableClips,
+  rendersOffMachine, backendDisclosures, systemMemoryGb, runwayCatalog, reactorContinuableClips,
   displaySleep, generating, onOpenSettings,
 }) {
   const { mode, hostedLane, backend } = lane;
@@ -76,7 +76,7 @@ export default function VideoGenRenderSettingsPanel({
           block download or generate. */}
       <ModelDisclosure
         backend={backend}
-        backendDisclosures={status?.backendDisclosures}
+        backendDisclosures={backendDisclosures}
         model={rendersOffMachine ? null : currentModel}
         systemMemoryGb={systemMemoryGb}
       />

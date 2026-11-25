@@ -2,7 +2,7 @@ vi.mock('../services/appIssues.js', () => ({ prepareAppIssueClaim: vi.fn(async (
 import { prepareAppIssueClaim } from '../services/appIssues.js';
 vi.mock('../services/provider/providers.js', () => ({ getProviderById: vi.fn() }));
 import { getProviderById } from '../services/provider/providers.js';
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
 import { rmSync } from 'node:fs';
 import { request } from '../lib/testHelper.js';
@@ -63,7 +63,6 @@ vi.mock('../services/cos/cosHealthMonitor.js', () => ({
   runHealthCheck: vi.fn()
 }));
 vi.mock('../services/cos/cosAgentLifecycle.js', () => ({
-  cleanupZombieAgents: vi.fn(),
   getAgents: vi.fn(),
   getAgent: vi.fn(),
   getAgentRecord: vi.fn(),
@@ -71,8 +70,6 @@ vi.mock('../services/cos/cosAgentLifecycle.js', () => ({
   sendBtwToAgent: vi.fn()
 }));
 vi.mock('../services/cos/cosAgentIndex.js', () => ({
-  getAgentDates: vi.fn(),
-  getAgentsByDate: vi.fn(),
   getCompletedAgentPage: vi.fn()
 }));
 vi.mock('../services/cos/cosAgentFeedback.js', () => ({
@@ -152,11 +149,16 @@ vi.mock('../services/codeReview.js', () => ({
 
 // Import mocked modules
 import { addTask, approveTask, deleteTask, getTaskView, reorderTasks, updateTask } from '../services/cos/cosTaskStore.js';
-import { cleanupZombieAgents, deleteAgent, getAgent, getAgentRecord, getAgents, sendBtwToAgent } from '../services/cos/cosAgentLifecycle.js';
+import { deleteAgent, getAgent, getAgentRecord, getAgents, sendBtwToAgent } from '../services/cos/cosAgentLifecycle.js';
+import { registerCosOrphanRecoveryHandlers } from '../services/bootHookRegistry.js';
+
+// GET /agents starts the dead-agent sweep through the boot hook registry; the
+// sweep itself is pinned in services/agent/agentManagement.test.js.
+const cleanupOrphanedAgents = vi.fn();
 import { clearCompletedAgents } from '../services/cos/cosAgentArchive.js';
 import { evaluateTasks } from '../services/cos/cosTaskGenerator.js';
 import { getBriefing, getWhileAwayActivity, listBriefings, } from '../services/cos/cosReports.js';
-import { getAgentDates, getAgentsByDate, getCompletedAgentPage } from '../services/cos/cosAgentIndex.js';
+import { getCompletedAgentPage } from '../services/cos/cosAgentIndex.js';
 import { getFeedbackStats, getPendingAgentFeedback, submitAgentFeedback } from '../services/cos/cosAgentFeedback.js';
 import { getHealthStatus, runHealthCheck } from '../services/cos/cosHealthMonitor.js';
 import { pause, resume, start, stop, updateConfig } from '../services/cos/cos.js';
@@ -180,7 +182,8 @@ describe('CoS Routes', () => {
     vi.clearAllMocks();
     // GET /tasks settles its payload against the live agent list (#spawn window).
     getAgents.mockResolvedValue([]);
-    cleanupZombieAgents.mockResolvedValue({ cleaned: [], count: 0 });
+    cleanupOrphanedAgents.mockResolvedValue(0);
+    registerCosOrphanRecoveryHandlers({ cleanupOrphanedAgents, handleOrphanedTask: vi.fn() });
     getTaskView.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } });
     getAgentRecord.mockResolvedValue(null);
   });
@@ -545,20 +548,64 @@ describe('CoS Routes', () => {
   });
 
   describe('GET /api/cos/agents', () => {
-    it('should return state-resident agents without waiting for zombie cleanup', async () => {
-      let releaseCleanup;
-      cleanupZombieAgents.mockReturnValue(new Promise((resolve) => { releaseCleanup = resolve; }));
+    // The route keeps one module-level "last sweep" stamp, and every listing
+    // test in this file moves it. Each test here starts a full interval past
+    // whatever came before, on a clock the test owns.
+    let now = Date.now();
+    const SWEEP_INTERVAL_MS = 15_000;
+    const listAgents = () => request(app).get('/api/cos/agents');
+
+    beforeEach(() => {
+      now = Math.max(now, Date.now()) + 10 * SWEEP_INTERVAL_MS;
+      vi.spyOn(Date, 'now').mockImplementation(() => now);
       getAgents.mockResolvedValue([
         { id: 'agent-001', status: 'running' },
         { id: 'agent-002', status: 'completed' }
       ]);
+    });
+    afterEach(() => { vi.mocked(Date.now).mockRestore(); });
 
-      const response = await request(app).get('/api/cos/agents');
+    it('should return state-resident agents without waiting for the dead-agent sweep', async () => {
+      let releaseCleanup;
+      cleanupOrphanedAgents.mockReturnValue(new Promise((resolve) => { releaseCleanup = resolve; }));
+
+      const response = await listAgents();
 
       expect(response.status).toBe(200);
       expect(response.body).toHaveLength(2);
-      expect(cleanupZombieAgents).toHaveBeenCalled();
-      releaseCleanup({ cleaned: [], count: 0 });
+      expect(cleanupOrphanedAgents).toHaveBeenCalledTimes(1);
+      releaseCleanup(0);
+    });
+
+    // The page reads this list on every load and socket-driven refresh; the
+    // sweep probes the runner and reconciles reservations.
+    it('starts the sweep at most once per interval, however often the list is read', async () => {
+      await listAgents();
+      await listAgents();
+      now += SWEEP_INTERVAL_MS - 1;
+      await listAgents();
+      expect(cleanupOrphanedAgents).toHaveBeenCalledTimes(1);
+
+      now += 1;
+      expect((await listAgents()).body).toHaveLength(2);
+      expect(cleanupOrphanedAgents).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      ['the sweep rejects', () => cleanupOrphanedAgents.mockRejectedValue(new Error('runner probe failed')), 'runner probe failed'],
+      ['no sweep is registered', () => registerCosOrphanRecoveryHandlers(null), 'CoS orphan recovery is not registered'],
+    ])('still lists agents and logs the failure when %s', async (_label, arrange, message) => {
+      arrange();
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const response = await listAgents();
+
+        expect(response.status).toBe(200);
+        expect(response.body).toHaveLength(2);
+        await vi.waitFor(() => expect(logged).toHaveBeenCalledWith(expect.stringContaining(message)));
+      } finally {
+        logged.mockRestore();
+      }
     });
   });
 
@@ -618,78 +665,6 @@ describe('CoS Routes', () => {
         identity,
         prUrl: 'https://github.com/example/repo/pull/101',
       });
-    });
-  });
-
-  describe('GET /api/cos/agents/history', () => {
-    it('should return available date buckets', async () => {
-      getAgentDates.mockResolvedValue([
-        { date: '2026-02-25', count: 5 },
-        { date: '2026-02-24', count: 3 }
-      ]);
-
-      const response = await request(app).get('/api/cos/agents/history');
-
-      expect(response.status).toBe(200);
-      expect(response.body.dates).toHaveLength(2);
-      expect(response.body.dates[0]).toEqual({ date: '2026-02-25', count: 5 });
-      expect(response.body).not.toHaveProperty('latest');
-      expect(getAgentsByDate).not.toHaveBeenCalled();
-    });
-
-    it('?hydrate=1 also returns the newest bucket, so the tab needs one round trip', async () => {
-      getAgentDates.mockResolvedValue([
-        { date: '2026-02-25', count: 5 },
-        { date: '2026-02-24', count: 3 }
-      ]);
-      getAgentsByDate.mockResolvedValue([
-        { id: 'agent-001', status: 'completed', output: ['a'], metadata: { taskDescription: 'Short' } }
-      ]);
-
-      const response = await request(app).get('/api/cos/agents/history?hydrate=1');
-
-      expect(response.status).toBe(200);
-      expect(getAgentsByDate).toHaveBeenCalledWith('2026-02-25');
-      expect(response.body.latest.date).toBe('2026-02-25');
-      expect(response.body.latest.agents).toHaveLength(1);
-      // The hydrated bucket goes through the same listing projection.
-      expect(response.body.latest.agents[0]).not.toHaveProperty('output');
-    });
-
-    it('hydrates to null on an install with no archived runs', async () => {
-      getAgentDates.mockResolvedValue([]);
-
-      const response = await request(app).get('/api/cos/agents/history?hydrate=1');
-
-      expect(response.status).toBe(200);
-      expect(response.body.latest).toBeNull();
-      expect(getAgentsByDate).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('GET /api/cos/agents/history/:date', () => {
-    it('should return agents for a valid date', async () => {
-      getAgentsByDate.mockResolvedValue([
-        { id: 'agent-001', status: 'completed' }
-      ]);
-
-      const response = await request(app).get('/api/cos/agents/history/2026-02-25');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveLength(1);
-      expect(getAgentsByDate).toHaveBeenCalledWith('2026-02-25');
-    });
-
-    it('should return 400 for invalid date format', async () => {
-      const response = await request(app).get('/api/cos/agents/history/not-a-date');
-
-      expect(response.status).toBe(400);
-    });
-
-    it('should return 400 for partial date format', async () => {
-      const response = await request(app).get('/api/cos/agents/history/2026-02');
-
-      expect(response.status).toBe(400);
     });
   });
 

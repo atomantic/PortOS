@@ -6,6 +6,7 @@ import {
   localRuntimeForProvider,
   normalizeOpenAiBaseUrl,
 } from './localProviderRuntime.js';
+import { LOCAL_RUNTIME_LABELS } from './modelPinMembership.js';
 import { opencodeLocalBaseUrl } from './opencodeConfig.js';
 import { PORTS } from './ports.js';
 
@@ -223,6 +224,11 @@ describe('LOCAL_RUNTIMES — user-facing copy names its page by route, never by 
     expect(allCopy.length).toBeGreaterThanOrEqual(rows.length);
     expect(allCopy.some(([, text]) => text.includes('{page}'))).toBe(true);
     expect(allCopy.map(([name]) => name)).toContain('vllm.setupStateDetail.empty');
+  });
+
+  it('takes every label from the shared map the client reads', () => {
+    expect(Object.fromEntries(rows.map(([id, runtime]) => [id, runtime.label])))
+      .toEqual(LOCAL_RUNTIME_LABELS);
   });
 
   it('takes every manageUrl from the shared map the client reads', () => {

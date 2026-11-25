@@ -1,41 +1,22 @@
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
-  providerConnectionProfile,
   projectConnectionOwnedFields,
   withConnectionOwnedFields,
 } from '../../lib/provider/providerConnections.js';
 import {
-  connectionOwnedSnapshot,
   isDerivedPreset,
   mergeConnectionCredentials,
   planGraphReconciliation,
   reconciliationIsNoop,
-  routeBelongsOnConnection,
   toConnectionDto,
-  toManagementGraphDto,
 } from '../../lib/provider/providerGraphRecords.js';
-import { harnessById } from '../../lib/provider/providerHarnesses.js';
-import { modeSiblingName } from '../../lib/aiToolkit/internal/providerModes.js';
 import {
   planPresetBackfill,
   presetBackfillVerdict,
   rederivePreset,
 } from '../../lib/provider/providerPresets.js';
-import { effortLevelsForProvider } from '../../lib/provider/providerModels.js';
-import {
-  bindingBlocker,
-  buildRouteRecord,
-  connectionBlocker,
-  connectionKindLabel,
-  mintRouteIds,
-} from '../../lib/provider/providerRouteRecipes.js';
-import {
-  routeSettingsFor,
-  routeSettingsRevision,
-  unsupportedRouteSettings,
-} from '../../lib/provider/providerRouteSettings.js';
-import { buildTuiShellLaunch } from '../../lib/tuiShellLaunch.js';
+import { connectionBlocker } from '../../lib/provider/providerRouteRecipes.js';
 import {
   instanceForConnection,
   planServiceColumnBackfill,
@@ -53,7 +34,6 @@ import {
   deleteConnection,
   mergeServiceInstances,
   readGraph,
-  saveBindingSettings,
   saveConnectionSettings,
   writeGraph,
 } from './providerGraphStore.js';
@@ -130,10 +110,8 @@ const providerService = () => requireToolkit().services.providers;
 const bootstrapApps = async () => (await import('../credentialBootstrapApps.js')).listCredentialBootstraps();
 
 /**
- * A connection addressed by UUID or by service slug (#7563). Every
- * `/connections/:id` route accepts either, so a client that learned the slug
- * from `/services` can use it on the older surface too. `null` when neither
- * matches — and never a label match.
+ * A connection addressed by UUID or by service slug (#7563). Returns null
+ * when neither matches.
  */
 export const findConnectionByRef = (graph, ref) =>
   graph.connections.find((candidate) => candidate.id === ref || (candidate.slug != null && candidate.slug === ref)) ?? null;
@@ -398,43 +376,6 @@ export async function initProviderGraph() {
  */
 export const onProvidersSaved = () => reconcileProviderGraph('legacy-write');
 
-/**
- * What one executable record contributes to its route's DTO: the overrides this
- * mode carries, the effort ladder its harness really accepts, and — for a
- * launchable TUI — the command line the Shell page would show.
- *
- * The command line is DISPLAY ONLY and its env half is dropped here: a launch
- * goes through `shell:start { providerId }`, which re-resolves both server-side,
- * so the provider's secret env never reaches a management payload.
- */
-function describeRoute(provider) {
-  const settings = routeSettingsFor(provider);
-  return {
-    settings,
-    effortLevels: effortLevelsForProvider(provider, settings.defaultModel ?? null),
-    tuiCommandLine: buildTuiShellLaunch(provider)?.commandLine ?? null,
-    // The record's own model strings, so the DTO can say which hand-authored
-    // aliases name a spelling this route no longer carries (#6369).
-    storedModels: Array.isArray(provider?.models) ? provider.models : null,
-  };
-}
-
-/** The sanitized `GET /api/providers/management` body. */
-export async function getManagementGraph() {
-  requireProviderGraph();
-  const [graph, data] = await Promise.all([readGraph(), providerService().getAllProviders()]);
-  // Only the records the graph actually routes: an unmapped legacy provider has
-  // no row to decorate, and resolving a shell invocation for it would be work
-  // this response throws away.
-  const byId = new Map(data.providers.map((provider) => [provider.id, provider]));
-  const routeSettings = new Map(graph.routes
-    .filter((route) => byId.has(route.providerId))
-    .map((route) => [route.providerId, describeRoute(byId.get(route.providerId))]));
-  return toManagementGraphDto({ ...graph, activeProvider: data.activeProvider, routeSettings });
-}
-
-// --- link / unlink -----------------------------------------------------------
-
 export const requireProviderGraph = () => {
   if (!graphEnabled) {
     throw new ServerError('Provider connection graph is unavailable on this install', { status: 503, code: 'PROVIDER_GRAPH_UNAVAILABLE' });
@@ -450,23 +391,6 @@ const requireConnection = (graph, ref) => {
 const stale = (what) => new ServerError(
   `${what} changed since the preview was taken; take a new preview`,
   { status: 409, code: 'PROVIDER_GRAPH_STALE_REVISION' });
-
-/** A connection row in the shape the endpoint comparator expects. */
-/**
- * The variant key `binding` may occupy on `connectionId`.
- *
- * `default` when free; otherwise a distinct labeled variant. Never a merge:
- * two harness configurations sharing one connection are both legitimate, and
- * collapsing them would discard one side's executable route ids.
- */
-function allocateVariantKey(graph, connectionId, binding) {
-  const taken = new Set(graph.bindings
-    .filter((candidate) => candidate.connectionId === connectionId
-      && candidate.harnessId === binding.harnessId
-      && candidate.id !== binding.id)
-    .map((candidate) => candidate.variantKey));
-  return taken.has('default') ? `variant:${binding.id}` : 'default';
-}
 
 /**
  * Delete a connection nothing binds any more.
@@ -539,32 +463,11 @@ function duringProviderWrite(work) {
   return Promise.resolve().then(work).finally(() => { reconciling = false; });
 }
 
-// --- explicit management edits (#6369) ---------------------------------------
-//
-// The three edits a human makes to a SHARED backend, as opposed to the link and
-// unlink above which change which backend a harness reaches:
-//
-//   1. edit the connection once and have every attached route follow it,
-//   2. refresh its model catalog once for every harness on it,
-//   3. choose the subset of that catalog a harness offers.
-//
-// All three are revision-checked against exactly what the human was looking at,
-// all three run on the same serialization queue as reconciliation, and none of
-// them contacts an AI provider except (3)'s explicitly requested model list.
-
-/** Locate a row the caller named, or 404. Never a partial match on a label. */
-function requireRow(rows, id, what, code) {
-  const row = rows.find((candidate) => candidate.id === id);
-  if (!row) throw new ServerError(`${what} not found`, { status: 404, code });
-  return row;
-}
-
 /**
  * Refuse a mutation while any of these routes is mid-projection.
  *
  * That state is precisely where the graph and `providers.json` disagree, so an
- * edit decided against it would be decided against unknown values. Same guard
- * `resolveLink` applies, applied to the connection's whole route set.
+ * connection edit must wait until its routes agree with the graph.
  */
 function requireSettledRoutes(routes) {
   if (routes.some((route) => route.pending)) {
@@ -650,116 +553,6 @@ export function updateConnectionSettings({
 }
 
 /**
- * Choose which of the shared catalog a harness offers, and rename the binding.
- *
- * Management state only — nothing here is projected into an executable record,
- * so choosing a subset can never enable a route, grant a mode's execution
- * consent, or repoint a saved selection. A pin outside the new subset stays
- * exactly where it was and simply reads as stale, which is what keeps a
- * narrowed catalog from silently repicking somebody's model.
- */
-export function updateBindingSettings({ bindingId, expectedRevision, label, selectedModels }) {
-  return serialize(async () => {
-    requireProviderGraph();
-    const graph = await readGraph();
-    const binding = requireRow(graph.bindings, bindingId, 'Binding', 'BINDING_NOT_FOUND');
-    if (binding.revision !== expectedRevision) throw stale('The binding');
-    requireSettledRoutes(graph.routes.filter((route) => route.bindingId === binding.id));
-
-    const next = {
-      id: binding.id,
-      label: label ?? binding.label,
-      selectedModels: selectedModels ?? binding.selectedModels,
-    };
-    const revision = await saveBindingSettings(next);
-    return { bindingId: binding.id, revision, label: next.label, selectedModels: next.selectedModels };
-  });
-}
-
-/**
- * Edit ONE route's mode overrides — its args, timeout, effort and model pins.
- *
- * The counterpart to `updateConnectionSettings`: that one changes a value every
- * harness on the backend shares, this one changes a value that belongs to a
- * single execution mode. Both live on this screen so a human stops bouncing
- * between a connection and three route editors to configure one backend.
- *
- * Three rules make it a genuine OVERRIDE rather than a second way to edit a
- * provider:
- *
- *   - **No sibling fan-out.** The write goes through `applyProviderPatches`,
- *     which names exactly this route. `updateProvider` would spread the edit
- *     onto the record's sibling modes, and a CLI route's `--effort` is not the
- *     TUI route's.
- *   - **No connection-owned field is reachable.** The accepted key set is the
- *     route-owned table in `providerRouteSettings.js`, so an endpoint or a
- *     credential can never be retyped here and silently escape the projection
- *     that keeps every other harness on the backend in step.
- *   - **No execution consent.** `enabled` and the transport opt-ins are absent
- *     from that table; granting them stays an explicit act on the route editor.
- *
- * The stale check is a fingerprint of the values as they are ON DISK, so an
- * edit made in `/ai/edit/:providerId` while this panel was open is caught too —
- * see `routeSettingsRevision`.
- */
-export function updateRouteSettings({ providerId, expectedRevision, settings }) {
-  return serialize(async () => {
-    requireProviderGraph();
-    const graph = await readGraph();
-    const route = graph.routes.find((candidate) => candidate.providerId === providerId);
-    if (!route) throw new ServerError('Route not found', { status: 404, code: 'ROUTE_NOT_FOUND' });
-    requireSettledRoutes([route]);
-
-    const { providers } = await providerService().getAllProviders();
-    const provider = providers.find((candidate) => candidate.id === providerId);
-    // A graph row whose record is gone is a reconciliation removal in flight.
-    // Reported as the same 404, because there is nothing left to override.
-    if (!provider) throw new ServerError('Route not found', { status: 404, code: 'ROUTE_NOT_FOUND' });
-
-    const current = routeSettingsFor(provider);
-    if (routeSettingsRevision(current) !== expectedRevision) throw stale("This route's settings");
-
-    const unsupported = unsupportedRouteSettings(route.mode, settings);
-    if (unsupported.length > 0) {
-      throw new ServerError(`A ${route.mode} route has no ${unsupported.join(', ')} setting`,
-        { status: 400, code: 'PROVIDER_ROUTE_SETTING_UNSUPPORTED' });
-    }
-
-    // Effort is a harness capability, not free text: a route whose program takes
-    // no `--effort` gets no control, and a level outside its ladder would be
-    // stored and then silently dropped at spawn time.
-    if (settings.effort != null) {
-      const levels = effortLevelsForProvider(provider, settings.defaultModel ?? current.defaultModel ?? null);
-      if (!levels || !levels.includes(settings.effort)) {
-        throw new ServerError(
-          levels
-            ? `This route accepts effort ${levels.join(', ')}`
-            : 'This route\'s harness takes no effort setting',
-          { status: 400, code: 'PROVIDER_ROUTE_EFFORT_UNSUPPORTED' });
-      }
-    }
-
-    const next = { ...current, ...settings };
-    const applied = await writeProviderPatches({ [providerId]: settings });
-    if (applied.length === 0) throw new ServerError('Route not found', { status: 404, code: 'ROUTE_NOT_FOUND' });
-
-    // No graph row is touched on purpose. These fields are route-owned, so the
-    // connection's `projected` snapshot still describes the record accurately
-    // and the binding must NOT be detached — the reconcile this write triggers
-    // is a documented no-op.
-    console.log(`🔗 Updated route ${providerId} overrides: ${Object.keys(settings).join(', ')}`);
-    return { providerId, settings: next, settingsRevision: routeSettingsRevision(next) };
-  });
-}
-
-// --- creating a backend and a harness on it (#6369) ---------------------------
-//
-// The two writes that ADD to the graph rather than editing it. Both are local
-// I/O only: creating a backend probes nothing, and creating a harness binding
-// mints DISABLED routes — configuration never generates, never launches and
-// never grants execution consent (AGENTS.md "No cold-bootstrap LLM calls").
-
-/**
  * Create a new backend connection.
  *
  * Deliberately NOT deduplicated against the connections already stored. Two
@@ -771,7 +564,7 @@ export function updateRouteSettings({ providerId, expectedRevision, settings }) 
  *
  * The catalog starts `unknown`, not empty: nothing has been asked yet, and
  * `[]` would claim a backend with no models. Discovery is the separate,
- * explicitly requested `POST /connections/:id/refresh-models`.
+ * explicitly requested service model refresh.
  */
 export function createConnection({ kind, label, transports, credentials }) {
   return serialize(async () => {
@@ -796,134 +589,5 @@ export function createConnection({ kind, label, transports, credentials }) {
     await writeGraph({ connections: [connection], bindings: [], routes: [] });
     console.log(`🔗 Created provider connection ${connection.id} (${kind}, no routes yet)`);
     return { connection: toConnectionDto(connection) };
-  });
-}
-
-/**
- * Create a harness binding on an existing backend, plus one executable route
- * per requested mode.
- *
- * This is the create the whole registry work was blocked on: minting a route
- * needs a per-harness COMMAND RECIPE (`PROVIDER_HARNESSES[].recipe`), because
- * the graph could previously only classify records it was handed, never
- * describe how to spawn a fresh one.
- *
- * Three guarantees, in the order they are enforced:
- *
- *   1. **Refuse before writing.** `bindingBlocker` rejects a harness with no
- *      recipe, a mode it has no support for, a backend whose transport it does
- *      not speak, and a backend missing a credential the program requires.
- *   2. **A minted route must sit on the connection it was minted for.** The
- *      record is fed straight back through `providerConnectionProfile` and
- *      checked with `routeBelongsOnConnection` — the SAME containment test
- *      reconciliation applies, so a create is judged on exactly the terms the
- *      next pass will judge it by. A route the row does not contain is refused
- *      rather than stored, because reconciliation would otherwise clone the
- *      binding onto a connection of its own on the very next pass. Containment
- *      rather than identity is what lets one route be minted on a backend that
- *      declares a second protocol for another harness (#6460).
- *   3. **Nothing is enabled.** The binding and every route arrive disabled with
- *      no model pins and no transport consent. Enabling stays an explicit act
- *      on the route editor, which is where granting execution belongs.
- *
- * The `projected` snapshot is read back off the records the toolkit actually
- * wrote, so the graph starts in agreement with `providers.json` and the
- * reconcile this write triggers is a no-op.
- */
-export function createBinding({ connectionId, harnessId, modes, label }) {
-  return serialize(async () => {
-    requireProviderGraph();
-    const graph = await readGraph();
-    const connection = requireConnection(graph, connectionId);
-
-    // A backend mid-projection is precisely where the graph and providers.json
-    // disagree about the endpoint and credentials this route would be built
-    // from, so a new route decided against it would be built from values still
-    // in dispute. Same guard every other mutation on a connection applies.
-    requireSettledRoutes(connectionFanout(graph, connection.id).routes);
-
-    const blocker = bindingBlocker({ harnessId, modes, connection });
-    if (blocker) {
-      const badRequest = blocker.code === 'PROVIDER_HARNESS_NOT_CREATABLE'
-        || blocker.code === 'PROVIDER_HARNESS_MODE_UNSUPPORTED';
-      throw new ServerError(blocker.message, { status: badRequest ? 400 : 409, code: blocker.code });
-    }
-
-    const { providers, activeProvider } = await providerService().getAllProviders();
-    const taken = new Set([...providers.map((provider) => provider.id), ...graph.routes.map((route) => route.providerId)]);
-    const ids = mintRouteIds({ harnessId, kind: connection.kind, modes, taken });
-    const harnessLabel = harnessId ? harnessById(harnessId).label : 'Direct API';
-    const name = label || `${harnessLabel} · ${connection.label || connectionKindLabel(connection.kind)}`;
-
-    const records = modes.map((mode) => buildRouteRecord({
-      harnessId,
-      mode,
-      providerId: ids[mode],
-      name: modeSiblingName(name, mode),
-      connection,
-    }));
-    for (const record of records) {
-      if (!routeBelongsOnConnection(providerConnectionProfile(record), connection)) {
-        throw new ServerError(
-          `A ${harnessLabel} route cannot describe this backend as it is configured; adjust the backend's transport or credentials first`,
-          { status: 409, code: 'PROVIDER_GRAPH_CONNECTION_INCOMPATIBLE' });
-      }
-    }
-
-    const bindingId = randomUUID();
-    const binding = {
-      id: bindingId,
-      revision: 1,
-      connectionId: connection.id,
-      harnessId,
-      // `default` when this harness is not already on the backend, a labeled
-      // variant otherwise — two configurations of one program on one backend
-      // are both legitimate and must not collapse into each other.
-      variantKey: allocateVariantKey(graph, connection.id, { id: bindingId, harnessId }),
-      label: name,
-      enabled: false,
-      selectedModels: [],
-    };
-
-    // If a create fails part-way, the records that landed simply have no graph
-    // row yet — the next reconciliation pass imports them as their own fragment
-    // rather than losing them. That is the same path a legacy write takes.
-    await duringProviderWrite(async () => {
-      for (const record of records) await providerService().createProvider(record);
-    });
-
-    const { providers: written, activeProvider: activeAfter } = await providerService().getAllProviders();
-    const byId = new Map(written.map((provider) => [provider.id, provider]));
-    const routes = modes
-      .filter((mode) => byId.has(ids[mode]))
-      .map((mode) => ({
-        providerId: ids[mode],
-        bindingId: binding.id,
-        mode,
-        modelMap: {},
-        modelAliasOverrides: {},
-        projected: connectionOwnedSnapshot(byId.get(ids[mode])),
-        pending: null,
-        pendingRevision: null,
-      }));
-    await writeGraph({ connections: [], bindings: [binding], routes });
-
-    console.log(`🔗 Created ${harnessLabel} binding ${binding.id} on connection ${connection.id}: `
-      + `${routes.map((route) => route.providerId).join(', ')} (disabled)`);
-    return {
-      connectionId: connection.id,
-      bindingId: binding.id,
-      harnessId,
-      variantKey: binding.variantKey,
-      label: binding.label,
-      enabled: false,
-      routeIds: routes.map((route) => route.providerId),
-      // Reported rather than hidden: the toolkit adopts the first route as the
-      // system default on an install that has none, and a disabled route being
-      // named the default grants no execution — but the caller should still be
-      // told its default moved.
-      activeProvider: activeAfter ?? null,
-      activeProviderChanged: (activeAfter ?? null) !== (activeProvider ?? null),
-    };
   });
 }

@@ -7,25 +7,9 @@ import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { REDACTED_CREDENTIAL, providerConnectionProfile } from './providerConnections.js';
-import {
-  PROVIDER_GRAPH_SCHEMA_VERSION,
-  buildProviderGraphPreview,
-} from './providerGraphPreview.js';
-import { CREATABLE_HARNESS_IDS, PROVIDER_HARNESSES, PROVIDER_HARNESS_IDS, ROUTE_MODES, } from './providerHarnesses.js';
-import {
-  effectiveModelAliases,
-  modelAliasRevision,
-  sanitizeModelAliases,
-  staleModelAliases,
-} from './providerModelAliases.js';
-import { routeSettingsRevision, routeSettingsSchema } from './providerRouteSettings.js';
-import { CREATABLE_CONNECTION_KINDS, connectionKindLabel } from './providerRouteRecipes.js';
+import { buildProviderGraphPreview } from './providerGraphPreview.js';
 import { SERVICE_CREDENTIAL_VIAS, SERVICE_PLANS } from '../serviceDefinitions.js';
 import { isNonBlankStr } from '../textUtils.js';
-
-// `PROVIDER_GRAPH_SCHEMA_VERSION` is deliberately NOT re-exported: it is one
-// wire version shared with the preview, so it has one declaring module.
-// Import it from `providerGraphPreview.js`.
 
 /**
  * The DURABLE half of the provider connection graph (#6367, design record
@@ -79,8 +63,6 @@ export const connectionDtoSchema = z.object({
   transports: z.record(z.string(), z.object({ baseUrl: z.string().min(1) }).strict()),
   hasCredentials: z.boolean(),
   catalog: catalogSchema,
-  // The service-instance identity (#7563). Additive, so
-  // `PROVIDER_GRAPH_SCHEMA_VERSION` stays at 1 and an older client ignores them.
   // `slug` / `definitionId` are null on a row the boot backfill has not named.
   slug: z.string().nullable(),
   definitionId: z.string().nullable(),
@@ -88,176 +70,6 @@ export const connectionDtoSchema = z.object({
   enabled: z.boolean(),
   credentialVia: z.enum(SERVICE_CREDENTIAL_VIAS),
 }).strict();
-
-const bindingDtoSchema = z.object({
-  id: z.string().min(1),
-  revision: z.number().int().positive(),
-  connectionId: z.string().min(1),
-  harnessId: z.enum(PROVIDER_HARNESS_IDS).nullable(),
-  variantKey: z.string().min(1),
-  label: z.string(),
-  enabled: z.boolean(),
-  selectedModels: z.array(z.string()),
-  // Derived, never stored: a binding whose route projection is unresolved
-  // refuses further graph mutations until reconciliation repairs it.
-  blocked: z.boolean(),
-}).strict();
-
-const routeDtoSchema = z.object({
-  providerId: z.string().min(1),
-  bindingId: z.string().min(1),
-  mode: z.enum(ROUTE_MODES),
-  // The EFFECTIVE alias map: what the last refresh observed, with the user's
-  // hand-authored overrides laid over the top (#6369).
-  modelMap: z.record(z.string(), z.string()),
-  // The override half on its own, so the panel can say which aliases a human
-  // wrote and offer to remove them, plus the fingerprint an edit must send
-  // back. `ai_route_bindings` has no revision column, so the stale check is a
-  // hash of these values — the same technique the mode overrides use.
-  modelAliasOverrides: z.record(z.string(), z.string()),
-  modelAliasRevision: z.string().min(1),
-  // Overrides naming a spelling the record no longer lists. Reported, never
-  // repaired: a saved alias is only ever removed by the person who wrote it.
-  staleModelAliases: z.array(z.string()),
-  // Presence only — the snapshots themselves can carry secrets.
-  projectionPending: z.boolean(),
-  // This mode's own overrides, and the fingerprint a write must send back
-  // (#6369). Route-owned by construction: nothing here is connection state, so
-  // editing it moves no other harness.
-  settings: routeSettingsSchema,
-  settingsRevision: z.string().min(1),
-  // The effort ladder this route's harness actually accepts, or `null` for one
-  // that takes no effort flag at all. Published rather than re-derived in the
-  // browser so a renamed or path-configured binary still offers the right
-  // levels — and so "no control" stays distinct from "an empty list".
-  effortLevels: z.array(z.string()).nullable(),
-  // Display half of the Shell hand-off, present only on a launchable TUI route.
-  // The launch itself re-resolves this AND the provider's secret env server-side
-  // (`shell:start { providerId }`), so the command line is never the contract.
-  tuiCommandLine: z.string().optional(),
-}).strict();
-
-// What a client may CREATE (#6369). Both are constants derived from the code
-// registries, published rather than mirrored into the browser: which harnesses
-// carry a command recipe, and which backend kinds a minted route can honestly
-// describe, are server decisions with no rendered value the browser could
-// recompute. Additive, so `PROVIDER_GRAPH_SCHEMA_VERSION` stays at 1 and an
-// older client simply ignores them.
-const creatableHarnessSchema = z.object({
-  id: z.enum(PROVIDER_HARNESS_IDS),
-  label: z.string().min(1),
-  modes: z.array(z.enum(ROUTE_MODES)).min(1),
-  protocol: z.string().min(1),
-  // The credential key this program needs on the connection, and whether it
-  // refuses to start without one — so the form can say so BEFORE the create.
-  credentialKey: z.string().min(1),
-  credentialRequired: z.boolean(),
-}).strict();
-
-const creatableKindSchema = z.object({
-  id: z.string().min(1),
-  label: z.string().min(1),
-}).strict();
-
-/** The static half of the create surface. Derived from code, never from rows. */
-const CREATABLE = Object.freeze({
-  // Creatable FROM A CONNECTION — a subscription program or Pi carries a
-  // recipe too (#7562) but composes only onto named services, not here.
-  harnesses: Object.freeze(PROVIDER_HARNESSES.filter((harness) => CREATABLE_HARNESS_IDS.includes(harness.id)).map((harness) => Object.freeze({
-    id: harness.id,
-    label: harness.label,
-    modes: [...harness.modes],
-    protocol: harness.protocol,
-    credentialKey: harness.recipe.credential.via === 'env' ? harness.recipe.credential.name : 'apiKey',
-    credentialRequired: harness.recipe.credential.required === true,
-  }))),
-  kinds: Object.freeze(CREATABLE_CONNECTION_KINDS.map((id) => Object.freeze({ id, label: connectionKindLabel(id) }))),
-});
-
-/** The full `GET /api/providers/management` body. */
-export const managementGraphSchema = z.object({
-  schemaVersion: z.literal(PROVIDER_GRAPH_SCHEMA_VERSION),
-  activeProvider: z.string().nullable(),
-  connections: z.array(connectionDtoSchema),
-  bindings: z.array(bindingDtoSchema),
-  routes: z.array(routeDtoSchema),
-  creatableHarnesses: z.array(creatableHarnessSchema),
-  creatableConnectionKinds: z.array(creatableKindSchema),
-}).strict();
-
-/**
- * The sanitized, validated body a client receives.
- *
- * Credentials, projection snapshots and raw provider records never appear: the
- * browser is told only WHETHER a connection has credentials and whether a
- * route's projection is settled. Every identity decision was already made
- * server-side on real values.
- *
- * `routeSettings` carries the per-route mode overrides the service resolved
- * from the live executable records (#6369). It arrives pre-resolved rather than
- * being read here because the TUI command line it also carries needs the host's
- * shell resolution, and this module stays pure. A route with no entry — a graph
- * row whose record is mid-removal — publishes an empty override set rather than
- * an absent field, so the client never has to branch on presence.
- *
- * A route entry also carries `storedModels` — the record's own model list — used
- * only to decide which hand-authored aliases have gone stale. It is read here
- * rather than from the graph row because `providers.json` is what a run
- * actually executes, so the file is the honest thing to check an alias against.
- *
- * @param {{routeSettings?: Map<string, object>}} input
- */
-export function toManagementGraphDto({ connections, bindings, routes, activeProvider = null, routeSettings = new Map() }) {
-  const blocked = new Set(routes.filter((route) => route.pending).map((route) => route.bindingId));
-  return managementGraphSchema.parse({
-    schemaVersion: PROVIDER_GRAPH_SCHEMA_VERSION,
-    activeProvider: typeof activeProvider === 'string' ? activeProvider : null,
-    creatableHarnesses: CREATABLE.harnesses,
-    creatableConnectionKinds: CREATABLE.kinds,
-    connections: connections.map(({
-      id, revision, kind, label, transports, credentials, catalog,
-      slug = null, definitionId = null, plan = 'paid', enabled = true, credentialVia = 'stored',
-    }) => ({
-      id,
-      revision,
-      kind,
-      label,
-      transports,
-      hasCredentials: connectionHasCredentials({ credentials, credentialVia }),
-      catalog,
-      slug,
-      definitionId,
-      plan,
-      enabled,
-      credentialVia,
-    })),
-    bindings: bindings.map(({ id, revision, connectionId, harnessId, variantKey, label, enabled, selectedModels }) => ({
-      id, revision, connectionId, harnessId, variantKey, label, enabled, selectedModels, blocked: blocked.has(id),
-    })),
-    routes: routes.map(({ providerId, bindingId, mode, modelMap, modelAliasOverrides, pending }) => {
-      const {
-        settings = {}, effortLevels = null, tuiCommandLine = null, storedModels = null,
-      } = routeSettings.get(providerId) || {};
-      const overrides = sanitizeModelAliases(modelAliasOverrides);
-      return {
-        providerId,
-        bindingId,
-        mode,
-        modelMap: effectiveModelAliases(modelMap, overrides),
-        modelAliasOverrides: overrides,
-        modelAliasRevision: modelAliasRevision(overrides),
-        staleModelAliases: staleModelAliases(overrides, storedModels),
-        projectionPending: Boolean(pending),
-        settings,
-        settingsRevision: routeSettingsRevision(settings),
-        effortLevels,
-        // Omitted rather than nulled: "not a launchable TUI" is the absence of
-        // the affordance, not an empty command.
-        ...(tuiCommandLine ? { tuiCommandLine } : {}),
-      };
-    }),
-  });
-}
 
 /**
  * The `credentials` key a service's credential pool (#17384) is stored under —
@@ -284,16 +96,24 @@ const pooledSecrets = (credentials) => {
 export const connectionHasCredentials = ({ credentials, credentialVia = 'stored' }) =>
   credentialVia === 'stored' && Object.keys(credentials || {}).some((name) => name !== CREDENTIAL_POOL_KEY);
 
-/**
- * One connection row, sanitized exactly as `GET /api/providers/management`
- * sanitizes it (#6369).
- *
- * Routed through {@link toManagementGraphDto} rather than mapped separately, so
- * the create response and the graph response cannot drift into publishing
- * different things — there is one strict schema and one mapper.
- */
-export const toConnectionDto = (connection) =>
-  toManagementGraphDto({ connections: [connection], bindings: [], routes: [] }).connections[0];
+/** Publish connection metadata without stored credentials. */
+export const toConnectionDto = ({
+  id, revision, kind, label, transports, credentials, catalog,
+  slug = null, definitionId = null, plan = 'paid', enabled = true, credentialVia = 'stored',
+}) => connectionDtoSchema.parse({
+  id,
+  revision,
+  kind,
+  label,
+  transports,
+  hasCredentials: connectionHasCredentials({ credentials, credentialVia }),
+  catalog,
+  slug,
+  definitionId,
+  plan,
+  enabled,
+  credentialVia,
+});
 
 // --- import ------------------------------------------------------------------
 
@@ -352,9 +172,7 @@ const routeKindFitsConnection = (routeKind, connectionKind) => routeKind === con
  * `sameConnectionIdentity` stays strict on purpose: it answers "are these two
  * records the same backend?" at IMPORT time, where equality is what stops an
  * accidental merge. This is the looser question reconciliation asks about a
- * link a human already made — and the same question `createBinding` asks of a
- * freshly minted record, so a create is accepted on exactly the terms the next
- * reconciliation pass will judge it by.
+ * binding on an existing connection.
  */
 export function routeBelongsOnConnection(profile, connection) {
   if (!connection || !routeKindFitsConnection(profile.kind, connection.kind)) return false;

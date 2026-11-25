@@ -281,6 +281,7 @@ export function cloneProjectRecord(source, {
     referenceImageId: includeGeneratedMedia ? (scene.referenceImageId ?? null) : null,
     videoHistoryId: includeGeneratedMedia ? (scene.videoHistoryId ?? null) : null,
     endImageId: includeGeneratedMedia ? (scene.endImageId ?? null) : null,
+    ...(includeGeneratedMedia && scene.imageTreatments?.length ? { imageTreatments: structuredClone(scene.imageTreatments) } : {}),
     ...(scene.photoSequence ? { photoSequence: includeGeneratedMedia ? scene.photoSequence : { ...scene.photoSequence, enabled: false, imageIds: [], ...(scene.photoSequence.layouts ? { layouts: [] } : {}) } } : {}),
     // Takes are immutable pointers to shared media, so a media-keeping clone
     // carries the whole candidate history; a clean clone starts empty.
@@ -317,11 +318,9 @@ export function cloneProjectRecord(source, {
         ...section, sceneId: sceneIdMap.get(section.sceneId) ?? section.sceneId,
       })) } } : {}),
     } } : {}),
-    // #8980 — the treatment's shot directions and proofs follow the scenes to
-    // their new ids; proof evidence the clone can't back is dropped.
+    // #8980 — the treatment's shot directions follow the scenes to
+    // their new ids.
     treatment: source.treatment ? remapTreatmentForClone(source.treatment, sceneIdMap, {
-      includeGeneratedMedia,
-      sourceRenderId: source.renderHistoryId ?? null,
       sourceScenesFingerprint: scenesFingerprint(source.scenes || []),
       cloneScenesFingerprint: scenesFingerprint(scenes),
     }) : null,
@@ -648,6 +647,7 @@ function buildScene(input, { order }) {
     ...(input.imageEffect ? { imageEffect: input.imageEffect } : {}),
     ...(input.imageEffectSec ? { imageEffectSec: input.imageEffectSec } : {}),
     ...(input.photoSequence ? { photoSequence: input.photoSequence } : {}),
+    ...(input.imageTreatments?.length ? { imageTreatments: input.imageTreatments } : {}),
     cardColor: input.cardColor ?? null,
     ...(input.textZone ? { textZone: input.textZone } : {}),
     ...(input.lyricRole ? { lyricRole: input.lyricRole } : {}),
@@ -821,6 +821,7 @@ function carryOver(prior, fresh) {
     // A still playing an image effect stays one: the effect is the shot's picture.
     ...(prior.imageEffect && prior.visualLayer === 'still' ? { visualLayer: 'still', imageEffect: prior.imageEffect,
       ...(prior.imageEffectSec ? { imageEffectSec: prior.imageEffectSec } : {}) } : {}),
+    ...(prior.imageTreatments?.length ? { imageTreatments: prior.imageTreatments } : {}),
     ...(prior.photoSequence ? { photoSequence: prior.photoSequence, ...(prior.visualLayer === 'still' ? { visualLayer: 'still' } : {}) } : {}),
     takes: prior.takes || [],
     ...(prior.direction ? { direction: prior.direction } : {}),
@@ -923,7 +924,7 @@ export function applyStoryboardShotSync(project, plan) {
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'pacingCut', 'label', 'prompt', 'framePrompt', 'visualIntent',
   'referenceImageId', 'videoHistoryId', 'endImageId', 'endFrameOff', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'clipLengthSec', 'clipModelId', 'reverse', 'holdLastFrame', 'filmLook', 'templateEffects', 'transitionIn', 'transitionOut', 'wipeIn', 'wipeOut', 'glitches', 'cutEffect',
-  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'clipSound', 'coverage', 'sourceTake', 'lyricAnchor',
+  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'imageTreatments', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'clipSound', 'coverage', 'sourceTake', 'lyricAnchor',
   'cameoId', 'cameoVariantId', 'cameoLabel', 'shotSheet'];
 
 /**
@@ -1189,6 +1190,7 @@ export function applySceneSplit(project, sceneId, plannedPieces, { preserveClip 
         visualLayer: scene.visualLayer ?? 'footage',
         ...(scene.stillMove ? { stillMove: scene.stillMove } : {}),
         ...(scene.photoSequence ? { photoSequence: scene.photoSequence } : {}),
+        ...(scene.imageTreatments?.length ? { imageTreatments: scene.imageTreatments } : {}),
         shotMode: scene.shotMode ?? 'cutaway',
         performanceSpeaker: scene.performanceSpeaker ?? null,
         performanceStyle: scene.performanceStyle ?? null,

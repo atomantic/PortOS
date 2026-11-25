@@ -6,7 +6,7 @@
  * production clear VITEST — Vitest sets it in every worker, and leaving it
  * set selects the file backend. We assert the SELECTION, not the storage
  * round-trip — the file/PG round-trips are covered by local.test.js (file)
- * and projectsDB.test.js (PG, skip-if-no-DB).
+ * and projectsDB.db.test.js (PG, skip-if-no-DB).
  *
  * vi.resetModules() + dynamic re-import isolates the module-level backend cache
  * between cases (same approach as memoryBackend.test.js).

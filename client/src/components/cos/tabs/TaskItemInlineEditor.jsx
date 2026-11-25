@@ -1,16 +1,15 @@
 import { Save, X } from 'lucide-react';
-import ExecutionOptionsSelect from '../../providers/ExecutionOptionsSelect.jsx';
+import ProviderModelSelector from '../../ProviderModelSelector.jsx';
 import AutoSizeTextarea from '../../ui/AutoSizeTextarea';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
-import { effectiveModelFor, effortAwareModelOptions, effortSurvivingModel } from '../../../utils/providers';
-import { shortClaudeModelName } from '../../../utils/formatters';
+import { effortAwareModelOptions } from '../../../utils/providers';
+import { isCompositeProviderId } from '../../../utils/providerRef.js';
 import InstancePicker from '../InstancePicker';
-import EffortSelect from '../EffortSelect';
 
 export default function TaskItemInlineEditor({ task, idScope, editData, setEditData, hasPromptField, canPinInstance, knownInstances, providers, isConfirmingDiscard, handleConfirmDiscard, cancelDiscardConfirm, handleSave, handleCancelEdit }) {
-  // Get models for selected provider in edit mode
   const editProvider = providers?.find(p => p.id === editData.provider);
-  const editModels = effortAwareModelOptions(editProvider, editData.model);
+  const catalogResolvesProvider = !editProvider && isCompositeProviderId(editData.provider);
+  const editModels = catalogResolvesProvider ? [] : effortAwareModelOptions(editProvider, editData.model);
 
   return (
     <div className="space-y-2" onPointerDown={e => e.stopPropagation()}>
@@ -42,46 +41,22 @@ export default function TaskItemInlineEditor({ task, idScope, editData, setEditD
         onChange={e => setEditData(d => ({ ...d, context: e.target.value }))}
         className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm font-mono resize-y overflow-auto"
       />
-      <div className="flex flex-col sm:flex-row gap-2">
-        <select
-          aria-label="Provider"
-          value={editData.provider}
-          onChange={e => setEditData(d => ({ ...d, provider: e.target.value, model: '', effort: '' }))}
-          className="w-full sm:w-36 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
-        >
-          <option value="">Auto</option>
-          {providers?.filter(p => p.enabled !== false || p.id === editData.provider).map(p => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </select>
-        {editModels.length > 0 && (
-          <select
-            aria-label="Model"
-            value={editData.model}
-            onChange={e => setEditData(d => ({
-              ...d,
-              model: e.target.value,
-              effort: effortSurvivingModel(editProvider, e.target.value, d.effort)
-            }))}
-            className="flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
-          >
-            <option value="">Auto</option>
-            {editModels.map(m => (
-              <option key={m} value={m}>{shortClaudeModelName(m)}</option>
-            ))}
-          </select>
-        )}
-        <EffortSelect
-          provider={editProvider}
-          model={effectiveModelFor(editProvider, editData.model)}
-          value={editData.effort}
-          onChange={effort => setEditData(d => ({ ...d, effort }))}
-          className="w-full sm:w-36 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
-        />
-        <ExecutionOptionsSelect provider={editProvider} model={effectiveModelFor(editProvider, editData.model)}
-          value={editData.executionOptions} onChange={executionOptions => setEditData(d => ({ ...d, executionOptions }))}
-          className="w-full sm:w-36 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm" />
-      </div>
+      <ProviderModelSelector
+        providers={providers}
+        selectedProviderId={editData.provider}
+        selectedModel={editData.model}
+        availableModels={editModels}
+        onProviderChange={provider => setEditData(d => ({ ...d, provider, model: '', effort: '' }))}
+        onModelChange={model => setEditData(d => ({ ...d, model }))}
+        effort={editData.effort}
+        onEffortChange={effort => setEditData(d => ({ ...d, effort }))}
+        executionOptions={editData.executionOptions}
+        onExecutionOptionsChange={executionOptions => setEditData(d => ({ ...d, executionOptions }))}
+        emptyProviderOption="Auto"
+        emptyModelOption="Auto"
+        compact
+        highlightToolUse
+      />
       {canPinInstance && (
         <InstancePicker
           id={`task-target-instance-${idScope}-${task.id}`}

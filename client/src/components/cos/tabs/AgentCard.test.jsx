@@ -242,6 +242,21 @@ describe('AgentCard runtime presentation', () => {
     expect(screen.getByTitle((value) => value.includes('2026'))).toBeInTheDocument();
   });
 
+  it('links a local card to its run, run events and task, and a remote or run-less card to none', () => {
+    const withRun = { ...agent, metadata: { ...agent.metadata, runId: 'run-9' } };
+    const view = render(<MemoryRouter><AgentCard agent={withRun} completed /></MemoryRouter>);
+    expect(screen.getByRole('link', { name: 'Run' })).toHaveAttribute('href', '/cos/runs?run=run-9');
+    expect(screen.getByRole('link', { name: 'Events' })).toHaveAttribute('href', '/cos/runs/events?run=run-9');
+    expect(screen.getByRole('link', { name: 'Task' })).toHaveAttribute('href', '/cos/tasks?task=task-example');
+
+    view.rerender(<MemoryRouter><AgentCard agent={withRun} completed remote /></MemoryRouter>);
+    expect(screen.queryByRole('link', { name: 'Run' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Events' })).not.toBeInTheDocument();
+
+    view.rerender(<MemoryRouter><AgentCard agent={agent} completed /></MemoryRouter>);
+    expect(screen.queryByRole('link', { name: 'Run' })).not.toBeInTheDocument();
+  });
+
   it('suppresses prompt access for remote cards while preserving the live shell destination', () => {
     render(
       <MemoryRouter>

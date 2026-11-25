@@ -8,6 +8,15 @@
 export const NEVER_MARKER = /\/\/\s*test-memo:\s*never\b/;
 
 /**
+ * A test file's declaration that every git process it starts runs in a
+ * repository the suite itself created outside this checkout, so repository
+ * state is no input of it. A line comment of its own (a mention inside
+ * another comment declares nothing), honored for the test file only and
+ * only while the file's own text does not contradict it (`gitFixture.js`).
+ */
+export const GIT_FIXTURE_MARKER = /^[ \t]*\/\/\s*test-memo:\s*git-fixture\b/m;
+
+/**
  * Hex characters of sha256 a v2 memo record keeps per loaded module. It only
  * detects that a module changed since the record (never authenticates), so
  * 64 bits is ample and keeps records small.
@@ -48,10 +57,20 @@ export const TEST_MEMO_ENV = Object.freeze([
 
 /**
  * External programs whose version is part of a key when a member reaches
- * them: the Python sidecars, ffmpeg/ffprobe, and Chrome for the browser
- * suites. The runner resolves the versions; the analyzer only names them.
+ * them: the Python sidecars, ffmpeg/ffprobe, Chrome for the browser suites,
+ * and git for a suite that declares its repositories fixtures
+ * (`GIT_FIXTURE_MARKER`). The runner resolves the versions; the analyzer
+ * only names them.
  */
-export const TEST_MEMO_TOOLS = Object.freeze(['chrome', 'ffmpeg', 'python']);
+export const TEST_MEMO_TOOLS = Object.freeze(['chrome', 'ffmpeg', 'git', 'python']);
+
+/**
+ * Tools a suite that reaches them cannot pass without. An unresolved version
+ * of any other tool is keyed as `absent` (a sidecar suite skips itself where
+ * python is missing, and that verdict is real); for these it means the
+ * runner could not say what the suite ran against, so nothing is keyed.
+ */
+export const TEST_MEMO_REQUIRED_TOOLS = Object.freeze(['git']);
 
 /**
  * Tree readers the guard suffix and the always-run set do not already cover:

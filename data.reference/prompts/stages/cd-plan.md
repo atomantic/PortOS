@@ -50,7 +50,7 @@ Parameters (JSON schema): {{parametersJson}}
 
 This project is locked to **{{render.aspectRatio}}** ({{render.width}}×{{render.height}}), **{{render.quality}}** quality, target ~{{render.targetDurationSeconds}}s, using **{{render.modelName}}** (`{{render.modelId}}`). The selected model exposes these same options in the Video Gen UI: {{render.modelOptionsJson}}.
 
-For any `media_enqueueVideoJob` step, set only `prompt`, `style`, and optionally a shorter per-beat `durationSeconds`.{{#render.supportsNegativePrompt}} You may also set `negativePrompt`.{{/render.supportsNegativePrompt}}{{^render.supportsNegativePrompt}} Do NOT set `negativePrompt`; this model does not expose it in the UI.{{/render.supportsNegativePrompt}} Do not set or override backend, model, aspect ratio, width, height, FPS, frame count, steps, guidance, tiling, or audio controls. The server derives them from the user's commission and snaps them to the selected model's advertised options.
+For any `media_enqueueVideoJob` step, set only `prompt`, `style`, and optionally a shorter per-beat `durationSeconds`.{{#render.supportsNegativePrompt}} You may also set `negativePrompt`.{{/render.supportsNegativePrompt}}{{^render.supportsNegativePrompt}} Do NOT set `negativePrompt`; the selected model or video backend does not take one.{{/render.supportsNegativePrompt}} Do not set or override backend, model, aspect ratio, width, height, FPS, frame count, steps, guidance, tiling, or audio controls. The server derives them from the user's commission and snaps them to the selected model's advertised options.
 
 ## Referencing a prior step's result
 

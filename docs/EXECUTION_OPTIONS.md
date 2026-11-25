@@ -56,6 +56,7 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/cos/tabs/MemoryTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/cos/tabs/RelaunchAgentModal.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/cos/tabs/ResumeAgentModal.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/cos/tabs/TaskItemInlineEditor.jsx` | Structured execution options persisted on the queued task when its edits are saved |
 | `client/src/components/cos/tabs/schedule/MusicVideoAutopilotSettings.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/cos/tabs/schedule/PipelineStageConfig.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/cos/tabs/schedule/TaskModelQuickControls.jsx` | Shared structured options or saved provider reference |
@@ -144,6 +145,6 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/pages/ThreejsModelDetail.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/ThreejsModels.jsx` | Shared structured options or saved provider reference |
 
-Custom adapters are `client/src/components/cos/tabs/TaskItem.jsx`, `client/src/components/cos/tabs/schedule/GlobalConfigControls.jsx`, `client/src/components/cos/tabs/schedule/TaskModelQuickControls.jsx`, `client/src/components/providers/ProviderForm.jsx`, `client/src/components/providers/ProviderComposePopover.jsx`, `client/src/components/cos/ReviewerPicker.jsx`, and `client/src/components/shell/ShellProviderLauncher.jsx`. These use ExecutionOptionsSelect directly. Resume/Relaunch use the shared selector; shell settings save a selection without launching until the user presses Launch. The server resolves the reference and validates before opening a provider shell.
+Custom adapters are `client/src/components/providers/ProviderForm.jsx`, `client/src/components/providers/ProviderComposePopover.jsx`, `client/src/components/cos/ReviewerPicker.jsx`, and `client/src/components/shell/ShellProviderLauncher.jsx`. These use ExecutionOptionsSelect directly. Resume/Relaunch use the shared selector; shell settings save a selection without launching until the user presses Launch. The server resolves the reference and validates before opening a provider shell.
 
 Verification covers default compatibility, explicit Standard precedence, unsupported/unknown options, native CLI/TUI/resume argv, app-server turn-only fields, provider-store reload/source edits, task retry/resume, audit-job configuration with recurrence disabled, legacy selector reference round-trip, and shell refusal/attribution. Required hosted CI supplies broader coverage.

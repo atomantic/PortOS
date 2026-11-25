@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { MemoryRouter } from 'react-router';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { formatCompositeId } from '../../../utils/providerRef.js';
 
 const api = vi.hoisted(() => ({
   updateCosTask: vi.fn(),
@@ -21,6 +22,18 @@ vi.mock('../../../services/apiAgents.js', () => ({
   resetSpawnBudgetAndRun: api.resetSpawnBudgetAndRun,
   recheckCosAgentCleanup: api.recheckCosAgentCleanup,
   resolveCosTaskChallenge: api.resolveCosTaskChallenge,
+}));
+vi.mock('../../../services/apiProviders.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  getProviderCatalog: vi.fn().mockResolvedValue({
+    harnesses: [{ id: 'codex', label: 'Codex', modes: ['cli'] }],
+    services: [{ slug: 'openai', label: 'OpenAI', catalog: { models: ['gpt-5.6-terra', 'gpt-5.6-sol'] } }],
+    compatibility: { codex: ['openai'] },
+    effortLevels: { codex: ['low', 'high'] },
+  }),
+}));
+vi.mock('../../../hooks/useToolUseModelIds.js', () => ({
+  default: () => ({ idsByProvider: null, loaded: false }),
 }));
 vi.mock('../../ui/Toast', () => ({ default: toast }));
 
@@ -198,6 +211,25 @@ describe('TaskItem task source', () => {
         type: 'internal',
       }),
       { silent: true },
+    ));
+  });
+
+  it('shows a composite pin with its catalog models and preserves it on save', async () => {
+    const provider = formatCompositeId({ harnessId: 'codex', method: 'cli', serviceSlug: 'openai' });
+    const metadata = { provider, model: 'gpt-5.6-terra', effort: 'high' };
+    render(<TaskItem task={{ ...task, metadata }} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+
+    expect(await screen.findByRole('option', { name: 'Codex · CLI · OpenAI' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Provider' })).toHaveValue(provider);
+    expect(screen.getByRole('combobox', { name: 'Model' })).toHaveValue(metadata.model);
+    expect(screen.getByRole('option', { name: 'gpt-5.6-sol' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Thinking effort' })).toHaveValue(metadata.effort);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(api.updateCosTask).toHaveBeenCalledWith(
+      task.id, expect.objectContaining(metadata), { silent: true },
     ));
   });
 

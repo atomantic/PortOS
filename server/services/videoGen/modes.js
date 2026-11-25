@@ -13,40 +13,28 @@
  */
 
 import {
-  CLOUD_VIDEO_GEN_MODES, VIDEO_GEN_MODE, VIDEO_GEN_MODES,
+  CLOUD_VIDEO_GEN_MODES, HOSTED_MEDIA_BACKENDS, VIDEO_GEN_MODE, VIDEO_GEN_MODES,
 } from '../../lib/generationModes.js';
+import { CREDENTIALS } from '../../lib/credentialRegistry.js';
 import { normalizeRenderPinValue } from '../../lib/renderTargets.js';
 
 export { CLOUD_VIDEO_GEN_MODES, VIDEO_GEN_MODE, VIDEO_GEN_MODES };
 
-/**
- * Is `mode` a video backend this install can render on right now? Grok shares the
- * `imageGen.grok.enabled` opt-in with grok image gen; local is always "usable"
- * here (its own validation runs per call site in `generateVideo`).
- */
+const settingAt = (settings, path) => path.split('.').reduce((value, key) => value?.[key], settings);
+const hasKey = (value) => typeof value === 'string' && value.trim() !== '';
+
+/** Check whether this install can select the backend before per-render validation. */
 export function isVideoModeUsable(settings, mode) {
-  if (mode === VIDEO_GEN_MODE.GROK) return settings?.imageGen?.grok?.enabled === true;
-  // fal.ai is metered: gated on a configured key (settings or FAL_KEY), see videoGen/fal.js#resolveFalApiKey.
-  if (mode === VIDEO_GEN_MODE.FAL) {
-    return Boolean((settings?.videoGen?.fal?.apiKey || '').trim() || (process.env.FAL_KEY || '').trim());
-  }
-  // reactor.inc: metered REST API, gated on a configured key (settings or REACTOR_API_KEY).
-  if (mode === VIDEO_GEN_MODE.REACTOR) {
-    return Boolean((settings?.videoGen?.reactor?.apiKey || '').trim() || (process.env.REACTOR_API_KEY || '').trim());
-  }
-  // Runway: a key in settings or RUNWAYML_API_SECRET.
-  if (mode === VIDEO_GEN_MODE.RUNWAY) {
-    return Boolean((settings?.videoGen?.runway?.apiKey || '').trim() || (process.env.RUNWAYML_API_SECRET || '').trim());
-  }
-  if (mode === VIDEO_GEN_MODE.HIGGSFIELD) {
-    return Boolean((settings?.videoGen?.higgsfield?.apiKey || '').trim() || (process.env.HIGGSFIELD_API_KEY || '').trim());
-  }
-  if (mode === VIDEO_GEN_MODE.GOOGLE) {
-    return Boolean((settings?.videoGen?.google?.apiKey || '').trim() || (process.env.GOOGLE_CLOUD_API_KEY || '').trim());
-  }
-  // Gemini has no key to check: it renders in the PortOS Browser, whose sign-in only the render can read.
-  if (mode === VIDEO_GEN_MODE.GEMINI) return true;
-  return mode === VIDEO_GEN_MODE.LOCAL;
+  if (mode === VIDEO_GEN_MODE.LOCAL) return true;
+  const backend = HOSTED_MEDIA_BACKENDS.find(({ id, video }) => video && id === mode);
+  if (!backend) return false;
+  if (backend.alwaysUsable) return true;
+  if (backend.enabledSetting) return settingAt(settings, backend.enabledSetting) === true;
+  const credential = CREDENTIALS.find(({ id }) => id === backend.credentialId);
+  return Boolean(credential && (
+    (credential.settingsPath && hasKey(settingAt(settings, credential.settingsPath)))
+    || credential.envVars.some(name => hasKey(process.env[name]))
+  ));
 }
 
 /**

@@ -28,12 +28,6 @@ router.get('/count', asyncHandler(async (req, res) => {
   res.json({ count });
 }));
 
-// GET /api/notifications/counts - Get counts by type
-router.get('/counts', asyncHandler(async (req, res) => {
-  const counts = await notifications.getCountsByType();
-  res.json(counts);
-}));
-
 // POST /api/notifications/:id/read - Mark as read
 router.post('/:id/read', asyncHandler(async (req, res) => {
   const result = await notifications.markAsRead(req.params.id);

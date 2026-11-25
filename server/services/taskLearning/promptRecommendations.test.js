@@ -6,7 +6,7 @@ vi.mock('./store.js', async (importOriginal) => {
 });
 
 import { loadLearningData } from './store.js';
-import { getPromptImprovementRecommendations, getAllPromptRecommendations } from './promptRecommendations.js';
+import { getPromptImprovementRecommendations } from './promptRecommendations.js';
 
 const data = (overrides = {}) => ({ byTaskType: {}, errorPatterns: {}, ...overrides });
 
@@ -119,23 +119,5 @@ describe('promptRecommendations.getPromptImprovementRecommendations', () => {
     const rec = await getPromptImprovementRecommendations('t');
     expect(rec.failureSignatures).toHaveLength(1);
     expect(rec.suggestions.some(s => s.type === 'failure-signature')).toBe(false);
-  });
-});
-
-describe('promptRecommendations.getAllPromptRecommendations', () => {
-  it('returns only types with >= 3 completions, sorted critical-first', async () => {
-    loadLearningData.mockResolvedValue(data({
-      byTaskType: {
-        good: { completed: 10, failed: 1, successRate: 90, avgDurationMs: 1000 },
-        broken: { completed: 10, failed: 9, successRate: 10, avgDurationMs: 1000 },
-        tiny: { completed: 2, failed: 1, successRate: 50, avgDurationMs: 1000 },
-      },
-    }));
-    const all = await getAllPromptRecommendations();
-    // critical (priority 0) must sort first — regression guard against the
-    // `priorityOrder[status] || 5` footgun that treated 0 as falsy and sorted
-    // the most urgent recommendation last.
-    expect(all.map(r => r.taskType)).toEqual(['broken', 'good']);
-    expect(all[0].status).toBe('critical');
   });
 });

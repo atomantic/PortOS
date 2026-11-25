@@ -109,9 +109,10 @@ you are already on.
 
 Then, either way:
 
-4. Use **Refresh Models** on the provider once the server is up; PortOS reads
-   `/v1/models` on demand. The seeded model id is `mtplx-qwen38-27b-optimized-speed` — refresh it if your
-   running server publishes a different one.
+4. The presets that front MTPLX update their model lists on their own when PortOS starts the server, or
+   downloads or removes a checkpoint (PortOS reads `/v1/models`, never generates). The seeded model id is
+   `mtplx-qwen38-27b-optimized-speed`. Use **Refresh Models** on the provider only for a server you started
+   yourself.
 5. Choose **MTPLX (local MTP)** for supported non-coding tasks, or choose an
    **OpenCode MTPLX** CLI/TUI preset for a CoS coding task.
 
@@ -302,3 +303,8 @@ Artificial Analysis index, and its mostly sliding-window attention keeps the KV
 cache near 32 KB per token against Qwen's 65.5 KB. Models → Runtimes →
 **Recommended coding-agent setup** therefore points Apple tiers at it, with a
 window computed from the GPU budget (`HardwareLlmRecommendation.jsx`).
+
+To read answers side by side rather than only speeds, open the Local LLM
+Playground (Compare mode): a running MTPLX appears as its own group beside Ollama
+and LM Studio. The Playground never starts the daemon; a stopped one shows as
+"not running" with a link to Models → Runtimes. `POST /api/local-llm/{test,test/stream,compare}` accept any assessable runtime as `backend` (no `/runs` record), and `GET /api/local-llm/runtime-models` lists what each bare-endpoint runtime serves without generating.

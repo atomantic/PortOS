@@ -14,12 +14,8 @@ const RUN_TEMP_ROOT = bootstrapVitestTempRoot();
 // wherever it is launched from (#4554).
 process.env.NODE_ENV = 'test';
 
-// Compatibility export for the existing DB inventory guard.
-export { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
-
 /**
  * DB-backed test config — runs ONLY the suites that talk to a real Postgres
- * (the `*.db.test.js` adapter round-trips + a few catalog/migration suites),
  * against the throwaway `portos_test` database.
  *
  * Why a separate config:
@@ -39,10 +35,8 @@ export { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
  * run's fixture rows mid-case (#12371). test/dbRunExclusivity.js holds a
  * session-level advisory lock on the test database for the run's lifetime.
  *
- * Adding a new DB-backed test? Add it to `DB_TEST_INCLUDE` in scripts/lib/dbTestFiles.js — the
- * `*.db.test.js` naming convention is documentation, not a glob match, so a new
- * suite silently never runs until it's listed. server/test/guards/repo/db.inventory.test.js fails if a
- * checkHealth consumer is left out.
+ * Name new DB-backed suites `*.db.test.js` to register them. The inventory
+ * guard flags DB-gated suites whose names miss the include patterns.
  */
 const config = defineConfig({
   server: { watch: VITEST_WATCH_OPTIONS },

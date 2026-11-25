@@ -10,6 +10,9 @@ import { anyAbortSignal } from '../lib/requestAbort.js';
 import { buildMessages, streamOllamaChat, streamOpenAiChat } from '../lib/openAiChatStream.js';
 import { assertSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
 import { withModelNumCtx } from '../lib/aiToolkit/internal/ollamaBacked.js';
+import { isEndpointRuntime } from '../lib/localProviderRuntime.js';
+import { withLocalConcurrencyGate } from '../lib/localLlmConcurrency.js';
+import { runtimeApiKey, runtimeEndpoint } from './localRuntimeEndpoints.js';
 
 const PROVIDER_BY_BACKEND = { ollama: 'ollama', lmstudio: 'lmstudio' };
 
@@ -188,6 +191,51 @@ export async function runLocalLlmTest({
   // chat; other playground runs keep the OpenAI-compatible transport.
   nativeOllamaUsage = false,
 }) {
+  // llama.cpp, MTPLX, Splash, vLLM and the other bare loopback daemons have no provider record, so
+  // they take the endpoint transport. A daemon that is not running comes back as an inline `error`
+  // result: the Playground never starts a runtime (a start can load tens of gigabytes).
+  if (isEndpointRuntime(backend)) {
+    const endpoint = await runtimeEndpoint(backend);
+    if (!endpoint) {
+      const now = Date.now();
+      return {
+        backend,
+        modelId,
+        error: `No endpoint is configured for the ${backend} runtime`,
+        text: '',
+        timings: summarizeTimings({ startedAt: now, firstChunkAt: null, endedAt: now, text: '' }),
+        options: { temperature, maxTokens, timeoutMs },
+      };
+    }
+    const apiKey = await runtimeApiKey(backend);
+    // The per-endpoint gate is what the MTPLX/Slotstream idle reapers read (`isLocalEndpointBusy`), so a
+    // generation holds a slot for its whole run and a long answer is not stopped mid-stream. It also queues
+    // behind an agent run already using the daemon instead of racing it.
+    try {
+      return await withLocalConcurrencyGate({ type: 'api', endpoint }, () => runEndpointLlmTest({
+        runtime: backend,
+        endpoint,
+        apiKey,
+        modelId, prompt, systemPrompt, images, temperature, maxTokens, timeoutMs, extraBody,
+        signal: clientSignal,
+        onToken,
+      }), { signal: clientSignal });
+    } catch (err) {
+      // Canceled while still queued for a slot: same resolved-result contract as a canceled run.
+      if (!clientSignal?.aborted) throw err;
+      const now = Date.now();
+      return {
+        backend,
+        modelId,
+        endpoint,
+        error: 'Local LLM test canceled by client',
+        text: '',
+        canceled: true,
+        timings: summarizeTimings({ startedAt: now, firstChunkAt: null, endedAt: now, text: '' }),
+        options: { temperature, maxTokens, timeoutMs },
+      };
+    }
+  }
   const provider = await resolveLocalProvider(backend);
   const fullPrompt = buildPrompt({ systemPrompt, prompt });
   const startedAt = Date.now();

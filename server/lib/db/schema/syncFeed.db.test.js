@@ -8,8 +8,8 @@
  * T1's row forever. Each test here holds real transactions open across real
  * pulls through the public sync readers.
  *
- * `*.db.test.js` → runs ONLY via `npm run test:db` against `portos_test`
- * (registered in DB_TEST_INCLUDE). Every row uses a per-run id prefix and is
+ * `*.db.test.js` → runs ONLY via `npm run test:db` against `portos_test`.
+ * Every row uses a per-run id prefix and is
  * removed in afterAll, so the shared test database stays usable by concurrent
  * worktrees.
  */

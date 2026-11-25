@@ -5,6 +5,7 @@
 
 import { isClaudeHarnessProvider } from './providerTypes.js';
 import { commandBasename } from './providerModels.js';
+import { hasLocalRuntimeMarker } from '../aiToolkit/internal/localRuntimeMarkers.js';
 
 /**
  * Subscription-quota FAMILY identity: which provider configs belong to the same paid plan (`claude`, `codex`, `agy`, `grok`). The pure half of the registry `server/services/provider/providerUsage.js` drives (which attaches a `fetch` per family that spawns PTYs to scrape a CLI's `/usage`); pricing, cost attribution and route validation need "which plan is this provider on?"
@@ -52,7 +53,7 @@ export const familyLabel = (id) => PROVIDER_FAMILIES.find((f) => f.id === id)?.l
 
 /** The family id a single provider config belongs to, or null (a local-runtime wrapper, a pay-as-you-go API provider); the inverse of `resolveEnabledFamilies`, so cost reporting attributes spend to the subscription that covered it. */
 export function familyForProvider(provider) {
-  if (!provider || provider.ollamaBacked === true || provider.lmstudioBacked === true || provider.mtplxBacked === true || provider.llamaBacked === true || provider.vllmBacked === true || provider.sglangBacked === true || provider.splashBacked === true) return null;
+  if (!provider || hasLocalRuntimeMarker(provider)) return null;
   return PROVIDER_FAMILIES.find((f) => f.matches(provider))?.id ?? null;
 }
 
