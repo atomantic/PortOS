@@ -7,7 +7,6 @@ import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import { formatTimecode } from '../../utils/formatters.js';
 import MediumPlanSummary from './MediumPlanSummary.jsx';
 import TreatmentShotList from './TreatmentShotList.jsx';
-import TreatmentProofs from './TreatmentProofs.jsx';
 import TreatmentApplyReview from './TreatmentApplyReview.jsx';
 
 const ASPECT_RATIOS = ['16:9', '9:16', '1:1', '4:5', '2.39:1'];
@@ -60,8 +59,8 @@ export function treatmentSummary(project) {
 
 /**
  * The pre-production treatment (#8980): a structured brief, the compiled
- * whole-song arc (beats by section, motifs, balance), per-shot direction, the
- * proof checklist and the Apply review. Compiling is always an explicit click —
+ * whole-song arc (beats by section, motifs, balance), per-shot direction and
+ * the Apply review. Compiling is always an explicit click —
  * "Draft without AI" makes no provider call at all. Keyed by project id at the
  * call site so a field draft never carries across projects.
  *
@@ -281,7 +280,6 @@ export default function TreatmentPanel({ project, treatment: api, storyboardAppr
             </div>
             <MediumPlanSummary project={project} />
             <TreatmentShotList project={project} treatment={t} onSave={api.save} />
-            <TreatmentProofs project={project} treatment={t} onReview={api.reviewProof} />
             <TreatmentApplyReview project={project} api={api} />
           </div>
         )}

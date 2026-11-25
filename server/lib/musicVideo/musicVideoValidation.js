@@ -656,7 +656,7 @@ const sceneLayerFields = {
 
 // The treatment sits between the director's concept/visual spec and the timed
 // shot planner: a structured brief, a compiled whole-song arc, per-shot
-// direction keyed to the board's real scene ids, and a proof checklist. Its own
+// direction keyed to the board's real scene ids. Its own
 // routes edit it (never the generic project PATCH) so every write carries the
 // revision it was based on. See services/musicVideo/treatment.js.
 export const MUSIC_VIDEO_ASPECT_RATIOS = ['16:9', '9:16', '1:1', '4:5', '2.39:1'];
@@ -669,8 +669,6 @@ export const MUSIC_VIDEO_TREATMENT_SHOT_MODES = ['performance', 'cutaway', 'grap
 export const MUSIC_VIDEO_SHOT_ROUTES = ['generated', 'supplied-asset', 'code-2d'];
 export const MUSIC_VIDEO_NEGATIVE_SPACE = ['none', 'upper', 'center', 'lower'];
 export const MUSIC_VIDEO_TYPOGRAPHY_ROLES = ['none', 'subtitle', 'hero'];
-export const MUSIC_VIDEO_PROOF_CHECKS = ['identity-continuity', 'readable-text', 'cut-continuity', 'audio-alignment', 'continuous-motion', 'lip-sync'];
-export const MUSIC_VIDEO_PROOF_STATUSES = ['proposed', 'passed', 'failed'];
 
 // A manually supplied reference note/URL. The URL is provenance the director
 // typed — PortOS never fetches it, and its text is treated as untrusted data.

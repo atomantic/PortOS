@@ -65,7 +65,7 @@ import { MUSCRIPTOR_MODELS } from '../muscriptorModels.js';
 import { MUSIC_VIDEO_CHARACTER_STYLE_IDS } from './musicVideoCharacterStyles.js';
 import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from '../generationModes.js';
 import { GREYBOX_SHOT_ID_MAX, GREYBOX_SHOT_ID_PATTERN } from '../greyboxVocabulary.js';
-import { musicVideoTemplateEffectsSchema, MUSIC_VIDEO_STATUSES, musicVideoConceptSchema, musicVideoVideoSettingsSchema, timedSec, musicVideoLyricCueSchema, musicVideoShotGlitchSchema, musicVideoPrevizSchema, galleryImageName, musicVideoVisualSpecSchema, musicVideoCastInputsSchema, MUSIC_VIDEO_DOCUMENT_TEMPLATES, MUSIC_VIDEO_DOCUMENT_DIRECTORY, musicVideoCompositionSchema, MUSIC_VIDEO_TREATMENT_SHOT_MODES, MUSIC_VIDEO_SHOT_ROUTES, MUSIC_VIDEO_NEGATIVE_SPACE, MUSIC_VIDEO_TYPOGRAPHY_ROLES, MUSIC_VIDEO_PROOF_STATUSES, musicVideoTreatmentBriefSchema, MUSIC_VIDEO_PUBLISH_TARGETS, MUSIC_VIDEO_DEV_ARTIFACT_KINDS, MUSIC_VIDEO_DEV_ARTIFACT_STATUSES, castSetsText, musicVideoProductionDraftSchema } from './musicVideoValidation.js';
+import { musicVideoTemplateEffectsSchema, MUSIC_VIDEO_STATUSES, musicVideoConceptSchema, musicVideoVideoSettingsSchema, timedSec, musicVideoLyricCueSchema, musicVideoShotGlitchSchema, musicVideoPrevizSchema, galleryImageName, musicVideoVisualSpecSchema, musicVideoCastInputsSchema, MUSIC_VIDEO_DOCUMENT_TEMPLATES, MUSIC_VIDEO_DOCUMENT_DIRECTORY, musicVideoCompositionSchema, MUSIC_VIDEO_TREATMENT_SHOT_MODES, MUSIC_VIDEO_SHOT_ROUTES, MUSIC_VIDEO_NEGATIVE_SPACE, MUSIC_VIDEO_TYPOGRAPHY_ROLES, musicVideoTreatmentBriefSchema, MUSIC_VIDEO_PUBLISH_TARGETS, MUSIC_VIDEO_DEV_ARTIFACT_KINDS, MUSIC_VIDEO_DEV_ARTIFACT_STATUSES, castSetsText, musicVideoProductionDraftSchema } from './musicVideoValidation.js';
 
 export const musicVideoShotReferenceRepairSchema = z.object({ problemId: z.string().regex(/^[a-f0-9]{64}$/) });
 export const musicVideoDcpRequestSchema = z.object({ grade: z.enum(['rec709', 'rec1886']), renderHistoryId: z.string().min(1), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
@@ -563,18 +563,6 @@ export const musicVideoTreatmentApplySchema = z.object({
 // POST /:id/treatment/sync-shot-sheet — deterministic record edit, no provider call.
 export const musicVideoTreatmentSyncShotSheetSchema = z.object({
   baseRevision: z.number().int().min(0),
-}).strict();
-
-// Record a proof-checklist review. Evidence names a real artifact of this
-// project (a scene's clip or frame take, or the final render).
-export const musicVideoTreatmentProofReviewSchema = z.object({
-  baseRevision: z.number().int().min(0),
-  status: z.enum(MUSIC_VIDEO_PROOF_STATUSES),
-  evidence: z.object({
-    videoHistoryId: z.string().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/, 'must be a video history id').optional(),
-    imageId: galleryImageName.optional(),
-    note: z.string().max(2000).optional(),
-  }).strict().optional(),
 }).strict();
 
 // ---- Draft excerpt render (#8986) -------------------------------------------

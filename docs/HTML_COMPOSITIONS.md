@@ -278,8 +278,6 @@ they are still at their defaults: a shot routed to 2D/code motion becomes a
 title card carrying its first sung line (or a pushed-in still when it has no
 line), and a performance shot becomes a `performance` shot mode only when the
 project's video backend has a source-audio lip-sync lane (fal.ai today).
-The treatment's proof checklist treats readable text and audio alignment as
-judgeable only in the final render.
 
 ## Music-video render grades
 

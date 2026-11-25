@@ -4,8 +4,8 @@
  * song is analyzed, planned into timed shots, and compiled into a treatment
  * whose arc and shot directions reference the board's real scene ids. Covers
  * the deterministic and AI compile paths (including malformed model output),
- * the revision/basis guards, the non-destructive Apply, proof-evidence rules,
- * clone remapping and motion-reference takes. Only the AI provider is mocked.
+ * the revision/basis guards, the non-destructive Apply, a legacy `proofs`
+ * checklist that is read and then dropped, clone remapping and motion-reference takes. Only the AI provider is mocked.
  */
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
@@ -13,7 +13,6 @@ import express from 'express';
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { request } from '../lib/testHelper.js';
-import { captureMusicVideoEvidence } from '../lib/musicVideo/musicVideoDependencies.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { stillMoveForCamera } from '../lib/cameraMovements.js';
@@ -94,7 +93,7 @@ beforeEach(() => {
 afterAll(cleanupTempDataRoots);
 
 describe('treatment compile', () => {
-  it('compiles a vocal song into a persisted arc keyed to the planned shot ids, with proofs and explicit gaps', async () => {
+  it('compiles a vocal song into a persisted arc keyed to the planned shot ids, with explicit gaps', async () => {
     const project = await plannedProject({ backend: 'grok' });
     const brief = await patchTreatment(project.id, {
       baseRevision: 0,
@@ -132,13 +131,7 @@ describe('treatment compile', () => {
       expect(d.negativeSpace).not.toBe('none');
     }
 
-    expect(stored.proofs.map((p) => p.kind)).toEqual(['risk-shot', 'transition-text']);
-    for (const proof of stored.proofs) {
-      expect(proof.status).toBe('proposed');
-      expect(proof.sceneIds.every((id) => sceneIds.includes(id))).toBe(true);
-      expect(proof.passCriteria.length).toBe(proof.checks.length);
-    }
-    expect(stored.proofs[1].checks).toEqual(expect.arrayContaining(['cut-continuity', 'audio-alignment']));
+    expect(stored).not.toHaveProperty('proofs');
     expect(stored.capabilityGaps.map((g) => g.id)).toContain('aspect-ratio');
     expect(stored.capabilityGaps.map((g) => g.id)).not.toContain('lip-sync');
   });
@@ -398,14 +391,12 @@ describe('treatment → scene render fields (#8977 shot mode, #8985 visual layer
     expect((await reload(project.id)).scenes.every((s) => s.shotMode === 'cutaway')).toBe(true);
   });
 
-  it('maps performance direction onto shotMode on a lip-sync backend and proves sync in the render', async () => {
+  it('maps performance direction onto shotMode on a lip-sync backend', async () => {
     const project = await plannedProject({ backend: 'fal' });
     const sungIndex = project.scenes.findIndex((scene) => scene.startSec >= 22 && scene.lyricText);
     runPromptThroughProvider.mockResolvedValueOnce({ text: JSON.stringify({ shots: [{ index: sungIndex, mode: 'performance', focalSubject: 'Example performer' }] }) });
     const { body } = await compile(project.id, { baseRevision: 0 });
     expect(body.treatment.capabilityGaps.map((g) => g.id)).not.toContain('lip-sync');
-    const riskShot = body.treatment.proofs.find((p) => p.kind === 'risk-shot');
-    expect(riskShot.checks).toContain('lip-sync');
     const performing = body.treatment.shotDirections.filter((d) => d.mode === 'performance').map((d) => d.sceneId);
     expect(performing.length).toBeGreaterThan(0);
     const res = await request(app).post(`${base(project.id)}/treatment/apply`).send({ revision: body.treatment.revision });
@@ -492,39 +483,41 @@ describe('treatment → scene render fields (#8977 shot mode, #8985 visual layer
   });
 });
 
-describe('treatment proofs, clone and motion references', () => {
-  it('only passes a proof on evidence that can show every check', async () => {
+describe('legacy proofs, clone and motion references', () => {
+  it('keeps reading, applying, cloning and syncing a legacy treatment that still carries a retired proofs checklist, and drops it on the first treatment write', async () => {
+    const { sanitizeRecordForWire } = await import('../lib/syncWire.js');
     const project = await plannedProject();
     const { body } = await compile(project.id, { baseRevision: 0, useAi: false });
-    const seq = body.treatment.proofs.find((p) => p.kind === 'transition-text');
-    const [firstId] = seq.sceneIds;
-    seedImage('frame-a.png');
-    seedVideoHistory([{ id: 'clip-a', filename: 'clip-a.mp4' }, { id: 'render-1', filename: 'render-1.mp4' }]);
-    await projects.appendSceneTakes(project.id, firstId, [
-      { kind: 'image', assetId: 'frame-a.png', source: 'generated' },
-      { kind: 'video', assetId: 'clip-a', source: 'generated' },
-    ]);
-    const review = (rev, payload) => request(app)
-      .post(`${base(project.id)}/treatment/proofs/${seq.id}/review`).send({ baseRevision: rev, ...payload });
+    expect(body.treatment).not.toHaveProperty('proofs');
+    const [firstId] = project.scenes.map((scene) => scene.sceneId);
+    const legacyProofs = [{ id: 'mvp-legacy', kind: 'risk-shot', sceneIds: [firstId], artifact: 'example', risk: 'example', route: 'example', checks: ['identity-continuity'], passCriteria: ['example'],
+      status: 'passed', evidence: { videoHistoryId: 'render-old', imageId: null, note: 'looked fine', reviewedAt: '2026-01-01T00:00:00.000Z' } }];
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, treatment: { ...current.treatment, proofs: legacyProofs } } }));
+    expect((await reload(project.id)).treatment.proofs).toHaveLength(1);
 
-    const noNote = await review(body.treatment.revision, { status: 'passed', evidence: { videoHistoryId: 'clip-a' } });
-    expect(noNote.body.code).toBe('PROOF_EVIDENCE_REQUIRED');
-    const bareFail = await review(body.treatment.revision, { status: 'failed' });
-    expect(bareFail.body.code).toBe('PROOF_EVIDENCE_REQUIRED');
-    const foreign = await review(body.treatment.revision, { status: 'failed', evidence: { videoHistoryId: 'not-this-project', note: 'looked wrong' } });
-    expect(foreign.body.code).toBe('PROOF_EVIDENCE_NOT_FOUND');
-    const still = await review(body.treatment.revision, { status: 'passed', evidence: { imageId: 'frame-a.png', note: 'contact sheet looks fine' } });
-    expect(still.status).toBe(422);
-    expect(still.body.code).toBe('PROOF_EVIDENCE_INSUFFICIENT');
-    const clip = await review(body.treatment.revision, { status: 'passed', evidence: { videoHistoryId: 'clip-a', note: 'clip plays' } });
-    expect(clip.status).toBe(422);
-    expect(clip.body.error).toMatch(/final render/);
+    expect((await request(app).get(base(project.id))).status).toBe(200);
+    expect((await request(app).get(`${base(project.id)}/dependency-impact`)).body.evidence ?? []).not.toContainEqual(expect.objectContaining({ kind: 'proof' }));
+    const preview = await request(app).get(`${base(project.id)}/treatment/apply-preview`);
+    expect(preview.body).toMatchObject({ blocked: false, stale: [] });
 
-    await projects.updateProject(project.id, { renderHistoryId: 'render-1', renderDependencies: captureMusicVideoEvidence(await projects.getProject(project.id)) });
-    const passed = await review(body.treatment.revision, { status: 'passed', evidence: { videoHistoryId: 'render-1', note: 'cut lands on the downbeat, text readable' } });
-    expect(passed.status).toBe(200);
-    const stored = (await reload(project.id)).treatment.proofs.find((p) => p.id === seq.id);
-    expect(stored).toMatchObject({ status: 'passed', evidence: { videoHistoryId: 'render-1' } });
+    // A peer on an older version keeps sending the field: it merges without error.
+    const wire = JSON.parse(JSON.stringify(sanitizeRecordForWire('musicVideoProject', await reload(project.id))));
+    await expect(projects.mergeProjectsFromSync([wire])).resolves.toBeDefined();
+
+    const cloned = await request(app).post(`${base(project.id)}/clone`).send({ includeGeneratedMedia: true });
+    expect(cloned.status).toBe(201);
+    const clone = await reload(cloned.body.id);
+    expect(clone.treatment).not.toHaveProperty('proofs');
+    expect(clone.treatment.shotDirections.map((d) => d.sceneId)).toEqual(clone.scenes.map((s) => s.sceneId));
+
+    const saved = await patchTreatment(project.id, { baseRevision: (await reload(project.id)).treatment.revision, brief: { premise: 'a fresh premise' } });
+    expect(saved.status).toBe(200);
+    expect(saved.body.treatment).not.toHaveProperty('proofs');
+    expect(await reload(project.id)).toMatchObject({ treatment: { brief: { premise: 'a fresh premise' } } });
+    expect((await reload(project.id)).treatment).not.toHaveProperty('proofs');
+
+    const applied = await request(app).post(`${base(project.id)}/treatment/apply`).send({ revision: saved.body.treatment.revision });
+    expect(applied.status).toBe(200);
   });
 
   it('carries the treatment into a clone with directions re-keyed to the new scene ids', async () => {
@@ -534,7 +527,6 @@ describe('treatment proofs, clone and motion references', () => {
     expect(res.status).toBe(201);
     const clone = await reload(res.body.id);
     expect(clone.treatment.shotDirections.map((d) => d.sceneId)).toEqual(clone.scenes.map((s) => s.sceneId));
-    expect(clone.treatment.proofs.every((p) => p.sceneIds.every((id) => clone.scenes.some((s) => s.sceneId === id)))).toBe(true);
     const preview = await request(app).get(`${base(clone.id)}/treatment/apply-preview`);
     expect(preview.body).toMatchObject({ blocked: false, stale: [], missingSceneIds: [] });
   });
