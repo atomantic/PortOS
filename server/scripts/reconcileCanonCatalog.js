@@ -13,9 +13,10 @@ import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.j
  * projection keeps them in lockstep.
  *
  * Writes:
- *   - universe side: `updateUniverse(..., { silent })` — silent suppresses the
+ *   - universe side: `updateUniverse(..., { silent, canonProjectionIdentityIds })` — silent suppresses the
  *     per-universe peer-sync fan-out (this is a local data repair, not a user
- *     edit; peers reconcile on their own boot).
+ *     edit; peers reconcile on their own boot). The guarded identities keep
+ *     the original entry clocks and skip reverse projection.
  *   - catalog side: `updateIngredientIfFresh(..., { source: 'sync' })` so the rewrite
  *     reads as a system reconciliation in the revision history, not a user edit.
  *
@@ -40,7 +41,7 @@ import * as catalogDB from '../services/catalog/catalogDB.js';
 // Reuse the live projection's canon-entry→payload strip so a reconcile and a
 // live projection produce byte-identical catalog payloads (a divergent rule
 // would re-introduce the very drift this repair exists to collapse).
-import { entryToPayload } from '../services/catalog/catalogCanonProjection.js';
+import { entryToPayload, pickCanonControlFields } from '../services/catalog/catalogCanonProjection.js';
 
 const MARKER_VERSION = 1;
 const MARKER_FILENAME = 'catalog-canon-reconcile.applied.json';
@@ -147,19 +148,26 @@ export async function reconcileCanonCatalog({ force = false } = {}) {
     // write per universe (skips when the catalog never won on this universe).
     const hasCanonPatch = Object.keys(canonPatches).some((k) => Object.keys(canonPatches[k]).length > 0);
     if (hasCanonPatch) {
+      const canonProjectionIdentityIds = [];
       await updateUniverse(universe.id, (cur) => {
+        // Use the queued record because reverse projection sees all persisted canon arrays.
+        const identityIds = new Set();
         const patch = {};
         for (const arrayKey of CANON_ARRAY_KEYS) {
-          const byId = canonPatches[arrayKey];
-          if (!byId || Object.keys(byId).length === 0) continue;
           const list = Array.isArray(cur[arrayKey]) ? cur[arrayKey] : [];
+          for (const entry of list) {
+            if (entry?.ingredientId) identityIds.add(entry.ingredientId);
+          }
+          const byId = canonPatches[arrayKey];
+          if (!byId) continue;
           patch[arrayKey] = list.map((e) => {
             const win = e?.id ? byId[e.id] : null;
-            return win ? { ...e, ...win } : e;
+            return win ? { ...pickCanonControlFields(e), ...win } : e;
           });
         }
+        canonProjectionIdentityIds.push(...identityIds);
         return Object.keys(patch).length > 0 ? patch : null;
-      }, { silent: true }).catch((err) => {
+      }, { silent: true, canonProjectionIdentityIds }).catch((err) => {
         console.error(`🔁 reconcile: universe ${universe.id} canon stamp failed: ${err.message}`);
         totals.errors++;
       });
