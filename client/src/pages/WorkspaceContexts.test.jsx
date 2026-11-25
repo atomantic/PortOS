@@ -9,9 +9,7 @@ vi.mock('../services/apiWorkspaceContexts.js', () => ({
   restoreWorkspaceContext: vi.fn(),
   deleteWorkspaceContext: vi.fn(),
 }));
-vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
-}));
+vi.mock('../components/ui/Toast');
 
 import WorkspaceContexts from './WorkspaceContexts';
 import { listWorkspaceContexts } from '../services/apiWorkspaceContexts.js';

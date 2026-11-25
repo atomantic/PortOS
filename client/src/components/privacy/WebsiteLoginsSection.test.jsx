@@ -8,7 +8,7 @@ const api = vi.hoisted(() => ({
   deleteWebsiteLogin: vi.fn(),
 }));
 vi.mock('../../services/apiPrivacy.js', () => api);
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import WebsiteLoginsSection from './WebsiteLoginsSection';
 

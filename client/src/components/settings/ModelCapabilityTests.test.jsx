@@ -8,7 +8,7 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
   deleteModelCapabilityTest: vi.fn(),
   getModelCapabilityTestResult: vi.fn(async () => ({ output: '', transcript: '' })),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
+vi.mock('../ui/Toast');
 // The live agent transcript arrives on the shared `localLlm:progress` socket
 // event; these tests replay frames through the registered handler.
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));

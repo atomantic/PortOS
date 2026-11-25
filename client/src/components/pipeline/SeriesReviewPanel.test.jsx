@@ -23,9 +23,7 @@ vi.mock('../../services/apiPipeline.js', () => ({
   getPipelineSeries: vi.fn(),
   listPipelineIssues: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn() }),
-}));
+vi.mock('../ui/Toast');
 // No EventSource in jsdom — and this suite never needs a live stream.
 vi.mock('../../hooks/usePipelineProgress', () => ({
   usePipelineProgress: () => ({ latest: null, frames: [], closed: false }),

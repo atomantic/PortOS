@@ -24,9 +24,7 @@ vi.mock('../services/apiImageVideo.js', () => ({
   getGalleryImages: api.getGalleryImages,
   listVideoHistory: api.listVideoHistory,
 }));
-vi.mock('../components/ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn() }),
-}));
+vi.mock('../components/ui/Toast');
 
 import PipelineExport, { TRIM_SIZE_LABELS, FONT_LABELS } from './PipelineExport.jsx';
 import { TRIM_SIZES, INTERIOR_FONTS } from '../lib/proseExportSettings.js';

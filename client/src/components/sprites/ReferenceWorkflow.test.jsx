@@ -14,9 +14,7 @@ vi.mock('../../services/apiSprites.js', () => ({
   updateSpriteRecord: vi.fn(() => Promise.resolve({})),
 }));
 
-vi.mock('../ui/Toast', () => ({
-  default: { error: vi.fn(), success: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 vi.mock('../imageGen/GalleryImagePicker.jsx', () => ({ default: () => null }));
 vi.mock('./SpriteReferencePicker.jsx', () => ({ default: () => null }));

@@ -15,7 +15,7 @@ vi.mock('../../../services/apiMemory.js', () => ({
 }));
 
 vi.mock('../../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 vi.mock('../../../hooks/useProviderModels', () => ({
   default: () => ({
     providers: [], availableModels: [], setSelectedProviderId: vi.fn(),

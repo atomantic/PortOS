@@ -19,7 +19,7 @@ vi.mock('../../services/apiUniverseBuilder.js', () => ({
 }));
 vi.mock('../moodBoard/MoodBoardReferenceStrip.jsx', () => ({ default: () => null }));
 vi.mock('./VocalStemControl.jsx', () => ({ default: () => null }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const common = { title: 'Example Song', artist: 'Example Artist', durationSec: 75, createdAt: '2026-01-02T12:00:00Z' };
 const tracks = [

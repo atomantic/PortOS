@@ -17,9 +17,7 @@ vi.mock('../../../services/apiPipeline.js', () => ({
   PIPELINE_STAGE_STATUS_COLOR: {},
 }));
 
-vi.mock('../../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
-}));
+vi.mock('../../ui/Toast');
 
 import TextStagePanel from './TextStagePanel';
 import toast from '../../ui/Toast';

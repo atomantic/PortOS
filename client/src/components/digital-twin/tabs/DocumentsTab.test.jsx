@@ -11,9 +11,7 @@ vi.mock('../../../services/apiDigitalTwin.js', () => ({
   deleteSoulDocument: vi.fn(),
 }));
 
-vi.mock('../../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() }
-}));
+vi.mock('../../ui/Toast');
 
 import DocumentsTab from './DocumentsTab';
 import {

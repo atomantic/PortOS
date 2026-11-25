@@ -13,7 +13,7 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
   updateMusicVideoCameoVariant: vi.fn(), deleteMusicVideoCameoVariant: vi.fn(), linkMusicVideoCameoShots: vi.fn(),
   unlinkMusicVideoCameoShots: vi.fn(), setMusicVideoCameoStillFromShot: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 vi.mock('../imageGen/GalleryImagePicker', () => ({ default: () => null }));
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 

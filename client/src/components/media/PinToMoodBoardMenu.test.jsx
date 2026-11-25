@@ -25,7 +25,7 @@ vi.mock('../../services/apiImageVideo.js', () => ({
   listMediaCollections: api.listMediaCollections,
   createMediaCollection: api.createMediaCollection,
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const imageItem = {
   kind: 'image',

@@ -26,9 +26,7 @@ vi.mock('../services/socket', () => ({
 vi.mock('../hooks/useSocketSubscription', () => ({
   useSocketSubscription: vi.fn(),
 }));
-vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
-}));
+vi.mock('../components/ui/Toast');
 
 import { RunnerPage } from './RunnerPage';
 

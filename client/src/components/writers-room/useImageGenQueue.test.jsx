@@ -12,7 +12,7 @@ vi.mock('../../services/socket', () => ({
 const getMediaJob = vi.fn();
 vi.mock('../../services/apiMediaJobs', () => ({ getMediaJob: (...a) => getMediaJob(...a) }));
 vi.mock('../../services/apiImageVideo', () => ({ cancelImageGen: vi.fn() }));
-vi.mock('../ui/Toast', () => ({ default: Object.assign(vi.fn(), { error: vi.fn() }) }));
+vi.mock('../ui/Toast');
 
 const useImageGenQueue = (await import('./useImageGenQueue.js')).default;
 

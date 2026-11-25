@@ -4,7 +4,7 @@ import { finalApprovalPatch } from '../../../../server/lib/musicVideo/musicVideo
 
 const upgradeMusicVideoShots = vi.fn();
 vi.mock('../../services/apiMusicVideo.js', () => ({ upgradeMusicVideoShots: (...args) => upgradeMusicVideoShots(...args) }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const { default: FinalUpgradePanel } = await import('./FinalUpgradePanel.jsx');
 

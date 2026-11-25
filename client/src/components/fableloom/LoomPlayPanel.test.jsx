@@ -21,7 +21,7 @@ vi.mock('./LoomHostedSessionModal', () => ({
     </button>
   ),
 }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import { playLoomTurn } from '../../services/apiFableLoom.js';
 import { io } from 'socket.io-client';

@@ -20,7 +20,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
 }));
 const cancelMediaJob = vi.fn(() => Promise.resolve({}));
 vi.mock('../services/apiMediaJobs', () => ({ getMediaJob: vi.fn(), cancelMediaJob: (...a) => cancelMediaJob(...a) }));
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 const useMusicVideoSceneMedia = (await import('./useMusicVideoSceneMedia.js')).default;
 

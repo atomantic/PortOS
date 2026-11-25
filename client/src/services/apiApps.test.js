@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../components/ui/Toast', () => ({
-  default: { loading: vi.fn(), success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../components/ui/Toast');
 
 import toast from '../components/ui/Toast';
 import { handleSelfRestart, getApps, getApp } from './apiApps';

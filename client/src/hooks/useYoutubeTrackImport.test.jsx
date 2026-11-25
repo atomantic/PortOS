@@ -4,7 +4,7 @@ import useYoutubeTrackImport from './useYoutubeTrackImport.js';
 import { MockEventSource, lastEventSource } from '../test/mockEventSource';
 import toast from '../components/ui/Toast';
 
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 vi.mock('../services/apiTracks.js', () => ({
   importTrackFromYoutube: vi.fn(async () => ({ jobId: 'yt-1' })),
   importTrackFromSuno: vi.fn(async () => ({ jobId: 'suno-1' })),

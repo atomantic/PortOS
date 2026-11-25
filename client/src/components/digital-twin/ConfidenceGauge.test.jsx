@@ -6,7 +6,7 @@ import ConfidenceGauge from './ConfidenceGauge';
 vi.mock('../../services/apiDigitalTwin.js', () => ({
   calculateDigitalTwinConfidence: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const confidence = {
   overall: 0.72,

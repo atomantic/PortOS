@@ -19,7 +19,7 @@ vi.mock('../../../services/apiMusicVideo.js', async importOriginal => ({
   previewMusicVideoThumbnailPaint: vi.fn(),
   removeMusicVideoThumbnailTest: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
+vi.mock('../../ui/Toast');
 beforeEach(() => { vi.clearAllMocks(); MockEventSource.reset(); vi.stubGlobal('EventSource', MockEventSource); });
 afterEach(() => vi.unstubAllGlobals());
 

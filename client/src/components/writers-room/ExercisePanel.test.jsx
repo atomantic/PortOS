@@ -7,9 +7,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 // out of reach while the editor holds unsaved changes, or the server-side
 // append would be overwritten by the next save.
 
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
-}));
+vi.mock('../ui/Toast');
 
 const listWritersRoomExercises = vi.fn(async () => []);
 const promoteWritersRoomExercise = vi.fn(async () => ({

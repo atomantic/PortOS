@@ -17,12 +17,7 @@ vi.mock('../../services/apiSystem.js', () => ({
 const pickerData = vi.hoisted(() => ({ current: { ctxById: {} } }));
 vi.mock('../../hooks/useReviewerModelOptions', () => ({ default: () => pickerData.current }));
 
-vi.mock('../ui/Toast', () => ({
-  default: {
-    success: vi.fn(),
-    error: vi.fn(),
-  },
-}));
+vi.mock('../ui/Toast');
 
 const renderTab = (ui, path = '/') => render(
   <MemoryRouter initialEntries={[path]}>{ui}</MemoryRouter>,

@@ -16,9 +16,7 @@ vi.mock('../services/apiAgents.js', () => ({
   updateCosConfig: api.updateCosConfig,
 }));
 vi.mock('../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
-vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../components/ui/Toast');
 
 import PersistentMindTools from './PersistentMindTools';
 

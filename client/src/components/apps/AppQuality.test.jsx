@@ -11,7 +11,7 @@ vi.mock('../../services/apiApps', () => ({
   getAppQualityHistory: vi.fn().mockResolvedValue({ points: [], totalCategories: 25 }),
   publishAppQualitySnapshot: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
+vi.mock('../ui/Toast');
 
 import { publishAppQualitySnapshot } from '../../services/apiApps';
 import toast from '../ui/Toast';

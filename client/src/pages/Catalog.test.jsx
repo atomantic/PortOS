@@ -31,9 +31,7 @@ vi.mock('../services/apiPipeline', () => ({
   listPipelineSeriesNames: vi.fn(),
 }));
 
-vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
-}));
+vi.mock('../components/ui/Toast');
 
 // useCatalogTypes (via Catalog) fetches the type registry — mock the API so a
 // user-defined type surfaces as a filter chip + dropdown option.

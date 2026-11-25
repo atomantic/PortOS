@@ -4,7 +4,7 @@ import useMediaPreviewActions from './useMediaPreviewActions';
 
 const navigate = vi.fn();
 vi.mock('react-router', () => ({ useNavigate: () => navigate }));
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 vi.mock('../services/apiImageVideo', () => ({
   cleanGalleryImage: vi.fn(),
   extractLastFrame: vi.fn(),

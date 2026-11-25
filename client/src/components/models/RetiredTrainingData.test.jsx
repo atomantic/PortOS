@@ -8,7 +8,7 @@ vi.mock('../../services/apiLoraTraining.js', () => ({
   getRetiredDataInventory: vi.fn(),
   deleteRetiredData: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const row = (id, directory, status = 'retained') => ({
   id, label: `Retired ${directory}`, path: `data/${directory}`, bytes: 2048, files: 3, status, deletable: true,

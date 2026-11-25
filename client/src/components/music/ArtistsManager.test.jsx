@@ -3,9 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router';
 
 vi.mock('../imageGen/GalleryImagePicker', () => ({ default: () => null }));
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
-}));
+vi.mock('../ui/Toast');
 vi.mock('../../hooks/useMediaJobProgress', () => ({ default: () => ({ status: 'idle' }) }));
 const copyToClipboard = vi.fn(async () => true);
 vi.mock('../../lib/clipboard', () => ({ copyToClipboard: (...a) => copyToClipboard(...a) }));

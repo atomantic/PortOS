@@ -8,7 +8,7 @@ const api = vi.hoisted(() => ({
   importSongFromUrl: vi.fn(),
 }));
 vi.mock('../services/apiSongbook.js', () => ({ createSong: api.createSong, importSongFromUrl: api.importSongFromUrl }));
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 const clipboard = vi.hoisted(() => ({ readClipboard: vi.fn() }));
 vi.mock('../lib/clipboard.js', () => clipboard);

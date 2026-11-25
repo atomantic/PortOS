@@ -8,9 +8,7 @@ vi.mock('../../../services/apiPipeline.js', () => ({
   deletePipelinePerspectiveRewrite: vi.fn(),
 }));
 
-vi.mock('../../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
-}));
+vi.mock('../../ui/Toast');
 
 import PovRewritePanel from './PovRewritePanel';
 import toast from '../../ui/Toast';

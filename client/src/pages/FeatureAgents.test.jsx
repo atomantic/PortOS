@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router';
 vi.mock('../services/apiAgents.js', () => ({
   getFeatureAgents: vi.fn(),
 }));
-vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 vi.mock('../components/feature-agents/FeatureAgentCard', () => ({
   default: ({ agent }) => <div>{agent.name}</div>,

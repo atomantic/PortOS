@@ -6,9 +6,7 @@ const extractLastFrame = vi.fn();
 vi.mock('../../services/apiImageVideo.js', () => ({
   extractLastFrame: (...a) => extractLastFrame(...a),
 }));
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), loading: vi.fn() }),
-}));
+vi.mock('../ui/Toast');
 
 const { useVideoGenForm: useGroupedVideoGenForm } = await import('./useVideoGenForm.js');
 

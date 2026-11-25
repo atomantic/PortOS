@@ -9,9 +9,7 @@ vi.mock('../../services/apiWritersRoom', () => ({
   revertWritersRoomPolishSnapshot: vi.fn(),
 }));
 
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
-}));
+vi.mock('../ui/Toast');
 
 import PolishPanel from './PolishPanel';
 import toast from '../ui/Toast';

@@ -11,7 +11,7 @@ import { MemoryRouter } from 'react-router';
 vi.mock('../../services/apiCreativeDirector.js', () => ({ createCreativeDirectorProject: vi.fn(), updateCreativeDirectorProject: vi.fn() }));
 vi.mock('../../services/apiStoryboards.js', () => ({ startVideoFromStoryboard: vi.fn() }));
 vi.mock('../../services/apiImageVideo.js', () => ({ listVideoModels: vi.fn(() => Promise.resolve([])) }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 import { createCreativeDirectorProject, updateCreativeDirectorProject } from '../../services/apiCreativeDirector.js';
 import { startVideoFromStoryboard } from '../../services/apiStoryboards.js';
 import { listVideoModels } from '../../services/apiImageVideo.js';

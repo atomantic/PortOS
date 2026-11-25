@@ -9,7 +9,7 @@ vi.mock('../../services/apiDigitalTwin.js', () => ({
 vi.mock('../../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
+vi.mock('../ui/Toast');
 vi.mock('./TwinProviderPicker.jsx', () => ({
   default: ({ providers }) => <div data-testid="picker">{providers.map((p) => p.id).join(',')}</div>,
 }));

@@ -46,9 +46,7 @@ vi.mock('../services/apiLoraTraining.js', () => ({
   deleteRetiredData: vi.fn(),
 }));
 
-vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
-}));
+vi.mock('../components/ui/Toast');
 
 const LORA = {
   filename: 'example-lora.safetensors',

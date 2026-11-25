@@ -9,7 +9,7 @@ vi.mock('../../services/apiApps', () => ({
   previewAppQualitySchedule: vi.fn(),
   applyAppQualitySchedule: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
+vi.mock('../ui/Toast');
 
 import { applyAppQualitySchedule, getAppQualitySchedule, previewAppQualitySchedule } from '../../services/apiApps';
 import toast from '../ui/Toast';

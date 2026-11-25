@@ -19,7 +19,7 @@ vi.mock('../services/apiPipeline.js', () => ({
   getReverseOutlineStatus: (...a) => getReverseOutlineStatus(...a),
   pipelineReverseOutlineSseUrl: (id) => `/sse/${id}`,
 }));
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 const EMPTY = { status: 'none', plotlines: [], scenes: [] };
 const SAVED = {

@@ -19,7 +19,7 @@ vi.mock('../services/apiPipeline.js', () => ({
   getContinuityBibleStatus: (...a) => getContinuityBibleStatus(...a),
   pipelineContinuityBibleSseUrl: (id) => `/sse/${id}`,
 }));
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 const EMPTY = { status: 'none', facts: [] };
 const SAVED = {

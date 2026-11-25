@@ -28,7 +28,7 @@ vi.mock('../components/catalog/GenerateImageControl', () => ({
 }));
 vi.mock('../services/apiCatalogTypes', () => ({ listCatalogTypes: vi.fn() }));
 vi.mock('../services/apiUniverseBuilder', () => ({ listUniverseNames: vi.fn(async () => [{ id: 'u-1', name: 'Example Universe' }]) }));
-vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 vi.mock('../components/MediaImage', async () => {
   const { imageThumbnailSrc } = await import('../lib/imageThumbnailSrc');
   return {

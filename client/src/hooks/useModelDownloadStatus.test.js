@@ -11,9 +11,7 @@ vi.mock('./useSseProgress.js', () => ({
     return { latest: null, closed: false, close: vi.fn() };
   },
 }));
-vi.mock('../components/ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), loading: vi.fn() }),
-}));
+vi.mock('../components/ui/Toast');
 vi.mock('../services/apiImageVideo.js', () => ({
   getImageModelStatuses: vi.fn(async () => []),
   getVideoModelStatuses: vi.fn(async () => ({ models: [], textEncoder: null, textEncoderOptions: [], icLoras: [] })),

@@ -9,13 +9,7 @@ vi.mock('../services/apiCatalog', () => ({
   listCatalogIngredients: vi.fn(),
 }));
 
-vi.mock('./ui/Toast', () => ({
-  default: {
-    success: vi.fn(),
-    error: vi.fn(),
-    info: vi.fn(),
-  },
-}));
+vi.mock('./ui/Toast');
 
 import CatalogCastPanel from './CatalogCastPanel';
 import {

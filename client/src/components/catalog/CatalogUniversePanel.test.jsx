@@ -12,7 +12,7 @@ vi.mock('../../services/apiCatalog', () => ({
   getCatalogUniverseContext: vi.fn(), setCatalogUniverseOwner: vi.fn(), forkCatalogIngredient: vi.fn(),
   linkCatalogIngredient: vi.fn(), unlinkCatalogIngredient: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 import CatalogUniversePanel from './CatalogUniversePanel';
 import socket from '../../services/socket';
 import { getCatalogUniverseContext, setCatalogUniverseOwner, forkCatalogIngredient, linkCatalogIngredient, unlinkCatalogIngredient } from '../../services/apiCatalog';

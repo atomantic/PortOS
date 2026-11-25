@@ -16,7 +16,7 @@ const listCatalogIngredients = vi.fn();
 const getCatalogIngredientDetails = vi.fn();
 vi.mock('../../services/apiCatalog', () => ({ listCatalogIngredients: (...a) => listCatalogIngredients(...a), getCatalogIngredientDetails: (...a) => getCatalogIngredientDetails(...a) }));
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 vi.mock('../imageGen/GalleryImagePicker', () => ({
   default: ({ open, onSelect }) => (open ? <button type="button" onClick={() => onSelect({ filename: 'gallery.png' })}>Pick gallery.png</button> : null),
 }));

@@ -7,7 +7,7 @@ vi.mock('../../../services/apiMeatspace.js', () => ({
   scorePostLlmDrill: vi.fn(),
   submitTrainingRun: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 import {
   generatePostDrill,

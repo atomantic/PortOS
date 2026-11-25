@@ -32,9 +32,7 @@ vi.mock('../../../hooks/useAppOperation', () => ({
 vi.mock('../ActivityLog', () => ({ default: () => null }));
 vi.mock('../SlashDoPanel', () => ({ default: () => null }));
 vi.mock('../../ui/Banner', () => ({ default: () => null }));
-vi.mock('../../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../../ui/Toast');
 
 import { deleteApp, getAppSpriteBindings, openAppInXcode as apiOpenAppInXcode } from '../../../services/apiApps.js';
 import toast from '../../ui/Toast';

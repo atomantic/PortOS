@@ -8,11 +8,7 @@ vi.mock('../../services/apiSystem', () => ({
   getOpenApiSpec: vi.fn(),
   getApiCatalog: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), {
-    success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(),
-  }),
-}));
+vi.mock('../ui/Toast');
 // copyToClipboard is unused in these tests but imported by the component.
 vi.mock('../../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
 

@@ -6,7 +6,7 @@ import { installLocalLlmModel } from '../../services/apiLocalLlm';
 import toast from '../ui/Toast';
 
 vi.mock('../../services/apiLocalLlm', () => ({ installLocalLlmModel: vi.fn() }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn() } }));
+vi.mock('../ui/Toast');
 beforeEach(() => vi.clearAllMocks());
 
 it('downloads only on request and saves the recommendation only after explicit selection', async () => {

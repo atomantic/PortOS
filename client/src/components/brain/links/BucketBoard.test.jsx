@@ -7,7 +7,7 @@ vi.mock('../../../services/apiBrain.js', () => ({
   deleteBrainBucket: vi.fn(),
   reorderBrainBuckets: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 import { createBrainBucket } from '../../../services/apiBrain.js';
 import BucketBoard from './BucketBoard';

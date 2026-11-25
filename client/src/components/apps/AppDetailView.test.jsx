@@ -45,9 +45,7 @@ vi.mock('../../services/appUrls', () => ({
   getLaunchUrls: vi.fn(() => ({ https: null, http: null, dev: null })),
 }));
 
-vi.mock('../ui/Toast', () => ({
-  default: { error: vi.fn(), success: vi.fn(), loading: vi.fn(), dismiss: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 vi.mock('../BrailleSpinner', () => ({ default: () => null }));
 vi.mock('../StatusBadge', () => ({ default: () => null }));
 vi.mock('./DeployPanel', () => ({ default: () => null }));

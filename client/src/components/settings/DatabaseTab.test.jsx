@@ -26,15 +26,7 @@ vi.mock('../../services/apiDatabase.js', () => ({
   destroyDatabase: vi.fn(),
 }));
 
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), {
-    success: vi.fn(),
-    error: vi.fn(),
-    loading: vi.fn(),
-    warning: vi.fn(),
-    dismiss: vi.fn(),
-  }),
-}));
+vi.mock('../ui/Toast');
 
 vi.mock('../../lib/safeStorage', () => ({
   safeReadJsonSession: vi.fn(() => null),

@@ -29,7 +29,7 @@ vi.mock('../../../services/apiDigitalTwin.js', () => ({
 vi.mock('../../../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 vi.mock('./ValuesAlignmentPanel', () => ({ default: () => null }));
 vi.mock('./AdversarialBoundaryPanel', () => ({ default: () => null }));
 vi.mock('./MultiTurnPanel', () => ({ default: () => null }));

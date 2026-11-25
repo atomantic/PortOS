@@ -3,7 +3,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 
 const musicVideoSequenceTake = vi.fn();
 vi.mock('../../services/apiMusicVideo.js', () => ({ musicVideoSequenceTake: (...args) => musicVideoSequenceTake(...args) }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const { default: SequenceTakePanel } = await import('./SequenceTakePanel.jsx');
 

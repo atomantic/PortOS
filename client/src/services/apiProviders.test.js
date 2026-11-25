@@ -10,7 +10,7 @@ const { request, socket } = vi.hoisted(() => {
 });
 vi.mock('./apiCore.js', () => ({ request }));
 vi.mock('./socket.js', () => ({ default: socket }));
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 let getProviders;
 let updateProvider;

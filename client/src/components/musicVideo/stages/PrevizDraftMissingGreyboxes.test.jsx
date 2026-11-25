@@ -15,7 +15,7 @@ vi.mock('../../../hooks/useProviderModels.js', () => ({
   }),
 }));
 
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 vi.mock('../../../services/apiCatalog.js', () => ({
   draftCatalogGreybox: vi.fn(),

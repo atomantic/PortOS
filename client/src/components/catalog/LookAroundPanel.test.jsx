@@ -7,7 +7,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('../../services/apiCatalog', () => api);
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 vi.mock('../MediaImage', () => ({ default: () => null }));
 
 const { default: LookAroundPanel } = await import('./LookAroundPanel.jsx');

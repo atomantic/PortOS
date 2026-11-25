@@ -6,7 +6,7 @@ import { getProviders } from '../../services/apiProviders';
 import { nanoAvailability } from '../../services/browserLlm';
 import toast from '../ui/Toast';
 
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const voiceApi = vi.hoisted(() => ({
   getVoiceStatus: vi.fn(),

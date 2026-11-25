@@ -17,7 +17,7 @@ vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({
   selectedProviderId: 'p1', selectedModel: 'example-model', availableModels: ['example-model'],
   setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn(), loading: false,
 }) }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn() } }));
+vi.mock('../ui/Toast');
 const deck = { id: 'd1', universeId: 'u1', styleNotes: 'Old style', influences: { embrace: ['ink'], avoid: [] } };
 
 describe('Deck style imports', () => {

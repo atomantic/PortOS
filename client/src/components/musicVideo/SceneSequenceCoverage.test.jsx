@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 
 const renderMusicVideoSequence = vi.fn(async () => ({ jobId: 'job-1' }));
 vi.mock('../../services/apiMusicVideo.js', () => ({ renderMusicVideoSequence }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const { default: SceneSequenceCoverage } = await import('./SceneSequenceCoverage.jsx');
 

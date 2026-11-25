@@ -18,7 +18,7 @@ vi.mock('../../../services/apiMusicVideo.js', () => ({
   cancelMusicVideoRevision: vi.fn(),
   releaseMusicVideoRevisionSection: vi.fn(() => Promise.resolve()),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 const opened = { id: 'mv-example', revisions: [{ id: 'mvrev-example', status: 'open' }], scenes: [{ sceneId: 'scene-a' }] };
 const persisted = { ...opened, updatedAt: 'after-reload' };

@@ -4,7 +4,7 @@ import WhatsappImportPanel from './WhatsappImportPanel';
 
 const api = vi.hoisted(() => ({ importWhatsappHistory: vi.fn() }));
 vi.mock('../../services/apiTimeline.js', () => ({ importWhatsappHistory: api.importWhatsappHistory }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const summary = { messages: 1, uniqueSenders: 1, from: '2024-03-04T18:30:00.000Z', to: '2024-03-04T18:30:00.000Z', topSenders: [] };
 const preview = (extra) => ({ dryRun: true, mapped: 1, summary, ...extra });

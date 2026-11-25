@@ -7,7 +7,7 @@ vi.mock('../../../services/apiDigitalTwin.js', () => ({
   getActiveDigitalTwinPersona: vi.fn(),
   setActiveDigitalTwinPersona: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 import PersonasTab from './PersonasTab';
 import {

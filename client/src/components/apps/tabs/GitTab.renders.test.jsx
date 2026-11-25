@@ -11,7 +11,7 @@ vi.mock('../../../services/apiGit.js', () => ({
   stageFiles: vi.fn(),
   createCommit: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
+vi.mock('../../ui/Toast');
 vi.mock('./RepositorySourcePanel', () => ({ default: () => null }));
 
 // Counts every time GitTab renders the history panel. The wrapper is not

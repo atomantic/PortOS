@@ -11,7 +11,7 @@ vi.mock('../../services/apiCreativeDirector.js', () => ({
   updateCreativeDirectorProject: vi.fn(async () => ({})),
   applyCreativeDirectorAutoCast: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import OverviewTab from './OverviewTab.jsx';
 import { applyCreativeDirectorAutoCast } from '../../services/apiCreativeDirector.js';

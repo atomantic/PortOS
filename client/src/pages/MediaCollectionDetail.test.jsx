@@ -54,13 +54,7 @@ vi.mock('../services/apiImageVideo', () => ({
   localizeMediaCollection: (...args) => mockLocalizeMediaCollection(...args),
 }));
 
-vi.mock('../components/ui/Toast', () => ({
-  default: Object.assign(vi.fn(), {
-    success: vi.fn(),
-    error: vi.fn(),
-    warning: vi.fn(),
-  }),
-}));
+vi.mock('../components/ui/Toast');
 
 const mockUpdateAnnotation = vi.fn();
 

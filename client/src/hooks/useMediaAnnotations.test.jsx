@@ -22,7 +22,7 @@ vi.mock('../services/apiImageVideo.js', () => ({
 vi.mock('../services/apiMediaHolders.js', () => ({ getMediaHolders: vi.fn(async () => ({ items: {} })) }));
 vi.mock('../services/apiMediaUsage.js', () => ({ getMediaUsages: vi.fn(async () => ({ items: {} })) }));
 
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 import { useMediaAnnotations } from './useMediaAnnotations.js';
 

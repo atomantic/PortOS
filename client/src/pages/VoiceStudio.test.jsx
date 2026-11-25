@@ -12,7 +12,7 @@ vi.mock('../services/apiVoice', () => ({
   designStudioVoice: vi.fn(), assignStudioVoice: vi.fn(),
 }));
 vi.mock('../services/apiUniverseBuilder', () => ({ listUniverseNames: vi.fn().mockResolvedValue([{ id: 'u1', name: 'Example Universe' }]), getUniverse: vi.fn() }));
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 const profile = { id: 'voice-1', label: 'Example voice', library: true, engine: 'auk', approval: { status: 'approved' },
   sourceAssets: [{ filename: 'reference.wav', transcript: 'Hello there.' }], inference: { seed: 42, instructions: 'Warm alto' } };
 function HistoryControls() {

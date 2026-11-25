@@ -6,7 +6,7 @@ vi.mock('react-router', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('../../hooks/useInstanceFeatures.js', () => ({
   useInstanceFeatures: () => ({ isFeatureEnabled: () => false }),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn() } }));
+vi.mock('../ui/Toast');
 vi.mock('../../services/apiAgents.js', () => ({ addCosTask: vi.fn() }));
 
 import GsdProjectHeader from './GsdProjectHeader.jsx';

@@ -7,7 +7,7 @@ vi.mock('../../services/apiImageVideo.js', () => ({
   getVideoHistoryItem,
   extendVideoHistoryItem,
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const { default: TakeExtend } = await import('./TakeExtend.jsx');
 

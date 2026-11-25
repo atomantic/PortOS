@@ -8,7 +8,7 @@ vi.mock('../services/apiPipeline.js', () => ({
   cancelSeriesEditorial: vi.fn(),
   pipelineEditorialSseUrl: (id) => `/sse/${id}`,
 }));
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 vi.mock('./usePipelineProgress', () => ({ usePipelineProgress: vi.fn() }));
 
 import { getSeriesEditorial, getSeriesEditorialStatus } from '../services/apiPipeline.js';

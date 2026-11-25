@@ -14,7 +14,7 @@ vi.mock('../../services/apiMedia', () => ({
   uploadFile: (...args) => uploadFile(...args),
 }));
 
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const HISTORY = [
   { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', filename: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.mp4', prompt: 'a neon chase', trimmedFrom: 'original-clip', hidden: false },

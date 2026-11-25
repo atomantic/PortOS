@@ -23,7 +23,7 @@ vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({
   ...api,
 }));
 vi.mock('../../services/apiMediaJobs', () => ({ getMediaJob }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 // The Look step also holds the creative direction; it is covered by its own panels' tests.
 vi.mock('./CreativeSetupPanel.jsx', () => ({ default: () => null }));
 vi.mock('./CatalogLookReferences.jsx', () => ({ default: () => null }));

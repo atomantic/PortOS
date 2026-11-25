@@ -31,7 +31,7 @@ vi.mock('../../hooks/useProviderModels.js', () => ({ default: () => ({
   setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn(),
 }) }));
 vi.mock('./CompositionPreviewPlayer.jsx', () => ({ default: () => <div>Candidate preview</div> }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import DocumentCompositionPanel from './DocumentCompositionPanel.jsx';
 

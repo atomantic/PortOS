@@ -12,9 +12,7 @@ vi.mock('../../services/apiImporter.js', () => ({
 vi.mock('../../services/apiStoryBuilder.js', () => ({
   createStorySession: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({
-  default: { error: vi.fn(), warning: vi.fn(), info: vi.fn(), success: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 const IMPORT_ID = `imp-${'a'.repeat(32)}`;
 const analysis = (importSession = null) => ({

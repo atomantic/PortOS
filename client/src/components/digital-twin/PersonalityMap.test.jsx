@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 vi.mock('../../services/apiDigitalTwin.js', () => ({
   analyzeDigitalTwinTraits: vi.fn(() => Promise.resolve({}))
 }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import PersonalityMap from './PersonalityMap';
 import { analyzeDigitalTwinTraits } from '../../services/apiDigitalTwin.js';

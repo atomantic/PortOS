@@ -23,7 +23,7 @@ vi.mock('../services/apiMedia.js', () => ({ getUploadUrl: api.getUploadUrl }));
 vi.mock('../components/songs/SongAiPanel', () => ({ default: () => null }));
 vi.mock('../components/songs/SongRecordings', () => ({ default: () => null }));
 vi.mock('../components/songs/SongScoreEditor', () => ({ default: () => null }));
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 import RoundEditor from './RoundEditor.jsx';
 

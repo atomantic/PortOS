@@ -9,7 +9,7 @@ import { MemoryRouter, useLocation } from 'react-router';
 // so both mocks share one updateThread fn.
 const threadApi = vi.hoisted(() => ({ updateThread: vi.fn() }));
 vi.mock('../../../services/apiBrainThreads.js', () => ({ updateThread: threadApi.updateThread , listThreads: vi.fn(), getThread: vi.fn(), createThread: vi.fn(), deleteThread: vi.fn(), addThreadRef: vi.fn(), removeThreadRef: vi.fn() }));
-vi.mock('../../ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
+vi.mock('../../ui/Toast');
 
 import { listThreads, getThread, updateThread, createThread, addThreadRef } from '../../../services/apiBrainThreads.js';
 import ThreadsTab from './ThreadsTab';

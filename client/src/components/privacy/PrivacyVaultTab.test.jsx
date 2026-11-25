@@ -15,7 +15,7 @@ vi.mock('../../services/apiPrivacy.js', () => ({
   revealVaultRecord: api.revealVaultRecord,
   updateVaultRecord: api.updateVaultRecord,
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 vi.mock('./VaultRecordDrawer', () => ({ default: () => null }));
 const loginSectionMounts = vi.hoisted(() => []);
 vi.mock('./WebsiteLoginsSection', async () => {

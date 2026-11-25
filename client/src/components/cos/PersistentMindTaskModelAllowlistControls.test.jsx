@@ -14,7 +14,7 @@ const apiLocalLlm = vi.hoisted(() => ({
 vi.mock('../../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
 vi.mock('../../services/apiAgents.js', () => ({ updateCosConfig: api.updateCosConfig }));
 vi.mock('../../services/apiLocalLlm', () => apiLocalLlm);
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import { __resetToolUseModelIdsCache } from '../../hooks/useToolUseModelIds.js';
 import PersistentMindTaskModelAllowlistControls from './PersistentMindTaskModelAllowlistControls.jsx';

@@ -33,7 +33,7 @@ vi.mock('../services/apiSystem.js', () => ({
 vi.mock('../services/apiScaffold.js', () => ({
   getDirectories: vi.fn(),
 }));
-vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 const disconnected = {
   connected: false, process: { status: 'online' }, pages: [],

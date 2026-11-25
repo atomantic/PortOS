@@ -9,7 +9,7 @@ vi.mock('../../../hooks/useSocketResource', () => ({
   useSocketResource: (...args) => mockUseSocketResource(...args),
 }));
 vi.mock('../../../services/apiBrainThreads.js', () => ({ listThreads: vi.fn(), updateThread: vi.fn() }));
-vi.mock('../../ui/Toast', () => ({ default: { error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 import * as api from '../../../services/apiBrainThreads.js';
 import toast from '../../ui/Toast';

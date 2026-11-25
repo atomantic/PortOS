@@ -45,7 +45,7 @@ vi.mock('../components/CatalogCastPanel', () => ({ default: () => <div>cast</div
 vi.mock('../components/pipeline/AuthorPicker', () => ({ default: () => <div>author</div> }));
 vi.mock('../components/VoiceExemplarEditor', () => ({ default: () => <div>voice exemplars</div>, VOICE_EXEMPLARS_MAX: 5 }));
 vi.mock('../components/imageGen/RecordRenderPinRow', () => ({ default: () => <div>render backend</div> }));
-vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 const SERIES = {
   'series-a': { id: 'series-a', name: 'Series A' },

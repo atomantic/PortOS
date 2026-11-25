@@ -9,12 +9,7 @@ vi.mock('../../services/apiBrainThreads.js', () => ({
   attachToThread: vi.fn(),
 }));
 
-vi.mock('../ui/Toast', () => ({
-  default: {
-    success: vi.fn(),
-    error: vi.fn(),
-  },
-}));
+vi.mock('../ui/Toast');
 
 describe('AddToThreadButton', () => {
   const sampleRef = {

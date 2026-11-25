@@ -18,7 +18,7 @@ import { useSocketSubscription } from '../../hooks/useSocketSubscription';
 import toast from '../ui/Toast';
 import CodeAnimationGallery from './CodeAnimationGallery';
 
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const changed = (event) => socket.on.mock.calls.find(([name]) => name === 'code-animation:changed')[1](event);
 

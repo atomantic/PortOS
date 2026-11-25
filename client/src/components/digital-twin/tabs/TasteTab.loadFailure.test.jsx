@@ -11,7 +11,7 @@ vi.mock('../../../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
 }));
 vi.mock('../../../services/socket', () => ({ default: { connected: false, on: vi.fn(), off: vi.fn() } }));
-vi.mock('../../ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
+vi.mock('../../ui/Toast');
 vi.mock('../ObservedTasteEvidence', () => ({ default: () => null }));
 vi.mock('../../cos/MarkdownOutput', () => ({ default: ({ content }) => <div>{content}</div> }));
 vi.mock('../TwinProviderPicker.jsx', () => ({

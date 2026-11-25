@@ -50,7 +50,7 @@ vi.mock('../../services/apiPrivacy.js', () => ({
   setPrivacyBrokerEnabled: vi.fn(async (id, enabled) => ({ id, name: 'Spokeo', enabled, tier: 1, source: 'curated', confidence: 'documented', clusterParent: null })),
 }));
 
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import PrivacyBrokersTab from './PrivacyBrokersTab.jsx';
 import {

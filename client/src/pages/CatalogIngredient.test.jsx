@@ -193,7 +193,7 @@ vi.mock('../components/TagPicker', () => ({
     </button>
   ),
 }));
-vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 import CatalogIngredient from './CatalogIngredient';
 import { buildGenerationPromptSeed } from '../lib/catalogImagePrompt';

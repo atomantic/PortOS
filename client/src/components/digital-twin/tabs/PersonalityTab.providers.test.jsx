@@ -13,7 +13,7 @@ vi.mock('../../../services/apiModelPersonality.js', () => ({
   getModelPersonalityHistory: api.getModelPersonalityHistory,
   getModelPersonalitySettings: api.getModelPersonalitySettings,
 }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 vi.mock('../../../hooks/useChartColors.js', () => ({ default: () => ({}) }));
 
 import PersonalityTab from './PersonalityTab.jsx';

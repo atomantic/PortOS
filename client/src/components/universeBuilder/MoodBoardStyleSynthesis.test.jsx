@@ -17,7 +17,7 @@ vi.mock('../../hooks/useProviderModels', () => ({
     loading: false,
   })),
 }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const synthesis = {
   proposed: {

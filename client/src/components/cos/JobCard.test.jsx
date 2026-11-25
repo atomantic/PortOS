@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn() })
-}));
+vi.mock('../ui/Toast');
 vi.mock('../../services/apiAgents.js', () => ({
   updateCosJob: vi.fn(),
   acknowledgeCosJobIncident: vi.fn(),

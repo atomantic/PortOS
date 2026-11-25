@@ -10,9 +10,7 @@ vi.mock('../../services/apiPeerSync.js', () => ({
   subscribeToPeer: vi.fn(),
   unsubscribeFromPeer: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 import { getInstances } from '../../services/apiSystem.js';
 import { listPeerSubscriptions, subscribeToPeer, unsubscribeFromPeer } from '../../services/apiPeerSync.js';

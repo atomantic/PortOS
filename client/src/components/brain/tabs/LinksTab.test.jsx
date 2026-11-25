@@ -32,7 +32,7 @@ vi.mock('../../../services/apiProviders.js', () => ({
   getProviders: vi.fn(() => Promise.resolve({ providers: [] })),
 }));
 
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 vi.mock('../links/BucketBoard', () => ({
   default: ({ buckets }) => (

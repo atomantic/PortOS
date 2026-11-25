@@ -9,9 +9,7 @@ vi.mock('../../services/apiAgents.js', () => ({
   updateCosJob: vi.fn(),
 }));
 
-vi.mock('../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 import { getCosJob, toggleCosJob, updateCosJob } from '../../services/apiAgents.js';
 import BrainParitySchedule, { PARITY_SWEEP_JOB_ID } from './BrainParitySchedule';
