@@ -217,16 +217,6 @@ export const TOPIC_SURFACE_SECTIONS = PRACTICE_GROUPS
  */
 export const PRACTICE_ENTRIES = PRACTICE_GROUPS.flatMap(group => group.entries);
 
-/**
- * True when every whitespace-separated token of `query` appears somewhere in the
- * entry's label, description, drill type, or group label — AND semantics, any
- * order, so "morse copy" and "copy morse" both match. An empty query matches
- * everything. Pure.
- */
-export function entryMatchesQuery(entry, query) {
-  return matchHaystack(entry?.search || '', tokenizeQuery(query));
-}
-
 /** `PRACTICE_GROUPS` with non-matching entries removed and empty groups dropped. */
 export function filterPracticeGroups(query) {
   const tokens = tokenizeQuery(query);

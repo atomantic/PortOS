@@ -66,7 +66,6 @@ export const waitForUniverseWrites = async (universeId, { timeoutMs = 15000 } = 
 // so request() doesn't also toast — see AGENTS.md "Custom catch ⇒ silent: true".
 export const listUniverseNames = (options = {}) => request('/universe-builder/names', options);
 export const listUniverseSummaries = (options = {}) => request('/universe-builder/summaries', options);
-export const listUniverses = (options = {}) => request('/universe-builder', options);
 export const getUniverse = (id, options = {}) => request(`/universe-builder/${encodeURIComponent(id)}`, options);
 export const exportUniverseMarkdown = (id, options = {}) => request(
   `/universe-builder/${encodeURIComponent(id)}/export/markdown`,
@@ -78,15 +77,13 @@ export const importUniverseMarkdown = (id, markdown, options = {}) => trackUnive
 ));
 
 // `[{ id, name, influences: { embrace[], avoid[] } }]` for every live universe
-// that has style tokens. Use this instead of `listUniverses()` whenever a
-// surface only needs to layer a universe's look onto a prompt — the full list
-// ships every canon bible and category.
+// that has style tokens. Use this to layer a universe's look onto a prompt.
 export const listUniverseStyles = (options = {}) => request('/universe-builder/styles', options);
 
 export const createUniverse = (data, options = {}) => request('/universe-builder', {
-  method: 'POST',
   body: JSON.stringify(data),
   ...options,
+  method: 'POST',
 });
 
 export const updateUniverse = (id, patch, options = {}) => trackUniverseWrite(id, request(`/universe-builder/${encodeURIComponent(id)}`, {

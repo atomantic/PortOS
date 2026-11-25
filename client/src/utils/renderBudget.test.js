@@ -6,11 +6,9 @@ import {
   DEFAULT_RENDER_BUDGET_CONFIG,
   createRenderBudget,
   recordFrame,
-  restartWarmup,
   resetRenderBudget,
   getEffectiveTier,
   percentile,
-  recommendStartTier,
   tierToIndex,
 } from './renderBudget.js';
 
@@ -36,8 +34,6 @@ function makeDriver(startTier) {
       }
     },
     advance(ms) { now += ms; },
-    hide(gapMs = 60000) { now += gapMs; s = restartWarmup(s, now); },
-    raw(dt) { now += dt; s = recordFrame(s, { now, dt }); return s; },
   };
 }
 
@@ -52,20 +48,6 @@ describe('renderBudget — helpers', () => {
     expect(tierToIndex('low')).toBe(0);
     expect(tierToIndex('ultra')).toBe(QUALITY_TIERS.length - 1);
     expect(tierToIndex('bogus')).toBe(QUALITY_TIERS.indexOf('high'));
-  });
-
-  it('starts conservatively on touch and lower-capability devices', () => {
-    expect(recommendStartTier({ coarsePointer: true, hardwareConcurrency: 12 })).toBe('medium');
-    expect(recommendStartTier({ hardwareConcurrency: 6 })).toBe('medium');
-    expect(recommendStartTier({ deviceMemory: 6 })).toBe('medium');
-    expect(recommendStartTier({ hardwareConcurrency: 2 })).toBe('low');
-    expect(recommendStartTier({ deviceMemory: 4 })).toBe('low');
-  });
-
-  it('keeps capable and unknown desktops at high', () => {
-    expect(recommendStartTier()).toBe('high');
-    expect(recommendStartTier({ hardwareConcurrency: 12, deviceMemory: 16 })).toBe('high');
-    expect(recommendStartTier({ hardwareConcurrency: 0, deviceMemory: Number.NaN })).toBe('high');
   });
 });
 
@@ -210,20 +192,7 @@ describe('renderBudget — cooldown', () => {
   });
 });
 
-describe('renderBudget — visibility transitions', () => {
-  it('restartWarmup re-arms warm-up and clears streaks/samples without changing tier', () => {
-    const d = makeDriver('high');
-    d.window(30); // pressure streak = 1
-    expect(d.state.pressureStreak).toBe(1);
-    d.hide(); // tab hidden, then visible → restartWarmup
-    expect(d.state.pressureStreak).toBe(0);
-    expect(d.state.samples.length).toBe(0);
-    expect(d.tier).toBe('high');
-    // First frames after resume land in the fresh warm-up → ignored.
-    d.raw(30);
-    expect(d.state.samples.length).toBe(0);
-  });
-
+describe('renderBudget — reset', () => {
   it('resetRenderBudget returns a fresh machine at the given start tier', () => {
     const s = resetRenderBudget(createRenderBudget('low', 0), 'ultra', 5000);
     expect(getEffectiveTier(s)).toBe('ultra');

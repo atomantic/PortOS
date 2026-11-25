@@ -164,12 +164,3 @@ export function stepResultLink(step) {
   if (r.workId) return { to: `/writers-room/works/${r.workId}`, label: 'Open work' };
   return null;
 }
-
-/**
- * Is this project directive-driven (studio mode) vs a legacy video project?
- * The Plan tab renders the composer/empty-state for a bare project and the board
- * once a directive exists.
- */
-export function isDirectiveProject(project) {
-  return Boolean(project?.directive);
-}

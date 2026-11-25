@@ -8,7 +8,6 @@ import {
   planStatusSummary,
   stepRequiresApproval,
   stepResultLink,
-  isDirectiveProject,
   DELIVERABLE_OPTIONS,
 } from './creativeDirectorPlan.js';
 
@@ -159,12 +158,7 @@ describe('stepResultLink', () => {
   });
 });
 
-describe('isDirectiveProject / DELIVERABLE_OPTIONS', () => {
-  it('detects a directive project', () => {
-    expect(isDirectiveProject({ directive: { goal: 'x' } })).toBe(true);
-    expect(isDirectiveProject({ directive: null })).toBe(false);
-    expect(isDirectiveProject({})).toBe(false);
-  });
+describe('DELIVERABLE_OPTIONS', () => {
   it('exposes a stable deliverable menu', () => {
     expect(DELIVERABLE_OPTIONS.map((o) => o.id)).toContain('covers');
     expect(DELIVERABLE_OPTIONS.map((o) => o.id)).toContain('video-teaser');

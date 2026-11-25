@@ -263,6 +263,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
   ]),
   'legacy-client-compat': Object.freeze([
     '/api/lora-training/runs',
+    // Universe pickers in older client builds request full records (before #17115).
+    'GET /api/universe-builder',
     '/api/voice/tts/status',
     '/api/voice/tts/unload',
   ]),

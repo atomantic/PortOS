@@ -9,7 +9,7 @@
 // so the page, the Tribe Care dashboard widget, and the proactive-alert check all
 // route through one implementation. `contactStatus` below only layers presentation
 // (label/tone) on top of that shared `cadenceStatus` — do not re-implement the rules.
-import { cadenceStatus, daysSinceDate, DEFAULT_RING_CADENCE } from './tribeCadence.js';
+import { cadenceStatus, DEFAULT_RING_CADENCE } from './tribeCadence.js';
 
 // The four inner rings are the Dunbar tribe (capped, care-cadenced). `external` is
 // a fifth, uncapped classification OUTSIDE the tribe — people known or previously
@@ -34,11 +34,6 @@ export const ENERGY = [
   { id: 'complex', label: 'Complex', className: 'text-amber-300 bg-amber-500/10 border-amber-500/30', hex: '#fcd34d' },
   { id: 'draining', label: 'Draining', className: 'text-rose-300 bg-rose-500/10 border-rose-500/30', hex: '#fda4af' },
 ];
-
-// Whole days from an ISO date (YYYY-MM-DD) to today, or null if unparseable.
-// Backed by the shared `daysSinceDate` so the client and server compute
-// elapsed days identically.
-export const daysBetween = daysSinceDate;
 
 // Cadence health for a contact: missing / overdue / soon (<=7d) / steady, plus
 // an `external` state that never nags. The state/`daysRemaining` come straight

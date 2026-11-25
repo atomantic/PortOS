@@ -1,4 +1,4 @@
-// `buildMediaHaystack`, `tokenizeQuery`, `matchHaystack`, `filterByQuery` — client-side AND-token
+// `buildMediaHaystack`, `tokenizeQuery`, `matchHaystack` — client-side AND-token
 // search over normalized media items (prompt/model/seed/LoRA/universe tags).
 //
 // Shared by MediaHistory + the Image Gen gallery picker.
@@ -47,14 +47,4 @@ export function tokenizeQuery(query) {
 // True when the haystack contains every token (substring, any order).
 export function matchHaystack(haystack, tokens) {
   return tokens.every((t) => haystack.includes(t));
-}
-
-// Convenience: filter a list of normalized items by a raw query string. Builds
-// haystacks inline — fine for one-shot filtering (the picker). For hot keystroke
-// paths over a large list, cache `buildMediaHaystack` per item and reuse
-// `tokenizeQuery` + `matchHaystack` (see MediaHistory).
-export function filterByQuery(items, query) {
-  const tokens = tokenizeQuery(query);
-  if (tokens.length === 0) return items;
-  return items.filter((item) => matchHaystack(buildMediaHaystack(item), tokens));
 }

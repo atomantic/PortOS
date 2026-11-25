@@ -457,6 +457,3 @@ export const isDrumNotation = (text) => {
 // pay for a second full parse of the same source.
 export const chartHasMusic = (chart) => (chart?.bars || [])
   .some((bar) => bar.rows.some((row) => row.cells.some((cell) => !cell.rest)));
-
-// Same question, from raw source.
-export const drumChartHasMusic = (text) => chartHasMusic(parseDrumChart(text));

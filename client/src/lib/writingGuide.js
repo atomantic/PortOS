@@ -2,9 +2,7 @@
 //
 // Canonical Writers Room reference data + craft principles rendered by the Guide page
 // (`/writers-room/guide`): `WRITING_LENGTH_TARGETS` (microfiction→novel word/char bands),
-// `BOOK_LENGTH_ESTIMATES` (page-based), `WRITING_PRINCIPLES`, `PLANNED_ANALYSES` (e.g. the
-// emotional-roadmap evaluator), and `classifyByWordCount(n)` for labelling a draft's length. Future
-// word-count gauges / length checks read from here so targets don't drift from the docs.
+// `BOOK_LENGTH_ESTIMATES` (page-based), `WRITING_PRINCIPLES` and `PLANNED_ANALYSES`.
 //
 // The Guide page renders directly from these arrays, and forthcoming editor features (word-count
 // gauges, the emotional- roadmap evaluator) read the same source so targets never drift between the
@@ -182,35 +180,3 @@ export const PLANNED_ANALYSES = [
       'Compare the live word/character count against the target band for the chosen form and flag a work that is drifting under- or over-length for its category.',
   },
 ];
-
-// Resolve a word count to its literary-ladder category. The ladder is ordered
-// ascending by upper bound, and the brief's bands have gaps (≤500 then 750–1000
-// then 1,500–7,500…), so we match on the first band whose `max` the count fits
-// under rather than requiring `min ≤ count ≤ max` — a 600-word draft rounds up
-// to flash instead of falling into a gap.
-//
-// Boundary handling: the conventional literary ladder shares boundary values
-// between adjacent bands (a 7,500-word piece is the floor of "novelette" and the
-// ceiling of "short story"; likewise 17,500 and 40,000). The display labels keep
-// the conventional inclusive ranges, but classification must be deterministic, so
-// at a shared boundary the HIGHER band wins (7,500 → novelette, 17,500 → novella,
-// 40,000 → novel). We implement that by treating a band's `max` as exclusive when
-// it equals the next band's `min`; otherwise the `max` is inclusive (so the gap
-// rounding above still works — 600 ≤ flash.max 1000 with no overlap to skip).
-//
-// Returns null only for invalid input; anything above every band is a (large)
-// novel. Future word-count gauges call this to label a draft.
-export function classifyByWordCount(wordCount) {
-  if (typeof wordCount !== 'number' || !Number.isFinite(wordCount) || wordCount < 0) return null;
-  for (let i = 0; i < WRITING_LENGTH_TARGETS.length; i++) {
-    const target = WRITING_LENGTH_TARGETS[i];
-    const max = target.words.max;
-    if (max == null) return target; // open-ended top band
-    const next = WRITING_LENGTH_TARGETS[i + 1];
-    // At a shared boundary (this.max === next.min) the higher band owns the
-    // boundary value, so treat max as exclusive there; otherwise inclusive.
-    const boundaryBelongsToNext = next != null && next.words.min === max;
-    if (boundaryBelongsToNext ? wordCount < max : wordCount <= max) return target;
-  }
-  return WRITING_LENGTH_TARGETS[WRITING_LENGTH_TARGETS.length - 1];
-}

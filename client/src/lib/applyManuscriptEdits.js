@@ -1,11 +1,6 @@
 /**
  * Client-side preview of applying editorial fix edits to a manuscript section.
  *
- * `applyEditsToContent(content, edits, anchorQuote)` — PREVIEW-ONLY client mirror of the server's
- * accept splice (`server/services/pipeline/manuscriptFix.js`): locate each `find` (nearest the anchor
- * when recurring), drop overlaps, replace bottom-up. Powers the Manuscript editor's whole-manuscript
- * impact preview.
- *
  * Mirrors the server splice in `server/services/pipeline/manuscriptFix.js` (`acceptManuscriptFix`):
  * locate each `find` (nearest the anchor when it recurs), then replace from the bottom up so earlier
  * offsets stay valid.
@@ -49,9 +44,4 @@ export function planManuscriptEdits(content, edits, anchorQuote) {
     output = output.slice(0, l.start) + l.replace + output.slice(l.end);
   });
   return { output, applied: kept.length, notFound, overlapping };
-}
-
-// Convenience: just the resulting text (drops overlaps/not-found silently).
-export function applyEditsToContent(content, edits, anchorQuote) {
-  return planManuscriptEdits(content, edits, anchorQuote).output;
 }
