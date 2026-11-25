@@ -21,8 +21,8 @@
  *     routers require host control themselves while the API is not exposed.
  *
  * Reads stay open unless listed in HOST_CONTROL_GET_ROUTES: a GET that streams
- * live capture, exports private archives or host listings, steers or reads the
- * signed-in managed browser, or runs a process per request. A GET that only
+ * live capture, reveals sealed records, exports private archives or host listings,
+ * steers or reads the signed-in managed browser, or runs a process per request. A GET that only
  * needs host control for part of its answer checks `requestHasHostControl` in
  * its handler instead (GET /api/browser strips page and download listings).
  * The socket twin is HOST_CONTROL_SOCKET_EVENTS in services/socket.js; voice and
@@ -49,6 +49,11 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/apps/:id/forge-auth/refresh/:jobId/events',
   // Raw backup archives export private records and credentials (#8772).
   'GET /api/backup/snapshots/:snapshotId/download',
+  // Broker evidence and digest search URLs reveal sealed identity data (#18851).
+  'GET /api/privacy/broker-cases/:id/evidence',
+  'GET /api/privacy/optout/digest',
+  // Raw CoS recordings contain machine-local terminal output (#18851).
+  'GET /api/data/cos/storage/recording/:date/:id',
   // The directory picker lists any readable host directory, not a PortOS record.
   'GET /api/scaffold/directories',
   // Status of a Topaz upscale, part of the gated host upscale workflow (#11076).

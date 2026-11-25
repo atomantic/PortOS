@@ -67,6 +67,9 @@ describe('isHostControlRoute (#16018)', () => {
       '/api/browser/logs',
       '/api/apps/app-001/logs',
       '/api/update/software/homebrew',
+      '/api/privacy/broker-cases/example-case/evidence',
+      '/api/privacy/optout/digest',
+      '/api/data/cos/storage/recording/2020-01-02/example-agent',
     ]) {
       expect(isHostControlRoute('GET', path), path).toBe(true);
       expect(isHostControlRoute('HEAD', `${path.toUpperCase()}//`), path).toBe(true);
