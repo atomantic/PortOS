@@ -26,17 +26,18 @@ export default function AudioPanel({
   onClear,
 }) {
   const [audioDuration, setAudioDuration] = useState(null);
-  const [previewUrl, setPreviewUrl] = useState('');
+  const [preview, setPreview] = useState(null);
+  const previewUrl = preview && preview.file === audioFile ? preview.url : null;
 
   useEffect(() => {
     setAudioDuration(null);
     onDurationChange?.(null);
     if (!audioFile) {
-      setPreviewUrl('');
+      setPreview(null);
       return undefined;
     }
     const nextPreviewUrl = URL.createObjectURL(audioFile);
-    setPreviewUrl(nextPreviewUrl);
+    setPreview({ file: audioFile, url: nextPreviewUrl });
     return () => URL.revokeObjectURL(nextPreviewUrl);
   }, [audioFile, onDurationChange]);
 
@@ -58,21 +59,23 @@ export default function AudioPanel({
               {audioDuration == null ? 'Reading duration…' : formatDurationSec(audioDuration)}
             </span>
           </div>
-          <audio
-            aria-label="Preview selected audio"
-            className="h-8 w-full"
-            controls
-            preload="metadata"
-            src={previewUrl}
-            onLoadedMetadata={(event) => {
-              const duration = event.currentTarget.duration;
-              const resolved = Number.isFinite(duration) ? duration : null;
-              setAudioDuration(resolved);
-              onDurationChange?.(resolved);
-            }}
-          >
-            Your browser does not support audio playback.
-          </audio>
+          {previewUrl && (
+            <audio
+              aria-label="Preview selected audio"
+              className="h-8 w-full"
+              controls
+              preload="metadata"
+              src={previewUrl}
+              onLoadedMetadata={(event) => {
+                const duration = event.currentTarget.duration;
+                const resolved = Number.isFinite(duration) ? duration : null;
+                setAudioDuration(resolved);
+                onDurationChange?.(resolved);
+              }}
+            >
+              Your browser does not support audio playback.
+            </audio>
+          )}
         </div>
       ) : (
         <FilePickerButton
