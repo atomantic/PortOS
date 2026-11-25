@@ -9,17 +9,17 @@
  */
 
 import { isOpencodeCommand, parseOpencodeConfigContent } from './provider/providerModels.js';
-import { opencodeLocalBaseUrl } from './opencodeConfig.js';
+import { opencodeLocalBaseUrl } from './opencodeLocalProviders.js';
 import { localRuntimeKind, LOCAL_RUNTIME_MANAGE_URLS } from './modelPinMembership.js';
 import { PORTS } from './ports.js';
 import { isLocalInstanceEndpoint } from './localEndpoint.js';
 
 export { isLocalInstanceHost, isLocalInstanceEndpoint, localEndpointPort } from './localEndpoint.js';
-// Classification and the model-pin membership rule live in the browser-safe leaf `modelPinMembership.js` (a picker must not pull this module's `opencodeConfig.js` → `zod` graph); re-exported for existing importers.
+// Classification and the model-pin membership rule live in the browser-safe leaf `modelPinMembership.js` (a picker must not pull this module's graph); re-exported for existing importers.
 export { localBackendForProvider, localRuntimeKind, modelPinIsOffered, LOCAL_RUNTIME_MANAGE_URLS } from './modelPinMembership.js';
 
 /**
- * One row per local runtime PortOS can check. `defaultBaseUrl` comes from `opencodeConfig.js`'s provider table (what a spawned OpenCode actually uses), never re-typed.
+ * One row per local runtime PortOS can check. `defaultBaseUrl` comes from the `opencodeLocalProviders.js` table (what a spawned OpenCode actually uses), never re-typed; that leaf keeps `opencodeConfig.js` out of this module's closure.
  * `manageUrl` is the client route that installs/starts it, read from `LOCAL_RUNTIME_MANAGE_URLS` because the client needs the same answer; `null` means no page.
  * `modelsHint` and `standbyDetail` name that page via the `{page}` token, expanded by `providerReadiness.js` through `navManifest.getNavPageForPath` so a page move
  * needs no edits; runtimes with a null `manageUrl` must not use the token.
