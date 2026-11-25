@@ -2052,6 +2052,29 @@ describe('ChiefOfStaff slice reads against concurrent refreshes (#18643)', () =>
     expect(screen.queryByText('Thinking')).toBeNull();
   });
 
+  it('keeps the Coding state from a spawn event when an older shell read finishes its ancillary reads later', async () => {
+    api.getCosStatus.mockResolvedValue({ running: true, config, stats: {} });
+    renderWithProbe('briefing');
+    await waitForPageShell();
+    expect(screen.getAllByText('Thinking').length).toBeGreaterThan(0);
+
+    let releaseLearning;
+    api.getCosLearningSummary.mockReturnValueOnce(new Promise(resolve => { releaseLearning = () => resolve(null); }));
+    await act(async () => { getSocketHandler('cos:config:changed')(); });
+    await settle();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'go tasks' })); });
+    await settle();
+    const running = { id: 'agent-example', taskId: 'task-example', status: 'running', startedAt: '2026-01-01T00:00:00.000Z', metadata: {} };
+    api.getCosAgents.mockResolvedValue([running]);
+    await act(async () => { getSocketHandler('cos:agent:spawned')(running); });
+    await settle();
+    expect(screen.getAllByText('Coding').length).toBeGreaterThan(0);
+
+    await act(async () => { releaseLearning(); await new Promise(resolve => setTimeout(resolve, 20)); });
+    expect(screen.getAllByText('Coding').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Thinking')).toBeNull();
+  });
+
   it('refreshes the learning summary from the persisted learning-change event', async () => {
     withFakeTimers();
     renderWithProbe('config');
