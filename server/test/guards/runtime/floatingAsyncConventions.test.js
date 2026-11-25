@@ -17,14 +17,16 @@ const isAsyncInit = (node) => (
   (node?.type === 'ArrowFunctionExpression' || node?.type === 'FunctionExpression') && node.async === true
 );
 
-// Without the TypeScript or Flow plugins these never hold a child node; they are about half of all nodes.
-const LEAF_TYPES = new Set(['Identifier', 'StringLiteral', 'NumericLiteral', 'BooleanLiteral', 'NullLiteral',
-  'BigIntLiteral', 'RegExpLiteral', 'TemplateElement', 'ThisExpression', 'Super']);
+// These Babel node types cannot contain an expression statement.
+const NO_STATEMENTS = new Set([
+  'Identifier', 'StringLiteral', 'NumericLiteral', 'BooleanLiteral', 'NullLiteral',
+  'BigIntLiteral', 'RegExpLiteral', 'TemplateElement', 'ThisExpression', 'Super',
+  'ImportDeclaration', 'ExportAllDeclaration', 'ExportSpecifier', 'ExportNamespaceSpecifier',
+]);
 
 function walk(node, visit) {
-  if (!node || typeof node.type !== 'string') return;
+  if (!node || typeof node.type !== 'string' || NO_STATEMENTS.has(node.type)) return;
   visit(node);
-  if (LEAF_TYPES.has(node.type)) return;
   for (const key in node) {
     if (key === 'loc' || key === 'extra' || key === 'comments' || key === 'errors') continue;
     const child = node[key];
@@ -35,56 +37,56 @@ function walk(node, visit) {
   }
 }
 
-/** Module-scope async functions declared in `ast`, plus which are exported. Nested ones are skipped: the same name is routinely a sync helper in a sibling scope. */
-function asyncDeclarations(ast) {
+/** Module-scope bindings only. Nested helpers can have sync namesakes in sibling scopes. */
+function moduleBindings(body, dir) {
   const local = new Set();
   const exported = new Set();
-  const addDeclaration = (decl) => {
-    if (decl?.type === 'FunctionDeclaration' && decl.async && decl.id) local.add(decl.id.name);
-    if (decl?.type === 'VariableDeclaration') {
-      for (const d of decl.declarations) {
-        if (d.id.type === 'Identifier' && isAsyncInit(d.init)) local.add(d.id.name);
-      }
-    }
+  const exportAliases = [];
+  const imports = new Map();
+  const addAsync = (name, isExport) => {
+    local.add(name);
+    if (isExport) exported.add(name);
   };
-  for (const stmt of ast.program.body) {
-    addDeclaration(stmt);
-    if (stmt.type === 'ExportNamedDeclaration') addDeclaration(stmt.declaration);
-  }
-  for (const stmt of ast.program.body) {
-    if (stmt.type !== 'ExportNamedDeclaration') continue;
-    const decl = stmt.declaration;
-    if (decl?.type === 'FunctionDeclaration' && decl.async) exported.add(decl.id.name);
+  for (const stmt of body) {
+    const isExport = stmt.type === 'ExportNamedDeclaration';
+    const decl = isExport ? stmt.declaration : stmt;
+    if (decl?.type === 'FunctionDeclaration' && decl.async && decl.id) addAsync(decl.id.name, isExport);
     if (decl?.type === 'VariableDeclaration') {
       for (const d of decl.declarations) {
-        if (d.id.type === 'Identifier' && isAsyncInit(d.init)) exported.add(d.id.name);
+        if (d.id.type === 'Identifier' && isAsyncInit(d.init)) addAsync(d.id.name, isExport);
       }
     }
-    for (const spec of stmt.specifiers || []) {
-      if (!stmt.source && local.has(spec.local.name)) exported.add(spec.exported.name || spec.exported.value);
+    if (isExport && !stmt.source && stmt.specifiers.length) exportAliases.push(...stmt.specifiers);
+    if (dir && stmt.type === 'ImportDeclaration' && stmt.source.value.startsWith('.')) {
+      for (const spec of stmt.specifiers) {
+        if (spec.type !== 'ImportSpecifier') continue;
+        const name = spec.local.name;
+        if (!imports.has(name)) imports.set(name, []);
+        imports.get(name).push({ source: stmt.source.value, imported: spec.imported.name || spec.imported.value });
+      }
     }
   }
-  return { local, exported };
+  for (const spec of exportAliases) {
+    if (local.has(spec.local.name)) exported.add(spec.exported.name || spec.exported.value);
+  }
+  return { local, exported, imports };
 }
 
 /** Retain recognition facts rather than every imported module's AST. */
-function summarizeSource(src) {
-  const ast = parseSource(src);
-  const { local, exported } = asyncDeclarations(ast);
-  const imports = ast.program.body.filter((stmt) => stmt.type === 'ImportDeclaration' && stmt.source.value.startsWith('.'))
-    .map((stmt) => ({
-      source: stmt.source.value,
-      names: stmt.specifiers.filter((spec) => spec.type === 'ImportSpecifier')
-        .map((spec) => ({ imported: spec.imported.name || spec.imported.value, local: spec.local.name })),
-    }));
+function summarizeSource(src, dir) {
+  const { program } = parseSource(src);
+  const { local, exported, imports } = moduleBindings(program.body, dir);
   const calls = [];
-  walk(ast, (node) => {
-    if (node.type !== 'ExpressionStatement') return;
-    const call = node.expression;
-    if (call.type === 'CallExpression' && call.callee.type === 'Identifier') {
-      calls.push({ name: call.callee.name, line: node.loc.start.line });
-    }
-  });
+  if (local.size > 0 || imports.size > 0) {
+    walk(program, (node) => {
+      if (node.type !== 'ExpressionStatement') return;
+      const call = node.expression;
+      if (call.type === 'CallExpression' && call.callee.type === 'Identifier') {
+        const name = call.callee.name;
+        if (local.has(name) || imports.has(name)) calls.push({ name, line: node.loc.start.line });
+      }
+    });
+  }
   return { local, exported, imports, calls };
 }
 
@@ -94,6 +96,7 @@ function summarizeSource(src) {
  * declares (and exports) no async function and Babel need not parse it (#16607).
  */
 const ASYNC_KEYWORD = /(?<![\w$])async(?![\w$])/;
+const NO_EXPORTS = new Set();
 /** An escape straight after a quote can spell a leading `.` or continue the line. */
 const ESCAPED_LITERAL_START = /['"]\\[.xu0-9\s]/;
 
@@ -124,7 +127,7 @@ function createFloatingAsyncScanner(readSource = (file) => readText(file)) {
     if (!summaries.has(file)) {
       const src = readSource(file);
       // Nothing here is async; a visit still needs the text to check what it imports.
-      summaries.set(file, ASYNC_KEYWORD.test(src) ? summarizeSource(src) : { exported: new Set(), src });
+      summaries.set(file, ASYNC_KEYWORD.test(src) ? summarizeSource(src, dirname(file)) : { exported: NO_EXPORTS, src });
     }
     return summaries.get(file);
   };
@@ -140,28 +143,34 @@ function createFloatingAsyncScanner(readSource = (file) => readText(file)) {
       resolutions.set(absPath, file ?? null);
     }
     const file = resolutions.get(absPath);
-    return file ? summaryOf(file).exported : new Set();
+    return file ? summaryOf(file).exported : NO_EXPORTS;
   };
   // A source with no local async function can only float a call it imports.
   const mayImportAsync = (src, dir) => {
+    // Named static imports require both keywords and a binding list.
+    if (!src.includes('import') || !src.includes('from') || !src.includes('{')) return false;
     const values = relativeLiteralValues(src);
     return values === null || values.some((value) => asyncExportsOf(resolve(dir, value)).size > 0);
   };
   const findCalls = ({ local, imports, calls }, dir) => {
-    const asyncNames = new Set(local);
-    if (dir) {
-      for (const imported of imports) {
-        const exported = asyncExportsOf(resolve(dir, imported.source));
-        for (const name of imported.names) {
-          if (exported.has(name.imported)) asyncNames.add(name.local);
-        }
+    const importedAsync = new Map();
+    const hits = [];
+    for (const { name, line } of calls) {
+      if (local.has(name)) {
+        hits.push(`line ${line}: ${name}()`);
+        continue;
       }
+      // Resolve a binding only when a bare call can use it, once per caller.
+      if (!importedAsync.has(name)) {
+        importedAsync.set(name, imports.get(name).some(({ source, imported }) =>
+          asyncExportsOf(resolve(dir, source)).has(imported)));
+      }
+      if (importedAsync.get(name)) hits.push(`line ${line}: ${name}()`);
     }
-    return calls.filter((call) => asyncNames.has(call.name))
-      .map((call) => `line ${call.line}: ${call.name}()`);
+    return hits;
   };
   return {
-    findInSource: (src, dir = null) => findCalls(summarizeSource(src), dir),
+    findInSource: (src, dir = null) => findCalls(summarizeSource(src, dir), dir),
     findInFile: (file) => {
       let summary = summaryOf(file);
       if (summary.hits) return summary.hits;
@@ -170,7 +179,7 @@ function createFloatingAsyncScanner(readSource = (file) => readText(file)) {
           summaries.set(file, { exported: summary.exported, hits: [] });
           return [];
         }
-        summary = summarizeSource(summary.src);
+        summary = summarizeSource(summary.src, dirname(file));
       }
       const hits = findCalls(summary, dirname(file));
       // After visiting a file, only its exports and verdict can be needed again.
@@ -233,6 +242,17 @@ describe('the floating-async recognizer', () => {
     expect(findFloatingAsyncCalls("import { getAllowedCommands as sync } from './services/commands.js';\nsync();", SERVER_ROOT)).toEqual([]);
     expect(findFloatingAsyncCalls("import { logAction as log } from './services/history.js';\nlog();", SERVER_ROOT))
       .toEqual(['line 2: log()']);
+  });
+
+  it('resolves only called bindings, including a forward export alias', () => {
+    const scanner = createFloatingAsyncScanner((file) => {
+      if (file !== join(SERVER_ROOT, 'services/history.js')) throw new Error('unneeded import read');
+      return 'export { run as renamed }; const run = async () => {};';
+    });
+    const source = `import { renamed as run } from './services/history.js';
+import { getAllowedCommands } from './services/commands.js';
+function check() { run(); run(); }`;
+    expect(scanner.findInSource(source, SERVER_ROOT)).toEqual(['line 3: run()', 'line 3: run()']);
   });
 
   it('reuses one file summary across import spellings and the whole-tree visit', () => {
