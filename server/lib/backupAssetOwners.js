@@ -165,7 +165,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     id: 'music-video-render-and-document-commits',
     status: 'admitted',
     modules: [
-      'services/musicVideo/render.js', 'services/musicVideo/excerptRender.js',
+      'services/musicVideo/finalRenderJob.js', 'services/musicVideo/excerptRender.js',
       'services/musicVideo/publishKit.js', 'services/musicVideo/compositionDocument.js',
       'services/musicVideo/sharingCopy.js', 'services/musicVideo/coverArt.js',
       'services/musicVideo/youtubeThumbnail.js',
