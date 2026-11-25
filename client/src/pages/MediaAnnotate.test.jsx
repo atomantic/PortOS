@@ -36,12 +36,14 @@ const getMediaSketch = vi.fn();
 const saveMediaSketch = vi.fn();
 const getRegenAvailability = vi.fn();
 const rerenderWithAnnotations = vi.fn();
+const previewRegenerate = vi.fn();
 
 vi.mock('../services/apiImageVideo.js', () => ({
   getMediaSketch: (...a) => getMediaSketch(...a),
   saveMediaSketch: (...a) => saveMediaSketch(...a),
   getRegenAvailability: (...a) => getRegenAvailability(...a),
   rerenderWithAnnotations: (...a) => rerenderWithAnnotations(...a),
+  previewRegenerate: (...a) => previewRegenerate(...a),
 }));
 
 const toastSuccess = vi.fn();
@@ -106,6 +108,26 @@ describe('MediaAnnotate re-render with annotations', () => {
     expect(rerenderWithAnnotations).toHaveBeenCalledWith('foo.png', { strength: 0.5, prompt: undefined });
     expect(toastSuccess).toHaveBeenCalled();
     expect(navigate).toHaveBeenCalledWith('/media/history');
+  });
+
+  it('shows the carried source negative prompt for a typed prompt, as the server previews it', async () => {
+    previewRegenerate.mockResolvedValue({
+      sentPrompt: 'typed words',
+      sentNegativePrompt: 'SOURCE NEGATIVE',
+      promptAdditions: [{ id: 'source-negative-prompt', label: "Source image's negative prompt", text: 'SOURCE NEGATIVE' }],
+    });
+    await renderPage();
+    fireEvent.click(await awaitEnabled(() => screen.getByTitle('Re-render this image guided by your annotations')));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).queryByRole('button', { name: /negative prompt/ })).toBeNull();
+
+    fireEvent.change(within(dialog).getByLabelText(/Prompt/), { target: { value: 'typed words' } });
+    const chip = await within(dialog).findByRole('button', { name: "+ Source image's negative prompt" }, { timeout: 2000 });
+    expect(previewRegenerate).toHaveBeenCalledWith('foo.png', { prompt: 'typed words', annotated: true }, { silent: true });
+    fireEvent.click(chip);
+    expect(within(dialog).getByText('SOURCE NEGATIVE')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Show full prompt' }));
+    expect(within(dialog).getByText(/Negative prompt: SOURCE NEGATIVE/)).toBeInTheDocument();
   });
 
   it('disables re-render and surfaces the reason when local img2img is unavailable', async () => {

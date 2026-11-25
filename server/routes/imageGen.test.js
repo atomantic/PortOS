@@ -2766,6 +2766,81 @@ describe('Image Gen Routes', () => {
       buildParamsSpy.mockRestore();
     });
 
+    it('previews byte-identically what the regenerate POST enqueues, carried negative included, and enqueues nothing', async () => {
+      const spies = () => [
+        vi.spyOn(fileUtils, 'resolveGalleryImage').mockReturnValue('/fake/gallery/source.png'),
+        vi.spyOn(regen, 'readImageDimensions').mockResolvedValue({ width: 1024, height: 1024 }),
+        vi.spyOn(regen, 'resolveRegenBackend').mockResolvedValue({ available: true, model: getImageModels().find(model => model.id === 'flux2-klein-9b'), pythonPath: '/fake/venv/python' }),
+      ];
+      const restore = spies();
+      imageGen.local.readImageSidecar.mockResolvedValue({
+        path: '/fake/gallery/source.png.json',
+        metadata: { modelId: 'flux2-klein-9b', prompt: 'a robot', negativePrompt: 'SOURCE NEGATIVE' },
+      });
+      mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'regen-job-002', position: 1, status: 'queued' });
+      try {
+        const body = { prompt: '  typed words  ' };
+        const preview = await request(app).post('/api/image-gen/source.png/regenerate/preview').send(body);
+        expect(preview.status).toBe(200);
+        expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+
+        const submit = await request(app).post('/api/image-gen/source.png/regenerate').send(body);
+        expect(submit.status).toBe(200);
+        const params = mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params;
+        const { localSentPrompt } = await import('../services/imageGen/local.js');
+        const sent = await localSentPrompt({ ...params, model: getImageModels().find(model => model.id === params.modelId) });
+        expect(preview.body).toEqual({ modelId: params.modelId, ...sent });
+        expect(preview.body.sentPrompt).toBe('typed words');
+        expect(preview.body.sentNegativePrompt).toBe('SOURCE NEGATIVE');
+        expect(preview.body.promptAdditions).toEqual(params.promptAdditions);
+        expect(params.promptAdditions.map(item => item.id)).toEqual(['source-negative-prompt']);
+      } finally {
+        restore.forEach(spy => spy.mockRestore());
+        imageGen.local.readImageSidecar.mockReset();
+      }
+    });
+
+    it('previews an annotated re-render without a saved sketch and stages no file', async () => {
+      const restore = [
+        vi.spyOn(fileUtils, 'resolveGalleryImage').mockReturnValue('/fake/gallery/source.png'),
+        vi.spyOn(regen, 'readImageDimensions').mockResolvedValue({ width: 1024, height: 1024 }),
+        vi.spyOn(regen, 'resolveRegenBackend').mockResolvedValue({ available: true, model: getImageModels().find(model => model.id === 'flux2-klein-9b'), pythonPath: '/fake/venv/python' }),
+      ];
+      const sketchPathSpy = vi.spyOn(mediaSketches, 'getSketchPngPath');
+      const copySpy = vi.spyOn(fileUtils, 'copyFileGuarded');
+      imageGen.local.readImageSidecar.mockResolvedValue({ path: '/fake/gallery/source.png.json', metadata: { modelId: 'flux2-klein-9b', negativePrompt: 'SOURCE NEGATIVE' } });
+      try {
+        const preview = await request(app).post('/api/image-gen/source.png/regenerate/preview').send({ annotated: true, prompt: 'typed words' });
+        expect(preview.status).toBe(200);
+        expect(preview.body.sentNegativePrompt).toBe('SOURCE NEGATIVE');
+        expect(sketchPathSpy).not.toHaveBeenCalled();
+        expect(copySpy).not.toHaveBeenCalled();
+        expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      } finally {
+        [...restore, sketchPathSpy, copySpy].forEach(spy => spy.mockRestore());
+        imageGen.local.readImageSidecar.mockReset();
+      }
+    });
+
+    it('previews no prompt and no negative for an empty prompt', async () => {
+      const restore = [
+        vi.spyOn(fileUtils, 'resolveGalleryImage').mockReturnValue('/fake/gallery/source.png'),
+        vi.spyOn(regen, 'readImageDimensions').mockResolvedValue({ width: 1024, height: 1024 }),
+        vi.spyOn(regen, 'resolveRegenBackend').mockResolvedValue({ available: true, model: getImageModels().find(model => model.id === 'flux2-klein-9b'), pythonPath: '/fake/venv/python' }),
+      ];
+      imageGen.local.readImageSidecar.mockResolvedValue({ path: '/fake/gallery/source.png.json', metadata: { modelId: 'flux2-klein-9b', negativePrompt: 'SOURCE NEGATIVE' } });
+      try {
+        const preview = await request(app).post('/api/image-gen/source.png/regenerate/preview').send({});
+        expect(preview.status).toBe(200);
+        expect(preview.body.sentPrompt).toBe('');
+        expect(preview.body).not.toHaveProperty('sentNegativePrompt');
+        expect(preview.body).not.toHaveProperty('promptAdditions');
+      } finally {
+        restore.forEach(spy => spy.mockRestore());
+        imageGen.local.readImageSidecar.mockReset();
+      }
+    });
+
     // Annotation re-render (issue #2036 phase 2)
     it('400s an annotated re-render when no annotation has been saved', async () => {
       const resolveGallerySpy = vi.spyOn(fileUtils, 'resolveGalleryImage')

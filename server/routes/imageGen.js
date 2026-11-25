@@ -34,6 +34,7 @@ import { PATHS, ensureDir, resolveGalleryImage, unlinkGuarded, copyFileGuarded }
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
 import { applyFilmLookBake, readFilmLookSource } from '../services/imageGen/filmLookBake.js';
 import { previewImagePrompt } from '../services/imageGen/promptPreview.js';
+import { localSentPrompt } from '../services/imageGen/local.js';
 import { join, basename } from 'node:path';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
 import {
@@ -524,18 +525,11 @@ router.post('/:filename/remove-watermark', asyncHandler(async (req, res) => {
   res.json(await applyWatermarkRemoval({ filename, sourceMeta, size: body.size, region: body.region }));
 }));
 
-// SynthID-defeat regeneration (issue #912). Round-trips an existing gallery
-// image through local FLUX img2img at low–moderate denoise so the per-pixel
-// watermark is overwritten by fresh sampling — the only honest defeat path
-// (the lossless clean above can't touch SynthID). Post-hoc + history-only:
-// enqueues a normal local image job (GPU lane) using the source's own prompt;
-// the new render lands in the gallery as a variant of the source. Hardware-
-// gated — 400s with an actionable message when no local FLUX runner exists.
-router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
-  const filename = req.params.filename;
+// Turns a regenerate request into the job params the queue runs. The POST route and the preview route both call
+// this, so the preview shows exactly what the real request sends. `stage` false (preview) writes nothing: no
+// annotation snapshot is copied and the saved sketch need not exist yet.
+async function resolveRegenJob(filename, body, { stage }) {
   local.assertGalleryFilename(filename, { pngOnly: true });
-  const body = validateRequest(regenerateSchema, req.body || {});
-
   const sourceAbsPath = resolveGalleryImage(filename);
   if (!sourceAbsPath) {
     throw new ServerError('Image not found', { status: 404, code: 'NOT_FOUND' });
@@ -555,8 +549,9 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
     if (!isValidSketchKey(key)) {
       throw new ServerError('Image cannot be annotated', { status: 400, code: 'VALIDATION_ERROR' });
     }
-    annotatedSketchPath = await getSketchPngPath(key);
-    if (!annotatedSketchPath) {
+    // The preview skips the saved-sketch check: the annotate dialog saves the markup only when the user submits.
+    annotatedSketchPath = stage ? await getSketchPngPath(key) : null;
+    if (stage && !annotatedSketchPath) {
       throw new ServerError('No saved annotation to re-render — draw over the image and save first.', { status: 400, code: 'NO_ANNOTATION' });
     }
   }
@@ -571,9 +566,7 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
   // CPU-only light path (no FLUX runner required). A best-effort spatial pass
   // for installs that can't run the GPU round-trip — synchronous like Clean:
   // it writes a `_regen-light.png` variant inline and returns it (no queue).
-  if (body.method === 'light') {
-    return res.json(await applyLightRegenVariant({ filename, sourceAbsPath, sourceMeta }));
-  }
+  if (body.method === 'light') return { light: { sourceAbsPath, sourceMeta } };
 
   const backend = await resolveRegenBackend({ sourceModelId: sourceMeta.modelId });
   if (!backend.available) {
@@ -591,7 +584,7 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
   // name (it IS this job's init image) lets imageRefsGc.js sweep it once
   // unreferenced.
   let initImageAbsPath = null;
-  if (annotatedSketchPath) {
+  if (stage && annotatedSketchPath) {
     await ensureDir(PATHS.imageRefs);
     initImageAbsPath = join(PATHS.imageRefs, `init-${randomUUID()}.png`);
     await copyFileGuarded(annotatedSketchPath, initImageAbsPath);
@@ -616,10 +609,36 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
     initImageAbsPath,
     annotated: !!body.annotated,
   });
+  return { params, backend, strength };
+}
+
+// SynthID-defeat regeneration (issue #912). Round-trips an existing gallery
+// image through local FLUX img2img at low–moderate denoise so the per-pixel
+// watermark is overwritten by fresh sampling — the only honest defeat path
+// (the lossless clean above can't touch SynthID). Post-hoc + history-only:
+// enqueues a normal local image job (GPU lane) using the source's own prompt;
+// the new render lands in the gallery as a variant of the source. Hardware-
+// gated — 400s with an actionable message when no local FLUX runner exists.
+router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
+  const filename = req.params.filename;
+  const body = validateRequest(regenerateSchema, req.body || {});
+  const job = await resolveRegenJob(filename, body, { stage: true });
+  if (job.light) return res.json(await applyLightRegenVariant({ filename, ...job.light }));
+  const { params, backend, strength } = job;
   const queued = await enqueueLoggedImage({ kind: 'image', params }, { source: routeSource(req) });
   const via = body.annotated ? 'annotation re-render' : 'Regenerating';
   console.log(`♻️ ${via} ${filename} via ${backend.model.id} (strength=${strength}) → job ${queued.jobId.slice(0, 8)}`);
   return res.json(queuedImageResponse({ ...queued, mode: IMAGE_GEN_MODE.LOCAL, model: backend.model.id }));
+}));
+
+// What a regenerate request would send to the model (#18642), built by the same resolveRegenJob and
+// localSentPrompt the real render uses. Enqueues and stages nothing. The light CPU pass sends no prompt.
+router.post('/:filename/regenerate/preview', asyncHandler(async (req, res) => {
+  const body = validateRequest(regenerateSchema, req.body || {});
+  const job = await resolveRegenJob(req.params.filename, body, { stage: false });
+  if (job.light) return res.json({ sentPrompt: '' });
+  const { params, backend } = job;
+  res.json({ modelId: backend.model.id, ...await localSentPrompt({ ...params, model: backend.model }) });
 }));
 
 // Local-mode setup automation (python probe/venv, FLUX.2 install/status,

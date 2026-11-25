@@ -4,6 +4,8 @@ import { Pencil, Eraser, Undo2, Trash2, Save, Download, ArrowLeft, ImageOff, Ima
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
 import AnnotationCanvas from '../components/media/AnnotationCanvas';
+import ModelInputPreview from '../components/media/ModelInputPreview';
+import { useModelInputPreview } from '../hooks/useModelInputPreview';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import useUnsavedChangesGuard from '../hooks/useUnsavedChangesGuard';
 import UnsavedChangesConfirm from '../components/ui/UnsavedChangesConfirm';
@@ -14,6 +16,7 @@ import {
   saveMediaSketch,
   getRegenAvailability,
   rerenderWithAnnotations,
+  previewRegenerate,
 } from '../services/apiImageVideo.js';
 import { clamp } from '../utils/formatters.js';
 
@@ -210,6 +213,12 @@ export default function MediaAnnotate() {
   const strengthMin = regenInfo?.strengthMin ?? 0.02;
   const strengthMax = regenInfo?.strengthMax ?? 0.6;
   const regenAvailable = !!regenInfo?.available;
+  // The server's view of the re-render's model input, including the source image's carried negative prompt (#18642).
+  const typedRerenderPrompt = rerenderPrompt.trim();
+  const previewRerender = useCallback((body, options) => previewRegenerate(parsed.ref, body, options), [parsed?.ref]);
+  const rerenderPreview = useModelInputPreview(previewRerender, { prompt: typedRerenderPrompt, annotated: true }, {
+    enabled: rerenderOpen && regenAvailable && isImage && typedRerenderPrompt.length > 0,
+  });
   const regenModelLabel = regenInfo?.modelId || 'local FLUX img2img';
 
   const openRerender = useCallback(() => {
@@ -483,6 +492,7 @@ export default function MediaAnnotate() {
                 placeholder="Leave blank to let the annotations alone guide the redraw"
                 className="w-full rounded-lg bg-port-bg border border-port-border px-3 py-2 text-sm text-gray-200 resize-none focus:outline-none focus:border-port-accent"
               />
+              <div className="mt-2"><ModelInputPreview preview={rerenderPreview} prompt={rerenderPrompt} /></div>
             </div>
 
             <div className="mt-3">

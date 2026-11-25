@@ -120,3 +120,7 @@ name (case-insensitive match), which is created on first use. The name rides on
 the job params, so queued, hosted and peer-lane renders all file on completion
 (`server/services/requestedCollectionHook.js`). Filing is best-effort and
 idempotent; a collection error is logged and never fails the render.
+
+## Regenerate and annotation re-render: model input preview
+
+A typed prompt in the lightbox Regenerate panel or the annotation re-render dialog also sends the source image's negative prompt. `buildRegenParams` declares it as the labeled addition `source-negative-prompt`, and `POST /api/image-gen/:filename/regenerate/preview` (same `regenerateSchema` body as the real route, plus `annotated: true` for a re-render) returns the exact `{ modelId, sentPrompt, sentNegativePrompt?, promptAdditions? }` through the same job builder and `localSentPrompt` the render uses. It enqueues and stages nothing, and does not require the annotation to be saved yet. An empty prompt sends neither a prompt nor a negative.
