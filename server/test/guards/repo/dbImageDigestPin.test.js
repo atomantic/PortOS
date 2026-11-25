@@ -1,5 +1,6 @@
 import { execFileSync } from 'child_process';
 import { statSync } from 'fs';
+import { readFile } from 'node:fs/promises';
 import { join } from 'path';
 import { describe, it, expect } from 'vitest';
 
@@ -24,16 +25,26 @@ describe('database image is pinned to a manifest digest', () => {
 
   // Regression caught: Dependabot's docker-compose ecosystem edits only
   // docker-compose.yml, so any second literal copy fails every bump PR.
-  it('the digest literal appears in no tracked file but docker-compose.yml', () => {
-    const digest = PINNED_DB_IMAGE.split('@')[1];
+  it('the digest literal appears in no tracked file but docker-compose.yml', async () => {
+    const digest = Buffer.from(PINNED_DB_IMAGE.split('@')[1]);
     const corpus = guardCorpus();
     // A symlink counts by what it points at, as `statSync` sees it.
     const isFile = (f) => {
       const stats = corpus.lstat(f);
       return stats?.isSymbolicLink() ? statSync(join(ROOT, f), { throwIfNoEntry: false })?.isFile() : stats?.isFile();
     };
-    const holders = corpus.tracked([]).filter((f) => isFile(f) && corpus.bytes(f).includes(digest));
-    expect(holders).toEqual(['docker-compose.yml']);
+    const files = corpus.tracked().filter(isFile);
+    const holders = [];
+    let next = 0;
+    // Bound in-flight reads and let each buffer go after searching so each
+    // overlapping pregate does not retain a second copy of the whole checkout.
+    await Promise.all(Array.from({ length: 8 }, async () => {
+      while (next < files.length) {
+        const file = files[next++];
+        if ((await readFile(join(ROOT, file))).includes(digest)) holders.push(file);
+      }
+    }));
+    expect(holders.sort()).toEqual(['docker-compose.yml']);
   });
 
   // Regression caught: a dependency refresh that moves the tag to a new major
