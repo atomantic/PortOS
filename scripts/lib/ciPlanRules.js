@@ -316,6 +316,11 @@ const GENERATED_DATA_RULES = [
 // children — `scripts/` is past the memo's directory limit, and hashing the
 // whole tree would fail the installer suites closed instead of keying the pins.
 export const FIXTURE_OWNERS = [
+  {
+    re: /^docker\/vllm-qwen\/[^/]+$/,
+    dir: 'docker/vllm-qwen',
+    tests: ['server/services/vllmQwenManager.test.js'],
+  },
   // The snapshot contract executes this shell verifier against signed fixtures;
   // neither the planner's import graph nor the test memo can see those reads.
   {

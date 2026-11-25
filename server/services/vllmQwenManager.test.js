@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'fs';
+import { createHash } from 'crypto';
+import { readFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { pinPlatform } from '../lib/testHelper.js';
@@ -25,7 +27,10 @@ const sourceFiles = vi.hoisted(() => ({
   rm: vi.fn(async () => {}),
   writeFile: vi.fn(async () => {}),
 }));
-vi.mock('fs/promises', async (importOriginal) => ({ ...(await importOriginal()), ...sourceFiles }));
+vi.mock('fs/promises', async (importOriginal) => {
+  const fs = await importOriginal();
+  return { ...fs, ...sourceFiles, readFile: vi.fn(fs.readFile) };
+});
 
 // The compose project on disk. Mocked so the suite never stats a real checkout.
 // PARTIAL for the rest of the module: `vllmProjectSetupState` is a pure
@@ -167,8 +172,26 @@ describe('provisionVllmQwenProject', () => {
       expect.stringContaining('127.0.0.1:${PORT:-18020}:${PORT:-18020}'),
       { flag: 'wx' },
     );
-    expect(sourceFiles.writeFile.mock.calls[0][1]).toContain('pull_policy: never');
     expect(sourceFiles.writeFile).toHaveBeenCalledAfter(buffered.bufferedSpawnOrThrow);
+    const staged = new Map(sourceFiles.writeFile.mock.calls.map(([path, content]) => [path, content.toString()]));
+    const override = staged.get(join(STAGING, 'compose.override.yaml'));
+    const manifest = await readFile(new URL('../../docker/vllm-qwen/manifest.sha256', import.meta.url));
+    expect(override).toContain(`image: portos-vllm-qwen:${createHash('sha256').update(manifest).digest('hex')}`);
+    expect(override).toContain('pull_policy: never');
+    const packaging = staged.get(join(STAGING, 'docker', 'portos', 'provision.patch'));
+    expect(packaging).toMatch(/^\+FROM nvidia\/cuda@sha256:[0-9a-f]{64}$/m);
+    expect(packaging).toContain('--only-binary=:all: --require-hashes -r docker/portos/requirements.lock');
+    expect(packaging).toMatch(/^\+ {2}hf download "\$HF_REPO" --revision [0-9a-f]{40} --local-dir/m);
+    expect(packaging).toMatch(/^\+\s+revision="[0-9a-f]{40}"/m);
+    expect(packaging).toMatch(/^\+revision = "[0-9a-f]{40}" if BF16 else "[0-9a-f]{40}"/m);
+    expect(packaging).toContain('+snapshot_download(REPO, revision=revision,');
+    expect(staged.get(join(STAGING, 'docker', 'portos', 'requirements.lock'))).toMatch(/^vllm==0\.27\.1 --hash=sha256:[0-9a-f]{64}$/m);
+    expect(staged.get(join(STAGING, 'docker', 'portos', 'install-apt.sh'))).toContain('sha256sum --check --strict cuda-packages.sha256');
+    expect(staged.get(join(STAGING, 'docker', 'portos', 'cuda-packages.sha256'))).toMatch(/^[0-9a-f]{64} {2}cuda-nvcc-13-0_.+_amd64\.deb$/m);
+    expect(buffered.bufferedSpawnOrThrow).toHaveBeenCalledWith(
+      '/usr/bin/git', ['-C', STAGING, 'apply', '--index', 'docker/portos/provision.patch'], expect.any(Object),
+    );
+    expect(sourceFiles.rename.mock.invocationCallOrder[0]).toBeGreaterThan(buffered.bufferedSpawnOrThrow.mock.invocationCallOrder[1]);
     expect(sourceFiles.rename).toHaveBeenCalledWith(STAGING, DIR);
     expect(sourceFiles.rename).toHaveBeenCalledAfter(sourceFiles.writeFile);
     expect(files.atomicWrite).toHaveBeenCalledAfter(sourceFiles.rename);
@@ -205,11 +228,29 @@ describe('provisionVllmQwenProject', () => {
     expect(dockerCalls()).toEqual(['version --format {{.Server.Version}}']);
   });
 
+  it.each(['missing checksum', 'changed bytes', 'patch conflict'])('stops before publishing a checkout on %s', async (fault) => {
+    stageFreshProject();
+    if (fault === 'missing checksum') {
+      readFile.mockResolvedValueOnce(`# HyperQwen ${VLLM_UPSTREAM_REVISION}\n`);
+    } else if (fault === 'changed bytes') {
+      const manifest = await readFile(new URL('../../docker/vllm-qwen/manifest.sha256', import.meta.url), 'utf8');
+      readFile.mockResolvedValueOnce(manifest).mockResolvedValueOnce(Buffer.from('modified patch'));
+    } else {
+      buffered.bufferedSpawnOrThrow.mockResolvedValueOnce({ stdout: VLLM_UPSTREAM_REVISION }).mockRejectedValueOnce(new Error('patch does not apply'));
+    }
+
+    expect(await provision()).toMatchObject({ success: false, error: expect.stringMatching(/checksum mismatch for provision.patch|patch does not apply/) });
+    expect(sourceFiles.rename).not.toHaveBeenCalled();
+    expect(files.atomicWrite).not.toHaveBeenCalled();
+    expect(dockerCalls()).toEqual(['version --format {{.Server.Version}}']);
+  });
+
   it('reuses an existing operator checkout without running Git', async () => {
     project.inspectVllmQwenProject.mockResolvedValue(clonedProject);
 
     expect(await provision()).toEqual({ success: true });
     expect(sourceFiles.mkdtemp).not.toHaveBeenCalled();
+    expect(sourceFiles.writeFile).not.toHaveBeenCalled();
     expect(buffered.bufferedSpawnOrThrow).not.toHaveBeenCalled();
     expect(streaming.runStreamingCommand.mock.calls.every(([cmd]) => cmd === 'docker')).toBe(true);
     expect(dockerCalls()).toEqual([
@@ -466,6 +507,16 @@ describe('provisionVllmQwenProject', () => {
 
     expect(result).toMatchObject({ success: false, error: expect.stringMatching(/docker compose build failed/) });
     expect(dockerCalls()).not.toContain('compose run --rm prepare');
+  });
+
+  it('returns a pinned-model download failure from prepare', async () => {
+    stageFreshProject();
+    streaming.runStreamingCommand.mockImplementation(async (_cmd, args) => (
+      args.includes('prepare') ? { success: false, error: 'requested revision unavailable' } : { success: true }
+    ));
+
+    expect(await provision()).toMatchObject({ success: false, error: expect.stringContaining('requested revision unavailable') });
+    expect(dockerCalls()).toEqual(['version --format {{.Server.Version}}', 'compose build', 'compose run --rm prepare']);
   });
 
   it('cancels between steps, and never kills a build or a prepare mid-flight', async () => {
