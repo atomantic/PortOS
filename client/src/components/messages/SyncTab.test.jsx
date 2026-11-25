@@ -293,6 +293,23 @@ describe('SyncTab token debug', () => {
     expect(api.getMessageTokenStatus).toHaveBeenCalledTimes(2);
   });
 
+  it('reports API rejection even when the probe returns token metadata', async () => {
+    api.getMessageTokenStatus.mockResolvedValue(statuses);
+    api.testMessageToken.mockResolvedValue({
+      token: { provider: 'outlook' },
+      api: { success: false, status: 401, error: 'InvalidAuthenticationToken' },
+    });
+    renderTab();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Test outlook token' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
+      'outlook token test failed: HTTP 401 — InvalidAuthenticationToken',
+    ));
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(api.getMessageTokenStatus).toHaveBeenCalledTimes(2);
+  });
+
   it('clears a cached token', async () => {
     api.getMessageTokenStatus.mockResolvedValue(statuses);
     api.clearMessageToken.mockResolvedValue({ cleared: true, provider: 'outlook' });

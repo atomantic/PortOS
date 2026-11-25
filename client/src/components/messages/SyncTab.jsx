@@ -142,8 +142,15 @@ export default function SyncTab({ accounts, onRefresh, accountsUnavailable = fal
 
   const handleTestToken = async (provider) => {
     const result = await testMessageToken(provider).catch(() => null);
-    if (result?.token) toast.success(`${provider} token is valid`);
-    else toast.error(`${provider} token is invalid or expired`);
+    if (result?.api?.success === true) {
+      toast.success(`${provider} token is valid`);
+    } else {
+      const { status, error } = result?.api ?? {};
+      const details = [status && `HTTP ${status}`, error].filter(Boolean).join(' — ');
+      toast.error(details
+        ? `${provider} token test failed: ${details}`
+        : `${provider} token is invalid or expired`);
+    }
     fetchTokenStatus();
   };
 
