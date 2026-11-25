@@ -47,36 +47,48 @@ export function useTaskModelPins({ taskType, config, providers, activeProviderId
     executionOptions: config?.executionOptions,
   }), [config?.providerId, config?.model, config?.effort, config?.executionOptions]);
 
-  const [pins, setPins] = useState(persisted);
-  const [saving, setSaving] = useState(false);
-
-  const writeRef = useRef(null);
-  const synced = useRef(persisted);
+  const activeTask = useRef({ type: taskType, synced: persisted, write: null });
+  if (activeTask.current.type !== taskType) {
+    activeTask.current = { type: taskType, synced: persisted, write: null };
+  }
+  const task = activeTask.current;
+  const [draft, setDraft] = useState({ task, pins: persisted });
+  const [busyTask, setBusyTask] = useState(null);
+  const pins = draft.task === task ? draft.pins : persisted;
+  const saving = busyTask === task;
 
   useEffect(() => {
-    if (saving || synced.current === persisted) return;
-    synced.current = persisted;
-    setPins(persisted);
-  }, [persisted, saving]);
+    if (busyTask && !saving) {
+      setBusyTask(null);
+      onBusyChange?.(false);
+    }
+    if (saving || task.synced === persisted) return;
+    task.synced = persisted;
+    setDraft({ task, pins: persisted });
+  }, [busyTask, onBusyChange, persisted, saving, task]);
 
   // The shared selector may emit model and effort together, or confirm a
   // composed provider before supplying the rest of its route. Merge callbacks
   // from the same turn and serialize any follow-up while Run stays disabled.
   const change = useCallback((patch) => {
-    setPins(prev => ({ ...prev, ...patch }));
-    const pending = writeRef.current;
+    if (activeTask.current !== task) return undefined;
+    setDraft(prev => ({
+      task,
+      pins: { ...(prev.task === task ? prev.pins : persisted), ...patch },
+    }));
+    const pending = task.write;
     if (pending) {
       Object.assign(pending.next, patch);
       return pending.done;
     }
 
     const write = { next: { ...patch }, done: null };
-    writeRef.current = write;
-    setSaving(true);
+    task.write = write;
+    setBusyTask(task);
     onBusyChange?.(true);
     write.done = Promise.resolve().then(async () => {
       let saved = persisted;
-      while (Object.keys(write.next).length) {
+      while (activeTask.current === task && Object.keys(write.next).length) {
         const next = write.next;
         write.next = {};
         const settings = Object.fromEntries(
@@ -86,13 +98,14 @@ export function useTaskModelPins({ taskType, config, providers, activeProviderId
         if (!ok) break;
         saved = { ...saved, ...next };
       }
-      writeRef.current = null;
-      setPins(saved);
-      setSaving(false);
+      if (activeTask.current !== task) return;
+      task.write = null;
+      setDraft({ task, pins: saved });
+      setBusyTask(null);
       onBusyChange?.(false);
     });
     return write.done;
-  }, [onUpdate, taskType, persisted, onBusyChange]);
+  }, [onUpdate, taskType, persisted, onBusyChange, task]);
 
   const toolFree = taskType === 'issue-watcher';
   const { provider, usingActive } = useMemo(

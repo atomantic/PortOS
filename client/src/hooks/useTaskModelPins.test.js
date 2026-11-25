@@ -90,3 +90,35 @@ it('keeps a composed route busy while its provider and remaining fields save in 
   expect(result.current.saving).toBe(false);
   expect(result.current).toMatchObject({ providerId: composite, model: 'gpt-5.6-terra', effort: 'high' });
 });
+
+it('isolates pending pin writes when the active task changes', async () => {
+  let finishPrevious;
+  const onUpdate = vi.fn()
+    .mockImplementationOnce(() => new Promise(resolve => { finishPrevious = resolve; }))
+    .mockResolvedValueOnce(true);
+  const onBusyChange = vi.fn();
+  const config = { providerId: AGY.id, model: 'gemini-3.6-flash' };
+  const { result, rerender } = renderHook(({ taskType }) => useTaskModelPins({
+    taskType, config, providers: [AGY], onUpdate, onBusyChange,
+  }), { initialProps: { taskType: 'code-review' } });
+
+  await act(async () => { result.current.changeProvider('codex.cli@openai'); });
+  act(() => { result.current.changeModel('gpt-5.6-terra'); });
+  const oldChangeEffort = result.current.changeEffort;
+  expect(result.current.saving).toBe(true);
+
+  rerender({ taskType: 'feature-ideas' });
+  expect(result.current).toMatchObject({ providerId: AGY.id, model: 'gemini-3.6-flash', saving: false });
+  expect(onBusyChange).toHaveBeenLastCalledWith(false);
+
+  await act(async () => { await result.current.changeEffort('low'); });
+  await act(async () => {
+    oldChangeEffort('high');
+    finishPrevious(true);
+  });
+  expect(onUpdate.mock.calls).toEqual([
+    ['code-review', { providerId: 'codex.cli@openai', model: null, effort: null }],
+    ['feature-ideas', { effort: 'low' }],
+  ]);
+  expect(result.current).toMatchObject({ providerId: AGY.id, model: 'gemini-3.6-flash', effort: 'low', saving: false });
+});
