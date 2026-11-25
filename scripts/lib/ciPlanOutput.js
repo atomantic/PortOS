@@ -29,7 +29,7 @@ export const CLIENT_BROWSER_FANOUT_SUITES = 4;
 // Parallel runners per test job on a full plan. Decided here rather than in
 // ci.yml because a job-level `if` cannot read the matrix context, so the
 // planner emits the matrix for scoped plans too. Sizing rationale:
-// docs/GITHUB_ACTIONS.md "Full-suite sharding".
+// docs/CI_TEST_SELECTION.md "Full-suite sharding".
 export const FULL_SUITE_SHARDS = { server: 2, client: 4, windows: 1 };
 
 /** Matrix values for one runner: every shard on a full run, one otherwise. */

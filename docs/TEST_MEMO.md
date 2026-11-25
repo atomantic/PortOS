@@ -273,7 +273,7 @@ operates on the normalized value itself as a segment.
 ## Never memoized (fails closed)
 
 A tree guard, named `*.guard.test.js` (the planner selects guards by that
-suffix, see [GITHUB_ACTIONS.md](GITHUB_ACTIONS.md)); any other file in the
+suffix, see [CI_HIDDEN_CONTENT_GATE.md](CI_HIDDEN_CONTENT_GATE.md)); any other file in the
 planner's always-run set or in `TEST_MEMO_NEVER` (the catalog and enumeration
 tests another selector reaches); a
 file whose closure contains the `// test-memo: never` marker; a test file or

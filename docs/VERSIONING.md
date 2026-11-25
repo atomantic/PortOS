@@ -40,7 +40,7 @@ merge) runs the primary suites complete and decides the six native job families
 the tree diff since the last green `main` run; a run gated that way publishes
 no `Full CI Gate`. A pull request into `release` always runs the complete plan
 with every native job and publishes `Full CI Gate`
-([details](GITHUB_ACTIONS.md#native-jobs-on-a-push-to-main)). Run
+([details](CI_NATIVE_JOBS.md#native-jobs-on-a-push-to-main)). Run
 `npm run pregate` before every push and again after rebasing onto a moved
 base, as required by [`AGENTS.md`](../AGENTS.md).
 

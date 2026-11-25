@@ -14,4 +14,4 @@ other path keeps the full plan. The plan is `native_gated`, so it publishes no
 `Full CI Gate`, and Main health will not close a "main is red" issue on a run
 whose `Server tests` jobs did not succeed: only a complete run closes it.
 
-See [GITHUB_ACTIONS.md](GITHUB_ACTIONS.md) for the rest of the impact planner.
+See [CI_TEST_SELECTION.md](CI_TEST_SELECTION.md) for the rest of the impact planner.
