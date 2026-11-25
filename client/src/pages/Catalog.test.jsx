@@ -512,6 +512,17 @@ describe('Catalog page', () => {
     expect(screen.getByText('Filtered Only')).toBeTruthy();
   });
 
+  it('offers a Retry when the Albums view cannot load its facets', async () => {
+    getCatalogFacets.mockRejectedValueOnce(new Error('facets unavailable'));
+    renderCatalog('/catalog?view=albums');
+
+    expect(screen.getByRole('status', { name: 'Loading albums' }).getAttribute('aria-busy')).toBe('true');
+    expect((await screen.findByRole('alert')).textContent).toContain('facets unavailable');
+    expect(screen.queryByText(/No albums yet/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Unsorted / Raw')).toBeTruthy();
+  });
+
   it('switches to the Albums view and lazy-loads the Raw album', async () => {
     renderCatalog();
     await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());

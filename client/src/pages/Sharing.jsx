@@ -13,6 +13,7 @@ import {
   Share2, Plus, Trash2, Folder, Inbox, History, Save, Loader2, Check, X, Users, AlertCircle, RefreshCw, Copy, GitMerge,
 } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
+import EmptyState from '../components/EmptyState';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import ListLoadError from '../components/ui/ListLoadError';
 import useListResource from '../hooks/useListResource';
@@ -484,9 +485,12 @@ function SharingBuckets({ selectedId }) {
           ) : bucketsState === 'error' ? (
             <ListLoadError what="buckets" error={bucketsError} onRetry={retryBuckets} />
           ) : buckets.length === 0 ? (
-            <div className="p-4 bg-port-card border border-port-border rounded-lg text-sm text-gray-500">
-              No buckets yet. Click <span className="text-port-accent">Add bucket</span> to register a synced folder.
-            </div>
+            <EmptyState
+              icon={Folder}
+              message="No buckets yet. Click Add bucket to register a synced folder."
+              actionLabel="Register a bucket"
+              onAction={() => setShowAdd(true)}
+            />
           ) : (
             <ul className="space-y-2">
               {buckets.map((b) => {
@@ -610,9 +614,16 @@ function Inboxlist({ bucket, items, state, error, onRetry, onPromote, onDismiss 
     );
   }
   if (state === 'error') return <ListLoadError what="the inbox" error={error} onRetry={onRetry} />;
-  if (state === 'loading') return <div role="status" className="p-4 text-sm text-gray-500">Loading inbox…</div>;
+  if (state === 'loading') return <PageSkeleton header="none" label="Loading inbox" cards={3} sidebar={false} />;
   if (items.length === 0) {
-    return <div className="p-4 bg-port-card border border-port-border rounded-lg text-sm text-gray-500">No pending imports.</div>;
+    return (
+      <EmptyState
+        icon={Inbox}
+        headingLevel={3}
+        title="No pending imports."
+        message="To review an import here, have a peer share an item into this bucket with Inbox mode enabled."
+      />
+    );
   }
   return (
     <ul className="space-y-2">
@@ -683,9 +694,16 @@ function Inboxlist({ bucket, items, state, error, onRetry, onPromote, onDismiss 
 
 function ActivityList({ manifests, state, error, onRetry }) {
   if (state === 'error') return <ListLoadError what="share activity" error={error} onRetry={onRetry} />;
-  if (state === 'loading') return <div role="status" className="p-4 text-sm text-gray-500">Loading activity…</div>;
+  if (state === 'loading') return <PageSkeleton header="none" label="Loading activity" cards={3} sidebar={false} />;
   if (manifests.length === 0) {
-    return <div className="p-4 bg-port-card border border-port-border rounded-lg text-sm text-gray-500">No share activity yet.</div>;
+    return (
+      <EmptyState
+        icon={History}
+        headingLevel={3}
+        title="No share activity yet."
+        message="Share an item into this bucket to start its activity history."
+      />
+    );
   }
   return (
     <ul className="space-y-1.5">

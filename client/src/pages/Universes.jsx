@@ -12,6 +12,8 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Plus, Globe, Trash2, Users, Workflow as WorkflowIcon, Copy, BadgeCheck } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
+import EmptyState from '../components/EmptyState';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import ImageThumb from '../components/ui/ImageThumb';
@@ -234,13 +236,16 @@ export default function Universes() {
       ) : null}
 
       {universesResource.state === 'loading' ? (
-        <div className="text-gray-500 text-sm">Loading universes…</div>
+        <PageSkeleton header="none" label="Loading universes" cards={3} sidebar={false} />
       ) : universesResource.state === 'error' ? (
         <ListLoadError what="universes" error={universesResource.error} onRetry={universesResource.retry} />
       ) : universes.length === 0 ? (
-        <div className="text-gray-500 text-sm">
-          No universes yet. Click <span className="text-port-accent">New Universe</span> to start.
-        </div>
+        <EmptyState
+          icon={Globe}
+          message="No universes yet. Click New Universe to start."
+          actionLabel="New Universe"
+          actionTo="/universes/new"
+        />
       ) : (
         <>
           {/* Desktop table */}

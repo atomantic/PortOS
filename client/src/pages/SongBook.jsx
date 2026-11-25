@@ -18,6 +18,7 @@ import { useNavigate, useSearchParams, Link } from 'react-router';
 import { ListMusic, Plus, Trash2, Download, Search, X, AlertTriangle } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import PageHeader from '../components/PageHeader';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import Modal from '../components/ui/Modal';
 import EmptyState from '../components/EmptyState';
 import Banner from '../components/ui/Banner';
@@ -238,7 +239,7 @@ export default function SongBook() {
 
       {/* Grid */}
       {loading ? (
-        <p className="text-sm text-gray-500">Loading songs…</p>
+        <PageSkeleton header="none" label="Loading songs" cards={4} sidebar={false} layout="grid" gridColsClass="sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4" />
       ) : loadError ? (
         <Banner
           tone="error"
@@ -267,7 +268,16 @@ export default function SongBook() {
             actionLabel="Import a song"
           />
         ) : (
-          <p className="text-sm text-gray-500">No songs match the current filters.</p>
+          <EmptyState
+            icon={ListMusic}
+            message="No songs match the current filters."
+            actionLabel="Clear filters"
+            onAction={() => setSearchParams((prev) => {
+              const next = new URLSearchParams(prev);
+              for (const key of ['stage', 'instrument', 'tag', 'q', 'due']) next.delete(key);
+              return next;
+            }, { replace: true })}
+          />
         )
       ) : (
         <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-3">

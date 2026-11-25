@@ -114,7 +114,7 @@ describe('Pipeline series list — mobile layout', () => {
     listPipelineSeriesSummaries.mockResolvedValue([]);
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'New Series' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Create a series' }));
     expect(await screen.findByText('No universes yet. Create one under Create → Universes before creating a series.')).toBeTruthy();
   });
 });

@@ -13,6 +13,8 @@ import useListResource from '../hooks/useListResource';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { Plus, Workflow as WorkflowIcon, Trash2, Loader2, Globe2, FileInput, Sparkles, BookOpen, Waypoints } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
+import EmptyState from '../components/EmptyState';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import ListLoadError from '../components/ui/ListLoadError';
@@ -528,11 +530,16 @@ export default function Pipeline() {
       )}
 
       {seriesResource.state === 'loading' ? (
-        <div className="text-gray-500 text-sm">Loading series…</div>
+        <PageSkeleton header="none" label="Loading series" cards={3} sidebar={false} />
       ) : seriesResource.state === 'error' ? (
         <ListLoadError what="series" error={seriesResource.error} onRetry={seriesResource.retry} />
       ) : series.length === 0 ? (
-        <div className="text-gray-500 text-sm">No series yet. Click <span className="text-port-accent">New Series</span> to start.</div>
+        <EmptyState
+          icon={WorkflowIcon}
+          message="No series yet. Click New Series to start."
+          actionLabel="Create a series"
+          onAction={() => setShowForm(true)}
+        />
       ) : (
         <ul className="space-y-2">
           {series.map((s) => {
