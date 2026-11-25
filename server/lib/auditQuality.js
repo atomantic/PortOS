@@ -16,6 +16,8 @@ import { safeJSONParse } from './jsonIo.js';
 const REPORT_PREFIX = 'QUALITY_AUDIT_JSON: ';
 const SLICE_PREFIX = 'AUDIT_SLICE: ';
 const MAX_SLICE_CHARS = 500;
+export const BROAD_COVERAGE_MIN_RATIO = 0.95;
+const broadCoverageMinPercent = BROAD_COVERAGE_MIN_RATIO * 100;
 
 // Each lens must explain how to find candidates before choosing a slice.
 const profileDiscovery = Object.freeze({
@@ -106,7 +108,7 @@ function featurePriorityScope(category, priorityScope) {
   const rules = exempt
     ? [`- P3 areas stay fully in scope for this lane and nothing is removed from the inventory: a vulnerability or migration bug in a dormant feature still shares the server, database, credentials and host privileges. Do not skip or down-rank these paths because the feature is unused.\n${scopeAreaLines(p3)}`]
     : [
-      p3.length ? `- P3, out of scope for this lane: remove every path matching these globs from the step 1 inventory before the signal scan, and never choose one as the slice or name it in AUDIT_SLICE. totalFiles and scannedFiles count only the inventory that remains, so coverage "broad" means every remaining file was scanned. A verified defect in P3 code met while tracing something else is still filed.\n${scopeAreaLines(p3)}` : '',
+      p3.length ? `- P3, out of scope for this lane: remove every path matching these globs from the step 1 inventory before the signal scan, and never choose one as the slice or name it in AUDIT_SLICE. totalFiles and scannedFiles count only the inventory that remains, so coverage "broad" requires scanning at least ${broadCoverageMinPercent}% of that inventory. A verified defect in P3 code met while tracing something else is still filed.\n${scopeAreaLines(p3)}` : '',
       p3.length && AUDIT_DISCOVERY[category].includes('quality:complexity') ? `- Complexity shortlist without the P3 paths (only where the repository has the quality:complexity script): npm run quality:complexity -- ${p3.flatMap(({ globs }) => globs).map(glob => `--exclude '${glob}'`).join(' ')}` : '',
       p2.length ? `- P2: file or fix verified functional or reliability defects only. No polish, micro-optimization, refactor, copy or speculative test work.\n${scopeAreaLines(p2)}` : '',
       p0.length ? `- P0: the first tie-break after severity and user impact, ahead of churn and fan-in, and preferred when rotating slices.\n${scopeAreaLines(p0)}` : '',
@@ -150,7 +152,7 @@ ${category === 'security' ? `   Security assessment: require evidence of attacke
 6. Score the worst finding's severity separately on 1–10: 1–3 minor localized impact, 4–6 material recurring cost, 7–8 major workflow/reliability impact, 9–10 critical data/security/availability failure. Use 0 only when no material finding was verified. List this severity for every finding in the narrative.
 7. Include exactly one single-line QUALITY_AUDIT_JSON: {...} in your completion sentinel summary AND final response, with no secrets or personal data. Replace the example values with observed evidence. The category is fixed to this task; do not rate other categories. Beside it, include exactly one line AUDIT_SLICE: <comma-separated top-level paths or areas deep-reviewed> naming the same slice; PortOS records it so later runs of this lane rotate to other areas. Keep ordinary completion/PR instructions and summaries too. The report's inner JSON "summary" field must contain plain assessment prose only, with no QUALITY_AUDIT_JSON: or AUDIT_SLICE: lines.
 QUALITY_AUDIT_JSON: {"version":2,"category":"${category}","slice":"top-level paths or area deep-reviewed","sliceScore":null,"worstSeverity":0,"coverage":"unavailable","confidence":"low","summary":"Explain the slice assessment and strongest evidence","scannedFiles":0,"totalFiles":0}
-Allowed coverage: broad, partial, unavailable, not-applicable. Allowed confidence: low, medium, high. coverage describes the signal scan in step 1, not the deep review: scannedFiles counts files actually included in the category signal scan; totalFiles is the eligible inventory. Broad requires the whole inventory to be scanned (deep review remains bounded). Partial assessments are excluded from the overall score. For partial coverage, use sliceScore:null when the inspected evidence cannot support a slice score; explain why rather than inventing one. A numeric partial score is provisional. If unavailable or not-applicable, sliceScore must be null and explain why. Even a zero-finding audit returns this assessment.
+Allowed coverage: broad, partial, unavailable, not-applicable. Allowed confidence: low, medium, high. coverage describes the signal scan in step 1, not the deep review: scannedFiles counts files actually included in the category signal scan; totalFiles is the eligible inventory. Broad requires scanning at least ${broadCoverageMinPercent}% of a nonempty inventory (deep review remains bounded). Partial assessments are excluded from the overall score. For partial coverage, use sliceScore:null when the inspected evidence cannot support a slice score; explain why rather than inventing one. A numeric partial score is provisional. If unavailable or not-applicable, sliceScore must be null and explain why. Even a zero-finding audit returns this assessment.
 
 ${featurePriorityScope(category, priorityScope)}${reachabilityCheck(app)}`;
 }
@@ -178,6 +180,9 @@ const reportFields = {
   totalFiles: z.number().int().nonnegative(),
 };
 
+const meetsBroadCoverageMinimum = (scannedFiles, totalFiles) =>
+  totalFiles > 0 && scannedFiles / totalFiles >= BROAD_COVERAGE_MIN_RATIO;
+
 /**
  * Two report shapes are stored side by side (#12076). v1 carried a category-wide
  * `score` the agent extrapolated from a bounded slice, which moved with the slice
@@ -191,7 +196,7 @@ const qualityReportSchema = category => z.discriminatedUnion('version', [
   z.object({ version: z.literal(2), category, slice: z.string().trim().min(1).max(500), sliceScore: scoreSchema, ...reportFields }).strict(),
 ]).refine(r => r.scannedFiles <= r.totalFiles)
   .refine(r => ['unavailable', 'not-applicable'].includes(r.coverage) ? qualityRunScore(r) === null : r.scannedFiles > 0 && (r.coverage === 'partial' || qualityRunScore(r) !== null))
-  .refine(r => r.coverage !== 'broad' || (r.totalFiles > 0 && r.scannedFiles === r.totalFiles));
+  .refine(r => r.coverage !== 'broad' || meetsBroadCoverageMinimum(r.scannedFiles, r.totalFiles));
 export const auditQualityReportSchema = qualityReportSchema(categorySchema);
 // Historical files can carry a retired or newer category without registering it
 // as an active audit or admitting it to the older peer wire contract.
@@ -211,9 +216,16 @@ function qualityRunScore(report) {
  * the machine. The result is still validated by its consumer's schema.
  */
 export function numericQualityReport(report) {
-  if (!report || typeof report !== 'object' || report.version !== 2) return report;
+  if (!report || typeof report !== 'object') return report;
   const { category, worstSeverity, coverage, confidence, scannedFiles, totalFiles } = report;
-  return { version: 1, category, score: qualityRunScore(report), worstSeverity, coverage, confidence, scannedFiles, totalFiles };
+  // Older readers require equal counts for broad rows. Keep the raw counts
+  // on the stored report and project only counts that meet the local minimum.
+  const projectedScannedFiles = coverage === 'broad' && scannedFiles < totalFiles
+    && Number.isSafeInteger(scannedFiles) && Number.isSafeInteger(totalFiles)
+    && meetsBroadCoverageMinimum(scannedFiles, totalFiles) ? totalFiles : scannedFiles;
+  if (report.version === 1 && projectedScannedFiles !== scannedFiles) return { ...report, scannedFiles: projectedScannedFiles };
+  if (report.version !== 2) return report;
+  return { version: 1, category, score: qualityRunScore(report), worstSeverity, coverage, confidence, scannedFiles: projectedScannedFiles, totalFiles };
 }
 
 function sanitizeReportSummary(value) {
@@ -228,12 +240,10 @@ export function parseAuditQualityReport(summary, category) {
   if (lines.length !== 1) return null;
   const raw = safeJSONParse(lines[0].slice(REPORT_PREFIX.length), null);
   if (typeof raw?.summary === 'string') raw.summary = sanitizeReportSummary(raw.summary);
-  // An agent that scanned only part of the inventory but labelled it "broad"
-  // (the common slip) still measured something real. Record it as the partial
-  // assessment it honestly is rather than dropping the whole run's measurement.
+  // Keep scored evidence below the broad coverage minimum as a partial assessment.
   const claim = raw && typeof raw === 'object' && raw.coverage === 'broad' && qualityRunScore(raw) !== null
     && Number.isFinite(raw.scannedFiles) && Number.isFinite(raw.totalFiles)
-    && raw.scannedFiles > 0 && raw.scannedFiles < raw.totalFiles
+    && raw.scannedFiles > 0 && raw.totalFiles > 0 && !meetsBroadCoverageMinimum(raw.scannedFiles, raw.totalFiles)
     ? { ...raw, coverage: 'partial' } : raw;
   const parsed = auditQualityReportSchema.safeParse(claim);
   return parsed.success && parsed.data.category === normalizeAuditTaskType(category) ? parsed.data : null;

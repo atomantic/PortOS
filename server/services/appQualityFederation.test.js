@@ -6,7 +6,7 @@ import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 
 beforeEach(() => resetQualityPeerPullState());
 import { enrichAppsWithQuality, getAppQualityHistory } from './appQuality.js';
-import { qualityFileFromWireSnapshot } from './appQualitySnapshotFormat.js';
+import { classifyQualitySnapshot, qualityFileFromWireSnapshot } from './appQualitySnapshotFormat.js';
 vi.mock('./instances.js', () => mockNoPeers());
 const now = Date.parse('2026-09-10T12:00:00Z');
 const peer = { id: 'peer-a', instanceId: 'instance-a', enabled: true, address: '192.0.2.1', port: 5555 };
@@ -172,11 +172,14 @@ it('matches managed repositories with different local ids and excludes other ori
 it('exports a slice-scored v2 record in the v1 numeric wire shape and reads it back into the window', async () => {
   const v2 = row('security', null);
   v2.report = { version: 2, category: 'security', slice: 'server/services/auth and /Users/person/private', sliceScore: 64, worstSeverity: 5,
-    coverage: 'broad', confidence: 'high', summary: 'Private narrative', scannedFiles: 12, totalFiles: 12 };
+    coverage: 'broad', confidence: 'high', summary: 'Private narrative', scannedFiles: 19, totalFiles: 20 };
   const payload = await exportPortosQuality(peer.instanceId, 30, deps([v2]));
-  expect(payload).toMatchObject({ schemaVersion: 1, measurements: [{ report: { version: 1, category: 'security', score: 64, worstSeverity: 5, coverage: 'broad', confidence: 'high', scannedFiles: 12, totalFiles: 12 } }] });
+  expect(payload).toMatchObject({ schemaVersion: 1, measurements: [{ report: { version: 1, category: 'security', score: 64, worstSeverity: 5, coverage: 'broad', confidence: 'high', scannedFiles: 20, totalFiles: 20 } }] });
   expect(JSON.stringify(payload)).not.toMatch(/slice|Users|narrative|summary/i);
-  expect(qualityFileFromWireSnapshot(payload)).toContain(',64,');
+  const snapshot = await buildQualitySnapshot(undefined, null, deps([v2]));
+  expect(classifyQualitySnapshot(qualityFileFromWireSnapshot(snapshot))).toMatchObject({
+    status: 'v3', records: [{ score: 64, coverage: 'broad', scannedFiles: 20, totalFiles: 20 }],
+  });
   const peerPayload = { ...payload, measurements: [{ ...payload.measurements[0], measurementId: 'a'.repeat(64), assessedAt: '2026-09-10T09:00:00Z' }] };
   const peerFetch = async () => response(peerPayload);
   const apps = [{ id: 'portos-default' }];
@@ -186,7 +189,7 @@ it('exports a slice-scored v2 record in the v1 numeric wire shape and reads it b
 
   const [app] = await enrichAppsWithQuality(apps, { ...deps([v2]), peerFetch });
   expect(app.quality.categories.find(c => c.id === 'security'))
-    .toMatchObject({ score: 64, runScore: 64, slice: v2.report.slice, window: { runs: 1 } });
+    .toMatchObject({ score: 64, runScore: 64, slice: v2.report.slice, scannedFiles: 19, totalFiles: 20, window: { runs: 1 } });
 });
 
 // PortOS's own release evidence goes through the same `.quality.json` path as
