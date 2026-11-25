@@ -728,6 +728,40 @@ describe('MusicVideo typography composition (#8984)', () => {
   });
 });
 
+it('reloads persisted shots when a one-tap render repair fails partway through', async () => {
+  const first = { ...PROJECT_WITH_CLIP.scenes[0], startSec: 0, endSec: 4 };
+  const second = { ...first, sceneId: 's2', order: 1, startSec: 4, endSec: 8 };
+  const project = { ...PROJECT_WITH_CLIP, scenes: [first, second] };
+  let persisted = project;
+  getMusicVideoProject.mockImplementation(async () => persisted);
+  renderMusicVideoProject.mockRejectedValueOnce(Object.assign(new Error('Clips are too short'), {
+    code: 'INSUFFICIENT_CLIP_COVERAGE',
+    context: { shortfalls: [{ sceneId: 's1' }, { sceneId: 's2' }] },
+  }));
+  updateMusicVideoScene.mockImplementationOnce(async (_id, _sceneId, patch) => {
+    const scenes = [{ ...first, ...patch }, second];
+    const updatedAt = '2026-01-01T00:00:01.000Z';
+    persisted = { ...project, scenes, updatedAt };
+    return { edit: editResult(scenes, ['s1'], { updatedAt }) };
+  }).mockRejectedValueOnce(new Error('Second shot could not be saved'));
+
+  await openProject(project, 'review');
+  fireEvent.click(await findEnabledByRole('button', { name: 'Render final' }));
+  const repair = await screen.findByRole('button', { name: 'Hold the last frame on these 2' });
+  getMusicVideoProject.mockClear();
+  fireEvent.click(repair);
+
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Second shot could not be saved'));
+  expect(updateMusicVideoScene).toHaveBeenNthCalledWith(1, project.id, 's1', { holdLastFrame: true }, expect.anything());
+  expect(updateMusicVideoScene).toHaveBeenNthCalledWith(2, project.id, 's2', { holdLastFrame: true }, expect.anything());
+  await waitFor(() => expect(getMusicVideoProject).toHaveBeenCalledWith(project.id, { silent: true }));
+  await openStage('produce');
+  fireEvent.click(await screen.findByRole('button', { name: 'Open Shot 1' }));
+  expect(await screen.findByRole('checkbox', { name: /Hold last frame/ })).toBeChecked();
+  fireEvent.click(await screen.findByRole('button', { name: 'Open Shot 2' }));
+  await waitFor(() => expect(screen.getByRole('checkbox', { name: /Hold last frame/ })).not.toBeChecked());
+});
+
 describe('MusicVideo section layers (#8985)', () => {
   const scenes = [
     { sceneId: 's1', order: 0, prompt: 'a', referenceImageId: 'img1', videoHistoryId: 'h1', startSec: 0, endSec: 4 },

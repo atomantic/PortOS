@@ -110,6 +110,7 @@ export default function useProduceStageWiring({
       })
       .catch((err) => {
         replaceProject(snapshot);
+        void reloadOpenProject(snapshot.id);
         toast.error(err?.message || 'Could not change the shots');
       });
   };
