@@ -194,10 +194,8 @@ export function reconcileHostedMedia(peerInstanceId, kind, filenames, checked) {
       // Keep it as a fallback, but put newly verified evidence first.
       const legacy = !Array.isArray(entries[key]?.hosts) ? hostsOf(entries[key]) : [];
       const hosts = legacy.length ? [] : hostsOf(entries[key]);
-      const index = hosts.findIndex((host) => host.peerId === peerInstanceId);
-      const evidence = { peerId: peerInstanceId, at: new Date().toISOString(), revision: randomUUID(), ...keepPrimary(hosts[index]) };
-      if (index >= 0) hosts[index] = evidence;
-      else hosts.push(evidence);
+      if (hosts.some((host) => host.peerId === peerInstanceId)) continue;
+      hosts.push({ peerId: peerInstanceId, at: new Date().toISOString(), revision: randomUUID() });
       for (const host of legacy) if (host.peerId !== peerInstanceId) hosts.push(host);
       entries[key] = hostEntry(hosts);
       changed = true;

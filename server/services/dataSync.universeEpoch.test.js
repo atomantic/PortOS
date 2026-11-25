@@ -60,6 +60,8 @@ vi.mock('./mediaCollections.js', async (importOriginal) => {
 });
 
 const dataSync = await import('./dataSync.js');
+const { listCollections } = await import('./mediaCollections.js');
+const { listUniverses } = await import('./universeBuilder.js');
 
 afterAll(cleanup);
 
@@ -100,5 +102,29 @@ describe('dataSync — universe mutation-epoch fingerprint', () => {
     epoch += 1;
     const after = await dataSync.getChecksum('mediaCollections');
     expect(after.checksum).not.toBe(before.checksum);
+  });
+
+  it('reuses collection inventory references across media kinds and refilters after a parent edit', async () => {
+    collectionContent = [{
+      id: 'c1', universeId: 'u1', items: [
+        { kind: 'image', ref: 'cover.png' },
+        { kind: 'video', ref: 'clip' },
+      ],
+    }];
+    listCollections.mockClear();
+    listUniverses.mockRejectedValueOnce(new Error('Universe read failed'));
+    const images = () => dataSync.getHostedMediaInventory('mediaCollections', 'image');
+    const videos = () => dataSync.getHostedMediaInventory('mediaCollections', 'video');
+
+    await expect(images()).rejects.toThrow('Universe read failed');
+    expect((await images()).checked).toEqual(['cover.png']);
+    expect((await videos()).checked).toEqual(['clip.mp4']);
+    expect(listCollections).toHaveBeenCalledTimes(2);
+
+    universeContent[0].ephemeral = true;
+    epoch += 1;
+    expect((await images()).checked).toEqual([]);
+    expect((await videos()).checked).toEqual([]);
+    expect(listCollections).toHaveBeenCalledTimes(3);
   });
 });
