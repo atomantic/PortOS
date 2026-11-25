@@ -361,17 +361,21 @@ container keeps its own chat-template default, which is not the same as being
 pinned to a value. So this is a step you take once per install, not something
 the preset does for you.
 
-The provider card's requirements checklist probes `:18020` directly. Its
-**Start** button runs `docker compose --profile single up -d` — but only when it
-can see a prepared project (a compose file in `~/qwen-serving`, or wherever
-`VLLM_QWEN_PROJECT_DIR` points) **and** confirm the weights are already on disk.
-It never builds and never downloads — that is the separate,
-explicitly-named provisioning action above. `prepare` writes them into the project's own
-`models/` directory (compose bind-mounts `${MODELS_DIR:-./models}`), which is
-what PortOS looks at; the `qwen-cache` docker volume alongside it holds only the
-torch.compile / Triton / FlashInfer JIT caches. If PortOS cannot read that
-directory at all, the button says so, and `VLLM_QWEN_WEIGHTS_DIR` is the escape
-hatch for weights kept somewhere else entirely. On Windows the Start button first
+The provider card's requirements checklist probes `:18020` directly. **Start**
+requires a Compose checkout and a complete checkpoint for its single-user model.
+It starts only the serving service, with Compose dependency startup, image pulls
+and builds disabled. Use **Clone, build & prepare** to fetch and prepare missing
+weights.
+
+PortOS checks the project's `models/` bind mount or its configured `MODELS_DIR`.
+It verifies the model metadata and indexed shards, including the fast variant or
+DFlash2 drafter when selected. If the path is unreadable, set
+`VLLM_QWEN_PROJECT_DIR` to the checkout or `VLLM_QWEN_WEIGHTS_DIR` to the
+host-visible location of the weights. The latter only changes PortOS inspection.
+Compose still needs its own matching bind mount. Operator checkouts that set
+`MODEL` to a Hub repo ID must mount its cache, set `HF_HUB_OFFLINE=1` and
+`VERIFY=0` in the project `.env`, and leave the selected snapshot under
+`refs/main` available. On Windows the Start button first
 resolves the WSL2 placement described above, so a project prepared by hand inside
 the distro is found without any configuration.
 

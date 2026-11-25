@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'fs';
 import { createHash } from 'crypto';
 import { readFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -542,7 +542,7 @@ describe('startVllmQwenProject', () => {
     expect(result.success).toBe(true);
     expect(streaming.runStreamingCommand).toHaveBeenCalledWith(
       'docker',
-      ['compose', '--profile', 'single', 'up', '-d'],
+      ['compose', '--profile', 'single', 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'single'],
       expect.any(Function),
       expect.objectContaining({ cwd: DIR }),
     );
@@ -559,7 +559,7 @@ describe('startVllmQwenProject', () => {
 
     expect(streaming.runStreamingCommand).toHaveBeenCalledWith(
       'docker',
-      ['compose', '--profile', 'single', 'up', '-d'],
+      ['compose', '--profile', 'single', 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'single'],
       expect.any(Function),
       expect.objectContaining({ env: { PORT: '18020' } }),
     );
@@ -570,20 +570,68 @@ describe('startVllmQwenProject', () => {
 
     expect(streaming.runStreamingCommand).toHaveBeenCalledWith(
       'docker',
-      ['compose', '--profile', 'single', 'up', '-d'],
+      ['compose', '--profile', 'single', 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'single'],
       expect.any(Function),
       expect.objectContaining({ env: { PORT: '19999' } }),
     );
   });
 
-  it('refuses to run compose when the project is not demonstrably prepared', async () => {
-    project.vllmStartBlockedReason.mockReturnValue('no Qwen weights are cached yet');
+  it.each([
+    ['missing shard', 'empty', /missing or incomplete/],
+    ['interrupted prepare', 'empty', /missing or incomplete/],
+    ['drafter only', 'empty', /missing or incomplete/],
+    ['unreadable cache', 'unknown', /VLLM_QWEN_WEIGHTS_DIR/],
+    ['prepared operator checkout', 'ready', null],
+  ])('checks %s through both setup and Start', async (layout, setup, reason) => {
+    const dir = mkdtempSync(join(tmpdir(), 'vllm-start-'));
+    try {
+      const actual = await vi.importActual('../lib/vllmQwenProject.js');
+      process.env.VLLM_QWEN_PROJECT_DIR = dir;
+      project.inspectVllmQwenProject.mockImplementation(() => actual.inspectVllmQwenProject({
+        HOME: dir,
+        VLLM_QWEN_PROJECT_DIR: dir,
+      }));
+      project.vllmStartBlockedReason.mockImplementation(actual.vllmStartBlockedReason);
+      writeFileSync(join(dir, 'compose.yaml'), 'services: {}\n');
+      const models = join(dir, 'models');
+      const model = join(models, layout === 'drafter only'
+        ? 'Qwen3.8-27B-DFlash2-W4A16' : 'Qwen3.8-27B-W4A16-AutoRound');
+      if (layout === 'unreadable cache') {
+        // A file in place of the configured directory fails readdir even as root.
+        writeFileSync(models, 'not a directory');
+      } else {
+        mkdirSync(model, { recursive: true });
+        for (const name of ['config.json', 'tokenizer.json', 'tokenizer_config.json']) {
+          writeFileSync(join(model, name), '{}');
+        }
+        const shard = 'model.safetensors';
+        const header = Buffer.from(JSON.stringify({ weight: { dtype: 'U8', shape: [1], data_offsets: [0, 1] } }));
+        const length = Buffer.alloc(8);
+        length.writeBigUInt64LE(BigInt(header.length));
+        if (layout !== 'missing shard') {
+          writeFileSync(join(model, shard), Buffer.concat([length, header, Buffer.of(1)]));
+        }
+        if (layout !== 'drafter only') {
+          const tensors = ['lm_head.weight_packed', 'model.embed_tokens.weight_packed',
+            'mtp.layers.0.mlp.down_proj.weight_packed', 'mtp.draft_lm_head.weight_packed'];
+          const weightMap = Object.fromEntries(tensors.map((name) => [name, shard]));
+          writeFileSync(join(model, 'model.safetensors.index.json'), JSON.stringify({ weight_map: weightMap }));
+          if (layout !== 'interrupted prepare') writeFileSync(join(model, 'mtp_draft_vocab_ids.pt'), 'vocab');
+        }
+      }
 
-    const result = await startVllmQwenProject({ emit: () => {}, isCancelled: () => false });
-
-    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/no Qwen weights are cached/) });
-    // The whole point: a 20 GB pull is never started on the user's behalf.
-    expect(streaming.runStreamingCommand).not.toHaveBeenCalled();
+      expect(await readVllmQwenSetupState()).toBe(setup);
+      const result = await startVllmQwenProject({ emit: () => {}, isCancelled: () => false });
+      if (reason) {
+        expect(result).toMatchObject({ success: false, error: expect.stringMatching(reason) });
+        expect(streaming.runStreamingCommand).not.toHaveBeenCalled();
+      } else {
+        expect(result.success).toBe(true);
+        expect(dockerCalls()).toEqual(['compose --profile single up -d --no-deps --no-build --pull never single']);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('settles a Windows host\'s project directory before looking for the project', async () => {

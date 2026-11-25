@@ -294,7 +294,7 @@ export async function provisionVllmQwenProject({ emit, isCancelled }) {
     project = await inspectVllmQwenProject();
   } else {
     emit(alreadyPrepared
-      ? `The project at ${dir} is already built and prepared — checking its .env, then starting it.`
+      ? `The project at ${dir} has prepared weights — checking its .env and selected model.`
       : `Reusing the existing checkout at ${dir}.`);
   }
 
@@ -308,7 +308,11 @@ export async function provisionVllmQwenProject({ emit, isCancelled }) {
   const env = await ensureVllmEnvFile(dir, emit);
   await applyVllmApiKeyToProviders(env.effective[VLLM_API_KEY_VAR], emit);
 
-  if (alreadyPrepared) return { success: true };
+  // Provisioning can add the default SPEC=dflash2 to a previously prepared
+  // operator checkout. Recheck the selection before deciding to skip prepare.
+  if (alreadyPrepared && vllmProjectSetupState(await inspectVllmQwenProject()) === 'ready') {
+    return { success: true };
+  }
   if (isCancelled()) return { success: false, error: 'cancelled before the image was built' };
 
   emit('Building the vLLM image locally (~9.5 GB).');
@@ -353,10 +357,10 @@ export async function startVllmQwenProject({ emit, endpoint, isCancelled }) {
   if (isCancelled()) return { success: false, error: 'Cancelled before the container was started.' };
   const port = localEndpointPort(endpoint) || PORTS.VLLM_QWEN;
   emit(`Starting the vLLM container from ${project.dir} (${project.composeFile}).`);
-  emit('The image and weights are already on disk — this only brings the service up.');
+  emit('The weights are ready. Starting the serving service with the local image.');
   return runStreamingCommand(
     'docker',
-    ['compose', '--profile', 'single', 'up', '-d'],
+    ['compose', '--profile', 'single', 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'single'],
     emit,
     { timeoutMs: CONTROL_TIMEOUT_MS, cwd: project.dir, env: { PORT: String(port) } },
   );
