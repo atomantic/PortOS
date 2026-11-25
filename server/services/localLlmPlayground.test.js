@@ -135,11 +135,35 @@ describe('runLocalLlmTest timeout/abort contract', () => {
     finalizeRunRecord.mockResolvedValue(undefined);
   });
 
-  afterEach(() => { delete global.fetch; });
+  afterEach(() => {
+    vi.useRealTimers();
+    delete global.fetch;
+  });
 
   const stubStream = (reader) => {
     global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, body: { getReader: () => reader } });
   };
+
+  const waitForAbort = (signal) => new Promise((_, reject) => {
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  });
+
+  async function runToDeadline(options, lines) {
+    vi.useFakeTimers();
+    global.fetch = vi.fn((_url, { signal }) => {
+      if (!lines) return waitForAbort(signal);
+      const reader = makeReader(lines);
+      const read = reader.read;
+      reader.read = async () => {
+        const chunk = await read();
+        return chunk.done ? waitForAbort(signal) : chunk;
+      };
+      return Promise.resolve({ ok: true, status: 200, body: { getReader: () => reader } });
+    });
+    const result = runLocalLlmTest({ modelId: 'm1', prompt: 'hi', timeoutMs: 5000, ...options });
+    await vi.advanceTimersByTimeAsync(5000);
+    return result;
+  }
 
   it.each([
     { numCtx: 16384, extraBody: {} },
@@ -178,28 +202,26 @@ describe('runLocalLlmTest timeout/abort contract', () => {
   });
 
   it('returns the content streamed before an abort as text and persists it on the failed run', async () => {
-    stubStream(makeReader([sse({ content: 'Hello ' }), sse({ content: 'world' })], { abort: true }));
-
-    const result = await runLocalLlmTest({ backend: 'lmstudio', modelId: 'm1', prompt: 'hi', timeoutMs: 5000 });
+    const result = await runToDeadline({ backend: 'lmstudio' }, [sse({ content: 'Hello ' }), sse({ content: 'world' })]);
 
     expect(result.error).toContain('Timed out');
     expect(result.text).toBe('Hello world');
     expect(finalizeRunRecord).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: 'run-1', output: 'Hello world', success: false, exitCode: 1 }),
+      expect.objectContaining({ runId: 'run-1', output: 'Hello world', success: false, exitCode: 1, reportFailure: false }),
     );
   });
 
-  // A big local model that needs longer than the caller allowed is not a broken
-  // provider: the partial text proves it was streaming, `timeoutMs` is the
-  // caller's own knob, and the error comes straight back inline. Reporting it
-  // through the host's provider-failure hook filed a CoS investigation task per
-  // slow playground run.
-  it('does not report a run cut off by its own deadline as a provider failure', async () => {
-    stubStream(makeReader([sse({ content: 'Hello ' })], { abort: true }));
+  it('records a native Ollama deadline before response headers without dispatching provider recovery', async () => {
+    getProviderById.mockResolvedValue({ id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1' });
+    createRun.mockResolvedValue({ runId: 'run-1', provider: { id: 'ollama' } });
 
-    await runLocalLlmTest({ backend: 'lmstudio', modelId: 'm1', prompt: 'hi', timeoutMs: 5000 });
+    const result = await runToDeadline({ backend: 'ollama', nativeOllamaUsage: true });
 
-    expect(finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({ reportFailure: false }));
+    expect(global.fetch).toHaveBeenCalledWith('http://localhost:11434/api/chat', expect.anything());
+    expect(result).toMatchObject({ error: 'Timed out after 5000ms', text: '', timings: { ttftMs: null } });
+    expect(finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+      error: 'Timed out after 5000ms', success: false, exitCode: 1, reportFailure: false,
+    }));
   });
 
   it('still reports a genuine provider failure through the host hook', async () => {
@@ -212,9 +234,7 @@ describe('runLocalLlmTest timeout/abort contract', () => {
   });
 
   it('surfaces a reasoning-only partial when no visible content streamed before the abort', async () => {
-    stubStream(makeReader([sse({ reasoning: 'thinking hard…' })], { abort: true }));
-
-    const result = await runLocalLlmTest({ backend: 'lmstudio', modelId: 'm1', prompt: 'hi', timeoutMs: 5000 });
+    const result = await runToDeadline({ backend: 'lmstudio' }, [sse({ reasoning: 'thinking hard…' })]);
 
     expect(result.error).toContain('Timed out');
     expect(result.text).toBe('thinking hard…');

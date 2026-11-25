@@ -113,8 +113,10 @@ const SAMPLE_MAX_TOKENS = BENCHMARK_PROFILE.maxTokens;
 // Its time is recorded separately as `warmup`, never folded into `performance`.
 const WARMUP_MAX_TOKENS = 16;
 const WARMUP_PROMPT = 'Reply with the single word: ready.';
+// A cold runtime can spend longer than a measured sample's budget loading weights and compiling kernels.
+const WARMUP_TIMEOUT_MS = 300000;
 
-// Per-sample ceiling; a timeout is recorded as a resource failure and the run moves on.
+// Per-sample ceiling; a timeout is recorded as a resource failure.
 const SAMPLE_TIMEOUT_MS = 120000;
 
 const SAMPLE_SYSTEM_PROMPT =
@@ -524,14 +526,14 @@ async function measureModel({ backend, modelId, contexts, benchmark = false, tun
   // stream opens — an unconfigured provider. Catch that into the same result
   // shape so one bad backend records a failed sample instead of aborting the
   // whole assessment with no evidence at all.
-  const generate = (prompt, maxTokens) => {
+  const generate = (prompt, maxTokens, timeoutMs) => {
     const shared = {
       modelId,
       prompt,
       systemPrompt: SAMPLE_SYSTEM_PROMPT,
       temperature: 0,
       maxTokens,
-      timeoutMs: SAMPLE_TIMEOUT_MS,
+      timeoutMs,
       extraBody: request,
       signal,
       // Ollama's OpenAI-compatible shim frequently omits usage even though the
@@ -549,7 +551,7 @@ async function measureModel({ backend, modelId, contexts, benchmark = false, tun
   let warmup = null;
   if (!signal?.aborted) {
     emit({ event: 'start', sampleIndex: 0, sampleCount: contexts.length, message: `${modelId}: warming up (not measured)…` });
-    const result = await generate(WARMUP_PROMPT, WARMUP_MAX_TOKENS);
+    const result = await generate(WARMUP_PROMPT, WARMUP_MAX_TOKENS, WARMUP_TIMEOUT_MS);
     const timing = (value) => (Number.isFinite(value) ? value : null);
     // A failed warm-up is recorded, not fatal: the measured samples below carry their own errors.
     warmup = { ok: !result?.error, ttftMs: timing(result?.timings?.ttftMs), totalMs: timing(result?.timings?.totalMs), error: result?.error || null };
@@ -565,7 +567,7 @@ async function measureModel({ backend, modelId, contexts, benchmark = false, tun
       contextTokens: context,
       message: `${modelId}: sample ${samples.length + 1}/${contexts.length} at ${context.toLocaleString('en-US')} tokens of context…`,
     });
-    const result = await generate(buildSamplePrompt(context), SAMPLE_MAX_TOKENS);
+    const result = await generate(buildSamplePrompt(context), SAMPLE_MAX_TOKENS, SAMPLE_TIMEOUT_MS);
 
     const sample = toSample(context, result);
     samples.push(sample);
