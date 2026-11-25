@@ -29,7 +29,7 @@ import { uploadSingle } from '../lib/multipart.js';
 import { isSupportedMusicUpload, MUSIC_UPLOAD_MAX_BYTES } from '../services/pipeline/musicLibrary.js';
 import { attachVocalStem, detachVocalStem } from '../services/musicVideo/vocalStem.js';
 import { addAudioLayer } from '../services/musicVideo/audioLayerUpload.js';
-import { listProjects, listProjectNames, listMidiSourceRows, listProjectPage, getProject, createProject, updateProject, deleteProject, setProjectAnalysis, setProjectSections, appendTakesAcrossScenes, mutateProjectRecord } from '../services/musicVideo/projects.js';
+import { listProjects, listProjectNames, listMidiSourceRows, listProjectPage, listProjectVersionPage, getProject, createProject, updateProject, deleteProject, setProjectAnalysis, setProjectSections, appendTakesAcrossScenes, mutateProjectRecord } from '../services/musicVideo/projects.js';
 import { updateProject as updateProjectEdit, previewProjectPacingRecut, recutProjectToPacing, markMediaPoolAssets } from '../services/musicVideo/projectBoardEdits.js';
 import { listProjectCompletion, cloneProject, refreshSongStyleFromSuno } from '../services/musicVideo/projectFilmActions.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
@@ -103,6 +103,12 @@ router.get('/', asyncHandler(async (req, res) => {
     const cursor = parseInt(query.cursor, 10);
     const paging = parsePagination(summary && Number.isInteger(cursor) && cursor >= 0 ? { ...query, offset: String(cursor) } : query,
       { defaultLimit: 50, maxLimit: 500 });
+    // Family navigation is intentionally independent of the index's name and status filters.
+    if (summary && query.versionRoot) {
+      const page = await listProjectVersionPage(query.versionRoot, paging);
+      const next = page.offset + page.limit;
+      return res.json({ ...page, nextCursor: next < page.total ? String(next) : null });
+    }
     const needle = (query.q || '').trim().toLowerCase();
     const matchesName = needle ? (project) => String(project.name || '').toLowerCase().includes(needle) : null;
     const stale = summary && query.statusFilter

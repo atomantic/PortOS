@@ -26,8 +26,8 @@ import {
 } from '../test/musicVideoPageMocks.jsx';
 import { MUSIC_VIDEO_STAGES } from '../lib/musicVideoStages.js';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
-import { MemoryRouter, useNavigate } from 'react-router';
-import { listMusicVideoProjects, listMusicVideoProjectSummaries, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject, deleteMusicVideoProject, analyzeMusicVideoProject, importMusicVideoTrackLyrics, getMusicVideoProject, resumeMusicVideoRevision, cancelMusicVideoRevision, approveMusicVideoCastAndSets, stopMusicVideoProduction, buildMusicVideoPublishKit, getMusicVideoCatalogCompletion } from '../services/apiMusicVideo.js';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router';
+import { listMusicVideoProjects, listMusicVideoProjectSummaries, listMusicVideoProjectVersions, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject, deleteMusicVideoProject, analyzeMusicVideoProject, importMusicVideoTrackLyrics, getMusicVideoProject, resumeMusicVideoRevision, cancelMusicVideoRevision, approveMusicVideoCastAndSets, stopMusicVideoProduction, buildMusicVideoPublishKit, getMusicVideoCatalogCompletion } from '../services/apiMusicVideo.js';
 import { listTracks } from '../services/apiTracks.js';
 
 installMusicVideoPageHooks();
@@ -328,6 +328,8 @@ describe('MusicVideo stage-only nav URLs (#10303)', () => {
     );
     await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent('/music-video/mv-1/board'));
     expect(screen.queryByText(/Project not found/)).not.toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name })).toBeInTheDocument();
+    expect(listMusicVideoProjectVersions).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, { silent: true });
   });
 
   it('falls back to the project list when there are no projects', async () => {
@@ -500,11 +502,11 @@ describe('MusicVideo index follows projects changed elsewhere (#15724)', () => {
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
     expect(listMusicVideoProjectSummaries).not.toHaveBeenCalled();
     fireEvent.focus(screen.getByLabelText('Project'));
-    await waitFor(() => expect(screen.getByRole('option', { name: 'Other Project' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Other Project (v1)' })).toBeInTheDocument());
     const summaryCalls = listMusicVideoProjectSummaries.mock.calls.length;
     await pushSocket('music-video:project:changed', { id: 'mv-other' });
-    await waitFor(() => expect(screen.getByRole('option', { name: 'Renamed Other' })).toBeInTheDocument());
-    expect(screen.queryByRole('option', { name: 'Other Project' })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Renamed Other (v1)' })).toBeInTheDocument());
+    expect(screen.queryByRole('option', { name: 'Other Project (v1)' })).not.toBeInTheDocument();
     expect(getMusicVideoProject).toHaveBeenCalledWith('mv-other', { silent: true });
     expect(listMusicVideoProjectSummaries).toHaveBeenCalledTimes(summaryCalls);
   });
@@ -643,6 +645,39 @@ describe('MusicVideo project versions', () => {
     await waitFor(() => expect(cloneMusicVideoProject).toHaveBeenCalledWith('mv-1', {}, { silent: true }));
     await screen.findByRole('heading', { level: 2, name: 'Neon Run v2' });
     expect(screen.getByRole('button', { name: 'Rename v2' })).toBeTruthy();
+  });
+
+  it('labels both versions in the project picker and switches the title version on the same stage', async () => {
+    const v1 = { ...PROJECT_WITH_CLIP, version: 1 };
+    const v2 = { ...PROJECT_WITH_CLIP, id: 'mv-v2', rootProjectId: v1.id, parentProjectId: v1.id, version: 2, name: `${v1.name} v2` };
+    const other = { ...PROJECT_WITH_CLIP, id: 'mv-other', name: 'Unrelated Project', version: 1 };
+    getMusicVideoProject.mockImplementation(async id => [v1, v2, other].find(project => project.id === id));
+    listMusicVideoProjectVersions.mockResolvedValue([v2, v1]);
+    listMusicVideoProjectSummaries.mockResolvedValue({ items: [other, v2], total: 3, nextCursor: '2' });
+    const SearchProbe = () => <span data-testid="version-search">{useLocation().search}</span>;
+    render(
+      <MemoryRouter initialEntries={[ `/music-video/${v2.id}/board?q=Night` ]}>
+        <LocationProbe />
+        <SearchProbe />
+        {MV_ROUTES}
+      </MemoryRouter>,
+    );
+    const version = await screen.findByRole('combobox', { name: 'Project version' });
+    expect(listMusicVideoProjectVersions).toHaveBeenCalledWith(v1.id, { silent: true });
+    expect(version).toHaveValue(v2.id);
+    expect(within(version).getAllByRole('option').map(option => option.textContent)).toEqual(['v2', 'v1']);
+    expect(version.nextElementSibling).toBe(screen.getByRole('button', { name: 'Rename v2' }));
+    const project = screen.getByLabelText('Project');
+    fireEvent.focus(project);
+    expect(await within(project).findByRole('option', { name: 'Unrelated Project (v1)' })).toBeInTheDocument();
+    expect(within(project).getByRole('option', { name: `${v1.name} (v1)` })).toHaveValue(v1.id);
+    expect(within(project).getByRole('option', { name: `${v1.name} (v2)` })).toHaveValue(v2.id);
+
+    fireEvent.change(version, { target: { value: v1.id } });
+    await screen.findByRole('heading', { level: 2, name: v1.name });
+    expect(screen.getByTestId('loc')).toHaveTextContent(`/music-video/${v1.id}/board`);
+    expect(screen.getByTestId('version-search')).toHaveTextContent('?q=Night');
+    expect(await screen.findByRole('combobox', { name: 'Project version' })).toHaveValue(v1.id);
   });
 
   it('omits media type parenthetical in the project picker options', async () => {

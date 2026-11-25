@@ -291,6 +291,29 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
     }
   });
 
+  it('loads a family page as just version names and ids, skipping tombstones', async () => {
+    const records = [
+      [{ id: 'mv-root', name: 'Original' }, '2026-01-01', false],
+      [{ id: 'mv-fork', rootProjectId: 'mv-root', name: 'Renamed fork', version: 2, scenes: [{ prompt: 'unused' }] }, '2026-02-01', false],
+      [{ id: 'mv-deleted', rootProjectId: 'mv-root', name: 'Deleted', version: 3 }, '2026-03-01', true],
+      [{ id: 'mv-other', name: 'Other' }, '2026-04-01', false],
+    ];
+    for (const [record, createdAt, deleted] of records) {
+      await query(`INSERT INTO music_video_projects (id, data, created_at, deleted)
+        VALUES ($1, $2::jsonb, $3, $4)`, [record.id, toPgJson(record), createdAt, deleted]);
+    }
+    expect(await db.listProjectVersionPage('mv-root', { limit: 1, offset: 0 })).toEqual({
+      limit: 1, offset: 0, total: 2,
+      items: [{ id: 'mv-fork', name: 'Renamed fork', version: 2, rootProjectId: 'mv-root' }],
+    });
+    expect(await db.listProjectVersionPage('mv-root', { limit: 1, offset: 1 })).toEqual({
+      limit: 1, offset: 1, total: 2,
+      items: [{ id: 'mv-root', name: 'Original', version: 1, rootProjectId: 'mv-root' }],
+    });
+    expect(await db.listProjectVersionPage('mv-root', { limit: 1, offset: 2 }))
+      .toEqual({ limit: 1, offset: 2, total: 2, items: [] });
+  });
+
   it('hydrates only a requested page while preserving legacy timestamp fallbacks and excluding tombstones', async () => {
     const records = Array.from({ length: 20 }, (_, i) => ({ id: `mv-page-${i}`,
       createdAt: i === 19 ? null : `2026-01-${String(i + 1).padStart(2, '0')}`,

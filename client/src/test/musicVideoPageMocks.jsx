@@ -15,7 +15,7 @@ import { expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useNavigate, useLocation } from 'react-router';
 import MusicVideo from '../pages/MusicVideo.jsx';
-import { listMusicVideoProjects, listMusicVideoProjectSummaries, getMusicVideoProject, getMusicVideoCatalogCompletion } from '../services/apiMusicVideo.js';
+import { listMusicVideoProjects, listMusicVideoProjectSummaries, listMusicVideoProjectVersions, getMusicVideoProject, getMusicVideoCatalogCompletion } from '../services/apiMusicVideo.js';
 vi.mock('../hooks/useMediaUsages', () => ({ useMediaUsages: () => ({}), refreshMediaUsages: () => Promise.resolve() }));
 vi.mock('../services/apiCatalog.js', async (importOriginal) => ({ ...await importOriginal(), listCatalogIngredientMedia: vi.fn(async () => []), listCatalogIngredientsMedia: vi.fn(async () => ({})) }));
 vi.mock('../hooks/usePrevizJobs.js', () => ({ default: () => ({ running: [], finished: null, drafted: 0, setCount: 0, step: null }) }));
@@ -76,6 +76,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
     const res = await listMusicVideoProjects(params, options);
     return Array.isArray(res) ? { items: res, total: res.length, nextCursor: null } : res;
   }),
+  listMusicVideoProjectVersions: vi.fn(async () => []),
   getMusicVideoCatalogCompletion: vi.fn(async () => []),
   createMusicVideoProject: vi.fn(),
   cloneMusicVideoProject: vi.fn(),
@@ -531,6 +532,7 @@ export function installMusicVideoPageHooks() {
       const res = await listMusicVideoProjects(params, options);
       return Array.isArray(res) ? { items: res, total: res.length, nextCursor: null } : res;
     });
+    listMusicVideoProjectVersions.mockReset().mockResolvedValue([]);
     getMusicVideoProject.mockReset();
     getMusicVideoProject.mockImplementation(async id => (await listMusicVideoProjects({ silent: true })).find(project => project.id === id));
     getMusicVideoCatalogCompletion.mockReset();

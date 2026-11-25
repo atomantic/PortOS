@@ -35,6 +35,23 @@ export const {
   persist, listProjects, listProjectPage, getProject, getProjectsByIds, listProjectIds, listProjectNames,
 } = store;
 
+/** Only the version labels: do not hydrate the JSONB scenes or presentation state. */
+export async function listProjectVersionPage(rootId, { limit, offset }) {
+  const { rows: [page] } = await query(`
+    WITH family AS (
+      SELECT id, data->>'name' AS name, COALESCE(data->'version', '1'::jsonb) AS version, created_at
+      FROM music_video_projects
+      WHERE deleted = FALSE AND COALESCE(NULLIF(data->>'rootProjectId', ''), id) = $1
+    ), version_page AS (
+      SELECT * FROM family ORDER BY created_at DESC, id LIMIT $2 OFFSET $3
+    )
+    SELECT (SELECT COUNT(*)::int FROM family) AS total,
+           COALESCE((SELECT json_agg(json_build_object('id', id, 'name', name, 'version', version, 'rootProjectId', $1::text)
+             ORDER BY created_at DESC, id) FROM version_page), '[]'::json) AS items
+  `, [rootId, limit, offset]);
+  return { ...page, limit, offset };
+}
+
 export async function listMidiSourceRows() {
   // Keep the listProjects order: the first candidate wins a timestamp tie
   // and fixes the track's position even if a later candidate replaces it.

@@ -22,6 +22,15 @@ export const {
   loadAll, saveAll, loadAllAndIndex, listProjects, listProjectPage, getProject, getProjectsByIds, listProjectIds, listProjectNames,
 } = store;
 
+export async function listProjectVersionPage(rootId, { limit, offset }) {
+  const family = (await store.loadStoredProjects())
+    .filter(project => !project.deleted && (project.rootProjectId || project.id) === rootId)
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')) || a.id.localeCompare(b.id));
+  const items = family.slice(offset, offset + limit)
+    .map(({ id, name, version }) => ({ id, name, version: version || 1, rootProjectId: rootId }));
+  return { items, total: family.length, limit, offset };
+}
+
 export async function listMidiSourceRows() {
   return (await store.loadStoredProjects())
     .filter(project => !project.deleted && project.trackId !== undefined && project.midiTranscription?.filename !== undefined)

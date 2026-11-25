@@ -88,6 +88,10 @@ export async function listProjectNames() {
   return (await selectBackend()).listProjectNames();
 }
 
+export async function listProjectVersionPage(rootId, options) {
+  return (await selectBackend()).listProjectVersionPage(rootId, options);
+}
+
 export async function listMidiSourceRows() {
   return (await selectBackend()).listMidiSourceRows();
 }
