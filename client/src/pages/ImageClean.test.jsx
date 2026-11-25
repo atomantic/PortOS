@@ -15,9 +15,7 @@ vi.mock('../services/apiImageVideo.js', () => ({
 vi.mock('../hooks/useMediaJobProgress', () => ({
   default: () => ({ status: null, progress: 0, error: null }),
 }));
-vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../components/ui/Toast');
 
 // happy-dom never decodes images, so the dimension probe would hang. Resolve it
 // on the next microtask instead.

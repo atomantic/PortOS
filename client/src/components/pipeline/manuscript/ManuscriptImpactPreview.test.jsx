@@ -6,9 +6,7 @@ vi.mock('../../../services/apiPipeline.js', () => ({
   generatePipelineManuscriptFix: vi.fn(),
   patchPipelineManuscriptComment: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
-}));
+vi.mock('../../ui/Toast');
 
 import ManuscriptImpactPreview from './ManuscriptImpactPreview';
 import { acceptPipelineManuscriptFix } from '../../../services/apiPipeline.js';

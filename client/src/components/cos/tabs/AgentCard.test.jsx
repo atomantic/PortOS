@@ -31,9 +31,7 @@ vi.mock('../../../services/apiAgents.js', () => ({
   hydrateCosAgentDescription: vi.fn(async (a) => a),
 }));
 
-vi.mock('../../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../../ui/Toast');
 
 const copyToClipboard = vi.fn();
 vi.mock('../../../lib/clipboard', () => ({

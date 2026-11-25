@@ -29,7 +29,7 @@ vi.mock('../../services/apiMoodBoard.js', () => ({
   removeMoodBoardItem: api.removeMoodBoardItem,
 }));
 vi.mock('../../services/apiMediaUsage.js', () => ({ getMediaUsages: vi.fn(async () => ({ items: {} })) }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 const item = {
   kind: 'image', key: 'image:fixture.png', filename: 'fixture.png',
   previewUrl: '/data/images/fixture.png', downloadUrl: '/data/images/fixture.png',

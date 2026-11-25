@@ -18,7 +18,7 @@ import {
 import EpigeneticTracker from './EpigeneticTracker';
 import toast from '../ui/Toast';
 
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const CATEGORIES = [];
 const REC = { id: 'omega3', name: 'Omega-3', category: 'supplement', evidence: 'strong' };

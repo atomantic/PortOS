@@ -64,9 +64,7 @@ vi.mock('../../services/apiProviders', () => ({
 vi.mock('../../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn() },
 }));
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }),
-}));
+vi.mock('../ui/Toast');
 
 import {
   deleteLocalLlmModel,

@@ -22,9 +22,7 @@ vi.mock('../../services/socket', async () => {
   bus.off = vi.fn(bus.off.bind(bus));
   return { default: bus };
 });
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }),
-}));
+vi.mock('../ui/Toast');
 
 import {
   adoptJevHead,

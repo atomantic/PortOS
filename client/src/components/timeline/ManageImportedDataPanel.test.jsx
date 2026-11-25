@@ -7,7 +7,7 @@ vi.mock('../../services/apiTimeline.js', () => ({
   getTimelineSources: api.getTimelineSources,
   eraseTimelineSource: api.eraseTimelineSource,
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn() } }));
+vi.mock('../ui/Toast');
 vi.mock('../../hooks/usePrefersReducedMotion', () => ({ default: () => true }));
 const sources = [{ source: 'browser', eventCount: 3 }, { source: 'discord', eventCount: 2 }];
 beforeEach(() => { vi.clearAllMocks(); api.getTimelineSources.mockResolvedValue({ sources }); });

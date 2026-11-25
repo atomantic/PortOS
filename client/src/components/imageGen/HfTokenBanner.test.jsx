@@ -2,11 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import HfTokenBanner from './HfTokenBanner';
 
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), {
-    success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(),
-  }),
-}));
+vi.mock('../ui/Toast');
 
 describe('HfTokenBanner', () => {
   it('uses the same guidance and model list for one gated model', () => {

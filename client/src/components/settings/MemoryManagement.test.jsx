@@ -15,9 +15,7 @@ vi.mock('../../services/apiVoice.js', () => ({
   getVoiceStatus: vi.fn(async () => ({ sttEngine: 'piper', services: {} })),
 }));
 
-vi.mock('../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 import { getLoadedLlmModels, unloadLmStudioModel } from '../../services/apiLocalLlm.js';
 import { getVoiceStatus } from '../../services/apiVoice.js';

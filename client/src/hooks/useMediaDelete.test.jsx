@@ -5,9 +5,7 @@ import { cancelImagePendingDelete, deleteImage, deleteVideoHistoryItem } from '.
 import { useMediaDelete } from './useMediaDelete';
 import { refreshMediaUsages } from './useMediaUsages';
 
-vi.mock('../components/ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }),
-}));
+vi.mock('../components/ui/Toast');
 vi.mock('../services/apiImageVideo.js', () => ({
   cancelImagePendingDelete: vi.fn(),
   cancelVideoPendingDelete: vi.fn(),

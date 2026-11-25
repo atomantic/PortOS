@@ -25,9 +25,7 @@ vi.mock('../services/apiApps.js', () => ({
   createApp: vi.fn(() => Promise.resolve({ id: 'app-1' })),
 }));
 
-vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn() }
-}));
+vi.mock('../components/ui/Toast');
 
 import CreateApp from './CreateApp';
 

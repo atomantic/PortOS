@@ -32,9 +32,7 @@ vi.mock('../../../services/apiAgents.js', () => ({
   addCosTask: vi.fn(),
 }));
 
-vi.mock('../../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../../ui/Toast');
 
 vi.mock('./AgentCard', () => ({
   default: ({ agent, durations, onFeedbackChange, onResume, onRelaunch, onDelete }) => (

@@ -18,7 +18,7 @@ vi.mock('../../../services/apiMusicVideo.js', () => ({
   stopMusicVideoAutoReview: vi.fn(),
   cancelMusicVideoAutoReview: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({ default: Object.assign(vi.fn(), { error: vi.fn(), info: vi.fn(), success: vi.fn(), dismiss: vi.fn() }) }));
+vi.mock('../../ui/Toast');
 
 const project = { id: 'mv-example', scenes: [] };
 const generateEvent = {

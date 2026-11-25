@@ -26,7 +26,7 @@ vi.mock('../components/decks/DeckRenderControls', () => ({ default: () => null }
 vi.mock('../components/decks/DeckCardGrid', () => ({ default: () => null }));
 vi.mock('../components/decks/DeckStylePanel', () => ({ default: () => null }));
 vi.mock('../components/decks/DeckCardDrawer', () => ({ default: () => null }));
-vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 import DeckDetail from './DeckDetail';
 

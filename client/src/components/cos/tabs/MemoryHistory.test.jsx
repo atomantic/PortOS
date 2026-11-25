@@ -19,7 +19,7 @@ vi.mock('../../../services/apiMemory.js', () => ({
   updateMemory: vi.fn(),
   getMemoryRuns: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
 vi.mock('../../../services/socket', () => ({ default: socket }));

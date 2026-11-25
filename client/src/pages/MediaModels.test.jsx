@@ -47,9 +47,7 @@ vi.mock('../services/apiImageVideo.js', () => ({
   removeCustomMediaModel: vi.fn(),
 }));
 
-vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
-}));
+vi.mock('../components/ui/Toast');
 
 vi.mock('../hooks/useModelDownloadStatus', () => ({
   useModelDownloadStatus: vi.fn(() => textEncoderDownloads),

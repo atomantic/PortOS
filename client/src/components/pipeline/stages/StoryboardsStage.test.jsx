@@ -36,7 +36,7 @@ const socket = vi.hoisted(() => {
 vi.mock('../../../services/socket', () => ({ default: socket }));
 vi.mock('../../../hooks/useUniverse', () => ({ default: () => [null] }));
 vi.mock('../MediaJobThumb', () => ({ default: () => null }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 import StoryboardsStage from './StoryboardsStage';
 

@@ -5,7 +5,7 @@ import useSseJobSlot from './useSseJobSlot.js';
 import { MockEventSource, lastEventSource } from '../test/mockEventSource';
 import toast from '../components/ui/Toast';
 
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 beforeEach(() => {
   vi.clearAllMocks();

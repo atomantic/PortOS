@@ -5,7 +5,7 @@ import { pairPeerSyncSecret } from '../../services/apiSystem.js';
 vi.mock('../../services/apiSystem.js', () => ({
   pairPeerSyncSecret: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 describe('peer record push pairing', () => {
   beforeEach(() => vi.clearAllMocks());

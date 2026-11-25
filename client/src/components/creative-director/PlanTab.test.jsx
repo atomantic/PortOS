@@ -13,7 +13,7 @@ vi.mock('../../services/apiCreativeDirector.js', () => ({
 }));
 vi.mock('../../services/apiUniverseBuilder.js', () => ({ listUniverseNames: vi.fn(async () => []) }));
 vi.mock('../../services/apiPipeline.js', () => ({ listPipelineSeriesNames: vi.fn(async () => []) }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import PlanTab from './PlanTab.jsx';
 import {

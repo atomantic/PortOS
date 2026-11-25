@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 vi.mock('../../services/apiCreativeDirector.js', () => ({ updateCreativeDirectorScene: vi.fn() }));
 vi.mock('../imageGen/GalleryImagePicker.jsx', () => ({ default: ({ open, onSelect, onClose }) => open ? <button onClick={() => { onSelect({ filename: 'example-frame.png' }); onClose(); }}>Example reference</button> : null }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 import { updateCreativeDirectorScene } from '../../services/apiCreativeDirector.js';
 import toast from '../ui/Toast';
 import VideoShotEditor from './VideoShotEditor.jsx';

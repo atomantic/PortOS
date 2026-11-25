@@ -3,7 +3,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import toast from '../../ui/Toast';
 import useMusicVideoKickoff from './useMusicVideoKickoff.js';
 
-vi.mock('../../ui/Toast', () => ({ default: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 const analyzed = { id: 'mv-example', audioAnalysis: { sections: [{}] }, lyricCues: [] };
 

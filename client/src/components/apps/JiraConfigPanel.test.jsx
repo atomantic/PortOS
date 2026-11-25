@@ -22,7 +22,7 @@ vi.mock('../../services/apiSystem.js', () => ({
   searchJiraEpics: api.searchJiraEpics,
 }));
 vi.mock('../../services/apiApps.js', () => ({ updateApp: api.updateApp }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const app = { id: 'app-1', jira: { enabled: true } };
 const renderPanel = () => render(<MemoryRouter><JiraConfigPanel app={app} onSaved={() => {}} /></MemoryRouter>);

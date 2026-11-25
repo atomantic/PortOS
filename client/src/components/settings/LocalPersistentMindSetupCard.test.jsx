@@ -9,11 +9,7 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
   installLocalLlmModel: vi.fn(),
   controlOllamaService: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), {
-    success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(),
-  }),
-}));
+vi.mock('../ui/Toast');
 
 import { getLocalPersistentMindSetup, applyLocalPersistentMindSetup } from '../../services/apiLocalLlm.js';
 import LocalPersistentMindSetupCard from './LocalPersistentMindSetupCard.jsx';

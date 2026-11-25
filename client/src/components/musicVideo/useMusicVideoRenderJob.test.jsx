@@ -8,7 +8,7 @@ import { getMusicVideoActiveRender, renderMusicVideoProject } from '../../servic
 vi.mock('../../services/apiMusicVideo.js', () => ({
   getMusicVideoActiveRender: vi.fn(), renderMusicVideoProject: vi.fn(), musicVideoRenderEventsUrl: id => `/events/${id}`, cancelMusicVideoRender: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 beforeEach(() => { vi.clearAllMocks(); MockEventSource.reset(); vi.stubGlobal('EventSource', MockEventSource); });
 afterEach(() => vi.unstubAllGlobals());
 

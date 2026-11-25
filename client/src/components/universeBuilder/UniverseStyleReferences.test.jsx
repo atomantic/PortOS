@@ -19,7 +19,7 @@ vi.mock('../universe/VisionProviderPicker', () => ({
     <button onClick={() => onChange({ providerId: 'ollama', model: 'qwen-vl' })}>Select vision model</button>
   ),
 }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const universe = {
   id: 'u1',

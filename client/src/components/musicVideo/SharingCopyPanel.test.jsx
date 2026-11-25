@@ -11,7 +11,7 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
 }));
 vi.mock('../../services/apiMediaJobs.js', () => ({ cancelMediaJob: api.cancel }));
 vi.mock('../../hooks/useSseProgress.js', () => ({ useSseProgress: () => sse, isTerminalSseFrame: frame => ['complete', 'error', 'canceled'].includes(frame?.type) }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 beforeEach(() => {
   vi.clearAllMocks();
   Object.assign(sse, { latest: null, latestUrl: null, closed: false, isOpen: true });

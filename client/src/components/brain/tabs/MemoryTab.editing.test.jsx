@@ -22,7 +22,7 @@ vi.mock('../../../services/apiBrain.js', () => ({
 }));
 vi.mock('../../../services/apiMemory.js', () => ({ getMemoryBackendStatus: api.getMemoryBackendStatus }));
 vi.mock('../../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 const memory = (id, extra = {}) => ({ id, title: `Example ${id}`, content: `Full body ${id}`, tags: [], ...extra });
 const deferred = () => {

@@ -15,9 +15,7 @@ vi.mock('../../../services/apiPrivacy.js', () => ({
   createPrivacyOrg: vi.fn(),
 }));
 
-vi.mock('../../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() }
-}));
+vi.mock('../../ui/Toast');
 
 import AccountsTab from './AccountsTab';
 import {

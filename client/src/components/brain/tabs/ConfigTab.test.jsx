@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
+vi.mock('../../ui/Toast');
 vi.mock('../YoutubeIngestSettings', () => ({ default: () => null }));
 
 const api = vi.hoisted(() => ({

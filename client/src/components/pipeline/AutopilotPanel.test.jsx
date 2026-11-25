@@ -28,9 +28,7 @@ vi.mock('../../services/apiAgents', async (importOriginal) => ({
 }));
 // The default export is CALLABLE (a neutral toast) as well as carrying the
 // typed helpers — the panel uses the bare call for the self-improvement line.
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn() }),
-}));
+vi.mock('../ui/Toast');
 // Controllable SSE hook so tests don't touch EventSource. `sseLatest` lets a
 // test simulate a stale terminal frame left over from a previous run.
 let sseLatest = null;

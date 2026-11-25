@@ -13,7 +13,7 @@ vi.mock('../../../services/apiDigitalTwin.js', () => ({
 vi.mock('../../../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 vi.mock('../SoulWizard', () => ({ default: () => null }));
 vi.mock('../PersonalityMap', () => ({ default: ({ traits }) => <div data-testid="map">{traits ? 'traits' : 'no-traits'}</div> }));
 vi.mock('../ConfidenceGauge', () => ({ default: () => null }));

@@ -38,12 +38,7 @@ vi.mock('../hooks/useProviderModels', () => ({
   }),
 }));
 
-vi.mock('../components/ui/Toast', () => {
-  const toast = Object.assign(vi.fn(), {
-    success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn()
-  });
-  return { default: toast };
-});
+vi.mock('../components/ui/Toast');
 
 // useHealthWarningDismiss (client/src/hooks/) calls apiSystem.js directly
 // rather than through the '../services/api' barrel — mock it separately so

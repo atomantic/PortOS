@@ -42,9 +42,7 @@ vi.mock('../services/apiApps.js', () => ({
   handleSelfRestart: vi.fn(),
 }));
 
-vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn() }
-}));
+vi.mock('../components/ui/Toast');
 
 vi.mock('../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },

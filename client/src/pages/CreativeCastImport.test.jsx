@@ -6,7 +6,7 @@ vi.mock('../services/apiCatalog', () => ({
   previewMusicVideoCastImport: vi.fn(),
   commitMusicVideoCastImport: vi.fn(),
 }));
-vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 vi.mock('../components/IngredientPicker', () => ({
   default: ({ open, type, onSelect }) => (open ? (
     <div role="dialog" aria-label={`Pick ${type}`}>

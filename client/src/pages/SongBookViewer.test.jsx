@@ -28,7 +28,7 @@ vi.mock('../services/apiSongbook.js', () => ({
 }));
 vi.mock('../services/apiRounds.js', () => ({ listRounds: api.listRounds }));
 vi.mock('../services/apiTracks.js', () => ({ listTracks: api.listTracks }));
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 import toast from '../components/ui/Toast';
 import SongBookViewer from './SongBookViewer.jsx';

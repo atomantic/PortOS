@@ -9,11 +9,7 @@ vi.mock('../../hooks/useInstallStream', () => ({
 vi.mock('../../services/apiAgents.js', () => ({
   addCosTask: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), {
-    success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(),
-  }),
-}));
+vi.mock('../ui/Toast');
 
 import { useInstallStream } from '../../hooks/useInstallStream';
 import Flux2InstallModal from './Flux2InstallModal';

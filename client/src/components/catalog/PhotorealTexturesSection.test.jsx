@@ -6,7 +6,7 @@ import { getCatalogPhotorealTextures, installCatalogPhotorealTexture, saveCatalo
 vi.mock('../../services/apiCatalog', () => ({
   getCatalogPhotorealTextures: vi.fn(), installCatalogPhotorealTexture: vi.fn(), saveCatalogPhotorealLook: vi.fn(), searchCatalogPhotorealTextures: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const record = { id: 'plc-example' };
 const look = {

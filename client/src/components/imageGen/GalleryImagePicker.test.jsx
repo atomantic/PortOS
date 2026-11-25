@@ -49,7 +49,7 @@ vi.mock('../../utils/fileUpload', async (importOriginal) => ({
   readFileAsBase64: vi.fn().mockResolvedValue('ZmFrZS1iYXNlNjQ='),
 }));
 
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const GALLERY = [
   {

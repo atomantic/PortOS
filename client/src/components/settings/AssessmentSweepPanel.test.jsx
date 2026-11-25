@@ -8,7 +8,7 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
   cancelLocalLlmAssessmentSweep: vi.fn(),
 }));
 
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 

@@ -5,7 +5,7 @@ vi.mock('../../services/apiPipeline', () => ({
   getIssueJudge: vi.fn(),
   judgeIssue: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import { getIssueJudge, judgeIssue } from '../../services/apiPipeline';
 import IssueJudgePanel from './IssueJudgePanel';

@@ -17,7 +17,7 @@ vi.mock('../../services/apiSystem.js', () => ({
   updateTelegramForwardTypes: vi.fn(),
   updateTelegramMethod: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const choices = [
   { key: 'health_issue', label: 'Health Issues' },

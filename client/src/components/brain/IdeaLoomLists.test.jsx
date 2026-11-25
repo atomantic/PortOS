@@ -15,7 +15,7 @@ vi.mock('../../services/apiBrain.js', () => ({
 vi.mock('../../services/apiNotes.js', () => ({
   getNotesVaults: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import {
   getIdeaLoomLists,

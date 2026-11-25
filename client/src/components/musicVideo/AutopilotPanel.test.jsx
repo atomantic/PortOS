@@ -31,7 +31,7 @@ vi.mock('../../services/apiImageVideo.js', () => ({
     defaultModel: 'example-ltx',
   })),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 const authorProvider = vi.hoisted(() => ({ type: 'api', toolFreeOneShot: true }));
 vi.mock('../../hooks/useProviderModels.js', () => ({
   default: (options) => options.allowDefault === false ? {

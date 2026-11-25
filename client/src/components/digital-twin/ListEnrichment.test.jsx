@@ -7,9 +7,7 @@ vi.mock('../../services/apiDigitalTwin.js', () => ({
   saveEnrichmentList: vi.fn(),
 }));
 
-vi.mock('../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 import { getEnrichmentListItems, analyzeEnrichmentList, saveEnrichmentList } from '../../services/apiDigitalTwin.js';
 import ListEnrichment from './ListEnrichment';

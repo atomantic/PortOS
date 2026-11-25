@@ -12,7 +12,7 @@ vi.mock('../../services/apiCatalog', () => ({
   detachCatalogIngredientMedia: vi.fn(), uploadCatalogIngredientMediaFile: vi.fn(), captureCatalogGreyboxShot: vi.fn(), draftCatalogGreybox: vi.fn(), previewCatalogGreyboxPrompt: vi.fn(), saveCatalogGreybox: vi.fn(),
   renderCatalogGreyboxShot: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 vi.mock('../musicVideo/MusicVideoLlmPicker', () => ({
   default: ({ onChange }) => <button type="button" onClick={() => onChange({ providerId: 'p1', model: 'm1', effort: 'high' })}>pick llm</button>,
 }));

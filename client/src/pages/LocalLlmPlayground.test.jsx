@@ -14,9 +14,7 @@ vi.mock('../services/apiLocalLlm.js', () => ({
   compareLocalLlmModels: vi.fn(),
 }));
 
-vi.mock('../components/ui/Toast', () => ({
-  default: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
-}));
+vi.mock('../components/ui/Toast');
 
 import LocalLlmPlayground from './LocalLlmPlayground';
 import {

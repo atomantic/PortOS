@@ -23,7 +23,7 @@ vi.mock('../../hooks/useProviderModels.js', () => ({
     setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn(),
   }),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import * as api from '../../services/apiMusicVideo.js';
 import useMusicVideoTreatment from '../../hooks/useMusicVideoTreatment.js';

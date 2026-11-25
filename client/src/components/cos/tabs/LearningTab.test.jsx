@@ -43,7 +43,7 @@ vi.mock('../../../services/apiAgents.js', () => ({
 }));
 vi.mock('../../../services/apiCodeReview.js', () => ({ getReviewerVerdictStats: api.getReviewerVerdictStats }));
 vi.mock('../../../services/socket', () => ({ default: socket }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 const renderTab = () => render(<MemoryRouter><LearningTab /></MemoryRouter>);
 

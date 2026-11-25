@@ -47,7 +47,7 @@ vi.mock('../components/pipeline/editorial/EditorialCustomCheckForm', () => ({ de
 vi.mock('../components/pipeline/editorial/EditorialFindingsTriage', () => ({ default: () => <div>findings-triage</div> }));
 vi.mock('../components/pipeline/editorial/EditorialHealthPanel', () => ({ default: () => <div>health-panel</div> }));
 vi.mock('../components/ProviderModelSelector', () => ({ default: () => <div>provider-selector</div> }));
-vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 function renderPage() {
   return render(

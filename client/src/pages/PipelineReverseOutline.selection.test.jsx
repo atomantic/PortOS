@@ -18,7 +18,7 @@ vi.mock('../services/apiPipeline.js', () => ({
 }));
 
 vi.mock('../hooks/usePipelineProgress', () => ({ usePipelineProgress: () => ({ latest: null }) }));
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 const OUTLINE = {
   status: 'complete',

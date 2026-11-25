@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import toast from '../components/ui/Toast';
 import { startMaintenanceRun, hydrateCosAgentDescription, triggerCosJob, getFeatureAgents } from './apiAgents';
 
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 // Exercise the real API wrapper through HTTP serialization: mocking the wrapper
 // in the form test cannot catch a selected mode being dropped before POST.

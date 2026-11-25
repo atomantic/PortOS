@@ -81,7 +81,7 @@ vi.mock('../components/musicVideo/MusicVideoLlmPicker', () => ({ default: () => 
 vi.mock('../components/imageGen/RecordRenderPinRow', () => ({ default: () => null }));
 const clipboard = vi.hoisted(() => ({ copyToClipboard: vi.fn() }));
 vi.mock('../lib/clipboard', () => clipboard);
-vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 const panel = (id, extra = {}) => ({
   id, action: '', dialogue: '', framing: null, camera: '', seconds: null,

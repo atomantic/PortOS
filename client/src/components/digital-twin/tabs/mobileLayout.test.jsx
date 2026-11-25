@@ -38,7 +38,7 @@ vi.mock('../../../services/apiDigitalTwin.js', () => ({
   createSoulDocument: vi.fn(),
   deleteSoulDocument: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 vi.mock('../../../hooks/useChartColors.js', () => ({ default: () => ({}) }));
 
 import PersonalityTab from './PersonalityTab.jsx';

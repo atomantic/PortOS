@@ -51,11 +51,7 @@ vi.mock('../components/creative-commission/CommissionConfigForm.jsx', () => ({
 }));
 // Callable: the degraded run-history warning (#7529) is a render-prop toast,
 // so the double has to be a function with the named helpers hung off it.
-vi.mock('../components/ui/Toast', () => ({
-  default: Object.assign(vi.fn(), {
-    success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn(), dismiss: vi.fn(),
-  }),
-}));
+vi.mock('../components/ui/Toast');
 // ProjectPreview reaches into the media/job graph; the assertions here are about
 // which projects resolved (and, for #4149, which snapshot of a project is on
 // screen), so stub it down to an identifiable marker carrying the status.

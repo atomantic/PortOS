@@ -22,7 +22,7 @@ vi.mock('../hooks/useImporterProgress', () => ({
   useImporterProgress: () => ({ stages: null, reset: vi.fn() }),
   stageStatusIcon: () => null,
 }));
-vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 import Importer from './Importer';
 

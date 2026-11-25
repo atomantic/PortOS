@@ -27,7 +27,7 @@ vi.mock('../hooks/useConfirmDelete.js', () => ({
 }));
 vi.mock('../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
 vi.mock('../components/video/YtDlpUpdateCard', () => ({ default: () => null }));
-vi.mock('../components/ui/Toast', () => ({ default: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }) }));
+vi.mock('../components/ui/Toast');
 
 import VideoDownloaderPage from './VideoDownloaderPage';
 import { listVideoDownloads, deleteVideoDownload } from '../services/apiVideoDownload.js';

@@ -19,7 +19,7 @@ vi.mock('../../services/apiCodeAnimation', () => ({
 }));
 vi.mock('../../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
 vi.mock('../musicVideo/MusicVideoLlmPicker', () => ({ default: () => null }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 vi.mock('../MediaImage', () => ({ default: (props) => <img alt={props.alt} src={props.src} /> }));
 
 const greybox = {

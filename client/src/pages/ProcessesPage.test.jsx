@@ -11,9 +11,7 @@ vi.mock('../services/apiCommands.js', () => ({ executeCommand: api.executeComman
 vi.mock('../components/apps/tabs/ProcessesTab', () => ({
   default: () => <div data-testid="processes-tab">Processes Tab</div>,
 }));
-vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../components/ui/Toast');
 
 import { ProcessesPage } from './ProcessesPage';
 

@@ -21,9 +21,7 @@ vi.mock('../services/apiSystem.js', () => ({
   refreshGoalScorecardNarrative: vi.fn(),
 }));
 
-vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
-}));
+vi.mock('../components/ui/Toast');
 
 vi.mock('../services/apiProviders.js', () => ({
   getProviders: vi.fn().mockResolvedValue([]),

@@ -11,7 +11,7 @@ vi.mock('../services/apiDecks.js', () => ({
   listDecks: api.listDecks,
 }));
 vi.mock('../services/apiUniverseBuilder.js', () => ({ listUniverseSummaries: api.listUniverseSummaries }));
-vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 import Decks from './Decks';
 

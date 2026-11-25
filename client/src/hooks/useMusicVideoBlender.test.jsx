@@ -8,7 +8,7 @@ vi.mock('../services/socket', () => ({
     off: (event, fn) => { handlers.get(event)?.delete(fn); },
   },
 }));
-vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 vi.mock('../services/apiMusicVideo.js', () => ({
   getMusicVideoBlender: vi.fn(),
   saveMusicVideoBlenderSettings: vi.fn(),

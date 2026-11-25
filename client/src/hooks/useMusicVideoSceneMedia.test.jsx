@@ -29,7 +29,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
 const getMediaJob = vi.fn(async () => ({ status: 'failed' }));
 vi.mock('../services/apiMediaJobs', () => ({ getMediaJob: (...a) => getMediaJob(...a) }));
 vi.mock('../services/apiImageVideo.js', () => ({ generateVideo }));
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 const { default: toast } = await import('../components/ui/Toast');
 const toastError = toast.error;
 const listCatalogIngredientMedia = vi.fn();

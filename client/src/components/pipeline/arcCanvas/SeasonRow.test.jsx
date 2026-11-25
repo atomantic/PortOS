@@ -10,7 +10,7 @@ vi.mock('../../../services/apiPipeline.js', async (importOriginal) => ({
   startPipelineVolumeBeats: vi.fn(),
   listPipelineIssues: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 vi.mock('./IssueRow.jsx', () => ({ default: () => null }));
 vi.mock('./VolumeCoverLiveUpdates.jsx', () => ({ default: () => null }));
 vi.mock('./VolumeCoversPanel.jsx', () => ({ default: () => null }));

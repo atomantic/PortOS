@@ -15,7 +15,7 @@ vi.mock('../services/apiPipeline.js', async (importOriginal) => ({
   cancelPipelineAutoRunText: vi.fn(async () => ({})),
   pipelineAutoRunSseUrl: () => '/sse',
 }));
-vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 vi.mock('../components/pipeline/stages/IdeaStage', () => ({ default: () => <div>Idea stage</div> }));
 vi.mock('../components/pipeline/stages/ProseStage', () => ({ default: () => <div>Prose stage</div> }));
 vi.mock('../components/pipeline/stages/NounsStage', () => ({ default: () => null }));

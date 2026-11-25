@@ -10,7 +10,7 @@ vi.mock('../../services/apiCatalog', () => ({
   getCatalogIngredientDetails: vi.fn(), listCatalogIngredients: vi.fn(), previewCatalogMerge: vi.fn(),
   applyCatalogMerge: vi.fn(), listCatalogMergeHistory: vi.fn(), getCatalogMergeReceipt: vi.fn(), recoverCatalogMerge: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const survivor = { id: 'example-survivor', name: 'Example subject', type: 'character', originInstanceId: 'example-local', payload: { locked: false, role: 'Guide' }, updatedAt: '2026-01-01' };
 const source = { ...survivor, id: 'example-source', name: 'Example alias', payload: { locked: false, description: 'A thoughtful guide' } };

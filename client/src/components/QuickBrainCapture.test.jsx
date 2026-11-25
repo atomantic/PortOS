@@ -22,9 +22,7 @@ vi.mock('../services/apiBrain.js', () => ({
 }));
 const clipboard = vi.hoisted(() => ({ readClipboard: vi.fn() }));
 vi.mock('../lib/clipboard', () => clipboard);
-vi.mock('./ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }),
-}));
+vi.mock('./ui/Toast');
 
 // jsdom has no EventSource, and once a kickoff resolves the real
 // useSseProgress subscribes to one. This controllable stub lets the accessibility

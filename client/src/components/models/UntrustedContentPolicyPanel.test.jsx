@@ -11,7 +11,7 @@ vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({
     { id: 'cloud-api', name: 'Cloud example', type: 'api', endpoint: 'https://example.com/v1', models: ['example-model'], defaultModel: 'example-model' },
   ], loading: false,
 }) }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import { getSettings, updateSettings } from '../../services/apiSystem.js';
 import UntrustedContentPolicyPanel from './UntrustedContentPolicyPanel';

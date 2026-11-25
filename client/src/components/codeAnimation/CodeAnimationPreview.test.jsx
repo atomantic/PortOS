@@ -44,7 +44,7 @@ vi.mock('../../services/apiCodeAnimation.js', () => ({
   getCodeAnimationThreeVendor: vi.fn(),
 }));
 vi.mock('../../lib/downloadBlob', () => ({ downloadBlob: vi.fn() }));
-vi.mock('../ui/Toast', () => ({ default: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }) }));
+vi.mock('../ui/Toast');
 vi.mock('../../hooks/useSseProgress', () => ({ useSseProgress: vi.fn(() => ({ latest: null })) }));
 
 import CodeAnimationPreview from './CodeAnimationPreview';

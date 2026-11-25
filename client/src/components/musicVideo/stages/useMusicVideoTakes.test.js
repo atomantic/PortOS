@@ -6,7 +6,7 @@ vi.mock('../../../services/apiMusicVideo.js', () => ({
   markMusicVideoPoolAssets: vi.fn(), getMusicVideoProject: vi.fn(), rejectUnusedMusicVideoSceneTakes: vi.fn(),
   continueMusicVideoSceneFromPrevious: vi.fn(), checkMusicVideoSceneTake: vi.fn(), moveMusicVideoSceneTake: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../../ui/Toast');
 vi.mock('../../../services/socket.js', () => ({ default: { id: 'socket-example' } }));
 
 import { placeMusicVideoPoolItem, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, getMusicVideoProject, rejectUnusedMusicVideoSceneTakes, continueMusicVideoSceneFromPrevious, checkMusicVideoSceneTake, moveMusicVideoSceneTake } from '../../../services/apiMusicVideo.js';

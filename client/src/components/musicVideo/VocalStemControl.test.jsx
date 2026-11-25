@@ -11,7 +11,7 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
   uploadMusicVideoVocalStem: vi.fn(),
   removeMusicVideoVocalStem: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import * as api from '../../services/apiMusicVideo.js';
 import toast from '../ui/Toast';

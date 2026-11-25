@@ -14,7 +14,7 @@ vi.mock('../../../services/apiDigitalTwin.js', () => ({
   saveAutobiographyStory: vi.fn(),
   deleteAutobiographyStory: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
+vi.mock('../../ui/Toast');
 vi.mock('../StoryCraftPanel', () => ({ default: () => null }));
 
 import AutobiographyTab from './AutobiographyTab';

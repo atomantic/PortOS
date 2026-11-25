@@ -32,7 +32,7 @@ vi.mock('../hooks/useSyncIntegrity', () => ({
 vi.mock('../components/sharing/ShareToButton', () => ({ default: () => <button type="button">share</button> }));
 vi.mock('../components/sharing/SyncToPeerButton', () => ({ default: () => <button type="button">sync-to-peer</button> }));
 vi.mock('../components/moodBoard/MoodBoardReferenceStrip', () => ({ default: () => <div>mood-board</div> }));
-vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 const SERIES = [
   { id: 'series-1', name: 'Example Series' },

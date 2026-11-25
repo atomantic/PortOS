@@ -9,9 +9,7 @@ vi.mock('../../services/apiSharing.js', () => ({
   subscribeToShareBucket: vi.fn(),
   unsubscribeFromShareBucket: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 import {
   listShareBuckets,

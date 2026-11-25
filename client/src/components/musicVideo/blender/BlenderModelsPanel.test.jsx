@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import BlenderModelsPanel from './BlenderModelsPanel.jsx';
 import { FilmApiContext } from './FilmApiContext.jsx';
 
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
+vi.mock('../../ui/Toast');
 vi.mock('../../../services/apiImageTo3d.js', () => ({
   listImageTo3dModels: vi.fn(async () => [{ id: 'a', name: 'Robot Dog', status: 'ready' }, { id: 'b', name: 'Draft', status: 'draft' }]),
 }));

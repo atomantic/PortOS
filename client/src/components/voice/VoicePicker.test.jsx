@@ -9,9 +9,7 @@ vi.mock('../../services/apiPipeline', () => ({
 vi.mock('../../services/voiceClient', () => ({
   playWav: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({
-  default: { error: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 import VoicePicker, { __resetVoicePickerCache } from './VoicePicker';
 import { listPipelineTtsVoices, previewPipelineTtsVoice } from '../../services/apiPipeline';

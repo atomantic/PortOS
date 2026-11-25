@@ -16,7 +16,7 @@ vi.mock('../../lib/metronome.js', async (importOriginal) => {
     },
   };
 });
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import Metronome from './Metronome.jsx';
 

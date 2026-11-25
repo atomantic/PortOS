@@ -7,9 +7,7 @@ vi.mock('../../services/apiCatalogTypes', () => ({
   updateCatalogType: vi.fn(),
   deleteCatalogType: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 import { CatalogTypesTab } from './CatalogTypesTab';
 import { __resetCatalogTypes } from '../../hooks/useCatalogTypes.jsx';

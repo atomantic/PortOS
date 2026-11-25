@@ -53,6 +53,8 @@ accessibility). Feature-specific components live under their own feature directo
 | `ToolUseWarning` | The "this model can't call tools" warning every agent/model picker shows. |
 | `UnsavedChangesConfirm` | The discard confirm every `useUnsavedChangesGuard` consumer renders from `blocked`. |
 
+In client tests, a factory-less `vi.mock()` for Toast loads the shared `__mocks__/Toast.jsx` mock.
+
 There is no `index.js` barrel here — components are imported by path
 (`import ProgressBar from '../ui/ProgressBar'`), matching the rest of `components/`. The
 barrel + README rule in the root `AGENTS.md` covers `lib/`, `hooks/`, `utils/`, and

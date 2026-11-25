@@ -9,7 +9,7 @@ vi.mock('../../services/apiModelPerformance', () => ({
   discoverModelPerformanceModels: vi.fn(),
   runModelPerformanceBenchmark: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), warning: vi.fn() } }));
+vi.mock('../ui/Toast');
 vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }) => <div>{children}</div>,
   ScatterChart: ({ children }) => <div>{children}</div>,

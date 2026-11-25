@@ -39,7 +39,7 @@ vi.mock('../../services/apiAgents.js', () => ({
   approveCosTask: api.approveCosTask,
   triggerCosOnDemandTask: api.triggerCosOnDemandTask,
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const ActionableInsightsBanner = (await import('./ActionableInsightsBanner')).default;
 

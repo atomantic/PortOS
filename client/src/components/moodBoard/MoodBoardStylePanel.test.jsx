@@ -31,9 +31,7 @@ vi.mock('../../services/socket', () => ({
   },
 }));
 
-vi.mock('../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 vi.mock('../ProviderModelSelector', () => ({ default: () => <div>provider</div> }));
 vi.mock('../pipeline/MediaJobThumb', () => ({ default: () => <div>rendering</div> }));

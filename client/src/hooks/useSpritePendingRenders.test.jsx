@@ -22,7 +22,7 @@ vi.mock('../services/apiMediaJobs.js', () => ({
   listMediaJobs: (...args) => listMediaJobs(...args),
   getMediaJob: (...args) => getMediaJob(...args),
 }));
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 import { useSpritePendingRenders } from './useSpritePendingRenders.js';
 

@@ -15,7 +15,7 @@ vi.mock('../../services/apiVoice', () => ({
   cancelFineTuningJob: (...args) => mocks.cancel(...args),
   promoteFineTunedCheckpoint: (...args) => mocks.promote(...args),
 }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const emit = (event, data) => act(() => { mocks.handlers.get(event)?.forEach((callback) => callback(data)); });
 

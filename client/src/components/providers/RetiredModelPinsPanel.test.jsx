@@ -6,9 +6,7 @@ vi.mock('../../services/apiProviders.js', () => ({
   getModelPinWarnings: vi.fn(),
   clearModelPin: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
-}));
+vi.mock('../ui/Toast');
 
 import { getModelPinWarnings, clearModelPin } from '../../services/apiProviders.js';
 import RetiredModelPinsPanel from './RetiredModelPinsPanel.jsx';

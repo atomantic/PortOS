@@ -14,9 +14,7 @@ vi.mock('../../services/apiSystem.js', () => ({
   provisionTailnetCert: vi.fn(),
 }));
 
-vi.mock('../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 import { handleSelfRestart, restartApp } from '../../services/apiApps.js';
 import { provisionTailnetCert } from '../../services/apiSystem.js';

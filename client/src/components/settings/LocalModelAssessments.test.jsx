@@ -19,7 +19,7 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
   deleteModelCapabilityTest: vi.fn(),
 }));
 
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 // Per-sample run progress arrives on the shared `localLlm:progress` socket
 // event; the tests below replay frames through the registered handler.

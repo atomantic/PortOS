@@ -12,7 +12,7 @@ vi.mock('../../../services/apiPipeline.js', () => ({
   acceptNarrationSegmentSpeech: api.acceptNarrationSegmentSpeech,
 }));
 vi.mock('../../voice/VoicePicker', () => ({ default: () => null }));
-vi.mock('../../ui/Toast', () => ({ default: Object.assign(vi.fn(), { error: vi.fn() }) }));
+vi.mock('../../ui/Toast');
 
 import ManuscriptReadAloud from './ManuscriptReadAloud';
 import toast from '../../ui/Toast';

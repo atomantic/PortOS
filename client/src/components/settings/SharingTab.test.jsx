@@ -13,14 +13,7 @@ vi.mock('../../services/apiSystem.js', () => ({
 vi.mock('../../services/apiMusic.js', () => ({
   listMusicEngines: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), {
-    success: vi.fn(),
-    error: vi.fn(),
-    warning: vi.fn(),
-    info: vi.fn(),
-  }),
-}));
+vi.mock('../ui/Toast');
 
 import { getAuthStatus } from '../../services/apiAuth.js';
 import { getMediaShareCandidates, getSettings, updateSettings } from '../../services/apiSystem.js';

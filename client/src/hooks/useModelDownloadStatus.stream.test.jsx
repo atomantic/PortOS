@@ -9,7 +9,7 @@ vi.mock('../services/apiImageVideo.js', () => ({
   repairImageModel: vi.fn(), repairVideoModel: vi.fn(),
   repairTextEncoder: vi.fn(), repairTextEncoderOption: vi.fn(), repairIcLora: vi.fn(),
 }));
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 afterEach(() => vi.unstubAllGlobals());
 
 describe('model picker download transport', () => {

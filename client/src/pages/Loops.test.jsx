@@ -16,9 +16,7 @@ vi.mock('../services/socket', () => ({
   default: { connected: true, on: vi.fn(), off: vi.fn(), emit: vi.fn() },
 }));
 
-vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../components/ui/Toast');
 
 import Loops from './Loops';
 import socket from '../services/socket';

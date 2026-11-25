@@ -15,11 +15,7 @@ vi.mock('../../services/apiImageVideo.js', () => ({
 vi.mock('../../services/apiAgents.js', () => ({
   addCosTask: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), {
-    success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(),
-  }),
-}));
+vi.mock('../ui/Toast');
 
 import { useInstallStream } from '../../hooks/useInstallStream.js';
 import { checkImageGenSetup } from '../../services/apiImageVideo.js';

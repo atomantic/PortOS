@@ -4,7 +4,7 @@ import { renderHook, waitFor, act } from '@testing-library/react';
 const api = vi.hoisted(() => ({ getVideoGenModelContext: vi.fn(), listLorasFull: vi.fn() }));
 vi.mock('../../services/apiImageVideo.js', () => api);
 vi.mock('../../services/apiMusicVideo.js', () => ({ updateMusicVideoProject: vi.fn() }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import useMusicVideoModelSettings from './useMusicVideoModelSettings.js';
 

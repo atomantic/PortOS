@@ -15,7 +15,7 @@ vi.mock('../../../services/apiBrain.js', () => ({
   runBrainDigest: api.runBrainDigest,
   runBrainReview: api.runBrainReview,
 }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 const digest = { id: 'example-digest', digestText: 'Example saved digest', generatedAt: '2026-01-01' };
 const review = { id: 'example-review', reviewText: 'Example saved review', generatedAt: '2026-01-01' };
 beforeEach(() => {

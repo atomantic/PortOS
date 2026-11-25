@@ -10,10 +10,7 @@ vi.mock('../services/apiSystem.js', () => ({
   dismissHealthWarning: vi.fn().mockResolvedValue({ message: 'x', dismissedAt: '2026-01-01T00:00:00.000Z' }),
   undismissHealthWarning: vi.fn().mockResolvedValue({ success: true }),
 }));
-vi.mock('./ui/Toast', () => {
-  const toast = Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), dismiss: vi.fn() });
-  return { default: toast };
-});
+vi.mock('./ui/Toast');
 
 const HEALTH = {
   overallHealth: 'warning',
