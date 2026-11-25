@@ -311,7 +311,10 @@ suite took about 10 minutes on a 4-vCPU runner, with 489 s of cumulative DOM
 environment setup across 868 files. Sharding spreads that work across runners.
 
 Primary server/client test jobs use matrices. The impact job emits
-`server_shards` and `client_shards` from `FULL_SUITE_SHARDS` (server 2, client 4).
+`server_shards` and `client_shards` from `FULL_SUITE_SHARDS` (server 2, client 6).
+The client matrix pins five or six existing Chromium suites per shard,
+balanced against the estimated cost of its other tests. The runner hashes
+the remaining suites.
 Windows emits `[1]` for its native contract runner. `scripts/run-ci-tests.js`
 turns `CI_SHARD=<index>/<count>` into a disjoint file slice before
 launching Vitest; the union is the complete selected suite. Windows uses exact
@@ -337,7 +340,7 @@ in a separate job, in parallel with the test shards. `CI Gate` checks each
 selected job and sees each test matrix as one `needs` result.
 
 `npm run pregate -- --full` reuses the same split locally: a full unit plan
-becomes one stage per shard (server 2, client 4, from `FULL_SUITE_SHARDS`), run
+becomes one stage per shard (server 2, client 6, from `FULL_SUITE_SHARDS`), run
 sequentially with the env `resolvePlanStages` builds once per scope. Each shard
 is a normal runner invocation with its own memo write, so a late failure in one
 shard leaves the earlier shards' green entries reusable on the next attempt;

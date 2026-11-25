@@ -18,7 +18,7 @@ import {
 } from './testMemoRunner.js';
 import { EXCLUSIVE_CAPTURE_TESTS, EXCLUSIVE_TESTS, vitestCaptureProjects } from '../vitestCiPool.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
-import { buildCiTestPlan } from '../ci-test-plan.js';
+import { FULL_SUITE_SHARDS, buildCiTestPlan, shardIndexes } from '../ci-test-plan.js';
 import { browserProfileAcceptedVerdicts, browserTestProfileArgs } from './browserTestProfiles.js';
 import { BROWSER_SUITES, browserShardSlice } from './browserSuites.js';
 import { getAlwaysRunTests } from './ciPlanRules.js';
@@ -1033,23 +1033,26 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(slices(posix, '/repo').flat().sort()).toEqual([...files].sort());
   });
 
-  it('spreads the real-Chromium client suites over four shards without moving other files (#17750)', () => {
+  it('spreads the real-Chromium client suites across the full matrix without moving other files', () => {
     const browser = Object.keys(CLIENT_BROWSER_SHARD_OWNERS);
     const plain = Array.from({ length: 40 }, (_, i) => `client/src/lib/plain${i}.test.js`);
     const files = [...browser, ...plain];
-    const slices = [1, 2, 3, 4].map((index) => serverShardSlice(files, { repoRoot: '/repo', scope: 'client', index, count: 4 }));
+    const count = FULL_SUITE_SHARDS.client;
+    const shardOptions = (index) => ({ repoRoot: '/repo', scope: 'client', index, count });
+    const slices = shardIndexes('full', count).map((index) => serverShardSlice(files, shardOptions(index)));
     expect(slices.flat().sort()).toEqual([...files].sort());
     expect(new Set(slices.flat()).size).toBe(files.length);
     slices.forEach((slice, i) => {
-      const count = slice.filter((file) => CLIENT_BROWSER_SHARD_OWNERS[file]).length;
-      expect(count).toBeGreaterThanOrEqual(8);
-      expect(count).toBeLessThanOrEqual(9);
-      const hashed = vitestShardSlice(files, { repoRoot: '/repo', scope: 'client', index: i + 1, count: 4 }).filter((file) => !CLIENT_BROWSER_SHARD_OWNERS[file]);
+      const browserCount = slice.filter((file) => CLIENT_BROWSER_SHARD_OWNERS[file]).length;
+      expect(browserCount).toBeGreaterThanOrEqual(5);
+      expect(browserCount).toBeLessThanOrEqual(6);
+      const hashed = vitestShardSlice(files, shardOptions(i + 1)).filter((file) => !CLIENT_BROWSER_SHARD_OWNERS[file]);
       expect(slice.filter((file) => !CLIENT_BROWSER_SHARD_OWNERS[file])).toEqual(hashed);
     });
-    const heavy = ['SceneClipCoverageLayout', 'MoodBoardDetail', 'PageLayout', 'SceneCard']
+    const heavy = ['SceneClipCoverageLayout', 'MediaLightbox', 'PageLayout', 'SceneCard']
       .map((name) => CLIENT_BROWSER_SHARD_OWNERS[browser.find((file) => file.endsWith(`/${name}.browser.test.js`))]);
-    expect(new Set(heavy).size).toBe(4);
+    expect(heavy).not.toContain(undefined);
+    expect(new Set(heavy).size).toBe(heavy.length);
     for (const file of browser) expect(existsSync(join(repoRootDir, file)), file).toBe(true);
   });
 

@@ -2002,7 +2002,7 @@ describe('CI test impact planner', () => {
     const full = buildCiTestPlan(['server/vitest.config.js'], { trackedFiles: [...TRACKED, ...BROWSER_SUITES] });
     expect(full.shards).toEqual({
       server: shardIndexes('full', FULL_SUITE_SHARDS.server),
-      client: [1, 2, 3, 4],
+      client: [1, 2, 3, 4, 5, 6],
       browser: [1, 2, 3, 4],
       windows: shardIndexes('full', FULL_SUITE_SHARDS.windows),
     });

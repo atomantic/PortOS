@@ -129,9 +129,10 @@ describe('trusted CI test-memo cache reuse', () => {
     expect(additionalKeys(restoreFrom(initial, [fallback, scopedKey], scopedContext))).toEqual(fullKeys);
     expect(additionalKeys(restoreFrom(initial, [], scopedContext))).toEqual(fullKeys);
     // A cache from an older shard layout must still fetch every current lineage.
-    const previousLayout = fullKeys[0].replace(`of${count}-`, `of${count - 1}-`);
+    const previousCount = family === 'client' ? 4 : count - 1;
+    const previousLayout = fullKeys[0].replace(`of${count}-`, `of${previousCount}-`);
     expect(additionalKeys(restoreFrom(initial, [previousLayout], scopedContext))).toEqual(fullKeys);
-    // The delimiter distinguishes, for example, client-4of4 from client-4of40.
+    // The delimiter distinguishes a partition such as client-6of6 from client-6of60.
     expect(additionalKeys(fallback.replace(`of${count}-`, `of${count}0-`))).toEqual(fullKeys);
 
     expect(memoPath(initial)).toBe(memoPath(save));
