@@ -396,9 +396,11 @@ export default function LocalLlmPlayground() {
     if (loadingStatus || status == null || runtimeRows == null) return;
     const installedKeys = new Set(installedTargets.map(localLlmTargetKey));
     setSelectedTargets((previous) => {
-      // With the runtime listing failed, a runtime target's inventory is unknown, not empty: keep it.
-      const next = previous.filter((target) => installedKeys.has(localLlmTargetKey(target))
-        || (runtimeError && !MANAGED_BACKENDS.includes(target.backend)));
+      // A runtime whose listing failed (whole request, or its own row's `error`) has an unknown inventory, not an
+      // empty one: keep its targets so a transient failure cannot swap the selected model for another backend's.
+      const inventoryUnknown = (backend) => !MANAGED_BACKENDS.includes(backend)
+        && (Boolean(runtimeError) || Boolean(runtimeRows.find((r) => r.id === backend)?.error));
+      const next = previous.filter((target) => installedKeys.has(localLlmTargetKey(target)) || inventoryUnknown(target.backend));
       return next.length === previous.length ? previous : next;
     });
   }, [installedTargets, loadingStatus, runtimeError, runtimeRows, status]);
