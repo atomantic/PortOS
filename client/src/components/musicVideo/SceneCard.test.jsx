@@ -980,6 +980,40 @@ describe('clip playback and coverage', () => {
 });
 
 describe('Sent to the model', () => {
+  it('keeps the open additions in place while the same shot preview refreshes', async () => {
+    const scene = { sceneId: 's1', prompt: 'A rider turns', referenceImageId: 'frame.png', startSec: 0, endSec: 4, takes: [] };
+    const preview = (text) => ({ backend: 'grok', sentPrompt: text, promptAdditions: [{ id: 'camera-move', label: 'Camera move', text }] });
+    let finishRefresh;
+    previewVideoPrompt.mockResolvedValueOnce(preview('Slow pan'))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishRefresh = resolve; }))
+      .mockResolvedValueOnce(preview('New prompt composition'));
+    const card = (updatedAt, shot = scene) => <SceneCard scene={shot} project={{ id: 'mv-1', updatedAt, scenes: [shot] }}
+      index={0} expanded lipSyncBackend="grok" falVideoSettings={{ backend: 'grok' }} onEditLocal={vi.fn()} onSave={vi.fn()} />;
+    const { rerender } = render(card('before'));
+    const panel = screen.getByTestId('render-inputs');
+    const inputs = within(panel);
+    const chip = await inputs.findByRole('button', { name: '+ Camera move' });
+    fireEvent.click(chip);
+    fireEvent.click(inputs.getByRole('button', { name: 'Show full prompt' }));
+    expect(inputs.getByRole('button', { name: 'Hide full prompt' })).toHaveAttribute('aria-expanded', 'true');
+
+    rerender(card('after'));
+    expect(inputs.getByRole('button', { name: '+ Camera move' })).toBe(chip);
+    expect(chip).toHaveAttribute('aria-pressed', 'true');
+    expect(panel).toHaveAttribute('aria-busy', 'true');
+    await waitFor(() => expect(finishRefresh).toBeTypeOf('function'));
+    await act(async () => { finishRefresh(preview('Dolly forward')); });
+    expect(inputs.getByRole('button', { name: '+ Camera move' })).toBe(chip);
+    expect(panel).not.toHaveAttribute('aria-busy');
+    expect(chip).toHaveAttribute('aria-pressed', 'true');
+    expect(inputs.getByRole('button', { name: 'Hide full prompt' })).toHaveAttribute('aria-expanded', 'true');
+    expect(inputs.getAllByText('Dolly forward')).toHaveLength(2);
+
+    rerender(card('after', { ...scene, prompt: 'A rider stops' }));
+    expect(inputs.queryByText('Dolly forward')).not.toBeInTheDocument();
+    await waitFor(() => expect(previewVideoPrompt).toHaveBeenLastCalledWith(expect.objectContaining({ prompt: 'A rider stops' }), { silent: true }));
+  });
+
   // Uniquely catches the card's Render sending anything other than what the card shows, or dropping the Song audio toggle.
   it('shows the prompt Render sends and hands it, with the song audio pick, to the render', () => {
     const scene = { sceneId: 's1', prompt: 'She shakes her head', referenceImageId: 'start.png', startSec: 0, endSec: 4,

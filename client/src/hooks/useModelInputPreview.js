@@ -17,8 +17,10 @@ const PREVIEW_DELAY_MS = 500;
  * wrapper. A superseded response is dropped, and a refusal comes back as
  * `error` so the form can show why the render would be refused. `revision`
  * invalidates previews when saved context changes outside the request body.
+ * `retainOnContextChange` keeps a successful preview visible as `refreshing`
+ * while that context is checked again, never across request-body changes.
  */
-export function useModelInputPreview(fetchPreview, body, { enabled = true, revision } = {}) {
+export function useModelInputPreview(fetchPreview, body, { enabled = true, revision, retainOnContextChange = false } = {}) {
   const [state, setState] = useState({ preview: null, error: null });
   const generation = useRef(0);
   const key = enabled ? JSON.stringify(body) : null;
@@ -37,8 +39,11 @@ export function useModelInputPreview(fetchPreview, body, { enabled = true, revis
     };
   }, [fetchPreview, key, revision]);
 
-  return enabled && state.key === key && state.fetchPreview === fetchPreview && state.revision === revision
-    ? { preview: state.preview, error: state.error } : { preview: null, error: null };
+  if (enabled && state.key === key && state.fetchPreview === fetchPreview) {
+    if (state.revision === revision) return { preview: state.preview, error: state.error };
+    if (retainOnContextChange && state.preview) return { preview: state.preview, error: null, refreshing: true };
+  }
+  return { preview: null, error: null };
 }
 
 export default useModelInputPreview;
