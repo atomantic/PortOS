@@ -8,6 +8,7 @@
 // reshaping. `mode` drives which knobs are visible: codex hides everything except
 // resolution; external swaps guidance for cfgScale; local shows guidance + quantize.
 
+import { useId } from 'react';
 import { sortByLabel } from '../../lib/sortByLabel.js';
 import { Dice5 } from 'lucide-react';
 import { filterResolutions, MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from '../../lib/imageGenResolutions';
@@ -106,6 +107,8 @@ export default function ImageGenControls({
   // with the featured edit endpoints. A fresh text render keeps Featured as-is.
   cloudModelEditing = false,
 }) {
+  // useId: the queue's retry editors render this grid beside the compose form, so a fixed id would collide.
+  const seedId = useId();
   const isLocal = mode === IMAGE_GEN_MODE.LOCAL;
   // Cloud-CLI backends (codex, grok) pick model/steps/seed internally — only
   // resolution + style fields apply, so the local-only knobs are hidden.
@@ -216,10 +219,10 @@ export default function ImageGenControls({
           is honored, so the rest of the knobs are hidden in that mode. */}
       {!isCloudCli && showSeed && (
         <div>
-          <label htmlFor="image-gen-seed" className="block text-xs font-medium text-gray-400 mb-1">Seed</label>
+          <label htmlFor={seedId} className="block text-xs font-medium text-gray-400 mb-1">Seed</label>
           <div className="flex items-center gap-1">
             <input
-              id="image-gen-seed"
+              id={seedId}
               type="number"
               value={seed ?? ''}
               onChange={(e) => onSeedChange?.(e.target.value)}

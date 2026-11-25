@@ -26,6 +26,7 @@ import { I2V_REFERENCE_MODES } from '../lib/videoReferenceModes.js';
 import { VIDEO_TILING_MODES } from '../lib/videoTiling.js';
 import { DRAFT_DECODE_IDS, isFullDecode } from '../lib/videoDraftDecoders.js';
 import { VIDEO_STREAMING_MODES, isDefaultVideoStreamingMode } from '../lib/videoStreamingMode.js';
+import { imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE } from '../lib/sharedSchemas.js';
 import { MAX_CONTEXT_FRAMES, resolveContinuityRequest } from '../lib/videoContinuity.js';
 
 const router = Router();
@@ -326,6 +327,15 @@ const VIDEO_RETRY_BOUNDS_SCHEMA = z.object({
   fps: z.number().int().min(1).max(60).optional(),
 }).passthrough();
 
+// Image retries get the same size limits the compose form and POST /image-gen
+// enforce (per-edge cap + total-pixel cap). RETRY_OVERRIDE_SCHEMA keeps its wider
+// edge range for the video kinds, so image is checked here. Only override values
+// are checked: a stored job already past the cap still retries unchanged.
+const IMAGE_RETRY_BOUNDS_SCHEMA = z.object({
+  width: imageEdgeSchema,
+  height: imageEdgeSchema,
+}).passthrough();
+
 const retryBodySchema = z.object({
   params: RETRY_OVERRIDE_SCHEMA.optional(),
 }).optional();
@@ -394,6 +404,13 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
   if (job.kind === 'video') {
     const bounds = VIDEO_RETRY_BOUNDS_SCHEMA.safeParse(rawOverrides);
     if (!bounds.success) throw new ServerError('Video retry settings are outside the supported range', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (job.kind === 'image') {
+    const bounds = IMAGE_RETRY_BOUNDS_SCHEMA.safeParse(rawOverrides);
+    if (!bounds.success) throw new ServerError('Image retry size is outside the supported range', { status: 400, code: 'VALIDATION_ERROR' });
+    if ((rawOverrides.width !== undefined || rawOverrides.height !== undefined) && !refineImagePixelCap(params)) {
+      throw new ServerError(PIXEL_CAP_MESSAGE, { status: 400, code: 'VALIDATION_ERROR' });
+    }
   }
   for (const key of ['seed', 'steps', 'guidanceScale', 'imageStrength', 'i2vReferenceMode', 'speedProfileId', 'draftDecode', 'streamingMode', 'a2vLoraStageStrengths']) {
     if (rawOverrides[key] === null) delete params[key];
