@@ -703,13 +703,16 @@ describe('fableLoom production service', () => {
       visualConditioningMocks.fableLoomImageCapabilities.mockImplementation(realCompiler.fableLoomImageCapabilities);
       loras.readTriggerWordsByFilename.mockResolvedValue({});
       const settings = await settingsMocks.getSettings();
-      const prepared = await prepareFableLoomImageParams({ settings, mode: 'local', params: {
+      const params = {
         fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' },
         prompt: 'An authored view', negativePrompt: 'fog', modelId: 'image-model',
         referenceImagePaths: [reference], referenceImageStrengths: [0.4],
-        initImagePath: init, initImageStrength: 0.3,
         loraPaths: [adapter], loraScales: [0.7],
-      } });
+      };
+      await expect(prepareFableLoomImageParams({
+        settings, mode: 'local', params: { ...params, initImagePath: init, initImageStrength: 0.3 },
+      })).rejects.toMatchObject({ status: 400, code: 'FABLELOOM_INPUTS_INCOMPATIBLE' });
+      const prepared = await prepareFableLoomImageParams({ settings, mode: 'local', params });
       expect(prepared.visualConditioning.adapters).toEqual([
         expect.objectContaining({ source: 'Canon adapter', filename: 'canon.safetensors' }),
         expect.objectContaining({ source: 'Request adapter', relativePath: 'nested/adapter.safetensors' }),
@@ -743,7 +746,6 @@ describe('fableLoom production service', () => {
       expect(reloaded.assets).toEqual(expect.arrayContaining([
         expect.objectContaining({ role: 'character-neutral', inputRoot: 'images', filename: 'neutral.png', sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }),
         expect.objectContaining({ role: 'request-reference', inputRoot: 'images', filename: 'reference.png' }),
-        expect.objectContaining({ role: 'request-init', inputRoot: 'images', strength: 0.3 }),
       ]));
       expect(reloaded.adapters).toEqual([
         expect.objectContaining({ source: 'Canon adapter', filename: 'canon.safetensors' }),
@@ -755,7 +757,6 @@ describe('fableLoom production service', () => {
       await vi.waitFor(() => expect(queueMocks.enqueueJob).toHaveBeenCalled());
       expect(queueMocks.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({
         prompt: prepared.prompt, negativePrompt: prepared.negativePrompt, seed: 123,
-        initImagePath: init, initImageStrength: 0.3,
         referenceImagePaths: [...canonImages, reference], referenceImageStrengths: [1, 1, 1, 0.4],
         loraFilenames: ['canon.safetensors'], loraPaths: [adapter], loraScales: [0.8, 0.7],
       }) }));
