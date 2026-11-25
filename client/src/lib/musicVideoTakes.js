@@ -121,6 +121,7 @@ export const takeControl = {
   acceptCharacters: (scene, take) => `accept-characters:${scene.sceneId}:${take.takeId}`,
   mark: (take) => `mark:${take.kind === 'video' ? 'video' : 'image'}:${take.assetId}`,
   rejectUnused: (scene) => `reject-unused:${scene.sceneId}`,
+  move: (scene, take) => `move:${scene.sceneId}:${take.takeId}`,
 };
 /** The control a review waits on, or null for a note alone. */
 export const reviewTakeControl = (scene, take, review) => (review.acknowledgeRenderQuality ? takeControl.acknowledge(scene, take)

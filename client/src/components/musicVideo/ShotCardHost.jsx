@@ -168,6 +168,7 @@ export default function ShotCardHost({ board, sceneId, storyboard = null, onStor
         onRejectUnusedTakes: takes.rejectUnusedTakes,
         onSwapFrames: takes.swapFrames,
         onMarkTake: takes.markTake,
+        onMoveTake: takes.moveTake,
         onCheckTake: takes.checkTake,
         onPoolMarked: takes.applyPoolMarks,
         onImportTake: (target) => board.setPickerTarget({ type: 'take', sceneId: target.sceneId }),

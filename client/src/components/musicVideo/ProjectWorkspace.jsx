@@ -631,6 +631,7 @@ export default function ProjectWorkspace({
           saving={takes.pending}
           onSelectTake={takes.selectTake}
           onReviewTake={takes.reviewTake}
+          onMoveTake={takes.moveTake}
           onOpenPreview={openPreview}
           pendingOnly={contactSheetPendingOnly}
           onPendingOnlyChange={setContactSheetPendingOnly}

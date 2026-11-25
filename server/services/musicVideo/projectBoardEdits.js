@@ -18,7 +18,7 @@ import { fileAppendedTakes, markPoolAssets, projectTakeAssets } from './mediaPoo
 import { getProject, getStoredProjectRecord, mutateProjectRecord, updateProjectForEdit } from './projects.js';
 import {
   appendSceneTakes as appendTakes, selectSceneTake as selectTake, rejectUnusedTakes, swapSceneFrames, reviewSceneTake as reviewTake,
-  plateCheckPrompt, plateCheckTake, recordTakePlateEvidence,
+  plateCheckPrompt, plateCheckTake, recordTakePlateEvidence, moveSceneTake as moveTake,
 } from './takes.js';
 
 const presentEdit = async ({ before, after }) => (await import('./editResult.js')).presentEditResult({ before, after });
@@ -383,6 +383,16 @@ export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAsset
   });
   const { edit: result } = await withEditResult({}, edit);
   return { scene: placed.scene, edit: result };
+}
+
+/**
+ * Move a take from one shot to another (takes.js moveSceneTake). Answers `{ scene, target, take, edit }`:
+ * both shots as GET presents them, so the board redraws both strips from the reply.
+ */
+export async function moveSceneTake(id, sceneId, takeId, { toSceneId }) {
+  const { outcome, edit } = await editWrite(id, (current) => moveTake(current, sceneId, takeId, { toSceneId }));
+  const { edit: result } = await withEditResult({}, edit);
+  return { scene: presentedScene(result, sceneId, outcome.scene), target: presentedScene(result, toSceneId, outcome.target), take: outcome.take, edit: result };
 }
 
 /** Reject every take of a shot that is not its selected frame, end frame or clip. Answers `{ scene, rejected, edit }`. */
