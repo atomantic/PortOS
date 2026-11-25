@@ -24,6 +24,8 @@ const {
   computeNextRecheckAt,
   parseCaRegistryCsv,
   parseBadboolList,
+  getBroker,
+  refreshBrokers,
   listBrokerCases,
   recordScanVerdict,
   ensureSeeded,
@@ -212,12 +214,22 @@ describe('computeNextRecheckAt — state-dependent backoff', () => {
 
 describe('parseCaRegistryCsv', () => {
   it('extracts name + url rows', () => {
-    const csv = 'Business Name,Website URL\nAcme Data,https://acme.example\n"Beta, Inc.",https://beta.example';
+    const csv = 'Business Name,Website URL\nAcme Data,https://acme.example\n"Beta,\nInc.",https://beta.example';
     const out = parseCaRegistryCsv(csv);
     expect(out.length).toBe(2);
     expect(out[0]).toMatchObject({ name: 'Acme Data', source: 'ca_registry', confidence: 'auto' });
     expect(out[0].id).toBe('ca-acme-data');
     expect(out[0].urls).toEqual({ home: 'https://acme.example' });
+    expect(out[1]).toMatchObject({ name: 'Beta,\nInc.', urls: { home: 'https://beta.example' } });
+  });
+  it('keeps only an HTTP(S) home link from the website column', () => {
+    const csv = 'Business Name,Opt-Out URL,Website URL,Search URL\n'
+      + 'Acme,https://optout.example,http://acme.example,https://search.example\n'
+      + 'Beta,https://optout.example,javascript:example,https://search.example';
+    expect(parseCaRegistryCsv(csv).map(({ urls, optout }) => ({ urls, optout }))).toEqual([
+      { urls: { home: 'http://acme.example' }, optout: {} },
+      { urls: {}, optout: {} },
+    ]);
   });
   it('returns [] on empty / headerless input', () => {
     expect(parseCaRegistryCsv('')).toEqual([]);
@@ -233,8 +245,53 @@ describe('parseBadboolList', () => {
     expect(out[1].id).toBe('bar');
   });
   it('accepts a { brokers: [...] } wrapper and drops nameless rows', () => {
-    const out = parseBadboolList({ brokers: [{ url: 'https://x.example' }, { name: 'Yes' }] });
+    const out = parseBadboolList({ brokers: [null, { url: 'https://x.example' }, { name: 'Yes' }] });
     expect(out.map((b) => b.name)).toEqual(['Yes']);
+  });
+  it('ignores search and opt-out fields and validates both home link shapes', () => {
+    const out = parseBadboolList([
+      { name: 'Nested', urls: { home: 'https://nested.example', search: 'https://search.example' }, optout: { method: 'email' } },
+      { name: 'Unsafe', urls: { home: 'file:///example' } },
+      { name: 'Unsafe flat', url: 'data:text/plain,example' },
+    ]);
+    expect(out.map(({ urls, optout }) => ({ urls, optout }))).toEqual([
+      { urls: { home: 'https://nested.example' }, optout: {} },
+      { urls: {}, optout: {} },
+      { urls: {}, optout: {} },
+    ]);
+  });
+});
+
+describe('broker discovery storage boundary', () => {
+  it('writes only validated home links from refreshed brokers', async () => {
+    const client = { query: vi.fn().mockResolvedValue({ rowCount: 0 }) };
+    withTransactionMock.mockImplementation(async (fn) => fn(client));
+    await refreshBrokers({
+      fetchBadbool: async () => [{ id: 'auto', urls: { home: 'https://auto.example', search: 'https://search.example' }, optout: { method: 'email' } }],
+      fetchCaRegistry: async () => [{ id: 'ca-auto', urls: { home: 'file:///example' }, optout: { method: 'web_form' } }],
+    });
+    const inserted = client.query.mock.calls.filter(([sql, params]) => /INSERT INTO privacy_brokers/.test(sql) && ['auto', 'ca-auto'].includes(params[0]));
+    expect(inserted.map(([, [id, , urls, optout]]) => [id, JSON.parse(urls), JSON.parse(optout)])).toEqual([
+      ['auto', { home: 'https://auto.example' }, {}],
+      ['ca-auto', {}, {}],
+    ]);
+  });
+
+  it('filters legacy discovery automation on read and preserves curated automation', async () => {
+    const urls = { home: 'https://broker.example', search: 'https://broker.example/search' };
+    const optout = { method: 'web_form', url: 'https://broker.example/optout' };
+    queryMock.mockResolvedValueOnce({ rows: [{ source: 'badbool', urls, optout }] });
+    queryMock.mockResolvedValueOnce({ rows: [{ source: 'ca_registry', urls: { home: 'file:///example' }, optout }] });
+    queryMock.mockResolvedValueOnce({ rows: [{ source: 'curated', urls, optout }] });
+    const badbool = await getBroker('badbool');
+    expect(badbool.urls).toEqual({ home: urls.home });
+    expect(badbool.optout).toEqual({});
+    const ca = await getBroker('ca');
+    expect(ca.urls).toEqual({});
+    expect(ca.optout).toEqual({});
+    const curated = await getBroker('curated');
+    expect(curated.urls).toEqual(urls);
+    expect(curated.optout).toEqual(optout);
   });
 });
 
