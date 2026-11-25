@@ -151,8 +151,9 @@ The selected work is split across parallel jobs:
   restored and its trusted-rebuild mark checks out. Autofixer tests use the
   server workspace's Express install. The impact job always checks the syntax
   of `server/index.js`, even when the planner skips the server job.
-- **Client tests and build** — affected client tests, plus the production build
-  whenever client source changed. The build runs on shard 1 only.
+- **Client tests** — affected client tests, sharded when the impact plan fans out.
+- **Build client** — runs the production build once when selected by the impact
+  plan. It shares the client install cache and runs in parallel with the test shards.
 - **Lint client** — Biome over the changed client sources, in its own job. It used
   to be a shard-1 step on the client job. Steps within a job run sequentially, so
   that put ~31 s of Biome in front of the slowest shard's tests rather than beside

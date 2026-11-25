@@ -274,8 +274,10 @@ export const SERVER_HEAVY_SHARD_OWNERS = {
  * The 34 real-Chromium client suites, pinned so the 4-way client matrix gets 8-9
  * each and the four slowest (SceneClipCoverageLayout, MoodBoardDetail,
  * PageLayout, SceneCard) land on distinct shards (#17750). The raw hash had
- * placed 6 / 9 / 9 / 10 with the two slowest together. A browser suite added
- * later is simply not in the table and stays on the hash.
+ * placed 6 / 9 / 9 / 10 with the two slowest together. Swap StoryBuilder
+ * (~18s) and musicVideoFlyer (~1s) to shift work from shard 4 to shard 3
+ * without stacking the four slowest suites (#18795). Later additions stay
+ * on the hash until they are pinned.
  */
 export const CLIENT_BROWSER_SHARD_OWNERS = Object.freeze({
   'client/src/components/Drawer.browser.test.js': 1,
@@ -300,9 +302,9 @@ export const CLIENT_BROWSER_SHARD_OWNERS = Object.freeze({
   'client/src/components/goals/GoalsTreeView.browser.test.js': 3,
   'client/src/components/musicVideo/CastAndSetsGreybox.browser.test.js': 3,
   'client/src/components/settings/AiAssignmentsTab.layout.browser.test.js': 3,
-  'client/src/lib/musicVideoFlyer.browser.test.js': 3,
   'client/src/pages/PageLayout.browser.test.js': 3,
   'client/src/pages/Shell.browser.test.js': 3,
+  'client/src/pages/StoryBuilder.browser.test.js': 3,
   'client/src/components/CmdKSearch.browser.test.js': 4,
   'client/src/components/DownloadManager.browser.test.js': 4,
   'client/src/components/ThemeSwitcher.browser.test.js': 4,
@@ -310,8 +312,8 @@ export const CLIENT_BROWSER_SHARD_OWNERS = Object.freeze({
   'client/src/components/media/AssetReferences.browser.test.js': 4,
   'client/src/components/musicVideo/BlenderFilmPanel.browser.test.js': 4,
   'client/src/components/musicVideo/SceneCard.browser.test.js': 4,
+  'client/src/lib/musicVideoFlyer.browser.test.js': 4,
   'client/src/pages/FableLoomStory.browser.test.js': 4,
-  'client/src/pages/StoryBuilder.browser.test.js': 4,
 });
 
 /**
