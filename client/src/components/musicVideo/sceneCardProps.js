@@ -132,3 +132,5 @@ export function normalizeSceneCardProps({ position, composition, media, takes, a
 
   return { position: pos, composition: comp, media: med, takes: tk, actions: act };
 }
+
+export { SECONDARY_BUTTON };
