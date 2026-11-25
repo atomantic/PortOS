@@ -4,6 +4,7 @@ import OrchestrationTab from './OrchestrationTab';
 import {
   getOrchestrationProfiles,
   saveOrchestrationProfile,
+  updateOrchestrationProfile,
   deleteOrchestrationProfile,
 } from '../../services/apiAgents.js';
 import { getProviders } from '../../services/apiProviders.js';
@@ -151,10 +152,29 @@ describe('OrchestrationTab', () => {
     await waitFor(() => {
       expect(saveOrchestrationProfile).toHaveBeenCalledWith(expect.objectContaining({
         name: 'Test Profile',
-      }));
+      }), { silent: true });
     });
     // Saved record is applied locally: no follow-up list read, no spinner flash.
     expect(getOrchestrationProfiles).toHaveBeenCalledTimes(1);
+  });
+
+  it('updates a profile without triggering the API error toast', async () => {
+    updateOrchestrationProfile.mockResolvedValue({
+      ...mockProfiles[1],
+      name: 'Updated Team',
+    });
+
+    render(<OrchestrationTab />);
+    await waitFor(() => expect(screen.getByText('Custom Team')).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('Edit profile Custom Team'));
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\. Heavy Planner/i), { target: { value: 'Updated Team' } });
+    fireEvent.click(screen.getByText('Save Profile'));
+
+    await waitFor(() => {
+      expect(updateOrchestrationProfile).toHaveBeenCalledWith('custom-team', expect.objectContaining({
+        name: 'Updated Team',
+      }), { silent: true });
+    });
   });
 
   it('confirms inline before deleting a non-builtin profile', async () => {
@@ -168,7 +188,7 @@ describe('OrchestrationTab', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     await waitFor(() => {
-      expect(deleteOrchestrationProfile).toHaveBeenCalledWith('custom-team');
+      expect(deleteOrchestrationProfile).toHaveBeenCalledWith('custom-team', { silent: true });
     });
     await waitFor(() => expect(screen.queryByText('Custom Team')).toBeNull());
     expect(getOrchestrationProfiles).toHaveBeenCalledTimes(1);
