@@ -1,22 +1,22 @@
 /**
  * Where the vLLM Qwen3.8-27B compose project lives, and whether its weights are already on disk.
  *
- * PortOS does not vendor this stack: it is an upstream compose project (`syv-ai/qwen38-27b-rtx3090`) an operator clones and prepares once (~9.5 GB image, ~20 GB weights).
- * The readiness checklist's start button is only for an ALREADY prepared project: `docker compose up` in an unprepared directory would start the multi-GB download PortOS promises never to start
- * on its own. This module reads directory entries and records where it looked; it never runs docker, contacts a registry, or reads a weight file.
- *
- * `hasWeights` is a tri-state: `true` (a Qwen model dir was found), `false` (every candidate root was readable and none held one), `null` (no candidate root could be read).
- * Start treats anything but `true` as "not verified" and refuses, with different copy per case ("cache is empty" vs "cannot see your cache"). `null` is a real deployment shape: on Windows the
- * project is cloned inside a WSL2 distro, unreachable at the default `~/qwen-serving`; `VLLM_QWEN_PROJECT_DIR` (UNC path) fixes it and `VLLM_QWEN_WEIGHTS_DIR` covers a cache elsewhere.
+ * Start requires a complete checkpoint for the single-user configuration. Inspect the
+ * model metadata and tensor headers on disk without invoking Docker or the network.
+ * `hasWeights` is true for verified weights, false for an incomplete checkpoint in
+ * a readable cache, and null when the location or its contents cannot be inspected.
  *
  * On Windows `services/vllmQwenManager.js` asks WSL for that path (via `services/wslProjectPlacement.js`) and records it through `recordVllmProjectDir`, one line in PortOS's own `.env`
  * (mechanics in `lib/recordedProjectDir.js`, shared with SGLang); this module states only which variable names THIS project.
  */
 
-import { readdir, stat } from 'fs/promises';
+import { constants } from 'fs';
+import { access, readFile, readdir, stat } from 'fs/promises';
 import { homedir } from 'os';
-import { join } from 'path';
+import { join, resolve } from 'path';
+import { parseEnv } from 'util';
 
+import { isSafeHfRepoRelativePath, repoToDirName, verifySafetensorsStructure } from './hfCache.js';
 import {
   projectDirIsSettled,
   readRecordedProjectDir,
@@ -65,14 +65,15 @@ export async function recordVllmProjectDir(dir, envPath = PORTOS_ENV_PATH) {
 /** Compose file names the upstream project may ship under. */
 const COMPOSE_FILENAMES = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
 
-/** HF hub cache names repo dirs `models--<org>--<repo>`. Matches on `qwen`, not an exact id: upstream may rename the requant repo, and a stale id would report a prepared machine as empty. */
-const QWEN_CACHE_ENTRY = /^models--.*qwen/i;
-
-/** Upstream's `prepare` service runs `hf download --local-dir /app/models/<model>` (bind-mounted from `${MODELS_DIR:-./models}`), so a prepared machine holds a plain `models/Qwen3.8-27B-…/` dir, never `models--…`; matching only the hub shape reported it as empty. */
-const QWEN_LOCAL_ENTRY = /qwen/i;
-
-/** What makes a `qwen`-named directory *weights* rather than a notes folder; the files upstream's own readiness check keys on (sharded index, or the tensor file itself for a single-file drafter). */
-const LOCAL_WEIGHT_MARKERS = ['model.safetensors.index.json', 'model.safetensors'];
+// Match the pinned upstream single-user launcher and prepare script.
+const BASE_MODEL = 'Qwen3.8-27B-W4A16-AutoRound';
+const FAST_MODEL = `${BASE_MODEL}-fast`;
+const DRAFTERS = ['Qwen3.8-27B-DFlash2-W4A16', 'Qwen3.8-27B-DFlash2'];
+const INDEX = 'model.safetensors.index.json';
+const SINGLE_WEIGHT = 'model.safetensors';
+const HUB_REPO = /^[\w.-]+\/[\w.-]+$/;
+const LOCAL_MODEL_PREFIX = /^(?:\/app\/|\.\/)?models\//;
+const isHubModel = (model) => HUB_REPO.test(model) && !LOCAL_MODEL_PREFIX.test(model);
 
 const isDirectory = (path) => stat(path).then((s) => s.isDirectory(), () => false);
 const isFile = (path) => stat(path).then((s) => s.isFile(), () => false);
@@ -90,37 +91,132 @@ export function vllmProjectDirIsSettled(env = process.env, envPath = PORTOS_ENV_
   return projectDirIsSettled(VLLM_PROJECT_DIR_ENV, env, envPath);
 }
 
-/** Candidate HF hub caches, most specific first: operator override, caches the compose project may bind-mount, then `HF_HOME`/`~/.cache/huggingface`. */
-function weightsCandidateRoots(projectDir, env = process.env) {
-  const override = String(env?.[VLLM_WEIGHTS_DIR_ENV] || '').trim();
-  const hfHome = String(env?.HF_HOME || '').trim();
-  return [
-    ...(override ? [override] : []),
-    join(projectDir, 'models'),
-    join(projectDir, 'hf-cache'),
-    join(projectDir, 'huggingface', 'hub'),
-    join(projectDir, '.cache', 'huggingface', 'hub'),
-    ...(hfHome ? [join(hfHome, 'hub')] : []),
-    join(resolveHome(env), '.cache', 'huggingface', 'hub'),
-  ];
+async function ifMissing(operation, fallback) {
+  try {
+    return await operation();
+  } catch (err) {
+    if (err.code === 'ENOENT') return fallback;
+    throw err;
+  }
 }
 
-/**
- * Whether one cache root holds Qwen weights, in either layout (hub entry or upstream's `--local-dir` model directory).
- *
- * @param {string} root
- * @param {string[]} entries
- * @returns {Promise<boolean>}
- */
-async function rootHoldsQwenWeights(root, entries) {
-  if (entries.some((name) => QWEN_CACHE_ENTRY.test(name))) return true;
-  for (const name of entries.filter((entry) => QWEN_LOCAL_ENTRY.test(entry))) {
-    for (const marker of LOCAL_WEIGHT_MARKERS) {
-      // two stats on a short, ordered candidate list
-      if (await isFile(join(root, name, marker))) return true;
+const readText = (path) => ifMissing(() => readFile(path, 'utf8'), null);
+const fileStat = (path) => ifMissing(() => stat(path), null);
+
+async function readableFile(path) {
+  const info = await fileStat(path);
+  if (!info?.isFile() || info.size === 0) return null;
+  await access(path, constants.R_OK);
+  return info;
+}
+
+async function completeTensor(path) {
+  const info = await readableFile(path);
+  if (!info) return false;
+  const result = await verifySafetensorsStructure(path, info.size);
+  if (result.reason === 'unreadable') throw new Error('Cannot open model weights');
+  return result.ok;
+}
+
+async function completeCheckpoint(dir, { preparedBase = false, drafter = false } = {}) {
+  const metadata = drafter ? ['config.json'] : ['config.json', 'tokenizer.json', 'tokenizer_config.json'];
+  for (const name of metadata) {
+    if (!await readableFile(join(dir, name))) return false;
+  }
+
+  const indexPath = join(dir, INDEX);
+  const indexInfo = await fileStat(indexPath);
+  if (!indexInfo) return !preparedBase && completeTensor(join(dir, SINGLE_WEIGHT));
+  if (!indexInfo.isFile()) return false;
+
+  let index;
+  try {
+    index = JSON.parse(await readText(indexPath))?.weight_map;
+  } catch (err) {
+    if (err instanceof SyntaxError) return false;
+    throw err;
+  }
+  if (!index || typeof index !== 'object' || Array.isArray(index)) return false;
+  const tensors = Object.keys(index);
+  if (!tensors.length) return false;
+  const shards = new Set(Object.values(index));
+  for (const shard of shards) {
+    if (!isSafeHfRepoRelativePath(shard) || !shard.endsWith('.safetensors')
+      || !await completeTensor(join(dir, shard))) return false;
+  }
+
+  // Raw upstream shards can be intact while prepare's requantization is unfinished.
+  return !preparedBase || (
+    Object.hasOwn(index, 'lm_head.weight_packed')
+    && tensors.some((name) => name.endsWith('embed_tokens.weight_packed'))
+    && Object.hasOwn(index, 'mtp.layers.0.mlp.down_proj.weight_packed')
+    && Object.hasOwn(index, 'mtp.draft_lm_head.weight_packed')
+    && Boolean(await readableFile(join(dir, 'mtp_draft_vocab_ids.pt')))
+  );
+}
+
+async function checkpointPath(model, modelsRoot, hubRoot) {
+  const local = model.replace(LOCAL_MODEL_PREFIX, '');
+  if (local !== model && isSafeHfRepoRelativePath(local)) return join(modelsRoot, local);
+  if (!isHubModel(model) || !isSafeHfRepoRelativePath(model)) return null;
+
+  // A serving repo ID selects its current Hub ref. Snapshots can coexist, but a
+  // complete older revision cannot stand in for a partial selected revision.
+  const repo = join(hubRoot, repoToDirName(model));
+  const ref = (await readText(join(repo, 'refs', 'main')))?.trim() || '';
+  return /^[a-f0-9]{40}$/i.test(ref) ? join(repo, 'snapshots', ref) : null;
+}
+
+async function inspectWeights(dir, env) {
+  const settings = parseEnv(await readText(join(dir, '.env')) ?? '');
+  const override = env[VLLM_WEIGHTS_DIR_ENV]?.trim();
+  const modelsRoot = resolve(dir, override || env.MODELS_DIR || settings.MODELS_DIR || 'models');
+  const hfHome = env.HF_HOME || settings.HF_HOME;
+  const hubRoot = resolve(dir, override || env.HF_HUB_CACHE || settings.HF_HUB_CACHE
+    || (hfHome ? join(hfHome, 'hub') : join(resolveHome(env), '.cache', 'huggingface', 'hub')));
+  const configuredModel = settings.MODEL || '';
+  const configuredDraft = settings.DRAFT || '';
+  // Compose resolves interpolated .env values itself. A literal guess could
+  // verify a different directory from the one selected in the container.
+  if ([modelsRoot, hubRoot, configuredModel, configuredDraft, settings.SPEC].some((value) => value?.includes('$'))) {
+    return { hasWeights: null, weightsRoot: null };
+  }
+
+  const usesHub = isHubModel(configuredModel);
+  if ((usesHub || (settings.SPEC === 'dflash2' && isHubModel(configuredDraft)))
+    && settings.HF_HUB_OFFLINE !== '1') {
+    return { hasWeights: null, weightsRoot: null };
+  }
+  if (usesHub && settings.VERIFY !== '0') return { hasWeights: null, weightsRoot: null };
+  const root = usesHub ? hubRoot : modelsRoot;
+  await readdir(root);
+  const fast = !configuredModel && (await fileStat(join(modelsRoot, FAST_MODEL)))?.isDirectory();
+  const model = configuredModel || `/app/models/${fast ? FAST_MODEL : BASE_MODEL}`;
+  const checkpoint = await checkpointPath(model, modelsRoot, hubRoot);
+  const preparedBase = checkpoint === join(modelsRoot, BASE_MODEL);
+  let complete = Boolean(checkpoint && await completeCheckpoint(checkpoint, { preparedBase }));
+  if (complete && checkpoint === join(modelsRoot, FAST_MODEL)) {
+    complete = Boolean(await readableFile(join(checkpoint, 'mtp_draft_vocab_ids.pt')));
+    // The container entrypoint verifies the default base before launch, even
+    // when the single-user launcher will then choose the fast variant.
+    if (complete && fast && settings.VERIFY !== '0') {
+      complete = await completeCheckpoint(join(modelsRoot, BASE_MODEL), { preparedBase: true });
     }
   }
-  return false;
+  if (complete && settings.SPEC === 'dflash2') {
+    let draft = configuredDraft;
+    if (!draft) {
+      for (const name of DRAFTERS) {
+        if ((await fileStat(join(modelsRoot, name, SINGLE_WEIGHT)))?.isFile()) {
+          draft = `/app/models/${name}`;
+          break;
+        }
+      }
+    }
+    const draftPath = await checkpointPath(draft, modelsRoot, hubRoot);
+    complete = Boolean(draftPath && await completeCheckpoint(draftPath, { drafter: true }));
+  }
+  return { hasWeights: complete, weightsRoot: complete ? root : null };
 }
 
 /**
@@ -146,25 +242,10 @@ export async function inspectVllmQwenProject(env = process.env, envPath = PORTOS
     }
   }
 
-  let readAnyRoot = false;
-  let weightsRoot = null;
-  for (const root of weightsCandidateRoots(dir, env)) {
-    // short, ordered, first-match-wins
-    const entries = await readdir(root).catch(() => null);
-    if (entries === null) continue; // absent or unreadable — says nothing either way
-    readAnyRoot = true;
-    // short, ordered, first-match-wins
-    if (await rootHoldsQwenWeights(root, entries)) { weightsRoot = root; break; }
-  }
-
-  return {
-    dir,
-    hasProject,
-    composeFile,
-    // `null` = no candidate cache could be read, which is NOT "no weights".
-    hasWeights: weightsRoot ? true : (readAnyRoot ? false : null),
-    weightsRoot,
-  };
+  const weights = composeFile
+    ? await inspectWeights(dir, env).catch(() => ({ hasWeights: null, weightsRoot: null }))
+    : { hasWeights: null, weightsRoot: null };
+  return { dir, hasProject, composeFile, ...weights };
 }
 
 /**
@@ -180,10 +261,10 @@ export function vllmStartBlockedReason(project) {
     return `${project.dir} exists but holds no docker-compose file. Point ${VLLM_PROJECT_DIR_ENV} at the cloned syv-ai/qwen38-27b-rtx3090 checkout.`;
   }
   if (project.hasWeights === false) {
-    return `the project is cloned but no Qwen weights are cached yet. Use the checklist's “Clone, build & prepare” button, which runs that step and names the ~20 GB before it starts — a plain Start will not spend it for you.`;
+    return `the project is cloned but the selected Qwen weights are missing or incomplete. Use the checklist's “Clone, build & prepare” button, which runs that step and names the ~20 GB before it starts — a plain Start will not spend it for you.`;
   }
-  if (project.hasWeights === null) {
-    return `PortOS cannot read a models directory for this project, so it cannot confirm the weights are already downloaded. On Windows it places the project inside WSL2 and records the UNC path for itself — if that record is stale, or the weights live somewhere else entirely, set ${VLLM_PROJECT_DIR_ENV} or ${VLLM_WEIGHTS_DIR_ENV} to where they actually are. Failing that, start it yourself with \`docker compose --profile single up -d\` in ${project.dir}.`;
+  if (project.hasWeights !== true) {
+    return `PortOS cannot read a models directory for this project or verify the selected model there. On Windows it places the project inside WSL2 and records the UNC path for itself — if that record is stale, or the weights live somewhere else entirely, set ${VLLM_PROJECT_DIR_ENV} or ${VLLM_WEIGHTS_DIR_ENV} to where they actually are. Failing that, start it yourself with \`docker compose --profile single up -d --no-deps --no-build --pull never single\` in ${project.dir}.`;
   }
   return null;
 }
