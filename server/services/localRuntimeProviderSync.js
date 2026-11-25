@@ -10,9 +10,10 @@
 
 import { refreshProviderModelsBatch, listProviders } from './provider/providers.js';
 import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
-import { createSingleFlight } from '../lib/singleFlight.js';
 
-const flight = createSingleFlight();
+// kind -> { running, again }. Single-flight with a trailing run: a notification arriving mid-refresh may follow a change
+// (a removal after a download) the running refresh already read past, so it schedules one more pass instead of joining it.
+const slots = new Map();
 
 /**
  * @param {{ kind: string, io?: {emit: Function}|null, waitForReady?: (() => Promise<{ready?: boolean, reason?: string|null}>)|null }} opts
@@ -20,9 +21,31 @@ const flight = createSingleFlight();
  *   resolves `ready`. A dead or never-answering runtime is not evidence the model set changed.
  * @returns {Promise<boolean>} true when a catalog was rewritten
  */
-export function syncRuntimeProviderModels({ kind, io = null, waitForReady = null }) {
-  return flight.run(kind, () => syncOnce({ kind, io, waitForReady })).catch((err) => {
-    console.error(`⚠️ Failed to refresh ${kind} provider models: ${err?.message ?? err}`);
+export async function syncRuntimeProviderModels({ kind, io = null, waitForReady = null }) {
+  const slot = slots.get(kind);
+  if (slot) {
+    // Every queued caller shares the one trailing pass, which uses the latest caller's readiness wait.
+    slot.pending = { io, waitForReady };
+    slot.trailing ??= new Promise((resolve) => { slot.release = resolve; });
+    return slot.trailing;
+  }
+  const mine = { pending: null, trailing: null, release: null };
+  slots.set(kind, mine);
+  let changed = await runGuarded({ kind, io, waitForReady });
+  while (mine.pending) {
+    const next = mine.pending;
+    const release = mine.release;
+    mine.pending = mine.trailing = mine.release = null;
+    changed = await runGuarded({ kind, ...next });
+    release(changed);
+  }
+  slots.delete(kind);
+  return changed;
+}
+
+async function runGuarded(args) {
+  return syncOnce(args).catch((err) => {
+    console.error(`⚠️ Failed to refresh ${args.kind} provider models: ${err?.message ?? err}`);
     return false;
   });
 }
