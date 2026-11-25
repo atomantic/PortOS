@@ -411,7 +411,23 @@ function scanReferencedPaths(rawSource) {
   const context = { helpers, scope: API_BASE_SCOPE, depth: 0 };
   const found = [];
 
+  // Literal spans first: a call-shaped text INSIDE a string (`'api.get("/x")'` in help text or a log)
+  // is a mention, so the verb scan below skips matches that start inside one.
+  const literals = [];
+  let i = 0;
+  while (i < source.length) {
+    const char = source[i];
+    if (char !== "'" && char !== '"' && char !== '`') { i++; continue; }
+    const end = char === '`' ? skipTemplate(source, i) : skipQuoted(source, i, char);
+    // A quote that does not close on its own line is an apostrophe in JSX text, not a literal.
+    if (char !== '`' && source.slice(i, end).includes('\n')) { i++; continue; }
+    literals.push([i, end]);
+    i = end;
+  }
+  const insideLiteral = (index) => literals.some(([from, to]) => index > from && index < to);
+
   for (const match of source.matchAll(API_VERB_CALL)) {
+    if (insideLiteral(match.index)) continue;
     const { text } = scanTo(source, match.index + match[0].length, [',']);
     const values = resolvePathExpression(text.trim(), context) ?? [];
     for (const value of values) {
@@ -422,18 +438,10 @@ function scanReferencedPaths(rawSource) {
 
   const loggingSpans = [...source.matchAll(/\bconsole\.\w+\s*\(/g)]
     .map((match) => [match.index, scanTo(source, match.index + match[0].length, []).end]);
-  let i = 0;
-  while (i < source.length) {
-    const char = source[i];
-    if (char !== "'" && char !== '"' && char !== '`') { i++; continue; }
-    const end = char === '`' ? skipTemplate(source, i) : skipQuoted(source, i, char);
-    // A quote that does not close on its own line is an apostrophe in JSX text, not a literal.
-    if (char !== '`' && source.slice(i, end).includes('\n')) { i++; continue; }
-    const insideLog = loggingSpans.some(([from, to]) => i > from && i < to);
-    if (!insideLog && !MATCHING_CONTEXT.test(source.slice(Math.max(0, i - 40), i))) {
-      found.push(...(foldReferencedLiteral(source.slice(i, end), context) ?? []));
-    }
-    i = end;
+  for (const [from, to] of literals) {
+    const insideLog = loggingSpans.some(([start, stop]) => from > start && from < stop);
+    if (insideLog || MATCHING_CONTEXT.test(source.slice(Math.max(0, from - 40), from))) continue;
+    found.push(...(foldReferencedLiteral(source.slice(from, to), context) ?? []));
   }
   return found;
 }
