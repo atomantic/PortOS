@@ -15,12 +15,10 @@
  * a PortOS-managed Ollama, so that port is refused.
  */
 
-import { createHash, randomUUID } from 'crypto';
-import { createReadStream } from 'fs';
+import { randomUUID } from 'crypto';
 import { chmod, copyFile, lstat, mkdir, mkdtemp, rename, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { commandExists } from '../lib/commandExists.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { sleep } from '../lib/fileUtils.js';
 import { LOCAL_RUNTIMES, localEndpointPort, localRuntimeKind, isLocalInstanceEndpoint } from '../lib/localProviderRuntime.js';
@@ -210,14 +208,6 @@ export async function getSlotstreamServerStatus() {
   };
 }
 
-async function sha256File(filePath) {
-  const hash = createHash('sha256');
-  for await (const chunk of createReadStream(filePath)) {
-    hash.update(chunk);
-  }
-  return hash.digest('hex');
-}
-
 /**
  * Install the pinned Apple Silicon Slotstream binary from GitHub Releases into
  * `~/.slotstream/bin`. Downloads and verifies SHA-256 in an isolated temp dir
@@ -230,13 +220,6 @@ export async function installSlotstream({ onProgress = () => {} } = {}) {
     throw new ServerError(SLOTSTREAM_UNSUPPORTED_REASON, { status: 400, code: 'SLOTSTREAM_UNSUPPORTED_PLATFORM' });
   }
 
-  if (!(await commandExists('gh', ['--version']))) {
-    throw new ServerError(
-      'PortOS could not install Slotstream because GitHub CLI is not available on this machine.',
-      { status: 400, code: 'SLOTSTREAM_INSTALL_UNAVAILABLE' },
-    );
-  }
-
   const target = SLOTSTREAM_RELEASE_TARGETS['darwin-arm64'];
   const workDir = await mkdtemp(join(tmpdir(), 'portos-slotstream-install-'));
   try {
@@ -245,26 +228,21 @@ export async function installSlotstream({ onProgress = () => {} } = {}) {
     await mkdir(extractDir, { recursive: true });
 
     emit(`Downloading Slotstream ${SLOTSTREAM_RELEASE_TAG} from GitHub Releases…`);
-    const download = await runStreamingCommand('gh', [
-      'release', 'download',
-      SLOTSTREAM_RELEASE_TAG,
-      '--repo', SLOTSTREAM_RELEASE_REPO,
-      '--pattern', target.archive,
-      '--dir', workDir,
-      '--clobber',
-    ], emit, { timeoutMs: INSTALL_TIMEOUT_MS });
-    if (!download.success) throw new ServerError(`Slotstream install failed: ${download.error}`, { status: 500 });
-
-    let digest;
+    const { streamResumableDownload } = await import('../lib/downloadPreflight.js');
+    const stalled = new AbortController();
     try {
-      digest = await sha256File(archivePath);
+      await streamResumableDownload({
+        url: `https://github.com/${SLOTSTREAM_RELEASE_REPO}/releases/download/${SLOTSTREAM_RELEASE_TAG}/${target.archive}`,
+        destPath: archivePath,
+        expectedSha256: target.sha256,
+        signal: AbortSignal.any([AbortSignal.timeout(INSTALL_TIMEOUT_MS), stalled.signal]),
+        idleStallTimeoutMs: 60_000,
+        onIdleStall: () => stalled.abort(new ServerError('Slotstream download stalled.', {
+          status: 502, code: 'DOWNLOAD_FAILED',
+        })),
+      });
     } catch (err) {
-      throw new ServerError(
-        `Slotstream download did not produce ${target.archive}: ${err.message}`,
-        { status: 502, code: 'SLOTSTREAM_DOWNLOAD_MISSING' },
-      );
-    }
-    if (digest !== target.sha256) {
+      if (err?.code !== 'DOWNLOAD_HASH_MISMATCH') throw err;
       throw new ServerError(
         'Slotstream download failed SHA-256 verification and was discarded.',
         { status: 502, code: 'SLOTSTREAM_DIGEST_MISMATCH' },
