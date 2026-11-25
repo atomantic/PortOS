@@ -1,7 +1,7 @@
 /** Explicit, experimental Laya execution. No boot hooks, automatic routing or prompt persistence. */
 import { notifyLayaStatus } from './layaMlxEvents.js';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { execFile } from '../lib/childProcess.js';
@@ -48,18 +48,29 @@ async function performInstall() {
   await execFileAsync(base, ['-c', 'import sys,platform; assert sys.version_info >= (3,11) and platform.machine() == "arm64" and int(platform.mac_ver()[0].split(".")[0]) >= 14'],
     { env: environment(), timeout: 10000, maxBuffer: 4096 });
   await mkdir(root(), { recursive: true });
-  await unlink(marker()).catch(error => { if (error.code !== 'ENOENT') throw error; });
   stage = 'runtime';
   notifyLayaStatus();
-  await execFileAsync(base, ['-m', 'venv', '--clear', join(root(), 'venv')], { env: environment(), timeout: 120000, maxBuffer: 4096 });
-  // Hash-pinned dependency closure, then the commit-pinned runtime archive with no
-  // resolution and its (locked) build backend: nothing unpinned is fetched.
-  const locked = installLockedRuntime(python(), 'laya-mlx', () => {}, { preferUv: true, env: environment(false),
-    sourceInstalls: [['install', '--force-reinstall', '--no-deps', '--no-build-isolation',
-      `https://github.com/mizorewww/laya-mlx/archive/${LAYA_MLX.runtimeRevision}.zip`]] });
-  const timer = setTimeout(locked.kill, 600000);
-  const installed = await locked.promise.finally(() => clearTimeout(timer));
-  if (!installed.ok) throw new Error('runtime');
+  const { streamResumableDownload } = await import('../lib/downloadPreflight.js');
+  const staging = await mkdtemp(join(root(), 'runtime-'));
+  try {
+    const archive = join(staging, 'laya-mlx.zip');
+    await streamResumableDownload({
+      url: `https://codeload.github.com/mizorewww/laya-mlx/zip/${LAYA_MLX.runtimeRevision}`,
+      destPath: archive,
+      expectedSha256: LAYA_MLX.runtimeArchiveSha256,
+      signal: AbortSignal.timeout(60_000),
+    });
+    // Preserve an existing installation until the replacement archive passes verification.
+    await unlink(marker()).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    await execFileAsync(base, ['-m', 'venv', '--clear', join(root(), 'venv')], { env: environment(), timeout: 120000, maxBuffer: 4096 });
+    const locked = installLockedRuntime(python(), 'laya-mlx', () => {}, { preferUv: true, env: environment(false),
+      sourceInstalls: [['install', '--force-reinstall', '--no-index', '--no-deps', '--no-build-isolation', archive]] });
+    const timer = setTimeout(locked.kill, 600000);
+    const installed = await locked.promise.finally(() => clearTimeout(timer));
+    if (!installed.ok) throw new Error('runtime');
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
   stage = 'model';
   notifyLayaStatus();
   await execFileAsync(python(), [script(), 'download', model(), LAYA_MLX.repository, LAYA_MLX.revision],

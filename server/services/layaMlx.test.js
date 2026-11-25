@@ -1,12 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { promisify } from 'node:util';
-const mocks = vi.hoisted(() => ({ exec: vi.fn(), enabled: vi.fn(), supported: vi.fn(), exists: vi.fn(), read: vi.fn(), installLocked: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  exec: vi.fn(), enabled: vi.fn(), supported: vi.fn(), exists: vi.fn(), read: vi.fn(), installLocked: vi.fn(),
+  download: vi.fn(), mkdtemp: vi.fn(), remove: vi.fn().mockResolvedValue(), unlink: vi.fn().mockResolvedValue(),
+}));
+const staging = '/example/data/python/laya-mlx/runtime-test';
+const archive = `${staging}/laya-mlx.zip`;
 vi.mock('../lib/childProcess.js', () => ({ execFile: Object.assign(() => {}, { [promisify.custom]: mocks.exec }) }));
 vi.mock('../lib/pythonSetup.js', () => ({ detectVenvBasePythonSync: () => '/example/python3', installLockedRuntime: mocks.installLocked }));
+vi.mock('../lib/downloadPreflight.js', () => ({ streamResumableDownload: mocks.download }));
 vi.mock('../lib/platform.js', () => ({ isAppleSilicon: mocks.supported }));
 vi.mock('./instanceFeatures.js', () => ({ isInstanceFeatureEnabled: mocks.enabled }));
 vi.mock('node:fs', () => ({ existsSync: mocks.exists }));
-vi.mock('node:fs/promises', () => ({ readFile: mocks.read, mkdir: vi.fn().mockResolvedValue(), writeFile: vi.fn().mockResolvedValue(), rename: vi.fn().mockResolvedValue(), unlink: vi.fn().mockResolvedValue() }));
+vi.mock('node:fs/promises', () => ({
+  readFile: mocks.read, mkdir: vi.fn().mockResolvedValue(), mkdtemp: mocks.mkdtemp,
+  writeFile: vi.fn().mockResolvedValue(), rename: vi.fn().mockResolvedValue(), unlink: mocks.unlink, rm: mocks.remove,
+}));
 import { layaMlxEvents } from './layaMlxEvents.js';
 import { LAYA_MLX } from '../lib/layaMlx.js';
 import { getLayaStatus, installLaya, scoreLaya } from './layaMlx.js';
@@ -23,6 +32,8 @@ beforeEach(() => {
   mocks.exists.mockReturnValue(true);
   mocks.read.mockResolvedValue(JSON.stringify(LAYA_MLX));
   stdin = { on: vi.fn(), end: vi.fn() };
+  mocks.download.mockResolvedValue(undefined);
+  mocks.mkdtemp.mockResolvedValue(staging);
   mocks.installLocked.mockReturnValue({ promise: Promise.resolve({ ok: true, code: 0 }), kill: vi.fn() });
   mocks.exec.mockImplementation(() => Object.assign(Promise.resolve({ stdout: JSON.stringify(output) }), { child: { stdin } }));
 });
@@ -87,11 +98,17 @@ it('installs only on request, pins runtime and weights, and reports bounded setu
   await vi.waitFor(async () => expect((await getLayaStatus()).installing).toBe(false));
   expect(notifications).toHaveBeenLastCalledWith({});
   expect(notifications).toHaveBeenCalledTimes(6);
-  // Dependencies come only from the hash-pinned lock; the pinned archive is then installed with no resolution.
+  expect(LAYA_MLX.runtimeArchiveSha256).toMatch(/^[a-f0-9]{64}$/);
+  expect(mocks.download).toHaveBeenCalledWith(expect.objectContaining({
+    url: `https://codeload.github.com/mizorewww/laya-mlx/zip/${LAYA_MLX.runtimeRevision}`,
+    destPath: archive,
+    expectedSha256: LAYA_MLX.runtimeArchiveSha256,
+  }));
   expect(mocks.installLocked).toHaveBeenCalledWith(expect.stringMatching(/venv\/bin\/python3$/), 'laya-mlx', expect.any(Function), expect.objectContaining({
     preferUv: true,
-    sourceInstalls: [['install', '--force-reinstall', '--no-deps', '--no-build-isolation', `https://github.com/mizorewww/laya-mlx/archive/${LAYA_MLX.runtimeRevision}.zip`]],
+    sourceInstalls: [['install', '--force-reinstall', '--no-index', '--no-deps', '--no-build-isolation', archive]],
   }));
+  expect(mocks.remove).toHaveBeenCalledWith(staging, { recursive: true, force: true });
   expect(mocks.exec.mock.calls.some(([, args]) => args.includes('pip'))).toBe(false);
   expect(mocks.exec.mock.calls.some(([, args]) => args.includes(LAYA_MLX.revision) && args.includes(LAYA_MLX.repository))).toBe(true);
   notifications.mockClear();
@@ -107,4 +124,15 @@ it('stops before downloading weights when the locked runtime install fails', asy
   await installLaya();
   await vi.waitFor(async () => expect(await getLayaStatus()).toMatchObject({ installing: false, installError: 'laya-install-runtime-failed' }));
   expect(mocks.exec.mock.calls.some(([, args]) => args.includes(LAYA_MLX.repository))).toBe(false);
+  expect(mocks.remove).toHaveBeenCalledWith(staging, { recursive: true, force: true });
+});
+
+it('preserves the existing runtime and skips package installation and weights on a digest mismatch', async () => {
+  mocks.download.mockRejectedValueOnce(Object.assign(new Error('SHA-256 mismatch'), { code: 'DOWNLOAD_HASH_MISMATCH' }));
+  await installLaya();
+  await vi.waitFor(async () => expect(await getLayaStatus()).toMatchObject({ installing: false, installError: 'laya-install-runtime-failed' }));
+  expect(mocks.exec).toHaveBeenCalledExactlyOnceWith('/example/python3', ['-c', expect.any(String)], expect.any(Object));
+  expect(mocks.unlink).not.toHaveBeenCalled();
+  expect(mocks.installLocked).not.toHaveBeenCalled();
+  expect(mocks.remove).toHaveBeenCalledWith(staging, { recursive: true, force: true });
 });
