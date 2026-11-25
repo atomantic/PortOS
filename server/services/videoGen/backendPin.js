@@ -214,6 +214,14 @@ export function videoBackendJobParams(settings, pin, params = {}, { durationSeco
       ...(duration != null ? { duration } : {}),
     };
   }
+  if (pin.mode === VIDEO_GEN_MODE.GEMINI) {
+    // Gemini web renders take only the prompt, geometry and an optional start frame; it sets its own clip length.
+    return {
+      ...base,
+      mode: VIDEO_GEN_MODE.GEMINI,
+      videoMode: sourceImagePath ? 'image' : 'text',
+    };
+  }
   if (pin.mode === VIDEO_GEN_MODE.HIGGSFIELD) {
     return {
       ...base,
