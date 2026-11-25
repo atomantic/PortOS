@@ -2,21 +2,21 @@
  * Probes whether the selected video model's bring-your-own-venv runtime is installed, and gates Generate until it is confirmed.
  *
  * Use when: The /media/video page needs the install/upgrade banner and the BYOV submit gate
- * before a render would hit a "venv not found" 500. The BYOV runtime set comes from `/status`.
+ * before a render would hit a "venv not found" 500. The BYOV runtime set comes from `/model-context`.
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import { getVideoGenRuntimeStatus } from '../services/apiImageVideo.js';
 
-export function useVideoGenByovRuntime({ currentModel, status }) {
+export function useVideoGenByovRuntime({ currentModel, byovRuntimes }) {
   // Probe the per-runtime status BEFORE the user hits Generate — without
   // this they'd see the buildArgs-time "venv not found" 500 with no good way
-  // to recover. The set of "BYOV" runtimes comes from /status server-side so
+  // to recover. The set of "BYOV" runtimes comes from /model-context server-side so
   // it can't drift from the server's BYOV_RUNTIME_INFO map.
   const [byovStatus, setByovStatus] = useState(null);
   const [installModalOpen, setInstallModalOpen] = useState(false);
   const byovRuntime = currentModel?.runtime;
-  const needsByovProbe = byovRuntime && (status?.byovRuntimes || []).includes(byovRuntime);
+  const needsByovProbe = byovRuntime && byovRuntimes.includes(byovRuntime);
   const refreshByovStatus = useCallback((signal) => {
     if (!needsByovProbe) { setByovStatus(null); return Promise.resolve(); }
     return getVideoGenRuntimeStatus(byovRuntime, { signal })

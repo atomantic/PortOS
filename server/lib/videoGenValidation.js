@@ -488,3 +488,6 @@ export const generateBodySchema = z.object({
 export const promptPreviewBodySchema = generateBodySchema.safeExtend({
   previewUploads: z.preprocess((v) => (typeof v === 'string' ? [v] : v), z.array(z.enum(PREVIEW_UPLOAD_FIELDS)).max(PREVIEW_UPLOAD_FIELDS.length)).optional(),
 });
+
+// GET /status: `fresh=true` drops the 30s interpreter-health memo before probing (manual Refresh, install completion).
+export const statusQuerySchema = z.object({ fresh: z.enum(['true', 'false']).optional() });

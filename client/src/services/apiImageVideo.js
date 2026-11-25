@@ -221,7 +221,8 @@ export async function createImageGenVenv() {
 }
 
 // Video gen
-export const getVideoGenStatus = (options = {}) => request('/video-gen/status', options)
+// `fresh` drops the server's 30s interpreter-health memo before probing (manual Refresh, install completion).
+export const getVideoGenStatus = ({ fresh, ...options } = {}) => request(`/video-gen/status${fresh ? '?fresh=true' : ''}`, options)
   .then((status) => ({
     ...status,
     models: filterHardwareCompatibleModels(status?.models),

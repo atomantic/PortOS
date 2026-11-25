@@ -132,7 +132,14 @@ vi.mock('../services/federatedMedia/sourceAudio.js', async (importOriginal) => (
 }));
 
 vi.mock('../lib/pythonSetup.js', () => ({
-  checkPackages: vi.fn(async () => ({ installed: ['mflux', 'mlx'], missing: [], missingPip: [] })),
+  // /status reads the real 30s memo in services/imageGen/setup.js, so only the
+  // interpreter spawn (probePythonHealth) and the constants that module loads are doubled.
+  probePythonHealth: vi.fn(async () => ({ installed: ['mflux', 'mlx'], missing: [], missingPip: [], interpreterArch: 'arm64', pythonVersion: '3.12.1' })),
+  REQUIRED_PACKAGES: ['mflux', 'mlx'],
+  HOST_ARCH: 'arm64',
+  hostIsAppleSilicon: vi.fn(() => false),
+  detectArm64Python: vi.fn(async () => null),
+  pipNameFor: vi.fn((pkg) => pkg),
   isAllowedPython: vi.fn(() => true),
   detectPythonSync: vi.fn(() => null),
   // setupScriptRunner presets PYTHON_BIN from the venv-base picker on Windows.
@@ -369,7 +376,8 @@ vi.mock('fs/promises', () => ({
   copyFile: fsMock.copyFile,
 }));
 
-import { copyFile, unlink } from 'fs/promises';
+import { copyFile, unlink, stat } from 'fs/promises';
+import { invalidateSetupCheck } from '../services/imageGen/setup.js';
 import * as videoGenService from '../services/videoGen/local.js';
 import * as mediaRemoteDelete from '../services/mediaRemoteDelete.js';
 import * as upscaleJobService from '../services/videoGen/upscaleJob.js';
@@ -478,6 +486,37 @@ describe('videoGen routes', () => {
   });
 
   describe('GET /status', () => {
+    beforeEach(() => {
+      // A stat-able interpreter lets the memo key resolve (an unstatable path skips the cache by design).
+      stat.mockResolvedValue({ mtimeMs: 1 });
+      invalidateSetupCheck();
+    });
+    afterEach(() => {
+      stat.mockImplementation(async () => { throw Object.assign(new Error('not found'), { code: 'ENOENT' }); });
+      invalidateSetupCheck();
+    });
+
+    it('spawns the interpreter probe once for two calls inside the memo window, and again for fresh=true', async () => {
+      const { probePythonHealth } = await import('../lib/pythonSetup.js');
+      probePythonHealth.mockClear();
+      expect((await request(app).get('/api/video-gen/status')).status).toBe(200);
+      const second = await request(app).get('/api/video-gen/status');
+      expect(second.body.connected).toBe(true);
+      expect(probePythonHealth).toHaveBeenCalledTimes(1);
+      expect((await request(app).get('/api/video-gen/status?fresh=true')).status).toBe(200);
+      expect(probePythonHealth).toHaveBeenCalledTimes(2);
+      expect((await request(app).get('/api/video-gen/status?fresh=maybe')).status).toBe(400);
+    });
+
+    it('re-probes after an install invalidates the memo for the interpreter', async () => {
+      const { probePythonHealth } = await import('../lib/pythonSetup.js');
+      probePythonHealth.mockClear();
+      await request(app).get('/api/video-gen/status');
+      invalidateSetupCheck('/usr/bin/python3');
+      await request(app).get('/api/video-gen/status');
+      expect(probePythonHealth).toHaveBeenCalledTimes(2);
+    });
+
     it('reports connected when pythonPath is set AND required packages all import', async () => {
       const r = await request(app).get('/api/video-gen/status');
       expect(r.status).toBe(200);
@@ -501,8 +540,8 @@ describe('videoGen routes', () => {
     });
 
     it('reports disconnected with reason + missingPackages when packages fail to import', async () => {
-      const { checkPackages } = await import('../lib/pythonSetup.js');
-      checkPackages.mockResolvedValueOnce({
+      const { probePythonHealth } = await import('../lib/pythonSetup.js');
+      probePythonHealth.mockResolvedValueOnce({
         installed: ['numpy', 'tqdm'],
         missing: ['mflux', 'mlx', 'mlx_video'],
         missingPip: ['mflux', 'mlx', 'mlx_video'],
@@ -779,8 +818,8 @@ describe('videoGen routes', () => {
     });
 
     it('serves the model list and its auto-select numbers without probing python', async () => {
-      const { checkPackages } = await import('../lib/pythonSetup.js');
-      checkPackages.mockClear();
+      const { probePythonHealth } = await import('../lib/pythonSetup.js');
+      probePythonHealth.mockClear();
 
       const r = await request(app).get('/api/video-gen/model-context');
       expect(r.status).toBe(200);
@@ -792,7 +831,15 @@ describe('videoGen routes', () => {
       expect(typeof r.body.fflfLtx2PixelBudget).toBe('number');
       expect(r.body.fflfLtx2PixelBudget).toBeGreaterThan(0);
       // The point of the route: no interpreter subprocess in the request path.
-      expect(checkPackages).not.toHaveBeenCalled();
+      expect(probePythonHealth).not.toHaveBeenCalled();
+      // The hosted-backend flags, runtime list and render-time disclosures the form
+      // needs to render also ride this probe-free route.
+      for (const key of ['falEnabled', 'reactorEnabled', 'runwayEnabled', 'geminiEnabled', 'higgsfieldEnabled', 'googleEnabled']) {
+        expect(typeof r.body[key]).toBe('boolean');
+      }
+      expect(Array.isArray(r.body.byovRuntimes)).toBe(true);
+      expect(r.body.backendDisclosures.map((b) => b.id)).toContain('local');
+      expect(typeof r.body.displaySleepOnRender).toBe('boolean');
     });
 
     it('uses the saved local video model as the form default when available', async () => {
