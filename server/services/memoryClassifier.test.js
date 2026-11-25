@@ -5,7 +5,7 @@ import { join } from 'path';
 
 // With no shipped seed (#8444), an install without data/memory-classifier-config.json
 // must get the endpoint derived from LM_STUDIO_URL rather than a hard-coded localhost.
-describe('memoryClassifier getConfig — env-derived endpoint', () => {
+describe('memoryClassifier', () => {
   let tempDir;
   let oldLmStudioUrl;
 
@@ -113,5 +113,166 @@ describe('memoryClassifier getConfig — env-derived endpoint', () => {
       vi.doUnmock('./promptService.js');
       vi.doUnmock('./memoryBackend.js');
     }
+  });
+
+  describe('classification and availability', () => {
+    const baseUrl = 'http://192.0.2.10:1234';
+    const endpoint = `${baseUrl}/v1/chat/completions`;
+    const configuredModel = 'example-model';
+    const accepted = {
+      type: 'fact',
+      content: 'The reading group meets on the first Monday of each month.',
+      confidence: 0.7
+    };
+    const task = { id: 'task-1', description: 'Record reading group notes' };
+    const output = 'The reading group discussed the next meeting and agreed to keep the recurring schedule throughout the year.';
+    const rejected = [{ reason: 'Unrelated to the meeting' }];
+    const fetchWithTimeout = vi.fn();
+    const getMemories = vi.fn();
+    const getStageTemplate = vi.fn();
+    let classifier;
+
+    function mockClassification(content, models = [{ id: configuredModel, type: 'llm', state: 'loaded' }]) {
+      fetchWithTimeout.mockImplementation(async (url, options) => {
+        if (url === `${baseUrl}/api/v0/models`) return Response.json({ data: models });
+        if (url === `${baseUrl}/api/v1/models/load`) return Response.json({});
+        if (url !== endpoint) throw new Error(`Unexpected classifier request: ${url}`);
+        const prompt = JSON.parse(options.body).messages.at(-1).content;
+        const response = typeof content === 'function' ? content(prompt) : content;
+        return Response.json({ choices: [{ message: { content: response } }] });
+      });
+    }
+
+    beforeEach(async () => {
+      fetchWithTimeout.mockReset();
+      getMemories.mockReset().mockResolvedValue({ memories: [] });
+      getStageTemplate.mockReset().mockResolvedValue('Existing memories:\n{{existingMemories}}\nNotes: {{agentOutput}}');
+      vi.doMock('../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout }));
+      vi.doMock('./promptService.js', () => ({ getStageTemplate }));
+      vi.doMock('./memoryBackend.js', () => ({ getMemories }));
+      classifier = await import('./memoryClassifier.js');
+      await classifier.updateConfig({ endpoint, model: configuredModel });
+    });
+
+    afterEach(() => {
+      vi.doUnmock('../lib/fetchWithTimeout.js');
+      vi.doUnmock('./promptService.js');
+      vi.doUnmock('./memoryBackend.js');
+    });
+
+    it.each([
+      ['null', null],
+      ['number', 42],
+      ['string', 'Unstructured memory candidate'],
+      ['boolean', false],
+      ['array', [accepted]],
+      ['missing type', { ...accepted, type: undefined }],
+      ['missing content', { ...accepted, content: undefined }],
+      ['non-numeric confidence', { ...accepted, confidence: '0.9' }],
+      ['low confidence', { ...accepted, confidence: 0.69 }],
+      ['short content', { ...accepted, content: 'Too brief' }],
+      ['quoted task echo', { ...accepted, content: 'Task "Read the notes": A recurring meeting schedule.' }],
+      ['short completion echo', { ...accepted, content: 'The reading group task was completed yesterday.' }],
+      ['file path', { ...accepted, content: 'The notes were recorded in examples/meeting.json.' }],
+      ['CSS dimensions', { ...accepted, content: 'The meeting banner is 250px wide.' }],
+      ['CSS color', { ...accepted, content: 'The meeting banner color is #aabbcc.' }],
+      ['port', { ...accepted, content: 'The meeting dashboard runs on port 1234.' }],
+      ['architecture fact', { ...accepted, content: 'The meeting dashboard uses React for rendering.' }],
+      ['positive status assessment', { ...accepted, content: 'The audit reported no changes needed for the dashboard.' }],
+      ['one-time code observation', { ...accepted, content: 'The dashboard module has 250 lines.' }]
+    ])('filters %s while retaining valid memories and model rejections', async (_label, candidate) => {
+      const preference = {
+        type: 'preference',
+        content: 'The group prefers meeting.md with the heading color #aabbcc.',
+        confidence: 0.9
+      };
+      mockClassification(JSON.stringify({ memories: [accepted, candidate, preference], rejected }));
+      await expect(classifier.classifyMemories(task, output)).resolves.toEqual({
+        memories: [accepted, preference],
+        rejected,
+        usedLLM: true
+      });
+    });
+
+    it('ignores a matching schema example in the echoed prompt', async () => {
+      getStageTemplate.mockResolvedValue('Example output: {"memories":[],"rejected":[]}\nNotes: {{agentOutput}}');
+      mockClassification(prompt => `${prompt}\n${JSON.stringify({ memories: [accepted], rejected })}`);
+
+      await expect(classifier.classifyMemories(task, output)).resolves.toEqual({
+        memories: [accepted],
+        rejected,
+        usedLLM: true
+      });
+    });
+
+    it('injects content from active memory and summary from pending memory', async () => {
+      getMemories
+        .mockResolvedValueOnce({
+          memories: [{ type: 'fact', content: 'The group meets monthly.', summary: 'Unused summary.' }]
+        })
+        .mockResolvedValueOnce({
+          memories: [{ type: 'preference', summary: 'The group prefers evening meetings.' }]
+        });
+      mockClassification(JSON.stringify({ memories: [], rejected: [] }));
+
+      await classifier.classifyMemories(task, output);
+
+      expect(getMemories).toHaveBeenNthCalledWith(1, {
+        status: 'active', sortBy: 'importance', sortOrder: 'desc', limit: 30
+      });
+      expect(getMemories).toHaveBeenNthCalledWith(2, { status: 'pending_approval', limit: 30 });
+      const [, request] = fetchWithTimeout.mock.lastCall;
+      expect(JSON.parse(request.body).messages.at(-1).content).toBe(
+        `Existing memories:\n- [fact] The group meets monthly.\n- [preference] The group prefers evening meetings.\nNotes: ${output}`
+      );
+    });
+
+    it.each([
+      ['prefers a matching loaded LLM', 'loaded', 'publisher/example-model', false],
+      ['uses another loaded LLM when the match is unloaded', 'not-loaded', 'other-model', false],
+      ['loads the configured LLM when none is loaded', 'not-loaded', 'publisher/example-model', true]
+    ])('%s', async (_label, preferredState, expectedModel, shouldLoad) => {
+      mockClassification(JSON.stringify({ memories: [], rejected: [] }), [
+        { id: 'embedding-model', type: 'embeddings', state: 'loaded' },
+        { id: 'other-model', type: 'llm', state: shouldLoad ? 'not-loaded' : 'loaded' },
+        { id: 'publisher/example-model', type: 'llm', state: preferredState }
+      ]);
+
+      await expect(classifier.classifyMemories(task, output)).resolves.toMatchObject({ usedLLM: true });
+
+      const loadUrl = `${baseUrl}/api/v1/models/load`;
+      expect(fetchWithTimeout.mock.calls.map(([url]) => url)).toEqual([
+        `${baseUrl}/api/v0/models`, ...(shouldLoad ? [loadUrl] : []), endpoint
+      ]);
+      if (shouldLoad) {
+        expect(fetchWithTimeout.mock.calls[1][1]).toMatchObject({
+          method: 'POST',
+          body: JSON.stringify({ model: expectedModel })
+        });
+      }
+      expect(JSON.parse(fetchWithTimeout.mock.lastCall[1].body).model).toBe(expectedModel);
+    });
+
+    it('skips the health request when disabled', async () => {
+      await classifier.updateConfig({ enabled: false });
+
+      await expect(classifier.isAvailable()).resolves.toBe(false);
+      expect(fetchWithTimeout).not.toHaveBeenCalled();
+    });
+
+    it.each([200, 503])('reports availability from the models endpoint with HTTP %i', async status => {
+      fetchWithTimeout.mockResolvedValue(new Response(null, { status }));
+
+      await expect(classifier.isAvailable()).resolves.toBe(status === 200);
+      expect(fetchWithTimeout).toHaveBeenCalledExactlyOnceWith(
+        `${baseUrl}/v1/models`, { method: 'GET' }, expect.any(Number)
+      );
+    });
+
+    it('reports unavailable when the models endpoint cannot be reached', async () => {
+      fetchWithTimeout.mockRejectedValue(new Error('Connection refused'));
+
+      await expect(classifier.isAvailable()).resolves.toBe(false);
+    });
   });
 });
