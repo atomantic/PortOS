@@ -892,15 +892,20 @@ describe('ci.yml shard wiring', () => {
     expect(jobs.gate).toContain('CI_GATE_RESULT_WINDOWS_SERVER:');
   });
 
-  it('runs once-only steps on the first shard alone', () => {
-    // Smoke boot and the production build are not
-    // sharded work; on every shard they would triple the cost for no coverage.
-    for (const step of ['Smoke-boot server', 'Build client']) {
-      const start = WORKFLOW.indexOf(`- name: ${step}\n`);
-      expect(start, step).toBeGreaterThan(0);
-      const condition = WORKFLOW.slice(start).match(/\n {8}if: (.*)\n/)[1];
-      expect(condition, step).toMatch(/&& matrix\.shard == 1$/);
-    }
+  it('runs smoke boot on the first server shard alone', () => {
+    expect(CI_JOBS.server).toMatch(/- name: Smoke-boot server\n {8}if: .*&& matrix\.shard == 1\n/);
+  });
+
+  it('builds the client once in parallel with the test shards and requires its result', () => {
+    const build = CI_JOBS['client-build'];
+    expect(CI_JOBS.client).toContain("if: fromJSON(needs.impact.outputs.plan).client_mode != 'skip'\n");
+    for (const [id, body] of runners) expect(body, id).not.toContain('npm run build --prefix client');
+    expect(build).toContain('needs: impact\n');
+    expect(build).toContain('if: fromJSON(needs.impact.outputs.plan).build\n');
+    expect(build).not.toMatch(/strategy:|matrix\.shard/);
+    expect(build).toMatch(/uses: \.\/\.github\/actions\/setup-client\n[\s\S]*\n {6}- run: npm run build --prefix client\n/);
+    expect(CI_JOBS.gate).toMatch(/needs: \[[^\]]*\bclient-build\b/);
+    expect(CI_JOBS.gate).toContain('CI_GATE_RESULT_CLIENT_BUILD: ${{ needs.client-build.result }}');
   });
 
   it('keeps client lint out of the sharded test jobs entirely', () => {

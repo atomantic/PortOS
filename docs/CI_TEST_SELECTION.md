@@ -35,9 +35,9 @@ are `cores / maxConcurrentAgents` from the CoS settings (`scripts/lib/cosWorkerB
 capped at 4, so concurrent worktree gates share one host budget; lower
 **max concurrent agents** in the app to ease load — no env var. A focused file
 run is not the full-suite result (`docs/CONTRIBUTING.md`). `npm run pregate`
-passes the derived value to its stages. The DOM-heavy client retains its proven two-worker override:
-four workers made its async rendering assertions timing-dependent under CI
-contention. File-level parallelism stays on; the DB suite already serializes
+passes the derived value to its stages. The client caps Vitest at three
+workers, leaving one runner core for Chromium and DOM spikes. File-level
+parallelism stays on; the DB suite already serializes
 files because those tests share one Postgres.
 
 Each test job restores Vite/Vitest transform artifacts from checkout-owned
@@ -149,7 +149,7 @@ on its first poll).
 
 ## Reusing the client install
 
-Every client test shard, `lint` and `browser` install `client/` through the
+Every client test shard, `client-build`, `lint` and `browser` install `client/` through the
 `setup-client` action.
 `setup-node`'s `cache: npm` only preserves the tarball cache, so `npm ci` still
 wipes and repopulates a 393 MB `client/node_modules` on each. `Cache client
@@ -306,13 +306,9 @@ Windows compatibility, Linux containment or the SuperCollider live suite.
 
 ## Full-suite sharding
 
-A full plan is the slow case: on the 4-vCPU public runners the client suite
-alone took ~10 minutes (DOM setup per file dominated — the 868-file run
-spent 489 s in `environment` against 384 s in `tests` — and its worker cap is
-two, see `scripts/vitestCiPool.js`), the Windows server suite ~10 minutes
-(module import is several times slower there), and the Linux server suite ~6
-minutes. Roughly half of all PR runs went full, so most PRs waited on the
-longest of those.
+A full plan runs the broadest selection. Before sharding, the client
+suite took about 10 minutes on a 4-vCPU runner, with 489 s of cumulative DOM
+environment setup across 868 files. Sharding spreads that work across runners.
 
 Primary server/client test jobs use matrices. The impact job emits
 `server_shards` and `client_shards` from `FULL_SUITE_SHARDS` (server 2, client 4).
@@ -335,11 +331,10 @@ the same extractor and resolver pregate's local selection uses.
 The summary names that reach-based fan-out. Every other scoped plan stays on one
 runner; record-aware selection ([TEST_MEMO.md](./TEST_MEMO.md#related-selection), #16424) still narrows what
 each selected suite runs. The runner slices the selection itself and never hands Vitest
-`--shard`, so a shard whose slice is empty exits green. Once-only steps — smoke boot and the client build —
-pin themselves to shard 1; lint is not among them,
-because it has its own job (see the lint job under [CI Workflow](GITHUB_ACTIONS.md#ci-workflow-ciyml)). `CI Gate` sees a matrix job as one
-`needs` result, so nothing downstream changes; public-repo runner minutes are
-free, so the fan-out costs only concurrency.
+`--shard`, so a shard whose slice is empty exits green. Server smoke boot
+runs on shard 1. The production client build and client lint each run once
+in a separate job, in parallel with the test shards. `CI Gate` checks each
+selected job and sees each test matrix as one `needs` result.
 
 `npm run pregate -- --full` reuses the same split locally: a full unit plan
 becomes one stage per shard (server 2, client 4, from `FULL_SUITE_SHARDS`), run
@@ -350,9 +345,8 @@ nothing is certified from a failed run. Sequential execution keeps a single
 writer on each workspace's Vitest dependency record. Scoped plans, structural
 guards and the browser stage clear `CI_SHARD` and stay unsliced.
 
-`scripts/run-ci-tests.test.js` pins the wiring: every runner job builds its
-matrix from the planner, hands `CI_SHARD` to the runner, and gates its
-once-only steps on shard 1.
+`scripts/run-ci-tests.test.js` pins the matrix wiring, the server smoke
+shard, and the separate client build job's dependency on the impact plan.
 
 ## Python sidecar scripts
 
