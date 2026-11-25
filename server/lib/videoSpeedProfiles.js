@@ -161,11 +161,6 @@ export const applyVideoSpeedProfiles = (list) => {
 };
 
 /**
- * Does this model offer any speed profile at all?
- */
-export const supportsSpeedProfiles = (model) => videoSpeedProfiles(model).length > 0;
-
-/**
  * Look up one declared profile by id. `null` for the default id, an unknown
  * id, or a model with none.
  */

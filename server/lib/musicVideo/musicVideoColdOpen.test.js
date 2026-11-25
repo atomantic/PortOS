@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { coldOpenPlan, coldOpenSeconds, normalizePreMusic, preMusicSoundSummary, songScenes, withSongScenesOnly } from './musicVideoColdOpen.js';
+import { coldOpenPlan, normalizePreMusic, preMusicSoundSummary, songScenes, withSongScenesOnly } from './musicVideoColdOpen.js';
 
 const project = {
   scenes: [
@@ -14,7 +14,6 @@ describe('cold open', () => {
   it('plays the marked shots first in storyboard order, on a clock of its own', () => {
     expect(coldOpenPlan(project).map(({ scene, startSec, endSec }) => [scene.sceneId, startSec, endSec]))
       .toEqual([['rink', 0, 3], ['booth', 3, 5.5]]);
-    expect(coldOpenSeconds(project)).toBe(5.5);
     expect(songScenes(project).map((scene) => scene.sceneId)).toEqual(['song-1', 'song-2']);
     expect(withSongScenesOnly({ scenes: [{ sceneId: 'only' }] })).toEqual({ scenes: [{ sceneId: 'only' }] });
   });

@@ -3,7 +3,6 @@ import {
   FABLELOOM_AUDIO_TARGETS,
   FABLELOOM_HOLD_ROTATION_MODES,
   FABLELOOM_PLAYBACK_MODES,
-  FABLELOOM_PLAYBACK_PHASES,
   FABLELOOM_PROTAGONIST_PRESENCE,
   asFableLoomPlaybackMode,
   inspectEpisodeProductionReadiness,
@@ -29,8 +28,7 @@ describe('FableLoom playback modes and vocabulary', () => {
     expect(asFableLoomPlaybackMode('loop')).toBe('decision');
   });
 
-  it('exposes playback phases, protagonist presence, audio targets, and hold rotation modes', () => {
-    expect(FABLELOOM_PLAYBACK_PHASES).toEqual(['entry', 'hold', 'exit', 'ended']);
+  it('exposes protagonist presence, audio targets, and hold rotation modes', () => {
     expect(FABLELOOM_PROTAGONIST_PRESENCE).toEqual(['offscreen', 'onscreen']);
     expect(FABLELOOM_AUDIO_TARGETS).toEqual(['host', 'audience']);
     expect(FABLELOOM_HOLD_ROTATION_MODES).toEqual(['deterministic', 'shuffle', 'sequential']);

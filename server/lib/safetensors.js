@@ -62,10 +62,6 @@ export const detectFlux2VariantFromHeader = (header) => {
   return null;
 };
 
-/** Read a file and classify it in one call: `'4b'` / `'9b'` / `null`. */
-export const detectFlux2Variant = async (path) =>
-  detectFlux2VariantFromHeader(await readSafetensorsHeader(path));
-
 /**
  * LoRA safetensors key layouts. Downloaded LoRAs ship in mutually incompatible key conventions and a runtime that fuses one layout silently no-ops (or renders noise) on another;
  * the tensor names determine it, so it is classified once at install time instead of failing opaquely in a Python render.

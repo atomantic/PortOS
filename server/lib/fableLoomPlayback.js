@@ -23,8 +23,6 @@ export const FABLELOOM_RUNTIME_VERSION = '1.0.0';
 export const FABLELOOM_PLAYBACK_MODES = Object.freeze(['cut', 'decision']);
 export const FABLELOOM_PLAYBACK_MODE_DEFAULT = 'decision';
 
-export const FABLELOOM_PLAYBACK_PHASES = Object.freeze(['entry', 'hold', 'exit', 'ended']);
-
 export const FABLELOOM_PROTAGONIST_PRESENCE = Object.freeze(['offscreen', 'onscreen']);
 export const FABLELOOM_PROTAGONIST_PRESENCE_DEFAULT = 'offscreen';
 

@@ -12,7 +12,6 @@
 import { CHARS_PER_TOKEN, localOutputReserveTokens } from '../contextBudget.js';
 import { PERSISTENT_MIND_OUTPUT_RESERVE_TOKENS } from './persistentMindPromptBudget.js';
 
-export const CONTEXT_BREAKDOWN_OCCUPANCY_SOURCES = Object.freeze(['provider_usage', 'provider_usage_plus_estimate', 'local_estimate']);
 export const CONTEXT_BREAKDOWN_WINDOW_SOURCES = Object.freeze(['pinned', 'advertised', 'fallback', 'unknown']);
 
 /** Occupancy above this share of the window earns the panel's non-blocking notice. */

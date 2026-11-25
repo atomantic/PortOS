@@ -12,8 +12,7 @@ import {
 // The catalog is the wire boundary for a paid API that validates every field
 // per model: a wrong key or type is a 400 after the user pressed Render, and a
 // wrong price is a bill the board never showed. These pin the bodies against
-// Runway's API reference and the quotes against its pricing guide
-// (RUNWAY_VIDEO_PRICING_VERIFIED_AT).
+// Runway's API reference and the quotes against its pricing guide, last checked 2026-11-06.
 
 const FRAME = 'data:image/png;base64,AA==';
 const END = 'data:image/jpeg;base64,BB==';

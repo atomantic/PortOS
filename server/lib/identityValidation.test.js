@@ -1,7 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  sectionStatusEnum,
-  chronotypeEnum,
   chronotypeBehavioralInputSchema,
   birthDateInputSchema,
   goalHorizonEnum,
@@ -25,19 +23,6 @@ import {
 
 describe('identityValidation', () => {
   describe('enums', () => {
-    it('sectionStatusEnum admits the documented states', () => {
-      for (const v of ['active', 'pending', 'unavailable']) {
-        expect(sectionStatusEnum.safeParse(v).success).toBe(true);
-      }
-      expect(sectionStatusEnum.safeParse('archived').success).toBe(false);
-    });
-
-    it('chronotypeEnum admits the three classic chronotypes', () => {
-      for (const v of ['morning', 'intermediate', 'evening']) {
-        expect(chronotypeEnum.safeParse(v).success).toBe(true);
-      }
-      expect(chronotypeEnum.safeParse('night-owl').success).toBe(false);
-    });
 
     it('goalHorizonEnum covers 1y through lifetime', () => {
       for (const v of ['1-year', '3-year', '5-year', '10-year', '20-year', 'lifetime']) {

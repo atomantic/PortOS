@@ -37,8 +37,6 @@ export const WORK_TRACKERS = ['auto', 'plan', 'github', 'gitlab', 'jira'];
 // The concrete sources `'auto'` can resolve to (i.e. WORK_TRACKERS minus auto).
 export const CONCRETE_WORK_TRACKERS = WORK_TRACKERS.filter(t => t !== 'auto');
 
-export const DEFAULT_WORK_TRACKER = 'auto';
-
 const TRACKER_LABELS = {
   auto: 'Auto (detect from git origin)',
   plan: 'PLAN.md',

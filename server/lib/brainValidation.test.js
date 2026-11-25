@@ -5,7 +5,6 @@ import {
   manualDestinationEnum,
   classifierOutputSchema,
   projectStatusEnum,
-  filedSchema,
   brainSettingsSchema,
   captureInputSchema,
   resolveReviewInputSchema,
@@ -42,12 +41,8 @@ describe('brainValidation.js', () => {
       expect(destinationEnum.safeParse('').success).toBe(false);
     });
 
-    it('accepts links as a filed destination (bare-URL captures)', () => {
+    it('accepts links as a destination (bare-URL captures)', () => {
       expect(destinationEnum.safeParse('links').success).toBe(true);
-      expect(filedSchema.safeParse({
-        destination: 'links',
-        destinationId: '11111111-1111-4111-8111-111111111111'
-      }).success).toBe(true);
     });
 
     it('keeps links out of the hand-filed destinations and the classifier menu', () => {
@@ -75,33 +70,6 @@ describe('brainValidation.js', () => {
 
     it('should reject invalid statuses', () => {
       expect(projectStatusEnum.safeParse('invalid').success).toBe(false);
-    });
-  });
-
-  describe('filedSchema', () => {
-    it('should validate filed info with valid destination', () => {
-      const filed = {
-        destination: 'projects',
-        destinationId: '550e8400-e29b-41d4-a716-446655440000'
-      };
-      const result = filedSchema.safeParse(filed);
-      expect(result.success).toBe(true);
-    });
-
-    it('should reject unknown destination', () => {
-      const filed = {
-        destination: 'unknown',
-        destinationId: '550e8400-e29b-41d4-a716-446655440000'
-      };
-      expect(filedSchema.safeParse(filed).success).toBe(false);
-    });
-
-    it('should reject invalid UUID', () => {
-      const filed = {
-        destination: 'projects',
-        destinationId: 'not-a-uuid'
-      };
-      expect(filedSchema.safeParse(filed).success).toBe(false);
     });
   });
 

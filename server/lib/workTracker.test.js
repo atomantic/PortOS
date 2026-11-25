@@ -20,7 +20,6 @@ import { repoIssueUrlBase, resolveAppForgeTarget, resolveAppWorkTracker } from '
 import {
   WORK_TRACKERS,
   CONCRETE_WORK_TRACKERS,
-  DEFAULT_WORK_TRACKER,
   workTrackerLabel,
   hostToWorkTracker,
   isGithubHost,
@@ -34,8 +33,7 @@ import {
 } from './workTracker.js';
 
 describe('workTracker constants', () => {
-  it('auto is the default and the only non-concrete value', () => {
-    expect(DEFAULT_WORK_TRACKER).toBe('auto');
+  it('auto is the only non-concrete value', () => {
     expect(WORK_TRACKERS).toContain('auto');
     expect(CONCRETE_WORK_TRACKERS).not.toContain('auto');
     expect(WORK_TRACKERS).toEqual(['auto', ...CONCRETE_WORK_TRACKERS]);

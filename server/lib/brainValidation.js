@@ -59,12 +59,6 @@ export {
 // Inbox log status enum
 export const inboxStatusEnum = z.enum(['classifying', 'filed', 'needs_review', 'corrected', 'done', 'error']);
 
-// Filed info schema
-export const filedSchema = z.object({
-  destination: destinationEnum.exclude(['unknown']),
-  destinationId: z.string().guid()
-});
-
 // Meta/Settings schema
 export const brainSettingsSchema = z.object({
   version: z.number().int().positive().default(1),

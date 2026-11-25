@@ -137,12 +137,6 @@ export function coldOpenPlan(project) {
   });
 }
 
-/** The seconds the cold open adds before the song (0 when no shot is marked). */
-export const coldOpenSeconds = (project) => {
-  const plan = coldOpenPlan(project);
-  return plan.length ? plan[plan.length - 1].endSec : 0;
-};
-
 /** What a shot's cold-open sound is, in words: "Silence", "Clip sound", "Clip sound + 2 layers". */
 export function preMusicSoundSummary(preMusic) {
   const settings = normalizePreMusic(preMusic);

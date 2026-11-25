@@ -380,7 +380,3 @@ export const STYLE_ID = { NONE: 'none', CUSTOM: 'custom' };
 export const ALL_STYLE_IDS = [STYLE_ID.NONE, STYLE_ID.CUSTOM, ...STYLE_PRESET_IDS];
 
 export const EMPTY_IMAGE_STYLE = { presetId: STYLE_ID.NONE, prompt: '', negativePrompt: '' };
-
-export function findStylePreset(id) {
-  return STYLE_PRESETS.find((p) => p.id === id) || null;
-}

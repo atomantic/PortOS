@@ -79,7 +79,6 @@ export const videoLoraFamily = (model) => {
   return null;
 };
 
-export const isMflux = (model) => model?.runner === RUNNER_FAMILIES.MFLUX;
 // mediaModels.js re-exports these five predicates for existing registry consumers.
 export const isFlux2 = (model) => model?.runner === RUNNER_FAMILIES.FLUX2;
 export const isZImage = (model) => model?.runner === RUNNER_FAMILIES.Z_IMAGE;

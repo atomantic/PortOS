@@ -27,10 +27,6 @@ import { FEATURE_AREA_IDS } from './goalFeatureMap.js';
 const createFeatureAreasSchema = z.array(z.enum(FEATURE_AREA_IDS)).max(FEATURE_AREA_IDS.length);
 const updateFeatureAreasSchema = z.array(z.string().min(1)).max(64);
 
-export const sectionStatusEnum = z.enum(['active', 'pending', 'unavailable']);
-
-export const chronotypeEnum = z.enum(['morning', 'intermediate', 'evening']);
-
 const hhmmRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export const chronotypeBehavioralInputSchema = z.object({

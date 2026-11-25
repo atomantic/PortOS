@@ -41,10 +41,6 @@ export const isDefaultI2vReferenceMode = (value) => (
   normalizeI2vReferenceMode(value) === DEFAULT_I2V_REFERENCE_MODE
 );
 
-export const isKnownI2vReferenceMode = (value) => (
-  I2V_REFERENCE_MODES.includes(normalizeI2vReferenceMode(value))
-);
-
 /** Can `runtime` deliver what `value` promises? Unknown modes are never supported. */
 export const runtimeSupportsI2vReferenceMode = (runtime, value) => {
   const mode = normalizeI2vReferenceMode(value);

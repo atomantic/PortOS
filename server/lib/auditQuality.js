@@ -278,8 +278,6 @@ const CONFIDENCE_WEIGHT = Object.freeze({ high: 1, medium: 0.5 });
 
 /** A score at or above this is healthy; below it the category has real debt. */
 export { QUALITY_HEALTHY_THRESHOLD };
-/** The pragmatic target band: reaching it means done, chasing 100 invites over-engineering. */
-export const QUALITY_TARGET_BAND = Object.freeze({ min: 85, max: 95 });
 export { QUALITY_RECENCY_HALF_LIFE_DAYS };
 const DAY_MS = 24 * 60 * 60 * 1000;
 

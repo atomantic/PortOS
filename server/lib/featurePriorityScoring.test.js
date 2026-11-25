@@ -1,13 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
-  FEATURE_PRIORITY_TIERS,
   MIN_EVIDENCE_DAYS,
-  highestTier,
   learnedTier,
   lastActiveAgeDays,
   resolveTier,
   scoreActiveDays,
-  tierForFile,
 } from './featurePriorityScoring.js';
 
 const NOW = Date.parse('2026-11-24T15:30:00Z');
@@ -104,37 +101,5 @@ describe('resolveTier', () => {
   it('never treats an enabled or core area as feature-off', () => {
     expect(resolveTier({ featureEnabled: true, lastActiveAgeDays: null, learned: 'P2' })).toEqual({ tier: 'P2', source: 'learned' });
     expect(resolveTier({ lastActiveAgeDays: null, learned: null })).toEqual({ tier: 'P1', source: 'default' });
-  });
-});
-
-describe('tierForFile', () => {
-  it('takes the highest-priority tier among the areas owning a file', () => {
-    expect(tierForFile({ jira: 'P3' }, 'server/routes/jira.js')).toBe('P3');
-    expect(tierForFile({ 'music-video': 'P3', music: 'P0' }, 'client/src/components/musicVideo/AnalysisPanel.jsx')).toBe('P3');
-  });
-
-  it('uses the best tier when one file belongs to several areas', () => {
-    expect(highestTier(['music-video', 'eidoverse'], { 'music-video': 'P3', eidoverse: 'P1' })).toBe('P1');
-    expect(highestTier(['a', 'b', 'c'], { a: 'P3', b: 'P2', c: 'P3' })).toBe('P2');
-    expect(highestTier(['a', 'b'], new Map([['a', 'P3'], ['b', 'P0']]))).toBe('P0');
-  });
-
-  it('counts an area with no recorded tier as P1 alongside recorded ones', () => {
-    expect(highestTier(['a', 'b'], { a: 'P3' })).toBe('P1');
-    expect(highestTier([], { a: 'P0' })).toBe('P1');
-  });
-
-  it('defaults an area with no recorded tier, and a file in no area, to P1', () => {
-    expect(tierForFile({}, 'server/routes/jira.js')).toBe('P1');
-    expect(tierForFile(new Map(), 'server/routes/jira.js')).toBe('P1');
-    expect(tierForFile({ jira: 'P3' }, 'package.json')).toBe('P1');
-  });
-
-  it('reads a Map of tiers', () => {
-    expect(tierForFile(new Map([['jira', 'P0']]), 'server/routes/jira.js')).toBe('P0');
-  });
-
-  it('ranks P0 above P3', () => {
-    expect(FEATURE_PRIORITY_TIERS).toEqual(['P0', 'P1', 'P2', 'P3']);
   });
 });
