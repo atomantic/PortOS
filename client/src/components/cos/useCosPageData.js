@@ -499,6 +499,10 @@ export default function useCosPageData({ activeTab, selectedTask }) {
         applyStatus(summary);
         // A failed first status read is recovered by any later successful one.
         setStatusReadFailed(typeof summary.running !== 'boolean');
+        // Coding is the one state that outlives its cause silently (the agent was
+        // paused or stopped while this tab ignored agent events), and the summary's
+        // activeAgents is what reveals it.
+        if (agentStateRef.current === 'coding') settleAgentState();
       }
       if (tasksData && tasksCurrent()) setTasks(tasksData);
       const insightsData = await insightsRead;
@@ -536,7 +540,8 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     const data = await readAgents(controller);
     if (!Array.isArray(data) || controller.signal.aborted) return;
     setActiveAgentMeta(data.find(agent => agent.status === 'running')?.metadata || null);
-  }, [readAgents]);
+    if (agentStateRef.current === 'coding') settleAgentState();
+  }, [readAgents, settleAgentState]);
 
   // All page insight reads use cached health. Explicit Run Check owns repairs;
   // task invalidations must never trigger a health-check/socket feedback loop.
@@ -578,7 +583,8 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     const tabChanged = lastTabRef.current !== activeTab;
     lastTabRef.current = activeTab;
     if (next.providers && (!prev.providers || (tabChanged && !providersLoadedRef.current))) getProviders().then(applyProviders).catch(() => {});
-    if (next.apps && !prev.apps) readApps();
+    // `readApps` serves its cached snapshot, so this only re-reads after a failure.
+    if (next.apps && (!prev.apps || tabChanged)) readApps();
   }, [activeTab, needsTasks, needsAgents, needsProviders, needsApps, readTasksSlice, readAgentsSlice, applyProviders, readApps]);
 
   // The selection-dependent read. The mount read already carries `selected`,
