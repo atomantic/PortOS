@@ -8,6 +8,7 @@
  * while the session is live and work remains, releases when it exits or the
  * checkout settles) and the PortOS-authored commit classification.
  */
+// test-memo: git-fixture — git only ever runs in repositories this suite creates under the temp directory (docs/TEST_MEMO.md#git-fixtures).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';

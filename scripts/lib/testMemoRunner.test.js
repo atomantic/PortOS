@@ -62,6 +62,77 @@ it.each([
   expect(resolver('ffmpeg')).toBe(matches ? ffmpeg : null);
 });
 
+// What a git-fixture suite runs against besides its sources (#18634): the git
+// binary and everything a repository made on this machine inherits.
+describe('git tool identity', () => {
+  const VERSION = 'git version 2.50.1\n';
+  const machine = ({ system = 'core.autocrlf\nfalse\0', global = 'user.name\nExample\0', enclosing = 128, version = 0, files = {}, env = { HOME: '/home/example' } } = {}) => {
+    const calls = [];
+    const run = (program, args, options) => {
+      calls.push({ program, args, options });
+      if (args[0] === '--version') return { status: version, stdout: VERSION, stderr: '' };
+      if (args[0] === 'rev-parse') return { status: enclosing, stdout: enclosing === 0 ? '.git\n' : '', stderr: '' };
+      const listed = args[1] === '--system' ? system : global;
+      return listed === null ? { status: 128, stdout: '', stderr: 'fatal: unable to read config file' } : { status: 0, stdout: listed, stderr: '' };
+    };
+    const read = (path) => { if (path in files) return files[path]; throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); };
+    return { calls, identity: createToolVersionResolver({ env, run, scratch: '/scratch', read })('git') };
+  };
+
+  it('is the version and a digest of the settings, and nothing of their content', () => {
+    const { identity, calls } = machine({ global: 'user.name\nExample\0http.extraheader\nAUTHORIZATION: example-secret\0' });
+    expect(identity).toMatch(/^git version 2\.50\.1 settings [0-9a-f]{16}$/);
+    expect(machine({ global: 'user.name\nExample\0http.extraheader\nAUTHORIZATION: example-secret\0' }).identity).toBe(identity);
+    // Every probe runs where the fixtures are made, never in the checkout.
+    expect(calls.every(({ program, options }) => program === 'git' && options.cwd === '/scratch')).toBe(true);
+    expect(calls.map(({ args }) => args.join(' '))).toEqual([
+      '--version', 'rev-parse --git-dir', 'config --system --includes --null --list', 'config --global --includes --null --list',
+    ]);
+  });
+
+  it('moves with every setting a new repository inherits', () => {
+    const base = machine().identity;
+    const ignore = join('/home/example', '.config', 'git', 'ignore');
+    const variants = {
+      'system configuration': machine({ system: 'core.autocrlf\ntrue\0' }),
+      'global configuration': machine({ global: 'user.name\nExample\0init.defaultbranch\ntrunk\0' }),
+      'no global configuration': machine({ global: null }),
+      'default global ignore file': machine({ files: { [ignore]: '*.log\n' } }),
+      'configured ignore file': machine({ global: 'core.excludesfile\n~/ignored\0', files: { [join('/home/example', 'ignored')]: 'dist/\n' } }),
+      'configured attributes file': machine({ global: 'core.attributesfile\n/etc/example-attributes\0', files: { '/etc/example-attributes': '* text=auto\n' } }),
+      'git environment': machine({ env: { HOME: '/home/example', GIT_CONFIG_GLOBAL: '/dev/null' } }),
+    };
+    const seen = new Set([base]);
+    for (const [label, { identity }] of Object.entries(variants)) {
+      expect(identity, label).toMatch(/^git version 2\.50\.1 settings [0-9a-f]{16}$/);
+      expect(seen.has(identity), label).toBe(false);
+      seen.add(identity);
+    }
+    // Only git's own variables count.
+    expect(machine({ env: { HOME: '/home/example', EDITOR: 'example' } }).identity).toBe(base);
+  });
+
+  it('is unresolved when git cannot run or the fixtures would be made inside a repository', () => {
+    expect(machine({ version: 127 }).identity).toBeNull();
+    // Git started in a fixture directory that is no repository of its own would find the enclosing one.
+    expect(machine({ enclosing: 0 }).identity).toBeNull();
+    expect(createToolVersionResolver({ run: () => ({ error: new Error('spawn git ENOENT') }), scratch: '/scratch' })('git')).toBeNull();
+  });
+
+  it('resolves against the real git on this machine', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'portos-git-identity-'));
+    try {
+      // A machine whose temp directory already sits inside a repository gets no identity at all.
+      const enclosed = spawnSync('git', ['rev-parse', '--git-dir'], { cwd: scratch }).status === 0;
+      const identity = createToolVersionResolver({ scratch })('git');
+      if (enclosed) expect(identity).toBeNull();
+      else expect(identity).toMatch(/^git version \S+.* settings [0-9a-f]{16}$/);
+      execFileSync('git', ['init', '-q'], { cwd: scratch });
+      expect(createToolVersionResolver({ scratch })('git')).toBeNull();
+    } finally { rmSync(scratch, { recursive: true, force: true }); }
+  });
+});
+
 describe('planTestMemo and recordTestMemo', () => {
   let root;
   let memoDir;
@@ -70,6 +141,65 @@ describe('planTestMemo and recordTestMemo', () => {
   const plan = (overrides = {}) => planTestMemo({
     scope: 'server', mode: 'files', repoFiles: TESTS.map((t) => `server/${t}`), repoSources: [], memoDir, repoRoot: root,
     env: { NODE_ENV: 'test' }, platform: 'linux', arch: 'x64', nodeVersion: '24.1.0', listTests: () => TESTS, ...overrides,
+  });
+
+  // #18634, the safety property of a `test-memo: git-fixture` suite: it is
+  // skipped only while every input it has is what the green run saw.
+  it('skips a git-fixture suite only while its sources, its git and its declaration are unchanged', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-git-fixture-plan-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-git-fixture-memo-'));
+    const fixture = 'server/lib/repo.test.js';
+    const unmarked = 'server/lib/a.test.js';
+    const source = [
+      '// test-memo: git-fixture',
+      "import { it } from 'vitest';",
+      "import { execFileSync } from 'node:child_process';",
+      "import { mkdtempSync } from 'node:fs';",
+      "import { tmpdir } from 'node:os';",
+      "import { describeRepo } from './repoHelper.js';",
+      "const git = (dir, ...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });",
+      "it('describes a repository it made', () => { const repo = mkdtempSync(tmpdir()); git(repo, 'init', '-q'); describeRepo(repo); });",
+    ].join('\n');
+    writeRepo(root, { ...FILES, [fixture]: source, 'server/lib/repoHelper.js': 'export const describeRepo = (dir) => dir;\n' });
+    const git = (identity) => (tool) => (tool === 'git' ? identity : null);
+    const GIT = 'git version 2.50.1 settings 0123456789abcdef';
+    const check = (overrides = {}) => plan({ repoFiles: [fixture, unmarked], toolVersion: git(GIT), ...overrides });
+    const record = (prepared) => recordTestMemo({
+      scope: 'server', repoRoot: root, memoDir, plan: prepared, passed: prepared.run,
+      dependencies: new Map(prepared.run.map((file) => [file, file === fixture ? [fixture, 'server/lib/repoHelper.js'] : [file, 'server/lib/a.js']])), source: 'ci',
+    });
+
+    expect(check().run).toEqual([unmarked, fixture]);
+    expect(record(check()).unrecorded).toEqual([]);
+    expect(check()).toMatchObject({ run: [], skipped: [{ test: unmarked, via: 'recorded' }, { test: fixture, via: 'recorded' }] });
+
+    // Another git, or other settings under the same git: only the suite that uses git runs again.
+    for (const identity of ['git version 2.51.0 settings 0123456789abcdef', 'git version 2.50.1 settings fedcba9876543210']) {
+      expect(check({ toolVersion: git(identity) }).run, identity).toEqual([fixture]);
+    }
+    // A git the runner cannot identify is never a hit, and never a new entry.
+    const unidentified = check({ toolVersion: git(null) });
+    expect(unidentified.run).toEqual([fixture]);
+    expect(record(unidentified).unrecorded).toEqual([{ test: fixture, reason: 'floor key: unverified tool: git; recorded key: unverified tool: git', declared: false }]);
+
+    // A source it loads.
+    writeRepo(root, { 'server/lib/repoHelper.js': 'export const describeRepo = (dir) => String(dir);\n' });
+    expect(check().run).toEqual([fixture]);
+    expect(record(check()).unrecorded).toEqual([]);
+    expect(check().run).toEqual([]);
+
+    // The suite starts reading this checkout: the declaration falls, the old entry no longer matches, and no new one is written.
+    writeRepo(root, { [fixture]: `${source}\nit('reads the checkout', () => { git(process.cwd(), 'rev-parse', 'HEAD'); });\n` });
+    const contradicted = check();
+    expect(contradicted.run).toEqual([fixture]);
+    const refused = 'spawns git (git-fixture declaration refused: hands git a path in this repository (server))';
+    expect(record(contradicted).unrecorded).toEqual([{ test: fixture, reason: `floor key: ${refused}; recorded key: ${refused}`, declared: false }]);
+    expect(check().run).toEqual([fixture]);
+
+    // Without the declaration it is the suite it always was.
+    writeRepo(root, { [fixture]: source.replace('// test-memo: git-fixture\n', '') });
+    expect(record(check()).unrecorded).toEqual([{ test: fixture, reason: 'floor key: spawns git; recorded key: spawns git', declared: false }]);
+    expect(check().run).toEqual([fixture]);
   });
 
   it('retains unverified audio suites until the runtime fingerprint proves coverage', () => {
