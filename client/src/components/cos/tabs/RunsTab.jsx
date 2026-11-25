@@ -67,12 +67,15 @@ export default function RunsTab() {
   // is running, is held and read once that settles (that read may have seen
   // the record before the change), so a burst costs at most one follow-up read.
   // A failed re-read keeps the last successful rows on screen.
+  // Set below; the socket-driven re-read calls it so one handler covers both.
+  const refreshPinnedRef = useRef(null);
   const runsReady = useRef(false);
   runsReady.current = runsState === 'ready';
   const refreshGeneration = useRef(0);
   const refreshInFlight = useRef(false);
   const refreshPending = useRef(false);
   const refreshRuns = useCallback(() => {
+    refreshPinnedRef.current?.();
     if (!runsReady.current || refreshInFlight.current) {
       refreshPending.current = true;
       return;
@@ -150,7 +153,7 @@ export default function RunsTab() {
     }
     // Completion metadata lands asynchronously after the child process exits;
     // refresh once so the row transitions from Running to its terminal state.
-    await loadRuns();
+    await Promise.all([loadRuns(), refreshPinned()]);
     setStoppingIds((prev) => {
       const next = new Set(prev);
       next.delete(id);
@@ -194,13 +197,27 @@ export default function RunsTab() {
   }, [deepLinkRunId, loading, runs, expandRun]);
 
   // A link can name a run older than the newest-100 page. Resolve it by id (one
-  // GET, only on this miss) and pin it above the list; 404 shows a notice.
-  // Holds the id being resolved so a response for a superseded ?run= is dropped
-  // without a cleanup flag (a re-read of `runs` must not cancel the one read).
+  // GET, only on this miss) and pin it above the list; a 404 shows a notice, any
+  // other failure a retryable error. Clearing ?run= drops the pin and any read
+  // still in flight.
+  // Holds the id being resolved so one miss costs one read, and a generation ref
+  // drops a response for a superseded selection (a re-read of `runs` must not
+  // cancel the read, so there is no cleanup flag).
   const deepLinkFetched = useRef(null);
   const deepLinkGen = useRef(0);
+  const [pinRetry, setPinRetry] = useState(0);
+  const pinnedId = useRef(null);
+  pinnedId.current = pinned?.status === 'ready' ? pinned.run.id : null;
   useEffect(() => {
-    if (deepLinkFetched.current === deepLinkRunId || deepLinkOpened.current || !deepLinkRunId || runsState !== 'ready') return;
+    if (!deepLinkRunId) {
+      if (deepLinkFetched.current !== null) {
+        deepLinkFetched.current = null;
+        deepLinkGen.current += 1;
+        setPinned(null);
+      }
+      return;
+    }
+    if (deepLinkFetched.current === deepLinkRunId || deepLinkOpened.current || runsState !== 'ready') return;
     if (runs.some(run => run.id === deepLinkRunId)) return;
     const id = deepLinkRunId;
     deepLinkFetched.current = id;
@@ -213,9 +230,31 @@ export default function RunsTab() {
         setPinned({ status: 'ready', run });
         expandRun(run.id);
       },
-      () => { if (gen === deepLinkGen.current) setPinned({ status: 'missing', run: null }); }
+      (err) => {
+        if (gen !== deepLinkGen.current) return;
+        setPinned(err?.status === 404
+          ? { status: 'missing', run: null }
+          : { status: 'error', run: null, message: err?.message || 'request failed' });
+      }
     );
-  }, [deepLinkRunId, runsState, runs, expandRun]);
+  }, [deepLinkRunId, runsState, runs, expandRun, pinRetry]);
+  const retryPinned = () => {
+    deepLinkFetched.current = null;
+    setPinRetry(n => n + 1);
+  };
+
+  // Lifecycle invalidations, a Stop and a bulk delete reach the pinned run too:
+  // re-read it by id so it cannot keep showing Running after it ended.
+  const refreshPinned = useCallback(() => {
+    const id = pinnedId.current;
+    if (!id) return Promise.resolve();
+    const gen = deepLinkGen.current;
+    return getRun(id, { silent: true }).then(
+      (run) => { if (gen === deepLinkGen.current && run?.id === id) setPinned({ status: 'ready', run }); },
+      (err) => { if (gen === deepLinkGen.current && err?.status === 404) setPinned({ status: 'missing', run: null }); }
+    );
+  }, []);
+  refreshPinnedRef.current = refreshPinned;
 
   const handleResume = async (run, e) => {
     e.stopPropagation();
@@ -278,6 +317,7 @@ export default function RunsTab() {
     if (ok) {
       supersedeRefresh();
       setRuns(prev => prev.filter(r => r.success !== false));
+      setPinned(prev => (prev?.run?.success === false ? null : prev));
     }
   };
 
@@ -590,6 +630,12 @@ export default function RunsTab() {
       )}
       {pinned?.status === 'missing' && (
         <Banner tone="info" size="md" srLabel={false} role="note">Run not found or deleted.</Banner>
+      )}
+      {pinned?.status === 'error' && (
+        <Banner tone="error" size="md" srLabel={false} role="alert">
+          Could not load run {deepLinkRunId} — {pinned.message}{' '}
+          <button type="button" onClick={retryPinned} className="min-h-11 underline">Retry</button>
+        </Banner>
       )}
       {pinned?.status === 'ready' && !runs.some(run => run.id === pinned.run.id) && (
         <div className="bg-port-card border border-port-accent/40 rounded-lg sm:rounded-xl overflow-hidden" data-testid="pinned-run">
