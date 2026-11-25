@@ -9,9 +9,8 @@
  * Music Video autonomous run panel.
  */
 
-import { useEffect, useRef, useState } from 'react';
 import toast from '../../ui/Toast';
-import socket from '../../../services/socket';
+import useMusicVideoRun from './useMusicVideoRun.js';
 import {
   cancelAutonomousMusicVideo,
   resumeAutonomousMusicVideo,
@@ -35,45 +34,13 @@ const OUTCOME_TOASTS = {
  */
 export default function useAutonomousMusicVideo({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
-  const [busy, setBusy] = useState(false);
-  const replaceRef = useRef(replaceProject);
-  const lastStatus = useRef({ id: null, status: null }); // a project has one run
-  useEffect(() => {
-    replaceRef.current = replaceProject;
+  const { busy, call } = useMusicVideoRun({
+    projectId,
+    event: 'music-video:autonomous',
+    toasts: OUTCOME_TOASTS,
+    errorLabel: 'Autonomous run request failed',
+    replaceProject,
   });
-
-  useEffect(() => {
-    if (!projectId) return undefined;
-    const onAutonomous = (data) => {
-      if (data?.projectId !== projectId) return;
-      if (data.project) replaceRef.current?.(data.project);
-      const run = data.run;
-      if (run?.id && lastStatus.current.status !== run.status) {
-        const seen = lastStatus.current.id === run.id;
-        lastStatus.current = { id: run.id, status: run.status };
-        if (seen || run.status !== 'running') OUTCOME_TOASTS[run.status]?.(run);
-      }
-    };
-    socket.on('music-video:autonomous', onAutonomous);
-    return () => socket.off('music-video:autonomous', onAutonomous);
-  }, [projectId]);
-
-  // `inline: true` leaves the error to the caller (shown next to the control) instead of toasting it.
-  const call = (request, { inline = false } = {}) => {
-    setBusy(true);
-    return request()
-      .then((res) => {
-        if (res?.project) replaceRef.current?.(res.project);
-        if (res?.run) lastStatus.current = { id: res.run.id, status: res.run.status };
-        return res;
-      })
-      .catch((err) => {
-        if (inline) throw err;
-        toast.error(err?.message || 'Autonomous run request failed');
-        return null;
-      })
-      .finally(() => setBusy(false));
-  };
 
   const resume = (edits = {}, options = {}) => call(() => resumeAutonomousMusicVideo(projectId, edits, { silent: true }), options);
   const stop = () => call(() => stopAutonomousMusicVideo(projectId, { silent: true }));

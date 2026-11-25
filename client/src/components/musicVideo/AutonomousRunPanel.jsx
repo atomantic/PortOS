@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { AlertTriangle, ExternalLink, Wand2 } from 'lucide-react';
 import {
-  AUTONOMOUS_STATUS_LABELS, AUTONOMOUS_VIEWABLE_STAGES, autonomousStageOutput, autonomousStageRows, isAutonomousLive, isOrchestratedRun,
+  AUTONOMOUS_VIEWABLE_STAGES, autonomousStageOutput, autonomousStageRows, isAutonomousLive, isOrchestratedRun,
 } from '../../lib/musicVideoAutonomous.js';
 import { MUSIC_VIDEO_AUTOMATION_TOOLS } from '../../lib/musicVideoAutomation.js';
 import { productionReviewStopGuidance } from '../../lib/musicVideoStages.js';
@@ -14,11 +14,7 @@ import CheckpointApprovalBox from './autonomousRun/CheckpointApprovalBox.jsx';
 import ParkedRunControls from './autonomousRun/ParkedRunControls.jsx';
 import useScopedDraft from './autonomousRun/useScopedDraft.js';
 import useSunoSongDrafts from './autonomousRun/useSunoSongDrafts.js';
-
-const STATUS_TONES = {
-  running: 'text-port-accent', 'awaiting-approval': 'text-port-warning', 'needs-human': 'text-port-warning', stopped: 'text-port-warning',
-  completed: 'text-port-success', failed: 'text-port-error', canceled: 'text-port-text-muted',
-};
+import { RUN_STATUS_LABELS, RUN_STATUS_TONES } from '../../lib/musicVideoRunStatus.js';
 
 const VIDEO_TOOLS = MUSIC_VIDEO_AUTOMATION_TOOLS.filter((tool) => tool.id.startsWith('video:'));
 
@@ -55,7 +51,7 @@ function RunHeader({ run, framed, orchestrator }) {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
       {framed && <span className="flex items-center gap-1 text-sm font-medium"><Wand2 size={15} className="text-port-accent" aria-hidden="true" /> Autonomous run</span>}
-      <span className={`text-sm ${STATUS_TONES[run.status] || ''}`}>{run.interrupted ? 'Interrupted — resume to continue' : AUTONOMOUS_STATUS_LABELS[run.status] || run.status}</span>
+      <span className={`text-sm ${RUN_STATUS_TONES[run.status] || ''}`}>{run.interrupted ? 'Interrupted — resume to continue' : RUN_STATUS_LABELS[run.status] || run.status}</span>
       {orchestrator && (
         <span className="text-xs text-port-text-muted break-all">Orchestrated by {orchestrator.providerId}{orchestrator.model ? ` / ${orchestrator.model}` : ''}{orchestrator.effort ? ` · ${orchestrator.effort}` : ''}</span>
       )}

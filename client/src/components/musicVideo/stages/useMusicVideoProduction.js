@@ -7,12 +7,9 @@
  * production panel.
  */
 
-import { useEffect, useRef, useState } from 'react';
 import toast from '../../ui/Toast';
-import socket from '../../../services/socket';
-import { toastWorkflowError } from '../workflowErrorToast.jsx';
+import useMusicVideoRun from './useMusicVideoRun.js';
 import {
-  getMusicVideoProject,
   startMusicVideoProduction,
   resumeMusicVideoProduction,
   stopMusicVideoProduction,
@@ -39,44 +36,13 @@ const OUTCOME_TOASTS = {
  */
 export default function useMusicVideoProduction({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
-  const [busy, setBusy] = useState(false);
-  const replaceRef = useRef(replaceProject);
-  const lastStatus = useRef(new Map());
-  useEffect(() => {
-    replaceRef.current = replaceProject;
+  const { busy, call } = useMusicVideoRun({
+    projectId,
+    event: 'music-video:production',
+    toasts: OUTCOME_TOASTS,
+    errorLabel: 'Production request failed',
+    replaceProject,
   });
-
-  useEffect(() => {
-    if (!projectId) return undefined;
-    const onProduction = (data) => {
-      if (data?.projectId !== projectId) return;
-      if (data.project) replaceRef.current?.(data.project);
-      const run = data.run;
-      if (run?.id && lastStatus.current.get(run.id) !== run.status) {
-        const seen = lastStatus.current.has(run.id);
-        lastStatus.current.set(run.id, run.status);
-        if (seen || run.status !== 'running') OUTCOME_TOASTS[run.status]?.(run);
-      }
-    };
-    socket.on('music-video:production', onProduction);
-    return () => socket.off('music-video:production', onProduction);
-  }, [projectId]);
-
-  // A refusal for an open revision links to it; reload so the banner can show
-  // a revision this tab never saw.
-  const reload = () => getMusicVideoProject(projectId, { silent: true }).then((next) => replaceRef.current?.(next));
-
-  const call = (request) => {
-    setBusy(true);
-    return request()
-      .then((res) => {
-        if (res?.project) replaceRef.current?.(res.project);
-        if (res?.run) lastStatus.current.set(res.run.id, res.run.status);
-        return res;
-      })
-      .catch((err) => { toastWorkflowError(err, 'Production request failed', { reload }); return null; })
-      .finally(() => setBusy(false));
-  };
 
   const start = (body) => call(() => startMusicVideoProduction(projectId, body, { silent: true }));
   const resume = (runId, body = {}) => call(() => resumeMusicVideoProduction(projectId, runId, body, { silent: true }));
