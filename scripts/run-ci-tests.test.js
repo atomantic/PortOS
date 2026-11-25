@@ -1192,6 +1192,54 @@ describe('structured failure diagnostics', () => {
     } finally { rmSync(fixture, { recursive: true, force: true }); }
   }, 65_000);
 
+  it('reports a nested suite hook timeout when Vitest JSON has no failure message', () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'portos-suite-hook-'));
+    try {
+      writeFileSync(join(fixture, 'vitest.config.mjs'), FIXTURE_CONFIG);
+      writeFileSync(join(fixture, 'fixture.test.js'), `
+        describe('outer suite', () => {
+          describe('setup suite', () => {
+            beforeAll(() => new Promise(() => {}), 20);
+            it('waits for setup', () => {});
+          });
+        });`);
+      const durable = join(fixture, 'durable');
+      const args = ['--config', join(fixture, 'vitest.config.mjs'), '--root', fixture, './fixture.test.js'];
+      const env = { ...process.env, NODE_ENV: 'test', NODE_DISABLE_COMPILE_CACHE: '1',
+        PORTOS_CI_DIAGNOSTICS_DIR: durable };
+      delete env.PORTOS_TEST_TEMP_ROOT;
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+        import { runNpm } from ${JSON.stringify(new URL('./run-ci-tests.js', import.meta.url).href)};
+        process.exitCode = (await runNpm('server', 'test:ci', ${JSON.stringify(args)})).status;
+      `], { encoding: 'utf8', timeout: 30_000, env });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      const attempt = join(durable, readdirSync(durable)[0]);
+      const reportPath = join(attempt, 'failures.json');
+      const runPath = join(attempt, 'run.json');
+      expect(JSON.parse(readFileSync(reportPath, 'utf8')).testResults).toMatchObject([
+        { status: 'failed', message: '', assertionResults: [{ status: 'skipped' }] },
+      ]);
+      expect(JSON.parse(readFileSync(runPath, 'utf8'))).toMatchObject({
+        errorCount: 0,
+        errors: [],
+        suiteErrors: [{
+          file: '<outside-repository>/fixture.test.js',
+          suite: 'outer suite > setup suite',
+          summary: expect.stringMatching(/HookTimeoutError: Hook timed out in 20ms/),
+        }],
+      });
+      const diagnostic = structuredFailureDiagnostics(reportPath, runPath);
+      expect(diagnostic).toContain('fixture.test.js > outer suite > setup suite');
+      expect(diagnostic).toContain('HookTimeoutError: Hook timed out in 20ms');
+      expect(diagnostic).not.toContain('Inconclusive');
+      expect(diagnostic).not.toContain(fixture);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  }, 35_000);
+
   it('reports a run-level rejection and worker cause when every test passed (#11244)', () => {
     const fixture = mkdtempSync(join(tmpdir(), 'portos-diagnostics-'));
     try {
