@@ -539,7 +539,7 @@ export function createProviderCatalogService({
       return this._refreshAPIProviderModels({ ...provider, endpoint: root ? `${root}/v1` : null });
     },
 
-    async _fetchMtplxModels(provider) {
+    async _fetchOpenAiCompatibleModels(provider) {
       return this._refreshAPIProviderModels(provider);
     },
 
@@ -560,22 +560,6 @@ export function createProviderCatalogService({
         models: [...new Set([...catalog.models, ...stale, ...cached])],
         contextWindows: catalog.contextWindows,
       };
-    },
-
-    async _fetchLmstudioModels(provider) {
-      return this._refreshAPIProviderModels(provider);
-    },
-
-    async _fetchLlamaModels(provider) {
-      return this._refreshAPIProviderModels(provider);
-    },
-
-    async _fetchVllmModels(provider) {
-      return this._refreshAPIProviderModels(provider);
-    },
-
-    async _fetchSglangModels(provider) {
-      return this._refreshAPIProviderModels(provider);
     },
 
     async _fetchGatewayModels(provider) {

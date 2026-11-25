@@ -27,6 +27,15 @@ describe('classifyMindRouteBilling', () => {
     expect(classifyMindRouteBilling({ id: 'lmstudio', type: 'api' }).spendsAccount).toBe(false);
   });
 
+  it('reads an lmstudioBacked wrapper as local even when its name does not say LM Studio', () => {
+    const verdict = classifyMindRouteBilling({
+      id: 'renamed-wrapper', name: 'Renamed wrapper', type: 'cli', command: 'opencode', lmstudioBacked: true,
+      endpoint: 'http://10.0.0.5:9000/v1',
+    });
+    expect(verdict.billing).toBe('local');
+    expect(verdict.spendsAccount).toBe(false);
+  });
+
   it('does NOT read a blank-endpoint cloud provider as local', () => {
     // `isLocalInstanceProvider` alone answers "true" here, which would badge a
     // paid vendor API as free — the exact regression this classification exists

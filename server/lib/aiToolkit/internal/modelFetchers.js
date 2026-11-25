@@ -25,8 +25,25 @@ import { CURSOR_TUI_ID, isCursorCommand } from './cursor.js';
 import { CODEX_TUI_ID, isCodexCommand } from './codex.js';
 import { isOllamaBackedProvider, ollamaBaseFromProvider } from './ollamaBacked.js';
 import { isGatewayBackedProvider } from './gateways.js';
+import { LOCAL_RUNTIME_MARKERS } from './localRuntimeMarkers.js';
 
 const displayName = (provider) => String(provider?.name || '').toLowerCase();
+
+/**
+ * One row per non-Ollama local runtime, in registry order, so a new runtime registers here by
+ * adding a `localRuntimeMarkers.js` row. Each probes its OpenAI-compatible `/v1/models` endpoint
+ * rather than `opencode models` / `codex` (which would inventory the harness); Splash alone
+ * normalizes the endpoint root first. Auth varies by runtime and is the record's `apiKey` (vLLM
+ * answers only with the compose stack's key sent as Bearer; LM Studio and SGLang usually have none).
+ */
+const LOCAL_RUNTIME_FETCHER_ROWS = Object.entries(LOCAL_RUNTIME_MARKERS)
+  .filter(([id]) => id !== 'ollama')
+  .map(([id, marker]) => ({
+    key: id,
+    cliMatch: (p) => p?.[marker] === true,
+    tuiMatch: (p) => p?.[marker] === true,
+    fetch: id === 'splash' ? '_fetchSplashModels' : '_fetchOpenAiCompatibleModels',
+  }));
 
 /**
  * Ordered vendor rows. Order is load-bearing in one place: the ollama row
@@ -42,48 +59,7 @@ export const MODEL_FETCHERS = [
     tuiMatch: (p) => isOllamaBackedProvider(p),
     fetch: '_fetchOllamaToolCapableModels',
   },
-  {
-    key: 'lmstudio',
-    // Probes the OpenAI-compatible `/v1/models` endpoint rather than `opencode
-    // models` / `codex` (which would inventory the harness). No loopback auth, so
-    // `apiKey` is blank and the Bearer header is omitted.
-    cliMatch: (p) => p?.lmstudioBacked === true,
-    tuiMatch: (p) => p?.lmstudioBacked === true,
-    fetch: '_fetchLmstudioModels',
-  },
-  {
-    key: 'splash',
-    cliMatch: (p) => p?.splashBacked === true,
-    tuiMatch: (p) => p?.splashBacked === true,
-    fetch: '_fetchSplashModels',
-  },
-  {
-    key: 'mtplx',
-    // OpenAI-compatible endpoint probe, not `opencode models` (which describes the harness).
-    cliMatch: (p) => p?.mtplxBacked === true,
-    tuiMatch: (p) => p?.mtplxBacked === true,
-    fetch: '_fetchMtplxModels',
-  },
-  {
-    key: 'llama',
-    cliMatch: (p) => p?.llamaBacked === true,
-    tuiMatch: (p) => p?.llamaBacked === true,
-    fetch: '_fetchLlamaModels',
-  },
-  {
-    key: 'vllm',
-    // Answers only WITH the compose stack's API key (wrapper `apiKey`, sent as Bearer).
-    cliMatch: (p) => p?.vllmBacked === true,
-    tuiMatch: (p) => p?.vllmBacked === true,
-    fetch: '_fetchVllmModels',
-  },
-  {
-    key: 'sglang',
-    // Authenticates only if started with `--api-key`, so `apiKey` is usually blank (no Bearer).
-    cliMatch: (p) => p?.sglangBacked === true,
-    tuiMatch: (p) => p?.sglangBacked === true,
-    fetch: '_fetchSglangModels',
-  },
+  ...LOCAL_RUNTIME_FETCHER_ROWS,
   {
     key: 'gateway',
     // Gateway-backed OpenCode wrappers (see ./gateways.js) probe their sibling

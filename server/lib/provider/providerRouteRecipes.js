@@ -15,6 +15,7 @@ import {
   harnessRecipe,
 } from './providerHarnesses.js';
 import { LOCAL_RUNTIMES } from '../localProviderRuntime.js';
+import { LOCAL_RUNTIME_MARKERS, LOCAL_RUNTIME_MARKER_KEYS } from '../aiToolkit/internal/localRuntimeMarkers.js';
 import { resolveServiceInstance, serviceError } from '../serviceDefinitions.js';
 
 /**
@@ -50,16 +51,6 @@ import { resolveServiceInstance, serviceError } from '../serviceDefinitions.js';
  * to describe it honestly. `vendor` is absent for the opposite reason — a
  * vendor's own hosted service is not a backend the user supplies.
  */
-const LOCAL_RUNTIME_MARKERS = Object.freeze({
-  ollama: 'ollamaBacked',
-  lmstudio: 'lmstudioBacked',
-  mtplx: 'mtplxBacked',
-  llama: 'llamaBacked',
-  vllm: 'vllmBacked',
-  sglang: 'sglangBacked',
-  splash: 'splashBacked',
-});
-
 /**
  * Every record key a backend marker can sit under: the local-runtime booleans,
  * the generic gateway marker, and each gateway's legacy per-gateway boolean —
@@ -67,7 +58,7 @@ const LOCAL_RUNTIME_MARKERS = Object.freeze({
  * different service, #7565) names the same set this module writes.
  */
 export const BACKEND_MARKER_KEYS = Object.freeze([
-  ...Object.values(LOCAL_RUNTIME_MARKERS),
+  ...LOCAL_RUNTIME_MARKER_KEYS,
   'gatewayBacked',
   ...PROVIDER_GATEWAYS.flatMap((gateway) => (gateway.legacyMarker ? [gateway.legacyMarker] : [])),
 ]);

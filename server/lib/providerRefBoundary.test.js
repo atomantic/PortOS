@@ -9,7 +9,7 @@ import { presetProviderIdSchema, providerRefFieldSchema, providerRefSchema } fro
 import { createCosTaskSchema, createTaskTemplateSchema, updateTaskTemplateSchema } from './cos/cosValidation.js';
 import { providerActiveSchema, providerCreateSchema, providerSchema, runSchema as toolkitRunSchema } from './aiToolkit/validation.js';
 import { appUpdateSchema } from './appValidation.js';
-import { providerSchema as hostProviderSchema, credentialBootstrapsSettingsSchema, harnessSettingsSchema } from './providerValidation.js';
+import { credentialBootstrapsSettingsSchema, harnessSettingsSchema } from './providerValidation.js';
 import { featureProviderConfigSchema } from './settingsValidation.js';
 import { llmSchema } from './sharedSchemas.js';
 import { runSchema } from './processValidation.js';
@@ -97,13 +97,11 @@ describe('the settings slices behind composition', () => {
     expect(harnessSettingsSchema.safeParse({ pi: { enabled: true, extra: 1 } }).success).toBe(false);
   });
 
-  it('preserves environment argv in both provider schemas and rejects malformed commands', () => {
+  it('preserves environment argv in the provider schema and rejects malformed commands', () => {
     const bootstrap = { command: 'token-cli', envCommand: ['token-cli', 'print-env', 'account with spaces'] };
-    for (const schema of [hostProviderSchema, providerSchema]) {
-      expect(schema.partial().parse({ credentialBootstrap: bootstrap }).credentialBootstrap).toEqual(bootstrap);
-      for (const envCommand of [[], '', [''], [5]]) {
-        expect(schema.partial().safeParse({ credentialBootstrap: { ...bootstrap, envCommand } }).success).toBe(false);
-      }
+    expect(providerSchema.partial().parse({ credentialBootstrap: bootstrap }).credentialBootstrap).toEqual(bootstrap);
+    for (const envCommand of [[], '', [''], [5]]) {
+      expect(providerSchema.partial().safeParse({ credentialBootstrap: { ...bootstrap, envCommand } }).success).toBe(false);
     }
   });
 
