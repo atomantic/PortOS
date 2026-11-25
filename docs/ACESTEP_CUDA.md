@@ -56,7 +56,6 @@ LABEL="ACE-Step CUDA"
 DOC=docs/ACESTEP_CUDA.md
 CUDA_SCOPED="torch"
 COMPILE_EXTRA=(
-  --upgrade-package filelock==4.2.9 --upgrade-package typing-inspection==0.4.5
   --no-binary docopt --no-binary unidic-lite
   --preview-features build-dependency-hashes --require-build-hashes
   --build-constraints "$PWD/scripts/ml/requirements/requirements-acestep-mlx-build.lock.txt"

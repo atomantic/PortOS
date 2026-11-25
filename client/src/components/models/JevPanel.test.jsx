@@ -109,6 +109,12 @@ describe('JevPanel install', () => {
     expect(screen.queryByTestId('jev-stage-huggingface-token')).not.toBeInTheDocument();
   });
 
+  it('shows the Python 3.11 requirement in the fallback setup checklist', async () => {
+    getJevStatus.mockResolvedValue(status({ stages: [] }));
+    await renderPanel();
+    expect(await screen.findByText('Python 3.11 or newer, with a supported PyTorch wheel for this machine.')).toBeInTheDocument();
+  });
+
   it('offers repair for a partial setup and blocks installation without host Python', async () => {
     getJevStatus.mockResolvedValue(status({ setupState: 'incomplete' }));
     await renderPanel();

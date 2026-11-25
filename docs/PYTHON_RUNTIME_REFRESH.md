@@ -41,16 +41,16 @@ that upstream moves or the caller is migrated.
 | NetworkX 3.7, ContourPy 1.4, PyAV 19, Librosa 1 | Fixed CPython 3.11 profiles | Older compatible versions (e.g. PyAV 18) | These releases require Python 3.12+. Universal locks already select the newer versions on their eligible Python branches. |
 | Librosa 0.11 | ACE-Step (revision `1bee4c9f5b43e30995f8d4d33b3919197ce1bd68`) | `==0.11` | Upstream `requirements.txt`, read by `setup.py`, pins it. Moving needs a source/API migration, not a pin override. |
 | py3langid 0.3 | ACE-Step | `<0.4` | `from_pickled_model` is required by the caller and removed in 0.4. |
-| fsspec 2026.7 | ACE-Step, shared mflux-video | `<=2026.7.0` | `datasets` 5.1 requires `fsspec[http]<=2026.7.0`. |
+| fsspec 2026.7 | shared mflux-video | `<=2026.7.0` | `datasets` 5.1 requires `fsspec[http]<=2026.7.0`. |
 | mpmath | Torch/model closures that include SymPy | `<1.4` | SymPy 1.14 requires `mpmath<1.4`. |
 | huggingface-hub 1.x | mflux 0.24 (FLUX.3, shared mflux-video), frozen Laya source, Wan MLX (frozen MLX-Gen source) | `<2` | Each upstream requires Hub below 2. Hub 2 is a separate migration per profile. |
-| MLX 0.32.2, mlx-lm `<0.32`, Transformers `<5.17`, Hub 1 | MTPLX 2.12.2 | As listed | MTPLX 2.12.2 requires exactly these ranges. |
+| MLX 0.32.2, mlx-lm `<0.32`, Transformers `<5.17`, Hub 1 | MTPLX 2.13.0 | As listed | MTPLX 2.13.0 requires exactly these ranges. |
 | mlx-lm below 0.32.2, MLX 0.31.1 / 0.32.0 | LTX MLX (LTX-2.3 / LTX-2.5) | Frozen MLX baselines | mlx-lm 0.32.2 requires MLX at least 0.32.2, beyond the frozen LTX baselines. |
 | Transformers 5.14.1, Hub 1 | LTX CUDA | Transformers `<5.15` | The frozen LTX source requires Transformers below 5.15. |
 | uv-build 0.9.30 | LTX CUDA | `>=0.9.8,<0.10` | Frozen LTX source build requirement. |
 | uv-build `<0.8` | MLX-Gen (Wan MLX) | `>=0.7.19,<0.8` | MLX-Gen build requirement. |
 | Hatchling | LTX workspace | `<1.32` | Cap documented in the LTX workspace README. |
-| Transformers 5.22.1 | Pixal3D CUDA, TRELLIS.2 CUDA | Exact | Immutable profile identities (`scripts/*-cuda-profile.json`, registry cutoff 2026-11-04) and the setup assertion pin it. Moving is a new profile revision with CUDA validation. |
+| Transformers 5.22.1 | Pixal3D CUDA, TRELLIS.2 CUDA | Exact | Immutable profile identities (`scripts/ml/*-cuda-profile.json`, registry cutoff 2026-11-04) and the setup assertion pin it. Moving is a new profile revision with CUDA validation. |
 | `cuda-bindings==13.5.0` | LTX CUDA | Cooldown exception (#15454) | 28 artifacts postdate the fixed `2026-11-05T00:00:00Z` cutoff. Retained deliberately; do not claim every source meets the cutoff. |
 | `trellis2-apple` revision `c873bde81ebe1e56535c6caddb4b21267364a923` | TRELLIS.2 Metal | Cooldown exception (#15708) | Commit dated 2026-11-09T16:25:19Z (seven days on 2026-11-16T16:25:19Z); carries the autorelease-pool leak repair. Preserve the repair. |
 | `mtplx==2.13.0` | MTPLX | Cooldown exception (#17422) | Published 2026-11-22; the first release that loads the Inkling 2 Mini MTP packs. Only MTPLX bypasses the cutoff (`--exclude-newer-package mtplx=…`); its 45 dependencies keep the previous pins. |
