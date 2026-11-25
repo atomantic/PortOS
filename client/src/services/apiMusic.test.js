@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { installAudioModel, setupSuperCollider } from './apiMusic.js';
-import { maybeRedirectToLogin } from './apiCore.js';
 
-vi.mock('./apiCore.js', () => ({ request: vi.fn(), maybeRedirectToLogin: vi.fn() }));
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 const respond = (chunks) => vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
@@ -52,8 +50,11 @@ for (const [name, start] of [
 });
 
 it('preserves authentication redirect handling', async () => {
-  const response = { ok: false, status: 401, text: async () => JSON.stringify({ code: 'AUTH_REQUIRED', error: 'Sign in' }) };
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+  const replace = vi.fn();
+  vi.stubGlobal('window', { location: { pathname: '/music', search: '', replace } });
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+    JSON.stringify({ code: 'AUTH_REQUIRED', error: 'Sign in' }), { status: 401 },
+  )));
   await expect(installAudioModel({ engine: 'musicgen', repo: 'example/model' })).rejects.toThrow('Sign in');
-  expect(maybeRedirectToLogin).toHaveBeenCalledWith(response, { code: 'AUTH_REQUIRED', error: 'Sign in' });
+  expect(replace).toHaveBeenCalledWith('/login?next=%2Fmusic');
 });

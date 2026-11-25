@@ -14,7 +14,8 @@
  * `cancelSlotstreamModelDownload`, so weights are managed in-app rather than from a terminal.
  */
 
-import { request, API_BASE, throwApiError } from './apiCore.js';
+import { request, API_BASE } from './apiCore.js';
+import { openStreamResponse, readStreamFrames } from './streamResponse.js';
 
 // Local LLM backends (Ollama / LM Studio) — status, model management, migrate.
 // Installed models per backend come back inside getLocalLlmStatus().
@@ -340,48 +341,22 @@ export const compareLocalLlmModels = (payload, options) =>
 // the EventSource-based useSseProgress hook here: that's GET-only and this
 // request carries a prompt body.
 export async function streamLocalLlmTest(payload, { signal, onToken } = {}) {
-  const response = await fetch(`${API_BASE}/local-llm/test/stream`, {
+  const response = await openStreamResponse(fetch(`${API_BASE}/local-llm/test/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
     signal,
-  });
-  if (!response.ok || !response.body?.getReader) {
-    // Honor session expiry the same way request() does — a streaming run that
-    // 401s should bounce to /login, not just toast and strand the user here.
-    await throwApiError(response);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+  }));
   let result = null;
-
-  const consume = (line) => {
-    const trimmed = line.trim();
-    if (!trimmed) return;
-    let frame;
-    try { frame = JSON.parse(trimmed); } catch { return; }
-    if (frame.type === 'token') onToken?.(frame.delta || '', frame.kind || 'content');
-    else if (frame.type === 'result') result = frame.result;
-  };
-
-  // Always release the reader on every exit — a clean finish, a thrown
-  // AbortError on cancel, or a mid-stream throw — so a non-abort error doesn't
-  // leave the stream dangling (mirrors apiAsk.js / apiOpenClaw.js).
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-      for (const line of lines) consume(line);
-    }
-    if (buffer.trim()) consume(buffer);
-  } finally {
-    await reader.cancel().catch(() => {});
-  }
+  await readStreamFrames(response, {
+    format: 'ndjson',
+    onFrame: ({ data }) => {
+      let frame;
+      try { frame = JSON.parse(data); } catch { return; }
+      if (frame.type === 'token') onToken?.(frame.delta || '', frame.kind || 'content');
+      else if (frame.type === 'result') result = frame.result;
+    },
+  });
   // A clean EOF that never delivered a `result` frame (server killed mid-stream,
   // truncated body, proxy cut the connection — all surface as read() done:true,
   // NOT an AbortError) would otherwise resolve null and be silently swallowed by

@@ -2,7 +2,8 @@
  * File browser / picker backend.
  */
 
-import { API_BASE, request, throwStreamApiError } from './apiCore.js';
+import { API_BASE, request } from './apiCore.js';
+import { openStreamResponse, readStreamFrames } from './streamResponse.js';
 
 export const getOpenClawStatus = () => request('/openclaw/status', { silent: true });
 export const getOpenClawSessions = () => request('/openclaw/sessions', { silent: true });
@@ -14,7 +15,7 @@ export const getOpenClawMessages = (sessionId, options = {}) => {
 };
 
 export async function streamOpenClawMessage(sessionId, { message, context, attachments, signal, onEvent }) {
-  const response = await fetch(`${API_BASE}/openclaw/sessions/${encodeURIComponent(sessionId)}/messages/stream`, {
+  const response = await openStreamResponse(fetch(`${API_BASE}/openclaw/sessions/${encodeURIComponent(sessionId)}/messages/stream`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -22,76 +23,19 @@ export async function streamOpenClawMessage(sessionId, { message, context, attac
     },
     body: JSON.stringify({ message, context, attachments }),
     signal
-  }).catch((err) => {
-    if (err?.name === 'AbortError') throw err;
-    return null;
-  });
-
-  if (!response) {
-    throw new Error('Server unreachable — check your connection and try again');
-  }
-
-  if (!response.ok) await throwStreamApiError(response);
-
-  if (!response.body) {
-    throw new Error('Streaming is unavailable for this response');
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  const emit = (eventName, data) => {
-    if (typeof onEvent === 'function') onEvent({ event: eventName, data });
-  };
-
-  const flushEventBlock = (block) => {
-    const lines = block.split(/\r?\n/);
-    let eventName = 'message';
-    const dataLines = [];
-
-    for (const line of lines) {
-      if (line.startsWith('event:')) eventName = line.slice(6).trim() || 'message';
-      if (line.startsWith('data:')) {
-        const raw = line.slice(5);
-        dataLines.push(raw.startsWith(' ') ? raw.slice(1) : raw);
+  }));
+  await readStreamFrames(response, {
+    format: 'sse',
+    onFrame: ({ event, data: raw }) => {
+      if (typeof onEvent !== 'function') return;
+      if (raw === '[DONE]') {
+        onEvent({ event: 'done', data: raw });
+        return;
       }
-    }
 
-    if (dataLines.length === 0) return;
-    const rawData = dataLines.join('\n');
-    if (rawData === '[DONE]') {
-      emit('done', '[DONE]');
-      return;
-    }
-
-    let data = rawData;
-    try {
-      data = JSON.parse(rawData);
-    } catch {
-      // keep raw string
-    }
-    emit(eventName, data);
-  };
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      const parts = buffer.split(/\r?\n\r?\n/);
-      buffer = parts.pop() || '';
-      for (const part of parts) flushEventBlock(part);
-    }
-
-    buffer += decoder.decode();
-    if (buffer.trim()) flushEventBlock(buffer);
-  } finally {
-    try {
-      await reader.cancel();
-    } catch {
-      // ignore cancel errors to avoid masking the original error
-    }
-  }
+      let data = raw;
+      try { data = JSON.parse(raw); } catch { /* Keep the raw string. */ }
+      onEvent({ event, data });
+    },
+  });
 }

@@ -11,7 +11,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { safeParseJSON } from '../lib/genUtils';
-import { throwApiError } from '../services/apiCore';
+import { openStreamResponse, readStreamFrames } from '../services/streamResponse.js';
 
 /**
  * Shared streaming lifecycle for the BYO runtime install modals
@@ -180,43 +180,24 @@ export function useInstallStream(url, {
       const startTimer = setTimeout(() => {
         if (!isCurrent()) return;
         const run = async () => {
-          let reader = null;
           try {
-            const response = await fetch(url, { method: 'POST', signal: controller.signal });
-            if (!response.ok) await throwApiError(response);
-            if (!response.body?.getReader) throw new Error('This browser cannot read a streamed response');
-
-            reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
-            let terminalFrame = false;
-            const consumeFrame = (frame) => {
-              const dataLine = frame.split(/\r?\n/).find(line => line.startsWith('data:'));
-              if (!dataLine || !isCurrent()) return;
-              const msg = safeParseJSON(dataLine.slice('data:'.length).trim());
-              if (!msg) return;
-              terminalFrame ||= msg.type === 'complete' || msg.type === 'error';
-              handleMessage(msg, closeThis);
-            };
-
-            for (;;) {
-              const { done: streamDone, value } = await reader.read();
-              if (streamDone) break;
-              buffer += decoder.decode(value, { stream: true });
-              const frames = buffer.split(/\r?\n\r?\n/);
-              buffer = frames.pop() || '';
-              for (const frame of frames) consumeFrame(frame);
-              if (!isCurrent()) break;
-            }
-            buffer += decoder.decode();
-            if (isCurrent() && buffer.trim()) consumeFrame(buffer);
-            if (isCurrent() && !terminalFrame && !doneRef.current) {
+            const response = await openStreamResponse(fetch(url, { method: 'POST', signal: controller.signal }));
+            await readStreamFrames(response, {
+              format: 'sse',
+              onFrame: ({ data }) => {
+                if (!isCurrent()) return true;
+                const msg = safeParseJSON(data);
+                if (!msg) return;
+                handleMessage(msg, closeThis);
+                return !isCurrent();
+              },
+            });
+            if (isCurrent() && !doneRef.current) {
               setError((prev) => prev ?? CONNECTION_LOST_MESSAGE);
             }
           } catch (err) {
             if (isCurrent()) setError((prev) => prev ?? (err?.message || CONNECTION_LOST_MESSAGE));
           } finally {
-            if (reader) await reader.cancel().catch(() => {});
             if (abortRef.current === controller) abortRef.current = null;
           }
         };

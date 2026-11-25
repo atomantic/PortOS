@@ -29,6 +29,8 @@ node scripts/lib-catalog.js <term> --dir client/src/services
 Each module opens with a one-sentence summary comment (at most 200 characters) that the catalog
 prints; `client/src/services/moduleSummaries.test.js` enforces it.
 
+Use `streamResponse.js` to open and read POST streams (SSE or NDJSON).
+
 The `request()` helper in `apiCore.js` toasts errors by default. Pass `{ silent: true }`
 when the caller owns its own error UI (custom catch + toast, or `useAsyncAction` which
 toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire twice.

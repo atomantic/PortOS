@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * Raw-fetch helpers (Ask stream, OpenClaw stream, Video Gen submit) must honor
+ * Streaming and Video Gen raw-fetch helpers must honor
  * the apiCore error envelope: session-expiry redirect plus .code/.status/.context.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -17,6 +17,9 @@ const respond = (status, body) => ({
 const callers = {
   streamAskTurn: async () => (await import('./apiAsk.js')).streamAskTurn({ question: 'q' }, { onEvent: vi.fn() }),
   streamOpenClawMessage: async () => (await import('./apiOpenClaw.js')).streamOpenClawMessage('s1', { message: 'hi' }),
+  installAudioModel: async () => (await import('./apiMusic.js')).installAudioModel({ engine: 'musicgen', repo: 'example/model' }),
+  streamLocalLlmTest: async () => (await import('./apiLocalLlm.js')).streamLocalLlmTest({ prompt: 'hi' }),
+  installLoraFromHuggingfaceStream: async () => (await import('./apiImageVideo.js')).installLoraFromHuggingfaceStream({ url: 'https://example.com/model' }),
   generateVideo: async () => (await import('./apiImageVideo.js')).generateVideo({ prompt: 'p' }),
 };
 
