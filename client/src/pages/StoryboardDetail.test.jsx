@@ -573,7 +573,15 @@ describe('StoryboardDetail', () => {
       beats, sentPrompt: `Instructions\n\n---\n\nPlot summary:\n${input.plot}`,
       promptAdditions: [{ id: 'beat-instructions', label: 'Beat instructions', text: 'Instructions' }], providerId: 'example', model: 'example-model',
     }));
-    api.addStoryboardBeats.mockImplementation(async (_id, added) => board({ beats: added.map((b, i) => ({ ...b, id: `beat-${i}`, sectionHint: '' })), updatedAt: '2026-10-22T00:00:03.000Z' }));
+    api.addStoryboardBeats.mockImplementation(async (_id, added) => board({
+      beats: added.map((beat, beatIndex) => ({
+        ...beat,
+        id: `beat-${beatIndex}`,
+        sectionHint: '',
+        panels: beat.panels.map((panel, panelIndex) => ({ ...panel, id: `panel-${beatIndex}-${panelIndex}` })),
+      })),
+      updatedAt: '2026-10-22T00:00:03.000Z',
+    }));
     renderAt('/storyboards/sb-1?plot=open');
 
     fireEvent.change(await screen.findByLabelText('Plot summary'), { target: { value: 'A shy teen finds her courage.' } });
@@ -586,6 +594,8 @@ describe('StoryboardDetail', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add 1 beat' }));
     await waitFor(() => expect(api.addStoryboardBeats).toHaveBeenCalledWith('sb-1', [beats[0]]));
     await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('plot=open'));
+    expect(screen.getByRole('textbox', { name: 'Beat title' })).toHaveValue('Arrival');
+    expect(screen.getByRole('button', { name: 'Open panel 1: Doors open' })).toBeInTheDocument();
   });
 
   it('plays the animatic with a temp track attached from an upload', async () => {
