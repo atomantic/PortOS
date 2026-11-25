@@ -183,6 +183,16 @@ describe('brokerDomains + scoreVerificationEmail (anti-phishing)', () => {
   it('collects the broker domains', () => {
     expect(brokerDomains(broker)).toContain('spokeo.com');
   });
+  it('collects only normalized hostnames from valid HTTP(S) broker URLs', () => {
+    expect(brokerDomains({
+      urls: {
+        home: 'https://WWW.Broker.example.:443?locale=en',
+        lookup: 'http://lookup.example:8080#search',
+        other: 'ftp://files.example',
+      },
+      optout: { url: 'https://user:secret@private.example/optout' },
+    })).toEqual(['broker.example', 'lookup.example']);
+  });
   it('trusts a confirmation email with a matching link domain', () => {
     const msg = { subject: 'Confirm your opt-out', body: 'Please click https://www.spokeo.com/confirm?t=abc to complete your removal.' };
     const s = scoreVerificationEmail(msg, broker);
@@ -194,6 +204,37 @@ describe('brokerDomains + scoreVerificationEmail (anti-phishing)', () => {
     const s = scoreVerificationEmail(msg, broker);
     expect(s.isConfirmation).toBe(false);
     expect(s.reason).toBe('no_domain_match');
+  });
+  it.each([
+    'https://unrelated.example?.broker.example',
+    'https://unrelated.example#.broker.example',
+    'https://unrelated.example\\.broker.example',
+    'https://broker.example@unrelated.example/confirm',
+    'https://user:secret@mail.broker.example/confirm',
+    'https://mail.broker.example:99999/confirm',
+  ])('rejects an untrusted verification URL (%s)', (url) => {
+    const result = scoreVerificationEmail(
+      { subject: 'Confirm your opt-out', body: `Click ${url} to complete.` },
+      { urls: { home: 'https://broker.example' } },
+    );
+    expect(result).toMatchObject({
+      isConfirmation: false, hasVerificationLink: false, verificationUrl: null, reason: 'no_domain_match',
+    });
+  });
+  it('retains the original body URL for a trusted subdomain with a port', () => {
+    const url = 'https://mail.broker.example:443/confirm?t=abc';
+    const result = scoreVerificationEmail(
+      { subject: 'Confirm your opt-out', body: `Click ${url} to complete.` },
+      { urls: { home: 'https://www.broker.example.:8443?locale=en' } },
+    );
+    expect(result).toMatchObject({ isConfirmation: true, hasVerificationLink: true, verificationUrl: url });
+  });
+  it('counts a trusted subject link as confirmation evidence without returning it as an action', () => {
+    const result = scoreVerificationEmail(
+      { subject: 'Confirm your opt-out at https://www.spokeo.com/confirm', body: 'Click to complete.' },
+      broker,
+    );
+    expect(result).toMatchObject({ isConfirmation: true, hasVerificationLink: false, verificationUrl: null });
   });
   it('rejects a matching-domain email that is not a confirmation', () => {
     const msg = { subject: 'Your weekly newsletter', body: 'News from https://www.spokeo.com/blog' };
