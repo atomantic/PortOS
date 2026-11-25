@@ -36,18 +36,6 @@ router.get('/', asyncHandler(async (req, res) => {
   res.json(accounts);
 }));
 
-// GET /:id - Get account by ID
-router.get('/:id', asyncHandler(async (req, res) => {
-  const { id } = req.params;
-
-  const account = await platformAccounts.getAccountById(id);
-  if (!account) {
-    throw new ServerError('Account not found', { status: 404, code: 'NOT_FOUND' });
-  }
-
-  res.json(account);
-}));
-
 // POST / - Create/link new platform account
 router.post('/', asyncHandler(async (req, res) => {
   const body = req.body && typeof req.body === 'object' ? req.body : {};

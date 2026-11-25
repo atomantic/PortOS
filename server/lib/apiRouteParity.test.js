@@ -61,9 +61,11 @@ const DYNAMIC_SEGMENT_SITES = [
 // What `controlFaceTime(action)` can reach: the forward check cannot see these, so pin that they stay mounted.
 const FACETIME_ACTIONS = ['call', 'hangup', 'probe'];
 
-const allowlistClassOf = new Map(Object.entries(UNCALLED_ROUTE_ALLOWLIST)
-  .flatMap(([callerClass, paths]) => paths.map((route) => [route, callerClass])));
-const describeRoute = (route) => `${route.methods.join('/')} ${route.path}`;
+const allowlistEntries = Object.values(UNCALLED_ROUTE_ALLOWLIST).flat();
+const routeKey = ({ method, path }) => `${method} ${path}`;
+const expandRoutes = (routes) => routes.flatMap(({ path, methods }) =>
+  methods.map((method) => ({ path, method })));
+const covers = (entry, route) => entry === route.path || entry === routeKey(route);
 
 const describeSite = (site) => `${site.file}: ${site.expression}`;
 const describeSitePath = (site) => `${describeSite(site)} → ${site.path}`;
@@ -71,8 +73,7 @@ const describeSitePath = (site) => `${describeSite(site)} → ${site.path}`;
 const catalog = getApiRouteCatalog();
 const serverPaths = catalog.routes.map((route) => route.path);
 const { paths: clientPaths, unresolved, referenced } = scanClientApiPaths({ repoRoot: REPO_ROOT });
-// Everything any client file reaches; the unmounted check keeps using `clientPaths` only.
-const reachedPaths = [...clientPaths, ...referenced.map((path) => ({ path }))];
+const uncalledRoutes = expandRoutes(findUncalledServerRoutes(catalog.routes, referenced));
 
 describe('client ↔ server API route parity', () => {
   it('resolves every client API path to a mounted server route', () => {
@@ -109,21 +110,23 @@ describe('client ↔ server API route parity', () => {
 
   // ── reverse direction: mounted routes with no client caller ────────────────
 
-  it('has a client caller or a justified allowlist entry for every mounted route', () => {
-    const uncalled = findUncalledServerRoutes(catalog.routes, reachedPaths);
+  it('has a client caller or a justified allowlist entry for every mounted method', () => {
     expect(
-      uncalled.filter((route) => !allowlistClassOf.has(route.path)).map(describeRoute),
-      'mounted routes nothing calls: delete the route, or add it to apiRouteCallerAllowlist.js under the class of its caller',
+      uncalledRoutes.filter((route) => !allowlistEntries.some((entry) => covers(entry, route))).map(routeKey),
+      'mounted methods nothing calls: delete the handler or cite its caller in apiRouteCallerAllowlist.js',
     ).toEqual([]);
   });
 
-  it('keeps the allowlist honest: every entry is mounted, still uncalled, unique and in a known class', () => {
-    const uncalled = new Set(findUncalledServerRoutes(catalog.routes, reachedPaths).map((route) => route.path));
-    const entries = Object.values(UNCALLED_ROUTE_ALLOWLIST).flat();
-    expect(entries.filter((route, index) => entries.indexOf(route) !== index), 'duplicate entries').toEqual([]);
+  it('keeps the allowlist honest: every entry covers only mounted, uncalled methods', () => {
+    const uncalled = new Set(uncalledRoutes.map(routeKey));
+    expect(new Set(allowlistEntries).size, 'duplicate entries').toBe(allowlistEntries.length);
     expect(Object.keys(UNCALLED_ROUTE_ALLOWLIST).filter((callerClass) => !ROUTE_CALLER_CLASSES[callerClass])).toEqual([]);
-    expect(entries.filter((route) => !serverPaths.includes(route)), 'entries for routes that are no longer mounted').toEqual([]);
-    expect(entries.filter((route) => !uncalled.has(route)), 'entries whose route a client now calls').toEqual([]);
+    expect(allowlistEntries.filter((entry) => !catalog.routes.some((route) => covers(entry, route))),
+      'entries for methods or paths that are no longer mounted').toEqual([]);
+    expect(catalog.routes.filter((route) => allowlistEntries.filter((entry) => covers(entry, route)).length > 1).map(routeKey),
+      'methods covered by multiple entries').toEqual([]);
+    expect(catalog.routes.filter((route) => allowlistEntries.some((entry) => covers(entry, route)) && !uncalled.has(routeKey(route))).map(routeKey),
+      'allowlisted methods a client now calls').toEqual([]);
   });
 
   // ── bypass probes ─────────────────────────────────────────────────────────
@@ -169,8 +172,8 @@ describe('client ↔ server API route parity', () => {
     const probeClient = [{ path: '/api/probe-called/:p' }, { path: '/api/probe-docs/:p/:p' }];
     const uncalled = findUncalledServerRoutes(probe, probeClient);
     expect(uncalled).toEqual([{ path: '/api/definitely-uncalled-probe', methods: ['GET', 'POST'] }]);
-    expect(uncalled.filter((route) => !allowlistClassOf.has(route.path)).map(describeRoute))
-      .toEqual(['GET/POST /api/definitely-uncalled-probe']);
+    expect(expandRoutes(uncalled).filter((route) => !allowlistEntries.some((entry) => covers(entry, route))).map(routeKey))
+      .toEqual(['GET /api/definitely-uncalled-probe', 'POST /api/definitely-uncalled-probe']);
     // An empty client scan must leave every mounted route uncalled rather than pass silently.
     expect(findUncalledServerRoutes(catalog.routes, []).length).toBeGreaterThan(1000);
   });
@@ -178,7 +181,7 @@ describe('client ↔ server API route parity', () => {
   // ── widened client scan (#18656): each call shape marks a route reached; a mention does not ──
 
   const scanProbe = (sources) => scanClientApiPaths({ sources });
-  const reachedBy = (sources) => scanProbe(sources).referenced;
+  const reachedBy = (sources) => scanProbe(sources).referenced.map(({ path }) => path);
 
   it('marks a route reached from a URL builder, api.<verb>, request and a component fetch/EventSource (call-shape bypass probes)', () => {
     const scanned = scanProbe({
@@ -196,7 +199,7 @@ describe('client ↔ server API route parity', () => {
         "const forward = () => api.get('/probe-page/read');",
       ].join('\n'),
     });
-    expect(scanned.referenced).toEqual(expect.arrayContaining([
+    expect(scanned.referenced.map(({ path }) => path)).toEqual(expect.arrayContaining([
       '/api/probe-builder/:p/stream', '/api/probe-verb/:p/send', '/api/probe-component/list',
       '/api/probe-events/:p', '/api/probe-request/ask', '/api/probe-icon/:p', '/api/probe-page/read',
     ]));
@@ -207,13 +210,40 @@ describe('client ↔ server API route parity', () => {
       { method: 'GET', path: '/api/probe-events/:id' },
       { method: 'GET', path: '/api/probe-never-called' },
     ];
-    expect(findUncalledServerRoutes(server, scanned.referenced.map((path) => ({ path }))).map((route) => route.path))
+    expect(findUncalledServerRoutes(server, scanned.referenced).map((route) => route.path))
       .toEqual(['/api/probe-never-called']);
+  });
+
+  it.each([
+    ['request default', 'apiProbe.js', 'request(`/probe/${id}`)'],
+    ['request options without a method', 'apiProbe.js', "request(`/probe/${id}`, { headers: { method: 'DELETE' } })"],
+    ['API verb', 'pages/Probe.jsx', 'api.get(`/probe/${id}`)'],
+    ['direct fetch', 'pages/Probe.jsx', 'fetch(`/api/probe/${id}`)'],
+    ['API_BASE fetch', 'apiProbe.js', 'fetch(`${API_BASE}/probe/${id}`)'],
+    ['EventSource', 'pages/Probe.jsx', 'new EventSource(`/api/probe/${id}`, options)'],
+  ])('reports an uncalled DELETE next to a GET reached by %s', (_name, file, call) => {
+    const probe = [{ method: 'GET', path: '/api/probe/:id' }, { method: 'DELETE', path: '/api/probe/:id' }];
+    const scanned = scanProbe({ [file]: `const load = (id) => ${call};` });
+    expect(findUncalledServerRoutes(probe, scanned.referenced)).toEqual([{ path: '/api/probe/:id', methods: ['DELETE'] }]);
+  });
+
+  it.each([
+    ['request(`/probe/${id}`, options)', null],
+    ["fetch(`/api/probe/${id}`, { method })", null],
+    ["request(`/probe/${id}`, { method: 'GET', ...options })", null],
+    ["request(`/probe/${id}`, { ...options, 'method': 'delete' })", 'DELETE'],
+    ["api.get(`/probe/${id}`, { method: 'DELETE' })", 'DELETE'],
+    ["api.post(`/probe/${id}`, { method: 'DELETE' })", 'POST'],
+  ])('resolves the method for %s when the transport determines it statically', (call, method) => {
+    const probe = [{ method: 'GET', path: '/api/probe/:id' }, { method: 'DELETE', path: '/api/probe/:id' }];
+    const scanned = scanProbe({ 'apiProbe.js': `const send = (id) => ${call};` });
+    expect(scanned.referenced).toEqual([{ path: '/api/probe/:p', method }]);
+    if (method === null) expect(findUncalledServerRoutes(probe, scanned.referenced)).toEqual([]);
   });
 
   it('does not let a component literal reach the forward check, and reads no unresolved site from one', () => {
     const scanned = scanProbe({ 'pages/Help.jsx': "const url = '/api/probe-help/not-mounted';" });
-    expect(scanned.referenced).toEqual(['/api/probe-help/not-mounted']);
+    expect(scanned.referenced).toEqual([{ path: '/api/probe-help/not-mounted', method: null }]);
     expect(scanned.paths).toEqual([]);
     expect(scanned.unresolved).toEqual([]);
     expect(findUnmountedClientPaths(scanned.paths, [])).toEqual([]);

@@ -30,17 +30,13 @@
  *
  * Two passes, with different strictness (#18656):
  *
- * 1. The CALL pass reads `client/src/services/api*.js` and folds the first argument
- *    of `request(`, `api.<verb>(` and `fetch(` (the last only when it mentions
- *    `API_BASE`). Its paths feed both directions of the parity test, and what it
- *    cannot fold is reported as `unresolved`.
- * 2. The REFERENCE pass reads every non-test file under `client/src` and collects
- *    (a) `api.<verb>(` first arguments and (b) string or template literals that
- *    BEGIN with `/api/` or `${API_BASE}/`. Its paths (`referenced`) only mark
- *    server routes as reached; they never feed the unmounted-path check and are
- *    never reported as unresolved, so help text cannot fail the forward direction.
+ * 1. The forward check reads request, api.<verb> and API_BASE fetch calls in
+ *    client/src/services/api*.js. It reports paths it cannot fold as unresolved.
+ * 2. The reverse check reads all client sources. It matches each call by path
+ *    and method, and treats standalone URL literals as references with an
+ *    unknown method. These wider references cannot fail the forward check.
  *
- * How pass 2 tells a call site from a mention: comments are blanked first, test
+ * How the reverse check tells a call site from a mention: comments are blanked first, test
  * files are never read, and a literal counts only when the whole literal IS the URL
  * (a prose string like `'GET /api/x'` or `'/api/x is gone'` does not start with the
  * prefix or has whitespace in its path). Literals that are an operand of a
@@ -58,9 +54,6 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { escapeRegExp } from './textUtils.js';
 
-/** Client wrappers live here; the call pass reads `api*.js` minus tests. */
-const CLIENT_SERVICES_DIR = 'client/src/services';
-
 /** The reference pass reads every non-test source file under here. */
 const CLIENT_SRC_DIR = 'client/src';
 const CLIENT_SOURCE_FILE = /\.(?:js|jsx)$/;
@@ -72,14 +65,8 @@ const CLIENT_TEST_FILE = /(?:\.(?:test|spec)\.[jt]sx?$|(?:^|\/)(?:__tests__|__mo
  */
 const TRANSPORT_MODULE = 'apiCore.js';
 
-/**
- * Call shapes that name a server path. `request(endpoint, …)` is the shared
- * transport; the streaming and blob wrappers bypass it and call `fetch` on
- * `` `${API_BASE}/…` `` directly, so those are scanned too — but only when the
- * argument mentions `API_BASE`, since a bare `fetch` may target any origin.
- */
-const REQUEST_CALL = /(?<![.\w$])(request|fetch|api\.(?:get|post|put|patch|delete))\s*\(/g;
-const API_VERB_CALL = /(?<![.\w$])(?:request|api\.(?:get|post|put|patch|delete))\s*\(/g;
+/** Calls whose first argument may identify a PortOS API route. */
+const REQUEST_CALL = /(?<![.\w$])(request|fetch|EventSource|api\.(?:get|post|put|patch|delete))\s*\(/g;
 const API_BASE_SCOPE = new Map([['API_BASE', ['']]]);
 
 /**
@@ -401,15 +388,41 @@ function foldReferencedLiteral(literal, context) {
   return paths.length ? paths : null;
 }
 
-/**
- * Pass 2 over one file: every `api.<verb>(` first argument and every URL-shaped
- * literal, as `/api/...` paths. See the header for how a call differs from a mention.
- */
-function scanReferencedPaths(rawSource) {
-  const source = stripComments(rawSource);
+/** A missing options argument uses the transport default. Later properties can override it. */
+function readMethod(options, defaultMethod) {
+  if (!options) return defaultMethod;
+  if (!options.startsWith('{')) return null;
+  const { text, end } = scanTo(options, 1, []);
+  if (end !== options.length - 1 || options[end] !== '}') return null;
+
+  let method = defaultMethod;
+  for (const property of splitArguments(text)) {
+    const { text: key, end: colon } = scanTo(property, 0, [':']);
+    const name = key.trim();
+    if (/^(?:\.\.\.|\[)/.test(name)) {
+      method = null;
+    } else if (name === 'method' || stringLiteralValue(name) === 'method') {
+      const value = property.slice(colon + 1).trim();
+      method = /^(['"`])[A-Za-z]+\1$/.test(value) ? value.slice(1, -1).toUpperCase() : null;
+    } else if (/^(?:(?:get|set)\s+)?method\s*\(/.test(name)) {
+      method = null;
+    }
+  }
+  return method;
+}
+
+function callMethod(call, expression, argsAfterPath) {
+  if (call === 'EventSource') return 'GET';
+  if (expression.startsWith('...')) return null;
+  const defaultMethod = call.startsWith('api.') ? call.slice(4).toUpperCase() : 'GET';
+  const optionsAt = /^(POST|PUT|PATCH)$/.test(defaultMethod) ? 1 : 0;
+  if (optionsAt === 1 && argsAfterPath[0]?.startsWith('...')) return null;
+  return readMethod(argsAfterPath[optionsAt], defaultMethod);
+}
+
+function scanFile(source, { file, forward, paths, unresolved, referenced }) {
   const helpers = parsePathHelpers(source);
-  const context = { helpers, scope: API_BASE_SCOPE, depth: 0 };
-  const found = [];
+  const context = { helpers, scope: API_BASE_SCOPE };
 
   // Literal spans first: a call-shaped text INSIDE a string (`'api.get("/x")'` in help text or a log)
   // is a mention, so the verb scan below skips matches that start inside one.
@@ -426,13 +439,35 @@ function scanReferencedPaths(rawSource) {
   }
   const insideLiteral = (index) => literals.some(([from, to]) => index > from && index < to);
 
-  for (const match of source.matchAll(API_VERB_CALL)) {
+  const callArguments = [];
+  for (const match of source.matchAll(REQUEST_CALL)) {
     if (insideLiteral(match.index)) continue;
-    const { text } = scanTo(source, match.index + match[0].length, [',']);
-    const values = resolvePathExpression(text.trim(), context) ?? [];
-    for (const value of values) {
-      const path = normalizeClientPath(value);
-      if (isNamedApiPath(path)) found.push(path);
+    const call = match[1];
+    const start = match.index + match[0].length;
+    const { text, end } = scanTo(source, start, [',']);
+    const expression = text.trim();
+    const usesApiBase = /\bAPI_BASE\b/.test(expression);
+    const checkForward = forward && call !== 'EventSource' && (call !== 'fetch' || usesApiBase);
+    const values = resolvePathExpression(expression, context)
+      ?? (checkForward && /^[A-Za-z_$][\w$]*$/.test(expression)
+        ? resolveForwardedParameter(source, match.index, expression, context) : null);
+    const directUrl = call === 'fetch' || call === 'EventSource';
+    const resolved = (values ?? []).map((value) => {
+      if (!directUrl) return normalizeClientPath(value);
+      if (value.startsWith('/api/')) return normalizeClientPath(value.slice(4));
+      return usesApiBase ? normalizeClientPath(value) : null;
+    }).filter((path) => path !== null);
+    const callPaths = resolved.filter(isNamedApiPath);
+    if (directUrl && !callPaths.length) callPaths.push(...(foldReferencedLiteral(expression, context) ?? []));
+    const argsAfterPath = source[end] === ',' ? splitArguments(scanTo(source, end + 1, []).text) : [];
+    const method = callMethod(call, expression, argsAfterPath);
+    for (const path of callPaths) referenced.push({ path, method });
+    if (callPaths.length) callArguments.push([start, end]);
+
+    if (checkForward) {
+      const site = { file: `${CLIENT_SRC_DIR}/${file}`, line: lineOf(source, match.index), expression: expression.replace(/\s+/g, ' ') };
+      for (const path of resolved) paths.push({ ...site, path, method });
+      if (!resolved.length || resolved.length < (values?.length ?? 0)) unresolved.push(site);
     }
   }
 
@@ -441,9 +476,13 @@ function scanReferencedPaths(rawSource) {
   for (const [from, to] of literals) {
     const insideLog = loggingSpans.some(([start, stop]) => from > start && from < stop);
     if (insideLog || MATCHING_CONTEXT.test(source.slice(Math.max(0, from - 40), from))) continue;
-    found.push(...(foldReferencedLiteral(source.slice(from, to), context) ?? []));
+    // The call has already supplied a method for its URL. A second, unknown-method
+    // reference from the same argument would hide uncalled methods again.
+    if (callArguments.some(([start, end]) => from >= start && to <= end)) continue;
+    for (const path of foldReferencedLiteral(source.slice(from, to), context) ?? []) {
+      referenced.push({ path, method: null });
+    }
   }
-  return found;
 }
 
 /**
@@ -491,39 +530,18 @@ const listClientSourceFiles = (repoRoot) => readdirSync(join(repoRoot, CLIENT_SR
  * path the server does not mount.
  */
 export function scanClientApiPaths({ repoRoot, sources } = {}) {
-  const referencedSources = sources
+  const files = sources
     ? Object.entries(sources).filter(([file]) => !CLIENT_TEST_FILE.test(file))
     : listClientSourceFiles(repoRoot).map((file) => [file, readFileSync(join(repoRoot, CLIENT_SRC_DIR, file), 'utf8')]);
-  const referenced = [...new Set(referencedSources.flatMap(([, source]) => scanReferencedPaths(source)))].sort();
-
-  const modules = sources
-    ? Object.entries(sources)
-    : readdirSync(join(repoRoot, CLIENT_SERVICES_DIR))
-      .filter((file) => /^api.*\.js$/.test(file) && !file.endsWith('.test.js') && file !== TRANSPORT_MODULE)
-      .sort()
-      .map((file) => [file, readFileSync(join(repoRoot, CLIENT_SERVICES_DIR, file), 'utf8')]);
 
   const paths = [];
   const unresolved = [];
-
-  for (const [file, rawSource] of modules) {
-    const source = stripComments(rawSource);
-    const helpers = parsePathHelpers(source);
-    for (const match of source.matchAll(REQUEST_CALL)) {
-      const { text } = scanTo(source, match.index + match[0].length, [',']);
-      const expression = text.trim().replace(/\s+/g, ' ');
-      if (match[1] === 'fetch' && !/\bAPI_BASE\b/.test(expression)) continue;
-      const site = { file: `${CLIENT_SERVICES_DIR}/${file}`, line: lineOf(source, match.index), expression };
-      const context = { helpers, scope: API_BASE_SCOPE };
-      const values = resolvePathExpression(text.trim(), context)
-        ?? (/^[A-Za-z_$][\w$]*$/.test(text.trim()) ? resolveForwardedParameter(source, match.index, text.trim(), context) : null);
-      if (!values) { unresolved.push(site); continue; }
-      for (const value of values) {
-        const path = normalizeClientPath(value);
-        if (path) paths.push({ ...site, path });
-        else unresolved.push(site);
-      }
-    }
+  const referenced = [];
+  for (const [name, source] of files) {
+    // Probe sources may name a wrapper without its services/ prefix.
+    const file = sources && !name.includes('/') ? `services/${name}` : name;
+    const forward = /^services\/api.*\.js$/.test(file) && file !== `services/${TRANSPORT_MODULE}`;
+    scanFile(stripComments(source), { file, forward, paths, unresolved, referenced });
   }
 
   return { paths, unresolved, referenced };
@@ -542,7 +560,7 @@ export const findUnmountedClientPaths = (clientPaths, serverPaths) => {
 /**
  * Mounted server routes no client wrapper path can reach — the reverse of
  * `findUnmountedClientPaths`, returned as one entry per distinct route path with
- * the methods declared on it.
+ * the uncalled methods declared on it.
  *
  * A route counts as reached when a client path matches it segment by segment, where
  * a `:param` (server) or `:p` (client, fully dynamic) segment matches anything and
@@ -551,12 +569,18 @@ export const findUnmountedClientPaths = (clientPaths, serverPaths) => {
  * segments) has a param at that position: Express registers the literal as its own
  * handler, so a wrapper for `/jobs/:id` only hits `/jobs/due` by accident, and
  * counting it as a caller hid dead static routes beside every id wrapper (#18655).
- * Matching is by path, not method, mirroring the forward check, so a GET wrapper
- * still counts as calling a POST route on the same path.
+ * A known method covers only that method. An unresolved method or standalone
+ * URL reference covers any method on a matching path.
  */
 export const findUncalledServerRoutes = (serverRoutes, clientPaths) => {
-  const clientSegments = [...new Set(clientPaths.map((entry) => entry.path))]
-    .map((path) => path.split('/').filter(Boolean));
+  const clientMethodsByPath = new Map();
+  for (const { path, method } of clientPaths) {
+    if (!clientMethodsByPath.has(path)) clientMethodsByPath.set(path, new Set());
+    clientMethodsByPath.get(path).add(method ?? null);
+  }
+  const clients = [...clientMethodsByPath].map(([path, methods]) => ({
+    segments: path.split('/').filter(Boolean), methods,
+  }));
   const isParam = (segment) => segment.startsWith(':');
   const serverSegments = [...new Set(serverRoutes.map((route) => route.path))]
     .map((path) => path.split('/').filter(Boolean))
@@ -572,10 +596,10 @@ export const findUncalledServerRoutes = (serverRoutes, clientPaths) => {
     }
     return siblingParamCache.get(key);
   };
-  const reached = (route) => {
-    const segments = route.split('/').filter(Boolean);
+  const uncalledMethods = (path, methods) => {
+    const segments = path.split('/').filter(Boolean);
     const wildcardAt = segments.findIndex(isWildcard);
-    return clientSegments.some((client) => {
+    const matches = (client) => {
       if (wildcardAt === -1 && client.length !== segments.length) return false;
       if (wildcardAt !== -1 && client.length < segments.length) return false;
       const limit = wildcardAt === -1 ? segments.length : wildcardAt;
@@ -583,7 +607,9 @@ export const findUncalledServerRoutes = (serverRoutes, clientPaths) => {
         if (segment === client[index] || isParam(segment)) return true;
         return isParam(client[index]) && (wildcardAt !== -1 || !hasSiblingParam(segments, index));
       });
-    });
+    };
+    return [...methods].filter((method) => !clients.some((client) =>
+      (client.methods.has(null) || client.methods.has(method)) && matches(client.segments))).sort();
   };
   const methodsByPath = new Map();
   for (const { method, path } of serverRoutes) {
@@ -591,7 +617,7 @@ export const findUncalledServerRoutes = (serverRoutes, clientPaths) => {
     methodsByPath.get(path).add(method);
   }
   return [...methodsByPath]
-    .filter(([path]) => !reached(path))
-    .map(([path, methods]) => ({ path, methods: [...methods].sort() }))
+    .map(([path, methods]) => ({ path, methods: uncalledMethods(path, methods) }))
+    .filter(({ methods }) => methods.length > 0)
     .sort((a, b) => a.path.localeCompare(b.path));
 };

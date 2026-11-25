@@ -96,15 +96,6 @@ const dayQuerySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
-const eventsQuerySchema = z.object({
-  from: z.string().datetime().optional(),
-  to: z.string().datetime().optional(),
-  source: z.string().max(64).optional(),
-  kind: z.string().max(64).optional(),
-  personId: z.string().max(200).optional(),
-  limit: z.coerce.number().int().min(1).max(2000).optional(),
-});
-
 // The store accepts connector-defined source identifiers. Require an exact,
 // non-empty source instead of duplicating its evolving producer set here.
 const eraseQuerySchema = z.object({
@@ -121,13 +112,6 @@ router.get('/day', asyncHandler(async (req, res) => {
   const { date } = validateRequest(dayQuerySchema, req.query);
   const summary = await humanActivity.getDaySummary({ date });
   res.json(summary);
-}));
-
-// Filtered raw event list (from/to/source/kind/personId). Newest first.
-router.get('/events', asyncHandler(async (req, res) => {
-  const filters = validateRequest(eventsQuerySchema, req.query);
-  const events = await humanActivity.listEvents(filters);
-  res.json({ events });
 }));
 
 // Per-source counts and date range — what "Manage imported data" shows before a delete.
