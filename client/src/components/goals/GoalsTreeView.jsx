@@ -279,7 +279,7 @@ export default function GoalsTreeView({ data, onRefresh, selectedGoalId }) {
   const [showNewGoal, setShowNewGoal] = useState(false);
   const [newGoal, setNewGoal] = useState({ ...DEFAULT_NEW_GOAL });
   const { isCreating, createGoal } = useGoalCreate(onRefresh);
-  const { organizing, orgSuggestion, applyingOrg, requestOrganize, applySuggestion, dismiss } = useGoalOrganize(onRefresh);
+  const { organizing, orgSuggestion, applyingOrg, requestOrganize, applySuggestion, dismiss, organizeButtonRef } = useGoalOrganize(onRefresh);
   const {
     providers, selectedProviderId, selectedModel, availableModels,
     setSelectedProviderId, setSelectedModel, loading: providersLoading
@@ -422,6 +422,7 @@ export default function GoalsTreeView({ data, onRefresh, selectedGoalId }) {
                   />
                 </div>
                 <button
+                  ref={organizeButtonRef}
                   onClick={handleOrganize}
                   disabled={organizing || !selectedProviderId}
                   className="flex items-center justify-center shrink-0 min-w-11 min-h-11 gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 disabled:opacity-50"

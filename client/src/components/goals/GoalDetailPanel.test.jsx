@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, fireEvent } from '@testing-library/react';
+import { act, render, screen, fireEvent, within } from '@testing-library/react';
 
 // The panel fires getActivities()/getCalendarAccounts() on mount; stub them so the
 // read view renders without network. The badge assertions below only care about
@@ -15,6 +15,8 @@ vi.mock('../../services/apiCalendar.js', () => ({
 }));
 vi.mock('../../services/apiGoals.js', () => ({
   updateGoal: vi.fn(() => Promise.resolve({})),
+  generateGoalPhases: vi.fn(),
+  decomposeGoal: vi.fn(),
 }));
 
 vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
@@ -23,11 +25,12 @@ vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
   getSettings: vi.fn(() => Promise.resolve({ timezone: 'UTC' })),
 }));
 
-import { updateGoal } from '../../services/apiGoals.js';
+import { updateGoal, generateGoalPhases, decomposeGoal } from '../../services/apiGoals.js';
 import { getActivities } from '../../services/apiMeatspace.js';
 import { getCalendarAccounts } from '../../services/apiCalendar.js';
 import { __resetInstanceFeatureCache } from '../../hooks/useInstanceFeatures.js';
 
+import { formatDateNumeric } from '../../utils/formatters';
 import GoalDetailPanel from './GoalDetailPanel';
 
 const baseGoal = {
@@ -48,9 +51,9 @@ const baseGoal = {
   ],
 };
 
-const renderPanel = async (goal = baseGoal) => {
+const renderPanel = async (goal = baseGoal, onClose = () => {}) => {
   const view = render(
-    <GoalDetailPanel goal={goal} allGoals={[goal]} onClose={() => {}} onRefresh={() => {}} />
+    <GoalDetailPanel goal={goal} allGoals={[goal]} onClose={onClose} onRefresh={() => {}} />
   );
 
   await act(async () => { await Promise.resolve(); });
@@ -75,6 +78,125 @@ beforeEach(() => {
   vi.clearAllMocks();
   __resetInstanceFeatureCache();
   getInstanceFeatures.mockResolvedValue({ features: [{ id: 'post', enabled: true }] });
+});
+
+describe('GoalDetailPanel accessibility', () => {
+  it('exposes disclosure states and the latest check-in status while collapsed', async () => {
+    await renderPanel({
+      ...baseGoal,
+      checkIns: [...baseGoal.checkIns, { id: 'ci-2', date: '2026-05-02', status: 'at-risk', actualProgress: 41 }],
+    });
+
+    for (const name of ['Plan', 'Check-ins (2) Latest status: At Risk', 'Log progress']) {
+      const button = screen.getByRole('button', { name, expanded: false });
+      expect(button).toHaveAttribute('type', 'button');
+      fireEvent.click(button);
+      expect(screen.getByRole('button', { name, expanded: true })).toBe(button);
+      fireEvent.click(button);
+      expect(button).toHaveAttribute('aria-expanded', 'false');
+    }
+  });
+
+  it('announces todo states and names the items to delete or unlink', async () => {
+    const date = '2026-05-01';
+    const todos = [
+      { id: 't1', title: 'Sketch', status: 'pending' },
+      { id: 't2', title: 'Cut', status: 'in-progress' },
+      { id: 't3', title: 'Measure', status: 'done' },
+    ];
+    await renderPanel({
+      ...baseGoal,
+      todos,
+      progressLog: [
+        { id: 'p1', date, note: 'First entry' },
+        { id: 'p2', date, note: 'Second entry' },
+      ],
+      linkedActivities: [{ activityName: 'Practice' }],
+      linkedCalendars: [{ subcalendarId: 'c1', subcalendarName: 'Workshop' }],
+    });
+
+    for (const todo of todos) {
+      const toggle = screen.getByRole('button', { name: `Mark ${todo.title} as done`, pressed: todo.status === 'done' });
+      expect(toggle).toHaveAccessibleDescription(todo.status === 'in-progress' ? 'Currently in progress' : '');
+      expect(screen.getByRole('button', { name: `Delete todo ${todo.title}` })).toBeInTheDocument();
+    }
+    for (const name of [
+      `Delete progress entry 1 from ${formatDateNumeric(date)}`,
+      `Delete progress entry 2 from ${formatDateNumeric(date)}`,
+      'Unlink Practice',
+      'Unlink Workshop',
+    ]) {
+      expect(screen.getByRole('button', { name })).toBeInTheDocument();
+    }
+  });
+
+  it('names the proposed phase, milestone, and task controls', async () => {
+    generateGoalPhases.mockResolvedValue([{ title: 'Prepare' }, { title: 'Build' }]);
+    decomposeGoal.mockResolvedValue([{ title: 'First pass', tasks: [{ title: 'Make a pattern' }] }]);
+    await renderPanel({ ...baseGoal, targetDate: '2026-12-05' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Plan' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Generate Plan' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Decompose into Tasks' }));
+    await screen.findByRole('button', { name: 'Delete task 1 in milestone 1: Make a pattern' });
+    for (const name of [
+      'Move phase 1 down', 'Move phase 2 up', 'Delete phase 1', 'Delete phase 2',
+      'Move milestone 1 up', 'Move milestone 1 down', 'Delete milestone 1',
+    ]) {
+      expect(screen.getByRole('button', { name })).toBeInTheDocument();
+    }
+  });
+
+  it('groups named weekday toggles and reflects changes to their pressed state', async () => {
+    await renderPanel({ ...baseGoal, timeBlockConfig: { preferredDays: ['mon'] } });
+    await openEdit();
+
+    const days = within(screen.getByRole('group', { name: 'Preferred days' }));
+    expect(days.getAllByRole('button')).toHaveLength(7);
+    for (const name of ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']) {
+      expect(days.getByRole('button', { name, pressed: name === 'Monday' })).toBeInTheDocument();
+    }
+    fireEvent.click(days.getByRole('button', { name: 'Monday', pressed: true }));
+    expect(days.getByRole('button', { name: 'Monday', pressed: false })).toBeInTheDocument();
+  });
+
+  it('focuses the goal heading and dismisses with Escape from inside the panel', async () => {
+    const onClose = vi.fn();
+    await renderPanel(baseGoal, onClose);
+
+    const heading = screen.getByRole('heading', { name: baseGoal.title, level: 2 });
+    expect(heading).toHaveFocus();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(heading, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('dismisses the open provenance popover before the detail panel', async () => {
+    const onClose = vi.fn();
+    await renderPanel(baseGoal, onClose);
+
+    const chip = screen.getByRole('button', { name: 'Inferred' });
+    fireEvent.click(chip);
+    expect(chip).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.keyDown(chip, { key: 'Escape' });
+    expect(chip).toHaveAttribute('aria-expanded', 'false');
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(chip, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('leaves Escape to form controls and preserves edits', async () => {
+    const onClose = vi.fn();
+    await renderPanel(baseGoal, onClose);
+
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'New todo title' }), { key: 'Escape' });
+    await openEdit();
+    const monday = within(screen.getByRole('group', { name: 'Preferred days' })).getByRole('button', { name: 'Monday' });
+    fireEvent.keyDown(monday, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });
 
 describe('GoalDetailPanel badge migration to <Pill>', () => {
@@ -331,7 +453,7 @@ it('can clear and save a time block config after removing its last preferred day
   });
   await openEdit();
 
-  fireEvent.click(screen.getByRole('button', { name: 'mon' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Monday', pressed: true }));
   fireEvent.click(screen.getByRole('button', { name: 'Clear config' }));
   expect(screen.queryByRole('button', { name: 'Clear config' })).toBeNull();
 

@@ -6,20 +6,27 @@ import { formatDateNumeric } from '../../utils/formatters';
 export default function GoalCheckIns({
   goal, checkInsOpen, setCheckInsOpen, checkingIn, handleCheckIn
 }) {
+  const latest = goal.checkIns?.at(-1);
+  const latestStatus = latest && (CHECK_IN_STATUS_CONFIG[latest.status]?.label ?? 'Unknown');
+
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
         <button
+          type="button"
+          aria-expanded={checkInsOpen}
           onClick={() => setCheckInsOpen(!checkInsOpen)}
           className="flex items-center gap-1 text-xs font-medium text-gray-400 hover:text-white"
         >
           {checkInsOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
           <ClipboardCheck className="w-3.5 h-3.5" />
           <span>Check-ins ({goal.checkIns?.length || 0})</span>
-          {goal.checkIns?.length > 0 && (() => {
-            const latest = goal.checkIns[goal.checkIns.length - 1];
-            return <span className={`ml-1 w-2 h-2 rounded-full ${CHECK_IN_DOT_COLORS[latest.status] || 'bg-gray-500'}`} />;
-          })()}
+          {latest && (
+            <>
+              <span aria-hidden="true" className={`ml-1 w-2 h-2 rounded-full ${CHECK_IN_DOT_COLORS[latest.status] || 'bg-gray-500'}`} />
+              <span className="sr-only">Latest status: {latestStatus}</span>
+            </>
+          )}
         </button>
         {goal.status === 'active' && (
           <button

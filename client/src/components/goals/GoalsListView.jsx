@@ -227,7 +227,7 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
   const [newGoal, setNewGoal] = useState({ ...DEFAULT_NEW_GOAL });
   const [quickAdd, setQuickAdd] = useState('');
   const { isCreating, createGoal, quickAddGoal } = useGoalCreate(onRefresh);
-  const { organizing, orgSuggestion, applyingOrg, requestOrganize, applySuggestion, dismiss } = useGoalOrganize(onRefresh);
+  const { organizing, orgSuggestion, applyingOrg, requestOrganize, applySuggestion, dismiss, organizeButtonRef } = useGoalOrganize(onRefresh);
   const [draggedGoal, setDraggedGoal] = useState(null);
   const {
     providers, selectedProviderId, selectedModel, availableModels,
@@ -425,6 +425,7 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
                 />
               </div>
               <button
+                ref={organizeButtonRef}
                 onClick={handleOrganize}
                 disabled={organizing || !selectedProviderId}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 disabled:opacity-50 min-h-[40px] whitespace-nowrap"

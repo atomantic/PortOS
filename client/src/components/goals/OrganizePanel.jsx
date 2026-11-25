@@ -1,17 +1,29 @@
-import { useMemo } from 'react';
+import { useEffect, useId, useMemo, useRef } from 'react';
 import { Wand2, X, Check, Star, Crown } from 'lucide-react';
-import { GOAL_TYPE_CONFIG } from './GoalDetailPanel';
+import { GOAL_TYPE_CONFIG } from './goalConstants';
 
 export default function OrganizePanel({ suggestion, goals, onApply, onClose, applying }) {
   const goalMap = useMemo(() => new Map((goals || []).map(g => [g.id, g])), [goals]);
+  const headingId = useId();
+  const headingRef = useRef(null);
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, [suggestion]);
+
   if (!suggestion) return null;
 
+  const handleKeyDown = (event) => {
+    if (event.key !== 'Escape' || event.defaultPrevented) return;
+    event.preventDefault();
+    onClose();
+  };
+
   return (
-    <div className="absolute top-12 right-3 z-20 bg-port-card border border-port-border rounded-lg p-4 w-96 max-w-[calc(100vw-1rem)] max-h-dvh-cap [--dvh-cap:80dvh] overflow-y-auto shadow-xl">
+    <section role="dialog" aria-labelledby={headingId} onKeyDown={handleKeyDown} className="absolute top-12 right-3 z-20 bg-port-card border border-port-border rounded-lg p-4 w-96 max-w-[calc(100vw-1rem)] max-h-dvh-cap [--dvh-cap:80dvh] overflow-y-auto shadow-xl">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <Wand2 className="w-4 h-4 text-port-accent" />
-          <h3 className="text-sm font-semibold text-white">Goal Organization</h3>
+          <h2 id={headingId} ref={headingRef} tabIndex={-1} className="text-sm font-semibold text-white">Goal Organization</h2>
         </div>
         <button onClick={onClose} aria-label="Close" className="p-1 text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"><X className="w-4 h-4" /></button>
       </div>
@@ -25,7 +37,7 @@ export default function OrganizePanel({ suggestion, goals, onApply, onClose, app
         <div className="mb-3 p-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
           <div className="flex items-center gap-1.5 mb-1">
             <Crown className="w-3.5 h-3.5 text-amber-400" />
-            <span className="text-xs font-medium text-amber-400">Apex Goal (North Star)</span>
+            <h3 className="text-xs font-medium text-amber-400">Apex Goal (North Star)</h3>
           </div>
           {suggestion.apexGoal.existingId ? (
             <p className="text-xs text-gray-300">{goalMap.get(suggestion.apexGoal.existingId)?.title || suggestion.apexGoal.existingId}</p>
@@ -44,7 +56,7 @@ export default function OrganizePanel({ suggestion, goals, onApply, onClose, app
       {/* Organization */}
       {suggestion.organization?.length > 0 && (
         <div className="mb-3 space-y-1.5">
-          <h4 className="text-xs font-medium text-gray-400">Proposed Hierarchy</h4>
+          <h3 className="text-xs font-medium text-gray-400">Proposed Hierarchy</h3>
           {suggestion.organization.map(item => {
             const goal = goalMap.get(item.id);
             const typeCfg = GOAL_TYPE_CONFIG[item.goalType] || GOAL_TYPE_CONFIG.standard;
@@ -74,7 +86,7 @@ export default function OrganizePanel({ suggestion, goals, onApply, onClose, app
       {/* Suggested sub-apex goals */}
       {suggestion.suggestedSubApex?.length > 0 && (
         <div className="mb-3 space-y-1.5">
-          <h4 className="text-xs font-medium text-gray-400">Suggested Sub-Apex Goals</h4>
+          <h3 className="text-xs font-medium text-gray-400">Suggested Sub-Apex Goals</h3>
           {suggestion.suggestedSubApex.map((sg, i) => (
             <div key={i} className="p-2 rounded bg-purple-500/5 border border-purple-500/20">
               <div className="flex items-center gap-1.5">
@@ -104,7 +116,7 @@ export default function OrganizePanel({ suggestion, goals, onApply, onClose, app
           Dismiss
         </button>
       </div>
-    </div>
+    </section>
   );
 }
 
