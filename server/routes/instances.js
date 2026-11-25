@@ -467,7 +467,7 @@ router.post('/peers/pair-secret', asyncHandler(async (req, res) => {
   }
   const { syncSecret } = validateRequest(pairSecretSchema, req.body || {});
   const instanceId = req.get(PEER_INSTANCE_HEADER);
-  if (!z.string().uuid().safeParse(instanceId).success) {
+  if (!z.string().guid().safeParse(instanceId).success) {
     throw new ServerError('A valid peer instance identity is required for pairing.', {
       status: 400, code: 'PEER_IDENTITY_REQUIRED',
     });

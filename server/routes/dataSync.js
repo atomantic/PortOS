@@ -85,14 +85,8 @@ router.get('/tombstones/status', asyncHandler(async (req, res) => {
 }));
 
 router.post('/tombstones/sweep', asyncHandler(async (req, res) => {
-  const parsed = tombstoneSweepBodySchema.safeParse(req.body || {});
-  if (!parsed.success) {
-    throw new ServerError(
-      `Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`,
-      { status: 400, code: 'VALIDATION_ERROR' },
-    );
-  }
-  const result = await sweepTombstones(parsed.data);
+  const options = validateRequest(tombstoneSweepBodySchema, req.body ?? {});
+  const result = await sweepTombstones(options);
   res.json(result);
 }));
 
@@ -197,11 +191,7 @@ const applyBodySchema = z.object({
 });
 router.post('/:category/apply', asyncHandler(async (req, res) => {
   const category = validateRequest(categoryParam, req.params.category);
-  const parsed = applyBodySchema.safeParse(req.body || {});
-  if (!parsed.success) {
-    throw new ServerError(`Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  const { data, portosMeta } = parsed.data;
+  const { data, portosMeta } = validateRequest(applyBodySchema, req.body ?? {});
   // `z.unknown()` accepts falsy-but-present payloads (0, false, ''); only
   // reject genuinely missing/null so we don't 400 a valid empty-ish snapshot.
   if (data == null) throw new ServerError('Missing data field', { status: 400 });
