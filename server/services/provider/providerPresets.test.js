@@ -42,6 +42,7 @@ const composite = await import('../compositeProviders.js');
 const presets = await import('./providerPresets.js');
 const { buildCliChildEnv } = await import('../../lib/cliChildEnv.js');
 const { buildTuiInvocation } = await import('../../lib/tuiHandshake.js');
+const { providerModeGroups } = await import('../../lib/aiToolkit/internal/providerModes.js');
 
 const uuid = (n) => `${n}${n}${n}${n}${n}${n}${n}${n}-${n}${n}${n}${n}-4${n}${n}${n}-8${n}${n}${n}-${n}${n}${n}${n}${n}${n}${n}${n}${n}${n}${n}${n}`;
 const NIM = {
@@ -108,6 +109,37 @@ describe('createPresetFromComposite', () => {
 });
 
 describe('materializeStoredPreset', () => {
+  it.each([false, true])('keeps a derived pair grouped after adding and saving its interactive mode (legacy copied method: %s)', async (legacyMethod) => {
+    const service = providerService();
+    const cli = await presets.createPresetFromComposite({ compositeId: 'claude.cli@ollama', id: 'claude-pair-test' });
+    const tui = await service.createProviderTuiMode(cli.id, { args: [] });
+    expect(tui).toMatchObject({ id: `${cli.id}-tui`, type: 'tui', method: 'tui', harnessId: cli.harnessId, serviceId: cli.serviceId });
+    if (legacyMethod) await service.applyProviderPatches({ [tui.id]: { method: 'cli' } });
+
+    // Mirrors Add interactive → Edit interactive → Save: the route sends the
+    // materialized record to the toolkit and the list groups the stored records.
+    const previous = await service.getProviderById(tui.id);
+    const updates = { name: 'Interactive edit', type: 'tui', args: ['--verbose'], harnessContext: { tokens: 131072 } };
+    const candidate = await presets.storableProviderRecord({ ...previous, ...updates }, updates, previous);
+    await service.updateProvider(tui.id, candidate);
+
+    const { providers } = await service.getAllProviders();
+    const modeGroup = providerModeGroups(providers).find(group => group.some(mode => mode.id === cli.id));
+    expect(modeGroup).toMatchObject([
+      { id: cli.id, type: 'cli', method: 'cli', harnessContext: { tokens: 131072 } },
+      { id: tui.id, type: 'tui', method: 'tui', name: 'Interactive edit', args: ['--verbose'], harnessContext: { tokens: 131072 } },
+    ]);
+  });
+
+  it('preserves a still-working legacy interactive mode when re-deriving its service', async () => {
+    const service = providerService();
+    const cli = await presets.createPresetFromComposite({ compositeId: 'claude.cli@ollama', id: 'claude-refresh-pair' });
+    const tui = await service.createProviderTuiMode(cli.id, { args: ['--verbose'] });
+    await service.applyProviderPatches({ [tui.id]: { method: 'cli' } });
+    await graph.rematerializeDerivedPresets(OLLAMA);
+    expect(await service.getProviderById(tui.id)).toMatchObject({ type: 'tui', method: 'tui', args: ['--verbose'] });
+  });
+
   it('re-derives a derived preset from its service, reads a models edit as a narrowing, and refuses a moved connection-owned value', async () => {
     const created = await presets.createPresetFromComposite({ compositeId: 'claude.cli@ollama' });
     const stored = await providerService().getProviderById(created.id);

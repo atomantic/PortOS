@@ -288,6 +288,10 @@ export function modeSiblingPayload(shared, mode, overrides = {}) {
     id: modeSiblingId(stem, mode),
     name: modeSiblingName(shared.name, mode),
     type: mode,
+    // A derived preset stores its execution mode twice: the spawner reads
+    // type; the preset editor rematerializes from method. Copying the CLI's
+    // method into the TUI sibling converts it back to CLI on the next save.
+    ...(inherited.method != null && { method: mode }),
   };
 }
 
