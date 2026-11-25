@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { __resetToolUseModelIdsCache } from '../../../hooks/useToolUseModelIds.js';
@@ -246,6 +246,46 @@ describe('ScheduleTab on-demand feedback', () => {
   });
 });
 
+
+it('writes the drawer model and effort clear in one request and gates Run until it settles', async () => {
+  const user = userEvent.setup();
+  const provider = {
+    id: 'antigravity-cli', name: 'Antigravity CLI', type: 'cli', command: 'agy', enabled: true,
+    models: ['gemini-3.6-flash-low', 'gemini-3.6-flash-high', 'claude-sonnet-4-6'],
+  };
+  const taskType = 'code-review';
+  api.getCodeReviewDefaults.mockResolvedValue({});
+  api.getCosSchedule.mockResolvedValueOnce({ improvementEnabled: true, tasks: {
+    [taskType]: {
+      type: 'on-demand', enabled: true, programmatic: true, displayName: 'Code review',
+      providerId: provider.id, model: 'gemini-3.6-flash', effort: 'high',
+    },
+  } });
+  let finish;
+  const saved = new Promise(resolve => { finish = resolve; });
+  api.updateCosTaskInterval.mockClear().mockImplementationOnce(() => saved);
+  render(<MemoryRouter initialEntries={[`/cos/schedule?task=${taskType}`]}>
+    <ScheduleTab apps={[]} providers={[provider]} providersLoaded />
+  </MemoryRouter>);
+
+  const drawer = within(await screen.findByRole('dialog'));
+  const model = drawer.getByRole('combobox', { name: 'Model' });
+  const run = drawer.getByRole('button', { name: 'Run Now' });
+  expect(run).toBeEnabled();
+
+  await user.selectOptions(model, 'claude-sonnet-4-6');
+  expect(api.updateCosTaskInterval).toHaveBeenCalledTimes(1);
+  expect(api.updateCosTaskInterval).toHaveBeenCalledWith(
+    taskType, { model: 'claude-sonnet-4-6', effort: null }, { silent: true },
+  );
+  expect(run).toBeDisabled();
+  expect(model).toBeDisabled();
+
+  await act(async () => { finish({ success: true, interval: { model: 'claude-sonnet-4-6', effort: null } }); });
+  expect(run).toBeEnabled();
+  expect(model).toBeEnabled();
+  expect(model).toHaveValue('claude-sonnet-4-6');
+});
 
 describe('Schedule labels', () => {
   it('filters by a linked label, searches legacy names, and saves custom labels through the drawer', async () => {

@@ -3,6 +3,9 @@ import { fireEvent, render, screen, waitFor, act, within } from '@testing-librar
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../../../hooks/useAssignableInstances', () => ({ default: () => ({ instances: [{ instanceId: 'self', isSelf: true }], isFederated: false }) }));
+vi.mock('../../../hooks/useToolUseModelIds.js', () => ({
+  default: () => ({ idsByProvider: null, loaded: false }),
+}));
 const api = vi.hoisted(() => ({
   getCosTasks: vi.fn(),
   getCosLearningDurations: vi.fn(),

@@ -6,7 +6,8 @@
  * `onUpdate` resolves falsy, a `saving` flag to gate "Run Now", plus the derived `availableModels`, `effectiveProviderId` and `defaultProviderLabel` a `ProviderModelSelector` needs. Use for any surface that retargets a scheduled task's model.
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { isCompositeProviderId } from '../utils/providerRef.js';
 import { effortAwareModelOptions, effortSurvivingModel, mergeModelLists, resolveEffectiveProvider } from '../utils/providers';
 
 /**
@@ -14,8 +15,8 @@ import { effortAwareModelOptions, effortSurvivingModel, mergeModelLists, resolve
  * schedule card's quick controls and the config drawer's global controls so a
  * change made in either place goes through the same optimistic-write path.
  *
- * Each change is written immediately (`'' → null` clears the pin) and rolled
- * back to the persisted value when the write fails. Picking a provider also
+ * Changes apply optimistically (`'' → null` clears the pin) and roll back to
+ * the last persisted values when a write fails. Picking a provider also
  * clears model + effort in the same PUT — a model from the previous provider
  * would not resolve. Picking a model clears the effort in the same PUT only when
  * that model has no effort tiers at all (see `changeModel`).
@@ -46,26 +47,67 @@ export function useTaskModelPins({ taskType, config, providers, activeProviderId
     executionOptions: config?.executionOptions,
   }), [config?.providerId, config?.model, config?.effort, config?.executionOptions]);
 
-  const [pins, setPins] = useState(persisted);
-  const [saving, setSaving] = useState(false);
+  const activeTask = useRef({ type: taskType, synced: persisted, write: null });
+  if (activeTask.current.type !== taskType) {
+    activeTask.current = { type: taskType, synced: persisted, write: null };
+  }
+  const task = activeTask.current;
+  const [draft, setDraft] = useState({ task, pins: persisted });
+  const [busyTask, setBusyTask] = useState(null);
+  const pins = draft.task === task ? draft.pins : persisted;
+  const saving = busyTask === task;
 
-  // Re-sync from the refetched config (and when the hosting surface switches task).
-  useEffect(() => { setPins(persisted); }, [taskType, persisted]);
+  useEffect(() => {
+    if (busyTask && !saving) {
+      setBusyTask(null);
+      onBusyChange?.(false);
+    }
+    if (saving || task.synced === persisted) return;
+    task.synced = persisted;
+    setDraft({ task, pins: persisted });
+  }, [busyTask, onBusyChange, persisted, saving, task]);
 
-  // One optimistic write for all three pins: apply locally, PUT ('' → null
-  // clears the pin), restore the persisted values if the write didn't land.
-  const change = useCallback(async (patch) => {
-    setPins(prev => ({ ...prev, ...patch }));
-    setSaving(true);
+  // The shared selector may emit model and effort together, or confirm a
+  // composed provider before supplying the rest of its route. Merge callbacks
+  // from the same turn and serialize any follow-up while Run stays disabled.
+  const change = useCallback((patch) => {
+    if (activeTask.current !== task) return undefined;
+    setDraft(prev => ({
+      task,
+      pins: { ...(prev.task === task ? prev.pins : persisted), ...patch },
+    }));
+    const pending = task.write;
+    if (pending) {
+      Object.assign(pending.next, patch);
+      return pending.done;
+    }
+
+    const write = { next: { ...patch }, done: null };
+    task.write = write;
+    setBusyTask(task);
     onBusyChange?.(true);
-    const settings = Object.fromEntries(
-      Object.entries(patch).map(([field, value]) => [field, value === '' ? null : value])
-    );
-    const ok = await onUpdate(taskType, settings).catch(() => false);
-    if (!ok) setPins(persisted);
-    setSaving(false);
-    onBusyChange?.(false);
-  }, [onUpdate, taskType, persisted, onBusyChange]);
+    write.done = Promise.resolve().then(async () => {
+      let saved = persisted;
+      // Finish edits already accepted for this task, even if the view has
+      // switched. Only the active task may publish draft or busy state.
+      while (Object.keys(write.next).length) {
+        const next = write.next;
+        write.next = {};
+        const settings = Object.fromEntries(
+          Object.entries(next).map(([field, value]) => [field, value === '' ? null : value])
+        );
+        const ok = await onUpdate(taskType, settings).catch(() => false);
+        if (!ok) break;
+        saved = { ...saved, ...next };
+      }
+      task.write = null;
+      if (activeTask.current !== task) return;
+      setDraft({ task, pins: saved });
+      setBusyTask(null);
+      onBusyChange?.(false);
+    });
+    return write.done;
+  }, [onUpdate, taskType, persisted, onBusyChange, task]);
 
   const toolFree = taskType === 'issue-watcher';
   const { provider, usingActive } = useMemo(
@@ -82,7 +124,7 @@ export function useTaskModelPins({ taskType, config, providers, activeProviderId
   // run — an invocation agy rejects. A merely narrowed ladder is left alone, since
   // EffortSelect still renders the clamp as a visible option.
   const changeModel = useCallback((next) => {
-    const surviving = effortSurvivingModel(provider, next, pins.effort);
+    const surviving = provider ? effortSurvivingModel(provider, next, pins.effort) : pins.effort;
     return change(surviving === pins.effort ? { model: next } : { model: next, effort: surviving });
   }, [change, provider, pins.effort]);
   const changeEffort = useCallback((next) => change({ effort: next }), [change]);
@@ -93,18 +135,18 @@ export function useTaskModelPins({ taskType, config, providers, activeProviderId
   // lists BASE models (`gemini-3.6-flash`) with the tier picked beside them —
   // `effortAwareModelOptions` also keeps a legacy suffixed pin selectable, since
   // the server splits it back into `--model` + `--effort` and it still runs.
-  // Any OTHER pin the provider no longer lists stays selectable too, or the
-  // select would hold a value matching no option, render blank, and read as
-  // "Default".
+  // An unresolved composite leaves the list empty so the shared selector
+  // can derive its options from the catalog.
   const availableModels = useMemo(() => {
+    if (!provider && isCompositeProviderId(pins.providerId)) return [];
     const selectable = effortAwareModelOptions(provider, pins.model);
     return pins.model ? mergeModelLists([pins.model], selectable) : selectable;
-  }, [provider, pins.model]);
+  }, [provider, pins.providerId, pins.model]);
 
   return {
     ...pins,
     provider,
-    effectiveProviderId: provider?.id || '',
+    effectiveProviderId: provider?.id || pins.providerId,
     toolFree,
     defaultProviderLabel: toolFree ? 'Default (Abuse Guard source policy)' : usingActive ? `Default (active: ${provider.name})` : 'Default (active provider)',
     availableModels,

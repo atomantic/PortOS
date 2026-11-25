@@ -1,14 +1,12 @@
-import ExecutionOptionsSelect from '../../../providers/ExecutionOptionsSelect.jsx';
 import { useState, useEffect } from 'react';
 import useFieldDraft from '../../../../hooks/useFieldDraft';
 import { AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, DEPFREE_MODE_TASK_TYPES, LOG_TRIAGE_CAPS, LOG_TRIAGE_TASK_TYPES, RELEASE_OPTIONS, RELEASE_OPTIONS_TASK_TYPES, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_TASK_TYPES } from '../../constants';
 import { FormField } from '../../../ui/FormField';
 import { formatDateTime } from '../../../../utils/formatters';
 import useTaskModelPins from '../../../../hooks/useTaskModelPins';
-import { effectiveModelFor, selectableProviders } from '../../../../utils/providers';
-import EffortSelect from '../../EffortSelect';
 import PromptEditor from './PromptEditor';
 import TaskDependencyPicker from './TaskDependencyPicker';
+import TaskModelQuickControls from './TaskModelQuickControls';
 import RunTaskButton from './RunTaskButton';
 import TaskDataInputs from '../../TaskDataInputs';
 import PerpetualStatusSummary from './PerpetualStatusSummary';
@@ -53,20 +51,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
       }
     },
   );
-  const {
-    providerId: selectedProviderId,
-    model: selectedModel,
-    effort: selectedEffort,
-    executionOptions: selectedExecutionOptions,
-    changeExecutionOptions: handleExecutionOptionsChange,
-    provider: selectedProvider,
-    defaultProviderLabel,
-    availableModels,
-    toolFree,
-    changeProvider: handleProviderChange,
-    changeModel: handleModelChange,
-    changeEffort: handleEffortChange,
-  } = useTaskModelPins({ taskType, config, providers, activeProviderId, onUpdate, onBusyChange: setUpdating });
+  const pins = useTaskModelPins({ taskType, config, providers, activeProviderId, onUpdate, onBusyChange: setUpdating });
 
   useEffect(() => {
     if (!editingPrompt) {
@@ -84,10 +69,6 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
     if (ok !== false) setEditingPrompt(false);
   };
 
-  // `selectedProvider` / `availableModels` come from useTaskModelPins above — it
-  // resolves the pin against the active provider, lists Antigravity's BASE models
-  // (this panel persists a separate Thinking Effort), and keeps a stale suffixed
-  // pin selectable so it still runs while showing what it is.
   const status = config.status || {};
   const userInvokable = config.invocation?.userInvokable !== false;
   const invocationDescription = config.invocation?.description || 'Runs as part of another automation and is not directly invokable.';
@@ -122,42 +103,10 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
 
       {pipelineStages(config).length === 0 && (
         <>
-          <FormField label="Provider (optional)" labelClassName="text-sm text-gray-400 block mb-2">
-            <select
-              value={selectedProviderId}
-              onChange={(e) => handleProviderChange(e.target.value)}
-              disabled={updating || !providersLoaded}
-              className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
-            >
-              {/* Mid-fetch the list is empty, so "Default (active provider)" would
-                  be this select's only option — a slow control that reads broken. */}
-              <option value="">{providersLoaded ? defaultProviderLabel : 'Loading providers…'}</option>
-              {selectableProviders(providers || [], { selectedId: selectedProviderId, allowed: toolFree ? (provider) => provider.type === 'api' : undefined }).map(provider => (
-                <option key={provider.id} value={provider.id} disabled={toolFree && provider.type !== 'api'}>{provider.name}{toolFree && provider.type !== 'api' ? ' (API provider required)' : ''}</option>
-              ))}
-            </select>
-            <p className="text-xs text-gray-500 mt-1">{toolFree
-              ? <>Uses a text API with no tools. Default follows <a href="/models/llms/abuse" className="text-port-accent underline">Abuse Guard source settings</a>; a saved CLI provider must be cleared or replaced.</>
-              : 'Leave as default to use the currently active provider'}</p>
-          </FormField>
-
-          <FormField label="Model (optional)" labelClassName="text-sm text-gray-400 block mb-2">
-            <select
-              value={selectedModel}
-              onChange={(e) => handleModelChange(e.target.value)}
-              disabled={updating || !providersLoaded}
-              className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
-            >
-              {/* `availableModels` already carries a pin the provider no longer
-                  lists, so the select can't render blank and read as "Default". */}
-              <option value="">Default model</option>
-              {availableModels.map(model => (
-                <option key={model} value={model}>{model}</option>
-              ))}
-            </select>
-            <p className="text-xs text-gray-500 mt-1">Leave as default to use the provider's default model</p>
-          </FormField>
-
+          <TaskModelQuickControls pins={pins} providers={providers} loading={!providersLoaded} disabled={updating} />
+          {pins.toolFree && (
+            <p className="text-xs text-gray-500">Uses a text API with no tools. Default follows <a href="/models/llms/abuse" className="text-port-accent underline">Abuse Guard source settings</a>; a saved CLI provider must be cleared or replaced.</p>
+          )}
         </>
       )}
 
@@ -181,27 +130,8 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
       </div>
 
       <TaskOverrides label="Schedule & execution options"
-        activeCount={countOverrides('perpetual', 'autoStart', 'recheckCron', 'effort', 'executionOptions')}>
+        activeCount={countOverrides('perpetual', 'autoStart', 'recheckCron')}>
         <TaskPerpetualFields config={config} edit={edit} updating={updating} />
-
-          {pipelineStages(config).length === 0 && (
-            <>
-            <EffortSelect
-              provider={selectedProvider}
-              model={effectiveModelFor(selectedProvider, selectedModel)}
-              value={selectedEffort}
-              onChange={handleEffortChange}
-              disabled={updating}
-              label="Thinking Effort (optional)"
-              labelClassName="text-sm text-gray-400 block mb-2"
-              hint="How hard the model reasons per turn — higher is slower and costlier but more thorough"
-              className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
-            />
-            <ExecutionOptionsSelect provider={selectedProvider} model={effectiveModelFor(selectedProvider, selectedModel)}
-              value={selectedExecutionOptions} onChange={handleExecutionOptionsChange} disabled={updating || !providersLoaded}
-              className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm" />
-            </>
-          )}
       </TaskOverrides>
 
       {(taskType === 'pr-watcher' || ISSUE_AUTHOR_FILTER_TASK_TYPES.has(taskType)) && (
