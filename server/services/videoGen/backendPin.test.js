@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { resolveVideoBackendPin, grokVideoJobParams, videoBackendJobParams } from './backendPin.js';
-import { VIDEO_GEN_MODE } from './modes.js';
+import { VIDEO_GEN_MODE, VIDEO_GEN_MODES } from './modes.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 
 const grokOn = { imageGen: { grok: { enabled: true, grokPath: '/usr/local/bin/grok' } } };
@@ -172,5 +172,36 @@ describe('grokVideoJobParams', () => {
     for (const key of ['pythonPath', 'numFrames', 'steps', 'guidanceScale', 'fps', 'modelId']) {
       expect(params).not.toHaveProperty(key);
     }
+  });
+});
+
+describe('videoBackendJobParams hosted arms', () => {
+  const geminiOn = { videoGen: { gemini: { enabled: true } } };
+
+  it('gives a Gemini project pin text and start-frame job params without local knobs', () => {
+    const pin = resolveVideoBackendPin(project({ mode: 'gemini', modelId: 'local-model' }), geminiOn);
+    expect(pin).toMatchObject({ mode: VIDEO_GEN_MODE.GEMINI });
+    const text = videoBackendJobParams(geminiOn, pin, { prompt: 'a lighthouse', mode: 'text', numFrames: 49, fps: 24, modelId: 'local-model' });
+    expect(text).toMatchObject({ mode: VIDEO_GEN_MODE.GEMINI, videoMode: 'text', prompt: 'a lighthouse' });
+    for (const key of ['numFrames', 'fps', 'modelId']) expect(text).not.toHaveProperty(key);
+    expect(videoBackendJobParams(geminiOn, pin, { prompt: 'a lighthouse', sourceImagePath: '/tmp/frame.png' }))
+      .toMatchObject({ mode: VIDEO_GEN_MODE.GEMINI, videoMode: 'image', sourceImagePath: '/tmp/frame.png' });
+  });
+
+  it('resolves an install-wide Gemini default for an unpinned project without throwing', () => {
+    const settings = { videoGen: { mode: 'gemini' } };
+    const pin = resolveVideoBackendPin(project(null), settings);
+    expect(pin.mode).toBe(VIDEO_GEN_MODE.GEMINI);
+    expect(videoBackendJobParams(settings, pin, { prompt: 'x', mode: 'text' })).toMatchObject({ mode: VIDEO_GEN_MODE.GEMINI, videoMode: 'text' });
+  });
+
+  it('still refuses a mode outside the video alphabet', () => {
+    let thrown = null;
+    try { videoBackendJobParams({}, { mode: 'not-a-backend' }, { prompt: 'x' }); } catch (err) { thrown = err; }
+    expect(thrown?.code).toBe('VIDEO_BACKEND_UNSUPPORTED');
+  });
+
+  it.each(VIDEO_GEN_MODES)('builds job params for every pickable mode (%s) from a plain text request', (mode) => {
+    expect(() => videoBackendJobParams(geminiOn, { mode }, { prompt: 'x', mode: 'text' })).not.toThrow();
   });
 });
