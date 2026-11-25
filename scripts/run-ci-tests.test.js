@@ -11,6 +11,7 @@ import {
   structuredFailureDiagnostics,
   extractCrashedTestFile,
   hasOtherTestFailures,
+  launcherDeadline,
   planCrashRetry,
   recordVitestDuration,
   repoRelativeFromCrashPath,
@@ -1585,5 +1586,81 @@ describe('browser shard ownership', () => {
     ];
     const shardOf = (file) => [1, 2, 3, 4].find(index => browserShardSlice(BROWSER_SUITES, { index, count: 4 }, 'smoke').includes(file));
     expect(heavy.map(shardOf)).toEqual([1, 2, 3, 4]);
+  });
+});
+
+describe('launcher wall-clock deadline (#18636)', () => {
+  const crashing = { status: 1, output: 'Caused by: Error: Worker exited unexpectedly with exit code 3221226505 '
+    + 'during started state while running test file D:/a/PortOS/PortOS/server/services/sprites/importer.test.js' };
+
+  it('reads a positive number of minutes and ignores everything else', () => {
+    for (const value of [undefined, '', '0', '-3', 'abc', 'Infinity']) {
+      expect(launcherDeadline({ PORTOS_CI_TEST_DEADLINE_MINUTES: value })).toBeNull();
+    }
+    const deadline = launcherDeadline({ PORTOS_CI_TEST_DEADLINE_MINUTES: '20' });
+    expect(deadline.minutes).toBe(20);
+    expect(deadline.signal.aborted).toBe(false);
+  });
+
+  it('hands the one shared signal to the first run and the crash retry, and starts nothing once it expired', async () => {
+    const controller = new AbortController();
+    const run = vi.fn(async () => crashing);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await spawnNpm('server', 'test:ci', ['a.test.js'], 'pass', { run, diagnose: async () => {}, signal: controller.signal });
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run.mock.calls.map(call => call[3])).toEqual([{ signal: controller.signal }, { signal: controller.signal }]);
+      controller.abort();
+      run.mockClear();
+      expect(await spawnNpm('server', 'test:ci', [], 'next pass', { run, signal: controller.signal })).toBe(143);
+      expect(run).not.toHaveBeenCalled();
+    } finally { vi.restoreAllMocks(); quiet.mockRestore(); }
+  });
+
+  it('ends a child that never exits, names the deadline, keeps the output tail and hides the variable from nested launchers', () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'portos-deadline-'));
+    try {
+      installFakeNpm(fixture, [
+        'process.on("SIGTERM", () => {});',
+        'process.stdout.write("DEADLINE_SEEN=" + String(process.env.PORTOS_CI_TEST_DEADLINE_MINUTES) + "\\n");',
+        'process.stdout.write("LAST_OUTPUT_BEFORE_HANG\\n");',
+        'setInterval(() => {}, 1000);',
+      ].join('\n'));
+      const started = Date.now();
+      const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
+        encoding: 'utf8', timeout: 60000,
+        env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, PORTOS_CI_TEST_DEADLINE_MINUTES: '0.03',
+          CI_TEST_MODE: 'full', CI_TEST_FILES: '[]', CI_TEST_SOURCES: '[]', PORTOS_TEST_MEMO: 'off', PORTOS_TEST_MEMO_DIR: '',
+          CI_SHARD: '', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.status).not.toBeNull();
+      expect(result.stderr).toContain('Test launcher deadline of 0.03 minute(s) (PORTOS_CI_TEST_DEADLINE_MINUTES) expired');
+      expect(result.stderr).toContain('Vitest output tail');
+      expect(result.stderr).toContain('LAST_OUTPUT_BEFORE_HANG');
+      expect(result.stdout).toContain('DEADLINE_SEEN=undefined');
+      expect(Date.now() - started).toBeLessThan(30000);
+    } finally { rmSync(fixture, { recursive: true, force: true }); }
+  });
+
+  it('sets the variable on the four launcher test steps below their step or job limit', () => {
+    const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
+    const jobs = workflowJobs(workflow);
+    const steps = [['server', 'node scripts/run-ci-tests.js server\n'], ['client', 'node scripts/run-ci-tests.js client\n'],
+      ['database', 'node scripts/run-ci-tests.js db\n'], ['windows-server', 'node scripts/run-ci-tests.js server\n']];
+    for (const [id, command] of steps) {
+      const job = jobs[id];
+      expect(job, id).toBeTruthy();
+      const end = job.indexOf(`run: ${command}`) + command.length;
+      const start = job.lastIndexOf('      - name:', end);
+      const step = job.slice(start, end);
+      const deadline = Number(step.match(/PORTOS_CI_TEST_DEADLINE_MINUTES:\s*(\d+)/)?.[1]);
+      const stepMinutes = Number(step.match(/timeout-minutes:\s*(\d+)/)?.[1]);
+      const limit = stepMinutes || Number(job.match(/^ {4}timeout-minutes:\s*(\d+)/m)?.[1]);
+      expect(deadline, id).toBeGreaterThan(0);
+      expect(deadline, id).toBeLessThan(limit);
+    }
   });
 });

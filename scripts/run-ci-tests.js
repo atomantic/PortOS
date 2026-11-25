@@ -388,14 +388,34 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
 const browserProfileArgs = () => (process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined
   ? browserTestProfileArgs(process.env.PORTOS_BROWSER_TEST_PROFILE) : []);
 
+let deadlineExpired = false;
+export const DEADLINE_ENV = 'PORTOS_CI_TEST_DEADLINE_MINUTES';
+
+/**
+ * One wall-clock deadline for the whole launcher invocation, read from the
+ * environment (#18636). The step timeout alone did not end a hung Windows run
+ * and the log was lost; the process that owns the child's pipes can still
+ * print the evidence. Returns null when unset or not a positive number.
+ *
+ * @returns {{ signal: AbortSignal, minutes: number } | null}
+ */
+export function launcherDeadline(env = process.env) {
+  const minutes = Number(env[DEADLINE_ENV]);
+  if (!(minutes > 0) || !Number.isFinite(minutes)) return null;
+  return { signal: AbortSignal.timeout(Math.round(minutes * 60_000)), minutes };
+}
+
 // `scope` here is the workspace npm runs in; `name` is only the runner scope shown on the duration line.
 export async function spawnNpm(scope, script, extraArgs, label, {
-  run = runNpm, diagnose = reportWindowsCrashDiagnostics, onResult = () => {}, name = scope,
+  run = runNpm, diagnose = reportWindowsCrashDiagnostics, onResult = () => {}, name = scope, signal,
 } = {}) {
+  // An expired shared deadline between passes must not start another run (runNpm throws on an aborted signal).
+  if (signal?.aborted) return 143;
   console.log(`Running ${scope} ${label}${extraArgs.length ? ` (${extraArgs.length} selector argument(s))` : ''}.`);
+  const runOptions = signal ? [{ signal }] : [];
   const startedAt = Date.now();
   const profileArgs = browserProfileArgs();
-  const result = await run(scope, script, [...extraArgs, ...profileArgs]);
+  const result = await run(scope, script, [...extraArgs, ...profileArgs], ...runOptions);
   recordVitestDuration(name, label, startedAt);
   onResult(result);
   if (result.error) {
@@ -421,7 +441,7 @@ export async function spawnNpm(scope, script, extraArgs, label, {
   console.warn(`⚠️ Vitest worker crashed natively on ${relPath} — retrying that file once`);
   const retryStartedAt = Date.now();
   // The retry keeps the run's flags (recording, pass-with-no-tests); only the selectors shrink to the crashed file.
-  const retry = await run(scope, script, [selector, ...profileArgs, ...extraArgs.filter(arg => arg.startsWith('--'))]);
+  const retry = await run(scope, script, [selector, ...profileArgs, ...extraArgs.filter(arg => arg.startsWith('--'))], ...runOptions);
   recordVitestDuration(name, `crash retry: ${relPath}`, retryStartedAt);
   onResult(retry);
   if (!retry.error && retry.status === 0) {
@@ -509,6 +529,16 @@ async function main() {
   // Set by ci.yml's Linux server job only; a nested runner a test spawns must not inherit it.
   const enforceGuardBudget = process.env.CI_GUARD_BUDGET === 'enforce';
   delete process.env.CI_GUARD_BUDGET;
+  // Same inheritance rule: a nested launcher a test spawns must not arm its own copy. The signal is created
+  // once here so every pass and the crash retry spend the same budget.
+  const deadline = launcherDeadline();
+  delete process.env[DEADLINE_ENV];
+  if (deadline) {
+    deadline.signal.addEventListener('abort', () => {
+      deadlineExpired = true;
+      console.error(`⏱️ Test launcher deadline of ${deadline.minutes} minute(s) (${DEADLINE_ENV}) expired; ending the test process tree.`);
+    }, { once: true });
+  }
   const mode = process.env.CI_TEST_MODE || 'full';
   const inputFiles = JSON.parse(process.env.CI_TEST_FILES || '[]');
   // Explicit planner selectors must respect the same browser and DB ownership as
@@ -562,7 +592,7 @@ async function main() {
   const memoDir = resolveMemoDir();
   const readOnlyMemo = process.env.GITHUB_EVENT_NAME === 'pull_request';
   if (mode === 'full' && !memoDir && !shard && !checkRemaining) {
-    process.exitCode = await spawnNpm(workspace, script, [], label, { name: scope });
+    process.exitCode = await spawnNpm(workspace, script, [], label, { name: scope, signal: deadline?.signal });
     return;
   }
 
@@ -671,7 +701,7 @@ async function main() {
       const loadLog = join(selection.dir, 'guard-loads.jsonl');
       process.env.PORTOS_GUARD_LOAD_LOG = loadLog;
       try {
-        status = (await spawnNpm(workspace, script, extraArgs, passLabel, { name: scope, onResult })) || status;
+        status = (await spawnNpm(workspace, script, extraArgs, passLabel, { name: scope, onResult, signal: deadline?.signal })) || status;
       } finally {
         loads.push(...readGuardLoads(loadLog));
         rmSync(selection.dir, { recursive: true, force: true });
@@ -712,4 +742,12 @@ async function main() {
   if (status === 0) pruneMemo();
 }
 
-if (isDirectlyInvoked(import.meta.url)) await main();
+if (isDirectlyInvoked(import.meta.url)) {
+  await main();
+  // After an expired deadline a detached descendant may still hold a handle (cleanup unverified), which would keep
+  // this process alive and the step hanging. Exit once the diagnostics written above have flushed.
+  if (deadlineExpired) {
+    const code = process.exitCode || 1;
+    process.stderr.write('', () => process.stdout.write('', () => process.exit(code)));
+  }
+}
