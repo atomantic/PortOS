@@ -4,6 +4,7 @@
  * render and the shot segment cache both cut from. Split out of render.js so
  * shotSegments.js can plan without importing the render orchestrator (#17578).
  */
+import { shotImageTreatmentAspect } from '../../lib/musicVideo/musicVideoImageTreatments.js';
 import { existsSync } from 'fs';
 import { basename } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
@@ -104,7 +105,7 @@ const authoredSpan = (scene) => (sceneHasAuthoredSpan(scene) ? round3(scene.endS
 // A composed render's non-footage section — a still, a card or a code shot —
 // or the problem that keeps it out of the render: `untimed` (no authored span
 // to take a length from) or `missing-still` (the selected reference frame is gone).
-function sectionClip(scene, layer, planned, { layered }) {
+function sectionClip(scene, layer, planned, { layered, project }) {
   const spanSec = authoredSpan(scene);
   if (spanSec == null) return { problem: 'untimed' };
   const section = { sceneId: scene.sceneId, layer, inSec: 0, outSec: spanSec, duration: spanSec, sourceSec: spanSec, ...sceneTransitions(scene), ...cutEffectOf(scene, planned) };
@@ -116,25 +117,37 @@ function sectionClip(scene, layer, planned, { layered }) {
     const cardText = [scene.cardText, scene.lyricText].find((t) => typeof t === 'string' && t.trim())?.trim() || '';
     return { clip: { ...section, cardText, cardColor: /^#[0-9a-f]{6}$/i.test(scene.cardColor || '') ? scene.cardColor : '#000000' } };
   }
-  return stillClip(scene, section, { layered });
+  return stillClip(scene, section, { layered, project });
 }
 
-function stillClip(scene, section, { layered }) {
+// Lazy import pays for Sharp only when at least one image is treated.
+async function treatedRenderPath(scene, id, original, project) {
+  if (!original || !scene.imageTreatments?.length) return original;
+  const { resolveTreatedShotImage } = await import('./imageTreatments.js');
+  return resolveTreatedShotImage(scene, id, original, shotImageTreatmentAspect(project, scene, id));
+}
+
+async function stillClip(scene, section, { layered, project }) {
   const sequence = layered && scenePhotoSequence(scene);
-  const photoPaths = sequence ? sequence.imageIds.map(id => safeUnder(PATHS.images, id)) : null;
+  const photoPaths = sequence ? await Promise.all(sequence.imageIds.map(async id => {
+    const original = safeUnder(PATHS.images, id);
+    return original && existsSync(original) ? treatedRenderPath(scene, id, original, project) : null;
+  })) : null;
   if (sequence && (!photoPaths.length || photoPaths.some(path => !path || !existsSync(path)))) {
     throw new ServerError('A selected sequence photo is missing. Pick the missing photos before rendering.', {
       status: 404, code: 'MISSING_SEQUENCE_PHOTOS', context: { sceneId: scene.sceneId,
         imageIds: sequence.imageIds.filter((id, i) => !photoPaths[i] || !existsSync(photoPaths[i])) },
     });
   }
-  const imagePath = photoPaths?.[0] || (scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null);
-  if (!imagePath || !existsSync(imagePath)) return { problem: 'missing-still' };
+  const source = photoPaths?.[0] || (scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null);
+  if (!source || !existsSync(source)) return { problem: 'missing-still' };
+  const imagePath = photoPaths?.[0] || await treatedRenderPath(scene, scene.referenceImageId, source, project);
   // The shot's Move plays as set; a planned camera move (#10589) only seeds it when the shot is made.
   // An image effect (a camera flash that develops, musicVideoImageEffects.js) plays over the still.
   // An end-frame effect also reads the shot's end frame; without it on disk the still plays alone.
   const effect = sceneImageEffect(scene, { layered });
-  const endImagePath = effect && isEndFrameImageEffect(effect.effect) ? safeUnder(PATHS.images, scene.endImageId) : null;
+  const endSource = effect && isEndFrameImageEffect(effect.effect) ? safeUnder(PATHS.images, scene.endImageId) : null;
+  const endImagePath = endSource && existsSync(endSource) ? await treatedRenderPath(scene, scene.endImageId, endSource, project) : null;
   const playable = effect && (!isEndFrameImageEffect(effect.effect) || (endImagePath && existsSync(endImagePath)));
   return { clip: { ...section, imagePath, move: scene.stillMove || stillMoveForCamera(scene.camera) || 'hold',
     ...(sequence ? { photoPaths, photoSequence: scene.photoSequence, photoStartSec: scene.startSec, photoEndSec: scene.endSec } : {}),
@@ -160,7 +173,7 @@ async function footageGeometry(entry) {
 }
 
 // A footage shot's render clip, or `missing-clip` when its selected take cannot be read.
-async function footageClip(scene, entry, planned, editOverride = undefined) {
+async function footageClip(scene, entry, planned, editOverride = undefined, project = null) {
   const geometry = await footageGeometry(entry);
   if (!geometry) return { problem: 'missing-clip' };
   const edit = editOverride !== undefined ? editOverride : performanceEdit(scene);
@@ -187,7 +200,7 @@ async function footageClip(scene, entry, planned, editOverride = undefined) {
     ...(leadSec > 0 ? { leadSec } : {}),
     inSec,
     outSec,
-    ...footageFrameFit(scene),
+    ...await footageFrameFit(scene, project),
     // VHS glitches on its cuts (musicVideoTransitions.js) ride over the edit without moving it.
     ...sceneTransitions(scene),
     // So does a beat toggle on its cut out (musicVideoCutEffects.js).
@@ -235,8 +248,8 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
     const layer = standIn(scene) ? 'still' : sceneVisualLayer(scene, { layered });
     const shot = applyCameraCutDefaults(played, project.cameras);
     const { clip, problem } = layer === 'footage'
-      ? await footageClip(shot, historyMap.get(played.videoHistoryId), planned, resolved ? { inSec: resolved.inSec, outSec: resolved.outSec } : undefined)
-      : sectionClip(shot, layer, planned, { layered });
+      ? await footageClip(shot, historyMap.get(played.videoHistoryId), planned, resolved ? { inSec: resolved.inSec, outSec: resolved.outSec } : undefined, project)
+      : await sectionClip(shot, layer, planned, { layered, project });
     if (clip) clips.push(withCameraPicture(clip, played, project));
     else problems[problem].push(scene);
   }
@@ -340,11 +353,13 @@ export function beatSnapClips(clips, beats, { toleranceSec = 0.12, minClipSec = 
 // to fill (the default), or kept whole with its side gaps covered by the shot's
 // still, a VHS-style blur of the clip, or black. The still edge needs the
 // still on disk; without it the gaps fall back to black.
-function footageFrameFit(scene) {
+async function footageFrameFit(scene, project) {
   const fit = MUSIC_VIDEO_FRAME_FITS.includes(scene.frameFit) ? scene.frameFit : 'fill';
   if (fit !== 'still') return { frameFit: fit };
   const stillPath = scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null;
-  return stillPath && existsSync(stillPath) ? { frameFit: 'still', stillPath } : { frameFit: 'black' };
+  return stillPath && existsSync(stillPath)
+    ? { frameFit: 'still', stillPath: await treatedRenderPath(scene, scene.referenceImageId, stillPath, project) }
+    : { frameFit: 'black' };
 }
 
 /** Camera frame, overscan and OSD on a footage or still clip. Cards stay full frame, and an unset camera leaves the chain unchanged. */

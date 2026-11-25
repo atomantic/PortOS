@@ -1070,7 +1070,7 @@ const MAX_RECENT_REVISIONS = 5;
 const REVIEWED_SCENE_FIELDS = ['sceneId', 'order', 'label', 'sectionIndex', 'startSec', 'endSec', 'lyricText', 'lyricAnchor',
   'visualIntent', 'prompt', 'framePrompt', 'camera', 'shotSheet', 'shotMode', 'performanceSpeaker', 'coverage', 'transitionIn', 'transitionOut',
   'frameReferenceIds', 'clipReferenceIds', 'setReference', 'characterVariant', 'referenceImageId', 'videoHistoryId',
-  'performanceEdit', 'direction', 'visualLayer', 'preMusic', 'photoSequence', 'templateEffects'];
+  'performanceEdit', 'direction', 'visualLayer', 'preMusic', 'photoSequence', 'imageTreatments', 'templateEffects'];
 const REVIEWED_SCENE_FIELD_SET = new Set(REVIEWED_SCENE_FIELDS);
 
 /** One shot as a reviewed revision stores it: the plan a reviewer saw, without takes or render bookkeeping. */

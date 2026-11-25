@@ -32,7 +32,7 @@ function photoLayerStyle(layout) {
  * The picture on top carries `data-shown`, so a glitch painted over the
  * frame (TransitionGlitch) reads the picture that is showing.
  */
-export default function ImageEffectStill({ src, endSrc = null, effect, sequence = null, startSec, time, playing = false, getTime = null, fps = 24 }) {
+export default function ImageEffectStill({ src, endSrc = null, effect, sequence = null, startSec, time, playing = false, getTime = null, fps = 24, imageUrl = photoUrl }) {
   const imgRefs = useRef([]);
   const stackRef = useRef(null);
   const endRef = useRef(null);
@@ -48,7 +48,7 @@ export default function ImageEffectStill({ src, endSrc = null, effect, sequence 
         img.style.display = layer ? '' : 'none';
         img.dataset.shown = layer && i === layers.length - 1 && state.end < 1 ? 'true' : 'false';
         if (!layer) return;
-        const url = photoUrl(sequence.imageIds[layer.index]);
+        const url = imageUrl(sequence.imageIds[layer.index]);
         if (img.getAttribute('src') !== url) img.setAttribute('src', url);
         Object.assign(img.style, photoLayerStyle(layer.layout));
         // The glitch overlay recomposes the stack from these (TransitionGlitch).
@@ -71,12 +71,12 @@ export default function ImageEffectStill({ src, endSrc = null, effect, sequence 
     }
     if (fogRef.current) fogRef.current.style.opacity = String(state.fog);
     if (flashRef.current) flashRef.current.style.opacity = String(state.flash);
-  }, [effect, sequence, startSec, fps]);
+  }, [effect, sequence, startSec, fps, imageUrl]);
   useEffect(() => { paint(time); }, [time, paint]);
   // A stacked layer swaps its source as photos arrive; warm them so a swap never flashes.
   useEffect(() => {
-    if (sequence?.stacked) sequence.imageIds.forEach(id => { const im = new Image(); im.src = photoUrl(id); });
-  }, [sequence]);
+    if (sequence?.stacked) sequence.imageIds.forEach(id => { const im = new Image(); im.src = imageUrl(id); });
+  }, [sequence, imageUrl]);
   useEffect(() => {
     if (!playing || !getTime) return undefined;
     let handle = 0;
@@ -93,11 +93,11 @@ export default function ImageEffectStill({ src, endSrc = null, effect, sequence 
       {sequence?.stacked ? (
         <div ref={stackRef} data-photo-stack="true" className="absolute inset-0 overflow-hidden bg-black">
           {Array.from({ length: photoSequenceMaxLayers(sequence) }, (_, i) => (
-            <img key={i} ref={el => { imgRefs.current[i] = el; }} src={photoUrl(sequence.imageIds[0])} alt=""
+            <img key={i} ref={el => { imgRefs.current[i] = el; }} src={imageUrl(sequence.imageIds[0])} alt=""
               data-shown={i === 0 ? 'true' : 'false'} data-layout="" style={{ display: i === 0 ? undefined : 'none' }} className="absolute h-full w-full object-cover" />
           ))}
         </div>
-      ) : (sequence ? sequence.imageIds.map(photoUrl) : [src]).map((url, i) => (
+      ) : (sequence ? sequence.imageIds.map(imageUrl) : [src]).map((url, i) => (
         <img key={`${i}:${url}`} ref={el => { imgRefs.current[i] = el; }} src={url} alt=""
           data-shown={i === 0 ? 'true' : 'false'} style={{ opacity: i === 0 ? 1 : 0 }}
           className="absolute inset-0 h-full w-full object-cover" />

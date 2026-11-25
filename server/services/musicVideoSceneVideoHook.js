@@ -107,7 +107,7 @@ const hook = createMediaJobImageHook({
     prompt: typeof job.params?.prompt === 'string' ? job.params.prompt : null,
     // The frame this clip was generated from — a basename only; job params
     // carry the server's absolute path, which never belongs on a synced record.
-    sourceImageId: firstFrame || (typeof job.params?.sourceImagePath === 'string' ? basename(job.params.sourceImagePath) : null),
+    sourceImageId: firstFrame || job.params?.musicVideoDependencies?.references?.find(ref => ref.role === 'plate')?.assetId || (typeof job.params?.sourceImagePath === 'string' ? basename(job.params.sourceImagePath) : null),
     // #8977: a performance take keeps the immutable record of the song slice,
     // edit in/out points and capability it was generated against — the
     // renderer places the take by it, so a later retime can't misalign lips.

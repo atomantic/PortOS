@@ -260,6 +260,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/midi-runtime/install',
     '/api/music-video/:id/publish-kit/video',
     '/api/music-video/:id/scenes/:sceneId/download',
+    // Music Video's still preview loads this binary response via <img src>.
+    '/api/music-video/:id/scenes/:sceneId/image-treatment',
     '/api/music/setup/runtime-install',
     '/api/pipeline/issues/:id/comic.pdf',
     // client/src/components/providers/ExecutionOptionsSelect.jsx.

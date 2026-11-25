@@ -295,7 +295,7 @@ export default function SceneVideoTakesSection({
         <SceneImageEffect fieldId={fieldId} scene={scene} onChange={applyPatch} beats={project?.audioAnalysis?.beats} fps={photoFps} />
       )}
       {stillPicture ? (
-        <ScenePicturePreview scene={scene} beats={project?.audioAnalysis?.beats} fps={photoFps} />
+        <ScenePicturePreview scene={scene} projectId={project?.id} beats={project?.audioAnalysis?.beats} fps={photoFps} />
       ) : (
         <>
           <SceneClipMediaPreview

@@ -8,6 +8,11 @@ import { musicVideoSceneCreateSchema, musicVideoSceneUpdateSchema } from '../lib
 import { musicVideoColorMatchTakePatchSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoSceneReorderSchema, musicVideoVaryWipesSchema, musicVideoSceneSplitSchema, musicVideoLyricCutSchema, musicVideoSceneStartSchema, musicVideoSceneEndSchema, musicVideoSceneFrameRenderSchema, musicVideoSceneClipRenderSchema, musicVideoTakeInputSchema, musicVideoTakeReviewSchema, musicVideoPerformanceRepairSchema, musicVideoApproveFinalSchema, musicVideoUpgradeSchema, musicVideoTakeSelectSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { renderShotDownload } from '../services/musicVideo/shotDownload.js';
 import { Router } from 'express';
+import { musicVideoImageTreatmentQuerySchema } from '../lib/musicVideo/musicVideoImageTreatmentValidation.js';
+import { shotImageTreatmentAspect, shotTreatmentImages } from '../lib/musicVideo/musicVideoImageTreatments.js';
+import { resolveGalleryImage } from '../lib/pathSafety.js';
+import { readFile } from 'node:fs/promises';
+import { getStoredProjectRecord } from '../services/musicVideo/projects.js';
 import { z } from 'zod';
 import { requireProductionReviewer } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -39,6 +44,18 @@ router.post('/:id/scenes/:sceneId/performance-repair', asyncHandler(async (req, 
   const input = validateRequest(musicVideoPerformanceRepairSchema, req.body || {});
   const { startPerformanceRepair } = await import('../services/musicVideo/performanceRepair.js');
   res.status(201).json(await startPerformanceRepair(req.params.id, req.params.sceneId, input));
+}));
+
+// The same deterministic processor feeds the draft preview and the final still.
+router.get('/:id/scenes/:sceneId/image-treatment', asyncHandler(async (req, res) => {
+  const { treatment } = validateRequest(musicVideoImageTreatmentQuerySchema, req.query);
+  const project = await getStoredProjectRecord(req.params.id);
+  const scene = project?.scenes?.find(shot => shot.sceneId === req.params.sceneId);
+  const original = shotTreatmentImages(scene).some(image => image.id === treatment.imageId) ? resolveGalleryImage(treatment.imageId) : null;
+  if (!original) throw new ServerError('This shot image is unavailable on this machine', { status: 404, code: 'NOT_FOUND' });
+  const { renderImageTreatment } = await import('../services/musicVideo/imageTreatments.js');
+  const preview = await renderImageTreatment(await readFile(original), treatment, { maxEdge: 1280, aspect: shotImageTreatmentAspect(project, scene, treatment.imageId) });
+  res.set('Cache-Control', 'private, max-age=300').type('png').send(preview);
 }));
 
 // --- Director scene board ---
