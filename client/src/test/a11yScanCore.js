@@ -501,11 +501,22 @@ export function* jsxScanner(src, { from = 0, mode: startMode = 'code', tokens = 
     // in `<option>Use the provider's default</option>` the apostrophe is text,
     // and reading it as a string opener swallows the rest of the file (#4318).
     if (mode !== 'jsx-text') {
-      const comment = commentEnd(src, i);
-      if (comment !== -1) {
-        if (tokens !== 'tags') yield { kind: 'comment', index: i, end: Math.min(comment, src.length - 1), mode };
-        i = comment;
-        continue;
+      if (c === '/') {
+        const comment = commentEnd(src, i);
+        if (comment !== -1) {
+          if (tokens !== 'tags') yield { kind: 'comment', index: i, end: Math.min(comment, src.length - 1), mode };
+          i = comment;
+          continue;
+        }
+        if (mode === 'code') {
+          const end = regexEnd(src, i, previous);
+          if (end !== -1) {
+            if (allTokens) yield { kind: 'regex', index: i, end, mode };
+            i = end;
+            previous = end;
+            continue;
+          }
+        }
       }
       if (c === '"' || c === '\'' || c === '`') {
         const end = skipString(src, i);
@@ -514,18 +525,11 @@ export function* jsxScanner(src, { from = 0, mode: startMode = 'code', tokens = 
         previous = Math.min(end, src.length - 1);
         continue;
       }
-      if (mode === 'code' && c === '/') {
-        const end = regexEnd(src, i, previous);
-        if (end !== -1) {
-          if (allTokens) yield { kind: 'regex', index: i, end, mode };
-          i = end;
-          previous = end;
-          continue;
-        }
-      }
     }
     const before = previous;
-    if (!/\s/.test(c)) previous = i;
+    // Printable non-space ASCII dominates these sources. Keep JS whitespace
+    // semantics for other characters without running a regex on every token.
+    if ((c > ' ' && c <= '~') || !/\s/.test(c)) previous = i;
 
     // Braces nest the same way in all three contexts, so they are handled once.
     if (c === '{') {
