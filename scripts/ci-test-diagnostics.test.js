@@ -116,9 +116,33 @@ describe('independent CI test failure recovery (#11552)', () => {
       const hooks = vitestRunDiagnostics();
       hooks.onInit({ onClose() {} });
       for (let i = 0; i < 105; i++) hooks.onTestModuleEnd({ moduleId: 'server/lib/synthetic.test.js', state: () => 'passed' });
-      hooks.onTestModuleEnd({ moduleId: 'server/lib/synthetic.test.js', state: () => 'failed', errors: ['private-sentinel'] });
+      hooks.onTestModuleEnd({
+        moduleId: 'server/lib/synthetic.test.js',
+        state: () => 'failed',
+        errors: () => [],
+        children: { allSuites: () => [] },
+      });
+      const moduleError = {
+        name: 'Error',
+        message: `Cannot load ${join(root, 'dependency.js')}. ${'x'.repeat(9000)}`,
+        stack: 'private-sentinel',
+      };
+      hooks.onTestModuleEnd({
+        moduleId: join(root, 'collection.test.js'),
+        state: () => 'failed',
+        errors: () => Array(11).fill(moduleError),
+        children: { allSuites: () => [] },
+      });
       hooks.onTestModuleEnd({ moduleId: 'server/lib/unknown.test.js', state: () => 'private-sentinel' });
       const persisted = JSON.parse(readFileSync(path, 'utf8'));
+      expect(persisted.suiteErrors).toHaveLength(10);
+      expect(persisted.suiteErrors[0]).toMatchObject({
+        file: '<outside-repository>/collection.test.js',
+        suite: '<module>',
+        summary: expect.stringContaining('<test-directory>/dependency.js'),
+      });
+      expect(persisted.suiteErrors[0].summary).toHaveLength(2000);
+      expect(JSON.stringify(persisted.suiteErrors)).not.toContain(root.replace(/\\/g, '/'));
       expect(persisted.moduleResults).toHaveLength(100);
       expect(persisted.moduleResults.at(-1).state).toBe('unavailable');
       expect(JSON.stringify(persisted)).not.toContain('private-sentinel');

@@ -1,11 +1,12 @@
 import { readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { writeStepSummary } from './lib/githubOutput.js';
 
-// Run-level errors plus five bounded assertion records and module progress.
+// Run-level and suite errors, bounded assertion records, and module progress.
 export const RUN_DIAGNOSTIC_MAX_BYTES = 320_000;
 
 const repoRoot = fileURLToPath(new URL('../', import.meta.url)).replace(/\\/g, '/');
@@ -19,6 +20,18 @@ export function diagnosticTestFile(value) {
     && !path.split('/').includes('..')) return path;
   const name = basename(normalized);
   return /^[\w.-]+\.test\.[\w]+$/.test(name) ? `<outside-repository>/${name}` : '<unavailable>';
+}
+
+export const SUITE_ERROR_LIMIT = 10;
+export const SUITE_ERROR_FIELD_LIMIT = 2000;
+
+export function suiteErrorText(value, moduleId) {
+  const moduleDir = dirname(moduleId.replace(/\\/g, '/'));
+  const home = homedir().replace(/\\/g, '/');
+  let text = String(value).replace(/\\/g, '/').replaceAll(repoRoot.slice(0, -1), '<repo>');
+  if (moduleDir.length > 3) text = text.replaceAll(moduleDir, '<test-directory>');
+  if (home.length > 3) text = text.replaceAll(home, '~');
+  return text.slice(0, SUITE_ERROR_FIELD_LIMIT);
 }
 
 export function persistTestDiagnostic(path, value) {

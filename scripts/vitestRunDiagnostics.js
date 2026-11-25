@@ -1,7 +1,7 @@
-import { diagnosticTestFile, persistTestDiagnostic } from './ci-test-diagnostics.js';
+import { diagnosticTestFile, persistTestDiagnostic, suiteErrorText, SUITE_ERROR_LIMIT } from './ci-test-diagnostics.js';
 
-// The JSON reporter includes test failures, but drops run-level errors such as
-// unhandled rejections and worker crashes. Keep those independently of stdout.
+// Vitest JSON can omit suite hook errors and run-level errors. Capture those
+// independently of stdout and keep them distinct from each other.
 function errorDiagnostic(error, depth = 0) {
   if (!error || typeof error !== 'object') return String(error).slice(0, 8000);
   const lines = [error.type, error.stack || `${error.name || 'Error'}: ${error.message || ''}`];
@@ -12,6 +12,11 @@ function errorDiagnostic(error, depth = 0) {
 
 const moduleStates = new Set(['queued', 'pending', 'passed', 'failed', 'skipped']);
 
+function* suitesIn(module) {
+  yield module;
+  yield* module.children.allSuites();
+}
+
 export default function vitestRunDiagnostics() {
   const path = process.env.PORTOS_CI_DIAGNOSTICS_PATH;
   let snapshotExitCode = null;
@@ -21,11 +26,12 @@ export default function vitestRunDiagnostics() {
   const activeModules = new Set();
   const completedModules = [];
   const moduleResults = [];
+  const suiteErrors = [];
   const persist = (processExit) => {
     if (!processExit) snapshotExitCode = process.exitCode ?? null;
     if (!path) return;
     persistTestDiagnostic(path, { ...diagnostics, ...(workers ? { workers } : {}), activeModules: [...activeModules].slice(0, 100),
-      completedModules, moduleResults, exitCode: snapshotExitCode,
+      completedModules, moduleResults, suiteErrors, exitCode: snapshotExitCode,
       ...(processExit ? { processExit } : {}) });
   };
   return {
@@ -55,6 +61,19 @@ export default function vitestRunDiagnostics() {
       const state = module.state?.();
       moduleResults.push({ file, state: moduleStates.has(state) ? state : 'unavailable' });
       if (moduleResults.length > 100) moduleResults.shift();
+      if (state === 'failed' && suiteErrors.length < SUITE_ERROR_LIMIT) {
+        for (const suite of suitesIn(module)) {
+          for (const error of suite.errors()) {
+            suiteErrors.push({
+              file,
+              suite: suiteErrorText(suite === module ? '<module>' : suite.fullName, module.moduleId),
+              summary: suiteErrorText(`${error.name || 'Error'}: ${error.message || ''}`, module.moduleId),
+            });
+            if (suiteErrors.length === SUITE_ERROR_LIMIT) break;
+          }
+          if (suiteErrors.length === SUITE_ERROR_LIMIT) break;
+        }
+      }
       diagnostics.completedCount += 1;
       persist();
     },
