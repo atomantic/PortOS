@@ -457,6 +457,15 @@ describe('analyzeAgentFailure — provenance origin (#2642)', () => {
     expect(analysis.category).not.toBe('usage-limit');
   });
 
+  it.each([
+    'FAIL src/foo.test.js — the usage limit guard rejected the request',
+    'The docs describe a usage limit for uploaded files.',
+  ])('classifies but does not promote a bare usage-limit phrase: %j', (prose) => {
+    const analysis = analyzeAgentFailure(withLead(prose), { id: 't' }, 'x');
+    expect(analysis.category).toBe('usage-limit');
+    expect(analysis.origin).toBe('output-scan');
+  });
+
   it('keeps promoting the older "<N>-hour limit reached" banner', () => {
     const analysis = analyzeAgentFailure(withLead('5-hour limit reached ∙ resets 3pm'), { id: 't' }, 'x');
     expect(analysis.category).toBe('usage-limit');

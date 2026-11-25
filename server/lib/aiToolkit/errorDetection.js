@@ -157,7 +157,12 @@ export const RATE_LIMIT_SIGNATURE = /API Error: 429|rate.?limit|too many request
 // `5-hour`/`weekly`/`Opus` kinds the CLI also emits were missing for the
 // same reason. Anchored on the second-person `hit your … limit` so the
 // bound wildcard cannot be reached by prose about a limit.
-export const USAGE_LIMIT_SIGNATURE = /(?:hit your (?:[\w-]+ )?(?:session|usage|weekly|monthly|daily|hourly|spend|\d+-hour) limit\b|usage limit|Upgrade to Pro|upgrade your subscription to increase your limits|(?:^|\n)\s*(?:\[stderr\]\s*)?Now using extra usage\s*(?:\r?\n|$))/i;
+// The vendor-banner half: wording a provider CLI prints and prose does not.
+// Kept separate because the agent table promotes ONLY this half to a provider
+// signal (a bench) — a bare `usage limit` also appears in tests and docs an
+// agent prints, so it may classify a failure but must not bench a provider.
+export const USAGE_LIMIT_BANNER_SIGNATURE = /(?:hit your (?:[\w-]+ )?(?:session|usage|weekly|monthly|daily|hourly|spend|\d+-hour) limit\b|Upgrade to Pro|upgrade your subscription to increase your limits|(?:^|\n)\s*(?:\[stderr\]\s*)?Now using extra usage\s*(?:\r?\n|$))/i;
+export const USAGE_LIMIT_SIGNATURE = new RegExp(`${USAGE_LIMIT_BANNER_SIGNATURE.source}|usage limit`, 'i');
 
 // Order matters — more specific patterns first.
 const ERROR_PATTERNS = [
