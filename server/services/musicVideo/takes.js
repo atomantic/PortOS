@@ -320,6 +320,44 @@ export function selectSceneTake(project, sceneId, takeId, options = {}) {
 }
 
 /**
+ * Move one take to another shot, to organize takes that were made for (or fit) a different shot.
+ * The take keeps its id, status, note and provenance, and lands on the target as an unselected
+ * take: it never changes the target's selection, and its dependencies still name the shot it was
+ * made for, so the target shows it as made for another shot until it is used. The take a shot is
+ * using must be swapped out first, so a move never empties a shot. A take covering a run of
+ * shots (`sequence`) belongs to that run and does not move. When the target already holds a take
+ * of the same file, the source's copy is dropped and the target's own take is kept.
+ * Returns `{ project, scene, target, take }` (`take` as it now sits on the target).
+ */
+export function moveSceneTake(project, sceneId, takeId, { toSceneId }) {
+  if (toSceneId === sceneId) throw new ServerError('The take is already on that shot', { status: 400, code: 'VALIDATION_ERROR' });
+  const { idx, scene, takes, take } = locateTake(project, sceneId, takeId);
+  const targetIdx = findSceneIndex(project, toSceneId);
+  if (scene[TAKE_SLOT[take.kind]] === take.assetId) {
+    throw new ServerError('This shot is using that take. Use another take on this shot before moving it.', { status: 409, code: 'MUSIC_VIDEO_TAKE_IN_USE' });
+  }
+  if (take.sequence) {
+    throw new ServerError('A clip covering several shots stays with its run of shots', { status: 409, code: 'MUSIC_VIDEO_TAKE_SEQUENCE' });
+  }
+  assertMusicVideoMedia(project, take.kind, 'take move');
+  const now = new Date().toISOString();
+  const source = { ...scene, takes: takes.filter((t) => t.takeId !== takeId) };
+  const targetScene = project.scenes[targetIdx];
+  const targetTakes = ensureSceneTakes(targetScene, now);
+  const existing = targetTakes.find((t) => t.kind === take.kind && t.assetId === take.assetId);
+  // A clip with no recorded dependencies gets them from the shot it was made for, before it leaves that shot.
+  const provenance = take.kind === 'video' && !take.dependencies && take.sourceImageId
+    ? { dependencies: captureTakeDependencies(scene, take.sourceImageId) } : {};
+  const moved = existing || { ...take, ...provenance, movedFrom: { sceneId, at: now } };
+  const target = { ...targetScene, takes: existing ? targetTakes : pruneTakes([...targetTakes, moved], targetScene) };
+  const scenes = project.scenes.slice();
+  scenes[idx] = source;
+  scenes[targetIdx] = target;
+  const saved = retainMusicVideoDependencies(project, { ...project, scenes, updatedAt: now });
+  return { project: saved, scene: saved.scenes[idx], target: saved.scenes[targetIdx], take: moved };
+}
+
+/**
  * Reject/restore a take and/or set its review note. Rejecting the SELECTED take
  * clears the slot so the scene reads as "needs a take" again.
  */

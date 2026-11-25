@@ -277,6 +277,68 @@ describe('scene takes routes', () => {
   });
 });
 
+describe('moving takes between shots', () => {
+  const move = (sceneId, takeId, toSceneId) => request(app).post(`${base()}/scenes/${sceneId}/takes/${takeId}/move`).send({ toSceneId });
+
+  it("moves a rejected clip take with its status and note, leaving the target's selection alone", async () => {
+    seedVideoHistory([{ id: 'clip-kept' }, { id: 'clip-moved' }, { id: 'clip-b' }]);
+    await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-kept' });
+    const spare = await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-moved' });
+    await request(app).patch(`${base()}/scenes/${sceneA.sceneId}/takes/${spare.body.take.takeId}`).send({ status: 'rejected', note: 'fits the waves shot' });
+    await addTake(sceneB.sceneId, { kind: 'video', assetId: 'clip-b' });
+
+    const moved = await move(sceneA.sceneId, spare.body.take.takeId, sceneB.sceneId);
+    expect(moved.status).toBe(200);
+    expect(moved.body.scene.takes.map((t) => t.assetId)).toEqual(['clip-kept']);
+    expect(moved.body.target.videoHistoryId).toBe('clip-b');
+    expect(moved.body.take).toMatchObject({ takeId: spare.body.take.takeId, status: 'rejected', note: 'fits the waves shot', movedFrom: { sceneId: sceneA.sceneId } });
+    expect(moved.body.edit).toBeTruthy();
+
+    const stored = await reload();
+    const [a, b] = [sceneA, sceneB].map(({ sceneId }) => stored.scenes.find((s) => s.sceneId === sceneId));
+    expect(a.videoHistoryId).toBe('clip-kept');
+    expect(a.takes.map((t) => t.assetId)).toEqual(['clip-kept']);
+    expect(b.videoHistoryId).toBe('clip-b');
+    expect(b.takes.map((t) => [t.assetId, t.status])).toEqual([['clip-b', 'candidate'], ['clip-moved', 'rejected']]);
+
+    // Using it on its new shot works as for any take, and restores it.
+    const used = await request(app).post(`${base()}/scenes/${sceneB.sceneId}/takes/${spare.body.take.takeId}/select`).send({});
+    expect(used.status).toBe(200);
+    expect(used.body.videoHistoryId).toBe('clip-moved');
+  });
+
+  it('moves a frame take back and forth, and keeps one take when the target already holds that file', async () => {
+    seedImage('a.png');
+    seedImage('spare.png');
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'a.png' });
+    const spare = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'spare.png' });
+    expect((await move(sceneA.sceneId, spare.body.take.takeId, sceneB.sceneId)).body.target.referenceImageId ?? null).toBeNull();
+    expect((await move(sceneB.sceneId, spare.body.take.takeId, sceneA.sceneId)).status).toBe(200);
+    expect((await reload()).scenes.find((s) => s.sceneId === sceneA.sceneId).takes.map((t) => t.assetId)).toEqual(['a.png', 'spare.png']);
+
+    const copy = await addTake(sceneB.sceneId, { kind: 'image', assetId: 'spare.png' });
+    const merged = await move(sceneA.sceneId, spare.body.take.takeId, sceneB.sceneId);
+    expect(merged.status).toBe(200);
+    expect(merged.body.take.takeId).toBe(copy.body.take.takeId);
+    const stored = await reload();
+    expect(stored.scenes.find((s) => s.sceneId === sceneA.sceneId).takes.map((t) => t.assetId)).toEqual(['a.png']);
+    expect(stored.scenes.find((s) => s.sceneId === sceneB.sceneId).takes.map((t) => t.assetId)).toEqual(['spare.png']);
+  });
+
+  it('refuses to move the take a shot is using, to the same shot, to a missing shot, or a missing take', async () => {
+    seedImage('a.png');
+    const inUse = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'a.png' });
+    const busy = await move(sceneA.sceneId, inUse.body.take.takeId, sceneB.sceneId);
+    expect(busy.status).toBe(409);
+    expect(busy.body.code).toBe('MUSIC_VIDEO_TAKE_IN_USE');
+    expect((await move(sceneA.sceneId, inUse.body.take.takeId, sceneA.sceneId)).status).toBe(400);
+    expect((await move(sceneA.sceneId, inUse.body.take.takeId, 'no-such-shot')).status).toBe(404);
+    expect((await move(sceneA.sceneId, 'mvt-missing', sceneB.sceneId)).status).toBe(404);
+    expect((await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/${inUse.body.take.takeId}/move`).send({})).status).toBe(400);
+    expect((await reload()).scenes.find((s) => s.sceneId === sceneA.sceneId).referenceImageId).toBe('a.png');
+  });
+});
+
 describe('external-asset handoff', () => {
   it('exports per-scene prompts + tags without machine-local settings, and imports tagged files back onto their exact scenes', async () => {
     seedImage('ref-mood.png');

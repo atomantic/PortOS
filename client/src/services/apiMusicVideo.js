@@ -378,6 +378,9 @@ export const continueMusicVideoSceneFromPrevious = (id, sceneId, body = {}, opti
 // The shot's start frame becomes its end frame and the end frame its start, prompts included → the scene.
 export const swapMusicVideoSceneFrames = (id, sceneId, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/swap-frames`, { method: 'POST', ...options });
+// Move one of the shot's unused takes to another shot → { scene, target, take, edit }.
+export const moveMusicVideoSceneTake = (id, sceneId, takeId, toSceneId, options = {}) =>
+  request(`${takesPath(id, sceneId)}/${encodeURIComponent(takeId)}/move`, { method: 'POST', body: JSON.stringify({ toSceneId }), ...options });
 export const rejectUnusedMusicVideoSceneTakes = (id, sceneId, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/takes/reject-unused`, { method: 'POST', ...options });
 export const reviewMusicVideoSceneTake = (id, sceneId, takeId, review, options = {}) =>

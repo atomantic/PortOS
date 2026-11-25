@@ -88,7 +88,7 @@ const RERENDER_HINT = 'Renders this frame again from the current Casting look an
 export default function SceneFrames({
   project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, greyboxSaving = false, onGreyboxSaving, scene, index, endFrames: endFramesAllowed, endFrameToggle = false, plainStill = false, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame, onImageTargetChange = null,
   onEditLocal, onSave, onOpenPreview, shown = true, takeBusy = false, pendingTakes = null, onSelectTake, onReviewTake, onSwap = null, onImportTake = null,
-  onContinueFromPrevious = null, previousHasClip = false, onSwapFrames = null, assetMarks = null, onMarkTake = null, onCheckTake = null, checkingTakes = null, onApplyCameos = null,
+  onContinueFromPrevious = null, previousHasClip = false, onSwapFrames = null, assetMarks = null, onMarkTake = null, onMoveTake = null, onCheckTake = null, checkingTakes = null, onApplyCameos = null,
 }) {
   const endFrameOff = endFrameToggle && (plainStill || scene.endFrameOff === true);
   const endFrames = endFramesAllowed && !endFrameOff;
@@ -337,7 +337,8 @@ export default function SceneFrames({
           onSelect={(take) => onSelectTake?.(scene, take)}
           onReview={(take, review) => onReviewTake?.(scene, take, review)}
           onOpenPreview={onOpenPreview} marks={assetMarks} onMark={onMarkTake}
-          onCheck={onCheckTake ? (take) => onCheckTake(scene, take) : null} checking={checkingTakes} />
+          onCheck={onCheckTake ? (take) => onCheckTake(scene, take) : null} checking={checkingTakes}
+          onMove={onMoveTake ? (take, toSceneId) => onMoveTake(scene, take, toSceneId) : null} />
       </div>
     );
   };

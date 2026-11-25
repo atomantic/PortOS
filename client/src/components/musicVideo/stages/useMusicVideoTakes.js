@@ -1,6 +1,6 @@
 /**
  * Hook for Music Video scene-take review and external asset handoff: select, reject, note, gallery
- * import, manifest download and handoff import.
+ * import, moving a take to another shot, manifest download and handoff import.
  *
  * Scene-take review + external-asset handoff for the Music Video board (#8965): serialized select /
  * reject / note / gallery-import take mutations folded back as scene patches, the handoff manifest
@@ -20,6 +20,7 @@ import {
   reviewMusicVideoSceneTake,
   checkMusicVideoSceneTake,
   rejectUnusedMusicVideoSceneTakes,
+  moveMusicVideoSceneTake,
   swapMusicVideoSceneFrames,
   markMusicVideoPoolAssets,
   getMusicVideoHandoff,
@@ -307,6 +308,18 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
     { control: takeControl.rejectUnused(scene) },
   );
 
+  // Organize takes: an unused take moves to another shot, keeping its status and note. Both shots change, so the
+  // reply's edit result redraws them; with another decision queued, each shot is patched on its own as usual.
+  const moveTake = (scene, take, toSceneId) => runTakeOp(
+    (projectId) => moveMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, toSceneId, own()).then(({ scene: source, target, edit }) => {
+      if (edit && applyEdit && runningRef.current === 1) return { ...source, edit };
+      applyScene(projectId, target);
+      return source;
+    }),
+    'Failed to move the take',
+    { control: takeControl.move(scene, take) },
+  );
+
   // A frame picked from (or uploaded into) the gallery for one scene.
   const importTake = (scene, item) => runTakeOp(
     (projectId) => addMusicVideoSceneTake(projectId, scene.sceneId, {
@@ -383,5 +396,5 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
   const writeMark = () => startedRef.current;
   const settledSince = (mark) => startedRef.current === mark && runningRef.current === 0;
 
-  return { busy, pending, writeMark, settledSince, reconcileError: reconcileError?.projectId === project.id ? reconcileError : null, reconciling, retryReconcile: () => reconcileProject(project.id), afterTakeWrites, selectTake, placePoolItem, trimClipTake, handheldClipTake, reviewTake, checkTake, checking, rejectUnusedTakes, swapFrames, markTake, applyPoolMarks, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
+  return { busy, pending, writeMark, settledSince, reconcileError: reconcileError?.projectId === project.id ? reconcileError : null, reconciling, retryReconcile: () => reconcileProject(project.id), afterTakeWrites, selectTake, placePoolItem, trimClipTake, handheldClipTake, reviewTake, checkTake, checking, rejectUnusedTakes, moveTake, swapFrames, markTake, applyPoolMarks, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
 }

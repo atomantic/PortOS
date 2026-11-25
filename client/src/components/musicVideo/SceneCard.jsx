@@ -302,7 +302,7 @@ export default function SceneCard({
                           onImportTake={actions.onImportTake}
                           onContinueFromPrevious={layer === 'footage' && position.index > 0 ? actions.onContinueFromPrevious : null}
                           previousHasClip={position.previousHasClip}
-                          assetMarks={project?.assetMarks} onMarkTake={actions.onMarkTake}
+                          assetMarks={project?.assetMarks} onMarkTake={actions.onMarkTake} onMoveTake={actions.onMoveTake}
                           onCheckTake={actions.onCheckTake} checkingTakes={takes.checking} onApplyCameos={actions.onApplyCameos}
                         />
                       </div>

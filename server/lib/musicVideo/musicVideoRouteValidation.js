@@ -283,6 +283,11 @@ export const musicVideoTakeSelectSchema = z.object({
   expectedSelectedAssetId: z.string().min(1).max(256).nullable().optional(),
 }).strict();
 
+/** Move one take to another shot of the same project (organizing takes; the files stay where they are). */
+export const musicVideoTakeMoveSchema = z.object({
+  toSceneId: z.string().min(1).max(128),
+}).strict();
+
 /** Delete unused stills and clips from the media library (the asset manager's "Delete bad"). */
 export const musicVideoPoolDeleteSchema = z.object({
   items: z.array(musicVideoPoolAssetSchema).min(1).max(500),

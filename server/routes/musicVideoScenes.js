@@ -5,14 +5,14 @@
  */
 
 import { musicVideoSceneCreateSchema, musicVideoSceneUpdateSchema } from '../lib/musicVideo/musicVideoValidation.js';
-import { musicVideoColorMatchTakePatchSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoSceneReorderSchema, musicVideoVaryWipesSchema, musicVideoSceneSplitSchema, musicVideoLyricCutSchema, musicVideoSceneStartSchema, musicVideoSceneEndSchema, musicVideoSceneFrameRenderSchema, musicVideoSceneFramesRenderSchema, musicVideoSceneClipRenderSchema, musicVideoSceneClipsRenderSchema, musicVideoTakeInputSchema, musicVideoTakeReviewSchema, musicVideoPerformanceRepairSchema, musicVideoApproveFinalSchema, musicVideoUpgradeSchema, musicVideoTakeSelectSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
+import { musicVideoColorMatchTakePatchSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoSceneReorderSchema, musicVideoVaryWipesSchema, musicVideoSceneSplitSchema, musicVideoLyricCutSchema, musicVideoSceneStartSchema, musicVideoSceneEndSchema, musicVideoSceneFrameRenderSchema, musicVideoSceneFramesRenderSchema, musicVideoSceneClipRenderSchema, musicVideoSceneClipsRenderSchema, musicVideoTakeInputSchema, musicVideoTakeReviewSchema, musicVideoPerformanceRepairSchema, musicVideoApproveFinalSchema, musicVideoUpgradeSchema, musicVideoTakeSelectSchema, musicVideoTakeMoveSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { renderShotDownload } from '../services/musicVideo/shotDownload.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireProductionReviewer } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { addProjectScene, updateScene, deleteScene, reorderProjectScenes, varyProjectWipes, splitProjectScene, cutProjectScenesOnLyrics, mergeProjectNextScene, mergeProjectPreviousScene, moveProjectSceneStart, moveProjectSceneEnd, appendSceneTakes, selectSceneTake, placeMediaPoolItem, reviewSceneTake, checkSceneTakePlate, rejectUnusedSceneTakes, swapProjectSceneFrames } from '../services/musicVideo/projectBoardEdits.js';
+import { addProjectScene, updateScene, deleteScene, reorderProjectScenes, varyProjectWipes, splitProjectScene, cutProjectScenesOnLyrics, mergeProjectNextScene, mergeProjectPreviousScene, moveProjectSceneStart, moveProjectSceneEnd, appendSceneTakes, selectSceneTake, placeMediaPoolItem, reviewSceneTake, checkSceneTakePlate, rejectUnusedSceneTakes, swapProjectSceneFrames, moveSceneTake } from '../services/musicVideo/projectBoardEdits.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
 import { approveFinal, upgradeApproved } from '../services/musicVideo/finalUpgrade.js';
 import { renderSceneClips, renderSceneFrames } from '../services/musicVideo/sceneCardRender.js';
@@ -198,6 +198,12 @@ router.post('/:id/scenes/:sceneId/takes/:takeId/select', asyncHandler(async (req
   // The saved scene with the edit result beside its fields (see the scene PATCH).
   const { scene, edit } = await selectSceneTake(req.params.id, req.params.sceneId, req.params.takeId, options);
   res.json({ ...scene, edit });
+}));
+
+// Move one of the shot's unselected takes to another shot, to organize takes → { scene, target, take, edit }.
+router.post('/:id/scenes/:sceneId/takes/:takeId/move', asyncHandler(async (req, res) => {
+  const { toSceneId } = validateRequest(musicVideoTakeMoveSchema, req.body ?? {});
+  res.json(await moveSceneTake(req.params.id, req.params.sceneId, req.params.takeId, { toSceneId }));
 }));
 
 // No body: marks the shot's unselected takes rejected, keeping their files.
