@@ -1,4 +1,4 @@
-import { createContentRefusalDetector, RATE_LIMIT_SIGNATURE, USAGE_LIMIT_SIGNATURE } from '../../lib/aiToolkit/errorDetection.js';
+import { createContentRefusalDetector, RATE_LIMIT_SIGNATURE, USAGE_LIMIT_BANNER_SIGNATURE, USAGE_LIMIT_SIGNATURE } from '../../lib/aiToolkit/errorDetection.js';
 import { classifyCodexTurnError } from '../../lib/codexTurn.js';
 import { PR_COMPLETIONS, resolvePrCompletion } from '../../lib/prDisposition.js';
 import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
@@ -325,10 +325,11 @@ export const ERROR_PATTERNS = [
     // burned both foundation-judge attempts on the dead provider and reported the
     // resulting screen scrape as a placeholder rubric (2026-08-13). The banner
     // itself is caught in-stream by AGY_QUOTA_BANNER in aiToolkit/errorDetection.js.
-    // Marker = the shared vendor signature plus the two reached-banners older
-    // CLIs print (`session limit reached`, `<N>-hour limit reached`). A bare
+    // Marker = the shared vendor-BANNER half (not the bare `usage limit` that
+    // tests and docs print) plus the reached-banners older CLIs print
+    // (`usage limit reached`, `session limit reached`, `<N>-hour limit reached`). A bare
     // `hit your limit` is deliberately NOT promoted: prose reaches it.
-    structuredMarker: new RegExp(`${USAGE_LIMIT_SIGNATURE.source}|session limit reached|\\d+-hour limit reached`, 'i'),
+    structuredMarker: new RegExp(`${USAGE_LIMIT_BANNER_SIGNATURE.source}|(?:usage|session) limit reached|\\d+-hour limit reached`, 'i'),
     extract: (match, output) => {
       const timeMatch = output.match(/(?:try again in|resets?)\s+(.+?)(?:\.|·|\n|$)/im);
       const waitTime = timeMatch ? timeMatch[1].trim() : null;
