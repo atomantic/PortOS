@@ -13,7 +13,7 @@ vi.mock('../../services/apiFableLoom.js', () => ({
 }));
 vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({ providers: [] }) }));
 vi.mock('../ProviderModelSelector', () => ({ default: () => null }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import { listVideoModels } from '../../services/apiImageVideo.js';
 import { reformatLoomEpisode, updateLoom } from '../../services/apiFableLoom.js';

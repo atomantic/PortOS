@@ -29,6 +29,20 @@ export const listMusicVideoProjectSummaries = ({ cursor, limit, statusFilter, q 
   if (q) query.set('q', q);
   return request(`/music-video?${query}`, options);
 };
+/** Version picker reads only the selected lineage, including siblings outside the project picker page. */
+export async function listMusicVideoProjectVersions(rootId, options = {}) {
+  const versions = new Map();
+  const query = new URLSearchParams({ summary: '1', versionRoot: rootId, limit: '100' });
+  let cursor;
+  do {
+    if (cursor != null) query.set('cursor', cursor);
+    const page = await request(`/music-video?${query}`, options);
+    for (const version of page.items) versions.set(version.id, version);
+    if (cursor != null && page.nextCursor === cursor) throw new Error('Version list did not advance');
+    cursor = page.nextCursor;
+  } while (cursor != null);
+  return [...versions.values()];
+}
 export const getMusicVideoCatalogCompletion = (ingredientIds, options = {}) => {
   const query = new URLSearchParams(ingredientIds.map(id => ['ingredientId', id]));
   return request(`/music-video/catalog-completion?${query}`, options);
@@ -364,6 +378,9 @@ export const continueMusicVideoSceneFromPrevious = (id, sceneId, body = {}, opti
 // The shot's start frame becomes its end frame and the end frame its start, prompts included → the scene.
 export const swapMusicVideoSceneFrames = (id, sceneId, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/swap-frames`, { method: 'POST', ...options });
+// Move one of the shot's unused takes to another shot → { scene, target, take, edit }.
+export const moveMusicVideoSceneTake = (id, sceneId, takeId, toSceneId, options = {}) =>
+  request(`${takesPath(id, sceneId)}/${encodeURIComponent(takeId)}/move`, { method: 'POST', body: JSON.stringify({ toSceneId }), ...options });
 export const rejectUnusedMusicVideoSceneTakes = (id, sceneId, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/takes/reject-unused`, { method: 'POST', ...options });
 export const reviewMusicVideoSceneTake = (id, sceneId, takeId, review, options = {}) =>
@@ -663,7 +680,7 @@ export const cancelAutonomousMusicVideo = (id, options = {}) =>
 
 // ---- Pre-production treatment (#8980) ----
 // A structured brief, a compiled whole-song arc, per-shot direction keyed to the
-// board's scene ids and a proof checklist. Every write names the treatment
+// board's scene ids. Every write names the treatment
 // revision it was made against; a stale one is a 409 (`TREATMENT_REVISION_CONFLICT`).
 export const getMusicVideoProject = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}`, options);
 // Body: { baseRevision, brief?, beats?, motifs?, shotDirections?, rebase? } → { project, treatment }.
@@ -686,11 +703,6 @@ export const applyMusicVideoTreatment = (id, body, options = {}) => request(`/mu
 export const syncMusicVideoTreatmentFromShotSheet = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/treatment/sync-shot-sheet`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
-// Body: { baseRevision, status, evidence?: { videoHistoryId?, imageId?, note } } → { project, treatment }.
-export const reviewMusicVideoTreatmentProof = (id, proofId, body, options = {}) =>
-  request(`/music-video/${encodeURIComponent(id)}/treatment/proofs/${encodeURIComponent(proofId)}/review`, {
-    method: 'POST', body: JSON.stringify(body), ...options,
-  });
 
 // ---- Development artifacts ("ingredients") ----
 // Reviewable development files attached to a project: a Cast & Sets sheet, an

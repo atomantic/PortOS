@@ -35,9 +35,7 @@ vi.mock('../components/creative-director/PlanTab.jsx', () => ({ default: () => n
 vi.mock('../components/creative-director/RunsTab.jsx', () => ({ default: () => null }));
 vi.mock('../components/creative-director/ActiveAgentsBanner.jsx', () => ({ default: ({ agents }) => <div data-testid="agents">{agents.map(a => a.id).join(',')}</div> }));
 vi.mock('../components/creative-director/CreativeDirectorModelsDrawer.jsx', () => ({ default: () => null }));
-vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
-}));
+vi.mock('../components/ui/Toast');
 
 import * as cdApi from '../services/apiCreativeDirector.js';
 import { getCosAgents } from '../services/apiAgents.js';

@@ -7,6 +7,7 @@
  * transcript live and there is exactly ONE parse of the stream.
  */
 
+import { resolveSplashHarnessContext } from '../lib/splashHarnessLaunch.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
 import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
@@ -64,7 +65,7 @@ export async function runOpencodeTask({ provider, modelId, cwd, prompt, timeoutM
   const baseArgs = Array.isArray(provider.args) ? provider.args : [];
   const args = ['run', '--format', 'json', '--auto', '--dir', cwd, ...baseArgs, '--model', qualifiedModel, prompt];
   // Pins PWD to `cwd` (#3193): OpenCode resolves its project root from PWD.
-  const env = buildCliChildEnv({ provider, model: modelId, cwd, guard: true });
+  const env = buildCliChildEnv({ provider: await resolveSplashHarnessContext(provider, modelId), model: modelId, cwd, guard: true });
   // Credential-bootstrap wrap first (credentialBootstrap.js), then shim resolution.
   const bootstrapped = applyCredentialBootstrap(provider, provider.command, args);
   const spawnTarget = prepareCliSpawn(bootstrapped.command, bootstrapped.args, env);

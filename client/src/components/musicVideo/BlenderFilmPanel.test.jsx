@@ -9,7 +9,7 @@ vi.mock('../../services/socket', () => ({
     off: (event, fn) => { handlers.get(event)?.delete(fn); },
   },
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
+vi.mock('../ui/Toast');
 // The shared Blender setup reads its own API; here it only needs to be present.
 vi.mock('../codeAnimation/ProductionContainment', () => ({ default: ({ onExecutionChange }) => <div data-testid="blender-setup">Blender setup<button type="button" onClick={() => onExecutionChange({ executionMode: 'trusted-local', lanes: { blender: { ready: true } } })}>Report ready Blender</button></div> }));
 vi.mock('../../services/apiMusicVideo.js', () => ({

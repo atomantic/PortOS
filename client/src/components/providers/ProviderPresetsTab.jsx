@@ -1,5 +1,4 @@
 import { Link } from 'react-router';
-import { Cpu } from 'lucide-react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { filterSelectableModels, isApiProvider, isCodexSubscriptionProvider, isLocalEndpoint, isProcessProvider, providerTypeClass } from '../../utils/providers';
 import { formatCount } from '../../utils/formatters';
@@ -51,12 +50,6 @@ export default function ProviderPresetsTab({
   onAddSample,
   onAddAllSamples,
   showRunPanel,
-  orchestrationProfiles,
-  orchestrationProfilesState,
-  orchestrationProfilesError,
-  retryOrchestrationProfiles,
-  selectedProfileId,
-  setSelectedProfileId,
   apps,
   appsState,
   appsError,
@@ -69,6 +62,7 @@ export default function ProviderPresetsTab({
   runOutput,
   runProviderIsTui,
   onExecuteRun,
+  startingRun,
   onStopRun,
   compositionCatalog,
   onCompose,
@@ -247,22 +241,6 @@ export default function ProviderPresetsTab({
               />
             </div>
 
-            {orchestrationProfilesState === 'error' ? (
-              <ListLoadError what="orchestration profiles" error={orchestrationProfilesError} onRetry={retryOrchestrationProfiles} />
-            ) : (
-              <select
-                aria-label="Orchestration profile"
-                value={selectedProfileId}
-                onChange={(e) => setSelectedProfileId(e.target.value)}
-                className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white w-full sm:w-auto"
-              >
-                <option value="">No profile (direct)</option>
-                {orchestrationProfiles.map(p => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            )}
-
             {appsState === 'error' && (
               <ListLoadError what="workspaces" error={appsError} onRetry={retryApps} />
             )}
@@ -281,31 +259,6 @@ export default function ProviderPresetsTab({
             )}
           </div>
 
-          {(() => {
-            const selectedProf = orchestrationProfiles.find(p => p.id === selectedProfileId);
-            if (!selectedProf) return null;
-            return (
-              <div className="text-xs text-gray-300 bg-port-bg/60 border border-port-border/80 rounded-lg p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-white flex items-center gap-1.5">
-                    <Cpu className="w-3.5 h-3.5 text-port-accent" />
-                    {selectedProf.name}
-                  </span>
-                  {selectedProf.description && <span className="text-gray-400">{selectedProf.description}</span>}
-                </div>
-                <div className="flex flex-wrap gap-2 pt-1">
-                  {Object.entries(selectedProf.profile || {}).map(([role, cfg]) => (
-                    <span key={role} className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-port-card border border-port-border text-gray-200">
-                      <span className="font-semibold text-port-accent capitalize">{role}:</span>
-                      <span>{cfg?.model || cfg?.provider || 'default'}</span>
-                      {cfg?.effort && <span className="text-amber-400 text-[10px]">({cfg.effort})</span>}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            );
-          })()}
-
           <textarea
             aria-label="Prompt"
             value={runPrompt}
@@ -318,7 +271,7 @@ export default function ProviderPresetsTab({
           <div className="flex justify-between items-center">
             <button
               onClick={onExecuteRun}
-              disabled={!runPrompt.trim() || !activeProviderId || activeRun}
+              disabled={!runPrompt.trim() || !activeProviderId || activeRun || startingRun}
               className="px-6 py-2 bg-port-success hover:bg-port-success/80 text-white rounded-lg transition-colors disabled:opacity-50"
             >
               {activeRun ? 'Running...' : 'Execute'}
@@ -409,6 +362,7 @@ export default function ProviderPresetsTab({
                     <ProviderCard
                       key={provider.id}
                       provider={provider}
+                      apps={apps}
                       cardState={cardStateByProviderId[provider.id]}
                       daemonReadiness={readiness[provider.id]}
                       runtime={runtimeByProviderId[provider.id]}

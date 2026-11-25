@@ -1,3 +1,4 @@
+import { reviewButtonClass as buttonClass } from './controlClasses.js';
 import { useState } from 'react';
 import useMusicVideoProofReview from './useMusicVideoProofReview.js';
 import ProofReviewContent, { ProofRenderControls } from './ProofReviewContent.jsx';
@@ -10,7 +11,6 @@ import { ART_DIRECTION_ANCHOR, artDirectionGaps, changeRequestBlocker, openChang
 const EMPTY = { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null,
   lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [] };
 const fieldClass = 'mt-1 w-full rounded border border-port-border bg-port-bg p-2 text-sm';
-const buttonClass = 'min-h-[44px] rounded border border-port-border px-3 py-2 text-sm disabled:opacity-50';
 const approveClass = 'min-h-[44px] rounded bg-port-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50';
 const labels = { art: 'Art direction', storyboard: 'Lyric-timed storyboard', proof: 'Animated proof' };
 // The proof is an optional check (the final render doesn't wait on it), so its heading says so.

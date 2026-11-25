@@ -51,6 +51,7 @@ export const MODE_SHARED_SETTINGS_KEYS = Object.freeze([
   'topP',
   'thinking',
   'contextWindow',
+  'harnessContext',
   'textTransport',
 ]);
 
@@ -249,9 +250,8 @@ export function unifyProviderModes(data) {
  *
  * `providerModeGroups` above pairs `<stem>` with `<stem>-tui`, so this is the
  * WRITE side of the rule it reads: mint a sibling any other way and the two
- * records stop being one harness. Declared here, beside the reader, and used by
- * every minter — `expandModePair` below, `mintRouteIds` and `createBinding`
- * for connection-backed routes — so the convention has one spelling.
+ * records stop being one harness. Declared beside the reader so all writers
+ * use the same convention.
  *
  * A distinct name matters as much as a distinct id: two identically-named rows
  * in the provider list are indistinguishable.
@@ -287,6 +287,10 @@ export function modeSiblingPayload(shared, mode, overrides = {}) {
     id: modeSiblingId(stem, mode),
     name: modeSiblingName(shared.name, mode),
     type: mode,
+    // A derived preset stores its execution mode twice: the spawner reads
+    // type; the preset editor rematerializes from method. Copying the CLI's
+    // method into the TUI sibling converts it back to CLI on the next save.
+    ...(inherited.method != null && { method: mode }),
   };
 }
 

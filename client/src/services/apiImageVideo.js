@@ -7,6 +7,7 @@
  */
 
 import { uploadBody, request, API_BASE, throwApiError } from './apiCore.js';
+import { openStreamResponse, readStreamFrames } from './streamResponse.js';
 import { filterHardwareCompatibleModels } from '../utils/systemCapabilities.js';
 
 // Image gen — local backend extras (gallery, models, LoRAs, cancel, delete).
@@ -126,6 +127,17 @@ export const regenerateGalleryImage = (filename, { strength, steps, prompt, meth
     }),
     silent: true,
   });
+// What a regenerate / annotation re-render would send to the model, built by the server's own route code
+// (#18642): the typed prompt plus the source image's carried negative prompt. Same body as the regenerate POST.
+export const previewRegenerate = (filename, { prompt, annotated } = {}, options = {}) =>
+  request(`/image-gen/${encodeURIComponent(filename)}/regenerate/preview`, {
+    method: 'POST',
+    body: JSON.stringify({
+      ...(prompt != null ? { prompt } : {}),
+      ...(annotated ? { annotated: true } : {}),
+    }),
+    ...options,
+  });
 // Whether the local FLUX regen backend is installed (hardware gate). Also carries
 // the strength slider bounds: `{ available, modelId, reason, strengthMin, strengthMax, strengthDefault }`.
 // Pass a source `filename` (issue #2036) to get the EXACT model a regen of that
@@ -210,7 +222,8 @@ export async function createImageGenVenv() {
 }
 
 // Video gen
-export const getVideoGenStatus = (options = {}) => request('/video-gen/status', options)
+// `fresh` drops the server's 30s interpreter-health memo before probing (manual Refresh, install completion).
+export const getVideoGenStatus = ({ fresh, ...options } = {}) => request(`/video-gen/status${fresh ? '?fresh=true' : ''}`, options)
   .then((status) => ({
     ...status,
     models: filterHardwareCompatibleModels(status?.models),
@@ -621,59 +634,31 @@ export const previewLoraInstall = ({ url, source = 'civitai', family, file, sile
 // `onProgress({ received, total, progress })` fires per throttled download tick
 // — `progress` is 0..1, or null when the server had no Content-Length to divide.
 //
-// Uses fetch() + a stream reader rather than EventSource, mirroring
-// streamLocalLlmTest: (1) a POST (not an EventSource GET) — this install mutates
-// state, and a state-changing GET would be CSRF-reachable via a top-level
-// cross-origin navigation; (2) EventSource auto-reconnects on any transport
-// drop, which for this NON-idempotent install would silently start a second
-// multi-GB download — a single fetch never retries; (3) it honors session expiry
-// — a 401 AUTH_REQUIRED bounces to /login via throwApiError exactly like
-// request(), instead of dead-ending on a generic stream error. Frames are
-// SSE-encoded (`data: {json}\n\n`).
+// Use a single POST: installing changes state and EventSource would replay the
+// non-idempotent request after a disconnect, starting a second download.
 export async function installLoraFromHuggingfaceStream({ url, family, file, onProgress, signal } = {}) {
-  const response = await fetch(`${API_BASE}/loras/install/huggingface/stream`, {
+  const response = await openStreamResponse(fetch(`${API_BASE}/loras/install/huggingface/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url, ...(family ? { family } : {}), ...(file ? { file } : {}) }),
     signal,
-  });
-  if (!response.ok || !response.body?.getReader) {
-    await throwApiError(response);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+  }));
   let sidecar;
   let streamError = null;
 
-  const consume = (line) => {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith('data:')) return; // skip SSE blank separators / comments
-    let frame;
-    try { frame = JSON.parse(trimmed.slice(5).trim()); } catch { return; }
-    if (frame.type === 'progress') onProgress?.(frame);
-    else if (frame.type === 'complete') sidecar = frame.sidecar;
-    else if (frame.type === 'error') {
-      streamError = new Error(frame.message || 'HuggingFace install failed');
-      streamError.code = frame.code || null;
-    }
-  };
-
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-      for (const line of lines) consume(line);
-    }
-    if (buffer.trim()) consume(buffer);
-  } finally {
-    await reader.cancel().catch(() => {});
-  }
-
+  await readStreamFrames(response, {
+    format: 'sse',
+    onFrame: ({ data }) => {
+      let frame;
+      try { frame = JSON.parse(data); } catch { return; }
+      if (frame.type === 'progress') onProgress?.(frame);
+      else if (frame.type === 'complete') sidecar = frame.sidecar;
+      else if (frame.type === 'error') {
+        streamError = new Error(frame.message || 'HuggingFace install failed');
+        streamError.code = frame.code || null;
+      }
+    },
+  });
   // An `error` frame is the server's terminal failure signal — surface it (with
   // its code) over a truncation error.
   if (streamError) throw streamError;

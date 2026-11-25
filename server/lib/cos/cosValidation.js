@@ -16,7 +16,7 @@ import { MIN_INTERVAL_MS, MAX_INTERVAL_MS, isValidLoopInterval } from '../loopIn
 import { EFFORT_LEVELS } from '../provider/providerModels.js';
 import { PR_COMPLETION_VALUES, PR_REVIEW_MODE_VALUES } from '../prDisposition.js';
 import { ORCHESTRATION_MODES, ORCHESTRATION_ROLES } from '../orchestrationProfile.js';
-import { AGENT_RUN_EVENT_KINDS, RUN_EVENT_READ_LIMITS } from '../agent/agentRunEvents.js';
+import { RUN_EVENT_READ_LIMITS } from '../agent/agentRunEvents.js';
 import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from '../taskParser.js';
 import { recurrenceRuleSchema } from '../recurrenceValidation.js';
 import { AUDIT_EXECUTION_TASK_TYPES, DEPFREE_MODES } from '../auditCatalog.js';
@@ -188,8 +188,6 @@ const taskStatusInputSchema = z.preprocess(
 // Query schemas for the CoS insight/learning/workflow reads. Counts stay strings: each handler
 // clamps or defaults them itself, so a bad number degrades exactly as before; unknown keys are stripped.
 export const cosActivityCalendarQuerySchema = z.object({ weeks: z.string().optional() });
-export const cosDecisionsQuerySchema = z.object({ limit: z.string().optional(), type: z.string().optional() });
-export const cosDigestCompareQuerySchema = z.object({ week1: z.string().optional(), week2: z.string().optional() });
 export const cosWorkflowQuerySchema = z.object({ hours: z.string().optional() });
 
 export const cosTaskDeleteQuerySchema = z.object({ type: cosTaskTypeSchema.default('user') });
@@ -667,21 +665,6 @@ export const createTaskTemplateSchema = z.object({
 // PUT accepts any subset — the route only forwards the keys actually present.
 export const updateTaskTemplateSchema = createTaskTemplateSchema.partial();
 
-// POST /templates/from-task snapshots a live task into a user template. Only the
-// fields createTemplateFromTask actually reads are accepted.
-export const taskTemplateFromTaskSchema = z.object({
-  task: z.object({
-    description: z.string().min(1).max(4000),
-    context: z.string().max(4000).optional(),
-    provider: providerRefFieldSchema.optional(),
-    model: z.string().max(200).optional(),
-    effort: z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).optional()),
-    executionOptions: executionOptionsSchema.optional(),
-    app: z.string().max(200).optional(),
-  }),
-  templateName: z.string().trim().min(1).max(120).optional(),
-});
-
 // CLI outcome reports carry only a bounded projection, never raw output or
 // provider headers. A successful process exit alone is not a review verdict.
 const cliReviewerIdentitySchema = z.string().max(40).refine(value => isReviewer(value) && isCliReviewer(value));
@@ -929,15 +912,6 @@ export const relaunchCosAgentSchema = resumeCosAgentSchema
 // strings; the `limit` ceiling IS the ledger's own `RUN_EVENT_READ_LIMITS.max`
 // (imported, not copied — a literal here would drift into 400-ing requests the
 // service would happily serve, or clamping ones it would refuse).
-export const runEventsQuerySchema = z.object({
-  runId: z.string().min(1).max(128).optional(),
-  agentId: z.string().min(1).max(128).optional(),
-  taskId: z.string().min(1).max(128).optional(),
-  kind: z.enum(AGENT_RUN_EVENT_KINDS).optional(),
-  since: z.string().datetime().optional(),
-  limit: z.coerce.number().int().min(1).max(RUN_EVENT_READ_LIMITS.max).optional()
-}).strict();
-
 export const runEventProjectionsQuerySchema = z.object({
   runId: z.string().min(1).max(128).optional(),
   agentId: z.string().min(1).max(128).optional(),
@@ -993,6 +967,20 @@ export const cosAgentFeedbackBodySchema = z.object({
   comment: nullishString,
 });
 export const cosAgentBtwBodySchema = z.object({ message: z.string().trim().min(1).max(5000) });
+
+const claimBranchSchema = z.string().min(1).max(200);
+export const claimOwnershipSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('bind'), agentId: z.string().min(1).max(200), branch: claimBranchSchema }),
+  z.object({ action: z.literal('release'), agentId: z.string().min(1).max(200), branch: claimBranchSchema, handoff: z.literal(true).optional() }),
+  z.object({
+    action: z.literal('check'),
+    appId: z.string().min(1).max(200),
+    branch: claimBranchSchema,
+    worktreePath: z.string().min(1).max(4096).optional(),
+    agentId: z.string().min(1).max(200).optional(),
+  }),
+]);
+
 export const cosTaskReorderBodySchema = z.object({ taskIds: z.array(nonEmptyString) });
 export const cosTaskSpawnBodySchema = z.object({ resetSpawnBudget: z.boolean().default(false) }).strict();
 export const cosScheduleTriggerBodySchema = z.object({

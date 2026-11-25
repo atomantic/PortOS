@@ -1,5 +1,6 @@
 import { notifyProviderQuotaUpdated } from './providerQuotaEvents.js';
 import { isProcessProvider } from '../../lib/provider/providerTypes.js';
+import { hasLocalRuntimeMarker } from '../../lib/aiToolkit/internal/localRuntimeMarkers.js';
 import { readdir } from 'fs/promises';
 import { join } from 'path';
 import { getAllProviders } from './providers.js';
@@ -953,7 +954,7 @@ export async function getProviderQuotas({ wait = WAIT.CACHED, family = null, per
 async function readProviderQuotas({ wait, family, period }) {
   const result = await getAllProviders();
   const providers = Array.isArray(result) ? result : (result?.providers || []);
-  const enabled = providers.filter((p) => p?.enabled && p.ollamaBacked !== true && p.lmstudioBacked !== true && p.mtplxBacked !== true && p.llamaBacked !== true && p.vllmBacked !== true && p.sglangBacked !== true);
+  const enabled = providers.filter((p) => p?.enabled && !hasLocalRuntimeMarker(p));
   const families = resolveEnabledFamilies(providers).filter((f) => !family || f.id === family);
   const familyCards = await Promise.all(families.map((f) =>
     fetchFamilyQuota(f, { wait, providers: enabled.filter((p) => f.matches(p)) })));

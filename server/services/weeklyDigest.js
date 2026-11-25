@@ -31,6 +31,17 @@ const DIGESTS_DIR = PATHS.digests;
 const agentsCompletedInWeek = (agents, weekId) => agents.filter(a =>
   a.completedAt && !isAgentHandoff(a) && getWeekId(new Date(a.completedAt)) === weekId);
 
+// Live state keeps a completed agent for about a day, so the rest of the week
+// comes from the date archive. Only dates inside the week are read.
+async function loadWeekAgents(weekId, stateAgents) {
+  const weekDates = (await getAgentDates())
+    .map(d => d.date)
+    .filter(d => getWeekId(new Date(d + 'T12:00:00')) === weekId);
+  const archived = (await Promise.all(weekDates.map(d => getAgentsByDate(d)))).flat();
+  const archivedIds = new Set(archived.map(a => a.id));
+  return agentsCompletedInWeek([...archived, ...stateAgents.filter(a => !archivedIds.has(a.id))], weekId);
+}
+
 /**
  * Get the start of a week (Monday) for a given date
  */
@@ -97,19 +108,7 @@ export async function generateWeeklyDigest(weekId = null) {
 
   emitLog('info', `Generating weekly digest for ${targetWeekId}`, { weekId: targetWeekId }, '📊 WeeklyDigest');
 
-  // Load only agents from dates in this week (not all agents)
-  const dates = await getAgentDates();
-  const weekDates = dates
-    .map(d => d.date)
-    .filter(d => getWeekId(new Date(d + 'T12:00:00')) === targetWeekId);
-  const flatDateAgents = (await Promise.all(weekDates.map(d => getAgentsByDate(d)))).flat();
-  const dateAgentIds = new Set(flatDateAgents.map(a => a.id));
-  // Also include state agents not yet in the date index (avoid double-counting)
-  const stateAgents = await getAgents();
-  const dedupedStateAgents = stateAgents.filter(a => !dateAgentIds.has(a.id));
-  const allAgents = [...flatDateAgents, ...dedupedStateAgents];
-
-  const weekAgents = agentsCompletedInWeek(allAgents, targetWeekId);
+  const weekAgents = await loadWeekAgents(targetWeekId, await getAgents());
 
   // Calculate basic stats
   const totalTasks = weekAgents.length;
@@ -398,28 +397,6 @@ export async function listWeeklyDigests() {
 }
 
 /**
- * Get comparative stats between two weeks
- */
-export async function compareWeeks(weekId1, weekId2) {
-  const digest1 = await loadDigest(weekId1);
-  const digest2 = await loadDigest(weekId2);
-
-  if (!digest1 || !digest2) {
-    return null;
-  }
-
-  return {
-    week1: { weekId: weekId1, ...digest1.summary },
-    week2: { weekId: weekId2, ...digest2.summary },
-    comparison: {
-      tasksChange: percentChange(digest1.summary.totalTasks, digest2.summary.totalTasks),
-      successRateChange: digest1.summary.successRate - digest2.summary.successRate,
-      workTimeChange: percentChange(digest1.summary.totalWorkTimeMs, digest2.summary.totalWorkTimeMs)
-    }
-  };
-}
-
-/**
  * Get current week progress (partial digest for in-progress week)
  */
 export async function getCurrentWeekProgress() {
@@ -427,10 +404,8 @@ export async function getCurrentWeekProgress() {
   const weekStart = getWeekStart();
   weekStart.setHours(0, 0, 0, 0);
 
-  // Get all agents
   const agents = await getAgents();
-
-  const weekAgents = agentsCompletedInWeek(agents, weekId);
+  const weekAgents = await loadWeekAgents(weekId, agents);
 
   // Currently running agents
   const runningAgents = agents.filter(a => a.status === 'running');
@@ -491,50 +466,4 @@ export async function getCurrentWeekProgress() {
         completedAt: a.completedAt
       }))
   };
-}
-
-/**
- * Generate a text summary suitable for notifications or logging
- */
-export async function generateTextSummary(weekId = null) {
-  const digest = await getWeeklyDigest(weekId);
-  if (!digest) return null;
-
-  const lines = [
-    `Weekly Digest: ${digest.weekId}`,
-    `=====================================`,
-    ``,
-    `Summary:`,
-    `  - Tasks Completed: ${digest.summary.totalTasks}`,
-    `  - Success Rate: ${digest.summary.successRate}%`,
-    `  - Total Work Time: ${digest.summary.totalWorkTime}`,
-    ``
-  ];
-
-  if (digest.weekOverWeek.tasksChange !== null) {
-    lines.push(`Week-over-Week:`);
-    lines.push(`  - Tasks: ${digest.weekOverWeek.tasksChange > 0 ? '+' : ''}${digest.weekOverWeek.tasksChange}%`);
-    if (digest.weekOverWeek.successRateChange !== null) {
-      lines.push(`  - Success Rate: ${digest.weekOverWeek.successRateChange > 0 ? '+' : ''}${digest.weekOverWeek.successRateChange} pts`);
-    }
-    lines.push(``);
-  }
-
-  if (digest.accomplishments.length > 0) {
-    lines.push(`Top Accomplishments:`);
-    for (const acc of digest.accomplishments.slice(0, 5)) {
-      lines.push(`  - ${acc.description}`);
-    }
-    lines.push(``);
-  }
-
-  if (digest.insights.length > 0) {
-    lines.push(`Insights:`);
-    for (const insight of digest.insights) {
-      const icon = insight.type === 'success' ? '+' : insight.type === 'warning' ? '!' : '-';
-      lines.push(`  [${icon}] ${insight.title}: ${insight.message}`);
-    }
-  }
-
-  return lines.join('\n');
 }

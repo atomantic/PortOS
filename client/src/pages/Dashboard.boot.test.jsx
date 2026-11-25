@@ -88,4 +88,60 @@ describe('Dashboard first paint', () => {
     expect(JSON.parse(localStorage.getItem(LAYOUT_CACHE_KEY))).toEqual({ layouts: [LAYOUT], activeLayoutId: 'mine' });
     expect(screen.getByTitle('Reorder, move and resize widgets')).toBeInTheDocument();
   });
+
+  describe('apps read states', () => {
+    const APPS_LAYOUT = { id: 'mine', name: 'Mine', widgets: ['apps', 'quick-stats'], grid: [] };
+    const app = { id: 'a1', name: 'Alpha', overallStatus: 'online', archived: false };
+    beforeEach(() => {
+      api.getDashboardLayouts.mockResolvedValue({ layouts: [APPS_LAYOUT], activeLayoutId: 'mine' });
+    });
+
+    it('offers Retry on a failed first read, never the empty CTA or zero counts, and recovers on retry', async () => {
+      api.getApps.mockRejectedValueOnce(new Error('503 down')).mockResolvedValueOnce([app]);
+      renderPage();
+
+      const retries = await screen.findAllByRole('button', { name: 'Retry' });
+      expect(retries.length).toBe(2);
+      expect(screen.queryByText('No apps registered')).not.toBeInTheDocument();
+      expect(screen.queryByText('Add App')).not.toBeInTheDocument();
+      expect(screen.queryByText('Total Apps')).not.toBeInTheDocument();
+      expect(screen.getAllByText('503 down')).toHaveLength(2);
+
+      const callsBefore = api.getSystemHealth.mock.calls.length;
+      await act(async () => retries[0].click());
+      expect(await screen.findByText('Alpha')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+      expect(api.getApps).toHaveBeenCalledTimes(2);
+      expect(api.getSystemHealth).toHaveBeenCalledTimes(callsBefore);
+    });
+
+    it('renders app tiles and counts from the base apps request, without the quality audit', async () => {
+      api.getApps.mockResolvedValue([app]);
+      renderPage();
+      expect(await screen.findByText('Alpha')).toBeInTheDocument();
+      expect(screen.getByText('Total Apps')).toBeInTheDocument();
+      expect(api.getApps).toHaveBeenCalledWith();
+    });
+
+    it('still shows the first-app action for a genuinely empty result', async () => {
+      api.getApps.mockResolvedValue([]);
+      renderPage();
+      expect(await screen.findByText('No apps registered')).toBeInTheDocument();
+      expect(screen.getByText('Add App')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    });
+
+    it('keeps loaded apps and offers one Retry when a later refresh fails', async () => {
+      const { default: socket } = await import('../services/socket');
+      api.getApps.mockResolvedValueOnce([app]).mockRejectedValueOnce(new Error('refresh failed'));
+      renderPage();
+      expect(await screen.findByText('Alpha')).toBeInTheDocument();
+
+      await act(async () => { socket.emit('apps:changed'); });
+      expect(await screen.findByText('refresh failed')).toBeInTheDocument();
+      expect(screen.getByText('Alpha')).toBeInTheDocument();
+      expect(screen.getByText('Total Apps')).toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(1);
+    });
+  });
 });

@@ -126,3 +126,18 @@ it('labels a sequence take with its place in the run and this shot\'s in-point',
   expect(label.textContent).toBe('One take · 2/3 · in 2.21s');
   expect(label.getAttribute('title')).toBe('One take across Diner wide, Booth, Exit. This shot plays from 2.21s, at its detected cut; nudge its Offset to move the window.');
 });
+
+// Uniquely catches Move offered on the take the shot is using, the picker listing this shot, or the pick not reaching its handler.
+it('moves an unused take (a rejected one included) to another shot picked by number', () => {
+  const onMove = vi.fn();
+  const project = { id: 'mv-example', scenes: [scene, { sceneId: 's3', order: 2, label: 'Waves' }, { sceneId: 's2', order: 1 }] };
+  render(<SceneTakeStrip scene={scene} project={project} kind="image" onMove={onMove} />);
+  const moves = screen.getAllByRole('button', { name: 'Move' });
+  expect(moves).toHaveLength(1);
+  fireEvent.click(moves[0]);
+  const picker = screen.getByLabelText('Move take to shot');
+  expect([...picker.options].map((option) => option.textContent)).toEqual(['Move to shot…', 'Shot 2', 'Shot 3 · Waves']);
+  fireEvent.change(picker, { target: { value: 's3' } });
+  expect(onMove).toHaveBeenCalledWith(scene.takes[1], 's3');
+  expect(screen.queryByLabelText('Move take to shot')).toBeNull();
+});

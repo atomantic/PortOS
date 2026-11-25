@@ -17,9 +17,7 @@ vi.mock('../../services/apiWritersRoom', () => ({
   deleteWritersRoomCharacter: vi.fn(),
 }));
 
-vi.mock('../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 import ObjectsBible from './ObjectsBible';
 import PlacesBible from './PlacesBible';

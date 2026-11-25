@@ -208,6 +208,81 @@ it('checks the duration the backend actually consumes and rejects batch expansio
   expect(enqueueUnattendedMediaJob).not.toHaveBeenCalled();
 });
 
+// #18680: a Gemini job carries no frames, fps or duration, so reading frames over fps refused
+// every clip of the run as out of bounds. It always renders its fixed length.
+it('admits a Gemini clip on its fixed clip length', async () => {
+  state.project.renderBackend = { video: { mode: 'gemini' } };
+  state.settings = {};
+  await startVideoExecution('example-video', await startInput());
+  const queued = await enqueueVideoProductionJob(state.project, { sceneId: 'opening', workRevision: 0,
+    params: { mode: 'gemini', videoMode: 'text', prompt: 'Example landscape' } });
+  expect(queued).toMatchObject({ jobId: 'example-job-1' });
+  expect(enqueueUnattendedMediaJob).toHaveBeenCalledWith(expect.objectContaining({ kind: 'video', params: expect.objectContaining({ mode: 'gemini' }) }));
+});
+
+it.each([
+  ['runway', null, 7.2, 'gen4.5', 8],
+  ['higgsfield', null, 6.2, 'bytedance/seedance-2.5', 7],
+  ['google', 'veo-3.0-fast-generate-001', 7, 'veo-3.0-fast-generate-001', 8],
+  ['fal', null, 7, 'fal-ai/minimax/hailuo-02/standard/text-to-video', 10],
+])('queues a %s clip at a catalog length that covers the saved shot', async (mode, modelId, duration, resolvedId, renderedSeconds) => {
+  state.project.renderBackend = { video: { mode, modelId } };
+  state.project.treatment.scenes[0].durationSeconds = duration;
+  state.settings.videoGen[mode] = { apiKey: 'example-key' };
+  await startVideoExecution('example-video', await startInput());
+
+  const queued = await enqueueVideoProductionJob(state.project, { sceneId: 'opening', workRevision: 0,
+    params: { mode, modelId, videoMode: 'text', duration, prompt: 'Example landscape' } });
+  expect(queued).toMatchObject({ jobId: 'example-job-1' });
+  expect(enqueueUnattendedMediaJob).toHaveBeenCalledWith(expect.objectContaining({
+    params: expect.objectContaining({ mode, modelId: resolvedId, duration: renderedSeconds }),
+  }));
+});
+
+it.each([
+  ['google', null, 10, 10, '4, 6, 8'],
+  ['runway', 'veo3.1', 10, 10, '4, 6, 8'],
+  ['fal', 'fal-ai/veo3.1/fast/image-to-video', 10, 10, '4, 6, 8'],
+  ['higgsfield', null, 8, 6, '4, 5, 6, 7, 8, 9, 10'],
+])('refuses a %s render that would leave the saved shot short before reserving an attempt', async (mode, modelId, shotSeconds, duration, lengths) => {
+  state.project.renderBackend = { video: { mode, modelId } };
+  state.project.treatment.scenes[0].durationSeconds = shotSeconds;
+  state.settings.videoGen[mode] = { apiKey: 'example-key' };
+  await startVideoExecution('example-video', await startInput());
+
+  await expect(enqueueVideoProductionJob(state.project, { sceneId: 'opening', workRevision: 0,
+    params: { mode, modelId, duration, prompt: 'Example landscape' } })).rejects.toMatchObject({
+    code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED', message: expect.stringContaining(`renders ${lengths} seconds`),
+  });
+  expect(state.project.videoExecution.attempts).toHaveLength(0);
+  expect(enqueueUnattendedMediaJob).not.toHaveBeenCalled();
+});
+
+it('checks coverage against the saved plan step before reserving a hosted clip', async () => {
+  state.project.renderBackend = { video: { mode: 'google' } };
+  state.settings.videoGen.google = { apiKey: 'example-key' };
+  state.project.plan = { steps: [{ stepId: 'opening', args: { params: { durationSeconds: 8 } } }] };
+  await startVideoExecution('example-video', await startInput());
+
+  await expect(enqueueVideoProductionJob(state.project, { stepId: 'opening',
+    params: { mode: 'google', duration: 6, durationSeconds: 6, prompt: 'Example landscape' } }))
+    .rejects.toMatchObject({ code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED' });
+  expect(state.project.videoExecution.attempts).toHaveLength(0);
+  expect(enqueueUnattendedMediaJob).not.toHaveBeenCalled();
+});
+
+it('blocks Start for a Gemini production on a canvas Gemini does not render', async () => {
+  state.project.renderBackend = { video: { mode: 'gemini' } };
+  state.settings = {};
+  expect(await getVideoExecutionPreview('example-video')).toMatchObject({ canStart: true, blockers: [], choices: { video: { mode: 'gemini' } } });
+  state.project.aspectRatio = '1:1';
+  const preview = await getVideoExecutionPreview('example-video');
+  expect(preview.canStart).toBe(false);
+  expect(preview.blockers).toEqual([expect.stringContaining('Gemini renders 16:9 or 9:16 only')]);
+  await expect(startVideoExecution('example-video', { configurationRevision: preview.configurationRevision, limits: {} }))
+    .rejects.toMatchObject({ code: 'VIDEO_START_BLOCKED' });
+});
+
 it('generates one explicitly selected soundtrack, retains its Track, and reuses it within audio job limits', async () => {
   const { prepareVideoSoundtrack } = await import('./videoAudio.js');
   const { enqueueJob } = await import('../mediaJobQueue/index.js');

@@ -664,6 +664,29 @@ describe('music routes', () => {
     expect(setup.spawn).toHaveBeenCalledTimes(1);
   });
 
+  it('POST /setup/runtime-install does not start an install whose client left during the probe', async () => {
+    let finishProbe;
+    cuda.probe = () => new Promise((resolve) => { finishProbe = resolve; });
+    gen.healthy = false;
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise((resolve) => server.once('listening', resolve));
+    const client = new AbortController();
+    const closed = new Promise((resolve) => server.on('connection', (socket) => socket.once('close', resolve)));
+    const url = `http://127.0.0.1:${server.address().port}/api/music/setup/runtime-install?runtime=test-cuda`;
+    const left = fetch(url, { method: 'POST', signal: client.signal }).then((response) => response.text()).catch((error) => error);
+    await vi.waitFor(() => expect(finishProbe).toEqual(expect.any(Function)));
+    client.abort();
+    await Promise.all([left, closed]);
+    finishProbe({ status: 'available', gpus: [], maxVramGb: 40, error: null });
+    cuda.probe = null;
+    // The claim is released, so the retry is the first and only install.
+    await vi.waitFor(async () => {
+      expect((await request(app).post('/api/music/setup/runtime-install?runtime=test-cuda')).text).toContain('Starting Test CUDA install.');
+    });
+    expect(setup.spawn).toHaveBeenCalledTimes(1);
+    await new Promise((resolve) => server.close(resolve));
+  });
+
   it('POST /setup/runtime-install releases its CUDA claim when the probe rejects', async () => {
     cuda.probe = vi.fn().mockRejectedValueOnce(new Error('CUDA probe failed'));
     gen.healthy = false;
@@ -687,13 +710,6 @@ describe('music routes', () => {
     expect(musicgen.platformSupported).toBe(false);
     expect(musicgen.platformLabel).toContain('Apple Silicon');
     expect(r.body.engines.find((e) => e.id === 'acestep').platformSupported).toBe(true);
-  });
-
-  it('GET /models/:engine returns the merged model list; 404s for an unknown engine', async () => {
-    const r = await request(app).get('/api/music/models/acestep');
-    expect(r.status).toBe(200);
-    expect(r.body.models).toEqual([{ id: 'm', name: 'M', userAdded: false }]);
-    expect((await request(app).get('/api/music/models/nope')).status).toBe(404);
   });
 
   it('POST /models registers the model then streams the download (SSE)', async () => {
@@ -1280,20 +1296,6 @@ describe('music routes', () => {
 
   describe("engine names are checked against the engine table own keys", () => {
     const PROTO_KEYS = ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"];
-
-    it("GET /models/:engine lists a real engine and 404s unknown and prototype names", async () => {
-      models.list.mockResolvedValue([{ id: "m" }]);
-      const ok = await request(app).get("/api/music/models/musicgen");
-      expect(ok.status).toBe(200);
-      expect(models.list).toHaveBeenCalledWith("musicgen");
-      models.list.mockClear();
-      for (const name of ["nope", ...PROTO_KEYS]) {
-        const r = await request(app).get(`/api/music/models/${name}`);
-        expect(r.status, name).toBe(404);
-        expect(r.body.code, name).toBe("AUDIO_MODEL_UNKNOWN_ENGINE");
-      }
-      expect(models.list).not.toHaveBeenCalled();
-    });
 
     it("POST /models rejects unknown and prototype engine names with 400 before touching the registry", async () => {
       for (const engine of ["nope", ...PROTO_KEYS]) {

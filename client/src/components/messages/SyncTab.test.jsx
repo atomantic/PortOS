@@ -253,8 +253,8 @@ describe('Messages sync live progress', () => {
 describe('SyncTab token debug', () => {
   const statuses = {
     providers: [
-      { provider: 'outlook', hasToken: true, expiresAt: '2026-11-21T12:00:00.000Z' },
-      { provider: 'teams', hasToken: false },
+      { provider: 'outlook', cached: true, valid: true, expires: '2026-11-21T12:00:00.000Z' },
+      { provider: 'teams', cached: false },
     ],
   };
 
@@ -268,6 +268,17 @@ describe('SyncTab token debug', () => {
     expect(screen.getByRole('button', { name: 'Test teams token' })).toBeTruthy();
     // Only providers holding a token offer Clear
     expect(screen.getAllByRole('button', { name: /^Clear .* token$/ })).toHaveLength(1);
+  });
+
+  it('offers Clear for an expired token with unknown expiry', async () => {
+    api.getMessageTokenStatus.mockResolvedValue({
+      providers: [{ provider: 'teams', cached: true, valid: false, expires: 'unknown' }],
+    });
+    renderTab();
+
+    expect(await screen.findByText('Token expired')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Clear teams token' })).toBeTruthy();
+    expect(screen.queryByText(/Expires:/)).toBeNull();
   });
 
   it('tests a token and refreshes status', async () => {
@@ -293,4 +304,18 @@ describe('SyncTab token debug', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('outlook token cleared'));
     expect(api.getMessageTokenStatus).toHaveBeenCalledTimes(2);
   });
+});
+
+it('only shows the empty account copy after a successful empty read', async () => {
+  const onRefresh = vi.fn();
+  const { rerender } = render(<SyncTab accounts={[]} accountsUnavailable onRefresh={onRefresh} />);
+  await act(async () => {});
+  expect(screen.queryByText(/No accounts configured/)).not.toBeInTheDocument();
+
+  rerender(<SyncTab accounts={[]} onRefresh={onRefresh} />);
+  expect(screen.getByText(/No accounts configured/)).toBeInTheDocument();
+
+  rerender(<SyncTab accounts={[{ id: 'example', name: 'Example account' }]} onRefresh={onRefresh} />);
+  expect(screen.getByText('Example account')).toBeInTheDocument();
+  expect(screen.queryByText(/No accounts configured/)).not.toBeInTheDocument();
 });

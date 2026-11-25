@@ -9,12 +9,7 @@ vi.mock('../../services/apiSystem.js', () => ({
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), {
-    success: vi.fn(),
-    error: vi.fn(),
-  }),
-}));
+vi.mock('../ui/Toast');
 vi.mock('../ThemePickerPanel', () => ({
   default: () => <div>Theme picker</div>,
 }));

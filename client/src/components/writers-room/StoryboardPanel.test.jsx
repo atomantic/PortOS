@@ -2,9 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
-}));
+vi.mock('../ui/Toast');
 vi.mock('../Drawer', () => ({ default: () => null }));
 vi.mock('../settings/ImageGenTab', () => ({ ImageGenTab: () => null }));
 vi.mock('./StoryboardBibleTab', () => ({ default: () => null }));

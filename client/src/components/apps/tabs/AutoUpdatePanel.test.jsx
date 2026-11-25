@@ -8,7 +8,7 @@ vi.mock('../../../services/apiSystem.js', () => ({
   patchSettingsSlice: mockPatch,
   getAutoUpdateStatus: mockGetStatus,
 }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 const handlers = new Map();
 vi.mock('../../../services/socket', () => ({
   default: {

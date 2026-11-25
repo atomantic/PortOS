@@ -14,7 +14,7 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
   stopMusicVideoProduction: vi.fn(),
   cancelMusicVideoProduction: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 vi.mock('../../hooks/useProviderModels.js', () => ({
   default: () => ({
     providers: [], selectedProviderId: '', selectedModel: '', availableModels: [],

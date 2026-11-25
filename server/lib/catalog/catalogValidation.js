@@ -156,8 +156,6 @@ export const catalogScrapCreateSchema = z.object({
   metadata: payload,
 }).strict();
 
-export const catalogScrapPatchSchema = catalogScrapCreateSchema.partial();
-
 // --- Source-kind ingest routes (url / file / voice) ---------------------
 // Each ingest route creates a scrap with the matching `sourceKind`, then runs
 // the same extraction pipeline the paste→extract→commit flow uses, so the

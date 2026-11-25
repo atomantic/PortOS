@@ -1,3 +1,5 @@
+import useListResource from '../hooks/useListResource';
+import ListLoadError from '../components/ui/ListLoadError';
 import { useEffect, useRef, useState, useCallback, memo } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { Send, Loader2, MessageCircle, Trash2, Pin, Brain, Calendar, Target, BookOpen, FileText, ExternalLink, ListTodo, CheckCircle2 } from 'lucide-react';
@@ -60,7 +62,9 @@ function SourceChip({ source, index }) {
   );
 }
 
-function Sidebar({ conversations, activeId, onPick, onNew, isConfirmingDelete, onRequestDelete, onConfirmDelete, onCancelDelete, loading, streaming }) {
+const fetchConversations = async () => (await listAskConversations({ silent: true })).conversations;
+
+function Sidebar({ conversations, activeId, onPick, onNew, isConfirmingDelete, onRequestDelete, onConfirmDelete, onCancelDelete, listState, listError, onRetry, streaming }) {
   return (
     <aside className="w-full shrink-0 max-h-[25%] overflow-y-auto md:w-64 md:max-h-none border-r border-port-border bg-port-card md:h-full">
       <div className="p-3 border-b border-port-border flex items-center gap-2">
@@ -73,8 +77,9 @@ function Sidebar({ conversations, activeId, onPick, onNew, isConfirmingDelete, o
         </button>
       </div>
       <div className="py-1">
-        {loading && <div className="p-3 text-xs"><BrailleSpinner text="Loading…" /></div>}
-        {!loading && conversations.length === 0 && (
+        {listState === 'error' && <ListLoadError what="conversations" error={listError} onRetry={onRetry} className="m-2" />}
+        {listState === 'loading' && <div className="p-3 text-xs"><BrailleSpinner text="Loading…" /></div>}
+        {listState === 'ready' && conversations.length === 0 && (
           <div className="p-3 text-xs text-gray-500">No conversations yet. Ask yourself something.</div>
         )}
         {conversations.map((c) => {
@@ -301,8 +306,9 @@ export default function Ask() {
   const { conversationId } = useParams();
   const navigate = useNavigate();
 
-  const [conversations, setConversations] = useState([]);
-  const [loadingList, setLoadingList] = useState(true);
+  const {
+    items: conversations, state: listState, error: listError, retry: refreshList, setItems: setConversations,
+  } = useListResource(fetchConversations, { retainOnRetry: true });
   const [activeConv, setActiveConv] = useState(null);
   const [loadingConv, setLoadingConv] = useState(false);
   const [goals, setGoals] = useState([]);
@@ -320,15 +326,6 @@ export default function Ask() {
   const streamingConvIdRef = useRef(null);
   const scrollRef = useRef(null);
   const streaming = streamingTurn !== null;
-
-  const refreshList = useCallback(async () => {
-    setLoadingList(true);
-    const data = await listAskConversations().catch(() => null);
-    setLoadingList(false);
-    if (data?.conversations) setConversations(data.conversations);
-  }, []);
-
-  useEffect(() => { refreshList(); }, [refreshList]);
 
   // Goals load lazily and only need a flat list for the picker dropdown — no
   // need to refetch on every conversation change. A failure leaves the
@@ -656,7 +653,9 @@ export default function Ask() {
         onRequestDelete={handleRequestDelete}
         onConfirmDelete={handleDelete}
         onCancelDelete={cancelDelete}
-        loading={loadingList}
+        listState={listState}
+        listError={listError}
+        onRetry={refreshList}
         streaming={streaming}
       />
 

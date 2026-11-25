@@ -247,6 +247,37 @@ describe('publishing kit build (#9281)', () => {
     }
   });
 
+  it('waits out a backup cut longer than the default wait before saving a finished kit build (#18718)', async () => {
+    const { acquireBackupSnapshotCut, _backupSnapshotWaitersForTests } = await import('../../lib/backupSnapshotBoundary.js');
+    const { id } = await projects.createProject({ name: 'Example Backup Wait' });
+    await mkdir(PATHS.videos, { recursive: true });
+    await writeFile(join(PATHS.videos, 'backup-wait-master.mp4'), 'placeholder; encoding is injected');
+    await saveHistory([{ id: 'backup-wait-render', filename: 'backup-wait-master.mp4', durationSec: 36 }]);
+    await projects.mutateProjectRecord(id, current => ({ project: { ...current, renderHistoryId: 'backup-wait-render' } }));
+    const probe = vi.spyOn(ffmpegService, 'findFfmpeg').mockResolvedValue('example-ffmpeg');
+    const encode = vi.spyOn(ffmpegService, 'runFfmpegProcess').mockResolvedValue({ ok: true });
+    const releaseCut = await acquireBackupSnapshotCut();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const { jobId } = await kit.startPublishKitBuild(id);
+      const ended = buildEnded(jobId);
+      // The build's real file I/O runs on the real event loop; let it reach the parked publication before the clock moves.
+      while (_backupSnapshotWaitersForTests().publications < 1) await new Promise(resolve => setImmediate(resolve));
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect((await projects.getProject(id)).publishKit?.exports ?? []).toEqual([]);
+      releaseCut();
+      await vi.advanceTimersByTimeAsync(1000);
+      vi.useRealTimers();
+      expect((await ended).type).toBe('complete');
+      expect((await projects.getProject(id)).publishKit.exports.length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+      releaseCut();
+      probe.mockRestore();
+      encode.mockRestore();
+    }
+  });
+
   it('stops a superseded kit build before the next case reuses the project', async () => {
     const { id } = await projects.createProject({ name: 'Example Held Build' });
     await mkdir(PATHS.videos, { recursive: true });
@@ -412,7 +443,7 @@ describe('renderSeekedWindow (the kit\'s native 9:16 cut)', () => {
     const out = await excerptRender.renderSeekedWindow(stored, { videoArgs, startSec: 20, endSec: 45, aspect: '9:16', fade: true, outputPath: '/tmp/v.mp4', jobId: 'job' }, { renderers, resolveAudio: async () => '/tmp/song.wav' });
     expect(out).toMatchObject({ width: 1080, height: 1920 });
     const input = encode.mock.calls[0][0];
-    expect(input).toMatchObject({ startSec: 20, endSec: 30, fade: true, videoArgs, outputPath: '/tmp/v.mp4', audioPath: '/tmp/song.wav', soundBed: null });
+    expect(input).toMatchObject({ window: { startSec: 20, endSec: 30 }, fade: true, videoArgs, outputPath: '/tmp/v.mp4', audioPath: '/tmp/song.wav', soundBed: null });
     expect(renderers.document.prepare.mock.calls[0][0]).not.toBe(stored); // re-framed view, the record untouched
   });
 });

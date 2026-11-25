@@ -51,10 +51,6 @@ async function persist(run) {
   return run;
 }
 
-export async function createRun(run) {
-  return persist(run);
-}
-
 export async function getRun(id) {
   const result = await query('SELECT data FROM lora_training_runs WHERE id = $1', [id]);
   return rowToRun(result.rows[0]);

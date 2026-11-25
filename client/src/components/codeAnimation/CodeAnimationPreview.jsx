@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Circle, Clapperboard, Download, FileCode2, LoaderCircle } from 'lucide-react';
 import { Link } from 'react-router';
-import { injectPreviewHead } from '../../../../server/lib/htmlPreviewHead.js';
 import toast from '../ui/Toast';
 import {
   cancelCodeAnimationExport,
@@ -25,25 +24,6 @@ const BUTTON_SECONDARY = 'inline-flex items-center gap-2 rounded-lg border borde
 
 const slug = (text) => (text || 'code-animation').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'code-animation';
 
-// The audio global is installed before page scripts. Escape `<` so no value
-// can close the script element early.
-const scriptLiteral = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
-const ANIMATION_CSP = [
-  "default-src 'none'",
-  "script-src 'unsafe-inline'",
-  "style-src 'unsafe-inline'",
-  'img-src data: blob:',
-  'media-src data: blob:',
-  'font-src data:',
-  "connect-src 'none'",
-  "form-action 'none'",
-  "base-uri 'none'",
-  "object-src 'none'",
-  "frame-src 'none'",
-  "worker-src 'none'",
-  "manifest-src 'none'",
-].join('; ');
-
 // The vendored three.js modules, read once per session: they are fixed for the
 // installed three version.
 let threeVendorLoad = null;
@@ -54,19 +34,6 @@ const loadThreeVendor = () => {
   });
   return threeVendorLoad;
 };
-
-// `vendorFiles` (a three-renderer film) inlines the vendored modules as data:
-// URLs behind an import map, so the CSP gains `data:` for scripts and nothing else.
-export function prepareAnimationHtml(html, globalName, audioDataUrl, vendorFiles = null) {
-  if (!html) return html;
-  const csp = vendorFiles ? ANIMATION_CSP.replace("script-src 'unsafe-inline'", "script-src 'unsafe-inline' data:") : ANIMATION_CSP;
-  const page = vendorFiles ? inlineThreeVendor(html, vendorFiles) : html;
-  const policy = `<meta http-equiv="Content-Security-Policy" content="${csp}">`;
-  const audio = audioDataUrl
-    ? `<script>window[${scriptLiteral(globalName)}] = ${scriptLiteral(audioDataUrl)};</script>`
-    : '';
-  return injectPreviewHead(page, policy + audio);
-}
 
 /**
  * Shows a generated code animation as inert frames from the OS-isolated

@@ -159,7 +159,7 @@ const DOCK_CLASSES = 'min-w-0 max-xl:order-first max-xl:col-span-full xl:sticky 
 export default function MusicVideoLayout({
   project, trackLabel, stage, onStageChange, progress, nextAction, onNextAction, spend, status = null,
   attention = null, dock = null, notes = null, autopilot = null, onOpenSettings = null,
-  playerFirst = false, previewExpanded = false, lead = null, review = null, onRename = null, renameForm = null, cancelRender = null, children,
+  playerFirst = false, previewExpanded = false, lead = null, review = null, onRename = null, renameForm = null, versionPicker = null, cancelRender = null, children,
 }) {
   const [railCollapsed, , toggleRail] = useLocalStorageBool(STEP_RAIL_COLLAPSED_KEY, false);
   const headerRef = useRef(null);
@@ -250,7 +250,7 @@ export default function MusicVideoLayout({
               <div className="flex min-w-0 items-center gap-1">
                 <h2 className="truncate text-lg font-semibold max-sm:whitespace-normal max-sm:break-words" title={project.name}>{project.name}</h2>
                 {/* The version rides beside the name as a tag, so it costs no line of its own. */}
-                <span className="ml-1 shrink-0 rounded border border-port-border px-1.5 text-xs leading-5 text-port-text-muted">v{project.version || 1}</span>
+                {versionPicker || <span className="ml-1 shrink-0 rounded border border-port-border px-1.5 text-xs leading-5 text-port-text-muted">v{project.version || 1}</span>}
                 {onRename && (
                   <button
                     type="button"

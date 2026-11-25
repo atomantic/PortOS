@@ -22,6 +22,7 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { resolveYtDlpBinaries, downloadAudioToTempMp3, cleanupYtDlpTemp } from './ytdlpAudioImport.js';
 import { attachReferenceAudio } from './rounds.js';
+import { trackedRenderMap } from './renderActivity.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 
 // Reference performances are short clips — bound resource use so a mistyped
@@ -30,7 +31,7 @@ export const REFERENCE_AUDIO_MAX_BYTES = 60 * 1024 * 1024; // 60MB
 export const REFERENCE_AUDIO_MAX_DURATION_SEC = 20 * 60; // 20 minutes
 
 // jobId -> { clients, lastPayload, process, canceled }
-const importJobs = new Map();
+const importJobs = trackedRenderMap('reference-audio-import', { noun: 'reference audio import' });
 
 export const attachReferenceAudioSseClient = (jobId, res) => attachSse(importJobs, jobId, res);
 

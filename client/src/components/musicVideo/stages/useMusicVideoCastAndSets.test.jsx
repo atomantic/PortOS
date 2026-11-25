@@ -19,7 +19,7 @@ vi.mock('../../../services/apiMusicVideo.js', () => ({
   approveMusicVideoCastAndSets: vi.fn(),
   skipMusicVideoCastAndSets: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 const withStage = (castAndSets) => ({ id: 'mv-example', castAndSets });
 

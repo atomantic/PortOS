@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { composeClaimIssuePrompt, DEFAULT_TASK_PROMPTS, getDefaultTaskPrompt } from './prompts.js';
+import { DEFAULT_TASK_PROMPTS, getDefaultPrompt } from '../taskPromptService.js';
+import { composeClaimIssuePrompt, getDefaultTaskPrompt } from './prompts.js';
 
 describe('scheduled task prompt catalog', () => {
   it('loads a single requested domain after importing the public prompt service and listing its keys', () => {
@@ -27,8 +28,8 @@ describe('scheduled task prompt catalog', () => {
     const catalogs = Object.values(import.meta.glob('./catalog/*.js', { eager: true }));
     const entries = catalogs.flatMap(({ prompts }) => Object.entries(prompts ?? {}));
     expect(entries.map(([key]) => key).sort()).toEqual(Object.keys(DEFAULT_TASK_PROMPTS).sort());
-    for (const [key, value] of entries) expect(getDefaultTaskPrompt(key), key).toBe(value);
-    expect(getDefaultTaskPrompt('missing-task')).toBeNull();
+    for (const [key, value] of entries) expect(getDefaultPrompt(key), key).toBe(value);
+    expect(getDefaultPrompt('missing-task')).toBeNull();
   });
 
   it('keeps Jira ticket handoff when a forge completion mode requests a merge', () => {

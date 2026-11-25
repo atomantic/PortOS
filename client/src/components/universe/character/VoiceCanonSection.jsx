@@ -4,6 +4,7 @@ import { BIBLE_LIMITS as L } from '../../../lib/bibleLimits';
 import useFieldDraft from '../../../hooks/useFieldDraft';
 import { REL_INPUT_CLASS, REL_SELECT_CLASS } from './editorClasses';
 import BoxedSection from './BoxedSection';
+import DraftNumber from '../../ui/DraftNumber';
 
 const VOICE_SOURCE_POLICIES = Object.freeze(['designed', 'consented-performance', 'licensed']);
 
@@ -75,11 +76,9 @@ export default function VoiceCanonSection({ entry, onPatch, disabled }) {
       <div className="grid grid-cols-2 gap-1.5">
         <div>
           <label htmlFor={`voice-canon-version-${entry.id}`} className="block text-[10px] uppercase tracking-wider text-gray-500">Revision</label>
-          <input
-            id={`voice-canon-version-${entry.id}`} type="number" min="1" max={L.VOICE_CANON_VERSION_MAX}
-            value={canon.version || 1} onChange={(e) => commit({ version: Number(e.target.value) || 1 })}
-            disabled={disabled} className={REL_INPUT_CLASS}
-          />
+          <DraftNumber integer min={1} max={L.VOICE_CANON_VERSION_MAX} value={canon.version || 1} onCommit={(version) => commit({ version })}>
+            {(field) => <input type="number" id={`voice-canon-version-${entry.id}`} disabled={disabled} className={REL_INPUT_CLASS} {...field} />}
+          </DraftNumber>
         </div>
         <div>
           <label htmlFor={`voice-canon-source-${entry.id}`} className="block text-[10px] uppercase tracking-wider text-gray-500">Source policy</label>

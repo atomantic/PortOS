@@ -21,7 +21,9 @@ import { resolveRenderVideoFile } from '../services/musicVideo/finalRenderFile.j
 vi.mock('../services/musicVideo/projects.js', () => ({
   listProjects: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
   listProjectNames: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
+  listMidiSourceRows: vi.fn(),
   listProjectPage: vi.fn(),
+  listProjectVersionPage: vi.fn(),
   getProject: vi.fn(),
   createProject: vi.fn(async (d) => ({ id: 'mv-new', ...d })),
   updateProject: vi.fn(async (id, p) => ({ id, ...p })),
@@ -251,21 +253,40 @@ describe('musicVideo routes', () => {
     svc.listProjectCompletion.mockReset();
   });
 
-  it('GET /midi-sources returns only the newest transcription per track, trimmed (#10203)', async () => {
-    const mk = (id, trackId, createdAt) => ({
-      id, name: id, trackId, scenes: [{ big: true }],
-      midiTranscription: createdAt ? { filename: `${id}.mid`, model: 'm', createdAt, notes: [1, 2] } : null,
+  it('GET /midi-sources preserves track order, timestamp ties, and the selected project for read-through', async () => {
+    const source = (id, trackId, createdAt) => ({
+      id, name: id, trackId,
+      midiTranscription: { filename: `${id}.mid`, model: 'm', createdAt },
     });
-    svc.listProjects.mockResolvedValueOnce([
-      mk('mv-old', 't1', '2026-01-01'), mk('mv-new', 't1', '2026-02-01'),
-      mk('mv-none', 't1', null), mk('mv-other', 't2', '2026-01-05'), mk('mv-unlinked', null, '2026-03-01'),
+    svc.listMidiSourceRows.mockResolvedValueOnce([
+      source('mv-old', 't1'),
+      source('mv-other', 't2', '2026-01-05'),
+      source('mv-new', 't1', '2026-02-01'),
+      source('mv-tie', 't1', '2026-02-01'),
+      source('mv-missing-date', 't1'),
+      source('mv-undated', 't3'),
+      source('mv-null-date', 't3', null),
+      source('mv-unlinked', null, '2026-03-01'),
+      { ...source('mv-empty-file', 't4'), midiTranscription: { filename: '' } },
     ]);
     const r = await request(app).get('/api/music-video/midi-sources');
     expect(r.status).toBe(200);
     expect(r.body).toEqual([
       { trackId: 't1', id: 'mv-new', name: 'mv-new', midiTranscription: { filename: 'mv-new.mid', model: 'm', createdAt: '2026-02-01' } },
       { trackId: 't2', id: 'mv-other', name: 'mv-other', midiTranscription: { filename: 'mv-other.mid', model: 'm', createdAt: '2026-01-05' } },
+      { trackId: 't3', id: 'mv-undated', name: 'mv-undated', midiTranscription: { filename: 'mv-undated.mid', model: 'm' } },
     ]);
+    expect(svc.listProjects).not.toHaveBeenCalled();
+    expect(svc.getProject).not.toHaveBeenCalled();
+
+    const winner = r.body.find(({ trackId }) => trackId === 't1');
+    svc.getProject.mockResolvedValueOnce({
+      ...winner, midiTranscription: { ...winner.midiTranscription, notes: [1, 2] },
+    });
+    const detail = await request(app).get(`/api/music-video/${winner.id}`);
+    expect(detail.status).toBe(200);
+    expect(svc.getProject).toHaveBeenCalledWith('mv-new');
+    expect(detail.body.midiTranscription).toEqual({ ...winner.midiTranscription, notes: [1, 2] });
   });
 
   it('GET / returns a bounded envelope when pagination is requested', async () => {
@@ -333,6 +354,19 @@ describe('musicVideo routes', () => {
     expect(r2.body.nextCursor).toBeNull();
     expect(r2.body.items).toHaveLength(1);
     expect(r2.body.items[0].id).toBe('mv-older');
+  });
+
+  it('pages version family identities independently from status and search', async () => {
+    svc.listProjectVersionPage
+      .mockResolvedValueOnce({ offset: 0, limit: 1, total: 2, items: [{ id: 'fork', rootProjectId: 'root', name: 'Renamed Fork', version: 2 }] })
+      .mockResolvedValueOnce({ offset: 1, limit: 1, total: 2, items: [{ id: 'root', rootProjectId: 'root', name: 'Original', version: 1 }] });
+    const first = await request(app).get('/api/music-video?summary=1&versionRoot=root&limit=1&q=Another&statusFilter=completed');
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({ total: 2, nextCursor: '1', items: [{ id: 'fork', rootProjectId: 'root', name: 'Renamed Fork', version: 2 }] });
+    expect(svc.listProjectVersionPage).toHaveBeenCalledWith('root', expect.objectContaining({ limit: 1, offset: 0 }));
+    expect(svc.listProjectPage).not.toHaveBeenCalled();
+    const second = await request(app).get('/api/music-video?summary=1&versionRoot=root&limit=1&cursor=1');
+    expect(second.body).toMatchObject({ total: 2, nextCursor: null, items: [{ id: 'root', rootProjectId: 'root', name: 'Original', version: 1 }] });
   });
 
   it('filters project status before paging and keeps missing and failed statuses in progress', async () => {

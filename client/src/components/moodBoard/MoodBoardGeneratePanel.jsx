@@ -1,3 +1,4 @@
+import { PROVIDERS_PAGE_BREADCRUMB } from '../../../../server/lib/navManifest.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Sparkles } from 'lucide-react';
 import { supportsToolFreeOneShot, toolFreeOneShotSelectionPolicy } from '../../utils/providerSelection';
@@ -124,7 +125,7 @@ export default function MoodBoardGeneratePanel({ board, disabled = false, embedd
             availableModels={providers.availableModels} onProviderChange={providers.setSelectedProviderId}
             onModelChange={providers.setSelectedModel} effort={effort} onEffortChange={setEffort}
             selectionPolicy={toolFreeOneShotSelectionPolicy} disabled={busy || providers.loading} layout="row" />
-          {!providers.loading && !providers.providers.length && <p className="text-xs text-port-warning">Enable an API or supported one-shot provider in Settings → Providers.</p>}
+          {!providers.loading && !providers.providers.length && <p className="text-xs text-port-warning">Enable an API or supported one-shot provider in {PROVIDERS_PAGE_BREADCRUMB}.</p>}
         </div>
         <FormField label="Direction (optional)">
           <textarea className={fieldClass} rows={2} maxLength={2000} value={direction} disabled={busy}

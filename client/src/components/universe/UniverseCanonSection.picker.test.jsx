@@ -24,9 +24,7 @@ vi.mock('../../services/apiUniverseBuilder', () => ({
 
 vi.mock('../../services/apiSystem', () => ({ generateImage: vi.fn() }));
 
-vi.mock('../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 import UniverseCanonSection from './UniverseCanonSection';
 import { listCatalogIngredients, linkCatalogIngredient } from '../../services/apiCatalog';

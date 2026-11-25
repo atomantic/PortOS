@@ -8,7 +8,7 @@ vi.mock('../../services/apiPipeline.js', () => ({
   cancelReaderPanel: vi.fn(),
   readerPanelSseUrl: (id) => `/sse/${id}`,
 }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn() } }));
+vi.mock('../ui/Toast');
 vi.mock('../../hooks/usePipelineProgress', () => ({ usePipelineProgress: vi.fn() }));
 
 import { getReaderPanel, getReaderPanelStatus } from '../../services/apiPipeline.js';

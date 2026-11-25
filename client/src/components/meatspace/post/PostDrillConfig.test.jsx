@@ -12,7 +12,7 @@ vi.mock('../../../services/apiMeatspace.js', () => ({
 vi.mock('../../../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 import PostDrillConfig from './PostDrillConfig';
 import {

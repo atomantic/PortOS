@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Routes, Route, Link } from 'react-router';
+import { useState } from 'react';
+import { createMemoryRouter, RouterProvider, Routes, Route, Link } from 'react-router';
 import MediaAnnotate from './MediaAnnotate';
 import { awaitEnabled } from '../test/enabledBarrier.js';
 
@@ -35,12 +36,14 @@ const getMediaSketch = vi.fn();
 const saveMediaSketch = vi.fn();
 const getRegenAvailability = vi.fn();
 const rerenderWithAnnotations = vi.fn();
+const previewRegenerate = vi.fn();
 
 vi.mock('../services/apiImageVideo.js', () => ({
   getMediaSketch: (...a) => getMediaSketch(...a),
   saveMediaSketch: (...a) => saveMediaSketch(...a),
   getRegenAvailability: (...a) => getRegenAvailability(...a),
   rerenderWithAnnotations: (...a) => rerenderWithAnnotations(...a),
+  previewRegenerate: (...a) => previewRegenerate(...a),
 }));
 
 const toastSuccess = vi.fn();
@@ -54,6 +57,12 @@ vi.mock('react-router', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, useNavigate: () => navigate };
 });
+
+// The unsaved-drawing guard needs a data router.
+function MemoryRouter({ initialEntries, children }) {
+  const [router] = useState(() => createMemoryRouter([{ path: '*', element: children }], { initialEntries }));
+  return <RouterProvider router={router} />;
+}
 
 const renderPage = async () => {
   const result = render(
@@ -99,6 +108,26 @@ describe('MediaAnnotate re-render with annotations', () => {
     expect(rerenderWithAnnotations).toHaveBeenCalledWith('foo.png', { strength: 0.5, prompt: undefined });
     expect(toastSuccess).toHaveBeenCalled();
     expect(navigate).toHaveBeenCalledWith('/media/history');
+  });
+
+  it('shows the carried source negative prompt for a typed prompt, as the server previews it', async () => {
+    previewRegenerate.mockResolvedValue({
+      sentPrompt: 'typed words',
+      sentNegativePrompt: 'SOURCE NEGATIVE',
+      promptAdditions: [{ id: 'source-negative-prompt', label: "Source image's negative prompt", text: 'SOURCE NEGATIVE' }],
+    });
+    await renderPage();
+    fireEvent.click(await awaitEnabled(() => screen.getByTitle('Re-render this image guided by your annotations')));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).queryByRole('button', { name: /negative prompt/ })).toBeNull();
+
+    fireEvent.change(within(dialog).getByLabelText(/Prompt/), { target: { value: 'typed words' } });
+    const chip = await within(dialog).findByRole('button', { name: "+ Source image's negative prompt" }, { timeout: 2000 });
+    expect(previewRegenerate).toHaveBeenCalledWith('foo.png', { prompt: 'typed words', annotated: true }, { silent: true });
+    fireEvent.click(chip);
+    expect(within(dialog).getByText('SOURCE NEGATIVE')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Show full prompt' }));
+    expect(within(dialog).getByText(/Negative prompt: SOURCE NEGATIVE/)).toBeInTheDocument();
   });
 
   it('disables re-render and surfaces the reason when local img2img is unavailable', async () => {
@@ -264,6 +293,29 @@ describe('MediaAnnotate saved-state safety', () => {
     fireEvent.click(screen.getByText('go-a'));
     await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
     expect(screen.getByTitle('Save sketch')).toBeDisabled();
+  });
+
+  it('asks before leaving with unsaved strokes, and leaves freely once they are saved', async () => {
+    getMediaSketch.mockResolvedValue({ sketch: null });
+    render(
+      <MemoryRouter initialEntries={['/media/annotate/sketch:11111111-1111-1111-1111-111111111111']}>
+        <Routes>
+          <Route path="/media/annotate/:mediaKey" element={<MediaAnnotate />} />
+          <Route path="/media/history" element={<div>Media History page</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await awaitEnabled(() => screen.getByTitle('Save sketch'));
+    fireEvent.click(screen.getByText('stub-draw'));
+    fireEvent.click(screen.getByRole('link', { name: 'Media History' }));
+    expect(await screen.findByText('Discard your unsaved sketch?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(screen.getByTestId('stub-canvas')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle('Save sketch'));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith('Sketch saved'));
+    fireEvent.click(screen.getByRole('link', { name: 'Media History' }));
+    expect(await screen.findByText('Media History page')).toBeInTheDocument();
   });
 
   it('keeps an annotated image saveable after Retry (the image does not re-report its size)', async () => {

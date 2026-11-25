@@ -5,18 +5,11 @@ import { harnessForProvider } from '../lib/provider/providerHarnesses.js';
 import { observeModelResource, observeModelMutations } from '../services/modelObservation.js';
 import { providerModeGroups } from '../lib/aiToolkit/internal/providerModes.js';
 import { tuiModeAddition } from '../lib/provider/providerModePairing.js';
-import { buildProviderGraphPreview, toManagementPreviewDto } from '../lib/provider/providerGraphPreview.js';
 import {
-  createBinding,
-  createConnection,
   findConnectionByRef,
-  getManagementGraph,
   presetSkipReason,
   providerGraphEnabled,
   removeConnection,
-  updateBindingSettings,
-  updateConnectionSettings,
-  updateRouteSettings,
 } from '../services/provider/providerGraph.js';
 import { readGraph } from '../services/provider/providerGraphStore.js';
 import {
@@ -32,13 +25,12 @@ import { requestHasHostControl } from '../services/authGate.js';
 import { auditModelPins, clearModelPin } from '../services/modelPinAudit.js';
 import { providerCreateSchema, providerSchema, providerActiveSchema, validate } from '../lib/aiToolkit/validation.js';
 import { canRefreshModels, withRefreshCapability } from '../lib/aiToolkit/internal/modelFetchers.js';
-import { applyModelAccess, applyModelAccessList } from '../lib/aiToolkit/internal/modelAccess.js';
+import { applyModelAccess } from '../lib/aiToolkit/internal/modelAccess.js';
 import { ALLOWED_COMMANDS } from '../cos-runner/allowedCommands.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import {
-  getProviderRuntimeStatus,
   getProviderRuntimeStatuses,
 } from '../services/provider/providerRuntimeInstaller.js';
 import { harnessCatalogRuntime, refreshHarnessModels } from '../services/harnesses.js';
@@ -67,6 +59,8 @@ import {
   PUBLIC_REVIEW_NO_TOOL_POSTURE,
   PUBLIC_REVIEW_ACTIONS_POSTURE,
 } from '../lib/provider/providerVendors.js';
+import { htmlPagesProviderCapability } from '../lib/provider/htmlPagesProvider.js';
+import { isMtplxOpenCodeCli } from '../lib/opencodeConfig.js';
 import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
 import { isMaskedEnvVar } from '../lib/credentialEnvVars.js';
 import { presetDerivable, presetKind } from '../lib/provider/providerPresets.js';
@@ -82,10 +76,9 @@ import { presentServiceDefinition } from '../lib/provider/providerServiceInstanc
 import {
   executionOptionSelectionSchema, providerExecutionOptionsQuerySchema, codexLoginCancelSchema,
   codexLoginStartSchema, modelPinClearSchema, providerVisionTestSchema, providerVisionSuiteSchema,
-  providerBindingCreateSchema, providerBindingUpdateSchema, providerConnectionCreateSchema,
-  providerConnectionUpdateSchema, providerServiceCreateSchema, providerServiceUpdateSchema,
+  providerServiceCreateSchema, providerServiceUpdateSchema,
   credentialPoolKeyCreateSchema, credentialPoolKeyUpdateSchema, credentialPoolResetSchema, credentialPoolSettingsSchema,
-  providerRouteSettingsUpdateSchema, providerPresetCreateSchema, credentialBootstrapsSettingsSchema,
+  providerPresetCreateSchema, credentialBootstrapsSettingsSchema,
   harnessEnablementUpdateSchema, harnessIdParamSchema
 } from '../lib/providerValidation.js';
 
@@ -138,8 +131,8 @@ const sanitizeProvider = (provider) => {
 };
 
 /**
- * Decorate a TUI provider with the command line the Shell page will run for it,
- * so the card can render a "Launch in Shell" button and show what it will type.
+ * Decorate a TUI provider with its launch command preview so the card can
+ * render a "Launch in Shell" button without probing installed CLIs.
  *
  * DISPLAY ONLY — the launch itself goes through `shell:start { providerId }`,
  * which re-resolves this server-side and pairs it with the provider's env (see
@@ -194,8 +187,14 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
   // untouched list rides along as `modelCatalog` — the editor seeds its
   // "Available Models" box from it, so an ordinary Save on a scoped provider
   // cannot persist the narrowed list over the real one.
+  const scoped = applyModelAccess(decorated);
+  const htmlPagesModels = isMtplxOpenCodeCli(provider)
+    ? [...new Set([...(scoped.models ?? []), scoped.defaultModel])]
+        .filter((model) => htmlPagesProviderCapability(provider, model)?.kind === 'opencode-mtplx')
+    : [];
   return sanitizeProvider({
-    ...applyModelAccess(decorated),
+    ...scoped,
+    htmlPagesModels,
     // The RAW record's key: an inherited or materialized one rides
     // NON-enumerably (`withGatewayApiKey`, the composite resolver), so the
     // decorating spreads above dropped it — re-carried here so `hasApiKey`
@@ -476,105 +475,12 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
   }));
 
   /**
-   * READ-ONLY preview of the provider connection graph (#6366) — what an
-   * import WOULD create from the records this install already runs, and which
-   * records it would leave isolated, with reasons.
-   *
-   * Nothing is persisted, no provider is written, and no AI provider is
-   * contacted: this is a pure projection of `providers.json` and must stay one,
-   * because it is meant to be safe to open from a configuration screen. The
-   * flat `GET /api/providers` shape is untouched and remains the execution
-   * contract; `activeProvider` here is the same executable provider id string.
-   *
-   * A client talking to a server without this endpoint gets a 404 and falls
-   * back to the flat list — an explicit unsupported answer, not a guess.
-   */
-  router.get('/management/preview', asyncHandler(async (_req, res) => {
-    const data = await providerService.getAllProviders();
-    // Scoped like every other picker payload: the preview's connection catalogs
-    // and binding model menus are what the Backend Connections page offers, so
-    // an unscoped read here would contradict the model-access policy four
-    // handlers below (docs/MODEL_ACCESS.md).
-    const scoped = { ...data, providers: applyModelAccessList(data.providers) };
-    res.set('Cache-Control', 'no-store').json(toManagementPreviewDto(buildProviderGraphPreview(scoped)));
-  }));
-
-  /**
-   * The DURABLE provider connection graph (#6367) — the same shape as the
-   * preview above, but read from ai_connections / ai_harness_bindings /
-   * ai_route_bindings rather than derived on every request.
-   *
-   * Sanitized identically: credential PRESENCE only, no projection snapshots,
-   * no raw provider records. An install whose database is unavailable gets an
-   * explicit 503 `PROVIDER_GRAPH_UNAVAILABLE` rather than a silent empty graph,
-   * so a client can fall back to the flat list on a known answer instead of
-   * guessing from a failed request.
-   */
-  router.get('/management', asyncHandler(async (_req, res) => {
-    res.set('Cache-Control', 'no-store').json(await getManagementGraph());
-  }));
-
-  /**
-   * Add a NEW backend to the graph (#6369) — mock flow 3 in the decision
-   * record: a distinct remote endpoint with its own credentials, created as its
-   * own identity even when its model names match a backend already configured.
-   *
-   * Creation only. Nothing is probed, no model list is fetched, no route is
-   * minted and `activeProvider` does not move: a connection with no binding is
-   * a legitimate row the user then attaches a harness to.
-   */
-  router.post('/connections', asyncHandler(async (req, res) => {
-    const input = validateRequest(providerConnectionCreateSchema, req.body ?? {});
-    res.status(201).json(await createConnection(input));
-  }));
-
-  /**
-   * Add a harness to an existing backend (#6369) — mock flow 2: the same
-   * daemon, driven by a second program, as an INDEPENDENT binding with its own
-   * executable route ids.
-   *
-   * The route records are minted from the harness's command recipe
-   * (`PROVIDER_HARNESSES[].recipe`), which is what this endpoint waited on: the
-   * registry could classify an existing record but not describe how to spawn a
-   * fresh one.
-   *
-   * Every minted route arrives DISABLED with no model pins. Creating a route is
-   * a management act; executing one is a separate grant on `PATCH
-   * /api/providers/:id`, and nothing here launches, probes or generates.
-   */
-  router.post('/bindings', asyncHandler(async (req, res) => {
-    const input = validateRequest(providerBindingCreateSchema, req.body ?? {});
-    res.status(201).json(await createBinding(input));
-  }));
-
-  // Remove a connection no binding uses. Refused with a 409 while one still
-  // does — the graph never silently orphans a binding to tidy a row away.
-  router.delete('/connections/:id', asyncHandler(async (req, res) => {
-    res.json(await removeConnection(req.params.id));
-  }));
-
-  /**
-   * Edit one SHARED backend (#6369) — its label, transports and credentials —
-   * and materialize the result into every executable route on it.
-   *
-   * This is the edit the graph exists for: an endpoint or key changed once
-   * rather than retyped per harness. `expectedRevision` is required and
-   * re-checked inside the serialized pass, so an edit made against a row that
-   * has since moved is a 409 instead of a silent overwrite.
-   */
-  router.patch('/connections/:id', asyncHandler(async (req, res) => {
-    const input = validateRequest(providerConnectionUpdateSchema, req.body ?? {});
-    res.json(await updateConnectionSettings({ connectionId: req.params.id, ...input }));
-  }));
-
-  /**
    * Service INSTANCES (#7563) — the same `ai_connections` rows read as one
    * instance each of a `SERVICE_DEFINITIONS` entry: slug, definition, plan,
    * enabled, how it authenticates, and the catalog it last listed. Sanitized
    * like the graph: credential PRESENCE and SOURCE only, never a value.
    *
-   * `:slug` also accepts the row's UUID, and every `/connections/:id` route
-   * above accepts a slug, so the two surfaces address one row either way.
+   * `:slug` also accepts the row's UUID.
    */
   router.get('/services', asyncHandler(async (_req, res) => {
     res.set('Cache-Control', 'no-store').json(await listServices());
@@ -613,8 +519,7 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
     res.json(await updateService(req.params.slug, input));
   }));
 
-  // Refused with a 409 while a binding still names the row — the same rule as
-  // the connection delete, because it IS the connection delete.
+  // Refused with a 409 while a binding still names the connection row.
   router.delete('/services/:slug', asyncHandler(async (req, res) => {
     res.json(await removeConnection(req.params.slug));
   }));
@@ -666,34 +571,6 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
   router.post('/services/:slug/credential-pool/reset', asyncHandler(async (req, res) => {
     const input = validateRequest(credentialPoolResetSchema, req.body ?? {});
     res.json(await (await credentialPools()).resetPoolCredentialCooldowns(req.params.slug, input));
-  }));
-
-  /**
-   * Edit one harness binding's management state: its label and the subset of
-   * the shared catalog it offers. Never its routes' enablement or consent —
-   * those stay on `PATCH /api/providers/:id`, where granting them is explicit.
-   */
-  router.patch('/bindings/:id', asyncHandler(async (req, res) => {
-    const input = validateRequest(providerBindingUpdateSchema, req.body ?? {});
-    res.json(await updateBindingSettings({ bindingId: req.params.id, ...input }));
-  }));
-
-  /**
-   * Edit ONE route's mode overrides (#6369) — args, timeout, effort, model pins.
-   *
-   * The per-mode counterpart to the shared-backend edit above, so a whole
-   * backend is configurable from one screen instead of a connection plus three
-   * route editors. Route-owned only: an endpoint, a credential and the `enabled`
-   * flag are all unreachable here by construction, and `PATCH
-   * /api/providers/:id` remains the place execution consent is granted.
-   *
-   * `expectedRevision` is the route's `settingsRevision` from
-   * `GET /api/providers/management` — a fingerprint of the values on disk, so an
-   * edit made in the route editor while this panel was open is a 409 too.
-   */
-  router.patch('/routes/:providerId', asyncHandler(async (req, res) => {
-    const input = validateRequest(providerRouteSettingsUpdateSchema, req.body ?? {});
-    res.json(await updateRouteSettings({ providerId: req.params.providerId, ...input }));
   }));
 
   router.get('/samples', asyncHandler(async (req, res) => {
@@ -760,12 +637,6 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
     res.json({ ...catalog, harnesses: (catalog.harnesses || []).map(harness => ({ ...harness, executionOptionKeys: executionOptionKeysForHarness(harness.id) })), presets: data.providers.map((provider) => presentProvider(provider, capabilities)) });
   }));
 
-  /** Per-harness enablement (#7564): the user's word, else PATH detection, `direct` always on. */
-  router.get('/harnesses', asyncHandler(async (_req, res) => {
-    const { listHarnessEnablement } = await import('../services/harnessEnablement.js');
-    res.json({ harnesses: await listHarnessEnablement() });
-  }));
-
   router.put('/harnesses/:id', asyncHandler(async (req, res) => {
     const harnessId = validateRequest(harnessIdParamSchema, req.params.id);
     const { enabled } = validateRequest(harnessEnablementUpdateSchema, req.body || {});
@@ -787,18 +658,6 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
     const bootstraps = validateRequest(credentialBootstrapsSettingsSchema, req.body?.bootstraps ?? req.body ?? {});
     const { saveCredentialBootstraps } = await import('../services/credentialBootstrapApps.js');
     res.json({ bootstraps: await saveCredentialBootstraps(bootstraps) });
-  }));
-
-  /**
-   * One composite's verdict (#7564): eligible or not, with the reason a picker
-   * shows beside a saved selection that names it, and — when eligible — the
-   * materialized record sanitized exactly as a stored one (`presentProvider`:
-   * `apiKey` → `hasApiKey`, secret env values redacted).
-   */
-  router.get('/composites/:id', asyncHandler(async (req, res) => {
-    const { describeCompositeProvider } = await import('../services/compositeProviders.js');
-    const { record, ...verdict } = await describeCompositeProvider(req.params.id);
-    res.json({ ...verdict, provider: record ? presentProvider(record, await detectSystemCapabilities()) : null });
   }));
 
   /**
@@ -985,6 +844,7 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
       emit,
       isCancelled: () => clientGone,
       action,
+      io: req.app.get('io'),
     }).catch((err) => ({ success: false, error: err.message }));
 
     if (holdsLock) { runtimeSetupInFlight = false; holdsLock = false; }
@@ -1094,18 +954,6 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
     await streamRuntimeInstall(req, res, validateRequest(runtimeQuerySchema, req.query).runtime);
   }));
 
-  // Back-compat for a client build that predates the generalized routes (a
-  // deployed `client/dist` can lag the server across an upgrade). Both mirror
-  // the old OpenCode-only response shape exactly.
-  router.get('/opencode/installation', asyncHandler(async (_req, res) => {
-    const status = await getProviderRuntimeStatus('opencode');
-    res.json({ installed: status.installed, npmAvailable: status.installable });
-  }));
-
-  router.post('/opencode/install', asyncHandler(async (req, res) => {
-    await streamRuntimeInstall(req, res, 'opencode');
-  }));
-
   // Provider status routes MUST be defined before toolkit routes,
   // because the toolkit has a GET /:id route that would catch /status
   const presentProviderStatus = (status) => {
@@ -1154,14 +1002,6 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
   });
   router.get('/status', asyncHandler(async (_req, res) => {
     res.json(await statusObservation.read());
-  }));
-
-  router.get('/:id/status', asyncHandler(async (req, res) => {
-    const status = presentProviderStatus(providerStatusService.getStatus(req.params.id));
-    res.json({
-      ...status,
-      timeUntilRecovery: providerStatusService.getTimeUntilRecovery(req.params.id)
-    });
   }));
 
   router.post('/:id/status/recover', asyncHandler(async (req, res) => {

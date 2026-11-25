@@ -4,9 +4,7 @@ import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/re
 vi.mock('../../services/apiSongbook.js', () => ({
   practiceSong: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 import PracticeLogger from './PracticeLogger.jsx';
 import { practiceSong } from '../../services/apiSongbook.js';

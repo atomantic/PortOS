@@ -1462,14 +1462,10 @@ describe('memory service', () => {
         return Promise.resolve(def);
       });
 
-      await linkMemories('src', 'tgt');
+      const result = await linkMemories('src', 'tgt');
 
-      // Should not add duplicate - memories saved but relatedMemories should still be length 1
-      const memorySaves = atomicWrite.mock.calls.filter(c => c[0].includes('memory.json'));
-      for (const save of memorySaves) {
-        const saved = save[1];
-        expect(saved.relatedMemories).toHaveLength(1);
-      }
+      expect(result.success).toBe(true);
+      expect(atomicWrite).not.toHaveBeenCalled();
     });
   });
 

@@ -7,6 +7,7 @@ import { canonicalSnapshotChecksum } from '../snapshotChecksum.js';
 import { isFilmLookNeutral } from '../filmLook.js';
 import { musicVideoOverscan } from './musicVideoFilmLook.js';
 import { activeShotColorMatch } from '../shotColorMatch.js';
+import { shotImageTreatment } from './musicVideoImageTreatments.js';
 import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
 import { isCatalogMediaReferenceId, isLegacyCatalogReference, musicVideoClipConditioningReferences, musicVideoClipReferenceChoices, musicVideoPanelArtReferences, musicVideoSceneCastIds, musicVideoShotSheetCastIds } from './musicVideoConditioning.js';
 import { presentCharacterReferenceStates } from './musicVideoCharacterReferenceAge.js';
@@ -18,10 +19,17 @@ const takeKinds = { plate: 'image', clip: 'video', endPlate: 'endImage' };
 const checksum = (value) => canonicalSnapshotChecksum(value);
 const selectedTake = (scene, role, assetId = scene?.[slots[role]]) => (scene?.takes || [])
   .find((take) => take.kind === takeKinds[role] && take.assetId === assetId);
-const assetRef = (scene, role, assetId = scene?.[slots[role]]) => ({
-  role, sceneId: scene.sceneId, assetId: assetId || null,
-  revision: checksum({ assetId: assetId || null, inputs: selectedTake(scene, role, assetId)?.inputAssets || [] }),
-});
+const assetRef = (scene, role, assetId = scene?.[slots[role]]) => {
+  const treatment = role !== 'clip' && shotImageTreatment(scene, assetId);
+  return { role, sceneId: scene.sceneId, assetId: assetId || null,
+    revision: checksum({ assetId: assetId || null, inputs: selectedTake(scene, role, assetId)?.inputAssets || [],
+      ...(treatment ? { imageTreatment: treatment } : {}) }) };
+};
+const photoTreatmentEntries = (scene) => {
+  if (!scene.photoSequence || scene.photoSequence.enabled === false) return [];
+  const selected = (scene.photoSequence.imageIds || []).map(id => shotImageTreatment(scene, id)).filter(Boolean);
+  return selected.length ? [['photoTreatments', selected]] : [];
+};
 // #16418 entered main at this instant. A final export on a record last touched
 // before it could not have captured the four new keys. Do not infer age from
 // the absence of a version marker: newer v1 records used the same version.
@@ -51,6 +59,7 @@ const layerRef = (scene, { legacy = false } = {}) => ({ role: 'layer', sceneId: 
     // An image effect over a still changes the render; a still without one keeps its evidence.
     .concat(scene.imageEffect ? [['imageEffect', scene.imageEffect], ['imageEffectSec', scene.imageEffectSec ?? null]] : [])
     .concat(scene.photoSequence && scene.photoSequence.enabled !== false ? [['photoSequence', scene.photoSequence]] : [])
+    .concat(photoTreatmentEntries(scene))
     // An effect from the start frame to the end frame renders the end frame too.
     // Use end frame off plays the start frame only, so it changes the render.
     .concat(scene.imageEffect && isEndFrameImageEffect(scene.imageEffect) ? [['endImageId', scene.endImageId ?? null]] : [])
@@ -399,6 +408,17 @@ function createDependencyReader(project) {
   };
 }
 
+const DEPENDENCY_LABELS = new Map([
+  ['song', 'Master audio, lyrics or alignment'],
+  ['plate', 'Selected plate or its crop/mask inputs'],
+  ['endPlate', 'Selected end frame'],
+  ['clip', 'Selected clip'],
+  ['clipReferences', 'Selected clip references'],
+  ['layer', 'Shot timing or composition layer'],
+  ['colorMatch', 'Shot color match'],
+  ['finish', 'Video finish settings (film look, title card, credits, cameras, overscan, sound bed or lyric overlay)'],
+]);
+
 function dependencyChanges(dependencies, readCurrent, matchFinalLayer = null) {
   if (!dependencies || dependencies.version !== MUSIC_VIDEO_DEPENDENCY_VERSION || !Array.isArray(dependencies.references)) {
     return [{ role: 'unknown', reason: 'Dependency evidence was not recorded; review again' }];
@@ -422,7 +442,7 @@ function dependencyChanges(dependencies, readCurrent, matchFinalLayer = null) {
       ? matchFinalLayer(ref)
       : current?.revision === ref.revision || current?.legacyRevision === ref.revision || matchFinalLayer?.(ref);
     if (!current || !sameAsset || current.catalogUnavailable || !sameRevision) {
-      changes.push({ ...ref, reason: `${ref.role === 'song' ? 'Master audio, lyrics or alignment' : ref.role === 'plate' ? 'Selected plate or its crop/mask inputs' : ref.role === 'endPlate' ? 'Selected end frame' : ref.role === 'clip' ? 'Selected clip' : ref.role === 'clipReferences' ? 'Selected clip references' : ref.role === 'layer' ? 'Shot timing or composition layer' : ref.role === 'colorMatch' ? 'Shot color match' : ref.role === 'finish' ? 'Video finish settings (film look, title card, credits, cameras, overscan, sound bed or lyric overlay)' : 'Composition'} changed` });
+      changes.push({ ...ref, reason: `${DEPENDENCY_LABELS.get(ref.role) || 'Composition'} changed` });
     }
   }
   return changes;
@@ -549,9 +569,6 @@ export function musicVideoDependencyImpact(project, performanceChanges = []) {
   for (const excerpt of project.excerpts || []) {
     if (excerpt.status === 'complete') check('excerpt', excerpt.id, excerpt.dependencies, { startSec: excerpt.startSec, endSec: excerpt.endSec });
   }
-  for (const proof of project.treatment?.proofs || []) {
-    if (proof.status === 'passed') check('proof', proof.id, proof.evidence?.dependencies);
-  }
   for (const run of project.autoReviews || []) {
     for (const attempt of run.attempts || []) {
       if (attempt.review?.verdict === 'pass') check('review', run.id, attempt.review.dependencies);
@@ -590,9 +607,6 @@ export function presentMusicVideoDependencies(project) {
       return { ...take, ...(dependencyState ? { dependencyState } : {}) };
     }) })),
     ...(project.excerpts ? { excerpts: project.excerpts.map((excerpt) => ({ ...excerpt, dependencyState: state(excerpt.dependencies) })) } : {}),
-    ...(Array.isArray(project.treatment?.proofs) ? { treatment: { ...project.treatment, proofs: (project.treatment.proofs || []).map((proof) => ({ ...proof,
-      ...(proof.evidence ? { evidence: { ...proof.evidence, dependencyState: state(proof.evidence.dependencies) } } : {}),
-    })) } } : {}),
     ...(project.autoReviews ? { autoReviews: project.autoReviews.map((run) => ({ ...run, attempts: (run.attempts || []).map((attempt) => ({ ...attempt,
       ...(attempt.review ? { review: { ...attempt.review, dependencyState: state(attempt.review.dependencies) } } : {}),
     })) })) } : {}),

@@ -29,7 +29,6 @@ vi.mock('../services/calendarGoogleSync.js', () => ({
 
 vi.mock('../services/dailyReview.js', () => ({
   getDailyReview: vi.fn(),
-  getDailyReviewHistory: vi.fn(),
   confirmEvent: vi.fn()
 }));
 

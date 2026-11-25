@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { Link } from 'react-router';
 import { Terminal, RefreshCw } from 'lucide-react';
+import { agentPath } from '../cos/crossLinks.js';
 import { getFeatureAgentOutput } from '../../services/apiAgents.js';
 import socket from '../../services/socket';
 
@@ -78,9 +80,9 @@ export default function OutputTab({ agent }) {
       <div className="flex items-center justify-between">
         <div className="text-sm text-gray-500">
           {agent.currentAgentId ? (
-            <span className="text-port-success">Running: {agent.currentAgentId}</span>
+            <span className="text-port-success">Running: <Link to={agentPath(agent.currentAgentId)} className="underline">{agent.currentAgentId}</Link></span>
           ) : (
-            <span>Last run output{agentId ? ` (${agentId})` : ''}</span>
+            <span>Last run output{agentId ? <> (<Link to={agentPath(agentId)} className="underline">{agentId}</Link>)</> : ''}</span>
           )}
         </div>
         <button

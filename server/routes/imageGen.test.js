@@ -43,9 +43,22 @@ import imageGenRoutes from './imageGen.js';
 import * as fileUtils from '../lib/fileUtils.js';
 import * as regen from '../services/imageGen/regen.js';
 import * as mediaSketches from '../services/mediaSketches.js';
-import { access, mkdir, writeFile, rm } from 'fs/promises';
+import { access, mkdir, mkdtemp, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { basename, join as pathJoin } from 'path';
+import { getImageModels } from '../lib/mediaModels.js';
+import { repoToDirName } from '../lib/hfCache.js';
+import { downloadHfRepo } from '../services/hfDownload.js';
+
+vi.mock('../lib/mediaModels.js', async original => {
+  const actual = await original();
+  return { ...actual, getImageModels: vi.fn(actual.getImageModels) };
+});
+vi.mock('../services/hfDownload.js', () => ({ downloadHfRepo: vi.fn() }));
+vi.mock('../services/modelManifest.js', async original => ({
+  ...await original(),
+  recordModelInstall: vi.fn(async () => null),
+}));
 
 const attachNodeImage = vi.hoisted(() => vi.fn(async () => ({})));
 const getLoom = vi.hoisted(() => vi.fn(async () => null));
@@ -90,7 +103,6 @@ vi.mock('../services/imageGen/index.js', () => ({
   resolveImageCleaners,
   local: {
     listImageModels: vi.fn(() => []),
-    listLoraFilenames: vi.fn(async () => []),
     listGallery: vi.fn(async () => []),
     assertGalleryFilename: vi.fn(),
     readImageSidecar: vi.fn(async () => ({ path: '', metadata: {} })),
@@ -215,6 +227,8 @@ vi.mock('fs/promises', async (importOriginal) => {
   return { ...actual, stat: (path) => mockStat(path) };
 });
 
+import { MEDIA_RUNTIME_MODULES, registerMediaRuntimeModules } from '../services/bootHookRegistry.js';
+
 import * as imageGen from '../services/imageGen/index.js';
 import * as characterService from '../services/character.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
@@ -225,6 +239,14 @@ import { getSettings } from '../services/settings.js';
 import { AGY_IMAGEGEN_DEFAULT_MODEL } from '../lib/imageGenCapabilities.js';
 import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
+
+const verifyImageAsync = vi.fn();
+registerMediaRuntimeModules(Object.fromEntries(
+  MEDIA_RUNTIME_MODULES.map(name => [name, async () => {
+    if (name === 'imageVerifier') return { verifyImageAsync };
+    throw new Error(`Unexpected media runtime: ${name}`);
+  }]),
+));
 
 describe('Image Gen Routes', () => {
   let app;
@@ -246,6 +268,84 @@ describe('Image Gen Routes', () => {
     app.use('/api/image-gen', imageGenRoutes);
     app.use(errorMiddleware);
     vi.clearAllMocks();
+  });
+
+  describe('pinned Hugging Face snapshots', () => {
+    const modelsPath = '/api/image-gen/models';
+    const revision = 'a'.repeat(40);
+    const otherRevision = 'b'.repeat(40);
+    const model = { id: 'example-model', runner: 'z-image', repo: 'org/model', revision };
+    const flux2 = {
+      ...model, runner: 'flux2',
+      textEncoderRepo: 'org/encoder', textEncoderRevision: 'c'.repeat(40),
+      tokenizerRepo: 'org/tokenizer', tokenizerRevision: 'd'.repeat(40),
+      basePipelineRepo: 'org/base', basePipelineRevision: 'e'.repeat(40),
+      kvRepo: 'org/kv', kvRevision: 'f'.repeat(40),
+    };
+    let cache;
+    let previousCache;
+    beforeEach(async () => {
+      cache = await mkdtemp(pathJoin(tmpdir(), 'portos-image-hf-'));
+      previousCache = process.env.HF_HUB_CACHE;
+      process.env.HF_HUB_CACHE = cache;
+    });
+    afterEach(async () => {
+      if (previousCache === undefined) delete process.env.HF_HUB_CACHE;
+      else process.env.HF_HUB_CACHE = previousCache;
+      downloadHfRepo.mockReset();
+      await rm(cache, { recursive: true, force: true });
+    });
+
+    const weightName = 'weights.bin';
+    const snapshot = (repo, pin) => pathJoin(cache, repoToDirName(repo), 'snapshots', pin);
+    const writeWeights = async (repo, pin, contents = 'fixture') => {
+      await mkdir(snapshot(repo, pin), { recursive: true });
+      await writeFile(pathJoin(snapshot(repo, pin), weightName), contents);
+    };
+
+    it.each([
+      ['a whole repo', model, [[model.repo, revision]]],
+      ['FLUX.2 with auxiliaries', flux2, [
+        [flux2.repo, revision], [flux2.textEncoderRepo, flux2.textEncoderRevision],
+        [flux2.tokenizerRepo, flux2.tokenizerRevision], [flux2.basePipelineRepo, flux2.basePipelineRevision],
+        [flux2.kvRepo, flux2.kvRevision],
+      ]],
+    ])('uses exact revisions for %s across status, download, verify, and repair', async (_name, entry, sources) => {
+      const repos = sources.map(([repo]) => repo);
+      const pending = sources.length > 1 ? sources.slice(1) : sources;
+      for (const repo of repos) await writeWeights(repo, otherRevision);
+      if (sources.length > 1) await writeWeights(entry.repo, entry.revision);
+      getImageModels.mockReturnValue([entry]);
+      try {
+        const status = await request(app).get(`${modelsPath}/status`);
+        expect(status.body).toEqual([expect.objectContaining({
+          id: entry.id, cached: false, requiredRepos: repos, pendingRepos: pending.map(([repo]) => repo), integrity: null,
+        })]);
+
+        downloadHfRepo.mockImplementation(({ repo, revision: pin }) => ({
+          promise: writeWeights(repo, pin).then(() => ({ ok: true, sizeBytes: 7 })),
+          kill: vi.fn(),
+        }));
+        const downloaded = await request(app).post(`${modelsPath}/${entry.id}/download`);
+        expect(downloaded.text).toContain('"type":"complete"');
+        expect(downloadHfRepo.mock.calls.map(([spec]) => [spec.repo, spec.revision])).toEqual(pending);
+        const cached = await request(app).get(`${modelsPath}/status`);
+        expect(cached.body[0]).toMatchObject({ cached: true, pendingRepos: [], integrity: { status: 'ok' } });
+
+        for (const [repo, pin] of sources) await writeWeights(repo, pin, '');
+        const verified = await request(app).post(`${modelsPath}/verify`).send({ modelId: entry.id, deep: true });
+        expect(verified.body).toMatchObject({ deep: true, models: [{ id: entry.id, status: 'bad' }] });
+        expect(verified.body.models[0].badFiles).toHaveLength(sources.length);
+        const repaired = await request(app).post(`${modelsPath}/${entry.id}/repair`).send({ deep: true });
+        expect(repaired.body).toEqual({ deep: true, repos, deleted: repos.map(repo => ({ repo, name: weightName })) });
+        for (const [repo, pin] of sources) {
+          await expect(access(pathJoin(snapshot(repo, pin), weightName))).rejects.toMatchObject({ code: 'ENOENT' });
+          await expect(access(pathJoin(snapshot(repo, otherRevision), weightName))).resolves.toBeUndefined();
+        }
+      } finally {
+        getImageModels.mockImplementation((await vi.importActual('../lib/mediaModels.js')).getImageModels);
+      }
+    });
   });
 
   it('removes both the multipart upload and its staged copy when queue submission fails', async () => {
@@ -943,6 +1043,20 @@ describe('Image Gen Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.path).toBe('/data/images/test.png');
       expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'a fantasy landscape' }));
+    });
+
+    it.each([true, false])('starts external image verification only when requested (%s)', async verifyImage => {
+      imageGen.generateImage.mockResolvedValue({ generationId: 'gen-verify', filename: 'render.png' });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ mode: 'external', prompt: 'a fantasy landscape', verifyImage });
+
+      expect(response.status).toBe(200);
+      expect(verifyImageAsync).toHaveBeenCalledTimes(verifyImage ? 1 : 0);
+      if (verifyImage) {
+        expect(verifyImageAsync).toHaveBeenCalledWith('render.png', { prompt: 'a fantasy landscape', isImport: false });
+      }
     });
 
     it('durably attaches a synchronous FableLoom scene render', async () => {
@@ -2650,6 +2764,81 @@ describe('Image Gen Routes', () => {
       readDimsSpy.mockRestore();
       resolveBackendSpy.mockRestore();
       buildParamsSpy.mockRestore();
+    });
+
+    it('previews byte-identically what the regenerate POST enqueues, carried negative included, and enqueues nothing', async () => {
+      const spies = () => [
+        vi.spyOn(fileUtils, 'resolveGalleryImage').mockReturnValue('/fake/gallery/source.png'),
+        vi.spyOn(regen, 'readImageDimensions').mockResolvedValue({ width: 1024, height: 1024 }),
+        vi.spyOn(regen, 'resolveRegenBackend').mockResolvedValue({ available: true, model: getImageModels().find(model => model.id === 'flux2-klein-9b'), pythonPath: '/fake/venv/python' }),
+      ];
+      const restore = spies();
+      imageGen.local.readImageSidecar.mockResolvedValue({
+        path: '/fake/gallery/source.png.json',
+        metadata: { modelId: 'flux2-klein-9b', prompt: 'a robot', negativePrompt: 'SOURCE NEGATIVE' },
+      });
+      mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'regen-job-002', position: 1, status: 'queued' });
+      try {
+        const body = { prompt: '  typed words  ' };
+        const preview = await request(app).post('/api/image-gen/source.png/regenerate/preview').send(body);
+        expect(preview.status).toBe(200);
+        expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+
+        const submit = await request(app).post('/api/image-gen/source.png/regenerate').send(body);
+        expect(submit.status).toBe(200);
+        const params = mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params;
+        const { localSentPrompt } = await import('../services/imageGen/local.js');
+        const sent = await localSentPrompt({ ...params, model: getImageModels().find(model => model.id === params.modelId) });
+        expect(preview.body).toEqual({ modelId: params.modelId, ...sent });
+        expect(preview.body.sentPrompt).toBe('typed words');
+        expect(preview.body.sentNegativePrompt).toBe('SOURCE NEGATIVE');
+        expect(preview.body.promptAdditions).toEqual(params.promptAdditions);
+        expect(params.promptAdditions.map(item => item.id)).toEqual(['source-negative-prompt']);
+      } finally {
+        restore.forEach(spy => spy.mockRestore());
+        imageGen.local.readImageSidecar.mockReset();
+      }
+    });
+
+    it('previews an annotated re-render without a saved sketch and stages no file', async () => {
+      const restore = [
+        vi.spyOn(fileUtils, 'resolveGalleryImage').mockReturnValue('/fake/gallery/source.png'),
+        vi.spyOn(regen, 'readImageDimensions').mockResolvedValue({ width: 1024, height: 1024 }),
+        vi.spyOn(regen, 'resolveRegenBackend').mockResolvedValue({ available: true, model: getImageModels().find(model => model.id === 'flux2-klein-9b'), pythonPath: '/fake/venv/python' }),
+      ];
+      const sketchPathSpy = vi.spyOn(mediaSketches, 'getSketchPngPath');
+      const copySpy = vi.spyOn(fileUtils, 'copyFileGuarded');
+      imageGen.local.readImageSidecar.mockResolvedValue({ path: '/fake/gallery/source.png.json', metadata: { modelId: 'flux2-klein-9b', negativePrompt: 'SOURCE NEGATIVE' } });
+      try {
+        const preview = await request(app).post('/api/image-gen/source.png/regenerate/preview').send({ annotated: true, prompt: 'typed words' });
+        expect(preview.status).toBe(200);
+        expect(preview.body.sentNegativePrompt).toBe('SOURCE NEGATIVE');
+        expect(sketchPathSpy).not.toHaveBeenCalled();
+        expect(copySpy).not.toHaveBeenCalled();
+        expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      } finally {
+        [...restore, sketchPathSpy, copySpy].forEach(spy => spy.mockRestore());
+        imageGen.local.readImageSidecar.mockReset();
+      }
+    });
+
+    it('previews no prompt and no negative for an empty prompt', async () => {
+      const restore = [
+        vi.spyOn(fileUtils, 'resolveGalleryImage').mockReturnValue('/fake/gallery/source.png'),
+        vi.spyOn(regen, 'readImageDimensions').mockResolvedValue({ width: 1024, height: 1024 }),
+        vi.spyOn(regen, 'resolveRegenBackend').mockResolvedValue({ available: true, model: getImageModels().find(model => model.id === 'flux2-klein-9b'), pythonPath: '/fake/venv/python' }),
+      ];
+      imageGen.local.readImageSidecar.mockResolvedValue({ path: '/fake/gallery/source.png.json', metadata: { modelId: 'flux2-klein-9b', negativePrompt: 'SOURCE NEGATIVE' } });
+      try {
+        const preview = await request(app).post('/api/image-gen/source.png/regenerate/preview').send({});
+        expect(preview.status).toBe(200);
+        expect(preview.body.sentPrompt).toBe('');
+        expect(preview.body).not.toHaveProperty('sentNegativePrompt');
+        expect(preview.body).not.toHaveProperty('promptAdditions');
+      } finally {
+        restore.forEach(spy => spy.mockRestore());
+        imageGen.local.readImageSidecar.mockReset();
+      }
     });
 
     // Annotation re-render (issue #2036 phase 2)

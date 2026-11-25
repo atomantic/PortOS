@@ -17,9 +17,7 @@ vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
   getInstanceFeatures: mock.getInstanceFeatures,
   updateInstanceFeature: mock.updateInstanceFeature,
 }));
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
-}));
+vi.mock('../ui/Toast');
 
 import { __resetInstanceFeatureCache } from '../../hooks/useInstanceFeatures.js';
 import {

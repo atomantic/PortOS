@@ -260,7 +260,7 @@ describe('image-to-3D install profile preflight', () => {
   });
 
   it.each([
-    ['/api/image-to-3d/trellis2/install', false],
+    ['/api/image-to-3d/targets/trellis2/install', false],
     ['/api/image-to-3d/targets/trellis2/install?repair=1', true],
   ])('runs the locked TRELLIS.2 installer through %s', async (path, repair) => {
     if (repair) trellis2.isTrellis2Installed.mockReturnValueOnce(true);
@@ -291,7 +291,7 @@ describe('image-to-3D install profile preflight', () => {
     trellis2.probeTrellis2TextureBake.mockResolvedValueOnce({
       quality: 'fallback', missing: ['mtldiffrast'], degradedQuality: [], modules: {}, help: 'Degraded textures.',
     });
-    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
+    const res = await request(makeApp()).post('/api/image-to-3d/targets/trellis2/install');
     const frames = sseFrames(res.text);
     expect(frames).toContainEqual({
       type: 'log', stage: 'verify', message: '⚠️ Degraded textures. Missing: mtldiffrast.',

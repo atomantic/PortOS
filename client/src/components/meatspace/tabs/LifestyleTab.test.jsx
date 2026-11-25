@@ -5,7 +5,7 @@ vi.mock('../../../services/apiMeatspace.js', () => ({
   getMeatspaceConfig: vi.fn(),
   updateMeatspaceConfig: vi.fn(async (data) => data),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 import { getMeatspaceConfig, updateMeatspaceConfig } from '../../../services/apiMeatspace.js';
 import LifestyleTab from './LifestyleTab';

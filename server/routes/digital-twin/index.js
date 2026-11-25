@@ -24,8 +24,7 @@
  * Route ordering is safe across sub-routers: each domain owns a unique path
  * prefix (`/documents`, `/tests`, `/personas`, `/taste`, `/snapshots`, …), so no
  * sub-router can shadow another's routes. The only order-sensitive pairs
- * (`/personas/active` before `/personas/:id`; `/taste/sections` before
- * `/taste/:section/...`) live entirely inside their own single files.
+ * (`/personas/active` before `/personas/:id`) lives entirely inside its own single file.
  */
 
 import { Router } from 'express';

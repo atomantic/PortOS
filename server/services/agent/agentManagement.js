@@ -60,11 +60,11 @@ import * as shellService from '../shell.js';
 import { exec } from '../../lib/childProcess.js';
 const ROOT_DIR = PATHS.root;
 
-// Startup has two callers for this sweep: cos.start() awaits it before the
-// first dequeue, while the spawner's delayed safety sweep runs shortly after
-// its event wiring. Keep the whole sweep single-flight so both callers cannot
-// read the same running agent and each requeue it (which would emit duplicate
-// wakeups and dispatch the same claim task twice).
+// The sweep's callers overlap: cos.start() awaits it before the first dequeue,
+// the spawner's delayed safety sweep follows its event wiring, and agent list
+// reads and "Run now" arrive at any time. Keep the whole sweep single-flight so
+// two callers cannot read the same running agent and each requeue it (which
+// would emit duplicate wakeups and dispatch the same claim task twice).
 let orphanCleanupPromise = null;
 
 /**
@@ -1003,21 +1003,6 @@ export async function isPidAlive(pid) {
 }
 
 /**
- * Clean up orphaned agents on startup.
- * Agents marked as "running" in state but not tracked anywhere are orphaned.
- *
- * Must check:
- * 1. Local activeAgents map (direct-spawned)
- * 2. Local runnerAgents map (recently spawned via runner)
- * 3. CoS Runner service (may have agents from before server restart)
- *
- * After cleanup:
- * - Resets associated tasks to pending for auto-retry
- * - Creates investigation task after max retries exceeded
- * - Triggers evaluation to spawn new agents
- */
-
-/**
  * Settle a Creative Director run tied to an orphaned/reaped agent (issue #2705).
  *
  * A CD plan/treatment agent that dies without issuing its completion PATCH leaves
@@ -1114,8 +1099,10 @@ const PAUSE_SETTLE_GRACE_MS = 60 * 1000;
  */
 async function retireStrandedPausedAgents(agents) {
   const now = Date.now();
-  for (const agent of agents) {
-    if (agent.status !== 'paused') continue;
+  for (const listed of agents) {
+    if (listed.status !== 'paused') continue;
+    const agent = await readCurrentRecord(listed, 'paused');
+    if (!agent) continue;
     // No task to compare against — nothing proves the pause is spent, so leave it.
     const taskId = agent.taskId || agent.metadata?.taskId || null;
     if (!taskId) continue;
@@ -1145,6 +1132,45 @@ async function retireStrandedPausedAgents(agents) {
 // A running record with no pid this young may still be mid-spawn.
 const SPAWN_GRACE_MS = 30000;
 
+/**
+ * The record behind a sweep-list entry as it stands now, or null when it has
+ * left `status` (or cannot be read, which proves nothing either way).
+ *
+ * The sweep reads its list once and then awaits forge, git and hook work for
+ * every record it retires, so by a later record's turn the listed copy can be
+ * minutes old: a spawn has since recorded its pid, or the run has completed.
+ * Judging that copy retires a live agent or finalizes a finished one twice.
+ */
+async function readCurrentRecord(listed, status) {
+  const current = await readAgentRecordOrUnreadable(listed.id);
+  return current !== AGENT_RECORD_UNREADABLE && current?.status === status ? current : null;
+}
+
+/**
+ * The one reaper for `running` agent records whose process is gone (#18637).
+ * Boot, the health-check interval, the spawner's startup sweep, `GET
+ * /api/cos/agents` and `forceSpawnTask` all call this; nothing else writes a
+ * terminal record for a dead run.
+ *
+ * A record is left running while any of these holds:
+ * - its completion is in flight (`completingAgents`);
+ * - this process holds its handle (`activeAgents`);
+ * - its task is still inside the spawn guard (`spawningTasks`);
+ * - it is runner-owned and the runner cannot be asked;
+ * - the runner lists it with corroborated liveness;
+ * - it has no pid yet and is younger than `SPAWN_GRACE_MS`, unless the
+ *   host-shutdown marker names it;
+ * - its pid answers.
+ *
+ * Any other record is retired once, through `completeAgent`: from the
+ * runner's completion receipt when one is on disk, otherwise as an orphan (or
+ * as interrupted when the host-shutdown marker names it), after which its
+ * task is retried or blocked by `handleOrphanedTask`.
+ *
+ * Single-flight through `orphanCleanupPromise`.
+ *
+ * @returns {Promise<number>} records retired as orphans or interrupted
+ */
 export function cleanupOrphanedAgents() {
   if (!orphanCleanupPromise) {
     orphanCleanupPromise = runCleanupOrphanedAgents().finally(() => {
@@ -1222,13 +1248,24 @@ async function runCleanupOrphanedAgents() {
     emitLog('info', `🧹 Dropped stale runner-agent tracking for ${agentId} — no live record behind it`, { agentId });
   }
 
-  for (const agent of agents) {
-    if (agent.status === 'running') {
+  for (const listed of agents) {
+    if (listed.status === 'running') {
+      const agent = await readCurrentRecord(listed, 'running');
+      if (!agent) continue;
+      // In-process ownership first, with no await since the read above: a spawn
+      // records its pid before it leaves `spawningTasks`, so a record read
+      // without a pid is still covered here.
       if (completingAgents.has(agent.id)) continue;
-      const inRemoteRunner = await runnerEntryShieldsRunningRecord(
-        runnerById.get(agent.id),
-        isPidAlive,
-      );
+      // Direct-spawn handles in this process are live. Leftover runnerAgents
+      // ownership from an earlier adopt is not — a stale listing must not keep
+      // the durable record running forever.
+      if (activeAgents.has(agent.id)) continue;
+      // The record is written before the spawn finishes (prompt build, task claim,
+      // forge/env lookups, PTY open), and that window can run for minutes under
+      // load. While the dispatch still owns the task, a missing pid means "not
+      // spawned yet"; retiring it here completes a run that goes on to launch,
+      // and its claim ownership bind then fails with owner-not-running.
+      if (agent.taskId && spawningTasks.has(agent.taskId)) continue;
 
       // A runner-owned agent may still be alive while the runner is booting or
       // reconnecting. Its absence from a failed probe is not evidence that the
@@ -1245,16 +1282,9 @@ async function runCleanupOrphanedAgents() {
         continue;
       }
 
-      // Direct-spawn handles in this process are live. Leftover runnerAgents
-      // ownership from an earlier adopt is not — a stale listing must not keep
-      // the durable record running forever.
-      if (activeAgents.has(agent.id)) continue;
-      if (inRemoteRunner) continue;
-      // The record is written before the spawn finishes (prompt build, task claim,
-      // PTY open), so a fresh one has no pid and no handle yet. Retiring it here
-      // completes a run that goes on to launch — its claim ownership bind then
-      // fails with owner-not-running. Mirrors the zombie sweep's guards.
-      if (agent.taskId && spawningTasks.has(agent.taskId)) continue;
+      // A runner listing shields only when corroborated (live pid, or the
+      // runner's own onExit bookkeeping); see runnerAgentLiveness.js.
+      if (await runnerEntryShieldsRunningRecord(runnerById.get(agent.id), isPidAlive)) continue;
       // A shutdown-marked dispatch cannot still be initializing in this process.
       // Retire it now; otherwise the grace skips it and we consume its marker,
       // so the next sweep charges a genuine host interruption as an orphan.
@@ -1309,18 +1339,25 @@ async function runCleanupOrphanedAgents() {
         if (receipt) {
           console.log(`📬 Finalizing runner agent ${agent.id} from its completion receipt (exit ${receipt.exitCode})`);
           const { handleAgentCompletion } = await import('./agentLifecycle.js');
-          await handleAgentCompletion(agent.id, receipt.exitCode, receipt.success, receipt.duration);
+          await handleAgentCompletion(agent.id, receipt.exitCode, receipt.success, receipt.duration, receipt);
           continue;
         }
       }
 
       const interrupted = interruptedByRestart.has(agent.id);
+      // The pid is written only after a successful spawn, so a record that never
+      // got one never launched: "terminated unexpectedly" would point at a crash
+      // when the cause is upstream, at spawn time. A recorded pid of 0 (Windows
+      // ConPTY) is a process that did start.
+      const neverStarted = agent.pid == null;
       const errorMessage = interrupted
         ? 'Agent was interrupted by a PortOS server restart'
-        : 'Agent process terminated unexpectedly';
+        : neverStarted
+          ? 'Agent never started — no process was ever launched (check the provider command and CoS Runner logs)'
+          : 'Agent process terminated unexpectedly';
       console.log(interrupted
         ? `🛑 Recovering agent ${agent.id} interrupted by a PortOS restart (PID ${agent.pid || 'unknown'} not running)`
-        : `🧹 Cleaning up orphaned agent ${agent.id} (PID ${agent.pid || 'unknown'} not running)`);
+        : `🧹 Cleaning up orphaned agent ${agent.id} (${neverStarted ? 'no process was ever launched' : `PID ${agent.pid} not running`})`);
       // Record the reap in the lifecycle ledger BEFORE the run is closed
       // (#4540), so the ordered stream reads "orphaned, then finalized" and a
       // replay can tell an agent that died from one that exited. Emitted even
@@ -1488,8 +1525,10 @@ async function runCleanupOrphanedAgents() {
  *   WITHOUT charging orphan-retry budget or arming the orphan cooldown — see the
  *   retry-budget note below (#3202). Pass it when the caller knows (the orphan sweep
  *   reads the host-shutdown marker); leave it null to derive from `agentMetadata`.
+ * @param {boolean} [options.providerStopped] - the runner killed the provider on a usage-limit / auth signal,
+ *   so an existing commit must not be read as the task having finished.
  */
-export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agentMetadata = null, agentStartedAt = null, interrupted = null } = {}) {
+export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agentMetadata = null, agentStartedAt = null, interrupted = null, providerStopped = false } = {}) {
   // Callers that watched the agent die (the orphan sweep, which reads the
   // host-shutdown marker) say so explicitly. The ones that didn't —
   // `resetOrphanedTasks`, post-restart completion recovery — fall back to the
@@ -1522,7 +1561,7 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
   // prove publication and synchronization. Preserve its same-task recovery.
   const releaseTask = agentMetadata?.taskAnalysisType === 'do-release'
     || currentTaskTypeName(task.metadata?.analysisType || task.metadata?.selfImprovementType) === 'do-release';
-  if (!releaseTask && await completeIfCommitted(ctx)) return;
+  if (!releaseTask && !providerStopped && await completeIfCommitted(ctx)) return;
 
   const decision = decideOrphanRetry({ task, wasInterrupted, now: Date.now() });
   await applyOrphanDecision(ctx, decision);

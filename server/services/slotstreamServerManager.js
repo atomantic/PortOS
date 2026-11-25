@@ -99,7 +99,9 @@ const daemon = createDaemonWatcher({
   getConfig: () => currentConfig,
   setConfig: (config) => { currentConfig = config; },
   getLastExitError: () => lastExitError,
+  setLastExitError: (error) => { lastExitError = error; },
   getAppStatus: (...args) => getAppStatusStrict(...args),
+  clearStatusCache: () => clearJlistCache(),
   getSavedProcessNames: (...args) => getSavedProcessNames(...args),
   execPm2: (...args) => execPm2(...args),
 });
@@ -362,21 +364,13 @@ async function launchSlotstreamServer(options = {}) {
     );
   }
 
-  const pm2Status = await getAppStatusStrict(SLOTSTREAM_APP);
-  if (pm2Status && pm2Status.status === 'online') {
-    throw new ServerError(`Slotstream is already running with PID ${pm2Status.pid}`, { status: 409 });
-  }
-
-  const endpoint = `http://${DEFAULT_HOST}:${port}/v1`;
-  if (await probeEndpoint(endpoint)) {
-    throw new ServerError(`Port ${port} is already in use by an active server at ${endpoint}`, { status: 409 });
-  }
-  if (await isPortInUse(port)) {
-    throw new ServerError(
-      `Port ${port} is already in use on ${DEFAULT_HOST}. Point Slotstream at a different port before starting it.`,
-      { status: 409, code: 'SLOTSTREAM_PORT_IN_USE' },
-    );
-  }
+  const endpoint = await daemon.assertPortFree({
+    host: DEFAULT_HOST,
+    port,
+    label: 'Slotstream',
+    codePrefix: 'SLOTSTREAM',
+    portAdvice: 'Point Slotstream at a different port before starting it.',
+  });
 
   daemon.resetLogs();
   lastExitError = null;
@@ -393,105 +387,30 @@ async function launchSlotstreamServer(options = {}) {
     '--memory-gb', String(plan.targetGb),
     ...(model ? ['--model', model] : []),
   ];
-  // `config.memoryGb` is the resolved target actually in effect — the same
-  // number `parseConfigFromArgs` reads back off the PM2 launch line. The
-  // user's *override* (null when PortOS sized it) is a separate fact, kept on
-  // the saved launch below, because the launch line alone cannot tell an
-  // auto-sized 85.8 GB from one the user typed.
   currentConfig = { port, model, memoryGb: plan.targetGb };
   appendLog(`Starting: slotstream ${args.join(' ')}`);
 
-  await execPm2(['delete', SLOTSTREAM_APP]).catch(() => {});
-  clearJlistCache();
-
   console.log(`🌊 Slotstream starting on ${DEFAULT_HOST}:${port}${model ? ` (model ${model})` : ''} (memory ${plan.targetGb} GB${plan.auto ? ', auto' : ''})`);
-  const logsReset = await slotstreamLogs.reset();
-  await execPm2([
-    'start', binaryPath,
-    '--name', SLOTSTREAM_APP,
-    '--interpreter', 'none',
-    '--no-autorestart',
-    '--output', slotstreamLogs.files().stdout,
-    '--error', slotstreamLogs.files().stderr,
-    '--',
-    ...args,
-  ]);
-  clearJlistCache();
 
-  const deadline = Date.now() + (Number.isFinite(waitMs) ? waitMs : startupWaitMs);
-  let online = false;
-  let currentProc = null;
-  while (Date.now() < deadline) {
-    await sleep(startupPollMs);
-    clearJlistCache();
-    currentProc = await getAppStatusStrict(SLOTSTREAM_APP);
-    if (currentProc && ['errored', 'stopped', 'not_found'].includes(currentProc.status)) break;
-    online = await probeEndpoint(endpoint);
-    if (online) break;
-  }
-
-  if (currentProc && ['errored', 'stopped', 'not_found'].includes(currentProc.status)) {
-    const pm2Logs = await execPm2(['logs', SLOTSTREAM_APP, '--nostream', '--lines', '15']).catch(() => null);
-    // Only trust the tail when the startup logs were actually truncated —
-    // otherwise this launch's diagnosis would be the PREVIOUS launch's output,
-    // sending the user after an error they already fixed.
-    const lines = logsReset
-      ? `${pm2Logs?.stderr || pm2Logs?.stdout || ''}`.split('\n').map((l) => l.trimEnd()).filter(Boolean)
-      : [];
-    for (const line of lines) appendLog(line);
-    const tail = (lines.length ? lines : daemon.snapshotLogs()).slice(-4).join(' | ');
-    lastExitError = `PM2 status: ${currentProc.status}`;
-    await execPm2(['delete', SLOTSTREAM_APP]).catch(() => {});
-    clearJlistCache();
-    currentConfig = null;
-    throw new ServerError(
-      `Slotstream exited immediately (${lastExitError}).${tail ? ` Last output: ${tail}` : ''}`,
-      { status: 500, code: 'SLOTSTREAM_EXITED' },
-    );
-  }
-
-  // `memoryGb` stays the user's *override* (null when PortOS sized it), never
-  // the resolved target — `--memory-gb` is always on the launch line, so the
-  // saved override is the only thing that can tell an auto-sized 85.8 GB from
-  // one the user typed apart later.
-  await persistDaemonLaunchConfig({ key: 'slotstream', label: 'Slotstream', launch: { port, model, memoryGb: plan.auto ? null : plan.targetGb } });
-
-  const finalProc = await getAppStatusStrict(SLOTSTREAM_APP);
-  return {
-    success: true,
-    running: true,
-    managed: true,
-    pid: finalProc?.pid || null,
+  // The saved override stays null for auto sizing. The live config carries
+  // the resolved target, which PM2 argv can recover but cannot tell was auto.
+  const result = await daemon.launch({
+    binaryPath,
+    args,
     endpoint,
-    online,
-    config: currentConfig,
-    memoryPlan: plan,
-  };
+    waitMs: Number.isFinite(waitMs) ? waitMs : startupWaitMs,
+    pollMs: startupPollMs,
+    logs: slotstreamLogs,
+    label: 'Slotstream',
+    codePrefix: 'SLOTSTREAM',
+    onStarted: () => persistDaemonLaunchConfig({ key: 'slotstream', label: 'Slotstream', launch: { port, model, memoryGb: plan.auto ? null : plan.targetGb } }),
+  });
+  return { ...result, memoryPlan: plan };
 }
 
 /** Stop the managed Slotstream process. */
 export async function stopSlotstreamServer() {
-  const pm2Status = await getAppStatusStrict(SLOTSTREAM_APP);
-  const isManaged = Boolean(pm2Status && pm2Status.status === 'online');
-
-  if (!isManaged) {
-    const endpoint = endpointFor(currentConfig);
-    if (await probeEndpoint(endpoint)) {
-      return {
-        success: false,
-        message: `An external process is listening on ${endpoint}. It was not started by PortOS and cannot be stopped here.`,
-      };
-    }
-    return { success: true, message: 'Slotstream is not running' };
-  }
-
-  appendLog(`Stopping ${SLOTSTREAM_APP}`);
-  await execPm2(['delete', SLOTSTREAM_APP]).catch((err) => {
-    throw new ServerError(`Failed to stop Slotstream: ${err.message}`, { status: 500 });
-  });
-  clearJlistCache();
-  currentConfig = null;
-  return { success: true, message: 'Slotstream stopped' };
+  return daemon.stop({ label: 'Slotstream' });
 }
 
 export function _resetSlotstreamServerStateForTests({
@@ -533,6 +452,9 @@ async function savedLaunchConfig() {
 // and `ensureSlotstreamRunning` all now live in `onDemand` (#8105) — see the
 // identical block in `mtplxServerManager.js`.
 export const markSlotstreamUsed = () => onDemand.markUsed();
+
+/** Wait for a just-started server to answer (stops early when PM2 reports it dead); `{ready, reason}`. */
+export const waitForSlotstreamReady = (endpoint) => onDemand.waitForReady(endpoint);
 
 /**
  * Bring Slotstream up if the idle reaper (or the user) stopped it. See

@@ -16,6 +16,7 @@
 import os from 'os';
 import { isLocalInstanceEndpoint } from './localEndpoint.js';
 import { localRuntimeKind } from './localProviderRuntime.js';
+import { hasLocalRuntimeMarker } from './aiToolkit/internal/localRuntimeMarkers.js';
 import { isAppleSilicon } from './platform.js';
 import { getCudaCapability, getCudaComputeCapability } from './cudaCapability.js';
 
@@ -119,6 +120,7 @@ const LOCAL_MODEL_REQUIREMENT_KEYS = Object.freeze(
 );
 
 const providerRuntimeRequirements = Object.freeze({
+  splash: Object.freeze({ platforms: ['darwin'], requiresAppleSilicon: true }),
   mtplx: Object.freeze({
     platforms: ['darwin'],
     requiresAppleSilicon: true,
@@ -141,12 +143,7 @@ const providerRuntimeRequirements = Object.freeze({
 // a plain API endpoint with no `mtplxBacked` marker to read. #6466 gave
 // `localRuntimeKind` an id-based fallback for exactly that record, so the
 // shortcut here is now a call to it instead of a hand-rolled copy.
-const localProvider = (provider) => provider?.ollamaBacked
-  || provider?.lmstudioBacked
-  || provider?.llamaBacked
-  || provider?.mtplxBacked
-  || provider?.vllmBacked
-  || provider?.sglangBacked
+const localProvider = (provider) => hasLocalRuntimeMarker(provider)
   || localRuntimeKind(provider) === 'mtplx';
 
 const localModelHardwareRequirements = (model) => {
@@ -405,13 +402,14 @@ export function hardwareRequirementsForLocalLlm(entry) {
 
 /** Resolve inferred and user-configured provider requirements. */
 export function hardwareRequirementsForProvider(provider) {
-  const runtime = localRuntimeKind(provider) === 'mtplx'
+  const kind = localRuntimeKind(provider);
+  const runtime = kind === 'mtplx'
     ? 'mtplx'
     : provider?.vllmBacked
       ? 'vllm'
       : provider?.sglangBacked
         ? 'sglang'
-        : null;
+        : kind === 'splash' && isLocalInstanceEndpoint(provider?.endpoint) ? 'splash' : null;
   return mergeHardwareRequirements(providerRuntimeRequirements[runtime], provider?.hardwareRequirements);
 }
 

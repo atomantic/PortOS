@@ -180,6 +180,3 @@ export const hasActiveTaskOwner = (taskId, agents = {}) => {
 // Metadata booleans may arrive as true/'true' or false/'false' (typed rows vs rows stored before #16407 and peers on older versions)
 export { isTruthyMeta, isFalsyMeta } from '../../lib/metadataFlags.js';
 
-// Metadata strings may be absent, empty, or non-string (objects/numbers leak past `||` checks).
-// Returns `value` only when it's a non-empty string, otherwise `fallback`.
-export const metaStringOr = (value, fallback) => (typeof value === 'string' && value) ? value : fallback;

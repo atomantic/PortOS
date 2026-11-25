@@ -46,7 +46,7 @@ vi.mock('../../services/socket', () => ({ default: socket }));
 const uploadGalleryImage = vi.hoisted(() => vi.fn(async () => ({ filename: 'upload-1234abcd.png' })));
 vi.mock('../../services/apiSystem.js', () => ({ uploadGalleryImage }));
 
-import CompositionPreviewPlayer, { playthroughVersion } from './CompositionPreviewPlayer.jsx';
+import CompositionPreviewPlayer, { documentPreviewRevision, playthroughVersion } from './CompositionPreviewPlayer.jsx';
 import { PREVIEW_FILM_LOOK_KEY } from './PreviewFilmLook.jsx';
 import toast from '../ui/Toast.jsx';
 
@@ -97,6 +97,16 @@ describe('playthroughVersion', () => {
     expect(version.length).toBeLessThanOrEqual(500);
     const nudged = cues.map((cue, line) => (line === 30 ? { ...cue, words: cue.words.map((w, i) => (i === 2 ? { ...w, endSec: w.endSec + 0.01 } : w)) } : cue));
     expect(playthroughVersion({ lyricCues: nudged })).not.toBe(version);
+  });
+});
+
+describe('documentPreviewRevision', () => {
+  it('reopens the preview when a shot selects another clip or returns to another take', () => {
+    const base = { composition: { document: { directory: 'doc-1' } }, scenes: [{ sceneId: 's1', startSec: 0, endSec: 2, videoHistoryId: 'clip-a' }] };
+    const withShot = (patch) => documentPreviewRevision({ ...base, scenes: [{ ...base.scenes[0], ...patch }] });
+    expect(withShot({ videoHistoryId: 'clip-b' })).not.toBe(withShot({}));
+    expect(withShot({ sourceTake: { sceneId: 's0' } })).not.toBe(withShot({}));
+    expect(withShot({ prompt: 'unrelated' })).toBe(withShot({}));
   });
 });
 

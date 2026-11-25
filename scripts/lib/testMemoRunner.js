@@ -41,9 +41,9 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import * as nodeFs from 'node:fs';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import * as nodePath from 'node:path';
-import { join, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { resolveTestChrome } from './testChrome.js';
 import { TOOLING_TESTS, getAlwaysRunTests } from './ciPlanRules.js';
 import { isGuardTest } from './guardScanners.js';
@@ -86,10 +86,11 @@ const reachesClosure = (info, sources) => sources.some((rel) => info.closure.has
  * @param {object|null} [options.factsCache] parsed file facts from earlier runs (`factsCache.js`); loaded from the store by default
  * @param {Array<{label: string, env: object, caseFilter: string[]}>} [options.acceptVerdictsFrom]
  *   settings whose green entry may also skip a file here (`createTestMemoAnalyzer`)
+ * @param {string} [options.provisionableTool] tool that setup can change, for counting misses that may still become hits
  * @returns {{ selected: string[], run: string[], skipped: Array<{test: string, via: 'recorded'|'floor', from?: string}>,
- *   unmemoizable: Set<string>, analyze: (test: string, recorded: string[]) => object, verdicts: Map }}
+ *   unsettled: number, unmemoizable: Set<string>, analyze: (test: string, recorded: string[]) => object, verdicts: Map }}
  */
-export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, caseFilter = [], acceptVerdictsFrom = [], listFiles = listRepositoryFiles, shardSlice = serverShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry, factsCache = memoDir ? loadFactsCache(memoDir, scope) : null }) {
+export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, freshToolVersion = toolVersion, requireToolVersions = false, provisionableTool, planBeforeClientSetup = false, caseFilter = [], acceptVerdictsFrom = [], listFiles = listRepositoryFiles, shardSlice = serverShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry, factsCache = memoDir ? loadFactsCache(memoDir, scope) : null }) {
   const candidates = mode === 'files' ? uniqueSorted(repoFiles)
     : uniqueSorted([...listTests(scope, { repoRoot, platform, env }).map((rel) => toRepoPath(scope, rel)), ...repoFiles]);
   // Related reach can differ between sibling shards with different memo records.
@@ -99,7 +100,7 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   const alwaysRun = new Set(getAlwaysRunTests());
   const unmemoizable = new Set(mode === 'files' || (mode === 'full' && memoDir)
     ? owned.filter((test) => neverMemoized(test, repoRoot, alwaysRun)) : []);
-  const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, caseFilter, acceptVerdictsFrom, listFiles: () => listFiles(repoRoot), factsCache };
+  const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, requireToolVersions, planBeforeClientSetup, caseFilter, acceptVerdictsFrom, listFiles: () => listFiles(repoRoot), factsCache };
   // Built on first use: a plan whose candidates are all unmemoizable never pays for the base closure.
   let primary = null;
   const analyze = (test, recorded, digests = null, served = null) => {
@@ -114,7 +115,7 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   let fresh = null;
   const freshAnalyze = (test, recorded, served = null) => {
     if (!fresh) {
-      const again = createTestMemoAnalyzer(options);
+      const again = createTestMemoAnalyzer({ ...options, toolVersion: freshToolVersion });
       fresh = { analyzer: again, baseClosure: again.workspaceBase(WORKSPACE_BASE_INPUTS[scope], WORKSPACE_SETUP_ENTRIES[scope]) };
     }
     return fresh.analyzer.analyzeTest(test, { baseClosure: fresh.baseClosure, recorded, served });
@@ -151,6 +152,7 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
 
   const skipped = [];
   const run = [];
+  let unsettled = 0;
   let unanalyzed = 0;
   // This run's own entry first, then one written under settings whose verdict
   // also proves this run's cases (`acceptVerdictsFrom`); `from` names those.
@@ -169,12 +171,17 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
     // file that runs has had its floor read here, before Vitest starts, which
     // `recordTestMemo`'s changed-during-the-run check relies on.
     const recorded = memoDir && info ? hit(test, info.recorded) : null;
-    const floor = memoDir && info && !recorded ? hit(test, info.floor) : null;
-    if (recorded || floor) { skipped.push({ test, via: recorded ? 'recorded' : 'floor', ...(recorded ?? floor) }); continue; }
+    if (recorded) { skipped.push({ test, via: 'recorded', ...recorded }); continue; }
+    const floor = memoDir && info ? hit(test, info.floor) : null;
+    if (floor) { skipped.push({ test, via: 'floor', ...floor }); continue; }
     run.push(test);
+    if (provisionableTool && memoDir && info && [info.recorded, info.floor].some(verdict =>
+      verdict?.tools?.has(provisionableTool) && !verdict.unavailableTools?.some(tool => tool !== provisionableTool))) {
+      unsettled += 1;
+    }
   }
   const narrowed = mode === 'related' ? [...verdicts.values()].filter((info) => info.narrowed).length : 0;
-  return { selected, slice, run, skipped, unmemoizable, unanalyzed, narrowed, analyze, freshAnalyze, moduleDigest, verdicts, caseFiltered: caseFilter.length > 0, factsCache };
+  return { selected, slice, run, skipped, unsettled, unmemoizable, unanalyzed, narrowed, analyze, freshAnalyze, moduleDigest, verdicts, caseFiltered: caseFilter.length > 0, factsCache };
 }
 
 export function memoSummaryLine(plan) {
@@ -477,27 +484,134 @@ export function seedVitestDependencies(repoRoot, scope, tests) {
   writeFileSync(path, JSON.stringify({ version: 2, projects: Object.fromEntries(VITEST_PROJECT_NAMES.map((name) => [name, { modules: [], files }])) }));
 }
 
+const sha256Hex = (data) => createHash('sha256').update(data).digest('hex');
+
+/** Configuration listings one identity reads before it gives up: what git reads by itself, plus each conditional include. */
+const GIT_CONFIG_SOURCES_LIMIT = 32;
+
+/**
+ * What a `test-memo: git-fixture` suite runs against besides its own
+ * sources: the git it finds and everything a repository made on this machine
+ * inherits. The first line of `git --version`, then a digest of:
+ *
+ * - the configuration git reads outside any repository: the system and
+ *   global files and what the environment supplies (`GIT_CONFIG_COUNT`,
+ *   `GIT_CONFIG_PARAMETERS`), includes followed;
+ * - every file a conditional include (`includeIf`) names, whatever its
+ *   condition: which of them a fixture repository meets depends on where and
+ *   how the suite makes it, so each one counts;
+ * - the global ignore and attributes files, at their default place and
+ *   wherever any of that configuration puts them, and the system-wide
+ *   attributes file, which no configuration names (`git var`, 2.42);
+ * - every `GIT_*` environment variable.
+ *
+ * Only the digest leaves this function, so no setting or credential reaches
+ * a log. What a setting points at beyond those files (a hooks or template
+ * directory) is the machine's, as the rest of its userland is to every key.
+ *
+ * Null, which the analyzer never keys (`TEST_MEMO_REQUIRED_TOOLS`), wherever
+ * this cannot be established. A failed probe is never read as an empty
+ * answer: git cannot be run or is too old to say where a setting came from
+ * (`--show-origin`, 2.8) or where its system-wide attributes are; the
+ * configuration cannot be listed (malformed, unreadable, a probe that timed
+ * out); a file it names cannot be placed (a path relative to each
+ * repository, git's own `%(prefix)` interpolation) or read; the include
+ * chain does not end; or the directory the fixtures are
+ * made under is itself inside a repository, so git started in a fixture
+ * directory that is no repository of its own would find that one, whose
+ * state is in no key.
+ */
+function gitToolIdentity({ env, run, scratch, read }) {
+  const git = (args) => run('git', args, { env, cwd: scratch, encoding: 'utf8', timeout: 15_000 });
+  const version = git(['--version']);
+  if (version.error || version.status !== 0) return null;
+  const line = String(version.stdout).trim().split('\n')[0];
+  const [, major, minor] = line.match(/(\d+)\.(\d+)/) ?? [];
+  if (!(Number(major) > 2 || (Number(major) === 2 && Number(minor) >= 8))) return null;
+  // Outside a repository git lists exactly what every new repository starts from, and exits 0 with no file at all.
+  const enclosing = git(['rev-parse', '--git-dir']);
+  if (enclosing.error || enclosing.status === 0) return null;
+
+  const home = env.HOME || env.USERPROFILE || homedir();
+  const defaults = join(env.XDG_CONFIG_HOME || join(home, '.config'), 'git');
+  // A file that is not there is an input like any other; one that cannot be read is no answer.
+  const digestOf = (file) => {
+    try { return sha256Hex(read(file)); } catch (error) { return error?.code === 'ENOENT' || error?.code === 'ENOTDIR' ? 'absent' : null; }
+  };
+  const files = new Set([join(defaults, 'ignore'), join(defaults, 'attributes')]);
+  // Only git knows where its system-wide attributes file is; `GIT_ATTR_NOSYSTEM` is the one way it has none.
+  const systemAttributes = git(['var', 'GIT_ATTR_SYSTEM']);
+  const attributesPath = systemAttributes.error || systemAttributes.status !== 0 ? '' : String(systemAttributes.stdout).trim();
+  if (attributesPath !== '') files.add(attributesPath);
+  else if (systemAttributes.error || systemAttributes.status !== 1 || !env.GIT_ATTR_NOSYSTEM) return null;
+  const sources = [[]];
+  const listings = [];
+  for (let at = 0; at < sources.length; at += 1) {
+    if (at >= GIT_CONFIG_SOURCES_LIMIT) return null;
+    // git skips a conditional include whose file is missing; any other one has to be readable and listable.
+    const target = sources[at].length ? digestOf(sources[at][1]) : '';
+    if (target === null) return null;
+    if (target === 'absent') { listings.push(`${sources[at][1]} absent`); continue; }
+    const listed = git(['config', ...sources[at], '--includes', '--show-origin', '--null', '--list']);
+    if (listed.error || listed.status !== 0) return null;
+    const text = String(listed.stdout);
+    listings.push(`${sources[at].join(' ')}\n${text}`);
+    // `--show-origin --null` writes `origin\0key\nvalue\0` per setting.
+    const fields = text.split('\0');
+    for (let i = 0; i + 1 < fields.length; i += 2) {
+      const [key, ...rest] = fields[i + 1].split('\n');
+      const include = /^includeif\..*\.path$/.test(key);
+      if (!include && key !== 'core.excludesfile' && key !== 'core.attributesfile') continue;
+      const value = rest.join('\n');
+      // `~/` is the home directory. An include is otherwise read beside the file that names it; an
+      // ignore or attributes file beside whichever repository reads the setting, which is no one place.
+      const beside = include && fields[i].startsWith('file:') ? dirname(fields[i].slice('file:'.length)) : null;
+      // `~user/` and git's own `%(prefix)/` are places this cannot name.
+      const named = /^~[\\/]/.test(value) ? join(home, value.slice(2)) : isAbsolute(value) ? value : beside === null || /^(?:~|%\()/.test(value) ? null : join(beside, value);
+      if (named === null) return null;
+      if (!include) files.add(named);
+      else if (!sources.some(([, file]) => file === named)) sources.push(['--file', named]);
+    }
+  }
+  const fileDigests = [...files].sort().map((file) => [file, digestOf(file)]);
+  if (fileDigests.some(([, digest]) => digest === null)) return null;
+  const gitEnv = Object.keys(env).filter((name) => name.startsWith('GIT_')).sort().map((name) => `${name}=${env[name]}`);
+  return `${line} settings ${sha256Hex([...listings, ...fileDigests.map((pair) => pair.join(' ')), ...gitEnv].join('\0')).slice(0, 16)}`;
+}
+
 /**
  * Version strings for `TEST_MEMO_TOOLS`, resolved once per process the way
  * the suites find the programs: `PORTOS_TEST_PYTHON` or `python3`, `ffmpeg`
- * on PATH, and Chrome through the suites' own candidate list
- * (`resolveTestChrome`). Null (keyed as `absent`) when the program cannot
- * be run.
+ * on PATH, Chrome through the suites' own candidate list
+ * (`resolveTestChrome`), and git with what its repositories inherit
+ * (`gitToolIdentity`; `scratch` is the directory the suites' temp root is
+ * made under, as `bootstrapVitestTempRoot` picks it, and `read` reads a
+ * file). Null when the program cannot be run.
  */
-export function createToolVersionResolver({ env = process.env } = {}) {
+export function createToolVersionResolver({ env = process.env, verifyAudioPair = false, run = spawnSync, scratch = env.PORTOS_TEST_TEMP_ROOT || tmpdir(), read = readFileSync } = {}) {
   const cache = new Map();
   const firstLine = (command, args) => {
     if (!command) return null;
-    const result = spawnSync(command, args, { encoding: 'utf8', timeout: 15_000 });
+    const result = run(command, args, { env, encoding: 'utf8', timeout: 15_000 });
     if (result.error || result.status !== 0) return null;
     return `${result.stdout}${result.stderr}`.trim().split('\n')[0] || null;
+  };
+  const audioVersion = () => {
+    const version = firstLine('ffmpeg', ['-version']);
+    if (!verifyAudioPair || !version) return version;
+    // The suite needs the companion tool from the same package. Keep the
+    // original ffmpeg line as the key so existing verified entries still hit.
+    const probe = firstLine('ffprobe', ['-version']);
+    const release = version.match(/^ffmpeg version (\S+)/)?.[1];
+    return release && probe?.match(/^ffprobe version (\S+)/)?.[1] === release ? version : null;
   };
   return (tool) => {
     if (cache.has(tool)) return cache.get(tool);
     const version = tool === 'python' ? firstLine(env.PORTOS_TEST_PYTHON || 'python3', ['--version'])
-      : tool === 'ffmpeg' ? firstLine('ffmpeg', ['-version'])
+      : tool === 'ffmpeg' ? audioVersion()
         : tool === 'chrome' ? firstLine(resolveTestChrome(env), ['--version'])
-          : null;
+          : tool === 'git' ? gitToolIdentity({ env, run, scratch, read })
+            : null;
     cache.set(tool, version);
     return version;
   };

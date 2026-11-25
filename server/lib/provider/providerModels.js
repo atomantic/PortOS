@@ -6,6 +6,7 @@ import { gatewayIdForProvider, isGatewayNamespace } from './providerGateways.js'
 import { isLocalInstanceEndpoint } from '../localEndpoint.js';
 import { isPlainObject } from '../objects.js';
 import { isOllamaBackedProvider, ollamaThinkingLevelsForModel } from '../aiToolkit/internal/ollamaBacked.js';
+import { markedLocalRuntime } from '../aiToolkit/internal/localRuntimeMarkers.js';
 
 export const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
@@ -22,8 +23,6 @@ const CONFIGURED_DEFAULT_SENTINELS = new Set([
   GROK_CONFIGURED_DEFAULT,
   KIMI_CONFIGURED_DEFAULT,
 ]);
-
-export const isCodexConfiguredDefault = (model) => model === CODEX_CONFIGURED_DEFAULT;
 
 /** True for any provider "use CLI's own default" sentinel (Codex / Antigravity / Grok Build). */
 export const isConfiguredDefaultModel = (model) => CONFIGURED_DEFAULT_SENTINELS.has(model);
@@ -630,16 +629,10 @@ export function bareLocalModelId(model, kind) {
  * @returns {'ollama'|'lmstudio'|'mtplx'|'llama'|'vllm'|'sglang'|string|null}
  */
 export function getOpencodeLocalProviderNamespace(provider) {
-  if (provider?.ollamaBacked === true) return 'ollama';
-  if (provider?.lmstudioBacked === true) return 'lmstudio';
-  if (provider?.mtplxBacked === true) return 'mtplx';
-  if (provider?.llamaBacked === true) return 'llama';
-  if (provider?.vllmBacked === true) return 'vllm';
-  if (provider?.sglangBacked === true) return 'sglang';
   // Hosted gateways (`providerGateways.js`) come LAST so a malformed record carrying both a local
   // marker and a gateway marker keeps its legacy local outcome, exactly as the old if-chain did
   // with `orcarouterBacked`.
-  return gatewayIdForProvider(provider);
+  return markedLocalRuntime(provider) ?? gatewayIdForProvider(provider);
 }
 
 /**

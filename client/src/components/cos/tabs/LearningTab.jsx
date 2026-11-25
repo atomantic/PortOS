@@ -225,17 +225,11 @@ export default function LearningTab() {
   }, [beginVerdictLoad]);
   useSocketSubscription('cos', { onResubscribe: refreshVerdicts });
   useEffect(() => {
-    // Deleting or clearing runs removes their verdicts; archiving moves a record
-    // without changing what the aggregate counts, so it needs no re-read.
-    const handleAgentsChanged = (change) => {
-      if (change?.action === 'auto-archive' || change?.action === 'zombie-cleanup') return;
-      refreshVerdicts();
-    };
     socket.on('cos:reviewer-verdict:recorded', refreshVerdicts);
-    socket.on('cos:agents:changed', handleAgentsChanged);
+    socket.on('cos:agents:changed', refreshVerdicts);
     return () => {
       socket.off('cos:reviewer-verdict:recorded', refreshVerdicts);
-      socket.off('cos:agents:changed', handleAgentsChanged);
+      socket.off('cos:agents:changed', refreshVerdicts);
     };
   }, [refreshVerdicts]);
 

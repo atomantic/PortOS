@@ -11,7 +11,7 @@ vi.mock('../services/apiPipeline.js', () => ({
   getVoiceFingerprint: (...a) => getVoiceFingerprint(...a),
 }));
 
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 function renderAt(seriesId = 'ser-1') {
   return render(

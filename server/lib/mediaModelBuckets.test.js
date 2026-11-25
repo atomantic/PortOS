@@ -6,7 +6,6 @@ import {
   activeVideoBucket,
   canonicalizeVideoBuckets,
   matchesVideoBucket,
-  otherVideoBucket,
   readVideoBucket,
   readVideoDefault,
   resolveVideoBucketKey,
@@ -39,10 +38,6 @@ describe('activeVideoBucket', () => {
     expect(activeVideoBucket()).toBe(VIDEO_BUCKET_CUDA);
   });
 
-  it('otherVideoBucket is the opposite of whatever it is handed', () => {
-    expect(otherVideoBucket(VIDEO_BUCKET_MLX)).toBe(VIDEO_BUCKET_CUDA);
-    expect(otherVideoBucket(VIDEO_BUCKET_CUDA)).toBe(VIDEO_BUCKET_MLX);
-  });
 });
 
 describe('bucket key resolution', () => {

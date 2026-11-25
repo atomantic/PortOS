@@ -1,9 +1,10 @@
+import { resolveSplashHarnessContext } from '../lib/splashHarnessLaunch.js';
 import { homedir } from 'node:os';
 import { EXECUTION_OPTIONS_ERROR } from '../lib/executionOptions.js';
 import * as shellService from '../services/shell.js';
 import { getProviderById } from '../services/provider/providers.js';
 import { prepareExecutionOptions } from '../lib/provider/providerExecutionOptions.js';
-import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
+import { prepareTuiShellLaunch } from '../lib/tuiShellLaunch.js';
 import {
   shellAttachSchema,
   shellCdSchema,
@@ -36,7 +37,7 @@ export const registerShellHandlers = (socket, _io) => {
           provider = prepared.provider;
           if (Object.keys(prepared.attribution.requested).length) executionOptions = prepared.attribution;
         }
-        const launch = buildTuiShellLaunch(provider);
+        const launch = await prepareTuiShellLaunch(await resolveSplashHarnessContext(provider), cwd);
         if (!launch) {
           socket.emit('shell:error', { error: `Provider '${providerId}' is not a launchable TUI provider` });
           return;

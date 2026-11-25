@@ -112,7 +112,7 @@ function StageReady({ stage, active, onReady }) {
 export default function ProjectWorkspace({
   selected, tracks, trackLibrary, trackName, youtube, separation, lyricAlign, midi, renderJob, videoSettings, publishing, analyzing, cloning,
   replaceProject, patchProject, patchScene, openProject, prepareSong, onAnalyze, onClone, onTrackImported,
-  onRename, renameForm, deletion, unsavedSceneFields, takesRef, mergeFetchedProject, applyEdit, reloadOpenProject,
+  onRename, renameForm, versionPicker, deletion, unsavedSceneFields, takesRef, mergeFetchedProject, applyEdit, reloadOpenProject,
 }) {
   const { projectId: routeProjectId, artifactId: routeArtifactId, stage: routeStage, sceneId: routeSceneId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -631,6 +631,7 @@ export default function ProjectWorkspace({
           saving={takes.pending}
           onSelectTake={takes.selectTake}
           onReviewTake={takes.reviewTake}
+          onMoveTake={takes.moveTake}
           onOpenPreview={openPreview}
           pendingOnly={contactSheetPendingOnly}
           onPendingOnlyChange={setContactSheetPendingOnly}
@@ -669,6 +670,7 @@ export default function ProjectWorkspace({
             previewExpanded={dockExpanded}
             onRename={onRename}
             renameForm={renameForm}
+            versionPicker={versionPicker}
             cancelRender={renderTargetsSelected && !renderJob.pending ? { onCancel: renderJob.cancel, cancelling: renderJob.cancelling } : null}
             lead={stageHasChecklist(activeStage) ? (
               <StageChecklist

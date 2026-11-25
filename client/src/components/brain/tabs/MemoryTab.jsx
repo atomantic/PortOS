@@ -76,6 +76,13 @@ export function transcriptTeaser(content, maxLen = 220) {
   return `${plain.slice(0, maxLen).trimEnd()}…`;
 }
 
+// Comma lists are held as typed text and split only on save: splitting on every
+// keystroke drops the comma or space being typed.
+const withCommaList = (form, inputKey, listKey) => {
+  const { [inputKey]: text, ...data } = form;
+  return text == null ? data : { ...data, [listKey]: text.split(',').map(s => s.trim()).filter(Boolean) };
+};
+
 // Ideas is a first-class Brain route, but it deliberately shares this native
 // record surface so CRUD, status completion, catalog handoff, embeddings, and
 // federation continue to use the same idea model and API.
@@ -97,6 +104,8 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
   const [editStatus, setEditStatus] = useState('ready');
   const [savingEdit, setSavingEdit] = useState(false);
   const pendingSave = useRef(false);
+  const [savingAdd, setSavingAdd] = useState(false);
+  const pendingAdd = useRef(false);
   const editSession = useRef(null);
   const selectedRecordId = useRef(recordId);
   selectedRecordId.current = recordId;
@@ -272,7 +281,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     let result;
     switch (session.type) {
       case 'people':
-        result = await updateBrainPerson(session.id, editForm, { silent: true }).catch(err => {
+        result = await updateBrainPerson(session.id, withCommaList(editForm, 'followUpsInput', 'followUps'), { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
@@ -296,9 +305,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
         });
         break;
       case 'memories': {
-        const { tagInput, ...memData } = editForm;
-        if (tagInput != null) memData.tags = tagInput.split(',').map(s => s.trim()).filter(Boolean);
-        result = await updateBrainMemory(session.id, memData, { silent: true }).catch(err => {
+        result = await updateBrainMemory(session.id, withCommaList(editForm, 'tagInput', 'tags'), { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
@@ -320,10 +327,13 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
   };
 
   const handleAdd = async () => {
+    if (pendingAdd.current) return;
+    pendingAdd.current = true;
+    setSavingAdd(true);
     let result;
     switch (activeType) {
       case 'people':
-        result = await createBrainPerson(addForm, { silent: true }).catch(err => {
+        result = await createBrainPerson(withCommaList(addForm, 'followUpsInput', 'followUps'), { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
@@ -347,9 +357,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
         });
         break;
       case 'memories': {
-        const { tagInput, ...memData } = addForm;
-        if (tagInput != null) memData.tags = tagInput.split(',').map(s => s.trim()).filter(Boolean);
-        result = await createBrainMemory(memData, { silent: true }).catch(err => {
+        result = await createBrainMemory(withCommaList(addForm, 'tagInput', 'tags'), { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
@@ -357,6 +365,8 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
       }
     }
 
+    pendingAdd.current = false;
+    if (mounted.current) setSavingAdd(false);
     if (result) {
       toast.success('Created');
       setShowAdd(false);
@@ -503,8 +513,8 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
               <input
                 type="text"
                 placeholder="Follow-ups (comma separated)"
-                value={(form.followUps || []).join(', ')}
-                onChange={(e) => setForm({ ...form, followUps: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+                value={form.followUpsInput ?? (form.followUps || []).join(', ')}
+                onChange={(e) => setForm({ ...form, followUpsInput: e.target.value })}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
               />
             </FormField>
@@ -1025,7 +1035,8 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
               <div className="flex items-center gap-2 mt-3">
                 <button
                   onClick={handleAdd}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30"
+                  disabled={savingAdd}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30 disabled:opacity-50"
                 >
                   <Plus size={14} />
                   Create

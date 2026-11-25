@@ -48,33 +48,8 @@ const providersFixture = () => ({
   providers: [CLAUDE_OLLAMA, CLAUDE_OLLAMA_TUI, REMOTE_API],
 });
 
-describe('GET /api/providers/management/preview', () => {
-  it('returns the version-1 graph preview without touching the flat provider API', async () => {
-    const getAllProviders = vi.fn().mockResolvedValue(providersFixture());
-    const res = await request(appWith({ getAllProviders })).get('/api/providers/management/preview');
-
-    expect(res.status).toBe(200);
-    expect(res.body.schemaVersion).toBe(1);
-    // Same executable provider id string the flat API publishes.
-    expect(res.body.activeProvider).toBe('claude-ollama');
-    expect(res.body.routes.map((route) => route.providerId).sort())
-      .toEqual(['claude-ollama', 'claude-ollama-tui', 'remote-ollama']);
-    // The graph is read-only: nothing was written back.
-    expect(getAllProviders).toHaveBeenCalledTimes(1);
-  });
-
-  it('publishes credential PRESENCE, never a credential or a redacted stand-in', async () => {
-    const res = await request(appWith({ getAllProviders: vi.fn().mockResolvedValue(providersFixture()) }))
-      .get('/api/providers/management/preview');
-
-    const serialized = JSON.stringify(res.body);
-    expect(serialized).not.toContain('example-token');
-    expect(serialized).not.toContain('example-remote-key');
-    expect(res.body.connections.every((connection) => connection.hasCredentials)).toBe(true);
-  });
-
+describe('GET /api/providers', () => {
   it('leaves GET /api/providers byte-compatible for existing clients', async () => {
-    // A new endpoint must not become a reason for an old client to change.
     const res = await request(appWith({ getAllProviders: vi.fn().mockResolvedValue(providersFixture()) }))
       .get('/api/providers');
 
@@ -111,36 +86,10 @@ describe('GET /api/providers local catalog sync', () => {
   });
 });
 
-describe('the preview contacts no AI provider and launches no runtime', () => {
-  // The AI Provider Usage Policy in AGENTS.md: rendering a configuration screen
-  // must never be what starts a generation call or a CLI/TUI process. The
-  // preview is designed to be safe to open, so the absence of those calls is a
-  // product contract and gets an assertion rather than a comment.
-  // `request()` is itself fetch-based against a loopback server, so the spy
-  // passes through and the assertion is about the DESTINATION: anything the
-  // handler reached for would show up as a non-loopback URL.
-  let fetchSpy;
-
-  beforeEach(() => {
-    const real = globalThis.fetch;
-    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((...args) => real(...args));
-  });
-  afterEach(() => {
-    fetchSpy.mockRestore();
-  });
-
-  it('makes no outbound request while serving the preview', async () => {
-    const res = await request(appWith({ getAllProviders: vi.fn().mockResolvedValue(providersFixture()) }))
-      .get('/api/providers/management/preview');
-
-    expect(res.status).toBe(200);
-    const destinations = fetchSpy.mock.calls.map(([input]) => String(input?.url ?? input));
-    expect(destinations.filter((url) => !url.startsWith('http://127.0.0.1:'))).toEqual([]);
-  });
-
+describe('the provider graph builder contacts no AI provider and launches no runtime', () => {
   it('builds the graph from modules that cannot spawn a process or open a socket', () => {
-    // The runtime assertion above only proves this request did not call out.
-    // This proves the preview modules have no way to: nothing in their static
+    // The AI Provider Usage Policy in AGENTS.md: the graph builder must have no
+    // way to call out. Nothing in its static
     // import closure can spawn, pty, or reach an AI provider service.
     const closure = staticImportClosure(abs('lib/provider/providerGraphPreview.js'));
     const forbidden = ['child_process', 'node:child_process', 'node-pty', 'node:net', 'node:dgram'];
@@ -150,8 +99,10 @@ describe('the preview contacts no AI provider and launches no runtime', () => {
     expect([...closure.files].filter((file) => file.includes('/services/'))).toEqual([]);
 
     // Positive control: the walk really does see packages, so a resolver gap
-    // cannot make the negative assertions above pass vacuously.
-    expect(closure.packages.has('zod')).toBe(true);
+    // cannot make the negative assertions above pass vacuously. It names a
+    // builtin because the closure no longer reaches the OpenCode config builder
+    // (and through it zod) now that runtime checks read a leaf table (#18697).
+    expect(closure.packages.has('node:util')).toBe(true);
     expect(closure.files.has(abs('lib/provider/providerConnections.js'))).toBe(true);
   });
 });

@@ -18,6 +18,7 @@ import ReferenceImagePicker from './ReferenceImagePicker';
 import { appendTriggerWords } from '../../lib/loraTriggers';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import FalCatalogStatus from './FalCatalogStatus.jsx';
+import DraftNumber from '../ui/DraftNumber';
 
 export default function ImageGenFormEditor({ form, backend, generation }) {
   const { fields, catalogs, settings, derived, actions, loraTest, cloudModelPicker } = form;
@@ -242,14 +243,9 @@ function ImageGenActionBar({ form, generation }) {
       {derived.isAsyncMode && (
         <label className="flex items-center gap-1.5 text-xs text-gray-400" title="Batch size: number of renders to queue per submit">
           <span className="select-none">×</span>
-          <input
-            type="number"
-            min={1}
-            max={20}
-            value={fields.batchCount}
-            onChange={(event) => fields.setBatchCount(Math.max(1, Math.min(20, Number(event.target.value) || 1)))}
-            className="w-14 bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-          />
+          <DraftNumber integer min={1} max={20} value={fields.batchCount} onCommit={fields.setBatchCount}>
+            {(field) => <input type="number" className="w-14 bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent" {...field} />}
+          </DraftNumber>
         </label>
       )}
       {generating && (
@@ -390,7 +386,7 @@ function ImageGenPostProcessOptions({ fields, settings, mode }) {
       </label>
       <label
         className="flex items-center gap-2 cursor-pointer select-none"
-        title="Automated visual quality inspection: verifies hand/finger count, detects spurious limbs, and checks composition before admitting to gallery."
+        title="Checks the generated image for hand and finger counts, extra limbs, and composition."
       >
         <input
           type="checkbox"

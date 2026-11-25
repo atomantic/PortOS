@@ -6,6 +6,8 @@
 import { writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { ServerError } from './errorHandler.js';
+import { MANAGED_RUNTIME_APPS } from './managedRuntimeApps.js';
 import { getMemoryStats } from './memoryStats.js';
 import { localEndpointPort } from './localEndpoint.js';
 import { isLocalEndpointBusy, localEndpointsSharePort, onLocalEndpointSettled } from './localLlmConcurrency.js';
@@ -16,8 +18,8 @@ import { createSingleFlight } from './singleFlight.js';
  * (`llamaServerManager.js` → `portos-llama-server`, `mtplxServerManager.js` →
  * `portos-mtplx`, `slotstreamServerManager.js` → `portos-slotstream`).
  *
- * Both managers answer the same two questions the same way, and the answers are
- * fiddly enough that two copies drift:
+ * The managers share how they read output, recover argv, and drive the PM2
+ * lifecycle. Earlier copies drifted in how they handled these details:
  *
  *   - **What did it print?** A launcher card is useless without the daemon's
  *     recent output, and the output lives in two places — the lines PortOS
@@ -27,10 +29,8 @@ import { createSingleFlight } from './singleFlight.js';
  *     still-online daemon's configuration is its PM2 argv, so both managers
  *     recover the launch flags by reading values back out of that array.
  *
- * Deliberately NOT a "daemon manager" abstraction: what each daemon's launch
- * line means, when it may be started, and what a refusal should say are exactly
- * the parts that differ, and folding them together would produce a base class
- * with two special cases. This is the shared *mechanism* only.
+ * Each manager supplies its launch arguments, start rules, and daemon-specific
+ * advice.
  */
 
 /**
@@ -41,9 +41,9 @@ import { createSingleFlight } from './singleFlight.js';
  * `slotstreamServerManager.js` re-export these as `LLAMA_APP` / `MTPLX_APP` /
  * `SLOTSTREAM_APP`.
  */
-export const LLAMA_APP = 'portos-llama-server';
-export const MTPLX_APP = 'portos-mtplx';
-export const SLOTSTREAM_APP = 'portos-slotstream';
+export const LLAMA_APP = MANAGED_RUNTIME_APPS.llama.app;
+export const MTPLX_APP = MANAGED_RUNTIME_APPS.mtplx.app;
+export const SLOTSTREAM_APP = MANAGED_RUNTIME_APPS.slotstream.app;
 
 /** Same cap both managers used, and what the launcher cards render. */
 const DEFAULT_MAX_LINES = 100;
@@ -115,8 +115,8 @@ export function pm2ArgValue(args, flag) {
  * Shared watcher for a local daemon PortOS owns through PM2.
  *
  * Managers supply their daemon-specific launch-line parser and endpoint probe;
- * the watcher owns the common PM2 adoption, status skeleton, bounded logs, and
- * stop-then-relaunch port-release wait. State remains in the manager through
+ * the watcher owns the common PM2 lifecycle, adoption, status, bounded logs,
+ * and stop-then-relaunch port-release wait. State remains in the manager through
  * `getConfig` / `setConfig`, so install and tuning paths can keep their domain
  * rules without reaching into this mechanism.
  *
@@ -135,7 +135,9 @@ export function createDaemonWatcher({
   getConfig,
   setConfig,
   getLastExitError,
+  setLastExitError,
   getAppStatus,
+  clearStatusCache,
   getSavedProcessNames,
   execPm2,
   getPortReleaseTimeoutMs = () => DEFAULT_PORT_RELEASE_TIMEOUT_MS,
@@ -193,18 +195,133 @@ export function createDaemonWatcher({
     while (Date.now() < deadline && await isPortInUse(port)) await sleep(200);
   };
 
+  const assertPortFree = async ({ host, port, label, codePrefix, portAdvice, beforeProbe }) => {
+    const proc = await getAppStatus(appName);
+    if (proc?.status === 'online') {
+      throw new ServerError(`${label} is already running with PID ${proc.pid}`, { status: 409 });
+    }
+
+    beforeProbe?.();
+    const resolvedEndpoint = `http://${host}:${port}/v1`;
+    if (await probe(resolvedEndpoint)) {
+      throw new ServerError(`Port ${port} is already in use by an active server at ${resolvedEndpoint}`, { status: 409 });
+    }
+    if (await isPortInUse(port)) {
+      throw new ServerError(`Port ${port} is already in use on ${host}. ${portAdvice}`, {
+        status: 409,
+        code: `${codePrefix}_PORT_IN_USE`,
+      });
+    }
+    return resolvedEndpoint;
+  };
+
+  const launch = async ({
+    binaryPath, args, endpoint, waitMs, pollMs, logs: logFiles, label, codePrefix,
+    describeExit, trimExitOutput, onStarted,
+  }) => {
+    await execPm2(['delete', appName]).catch(() => {});
+    clearStatusCache();
+
+    const logsReset = await logFiles.reset();
+    const { stdout, stderr } = logFiles.files();
+    await execPm2([
+      'start', binaryPath,
+      '--name', appName,
+      '--interpreter', 'none',
+      '--no-autorestart',
+      '--output', stdout,
+      '--error', stderr,
+      '--',
+      ...args,
+    ]);
+    clearStatusCache();
+
+    const deadline = Date.now() + waitMs;
+    let online = false;
+    while (Date.now() < deadline) {
+      await sleep(pollMs);
+      clearStatusCache();
+      const proc = await getAppStatus(appName);
+      if (isDeadPm2Status(proc)) {
+        // PM2 appends across launches. Without truncation its tail may only
+        // describe a prior process, so use the current in-memory lines instead.
+        const lines = logsReset ? await readPm2ExitLines({ appName, execPm2, trimOutput: trimExitOutput }) : [];
+        for (const line of lines) logs.append(line);
+        const tail = (lines.length ? lines : logs.snapshot()).slice(-4).join(' | ');
+        const status = `PM2 status: ${proc.status}`;
+        setLastExitError(status);
+        const message = describeExit?.(lines) || `${label} exited immediately (${status}).`;
+
+        await execPm2(['delete', appName]).catch(() => {});
+        clearStatusCache();
+        setConfig(null);
+        throw new ServerError(`${message}${tail ? ` Last output: ${tail}` : ''}`, {
+          status: 500,
+          code: `${codePrefix}_EXITED`,
+        });
+      }
+      online = await probe(endpoint);
+      if (online) break;
+    }
+
+    await onStarted?.();
+    const finalProc = await getAppStatus(appName);
+    return {
+      success: true,
+      running: true,
+      managed: true,
+      pid: finalProc?.pid || null,
+      endpoint,
+      online,
+      config: getConfig(),
+    };
+  };
+
+  const stop = async ({ label, onStopped }) => {
+    const proc = await getAppStatus(appName);
+    if (proc?.status !== 'online') {
+      const resolvedEndpoint = endpoint();
+      if (await probe(resolvedEndpoint)) {
+        return {
+          success: false,
+          message: `An external process is listening on ${resolvedEndpoint}. It was not started by PortOS and cannot be stopped here.`,
+        };
+      }
+      return { success: true, message: `${label} is not running` };
+    }
+
+    logs.append(`Stopping ${appName}`);
+    await execPm2(['delete', appName]).catch((err) => {
+      throw new ServerError(`Failed to stop ${label}: ${err.message}`, { status: 500 });
+    });
+    clearStatusCache();
+    setConfig(null);
+    onStopped?.();
+    return { success: true, message: `${label} stopped` };
+  };
+
   return {
     appendLog: logs.append,
+    assertPortFree,
     endpoint,
     getStatusBase,
+    launch,
     readLaunch,
     resetLogs: logs.reset,
-    snapshotLogs: logs.snapshot,
+    stop,
     waitForPortRelease,
   };
 }
 
 const DEFAULT_PORT_RELEASE_TIMEOUT_MS = 5000;
+
+const isDeadPm2Status = (proc) => ['errored', 'stopped', 'not_found'].includes(proc?.status);
+
+async function readPm2ExitLines({ appName, execPm2, lines = 15, trimOutput = false }) {
+  const result = await execPm2(['logs', appName, '--nostream', '--lines', String(lines)]).catch(() => null);
+  const output = String(result?.stderr || result?.stdout || '');
+  return (trimOutput ? output.trim() : output).split('\n').map((line) => line.trimEnd()).filter(Boolean);
+}
 
 /**
  * Per-launch truncated PM2 `--output`/`--error` files. PM2 appends to its
@@ -293,7 +410,7 @@ export async function waitForDaemonReady({
     if (await probe(endpoint)) return { ready: true, reason: null };
     clearStatusCache();
     const proc = await getStatusStrict();
-    if (proc && ['errored', 'stopped', 'not_found'].includes(proc.status)) {
+    if (isDeadPm2Status(proc)) {
       const tail = exitTail ? await exitTail(proc.status) : `PM2 status: ${proc.status}`;
       return { ready: false, reason: `${label} exited while loading (${tail})` };
     }
@@ -317,8 +434,7 @@ export async function waitForDaemonReady({
  */
 export function createPm2ExitTail({ appName, execPm2, appendLog, lines = 15, tailLines = 4 }) {
   return async (status) => {
-    const pm2Logs = await execPm2(['logs', appName, '--nostream', '--lines', String(lines)]).catch(() => null);
-    const outputLines = `${pm2Logs?.stderr || pm2Logs?.stdout || ''}`.split('\n').map((l) => l.trimEnd()).filter(Boolean);
+    const outputLines = await readPm2ExitLines({ appName, execPm2, lines });
     for (const line of outputLines) appendLog(line);
     const tail = outputLines.slice(-tailLines).join(' | ');
     return tail ? `PM2 status: ${status} — ${tail}` : `PM2 status: ${status}`;

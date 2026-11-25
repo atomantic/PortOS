@@ -19,7 +19,7 @@ vi.mock('../../services/apiUniverseBuilder.js', () => ({
 vi.mock('../../services/apiPipeline.js', () => ({
   updatePipelineSeries: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
+vi.mock('../ui/Toast');
 vi.mock('../ui/Modal', () => ({ default: ({ open, children }) => (open ? <div role="dialog">{children}</div> : null) }));
 vi.mock('../ui/InlineDiff', () => ({ default: ({ oldText, newText }) => <div data-testid="diff">{oldText}|{newText}</div> }));
 

@@ -1,3 +1,4 @@
+import { inputClass as input } from './controlClasses.js';
 import { useEffect, useRef, useState } from 'react';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import SentPromptPanel from '../media/SentPromptPanel.jsx';
@@ -7,7 +8,6 @@ import { STORYBOARD_LIMITS, STORYBOARD_MUSICAL_ROLES, STORYBOARD_PANEL_FRAMINGS 
 import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../../../../server/lib/musicVideo/musicVideoSubjectLimits.js';
 import { formatCount } from '../../utils/formatters.js';
 
-const input = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm';
 const button = 'min-h-[44px] rounded border border-port-border px-3 py-1.5 text-sm text-port-accent disabled:opacity-50';
 const display = (value) => typeof value === 'string' ? value : JSON.stringify(value ?? null, null, 2);
 const title = (key) => ({ prompt: 'Concept', style: 'Visual style', songStyle: 'Song style', premise: 'Narrative premise', mustHave: 'Must have', avoid: 'Avoid' }[key] || key.replace(/([A-Z])/g, ' $1').toLowerCase().replace(/^./, (letter) => letter.toUpperCase()));

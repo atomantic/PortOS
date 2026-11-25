@@ -6,24 +6,6 @@ import { isTruthyMeta } from '../lib/metadataFlags.js';
 
 const TASK_REF_KIND = 'cos.task';
 
-export async function ensureTaskThread({ taskId, title, nextAction, notes, priority = 'normal' }) {
-  if (!taskId || !title) return null;
-  const threads = await brainStorage.getThreadListRows();
-  const existing = threads.find(thread => thread.status !== 'archived'
-    && thread.refs?.some(ref => ref?.kind === TASK_REF_KIND && ref?.id === taskId));
-  // Callers get the full record (notes included), not the cached list row.
-  if (existing) return brainStorage.getThreadById(existing.id) ?? existing;
-  return brainStorage.createThread({
-    title,
-    status: 'open',
-    priority,
-    nextAction: nextAction || 'Review the task in CoS',
-    notes: notes || '',
-    refs: [{ kind: TASK_REF_KIND, id: taskId, label: title }],
-    source: 'cos',
-  });
-}
-
 // Exact legacy producer signatures, not a title-prefix filter. Only pristine
 // records with the original single task reference qualify for reconciliation.
 function legacyCleanupThread(thread, task) {

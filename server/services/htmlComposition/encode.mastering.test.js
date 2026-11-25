@@ -71,14 +71,6 @@ describe('encodeComposition loudness mastering (fake ffmpeg)', () => {
     expect(spawned[0][spawned[0].indexOf('-af') + 1]).toBe('atrim=duration=1,asetpts=PTS-STARTPTS,afade=t=out:st=0.5:d=0.5');
     expect(result.loudness).toBeUndefined();
   });
-
-  it('never masters an exact music-video master', async () => {
-    const runFfmpeg = vi.fn();
-    const { spawned, spawnProcess } = fakeEncoder();
-    await encodeComposition(page, contract, '/tmp/out.mp4', options({ audio: { path: '/masters/song.wav', startSec: 3 }, master: true, runFfmpeg, spawnProcess }));
-    expect(runFfmpeg).not.toHaveBeenCalled();
-    expect(spawned[0]).not.toContain('-af');
-  });
 });
 
 const hasFfmpeg = (() => { try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); return true; } catch { return false; } })();

@@ -10,6 +10,7 @@
  * collection bulk add/remove payloads, plus the media sketch save body.
  */
 import { z } from 'zod';
+import { isSplashContextWindow } from './splashRuntime.js';
 import { PORTS } from './ports.js';
 import { ASSESSABLE_RUNTIMES } from './localProviderRuntime.js';
 import { BENCHMARK_PROFILE, SWEEP_SCOPES } from './localModelAssessment.js';
@@ -202,6 +203,14 @@ export const localLlmLmStudioServiceSchema = z.object({ action: z.enum(['start',
 // MTPLX launch. Every field is optional: with none of them PortOS serves the
 // checkpoint already in MTPLX's cache on the port the shipped provider presets
 // point at. `model` is a Hugging Face repo id, which lands in the launch argv.
+// These curated runtimes never accept a host, port, executable, or artifact
+// override from an HTTP request.
+export const managedInklingActionSchema = z.strictObject({});
+
+export const splashContextSchema = z.strictObject({
+  contextWindow: z.number().refine(isSplashContextWindow, 'Choose a supported Splash context window'),
+});
+
 export const localLlmMtplxStartSchema = z.object({
   port: z.coerce.number().int().min(1).max(65535).optional(),
   // No `host`: MTPLX is a loopback daemon and the manager never puts one on the
@@ -327,16 +336,17 @@ export const localLlmPlaygroundOptionsSchema = z.object({
   maxTokens: z.coerce.number().int().min(1).max(8192).optional().default(1000),
   timeoutMs: z.coerce.number().int().min(1000).max(600000).optional().default(300000),
 });
-export const localLlmTestSchema = localLlmPlaygroundOptionsSchema.extend({
-  backend: localLlmBackendSchema,
-  modelId: localLlmModelIdSchema,
-  prompt: z.string().trim().min(1).max(50000),
-});
 // Assessments reach EVERY local runtime PortOS can talk to, not just the two it
 // installs models for — llama.cpp, MTPLX, and vLLM are bare OpenAI-compatible
 // daemons with no PortOS-side catalog. `localLlmBackendSchema` stays narrow
 // because install/delete/migrate genuinely only work on the managed pair.
 export const localLlmRuntimeSchema = z.enum(ASSESSABLE_RUNTIMES);
+// The Playground targets every runtime Assessments can reach; install/delete/switch keep the narrow managed pair.
+export const localLlmTestSchema = localLlmPlaygroundOptionsSchema.extend({
+  backend: localLlmRuntimeSchema,
+  modelId: localLlmModelIdSchema,
+  prompt: z.string().trim().min(1).max(50000),
+});
 // Tuning knobs are validated for SHAPE only (a flat map of scalars). Which keys
 // a runtime accepts, and their ranges, live in `lib/localModelTuning.js` — one
 // catalog, applied by `normalizeTuning`, rather than a Zod copy that would drift
@@ -432,7 +442,7 @@ export const localLlmCompareSchema = z.object({
   mode: z.enum(['round-robin', 'parallel']).optional().default('round-robin'),
   prompt: z.string().trim().min(1).max(50000),
   targets: z.array(z.object({
-    backend: localLlmBackendSchema,
+    backend: localLlmRuntimeSchema,
     modelId: localLlmModelIdSchema,
   })).min(1).max(6),
   options: localLlmPlaygroundOptionsSchema.optional().default({}),

@@ -24,12 +24,7 @@ vi.mock('../../services/apiAuth.js', () => ({
   rotateAgentKey: vi.fn(),
 }));
 
-vi.mock('../ui/Toast', () => ({
-  default: {
-    success: vi.fn(),
-    error: vi.fn(),
-  },
-}));
+vi.mock('../ui/Toast');
 
 const deferred = () => {
   let resolve;

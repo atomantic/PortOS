@@ -25,7 +25,7 @@ vi.mock('../services/apiSyncReview.js', () => ({
   previewSeriesMerge: vi.fn(),
   mergeSeries: vi.fn(),
 }));
-vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 vi.mock('../components/ui/Modal', () => ({ default: ({ open, children }) => (open ? <div role="dialog">{children}</div> : null) }));
 vi.mock('../components/ui/InlineDiff', () => ({ default: ({ oldText, newText }) => <div data-testid="diff">{oldText}|{newText}</div> }));
 vi.mock('../hooks/useSyncIntegrity', () => ({ useSyncIntegrity: () => ({}), syncBadgeStatus: () => 'unknown' }));

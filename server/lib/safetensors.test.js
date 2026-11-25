@@ -6,7 +6,6 @@ import { join } from 'path';
 import {
   readSafetensorsHeader,
   detectFlux2VariantFromHeader,
-  detectFlux2Variant,
   classifyLoraKeyLayoutFromHeader,
   classifyLoraKeyLayout,
   videoLoraLayoutIssue,
@@ -103,20 +102,6 @@ describe('detectFlux2VariantFromHeader', () => {
       'transformer.single_transformer_blocks.1.attn.to_out.lora_A.weight': { shape: [32, 12288] },
     };
     expect(detectFlux2VariantFromHeader(header)).toBeNull();
-  });
-});
-
-describe('detectFlux2Variant (file)', () => {
-  it('reads + classifies in one call', async () => {
-    const p = writeTmp('9b.safetensors', makeFile({
-      'transformer.single_transformer_blocks.0.attn.to_out.lora_A.weight': { shape: [32, 16384] },
-    }));
-    expect(await detectFlux2Variant(p)).toBe('9b');
-  });
-
-  it('returns null for a non-safetensors file', async () => {
-    const p = writeTmp('bad.safetensors', Buffer.from('garbage'));
-    expect(await detectFlux2Variant(p)).toBeNull();
   });
 });
 

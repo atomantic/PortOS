@@ -1,7 +1,7 @@
 import { currentPlateEvidence, renderQualityAcknowledged } from '../../../../server/lib/musicVideo/musicVideoPlateEvidence.js';
 import { musicVideoRenderTierLabel } from '../../../../server/lib/musicVideo/musicVideoRenderTier.js';
 import { useRef, useState } from 'react';
-import { Ban, Check, Loader2, RotateCcw, Eye, X, MessageSquare, PencilLine } from 'lucide-react';
+import { ArrowRightLeft, Ban, Check, Loader2, RotateCcw, Eye, X, MessageSquare, PencilLine } from 'lucide-react';
 import { sceneTakeList, takePreviewKey, takeThumbUrl, takeClipUrl, takeProvenance, takeControl, TAKE_SLOT } from '../../lib/musicVideoTakes.js';
 import { plateVerdict } from './PlateComparison.jsx';
 import TakeExtend from './TakeExtend.jsx';
@@ -42,12 +42,15 @@ async function videoTakeUrl(take) {
  * the take ids in flight. A checked take wears its verdict, which opens to the misses.
  * `saving` holds the take controls waiting on a reply (useMusicVideoTakes `pending`, keys from `takeControl`):
  * each shows it is saving and stays disabled until the reply, so a slow reply is not pressed twice.
+ * `onMove(take, toSceneId)` moves a take the shot is not using to another shot of `project`, to organize takes
+ * (a rejected or bad one included); it keeps its status and note there.
  */
 export default function SceneTakeStrip({
   scene, project = null, kind, busy = false, saving = null, large = false, grid = false, onSelect, onReview, onOpenPreview, marks = null, onMark = null, pending = [],
-  onCheck = null, checking = null, onRefine = null, refineDisabled = false,
+  onCheck = null, checking = null, onRefine = null, refineDisabled = false, onMove = null,
 }) {
   const [noteFor, setNoteFor] = useState(null);
+  const [moveFor, setMoveFor] = useState(null);
   const [noteDraft, setNoteDraft] = useState('');
   const [playingId, setPlayingId] = useState(null);
   const [openVerdict, setOpenVerdict] = useState(null);
@@ -64,6 +67,10 @@ export default function SceneTakeStrip({
   };
   const thumbClass = grid ? 'min-w-0' : `${large ? 'w-40' : 'w-24'} shrink-0`;
   const noteInputId = (take) => `mv-take-note-${scene.sceneId}-${take.takeId}`;
+  const moveInputId = (take) => `mv-take-move-${scene.sceneId}-${take.takeId}`;
+  const moveTargets = onMove ? (project?.scenes || []).filter((entry) => entry.sceneId !== scene.sceneId)
+    .slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0)) : [];
+  const shotName = (entry) => `Shot ${(entry.order ?? 0) + 1}${entry.label ? ` · ${entry.label}` : ''}`;
 
   return (
     <div className="space-y-1">
@@ -89,6 +96,9 @@ export default function SceneTakeStrip({
           const savingAcknowledge = Boolean(take.takeId && saving?.has(takeControl.acknowledge(scene, take)));
           const savingConfirm = Boolean(take.takeId && saving?.has(takeControl.confirm(scene, take)));
           const savingAccept = Boolean(take.takeId && saving?.has(takeControl.acceptCharacters(scene, take)));
+          const savingMove = Boolean(take.takeId && saving?.has(takeControl.move(scene, take)));
+          // The take in use is swapped out first, and a clip covering a run of shots stays with its run.
+          const movable = Boolean(take.takeId && !isSelected && !take.sequence && moveTargets.length);
           return (
             <li key={take.takeId || `legacy-${take.assetId}`} className={`${thumbClass} space-y-1`}
               onPointerDownCapture={(event) => { copyPointer.current = Boolean(event.target.closest('[data-asset-copy-trigger]')); }}
@@ -200,6 +210,14 @@ export default function SceneTakeStrip({
                       {takeChecking ? <Loader2 size={11} className="animate-spin" aria-hidden="true" /> : <Eye size={11} aria-hidden="true" />} {takeChecking ? 'Checking' : 'Check'}
                     </button>
                   )}
+                  {movable && (
+                    <button type="button" disabled={busy || savingMove} onClick={() => setMoveFor(moveFor === take.takeId ? null : take.takeId)}
+                      aria-expanded={moveFor === take.takeId}
+                      className="inline-flex items-center gap-0.5 rounded bg-port-border px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 min-h-[32px] sm:min-h-0 disabled:opacity-50"
+                      title="Move this take to another shot. It keeps its status and note; the files stay where they are.">
+                      {savingMove ? <Loader2 size={11} className="animate-spin" aria-hidden="true" /> : <ArrowRightLeft size={11} aria-hidden="true" />} {savingMove ? 'Moving…' : 'Move'}
+                    </button>
+                  )}
                   <button type="button" disabled={busy} onClick={() => openNote(take)}
                     aria-label="Edit take note"
                     className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center rounded bg-port-border px-1.5 py-0.5 text-[10px] min-h-[32px] sm:min-h-0 disabled:opacity-50"
@@ -250,6 +268,17 @@ export default function SceneTakeStrip({
                       {savingAccept ? 'Saving…' : 'Still matches'}
                     </button>
                   )}
+                </div>
+              )}
+              {movable && moveFor === take.takeId && (
+                <div>
+                  <label htmlFor={moveInputId(take)} className="sr-only">Move take to shot</label>
+                  <select id={moveInputId(take)} value="" disabled={busy || savingMove}
+                    onChange={(e) => { const to = e.target.value; if (!to) return; setMoveFor(null); onMove(take, to); }}
+                    className="w-full bg-port-bg border border-port-border rounded px-1 py-0.5 text-[11px] min-h-[44px] pointer-fine:sm:min-h-0">
+                    <option value="">Move to shot…</option>
+                    {moveTargets.map((entry) => <option key={entry.sceneId} value={entry.sceneId}>{shotName(entry)}</option>)}
+                  </select>
                 </div>
               )}
               {noteFor === take.takeId && (

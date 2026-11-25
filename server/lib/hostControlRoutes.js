@@ -67,7 +67,6 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   // to the gated installers (#8798).
   'GET /api/browser/update-preflight',
   'GET /api/browser/pages',
-  'GET /api/browser/downloads',
   'GET /api/browser/downloads/:name',
   'GET /api/browser/logs',
   'GET /api/harnesses/update-reference',
@@ -82,8 +81,6 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/music-video/:id/dependency-impact',
   // Re-encodes the video with ffmpeg on every request (#13156).
   'GET /api/video-gen/history/:id/sharing-download',
-  // Mints a paid Reactor.inc session JWT using the owner's REACTOR_API_KEY (#18240).
-  'GET /api/video-gen/reactor/token',
   // Opens or reuses a tab in the signed-in managed browser and reads it.
   'GET /api/youtube/setup-check',
   // The local recovery command checks private runner process and workspace identities.

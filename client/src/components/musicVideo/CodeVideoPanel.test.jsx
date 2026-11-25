@@ -20,7 +20,7 @@ vi.mock('../../hooks/useProviderModels.js', () => ({
     setSelectedModel: vi.fn(),
   }),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 vi.mock('../../services/socket', () => ({
   default: { emit: vi.fn(), on: vi.fn(), off: vi.fn(), connected: true },
 }));

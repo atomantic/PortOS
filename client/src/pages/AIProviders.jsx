@@ -2,7 +2,7 @@ import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'rea
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { Bot, Cpu, Gauge, Network, Package, Plug, Plus, TerminalSquare } from 'lucide-react';
 import toast from '../components/ui/Toast';
-import { getOrchestrationProfiles } from '../services/apiAgents.js';
+import { useAsyncAction } from '../hooks/useAsyncAction';
 import { getApps } from '../services/apiApps.js';
 import {
   getSampleProviders,
@@ -44,6 +44,8 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import OverflowMenu from '../components/ui/OverflowMenu';
 import { providerPageTabForPath } from '../components/providers/ProviderPageTabs';
 import { lazyWithReload } from '../utils/lazyWithReload';
+import { useSingleFlight } from '../hooks/useSingleFlight';
+import { LOCAL_RUNTIME_LABELS } from '../../../server/lib/modelPinMembership.js';
 
 // Routed views and heavy drawers/modals stay out of the entry chunk so visiting
 // `/ai/presets` never downloads Harnesses, Services, Fleet Setup, or the form.
@@ -70,7 +72,6 @@ const VIEW_HEADERS = {
 // The two local apps an API provider can front. Their installer lives on the
 // Models → LLMs page (it starts the service too), so the provider card
 // links there instead of offering an install of its own.
-const LOCAL_APP_LABELS = { ollama: 'Ollama', lmstudio: 'LM Studio' };
 
 // Presets are grouped by HARNESS (#7567) — the program that drives them — and
 // within a group ordered by readiness: what can run first, what the user
@@ -132,17 +133,6 @@ export default function AIProviders() {
   const [showRunPanel, setShowRunPanel] = useState(false);
   const [runPrompt, setRunPrompt] = useState('');
   const [selectedWorkspace, setSelectedWorkspace] = useState('');
-  const loadOrchestrationProfiles = useCallback(async () => {
-    const result = await getOrchestrationProfiles?.({ silent: true });
-    return Array.isArray(result) ? result : result?.profiles || [];
-  }, []);
-  const {
-    items: orchestrationProfiles,
-    state: orchestrationProfilesState,
-    error: orchestrationProfilesError,
-    retry: retryOrchestrationProfiles,
-  } = useListResource(loadOrchestrationProfiles);
-  const [selectedProfileId, setSelectedProfileId] = useState('');
   const loadApps = useCallback(async () => {
     const list = await getApps({ silent: true });
     return Array.isArray(list) ? list : [];
@@ -639,7 +629,7 @@ export default function AIProviders() {
     }
   };
 
-  const handleExecuteRun = async () => {
+  const [handleExecuteRun, startingRun] = useAsyncAction(async () => {
     if (!runPrompt.trim() || !activeProviderId) return;
 
     setRunOutput('');
@@ -650,7 +640,6 @@ export default function AIProviders() {
       prompt: runPrompt,
       workspacePath: workspace?.repoPath,
       workspaceName: workspace?.name,
-      orchestrationProfileId: selectedProfileId || undefined,
     }, { silent: true }).catch(err => ({ error: err.message }));
 
     if (result.error) {
@@ -659,7 +648,7 @@ export default function AIProviders() {
     }
 
     setActiveRun(result.runId);
-  };
+  });
 
   const handleStopRun = async () => {
     if (activeRun) {
@@ -710,7 +699,7 @@ export default function AIProviders() {
     return updated;
   };
 
-  const handleAddAllSamples = async () => {
+  const handleAddAllSamples = useSingleFlight(async () => {
     if (addableSamples.length === 0) return;
 
     const succeededIds = [];
@@ -736,7 +725,7 @@ export default function AIProviders() {
     } else {
       toast.warning(`Added ${succeededIds.length} provider${succeededIds.length === 1 ? '' : 's'}, ${failedIds.length} failed`);
     }
-  };
+  });
 
   const handleRuntimeInstallComplete = () => {
     toast.success(`${installingRuntime?.label || 'Runtime'} installed and ready to test`);
@@ -772,7 +761,7 @@ export default function AIProviders() {
     const installed = localModels.installed?.[backend];
     // `null` = status not fetched — never offer an install from an unknown state.
     if (typeof installed !== 'boolean') return null;
-    return { id: backend, label: LOCAL_APP_LABELS[backend], installed, installable: false, manageUrl: '/models/llms' };
+    return { id: backend, label: LOCAL_RUNTIME_LABELS[backend], installed, installable: false, manageUrl: '/models/llms' };
   }, [runtimes, localModels.installed, readiness]);
 
   // Everything the cards are derived from, in one pass: each provider's runtime,
@@ -1001,12 +990,6 @@ export default function AIProviders() {
           onAddSample={handleAddSample}
           onAddAllSamples={handleAddAllSamples}
           showRunPanel={showRunPanel}
-          orchestrationProfiles={orchestrationProfiles}
-          orchestrationProfilesState={orchestrationProfilesState}
-          orchestrationProfilesError={orchestrationProfilesError}
-          retryOrchestrationProfiles={retryOrchestrationProfiles}
-          selectedProfileId={selectedProfileId}
-          setSelectedProfileId={setSelectedProfileId}
           apps={apps}
           appsState={appsState}
           appsError={appsError}
@@ -1019,6 +1002,7 @@ export default function AIProviders() {
           runOutput={runOutput}
           runProviderIsTui={runProviderIsTui}
           onExecuteRun={handleExecuteRun}
+          startingRun={startingRun}
           onStopRun={handleStopRun}
           compositionCatalog={compositionCatalog}
           onCompose={setComposeInitial}

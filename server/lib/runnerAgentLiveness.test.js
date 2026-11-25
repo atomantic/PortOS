@@ -4,7 +4,6 @@ import {
   RUNNER_LIVENESS_PTY,
   usableAgentPid,
   runnerAgentLivenessFields,
-  runnerListedAgentIsLive,
   runnerEntryShieldsRunningRecord,
 } from './runnerAgentLiveness.js';
 
@@ -67,39 +66,6 @@ describe('runnerAgentLivenessFields', () => {
     expect(dead).toMatchObject({
       processActive: false, state: 'dead', liveness: RUNNER_LIVENESS_PID,
     });
-  });
-});
-
-describe('runnerListedAgentIsLive', () => {
-  it('trusts processActive when the runner tagged how it measured', () => {
-    expect(runnerListedAgentIsLive({
-      processActive: true, liveness: RUNNER_LIVENESS_PTY, kind: 'tui',
-    })).toBe(true);
-    expect(runnerListedAgentIsLive({
-      processActive: false, liveness: RUNNER_LIVENESS_PTY, kind: 'tui',
-    })).toBe(false);
-    expect(runnerListedAgentIsLive({
-      processActive: false, liveness: RUNNER_LIVENESS_PID, kind: 'cli',
-    })).toBe(false);
-  });
-
-  it('does not treat a pre-fix Windows TUI processActive false as dead', () => {
-    expect(runnerListedAgentIsLive({
-      kind: 'tui', pid: 0, processActive: false,
-    })).toBe(true);
-  });
-
-  it('does not treat a pre-fix POSIX TUI with a dead pid as live', () => {
-    expect(runnerListedAgentIsLive({
-      kind: 'tui', pid: 4242, processActive: false,
-    })).toBe(false);
-  });
-
-  it('does not treat a bare CLI listing as live', () => {
-    expect(runnerListedAgentIsLive({ id: 'agent-1', kind: 'cli', pid: 9 })).toBe(false);
-    expect(runnerListedAgentIsLive({
-      kind: 'cli', pid: 9, processActive: false,
-    })).toBe(false);
   });
 });
 

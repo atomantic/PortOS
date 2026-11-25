@@ -4,7 +4,6 @@
  *   GET  /api/music/engines              → { engines, defaultEngine }
  *   POST /api/music/describe             → { description, llm }
  *   POST /api/music/lyrics               → { lyrics, llm }
- *   POST /api/music/waveform             → { sketch, llm }
  *   POST /api/music/code                 → { language, code, llm }
  *   POST /api/music/generate             → { jobId, position, status }
  *
@@ -42,12 +41,10 @@ import {
   enginePlatformLabel, resolveEngineVramReadiness, MUSIC_VRAM_READINESS,
   formatEngineVramReadinessMessage,
 } from '../services/pipeline/musicGen.js';
-import { listEngineModels, addAudioModel, removeAudioModel, isValidRepoId } from '../services/audioModels.js';
+import { addAudioModel, removeAudioModel, isValidRepoId } from '../services/audioModels.js';
 import { listMusicEngineCapabilities } from '../services/musicEngineCapabilities.js';
 import { describeMusic, writeLyrics } from '../services/musicDesigner.js';
-import { drawWaveSketch } from '../services/musicWaveform.js';
 import { MUSIC_CODE_LANGUAGES, MUSIC_CODE_MAX, previewMusicCodePrompt, writeMusicCode } from '../services/musicCode.js';
-import { PAINTED_CANVAS_LIMITS } from '../lib/paintedCanvas.js';
 import { startHfDownloadStream } from '../services/hfDownloadStream.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
@@ -120,6 +117,19 @@ router.post('/setup/runtime-install', asyncHandler(async (req, res) => {
   // Claim synchronously before platform/CUDA probes can yield, so concurrent
   // requests cannot both pass the guard while readiness is being checked.
   runtimeInstallInFlight.set(engine.id, null);
+  // Registered before the first await: a client that closes the installer during
+  // a probe would otherwise start a multi-GB install nobody can stop.
+  let child = null;
+  let finished = false;
+  let clientGone = false;
+  let installLog = null;
+  onClientDisconnect(req, res, () => {
+    clientGone = true;
+    if (finished || !child) return;
+    installLog.cancel();
+    stopSetupScript(child);
+    safeEnd();
+  });
   if (!isEnginePlatformSupported(engine.id)) {
     runtimeInstallInFlight.delete(engine.id);
     send({ type: 'error', message: `${engine.name} requires ${enginePlatformLabel(engine.id)} and cannot be installed on this host.` });
@@ -150,7 +160,12 @@ router.post('/setup/runtime-install', asyncHandler(async (req, res) => {
 
   // Force a fresh probe: a cached `true` from before the venv broke would
   // short-circuit the very install meant to repair it.
-  if (await isEngineHealthy(engine.id, { refresh: true })) {
+  const alreadyHealthy = await isEngineHealthy(engine.id, { refresh: true });
+  if (clientGone) {
+    runtimeInstallInFlight.delete(engine.id);
+    return safeEnd();
+  }
+  if (alreadyHealthy) {
     runtimeInstallInFlight.delete(engine.id);
     send({ type: 'log', message: `${engine.name} already installed at ${engine.resolvePython() || engine.venvDefault}` });
     send({ type: 'complete', message: 'Already installed - nothing to do.' });
@@ -166,12 +181,11 @@ router.post('/setup/runtime-install', asyncHandler(async (req, res) => {
   send({ type: 'log', message: `Starting ${engine.name} install.` });
   // Server-console visibility for the multi-GB install (start / heartbeat /
   // outcome) — the SSE stream otherwise surfaces progress only in the browser.
-  const installLog = createInstallLogger({ installer: engine.name, target: engine.venvDefault });
+  installLog = createInstallLogger({ installer: engine.name, target: engine.venvDefault });
   const emit = (ev) => { installLog.onEvent(ev); send(ev); };
   installLog.start();
-  const child = spawnSetupScript({ [engine.installEnv]: '1' });
+  child = spawnSetupScript({ [engine.installEnv]: '1' });
   runtimeInstallInFlight.set(engine.id, child);
-  let finished = false;
 
   // `splitRe: /[\r\n]+/` so a bash/pip/tqdm progress bar that redraws with a
   // bare `\r` surfaces each redraw as its own log line; the carry buffer
@@ -216,13 +230,6 @@ router.post('/setup/runtime-install', asyncHandler(async (req, res) => {
       safeEnd();
     }
   });
-
-  onClientDisconnect(req, res, () => {
-    if (finished) return;
-    installLog.cancel();
-    stopSetupScript(child);
-    safeEnd();
-  });
 }));
 
 // --- Install additional audio models from HuggingFace -----------------------
@@ -237,13 +244,6 @@ const installSchema = z.object({
   repo: z.string().trim().min(1).max(200),
   name: z.string().trim().max(200).optional(),
 });
-
-// GET /api/music/models/:engine → the merged shipped+user model list for one
-// engine (also exposed via /engines, but handy for a focused refresh).
-router.get('/models/:engine', asyncHandler(async (req, res) => {
-  if (!findEngine(req.params.engine)) throw new ServerError('Unknown audio engine', { status: 404, code: 'AUDIO_MODEL_UNKNOWN_ENGINE' });
-  res.json({ models: await listEngineModels(req.params.engine) });
-}));
 
 // POST /api/music/models — register the repo, STREAM its HF download as SSE
 // (text/event-stream), then ROLL BACK the registration if the download didn't
@@ -367,26 +367,6 @@ router.post('/lyrics', asyncHandler(async (req, res) => {
     effort: body.effort,
   });
   res.json({ lyrics, llm, sentPrompt, promptAdditions });
-}));
-
-const waveformSchema = z.object({
-  description: z.string().trim().min(1, 'description is required').max(8000),
-  lyrics: z.string().trim().max(20000).optional(),
-  durationSec: z.number().min(PAINTED_CANVAS_LIMITS.DURATION_MIN_SEC).max(PAINTED_CANVAS_LIMITS.DURATION_MAX_SEC).optional(),
-  // The painting to revise — normalized (and size-bounded) by the service.
-  current: z.record(z.string(), z.unknown()).optional(),
-  review: z.boolean().optional(),
-  // The drawing contract is fixed (no meta-prompt override like describe/lyrics).
-  ...designerPickerShape,
-}).omit({ template: true });
-
-// POST /api/music/waveform — stateless: have the LLM PAINT the music on a
-// spectrogram canvas (lib/paintedCanvas.js) without storing it. The
-// designer draws via POST /api/tracks/:id/waveform/draw, which persists it.
-// One explicit user action per call.
-router.post('/waveform', asyncHandler(async (req, res) => {
-  const body = validateRequest(waveformSchema, req.body ?? {});
-  res.json(await drawWaveSketch(body));
 }));
 
 const codeShape = z.object({

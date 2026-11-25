@@ -49,6 +49,20 @@ describe('wake evidence projection', () => {
   });
 });
 
+it('keeps only thoughts whose turn has no reply, reading each event a bounded number of times', () => {
+  let reads = 0;
+  const events = Array.from({ length: 400 }, (_, index) => {
+    const replied = index % 4 === 3;
+    const row = { ...event(index, replied ? 'mind.reply' : 'mind.thought', `Text ${index}`, { visibility: 'user-summary' }),
+      turnId: `turn-${index < 200 ? index - (index % 4) : index}` };
+    return Object.defineProperty(row, 'mindId', { get: () => { reads += 1; return 'cos-persistent-mind'; } });
+  });
+  const selected = selectPersistentMindContextEvents(events);
+  expect(selected.filter(row => row.kind === 'mind.thought').map(row => row.sequence))
+    .toEqual(events.filter(row => row.kind === 'mind.thought' && row.sequence >= 200).map(row => row.sequence));
+  expect(selected.filter(row => row.kind === 'mind.reply')).toHaveLength(100);
+  expect(reads).toBeLessThan(events.length * 10);
+});
 
 it('preserves a cumulative summary overlapping the expanded meaningful window', () => {
   const mindId = 'cos-persistent-mind';

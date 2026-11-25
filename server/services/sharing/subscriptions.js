@@ -83,14 +83,6 @@ export async function listSubscriptions(filter = {}) {
   });
 }
 
-export async function findSubscription(bucketId, recordKind, recordId) {
-  if (!bucketId || !recordKind || !recordId) return null;
-  const { subscriptions } = await readState();
-  return subscriptions.find(
-    (s) => s.bucketId === bucketId && s.recordKind === recordKind && s.recordId === recordId,
-  ) || null;
-}
-
 /**
  * Adopt an inbound subscription as a local outgoing subscription without
  * immediately exporting back into the bucket. Importing a subscribed record

@@ -17,7 +17,7 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
   startMusicVideoProduction: vi.fn(), resumeMusicVideoProduction: vi.fn(), stopMusicVideoProduction: vi.fn(), cancelMusicVideoProduction: vi.fn(),
 }));
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import AutopilotPanel from './AutopilotPanel.jsx';
 import { getProviders } from '../../services/apiProviders.js';

@@ -18,14 +18,14 @@ parse PRD.md + GOALS.md           ← server/lib/prdClauses.js. No model.
   ↓ clauses
 retrieve top-k candidates         ← BM25 × 2 views, fused with RRF. No model.
   ↓ ≤ k clauses
-screenUntrustedContent()          ← Prompt Guard. Unchanged, and not optional.
+screenForScopeAdvisory()          ← Prompt Guard. Unchanged, and not optional.
   ↓ safe
 runJevDecision('scope-adherence') ← once per clause. Abstains on a near-tie.
   ↓
 one advisory naming the clause
 ```
 
-An issue or PR body is attacker-controlled text, so it passes phase 1 of the untrusted-content ladder before any model reasons over it — the same contract described in [messages-security](./messages-security.md). Scope adherence is a **phase-2 reasoner**, never a replacement for the screen.
+An issue or PR body is attacker-controlled text, so it passes phase 1 of the untrusted-content ladder before any model reasons over it — the same contract described in [messages-security](./messages-security.md). Scope adherence is a **phase-2 reasoner**, never a replacement for the screen. It stays local and does not request the separate security-model clearance used for GitHub automation. A scope result does not clear a PR for review, claim, or merge.
 
 The screen is not the first step, because the two steps above it are inert with respect to that text: reading the operator's own files, and tokenizing the change for an in-process BM25 query. A managed app with no PRD, or a change nothing in the corpus matches, can never produce an advisory — and making it pay a full model-abuse classifier run (possibly a sidecar cold start) to be told so is the only cost on this path that repeats per click. **The exact string that is screened is the exact string that enters every premise**, so the screened text and the scored text cannot drift apart.
 
@@ -72,7 +72,8 @@ The repository path comes from the loaded app record, never from the request: `P
 | `scope-adherence-corpus-missing` | The checkout has no `PRD.md` or `GOALS.md` (or the app has no repository). |
 | `scope-adherence-corpus-unreadable` | The files exist but could not be read — a broken install, not an empty one. |
 | `scope-adherence-no-clause` | No stated goal was close enough to the change to be worth a forward pass. |
-| `untrusted-content-*` | Phase 1 blocked the content, or the abuse guard could not run. See [messages-security](./messages-security.md). |
+| `scope-adherence-abuse-blocked` | Abuse Guard flagged the text; no local scope score was requested. |
+| `scope-adherence-screening-unavailable` | Abuse Guard could not complete the check; no local scope score was requested. See [messages-security](./messages-security.md). |
 | `jev-*` | The scorer itself is unavailable. See [JEV_SETUP.md](../JEV_SETUP.md). |
 
 Each reads as "no advisory" in the UI, never as a verdict.

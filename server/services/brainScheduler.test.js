@@ -4,9 +4,11 @@ const loadMeta = vi.hoisted(() => vi.fn());
 const runDailyDigest = vi.hoisted(() => vi.fn());
 const runWeeklyReview = vi.hoisted(() => vi.fn());
 const getUserTimezone = vi.hoisted(() => vi.fn());
+const held = vi.hoisted(() => vi.fn(() => false));
 vi.mock('./brainStorage.js', () => ({ loadMeta }));
 vi.mock('./brain.js', () => ({ runDailyDigest, runWeeklyReview, TOOL_FREE_REQUIRED: 'TOOL_FREE_REQUIRED' }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone }));
+vi.mock('../lib/maintenanceAdmission.js', async (importOriginal) => ({ ...(await importOriginal()), maintenance: { held } }));
 
 const flush = () => vi.advanceTimersByTimeAsync(0);
 
@@ -21,6 +23,7 @@ describe('brainScheduler opt-in', () => {
     runDailyDigest.mockReset().mockResolvedValue({});
     runWeeklyReview.mockReset().mockResolvedValue({});
     getUserTimezone.mockReset().mockResolvedValue('UTC');
+    held.mockReset().mockReturnValue(false);
     ({ startBrainScheduler } = await import('./brainScheduler.js'));
   });
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
@@ -52,6 +55,27 @@ describe('brainScheduler opt-in', () => {
     for (let i = 0; i < 40; i++) await vi.advanceTimersByTimeAsync(60000);
     expect(runDailyDigest).toHaveBeenCalledTimes(1);
     expect(runWeeklyReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the catch-up for after a boot maintenance hold instead of spending it on the refusal', async () => {
+    loadMeta.mockResolvedValue(meta({ scheduledReviewsEnabled: true }));
+    held.mockReturnValue(true);
+    startBrainScheduler();
+    await flush();
+    expect(runDailyDigest).not.toHaveBeenCalled();
+    expect(runWeeklyReview).not.toHaveBeenCalled();
+
+    // A hold that lands after the gate refuses the run itself.
+    held.mockReturnValue(false);
+    const hold = Object.assign(new Error('Maintenance is holding new work.'), { code: 'MAINTENANCE_HELD' });
+    runDailyDigest.mockRejectedValueOnce(hold);
+    runWeeklyReview.mockRejectedValueOnce(hold);
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(console.error).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(runDailyDigest).toHaveBeenCalledTimes(2);
+    expect(runWeeklyReview).toHaveBeenCalledTimes(2);
   });
 
   it('runs the digest at the configured local time, not the UTC hour of the same clock value', async () => {

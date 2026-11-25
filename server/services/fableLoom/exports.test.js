@@ -37,6 +37,7 @@ vi.mock('./index.js', () => ({}));
 vi.mock('./shotRuns.js', () => ({}));
 
 import { PATHS } from '../../lib/paths.js';
+import { listActiveRenders } from '../renderActivity.js';
 import { getLoom } from './records.js';
 import { loadHistory } from '../videoGen/history.js';
 import { getUniverse } from '../universeBuilder.js';
@@ -862,8 +863,10 @@ describe('portable FableLoom export boundary', () => {
       });
       pendingRead = getFableLoomExport(loom.id, id);
       expect(await snapshotRead.promise).toMatchObject({ jobId: id, status: 'packing' });
+      expect(listActiveRenders()).toEqual([expect.objectContaining({ kind: 'fableloom-export', to: `/fableloom/${loom.id}` })]);
       releaseSource.resolve();
       await __testing.drain();
+      expect(listActiveRenders()).toEqual([]);
       const terminalRecord = JSON.parse(await readFile(recordFile(id), 'utf8'));
       expect(terminalRecord).toMatchObject({ status: 'failed', error: { code: 'EXPORT_MEDIA_PATH' } });
       releaseRead.resolve();

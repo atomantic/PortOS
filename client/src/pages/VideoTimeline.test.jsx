@@ -8,7 +8,7 @@ vi.mock('../services/apiImageVideo.js', () => ({
   createTimelineProject: vi.fn(),
   deleteTimelineProject: vi.fn(),
 }));
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 import VideoTimeline from './VideoTimeline.jsx';
 import { listTimelineProjects, listVideoHistory } from '../services/apiImageVideo.js';

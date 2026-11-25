@@ -34,9 +34,19 @@ import { nearestReactorAspect } from '../../lib/reactorVideoClip.js';
 import { getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
 import { getHiggsfieldVideoModel } from '../../lib/higgsfieldVideoModels.js';
 import { getGoogleVideoModel } from '../../lib/googleVideoModels.js';
+import { GEMINI_WEB_ASPECTS, geminiWebRendersCanvas } from '../../lib/geminiWebVideo.js';
+import { VIDEO_BACKENDS_WITHOUT_NEGATIVE_PROMPT } from '../../lib/generationModes.js';
+import { resolveImageInputPath } from '../../lib/pathSafety.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { renderTargetDefaults } from '../imageGen/cloudProviderConfig.js';
 import { VIDEO_GEN_MODE, VIDEO_GEN_MODES, resolveVideoMode, hasVideoPin, isVideoModeUsable } from './modes.js';
+
+const PIN_MODEL_BY_MODE = Object.freeze({
+  [VIDEO_GEN_MODE.FAL]: id => id,
+  [VIDEO_GEN_MODE.RUNWAY]: id => getRunwayVideoModel(id)?.id ?? null,
+  [VIDEO_GEN_MODE.HIGGSFIELD]: id => getHiggsfieldVideoModel(id)?.id ?? null,
+  [VIDEO_GEN_MODE.GOOGLE]: id => getGoogleVideoModel(id)?.id ?? null,
+});
 
 /**
  * Resolve the video backend for a CD project through the pin ladder: the
@@ -52,8 +62,8 @@ import { VIDEO_GEN_MODE, VIDEO_GEN_MODES, resolveVideoMode, hasVideoPin, isVideo
  * params untouched instead of re-deriving them.
  *
  * `modelId` belongs to the resolved backend: local catalog pins follow the
- * existing project → target precedence; fal endpoint pins come only from an
- * explicit fal project pin. Grok and Reactor use their renderer's own model.
+ * existing project → target precedence; hosted model ids come only from
+ * an explicit project pin for that backend. Grok and Reactor use their renderer's own model.
  */
 export function resolveVideoBackendPin(project, settings, { target = RENDER_TARGET.CREATIVE_AGENT } = {}) {
   const raw = project?.renderBackend?.video || null;
@@ -70,24 +80,16 @@ export function resolveVideoBackendPin(project, settings, { target = RENDER_TARG
     throw new ServerError(`The selected ${strictMode} video backend is unavailable. Enable it and configure its credentials in Settings, or change the production backend.`, { status: 409, code: 'VIDEO_BACKEND_UNAVAILABLE' });
   }
   const resolvedMode = project?.workspace === 'video' ? strictMode : resolveVideoMode(mode, settings, { target });
-  // The target videoModel and project.modelId are local catalog choices. fal
-  // and Runway accept a model only from their own explicit project pin (Runway
-  // only a curated catalog id); Reactor and Grok choose their models in the
-  // renderer. A lapsed fal or Runway pin must not pass its model id into the
-  // legacy local fallback either.
-  const cloudModelPin = mode === VIDEO_GEN_MODE.FAL || mode === VIDEO_GEN_MODE.REACTOR || mode === VIDEO_GEN_MODE.RUNWAY || mode === VIDEO_GEN_MODE.HIGGSFIELD || mode === VIDEO_GEN_MODE.GOOGLE;
-  const localModelId = (!cloudModelPin && normalizeRenderPinValue(raw?.modelId))
-    || targetDefaults.videoModel || null;
-  const modelId = resolvedMode === VIDEO_GEN_MODE.LOCAL ? localModelId
-    : resolvedMode === VIDEO_GEN_MODE.FAL && mode === VIDEO_GEN_MODE.FAL
-      ? normalizeRenderPinValue(raw?.modelId)
-      : resolvedMode === VIDEO_GEN_MODE.RUNWAY && mode === VIDEO_GEN_MODE.RUNWAY
-        ? getRunwayVideoModel(normalizeRenderPinValue(raw?.modelId))?.id || null
-        : resolvedMode === VIDEO_GEN_MODE.HIGGSFIELD && mode === VIDEO_GEN_MODE.HIGGSFIELD
-          ? getHiggsfieldVideoModel(normalizeRenderPinValue(raw?.modelId))?.id || null
-          : resolvedMode === VIDEO_GEN_MODE.GOOGLE && mode === VIDEO_GEN_MODE.GOOGLE
-            ? getGoogleVideoModel(normalizeRenderPinValue(raw?.modelId))?.id || null
-            : null;
+  const hasHostedModel = Object.hasOwn(PIN_MODEL_BY_MODE, mode);
+  // A disabled hosted API pin must not pass its model id into the legacy local fallback.
+  const cloudModelPin = hasHostedModel || mode === VIDEO_GEN_MODE.REACTOR;
+  const requestedModel = normalizeRenderPinValue(raw?.modelId);
+  let modelId = null;
+  if (resolvedMode === VIDEO_GEN_MODE.LOCAL) {
+    modelId = (!cloudModelPin && requestedModel) || targetDefaults.videoModel || null;
+  } else if (resolvedMode === mode && hasHostedModel) {
+    modelId = PIN_MODEL_BY_MODE[mode](requestedModel);
+  }
   return {
     // A model pin counts as a pin even with no mode beside it. Naming a local
     // video model IS a configured choice, and the resolved mode for an
@@ -154,6 +156,15 @@ export function grokVideoJobParams(settings, { sourceImagePath = null, durationS
  * requests before enqueue instead of producing an unconditioned paid clip.
  * Backend workers retain their own duration/prompt validation before submission
  * (in particular Reactor's shared short-clip limits, never a project-length clip).
+ *
+ * This is also where planner output crosses to a third party: a hosted worker
+ * reads the files its params name and sends them to its provider, and the
+ * planner writes those params freehand. So the start frame is re-anchored to
+ * the approved image roots (`resolveImageInputPath`, the rule the cloud image
+ * tools and the federated uploader apply) and refused when it resolves to
+ * nothing, and every other path-bearing input is refused outright: neither
+ * creative surface stages uploads or builds cast sheets, so one here was never
+ * resolved by this server.
  */
 export function videoBackendJobParams(settings, pin, params = {}, { durationSeconds } = {}) {
   if (pin.mode === VIDEO_GEN_MODE.LOCAL) {
@@ -169,7 +180,11 @@ export function videoBackendJobParams(settings, pin, params = {}, { durationSeco
     'keyframes', 'lastImagePath', 'lastImageFile', 'audioFilePath', 'audioFile',
     'extendFromVideoId', 'extendFromVideoPath', 'icReferencePaths',
     'icReferenceVideoIds', 'icReferenceImageFiles', 'referenceImageFiles', 'referenceImagePaths', 'referenceVideoIds', 'referenceVideoPaths', 'referenceAudioPaths', 'loras', 'loraPaths', 'loraFilenames',
+    'castReferences', 'guidanceImagePath', 'sourceVideoPath', 'runwayVideoPath', 'runwayCharacterVideoPath', 'uploadedTempPath', 'uploadedTempPaths',
   ].filter((key) => hasInput(params[key]));
+  const startFrame = hasInput(params.sourceImagePath) ? params.sourceImagePath : params.sourceImageFile;
+  const sourceImagePath = hasInput(startFrame) ? resolveImageInputPath(startFrame) : null;
+  if (hasInput(startFrame) && !sourceImagePath) unsupported.push('a start frame that is missing or outside the image library');
   if (!isDefaultA2vLoraStages(params.a2vLoraStageStrengths)) unsupported.push('per-stage user LoRA strengths');
   if (semantic && semantic !== 'text' && semantic !== 'image') unsupported.push(`mode ${semantic}`);
   if (Number(params.chunks) > 1) unsupported.push('chained chunks');
@@ -177,9 +192,18 @@ export function videoBackendJobParams(settings, pin, params = {}, { durationSeco
   if (params.disableAudio === true) unsupported.push('audio-disabled output');
   if (params.i2vReferenceMode && params.i2vReferenceMode !== 'anchor') unsupported.push('inspire reference mode');
   if (params.continueFromClipId && pin.mode !== VIDEO_GEN_MODE.REACTOR) unsupported.push('Reactor clip continuation');
+  if (VIDEO_BACKENDS_WITHOUT_NEGATIVE_PROMPT.includes(pin.mode) && String(params.negativePrompt ?? '').trim()) {
+    unsupported.push('a negative prompt');
+  }
+  if (pin.mode === VIDEO_GEN_MODE.GEMINI) {
+    // The composer answers every unsupported shape with Landscape.
+    if (!geminiWebRendersCanvas(params.frameAspect || params.aspectRatio, params.width, params.height)) {
+      unsupported.push(`this canvas (it renders ${GEMINI_WEB_ASPECTS.join(' or ')} only)`);
+    }
+  }
   if (unsupported.length) {
     throw new ServerError(
-      `The ${pin.mode} video backend cannot honor ${unsupported.join(', ')}. Remove those inputs or choose a compatible local render backend.`,
+      `The ${pin.mode} video backend cannot honor ${unsupported.join(', ')}. Remove those inputs or choose a compatible render backend.`,
       { status: 400, code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED' },
     );
   }
@@ -189,58 +213,30 @@ export function videoBackendJobParams(settings, pin, params = {}, { durationSeco
   const {
     modelId: _model, pythonPath: _python, numFrames: _frames, fps: _fps,
     steps: _steps, guidanceScale: _guidance, tiling: _tiling,
-    imageStrength: _strength, disableAudio: _audio, ...base
+    imageStrength: _strength, disableAudio: _audio, sourceImageFile: _sourceFile, ...rest
   } = params;
-  const sourceImagePath = params.sourceImagePath || null;
+  const base = sourceImagePath ? { ...rest, sourceImagePath } : rest;
   const duration = params.duration ?? params.durationSeconds ?? durationSeconds;
   if (pin.mode === VIDEO_GEN_MODE.GROK) {
     return { ...base, ...grokVideoJobParams(settings, { sourceImagePath, durationSeconds: duration }) };
   }
-  if (pin.mode === VIDEO_GEN_MODE.FAL) {
+  const hostedParams = { ...base, mode: pin.mode, videoMode: sourceImagePath ? 'image' : 'text' };
+  if (Object.hasOwn(PIN_MODEL_BY_MODE, pin.mode)) {
     return {
-      ...base,
-      mode: VIDEO_GEN_MODE.FAL,
-      videoMode: sourceImagePath ? 'image' : 'text',
+      ...hostedParams,
       ...(pin.modelId ? { modelId: pin.modelId } : {}),
       ...(duration != null ? { duration } : {}),
     };
   }
-  if (pin.mode === VIDEO_GEN_MODE.GOOGLE) {
-    return {
-      ...base,
-      mode: VIDEO_GEN_MODE.GOOGLE,
-      videoMode: sourceImagePath ? 'image' : 'text',
-      ...(pin.modelId ? { modelId: pin.modelId } : {}),
-      ...(duration != null ? { duration } : {}),
-    };
-  }
-  if (pin.mode === VIDEO_GEN_MODE.HIGGSFIELD) {
-    return {
-      ...base,
-      mode: VIDEO_GEN_MODE.HIGGSFIELD,
-      videoMode: sourceImagePath ? 'image' : 'text',
-      ...(pin.modelId ? { modelId: pin.modelId } : {}),
-      ...(duration != null ? { duration } : {}),
-    };
-  }
-  if (pin.mode === VIDEO_GEN_MODE.RUNWAY) {
-    return {
-      ...base,
-      mode: VIDEO_GEN_MODE.RUNWAY,
-      videoMode: sourceImagePath ? 'image' : 'text',
-      ...(pin.modelId ? { modelId: pin.modelId } : {}),
-      ...(duration != null ? { duration } : {}),
-    };
-  }
+  // Gemini sets its own clip length and does not accept a model pin.
+  if (pin.mode === VIDEO_GEN_MODE.GEMINI) return hostedParams;
   if (pin.mode === VIDEO_GEN_MODE.REACTOR) {
     const seconds = params.seconds ?? duration;
     const aspect = Number(params.width) > 0 && Number(params.height) > 0
       ? nearestReactorAspect(params.width, params.height)
       : params.aspect ?? params.aspectRatio;
     return {
-      ...base,
-      mode: VIDEO_GEN_MODE.REACTOR,
-      videoMode: sourceImagePath ? 'image' : 'text',
+      ...hostedParams,
       ...(seconds != null ? { seconds } : {}),
       ...(aspect ? { aspect } : {}),
     };

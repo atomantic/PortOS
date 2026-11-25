@@ -181,3 +181,16 @@ describe('SpotifyTab load errors and disconnect (#17971)', () => {
     expect(screen.getByText(/Connect Spotify \(step 2\) to enable Sync now/)).toBeTruthy();
   });
 });
+
+it.each([false, true])('retries an unread Spotify status (connected: %s)', async (connected) => {
+  api.getSpotifyStatus.mockRejectedValueOnce(new Error('Offline'))
+    .mockResolvedValueOnce({ state: {}, auth: { hasTokens: connected, hasCredentials: connected } });
+  render(<MemoryRouter><SpotifyTab /></MemoryRouter>);
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load Spotify status');
+  expect(screen.queryByText('Not connected')).not.toBeInTheDocument();
+  expect(screen.queryByText(/Save your client ID and secret above/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByText(connected ? 'Connected' : 'Not connected')).toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});

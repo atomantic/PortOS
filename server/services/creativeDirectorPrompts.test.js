@@ -93,6 +93,11 @@ describe('Creative Director stage prompts — API origin', () => {
 });
 
 describe('buildTreatmentPrompt — template-rendered output', () => {
+  it('tells the Video writer the pinned model’s clip lengths and maximum shot length', async () => {
+    const out = await buildTreatmentPrompt({ ...baseProject, workspace: 'video', renderBackend: { video: { mode: 'google' } } });
+    expect(out).toContain('{"minSeconds":1,"maxSeconds":8,"renderedClipSeconds":[4,6,8]}');
+  });
+
   it('passes resolved Video source descriptions and the matching revision in the treatment output contract', async () => {
     const revision = 'a'.repeat(32);
     const out = await buildTreatmentPrompt({ ...baseProject, workspace: 'video', videoPlanningContext: { revision }, resolvedVideoSources: [{ kind: 'universe', id: 'example-universe', summary: { canon: 'The traveler wears a silver cloak.' } }] });
@@ -273,6 +278,33 @@ describe('buildEvaluatePrompt — imageStrength surfacing', () => {
   });
 });
 
+describe('negative prompts on a backend that takes none', () => {
+  it.each([['gemini', 'Gemini'], ['reactor', 'Reactor.inc']])('tells the treatment writer to omit it on %s', async (videoBackend, label) => {
+    const prompt = await buildTreatmentPrompt(baseProject, { videoBackend });
+    expect(prompt).toContain(`(${label}) has no negative-prompt field`);
+    expect(prompt).not.toContain('"negativePrompt": "<optional>"');
+    expect(prompt).toMatch(/"prompt": "<full render prompt with style spec inlined>",\n {6}"durationSeconds": 5,/);
+    expect(prompt).not.toMatch(/{{[#/^]?[a-zA-Z]/);
+  });
+
+  it('keeps the option in treatment prompts for local and fal', async () => {
+    for (const other of [await buildTreatmentPrompt(baseProject), await buildTreatmentPrompt(baseProject, { videoBackend: 'fal' })]) {
+      expect(other).not.toContain('has no negative-prompt field');
+      expect(other).toMatch(/"negativePrompt": "<optional>",\n {6}"durationSeconds": 5,/);
+    }
+  });
+
+  it.each(['gemini', 'reactor'])('tells the planner to omit it on %s', async (videoBackend) => {
+    const prompt = await buildPlanPrompt({ ...baseProject, aspectRatio: '9:16' }, { toolSpecs: [], videoBackend });
+    expect(prompt).toContain('Do NOT set `negativePrompt`');
+    expect(prompt).not.toContain('You may also set `negativePrompt`');
+  });
+
+  it('keeps the option in local plan prompts', async () => {
+    expect(await buildPlanPrompt({ ...baseProject, aspectRatio: '9:16' }, { toolSpecs: [] })).toContain('You may also set `negativePrompt`');
+  });
+});
+
 describe('standalone Video treatment planning', () => {
   it('requires an exact timed script and preserves revision context without authorizing renders', async () => {
     const project = {
@@ -299,6 +331,9 @@ describe('standalone Video treatment planning', () => {
     const project = { ...baseProject, workspace: 'video' };
     const grok = await buildTreatmentPrompt({ ...project, renderBackend: { video: { mode: 'grok' } } });
     expect(grok).toContain('"durationSeconds":[6,10,15]');
+    const gemini = await buildTreatmentPrompt({ ...project, renderBackend: { video: { mode: 'gemini' } } }, { videoBackend: 'gemini' });
+    expect(gemini).toContain('"maxSeconds":10,"aspectRatios":["16:9","9:16"]}');
+    expect(gemini).toContain('(Gemini) has no negative-prompt field');
     const inherited = await buildTreatmentPrompt(project);
     expect(inherited).toContain('"backendCompatibility":"unresolved"');
     expect(inherited).toContain('source record IDs are not image filenames');

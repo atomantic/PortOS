@@ -217,19 +217,6 @@ export const CATALOG_BADGE_BY_ID = Object.freeze(
   Object.fromEntries(CATALOG_TYPES.map((t) => [t.id, t.badgeColor])),
 );
 
-// Catalog ingredient `type` → ref role when linking the ingredient to a
-// universe/series from the UI (#1762 bulk "Add to universe/series" + the cast
-// panel). character/place/object carry a typed `cast-*` role; everything else
-// (idea/scene/concept/user types) links as a generic 'reference'. The server
-// validates role as a free string (min1/max64), so this is the client-side
-// convention shared by CatalogCastPanel and the Catalog bulk-place action.
-const CATALOG_REF_ROLE_BY_TYPE = Object.freeze({
-  character: 'cast-character',
-  place: 'cast-place',
-  object: 'cast-object',
-});
-export const catalogRefRoleForType = (type) => CATALOG_REF_ROLE_BY_TYPE[type] || 'reference';
-
 // --- User-defined types (client mirror) ----------------------------------
 // User types are defined in Settings → Catalog, persisted server-side in
 // settings.json, and served (merged with the system registry) via
@@ -293,9 +280,4 @@ export function mergeCatalogTypes(staticTypes = CATALOG_TYPES, userTypes = []) {
   }
   const byId = Object.fromEntries(list.map((t) => [t.id, t]));
   return { list, byId };
-}
-
-/** Look up a type by id from a merged `byId` map (from `mergeCatalogTypes`). */
-export function getCatalogTypeFrom(byId, id) {
-  return byId?.[id];
 }

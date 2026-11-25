@@ -33,7 +33,17 @@ runs:
         # Refresh immutable entries daily as signed package indexes evolve.
         echo "key=${prefix}$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
+    # A PR-saved cache is private to its merge ref and never read again, so PRs only restore.
+    - name: Cache APT package downloads (restore only on pull requests)
+      if: github.event_name == 'pull_request'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/portos-apt-packages/*.deb
+        key: ${{ steps.apt-cache.outputs.key }}
+        restore-keys: ${{ steps.apt-cache.outputs.prefix }}
+
     - name: Cache APT package downloads
+      if: github.event_name != 'pull_request'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/portos-apt-packages/*.deb

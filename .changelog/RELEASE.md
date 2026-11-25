@@ -1,34 +1,36 @@
-# Release v2.128.0 - Sculpted Osprey
+# Release v2.129.0 - Guided Kestrel
 
-Released: 2026-11-24
+Released: 2026-11-25
 
 ## Highlights
 
-- **Blender Models Studio**: Create, build, review, and export game-ready Blender models directly on the 3D page, complete with reference sheets, parts briefs, moving parts with 0–1 pose sliders, collision sweeps, worn-material texture baking, and one-click showcase films.
-- **Film & 3D Production Tools**: Compare Three.js builds against product-sheet reference views, catch interpenetrating parts during clip playback, view motion reference clips beside film shot contact sheets, and drop 3D library models into Blender or code films.
-- **Catalog, Embeddings & Local LLMs**: Trigger catalog embedding backfills from the Embeddings tab with disabled-provider guards, export catalog slices from the Catalog UI, and browse newly added local models including MiMo-V2.6 9B, Laguna XS 2.1, Qwen3-Coder-Next, Ornith 1.5 122B, and GLM-OCR.
-- **Performance, Security & Reliability**: Sped up GitHub notification sync, Beeper reconciliation, native usage scans, and cold-load client bundles, while tightening credential permissions (`0600`), pinning immutable Hugging Face revisions for image/audio/music models, and hardening OAuth and installer verification.
+- **Managed Local Runtimes & Coding Context**: Install, start, repair, and monitor Splash (with its Inkling checkpoint) and mkserve directly from PortOS with PM2 logs, performance tracking, free-disk checks, and automatic provider model refreshes, while editing Claude Code, OpenCode, and Splash context in-app.
+- **Multi-Runtime LLM Playground**: Test and compare models across every running local runtime in the Local LLM Playground, with clearer per-runtime listing errors and removable stale selections.
+- **Music Video & Media Studio**: Apply non-destructive Image Treatments to music video shots, move takes between shots, label and switch project versions, browse a paginated video gallery picker, and inspect or edit negative prompts on image and video retries.
+- **CoS Linking & Feature Audit Priorities**: Navigate directly between Chief of Staff agents, runs, run events, and tasks via deep links, and view or pin feature-area audit priority tiers in Settings > Features.
+- **Performance & Reliability**: Split heavy charting and 3D libraries out of cold-load bundles, speed up app status lists, media gallery search, and Review history, and add retryable error states and duplicate-submit guards across core pages.
 
 ## Added
 
-- **Blender Models Engine & 3D Page**: Added a full Blender Models workspace on the 3D page with model creation, GLB export and re-import verification, reference sheets, parts briefs, build-vs-reference comparison, moving-part 0–1 pose sliders and collision sweeps, worn-material texture baking, and showcase film generation from published models.
-- **Three.js & Film Workflows**: Added one-tap product-sheet and multi-view references for Three.js model generation, clip-playback collision detection for Three.js parts, motion reference clips beside film shot contact sheets, and support for adding 3D library models to Blender or code films.
-- **Catalog & Embeddings Controls**: Added catalog embedding backfill controls in the Embeddings tab (refusing disabled providers) and catalog slice export in the Catalog UI.
-- **Local LLM Catalog & Trusted Bots**: Added MiMo-V2.6 9B, Laguna XS 2.1, Qwen3-Coder-Next, Ornith 1.5 122B, and GLM-OCR to the local LLM catalog, and added default instance-bot trust plus an explicit trusted-bots list for GitHub accounts.
+- **Managed Splash & mkserve Lifecycle**: Added in-app lifecycle controls, pinned installation, free-disk verification, PM2 log integration, performance measurements, proxy support, and cache repair for Splash (including Inkling) and mkserve, plus automatic provider-model refreshes after starts, downloads, or removals.
+- **In-App Coding Context Editor**: Added editing for Claude Code, OpenCode, and Splash context inside PortOS, with Launch in Shell support for managed apps and OpenCode 2.
+- **Local LLM Playground Multi-Runtime Comparison**: Added side-by-side testing and comparison across all running local runtimes, retaining unavailable selections as removable rows and surfacing per-runtime listing errors.
+- **Music Video & Media Controls**: Added non-destructive Image Treatments for music video shots, moving takes to another shot, music video project version labels and switching, and pagination in the video gallery picker.
+- **CoS Cross-Linking & Audit Priorities**: Linked Chief of Staff agents, runs, run events, and tasks with deep-link resolution by run ID, added automatic feature-area usage learning with pinnable priority tiers in Settings > Features, and added reasoning-only timeout reporting for HTML Pages.
 
 ## Changed
 
-- **Quality & App Health**: Updated App Quality to use an 85+ healthy target band with a recency-decay window and per-slice score history.
-- **Performance**: Bounded concurrency and batched database writes/indexes for GitHub notification sync, coalesced and cached Beeper reachability probes and Tribe lookups, split navigation search metadata and theme palettes out of the cold-load client bundle, and streamed native agent usage scans.
-- **Accessibility & Responsive Polish**: Improved keyboard navigation, focus rings, landmarks, contrast, reduced-motion support, narrow-width layouts, and large-text alignment across Goals, Flows, and Autofixer.
+- **Performance & Bundle Splitting**: Split shared client chunks so routes no longer load 3D and charting libraries unnecessarily, served Video Gen status from a shared probe cache, indexed media gallery search and filter fields, paged Review history, trimmed mood board and comparison payloads, and read only metadata prefixes when scanning Obsidian notes.
+- **Retry & Edit Flows**: Built the image Edit and Retry form from Image Gen compose controls with model-input previews, showed source negative prompts on Regenerate and annotation re-renders, and kept Schedule Timeline edits applied locally with clearable recheck schedules.
+- **Dependencies & Retirements**: Updated client charting and icon dependencies (`recharts` and `lucide-react`), and retired the Integration Flows viewer along with unused routes.
 
 ## Fixed
 
-- **Security & Credentials**: Enforced `0600` permissions on secret-bearing `.env` files and credential stores, moved Telegram bot tokens to a `0600` private key store, required single-use Google and Spotify OAuth state with Host-derived origins, gated host-control routes, and verified SHA-256 checksums for Bun, Ollama, and Slotstream downloads.
-- **AI Media & Model Pinning**: Pinned immutable Hugging Face commit revisions for FLUX.2, FLUX.3 Klein, diffusers, MiniMax-Music3, and Qwen3-TTS, recovered interrupted rigging/retargeting runs on boot, made rigging readiness probes race-safe, and preserved untouched video retry parameters.
-- **FableLoom, Code Animation & Messaging**: Serialized concurrent Series Autopilot starts, recovered closed SSE streams in Autopilot and Pipeline Issue views, preserved FableLoom export jobs and volume beat-sheet progress, preloaded upcoming music-video shots, erased derived Timeline/Tribe copies when disabling subcalendars, and made Stacker News action replays idempotent.
-- **Memory & Brain**: Unified catalog and memory embedding settings, kept memory related links symmetric, preserved journal and tombstone purges, and prevented memory decay from archiving Persistent Mind memories.
+- **Media & Video Generation**: Prevented duplicate 3D renders on double-click, refused unsupported negative prompts on Reactor renders, validated hosted video durations and attachments for Gemini, Runway, and Higgsfield, preserved inherited prompts and retry edits after refusals, and prompted before leaving Media Annotate with unsaved strokes.
+- **Chief of Staff & Runs**: Stabilized Chief of Staff avatar state and slice refreshes across tab switches and socket updates, serialized pinned Runs reads, kept scheduled jobs armed after overlapped or failed fires, and prevented updates from killing detached jobs.
+- **Error States & Form Input**: Added retryable load-error states across Insights, Catalog, Privacy Center, POST, and Dashboard widgets, fixed digit-by-digit number input and speech-rate entry below 1, preserved commas and spaces in Brain follow-ups, and stopped double-clicks from creating duplicate records.
+- **Imports, Feeds & Backups**: Fixed iPhone Google Timeline visit imports, WhatsApp afternoon timestamps, legacy Spotify podcast plays, Gmail Takeout sent-mail labels, Atom feed decoding, Rapid Reader book reopening, and exclusion of managed Python environments from backups.
 
 ## Full Changelog
 
-**Full Diff**: https://github.com/atomantic/PortOS/compare/v2.127.0...v2.128.0
+**Full Diff**: https://github.com/atomantic/PortOS/compare/v2.128.0...v2.129.0

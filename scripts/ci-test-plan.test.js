@@ -20,6 +20,7 @@ import {
   collectPlanInputs,
   collectSuperColliderLiveInputs,
   emitGitHubPlan,
+  isGeneratedSnapshotPush,
   formatPlanSummary,
   forceFullReasonFor,
   githubPlanOutput,
@@ -841,8 +842,7 @@ it('requests DB verification for every shape of suite in the real canonical inve
   // per inventory shape proves the rule; planning all 50+ only repeated it.
   const shapes = {
     scripts: (path) => path.startsWith('scripts/'),
-    globbed: (path) => path.endsWith('/db.test.js'),
-    unmarked: (path) => !path.includes('.db.') && !path.endsWith('/db.test.js'),
+    store: (path) => path.endsWith('/db.test.js'),
     realBrowser: (path) => path.includes('.realBrowser.db.'),
     named: (path) => path.startsWith('server/') && /\.db\.test\.js$/.test(path) && !path.includes('.realBrowser.'),
   };
@@ -2709,10 +2709,18 @@ describe('cross-workspace browser suites (#10312)', () => {
       !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
     const plan = buildCiTestPlan(catalogFiles, { ...inputs, trackedFiles });
     expect(plan.full).toBe(false);
-    for (const suite of [...suites, 'server/services/codeAnimation/export.realBrowser.test.js']) {
-      expect(inputs.browserDependencies[suite]?.length, suite).toBeLessThan(400);
+    for (const suite of suites) {
+      for (const file of catalogFiles) {
+        expect(inputs.browserDependencies[suite], `${suite} reaches ${file}`).not.toContain(file);
+      }
+      expect(plan.browserFiles).not.toContain(suite);
     }
-    for (const suite of suites) expect(plan.browserFiles).not.toContain(suite);
+    // Code-animation export reaches systemCapabilities.js through the media
+    // queue's model registry, which checks hardware compatibility.
+    const openCodeConfig = 'server/lib/opencodeConfig.js';
+    for (const suite of [...suites, 'server/services/codeAnimation/export.realBrowser.test.js']) {
+      expect(inputs.browserDependencies[suite], `${suite} reaches ${openCodeConfig}`).not.toContain(openCodeConfig);
+    }
   });
 
   it('selects only the music-video browser suites that mount ProductionReviewPanel when it changes', () => {
@@ -3093,6 +3101,16 @@ describe('path-gated single-purpose jobs', () => {
     expect(jobs.gate).toContain('CI_GATE_RESULT_DOCKER_CONTAINMENT_LIVE: ${{ needs.docker-containment-live.result }}');
   });
 
+  // #18633: a scheduled run in the main ref group was the pending run a push
+  // dropped, so its enforced budget, ungated native jobs and cache seeding lapsed.
+  it('keeps scheduled runs in their own concurrency group and cancels only superseded PR runs', () => {
+    const ci = readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8');
+    expect(ci).toContain(
+      "group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'schedule') || github.ref }}",
+    );
+    expect(ci).toContain("cancel-in-progress: ${{ github.event_name == 'pull_request' }}");
+  });
+
   // #16555: ci.yml reads every decision from the one `plan` output. A read of
   // a key the planner never emits is `null` in Actions, which silently skips
   // the job (or, in a gate's `!…` test, silently passes it) instead of failing.
@@ -3325,6 +3343,50 @@ describe('native jobs on a push to main', () => {
     expect(gatedPlan(['client/src/App.jsx'], { linuxContainmentInputs: null }).linuxContainment).toBe(true);
     // A pull request never takes the gated path, even if handed a list.
     expect(buildCiTestPlan(['docs/README.md'], { gatedChangedFiles: ['server/lib/darwinAgentSupervisor.py'] }).macosNative).toBe(false);
+  });
+
+  describe('generated snapshot push (#18457)', () => {
+    const GREEN = 'a'.repeat(40);
+    const snapshotPlan = (gatedChangedFiles, extra = {}) => gatedPlan(gatedChangedFiles, {
+      gatedBaseSha: GREEN, predecessorGreenSha: GREEN, ...extra,
+    });
+    const jobsRun = (plan) => githubPlanOutput(plan);
+
+    it.each([
+      ['run 45350192457 diff', ['.quality.json']],
+      ['run 45337587297 diff', ['.quality.json']],
+    ])('runs the generated-data plan for %s and never offers release evidence', (_name, diff) => {
+      const plan = snapshotPlan(diff);
+      const out = jobsRun(plan);
+      expect(out).toMatchObject({
+        full: false, server_mode: 'skip', client_mode: 'skip', db: false, build: false, smoke: false,
+        windows: false, native_gated: true, snapshot_scoped: true, lint_mode: 'skip',
+      });
+      expect(out.reason).toMatch(/^generated snapshot push: only \.quality\.json changed since the green first parent aaaaaaaaa/);
+      expect(gates(plan)).toEqual(none);
+    });
+
+    it.each([
+      ['a concurrent code change', ['.quality.json', 'server/lib/db.js']],
+      ['the snapshot renamed into another path', ['.quality.json', 'docs/quality.json']],
+      ['an empty diff', []],
+      ['an unreadable diff', null],
+    ])('keeps the full plan for %s', (_name, diff) => {
+      const out = jobsRun(snapshotPlan(diff));
+      expect(out).toMatchObject({ full: true, snapshot_scoped: false });
+      expect(out.reason).toBe('full CI requested');
+    });
+
+    it('keeps the full plan without proof the green run is the first parent', () => {
+      expect(jobsRun(snapshotPlan(['.quality.json'], { predecessorGreenSha: undefined })).full).toBe(true);
+      expect(jobsRun(snapshotPlan(['.quality.json'], { predecessorGreenSha: 'b'.repeat(40) })).full).toBe(true);
+      expect(jobsRun(snapshotPlan(['.quality.json'], { gatedBaseSha: undefined })).full).toBe(true);
+    });
+
+    it('never scopes a run that is not forced full', () => {
+      expect(isGeneratedSnapshotPush({ forceFull: false, gatedBaseSha: GREEN, predecessorGreenSha: GREEN,
+        gatedChangedFiles: ['.quality.json'] })).toBe(false);
+    });
   });
 
   it('collects the two-dot tree diff, including both sides of a rename', () => {

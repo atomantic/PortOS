@@ -1,12 +1,22 @@
-/** Load a default-exported Express router on its first matching request, sharing the import across concurrent requests. */
+/** Load default-exported Express routers on demand and warm them after the server starts listening. */
+import { warmModuleLoads } from './moduleWarmup.js';
+
+const routerLoads = [];
+
 export function createLazyRouter(load) {
   let pending;
-  return async (req, res, next) => {
+  const getRouter = () => {
     pending ??= load().then(module => module.default).catch(error => {
       pending = undefined;
       throw error;
     });
-    const router = await pending;
+    return pending;
+  };
+  routerLoads.push(['Lazy router', getRouter]);
+  return async (req, res, next) => {
+    const router = await getRouter();
     return router(req, res, next);
   };
 }
+
+export const warmLazyRouters = () => warmModuleLoads(routerLoads);

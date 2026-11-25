@@ -51,7 +51,6 @@ vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: (...args) => updateTaskMo
 vi.mock('../provider/providers.js', () => ({ getActiveProvider: vi.fn(async () => null) }));
 vi.mock('../provider/providerStatus.js', () => ({
   markProviderUsageLimit: vi.fn(async () => null),
-  markProviderRateLimited: vi.fn(async () => null),
   markProviderUnavailable: vi.fn(async () => null),
 }));
 
@@ -71,7 +70,6 @@ vi.mock('./agentRunTracking.js', () => ({
   completeAgentRun: (...args) => completeAgentRunMock(...args),
 }));
 vi.mock('../taskTypeHooks.js', () => ({
-  canRunTaskOutputHookWithoutPayload: vi.fn(() => false),
   isProgrammaticIoTaskType: vi.fn(() => false),
   resolveTaskHookType: vi.fn(() => null),
   declaresNoCommitCriterion: vi.fn(() => false),
@@ -79,7 +77,7 @@ vi.mock('../taskTypeHooks.js', () => ({
   getTaskOutputPayloadPredicate: vi.fn(async () => null),
 }));
 vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () => null) }));
-vi.mock('./agentSummaryExtraction.js', () => ({ extractSimplifySummaries: vi.fn(() => null), extractFinalSummary: vi.fn(() => null) }));
+vi.mock('./agentSummaryExtraction.js', () => ({ extractFinalSummary: vi.fn(() => null) }));
 
 import { checkPrimaryCheckoutDrift, finalizeAgent } from './agentFinalization.js';
 import { emitLog } from '../cos/cosEvents.js';

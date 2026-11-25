@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import ListLoadError from '../ui/ListLoadError';
 import {
   Plus, Repeat, ChevronDown, ChevronRight, ExternalLink, Check, Ban, Mail, ArrowRight,
 } from 'lucide-react';
@@ -112,8 +113,9 @@ function StatusGroup({ title, orgs, status, eventId, hasReplacement, onChanged }
 }
 
 export default function PrivacyChangesTab({ subjectId }) {
-  const [events, setEvents] = useState([]);
-  const [vaultRecords, setVaultRecords] = useState([]);
+  const [events, setEvents] = useState(null);
+  const [vaultRecords, setVaultRecords] = useState(null);
+  const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [expanded, setExpanded] = useState(null); // eventId
@@ -127,11 +129,15 @@ export default function PrivacyChangesTab({ subjectId }) {
     // A change event inherits its subject from the vault record it replaces, so
     // scoping the record list is what keeps the Declare form on one person.
     Promise.allSettled([
-      getPrivacyChanges({ subjectId }), getVaultRecords(undefined, { subjectId }),
+      getPrivacyChanges({ subjectId, silent: true }), getVaultRecords(undefined, { subjectId, silent: true }),
     ]).then(([e, v]) => {
       if (!isCurrent()) return;
-      setEvents(e.status === 'fulfilled' ? e.value : []);
-      setVaultRecords(v.status === 'fulfilled' ? v.value : []);
+      const errors = {};
+      if (e.status === 'fulfilled') setEvents(e.value);
+      else errors.events = e.reason;
+      if (v.status === 'fulfilled') setVaultRecords(v.value);
+      else errors.vault = v.reason;
+      setErrors(errors);
       setLoading(false);
     });
   }, [subjectId, beginRequest]);
@@ -152,7 +158,7 @@ export default function PrivacyChangesTab({ subjectId }) {
     setDrawerOpen(false);
     setEvents((prev) => [
       { ...event, progress: { pending: 0, updated: 0, removed: 0, total: 0 } },
-      ...prev,
+      ...(prev ?? []),
     ]);
     // Refresh so the new event's progress counts + masked values are populated.
     load();
@@ -168,7 +174,7 @@ export default function PrivacyChangesTab({ subjectId }) {
       removed: groups.removed.length,
       total: groups.pending.length + groups.updated.length + groups.removed.length,
     };
-    setEvents((prev) => prev.map((ev) => (ev.id === eventId ? { ...ev, progress: counts } : ev)));
+    setEvents((prev) => prev?.map((ev) => (ev.id === eventId ? { ...ev, progress: counts } : ev)));
   };
 
   return (
@@ -177,14 +183,16 @@ export default function PrivacyChangesTab({ subjectId }) {
         <p className="text-xs text-gray-500 max-w-lg">
           Declare "field X changed from A to B" — every org holding the old value is flagged for an update, and you work the checklist until everyone is current.
         </p>
-        <button onClick={() => setDrawerOpen(true)} className="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 self-start">
+        <button onClick={() => setDrawerOpen(true)} disabled={vaultRecords === null} className="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 self-start disabled:opacity-50">
           <Plus size={16} /> Declare change
         </button>
       </div>
 
-      {loading ? (
+      {errors.vault && <ListLoadError what="vault records for declaring changes" error={errors.vault} onRetry={load} retrying={loading} />}
+      {errors.events && <ListLoadError what="declared changes" error={errors.events} onRetry={load} retrying={loading} />}
+      {loading && events === null ? (
         <div className="text-gray-500 text-sm py-8 text-center">Loading changes…</div>
-      ) : events.length === 0 ? (
+      ) : events === null ? null : events.length === 0 ? (
         <div className="border border-dashed border-port-border rounded-lg p-8 text-center text-gray-500 text-sm">
           No changes declared yet. When an address, phone, or email changes, declare it here to track who still needs updating.
         </div>
@@ -244,7 +252,7 @@ export default function PrivacyChangesTab({ subjectId }) {
 
       <DeclareChangeDrawer
         open={drawerOpen}
-        vaultRecords={vaultRecords}
+        vaultRecords={vaultRecords ?? []}
         onClose={() => setDrawerOpen(false)}
         onDeclared={handleDeclared}
       />

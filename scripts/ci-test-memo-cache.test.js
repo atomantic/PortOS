@@ -78,7 +78,7 @@ describe('trusted CI test-memo cache reuse', () => {
       const invocation = step(rawJob, 'Restore the test memo');
       expect(invocation).toContain('suite: browser\n');
       expect(invocation).toContain(`merge-shards: \${{ ${mergeBrowserShards} }}\n`);
-      expect(save).toContain("steps.browser-tests.outcome == 'success' && github.event_name != 'pull_request'");
+      expect(save).toContain("steps.browser-tests.outcome == 'success' && steps.browser-tests.outputs.memo-written == 'true' && github.event_name != 'pull_request'");
     } else {
       const invocation = step(rawJob, 'Restore the test memo');
       expect(invocation).toContain(`suite: ${family}\n`);

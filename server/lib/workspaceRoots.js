@@ -47,12 +47,6 @@ export const EXTRA_WORKSPACE_ROOTS = (process.env.PORTOS_WORKSPACE_ROOTS || '')
   .map(s => s.trim())
   .filter(Boolean);
 
-// True when the operator has explicitly configured PORTOS_WORKSPACE_ROOTS.
-// Routes that are permissive by default (detect) opt into root-restriction
-// only when this is set; routes that always scope (command execution) ignore
-// it and enforce against ALLOWED_WORKSPACE_ROOTS unconditionally.
-export const WORKSPACE_ROOTS_CONFIGURED = EXTRA_WORKSPACE_ROOTS.length > 0;
-
 // NOT the whole answer on Windows — the non-system-drive rule below allows paths
 // that appear in no root here. `isWithinAllowedRoots` is the only complete test;
 // don't render this list as "the directories you may use".

@@ -13,7 +13,7 @@ vi.mock('../../../hooks/useProviderModels', () => ({
     setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn(), loading: false,
   }),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 import { getDigitalTwinEnrichProgress, getDigitalTwinGaps } from '../../../services/apiDigitalTwin.js';
 import InterviewTab from './InterviewTab';

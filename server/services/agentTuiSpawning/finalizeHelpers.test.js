@@ -3,11 +3,8 @@ import { mkdtemp, writeFile, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-// git + failure analyzer are mocked; fs/promises stays REAL so readFileTail /
-// captureWorktreeDiff are exercised against actual temp files.
-vi.mock('../git/status.js', () => ({
-  getDiff: vi.fn(),
-}));
+// The failure analyzer is mocked; fs/promises stays REAL so readFileTail is
+// exercised against actual temp files.
 vi.mock('../agent/agentErrorAnalysis.js', () => ({
   analyzeAgentFailure: vi.fn(),
 }));
@@ -17,13 +14,11 @@ vi.mock('../../lib/gitCommitProbe.js', () => ({
   commitsSince: vi.fn(),
 }));
 
-import * as git from '../git/status.js';
 import { analyzeAgentFailure } from '../agent/agentErrorAnalysis.js';
 import { commitsSince as commitsSinceMock } from '../../lib/gitCommitProbe.js';
 import {
   readFileTail,
   commitsSince,
-  captureWorktreeDiff,
   resolveErrorAnalysis,
 } from './finalizeHelpers.js';
 
@@ -70,29 +65,6 @@ describe('finalizeHelpers', () => {
     vi.mocked(commitsSinceMock).mockResolvedValue(3);
     expect(await commitsSince('/tmp/ws', 1)).toBe(3);
     expect(commitsSince).toBe(commitsSinceMock);
-  });
-
-  describe('captureWorktreeDiff', () => {
-    it('writes a combined staged+unstaged diff and returns it', async () => {
-      vi.mocked(git.getDiff).mockImplementation(async (_dir, staged) => (staged ? 'S-DIFF' : 'U-DIFF'));
-      const combined = await captureWorktreeDiff('/tmp/ws', dir);
-      expect(combined).toContain('### STAGED CHANGES ###');
-      expect(combined).toContain('S-DIFF');
-      expect(combined).toContain('### UNSTAGED CHANGES ###');
-      expect(combined).toContain('U-DIFF');
-      // Persisted alongside the agent archive dir for post-mortems.
-      expect(await readFile(join(dir, 'worktree-diff.txt'), 'utf8')).toBe(combined);
-    });
-
-    it('returns null when there is no diff to capture', async () => {
-      vi.mocked(git.getDiff).mockResolvedValue('');
-      expect(await captureWorktreeDiff('/tmp/ws', dir)).toBeNull();
-    });
-
-    it('returns null for invalid args', async () => {
-      expect(await captureWorktreeDiff(null, dir)).toBeNull();
-      expect(await captureWorktreeDiff('/tmp/ws', null)).toBeNull();
-    });
   });
 
   describe('resolveErrorAnalysis', () => {

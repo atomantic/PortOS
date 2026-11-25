@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn() })
-}));
+vi.mock('../ui/Toast');
 vi.mock('../../services/apiAgents.js', () => ({
   updateCosJob: vi.fn(),
   acknowledgeCosJobIncident: vi.fn(),
@@ -243,6 +241,17 @@ describe('JobCard schedule anchor (#15395)', () => {
     fireEvent.change(weekday, { target: { value: '4' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Save/ })); });
     expect(updateCosJob.mock.calls[0][1]).toMatchObject({ interval: 'weekly', scheduleAnchor: 4 });
+  });
+
+  it('sets weekdaysOnly from the edit form and drops the weekday anchor picker', async () => {
+    vi.mocked(updateCosJob).mockResolvedValue({ success: true });
+    renderCard(weekly);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Weekdays only' }));
+    expect(screen.queryByRole('combobox', { name: 'Run on weekday' })).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Save/ })); });
+    expect(updateCosJob.mock.calls[0][1]).toMatchObject({ weekdaysOnly: true });
   });
 
   it('keeps the picked weekday when weekly becomes biweekly, and re-defaults it when it becomes monthly', async () => {

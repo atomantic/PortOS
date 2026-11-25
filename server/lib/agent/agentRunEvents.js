@@ -107,7 +107,6 @@ export const RUN_EVENT_KINDS = Object.freeze([
   ...PERSISTENT_MIND_EVENT_KINDS,
 ]);
 
-const KIND_SET = new Set(RUN_EVENT_KINDS);
 const AGENT_KIND_SET = new Set(AGENT_RUN_EVENT_KINDS);
 
 // ---------------------------------------------------------------------------
@@ -401,16 +400,6 @@ export function deriveEventId(core) {
   return sha256Text(canonicalStringify(core) ?? '').slice(0, 32);
 }
 
-/** Is this parsed line a well-formed ledger event? Used by the read path. */
-export function isValidRunEvent(value) {
-  return agentRunEventSchema.safeParse(value).success;
-}
-
-/** Does this kind belong to the closed vocabulary? */
-export function isKnownRunEventKind(kind) {
-  return KIND_SET.has(kind);
-}
-
 // ---------------------------------------------------------------------------
 // Projection
 // ---------------------------------------------------------------------------
@@ -627,9 +616,4 @@ function applyKind(state, event) {
       // Unknown kind from a newer install — counted, not interpreted.
       break;
   }
-}
-
-/** Project a single key out of a stream (`runId`, or `agent:<agentId>`). */
-export function projectRunState(events, id) {
-  return projectRunStates(events).find((state) => state.id === id) ?? null;
 }

@@ -155,7 +155,6 @@ export const NAV_SEARCH_METADATA = Object.freeze({
   'nav.browser': { aliases: ['browser'] },
   'nav.devtools.runner': { aliases: ['devtools-runner'] },
   'nav.devtools.datadog': { aliases: ['datadog', 'devtools-datadog'] },
-  'nav.devtools.flows': { aliases: ['flows', 'integration-flows', 'workflows'], keywords: ['architecture', 'diagram', 'data flow', 'integrations', 'how it works'] },
   'nav.devtools.github': { aliases: ['github', 'devtools-github'] },
   'nav.devtools.github-accounts': { aliases: ['github-accounts', 'github-enterprise'], keywords: ['github', 'enterprise', 'ghes', 'gh auth', 'login', 'trust', 'notifications'] },
   'nav.devtools.github-inbox': { aliases: ['github-inbox', 'github-notifications'], keywords: ['github', 'notifications', 'inbox', 'mentions', 'review requests', 'mute', 'unsubscribe'] },

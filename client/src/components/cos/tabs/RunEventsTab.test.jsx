@@ -112,6 +112,22 @@ describe('RunEventsTab', () => {
     expect(api.getRunEventDiagnostic).toHaveBeenCalledWith('run-a', { silent: true });
   });
 
+  it('links the diagnostic Agent and Task values, and shows a dash when null', async () => {
+    renderTab('/cos/run-events?run=run-a');
+    expect(await screen.findByRole('link', { name: 'agent-a' })).toHaveAttribute('href', '/cos/agents/agent-a');
+    expect(screen.getByRole('link', { name: 'task-a' })).toHaveAttribute('href', '/cos/tasks?task=task-a');
+  });
+
+  it('renders null Agent and Task ids as plain dashes', async () => {
+    api.getRunEventDiagnostic.mockResolvedValue({
+      projection: projection({ agentId: null, taskId: null }),
+      events: [{ eventId: 'e1', kind: 'run.spawned', at: '2026-08-18T10:00:00.000Z', data: {} }],
+    });
+    renderTab('/cos/run-events?run=run-a');
+    expect(await screen.findByText('Agent')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'agent-a' })).not.toBeInTheDocument();
+  });
+
   it('puts the selection in the URL, not in local state', async () => {
     // Same contract as every other selectable view: the open diagnostic has to
     // survive a reload and be pasteable to someone else.

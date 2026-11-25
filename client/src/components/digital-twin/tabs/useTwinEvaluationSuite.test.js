@@ -1,9 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 
-vi.mock('../../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() }
-}));
+vi.mock('../../ui/Toast');
 
 import toast from '../../ui/Toast';
 import { useTwinEvaluationSuite } from './useTwinEvaluationSuite';

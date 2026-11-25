@@ -19,7 +19,7 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
   deleteModelCapabilityTest: vi.fn(),
 }));
 
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 // Per-sample run progress arrives on the shared `localLlm:progress` socket
 // event; the tests below replay frames through the registered handler.
@@ -34,6 +34,7 @@ vi.mock('../../services/apiModelPerformance', () => ({
 }));
 
 import {
+  getModelCapabilityTests,
   getLocalLlmAssessments,
   runLocalLlmAssessment,
   runOpenCodeAgentBenchmark,
@@ -1078,4 +1079,19 @@ describe('LocalModelAssessments — focused task views and selected evidence', (
     await user.click(screen.getByRole('link', { name: 'Return to Results' }));
     expect(currentUrl()).toBe('/models/performance/results');
   });
+});
+
+it('offers to retry the capability report without recommending unmeasured checks', async () => {
+  getLocalLlmAssessments.mockResolvedValue(report());
+  getModelCapabilityTests.mockRejectedValueOnce(new Error('Offline'));
+  const user = userEvent.setup();
+  await renderPanel('/models/performance/capabilities');
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load capability tests');
+  expect(screen.queryByText(/check to rank it/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/No local models are installed/)).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByText(/No local models are installed/)).toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 });

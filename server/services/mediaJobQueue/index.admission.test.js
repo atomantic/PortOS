@@ -30,6 +30,30 @@ describe('mediaJobQueue', () => {
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
   });
 
+  it('re-admits the same reviewed bytes for a verification reroll', async () => {
+    const source = join(tempDataDir, 'images', 'reviewed.png');
+    mkdirSync(join(tempDataDir, 'images'), { recursive: true });
+    writeFileSync(source, 'reviewed bytes');
+    const digest = createHash('sha256').update('reviewed bytes').digest('hex');
+    stubs.generateImage.mockResolvedValue({});
+    stubs.verifyImage.mockResolvedValueOnce({ verdict: 'fail', summary: 'Extra fingers' });
+    const first = await mediaJobQueue.enqueueJob({ kind: 'image', params: {
+      prompt: 'edit', referenceImagePaths: [source], reviewedReferenceDigest: digest, verifyImage: true, seed: 41,
+    } });
+    await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+    writeFileSync(source, 'replacement');
+    imageGenEvents.emit('completed', { generationId: first.jobId, filename: 'first.png', inputProcessSettled: true });
+
+    await waitFor(() => stubs.generateImage.mock.calls.length === 2);
+    const request = stubs.generateImage.mock.calls[1][0];
+    expect(request).toMatchObject({ prompt: 'edit', seed: 42 });
+    expect(request.reviewedReferenceSnapshot.jobId).not.toBe(first.jobId);
+    expect(readFileSync(request.referenceImagePaths[0], 'utf8')).toBe('reviewed bytes');
+    const rerollId = request.reviewedReferenceSnapshot.jobId;
+    imageGenEvents.emit('completed', { generationId: rerollId, filename: 'reroll.png', inputProcessSettled: true });
+    await waitFor(() => mediaJobQueue.getJob(rerollId).status === 'completed');
+  });
+
   it('snapshots only the edited image and keeps further references in order', async () => {
     const source = join(tempDataDir, 'images', 'reviewed.png');
     const extra = join(tempDataDir, 'images', 'place.png');

@@ -13,7 +13,7 @@ vi.mock('../../services/apiCalendar.js', () => ({
   apiSyncGoogleCalendar: vi.fn(),
   mcpSyncGoogleCalendar: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import {
   getCalendarEvents,

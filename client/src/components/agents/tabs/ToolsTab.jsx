@@ -79,6 +79,7 @@ export default function ToolsTab({ agentId, agent }) {
   // Auto-resolve the moltbook account for this agent. A failed read sets
   // accountError so it never falls through into the "no account" onboarding copy.
   const accountRequestRef = useRef(0);
+  const viewPostRequestRef = useRef(0);
   const loadAccount = useCallback(async () => {
     const requestId = ++accountRequestRef.current;
     setLoading(true);
@@ -192,8 +193,12 @@ export default function ToolsTab({ agentId, agent }) {
     }
   };
 
+  // The platform read can take seconds; only the most recent request may land.
   const handleViewPost = async (post) => {
+    viewPostRequestRef.current += 1;
+    const requestId = viewPostRequestRef.current;
     const details = await getAgentPost(selectedAccountId, post.id);
+    if (viewPostRequestRef.current !== requestId) return;
     setSelectedPost(details);
     setPostComments(details.comments || []);
     setCommentContent('');
@@ -290,6 +295,7 @@ export default function ToolsTab({ agentId, agent }) {
 
   const handlePublishComment = async () => {
     if (!selectedPost || !commentContent) return;
+    const viewSeq = viewPostRequestRef.current;
     setPublishingComment(true);
     const result = await publishAgentComment({
       agentId, accountId: selectedAccountId, postId: selectedPost.id, content: commentContent, parentId: replyToId || undefined
@@ -317,12 +323,14 @@ export default function ToolsTab({ agentId, agent }) {
       toast.success('Comment published');
     }
 
-    if (!result?.verificationFailed) {
+    // Another post was opened while publishing: its view and typed reply are not ours to refresh or clear.
+    const stillViewing = viewPostRequestRef.current === viewSeq;
+    if (!result?.verificationFailed && stillViewing) {
       setCommentContent('');
       setReplyToId(null);
     }
     setPublishingComment(false);
-    handleViewPost(selectedPost);
+    if (stillViewing) handleViewPost(selectedPost);
     getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
   };
 

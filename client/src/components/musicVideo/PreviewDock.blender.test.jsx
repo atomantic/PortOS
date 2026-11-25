@@ -9,7 +9,7 @@ vi.mock('../../services/socket', () => ({
     off: (event, fn) => { handlers.get(event)?.delete(fn); },
   },
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
+vi.mock('../ui/Toast');
 vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({
   ...await importOriginal(),
   getMusicVideoBlender: vi.fn(),

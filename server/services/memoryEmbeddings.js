@@ -17,7 +17,7 @@ import { getConfig as getCosConfig } from './cos/cosState.js';
 import { getSettings, settingsEvents } from './settings.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
-import { estimateTokens, CHARS_PER_TOKEN } from '../lib/contextBudget.js';
+import { estimateTokens } from '../lib/contextBudget.js';
 import { isEmbeddingModel } from '../lib/localModelHeuristics.js';
 import { getNavPageForPath } from '../lib/navManifest.js';
 
@@ -437,48 +437,6 @@ export async function generateEmbedding(text) {
 }
 
 /**
- * Generate embeddings for multiple texts (batch).
- *
- * A batch shares one request, so one over-long member would 400 the WHOLE
- * batch. We can't selectively retry inside a batch response, so on a
- * context-overflow rejection we fall back to embedding each input individually
- * (generateEmbedding handles per-item shrink/retry) rather than nulling all.
- */
-export async function generateBatchEmbeddings(texts) {
-  const config = await loadConfig();
-
-  if (!texts || texts.length === 0) {
-    return [];
-  }
-  if (config.disabled || !await ensureModelReady(config)) return texts.map(() => null);
-
-  const maxChars = embeddingCharBudget(config);
-  const truncatedTexts = texts.map(t => clampToChars(t, maxChars));
-
-  const result = await postEmbedding(config, truncatedTexts);
-  if (!result.ok) {
-    if (result.overflow) {
-      // One member still overflowed — re-embed each individually so the rest
-      // aren't lost to a single oversized input.
-      console.log('🔁 Batch embedding over context; falling back to per-item embedding');
-      const out = [];
-      for (const t of texts) out.push(await generateEmbedding(t));
-      return out;
-    }
-    console.error(`❌ Batch embedding generation failed: ${result.error}`);
-    return texts.map(() => null);
-  }
-
-  // Sort by index to maintain order
-  const embeddings = new Array(texts.length).fill(null);
-  for (const item of result.data.data || []) {
-    embeddings[item.index] = item.embedding;
-  }
-
-  return embeddings;
-}
-
-/**
  * Generate embedding for memory content + metadata.
  *
  * Combines content with type/category/tags for a richer semantic vector. When
@@ -549,14 +507,4 @@ export async function generateQueryEmbedding(query, context = {}) {
 
   const text = parts.join('\n');
   return generateEmbedding(text);
-}
-
-/**
- * Truncate text to fit within token budget
- */
-export function truncateToTokens(text, maxTokens) {
-  if (!text) return '';
-  const maxChars = maxTokens * CHARS_PER_TOKEN;
-  if (text.length <= maxChars) return text;
-  return text.substring(0, maxChars - 3) + '...';
 }

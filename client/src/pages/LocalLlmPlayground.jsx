@@ -17,13 +17,21 @@ import {
   getLoadedLlmModels,
   getLocalLlmCatalog,
   getLocalLlmStatus,
+  getLocalRuntimeModels,
   streamLocalLlmTest,
 } from '../services/apiLocalLlm.js';
 import { getNavPageForPath } from '../../../server/lib/navManifest.js';
+import { LOCAL_RUNTIME_LABELS } from '../../../server/lib/modelPinMembership.js';
 
 const LOADED_EVENTS = ['loaded-models:changed'];
 
-const BACKEND_LABEL = { ollama: 'Ollama', lmstudio: 'LM Studio' };
+// Managed backends come from `/status`; every other runtime id and its label comes from `/runtime-models`.
+const BACKEND_LABEL = { ollama: LOCAL_RUNTIME_LABELS.ollama, lmstudio: LOCAL_RUNTIME_LABELS.lmstudio };
+const MANAGED_BACKENDS = ['ollama', 'lmstudio'];
+const NO_RUNTIMES = Object.freeze([]);
+// A saved `?targets=` link may name any runtime the server serves; the server's schema is the real gate, so the
+// client only checks the id's shape and lets the picker drop a target no listed runtime serves.
+const isBackendId = (value) => typeof value === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(value);
 const DEFAULT_PROMPT = 'Write a short, vivid paragraph about a lighthouse computer waking up at dawn.';
 // Single source for the timeout choices so the collapsed Advanced-options
 // summary names the selected one without re-deriving the label from the ms.
@@ -113,7 +121,7 @@ function parseTargetsParam(searchParams) {
       const parsed = JSON.parse(rawTargets);
       if (Array.isArray(parsed)) {
         return parsed
-          .filter((t) => (t.backend === 'ollama' || t.backend === 'lmstudio') && typeof t.modelId === 'string' && t.modelId)
+          .filter((t) => t && isBackendId(t.backend) && typeof t.modelId === 'string' && t.modelId)
           .slice(0, 6);
       }
     } catch {
@@ -123,7 +131,7 @@ function parseTargetsParam(searchParams) {
 
   const backend = searchParams.get('backend');
   const modelId = searchParams.get('model');
-  if ((backend === 'ollama' || backend === 'lmstudio') && modelId) return [{ backend, modelId }];
+  if (isBackendId(backend) && modelId) return [{ backend, modelId }];
   return [];
 }
 
@@ -147,7 +155,7 @@ function Metric({ icon: Icon, label, value }) {
   );
 }
 
-function ResultPanel({ result }) {
+function ResultPanel({ result, backendLabel }) {
   const ok = !result?.error;
   // A failed run that still streamed tokens before it stopped (e.g. a timeout) —
   // show the partial output alongside the error rather than hiding it.
@@ -157,7 +165,7 @@ function ResultPanel({ result }) {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-sm text-white truncate">{result.modelId}</div>
-          <div className="text-xs text-gray-500">{BACKEND_LABEL[result.backend] || result.backend}</div>
+          <div className="text-xs text-gray-500">{backendLabel}</div>
         </div>
         <span className={`text-xs px-2 py-1 rounded ${ok ? 'bg-port-success/15 text-port-success' : hasPartial ? 'bg-port-warning/15 text-port-warning' : 'bg-port-error/15 text-port-error'}`}>
           {ok ? 'Done' : hasPartial ? 'Partial' : 'Failed'}
@@ -206,7 +214,7 @@ function ResultPanel({ result }) {
 // ResultPanel (with timings) once the run settles. Reasoning (a reasoning
 // model's chain-of-thought) streams on its own channel and renders in a
 // distinct "Thinking" block above the answer, so the answer text stays clean.
-function StreamingPanel({ stream }) {
+function StreamingPanel({ stream, backendLabel }) {
   const hasReasoning = Boolean(stream.reasoning);
   const hasText = Boolean(stream.text);
   return (
@@ -214,7 +222,7 @@ function StreamingPanel({ stream }) {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-sm text-white truncate">{stream.modelId}</div>
-          <div className="text-xs text-gray-500">{BACKEND_LABEL[stream.backend] || stream.backend}</div>
+          <div className="text-xs text-gray-500">{backendLabel}</div>
         </div>
         <span className="flex items-center gap-2 text-xs px-2 py-1 rounded bg-port-accent/15 text-port-accent">
           <BrailleSpinner />
@@ -243,7 +251,12 @@ export default function LocalLlmPlayground() {
   const [searchParams] = useSearchParams();
   const [status, setStatus] = useState(null);
   const [catalogByBackend, setCatalogByBackend] = useState({});
-  const [loadingStatus, setLoadingStatus] = useState(true);
+  // `null` until /runtime-models answers, so the stale-selection prune below waits for it.
+  const [runtimeRows, setRuntimeRows] = useState(null);
+  const [runtimeError, setRuntimeError] = useState('');
+  const [loadingManaged, setLoadingManaged] = useState(true);
+  const [loadingRuntimes, setLoadingRuntimes] = useState(true);
+  const loadingStatus = loadingManaged || loadingRuntimes;
   const [modelLoadError, setModelLoadError] = useState('');
   // Ollama models currently resident in VRAM/unified memory (from `/api/ps`),
   // observed so the sidebar can flag which models are warm — and which one is
@@ -297,14 +310,30 @@ export default function LocalLlmPlayground() {
 
   const cancelRun = () => runControllerRef.current?.abort();
 
+  // The managed pair (/status) and the endpoint runtimes (/runtime-models) load independently: a stopped runtime can
+  // make its listing slow, and either request failing must not hide what the other already returned.
   const loadStatus = useCallback(() => {
-    setLoadingStatus(true);
+    setLoadingManaged(true);
+    setLoadingRuntimes(true);
     setModelLoadError('');
+    setRuntimeError('');
+    getLocalRuntimeModels({ silent: true })
+      .then((r) => {
+        if (!mountedRef.current) return;
+        setRuntimeRows(r?.runtimes ?? NO_RUNTIMES);
+      })
+      .catch((err) => {
+        if (!mountedRef.current) return;
+        // A failed listing keeps the last good rows (or none yet); it is never an empty inventory.
+        setRuntimeRows((previous) => previous ?? NO_RUNTIMES);
+        setRuntimeError(err?.message || 'Failed to list runtime models');
+      })
+      .finally(() => { if (mountedRef.current) setLoadingRuntimes(false); });
     return getLocalLlmStatus({ silent: true })
       .then(async (nextStatus) => {
         if (!mountedRef.current) return;
         setStatus(nextStatus);
-        const backendsWithModels = ['ollama', 'lmstudio'].filter((backend) => (nextStatus?.[backend]?.models || []).length > 0);
+        const backendsWithModels = MANAGED_BACKENDS.filter((backend) => (nextStatus?.[backend]?.models || []).length > 0);
         const catalogs = await Promise.all(backendsWithModels.map((backend) =>
           getLocalLlmCatalog(backend).then((result) => [backend, result?.models || []]).catch(() => [backend, []])
         ));
@@ -316,7 +345,7 @@ export default function LocalLlmPlayground() {
         setCatalogByBackend({});
         setModelLoadError(err?.message || 'Failed to load local models');
       })
-      .finally(() => { if (mountedRef.current) setLoadingStatus(false); });
+      .finally(() => { if (mountedRef.current) setLoadingManaged(false); });
   }, []);
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
@@ -330,7 +359,7 @@ export default function LocalLlmPlayground() {
 
   const installedTargets = useMemo(() => {
     const models = [];
-    for (const backend of ['ollama', 'lmstudio']) {
+    for (const backend of MANAGED_BACKENDS) {
       const catalogById = new Map((catalogByBackend[backend] || []).map((entry) => [normalizeCatalogId(backend, entry.id), entry]));
       for (const model of filterHardwareCompatibleModels(status?.[backend]?.models)) {
         models.push({
@@ -346,8 +375,22 @@ export default function LocalLlmPlayground() {
         });
       }
     }
+    // A runtime that is not answering contributes no targets: its row renders as "not running" instead.
+    for (const runtime of runtimeRows || []) {
+      if (runtime.offline) continue;
+      for (const model of runtime.models || []) {
+        models.push({ backend: runtime.id, modelId: model.id, name: model.id });
+      }
+    }
     return models;
-  }, [catalogByBackend, status]);
+  }, [catalogByBackend, runtimeRows, status]);
+
+  const runtimeLabels = useMemo(
+    () => ({ ...BACKEND_LABEL, ...Object.fromEntries((runtimeRows || []).map((r) => [r.id, r.label])) }),
+    [runtimeRows],
+  );
+  const backendLabel = (backend) => runtimeLabels[backend] || backend;
+  const offlineRuntimes = useMemo(() => (runtimeRows || []).filter((r) => r.offline || (r.models || []).length === 0), [runtimeRows]);
 
   // Map each warm Ollama model to its installed-row key so the sidebar can
   // match it. `/api/ps` reports the same tagged name `/api/tags` does, so the
@@ -362,13 +405,17 @@ export default function LocalLlmPlayground() {
   }, [loadedModels, loadedUnknown]);
 
   useEffect(() => {
-    if (loadingStatus || status == null) return;
+    if (loadingStatus || status == null || runtimeRows == null) return;
     const installedKeys = new Set(installedTargets.map(localLlmTargetKey));
     setSelectedTargets((previous) => {
-      const next = previous.filter((target) => installedKeys.has(localLlmTargetKey(target)));
+      // A runtime whose listing failed (whole request, or its own row's `error`) has an unknown inventory, not an
+      // empty one: keep its targets so a transient failure cannot swap the selected model for another backend's.
+      const inventoryUnknown = (backend) => !MANAGED_BACKENDS.includes(backend)
+        && (Boolean(runtimeError) || Boolean(runtimeRows.find((r) => r.id === backend)?.error));
+      const next = previous.filter((target) => installedKeys.has(localLlmTargetKey(target)) || inventoryUnknown(target.backend));
       return next.length === previous.length ? previous : next;
     });
-  }, [installedTargets, loadingStatus, status]);
+  }, [installedTargets, loadingStatus, runtimeError, runtimeRows, status]);
 
   useEffect(() => {
     if (selectedTargets.length > 0 || installedTargets.length === 0) return;
@@ -391,6 +438,11 @@ export default function LocalLlmPlayground() {
   }, [installedTargets.length, loadingStatus]);
 
   const selectedKeys = useMemo(() => new Set(selectedTargets.map(localLlmTargetKey)), [selectedTargets]);
+  // Selections kept while their runtime's inventory is unknown have no picker row, so they get a removable one.
+  const unavailableSelected = useMemo(() => {
+    const listed = new Set(installedTargets.map(localLlmTargetKey));
+    return selectedTargets.filter((target) => !listed.has(localLlmTargetKey(target)));
+  }, [installedTargets, selectedTargets]);
   // `/api/ps` reports what's resident but not which model is mid-generation, so
   // derive the "processing" flag from our own in-flight run: the streaming chat
   // target, or every target in a busy comparison. Intentionally backend-agnostic
@@ -580,12 +632,12 @@ export default function LocalLlmPlayground() {
               </p>
             ) : (
               <div className="space-y-3">
-                {['ollama', 'lmstudio'].map((backend) => {
+                {[...MANAGED_BACKENDS, ...(runtimeRows || []).map((r) => r.id)].map((backend) => {
                   const models = installedTargets.filter((target) => target.backend === backend);
                   if (models.length === 0) return null;
                   return (
                     <div key={backend} className="space-y-2">
-                      <div className="text-xs text-gray-500">{BACKEND_LABEL[backend]}</div>
+                      <div className="text-xs text-gray-500">{backendLabel(backend)}</div>
                       {models.map((target) => {
                         const selected = selectedKeys.has(localLlmTargetKey(target));
                         const size = modelSizeLabel(target);
@@ -651,6 +703,36 @@ export default function LocalLlmPlayground() {
                     </div>
                   );
                 })}
+              </div>
+            )}
+            {unavailableSelected.length > 0 && (
+              <div className="space-y-1" data-testid="local-llm-unavailable-selected">
+                {unavailableSelected.map((target) => (
+                  <button key={localLlmTargetKey(target)} onClick={() => toggleTarget(target)} className="w-full min-h-10 flex items-center justify-between gap-2 rounded-lg border border-port-warning/40 px-3 py-2 text-left text-xs text-port-warning">
+                    <span className="truncate">{backendLabel(target.backend)} · {target.modelId} (not listed)</span>
+                    <X size={13} aria-label={`Remove ${target.modelId}`} />
+                  </button>
+                ))}
+              </div>
+            )}
+            {modelLoadError && installedTargets.length > 0 && (
+              <p role="status" className="text-xs text-port-warning">Ollama and LM Studio could not be listed: {modelLoadError}</p>
+            )}
+            {runtimeError && (
+              <p role="status" className="text-xs text-port-warning">Other runtimes could not be listed: {runtimeError}</p>
+            )}
+            {offlineRuntimes.length > 0 && (
+              <div className="space-y-1" data-testid="local-llm-offline-runtimes">
+                {offlineRuntimes.map((runtime) => (
+                  <div key={runtime.id} className="text-xs text-gray-500 flex flex-wrap items-center gap-x-1.5">
+                    <span className="text-gray-400">{runtime.label}</span>
+                    <span>{runtime.offline ? 'not running' : 'serves no models'}</span>
+                    {runtime.error && !/^not reachable/.test(runtime.error) && <span className="text-port-warning">({runtime.error})</span>}
+                    <Link to="/models/llms-runtimes" className="text-port-accent hover:underline">
+                      {getNavPageForPath('/models/llms-runtimes')?.breadcrumb || 'Runtimes'}
+                    </Link>
+                  </div>
+                ))}
               </div>
             )}
             </div>
@@ -783,19 +865,19 @@ export default function LocalLlmPlayground() {
 
             {activeMode === 'chat' ? (
               <section className="space-y-3">
-                {streamingChat && <StreamingPanel stream={streamingChat} />}
+                {streamingChat && <StreamingPanel stream={streamingChat} backendLabel={backendLabel(streamingChat.backend)} />}
                 {chatResults.length === 0 && !streamingChat ? (
                   <div className="bg-port-card border border-port-border rounded-lg p-5 text-sm text-gray-500 flex items-center gap-2">
                     <TriangleAlert size={16} className="text-gray-600" />
                     Pick a model, enter a prompt, and run a chat test.
                   </div>
-                ) : chatResults.map((result, idx) => <ResultPanel key={`${result.runId || idx}-${result.modelId}`} result={result} />)}
+                ) : chatResults.map((result, idx) => <ResultPanel key={`${result.runId || idx}-${result.modelId}`} result={result} backendLabel={backendLabel(result.backend)} />)}
               </section>
             ) : (
               <section className="space-y-3">
                 {compareResult ? (
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                    {compareResult.results.map((result, idx) => <ResultPanel key={`${result.runId || idx}-${result.modelId}`} result={result} />)}
+                    {compareResult.results.map((result, idx) => <ResultPanel key={`${result.runId || idx}-${result.modelId}`} result={result} backendLabel={backendLabel(result.backend)} />)}
                   </div>
                 ) : (
                   <div className="bg-port-card border border-port-border rounded-lg p-5 text-sm text-gray-500 flex items-center gap-2">

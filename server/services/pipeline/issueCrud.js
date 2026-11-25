@@ -121,21 +121,6 @@ export async function listIssuesForSeries(seriesId, { includeDeleted = false, wi
   return sorted;
 }
 
-/**
- * Recently updated issues, bounded at the store before PG records reach Node.
- * Full records remain the default for internal callers; summary is the HTTP
- * list's explicit projection and never changes detail/export/sync reads.
- */
-export async function listRecentIssues({ limit = 10, withHistory = true, includeDeleted = false, summary = false } = {}) {
-  // Coerce in two passes so non-finite inputs ('abc', undefined) fall to
-  // the default rather than letting JS's `0 || 10` short-circuit return
-  // 10 for an explicit limit=0.
-  const raw = Number(limit);
-  const fallback = Number.isFinite(raw) ? Math.floor(raw) : 10;
-  const clamped = Math.max(1, Math.min(50, fallback));
-  return store().loadRecent({ limit: clamped, withHistory, includeDeleted, summary });
-}
-
 export async function getIssue(id, { includeDeleted = false } = {}) {
   const found = await store().loadOne(id);
   if (!found) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);

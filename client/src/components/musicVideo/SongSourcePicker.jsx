@@ -1,3 +1,4 @@
+import { inputClass } from './controlClasses.js';
 import { useEffect, useState } from 'react';
 import ToggleChip from '../ui/ToggleChip.jsx';
 import {
@@ -9,8 +10,6 @@ import {
   LOCAL_MUSIC_TYPE_LABELS,
 } from '../../lib/musicVideoAutonomous.js';
 import { listMusicEngines } from '../../services/apiMusic.js';
-
-const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 
 /**
  * Where an autonomous run's song comes from — Suno through the PortOS Browser or

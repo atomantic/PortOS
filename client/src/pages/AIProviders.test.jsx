@@ -2,7 +2,7 @@ import socket from '../services/socket';
 const socketEvent = event => { for (const [name, handler] of socket.on.mock.calls) if (name === event) handler({}); };
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { findEnabledByRole } from '../test/enabledBarrier.js';
 
 const api = vi.hoisted(() => ({
@@ -29,7 +29,6 @@ const api = vi.hoisted(() => ({
   getModelPinWarnings: vi.fn().mockResolvedValue({ pins: [], providers: {} }),
   clearModelPin: vi.fn(),
   setActiveProvider: vi.fn().mockResolvedValue({}),
-  getOrchestrationProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   createRun: vi.fn().mockResolvedValue({ runId: 'run-1' }),
   stopRun: vi.fn().mockResolvedValue({}),
   // The compatibility matrix reads the composition catalog (#7567). Empty by
@@ -71,7 +70,6 @@ vi.mock('../services/apiMoaPresets', () => ({
   createMoaPreset: vi.fn(), updateMoaPreset: vi.fn(), deleteMoaPreset: vi.fn(),
 }));
 vi.mock('../services/apiSystem.js', () => ({ getInstances: api.getInstances }));
-vi.mock('../services/apiAgents.js', () => ({ getOrchestrationProfiles: api.getOrchestrationProfiles }));
 vi.mock('../services/apiRuns.js', () => ({ createRun: api.createRun, stopRun: api.stopRun }));
 vi.mock('../services/apiHarnesses.js', () => ({ getHarnesses: api.getHarnesses }));
 vi.mock('../services/apiProviders', () => ({
@@ -136,6 +134,11 @@ import { PROVIDER_CARD_STATE } from '../utils/providers';
 // mount the real route table rather than a bare page — clicking Edit
 // navigates, and a deep link can be rendered directly. The three views are
 // route prefixes of the same page (#7567).
+function ShellLocation() {
+  const { pathname, search } = useLocation();
+  return <div data-testid="shell-location">{`${pathname}${search}`}</div>;
+}
+
 const mountPage = (initialPath = '/ai/presets') => render(
   <MemoryRouter initialEntries={[initialPath]}>
     <Routes>
@@ -149,6 +152,7 @@ const mountPage = (initialPath = '/ai/presets') => render(
       <Route path="/ai/services" element={<AIProviders />} />
       <Route path="/ai/services/new" element={<AIProviders />} />
       <Route path="/ai/services/:serviceSlug" element={<AIProviders />} />
+      <Route path="/shell" element={<ShellLocation />} />
     </Routes>
   </MemoryRouter>
 );
@@ -885,10 +889,10 @@ describe('handleAddAllSamples partial failure handling', () => {
     const addAllBtn = await screen.findByRole('button', { name: 'Add All (3)' });
     fireEvent.click(addAllBtn);
 
-    expect(await screen.findByText('Sample AI 2')).toBeInTheDocument();
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledWith('Added 2 providers, 1 failed'));
+    expect(screen.getByText('Sample AI 2')).toBeInTheDocument();
     expect(screen.queryByText('Sample AI 1')).not.toBeInTheDocument();
     expect(screen.queryByText('Sample AI 3')).not.toBeInTheDocument();
-    expect(toast.warning).toHaveBeenCalledWith('Added 2 providers, 1 failed');
     expect(api.getProviders).toHaveBeenCalledTimes(2);
   });
 });
@@ -1855,6 +1859,41 @@ describe('Launch in Shell button on TUI provider cards', () => {
     expect(link).toHaveAttribute('title', expect.stringContaining('--model gpt-5'));
   });
 
+  it('turns into a managed-app picker that launches the shell in the chosen app', async () => {
+    baseMocks();
+    api.getApps.mockResolvedValue([
+      { id: 'app-b', name: 'Beta App', repoPath: '/repos/beta app' },
+      { id: 'app-a', name: 'Alpha App', repoPath: '/repos/alpha' },
+      { id: 'app-old', name: 'Old App', repoPath: '/repos/old', archived: true },
+      { id: 'app-norepo', name: 'No Repo App' },
+    ]);
+    api.getProviders.mockResolvedValue({
+      providers: [{ id: 'codex', name: 'Codex TUI', type: 'tui', command: 'codex', args: [], enabled: true, tuiCommandLine: 'codex' }],
+      activeProvider: null,
+    });
+
+    await renderPage();
+
+    const picker = await screen.findByRole('combobox', { name: 'Launch in Shell in app' });
+    // Only live apps with a checkout to cd into, alphabetical after the prompt.
+    expect(within(picker).getAllByRole('option').map(o => o.textContent)).toEqual(['Launch in Shell…', 'Alpha App', 'Beta App']);
+    fireEvent.change(picker, { target: { value: 'app-b' } });
+    expect(await screen.findByTestId('shell-location')).toHaveTextContent('/shell?provider=codex&cwd=%2Frepos%2Fbeta+app');
+  });
+
+  it('keeps the home-folder link when every app with a repo path is archived', async () => {
+    baseMocks();
+    api.getApps.mockResolvedValue([{ id: 'app-old', name: 'Old App', repoPath: '/repos/old', archived: true }]);
+    api.getProviders.mockResolvedValue({
+      providers: [{ id: 'codex', name: 'Codex TUI', type: 'tui', command: 'codex', args: [], enabled: true, tuiCommandLine: 'codex' }],
+      activeProvider: null,
+    });
+
+    await renderPage();
+
+    expect(await screen.findByRole('link', { name: /Launch in Shell/ })).toHaveAttribute('href', '/shell?provider=codex');
+  });
+
   it('renders no button for a CLI provider, or when the server sent no command line', async () => {
     baseMocks();
     api.getProviders.mockResolvedValue({
@@ -1971,26 +2010,13 @@ describe('vLLM-backed TUI provider', () => {
   });
 });
 
-describe('AIProviders orchestration profiles', () => {
+describe('AIProviders Run Prompt and orchestration settings', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.getApps.mockResolvedValue([]);
     api.getProviderStatuses.mockResolvedValue({ providers: {} });
     api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
     api.getProviderReadiness.mockResolvedValue({ readiness: {} });
-    api.getOrchestrationProfiles.mockResolvedValue({
-      profiles: [
-        {
-          id: 'deep-research',
-          name: 'Deep Research',
-          description: 'o3-mini planner + sonnet coder',
-          profile: {
-            architect: { provider: 'codex', model: 'o3-mini', effort: 'high' },
-            implementer: { provider: 'anthropic', model: 'claude-3-5-sonnet', effort: 'medium' },
-          },
-        },
-      ],
-    });
     api.createRun.mockResolvedValue({ runId: 'run-123' });
     localModels.value = { ctxById: {}, installed: { ollama: null, lmstudio: null } };
   });
@@ -2004,44 +2030,33 @@ describe('AIProviders orchestration profiles', () => {
     expect(link).toHaveAttribute('href', '/settings/orchestration');
   });
 
-  it('allows selecting an orchestration profile in the run panel and renders role chips', async () => {
+  it('runs a prompt directly on the selected provider', async () => {
     api.getProviders.mockResolvedValue({
       providers: [{ id: 'prov-1', name: 'Prov 1', type: 'api', enabled: true, hardwareUnavailable: false }],
       activeProvider: 'prov-1',
     });
     await renderPage();
 
-    // Open runner panel
     const runBtn = await screen.findByRole('button', { name: 'Run Prompt' });
     fireEvent.click(runBtn);
 
-    // Profile selector should be available
-    const profileSelect = await screen.findByLabelText('Orchestration profile');
-    expect(profileSelect).toBeInTheDocument();
-    fireEvent.change(profileSelect, { target: { value: 'deep-research' } });
-
-    // Role chips should appear
-    expect(await screen.findByText('o3-mini planner + sonnet coder')).toBeInTheDocument();
-    expect(screen.getByText('architect:')).toBeInTheDocument();
-    expect(screen.getByText('o3-mini')).toBeInTheDocument();
-    expect(screen.getByText('(high)')).toBeInTheDocument();
-
-    // Fill prompt and execute
-    const promptInput = screen.getByLabelText('Prompt');
-    fireEvent.change(promptInput, { target: { value: 'Test run with orchestration' } });
+    const promptInput = await screen.findByLabelText('Prompt');
+    expect(screen.queryByLabelText('Orchestration profile')).not.toBeInTheDocument();
+    fireEvent.change(promptInput, { target: { value: 'Test direct run' } });
 
     const executeBtn = screen.getByRole('button', { name: 'Execute' });
     fireEvent.click(executeBtn);
 
     await waitFor(() => {
-      expect(api.createRun).toHaveBeenCalledWith(
-        expect.objectContaining({
+      expect(api.createRun.mock.calls).toStrictEqual([[
+        {
           providerId: 'prov-1',
-          prompt: 'Test run with orchestration',
-          orchestrationProfileId: 'deep-research',
-        }),
-        expect.anything()
-      );
+          prompt: 'Test direct run',
+          workspacePath: undefined,
+          workspaceName: undefined,
+        },
+        { silent: true },
+      ]]);
     });
   });
 });
@@ -2529,28 +2544,6 @@ describe('AIProviders list resources (#12171)', () => {
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
     expect(await screen.findByLabelText('Known PortOS peer')).toBeInTheDocument();
-  });
-
-  it('shows error row with Retry when orchestration profiles fail to load, not an empty profile select', async () => {
-    vi.clearAllMocks();
-    api.getProviders.mockResolvedValue({ providers: [{ id: 'p1', name: 'P1', type: 'api', enabled: true }], activeProvider: 'p1' });
-    api.getApps.mockResolvedValue([]);
-    api.getProviderStatuses.mockResolvedValue({ providers: {} });
-    api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
-    api.getProviderReadiness.mockResolvedValue({ readiness: {} });
-    api.getOrchestrationProfiles.mockRejectedValueOnce(new Error('profiles offline'));
-
-    await renderPage();
-    fireEvent.click(await screen.findByRole('button', { name: 'Run Prompt' }));
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load orchestration profiles — profiles offline');
-    expect(screen.queryByLabelText('Orchestration profile')).not.toBeInTheDocument();
-
-    api.getOrchestrationProfiles.mockResolvedValueOnce({ profiles: [{ id: 'deep-research', name: 'Deep Research' }] });
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-
-    const profileSelect = await screen.findByLabelText('Orchestration profile');
-    expect(within(profileSelect).getByRole('option', { name: 'Deep Research' })).toBeInTheDocument();
   });
 
   it('shows error row with Retry when sample providers fail to load, not "all samples already added"', async () => {

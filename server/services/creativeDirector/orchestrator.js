@@ -16,28 +16,6 @@ export function nextPendingScene(project) {
   return sorted.find((s) => s.status === 'pending' || s.status === 'rendering' || s.status === 'evaluating') || null;
 }
 
-/**
- * What kind of follow-up task should the server enqueue next?
- *  - 'treatment' — no treatment yet
- *  - 'scene'     — at least one scene still pending
- *  - 'stitch'    — every scene accepted, no final video yet
- *  - null        — project is fully done (or failed terminally)
- */
-export function nextTaskKind(project) {
-  if (!project) return null;
-  if (project.status === 'failed' || project.status === 'paused') return null;
-  if (!project.treatment) return 'treatment';
-  const scenes = project.treatment.scenes || [];
-  if (!scenes.length) return null;
-  const remaining = scenes.find((s) => s.status === 'pending' || s.status === 'rendering' || s.status === 'evaluating');
-  if (remaining) return 'scene';
-  // All scenes terminal: stitch if any accepted, else the project failed.
-  const acceptedCount = scenes.filter((s) => s.status === 'accepted').length;
-  if (!acceptedCount) return null;
-  if (project.finalVideoId) return null;
-  return 'stitch';
-}
-
 /** Build the timeline-project clip list from accepted scenes. */
 export function buildTimelineClips(project) {
   return (project?.treatment?.scenes || [])

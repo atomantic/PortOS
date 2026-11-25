@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../../services/apiNotes.js', () => ({
@@ -25,5 +25,14 @@ describe('LogTab', () => {
     await act(async () => { resolveA(logNote('Vault A entry')); });
     expect(screen.getByText('Vault B entry')).toBeInTheDocument();
     expect(screen.queryByText('Vault A entry')).toBeNull();
+  });
+
+  it('offers Retry when an existing log cannot be read instead of claiming there is none', async () => {
+    getNote.mockReset().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(logNote('Recovered entry'));
+    render(<LogTab vaultId="vault-a" allNotes={LOG_NOTES} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the activity log');
+    expect(screen.queryByText('No activity log found')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Recovered entry')).toBeInTheDocument();
   });
 });

@@ -1,5 +1,5 @@
 /**
- * App runtime lifecycle: PM2 start/stop/restart, update, build, status, logs,
+ * App runtime lifecycle: PM2 start/stop/restart, update, build, logs,
  * and ecosystem-config refresh.
  *
  *   POST /:id/native-launch  → { success, processName, result }
@@ -8,7 +8,6 @@
  *   POST /:id/restart        → { success, results }  (self-restart for PortOS)
  *   POST /:id/update         → { success, steps, progress }
  *   POST /:id/build          → { success, output }
- *   GET  /:id/status         → { [process]: status }
  *   GET  /:id/logs           → { processName, lines, logs }
  *   POST /:id/refresh-config → { success, updated, app, processes }
  */
@@ -145,7 +144,7 @@ router.post('/:id/start', loadApp, asyncHandler(async (req, res) => {
     }
   } else {
     // Fallback to command-based start for apps without ecosystem config
-    const commands = app.startCommands || ['npm run dev'];
+    const commands = app.startCommands?.length ? app.startCommands : ['npm run dev'];
     // Pin the app's own port so PortOS's PORT can't leak in through the
     // inherited environment (see startWithCommand). Only a single-process app
     // has an unambiguous port — for a multi-process app the recorded ports
@@ -271,25 +270,6 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
   }
 
   res.json({ success: true, output: result.output });
-}));
-
-// GET /api/apps/:id/status - Get PM2 status
-router.get('/:id/status', loadApp, asyncHandler(async (req, res) => {
-  const app = req.loadedApp;
-
-  if (!usesPm2(app.type)) {
-    return res.json({});
-  }
-
-  const statuses = {};
-
-  for (const name of app.pm2ProcessNames || []) {
-    const status = await pm2Service.getAppStatus(name, app.pm2Home)
-      .catch(err => ({ status: 'error', error: err.message }));
-    statuses[name] = status;
-  }
-
-  res.json(statuses);
 }));
 
 // GET /api/apps/:id/logs - Get logs

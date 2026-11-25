@@ -84,6 +84,9 @@ describe('guard corpus pathspec parity with git (#16996)', () => {
     }
     expect(corpus.workingTree(['*.js'])).toContain('zz-untracked.js');
     expect(corpus.workingTree([])).not.toContain('ignored/x.js');
+    expect(corpus.workingTreeCandidates()).toEqual(expect.arrayContaining(['zz-untracked.js', 'server/lib/gone.js']));
+    expect(corpus.workingTreeCandidates()).not.toContain('ignored/x.js');
+    expect(corpus.workingTree()).not.toContain('server/lib/gone.js');
   });
 
   it('declines pathspec magic it cannot interpret and lets git answer', () => {

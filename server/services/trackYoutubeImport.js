@@ -22,6 +22,7 @@ import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { importUploadedTrack, MUSIC_UPLOAD_MAX_BYTES } from './pipeline/musicLibrary.js';
 import { createTrack, DURATION_MAX_SEC } from './tracks/index.js';
 import { RENDER_SOURCES } from './tracks/logic.js';
+import { trackedRenderMap } from './renderActivity.js';
 import { resolveYtDlpBinaries, downloadAudioToTempMp3, cleanupYtDlpTemp } from './ytdlpAudioImport.js';
 
 // YouTube-only by design (issue #1945 scope: "start narrow" — other video hosts
@@ -32,11 +33,10 @@ import { resolveYtDlpBinaries, downloadAudioToTempMp3, cleanupYtDlpTemp } from '
 // links, which the brain ingest and the Takeout importer already handled.
 export {
   YOUTUBE_VIDEO_URL_RE as YOUTUBE_URL_RE,
-  assertYoutubeVideoUrl as assertYoutubeUrl,
 };
 
 // jobId -> { clients, lastPayload, process, canceled }
-const importJobs = new Map();
+const importJobs = trackedRenderMap('track-youtube-import', { noun: 'YouTube track import' });
 
 export const attachImportSseClient = (jobId, res) => attachSse(importJobs, jobId, res);
 

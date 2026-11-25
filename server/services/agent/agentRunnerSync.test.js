@@ -353,6 +353,14 @@ describe('readRunnerCompletionReceipt', () => {
     await expect(readRunnerCompletionReceipt(`agent-${name.replace(/ /g, '-')}`, record)).resolves.toEqual(expected);
   });
 
+  it('carries the output-parser verdict fields a newer runner records', async () => {
+    const extras = { fallbackAnalysis: { category: 'usage-limit' }, finalSummary: 'Final answer.', rawStreamTail: '{"type":"result"}' };
+    await writeReceipt('agent-parser-verdict', { ...receipt, exitCode: 0, success: false, ...extras });
+    await expect(readRunnerCompletionReceipt('agent-parser-verdict', record)).resolves.toEqual({
+      exitCode: 0, success: false, duration: 299000, ...extras,
+    });
+  });
+
   it.each([
     ['corrupt', '{not json'],
     ['paused (no verdict)', { agentId: 'agent-r', outputSize: 10 }],

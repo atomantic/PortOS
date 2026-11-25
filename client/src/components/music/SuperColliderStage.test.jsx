@@ -8,7 +8,7 @@ import {
 } from '../../services/apiMusic.js';
 import { saveSuperColliderTake } from '../../services/apiTracks.js';
 import toast from '../ui/Toast';
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 import { useSseProgress } from '../../hooks/useSseProgress';
 
 vi.mock('../../services/apiMusic.js', () => ({

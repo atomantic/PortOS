@@ -84,14 +84,21 @@ vi.mock('./agentRunTracking.js', () => ({
 // `isLiveAgentRecord` and the sentinel come from the real module — the reverse
 // prune turns on that predicate, so a re-implemented copy here would keep
 // passing while the real one changed underneath it.
-vi.mock('../cos/cosAgentLifecycle.js', async (importOriginal) => ({
-  ...(await importOriginal()),
-  completeAgent: vi.fn().mockResolvedValue(undefined),
-  updateAgent: vi.fn().mockResolvedValue(undefined),
-  getAgents: vi.fn().mockResolvedValue([]),
-  getAgentRecord: vi.fn().mockResolvedValue(null),
-  readAgentRecordOrUnreadable: vi.fn().mockResolvedValue(null),
-}));
+vi.mock('../cos/cosAgentLifecycle.js', async (importOriginal) => {
+  const getAgents = vi.fn().mockResolvedValue([]);
+  return {
+    ...(await importOriginal()),
+    completeAgent: vi.fn().mockResolvedValue(undefined),
+    updateAgent: vi.fn().mockResolvedValue(undefined),
+    getAgents,
+    getAgentRecord: vi.fn().mockResolvedValue(null),
+    // The sweep re-reads every listed record before judging it. One store backs
+    // both reads, so the default answers with the record the last list held; a
+    // test that stages a change between the two reads overrides this.
+    readAgentRecordOrUnreadable: vi.fn(async (id) =>
+      (await getAgents.mock.results.at(-1)?.value)?.find(agent => agent.id === id) ?? null),
+  };
+});
 vi.mock('../cos/cosRunnerClient.js', () => ({
   killAgentViaRunner: vi.fn(),
   pauseAgentViaRunner: vi.fn(),
@@ -274,7 +281,12 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
       return { id, status: 'running' };
     });
 
-    await cleanupOrphanedAgents();
+    try {
+      await cleanupOrphanedAgents();
+    } finally {
+      // Back to the list-backed default the rest of the file relies on.
+      readAgentRecordOrUnreadable.mockReset();
+    }
 
     expect(runnerAgents.has('agent-ghost')).toBe(false);
     expect(runnerAgents.has('agent-done')).toBe(false);
@@ -402,6 +414,7 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
     it.each([
       [{ exitCode: 0, success: true, duration: 4200 }],
       [{ exitCode: 2, success: false, duration: 4200 }],
+      [{ exitCode: 0, success: false, duration: 4200, fallbackAnalysis: { category: 'usage-limit' }, finalSummary: 'done', rawStreamTail: '{"type":"result"}' }],
     ])('finalizes through the normal completion path with the receipt verdict %o', async (receipt) => {
       readRunnerCompletionReceipt.mockResolvedValueOnce(receipt);
 
@@ -410,7 +423,7 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
       expect(readRunnerCompletionReceipt).toHaveBeenCalledWith('agent-exited', {
         taskId: 'task-1', startedAt: '2026-01-01T00:00:01.000Z',
       });
-      expect(handleAgentCompletion).toHaveBeenCalledExactlyOnceWith('agent-exited', receipt.exitCode, receipt.success, 4200);
+      expect(handleAgentCompletion).toHaveBeenCalledExactlyOnceWith('agent-exited', receipt.exitCode, receipt.success, 4200, receipt);
       expect(retireDeadAgent).not.toHaveBeenCalled();
       expect(orphanCharges()).toEqual([]);
       expect(appendRunEvent).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'run.orphan-recovered' }));
@@ -612,6 +625,156 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
     await cleanupOrphanedAgents();
 
     expect(markAgentComplete).not.toHaveBeenCalled();
+  });
+});
+
+// The sweep is the only reaper (#18637): boot, the health check, every agent
+// list read and "Run now" call it. Its liveness predicate is therefore the one
+// thing standing between a live agent and a terminal record.
+describe('cleanupOrphanedAgents — the one reaper judges live state (#18637)', () => {
+  const DEAD_PID = 2147483646;
+  const old = () => new Date(Date.now() - 120000).toISOString();
+  const task = { id: 'task-1', taskType: 'user', status: 'in_progress', metadata: {} };
+  const retiredIds = () => retireDeadAgent.mock.calls.map(([{ agent }]) => agent.id);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    activeAgents.clear();
+    runnerAgents.clear();
+    spawningTasks.clear();
+    completingAgents.clear();
+    getActiveAgentsFromRunner.mockResolvedValue([]);
+    getTaskById.mockResolvedValue(task);
+  });
+  afterEach(() => {
+    activeAgents.clear();
+    runnerAgents.clear();
+    spawningTasks.clear();
+    completingAgents.clear();
+    readAgentRecordOrUnreadable.mockReset();
+    retireDeadAgent.mockReset().mockResolvedValue({ success: false });
+  });
+
+  // One fixture per guard, each a record the sweep WOULD retire (dead or absent
+  // pid, past the spawn grace) were its guard not held. The second sweep, with
+  // every guard released, retires all of them: the bypass probe that keeps
+  // these from passing on a sweep that retires nothing at all.
+  it('retires nothing a guard still owns, then every one of them once the guards release', async () => {
+    const records = [
+      { id: 'agent-handle', status: 'running', pid: DEAD_PID, startedAt: old(), metadata: {} },
+      { id: 'agent-spawning', status: 'running', taskId: 'task-spawning', startedAt: old(), metadata: {} },
+      { id: 'agent-completing', status: 'running', pid: DEAD_PID, startedAt: old(), metadata: { useRunner: true, executionMode: 'runner' } },
+      { id: 'agent-tui', status: 'running', pid: 0, startedAt: old(), metadata: { useRunner: true, executionMode: 'runner-tui' } },
+      { id: 'agent-young', status: 'running', startedAt: new Date().toISOString(), metadata: {} },
+    ];
+    getAgents.mockResolvedValue(records);
+    activeAgents.set('agent-handle', {});
+    spawningTasks.add('task-spawning');
+    completingAgents.add('agent-completing');
+    getActiveAgentsFromRunner.mockResolvedValue([{ id: 'agent-tui', pid: 0, kind: 'tui', processActive: true, liveness: 'pty' }]);
+
+    expect(await cleanupOrphanedAgents()).toBe(0);
+    expect(retireDeadAgent).not.toHaveBeenCalled();
+    expect(handleAgentCompletion).not.toHaveBeenCalled();
+    expect(appendRunEvent).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'run.orphan-recovered' }));
+
+    activeAgents.clear();
+    spawningTasks.clear();
+    completingAgents.clear();
+    getActiveAgentsFromRunner.mockResolvedValue([]);
+    getAgents.mockResolvedValue(records.map(record => record.id === 'agent-young' ? { ...record, startedAt: old() } : record));
+
+    expect(await cleanupOrphanedAgents()).toBe(5);
+    expect(retiredIds()).toEqual(['agent-handle', 'agent-spawning', 'agent-completing', 'agent-tui', 'agent-young']);
+  });
+
+  // The list is read once; each retirement then awaits forge, git and hooks. A
+  // runner spawn that finishes in that time has left `spawningTasks` and is in
+  // neither in-process map, so only its recorded pid says it is alive — and the
+  // listed copy predates that pid.
+  it('does not retire a record whose spawn recorded a live pid after the list was read', async () => {
+    const listed = { id: 'agent-late', status: 'running', taskId: 'task-1', startedAt: old(), metadata: { useRunner: true, executionMode: 'runner' } };
+    getAgents.mockResolvedValue([listed]);
+    readAgentRecordOrUnreadable.mockResolvedValue({ ...listed, pid: process.pid });
+
+    expect(await cleanupOrphanedAgents()).toBe(0);
+
+    expect(retireDeadAgent).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+    // The live pid is re-adopted, exactly as for a restart survivor.
+    expect(runnerAgents.get('agent-late')).toMatchObject({ pid: process.pid, taskId: 'task-1' });
+
+    // Bypass probe: the same listed copy, with no pid ever recorded, is dead.
+    runnerAgents.clear();
+    readAgentRecordOrUnreadable.mockResolvedValue(listed);
+    expect(await cleanupOrphanedAgents()).toBe(1);
+    expect(retiredIds()).toEqual(['agent-late']);
+  });
+
+  // A slow retirement ahead of it gives a second record time to finish for
+  // real. Retiring it anyway re-runs its output hook, rewrites its run record
+  // as a failure and charges its task an orphan retry.
+  it('leaves a run that completed while an earlier record was being retired', async () => {
+    const store = new Map([
+      ['agent-dead', { id: 'agent-dead', status: 'running', pid: DEAD_PID, taskId: 'task-1', startedAt: old(), metadata: {} }],
+      ['agent-finished', { id: 'agent-finished', status: 'running', pid: DEAD_PID, taskId: 'task-2', startedAt: old(), metadata: { isWorktree: true } }],
+    ]);
+    getAgents.mockResolvedValue([...store.values()]);
+    readAgentRecordOrUnreadable.mockImplementation(async (id) => store.get(id) ?? null);
+    retireDeadAgent.mockImplementation(async ({ agent }) => {
+      store.set(agent.id, { ...agent, status: 'completed' });
+      // Its own completion lands while this retirement is still awaiting.
+      store.set('agent-finished', { ...store.get('agent-finished'), status: 'completed', result: { success: true } });
+      return { success: false };
+    });
+
+    expect(await cleanupOrphanedAgents()).toBe(1);
+
+    expect(retiredIds()).toEqual(['agent-dead']);
+    expect(appendRunEvent.mock.calls.filter(([event]) => event.kind === 'run.orphan-recovered').map(([event]) => event.agentId)).toEqual(['agent-dead']);
+    expect(cleanupAgentWorktree.mock.calls.map(([agentId]) => agentId)).toEqual(['agent-dead']);
+    expect(store.get('agent-finished').result).toEqual({ success: true });
+  });
+
+  it('retires a dead record exactly once across repeated sweeps', async () => {
+    const store = new Map([['agent-dead', { id: 'agent-dead', status: 'running', pid: DEAD_PID, taskId: 'task-1', startedAt: old(), metadata: {} }]]);
+    getAgents.mockImplementation(async () => [...store.values()]);
+    retireDeadAgent.mockImplementation(async ({ agent }) => {
+      store.set(agent.id, { ...agent, status: 'completed' });
+      return { success: false };
+    });
+
+    expect(await cleanupOrphanedAgents()).toBe(1);
+    expect(await cleanupOrphanedAgents()).toBe(0);
+    expect(await cleanupOrphanedAgents()).toBe(0);
+
+    expect(retiredIds()).toEqual(['agent-dead']);
+  });
+
+  it('leaves a record it cannot re-read, since a failed read proves nothing', async () => {
+    getAgents.mockResolvedValue([{ id: 'agent-unreadable', status: 'running', pid: DEAD_PID, taskId: 'task-1', startedAt: old(), metadata: {} }]);
+    readAgentRecordOrUnreadable.mockResolvedValue(AGENT_RECORD_UNREADABLE);
+
+    expect(await cleanupOrphanedAgents()).toBe(0);
+
+    expect(retireDeadAgent).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  // The pid is written only after a successful spawn. A recorded 0 is a Windows
+  // ConPTY process that did start.
+  it.each([
+    ['no pid was ever recorded', {}, /^Agent never started — no process was ever launched/],
+    ['the recorded pid is gone', { pid: DEAD_PID }, /^Agent process terminated unexpectedly$/],
+    ['the recorded pid is an unusable 0', { pid: 0 }, /^Agent process terminated unexpectedly$/],
+  ])('names the failure for what it was when %s', async (_label, pid, message) => {
+    getAgents.mockResolvedValue([{ id: 'agent-dead', status: 'running', taskId: 'task-1', startedAt: old(), metadata: {}, ...pid }]);
+
+    await cleanupOrphanedAgents();
+
+    expect(retireDeadAgent).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      errorMessage: expect.stringMatching(message), category: 'orphaned', exitCode: 1, success: false,
+    }));
   });
 });
 
@@ -2405,6 +2568,7 @@ describe('orphan retries resume what the dead run left behind', () => {
   it('hands retireDeadAgent the orphaned exit code, duration and category for the dead run', async () => {
     getAgents.mockResolvedValue([{
       ...deadAgent,
+      pid: 2147483646,
       startedAt: new Date(Date.now() - 60000).toISOString(),
       metadata: { ...deadMetadata, runId: 'run-orphan' },
       output: [{ line: 'last buffered line' }],
@@ -2943,6 +3107,16 @@ describe('the sweep retires paused records whose task moved on', () => {
     id: 'task-9', taskType: 'user', status: 'blocked',
     metadata: { blockedCategory: 'agent-paused', pausedAgentId: 'agent-paused-9' },
   };
+
+  // Same staleness as the running pass: the list predates every retirement the
+  // sweep awaited, and a resume in that time has already retired this record.
+  it('leaves a pause that was resumed after the list was read', async () => {
+    getTaskById.mockResolvedValue({ ...livePause, status: 'in_progress', metadata: {} });
+    readAgentRecordOrUnreadable.mockResolvedValueOnce({ ...pausedAgent, status: 'completed' });
+    await cleanupOrphanedAgents();
+    expect(completeAgentRun).not.toHaveBeenCalled();
+    expect(markAgentComplete).not.toHaveBeenCalled();
+  });
 
   it('leaves a live pause alone — a user may resume it days later', async () => {
     getTaskById.mockResolvedValue(livePause);

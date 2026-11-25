@@ -1,9 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
-}));
+vi.mock('../ui/Toast');
 vi.mock('../../services/apiSprites.js', () => ({ importSprites: vi.fn() }));
 const getApps = vi.fn();
 vi.mock('../../services/apiApps.js', () => ({ getApps: (...a) => getApps(...a) }));

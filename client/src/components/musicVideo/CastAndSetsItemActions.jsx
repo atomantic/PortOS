@@ -1,3 +1,4 @@
+import { inputClass as fieldClass } from './controlClasses.js';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import CastAndSetsImageEditor from './CastAndSetsImageEditor.jsx';
 import { useId, useRef, useState } from 'react';
@@ -7,8 +8,6 @@ import useMounted from '../../hooks/useMounted.js';
 import { getMusicVideoCastAndSets } from '../../services/apiMusicVideo.js';
 
 const buttonClass = 'flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs pointer-fine:sm:min-h-0 disabled:opacity-50';
-const fieldClass = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm';
-
 const PROTAGONIST_FIELDS = [['name', 'Name'], ['description', 'Who they are'], ['height', 'Height'], ['face', 'Face'], ['hair', 'Hair'], ['signature', 'Signature detail'], ['gesture', 'Gesture']];
 const FORM_FIELDS = [['label', 'Label'], ['age', 'Age'], ['description', 'How they look at that age'], ['height', 'Height at that age'], ['hair', 'Hair'], ['wardrobe', 'Wardrobe'],
   ['era', 'Era (year or period)'], ['look', 'Film look of that memory'], ['renderingMedium', 'Rendering medium (empty inherits direction)']];

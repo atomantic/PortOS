@@ -6,7 +6,6 @@ import {
   ALL_STYLE_IDS,
   EMPTY_IMAGE_STYLE,
   getStylePresetById,
-  findStylePreset
 } from './writersRoomStylePresets.js';
 
 describe('writersRoomStylePresets', () => {
@@ -81,21 +80,4 @@ describe('writersRoomStylePresets', () => {
     });
   });
 
-  describe('findStylePreset', () => {
-    it('returns the matching preset', () => {
-      const noir = findStylePreset('noir');
-      expect(noir).not.toBeNull();
-      expect(noir.id).toBe('noir');
-    });
-
-    it('returns null for unknown ids', () => {
-      expect(findStylePreset('not-a-real-style')).toBeNull();
-    });
-
-    it('agrees with getStylePresetById for every known id', () => {
-      for (const id of STYLE_PRESET_IDS) {
-        expect(findStylePreset(id)).toBe(getStylePresetById(id));
-      }
-    });
-  });
 });

@@ -1,10 +1,5 @@
 // Pure render-budget state machine for adaptive quality (issue #2592).
 //
-// Pure adaptive render-quality state machine: capability-aware startup tier (`recommendStartTier`),
-// p75 frame-time windows, hysteresis, cooldown, warm-up/gap rejection (`createRenderBudget`,
-// `recordFrame`, `restartWarmup`, `resetRenderBudget`, `getEffectiveTier`, `QUALITY_TIERS`,
-// `DEFAULT_RENDER_BUDGET_CONFIG`).
-//
 // It observes per-frame delta times and decides when the *effective* detail tier
 // should step down (frame pressure) or up (headroom), with hysteresis + a cooldown
 // so it settles instead of oscillating between adjacent tiers. It is intentionally
@@ -18,29 +13,6 @@
 // nothing in this module reads or writes localStorage.
 
 export const QUALITY_TIERS = ['low', 'medium', 'high', 'ultra'];
-
-// Pick a conservative first tier from capabilities that are available before the
-// frame-time sampler has enough evidence to adapt. Starting every device at High
-// made phones and small-memory machines pay the full scene cost for several seconds
-// before Auto quality could react. Unknown desktop capabilities remain High; a coarse
-// pointer or sub-8-core/sub-8GB device starts at Medium, while clearly constrained
-// hardware starts at Low. The live budget can still climb when it measures headroom.
-export function recommendStartTier({
-  coarsePointer = false,
-  hardwareConcurrency = null,
-  deviceMemory = null,
-} = {}) {
-  const cores = Number.isFinite(hardwareConcurrency) && hardwareConcurrency > 0
-    ? hardwareConcurrency
-    : null;
-  const memoryGb = Number.isFinite(deviceMemory) && deviceMemory > 0
-    ? deviceMemory
-    : null;
-
-  if ((cores !== null && cores <= 2) || (memoryGb !== null && memoryGb <= 4)) return 'low';
-  if (coarsePointer || (cores !== null && cores < 8) || (memoryGb !== null && memoryGb < 8)) return 'medium';
-  return 'high';
-}
 
 // Thresholds from the issue's acceptance criteria. p75 frame time is the signal:
 // > 25ms (≈40fps) for 2 windows → step down; < 18ms (≈55fps) for 5 windows → step up.
@@ -106,22 +78,6 @@ export function createRenderBudget(startTier = 'high', now = 0) {
       sampleCount: 0,
       windows: 0,
     },
-  };
-}
-
-// Re-arm the warm-up without touching the current tier — used when a frameloop
-// resumes after the tab was hidden, so the first sluggish post-resume frames (and any
-// pre-hide pressure/headroom streaks) don't drive a bogus decision.
-export function restartWarmup(state, now) {
-  return {
-    ...state,
-    startedAt: now,
-    windowStart: now,
-    samples: [],
-    gapStreak: 0,
-    pressureStreak: 0,
-    headroomStreak: 0,
-    windowClosed: false,
   };
 }
 

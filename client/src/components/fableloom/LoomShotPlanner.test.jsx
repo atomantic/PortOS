@@ -10,7 +10,7 @@ vi.mock('../../services/apiFableLoom.js', () => ({
   applyLoomEpisodeShots: api.applyLoomEpisodeShots,
 }));
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 it('previews with the selected route, then explicitly applies the reviewed fingerprint', async () => {
   const episode = { id: 'ep-1', nodes: [{ id: 'scene-1', title: 'The gate' }] };
   const groups = [{ sceneId: 'scene-1', shots: [{ title: 'A knock', durationSeconds: 8, framing: 'Close', action: 'A hand knocks.', dialogue: [] }] }];

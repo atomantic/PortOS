@@ -302,7 +302,7 @@ export default function SceneCard({
                           onImportTake={actions.onImportTake}
                           onContinueFromPrevious={layer === 'footage' && position.index > 0 ? actions.onContinueFromPrevious : null}
                           previousHasClip={position.previousHasClip}
-                          assetMarks={project?.assetMarks} onMarkTake={actions.onMarkTake}
+                          assetMarks={project?.assetMarks} onMarkTake={actions.onMarkTake} onMoveTake={actions.onMoveTake}
                           onCheckTake={actions.onCheckTake} checkingTakes={takes.checking} onApplyCameos={actions.onApplyCameos}
                         />
                       </div>
@@ -330,7 +330,7 @@ export default function SceneCard({
                   scene={scene} project={project} layer={layer} codeShot={codeShot} fromSheet={fromSheet} loops={loops}
                   sourceWindow={sourceWindow} renderPlan={renderPlan}
                   position={position} composition={composition} actions={actions} fieldId={fieldId}
-                  applyPatch={applyPatch} applySaved={applySaved} markDirty={markDirty} saveIfDirty={saveIfDirty}
+                  applyPatch={applyPatch} applySaved={applySaved} markDirty={markDirty} saveIfDirty={saveIfDirty} saveShot={saveShot}
                   moveStart={moveStart} moveEnd={moveEnd}
                   setSpeakerDirty={setSpeakerDirty} setSpeakerSaving={setSpeakerSaving}
                 /></Suspense>

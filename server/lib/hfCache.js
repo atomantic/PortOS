@@ -150,16 +150,6 @@ export async function inspectModelCache(repoId, { revision = null } = {}) {
 
 export const isModelCached = async (repoId) => (await inspectModelCache(repoId)).cached;
 
-// Return the exact cached snapshot directory for an immutable revision. The
-// Wan runner consumes this local path instead of a mutable `org/repo` handle,
-// which also guarantees its cache-only subprocess cannot select another
-// snapshot or trigger a hidden network fetch.
-export async function findCachedRepoSnapshot(repoId, revision) {
-  if (!repoId || typeof repoId !== 'string') return null;
-  if (!revision || typeof revision !== 'string') return null;
-  return latestSnapshotDir(join(getHfCacheRoot(), repoToDirName(repoId)), revision);
-}
-
 const isPathInside = (root, candidate) => {
   const rel = relative(resolvePath(root), resolvePath(candidate));
   return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`)

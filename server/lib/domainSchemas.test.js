@@ -24,7 +24,8 @@ import {
 } from './brainValidation.js';
 import { agentActivityAgentParamsSchema } from './agentActivityValidation.js';
 import { processSchema, appSchema, appUpdateSchema, datadogInstanceRequestSchema, datadogSearchErrorsRequestSchema } from './appValidation.js';
-import { providerSchema, providerVisionTestSchema, providerVisionSuiteSchema } from './providerValidation.js';
+import { providerVisionTestSchema, providerVisionSuiteSchema } from './providerValidation.js';
+import { providerSchema } from './aiToolkit/validation.js';
 import { runSchema } from './processValidation.js';
 import { validate } from './validateRequest.js';
 import { featureProviderConfigSchema, seriesAutopilotSettingsSchema } from './settingsValidation.js';

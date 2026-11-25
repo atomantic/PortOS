@@ -10,6 +10,7 @@ const listQueueMediaJobs = vi.fn();
 const cancelMediaJob = vi.fn();
 const deleteFailedCanceledMediaJobs = vi.fn();
 const retryMediaJob = vi.fn();
+const previewMediaJobRetry = vi.fn();
 const resumeMediaVideoHold = vi.fn();
 const listMediaVideoHolds = vi.fn();
 vi.mock('../../services/apiMediaJobs.js', () => ({
@@ -19,6 +20,7 @@ vi.mock('../../services/apiMediaJobs.js', () => ({
   deleteMediaJob: vi.fn(),
   deleteFailedCanceledMediaJobs: (...a) => deleteFailedCanceledMediaJobs(...a),
   retryMediaJob: (...a) => retryMediaJob(...a),
+  previewMediaJobRetry: (...a) => previewMediaJobRetry(...a),
   runMediaJobNow: vi.fn(),
   resumeMediaVideoHold: (...a) => resumeMediaVideoHold(...a),
   listMediaVideoHolds: (...a) => listMediaVideoHolds(...a),
@@ -37,8 +39,14 @@ vi.mock('../../services/apiImageVideo.js', () => ({
   cancelTopazRemoteJob: (...a) => cancelTopazRemoteJob(...a),
   recoverTopazJob: vi.fn(),
   listLorasFull: (...a) => listLorasFull(...a),
+  listImageModels: (...a) => listImageModels(...a),
 }));
 const listLorasFull = vi.fn();
+const listImageModels = vi.fn();
+vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getSettings: vi.fn(async () => ({})),
+}));
 
 const listLoraTrainingCheckpoints = vi.fn();
 vi.mock('../../services/apiLoraTraining.js', () => ({
@@ -82,6 +90,7 @@ const trainingJob = {
 
 beforeEach(() => {
   listQueueMediaJobs.mockReset();
+  previewMediaJobRetry.mockReset().mockResolvedValue({ sentPrompt: 'Example' });
   socketEmit.mockClear();
   cancelMediaJob.mockReset().mockResolvedValue({ ok: true, status: 'canceling' });
   deleteFailedCanceledMediaJobs.mockReset();
@@ -97,6 +106,11 @@ beforeEach(() => {
   getVideoGenModelContext.mockResolvedValue({ models: [] });
   listLorasFull.mockReset();
   listLorasFull.mockResolvedValue([]);
+  listImageModels.mockReset();
+  listImageModels.mockResolvedValue([
+    { id: 'z-image-turbo', name: 'Z-Image Turbo', steps: 8, cfgDisabled: true },
+    { id: 'flux-dev', name: 'Flux Dev', steps: 25, guidance: 3.5 },
+  ]);
 });
 
 it('applies only matching progress frames to a running row without rereading the queue', async () => {
@@ -204,6 +218,94 @@ const failedCodexDefaultEffortJob = {
   // No explicit effort → ran on the shipped default.
   params: { prompt: 'a fox', mode: 'codex', model: 'gpt-5.6-luna' },
 };
+
+describe('MediaJobsQueue — image retry on shipped sizes', () => {
+  // 750x1050 is a shipped preset whose edges are not on the 64+8n grid, so a
+  // hand-rolled step=8 input would block the native submit even for a prompt-only edit.
+  it('retries a 750x1050 job with only the edited prompt', async () => {
+    const user = userEvent.setup();
+    listQueueMediaJobs.mockResolvedValue([{
+      ...failedCodexJob, id: 'size750fail0000dead', params: { ...failedCodexJob.params, width: 750, height: 1050 },
+    }]);
+    render(<MediaJobsQueue kind="image" />);
+    await expandReel(user);
+    await user.click(await screen.findByLabelText('Edit and retry'));
+    await retypeSettled(user, await screen.findByLabelText('Prompt'), 'a red fox');
+    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+    expect(retryMediaJob).toHaveBeenCalledWith('size750fail0000dead', { prompt: 'a red fox' }, { silent: true });
+  });
+});
+
+describe('MediaJobsQueue — image retry editor knobs', () => {
+  const open = async (user, job) => {
+    listQueueMediaJobs.mockResolvedValue([job]);
+    render(<MediaJobsQueue kind="image" />);
+    await expandReel(user);
+    await user.click(await screen.findByLabelText('Edit and retry'));
+  };
+  const retry = (user) => user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+
+  it('offers installed local models plus seed, steps and guidance, and sends only the edits', async () => {
+    const user = userEvent.setup();
+    await open(user, { ...failedLocalJob, params: { ...failedLocalJob.params, modelId: 'flux-dev', width: 1024, height: 1024, steps: 25 } });
+    const model = await screen.findByRole('combobox', { name: 'Model id' });
+    expect(within(model).getByRole('option', { name: 'Z-Image Turbo' })).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Seed/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Steps/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Guidance/)).toBeInTheDocument();
+    await user.selectOptions(model, 'z-image-turbo');
+    await retry(user);
+    expect(retryMediaJob).toHaveBeenCalledWith('localfail0000beef', { modelId: 'z-image-turbo' }, { silent: true });
+  });
+
+  it('retries a prompt-only edit of a job stored outside the compose ranges', async () => {
+    const user = userEvent.setup();
+    await open(user, { ...failedLocalJob, params: { ...failedLocalJob.params, modelId: 'flux-dev', width: 4096, height: 1024, steps: 180, guidance: 4.2 } });
+    await retypeSettled(user, await screen.findByLabelText('Prompt'), 'a red fox');
+    await retry(user);
+    expect(retryMediaJob).toHaveBeenCalledWith('localfail0000beef', { prompt: 'a red fox' }, { silent: true });
+  });
+
+  it('clears inherited steps when switching to a locked-sampler model', async () => {
+    const user = userEvent.setup();
+    listImageModels.mockResolvedValue([
+      { id: 'flux-dev', name: 'Flux Dev', steps: 25, guidance: 3.5 },
+      { id: 'h3-image', name: 'H3 Image', samplerLocked: true },
+    ]);
+    await open(user, { ...failedLocalJob, params: { ...failedLocalJob.params, modelId: 'flux-dev', width: 1024, height: 1024, steps: 25 } });
+    await user.selectOptions(await screen.findByRole('combobox', { name: 'Model id' }), 'h3-image');
+    expect(screen.queryByLabelText(/^Steps/)).not.toBeInTheDocument();
+    await retry(user);
+    expect(retryMediaJob).toHaveBeenCalledWith('localfail0000beef', { modelId: 'h3-image', steps: null }, { silent: true });
+  });
+
+  it('shows resolution and the backend model control only for a cloud retry', async () => {
+    const user = userEvent.setup();
+    await open(user, failedCodexJob);
+    expect(await screen.findByLabelText('Codex model')).toBeInTheDocument();
+    expect(screen.getByLabelText('Resolution')).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Seed/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Steps/)).not.toBeInTheDocument();
+  });
+
+  it('shows no model control for a Grok retry', async () => {
+    const user = userEvent.setup();
+    await open(user, { ...failedCodexJob, id: 'grokfail00000dead', params: { prompt: 'a fox', mode: 'grok' } });
+    await screen.findByLabelText('Resolution');
+    expect(screen.queryByLabelText(/model/i)).not.toBeInTheDocument();
+    await retry(user);
+    expect(retryMediaJob).toHaveBeenCalledWith('grokfail00000dead', null, { silent: true });
+  });
+
+  it.each(['audio', 'video-stitch', 'supercollider'])('offers plain Retry and no editor for a failed %s job', async (kind) => {
+    const user = userEvent.setup();
+    listQueueMediaJobs.mockResolvedValue([{ id: 'nonimage0000dead', kind, status: 'failed', error: 'boom', params: { prompt: 'a fox' } }]);
+    render(<MediaJobsQueue kind={kind} />);
+    await expandReel(user);
+    expect(await screen.findByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Edit and retry')).not.toBeInTheDocument();
+  });
+});
 
 describe('MediaJobsQueue — continuation retry', () => {
   const verified = { id: 'verified-h3', name: 'Example verified H3', runtime: 'minimax_h3', supportedModes: ['text', 'image'],
@@ -645,14 +747,14 @@ describe('MediaJobsQueue — federated render badge', () => {
     expect(await screen.findByText(/local \/ z-image-turbo/)).toBeInTheDocument();
   });
 
-  it('offers plain Retry but not the editor on a failed federated job', async () => {
+  it.each(['image', 'video'])('offers plain Retry but not the editor on a failed federated %s job', async (kind) => {
     // A prompt/model edit would never reach the peer — the remote executor
     // renders from the wire request inside the marker — so showing the form
     // would silently discard what the user typed.
     const user = userEvent.setup();
-    listQueueMediaJobs.mockResolvedValue([{ ...failedLocalJob, id: 'remotefail0000beef', renderer: 'remote' }]);
+    listQueueMediaJobs.mockResolvedValue([{ ...failedLocalJob, id: 'remotefail0000beef', kind, renderer: 'remote' }]);
 
-    render(<MediaJobsQueue kind="image" />);
+    render(<MediaJobsQueue kind={kind} />);
     await expandReel(user);
 
     expect(await screen.findByRole('button', { name: /^Retry$/ })).toBeInTheDocument();
@@ -1273,4 +1375,65 @@ describe('MediaJobsQueue — hosted video retry editor (#10741)', () => {
     await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
     expect(retryMediaJob).toHaveBeenCalledWith(HOSTED_JOBS[mode].id, null, { silent: true });
   });
+});
+
+it.each([
+  ['image', 'codex', 'Style preset: Print'],
+  ['video', 'grok', 'Grok video tool instructions'],
+])('shows authored text, additions, full prompt and Copy in the %s retry editor', async (kind, mode, label) => {
+  const job = {
+    id: `${kind}-preview`, kind, status: 'failed',
+    params: { mode, prompt: 'styled original', retryPrompt: 'original', negativePrompt: '' },
+  };
+  listQueueMediaJobs.mockResolvedValue([job]);
+  previewMediaJobRetry.mockImplementation(async (_id, overrides) => ({
+    sentPrompt: `Style. ${overrides?.prompt ?? 'original'}`,
+    promptAdditions: [{ id: 'instructions', label, text: 'Style.' }],
+    referenceImages: [{ filename: 'anchor.png', source: 'Reference image', status: 'included' }],
+  }));
+  const user = userEvent.setup();
+  render(<MediaJobsQueue />);
+  await expandReel(user);
+  await user.click(await screen.findByRole('button', { name: /edit and retry/i }));
+  const prompt = screen.getByRole('textbox', { name: /^prompt$/i });
+  expect(prompt).toHaveValue('original');
+  await user.clear(prompt);
+  await user.type(prompt, '  revised  ');
+  await user.click(await screen.findByRole('button', { name: `+ ${label}` }));
+  expect(screen.getByText('Style.')).toBeInTheDocument();
+  expect(screen.getByText('anchor.png')).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Show full prompt' }));
+  expect(screen.getByText('Style. revised').textContent).toBe('Style.   revised  ');
+  await user.click(screen.getByRole('button', { name: 'Copy full prompt' }));
+  expect(await navigator.clipboard.readText()).toBe('Style.   revised  ');
+  await user.click(screen.getByRole('button', { name: /retry with changes/i }));
+  expect(previewMediaJobRetry).toHaveBeenLastCalledWith(job.id, { prompt: '  revised  ' }, { silent: true });
+  expect(retryMediaJob).toHaveBeenCalledWith(job.id, { prompt: '  revised  ' }, { silent: true });
+});
+
+it('keeps edited prompt text when the retry is refused', async () => {
+  listQueueMediaJobs.mockResolvedValue([failedCodexJob]);
+  retryMediaJob.mockRejectedValueOnce(new Error('Prompt is 8001/8000 characters. Shorten it to retry.'));
+  const user = userEvent.setup();
+  render(<MediaJobsQueue kind="image" />);
+  await expandReel(user);
+  await user.click(await screen.findByLabelText('Edit and retry'));
+  const prompt = screen.getByRole('textbox', { name: /^prompt$/i });
+  await user.clear(prompt);
+  await user.type(prompt, '  edited  ');
+  await user.click(screen.getByRole('button', { name: /retry with changes/i }));
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Prompt is 8001/8000 characters. Shorten it to retry.'));
+  expect(prompt).toHaveValue('  edited  ');
+});
+
+it('submits a style-only video retry with an empty authored prompt', async () => {
+  const job = { id: 'video-style-only', kind: 'video', status: 'failed', params: { mode: 'grok', prompt: 'Woodcut', retryPrompt: '' } };
+  listQueueMediaJobs.mockResolvedValue([job]);
+  const user = userEvent.setup();
+  render(<MediaJobsQueue kind="video" />);
+  await expandReel(user);
+  await user.click(await screen.findByLabelText('Edit and retry'));
+  expect(screen.getByRole('textbox', { name: /^prompt$/i })).toHaveValue('');
+  await user.click(screen.getByRole('button', { name: /retry with changes/i }));
+  expect(retryMediaJob).toHaveBeenCalledWith(job.id, null, { silent: true });
 });

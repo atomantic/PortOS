@@ -54,6 +54,9 @@ import { PR_CREATION, resolvePrCompletion, resolvePrCreation } from '../../lib/p
 import { resolvePrOpenedBy, PR_OPENED_BY } from '../../lib/slashdoInvocation.js';
 import { isPublicReviewRestrictedProfile, publicReviewPostureForProfile } from '../../lib/agent/agentExecutionProfiles.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from '../notifications.js';
+import { sameCheckoutPath } from '../../lib/pathContainment.js';
+import { shortBranch } from '../completedCheckoutEvidence.js';
+import { readCheckoutPathPresence, readLocalBranchPresence } from '../repoCleanupObservation.js';
 import { COMPLETION_RECEIPT_VERSION, COMPLETION_STAGE, REPOSITORY_HOLD, REPOSITORY_STATE_VERIFICATION,
   isRepositoryHold, worktreeStageDefersTaskSettlement } from '../../lib/agent/agentCompletionStages.js';
 
@@ -155,9 +158,9 @@ export async function handlePipelineProgression(task, agentId, success) {
 
   const { getStagePrompt } = await import('../taskPromptService.js');
   let prompt = await getStagePrompt(task.metadata.analysisType, nextStageIndex);
-  if (task.metadata.appName) prompt = prompt.replace(/\{appName\}/g, task.metadata.appName);
-  if (task.metadata.repoPath) prompt = prompt.replace(/\{repoPath\}/g, task.metadata.repoPath);
-  if (task.metadata.app) prompt = prompt.replace(/\{appId\}/g, task.metadata.app);
+  if (task.metadata.appName) prompt = prompt.replace(/\{appName\}/g, () => task.metadata.appName);
+  if (task.metadata.repoPath) prompt = prompt.replace(/\{repoPath\}/g, () => task.metadata.repoPath);
+  if (task.metadata.app) prompt = prompt.replace(/\{appId\}/g, () => task.metadata.app);
 
   const nextTask = {
     id: `${task.id || 'sys-pipeline'}-stage${nextStageIndex}-${Date.now().toString(36)}`,
@@ -389,6 +392,8 @@ async function performCompletionCleanupSteps(context, onStepError) {
   const durable = state?.status === 'completed' && typeof state.startedAt === 'string';
   if (durable && ['completed', 'failed', 'abandoned'].includes(state.metadata?.completionCleanup?.status)) return;
   const stages = { ...state?.metadata?.completionCleanup?.stages };
+  // Finalization can save replay input before cleanup ever runs.
+  const priorSentinel = stages[COMPLETION_STAGE.SENTINEL];
   const persist = async patch => {
     if (durable && !await recordCompletionCleanup(context.agentId, state.startedAt, patch)) throw new Error('completion-cleanup-write-unverified');
   };
@@ -482,8 +487,16 @@ async function performCompletionCleanupSteps(context, onStepError) {
   // A terminal rejection is not proof that its audit artifacts were consumed.
   // Keep the checkout and original signal available for explicit recovery.
   const preserveAuditEvidence = auditEvidencePending(context);
-  if (preserveAuditEvidence) {
+  if (preserveAuditEvidence && !priorSentinel) {
     emitLog('warn', `Audit disposition incomplete for ${context.agentId}; preserving worktree and completion evidence`, { agentId: context.agentId });
+  }
+  const evidenceAbsent = preserveAuditEvidence && priorSentinel && await auditCheckoutAbsent(state?.metadata);
+  const abandonedStages = {};
+  if (evidenceAbsent) {
+    const abandoned = { status: 'abandoned', retryable: false, reason: 'audit-evidence-absent' };
+    abandonedStages[COMPLETION_STAGE.WORKTREE] = abandoned;
+    if (stages[COMPLETION_STAGE.SENTINEL]?.status === 'held') abandonedStages[COMPLETION_STAGE.SENTINEL] = abandoned;
+    Object.assign(stages, abandonedStages);
   }
   const priorWorktree = stages[COMPLETION_STAGE.WORKTREE];
   const cleanupWarnings = preserveAuditEvidence ? [] : await runStep(COMPLETION_STAGE.WORKTREE, 'Worktree cleanup', async () => {
@@ -496,10 +509,10 @@ async function performCompletionCleanupSteps(context, onStepError) {
   if (['done', 'held'].includes(stages[COMPLETION_STAGE.WORKTREE]?.status)) {
     await runStep(COMPLETION_STAGE.REPORT, 'Cleanup warning reporting', () => reportWorktreeCleanupWarnings({ ...context, cleanupWarnings }));
   }
-  const unfinished = preserveAuditEvidence || Object.values(stages).some(stage => stage.status === 'held'
+  const unfinished = (preserveAuditEvidence && !evidenceAbsent) || Object.values(stages).some(stage => stage.status === 'held'
     || (stage.status === 'failed' && stage.retryable) || stage.status === 'running');
   const failed = Object.values(stages).some(stage => ['failed', 'abandoned'].includes(stage.status));
-  await persist({ status: unfinished ? 'pending' : failed ? 'failed' : 'completed' });
+  await persist({ status: unfinished ? 'pending' : failed ? 'failed' : 'completed', stages: abandonedStages });
   if (firstError && onStepError === STEP_ERROR_POLICY.PROPAGATE) throw firstError;
 }
 
@@ -678,6 +691,17 @@ async function advanceCreativeDirectorIfNeeded({ agentId, task, effectiveSuccess
 function auditEvidencePending({ task, agentState }) {
   return Number(task?.metadata?.auditDispositionVersion ?? agentState?.metadata?.auditDispositionVersion) === 1
     && agentState?.metadata?.auditFindings?.status !== 'complete';
+}
+
+async function auditCheckoutAbsent({ workspacePath, sourceWorkspace, worktreeBranch, isWorktree } = {}) {
+  if (!workspacePath || await readCheckoutPathPresence(workspacePath) !== false) return false;
+  if (!isWorktree && !worktreeBranch) return true;
+  if (!sourceWorkspace || !worktreeBranch) return false;
+  const { listWorktrees } = await import('../worktree/status.js');
+  const worktrees = await listWorktrees(sourceWorkspace).catch(() => null);
+  return !!worktrees?.length
+    && !worktrees.some(tree => sameCheckoutPath(tree.path, workspacePath) || shortBranch(tree.branch) === worktreeBranch)
+    && await readLocalBranchPresence(sourceWorkspace, worktreeBranch) === false;
 }
 
 /**

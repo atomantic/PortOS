@@ -287,6 +287,19 @@ describe('mediaJobQueue', () => {
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'canceled');
   });
 
+  it('records a running Gemini production cancellation as an uncertain submission', async () => {
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: {
+      mode: 'gemini', prompt: 'A lighthouse', videoProduction: { submissionUncertain: false },
+    } });
+    await waitFor(() => stubs.generateVideoGemini.mock.calls.some(([params]) => params.jobId === jobId));
+    stubs.cancelVideo.mockReturnValueOnce(true);
+    await expect(mediaJobQueue.cancelJob(jobId)).resolves.toMatchObject({ ok: true, status: 'canceling' });
+    const snapshot = JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8'));
+    expect(snapshot.jobs.find(entry => entry.id === jobId)?.params.videoProduction.submissionUncertain).toBe(true);
+    videoGenEvents.emit('failed', { generationId: jobId, error: 'Canceled' });
+    await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'canceled');
+  });
+
   it('restores cancellation bookkeeping when a provider refuses during finalization', async () => {
     const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: {
       mode: 'grok', prompt: 'finishing render', videoProduction: { submissionUncertain: false },

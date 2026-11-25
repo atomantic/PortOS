@@ -191,7 +191,10 @@ problem:
   as are nested functions. The report excludes generated, vendored, build and
   migration files; it identifies parsing failures and exits nonzero if its scan
   is incomplete, but never fails for a high score. Analyze other languages
-  separately and judge each candidate in context.
+  separately and judge each candidate in context. A repeatable
+  `--exclude <glob>` drops matching paths from both shortlists and prints the
+  excluded count; a PortOS audit passes the globs of its dormant
+  [feature areas](feature-priorities.md#audit-scope).
 - **Layout is split by what is narrow.** `mobile-responsive` owns every layout
   defect at a viewport width ≤1024 (phone and tablet) plus touch mechanics —
   overflow, clipping, breakpoint gaps, tap targets. `ux` checklist item 8 keeps

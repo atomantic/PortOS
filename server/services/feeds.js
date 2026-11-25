@@ -13,6 +13,7 @@ import { join } from 'path';
 import { PATHS, createCachedStore } from '../lib/fileUtils.js';
 import { fetchPublicText } from '../lib/safeUrlFetch.js';
 import { decodeXmlEntities } from '../lib/xmlEntities.js';
+import { htmlToText } from '../lib/htmlToText.js';
 
 const FEEDS_FILE = join(PATHS.data, 'feeds.json');
 const MAX_ITEMS_PER_FEED = 100;
@@ -78,44 +79,62 @@ async function ensureItemsSorted() {
 // expands characters such as U+0130 and would skew the offsets below.
 const asciiLower = (text) => text.replace(/[A-Z]+/g, (run) => run.toLowerCase());
 
-const extractTag = (xml, tag) => {
+const readTag = (xml, tag) => {
+  const none = { content: '', cdata: false };
   const lower = asciiLower(xml);
   const open = `<${asciiLower(tag)}`;
   const close = `</${asciiLower(tag)}>`;
   for (let from = 0; ; ) {
     const start = lower.indexOf(open, from);
-    if (start === -1) return '';
+    if (start === -1) return none;
     const after = start + open.length;
     const boundary = xml[after];
     if (boundary !== undefined && boundary !== '>' && boundary !== '/' && !/\s/.test(boundary)) { from = after; continue; }
     const gt = xml.indexOf('>', after);
-    if (gt === -1) return '';
+    if (gt === -1) return none;
     const end = lower.indexOf(close, gt + 1);
-    if (end === -1) return '';
+    if (end === -1) return none;
     let inner = xml.slice(gt + 1, end).trim();
-    if (inner.startsWith('<![CDATA[')) inner = inner.slice('<![CDATA['.length);
+    const cdata = inner.startsWith('<![CDATA[');
+    if (cdata) inner = inner.slice('<![CDATA['.length);
     if (inner.endsWith(']]>')) inner = inner.slice(0, -']]>'.length);
-    return inner.trim();
+    return { content: inner.trim(), cdata };
   }
+};
+const extractTag = (xml, tag) => readTag(xml, tag).content;
+
+const HTML_ENTITIES = { nbsp: ' ' };
+const extractText = (xml, tag) => decodeXmlEntities(extractTag(xml, tag), HTML_ENTITIES).trim();
+
+/** A tag holding HTML (CDATA, or entity-escaped once for XML) as plain text. */
+const extractHtmlText = (xml, tag) => {
+  const { content, cdata } = readTag(xml, tag);
+  return htmlToText(cdata ? content : decodeXmlEntities(content), { collapseSpaces: true });
 };
 
 export const __testing = { extractTag };
 
-/**
- * Extract href from an Atom <link> tag.
- */
-const extractAtomLink = (xml) => {
-  // Prefer rel="alternate" or no rel
-  const altMatch = xml.match(/<link[^>]*rel=["']alternate["'][^>]*href=["']([^"']+)["']/i);
-  if (altMatch) return altMatch[1];
-  const anyMatch = xml.match(/<link[^>]*href=["']([^"']+)["']/i);
-  return anyMatch ? anyMatch[1] : '';
-};
+const attr = (attributes, name) => new RegExp(`(?:^|\\s)${name}\\s*=\\s*["']([^"']*)["']`, 'i').exec(attributes)?.[1] ?? '';
 
 /**
- * Strip HTML tags from a string for plain text display.
+ * Extract href from an Atom <link> tag, preferring rel="alternate" or no rel
+ * whatever order the attributes come in.
  */
-const stripHtml = (html) => decodeXmlEntities(html.replace(/<[^>]+>/g, '')).trim();
+const extractAtomLink = (xml) => {
+  const links = [...xml.matchAll(/<link\s([^>]*)>/gi)]
+    .map(([, attributes]) => ({ rel: attr(attributes, 'rel').toLowerCase(), href: attr(attributes, 'href') }))
+    .filter(link => link.href);
+  const link = links.find(({ rel }) => rel === 'alternate') || links.find(({ rel }) => !rel) || links[0];
+  return link ? decodeXmlEntities(link.href).trim() : '';
+};
+
+/** An RSS item's address: <link>, else a <guid> that is itself a URL. */
+const extractRssLink = (block) => {
+  const link = extractText(block, 'link');
+  if (link) return link;
+  const guid = extractText(block, 'guid');
+  return /^https?:\/\//i.test(guid) ? guid : '';
+};
 
 /**
  * Parse RSS 2.0 feed XML into normalized items.
@@ -124,15 +143,15 @@ const parseRSS = (xml) => {
   // Channel only supplies the title; RSS 1.0 (RDF) puts <item> siblings after
   // </channel>, so items are searched across the whole document.
   const channelMatch = xml.match(/<channel\b[^>]*>([\s\S]*?)<\/channel>/i);
-  const feedTitle = extractTag(channelMatch ? channelMatch[1] : '', 'title');
+  const feedTitle = extractText(channelMatch ? channelMatch[1] : '', 'title');
 
   const itemBlocks = xml.match(/<item\b[^>]*>[\s\S]*?<\/item>/gi) || [];
   const items = itemBlocks.map(block => ({
-    title: extractTag(block, 'title'),
-    link: extractTag(block, 'link'),
-    description: stripHtml(extractTag(block, 'description')).slice(0, 500),
+    title: extractText(block, 'title'),
+    link: extractRssLink(block),
+    description: extractHtmlText(block, 'description').slice(0, 500),
     pubDate: extractTag(block, 'pubDate'),
-    author: extractTag(block, 'author') || extractTag(block, 'dc:creator')
+    author: extractText(block, 'author') || extractText(block, 'dc:creator')
   }));
 
   return { title: feedTitle, items };
@@ -142,15 +161,15 @@ const parseRSS = (xml) => {
  * Parse Atom feed XML into normalized items.
  */
 const parseAtom = (xml) => {
-  const feedTitle = extractTag(xml, 'title');
+  const feedTitle = extractText(xml, 'title');
 
-  const entryBlocks = xml.match(/<entry>([\s\S]*?)<\/entry>/gi) || [];
+  const entryBlocks = xml.match(/<entry(?:\s[^>]*)?>[\s\S]*?<\/entry>/gi) || [];
   const items = entryBlocks.map(block => ({
-    title: extractTag(block, 'title'),
+    title: extractText(block, 'title'),
     link: extractAtomLink(block),
-    description: stripHtml(extractTag(block, 'summary') || extractTag(block, 'content')).slice(0, 500),
+    description: (extractHtmlText(block, 'summary') || extractHtmlText(block, 'content')).slice(0, 500),
     pubDate: extractTag(block, 'updated') || extractTag(block, 'published'),
-    author: extractTag(block, 'name')
+    author: extractText(block, 'name')
   }));
 
   return { title: feedTitle, items };
@@ -208,7 +227,7 @@ export async function addFeed(url) {
   };
 
   // Add initial items
-  const newItems = dedupeByLink(parsed.items).slice(0, MAX_ITEMS_PER_FEED).map(item => ({
+  const newItems = dedupeByLink(parsed.items).sort(compareItemsNewestFirst).slice(0, MAX_ITEMS_PER_FEED).map(item => ({
     id: randomUUID(),
     feedId: feed.id,
     title: item.title,
@@ -295,8 +314,24 @@ function applyParsedFeed(data, feed, parsed) {
   const feedRecord = data.feeds.find(f => f.id === feed.id);
   if (!feedRecord) return 0;
 
-  const existingLinks = new Set(data.items.filter(i => i.feedId === feed.id).map(i => i.link));
+  const parsedByLink = new Map(dedupeByLink(parsed.items).map(item => [item.link, item]));
+  const existingLinks = new Set();
+  let oldestKept = Infinity;
+  for (const item of data.items) {
+    if (item.feedId !== feed.id) continue;
+    // Items stored before links and titles were decoded still hold entities;
+    // matching on the decoded link repairs them instead of adding a second copy.
+    const fresh = parsedByLink.get(item.link) ?? parsedByLink.get(decodeXmlEntities(item.link));
+    if (fresh) Object.assign(item, { title: fresh.title, link: fresh.link, description: fresh.description });
+    existingLinks.add(item.link);
+    oldestKept = Math.min(oldestKept, itemSortKey(item));
+  }
+  // A full feed has already dropped everything older than its oldest item, so
+  // those are not new posts. An undated item can't be placed and stays eligible.
+  const atCap = existingLinks.size >= MAX_ITEMS_PER_FEED;
+  const alreadyDropped = (item) => atCap && itemSortKey(item) !== 0 && itemSortKey(item) < oldestKept;
   const newItems = dedupeByLink(parsed.items, existingLinks)
+    .filter(item => !alreadyDropped(item))
     .slice(0, MAX_ITEMS_PER_FEED)
     .map(item => ({
       id: randomUUID(),

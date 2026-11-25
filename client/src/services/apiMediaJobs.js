@@ -45,6 +45,13 @@ export const retryMediaJob = (id, paramOverrides = null, options = {}) =>
     ...options,
   });
 
+export const previewMediaJobRetry = (id, paramOverrides, options = {}) =>
+  request(`/media-jobs/${encodeURIComponent(id)}/retry/preview`, {
+    method: 'POST',
+    body: JSON.stringify(paramOverrides ? { params: paramOverrides } : {}),
+    ...options,
+  });
+
 // "Run now" — promote a queued Codex image job past the parallel limit and
 // start it immediately alongside the currently-running jobs. Only valid for
 // queued codex jobs; the server 400s for GPU jobs (single MLX runtime).

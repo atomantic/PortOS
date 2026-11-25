@@ -14,7 +14,7 @@ vi.mock('../services/apiUniverseBuilder.js', () => ({
   listUniverseStyles: (...args) => listUniverseStyles(...args),
 }));
 vi.mock('./pipeline/MediaJobThumb', () => ({ default: () => <div data-testid="job-thumb" /> }));
-vi.mock('./ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('./ui/Toast');
 
 // Settles the mount fetch before returning so no test has to remember to — a
 // state update from it after the test body starts trips the act() guard.

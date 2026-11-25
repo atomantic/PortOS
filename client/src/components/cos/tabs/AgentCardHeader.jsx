@@ -5,6 +5,7 @@ import ExecutionOptionsAttribution from '../../providers/ExecutionOptionsAttribu
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
+import { runPath, runEventsPath, taskPath } from '../crossLinks.js';
 import { shortClaudeModelName } from '../../../utils/formatters';
 
 export default function AgentCardHeader({ agent, inactive, isSystemAgent, remote, peerName, paused, controls }) {
@@ -26,6 +27,18 @@ export default function AgentCardHeader({ agent, inactive, isSystemAgent, remote
         >
           <Copy size={13} aria-hidden="true" />
         </button>
+        {!remote && agent.metadata?.runId && (
+          <>
+            <Link to={runPath(agent.metadata.runId)} onClick={(event) => event.stopPropagation()}
+              className="inline-flex min-h-[44px] items-center px-1 text-xs text-port-accent hover:underline shrink-0">Run</Link>
+            <Link to={runEventsPath(agent.metadata.runId)} onClick={(event) => event.stopPropagation()}
+              className="inline-flex min-h-[44px] items-center px-1 text-xs text-port-accent hover:underline shrink-0">Events</Link>
+          </>
+        )}
+        {!remote && agent.taskId && (
+          <Link to={taskPath(agent.taskId)} onClick={(event) => event.stopPropagation()}
+            className="inline-flex min-h-[44px] items-center px-1 text-xs text-port-accent hover:underline shrink-0">Task</Link>
+        )}
         {remote && peerName && (
           <span className="px-1.5 py-0.5 text-xs bg-port-accent/20 text-port-accent rounded min-w-0 max-w-full [overflow-wrap:anywhere]" title={`Remote agent on ${peerName}`}>
             {peerName}

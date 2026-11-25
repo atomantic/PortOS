@@ -108,11 +108,6 @@ describe('before the database phase enables the graph', () => {
     expect(await graph.onProvidersSaved()).toBeNull();
     expect(store.readGraph).not.toHaveBeenCalled();
   });
-
-  it('the management read answers unavailable rather than an empty graph', async () => {
-    await expect(graph.getManagementGraph()).rejects.toMatchObject({ code: 'PROVIDER_GRAPH_UNAVAILABLE' });
-  });
-
 });
 
 describe('reconciliation', () => {

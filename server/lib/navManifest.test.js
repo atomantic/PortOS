@@ -354,7 +354,11 @@ describe('nav contract — instance-feature gating', () => {
     const gated = NAV_COMMANDS.filter((c) => c.feature).map((c) => c.id);
     expect(gated).toContain('nav.devtools.jira');
     expect(gated).not.toContain('nav.dashboard');
-    expect(gated).not.toContain('nav.devtools.flows');
+    expect(NAV_COMMANDS.find((c) => c.id === 'nav.devtools.image-clean')).toMatchObject({
+      path: '/devtools/image-clean',
+      section: 'Dev Tools',
+    });
+    expect(gated).not.toContain('nav.devtools.image-clean');
   });
 
   // Sidebar rows now derive path, label, section and feature directly from this
@@ -363,6 +367,11 @@ describe('nav contract — instance-feature gating', () => {
 });
 
 describe('resolveNavCommand — fuzzy matching', () => {
+  it('omits the retired Flows destination from searchable navigation and voice resolution', () => {
+    expect(NAV_COMMANDS_WITH_SEARCH.find((command) => command.path === '/devtools/flows')).toBeUndefined();
+    expect(resolveNavCommand('integration-flows')?.path).not.toBe('/devtools/flows');
+  });
+
   it('disambiguates security settings from the security camera monitor', () => {
     const settings = NAV_COMMANDS_WITH_SEARCH.find((command) => command.id === 'nav.settings.security');
     const camera = NAV_COMMANDS_WITH_SEARCH.find((command) => command.id === 'nav.security');

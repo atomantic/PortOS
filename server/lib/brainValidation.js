@@ -59,94 +59,6 @@ export {
 // Inbox log status enum
 export const inboxStatusEnum = z.enum(['classifying', 'filed', 'needs_review', 'corrected', 'done', 'error']);
 
-// AI configuration schema
-export const aiConfigSchema = z.object({
-  providerId: z.string(),
-  modelId: z.string(),
-  promptTemplateId: z.string(),
-  temperature: z.number().min(0).max(2).optional(),
-  maxTokens: z.number().int().positive().optional()
-});
-
-// Classification result schema
-export const classificationSchema = z.object({
-  destination: destinationEnum,
-  confidence: z.number().min(0).max(1),
-  title: z.string().min(1).max(200),
-  cleanedUp: z.string().max(10000).optional(),
-  thoughts: z.string().max(2000).optional(),
-  extracted: z.record(z.unknown()),
-  reasons: z.array(z.string()).max(5).optional()
-});
-
-// Filed info schema
-export const filedSchema = z.object({
-  destination: destinationEnum.exclude(['unknown']),
-  destinationId: z.string().guid()
-});
-
-// Correction schema
-export const correctionSchema = z.object({
-  correctedAt: z.string().datetime(),
-  previousDestination: destinationEnum,
-  newDestination: manualDestinationEnum,
-  note: z.string().max(500).optional()
-});
-
-// Error schema
-export const errorSchema = z.object({
-  message: z.string(),
-  stack: z.string().optional()
-});
-
-// People Record schema
-export const peopleRecordSchema = z.object({
-  id: z.string().guid(),
-  name: z.string().min(1).max(200),
-  context: z.string().max(2000).optional().default(''),
-  followUps: z.array(z.string().max(500)).optional().default([]),
-  lastTouched: z.string().datetime().optional(),
-  tags: z.array(z.string().max(50)).optional().default([]),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime()
-});
-
-// Project Record schema
-export const projectRecordSchema = z.object({
-  id: z.string().guid(),
-  name: z.string().min(1).max(200),
-  status: projectStatusEnum,
-  nextAction: z.string().min(1).max(500),
-  notes: z.string().max(5000).optional(),
-  tags: z.array(z.string().max(50)).optional().default([]),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime()
-});
-
-// Idea Record schema
-export const ideaRecordSchema = z.object({
-  id: z.string().guid(),
-  title: z.string().min(1).max(200),
-  status: ideaStatusEnum.default('active'),
-  oneLiner: z.string().min(1).max(500),
-  notes: z.string().max(5000).optional(),
-  tags: z.array(z.string().max(50)).optional().default([]),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime()
-});
-
-// Admin Record schema
-export const adminRecordSchema = z.object({
-  id: z.string().guid(),
-  title: z.string().min(1).max(200),
-  status: adminStatusEnum,
-  dueDate: z.string().datetime().optional(),
-  nextAction: z.string().max(500).optional(),
-  notes: z.string().max(5000).optional(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime()
-});
-
 // Meta/Settings schema
 export const brainSettingsSchema = z.object({
   version: z.number().int().positive().default(1),
@@ -228,13 +140,6 @@ export const fixInputSchema = z.object({
 export const updateInboxInputSchema = z.object({
   capturedText: z.string().min(1).max(10000)
 });
-
-// Batch mark a set of creative inbox notes as consumed by a catalog ingest that
-// just committed. Bounded to keep a malformed/runaway payload from stamping the
-// whole inbox in one call.
-export const markInboxSentToCatalogSchema = z.object({
-  ids: z.array(z.string().guid()).min(1).max(200)
-}).strict();
 
 // Create/Update People input schema
 export const peopleInputSchema = z.object({
@@ -360,64 +265,6 @@ export const entityQuerySchema = z.object({
 // links stored (or federated from a peer) before migration 330 still validate;
 // `repo` is what new links are written with.
 export const linkTypeEnum = z.enum(['repo', 'github', 'article', 'documentation', 'tool', 'reference', 'other']);
-
-// Link Record schema
-export const linkRecordSchema = z.object({
-  id: z.string().guid(),
-  url: z.string().url(),
-  title: z.string().min(1).max(500),
-  description: z.string().max(2000).optional().default(''),
-  note: z.string().max(2000).optional().default(''),
-  linkType: linkTypeEnum.default('other'),
-  tags: z.array(z.string().max(50)).optional().default([]),
-  // Repository fields. `repoOwner` may be a GitLab `group/subgroup` path.
-  isRepo: z.boolean().default(false),
-  repoHost: z.string().max(253).nullable().optional(),
-  repoOwner: z.string().max(200).nullable().optional(),
-  repoName: z.string().max(100).nullable().optional(),
-  // Legacy GitHub-only mirror, still written so a peer on older code keeps
-  // recognising a captured GitHub repo — see lib/repoLinkFields.js.
-  isGitHubRepo: z.boolean().default(false),
-  gitHubOwner: z.string().max(100).nullable().optional(),
-  gitHubRepo: z.string().max(100).nullable().optional(),
-  localPath: z.string().max(500).optional(),
-  cloneStatus: z.enum(['pending', 'cloning', 'cloned', 'failed', 'none']).default('none'),
-  cloneError: z.string().max(500).optional(),
-  // The instance currently responsible for an in-flight clone. This differs
-  // from immutable originInstanceId when a peer retries a shared link.
-  cloneInstanceId: z.string().nullable().optional(),
-  // True only when boot recovery observed an interrupted attempt. Retry uses
-  // this to replace a legacy direct-to-destination partial checkout safely.
-  cloneInterrupted: z.boolean().optional().default(false),
-  // The in-flight clone that owns this record's next `cloned`/`failed` write
-  // (#15155). Absent or null means no live attempt.
-  cloneAttempt: z.string().nullable().optional(),
-  malwareScan: z.object({
-    reportId: z.string().uuid(),
-    taskId: z.string().optional(),
-    // `queued` is stamped when the capture-time checkbox dispatches the scan
-    // right after the clone; finalizeMalwareScan replaces it on completion.
-    status: z.enum(['queued', 'completed', 'failed']).optional(),
-    verdict: z.enum(['CLEAN', 'CAUTION', 'DANGEROUS']).nullable().optional(),
-    completedAt: z.string().datetime().optional()
-  }).optional(),
-  // What the user asked to happen after the clone lands (capture-time checkboxes).
-  repoIntake: repoIntakeSchema.optional(),
-  // The queued `repo-study` run, once dispatched.
-  repoStudy: z.object({
-    taskId: z.string().optional(),
-    queuedAt: z.string().datetime().optional(),
-    // The brief the last study was dispatched with, so the re-study form opens
-    // pre-filled instead of blank.
-    studyContext: z.string().max(5000).optional()
-  }).optional(),
-  // Bucket grouping (nullable = ungrouped)
-  bucketId: z.string().guid().nullable().optional(),
-  bucketOrder: z.number().int().optional(),
-  // Metadata
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime()
-});
 
 // Create/Update Link input schema
 export const linkInputSchema = z.object({

@@ -244,6 +244,15 @@ async function persistAndEmitTask({ id, runId, record }, project, kind, sceneId)
   return effective;
 }
 
+// The backend this project's clips render on, so the writer is told what it cannot take
+// (the enqueue boundary refuses those inputs either way). A started Video production
+// already carries its frozen, resolved choice (effectiveVideoProject).
+async function plannedVideoBackend(project) {
+  if (project.workspace === 'video') return project.renderBackend?.video?.mode || null;
+  const { resolveVideoBackendPin } = await import('../videoGen/backendPin.js');
+  return resolveVideoBackendPin(project, await getSettings()).mode;
+}
+
 export async function enqueueTreatmentTask(project) {
   const { prepareVideoPlanningProject } = await import('./videoSources.js');
   project = await prepareVideoPlanningProject(project);
@@ -251,7 +260,7 @@ export async function enqueueTreatmentTask(project) {
     const { effectiveVideoProject } = await import('./videoExecution.js');
     project = effectiveVideoProject(project);
   }
-  const context = await buildTreatmentPrompt(project);
+  const context = await buildTreatmentPrompt(project, { videoBackend: await plannedVideoBackend(project) });
   const built = await buildTaskRecord(project, 'treatment', null, context);
   return built ? persistAndEmit(built, project, 'treatment', null) : null;
 }
@@ -271,7 +280,7 @@ export async function enqueuePlanTask(project) {
   }
   const targetAbility = project?.directive?.constraints?.targetAbility || null;
   const { getToolSpecs } = await loadLateBoundService('creativeToolRegistry');
-  const context = await buildPlanPrompt(project, { toolSpecs: getToolSpecs({ targetAbility }).filter(tool => project.workspace !== 'video' || tool.function?.name === 'media_enqueueVideoJob').map(tool => project.workspace === 'video' ? { ...tool, function: { ...tool.function, description: `${tool.function.description} Each step renders exactly one clip; set params.durationSeconds between 1 and 10. Match the saved timed shot plan. Do not batch or chain clips.` } } : tool) });
+  const context = await buildPlanPrompt(project, { videoBackend: await plannedVideoBackend(project), toolSpecs: getToolSpecs({ targetAbility }).filter(tool => project.workspace !== 'video' || tool.function?.name === 'media_enqueueVideoJob').map(tool => project.workspace === 'video' ? { ...tool, function: { ...tool.function, description: `${tool.function.description} Each step renders exactly one clip; set params.durationSeconds between 1 and 10. Match the saved timed shot plan. Do not batch or chain clips.` } } : tool) });
   const built = await buildTaskRecord(project, 'plan', null, context);
   return built ? persistAndEmit(built, project, 'plan', null) : null;
 }

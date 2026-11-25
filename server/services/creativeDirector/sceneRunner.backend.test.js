@@ -12,7 +12,10 @@
  * it entirely and always build local MLX params.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const reviewState = vi.hoisted(() => ({ allowsDispatch: false }));
 
@@ -60,7 +63,7 @@ import { videoReviewStages } from '../../lib/creativeDirectorVideoReview.js';
 import { enqueueJob, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
 import { updateScene, getProject } from './local.js';
-import { resolveGalleryImage } from '../../lib/fileUtils.js';
+import { PATHS, resolveGalleryImage } from '../../lib/fileUtils.js';
 
 const LOCAL_READY = { imageGen: { local: { pythonPath: '/usr/bin/python3' } } };
 const GROK_READY = { imageGen: { grok: { enabled: true, grokPath: '/usr/local/bin/grok' } } };
@@ -77,6 +80,23 @@ const scene = (over = {}) => ({
 });
 
 const enqueuedParams = () => enqueueJob.mock.calls[0][0].params;
+
+// A real gallery image: a hosted pin re-anchors its start frame against the image library
+// (videoGen/backendPin.js), so the frame a scene resolves has to be a file the gallery holds.
+let gallery;
+let galleryFrame;
+const savedImages = PATHS.images;
+beforeAll(() => {
+  gallery = mkdtempSync(join(tmpdir(), 'cd-scene-gallery-'));
+  PATHS.images = join(gallery, 'images');
+  mkdirSync(PATHS.images);
+  galleryFrame = join(PATHS.images, 'example-frame.png');
+  writeFileSync(galleryFrame, 'x');
+});
+afterAll(() => {
+  PATHS.images = savedImages;
+  rmSync(gallery, { recursive: true, force: true });
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -206,20 +226,34 @@ describe('runSceneRender — local model pin', () => {
 describe('runSceneRender — Reactor and fal pins', () => {
   it('queues a Reactor starting-frame scene without local Python or local model knobs', async () => {
     getSettings.mockResolvedValue({ videoGen: { reactor: { apiKey: 'example-test-key' } } });
-    resolveGalleryImage.mockReturnValue('/tmp/example-frame.png');
+    resolveGalleryImage.mockReturnValue(galleryFrame);
     const jobId = await runSceneRender(
       project({ aspectRatio: '9:16', renderBackend: { video: { mode: 'reactor' } } }),
-      scene({ sourceImageFile: 'example-frame.png' }),
+      scene({ sourceImageFile: 'example-frame.png', negativePrompt: '' }),
     );
     expect(jobId).toBe('job-1');
     expect(enqueuedParams()).toMatchObject({
       mode: 'reactor', videoMode: 'image', seconds: 8, aspect: '9:16',
-      sourceImagePath: '/tmp/example-frame.png',
+      sourceImagePath: galleryFrame,
       creativeDirector: { projectId: 'proj-1', sceneId: 'scene-1' },
     });
     for (const key of ['pythonPath', 'modelId', 'numFrames', 'steps', 'apiKey', 'settings']) {
       expect(enqueuedParams()).not.toHaveProperty(key);
     }
+  });
+
+  it('refuses a Reactor scene with a negative prompt before enqueue', async () => {
+    getSettings.mockResolvedValue({ videoGen: { reactor: { apiKey: 'example-test-key' } } });
+    const shot = scene({ negativePrompt: 'fog, crowds' });
+    const selected = project({ renderBackend: { video: { mode: 'reactor' } }, treatment: { scenes: [shot] } });
+    getProject.mockResolvedValue(selected);
+
+    expect(await runSceneRender(selected, shot)).toBeNull();
+    expect(enqueueJob).not.toHaveBeenCalled();
+    expect(updateScene).toHaveBeenLastCalledWith('proj-1', 'scene-1', expect.objectContaining({
+      status: 'failed', evaluation: expect.objectContaining({ notes: expect.stringMatching(/reactor.*a negative prompt/) }),
+    }));
+    expect(updateScene.mock.calls.filter(([, , patch]) => patch.status === 'rendering')).toHaveLength(1);
   });
 
   it('queues fal with its pinned endpoint and scene duration when no local Python exists', async () => {
@@ -262,6 +296,62 @@ describe('runSceneRender — Reactor and fal pins', () => {
 
     expect(await runSceneRender(video, shot)).toBe('job-1');
     expect(enqueuedParams()).not.toHaveProperty('disableAudio');
+  });
+});
+
+
+describe('runSceneRender — Gemini pin', () => {
+  const geminiProject = (over = {}) => project({ renderBackend: { video: { mode: 'gemini' } }, ...over });
+  const failureNotes = () => updateScene.mock.calls.at(-1)[2].evaluation.notes;
+
+  it('queues a Gemini scene from its gallery start frame, with no local knobs or clip length', async () => {
+    getSettings.mockResolvedValue({});
+    resolveGalleryImage.mockReturnValue(galleryFrame);
+    const jobId = await runSceneRender(geminiProject({ aspectRatio: '9:16' }), scene({ sourceImageFile: 'example-frame.png' }));
+    expect(jobId).toBe('job-1');
+    expect(enqueuedParams()).toMatchObject({
+      mode: 'gemini', videoMode: 'image', prompt: 'a cat walks into view', sourceImagePath: galleryFrame,
+      creativeDirector: { projectId: 'proj-1', sceneId: 'scene-1' },
+    });
+    expect(enqueuedParams().height).toBeGreaterThan(enqueuedParams().width);
+    for (const key of ['pythonPath', 'modelId', 'numFrames', 'fps', 'steps', 'duration']) {
+      expect(enqueuedParams()).not.toHaveProperty(key);
+    }
+  });
+
+  it.each([
+    ['a negative prompt', {}, { negativePrompt: 'fog, crowds' }, 'a negative prompt'],
+    ['a square canvas', { aspectRatio: '1:1' }, {}, '16:9 or 9:16 only'],
+  ])('fails a scene with %s once, with the reason, instead of rendering something else', async (_label, projectOver, sceneOver, reason) => {
+    getSettings.mockResolvedValue({});
+    const selected = geminiProject({ ...projectOver, treatment: { scenes: [scene(sceneOver)] } });
+    getProject.mockResolvedValue(selected);
+    expect(await runSceneRender(selected, scene(sceneOver))).toBeNull();
+    expect(enqueueJob).not.toHaveBeenCalled();
+    expect(updateScene).toHaveBeenLastCalledWith('proj-1', 'scene-1', expect.objectContaining({ status: 'failed' }));
+    expect(failureNotes()).toContain(reason);
+    expect(updateScene.mock.calls.filter(([, , patch]) => patch.status === 'rendering')).toHaveLength(1);
+  });
+
+  // #18680: admission read frames over fps, which a Gemini job never carries, so every clip
+  // of a Video production was refused before it reached the queue.
+  it('admits a Video production clip at the fixed clip length and reaches the queue', async () => {
+    reviewState.allowsDispatch = true;
+    const shot = scene({ status: 'pending', workRevision: 0 });
+    const video = project({ workspace: 'video', status: 'rendering', videoOwnerInstanceId: 'example-owner',
+      videoDraft: { sources: [], audio: { mode: 'native' } },
+      videoExecution: { id: 'example-execution', authorized: true,
+        limits: { maxClips: 3, maxRetries: 1, maxAgentCalls: 10, maxReplans: 1, spendCapUsd: null },
+        choices: { video: { mode: 'gemini' }, audio: { mode: 'native' }, evaluation: { type: 'agent' } },
+        attempts: [] },
+      treatment: { artifact: { revision: 1 }, script: 'Example script', scenes: [shot] } });
+    video.videoExecution.inputRevision = videoConfigurationRevision(video);
+    getProject.mockResolvedValue(video);
+    getSettings.mockResolvedValue({});
+
+    expect(await runSceneRender(video, shot)).toBe('job-1');
+    expect(enqueuedParams()).toMatchObject({ mode: 'gemini', videoMode: 'text', videoProduction: { projectId: 'proj-1' } });
+    expect((await getProject()).videoExecution.attempts).toMatchObject([{ kind: 'clip', sceneId: 'scene-1', status: 'queued', jobId: 'job-1' }]);
   });
 });
 

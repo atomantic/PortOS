@@ -189,7 +189,7 @@ const GRACE_MS = 24 * 60 * 60 * 1000;
 // every registry peer with an instanceId, paused or not (`enabled: false`
 // and `syncEnabled: false` still owe deliveries they will receive on resume).
 // A removed peer is absent here, so a leftover subscription row cannot freeze
-// the water-mark after `unsubscribeAllForPeer` drops it from the registry.
+// the water-mark.
 function eligiblePeerIdSet(peers) {
   return new Set(peers.map((p) => p?.instanceId).filter(Boolean));
 }

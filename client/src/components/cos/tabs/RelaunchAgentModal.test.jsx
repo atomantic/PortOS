@@ -11,9 +11,7 @@ const apiLocalLlm = vi.hoisted(() => ({
   getToolUseModels: vi.fn(),
 }));
 vi.mock('../../../services/apiLocalLlm', () => apiLocalLlm);
-vi.mock('../../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../../ui/Toast');
 
 import { relaunchCosAgent } from '../../../services/apiAgents.js';
 import toast from '../../ui/Toast';

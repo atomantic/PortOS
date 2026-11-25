@@ -223,6 +223,8 @@ export default function StackerNews() {
   }, [accountId]);
 
   const loadSelected = useCallback(async (refresh = false) => {
+    // A long request started before an account switch must not take the page back.
+    if (currentAccountIdRef.current !== accountId) return;
     setResourcesAccountId(accountId);
     if (!refresh) {
       setTerritories([]); setItems([]); setActions([]);
@@ -329,9 +331,11 @@ export default function StackerNews() {
   const createTerritory = (event) => {
     event.preventDefault();
     if (!selected) return;
+    const createdForId = selected.id;
     finish('create-territory', createStackerNewsTerritory({
-      accountId: selected.id, ...territoryPayload(newTerritory),
+      accountId: createdForId, ...territoryPayload(newTerritory),
     }, { silent: true }), (result) => {
+      if (currentAccountIdRef.current !== createdForId) return;
       setTerritories((previous) => [...previous, result]); setNewTerritory(emptyTerritory);
     });
   };
@@ -401,6 +405,7 @@ export default function StackerNews() {
       ...(isComment ? { payload: { body: draft.body } } : {}),
     };
     finish('create-action', createStackerNewsAction(data, { silent: true }), (result) => {
+      if (currentAccountIdRef.current !== data.accountId) return;
       upsertAction(result);
       setDraft(emptyDraft);
       navigate(accountPath(selected.id, 'review'));

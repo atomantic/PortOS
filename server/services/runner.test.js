@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import EventEmitter from 'events';
+import { join } from 'node:path';
 import { ChildProcess } from '../lib/childProcess.js';
 import { parseLLMJSON } from '../lib/llmText.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
@@ -537,6 +538,81 @@ describe('executeCliRun — Claude response channel', () => {
     const result = onComplete.mock.calls[0][0];
     expect(result).toMatchObject({ success: true, text: reply });
     expect(result).not.toHaveProperty('claudeSignInExpiring');
+  });
+});
+
+describe('executeCliRun — tool-free OpenCode', () => {
+  it('disables tools for the selected MTPLX model and returns only the answer', async () => {
+    const child = makeChild();
+    spawn.mockReturnValueOnce(child);
+    const onComplete = vi.fn();
+    const prompt = 'Return a standalone HTML document.';
+    const model = 'mtplx/mtplx-inkling-2-mini-optimized-speed';
+    const diagnostics = '\u001b[0m\n> build · example\n\u001b[0m\n';
+    const page = '<!doctype html><html><body>Example</body></html>\n';
+    await executeCliRun({
+      runId: 'html-page',
+      provider: {
+        id: 'opencode-mtplx', command: 'opencode', type: 'cli', mtplxBacked: true,
+        models: [model], effort: 'xhigh',
+        args: ['run', '--agent', 'custom', '--attach', 'http://localhost:4096', '--model', model, '--thinking', '--variant=low'],
+        envVars: {
+          OPENCODE_PERMISSION: '{"bash":"allow"}',
+          OPENCODE_CONFIG: '/example/opencode.json',
+          OPENCODE_DISABLE_PROJECT_CONFIG: '0',
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+            permission: 'allow',
+            mode: { build: { permission: { bash: 'allow' } } },
+            agent: { build: { permission: { bash: 'allow' } } },
+            plugin: ['example-plugin'],
+            mcp: { example: { type: 'remote', url: 'https://example.com/mcp' } },
+          }),
+        },
+      },
+      prompt, workspacePath: TEST_WORKSPACE, toolFree: true, isolateMtplxOpenCode: true, onComplete,
+    });
+
+    const [command, args, { env }] = spawn.mock.calls[0];
+    expect(command).toBe('opencode');
+    expect(args).toEqual(['run', '--pure', '--agent', 'build', '--variant', 'low', '-m', model]);
+    expect(JSON.parse(env.OPENCODE_PERMISSION)).toBe('deny');
+    expect(env.OPENCODE_CONFIG).toBeUndefined();
+    expect(env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe('1');
+    expect(env.XDG_CONFIG_HOME).toBe(join(env.HOME, 'config'));
+    const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT);
+    expect(config.mode).toBeUndefined();
+    expect(config.mcp).toEqual({});
+    expect(config.plugin).toEqual([]);
+    expect(config).toMatchObject({
+      permission: 'deny',
+      agent: { build: { permission: { bash: 'deny' }, reasoningEffort: 'xhigh' }, title: { disable: true } },
+      provider: { mtplx: { models: { 'mtplx-inkling-2-mini-optimized-speed': { tool_call: false } } } },
+    });
+    expect(child.stdin.write).toHaveBeenCalledWith(prompt);
+
+    child.stderr.emit('data', Buffer.from(diagnostics));
+    child.stdout.emit('data', Buffer.from(page));
+    child.emit('close', 0);
+    await flushMicrotasks();
+    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ success: true, text: page }));
+    expect(writeFile).toHaveBeenCalledWith(expect.stringContaining('output.txt'), diagnostics + page);
+  });
+
+  it('keeps the ordinary tool-free recipe for other callers', async () => {
+    const child = makeChild();
+    spawn.mockReturnValueOnce(child);
+    await executeCliRun({
+      runId: 'ordinary-opencode',
+      provider: {
+        id: 'opencode-mtplx', command: 'opencode', type: 'cli', mtplxBacked: true,
+        envVars: { OPENCODE_CONFIG: '/example/opencode.json' },
+        args: ['run', '-m', 'mtplx/example'],
+      },
+      prompt: 'One-shot text', workspacePath: TEST_WORKSPACE, toolFree: true,
+    });
+    expect(spawn.mock.calls[0][2].env.OPENCODE_CONFIG).toBe('/example/opencode.json');
+    child.emit('close', 0);
+    await flushMicrotasks();
   });
 });
 

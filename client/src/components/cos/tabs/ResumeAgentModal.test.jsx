@@ -23,3 +23,28 @@ it('clears provider-scoped execution options when resuming on a different provid
     provider: 'second', model: '', executionOptions: {},
   })));
 });
+
+it('sorts target apps and retains an archived app only while selected', async () => {
+  const onSubmit = vi.fn().mockResolvedValue({});
+  render(<ResumeAgentModal
+    agent={{ id: 'example-agent', status: 'paused', metadata: { taskApp: 'retired' } }}
+    providers={providers}
+    apps={[
+      { id: 'zed', name: 'Zed' },
+      { id: 'old', name: 'Old App', archived: true },
+      { id: 'alpha', name: 'Alpha' },
+      { id: 'retired', name: 'Retired App', archived: true },
+    ]}
+    onSubmit={onSubmit}
+    onClose={vi.fn()}
+  />);
+
+  const app = screen.getByRole('combobox', { name: 'Target App' });
+  expect(app).toHaveValue('retired');
+  expect(Array.from(app.options, option => option.text)).toEqual(['PortOS (default)', 'Alpha', 'Retired App', 'Zed']);
+
+  fireEvent.change(app, { target: { value: 'alpha' } });
+  expect(Array.from(app.options, option => option.text)).toEqual(['PortOS (default)', 'Alpha', 'Zed']);
+  fireEvent.click(screen.getByRole('button', { name: 'Resume Agent' }));
+  await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ app: 'alpha' })));
+});

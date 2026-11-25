@@ -43,7 +43,7 @@ vi.mock('../../../services/apiAgents.js', () => ({
 }));
 vi.mock('../../../services/apiCodeReview.js', () => ({ getReviewerVerdictStats: api.getReviewerVerdictStats }));
 vi.mock('../../../services/socket', () => ({ default: socket }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 const renderTab = () => render(<MemoryRouter><LearningTab /></MemoryRouter>);
 
@@ -189,15 +189,12 @@ describe('LearningTab reviewer verdicts', () => {
     expect(screen.getByText(/2 archived runs could not be read/)).toBeInTheDocument();
   });
 
-  it('re-reads when runs are deleted or cleared, not when they are only archived', async () => {
+  it('re-reads reviewer verdicts when agent runs change', async () => {
     renderTab();
     expect(await screen.findByText('Tasks Analyzed')).toBeInTheDocument();
     const initialReads = api.getReviewerVerdictStats.mock.calls.length;
 
-    await act(async () => { socket.receive('cos:agents:changed', { action: 'auto-archive', archived: 2 }); });
-    expect(api.getReviewerVerdictStats).toHaveBeenCalledTimes(initialReads);
-
-    await act(async () => { socket.receive('cos:agents:changed', { action: 'cleared-completed', cleared: 3, retained: 0 }); });
+    await act(async () => { socket.receive('cos:agents:changed', {}); });
     expect(api.getReviewerVerdictStats).toHaveBeenCalledTimes(initialReads + 1);
   });
 

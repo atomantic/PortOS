@@ -453,7 +453,10 @@ describe('BlenderModelDetail', () => {
     it('updates the reference full-size link when the fallback /data/image-refs/ URL loads', async () => {
       serve(compared());
       renderAt(`/3d/blender/${ID}/compare`);
-      const img = await screen.findByRole('img', { name: 'Overall sheet reference' });
+      await screen.findByRole('img', { name: 'Overall sheet reference' });
+      // The build report still loading re-renders this view; act on what it settles to.
+      await act(async () => {});
+      const img = screen.getByRole('img', { name: 'Overall sheet reference' });
       const link = screen.getByRole('link', { name: 'Open the reference full size' });
       expect(link).toHaveAttribute('href', '/data/images/sheet.png');
       fireEvent.error(img);

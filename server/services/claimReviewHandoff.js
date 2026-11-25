@@ -16,10 +16,9 @@ import { expandHome } from '../lib/paths.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { localReviewLifecycle } from '../lib/localReviewLifecycle.js';
 import { PR_COMPLETIONS, resolvePrCompletion } from '../lib/prDisposition.js';
-import { awaitsRequiredHumanReview } from '../lib/pullRequestReadiness.js';
 import { githubRepoSpec } from '../lib/workTracker.js';
 import { getAppDataForTask } from './agent/agentAppWorkspace.js';
-import { readPullRequest } from './prProbe.js';
+import { readPullRequest, awaitsHumanReviewOnRequiredChecks } from './prProbe.js';
 import { listWorktrees } from './worktreeManager.js';
 
 const PR_FIELDS = 'number,url,state,isDraft,isCrossRepository,headRefName,headRefOid,mergeable,reviewDecision,statusCheckRollup';
@@ -46,7 +45,7 @@ async function inspectBranch({ branch, source, trees, repoSpec, forgeAccount, re
     return unverified('pull-request-head-unverified');
   }
   if (view.state === 'MERGED') return { status: 'verified', pullRequest: { branch, number: view.number, url: view.url, head, state: 'MERGED' } };
-  if (!awaitsRequiredHumanReview(view)) return unverified('pull-request-not-awaiting-human-review');
+  if (!await awaitsHumanReviewOnRequiredChecks(view, { repoPath: source, forgeAccount, repoSpec })) return unverified('pull-request-not-awaiting-human-review');
   const holders = trees.filter(tree => shortBranch(tree.branch) === branch);
   if (holders.length > 1 || (reviewRequired && holders.length !== 1)) return unverified('checkout-unavailable');
   if (holders.length === 1) {

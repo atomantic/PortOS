@@ -19,6 +19,7 @@ import AddToThreadButton from '../threads/AddToThreadButton';
 import { messageReadState, partitionAccountsBySyncMode } from '../../lib/messageSyncModes';
 import LoadFailedState from '../ui/LoadFailedState';
 import { useSocketResource } from '../../hooks/useSocketResource';
+import { useSingleFlight } from '../../hooks/useSingleFlight';
 
 const ACTION_CONFIG = {
   reply:   { icon: Reply,   color: 'text-port-accent',  bg: 'bg-port-accent/10',  hoverBg: 'hover:bg-port-accent/20',  label: 'Reply' },
@@ -53,6 +54,13 @@ const READ_STATE_FROM_CLASS = { unread: 'text-white font-medium', unknown: 'text
 const READ_STATE_SUBJECT_CLASS = { unread: 'text-gray-300', unknown: 'text-gray-400', read: 'text-gray-500' };
 
 const EMPTY_ACTION_CLASS = 'inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm transition-colors disabled:opacity-50';
+
+/** Toast text for the fetch-full response: updated of total, plus a truncation note. */
+export const fetchFullToastMessage = ({ updated = 0, total = 0, truncated = false } = {}) => {
+  if (!total) return 'Nothing to fetch';
+  const base = `Fetched full content for ${updated} of ${pluralize(total, 'message')}`;
+  return truncated ? `${base} — more remain, run again to continue` : base;
+};
 
 /**
  * Newest `lastSyncAt` across the given accounts, or `null` when none has ever
@@ -345,8 +353,7 @@ export default function InboxTab({ accounts }) {
     }));
   };
 
-  const handleQuickReply = async (msg, e) => {
-    e.stopPropagation();
+  const handleQuickReply = useSingleFlight(async (msg) => {
     const account = accountList.find(a => a.id === msg.accountId) || accountList[0];
     if (!account) return toast.error('No account available');
     toast('Generating AI reply...', { icon: '✨' });
@@ -361,7 +368,7 @@ export default function InboxTab({ accounts }) {
       toast.success('Draft created — opening Drafts');
       navigate('/messages/drafts');
     }
-  };
+  }, (msg) => msg.id);
 
   const handleAction = async (msg, action, e) => {
     e.stopPropagation();
@@ -535,7 +542,7 @@ export default function InboxTab({ accounts }) {
               const result = await fetchFullContent(selectedAccount).catch(() => null);
               setFetchingFull(false);
               if (!result) return;
-              toast.success(`Fetched full content for ${pluralize(result.count || 0, 'message')}`);
+              toast.success(fetchFullToastMessage(result));
               fetchMessages();
             }}
             disabled={fetchingFull}
@@ -651,7 +658,7 @@ export default function InboxTab({ accounts }) {
                   const isActionable = ['archive', 'delete'].includes(actionKey) && ACTIONABLE_SOURCES.includes(msgSource);
 
                   const onClick = actionKey === 'reply'
-                    ? (e) => handleQuickReply(msg, e)
+                    ? (e) => { e.stopPropagation(); handleQuickReply(msg); }
                     : actionKey === 'review'
                       ? (e) => { e.stopPropagation(); openMessage(msg); }
                       : isActionable

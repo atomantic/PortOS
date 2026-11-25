@@ -8,7 +8,7 @@
  * refused so a paste cannot silently start a 300-video batch download.
  */
 import { describe, it, expect } from 'vitest';
-import { isYoutubeVideoUrl, youtubeVideoId, youtubeVideoIdFromUrl } from './youtubeUrl.js';
+import { isYoutubeVideoUrl, youtubeVideoIdFromUrl } from './youtubeUrl.js';
 
 const ACCEPTED = [
   'https://youtu.be/oCnxnaVg0bY',
@@ -52,10 +52,6 @@ describe('isYoutubeVideoUrl', () => {
 describe('youtubeVideoIdFromUrl', () => {
   it.each(ACCEPTED)('extracts the one video id from %j', (url) => {
     expect(youtubeVideoIdFromUrl(url)).toBe('oCnxnaVg0bY');
-  });
-
-  it('is what the `youtubeVideoId` alias resolves to', () => {
-    expect(youtubeVideoId).toBe(youtubeVideoIdFromUrl);
   });
 
   it('returns null when there is no id to read', () => {

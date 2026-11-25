@@ -1,10 +1,9 @@
+import { shotButtonClass as BUTTON } from './controlClasses.js';
 import { useEffect, useRef, useState } from 'react';
 import { Activity, Play, RefreshCw, X } from 'lucide-react';
 import { buildMusicVideoRenderPreview, musicVideoShotRenderUrl } from '../../services/apiMusicVideo.js';
 import { useLocalStorageBool } from '../../hooks/useLocalStorageBool.js';
 import { formatDurationSec } from '../../utils/formatters.js';
-
-const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-xs hover:bg-port-border/40 disabled:opacity-50 pointer-fine:sm:min-h-0';
 
 /**
  * The composed final render's shots finished so far, stitched in order up to

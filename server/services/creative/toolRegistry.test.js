@@ -105,7 +105,6 @@ import { getSettings } from '../settings.js';
 import {
   CREATIVE_TOOLS,
   getToolSpecs,
-  getAllCreativeToolNames,
   getCreativeToolMetadata,
   filterDestructive,
   getCommissionPlanError,
@@ -126,7 +125,7 @@ beforeEach(() => {
 
 describe('registry shape', () => {
   it('registers the seven-domain tool inventory with unique names', () => {
-    const names = getAllCreativeToolNames();
+    const names = CREATIVE_TOOLS.map((tool) => tool.name);
     expect(new Set(names).size).toBe(names.length);
     for (const prefix of ['universe_', 'storyBuilder_', 'writersRoom_', 'pipeline_', 'media_', 'catalog_', 'cd_']) {
       expect(names.some((n) => n.startsWith(prefix))).toBe(true);
@@ -142,7 +141,7 @@ describe('registry shape', () => {
   });
 
   it('every registered tool name is function-calling-safe (no dots)', () => {
-    for (const name of getAllCreativeToolNames()) {
+    for (const name of CREATIVE_TOOLS.map((tool) => tool.name)) {
       expect(name).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
     }
   });

@@ -284,37 +284,3 @@ function getGeneralPromptHints(taskType) {
 
   return hints;
 }
-
-/**
- * Get prompt improvement recommendations for all task types
- * Returns a summary suitable for display in the Learning tab
- */
-export async function getAllPromptRecommendations() {
-  const data = await loadLearningData();
-  const allRecommendations = [];
-
-  for (const taskType of Object.keys(data.byTaskType)) {
-    const recommendations = await getPromptImprovementRecommendations(taskType);
-    if (recommendations.hasData && recommendations.completed >= 3) {
-      allRecommendations.push({
-        taskType,
-        status: recommendations.status,
-        successRate: recommendations.successRate,
-        completed: recommendations.completed,
-        topSuggestion: recommendations.suggestions[0] || null,
-        errorCount: recommendations.errorInsights.length,
-        hintCount: recommendations.promptHints.length,
-        failureSignatureCount: recommendations.failureSignatures.length
-      });
-    }
-  }
-
-  // Sort by priority (critical first, then needs-improvement, etc.)
-  const priorityOrder = { critical: 0, 'needs-improvement': 1, moderate: 2, good: 3, 'insufficient-data': 4 };
-  // Use ?? not || so the highest-priority status (`critical`, value 0) isn't
-  // treated as falsy and bumped to the catch-all 5 — that would sort the most
-  // urgent recommendations LAST, inverting the intended "critical first" order.
-  allRecommendations.sort((a, b) => (priorityOrder[a.status] ?? 5) - (priorityOrder[b.status] ?? 5));
-
-  return allRecommendations;
-}

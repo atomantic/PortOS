@@ -3,7 +3,7 @@ import { it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { basename, join } from 'node:path';
 import {
   APP_QUALITY_SNAPSHOT_FILENAME, APP_QUALITY_SNAPSHOT_MAX_BYTES, QUALITY_SNAPSHOT_BRANCH,
-  readAppQualitySnapshotFile, readStoredQualitySnapshot, publishAppQualitySnapshot,
+  readStoredQualitySnapshot, publishAppQualitySnapshot,
   migrateAppQualitySnapshot, __resetQualitySnapshotPublishState,
 } from './appQualitySnapshotFile.js';
 import {
@@ -65,22 +65,9 @@ beforeEach(() => {
 });
 afterEach(() => log.mockRestore());
 
-// Uniquely pins the opt-in snapshot file contract: numeric-only content and the
-// skips that must never touch the app's live checkout or its git index.
-it('reads a committed snapshot and answers null for every unusable file', async () => {
-  const read = body => readAppQualitySnapshotFile('/repo/example-app', { readFile: async () => body });
-  expect(await read(JSON.stringify(snapshot()))).toEqual(snapshot());
-  expect(await read('not json')).toBeNull();
-  expect(await read('[1,2]')).toBeNull();
-  expect(await read('"a string"')).toBeNull();
-  expect(await read(' '.repeat(APP_QUALITY_SNAPSHOT_MAX_BYTES + 1))).toBeNull();
-  expect(await readAppQualitySnapshotFile('', { readFile: async () => '{}' })).toBeNull();
-  expect(await readAppQualitySnapshotFile('/repo/example-app', { readFile: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); } })).toBeNull();
+it('lands a changed snapshot from a detached worktree so the PR branch stays attachable', async () => {
   expect(APP_QUALITY_SNAPSHOT_FILENAME).toBe('.quality.json');
   expect(QUALITY_SNAPSHOT_BRANCH).toBe('portos/quality-snapshot');
-});
-
-it('lands a changed snapshot from a detached worktree so the PR branch stays attachable', async () => {
   const deps = testDeps();
   expect(await publishAppQualitySnapshot(app, deps)).toEqual({
     published: true, hash: 'abc1234', path: '.quality.json',

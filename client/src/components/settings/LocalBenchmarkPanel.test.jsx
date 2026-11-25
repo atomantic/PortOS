@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router';
 
 vi.mock('../../services/apiLocalLlm.js', () => ({ startLocalLlmAssessmentBenchmark: vi.fn() }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import { startLocalLlmAssessmentBenchmark } from '../../services/apiLocalLlm.js';
 import LocalBenchmarkPanel, { benchmarkCandidates, benchmarkGenerations } from './LocalBenchmarkPanel.jsx';

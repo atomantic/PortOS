@@ -31,9 +31,7 @@ vi.mock('../../services/apiSprites.js', () => ({
   deleteSpriteAnimationTrack: (...args) => deleteSpriteAnimationTrack(...args),
 }));
 
-vi.mock('../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 import AnimationTypesDrawer from './AnimationTypesDrawer.jsx';
 

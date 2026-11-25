@@ -12,6 +12,7 @@ import Banner from '../components/ui/Banner.jsx';
 import { usePagedCollection } from '../hooks/usePagedCollection';
 import {
   listMusicVideoProjectSummaries,
+  listMusicVideoProjectVersions,
   createMusicVideoProject,
   cloneMusicVideoProject,
   updateMusicVideoProject,
@@ -27,6 +28,7 @@ import AutonomousStartDrawer from '../components/musicVideo/AutonomousStartDrawe
 import { automationDraftFrom, automationFromDraft } from '../lib/musicVideoAutomation.js';
 import { listUniverseNames } from '../services/apiUniverseBuilder.js';
 import { MUSIC_VIDEO_PAGE_ID, MUSIC_VIDEO_SCROLL_ID } from '../components/musicVideo/MusicVideoLayout.jsx';
+import { distinctMusicVideoLabels, groupMusicVideoProjects, musicVideoVersionLabels } from '../lib/musicVideoProjectList.js';
 import ProjectIndex from '../components/musicVideo/ProjectIndex.jsx';
 import useMusicVideoJobSlots from '../components/musicVideo/useMusicVideoJobSlots.js';
 import useProjectSummarySync from '../components/musicVideo/useProjectSummarySync.js';
@@ -45,9 +47,14 @@ const emptyCreateForm = () => ({
 
 // Format project label for the header dropdown: omit trailing media type parentheticals
 // like "(experimental, images)" or "(revision)" so the title remains clean.
-function formatProjectPickerLabel(name) {
-  if (typeof name !== 'string') return '';
-  return name.replace(/\s*\([^)]*\)$/, '').trim();
+function formatProjectPickerLabel(project, versioned) {
+  if (typeof project.name !== 'string') return '';
+  const name = project.name.replace(/\s*\([^)]*\)$/, '').trim();
+  if (!versioned) return name;
+  const version = `v${project.version || 1}`;
+  // Auto-forks already have a bare version suffix; show it once in picker format.
+  const title = name.endsWith(` ${version}`) ? name.slice(0, -(version.length + 1)) : name;
+  return `${title} (${version})`;
 }
 
 // Stable fetcher for useListResource — the hook re-runs on identity change.
@@ -181,6 +188,14 @@ export default function MusicVideo() {
     ? () => setSelectedReload((n) => n + 1)
     : () => { const collection = stageOnlyParam ? summaries : indexSummaries; if (!collection.loading) collection.reload(); };
   const selected = selectedLoaded ? selectedProject : null;
+  const selectedRoot = selected ? selected.rootProjectId || selected.id : null;
+  // Keep the request identity through the brief gap between the cached record
+  // and its URL changing on a fork. Only the selected root may display results.
+  const versionRequestRoot = selectedId && selectedProject ? selectedProject.rootProjectId || selectedProject.id : null;
+  const loadVersions = useCallback(() => listMusicVideoProjectVersions(versionRequestRoot, { silent: true }), [versionRequestRoot]);
+  const versionFamily = useListResource(loadVersions, { enabled: !!versionRequestRoot, retainOnRetry: true });
+
+  const { retry: retryVersions, setItems: setFamilyVersions } = versionFamily;
 
   const [cloningId, setCloningId] = useState(null);
   const cloning = !!cloningId;
@@ -236,14 +251,26 @@ export default function MusicVideo() {
   const openProject = (proj) => {
     summaries.setItems((prev) => [proj, ...prev.filter((p) => p.id !== proj.id)]);
     setSelectedProject(proj);
+    if (selectedRoot && (proj.rootProjectId || proj.id) === selectedRoot) retryVersions();
   };
   // The open project leads; summaries fill in the rest of the picker.
   const sortedProjects = useMemo(() => {
     const pickerItems = !summaries.loaded && !stageOnlyParam ? indexSummaries.items : summaries.items;
     const byId = new Map(pickerItems.map((p) => [p.id, p]));
+    for (const version of versionFamily.items) {
+      if ((version.rootProjectId || version.id) === selectedRoot && !byId.has(version.id)) byId.set(version.id, version);
+    }
     if (selected) byId.set(selected.id, selected);
     return [...byId.values()].sort(compareMusicVideoProjectsNewestFirst);
-  }, [selected, summaries.items, summaries.loaded, indexSummaries.items, stageOnlyParam]);
+  }, [selected, summaries.items, summaries.loaded, indexSummaries.items, stageOnlyParam, versionFamily.items, selectedRoot]);
+  const versionGroups = useMemo(() => groupMusicVideoProjects(sortedProjects), [sortedProjects]);
+  const projectPickerLabels = useMemo(() => {
+    const versionedRoots = new Set(versionGroups.filter(({ versions }) => versions.length > 1).map(({ rootId }) => rootId));
+    return distinctMusicVideoLabels(sortedProjects, (project) =>
+      formatProjectPickerLabel(project, Number.isInteger(project.version) || versionedRoots.has(project.rootProjectId || project.id)));
+  }, [sortedProjects, versionGroups]);
+  const selectedVersions = versionGroups.find(({ rootId }) => rootId === selectedRoot)?.versions ?? [];
+  const versionLabels = musicVideoVersionLabels(selectedVersions);
   useEffect(() => {
     if (!stageOnlyParam || !summaries.loaded || summaries.error) return;
     const newest = sortedProjects[0];
@@ -524,6 +551,7 @@ export default function MusicVideo() {
     });
     summaries.setItems((prev) => prev.filter((p) => p.id !== id));
     indexSummaries.setItems((prev) => prev.filter((p) => p.id !== id));
+    setFamilyVersions((prev) => prev.filter((p) => p.id !== id));
     indexSummaries.reconcileFirst();
     if (selectedId === id) navigate('/music-video');
   };
@@ -577,7 +605,7 @@ export default function MusicVideo() {
             >
               <option value="">{loading ? 'Loading projects…' : 'Select a project…'}</option>
               {sortedProjects.map((project) => (
-                <option key={project.id} value={project.id}>{formatProjectPickerLabel(project.name)}</option>
+                <option key={project.id} value={project.id}>{projectPickerLabels.get(project.id)}</option>
               ))}
             </select>
             {!selected && (
@@ -720,6 +748,22 @@ export default function MusicVideo() {
               onTrackImported={onTrackImported}
               onRename={handleRename}
               renameForm={renameForm}
+              versionPicker={selectedVersions.length > 1 ? (
+                <select
+                  aria-label="Project version"
+                  value={selected.id}
+                  disabled={youtube.editJob.active}
+                  onChange={(e) => selectProject(e.target.value, resolveStageParam(routeStage))}
+                  className="ml-1 min-h-[44px] max-w-[45vw] shrink-0 rounded border border-port-border bg-port-bg sm:max-w-52 px-1.5 text-xs text-port-text-muted disabled:opacity-50 pointer-fine:sm:min-h-[32px]"
+                >
+                  {selectedVersions.map((version) => <option key={version.id} value={version.id}>{versionLabels.get(version.id)}</option>)}
+                </select>
+              ) : versionFamily.state === 'error' ? (
+                <button type="button" aria-label="Retry loading project versions" onClick={retryVersions}
+                  className="ml-1 min-h-[44px] shrink-0 rounded border border-port-border px-1.5 text-xs text-port-warning pointer-fine:sm:min-h-[32px]">
+                  v{selected.version || 1} · Retry
+                </button>
+              ) : null}
               deletion={deletion}
             />
           </Suspense>

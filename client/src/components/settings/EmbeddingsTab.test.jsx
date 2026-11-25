@@ -16,9 +16,7 @@ vi.mock('../../services/apiCatalog', () => ({
   getCatalogStats: vi.fn().mockResolvedValue({ total: 120, withEmbeddings: 70 }),
   backfillCatalogEmbeddings: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
-}));
+vi.mock('../ui/Toast');
 
 import EmbeddingsTab from './EmbeddingsTab.jsx';
 import { getSettings, updateSettings } from '../../services/apiSystem';

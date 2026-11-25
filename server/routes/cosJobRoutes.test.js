@@ -14,9 +14,6 @@ vi.mock('../services/cos/cos.js', () => ({
 vi.mock('../services/autonomousJobs.js', () => ({
   getAllJobs: vi.fn(),
   getJobStats: vi.fn(),
-  getDueJobs: vi.fn(),
-  INTERVAL_OPTIONS: ['hourly', 'daily', 'weekly'],
-  getAllowedCommands: vi.fn(),
   getJob: vi.fn(),
   createJob: vi.fn(),
   updateJob: vi.fn(),
@@ -35,7 +32,6 @@ vi.mock('../services/autonomousJobs/incidents.js', () => ({
 }));
 
 vi.mock('../services/jobGates.js', () => ({
-  checkJobGate: vi.fn(),
   hasGate: vi.fn(),
   getRegisteredGates: vi.fn()
 }));
@@ -56,7 +52,7 @@ vi.mock('../services/userTimezone.js', () => ({
 import { addTask } from '../services/cos/cosTaskStore.js';
 import { forceSpawnTask } from '../services/cos/cos.js';
 import * as autonomousJobs from '../services/autonomousJobs.js';
-import { checkJobGate, hasGate, getRegisteredGates } from '../services/jobGates.js';
+import { hasGate, getRegisteredGates } from '../services/jobGates.js';
 import { parseCronToNextRun } from '../services/eventScheduler.js';
 import { computeNextJobRun } from '../services/autonomousJobs/scheduler.js';
 import { getUserTimezone } from '../services/userTimezone.js';
@@ -159,39 +155,6 @@ describe('CoS Job Routes', () => {
 
       expect(computeNextJobRun).toHaveBeenCalledWith(expect.objectContaining({ id: 'j1' }), 'America/Los_Angeles');
       expect(response.body.jobs.map(j => j.nextRunAt)).toEqual(['2026-11-09T11:00:00.000Z', null]);
-    });
-  });
-
-  describe('GET /api/cos/jobs/due', () => {
-    it('should return due jobs', async () => {
-      autonomousJobs.getDueJobs.mockResolvedValue([{ id: 'j1' }]);
-
-      const response = await request(app).get('/api/cos/jobs/due');
-
-      expect(response.status).toBe(200);
-      expect(response.body.due).toHaveLength(1);
-    });
-  });
-
-  describe('GET /api/cos/jobs/intervals', () => {
-    it('should return available intervals', async () => {
-      const response = await request(app).get('/api/cos/jobs/intervals');
-
-      expect(response.status).toBe(200);
-      expect(response.body.intervals).toContain('daily');
-    });
-  });
-
-  describe('GET /api/cos/jobs/gates', () => {
-    it('should return all gate results', async () => {
-      getRegisteredGates.mockReturnValue(['j1']);
-      checkJobGate.mockResolvedValue({ shouldRun: true, reason: 'approved' });
-
-      const response = await request(app).get('/api/cos/jobs/gates');
-
-      expect(response.status).toBe(200);
-      expect(response.body.gates).toHaveLength(1);
-      expect(response.body.gates[0].shouldRun).toBe(true);
     });
   });
 

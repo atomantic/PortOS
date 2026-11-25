@@ -11,7 +11,7 @@ vi.mock('../../services/apiApps', () => ({
   getAppQualityHistory: vi.fn().mockResolvedValue({ points: [], totalCategories: 25 }),
   publishAppQualitySnapshot: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
+vi.mock('../ui/Toast');
 
 import { publishAppQualitySnapshot } from '../../services/apiApps';
 import toast from '../ui/Toast';
@@ -288,4 +288,25 @@ it('omits the target-met pill below the healthy threshold', async () => {
   render(<MemoryRouter><AppQuality app={{ id: 'example', quality: { score: 70, categories: [] } }} detail /></MemoryRouter>);
   await screen.findByText(/No scored assessments/);
   expect(screen.queryByText('Target met (85+)')).not.toBeInTheDocument();
+});
+
+describe('AppQuality audit scope summary', () => {
+  const featurePriorities = [
+    { id: 'a', label: 'Checkout', paths: ['src/checkout/**'], priority: 'P0' },
+    { id: 'b', label: 'Legacy importer', paths: ['legacy/**', 'scripts/import-*.js'], priority: 'P3' },
+    { id: 'c', label: 'Core', paths: ['src/core/**'], priority: 'P1' },
+  ];
+
+  it('shows counts per tier and the paths on expand, only for an app with entries', async () => {
+    const { rerender } = render(<MemoryRouter><AppQuality app={{ id: 'example', quality: { score: 80, categories: [] } }} detail /></MemoryRouter>);
+    await screen.findByText(/No scored assessments/);
+    expect(screen.queryByText('Audit scope')).not.toBeInTheDocument();
+
+    rerender(<MemoryRouter><AppQuality app={{ id: 'example', featurePriorities, quality: { score: 80, categories: [] } }} detail /></MemoryRouter>);
+    const summary = screen.getByText('Audit scope');
+    expect(summary).toHaveTextContent('P0 1 · P3 1');
+    fireEvent.click(summary);
+    expect(screen.getByText('legacy/**, scripts/import-*.js')).toBeInTheDocument();
+    expect(screen.queryByText('src/core/**')).not.toBeInTheDocument();
+  });
 });

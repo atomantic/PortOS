@@ -1,3 +1,4 @@
+import { PROVIDERS_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import { isVisionCapableCodexTuiProvider } from '../lib/codex.js';
 /**
  * Reverse-engineer an image-gen and/or video-gen prompt from a still or clip.
@@ -168,7 +169,7 @@ function assertVisionProvider(provider) {
   }
   if (provider.enabled === false) {
     throw new ServerError(
-      `Provider "${provider.name || provider.id}" is disabled — enable it in Settings → Providers first`,
+      `Provider "${provider.name || provider.id}" is disabled — enable it in ${PROVIDERS_PAGE_BREADCRUMB} first`,
       { status: 400, code: 'PROVIDER_DISABLED' },
     );
   }

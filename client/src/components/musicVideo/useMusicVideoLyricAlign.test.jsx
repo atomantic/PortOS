@@ -4,7 +4,7 @@ import useMusicVideoLyricAlign, { lyricAlignStageLabel } from './useMusicVideoLy
 import { MockEventSource, lastEventSource } from '../../test/mockEventSource';
 import { alignMusicVideoLyrics } from '../../services/apiMusicVideo.js';
 
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 vi.mock('../../services/apiMusicVideo.js', () => ({
   alignMusicVideoLyrics: vi.fn(async () => ({ jobId: 'job-1' })),
   musicVideoLyricAlignEventsUrl: (id) => `/events/${id}`,

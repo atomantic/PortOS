@@ -61,11 +61,6 @@ export async function normalizeTags(labels = [], { client } = {}) {
   return entries.map((e) => canonical.get(e.id) ?? e.label);
 }
 
-export async function getTag(id) {
-  const result = await query(`SELECT * FROM catalog_tags WHERE id = $1`, [id]);
-  return rowToTag(result.rows[0]);
-}
-
 /**
  * Autocomplete / list canonical tags. `q` does a case-insensitive prefix-then-
  * substring match on label (prefix matches rank first); absent `q` returns the

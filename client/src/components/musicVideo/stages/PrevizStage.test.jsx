@@ -24,7 +24,7 @@ vi.mock('../../../hooks/useProviderModels.js', () => ({
     setSelectedModel: vi.fn(),
   }),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 vi.mock('./PrevizAi.jsx', () => ({ default: () => null }));
 vi.mock('../../../services/apiCatalog.js', () => ({
   createCatalogIngredient: vi.fn(async (body) => ({ id: 'cat-world', ...body })),

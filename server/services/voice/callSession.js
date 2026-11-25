@@ -37,7 +37,6 @@ import { getLocalMinutes, isWithinQuietHours } from './proactiveSpeech.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from '../notifications.js';
 import { EventEmitter } from 'events';
 
-export const CALL_STATES = ['idle', 'dialing', 'connected', 'listening', 'speaking', 'ended'];
 export const PROBE_INTERVAL_MS = 2_000;
 // A caller who has said nothing for this long has walked away or hung up
 // somewhere PortOS cannot see.
@@ -184,18 +183,6 @@ export function peekCallOpeningLine() {
 /** Retire the opening line once it has actually been delivered. */
 export function clearCallOpeningLine() {
   session.openingLine = '';
-}
-
-/**
- * Take the pending opening line, clearing it. Consume-once on purpose: the
- * host speaks it on the first `connected` observation, and `voice:call:state`
- * is broadcast more than once per call.
- */
-export function takeCallOpeningLine() {
-  if (!publicState().active) return '';
-  const line = peekCallOpeningLine();
-  clearCallOpeningLine();
-  return line;
 }
 
 /**

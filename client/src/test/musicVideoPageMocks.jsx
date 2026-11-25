@@ -15,7 +15,7 @@ import { expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useNavigate, useLocation } from 'react-router';
 import MusicVideo from '../pages/MusicVideo.jsx';
-import { listMusicVideoProjects, listMusicVideoProjectSummaries, getMusicVideoProject, getMusicVideoCatalogCompletion } from '../services/apiMusicVideo.js';
+import { listMusicVideoProjects, listMusicVideoProjectSummaries, listMusicVideoProjectVersions, getMusicVideoProject, getMusicVideoCatalogCompletion } from '../services/apiMusicVideo.js';
 vi.mock('../hooks/useMediaUsages', () => ({ useMediaUsages: () => ({}), refreshMediaUsages: () => Promise.resolve() }));
 vi.mock('../services/apiCatalog.js', async (importOriginal) => ({ ...await importOriginal(), listCatalogIngredientMedia: vi.fn(async () => []), listCatalogIngredientsMedia: vi.fn(async () => ({})) }));
 vi.mock('../hooks/usePrevizJobs.js', () => ({ default: () => ({ running: [], finished: null, drafted: 0, setCount: 0, step: null }) }));
@@ -76,6 +76,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
     const res = await listMusicVideoProjects(params, options);
     return Array.isArray(res) ? { items: res, total: res.length, nextCursor: null } : res;
   }),
+  listMusicVideoProjectVersions: vi.fn(async () => []),
   getMusicVideoCatalogCompletion: vi.fn(async () => []),
   createMusicVideoProject: vi.fn(),
   cloneMusicVideoProject: vi.fn(),
@@ -146,7 +147,6 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   previewMusicVideoTreatmentApply: vi.fn(),
   applyMusicVideoTreatment: vi.fn(),
   syncMusicVideoTreatmentFromShotSheet: vi.fn(),
-  reviewMusicVideoTreatmentProof: vi.fn(),
   renderMusicVideoExcerpt: vi.fn(async () => ({ jobId: 'mve-job-1', excerptId: 'mve-job-1' })),
   musicVideoExcerptRenderEventsUrl: (jobId) => `/api/music-video/excerpt/${jobId}/events`,
   inspectMusicVideoDcp: vi.fn(),
@@ -330,7 +330,6 @@ vi.mock('../services/apiImageVideo.js', () => ({
       { id: 'wan22_t2v_a14b', name: 'Wan T2V', mode: 't2v' },
     ],
   })),
-  listVideoHistory: vi.fn(async () => [{ id: 'rh-9', filename: 'final.mp4' }]),
   // Sidecar lookup behind useHydratedPreviewRoute: the board's scene prompt is
   // only a label — `useMusicVideoSceneMedia` suffixes `concept.style` onto it
   // before rendering, so only the sidecar knows what the renderer was sent.
@@ -345,7 +344,9 @@ vi.mock('../services/apiImageVideo.js', () => ({
   // Scene refs are a projection, so the lightbox resolves variant lineage and
   // any variant it opens through the gallery rather than this page's list.
   listImageVariants: vi.fn(async () => ({ items: [] })),
-  listMediaGalleryPage: vi.fn(async () => ({ items: [] })),
+  listMediaGalleryPage: vi.fn(async ({ kind } = {}) => kind === 'video'
+    ? { items: [{ kind: 'video', data: { id: 'rh-9', filename: 'final.mp4', compact: true } }], total: 1 }
+    : { items: [], total: 0 }),
 }));
 vi.mock('../services/apiTracks.js', () => ({
   listTracks: vi.fn(async () => []),
@@ -531,6 +532,7 @@ export function installMusicVideoPageHooks() {
       const res = await listMusicVideoProjects(params, options);
       return Array.isArray(res) ? { items: res, total: res.length, nextCursor: null } : res;
     });
+    listMusicVideoProjectVersions.mockReset().mockResolvedValue([]);
     getMusicVideoProject.mockReset();
     getMusicVideoProject.mockImplementation(async id => (await listMusicVideoProjects({ silent: true })).find(project => project.id === id));
     getMusicVideoCatalogCompletion.mockReset();

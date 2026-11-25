@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   buildAgentGeneration,
   buildOpencodeConfig,
-  buildOpencodeConfigContent,
   buildOpencodeEnvVars,
   opencodeLocalBaseUrl,
   toBareModelIds,
@@ -103,6 +102,31 @@ describe('buildOpencodeConfig', () => {
     expect(base.provider.ollama.models['qwen2.5:7b']).toBeUndefined();
   });
 
+  it('preserves the configured context, output and model options of a generated wrapper entry', () => {
+    const base = { provider: { vllm: { models: {
+      example: { name: 'Customized', limit: { context: 262144, output: 4096 }, tool_call: false },
+    } } } };
+    const config = buildOpencodeConfig('vllm/example', base, 'vllm');
+    expect(config.provider.vllm.models.example).toEqual({
+      name: 'Customized', limit: { context: 262144, output: 4096 }, tool_call: true,
+    });
+  });
+
+  it('applies a preset window to only the chosen model without overwriting raw OpenCode options', () => {
+    const raw = { provider: { vllm: { models: {
+      example: { name: 'Customized', limit: { context: 65536, output: 4096 } },
+      alternate: { limit: { context: 32768, output: 2048 } },
+    } } } };
+    const provider = { command: 'opencode', vllmBacked: true, defaultModel: 'example',
+      envVars: { OPENCODE_CONFIG_CONTENT: JSON.stringify(raw) },
+      harnessContext: { model: 'vllm/example', tokens: 262144 } };
+    const { OPENCODE_CONFIG_CONTENT } = buildOpencodeEnvVars(provider, 'alternate');
+    const { models } = JSON.parse(OPENCODE_CONFIG_CONTENT).provider.vllm;
+    expect(models.example.limit).toEqual({ context: 262144, output: 4096 });
+    expect(models.alternate.limit).toEqual({ context: 32768, output: 2048 });
+    expect(JSON.parse(provider.envVars.OPENCODE_CONFIG_CONTENT)).toEqual(raw);
+  });
+
   it('declares MTPLX models under provider.mtplx with its local endpoint', () => {
     const cfg = buildOpencodeConfig('mtplx/mtplx', null, 'mtplx');
     expect(cfg.provider.ollama).toBeUndefined();
@@ -140,24 +164,6 @@ describe('buildOpencodeConfig', () => {
     expect(Object.keys(cfg.provider.orcarouter.models).sort()).toEqual([
       'anthropic/claude-sonnet-4.6', 'orcarouter/auto',
     ]);
-  });
-});
-
-describe('buildOpencodeConfigContent', () => {
-  it('returns valid JSON with the models map nested under the provider', () => {
-    const json = buildOpencodeConfigContent('ollama/qwen2.5:7b');
-    expect(() => JSON.parse(json)).not.toThrow();
-    const parsed = JSON.parse(json);
-    expect(parsed.provider.ollama.models['qwen2.5:7b']).toEqual({
-      name: 'qwen2.5:7b',
-      tool_call: true,
-    });
-  });
-
-  it('serializes the base config (no models) for null model', () => {
-    const parsed = JSON.parse(buildOpencodeConfigContent(null));
-    expect(parsed.permission).toEqual(gated('allow'));
-    expect(parsed.provider.ollama.models).toBeUndefined();
   });
 });
 

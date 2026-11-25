@@ -39,7 +39,6 @@ const MAX_LINKED_ISSUES = 50;
 
 const failure = (code, extra = {}) => ({ ok: false, passed: false, code, ...extra });
 const isHeadRefOid = (value) => typeof value === 'string' && /^[a-f0-9]{40}$/i.test(value);
-const safeText = (value, max) => typeof value === 'string' ? value.slice(0, max) : '';
 const ELIGIBILITY_LOOKUP_CONCURRENCY = 4;
 
 function issueNumbersFromText(value, repoFullName) {
@@ -492,14 +491,5 @@ export async function runPrReviewerSecurityScan({ app, target = null, largeInput
     reviewInputs,
     usedLargeInputFallback: reviewInputs.some(input =>
       input.linkedIssues.some(issue => issue.body.length > LINKED_ISSUE_STANDARD_BODY_MAX_CHARS)),
-  };
-}
-
-export function summarizeSecurityScanReport(report) {
-  return {
-    number: report?.number || null,
-    safe: report?.safe === true,
-    findingCount: Array.isArray(report?.securityFindings) ? report.securityFindings.length : 0,
-    guardId: safeText(report?.guardId, 100) || MODEL_ABUSE_GUARD.id,
   };
 }

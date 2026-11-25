@@ -28,6 +28,7 @@ import { isSchemaTypeCategory, resolveProviderBench } from '../lib/provider/prov
 import { isGenerationModel, isVisionCapableCliProvider } from '../lib/localModelHeuristics.js';
 import { contextWindowRejection, knownContextWindow } from '../lib/aiToolkit/providerStatus.js';
 import { isOllamaBackedProvider } from '../lib/aiToolkit/internal/ollamaBacked.js';
+import { hasLocalRuntimeMarker } from '../lib/aiToolkit/internal/localRuntimeMarkers.js';
 import { apiRunAbsoluteTimeoutMs } from '../lib/aiToolkit/internal/runTimeouts.js';
 import { withOllamaRuntimeContextWindow } from '../lib/ollamaContext.js';
 import { getAIToolkitInstance } from '../lib/aiToolkitState.js';
@@ -586,6 +587,7 @@ const COMPLETION_ARGS = new Set([
  *   (#9008). A headless CLI run gets no approval-bypass flag and, where the vendor has one, its
  *   tool-disable switch (`toolFreeOneShotArgs`). Rides every fallback tier; does not reach TUI runs,
  *   so a caller that must stay tool-free gates on `isToolFreeOneShotProvider` and disables fallback.
+ * @param {boolean} [args.isolateMtplxOpenCode=false] — select the isolated local MTPLX recipe for a pinned tool-free CLI request.
  * @param {*} [args.responseSchema] — the caller's declared response schema (#2350): a Zod-style
  *   schema or bare predicate. Enables Tier-2: validate a SUCCESSFUL response, coerce JSON in place,
  *   else re-request the SAME provider once with a schema-strengthened prompt before Tier 3/4. Unset =
@@ -1128,11 +1130,7 @@ function stripFallbackContext(err) {
 function isLocalInferenceProvider(provider) {
   if (provider?.type !== PROVIDER_TYPES.API) return false;
   return isOllamaBackedProvider(provider)
-    || provider.llamaBacked === true
-    || provider.lmstudioBacked === true
-    || provider.mtplxBacked === true
-    || provider.vllmBacked === true
-    || provider.sglangBacked === true
+    || hasLocalRuntimeMarker(provider)
     || isLocalEndpoint(provider.endpoint);
 }
 
@@ -1271,7 +1269,11 @@ async function executeProviderRunOnce({
   callerPolicy = null,
   allowFallback = true,
   toolFree = false,
+  isolateMtplxOpenCode = false,
 }) {
+  if (isolateMtplxOpenCode && (!toolFree || allowFallback || provider.type !== PROVIDER_TYPES.CLI)) {
+    throw new Error('The isolated OpenCode MTPLX recipe needs a pinned tool-free CLI request');
+  }
   // Caller EXECUTION-MODE policy, enforced on the EXPLICIT provider before a run
   // record exists and carried into fallback selection below, so the pin and the
   // route that might replace it are judged by one rule.
@@ -1572,7 +1574,12 @@ async function executeProviderRunOnce({
     }
 
     if (effectiveProvider.type === PROVIDER_TYPES.CLI) {
-      executeCliRun({ runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, screenshots, onData, onComplete, timeout: effectiveTimeout, toolFree, ...(admitDispatch ? { beforeExecute: admitDispatch } : {}) }).catch(safeReject);
+      executeCliRun({
+        runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, screenshots,
+        onData, onComplete, timeout: effectiveTimeout, toolFree,
+        ...(isolateMtplxOpenCode ? { isolateMtplxOpenCode } : {}),
+        ...(admitDispatch ? { beforeExecute: admitDispatch } : {}),
+      }).catch(safeReject);
     } else if (effectiveProvider.type === PROVIDER_TYPES.API) {
       // API runs take model as a first-class arg — no clone needed. The
       // toolkit's executeApiRun now owns the primary wall-clock timeout (it

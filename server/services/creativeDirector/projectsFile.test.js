@@ -8,7 +8,7 @@ vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => '
  * seeding on insert, `maybeJournalBeforeOverwrite` archiving the losing local
  * version on a true 3-way divergence, soft-delete tombstone, prune eviction)
  * without touching real `data/` or needing Postgres. The Postgres backend shares
- * the same `mergeProjectRecord` decision, so its round-trip in projectsDB.test.js
+ * the same `mergeProjectRecord` decision, so its round-trip in projectsDB.db.test.js
  * doesn't need to re-pin these.
  */
 
@@ -97,10 +97,15 @@ describe('Video treatment artifacts', () => {
     tooShort.scenes[0].durationSeconds = 5;
     const tooLong = videoTreatment();
     tooLong.scenes[0].prompt = 'x'.repeat(801);
+    const withNegativePrompt = videoTreatment();
+    withNegativePrompt.scenes[0].negativePrompt = 'fog, crowds';
     const missingPrior = videoTreatment();
     missingPrior.scenes[0].useContinuationFromPrior = true;
     await expect(file.setTreatment(p.id, tooShort)).rejects.toThrow('incompatible duration');
     await expect(file.setTreatment(p.id, tooLong)).rejects.toThrow('maximum 800 characters');
+    await expect(file.setTreatment(p.id, withNegativePrompt)).rejects.toMatchObject({
+      code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED', message: expect.stringMatching(/negative prompt \(Reactor\.inc takes none/),
+    });
     await expect(file.setTreatment(p.id, missingPrior)).rejects.toThrow('without a prior shot');
     await expect(file.updateScene(p.id, 'scene-0', { prompt: 'x'.repeat(801) })).rejects.toThrow('maximum 800 characters');
     expect(await file.getProject(p.id)).toEqual(saved);

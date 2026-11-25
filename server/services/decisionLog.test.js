@@ -45,7 +45,6 @@ describe('decisionLog.js', () => {
   let writeFile;
   let readJSONFile;
   let recordDecision;
-  let getRecentDecisions;
   let getDecisionSummary;
   let DECISION_TYPES;
 
@@ -90,7 +89,6 @@ describe('decisionLog.js', () => {
     readJSONFile = fileUtils.readJSONFile;
     const decisionLogModule = await import('./decisionLog.js');
     recordDecision = decisionLogModule.recordDecision;
-    getRecentDecisions = decisionLogModule.getRecentDecisions;
     getDecisionSummary = decisionLogModule.getDecisionSummary;
     DECISION_TYPES = decisionLogModule.DECISION_TYPES;
 
@@ -200,50 +198,6 @@ describe('decisionLog.js', () => {
 
       expect(savedData.stats.totalDecisions).toBe(1);
       expect(savedData.stats.byType[DECISION_TYPES.TASK_SKIPPED]).toBe(1);
-    });
-  });
-
-  describe('getRecentDecisions', () => {
-    it('should return decisions up to limit', async () => {
-      const decisions = Array(50).fill(null).map((_, i) => ({
-        id: `dec-${i}`,
-        type: DECISION_TYPES.IDLE,
-        reason: `Decision ${i}`,
-        timestamp: '2026-01-25T10:00:00.000Z'
-      }));
-      readJSONFile.mockResolvedValue(makeDecisionData({ decisions }));
-
-      const result = await getRecentDecisions(10);
-
-      expect(result).toHaveLength(10);
-    });
-
-    it('should filter by type', async () => {
-      const decisions = [
-        { id: 'dec-1', type: DECISION_TYPES.TASK_SELECTED, reason: 'A', timestamp: '2026-01-25T10:00:00.000Z' },
-        { id: 'dec-2', type: DECISION_TYPES.IDLE, reason: 'B', timestamp: '2026-01-25T10:00:00.000Z' },
-        { id: 'dec-3', type: DECISION_TYPES.TASK_SELECTED, reason: 'C', timestamp: '2026-01-25T10:00:00.000Z' }
-      ];
-      readJSONFile.mockResolvedValue(makeDecisionData({ decisions }));
-
-      const result = await getRecentDecisions(20, DECISION_TYPES.TASK_SELECTED);
-
-      expect(result).toHaveLength(2);
-      expect(result.every(d => d.type === DECISION_TYPES.TASK_SELECTED)).toBe(true);
-    });
-
-    it('should use default limit of 20', async () => {
-      const decisions = Array(30).fill(null).map((_, i) => ({
-        id: `dec-${i}`,
-        type: DECISION_TYPES.IDLE,
-        reason: `Decision ${i}`,
-        timestamp: '2026-01-25T10:00:00.000Z'
-      }));
-      readJSONFile.mockResolvedValue(makeDecisionData({ decisions }));
-
-      const result = await getRecentDecisions();
-
-      expect(result).toHaveLength(20);
     });
   });
 

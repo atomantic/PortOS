@@ -200,6 +200,33 @@ describe('Apps CRUD Routes', () => {
       }
     });
 
+    it('asks git about a repository once across list reads but re-checks a plain directory', async () => {
+      const plainDir = mkdtempSync(join(tmpdir(), 'portos-plain-cache-'));
+      const gitDir = mkdtempSync(join(tmpdir(), 'portos-git-cache-'));
+      try {
+        appsService.getAllApps.mockResolvedValue([
+          { id: 'plain', name: 'Plain', repoPath: plainDir, pm2ProcessNames: [] },
+          { id: 'repo', name: 'Repo', repoPath: gitDir, pm2ProcessNames: [] },
+        ]);
+        pm2Service.listProcessesStrict.mockResolvedValue([]);
+        streamingDetect.parseEcosystemFromPath.mockResolvedValue([]);
+        execFileSync('git', ['init', '-q'], { cwd: gitDir });
+        execGit.mockClear();
+
+        for (let read = 0; read < 2; read += 1) {
+          const response = await request(app).get('/api/apps');
+          expect(Object.fromEntries(response.body.map(a => [a.id, a.isGitRepo]))).toEqual({ plain: false, repo: true });
+        }
+
+        const probes = execGit.mock.calls.map(([, cwd]) => cwd);
+        expect(probes.filter(cwd => cwd === gitDir)).toHaveLength(1);
+        expect(probes.filter(cwd => cwd === plainDir)).toHaveLength(2);
+      } finally {
+        rmSync(plainDir, { recursive: true, force: true });
+        rmSync(gitDir, { recursive: true, force: true });
+      }
+    });
+
     it('leaves Git capability unknown when the probe is unavailable without relaxing worktree guards', async () => {
       const gitDir = mkdtempSync(join(tmpdir(), 'portos-unavailable-git-'));
       try {
@@ -296,6 +323,46 @@ describe('Apps CRUD Routes', () => {
       }]);
       expect(pm2Service.listProcessesStrict).toHaveBeenCalledTimes(1);
       expect(response.body[0].pm2Status).toBeUndefined();
+    });
+
+    it('makes zero Git calls for a peer probe even with configured checkouts', async () => {
+      const gitDir = mkdtempSync(join(tmpdir(), 'portos-probe-git-'));
+      try {
+        appsService.getAllApps.mockResolvedValue([{
+          id: 'repo', name: 'Repo', type: 'express', repoPath: gitDir, pm2ProcessNames: ['repo'], processes: [],
+        }]);
+        pm2Service.listProcessesStrict.mockResolvedValue([{ name: 'repo', status: 'online' }]);
+        streamingDetect.parseEcosystemFromPath.mockResolvedValue({ processes: [] });
+
+        const response = await request(app).get('/api/apps?view=probe');
+
+        expect(response.status).toBe(200);
+        expect(response.body[0]).toMatchObject({ id: 'repo', overallStatus: 'online' });
+        expect(response.body[0]).not.toHaveProperty('isGitRepo');
+        expect(execGit).not.toHaveBeenCalled();
+      } finally {
+        rmSync(gitDir, { recursive: true, force: true });
+      }
+    });
+
+    it('reads PM2 only for apps that use it, once per distinct home', async () => {
+      appsService.getAllApps.mockResolvedValue([
+        { id: 'native', name: 'Native', type: 'macos-native', pm2ProcessNames: [] },
+        { id: 'a', name: 'A', type: 'express', pm2ProcessNames: ['a'], processes: [] },
+        { id: 'b', name: 'B', type: 'express', pm2ProcessNames: ['b'], processes: [] },
+        { id: 'c', name: 'C', type: 'express', pm2Home: '/example/pm2', pm2ProcessNames: ['c'], processes: [] },
+        { id: 'native2', name: 'Native2', type: 'xcode', pm2Home: '/example/unused', pm2ProcessNames: [] },
+      ]);
+      pm2Service.listProcessesStrict.mockResolvedValue([]);
+
+      await request(app).get('/api/apps?view=probe');
+      expect(pm2Service.listProcessesStrict.mock.calls.map(([home]) => home ?? null).sort()).toEqual(['/example/pm2', null]);
+
+      pm2Service.listProcessesStrict.mockClear();
+      appsService.getAllApps.mockResolvedValue([{ id: 'native', name: 'Native', type: 'swift', pm2ProcessNames: [] }]);
+      const response = await request(app).get('/api/apps?view=probe');
+      expect(response.body[0].overallStatus).toBe('n/a');
+      expect(pm2Service.listProcessesStrict).not.toHaveBeenCalled();
     });
 
     it('does not advertise the loopback-only Eidoverse port to peers', async () => {
@@ -488,6 +555,21 @@ describe('Apps CRUD Routes', () => {
       expect(response.status).toBe(200);
       expect(appsService.updateApp).toHaveBeenCalledWith('app-001', expect.objectContaining({ name: 'Updated Name' }));
       expect(appsService.notifyAppsChanged).toHaveBeenCalledWith('update', 'app-001');
+    });
+
+    it('passes the validated featurePriorities through and rejects a malformed array without writing', async () => {
+      const featurePriorities = [{ id: 'checkout', label: 'Checkout', paths: ['src/checkout/**'], priority: 'P0' }];
+      appsService.updateApp.mockResolvedValue({ id: 'app-001', name: 'App', featurePriorities });
+
+      const ok = await request(app).put('/api/apps/app-001').send({ featurePriorities });
+      expect(ok.status).toBe(200);
+      expect(appsService.updateApp).toHaveBeenCalledWith('app-001', { featurePriorities });
+      expect(ok.body.featurePriorities).toEqual(featurePriorities);
+
+      appsService.updateApp.mockClear();
+      const bad = await request(app).put('/api/apps/app-001').send({ featurePriorities: [{ ...featurePriorities[0], paths: ["src/it's"] }] });
+      expect(bad.status).toBe(400);
+      expect(appsService.updateApp).not.toHaveBeenCalled();
     });
 
     it('should return 404 if app not found', async () => {

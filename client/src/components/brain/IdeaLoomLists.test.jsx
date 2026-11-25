@@ -15,7 +15,7 @@ vi.mock('../../services/apiBrain.js', () => ({
 vi.mock('../../services/apiNotes.js', () => ({
   getNotesVaults: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import {
   getIdeaLoomLists,
@@ -173,8 +173,34 @@ describe('IdeaLoomLists', () => {
     getIdeaLoomSettings.mockRejectedValue(new Error('Server unreachable'));
     renderPanel();
 
-    expect(await screen.findByText('Could not load IdeaLoom settings. Local lists remain available.')).toBeTruthy();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load IdeaLoom settings');
+    expect(screen.getByRole('button', { name: 'Create IdeaLoom list' })).toBeEnabled();
     expect(screen.queryByText('Vault sync is disabled. Local lists remain available.')).toBeNull();
+  });
+
+  it.each([false, true])('retries a failed lists read (has lists: %s)', async (hasLists) => {
+    getIdeaLoomLists.mockRejectedValueOnce(new Error('Offline')).mockResolvedValueOnce(hasLists ? [storedList()] : []);
+    renderPanel();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load IdeaLoom lists');
+    expect(screen.queryByText('No IdeaLoom lists yet.')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(hasLists ? 'Launch ideas' : 'No IdeaLoom lists yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps the last lists and selected editor when the post-exchange read fails', async () => {
+    getIdeaLoomSettings.mockResolvedValue({ enabled: true, obsidianVaultId: 'vault-1', autoSync: false });
+    getIdeaLoomLists.mockResolvedValueOnce([storedList()]).mockRejectedValueOnce(new Error('Offline'));
+    syncIdeaLoomToObsidian.mockResolvedValue({ counts: { exported: 1 } });
+    renderPanel('/brain/ideas?list=list-1');
+
+    expect(await screen.findByDisplayValue('Launch ideas')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Export to Obsidian' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load IdeaLoom lists');
+    expect(screen.getByRole('button', { name: /Launch ideas/ })).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Launch ideas')).toBeInTheDocument();
+    expect(screen.queryByText('No IdeaLoom lists yet.')).not.toBeInTheDocument();
   });
 
   it('reorders a selected list locally and saves only the schema fields', async () => {

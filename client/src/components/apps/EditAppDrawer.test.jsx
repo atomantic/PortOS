@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 // Mock the API surface EditAppDrawer touches on mount, plus the work-tracker
@@ -35,6 +35,7 @@ import {
 } from '../../services/apiApps.js';
 import { getProviders } from '../../services/apiProviders.js';
 import { __resetInstanceFeatureCache } from '../../hooks/useInstanceFeatures.js';
+import { PORTOS_APP_ID } from '../../services/apiCore';
 import EditAppDrawer from './EditAppDrawer';
 
 const APP = {
@@ -288,6 +289,89 @@ describe('EditAppDrawer work tracker selector', () => {
     expect(updateApp.mock.calls[0][1].publishQualitySnapshot).toBe(false);
   });
 
+  describe('audit priorities editor', () => {
+    const saved = () => updateApp.mock.calls[0][1];
+    const save = async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+      await waitFor(() => expect(updateApp).toHaveBeenCalled());
+    };
+
+    it('adds, edits and saves a priority row with its paths split per line', async () => {
+      renderDrawer();
+      await openTab('Workflow');
+      fireEvent.click(await screen.findByRole('button', { name: 'Add audit priority' }));
+      const row = screen.getByRole('group', { name: 'Audit priority 1' });
+      fireEvent.change(within(row).getByLabelText('Name'), { target: { value: ' Legacy importer ' } });
+      fireEvent.change(within(row).getByLabelText('Priority'), { target: { value: 'P3' } });
+      fireEvent.change(within(row).getByLabelText('Paths (one glob per line)'), { target: { value: 'legacy/**\n\n scripts/import-*.js ' } });
+      await save();
+      expect(saved().featurePriorities).toEqual([
+        { id: expect.any(String), label: 'Legacy importer', paths: ['legacy/**', 'scripts/import-*.js'], priority: 'P3' },
+      ]);
+    });
+
+    it('edits and removes stored rows, keeping the stored id and note', async () => {
+      const featurePriorities = [
+        { id: 'checkout', label: 'Checkout', paths: ['src/checkout/**'], priority: 'P0', note: 'revenue' },
+        { id: 'legacy', label: 'Legacy', paths: ['legacy/**'], priority: 'P3' },
+      ];
+      renderDrawer({ app: { ...APP, featurePriorities } });
+      await openTab('Workflow');
+      const first = await screen.findByRole('group', { name: 'Audit priority 1' });
+      expect(within(first).getByLabelText('Name')).toHaveValue('Checkout');
+      fireEvent.change(within(first).getByLabelText('Priority'), { target: { value: 'P2' } });
+      fireEvent.click(within(screen.getByRole('group', { name: 'Audit priority 2' })).getByRole('button', { name: 'Remove' }));
+      await save();
+      expect(saved().featurePriorities).toEqual([{ id: 'checkout', label: 'Checkout', paths: ['src/checkout/**'], priority: 'P2', note: 'revenue' }]);
+    });
+
+    it('sends an empty array when the last row is removed so the server clears it', async () => {
+      renderDrawer({ app: { ...APP, featurePriorities: [{ id: 'a', label: 'A', paths: ['a/**'], priority: 'P3' }] } });
+      await openTab('Workflow');
+      fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+      await save();
+      expect(saved().featurePriorities).toEqual([]);
+    });
+
+    it('leaves the field out of an unrelated save', async () => {
+      renderDrawer({ app: { ...APP, featurePriorities: [{ id: 'a', label: 'A', paths: ['a/**'], priority: 'P3' }] } });
+      await save();
+      expect(saved()).not.toHaveProperty('featurePriorities');
+    });
+
+    it('blocks the save on an incomplete or prompt-unsafe row and says why', async () => {
+      renderDrawer();
+      await openTab('Workflow');
+      fireEvent.click(await screen.findByRole('button', { name: 'Add audit priority' }));
+      const row = screen.getByRole('group', { name: 'Audit priority 1' });
+      fireEvent.change(within(row).getByLabelText('Name'), { target: { value: 'Quoted' } });
+      fireEvent.change(within(row).getByLabelText('Paths (one glob per line)'), { target: { value: "src/it's/**" } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('no quotes or backticks');
+      expect(updateApp).not.toHaveBeenCalled();
+    });
+
+    it('blocks the save when a P3 path contains a P0 path, since that would drop prioritized code from audits', async () => {
+      renderDrawer({ app: { ...APP, featurePriorities: [
+        { id: 'a', label: 'Checkout', paths: ['src/checkout/**'], priority: 'P0' },
+        { id: 'b', label: 'Everything else', paths: ['src/**'], priority: 'P3' },
+      ] } });
+      await openTab('Workflow');
+      fireEvent.change(await screen.findByLabelText('Note (optional, not sent to audits)', { selector: '#a-note' }), { target: { value: 'edited' } });
+      expect(screen.getByText(/overlaps/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('"Everything else" (P3) path src/** overlaps "Checkout" (P0)');
+      expect(updateApp).not.toHaveBeenCalled();
+    });
+
+    it('is not offered for PortOS itself, which scopes audits from its feature catalog', async () => {
+      renderDrawer({ app: { ...APP, id: PORTOS_APP_ID } });
+      await openTab('Workflow');
+      await screen.findByLabelText(/Discover repo skills for agents/);
+      expect(screen.queryByRole('button', { name: 'Add audit priority' })).not.toBeInTheDocument();
+    });
+  });
+
   // Repo skills are third-party prompt text (#17387): unchecked until opted in,
   // and the opt-in reaches the server as an explicit boolean.
   it('opts an app into repo skill discovery', async () => {
@@ -352,6 +436,36 @@ describe('EditAppDrawer update command', () => {
 
     await waitFor(() => expect(updateApp).toHaveBeenCalled());
     expect(updateApp.mock.calls[0][1].updateCommand).toBe('npm run update');
+  });
+});
+
+describe('EditAppDrawer cleared fields', () => {
+  it('sends cleared commands and process names so the server drops the stored values', async () => {
+    renderDrawer({ app: {
+      id: 'app-1', name: 'My App', repoPath: '/repo/my-app',
+      buildCommand: 'npm run build', updateCommand: 'npm run update', pm2ProcessNames: ['my-app'],
+    } });
+    await openTab('Commands');
+    for (const label of ['Build Command', 'Update Command', 'PM2 Process Names (comma-separated)']) {
+      fireEvent.change(screen.getByLabelText(label), { target: { value: '' } });
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(updateApp).toHaveBeenCalled());
+    expect(JSON.parse(JSON.stringify(updateApp.mock.calls[0][1]))).toMatchObject({
+      buildCommand: '', updateCommand: '', pm2ProcessNames: [],
+    });
+  });
+
+  it('keeps the drawer open with the error when the save fails', async () => {
+    updateApp.mockRejectedValue(new Error('Port in use'));
+    const onSave = vi.fn();
+    renderDrawer({ onSave });
+    fireEvent.click(await screen.findByRole('button', { name: 'Save Changes' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Port in use');
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Save Changes' })).toBeEnabled();
   });
 });
 

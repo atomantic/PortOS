@@ -46,6 +46,49 @@ export function restoreCancellationIntent(job, previous) {
 // retain the lane until the owned browser and any publication work settle.
 export const VISUAL_PROFILE_FINISH_TIMEOUT_MS = 3 * 60 * 1000;
 
+async function verifyCompletedImage(job, result, enqueueJob, signal) {
+  try {
+    const { getVerifierSettings, verifyImage } = await loadMediaRuntimeModule('imageVerifier');
+    const vs = await getVerifierSettings().catch(() => null);
+    if (vs?.enabledForGeneration || job.params?.verifyImage === true) {
+      const verification = await verifyImage({
+        filename: result.filename,
+        prompt: job.params?.remoteMedia?.request?.prompt ?? job.params?.reviewedReferenceRequest?.prompt ?? job.params?.prompt ?? '',
+        profileId: job.params?.verificationProfileId || vs?.defaultProfileId,
+      }).catch(() => null);
+      if (verification) {
+        result.verification = verification;
+        const maxRerolls = Number.isFinite(job.params?.maxRerolls) ? job.params.maxRerolls : (vs?.maxRerolls ?? 2);
+        const rerollsDone = job.params?.verificationRerollCount || 0;
+        if (verification.verdict === 'fail' && rerollsDone < maxRerolls && !signal?.aborted) {
+          console.log(`⚠️ media-job [${job.id.slice(0, 8)}] verification failed: ${verification.summary}. Auto-rerolling (attempt ${rerollsDone + 1} of ${maxRerolls})...`);
+          const { visualProfileSource: _source, ...rerollParams } = job.params;
+          const remoteMedia = rerollParams.remoteMedia;
+          const previousSeed = remoteMedia?.request?.seed ?? rerollParams.seed;
+          const seed = (Number.isFinite(previousSeed) ? previousSeed : Date.now()) + 1;
+          await enqueueJob({
+            kind: 'image',
+            owner: job.owner,
+            params: {
+              ...rerollParams,
+              // Re-admit the reviewed bytes into a new snapshot owned by the reroll.
+              ...rerollParams.reviewedReferenceRequest,
+              seed,
+              ...(remoteMedia ? {
+                remoteMedia: { ...remoteMedia, reconcile: false, cancelRequested: false, request: { ...remoteMedia.request, seed } },
+              } : {}),
+              verificationRerollCount: rerollsDone + 1,
+              parentJobId: job.id,
+            },
+          }).catch((e) => console.error(`❌ Auto-reroll enqueue failed: ${e.message}`));
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`🔍 Verification check failed on completed image job [${job.id.slice(0, 8)}]:`, err.message);
+  }
+}
+
 export function createJobHandlers(job, { sseEntry, permit, terminate, enqueueJob, stopWatchdog }) {
   const handlers = {
     progress: (payload) => {
@@ -98,6 +141,11 @@ export function createJobHandlers(job, { sseEntry, permit, terminate, enqueueJob
             const finished = await finishVisualProfileImage({ result, profile: job.params.visualProfile,
               revision: job.params.visualProfileRevision, applyFilmFinish, signal: controller.signal, onCleanupFailure: () => permit.markUnsettled() });
             controller.signal.throwIfAborted();
+            if (finished.filename) {
+              clearTimeout(finishWatchdog);
+              await verifyCompletedImage(job, finished, enqueueJob, controller.signal);
+              controller.signal.throwIfAborted();
+            }
             await terminate('completed', j => { recordRefs(j); j.result = finished; }, remoteInputsDisposable === true);
           } catch (error) {
             await terminate(job.cancelRequested ? 'canceled' : 'failed', j => {
@@ -112,37 +160,7 @@ export function createJobHandlers(job, { sseEntry, permit, terminate, enqueueJob
       }
       if (job.kind === 'image' && result?.filename) {
         trackTerminalOperation(permit.run(async () => {
-          try {
-            const { getVerifierSettings, verifyImage } = await loadMediaRuntimeModule('imageVerifier');
-            const vs = await getVerifierSettings().catch(() => null);
-            if (vs?.enabledForGeneration || job.params?.verifyImage === true) {
-              const verification = await verifyImage({
-                filename: result.filename,
-                prompt: job.params?.prompt || '',
-                profileId: job.params?.verificationProfileId || vs?.defaultProfileId,
-              }).catch(() => null);
-              if (verification) {
-                result.verification = verification;
-                const maxRerolls = Number.isFinite(job.params?.maxRerolls) ? job.params.maxRerolls : (vs?.maxRerolls ?? 2);
-                const rerollsDone = job.params?.verificationRerollCount || 0;
-                if (verification.verdict === 'fail' && rerollsDone < maxRerolls) {
-                  console.log(`⚠️ media-job [${job.id.slice(0, 8)}] verification failed: ${verification.summary}. Auto-rerolling (attempt ${rerollsDone + 1} of ${maxRerolls})...`);
-                  await enqueueJob({
-                    kind: 'image',
-                    owner: job.owner,
-                    params: {
-                      ...job.params,
-                      seed: (Number.isFinite(job.params?.seed) ? job.params.seed : Date.now()) + 1,
-                      verificationRerollCount: rerollsDone + 1,
-                      parentJobId: job.id,
-                    },
-                  }).catch((e) => console.error(`❌ Auto-reroll enqueue failed: ${e.message}`));
-                }
-              }
-            }
-          } catch (err) {
-            console.warn(`🔍 Verification check failed on completed image job [${job.id.slice(0, 8)}]:`, err.message);
-          }
+          await verifyCompletedImage(job, result, enqueueJob);
           await terminate('completed', (j) => { recordRefs(j); j.result = result; }, remoteInputsDisposable === true);
         }).catch((e) => console.error(`❌ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)));
         return;

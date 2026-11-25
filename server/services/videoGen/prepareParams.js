@@ -5,17 +5,15 @@
  * validation and the final `enqueueJob` call lives here, so the route stays a
  * thin parse → prepare → enqueue → respond shell.
  *
- * Handles, in this exact order (several checks depend on an earlier one having
- * run — see the inline notes before reordering anything):
+ * Handles, in this order:
  *   - resolve the effective backend through the #3231 pin ladder
- *   - validate modelId + local-python configuration
- *   - a2v / IC-LoRA mode↔upload pairing and reference-count bounds
+ *   - resolve modelId and validate the declared model and upload contract
  *   - stage multipart uploads into PATHS.uploads with rollback bookkeeping
  *   - hosted backend short-circuit after source-image staging (usability check,
  *     then the backend's own `stageInputs` in hostedSubmission.js)
  *   - keyframe resolution + range checks (resolveKeyframeAnchors)
  *   - render-history resolution for native extend and IC references
- *   - LoRA-array normalization and chunk-count resolution
+ *   - reference limits, LoRA and speed-profile validation, and chunk settings
  *
  * On failure it unlinks every durable copy staged so far plus every multipart
  * temp file, then throws `ServerError` so the route's asyncHandler middleware
@@ -59,19 +57,18 @@ import { isPerformanceScene } from '../../lib/musicVideo/musicVideoShotTiming.js
 import { getTrack } from '../tracks/index.js';
 import { CLOUD_VIDEO_GEN_MODES, VIDEO_GEN_MODE, resolveVideoMode } from './modes.js';
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
+import { assertReactorNegativePromptSupported } from './negativePrompt.js';
 import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
 import { resolveStoryboardGuidanceInputs, storyboardGuidanceRequestError } from './storyboardGuidance.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
 import { listVideoModels, defaultVideoModelId } from './modelCatalog.js';
+import { resolveVideoModelSelection } from './modelSelection.js';
 import { BYOV_VIDEO_RUNTIMES } from './runtimes.js';
 import { loadHistory } from './history.js';
 import { DEFAULT_NUM_FRAMES } from './renderArgs.js';
 import {
-  captureSystemCapabilities,
-  detectSystemCapabilities,
   hardwareUnavailableReason,
   isHardwareCompatible,
-  withHardwareCompatibility,
 } from '../../lib/systemCapabilities.js';
 // Straight from the leaf, not through local.js: the suites that exercise this
 // module mock local.js wholesale, and a mocked rule table would assert nothing.
@@ -140,136 +137,129 @@ async function validateMiniMaxH3SpeedParams(model, params) {
   }
 }
 
-// Retries reuse persisted worker parameters instead of passing through the
-// multipart preparation path. Keep the model/mode gates here so a model edit
-// cannot delete the original history row before the replacement is renderable.
-export async function validateVideoRetryParams(params = {}) {
-  const needsCuda = (requirements) => requirements?.requiresNvidiaGpu
-    || requirements?.minVramGb != null
-    || requirements?.minCudaComputeCapability != null;
-  let capabilities = captureSystemCapabilities();
-  const modelWasOmitted = params.modelId === undefined || params.modelId === '';
-  const settings = modelWasOmitted ? await getSettings() : null;
-  const preferredId = settings?.videoGen?.defaultModelId;
-  let modelId = modelWasOmitted ? defaultVideoModelId(capabilities, preferredId) : params.modelId;
+function selectPreparationModel(modelId, resolveSettings) {
   const knownModels = listVideoModels();
-  let model = knownModels.find((entry) => entry.id === modelId);
-  if (needsCuda(model?.hardwareRequirements)) {
-    capabilities = await detectSystemCapabilities();
-    if (modelWasOmitted) modelId = defaultVideoModelId(capabilities, preferredId);
-    model = knownModels.find((entry) => entry.id === modelId);
-  }
-  model = model && withHardwareCompatibility(model, capabilities, model.hardwareRequirements);
+  return resolveVideoModelSelection(modelId, {
+    resolveSettings,
+    resolveModel: (id) => knownModels.find((model) => model.id === id),
+    resolveDefaultModelId: defaultVideoModelId,
+  });
+}
+
+async function validateVideoLoraStages(params, model, backend) {
   const { validateA2vLoraStages } = await import('./loraStages.js');
   await validateA2vLoraStages({ strengths: params.a2vLoraStageStrengths, model,
-    mode: params.mode, hasLoras: params.loras?.length > 0 });
-  if (!model) {
-    throw new ServerError(unknownVideoModelMessage(modelId), { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' });
-  }
-  if (!isHardwareCompatible(model.hardwareCompatibility)) {
-    throw new ServerError(
-      hardwareUnavailableReason(`Video model "${modelId}"`, model.hardwareCompatibility),
-      { status: 400, code: 'MODEL_HARDWARE_UNAVAILABLE' },
-    );
-  }
-  if (!isStockTextEncoder(params.textEncoderId)
-    && !supportsVideoTextEncoder(model, params.textEncoderId)) {
-    throw videoTextEncoderUnsupportedError(model, params.textEncoderId);
-  }
-  const continuityError = videoContinuityContractError({ model, continuityStrategy: params.continuityStrategy, contextFrames: params.contextFrames });
-  if (continuityError) throw continuityError;
-  validateVideoBatch(params, model);
-  const mode = params.mode || (params.sourceImagePath ? 'image' : 'text');
-  const modeError = videoModeContractError({
-    model,
-    mode,
-    hasFirstImage: Boolean(params.sourceImagePath),
+    backend, mode: params.mode, hasLoras: params.loras?.length > 0 });
+}
+
+function validateVideoSourceContract(model, params, mode, sourceResolved = false) {
+  const hasFirstImage = Boolean(params.sourceImagePath);
+  const error = videoModeContractError({
+    model, mode, hasFirstImage, sourceResolved,
     hasLastImage: Boolean(params.lastImagePath),
     keyframes: params.keyframes,
     extendFromVideo: params.extendFromVideoPath,
     audioFile: params.audioFilePath,
     icReferences: params.icReferencePaths,
-  });
-  if (modeError) throw modeError;
-  // A retry replays persisted params past the route, so re-assert the ceilings.
-  const retryReferenceError = referenceCountError(model, 'extra reference images', params.referenceImagePaths?.length, extraReferenceImageLimit(model), 'VIDEO_REFERENCE_IMAGES_UNSUPPORTED')
-    || referenceCountError(model, 'reference clips', params.referenceVideoPaths?.length, model.maxReferenceVideos, 'VIDEO_REFERENCE_CLIPS_UNSUPPORTED')
-    || referenceCountError(model, 'voice clips', params.referenceAudioPaths?.length, model.maxReferenceAudios, 'VIDEO_REFERENCE_AUDIO_UNSUPPORTED');
-  if (retryReferenceError) throw retryReferenceError;
-  const retryTotalError = referenceTotalError(model, {
-    hasFirstImage: Boolean(params.sourceImagePath),
-    images: params.referenceImagePaths?.length, videos: params.referenceVideoPaths?.length, audios: params.referenceAudioPaths?.length,
-  });
-  if (retryTotalError) throw retryTotalError;
-  // Staged voice uploads belong to the job that staged them, so a chain's later
-  // chunks would reference files chunk zero's cleanup already removed.
-  if (Number(params.chunks || 1) > 1 && (params.referenceImagePaths?.length || params.referenceVideoPaths?.length || params.referenceAudioPaths?.length)) {
-    throw new ServerError(REFERENCE_CHUNKS_MESSAGE, { status: 400, code: 'VIDEO_REFERENCE_CHUNKS_CONFLICT' });
-  }
-  // Reference-mode promise (#4874). A retry replays persisted params without
-  // passing the route schema, so an entry written by a newer/edited install (or
-  // a model swapped to a runtime that can't honor the mode) has to be caught
-  // here rather than reaching the render as a silent downgrade to anchor.
-  const referenceModeError = videoReferenceModeError({
-    model,
-    mode,
-    referenceMode: params.i2vReferenceMode,
-    hasFirstImage: Boolean(params.sourceImagePath),
-  });
-  if (referenceModeError) throw referenceModeError;
-  if (Number(params.chunks || 1) > 1) {
-    const chainError = videoChainUnsupportedError(model);
-    if (chainError) throw chainError;
-    if (Array.isArray(params.keyframes) && params.keyframes.length > 0) {
-      throw new ServerError(
-        'keyframes cannot be combined with chunks > 1 — keyframes anchor a single clip.',
-        { status: 400, code: 'KEYFRAMES_CHUNKS_CONFLICT' },
-      );
-    }
-    if (icLoraSpecForMode(mode) || (Array.isArray(params.icReferencePaths) && params.icReferencePaths.length > 0)) {
-      throw new ServerError(
-        'IC-LoRA modes cannot be combined with chunks > 1 — the reference clip anchors a single render.',
-        { status: 400, code: 'IC_LORA_CHUNKS_CONFLICT' },
-      );
-    }
-  }
-  if ((mode === 'a2v' && !isAudioToVideoRuntime(model.runtime))
-    || (icLoraSpecForMode(mode) && !icLoraSupportsRuntime(icLoraSpecForMode(mode), model.runtime))) {
+  }) || videoReferenceModeError({ model, mode, hasFirstImage, referenceMode: params.i2vReferenceMode });
+  if (error) throw error;
+}
+
+// Submit checks declared inputs before copying uploads. Retry uses the same
+// contract on worker params before it can replace the original history row.
+// Reference totals and LoRAs are checked after submit resolves their inputs.
+function validateLocalVideoContract(model, params, mode) {
+  const modelId = model?.id;
+  validateVideoBatch(params, model);
+  if (model && !isHardwareCompatible(model.hardwareCompatibility)) {
     throw new ServerError(
-      mode === 'a2v'
-        ? `a2v mode requires an audio-to-video runtime. Model "${modelId}" runs on "${model.runtime || 'mlx_video'}".`
-        : `${mode} requires a ${icLoraSpecForMode(mode).baseModel} model. Model "${modelId}" runs on "${model.runtime || 'mlx_video'}".`,
-      { status: 400, code: mode === 'a2v' ? 'A2V_RUNTIME_UNSUPPORTED' : 'IC_LORA_REQUIRES_LTX2' },
+      hardwareUnavailableReason(`Video model "${modelId}"`, model.hardwareCompatibility),
+      { status: 400, code: 'MODEL_HARDWARE_UNAVAILABLE' },
     );
   }
-  if (Array.isArray(params.loras) && params.loras.length > 0 && !videoLoraFamily(model)) {
-    const runtimeLoraCapable = await resolveByovRuntimeLoraCapable(model.runtime);
-    if (!videoLoraFamily({ ...model, runtimeLoraCapable })) {
-      throw videoLoraUnsupportedError(model, modelId);
-    }
+  if (model && !isStockTextEncoder(params.textEncoderId) && !supportsVideoTextEncoder(model, params.textEncoderId)) {
+    throw videoTextEncoderUnsupportedError(model, params.textEncoderId);
   }
-  const numFrames = params.numFrames ?? model.defaultFrames ?? DEFAULT_NUM_FRAMES;
-  const icFrameIssue = icLoraFrameIssue(icLoraSpecForMode(mode), numFrames);
+  const continuityError = videoContinuityContractError({ model, continuityStrategy: params.continuityStrategy, contextFrames: params.contextFrames });
+  if (continuityError) throw continuityError;
+
+  if (params.keyframes?.length && model && !isLtx2FamilyRuntime(model.runtime)) {
+    throw new ServerError(
+      `keyframes mode requires an ltx2-runtime model. Model "${modelId}" runs on "${model.runtime || 'mlx_video'}".`,
+      { status: 400, code: 'KEYFRAMES_REQUIRE_LTX2' },
+    );
+  }
+  const icSpec = icLoraSpecForMode(mode);
+  if (model && mode === 'a2v' && !isAudioToVideoRuntime(model.runtime)) {
+    throw new ServerError(
+      `a2v mode requires an audio-to-video runtime. Model "${modelId}" runs on "${model.runtime || 'mlx_video'}".`,
+      { status: 400, code: 'A2V_RUNTIME_UNSUPPORTED' },
+    );
+  }
+  if (model && icSpec && !icLoraSupportsRuntime(icSpec, model.runtime)) {
+    throw new ServerError(
+      `${icSpec.label} mode requires a ${icSpec.baseModel} model. Model "${modelId}" runs on "${model.runtime || 'mlx_video'}".`,
+      { status: 400, code: 'IC_LORA_REQUIRES_LTX2' },
+    );
+  }
+  const numFrames = params.numFrames ?? model?.defaultFrames ?? DEFAULT_NUM_FRAMES;
+  const icFrameIssue = icLoraFrameIssue(icSpec, numFrames);
   if (icFrameIssue) throw new ServerError(icFrameIssue, { status: 400, code: 'IC_LORA_REFERENCE_TOO_SHORT' });
   if (mode === 'ic-ingredients-25' && (params.icSkipStage2 === true || params.icSkipStage2 === 'true')) {
     throw new ServerError('LTX 2.5 References requires the refinement stage.',
       { status: 400, code: 'IC_LORA_SKIP_STAGE2_UNSUPPORTED' });
   }
-  const fps = params.fps ?? 24;
-  if (isMiniMaxH3Runtime(model.runtime)) {
-    const controlError = minimaxH3ControlError({
-      model,
-      negativePrompt: params.negativePrompt,
-      disableAudio: params.disableAudio,
-      tiling: params.tiling,
-      numFrames,
-      fps,
-    });
+  if (Number(params.chunks ?? 1) > 1) {
+    if (params.keyframes?.length) {
+      throw new ServerError('keyframes cannot be combined with chunks > 1 — keyframes anchor a single clip.',
+        { status: 400, code: 'KEYFRAMES_CHUNKS_CONFLICT' });
+    }
+    if (icSpec || params.icReferencePaths?.length) {
+      throw new ServerError(
+        `${icSpec?.label || 'IC-LoRA'} mode cannot be combined with chunks > 1 — the reference clip anchors a single render.`,
+        { status: 400, code: 'IC_LORA_CHUNKS_CONFLICT' },
+      );
+    }
+    const chainError = videoChainUnsupportedError(model);
+    if (chainError) throw chainError;
+  }
+  validateVideoSourceContract(model, params, mode);
+  if (isMiniMaxH3Runtime(model?.runtime)) {
+    const controlError = minimaxH3ControlError({ ...params, model, numFrames, fps: params.fps ?? 24 });
     if (controlError) throw controlError;
   }
   const frameCountError = wan22FrameCountError(model, numFrames);
   if (frameCountError) throw frameCountError;
+  return numFrames;
+}
+
+async function validateVideoLorasAndSpeed(model, params) {
+  if (model && Array.isArray(params.loras) && params.loras.length) {
+    // A cold catalog cache can understate the installed runtime's capability.
+    const runtimeLoraCapable = await resolveByovRuntimeLoraCapable(model.runtime);
+    if (!videoLoraFamily({ ...model, runtimeLoraCapable })) {
+      throw videoLoraUnsupportedError(model, model.id);
+    }
+  }
   await validateMiniMaxH3SpeedParams(model, params);
+}
+
+export async function validateVideoRetryParams(params = {}) {
+  const { model, modelId } = await selectPreparationModel(params.modelId);
+  await validateVideoLoraStages(params, model);
+  if (!model) {
+    throw new ServerError(unknownVideoModelMessage(modelId), { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' });
+  }
+
+  const mode = params.mode || (params.sourceImagePath ? 'image' : 'text');
+  validateLocalVideoContract(model, params, mode);
+  validateReferenceLimits(model, {
+    images: params.referenceImagePaths?.length,
+    videos: params.referenceVideoPaths?.length,
+    audios: params.referenceAudioPaths?.length,
+  });
+  validateResolvedReferences(model, params);
+  await validateVideoLorasAndSpeed(model, params);
   return model;
 }
 
@@ -379,6 +369,7 @@ export function resolveRequestedVideoBackend({ body, uploads, settings, localOnl
 export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys }) {
   const settings = await getSettings();
   const backend = resolveRequestedVideoBackend({ body, uploads, settings, localOnlyParamKeys });
+  assertReactorNegativePromptSupported(backend, body.negativePrompt);
   if (backend !== VIDEO_GEN_MODE.LOCAL && body.continuityStrategy != null) {
     await cleanupMultipartTemp(uploads);
     throw new ServerError('Explicit continuation strategy requires a local video backend.', {
@@ -414,46 +405,15 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
     );
   }
   const pythonPath = settings.imageGen?.local?.pythonPath || null;
-  // Resolve the effective model up front — both the modelId-exists check
-  // below AND the a2v runtime guard further down need the model entry,
-  // and listVideoModels() is the kind of thing test mocks easily get out
-  // of sync if called twice.
-  const knownModels = listVideoModels();
-  const needsCuda = (requirements) => requirements?.requiresNvidiaGpu
-    || requirements?.minVramGb != null
-    || requirements?.minCudaComputeCapability != null;
-  let capabilities = captureSystemCapabilities();
-  // `undefined`/empty means the request omitted a model and may use the
-  // configured default. Explicit null is the routed-job sentinel and must
-  // remain unknown so a legacy local dispatcher cannot render a remote job
-  // locally.
-  const modelWasOmitted = body.modelId === undefined || body.modelId === '';
-  const preferredId = settings?.videoGen?.defaultModelId;
-  let effectiveModelId = modelWasOmitted ? defaultVideoModelId(capabilities, preferredId) : body.modelId;
-  let effectiveModel = knownModels.find((m) => m.id === effectiveModelId);
-  if (needsCuda(effectiveModel?.hardwareRequirements)) {
-    capabilities = await detectSystemCapabilities();
-    if (modelWasOmitted) {
-      effectiveModelId = defaultVideoModelId(capabilities, preferredId);
-      effectiveModel = knownModels.find((m) => m.id === effectiveModelId);
-    }
-  }
-  effectiveModel = effectiveModel && withHardwareCompatibility(
-    effectiveModel,
-    capabilities,
-    effectiveModel.hardwareRequirements,
-  );
-  const { validateA2vLoraStages } = await import('./loraStages.js');
-  await validateA2vLoraStages({ strengths: body.a2vLoraStageStrengths, model: effectiveModel,
-    backend, mode: body.mode, hasLoras: body.loraFilenames?.length > 0 })
+  const { model: effectiveModel, modelId: effectiveModelId } = await selectPreparationModel(body.modelId, () => settings)
     .catch(async (error) => { await cleanupMultipartTemp(uploads); throw error; });
-  // Validate modelId before staging (when supplied). Without this the queue
-  // would happily accept a typo'd modelId and fail asynchronously inside
-  // the worker — leaving a persisted, doomed queue entry.
-  if (body.modelId !== undefined && !effectiveModel) {
+  await validateVideoLoraStages({ ...body, loras: body.loraFilenames }, effectiveModel, backend)
+    .catch(async (error) => { await cleanupMultipartTemp(uploads); throw error; });
+  // Hosted renders can run without a local model when the caller omitted it.
+  if (!effectiveModel && (backend === VIDEO_GEN_MODE.LOCAL || body.modelId !== undefined)) {
     await cleanupMultipartTemp(uploads);
     throw new ServerError(
-      unknownVideoModelMessage(body.modelId),
+      unknownVideoModelMessage(effectiveModelId),
       { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
     );
   }
@@ -498,42 +458,6 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
       .catch(async (error) => { await cleanupMultipartTemp(uploads); throw error; });
     if (project) Object.assign(body, musicVideoFrameGenSize(project));
   }
-  validateVideoBatch({ ...body, backend }, effectiveModel);
-  if (effectiveModel && !isHardwareCompatible(effectiveModel.hardwareCompatibility)) {
-    await cleanupMultipartTemp(uploads);
-    throw new ServerError(
-      hardwareUnavailableReason(`Video model "${effectiveModelId}"`, effectiveModel.hardwareCompatibility),
-      { status: 400, code: 'MODEL_HARDWARE_UNAVAILABLE' },
-    );
-  }
-  // Substituted prompt conditioner (#4081). A pure registry lookup with no
-  // dependency on anything staged, so it belongs with the other pre-staging
-  // model gates: the request that named the bad conditioner is the only place
-  // that can report it, and rejecting later would first write durable copies of
-  // every upload for a render that was never going to run.
-  if (effectiveModel && !isStockTextEncoder(body.textEncoderId)
-    && !supportsVideoTextEncoder(effectiveModel, body.textEncoderId)) {
-    await cleanupMultipartTemp(uploads);
-    throw videoTextEncoderUnsupportedError(effectiveModel, body.textEncoderId);
-  }
-  // Reject up-front when the local python isn't configured AND the model's
-  // runtime needs it. BYOV runtimes bring their own venv (resolved inside
-  // buildArgs), so they must NOT be blocked by the legacy mlx_video
-  // pythonPath setting. Without this gate, the queue would happily accept
-  // a job that's known to fail and only surface it asynchronously on SSE,
-  // polluting the persisted queue with a doomed entry. The allowlist is
-  // shared with services/videoGen/local.js so the route and worker stay
-  // in sync.
-  const runtimeBringsOwnVenv = effectiveModel && BYOV_VIDEO_RUNTIMES.has(effectiveModel.runtime);
-  if (!pythonPath && !runtimeBringsOwnVenv
-    && !CLOUD_VIDEO_GEN_MODES.includes(backend)) {
-    await cleanupMultipartTemp(uploads);
-    throw new ServerError(
-      'Local video generation is not configured (settings.imageGen.local.pythonPath is missing).',
-      { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' },
-    );
-  }
-
   // Reference inputs condition a local reference-to-video model only; a hosted
   // lane would enqueue an ordinary render that silently ignores them.
   const hostedReferenceError = hostedReferenceInputsError({ backend, body, uploads });
@@ -553,11 +477,8 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
     await cleanupMultipartTemp(uploads);
   };
 
-  // #3326 — every *explicit* throw below already calls cleanupStaged(), but a
-  // plain rejected await (getMusicVideoProject / getTrack / loadHistory) would
-  // bubble straight past them and orphan up to the full multipart size cap
-  // under data/uploads. One guard around the whole staging region covers every
-  // rejection point at once, and stays correct as new awaits are added.
+  // #3326 — shared validators and lookups can reject after earlier uploads
+  // have been copied. Guard the entire staging region to release those files.
   return withStagedRollback(cleanupStaged, () => resolvePreparedParams({
     body, uploads, settings, backend, pythonPath,
     effectiveModel: runwaySpecial ? null : effectiveModel, effectiveModelId, stagedDurablePaths, cleanupStaged, musicVideoContractMode,
@@ -586,11 +507,9 @@ async function ensureUploadsDir({ uploads, cleanupStaged }) {
 // so the queue doesn't accept a doomed job. Only valid for fflf mode +
 // single-chunk renders (the chain orchestrator pins keyframes only on
 // chunk 0; chaining ≥2 chunks with N keyframes has no defined semantic).
-// Returns null when the request carries no multi-keyframe list. The checks run
-// in this order (the `body.mode` default sits between the LTX-2 and chunk
-// checks) and every throw unwinds staged files first.
+// Returns null when the request carries no multi-keyframe list.
 async function resolveKeyframeAnchors({
-  body, effectiveModel, effectiveModelId, sourceImagePath, lastImagePath, cleanupStaged,
+  body, sourceImagePath, lastImagePath, cleanupStaged,
 }) {
   if (!body.keyframes || body.keyframes.length < 2) return null;
   const reject = async (message, code) => {
@@ -612,23 +531,10 @@ async function resolveKeyframeAnchors({
       'KEYFRAMES_LEGACY_INPUTS_CONFLICT',
     );
   }
-  // Multi-keyframe FFLF is an LTX-2 primitive — the legacy mlx_video
-  // pipeline has no equivalent. Mirror the a2v guard above so a bad
-  // modelId can't enqueue a doomed job that will only fail in the
-  // worker (with KEYFRAMES_REQUIRE_LTX2).
-  if (effectiveModel && !isLtx2FamilyRuntime(effectiveModel.runtime)) {
-    await reject(
-      `keyframes mode requires an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
-      'KEYFRAMES_REQUIRE_LTX2',
-    );
-  }
   // Default mode to 'fflf' when keyframes is set without an explicit mode —
   // otherwise local.js#buildLtx2Args resolves helperMode to 'text' and the
   // keyframes silently disappear.
   if (!body.mode) body.mode = 'fflf';
-  if (body.chunks != null && Number(body.chunks) > 1) {
-    await reject('keyframes cannot be combined with chunks > 1 — keyframes anchor a single clip.', 'KEYFRAMES_CHUNKS_CONFLICT');
-  }
   // Validate keyframe indices against the *effective* numFrames so a
   // request with no explicit `numFrames` (which falls back to the
   // generateVideo default of 121) still rejects out-of-range indices
@@ -742,6 +648,25 @@ const referenceTotalError = (model, { hasFirstImage, images = 0, videos = 0, aud
 // `maxReferenceImages` counts the first-frame input as the first image.
 const extraReferenceImageLimit = (model) => Math.max(0, (Number(model?.maxReferenceImages) || 0) - 1);
 
+function validateReferenceLimits(model, { images, videos, audios }) {
+  const error = referenceCountError(model, 'extra reference images', images, extraReferenceImageLimit(model), 'VIDEO_REFERENCE_IMAGES_UNSUPPORTED')
+    || referenceCountError(model, 'reference clips', videos, model?.maxReferenceVideos, 'VIDEO_REFERENCE_CLIPS_UNSUPPORTED')
+    || referenceCountError(model, 'voice clips', audios, model?.maxReferenceAudios, 'VIDEO_REFERENCE_AUDIO_UNSUPPORTED');
+  if (error) throw error;
+}
+
+function validateResolvedReferences(model, { sourceImagePath, referenceImagePaths, referenceVideoPaths, referenceAudioPaths, chunks }) {
+  const images = referenceImagePaths?.length;
+  const videos = referenceVideoPaths?.length;
+  const audios = referenceAudioPaths?.length;
+  // The first chunk owns staged voice uploads and removes them on completion.
+  if ((images || videos || audios) && Number(chunks) > 1) {
+    throw new ServerError(REFERENCE_CHUNKS_MESSAGE, { status: 400, code: 'VIDEO_REFERENCE_CHUNKS_CONFLICT' });
+  }
+  const error = referenceTotalError(model, { hasFirstImage: Boolean(sourceImagePath), images, videos, audios });
+  if (error) throw error;
+}
+
 async function resolveAudioFrameCount({ body, audioFilePath, effectiveModel, effectiveNumFrames, cleanupStaged }) {
   // A direct-upload LTX-2.5 A2V request follows the whole audio file. The MLX
   // pipeline still requires an explicit 8n+1 frame canvas, so derive that canvas
@@ -792,8 +717,11 @@ async function prepareVideoReferences({
   // The backend and capability-dependent model are already resolved here, and
   // hosted/peer submissions have taken their own lanes. Add cast sheets only
   // when they cannot displace caller-provided references or break a chain.
-  const hasRequestedReferences = body.referenceImageFiles?.length || body.referenceVideoIds?.length
-    || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]);
+  const audioUploads = REFERENCE_AUDIO_FIELDS.map((field) => uploads[field]).filter(Boolean);
+  const images = body.referenceImageFiles?.length;
+  const videos = body.referenceVideoIds?.length;
+  validateReferenceLimits(effectiveModel, { images, videos, audios: audioUploads.length });
+  const hasRequestedReferences = images || videos || audioUploads.length;
   let referenceImagePaths = null;
   if (body.musicVideo?.sceneId && !body.musicVideo.clipReferencesDisabled && sourceImagePath && !hasRequestedReferences && !(Number(body.chunks) > 1)) {
     const totalLimit = Number(effectiveModel?.maxReferenceTotal) || Infinity;
@@ -809,11 +737,6 @@ async function prepareVideoReferences({
   // would render a clip that ignores what the user supplied) and past the
   // model's ceiling, which counts the source still as the first image.
   if (body.referenceImageFiles?.length) {
-    const imageCountError = referenceCountError(effectiveModel, 'extra reference images', body.referenceImageFiles.length, extraReferenceImageLimit(effectiveModel), 'VIDEO_REFERENCE_IMAGES_UNSUPPORTED');
-    if (imageCountError) {
-      await cleanupStaged();
-      throw imageCountError;
-    }
     referenceImagePaths = [];
     for (let i = 0; i < body.referenceImageFiles.length; i++) {
       const file = body.referenceImageFiles[i];
@@ -834,11 +757,6 @@ async function prepareVideoReferences({
   // the render; an uploaded voice clip is staged durably and dropped with the job.
   let referenceVideoPaths = null;
   if (body.referenceVideoIds?.length) {
-    const clipCountError = referenceCountError(effectiveModel, 'reference clips', body.referenceVideoIds.length, effectiveModel?.maxReferenceVideos, 'VIDEO_REFERENCE_CLIPS_UNSUPPORTED');
-    if (clipCountError) {
-      await cleanupStaged();
-      throw clipCountError;
-    }
     const history = await getHistory();
     referenceVideoPaths = [];
     for (const id of body.referenceVideoIds) {
@@ -851,13 +769,7 @@ async function prepareVideoReferences({
     }
   }
   let referenceAudioPaths = null;
-  const audioUploads = REFERENCE_AUDIO_FIELDS.map((field) => uploads[field]).filter(Boolean);
   if (audioUploads.length) {
-    const voiceCountError = referenceCountError(effectiveModel, 'voice clips', audioUploads.length, effectiveModel?.maxReferenceAudios, 'VIDEO_REFERENCE_AUDIO_UNSUPPORTED');
-    if (voiceCountError) {
-      await cleanupStaged();
-      throw voiceCountError;
-    }
     referenceAudioPaths = [];
     for (const upload of audioUploads) {
       const path = await stageUploadDurable(upload, 'ref-audio');
@@ -866,27 +778,18 @@ async function prepareVideoReferences({
     }
   }
 
-  const hasAnyReference = Boolean(referenceImagePaths?.length || referenceVideoPaths?.length || referenceAudioPaths?.length);
-  const referenceConflict = (hasAnyReference && Number(body.chunks) > 1
-    ? new ServerError(REFERENCE_CHUNKS_MESSAGE, { status: 400, code: 'VIDEO_REFERENCE_CHUNKS_CONFLICT' })
-    : null)
-    || referenceTotalError(effectiveModel, {
-      hasFirstImage: Boolean(sourceImagePath),
-      images: referenceImagePaths?.length, videos: referenceVideoPaths?.length, audios: referenceAudioPaths?.length,
-    });
-  if (referenceConflict) {
-    await cleanupStaged();
-    throw referenceConflict;
-  }
+  validateResolvedReferences(effectiveModel, {
+    sourceImagePath, referenceImagePaths, referenceVideoPaths, referenceAudioPaths, chunks: body.chunks,
+  });
 
   return { referenceImagePaths, referenceVideoPaths, referenceAudioPaths };
 }
 
 /**
  * Pre-staging IC-LoRA request shape: mode ↔ reference pairing, reference kind,
- * count and runtime. Throws the 400 the route returns; the caller owns cleanup.
+ * and count. The shared model contract checks the runtime and controls.
  */
-function assertIcLoraRequest({ icSpec, body, uploads, effectiveModel, effectiveModelId }) {
+function assertIcLoraRequest({ icSpec, body, uploads, backend }) {
   if (!icSpec) {
     if (uploads.icReference || body.icReferenceVideoIds?.length || body.icReferenceImageFiles?.length) {
       throw new ServerError(
@@ -901,9 +804,9 @@ function assertIcLoraRequest({ icSpec, body, uploads, effectiveModel, effectiveM
   // plain grok render with the reference clip silently dropped. The client's
   // mode bar snaps grok back to text/image, but reject explicitly so a direct
   // caller gets an error instead of a wrong-looking clip.
-  if (CLOUD_VIDEO_GEN_MODES.includes(body.backend)) {
+  if (CLOUD_VIDEO_GEN_MODES.includes(backend)) {
     throw new ServerError(
-      `${icSpec.label} mode runs on the local ltx2 runtime — it isn't available on the ${body.backend} backend.`,
+      `${icSpec.label} mode runs on the local ltx2 runtime — it isn't available on the ${backend} backend.`,
       { status: 400, code: 'IC_LORA_REQUIRES_LOCAL_BACKEND' },
     );
   }
@@ -956,28 +859,6 @@ function assertIcLoraRequest({ icSpec, body, uploads, effectiveModel, effectiveM
   assertIcReferenceCount(icSpec, refCount, (msg) => new ServerError(msg, {
     status: 400, code: 'IC_LORA_REFERENCE_COUNT',
   }));
-  // Fail before enqueue when the selected adapter and model generation differ.
-  if (effectiveModel && !icLoraSupportsRuntime(icSpec, effectiveModel.runtime)) {
-    throw new ServerError(
-      `${icSpec.label} mode requires a ${icSpec.baseModel} model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
-      { status: 400, code: 'IC_LORA_REQUIRES_LTX2' },
-    );
-  }
-  const frameIssue = icLoraFrameIssue(icSpec, body.numFrames ?? effectiveModel?.defaultFrames ?? DEFAULT_NUM_FRAMES);
-  if (frameIssue) throw new ServerError(frameIssue, { status: 400, code: 'IC_LORA_REFERENCE_TOO_SHORT' });
-  if (icSpec.mode === 'ic-ingredients-25' && (body.icSkipStage2 === true || body.icSkipStage2 === 'true')) {
-    throw new ServerError('LTX 2.5 References requires the refinement stage.',
-      { status: 400, code: 'IC_LORA_SKIP_STAGE2_UNSUPPORTED' });
-  }
-  // Chained renders re-seed each chunk from the previous chunk's last frame;
-  // an IC render is conditioned on a whole reference clip instead, so there's
-  // no defined semantic for chunk 2+ and it would silently ignore the mode.
-  if (body.chunks != null && Number(body.chunks) > 1) {
-    throw new ServerError(
-      `${icSpec.label} mode cannot be combined with chunks > 1 — the reference clip anchors a single render.`,
-      { status: 400, code: 'IC_LORA_CHUNKS_CONFLICT' },
-    );
-  }
 }
 
 /**
@@ -1074,13 +955,8 @@ function resolveChainSettings({ body, effectiveChunks, effectiveModel }) {
   return { effectiveChunkPrompts, effectiveContextFrames, continuation };
 }
 
-/**
- * The staging + resolution region, split out so `prepareVideoGenParams` can
- * wrap it in a single rollback guard (#3326) without indenting 400 lines.
- * Every explicit throw here still calls `cleanupStaged()` itself so the
- * unwind order stays identical to the pre-extraction handler; `unlink` is
- * best-effort and idempotent, so the outer guard's second call is harmless.
- */
+// The caller's rollback guard owns cleanup for shared validation errors and
+// rejected staging or lookup operations.
 async function resolvePreparedParams({
   body, uploads, settings, backend, pythonPath,
   effectiveModel, effectiveModelId, stagedDurablePaths, cleanupStaged, musicVideoContractMode = null,
@@ -1154,107 +1030,34 @@ async function resolvePreparedParams({
   // reference channel is what makes the mode meaningful, and an IC upload
   // outside an IC mode would be silently dropped by the worker.
   const icSpec = icLoraSpecForMode(body.mode);
-  try {
-    assertIcLoraRequest({ icSpec, body, uploads, effectiveModel, effectiveModelId });
-  } catch (err) {
-    await cleanupStaged();
-    throw err;
-  }
-  // a2v needs a runtime with an audio-conditioning path. The worker also
-  // catches this in buildArgs, but checking here keeps the route's "fail fast
-  // before enqueue" contract so a bad modelId can't pollute the persisted
-  // queue with a doomed entry.
-  if (body.mode === 'a2v' && effectiveModel && !isAudioToVideoRuntime(effectiveModel.runtime)) {
-    await cleanupStaged();
+  assertIcLoraRequest({ icSpec, body, uploads, backend });
+
+  // Pin the mode from the declared shape so a missing gallery file cannot
+  // turn a requested image render into a text render at the resolved pass.
+  const contractParams = {
+    ...body,
+    backend,
+    sourceImagePath: uploads.sourceImage || body.sourceImageFile,
+    lastImagePath: uploads.lastImage || body.lastImageFile,
+    extendFromVideoPath: body.extendFromVideoId,
+    audioFilePath: uploads.audioFile || body.musicVideo,
+  };
+  const declaredMode = musicVideoContractMode || body.mode || (contractParams.sourceImagePath ? 'image' : 'text');
+  const validatedNumFrames = validateLocalVideoContract(effectiveModel, contractParams, declaredMode);
+
+  // BYOV runtimes resolve their own environments. Legacy mlx_video requires
+  // the configured Python path before a job can be queued.
+  const runtimeBringsOwnVenv = effectiveModel && BYOV_VIDEO_RUNTIMES.has(effectiveModel.runtime);
+  if (!pythonPath && !runtimeBringsOwnVenv && !CLOUD_VIDEO_GEN_MODES.includes(backend)) {
     throw new ServerError(
-      `a2v mode requires an audio-to-video runtime. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
-      { status: 400, code: 'A2V_RUNTIME_UNSUPPORTED' },
+      'Local video generation is not configured (settings.imageGen.local.pythonPath is missing).',
+      { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' },
     );
   }
-  const continuityError = videoContinuityContractError({ model: effectiveModel,
-    continuityStrategy: body.continuityStrategy, contextFrames: body.contextFrames });
-  if (continuityError) {
-    await cleanupStaged();
-    throw continuityError;
-  }
-  // Chunk chaining needs image-to-video on any runtime — the same rule
-  // generateChainedVideo enforces at dispatch, applied once here so a doomed
-  // chain never reaches the persisted queue.
-  if (body.chunks != null && Number(body.chunks) > 1) {
-    const chainError = videoChainUnsupportedError(effectiveModel);
-    if (chainError) {
-      await cleanupStaged();
-      throw chainError;
-    }
-  }
-  // Mode ↔ source pairing for every gated runtime, resolved through the one
-  // contract the render boundary also throws from (#3736), so the two entry
-  // points can't disagree about which shapes are legal or which code they
-  // return. Runs before durable upload staging, keeping rejection cleanup cheap.
-  const hasDeclaredFirstImage = Boolean(uploads.sourceImage || body.sourceImageFile);
-  const hasDeclaredLastImage = Boolean(uploads.lastImage || body.lastImageFile);
-  // Pinned here rather than re-derived at the resolved pass below: once a
-  // declared gallery pick fails to resolve, "was this an i2v request?" can only
-  // be answered from what the caller declared.
-  const declaredMode = musicVideoContractMode || body.mode || (hasDeclaredFirstImage ? 'image' : 'text');
-  const modeContractError = videoModeContractError({
-    model: effectiveModel,
-    mode: declaredMode,
-    hasFirstImage: hasDeclaredFirstImage,
-    hasLastImage: hasDeclaredLastImage,
-    keyframes: body.keyframes,
-    extendFromVideo: body.extendFromVideoId,
-    audioFile: uploads.audioFile || body.musicVideo,
-  });
-  if (modeContractError) {
-    await cleanupStaged();
-    throw modeContractError;
-  }
-  // What the conditioning image PROMISES (#4874) — the orthogonal axis to the
-  // mode/source pairing above, and the same "reject rather than silently deliver
-  // something else" rule. Runs on the DECLARED shape for the same reason the
-  // mode contract does: rejecting before durable staging keeps cleanup cheap, and
-  // the resolved pass below re-checks once a gallery pick has become a real path.
-  const declaredReferenceModeError = videoReferenceModeError({
-    model: effectiveModel,
-    mode: declaredMode,
-    referenceMode: body.i2vReferenceMode,
-    hasFirstImage: hasDeclaredFirstImage,
-  });
-  if (declaredReferenceModeError) {
-    await cleanupStaged();
-    throw declaredReferenceModeError;
-  }
-  // MiniMax H3 is fixed-24fps, joint A/V and CFG-distilled on both its runtimes
-  // (MLX and CUDA). These are the model's non-mode controls; the mode gate
-  // above already ran. Fail before queue persistence so a direct API caller
-  // cannot enqueue a request whose controls the runtime would silently ignore —
-  // the render boundary re-checks with the same helper.
-  if (isMiniMaxH3Runtime(effectiveModel?.runtime)) {
-    const controlError = minimaxH3ControlError({
-      model: effectiveModel,
-      negativePrompt: body.negativePrompt,
-      disableAudio: body.disableAudio,
-      tiling: body.tiling,
-      numFrames: body.numFrames ?? effectiveModel.defaultFrames,
-      fps: body.fps ?? 24,
-    });
-    if (controlError) {
-      await cleanupStaged();
-      throw controlError;
-    }
-  }
-  // Pin Wan's validated count for the worker while preserving other runtimes'
-  // existing behavior of leaving omitted controls unset in persisted params.
+
+  // Persist Wan's validated count so the worker uses the same default.
   const isWan = effectiveModel?.runtime === 'wan22' || effectiveModel?.runtime === 'wan22_cuda';
-  let effectiveNumFrames = isWan
-    ? body.numFrames ?? effectiveModel.defaultFrames ?? DEFAULT_NUM_FRAMES
-    : body.numFrames;
-  const frameCountError = wan22FrameCountError(effectiveModel, effectiveNumFrames);
-  if (frameCountError) {
-    await cleanupStaged();
-    throw frameCountError;
-  }
+  let effectiveNumFrames = isWan ? validatedNumFrames : body.numFrames;
 
   // A missing panel or reference refuses before any upload is staged.
   let guidance;
@@ -1281,36 +1084,7 @@ async function resolvePreparedParams({
     throw new ServerError('The selected opening frame is missing or could not be resolved. Choose it again.',
       { status: 400, code: 'IC_LORA_SOURCE_MISSING' });
   }
-  // Re-run the same contract now that the gallery pick has been resolved to a
-  // real path: the pre-staging pass only saw that a filename was *declared*, so
-  // a stale/missing gallery entry would otherwise fall through to a text render.
-  const resolvedModeError = videoModeContractError({
-    model: effectiveModel,
-    mode: declaredMode,
-    hasFirstImage: Boolean(sourceImagePath),
-    hasLastImage: hasDeclaredLastImage,
-    sourceResolved: true,
-    audioFile: uploads.audioFile || body.musicVideo,
-    keyframes: body.keyframes,
-    extendFromVideo: body.extendFromVideoId,
-  });
-  if (resolvedModeError) {
-    await cleanupStaged();
-    throw resolvedModeError;
-  }
-  // Same re-check for the reference-mode promise: a declared gallery pick that
-  // failed to resolve leaves an i2v request with no image, and "Inspire" over
-  // nothing is not a promise anything can keep.
-  const resolvedReferenceModeError = videoReferenceModeError({
-    model: effectiveModel,
-    mode: declaredMode,
-    referenceMode: body.i2vReferenceMode,
-    hasFirstImage: Boolean(sourceImagePath),
-  });
-  if (resolvedReferenceModeError) {
-    await cleanupStaged();
-    throw resolvedReferenceModeError;
-  }
+  validateVideoSourceContract(effectiveModel, { ...contractParams, sourceImagePath }, declaredMode, true);
   // Music Video director-board renders are always i2v FROM the scene's reference
   // frame (#1760 Phase 1). resolveGalleryImage returns null for a missing/invalid
   // gallery file (mustExist defaults true), and an unresolved source would
@@ -1404,7 +1178,7 @@ async function resolvePreparedParams({
   }
 
   const resolvedKeyframes = await resolveKeyframeAnchors({
-    body, effectiveModel, effectiveModelId, sourceImagePath, lastImagePath, cleanupStaged,
+    body, sourceImagePath, lastImagePath, cleanupStaged,
   });
 
   // Resolve a render-history id to its on-disk video under data/videos/.
@@ -1474,36 +1248,14 @@ async function resolvePreparedParams({
       }))
     : undefined;
 
-  // Video LoRAs fuse on two runtimes: dgrauet's `ltx2` (via the pipeline's
-  // _pending_loras hook, see scripts/ml/generate_ltx2.py) and non-quantized
-  // LTX-2.x `mlx_video` models (merged offline by scripts/ml/generate_av_lora.py).
-  // `minimax_h3` applies them at runtime, but only if the installed checkout
-  // passes PortOS's quant-aware adapter probe — listVideoModels() decorates that
-  // result as `runtimeLoraCapable`, which videoLoraFamily() reads.
-  // videoLoraFamily() returns null for everything else (wan22 / fastvideo /
-  // quantized mlx_video) — reject up-front so a bad modelId can't enqueue a
-  // doomed job that only fails in the worker.
-  if (loras && effectiveModel) {
-    // `runtimeLoraCapable` was decorated from a SYNC cache read, which is false
-    // on a cold cache. Resolve the probe before rejecting, or the first LoRA
-    // render after boot on a capable install would be refused and only heal on
-    // retry. Re-derive the flag from the settled verdict rather than trusting
-    // the snapshot the model list was built from.
-    const runtimeLoraCapable = await resolveByovRuntimeLoraCapable(effectiveModel.runtime);
-    if (!videoLoraFamily({ ...effectiveModel, runtimeLoraCapable })) {
-      await cleanupStaged();
-      throw videoLoraUnsupportedError(effectiveModel, effectiveModelId);
-    }
-  }
-
   // a2v and the IC remix modes both anchor a single render (audio track /
   // reference clip), so chaining is meaningless — pin to 1 chunk. The IC path
   // also hard-rejects an explicit chunks>1 above; this covers the default.
   const effectiveChunks = (body.mode === 'a2v' || icSpec) ? 1 : (body.chunks ?? 1);
-  await validateMiniMaxH3SpeedParams(effectiveModel, {
+  await validateVideoLorasAndSpeed(effectiveModel, {
     ...body, loras, sourceImagePath, lastImagePath, keyframes: resolvedKeyframes,
     extendFromVideoPath, audioFilePath,
-  }).catch(async (error) => { await cleanupStaged(); throw error; });
+  });
 
   const { effectiveChunkPrompts, effectiveContextFrames, continuation } = resolveChainSettings({
     body, effectiveChunks, effectiveModel,

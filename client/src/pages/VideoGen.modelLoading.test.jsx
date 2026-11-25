@@ -76,6 +76,35 @@ describe('VideoGen model picker vs the /status python probe', () => {
     await waitFor(() => expect(screen.getByText('Python 3.12.1')).toBeInTheDocument());
   });
 
+  it('keeps the hosted backend switch and Generate usable for hosted lanes while /status is still pending', async () => {
+    // The hosted-lane flags and the weights gate come from the probe-free
+    // model context, so the python probe may take as long as it likes.
+    state.getVideoGenModelContext.mockResolvedValue(modelContextPayload({ falEnabled: true, byovRuntimes: [], backendDisclosures: [] }));
+    state.modelStatuses[MODEL_ONE.id] = { id: MODEL_ONE.id, cached: true, sizeBytes: 1 };
+    state.getVideoGenStatus.mockReturnValue(new Promise(() => {}));
+    await renderVideoGenPage();
+
+    expect(await screen.findByRole('button', { name: 'fal.ai' })).toBeInTheDocument();
+    fireEvent.change(await screen.findByLabelText('Prompt'), { target: { value: 'a fox in the rain' } });
+    const generate = () => screen.getByRole('button', { name: 'Generate', exact: true });
+    // A legacy local render waits on the unanswered health verdict, and says so rather than blaming the weights.
+    await waitFor(() => expect(generate()).toHaveAttribute('title', 'Checking the Python runtime…'));
+    expect(screen.getByText('Checking…')).toBeInTheDocument();
+
+    // A hosted lane does not wait on the interpreter at all.
+    fireEvent.click(screen.getByRole('button', { name: 'fal.ai' }));
+    await waitFor(() => expect(generate()).toBeEnabled());
+  });
+
+  it('asks for a fresh probe only when the Refresh button is pressed', async () => {
+    await renderVideoGenPage();
+    await waitFor(() => expect(screen.getByLabelText('Refresh status')).toBeEnabled());
+    expect(state.getVideoGenStatus).toHaveBeenLastCalledWith({ fresh: false });
+    await act(async () => { fireEvent.click(screen.getByLabelText('Refresh status')); });
+    expect(state.getVideoGenStatus).toHaveBeenLastCalledWith({ fresh: true });
+    await waitFor(() => expect(screen.getByLabelText('Refresh status')).toBeEnabled());
+  });
+
   it('retries a failed model list independently of the status probe, including another failure', async () => {
     state.getVideoGenModelContext
       .mockRejectedValueOnce(new Error('offline'))

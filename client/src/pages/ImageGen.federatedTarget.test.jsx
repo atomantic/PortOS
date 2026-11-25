@@ -38,6 +38,7 @@ describe('ImageGen federated render target', () => {
     await mount();
     fireEvent.change(await screen.findByRole('combobox', { name: /generation target/i }), { target: { value: 'peer-example' } });
 
+    fireEvent.click(screen.getByRole('checkbox', { name: /Verify Quality & Anatomy/i }));
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Generate$/ })); });
 
     await waitFor(() => expect(state.generateImage).toHaveBeenCalled());
@@ -46,6 +47,7 @@ describe('ImageGen federated render target', () => {
       mediaProviderPeerId: 'peer-example',
       mediaProviderEngine: 'local',
       modelId: 'peer-flux',
+      verifyImage: true,
     });
     // `mode` picks a local dispatcher lane, `quantize` and the cleaners describe
     // work on this machine's bytes — none of them mean anything on a peer.

@@ -14,9 +14,7 @@ import { MemoryRouter } from 'react-router';
 
 // vi.mock is hoisted above every const in this file, so the callable-toast
 // double is built inside the factory and read back through the import.
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), dismiss: vi.fn() }),
-}));
+vi.mock('../ui/Toast');
 
 import toastMock from '../ui/Toast';
 import { toastRunOutcome } from './runOutcomeToast.jsx';

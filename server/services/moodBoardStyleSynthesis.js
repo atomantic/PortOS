@@ -10,6 +10,7 @@
  * through the universe's queued-write adopt endpoint.
  */
 
+import { PROVIDERS_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import { parseLLMJSON, resolveAPIProvider } from './aiProvider.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { assertProvider, runPromptThroughProvider } from './promptRunner.js';
@@ -18,7 +19,7 @@ import {
   sanitizeLocked,
   STYLE_NOTES_MAX,
 } from './universeBuilder.js';
-import { buildStyleReferenceDiff } from './universeStyleReference.js';
+import { buildStyleReferenceDiff, mergeStyleProposal } from './universeStyleReference.js';
 import { trimTo } from '../lib/textUtils.js';
 import { collectBoardStyleContext } from './moodBoard/styleContext.js';
 
@@ -69,7 +70,7 @@ export async function synthesizeBoardStyle({
 
   const provider = await resolveAPIProvider(providerId);
   assertProvider(provider, {
-    message: 'Synthesizing a style guide needs an API-based provider. Configure one under Settings → Providers.',
+    message: `Synthesizing a style guide needs an API-based provider. Configure one under ${PROVIDERS_PAGE_BREADCRUMB}.`,
     code: 'NO_API_PROVIDER',
     status: 503,
   });
@@ -92,31 +93,7 @@ export async function synthesizeBoardStyle({
 
   const currentInfluences = sanitizeInfluences(influences);
   const safeLocked = sanitizeLocked(locked);
-  const parsedInfluences = parsed?.influences && typeof parsed.influences === 'object'
-    ? parsed.influences
-    : {};
-  // Locked fields keep their current value verbatim regardless of what the
-  // model proposed — the same belt the style-reference analyzer wears; the
-  // adopt write re-checks locks against the freshest persisted record.
-  const proposed = {
-    styleNotes: safeLocked.styleNotes
-      ? trimTo(styleNotes, STYLE_NOTES_MAX)
-      : (typeof parsed?.styleNotes === 'string'
-        ? trimTo(parsed.styleNotes, STYLE_NOTES_MAX)
-        : trimTo(styleNotes, STYLE_NOTES_MAX)),
-    influences: {
-      embrace: safeLocked.influencesEmbrace
-        ? currentInfluences.embrace
-        : (Array.isArray(parsedInfluences.embrace)
-          ? sanitizeInfluences({ embrace: parsedInfluences.embrace }).embrace
-          : currentInfluences.embrace),
-      avoid: safeLocked.influencesAvoid
-        ? currentInfluences.avoid
-        : (Array.isArray(parsedInfluences.avoid)
-          ? sanitizeInfluences({ avoid: parsedInfluences.avoid }).avoid
-          : currentInfluences.avoid),
-    },
-  };
+  const proposed = mergeStyleProposal({ styleNotes, influences: currentInfluences, locked: safeLocked }, parsed);
 
   return {
     proposed,

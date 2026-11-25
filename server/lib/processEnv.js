@@ -15,6 +15,7 @@ import { promisify } from 'util';
 import { accessSync, constants, existsSync, statSync } from 'fs';
 import { delimiter, isAbsolute, join, resolve, win32 } from 'path';
 import { PATHS } from './paths.js';
+import { LOCAL_RUNTIME_MARKER_KEYS, hasLocalRuntimeMarker } from './aiToolkit/internal/localRuntimeMarkers.js';
 
 const execFileAsync = promisify(execFile);
 const IS_WIN = process.platform === 'win32';
@@ -27,6 +28,14 @@ export function stripDebugMallocEnv(env) {
 
 export function safeChildProcessEnv(extra = {}) {
   return withTorchCompilerCacheEnv(stripDebugMallocEnv({ ...process.env, ...extra }));
+}
+
+// For a fixed artifact-fetch subprocess, keep configured proxy and trust-store
+// knobs without inheriting provider tokens, package hooks or Python overrides.
+export function artifactDownloadEnv(env = process.env) {
+  const keys = ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy',
+    'all_proxy', 'no_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE'];
+  return Object.fromEntries(keys.filter((key) => env[key]).map((key) => [key, env[key]]));
 }
 
 // PyTorch's Windows default cache asks getpass for an account name, which a
@@ -76,8 +85,6 @@ const CLI_PROVIDER_AUTH_RULES = Object.freeze({
   hermes: { keys: ['HERMES_HOME'], prefixes: [] },
 });
 
-const LOCAL_PROVIDER_MARKERS = ['ollamaBacked', 'lmstudioBacked', 'mtplxBacked', 'llamaBacked', 'vllmBacked', 'sglangBacked'];
-
 /**
  * Build the non-secret provider metadata needed to classify ambient CLI auth
  * in another process. Provider envVars are deliberately excluded: those may
@@ -98,7 +105,7 @@ export function cliProviderAuthDescriptor(provider) {
   const descriptor = {};
   if (typeof provider.id === 'string' && provider.id) descriptor.id = provider.id;
   if (typeof provider.command === 'string' && provider.command) descriptor.command = provider.command;
-  for (const marker of LOCAL_PROVIDER_MARKERS) {
+  for (const marker of LOCAL_RUNTIME_MARKER_KEYS) {
     if (provider[marker] === true) descriptor[marker] = true;
   }
   return Object.keys(descriptor).length ? { ...descriptor, authOnly: true } : null;
@@ -109,8 +116,7 @@ function cliProviderAuthRule(provider) {
     ? provider.command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '')
     : '';
   const id = String(provider?.id || '').toLowerCase();
-  const local = LOCAL_PROVIDER_MARKERS.some((marker) => provider?.[marker] === true);
-  if (local) return null;
+  if (hasLocalRuntimeMarker(provider)) return null;
   if (command === 'claude' || id.startsWith('claude-code')) return CLI_PROVIDER_AUTH_RULES.claude;
   if (command === 'codex' || id === 'codex' || id === 'codex-tui') return CLI_PROVIDER_AUTH_RULES.codex;
   if (command === 'agy' || command === 'antigravity' || id.startsWith('antigravity')) return CLI_PROVIDER_AUTH_RULES.agy;

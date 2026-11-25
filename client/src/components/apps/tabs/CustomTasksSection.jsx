@@ -6,12 +6,14 @@ import ListLoadError from '../../ui/ListLoadError';
 import useUserTimezone from '../../../hooks/useUserTimezone.js';
 import { getCosJobs, createCosJob, toggleCosJob, triggerCosJob, deleteCosJob } from '../../../services/apiAgents.js';
 import { getProviders } from '../../../services/apiProviders.js';
-import { parseCronToRecurrence, buildCronFromRecurrence } from '../../../utils/cronHelpers';
+import { buildCronFromRecurrence } from '../../../utils/cronHelpers';
 import AgentJobProviderFields from '../../cos/AgentJobProviderFields';
-import JobCard, { ScheduleFields, TaskMetadataFields } from '../../cos/JobCard';
+import JobCard, { TaskMetadataFields } from '../../cos/JobCard';
+import { ScheduleFields } from '../../cos/JobScheduleFields';
 import { filterRunnableProviders } from '../../../utils/providers';
 import TaskDataInputs from '../../cos/TaskDataInputs';
 import { JobFormFieldsEditor, JobFormValueInputs, missingRequiredJobFormFields } from '../../cos/JobFormFields';
+import { useSingleFlight } from '../../../hooks/useSingleFlight';
 
 export function emptyForm() {
   return {
@@ -22,6 +24,7 @@ export function emptyForm() {
     interval: 'weekly',
     scheduledTime: '',
     scheduleAnchor: null,
+    weekdaysOnly: false,
     cronExpression: '',
     cronSchedule: null,
     priority: 'MEDIUM',
@@ -33,29 +36,6 @@ export function emptyForm() {
     formFields: [],
     formValues: {},
     taskMetadata: { useWorktree: true, openPR: true, simplify: true }
-  };
-}
-
-export function formFromJob(job) {
-  return {
-    name: job.name || '',
-    description: job.description || '',
-    promptTemplate: job.promptTemplate || '',
-    scheduleMode: job.cronExpression || job.cronSchedule ? 'cron' : 'interval',
-    interval: job.interval || 'weekly',
-    scheduledTime: job.scheduledTime || '',
-    scheduleAnchor: job.scheduleAnchor ?? null,
-    cronExpression: job.cronExpression || '',
-    cronSchedule: job.cronSchedule || (job.cronExpression ? parseCronToRecurrence(job.cronExpression) : null),
-    priority: job.priority || 'MEDIUM',
-    autonomyLevel: job.autonomyLevel || 'manager',
-    providerId: job.providerId || '',
-    model: job.model || '',
-    effort: job.effort || '',
-    dataInputs: job.dataInputs || [],
-    formFields: job.formFields || [],
-    formValues: job.formValues || {},
-    taskMetadata: { useWorktree: false, openPR: false, simplify: false, ...(job.taskMetadata || {}) }
   };
 }
 
@@ -75,7 +55,8 @@ export function toPayload(form, appId) {
     dataInputs: form.dataInputs || [],
     formFields: form.formFields || [],
     formValues: form.formValues || {},
-    taskMetadata: form.taskMetadata
+    taskMetadata: form.taskMetadata,
+    weekdaysOnly: !!form.weekdaysOnly
   };
   if (form.scheduleMode === 'cron') {
     payload.cronExpression = buildCronFromRecurrence(form.cronSchedule) || form.cronExpression?.trim() || null;
@@ -235,7 +216,7 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
   // silent here), so catches just return null — guarding on the result avoids a
   // second toast and the success-on-error footgun. Deliberate 200 `skipped`
   // outcomes are NOT toasted by the helper, so those branches toast explicitly.
-  const handleCreate = async () => {
+  const handleCreate = useSingleFlight(async () => {
     if (!validate(createForm)) return;
     const created = await createCosJob(toPayload(createForm, appId)).catch(() => null);
     if (!created) return;
@@ -243,7 +224,7 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
     setCreateForm(emptyForm());
     setShowCreate(false);
     fetchTasks();
-  };
+  });
 
   const handleToggle = async (jobId) => {
     const result = await toggleCosJob(jobId).catch(() => null);

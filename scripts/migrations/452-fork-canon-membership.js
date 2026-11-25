@@ -54,6 +54,8 @@ async function repair({ id, type, universeId }) {
 }
 
 export default {
+  // Opens PostgreSQL directly; the disposable boot smoke has no database, so its runner skips this (never recording it).
+  requiresPostgres: true,
   async up() {
     const { rows } = await query(CANDIDATES);
     let repaired = 0;

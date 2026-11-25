@@ -54,6 +54,15 @@ export function runwayImageSentPrompt({ prompt = '', negativePrompt, inputImages
   return { fullPrompt, references, record: sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }), added }) };
 }
 
+export function assertRunwayImagePromptLength(fullPrompt, authoredLength, limit) {
+  if (fullPrompt.length > limit) {
+    throw new ServerError(
+      `Runway's complete prompt is ${fullPrompt.length}/${limit} characters: ${authoredLength} supplied, plus ${fullPrompt.length - authoredLength} from reference tags and the negative prompt. Shorten the supplied or negative prompt; the full text is available in Show full prompt. Nothing was submitted or truncated.`,
+      { status: 400, code: 'RUNWAY_IMAGE_PROMPT_TOO_LONG' },
+    );
+  }
+}
+
 async function encodeInputImage(path, reviewedBytes = null) {
   const raw = reviewedBytes || await readFile(path);
   const bytes = stripImageMetadata(raw).data;
@@ -99,12 +108,7 @@ async function generateImagePrepared({
   const endpointId = family.id;
   if (inputImages.paths.length !== (initImagePath ? 1 : 0) + referenceImagePaths.length) throw new ServerError('Runway reference inputs are unavailable or exceed the selected model’s reference limit', { status: 400, code: 'RUNWAY_IMAGE_INPUT_INVALID' });
   const { fullPrompt, references, record: sentRecord } = runwayImageSentPrompt({ prompt, negativePrompt, inputImages, initImageStrength, visualConditioning, modelId: family.id, promptAdditions });
-  if (fullPrompt.length > family.promptMaxChars) {
-    throw new ServerError(
-      `Runway's complete prompt is ${fullPrompt.length}/${family.promptMaxChars} characters: ${prompt.length} supplied, plus ${fullPrompt.length - prompt.length} from reference tags and the negative prompt. Shorten the supplied or negative prompt; the full text is available in Show full prompt. Nothing was submitted or truncated.`,
-      { status: 400, code: 'RUNWAY_IMAGE_PROMPT_TOO_LONG' },
-    );
-  }
+  assertRunwayImagePromptLength(fullPrompt, prompt.length, family.promptMaxChars);
   const request = buildRunwayImageRequest({ modelId: family.id, prompt: fullPrompt, resolution, ratio, width, height, seed, referenceImages: references.map((ref) => ({ uri: '(validated input)', tag: ref.tag })) });
 
   const meta = runner.jobMeta({

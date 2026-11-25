@@ -56,7 +56,7 @@ const MAX_FRAME_RETRIES = 2;
 // recoverable browser failure; the frame is redrawn there and the encoder
 // keeps running, so frames already piped are kept. `onRetry({ frame, attempt,
 // error })` reports each restart, `frame` counted on song time.
-export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress, onLifecycle, offsetSec = 0, continuous = false, followed = false, videoFilter = null, videoArgs = H264_ENCODE_ARGS, master = false, reopenPage = null, onRetry = null, runFfmpeg = runFfmpegProcess, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
+export async function encodeComposition(page, contract, outputPath, { musicPath, signal, onProgress, onLifecycle, offsetSec = 0, continuous = false, followed = false, videoFilter = null, videoArgs = H264_ENCODE_ARGS, master = false, reopenPage = null, onRetry = null, runFfmpeg = runFfmpegProcess, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
   const { default: sharp } = await import('sharp');
   onLifecycle?.({ phase: 'encoder-preflight' });
   const ffmpeg = await locateFfmpeg();
@@ -68,11 +68,7 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   // Worker time sums across parallel segments. Encoding overlaps capture;
   // encodeMs measures pipe back-pressure plus the final drain, not CPU time.
   const timing = { frames: 0, seekMs: 0, drawMs: 0, captureMs: 0, encodeMs: 0, gpuFrames: 0, svgFrames: 0 };
-  // Music-video masters are cut once (`-ss` / `-t`) and muxed whole. Library
-  // beds keep the launch-video loop and half-second tail fade.
-  const exactAudio = audio?.path ? audio : null;
-  if (exactAudio && musicPath) throw new Error('Music-video audio replaces library music');
-  // Library and synthesized beds (never an exact music-video master) can be
+  // Library and synthesized beds loop under a half-second tail fade and can be
   // mastered to the loudness target (#10249): measure the trimmed bed first,
   // then apply the linear gain inside the encode's own audio filter.
   const bedTrim = `atrim=duration=${durationSec},asetpts=PTS-STARTPTS`;
@@ -91,11 +87,9 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   await frameFormat(page, contract);
   const input = shutter ? ['-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', `${width}x${height}`] : ['-f', 'image2pipe', '-vcodec', 'png'];
   const args = ['-hide_banner', '-loglevel', 'error', ...input, '-framerate', String(fps * sub), '-i', 'pipe:0'];
-  if (exactAudio) args.push('-ss', String(exactAudio.startSec ?? 0), '-t', String(durationSec), '-i', exactAudio.path);
-  else if (musicPath) args.push('-stream_loop', '-1', '-i', musicPath);
+  if (musicPath) args.push('-stream_loop', '-1', '-i', musicPath);
   args.push('-map', '0:v', '-vf', [motionBlurFilter, videoFilter, 'scale=in_range=pc:out_range=tv:out_color_matrix=bt709', tag].filter(Boolean).join(','), ...videoArgs, ...BT709_CONTAINER_ARGS);
-  if (exactAudio) args.push('-map', '1:a', ...AAC_ENCODE_ARGS);
-  else if (musicPath) args.push('-map', '1:a', '-af', `${bedTrim}${mastering ? `,${mastering.filter}` : ''},afade=t=out:st=${durationSec - 0.5}:d=0.5`, ...AAC_ENCODE_ARGS);
+  if (musicPath) args.push('-map', '1:a', '-af', `${bedTrim}${mastering ? `,${mastering.filter}` : ''},afade=t=out:st=${durationSec - 0.5}:d=0.5`, ...AAC_ENCODE_ARGS);
   // select drops subframes without changing the input's advertised rate.
   // Pin the output cadence so ffmpeg cannot duplicate frames or shorten it.
   if (sub > 1) args.push('-r', String(fps));

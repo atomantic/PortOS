@@ -3,6 +3,9 @@
 /** Pragmatic healthy floor of the 85-95 target band; chasing 100/100 is discouraged. */
 export const QUALITY_HEALTHY_THRESHOLD = 85;
 
+/** A run's weight halves every this many days, so remediated pre-fix runs stop pinning the score. Feature-area usage decays on the same clock. */
+export const QUALITY_RECENCY_HALF_LIFE_DAYS = 14;
+
 // A folded task is still its own executable schedule and measurement series.
 // Mapping it into a domain for selection or scoring must never merge its cron,
 // customized prompt, app override, pending request, or same-day snapshot row.
@@ -77,3 +80,9 @@ export function auditDomainFor(taskType) {
   const profile = normalizeAuditTaskType(taskType);
   return Object.hasOwn(AUDIT_DOMAIN_ALIASES, profile) ? AUDIT_DOMAIN_ALIASES[profile] : profile;
 }
+
+// Audits whose findings must never be narrowed by feature priority: a dormant feature still ships its security,
+// privacy and data-loss defects. Decided by domain, not task id, so the folded task ids stay exempt.
+export const PRIORITY_EXEMPT_AUDIT_DOMAINS = Object.freeze(['security', 'privacy', 'data-integrity-safety']);
+
+export const isPriorityExemptAuditType = taskType => PRIORITY_EXEMPT_AUDIT_DOMAINS.includes(auditDomainFor(taskType));

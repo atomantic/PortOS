@@ -38,7 +38,7 @@ vi.mock('../../services/apiImageVideo.js', () => ({
     defaultModel: 'example-ltx',
   })),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 // A picker with no Auto option (the orchestrator's) opens on the active provider.
 vi.mock('../../hooks/useProviderModels.js', () => ({
   default: ({ filter, allowDefault } = {}) => (!filter && !allowDefault ? {

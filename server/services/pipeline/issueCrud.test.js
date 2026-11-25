@@ -232,49 +232,6 @@ describe('pipeline issues service', () => {
     });
   });
 
-  describe('listRecentIssues', () => {
-    it('orders descending by updatedAt across all series', async () => {
-      const a = await svc.createIssue({ seriesId: 'ser-1', title: 'A' });
-      const b = await svc.createIssue({ seriesId: 'ser-2', title: 'B' });
-      const c = await svc.createIssue({ seriesId: 'ser-3', title: 'C' });
-      // Bump A so it becomes unambiguously the most recent — its update
-      // timestamp will be 10ms later than B and C's creates, which may
-      // share the same ms-resolution timestamp with each other.
-      await new Promise((r) => setTimeout(r, 10));
-      await svc.updateStage(a.id, 'idea', { status: 'ready', output: 'fresh' });
-      const recent = await svc.listRecentIssues({ limit: 10 });
-      expect(recent[0].id).toBe(a.id);
-      expect(recent).toHaveLength(3);
-      // B and C may tie on ms-resolution timestamps; only assert their
-      // membership in the remaining positions, not the order between them.
-      expect(new Set(recent.slice(1).map((i) => i.id))).toEqual(new Set([b.id, c.id]));
-    });
-
-    it('clamps limit: < 1 → 1, > 50 → 50, non-numeric → default 10', async () => {
-      for (let i = 0; i < 12; i += 1) {
-        // Stagger to keep updatedAt monotonic.
-        await svc.createIssue({ seriesId: 'ser-1', title: `T${i}` });
-        await new Promise((r) => setTimeout(r, 2));
-      }
-      expect((await svc.listRecentIssues({ limit: 0 })).length).toBe(1);
-      expect((await svc.listRecentIssues({ limit: -5 })).length).toBe(1);
-      expect((await svc.listRecentIssues({ limit: 999 })).length).toBe(12);
-      expect((await svc.listRecentIssues({ limit: 'abc' })).length).toBe(10);
-      expect((await svc.listRecentIssues({})).length).toBe(10);
-    });
-
-    it('respects the upper clamp of 50', async () => {
-      // Verifying the cap without creating 51 issues — pass an explicit
-      // huge limit and confirm it clamps to 50 (one of the bounds), and
-      // a limit of 50 returns up to 50.
-      for (let i = 0; i < 3; i += 1) {
-        await svc.createIssue({ seriesId: 'ser-1', title: `Y${i}` });
-      }
-      const r = await svc.listRecentIssues({ limit: 9999 });
-      expect(r.length).toBeLessThanOrEqual(50);
-    });
-  });
-
   describe('list endpoints opt into runHistory strip', () => {
     // List payloads (sidebar, per-series list) never render runHistory,
     // and each text stage can hold up to 5 × ~600KB entries. Routes
@@ -315,20 +272,6 @@ describe('pipeline issues service', () => {
       });
       expect(result.items).toHaveLength(1);
       expect(result.items[0].stages.idea.runHistory).toEqual([]);
-    });
-
-    it('listRecentIssues default preserves runHistory', async () => {
-      await seedWithHistory();
-      const recent = await svc.listRecentIssues({ limit: 10 });
-      expect(recent).toHaveLength(1);
-      expect(recent[0].stages.idea.runHistory).toHaveLength(1);
-    });
-
-    it('listRecentIssues withHistory:false strips runHistory', async () => {
-      await seedWithHistory();
-      const recent = await svc.listRecentIssues({ limit: 10, withHistory: false });
-      expect(recent).toHaveLength(1);
-      expect(recent[0].stages.idea.runHistory).toEqual([]);
     });
 
     it('getIssue (detail read) keeps the full runHistory', async () => {

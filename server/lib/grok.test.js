@@ -4,8 +4,6 @@ import { pinPlatform } from './testHelper.js';
 
 import {
   isGrokCommand,
-  isGrokCliProvider,
-  isGrokTuiProvider,
   ensureGrokHeadlessArgs,
   ensureGrokTuiArgs,
   prepareGrokPromptFile,
@@ -31,19 +29,6 @@ describe('grok — isGrokCommand', () => {
     expect(isGrokCommand('')).toBe(false);
     expect(isGrokCommand(null)).toBe(false);
     expect(isGrokCommand(undefined)).toBe(false);
-  });
-});
-
-describe('grok — provider predicates', () => {
-  it('identifies the cli provider by id or by cli-type command', () => {
-    expect(isGrokCliProvider({ id: 'grok-cli' })).toBe(true);
-    expect(isGrokCliProvider({ id: 'custom', type: 'cli', command: 'grok' })).toBe(true);
-    expect(isGrokCliProvider({ id: 'grok', type: 'api', command: 'grok' })).toBe(false);
-  });
-  it('identifies the tui provider by id or by tui-type command', () => {
-    expect(isGrokTuiProvider({ id: 'grok-tui' })).toBe(true);
-    expect(isGrokTuiProvider({ id: 'custom', type: 'tui', command: 'grok' })).toBe(true);
-    expect(isGrokTuiProvider({ id: 'grok-cli', type: 'cli', command: 'grok' })).toBe(false);
   });
 });
 

@@ -15,8 +15,8 @@ export default function useStoryStageWiring({ selected, patchProject, replacePro
   const conceptSaveVersions = useRef({});
   const conceptSaveSequence = useRef(0);
   const [songStyleReadPending, setSongStyleReadPending] = useState(false);
-  // Pre-production treatment (#8980): brief, compiled arc, shot direction,
-  // proof checklist and the non-destructive Apply review.
+  // Pre-production treatment (#8980): brief, compiled arc, shot direction
+  // and the non-destructive Apply review.
   const treatment = useMusicVideoTreatment({ project: selected, onProjectPatch: patchProject, replaceProject });
 
   // Project-level concept/style (issue #3168) — optimistic-local + silent-PATCH on

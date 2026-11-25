@@ -501,6 +501,15 @@ describe('prepareVideoGenParams', () => {
   });
 
   describe('explicit validation throws still clean up', () => {
+    it('rejects a missing local default before staging uploads', async () => {
+      listVideoModels.mockReturnValue([]);
+      const pendingUpload = upload('sourceImage');
+      await expect(prepare({}, { sourceImage: pendingUpload }))
+        .rejects.toMatchObject({ status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' });
+      expect(unlink).toHaveBeenCalledWith(pendingUpload.path);
+      expect(copyFileMock).not.toHaveBeenCalled();
+    });
+
     it('rejects an unknown modelId and drops the multipart temp file', async () => {
       await expect(prepare({ modelId: 'nope' }, { sourceImage: upload('sourceImage') }))
         .rejects.toMatchObject({ status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' });
@@ -655,6 +664,24 @@ it('leaves omitted frame counts unset for other runtimes', async () => {
 });
 
 describe('validateVideoRetryParams', () => {
+  it('rejects a model swap from LTX-2 to mlx_video for persisted keyframes', async () => {
+    listVideoModels.mockReturnValue([
+      { id: 'ltx2_unified', runtime: 'ltx2' },
+      { id: 'legacy', runtime: 'mlx_video' },
+    ]);
+    const params = {
+      modelId: 'ltx2_unified',
+      mode: 'fflf',
+      keyframes: [
+        { path: '/mock/images/start.png', index: 0 },
+        { path: '/mock/images/end.png', index: 24 },
+      ],
+    };
+    await expect(validateVideoRetryParams(params)).resolves.toMatchObject({ id: 'ltx2_unified' });
+    await expect(validateVideoRetryParams({ ...params, modelId: 'legacy' }))
+      .rejects.toMatchObject({ status: 400, code: 'KEYFRAMES_REQUIRE_LTX2' });
+  });
+
   it('keeps an explicit null model sentinel unknown instead of selecting the default', async () => {
     await expect(validateVideoRetryParams({ modelId: null })).rejects.toMatchObject({
       status: 400,

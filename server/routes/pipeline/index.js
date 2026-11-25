@@ -2,7 +2,7 @@
  * Pipeline Routes (/api/pipeline): series and issue/episode resources plus stage operations,
  * assembled from domain sub-routers (each documents its own endpoints). Order-sensitive pairs
  * live INSIDE one sub-router each (`/series/duplicates` + `/series/merge*` before
- * `/series/:id` in series.js, `/issues/recent` before `/issues/:id` in issues.js).
+ * `/series/:id` in series.js).
  */
 
 import { Router } from 'express';

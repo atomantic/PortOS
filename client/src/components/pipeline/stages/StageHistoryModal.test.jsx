@@ -7,9 +7,7 @@ vi.mock('../../../services/apiPipeline.js', () => ({
   restorePipelineStageVersion: vi.fn(),
 }));
 
-vi.mock('../../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../../ui/Toast');
 
 import StageHistoryModal from './StageHistoryModal';
 import { restorePipelineStageVersion } from '../../../services/apiPipeline.js';

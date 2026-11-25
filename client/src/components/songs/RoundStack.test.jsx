@@ -27,7 +27,7 @@ vi.mock('../../lib/songPlayback', () => ({
 vi.mock('../../services/apiMedia.js', () => ({
   getUploadUrl: (f) => `/api/uploads/${f}`,
 }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import RoundStack from './RoundStack.jsx';
 

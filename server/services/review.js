@@ -11,6 +11,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { EventEmitter } from 'events';
 import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 import { cosEvents } from './cos/cosEvents.js';
 import { GOAL_FIDELITY_HOLD_EVENT, formatGoalFidelitySummary } from '../lib/goalFidelity.js';
 
@@ -152,8 +153,7 @@ async function loadItems() {
 
 /**
  * Load the archived (retired) items. Never cached — only read from the
- * history views (`getItems` for a completed/dismissed/unfiltered query,
- * and `createItem`'s duplicate-alert check when the live scan misses).
+ * history and archived item operations.
  * Strict: a caller that must not silently treat "unreadable" as "empty"
  * (`applyRetention`, before it trusts the file enough to write over it)
  * awaits this directly. A read-only view that can safely degrade instead
@@ -253,7 +253,8 @@ async function loadItemCollection(id) {
 }
 
 /**
- * Get all review items, sorted by type then creation date (newest first).
+ * Get review items sorted by type then creation date (newest first). Apply all
+ * filters before returning either the full array or a requested page.
  * A completed/dismissed or unfiltered query also merges in archive.json —
  * archive never holds a pending item, so a pending-only query skips it. A
  * corrupt archive.json degrades to "no archived items" rather than failing
@@ -262,7 +263,7 @@ async function loadItemCollection(id) {
  * (live copy wins) in case a crash left the same item in both files
  * mid-retention; see `applyRetention`'s doc comment.
  */
-export async function getItems({ status, type } = {}) {
+export async function getItems({ status, type, limit, offset, matches } = {}) {
   let items = await loadItems();
   if (!status || ARCHIVE_ELIGIBLE_STATUSES.has(status)) {
     const archived = await loadArchiveOrEmpty('getItems');
@@ -271,11 +272,14 @@ export async function getItems({ status, type } = {}) {
   }
   if (status) items = items.filter(i => i.status === status);
   if (type) items = items.filter(i => i.type === type);
-  return items.sort((a, b) => {
+  if (matches) items = items.filter(matches);
+  items.sort((a, b) => {
     const typeOrder = ITEM_TYPES.indexOf(a.type) - ITEM_TYPES.indexOf(b.type);
     if (typeOrder !== 0) return typeOrder;
     return new Date(b.createdAt) - new Date(a.createdAt);
   });
+  const page = { limit, offset };
+  return isPaginationRequested(page) ? paginateArray(items, page) : items;
 }
 
 /**
@@ -304,21 +308,15 @@ export async function createItem({ type, title, description = '', metadata = {} 
   return runMutation(async () => {
     const items = await loadItems();
 
-    // Prevent duplicate alerts for same reference within 24 hours. Archive only
-    // ever holds items >=30 days old, so it can never actually match this 24h
-    // window in practice — but check it anyway rather than silently narrowing
-    // the dedup window the day an item crosses into archive.json. Only
-    // consulted when the live scan misses, so the common case (no dedup match,
-    // or a live match) never touches the archive file. A corrupt archive.json
-    // degrades to "no archived duplicate found" (`loadArchiveOrEmpty`) rather
-    // than blocking item creation entirely.
+    // Retention keeps recent alerts in the live store, which covers the 24h
+    // dedup window.
     if (type === 'alert' && metadata?.referenceId) {
       const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
       const isDuplicate = (i) =>
         i.type === 'alert' &&
         i.metadata?.referenceId === metadata.referenceId &&
         new Date(i.createdAt).getTime() > oneDayAgo;
-      const duplicate = items.find(isDuplicate) ?? (await loadArchiveOrEmpty('createItem duplicate check')).find(isDuplicate);
+      const duplicate = items.find(isDuplicate);
       if (duplicate) return { result: duplicate };
     }
 
@@ -505,7 +503,7 @@ export async function deleteItem(id) {
 
     const [removed] = items.splice(index, 1);
     await save(items);
-    console.log(`📋 Review item deleted: ${removed.type} — ${removed.title}`);
+    console.log(`📋 Review item deleted: ${removed.type} (${removed.id})`);
     return { result: removed, events: [['item:deleted', removed]] };
   });
 }

@@ -114,11 +114,13 @@ describe('resolvePublicReviewProvider', () => {
     expect(gate.ok).toBe(false);
     expect(gate.code).toBe('public-review-no-eligible-provider');
     expect(gate.error).toMatch(/no-tool/);
+    expect(gate.error).toContain('Models → Providers');
 
     seed([OLLAMA_API, { ...OPENCODE, enabled: false }]);
     const actions = await resolvePublicReviewProvider({ posture: 'sandboxed-actions' });
     expect(actions.ok).toBe(false);
     expect(actions.code).toBe('public-review-no-eligible-provider');
     expect(actions.error).toMatch(/sandboxed-actions/);
+    expect(actions.error).toContain('Models → Providers');
   });
 });

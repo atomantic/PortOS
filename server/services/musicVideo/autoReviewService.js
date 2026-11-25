@@ -523,22 +523,20 @@ async function pauseOnEndedGeneration(tag, job) {
   publish(tag.projectId, out.project, out.run, { type: 'idle' });
 }
 
-function continueFromEvent(projectId, pickRun, label) {
-  track(getProject(projectId)
+function continueFromEvent(projectId, pickRun) {
+  return track(getProject(projectId)
     .then((project) => {
       const run = project ? pickRun(project) : null;
       return run ? advanceAutoReview(projectId, run.id) : null;
-    })
-    .catch((err) => console.error(`❌ Music Video auto-review could not continue after ${label}: ${err.message}`)));
+    }));
 }
 
-musicVideoEvents.on('excerpt-render', ({ projectId, excerptId } = {}) => {
-  if (projectId && excerptId) continueFromEvent(projectId, (project) => runAwaitingExcerpt(project, excerptId), 'a draft render');
-});
+export function onAutoReviewExcerptSettled({ projectId, excerptId }) {
+  return continueFromEvent(projectId, (project) => runAwaitingExcerpt(project, excerptId));
+}
 
-const onSceneTake = ({ projectId, sceneId } = {}) => {
-  if (!projectId || !sceneId) return;
-  continueFromEvent(projectId, (project) => {
+export function onAutoReviewSceneTake({ projectId, sceneId }) {
+  return continueFromEvent(projectId, (project) => {
     const revisions = projectRevisions(project);
     return projectAutoReviews(project).find((run) => {
       if (run.status !== 'running') return false;
@@ -546,10 +544,8 @@ const onSceneTake = ({ projectId, sceneId } = {}) => {
       const revision = revisions.find((r) => r.id === revisionId && r.status === 'open');
       return !!revision?.sections?.some((s) => s.sceneId === sceneId && s.verdict === 'rejected');
     }) || null;
-  }, 'a revised take landed');
-};
-musicVideoEvents.on('scene-image', onSceneTake);
-musicVideoEvents.on('scene-video', onSceneTake);
+  });
+}
 
 /**
  * Resolves once no background work is in flight — including work an earlier

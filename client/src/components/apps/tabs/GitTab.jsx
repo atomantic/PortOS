@@ -35,8 +35,10 @@ export default function GitTab({ appId, appName, repoPath }) {
 
   const handleCommit = async (message, clearDraft) => {
     setCommitting(true);
-    await createCommit(repoPath, message).catch(() => null);
-    clearDraft();
+    // Keep the typed message when the commit fails (hook, identity, lock) so
+    // it can be retried without retyping.
+    const committed = await createCommit(repoPath, message).then(() => true, () => false);
+    if (committed) clearDraft();
     setCommitting(false);
     await loadGitInfo();
   };
@@ -110,6 +112,7 @@ export default function GitTab({ appId, appName, repoPath }) {
             remoteBranchesError={repo.remoteBranchesError}
             loadingRemote={repo.loadingRemote}
             onRefresh={() => loadRemoteBranches({ force: true })}
+            localWorktreeMergedCount={branches.filter(b => b.merged && b.worktree).length}
             actions={branchActions}
           />
         </div>

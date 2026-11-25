@@ -92,7 +92,7 @@ export async function getPersistentMindImageWorkGuard() {
 export const rendersActiveError = (renders) => {
   const running = summarizeSystemActivity({ renders }).blockers.map((blocker) => blocker.label).join(', ');
   return new ServerError(
-    `${running}. Let ${renders.length === 1 ? 'it' : 'them'} finish, or stop ${renders.length === 1 ? 'it' : 'them'}, before updating: the update restarts PortOS and ${renders.length === 1 ? 'the render' : 'the renders'} would be lost.`,
+    `${running}. Let ${renders.length === 1 ? 'it' : 'them'} finish, or stop ${renders.length === 1 ? 'it' : 'them'}, before updating: the update restarts PortOS and that work would be lost.`,
     { status: 409, code: 'RENDERS_ACTIVE', context: { renders: renders.length } },
   );
 };

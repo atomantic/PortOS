@@ -27,7 +27,7 @@ vi.mock('../services/apiAgents.js', () => ({
   getCosActivityCalendar: api.getCosActivityCalendar,
   getCosDecisionSummary: api.getCosDecisionSummary,
 }));
-vi.mock('./ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
+vi.mock('./ui/Toast');
 import GoalProgressWidget from './GoalProgressWidget';
 import UpcomingTasksWidget from './UpcomingTasksWidget';
 import BackupWidget from './BackupWidget';

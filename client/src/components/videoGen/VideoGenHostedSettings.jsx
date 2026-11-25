@@ -50,7 +50,7 @@ export default function VideoGenHostedSettings({
     );
   }
   if (isFal) {
-    const { falModel, falResolutions, falModelId, setFalModelId, falDuration, setFalDuration, falResolution, setFalResolution, falGenerateAudio, setFalGenerateAudio } = fal;
+    const { falModelId, setFalModelId, falDuration, setFalDuration, falResolution, setFalResolution, falGenerateAudio, setFalGenerateAudio } = fal;
     return (
       <FalVideoSettings
         mode={mode}
@@ -58,10 +58,8 @@ export default function VideoGenHostedSettings({
         setFalModelId={setFalModelId}
         falDuration={falDuration}
         setFalDuration={setFalDuration}
-        falModel={falModel}
         falResolution={falResolution}
         setFalResolution={setFalResolution}
-        falResolutions={falResolutions}
         falGenerateAudio={falGenerateAudio}
         setFalGenerateAudio={setFalGenerateAudio}
         width={width}
@@ -138,10 +136,8 @@ export default function VideoGenHostedSettings({
         width={width}
         height={height}
         handleResolutionChange={handleResolutionChange}
-        runwayResolutions={runway.runwayResolutions}
         runwayResolution={runway.runwayResolution}
         setRunwayResolution={runway.setRunwayResolution}
-        runwaySizeModel={runway.runwaySizeModel}
       />
     );
   }

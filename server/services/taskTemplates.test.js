@@ -28,7 +28,6 @@ const {
   getPopularTemplates,
   recordTemplateUsage,
   createTemplate,
-  createTemplateFromTask,
   updateTemplate,
   deleteTemplate
 } = await import('./taskTemplates.js');
@@ -106,13 +105,13 @@ describe('taskTemplates service', () => {
       expect((await getAllTemplates()).find(t => t.id === template.id)).toBeUndefined();
     });
 
-    it('shares admission across usage, create-from-task, edits and deletion of different templates', async () => {
+    it('shares admission across usage, creation, edits and deletion of different templates', async () => {
       const removed = { ...template, id: 'user-removed' };
       usePersistence({ userTemplates: [template, removed], usage: {} });
       const pending = holdNextWrite();
       const use = recordTemplateUsage('builtin-do-plan-task');
       await pending.started;
-      const creation = createTemplateFromTask({ description: 'Example task', context: 'Example context' }, 'Saved task');
+      const creation = createTemplate({ name: 'Saved task', description: 'Example task', context: 'Example context', category: 'from-task' });
       const edit = updateTemplate(template.id, { name: 'Edited' });
       const deletion = deleteTemplate(removed.id);
       pending.release();
@@ -148,7 +147,7 @@ describe('taskTemplates service', () => {
       writeFile.mockRejectedValueOnce(failure);
       await expect(createTemplate({ name: 'Not saved', description: 'Example' })).rejects.toBe(failure);
 
-      const created = await createTemplateFromTask({ description: 'Example task' }, 'Saved task');
+      const created = await createTemplate({ name: 'Saved task', description: 'Example task' });
       expect((await getAllTemplates()).filter(t => !t.isBuiltin)).toEqual([{ ...created, useCount: 0 }]);
     });
 

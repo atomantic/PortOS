@@ -25,6 +25,7 @@ import { resolvePhotorealLook } from '../../lib/photorealLook.js';
 import {
   GREYBOX_BLENDER_PY, greyboxBlenderJob, photorealFlythroughFrameFile, photorealShotFile, photorealShotRole,
 } from '../../lib/greyboxBlender.js';
+import { trackedRenderMap } from '../renderActivity.js';
 import * as catalogDB from './catalogDB.js';
 import { catalogEvents } from './catalogEvents.js';
 import { uploadIngredientMediaFile } from './catalogMedia.js';
@@ -49,7 +50,8 @@ export const __setPhotorealDepsForTests = (overrides) => Object.assign(deps, ove
 // ingredientId → latest job. In memory: a render is a disposable process; the
 // renders it attached and the .blend it kept are the durable results.
 const jobs = new Map();
-const sceneBuilds = new Map();
+const liveRenders = trackedRenderMap('photoreal', { noun: 'Photoreal render', link: (ingredientId) => `/catalog/place/${encodeURIComponent(ingredientId)}` });
+const sceneBuilds = trackedRenderMap('photoreal-scene', { noun: 'Photoreal scene build', link: (ingredientId) => `/catalog/place/${encodeURIComponent(ingredientId)}` });
 
 // Ingredient ids are slug-safe; anything else never reaches a file path.
 const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -192,11 +194,13 @@ export async function startPhotorealRender(ingredientId, { shotIds, engine, samp
     startedAt: new Date().toISOString(), finishedAt: null, error: null, report: null, video: null, blenderVersion: tool.version,
   };
   publish(job);
+  liveRenders.set(ingredientId, job);
   maintenance.run('composition', 'Photoreal environment render', () => runRender({ place, scene, tool, job, samples }), { continuation: true })
     .catch((err) => {
       console.error(`❌ Photoreal render for place ${ingredientId.slice(0, 12)} failed: ${err.message}`);
       publish({ ...job, state: 'failed', error: err.message, finishedAt: new Date().toISOString() });
-    });
+    })
+    .finally(() => liveRenders.delete(ingredientId));
   return job;
 }
 

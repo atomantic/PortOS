@@ -11,7 +11,7 @@ vi.mock('../../../services/apiDigitalTwin.js', () => ({
 vi.mock('../../../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
+vi.mock('../../ui/Toast');
 vi.mock('../TwinProviderPicker.jsx', () => ({
   default: ({ providers, selected }) => (
     <div data-testid="provider-picker">{providers.map((p) => p.id).join(',')}|{selected?.providerId ?? 'none'}</div>

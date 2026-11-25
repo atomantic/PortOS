@@ -4,8 +4,7 @@
  * GitHub silently skips a workflow it rejects (a `runner` context in job-level
  * `env`, say), so a bad file merges unnoticed. actionlint catches that class
  * before push. The version and the linux/amd64 archive SHA-256 are pinned here
- * and mirrored literally in .github/workflows/ci.yml; the parity test in
- * scripts/run-actionlint.test.js keeps the two in step.
+ * only; scripts/install-actionlint.js reads them for CI acquisition.
  *
  * Builtins only: ci-test-plan.js imports this before `npm ci` runs.
  */

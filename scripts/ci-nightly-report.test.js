@@ -148,7 +148,40 @@ describe('reportMainHealth', () => {
     '/issues?': issues,
   });
   const OPEN_ISSUE = { number: 77, title: 'main is red' };
-  const greenRoutes = (issues) => ({ ...runsRoute([run({ run_attempt: 2, conclusion: 'success' })]), '/issues?': issues });
+  const FULL_GREEN_JOBS = { jobs: [
+    { name: 'Server tests (1/4)', conclusion: 'success', steps: [] },
+    { name: 'CI Gate', conclusion: 'success', steps: [] },
+  ] };
+  const SCOPED_GREEN_JOBS = { jobs: [
+    { name: 'Impact', conclusion: 'success', steps: [] },
+    { name: 'Server tests (1/4)', conclusion: 'skipped', steps: [] },
+    { name: 'CI Gate', conclusion: 'success', steps: [] },
+  ] };
+  const greenRoutes = (issues, jobs = FULL_GREEN_JOBS) => ({
+    ...runsRoute([run({ run_attempt: 2, conclusion: 'success' })]),
+    '/actions/runs/500/attempts/2/jobs': jobs,
+    '/issues?': issues,
+  });
+
+  it('does not close the alert on a scoped green run that skipped the server suite (#18457)', async () => {
+    const { fetchImpl, writes } = stubFetch(greenRoutes([{ ...OPEN_ISSUE, body: 'red' }], SCOPED_GREEN_JOBS));
+    const result = await reportMainHealth({
+      env: { ...ENV, CI_RUN_CONCLUSION: 'success' }, logger, writeSummary: vi.fn(), fetchImpl,
+    });
+    expect(result).toMatchObject({ action: 'none', syncFailed: false });
+    expect(writes()).toEqual([]);
+  });
+
+  it('keeps the alert open and fails the sync when the green run jobs are unreadable', async () => {
+    const { fetchImpl, writes } = stubFetch({
+      ...runsRoute([run({ run_attempt: 2, conclusion: 'success' })]), '/issues?': [OPEN_ISSUE],
+    });
+    const result = await reportMainHealth({
+      env: { ...ENV, CI_RUN_CONCLUSION: 'success' }, logger, writeSummary: vi.fn(), fetchImpl,
+    });
+    expect(result).toMatchObject({ action: 'none', syncFailed: true });
+    expect(writes()).toEqual([]);
+  });
 
   it('leaves the newer red alert open after an older green rerun', async () => {
     const newerRed = run({ id: 501, run_number: 11, head_sha: BASE });
@@ -261,6 +294,7 @@ describe('reportMainHealth', () => {
     const olderRed = run({ id: 499, run_number: 9, head_sha: BASE });
     const { fetchImpl, writes } = stubFetch({
       ...runsRoute([olderRed, run({ conclusion: 'success' })]),
+      '/actions/runs/500/attempts/1/jobs': FULL_GREEN_JOBS,
       '/issues?': [{ ...OPEN_ISSUE, body: 'Run: https://github.com/example/repo/actions/runs/499' }],
     });
     const result = await reportMainHealth({

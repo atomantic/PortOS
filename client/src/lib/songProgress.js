@@ -214,7 +214,6 @@ export const memorizationPercent = (progress, sections) => {
 // `dim` (lyrics dimmed, still legible), `hide` (lyrics hidden, notes only),
 // `blind` (notes hidden too — sing from memory). Driven off the rolling average
 // so a single good take doesn't yank the crutch away mid-practice.
-export const HIDE_LEVELS = ['show', 'dim', 'hide', 'blind'];
 export const hideLevelFor = (average) => {
   const avg = clampPercent(average);
   if (avg >= 95) return 'blind';

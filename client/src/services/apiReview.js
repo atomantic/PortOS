@@ -15,11 +15,9 @@ export const claimReviewQueueDelivery = (id, options = {}) => request('/review/q
 
 // Review Hub
 export const getReviewItems = (params, options = {}) => {
-  const qs = new URLSearchParams();
-  if (params?.status) qs.set('status', params.status);
-  if (params?.type) qs.set('type', params.type);
-  const query = qs.toString();
-  return request(`/review/items${query ? `?${query}` : ''}`, options);
+  const { status, type, limit, offset } = params ?? {};
+  const query = queryString({ status: status || undefined, type: type || undefined, limit, offset });
+  return request(`/review/items${query}`, options);
 };
 export const getReviewCounts = (options = {}) => request('/review/counts', options);
 export const getReviewBriefing = () => request('/review/briefing');

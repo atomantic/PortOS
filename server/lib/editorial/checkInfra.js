@@ -30,3 +30,4 @@ export * from './checkInfra/sceneAnalysis.js';
 export * from './checkInfra/proseDensity.js';
 export * from './checkInfra/comic.js';
 export * from './checkInfra/gates.js';
+export * from './checkInfra/findingCap.js';

@@ -15,10 +15,6 @@ import { preparePersistentMindContext, readPersistentMindMemories } from './pers
 
 const normalizeOllamaModel = (value) => String(value || '').trim().toLowerCase().replace(/:latest$/, '');
 
-export function persistentMindLocalBackend(provider) {
-  return localRuntimeForProvider(provider)?.kind || null;
-}
-
 export function persistentMindModelMatches(backend, configuredModel, residentModel) {
   const residentId = residentModel?.id || residentModel?.name;
   if (!configuredModel || !residentId) return false;

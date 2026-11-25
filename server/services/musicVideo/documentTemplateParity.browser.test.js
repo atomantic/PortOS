@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { release, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -9,6 +9,7 @@ import { chromium } from 'playwright-core';
 import { startOwnedBrowserFixture } from '../../test/browserFixture.js';
 import { createOwnedFixtureSetup } from '../../test/ownedFixtureSetup.js';
 import { installTemplateParityDiagnostics } from '../../test/templateParityDiagnostics.js';
+import { createTestPhaseDiagnostics } from '../../../lib/testPhaseDiagnostics.js';
 import { buildRecordedViteFixture, createRecordedStaticServer } from '../../../scripts/lib/browserServedFiles.js';
 import { browserSuiteCanRun, resolveTestChrome, resolveClientBundler } from '../../lib/browserSuiteGate.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
@@ -28,11 +29,14 @@ const still = { sceneId: 'still', order: 0, label: 'Example still', startSec: 0,
 const base = (scene = still, extra = {}) => ({ id: 'native-parity-fixture', name: 'Example song', scenes: [scene],
   audioAnalysis: { durationSec: 4, beats: [0.5, 1, 2, 3], downbeats: [1, 3], sections: [{ startSec: 0, endSec: 4, label: 'Verse' }] },
   composition: { mode: 'document', document: { directory: 'fixture' } }, ...extra });
-let dir, server, fixture, native, engine, current, engineData;
+const clipHistory = Object.fromEntries(['clip', 'uniform'].map(id => [
+  id, { id, filename: `${id}.webm`, fps: 24, width: 240, height: 240, numFrames: 96 },
+]));
+let dir, server, fixture, engineFixture, native, engine, current, engineData;
 let comparison = 0;
 const errors = [];
 const setup = createOwnedFixtureSetup({ cleanup: async () => {
-  const results = await Promise.allSettled([fixture?.close(), server && new Promise((done, reject) => server.close(error => error ? reject(error) : done()))]);
+  const results = await Promise.allSettled([fixture?.close(), engineFixture?.close(), server && new Promise((done, reject) => server.close(error => error ? reject(error) : done()))]);
   results.push(...await Promise.allSettled([dir && rm(dir, { recursive: true, force: true })]));
   const failures = results.filter(result => result.status === 'rejected').map(result => result.reason);
   if (failures.length) throw new AggregateError(failures, 'Native parity fixture cleanup failed');
@@ -40,6 +44,36 @@ const setup = createOwnedFixtureSetup({ cleanup: async () => {
 afterAll(() => setup.close());
 
 const dataFor = (project, media = new Map()) => buildDocumentData(project, { media, frame: DOCUMENT_FRAME_SIZES[documentAspect(project)], clock: documentRenderClock(4, 24), songDurationSec: 4 });
+
+// Supply the macOS fixture's data in the native page. Chrome still decodes
+// every image and media file and renders the generated lyric HTML.
+function installNativeFixtureInputs({ clips, assets }) {
+  const history = new Map(clips.map(entry => [`/api/video-gen/history/${entry.id}`, entry]));
+  const urls = new Map(assets.map(({ path, type, bytes }) => [
+    path, URL.createObjectURL(new Blob([Uint8Array.from(atob(bytes), char => char.charCodeAt(0))], { type })),
+  ]));
+  const fetch = window.fetch;
+  window.fetch = (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : input, location.href);
+    if (url.origin === location.origin) {
+      const response = history.get(url.pathname) ?? window.parityLyricResponses?.get(url.pathname);
+      if (response) return Promise.resolve(Response.json(response));
+    }
+    return fetch(input, init);
+  };
+
+  // React sets the attribute, while the canvas painter assigns Image.src.
+  const setAttribute = Element.prototype.setAttribute;
+  Element.prototype.setAttribute = function (name, value) {
+    return setAttribute.call(this, name, name === 'src' ? urls.get(value) ?? value : value);
+  };
+  for (const prototype of [HTMLImageElement.prototype, HTMLMediaElement.prototype]) {
+    const src = Object.getOwnPropertyDescriptor(prototype, 'src');
+    Object.defineProperty(prototype, 'src', {
+      ...src, set(value) { src.set.call(this, urls.get(value) ?? value); },
+    });
+  }
+}
 
 async function assertParity({ actual, expected, metadata }) {
   // The launcher deliberately removes DIAGNOSTICS_DIR from worker envs. Its
@@ -102,7 +136,7 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
         res.sendFile(join(dir, name));
       });
       app.use('/engine', staticFiles.serve(join(templates, 'layered')), staticFiles.serve(join(templates, 'shared')), staticFiles.serve(join(root, 'server/lib/musicVideo')));
-      app.get('/api/video-gen/history/:id', (req, res) => res.json({ id: req.params.id, filename: req.params.id === 'uniform' ? 'uniform.webm' : 'clip.webm', fps: 24, width: 240, height: 240, numFrames: 96 }));
+      app.get('/api/video-gen/history/:id', (req, res) => res.json({ ...clipHistory[req.params.id === 'uniform' ? 'uniform' : 'clip'], id: req.params.id }));
       app.get('/api/music-video/:id/lyrics/overlay/preview', async (_req, res, next) => { await buildLyricPlaythroughPreview(current, { overlay: true }).then(value => res.json(value)).catch(next); });
       app.get('/data/images/:file', (req, res) => res.sendFile(join(dir, req.params.file)));
       app.get('/data/videos/:file', (req, res) => res.sendFile(join(dir, req.params.file === 'uniform.webm' ? 'uniform.webm' : 'clip.webm')));
@@ -111,41 +145,76 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
       server = await staticFiles.start(app);
     });
     await phase('browser', async () => {
-      fixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true, args: ['--force-color-profile=srgb'] } });
+      const options = { chromium, launchOptions: { executablePath: chrome, headless: true, args: ['--force-color-profile=srgb'] } };
+      fixture = await startOwnedBrowserFixture(options);
+      // A mounted native preview can stall the next layered navigation when
+      // macOS Chrome for Testing runs both pages in the same browser process.
+      if (process.platform === 'darwin') engineFixture = await startOwnedBrowserFixture(options);
       native = await fixture.browser.newPage({ viewport: { width: 640, height: 700 } });
-      engine = await fixture.browser.newPage({ viewport: { width: 640, height: 360 } });
+      engine = await (engineFixture ?? fixture).browser.newPage({ viewport: { width: 640, height: 360 } });
       for (const page of [native, engine]) {
         await page.addInitScript(installTemplateParityDiagnostics);
         page.on('pageerror', error => errors.push(error.message));
+      }
+      if (process.platform === 'darwin') {
+        const clips = Object.values(clipHistory);
+        const files = [
+          ...clips.map(({ filename }) => ({ filename, path: `/data/videos/${filename}`, type: 'video/webm' })),
+          ...['grid.png', 'end.png'].map(filename => ({ filename, path: `/data/images/${filename}`, type: 'image/png' })),
+          { filename: 'song.wav', path: '/song.wav', type: 'audio/wav' },
+        ];
+        const assets = await Promise.all(files.map(async ({ filename, path, type }) => ({
+          path, type, bytes: (await readFile(join(dir, filename))).toString('base64'),
+        })));
+        await native.addInitScript(installNativeFixtureInputs, { clips, assets });
       }
       await native.goto(`http://127.0.0.1:${server.address().port}`);
       await native.waitForFunction(() => typeof window.show === 'function');
     });
   }), 30000);
 
-  async function compare(project, t, { words = false, reuse = false, clockJump = false, lyricsOff = false, beforeCapture } = {}) {
+  let track;
+  beforeEach(({ onTestFailed, signal }) => {
+    const observe = createTestPhaseDiagnostics(onTestFailed);
+    track = (label, operation) => {
+      signal.throwIfAborted();
+      return observe(label, operation);
+    };
+  });
+
+  async function compare(project, t, { name = 'comparison', words = false, reuse = false, clockJump = false, lyricsOff = false, beforeCapture } = {}) {
+    const observe = track;
+    const phase = (label, operation) => observe(`${name}-${label}`, operation);
     // Media elements store microseconds; use a frame's centre so rounding a
     // fractional 24fps boundary cannot move the native clock back one frame.
     t = (Math.floor(t * 24 + 1e-6) + 0.5) / 24;
     current = project;
     const media = new Map(project.scenes.filter(s => s.visualLayer !== 'card').map(s => [s.sceneId, { kind: s.videoHistoryId ? 'video' : 'image', ext: s.videoHistoryId ? 'webm' : 'png', fps: 24, ...(s.endImageId ? { end: { kind: 'image', ext: 'png' } } : {}) }]));
     engineData = dataFor(lyricsOff ? { ...project, lyricOverlayEnabled: false } : project, media);
-    await engine.setViewportSize({ width: 640, height: Math.round(640 * engineData.render.height / engineData.render.width) });
-    await engine.goto(`http://127.0.0.1:${server.address().port}/engine/index.html`);
-    await engine.waitForFunction(() => !!window.portosComposition);
-    await engine.evaluate(t => window.portosComposition.seek(t), t);
-    if (clockJump) await native.evaluate(() => {
+    await phase('engine-viewport', () => engine.setViewportSize({ width: 640, height: Math.round(640 * engineData.render.height / engineData.render.width) }));
+    await phase('engine-navigation', () => engine.goto(`http://127.0.0.1:${server.address().port}/engine/index.html`));
+    await phase('engine-composition-ready', () => engine.waitForFunction(() => !!window.portosComposition));
+    await phase('engine-seek', () => engine.evaluate(t => window.portosComposition.seek(t), t));
+    if (clockJump) await phase('native-clock-jump', () => native.evaluate(() => {
       // Advance the playing clock without a seek event: this case owns a dropped
       // playback frame, while the neighboring seek tests own scrub invalidation.
       const audio = document.querySelector('audio'); let clock = audio.currentTime;
       Object.defineProperty(audio, 'currentTime', { configurable: true, get: () => clock, set: value => { clock = value; } });
-    });
-    await native.evaluate(({ project, data, t, reuse }) => (reuse ? window.update : window.show)(project, data, t), { project, data: dataFor(project), t, reuse });
-    await native.waitForFunction(frame => document.querySelector('[data-testid="document-template-canvas"]')?.dataset.songFrame === String(frame), Math.floor(t * 24 + 1e-6));
-    await native.evaluate(() => document.fonts.ready);
+    }));
+    const lyrics = process.platform === 'darwin' && words
+      ? await phase('prepare-lyrics', () => buildLyricPlaythroughPreview(project, { overlay: true }))
+      : null;
+    await phase('native-seek', () => native.evaluate(({ project, data, t, reuse, lyrics }) => {
+      window.parityLyricResponses = new Map(lyrics ? [[`/api/music-video/${encodeURIComponent(project.id)}/lyrics/overlay/preview`, lyrics]] : []);
+      (reuse ? window.update : window.show)(project, data, t);
+    }, { project, data: dataFor(project), t, reuse, lyrics }));
+    await phase('native-song-frame', () => native.waitForFunction(frame => document.querySelector('[data-testid="document-template-canvas"]')?.dataset.songFrame === String(frame), Math.floor(t * 24 + 1e-6)));
+    await phase('native-fonts-ready', () => native.evaluate(() => document.fonts.ready));
     const currentScene = project.scenes.filter(s => s.startSec <= t && t < s.endSec).at(-1);
-    if (currentScene?.visualLayer === 'footage' && currentScene.videoHistoryId) await native.waitForFunction(() => document.querySelector('video[data-ready="true"]')?.readyState >= 2);
-    if (words) {
+    if (currentScene?.visualLayer === 'footage' && currentScene.videoHistoryId) {
+      await phase('native-video-ready', () => native.waitForFunction(() => document.querySelector('video[data-ready="true"]')?.readyState >= 2));
+    }
+    if (words) await phase('native-lyrics-ready', async () => {
       await native.waitForSelector('[data-testid="animatic-lyrics"]');
       if (lyricsOff) {
         await native.getByRole('button', { name: 'Lyrics', exact: true }).click();
@@ -153,23 +222,23 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
       }
       // Use the public seek bridge's response to know its exact lyric frame landed.
       await native.waitForFunction(t => window.lyricFrames.includes(t), Math.floor(t * 24 + 1e-6) / 24);
-    }
+    });
     // A late image/video/font load repaints the native surface on its own event.
-    await native.waitForFunction(() => [...document.querySelectorAll('figure img')].every(img => img.complete && img.naturalWidth));
-    await beforeCapture?.();
-    const nativeBefore = await native.evaluate(() => window.templateParityState());
-    const actual = await native.locator('figure > div').first().screenshot();
-    const nativeAfter = await native.evaluate(() => window.templateParityState());
-    const engineBefore = await engine.evaluate(() => window.templateParityState());
-    const expected = await engine.locator('#stage').screenshot();
-    const engineAfter = await engine.evaluate(() => window.templateParityState());
+    await phase('native-images-ready', () => native.waitForFunction(() => [...document.querySelectorAll('figure img')].every(img => img.complete && img.naturalWidth)));
+    if (beforeCapture) await phase('before-capture', beforeCapture);
+    const nativeBefore = await phase('native-state-before', () => native.evaluate(() => window.templateParityState()));
+    const actual = await phase('native-capture', () => native.locator('figure > div').first().screenshot());
+    const nativeAfter = await phase('native-state-after', () => native.evaluate(() => window.templateParityState()));
+    const engineBefore = await phase('engine-state-before', () => engine.evaluate(() => window.templateParityState()));
+    const expected = await phase('engine-capture', () => engine.locator('#stage').screenshot());
+    const engineAfter = await phase('engine-state-after', () => engine.evaluate(() => window.templateParityState()));
     const capture = { actual, expected, metadata: { case: ++comparison, test: expect.getState().currentTestName, t,
       diffContext: { reuse, clockJump, words, lyricsOff },
       scenes: project.scenes.map(({ sceneId, startSec, endSec, visualLayer, videoHistoryId }) => ({ sceneId, startSec, endSec, visualLayer, videoHistoryId })),
       environment: { platform: process.platform, arch: process.arch, osRelease: release(), node: process.version,
         browser: fixture.browser.version(), engine: 'Blink', headless: true },
       native: { before: nativeBefore, after: nativeAfter }, engine: { before: engineBefore, after: engineAfter } } };
-    await assertParity(capture);
+    await phase('assert-pixels', () => assertParity(capture));
     expect(errors).toEqual([]);
     return capture;
   }
@@ -177,9 +246,9 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
   // Each case catches a named omission of the native player, through its rendered surface.
   it('matches the constant vignette and grain', async () => { await compare(base(), 0.75); });
   it('matches hold, push, pan, a planned rotating beat snap and cover-fitted footage breathing', async () => {
-    for (const move of ['hold', 'push', 'pan']) await compare(base({ ...still, stillMove: move }), 1.25);
-    await compare(base({ ...still, camera: { move: 'dutch-roll', speed: 'fast', onBeat: true } }), 1.25);
-    await compare(base({ ...still, visualLayer: 'footage', videoHistoryId: 'clip' }), 1.25);
+    for (const move of ['hold', 'push', 'pan']) await compare(base({ ...still, stillMove: move }), 1.25, { name: move });
+    await compare(base({ ...still, camera: { move: 'dutch-roll', speed: 'fast', onBeat: true } }), 1.25, { name: 'beat-snap' });
+    await compare(base({ ...still, visualLayer: 'footage', videoHistoryId: 'clip' }), 1.25, { name: 'footage-breathing' });
   });
   it('repaints paused footage when presentation follows the seeked paint', async () => {
     // Pin the observed ordering without sleeps: seeked/readyState can precede

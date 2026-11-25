@@ -8,9 +8,7 @@ vi.mock('../services/apiRounds.js', () => ({
   deleteRound: vi.fn(),
   generateRound: vi.fn(),
 }));
-vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
-}));
+vi.mock('../components/ui/Toast');
 
 import Rounds from './Rounds';
 import { listRounds } from '../services/apiRounds.js';

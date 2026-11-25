@@ -17,8 +17,12 @@ and OFFSET. Ordering is newest first with a stable media-key tie break. Search
 matches all whitespace-separated tokens, case-insensitively, anywhere in the
 metadata JSON (including prompt and filename); percent and underscore are literal.
 This deliberately broadens the old curated-field search: metadata keys, timestamps,
-and other stored fields can match too. Search scans metadata inside PostgreSQL;
-paging bounds transfer and browser state, not the search scan itself.
+and other stored fields can match too. Search reads a stored column: PostgreSQL keeps
+each index row's lower-cased metadata text in `search_text` (a generated column,
+alongside `is_hidden` and the picker facets), so a search is one substring test per
+token per row and no request decodes the metadata to filter it. Videos are matched
+the same way against text cached once per `video-history.json` revision, and only
+matching videos reach SQL. Paging bounds transfer and browser state.
 No request scans sidecars to recover from a database error.
 
 Sidecars remain authoritative. Boot reconcile scans disk and repairs index drift.
@@ -116,3 +120,7 @@ name (case-insensitive match), which is created on first use. The name rides on
 the job params, so queued, hosted and peer-lane renders all file on completion
 (`server/services/requestedCollectionHook.js`). Filing is best-effort and
 idempotent; a collection error is logged and never fails the render.
+
+## Regenerate and annotation re-render: model input preview
+
+A typed prompt in the lightbox Regenerate panel or the annotation re-render dialog also sends the source image's negative prompt. `buildRegenParams` declares it as the labeled addition `source-negative-prompt`, and `POST /api/image-gen/:filename/regenerate/preview` (same `regenerateSchema` body as the real route, plus `annotated: true` for a re-render) returns the exact `{ modelId, sentPrompt, sentNegativePrompt?, promptAdditions? }` through the same job builder and `localSentPrompt` the render uses. It enqueues and stages nothing, and does not require the annotation to be saved yet. An empty prompt sends neither a prompt nor a negative.

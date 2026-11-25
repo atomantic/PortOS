@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Recommendation composition (issue #2100). The pure functions
-// (composePostRecommendations / weakestSkillFromStats / stalledProgressions)
+// (composePostRecommendations / weakestSkillsFromStats / stalledProgressions)
 // need no mocks; getPostRecommendations is exercised through the same
 // mocked-fileUtils harness the other POST service tests use.
 const state = { sessions: [], training: [], memoryItems: [], reviewSchedule: { skills: {} }, morse: { kochLevel: null, settings: null, rounds: [] }, config: {} };
@@ -34,7 +34,6 @@ vi.mock('../settings.js', () => ({
 
 import {
   composePostRecommendations,
-  weakestSkillFromStats,
   stalledProgressions,
   updatePostConfig,
   isRecDrillRunnable,
@@ -69,13 +68,13 @@ function lastWrittenConfig() {
   return call?.[1];
 }
 
-describe('weakestSkillFromStats', () => {
+describe('weakestSkillsFromStats sample filtering', () => {
   it('returns the lowest-accuracy drill with samples', () => {
     const stats = {
       byDrillAccuracy: { 'mental-math:multiplication': 0.9, 'cognitive:n-back': 0.5 },
       byDrillCount: { 'mental-math:multiplication': 4, 'cognitive:n-back': 3 },
     };
-    const w = weakestSkillFromStats(stats);
+    const [w] = weakestSkillsFromStats(stats);
     expect(w.type).toBe('n-back');
     expect(w.module).toBe('cognitive');
     expect(w.accuracy).toBe(0.5);
@@ -86,12 +85,12 @@ describe('weakestSkillFromStats', () => {
       byDrillAccuracy: { 'cognitive:n-back': 0.2, 'mental-math:powers': 0.8 },
       byDrillCount: { 'cognitive:n-back': 0, 'mental-math:powers': 5 },
     };
-    expect(weakestSkillFromStats(stats).type).toBe('powers');
+    expect(weakestSkillsFromStats(stats).map(({ type }) => type)).toEqual(['powers']);
   });
 
-  it('returns null when there is no accuracy signal', () => {
-    expect(weakestSkillFromStats({ byDrillAccuracy: {}, byDrillCount: {} })).toBeNull();
-    expect(weakestSkillFromStats(null)).toBeNull();
+  it('returns an empty ranking when there is no accuracy signal', () => {
+    expect(weakestSkillsFromStats({ byDrillAccuracy: {}, byDrillCount: {} })).toEqual([]);
+    expect(weakestSkillsFromStats(null)).toEqual([]);
   });
 });
 
@@ -734,8 +733,6 @@ describe('weakestSkillsFromStats ranking (issue #5319)', () => {
       byDrillCount: { 'cognitive:digit-span': 3, 'mental-math:powers': 3, 'cognitive:n-back': 3 },
     };
     expect(weakestSkillsFromStats(stats).map(s => s.type)).toEqual(['digit-span', 'n-back', 'powers']);
-    // The single-value helper stays the head of that list.
-    expect(weakestSkillFromStats(stats).type).toBe('digit-span');
   });
 });
 

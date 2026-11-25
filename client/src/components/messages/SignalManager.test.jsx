@@ -11,7 +11,7 @@ vi.mock('../../services/apiSignal.js', () => ({
   purgeSignalConversation: api.purgeSignalConversation,
   blockSignalConversation: api.blockSignalConversation,
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn() } }));
+vi.mock('../ui/Toast');
 import SignalManager from './SignalManager';
 beforeEach(() => {
   vi.clearAllMocks();

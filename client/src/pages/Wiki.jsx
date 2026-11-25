@@ -3,6 +3,7 @@ import { Link, useParams, useNavigate, useSearchParams } from 'react-router';
 import { getNotesVaults, scanNotesVault } from '../services/apiNotes.js';
 import { BookOpen, Search, Network, FileText, BarChart3, Activity } from 'lucide-react';
 import LoadFailedState from '../components/ui/LoadFailedState';
+import ListLoadError from '../components/ui/ListLoadError';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
@@ -30,6 +31,8 @@ const TAB_PRESENTATION = {
 
 export const TABS = buildPageNavTabs(getPageNavTabs('wiki'), TAB_PRESENTATION, 'Wiki');
 
+const SCAN_PAGE = 1000;
+
 export default function Wiki() {
   const { tab } = useParams();
   const navigate = useNavigate();
@@ -44,6 +47,7 @@ export default function Wiki() {
   const [noteSnapshot, setNoteSnapshot] = useState(null);
   const mountedRef = useMounted();
   const scanSequence = useRef(0);
+  const [scanFailedScope, setScanFailedScope] = useState(null);
 
   const loadVaults = useCallback(async () => {
     const data = await getNotesVaults({ silent: true }).catch(() => null);
@@ -87,10 +91,18 @@ export default function Wiki() {
   const loadNotes = useCallback(async () => {
     if (!vaultScope.id || !mountedRef.current || vaultScopeRef.current !== vaultScope) return;
     const sequence = ++scanSequence.current;
-    const data = await scanNotesVault(vaultScope.id, { limit: 1000 }).catch(() => null);
-    if (data && mountedRef.current && vaultScopeRef.current === vaultScope && scanSequence.current === sequence) {
-      setNoteSnapshot({ scope: vaultScope, notes: data.notes });
-    }
+    const isCurrent = () => mountedRef.current && vaultScopeRef.current === vaultScope && scanSequence.current === sequence;
+    // A scan page holds at most 1,000 notes, newest edit first, so a larger vault
+    // needs every page before wiki pages can be counted or browsed.
+    const collected = [];
+    let page = null;
+    do {
+      page = await scanNotesVault(vaultScope.id, { limit: SCAN_PAGE, ...(collected.length ? { offset: collected.length } : {}), silent: true }).catch(() => null);
+      if (!isCurrent()) return;
+      if (page) collected.push(...page.notes);
+    } while (page?.notes.length && collected.length < page.total);
+    setScanFailedScope(page ? null : vaultScope);
+    if (page) setNoteSnapshot({ scope: vaultScope, notes: collected });
   }, [vaultScope, mountedRef]);
 
   useEffect(() => {
@@ -226,6 +238,10 @@ export default function Wiki() {
       />
 
       <TabPills tabs={TABS} activeTab={activeTab} onChange={(id) => navigate({ pathname: `/wiki/${id}`, search: searchParams.toString() })} ariaLabel="Wiki sections" />
+
+      {scanFailedScope === vaultScope && (
+        <ListLoadError what="this vault's notes" onRetry={loadNotes} className="m-3" />
+      )}
 
       {/* Tab content — Browse manages its own list/detail scroll, so it gets a
           bare flex-fill parent (no padding/scroll) instead of the padded scroller. */}

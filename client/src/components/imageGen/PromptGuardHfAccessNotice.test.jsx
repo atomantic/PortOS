@@ -2,11 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import PromptGuardHfAccessNotice from './PromptGuardHfAccessNotice';
 
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), {
-    success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(),
-  }),
-}));
+vi.mock('../ui/Toast');
 
 const MODEL = {
   name: 'Llama Prompt Guard 2 86M',

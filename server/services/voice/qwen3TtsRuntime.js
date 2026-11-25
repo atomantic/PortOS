@@ -51,7 +51,6 @@ export const SUPPORTED_QWEN3_MODELS = Object.freeze([
 
 export const DEFAULT_DESIGN_MODEL = 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign';
 export const DEFAULT_CLONE_MODEL = 'Qwen/Qwen3-TTS-12Hz-1.7B-Base';
-export const DEFAULT_INTERACTIVE_MODEL = 'Qwen/Qwen3-TTS-12Hz-0.6B-Base';
 
 /**
  * Resolve an executable Python binary: uses isolated venv if present, otherwise
@@ -61,16 +60,7 @@ export async function resolveQwen3Python() {
   if (existsSync(QWEN3_TTS_VENV_PYTHON)) {
     return QWEN3_TTS_VENV_PYTHON;
   }
-  const sysPython = await whichFirst('python3', 'python');
-  return sysPython || null;
-}
-
-/**
- * Check if the isolated runtime venv or compatible Python interpreter is installed.
- */
-export async function isQwen3RuntimeInstalled() {
-  const status = await getQwen3RuntimeStatus();
-  return status.ok;
+  return (await whichFirst('python3')) || (await whichFirst('python')) || null;
 }
 
 /**
@@ -166,4 +156,3 @@ function runRuntime(pythonPath, args, timeout = 10000) {
     child.on('error', reject);
   });
 }
-

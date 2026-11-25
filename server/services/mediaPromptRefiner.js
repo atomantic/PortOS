@@ -1,3 +1,4 @@
+import { PROVIDERS_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { extractNonPlaceholderJson } from '../lib/jsonExtract.js';
 import { clampToCharLimit, trimTo } from '../lib/textUtils.js';
@@ -134,7 +135,7 @@ export async function refineMediaPrompt({
   }
   if (provider.enabled === false) {
     throw new ServerError(
-      `Provider "${provider.name || provider.id}" is disabled — enable it in Settings → Providers first`,
+      `Provider "${provider.name || provider.id}" is disabled — enable it in ${PROVIDERS_PAGE_BREADCRUMB} first`,
       { status: 400, code: 'PROVIDER_DISABLED' },
     );
   }

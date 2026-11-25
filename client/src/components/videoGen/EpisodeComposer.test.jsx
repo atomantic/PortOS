@@ -11,7 +11,7 @@ vi.mock('../../services/apiContinuousVideo.js', () => ({
   getActiveContinuousVideoEpisodes: vi.fn(),
   cancelContinuousVideoEpisode: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import {
   lintContinuousVideoEpisode,

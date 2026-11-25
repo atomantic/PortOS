@@ -937,6 +937,18 @@ describe('endpoint runtimes', () => {
 // relaunch runs, `tuningApplied: true` is recorded, and the knob is dropped on
 // the way to the launch line, which is exactly the un-applied-but-claimed
 // reading the catalog exists to prevent.
+describe('mkserve measurement', () => {
+  it('measures through the endpoint path and records the PM2 process footprint', async () => {
+    probeOpenAiModels.mockResolvedValue({ reachable: true, models: ['example-model'], error: null });
+    runEndpointLlmTest.mockResolvedValue(okRun());
+    getAppStatus.mockImplementation(async (name) => ({ name, status: 'online', pid: 4321 }));
+    readProcessTreeResidentBytes.mockResolvedValue({ bytes: 20 * 2 ** 30, source: 'footprint', pids: 1 });
+    const result = await svc.runAssessment({ backend: 'mkserve', modelId: 'example-model', contextTokens: [512] });
+    expect(getAppStatus).toHaveBeenCalledWith('portos-mkserve');
+    expect(result).toMatchObject({ backend: 'mkserve', residentGb: 20, residentSource: 'process-footprint' });
+  });
+});
+
 describe('launch transports', () => {
   it('carries every launch knob each runtime with an applier declares', () => {
     for (const [runtime, transport] of Object.entries(svc.LAUNCH_TRANSPORTS)) {
@@ -1197,7 +1209,7 @@ describe('tuning', () => {
 describe('runtime roster', () => {
   it('reports every assessable runtime with its knob catalog', async () => {
     const report = await svc.getAssessmentReport();
-    expect(report.runtimes.map((r) => r.id)).toEqual(['ollama', 'lmstudio', 'llama', 'mtplx', 'vllm', 'sglang', 'slotstream']);
+    expect(report.runtimes.map((r) => r.id)).toEqual(['ollama', 'lmstudio', 'llama', 'mtplx', 'vllm', 'sglang', 'slotstream', 'splash', 'mkserve']);
     expect(report.runtimes.find((r) => r.id === 'llama').tuningSpecs.some((s) => s.id === 'ubatchSize')).toBe(true);
   });
 

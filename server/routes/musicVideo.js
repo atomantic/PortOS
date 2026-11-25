@@ -23,13 +23,13 @@ import { finishedOutsideBlocker } from '../lib/musicVideo/musicVideoFinishedOuts
 import { musicVideoCompletionBlocker, musicVideoCompletionOverride } from '../lib/musicVideo/musicVideoCompletion.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { musicVideoAudioTimingPreviewSchema, musicVideoAudioTimingApplySchema, musicVideoProjectCreateSchema, musicVideoProjectCloneSchema, musicVideoProjectUpdateSchema, musicVideoPacingRecutSchema, musicVideoPlanRequestSchema, musicVideoManualAnalysisSchema, musicVideoSectionsEditSchema, musicVideoTranscribeMidiRequestSchema, musicVideoLyricsImportSchema, musicVideoLyricsImportTrackSchema, musicVideoLyricsAlignSchema, musicVideoLyricsVerifySchema, musicVideoSongPrepareSchema, musicVideoTakeInputSchema, musicVideoHandoffImportSchema, musicVideoTreatmentUpdateSchema, musicVideoTreatmentCompileSchema, musicVideoTreatmentApplySchema, musicVideoTreatmentSyncShotSheetSchema, musicVideoSequenceRenderSchema, musicVideoSequenceTakeSchema, musicVideoTreatmentProofReviewSchema, musicVideoCodeGenerateSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
+import { musicVideoAudioTimingPreviewSchema, musicVideoAudioTimingApplySchema, musicVideoProjectCreateSchema, musicVideoProjectCloneSchema, musicVideoProjectUpdateSchema, musicVideoPacingRecutSchema, musicVideoPlanRequestSchema, musicVideoManualAnalysisSchema, musicVideoSectionsEditSchema, musicVideoTranscribeMidiRequestSchema, musicVideoLyricsImportSchema, musicVideoLyricsImportTrackSchema, musicVideoLyricsAlignSchema, musicVideoLyricsVerifySchema, musicVideoSongPrepareSchema, musicVideoTakeInputSchema, musicVideoHandoffImportSchema, musicVideoTreatmentUpdateSchema, musicVideoTreatmentCompileSchema, musicVideoTreatmentApplySchema, musicVideoTreatmentSyncShotSheetSchema, musicVideoSequenceRenderSchema, musicVideoSequenceTakeSchema, musicVideoCodeGenerateSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { recordRenderPinFields } from '../lib/sharedSchemas.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { isSupportedMusicUpload, MUSIC_UPLOAD_MAX_BYTES } from '../services/pipeline/musicLibrary.js';
 import { attachVocalStem, detachVocalStem } from '../services/musicVideo/vocalStem.js';
 import { addAudioLayer } from '../services/musicVideo/audioLayerUpload.js';
-import { listProjects, listProjectNames, listProjectPage, getProject, createProject, updateProject, deleteProject, setProjectAnalysis, setProjectSections, appendTakesAcrossScenes, mutateProjectRecord } from '../services/musicVideo/projects.js';
+import { listProjects, listProjectNames, listMidiSourceRows, listProjectPage, listProjectVersionPage, getProject, createProject, updateProject, deleteProject, setProjectAnalysis, setProjectSections, appendTakesAcrossScenes, mutateProjectRecord } from '../services/musicVideo/projects.js';
 import { updateProject as updateProjectEdit, previewProjectPacingRecut, recutProjectToPacing, markMediaPoolAssets } from '../services/musicVideo/projectBoardEdits.js';
 import { listProjectCompletion, cloneProject, refreshSongStyleFromSuno } from '../services/musicVideo/projectFilmActions.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
@@ -54,7 +54,7 @@ import { attachLyricAlignSseClient, cancelLyricAlign, getActiveLyricAlignJobId, 
 import { startLyricVerify, attachLyricVerifySseClient, cancelLyricVerify } from '../services/musicVideo/lyricVerifyJob.js';
 import { importTrackLyrics, MAX_LYRIC_CUES } from '../services/musicVideo/trackLyrics.js';
 import { offsetLyricMarkers } from '../lib/lyricMarkers.js';
-import { updateTreatment, compileTreatment, previewTreatmentApply, applyTreatment, syncTreatmentFromShotSheet, reviewProof } from '../services/musicVideo/treatmentService.js';
+import { updateTreatment, compileTreatment, previewTreatmentApply, applyTreatment, syncTreatmentFromShotSheet } from '../services/musicVideo/treatmentService.js';
 import { writeOriginScope } from '../lib/writeOrigin.js';
 import { presentProjectForRead } from '../services/musicVideo/projectPresentation.js';
 import { summarizeMusicVideoProject, compareMusicVideoProjectsNewestFirst } from '../lib/musicVideo/musicVideoSummary.js';
@@ -103,6 +103,12 @@ router.get('/', asyncHandler(async (req, res) => {
     const cursor = parseInt(query.cursor, 10);
     const paging = parsePagination(summary && Number.isInteger(cursor) && cursor >= 0 ? { ...query, offset: String(cursor) } : query,
       { defaultLimit: 50, maxLimit: 500 });
+    // Family navigation is intentionally independent of the index's name and status filters.
+    if (summary && query.versionRoot) {
+      const page = await listProjectVersionPage(query.versionRoot, paging);
+      const next = page.offset + page.limit;
+      return res.json({ ...page, nextCursor: next < page.total ? String(next) : null });
+    }
     const needle = (query.q || '').trim().toLowerCase();
     const matchesName = needle ? (project) => String(project.name || '').toLowerCase().includes(needle) : null;
     const stale = summary && query.statusFilter
@@ -133,21 +139,15 @@ router.get('/names', asyncHandler(async (_req, res) => {
   res.json(await listProjectNames());
 }));
 
-// Bounded projection for the Tracks page MIDI read-through (#10203): the newest
-// MIDI transcription per linked track, without shipping every full project record.
-router.get('/midi-sources', asyncHandler(async (req, res) => {
+// Newest MIDI transcription per linked track for the Tracks page read-through.
+router.get('/midi-sources', asyncHandler(async (_req, res) => {
   const newest = new Map();
-  for (const p of await listProjects()) {
+  for (const p of await listMidiSourceRows()) {
     const midi = p.midiTranscription;
     if (!p.trackId || !midi?.filename) continue;
     const prev = newest.get(p.trackId);
     if (!prev || (midi.createdAt || '') > (prev.midiTranscription.createdAt || '')) {
-      newest.set(p.trackId, {
-        trackId: p.trackId,
-        id: p.id,
-        name: p.name,
-        midiTranscription: { filename: midi.filename, model: midi.model, createdAt: midi.createdAt },
-      });
+      newest.set(p.trackId, p);
     }
   }
   res.json([...newest.values()]);
@@ -401,7 +401,7 @@ router.use('/', spendRoutes);
 
 // --- Pre-production treatment (#8980) ---
 // A structured brief, a compiled whole-song arc, per-shot direction keyed to
-// the board's scene ids and a proof checklist (services/musicVideo/treatment.js).
+// the board's scene ids (services/musicVideo/treatment.js).
 // Every write names the revision it was made against; a stale one is a 409.
 router.patch('/:id/treatment', asyncHandler(async (req, res) => {
   const patch = validateRequest(musicVideoTreatmentUpdateSchema, req.body);
@@ -420,13 +420,6 @@ router.post('/:id/treatment/compile', asyncHandler(async (req, res) => {
 // keeps, and whether a stale input blocks it.
 router.get('/:id/treatment/apply-preview', asyncHandler(async (req, res) => {
   res.json(await previewTreatmentApply(req.params.id));
-}));
-
-// Read-only (#14241): which cutaway runs a `coverage: 'sequence'` scene set would
-// generate in one timed request, with the exact prompt and request fields.
-router.get('/:id/sequence-coverage', asyncHandler(async (req, res) => {
-  const { previewSequenceCoverage } = await import('../services/musicVideo/sequenceCoverage.js');
-  res.json(previewSequenceCoverage(await requireProject(req.params.id)));
 }));
 
 // Queue one planned run as a single fal request; the clip is cut onto its scenes on completion.
@@ -455,11 +448,6 @@ router.post('/:id/treatment/apply', asyncHandler(async (req, res) => {
 router.post('/:id/treatment/sync-shot-sheet', asyncHandler(async (req, res) => {
   const options = validateRequest(musicVideoTreatmentSyncShotSheetSchema, req.body);
   res.json(await syncTreatmentFromShotSheet(req.params.id, options));
-}));
-
-router.post('/:id/treatment/proofs/:proofId/review', asyncHandler(async (req, res) => {
-  const review = validateRequest(musicVideoTreatmentProofReviewSchema, req.body);
-  res.json(await reviewProof(req.params.id, req.params.proofId, review));
 }));
 
 // Import timed lyric cues (#8964) from pasted LRC, SRT/WebVTT, or plain lines

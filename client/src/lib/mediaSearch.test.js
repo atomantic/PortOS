@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildMediaHaystack, tokenizeQuery, matchHaystack, filterByQuery } from './mediaSearch';
+import { buildMediaHaystack, tokenizeQuery, matchHaystack } from './mediaSearch';
 
 const img = (over = {}) => ({
   kind: 'image',
@@ -57,24 +57,4 @@ describe('matchHaystack', () => {
   });
 });
 
-describe('filterByQuery', () => {
-  const items = [
-    img({ filename: 'a.png', prompt: 'neon sunset', modelId: 'flux2' }),
-    img({ filename: 'b.png', prompt: 'forest morning', modelId: 'sdxl', universeName: null, entryName: null, loraNames: [] }),
-  ];
-
-  it('returns all items for an empty query', () => {
-    expect(filterByQuery(items, '')).toHaveLength(2);
-  });
-
-  it('AND-matches across tokens in any order', () => {
-    const res = filterByQuery(items, 'flux2 neon');
-    expect(res).toHaveLength(1);
-    expect(res[0].filename).toBe('a.png');
-  });
-
-  it('returns empty when no item matches all tokens', () => {
-    expect(filterByQuery(items, 'neon sdxl')).toHaveLength(0);
-  });
-});
 // @vitest-environment node

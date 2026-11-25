@@ -199,6 +199,7 @@ video/audio switches (a transcript-only ingest works without it).
 | POST /api/brain/youtube/ingest | Start a YouTube ingest → `{ jobId, videoId }` |
 | GET /api/brain/youtube/ingest/:jobId/events | SSE progress for an ingest |
 | POST /api/brain/youtube/ingest/:jobId/cancel | Cancel an in-flight ingest |
+| GET /api/brain/youtube/ingest/active | Ingests still running, so a page that was left can watch or cancel one |
 | GET /api/brain/youtube/ingests | List ingests, newest first |
 | GET/DELETE /api/brain/youtube/ingests/:videoId | One ingest / forget it |
 | GET /api/brain/youtube/ingests/:videoId/transcript | Stored transcript markdown |

@@ -39,9 +39,7 @@ vi.mock('../../../hooks/useRepoIntake.js', () => ({
   }),
 }));
 
-vi.mock('../../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }),
-}));
+vi.mock('../../ui/Toast');
 
 vi.mock('../VoiceCapture', () => ({ default: () => null }));
 vi.mock('../RepoIntakeOptions', () => ({ default: () => null }));

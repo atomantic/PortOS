@@ -33,9 +33,10 @@ import { localLlmBackendLabel } from '../lib/localLlmBackends.js';
  *   `complete` progress frame (the Library view re-queries its catalog).
  *   BOTH must be stable (`useCallback`) — they are effect dependencies.
  */
-export default function useLocalLlmStatus({ onRefresh, onReload } = {}) {
+export default function useLocalLlmStatus({ onRefresh, onReload, inlineErrors = false } = {}) {
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [statusError, setStatusError] = useState(null);
   const [selected, setSelected] = useState('ollama');
   const [actionInProgress, setActionInProgress] = useState(null);
   const [progressMsg, setProgressMsg] = useState('');
@@ -52,19 +53,22 @@ export default function useLocalLlmStatus({ onRefresh, onReload } = {}) {
       .then((s) => {
         if (requestId !== statusRequestId.current) return;
         setStatus(s);
+        setStatusError(null);
         // Default the model-management view to the active backend on first load.
         if (!selectedInitialized.current && s?.backend) {
           setSelected(s.backend);
           selectedInitialized.current = true;
         }
       })
-      .catch(() => {
-        if (requestId === statusRequestId.current) toast.error('Failed to load local LLM status');
+      .catch((error) => {
+        if (requestId !== statusRequestId.current) return;
+        setStatusError(error);
+        if (!inlineErrors) toast.error('Failed to load local LLM status');
       })
       .finally(() => {
         if (requestId === statusRequestId.current) setLoading(false);
       });
-  }, [onRefresh]);
+  }, [inlineErrors, onRefresh]);
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
 
@@ -145,6 +149,7 @@ export default function useLocalLlmStatus({ onRefresh, onReload } = {}) {
 
   return {
     status,
+    statusError,
     loading,
     selected,
     setSelected,

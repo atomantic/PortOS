@@ -5,102 +5,14 @@
  */
 
 import { z } from 'zod';
+import { PROVIDER_HARNESS_IDS } from './provider/providerHarnesses.js';
 import { SERVICE_SLUG_RE, SERVICE_PLANS, SERVICE_CREDENTIAL_VIAS } from './serviceDefinitions.js';
-import { MIN_TIMEOUT as AI_RUN_TIMEOUT_MIN_MS, MAX_TIMEOUT as AI_RUN_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
-import { PROVIDER_HARNESS_IDS, ROUTE_MODES } from './provider/providerHarnesses.js';
-import { emptyToUndefined, emptyToNull, providerRefSchema, presetProviderIdSchema } from './zodCompat.js';
-import { EFFORT_LEVELS } from './provider/providerModels.js';
+import { emptyToUndefined, providerRefSchema, presetProviderIdSchema } from './zodCompat.js';
 import { CREDENTIALS } from './credentialRegistry.js';
 import { GOOGLE_CREDENTIAL_MAX_LENGTH } from './sharedSchemas.js';
 import { isHeaderSafeKey, headerSafeKeyMessage } from './headerSafeKey.js';
 import { parseProviderRef } from './provider/providerRef.js';
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
-
-// Provider schema
-const providerHardwareRequirementsSchema = z.object({
-  platforms: z.array(z.string().trim().min(1).max(32)).min(1).max(8).optional(),
-  architectures: z.array(z.string().trim().min(1).max(32)).min(1).max(8).optional(),
-  requiresAppleSilicon: z.boolean().optional(),
-  requiresNvidiaGpu: z.boolean().optional(),
-  minMemoryGb: z.number().positive().max(4096).optional(),
-  minVramGb: z.number().positive().max(4096).optional(),
-  minCudaComputeCapability: z.number().positive().max(20).optional(),
-}).strict();
-
-/** A service or bootstrap slug on a preset (#7565), clearable with `null`. */
-const presetSlugField = z.string().trim().min(1).max(64).regex(SERVICE_SLUG_RE).nullable().optional();
-
-export const providerSchema = z.object({
-  name: z.string().min(1).max(100),
-  type: z.enum(['cli', 'api', 'tui']),
-  command: z.string().optional(),
-  args: z.array(z.string()).optional(),
-  endpoint: z.string().url().optional(),
-  apiKey: z.string().optional(),
-  models: z.array(z.string()).optional(),
-  hardwareRequirements: providerHardwareRequirementsSchema.optional(),
-  modelHardwareRequirements: z.record(providerHardwareRequirementsSchema).optional(),
-  defaultModel: z.string().nullable().optional(),
-  timeout: z.number().int().min(AI_RUN_TIMEOUT_MIN_MS).max(AI_RUN_TIMEOUT_MAX_MS).optional(),
-  enabled: z.boolean().optional(),
-  // Marks a harness wrapper whose backend is the LM Studio server on this
-  // machine. Unlike the containers below, its context window and reasoning are
-  // chosen when the model instance is LOADED, so PortOS forwards neither.
-  lmstudioBacked: z.boolean().optional(),
-  // Kept in schema parity with aiToolkit's provider schema. Marks OpenCode
-  // wrappers for a separately started local MTPLX native-MTP server.
-  mtplxBacked: z.boolean().optional(),
-  // Marks an OpenCode CLI/TUI wrapper for a separately started local llama.cpp
-  // server (e.g. DFlash 2 speculative decoding).
-  llamaBacked: z.boolean().optional(),
-  // Marks an OpenCode CLI/TUI wrapper for a separately started local vLLM
-  // container (the Qwen3.8-27B DFlash 2 stack on an RTX 3090).
-  vllmBacked: z.boolean().optional(),
-  // Marks an OpenCode CLI/TUI wrapper for a separately started local SGLang
-  // container (Qwen3.8-27B on a Hopper/Blackwell card).
-  sglangBacked: z.boolean().optional(),
-  // Marks an OpenCode CLI/TUI wrapper for a hosted OpenAI-compatible gateway
-  // ('orcarouter', 'openrouter', 'nvidia-nim' — see server/lib/provider/providerGateways.js). The
-  // sibling API record whose id equals this value owns the key.
-  gatewayBacked: z.string().optional(),
-  // Legacy per-gateway marker, superseded by `gatewayBacked`. Still accepted and
-  // still READ (providerGateways.js resolves it), because records written before
-  // the registry existed are never rewritten — installs upgrade on their own
-  // schedule.
-  orcarouterBacked: z.boolean().optional(),
-  // Explicit opt-in to attach the API key to an arbitrary (non-local,
-  // non-allowlisted) endpoint — mirrors the aiToolkit providerSchema. Guards
-  // SSRF / key exfiltration (server/lib/aiToolkit/endpointGuard.js).
-  allowCustomEndpoint: z.boolean().optional(),
-  // Kept in schema parity with aiToolkit's provider schema. Marks a CLI/TUI
-  // provider whose harness auth is provisioned by an external CLI at spawn
-  // time (a short-lived token for a proxy) rather than a static apiKey.
-  // `setupCommand` is advisory only — PortOS never executes it. Nullable so
-  // the editor can explicitly clear a previously-set bootstrap.
-  credentialBootstrap: z.object({
-    setupCommand: z.string().trim().max(500).optional(),
-    command: z.string().trim().min(1).max(200),
-    args: z.array(z.string().max(200)).max(20).optional(),
-    envCommand: z.array(z.string().min(1).max(500)).min(1).max(21).optional(),
-    harnessId: z.string().trim().min(1).max(100).optional(),
-    argsSeparator: z.string().trim().max(20).optional(),
-  }).strict().nullable().optional(),
-  envVars: z.record(z.string()).optional(),
-  headlessArgs: z.array(z.string()).optional(),
-  tuiPromptDelayMs: z.number().int().min(250).max(60000).optional(),
-  tuiIdleTimeoutMs: z.number().int().min(1000).max(86400000).optional(),
-  // Kept in schema parity with aiToolkit's provider schema. This opt-in applies
-  // only to interactive Claude TUI runs after the session-limit banner.
-  lowPriorityOnUsageLimit: z.boolean().optional(),
-  // Preset structure (#7565), in parity with the toolkit schema: the harness,
-  // method and service slug a DERIVED preset is materialized from, the
-  // optional catalog narrowing, and the bootstrap app it spawns through.
-  harnessId: z.enum(PROVIDER_HARNESS_IDS).nullable().optional(),
-  method: z.enum(ROUTE_MODES).nullable().optional(),
-  serviceId: presetSlugField,
-  catalogNarrowing: z.array(z.string().trim().min(1).max(512)).max(1000).nullable().optional(),
-  credentialBootstrapId: presetSlugField,
-});
 
 // POST /api/providers/:id/test-vision.
 export const providerVisionTestSchema = z.object({
@@ -135,73 +47,6 @@ export const modelPinClearSchema = z.object({
   pinId: z.string().trim().min(1).max(300),
 });
 
-// POST /api/providers/connections (#6369) — a NEW backend.
-//
-// This schema bounds the SHAPE only. Which backend kinds and transport
-// protocols are real is checked by `connectionBlocker` in the service, which
-// already owns the harness/transport registries — importing them here would
-// pull that subtree into the one module nearly every route validates through
-// (`lib/importScoping.test.js`), for two enum lists and no extra safety.
-//
-// Exactly ONE transport, and this is the load-bearing rule: a provider record
-// names one endpoint, so the profile a minted route reports always declares one
-// transport. A connection declaring two would not be the connection its own
-// routes describe, and reconciliation would clone each binding onto a fresh
-// single-transport row on the next pass — silently undoing the create.
-//
-// Credentials take no `null` here, unlike the PATCH above: there is nothing yet
-// to clear, so a null would only be a typo with a destructive reading.
-export const providerConnectionCreateSchema = z.object({
-  kind: z.string().trim().min(1).max(64),
-  label: z.string().trim().min(1).max(200),
-  transports: z.record(
-    z.string().trim().min(1).max(64),
-    z.object({ baseUrl: z.string().trim().min(1).max(2048) }).strict(),
-  ).refine((value) => Object.keys(value).length === 1, {
-    message: 'Declare exactly one transport protocol for this backend',
-  }),
-  credentials: z.record(
-    z.string().trim().min(1).max(128),
-    z.string().min(1).max(4096),
-  ).optional().default({}),
-}).strict();
-
-// POST /api/providers/bindings (#6369) — a NEW harness configuration on an
-// existing backend, and the executable routes it owns.
-//
-// `harnessId` accepts every registry id, not only the creatable ones: a harness
-// with no command recipe gets the service's explanation of WHY it cannot be
-// pointed at a backend, which is more useful than a schema enum error. `null`
-// is the direct API binding and is spelled explicitly rather than by omission,
-// because "no harness" is a real choice here, not a missing field.
-export const providerBindingCreateSchema = z.object({
-  connectionId: z.string().uuid(),
-  harnessId: z.enum(PROVIDER_HARNESS_IDS).nullable(),
-  modes: z.array(z.enum(ROUTE_MODES)).min(1).max(ROUTE_MODES.length)
-    .refine((value) => new Set(value).size === value.length, { message: 'Name each mode once' }),
-  label: z.string().trim().min(1).max(200).optional(),
-}).strict();
-
-// PATCH /api/providers/connections/:id (#6369).
-//
-// `expectedRevision` is REQUIRED, unlike the link schemas where a preview may
-// omit it: this endpoint always writes, and a shared backend edit that lands on
-// a row the human never saw is exactly the silent overwrite the graph exists to
-// prevent.
-//
-// Credentials are three-valued on purpose — absent preserves, `null` clears, a
-// string sets — so a client that never received the secret (the DTO carries
-// only `hasCredentials`) can edit a label without wiping the key.
-export const providerConnectionUpdateSchema = z.object({
-  expectedRevision: z.number().int().positive(),
-  label: z.string().trim().max(200).optional(),
-  transports: z.record(
-    z.string().trim().min(1).max(64),
-    z.object({ baseUrl: z.string().trim().min(1).max(2048) }).strict(),
-  ).optional(),
-  credentials: z.record(z.string().trim().min(1).max(128), z.string().max(4096).nullable()).optional(),
-}).strict();
-
 // --- service instances (#7563) ------------------------------------------------
 // The vocabulary comes from `serviceDefinitions.js`, a zero-import leaf this
 // module already reaches, so nothing here can drift from the definitions.
@@ -218,8 +63,7 @@ const serviceTransportsSchema = z.record(
 
 // POST /api/providers/services — a NEW instance of a definition. The
 // definition decides which transports and plans are legal (`resolveServiceInstance`
-// in the service), so this bounds shape only. Credentials take no `null`, as
-// on the connection create: nothing exists yet to clear.
+// in the service), so this bounds shape only. A new service has no credentials to clear.
 export const providerServiceCreateSchema = z.object({
   definitionId: z.string().trim().min(1).max(64),
   slug: serviceSlugSchema.optional(),
@@ -231,10 +75,13 @@ export const providerServiceCreateSchema = z.object({
   credentialVia: serviceCredentialViaSchema.optional(),
 }).strict();
 
-// PATCH /api/providers/services/:slug — the connection update plus the
-// instance's own plan / enabled / credential mode. Same three-valued
-// credential rule, same required `expectedRevision`.
-export const providerServiceUpdateSchema = providerConnectionUpdateSchema.extend({
+// PATCH /api/providers/services/:slug — omitted credentials preserve stored
+// values, null clears them, and strings replace them.
+export const providerServiceUpdateSchema = z.object({
+  expectedRevision: z.number().int().positive(),
+  label: z.string().trim().max(200).optional(),
+  transports: serviceTransportsSchema.optional(),
+  credentials: z.record(z.string().trim().min(1).max(128), z.string().max(4096).nullable()).optional(),
   plan: servicePlanSchema.optional(),
   enabled: z.boolean().optional(),
   credentialVia: serviceCredentialViaSchema.optional(),
@@ -278,48 +125,6 @@ export const credentialPoolSettingsSchema = z.object({
 
 export const credentialPoolResetSchema = z.object({
   credentialId: poolCredentialIdSchema.optional(),
-}).strict();
-
-// PATCH /api/providers/bindings/:id (#6369). Management state only: no
-// `enabled`, because route enablement is an executable-record field that
-// PATCH /api/providers/:id owns and a binding toggle must never grant it.
-export const providerBindingUpdateSchema = z.object({
-  expectedRevision: z.number().int().positive(),
-  label: z.string().trim().max(200).optional(),
-  selectedModels: z.array(z.string().trim().min(1).max(512)).max(1000).optional(),
-}).strict();
-
-// PATCH /api/providers/routes/:providerId (#6369) — ONE route's mode overrides.
-//
-// Deliberately not `providerSchema.partial()`: that would reopen the whole
-// executable record, including the connection-owned endpoint/key the graph
-// projects and the `enabled` flag that grants execution consent. The accepted
-// keys are exactly the route-owned table in `providerRouteSettings.js`;
-// `providerRouteSettings.test.js` fails if the two ever drift.
-//
-// `expectedRevision` is a FINGERPRINT of the values on disk, not a row counter
-// — these fields live in providers.json, which the route editor and a model
-// refresh also write. An empty patch is refused rather than written: it would
-// rewrite the provider file to say nothing.
-//
-// `timeout` takes no `null`. The executable record's own schema has no null
-// timeout, so storing one here would 400 the next save from the route editor;
-// clearing a custom timeout stays that editor's job.
-const nullableModelPin = z.preprocess(emptyToNull, z.string().trim().max(512).nullable());
-export const providerRouteSettingsUpdateSchema = z.object({
-  expectedRevision: z.string().trim().min(1).max(64),
-  settings: z.object({
-    args: z.array(z.string().trim().min(1).max(2048)).max(200).optional(),
-    timeout: z.number().int().min(AI_RUN_TIMEOUT_MIN_MS).max(AI_RUN_TIMEOUT_MAX_MS).optional(),
-    effort: z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable()).optional(),
-    defaultModel: nullableModelPin.optional(),
-    lightModel: nullableModelPin.optional(),
-    mediumModel: nullableModelPin.optional(),
-    heavyModel: nullableModelPin.optional(),
-    ultraModel: nullableModelPin.optional(),
-  }).strict().refine((value) => Object.keys(value).length > 0, {
-    message: 'Name at least one setting to change',
-  }),
 }).strict();
 
 // POST /api/providers/:id/vision-suite.

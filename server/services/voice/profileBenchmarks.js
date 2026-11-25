@@ -26,7 +26,7 @@ const benchmarkLinesFor = (profile) => {
   const character = profile.label || 'this character';
   return VOICE_PROFILE_BENCHMARK_LINES.map((line) => ({
     ...line,
-    text: line.text.replace('{character}', character),
+    text: line.text.replace('{character}', () => character),
   }));
 };
 

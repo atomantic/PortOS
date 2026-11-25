@@ -26,9 +26,6 @@ import {
   isVisionCapableCliProvider,
   visionLocalModelFilter,
   isToolUseModel,
-  isToolFreeLocalProvider,
-  isToolFreeLocalModel,
-  toolFreeLocalSelectionPolicy,
   publicReviewSelectionPolicy,
   supportsPublicReviewPosture,
   PUBLIC_REVIEW_ACTIONS_POSTURE,
@@ -1045,6 +1042,12 @@ describe('localToolUseHint', () => {
     expect(localToolUseHint('gemma2:9b', ollama)).toEqual({ toolCapable: false });
   });
 
+  it('annotates every local-runtime marker, Splash included', () => {
+    // `inkling` is a tool-use family, so a Splash preset must get the hint like the other runtimes.
+    expect(localToolUseHint('inkling-1', { name: 'Splash', splashBacked: true })).toEqual({ toolCapable: true });
+    expect(localToolUseHint('gemma3:4b', { name: 'Splash', splashBacked: true })).toEqual({ toolCapable: false });
+  });
+
   it('returns null for cloud providers (their ids do not encode family)', () => {
     const cloud = { name: 'OpenAI', endpoint: 'https://api.openai.com/v1' };
     expect(localToolUseHint('gpt-4o', cloud)).toBeNull();
@@ -1171,17 +1174,8 @@ describe('localBackendForProvider', () => {
   });
 });
 
-describe('toolFreeLocalSelectionPolicy', () => {
-  const ollama = { id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1', enabled: true };
-  const lmstudio = { id: 'lmstudio', type: 'api', endpoint: 'http://localhost:1234/v1', enabled: true };
-
-  it('allows only canonical local API providers', () => {
-    expect(isToolFreeLocalProvider(ollama)).toBe(true);
-    expect(isToolFreeLocalProvider(lmstudio)).toBe(true);
-    expect(isToolFreeLocalProvider({ ...ollama, type: 'tui' })).toBe(false);
-    expect(isToolFreeLocalProvider({ ...ollama, id: 'custom-local' })).toBe(false);
-    expect(isToolFreeLocalProvider({ ...ollama, endpoint: 'http://example.internal:11434/v1' })).toBe(false);
-  });
+describe('no-tool public-review model eligibility', () => {
+  const ollama = { id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1', enabled: true, publicReviewSupported: true };
 
   it('requires an authoritative text capability report and rejects tool or embedding models', () => {
     const capabilities = {
@@ -1193,6 +1187,8 @@ describe('toolFreeLocalSelectionPolicy', () => {
         'empty-model': [],
       },
     };
+    const isToolFreeLocalModel = (model, provider, caps) =>
+      publicReviewSelectionPolicy(PUBLIC_REVIEW_NO_TOOL_POSTURE, caps).model(model, provider);
     expect(isToolFreeLocalModel('safe-model', ollama, capabilities)).toBe(true);
     expect(isToolFreeLocalModel('completion-model', ollama, capabilities)).toBe(true);
     expect(isToolFreeLocalModel('embedding-model', ollama, capabilities)).toBe(false);
@@ -1201,31 +1197,6 @@ describe('toolFreeLocalSelectionPolicy', () => {
     expect(isToolFreeLocalModel('unknown-model', ollama, capabilities)).toBe(false);
     expect(isToolFreeLocalModel({ id: 'safe-object', capabilities: ['chat'] }, ollama, {})).toBe(true);
     expect(isToolFreeLocalModel({ id: 'tool-object', capabilities: ['chat', 'tools'] }, ollama, {})).toBe(false);
-  });
-
-  it('provides one policy object for provider and model filtering', () => {
-    const policy = toolFreeLocalSelectionPolicy({ ollama: { 'safe-model': ['chat'] } });
-    expect(policy.provider(ollama)).toBe(true);
-    expect(policy.provider({ id: 'claude-code', type: 'cli', command: 'claude' })).toBe(false);
-    expect(policy.model('safe-model', ollama)).toBe(true);
-    expect(policy.model('unknown-model', ollama)).toBe(false);
-  });
-
-  it('reuses the same no-tool model policy for an explicitly maintained local wrapper', () => {
-    const wrapper = {
-      id: 'claude-ollama',
-      type: 'cli',
-      name: 'Claude Ollama',
-      endpoint: 'http://localhost:11434',
-      publicReviewSupported: true,
-    };
-    const policy = toolFreeLocalSelectionPolicy(
-      { ollama: { 'safe-model': ['chat'], 'agent-model': ['chat', 'tools'] } },
-      { providerPredicate: (provider) => provider?.publicReviewSupported === true },
-    );
-    expect(policy.provider(wrapper)).toBe(true);
-    expect(policy.model('safe-model', wrapper)).toBe(true);
-    expect(policy.model('agent-model', wrapper)).toBe(false);
   });
 });
 
@@ -1382,7 +1353,7 @@ describe('supportsModelRefresh', () => {
       // but the cached catalog is first-party ids, so a refresh would overwrite
       // the Bedrock catalog and strand defaultModel. The card keeps the stored list.
       'claude-ollama', 'claude-ollama-tui',
-      'claude-sglang', 'claude-sglang-tui', 'codex', 'codex-lmstudio',
+      'claude-sglang', 'claude-sglang-tui', 'claude-splash', 'codex', 'codex-lmstudio',
       'codex-ollama', 'codex-tui',
       'cursor-cli',
       'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-nim', 'ollama',
@@ -1393,7 +1364,7 @@ describe('supportsModelRefresh', () => {
       'opencode-ollama',
       'opencode-ollama-tui', 'opencode-openrouter', 'opencode-openrouter-tui',
       'opencode-orcarouter', 'opencode-orcarouter-tui',
-      'opencode-sglang', 'opencode-sglang-tui',
+      'opencode-sglang', 'opencode-sglang-tui', 'opencode-splash',
       'opencode-vllm', 'opencode-vllm-tui',
       // The Zen API record is an ordinary OpenAI-compatible endpoint. Its CLI/TUI
       // wrappers are deliberately ABSENT: they carry no namespace marker, which
@@ -1401,7 +1372,7 @@ describe('supportsModelRefresh', () => {
       // provider — nothing here can enumerate that, and Models → Harnesses
       // ("Refresh models") is where their catalog comes from instead.
       'opencode-zen',
-      'openrouter', 'orcarouter', 'pi-cli', 'pi-tui', 'slotstream',
+      'openrouter', 'orcarouter', 'pi-cli', 'pi-tui', 'slotstream', 'splash',
     ]);
   });
 });

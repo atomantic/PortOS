@@ -6,7 +6,7 @@ import socket from '../../../services/socket';
 
 const api = vi.hoisted(() => ({
   getBrainMemories: vi.fn(), getBrainMemory: vi.fn(), updateBrainMemory: vi.fn(),
-  getBrainPeople: vi.fn(), updateBrainPerson: vi.fn(),
+  getBrainPeople: vi.fn(), updateBrainPerson: vi.fn(), createBrainPerson: vi.fn(),
   getBrainProjects: vi.fn(), updateBrainProject: vi.fn(),
   getMemoryBackendStatus: vi.fn(),
 }));
@@ -16,12 +16,13 @@ vi.mock('../../../services/apiBrain.js', () => ({
   updateBrainMemory: api.updateBrainMemory,
   getBrainPeople: api.getBrainPeople,
   updateBrainPerson: api.updateBrainPerson,
+  createBrainPerson: api.createBrainPerson,
   getBrainProjects: api.getBrainProjects,
   updateBrainProject: api.updateBrainProject,
 }));
 vi.mock('../../../services/apiMemory.js', () => ({ getMemoryBackendStatus: api.getMemoryBackendStatus }));
 vi.mock('../../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 const memory = (id, extra = {}) => ({ id, title: `Example ${id}`, content: `Full body ${id}`, tags: [], ...extra });
 const deferred = () => {
@@ -188,5 +189,25 @@ describe('Brain record editor ownership', () => {
     expect(screen.queryByText('Example project')).toBeNull();
     expect(screen.getByRole('region', { name: 'Memory entries' })).toBe(list);
     expect(screen.getByRole('combobox', { name: 'Filter by status' })).toHaveValue('active');
+  });
+
+  it('keeps typed commas in a person\'s follow-ups and creates one record for a double click', async () => {
+    api.getBrainPeople.mockResolvedValue([]);
+    await mount([memory('a')]);
+    fireEvent.click(screen.getByRole('button', { name: /^People/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add', exact: true }));
+    const input = screen.getByRole('textbox', { name: 'Follow-ups' });
+    for (const typed of ['Send book,', 'Send book, ', 'Send book, call back']) {
+      fireEvent.change(input, { target: { value: typed } });
+      expect(input).toHaveValue(typed);
+    }
+    const created = deferred();
+    api.createBrainPerson.mockReturnValue(created.promise);
+    const create = screen.getByRole('button', { name: 'Create' });
+    fireEvent.click(create);
+    fireEvent.click(create);
+    expect(api.createBrainPerson).toHaveBeenCalledTimes(1);
+    expect(api.createBrainPerson.mock.calls[0][0]).toEqual({ followUps: ['Send book', 'call back'] });
+    await act(async () => { created.resolve({ id: 'p1', name: '' }); });
   });
 });

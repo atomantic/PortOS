@@ -4,11 +4,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 vi.mock('../../services/apiImageVideo.js', () => ({
   getHfTokenStatus: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), {
-    success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(),
-  }),
-}));
+vi.mock('../ui/Toast');
 
 import { getHfTokenStatus } from '../../services/apiImageVideo.js';
 import MidiGatedModal from './MidiGatedModal';

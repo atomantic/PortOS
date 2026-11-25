@@ -8,7 +8,7 @@ vi.mock('../../services/apiSyncReview.js', () => ({
   resolveConflict: vi.fn(),
   deleteConflict: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 vi.mock('../ui/InlineDiff', () => ({ default: ({ oldText, newText }) => <div data-testid="diff">{oldText}|{newText}</div> }));
 
 import { listConflicts, getConflict, resolveConflict } from '../../services/apiSyncReview.js';

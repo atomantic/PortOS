@@ -533,6 +533,272 @@ describe('floor key', () => {
   });
 });
 
+// #18634: a suite that spawns git was refused whatever it did with it, since
+// repository state is in no key. One that only drives git inside repositories
+// it creates declares that with `// test-memo: git-fixture`; git itself
+// then becomes a keyed tool, and the declaration falls wherever the file's own
+// text shows git reaching this checkout.
+describe('git-fixture declaration', () => {
+  const test = 'server/lib/repo.test.js';
+  const HEAD = [
+    "import { it } from 'vitest';",
+    "import { execFileSync, execSync } from 'node:child_process';",
+    "import { mkdtempSync } from 'node:fs';",
+    "import { tmpdir } from 'node:os';",
+    "import { dirname, join } from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+  ];
+  const WRAPPER = "const git = (dir, ...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });";
+  const suite = (...lines) => ['// test-memo: git-fixture', ...HEAD, ...lines].join('\n');
+  const FIXTURE = suite(
+    WRAPPER,
+    "it('commits in a repository of its own', () => {",
+    // SKIP: mkdtemp cleanup — fixture source text, not a real call.
+    "  const repo = mkdtempSync(join(tmpdir(), 'fixture-'));",
+    "  git(repo, 'init', '-q');",
+    "  execFileSync('git', ['-C', repo, 'status', '--porcelain'], { stdio: 'pipe' });",
+    "  execFileSync('git', ['add', '.'], { cwd: join(repo, 'nested'), env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' } });",
+    '});',
+  );
+  const GIT = 'git version 2.50.1 settings 0123456789abcdef';
+  const floorOf = (source, extra = {}, files = TREE) => keyOf({ ...files, [test]: source }, test, { toolVersion: (tool) => (tool === 'git' ? GIT : null), ...extra }).floor;
+  const refusal = (source, files) => floorOf(source, {}, files).reason;
+
+  it('keys a declared suite by its closure and the git it runs against, and leaves every other key alone', () => {
+    const floor = floorOf(FIXTURE);
+    expect(floor).toMatchObject({ memoizable: true, reasons: [] });
+    expect([...floor.tools]).toEqual(['git']);
+    // The safety property: each input of the suite moves its key.
+    expect(floorOf(FIXTURE, { toolVersion: () => 'git version 2.51.0 settings 0123456789abcdef' }).key).not.toBe(floor.key);
+    expect(floorOf(FIXTURE, { toolVersion: () => 'git version 2.50.1 settings fedcba9876543210' }).key).not.toBe(floor.key);
+    expect(floorOf(FIXTURE.replace("'status'", "'diff'")).key).not.toBe(floor.key);
+    // No version the runner could not establish is ever keyed: the suite cannot pass without git.
+    expect(floorOf(FIXTURE, { toolVersion: () => null })).toMatchObject({ memoizable: false, reason: 'unverified tool: git' });
+    // A file that does not use git has no git line, whatever the runner reports for it.
+    const plain = (toolVersion) => keyOf(TREE, 'server/lib/plain.test.js', { toolVersion }).floor.key;
+    expect(plain(() => GIT)).toBe(plain(() => null));
+    expect(plain(() => GIT)).toBe(keyOf(TREE, 'server/lib/plain.test.js').floor.key);
+  });
+
+  it('requires a verified Git identity even when a declaring test also reaches product Git', () => {
+    const product = 'server/lib/gitProduct.js';
+    const files = {
+      ...TREE,
+      [product]: "import { execFileSync } from 'node:child_process';\nexport const status = (cwd) => execFileSync('git', ['status'], { cwd });\n",
+      [test]: `${FIXTURE}\nimport './gitProduct.js';\n`,
+    };
+    const { floor, recorded } = keyOf(files, test, { records: new Map([[test, [test, product]]]), toolVersion: () => null });
+    for (const verdict of [floor, recorded]) expect(verdict).toMatchObject({ memoizable: false, reason: 'unverified tool: git' });
+  });
+
+  it('changes nothing for a suite that does not declare, or whose marker is not a comment', () => {
+    const undeclared = FIXTURE.replace('// test-memo: git-fixture\n', '');
+    expect(floorOf(undeclared)).toMatchObject({ memoizable: false, reason: 'spawns git' });
+    expect(floorOf(`${undeclared}\nconst fixtureSource = '// test-memo: git-fixture';\n`)).toMatchObject({ memoizable: false, reason: 'spawns git' });
+    expect(floorOf(`${undeclared}\nconst fixtureSource = \`\n// test-memo: git-fixture\n\`;\n`)).toMatchObject({ memoizable: false, reason: 'spawns git' });
+    // A mention inside another comment declares nothing.
+    for (const mention of ['/**\n * Not a `// test-memo: git-fixture` suite: it reads the checkout.\n */', "const kind = 'plain'; // test-memo: git-fixture"]) {
+      expect(floorOf(`${mention}\n${undeclared}`), mention).toMatchObject({ memoizable: false, reason: 'spawns git' });
+    }
+    // Marker text a string also carries is no proof the comment is the declaration.
+    expect(refusal(`${FIXTURE}\nconst quoted = '// test-memo: git-fixture';\n`)).toBe('spawns git');
+  });
+
+  it.each([
+    ['a git call with no directory', ["execFileSync('git', ['rev-parse', 'HEAD']);"], /starts git without naming the directory/],
+    ['a directory only an opaque options value could name', ['const options = { cwd: mkdtempSync(tmpdir()) };', "execFileSync('git', ['status'], options);"], /starts git without naming the directory/],
+    ['a spread that can replace the directory', ['const extra = {};', "execFileSync('git', ['status'], { cwd: mkdtempSync(tmpdir()), ...extra });"], /starts git without naming the directory/],
+    ['a command line', ["execSync('git status', { cwd: mkdtempSync(tmpdir()) });"], /runs git through a command line/],
+    ['a command line in a template', ['const scratch = mkdtempSync(tmpdir());', 'execSync(`git -C ${scratch} status`);'], /runs git through a command line/],
+    ['a git binary named by path', ["execFileSync('/usr/bin/git', ['status'], { cwd: mkdtempSync(tmpdir()) });"], /runs git through a command line/],
+    ['the test process directory', ["execFileSync('git', ['status'], { cwd: process.cwd() });"], /hands git a path in this repository \(server\)/],
+    ['the file directory', ["execFileSync('git', ['log'], { cwd: dirname(fileURLToPath(import.meta.url)) });"], /hands git a path in this repository \(server\/lib\)/],
+    ['a repository constant', ["const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');", "execFileSync('git', ['ls-files'], { cwd: ROOT });"], /hands git a path in this repository \(<repo root>\)/],
+    ['a repository path after -C', ["execFileSync('git', ['-C', process.cwd(), 'status']);"], /hands git a path in this repository/],
+    ['a relative directory', ["execFileSync('git', ['status'], { cwd: '.' });"], /relative to the test process \(\.\)/],
+    ['a relative fallback directory', ['const scratch = process.env.EXAMPLE_SCRATCH;', "execFileSync('git', ['status'], { cwd: scratch || 'fixtures' });"], /relative to the test process \(fixtures\)/],
+    ['a relative directory bound to a name', ["const dir = '.';", "execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir });"], /relative to the test process \(\.\)/],
+    ['a relative directory assigned later', ['let dir = mkdtempSync(tmpdir());', "execFileSync('git', ['init'], { cwd: dir });", "dir = 'fixtures';"], /relative to the test process \(fixtures\)/],
+    ['a relative directory handed to the wrapper', [WRAPPER, "git('.', 'rev-parse', 'HEAD');"], /relative to the test process \(\.\)/],
+    ['a relative directory through a function that calls the wrapper', [WRAPPER, "const head = (dir) => git(dir, 'rev-parse', 'HEAD');", "head('..');"], /relative to the test process \(\.\.\)/],
+    ['a relative directory as a parameter default', ["const git = (dir = '.') => execFileSync('git', ['status'], { cwd: dir });", 'git();'], /relative to the test process \(\.\)/],
+    ['a path joined onto a relative start', ["execFileSync('git', ['status'], { cwd: join('fixtures', 'repo') });"], /relative to the test process \(fixtures\/repo\)/],
+    ['a path joined onto a relative name', ["const base = 'fixtures';", 'const name = process.env.EXAMPLE_NAME;', "execFileSync('git', ['status'], { cwd: join(base, name) });"], /relative to the test process \(fixtures\)/],
+    ['a path resolved from nothing', ["import { resolve } from 'node:path';", "execFileSync('git', ['status'], { cwd: resolve() });"], /relative to the test process \(resolve\(\)\)/],
+    ['a template that starts relative', ['const name = process.env.EXAMPLE_NAME;', "execFileSync('git', ['status'], { cwd: `fixtures/${name}` });"], /relative to the test process \(fixtures\/\)/],
+    ['a relative directory after -C', ["const dir = 'fixtures';", "execFileSync('git', ['-C', dir, 'status']);"], /relative to the test process \(fixtures\)/],
+    ["a relative directory handed to the repository's own git helper", ["import { execGit } from './execGit.js';", 'const scratch = mkdtempSync(tmpdir());',
+      "execFileSync('git', ['init'], { cwd: scratch });", "await execGit(['rev-parse', 'HEAD'], '.');"], /relative to the test process \(\.\)/],
+    ["that helper called with no directory", ["import { execGit } from './execGit.js';", 'const scratch = mkdtempSync(tmpdir());',
+      "execFileSync('git', ['init'], { cwd: scratch });", "await execGit(['rev-parse', 'HEAD']);"], /starts git without naming the directory/],
+    ['a null directory', ["execFileSync('git', ['rev-parse', 'HEAD'], { cwd: null });"], /nullish directory/],
+    ['an undefined directory bound to a name', ['const dir = undefined;', "execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir });"], /nullish directory/],
+    ['a void directory handed to the wrapper', [WRAPPER, "git(void 0, 'rev-parse', 'HEAD');"], /nullish directory/],
+    ['a nullish fallback directory', ['const scratch = process.env.EXAMPLE_SCRATCH;', "execFileSync('git', ['status'], { cwd: scratch ?? undefined });"], /nullish directory/],
+    // A wrapper's directory parameter is whatever each caller passes, and `undefined` where a caller passes nothing.
+    ['a wrapper called without its directory', ["const git = dir => execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir });", 'git();'], /git\(\) is called without the directory its git call reads/],
+    ['a wrapper called without its second, directory, argument', ["const git = (args, dir) => execFileSync('git', args, { cwd: dir });", "git(['status']);"], /git\(\) is called without the directory/],
+    ['a declared function called without its directory', ["function git(dir) { return execFileSync('git', ['status'], { cwd: dir }); }", 'git();'], /git\(\) is called without the directory/],
+    ['a method wrapper called without its directory', ["const helpers = { run(dir) { return execFileSync('git', ['status'], { cwd: dir }); } };", 'helpers.run();'], /run\(\) is called without the directory/],
+    ['a method wrapper handed a relative directory', ["const helpers = { run: (dir) => execFileSync('git', ['status'], { cwd: dir }) };", "helpers.run('.');"], /relative to the test process \(\.\)/],
+    ['a function that calls the wrapper, itself called without the directory', [WRAPPER, "const head = (dir) => git(dir, 'rev-parse', 'HEAD');", 'head();'], /head\(\) is called without the directory/],
+    ['a directory read through a local, in a wrapper called without it', ["const git = (dir) => { const where = dir; return execFileSync('git', ['status'], { cwd: where }); };", 'git();'], /git\(\) is called without the directory/],
+    ['an optional call with a relative directory', [WRAPPER, "git?.('.', 'status');"], /relative to the test process \(\.\)/],
+    ['a default that is a repository constant', ["const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');", "const git = (dir = ROOT) => execFileSync('git', ['status'], { cwd: dir });", 'git();'], /hands git a path in this repository \(<repo root>\)/],
+    ['a default that is undefined', ["const git = (dir = undefined) => execFileSync('git', ['status'], { cwd: dir });", 'git();'], /nullish directory/],
+    // .call, .apply and .bind put the arguments where no call's are.
+    ['a wrapper reached through .call', [WRAPPER, 'git.call(null);'], /git\(\) runs git and is used other than by a direct call/],
+    ['a wrapper reached through .apply', [WRAPPER, 'git.apply(null, []);'], /git\(\) runs git and is used other than by a direct call/],
+    ['a wrapper reached through .bind', [WRAPPER, 'const bound = git.bind(null);', 'bound();'], /git\(\) runs git and is used other than by a direct call/],
+    ['a method wrapper reached through .call', ["const helpers = { run(dir) { return execFileSync('git', ['status'], { cwd: dir }); } };", 'helpers.run.call(helpers);'], /run\(\) runs git and is used other than by a direct call/],
+    ["the repository's own git helper reached through .call", ["import { execGit } from './execGit.js';", 'const scratch = mkdtempSync(tmpdir());',
+      "execFileSync('git', ['init'], { cwd: scratch });", "await execGit.call(null, ['rev-parse', 'HEAD']);"], /execGit\(\) runs git and is used other than by a direct call/],
+    // An options object: its `cwd` is the directory, and an object without one gives none.
+    ['an options pattern whose caller gives no cwd', ["const git = ({ cwd }) => execFileSync('git', ['status'], { cwd });", 'git({});'], /git\(\) is called without the directory/],
+    ['an options pattern whose caller gives nothing', ["const git = ({ cwd } = {}) => execFileSync('git', ['status'], { cwd });", 'git();'], /git\(\) is called without the directory/],
+    ['an options pattern whose caller gives a relative cwd', ["const git = ({ cwd }) => execFileSync('git', ['status'], { cwd });", "git({ cwd: '.' });"], /relative to the test process \(\.\)/],
+    ['a renamed options pattern whose caller gives no cwd', ["const git = ({ cwd: where }) => execFileSync('git', ['status'], { cwd: where });", "git({ encoding: 'utf8' });"], /git\(\) is called without the directory/],
+    ['an options parameter whose caller gives no cwd', ["const git = (args, options) => execFileSync('git', args, { cwd: options.cwd });", "git(['status'], {});"], /git\(\) is called without the directory/],
+    ['a defaulted options parameter whose caller gives nothing', ["const git = (args, options = {}) => execFileSync('git', args, { cwd: options.cwd });", "git(['status']);"], /git\(\) is called without the directory/],
+    ['an options parameter whose caller gives an undefined cwd', ["const git = (args, options) => execFileSync('git', args, { cwd: options.cwd });", "git(['status'], { cwd: undefined });"], /nullish directory/],
+    ['a directory name declared and never given a value', ['let dir;', "execFileSync('git', ['status'], { cwd: dir });"], /nullish directory.*dir is declared and never assigned/],
+    // A program that is a name holding 'git', or a parameter a caller passes it as, is a git call like a literal one.
+    ['git named through a constant', ['const scratch = mkdtempSync(tmpdir());', "execFileSync('git', ['init'], { cwd: scratch });", "const command = 'git';", "execFileSync(command, ['rev-parse', 'HEAD']);"], /starts git without naming the directory/],
+    ['git named through a constant, with no literal git call at all', ["const command = 'git';", "execFileSync(command, ['rev-parse', 'HEAD']);"], /starts git without naming the directory/],
+    ['git as a fallback program', ["execFileSync(process.env.EXAMPLE_GIT || 'git', ['rev-parse', 'HEAD']);"], /starts git without naming the directory/],
+    ['git passed to a runner as its program', ['const run = (program, args) => execFileSync(program, args);', "run('git', ['rev-parse', 'HEAD']);"], /starts git without naming the directory/],
+    ['git passed to a runner called without its directory', ['const run = (program, args, dir) => execFileSync(program, args, { cwd: dir });', "run('git', ['status']);"], /run\(\) is called without the directory/],
+    ['git passed to a runner with a relative directory', ['const run = (program, args, dir) => execFileSync(program, args, { cwd: dir });', "run('git', ['status'], '.');"], /relative to the test process \(\.\)/],
+    ['a git command line named through a constant', ['const scratch = mkdtempSync(tmpdir());', "const command = 'git status';", 'execSync(command, { cwd: scratch });'], /runs git through a command line/],
+    // A spawn callee under another name is a spawn callee, and the process directory out of the environment is the checkout.
+    ['git through an alias of the spawn callee', ['const run = execFileSync;', "run('git', ['rev-parse', 'HEAD']);"], /starts git without naming the directory/],
+    ['git through a promisified spawn callee', ["import { promisify } from 'node:util';", "import { execFile } from 'node:child_process';", 'const execFileAsync = promisify(execFile);', "await execFileAsync('git', ['rev-parse', 'HEAD']);"], /starts git without naming the directory/],
+    ['git through a renamed import of the spawn callee', ["import { spawnSync as launch } from 'node:child_process';", "launch('git', ['status'], { cwd: '.' });"], /relative to the test process \(\.\)/],
+    ['git through a namespace member bound to a name', ["import * as childProcess from 'node:child_process';", 'const launch = childProcess.spawnSync;', "launch('git', ['status']);"], /starts git without naming the directory/],
+    ['the process directory out of the environment', ["execFileSync('git', ['status'], { cwd: process.env.PWD });"], /hands git the directory the test process runs in \(process\.env\.PWD\)/],
+    ['the workspace directory out of the environment, through a name', ['const workspace = process.env.GITHUB_WORKSPACE;', "execFileSync('git', ['status'], { cwd: workspace });"], /process\.env\.GITHUB_WORKSPACE/],
+    // git started by a shell the suite hands a command line, and by code it hands the checkout.
+    ['a git command line handed to a shell', ["execFileSync('sh', ['-c', 'git rev-parse HEAD']);"], /runs git through a command line/],
+    ['a git command line handed to a shell in a fixture directory', ['const scratch = mkdtempSync(tmpdir());', "execFileSync('sh', ['-c', 'cd nested && git log -1'], { cwd: scratch });"], /runs git through a command line/],
+    ['a git command line a shell is handed through a name', ["const script = 'echo $(git rev-parse HEAD)';", "execFileSync('bash', ['-c', script]);"], /runs git through a command line/],
+    ['the repository directory handed to imported code', ["import { commit } from './git.js';", 'const scratch = mkdtempSync(tmpdir());', "execFileSync('git', ['init'], { cwd: scratch });", "await commit(process.cwd(), 'example');"], /hands the repository directory server to code that may run git there/],
+    ['the repository directory handed on in an options object', ["import { checkReadiness } from './readiness.js';", 'const scratch = mkdtempSync(tmpdir());', "execFileSync('git', ['init'], { cwd: scratch });",
+      "const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');", 'await checkReadiness({ repoPath: ROOT });'], /hands the repository directory <repo root> to code that may run git there/],
+    ['the home directory', ["import { homedir } from 'node:os';", "execFileSync('git', ['status'], { cwd: homedir() });"], /home directory/],
+    ['a repository path among the arguments', ['const scratch = mkdtempSync(tmpdir());', "execFileSync('git', ['clone', process.cwd(), 'copy'], { cwd: scratch });"], /hands git a path in this repository/],
+    ['a repository path in the environment', ['const scratch = mkdtempSync(tmpdir());', "execFileSync('git', ['status'], { cwd: scratch, env: { GIT_WORK_TREE: process.cwd() } });"], /hands git a path in this repository/],
+    ['a repository path handed to the wrapper', [WRAPPER, "git(process.cwd(), 'rev-parse', 'HEAD');"], /hands git a path in this repository \(server\)/],
+    ['a repository path among the wrapper arguments', [WRAPPER, 'const scratch = mkdtempSync(tmpdir());', "git(scratch, 'clone', process.cwd(), scratch);"], /hands git a path in this repository/],
+    ['a repository path through a function that calls the wrapper', [WRAPPER, "const head = (dir) => git(dir, 'rev-parse', 'HEAD');", 'head(process.cwd());'], /hands git a path in this repository/],
+    ['a wrapper method called on an object', ["const helpers = { run(dir) { return execFileSync('git', ['status'], { cwd: dir }); } };", 'helpers.run(process.cwd());'], /hands git a path in this repository/],
+    ['a name one test binds to the repository and another to a fixture', [WRAPPER,
+      "it('a', () => { const repo = mkdtempSync(tmpdir()); git(repo, 'init'); });",
+      "it('b', () => { const repo = process.cwd(); git(repo, 'status'); });"], /hands git a path in this repository/],
+    ['a later assignment', [WRAPPER, 'let repo;', 'repo = mkdtempSync(tmpdir());', "git(repo, 'init');", 'repo = process.cwd();'], /hands git a path in this repository/],
+    ['a parameter default', ["const git = (dir = process.cwd()) => execFileSync('git', ['status'], { cwd: dir });", 'git();'], /hands git a path in this repository/],
+    ['a loop over the repository', [WRAPPER, "for (const dir of [mkdtempSync(tmpdir()), process.cwd()]) git(dir, 'status');"], /hands git a path in this repository/],
+    ['a wrapper whose callers are not all in view', [WRAPPER, '[process.cwd()].forEach(git);'], /git\(\) runs git and is used other than by a direct call/],
+    ["a repository path handed to the repository's own git helper", ["import { execGit } from './execGit.js';", 'const scratch = mkdtempSync(tmpdir());',
+      "execFileSync('git', ['init'], { cwd: scratch });", "await execGit(['rev-parse', 'HEAD'], process.cwd());"], /hands git a path in this repository \(server\)/],
+    ['a repository path through a function that calls that helper', ["import { execGit } from './execGit.js';", 'const scratch = mkdtempSync(tmpdir());',
+      "execFileSync('git', ['init'], { cwd: scratch });", "const head = (dir) => execGit(['rev-parse', 'HEAD'], dir);", 'await head(process.cwd());'], /hands git a path in this repository \(server\)/],
+  ])('refuses the declaration for %s', (_label, lines, why) => {
+    const reason = refusal(suite(...lines, "it('x', () => {});"));
+    expect(reason).toMatch(/^spawns git \(git-fixture declaration refused: /);
+    expect(reason).toMatch(why);
+  });
+
+  // What stays on the declaration's word: a value the source does not spell.
+  it('accepts the shapes fixture suites are written in', () => {
+    const shapes = suite(
+      'let root; let repo;',
+      // SKIP: mkdtemp cleanup — fixture source text, not a real call.
+      "beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'fixture-')); repo = join(root, 'repo'); });",
+      "const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'Example' } });",
+      "const inDir = (args, cwd = root) => execFileSync('git', args, { cwd });",
+      "const runGit = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });",
+      'const facts = makeFacts();',
+      "it('x', async () => {",
+      "  git('init', '-q');",
+      "  inDir(['status']);",
+      "  runGit(facts.repo, 'rev-parse', 'HEAD');",
+      "  await withRepo(({ checkout }) => runGit(checkout, 'status'));",
+      "  await execGit(['worktree', 'add', join(root, 'tree'), 'main'], repo);",
+      "  await gitWork.execGit(['--version'], tmpdir());",
+      "  execFileSync('git', ['status'], { cwd: join(root, 'nested', 'repo') });",
+      "  execFileSync('git', ['status'], { cwd: `${root}/repo` });",
+      "  execFileSync('git', ['status'], { cwd: '/example/missing' });",
+      // A default stands in for an argument or a property that is left out.
+      "  inDir(['status'], repo);",
+      "  const at = ({ cwd = root, encoding } = {}) => execFileSync('git', ['status'], { cwd, encoding });",
+      "  at(); at({ encoding: 'utf8' }); at({ cwd: repo });",
+      // Behind a spread, or in an object that is no literal, the directory is not spelled: the declaration's word.
+      "  const forward = (...args) => runGit(...args);",
+      "  forward(repo, 'status'); at(launch.options);",
+      // A program named through a constant or passed to a runner is read like a literal one, and may stand.
+      "  const program = 'git';",
+      "  execFileSync(program, ['status'], { cwd: repo });",
+      "  const run = (tool, args, dir) => execFileSync(tool, args, { cwd: dir });",
+      "  run('git', ['status'], repo); run(process.execPath, ['-e', ''], repo);",
+      // Another program with no git in what it is handed, and a repository file (not a directory) handed on.
+      "  execFileSync('sh', ['-c', 'printf %s done'], { cwd: repo });",
+      "  execFileSync(process.execPath, [fileURLToPath(new URL('./a.js', import.meta.url))], { cwd: repo });",
+      "  execFileSync('git', ['commit', '-m', 'explain git status output'], { cwd: repo });",
+      // An alias of a spawn callee is held to the same rules, and may stand.
+      "  const launch = promisify(execFile);",
+      "  await launch('git', ['status'], { cwd: repo, env: { ...process.env, TMPDIR: process.env.TMPDIR } });",
+      // A property that only shares a function's name is no use of that function.
+      "  expect(facts.runGit).toBeUndefined();",
+      "  execFileSync('git', ['commit', '--allow-empty', '-m', 'example'], { cwd: launch.cwd });",
+      '});',
+    );
+    expect(floorOf(shapes)).toMatchObject({ memoizable: true });
+  });
+
+  it('never extends the declaration past the test file itself', () => {
+    const tool = "import { execFileSync } from 'node:child_process';\nexport const listed = (dir) => execFileSync('git', ['ls-files'], { cwd: dir });\n";
+    const importing = (spec) => FIXTURE.replace(HEAD[0], `${HEAD[0]}\nimport { listed } from '${spec}';`);
+    // A scripts/ module's git use is repository tooling, whatever the test declares, even carrying the marker itself.
+    for (const source of [tool, `// test-memo: git-fixture\n${tool}`]) {
+      expect(refusal(importing('../../scripts/tool.js'), { ...TREE, 'scripts/tool.js': source }))
+        .toBe("spawns git (through scripts/tool.js, which the test's git-fixture declaration does not cover)");
+    }
+    // A product module's git use was never the refusal: the test controls where it runs.
+    expect(floorOf(importing('./listed.js'), {}, { ...TREE, 'server/lib/listed.js': tool })).toMatchObject({ memoizable: true });
+    // A git library takes its directory wherever its API says.
+    const files = { ...TREE, 'server/node_modules/simple-git/package.json': '{"name":"simple-git","version":"3.0.0"}' };
+    expect(refusal(FIXTURE.replace(HEAD[0], `${HEAD[0]}\nimport { simpleGit } from 'simple-git';`), files))
+      .toBe('spawns git (git-fixture declaration refused: imports the git library simple-git)');
+  });
+
+  // The git rule itself reads the program the same way, declaration or not: a wrapper that is
+  // handed 'git' spawns git as surely as a call that writes it.
+  it('refuses an undeclared file that starts git through a name or a runner', () => {
+    const runner = "import { spawnSync } from 'node:child_process';\nexport const capture = (command, args) => spawnSync(command, args, { encoding: 'utf8' });\n";
+    const reading = `${runner}export const head = () => capture('git', ['rev-parse', 'HEAD']);\n`;
+    const importing = (spec) => `import { it } from 'vitest';\nimport { head } from '${spec}';\nit('x', () => {});\n`;
+    for (const [label, source] of Object.entries({
+      'a constant': "import { it } from 'vitest';\nimport { execFileSync } from 'node:child_process';\nconst command = 'git';\nexecFileSync(command, ['status']);\nit('x', () => {});\n",
+      'a runner': `import { it } from 'vitest';\n${reading}it('x', () => {});\n`,
+    })) expect(floorOf(source), label).toMatchObject({ memoizable: false, reason: 'spawns git' });
+    expect(floorOf(importing('../../scripts/tool.js'), {}, { ...TREE, 'scripts/tool.js': reading })).toMatchObject({ memoizable: false, reason: 'spawns git' });
+    // A product module's git use was never the refusal, and a runner nobody hands git is no git call.
+    expect(floorOf(importing('./tool.js'), {}, { ...TREE, 'server/lib/tool.js': reading })).toMatchObject({ memoizable: true });
+    expect(floorOf(`import { it } from 'vitest';\n${runner}capture(process.execPath, ['-e', '']);\nit('x', () => {});\n`)).toMatchObject({ memoizable: true });
+    // An alias of a spawn callee is one.
+    expect(floorOf("import { it } from 'vitest';\nimport { promisify } from 'node:util';\nimport { execFile } from 'node:child_process';\nconst run = promisify(execFile);\nawait run('git', ['status']);\nit('x', () => {});\n"))
+      .toMatchObject({ memoizable: false, reason: 'spawns git' });
+  });
+
+  it('keeps the recorded key under the same rule', () => {
+    const recorded = (source, toolVersion = () => GIT) => keyOf({ ...TREE, [test]: source }, test, { toolVersion, records: new Map([[test, [test]]]) }).recorded;
+    const verdict = recorded(FIXTURE);
+    expect(verdict.memoizable).toBe(true);
+    expect(recorded(FIXTURE, () => 'git version 2.51.0 settings 0123456789abcdef').key).not.toBe(verdict.key);
+    expect(recorded(suite("execFileSync('git', ['status']);"))).toMatchObject({ memoizable: false });
+  });
+});
+
 // #16602: a path with a variable segment was keyed as the directory the source
 // still names, as if the read had to land inside it. A helper called with
 // '../../client/src/limits.js' leaves that directory, so the key held a tree the
@@ -1548,6 +1814,63 @@ describe('python sidecars, external tools and machine-local state', () => {
     expect(keyOf({ ...TREE, 'server/lib/a.test.js': read("join(process.env.HOME, '.portos')") }).floor.memoizable).toBe(false);
     const product = { ...TREE, 'server/lib/a.js': `import { readFileSync } from 'node:fs';\nimport { join } from 'node:path';\nexport const a = () => readFileSync(join(__dirname, '..', '..', '${DATA}', 'settings.json'));\n` };
     expect(keyOf(product).floor.memoizable).toBe(true);
+  });
+});
+
+describe('Git reached through a product module', () => {
+  const test = 'server/lib/a.test.js';
+  const gitModule = 'server/lib/lazy.js';
+  const files = {
+    ...TREE,
+    [gitModule]: "import { execFileSync } from 'node:child_process';\nexport const status = (cwd) => execFileSync('git', ['status'], { cwd });\n",
+  };
+  const analyze = (identity, { recorded = [test, gitModule], tree = files } = {}) => {
+    const analyzer = createTestMemoAnalyzer({
+      ...options(tree), workspaceRel: 'server', requireToolVersions: true,
+      toolVersion: (tool) => tool === 'git' ? identity : null,
+    });
+    const baseClosure = analyzer.workspaceBase(WORKSPACE_BASE_INPUTS.server, WORKSPACE_SETUP_ENTRIES.server);
+    return analyzer.analyzeTest(test, { baseClosure, recorded });
+  };
+
+  it('keys the resolved Git identity in both keys and can key an unresolved identity', () => {
+    const first = analyze('git version 2.52.0 settings config-a');
+    const changed = analyze('git version 2.52.0 settings config-b');
+    const absent = analyze(null);
+    const absentLine = analyze('absent');
+    for (const kind of ['floor', 'recorded']) {
+      expect(first[kind]).toMatchObject({ memoizable: true, tools: new Set(['git']) });
+      expect(changed[kind].key).not.toBe(first[kind].key);
+      expect(absent[kind]).toMatchObject({ memoizable: true, tools: new Set(['git']) });
+      expect(absent[kind].key).not.toBe(first[kind].key);
+      expect(absent[kind].key).toBe(absentLine[kind].key);
+    }
+  });
+
+  it('leaves Git out of the recorded key when the run did not load the spawner', () => {
+    const recorded = [test];
+    const first = analyze('git version 2.52.0 settings config-a', { recorded });
+    const changed = analyze('git version 2.53.0 settings config-a', { recorded });
+    expect(first.floor.tools.has('git')).toBe(true);
+    expect(changed.floor.key).not.toBe(first.floor.key);
+    expect(first.recorded).toMatchObject({ memoizable: true, tools: new Set() });
+    expect(changed.recorded.key).toBe(first.recorded.key);
+  });
+
+  it('leaves both keys unchanged for a test that reaches no Git spawner', () => {
+    const first = analyze('git version 2.52.0 settings config-a', { tree: TREE });
+    const absent = analyze(null, { tree: TREE });
+    for (const kind of ['floor', 'recorded']) {
+      expect(first[kind]).toMatchObject({ memoizable: true, tools: new Set() });
+      expect(absent[kind].key).toBe(first[kind].key);
+    }
+  });
+
+  it('keeps the refusal for a Git-spawning scripts member', () => {
+    const script = 'scripts/tool.js';
+    const tree = { ...files, [script]: files[gitModule], [test]: `import '../../${script}';\n${files[test]}` };
+    const { floor, recorded } = analyze('git version 2.52.0 settings config-a', { tree, recorded: [test, gitModule, script] });
+    for (const verdict of [floor, recorded]) expect(verdict).toMatchObject({ memoizable: false, reason: 'spawns git' });
   });
 });
 

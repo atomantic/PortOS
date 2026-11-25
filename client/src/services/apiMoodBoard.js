@@ -10,7 +10,8 @@ import { request } from './apiCore.js';
 // `options` is forwarded to the request helper so callers that own their own
 // error UI (useAsyncAction / custom catch) can pass `{ silent: true }`.
 
-export const listMoodBoards = (options) => request('/mood-boards', options);
+export const listMoodBoards = ({ view, ...options } = {}) =>
+  request(view === 'summary' ? '/mood-boards?view=summary' : '/mood-boards', options);
 
 // `{ id, name }` only — for pickers; skips every board's inline items.
 export const listMoodBoardNames = (options) => request('/mood-boards/names', options);

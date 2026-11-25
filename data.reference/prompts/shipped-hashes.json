@@ -103,24 +103,26 @@
     ]
   },
   "stages/cd-plan.md": {
-    "current": "8dac4102dbbaee05f2f23f37c7e80782",
+    "current": "03b7a1a207d2eda621a876bdeeb72038",
     "retired": [
       "02354df62fe776704669d3ff06f346e4",
       "0768d6809645c2c1fe73cacae9740fe9",
       "3ce871196a8fd04781b71b6780e89c86",
       "41a61590896d1327df2c6915557361de",
-      "ef0d96f6ebde43af6c4579969d31cfb7"
+      "ef0d96f6ebde43af6c4579969d31cfb7",
+      "8dac4102dbbaee05f2f23f37c7e80782"
     ]
   },
   "stages/cd-treatment.md": {
-    "current": "16c5ce4a199d8efbf80016424315beb6",
+    "current": "06864fe3cc8402f7ee718cc005c17307",
     "retired": [
       "16d0ef6a7fd2533719a846019122ebee",
       "1de973575a772db0544bbeda2ba5df77",
       "2ffa482e7bfb6fe8b7224505fedbf712",
       "4da071646deff0001473502a7c4b5252",
       "95b7685690ecfee4f682b0293b790277",
-      "d940eadfb406ce584f0e244032f33382"
+      "d940eadfb406ce584f0e244032f33382",
+      "16c5ce4a199d8efbf80016424315beb6"
     ]
   },
   "stages/cos-agent-briefing.md": {

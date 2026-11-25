@@ -3,7 +3,7 @@ import { fileCompositionVideos } from '../mediaCollectionRules.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { cp, lstat, mkdtemp, open, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdtemp, open, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
@@ -20,15 +20,12 @@ import { makePathResolver } from '../../lib/pathSafety.js';
 import { UPLOAD_AUDIO_EXTENSIONS } from '../../lib/mimeTypes.js';
 import {
   LAUNCH_VIDEO_FORMATS, LAUNCH_VIDEO_FORMAT_SIZES, htmlCompositionContractSchema,
-  htmlCompositionContractSchemaFor, htmlCompositionRenderSchema
+  htmlCompositionRenderSchema
 } from '../../lib/htmlCompositionValidation.js';
 
 const active = new Map();
 const resolveAudioUpload = makePathResolver(() => PATHS.uploads, { extensions: UPLOAD_AUDIO_EXTENSIONS });
 const lifecycle = channel('portos.composition-render.lifecycle');
-// A music-video owner may run as long as its song, and no longer than this.
-const MUSIC_VIDEO_DURATION_CAP_SEC = 900;
-const MUSIC_VIDEO_OWNER = 'music-video';
 
 function insideData(root, path) {
   const rel = relative(root, path);
@@ -47,27 +44,6 @@ function normalizeSongDocument(song) {
     sections: Array.isArray(source.sections) ? source.sections : [],
     features: features !== null && typeof features === 'object' && !Array.isArray(features) ? features : null,
     words: Array.isArray(source.words) ? source.words : null,
-  };
-}
-
-async function resolveMusicVideoOwner({ owner, audio, maxDurationSec }) {
-  if (owner == null) return null;
-  if (owner !== MUSIC_VIDEO_OWNER) throw new Error('Unknown composition owner');
-  if (!audio || typeof audio.path !== 'string' || !audio.path || audio.path.includes('\0')) {
-    throw new Error('Music-video renders require an audio master path');
-  }
-  const startSec = audio.startSec ?? 0;
-  if (!Number.isFinite(startSec) || startSec < 0) throw new Error('audio.startSec must be a non-negative number');
-  if (!Number.isFinite(maxDurationSec) || maxDurationSec < 1) throw new Error('maxDurationSec must be the song duration');
-  let info;
-  try { info = await stat(audio.path); } catch (error) {
-    if (error.code === 'ENOENT') throw new Error('Music-video audio master is missing');
-    throw error;
-  }
-  if (!info.isFile()) throw new Error('Music-video audio master must be a regular file');
-  return {
-    audio: { path: audio.path, startSec },
-    maxDurationSec: Math.min(MUSIC_VIDEO_DURATION_CAP_SEC, maxDurationSec),
   };
 }
 
@@ -149,7 +125,7 @@ export async function renderComposition(options) {
   return maintenance.run('composition', options.jobId, () => renderCompositionAdmitted(options), { continuation: true });
 }
 
-async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, song, signal: parentSignal, ...input }) {
+async function renderCompositionAdmitted({ jobId, signal: parentSignal, ...input }) {
   const job = { controller: new AbortController(), committing: false };
   active.set(jobId, job);
   // Relay cancellation through the same commit guard as cancel(jobId). The
@@ -166,7 +142,6 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
   });
   let page;
   let audioDirectory;
-  let scratchRoot;
   let success = false;
   let result;
   let failure;
@@ -182,16 +157,8 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
   try {
     report('preflight');
     signal.throwIfAborted();
-    const musicVideo = await resolveMusicVideoOwner({ owner, audio, maxDurationSec });
     const parsedInput = validateRequest(htmlCompositionRenderSchema, input);
-    let { directory } = parsedInput;
-    const sourceDirectory = directory;
-    const { musicTrack, audioUpload, launchVideo, synthesizeMusic, proof, formats, motionBlur: blurChoice, masterLoudness } = parsedInput;
-    // A music-video render may still ask for the extra frames its contract
-    // declares in portosComposition.formats (renderTargets enforces that).
-    if (musicVideo && (launchVideo || synthesizeMusic || musicTrack || audioUpload || proof)) {
-      throw new Error('A music-video composition render cannot use launch-video, proof, or soundtrack options');
-    }
+    const { directory, musicTrack, audioUpload, launchVideo, synthesizeMusic, proof, formats, motionBlur: blurChoice, masterLoudness } = parsedInput;
     let musicPath = musicTrack ? await resolveMusicTrackPath(musicTrack) : null;
     if (musicTrack && !musicPath) throw new Error('musicTrack is missing from the Music library');
     if (audioUpload) {
@@ -212,12 +179,6 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
     const needsLaunchGate = launchVideo || directory.split('/')[0] === 'launch-videos';
     // One page and one frozen snapshot per job: the privacy and storyboard
     // gates run once however many formats render from it.
-    if (musicVideo) {
-      const staged = await stageMusicVideoComposition(directory, jobId, song);
-      directory = staged.directory;
-      scratchRoot = staged.scratchRoot;
-      signal.throwIfAborted();
-    }
     report('browser-open');
     page = await openComposition(directory, { signal, validateAssets: needsLaunchGate
       ? assets => { launchPlan = validateLaunchVideoAssets(assets, launchVideo); launchAssets = assets; }
@@ -229,10 +190,7 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
       return { durationSec: c.durationSec, fps: c.fps, width: c.width, height: c.height, motionBlur: c.motionBlur,
         formats: c.formats, layout: typeof c.layout === 'function' };
     })()`);
-    const contractSchema = musicVideo
-      ? htmlCompositionContractSchemaFor(musicVideo.maxDurationSec)
-      : htmlCompositionContractSchema;
-    const parsed = contractSchema.safeParse(metadata);
+    const parsed = htmlCompositionContractSchema.safeParse(metadata);
     if (!parsed.success) throw new Error(parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '));
     const contract = blurChoice ? { ...parsed.data, motionBlur: MOTION_BLUR_PRESETS[blurChoice] } : parsed.data;
     if (launchPlan && Math.abs(contract.durationSec - launchPlan.durationSec) > 1e-8) {
@@ -297,9 +255,8 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
         const targetFrames = frameCount(target.contract);
         ownedPaths.push(outputPath, join(PATHS.videoThumbnails, `${target.id}.jpg`));
         const { sampleHistogram, loudness } = await encodeComposition(page, target.contract, outputPath, {
-          musicPath: musicVideo ? null : musicPath,
+          musicPath,
           master: masterLoudness !== false,
-          audio: musicVideo?.audio,
           signal,
           onLifecycle: detail => report(detail.phase, detail),
           onProgress: (fraction, detail) => {
@@ -363,7 +320,7 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
           // One Media History entry per format, linked by launchVideo.runId and
           // written in a single mutation so a run registers all formats or none.
           const metas = rendered.map(video => ({
-            id: video.id, prompt: `HTML composition: ${sourceDirectory}`, modelId: 'html-composition', seed: 0,
+            id: video.id, prompt: `HTML composition: ${directory}`, modelId: 'html-composition', seed: 0,
             ...frameOf(video.contract), numFrames: Math.round(contract.durationSec * contract.fps),
             ...(launchMetadata ? { launchVideo: launchMetadata, appId: launchMetadata.appId, posterSec: launchPlan.posterSec } : {}),
             ...(video.sampleHistogram ? { sampleHistogram: video.sampleHistogram } : {}),
@@ -401,10 +358,6 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
     if (audioDirectory) await rm(audioDirectory, { recursive: true, force: true }).catch(() => {
       maintenance.markCurrentUnsettled();
       console.warn('⚠️ Could not remove temporary composition audio');
-    });
-    if (scratchRoot) await rm(scratchRoot, { recursive: true, force: true }).catch(() => {
-      maintenance.markCurrentUnsettled();
-      console.warn('⚠️ Could not remove temporary music-video composition');
     });
     if (!success) {
       for (const path of ownedPaths) await unlinkGuarded(path).catch(error => { if (error.code !== 'ENOENT') maintenance.markCurrentUnsettled(); });

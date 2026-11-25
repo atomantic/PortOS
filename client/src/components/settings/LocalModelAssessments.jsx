@@ -47,6 +47,7 @@ import {
   deleteLocalLlmAssessment,
   getModelCapabilityTests,
 } from '../../services/apiLocalLlm.js';
+import { LOCAL_RUNTIME_LABELS } from '../../../../server/lib/modelPinMembership.js';
 
 // Heavy, tab-gated panels: PortosModelBenchmarkPanel pulls vendor-charts, the
 // capability matrix is ~1,000 lines, and the sweep panel is only used on its tab.
@@ -77,7 +78,7 @@ const PERFORMANCE_PATH = '/models/performance';
 // catalog) rides on the report as `runtimes` — a hardcoded list here would drift
 // the moment the server learns a sixth runtime.
 const BACKEND_LABEL = {
-  ollama: 'Ollama', lmstudio: 'LM Studio', llama: 'llama.cpp', mtplx: 'MTPLX', vllm: 'vLLM',
+  ollama: LOCAL_RUNTIME_LABELS.ollama, lmstudio: LOCAL_RUNTIME_LABELS.lmstudio, llama: LOCAL_RUNTIME_LABELS.llama, mtplx: LOCAL_RUNTIME_LABELS.mtplx, vllm: 'vLLM',
 };
 
 const OPENCODE_AGENT_TARGETS = [
@@ -839,6 +840,8 @@ export function LocalModelAssessments({ view, taskView, assessmentKey } = {}) {
   // claims. Disk-only on the server — safe to load with the tab.
   const [capabilityReport, setCapabilityReport] = useState(null);
   const [capabilityLoading, setCapabilityLoading] = useState(true);
+  const [capabilityError, setCapabilityError] = useState(null);
+  const capabilityRequest = useRef(0);
 
   const [searchParams, updateParams] = useUrlParams();
   const measureBackend = searchParams.get('measureBackend') || '';
@@ -891,12 +894,16 @@ export function LocalModelAssessments({ view, taskView, assessmentKey } = {}) {
   useEffect(() => { load(intent); }, [load, intent]);
 
   const loadCapabilities = useCallback(async () => {
+    const request = ++capabilityRequest.current;
     setCapabilityLoading(true);
-    // The panel renders its own empty/error state (client/src/AGENTS.md: custom
-    // catch ⇒ silent).
-    const data = await getModelCapabilityTests({ silent: true }).catch(() => null);
-    setCapabilityReport(data);
-    setCapabilityLoading(false);
+    await getModelCapabilityTests({ silent: true })
+      .then((data) => {
+        if (request !== capabilityRequest.current) return;
+        setCapabilityReport(data);
+        setCapabilityError(null);
+      })
+      .catch((error) => { if (request === capabilityRequest.current) setCapabilityError(error); })
+      .finally(() => { if (request === capabilityRequest.current) setCapabilityLoading(false); });
   }, []);
 
   useEffect(() => { loadCapabilities(); }, [loadCapabilities]);
@@ -1184,6 +1191,7 @@ export function LocalModelAssessments({ view, taskView, assessmentKey } = {}) {
           <ModelCapabilityTests
             report={capabilityReport}
             loading={capabilityLoading}
+            error={capabilityError}
             onReload={loadCapabilities}
             disabled={busy}
           />

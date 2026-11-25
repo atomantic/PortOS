@@ -1,16 +1,45 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
-import { tmpdir, homedir } from 'os';
+import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { pinPlatform } from './testHelper.js';
-import { getShippedMediaRegistry } from './mediaModels.js';
+import { getShippedMediaRegistry, requiredRepoSpecsForModel, requiredReposForModel } from './mediaModels.js';
 
 const __dirname_self = dirname(fileURLToPath(import.meta.url));
 
 let tmpDir;
 let registryFile;
 const priorRegistryFile = process.env.PORTOS_MEDIA_MODELS_FILE;
+
+describe('required image repo specs', () => {
+  it('preserves distinct snapshots and deduplicates repeated repo and revision pairs', () => {
+    const revision = 'a'.repeat(40);
+    const kvRevision = 'b'.repeat(40);
+    const model = {
+      runner: 'flux2', repo: 'org/model', revision,
+      textEncoderRepo: 'org/encoder', textEncoderRevision: revision,
+      tokenizerRepo: 'org/aux', tokenizerRevision: revision,
+      basePipelineRepo: 'org/aux', basePipelineRevision: revision,
+      kvRepo: 'org/aux', kvRevision,
+    };
+    const specs = [
+      { repo: 'org/model', revision },
+      { repo: 'org/encoder', revision },
+      { repo: 'org/aux', revision },
+      { repo: 'org/aux', revision: kvRevision },
+    ];
+    expect(requiredRepoSpecsForModel(model)).toEqual(specs);
+    expect(requiredReposForModel(model)).toEqual(specs.map(({ repo }) => repo));
+  });
+
+  it('keeps fallback repos, floating revisions, and unknown models compatible', () => {
+    expect(requiredRepoSpecsForModel({ id: 'dev', revision: '', textEncoderRepo: '  ' }))
+      .toEqual([{ repo: 'black-forest-labs/FLUX.1-dev', revision: null }]);
+    expect(requiredRepoSpecsForModel({ id: 'custom', textEncoderRepo: 'org/encoder' })).toBeNull();
+    expect(requiredReposForModel(null)).toBeNull();
+  });
+});
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'portos-media-models-'));
@@ -615,33 +644,6 @@ describe('mediaModels registry', () => {
     expect(ids).not.toContain('broken-here');
   });
 
-  it('expandHome resolves ~/ correctly without dropping the home dir', async () => {
-    writeFileSync(registryFile, JSON.stringify({
-      video: { mlx: [], cuda: [], defaultMlx: 'x', defaultCuda: 'x' },
-      image: [],
-      textEncoders: [
-        { id: 'tilde-only', label: 't', repo: 'r1', localPath: '~' },
-        { id: 'tilde-slash', label: 't', repo: 'r2', localPath: '~/some/nonexistent/path' },
-      ],
-      selectedTextEncoder: 'tilde-slash',
-    }));
-    const { getTextEncoderEntries } = await import('./mediaModels.js');
-    const entries = getTextEncoderEntries();
-    const tilde = entries.find((e) => e.id === 'tilde-only');
-    const slash = entries.find((e) => e.id === 'tilde-slash');
-    // The bug being guarded against: `path.join(homedir(), '/.foo')` discards
-    // the homedir because the second segment starts with /. The fix strips
-    // the `~/` prefix before joining. Result MUST start with the user's
-    // actual home directory, not just `/`.
-    expect(slash.localPath.startsWith(homedir())).toBe(true);
-    // Use path.join to assemble the expected suffix so the assertion
-    // works on Windows (where the joined path uses backslashes) as well
-    // as POSIX. The earlier `toContain('/some/nonexistent/path')` would
-    // fail under win32's backslash-separated paths.
-    expect(slash.localPath.endsWith(join('some', 'nonexistent', 'path'))).toBe(true);
-    expect(tilde.localPath).toBe(homedir());
-  });
-
   it('getTextEncoderRepo prefers existing localPath over repo', async () => {
     writeFileSync(registryFile, JSON.stringify({
       video: { mlx: [], cuda: [], defaultMlx: 'x', defaultCuda: 'x' },
@@ -833,6 +835,83 @@ describe('mediaModels registry', () => {
   });
 
   // _shippedDefaults — editable-registry contract tests
+
+  it('keeps the pre-ledger video baseline fixed across catalog changes', async () => {
+    const { BOOTSTRAP_VIDEO_BASELINE_IDS } = await import('./mediaModels/upgrades.js');
+    expect(BOOTSTRAP_VIDEO_BASELINE_IDS).toEqual({
+      mlx: [
+        'ltx23_unified',
+        'ltx23_distilled_q4',
+        'ltx23_dgrauet_q4',
+        'ltx23_dgrauet_q8',
+        'ltx25_mlx_q8',
+        'minimax_h3_8bit',
+        'minimax_h3_6bit',
+        'minimax_h3_4bit',
+        'minimax_h3_ref2va_8bit',
+        'wan22_ti2v_5b',
+        'wan22_t2v_a14b',
+        'wan22_i2v_a14b',
+        'wan22_t2v_a14b_lightning',
+        'wan22_i2v_a14b_lightning',
+        'fastmetal_1_3b_qad',
+        'fastmetal_5b_qad',
+        'fastmetal_14b_qad',
+        'fasth3_dense_datafree_int8',
+        'fasth3_dense_datafree_int6',
+        'fasth3_dense_datafree_int4',
+        'fasth3_v2_int8',
+        'fasth3_v2_int6',
+        'fasth3_omni_int6',
+        'fasth3_dense_datafree_mlx_int4',
+      ],
+      cuda: [
+        'ltx_video',
+        'ltx25_cuda_distilled',
+        'wan22_cuda_ti2v_5b',
+        'minimax_h3_cuda',
+      ],
+    });
+    expect(Object.isFrozen(BOOTSTRAP_VIDEO_BASELINE_IDS)).toBe(true);
+    expect(Object.isFrozen(BOOTSTRAP_VIDEO_BASELINE_IDS.mlx)).toBe(true);
+    expect(Object.isFrozen(BOOTSTRAP_VIDEO_BASELINE_IDS.cuda)).toBe(true);
+  });
+
+  it.each([
+    ['mlx', 'ltx23_unified', 'ltx23_distilled_q4'],
+    ['cuda', 'ltx_video', 'ltx25_cuda_distilled'],
+  ])('appends and persists a new %s model during ledger bootstrap', async (bucket, keptId, removedId) => {
+    const newId = 'future_shipped_model';
+    const keptModel = getShippedMediaRegistry().video[bucket].find(({ id }) => id === keptId);
+    writeFileSync(registryFile, JSON.stringify({ video: { [bucket]: [keptModel] } }));
+    vi.doMock('./mediaModels/catalogDefaults.js', async (importOriginal) => {
+      const catalog = await importOriginal();
+      const defaults = catalog.DEFAULT_REGISTRY;
+      return {
+        ...catalog,
+        DEFAULT_REGISTRY: {
+          ...defaults,
+          video: {
+            ...defaults.video,
+            [bucket]: [...defaults.video[bucket], { ...keptModel, id: newId }],
+          },
+        },
+      };
+    });
+
+    try {
+      const { loadMediaModels, reloadMediaModels } = await import('./mediaModels.js');
+      expect(loadMediaModels().video[bucket].map(({ id }) => id)).toEqual([keptId, newId]);
+
+      const onDisk = JSON.parse(readFileSync(registryFile, 'utf-8'));
+      expect(onDisk.video[bucket].map(({ id }) => id)).toEqual([keptId, newId]);
+      expect(onDisk._shippedDefaults.video[bucket]).toContain(removedId);
+      expect(onDisk._shippedDefaults.video[bucket].filter((id) => id === newId)).toEqual([newId]);
+      expect(reloadMediaModels().video[bucket].map(({ id }) => id)).toEqual([keptId, newId]);
+    } finally {
+      vi.doUnmock('./mediaModels/catalogDefaults.js');
+    }
+  });
 
   it('fresh install: all default video models present; _shippedDefaults populated', async () => {
     // No file exists yet → seedIfMissing writes DEFAULT_REGISTRY, then

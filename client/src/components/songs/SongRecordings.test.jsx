@@ -45,7 +45,7 @@ vi.mock('../../services/apiMedia.js', () => ({
   getUploadUrl: (f) => `/api/uploads/${f}`,
 }));
 
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 // PitchTuner taps Web Audio (createStreamAnalyser) on a live stream — stub it;
 // it has its own test. ColorMatch stays real (it's pure now) so we exercise the

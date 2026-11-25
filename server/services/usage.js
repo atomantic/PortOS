@@ -582,21 +582,6 @@ export async function getRecentCodexUsageClaims(since) {
 }
 
 /**
- * Drop sibling markers that only guarded a single apply — the interactive scan's
- * synthetic ids, which its own watermark makes redundant once the batch lands.
- * Left in place they would grow `usage.json` by a key per family per day per scan.
- */
-async function forgetSiblingReconciledUsageRunsDraft(runIds = []) {
-  if (usageData) await loadDraftRunMarkers(runIds);
-  if (!usageData?.siblingReconciledRuns) return;
-  let dropped = 0;
-  for (const runId of runIds) {
-    if (delete usageData.siblingReconciledRuns[runId]) dropped++;
-  }
-  if (dropped > 0) await saveUsage();
-}
-
-/**
  * Run ids whose NESTED-session (sibling-family) attribution has already landed.
  * A separate marker from `reconciledRuns` on purpose: the sibling pass has to be
  * able to run on a run whose own transcript was reconciled long ago (#5831).
@@ -1107,7 +1092,7 @@ function recordRunUsageDraft(record, { reconciledRunId = null, siblings = false,
 /**
  * Add counts on a specific UTC day, optionally guarded by a repair id so the
  * same image, video, or long-context turn cannot be added twice. `flush: false`
- * leaves the write to {@link flushUsageLedger} so a backfill is one save.
+ * leaves the write to the batch caller so a backfill is one save.
  * @returns {Promise<boolean>} false when the id was already recorded or the day is unusable.
  */
 async function addDatedUsageDraft(dayKey, record, { repairId = null, flush = true } = {}) {
@@ -1137,28 +1122,6 @@ async function addDatedUsageBatchDraft(additions = []) {
   }
   if (written.length) await saveUsage();
   return written;
-}
-
-/** Persist the in-memory ledger. One call after a batch of `addDatedUsage(..., { flush: false })`. */
-async function flushUsageLedgerDraft() {
-  if (!usageData) return;
-  await saveUsage();
-}
-
-/**
- * Record token usage
- */
-async function recordTokensDraft(inputTokens, outputTokens) {
-  if (!usageData) await loadUsageDraft();
-  await refreshDayKeyTimezone();
-  usageData.totalTokens.input += inputTokens;
-  usageData.totalTokens.output += outputTokens;
-  const day = todayBucket();
-  day.tokens = (day.tokens || 0) + outputTokens;
-  const providerDay = providerDayBucket(day, UNKNOWN_PROVIDER_ID, UNKNOWN_PROVIDER_NAME);
-  providerDay.tokensIn += inputTokens;
-  providerDay.tokensOut += outputTokens;
-  await saveUsage();
 }
 
 /**
@@ -1487,10 +1450,6 @@ export async function reloadRestoredUsageLedger() {
   }, []);
 }
 
-export async function forgetSiblingReconciledUsageRuns(...args) {
-  return mutateUsage(forgetSiblingReconciledUsageRunsDraft, args);
-}
-
 export async function markUsageRunReconciled(...args) {
   return mutateUsage(markUsageRunReconciledDraft, args);
 }
@@ -1519,14 +1478,6 @@ export async function addDatedUsage(...args) {
   }, args);
 }
 
-export async function flushUsageLedger(...args) {
-  return mutateUsage(flushUsageLedgerDraft, args);
-}
-
-export async function recordTokens(...args) {
-  return mutateUsage(recordTokensDraft, args);
-}
-
 export async function recordLimitBlock(...args) {
   return mutateUsage(recordLimitBlockDraft, args);
 }
@@ -1538,4 +1489,3 @@ export async function resetUsage(...args) {
 export async function addDatedUsageBatch(...args) {
   return mutateUsage(addDatedUsageBatchDraft, args);
 }
-

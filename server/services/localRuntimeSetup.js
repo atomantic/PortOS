@@ -38,6 +38,8 @@ import { installLlamaServer } from './llamaServerManager.js';
 import { installMtplx, startMtplxServer, MTPLX_UNSUPPORTED_REASON } from './mtplxServerManager.js';
 import { installSlotstream, startSlotstreamServer, SLOTSTREAM_UNSUPPORTED_REASON } from './slotstreamServerManager.js';
 import { previewMtplxPull } from './mtplxModelManager.js';
+import { MANAGED_RUNTIME_APPS } from '../lib/managedRuntimeApps.js';
+import { syncRuntimeProviderModels } from './localRuntimeProviderSync.js';
 import { assertDownloadFits } from '../lib/downloadPreflight.js';
 import { controlOllamaServer, installBackend } from './localLlm.js';
 import { isAppInstalled as isLmStudioAppInstalled } from './lmStudioManager.js';
@@ -400,11 +402,11 @@ export function describeRuntimeSetup(kind, { installed, running, weights = 'unkn
  * @param {string} kind
  * @param {{endpoint: string, emit: (line: string) => void, isCancelled?: () => boolean, action?: string}} ctx
  *   `isCancelled` is checked between steps so a closed modal doesn't start a daemon nobody watches. `action` is the one the
- *   button named; only a PROVISION_STEPS action adds a step (MTPLX's model download, vLLM's clone/build/prepare), opt-in so no
+ *   button named; `io` lets the post-start provider-model refresh announce `providers:changed`; only a PROVISION_STEPS action adds a step (MTPLX's model download, vLLM's clone/build/prepare), opt-in so no
  *   other action can spend gigabytes. Omit it (`null`) to resolve the action the checklist would offer now.
  * @returns {Promise<{success: boolean, error?: string, message?: string}>}
  */
-export async function runLocalRuntimeSetup(kind, { endpoint, emit = () => {}, isCancelled = () => false, action = null }) {
+export async function runLocalRuntimeSetup(kind, { endpoint, emit = () => {}, isCancelled = () => false, action = null, io = null }) {
   const row = SETUP_ROWS[kind];
   const runtime = LOCAL_RUNTIMES[kind];
   if (!row || !runtime) return { success: false, error: `PortOS has no automatic setup for \`${String(kind)}\`.` };
@@ -476,6 +478,9 @@ export async function runLocalRuntimeSetup(kind, { endpoint, emit = () => {}, is
   if (!final.reachable) {
     return { success: false, error: `${runtime.label} was set up, but ${target} still does not answer${final.error ? ` (${final.error})` : ''}.` };
   }
+  // The one-click start is the same user action as the Runtimes card's Start: presets fronting a managed runtime pick up what it now serves.
+  // Never awaited; the endpoint answered, so no readiness wait. Ollama/LM Studio refresh through their own install/delete sync.
+  if (kind in MANAGED_RUNTIME_APPS) void syncRuntimeProviderModels({ kind, io });
   const served = Array.isArray(final.models) && final.models.length > 0
     ? ` It is serving ${final.models.slice(0, 3).join(', ')}${final.models.length > 3 ? ` +${final.models.length - 3} more` : ''}.`
     : '';

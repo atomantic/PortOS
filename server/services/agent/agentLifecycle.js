@@ -1,3 +1,4 @@
+import { resolveSplashHarnessContext } from '../../lib/splashHarnessLaunch.js';
 import { EXECUTION_OPTIONS_ERROR } from '../../lib/executionOptions.js';
 import { PROVIDER_CONFIG_BLOCKED_CATEGORY } from '../../lib/taskBlockCategories.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
@@ -17,7 +18,7 @@ import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
  * imported by:
  *
  *   - `agentFinalization.js`       — finalizeAgent (both spawners)
- *   - `agentSummaryExtraction.js`  — extractFinalSummary / extractSimplifySummaries
+ *   - `agentSummaryExtraction.js`  — extractFinalSummary
  *   - `agentRunnerSync.js`         — syncRunnerAgents (agentManagement, subAgentSpawner)
  *   - `agentState.js`              — the shared in-memory agent maps
  *
@@ -285,7 +286,7 @@ export async function spawnViaRunner(agentId, task, opts) {
       // the site that sweep originally missed).
       envVars: composeProviderEnv({
         before: { ...forgeTokenEnv, ...claudeSettingsEnv, ...agentApiEnv },
-        provider,
+        provider: await resolveSplashHarnessContext(provider, model),
         model,
       }),
       cliCommand: cliConfig.command,
@@ -462,7 +463,7 @@ export async function extractPipelineOutputSummary(task, workspacePath, outputBu
  * "route, then complete the live agent" instead of two unrelated jobs sharing
  * one name.
  */
-async function completeUntrackedAgentFromCosState(agentId, exitCode, success, duration, { interruptedStartup = null } = {}) {
+async function completeUntrackedAgentFromCosState(agentId, exitCode, success, duration, { interruptedStartup = null, fallbackAnalysis = null } = {}) {
   const cosAgent = await getAgent(agentId).catch(() => null);
   if (!cosAgent) {
     console.log(`⚠️ Received completion for unknown agent: ${agentId} (not in cos state)`);
@@ -492,8 +493,9 @@ async function completeUntrackedAgentFromCosState(agentId, exitCode, success, du
     success,
     exitCode,
     duration,
-    errorMessage: interruptedStartup?.message ?? (willSucceed ? undefined : 'Agent completed after server restart'),
-    ...(interruptedStartup ? { category: 'interrupted', agentResultExtra: { interruptedByRestart: true } } : {}),
+    errorMessage: interruptedStartup?.message ?? fallbackAnalysis?.message ?? (willSucceed ? undefined : 'Agent completed after server restart'),
+    ...(interruptedStartup ? { category: 'interrupted', agentResultExtra: { interruptedByRestart: true } }
+      : fallbackAnalysis ? { category: fallbackAnalysis.category } : {}),
   });
   if (cosAgent.taskId && task && task.status !== 'completed' && !deliveryHeld) {
     if (retiredSuccess) {
@@ -515,10 +517,31 @@ async function completeUntrackedAgentFromCosState(agentId, exitCode, success, du
         agentMetadata: cosAgent.metadata,
         agentStartedAt: cosAgent.startedAt,
         ...(interruptedStartup ? { interrupted: true } : {}),
+        // The runner stopped the provider on a usage-limit signal: a commit already in the repo is not proof
+        // the task finished, exactly as the live completion path refuses to promote it.
+        ...(fallbackAnalysis ? { providerStopped: true } : {}),
       });
     }
   }
   await maintenance.finishResource('agent', agentId);
+}
+
+/**
+ * The optional verdict fields a runner attaches to its completion event or receipt.
+ * Each is absent from an older runner, and anything of the wrong shape is dropped
+ * rather than trusted, so an old or partial payload finalizes exactly as before.
+ *
+ * @param {object} [raw]
+ * @returns {{ fallbackAnalysis: object|null, finalSummary: string|null, rawStreamTail: string|null }}
+ */
+export function normalizeRunnerCompletionExtras(raw) {
+  const { fallbackAnalysis, finalSummary, rawStreamTail } = raw && typeof raw === 'object' ? raw : {};
+  return {
+    fallbackAnalysis: fallbackAnalysis && typeof fallbackAnalysis === 'object' && typeof fallbackAnalysis.category === 'string'
+      ? fallbackAnalysis : null,
+    finalSummary: typeof finalSummary === 'string' && finalSummary ? finalSummary : null,
+    rawStreamTail: typeof rawStreamTail === 'string' && rawStreamTail ? rawStreamTail : null,
+  };
 }
 
 /**
@@ -527,8 +550,13 @@ async function completeUntrackedAgentFromCosState(agentId, exitCode, success, du
  * Router, then the live in-memory completion path. The two early exits are the
  * pause guard and the post-restart recovery hand-off — both return before any
  * finalization runs against a live agent.
+ *
+ * `extras` carries what the runner's output parser saw (see
+ * `normalizeRunnerCompletionExtras`): a usage-limit `fallbackAnalysis` fails the
+ * run and is its error analysis, `finalSummary` is the stream-json result text,
+ * and `rawStreamTail` is what failure analysis reads in place of the parsed transcript.
  */
-export async function handleAgentCompletion(agentId, exitCode, success, duration) {
+export async function handleAgentCompletion(agentId, exitCode, success, duration, extras = {}) {
   if (completingAgents.has(agentId)) return;
   // Claim before admission's first await: the process may already be gone.
   completingAgents.add(agentId);
@@ -538,7 +566,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
       // Capture before the pause router consumes its map entry. A paused job's
       // checkout still belongs to its future resume, not completion retirement.
       retirementEligible = !pausedAgents.has(agentId);
-      try { return await handleAdmittedAgentCompletion(agentId, exitCode, success, duration); }
+      try { return await handleAdmittedAgentCompletion(agentId, exitCode, success, duration, normalizeRunnerCompletionExtras(extras)); }
       catch (err) { maintenance.markResourceUnsettled('agent', agentId); throw err; }
     });
   } finally {
@@ -550,7 +578,10 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
   }
 }
 
-async function handleAdmittedAgentCompletion(agentId, exitCode, success, duration) {
+async function handleAdmittedAgentCompletion(agentId, exitCode, reportedSuccess, duration, runnerExtras) {
+  const { fallbackAnalysis, finalSummary, rawStreamTail } = runnerExtras;
+  // A usage-limit stop can race to exit 0; the verdict the runner saw outranks the exit code.
+  const success = reportedSuccess && !fallbackAnalysis;
   // Paused agents are finalized by markAgentPaused, not here — skip so a stray
   // completion event can't clean the worktree / complete the task out from
   // under a later resume. Mirrors the CLI/TUI close-handler pause guards.
@@ -563,7 +594,7 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
   const agent = runnerAgents.get(agentId);
   if (!agent) {
     // Agent not in memory map (server restarted). Retire it from cos state.
-    return completeUntrackedAgentFromCosState(agentId, exitCode, success, duration);
+    return completeUntrackedAgentFromCosState(agentId, exitCode, success, duration, { fallbackAnalysis });
   }
 
   const { task, runId, model } = agent;
@@ -645,7 +676,7 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
     // the persisted record stores an ISO string; toEpochMs handles both.
     const runStartedAt = toEpochMs(agent.startedAt);
     let effectiveSuccess = success;
-    if (!effectiveSuccess && task?.id && !agent.startupErrorAnalysis) {
+    if (!effectiveSuccess && task?.id && !agent.startupErrorAnalysis && !fallbackAnalysis) {
       const commitFound = workspacePath && await committedDuringRun(workspacePath, runStartedAt);
       if (commitFound) {
         emitLog('warn', `Agent ${agentId} reported failure (exit ${exitCode}) but work completed - commit found for task ${task.id}`, { agentId, taskId: task.id, exitCode });
@@ -653,8 +684,12 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
       }
     }
 
-    // Analyze failure if applicable
-    const errorAnalysis = effectiveSuccess ? null : agent.startupErrorAnalysis || analyzeAgentFailure(outputBuffer, task, model);
+    // Analyze failure if applicable. Same precedence as the direct spawner's resolveCliErrorAnalysis: a fallback
+    // signal the run already raised outranks a keyword sweep, which reads the raw stream-json payload when the
+    // runner sent it, joined with the transcript so a stderr-only diagnostic (an auth error printed after stdout
+    // initialization events) still classifies; output.txt holds only the parsed transcript.
+    const errorAnalysis = effectiveSuccess ? null
+      : agent.startupErrorAnalysis || fallbackAnalysis || analyzeAgentFailure(rawStreamTail ? `${rawStreamTail}\n${outputBuffer}` : outputBuffer, task, model);
 
     // The gate for finalizeAgent's PR-claim verification (#3358): a PortOS-owned
     // PR is created by `runAgentCompletionCleanup` below, i.e. AFTER finalize, so
@@ -721,6 +756,7 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
         exitCode,
         duration,
         outputBuffer,
+        finalSummary,
         errorAnalysis,
         workspacePath,
         // A recovered run with no known cwd must not borrow the primary

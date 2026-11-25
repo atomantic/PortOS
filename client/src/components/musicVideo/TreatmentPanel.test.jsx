@@ -16,7 +16,6 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
   previewMusicVideoTreatmentApply: vi.fn(),
   applyMusicVideoTreatment: vi.fn(),
   syncMusicVideoTreatmentFromShotSheet: vi.fn(),
-  reviewMusicVideoTreatmentProof: vi.fn(),
 }));
 vi.mock('../../hooks/useProviderModels.js', () => ({
   default: () => ({
@@ -24,7 +23,7 @@ vi.mock('../../hooks/useProviderModels.js', () => ({
     setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn(),
   }),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import * as api from '../../services/apiMusicVideo.js';
 import useMusicVideoTreatment from '../../hooks/useMusicVideoTreatment.js';
@@ -42,7 +41,6 @@ const TREATMENT = {
     balance: { performance: 20, cutaway: 60, graphic: 20, rationale: '' },
   },
   shotDirections: [],
-  proofs: [],
   capabilityGaps: [{ id: 'lip-sync', detail: 'No source-audio lip-sync is available.' }],
   basis: {},
   compiledAt: '2026-01-01T00:00:00.000Z',

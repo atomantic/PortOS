@@ -7,17 +7,18 @@ import Banner from '../ui/Banner.jsx';
 import CleanupControl from '../system-resources/CleanupControl.jsx';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { formatBytes, timeAgo } from '../../utils/formatters.js';
+import { LOCAL_RUNTIME_LABELS } from '../../../../server/lib/modelPinMembership.js';
 
 const BACKEND_LABEL = {
   huggingface: 'Hugging Face',
   lora: 'LoRA',
-  ollama: 'Ollama',
-  lmstudio: 'LM Studio',
-  mtplx: 'MTPLX',
+  ollama: LOCAL_RUNTIME_LABELS.ollama,
+  lmstudio: LOCAL_RUNTIME_LABELS.lmstudio,
+  mtplx: LOCAL_RUNTIME_LABELS.mtplx,
   hy3dgen: 'Hunyuan3D',
   'hf-xet-cache': 'HF xet cache',
   'pixie-forge': 'Pixie Forge',
-  slotstream: 'Slotstream',
+  slotstream: LOCAL_RUNTIME_LABELS.slotstream,
   'fastvideo-mlx': 'FastVideo MLX',
   'auk-ckpts': 'AuK voice',
   'portos-models': 'Manual download',

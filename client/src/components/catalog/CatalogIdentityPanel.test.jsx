@@ -14,7 +14,7 @@ vi.mock('../../services/apiCatalogIdentity', () => ({
   listCatalogIdentities: vi.fn(), getCatalogIdentity: vi.fn(), previewCatalogIdentity: vi.fn(), createCatalogIdentity: vi.fn(),
   importCatalogIdentity: vi.fn(), acceptCatalogIdentity: vi.fn(), advanceCatalogIdentity: vi.fn(), abortCatalogIdentity: vi.fn(), recoverCatalogIdentity: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const survivor = { id: 'shared-survivor', type: 'character', name: 'Example Keeper', originInstanceId: 'owner-one', payload: { locked: false, role: 'Guide' } };
 const source = { ...survivor, id: 'shared-source', name: 'Example Traveler', originInstanceId: 'owner-two' };

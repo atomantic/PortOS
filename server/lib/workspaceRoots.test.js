@@ -155,11 +155,10 @@ describe('PORTOS_WORKSPACE_ROOTS opt-in gate', () => {
     vi.resetModules();
   });
 
-  it('WORKSPACE_ROOTS_CONFIGURED is false when the env var is unset', async () => {
+  it('has no extra roots when the env var is unset', async () => {
     vi.stubEnv('PORTOS_WORKSPACE_ROOTS', '');
     vi.resetModules();
     const mod = await import('./workspaceRoots.js');
-    expect(mod.WORKSPACE_ROOTS_CONFIGURED).toBe(false);
     expect(mod.EXTRA_WORKSPACE_ROOTS).toEqual([]);
   });
 
@@ -169,7 +168,6 @@ describe('PORTOS_WORKSPACE_ROOTS opt-in gate', () => {
     vi.stubEnv('PORTOS_WORKSPACE_ROOTS', ` /srv/repos ${delimiter}${delimiter} /data/projects `);
     vi.resetModules();
     const mod = await import('./workspaceRoots.js');
-    expect(mod.WORKSPACE_ROOTS_CONFIGURED).toBe(true);
     expect(mod.EXTRA_WORKSPACE_ROOTS).toEqual(['/srv/repos', '/data/projects']);
   });
 

@@ -1,3 +1,4 @@
+import { PROVIDERS_PAGE_BREADCRUMB, PROVIDERS_PAGE_PATH } from '../../../../../../server/lib/navManifest.js';
 import { useMemo } from 'react';
 import { Link } from 'react-router';
 import {
@@ -262,7 +263,7 @@ export default function PipelineStageConfig({ taskType, config, providers, provi
                   No enabled AI provider on this install can enforce the{' '}
                   {isActionsStage ? 'sandboxed-actions' : 'tool-free'} posture, so this stage will not run.
                   Enable a supported CLI provider in{' '}
-                  <Link to="/ai" className="underline hover:text-port-accent">Settings → Providers</Link>.
+                  <Link to={PROVIDERS_PAGE_PATH} className="underline hover:text-port-accent">{PROVIDERS_PAGE_BREADCRUMB}</Link>.
                 </p>
               )}
               {isNoToolStage && !isSecurityStage && eligibleProviders?.length > 0 && (

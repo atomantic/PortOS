@@ -813,5 +813,3 @@ export function assessPersistentMindWorkspaceReadiness(preflight, requiredValida
     warnings: Array.isArray(preflight?.warnings) ? preflight.warnings : [],
   };
 }
-
-export const PERSISTENT_MIND_WORKSPACE_PREFLIGHT_CHECKS = PERSISTENT_MIND_VALIDATION_CHECKS;

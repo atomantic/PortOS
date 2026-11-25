@@ -1,5 +1,6 @@
 // Editorial checks — characterArc group. Extracted from checkRegistry.js (#1829).
 // Each entry is a declarative check; see ../README.md and ../checkInfra.js.
+import { findingCapField, findingCapSchema } from '../checkInfra/findingCap.js';
 import { hasManuscript } from '../checkInfra/gates.js';
 import {
   ARC_REGRESSION_STAGE,
@@ -53,21 +54,8 @@ export const characterArcChecks = [
     // Reads the stitched manuscript corpus — so the runner only pays the
     // section-collection I/O when a manuscript-consuming check is enabled.
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long manuscript can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     gate: hasManuscript,
     run: (ctx) => {
       // All three blocks are fixed per-call overhead (re-sent on each chunk) and
@@ -133,8 +121,7 @@ export const characterArcChecks = [
       // recurring (and therefore be held to an arc). 1 would judge every walk-on;
       // 2 is the smallest "recurring" threshold.
       minScenes: z.number().int().min(2).max(20).default(2),
-      // Cap findings per run so a large cast can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
+      maxFindings: findingCapSchema(12),
     }),
     configFields: [
       {
@@ -146,15 +133,7 @@ export const characterArcChecks = [
         step: 1,
         help: 'A non-POV character must appear in at least this many scenes to be judged for an arc. 2 is the smallest "recurring" threshold; raise it to focus on only the most prominent secondary characters.',
       },
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a large cast can not flood the review.',
-      },
+      findingCapField('a large cast'),
     ],
     gate: hasManuscript,
     run: (ctx) => {
@@ -218,21 +197,8 @@ export const characterArcChecks = [
     // Reads the stitched manuscript corpus — so the runner only pays the
     // section-collection I/O when a manuscript-consuming check is enabled.
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long manuscript can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     gate: hasManuscript,
     run: (ctx) => {
       // Both blocks are fixed per-call overhead (re-sent on each chunk) and pure
@@ -280,21 +246,8 @@ export const characterArcChecks = [
     // Reads the stitched manuscript corpus — so the runner only pays the
     // section-collection I/O when a manuscript-consuming check is enabled.
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long manuscript can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     gate: hasManuscript,
     run: (ctx) => {
       // Both blocks are fixed per-call overhead (re-sent on each chunk) and pure
@@ -381,21 +334,8 @@ export const characterArcChecks = [
     // Reads the stitched manuscript corpus — so the runner only pays the
     // section-collection I/O when a manuscript-consuming check is enabled.
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long manuscript can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     gate: hasManuscript,
     run: (ctx) => {
       // All three blocks are fixed per-call overhead (re-sent on each chunk) and
@@ -616,21 +556,8 @@ export const characterArcChecks = [
     // Reads the stitched manuscript corpus — so the runner only pays the
     // section-collection I/O when a manuscript-consuming check is enabled.
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long manuscript can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     gate: hasManuscript,
     // Per-scene, localized findings (one interiority gap = one scene), so this
     // stays a plain per-chunk run with no cross-chunk digest — mirrors

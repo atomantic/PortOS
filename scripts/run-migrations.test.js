@@ -131,6 +131,28 @@ export default {
 
   // A pre-2026-05-16 install upgraded by pull-and-restart reaches the boot
   // runner without setup-data.js ever moving its ledger.
+  it('skips requiresPostgres migrations under smoke boot, keeps running later ones, and never records the skip', async () => {
+    writeFileSync(join(migrationsDir, '002-pg.js'), `export default { requiresPostgres: true, async up() { throw new Error('database does not exist'); } };`);
+    writeFileSync(join(migrationsDir, '003-after.js'), `
+import { writeFileSync } from 'fs';
+import { join } from 'path';
+export default { async up({ rootDir }) { writeFileSync(join(rootDir, 'data', 'after-marker.txt'), 'ran'); } };
+`);
+    vi.stubEnv('PORTOS_SMOKE_BOOT', '1');
+    try {
+      expect(await runMigrations({ rootDir, migrationsDir })).toBe(2);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(existsSync(join(dataDir, 'after-marker.txt'))).toBe(true);
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['001-fixture.js', '003-after.js']);
+  });
+
+  it('still runs requiresPostgres migrations outside smoke boot', async () => {
+    writeFileSync(join(migrationsDir, '002-pg.js'), `export default { requiresPostgres: true, async up() { throw new Error('boom'); } };`);
+    await expect(runMigrations({ rootDir, migrationsDir })).rejects.toThrow('boom');
+  });
+
   it('adopts a legacy data/migrations/.applied.json instead of re-running what it records', async () => {
     const legacyFile = join(dataDir, 'migrations', '.applied.json');
     mkdirSync(join(dataDir, 'migrations'));

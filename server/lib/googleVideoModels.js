@@ -24,6 +24,8 @@
  * console has the real charge, and a combination with no listed rate stays unknown (never zero).
  */
 
+import { coverOrLongest, durationLengths } from './hostedVideoClipRules.js';
+
 export const GOOGLE_VIDEO_PRICING_VERIFIED_AT = '2026-11-17';
 const flat = (audio, silent) => Object.freeze({
   '720p': Object.freeze({ audio, silent }), '1080p': Object.freeze({ audio, silent }),
@@ -69,20 +71,16 @@ export const GOOGLE_DEFAULT_VIDEO_MODEL = GOOGLE_VIDEO_MODELS[0].id;
 export const GOOGLE_VIDEO_MODEL_IDS = Object.freeze(GOOGLE_VIDEO_MODELS.map((m) => m.id));
 export const getGoogleVideoModel = (id) => GOOGLE_VIDEO_MODELS.find((m) => m.id === id) || null;
 
-/**
- * The clip length (seconds) `model` will render for a request of `seconds`: the
- * shortest supported length that still COVERS it, else the longest — a Music
- * Video shot must not be under-covered and nothing loops or stretches footage.
- * An absent or invalid request gets the model's default.
- */
-export function coerceGoogleVideoSeconds(model, seconds) {
-  const lengths = Array.isArray(model?.lengths) ? model.lengths : VEO_LENGTHS;
-  const n = Number(seconds);
-  if (seconds == null || seconds === '' || !Number.isFinite(n) || n <= 0) return model?.defaultSec ?? 8;
-  return lengths.find((v) => v >= n - 1e-6) ?? lengths[lengths.length - 1];
-}
+const googleDurationRule = (model) => ({
+  kind: 'enum',
+  values: Array.isArray(model?.lengths) ? model.lengths : VEO_LENGTHS,
+  defaultSec: model?.defaultSec ?? 8,
+});
 
-export const googleVideoLengths = (model) => (Array.isArray(model?.lengths) ? [...model.lengths] : [...VEO_LENGTHS]);
+/** The shortest Veo clip that covers a shot, or the longest when it cannot cover it. */
+export const coerceGoogleVideoSeconds = (model, seconds) => coverOrLongest(googleDurationRule(model), seconds);
+
+export const googleVideoLengths = (model) => durationLengths(googleDurationRule(model));
 
 /** Shot settings shared by the board and server card endpoint. */
 export function googleShotRequestFields(settings, spanSec = null) {

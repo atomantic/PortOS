@@ -27,6 +27,7 @@
  *   - key present, non-empty → fill ONLY when the target field is blank
  */
 
+import { PROVIDERS_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import { getUniverse } from './universeBuilder.js';
 import { applyExpansion, STRING_FIELDS, LIST_FIELDS } from './universeCharacterExpand.js';
 import { bibleFieldIsBlank } from '../lib/universeBibleCompleteness.js';
@@ -171,7 +172,7 @@ export async function expandEntityFromImages({
   const provider = await resolveAPIProvider(providerId);
   assertProvider(provider, {
     message:
-      'Analyzing an image needs an API-based AI provider with a vision-capable model (e.g. Ollama with a llava/qwen-vl model, LM Studio, or an OpenAI-compatible endpoint). Configure one under Settings → Providers.',
+      `Analyzing an image needs an API-based AI provider with a vision-capable model (e.g. Ollama with a llava/qwen-vl model, LM Studio, or an OpenAI-compatible endpoint). Configure one under ${PROVIDERS_PAGE_BREADCRUMB}.`,
     code: 'NO_API_PROVIDER',
     status: 503,
   });

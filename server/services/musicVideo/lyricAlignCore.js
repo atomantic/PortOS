@@ -595,31 +595,6 @@ export function detectVocalPhrases(pcm, sampleRate = LYRIC_ALIGN_SAMPLE_RATE) {
   return phrases;
 }
 
-/** Windows on the song clock. Long gaps start a new anchor, even below 11 s. */
-export function phraseWindows(phrases, durationSec = phrases.at(-1)?.endSec ?? 0) {
-  const windows = [];
-  for (const phrase of phrases) {
-    const startSec = Math.max(0, phrase.startSec - 0.08);
-    const endSec = Math.min(durationSec, phrase.endSec + 0.08);
-    const last = windows.at(-1);
-    // Do not put a post-silence phrase inside an earlier window: whisper
-    // would again attach its first word to that silence.
-    if (last && startSec - last.endSec <= 0.1 && endSec - last.startSec <= 11) last.endSec = endSec;
-    else if (endSec > startSec) windows.push({ startSec: round3(startSec), endSec: round3(endSec) });
-  }
-  const gaps = [];
-  let cursor = 0;
-  for (const window of [...windows, { startSec: durationSec, endSec: durationSec }]) {
-    if (window.startSec - cursor > 3) {
-      for (let start = cursor; start < window.startSec; start += 11) {
-        gaps.push({ startSec: round3(start), endSec: round3(Math.min(start + 11, window.startSec)) });
-      }
-    }
-    cursor = Math.max(cursor, window.endSec);
-  }
-  return [...windows, ...gaps].sort((a, b) => a.startSec - b.startSec);
-}
-
 // SequenceMatcher-style ratio: recursively count longest common contiguous
 // blocks, rather than making one edit the only tolerated recognition error.
 function wordRatio(a, b) {
@@ -702,41 +677,6 @@ function dpAlignWords(lyricWords, recognised) {
     else j--;
   }
   return matches;
-}
-
-/** Snap generated line starts and all words by one delta; authored sides stay fixed. */
-export function snapLineStarts(lines, onsets, originals = []) {
-  const snapped = [];
-  for (const [index, line] of lines.entries()) {
-    snapped.push(line);
-    const original = originals[index] || {};
-    if (line.matched < 0.5 || !line.words?.length) continue;
-    const first = line.words[0].startSec;
-    const onset = onsets.filter((t) => t >= first - 0.35 && t <= first + 0.25)
-      .sort((a, b) => Math.abs(a - first) - Math.abs(b - first))[0];
-    if (onset == null) continue;
-    const delta = onset - first;
-    const wordEnd = line.words.at(-1).endSec + delta;
-    // A snap is optional evidence, never permission to cross an authored
-    // boundary or overlap the adjacent lyric. Use the already-snapped previous
-    // line so two individually permissible shifts cannot collide.
-    if (original.startSec != null && onset < original.startSec) continue;
-    if (original.endSec != null && wordEnd > original.endSec) continue;
-    const previous = snapped[index - 1];
-    const following = lines[index + 1];
-    const previousEnd = Math.max(previous?.words?.at(-1)?.endSec ?? -Infinity, previous?.endSec ?? -Infinity);
-    const followingStart = Math.min(following?.words?.[0]?.startSec ?? Infinity, following?.startSec ?? Infinity);
-    const endSec = original.endSec ?? (line.endSec == null ? null : round3(line.endSec + delta));
-    if (Math.min(original.startSec ?? onset, onset) < previousEnd) continue;
-    if (Math.max(endSec ?? wordEnd, wordEnd) > followingStart) continue;
-    snapped[index] = {
-      ...line,
-      startSec: original.startSec ?? round3(onset),
-      endSec,
-      words: line.words.map((word) => ({ ...word, startSec: round3(word.startSec + delta), endSec: round3(word.endSec + delta) })),
-    };
-  }
-  return snapped;
 }
 
 /** Read the ffmpeg-decoded WAV without assuming a fixed-size RIFF header. */

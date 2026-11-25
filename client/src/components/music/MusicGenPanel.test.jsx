@@ -47,9 +47,7 @@ vi.mock('../../services/apiMediaJobs', () => ({
   cancelMediaJob: vi.fn(),
 }));
 
-vi.mock('../ui/Toast', () => ({
-  default: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 vi.mock('../install/RuntimeInstallModal', () => ({
   default: ({ open, label, onClose }) => (open ? (

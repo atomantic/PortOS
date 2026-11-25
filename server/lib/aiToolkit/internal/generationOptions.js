@@ -16,6 +16,7 @@
  * Lives beside `ollamaBacked.js` so `runner.js` avoids a cycle through `providers.js`.
  */
 import { isOllamaBackedProvider } from './ollamaBacked.js';
+import { hasLocalRuntimeMarker } from './localRuntimeMarkers.js';
 
 const finiteNumber = (value, min, max) => {
   if (value === null || value === undefined || value === '') return undefined;
@@ -24,21 +25,17 @@ const finiteNumber = (value, min, max) => {
 };
 
 /**
- * Every local backend marker belongs in the guard below: a missing one returns
- * `{}` and drops temperature and top_p too.
+ * The guard below asks the local-runtime registry, so a new runtime is covered
+ * without an edit here (a missing marker would return `{}` and drop temperature and top_p).
  *
- * @param {{temperature?:unknown, topP?:unknown, thinking?:unknown, lmstudioBacked?:boolean, llamaBacked?:boolean, mtplxBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean}|null|undefined} provider
+ * @param {{temperature?:unknown, topP?:unknown, thinking?:unknown}|null|undefined} provider a provider record carrying any `LOCAL_RUNTIME_MARKERS` boolean
  * @returns {{temperature?:number, top_p?:number, think?:boolean, chat_template_kwargs?:{enable_thinking:boolean}}}
  */
 export function apiGenerationOptions(provider) {
   const ollama = isOllamaBackedProvider(provider);
   const lmstudio = provider?.lmstudioBacked === true;
-  if (!ollama
-    && !lmstudio
-    && provider?.llamaBacked !== true
-    && provider?.mtplxBacked !== true
-    && provider?.vllmBacked !== true
-    && provider?.sglangBacked !== true) return {};
+  const splash = provider?.splashBacked === true;
+  if (!ollama && !hasLocalRuntimeMarker(provider)) return {};
   // Only Ollama defaults to 0.6; other backends keep their own until pinned.
   const temperature = finiteNumber(provider.temperature, 0, 2) ?? (ollama ? 0.6 : undefined);
   const topP = finiteNumber(provider.topP, 0, 1);
@@ -48,7 +45,7 @@ export function apiGenerationOptions(provider) {
     // Ollama takes a native `think` boolean; llama.cpp / MTPLX / vLLM / SGLang
     // use the chat template. LM Studio takes neither (reasoning is a property of
     // the loaded model instance).
-    ...(typeof provider.thinking !== 'boolean' || lmstudio
+    ...(typeof provider.thinking !== 'boolean' || lmstudio || splash
       ? {}
       : ollama
         ? { think: provider.thinking }

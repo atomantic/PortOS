@@ -1,17 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import MoodBoardReferenceStrip from './MoodBoardReferenceStrip';
-import { listMoodBoards, getMoodBoard, createMoodBoard } from '../../services/apiMoodBoard.js';
+import { listMoodBoardNames, getMoodBoard, createMoodBoard } from '../../services/apiMoodBoard.js';
 
 vi.mock('../../services/apiMoodBoard.js', () => ({
-  listMoodBoards: vi.fn(),
+  listMoodBoardNames: vi.fn(),
   getMoodBoard: vi.fn(),
   createMoodBoard: vi.fn(),
 }));
 
 const BOARDS = [
-  { id: 'mb-1', name: 'Board One', items: [] },
-  { id: 'mb-2', name: 'Board Two', items: [] },
+  { id: 'mb-1', name: 'Board One' },
+  { id: 'mb-2', name: 'Board Two' },
 ];
 
 const expand = () => fireEvent.click(screen.getByRole('button', { name: /mood board reference/i }));
@@ -19,7 +19,7 @@ const expand = () => fireEvent.click(screen.getByRole('button', { name: /mood bo
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
-  listMoodBoards.mockResolvedValue(BOARDS);
+  listMoodBoardNames.mockResolvedValue(BOARDS);
   getMoodBoard.mockImplementation((id) => Promise.resolve(BOARDS.find((b) => b.id === id) || null));
 });
 
@@ -29,6 +29,8 @@ describe('MoodBoardReferenceStrip — uncontrolled (localStorage) mode', () => {
     expand();
     const select = await screen.findByLabelText('Board');
     expect(select.value).toBe('mb-1');
+    expect(listMoodBoardNames).toHaveBeenCalledWith({ silent: true });
+    expect(getMoodBoard).toHaveBeenCalledWith('mb-1', { silent: true });
     // No "none" placeholder in uncontrolled mode.
     expect(screen.queryByRole('option', { name: /no board linked/i })).toBeNull();
   });
@@ -85,7 +87,7 @@ describe('MoodBoardReferenceStrip — controlled (persisted link) mode', () => {
 
   it('offers create-and-link even when no boards exist yet', async () => {
     const onChange = vi.fn();
-    listMoodBoards.mockResolvedValue([]);
+    listMoodBoardNames.mockResolvedValue([]);
     createMoodBoard.mockResolvedValue({ id: 'mb-first', name: 'Example Universe', items: [] });
     render(
       <MoodBoardReferenceStrip storageKey="u" value="" onChange={onChange} newBoardName="Example Universe" />,

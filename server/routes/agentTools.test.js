@@ -20,17 +20,13 @@ vi.mock('../services/platformAccounts.js', () => fnMap([
   'getAccountWithCredentials', 'recordActivity',
 ]));
 vi.mock('../services/agent/agentPersonalities.js', () => fnMap(['getAgentById']));
-vi.mock('../services/agent/agentActivity.js', () => fnMap(['logActivity']));
+vi.mock('../services/agent/agentActivity.js', () => fnMap(['logActivity', 'getActivities']));
 vi.mock('../services/agent/agentDrafts.js', () => fnMap([
   'listDrafts', 'createDraft', 'updateDraft', 'deleteDraft',
 ]));
 vi.mock('../services/agent/agentContentGenerator.js', () => fnMap([
   'generatePost', 'generateComment', 'generateReply', 'assertMoltbookCommentProvider',
 ]));
-vi.mock('../services/agent/agentFeedFilter.js', () => fnMap([
-  'findRelevantPosts', 'findReplyOpportunities',
-]));
-vi.mock('../services/agent/agentPublished.js', () => fnMap(['collectPublishedPosts']));
 
 // createMoltbookClient is a factory; checkRateLimit gates the engage loop's writes.
 const moltbookClient = vi.hoisted(() => ({
@@ -38,6 +34,10 @@ const moltbookClient = vi.hoisted(() => ({
   createComment: vi.fn(() => Promise.resolve({ id: 'c1' })),
   getPost: vi.fn(() => Promise.resolve({ id: 'p1', title: 'T' })),
   getComments: vi.fn(() => Promise.resolve({ comments: [] })),
+  getFeed: vi.fn(() => Promise.resolve({ posts: [] })),
+  getPostsByAuthor: vi.fn(() => Promise.resolve([])),
+  upvoteComment: vi.fn(() => Promise.resolve({})),
+  replyToComment: vi.fn(() => Promise.resolve({ id: 'r1' })),
   apiKey: 'key-123',
 }));
 const checkRateLimitMock = vi.hoisted(() => vi.fn(() => ({ allowed: true })));
@@ -49,11 +49,11 @@ vi.mock('../integrations/moltbook/index.js', () => ({
 import agentToolsRoutes from './agentTools.js';
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agent/agentPersonalities.js';
-import { generatePost, generateComment, assertMoltbookCommentProvider } from '../services/agent/agentContentGenerator.js';
+import * as agentActivity from '../services/agent/agentActivity.js';
+import { generatePost, generateComment, generateReply, assertMoltbookCommentProvider } from '../services/agent/agentContentGenerator.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { findRelevantPosts, findReplyOpportunities } from '../services/agent/agentFeedFilter.js';
 
-const ACTIVE_ACCOUNT = { id: 'acc-1', status: 'active', credentials: { apiKey: 'key-123' } };
+const ACTIVE_ACCOUNT = { id: 'acc-1', status: 'active', credentials: { apiKey: 'key-123', username: 'testuser' } };
 const AGENT = { id: 'agent-1', name: 'Bot', aiConfig: {} };
 
 describe('Agent Tools Routes', () => {
@@ -65,6 +65,7 @@ describe('Agent Tools Routes', () => {
     app.use('/api/agents/tools', agentToolsRoutes);
     vi.clearAllMocks();
     assertMoltbookCommentProvider.mockResolvedValue(undefined);
+    agentActivity.getActivities.mockResolvedValue([]);
   });
 
   describe('POST /generate-post', () => {
@@ -124,12 +125,12 @@ describe('Agent Tools Routes', () => {
       const res = await request(app).get(`/api/agents/tools${path}`);
       expect(res.status).toBe(400);
       expect(platformAccounts.getAccountWithCredentials).not.toHaveBeenCalled();
-      expect(findRelevantPosts).not.toHaveBeenCalled();
+      expect(moltbookClient.getFeed).not.toHaveBeenCalled();
     });
 
     it('passes coerced numeric limit and default sort to the client', async () => {
       platformAccounts.getAccountWithCredentials.mockResolvedValue(ACTIVE_ACCOUNT);
-      moltbookClient.getFeed = vi.fn().mockResolvedValue({ posts: [] });
+      moltbookClient.getFeed.mockResolvedValueOnce({ posts: [] });
       const res = await request(app).get('/api/agents/tools/feed?accountId=acc-1&limit=5');
       expect(res.status).toBe(200);
       expect(moltbookClient.getFeed).toHaveBeenCalledWith('hot', 5);
@@ -144,7 +145,7 @@ describe('Agent Tools Routes', () => {
         .send({ agentId: 'agent-1', accountId: 'acc-1' });
       expect(res.status).toBe(400);
       expect(res.body.code).toBe('ACCOUNT_INACTIVE');
-      expect(findRelevantPosts).not.toHaveBeenCalled();
+      expect(moltbookClient.getFeed).not.toHaveBeenCalled();
     });
 
     it('400s on out-of-range maxVotes', async () => {
@@ -157,12 +158,11 @@ describe('Agent Tools Routes', () => {
     it('throttles between each vote with MOLTBOOK_ACTION_DELAY_MS', async () => {
       platformAccounts.getAccountWithCredentials.mockResolvedValue(ACTIVE_ACCOUNT);
       agentPersonalities.getAgentById.mockResolvedValue(AGENT);
-      findRelevantPosts.mockResolvedValue([
+      moltbookClient.getFeed.mockResolvedValueOnce({ posts: [
         { id: 'p1', title: 'A' },
         { id: 'p2', title: 'B' },
         { id: 'p3', title: 'C' },
-      ]);
-      findReplyOpportunities.mockResolvedValue([]);
+      ] });
 
       const res = await request(app)
         .post('/api/agents/tools/engage')
@@ -179,8 +179,7 @@ describe('Agent Tools Routes', () => {
     it('stops voting early when the rate limiter disallows', async () => {
       platformAccounts.getAccountWithCredentials.mockResolvedValue(ACTIVE_ACCOUNT);
       agentPersonalities.getAgentById.mockResolvedValue(AGENT);
-      findRelevantPosts.mockResolvedValue([{ id: 'p1', title: 'A' }, { id: 'p2', title: 'B' }]);
-      findReplyOpportunities.mockResolvedValue([]);
+      moltbookClient.getFeed.mockResolvedValueOnce({ posts: [{ id: 'p1', title: 'A' }, { id: 'p2', title: 'B' }] });
       checkRateLimitMock.mockReturnValueOnce({ allowed: false });
 
       const res = await request(app)
@@ -210,10 +209,75 @@ describe('Agent Tools Routes', () => {
       expect(res.status).toBe(422);
       expect(res.body.code).toBe('untrusted-content-provider-unavailable');
       expect(assertMoltbookCommentProvider).toHaveBeenCalledWith('cli-1');
-      expect(findRelevantPosts).not.toHaveBeenCalled();
+      expect(moltbookClient.getFeed).not.toHaveBeenCalled();
       expect(generateComment).not.toHaveBeenCalled();
       expect(moltbookClient.upvote).not.toHaveBeenCalled();
       expect(moltbookClient.createComment).not.toHaveBeenCalled();
+    });
+
+    it('skips posts the account already commented on and does not report an unverified comment', async () => {
+      platformAccounts.getAccountWithCredentials.mockResolvedValue(ACTIVE_ACCOUNT);
+      agentPersonalities.getAgentById.mockResolvedValue({ ...AGENT, personality: { topics: ['robotics'] } });
+      generateComment.mockResolvedValue({ content: 'Hello' });
+      moltbookClient.getFeed.mockResolvedValue({ posts: ['done', 'held', 'ok'].map(id => ({ id, title: 'Robotics' })) });
+      moltbookClient.getComments.mockImplementation(async id => ({ comments: id === 'done' ? [{ author: 'testuser' }] : [] }));
+      moltbookClient.createComment
+        .mockResolvedValueOnce({ id: 'c-held', verification_solved: false })
+        .mockResolvedValueOnce({ id: 'c-ok' });
+
+      const res = await request(app)
+        .post('/api/agents/tools/engage')
+        .send({ agentId: 'agent-1', accountId: 'acc-1', maxVotes: 0, maxComments: 1 });
+
+      expect(res.status).toBe(200);
+      expect(moltbookClient.createComment.mock.calls.map(([id]) => id)).toEqual(['held', 'ok']);
+      expect(res.body.comments).toEqual([expect.objectContaining({ postId: 'ok', commentId: 'c-ok' })]);
+    });
+  });
+
+  describe('POST /check-posts', () => {
+    it('replies and upvotes only comments no earlier run handled', async () => {
+      platformAccounts.getAccountWithCredentials.mockResolvedValue(ACTIVE_ACCOUNT);
+      agentPersonalities.getAgentById.mockResolvedValue(AGENT);
+      generateReply.mockResolvedValue({ content: 'Thanks' });
+      moltbookClient.getPostsByAuthor.mockResolvedValue([{ id: 'mine', title: 'Mine', created_at: new Date().toISOString() }]);
+      moltbookClient.getComments.mockImplementation(async () => ({ comments: [{ id: 'old', author: 'a' }, { id: 'new', author: 'b' }] }));
+      agentActivity.getActivities.mockImplementation(async (agentId, { action }) => (
+        agentId === 'agent-1' && action === 'monitor'
+          ? [{ status: 'completed', result: { replied: [{ commentId: 'old' }], upvoted: [{ commentId: 'old' }] } }]
+          : []
+      ));
+
+      const res = await request(app)
+        .post('/api/agents/tools/check-posts')
+        .send({ agentId: 'agent-1', accountId: 'acc-1', maxReplies: 2, maxUpvotes: 2 });
+
+      expect(res.status).toBe(200);
+      expect(moltbookClient.replyToComment.mock.calls).toEqual([['mine', 'new', 'Thanks']]);
+      expect(moltbookClient.upvoteComment.mock.calls).toEqual([['new']]);
+    });
+  });
+
+  describe('GET /published', () => {
+    it('lists completed posts and engagement comments once, with live engagement counts', async () => {
+      platformAccounts.getAccountWithCredentials.mockResolvedValue(ACTIVE_ACCOUNT);
+      agentPersonalities.getAgentById.mockResolvedValue(AGENT);
+      const log = {
+        post: [
+          { id: 'a1', status: 'completed', timestamp: '2026-01-01T00:00:00Z', result: { postId: 'p1', title: 'Live', submolt: 'general' } },
+          { id: 'a2', status: 'verification_failed', timestamp: '2026-01-01T00:00:00Z', result: { postId: 'p2', title: 'Held' } },
+        ],
+        comment: [],
+        engage: [{ id: 'a3', status: 'completed', timestamp: '2026-01-01T00:00:00Z', result: { comments: [{ postId: 'p9', postTitle: 'Other', commentId: 'c9' }] } }],
+      };
+      agentActivity.getActivities.mockImplementation(async (_id, { action }) => log[action] ?? []);
+      moltbookClient.getPost.mockResolvedValue({ id: 'p1', score: 4, comment_count: 7 });
+
+      const res = await request(app).get('/api/agents/tools/published?agentId=agent-1&accountId=acc-1&days=2');
+
+      expect(res.status).toBe(200);
+      expect(res.body.posts).toEqual([expect.objectContaining({ postId: 'p1', score: 4, commentCount: 7 })]);
+      expect(res.body.comments).toEqual([expect.objectContaining({ commentId: 'c9', postTitle: 'Other' })]);
     });
   });
 });

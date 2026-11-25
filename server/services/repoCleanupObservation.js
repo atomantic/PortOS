@@ -3,7 +3,6 @@ import { join } from 'path';
 import { isSafeGitRef } from '../lib/gitArgs.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
 import { execGit } from '../lib/execGit.js';
-import { awaitsRequiredHumanReview } from '../lib/pullRequestReadiness.js';
 
 /** Only ENOENT means absent. A broken symlink or non-directory still occupies
  * the requested path and cannot establish successful cleanup.
@@ -75,7 +74,7 @@ export async function inspectOpenDeliveryRepair(repoPath, branch, prUrl, { forge
   const { getOriginInfo } = await import('../lib/gitRemote.js');
   const origin = await getOriginInfo(repoPath);
   if (!target || target.host !== origin?.host || `${target.owner}/${target.repo}` !== origin?.fullName) return { reason: 'delivery-repository-unverified' };
-  const { readPullRequest, isOpenSameRepoPr } = await import('./prProbe.js');
+  const { readPullRequest, isOpenSameRepoPr, awaitsHumanReviewOnRequiredChecks } = await import('./prProbe.js');
   const { githubRepoSpec } = await import('../lib/workTracker.js');
   const spec = githubRepoSpec(origin);
   if (!spec) return { reason: 'delivery-forge-unsupported' };
@@ -91,11 +90,14 @@ export async function inspectOpenDeliveryRepair(repoPath, branch, prUrl, { forge
   if (ancestry.relation !== 'equal') return { reason: `delivery-${ancestry.relation}`, ancestry };
   if (view.isDraft !== false) return { reason: 'delivery-draft-held', ancestry };
   const failed = (view.statusCheckRollup || []).filter(check => ['FAILURE', 'ERROR', 'TIMED_OUT', 'ACTION_REQUIRED'].includes(check.conclusion || check.state));
-  const actionable = view.mergeable === 'CONFLICTING' || view.reviewDecision === 'CHANGES_REQUESTED' || failed.length > 0;
+  const blocked = view.mergeable === 'CONFLICTING' || view.reviewDecision === 'CHANGES_REQUESTED';
+  // A failing advisory check does not stop a merge; only required ones make it agent work.
+  const awaitsHuman = !blocked && await awaitsHumanReviewOnRequiredChecks(view, { repoPath, forgeAccount, repoSpec: spec });
+  const actionable = blocked || (failed.length > 0 && !awaitsHuman);
   // No `headSha`, so every caller holds instead of queuing review or repair: no
   // agent can supply a required human approval, and a follow-up would only stop
   // at the same merge gate. The next sweep re-reads it once someone approves.
-  if (!actionable && awaitsRequiredHumanReview(view)) return { ancestry, reason: 'delivery-human-review-pending' };
+  if (!actionable && awaitsHuman) return { ancestry, reason: 'delivery-human-review-pending' };
   return actionable ? { actionable: true, headSha: view.headRefOid, ancestry, evidence: { head: view.headRefOid, conflicts: view.mergeable === 'CONFLICTING',
     changesRequested: view.reviewDecision === 'CHANGES_REQUESTED', checks: failed.map(check => ({ name: check.name || check.context, conclusion: check.conclusion || check.state })).sort((a,b) => String(a.name).localeCompare(String(b.name))) } }
     : { headSha: view.headRefOid, ancestry, reason: 'delivery-ci-or-review-pending' };

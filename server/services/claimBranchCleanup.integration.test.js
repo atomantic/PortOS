@@ -15,12 +15,19 @@ vi.mock('./agent/agentRepoStateVerification.js', () => ({ verifyAgentRepoState: 
 vi.mock('./cos/cosClaimOwnershipState.js', async original => ({
   ...await original(), readClaimOwnershipAgents: vi.fn(async () => fixture.owners),
 }));
+vi.mock('./cos/cosState.js', () => ({
+  withStateLock: async work => work(),
+  loadState: async () => ({ agents: { [fixture.agent.id]: fixture.agent } }),
+  saveState: async state => { fixture.agent = state.agents[fixture.agent.id]; },
+}));
+vi.mock('./cos/cosEvents.js', async original => ({ ...await original(), cosEvents: { emit: vi.fn() } }));
 vi.mock('./prProbe.js', async original => ({
   ...await original(), probePrForBranch: vi.fn(async () => fixture.probe),
 }));
 
 import { cleanupAgentWorktree } from './agent/agentWorktreeCleanup.js';
-import { readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
+import { captureCompletedCheckouts, readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
+import { updateClaimOwnership } from './cos/cosClaimOwnership.js';
 import { verifyAgentRepoState } from './agent/agentRepoStateVerification.js';
 
 describe('claim coordinator cleanup', () => {
@@ -39,6 +46,19 @@ describe('claim coordinator cleanup', () => {
   };
   const localRef = async () => execGit(['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], sandbox.repo, { ignoreExitCode: true });
   const remoteRef = async () => (await execGit(['ls-remote', '--heads', 'origin', `refs/heads/${branch}`], sandbox.repo)).stdout.trim();
+
+  async function completeAfterReleaseRefusal() {
+    fixture.agent.status = 'running';
+    delete fixture.agent.metadata.completedCheckouts;
+    fixture.owners = [fixture.agent];
+    expect(await updateClaimOwnership({ agentId: id, action: 'release', branch }))
+      .toEqual({ released: false, reason: 'checkout-present' });
+    const completedCheckouts = await captureCompletedCheckouts(fixture.agent, { success: true, strict: true });
+    expect(completedCheckouts).toMatchObject([{ branch, head }]);
+    fixture.agent.status = 'completed';
+    fixture.agent.completedAt = new Date().toISOString();
+    fixture.agent.metadata.completedCheckouts = completedCheckouts;
+  }
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -60,11 +80,27 @@ describe('claim coordinator cleanup', () => {
 
   afterEach(async () => { await destroyGitSandbox(sandbox?.scratch); });
 
-  it('removes the captured merged checkout and only its exact remote head', async () => {
+  it('retires the checkout, local ref and exact merged remote head after refusing release', async () => {
+    await writeFile(join(checkout, `.agent-done-${id}`), '{}\n');
+    await completeAfterReleaseRefusal();
     expect(await run()).toEqual([]);
     expect(existsSync(checkout)).toBe(false);
     expect((await localRef()).exitCode).toBe(1);
     expect(await remoteRef()).toBe('');
+  });
+
+  it.each(['open PR', 'unmerged work', 'dirty merged checkout'])('preserves %s after refusing release', async scenario => {
+    if (scenario === 'open PR') fixture.probe.prState = 'OPEN';
+    if (scenario === 'unmerged work') fixture.probe.prState = 'CLOSED';
+    if (scenario === 'dirty merged checkout') await writeFile(join(checkout, 'unfinished.txt'), 'Keep this work\n');
+    await completeAfterReleaseRefusal();
+    expect(await run()).toHaveLength(1);
+    expect(existsSync(checkout)).toBe(true);
+    expect((await localRef()).exitCode).toBe(0);
+    expect(await remoteRef()).toBe(`${head}\trefs/heads/${branch}`);
+    if (scenario === 'dirty merged checkout') {
+      expect((await execGit(['status', '--porcelain'], checkout)).stdout).toContain('?? unfinished.txt');
+    }
   });
 
   it('keeps a remote branch that advanced after the captured delivery', async () => {
@@ -186,7 +222,8 @@ describe('claim coordinator cleanup', () => {
   it('settles owned git work when a remote branch probe times out during cleanup', async () => {
     await execGit(['config', `url.ssh://slow-host/.insteadOf`, sandbox.origin], sandbox.repo);
     await execGit(['config', 'core.sshCommand', 'node -e "process.stdin.resume(); process.stdin.on(\'end\', () => process.exit(0)); setTimeout(() => {}, 10000);" --'], sandbox.repo);
-    const result = await run({ remoteTimeoutMs: 100 });
+    // The limit also bounds the local target read, so it must outlast a git spawn on a loaded host.
+    const result = await run({ remoteTimeoutMs: 1000 });
     expect(result).toEqual([expect.stringContaining('remote branch state unavailable')]);
     expect(existsSync(checkout)).toBe(false);
   });
@@ -200,7 +237,7 @@ describe('claim coordinator cleanup', () => {
     await execGit(['push', 'origin', `:refs/heads/${branch}`], sandbox.repo);
     await execGit(['config', `url.ssh://slow-host/.insteadOf`, sandbox.origin], sandbox.repo);
     await execGit(['config', 'core.sshCommand', 'node -e "process.stdin.resume(); process.stdin.on(\'end\', () => process.exit(0)); setTimeout(() => {}, 10000);" --'], sandbox.repo);
-    const result = await run({ remoteTimeoutMs: 100 });
+    const result = await run({ remoteTimeoutMs: 1000 });
     expect(result).toEqual([expect.stringContaining('remote branch state unavailable')]);
     expect(existsSync(checkout)).toBe(false);
     expect((await localRef()).exitCode).toBe(1);

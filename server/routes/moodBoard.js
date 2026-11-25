@@ -8,12 +8,12 @@
  */
 
 import { Router } from 'express';
-import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
+import { isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { moodBoardCreateSchema, moodBoardUpdateSchema, moodBoardItemCreateSchema, moodBoardItemUpdateSchema, moodBoardPinterestLinkSchema, moodBoardXPostImportSchema, moodBoardCollageSchema, moodBoardExtractFramesSchema, moodBoardItemRenderSchema, moodBoardGenerateSchema } from '../lib/moodBoardValidation.js';
-import { moodBoardCombineSchema } from '../lib/moodBoardValidation.js';
+import { moodBoardCombineSchema, moodBoardListQuerySchema } from '../lib/moodBoardValidation.js';
 import { influencesSchema, lockedSchema } from './universeBuilder/shared.js';
 import { synthesizeBoardStyle } from '../services/moodBoardStyleSynthesis.js';
 import { composeBoardPrompt } from '../services/moodBoardCompositeStyle.js';
@@ -58,8 +58,8 @@ router.get('/:id/generate', asyncHandler(async (req, res) => {
 // passes `limit`/`offset`, the response becomes the bounded
 // `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
 router.get('/', asyncHandler(async (req, res) => {
-  const query = validateRequest(paginationQuerySchema, req.query);
-  const boards = await listBoards();
+  const query = validateRequest(moodBoardListQuerySchema, req.query);
+  const boards = await listBoards({ omitItemAnalysis: query.view === 'summary' });
   if (!isPaginationRequested(query)) {
     return res.json(boards);
   }

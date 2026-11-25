@@ -23,6 +23,14 @@ describe('shotSteps', () => {
     expect(shotStartFrameSec(4)).toBe(4);
   });
 
+  it('still shows the shot it jumped to after the media clock truncates to microseconds', () => {
+    for (let frame = 1; frame <= 24 * 240; frame += 1) {
+      const held = Math.floor(shotStartFrameSec(frame / 24) * 1e6) / 1e6;
+      // The frame the composition draws for a song time (documentTemplateDrawing.js, the layered engine).
+      expect(Math.floor(held * 24 + 1e-6)).toBe(frame);
+    }
+  });
+
   it('keeps a rendered excerpt to the shots inside it', () => {
     const excerpt = shotSteps([{ sceneId: 'earlier', startSec: 0 }, { sceneId: 'remaining', startSec: 4, label: 'Shot 3' }, { sceneId: 'later', startSec: 8.5 }], 5, { startSec: 4, endSec: 8 });
     expect(excerpt).toMatchObject({ back: 4, next: null, index: 1, count: 1, scene: { sceneId: 'remaining', label: 'Shot 3' } });

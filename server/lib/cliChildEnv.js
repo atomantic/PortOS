@@ -24,6 +24,7 @@ import {
   opencodeConfigIsLocalOnly,
 } from './provider/providerModels.js';
 import { isLocalInstanceEndpoint } from './localEndpoint.js';
+import { SPLASH_CONTEXT } from './splashRuntime.js';
 import { agentGuardEnv } from './agentGuard/index.js';
 import { join, resolve } from 'path';
 import { buildSafeCliBaseEnv, withTorchCompilerCacheEnv } from './processEnv.js';
@@ -69,14 +70,16 @@ function isLocalBackedClaude(provider) {
  * `claudeLocalEnvDefaults`; `cliChildEnv.test.js` enforces it.
  */
 const CLAUDE_LOCAL_TUNING_ENV_KEYS = [
-  'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'API_TIMEOUT_MS', 'API_FORCE_IDLE_TIMEOUT',
+  'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_MAX_CONTEXT_TOKENS', 'API_TIMEOUT_MS', 'API_FORCE_IDLE_TIMEOUT',
   'CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS', 'CLAUDE_STREAM_IDLE_TIMEOUT_MS', 'MAX_THINKING_TOKENS',
 ];
 
 function claudeLocalEnvDefaults(provider) {
   if (!isLocalBackedClaude(provider)) return {};
   return {
-    CLAUDE_CODE_MAX_OUTPUT_TOKENS: CLAUDE_LOCAL_MAX_OUTPUT_TOKENS,
+    // Splash's usual 64K window needs room for prompts and tool results.
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: provider.splashBacked === true ? '8192' : CLAUDE_LOCAL_MAX_OUTPUT_TOKENS,
+    ...(provider.splashBacked === true ? { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(SPLASH_CONTEXT) } : {}),
     API_TIMEOUT_MS: CLAUDE_LOCAL_API_TIMEOUT_MS,
     API_FORCE_IDLE_TIMEOUT: CLAUDE_LOCAL_FORCE_IDLE_TIMEOUT,
     CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS: CLAUDE_LOCAL_STREAM_IDLE_TIMEOUT_MS,
@@ -88,6 +91,22 @@ function claudeLocalEnvDefaults(provider) {
     // `generationControlsFor` in client/src/utils/providerModels.js).
     ...(provider.ollamaBacked === true && provider.thinking === false
       ? { MAX_THINKING_TOKENS: '0' }
+      : {}),
+  };
+}
+
+function claudeContextOverride(provider) {
+  const value = provider?.harnessContext;
+  if (!value || value.model || !Number.isSafeInteger(value.tokens) || !provider.command || !isClaudeCommand(provider.command)
+    || !(provider.envVars?.ANTHROPIC_BASE_URL || provider.envVars?.CLAUDE_CODE_MAX_CONTEXT_TOKENS)) return {};
+  const output = provider.splashBacked === true ? 8192 : isLocalBackedClaude(provider) ? Number(CLAUDE_LOCAL_MAX_OUTPUT_TOKENS) : 32000;
+  const outputCap = Math.floor(value.tokens / 4);
+  // Leave at least three quarters of a chosen window for input unless the
+  // user explicitly sets a different output reserve.
+  return {
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(value.tokens),
+    ...(provider.envVars?.CLAUDE_CODE_MAX_OUTPUT_TOKENS == null && output > outputCap
+      ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(outputCap) }
       : {}),
   };
 }
@@ -108,9 +127,10 @@ function claudeLocalEnvDefaults(provider) {
  *   other layer including `provider.envVars` (TERM/COLORTERM for a PTY).
  * @param {string|null} [options.safetyProfile] - a public-review execution
  *   profile, which hardens the OpenCode config (see `buildOpencodeEnvVars`).
+ * @param {boolean} [options.toolFree=false] - apply OpenCode tool restrictions for a private one-shot.
  * @returns {object} a fresh object holding only these layers
  */
-export function composeProviderEnv({ before = null, provider = null, model = null, extra = null, safetyProfile = null } = {}) {
+export function composeProviderEnv({ before = null, provider = null, model = null, extra = null, safetyProfile = null, toolFree = false } = {}) {
   // `authOnly` is an identity-only provider view (`cliProviderAuthDescriptor`),
   // NOT a record to generate env from: generators below sit ABOVE `before` and
   // would overwrite the already-composed env (e.g. OpenCode's declared-models map).
@@ -119,11 +139,12 @@ export function composeProviderEnv({ before = null, provider = null, model = nul
     ...(before || {}),
     ...claudeLocalEnvDefaults(provider),
     ...(provider?.envVars || {}),
+    ...claudeContextOverride(provider),
     // Rebuilds OPENCODE_CONFIG_CONTENT with a declared models map so the injected
     // namespaced `--model` is accepted; lands after provider.envVars to override
     // the provider's STATIC copy. `safetyProfile` reaches it because OpenCode's
     // tool posture lives in that config (`hardenOpencodeConfigForNoTool`).
-    ...buildOpencodeEnvVars(provider, model, { safetyProfile }),
+    ...buildOpencodeEnvVars(provider, model, { safetyProfile, toolFree }),
     // A Pi record on a custom endpoint hands it to the PortOS endpoint extension.
     ...buildPiEndpointEnvVars(provider, model),
     ...(extra || {}),
@@ -197,6 +218,30 @@ export function buildPublicReviewCliEnv(env = {}) {
   return allowlistEnv(env, PUBLIC_REVIEW_ENV_KEYS);
 }
 
+function isolatedMtplxOpenCodeEnv(baseEnv, provider, model, directory, cwd) {
+  // OpenCode deep-merges MCP and permissions, so an empty inline map can't
+  // clear definitions loaded from user files. Give it fresh config and auth
+  // directories and disable project discovery before the CLI can read either.
+  const inherited = Object.fromEntries(Object.entries(baseEnv).filter(([key]) => [
+    'PATH', 'Path', 'SystemRoot', 'ComSpec', 'PATHEXT', 'ProgramData', 'TMPDIR', 'TMP', 'TEMP', 'LANG',
+  ].includes(key)));
+  return withSpawnCwdEnv({
+    ...inherited,
+    HOME: directory,
+    USERPROFILE: directory,
+    XDG_CONFIG_HOME: join(directory, 'config'),
+    XDG_DATA_HOME: join(directory, 'data'),
+    XDG_STATE_HOME: join(directory, 'state'),
+    XDG_CACHE_HOME: join(directory, 'cache'),
+    OPENCODE_DISABLE_PROJECT_CONFIG: '1',
+    OPENCODE_DISABLE_CLAUDE_CODE: '1',
+    OPENCODE_DISABLE_MODELS_FETCH: '1',
+    OPENCODE_DISABLE_AUTOUPDATE: '1',
+    OPENCODE_DISABLE_AUTOCOMPACT: '1',
+    ...buildOpencodeEnvVars(provider, model, { toolFree: true, restrictedMtplx: true }),
+  }, cwd);
+}
+
 // The actions stage may use its vendor's workspace sandbox but must never inherit
 // forge credentials, SSH config, cloud keys or arbitrary provider env. An
 // allowlist, not a blocklist, so a new server secret never leaks into a
@@ -236,6 +281,8 @@ export function buildPublicReviewActionsCliEnv(env = {}) {
  *   whenever the spawn names a cwd; `server/test/guards/runtime/spawnCwd.test.js` only counts such a call.
  * @param {object|null} [options.extra] - see `composeProviderEnv`.
  * @param {object|null} [options.bootstrapEnv] - Explicit credential-command output; only recognized auth keys pass, in ordinary runs or an opted-in no-tool review.
+ * @param {boolean} [options.toolFree=false] - see `composeProviderEnv`.
+ * @param {string} [options.openCodeIsolationDir] - private per-run directory for the restricted MTPLX OpenCode recipe.
  * @param {boolean} [options.guard=false] - prepend the pm2 guard shim onto the
  *   final `PATH` so an unrestricted agent can't `pm2 kill` the shared daemon.
  *   Only agent-spawning sites opt in.
@@ -251,9 +298,12 @@ export function buildCliChildEnv({
   guard = false,
   bootstrapEnv = null,
   safetyProfile = null,
+  toolFree = false,
+  openCodeIsolationDir,
 } = {}) {
+  if (toolFree && openCodeIsolationDir) return isolatedMtplxOpenCodeEnv(baseEnv, provider, model, openCodeIsolationDir, cwd);
   const composed = withTorchCompilerCacheEnv(withSpawnCwdEnv(
-    { ...buildSafeCliBaseEnv(baseEnv, provider), ...composeProviderEnv({ before, provider, model, extra, safetyProfile }) },
+    { ...buildSafeCliBaseEnv(baseEnv, provider), ...composeProviderEnv({ before, provider, model, extra, safetyProfile, toolFree }) },
     cwd,
   ), join(resolve(cwd || process.cwd()), '.cache'));
 

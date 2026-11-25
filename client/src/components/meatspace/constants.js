@@ -34,23 +34,6 @@ const TAB_PRESENTATION = {
 
 export const TABS = buildPageNavTabs(getPageNavTabs('meatspace'), TAB_PRESENTATION, 'MeatSpace');
 
-// Lifestyle adjustment table for death clock
-export const LIFESTYLE_ADJUSTMENTS = {
-  smoking: { never: 0, former: -2, current: -10 },
-  alcohol: { none: 0, moderate: 0.5, heavy: -5 },
-  exercise: { high: 2, moderate: 0.5, low: -2 },
-  sleep: { optimal: 1, fair: 0, poor: -1.5 },
-  diet: { excellent: 2, good: 0.5, fair: 0, poor: -3 },
-  stress: { low: 1, moderate: 0, high: -2 },
-  bmi: { normal: 0.5, overweight: -0.5, obese: -3 }
-};
-
-// NIAAA alcohol thresholds
-export const ALCOHOL_THRESHOLDS = {
-  male: { dailyMax: 2, weeklyMax: 14 },
-  female: { dailyMax: 1, weeklyMax: 7 }
-};
-
 // Blood test reference ranges (common panels)
 export const REFERENCE_RANGES = {
   // Metabolic Panel
@@ -128,8 +111,3 @@ export function dayOfWeek(dateStr) {
   const [y, m, d] = dateStr.split('-').map(Number);
   return DAY_LABELS[new Date(y, m - 1, d).getDay()];
 }
-
-// LEV 2045 constants
-export const LEV_TARGET_YEAR = 2045;
-export const LEV_BIRTH_YEAR = 1979;
-export const LEV_START_YEAR = 2000; // Research timeline start

@@ -1,3 +1,4 @@
+import { assertYoutubeVideoUrl } from '../lib/youtubeUrlAssert.js';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 
@@ -37,7 +38,7 @@ const { downloadAudioToTempMp3 } = await import('./ytdlpAudioImport.js');
 const { importUploadedTrack } = await import('./pipeline/musicLibrary.js');
 const { createTrack } = await import('./tracks/index.js');
 const {
-  YOUTUBE_URL_RE, assertYoutubeUrl, startYoutubeImport, cancelYoutubeImport, __testing,
+  YOUTUBE_URL_RE, startYoutubeImport, cancelYoutubeImport, __testing,
 } = await import('./trackYoutubeImport.js');
 
 // A fake yt-dlp child that immediately closes with the given exit code —
@@ -56,10 +57,10 @@ beforeEach(() => {
   findFfmpeg.mockResolvedValue('/usr/local/bin/ffmpeg');
 });
 
-describe('YOUTUBE_URL_RE / assertYoutubeUrl', () => {
+describe('YOUTUBE_URL_RE / assertYoutubeVideoUrl', () => {
   it('accepts a standard watch URL', () => {
     expect(YOUTUBE_URL_RE.test('https://www.youtube.com/watch?v=dQw4w9WgXcQ')).toBe(true);
-    expect(() => assertYoutubeUrl('https://www.youtube.com/watch?v=dQw4w9WgXcQ')).not.toThrow();
+    expect(() => assertYoutubeVideoUrl('https://www.youtube.com/watch?v=dQw4w9WgXcQ')).not.toThrow();
   });
 
   it('accepts a youtu.be short link', () => {
@@ -86,12 +87,12 @@ describe('YOUTUBE_URL_RE / assertYoutubeUrl', () => {
     'https://www.youtube.com/embed/dQw4w9WgXcQ',
   ])('accepts %s', (url) => {
     expect(YOUTUBE_URL_RE.test(url)).toBe(true);
-    expect(() => assertYoutubeUrl(url)).not.toThrow();
+    expect(() => assertYoutubeVideoUrl(url)).not.toThrow();
   });
 
   it('returns the video id so the caller need not re-parse the URL', () => {
-    expect(assertYoutubeUrl('https://music.youtube.com/watch?v=dQw4w9WgXcQ')).toBe('dQw4w9WgXcQ');
-    expect(assertYoutubeUrl('https://youtu.be/dQw4w9WgXcQ')).toBe('dQw4w9WgXcQ');
+    expect(assertYoutubeVideoUrl('https://music.youtube.com/watch?v=dQw4w9WgXcQ')).toBe('dQw4w9WgXcQ');
+    expect(assertYoutubeVideoUrl('https://youtu.be/dQw4w9WgXcQ')).toBe('dQw4w9WgXcQ');
   });
 
   it.each([
@@ -100,12 +101,12 @@ describe('YOUTUBE_URL_RE / assertYoutubeUrl', () => {
     'https://www.youtube.com/feed/history',
   ])('rejects %s — a batch paste must not start a 300-video download', (url) => {
     expect(YOUTUBE_URL_RE.test(url)).toBe(false);
-    expect(() => assertYoutubeUrl(url)).toThrow(/single-video YouTube URL/);
+    expect(() => assertYoutubeVideoUrl(url)).toThrow(/single-video YouTube URL/);
   });
 
   it('rejects a non-YouTube host', () => {
     expect(YOUTUBE_URL_RE.test('https://vimeo.com/12345')).toBe(false);
-    expect(() => assertYoutubeUrl('https://vimeo.com/12345')).toThrow(/YouTube/);
+    expect(() => assertYoutubeVideoUrl('https://vimeo.com/12345')).toThrow(/YouTube/);
   });
 
   it('rejects a youtube.com URL with no video id', () => {
@@ -113,8 +114,8 @@ describe('YOUTUBE_URL_RE / assertYoutubeUrl', () => {
   });
 
   it('rejects a non-string input', () => {
-    expect(() => assertYoutubeUrl(null)).toThrow();
-    expect(() => assertYoutubeUrl(42)).toThrow();
+    expect(() => assertYoutubeVideoUrl(null)).toThrow();
+    expect(() => assertYoutubeVideoUrl(42)).toThrow();
   });
 });
 

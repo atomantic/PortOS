@@ -14,11 +14,15 @@
  * `cancelSlotstreamModelDownload`, so weights are managed in-app rather than from a terminal.
  */
 
-import { request, API_BASE, throwApiError } from './apiCore.js';
+import { request, API_BASE } from './apiCore.js';
+import { openStreamResponse, readStreamFrames } from './streamResponse.js';
 
 // Local LLM backends (Ollama / LM Studio) — status, model management, migrate.
 // Installed models per backend come back inside getLocalLlmStatus().
 export const getLocalLlmStatus = (options) => request('/local-llm/status', options);
+
+// Models served by each bare-endpoint runtime (llama.cpp, MTPLX, Splash, ...); lists only, never generates.
+export const getLocalRuntimeModels = (options) => request('/local-llm/runtime-models', options);
 
 // Vision-capable installed models across both backends, each tagged with the
 // provider id that serves it. Powers the LoRA caption-model picker.
@@ -35,8 +39,8 @@ export const getContextPlans = (options) => request('/local-llm/context-plans', 
 // per HF-backed entry) — the recommended-models picker wants it. Callers that only
 // need catalog metadata (e.g. the playground decorating installed models) omit it
 // to keep the response fast and fully local.
-export const getLocalLlmCatalog = (backend, q = '', { variants = false } = {}) =>
-  request(`/local-llm/catalog?backend=${encodeURIComponent(backend)}${q ? `&q=${encodeURIComponent(q)}` : ''}${variants ? '&variants=1' : ''}`);
+export const getLocalLlmCatalog = (backend, q = '', { variants = false, silent } = {}) =>
+  request(`/local-llm/catalog?backend=${encodeURIComponent(backend)}${q ? `&q=${encodeURIComponent(q)}` : ''}${variants ? '&variants=1' : ''}`, { silent });
 
 export const getModelAbuseGuardStatus = (options) =>
   request('/local-llm/security-guard/status', options);
@@ -98,8 +102,8 @@ export const adoptJevHead = (decisionId, options) =>
 export const discardJevHead = (decisionId, { adopted = false } = {}, options) =>
   request('/local-llm/jev/heads/discard', { method: 'POST', body: JSON.stringify({ decisionId, adopted }), ...options });
 
-export const getLocalLlmHuggingFaceSearch = (backend, q = '', category = 'all', limit = 12) =>
-  request(`/local-llm/huggingface-search?backend=${encodeURIComponent(backend)}&category=${encodeURIComponent(category)}&limit=${encodeURIComponent(limit)}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
+export const getLocalLlmHuggingFaceSearch = (backend, q = '', category = 'all', limit = 12, options) =>
+  request(`/local-llm/huggingface-search?backend=${encodeURIComponent(backend)}&category=${encodeURIComponent(category)}&limit=${encodeURIComponent(limit)}${q ? `&q=${encodeURIComponent(q)}` : ''}`, options);
 
 // `options` lets callers opt into `{ silent: true }` so structured failure codes
 // (e.g. OLLAMA_OUTDATED → offer to upgrade in place) can be handled by the UI
@@ -137,35 +141,63 @@ export const controlOllamaService = (action) =>
 export const controlLmStudioService = (action) =>
   request('/local-llm/lmstudio-service', { method: 'POST', body: JSON.stringify({ action }) });
 
-// MTPLX (native-MTP Qwen on Apple Silicon) — a PM2-managed process, same
-// lifecycle shape as llama-server below.
-export const getMtplxServerStatus = (options) =>
-  request('/local-llm/mtplx/status', options);
+// Start payloads differ by runtime: llama-server requires a chosen GGUF,
+// MTPLX and Slotstream default to their verified cache, and the bundles own
+// their prepared weights. Bundle mutations report completion via progress events.
+const managedRuntimeRequests = {
+  llama: {
+    status: (options) => request('/local-llm/llama-server/status', options),
+    install: (options) => request('/local-llm/llama-server/install', { ...options, method: 'POST' }),
+    start: (config) => request('/local-llm/llama-server/start', { method: 'POST', body: JSON.stringify(config) }),
+    stop: (options) => request('/local-llm/llama-server/stop', { ...options, method: 'POST' }),
+    upgrade: (options) => request('/local-llm/llama-server/upgrade', { ...options, method: 'POST' }),
+  },
+  mtplx: {
+    status: (options) => request('/local-llm/mtplx/status', options),
+    install: (options) => request('/local-llm/mtplx/install', { ...options, method: 'POST' }),
+    start: (config = {}) => request('/local-llm/mtplx/start', { method: 'POST', body: JSON.stringify(config) }),
+    stop: (options) => request('/local-llm/mtplx/stop', { ...options, method: 'POST' }),
+  },
+  slotstream: {
+    status: (options) => request('/local-llm/slotstream/status', options),
+    install: (options) => request('/local-llm/slotstream/install', { ...options, method: 'POST' }),
+    start: (config = {}) => request('/local-llm/slotstream/start', { method: 'POST', body: JSON.stringify(config) }),
+    stop: (options) => request('/local-llm/slotstream/stop', { ...options, method: 'POST' }),
+  },
+  splash: {
+    status: (options) => request('/local-llm/splash/status', options),
+    install: (options) => request('/local-llm/splash/install', { ...options, method: 'POST' }),
+    start: (options) => request('/local-llm/splash/start', { ...options, method: 'POST' }),
+    stop: (options) => request('/local-llm/splash/stop', { ...options, method: 'POST' }),
+    upgrade: (options) => request('/local-llm/splash/upgrade', { ...options, method: 'POST' }),
+  },
+  mkserve: {
+    status: (options) => request('/local-llm/mkserve/status', options),
+    install: (options) => request('/local-llm/mkserve/install', { ...options, method: 'POST' }),
+    start: (options) => request('/local-llm/mkserve/start', { ...options, method: 'POST' }),
+    stop: (options) => request('/local-llm/mkserve/stop', { ...options, method: 'POST' }),
+    upgrade: (options) => request('/local-llm/mkserve/upgrade', { ...options, method: 'POST' }),
+  },
+};
 
-// `config` is optional: with none of it PortOS serves the checkpoint already in
-// MTPLX's cache on the port the shipped provider presets point at.
-export const startMtplxServer = (config = {}) =>
-  request('/local-llm/mtplx/start', { method: 'POST', body: JSON.stringify(config) });
+export const getManagedInklingRuntimeStatus = (runtime, options) =>
+  managedRuntimeRequests[runtime].status(options);
 
-export const stopMtplxServer = () =>
-  request('/local-llm/mtplx/stop', { method: 'POST' });
+export const saveSplashContextWindow = (contextWindow, options) =>
+  request('/local-llm/splash/context', { ...options, method: 'PUT', body: JSON.stringify({ contextWindow }) });
 
-export const installMtplx = () =>
-  request('/local-llm/mtplx/install', { method: 'POST' });
+export const controlManagedInklingRuntime = (runtime, action, options) =>
+  managedRuntimeRequests[runtime][action](options);
 
-// Slotstream (SSD-streaming MoE on Apple Silicon) — a PM2-managed process,
-// same lifecycle shape as MTPLX. A start never downloads weights.
-export const getSlotstreamServerStatus = (options) =>
-  request('/local-llm/slotstream/status', options);
+export const getMtplxServerStatus = managedRuntimeRequests.mtplx.status;
+export const startMtplxServer = managedRuntimeRequests.mtplx.start;
+export const stopMtplxServer = () => managedRuntimeRequests.mtplx.stop();
+export const installMtplx = () => managedRuntimeRequests.mtplx.install();
 
-export const startSlotstreamServer = (config = {}) =>
-  request('/local-llm/slotstream/start', { method: 'POST', body: JSON.stringify(config) });
-
-export const stopSlotstreamServer = () =>
-  request('/local-llm/slotstream/stop', { method: 'POST' });
-
-export const installSlotstream = () =>
-  request('/local-llm/slotstream/install', { method: 'POST' });
+export const getSlotstreamServerStatus = managedRuntimeRequests.slotstream.status;
+export const startSlotstreamServer = managedRuntimeRequests.slotstream.start;
+export const stopSlotstreamServer = () => managedRuntimeRequests.slotstream.stop();
+export const installSlotstream = () => managedRuntimeRequests.slotstream.install();
 
 // Fetch one checkpoint into Slotstream's cache. `model` is a catalog id from
 // the status payload, or a Hugging Face `owner/name`. Byte progress arrives on
@@ -209,8 +241,7 @@ export const saveRuntimeStartupList = () =>
   request('/local-llm/save-startup', { method: 'POST' });
 
 // llama-server (DFlash 2 / Speculative Decoding) process controls
-export const getLlamaServerStatus = (options) =>
-  request('/local-llm/llama-server/status', options);
+export const getLlamaServerStatus = managedRuntimeRequests.llama.status;
 
 // Optional version/package-manager metadata for the Local LLMs runtime card.
 // Kept separate from lifecycle status because the provider version probe and the
@@ -218,20 +249,13 @@ export const getLlamaServerStatus = (options) =>
 export const getLlamaServerUpdateStatus = (options) =>
   request('/local-llm/llama-server/update-status', options);
 
-export const startLlamaServer = (config) =>
-  request('/local-llm/llama-server/start', { method: 'POST', body: JSON.stringify(config) });
+export const startLlamaServer = managedRuntimeRequests.llama.start;
+export const stopLlamaServer = () => managedRuntimeRequests.llama.stop();
+export const installLlamaServer = () => managedRuntimeRequests.llama.install();
 
-export const stopLlamaServer = () =>
-  request('/local-llm/llama-server/stop', { method: 'POST' });
-
-export const installLlamaServer = () =>
-  request('/local-llm/llama-server/install', { method: 'POST' });
-
-// Upgrade a package-manager-installed llama.cpp binary (Homebrew on macOS/Linux,
-// winget on Windows). A managed llama-server is restarted by the server with its
-// existing launch configuration.
-export const upgradeLlamaServer = () =>
-  request('/local-llm/llama-server/upgrade', { method: 'POST' });
+// Upgrade a package-manager-installed binary. The server restarts a managed
+// llama-server using its existing launch configuration.
+export const upgradeLlamaServer = () => managedRuntimeRequests.llama.upgrade();
 
 // Size/destination/free-disk numbers for the confirm step, before any
 // transfer starts. `body.kind` picks which download this previews
@@ -317,48 +341,22 @@ export const compareLocalLlmModels = (payload, options) =>
 // the EventSource-based useSseProgress hook here: that's GET-only and this
 // request carries a prompt body.
 export async function streamLocalLlmTest(payload, { signal, onToken } = {}) {
-  const response = await fetch(`${API_BASE}/local-llm/test/stream`, {
+  const response = await openStreamResponse(fetch(`${API_BASE}/local-llm/test/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
     signal,
-  });
-  if (!response.ok || !response.body?.getReader) {
-    // Honor session expiry the same way request() does — a streaming run that
-    // 401s should bounce to /login, not just toast and strand the user here.
-    await throwApiError(response);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+  }));
   let result = null;
-
-  const consume = (line) => {
-    const trimmed = line.trim();
-    if (!trimmed) return;
-    let frame;
-    try { frame = JSON.parse(trimmed); } catch { return; }
-    if (frame.type === 'token') onToken?.(frame.delta || '', frame.kind || 'content');
-    else if (frame.type === 'result') result = frame.result;
-  };
-
-  // Always release the reader on every exit — a clean finish, a thrown
-  // AbortError on cancel, or a mid-stream throw — so a non-abort error doesn't
-  // leave the stream dangling (mirrors apiAsk.js / apiOpenClaw.js).
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-      for (const line of lines) consume(line);
-    }
-    if (buffer.trim()) consume(buffer);
-  } finally {
-    await reader.cancel().catch(() => {});
-  }
+  await readStreamFrames(response, {
+    format: 'ndjson',
+    onFrame: ({ data }) => {
+      let frame;
+      try { frame = JSON.parse(data); } catch { return; }
+      if (frame.type === 'token') onToken?.(frame.delta || '', frame.kind || 'content');
+      else if (frame.type === 'result') result = frame.result;
+    },
+  });
   // A clean EOF that never delivered a `result` frame (server killed mid-stream,
   // truncated body, proxy cut the connection — all surface as read() done:true,
   // NOT an AbortError) would otherwise resolve null and be silently swallowed by

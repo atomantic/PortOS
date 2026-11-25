@@ -96,8 +96,8 @@ describe('useProviderModels — Antigravity base models', () => {
     ]);
   });
 
-  it('does not re-surface the configured-default sentinel as the auto-selected pin', async () => {
-    const { result } = await mountWith([AGY]);
+  it.each([undefined, () => true])('keeps an eligible configured default selected and out of the explicit options', async (modelFilter) => {
+    const { result } = await mountWith([AGY], { withEffort: true, modelFilter });
     // The sentinel is the provider's defaultModel, so it IS the selected value —
     // but filterSelectableModels exists to keep it out of the options.
     expect(result.current.selectedModel).toBe('antigravity-configured-default');
@@ -293,6 +293,42 @@ describe('useProviderModels — a modelFilter whose identity changes', () => {
     await waitFor(() => expect(result.current.availableModels).toEqual([]));
     // `''` is the "use the default model" choice here, never an auto-pick target.
     expect(result.current.selectedModel).toBe('');
+  });
+});
+
+describe('useProviderModels — failed reads', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('reports error (not an empty success) on a failed read, and retry fills the list', async () => {
+    getProviders.mockRejectedValueOnce(new Error('boom'));
+    getProviders.mockResolvedValueOnce({ activeProvider: 'codex', providers: [CODEX] });
+    const { result } = renderHook(() => useProviderModels({ silent: true }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error?.message).toBe('boom');
+    expect(result.current.providers).toEqual([]);
+
+    await act(async () => { await result.current.retry(); });
+    expect(result.current.error).toBeNull();
+    expect(result.current.providers.map((p) => p.id)).toEqual(['codex']);
+  });
+
+  it('keeps the list and selection when a later reload fails', async () => {
+    getProviders.mockResolvedValueOnce({ activeProvider: 'codex', providers: [CODEX] });
+    getProviders.mockRejectedValueOnce(new Error('boom'));
+    const { result } = renderHook(() => useProviderModels({ silent: true }));
+    await waitFor(() => expect(result.current.selectedProviderId).toBe('codex'));
+
+    await act(async () => { await result.current.retry(); });
+    expect(result.current.error?.message).toBe('boom');
+    expect(result.current.providers.map((p) => p.id)).toEqual(['codex']);
+    expect(result.current.selectedProviderId).toBe('codex');
+  });
+
+  it('a successful empty read has no error', async () => {
+    getProviders.mockResolvedValueOnce({ activeProvider: '', providers: [] });
+    const { result } = renderHook(() => useProviderModels({ silent: true }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toBeNull();
   });
 });
 

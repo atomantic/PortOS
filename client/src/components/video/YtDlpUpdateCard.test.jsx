@@ -8,7 +8,7 @@ vi.mock('../../services/apiVideoDownload.js', () => ({
   installYtDlp: vi.fn(),
   updateYtDlp: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const handlers = new Map();
 vi.mock('../../hooks/useSocket.js', () => ({

@@ -71,6 +71,7 @@ import {
   isCursorProvider,
   isClaudeCommand,
   hasModelFlag,
+  extractBakedModel,
   argvHasFlag,
   resolveInjectedTuiModel,
   resolveClaudeCliModel,
@@ -562,7 +563,18 @@ const opencodeSpawnConfig = (provider, args) => ({ command: provider?.command ||
 const ensureOpencodeAgent = (args) =>
   argvHasFlag(args, ['--agent']) ? args : [...args, '--agent', OPENCODE_BUILD_AGENT];
 
-function opencodeCliArgs(baseArgs, { model, provider }) {
+function opencodeCliArgs(baseArgs, { model, provider, toolFree = false }) {
+  if (toolFree) {
+    // Reusing agent, attachment or session flags could bypass the config for
+    // this invocation. Keep model and reasoning selection on the fresh run.
+    const args = ['run', '--pure', '--agent', OPENCODE_BUILD_AGENT];
+    const pinned = extractBakedModel(baseArgs);
+    const variantIndex = baseArgs.findIndex((arg) => arg === '--variant' || arg.startsWith('--variant='));
+    const variantFlag = baseArgs[variantIndex];
+    const variant = variantFlag === '--variant' ? baseArgs[variantIndex + 1] : variantFlag?.slice('--variant='.length);
+    if (variant && !variant.startsWith('-')) args.push('--variant', variant);
+    return pinned ? [...args, '-m', pinned] : appendOpencodeModel(args, provider, model);
+  }
   const args = ensureLeadingSubcommand(baseArgs, 'run');
   return ensureOpencodeAgent(appendOpencodeModel(args, provider, model));
 }
@@ -1262,6 +1274,8 @@ export function buildVendorCliArgs(provider, baseArgs, { model, effort, toolFree
  * kilo and cursor, whose tool posture has no argv off switch — reports
  * `toolFree: false`, which callers treat as host control. An API provider runs
  * no process, so its argv is returned unchanged with `toolFree: true`.
+ * OpenCode's tool-free runner also needs a config overlay, so this argv-only
+ * check cannot admit it on its own.
  *
  * @param {object} provider - provider record (type, command)
  * @param {string[]} [args] - the built argv

@@ -9,7 +9,7 @@ vi.mock('../../services/apiDigitalTwin.js', () => ({
 vi.mock('../../services/apiProviders.js', () => ({
   getActiveProvider: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import { getDigitalTwinEnrichQuestion, submitSoulEnrichAnswer } from '../../services/apiDigitalTwin.js';
 import { getActiveProvider } from '../../services/apiProviders.js';

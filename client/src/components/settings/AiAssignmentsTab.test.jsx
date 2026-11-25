@@ -9,7 +9,7 @@ vi.mock('../../services/apiSystem.js', () => ({
   updateAiAssignment: vi.fn(),
 }));
 vi.mock('../../services/apiLocalLlm', () => ({ getVisionModels: vi.fn(), getToolUseModels: vi.fn() }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import AiAssignmentsTab from './AiAssignmentsTab.jsx';
 import { getAiAssignments, updateAiAssignment } from '../../services/apiSystem.js';
@@ -452,4 +452,16 @@ describe('AiAssignmentsTab card field names', () => {
     expect(await screen.findByRole('group', { name: 'Provider' })).toHaveTextContent('Ollama');
     expect(screen.getByRole('group', { name: 'Model' })).toHaveTextContent('gemma2:9b');
   });
+});
+
+it.each([false, true])('retries an unread assignment list (has assignments: %s)', async (hasAssignments) => {
+  const assignments = hasAssignments ? [entry({ id: 'settings.example' })] : [];
+  getAiAssignments.mockRejectedValueOnce(new Error('Offline')).mockResolvedValueOnce(payload(assignments));
+  renderTab();
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load AI assignments');
+  expect(screen.queryByText(/No assignments match/)).not.toBeInTheDocument();
+  await userEvent.setup().click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByText(hasAssignments ? 'Production planning model' : /No assignments match/)).toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 });

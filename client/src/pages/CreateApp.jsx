@@ -245,6 +245,7 @@ export default function CreateApp() {
 
     const data = {
       name,
+      description: description.trim() || undefined,
       repoPath,
       type: appType !== 'unknown' ? appType : undefined,
       icon,

@@ -20,7 +20,7 @@ import { readdir, rename } from 'fs/promises';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { isPlainObject } from '../../lib/objects.js';
-import { SHARING_SCHEMA_VERSION, } from './version.js';
+import { SHARING_SCHEMA_VERSION } from './version.js';
 import { universeCollectionNameFor, seriesCollectionNameFor } from '../mediaCollections.js';
 import { UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { isStr } from '../../lib/textUtils.js';
@@ -34,9 +34,6 @@ export function annotationManifestFilename(senderInstanceId) {
   const safeId = String(senderInstanceId || UNKNOWN_INSTANCE_ID).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80);
   return `annotations-${safeId}.json`;
 }
-
-/** @deprecated Use SHARING_SCHEMA_VERSION from ./version.js. Kept exported for back-compat. */
-export const MANIFEST_SCHEMA_VERSION = SHARING_SCHEMA_VERSION;
 
 const queueCursorWrite = createKeyCachedQueue();
 

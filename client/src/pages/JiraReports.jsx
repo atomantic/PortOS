@@ -1,3 +1,5 @@
+import useListResource from '../hooks/useListResource';
+import ListLoadError from '../components/ui/ListLoadError';
 import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, Link } from 'react-router';
 import toast from '../components/ui/Toast';
@@ -8,6 +10,7 @@ import {FileText,
 import { getJiraReport, getJiraReports, generateJiraReport } from '../services/apiSystem.js';
 import { getApps } from '../services/apiApps.js';
 import BrailleSpinner from '../components/BrailleSpinner';
+import { pluralize } from '../lib/textUtils';
 import { copyToClipboard } from '../lib/clipboard';
 
 function ReportCard({ report, onClick, isSelected }) {
@@ -121,11 +124,12 @@ function ReportDetail({ report }) {
   );
 }
 
+const fetchReports = () => getJiraReports({ silent: true });
+
 export default function JiraReports() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [reports, setReports] = useState([]);
+  const { items: reports, state: reportsState, error: reportsError, retry: loadReports } = useListResource(fetchReports, { retainOnRetry: true });
   const [selectedReport, setSelectedReport] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [apps, setApps] = useState([]);
   const [appsLoaded, setAppsLoaded] = useState(false);
@@ -137,7 +141,6 @@ export default function JiraReports() {
   const reportDate = searchParams.get('reportDate') || '';
 
   useEffect(() => {
-    loadReports();
     loadApps();
   }, []);
 
@@ -176,21 +179,16 @@ export default function JiraReports() {
     setAppsLoaded(true);
   };
 
-  const loadReports = async () => {
-    setLoading(true);
-    // request() toasts a failure; keep the list we have and leave the loading state.
-    const result = await getJiraReports().catch(() => null);
-    if (result) setReports(result);
-    setLoading(false);
-  };
-
   const handleGenerate = async (appId = null) => {
     setGenerating(true);
     // A failed generation must re-enable the Generate buttons (request() toasts the error).
     const result = await generateJiraReport(appId).catch(() => null);
     if (result) {
-      toast.success(appId ? 'Report generated' : `Generated ${Array.isArray(result) ? result.length : 1} report(s)`);
-      await loadReports();
+      const generated = Array.isArray(result) ? result.length : 1;
+      const missed = appId ? 0 : apps.filter(a => a.jira.instanceId && a.jira.projectKey).length - generated;
+      if (generated > 0 || missed <= 0) toast.success(appId ? 'Report generated' : `Generated ${pluralize(generated, 'report')}`);
+      if (missed > 0) toast.error(`${pluralize(missed, 'project')} could not be reported. Check its JIRA instance.`);
+      loadReports();
       if (!Array.isArray(result) && result.appId) {
         // Set the full record directly (avoids a redundant re-fetch — the effect's
         // guard sees the params already match) and reflect it in the URL.
@@ -210,7 +208,7 @@ export default function JiraReports() {
   };
 
   // appsLoaded keeps the button enabled until the app list resolves, so a slow fetch is not mistaken for "no JIRA apps".
-  const noJiraApps = !loading && appsLoaded && apps.length === 0;
+  const noJiraApps = appsLoaded && apps.length === 0;
 
   const filteredReports = filterAppId
     ? reports.filter(r => r.appId === filterAppId)
@@ -264,11 +262,12 @@ export default function JiraReports() {
         </p>
       )}
 
-      {loading ? (
+      {reportsState === 'error' && <ListLoadError what="JIRA reports" error={reportsError} onRetry={loadReports} className="mb-4" />}
+      {reportsState === 'loading' && !reports.length ? (
         <div className="flex items-center justify-center h-64">
           <BrailleSpinner text="Loading" />
         </div>
-      ) : filteredReports.length === 0 ? (
+      ) : filteredReports.length === 0 ? reportsState === 'ready' && (
         <div className="flex flex-col items-center justify-center h-64 text-gray-500">
           <FileText size={48} className="mb-3 opacity-30" />
           <p>{noJiraApps ? 'No reports yet.' : 'No reports yet. Generate your first report above.'}</p>

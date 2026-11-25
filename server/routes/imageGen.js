@@ -21,11 +21,11 @@ import { optionalUploadFields, optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
 import setupRouter, { streamMossAction } from './imageGenSetup.js';
-import { usesMossSwift, usesFlux3 } from '../lib/imageRuntimeRemedies.js';
+import { usesMossSwift } from '../lib/imageRuntimeRemedies.js';
 import { downloadMossWeights, mossModelCacheStatus, verifyMossWeights, repairMossWeights } from '../services/imageGen/mossWeights.js';
 import { attachSseClient as attachQueueSseClient, cancelJob, listJobs, laneConcurrencyFor } from '../services/mediaJobQueue/index.js';
 import { mediaJobExecutionLane } from '../lib/generationModes.js';
-import { getImageModels, requiredReposForModel, imageModelDownloadTargets } from '../lib/mediaModels.js';
+import { getImageModels, requiredRepoSpecsForModel, imageModelDownloadTargets } from '../lib/mediaModels.js';
 import {
   inspectModelCache, verifyModelCache, repairModelCache, aggregateVerifies, verifyCachedRepoFiles, repairCachedRepoFiles,
 } from '../lib/hfCache.js';
@@ -34,6 +34,7 @@ import { PATHS, ensureDir, resolveGalleryImage, unlinkGuarded, copyFileGuarded }
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
 import { applyFilmLookBake, readFilmLookSource } from '../services/imageGen/filmLookBake.js';
 import { previewImagePrompt } from '../services/imageGen/promptPreview.js';
+import { localSentPrompt } from '../services/imageGen/local.js';
 import { join, basename } from 'node:path';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
 import {
@@ -278,23 +279,18 @@ const imageModelCacheStatus = async (m) => {
       integrity: cached ? aggregateVerifies(verifies) : null,
     };
   }
-  const required = requiredReposForModel(m);
+  const required = requiredRepoSpecsForModel(m);
   if (!required) return { id: m.id, repo: null, cached: null, sizeBytes: 0 };
-  // Inspect every required repo (main + any aux text encoders). The badge
-  // is `cached: true` only when ALL are cached; sizeBytes is the sum. The
-  // `pendingRepos` field lets the UI explain WHICH repos still need a pull
-  // so the user isn't surprised when clicking "Download" triggers >1 fetch.
-  // FLUX.3 renders load only its pinned snapshot, so another revision of the repo is not "cached".
-  const pinnedRevision = (r, i) => (i === 0 && usesFlux3(m) ? m.revision || null : null);
-  const inspections = await Promise.all(required.map((r, i) => inspectModelCache(r, { revision: pinnedRevision(r, i) })));
+  const inspections = await Promise.all(required.map(({ repo, revision }) => inspectModelCache(repo, { revision })));
   const cached = inspections.every((i) => i.cached);
   const sizeBytes = inspections.reduce((sum, i) => sum + (i.sizeBytes || 0), 0);
-  const pendingRepos = required.filter((_, i) => !inspections[i].cached);
+  const requiredRepos = required.map(({ repo }) => repo);
+  const pendingRepos = requiredRepos.filter((_, i) => !inspections[i].cached);
   // Integrity is only meaningful for repos that finished downloading — run
   // the cheap structural check across every cached required repo and report
   // the worst result, so a corrupt aux encoder still surfaces a Repair state.
-  const integrity = cached ? aggregateVerifies(await Promise.all(required.map((r, i) => verifyModelCache(r, { revision: pinnedRevision(r, i) })))) : null;
-  return { id: m.id, repo: required[0], cached, sizeBytes, requiredRepos: required, pendingRepos, integrity };
+  const integrity = cached ? aggregateVerifies(await Promise.all(required.map(({ repo, revision }) => verifyModelCache(repo, { revision })))) : null;
+  return { id: m.id, repo: requiredRepos[0], cached, sizeBytes, requiredRepos, pendingRepos, integrity };
 };
 
 router.get('/models/status', asyncHandler(async (_req, res) => {
@@ -320,8 +316,8 @@ router.post('/models/verify', asyncHandler(async (req, res) => {
     if (usesMossSwift(m)) return { id: m.id, ...aggregateVerifies([await verifyMossWeights({ deep })]) };
     const targets = imageModelDownloadTargets(m);
     if (targets) return { id: m.id, ...(aggregateVerifies(await verifyPinnedTargets(targets, deep)) || { status: 'missing', checkedDeep: deep, badFiles: [] }) };
-    const required = requiredReposForModel(m) || [];
-    const verifies = await Promise.all(required.map((r) => verifyModelCache(r, { deep })));
+    const required = requiredRepoSpecsForModel(m) || [];
+    const verifies = await Promise.all(required.map(({ repo, revision }) => verifyModelCache(repo, { deep, revision })));
     return { id: m.id, ...(aggregateVerifies(verifies) || { status: 'missing', checkedDeep: deep, badFiles: [] }) };
   }));
   res.json({ deep, models: results });
@@ -344,13 +340,13 @@ router.post('/models/:modelId/repair', asyncHandler(async (req, res) => {
     const deleted = repaired.flatMap((r, i) => (r.deleted || []).map((name) => ({ repo: targets[i].repo, name })));
     return res.json({ deep, deleted, repos: targets.map((t) => t.repo) });
   }
-  const required = requiredReposForModel(model);
+  const required = requiredRepoSpecsForModel(model);
   if (!required) {
     throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
   }
-  const repaired = await Promise.all(required.map((repo) => repairModelCache(repo, { deep })));
+  const repaired = await Promise.all(required.map(({ repo, revision }) => repairModelCache(repo, { deep, revision })));
   const deleted = repaired.flatMap((r) => r.deleted.map((name) => ({ repo: r.repoId, name })));
-  res.json({ deep, deleted, repos: required });
+  res.json({ deep, deleted, repos: required.map(({ repo }) => repo) });
 }));
 
 // SSE-driven model download. Cancels the python child if the client
@@ -373,23 +369,17 @@ router.post('/models/:modelId/download', asyncHandler(async (req, res) => {
   const { force } = validateRequest(modelDownloadQuerySchema, req.query);
   const model = downloadableImageModel(req);
   if (usesMossSwift(model)) return streamMossAction(req, res, downloadMossWeights);
-  const repos = imageModelDownloadTargets(model) || requiredReposForModel(model);
-  if (repos && usesFlux3(model) && model.revision) repos[0] = { repo: repos[0], revision: model.revision };
+  const repos = imageModelDownloadTargets(model) || requiredRepoSpecsForModel(model);
   if (!repos) {
     throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file — cannot pre-download.`, {
       status: 400,
       code: 'NO_REPO_FOR_MODEL',
     });
   }
-  // Sequentially fetch every required repo (main + aux text encoders for
-  // HiDream). The SSE stream tags each event with `repo` so the client can
-  // show per-repo progress / log lines. `?force=1` (repair-initiated) re-fetches
+  // Sequentially fetch the required snapshots. SSE events carry `repo` so the
+  // client can show per-repo progress. `?force=1` (repair-initiated) re-fetches
   // even when the repo still looks cached, so a deleted shard isn't skipped.
   await startHfDownloadStream({ req, res, repos, force });
-}));
-
-router.get('/loras', asyncHandler(async (_req, res) => {
-  res.json(await local.listLoraFilenames());
 }));
 
 const galleryReads = createImageGalleryHandlers(local.listGallery);
@@ -535,18 +525,11 @@ router.post('/:filename/remove-watermark', asyncHandler(async (req, res) => {
   res.json(await applyWatermarkRemoval({ filename, sourceMeta, size: body.size, region: body.region }));
 }));
 
-// SynthID-defeat regeneration (issue #912). Round-trips an existing gallery
-// image through local FLUX img2img at low–moderate denoise so the per-pixel
-// watermark is overwritten by fresh sampling — the only honest defeat path
-// (the lossless clean above can't touch SynthID). Post-hoc + history-only:
-// enqueues a normal local image job (GPU lane) using the source's own prompt;
-// the new render lands in the gallery as a variant of the source. Hardware-
-// gated — 400s with an actionable message when no local FLUX runner exists.
-router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
-  const filename = req.params.filename;
+// Turns a regenerate request into the job params the queue runs. The POST route and the preview route both call
+// this, so the preview shows exactly what the real request sends. `stage` false (preview) writes nothing: no
+// annotation snapshot is copied and the saved sketch need not exist yet.
+async function resolveRegenJob(filename, body, { stage }) {
   local.assertGalleryFilename(filename, { pngOnly: true });
-  const body = validateRequest(regenerateSchema, req.body || {});
-
   const sourceAbsPath = resolveGalleryImage(filename);
   if (!sourceAbsPath) {
     throw new ServerError('Image not found', { status: 404, code: 'NOT_FOUND' });
@@ -566,8 +549,9 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
     if (!isValidSketchKey(key)) {
       throw new ServerError('Image cannot be annotated', { status: 400, code: 'VALIDATION_ERROR' });
     }
-    annotatedSketchPath = await getSketchPngPath(key);
-    if (!annotatedSketchPath) {
+    // The preview skips the saved-sketch check: the annotate dialog saves the markup only when the user submits.
+    annotatedSketchPath = stage ? await getSketchPngPath(key) : null;
+    if (stage && !annotatedSketchPath) {
       throw new ServerError('No saved annotation to re-render — draw over the image and save first.', { status: 400, code: 'NO_ANNOTATION' });
     }
   }
@@ -582,9 +566,7 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
   // CPU-only light path (no FLUX runner required). A best-effort spatial pass
   // for installs that can't run the GPU round-trip — synchronous like Clean:
   // it writes a `_regen-light.png` variant inline and returns it (no queue).
-  if (body.method === 'light') {
-    return res.json(await applyLightRegenVariant({ filename, sourceAbsPath, sourceMeta }));
-  }
+  if (body.method === 'light') return { light: { sourceAbsPath, sourceMeta } };
 
   const backend = await resolveRegenBackend({ sourceModelId: sourceMeta.modelId });
   if (!backend.available) {
@@ -602,7 +584,7 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
   // name (it IS this job's init image) lets imageRefsGc.js sweep it once
   // unreferenced.
   let initImageAbsPath = null;
-  if (annotatedSketchPath) {
+  if (stage && annotatedSketchPath) {
     await ensureDir(PATHS.imageRefs);
     initImageAbsPath = join(PATHS.imageRefs, `init-${randomUUID()}.png`);
     await copyFileGuarded(annotatedSketchPath, initImageAbsPath);
@@ -627,10 +609,36 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
     initImageAbsPath,
     annotated: !!body.annotated,
   });
+  return { params, backend, strength };
+}
+
+// SynthID-defeat regeneration (issue #912). Round-trips an existing gallery
+// image through local FLUX img2img at low–moderate denoise so the per-pixel
+// watermark is overwritten by fresh sampling — the only honest defeat path
+// (the lossless clean above can't touch SynthID). Post-hoc + history-only:
+// enqueues a normal local image job (GPU lane) using the source's own prompt;
+// the new render lands in the gallery as a variant of the source. Hardware-
+// gated — 400s with an actionable message when no local FLUX runner exists.
+router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
+  const filename = req.params.filename;
+  const body = validateRequest(regenerateSchema, req.body || {});
+  const job = await resolveRegenJob(filename, body, { stage: true });
+  if (job.light) return res.json(await applyLightRegenVariant({ filename, ...job.light }));
+  const { params, backend, strength } = job;
   const queued = await enqueueLoggedImage({ kind: 'image', params }, { source: routeSource(req) });
   const via = body.annotated ? 'annotation re-render' : 'Regenerating';
   console.log(`♻️ ${via} ${filename} via ${backend.model.id} (strength=${strength}) → job ${queued.jobId.slice(0, 8)}`);
   return res.json(queuedImageResponse({ ...queued, mode: IMAGE_GEN_MODE.LOCAL, model: backend.model.id }));
+}));
+
+// What a regenerate request would send to the model (#18642), built by the same resolveRegenJob and
+// localSentPrompt the real render uses. Enqueues and stages nothing. The light CPU pass sends no prompt.
+router.post('/:filename/regenerate/preview', asyncHandler(async (req, res) => {
+  const body = validateRequest(regenerateSchema, req.body || {});
+  const job = await resolveRegenJob(req.params.filename, body, { stage: false });
+  if (job.light) return res.json({ sentPrompt: '' });
+  const { params, backend } = job;
+  res.json({ modelId: backend.model.id, ...await localSentPrompt({ ...params, model: backend.model }) });
 }));
 
 // Local-mode setup automation (python probe/venv, FLUX.2 install/status,

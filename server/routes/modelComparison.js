@@ -7,13 +7,14 @@ import { antigravityBaseModels, effortLevelsForProvider, filterSelectableModels,
 import { localRuntimeKind } from '../lib/modelPinMembership.js';
 import { gatewayIdForProvider } from '../lib/provider/providerGateways.js';
 import { buildModelComparisonComposite, CURRENT_COMPARISON_ANCHOR } from '../lib/modelComparisonComposite.js';
-import { modelComparisonImportSchema } from '../lib/modelComparisonValidation.js';
+import { modelComparisonImportSchema, modelComparisonQuerySchema } from '../lib/modelComparisonValidation.js';
 import { captureLiveEnvironments, loadAssessments } from '../services/localModelAssessmentStore.js';
 import { localPerformanceFromAssessments } from '../lib/localModelAssessment.js';
 
 export function createModelComparisonRoutes(providerService = { getSelectableProviders }) {
   const router = Router();
-  router.get('/', asyncHandler(async (_req, res) => {
+  router.get('/', asyncHandler(async (req, res) => {
+    const { view } = validateRequest(modelComparisonQuerySchema, req.query);
     // Disk-only read; an unreadable store reports no assessments, which leaves local measured axes unplotted.
     const [catalog, result, assessments] = await Promise.all([getPublicModelComparison(), providerService.getSelectableProviders(), loadAssessments()]);
     const inventory = result.providers.filter(provider => provider.enabled !== false).map(provider => ({
@@ -27,9 +28,16 @@ export function createModelComparisonRoutes(providerService = { getSelectablePro
     // Staleness needs the live machine state; the backend-version probe is one cached loopback GET.
     const liveEnvironments = await captureLiveEnvironments({ backends: [...new Set(assessments.map(a => a?.backend).filter(Boolean))] });
     const localPerformance = localPerformanceFromAssessments(assessments, liveEnvironments);
-    const composite = buildModelComparisonComposite(catalog.observations, inventory, undefined, { localPerformance });
-    const currentComposite = buildModelComparisonComposite(catalog.observations, inventory, CURRENT_COMPARISON_ANCHOR, { localPerformance });
-    res.json({ ...catalog, inventory, composite, currentComposite });
+    const { observations, ...metadata } = catalog;
+    const composite = buildModelComparisonComposite(observations, inventory, undefined, { localPerformance });
+    const currentComposite = buildModelComparisonComposite(observations, inventory, CURRENT_COMPARISON_ANCHOR, { localPerformance });
+    res.json({
+      ...metadata,
+      ...(view === 'summary' ? {} : { observations }),
+      inventory,
+      composite,
+      currentComposite,
+    });
   }));
   router.post('/import', asyncHandler(async (req, res) => {
     const result = await importModelComparison(validateRequest(modelComparisonImportSchema, req.body));

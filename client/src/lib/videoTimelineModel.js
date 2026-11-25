@@ -33,9 +33,6 @@ export { historySourceDuration };
 // card-sized rows (id, filename, numFrames, fps, thumbnail, timelineProjectId).
 export const CLIP_CATALOG_QUERY = Object.freeze({ compact: true });
 
-export const IMAGE_ASSET_KINDS = ['images', 'video-thumbnails'];
-export const AUDIO_ASSET_KINDS = ['audio', 'music'];
-
 // data/ subdirectory → the URL prefix the server exposes it under.
 const ASSET_URL_PREFIX = {
   images: '/data/images',

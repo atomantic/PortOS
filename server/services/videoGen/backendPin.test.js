@@ -1,7 +1,41 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { resolveVideoBackendPin, grokVideoJobParams, videoBackendJobParams } from './backendPin.js';
-import { VIDEO_GEN_MODE } from './modes.js';
+import { CLOUD_VIDEO_GEN_MODES, VIDEO_GEN_MODE, VIDEO_GEN_MODES } from './modes.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
+import { PATHS } from '../../lib/paths.js';
+
+// A real image library on disk: the hosted arms re-anchor a start frame against the approved
+// image roots, so a fixture path has to be a file one of those roots actually holds.
+let sandbox;
+let libraryFrame;
+let outsideFile;
+let stagedUpload;
+const savedPaths = {};
+beforeAll(() => {
+  sandbox = mkdtempSync(join(tmpdir(), 'backend-pin-'));
+  for (const key of ['images', 'imageRefs', 'uploads']) {
+    savedPaths[key] = PATHS[key];
+    PATHS[key] = join(sandbox, key);
+    mkdirSync(PATHS[key]);
+  }
+  libraryFrame = join(PATHS.images, 'frame.png');
+  // Both exist and are readable, so a refusal is the root check and not a missing file.
+  outsideFile = join(sandbox, 'private-notes.png');
+  stagedUpload = join(PATHS.uploads, 'staged.png');
+  for (const path of [libraryFrame, outsideFile, stagedUpload]) writeFileSync(path, 'x');
+});
+afterAll(() => {
+  Object.assign(PATHS, savedPaths);
+  rmSync(sandbox, { recursive: true, force: true });
+});
+
+const refusal = (run) => {
+  try { run(); } catch (err) { return err; }
+  return null;
+};
 
 const grokOn = { imageGen: { grok: { enabled: true, grokPath: '/usr/local/bin/grok' } } };
 const grokOff = { imageGen: { grok: { enabled: false, grokPath: '/usr/local/bin/grok' } } };
@@ -107,6 +141,17 @@ describe('resolveVideoBackendPin', () => {
     });
   });
 
+  it.each([
+    ['higgsfield', 'bytedance/seedance-2.5'],
+    ['google', 'veo-3.1-generate-001'],
+  ])('keeps a curated %s project model through dispatch', (mode, modelId) => {
+    const settings = { videoGen: { [mode]: { apiKey: 'key' } } };
+    const pin = resolveVideoBackendPin(project({ mode, modelId }), settings);
+    expect(videoBackendJobParams(settings, pin, { prompt: 'A lighthouse' }, { durationSeconds: 8 }))
+      .toMatchObject({ mode, modelId, videoMode: 'text', duration: 8 });
+    expect(resolveVideoBackendPin(project({ mode, modelId: 'unknown-model' }), settings).modelId).toBeNull();
+  });
+
   // A Runway model pin renders on the pinned catalog model (its price and
   // end-frame support differ from the Gen-4.5 default), and never leaks into
   // the local fallback when the Runway key goes away.
@@ -114,7 +159,7 @@ describe('resolveVideoBackendPin', () => {
     const runwayOn = { videoGen: { runway: { apiKey: 'key_test' } } };
     const pin = resolveVideoBackendPin(project({ mode: 'runway', modelId: 'kling2.5_turbo_pro' }), runwayOn);
     expect(pin).toMatchObject({ mode: VIDEO_GEN_MODE.RUNWAY, modelId: 'kling2.5_turbo_pro' });
-    expect(videoBackendJobParams(runwayOn, pin, { sourceImagePath: '/tmp/frame.png', duration: 5 }))
+    expect(videoBackendJobParams(runwayOn, pin, { sourceImagePath: libraryFrame, duration: 5 }))
       .toMatchObject({ mode: VIDEO_GEN_MODE.RUNWAY, modelId: 'kling2.5_turbo_pro', videoMode: 'image', duration: 5 });
     expect(resolveVideoBackendPin(project({ mode: 'runway', modelId: 'not-a-runway-model' }), runwayOn).modelId).toBeNull();
 
@@ -172,5 +217,122 @@ describe('grokVideoJobParams', () => {
     for (const key of ['pythonPath', 'numFrames', 'steps', 'guidanceScale', 'fps', 'modelId']) {
       expect(params).not.toHaveProperty(key);
     }
+  });
+});
+
+describe('videoBackendJobParams hosted arms', () => {
+  const geminiOn = { videoGen: { gemini: { enabled: true } } };
+
+  it('gives a Gemini project pin text and start-frame job params without local knobs', () => {
+    const pin = resolveVideoBackendPin(project({ mode: 'gemini', modelId: 'local-model' }), geminiOn);
+    expect(pin).toMatchObject({ mode: VIDEO_GEN_MODE.GEMINI });
+    const text = videoBackendJobParams(geminiOn, pin, { prompt: 'a lighthouse', mode: 'text', numFrames: 49, fps: 24, modelId: 'local-model' });
+    expect(text).toMatchObject({ mode: VIDEO_GEN_MODE.GEMINI, videoMode: 'text', prompt: 'a lighthouse' });
+    for (const key of ['numFrames', 'fps', 'modelId']) expect(text).not.toHaveProperty(key);
+    expect(videoBackendJobParams(geminiOn, pin, { prompt: 'a lighthouse', sourceImagePath: libraryFrame }))
+      .toMatchObject({ mode: VIDEO_GEN_MODE.GEMINI, videoMode: 'image', sourceImagePath: libraryFrame });
+  });
+
+  it('resolves an install-wide Gemini default for an unpinned project without throwing', () => {
+    const settings = { videoGen: { mode: 'gemini' } };
+    const pin = resolveVideoBackendPin(project(null), settings);
+    expect(pin.mode).toBe(VIDEO_GEN_MODE.GEMINI);
+    expect(videoBackendJobParams(settings, pin, { prompt: 'x', mode: 'text' })).toMatchObject({ mode: VIDEO_GEN_MODE.GEMINI, videoMode: 'text' });
+  });
+
+  it('still refuses a mode outside the video alphabet', () => {
+    let thrown = null;
+    try { videoBackendJobParams({}, { mode: 'not-a-backend' }, { prompt: 'x' }); } catch (err) { thrown = err; }
+    expect(thrown?.code).toBe('VIDEO_BACKEND_UNSUPPORTED');
+  });
+
+  it.each(VIDEO_GEN_MODES)('builds job params for every pickable mode (%s) from a plain text request', (mode) => {
+    expect(() => videoBackendJobParams(geminiOn, { mode }, { prompt: 'x', mode: 'text' })).not.toThrow();
+  });
+});
+
+// Planner params are model output, and a hosted worker sends the files they name to its
+// provider. Only an image this install already holds may cross.
+describe('videoBackendJobParams hosted attachments', () => {
+  it.each(CLOUD_VIDEO_GEN_MODES)('re-anchors a library start frame for %s, however it was named', (mode) => {
+    for (const given of [libraryFrame, 'frame.png', '/data/images/frame.png']) {
+      expect(videoBackendJobParams({}, { mode }, { prompt: 'x', sourceImagePath: given }))
+        .toMatchObject({ mode, videoMode: 'image', sourceImagePath: libraryFrame });
+    }
+  });
+
+  it.each(CLOUD_VIDEO_GEN_MODES)('refuses a %s start frame outside the image library', (mode) => {
+    for (const given of [outsideFile, stagedUpload, join(PATHS.images, '..', 'private-notes.png'), { path: libraryFrame }]) {
+      const err = refusal(() => videoBackendJobParams({}, { mode }, { prompt: 'x', sourceImagePath: given }));
+      expect(err?.code).toBe('VIDEO_BACKEND_INPUT_UNSUPPORTED');
+      expect(err.message).toContain('outside the image library');
+    }
+  });
+
+  it.each([
+    'castReferences', 'guidanceImagePath', 'sourceVideoPath', 'runwayVideoPath',
+    'runwayCharacterVideoPath', 'uploadedTempPath', 'uploadedTempPaths',
+  ])('refuses a planner-authored %s on every hosted pin, even one naming a library file', (key) => {
+    const value = key === 'castReferences' ? [{ path: libraryFrame, label: 'Ada' }] : key.endsWith('s') ? [libraryFrame] : libraryFrame;
+    for (const mode of CLOUD_VIDEO_GEN_MODES) {
+      const err = refusal(() => videoBackendJobParams({}, { mode }, { prompt: 'x', [key]: value }));
+      expect(err?.code).toBe('VIDEO_BACKEND_INPUT_UNSUPPORTED');
+      expect(err.message).toContain(key);
+    }
+  });
+
+  it('prefers the explicit path over the filename on hosted pins', () => {
+    const result = videoBackendJobParams({}, { mode: VIDEO_GEN_MODE.GEMINI }, {
+      sourceImagePath: 'frame.png', sourceImageFile: 'missing.png',
+    });
+    expect(result).toMatchObject({ videoMode: 'image', sourceImagePath: libraryFrame });
+    expect(result).not.toHaveProperty('sourceImageFile');
+  });
+
+  it('leaves a local pin alone: the local runner validates its own inputs and sends nothing out', () => {
+    expect(videoBackendJobParams({}, { mode: VIDEO_GEN_MODE.LOCAL }, { prompt: 'x', sourceImagePath: outsideFile, sourceImageFile: 'frame.png' }))
+      .toEqual({ prompt: 'x', sourceImagePath: outsideFile, sourceImageFile: 'frame.png' });
+  });
+});
+
+// Gemini's composer has two canvases and no negative-prompt field. A request for anything
+// else is refused here, where the caller can see it, instead of being changed by the worker.
+describe('videoBackendJobParams Gemini limits', () => {
+  const gemini = { mode: VIDEO_GEN_MODE.GEMINI };
+
+  it('refuses a negative prompt and takes an empty one', () => {
+    const err = refusal(() => videoBackendJobParams({}, gemini, { prompt: 'a lighthouse', negativePrompt: 'fog, crowds' }));
+    expect(err?.code).toBe('VIDEO_BACKEND_INPUT_UNSUPPORTED');
+    expect(err.message).toContain('a negative prompt');
+    for (const negativePrompt of ['', '   ', null, undefined]) {
+      expect(videoBackendJobParams({}, gemini, { prompt: 'a lighthouse', negativePrompt }))
+        .toMatchObject({ mode: VIDEO_GEN_MODE.GEMINI, prompt: 'a lighthouse' });
+    }
+  });
+
+  it.each([
+    { width: 512, height: 512 },
+    { width: 1024, height: 768 },
+    { aspectRatio: '1:1' },
+    { aspectRatio: '1:1', width: 768, height: 432 },
+  ])('refuses the canvas %j it would otherwise render as landscape', (canvas) => {
+    const err = refusal(() => videoBackendJobParams({}, gemini, { prompt: 'x', ...canvas }));
+    expect(err?.code).toBe('VIDEO_BACKEND_INPUT_UNSUPPORTED');
+    expect(err.message).toContain('16:9 or 9:16 only');
+  });
+
+  it.each([
+    { width: 768, height: 432 },
+    { width: 432, height: 768 },
+    { aspectRatio: '9:16' },
+    {},
+  ])('renders the canvas %j', (canvas) => {
+    expect(videoBackendJobParams({}, gemini, { prompt: 'x', ...canvas })).toMatchObject({ mode: VIDEO_GEN_MODE.GEMINI, ...canvas });
+  });
+
+  it('leaves both inputs to the backends that take them', () => {
+    const falOn = { videoGen: { fal: { apiKey: 'key_test' } } };
+    expect(videoBackendJobParams(falOn, { mode: VIDEO_GEN_MODE.FAL }, { prompt: 'x', negativePrompt: 'fog', width: 512, height: 512 }))
+      .toMatchObject({ mode: VIDEO_GEN_MODE.FAL, negativePrompt: 'fog', width: 512, height: 512 });
   });
 });

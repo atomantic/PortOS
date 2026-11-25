@@ -66,8 +66,3 @@ export function createMoltbookClient(apiKey) {
   };
   return client;
 }
-
-/**
- * Register a new agent on Moltbook (doesn't require an existing API key)
- */
-export const registerMoltbookAgent = api.register;

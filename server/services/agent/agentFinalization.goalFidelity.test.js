@@ -68,7 +68,6 @@ vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: (...args) => updateTaskMo
 vi.mock('../provider/providers.js', () => ({ getActiveProvider: vi.fn(async () => null) }));
 vi.mock('../provider/providerStatus.js', () => ({
   markProviderUsageLimit: vi.fn(async () => null),
-  markProviderRateLimited: vi.fn(async () => null),
   markProviderUnavailable: vi.fn(async () => null),
 }));
 vi.mock('./agentErrorAnalysis.js', () => ({
@@ -90,7 +89,6 @@ vi.mock('../taskTypeHooks.js', async (importOriginal) => ({
   // isClaimFlowDispatch stays REAL: the claim-flow fidelity cases below depend
   // on it resolving the claim marker/type exactly as production does.
   ...(await importOriginal()),
-  canRunTaskOutputHookWithoutPayload: vi.fn(() => false),
   isProgrammaticIoTaskType: vi.fn(() => false),
   resolveTaskHookType: vi.fn(() => null),
   declaresNoCommitCriterion: vi.fn(() => false),
@@ -111,7 +109,7 @@ vi.mock('../goalFidelityPriorDelivery.js', () => ({
 }));
 
 vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () => null) }));
-vi.mock('./agentSummaryExtraction.js', () => ({ extractSimplifySummaries: vi.fn(() => null), extractFinalSummary: vi.fn(() => null) }));
+vi.mock('./agentSummaryExtraction.js', () => ({ extractFinalSummary: vi.fn(() => null) }));
 
 const getGoalFidelityConfigMock = vi.fn(async () => ({ enabled: true, backend: 'ollama', model: 'example-model', effort: null }));
 const runLocalGoalFidelityReviewMock = vi.fn();

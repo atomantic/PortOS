@@ -1,8 +1,9 @@
+import { writeDependencyHashes } from './lib/dependencyReceipts.js';
 import { installUpdateTestSupervisor } from './lib/updateTestSupervisor.js';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn, execFileSync } from 'child_process';
 import { createHash } from 'crypto';
-import { mkdirSync, writeFileSync, copyFileSync, readFileSync, existsSync, chmodSync, rmSync } from 'fs';
+import { mkdirSync, writeFileSync, copyFileSync, readFileSync, existsSync, chmodSync, rmSync, symlinkSync, renameSync } from 'fs';
 import { join, dirname, delimiter } from 'path';
 import { createMaintenanceAdmission } from '../server/lib/maintenanceAdmission.js';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -45,20 +46,21 @@ const STUB_SCRIPTS = [
 async function makeSandbox({
   origin = true, failAfterDelete = true, npmShim = 'ok',
   forceClean = false, pm2OnPath = false, healthy = true, stallDelete = false, nodeVersion = null, originAhead = false, peerTarget = false, aheadRefusesInCheckout = false, unknownPrevious = false, withoutDeps = false, pm2StartFailure = false,
-  lockfileOnly = false, pendingLockfiles = null, restoreTrees = false
+  lockfileOnly = false, pendingLockfiles = null, verified = false, configOnly = false
 } = {}) {
   const { scratch, repo } = await makeGitSandbox({ origin, prefix: 'portos-update-guard-' });
   const bin = join(scratch, 'bin');
   const calls = join(scratch, 'pm2-calls.log');
   const releaseFile = join(scratch, 'pm2-delete-stalled');
   const optionalCalls = join(scratch, 'optional-calls.log');
+  const dependencyCalls = join(scratch, 'dependency-calls.log');
 
   mkdirSync(bin, { recursive: true });
   mkdirSync(join(repo, 'scripts'), { recursive: true });
   if (!withoutDeps) mkdirSync(join(repo, 'node_modules', 'pm2', 'bin'), { recursive: true });
 
   installUpdateTestSupervisor(repo);
-  for (const file of [SHIM, 'scripts/update.mjs', windowsSpawnHelpers]) {
+  for (const file of [SHIM, 'scripts/update.mjs', 'scripts/lib/dependencyReceipts.js', 'scripts/lib/workspaceDependencies.js', windowsSpawnHelpers]) {
     mkdirSync(dirname(join(repo, file)), { recursive: true });
     copyFileSync(join(REPO_ROOT, file), join(repo, file));
   }
@@ -110,7 +112,9 @@ if (${pm2StartFailure} && args.startsWith('start') && !fs.existsSync(${JSON.stri
   }
 
   writeFileSync(join(repo, 'scripts', 'SLASHDO_VERSION'), '0.0.0\n');
-  writeFileSync(join(repo, 'scripts', 'trusted-rebuilds.js'), `process.exit(${failAfterDelete ? 1 : 0});\n`);
+  const record = (value, exitCode) => `import { appendFileSync } from 'node:fs';
+    appendFileSync(${JSON.stringify(dependencyCalls)}, ${JSON.stringify(value + '\n')}); process.exit(${exitCode});\n`;
+  writeFileSync(join(repo, 'scripts', 'trusted-rebuilds.js'), record('rebuild server', failAfterDelete ? 1 : 0));
   for (const stub of STUB_SCRIPTS) {
     const optional = ['ensure-ffmpeg.js', 'install-slashdo.js'].includes(stub);
     // Executed by the real Node process, not a simulated updater step.
@@ -118,7 +122,7 @@ if (${pm2StartFailure} && args.startsWith('start') && !fs.existsSync(${JSON.stri
       `import { appendFileSync } from 'node:fs'; appendFileSync(${JSON.stringify(optionalCalls)}, ${JSON.stringify(stub + '\n')}); process.exit(1);\n`
       : 'process.exit(0);\n');
   }
-  writeFileSync(join(repo, 'scripts', 'verify-server-health.js'), `process.exit(${healthy ? 0 : 1});\n`);
+  writeFileSync(join(repo, 'scripts', 'verify-server-health.js'), record('health', healthy ? 0 : 1));
   // Non-zero means "the daemon is already ours", which skips the co-located
   // `pm2 update` restart — the branch a healthy install takes.
   writeFileSync(join(repo, 'scripts', 'pm2-daemon-refresh.js'), 'process.exit(1);\n');
@@ -131,39 +135,63 @@ if (${pm2StartFailure} && args.startsWith('start') && !fs.existsSync(${JSON.stri
   mkdirSync(join(repo, 'client', 'node_modules', 'vite', 'bin'), { recursive: true });
   writeFileSync(join(repo, 'client', 'node_modules', 'vite', 'bin', 'vite.js'), '');
 
-  // update.sh only ever calls these as bare commands, so a PATH shim covers
-  // every install and the slash-do refresh without touching the network.
-  const npmCode = npmShim === 'fail' ? 1 : 0;
-  if (restoreTrees) {
-    writeFileSync(join(scratch, 'restore-install.mjs'), `
-      import { mkdirSync, writeFileSync } from 'node:fs';
-      import { basename, join } from 'node:path';
-      const dir = process.cwd();
-      const touch = (rel) => {
-        const path = join(dir, rel);
-        mkdirSync(join(path, '..'), { recursive: true });
-        writeFileSync(path, '{}');
-      };
-      const name = basename(dir);
-      if (name === 'client') touch('node_modules/vite/bin/vite.js');
-      else if (name === 'server') {
-        touch('node_modules/express/package.json');
-        touch('node_modules/pg/package.json');
-      } else touch('node_modules/pm2/package.json');
-    `);
+  const packages = {
+    root: ['pm2'],
+    client: ['vite'],
+    server: ['express', 'pg'],
+  };
+  if (verified) {
+    for (const [label, names] of Object.entries(packages)) {
+      const dir = label === 'root' ? repo : join(repo, label);
+      const locked = { '': { name: label, version: '0.0.0' } };
+      for (const name of names) {
+        const path = `node_modules/${name}`;
+        locked[path] = { version: '0.0.0' };
+        mkdirSync(join(dir, path), { recursive: true });
+        writeFileSync(join(dir, path, 'package.json'), JSON.stringify({ name, version: '0.0.0' }));
+      }
+      writeFileSync(join(dir, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3, packages: locked }));
+      writeFileSync(join(dir, '.npmrc'), 'ignore-scripts=true\n');
+    }
+    writeDependencyHashes(repo);
   }
-  const restorePosix = restoreTrees
-    ? `${JSON.stringify(process.execPath)} ${JSON.stringify(join(scratch, 'restore-install.mjs'))}\n`
-    : '';
-  const restoreWindows = restoreTrees
-    ? `"${process.execPath}" "${join(scratch, 'restore-install.mjs')}"\r\n`
-    : '';
+
+  // Record the npm subprocess's actual cwd and arguments. Restore wiped trees
+  // for verified cases so the real update can continue through build and PM2.
+  const npmScript = join(scratch, 'npm-shim.mjs');
+  const pm2Fixture = verified ? readFileSync(join(repo, 'node_modules', 'pm2', 'bin', 'pm2'), 'utf8') : '';
+  const npmCode = npmShim === 'fail' ? 1 : 0;
+  writeFileSync(npmScript, `
+    import { appendFileSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+    import { basename, dirname, join } from 'node:path';
+    const args = process.argv.slice(2);
+    const dir = process.cwd();
+    const name = basename(dir);
+    const label = ['client', 'server'].includes(name) ? name : 'root';
+    appendFileSync(${JSON.stringify(dependencyCalls)}, label + ' ' + args.join(' ') + ${JSON.stringify('\n')});
+    if (${verified} && args[0] === 'install') {
+      const { packages } = JSON.parse(readFileSync(join(dir, 'package-lock.json'), 'utf8'));
+      const write = (rel, value) => {
+        const path = join(dir, rel);
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, value);
+      };
+      for (const [path, pkg] of Object.entries(packages)) {
+        if (path) write(join(path, 'package.json'), JSON.stringify(pkg));
+      }
+      if (label === 'client') write('node_modules/vite/bin/vite.js', '');
+      if (label === 'root') write('node_modules/pm2/bin/pm2', ${JSON.stringify(pm2Fixture)});
+    }
+    process.exit(${npmCode});
+  `);
   const shim = (name, posixBody, windowsBody) => {
     const path = join(bin, WINDOWS ? `${name}.cmd` : name);
     writeFileSync(path, WINDOWS ? `@echo off\r\n${windowsBody}\r\n` : `#!/bin/sh\n${posixBody}\n`);
     if (!WINDOWS) chmodSync(path, 0o755);
   };
-  for (const name of ['npm', 'npx']) shim(name, `${restorePosix}exit ${npmCode}`, `${restoreWindows}exit /b ${npmCode}`);
+  shim('npm', `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(npmScript)} "$@"`,
+    `"${process.execPath}" "${npmScript}" %*\r\nexit /b %errorlevel%`);
+  shim('npx', `exit ${npmCode}`, `exit /b ${npmCode}`);
   // The success case is the only one that runs past trusted-rebuilds, so it
   // reaches update.sh's ffmpeg step — which on a machine without ffmpeg would
   // run a real `brew install`, or on Linux CI a passwordless `sudo apt-get
@@ -186,7 +214,12 @@ if (${pm2StartFailure} && args.startsWith('start') && !fs.existsSync(${JSON.stri
   let aheadSha = null;
   if (originAhead) {
     if (lockfileOnly) {
-      writeFileSync(join(repo, 'client', 'package-lock.json'), '{"lockfileVersion":3,"name":"client-lock-only"}\n');
+      const file = join(repo, 'client', 'package-lock.json');
+      const lock = JSON.parse(readFileSync(file, 'utf8'));
+      lock.packages['node_modules/vite'].version = '0.0.1';
+      writeFileSync(file, JSON.stringify(lock));
+    } else if (configOnly) {
+      writeFileSync(join(repo, 'client', '.npmrc'), 'ignore-scripts=true\nprefer-offline=true\n');
     } else {
       writeFileSync(join(repo, 'ahead.txt'), 'ahead\n');
     }
@@ -259,7 +292,7 @@ if (${pm2StartFailure} && args.startsWith('start') && !fs.existsSync(${JSON.stri
   }
 
 
-  return { scratch, repo, bin, calls, optionalCalls, forceClean, releaseFile, nodeOptions: flags.join(' '), headSha, aheadSha, peerTarget };
+  return { scratch, repo, bin, calls, optionalCalls, dependencyCalls, forceClean, releaseFile, nodeOptions: flags.join(' '), headSha, aheadSha, peerTarget };
 }
 
 // The three runs share no state, so they go out concurrently rather than
@@ -327,7 +360,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('shared updater headless-install guard',
       postPullRefusal: { origin: true, originAhead: true, aheadRefusesInCheckout: true },
       unknownPrevious: { originAhead: true, aheadRefusesInCheckout: true, unknownPrevious: true },
       startFails: { failAfterDelete: false, pm2StartFailure: true },
-      cleanAhead: { nodeVersion: null, failAfterDelete: false, origin: true, originAhead: true },
+      cleanAhead: { failAfterDelete: false, originAhead: true, verified: true },
       // The failure the guard's own comment names: both npm installs fail, and
       // safe_install wiped root node_modules — pm2 included — on the way.
       pm2Wiped: { npmShim: 'fail', forceClean: true, pm2OnPath: true }
@@ -551,6 +584,18 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('shared updater headless-install guard',
     expect(pm2Calls(sandboxes.preDelete)).toEqual([]);
   });
 
+  const dependencyCalls = box => readFileSync(box.dependencyCalls, 'utf8').trim().split(/\r?\n/);
+  const installCalls = box => dependencyCalls(box).filter(call => call.endsWith(' install --no-save'));
+
+  it('builds and verifies a real code-only update without any workspace installs', () => {
+    const box = sandboxes.cleanAhead;
+    expect(results.cleanAhead.status, results.cleanAhead.stdout).toBe(0);
+    expect(dependencyCalls(box)).toEqual(['rebuild server', 'root run build', 'health']);
+    expect(pm2Calls(box).filter(call => call.startsWith('start '))).toHaveLength(1);
+    expect(results.cleanAhead.stdout).toContain('STEP:npm-install:done:Verified existing workspace dependencies');
+    expect(results.cleanAhead.stdout).toContain('STEP:verify:done:');
+  });
+
   function dependencyReceipt(dir) {
     const hash = createHash('sha256').update(readFileSync(join(dir, 'package.json'))).update('\0');
     const lockfile = join(dir, 'package-lock.json');
@@ -583,11 +628,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('shared updater headless-install guard',
 
   it('wipes node_modules for a lockfile-only update and leaves a receipt ensure-deps trusts', async () => {
     const box = await makeSandbox({
-      failAfterDelete: false, origin: true, originAhead: true, lockfileOnly: true, restoreTrees: true
+      failAfterDelete: false, origin: true, originAhead: true, lockfileOnly: true, verified: true
     });
     try {
       const result = await runUpdate(box);
       expect(result.status, result.stdout).toBe(0);
+      expect(installCalls(box)).toEqual(['client install --no-save']);
       expect(result.stdout).toContain('🧹 client package-lock.json changed in this update — clean reinstall (wiping node_modules)');
       expect(result.stdout).not.toContain('🧹 server ');
       expect(result.stdout).not.toContain('🧹 root ');
@@ -611,11 +657,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('shared updater headless-install guard',
 
   it('wipes the workspace named by a pending reconcile marker when the pull diff is empty', async () => {
     const box = await makeSandbox({
-      failAfterDelete: false, restoreTrees: true, pendingLockfiles: ['server/package-lock.json']
+      failAfterDelete: false, verified: true, pendingLockfiles: ['server/package-lock.json']
     });
     try {
       const result = await runUpdate(box);
       expect(result.status, result.stdout).toBe(0);
+      expect(installCalls(box)).toEqual(['server install --no-save']);
       expect(result.stdout).toContain('🧹 server package-lock.json changed in this update — clean reinstall (wiping node_modules)');
       expect(result.stdout).not.toContain('🧹 client ');
       expect(result.stdout).not.toContain('🧹 root ');
@@ -629,6 +676,76 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('shared updater headless-install guard',
       const output = execFileSync(process.execPath, ['scripts/ensure-deps.js'], { cwd: box.repo, encoding: 'utf8' });
       expect(output).not.toMatch(/reinstall|installing/i);
       expect(existsSync(join(box.repo, 'server', 'node_modules', 'npm-ran'))).toBe(false);
+    } finally {
+      await destroyGitSandbox(box.scratch);
+    }
+  }, 120000);
+
+  it.each([
+    ['changed npm config', { originAhead: true, configOnly: true }, ['client']],
+    ['missing package', {}, ['server']],
+    ['stale package version', {}, ['server']],
+    ['missing workspace receipt', {}, ['server']],
+    ['unknown Git baseline', { unknownPrevious: true }, ['root', 'client', 'server']],
+    ['forced clean repair', { forceClean: true }, ['root']],
+  ])('repairs %s and reuses the other verified workspaces', async (scenario, options, expected) => {
+    const box = await makeSandbox({ failAfterDelete: false, verified: true, ...options });
+    try {
+      const pg = join(box.repo, 'server', 'node_modules', 'pg', 'package.json');
+      const receipt = join(box.repo, 'data', 'deps-hashes.json');
+      if (scenario === 'missing package') rmSync(pg);
+      if (scenario === 'stale package version') writeFileSync(pg, '{"version":"0.0.1"}');
+      if (scenario === 'missing workspace receipt') {
+        const hashes = JSON.parse(readFileSync(receipt, 'utf8'));
+        delete hashes.server;
+        writeFileSync(receipt, JSON.stringify(hashes));
+      }
+
+      const result = await runUpdate(box, { automatic: true });
+      expect(result.status, result.stdout).toBe(0);
+      expect(installCalls(box)).toEqual(expected.map(label => `${label} install --no-save`));
+      expect(JSON.parse(readFileSync(pg, 'utf8')).version).toBe('0.0.0');
+      const hashes = JSON.parse(readFileSync(receipt, 'utf8'));
+      expect(hashes.server).toBe(dependencyReceipt(join(box.repo, 'server')));
+      if (scenario === 'changed npm config') {
+        const config = readFileSync(join(box.repo, 'client', '.npmrc'));
+        expect(config.toString()).toContain('prefer-offline=true');
+        expect(hashes.npmrc.client).toBe(createHash('sha256').update(config).digest('hex'));
+      }
+    } finally {
+      await destroyGitSandbox(box.scratch);
+    }
+  }, 120000);
+
+  it('preserves the pending reconciliation marker and prior receipts on failed native rebuild', async () => {
+    const box = await makeSandbox({ verified: true, pendingLockfiles: ['server/package-lock.json'] });
+    try {
+      const receipt = join(box.repo, 'data', 'deps-hashes.json');
+      const before = readFileSync(receipt, 'utf8');
+      const result = await runUpdate(box, { automatic: true });
+      expect(result.status).toBe(1);
+      expect(installCalls(box)).toEqual(['server install --no-save']);
+      expect(result.stdout).toContain('STEP:restart:warning:');
+      expect(existsSync(join(box.repo, 'data', 'dependency-reconcile-pending.json'))).toBe(true);
+      expect(readFileSync(receipt, 'utf8')).toBe(before);
+    } finally {
+      await destroyGitSandbox(box.scratch);
+    }
+  }, 120000);
+
+  it('refuses a linked tree before dependency commands or stopping apps', async () => {
+    const box = await makeSandbox({ verified: true });
+    try {
+      const modules = join(box.repo, 'server', 'node_modules');
+      const shared = join(box.scratch, 'shared-deps');
+      renameSync(modules, shared);
+      symlinkSync(shared, modules, WINDOWS ? 'junction' : 'dir');
+      const result = await runUpdate(box, { automatic: true });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain('Refusing update: node_modules is linked to another checkout.');
+      expect(pm2Calls(box)).toEqual([]);
+      expect(existsSync(box.dependencyCalls)).toBe(false);
+      expect(readFileSync(join(shared, 'pg', 'package.json'), 'utf8')).toContain('0.0.0');
     } finally {
       await destroyGitSandbox(box.scratch);
     }

@@ -1241,46 +1241,6 @@ export async function resetPersistentMindRuntimeResidue() {
   return result.state;
 }
 
-export async function setPersistentMindEnabled(enabled) {
-  if (!enabled) {
-    runtimeGeneration += 1;
-    activeAbortController?.abort('Persistent mind disabled');
-    cancel(PERSISTENT_MIND_WAKE_EVENT_ID);
-    cancel(PERSISTENT_MIND_WATCHDOG_EVENT_ID);
-    cancelUsageLimitProbe();
-    usageLimitProbeAttempt = 0;
-  }
-  const result = await mutateMindState((mind) => {
-    const changedToDisabled = !enabled && (mind.enabled || Boolean(mind.activeTurn));
-    const interruptedTurnId = !enabled ? mind.activeTurn?.id || null : null;
-    let next = mind;
-    if (!enabled && mind.activeTurn) next = releaseClaimedWake(next, mind.activeTurn.wake);
-    return {
-      mind: {
-        ...next,
-        enabled: Boolean(enabled),
-        started: enabled ? next.started : false,
-        status: enabled ? (next.started ? 'waiting' : 'idle') : 'disabled',
-        activeTurn: enabled ? next.activeTurn : null,
-        pauseReason: null,
-        nextEligibleWakeAt: enabled ? next.nextEligibleWakeAt : null,
-      },
-      value: { changedToDisabled, interruptedTurnId, mindId: mind.mindId },
-    };
-  });
-  if (result.value.changedToDisabled) {
-    await appendMindEvent({
-      kind: 'mind.paused',
-      mindId: result.value.mindId,
-      turnId: result.value.interruptedTurnId,
-      eventId: `mind-disabled:${result.value.interruptedTurnId || randomUUID()}`,
-      data: { status: 'disabled', error: 'Persistent mind disabled' },
-    });
-  }
-  emitMindStatus(result.state);
-  return result.state;
-}
-
 export async function startPersistentMind() {
   maintenance.assertOpen();
   const result = await mutateMindState((mind) => {
@@ -1663,30 +1623,6 @@ export async function enqueuePersistentMindMessage({
   const publicResult = { ...result.value };
   delete publicResult.acceptedMessage;
   return publicResult;
-}
-
-export async function requestPersistentMindWake({ sourceTurnId, reason, notBefore = nowIso() } = {}) {
-  const result = await mutateMindState((mind) => {
-    if (!sourceTurnId || sourceTurnId !== mind.lastCompletedTurnId) {
-      return { mind, value: { success: false, error: 'Self-wake must reference the last completed turn' } };
-    }
-    const selfWake = {
-      id: `wake-${randomUUID()}`,
-      kind: 'self',
-      scheduleKind: 'requested',
-      reason: String(reason || 'self-wake').slice(0, PERSISTENT_MIND_LIMITS.MAX_REASON_CHARS),
-      sourceTurnId,
-      createdAt: nowIso(),
-      notBefore,
-    };
-    return {
-      mind: { ...mind, selfWake, status: mind.started && mind.status !== 'paused' ? 'waiting' : mind.status },
-      value: { success: true, wakeId: selfWake.id },
-    };
-  });
-  if (result.value.success && result.state.started) await scheduleNextWake();
-  emitMindStatus(result.state);
-  return result.value;
 }
 
 export async function drainPersistentMind({ rearm = true } = {}) {

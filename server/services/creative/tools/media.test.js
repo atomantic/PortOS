@@ -54,6 +54,29 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllEnvs());
 
+// A real image library. A hosted video pin re-anchors a planner's start frame against the
+// approved image roots, so the frame has to be a file the gallery holds; `hostFile` exists
+// and is readable but sits outside every root, the way a planner-named host path would.
+let library;
+let libraryFrame;
+let hostFile;
+const savedLibraryPaths = {};
+beforeAll(() => {
+  library = mkdtempSync(join(tmpdir(), 'cd-media-library-'));
+  for (const key of ['images', 'imageRefs']) {
+    savedLibraryPaths[key] = PATHS[key];
+    PATHS[key] = join(library, key);
+    mkdirSync(PATHS[key]);
+  }
+  libraryFrame = join(PATHS.images, 'example-frame.png');
+  hostFile = join(library, 'private-notes.png');
+  for (const path of [libraryFrame, hostFile]) writeFileSync(path, 'x');
+});
+afterAll(() => {
+  Object.assign(PATHS, savedLibraryPaths);
+  rmSync(library, { recursive: true, force: true });
+});
+
 describe('model-aware autonomous video controls', () => {
   it('uses the same H3 options as Video Gen and drops controls its UI disables', () => {
     const params = reconcileVideoParamsWithModel({
@@ -259,6 +282,65 @@ describe('render-backend pin — image (#3135)', () => {
   });
 });
 
+// #18681: the planner writes these params freehand, and a hosted worker sends the files they
+// name to its provider. Model output must not be able to name a host file for upload.
+describe('planner-authored attachments on a hosted video pin', () => {
+  const pinned = (mode, extra = {}) => ({ ...projectWithPin({ video: { mode } }), ...extra });
+  const settingsFor = {
+    gemini: {},
+    fal: { videoGen: { fal: { apiKey: 'example-test-key' } } },
+    grok: { imageGen: { grok: { enabled: true, grokPath: '/bin/grok' } } },
+  };
+
+  it.each(['gemini', 'fal', 'grok'])('refuses a %s start frame the planner pointed at a host file', async (mode) => {
+    getSettings.mockResolvedValue(settingsFor[mode]);
+    getProject.mockResolvedValue(pinned(mode));
+    await expect(run('media_enqueueVideoJob', { prompt: 'p', sourceImagePath: hostFile }, { projectId: 'cd-1' }))
+      .rejects.toMatchObject({ code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED' });
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it.each(['gemini', 'grok'])('refuses planner-authored cast references on %s, which uploads each one', async (mode) => {
+    getSettings.mockResolvedValue(settingsFor[mode]);
+    getProject.mockResolvedValue(pinned(mode));
+    await expect(run('media_enqueueVideoJob', {
+      prompt: 'p', sourceImagePath: libraryFrame, castReferences: [{ path: hostFile, label: 'Ada' }],
+    }, { projectId: 'cd-1' })).rejects.toMatchObject({ code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED' });
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it.each(['sourceImagePath', 'sourceImageFile'])('renders a Gemini clip from a library start frame given as %s', async (key) => {
+    getSettings.mockResolvedValue({});
+    getProject.mockResolvedValue(pinned('gemini', { aspectRatio: '9:16', quality: 'standard', targetDurationSeconds: 8 }));
+    await run('media_enqueueVideoJob', { prompt: 'An example lighthouse', [key]: 'example-frame.png' }, { projectId: 'cd-1' });
+    expect(enqueued().params).toMatchObject({
+      mode: 'gemini', videoMode: 'image', prompt: 'An example lighthouse', sourceImagePath: libraryFrame,
+    });
+    expect(enqueued().params.height).toBeGreaterThan(enqueued().params.width);
+    for (const key of ['modelId', 'numFrames', 'fps', 'steps', 'sourceImageFile']) expect(enqueued().params).not.toHaveProperty(key);
+  });
+
+  it.each(['missing file', 'host file'])('refuses a sourceImageFile pointing at a %s before enqueue', async (location) => {
+    const sourceImageFile = location === 'host file' ? hostFile : 'missing-frame.png';
+    getSettings.mockResolvedValue({});
+    getProject.mockResolvedValue(pinned('gemini'));
+    await expect(run('media_enqueueVideoJob', { prompt: 'p', sourceImageFile }, { projectId: 'cd-1' }))
+      .rejects.toMatchObject({ code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED' });
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a negative prompt', { aspectRatio: '16:9' }, { negativePrompt: 'fog, crowds' }, /a negative prompt/],
+    ['a square project', { aspectRatio: '1:1' }, {}, /16:9 or 9:16 only/],
+  ])('refuses %s on Gemini before enqueue instead of rendering something else', async (_label, projectOver, paramsOver, message) => {
+    getSettings.mockResolvedValue({});
+    getProject.mockResolvedValue(pinned('gemini', { quality: 'standard', targetDurationSeconds: 8, ...projectOver }));
+    await expect(run('media_enqueueVideoJob', { prompt: 'An example lighthouse', ...paramsOver }, { projectId: 'cd-1' }))
+      .rejects.toMatchObject({ code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED', message: expect.stringMatching(message) });
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+});
+
 describe('commission style reference images (#8724)', () => {
   // Real files under temp gallery / image-ref roots, so the filename → path
   // resolution the render actually receives is exercised, not stubbed.
@@ -347,7 +429,7 @@ describe('render-backend pin — video (#3135)', () => {
   it('marks a grok video with a source frame as image-to-video', async () => {
     getSettings.mockResolvedValue({ imageGen: { grok: { enabled: true, grokPath: '/bin/grok' } } });
     getProject.mockResolvedValue(projectWithPin({ video: { mode: 'grok' } }));
-    await run('media_enqueueVideoJob', { prompt: 'p', sourceImagePath: '/tmp/frame.png' }, { projectId: 'cd-1' });
+    await run('media_enqueueVideoJob', { prompt: 'p', sourceImagePath: libraryFrame }, { projectId: 'cd-1' });
     expect(enqueued().params.videoMode).toBe('image');
   });
 
@@ -649,18 +731,30 @@ describe('cloud video pins reach the queue without local model reconciliation', 
     getProject.mockResolvedValue(cloudProject({ mode: 'reactor' }));
     await run('media_enqueueVideoJob', {
       prompt: 'An example lighthouse', mode: 'grok', modelId: 'local-planner-model',
-      sourceImagePath: '/tmp/example-frame.png', durationSeconds: 8,
+      sourceImagePath: libraryFrame, durationSeconds: 8, negativePrompt: '',
     }, { projectId: 'cd-1' });
 
     const { params } = enqueued();
     expect(params).toMatchObject({
       mode: 'reactor', videoMode: 'image', seconds: 8, aspect: '9:16',
-      sourceImagePath: '/tmp/example-frame.png',
+      sourceImagePath: libraryFrame,
     });
     expect(params.height).toBeGreaterThan(params.width);
     for (const key of ['modelId', 'pythonPath', 'numFrames', 'fps', 'steps', 'apiKey', 'settings']) {
       expect(params).not.toHaveProperty(key);
     }
+  });
+
+  it('refuses a planner-authored negative prompt on Reactor before enqueue', async () => {
+    getSettings.mockResolvedValue({ videoGen: { reactor: { apiKey: 'example-test-key' } } });
+    getProject.mockResolvedValue(cloudProject({ mode: 'reactor' }));
+
+    await expect(run('media_enqueueVideoJob', {
+      prompt: 'An example lighthouse', negativePrompt: 'fog, crowds',
+    }, { projectId: 'cd-1' })).rejects.toMatchObject({
+      code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED', message: expect.stringMatching(/reactor.*a negative prompt/),
+    });
+    expect(enqueueJob).not.toHaveBeenCalled();
   });
 
   it('preserves Reactor native continuation parameters', async () => {
@@ -690,7 +784,7 @@ describe('cloud video pins reach the queue without local model reconciliation', 
       renderDefaults: { 'creative-agent': { videoModel: 'local-default-model' } },
     });
     getProject.mockResolvedValue(cloudProject(null));
-    await run('media_enqueueVideoJob', { prompt: 'An example scene', modelId: 'local-planner-model', sourceImagePath: '/tmp/example.png' }, { projectId: 'cd-1' });
+    await run('media_enqueueVideoJob', { prompt: 'An example scene', modelId: 'local-planner-model', sourceImagePath: libraryFrame }, { projectId: 'cd-1' });
     expect(enqueued().params).toMatchObject({ mode: 'fal', videoMode: 'image', duration: 8 });
     expect(enqueued().params).not.toHaveProperty('modelId');
   });
@@ -708,7 +802,7 @@ describe('cloud video pins reach the queue without local model reconciliation', 
     { mode: 'reactor', videoMode: 'a2v', audioFilePath: '/tmp/example.wav' },
     { mode: 'text', disableAudio: true },
     { mode: 'text', batchSize: 2 },
-    { mode: 'image', sourceImagePath: '/tmp/example.png', loras: [{ path: '/tmp/example.safetensors', scale: 1 }] },
+    { mode: 'image', sourceImagePath: 'example-frame.png', loras: [{ path: '/tmp/example.safetensors', scale: 1 }] },
   ])('rejects unsupported cloud conditioning before enqueue: %j', async (params) => {
     getSettings.mockResolvedValue({ videoGen: { reactor: { apiKey: 'example-test-key' } } });
     getProject.mockResolvedValue(cloudProject({ mode: 'reactor' }));

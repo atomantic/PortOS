@@ -11,7 +11,7 @@ import { MemoryRouter } from 'react-router';
 vi.mock('../../services/apiCreativeDirector.js', () => ({ createCreativeDirectorProject: vi.fn(), updateCreativeDirectorProject: vi.fn() }));
 vi.mock('../../services/apiStoryboards.js', () => ({ startVideoFromStoryboard: vi.fn() }));
 vi.mock('../../services/apiImageVideo.js', () => ({ listVideoModels: vi.fn(() => Promise.resolve([])) }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 import { createCreativeDirectorProject, updateCreativeDirectorProject } from '../../services/apiCreativeDirector.js';
 import { startVideoFromStoryboard } from '../../services/apiStoryboards.js';
 import { listVideoModels } from '../../services/apiImageVideo.js';
@@ -42,6 +42,19 @@ it('restores and saves a Reactor pin even when the local model list is unavailab
   expect(screen.getByLabelText('Media model')).toHaveValue('fast-h3');
   await user.click(screen.getByRole('button', { name: 'Save draft' }));
   await waitFor(() => expect(updateCreativeDirectorProject).toHaveBeenCalledWith('reactor-draft', expect.objectContaining({ renderBackend: project.renderBackend }), { silent: true }));
+});
+
+it('says what Gemini cannot render next to the backend that was picked', async () => {
+  const user = userEvent.setup();
+  const project = { id: 'gemini-draft', name: 'Example gemini', workspace: 'video', aspectRatio: '1:1', renderBackend: { video: { mode: 'gemini' } } };
+  render(<MemoryRouter initialEntries={['/?videoDraftTab=production']}><VideoDraftDrawer open project={project} onClose={vi.fn()} onSaved={vi.fn()} /></MemoryRouter>);
+  expect(screen.getByLabelText('Media backend')).toHaveValue('gemini');
+  const hint = screen.getByText(/It renders 16:9 or 9:16 only, takes no negative prompt/);
+  expect(hint).toHaveTextContent('Choose 16:9 or 9:16 above before production.');
+  await user.selectOptions(screen.getByLabelText('Aspect ratio'), '9:16');
+  expect(hint).not.toHaveTextContent('before production');
+  await user.selectOptions(screen.getByLabelText('Media backend'), 'reactor');
+  expect(screen.queryByText(/takes no negative prompt/)).not.toBeInTheDocument();
 });
 
 it('defaults a new Video draft to native clip audio', async () => {

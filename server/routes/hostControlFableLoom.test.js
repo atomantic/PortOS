@@ -72,7 +72,6 @@ vi.mock('../services/fableLoom/index.js', () => ({
 }));
 
 vi.mock('../services/fableLoom/shotRuns.js', () => ({
-  planEpisodeShotRun: vi.fn(async () => ({ id: 'example-record' })),
   startEpisodeShotRun: vi.fn(async () => ({ id: 'example-record' })),
   getEpisodeShotRun: vi.fn(async () => ({ id: 'example-record' })),
   cancelEpisodeShotRun: vi.fn(async () => ({ id: 'example-record' })),
@@ -101,7 +100,6 @@ const generation = [
   ['post', `${loom}/playtest`, picker, fableLoom.reviewFableLoomPlaythroughs, 200],
   ['post', `${loom}/editorial/autopilot/start`, picker, fableLoom.startFableLoomEditorialAutopilot, 202, 200],
   ['post', `${episode}/weave`, picker, fableLoom.weaveEpisode, 200],
-  ['post', `${episode}/shots/plan`, picker, shotRuns.planEpisodeShotRun, 200],
   ['post', `${episode}/shots/start`, picker, shotRuns.startEpisodeShotRun, 202, 200],
   ['post', `${episode}/outline/generate`, picker, fableLoom.generateEpisodeOutline, 200],
   ['post', `${episode}/outline/review`, picker, fableLoom.reviewEpisodeOutline, 200],

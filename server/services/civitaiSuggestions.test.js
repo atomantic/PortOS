@@ -54,6 +54,23 @@ describe('getSuggestions', () => {
     expect(typeof out.fetchedAt).toBe('string');
   });
 
+  it('retries curated picks on the next request after an offline read instead of caching the gap', async () => {
+    let online = false;
+    const fetchImpl = async (url) => {
+      if (!online) throw new Error('offline');
+      const m = url.match(/api\/v1\/models\/(\d+)$/);
+      return mockJsonResponse(m ? buildModel(Number(m[1]), `Curated-${m[1]}`, 'Flux.1 D') : { items: [] });
+    };
+    expect((await svc.getSuggestions({ fetchImpl })).curated).toEqual([]);
+    online = true;
+    const { curated } = await svc.getSuggestions({ fetchImpl });
+    expect(curated.length).toBeGreaterThan(0);
+
+    online = false;
+    const forced = await svc.getSuggestions({ fetchImpl, force: true });
+    expect(forced.curated.map((card) => card.modelId)).toEqual(curated.map((card) => card.modelId));
+  });
+
   it('survives a curated fetch failure (one bad id) without dropping the rest', async () => {
     let calls = 0;
     const fetchImpl = async (url) => {

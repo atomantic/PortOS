@@ -161,21 +161,6 @@ describe.skipIf(!runDb)('privacy orgs DB round-trip', () => {
     expect(rows).toHaveLength(0);
   });
 
-  it('batch-flips holdings status across all orgs holding a record', async () => {
-    const record = await vault.createVaultRecord({ type: 'address', label: 'Old address', value: '9 Old Rd' });
-    createdVaultRecords.push(record.id);
-    const orgA = await orgs.createOrg({ name: 'Bank A' });
-    const orgB = await orgs.createOrg({ name: 'Bank B' });
-    createdOrgs.push(orgA.id, orgB.id);
-    await orgs.setOrgHoldings(orgA.id, [{ vaultRecordId: record.id, status: 'current' }]);
-    await orgs.setOrgHoldings(orgB.id, [{ vaultRecordId: record.id, status: 'current' }]);
-
-    const result = await orgs.setHoldingsStatus(record.id, 'current', 'update_pending');
-    expect(result.updated).toBe(2);
-    const holdingOrgs = await orgs.getOrgsHoldingRecord(record.id);
-    expect(holdingOrgs.every((h) => h.status === 'update_pending')).toBe(true);
-  });
-
   it('validation rejects unknown enum values at the service boundary via the schema layer', async () => {
     const { privacyOrgCreateSchema } = await import('../lib/privacyValidation.js');
     expect(() => privacyOrgCreateSchema.parse({ name: 'X', trust: 'bogus' })).toThrow();
@@ -183,9 +168,4 @@ describe.skipIf(!runDb)('privacy orgs DB round-trip', () => {
     expect(() => privacyOrgCreateSchema.parse({ name: 'X', status: 'bogus' })).toThrow();
   });
 
-  it('reports a holdings summary across orgs and vault records', async () => {
-    const summary = await orgs.getHoldingsSummary();
-    expect(Array.isArray(summary.byOrg)).toBe(true);
-    expect(Array.isArray(summary.byVaultRecord)).toBe(true);
-  });
 });

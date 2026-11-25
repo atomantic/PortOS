@@ -193,6 +193,11 @@ describe('telegram service', () => {
     return active;
   }
 
+  function sendCheckinCommand() {
+    const { fn } = h.textHandlers.find((t) => t.regex.source.includes('checkin'));
+    return fn({ chat: { id: 42 }, text: '/checkin' });
+  }
+
   it('stops a failed startup before returning and can connect again', async () => {
     const telegram = await loadTelegramActive();
     h.getMe.mockRejectedValueOnce(new Error('Temporary validation outage'));
@@ -444,7 +449,7 @@ describe('telegram service', () => {
       const { getGoals } = await import('./identity.js');
       getGoals.mockResolvedValue({ goals: [{ id: 'g1', title: 'Example Goal', status: 'active', progress: 40 }] });
       await telegram.init(false);
-      await telegram.sendCheckin();
+      await sendCheckinCommand();
       h.sendMessage.mockClear();
     }
 
@@ -479,7 +484,7 @@ describe('telegram service', () => {
       expect(fu.writes[0].data.checkins[0]).toMatchObject({ goalId: 'g1', response: 'Made good progress' });
     });
 
-    it('skips the scheduled send rather than asking about an arbitrary goal', async () => {
+    it('reports the unreadable log rather than asking about an arbitrary goal', async () => {
       const telegram = await loadTelegramActive();
       const { getGoals } = await import('./identity.js');
       getGoals.mockResolvedValue({ goals: [{ id: 'g1', title: 'Example Goal', status: 'active', progress: 40 }] });
@@ -487,9 +492,10 @@ describe('telegram service', () => {
       h.sendMessage.mockClear();
 
       fu.strictRead = { ok: false, value: { checkins: [] } };
-      await telegram.sendCheckin();
+      await sendCheckinCommand();
 
-      expect(h.sendMessage, 'staleness is unrankable without the log').not.toHaveBeenCalled();
+      expect(h.sendMessage).toHaveBeenCalledOnce();
+      expect(h.sendMessage.mock.calls[0][1], 'staleness is unrankable without the log').toContain("can't pick the most overdue goal");
     });
 
     it('treats a readable-but-shapeless log as untrustworthy rather than replacing it', async () => {
@@ -538,7 +544,7 @@ describe('telegram service', () => {
       const { getGoals } = await import('./identity.js');
       getGoals.mockResolvedValue({ goals: [{ id: 'g1', title: 'Example Goal', status: 'active', progress: 40 }] });
       await telegram.init(false);
-      await telegram.sendCheckin();
+      await sendCheckinCommand();
 
       const msgHandler = h.eventHandlers.message[0];
       h.sendMessage.mockRejectedValueOnce(new Error('Telegram 403: bot was blocked by the user'));
@@ -584,7 +590,7 @@ describe('telegram service', () => {
       const { getGoals } = await import('./identity.js');
       getGoals.mockResolvedValue({ goals: [{ id: 'g1', title: 'Example Goal', status: 'active', progress: 40 }] });
       await telegram.init(false);
-      await telegram.sendCheckin();
+      await sendCheckinCommand();
       h.sendMessage.mockClear();
       fu.writes = [];
       // Seed pre-existing history so a clobbered (rather than serialized) RMW
@@ -618,7 +624,7 @@ describe('telegram service', () => {
       const { getGoals } = await import('./identity.js');
       getGoals.mockResolvedValue({ goals: [{ id: 'g1', title: 'Example Goal', status: 'active', progress: 40 }] });
       await telegram.init(false);
-      await telegram.sendCheckin();
+      await sendCheckinCommand();
       h.sendMessage.mockClear();
 
       const { atomicWrite } = await import('../lib/fileUtils.js');
@@ -651,7 +657,7 @@ describe('telegram service', () => {
         ],
       });
       await telegram.init(false);
-      await telegram.sendCheckin(); // arms g1 (oldest/only-ranked checkin so far)
+      await sendCheckinCommand(); // arms g1 (oldest/only-ranked checkin so far)
       h.sendMessage.mockClear();
 
       const { readJSONFileStrict } = await import('../lib/fileUtils.js');
@@ -669,9 +675,9 @@ describe('telegram service', () => {
       await vi.waitFor(() => expect(releaseRead).toBeTypeOf('function'));
 
       // While that read is still in flight, a new question is armed for the
-      // SAME chat (explicit goalId skips loadCheckins entirely, so this isn't
-      // blocked by the deferred read).
-      await telegram.sendCheckin('g2');
+      // SAME chat (only the first read is deferred, so this one isn't blocked).
+      getGoals.mockResolvedValue({ goals: [{ id: 'g2', title: 'Second Goal', status: 'active', progress: 20 }] });
+      await sendCheckinCommand();
       expect(h.sendMessage).toHaveBeenCalledWith('42', expect.stringContaining('Second Goal'), expect.anything());
 
       // Release the delayed read and let the first response finish persisting.

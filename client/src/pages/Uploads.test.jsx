@@ -15,7 +15,7 @@ vi.mock('../services/apiMedia.js', () => ({
   deleteAllUploads: api.deleteAllUploads,
   getUploadUrl: api.getUploadUrl,
 }));
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 import Uploads from './Uploads';
 

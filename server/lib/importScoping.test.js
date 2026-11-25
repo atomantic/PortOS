@@ -22,12 +22,14 @@
  */
 
 import { beforeAll, describe, it, expect } from 'vitest';
-import { existsSync, readFileSync, readdirSync } from 'fs';
+import { existsSync, readdirSync } from 'fs';
 import { dirname, join, posix, relative, sep } from 'path';
 import { fileURLToPath } from 'url';
-import { staticImportClosure as walkImportClosure, staticImportSpecifiers } from './staticImportGraph.js';
+import { staticImportClosure as walkImportClosure } from './staticImportGraph.js';
+import { guardCorpus, readText } from '../../scripts/lib/guardCorpus.js';
 import {
   BOOT_CLOSURE_GROWTH_LIMIT,
+  cachedStaticImportSpecifiers,
   compareImportGrowth,
   evaluateWorkingTreeImportGrowth,
   formatImportGrowthReport,
@@ -47,7 +49,10 @@ const memoize = (fn) => {
     return cache.get(key);
   };
 };
-const closureIo = { specifiers: memoize(staticImportSpecifiers), exists: memoize(existsSync) };
+const closureIo = {
+  specifiers: memoize((file) => cachedStaticImportSpecifiers(readText(file))),
+  exists: memoize(existsSync),
+};
 const staticImportClosure = (entry) => walkImportClosure(entry, closureIo);
 
 // Server-relative POSIX paths, so a failure names `lib/db.js` rather than the
@@ -122,6 +127,8 @@ describe('instance identity stays a leaf (#6836)', () => {
 const MUSIC_VIDEO_STORE = /^services\/musicVideo\/(?:projects|requireProject)\.js$/;
 const MUSIC_VIDEO_STORE_UPWARD = /^services\/(?:musicVideo\/(?:projectPresentation|editResult|plateReview|shotSegments|pacingRecut|handoff|projectBoardEdits|projectFilmActions|blender\/[^/]+)\.js|storyboards\/followShots\.js|trackSunoImport\.js|imageGen\/local\.js|film\/[^/]+\.js)$/;
 const SELECTION_CUTS = [
+  ['lib/localProviderRuntime.js', 'lib/opencodeConfig.js',
+    'reads default base URLs from the opencodeLocalProviders.js leaf so the OpenCode config builder stays out of runtime checks (#18697)'],
   ['services/llamaServerManager.js', 'services/specDecodeModels.js',
     'resolves launcher paths from the leaf preset module so the download stack stays out of its closure'],
   ['services/branchReconcile/classify.js', /^services\/(?:git\.js$|worktreeManager\.js$|branchReconcile\.js$|cos\/)/,
@@ -258,7 +265,7 @@ const productionModulesIn = (dir) => readdirSync(abs(dir))
   .map(file => `${dir}/${file}`);
 
 const importTargets = (entry) => {
-  const { statics: eager, deferred: lazy } = moduleSpecifiers(readFileSync(abs(entry), 'utf-8'), entry);
+  const { statics: eager, deferred: lazy } = moduleSpecifiers(readText(abs(entry)), entry);
   return [...eager, ...lazy].filter((spec) => spec.startsWith('.'))
     .map((spec) => posix.normalize(posix.join(posix.dirname(entry), spec)));
 };
@@ -316,6 +323,11 @@ describe('CI-selection cuts stay cut (#12285)', () => {
   it('still sees the processPins.js edge a project read keeps (#17576)', () => {
     expect(importTargets('services/musicVideo/projectPresentation.js')).toContain('services/musicVideo/processPins.js');
     expect(importTargets('services/musicVideo/processPins.js')).toContain('services/musicVideo/castAndSets.js');
+  });
+
+  it('keeps the auto-review orchestrator out of boot hook registration', () => {
+    expect(reaches('services/bootHooks.js', 'services/musicVideo/autoReviewCompletionListeners.js')).toBe(true);
+    expect(reaches('services/bootHooks.js', 'services/musicVideo/autoReviewService.js')).toBe(false);
   });
 
   // Positive control for the media scan: the boot owner still names every runtime and helper.
@@ -402,7 +414,7 @@ const FIRST_REGISTRATION = /^[ \t]*(?:describe|it|test|beforeAll|beforeEach|afte
 
 describe('heavy test imports stay hoisted to file scope (#7951)', () => {
   it.each(HOISTED)('%s imports %s before any test or hook — it %s', (entry, specifier) => {
-    const src = readFileSync(abs(entry), 'utf-8');
+    const src = readText(abs(entry));
     const call = `import('${specifier}')`;
     const first = src.indexOf(call);
     expect(
@@ -432,7 +444,7 @@ describe('heavy test imports stay hoisted to file scope (#7951)', () => {
   // Positive control: the regex must actually FIND a registration in a file
   // that has one, or every row above would pass by comparing against -1.
   it('recognizes a test registration in a file that plainly has one', () => {
-    const src = readFileSync(abs('services/beeper/beeperOutboxHumanGate.test.js'), 'utf-8');
+    const src = readText(abs('services/beeper/beeperOutboxHumanGate.test.js'));
     expect(src.search(FIRST_REGISTRATION)).toBeGreaterThan(-1);
     expect(FIRST_REGISTRATION.test("  it('does a thing', () => {")).toBe(true);
     expect(FIRST_REGISTRATION.test('beforeAll(async () => {')).toBe(true);
@@ -447,7 +459,7 @@ const REPO_ROOT = dirname(SERVER_DIR);
 // Shared across both growth checks in this file so base/head git walks run once.
 let cachedHeadMeasurement = null;
 function getHeadMeasurement() {
-  if (!cachedHeadMeasurement) cachedHeadMeasurement = measureWorkingTree(REPO_ROOT);
+  if (!cachedHeadMeasurement) cachedHeadMeasurement = measureWorkingTree(REPO_ROOT, guardCorpus());
   return cachedHeadMeasurement;
 }
 
@@ -474,13 +486,14 @@ describe('server suite import growth (#7993)', () => {
   it('memoized closure walk agrees with staticImportClosure', () => {
     const read = (rel) => {
       try {
-        return readFileSync(join(REPO_ROOT, ...rel.split('/')), 'utf8');
+        return readText(join(REPO_ROOT, ...rel.split('/')));
       } catch {
         return null;
       }
     };
     for (const sample of ['server/lib/db.js', 'server/lib/pipelineValidation.js', 'server/services/agent/agentManagement.test.js', 'server/lib/editorial/checkInfra/taxonomy.js']) {
-      const measured = measureClosures([sample], read);
+      // Compare independent walks over this sample without collecting the boot graph.
+      const measured = measureClosures([sample], read, { bootEntry: null });
       expect(measured.total, sample).toBe(staticImportClosure(join(REPO_ROOT, ...sample.split('/'))).files.size);
     }
   });

@@ -11,7 +11,7 @@ vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({
   ...(await importOriginal()),
   ...api,
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 vi.mock('../imageGen/GalleryImagePicker', () => ({ default: () => null }));
 
 import useMusicVideoCoverLettering from '../../hooks/useMusicVideoCoverLettering.js';

@@ -8,6 +8,7 @@ import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlay
 import { listModels, listVisionModels, listToolUseModels, installModel, cancelModelInstall, switchBackend } from '../services/localLlm.js';
 import { enrichCatalogWithVariants, applyMeasuredFit } from '../services/huggingFaceCatalog.js';
 import { getMeasuredFits } from '../services/localModelAssessmentStore.js';
+import { listEndpointRuntimeModels } from '../services/localRuntimeEndpoints.js';
 import { runAssessment } from '../services/localModelAssessments.js';
 import { startSweep, getSweepStatus, cancelSweep } from '../services/localModelAssessmentSweep.js';
 import { runOpenCodeAgentBenchmark } from '../services/localModelAgentBenchmark.js';
@@ -15,7 +16,16 @@ import { getLoadedModels, unloadModel } from '../services/ollamaManager.js';
 import { getLoadedModels as getLoadedLmStudioModels, getLastLoadedModelsError as getLmStudioResidencyError } from '../services/lmStudioManager.js';
 import { getSettings, readSettingsStrict, updateSettingsWith } from '../services/settings.js';
 import { localLlmCompareSchema, localLlmTestSchema } from '../lib/mediaValidation.js';
-import { errorEvents } from '../lib/errorHandler.js';
+import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer } from '../services/splashServerManager.js';
+import { installMkserve, startMkserveServer, stopMkserveServer } from '../services/mkserveRuntimeManager.js';
+import { ServerError, errorEvents } from '../lib/errorHandler.js';
+import { saveProcessList } from '../services/pm2.js';
+import { syncRuntimeProviderModels } from '../services/localRuntimeProviderSync.js';
+import { startMtplxServer, stopMtplxServer, waitForMtplxReady } from '../services/mtplxServerManager.js';
+import { startSlotstreamServer, stopSlotstreamServer, waitForSlotstreamReady } from '../services/slotstreamServerManager.js';
+import { startLlamaServer, stopLlamaServer, waitForLlamaServerReady } from '../services/llamaServerManager.js';
+import { pullMtplxModel, removeMtplxModel } from '../services/mtplxModelManager.js';
+import { downloadSlotstreamModel } from '../services/slotstreamModelManager.js';
 
 const getModelAbuseGuardStatus = vi.fn(async () => ({ ready: false, modelCached: false, runtimeReady: false }));
 const installModelAbuseGuard = vi.fn(async () => ({ ok: true, ready: true }));
@@ -56,6 +66,8 @@ vi.mock('../services/modelAbuseGuard.js', () => ({
 vi.mock('../services/untrustedContent.js', () => ({
   getContributionAssessmentReadiness: vi.fn(async () => ({ ready: false, code: 'untrusted-content-model-required', sources: {} })),
 }));
+
+vi.mock('../services/localRuntimeEndpoints.js', () => ({ listEndpointRuntimeModels: vi.fn() }));
 
 vi.mock('../services/localLlmPlayground.js', () => ({
   runLocalLlmTest: vi.fn(),
@@ -126,10 +138,63 @@ vi.mock('../services/llamaServerManager.js', () => ({
   stopLlamaServer: vi.fn(async () => ({ success: true })),
   installLlamaServer: vi.fn(async () => ({ success: true, message: 'installed' })),
   upgradeLlamaServer: vi.fn(async () => ({ success: true, note: 'updated' })),
+  waitForLlamaServerReady: vi.fn(),
 }));
 
 // The launcher's curated presets (and their weights' on-disk state) ride along
 // on the status response so the card can offer a Download button per GGUF.
+vi.mock('../services/pm2.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  saveProcessList: vi.fn(async () => ({ saved: true })),
+}));
+vi.mock('../services/localRuntimeProviderSync.js', () => ({ syncRuntimeProviderModels: vi.fn(async () => false) }));
+vi.mock('../services/mtplxServerManager.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getMtplxServerStatus: vi.fn(),
+  startMtplxServer: vi.fn(),
+  stopMtplxServer: vi.fn(),
+  installMtplx: vi.fn(),
+  waitForMtplxReady: vi.fn(),
+}));
+vi.mock('../services/slotstreamServerManager.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getSlotstreamServerStatus: vi.fn(),
+  startSlotstreamServer: vi.fn(),
+  stopSlotstreamServer: vi.fn(),
+  installSlotstream: vi.fn(),
+  waitForSlotstreamReady: vi.fn(),
+}));
+vi.mock('../services/mtplxModelManager.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  searchMtplxCatalog: vi.fn(),
+  pullMtplxModel: vi.fn(),
+  previewMtplxPull: vi.fn(),
+  removeMtplxModel: vi.fn(),
+}));
+vi.mock('../services/slotstreamModelManager.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  cancelSlotstreamModelDownload: vi.fn(),
+  downloadSlotstreamModel: vi.fn(),
+  previewSlotstreamDownload: vi.fn(),
+}));
+vi.mock('../services/splashRuntimeStatus.js', () => ({
+  getSplashRuntimeStatus: vi.fn(async () => ({ supported: true, state: 'stopped', installed: true })),
+}));
+vi.mock('../services/splashServerManager.js', () => ({
+  SPLASH_APP: 'portos-splash',
+  installSplashRuntime: vi.fn(),
+  saveSplashContextWindow: vi.fn(),
+  startSplashServer: vi.fn(),
+  stopSplashServer: vi.fn(),
+}));
+vi.mock('../services/mkserveRuntimeManager.js', () => ({
+  MKSERVE_APP: 'portos-mkserve',
+  getMkserveRuntimeStatus: vi.fn(async () => ({ supported: true, state: 'stopped', installed: true })),
+  installMkserve: vi.fn(),
+  startMkserveServer: vi.fn(),
+  stopMkserveServer: vi.fn(),
+}));
+
 vi.mock('../services/specDecodeModels.js', () => ({
   getSpecDecodePresetStatus: vi.fn(async () => ([{ id: 'test-preset', label: 'Test', specType: 'draft-dspark', model: null, draftModel: null }])),
   downloadSpecDecodeModel: vi.fn(async () => ({ success: true, path: 'models/base.gguf', file: 'base.gguf' })),
@@ -329,7 +394,7 @@ describe('local LLM playground routes', () => {
     expect(installModel).toHaveBeenCalledWith('ollama', 'llama3.2', expect.any(Function), { force: false });
   });
 
-  it('runs a single local model test with validated defaults', async () => {
+  it('streams a single local model test with validated defaults', async () => {
     runLocalLlmTest.mockResolvedValue({
       backend: 'ollama',
       modelId: 'llama3.2',
@@ -339,11 +404,11 @@ describe('local LLM playground routes', () => {
     });
 
     const res = await request(makeApp())
-      .post('/api/local-llm/test')
+      .post('/api/local-llm/test/stream')
       .send({ backend: 'ollama', modelId: 'llama3.2', prompt: 'Say hello' });
 
     expect(res.status).toBe(200);
-    expect(res.body.text).toBe('hello');
+    expect(JSON.parse(res.text.trim()).result.text).toBe('hello');
     expect(runLocalLlmTest).toHaveBeenCalledWith({
       backend: 'ollama',
       modelId: 'llama3.2',
@@ -352,6 +417,7 @@ describe('local LLM playground routes', () => {
       temperature: 0.3,
       maxTokens: 1000,
       timeoutMs: 300000,
+      onToken: expect.any(Function),
       // Derived from res — lets a client disconnect tear down the upstream stream.
       signal: expect.any(AbortSignal),
     });
@@ -460,6 +526,52 @@ describe('local LLM playground routes', () => {
       },
       signal: expect.any(AbortSignal),
     });
+  });
+
+  it('accepts an endpoint-runtime target, rejects an unknown backend, and keeps install/delete on the managed pair', async () => {
+    compareLocalLlmModels.mockResolvedValue({ mode: 'round-robin', results: [] });
+    const ok = await request(makeApp())
+      .post('/api/local-llm/compare')
+      .send({ prompt: 'p', targets: [{ backend: 'ollama', modelId: 'a' }, { backend: 'llama', modelId: 'dflash' }] });
+    expect(ok.status).toBe(200);
+    expect(compareLocalLlmModels.mock.calls.at(-1)[0].targets[1]).toEqual({ backend: 'llama', modelId: 'dflash' });
+
+    const unknown = await request(makeApp())
+      .post('/api/local-llm/compare')
+      .send({ prompt: 'p', targets: [{ backend: 'nope', modelId: 'x' }] });
+    expect(unknown.status).toBe(400);
+
+    const install = await request(makeApp()).post('/api/local-llm/install').send({ backend: 'llama', modelId: 'dflash' });
+    expect(install.status).toBe(400);
+    const del = await request(makeApp()).post('/api/local-llm/delete').send({ backend: 'llama', modelId: 'dflash' });
+    expect(del.status).toBe(400);
+  });
+
+  it('streams an mtplx test as token frames then a result, and a down daemon is an inline error result', async () => {
+    runLocalLlmTest.mockImplementationOnce(async ({ onToken }) => {
+      await onToken('Hi', 'content');
+      return { backend: 'mtplx', modelId: 'm', text: 'Hi', timings: {} };
+    });
+    const up = await request(makeApp()).post('/api/local-llm/test/stream').send({ backend: 'mtplx', modelId: 'm', prompt: 'hi' });
+    expect(up.status).toBe(200);
+    expect(runLocalLlmTest.mock.calls.at(-1)[0]).toMatchObject({ backend: 'mtplx', modelId: 'm', prompt: 'hi' });
+    const upFrames = up.text.trim().split('\n').map((l) => JSON.parse(l));
+    expect(upFrames.map((f) => f.type)).toEqual(['token', 'result']);
+
+    runLocalLlmTest.mockResolvedValueOnce({ backend: 'mtplx', modelId: 'm', error: 'fetch failed', text: '' });
+    const down = await request(makeApp()).post('/api/local-llm/test/stream').send({ backend: 'mtplx', modelId: 'm', prompt: 'hi' });
+    expect(down.status).toBe(200);
+    expect(JSON.parse(down.text.trim())).toMatchObject({ type: 'result', result: { error: 'fetch failed' } });
+  });
+
+  it('lists the runtime models without running a generation', async () => {
+    const runtimes = [{ id: 'llama', label: 'llama.cpp', models: [{ id: 'dflash' }], offline: false, error: null }];
+    listEndpointRuntimeModels.mockResolvedValue(runtimes);
+    const res = await request(makeApp()).get('/api/local-llm/runtime-models');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ runtimes });
+    expect(runLocalLlmTest).not.toHaveBeenCalled();
+    expect(compareLocalLlmModels).not.toHaveBeenCalled();
   });
 
   it('rejects empty prompts before running a model', () => {
@@ -1076,5 +1188,178 @@ describe('local LLM catalog and loaded query validation', () => {
     const res = await request(makeApp()).get('/api/local-llm/loaded?fresh=1&fresh=0');
     expect(res.status).toBe(400);
     expect(getLoadedModels).not.toHaveBeenCalled();
+  });
+});
+
+describe.each([
+  { id: 'splash', install: installSplashRuntime, start: startSplashServer, stop: stopSplashServer },
+  { id: 'mkserve', install: installMkserve, start: startMkserveServer, stop: stopMkserveServer },
+])('$id lifecycle routes', ({ id, install, start, stop }) => {
+  const url = `/api/local-llm/${id}`;
+  const readStatus = (app) => request(app).get(`${url}/status`);
+  const mutate = (app, action) => request(app).post(`${url}/${action}`);
+
+  it('returns immediately, reports install progress, and rejects concurrent operations', async () => {
+    const app = makeApp();
+    let finish;
+    const transfer = new Promise((resolve) => { finish = resolve; });
+    install.mockImplementationOnce(({ onProgress }) => {
+      onProgress({ event: 'download', message: 'Downloading weights' });
+      return transfer;
+    });
+    try {
+      const accepted = await mutate(app, 'install');
+      expect(accepted.status).toBe(202);
+      expect(accepted.body.operation.action).toBe('install');
+      expect((await readStatus(app)).body.operation).toMatchObject({
+        action: 'install', message: expect.stringContaining('Downloading weights'),
+      });
+      expect((await mutate(app, 'start')).status).toBe(409);
+    } finally {
+      finish();
+    }
+    expect((await readStatus(app)).body).toMatchObject({ operation: null, lastError: null });
+    expect(app.get('io').emit).toHaveBeenCalledWith(
+      'localLlm:progress', expect.objectContaining({ event: 'complete', runtime: id }),
+    );
+  });
+
+  it('routes Update and Stop to the managed service, rejecting launch overrides', async () => {
+    const app = makeApp();
+    install.mockClear().mockResolvedValueOnce({});
+    stop.mockClear().mockResolvedValueOnce({});
+    start.mockClear();
+    const invalid = await mutate(app, 'start').send({ host: '0.0.0.0' });
+    expect(invalid.status).toBe(400);
+    expect(start).not.toHaveBeenCalled();
+    expect((await mutate(app, 'upgrade')).status).toBe(202);
+    expect(install).toHaveBeenCalledOnce();
+    expect((await mutate(app, 'stop')).status).toBe(202);
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it('surfaces actionable refusal after accepting a background start', async () => {
+    const app = makeApp();
+    start.mockRejectedValueOnce(new ServerError('Preset port is occupied. Stop the external process first.', { status: 409 }));
+    expect((await mutate(app, 'start')).status).toBe(202);
+    expect((await readStatus(app)).body).toMatchObject({
+      operation: null, lastError: 'Preset port is occupied. Stop the external process first.',
+    });
+    expect(app.get('io').emit).toHaveBeenCalledWith(
+      'localLlm:progress', expect.objectContaining({ event: 'error', runtime: id }),
+    );
+  });
+});
+
+
+describe('managed runtime provider-model refresh after a user lifecycle action', () => {
+  const post = (path, body = {}) => request(makeApp()).post(`/api/local-llm/${path}`).send(body);
+  const MODEL = 'example-org/example-model';
+
+  beforeEach(() => {
+    syncRuntimeProviderModels.mockClear();
+  });
+
+  it.each([
+    ['llama', 'llama-server/start', startLlamaServer, waitForLlamaServerReady],
+    ['mtplx', 'mtplx/start', startMtplxServer, waitForMtplxReady, {}],
+    ['slotstream', 'slotstream/start', startSlotstreamServer, waitForSlotstreamReady, {}],
+  ])('%s start refreshes after the response; a server still loading waits on its readiness probe', async (kind, path, start, waitFor) => {
+    start.mockResolvedValueOnce({ success: true, online: true, endpoint: 'http://127.0.0.1:9000/v1' });
+    const body = kind === 'llama' ? { model: 'preset' } : {};
+    expect((await post(path, body)).status).toBe(200);
+    expect(syncRuntimeProviderModels).toHaveBeenCalledTimes(1);
+    expect(syncRuntimeProviderModels.mock.calls[0][0]).toMatchObject({ kind, waitForReady: null });
+    expect(syncRuntimeProviderModels.mock.calls[0][0].io).toBeTruthy();
+
+    syncRuntimeProviderModels.mockClear();
+    start.mockResolvedValueOnce({ success: true, online: false, endpoint: 'http://127.0.0.1:9000/v1' });
+    waitFor.mockResolvedValueOnce({ ready: true });
+    expect((await post(path, body)).status).toBe(200);
+    await syncRuntimeProviderModels.mock.calls[0][0].waitForReady();
+    expect(waitFor).toHaveBeenCalledWith('http://127.0.0.1:9000/v1');
+  });
+
+  it('does not wait on the refresh: the response returns while it is still pending', async () => {
+    startMtplxServer.mockResolvedValueOnce({ success: true, online: true, endpoint: 'http://127.0.0.1:8000/v1' });
+    syncRuntimeProviderModels.mockReturnValueOnce(new Promise(() => {}));
+    expect((await post('mtplx/start')).status).toBe(200);
+  });
+
+  it.each([
+    ['llama-server/start', startLlamaServer, { model: 'preset' }],
+    ['mtplx/start', startMtplxServer, {}],
+    ['slotstream/start', startSlotstreamServer, {}],
+    ['mtplx/models/pull', pullMtplxModel, { model: MODEL }],
+    ['mtplx/models/remove', removeMtplxModel, { model: MODEL }],
+    ['slotstream/models/download', downloadSlotstreamModel, { model: MODEL }],
+  ])('%s that throws refreshes nothing', async (path, action, body) => {
+    action.mockRejectedValueOnce(new ServerError('refused', { status: 400 }));
+    expect((await post(path, body)).status).toBe(400);
+    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['mtplx', 'mtplx/models/pull', pullMtplxModel],
+    ['slotstream', 'slotstream/models/download', downloadSlotstreamModel],
+  ])('%s checkpoint download refreshes only when it reports success', async (kind, path, action) => {
+    action.mockResolvedValueOnce({ success: false });
+    await post(path, { model: MODEL });
+    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
+    action.mockResolvedValueOnce({ success: true });
+    await post(path, { model: MODEL });
+    expect(syncRuntimeProviderModels.mock.calls[0][0]).toMatchObject({ kind, waitForReady: null });
+  });
+
+  it('mtplx checkpoint removal refreshes', async () => {
+    removeMtplxModel.mockResolvedValueOnce({ success: true });
+    await post('mtplx/models/remove', { model: MODEL });
+    expect(syncRuntimeProviderModels.mock.calls[0][0]).toMatchObject({ kind: 'mtplx' });
+  });
+
+  it.each(['splash', 'mkserve'])('%s refreshes after a successful background start only', async (id) => {
+    const start = { splash: startSplashServer, mkserve: startMkserveServer }[id];
+    start.mockResolvedValueOnce({ success: true });
+    expect((await post(`${id}/start`)).status).toBe(202);
+    await vi.waitFor(() => expect(syncRuntimeProviderModels).toHaveBeenCalledTimes(1));
+    expect(syncRuntimeProviderModels.mock.calls[0][0]).toMatchObject({ kind: id, waitForReady: null });
+
+    syncRuntimeProviderModels.mockClear();
+    start.mockRejectedValueOnce(new ServerError('port in use', { status: 409 }));
+    const app = makeApp();
+    expect((await request(app).post(`/api/local-llm/${id}/start`)).status).toBe(202);
+    await vi.waitFor(async () => expect((await request(app).get(`/api/local-llm/${id}/status`)).body.lastError).toBe('port in use'));
+    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['llama-server/stop', stopLlamaServer],
+    ['mtplx/stop', stopMtplxServer],
+    ['slotstream/stop', stopSlotstreamServer],
+  ])('%s never refreshes: an unreachable daemon is no evidence the set changed', async (path, stop) => {
+    stop.mockResolvedValueOnce({ success: true });
+    expect((await post(path)).status).toBe(200);
+    expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
+  });
+});
+
+it('validates and saves the Splash next-start context through the runtime route', async () => {
+  const app = makeApp();
+  const save = (contextWindow) => request(app).put('/api/local-llm/splash/context').send({ contextWindow });
+  expect((await save(1010000)).status).toBe(400);
+  expect((await save('1000000')).status).toBe(400);
+  expect(saveSplashContextWindow).not.toHaveBeenCalled();
+  saveSplashContextWindow.mockResolvedValueOnce({ requestedContextWindow: 1000000 });
+  const result = await save(1000000);
+  expect(result.status).toBe(200);
+  expect(result.body).toEqual({ requestedContextWindow: 1000000 });
+  expect(saveSplashContextWindow).toHaveBeenCalledWith(1000000);
+});
+
+it('save-startup leaves every on-demand runtime out of the boot dump', async () => {
+  const res = await request(makeApp()).post('/api/local-llm/save-startup');
+  expect(res.status).toBe(200);
+  expect(saveProcessList).toHaveBeenCalledWith(null, {
+    exclude: ['portos-mtplx', 'portos-slotstream', 'portos-splash', 'portos-mkserve'],
   });
 });

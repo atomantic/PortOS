@@ -8,21 +8,21 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { PREVIEW_PAGE_CSP } from '../../lib/generatedPreviewSandbox.js';
+import { injectPreviewHead } from '../../lib/htmlPreviewHead.js';
 
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/;
 const SCRATCH_DIR = 'music-video-song-renders';
 
 // Any CSP the generated page declares is replaced: the host's policy is the only one.
+// It must be parsed before any model markup, so a `<head>` in a comment, an
+// attribute or a script literal is never the anchor (#17555).
 function injectPolicy(html, { csp, audioGlobal, audioDataUrl }) {
   const stripped = String(html).replace(/<meta\b[^>]*http-equiv\s*=\s*["']?Content-Security-Policy["']?[^>]*>/gi, '');
   const audio = audioDataUrl && IDENT.test(String(audioGlobal || ''))
     ? `<script>window[${JSON.stringify(audioGlobal)}] = ${JSON.stringify(audioDataUrl).replace(/</g, '\\u003c')};</script>`
     : '';
   const tags = `<meta http-equiv="Content-Security-Policy" content="${csp}">${audio}`;
-  const head = stripped.match(/<head[^>]*>/i);
-  if (!head) return `${tags}${stripped}`;
-  const at = head.index + head[0].length;
-  return `${stripped.slice(0, at)}${tags}${stripped.slice(at)}`;
+  return injectPreviewHead(stripped, tags);
 }
 
 /** `name` must be unique per run; the caller removes `scratchRoot` when done. */

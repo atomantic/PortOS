@@ -237,8 +237,6 @@ export function getCommissionPlanError(plan, directive) {
 export const getToolSpecs = ({ includeDestructive = false, targetAbility = null } = {}) =>
   filterForTargetAbility(filterDestructive(CREATIVE_TOOLS, includeDestructive), targetAbility).map(toSpec);
 
-export const getAllCreativeToolNames = () => CREATIVE_TOOLS.map((t) => t.name);
-
 /**
  * Plain metadata for EVERY registered tool (id, description, costClass,
  * longRunning, destructive) — the plan-board / directive-composer consumers

@@ -507,11 +507,6 @@ def _attach(planned: list[tuple[nn.Module, str, _LoRAProjection]]) -> None:
             setattr(parent, leaf, LoRALinear(current, [adapter]))
 
 
-def apply_lora(transformer: nn.Module, path: str | Path, scale: float = 1.0) -> None:
-    """Load and attach one MiniMax H3 LoRA to a DiT in place."""
-    _attach(_plan_lora(transformer, path, scale))
-
-
 def apply_loras(transformer: nn.Module, loras: list[dict[str, Any]]) -> None:
     """Attach the ordered ``[{path, scale}]`` adapters used by the H3 runner.
 

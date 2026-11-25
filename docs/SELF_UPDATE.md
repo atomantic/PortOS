@@ -247,7 +247,9 @@ the feature is on) checks, in order:
 2. **Something to update to** — a newer release tag (`release`), or origin's default branch
    ahead of this checkout / `installState.outOfSync` (`main`). Nothing to do is a no-op.
 3. **Checkout readiness** (`updateRepoReadiness.js`) — see below.
-4. **System idle** (`lib/systemIdle.js`) — no render running **or queued**, no CoS agent or
+4. **System idle** (`lib/systemIdle.js`) — no render running **or queued**, no detached job
+   tracked in `renderActivity.js` (downloads, song analysis, voice training, exports,
+   Homebrew jobs), no CoS agent or
    queued task, no Persistent Mind turn or queued message, no app operation, no update
    already in flight. An unreadable Persistent Mind state counts as busy, matching the
    update path's own `PERSISTENT_MIND_STATE_UNTRUSTED` refusal.
@@ -361,6 +363,17 @@ Verify `/api/system/health` after each run and record the commit and exact resul
 If a run fails, retain `data/update.log` and its terminal result; do not merge on a
 failed recovery. Restore the disposable instance from its known-good snapshot
 rather than guessing which partial setup or migration ran.
+
+## When the updater reuses dependencies
+
+The updater checks root, client and server separately. It skips a workspace's
+npm install when the last install receipt matches its manifest, lockfile and
+project `.npmrc`, and the packages on disk match the lockfile. Older v2 receipts
+still identify the manifest and lockfile, but workspaces with a project
+`.npmrc` acquire configuration evidence on their next install. Changed inputs,
+missing or stale packages, forced repair and pending reconciliation take the
+repair path. The server's trusted native rebuilds, client build, PM2 restart
+and health verification still run when all three trees are reused.
 
 ## Running a customized fork
 

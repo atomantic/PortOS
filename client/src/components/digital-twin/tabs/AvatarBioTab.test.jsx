@@ -13,7 +13,7 @@ vi.mock('../../../hooks/useProviderModels', () => ({
   }),
 }));
 vi.mock('../../ProviderModelSelector', () => ({ default: () => null }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 import AvatarBioTab from './AvatarBioTab';
 import { getAvatarBio } from '../../../services/apiDigitalTwin.js';

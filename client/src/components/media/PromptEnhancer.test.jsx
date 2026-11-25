@@ -23,9 +23,7 @@ vi.mock('../../services/apiMediaJobs.js', () => ({
   refineMediaPrompt: vi.fn(),
 }));
 
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn(), loading: vi.fn() }),
-}));
+vi.mock('../ui/Toast');
 
 describe('PromptEnhancer', () => {
   beforeEach(() => {

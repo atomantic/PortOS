@@ -36,9 +36,12 @@ members reach (so a lockfile bump invalidates exactly the suites that reach
 the bumped packages); a Python sidecar's resolvable sibling imports; the
 version of an external program a member reaches (`TEST_MEMO_TOOLS`: the
 python the sidecar tests spawn — a literal, `PORTOS_TEST_PYTHON`, or an
-interpreter bound from `resolveTestPython()`; ffmpeg/ffprobe; and Chrome for
+interpreter bound from `resolveTestPython()`; ffmpeg/ffprobe; Chrome for
 the browser suites, found with the suites' own candidate list,
-`resolveTestChrome` in `scripts/lib/testChrome.js`); an unknown program
+`resolveTestChrome` in `scripts/lib/testChrome.js`; and Git, with the
+settings its repositories inherit, when a product module in the key spawns it
+or the test declares its repositories fixtures
+([Git fixtures](./TEST_MEMO_GIT_FIXTURES.md))); an unknown program
 handed a `.py` file fails closed; the workspace Vitest config closure, setup files,
 `scripts/vitestCiPool.js`, `package.json` and lockfile (the workspace base,
 below); the full Node
@@ -273,13 +276,16 @@ operates on the normalized value itself as a segment.
 ## Never memoized (fails closed)
 
 A tree guard, named `*.guard.test.js` (the planner selects guards by that
-suffix, see [GITHUB_ACTIONS.md](GITHUB_ACTIONS.md)); any other file in the
+suffix, see [CI_HIDDEN_CONTENT_GATE.md](CI_HIDDEN_CONTENT_GATE.md#guard-selection-and-registration)); any other file in the
 planner's always-run set or in `TEST_MEMO_NEVER` (the catalog and enumeration
 tests another selector reaches); a
 file whose closure contains the `// test-memo: never` marker; a test file or
-`scripts/` module that spawns `git` (repository state is not in the key —
+`scripts/` module that spawns `git`, named in the call, by a name that holds
+it or by a caller of a runner (repository state is not in the key —
 product modules that run git on their own targets are under the test's
-control); a test file or `scripts/` member that reads machine-local state
+control; a test file that declares its repositories fixtures with
+`// test-memo: git-fixture` is keyed by git itself instead:
+[TEST_MEMO_GIT_FIXTURES.md](./TEST_MEMO_GIT_FIXTURES.md)); a test file or `scripts/` member that reads machine-local state
 (`data/`, the home directory); any member that reads
 a path whose variable segment nothing bounds
 ([Variable path segments](#variable-path-segments)); a member that reads a path the analyzer
@@ -409,9 +415,9 @@ Every other key line (file bytes, records, packages, tools, Node, platform,
 arch and other env values) stays this run's own, and entries are still written
 under the run's own key only.
 
-Smoke uses its own stable two-shard assignment before the runner checks memo
-entries. The smoke jobs restore and merge both trusted full-run browser shard
-lineages, so a suite that moves can still reuse its former owner's verdict.
+Smoke can use a different stable shard assignment. Smoke jobs read all trusted
+full-run browser shard lineages, so a suite that moves can still reuse its
+former owner's verdict.
 Full-profile jobs keep their per-partition restore and save behavior.
 
 `smoke` skips `[fidelity]` cases and `full` skips `[local-performance]` ones.
@@ -422,6 +428,17 @@ on a line that mentions `local-performance` without `[fidelity]`. The reverse
 never holds: a `smoke` entry skipped the fidelity cases, so `full` and
 `fidelity` accept only their own entries. The verbose listing marks such a
 skip `(recorded key, full profile verdict)`.
+
+Browser shards check the memo before provisioning audio tools. A shard with
+verified hits for every suite skips audio and client setup. Before a client
+install exists, the check can use unconditional package versions from the
+integrity-pinned client lockfile, which must match the lockfile in the memo
+key. Test execution still keys the installed package manifests. If provisioning
+ffmpeg could turn every remaining verdict into a hit, the shard checks again
+before client setup and browser startup. A cold memo or a definite miss goes
+straight from audio provisioning to the usual client setup and test runner.
+Only a successful browser run that records green entries saves a new memo.
+An unavailable tool cannot supply a browser memo hit or green entry.
 
 ## Shards
 

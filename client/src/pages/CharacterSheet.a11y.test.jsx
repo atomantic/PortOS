@@ -27,9 +27,7 @@ vi.mock('../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
 }));
 
-vi.mock('../components/ui/Toast', () => ({
-  default: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
-}));
+vi.mock('../components/ui/Toast');
 
 import CharacterSheet from './CharacterSheet';
 

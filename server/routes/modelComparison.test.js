@@ -72,6 +72,16 @@ it('merges newer installed evidence with shipped evidence and includes only sele
   expect((await request(app).get('/comparison')).body.observations.some(row => row.id === imported.id)).toBe(true);
 });
 
+it('omits raw observations only in the summary view and retains both composites', async () => {
+  const full = await request(app).get('/comparison');
+  const summary = await request(app).get('/comparison?view=summary');
+  expect(full.status).toBe(200);
+  expect(summary.status).toBe(200);
+  const { observations, ...expected } = full.body;
+  expect(observations).toHaveLength(seed.observations.length);
+  expect(summary.body).toEqual(expected);
+});
+
 it('exposes Terra pricing and measured effort scores to existing Codex installs', async () => {
   await writeFile(join(dir, 'model-comparison.json'), JSON.stringify({ schemaVersion: 1, observations: [observation] }));
   const codexApp = express();

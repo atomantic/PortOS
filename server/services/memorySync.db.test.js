@@ -17,8 +17,7 @@
  *
  * `*.db.test.js` → runs ONLY via `npm run test:db` against `portos_test`, never
  * the real `portos` DB (the db.js runner guard + the suite skip below enforce
- * this). Registered in `DB_TEST_INCLUDE` in `vitest.config.db.js`, without which
- * it would silently never run.
+ * this).
  *
  * `applyRemoteChanges` reads and writes the whole `memories` table by id, so
  * like `memoryDB.db.test.js` this suite clears the table and seeds its own rows.

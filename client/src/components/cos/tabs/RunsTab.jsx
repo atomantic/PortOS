@@ -4,6 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { Trash2, RotateCcw, ScrollText, Square } from 'lucide-react';
 import {
   getRuns,
+  getRun,
   deleteRun,
   stopRun,
   getRunPrompt,
@@ -11,6 +12,7 @@ import {
   deleteFailedRuns,
 } from '../../../services/apiRuns.js';
 import { TABS } from '../constants';
+import { agentPath, taskPath } from '../crossLinks.js';
 import socket from '../../../services/socket';
 import { formatTime, formatRuntime, formatBytes, formatDateTime } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -42,10 +44,34 @@ export default function RunsTab() {
   // The failed run whose system logs are open in the log modal, or null.
   const [logModalRun, setLogModalRun] = useState(null);
 
+  // Server total behind the newest-100 page, for the "newest N of total" note.
+  const [totalRuns, setTotalRuns] = useState(null);
+  // A deep-linked run outside the loaded page: { status: 'loading'|'ready'|'missing', run }.
+  const [pinned, setPinned] = useState(null);
+  // The totals are a side effect of the fetcher, which useListResource cannot
+  // drop with the rows: only the newest read (and no read that predates a local
+  // delete, which also bumps totalGen) may write them.
+  const totalGen = useRef(0);
   const fetchRuns = useCallback(
-    () => getRuns(100, 0, sourceFilter, { silent: true }).then(data => data?.runs || []),
+    () => {
+      const gen = ++totalGen.current;
+      return getRuns(100, 0, sourceFilter, { silent: true }).then(data => {
+      if (gen === totalGen.current) {
+        setTotalRuns({ source: sourceFilter, total: Number.isFinite(data?.total) ? data.total : null });
+      }
+      return data?.runs || [];
+      });
+    },
     [sourceFilter]
   );
+  // A confirmed local delete lowers the server total by `count`; null when the
+  // count is unknown for this source filter, which hides the note until a re-read.
+  const adjustTotal = (count) => {
+    totalGen.current += 1;
+    setTotalRuns(prev => (prev && count !== null && prev.total !== null
+      ? { ...prev, total: Math.max(0, prev.total - count) }
+      : null));
+  };
   const { items: runs, state: runsState, error: runsError, retry: loadRuns, setItems: setRuns } = useListResource(fetchRuns);
   const loading = runsState === 'loading';
 
@@ -58,12 +84,15 @@ export default function RunsTab() {
   // is running, is held and read once that settles (that read may have seen
   // the record before the change), so a burst costs at most one follow-up read.
   // A failed re-read keeps the last successful rows on screen.
+  // Set below; the socket-driven re-read calls it so one handler covers both.
+  const refreshPinnedRef = useRef(null);
   const runsReady = useRef(false);
   runsReady.current = runsState === 'ready';
   const refreshGeneration = useRef(0);
   const refreshInFlight = useRef(false);
   const refreshPending = useRef(false);
   const refreshRuns = useCallback(() => {
+    refreshPinnedRef.current?.();
     if (!runsReady.current || refreshInFlight.current) {
       refreshPending.current = true;
       return;
@@ -122,8 +151,10 @@ export default function RunsTab() {
     const deleted = await deleteRun(id).catch(() => null);
     if (!deleted && deleted !== undefined) return;
     supersedeRefresh();
+    adjustTotal(1);
     setRuns(prev => prev.filter(run => run.id !== id));
     if (expandedId === id) setExpandedId(null);
+    if (pinRef.current?.run?.id === id) dropPin();
   };
 
   const handleStop = async (id, e) => {
@@ -140,7 +171,7 @@ export default function RunsTab() {
     }
     // Completion metadata lands asynchronously after the child process exits;
     // refresh once so the row transitions from Running to its terminal state.
-    await loadRuns();
+    await Promise.all([loadRuns(), refreshPinned()]);
     setStoppingIds((prev) => {
       const next = new Set(prev);
       next.delete(id);
@@ -175,13 +206,95 @@ export default function RunsTab() {
   // Open the run named by `?run=<id>` on entry — the Local LLM Playground links
   // straight at a run it just finished. One-shot: switching CoS tabs drops the
   // param, and the user stays free to collapse the row afterwards.
-  const deepLinkOpened = useRef(false);
+  const deepLinkOpened = useRef(null);
   useEffect(() => {
-    if (deepLinkOpened.current || !deepLinkRunId || loading) return;
+    if (deepLinkOpened.current === deepLinkRunId || !deepLinkRunId || loading) return;
     if (!runs.some(run => run.id === deepLinkRunId)) return;
-    deepLinkOpened.current = true;
+    deepLinkOpened.current = deepLinkRunId;
     expandRun(deepLinkRunId);
   }, [deepLinkRunId, loading, runs, expandRun]);
+
+  // A link can name a run older than the newest-100 page. Resolve it by id (one
+  // GET, only on this miss) and pin it above the list; a 404 shows a notice, any
+  // other failure a retryable error. Every pinned read (first lookup and the
+  // re-reads below) takes a generation from pinGen and applies only while it is
+  // still the newest, so a changed selection, a delete or a later read drops it;
+  // pinTarget is the id in play, which also keeps one miss to one read.
+  const pinTarget = useRef(null);
+  const pinGen = useRef(0);
+  const pinRef = useRef(null);
+  pinRef.current = pinned;
+  const [pinRetry, setPinRetry] = useState(0);
+  // At most one pinned read in flight plus one follow-up, like the list refresh:
+  // a burst of invalidations must not keep superseding the read that would land.
+  const pinFlight = useRef(false);
+  const pinPending = useRef(false);
+  const pinFlightToken = useRef(0);
+  const dropPin = useCallback(() => {
+    pinGen.current += 1;
+    setPinned(null);
+  }, []);
+  const readPinned = useCallback((id) => {
+    const initial = !(pinRef.current?.status === 'ready' && pinRef.current.run.id === id);
+    const gen = ++pinGen.current;
+    return getRun(id, { silent: true }).then(
+      (run) => {
+        if (gen !== pinGen.current) return;
+        if (!run?.id) { if (initial) setPinned({ status: 'missing', run: null }); return; }
+        setPinned({ status: 'ready', run });
+        if (initial) expandRun(run.id);
+      },
+      (err) => {
+        if (gen !== pinGen.current) return;
+        if (err?.status === 404) setPinned({ status: 'missing', run: null });
+        else if (initial) setPinned({ status: 'error', run: null, message: err?.message || 'request failed' });
+      }
+    );
+  }, [expandRun]);
+  const startPinnedRead = useCallback((id) => {
+    pinFlight.current = true;
+    const token = pinFlightToken.current;
+    readPinned(id).finally(() => {
+      if (token !== pinFlightToken.current) return;
+      pinFlight.current = false;
+      if (!pinPending.current) return;
+      pinPending.current = false;
+      if (pinTarget.current && pinRef.current) startPinnedRead(pinTarget.current);
+    });
+  }, [readPinned]);
+  // Any change of the ?run= selection (including clearing it) retires the pin
+  // and the read in flight for the previous one.
+  useEffect(() => () => {
+    dropPin();
+    deepLinkOpened.current = null;
+    pinTarget.current = null;
+    pinFlight.current = false;
+    pinPending.current = false;
+    pinFlightToken.current += 1;
+  }, [deepLinkRunId, dropPin]);
+  useEffect(() => {
+    if (!deepLinkRunId || pinTarget.current === deepLinkRunId || deepLinkOpened.current === deepLinkRunId || runsState !== 'ready') return;
+    if (runs.some(run => run.id === deepLinkRunId)) return;
+    pinTarget.current = deepLinkRunId;
+    setPinned({ status: 'loading', run: null });
+    startPinnedRead(deepLinkRunId);
+  }, [deepLinkRunId, runsState, runs, startPinnedRead, pinRetry]);
+  const retryPinned = () => {
+    pinTarget.current = null;
+    setPinRetry(n => n + 1);
+  };
+
+  // Lifecycle invalidations and a Stop reach the pinned run too: re-read it by
+  // id (newest read wins) so it cannot keep showing Running after it ended.
+  const refreshPinned = useCallback(() => {
+    if (!pinTarget.current || !pinRef.current) return Promise.resolve();
+    if (pinFlight.current) {
+      pinPending.current = true;
+      return Promise.resolve();
+    }
+    return startPinnedRead(pinTarget.current);
+  }, [startPinnedRead]);
+  refreshPinnedRef.current = refreshPinned;
 
   const handleResume = async (run, e) => {
     e.stopPropagation();
@@ -240,12 +353,262 @@ export default function RunsTab() {
   const logProc = logModalRun ? runLogProcessName(logModalRun.source) : '';
 
   const handleClearFailed = async () => {
-    const ok = await deleteFailedRuns().then(() => true).catch(() => false);
-    if (ok) {
+    const result = await deleteFailedRuns().catch(() => null);
+    if (result !== null) {
       supersedeRefresh();
+      // deletedCount spans every source, so it only adjusts the unfiltered total.
+      adjustTotal(sourceFilter === 'all' && Number.isFinite(result?.deletedCount) ? result.deletedCount : null);
       setRuns(prev => prev.filter(r => r.success !== false));
+      if (pinRef.current?.run?.success === false) dropPin();
+      else if (pinRef.current?.status === 'loading') refreshPinned();
     }
   };
+
+  const renderRun = (run) => (
+    <div key={run.id}>
+      <div
+        className="p-3 sm:p-4 hover:bg-port-border/20 cursor-pointer group"
+        onClick={() => toggleExpand(run.id)}
+        {...clickableProps(() => toggleExpand(run.id))}
+        onKeyDown={onActivateKeyDown(() => toggleExpand(run.id))}
+        data-testid={`run-row-${run.id}`}
+      >
+        <div className="flex flex-wrap items-center gap-2 sm:gap-4">
+          <div className="flex items-center gap-3 flex-1 basis-64 min-w-0">
+            <button
+              type="button"
+              className="text-gray-400 hover:text-white shrink-0"
+              onClick={(event) => {
+                event.stopPropagation();
+                toggleExpand(run.id);
+              }}
+              aria-label={expandedId === run.id ? 'Collapse run details' : 'Expand run details'}
+            >
+              <span className={`inline-block transition-transform ${expandedId === run.id ? 'rotate-90' : ''}`}>▶</span>
+            </button>
+            <span className="text-xl shrink-0">🤖</span>
+            <div className="flex-1 min-w-0">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="font-medium text-white">{run.providerName}</span>
+                <span className="text-gray-500 text-sm">{run.model}</span>
+                <ExecutionOptionsAttribution value={run.executionOptions} />
+                {run.source === 'cos-agent' && (
+                  <span className="text-xs text-port-accent-2 bg-port-accent-2/10 px-2 py-0.5 rounded">
+                    CoS
+                  </span>
+                )}
+                {run.workspaceName && (
+                  <span className="text-xs text-port-accent bg-port-accent/10 px-2 py-0.5 rounded">
+                    {run.workspaceName}
+                  </span>
+                )}
+                {run.duration && (
+                  <span className="text-xs text-cyan-400 font-mono">{formatRuntime(run.duration)}</span>
+                )}
+              </div>
+              <div className="text-xs text-gray-500 font-mono truncate mt-1">
+                {run.prompt?.substring(0, 100)}{run.prompt?.length > 100 ? '...' : ''}
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 min-w-0">
+            <span className="inline-flex items-center gap-1.5 text-sm text-gray-400 shrink-0">
+              <span aria-hidden="true" className={`w-2 h-2 rounded-full shrink-0 ${run.success ? 'bg-port-success' : run.success === false ? 'bg-port-error' : 'bg-port-warning'}`} />
+              {run.success ? 'Succeeded' : run.success === false ? 'Failed' : 'Running'}
+            </span>
+            <span className="text-sm text-gray-500 shrink-0">{formatTime(run.startTime)}</span>
+            {run.success === false && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setLogModalRun(run); }}
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent transition-colors"
+                title="View system logs"
+                aria-label="View system logs"
+                data-testid={`view-logs-${run.id}`}
+              >
+                <ScrollText size={14} />
+              </button>
+            )}
+            {run.success !== null && (
+              <button
+                onClick={(e) => handleResume(run, e)}
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent transition-colors"
+                title="Resume run" aria-label="Resume run"
+                data-testid={`resume-run-${run.id}`}
+              >
+                <RotateCcw size={14} />
+              </button>
+            )}
+            {run.success === null && (
+              <button
+                onClick={(e) => handleStop(run.id, e)}
+                disabled={stoppingIds.has(run.id)}
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors disabled:opacity-40"
+                title={stoppingIds.has(run.id) ? 'Stopping run' : 'Stop run'}
+                aria-label={stoppingIds.has(run.id) ? 'Stopping run' : 'Stop run'}
+                data-testid={`stop-run-${run.id}`}
+              >
+                <Square size={14} fill="currentColor" />
+              </button>
+            )}
+            <button
+              onClick={(e) => handleDelete(run.id, e)}
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
+              title="Delete run" aria-label="Delete run"
+              data-testid={`delete-run-${run.id}`}
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {run.claudeSignInExpiring === true && (
+        <div className="px-3 pb-3 sm:px-4 sm:pb-4 min-w-0">
+          <Banner tone="warning" size="md" title="Claude Code sign-in expires soon" srLabel={false} role="note">
+            <p>Renew the sign-in with <code>claude auth login</code>. The CLI notice in the run output has the expiry window.</p>
+          </Banner>
+        </div>
+      )}
+
+      {/* Failure guidance stays visible; only execution diagnostics collapse. */}
+      {(run.error || run.success === false) && (() => {
+        const exitInfo = getExitCodeInfo(run.exitCode);
+        const hasExitCode = run.exitCode !== undefined && run.exitCode !== null && run.exitCode !== 0;
+        return (
+          <div className="px-3 pb-3 sm:px-4 sm:pb-4 min-w-0">
+            <Banner tone="error" size="md" title="Run failed" srLabel={false} role="note">
+              <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">
+                {run.error || (hasExitCode ? exitInfo.description : 'This run did not complete successfully.')}
+              </p>
+              {run.suggestedFix && (
+                <p className="mt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">
+                  <span className="font-medium">Suggested fix: </span>{run.suggestedFix}
+                </p>
+              )}
+            </Banner>
+          </div>
+        );
+      })()}
+
+      {/* Expanded Details */}
+      {expandedId === run.id && (
+        <div className="px-4 pb-4 bg-port-bg border-t border-port-border">
+          <div className="pt-4 space-y-4">
+            {/* Execution ID */}
+            <div className="mb-4">
+              <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Execution ID</div>
+              <div className="flex items-center gap-2">
+                <code className="text-xs text-gray-400 font-mono select-all">{run.id}</code>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    writeClipboardSilently(run.id);
+                  }}
+                  className="p-1 text-gray-500 hover:text-white transition-colors"
+                  title="Copy execution ID"
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                </button>
+                {run.source === 'cos-agent' && (
+                  <Link to={`${runEventsPath}?${new URLSearchParams({ run: run.id })}`}
+                    className="inline-flex min-h-11 items-center px-2 text-xs text-port-accent hover:underline">
+                    View run events
+                  </Link>
+                )}
+                {run.source === 'cos-agent' && run.agentId && (
+                  <Link to={agentPath(run.agentId)}
+                    className="inline-flex min-h-11 items-center px-2 text-xs text-port-accent hover:underline">
+                    View agent
+                  </Link>
+                )}
+                {run.source === 'cos-agent' && run.taskId && (
+                  <Link to={taskPath(run.taskId)}
+                    className="inline-flex min-h-11 items-center px-2 text-xs text-port-accent hover:underline">
+                    View task
+                  </Link>
+                )}
+              </div>
+            </div>
+
+            {/* Metadata Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 text-sm">
+              <div>
+                <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Started</div>
+                <div className="text-gray-300">{formatDateTime(run.startTime)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Status</div>
+                <div className={run.success ? 'text-port-success' : run.success === false ? 'text-port-error' : 'text-port-warning'}>
+                  {run.success ? 'Success' : run.success === false ? 'Failed' : 'Running'}
+                </div>
+              </div>
+              {run.duration && (
+                <div>
+                  <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Duration</div>
+                  <div className="text-cyan-400 font-mono">{formatRuntime(run.duration)}</div>
+                </div>
+              )}
+              {run.exitCode !== undefined && run.exitCode !== null && (
+                <div>
+                  <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Exit Code</div>
+                  <div className={`font-mono ${run.exitCode === 0 ? 'text-port-success' : 'text-port-error'}`}>
+                    {run.exitCode}
+                  </div>
+                </div>
+              )}
+              {run.errorCategory && run.errorCategory !== 'unknown' && (
+                <div>
+                  <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Failure category</div>
+                  <div className="text-gray-300 [overflow-wrap:anywhere]">{run.errorCategory}</div>
+                </div>
+              )}
+              {run.outputSize && (
+                <div>
+                  <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Output Size</div>
+                  <div className="text-gray-300 font-mono">{formatBytes(run.outputSize)}</div>
+                </div>
+              )}
+            </div>
+
+            {run.errorDetails && run.errorDetails !== run.error && (
+              <div>
+                <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Additional error details</div>
+                <pre className="text-xs text-port-error/80 font-mono whitespace-pre-wrap break-all">
+                  {run.errorDetails}
+                </pre>
+              </div>
+            )}
+
+            {/* Prompt */}
+            <div>
+              <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Prompt</div>
+              <div className="bg-port-card border border-port-border rounded-lg p-3 max-h-48 overflow-auto">
+                <pre className="text-sm text-gray-300 font-mono whitespace-pre-wrap break-all">
+                  {expandedDetails[run.id]?.prompt || run.prompt || <BrailleSpinner text="Loading prompt" />}
+                </pre>
+              </div>
+            </div>
+
+            {/* Output - show for all completed runs */}
+            {run.success !== null && (
+              <div>
+                <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Output</div>
+                <div className="bg-port-card border border-port-border rounded-lg p-3 max-h-64 overflow-auto">
+                  <pre className="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all">
+                    {expandedDetails[run.id]?.output !== undefined
+                      ? (expandedDetails[run.id].output || '(no output)')
+                      : 'Loading output...'}
+                  </pre>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <div className="space-y-4 lg:space-y-6">
@@ -305,6 +668,24 @@ export default function RunsTab() {
         ))}
       </div>
 
+      {totalRuns?.source === sourceFilter && totalRuns.total > runs.length && (
+        <p className="text-xs text-gray-500">Showing the newest {runs.length} of {totalRuns.total} runs</p>
+      )}
+      {pinned?.status === 'missing' && (
+        <Banner tone="info" size="md" srLabel={false} role="note">Run not found or deleted.</Banner>
+      )}
+      {pinned?.status === 'error' && (
+        <Banner tone="error" size="md" srLabel={false} role="alert">
+          Could not load run {deepLinkRunId} — {pinned.message}{' '}
+          <button type="button" onClick={retryPinned} className="min-h-11 underline">Retry</button>
+        </Banner>
+      )}
+      {pinned?.status === 'ready' && !runs.some(run => run.id === pinned.run.id) && (
+        <div className="bg-port-card border border-port-accent/40 rounded-lg sm:rounded-xl overflow-hidden" data-testid="pinned-run">
+          {renderRun(pinned.run)}
+        </div>
+      )}
+
       {/* Runs List */}
       <div className="bg-port-card border border-port-border rounded-lg sm:rounded-xl overflow-hidden">
         {runsState === 'error' ? (
@@ -315,239 +696,7 @@ export default function RunsTab() {
           </div>
         ) : (
           <div className="divide-y divide-port-border">
-            {filteredRuns.map(run => (
-              <div key={run.id}>
-                <div
-                  className="p-3 sm:p-4 hover:bg-port-border/20 cursor-pointer group"
-                  onClick={() => toggleExpand(run.id)}
-                  {...clickableProps(() => toggleExpand(run.id))}
-                  onKeyDown={onActivateKeyDown(() => toggleExpand(run.id))}
-                  data-testid={`run-row-${run.id}`}
-                >
-                  <div className="flex flex-wrap items-center gap-2 sm:gap-4">
-                    <div className="flex items-center gap-3 flex-1 basis-64 min-w-0">
-                      <button
-                        type="button"
-                        className="text-gray-400 hover:text-white shrink-0"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          toggleExpand(run.id);
-                        }}
-                        aria-label={expandedId === run.id ? 'Collapse run details' : 'Expand run details'}
-                      >
-                        <span className={`inline-block transition-transform ${expandedId === run.id ? 'rotate-90' : ''}`}>▶</span>
-                      </button>
-                      <span className="text-xl shrink-0">🤖</span>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                          <span className="font-medium text-white">{run.providerName}</span>
-                          <span className="text-gray-500 text-sm">{run.model}</span>
-                          <ExecutionOptionsAttribution value={run.executionOptions} />
-                          {run.source === 'cos-agent' && (
-                            <span className="text-xs text-port-accent-2 bg-port-accent-2/10 px-2 py-0.5 rounded">
-                              CoS
-                            </span>
-                          )}
-                          {run.workspaceName && (
-                            <span className="text-xs text-port-accent bg-port-accent/10 px-2 py-0.5 rounded">
-                              {run.workspaceName}
-                            </span>
-                          )}
-                          {run.duration && (
-                            <span className="text-xs text-cyan-400 font-mono">{formatRuntime(run.duration)}</span>
-                          )}
-                        </div>
-                        <div className="text-xs text-gray-500 font-mono truncate mt-1">
-                          {run.prompt?.substring(0, 100)}{run.prompt?.length > 100 ? '...' : ''}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-3 min-w-0">
-                      <span className="inline-flex items-center gap-1.5 text-sm text-gray-400 shrink-0">
-                        <span aria-hidden="true" className={`w-2 h-2 rounded-full shrink-0 ${run.success ? 'bg-port-success' : run.success === false ? 'bg-port-error' : 'bg-port-warning'}`} />
-                        {run.success ? 'Succeeded' : run.success === false ? 'Failed' : 'Running'}
-                      </span>
-                      <span className="text-sm text-gray-500 shrink-0">{formatTime(run.startTime)}</span>
-                      {run.success === false && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setLogModalRun(run); }}
-                          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent transition-colors"
-                          title="View system logs"
-                          aria-label="View system logs"
-                          data-testid={`view-logs-${run.id}`}
-                        >
-                          <ScrollText size={14} />
-                        </button>
-                      )}
-                      {run.success !== null && (
-                        <button
-                          onClick={(e) => handleResume(run, e)}
-                          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent transition-colors"
-                          title="Resume run" aria-label="Resume run"
-                          data-testid={`resume-run-${run.id}`}
-                        >
-                          <RotateCcw size={14} />
-                        </button>
-                      )}
-                      {run.success === null && (
-                        <button
-                          onClick={(e) => handleStop(run.id, e)}
-                          disabled={stoppingIds.has(run.id)}
-                          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors disabled:opacity-40"
-                          title={stoppingIds.has(run.id) ? 'Stopping run' : 'Stop run'}
-                          aria-label={stoppingIds.has(run.id) ? 'Stopping run' : 'Stop run'}
-                          data-testid={`stop-run-${run.id}`}
-                        >
-                          <Square size={14} fill="currentColor" />
-                        </button>
-                      )}
-                      <button
-                        onClick={(e) => handleDelete(run.id, e)}
-                        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
-                        title="Delete run" aria-label="Delete run"
-                        data-testid={`delete-run-${run.id}`}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {run.claudeSignInExpiring === true && (
-                  <div className="px-3 pb-3 sm:px-4 sm:pb-4 min-w-0">
-                    <Banner tone="warning" size="md" title="Claude Code sign-in expires soon" srLabel={false} role="note">
-                      <p>Renew the sign-in with <code>claude auth login</code>. The CLI notice in the run output has the expiry window.</p>
-                    </Banner>
-                  </div>
-                )}
-
-                {/* Failure guidance stays visible; only execution diagnostics collapse. */}
-                {(run.error || run.success === false) && (() => {
-                  const exitInfo = getExitCodeInfo(run.exitCode);
-                  const hasExitCode = run.exitCode !== undefined && run.exitCode !== null && run.exitCode !== 0;
-                  return (
-                    <div className="px-3 pb-3 sm:px-4 sm:pb-4 min-w-0">
-                      <Banner tone="error" size="md" title="Run failed" srLabel={false} role="note">
-                        <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">
-                          {run.error || (hasExitCode ? exitInfo.description : 'This run did not complete successfully.')}
-                        </p>
-                        {run.suggestedFix && (
-                          <p className="mt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">
-                            <span className="font-medium">Suggested fix: </span>{run.suggestedFix}
-                          </p>
-                        )}
-                      </Banner>
-                    </div>
-                  );
-                })()}
-
-                {/* Expanded Details */}
-                {expandedId === run.id && (
-                  <div className="px-4 pb-4 bg-port-bg border-t border-port-border">
-                    <div className="pt-4 space-y-4">
-                      {/* Execution ID */}
-                      <div className="mb-4">
-                        <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Execution ID</div>
-                        <div className="flex items-center gap-2">
-                          <code className="text-xs text-gray-400 font-mono select-all">{run.id}</code>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              writeClipboardSilently(run.id);
-                            }}
-                            className="p-1 text-gray-500 hover:text-white transition-colors"
-                            title="Copy execution ID"
-                          >
-                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                            </svg>
-                          </button>
-                          {run.source === 'cos-agent' && (
-                            <Link to={`${runEventsPath}?${new URLSearchParams({ run: run.id })}`}
-                              className="inline-flex min-h-11 items-center px-2 text-xs text-port-accent hover:underline">
-                              View run events
-                            </Link>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Metadata Grid */}
-                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 text-sm">
-                        <div>
-                          <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Started</div>
-                          <div className="text-gray-300">{formatDateTime(run.startTime)}</div>
-                        </div>
-                        <div>
-                          <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Status</div>
-                          <div className={run.success ? 'text-port-success' : run.success === false ? 'text-port-error' : 'text-port-warning'}>
-                            {run.success ? 'Success' : run.success === false ? 'Failed' : 'Running'}
-                          </div>
-                        </div>
-                        {run.duration && (
-                          <div>
-                            <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Duration</div>
-                            <div className="text-cyan-400 font-mono">{formatRuntime(run.duration)}</div>
-                          </div>
-                        )}
-                        {run.exitCode !== undefined && run.exitCode !== null && (
-                          <div>
-                            <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Exit Code</div>
-                            <div className={`font-mono ${run.exitCode === 0 ? 'text-port-success' : 'text-port-error'}`}>
-                              {run.exitCode}
-                            </div>
-                          </div>
-                        )}
-                        {run.errorCategory && run.errorCategory !== 'unknown' && (
-                          <div>
-                            <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Failure category</div>
-                            <div className="text-gray-300 [overflow-wrap:anywhere]">{run.errorCategory}</div>
-                          </div>
-                        )}
-                        {run.outputSize && (
-                          <div>
-                            <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Output Size</div>
-                            <div className="text-gray-300 font-mono">{formatBytes(run.outputSize)}</div>
-                          </div>
-                        )}
-                      </div>
-
-                      {run.errorDetails && run.errorDetails !== run.error && (
-                        <div>
-                          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Additional error details</div>
-                          <pre className="text-xs text-port-error/80 font-mono whitespace-pre-wrap break-all">
-                            {run.errorDetails}
-                          </pre>
-                        </div>
-                      )}
-
-                      {/* Prompt */}
-                      <div>
-                        <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Prompt</div>
-                        <div className="bg-port-card border border-port-border rounded-lg p-3 max-h-48 overflow-auto">
-                          <pre className="text-sm text-gray-300 font-mono whitespace-pre-wrap break-all">
-                            {expandedDetails[run.id]?.prompt || run.prompt || <BrailleSpinner text="Loading prompt" />}
-                          </pre>
-                        </div>
-                      </div>
-
-                      {/* Output - show for all completed runs */}
-                      {run.success !== null && (
-                        <div>
-                          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Output</div>
-                          <div className="bg-port-card border border-port-border rounded-lg p-3 max-h-64 overflow-auto">
-                            <pre className="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all">
-                              {expandedDetails[run.id]?.output !== undefined
-                                ? (expandedDetails[run.id].output || '(no output)')
-                                : 'Loading output...'}
-                            </pre>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
+            {filteredRuns.map(renderRun)}
           </div>
         )}
       </div>

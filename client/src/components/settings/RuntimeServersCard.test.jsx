@@ -1,32 +1,24 @@
 import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
+import { LOCAL_RUNTIME_DESCRIPTORS } from './localRuntimeDescriptors.js';
 import RuntimeServersCard from './RuntimeServersCard.jsx';
 
 // Every row renders the same status/action vocabulary, so a text query alone
 // would match the wrong runtime. Scope to the row that names it.
 const row = (label) => screen.getByRole('group', { name: label });
 
-const renderCard = (props = {}) => {
+const renderCard = ({ llamaStatus, mtplxStatus, slotstreamStatus, ...props } = {}) => {
+  const statuses = { llama: llamaStatus, mtplx: mtplxStatus, slotstream: slotstreamStatus };
   const handlers = {
     onRefresh: vi.fn(),
     onControlOllama: vi.fn(),
     onUpgradeOllama: vi.fn(),
     onControlLmStudio: vi.fn(),
     onInstallBackend: vi.fn(),
-    onInstallLlama: vi.fn(),
-    onUpgradeLlama: vi.fn(),
-    onStopLlama: vi.fn(),
-    onConfigureLlama: vi.fn(),
-    onConfigureMtplx: vi.fn(),
-    onInstallMtplx: vi.fn(),
-    onStartMtplx: vi.fn(),
+    onAction: vi.fn(),
+    onSelectRuntime: vi.fn(),
     onSaveIdleWindow: vi.fn(),
-    onStopMtplx: vi.fn(),
-    onConfigureSlotstream: vi.fn(),
-    onInstallSlotstream: vi.fn(),
-    onStartSlotstream: vi.fn(),
-    onStopSlotstream: vi.fn(),
     onSaveStartup: vi.fn(),
     onToggleKeepLoaded: vi.fn(),
   };
@@ -34,8 +26,7 @@ const renderCard = (props = {}) => {
     <MemoryRouter>
       <RuntimeServersCard
         status={{ ollama: { canAutoInstall: true }, lmstudio: {} }}
-        llamaStatus={null}
-        mtplxStatus={null}
+        runtimes={Object.values(LOCAL_RUNTIME_DESCRIPTORS).map((descriptor) => ({ descriptor, status: statuses[descriptor.id] }))}
         loading={false}
         busy={false}
         actionInProgress={null}
@@ -110,7 +101,7 @@ describe('RuntimeServersCard', () => {
     expect(within(llama).getByText(/Choose Configure to pick a model/)).toBeInTheDocument();
 
     fireEvent.click(within(llama).getByRole('button', { name: /Configure/ }));
-    expect(handlers.onConfigureLlama).toHaveBeenCalled();
+    expect(handlers.onSelectRuntime).toHaveBeenCalledWith('llama');
   });
 
   it('shows a llama.cpp update and delegates the action to the runtime handler', () => {
@@ -130,7 +121,7 @@ describe('RuntimeServersCard', () => {
     expect(within(llama).getByText('v0.3.0 available')).toBeInTheDocument();
     fireEvent.click(within(llama).getByRole('button', { name: 'Update to v0.3.0' }));
 
-    expect(handlers.onUpgradeLlama).toHaveBeenCalledWith();
+    expect(handlers.onAction).toHaveBeenCalledWith('llama', 'upgrade');
   });
 
   it('shows an Ollama update on its roster row, not only inside the backend card', () => {
@@ -189,7 +180,7 @@ describe('RuntimeServersCard', () => {
       mtplxStatus: { installed: true, running: false, supported: true, cachedModels: ['Example/Qwen-MTP'], endpoint: 'http://127.0.0.1:8000/v1' },
     });
     fireEvent.click(within(row('MTPLX')).getByRole('button', { name: /^Start/ }));
-    expect(handlers.onStartMtplx).toHaveBeenCalledWith();
+    expect(handlers.onAction).toHaveBeenCalledWith('mtplx', 'start');
   });
 
   it('keeps MTPLX Start unavailable when no checkpoint is cached', () => {
@@ -208,7 +199,7 @@ describe('RuntimeServersCard', () => {
       mtplxStatus: { installed: true, running: true, managed: true, supported: true, cachedModels: ['Example/Qwen-MTP'] },
     });
     fireEvent.click(within(row('MTPLX')).getByRole('button', { name: /^Stop/ }));
-    expect(handlers.onStopMtplx).toHaveBeenCalled();
+    expect(handlers.onAction).toHaveBeenCalledWith('mtplx', 'stop');
   });
 
   it('invokes a row action with NO arguments — never React\'s click event', () => {
@@ -219,7 +210,7 @@ describe('RuntimeServersCard', () => {
       mtplxStatus: { installed: true, running: true, managed: true, supported: true, cachedModels: ['Example/Qwen-MTP'] },
     });
     fireEvent.click(within(row('MTPLX')).getByRole('button', { name: /^Stop/ }));
-    expect(handlers.onStopMtplx).toHaveBeenCalledWith();
+    expect(handlers.onAction).toHaveBeenCalledWith('mtplx', 'stop');
 
     fireEvent.click(within(row('Ollama')).getByRole('button', { name: /Install/ }));
     expect(handlers.onInstallBackend).toHaveBeenCalledWith('ollama');
@@ -238,7 +229,7 @@ describe('RuntimeServersCard', () => {
     const slotstream = row('Slotstream');
     expect(within(slotstream).getByText(/target 22 GB/)).toBeInTheDocument();
     fireEvent.click(within(slotstream).getByRole('button', { name: /^Start/ }));
-    expect(handlers.onStartSlotstream).toHaveBeenCalledWith();
+    expect(handlers.onAction).toHaveBeenCalledWith('slotstream', 'start');
   });
 
   it('keeps Slotstream Start unavailable when no checkpoint is cached', () => {

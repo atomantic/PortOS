@@ -136,6 +136,45 @@ describe('addFeed', () => {
     ]);
   });
 
+  it('decodes entities in titles, links and escaped HTML descriptions', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ body: `<rss version="2.0"><channel>
+<title>Bits &amp; Bobs</title>
+<item>
+  <title>It&#8217;s here &amp; now</title>
+  <link>https://example.com/read?a=1&amp;b=2</link>
+  <description>&lt;p&gt;Fish &amp;amp; chips&lt;/p&gt;</description>
+</item>
+<item>
+  <title><![CDATA[Ampersands &amp; CDATA]]></title>
+  <guid>https://example.com/guid-only</guid>
+  <description><![CDATA[<p>1 &lt; 2</p>]]></description>
+</item>
+</channel></rss>` }));
+    const { feed } = await feeds.addFeed('https://example.com/rss');
+    expect(feed.title).toBe('Bits & Bobs');
+    expect(await feeds.getItems({ feedId: feed.id })).toMatchObject([
+      { title: 'It’s here & now', link: 'https://example.com/read?a=1&b=2', description: 'Fish & chips' },
+      { title: 'Ampersands & CDATA', link: 'https://example.com/guid-only', description: '1 < 2' },
+    ]);
+  });
+
+  it('reads Atom entries with attributes and links in any attribute order', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ body: `<feed xmlns="http://www.w3.org/2005/Atom">
+<title>Atom Source</title>
+<entry xml:lang="en">
+  <title type="html">Entry &amp; One</title>
+  <link href="https://example.com/edit/1" rel="edit"/>
+  <link href="https://example.com/atom/1?x=1&amp;y=2" rel="alternate"/>
+  <content type="html">&lt;b&gt;Bold&lt;/b&gt; move</content>
+  <updated>2026-05-18T12:00:00Z</updated>
+</entry>
+</feed>` }));
+    const { feed } = await feeds.addFeed('https://example.com/atom');
+    expect(await feeds.getItems({ feedId: feed.id })).toMatchObject([
+      { title: 'Entry & One', link: 'https://example.com/atom/1?x=1&y=2', description: 'Bold move' },
+    ]);
+  });
+
   it('rejects a non-feed HTML page without storing a subscription', async () => {
     fetchMock.mockResolvedValue(makeResponse({ body: '<!doctype html><html><body>Hi</body></html>' }));
     const result = await feeds.addFeed('https://example.com/');
@@ -378,6 +417,30 @@ describe('refreshFeed', () => {
     const links = (await feeds.getItems({ feedId: feed.id, limit: 200 })).map(i => i.link);
     expect(links).toHaveLength(100);
     for (const n of [100, 101, 102]) expect(links).toContain(`https://example.com/u/${n}`);
+  });
+
+  it('does not offer back items the per-feed cap already dropped', async () => {
+    const item = (n) => `<item><title>Post ${n}</title><link>https://example.com/${n}</link><pubDate>${new Date(Date.UTC(2026, 0, 1 + n)).toUTCString()}</pubDate></item>`;
+    const body = `<rss><channel><title>Archive</title>${Array.from({ length: 130 }, (_, n) => item(n)).join('')}</channel></rss>`;
+    fetchMock.mockResolvedValue(makeResponse({ body }));
+    const { feed } = await feeds.addFeed('https://example.com/archive');
+    const stored = await feeds.getItems({ feedId: feed.id });
+    expect(stored).toHaveLength(100);
+    expect(stored[0].title).toBe('Post 129');
+    await feeds.markAllRead(feed.id);
+
+    const result = await feeds.refreshFeed(feed.id);
+    expect(result).toMatchObject({ newCount: 0, feed: { unreadCount: 0 } });
+  });
+
+  it('repairs an item stored with an encoded link instead of adding a second copy', async () => {
+    const body = (link) => `<rss><channel><title>T</title><item><title>A &amp; B</title><link>${link}</link></item></channel></rss>`;
+    fetchMock.mockResolvedValueOnce(makeResponse({ body: body('https://example.com/?a=1&amp;amp;b=2') }));
+    const { feed } = await feeds.addFeed('https://example.com/rss');
+    fetchMock.mockResolvedValueOnce(makeResponse({ body: body('https://example.com/?a=1&amp;b=2') }));
+    const result = await feeds.refreshFeed(feed.id);
+    expect(result.newCount).toBe(0);
+    expect((await feeds.getItems({ feedId: feed.id })).map(i => i.link)).toEqual(['https://example.com/?a=1&b=2']);
   });
 
   it('returns an error when the feed id is unknown', async () => {

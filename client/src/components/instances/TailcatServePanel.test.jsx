@@ -13,9 +13,7 @@ vi.mock('../../services/apiSystem.js', () => ({
   stopTailcatServe: vi.fn(),
 }));
 
-vi.mock('../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 vi.mock('../../services/socket', () => {
   const listeners = new Map();

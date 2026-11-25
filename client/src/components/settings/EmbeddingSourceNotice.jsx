@@ -3,13 +3,14 @@ import { Database } from 'lucide-react';
 import ListLoadError from '../ui/ListLoadError';
 import { useSocketResource } from '../../hooks/useSocketResource';
 import { getEmbeddingConfig } from '../../services/apiMemory';
+import { LOCAL_RUNTIME_LABELS } from '../../../../server/lib/modelPinMembership.js';
 
 // No server event announces a settings.embeddings save; the resource still
 // re-reads on reconnect and when the tab is shown again, which covers editing
 // it on Models → Embeddings and coming back.
 const NO_EVENTS = [];
 
-const PROVIDER_LABELS = { ollama: 'Ollama', lmstudio: 'LM Studio', none: 'Disabled' };
+const PROVIDER_LABELS = { ollama: LOCAL_RUNTIME_LABELS.ollama, lmstudio: LOCAL_RUNTIME_LABELS.lmstudio, none: 'Disabled' };
 
 // One embedding configuration drives the catalog and memory (#18296): this is
 // the read-only view every other surface shows, with the link to the single

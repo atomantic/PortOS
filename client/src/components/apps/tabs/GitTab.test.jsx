@@ -16,6 +16,8 @@ vi.mock('../../../services/apiGit.js', () => ({
   pushAllBranches: vi.fn(),
   rebaseAndPushDefaultBranch: vi.fn(),
   getGitDiff: vi.fn(),
+  stageFiles: vi.fn(),
+  unstageFiles: vi.fn(),
   cleanupMergedBranches: vi.fn(),
   resetToDefaultBranch: vi.fn(),
 }));
@@ -39,6 +41,7 @@ import {
   getRemoteBranches,
   updateBranches,
   getGitDiff,
+  unstageFiles,
   cleanupMergedBranches,
   resetToDefaultBranch,
   rebaseAndPushDefaultBranch,
@@ -210,6 +213,34 @@ describe('GitTab modal accessibility (issue #1090)', () => {
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
   });
 
+  it('shows staged and unstaged changes, and opens nothing when the read fails', async () => {
+    getGitDiff.mockImplementation(async (_path, staged) => ({ diff: staged ? '+staged line' : '' }));
+    render(<GitTab appId="x" appName="App" repoPath="/repo" />);
+    fireEvent.click(await screen.findByText('View Diff'));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('+staged line');
+    expect(dialog).not.toHaveTextContent('Not staged');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    getGitDiff.mockRejectedValue(new Error('unreachable'));
+    await act(async () => { fireEvent.click(screen.getByText('View Diff')); });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('offers both index actions on a partly staged file and unstages both halves of a rename', async () => {
+    getGitInfo.mockResolvedValue({ ...GIT_INFO, status: { staged: 2, files: [
+      { path: 'a.js', status: 'modified (partial)', staged: true, modified: true },
+      { path: 'new.js', origPath: 'old.js', status: 'renamed', staged: true },
+    ] } });
+    unstageFiles.mockRejectedValue(new Error('index locked'));
+    render(<GitTab appId="x" appName="App" repoPath="/repo" />);
+
+    const unstage = await screen.findAllByRole('button', { name: 'Unstage' });
+    expect(screen.getAllByRole('button', { name: 'Stage' })).toHaveLength(1);
+    await act(async () => { fireEvent.click(unstage[1]); });
+    expect(unstageFiles).toHaveBeenCalledWith('/repo', ['new.js', 'old.js']);
+  });
+
   it('closes the diff dialog on Escape', async () => {
     render(<GitTab appId="x" appName="App" repoPath="/repo" />);
     const viewDiff = await screen.findByText('View Diff');
@@ -335,6 +366,25 @@ describe('GitTab merged branches checked out in worktrees', () => {
     render(<GitTab appId="x" appName="App" repoPath="/repo" />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Clean 2 merged' }));
+
+    expect(await screen.findByRole('button', { name: 'Delete all merged (local + remote + worktrees)' })).toBeInTheDocument();
+  });
+
+  it('also discloses worktree removal when merged cleanup is confirmed from the remote branches panel', async () => {
+    getRemoteBranches.mockResolvedValue({
+      branches: [
+        { name: 'claim/issue-1', fullRef: 'origin/claim/issue-1', merged: true, hasLocal: true, isDefault: false, isProtected: false },
+      ],
+      defaultBranch: 'main',
+    });
+    render(<GitTab appId="x" appName="App" repoPath="/repo" />);
+
+    const remoteCleanBtn = await screen.findByRole('button', { name: 'Clean 1 merged' });
+    expect(remoteCleanBtn).toHaveAttribute(
+      'title',
+      'Deletes merged branches locally and on the remote, removing the 2 worktrees holding one — unless it still has uncommitted or unmerged work, or is in use'
+    );
+    fireEvent.click(remoteCleanBtn);
 
     expect(await screen.findByRole('button', { name: 'Delete all merged (local + remote + worktrees)' })).toBeInTheDocument();
   });

@@ -22,7 +22,7 @@ vi.mock('socket.io-client', () => ({
 vi.mock('../lib/publicGuestRoutes', () => ({ isPublicGuestRoute: () => fake.guestRoute }));
 vi.mock('./apiSystem', () => ({ getSystemBuild: vi.fn(() => new Promise(() => {})) }));
 vi.mock('./staleBuildToast', () => ({ showStaleBuildToast: vi.fn() }));
-vi.mock('../components/ui/Toast', () => ({ default: { dismiss: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 const setVisibility = (state) => {
   Object.defineProperty(document, 'visibilityState', { value: state, configurable: true });

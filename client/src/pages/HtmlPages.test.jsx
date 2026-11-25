@@ -34,22 +34,31 @@ vi.mock('../components/htmlPages/HtmlPreviewFrame', () => ({
 vi.mock('../hooks/useProviderModels', async () => {
   const { useState } = await import('react');
   return {
-    default: () => {
+    default: ({ filter = () => true }) => {
       const [selectedProviderId, setProviderId] = useState('');
       const [selectedModel, setSelectedModel] = useState('');
       const setSelectedProviderId = (id) => { setProviderId(id); setSelectedModel(id ? 'example-model' : ''); };
       const availableModels = selectedProviderId ? ['example-model'] : [];
-      return { providers: [{ id: 'example-cli', name: 'Example CLI' }], loading: false, selectedProviderId, selectedModel, availableModels, setSelectedProviderId, setSelectedModel };
+      const providers = [
+        { id: 'example-cli', name: 'Example CLI', type: 'cli', toolFreeOneShot: true },
+        { id: 'example-api', name: 'Example API', type: 'api' },
+        { id: 'opencode-mtplx', name: 'OpenCode MTPLX', type: 'cli', htmlPagesModels: ['example-model'] },
+        { id: 'example-opencode', name: 'Other OpenCode', type: 'cli', htmlPagesModels: [] },
+        { id: 'example-tui', name: 'Example TUI', type: 'tui' },
+        { id: 'example-sandbox', name: 'Example Sandbox', type: 'cli', authoringOneShot: true },
+      ].filter(filter);
+      return { providers, loading: false, selectedProviderId, selectedModel, availableModels, setSelectedProviderId, setSelectedModel };
     },
   };
 });
 vi.mock('../components/ProviderModelSelector', () => ({
-  default: ({ providers, selectedProviderId, selectedModel, availableModels, onProviderChange, onModelChange, onEffortChange, label, modelLabel }) => (
+  default: ({ providers, selectedProviderId, selectedModel, availableModels, onProviderChange, onModelChange, onEffortChange, label, modelLabel, compose = true }) => (
     <div>
       <label>{label}
         <select value={selectedProviderId} onChange={(e) => onProviderChange(e.target.value)}>
           <option value="">—</option>
           {providers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          {compose && <option value="compose">Custom combination…</option>}
         </select>
       </label>
       <label>{modelLabel}
@@ -146,6 +155,13 @@ describe('HtmlPages', () => {
     startHtmlPageRuns.mockImplementation(async (body) => body.routes.map((r, i) => run(`route-${i}`, r.model, { status: 'queued', backend: 'provider', route: { ...r, providerName: 'Example CLI' } })));
     renderPage();
     await screen.findByText('Models');
+    const picker = within(screen.getByLabelText('Provider 1'));
+    expect(picker.getByRole('option', { name: 'Example API' })).toBeInTheDocument();
+    expect(picker.getByRole('option', { name: 'OpenCode MTPLX' })).toBeInTheDocument();
+    expect(picker.queryByRole('option', { name: 'Other OpenCode' })).not.toBeInTheDocument();
+    expect(picker.queryByRole('option', { name: 'Example TUI' })).not.toBeInTheDocument();
+    expect(picker.queryByRole('option', { name: 'Example Sandbox' })).not.toBeInTheDocument();
+    expect(picker.queryByRole('option', { name: 'Custom combination…' })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Provider 1'), { target: { value: 'example-cli' } });
     fireEvent.click(screen.getByRole('button', { name: 'High effort for Provider 1' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add a model' }));

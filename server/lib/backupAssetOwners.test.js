@@ -1,10 +1,3 @@
-/**
- * The owner inventory decides what consistency a backup snapshot may claim, so
- * it must agree with the code in both directions (#9982): every module it calls
- * admitted really holds the admission lease, and every module that takes the
- * lease is inventoried. Otherwise a stale entry could let a snapshot claim
- * global consistency, or a newly admitted workflow could go unrecorded.
- */
 import { describe, expect, it } from 'vitest';
 import { BACKUP_ASSET_OWNERS, backupAssetConsistency } from './backupAssetOwners.js';
 
@@ -25,7 +18,7 @@ describe('backupAssetConsistency', () => {
       .toEqual({ scope: 'admitted-owners', outstanding: ['example-typo'] });
   });
 
-  it('claims readiness only after every identified managed runtime owner is classified', () => {
+  it('claims global consistency for the shipped exception inventory', () => {
     const outstanding = BACKUP_ASSET_OWNERS.filter(owner => owner.status === 'outstanding').map(owner => owner.id);
     expect(outstanding).toEqual([]);
     expect(backupAssetConsistency()).toEqual({ scope: 'global', outstanding });

@@ -32,17 +32,12 @@ export {
 
 // Shared dispatcher (#2909). ensureSchema() runs inside the selector so the
 // backend is self-sufficient regardless of boot ordering.
-const { selectBackend, getBackendName } = createRecordStoreBackendSelector({
+const { selectBackend } = createRecordStoreBackendSelector({
   label: 'Artists',
   loadFileBackend: () => import('./file.js'),
   loadDbBackend: () => import('./db.js'),
   requireDbMessage: `Artists require PostgreSQL — ${POSTGRES_SETUP_HINT}`,
 });
-
-/** Name of the active backend, or null before first call (for diagnostics/tests). */
-export function getArtistsBackendName() {
-  return getBackendName();
-}
 
 export async function listArtists(options = {}) {
   return (await selectBackend()).listArtists(options);

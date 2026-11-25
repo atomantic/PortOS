@@ -1,10 +1,9 @@
+import { inputClass } from './controlClasses.js';
 import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { listMusicVideoCharacterStyles, setMusicVideoCharacterStyleReference } from '../../services/apiMusicVideo.js';
 import MediaImage from '../MediaImage';
-
-const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 
 /**
  * Loads a built-in character style (a fixed-identity performer) as the

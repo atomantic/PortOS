@@ -39,6 +39,8 @@ import {
   localLlmLlamaServerStartSchema,
   localLlmLmStudioServiceSchema,
   localLlmMtplxStartSchema,
+  managedInklingActionSchema,
+  splashContextSchema,
   localLlmSlotstreamStartSchema,
   localLlmSlotstreamDownloadSchema,
   localLlmMtplxSearchSchema,
@@ -55,15 +57,21 @@ import {
   stopLlamaServer,
   installLlamaServer,
   upgradeLlamaServer,
+  waitForLlamaServerReady,
 } from '../services/llamaServerManager.js'
-import { MTPLX_APP, getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx } from '../services/mtplxServerManager.js'
-import { SLOTSTREAM_APP, getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream } from '../services/slotstreamServerManager.js'
+import { onDemandRuntimeAppNames } from '../lib/managedRuntimeApps.js'
+import { getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx, waitForMtplxReady } from '../services/mtplxServerManager.js'
+import { getSplashRuntimeStatus } from '../services/splashRuntimeStatus.js'
+import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer } from '../services/splashServerManager.js'
+import { getMkserveRuntimeStatus, installMkserve, startMkserveServer, stopMkserveServer } from '../services/mkserveRuntimeManager.js'
+import { getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream, waitForSlotstreamReady } from '../services/slotstreamServerManager.js'
 import { cancelSlotstreamModelDownload, downloadSlotstreamModel, previewSlotstreamDownload } from '../services/slotstreamModelManager.js'
 import { searchMtplxCatalog, pullMtplxModel, previewMtplxPull, removeMtplxModel } from '../services/mtplxModelManager.js'
 import { saveProcessList } from '../services/pm2.js'
 import { getSpecDecodePresetStatus, downloadSpecDecodeModel, previewSpecDecodeDownload, cancelSpecDecodeModelDownload, removeSpecDecodeModel } from '../services/specDecodeModels.js'
 import { SPEC_TYPE_SUGGESTIONS } from '../lib/specDecodePresets.js'
 import { resetProviderReadinessCache } from '../services/provider/providerReadiness.js'
+import { syncRuntimeProviderModels } from '../services/localRuntimeProviderSync.js'
 import { MODEL_ABUSE_GUARD, MODEL_ABUSE_GUARD_MAX_INPUT_CHARS } from '../lib/modelAbuseGuard.js'
 import { JEV_MODEL, jevScoreRequestSchema } from '../lib/jev.js'
 import { jevHeadActionRequestSchema, jevHeadTrainRequestSchema } from '../lib/jevHead.js'
@@ -77,6 +85,7 @@ import {
 } from '../lib/systemCapabilities.js'
 import { searchHuggingFaceModels, enrichCatalogWithVariants, applyMeasuredFit } from '../services/huggingFaceCatalog.js'
 import { getMeasuredFits } from '../services/localModelAssessmentStore.js'
+import { listEndpointRuntimeModels } from '../services/localRuntimeEndpoints.js'
 import {
   getStatus, listModels, listVisionModels, listToolUseModels, listContextPlans, installModel, cancelModelInstall, previewInstallModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer,
   describeInstallProgress
@@ -135,6 +144,18 @@ const emitter = (req) => {
   return (event, message, extra) => io?.emit('localLlm:progress', { event, message, ...extra })
 }
 
+// After a user-triggered start, checkpoint download or removal, bring the presets fronting that runtime up to date
+// (what "Refresh Models" does by hand). Called after the response is sent and never awaited: it owns its rejections
+// and must not delay or fail the lifecycle action. `started.online === false` means the start returned before the
+// endpoint answered, so the refresh waits on `waitFor` first.
+const refreshRuntimeModels = (req, kind, started = null, waitFor = null) => {
+  const pending = started?.online === false && waitFor && started.endpoint
+  void syncRuntimeProviderModels({
+    kind,
+    io: req.app.get('io'),
+    waitForReady: pending ? () => waitFor(started.endpoint) : null,
+  })
+}
 
 // GET /api/local-llm/persistent-mind-setup — Grok-box / CPU-only free local
 // Persistent Mind checklist (Ollama + Qwen2.5 7B Instruct). Applicable hosts
@@ -713,20 +734,12 @@ router.post('/unload', asyncHandler(async (req, res) => {
   res.json({ success: true, ...result })
 }))
 
-// POST /api/local-llm/test — run one installed local model with a prompt.
-// Returns speed metrics and a run id so the playground can inspect output
-// quality without leaving the Local LLM workflow.
-router.post('/test', asyncHandler(async (req, res) => {
-  const body = validateRequest(localLlmTestSchema, req.body)
-  res.json(await runLocalLlmTest({ ...body, signal: abortSignalFromResponse(res) }))
-}))
-
-// POST /api/local-llm/test/stream — same as /test, but streams the model's
-// output token-by-token as newline-delimited JSON (NDJSON) so the playground
+// POST /api/local-llm/test/stream — run one installed local model with a prompt and
+// stream the model's output token-by-token as newline-delimited JSON (NDJSON) so the playground
 // can render live. Frames: `{ type: 'token', delta, kind }` per chunk (kind is
 // 'content' or 'reasoning' so the client can render thinking separately), then a
-// terminal `{ type: 'result', result }` carrying the same object /test returns
-// (text, timings, runId, and any error). `runLocalLlmTest` resolves rather than
+// terminal `{ type: 'result', result }` carrying the run object
+// (text, speed metrics, runId, and any error). `runLocalLlmTest` resolves rather than
 // throws — including on timeout/abort — so the result frame always lands while
 // the socket is alive, and no JSON error body is attempted after headers flush.
 router.post('/test/stream', asyncHandler(async (req, res) => {
@@ -780,6 +793,12 @@ router.post('/test/stream', asyncHandler(async (req, res) => {
 router.post('/compare', asyncHandler(async (req, res) => {
   const body = validateRequest(localLlmCompareSchema, req.body)
   res.json(await compareLocalLlmModels({ ...body, signal: abortSignalFromResponse(res) }))
+}))
+
+// GET /api/local-llm/runtime-models — the models each bare-endpoint runtime (llama.cpp, MTPLX,
+// Splash, ...) serves, for the Playground picker. Lists only; never generates, so it is safe on page load.
+router.get('/runtime-models', asyncHandler(async (_req, res) => {
+  res.json({ runtimes: await listEndpointRuntimeModels() })
 }))
 
 // === Measured local-model assessments ========================================
@@ -1020,6 +1039,7 @@ router.post('/llama-server/start', asyncHandler(async (req, res) => {
   const result = await startLlamaServer(options)
   resetProviderReadinessCache()
   res.json(result)
+  refreshRuntimeModels(req, 'llama', result, waitForLlamaServerReady)
 }))
 
 // POST /api/local-llm/llama-server/stop — stop managed llama-server
@@ -1084,6 +1104,7 @@ router.post('/mtplx/start', asyncHandler(async (req, res) => {
   resetProviderReadinessCache()
   emit('complete', `MTPLX is running at ${result.endpoint}`)
   res.json(result)
+  refreshRuntimeModels(req, 'mtplx', result, waitForMtplxReady)
 }))
 
 // POST /api/local-llm/mtplx/stop — stop the managed MTPLX process
@@ -1130,6 +1151,7 @@ router.post('/mtplx/models/pull', asyncHandler(async (req, res) => {
   // probes remember as "MTPLX setup incomplete".
   if (result.success) resetProviderReadinessCache()
   res.json(result)
+  if (result.success) refreshRuntimeModels(req, 'mtplx')
 }))
 
 // POST /api/local-llm/mtplx/models/remove — delete one checkpoint from the cache
@@ -1138,7 +1160,74 @@ router.post('/mtplx/models/remove', asyncHandler(async (req, res) => {
   const result = await removeMtplxModel(model)
   resetProviderReadinessCache()
   res.json(result)
+  refreshRuntimeModels(req, 'mtplx')
 }))
+
+// Downloads outlive a browser request. Keep progress and the last failure
+// available from Status as well as the socket, so reopening the tab is safe.
+const inklingOperations = new Map()
+const inklingErrors = new Map()
+const runtimeStatusRoute = (runtime, readStatus) => asyncHandler(async (_req, res) => {
+  const status = await readStatus()
+  res.json({ ...status, operation: inklingOperations.get(runtime) ?? null, lastError: inklingErrors.get(runtime) ?? null })
+})
+
+const runtimeActionRoute = (runtime, label, action, run) => asyncHandler(async (req, res) => {
+  validateRequest(managedInklingActionSchema, req.body ?? {})
+  if (inklingOperations.has(runtime)) {
+    throw new ServerError(`${label} already has an operation in progress.`, { status: 409 })
+  }
+  const emit = emitter(req)
+  const scope = { runtime }
+  const operation = { action, message: '' }
+  inklingErrors.delete(runtime)
+  inklingOperations.set(runtime, operation)
+  const report = (progress) => {
+    const message = typeof progress === 'string' ? progress : progress?.message
+    if (!message || inklingOperations.get(runtime) !== operation) return
+    operation.message = `${label}: ${message}`
+    emit('progress', operation.message, scope)
+  }
+  report({ install: 'Preparing installation', upgrade: 'Preparing update', start: 'Starting', stop: 'Stopping' }[action])
+  res.status(202).json({ operation })
+  void Promise.resolve().then(() => run({ onProgress: report })).then(
+    () => {
+      inklingOperations.delete(runtime)
+      resetProviderReadinessCache()
+      const done = { install: 'installation complete', upgrade: 'update complete', start: 'start completed', stop: 'stopped' }[action]
+      emit('complete', `${label}: ${done}.`, scope)
+      // Their start only resolves once the model answers, so no readiness wait.
+      if (action === 'start') refreshRuntimeModels(req, runtime)
+    },
+    (err) => {
+      inklingOperations.delete(runtime)
+      resetProviderReadinessCache()
+      const message = err instanceof ServerError ? (err.responseMessage || err.message) : 'Operation failed. See PortOS server logs for details.'
+      if (!(err instanceof ServerError)) console.error(`❌ ${label} ${action} failed: ${err?.message ?? 'Unknown error'}`)
+      inklingErrors.set(runtime, message)
+      emit('error', `${label}: ${message}`, scope)
+    },
+  )
+})
+
+router.get('/splash/status', runtimeStatusRoute('splash', getSplashRuntimeStatus))
+router.put('/splash/context', asyncHandler(async (req, res) => {
+  const { contextWindow } = validateRequest(splashContextSchema, req.body ?? {})
+  if (inklingOperations.has('splash')) {
+    throw new ServerError('Splash already has an operation in progress.', { status: 409 })
+  }
+  res.json(await saveSplashContextWindow(contextWindow))
+}))
+router.post('/splash/install', runtimeActionRoute('splash', 'Splash', 'install', installSplashRuntime))
+router.post('/splash/upgrade', runtimeActionRoute('splash', 'Splash', 'upgrade', installSplashRuntime))
+router.post('/splash/start', runtimeActionRoute('splash', 'Splash', 'start', startSplashServer))
+router.post('/splash/stop', runtimeActionRoute('splash', 'Splash', 'stop', stopSplashServer))
+
+router.get('/mkserve/status', runtimeStatusRoute('mkserve', getMkserveRuntimeStatus))
+router.post('/mkserve/install', runtimeActionRoute('mkserve', 'mkserve', 'install', installMkserve))
+router.post('/mkserve/upgrade', runtimeActionRoute('mkserve', 'mkserve', 'upgrade', installMkserve))
+router.post('/mkserve/start', runtimeActionRoute('mkserve', 'mkserve', 'start', startMkserveServer))
+router.post('/mkserve/stop', runtimeActionRoute('mkserve', 'mkserve', 'stop', stopMkserveServer))
 
 // GET /api/local-llm/slotstream/status — binary, process, memory plan, cache, logs.
 router.get('/slotstream/status', asyncHandler(async (_req, res) => {
@@ -1159,6 +1248,7 @@ router.post('/slotstream/start', asyncHandler(async (req, res) => {
   resetProviderReadinessCache()
   emit('complete', `Slotstream is running at ${result.endpoint}`)
   res.json(result)
+  refreshRuntimeModels(req, 'slotstream', result, waitForSlotstreamReady)
 }))
 
 router.post('/slotstream/stop', asyncHandler(async (_req, res) => {
@@ -1193,6 +1283,7 @@ router.post('/slotstream/models/download', asyncHandler(async (req, res) => {
   // probes remember as "Slotstream has no checkpoint".
   if (result.success) resetProviderReadinessCache()
   res.json(result)
+  if (result.success) refreshRuntimeModels(req, 'slotstream')
 }))
 
 // POST /api/local-llm/slotstream/models/download/cancel — a checkpoint download
@@ -1211,13 +1302,11 @@ router.post('/slotstream/models/download/cancel', asyncHandler(async (req, res) 
 // startup`, which writes the launchd/systemd unit — is deliberately blocked and
 // stays a one-time operator command.
 //
-// MTPLX and Slotstream are deliberately EXCLUDED. Both are started on demand
-// by the first request that needs them and stopped again when idle, so
-// resurrecting them at boot would pin a multi-gigabyte checkpoint on a machine
-// nobody has asked anything of yet — the exact waste the idle stop exists to
-// end. The running process is left alone; only the boot list drops it.
+// Exclude runtimes that need not pin their checkpoints at boot. MTPLX and
+// Slotstream can start on demand; Splash and mkserve start from their controls.
+// The running processes are left alone; only this saved boot list changes.
 router.post('/save-startup', asyncHandler(async (_req, res) => {
-  res.json(await saveProcessList(null, { exclude: [MTPLX_APP, SLOTSTREAM_APP] }))
+  res.json(await saveProcessList(null, { exclude: onDemandRuntimeAppNames() }))
 }))
 
 export default router

@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, NavLink } from 'react-router';
 
 const api = vi.hoisted(() => ({
   getRuns: vi.fn(),
+  getRun: vi.fn(),
   getRunPrompt: vi.fn(),
   getRunOutput: vi.fn(),
   deleteRun: vi.fn(),
@@ -23,6 +24,7 @@ const socket = vi.hoisted(() => {
 
 vi.mock('../../../services/apiRuns.js', () => ({
   getRuns: api.getRuns,
+  getRun: api.getRun,
   getRunPrompt: api.getRunPrompt,
   getRunOutput: api.getRunOutput,
   deleteRun: api.deleteRun,
@@ -145,11 +147,147 @@ describe('RunsTab ?run= deep link', () => {
     expect(api.getRunPrompt).not.toHaveBeenCalled();
   });
 
-  it('ignores a ?run= id that is not in the loaded list', async () => {
+  it('resolves a ?run= id outside the loaded list with one by-id read and pins it expanded', async () => {
+    api.getRun.mockResolvedValue({ id: 'run-old', prompt: 'old prompt', providerName: 'demo', success: true, startTime: '2025-01-01T00:00:00Z' });
+    renderTab('/cos/runs?run=run-old');
+
+    const pinned = await screen.findByTestId('pinned-run');
+    expect(within(pinned).getByText('old prompt')).toBeInTheDocument();
+    expect(api.getRun).toHaveBeenCalledTimes(1);
+    expect(api.getRun.mock.calls[0][0]).toBe('run-old');
+    expect(api.getRunPrompt).toHaveBeenCalledWith('run-old');
+  });
+
+  it('keeps a failed by-id read distinct from a missing run and retries it', async () => {
+    api.getRun.mockRejectedValueOnce(Object.assign(new Error('boom'), { status: 500 }));
+    api.getRun.mockResolvedValue({ id: 'run-old', prompt: 'old prompt', providerName: 'demo', success: true, startTime: '2025-01-01T00:00:00Z' });
+    renderTab('/cos/runs?run=run-old');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load run run-old — boom');
+    expect(screen.queryByText('Run not found or deleted.')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByTestId('pinned-run')).toBeInTheDocument();
+  });
+
+  it('re-reads the pinned run on a lifecycle invalidation so it does not stay Running', async () => {
+    api.getRun.mockResolvedValueOnce({ id: 'run-old', prompt: 'old prompt', providerName: 'demo', success: null, startTime: '2025-01-01T00:00:00Z' });
+    api.getRun.mockResolvedValue({ id: 'run-old', prompt: 'old prompt', providerName: 'demo', success: true, startTime: '2025-01-01T00:00:00Z' });
+    renderTab('/cos/runs?run=run-old');
+
+    const pinned = await screen.findByTestId('pinned-run');
+    expect(within(pinned).getAllByText('Running').length).toBeGreaterThan(0);
+    await act(async () => { socket.fire('connect'); });
+    expect(within(screen.getByTestId('pinned-run')).getAllByText('Succeeded').length).toBeGreaterThan(0);
+  });
+
+  it('coalesces a burst of invalidations into at most two pinned reads and still renders the run', async () => {
+    let resolveFirst;
+    api.getRun.mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }));
+    api.getRun.mockResolvedValue({ id: 'run-old', prompt: 'old prompt', providerName: 'demo', success: true, startTime: '2025-01-01T00:00:00Z' });
+    renderTab('/cos/runs?run=run-old');
+    await act(async () => {});
+    expect(api.getRun).toHaveBeenCalledTimes(1);
+
+    await act(async () => { for (let i = 0; i < 10; i++) socket.fire('connect'); });
+    await act(async () => { resolveFirst({ id: 'run-old', prompt: 'old prompt', providerName: 'demo', success: null, startTime: '2025-01-01T00:00:00Z' }); });
+
+    expect(await screen.findByTestId('pinned-run')).toBeInTheDocument();
+    expect(api.getRun.mock.calls.length).toBeLessThanOrEqual(2);
+    await act(async () => {});
+    expect(within(screen.getByTestId('pinned-run')).getAllByText('Succeeded').length).toBeGreaterThan(0);
+  });
+
+  it('ignores totals from a response for a previous source filter', async () => {
+    let resolveAll;
+    api.getRuns.mockImplementation((_limit, _offset, source) => {
+      if (source === 'cos-agent') return Promise.resolve({ runs: [RUNS[0]], total: 5 });
+      return Promise.resolve({ runs: RUNS, total: 250 });
+    });
+    renderTab('/cos/runs');
+    expect(await screen.findByText('Showing the newest 2 of 250 runs')).toBeInTheDocument();
+
+    api.getRuns.mockImplementationOnce(() => new Promise((resolve) => { resolveAll = resolve; }));
+    await act(async () => { socket.fire('connect'); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'CoS' })); });
+    expect(await screen.findByText('Showing the newest 1 of 5 runs')).toBeInTheDocument();
+
+    await act(async () => { resolveAll({ runs: RUNS, total: 999 }); });
+    expect(screen.getByText('Showing the newest 1 of 5 runs')).toBeInTheDocument();
+  });
+
+  it('does not let a stale All response overwrite the total after All, CoS, All', async () => {
+    let resolveStale;
+    api.getRuns.mockResolvedValue({ runs: RUNS, total: 251 });
+    renderTab('/cos/runs');
+    expect(await screen.findByText('Showing the newest 2 of 251 runs')).toBeInTheDocument();
+
+    api.getRuns.mockImplementationOnce(() => new Promise((resolve) => { resolveStale = resolve; }));
+    await act(async () => { socket.fire('connect'); });
+    api.getRuns.mockResolvedValue({ runs: [RUNS[0]], total: 200 });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'CoS' })); });
+    api.getRuns.mockResolvedValue({ runs: RUNS, total: 251 });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'All' })); });
+    expect(await screen.findByText('Showing the newest 2 of 251 runs')).toBeInTheDocument();
+
+    await act(async () => { resolveStale({ runs: RUNS, total: 999 }); });
+    expect(screen.getByText('Showing the newest 2 of 251 runs')).toBeInTheDocument();
+  });
+
+  it('lowers the total after a confirmed delete', async () => {
+    api.getRuns.mockResolvedValue({ runs: RUNS, total: 3 });
+    api.deleteRun.mockResolvedValue({ success: true });
+    renderTab('/cos/runs');
+    expect(await screen.findByText('Showing the newest 2 of 3 runs')).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByTestId('delete-run-run-a')); });
+    expect(screen.getByText('Showing the newest 1 of 2 runs')).toBeInTheDocument();
+  });
+
+  it('reopens a listed run after navigating to another selection and back', async () => {
+    const view = render(
+      <MemoryRouter initialEntries={['/cos/runs?run=run-a']}>
+        <RunsTab />
+        <NavLink to="/cos/runs?run=run-b">go-b</NavLink>
+        <NavLink to="/cos/runs?run=run-a">go-a</NavLink>
+      </MemoryRouter>
+    );
+    await act(async () => {});
+    expect(await screen.findByText('full output for run-b')).toBeInTheDocument();
+    api.getRunPrompt.mockClear();
+    api.getRunOutput.mockClear();
+    api.getRunPrompt.mockResolvedValue('prompt b');
+    await act(async () => { fireEvent.click(screen.getByText('go-b')); });
+    await act(async () => { fireEvent.click(screen.getByText('go-a')); });
+    expect(screen.getByRole('button', { name: 'Collapse run details' })).toBeInTheDocument();
+    view.unmount();
+  });
+
+  it('shows a not-found notice for an unknown ?run= id', async () => {
+    api.getRun.mockRejectedValue(Object.assign(new Error('not found'), { status: 404 }));
     renderTab('/cos/runs?run=run-missing');
 
-    expect(await screen.findByText('first prompt')).toBeInTheDocument();
+    expect(await screen.findByText('Run not found or deleted.')).toBeInTheDocument();
     expect(api.getRunPrompt).not.toHaveBeenCalled();
+  });
+
+  it('makes no by-id read when the run is in the loaded list or no ?run= is given', async () => {
+    renderTab('/cos/runs?run=run-b');
+    await screen.findByText('full output for run-b');
+    expect(api.getRun).not.toHaveBeenCalled();
+  });
+
+  it('notes the server total when more runs exist than were loaded', async () => {
+    api.getRuns.mockResolvedValue({ runs: RUNS, total: 250 });
+    renderTab('/cos/runs');
+    expect(await screen.findByText('Showing the newest 2 of 250 runs')).toBeInTheDocument();
+  });
+
+  it('links a CoS run to its agent and task', async () => {
+    api.getRuns.mockResolvedValue({ runs: [
+      { ...RUNS[0], id: 'cos-run', source: 'cos-agent', agentId: 'agent-1', taskId: 'sys-task-1', success: false },
+    ] });
+    renderTab('/cos/runs?run=cos-run');
+    expect(await screen.findByRole('link', { name: 'View agent' })).toHaveAttribute('href', '/cos/agents/agent-1');
+    expect(screen.getByRole('link', { name: 'View task' })).toHaveAttribute('href', '/cos/tasks?task=sys-task-1&source=internal');
   });
 
   it('shows each execution state and complete failure guidance before optional diagnostics', async () => {

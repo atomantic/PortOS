@@ -9,9 +9,7 @@ import {
   mapBeeperResponseError,
   paginateBeeperCursor,
   listChatsPage,
-  listChats,
-  searchChatsPage,
-  searchMessagesPage,
+  listMessages,
   getInfo,
   probeBeeperInfo,
   assertValidInfoResponse,
@@ -21,8 +19,6 @@ import {
   getJoinedAccounts,
   sendMessage,
   editMessage,
-  deleteMessage,
-  downloadAsset,
   fetchAssetStream,
   updateChat,
 } from './beeperClient.js';
@@ -178,37 +174,9 @@ describe('beeperClient', () => {
       expect(err.retryable).toBe(false);
     });
 
-    // Live-verified: POST /v1/assets/download answers HTTP 200 for an
-    // unresolvable mxc:// reference, with an `{ error }` body and no `srcURL`
-    // — never a 502. beeperRequest treats any `response.ok` body as success,
-    // so downloadAsset itself must reject a 200 body shaped like a failure.
-    it('downloadAsset end-to-end surfaces ASSET_UNAVAILABLE on a live 200-with-error body', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
-        jsonResponse(200, { error: 'Failed to download asset: Transfer failed for mxc://gone' }),
-      ));
-      await expect(downloadAsset('mxc://gone', { baseUrl: DEFAULT_BASE_URL, token: 't' }))
-        .rejects.toMatchObject({ code: 'ASSET_UNAVAILABLE', retryable: false });
-    });
-
-    it('downloadAsset also rejects a 200 body with neither an error nor a srcURL', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, {})));
-      await expect(downloadAsset('mxc://odd', { baseUrl: DEFAULT_BASE_URL, token: 't' }))
-        .rejects.toMatchObject({ code: 'ASSET_UNAVAILABLE', retryable: false });
-    });
-
-    it('downloadAsset resolves with the body when srcURL is a non-empty string', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
-        jsonResponse(200, { srcURL: 'file:///tmp/example.png' }),
-      ));
-      await expect(downloadAsset('mxc://ok', { baseUrl: DEFAULT_BASE_URL, token: 't' }))
-        .resolves.toEqual({ srcURL: 'file:///tmp/example.png' });
-    });
-
     // The mapper's asset-502 branch above still applies to GET/HEAD
     // /v1/assets/serve — the byte-streaming half of the asset surface — which
     // really does answer 502 for a missing/expired asset (live-verified).
-    // downloadAsset (POST /v1/assets/download) is the one caller that never
-    // reaches this branch, per the two tests above.
   });
 
   // -------------------------------------------------------------------------
@@ -282,6 +250,18 @@ describe('beeperClient', () => {
       expect(collected).toEqual(['a']);
     });
 
+    it('listMessages drives listMessagesPage across real HTTP pages', async () => {
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(jsonResponse(200, { items: [{ id: 'msg1' }], hasMore: true, oldestCursor: 'cur1' }))
+        .mockResolvedValueOnce(jsonResponse(200, { items: [{ id: 'msg2' }], hasMore: false }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const messages = [];
+      for await (const message of listMessages('chat1', { baseUrl: DEFAULT_BASE_URL, token: 't' })) messages.push(message);
+      expect(messages.map((m) => m.id)).toEqual(['msg1', 'msg2']);
+      expect(fetchMock.mock.calls[1][0]).toContain('cursor=cur1');
+    });
+
     it('walks newestCursor when direction is "after"', async () => {
       const fetchPage = vi.fn(async ({ cursor }) => (!cursor
         ? { items: [1], hasMore: true, oldestCursor: null, newestCursor: 'n1' }
@@ -292,18 +272,6 @@ describe('beeperClient', () => {
       expect(fetchPage).toHaveBeenNthCalledWith(2, { cursor: 'n1', direction: 'after' });
     });
 
-    it('listChats/listMessages iterators drive listChatsPage/listMessagesPage across real HTTP pages', async () => {
-      const fetchMock = vi.fn()
-        .mockResolvedValueOnce(jsonResponse(200, { items: [{ id: 'chat1' }], hasMore: true, oldestCursor: 'cur1' }))
-        .mockResolvedValueOnce(jsonResponse(200, { items: [{ id: 'chat2' }], hasMore: false }));
-      vi.stubGlobal('fetch', fetchMock);
-
-      const chats = [];
-      for await (const chat of listChats({ baseUrl: DEFAULT_BASE_URL, token: 't' })) chats.push(chat);
-      expect(chats.map((c) => c.id)).toEqual(['chat1', 'chat2']);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(fetchMock.mock.calls[1][0]).toContain('cursor=cur1');
-    });
   });
 
   // -------------------------------------------------------------------------
@@ -644,22 +612,6 @@ describe('beeperClient', () => {
         .rejects.toMatchObject({ code: 'INTERNAL_ERROR', retryable: true });
     });
 
-    it('deleteMessage requires an explicit boolean forEveryone and never calls fetch without one', async () => {
-      const fetchMock = vi.fn();
-      vi.stubGlobal('fetch', fetchMock);
-
-      await expect(deleteMessage('chat1', 'msg1', undefined, { baseUrl: DEFAULT_BASE_URL, token: 't' }))
-        .rejects.toMatchObject({ code: 'FOR_EVERYONE_REQUIRED' });
-      expect(fetchMock).not.toHaveBeenCalled();
-    });
-
-    it('deleteMessage passes forEveryone=false explicitly in the query string', async () => {
-      const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 204, text: async () => '' });
-      vi.stubGlobal('fetch', fetchMock);
-
-      await deleteMessage('chat1', 'msg1', false, { baseUrl: DEFAULT_BASE_URL, token: 't' });
-      expect(fetchMock.mock.calls[0][0]).toContain('forEveryone=false');
-    });
   });
 
   // -------------------------------------------------------------------------
@@ -854,52 +806,12 @@ describe('beeperClient', () => {
   // Search endpoint limit clamping (limit max 20 on /v1/messages/search)
   // -------------------------------------------------------------------------
 
-  describe('searchMessagesPage limit clamping', () => {
-    it('clamps an over-cap limit to 20 rather than passing it through unbounded', async () => {
-      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { items: [], hasMore: false, chats: {} }));
-      vi.stubGlobal('fetch', fetchMock);
-
-      await searchMessagesPage({ query: 'hello', limit: 500, baseUrl: DEFAULT_BASE_URL, token: 't' });
-      expect(fetchMock.mock.calls[0][0]).toContain('limit=20');
-    });
-
-    it('defaults limit to 20 when omitted', async () => {
-      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { items: [], hasMore: false }));
-      vi.stubGlobal('fetch', fetchMock);
-
-      await searchMessagesPage({ query: 'hello', baseUrl: DEFAULT_BASE_URL, token: 't' });
-      expect(fetchMock.mock.calls[0][0]).toContain('limit=20');
-    });
-  });
-
   // -------------------------------------------------------------------------
   // Array query params (accountIDs, chatIDs, mediaTypes) must serialize as
   // repeated keys, not one comma-joined value the server reads as a single id.
   // -------------------------------------------------------------------------
 
   describe('array query param serialization', () => {
-    it('searchMessagesPage serializes an array filter (accountIDs) as repeated keys, not comma-joined', async () => {
-      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { items: [], hasMore: false }));
-      vi.stubGlobal('fetch', fetchMock);
-
-      await searchMessagesPage({ query: 'hello', accountIDs: ['acct-a', 'acct-b'], baseUrl: DEFAULT_BASE_URL, token: 't' });
-      const url = fetchMock.mock.calls[0][0];
-      const params = new URL(url).searchParams;
-      expect(params.getAll('accountIDs')).toEqual(['acct-a', 'acct-b']);
-      expect(url).not.toContain('acct-a%2Cacct-b');
-    });
-
-    it('searchChatsPage serializes an array filter (chatIDs) as repeated keys, not comma-joined', async () => {
-      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { items: [], hasMore: false }));
-      vi.stubGlobal('fetch', fetchMock);
-
-      await searchChatsPage({ chatIDs: ['chat-a', 'chat-b'], baseUrl: DEFAULT_BASE_URL, token: 't' });
-      const url = fetchMock.mock.calls[0][0];
-      const params = new URL(url).searchParams;
-      expect(params.getAll('chatIDs')).toEqual(['chat-a', 'chat-b']);
-      expect(url).not.toContain('chat-a%2Cchat-b');
-    });
-
     // #32: the ingestion sweep pages ONE account at a time so every chat row is
     // attributable to the account whose cursor bounds it. `GET /v1/chats` takes
     // no `limit`, so `accountIDs` is its only filter and has to survive into the
@@ -930,28 +842,6 @@ describe('beeperClient', () => {
       expect(new URL(url).searchParams.get('direction')).toBe('before');
     });
 
-    it('the listChats iterator carries accountIDs onto every page it walks', async () => {
-      const fetchMock = vi.fn()
-        .mockResolvedValueOnce(jsonResponse(200, { items: [{ id: 'chat1' }], hasMore: true, oldestCursor: 'cur1' }))
-        .mockResolvedValueOnce(jsonResponse(200, { items: [{ id: 'chat2' }], hasMore: false }));
-      vi.stubGlobal('fetch', fetchMock);
-
-      const chats = [];
-      for await (const chat of listChats({ accountIDs: ['acct-a'], baseUrl: DEFAULT_BASE_URL, token: 't' })) chats.push(chat);
-      expect(chats.map((c) => c.id)).toEqual(['chat1', 'chat2']);
-      for (const call of fetchMock.mock.calls) {
-        expect(new URL(call[0]).searchParams.getAll('accountIDs')).toEqual(['acct-a']);
-      }
-    });
-
-    it('a scalar filter still serializes as a single key (no regression from the array path)', async () => {
-      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { items: [], hasMore: false }));
-      vi.stubGlobal('fetch', fetchMock);
-
-      await searchMessagesPage({ query: 'hello', chatType: 'group', baseUrl: DEFAULT_BASE_URL, token: 't' });
-      const params = new URL(fetchMock.mock.calls[0][0]).searchParams;
-      expect(params.getAll('chatType')).toEqual(['group']);
-    });
   });
 
   // -------------------------------------------------------------------------

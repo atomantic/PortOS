@@ -225,6 +225,20 @@ describe('applyProjectPatch', () => {
 });
 
 describe('applyTreatment — status preservation', () => {
+  it('refuses a Video treatment whose pinned model cannot cover its shot', () => {
+    const project = { id: 'cd-1', status: 'draft', workspace: 'video', aspectRatio: '16:9',
+      targetDurationSeconds: 10, renderBackend: { video: { mode: 'google' } } };
+    const treatment = { ...VALID_TREATMENT, script: 'A cat walks in.',
+      scenes: [{ ...VALID_TREATMENT.scenes[0], durationSeconds: 10 }] };
+
+    expect(() => applyTreatment(project, treatment)).toThrow(expect.objectContaining({
+      code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED', message: expect.stringContaining('renders 4, 6, 8 seconds'),
+    }));
+    expect(applyTreatment({ ...project, targetDurationSeconds: 7 }, {
+      ...treatment, scenes: [{ ...treatment.scenes[0], durationSeconds: 7 }],
+    }).treatment.scenes[0].durationSeconds).toBe(7);
+  });
+
   it('preserves paused status', () => {
     const next = applyTreatment({ id: 'cd-1', status: 'paused' }, VALID_TREATMENT);
     expect(next.status).toBe('paused');
@@ -547,6 +561,14 @@ describe('applyPlan', () => {
     expect(revised.plan.steps[0]).toMatchObject({ stepId: 'a', status: 'done', result: { seriesId: 's1' } });
     // The revised remaining step is fresh pending.
     expect(revised.plan.steps[1]).toMatchObject({ stepId: 'c', status: 'pending' });
+  });
+  it('refuses a Video plan step its pinned backend cannot render, so the planner reads why and revises', () => {
+    const video = { id: 'cd-1', status: 'planning', workspace: 'video', aspectRatio: '16:9', renderBackend: { video: { mode: 'gemini' } } };
+    const step = (params) => ({ steps: [{ stepId: 'a', toolName: 'media_enqueueVideoJob', args: { params: { prompt: 'An example lighthouse', durationSeconds: 8, ...params } } }] });
+    expect(applyPlan(video, step({})).plan.steps).toHaveLength(1);
+    // Gemini has no negative-prompt field: the step is refused here rather than rendered without it.
+    expect(() => applyPlan(video, step({ negativePrompt: 'fog, crowds' }))).toThrow(/negative prompt \(Gemini takes none/);
+    expect(applyPlan({ ...video, renderBackend: { video: { mode: 'fal' } } }, step({ negativePrompt: 'fog, crowds' })).plan.steps).toHaveLength(1);
   });
   it('does NOT preserve a failed step across a re-plan (re-runs it)', () => {
     const first = applyPlan({ id: 'cd-1', status: 'planning' }, VALID_PLAN);

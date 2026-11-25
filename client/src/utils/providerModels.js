@@ -13,7 +13,7 @@
  */
 
 import { isGatewayBackedProvider } from './providerGateways.js';
-import { isAntigravityProvider, isClaudeCommandProvider, isCodexSubscriptionProvider, isOllamaBackedProvider } from './providerTypes.js';
+import { isAntigravityProvider, isClaudeCommandProvider, isCodexSubscriptionProvider, isOllamaBackedProvider, hasLocalRuntimeMarker } from './providerTypes.js';
 import {
   antigravityBaseModels,
   clampEffortToLadder,
@@ -285,13 +285,8 @@ export const generationControlsFor = (provider) => {
   const gateway = isGatewayBackedProvider(provider);
   // LM Studio forwards temperature/top_p, but reasoning belongs to the LOADED model instance (THINKING_STYLE.lmstudio on the server: no toggle).
   const lmstudio = provider?.lmstudioBacked === true;
-  const local = isOllamaBackedProvider(provider)
-    || lmstudio
-    || provider?.llamaBacked === true
-    || provider?.mtplxBacked === true
-    || provider?.vllmBacked === true
-    // SGLang takes `chat_template_kwargs.enable_thinking` like other local endpoints (THINKING_STYLE.sglang).
-    || provider?.sglangBacked === true;
+  const splash = provider?.splashBacked === true;
+  const local = isOllamaBackedProvider(provider) || hasLocalRuntimeMarker(provider);
   if (!local && !gateway) return null;
   if (isClaudeCommandProvider(provider)) {
     // A Claude harness owns its sampling; only a thinking signal is forwardable, and only on Ollama (`MAX_THINKING_TOKENS=0` in server/lib/cliChildEnv.js).
@@ -300,5 +295,5 @@ export const generationControlsFor = (provider) => {
       : null;
   }
   // LM Studio joins the gateways in having no forwardable thinking signal.
-  return { temperature: true, topP: true, thinking: !gateway && !lmstudio };
+  return { temperature: true, topP: true, thinking: !gateway && !lmstudio && !splash };
 };

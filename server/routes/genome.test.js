@@ -54,14 +54,6 @@ describe('genome deletion routes', () => {
     expect(deleteGenome.mock.invocationCallOrder[0]).toBeLessThan(deleteClinvar.mock.invocationCallOrder[0]);
   });
 
-  it('deletes only ClinVar data from the scoped endpoint', async () => {
-    const response = await request(makeApp()).delete('/api/meatspace/genome/clinvar');
-
-    expect(response.status).toBe(204);
-    expect(response.text).toBe('');
-    expect(deleteClinvar).toHaveBeenCalledOnce();
-    expect(deleteGenome).not.toHaveBeenCalled();
-  });
 });
 
 describe('POST /api/meatspace/genome/epigenetic/:id/log', () => {

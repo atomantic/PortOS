@@ -69,15 +69,6 @@ router.get('/projects/:appId', asyncHandler(async (req, res) => {
   res.json(project)
 }))
 
-// GET /projects/:appId/concerns — parsed CONCERNS.md with severity
-router.get('/projects/:appId/concerns', asyncHandler(async (req, res) => {
-  const project = await gsdService.getGsdProject(req.params.appId)
-  if (!project) {
-    throw new ServerError('GSD project not found', { status: 404, code: 'GSD_PROJECT_NOT_FOUND' })
-  }
-  res.json({ concerns: project.concerns })
-}))
-
 // GET /projects/:appId/phases — phase list with status
 router.get('/projects/:appId/phases', asyncHandler(async (req, res) => {
   const project = await gsdService.getGsdProject(req.params.appId)
@@ -86,19 +77,6 @@ router.get('/projects/:appId/phases', asyncHandler(async (req, res) => {
   }
   const pendingActions = await gsdService.getGsdPendingActions(req.params.appId)
   res.json({ phases: project.phases, pendingActions })
-}))
-
-// GET /projects/:appId/phases/:phaseId — phase detail
-router.get('/projects/:appId/phases/:phaseId', asyncHandler(async (req, res) => {
-  const project = await gsdService.getGsdProject(req.params.appId)
-  if (!project) {
-    throw new ServerError('GSD project not found', { status: 404, code: 'GSD_PROJECT_NOT_FOUND' })
-  }
-  const phase = project.phases.find(p => p.id === req.params.phaseId)
-  if (!phase) {
-    throw new ServerError('Phase not found', { status: 404, code: 'GSD_PHASE_NOT_FOUND' })
-  }
-  res.json(phase)
 }))
 
 // POST /projects/:appId/concerns/tasks — create CoS tasks from selected concerns
@@ -191,16 +169,20 @@ router.put('/projects/:appId/documents/:docName', asyncHandler(async (req, res) 
   const created = !existsSync(resolved)
 
   await atomicWrite(resolved, content)
+  gsdService.invalidateGsdProject(ctx.app)
   const relPath = `.planning/${docName}`
   await git.stageFiles(ctx.app.repoPath, [relPath])
 
-  const status = await git.getStatus(ctx.app.repoPath)
+  // Scope the check and the commit to this document (as routes/apps/documents.js
+  // does): the checkout may hold the user's own staged work, which must not be
+  // swept into this commit, and a partial commit of an unchanged path exits 1.
+  const status = await git.getStatus(ctx.app.repoPath, { paths: [relPath] })
   if (status.clean) {
     return res.json({ success: true, noChanges: true })
   }
 
   const message = commitMessage || `docs: update .planning/${docName} via PortOS`
-  const result = await git.commit(ctx.app.repoPath, message)
+  const result = await git.commit(ctx.app.repoPath, message, { paths: [relPath] })
   console.log(`📝 ${created ? 'Created' : 'Updated'} .planning/${docName} in ${ctx.app.name} (${result.hash})`)
 
   res.json({ success: true, hash: result.hash, created })

@@ -31,26 +31,6 @@ function regionRegExp({ start, end }) {
   return new RegExp(`(?:\\n{1,2})?${escapeRegExp(start)}[\\s\\S]*?${escapeRegExp(end)}`);
 }
 
-// True when `content` already carries a well-formed (start … end) region.
-export function hasMarkedSection(content, { start, end }) {
-  if (typeof content !== 'string' || !content) return false;
-  const si = content.indexOf(start);
-  if (si === -1) return false;
-  return content.indexOf(end, si + start.length) !== -1;
-}
-
-// Extract the trimmed body BETWEEN the markers, or null when absent. Markers
-// themselves are stripped.
-export function extractMarkedSection(content, { start, end }) {
-  if (typeof content !== 'string') return null;
-  const si = content.indexOf(start);
-  if (si === -1) return null;
-  const bodyStart = si + start.length;
-  const ei = content.indexOf(end, bodyStart);
-  if (ei === -1) return null;
-  return content.slice(bodyStart, ei).trim();
-}
-
 /**
  * Replace (or insert, or remove) the marker-delimited section in `content`.
  *
@@ -81,7 +61,7 @@ export function replaceMarkedSection(content, body, markers) {
     // Replace in place. Re-attach the blank-line separator the regex consumed so
     // the block stays visually detached from the content above; strip any
     // leading newlines left when the region was at the very top of the document.
-    return base.replace(regionRe, `\n\n${block}`).replace(/^\n+/, '');
+    return base.replace(regionRe, () => `\n\n${block}`).replace(/^\n+/, '');
   }
 
   const head = base.replace(/\s+$/, '');

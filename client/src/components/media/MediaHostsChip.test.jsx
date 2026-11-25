@@ -7,7 +7,7 @@ vi.mock('../../services/apiMediaHolders.js', () => ({
   getMediaHolders: api.getMediaHolders,
 }));
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const { default: MediaHostsChip } = await import('./MediaHostsChip');
 const { default: toast } = await import('../ui/Toast');

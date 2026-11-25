@@ -1,7 +1,8 @@
 import { eidoverseWorldEvents } from './eidoverseWorldEvents.js';
 import { createHash } from 'node:crypto';
 import { homedir, hostname, userInfo } from 'node:os';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { registerLateBoundService } from '../lib/lateBoundServices.js';
 
 registerLateBoundService('eidoverse', () => import('./eidoverse.js'));
@@ -38,6 +39,12 @@ const mocks = vi.hoisted(() => ({
 
 const DEFAULT_HUMAN_NAME = 'portos-8e9b660b05fb';
 
+// CoS config reads create their directories; keep them off the checkout's data/.
+vi.mock('../lib/paths.js', async (importActual) => {
+  const { lazyTempDataRoot, makePathsProxy } = await import('../lib/mockPathsDataRoot.js');
+  return makePathsProxy(await importActual(), { dataRoot: () => lazyTempDataRoot('eidoverse-runtime-') });
+});
+afterAll(cleanupTempDataRoots);
 vi.mock('../lib/fileUtils.js', async (importActual) => {
   const actual = await importActual();
   const isWorldStatePath = (path) => String(path).replaceAll('\\', '/') === mocks.worldStatePath;

@@ -78,6 +78,7 @@ const INHERITED_ENV = {
   USER: 'OS-provided account name',
   TZ: 'OS/pm2-provided timezone (ecosystem.config.cjs pins it to UTC)',
   LOCALAPPDATA: 'Windows-provided per-user app data root',
+  ProgramData: 'Windows-provided shared application data root',
   ProgramFiles: 'Windows-provided install root',
   SystemDrive: 'Windows-provided system drive letter',
   DYLD_LIBRARY_PATH: 'macOS dynamic-loader path, passed through to child processes',

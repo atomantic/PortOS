@@ -180,6 +180,18 @@ describe('gmailMboxImport — mboxMessageToCandidate', () => {
     expect(c.summary).toBe('To: Alice');
   });
 
+  it('reads the Sent label when Gmail encodes the label list for a non-ASCII label', () => {
+    const c = mboxMessageToCandidate([
+      'Date: Tue, 16 Jan 2024 09:00:00 +0000',
+      'From: Me <me@gmail.com>',
+      'To: Alice <alice@example.com>',
+      'X-Gmail-Labels: =?UTF-8?Q?Sent,Caf=C3=A9?=',
+      ' =?UTF-8?Q?,Travel?=',
+    ], { selfEmails: [] });
+    expect(c.kind).toBe('message.sent');
+    expect(c.metadata.labels).toEqual(['Sent', 'Café', 'Travel']);
+  });
+
   it('scopes the fallback hash by thread when Message-ID is absent', () => {
     const noId = headerLines.filter((l) => !l.startsWith('Message-ID'));
     const c = mboxMessageToCandidate(noId, { selfEmails: [] });

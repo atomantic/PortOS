@@ -6,7 +6,7 @@ vi.mock('../../services/apiDockerContainment.js', () => ({
   getDockerContainmentStatus: mock.getDockerContainmentStatus,
   pullDockerContainmentImage: mock.pullDockerContainmentImage,
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import DockerContainmentCard from './DockerContainmentCard';
 

@@ -1,3 +1,4 @@
+import { PROVIDERS_PAGE_BREADCRUMB } from '../../../../server/lib/navManifest.js';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { ScanEye, ChevronDown, ChevronUp, Image as ImageIcon, Film, X, Copy } from 'lucide-react';
@@ -16,6 +17,7 @@ import { isVisionCapableCodexTuiProvider, isVisionCapableCliProvider, visionLoca
 import { copyToClipboard } from '../../lib/clipboard';
 import { safeReadStorage, safeRemoveStorage, safeWriteStorage } from '../../lib/safeStorage';
 import toast from '../ui/Toast';
+import ListLoadError from '../ui/ListLoadError';
 import BrailleSpinner from '../BrailleSpinner';
 
 const HISTORY_EVENTS = ['media-prompt-history:changed'];
@@ -106,6 +108,8 @@ export default function PromptFromMedia({
     setSelectedProviderId,
     setSelectedModel,
     loading: providersLoading,
+    error: providersError,
+    retry: retryProviders,
   } = useProviderModels({
     filter: visionProviderFilter,
     silent: true,
@@ -362,8 +366,11 @@ export default function PromptFromMedia({
             layout="stacked"
           />
 
-          {providers.length === 0 && !providersLoading && (
-            <p className="text-xs text-port-warning">No vision-capable providers are enabled. Add an API VLM or a Claude/Codex CLI in Settings → Providers.</p>
+          {providersError && providers.length === 0 && !providersLoading && (
+            <ListLoadError what="AI providers" error={providersError} onRetry={retryProviders} />
+          )}
+          {!providersError && providers.length === 0 && !providersLoading && (
+            <p className="text-xs text-port-warning">No vision-capable providers are enabled. Add an API VLM or a Claude/Codex CLI in {PROVIDERS_PAGE_BREADCRUMB}.</p>
           )}
 
           <div className="flex justify-end">

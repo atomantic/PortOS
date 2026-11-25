@@ -42,16 +42,10 @@ export {
 } from '../../lib/pipelineStages.js';
 import {
   AUDIO_STAGE_IDS,
-  PIPELINE_STAGE_IDS as STAGE_IDS,
   TEXT_STAGE_IDS,
   VISUAL_STAGE_IDS,
 } from '../../lib/pipelineStages.js';
 import { isStr, trimTo } from '../../lib/textUtils.js';
-
-// Backward-compatible data-stage export. Voice navigation now uses the visible
-// tab order from pipelineStages.js, but existing service consumers may still
-// use this name for the persisted stages that were historically navigable.
-export const NAVIGABLE_STAGE_IDS = STAGE_IDS;
 
 // Storage backend dispatcher (#1015). Issue records moved from per-record
 // `data/pipeline-issues/{id}/index.json` (collectionStore) to one-row-per-issue

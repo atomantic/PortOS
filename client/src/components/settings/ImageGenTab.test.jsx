@@ -29,11 +29,7 @@ vi.mock('../../hooks/useHfTokenStatus', () => ({
 vi.mock('../../hooks/useFalImageCatalog.js', () => ({
   useFalImageCatalog: () => ({ models: [], bundled: true, stale: true, truncated: false, refresh: () => Promise.resolve() }),
 }));
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), {
-    success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(),
-  }),
-}));
+vi.mock('../ui/Toast');
 // LocalSetupPanel has its own SSE/install-stream deps — stub it out; this suite
 // only cares that the Local tab hosts a python-path panel.
 vi.mock('./LocalSetupPanel', () => ({

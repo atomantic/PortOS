@@ -1,5 +1,7 @@
+import { PROVIDERS_PAGE_BREADCRUMB } from '../../../../server/lib/navManifest.js';
 import { useCallback, useMemo, useState } from 'react';
 import Modal from '../ui/Modal';
+import ListLoadError from '../ui/ListLoadError';
 import ProviderModelSelector from '../ProviderModelSelector';
 import useProviderModels from '../../hooks/useProviderModels';
 import useVisionModelIds from '../../hooks/useVisionModelIds';
@@ -19,7 +21,7 @@ export default function CombineMoodBoards({ boards, onClose, onCreated }) {
   const [effort, setEffort] = useState('');
   const { idsByProvider: visionIds } = useVisionModelIds(true);
   const modelFilter = useCallback((id, provider) => visionLocalModelFilter(id, provider, visionIds), [visionIds]);
-  const { providers, selectedProviderId, selectedModel, availableModels, setSelectedProviderId, setSelectedModel, loading } = useProviderModels({
+  const { providers, selectedProviderId, selectedModel, availableModels, setSelectedProviderId, setSelectedModel, loading, error: providersError, retry: retryProviders } = useProviderModels({
     filter: visionProviderFilter, silent: true, withEffort: true, modelFilter,
   });
   const missing = boards.filter(board => [firstId, secondId].includes(board.id) && !board.style?.prompt?.trim());
@@ -68,7 +70,8 @@ export default function CombineMoodBoards({ boards, onClose, onCreated }) {
           availableModels={availableModels} onProviderChange={setSelectedProviderId} onModelChange={setSelectedModel}
           effort={effort} onEffortChange={setEffort} disabled={busy} loading={loading}
         />
-        {!loading && !providers.length ? <p role="alert" className="text-sm text-port-warning">Enable a vision-capable provider in Settings → Providers to combine boards.</p> : null}
+        {!loading && !providers.length && providersError ? <ListLoadError what="AI providers" error={providersError} onRetry={retryProviders} /> : null}
+        {!loading && !providers.length && !providersError ? <p role="alert" className="text-sm text-port-warning">Enable a vision-capable provider in {PROVIDERS_PAGE_BREADCRUMB} to combine boards.</p> : null}
         {error ? <p role="alert" className="text-sm text-port-error">{error}</p> : null}
         <div className="flex justify-end gap-2">
           <button type="button" onClick={onClose} disabled={busy} className="min-h-[44px] px-3 text-sm text-gray-400">Cancel</button>

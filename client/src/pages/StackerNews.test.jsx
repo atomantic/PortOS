@@ -466,6 +466,23 @@ describe('StackerNews', () => {
     expect(screen.getByText('Current community')).toBeInTheDocument();
   });
 
+  it('keeps the selected account loaded when another account finishes its sync', async () => {
+    const user = userEvent.setup();
+    const sync = deferred();
+    api.syncStackerNewsAccount.mockReturnValue(sync.promise);
+    api.getStackerNewsTerritories.mockImplementation((id) => Promise.resolve({
+      territories: [{ id: `t-${id}`, accountId: id, slug: `community-${id}`, label: `Community ${id}`, rules: {} }],
+    }));
+    renderPage('/stacker-news/a1/accounts');
+    await user.click(await findEnabledByRole('button', { name: 'Sync now' }));
+    await user.selectOptions(accountSwitcher(), 'a2');
+    await user.click(screen.getByRole('tab', { name: 'Communities' }));
+    expect(await screen.findByText('Community a2')).toBeInTheDocument();
+    await act(async () => sync.resolve({ transport: 'api', ingested: 1, analyzed: 0, newestItemLimit: 30 }));
+    expect(screen.getByText('Community a2')).toBeInTheDocument();
+    expect(screen.queryByText('Loading communities…')).not.toBeInTheDocument();
+  });
+
   it('hides executable actions immediately when account selection changes', async () => {
     const user = userEvent.setup();
     const nextActions = deferred();

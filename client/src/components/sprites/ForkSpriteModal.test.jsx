@@ -28,9 +28,7 @@ vi.mock('../../services/apiSprites.js', () => ({
   getSpriteAssetPrompt: vi.fn(() => Promise.resolve(null)),
 }));
 
-vi.mock('../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 import ForkSpriteModal from './ForkSpriteModal.jsx';
 import toast from '../ui/Toast';

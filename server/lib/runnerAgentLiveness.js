@@ -4,7 +4,7 @@
  * CoS Runner GET /agents liveness. Presence in the runner's handle map is not proof of life:
  * `runnerAgentLivenessFields` produces `processActive` + `liveness` (`pty` from TUI onExit
  * bookkeeping, `pid` from a CLI probe) so Windows ConPTY `pid: 0` no longer reports every TUI as dead;
- * `runnerEntryShieldsRunningRecord` is the corroboration gate both zombie/orphan sweeps use before a
+ * `runnerEntryShieldsRunningRecord` is the corroboration gate the orphan sweep uses before a
  * listing can keep a durable `running` record.
  *
  * The runner's map is a list of PTY/child handles it has not seen exit. A
@@ -50,23 +50,6 @@ export function runnerAgentLivenessFields(agent, stats) {
     memoryMb: stats?.memoryMb ?? 0,
     liveness: RUNNER_LIVENESS_PID,
   };
-}
-
-/**
- * Sync read of a GET /agents row: is this a live process, not just a handle?
- * Does not probe pids — pair with `runnerEntryShieldsRunningRecord` when a
- * live-pid corroboration is wanted.
- */
-export function runnerListedAgentIsLive(entry) {
-  if (!entry || typeof entry !== 'object') return false;
-  if (entry.liveness === RUNNER_LIVENESS_PTY) return entry.processActive === true;
-  if (entry.liveness === RUNNER_LIVENESS_PID) return entry.processActive === true;
-  if (entry.processActive === true) return true;
-  // Pre-fix Windows TUI: node-pty reports pid 0, so processActive is always
-  // false whether the session is alive or dead. Presence is all we have.
-  // A pre-fix POSIX TUI has a real pid and a working probe — do not treat
-  // processActive:false as live just because kind is tui.
-  return entry.kind === 'tui' && !usableAgentPid(entry.pid);
 }
 
 /**

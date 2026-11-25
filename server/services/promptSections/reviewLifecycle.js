@@ -11,7 +11,7 @@ import { forkLocalBranch, forkRemoteName, normalizeForkHead } from '../../lib/fo
 import { shellQuote } from '../../lib/shellQuote.js';
 import { localApiBaseUrl } from '../../lib/networkExposure.js';
 import { agentApiAuthNote, agentApiCurl } from '../../lib/agent/agentApiToken.js';
-import { LOCAL_REVIEW_BRIDGE_SCRIPT, LOCAL_REVIEW_LIFECYCLE_SCRIPT, LOCAL_REVIEW_LIFECYCLE_GUIDE } from '../../lib/localReviewBridge.js';
+import { LOCAL_REVIEW_BRIDGE_SCRIPT, buildLocalReviewShell, LOCAL_REVIEW_LIFECYCLE_SCRIPT, LOCAL_REVIEW_LIFECYCLE_GUIDE } from '../../lib/localReviewBridge.js';
 import { INLINE_REVIEW_LOOP_STEP } from './constants.js';
 import { normalizeForgeCli } from './forge.js';
 import { buildCliReviewerOutcomeInstructions } from './reviewerOutcome.js';
@@ -414,15 +414,7 @@ function buildLocalLlmInvocation({ localLlmBackends, reviewerModelMap, reviewerE
   ].join(', ');
   const invocation = `Pipe the diff into PortOS's local-review bridge and extract its review text before evaluating it.${backendNote}
 \`\`\`bash
-REVIEW_RESPONSE=$(mktemp)
-trap 'rm -f "$REVIEW_RESPONSE" "\${REVIEW_RESPONSE}.findings"' EXIT
-${diffCommand} | jq -Rs ${shellQuote(reviewInput)} | node ${shellQuote(LOCAL_REVIEW_BRIDGE_SCRIPT)} > "$REVIEW_RESPONSE"
-if ! jq -er 'select(.ok == true and (.verdict == "clean" or .verdict == "findings")) | .findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "\${REVIEW_RESPONSE}.findings"; then
-  echo "Local reviewer failed: $(jq -r '.error // "missing .findings in reviewer response"' "$REVIEW_RESPONSE")" >&2
-  exit 1 # Never treat an absent or malformed response as clean.
-else
-  cat "\${REVIEW_RESPONSE}.findings"
-fi
+${buildLocalReviewShell(`${diffCommand} | jq -Rs ${shellQuote(reviewInput)} | node ${shellQuote(LOCAL_REVIEW_BRIDGE_SCRIPT)}`)}
 \`\`\`
 Only an \`ok: true\` response with a validated \`clean\` or \`findings\` verdict and a successfully extracted \`.findings\` value is review text; treat it like any other reviewer's findings.${pinNote.length && !providerRequest
   ? ` This run pins settings for ${pinNote.join(', ')} — add those keys to the JSON object (\`jq -Rs '{ ${pinJq} }'\`) so the review runs with them instead of the install defaults. Send ONLY the keys named above; a key with no pinned value overrides the install default with junk.`

@@ -8,7 +8,7 @@ vi.mock('../../services/apiSystem.js', () => ({
 }));
 vi.mock('../../services/apiCreativeDirector.js', () => ({ updateCreativeDirectorProject: vi.fn() }));
 vi.mock('../../services/apiLocalLlm', () => ({ getVisionModels: vi.fn(), getToolUseModels: vi.fn() }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import CreativeDirectorModelsDrawer from './CreativeDirectorModelsDrawer.jsx';
 import { getAiAssignments, updateAiAssignment } from '../../services/apiSystem.js';

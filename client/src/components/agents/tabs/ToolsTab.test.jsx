@@ -7,6 +7,7 @@ vi.mock('../../../services/apiAccounts.js', () => ({
   getAgentSubmolts: vi.fn(),
   getAgentDrafts: vi.fn(),
   getAgentFeed: vi.fn(),
+  getAgentPost: vi.fn(),
   getAgentRelevantPosts: vi.fn(),
   engageAgent: vi.fn(),
   deleteAgentDraft: vi.fn(),
@@ -18,6 +19,7 @@ import {
   getAgentSubmolts,
   getAgentDrafts,
   getAgentFeed,
+  getAgentPost,
   deleteAgentDraft,
 } from '../../../services/apiAccounts.js';
 import ToolsTab from './ToolsTab.jsx';
@@ -164,5 +166,41 @@ describe('ToolsTab account loading', () => {
 
     expect(await screen.findByText('example-user')).toBeInTheDocument();
     expect(screen.queryByText(/Could not load Moltbook account/)).not.toBeInTheDocument();
+  });
+});
+
+describe('ToolsTab post viewing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getPlatformAccounts.mockResolvedValue([{
+      id: 'account-1', status: 'active', credentials: { username: 'example-user' },
+    }]);
+    getAgentRateLimits.mockResolvedValue({});
+    getAgentSubmolts.mockResolvedValue([]);
+    getAgentDrafts.mockResolvedValue([]);
+  });
+
+  it('ignores a late read for an earlier post so it cannot replace the open post or erase a typed comment', async () => {
+    getAgentFeed.mockResolvedValue({ posts: [{ id: 'a', title: 'Post A' }, { id: 'b', title: 'Post B' }] });
+    let resolveA;
+    let resolveB;
+    getAgentPost.mockImplementation((_account, id) => new Promise((resolve) => {
+      if (id === 'a') resolveA = resolve; else resolveB = resolve;
+    }));
+
+    render(<ToolsTab agentId="agent-1" agent={{ id: 'agent-1', aiConfig: {} }} />);
+    const browse = await screen.findByRole('button', { name: 'Browse Feed' });
+    await act(async () => { fireEvent.click(browse); });
+    await act(async () => { fireEvent.click(screen.getByText('Post A')); });
+    await act(async () => { fireEvent.click(screen.getByText('Post B')); });
+    await act(async () => { resolveB({ id: 'b', title: 'Post B', content: 'Body B', comments: [] }); });
+
+    const box = screen.getByPlaceholderText('Comment content (markdown)...');
+    fireEvent.change(box, { target: { value: 'my draft reply' } });
+    await act(async () => { resolveA({ id: 'a', title: 'Post A', content: 'Body A', comments: [] }); });
+
+    expect(screen.getByText('Reply to: Post B')).toBeInTheDocument();
+    expect(screen.queryByText('Reply to: Post A')).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Comment content (markdown)...')).toHaveValue('my draft reply');
   });
 });

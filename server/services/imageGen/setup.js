@@ -13,6 +13,7 @@ import {
   REQUIRED_PACKAGES, detectArm64Python, HOST_ARCH, hostIsAppleSilicon, probePythonHealth, pipNameFor,
 } from '../../lib/pythonSetup.js';
 
+// The same memo backs GET /api/video-gen/status, so Video Gen page opens don't re-spawn the probe either.
 // /setup/check is called on every keystroke in the python-path input (debounced
 // to 400ms), on mount, AND on the refresh button — each call spawns a python
 // subprocess (~0.5-1s warm) plus the optional `detectArm64Python` walk. A

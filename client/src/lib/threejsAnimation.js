@@ -14,9 +14,6 @@
 
 import { evaluateThreejsModelClipPose } from '../../../server/lib/threejsModelClipPose.js';
 
-/** Channels a sequence may drive, in the order the schema declares them. */
-export const THREEJS_CLIP_CHANNELS = ['position', 'rotationDegrees', 'scale', 'opacity', 'visible'];
-
 /** Declared clips for a spec, or `[]` for a static assembly. */
 export const listThreejsClips = (spec) => (Array.isArray(spec?.animation?.clips) ? spec.animation.clips : []);
 

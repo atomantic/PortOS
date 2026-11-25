@@ -252,7 +252,7 @@ async function cleanupUncapturedClaimBranch({ sourceWorkspace, branch, remoteOpt
   return remote ? held(branch, remote) : null;
 }
 
-async function verifyClaimWorktreeRemoval({ sourceWorkspace, branch, capture, merged, owner, holder, trees }) {
+async function verifyClaimWorktreeRemoval({ agentId, sourceWorkspace, branch, capture, merged, owner, holder, trees }) {
   const reason = await owner();
   if (reason) return reason;
   if (!holder || holder.branch !== `refs/heads/${branch}` || holder.head !== capture.head) return 'checkout-changed';
@@ -260,6 +260,15 @@ async function verifyClaimWorktreeRemoval({ sourceWorkspace, branch, capture, me
     repoPath: sourceWorkspace, branch, path: capture.path, head: capture.head, worktrees: trees,
   }).catch(() => null);
   if (!current) return 'checkout-changed';
+  // Only the consumed, untracked sentinel belongs to completion cleanup.
+  // Leave Git to reject a dirty checkout even when its exact HEAD was merged.
+  const sentinelNames = doneSentinelCandidateNames(agentId);
+  const sentinels = await execGit(['ls-files', '--others', '--exclude-standard', '-z', '--', ...sentinelNames], capture.path)
+    .catch(() => null);
+  if (!sentinels) return 'checkout state unavailable';
+  const untracked = new Set(sentinels.stdout.split('\0'));
+  await Promise.all(sentinelNames.filter(name => untracked.has(name))
+    .map(name => rm(join(capture.path, name), { force: true }).catch(() => null)));
   if (!merged) {
     const base = await getDefaultBranch(sourceWorkspace, { strict: true, allowRemote: false }).catch(() => null);
     const [status, contained] = await Promise.all([
@@ -312,15 +321,11 @@ async function cleanupCapturedClaimBranch({ agentId, sourceWorkspace, branch, ca
     const removal = await withClaimOwnershipLock(async () => {
       const reason = await owner();
       if (reason) return { removed: false, reason };
-      // A claim that ran inside this checkout (server-provisioned, #15517) left
-      // its consumed completion sentinel here; it is not work, and an untracked
-      // file would make the non-forced removal of a clean stand-down refuse.
-      if (!merged) await Promise.all(doneSentinelCandidateNames(agentId).map(name => rm(join(capture.path, name), { force: true }).catch(() => null)));
       return forceRemoveWorktreeDir(sourceWorkspace, capture.path, {
         verifyRemoval: (currentHolder, currentTrees) => verifyClaimWorktreeRemoval({
-          sourceWorkspace, branch, capture, merged, owner, holder: currentHolder, trees: currentTrees,
+          agentId, sourceWorkspace, branch, capture, merged, owner, holder: currentHolder, trees: currentTrees,
         }),
-        force: merged,
+        force: false,
       });
     }).catch(() => ({ removed: false, reason: 'claim-ownership-unreadable' }));
     if (!removal.removed) return held(branch, removal.reason || 'worktree removal unverified');

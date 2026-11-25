@@ -97,7 +97,6 @@ function bmiCategory(bmi) {
 
 /**
  * Build the lifestyle section as a list of `{ label, value, note }` rows.
- * `LIFESTYLE_ADJUSTMENTS` keys define which factors the clinician summary covers.
  */
 export function buildLifestyleModel(config) {
   const lifestyle = config?.lifestyle || {};

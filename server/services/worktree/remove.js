@@ -2,10 +2,11 @@
 
 import { existsSync, realpathSync } from 'fs';
 import { lstat, rm } from 'fs/promises';
-import { dirname, isAbsolute, join } from 'path';
+import { dirname, isAbsolute, join, resolve } from 'path';
 import { claimCheckoutOwnerReason } from '../../lib/claimContinuation.js';
 import { DONE_SENTINEL_NAME, doneSentinelCandidateNames } from '../../lib/agent/agentSentinel.js';
 import { execGit } from '../../lib/execGit.js';
+import { rmGuarded } from '../../lib/fileUtils.js';
 import { PROTECTED_BRANCHES } from '../../lib/gitArgs.js';
 import { decideForceRemoval, decideWith } from '../branchRetirementDecision.js';
 import { withGitMutationLifetime } from '../../lib/gitMutationLifetime.js';
@@ -77,6 +78,31 @@ function canonicalPath(p) {
 }
 
 /**
+ * Finish removing a managed directory after Git has let go of it. The caller
+ * must already have authority over its contents (an admitted removal or the
+ * reserved path for a new claim). A Git marker of any kind keeps it intact.
+ */
+export async function removeUnregisteredWorktreeResidue(repo, worktreePath, { worktreesRoot = WORKTREES_DIR, beforeMutation } = {}) {
+  if (!isAbsolute(worktreePath)) return false;
+  const target = resolve(worktreePath);
+  if (!pathsEqual(dirname(target), worktreesRoot)) return false;
+  const isResidue = async () => {
+    const canonicalTarget = canonicalPath(target);
+    if (!pathsEqual(dirname(canonicalTarget), worktreesRoot)) return false;
+    const entries = await listWorktrees(repo).catch(() => null);
+    if (!entries?.length || entries.some(wt => canonicalPath(wt.path) === canonicalTarget)) return false;
+    const directory = await lstat(target).catch(() => null);
+    return directory?.isDirectory() && await lstat(join(target, '.git')).then(() => false, error => error.code === 'ENOENT');
+  };
+  if (!await isResidue()) return false;
+  if (beforeMutation) {
+    await beforeMutation();
+    if (!await isResidue()) return false;
+  }
+  return await rmGuarded(target, { recursive: true, force: true, maxRetries: 3 }).then(() => true, () => false);
+}
+
+/**
  * Observe whether a worktree's directory and Git registration are really gone.
  * Each probe answers `'unknown'` when it could not be read — an unverifiable
  * state is NOT absence, so callers never report cleanup they did not establish.
@@ -119,8 +145,9 @@ function removalOutcome(worktreePath, { directory, registration }, failure = nul
 
 /**
  * Remove a worktree directory robustly: try `git worktree remove --force`, and
- * if git refuses, preserve surviving contents and only prune an absent tree.
- * Git's lock-aware remove is the only operation allowed to delete a checkout.
+ * if Git refuses, preserve surviving checkouts and only prune an absent tree.
+ * After Git drops a managed checkout's registration and marker, finish removing
+ * any residue under the original admission.
  * Never throws — cleanup is best-effort and must never throw into a
  * completion/reap path — but it DOES report what it achieved: after every
  * attempt it re-reads the exact directory and its Git registration, and
@@ -152,6 +179,7 @@ function removalOutcome(worktreePath, { directory, registration }, failure = nul
  *   caller's fresh ownership/content gate, run before Git removal and rechecked
  *   after a refusal to report the current hold.
  *   Callers that share claim ownership hold its lock through this operation.
+ * @param {string} [opts.worktreesRoot] - managed root for residue cleanup.
  * @param {boolean} [opts.force=true] - allow Git to remove a dirty checkout.
  * Local content is not a hold here: callers retire only merged deliveries,
  * throwaway checkouts or a rolled-back add, whose ignored and uncommitted
@@ -167,28 +195,32 @@ export async function forceRemoveWorktreeDir(repo, worktreePath, opts = {}) {
 // Hold reasons that mean the cleanup could not even decide, rather than a gate declining.
 const REMOVAL_FAULT_HOLDS = new Set(['worktree-ownership-unreadable', 'worktree-removal-refused']);
 
-async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log = 'remove', subject = worktreePath, verifyRemoval, beforeMutation, force = true } = {}) {
+async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log = 'remove', subject = worktreePath, verifyRemoval, beforeMutation, force = true, worktreesRoot } = {}) {
   const logAll = label && log === 'all';
   let lastFailure = null;
   let heldReason = null;
   const findHolder = entries => entries.find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath)) || null;
   const listHolder = () => listWorktrees(repo).then(entries => ({ holder: findHolder(entries), entries }), () => null);
   const check = async () => {
-    let entries = null;
+    let listed;
     const decision = await decideWith(facts => decideForceRemoval({ guarded: Boolean(verifyRemoval), facts }), {
-      listing: async () => { const listed = await listHolder(); entries = listed?.entries; return listed; },
+      listing: async () => { listed = await listHolder(); return listed; },
       // The callback can await I/O, so the decision re-reads Git's registration after it.
-      guardReason: async facts => (await verifyRemoval(facts.listing.holder, entries).catch(() => 'worktree-ownership-unreadable')) || false,
+      guardReason: async facts => (await verifyRemoval(facts.listing.holder, facts.listing.entries).catch(() => 'worktree-ownership-unreadable')) || false,
       fresh: listHolder,
     });
-    return decision.hold?.reason ?? null;
+    return { reason: decision.hold?.reason ?? null, holder: listed?.holder };
   };
-  heldReason = await check();
+  const admission = await check();
+  heldReason = admission.reason;
   if (!heldReason) await beforeMutation?.();
   if (!heldReason) await execGit(['worktree', 'remove', worktreePath, ...(force ? ['--force'] : [])], repo, { timeout: WORKTREE_ADD_TIMEOUT_MS }).catch(async (err) => {
     lastFailure = errorExcerpt(err);
     if (label) console.log(`⚠️ ${label}: ${err.message}`);
-    heldReason = await check();
+    // The caller's guard may require a holder, so re-running it after Git drops
+    // the registration would reject the very residue we were admitted to remove.
+    if (admission.holder && await removeUnregisteredWorktreeResidue(repo, worktreePath, { worktreesRoot, beforeMutation })) return;
+    heldReason = (await check()).reason;
     if (heldReason) return;
     // A refusal is not authority to erase a surviving checkout. A raw rm could
     // bypass a lock acquired after our last read, even with a caller guard.

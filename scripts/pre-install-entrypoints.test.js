@@ -48,10 +48,9 @@ const PRE_INSTALL_ENTRYPOINTS = [
  * does not show up in this static walk.
  *
  * `ci-gate-report.js` runs on the two gate jobs, which check out the repo for
- * this one script and deliberately install nothing; `ci-retry-cancelled-run.js`
- * is the whole body of the `workflow_run` recovery workflow, which does the
- * same. Both would otherwise be one careless import away from making the
- * required check — or the thing that recovers a cancelled one — unloadable.
+ * this one script and deliberately install nothing.
+ * It would otherwise be one careless import away from making the required
+ * check unloadable.
  *
  * `portos-acp.js` is launched directly by an ACP editor (docs/ACP.md), often
  * from a checkout whose dependencies were never installed for that user.
@@ -64,7 +63,6 @@ const PRE_INSTALL_ENTRYPOINTS = [
 const BARE_CHECKOUT_SCRIPTS = [
   'scripts/ci-gate-report.js',
   'scripts/ci-nightly-report.js',
-  'scripts/ci-retry-cancelled-run.js',
   'scripts/doctor.js',
   'scripts/checkGitVersion.js',
   'scripts/setup.js',
@@ -159,29 +157,26 @@ describe('scripts that must load from a bare checkout', () => {
  * difference is invisible until CI breaks: `scripts/run-ci-tests.js` reaches
  * `../server/lib/bufferedSpawn.js` today, which is builtin-only and would be
  * ABSENT under `sparse-checkout: scripts`. One such import added to a gate
- * script blocks every pull request with a module-not-found error, or leaves
- * the cancel-recovery workflow erroring instead of recovering.
+ * script blocks every pull request with a module-not-found error.
  */
 describe('scripts that run from a sparse checkout of scripts/', () => {
   /** Jobs that pass `sparse-checkout: scripts` → the script each one runs. */
   const SPARSE_CHECKOUT_SCRIPTS = [
     'scripts/ci-gate-report.js',
     'scripts/ci-nightly-report.js',
-    'scripts/ci-retry-cancelled-run.js',
   ];
 
   it('the sparse jobs are exactly the ones claiming a sparse checkout', () => {
     // Discovery floor: a THIRD sparse job added without a row above would
     // never be held to the cone contract below.
-    const workflows = ['.github/workflows/ci.yml', '.github/workflows/ci-cancel-recovery.yml', '.github/workflows/main-health.yml']
+    const workflows = ['.github/workflows/ci.yml', '.github/workflows/main-health.yml']
       .map((rel) => readFileSync(join(REPO_ROOT, rel), 'utf8'))
       .join('\n');
     // The `with:` key at the start of a line, not the literal anywhere: a
     // comment mentioning it must neither inflate the count nor evade it.
     const sparseJobs = (workflows.match(/^ +sparse-checkout: scripts$/gm) || []).length;
-    // CI's two gate jobs, one cancellation retry job and the main-health
-    // reporter use scripts.
-    expect(sparseJobs).toBe(4);
+    // CI's two gate jobs and the main-health reporter use scripts.
+    expect(sparseJobs).toBe(3);
     for (const entry of SPARSE_CHECKOUT_SCRIPTS) {
       expect(workflows, entry).toContain(`node ${entry}`);
     }

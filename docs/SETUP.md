@@ -90,7 +90,7 @@ password, and signs out existing sessions. Peer credentials cannot change it.
 
 ## Choose an AI provider
 
-Initial setup is complete once at least one enabled provider is actually runnable. Choose one path under **AI → Providers**:
+Initial setup is complete once at least one enabled provider is actually runnable. Choose one path under **Models → Providers**:
 
 - **Subscription CLI:** install and authenticate a supported CLI such as Claude Code, Codex, or Antigravity. This is the recommended cost model for sustained autonomous work.
 - **API provider:** add a key for the paid provider you intend to use. PortOS never enables a paid provider automatically.

@@ -17,6 +17,7 @@ import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
 import { copyFile, unlink, writeFile } from 'fs/promises';
 import { join } from 'path';
+import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
@@ -220,7 +221,7 @@ async function beginPublishKitBuild(projectId, jobId) {
         captionsFilename,
         chapters: buildChapters(current),
       } } };
-    })).catch(err => { projectBuilds.markUnsettled(projectId); throw err; });
+    }), waitForBackup('kit build')).catch(err => { projectBuilds.markUnsettled(projectId); throw err; });
     await releaseKitFiles(staleFiles, written);
     return written;
   };
@@ -275,10 +276,16 @@ export async function capturePublishKitFrame(projectId, atSec) {
     const frames = [filename, ...(kit.frames || [])];
     dropped.push(...frames.slice(12));
     return { project: { ...current, publishKit: { ...kit, frames: frames.slice(0, 12) } } };
-  }))).catch(async error => { await unlink(output).catch(() => {}); throw error; });
+  }), waitForBackup('frame capture'))).catch(async error => { await unlink(output).catch(() => {}); throw error; });
   await releaseKitFiles(dropped);
   return result;
 }
+
+/** The files already exist, so a backup cut holding admission is a pause, never a reason to fail the build. */
+const waitForBackup = (what) => ({
+  timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
+  onWait: () => console.log(`⏸️ Music-video publishing kit ${what} waiting for the backup to finish before saving`),
+});
 
 /** Merge edited copy fields per platform (only known platforms and string/array fields). */
 export async function updatePublishKitCopy(projectId, patch, deps = {}) {

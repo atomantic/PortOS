@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   MAX_CHALLENGES_PER_TASK,
   CHALLENGE_OUTCOMES,
-  CHALLENGE_METADATA_KEYS,
   getChallengeCount,
   canChallenge,
   buildChallengePatch,
@@ -147,9 +146,6 @@ describe('cosChallenge', () => {
   });
 
   describe('constants / parity', () => {
-    it('owns exactly the three challenge metadata keys', () => {
-      expect([...CHALLENGE_METADATA_KEYS].sort()).toEqual(['challenge', 'challengeCount', 'challengeResolution']);
-    });
 
     it('the route resolution enum stays in lockstep with CHALLENGE_OUTCOMES', () => {
       // Drift guard: the Zod enum in cosValidation.js is a mirror; both must match.

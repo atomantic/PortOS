@@ -65,7 +65,7 @@ export const viteHostCheckQuerySchema = z.object({ host: scalar });
 export const platformAccountsQuerySchema = z.object({ agentId: scalar, platform: scalar });
 
 /** GET /api/review/items. */
-export const reviewItemsQuerySchema = z.object({ status: scalar, type: scalar });
+export const reviewItemsQuerySchema = paginationQuerySchema.extend({ status: scalar, type: scalar });
 
 /** GET /api/sharing/subscriptions. */
 export const sharingSubscriptionsQuerySchema = z.object({ bucketId: scalar, recordKind: scalar, recordId: scalar });

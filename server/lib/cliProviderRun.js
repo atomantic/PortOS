@@ -22,6 +22,8 @@
  * lightweight cousin for fire-and-collect prompts.
  */
 
+import { resolveSplashHarnessContext } from './splashHarnessLaunch.js';
+import { followsSplashContext, splashHarnessTarget } from './provider/splashHarnessContext.js';
 import { spawn } from './childProcess.js';
 import { buildCliArgs, prepareCliPrompt } from './cliProviderArgs.js';
 import { killProcessTree, guardChildStdin } from './bufferedSpawn.js';
@@ -152,6 +154,15 @@ export function runCliProviderPrompt(args = {}) {
         return runCliProviderPrompt({ ...args, timeoutMs: remaining, provider: prepared.provider, executionOptions: undefined })
           .then((result) => ({ ...result, executionOptions: prepared.attribution }));
       });
+  }
+  const requestedModel = model ?? provider.defaultModel;
+  if (followsSplashContext(provider, splashHarnessTarget(provider, requestedModel))) {
+    const started = Date.now();
+    return resolveSplashHarnessContext(provider, requestedModel).then((prepared) => {
+      const remaining = timeoutMs - (Date.now() - started);
+      if (remaining <= 0) return { error: 'Caller runtime budget exhausted before CLI dispatch', code: 'RUNTIME_BUDGET_EXHAUSTED', partial: false };
+      return runCliProviderPrompt({ ...args, provider: prepared, timeoutMs: remaining });
+    });
   }
   // Clone with the per-call model as defaultModel so buildCliArgs injects the
   // right --model/-m flag for this provider's CLI convention.

@@ -13,7 +13,7 @@ import { BROWSER_SERVED_SHARED_INPUTS } from '../browserServedFiles.js';
 import { isGuardTest } from '../guardScanners.js';
 import {
   DIRECTORY_INPUT_LIMIT, GIT_PACKAGE, GUARD_SUFFIX_REASON, IGNORED_INPUT_PREFIXES, JS_EXT, RECORD_DIGEST_LENGTH,
-  SKIP_TREE_DIRS, TEST_MEMO_ENV, TEST_MEMO_NEVER, UNRECORDED_SERVER_CALL, WORKSPACE_BASE_INPUTS, WORKSPACE_SELECTION_MODULES, WORKSPACE_SETUP_ENTRIES,
+  SKIP_TREE_DIRS, TEST_MEMO_ENV, TEST_MEMO_NEVER, TEST_MEMO_REQUIRED_TOOLS, UNRECORDED_SERVER_CALL, WORKSPACE_BASE_INPUTS, WORKSPACE_SELECTION_MODULES, WORKSPACE_SETUP_ENTRIES,
 } from './constants.js';
 import { collectBindings, evaluate, literalExports } from './evaluator.js';
 import { extractFileFacts } from './fileFacts.js';
@@ -34,6 +34,18 @@ const outsideRepository = (rel) => rel.startsWith('../') || rel.startsWith('/') 
 const ignoredInput = (rel) => IGNORED_INPUT_PREFIXES.some((prefix) => rel === prefix.slice(0, -1) || rel.startsWith(prefix));
 const localState = (target) => target === 'data' || target.startsWith('data/');
 const underGit = (rel) => rel === '.git' || rel.startsWith('.git/');
+
+const CLIENT_LOCKFILE = 'client/package-lock.json';
+
+function lockedClientPackages(fs) {
+  if (fs.kind('client/node_modules') !== null) return null;
+  try {
+    const lock = JSON.parse(fs.read(CLIENT_LOCKFILE)?.toString('utf8'));
+    return lock.lockfileVersion === 3 && lock.packages?.[''] ? lock.packages : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * The analyzer over an abstract filesystem (`read(rel) -> Buffer|null`,
@@ -57,13 +69,15 @@ const underGit = (rel) => rel === '.git' || rel.startsWith('.git/');
  * earlier run when a file's bytes, the setup's replaced sources and every
  * cross-file constant it looked up are unchanged; null extracts every file.
  */
-export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = process.platform, arch = process.arch, nodeVersion = process.versions.node, toolVersion = () => null, caseFilter = [], acceptVerdictsFrom = [], listFiles = null, factsCache = null }) {
+export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = process.platform, arch = process.arch, nodeVersion = process.versions.node, toolVersion = () => null, requireToolVersions = false, planBeforeClientSetup = false, caseFilter = [], acceptVerdictsFrom = [], listFiles = null, factsCache = null }) {
   const host = { nodeVersion, platform, arch };
   const a = {
     fs,
     factsCache,
     workspaceRel,
     toolVersion,
+    requireToolVersions,
+    clientPackages: planBeforeClientSetup ? lockedClientPackages(fs) : null,
     listFiles,
     hashes: new Map(),
     facts: new Map(),
@@ -216,6 +230,7 @@ function dataTree(a, dirRel) {
     files.add(rel);
     if (!JS_EXT.test(rel)) continue;
     const f = factsFor(a, rel);
+    if (f.inputs.has(CLIENT_LOCKFILE)) files.add(CLIENT_LOCKFILE);
     for (const target of f.edgeTargets) if (!files.has(target)) pending.push(target);
     for (const missing of f.absent) absent.add(missing);
     for (const [name, version] of f.packages) packageVersions.set(name, version);
@@ -294,6 +309,7 @@ function servedTree(a, dir, servedFiles) {
     if (rel.endsWith('.css')) { pending.push(...cssReferences(a, rel)); continue; }
     if (!JS_EXT.test(rel)) continue;
     const f = factsFor(a, rel);
+    if (f.inputs.has(CLIENT_LOCKFILE)) files.add(CLIENT_LOCKFILE);
     if (!served.has(rel)) pending.push(...f.edgeTargets);
     for (const missing of f.absent) absent.add(missing);
     for (const [name, version] of f.packages) packages.set(name, version);
@@ -348,10 +364,19 @@ function packageVersion(a, fromRel, spec) {
   }
   roots.push(a.workspaceRel);
   let found = null;
+  const packagePath = `node_modules/${name}`;
   for (const root of roots) {
-    const bytes = a.fs.read(`${root === '' ? '' : `${root}/`}node_modules/${name}/package.json`);
-    if (bytes === null) continue;
-    try { found = { name, version: String(JSON.parse(bytes.toString('utf8')).version ?? '') }; } catch { found = null; }
+    const bytes = a.fs.read(`${root === '' ? '' : `${root}/`}${packagePath}/package.json`);
+    if (bytes === null) {
+      const locked = root === 'client' ? a.clientPackages?.[packagePath] : null;
+      // An npm ci from this lock can be predicted only for unconditional,
+      // integrity-pinned packages. Execution always reads installed manifests.
+      if (typeof locked?.version !== 'string' || !locked.version || typeof locked.integrity !== 'string'
+        || !locked.integrity || locked.link || locked.optional || locked.devOptional || locked.os || locked.cpu || locked.libc) continue;
+      found = { name, version: locked.version, client: true };
+      break;
+    }
+    try { found = { name, version: String(JSON.parse(bytes.toString('utf8')).version ?? ''), client: root === 'client' }; } catch { found = null; }
     break;
   }
   a.packages.set(cacheKey, found);
@@ -396,6 +421,7 @@ function factsFor(a, rel) {
     nativeUnresolved: false,
     inputs: new Set(), absent: new Set(), packages: new Map(), tools: new Set(),
     unresolvedEdges: [], unresolvedInputs: [], oversized: [], localReads: [], never: false, git: false,
+    gitFixture: false, gitFixtureProblem: null, // the file's `test-memo: git-fixture` declaration, and why it was refused (`gitFixture.js`)
     openReads: new Set(), // reads whose variable segment is not proven to stay under the prefix that was keyed
     replaces: null, trusted: null, // sources this file mocks, and sources its contained paths rely on (`replacedSources`)
     trusts: new Set(), // modules whose constants named a read: void when a member mocks one (`gather`)
@@ -427,6 +453,8 @@ function copyRawFacts(a, rel, raw, resolved) {
   resolved.trusted = raw.trusted ?? null;
   resolved.never = raw.never;
   resolved.git = raw.git;
+  resolved.gitFixture = raw.gitFixture === true;
+  resolved.gitFixtureProblem = raw.gitFixtureProblem ?? null;
   resolved.nativeUnresolved = raw.nativeUnresolved;
   resolved.handedProblems = raw.handedProblems;
   resolved.handedDirs = [...new Set(raw.handedDirs)].filter((dirRel) => !dirRel.startsWith('..') && a.fs.kind(dirRel) === 'dir');
@@ -517,7 +545,12 @@ function resolveEdges(r, edges) {
       continue;
     }
     if (isBuiltin(spec) || spec.startsWith('data:')) continue;
-    if (GIT_PACKAGE.test(packageNameOf(spec))) resolved.git = true;
+    if (GIT_PACKAGE.test(packageNameOf(spec))) {
+      // A git library takes its directory wherever its API says: nothing the declaration's reading covers.
+      resolved.git = true;
+      if (resolved.gitFixture || resolved.gitFixtureProblem !== null) resolved.gitFixtureProblem = `imports the git library ${packageNameOf(spec)}`;
+      resolved.gitFixture = false;
+    }
     addPackage(r, spec, { mock: kind === 'mock' || kind === 'mock-import' });
   }
   for (const target of registered) if (!loaded.has(target) && resolved.modules.has(target)) resolved.mockOnly.add(target);
@@ -541,7 +574,12 @@ function resolveCwdLiterals(r, cwdLiterals) {
 
 function addPackage(r, spec, { mock = false } = {}) {
   const pkg = packageVersion(r.a, r.rel, spec);
-  if (pkg) { r.resolved.packages.set(pkg.name, pkg.version); return; }
+  if (pkg) {
+    r.resolved.packages.set(pkg.name, pkg.version);
+    // Preflight and execution bind client package versions to the same lock.
+    if (pkg.client && r.a.fs.kind(CLIENT_LOCKFILE) === 'file') r.resolved.inputs.add(CLIENT_LOCKFILE);
+    return;
+  }
   if (mock) { r.resolved.packages.set(packageNameOf(spec), 'absent'); return; }
   r.resolved.unresolvedEdges.push(`package not installed: ${packageNameOf(spec)}`);
 }
@@ -697,6 +735,9 @@ function gather(a, roots, { walk, testRel = null, stop = null, followMockOnly = 
     hasOpenReads: false,
     never: false,
     git: false,
+    gitFixture: false,
+    gitRefusal: null, // why the test's own `git-fixture` declaration was refused
+    gitMember: null, // the first other member that spawns git
   };
   // A side module (read as text, spawned, loaded natively or as a worker)
   // is never narrowed by the recording: it and its own closure are walked
@@ -722,8 +763,8 @@ function gather(a, roots, { walk, testRel = null, stop = null, followMockOnly = 
   // other test keeps the older reading (a directory passed along is a value).
   if (testRel !== null && g.members.has(testRel) && reachesChrome(a, roots, walk)) addBrowserInputs(a, g, testRel, served);
   for (const [name, version] of g.dataPackages) if (!g.packageVersions.has(name)) g.packageVersions.set(name, version);
-  const { members, inputs, absent, packageVersions: packages, tools, trees, servedRoots, unresolvedEdges, unresolvedInputs, hasOpenReads, never, git } = g;
-  return { members, inputs, absent, packages, tools, trees, servedRoots, unresolvedEdges, unresolvedInputs, hasOpenReads, never, git };
+  const { members, inputs, absent, packageVersions: packages, tools, trees, servedRoots, unresolvedEdges, unresolvedInputs, hasOpenReads, never, git, gitFixture, gitRefusal, gitMember } = g;
+  return { members, inputs, absent, packages, tools, trees, servedRoots, unresolvedEdges, unresolvedInputs, hasOpenReads, never, git, gitFixture, gitRefusal, gitMember };
 }
 
 /** Fold one closure member's own facts into the gathering `g`. */
@@ -767,7 +808,35 @@ function foldMember(a, g, rel, f, testRel) {
     foldDataTree(g, dir, data);
   }
   if (f.never) g.never = true;
-  if (f.git && ownsTrees) g.git = true;
+  if (f.git) {
+    if (ownsTrees) foldGitUse(g, rel, f, testRel);
+    else g.tools.add('git');
+  }
+}
+
+/**
+ * A member the git rule applies to spawns git. The test file's own
+ * `test-memo: git-fixture` declaration, where nothing in the file
+ * contradicts it (`gitFixture.js`), swaps the refusal for git as a keyed
+ * tool: the suite's repositories are its own, so what it runs against is its
+ * closure and the git it found. A `scripts/` member's git use is never the
+ * test's to declare, and the workspace base has no test.
+ */
+function foldGitUse(g, rel, f, testRel) {
+  if (rel === testRel && f.gitFixture) {
+    g.gitFixture = true;
+    g.tools.add('git');
+    return;
+  }
+  g.git = true;
+  if (rel === testRel) g.gitRefusal = f.gitFixtureProblem;
+  else g.gitMember ??= rel;
+}
+
+/** The git refusal, saying what a declaring test would need to know: why its declaration fell, or which member it does not cover. */
+function gitReason({ gitFixture, gitRefusal, gitMember }) {
+  if (gitRefusal !== null) return `spawns git (git-fixture declaration refused: ${gitRefusal})`;
+  return gitFixture && gitMember !== null ? `spawns git (through ${gitMember}, which the test's git-fixture declaration does not cover)` : 'spawns git';
 }
 
 /**
@@ -888,7 +957,7 @@ function verdictReasons(testRel, gathered, extra, baseClosure, requireEdges) {
   if (gathered.never) reasons.push('test-memo: never marker');
   // Set before the analyzer's own findings are appended: these three are a decision someone wrote down.
   const declared = reasons.length > 0;
-  if (gathered.git) reasons.push('spawns git');
+  if (gathered.git) reasons.push(gitReason(gathered));
   if (baseClosure.unresolved.length) reasons.push(`workspace config: ${baseClosure.unresolved[0]}`);
   if (requireEdges) reasons.push(...gathered.unresolvedEdges);
   reasons.push(...gathered.unresolvedInputs, ...extra.problems);
@@ -913,13 +982,25 @@ function verdict(a, testRel, gathered, extra, baseClosure, { requireEdges }) {
   for (const rel of [...gathered.absent].sort()) lines.push(`absent ${rel}`);
   const versions = new Map([...baseClosure.packages, ...gathered.packages]);
   for (const name of [...versions.keys()].sort()) lines.push(`pkg ${name} ${versions.get(name)}`);
-  for (const tool of [...gathered.tools].sort()) lines.push(`tool ${tool} ${a.toolVersion(tool) ?? 'absent'}`);
+  const unavailableTools = [];
+  for (const tool of [...gathered.tools].sort()) {
+    const version = a.toolVersion(tool);
+    // Reaching a product module does not prove that the suite exercised its Git path.
+    if (!version && (tool !== 'git' || gathered.gitFixture)) unavailableTools.push(tool);
+    lines.push(`tool ${tool} ${version ?? 'absent'}`);
+  }
+  // A required tool the runner could not identify is never keyed as `absent`: the suite ran against something.
+  if (unavailableTools.length && (a.requireToolVersions || unavailableTools.some((tool) => TEST_MEMO_REQUIRED_TOOLS.includes(tool)))) {
+    const reason = `unverified tool: ${unavailableTools.join(', ')}`;
+    return { key: null, memoizable: false, reason, reasons: [reason], tools: gathered.tools, unavailableTools };
+  }
   const keyWith = (head) => sha256([...head, ...lines].join('\n'));
   return {
     key: keyWith(a.environmentLines),
     acceptedKeys: a.acceptedEnvironments.map(({ label, lines: head }) => ({ label, key: keyWith(head) })),
     memoizable: true,
     reasons: [],
+    tools: gathered.tools,
   };
 }
 

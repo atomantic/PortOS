@@ -170,24 +170,6 @@ export function musicVideoSongDocument(project) {
 }
 
 /**
- * Render one code-composition music video (or an excerpt of it) through the
- * HTML composition owner. `startSec` is the master's in-point (#8986); the
- * page's own duration is the rendered length. Song data is staged as song.json
- * before the composition snapshot freezes.
- */
-export async function renderSongComposition({ project, directory, jobId, audioPath, startSec = 0 }) {
-  const { renderComposition } = await import('../htmlComposition/index.js');
-  return renderComposition({
-    jobId,
-    directory,
-    owner: 'music-video',
-    audio: { path: audioPath, startSec },
-    maxDurationSec: Number(project?.audioAnalysis?.durationSec),
-    song: musicVideoSongDocument(project),
-  });
-}
-
-/**
  * The frame windows the overlay capture draws, per page (`doc` for the timed
  * text cues, `lyrics` for the sung lyrics), in the order renderTypographyOverlays
  * emits its clips. Each window is snapped outward to the output frame grid and

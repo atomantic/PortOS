@@ -118,5 +118,3 @@ export function installUpgradeFallback(server, {
     server.off('upgrade', onUpgrade);
   };
 }
-
-export const mountUpgradeFallback = installUpgradeFallback;

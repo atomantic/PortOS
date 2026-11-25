@@ -20,6 +20,9 @@ vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
   updateEidoverseWorldsSource: mock.updateEidoverseWorldsSource,
 }));
 
+// The audit-priority section has its own suite and its own fetch.
+vi.mock('./FeaturePrioritiesSection', () => ({ default: () => null }));
+
 import { INSTANCE_FEATURES_CHANGED } from '../../constants/events.js';
 import { __resetInstanceFeatureCache } from '../../hooks/useInstanceFeatures.js';
 import InstanceFeaturesTab from './InstanceFeaturesTab';

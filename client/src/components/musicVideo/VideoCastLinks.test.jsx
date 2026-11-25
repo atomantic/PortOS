@@ -16,7 +16,7 @@ vi.mock('../../services/apiCatalog.js', () => ({
   restoreVideoSubjectDescription: vi.fn(),
   saveVideoSubjectToCatalog: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 vi.mock('../IngredientPicker.jsx', () => ({
   default: ({ open: isOpen, type, onSelect }) => (isOpen ? (
     <div role="dialog" aria-label={`Pick ${type}`}>

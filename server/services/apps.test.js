@@ -280,6 +280,19 @@ describe('portless / desktop apps (#2991)', () => {
     expect(atomicWrite.mock.calls.at(-1)[1].apps[created.id].featureOverrides).toEqual(featureOverrides);
   });
 
+  it('createApp persists featurePriorities when sent and leaves the field absent otherwise', async () => {
+    readJSONFile.mockResolvedValue({ apps: { [PORTOS_APP_ID]: { name: 'PortOS' } } });
+    const featurePriorities = [{ id: 'legacy', label: 'Legacy', paths: ['legacy/**'], priority: 'P3' }];
+
+    const scoped = await createApp({ name: 'Scoped App', repoPath: '/tmp/scoped-app', featurePriorities });
+    expect(atomicWrite.mock.calls.at(-1)[1].apps[scoped.id].featurePriorities).toEqual(featurePriorities);
+
+    for (const value of [undefined, []]) {
+      const plain = await createApp({ name: 'Plain App', repoPath: '/tmp/plain-app', featurePriorities: value });
+      expect(atomicWrite.mock.calls.at(-1)[1].apps[plain.id]).not.toHaveProperty('featurePriorities');
+    }
+  });
+
   it('createApp preserves web ports when a separate native target is present', async () => {
     readJSONFile.mockResolvedValue({ apps: { [PORTOS_APP_ID]: { name: 'PortOS' } } });
     const nativeLaunch = {
@@ -306,6 +319,18 @@ describe('portless / desktop apps (#2991)', () => {
     expect(atomicWrite.mock.calls.at(-1)?.[1].apps[created.id].nativeLaunch).toEqual(nativeLaunch);
   });
 
+});
+
+describe('cleared app process names', () => {
+  it.each([
+    ['express', ['my-app']],
+    ['xcode', []],
+  ])('stores the default name for a %s app only when PM2 runs it', async (type, expected) => {
+    readJSONFile.mockResolvedValue({ apps: { 'app-1': { name: 'My App', type, pm2ProcessNames: ['old-name'] } } });
+    invalidateCache();
+    expect((await updateApp('app-1', { pm2ProcessNames: [] })).pm2ProcessNames).toEqual(expected);
+    expect((await updateApp('app-1', { description: 'x' })).pm2ProcessNames).toEqual(expected);
+  });
 });
 
 describe('managed app PR completion settings', () => {

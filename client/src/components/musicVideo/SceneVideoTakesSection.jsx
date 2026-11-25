@@ -295,7 +295,7 @@ export default function SceneVideoTakesSection({
         <SceneImageEffect fieldId={fieldId} scene={scene} onChange={applyPatch} beats={project?.audioAnalysis?.beats} fps={photoFps} />
       )}
       {stillPicture ? (
-        <ScenePicturePreview scene={scene} beats={project?.audioAnalysis?.beats} fps={photoFps} />
+        <ScenePicturePreview scene={scene} projectId={project?.id} beats={project?.audioAnalysis?.beats} fps={photoFps} />
       ) : (
         <>
           <SceneClipMediaPreview
@@ -307,7 +307,8 @@ export default function SceneVideoTakesSection({
           <SceneTakeStrip project={project} scene={scene} kind="video" busy={takes.busy} saving={takes.pending} grid pending={renderPlan.clipJobs}
             onSelect={(take) => actions.onSelectTake?.(scene, take)}
             onReview={(take, review) => actions.onReviewTake?.(scene, take, review)}
-            onOpenPreview={actions.onOpenPreview} marks={project?.assetMarks} onMark={actions.onMarkTake} />
+            onOpenPreview={actions.onOpenPreview} marks={project?.assetMarks} onMark={actions.onMarkTake}
+            onMove={actions.onMoveTake ? (take, toSceneId) => actions.onMoveTake(scene, take, toSceneId) : null} />
           {layer === 'footage' && (
             <SceneFinalApproval scene={scene} locked={locked} busy={takes.busy} onApprove={actions.onApproveFinal} onSelectTake={actions.onSelectTake} />
           )}

@@ -553,7 +553,10 @@ export function listSheetVariants({ photographic = false } = {}) {
 // subscriber's handlers via O(1) Map lookup instead of N filters.
 const sheetSubscribers = new Map(); // jobId → { onStarted, onCompleted, onFailed }
 let _sheetListenersAttached = false;
-function ensureSheetDispatchListeners() {
+
+// The queue calls this before publishing a terminal outcome, including for
+// restored jobs. Importing the module during warmup leaves listeners alone.
+export function initCharacterSheetCompletionHook() {
   if (_sheetListenersAttached) return;
   _sheetListenersAttached = true;
   mediaJobEvents.on('started', (job) => sheetSubscribers.get(job?.id)?.onStarted?.(job));
@@ -582,11 +585,7 @@ function ensureSheetDispatchListeners() {
   mediaJobEvents.on('failed', onTerminal);
   mediaJobEvents.on('canceled', onTerminal);
 }
-// Routes import this module before queue recovery starts at boot.
-ensureSheetDispatchListeners();
-
 function subscribeToSheetJob(jobId, handlers) {
-  ensureSheetDispatchListeners();
   sheetSubscribers.set(jobId, handlers);
   return () => { sheetSubscribers.delete(jobId); };
 }
@@ -888,6 +887,7 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   });
   params.characterSheet = { universeId, entryId, variant, requestId };
   if (options.catalogAttach) params.catalogAttach = options.catalogAttach;
+  initCharacterSheetCompletionHook();
   const queued = await enqueueJob({ kind: 'image', params });
   const jobId = queued.jobId;
   const latest = await getUniverse(universeId);

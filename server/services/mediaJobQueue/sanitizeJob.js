@@ -1,3 +1,4 @@
+import { retryPromptParts } from './retryPrompt.js';
 import { sanitizeContinuation } from '../../lib/videoContinuationProvenance.js';
 import { effectiveJobPrompt } from '../../lib/federatedMediaWire.js';
 import { videoHoldSchema } from './videoHolds.js';
@@ -124,6 +125,11 @@ export function sanitizeJob(job) {
   if (safeParams && routed) {
     if (remotePrompt) safeParams.prompt = remotePrompt;
     if (typeof remoteModelId === 'string' && remoteModelId) safeParams.modelId = remoteModelId;
+  }
+  if (safeParams && !routed && ['image', 'video'].includes(job.kind)) {
+    const parts = retryPromptParts(job.params);
+    if (parts.prompt.text !== (safeParams.prompt ?? '')) safeParams.retryPrompt = parts.prompt.text;
+    if (parts.negativePrompt.text !== (safeParams.negativePrompt ?? '')) safeParams.retryNegativePrompt = parts.negativePrompt.text;
   }
   const requestedInputImages = job.kind === 'image' ? referenceInputs(job.params, routed) : [];
   const referenceImageFilenames = job.kind === 'image' && Array.isArray(job.referenceImageFilenames)

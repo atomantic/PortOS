@@ -552,25 +552,6 @@ describe('listWeeklyDigests', () => {
   });
 });
 
-describe('compareWeeks', () => {
-  it('returns null when either week is missing', async () => {
-    writeDigest(LAST_WEEK, storedDigest(LAST_WEEK, { totalTasks: 4, successRate: 50, totalWorkTimeMs: 1000 }));
-
-    expect(await digestService.compareWeeks(LAST_WEEK, '2026-W10')).toBeNull();
-  });
-
-  it('reports the deltas between two stored weeks', async () => {
-    writeDigest(LAST_WEEK, storedDigest(LAST_WEEK, { totalTasks: 6, successRate: 80, totalWorkTimeMs: 3000 }));
-    writeDigest('2026-W10', storedDigest('2026-W10', { totalTasks: 4, successRate: 50, totalWorkTimeMs: 6000 }));
-
-    const result = await digestService.compareWeeks(LAST_WEEK, '2026-W10');
-
-    expect(result.week1).toMatchObject({ weekId: LAST_WEEK, totalTasks: 6, successRate: 80 });
-    expect(result.week2).toMatchObject({ weekId: '2026-W10', totalTasks: 4, successRate: 50 });
-    expect(result.comparison).toEqual({ tasksChange: 50, successRateChange: 30, workTimeChange: -50 });
-  });
-});
-
 describe('getCurrentWeekProgress', () => {
   it('projects the full week from the pace so far and lists recent completions', async () => {
     mock.agents = [
@@ -605,44 +586,22 @@ describe('getCurrentWeekProgress', () => {
     expect(progress.recentCompletions.at(-1).description).toBe(`${'z'.repeat(57)}...`);
   });
 
+  it('counts agents already archived out of live state, matching the week\'s digest', async () => {
+    onDates([agent('archived', { day: 16 }), agent('both', { day: 17 })]);
+    mock.agents = [agent('both', { day: 17 }), agent('live', { day: 18 })];
+
+    const progress = await digestService.getCurrentWeekProgress();
+    const digest = await digestService.generateWeeklyDigest();
+
+    expect(progress.current.totalTasks).toBe(3);
+    expect(progress.current.totalTasks).toBe(digest.summary.totalTasks);
+  });
+
   it('reports an idle week without projecting phantom tasks', async () => {
     const progress = await digestService.getCurrentWeekProgress();
 
     expect(progress.current).toMatchObject({ totalTasks: 0, successRate: 0, runningAgents: 0, totalWorkTime: '0m' });
     expect(progress.projected).toEqual({ tasks: 0, workTimeMs: 0, workTime: '0m' });
     expect(progress.recentCompletions).toEqual([]);
-  });
-});
-
-describe('generateTextSummary', () => {
-  it('renders the digest as plain text with week-over-week and insight lines', async () => {
-    writeDigest(LAST_WEEK, storedDigest(LAST_WEEK, { totalTasks: 2, successRate: 50, totalWorkTimeMs: 1000 }));
-    onDates([
-      agent('a1', { day: 16, duration: 1800000, taskType: 'review', description: 'shipped the digest' }),
-      agent('a2', { day: 17, duration: 1800000, taskType: 'review', description: 'fixed the streaks' }),
-      agent('a3', { day: 18, duration: 0, taskType: 'review', description: 'tried a thing' }),
-    ]);
-
-    const text = await digestService.generateTextSummary();
-
-    expect(text).toContain(`Weekly Digest: ${THIS_WEEK}`);
-    expect(text).toContain('  - Tasks Completed: 3');
-    expect(text).toContain('  - Success Rate: 100%');
-    expect(text).toContain('  - Total Work Time: 1h 0m');
-    expect(text).toContain('  - Tasks: +50%');
-    expect(text).toContain('  - Success Rate: +50 pts');
-    expect(text).toContain('  - shipped the digest');
-    expect(text).toContain('  [+] Increased Output: Task completion increased by 50% compared to last week.');
-    expect(text).toContain('  [-] Focus Area: Most effort spent on review tasks (3 completed).');
-  });
-
-  it('omits the week-over-week block when there is no prior week', async () => {
-    onDates([agent('a1', { day: 16, description: 'only thing' })]);
-
-    const text = await digestService.generateTextSummary();
-
-    expect(text).not.toContain('Week-over-Week:');
-    expect(text).toContain('Top Accomplishments:');
-    expect(text).toContain('  - only thing');
   });
 });

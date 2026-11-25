@@ -24,20 +24,6 @@ export const memoryTypeEnum = z.enum([
 // Memory status enum
 export const memoryStatusEnum = z.enum(['active', 'archived', 'expired', 'pending_approval']);
 
-// Memory category enum (extensible, but common ones)
-export const memoryCategoryEnum = z.enum([
-  'codebase',
-  'workflow',
-  'tools',
-  'architecture',
-  'patterns',
-  'conventions',
-  'preferences',
-  'system',
-  'project',
-  'other'
-]);
-
 // Core memory schema for creation
 export const memoryCreateSchema = z.object({
   type: memoryTypeEnum,
@@ -196,13 +182,6 @@ export const memoryTimelineSchema = z.object({
   // hand-built its options object.
   appId: emptyToUndefined(z.string().max(100).optional()),
   limit: numeric(z.number().int().min(1).max(500).optional().default(100))
-});
-
-// Memory extraction request schema (from agent output)
-export const memoryExtractSchema = z.object({
-  agentId: z.string(),
-  taskId: z.string(),
-  output: z.string().min(1)
 });
 
 // Memory consolidation request schema

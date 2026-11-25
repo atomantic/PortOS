@@ -193,8 +193,7 @@ export function tagIndexOf(src, { startMode = 'code' } = {}) {
   if (cached) return cached;
   const nodes = [];
   const openByStart = new Map();
-  for (const token of jsxScanner(src, { mode: startMode })) {
-    if (token.kind !== 'char') continue;
+  for (const token of jsxScanner(src, { mode: startMode, tokens: 'tags' })) {
     if (token.opensTag) {
       const closing = src.startsWith('</', token.index);
       const node = {
@@ -464,8 +463,9 @@ export const looksLikeJsxTagStart = (src, index, previous) => {
  * `from` and `mode` together are what the arbitrary-substring callers need: a
  * slice is not always a whole file, and the machine has to be told where it is.
  */
-// Comment masking still needs the same lexer state, but can skip allocating and yielding other tokens.
-export function* jsxScanner(src, { from = 0, mode: startMode = 'code', commentsOnly = false } = {}) {
+// Tag indexing and comment masking need the same lexer state, but only need their own events.
+export function* jsxScanner(src, { from = 0, mode: startMode = 'code', tokens = 'all' } = {}) {
+  const allTokens = tokens === 'all';
   let mode = startMode;
   // The tag being read whenever `mode` is 'jsx-tag'; `parentMode` is where a
   // self-closing tag hands back to. A caller that starts mid-tag gets a stand-in
@@ -501,35 +501,39 @@ export function* jsxScanner(src, { from = 0, mode: startMode = 'code', commentsO
     // in `<option>Use the provider's default</option>` the apostrophe is text,
     // and reading it as a string opener swallows the rest of the file (#4318).
     if (mode !== 'jsx-text') {
-      const comment = commentEnd(src, i);
-      if (comment !== -1) {
-        yield { kind: 'comment', index: i, end: Math.min(comment, src.length - 1), mode };
-        i = comment;
-        continue;
+      if (c === '/') {
+        const comment = commentEnd(src, i);
+        if (comment !== -1) {
+          if (tokens !== 'tags') yield { kind: 'comment', index: i, end: Math.min(comment, src.length - 1), mode };
+          i = comment;
+          continue;
+        }
+        if (mode === 'code') {
+          const end = regexEnd(src, i, previous);
+          if (end !== -1) {
+            if (allTokens) yield { kind: 'regex', index: i, end, mode };
+            i = end;
+            previous = end;
+            continue;
+          }
+        }
       }
       if (c === '"' || c === '\'' || c === '`') {
         const end = skipString(src, i);
-        if (!commentsOnly) yield { kind: 'string', index: i, end: Math.min(end, src.length - 1), mode };
+        if (allTokens) yield { kind: 'string', index: i, end: Math.min(end, src.length - 1), mode };
         i = end;
         previous = Math.min(end, src.length - 1);
         continue;
       }
-      if (mode === 'code' && c === '/') {
-        const end = regexEnd(src, i, previous);
-        if (end !== -1) {
-          if (!commentsOnly) yield { kind: 'regex', index: i, end, mode };
-          i = end;
-          previous = end;
-          continue;
-        }
-      }
     }
     const before = previous;
-    if (!/\s/.test(c)) previous = i;
+    // Printable non-space ASCII dominates these sources. Keep JS whitespace
+    // semantics for other characters without running a regex on every token.
+    if ((c > ' ' && c <= '~') || !/\s/.test(c)) previous = i;
 
     // Braces nest the same way in all three contexts, so they are handled once.
     if (c === '{') {
-      if (!commentsOnly) yield { kind: 'char', index: i, char: c, mode, depth: braceFrames.length };
+      if (allTokens) yield { kind: 'char', index: i, char: c, mode, depth: braceFrames.length };
       braceFrames.push({ mode, tag });
       mode = 'code';
       tag = null;
@@ -539,7 +543,7 @@ export function* jsxScanner(src, { from = 0, mode: startMode = 'code', commentsO
       // A slice can begin inside an expression, so the pop may come back empty;
       // an unmatched `}` then simply sits at depth 0 and changes no context.
       const frame = braceFrames.pop();
-      if (!commentsOnly) yield { kind: 'char', index: i, char: c, mode, depth: braceFrames.length };
+      if (allTokens) yield { kind: 'char', index: i, char: c, mode, depth: braceFrames.length };
       if (frame) ({ mode, tag } = frame);
       continue;
     }
@@ -551,7 +555,7 @@ export function* jsxScanner(src, { from = 0, mode: startMode = 'code', commentsO
       ? opensJsxTagInText(src, i)
       : mode === 'code' && looksLikeJsxTagStart(src, i, before));
 
-    if (!commentsOnly) yield {
+    if (allTokens || (tokens === 'tags' && (opensTag || (mode === 'jsx-tag' && c === '>')))) yield {
       kind: 'char',
       index: i,
       char: c,

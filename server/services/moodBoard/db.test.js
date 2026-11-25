@@ -1,7 +1,7 @@
 /**
  * Postgres-backed round-trip for the mood board store (issue #911).
  *
- * Like projectsDB.test.js / mediaAssetIndex/db.test.js, this needs a live
+ * Like projectsDB.db.test.js / mediaAssetIndex/db.test.js, this needs a live
  * PostgreSQL with the schema applied. If no DB is reachable (CI, fresh
  * checkout), it SKIPS cleanly rather than failing red. When a DB IS reachable it
  * exercises create/list/get/update + the item add/update/remove ops + the #1564
@@ -97,6 +97,24 @@ describe.skipIf(!runDb)('mood board DB round-trip', () => {
 
     const list = await db.listBoards();
     expect(list.some((b) => b.id === board.id)).toBe(true);
+  });
+
+  it('projects item analysis out of list summaries without changing the board or item order', async () => {
+    const board = await db.createBoard({ name: 'Summary fixture' });
+    created.push(board.id);
+    const empty = (await db.listBoards({ omitItemAnalysis: true })).find(row => row.id === board.id);
+    expect(empty).toEqual(board);
+
+    const image = await db.addBoardItem(board.id, { type: 'image', mediaKey: 'image:summary-fixture.png' });
+    await db.addBoardItem(board.id, { type: 'text', text: 'Retain this note' });
+    await db.updateBoardItem(board.id, image.id, { analysis: { prompt: 'Example analysis' } });
+    const full = (await db.listBoards()).find(row => row.id === board.id);
+    const { analysis, ...imageSummary } = full.items[0];
+    expect(analysis.prompt).toBe('Example analysis');
+
+    const summary = (await db.listBoards({ omitItemAnalysis: true })).find(row => row.id === board.id);
+    expect(summary).toEqual({ ...full, items: [imageSummary, full.items[1]] });
+    expect(await db.getBoard(board.id)).toEqual(full);
   });
 
   it('persists a complete composite independently from its source boards', async () => {

@@ -35,7 +35,7 @@ vi.mock('../ui/Toast', () => ({ default: toast }));
 vi.mock('../../services/socket', () => ({ default: socket }));
 
 const InboxTab = (await import('./InboxTab')).default;
-const { latestSyncAt } = await import('./InboxTab');
+const { latestSyncAt, fetchFullToastMessage } = await import('./InboxTab');
 
 const HOUR_AGO = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
@@ -503,5 +503,17 @@ describe('InboxTab deep-linked message read failures', () => {
 
     await waitFor(() => expect(screen.getByTestId('location')).not.toHaveTextContent('message='));
     expect(screen.queryByText('Could not load this message')).not.toBeInTheDocument();
+  });
+});
+
+describe('fetchFullToastMessage', () => {
+  it('reports updated of total', () => {
+    expect(fetchFullToastMessage({ updated: 3, total: 5, truncated: false })).toBe('Fetched full content for 3 of 5 messages');
+  });
+  it('says more remain when truncated', () => {
+    expect(fetchFullToastMessage({ updated: 3, total: 5, truncated: true })).toMatch(/more remain/);
+  });
+  it('says nothing to fetch when total is 0', () => {
+    expect(fetchFullToastMessage({ updated: 0, total: 0 })).toBe('Nothing to fetch');
   });
 });

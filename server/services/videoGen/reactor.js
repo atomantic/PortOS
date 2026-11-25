@@ -59,8 +59,7 @@ export function resolveReactorApiKey(settings) {
 
 /**
  * Mint a short-lived session JWT scoped to `reactor/fast-h3`, bounded to one
- * concurrent session. Called by the `/api/video-gen/reactor/token` route AND
- * internally before every submit — the raw API key never leaves this module.
+ * concurrent session. Called internally before every submit — the raw API key never leaves this module.
  */
 export async function mintReactorToken(apiKey) {
   if (!apiKey) {
@@ -106,8 +105,9 @@ export const cancelAll = () => {
 export function validateReactorRequest({
   prompt, continueFromClipId, sourceImagePath, seconds = REACTOR_DEFAULT_CLIP_LENGTH, seed, aspect,
 }) {
-  if (typeof prompt !== 'string' || !prompt.trim() || prompt.trim().length > REACTOR_MAX_PROMPT_LENGTH) {
-    throw new ServerError(`Reactor prompts must contain 1–${REACTOR_MAX_PROMPT_LENGTH} characters; shorten the shot prompt before rendering`, { status: 400, code: 'VALIDATION_ERROR' });
+  const promptLength = typeof prompt === 'string' ? prompt.trim().length : 0;
+  if (promptLength < 1 || promptLength > REACTOR_MAX_PROMPT_LENGTH) {
+    throw new ServerError(`Reactor prompts must contain 1–${REACTOR_MAX_PROMPT_LENGTH} characters (received ${promptLength}); shorten the shot prompt before rendering`, { status: 400, code: 'VALIDATION_ERROR' });
   }
   if (continueFromClipId) {
     // A clip id addresses a clip fast-h3 already rendered, so continuation and
@@ -220,7 +220,7 @@ function captureClip(entry, input, pythonPath, job, jobId) {
 export const generateVideo = (params) => preparations.run(params, generateVideoPrepared);
 
 async function generateVideoPrepared({
-  settings, prompt = '', negativePrompt,
+  settings, prompt = '',
   continueFromClipId, seconds, seed, aspect,
   sourceImagePath = null, jobId: providedJobId = null,
 }) {
@@ -247,7 +247,6 @@ async function generateVideoPrepared({
   const meta = {
     id: jobId,
     prompt: prompt.trim(),
-    negativePrompt: negativePrompt || '',
     modelId: `reactor:${REACTOR_MODEL_ID}`,
     ...(continueFromClipId ? { continueFromClipId } : {}),
     ...(seconds ? { seconds } : {}),

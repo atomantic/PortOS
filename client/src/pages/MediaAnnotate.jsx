@@ -4,7 +4,11 @@ import { Pencil, Eraser, Undo2, Trash2, Save, Download, ArrowLeft, ImageOff, Ima
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
 import AnnotationCanvas from '../components/media/AnnotationCanvas';
+import ModelInputPreview from '../components/media/ModelInputPreview';
+import { useModelInputPreview } from '../hooks/useModelInputPreview';
 import { useAsyncAction } from '../hooks/useAsyncAction';
+import useUnsavedChangesGuard from '../hooks/useUnsavedChangesGuard';
+import UnsavedChangesConfirm from '../components/ui/UnsavedChangesConfirm';
 import { uuidv4 } from '../lib/uuid';
 import { undoStrokes, clampSize, DEFAULT_COLOR, DEFAULT_SIZE, MIN_SIZE, MAX_SIZE } from '../lib/sketchCanvas';
 import {
@@ -12,6 +16,7 @@ import {
   saveMediaSketch,
   getRegenAvailability,
   rerenderWithAnnotations,
+  previewRegenerate,
 } from '../services/apiImageVideo.js';
 import { clamp } from '../utils/formatters.js';
 
@@ -69,6 +74,8 @@ export default function MediaAnnotate() {
 
   const canvasApiRef = useRef(null);
   const [strokes, setStrokes] = useState([]);
+  // The strokes the server holds; a different array means unsaved drawing.
+  const [savedStrokes, setSavedStrokes] = useState(strokes);
   const [dims, setDims] = useState(null);
   const [color, setColor] = useState(DEFAULT_COLOR);
   const [size, setSize] = useState(DEFAULT_SIZE);
@@ -126,7 +133,9 @@ export default function MediaAnnotate() {
     // Save disabled, since the unchanged <img> never fires onLoad again.
     if (resetKeyRef.current !== mediaKey) {
       resetKeyRef.current = mediaKey;
-      setStrokes([]);
+      const blank = [];
+      setStrokes(blank);
+      setSavedStrokes(blank);
       // In image mode dims come from the <img> onLoad, which re-fires when the src
       // changes — so reset to null and let it re-report. In blank mode dims derive
       // from the (stable-per-key) URL size params; the child's dims effect won't
@@ -140,6 +149,7 @@ export default function MediaAnnotate() {
         if (!active) return;
         const restored = Array.isArray(res?.sketch?.strokes) ? res.sketch.strokes : [];
         setStrokes(restored);
+        setSavedStrokes(restored);
         setLoadResult({ key: mediaKey, status: 'loaded' });
         if (restored.length > 0) toast.success(`Restored ${restored.length} stroke${restored.length === 1 ? '' : 's'}`);
       })
@@ -169,8 +179,16 @@ export default function MediaAnnotate() {
       strokes,
       png,
     }, { silent: true });
+    setSavedStrokes(strokes);
     return res;
   }, { errorMessage: 'Failed to save annotation' });
+
+  const dirty = loaded && strokes !== savedStrokes && (strokes.length > 0 || savedStrokes.length > 0);
+  const routeGuard = useUnsavedChangesGuard(dirty);
+  const discardAndLeave = useCallback(() => {
+    setStrokes(savedStrokes);
+    routeGuard.proceed();
+  }, [savedStrokes, routeGuard]);
 
   const noun = isBlank ? 'Sketch' : 'Annotation';
   const backPath = returnTo || '/media/history';
@@ -195,6 +213,12 @@ export default function MediaAnnotate() {
   const strengthMin = regenInfo?.strengthMin ?? 0.02;
   const strengthMax = regenInfo?.strengthMax ?? 0.6;
   const regenAvailable = !!regenInfo?.available;
+  // The server's view of the re-render's model input, including the source image's carried negative prompt (#18642).
+  const typedRerenderPrompt = rerenderPrompt.trim();
+  const previewRerender = useCallback((body, options) => previewRegenerate(parsed.ref, body, options), [parsed?.ref]);
+  const rerenderPreview = useModelInputPreview(previewRerender, { prompt: typedRerenderPrompt, annotated: true }, {
+    enabled: rerenderOpen && regenAvailable && isImage && typedRerenderPrompt.length > 0,
+  });
   const regenModelLabel = regenInfo?.modelId || 'local FLUX img2img';
 
   const openRerender = useCallback(() => {
@@ -212,6 +236,7 @@ export default function MediaAnnotate() {
     if (strokes.length === 0) throw new Error('Draw over the image before re-rendering');
     const png = canvasApiRef.current?.exportPng?.() || undefined;
     await saveMediaSketch(mediaKey, { width: dims.w, height: dims.h, strokes, png }, { silent: true });
+    setSavedStrokes(strokes);
     return rerenderWithAnnotations(parsed.ref, {
       strength: rerenderStrength,
       prompt: rerenderPrompt.trim() || undefined,
@@ -264,6 +289,13 @@ export default function MediaAnnotate() {
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
+      <UnsavedChangesConfirm
+        guard={routeGuard}
+        when={!saving && !rerendering}
+        question={`Discard your unsaved ${noun.toLowerCase()}?`}
+        label={`Discard unsaved ${noun.toLowerCase()}`}
+        onDiscard={discardAndLeave}
+      />
       <div className="p-3 md:p-4 border-b border-port-border flex flex-wrap items-center gap-2 sticky top-0 bg-port-bg/95 backdrop-blur z-10">
         <Link to={backPath} className="text-gray-400 hover:text-white inline-flex items-center gap-1 text-sm mr-1" title={`Back to ${backLabel}`}>
           <ArrowLeft className="w-4 h-4" /> <span className="max-sm:sr-only">{backLabel}</span>
@@ -460,6 +492,7 @@ export default function MediaAnnotate() {
                 placeholder="Leave blank to let the annotations alone guide the redraw"
                 className="w-full rounded-lg bg-port-bg border border-port-border px-3 py-2 text-sm text-gray-200 resize-none focus:outline-none focus:border-port-accent"
               />
+              <div className="mt-2"><ModelInputPreview preview={rerenderPreview} prompt={rerenderPrompt} /></div>
             </div>
 
             <div className="mt-3">

@@ -40,7 +40,7 @@ describe('three import map injection', () => {
     const html = '<html><head><script type="importmap">{"imports":{"three":"https://cdn.example.com/three.js"}}</script><title>x</title></head><body></body></html>';
     const page = injectThreeImportMap(html);
     expect(page).not.toContain('cdn.example.com');
-    expect(page.startsWith(`<html><head><script type="importmap">${JSON.stringify(THREE_IMPORT_MAP)}</script>`)).toBe(true);
+    expect(page.startsWith(`<!doctype html><html><head><script type="importmap">${JSON.stringify(THREE_IMPORT_MAP)}</script>`)).toBe(true);
     expect(page.match(/type="importmap"/g)).toHaveLength(1);
   });
 });

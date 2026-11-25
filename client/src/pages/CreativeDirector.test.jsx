@@ -22,9 +22,7 @@ vi.mock('../services/apiImageVideo.js', () => ({ listVideoModels: vi.fn(() => Pr
 vi.mock('../services/apiUniverseBuilder.js', () => ({ listUniverseNames: vi.fn(() => Promise.resolve([])) }));
 vi.mock('../services/apiPipeline.js', () => ({ listPipelineSeriesNames: vi.fn(() => Promise.resolve([])) }));
 vi.mock('../components/creative-director/CreativeDirectorModelsDrawer.jsx', () => ({ default: () => null }));
-vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
-}));
+vi.mock('../components/ui/Toast');
 
 import * as cdApi from '../services/apiCreativeDirector.js';
 import CreativeDirector from './CreativeDirector';

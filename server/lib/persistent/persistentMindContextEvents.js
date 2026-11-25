@@ -11,9 +11,14 @@ const CONTENT_KINDS = new Set([
 
 export function selectPersistentMindContextEvents(events, mindId = 'cos-persistent-mind') {
   const seenIds = new Set();
-  const failedTurns = new Set((Array.isArray(events) ? events : [])
-    .filter(event => event?.mindId === mindId && ['mind.failed', 'mind.paused'].includes(event.kind))
-    .map(event => event.turnId).filter(Boolean));
+  const failedTurns = new Set();
+  // Indexed once: a ledger holds thousands of thoughts, so scanning it again per thought is quadratic.
+  const repliedTurns = new Set();
+  for (const event of Array.isArray(events) ? events : []) {
+    if (event?.mindId !== mindId || !event.turnId) continue;
+    if (event.kind === 'mind.failed' || event.kind === 'mind.paused') failedTurns.add(event.turnId);
+    else if (event.kind === 'mind.reply' && typeof event.data?.displayText === 'string' && event.data.displayText.trim()) repliedTurns.add(event.turnId);
+  }
   const ordered = (Array.isArray(events) ? events : []).filter(event => {
     if (event?.mindId !== mindId || !CONTENT_KINDS.has(event.kind)
       || !Number.isSafeInteger(event.sequence) || event.sequence < 0
@@ -30,9 +35,7 @@ export function selectPersistentMindContextEvents(events, mindId = 'cos-persiste
     // Working notes are public summaries, never private model reasoning. Prefer
     // the final reply when one exists, to avoid two recaps of the same turn.
     if (event.kind === 'mind.thought' && (event.data.visibility !== 'user-summary'
-      || !event.turnId || events.some(other => other?.mindId === mindId
-        && other.turnId === event.turnId && other.kind === 'mind.reply'
-        && typeof other.data?.displayText === 'string' && other.data.displayText.trim()))) return false;
+      || !event.turnId || repliedTurns.has(event.turnId))) return false;
     if (seenIds.has(event.eventId)) return false;
     seenIds.add(event.eventId);
     return true;

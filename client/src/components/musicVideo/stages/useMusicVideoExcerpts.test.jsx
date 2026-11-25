@@ -11,7 +11,7 @@ vi.mock('../../../services/apiMusicVideo.js', () => ({
   cancelMusicVideoExcerptRender: vi.fn(), deleteMusicVideoExcerpt: vi.fn(),
   addMusicVideoExcerptNote: vi.fn(), updateMusicVideoExcerptNote: vi.fn(), deleteMusicVideoExcerptNote: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
+vi.mock('../../ui/Toast');
 beforeEach(() => { vi.clearAllMocks(); MockEventSource.reset(); vi.stubGlobal('EventSource', MockEventSource); });
 afterEach(() => vi.unstubAllGlobals());
 

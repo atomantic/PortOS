@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
-import { Download, RefreshCw, ExternalLink, Link2, Copy, Power, PowerOff, Zap, ChevronDown, ChevronUp, Terminal, } from 'lucide-react';
+import { Download, RefreshCw, ExternalLink, Link2, Copy, Power, PowerOff, Zap, ChevronDown, ChevronUp, } from 'lucide-react';
 import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
 import BrailleSpinner from '../BrailleSpinner';
@@ -12,28 +12,15 @@ import {
   migrateLocalLlmBackend,
   upgradeLocalLlmBackend,
   controlOllamaService,
-  getLlamaServerStatus,
-  getLlamaServerUpdateStatus,
-  startLlamaServer,
-  stopLlamaServer,
-  installLlamaServer,
-  upgradeLlamaServer,
   downloadSpecDecodeModel,
   cancelSpecDecodeModelDownload,
   removeSpecDecodeModel,
   previewLocalLlmDownload,
   controlLmStudioService,
-  getMtplxServerStatus,
-  startMtplxServer,
-  stopMtplxServer,
-  installMtplx,
   searchMtplxModels,
   pullMtplxModel,
   removeMtplxModel,
-  getSlotstreamServerStatus,
-  startSlotstreamServer,
-  stopSlotstreamServer,
-  installSlotstream,
+  saveSplashContextWindow,
   downloadSlotstreamModel,
   cancelSlotstreamModelDownload,
   saveRuntimeStartupList,
@@ -42,7 +29,11 @@ import { patchSettingsSlice } from '../../services/apiSystem.js';
 import { getFleetLlmHost, stopFleetLlmHost } from '../../services/apiProviders';
 import socket from '../../services/socket';
 import SpecDecodeWeightRow from './SpecDecodeWeightRow.jsx';
-import RuntimeServersCard from './RuntimeServersCard.jsx';
+import RuntimeServersCard, { ManagedInklingRuntimeCard } from './RuntimeServersCard.jsx';
+import { LOCAL_RUNTIME_DESCRIPTORS, RUNTIME_CHANGE_LABELS } from './localRuntimeDescriptors.js';
+import RuntimeLogDisclosure from './RuntimeLogDisclosure.jsx';
+import useRuntimeDownloadProgress from './useRuntimeDownloadProgress.js';
+import Modal from '../ui/Modal';
 import MtplxServerCard from './MtplxServerCard.jsx';
 import SlotstreamServerCard from './SlotstreamServerCard.jsx';
 import HardwareLlmRecommendation from './HardwareLlmRecommendation.jsx';
@@ -101,14 +92,16 @@ function summarizeMigrate(r) {
   return `${labelFor(r.from)} → ${labelFor(r.to)}: ${parts.join(', ') || 'nothing to move'}`;
 }
 
+const descriptors = Object.values(LOCAL_RUNTIME_DESCRIPTORS);
+const runtimeIds = ['ollama', 'lmstudio', ...descriptors.map(({ id }) => id), 'fleet-host'];
+
 // Install, start, stop and configure the local servers that run language models.
-// Its own Models tab since #7414 (`/models/llms-runtimes`), so every socket
-// subscription and poll below belongs to a page the user is actually looking at.
+// Status and progress subscriptions belong to the Runtimes tab.
 export default function LocalLlmRuntimesView({ view } = {}) {
   const navigate = useNavigate();
   const { search } = useLocation();
-  const runtimeIds = ['ollama', 'lmstudio', 'llama', 'mtplx', 'slotstream', 'fleet-host'];
   const selectedRuntime = runtimeIds.includes(view) ? view : null;
+  const selectedDescriptor = LOCAL_RUNTIME_DESCRIPTORS[selectedRuntime];
   const selectRuntime = (id) => navigate(`/models/llms-runtimes${id ? '/' + id : ''}${search}`);
   const detailHeading = useRef(null);
   const rosterRef = useRef(null);
@@ -120,19 +113,15 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     }
     previousRuntime.current = selectedRuntime;
   }, [view, selectedRuntime]);
-  const [llamaStatus, setLlamaStatus] = useState(null);
-  const [mtplxStatus, setMtplxStatus] = useState(null);
-  const [slotstreamStatus, setSlotstreamStatus] = useState(null);
+  const [statuses, setStatuses] = useState({});
+  const { llama: llamaStatus, mtplx: mtplxStatus, slotstream: slotstreamStatus } = statuses;
+  const statusRequests = useRef({});
+  const [runtimeConfirm, setRuntimeConfirm] = useState(null);
   // The dedicated Qwen host is a docker container rather than a PM2 process, so
   // it is not part of the shared local-LLM status payload — but it IS a local
   // model server, and this is the page an operator comes to when they want to
   // stop one (#7414 moved every other lifecycle control here).
   const [fleetHostStatus, setFleetHostStatus] = useState(null);
-  // Live byte progress for an in-flight `mtplx pull`, driven by the socket. One
-  // at a time on purpose: a checkpoint is tens of gigabytes, so two concurrent
-  // pulls just make both slower.
-  const [mtplxDownload, setMtplxDownload] = useState(null);
-  const [slotstreamDownload, setSlotstreamDownload] = useState(null);
   const { confirm: downloadConfirm, request: requestWeightDownload, cancel: cancelDownloadConfirm, confirmRun: runDownloadConfirm } = useDownloadPreflightConfirm();
   const [llamaLoading, setLlamaLoading] = useState(false);
   const [llamaPresetId, setLlamaPresetId] = useState(DEFAULT_SPEC_PRESET_ID);
@@ -175,48 +164,35 @@ export default function LocalLlmRuntimesView({ view } = {}) {
   const llamaPresetIdRef = useRef(llamaPresetId);
   llamaPresetIdRef.current = llamaPresetId;
   const [showLlamaAdvanced, setShowLlamaAdvanced] = useState(false);
-  const [showLlamaLogs, setShowLlamaLogs] = useState(false);
 
-  const loadLlamaStatus = useCallback(() => {
-    return getLlamaServerStatus({ silent: true })
-      .then((res) => {
-        if (res) {
-          setLlamaStatus(res);
-          // Version/Homebrew metadata is deliberately a separate, non-blocking
-          // request. A slow `--version` probe must not hold up lifecycle state,
-          // presets, or the rest of the Local LLMs page.
-          if (res.installed) {
-            getLlamaServerUpdateStatus({ silent: true })
-              .then((update) => {
-                if (update) setLlamaStatus((previous) => previous ? { ...previous, ...update } : previous);
-              })
-              .catch(() => null);
-          }
+  const loadRuntime = useCallback(async (id) => {
+    const { api, kind } = LOCAL_RUNTIME_DESCRIPTORS[id];
+    const requestId = Symbol(id);
+    statusRequests.current[id] = requestId;
+    const result = await api.status({ silent: true }).catch(() => null);
+    if (statusRequests.current[id] !== requestId) return result;
+    if (result || kind === 'bundle') setStatuses((previous) => ({ ...previous, [id]: result }));
+    // Keep version/package-manager probing off the lifecycle status critical path.
+    if (result?.installed && api.updateStatus) {
+      api.updateStatus({ silent: true }).then((update) => {
+        if (update && statusRequests.current[id] === requestId) {
+          setStatuses((previous) => ({ ...previous, [id]: { ...previous[id], ...update } }));
         }
-        return res;
-      })
-      .catch(() => null);
+      }).catch(() => null);
+    }
+    return result;
   }, []);
 
-  const loadMtplxStatus = useCallback(() => (
-    getMtplxServerStatus({ silent: true })
-      .then((res) => {
-        if (res) setMtplxStatus(res);
-        return res;
-      })
-      .catch(() => null)
-  ), []);
+  const mergeRuntimeStatus = (id, result) => {
+    // An older read may have captured the state before the mutation was accepted.
+    delete statusRequests.current[id];
+    setStatuses((previous) => ({ ...previous, [id]: { ...previous[id], ...result } }));
+  };
 
-  const loadSlotstreamStatus = useCallback(() => (
-    getSlotstreamServerStatus({ silent: true })
-      .then((res) => {
-        if (res) setSlotstreamStatus(res);
-        return res;
-      })
-      .catch(() => null)
-  ), []);
+  const [mtplxDownload, clearMtplxDownload] = useRuntimeDownloadProgress('mtplx:download', () => loadRuntime('mtplx'));
+  const [slotstreamDownload, clearSlotstreamDownload] = useRuntimeDownloadProgress('slotstream:download', () => loadRuntime('slotstream'));
 
-  // The three managed runtimes refresh alongside the shared status, so one
+  // The runtime rows refresh alongside the shared status, so one
   // Refresh — or one completed action — repaints every row on this view.
   const loadFleetHostStatus = useCallback(() => (
     getFleetLlmHost({ silent: true })
@@ -228,15 +204,58 @@ export default function LocalLlmRuntimesView({ view } = {}) {
   ), []);
 
   const refreshRuntimes = useCallback(() => {
-    loadLlamaStatus();
-    loadMtplxStatus();
-    loadSlotstreamStatus();
+    for (const { id } of descriptors) loadRuntime(id);
     loadFleetHostStatus();
-  }, [loadLlamaStatus, loadMtplxStatus, loadSlotstreamStatus, loadFleetHostStatus]);
+  }, [loadRuntime, loadFleetHostStatus]);
+  useEffect(() => {
+    // Recover terminal bundle operation state after a dropped connection.
+    const recover = () => {
+      for (const { id, kind } of descriptors) {
+        if (kind === 'bundle') loadRuntime(id);
+      }
+    };
+    socket.on('connect', recover);
+    return () => socket.off('connect', recover);
+  }, [loadRuntime]);
   const {
     status, loading, loadStatus, runAction, installBackend: installRuntimeBackend,
     actionInProgress, busy, progressMsg, confirmAction, setConfirmAction,
   } = useLocalLlmStatus({ onRefresh: refreshRuntimes });
+  const runRuntimeAction = (id, action, payload) => {
+    const { api, kind, copy } = LOCAL_RUNTIME_DESCRIPTORS[id];
+    const invoke = () => action === 'start' ? api.start(payload ?? {}) : api[action]();
+    const key = `runtime-${action}-${id}`;
+    if (kind === 'bundle') {
+      return runAction(key, async () => {
+        const result = await invoke();
+        mergeRuntimeStatus(id, { ...result, lastError: null });
+        return result;
+      });
+    }
+    return runAction(key, invoke, copy?.[action]).then(() => loadRuntime(id));
+  };
+  const runtimeAction = (id, action, payload) => {
+    const descriptor = LOCAL_RUNTIME_DESCRIPTORS[id];
+    if (descriptor.capabilities.confirmInstall && Object.hasOwn(RUNTIME_CHANGE_LABELS, action)) {
+      setRuntimeConfirm({ descriptor, action });
+    } else {
+      runRuntimeAction(id, action, payload);
+    }
+  };
+  const confirmRuntimeAction = () => {
+    const { descriptor, action } = runtimeConfirm;
+    setRuntimeConfirm(null);
+    runRuntimeAction(descriptor.id, action === 'repair' ? 'install' : action);
+  };
+  const updateSplashContext = (contextWindow) => runAction(
+    'runtime-context-splash',
+    async () => {
+      const result = await saveSplashContextWindow(contextWindow);
+      mergeRuntimeStatus('splash', result);
+      return result;
+    },
+    'Saved Splash context for its next start',
+  );
 
   // The preset select mounts pre-selected, so the form has to be filled in the
   // moment the presets land — otherwise the recommended preset reads as chosen
@@ -275,7 +294,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
           delete next[key];
           return next;
         });
-        loadLlamaStatus();
+        loadRuntime('llama');
         return;
       }
       setLlamaDownloads((prev) => ({
@@ -285,61 +304,11 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     };
     socket.on('llamaServer:download', handleDownloadProgress);
     return () => socket.off('llamaServer:download', handleDownloadProgress);
-  }, [loadLlamaStatus]);
-
-  // MTPLX checkpoint download progress. A pull can run for hours, so the socket
-  // — not the still-open HTTP request — is what the UI trusts: a terminal frame
-  // clears the bar AND re-reads the cache, so the list is right even if the
-  // request itself never comes back.
-  useEffect(() => {
-    const handleMtplxDownload = (frame) => {
-      if (!frame) return;
-      if (frame.event === 'complete' || frame.event === 'error' || frame.event === 'cancelled') {
-        setMtplxDownload(null);
-        loadMtplxStatus();
-        return;
-      }
-      setMtplxDownload((prev) => ({
-        model: frame.model || prev?.model || null,
-        // A frame without byte counters (`resolving`, `verifying`) must not
-        // reset a bar that already has them — keep the last known numbers.
-        received: Number.isFinite(frame.received) ? frame.received : (prev?.received ?? 0),
-        total: Number.isFinite(frame.total) ? frame.total : (prev?.total ?? 0),
-        message: frame.message || prev?.message || null,
-      }));
-    };
-    socket.on('mtplx:download', handleMtplxDownload);
-    return () => socket.off('mtplx:download', handleMtplxDownload);
-  }, [loadMtplxStatus]);
-
-  // Slotstream checkpoint download progress. Same contract as MTPLX above: a
-  // 100 GB+ pull outlives the request that started it, so the socket's terminal
-  // frame is what clears the bar and re-reads the cache — the list is then right
-  // even if the request itself never comes back.
-  useEffect(() => {
-    const handleSlotstreamDownload = (frame) => {
-      if (!frame) return;
-      if (frame.event === 'complete' || frame.event === 'error' || frame.event === 'cancelled') {
-        setSlotstreamDownload(null);
-        loadSlotstreamStatus();
-        return;
-      }
-      setSlotstreamDownload((prev) => ({
-        model: frame.model || prev?.model || null,
-        // A frame without byte counters (the resolving pass) must not reset a
-        // bar that already has them — keep the last known numbers.
-        received: Number.isFinite(frame.received) ? frame.received : (prev?.received ?? 0),
-        total: Number.isFinite(frame.total) ? frame.total : (prev?.total ?? 0),
-        message: frame.message || prev?.message || null,
-      }));
-    };
-    socket.on('slotstream:download', handleSlotstreamDownload);
-    return () => socket.off('slotstream:download', handleSlotstreamDownload);
-  }, [loadSlotstreamStatus]);
+  }, [loadRuntime]);
 
   // === Unified runtime-server controls ======================================
   // Every handler routes through `runAction` so one busy/spinner/refresh path
-  // covers all four runtimes. The `runtime-<verb>-<id>` keys are what
+  // covers every runtime. The `runtime-<verb>-<id>` keys are what
   // `RuntimeServersCard` matches to place its spinner.
   const controlOllama = (action) => runAction(
     action === 'enable' || action === 'disable' ? 'runtime-startup-ollama' : `runtime-${action}-ollama`,
@@ -372,72 +341,29 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     () => controlLmStudioService(action),
     action === 'start' ? 'LM Studio server is running' : 'LM Studio server stopped'
   );
-  const runtimeInstallLlama = () => runAction(
-    'runtime-install-llama',
-    () => installLlamaServer(),
-    'llama.cpp installed'
-  ).then(loadLlamaStatus);
-  const runtimeUpgradeLlama = () => runAction(
-    'runtime-upgrade-llama',
-    () => upgradeLlamaServer(),
-    (r) => r?.note || 'llama.cpp updated'
-  ).then(loadLlamaStatus);
-  const runtimeStopLlama = () => runAction(
-    'runtime-stop-llama',
-    () => stopLlamaServer(),
-    (r) => r?.message || 'llama-server stopped'
-  ).then(loadLlamaStatus);
-  const runtimeInstallMtplx = () => runAction(
-    'runtime-install-mtplx',
-    () => installMtplx(),
-    'MTPLX installed'
-  ).then(loadMtplxStatus);
-  const runtimeStartMtplx = (launch = {}) => runAction(
-    'runtime-start-mtplx',
-    () => startMtplxServer(launch),
-    (r) => r?.online ? 'MTPLX is running' : 'MTPLX is loading its checkpoint'
-  ).then(loadMtplxStatus);
-  // The card can start MTPLX explicitly from its cached checkpoint, and the
-  // same launch configuration is replayed when a request wakes it on demand.
-  const saveMtplxLaunch = (launch) => runAction(
-    'runtime-save-mtplx-launch',
-    () => patchSettingsSlice('localLlm.mtplx', { launch }),
-    'Saved — MTPLX will start on these options when a request needs it'
-  ).then(loadMtplxStatus);
+  const saveRuntimeLaunch = (id, launch) => runAction(
+    `runtime-save-${id}-launch`,
+    () => patchSettingsSlice(`localLlm.${id}`, { launch }),
+    `Saved — ${LOCAL_RUNTIME_DESCRIPTORS[id].label} will start on these options when a request needs it`
+  ).then(() => loadRuntime(id));
 
   // The idle window is a plain settings write for the PM2-managed daemons;
   // only what happens when it elapses differs (llama.cpp unloads in place on
   // its next start; MTPLX and Slotstream are stopped and lazily restarted).
-  const idleRuntimeLabel = { llama: 'llama.cpp', mtplx: 'MTPLX', slotstream: 'Slotstream' };
   const saveIdleWindow = (runtime, minutes) => runAction(
     `runtime-idle-${runtime}`,
     () => patchSettingsSlice(`localLlm.${runtime}`, { idleMinutes: minutes }),
     minutes === 0
-      ? `${idleRuntimeLabel[runtime] || runtime} will stay loaded while idle`
-      : `${idleRuntimeLabel[runtime] || runtime} releases its model after ${minutes} idle minute${minutes === 1 ? '' : 's'}`
-  ).then(runtime === 'llama' ? loadLlamaStatus : runtime === 'slotstream' ? loadSlotstreamStatus : loadMtplxStatus);
+      ? `${LOCAL_RUNTIME_DESCRIPTORS[runtime].label} will stay loaded while idle`
+      : `${LOCAL_RUNTIME_DESCRIPTORS[runtime].label} releases its model after ${minutes} idle minute${minutes === 1 ? '' : 's'}`
+  ).then(() => loadRuntime(runtime));
   const toggleKeepLoaded = (runtime, nextPinned) => runAction(
     `runtime-keep-loaded-${runtime}`,
     () => patchSettingsSlice(`localLlm.${runtime}`, { keepLoaded: nextPinned }),
     nextPinned
-      ? `${idleRuntimeLabel[runtime] || runtime} is pinned and will stay loaded`
-      : `${idleRuntimeLabel[runtime] || runtime} will follow idle and pressure release policies`
-  ).then(runtime === 'llama' ? loadLlamaStatus : runtime === 'slotstream' ? loadSlotstreamStatus : loadMtplxStatus);
-  const runtimeInstallSlotstream = () => runAction(
-    'runtime-install-slotstream',
-    () => installSlotstream(),
-    'Slotstream installed'
-  ).then(loadSlotstreamStatus);
-  const runtimeStartSlotstream = (launch = {}) => runAction(
-    'runtime-start-slotstream',
-    () => startSlotstreamServer(launch),
-    (r) => r?.online ? 'Slotstream is running' : 'Slotstream is loading its checkpoint'
-  ).then(loadSlotstreamStatus);
-  const saveSlotstreamLaunch = (launch) => runAction(
-    'runtime-save-slotstream-launch',
-    () => patchSettingsSlice('localLlm.slotstream', { launch }),
-    'Saved — Slotstream will start on these options when a request needs it'
-  ).then(loadSlotstreamStatus);
+      ? `${LOCAL_RUNTIME_DESCRIPTORS[runtime].label} is pinned and will stay loaded`
+      : `${LOCAL_RUNTIME_DESCRIPTORS[runtime].label} will follow idle and pressure release policies`
+  ).then(() => loadRuntime(runtime));
   // The route awaits the whole transfer, so this request runs for as long as the
   // download does; the bar is driven by `slotstream:download` (subscribed above)
   // rather than by the spinner, and the terminal frame clears it first. The
@@ -451,8 +377,8 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     (r) => `${r?.repo || 'Checkpoint'} downloaded`,
     { onError: (err) => toast.error(`Slotstream download failed: ${err.message}`) },
   ).then(() => {
-    setSlotstreamDownload(null);
-    return loadSlotstreamStatus();
+    clearSlotstreamDownload();
+    return loadRuntime('slotstream');
   });
   const slotstreamDownloadModel = (model) => requestWeightDownload({
     title: 'Download Slotstream checkpoint',
@@ -468,22 +394,10 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     (r) => (r?.cancelled ? 'Cancelling checkpoint download…' : 'No checkpoint download is running'),
     { onError: (err) => toast.error(err?.message || 'Could not cancel the checkpoint download') },
   );
-  const runtimeStopSlotstream = () => runAction(
-    'runtime-stop-slotstream',
-    () => stopSlotstreamServer(),
-    (r) => r?.message || 'Slotstream stopped'
-  ).then(loadSlotstreamStatus);
-  const runtimeStopMtplx = () => runAction(
-    'runtime-stop-mtplx',
-    () => stopMtplxServer(),
-    (r) => r?.message || 'MTPLX stopped'
-  ).then(loadMtplxStatus);
-
   // Checkpoint management (search / download / remove), owned by the MTPLX card.
   //
   // `mtplxSearch` keeps a stable identity because the checkpoint panel keys its
-  // one-time initial load on it, and the status poll re-renders this component
-  // every few seconds. It resolves its own failures into the `{models, error}`
+  // one-time initial load on it, and progress and status updates re-render this component. It resolves its own failures into the `{models, error}`
   // shape the panel renders inline, so it is `silent` — no toast.
   const mtplxSearch = useCallback((params) => searchMtplxModels(params, { silent: true })
     .catch((err) => ({ models: [], error: err?.message || 'Search failed' })), []);
@@ -503,8 +417,8 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     (r) => `${r?.model || 'Default checkpoint'} downloaded`,
     { onError: (err) => toast.error(`MTPLX download failed: ${err.message}`) },
   ).then(() => {
-    setMtplxDownload(null);
-    return loadMtplxStatus();
+    clearMtplxDownload();
+    return loadRuntime('mtplx');
   });
   const mtplxPull = (model) => requestWeightDownload({
     title: 'Download MTPLX checkpoint',
@@ -515,12 +429,16 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     `mtplx-remove-${model}`,
     () => removeMtplxModel(model),
     (r) => `${r?.model || model} removed${r?.bytesFreed ? ` — ${formatBytes(r.bytesFreed)} freed` : ''}`,
-  ).then(loadMtplxStatus);
+  ).then(() => loadRuntime('mtplx'));
   const saveRuntimeStartup = () => runAction(
     'runtime-save-startup',
     () => saveRuntimeStartupList(),
     'Saved — the PM2 processes running now will come back after a reboot'
-  ).then(() => { loadLlamaStatus(); loadMtplxStatus(); loadSlotstreamStatus(); });
+  ).then(() => {
+    for (const { id, kind } of descriptors) {
+      if (kind === 'pm2') loadRuntime(id);
+    }
+  });
   // Hand-editing a path the preset supplied means the form no longer describes
   // that preset — say Custom rather than keep claiming the preset is in effect.
   const setLlamaField = (field, value) => {
@@ -618,7 +536,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
       // reporting "Download failed" over a transfer that is still going is the
       // one message guaranteed to send the user looking for a problem that
       // isn't there.
-      const status = await loadLlamaStatus();
+      const status = await loadRuntime('llama');
       const stillRunning = status?.presets
         ?.find((p) => p.id === presetId)?.[role]?.downloading;
       if (err?.code === 'SPEC_DOWNLOAD_CANCELLED') {
@@ -634,7 +552,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
         delete next[key];
         return next;
       });
-      loadLlamaStatus();
+      loadRuntime('llama');
     }
   };
 
@@ -654,7 +572,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     } catch (err) {
       toast.error(err?.message || 'Could not cancel the model download');
     } finally {
-      loadLlamaStatus();
+      loadRuntime('llama');
     }
   };
 
@@ -674,7 +592,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     } catch (err) {
       toast.error(err?.message || 'Could not delete the weight file');
     } finally {
-      loadLlamaStatus();
+      loadRuntime('llama');
     }
   };
 
@@ -701,14 +619,14 @@ export default function LocalLlmRuntimesView({ view } = {}) {
       if (config[field] === '' || config[field] === null) delete config[field];
     }
     try {
-      const res = await startLlamaServer(config);
+      const res = await LOCAL_RUNTIME_DESCRIPTORS.llama.api.start(config);
       if (res?.success) {
         toast.success(`llama-server started (PID ${res.pid}) on port ${config.port}`);
       }
-      loadLlamaStatus();
+      loadRuntime('llama');
     } catch (err) {
       toast.error(err?.message || 'Failed to start llama-server');
-      loadLlamaStatus();
+      loadRuntime('llama');
     } finally {
       setLlamaLoading(false);
     }
@@ -717,16 +635,16 @@ export default function LocalLlmRuntimesView({ view } = {}) {
   const handleStopLlama = async () => {
     setLlamaLoading(true);
     try {
-      const res = await stopLlamaServer();
+      const res = await LOCAL_RUNTIME_DESCRIPTORS.llama.api.stop();
       if (res?.success) {
         toast.success(res.message || 'llama-server stopped');
       } else {
         toast.error(res?.message || 'Could not stop server');
       }
-      loadLlamaStatus();
+      loadRuntime('llama');
     } catch (err) {
       toast.error(err?.message || 'Failed to stop llama-server');
-      loadLlamaStatus();
+      loadRuntime('llama');
     } finally {
       setLlamaLoading(false);
     }
@@ -735,14 +653,14 @@ export default function LocalLlmRuntimesView({ view } = {}) {
   const handleInstallLlama = async () => {
     setLlamaLoading(true);
     try {
-      const res = await installLlamaServer();
+      const res = await LOCAL_RUNTIME_DESCRIPTORS.llama.api.install();
       if (res?.success) {
         toast.success(res.message || 'llama.cpp installed successfully');
       }
-      loadLlamaStatus();
+      loadRuntime('llama');
     } catch (err) {
       toast.error(err?.message || 'Failed to install llama.cpp');
-      loadLlamaStatus();
+      loadRuntime('llama');
     } finally {
       setLlamaLoading(false);
     }
@@ -772,6 +690,21 @@ export default function LocalLlmRuntimesView({ view } = {}) {
           labelledby dangled, leaving the panel unnamed. A heading of its own
           survives whatever tab bar happens to be above it. Visually hidden
           because the section header already shows "Models → Runtimes". */}
+      {runtimeConfirm && (
+        <Modal open onClose={() => setRuntimeConfirm(null)} size="sm" usePortal
+          ariaLabel={`${RUNTIME_CHANGE_LABELS[runtimeConfirm.action]} ${runtimeConfirm.descriptor.label}`}>
+          <div className="rounded-xl border border-port-border bg-port-card p-5 space-y-4">
+            <p className="text-sm text-white">{runtimeConfirm.descriptor.copy.download}</p>
+            <p className="text-xs text-gray-400">This stages the PortOS-supported version. Existing providers and other runtimes are not changed.</p>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button type="button" onClick={() => setRuntimeConfirm(null)} className="min-h-[44px] rounded border border-port-border px-3 text-sm text-gray-300">Cancel</button>
+              <button type="button" onClick={confirmRuntimeAction} disabled={busy} className="min-h-[44px] rounded bg-port-accent px-3 text-sm text-white disabled:opacity-50">
+                {runtimeConfirm.action === 'install' ? 'Install and download' : RUNTIME_CHANGE_LABELS[runtimeConfirm.action]}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
       <h2 id="llm-runtimes-heading" className="sr-only">Runtimes</h2>
       {/* One start/stop/install surface for every local server PortOS can run */}
       {(progressMsg || busy || llamaLoading || mtplxDownload || slotstreamDownload || Object.keys(llamaDownloads).length > 0) && (
@@ -789,9 +722,8 @@ export default function LocalLlmRuntimesView({ view } = {}) {
         selectedRuntime={selectedRuntime}
         onSelectRuntime={selectRuntime}
         status={status}
-        llamaStatus={llamaStatus}
-        mtplxStatus={mtplxStatus}
-        slotstreamStatus={slotstreamStatus}
+        runtimes={descriptors.map((descriptor) => ({ descriptor, status: statuses[descriptor.id] }))}
+        onAction={runtimeAction}
         loading={loading}
         busy={busy}
         actionInProgress={actionInProgress}
@@ -800,18 +732,6 @@ export default function LocalLlmRuntimesView({ view } = {}) {
         onUpgradeOllama={runtimeUpgradeOllama}
         onControlLmStudio={controlLmStudio}
         onInstallBackend={installRuntimeBackend}
-        onInstallLlama={runtimeInstallLlama}
-        onUpgradeLlama={runtimeUpgradeLlama}
-        onStopLlama={runtimeStopLlama}
-        onConfigureLlama={() => selectRuntime('llama')}
-        onConfigureMtplx={() => selectRuntime('mtplx')}
-        onInstallMtplx={runtimeInstallMtplx}
-        onStartMtplx={runtimeStartMtplx}
-        onStopMtplx={runtimeStopMtplx}
-        onConfigureSlotstream={() => selectRuntime('slotstream')}
-        onInstallSlotstream={runtimeInstallSlotstream}
-        onStartSlotstream={runtimeStartSlotstream}
-        onStopSlotstream={runtimeStopSlotstream}
         onSaveStartup={saveRuntimeStartup}
         onSaveIdleWindow={saveIdleWindow}
         onToggleKeepLoaded={toggleKeepLoaded}
@@ -895,6 +815,18 @@ export default function LocalLlmRuntimesView({ view } = {}) {
         )}
       </div>
 
+      {selectedDescriptor?.kind === 'bundle' && (
+        <ManagedInklingRuntimeCard
+          descriptor={selectedDescriptor}
+          status={statuses[selectedRuntime]}
+          busy={busy}
+          actionInProgress={actionInProgress}
+          onRefresh={() => loadRuntime(selectedRuntime)}
+          onAction={runtimeAction}
+          onSaveContext={updateSplashContext}
+        />
+      )}
+
       {/* Slotstream — PM2-managed SSD-streaming MoE runtime (Apple Silicon) */}
       <div hidden={selectedRuntime !== 'slotstream'}>
         <SlotstreamServerCard
@@ -902,11 +834,11 @@ export default function LocalLlmRuntimesView({ view } = {}) {
           loading={loading}
           busy={busy}
           actionInProgress={actionInProgress}
-          onRefresh={loadSlotstreamStatus}
-          onSaveLaunch={saveSlotstreamLaunch}
-          onStart={runtimeStartSlotstream}
-          onStop={runtimeStopSlotstream}
-          onInstall={runtimeInstallSlotstream}
+          onRefresh={() => loadRuntime('slotstream')}
+          onSaveLaunch={(launch) => saveRuntimeLaunch('slotstream', launch)}
+          onStart={(launch) => runRuntimeAction('slotstream', 'start', launch)}
+          onStop={() => runRuntimeAction('slotstream', 'stop')}
+          onInstall={() => runRuntimeAction('slotstream', 'install')}
           onDownloadModel={slotstreamDownloadModel}
           onCancelDownload={cancelSlotstreamDownload}
           download={slotstreamDownload}
@@ -920,11 +852,11 @@ export default function LocalLlmRuntimesView({ view } = {}) {
           loading={loading}
           busy={busy}
           actionInProgress={actionInProgress}
-          onRefresh={loadMtplxStatus}
-          onSaveLaunch={saveMtplxLaunch}
-          onStart={runtimeStartMtplx}
-          onStop={runtimeStopMtplx}
-          onInstall={runtimeInstallMtplx}
+          onRefresh={() => loadRuntime('mtplx')}
+          onSaveLaunch={(launch) => saveRuntimeLaunch('mtplx', launch)}
+          onStart={(launch) => runRuntimeAction('mtplx', 'start', launch)}
+          onStop={() => runRuntimeAction('mtplx', 'stop')}
+          onInstall={() => runRuntimeAction('mtplx', 'install')}
           onSearchModels={mtplxSearch}
           onPullModel={mtplxPull}
           onRemoveModel={mtplxRemove}
@@ -941,7 +873,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
           </div>
           <div className="flex items-center gap-3">
             <button
-              onClick={loadLlamaStatus}
+              onClick={() => loadRuntime('llama')}
               disabled={llamaLoading}
               className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white transition-colors"
               title="Refresh llama-server status"
@@ -1328,23 +1260,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
           </div>
         )}
 
-        {llamaStatus?.recentLogs?.length > 0 && (
-          <div className="space-y-1">
-            <button
-              type="button"
-              onClick={() => setShowLlamaLogs((prev) => !prev)}
-              className="text-[11px] text-gray-500 hover:text-gray-300 flex items-center gap-1"
-            >
-              <Terminal size={11} />
-              {showLlamaLogs ? 'Hide server logs' : `View server logs (${llamaStatus.recentLogs.length} lines)`}
-            </button>
-            {showLlamaLogs && (
-              <pre className="text-[10px] text-gray-400 bg-port-bg border border-port-border/60 p-2.5 rounded max-h-40 overflow-y-auto font-mono whitespace-pre-wrap break-all">
-                {llamaStatus.recentLogs.join('\n')}
-              </pre>
-            )}
-          </div>
-        )}
+        <RuntimeLogDisclosure logs={llamaStatus?.recentLogs} />
       </div>
       </div>
       </div>

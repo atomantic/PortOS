@@ -17,6 +17,7 @@ import useProviderModels from '../hooks/useProviderModels';
 import toast from '../components/ui/Toast';
 import { deleteHtmlPageRun, getHtmlPageRun, listHtmlPageModels, listHtmlPageRuns, resumeHtmlPageRun, startHtmlPageRuns } from '../services/apiHtmlPages.js';
 import { formatCount, formatDurationMs, timeAgo } from '../utils/formatters';
+import { supportsStrictToolFreeOneShot } from '../utils/providerSelection';
 
 const RUN_EVENTS = ['html-page-run:changed'];
 // The installed-model list changes when the user installs a model, not when a run changes.
@@ -84,12 +85,16 @@ const installedProviders = (models) => {
 
 /** What a row would run, as a comparable key: two rows naming the same target are one run, which the server refuses. */
 const targetKey = (t) => (t.backend ? `m:${t.backend}:${t.modelId}` : `r:${t.providerId}:${t.model ?? ''}:${t.effort ?? ''}`);
+const supportsHtmlPages = (provider) => supportsStrictToolFreeOneShot(provider)
+  || (provider.enabled !== false && provider.htmlPagesModels?.length > 0);
+const supportsHtmlPagesModel = (model, provider) => supportsStrictToolFreeOneShot(provider)
+  || provider.htmlPagesModels?.includes(model);
 
 /**
  * One model to run: the shared provider > model > effort picker, with the installed local models as extra providers. Reports `{ backend, modelId }` for an installed model, `{ providerId, model, effort }` for a provider route, or null until something is picked.
  */
 function TargetRow({ rowKey, index, installed, duplicate, onChange, onRemove }) {
-  const { providers, loading, selectedProviderId, selectedModel, availableModels, setSelectedProviderId, setSelectedModel } = useProviderModels({ withEffort: true, silent: true, preselectDefaults: true });
+  const { providers, loading, selectedProviderId, selectedModel, availableModels, setSelectedProviderId, setSelectedModel } = useProviderModels({ filter: supportsHtmlPages, modelFilter: supportsHtmlPagesModel, withEffort: true, silent: true, preselectDefaults: true });
   // An installed pick lives here; the hook only knows configured providers.
   const [local, setLocal] = useState(null);
   const [effort, setEffort] = useState('');
@@ -128,6 +133,7 @@ function TargetRow({ rowKey, index, installed, duplicate, onChange, onRemove }) 
           onEffortChange={setEffort}
           label={`Provider ${index + 1}`}
           modelLabel={`Model ${index + 1}`}
+          compose={false}
           dense
         />
         {duplicate && <p role="alert" className="mt-1 text-[11px] text-port-error">Already picked above.</p>}

@@ -28,7 +28,7 @@ vi.mock('./privacySubjects.js', () => ({
 
 const {
   createOrg, listOrgs, getOrg, updateOrg, deleteOrg,
-  getHoldingsForOrg, getOrgsHoldingRecord, setOrgHoldings, setHoldingsStatus, getHoldingsSummary,
+  getHoldingsForOrg, getOrgsHoldingRecord, setOrgHoldings,
 } = await import('./privacyOrgs.js');
 
 beforeEach(() => {
@@ -234,28 +234,5 @@ describe('setOrgHoldings', () => {
     });
     await expect(setOrgHoldings('o1', [{ vaultRecordId: 'missing-vault-id' }]))
       .rejects.toMatchObject({ status: 400, code: 'VAULT_RECORD_NOT_FOUND' });
-  });
-});
-
-describe('setHoldingsStatus', () => {
-  it('flips only rows matching fromStatus and reports the count', async () => {
-    queryMock.mockResolvedValue({ rows: [{ org_id: 'o1', vault_record_id: 'v1' }, { org_id: 'o2', vault_record_id: 'v1' }] });
-    const result = await setHoldingsStatus('v1', 'current', 'update_pending');
-    expect(result).toEqual({ updated: 2 });
-    const [, params] = queryMock.mock.calls[0];
-    expect(params).toEqual(['update_pending', 'v1', 'current']);
-  });
-});
-
-describe('getHoldingsSummary', () => {
-  it('returns per-org and per-vault-record counts', async () => {
-    queryMock.mockImplementation(async (sql) => {
-      if (/FROM privacy_orgs o/.test(sql)) return { rows: [{ org_id: 'o1', org_name: 'Acme', holding_count: 2 }] };
-      if (/FROM privacy_vault_records v/.test(sql)) return { rows: [{ vault_record_id: 'v1', type: 'email', label: 'Main', org_count: 1 }] };
-      throw new Error(`unexpected query: ${sql}`);
-    });
-    const summary = await getHoldingsSummary();
-    expect(summary.byOrg).toEqual([{ orgId: 'o1', orgName: 'Acme', holdingCount: 2 }]);
-    expect(summary.byVaultRecord).toEqual([{ vaultRecordId: 'v1', type: 'email', label: 'Main', orgCount: 1 }]);
   });
 });

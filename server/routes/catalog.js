@@ -14,7 +14,7 @@ import { withTransaction } from '../lib/db.js';
 import { changedMusicVideoDescriptionOverLimit, MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../lib/musicVideo/musicVideoSubjectLimits.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { catalogScrapCreateSchema, catalogScrapPatchSchema, catalogIngredientCreateRouteSchema, catalogIngredientPatchSchema, catalogIngredientLinkSchema, catalogRelationLinkSchema, catalogMediaAttachSchema, catalogMediaLibraryPatchSchema, catalogMediaFromMoodBoardSchema, catalogMediaLibraryQuerySchema, catalogMediaDetachSchema, catalogMediaFileUploadSchema, catalogMediaVoiceMemoSchema, catalogPortraitSetSchema, catalogGeneratedImageAttachSchema, catalogIngredientQuerySchema, catalogIngredientDetailQuerySchema, catalogIngredientCardsQuerySchema, catalogIngredientLockSchema, catalogTagQuerySchema, catalogScrapCommitSchema, catalogExtractRequestSchema, catalogPruneRequestSchema, catalogEmbeddingsBackfillSchema, catalogMigrationRerunSchema, catalogMusicVideoImportSchema, catalogBulkImportSchema, catalogBulkEntrySchema, catalogExportQuerySchema, catalogRevisionQuerySchema, catalogRelatedImagesQuerySchema, catalogRevisionRestoreSchema, catalogUrlIngestSchema, catalogFileIngestSchema, catalogVoiceIngestSchema, catalogBrainIngestSchema, catalogUserTypeSchema, catalogUserTypesSettingsSchema, catalogStoryListQuerySchema, catalogStoryParamsSchema, catalogStoryJoinSchema, catalogStoryDraftSchema, catalogVideoSubjectsQuerySchema, catalogVideoSubjectLinksSchema, catalogVideoSubjectSaveSchema, catalogVideoDescriptionRestoreSchema, REF_KINDS, catalogBatchMediaQuerySchema, catalogLookAroundRenderSchema, catalogLookAroundClipParamsSchema, catalogLookAroundFramesSchema, catalogLookAroundAnglesSchema, catalogMergeSchema, catalogMergeHistoryQuerySchema, catalogMergeRecoverSchema, catalogIncludeEmbeddingQuerySchema, catalogTypeDeleteQuerySchema, catalogSyncQuerySchema } from '../lib/catalog/catalogValidation.js';
+import { catalogScrapCreateSchema, catalogIngredientCreateRouteSchema, catalogIngredientPatchSchema, catalogIngredientLinkSchema, catalogRelationLinkSchema, catalogMediaAttachSchema, catalogMediaLibraryPatchSchema, catalogMediaFromMoodBoardSchema, catalogMediaLibraryQuerySchema, catalogMediaDetachSchema, catalogMediaFileUploadSchema, catalogMediaVoiceMemoSchema, catalogPortraitSetSchema, catalogGeneratedImageAttachSchema, catalogIngredientQuerySchema, catalogIngredientDetailQuerySchema, catalogIngredientCardsQuerySchema, catalogIngredientLockSchema, catalogTagQuerySchema, catalogScrapCommitSchema, catalogExtractRequestSchema, catalogPruneRequestSchema, catalogEmbeddingsBackfillSchema, catalogMigrationRerunSchema, catalogMusicVideoImportSchema, catalogBulkImportSchema, catalogBulkEntrySchema, catalogExportQuerySchema, catalogRevisionQuerySchema, catalogRelatedImagesQuerySchema, catalogRevisionRestoreSchema, catalogUrlIngestSchema, catalogFileIngestSchema, catalogVoiceIngestSchema, catalogBrainIngestSchema, catalogUserTypeSchema, catalogUserTypesSettingsSchema, catalogStoryListQuerySchema, catalogStoryParamsSchema, catalogStoryJoinSchema, catalogStoryDraftSchema, catalogVideoSubjectsQuerySchema, catalogVideoSubjectLinksSchema, catalogVideoSubjectSaveSchema, catalogVideoDescriptionRestoreSchema, REF_KINDS, catalogBatchMediaQuerySchema, catalogLookAroundRenderSchema, catalogLookAroundClipParamsSchema, catalogLookAroundFramesSchema, catalogLookAroundAnglesSchema, catalogMergeSchema, catalogMergeHistoryQuerySchema, catalogMergeRecoverSchema, catalogIncludeEmbeddingQuerySchema, catalogTypeDeleteQuerySchema, catalogSyncQuerySchema } from '../lib/catalog/catalogValidation.js';
 import { paginationQuerySchema, parsePagination } from '../lib/queryValidation.js';
 import { getActiveCatalogTypes, setUserCatalogTypes } from '../lib/catalog/catalogTypes.js';
 import { updateUserTypes } from '../services/catalogUserTypes/store.js';
@@ -56,13 +56,6 @@ router.get('/scraps', asyncHandler(async (req, res) => {
   res.json(await catalogDB.listScraps({ limit, offset }));
 }));
 
-router.get('/scraps/:id', asyncHandler(async (req, res) => {
-  const scrap = await catalogDB.getScrap(req.params.id);
-  if (!scrap) throw new ServerError('Scrap not found', { status: 404 });
-  const sources = await catalogDB.listSourcesForScrap(scrap.id);
-  res.json({ ...scrap, sources });
-}));
-
 router.post('/scraps', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogScrapCreateSchema, req.body);
   // Scrap embedding was previously generated on create but never read — there is no
@@ -80,18 +73,6 @@ router.post('/scraps', asyncHandler(async (req, res) => {
     metadata: body.metadata,
   });
   res.status(201).json({ scrap });
-}));
-
-router.patch('/scraps/:id', asyncHandler(async (req, res) => {
-  const body = validateRequest(catalogScrapPatchSchema, req.body);
-  const updated = await catalogDB.updateScrap(req.params.id, body);
-  if (!updated) throw new ServerError('Scrap not found', { status: 404 });
-  res.json(updated);
-}));
-
-router.delete('/scraps/:id', asyncHandler(async (req, res) => {
-  await catalogDB.deleteScrap(req.params.id);
-  res.status(204).end();
 }));
 
 router.post('/scraps/:id/extract', asyncHandler(async (req, res) => {

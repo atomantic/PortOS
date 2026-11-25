@@ -23,8 +23,6 @@ export const FABLELOOM_RUNTIME_VERSION = '1.0.0';
 export const FABLELOOM_PLAYBACK_MODES = Object.freeze(['cut', 'decision']);
 export const FABLELOOM_PLAYBACK_MODE_DEFAULT = 'decision';
 
-export const FABLELOOM_PLAYBACK_PHASES = Object.freeze(['entry', 'hold', 'exit', 'ended']);
-
 export const FABLELOOM_PROTAGONIST_PRESENCE = Object.freeze(['offscreen', 'onscreen']);
 export const FABLELOOM_PROTAGONIST_PRESENCE_DEFAULT = 'offscreen';
 
@@ -391,75 +389,6 @@ export function evaluateFableLoomLiveInput({ node, phase, asset } = {}) {
     }
   }
   return { allowed: true };
-}
-
-/**
- * Helper to build an audio occupancy manifest.
- */
-export function createAudioOccupancyManifest({
-  durationMs = 0,
-  characterDialogue = [],
-  music = [],
-  effects = [],
-} = {}) {
-  return validateAudioOccupancy({ durationMs, characterDialogue, music, effects });
-}
-
-/**
- * Mux audio tracks into a single unified occupancy manifest.
- */
-export function muxAudioTracks({
-  durationMs = 0,
-  characterDialogue = [],
-  music = [],
-  effects = [],
-} = {}) {
-  const manifest = createAudioOccupancyManifest({ durationMs, characterDialogue, music, effects });
-  return {
-    manifest,
-    totalDialogueMs: manifest.characterDialogue.reduce((sum, d) => sum + Math.max(0, d.endMs - d.startMs), 0),
-    totalMusicMs: manifest.music.reduce((sum, m) => sum + Math.max(0, m.endMs - m.startMs), 0),
-    totalEffectsMs: manifest.effects.reduce((sum, e) => sum + Math.max(0, e.endMs - e.startMs), 0),
-    safeForLiveVoice: manifest.safeForLiveVoice,
-  };
-}
-
-/**
- * Compute ducking and audio level adjustments when live voice or dialogue is active.
- */
-export function computeAudioMix({
-  assetManifest = null,
-  liveVoiceActive = false,
-  baseDuckDb = LOOM_LIMITS.AMBIENT_DUCK_DB_DEFAULT || -8,
-  currentTimeMs = 0,
-} = {}) {
-  const manifest = validateAudioOccupancy(assetManifest);
-  const duckDb = clamp(
-    Number.isFinite(baseDuckDb) ? baseDuckDb : (LOOM_LIMITS.AMBIENT_DUCK_DB_DEFAULT || -8),
-    LOOM_LIMITS.AMBIENT_DUCK_DB_MIN || -60,
-    LOOM_LIMITS.AMBIENT_DUCK_DB_MAX || 0,
-  );
-
-  const duckFactor = liveVoiceActive ? 10 ** (duckDb / 20) : 1.0;
-
-  const dialogueActive = manifest.characterDialogue.some(
-    (d) => currentTimeMs >= d.startMs && currentTimeMs <= d.endMs,
-  );
-
-  const blockingEffectActive = manifest.effects.some(
-    (e) => e.blocking && currentTimeMs >= e.startMs && currentTimeMs <= e.endMs,
-  );
-
-  return {
-    duckDb: liveVoiceActive ? duckDb : 0,
-    duckFactor: Math.round(duckFactor * 1000) / 1000,
-    musicLevel: duckFactor,
-    effectsLevel: blockingEffectActive ? 1.0 : duckFactor,
-    dialogueActive,
-    blockingEffectActive,
-    safeForLiveVoice: manifest.safeForLiveVoice,
-    canOpenLiveVoice: manifest.safeForLiveVoice && !dialogueActive && !blockingEffectActive,
-  };
 }
 
 /**

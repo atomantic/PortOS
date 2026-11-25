@@ -2,7 +2,9 @@
  * Optional LOCAL temporal analyzer protocol. Never installs, downloads or calls
  * a paid provider. The operator installs portos-temporal-analyzer on PATH.
  * Capability and result validation fail closed; stills and duration parity
- * cannot supply this evidence. Times are on the encoded excerpt's timeline.
+ * cannot supply this evidence. An analyzer that is absent or fails its
+ * capability probe reports 'unavailable' (not measured); one that ran and could
+ * not verify reports 'unverified'. Times are on the encoded excerpt's timeline.
  */
 import { promisify } from 'util';
 import { z } from 'zod';
@@ -23,8 +25,10 @@ const resultSchema = z.object({
     confidence: z.number().finite().min(0).max(1).nullable(),
   })).min(1).max(256),
 });
-const unavailable = (shots, reason, analyzer = null) => ({
-  version: 1, status: 'unverified', analyzer, reason,
+// 'unavailable' means no supported analyzer is present (missing capability, not
+// failed evidence); every other failure stays 'unverified' and gates the review.
+const unmeasured = (shots, reason, analyzer = null, status = 'unverified') => ({
+  version: 1, status, analyzer, reason,
   omittedShots: Math.max(0, shots.length - 256),
   shots: shots.slice(0, 256).map((shot) => ({ ...shot, spans: [{ startSec: shot.startSec, endSec: shot.endSec, status: 'unverified', offsetSec: null, confidence: null }] })),
 });
@@ -45,11 +49,11 @@ const invoke = async (command, args, timeout) => {
 /** Called only by an explicitly requested draft review. */
 export async function analyzeTemporalPerformance({ excerptPath, shots }) {
   if (!shots.length) return { version: 1, status: 'not-applicable', analyzer: null, reason: null, shots: [] };
-  if (shots.length > 256) return unavailable(shots, 'The draft exceeds the temporal evidence section limit');
+  if (shots.length > 256) return unmeasured(shots, 'The draft exceeds the temporal evidence section limit');
   const command = findCommandOnPath('portos-temporal-analyzer');
-  if (!command || /\.(cmd|bat)$/i.test(command)) return unavailable(shots, 'No supported local temporal analyzer is installed');
+  if (!command || /\.(cmd|bat)$/i.test(command)) return unmeasured(shots, 'No supported local temporal analyzer is installed', null, 'unavailable');
   const capability = await invoke(command, ['--capabilities'], 5000).then((value) => capabilities.safeParse(value), () => null);
-  if (!capability?.success) return unavailable(shots, 'The installed temporal analyzer is unavailable or unsupported');
+  if (!capability?.success) return unmeasured(shots, 'The installed temporal analyzer is unavailable or unsupported', null, 'unavailable');
   const analyzer = { id: capability.data.id, version: capability.data.version, protocolVersion: 1 };
   const measured = [];
   const deadline = Date.now() + 60_000;
@@ -58,26 +62,26 @@ export async function analyzeTemporalPerformance({ excerptPath, shots }) {
     // Analyze the ACTUAL output against its embedded song audio. Source-file
     // preparation and the current (possibly changed) master prove no output sync.
     const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) return unavailable(shots, 'The temporal analyzer exceeded the review time limit', analyzer);
+    if (remainingMs <= 0) return unmeasured(shots, 'The temporal analyzer exceeded the review time limit', analyzer);
     const response = await invoke(command, [
       '--analyze', '--video', excerptPath, '--audio', excerptPath,
       '--audio-start-sec', '0', '--start-sec', String(shot.startSec), '--end-sec', String(shot.endSec),
       '--speaker', shot.speaker || '',
     ], remainingMs).then((value) => resultSchema.safeParse(value), () => null);
-    if (!response?.success) return unavailable(shots, 'The temporal analyzer returned missing or malformed evidence', analyzer);
+    if (!response?.success) return unmeasured(shots, 'The temporal analyzer returned missing or malformed evidence', analyzer);
     const spans = response.data.spans;
     spanCount += spans.length;
-    if (spanCount > 256) return unavailable(shots, 'The temporal analyzer exceeded the evidence span limit', analyzer);
+    if (spanCount > 256) return unmeasured(shots, 'The temporal analyzer exceeded the evidence span limit', analyzer);
     let cursor = shot.startSec;
     // Require complete ordered coverage. Gaps, overlaps, non-finite values and
     // out-of-window results never become a partial pass.
     for (const span of spans) {
       if (Math.abs(span.startSec - cursor) > 0.001 || span.endSec <= span.startSec || span.endSec > shot.endSec) {
-        return unavailable(shots, 'The temporal analyzer returned invalid span coverage', analyzer);
+        return unmeasured(shots, 'The temporal analyzer returned invalid span coverage', analyzer);
       }
       cursor = span.endSec;
     }
-    if (Math.abs(cursor - shot.endSec) > 0.001) return unavailable(shots, 'The temporal analyzer did not cover the performance window', analyzer);
+    if (Math.abs(cursor - shot.endSec) > 0.001) return unmeasured(shots, 'The temporal analyzer did not cover the performance window', analyzer);
     measured.push({ ...shot, spans: spans.map((span) => ({
       ...span,
       status: span.status === 'verified' && span.offsetSec !== null && span.confidence >= 0.8 ? 'verified' : 'unverified',

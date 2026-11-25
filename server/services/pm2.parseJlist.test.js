@@ -1,16 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
-// pm2.js imports the `pm2` package at module load (no daemon connection until a
-// call is made), so importing it for a pure-helper test is safe. We still mock
-// the package to keep the import side-effect-free in CI.
-vi.mock('pm2', () => ({ default: { connect: vi.fn(), list: vi.fn(), disconnect: vi.fn() } }));
+import { parsePm2JlistStdout } from '../lib/pm2Jlist.js';
 
-import { parseJlistStdout } from './pm2.js';
-
-describe('parseJlistStdout (issue #968 — custom PM2_HOME absent-vs-empty)', () => {
+describe('parsePm2JlistStdout (issue #968 — custom PM2_HOME absent-vs-empty)', () => {
   it('parses a populated jlist array', () => {
     const out = '[{"name":"svc-a","pm2_env":{"status":"online"}}]';
-    const list = parseJlistStdout(out);
+    const list = parsePm2JlistStdout(out);
     expect(Array.isArray(list)).toBe(true);
     expect(list).toHaveLength(1);
     expect(list[0].name).toBe('svc-a');
@@ -18,35 +13,35 @@ describe('parseJlistStdout (issue #968 — custom PM2_HOME absent-vs-empty)', ()
 
   it('parses the first complete array when trailing output follows it', () => {
     const entry = { name: 'svc-a', pm2_env: { status: 'online', args: ['literal ] and [', 'other'] } };
-    expect(parseJlistStdout(`${JSON.stringify([entry])}\n[2K`)).toEqual([entry]);
-    expect(parseJlistStdout(`${JSON.stringify([entry])}\n${JSON.stringify([{ name: 'svc-b' }])}`)).toEqual([entry]);
-    expect(parseJlistStdout('[]\n[2K')).toEqual([]);
-    expect(parseJlistStdout('[{"name":"svc-a"}\n[2K')).toBeNull();
+    expect(parsePm2JlistStdout(`${JSON.stringify([entry])}\n[2K`)).toEqual([entry]);
+    expect(parsePm2JlistStdout(`${JSON.stringify([entry])}\n${JSON.stringify([{ name: 'svc-b' }])}`)).toEqual([entry]);
+    expect(parsePm2JlistStdout('[]\n[2K')).toEqual([]);
+    expect(parsePm2JlistStdout('[{"name":"svc-a"}\n[2K')).toBeNull();
   });
 
   it('parses a genuine empty array as [] (read OK, no processes)', () => {
     // The literal '[]' is a successful "nothing running" — NOT a failure.
-    expect(parseJlistStdout('[]')).toEqual([]);
+    expect(parsePm2JlistStdout('[]')).toEqual([]);
     // Tolerates ANSI/log noise around the array literal.
-    expect(parseJlistStdout('[2K[]\n')).toEqual([]);
+    expect(parsePm2JlistStdout('\x1b[2K[]\n')).toEqual([]);
   });
 
   it('returns null for empty stdout (failed read, not "no processes")', () => {
     // exit-0 with no output is a failed read — must NOT collapse to [].
-    expect(parseJlistStdout('')).toBeNull();
-    expect(parseJlistStdout('   \n')).toBeNull();
+    expect(parsePm2JlistStdout('')).toBeNull();
+    expect(parsePm2JlistStdout('   \n')).toBeNull();
   });
 
   it('returns null for garbage / non-array stdout', () => {
-    expect(parseJlistStdout('pm2 daemon not running')).toBeNull();
-    expect(parseJlistStdout('{"not":"an array"}')).toBeNull();
-    expect(parseJlistStdout(undefined)).toBeNull();
-    expect(parseJlistStdout(null)).toBeNull();
+    expect(parsePm2JlistStdout('pm2 daemon not running')).toBeNull();
+    expect(parsePm2JlistStdout('{"not":"an array"}')).toBeNull();
+    expect(parsePm2JlistStdout(undefined)).toBeNull();
+    expect(parsePm2JlistStdout(null)).toBeNull();
   });
 
   it('does not mistake an ANSI color code like [31m for an empty array', () => {
     // The /\[\](?![0-9])/ guard means '[]' inside '[31m' style noise without a
     // real array still resolves to null, not a bogus empty success.
-    expect(parseJlistStdout('[31mERROR[0m no pm2')).toBeNull();
+    expect(parsePm2JlistStdout('\x1b[31mERROR\x1b[0m no pm2')).toBeNull();
   });
 });

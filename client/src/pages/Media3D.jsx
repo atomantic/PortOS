@@ -159,7 +159,7 @@ export default function Media3D() {
 
   const handleGenerate = useCallback(async () => {
     if (!selectedImage || !selectedTarget) return;
-    setGenError(null); setGenPercent(0); setModelId(null);
+    setGenError(null); setGenPercent(0); setModelId(null); setGenerating(true);
     updateParams({ glb: '' }); // clear any previously-previewed mesh
     const created = await createImageTo3dModel(
       {
@@ -172,10 +172,10 @@ export default function Media3D() {
       },
       { silent: true },
     ).catch((err) => {
-      if (mountedRef.current) setGenError(err?.message || 'Could not start the render.');
+      if (mountedRef.current) { setGenError(err?.message || 'Could not start the render.'); setGenerating(false); }
       return null;
     });
-    if (created && mountedRef.current) { setModelId(created.id); setGenerating(true); patchRecord(created); }
+    if (created && mountedRef.current) { setModelId(created.id); patchRecord(created); }
   }, [selectedImage, selectedTarget, steps, seed, keyBackground, detail, alphaMode, normalMap,
     subjectScale, updateParams, mountedRef, patchRecord]);
 

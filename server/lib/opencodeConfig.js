@@ -14,7 +14,11 @@
  * reports it) and `<id> does not support tools` (filtered by `_fetchOllamaToolCapableModels`).
  */
 
+import { existsSync } from 'node:fs';
+import { userInfo } from 'node:os';
+import { join } from 'node:path';
 import {
+  bareLocalModelId,
   getOpencodeLocalProviderNamespace,
   isOpencodeCommand,
   prefixOpencodeModel,
@@ -23,65 +27,17 @@ import {
   OPENCODE_BUILD_AGENT,
   OPENCODE_PUBLIC_REVIEW_AGENT,
 } from './provider/providerModels.js';
-import { PROVIDER_GATEWAYS, PROVIDER_GATEWAY_IDS, gatewayById, isGatewayNamespace } from './provider/providerGateways.js';
+import { PROVIDER_GATEWAY_IDS, gatewayById, isGatewayNamespace } from './provider/providerGateways.js';
 import { isPublicReviewNoToolProfile } from './agent/agentExecutionProfiles.js';
 import { isPlainObject } from './objects.js';
-import { PORTS } from './ports.js';
+import { SPLASH_CONTEXT, SPLASH_MODEL } from './splashRuntime.js';
 
 import { isTruthyMeta } from './metadataFlags.js';
-const LLAMA_SERVER_BASE_URL = `http://127.0.0.1:${PORTS.LLAMA_SERVER}/v1`;
-const VLLM_QWEN_BASE_URL = `http://127.0.0.1:${PORTS.VLLM_QWEN}/v1`;
-const SGLANG_QWEN_BASE_URL = `http://127.0.0.1:${PORTS.SGLANG_QWEN}/v1`;
-
-/** Base provider entries for local OpenAI-compatible daemons; `buildOpencodeConfig` adds the per-run models map. */
-const OPENCODE_LOCAL_BASE_PROVIDERS = {
-  ollama: {
-    npm: '@ai-sdk/openai-compatible',
-    name: 'Ollama (local)',
-    options: { baseURL: 'http://localhost:11434/v1' },
-  },
-  lmstudio: {
-    npm: '@ai-sdk/openai-compatible',
-    name: 'LM Studio (local)',
-    // LM Studio's own app default, not a PortOS port (like Ollama's 11434).
-    options: { baseURL: 'http://localhost:1234/v1' },
-  },
-  mtplx: {
-    npm: '@ai-sdk/openai-compatible',
-    name: 'MTPLX (local MTP)',
-    options: { baseURL: 'http://127.0.0.1:8000/v1' },
-  },
-  llama: {
-    npm: '@ai-sdk/openai-compatible',
-    name: 'llama.cpp (local)',
-    options: { baseURL: LLAMA_SERVER_BASE_URL },
-  },
-  vllm: {
-    npm: '@ai-sdk/openai-compatible',
-    name: 'vLLM Qwen3.8-27B (local)',
-    options: { baseURL: VLLM_QWEN_BASE_URL },
-  },
-  sglang: {
-    npm: '@ai-sdk/openai-compatible',
-    name: 'SGLang Qwen3.8-27B (local)',
-    options: { baseURL: SGLANG_QWEN_BASE_URL },
-  },
-  // Hosted gateways share the OpenAI-compatible shape; rows are generated from the registry.
-  ...Object.fromEntries(PROVIDER_GATEWAYS.map((gateway) => [gateway.id, {
-    npm: '@ai-sdk/openai-compatible',
-    name: gateway.label,
-    options: { baseURL: gateway.baseURL },
-  }])),
-};
-
-/**
- * The canonical base URL PortOS declares for one local OpenCode provider entry;
- * read by `lib/localProviderRuntime.js` so readiness and spawn agree.
- * @param {'ollama'|'lmstudio'|'mtplx'|'llama'|'vllm'|'sglang'|string} providerKey
- * @returns {string|null}
- */
-export const opencodeLocalBaseUrl = (providerKey) =>
-  OPENCODE_LOCAL_BASE_PROVIDERS[providerKey]?.options?.baseURL || null;
+import { isLocalInstanceEndpoint } from './localEndpoint.js';
+import { isGenerationModel } from './localModelHeuristics.js';
+import { executionOptionsError } from './aiToolkit/internal/executionOptions.js';
+import { OPENCODE_LOCAL_BASE_PROVIDERS } from './opencodeLocalProviders.js';
+export { opencodeLocalBaseUrl } from './opencodeLocalProviders.js';
 
 /** OpenCode local namespaces whose backend authenticates the request; keys are never attached to unauthenticated loopback daemons. */
 const KEY_BEARING_NAMESPACES = new Set(['vllm', 'sglang', ...PROVIDER_GATEWAY_IDS]);
@@ -137,6 +93,8 @@ const THINKING_STYLE = {
   ollama: 'think',
   // LM Studio reasoning is a LOAD-TIME model property, not a documented per-request field; a toggle would pin a value nothing reads.
   lmstudio: null,
+  // Inkling chooses its own reasoning; do not translate the toggle into an Ollama field.
+  splash: null,
   mtplx: 'chatTemplate',
   llama: 'chatTemplate',
   vllm: 'chatTemplate',
@@ -154,8 +112,20 @@ const asObject = (value) => (isPlainObject(value) ? value : {});
 // renderer never sees on the next tool step. OpenCode 2 also migrates this
 // legacy model-level field when reading the `provider` config shape.
 function localModelEntry(providerKey, id, existing) {
+  if (providerKey === 'splash') {
+    // OpenCode otherwise assumes 0 context for a custom ID and never compacts.
+    const limits = id === SPLASH_MODEL ? { limit: { context: SPLASH_CONTEXT, output: 8192 } } : {};
+    return {
+      name: id,
+      reasoning: true,
+      interleaved: { field: 'reasoning_content' },
+      ...limits,
+      ...asObject(existing),
+      tool_call: true,
+    };
+  }
   if (providerKey !== 'ollama' || !/^inkling-2-mini(?::[^/]+)?$/.test(id)) {
-    return { name: id, tool_call: true };
+    return { name: id, ...asObject(existing), tool_call: true };
   }
   return {
     name: id,
@@ -321,6 +291,68 @@ const DENY_ALL_TOOLS = Object.freeze({ '*': false });
 const DENY_ALL_PERMISSIONS = 'deny';
 const DENY_ALL_AGENT_PERMISSIONS = Object.freeze({ edit: 'deny', bash: 'deny', webfetch: 'deny' });
 
+export const isMtplxOpenCodeCli = (provider) => provider?.type === 'cli'
+  && isOpencodeCommand(provider.command)
+  && getOpencodeLocalProviderNamespace(provider) === 'mtplx';
+
+// OpenCode 1.19 loads system policies after the inline config. Leave those
+// installations ineligible rather than shadowing their managed configuration.
+function hasManagedOpenCodeConfig() {
+  let directory = '/etc/opencode';
+  if (process.platform === 'darwin') {
+    directory = '/Library/Application Support/opencode';
+    const preferences = '/Library/Managed Preferences';
+    const domain = 'ai.opencode.managed.plist';
+    let username = 'user';
+    try { username = userInfo().username; } catch { /* OpenCode uses the same fallback. */ }
+    if (existsSync(join(preferences, domain)) || existsSync(join(preferences, username, domain))) return true;
+  }
+  if (process.platform === 'win32') directory = join(process.env.ProgramData || 'C:\\ProgramData', 'opencode');
+  return ['opencode.json', 'opencode.jsonc'].some((file) => existsSync(join(directory, file)));
+}
+
+/**
+ * The base for the restricted MTPLX launch, or null when the route can't use it.
+ * Only the compatible local adapter and the selected model's context limits
+ * carry over. Ambient files and provider-supplied env are isolated at spawn.
+ */
+export function restrictedMtplxOpenCodeConfig(provider, model) {
+  if (!isMtplxOpenCodeCli(provider) || provider.authOnly || provider.credentialBootstrap
+    || Object.keys(provider.executionOptions || {}).length || hasManagedOpenCodeConfig()) return null;
+  const id = bareLocalModelId(model, 'mtplx');
+  const models = Array.isArray(provider.models) ? provider.models : [];
+  if (!id || model !== model.trim() || !isGenerationModel(id) || !/^[\w][\w.:-]*$/.test(id)
+    || ![provider.defaultModel, ...models].some((listed) => bareLocalModelId(listed, 'mtplx') === id)) return null;
+
+  const raw = provider.envVars?.OPENCODE_CONFIG_CONTENT;
+  const stored = parseOpencodeConfigContent(raw);
+  if (raw != null && !stored) return null;
+  const entry = stored?.provider?.mtplx;
+  const standard = OPENCODE_LOCAL_BASE_PROVIDERS.mtplx;
+  const baseURL = entry?.options?.baseURL ?? provider.endpoint ?? standard.options.baseURL;
+  if (entry && entry.npm !== standard.npm) return null;
+  if (typeof baseURL !== 'string' || !/^https?:\/\//i.test(baseURL) || !isLocalInstanceEndpoint(baseURL)) return null;
+  const endpoint = new URL(baseURL);
+  if (endpoint.username || endpoint.password || endpoint.search || endpoint.hash
+    || !['/v1', '/v1/'].includes(endpoint.pathname)) return null;
+  const storedLimit = entry?.models?.[id]?.limit;
+  const limit = Object.fromEntries(['context', 'input', 'output']
+    .filter((key) => Number.isSafeInteger(storedLimit?.[key]) && storedLimit[key] > 0)
+    .map((key) => [key, storedLimit[key]]));
+  return {
+    enabled_providers: ['mtplx'],
+    // A title request competes for the same daemon and uses a separate effort.
+    agent: { title: { disable: true } },
+    provider: {
+      mtplx: {
+        ...standard,
+        options: { baseURL },
+        ...(limit.context && limit.output ? { models: { [id]: { limit } } } : {}),
+      },
+    },
+  };
+}
+
 /**
  * Harden an OpenCode config for the `no-tool` public-review posture. OpenCode has no
  * argv equivalent of codex's `--sandbox read-only`, so its tool posture lives in
@@ -369,18 +401,6 @@ function hardenOpencodeConfigForNoTool(config) {
 }
 
 /**
- * Build the `OPENCODE_CONFIG_CONTENT` JSON string; see `buildOpencodeConfig`.
- *
- * @param {string|string[]|null|undefined} models
- * @param {object|null} [base] - existing config to merge into
- * @param {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|string} [providerKey='ollama']
- * @returns {string} JSON string for OPENCODE_CONFIG_CONTENT
- */
-export function buildOpencodeConfigContent(models, base = null, providerKey = 'ollama', generation = null) {
-  return JSON.stringify(buildOpencodeConfig(models, base, providerKey, generation));
-}
-
-/**
  * The provider record as a GENERATION source for THIS run's model, with a stored
  * effort the model rejects clamped to the nearest accepted rung (`resolveCliEffort`).
  * OpenCode forwards `reasoningEffort` verbatim and only the upstream validates it
@@ -400,6 +420,23 @@ function generationForModel(provider, model) {
   return resolved === stored ? provider : { ...provider, effort: resolved || null };
 }
 
+function applyOpenCodeContext(config, namespace, override) {
+  const { model, tokens } = override ?? {};
+  if (!model || !Number.isSafeInteger(tokens)) return;
+  const slash = model.indexOf('/');
+  const key = namespace || (slash > 0 ? model.slice(0, slash) : null);
+  if (!key || !Object.hasOwn(asObject(config.provider), key)) return;
+  const id = namespace ? stripProviderPrefix(model, namespace) : model.slice(slash + 1);
+  if (!id) return;
+  const entry = config.provider[key];
+  const models = asObject(entry.models);
+  const existing = asObject(models[id]);
+  const limit = asObject(existing.limit);
+  const output = limit.output ?? Math.min(4096, Math.floor(tokens / 4));
+  if (output >= tokens || limit.input > tokens) return; // A later environment edit can invalidate the saved override.
+  entry.models = { ...models, [id]: { ...existing, limit: { ...limit, context: tokens, output } } };
+}
+
 /**
  * Build dynamic env vars for an OpenCode spawn: `OPENCODE_CONFIG_CONTENT` for a
  * provider naming a backend namespace (Ollama, MTPLX, llama.cpp, vLLM, SGLang, or a
@@ -413,21 +450,24 @@ function generationForModel(provider, model) {
  *
  * @param {{command?:string, ollamaBacked?:boolean, lmstudioBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, gatewayBacked?:string, orcarouterBacked?:boolean, models?:string[], defaultModel?:string|null, apiKey?:string, orcarouterApiKey?:string, envVars?:object}} provider
  * @param {string|null|undefined} model - the model being run (may differ from defaultModel)
- * @param {{safetyProfile?:string|null}} [options] - `no-tool` public-review applies `hardenOpencodeConfigForNoTool`.
+ * @param {{safetyProfile?:string|null,toolFree?:boolean,restrictedMtplx?:boolean}} [options] - apply a no-tool config and optionally restrict it to the isolated MTPLX recipe.
  * @returns {{OPENCODE_CONFIG_CONTENT?: string}} env vars to merge
  */
-export function buildOpencodeEnvVars(provider, model, { safetyProfile = null } = {}) {
+export function buildOpencodeEnvVars(provider, model, { safetyProfile = null, toolFree = false, restrictedMtplx = false } = {}) {
   const providerKey = getOpencodeLocalProviderNamespace(provider);
   if (!isOpencodeCommand(provider?.command)) {
     return {};
   }
   // Parse the stored config as the base so user customization is preserved.
-  const base = parseOpencodeConfigContent(provider?.envVars?.OPENCODE_CONFIG_CONTENT);
+  const base = restrictedMtplx
+    ? restrictedMtplxOpenCodeConfig(provider, model)
+    : parseOpencodeConfigContent(provider?.envVars?.OPENCODE_CONFIG_CONTENT);
+  if (restrictedMtplx && (!base || !toolFree)) throw executionOptionsError('OpenCode MTPLX cannot start with the tool-free configuration');
   // A NAMESPACE-LESS record with no stored config is a hand-made plain `opencode`
   // provider running against the user's `~/.config/opencode`; `OPENCODE_CONFIG_CONTENT`
   // REPLACES that file wholesale, so synthesizing one would drop their providers.
   // Seeded Zen records ship `{"permission":"allow"}` and take the path below.
-  if (!providerKey && !base) return {};
+  if (!providerKey && !base && !toolFree) return {};
 
   const ids = [
     ...(Array.isArray(provider?.models) ? provider.models : []),
@@ -435,6 +475,7 @@ export function buildOpencodeEnvVars(provider, model, { safetyProfile = null } =
     model,
   ];
   const config = buildOpencodeConfig(ids, base, providerKey, generationForModel(provider, model));
+  applyOpenCodeContext(config, providerKey, provider?.harnessContext);
   // Pin the auxiliary model for OpenCode's OWN side work (titles, summarization):
   // unset, it falls back to a built-in hosted model nobody chose (paid calls, or a
   // cloud provider via an inherited API key), which the AI Provider Usage Policy
@@ -460,9 +501,12 @@ export function buildOpencodeEnvVars(provider, model, { safetyProfile = null } =
   }
   // LAST: overrides everything above, including a stored `permission: "allow"` and
   // `tool_call: true`. The enforcement boundary.
-  if (isPublicReviewNoToolProfile(safetyProfile)) hardenOpencodeConfigForNoTool(config);
+  if (toolFree || isPublicReviewNoToolProfile(safetyProfile)) hardenOpencodeConfigForNoTool(config);
   return {
     OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
+    // OpenCode reads this after the inline config. Replace any saved override
+    // so it cannot restore root permissions on the private one-shot.
+    ...(toolFree ? { OPENCODE_PERMISSION: JSON.stringify(DENY_ALL_PERMISSIONS) } : {}),
     ...(apiKey && gateway ? { [gateway.apiKeyEnv]: apiKey } : {}),
   };
 }

@@ -6,7 +6,7 @@
  *       ↓ clauses
  *     retrieve top-k candidates     ← BM25 + RRF, in process. No model.
  *       ↓ ≤ k clauses
- *     screenUntrustedContent()      ← Prompt Guard. Unchanged, and not optional.
+ *     screenForScopeAdvisory()      ← Prompt Guard. Unchanged, and not optional.
  *       ↓ safe
  *     runJevDecision() per clause   ← the shared `scope-adherence` rung.
  *       ↓
@@ -151,17 +151,19 @@ export async function scoreAdherence({
   const candidates = selectCandidateClauses(corpus.clauses, change, { k: topK, index: corpus.index });
   if (!candidates.length) return failure('scope-adherence-no-clause');
 
-  // Phase 1 of the ladder, unchanged and not optional: an issue or PR body is
-  // attacker-controlled text. The screened string is the SAME string that goes
+  // Abuse screening is mandatory; the separate automation policy verdict
+  // does not apply because this local classifier cannot act on its advice.
+  // The supplied title or body may be attacker-controlled. Screen exactly
+  // the string that goes
   // into every premise — screening a separately-assembled subset is what lets
   // the screened text and the scored text drift apart.
   const evidence = formatChangeEvidence(change);
-  const { screenUntrustedContent } = await import('./untrustedContent.js');
-  const screened = await screenUntrustedContent({
+  const { screenForScopeAdvisory } = await import('./untrustedContent.js');
+  const screened = await screenForScopeAdvisory({
     content: evidence,
     source: kind === 'pr' ? 'github-pr' : 'github-issue',
   });
-  if (!screened.ok) return failure(screened.code || 'untrusted-content-screening-failed');
+  if (!screened.ok) return failure(screened.code || 'scope-adherence-screening-unavailable');
 
   const decided = [];
   const observations = [];

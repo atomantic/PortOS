@@ -17,7 +17,7 @@ vi.mock('./ollamaManager.js', () => ({ getBaseUrl: vi.fn(), getModelCapabilities
 const { getProviderById, listProviders } = await import('./provider/providers.js');
 const { callProviderAISimple } = await import('./aiProvider.js');
 const { runCliProviderPrompt } = await import('../lib/cliProviderRun.js');
-const { CLI_CODE_REVIEW_INACTIVITY_DEFAULT_MS, REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS, REMOTE_CODE_REVIEW_TIMEOUT_CEILING_MS, getLocalCodeReviewTimeoutMs, pickCodeReviewDefaults, runLocalCodeReview, runLocalClaimCommentReview, getProviderReviewUnsupported, getReviewerConfigHealth, pickAvailableReviewerGroups } = await import('./codeReview.js');
+const { CLI_CODE_REVIEW_INACTIVITY_DEFAULT_MS, REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS, REMOTE_CODE_REVIEW_TIMEOUT_CEILING_MS, getLocalCodeReviewTimeoutMs, pickCodeReviewDefaults, runLocalCodeReview, runLocalClaimCommentReview, getProviderReviewCapability, getReviewerConfigHealth, pickAvailableReviewerGroups } = await import('./codeReview.js');
 
 const backend = 'provider:example-gpu';
 const provider = { id: 'example-gpu', name: 'Example GPU', type: 'api', enabled: true,
@@ -326,7 +326,7 @@ describe('configured provider reviewers', () => {
     getProviderById.mockResolvedValue(cli);
     listProviders.mockResolvedValue([cli]);
     runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: false });
-    expect(await getProviderReviewUnsupported()).toEqual({});
+    expect((await getProviderReviewCapability()).unsupported).toEqual({});
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: true, findings: 'NO FINDINGS' });
     expect(runCliProviderPrompt).toHaveBeenCalledWith(expect.objectContaining({
       provider: expect.objectContaining({ credentialBootstrap: cli.credentialBootstrap }),
@@ -335,7 +335,7 @@ describe('configured provider reviewers', () => {
     }));
 
     cli.credentialBootstrap.envCommand = [process.execPath, '-e', 'console.log("ANTHROPIC_AUTH_TOKEN=example-minted-token")'];
-    expect(await getProviderReviewUnsupported()).toEqual({});
+    expect((await getProviderReviewCapability()).unsupported).toEqual({});
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: true, findings: 'NO FINDINGS' });
     expect(runCliProviderPrompt).toHaveBeenCalledWith(expect.objectContaining({
       bootstrapEnv: { ANTHROPIC_AUTH_TOKEN: 'example-minted-token' },
@@ -602,7 +602,7 @@ describe('configured provider reviewers', () => {
     expect(result.error).toContain('timed out after');
   });
 
-  describe('getProviderReviewUnsupported', () => {
+  describe('getProviderReviewCapability.unsupported', () => {
     // Any CLI with a command can review code (confined when it has no enforced
     // mode), so only a missing command is reported.
     it('names only providers with no command to run', async () => {
@@ -614,7 +614,7 @@ describe('configured provider reviewers', () => {
         { ...provider, id: 'no-command', type: 'cli' },
         { ...provider, id: 'switched-off', type: 'cli', command: 'custom-agent', enabled: false },
       ]);
-      const unsupported = await getProviderReviewUnsupported();
+      const unsupported = (await getProviderReviewCapability()).unsupported;
       // The capable provider is ABSENT rather than false, so "nobody fetched
       // this map" and "nothing is wrong here" read the same to a picker.
       expect(unsupported).toEqual({
@@ -651,14 +651,14 @@ describe('configured provider reviewers', () => {
       const harness = { ...provider, id: 'no-command', type: 'cli' };
       listProviders.mockResolvedValue([harness]);
       getProviderById.mockResolvedValue(harness);
-      const warned = await getProviderReviewUnsupported();
+      const warned = (await getProviderReviewCapability()).unsupported;
       const ran = await runLocalCodeReview({ backend: 'provider:no-command', diff: 'example diff' });
       expect(warned['provider:no-command']).toBe(ran.code);
     });
 
     it('reports nothing, and clears no stored fault, when the provider store cannot be read', async () => {
       listProviders.mockRejectedValue(new Error('provider store unreadable'));
-      expect(await getProviderReviewUnsupported()).toEqual({});
+      expect((await getProviderReviewCapability()).unsupported).toEqual({});
       const { getSettings } = await import('./settings.js');
       getSettings.mockResolvedValue({ codeReview: { reviewerHealth: { 'provider:agy-cli': { code: 'REVIEWER_UNSUPPORTED', lastFailureAt: 1 } } } });
       expect((await getReviewerConfigHealth()).configFaults).toHaveProperty('provider:agy-cli');

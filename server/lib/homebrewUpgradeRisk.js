@@ -22,8 +22,6 @@
  * Risk only warns: the owner can upgrade anything that is not pinned.
  */
 
-export const HOMEBREW_RISKS = Object.freeze(['breaking', 'caution', 'safe', 'pinned']);
-
 const VERSIONED = /^(.+)@(\d+(?:\.\d+)?)$/;
 const RISK_ORDER = { breaking: 0, caution: 1, safe: 2, pinned: 3 };
 

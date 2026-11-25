@@ -7,6 +7,7 @@ import { unifyProviderModes } from './providerModes.js';
 import { modelContextWindowPatch } from './modelCatalog.js';
 import { normalizeModelAccess } from './modelAccess.js';
 import { CODEX_SHIPPED_MODELS } from './codexShippedModels.js';
+import { LOCAL_RUNTIME_MARKER_KEYS } from './localRuntimeMarkers.js';
 
 const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 const CODEX_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
@@ -370,18 +371,14 @@ export function createProviderServiceState(config = {}) {
       topP: providerData.topP,
       thinking: providerData.thinking,
       contextWindow: providerData.contextWindow || null,
+      ...(providerData.harnessContext ? { harnessContext: providerData.harnessContext } : {}),
       ...modelContextWindowPatch(providerData.modelContextWindows),
       timeout: providerData.timeout || 300000,
       enabled: providerData.enabled !== false,
       ...(typeof providerData.textTransport === 'string' && providerData.textTransport ? { textTransport: providerData.textTransport } : {}),
       ...(providerData.textTransportEnabled === true ? { textTransportEnabled: true } : {}),
       ...(providerData.textTransportReadRiskAcknowledged === true ? { textTransportReadRiskAcknowledged: true } : {}),
-      ...(providerData.ollamaBacked === true ? { ollamaBacked: true } : {}),
-      ...(providerData.lmstudioBacked === true ? { lmstudioBacked: true } : {}),
-      ...(providerData.mtplxBacked === true ? { mtplxBacked: true } : {}),
-      ...(providerData.llamaBacked === true ? { llamaBacked: true } : {}),
-      ...(providerData.vllmBacked === true ? { vllmBacked: true } : {}),
-      ...(providerData.sglangBacked === true ? { sglangBacked: true } : {}),
+      ...Object.fromEntries(LOCAL_RUNTIME_MARKER_KEYS.filter((key) => providerData[key] === true).map((key) => [key, true])),
       ...(typeof providerData.gatewayBacked === 'string' && providerData.gatewayBacked ? { gatewayBacked: providerData.gatewayBacked } : {}),
       ...(providerData.orcarouterBacked === true ? { orcarouterBacked: true } : {}),
       ...(modelAccess ? { modelAccess } : {}),

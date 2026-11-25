@@ -155,7 +155,7 @@ Admission inventory (`withBackupAssetPublication`):
 | Pipeline audio stage rows: generated music, cue render and voice-over line render (`routes/pipeline/audio.js`) | Covered (#9982): the row that first names the WAV takes the lease; the sidecar or synthesizer writes the WAV before it |
 | Music-library upload attach: Music Designer upload, pipeline music upload, YouTube import and Suno import (`routes/tracks.js`, `routes/pipeline/audio.js`, `trackYoutubeImport.js`, `trackSunoImport.js`) | Reference-only: the admitted library import copies the file first and the track or issue row commits after it |
 | LoRA training and deployed LoRAs: trained-adapter registration, checkpoint promotion over the deployed adapter, the promoted-checkpoint preview copy, the progress row naming trainer-written samples and checkpoints, run deletion, and LoRA deletion from the LoRA manager or Media Models (`loraTraining/index.js`, `loras.js`) | Covered (#9982): registration and promotion hold one lease from the adapter write through the run row and dataset flag; Civitai and Hugging Face installs admit the sidecar that first names the already-linked weights |
-| Music Video final and excerpt renders, publishing-kit builds and composition document versions (`musicVideo/render.js`, `musicVideo/excerptRender.js`, `musicVideo/publishKit.js`, `musicVideo/compositionDocument.js`) | Covered (#9982): the encoder or import writes the files in place; the history entry and project row that first name them commit under one lease |
+| Music Video final and excerpt renders, publishing-kit builds and composition document versions (`musicVideo/finalRenderJob.js`, `musicVideo/excerptRender.js`, `musicVideo/publishKit.js`, `musicVideo/compositionDocument.js`) | Covered (#9982): the encoder or import writes the files in place; the history entry and project row that first name them commit under one lease |
 | Music Video excerpt deletion (`musicVideo/excerptService.js`) | Reference-only: the project row drops the excerpt before its unreferenced video and contact sheet are unlinked |
 | Music Video performance repair, MIDI transcription and the autonomous Suno song (`musicVideo/performanceRepair.js`, `audioMidiTranscription.js`, `musicVideo/autonomous/autonomousStages.js`) | Covered by #9982. Write the asset first. Its first reference (repair revision, project MIDI pointer, or track render) commits under one lease, which also covers unlinking a declined MIDI result. |
 | Writers Room draft bodies: new work, draft save and version snapshot (`writersRoom/local.js`) | Covered (#9982): each holds one lease from the `.md` write through the manifest row that names it; a draft save replaces its body in place |
@@ -179,7 +179,7 @@ Admission inventory (`withBackupAssetPublication`):
 | Music Video Making-of export (`makingOf.js`, `makingOfVisuals.js`) | Reference-only: reads existing assets and transforms buffers for the ZIP response; no durable file or row writes |
 | Time Capsule snapshots (`timeCapsule.js`) | Covered (#9982): snapshot creation and deletion lease the file and index entry together, acquiring before the shared index write tail |
 | CoS raw recording compression and purge (`cosAgentStorage.js`) | Covered (#9982): verified gzip publication, storage manifest and plain-file removal share a lease; purge intent and unlinks also share a lease because the manifest is file-primary |
-| CoS agent archive/index publication (`cosAgentLifecycle.js`, `cosAgentArchive.js`, `cosAgentIndex.js`) | Covered (#9982): completion, zombie/stale archival, deletion and legacy layout migration lease directory changes through state and index publication; state-locked workflows acquire admission first |
+| CoS agent archive/index publication (`cosAgentLifecycle.js`, `cosAgentArchive.js`, `cosAgentIndex.js`) | Covered (#9982): completion, stale archival, deletion and legacy layout migration lease directory changes through state and index publication; state-locked workflows acquire admission first |
 | Game compiled manifests (`games/compile.js`) | Covered (#9982): versioned manifest and game compiled/history pointers hold one lease before the per-game queue |
 | Toolkit run creation, CLI/API terminal recording and deletion (`aiToolkit/runner.js`, `internal/runFinalizer.js`) | Covered through the host-injected `withAssetPublication` boundary. Standalone toolkit defaults to direct execution. Terminal hooks run after release; output failures retain truthful persisted byte counts. The injected boundary coordinates the server and separate runner processes |
 | Beeper attachment mirror (`beeperAttachments.js`) | Covered (#9982): network transfer stays outside admission; content-addressed installation/dedupe and its `local_path` row commit share admission and a path queue with eviction/orphan cleanup. This also protects snapshots that opt into the normally excluded attachment bytes |
@@ -370,26 +370,23 @@ animation/reference write tails. Their file-primary manifests and runtime
 pointers need the same protection even when the PostgreSQL sprite row contains
 no path: writing a record last alone cannot protect a multi-file rsync pass.
 
-**Snapshot consistency claim.** `server/lib/backupAssetOwners.js` inventories
-each durable owner as `admitted`, `reference-only` or `outstanding`, and its
-test fails when an `admitted` entry stops taking the lease or a module that
-takes the lease is missing from the inventory. Every snapshot records the claim
-derived from it as `assetConsistency` in its `manifest.json`, the backup status
+**Snapshot consistency claim.** `server/lib/backupAssetOwners.js` records
+`reference-only` exceptions and `outstanding` workflows that still need
+admission. Find workflows that hold the lease by searching the source for
+`withBackupAssetPublication`. Every snapshot records the claim as
+`assetConsistency` in its `manifest.json`, the backup status
 (`GET /api/backup/status`) and the run result. `scope: "global"` is reported
-only when no owner is outstanding; until then the scope is `admitted-owners`
-and `outstanding` lists the owner ids still outside admission. An unrecognized
-status counts as outstanding, never as covered. Snapshots written before this
-field existed carry no claim and must be treated as partial.
+when the inventory has no outstanding entries. An `outstanding` or
+unrecognized status yields `scope: "admitted-owners"` with the affected IDs in
+`outstanding`. Treat snapshots written before this field existed as partial.
 
-The completed inventory covers the identified managed runtime workflows in this
-repository. New byte-plus-record workflows must be classified before they can
-participate in the guarantee; an `outstanding` or unknown status downgrades the
-snapshot claim. The global scope requires both server and CoS runner to use the
-shared protocol. It excludes arbitrary external scripts/tools and does not repair
-preexisting missing assets, deliberate operator deletion, or corruption left by a
-failed migration. Managed startup migrations finish before backup routes and the
-scheduler become available; this ordering prevents concurrent capture, not a
-claim that every migration necessarily succeeded.
+New byte-plus-record workflows enter admission at the lease boundary. Record
+any exception and its rationale in the inventory. The global scope requires
+both server and CoS runner to use the shared protocol. It excludes arbitrary
+external scripts and tools. Preexisting missing assets, deliberate operator
+deletion and corruption left by failed migrations fall outside the claim.
+Managed startup migrations finish before backup routes and the scheduler become
+available, which prevents concurrent capture.
 
 No authoritative asset domain is excluded merely to satisfy readiness. Existing
 explicit backup exclusions still apply; the derived media index is reconstructed

@@ -20,6 +20,7 @@ import ListLoadError from '../ui/ListLoadError';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import useListResource from '../../hooks/useListResource';
 import { copyToClipboard } from '../../lib/clipboard';
+import AppAuditPrioritiesEditor, { fromPriorityRows, priorityRowsError, toPriorityRows } from './AppAuditPrioritiesEditor';
 import LayeredIntelligenceTab, { buildLayeredIntelligenceUpdate, buildLayeredIntelligenceScheduleUpdate } from './LayeredIntelligenceTab';
 import { PROVIDER_TYPES } from '../../utils/providers';
 import { DEFAULT_PR_COMPLETION, PR_COMPLETION_OPTIONS, prCompletionMerges, prCompletionOption, resolveUseAutoMerge, resolveAutoApprovePR, resolveAdminMerge } from '../cos/constants';
@@ -100,6 +101,8 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     // Opt-in: repo skills are third-party prompt text, so default unchecked.
     skillDiscovery: app.skillDiscovery === true,
     deploymentModel: typeof app.deploymentModel === 'string' ? app.deploymentModel : '',
+    featurePriorities: toPriorityRows(app.featurePriorities),
+    featurePrioritiesTouched: false,
     featureOverrides: Object.fromEntries(
       APP_FEATURE_IDS.map(featureId => [featureId, getAppFeatureOverride(app, featureId)])
     ),
@@ -270,6 +273,15 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       }
     }
 
+    if (formData.featurePrioritiesTouched) {
+      const prioritiesError = priorityRowsError(formData.featurePriorities);
+      if (prioritiesError) {
+        setActiveTab('workflow');
+        setError(prioritiesError);
+        return;
+      }
+    }
+
     setSaving(true);
 
     const data = {
@@ -280,18 +292,17 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       devUiPort: formData.devUiPort ? parseInt(formData.devUiPort, 10) : null,
       apiPort: formData.apiPort ? parseInt(formData.apiPort, 10) : null,
       tlsPort: formData.tlsPort ? parseInt(formData.tlsPort, 10) : null,
-      buildCommand: formData.buildCommand || undefined,
-      updateCommand: formData.updateCommand || undefined,
+      // Sent blank, not omitted: the server merges the patch, so an absent key keeps the old value.
+      buildCommand: formData.buildCommand.trim(),
+      updateCommand: formData.updateCommand.trim(),
       startCommands: formData.startCommands.split('\n').filter(Boolean),
-      pm2ProcessNames: formData.pm2ProcessNames
-        ? formData.pm2ProcessNames.split(',').map(s => s.trim()).filter(Boolean)
-        : undefined,
+      pm2ProcessNames: formData.pm2ProcessNames.split(',').map(s => s.trim()).filter(Boolean),
       nativeLaunch: formData.nativeLaunchEnabled ? {
         label: formData.nativeLaunchLabel.trim(),
         command: formData.nativeLaunchCommand.trim(),
         processName: formData.nativeLaunchProcessName.trim()
       } : null,
-      editorCommand: formData.editorCommand || undefined,
+      editorCommand: formData.editorCommand.trim(),
       workTracker: formData.workTracker || 'auto',
       forgeAccount: formData.forgeAccount.trim(),
       defaultUseWorktree: formData.defaultUseWorktree || formData.defaultOpenPR,
@@ -312,6 +323,10 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     // global changes flowing to apps whose feature controls were never touched.
     if (formData.featureOverridesTouched) data.featureOverrides = formData.featureOverrides;
 
+    // Sent only once edited, so an app saved before audit priorities existed round-trips unchanged. PortOS itself
+    // scopes audits from its feature catalog, so the editor is not offered for it.
+    if (formData.featurePrioritiesTouched) data.featurePriorities = fromPriorityRows(formData.featurePriorities);
+
     // Keep the integration slice out of unrelated saves. The new feature map
     // handles tab visibility, while this legacy slice holds DataDog's runtime
     // connection details; omitting it preserves an existing configuration.
@@ -331,22 +346,19 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     const liUpdate = buildLayeredIntelligenceUpdate(liBaseline, liConfig);
     if (liUpdate) data.layeredIntelligence = liUpdate;
 
-    await updateApp(app.id, data).catch(err => {
+    const failSave = (err) => {
       setError(err.message);
       setSaving(false);
-      throw err;
-    });
+      return null;
+    };
+    if (!await updateApp(app.id, data, { silent: true }).catch(failSave)) return;
 
     // Scheduling (enabled/interval/provider/model) is stored on the per-app task
     // override (#2322), NOT app.layeredIntelligence — PUT it separately when the
     // user changed a scheduling field.
     const schedUpdate = buildLayeredIntelligenceScheduleUpdate(liBaseline, liConfig);
     if (schedUpdate) {
-      await updateAppTaskTypeOverride(app.id, 'layered-intelligence', schedUpdate, { silent: true }).catch(err => {
-        setError(err.message);
-        setSaving(false);
-        throw err;
-      });
+      if (!await updateAppTaskTypeOverride(app.id, 'layered-intelligence', schedUpdate, { silent: true }).catch(failSave)) return;
     }
 
     setSaving(false);
@@ -842,6 +854,12 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                   Audits judge which bugs are realistic from this: a single-user app skips multi-user edit races, a multi-user app keeps them. Leave empty to use the repo's requirements, PRD or spec.
                 </p>
               </div>
+              {app.id !== PORTOS_APP_ID && (
+                <AppAuditPrioritiesEditor
+                  rows={formData.featurePriorities}
+                  onChange={rows => setFormData(prev => ({ ...prev, featurePriorities: rows, featurePrioritiesTouched: true }))}
+                />
+              )}
             </div>
           )}
 

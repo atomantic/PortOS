@@ -8,7 +8,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('../../services/apiImageVideo.js', () => api);
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const { default: OvernightRendersPanel, nextClockTime } = await import('./OvernightRendersPanel.jsx');
 

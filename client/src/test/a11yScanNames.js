@@ -76,7 +76,7 @@ export function maskComments(src, { startMode = 'code' } = {}) {
   if (!src.includes('//') && !src.includes('/*')) return src;
   const chunks = [];
   let cursor = 0;
-  for (const { index, end } of jsxScanner(src, { mode: startMode, commentsOnly: true })) {
+  for (const { index, end } of jsxScanner(src, { mode: startMode, tokens: 'comments' })) {
     // Slice at the lexer's UTF-16 offsets and preserve newlines for diagnostics.
     chunks.push(src.slice(cursor, index), src.slice(index, end + 1).replace(/[^\n]/g, ' '));
     cursor = end + 1;
@@ -91,6 +91,7 @@ export function maskComments(src, { startMode = 'code' } = {}) {
 // lets several consumers share one structural read without compensating for
 // prior replacements.
 export function blankSourceSpans(src, spans) {
+  if (spans.length === 0) return src;
   const chars = src.split('');
   for (const { start, end } of spans) {
     for (let index = start; index < end; index++) {
@@ -277,7 +278,9 @@ export function isResponsiveHiddenOnlyLabelControl(src, node) {
   const withoutA11yHidden = stripHiddenElementContent(rawBody);
   // Any text left once the responsive-hidden wrappers are ALSO blanked is
   // visible at every width, so the control is never nameless.
-  const alwaysVisibleBody = stripJsxTags(stripResponsiveHiddenLabelContent(withoutA11yHidden)).trim();
+  const withoutResponsiveHidden = stripResponsiveHiddenLabelContent(withoutA11yHidden);
+  if (withoutResponsiveHidden === withoutA11yHidden) return false;
+  const alwaysVisibleBody = stripJsxTags(withoutResponsiveHidden).trim();
   if (bodyHasUsableText(alwaysVisibleBody)) return false;
   // Nothing survives — flag it only if that's because a responsive-hidden
   // wrapper swallowed real text, not because the control had none to begin

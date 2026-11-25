@@ -12,6 +12,30 @@ import { isCronShaped, isValidCronExpression } from './cronValidation.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { WORK_TRACKERS } from './workTracker.js';
 import { nullishString } from './sharedSchemas.js';
+import {
+  FEATURE_PRIORITY_MAX_ENTRIES, FEATURE_PRIORITY_MAX_LABEL, FEATURE_PRIORITY_MAX_NOTE, FEATURE_PRIORITY_MAX_PATH, FEATURE_PRIORITY_MAX_PATHS,
+  auditPathConflict, hasUnsafePromptChar,
+} from './appFeaturePriorityRules.js';
+
+// These strings are written into audit prompts, so they must be prompt-safe (see appFeaturePriorityRules.js).
+const promptSafeText = (max) => z.string().trim().min(1).max(max)
+  .refine((value) => !hasUnsafePromptChar(value), { message: 'must not contain control characters, quotes or backticks' });
+
+// Hand-written path priority for one slice of a managed app. P1 is the default for every path no entry names.
+export const appFeaturePrioritySchema = z.object({
+  id: z.string().trim().min(1).max(64),
+  label: promptSafeText(FEATURE_PRIORITY_MAX_LABEL),
+  paths: z.array(promptSafeText(FEATURE_PRIORITY_MAX_PATH)).min(1).max(FEATURE_PRIORITY_MAX_PATHS),
+  priority: z.enum(['P0', 'P1', 'P2', 'P3']),
+  note: z.string().trim().max(FEATURE_PRIORITY_MAX_NOTE).optional(),
+});
+
+export const appFeaturePrioritiesSchema = z.array(appFeaturePrioritySchema).max(FEATURE_PRIORITY_MAX_ENTRIES)
+  .refine((entries) => new Set(entries.map((entry) => entry.id)).size === entries.length, { message: 'Feature priority ids must be unique' })
+  .superRefine((entries, ctx) => {
+    const message = auditPathConflict(entries);
+    if (message) ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+  });
 
 export const processSchema = z.object({
   name: z.string().min(1),
@@ -169,8 +193,8 @@ export const appSchema = z.object({
   buildCommand: z.string().max(200).optional(),
   // Explicit lifecycle hook for managed-app updates. PortOS runs its own
   // update.sh/update.ps1; other apps must opt in instead of inheriting that
-  // lifecycle from their package.json.
-  updateCommand: z.string().trim().min(1).max(500).optional(),
+  // lifecycle from their package.json. Empty clears it.
+  updateCommand: z.string().trim().max(500).optional(),
   uiUrl: z.string().url().optional(),
   startCommands: z.array(z.string()).optional(),
   pm2ProcessNames: z.array(z.string()).optional(),
@@ -229,6 +253,9 @@ export const appSchema = z.object({
   // Free-text deployment assumptions (who uses it, what runs beside the user)
   // every quality audit weighs reachability against. Empty clears it.
   deploymentModel: z.string().trim().max(2000).optional(),
+  // Hand-written path priorities that scope this app's quality audits (see
+  // resolveAuditPriorityScope). Optional local metadata: absent or [] means no scope.
+  featurePriorities: appFeaturePrioritiesSchema.optional(),
   // Opt-in to the Skill Registry's `project` tier (#17387): the repo's
   // `.agents/skills/` and `.claude/skills/` are discovered, security-scanned
   // and offered to agents. Unset/false = never read (default off).

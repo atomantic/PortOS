@@ -5,7 +5,7 @@ import useSseJobSlot from './useSseJobSlot.js';
 import { MockEventSource, lastEventSource } from '../test/mockEventSource';
 import toast from '../components/ui/Toast';
 
-vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -169,4 +169,23 @@ describe('cancel feedback', () => {
     await act(async () => result.current.cancel());
     expect(toast.error).not.toHaveBeenCalled();
   });
+});
+
+it('adopts the job findActive reports on mount, unless the slot was taken or the read fails', async () => {
+  const options = { startRequest: vi.fn(async () => ({ jobId: 'started' })), eventsUrl: (id) => `/events/${id}` };
+  const adopted = renderHook(() => useSseJobSlot({ ...options, findActive: async () => ({ jobId: 'earlier', context: 'ctx' }) }), { wrapper: StrictMode });
+  await act(async () => {});
+  expect(adopted.result.current).toMatchObject({ active: true, jobId: 'earlier', context: 'ctx' });
+
+  let resolveFound;
+  const taken = renderHook(() => useSseJobSlot({ ...options, findActive: () => new Promise((resolve) => { resolveFound = resolve; }) }));
+  await act(async () => { taken.result.current.start('mine'); });
+  await act(async () => { resolveFound({ jobId: 'earlier', context: 'ctx' }); });
+  expect(taken.result.current).toMatchObject({ jobId: 'started', context: 'mine' });
+
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const failed = renderHook(() => useSseJobSlot({ ...options, findActive: async () => { throw new Error('offline'); } }));
+  await act(async () => {});
+  expect(failed.result.current.active).toBe(false);
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining('offline'));
 });

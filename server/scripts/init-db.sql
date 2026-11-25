@@ -425,6 +425,13 @@ CREATE INDEX IF NOT EXISTS idx_user_action_type_time ON user_action_events (type
 
 CREATE INDEX IF NOT EXISTS idx_user_action_actor_time ON user_action_events (actor, happened_at DESC);
 
+CREATE TABLE IF NOT EXISTS feature_usage_days (
+      area_id TEXT NOT NULL,
+      day DATE NOT NULL,
+      visits INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (area_id, day)
+    );
+
 CREATE TABLE IF NOT EXISTS review_queue_triage (
     action_key TEXT NOT NULL,
     occurrence TEXT NOT NULL DEFAULT '',
@@ -1544,8 +1551,30 @@ CREATE TABLE IF NOT EXISTS media_assets (
       data JSONB NOT NULL DEFAULT '{}'::jsonb,
       provenance_refs TEXT[] NOT NULL DEFAULT '{}',
       created_at TIMESTAMPTZ DEFAULT NOW(),
-      indexed_at TIMESTAMPTZ DEFAULT NOW()
+      indexed_at TIMESTAMPTZ DEFAULT NOW(),
+      search_text TEXT GENERATED ALWAYS AS (lower(data::text || ' ' || kind
+        || COALESCE(' ' || (data->>'width') || 'x' || (data->>'height'), '')
+        || CASE WHEN data->>'extractedFromVideoId' IS NOT NULL THEN ' extracted frame' ELSE '' END
+        || CASE WHEN data->>'stitchedFrom' IS NOT NULL THEN ' stitched' ELSE '' END
+        || CASE WHEN data->>'upscaledFrom' IS NOT NULL THEN ' upscaled 2x' ELSE '' END)) STORED,
+      is_hidden BOOLEAN GENERATED ALWAYS AS (COALESCE(data->>'hidden', 'false') = 'true') STORED,
+      universe_id TEXT GENERATED ALWAYS AS (CASE WHEN jsonb_typeof(data->'universeId') = 'string' THEN data->>'universeId' END) STORED,
+      universe_name TEXT GENERATED ALWAYS AS (CASE WHEN jsonb_typeof(data->'universeName') = 'string' THEN data->>'universeName' END) STORED,
+      entry_category TEXT GENERATED ALWAYS AS (CASE WHEN jsonb_typeof(data->'entryCategory') = 'string' THEN data->>'entryCategory' END) STORED,
+      entry_kind TEXT GENERATED ALWAYS AS (CASE WHEN jsonb_typeof(data->'entryKind') = 'string' THEN data->>'entryKind' END) STORED
     );
+
+ALTER TABLE media_assets
+      ADD COLUMN IF NOT EXISTS search_text TEXT GENERATED ALWAYS AS (lower(data::text || ' ' || kind
+        || COALESCE(' ' || (data->>'width') || 'x' || (data->>'height'), '')
+        || CASE WHEN data->>'extractedFromVideoId' IS NOT NULL THEN ' extracted frame' ELSE '' END
+        || CASE WHEN data->>'stitchedFrom' IS NOT NULL THEN ' stitched' ELSE '' END
+        || CASE WHEN data->>'upscaledFrom' IS NOT NULL THEN ' upscaled 2x' ELSE '' END)) STORED,
+      ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN GENERATED ALWAYS AS (COALESCE(data->>'hidden', 'false') = 'true') STORED,
+      ADD COLUMN IF NOT EXISTS universe_id TEXT GENERATED ALWAYS AS (CASE WHEN jsonb_typeof(data->'universeId') = 'string' THEN data->>'universeId' END) STORED,
+      ADD COLUMN IF NOT EXISTS universe_name TEXT GENERATED ALWAYS AS (CASE WHEN jsonb_typeof(data->'universeName') = 'string' THEN data->>'universeName' END) STORED,
+      ADD COLUMN IF NOT EXISTS entry_category TEXT GENERATED ALWAYS AS (CASE WHEN jsonb_typeof(data->'entryCategory') = 'string' THEN data->>'entryCategory' END) STORED,
+      ADD COLUMN IF NOT EXISTS entry_kind TEXT GENERATED ALWAYS AS (CASE WHEN jsonb_typeof(data->'entryKind') = 'string' THEN data->>'entryKind' END) STORED;
 
 ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS provenance_refs TEXT[];
 

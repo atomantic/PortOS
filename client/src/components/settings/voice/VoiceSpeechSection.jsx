@@ -10,6 +10,7 @@ import FormField from '../../ui/FormField';
 import ListLoadError from '../../ui/ListLoadError';
 import useMounted from '../../../hooks/useMounted';
 import useListResource from '../../../hooks/useListResource';
+import DraftNumber from '../../ui/DraftNumber';
 
 const STT_ENGINES = [
   { value: 'whisper', label: 'Whisper (local, accurate, works offline)' },
@@ -217,14 +218,13 @@ export default function VoiceSpeechSection({ cfg, patch, inputCls, onRegisterRet
         </p>
       )}
 
-      <FormField label="Speech rate" hint="0.5 = slow, 1.0 = normal, 2.0 = fast">
-        <input
-          type="number" min="0.5" max="2" step="0.1"
-          value={cfg.tts.rate ?? 1.0}
-          onChange={(e) => patch('tts.rate', parseFloat(e.target.value) || 1.0)}
-          className={inputCls}
-        />
-      </FormField>
+      <DraftNumber min={0.5} max={2} value={cfg.tts.rate ?? 1.0} onCommit={(rate) => patch('tts.rate', rate)}>
+        {(field) => (
+          <FormField label="Speech rate" hint="0.5 = slow, 1.0 = normal, 2.0 = fast">
+            <input type="number" step="0.1" className={inputCls} {...field} />
+          </FormField>
+        )}
+      </DraftNumber>
 
       <FormField label="STT engine" hint={webSpeechSupported
         ? 'Web Speech = browser-native, zero-latency, but quality varies by browser and only works in Chrome/Edge. Whisper = local, consistent, offline.'

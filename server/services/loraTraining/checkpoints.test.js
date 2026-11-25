@@ -19,7 +19,6 @@ const {
   listRunCheckpoints,
   isPreviewCollapsed,
   resolveCheckpointAdapterBuffer,
-  resolveLatestCheckpointArtifact,
   selectDeployableCheckpoint,
   COLLAPSE_ENTROPY_MAX,
 } = await import('./checkpoints.js');
@@ -186,40 +185,6 @@ describe('loraTraining/checkpoints', () => {
       },
     }));
     expect(mixed.map((c) => c.step)).toEqual([250]);
-  });
-
-  it('resolves the latest on-disk checkpoint zip as the mflux resume point', () => {
-    const latest = resolveLatestCheckpointArtifact(buildRun());
-    expect(latest).toMatchObject({ step: 500 });
-    expect(latest.path).toContain(join('mflux', 'checkpoints', '0000500_checkpoint.zip'));
-  });
-
-  it('returns null when a run has no checkpoint dir to resume from', () => {
-    expect(resolveLatestCheckpointArtifact({ id: 'no-such-run', runtime: 'mflux' })).toBeNull();
-  });
-
-  it('resolves the latest flux2 checkpoint dir that carries an optimizer.pt resume bundle', async () => {
-    const id = 'run-flux2-fixture';
-    const ckpts = join(dataRoot, 'training-runs', id, 'checkpoints');
-    mkdirSync(join(ckpts, 'step-000100'), { recursive: true });
-    mkdirSync(join(ckpts, 'step-000200'), { recursive: true });
-    mkdirSync(join(ckpts, 'step-000300'), { recursive: true }); // no weights yet — must be skipped
-    await writeFile(join(ckpts, 'step-000100', 'pytorch_lora_weights.safetensors'), Buffer.from('w1'));
-    await writeFile(join(ckpts, 'step-000100', 'optimizer.pt'), Buffer.from('o1'));
-    await writeFile(join(ckpts, 'step-000200', 'pytorch_lora_weights.safetensors'), Buffer.from('w2'));
-    await writeFile(join(ckpts, 'step-000200', 'optimizer.pt'), Buffer.from('o2'));
-    const latest = resolveLatestCheckpointArtifact({ id, runtime: 'flux2' });
-    expect(latest).toMatchObject({ step: 200 });
-    expect(latest.path).toContain(join('checkpoints', 'step-000200'));
-  });
-
-  it('skips a flux2 checkpoint that predates optimizer-state resume (adapter only, no optimizer.pt)', async () => {
-    const id = 'run-flux2-legacy';
-    const ckpts = join(dataRoot, 'training-runs', id, 'checkpoints');
-    mkdirSync(join(ckpts, 'step-000150'), { recursive: true });
-    // Pre-optimizer.pt checkpoint: adapter weights but no resume bundle.
-    await writeFile(join(ckpts, 'step-000150', 'pytorch_lora_weights.safetensors'), Buffer.from('w'));
-    expect(resolveLatestCheckpointArtifact({ id, runtime: 'flux2' })).toBeNull();
   });
 
   it('joins preview by the filename-derived step even when the recorded step drifted', async () => {

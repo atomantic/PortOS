@@ -27,7 +27,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { LayoutGrid, ChevronDown, ChevronRight, ExternalLink, ImageIcon, Plus, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
-import { listMoodBoards, getMoodBoard, createMoodBoard } from '../../services/apiMoodBoard.js';
+import { listMoodBoardNames, getMoodBoard, createMoodBoard } from '../../services/apiMoodBoard.js';
 import { moodBoardItemSrc } from '../../lib/moodBoardItemSrc';
 import { moodBoardItemPrompt } from '../../lib/moodBoardAnalysis';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
@@ -55,7 +55,7 @@ export default function MoodBoardReferenceStrip({
   useEffect(() => {
     if (!expanded || boards !== null) return undefined;
     let cancelled = false;
-    listMoodBoards({ silent: true }).then(
+    listMoodBoardNames({ silent: true }).then(
       (data) => { if (!cancelled) setBoards(Array.isArray(data) ? data : []); },
       () => { if (!cancelled) setBoards([]); },
     );
@@ -77,21 +77,18 @@ export default function MoodBoardReferenceStrip({
       ? (inList(selectedId) ? selectedId : boards[0].id)
       : '');
 
-  // Fetch the shown board's full record (the list payload already carries
-  // items, but getMoodBoard guarantees the freshest items).
+  // Fetch items only for the board currently shown.
   useEffect(() => {
     if (!expanded || !effectiveId) { setDetail(null); return undefined; }
-    // Fast path: the list entry already has items — show it immediately.
-    const fromList = Array.isArray(boards) ? boards.find((b) => b.id === effectiveId) : null;
-    if (fromList && Array.isArray(fromList.items)) setDetail(fromList);
+    setDetail(null);
     let cancelled = false;
     setLoadingDetail(true);
     getMoodBoard(effectiveId, { silent: true }).then(
       (data) => { if (!cancelled && data) setDetail(data); },
-      () => { /* keep the list fallback */ },
+      () => { if (!cancelled) setDetail(null); },
     ).finally(() => { if (!cancelled) setLoadingDetail(false); });
     return () => { cancelled = true; };
-  }, [expanded, effectiveId, boards]);
+  }, [expanded, effectiveId]);
 
   const handleSelect = useCallback((id) => {
     if (controlled) {
@@ -121,12 +118,12 @@ export default function MoodBoardReferenceStrip({
   }, [creating, newBoardName, onChange]);
 
   const thumbs = useMemo(() => {
-    const items = Array.isArray(detail?.items) ? detail.items : [];
+    const items = detail?.id === effectiveId && Array.isArray(detail.items) ? detail.items : [];
     return items
       .map((it) => ({ id: it.id, src: moodBoardItemSrc(it), caption: moodBoardItemPrompt(it) || it.caption || '' }))
       .filter((t) => t.src)
       .slice(0, MAX_THUMBS);
-  }, [detail]);
+  }, [detail, effectiveId]);
 
   return (
     <div className={`min-w-0 bg-port-bg border border-port-border rounded ${className}`}>
@@ -216,7 +213,7 @@ export default function MoodBoardReferenceStrip({
                   <span className="min-w-0 break-words">
                     {!effectiveId
                       ? 'No board linked — pick one above to surface its references here.'
-                      : loadingDetail ? 'Loading reference images…' : 'No reference images pinned on this board yet.'}
+                      : loadingDetail ? 'Loading reference images…' : detail ? 'No reference images pinned on this board yet.' : 'Could not load reference images.'}
                   </span>
                 </div>
               ) : (

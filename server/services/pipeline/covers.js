@@ -61,42 +61,6 @@ export function composeComicCoverPrompt({
 }
 
 /**
- * Compose a TV episode title-screen prompt. Reuses the same masthead/logo
- * cue the comic covers do — `series.titleLogo` describes the letterform +
- * finish, the series name is lettered verbatim, and `series.author` lands as
- * a small byline. The episode's number + title appear as secondary
- * typography so the screen identifies the specific episode, not just the
- * series. Returns the full prompt with world style baked in when present.
- *
- * Caller decides where to render the result — there is no auto-prepend into
- * the episode video pipeline today. Future title-card stages can call this
- * directly; for now it is the single source of truth for "what should the TV
- * title card for this episode look like."
- */
-export function composeTitleScreenPrompt({
-  series, world, issue, extraStyle = '',
-}) {
-  const _seriesName = (series?.name || '').trim();
-  const issueNumber = Number.isFinite(issue?.number) ? Math.max(1, Math.floor(issue.number)) : null;
-  const issueTitle = (issue?.title || '').trim();
-
-  const styleStack = stackStyle(series, extraStyle);
-  const styleClause = styleStack ? ` Art style: ${styleStack}.` : '';
-
-  const titleBlock = buildMastheadClause(series);
-  const numberLine = issueNumber
-    ? ` Render an "EPISODE ${issueNumber}" tag in restrained smaller typography, positioned above the masthead.`
-    : '';
-  const titleLine = issueTitle
-    ? ` Render the episode title "${issueTitle}" as a secondary banner below the masthead in a complementary but lighter weight.`
-    : '';
-  const authorLine = buildAuthorClause(series);
-
-  const layout = `A single TV episode title screen — a static title card meant to hold on-screen for a few seconds, NOT a story panel. Centered hero typography, generous negative space, cinematic 16:9 framing. ${titleBlock}${numberLine}${titleLine}${authorLine} Subtle background imagery only — atmospheric texture, signature color of the universe, no characters, no narrative scene.${styleClause}`;
-  return applyWorldStyle(layout, world, series);
-}
-
-/**
  * Compose a comic-book BACK-cover prompt. Distinguishing constraints vs.
  * front cover: no masthead, no issue-number tag, no title banner — back
  * covers are pure illustration in this app. The negative clause forbids
@@ -367,15 +331,6 @@ async function enqueueVolumeCoverLike(seriesId, seasonId, target, options = {}) 
     logLine: `🎨 Pipeline volume ${logTarget} — series=${seriesId.slice(0, 8)} season=${seasonId.slice(0, 8)} vol=${season.number || 1} variant=${variant}${fromProof ? ' (from proof)' : ''}`,
   });
   return { jobId, mode, prompt, script, variant, fromProof };
-}
-
-/**
- * Enqueue a volume (season) FRONT cover render. Returns
- * { jobId, mode, prompt, coverScript, variant, fromProof }.
- */
-export async function enqueueVolumeCover(seriesId, seasonId, options = {}) {
-  const { script, ...rest } = await enqueueVolumeCoverLike(seriesId, seasonId, 'cover', options);
-  return { ...rest, coverScript: script };
 }
 
 /**

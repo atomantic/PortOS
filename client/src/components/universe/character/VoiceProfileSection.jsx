@@ -6,6 +6,7 @@ import { prepareProfilePlayback } from '../../../services/voiceProfileBenchmark'
 import VoiceFineTuningPanel from '../../voice/VoiceFineTuningPanel';
 import TabPills from '../../ui/TabPills';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import DraftNumber from '../../ui/DraftNumber';
 import useDrawerTab from '../../../hooks/useDrawerTab';
 import BoxedSection from './BoxedSection';
 
@@ -326,12 +327,15 @@ export default function VoiceProfileSection({ universeId, entry, disabled }) {
             <div className="flex gap-2">
               <label className="block text-[10px] text-gray-400 flex-1">
                 Seed
-                <input
-                  type="number"
-                  value={designSeed}
-                  onChange={(e) => setDesignSeed(parseInt(e.target.value, 10) || 42)}
-                  className="w-full mt-0.5 px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
-                />
+                <DraftNumber integer value={designSeed} onCommit={setDesignSeed}>
+                  {(field) => (
+                    <input
+                      type="number"
+                      {...field}
+                      className="w-full mt-0.5 px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
+                    />
+                  )}
+                </DraftNumber>
               </label>
               <label className="block text-[10px] text-gray-400 flex-1">
                 Rate Multiplier ({designRate}x)

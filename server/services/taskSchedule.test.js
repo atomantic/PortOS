@@ -1,3 +1,4 @@
+import { getDefaultTaskPrompt } from './taskPromptDefaults/prompts.js';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 vi.mock('./cos/cosEvents.js', () => ({
@@ -123,7 +124,6 @@ import { recordUserAction } from './userActions.js'
 // Prompt getters moved to taskPromptService.js (issue #744 split, #1083 cycle
 // break). taskSchedule.js re-exports the version constants but not the getters.
 import {
-  getDefaultPrompt,
   getTaskPrompt
 } from './taskPromptService.js'
 
@@ -519,7 +519,7 @@ describe('taskSchedule', () => {
     })
 
     it('should expose a default prompt that delegates to the slashdo command', () => {
-      const prompt = getDefaultPrompt('do-replan')
+      const prompt = getDefaultTaskPrompt('do-replan')
       expect(prompt).toBeDefined()
       expect(prompt).toContain('Replan')
       expect(prompt).toContain('{appName}')
@@ -1568,15 +1568,15 @@ describe('taskSchedule', () => {
     })
   })
 
-  describe('getDefaultPrompt', () => {
+  describe('getDefaultTaskPrompt', () => {
     it('should return prompt for known task type', () => {
-      const prompt = getDefaultPrompt('security')
+      const prompt = getDefaultTaskPrompt('security')
       expect(prompt).toBeDefined()
       expect(prompt).toContain('Security')
     })
 
     it('should return null for unknown task type', () => {
-      const prompt = getDefaultPrompt('nonexistent')
+      const prompt = getDefaultTaskPrompt('nonexistent')
       expect(prompt).toBeNull()
     })
   })

@@ -16,9 +16,7 @@ vi.mock('../../services/apiBrain.js', () => ({
   updateYoutubeIngestSettings: api.updateYoutubeIngestSettings,
 }));
 vi.mock('../../services/apiNotes.js', () => ({ getNotesVaults: api.getNotesVaults }));
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }),
-}));
+vi.mock('../ui/Toast');
 
 import YoutubeIngestSettings from './YoutubeIngestSettings';
 

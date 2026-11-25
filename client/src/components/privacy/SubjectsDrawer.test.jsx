@@ -10,7 +10,7 @@ vi.mock('../../services/apiPrivacy.js', () => ({
   grantPrivacySubjectConsent: vi.fn(),
   revokePrivacySubjectConsent: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import SubjectsDrawer from './SubjectsDrawer';
 import {

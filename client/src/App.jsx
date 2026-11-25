@@ -6,7 +6,8 @@ import { FullWidthMain, PaddedMain } from './components/PageShell';
 import { getSettings, updateSettings, getSelfInstance } from './services/apiSystem.js';
 import { NAV_COMMANDS } from '../../server/lib/navManifest.js';
 import { previousPathRedirects, previousPathTarget } from './lib/previousPaths';
-import BrailleSpinner from './components/BrailleSpinner';
+import PageLoader from './components/PageLoader';
+import useFeatureUsageBeacon from './components/featureUsage/useFeatureUsageBeacon';
 import { readShellBootstrap } from './services/shellBootstrap.js';
 import { lazyWithReload } from './utils/lazyWithReload';
 
@@ -27,7 +28,6 @@ const UsagePage = lazyWithReload(() => import('./pages/UsagePage'));
 const ProcessesPage = lazyWithReload(() => import('./pages/ProcessesPage'));
 const AgentsPage = lazyWithReload(() => import('./pages/AgentsPage'));
 const DataDog = lazyWithReload(() => import('./pages/DataDog'));
-const FlowsDoc = lazyWithReload(() => import('./pages/FlowsDoc'));
 const GitHub = lazyWithReload(() => import('./pages/GitHub'));
 const Eidoverse = lazyWithReload(() => import('./pages/Eidoverse'));
 const AppDetail = lazyWithReload(() => import('./pages/AppDetail'));
@@ -160,13 +160,6 @@ const EidoverseGuest = lazyWithReload(() => import('./pages/EidoverseGuest'));
 const Login = lazyWithReload(() => import('./pages/Login'));
 const NotFound = lazyWithReload(() => import('./pages/NotFound'));
 
-// Loading fallback for lazy-loaded pages
-const PageLoader = () => (
-  <div className="flex items-center justify-center h-64">
-    <BrailleSpinner text="Loading" />
-  </div>
-);
-
 // Preserve query string + hash on a hand-written redirect.
 function RedirectWithSearch({ to }) {
   const { search, hash, state } = useLocation();
@@ -269,6 +262,7 @@ export default function App() {
   const isHostedAudienceRoute = isPublicGuestRoute(pathname);
   useTimezoneBootstrap(!isHostedAudienceRoute);
   useDocumentTitle(!isHostedAudienceRoute);
+  useFeatureUsageBeacon(!isHostedAudienceRoute);
 
   const routeContent = (
     <Suspense fallback={<PageLoader />}>
@@ -299,7 +293,6 @@ export default function App() {
           <Route element={<FullWidthMain />}>
             <Route path="apps" element={<Apps />} />
             <Route path="devtools/datadog" element={<DataDog />} />
-            <Route path="devtools/flows" element={<FlowsDoc />} />
             <Route path="devtools/github" element={<GitHub />} />
             <Route path="devtools/github/:tab" element={<GitHub />} />
             <Route path="devtools/github/:tab/:accountId/:threadId" element={<GitHub />} />

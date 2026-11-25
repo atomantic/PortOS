@@ -34,7 +34,6 @@ vi.mock('./db.js', () => ({
 vi.mock('./checkpoints.js', () => ({
   listRunCheckpoints: () => [{ step: 100, loss: 0.1, previewUrl: '/preview.png' }],
   resolveCheckpointAdapterBuffer: async () => Buffer.from('promoted adapter'),
-  resolveLatestCheckpointArtifact: () => null,
   selectDeployableCheckpoint: vi.fn(),
 }));
 vi.mock('../loraDatasets.js', () => ({ updateDataset: async () => null }));

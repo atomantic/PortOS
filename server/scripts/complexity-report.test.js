@@ -1,3 +1,4 @@
+// test-memo: git-fixture — git only ever runs in repositories this suite creates under the temp directory (docs/TEST_MEMO_GIT_FIXTURES.md).
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,7 +22,7 @@ function fixtureRepo() {
     mkdirSync(dirname(full), { recursive: true });
     writeFileSync(full, content);
   };
-  const run = () => spawnSync(process.execPath, [script], { cwd: dir, encoding: 'utf8' });
+  const run = (...args) => spawnSync(process.execPath, [script, ...args], { cwd: dir, encoding: 'utf8' });
   return { dir, write, run };
 }
 
@@ -131,4 +132,47 @@ function classScopes(flag) {
     "2  src/decisions.js:21:5  Method 'field'",
     '1  src/decisions.js:21:13  Class field initializer',
   ]);
+});
+
+it('drops --exclude matches from both shortlists, reports how many, and is unchanged without the flag', () => {
+  const { write, run } = fixtureRepo();
+  const body = 'export function pick(a, b) { if (a && b) return a; return b; }';
+  for (const path of ['src/keep.js', 'src/dormant/one.js', 'src/dormant/deep/two.jsx', 'src/dormantPanel.js', 'src/dormantKeep.js', 'src/other.js']) write(path, body);
+  for (const path of ['src/keep.test.js', 'src/dormant/one.test.js', 'tests/other.js']) write(path, body);
+
+  const all = run();
+  expect(all.status, all.stderr).toBe(0);
+  expect(all.stdout).toContain('Source: 6/6 files scanned');
+  expect(all.stdout).toContain('Tests and fixtures: 3/3 files scanned');
+  expect(all.stdout).not.toContain('Excluded');
+
+  // Brace lists, a trailing /** and an extglob negation, as the feature-area catalog writes them.
+  const scoped = run('--exclude', 'src/dormant/**', '--exclude=src/{dormant!(Keep*),other.js}');
+  expect(scoped.status, scoped.stderr).toBe(0);
+  expect(scoped.stderr).toBe('');
+  expect(scoped.stdout).toContain('Excluded: 5 file(s) matching 2 --exclude glob(s)');
+  const [source, tests] = scoped.stdout.split('Tests and fixtures:');
+  expect(source).toContain('Source: 2/2 files scanned');
+  expect(source).toContain('src/keep.js');
+  expect(source).toContain('src/dormantKeep.js');
+  expect(source).not.toMatch(/src\/dormant\/|dormantPanel|src\/other\.js/);
+  expect(tests).toContain(' 2/2 files scanned');
+  expect(tests).toContain('src/keep.test.js');
+  expect(tests).toContain('tests/other.js');
+  expect(tests).not.toContain('src/dormant/');
+
+  const none = run('--exclude', 'lib/**');
+  expect(none.stdout).toContain('Excluded: 0 file(s) matching 1 --exclude glob(s)');
+  expect(none.stdout.replace(/^Excluded: .*\n/m, '')).toBe(all.stdout);
+});
+
+it('fails on a mistyped flag or a missing glob instead of scanning unfiltered', () => {
+  const { write, run } = fixtureRepo();
+  write('src/keep.js', 'export function keep() {}');
+  for (const args of [['--exclude'], ['--exclude='], ['--exlude', 'src/**'], ['src/**']]) {
+    const result = run(...args);
+    expect(result.status, args.join(' ')).toBe(1);
+    expect(result.stderr).toMatch(/Complexity scan failed: (unknown argument|--exclude needs a glob)/);
+    expect(result.stdout).toBe('');
+  }
 });

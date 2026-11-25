@@ -12,7 +12,7 @@ vi.mock('../../services/apiMortalLoom.js', () => ({
   getMortalLoomStatus: api.getMortalLoomStatus,
   importMortalLoom: api.importMortalLoom,
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import MortalLoomTab from './MortalLoomTab.jsx';
 

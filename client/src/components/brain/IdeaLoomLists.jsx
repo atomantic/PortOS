@@ -18,9 +18,15 @@ import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import useUrlParams from '../../hooks/useUrlParams';
 import useListResource from '../../hooks/useListResource';
 import ListLoadError from '../ui/ListLoadError';
+import { useSingleFlight } from '../../hooks/useSingleFlight';
 
 // Module-level so useListResource sees a stable fetcher. The row owns the error UI; the route returns a bare array.
 const fetchVaults = () => getNotesVaults({ silent: true });
+
+const fetchLists = async () => {
+  const data = await getIdeaLoomLists({ silent: true });
+  return data?.lists ?? data;
+};
 
 const emptyList = () => ({ title: '', prompt: '', category: '', help: '', status: 'draft', ideas: [] });
 
@@ -42,11 +48,8 @@ const toPayload = (draft) => ({
   ideas: (draft.ideas || []).map((idea) => idea.trim()).filter(Boolean),
 });
 
-// Integration state never gates local editing — these are notices, not blockers.
-// A null `settings` is "the fetch failed", NOT "the integration is off": reporting
-// an unread configuration as disabled asserts a fact we never read.
+// A successful integration read can still leave vault sync unavailable for local lists.
 const integrationNotice = (settings) => {
-  if (!settings) return 'Could not load IdeaLoom settings. Local lists remain available.';
   if (!settings.enabled) return 'Vault sync is disabled. Local lists remain available.';
   if (!settings.obsidianVaultId) return 'No Obsidian vault is selected. Local lists remain available.';
   return null;
@@ -66,9 +69,12 @@ const missingField = (draft) => {
 export default function IdeaLoomLists() {
   const [searchParams, updateParams] = useUrlParams();
   const selectedId = searchParams.get('list');
-  const [lists, setLists] = useState([]);
+  const {
+    items: lists, state: listsState, error: listsError, retry: refreshLists, setItems: setLists,
+  } = useListResource(fetchLists, { retainOnRetry: true });
   const [settings, setSettings] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsError, setSettingsError] = useState(null);
   const [draft, setDraft] = useState(null);
   const [ideaText, setIdeaText] = useState('');
   const [exchangeBusy, setExchangeBusy] = useState(false);
@@ -78,23 +84,20 @@ export default function IdeaLoomLists() {
 
   const select = useCallback((id) => updateParams({ list: id }), [updateParams]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const [nextLists, nextSettings] = await Promise.all([
-      getIdeaLoomLists({ silent: true }),
-      getIdeaLoomSettings({ silent: true }),
-    ]).catch((error) => {
-      toast.error(error.message || 'Failed to load IdeaLoom lists');
-      return [[], null];
-    });
-    setLists(Array.isArray(nextLists?.lists) ? nextLists.lists : (Array.isArray(nextLists) ? nextLists : []));
-    setSettings(nextSettings?.settings || nextSettings);
-    setLoading(false);
+  const loadSettings = useCallback(async () => {
+    setSettingsLoading(true);
+    await getIdeaLoomSettings({ silent: true })
+      .then((data) => {
+        setSettings(data?.settings ?? data);
+        setSettingsError(null);
+      })
+      .catch(setSettingsError)
+      .finally(() => setSettingsLoading(false));
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadSettings(); }, [loadSettings]);
 
-  const notice = integrationNotice(settings);
+  const notice = settings && !settingsError ? integrationNotice(settings) : null;
   const selected = useMemo(() => lists.find((list) => list.id === selectedId) || null, [lists, selectedId]);
   useEffect(() => {
     if (selected) setDraft({ ...selected, ideas: [...(selected.ideas || [])] });
@@ -103,7 +106,7 @@ export default function IdeaLoomLists() {
   // `overrides` lets a one-click action (completing a list) persist through the
   // same validated path instead of a second endpoint, so it can never drop the
   // edits already sitting in the draft.
-  const save = async (overrides = {}) => {
+  const save = useSingleFlight(async (overrides = {}) => {
     const next = { ...draft, ...overrides };
     const problem = missingField(next);
     if (problem) {
@@ -123,7 +126,7 @@ export default function IdeaLoomLists() {
     setDraft({ ...saved, ideas: [...(saved.ideas || [])] });
     select(saved.id);
     toast.success(next.id ? 'List saved' : 'List created');
-  };
+  }, () => draft?.id);
 
   const remove = async (id) => {
     const result = await deleteIdeaLoomList(id, { silent: true }).catch((error) => {
@@ -173,10 +176,8 @@ export default function IdeaLoomLists() {
     const problems = PROBLEM_KEYS.reduce((total, key) => total + (counts[key] || 0), 0);
     if (problems) toast.error(`${successMessage} with ${problems} issue${problems === 1 ? '' : 's'}`);
     else toast.success(successMessage);
-    await load();
+    refreshLists();
   };
-
-  if (loading) return <p className="py-8 text-center text-gray-500">Loading IdeaLoom lists…</p>;
 
   return (
     <section className="grid gap-4 lg:grid-cols-[minmax(14rem,20rem)_1fr]" aria-label="IdeaLoom lists">
@@ -185,7 +186,9 @@ export default function IdeaLoomLists() {
           <div><h2 className="font-medium text-white">IdeaLoom lists</h2><p className="text-xs text-gray-500">Separate from native Brain ideas</p></div>
           <button type="button" onClick={() => { setDraft(emptyList()); select(null); }} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-[44px] rounded px-3 text-sm text-port-accent hover:bg-port-accent/10" aria-label="Create IdeaLoom list"><Plus size={16} /></button>
         </div>
-        {settings && <div className="mb-3 space-y-2 rounded border border-port-border p-2">
+        {settingsError && <ListLoadError what="IdeaLoom settings" error={settingsError} onRetry={loadSettings} retrying={settingsLoading} className="mb-3" />}
+        {settingsLoading && !settings && !settingsError && <p className="mb-3 text-xs text-gray-500">Loading IdeaLoom settings…</p>}
+        {settings && !settingsError && <div className="mb-3 space-y-2 rounded border border-port-border p-2">
           <label className="flex items-center gap-2 text-xs text-gray-300" htmlFor="idealoom-enabled">
             <input id="idealoom-enabled" type="checkbox" checked={Boolean(settings.enabled)} onChange={(event) => patchSettings({ enabled: event.target.checked })} />
             Sync with an Obsidian vault
@@ -203,7 +206,7 @@ export default function IdeaLoomLists() {
           </label>}
         </div>}
         {notice && <p role="status" className="mb-3 rounded bg-port-warning/10 p-2 text-xs text-port-warning">{notice}</p>}
-        {!notice && <div className="mb-3 flex flex-wrap gap-2">
+        {settings && !settingsError && !notice && <div className="mb-3 flex flex-wrap gap-2">
           <button type="button" disabled={exchangeBusy} onClick={() => runExchange(() => importIdeaLoomFromObsidian({ silent: true }), 'IdeaLoom import complete')} className="flex min-h-[44px] items-center gap-2 rounded border border-port-border px-3 text-xs text-gray-300 hover:bg-port-border/50 disabled:opacity-50"><Download size={14} />Import from Obsidian</button>
           <button type="button" disabled={exchangeBusy} onClick={() => runExchange(() => syncIdeaLoomToObsidian(null, { silent: true }), 'IdeaLoom export complete')} className="flex min-h-[44px] items-center gap-2 rounded border border-port-border px-3 text-xs text-gray-300 hover:bg-port-border/50 disabled:opacity-50"><Upload size={14} />Export to Obsidian</button>
           {Boolean(exchangeResult?.missing) && <button type="button" disabled={exchangeBusy} onClick={() => runExchange(() => syncIdeaLoomToObsidian(null, { silent: true, recreateMissing: true }), 'Deleted notes recreated')} className="flex min-h-[44px] items-center gap-2 rounded border border-port-warning px-3 text-xs text-port-warning hover:bg-port-warning/10 disabled:opacity-50"><RotateCcw size={14} />Recreate {exchangeResult.missing} deleted note{exchangeResult.missing === 1 ? '' : 's'}</button>}
@@ -213,7 +216,9 @@ export default function IdeaLoomLists() {
           {lists.map((list) => <button key={list.id} type="button" onClick={() => select(list.id)} className={`w-full rounded p-3 text-left ${selected?.id === list.id ? 'bg-port-accent/20 text-white' : 'text-gray-300 hover:bg-port-border/50'}`}>
             <span className="block truncate text-sm font-medium">{list.title}</span><span className="text-xs text-gray-500">{list.status === 'completed' ? 'Completed' : 'Draft'} · {(list.ideas || []).length} ideas</span>
           </button>)}
-          {!lists.length && <p className="py-5 text-center text-sm text-gray-500">No IdeaLoom lists yet.</p>}
+          {listsState === 'error' && <ListLoadError what="IdeaLoom lists" error={listsError} onRetry={refreshLists} />}
+          {listsState === 'loading' && !lists.length && <p className="py-5 text-center text-sm text-gray-500">Loading IdeaLoom lists…</p>}
+          {listsState === 'ready' && !lists.length && <p className="py-5 text-center text-sm text-gray-500">No IdeaLoom lists yet.</p>}
         </div>
       </aside>
 

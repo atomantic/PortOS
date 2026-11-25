@@ -19,6 +19,7 @@ import { mkdir, readdir, rm, stat } from 'fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
 import { atomicWrite } from '../../lib/fileCore.js';
+import { injectPreviewHead } from '../../lib/htmlPreviewHead.js';
 import { isTopLevelEntryName, makePathResolver } from '../../lib/pathSafety.js';
 import { UPLOAD_AUDIO_EXTENSIONS } from '../../lib/mimeTypes.js';
 import { getCodeAnimationJobRecord, isCodeAnimationJobId, readCodeAnimationHtml } from './jobStore.js';
@@ -101,11 +102,7 @@ export function buildExportShim({ maxDurationSec = EXPORT_MAX_DURATION_SEC, song
 
 /** The stored HTML with the shim inserted as the first script of the document. */
 export function injectExportShim(html, shim) {
-  const tag = `<script>${shim}</script>`;
-  const head = html.match(/<head[^>]*>/i);
-  if (!head) return `${tag}${html}`;
-  const at = head.index + head[0].length;
-  return `${html.slice(0, at)}${tag}${html.slice(at)}`;
+  return injectPreviewHead(html, `<script>${shim}</script>`);
 }
 
 function exportAudioOf(job) {

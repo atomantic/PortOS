@@ -4,12 +4,12 @@ import { act, renderHook } from '@testing-library/react';
 vi.mock('../../../services/apiMusicVideo.js', () => ({
   placeMusicVideoPoolItem: vi.fn(), selectMusicVideoSceneTake: vi.fn(), reviewMusicVideoSceneTake: vi.fn(),
   markMusicVideoPoolAssets: vi.fn(), getMusicVideoProject: vi.fn(), rejectUnusedMusicVideoSceneTakes: vi.fn(),
-  continueMusicVideoSceneFromPrevious: vi.fn(), checkMusicVideoSceneTake: vi.fn(),
+  continueMusicVideoSceneFromPrevious: vi.fn(), checkMusicVideoSceneTake: vi.fn(), moveMusicVideoSceneTake: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../../ui/Toast');
 vi.mock('../../../services/socket.js', () => ({ default: { id: 'socket-example' } }));
 
-import { placeMusicVideoPoolItem, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, getMusicVideoProject, rejectUnusedMusicVideoSceneTakes, continueMusicVideoSceneFromPrevious, checkMusicVideoSceneTake } from '../../../services/apiMusicVideo.js';
+import { placeMusicVideoPoolItem, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, getMusicVideoProject, rejectUnusedMusicVideoSceneTakes, continueMusicVideoSceneFromPrevious, checkMusicVideoSceneTake, moveMusicVideoSceneTake } from '../../../services/apiMusicVideo.js';
 import useMusicVideoTakes from './useMusicVideoTakes.js';
 import { takeControl } from '../../../lib/musicVideoTakes.js';
 
@@ -225,5 +225,30 @@ describe('useMusicVideoTakes edit results beyond the take decisions', () => {
     await act(() => checking);
     expect(applyEdit).not.toHaveBeenCalled();
     expect(applyScenePatch).toHaveBeenCalledWith('mv-1', 's1', expect.objectContaining({ takes: [] }));
+  });
+});
+
+describe('useMusicVideoTakes moveTake', () => {
+  // Uniquely catches a moved take vanishing from its old shot without appearing on the new one when no edit result applies.
+  it('redraws both shots from the reply: through the edit result, or each shot patched on its own', async () => {
+    const take = { takeId: 't-a', kind: 'video', assetId: 'clip-a', status: 'rejected' };
+    const source = { sceneId: 's1', takes: [] };
+    const target = { sceneId: 's2', takes: [take] };
+    const applyScenePatch = vi.fn();
+    const applyEdit = vi.fn();
+    const { result } = renderHook(() => useMusicVideoTakes({ project: { id: 'mv-1' }, applyScenePatch, applyEdit }));
+
+    moveMusicVideoSceneTake.mockResolvedValueOnce({ scene: source, target, take, edit: { revision: 'r2' } });
+    await act(() => result.current.moveTake({ sceneId: 's1' }, take, 's2'));
+    expect(moveMusicVideoSceneTake).toHaveBeenCalledWith('mv-1', 's1', 't-a', 's2', expect.any(Object));
+    expect(applyEdit).toHaveBeenCalledWith('mv-1', { revision: 'r2' });
+
+    applyEdit.mockClear();
+    moveMusicVideoSceneTake.mockResolvedValueOnce({ scene: source, target, take });
+    await act(() => result.current.moveTake({ sceneId: 's1' }, take, 's2'));
+    expect(applyEdit).not.toHaveBeenCalled();
+    expect(applyScenePatch).toHaveBeenCalledWith('mv-1', 's2', expect.objectContaining({ takes: [take] }));
+    expect(applyScenePatch).toHaveBeenCalledWith('mv-1', 's1', expect.objectContaining({ takes: [] }));
+    expect(result.current.pending.has(takeControl.move({ sceneId: 's1' }, take))).toBe(false);
   });
 });

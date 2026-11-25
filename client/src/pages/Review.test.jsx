@@ -117,7 +117,10 @@ vi.mock('../services/apiHarnesses.js', () => ({
 vi.mock('../services/apiReview.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getReviewQueue: vi.fn(() => Promise.resolve({ items: [], sources: {}, partial: false })),
-  getReviewItems: vi.fn(() => Promise.resolve([ITEM, SHORT_ITEM, COMPLETED_ITEM])),
+  getReviewItems: vi.fn(async ({ status, limit, offset } = {}) => {
+    const items = [ITEM, SHORT_ITEM, COMPLETED_ITEM].filter(item => !status || item.status === status);
+    return limit === undefined ? items : { items: items.slice(offset, offset + limit), total: items.length, limit, offset };
+  }),
   getReviewCounts: vi.fn(),
   getReviewBriefing: vi.fn(() => Promise.resolve(null)),
   completeReviewItem: vi.fn(() => Promise.resolve({})),
@@ -780,13 +783,14 @@ describe('Actions commitments workspace (#7739)', () => {
 
 describe('Review status request ownership (#9447)', () => {
   const dismissedItem = { ...SHORT_ITEM, status: 'dismissed', title: 'Example dismissed action' };
+  const page = (item) => ({ items: [item], total: 1, limit: 50, offset: 0 });
 
   it('keeps the latest selected status results when an older success arrives last', async () => {
     let resolveCompleted;
     getReviewItems
       .mockResolvedValueOnce([])
       .mockReturnValueOnce(new Promise(resolve => { resolveCompleted = resolve; }))
-      .mockResolvedValueOnce([dismissedItem]);
+      .mockResolvedValueOnce(page(dismissedItem));
 
     render(<Review />);
     await waitFor(() => expect(screen.queryByText('Loading stored review items…')).not.toBeInTheDocument());
@@ -797,7 +801,7 @@ describe('Review status request ownership (#9447)', () => {
     fireEvent.change(selector, { target: { value: 'dismissed' } });
     expect(await screen.findByText(dismissedItem.title)).toBeInTheDocument();
 
-    await act(async () => resolveCompleted([COMPLETED_ITEM]));
+    await act(async () => resolveCompleted(page(COMPLETED_ITEM)));
 
     expect(selector).toHaveValue('dismissed');
     expect(screen.getByText(dismissedItem.title)).toBeInTheDocument();
@@ -822,16 +826,44 @@ describe('Review status request ownership (#9447)', () => {
     fireEvent.change(selector, { target: { value: 'dismissed' } });
 
     await act(async () => {
-      if (outcome === 'success') resolveCompleted([COMPLETED_ITEM]);
+      if (outcome === 'success') resolveCompleted(page(COMPLETED_ITEM));
       else rejectCompleted(new Error('synthetic obsolete failure'));
     });
 
     expect(screen.getByRole('status')).toHaveTextContent('Loading stored review items');
     expect(screen.queryByText(/Stored review items are unavailable/)).not.toBeInTheDocument();
-    await act(async () => resolveDismissed([dismissedItem]));
+    await act(async () => resolveDismissed(page(dismissedItem)));
     expect(screen.getByText(dismissedItem.title)).toBeInTheDocument();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
+});
+
+it('pages stored history and refreshes only the active page on review events', async () => {
+  render(<Review />);
+  await screen.findByText('Action Queue');
+  const older = { ...COMPLETED_ITEM, id: 'older', title: 'Older completed item' };
+  const refreshed = { ...older, title: 'Updated older item' };
+  getReviewItems
+    .mockResolvedValueOnce({ items: [COMPLETED_ITEM], total: 51, limit: 50, offset: 0 })
+    .mockResolvedValueOnce({ items: [older], total: 51, limit: 50, offset: 50 })
+    .mockResolvedValueOnce({ items: [refreshed], total: 51, limit: 50, offset: 50 });
+
+  fireEvent.change(screen.getByLabelText('Filter review items by status'), { target: { value: 'completed' } });
+  fireEvent.click(await screen.findByRole('button', { name: 'Next page' }));
+  expect(await screen.findByText(older.title)).toBeInTheDocument();
+  expect(screen.queryByText(COMPLETED_ITEM.title)).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled();
+
+  await act(async () => socketHandler('review:item:updated')?.(refreshed));
+  expect(await screen.findByText(refreshed.title)).toBeInTheDocument();
+  expect(getReviewItems.mock.calls.slice(1).map(([query]) => query)).toEqual([
+    { status: 'completed', limit: 50, offset: 0 },
+    { status: 'completed', limit: 50, offset: 50 },
+    { status: 'completed', limit: 50, offset: 50 },
+  ]);
+
+  fireEvent.change(screen.getByLabelText('Filter review items by status'), { target: { value: 'dismissed' } });
+  await waitFor(() => expect(getReviewItems.mock.lastCall[0]).toEqual({ status: 'dismissed', limit: 50, offset: 0 }));
 });
 
 describe('Review Hub bulk status updates (#6853)', () => {
@@ -918,7 +950,7 @@ describe('Review Hub triage summary (#6926)', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Filter review items by status' }), {
       target: { value: 'completed' }
     });
-    await waitFor(() => expect(getReviewItems).toHaveBeenLastCalledWith({ status: 'completed' }, { silent: true }));
+    await waitFor(() => expect(getReviewItems).toHaveBeenLastCalledWith({ status: 'completed', limit: 50, offset: 0 }, { silent: true, signal: expect.any(AbortSignal) }));
 
     expect(summaryValue('Pending')).toBe('8');
     expect(summaryValue('Alerts')).toBe('3');
@@ -983,8 +1015,16 @@ describe('Review Hub triage summary (#6926)', () => {
 describe('Review Hub all-clear Today tab (#13005)', () => {
   const historyDisclosure = () => screen.getByText(/Daily briefing ·/).closest('details');
 
+  it('counts loaded pending rows in the triage summary when global counts are unavailable', async () => {
+    getReviewCounts.mockRejectedValue(new Error('synthetic counts failure'));
+    render(<Review />);
+
+    expect(await screen.findByText(/2 stored items still pending/)).toBeInTheDocument();
+  });
+
   it('states the all-clear and shows the pending stored items ahead of a stale briefing', async () => {
     getReviewItems.mockResolvedValueOnce([SHORT_ITEM]);
+    getReviewCounts.mockResolvedValue({ total: 1, todo: 1 });
     getReviewBriefing.mockResolvedValueOnce({ source: 'test', generatedAt: '2026-04-05T12:00:00Z', content: 'Old briefing body' });
     render(<Review />);
 
@@ -1005,6 +1045,17 @@ describe('Review Hub all-clear Today tab (#13005)', () => {
 
     await screen.findByText('Fresh briefing body');
     await waitFor(() => expect(historyDisclosure()).toHaveAttribute('open'));
+  });
+
+  it('opens a briefing dated today and shows its day without an invented time', async () => {
+    const now = new Date();
+    const today = [now.getFullYear(), now.getMonth() + 1, now.getDate()].map((n) => String(n).padStart(2, '0')).join('-');
+    getReviewBriefing.mockResolvedValueOnce({ source: 'cos', generatedAt: today, content: 'Dated briefing body' });
+    render(<Review />);
+
+    await screen.findByText('Dated briefing body');
+    await waitFor(() => expect(historyDisclosure()).toHaveAttribute('open'));
+    expect(historyDisclosure()).not.toHaveTextContent('12:00');
   });
 
   it('keeps the all-clear line off a non-empty canonical queue', async () => {

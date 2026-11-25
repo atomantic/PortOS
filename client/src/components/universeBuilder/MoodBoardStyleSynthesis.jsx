@@ -11,6 +11,7 @@
  * server-side on adopt.
  */
 
+import { PROVIDERS_PAGE_BREADCRUMB } from '../../../../server/lib/navManifest.js';
 import { useEffect, useState } from 'react';
 import { Loader2, Sparkles, Wand2, X } from 'lucide-react';
 import { synthesizeMoodBoardStyle } from '../../services/apiMoodBoard.js';
@@ -19,6 +20,7 @@ import useProviderModels from '../../hooks/useProviderModels';
 import ProviderModelSelector from '../ProviderModelSelector';
 import Modal from '../ui/Modal';
 import toast from '../ui/Toast';
+import ListLoadError from '../ui/ListLoadError';
 import StyleDiffPreview from './StyleDiffPreview';
 
 const apiProviderFilter = (p) => p.enabled && p.type === 'api';
@@ -40,6 +42,8 @@ function SynthesisBody({ targetLabel, boardId, styleNotes, influences, locked, o
     setSelectedProviderId,
     setSelectedModel,
     loading: providersLoading,
+    error: providersError,
+    retry: retryProviders,
   } = useProviderModels({ filter: apiProviderFilter, silent: true });
 
   const busy = running || adopting;
@@ -109,8 +113,10 @@ function SynthesisBody({ targetLabel, boardId, styleNotes, influences, locked, o
         label="LLM for synthesis"
         layout="stacked"
       />
-      {providers.length === 0 && !providersLoading ? (
-        <p className="text-xs text-port-warning">No API providers are enabled. Add one in Settings → Providers.</p>
+      {providersError && providers.length === 0 && !providersLoading ? (
+        <ListLoadError what="AI providers" error={providersError} onRetry={retryProviders} />
+      ) : providers.length === 0 && !providersLoading ? (
+        <p className="text-xs text-port-warning">No API providers are enabled. Add one in {PROVIDERS_PAGE_BREADCRUMB}.</p>
       ) : null}
 
       {result ? (

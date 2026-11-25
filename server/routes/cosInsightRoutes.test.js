@@ -30,12 +30,10 @@ vi.mock('../services/cos/cosActivityCalendar.js', () => ({
 }));
 
 vi.mock('../services/goalProgress.js', () => ({
-  getGoalProgress: vi.fn(),
   getGoalProgressSummary: vi.fn()
 }));
 
 vi.mock('../services/decisionLog.js', () => ({
-  getRecentDecisions: vi.fn(),
   getDecisionSummary: vi.fn(),
 }));
 
@@ -392,17 +390,6 @@ describe('CoS Insight Routes', () => {
     });
   });
 
-  describe('GET /api/cos/goal-progress', () => {
-    it('should return goal progress', async () => {
-      goalProgress.getGoalProgress.mockResolvedValue({ goals: [], overall: 0.5 });
-
-      const response = await request(app).get('/api/cos/goal-progress');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('overall');
-    });
-  });
-
   describe('GET /api/cos/goal-progress/summary', () => {
     it('should return goal progress summary', async () => {
       goalProgress.getGoalProgressSummary.mockResolvedValue({ topGoals: [] });
@@ -416,27 +403,6 @@ describe('CoS Insight Routes', () => {
   // ============================================================
   // Decision Log Routes
   // ============================================================
-
-  describe('GET /api/cos/decisions', () => {
-    it('should return recent decisions with default limit', async () => {
-      decisionLog.getRecentDecisions.mockResolvedValue([{ id: 'd1', type: 'approval' }]);
-
-      const response = await request(app).get('/api/cos/decisions');
-
-      expect(response.status).toBe(200);
-      expect(response.body.decisions).toHaveLength(1);
-      expect(decisionLog.getRecentDecisions).toHaveBeenCalledWith(20, null);
-    });
-
-    it('should respect custom limit and type', async () => {
-      decisionLog.getRecentDecisions.mockResolvedValue([]);
-
-      const response = await request(app).get('/api/cos/decisions?limit=5&type=routing');
-
-      expect(response.status).toBe(200);
-      expect(decisionLog.getRecentDecisions).toHaveBeenCalledWith(5, 'routing');
-    });
-  });
 
   describe('GET /api/cos/decisions/summary', () => {
     it('should return decision summary', async () => {

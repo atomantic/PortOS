@@ -21,6 +21,19 @@ import { RUNWAY_SPECIAL_VIDEO_MODES, getRunwaySpecialVideoModel } from '../../..
 // video mode it rendered in (only text and image-to-video exist there).
 const imageOrText = (p) => (p.videoMode === 'image' ? 'image' : 'text');
 
+// Restoring a job advances this ref before setting the model so its saved options survive.
+function useResetOnModelChange(modelId, setDuration, setResolution, setAudio) {
+  const modelPickRef = useRef(modelId);
+  useEffect(() => {
+    if (modelPickRef.current === modelId) return;
+    modelPickRef.current = modelId;
+    setDuration('');
+    setResolution('');
+    setAudio?.(false);
+  }, [modelId, setDuration, setResolution, setAudio]);
+  return modelPickRef;
+}
+
 /**
  * `enabled` maps each hosted lane id to whether it is usable on this install.
  * Each lane stays gated on its own flag, so a persisted backend that is no
@@ -55,41 +68,10 @@ export function useVideoGenBackendCaps({ enabled, mode }) {
   // the fast-h3 canvas from the starting frame (text renders fall back to 16:9).
   const [reactorAspect, setReactorAspect] = useState('');
 
-  // Each fal model has its own resolution and audio capabilities.
-  const falModelPickRef = useRef(falModelId);
-  useEffect(() => {
-    if (falModelPickRef.current === falModelId) return;
-    falModelPickRef.current = falModelId;
-    setFalResolution('');
-    setFalGenerateAudio(false);
-  }, [falModelId]);
-
-  // Each Runway model has its own lengths and sizes.
-  const runwayModelPickRef = useRef(runwayModelId);
-  useEffect(() => {
-    if (runwayModelPickRef.current === runwayModelId) return;
-    runwayModelPickRef.current = runwayModelId;
-    setRunwayDuration('');
-    setRunwayResolution('');
-  }, [runwayModelId]);
-
-  // Each Higgsfield family has its own lengths, tiers and audio switch.
-  const higgsfieldModelPickRef = useRef(higgsfieldModelId);
-  useEffect(() => {
-    if (higgsfieldModelPickRef.current === higgsfieldModelId) return;
-    higgsfieldModelPickRef.current = higgsfieldModelId;
-    setHiggsfieldDuration('');
-    setHiggsfieldResolution('');
-  }, [higgsfieldModelId]);
-
-  // Each Veo model has its own lengths and inputs.
-  const googleModelPickRef = useRef(googleModelId);
-  useEffect(() => {
-    if (googleModelPickRef.current === googleModelId) return;
-    googleModelPickRef.current = googleModelId;
-    setGoogleDuration('');
-    setGoogleResolution('');
-  }, [googleModelId]);
+  const falModelPickRef = useResetOnModelChange(falModelId, setFalDuration, setFalResolution, setFalGenerateAudio);
+  const runwayModelPickRef = useResetOnModelChange(runwayModelId, setRunwayDuration, setRunwayResolution);
+  const higgsfieldModelPickRef = useResetOnModelChange(higgsfieldModelId, setHiggsfieldDuration, setHiggsfieldResolution);
+  const googleModelPickRef = useResetOnModelChange(googleModelId, setGoogleDuration, setGoogleResolution);
 
   const hostedLane = enabled[backend] ? backend : null;
   // Grok, fal.ai, reactor.inc and Runway are usability-gated on a configured

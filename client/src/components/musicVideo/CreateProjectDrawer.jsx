@@ -1,3 +1,4 @@
+import { inputClass } from './controlClasses.js';
 import { sortByLabel } from '../../lib/sortByLabel.js';
 import MediaModePicker from './MediaModePicker.jsx';
 import CharacterStyleSelect from './CharacterStyleSelect.jsx';
@@ -15,7 +16,6 @@ import { universeStyleRefusal } from '../../../../server/lib/universeVisualStyle
 import { getUniverse } from '../../services/apiUniverseBuilder.js';
 import { onRadioGroupKeyDown } from '../../lib/a11yKeyboard.js';
 
-const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 const MODES = [
   { id: 'autonomous', label: 'Autopilot', icon: Bot, hint: 'Seed it, pick tools and a budget, let the agent churn' },
   { id: 'director', label: 'Director', icon: Clapperboard, hint: 'Build the scene board by hand' },

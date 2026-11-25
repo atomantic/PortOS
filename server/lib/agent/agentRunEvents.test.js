@@ -6,9 +6,6 @@ import {
   RUN_EVENT_LIMITS,
   agentRunEventSchema,
   buildRunEvent,
-  isKnownRunEventKind,
-  isValidRunEvent,
-  projectRunState,
   projectRunStates,
   redactRunEventData,
   isStoredRunEvent,
@@ -65,9 +62,9 @@ describe('buildRunEvent — envelope schema', () => {
     expect(event.at).toBe(AT);
   });
 
-  it('isValidRunEvent rejects a line missing required fields', () => {
-    expect(isValidRunEvent({ kind: 'run.spawned' })).toBe(false);
-    expect(isValidRunEvent(buildRunEvent({ kind: 'run.spawned', runId: 'r1', at: AT }))).toBe(true);
+  it('isStoredRunEvent rejects a line missing required fields', () => {
+    expect(isStoredRunEvent({ kind: 'run.spawned' })).toBe(false);
+    expect(isStoredRunEvent(buildRunEvent({ kind: 'run.spawned', runId: 'r1', at: AT }))).toBe(true);
   });
 
   it('admits an UNKNOWN kind on the read path while refusing it on the write path', () => {
@@ -77,7 +74,7 @@ describe('buildRunEvent — envelope schema', () => {
     // no-ops, so the read check only has to be structural.
     const future = { ...buildRunEvent({ kind: 'run.spawned', runId: 'r1', at: AT }), kind: 'run.from-the-future' };
     expect(isStoredRunEvent(future)).toBe(true);
-    expect(isValidRunEvent(future)).toBe(false);
+    expect(agentRunEventSchema.safeParse(future).success).toBe(false);
   });
 
   it('still refuses a structurally broken line on the read path', () => {
@@ -95,10 +92,6 @@ describe('buildRunEvent — envelope schema', () => {
     expect(isStoredRunEvent(missingSequence)).toBe(false);
   });
 
-  it('isKnownRunEventKind tracks the exported vocabulary', () => {
-    for (const kind of AGENT_RUN_EVENT_KINDS) expect(isKnownRunEventKind(kind)).toBe(true);
-    expect(isKnownRunEventKind('run.nope')).toBe(false);
-  });
 });
 
 describe('buildRunEvent — idempotent event ids', () => {
@@ -388,8 +381,6 @@ describe('projectRunStates — replayable status', () => {
 
   it('tolerates a non-array input', () => {
     expect(projectRunStates(null)).toEqual([]);
-    expect(projectRunState(stream, 'nope')).toBeNull();
-    expect(projectRunState(stream, 'r1').status).toBe('completed');
   });
 });
 
@@ -518,7 +509,7 @@ describe('projectRunStates — the second-slice boundaries (#4540)', () => {
 
   it('keeps every new kind inside the closed write vocabulary', () => {
     for (const kind of ['run.handoff', 'run.reconnected', 'run.output', 'run.paused', 'run.resumed', 'run.interrupted', 'run.pr-verified']) {
-      expect(isKnownRunEventKind(kind)).toBe(true);
+      expect(AGENT_RUN_EVENT_KINDS).toContain(kind);
       expect(() => buildRunEvent({ kind, runId: 'r1', at: at('10:00') })).not.toThrow();
     }
   });

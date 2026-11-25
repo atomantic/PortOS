@@ -209,6 +209,40 @@ export async function getTodayActionCount(accountId, action) {
   return count;
 }
 
+const arrayLength = (value) => (Array.isArray(value) ? value.length : 0);
+
+/**
+ * Posts/comments/votes one activity record produced. Only `completed` records
+ * count: the scheduler also logs a `started` record for the same action, and
+ * engage/monitor runs bundle several votes and replies into one record.
+ */
+function countOutcomes(activity) {
+  const counts = { posts: 0, comments: 0, votes: 0 };
+  if (activity.status !== 'completed') return counts;
+  const result = activity.result || {};
+  const performed = result.action !== 'none' ? 1 : 0;
+  switch (activity.action) {
+    case 'post':
+      counts.posts = 1;
+      break;
+    case 'comment':
+      counts.comments = performed;
+      break;
+    case 'vote':
+      counts.votes = performed;
+      break;
+    case 'engage':
+      counts.votes = arrayLength(result.votes);
+      counts.comments = arrayLength(result.comments);
+      break;
+    case 'monitor':
+      counts.votes = arrayLength(result.upvoted);
+      counts.comments = arrayLength(result.replied);
+      break;
+  }
+  return counts;
+}
+
 /**
  * Get activity stats for an agent
  */
@@ -217,7 +251,10 @@ export async function getAgentStats(agentId, days = 7) {
     totalActivities: 0,
     byAction: {},
     byStatus: {},
-    byDay: {}
+    byDay: {},
+    totalPosts: 0,
+    totalComments: 0,
+    totalVotes: 0
   };
 
   const today = new Date();
@@ -236,6 +273,10 @@ export async function getAgentStats(agentId, days = 7) {
     for (const activity of dayActivities) {
       stats.byAction[activity.action] = (stats.byAction[activity.action] || 0) + 1;
       stats.byStatus[activity.status] = (stats.byStatus[activity.status] || 0) + 1;
+      const counts = countOutcomes(activity);
+      stats.totalPosts += counts.posts;
+      stats.totalComments += counts.comments;
+      stats.totalVotes += counts.votes;
     }
   }
 

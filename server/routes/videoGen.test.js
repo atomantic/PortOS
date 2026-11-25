@@ -132,7 +132,14 @@ vi.mock('../services/federatedMedia/sourceAudio.js', async (importOriginal) => (
 }));
 
 vi.mock('../lib/pythonSetup.js', () => ({
-  checkPackages: vi.fn(async () => ({ installed: ['mflux', 'mlx'], missing: [], missingPip: [] })),
+  // /status reads the real 30s memo in services/imageGen/setup.js, so only the
+  // interpreter spawn (probePythonHealth) and the constants that module loads are doubled.
+  probePythonHealth: vi.fn(async () => ({ installed: ['mflux', 'mlx'], missing: [], missingPip: [], interpreterArch: 'arm64', pythonVersion: '3.12.1' })),
+  REQUIRED_PACKAGES: ['mflux', 'mlx'],
+  HOST_ARCH: 'arm64',
+  hostIsAppleSilicon: vi.fn(() => false),
+  detectArm64Python: vi.fn(async () => null),
+  pipNameFor: vi.fn((pkg) => pkg),
   isAllowedPython: vi.fn(() => true),
   detectPythonSync: vi.fn(() => null),
   // setupScriptRunner presets PYTHON_BIN from the venv-base picker on Windows.
@@ -170,6 +177,7 @@ const videoGenLeaves = vi.hoisted(() => ({
   }]),
   defaultVideoModelId: vi.fn(() => 'ltx2_unified'),
   loadHistory: vi.fn(async () => []),
+  readHistorySnapshot: vi.fn(async () => []),
   getHistoryItem: vi.fn(async () => null),
 }));
 vi.mock('../services/videoGen/modelCatalog.js', () => ({
@@ -179,6 +187,7 @@ vi.mock('../services/videoGen/modelCatalog.js', () => ({
 vi.mock('../services/videoGen/history.js', async (importOriginal) => ({
   ...(await importOriginal()),
   loadHistory: videoGenLeaves.loadHistory,
+  readHistorySnapshot: videoGenLeaves.readHistorySnapshot,
   getHistoryItem: videoGenLeaves.getHistoryItem,
 }));
 
@@ -369,7 +378,8 @@ vi.mock('fs/promises', () => ({
   copyFile: fsMock.copyFile,
 }));
 
-import { copyFile, unlink } from 'fs/promises';
+import { copyFile, unlink, stat } from 'fs/promises';
+import { invalidateSetupCheck } from '../services/imageGen/setup.js';
 import * as videoGenService from '../services/videoGen/local.js';
 import * as mediaRemoteDelete from '../services/mediaRemoteDelete.js';
 import * as upscaleJobService from '../services/videoGen/upscaleJob.js';
@@ -478,6 +488,37 @@ describe('videoGen routes', () => {
   });
 
   describe('GET /status', () => {
+    beforeEach(() => {
+      // A stat-able interpreter lets the memo key resolve (an unstatable path skips the cache by design).
+      stat.mockResolvedValue({ mtimeMs: 1 });
+      invalidateSetupCheck();
+    });
+    afterEach(() => {
+      stat.mockImplementation(async () => { throw Object.assign(new Error('not found'), { code: 'ENOENT' }); });
+      invalidateSetupCheck();
+    });
+
+    it('spawns the interpreter probe once for two calls inside the memo window, and again for fresh=true', async () => {
+      const { probePythonHealth } = await import('../lib/pythonSetup.js');
+      probePythonHealth.mockClear();
+      expect((await request(app).get('/api/video-gen/status')).status).toBe(200);
+      const second = await request(app).get('/api/video-gen/status');
+      expect(second.body.connected).toBe(true);
+      expect(probePythonHealth).toHaveBeenCalledTimes(1);
+      expect((await request(app).get('/api/video-gen/status?fresh=true')).status).toBe(200);
+      expect(probePythonHealth).toHaveBeenCalledTimes(2);
+      expect((await request(app).get('/api/video-gen/status?fresh=maybe')).status).toBe(400);
+    });
+
+    it('re-probes after an install invalidates the memo for the interpreter', async () => {
+      const { probePythonHealth } = await import('../lib/pythonSetup.js');
+      probePythonHealth.mockClear();
+      await request(app).get('/api/video-gen/status');
+      invalidateSetupCheck('/usr/bin/python3');
+      await request(app).get('/api/video-gen/status');
+      expect(probePythonHealth).toHaveBeenCalledTimes(2);
+    });
+
     it('reports connected when pythonPath is set AND required packages all import', async () => {
       const r = await request(app).get('/api/video-gen/status');
       expect(r.status).toBe(200);
@@ -501,8 +542,8 @@ describe('videoGen routes', () => {
     });
 
     it('reports disconnected with reason + missingPackages when packages fail to import', async () => {
-      const { checkPackages } = await import('../lib/pythonSetup.js');
-      checkPackages.mockResolvedValueOnce({
+      const { probePythonHealth } = await import('../lib/pythonSetup.js');
+      probePythonHealth.mockResolvedValueOnce({
         installed: ['numpy', 'tqdm'],
         missing: ['mflux', 'mlx', 'mlx_video'],
         missingPip: ['mflux', 'mlx', 'mlx_video'],
@@ -769,7 +810,9 @@ describe('videoGen routes', () => {
         const ctx = await request(app).get('/api/video-gen/model-context');
         const status = await request(app).get('/api/video-gen/status');
         expect(ctx.body.falEnabled).toBe(true);
-        for (const key of ['falEnabled', 'reactorEnabled', 'runwayEnabled', 'geminiEnabled', 'higgsfieldEnabled', 'googleEnabled']) {
+        const enabledKeys = ['falEnabled', 'geminiEnabled', 'googleEnabled', 'higgsfieldEnabled', 'reactorEnabled', 'runwayEnabled'];
+        expect(Object.keys(status.body).filter(key => key.endsWith('Enabled')).sort()).toEqual(enabledKeys);
+        for (const key of enabledKeys) {
           expect(typeof ctx.body[key]).toBe('boolean');
           expect(status.body[key]).toBe(ctx.body[key]);
         }
@@ -779,8 +822,8 @@ describe('videoGen routes', () => {
     });
 
     it('serves the model list and its auto-select numbers without probing python', async () => {
-      const { checkPackages } = await import('../lib/pythonSetup.js');
-      checkPackages.mockClear();
+      const { probePythonHealth } = await import('../lib/pythonSetup.js');
+      probePythonHealth.mockClear();
 
       const r = await request(app).get('/api/video-gen/model-context');
       expect(r.status).toBe(200);
@@ -792,7 +835,15 @@ describe('videoGen routes', () => {
       expect(typeof r.body.fflfLtx2PixelBudget).toBe('number');
       expect(r.body.fflfLtx2PixelBudget).toBeGreaterThan(0);
       // The point of the route: no interpreter subprocess in the request path.
-      expect(checkPackages).not.toHaveBeenCalled();
+      expect(probePythonHealth).not.toHaveBeenCalled();
+      // The hosted-backend flags, runtime list and render-time disclosures the form
+      // needs to render also ride this probe-free route.
+      for (const key of ['falEnabled', 'reactorEnabled', 'runwayEnabled', 'geminiEnabled', 'higgsfieldEnabled', 'googleEnabled']) {
+        expect(typeof r.body[key]).toBe('boolean');
+      }
+      expect(Array.isArray(r.body.byovRuntimes)).toBe(true);
+      expect(r.body.backendDisclosures.map((b) => b.id)).toContain('local');
+      expect(typeof r.body.displaySleepOnRender).toBe('boolean');
     });
 
     it('uses the saved local video model as the form default when available', async () => {
@@ -1129,13 +1180,13 @@ describe('videoGen routes', () => {
       const musicVideo = { projectId: 'mv-example', sceneId: 'scene-example' };
       const fableLoom = { loomId: 'loom-example', episodeId: 'ep-example', nodeId: 'node-example' };
       const r = await request(app).post('/api/video-gen/').send({
-        backend, prompt: 'a fox', negativePrompt: 'blur', sourceImageFile: 'frame.png',
+        backend, prompt: 'a fox', ...(backend === 'reactor' ? {} : { negativePrompt: 'blur' }), sourceImageFile: 'frame.png',
         musicVideo, fableLoom, ...input,
       });
       expect(r.status).toBe(200);
       expect(mediaJobQueue.enqueueJob.mock.calls[0][0]).toStrictEqual({
         kind: 'video', params: {
-          mode: backend, videoMode: 'image', prompt: 'a fox', negativePrompt: 'blur',
+          mode: backend, videoMode: 'image', prompt: 'a fox', negativePrompt: backend === 'reactor' ? '' : 'blur',
           sourceImagePath: '/mock/images/frame.png', uploadedTempPath: null,
           musicVideo, fableLoom,
           visualConditioning: {
@@ -1187,6 +1238,59 @@ describe('videoGen routes', () => {
       expect(unlink.mock.calls.filter(([path]) => path === durable)).toHaveLength(1);
       expect(unlink).toHaveBeenCalledWith('/tmp/hosted-frame.png');
       if (failureStage === 'conditioning') expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['an explicit backend', { backend: 'reactor' }],
+      ['the configured backend', {}],
+      ['a tagged FableLoom scene', { backend: 'reactor', fableLoom: { loomId: 'loom-example', episodeId: 'episode-example', nodeId: 'node-example' } }],
+    ])('refuses authored Reactor exclusions with %s before staging or queueing', async (_, fields) => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ ...settings, videoGen: { ...settings.videoGen, mode: 'reactor' } });
+      const source = { fieldname: 'sourceImage', path: '/tmp/hosted-frame.png', originalname: 'frame.png' };
+      setPendingUpload(source);
+      const response = await request(app).post('/api/video-gen/').send({
+        ...fields, prompt: 'a fox running', negativePrompt: '  fog  ',
+      });
+      expect(response.status).toBe(400);
+      expect(response.body).toMatchObject({
+        code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED', error: expect.stringMatching(/Reactor.*exclusions in the main prompt.*compatible video backend/),
+      });
+      expect(copyFile).not.toHaveBeenCalled();
+      expect(unlink).toHaveBeenCalledWith(source.path);
+      expect(compileFableLoomVisualRequest).not.toHaveBeenCalled();
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it.each([undefined, '', ' \t '])('submits and previews Reactor with a blank negative prompt (%j)', async (negativePrompt) => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce(settings).mockResolvedValueOnce(settings);
+      const body = { backend: 'reactor', prompt: '  a fox running  ', negativePrompt };
+      const response = await request(app).post('/api/video-gen/').send(body);
+      expect(response.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledTimes(1);
+      const [{ params }] = mediaJobQueue.enqueueJob.mock.calls[0];
+      expect(params.mode).toBe('reactor');
+      expect(params.negativePrompt).toBe('');
+
+      const preview = await request(app).post('/api/video-gen/prompt-preview').send(body);
+      expect(preview.status).toBe(200);
+      expect(preview.body).toMatchObject({ backend: 'reactor', sentPrompt: 'a fox running' });
+      expect(preview.body).not.toHaveProperty('sentNegativePrompt');
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses to preview an authored Reactor negative prompt', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce(settings);
+      const response = await request(app).post('/api/video-gen/prompt-preview').send({
+        backend: 'reactor', prompt: 'a fox running', negativePrompt: 'fog',
+      });
+      expect(response.status).toBe(400);
+      expect(response.body).toMatchObject({
+        code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED', error: expect.stringMatching(/Reactor.*exclusions in the main prompt/),
+      });
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 
     it('hands a successful hosted upload to the worker and discards it on conditioning downgrade', async () => {
@@ -3645,10 +3749,14 @@ describe('videoGen routes', () => {
     });
 
     it('validates the opt-in query and returns a bounded page', async () => {
-      videoGenService.loadHistory.mockResolvedValue([{ id: 'a', createdAt: '2026-01-01' }, { id: 'b', createdAt: '2026-02-01' }]);
+      videoGenLeaves.readHistorySnapshot.mockResolvedValue(Object.freeze([
+        Object.freeze({ id: 'a', createdAt: '2026-01-01' }),
+        Object.freeze({ id: 'b', createdAt: '2026-02-01' }),
+      ]));
       const page = await request(app).get('/api/video-gen/history?limit=1&compact=true');
       expect(page.status).toBe(200);
       expect(page.body.map((i) => i.id)).toEqual(['b']);
+      expect(videoGenService.loadHistory).not.toHaveBeenCalled();
       expect((await request(app).get('/api/video-gen/history?limit=999')).status).toBe(400);
     });
   });
@@ -3656,7 +3764,7 @@ describe('videoGen routes', () => {
   describe('GET /history/:id', () => {
     // Hosted clips lack stored geometry; the animatic needs the cadence the renderer measures.
     it('measures geometry only when requested and missing, without changing the stored entry', async () => {
-      const entry = { id: 'hosted', filename: 'hosted.mp4' };
+      const entry = Object.freeze({ id: 'hosted', filename: 'hosted.mp4' });
       videoGenService.getHistoryItem.mockResolvedValue(entry);
       probeVideoGeometry.mockResolvedValue({ width: 1280, height: 720, fps: 30, numFrames: 60 });
       const plain = await request(app).get('/api/video-gen/history/hosted');
@@ -3695,6 +3803,14 @@ describe('videoGen routes', () => {
       expect(videoGenService.getHistoryItem).toHaveBeenCalledWith('final-1');
       // Never the full list — that fan-out is exactly what this replaced.
       expect(videoGenService.loadHistory).not.toHaveBeenCalled();
+    });
+
+    it('returns the full generated clip record', async () => {
+      const entry = Object.freeze({ id: 'clip-1', filename: 'clip-1.mp4', prompt: 'Full prompt', provider: 'local', fps: 24 });
+      videoGenService.getHistoryItem.mockResolvedValueOnce(entry);
+      const r = await request(app).get('/api/video-gen/history/clip-1');
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual(entry);
     });
 
     it('404s for an id that is not in history', async () => {

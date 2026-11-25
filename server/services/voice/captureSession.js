@@ -21,8 +21,6 @@
 import { appendJournal, getToday } from '../brainJournal.js';
 import { createInboxLog } from '../brainStorage.js';
 
-export const CAPTURE_STATES = ['idle', 'listening', 'ended'];
-
 const initialState = () => ({
   state: 'idle',
   startedAt: null,

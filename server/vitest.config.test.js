@@ -45,11 +45,7 @@ async function expectForces(configPath) {
 }
 
 describe('vitest.config.js', () => {
-  it('forces NODE_ENV=test on its own, not via the db config it imports', async () => {
-    // It pulls DB_TEST_INCLUDE from vitest.config.db.js, and THAT module forces
-    // NODE_ENV at its own top level — so without stubbing the import out, this
-    // case would still pass with vitest.config.js's assignment deleted.
-    vi.doMock('./vitest.config.db.js', () => ({ DB_TEST_INCLUDE: [] }));
+  it('forces NODE_ENV=test when loaded by the unit runner', async () => {
     await expectForces('./vitest.config.js');
   });
 });

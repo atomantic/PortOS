@@ -42,6 +42,7 @@ async function handleVerification(data, apiKey, aiConfig) {
   const answer = await solveChallenge(challenge, aiConfig);
   if (!answer) {
     console.error(`❌ Could not solve Moltbook challenge — post will remain pending`);
+    data.verification_solved = false;
     return data;
   }
 

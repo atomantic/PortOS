@@ -1,6 +1,6 @@
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../../../services/socket', async () => {
@@ -32,10 +32,14 @@ vi.mock('../../../services/apiProviders.js', () => ({
   getProviders: vi.fn(() => Promise.resolve({ providers: [] })),
 }));
 
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 vi.mock('../links/BucketBoard', () => ({
-  default: () => <div data-testid="bucket-board" />,
+  default: ({ buckets }) => (
+    <div data-testid="bucket-board">
+      {buckets.map(bucket => <span key={bucket.id}>{bucket.name}</span>)}
+    </div>
+  ),
 }));
 
 // LinksTab mounts its own `DndContext` (buckets + the flat link list share
@@ -116,6 +120,49 @@ const invalidate = (...ids) => act(async () => {
 });
 
 describe('LinksTab socket updates', () => {
+  it.each(['initial', 'reconnect'])('reconciles links and buckets when an event supersedes the %s read', async phase => {
+    const stale = Promise.withResolvers();
+    const bucket = { id: 'b1', name: 'Reading', color: 'accent', order: 0 };
+    const snapshot = { links: [link('a', 'cloned'), link('b', 'cloned')] };
+    if (phase === 'reconnect') {
+      getBrainLinks.mockResolvedValueOnce({ links: [] });
+      await renderTab();
+    }
+    getBrainLinks.mockReturnValueOnce(stale.promise).mockResolvedValue(snapshot);
+    getBrainBuckets.mockResolvedValueOnce({ buckets: [] }).mockResolvedValue({ buckets: [bucket] });
+    getBrainLink.mockResolvedValue(link('b', 'cloned'));
+    if (phase === 'initial') await renderTab();
+    else await act(async () => { socket.emit('connect'); });
+
+    const readsStarted = phase === 'initial' ? 1 : 2;
+    expect(getBrainLinks).toHaveBeenCalledTimes(readsStarted);
+    await invalidate('b');
+    expect(getBrainLinks).toHaveBeenCalledTimes(readsStarted);
+    expect(getBrainLink).not.toHaveBeenCalled();
+    await act(async () => { stale.resolve({ links: [] }); });
+
+    expect(screen.getByText('repo-a')).toBeTruthy();
+    expect(screen.getByText('repo-b')).toBeTruthy();
+    expect(getBrainBuckets).toHaveBeenCalledTimes(readsStarted + 1);
+    expect(within(screen.getByTestId('bucket-board')).getByText('Reading')).toBeTruthy();
+    expect(getBrainLink).not.toHaveBeenCalled();
+  });
+
+  it('merges both targeted records when a second event supersedes the first read', async () => {
+    const stale = Promise.withResolvers();
+    getBrainLinks.mockResolvedValue({ links: [link('a', 'cloning'), link('b', 'cloning')] });
+    getBrainLink.mockReturnValueOnce(stale.promise).mockImplementation(async id => link(id, 'cloned'));
+    await renderTab();
+    await invalidate('a');
+    await invalidate('b');
+    expect(getBrainLink.mock.calls.map(([id]) => id)).toEqual(['a']);
+    await act(async () => { stale.resolve(link('a', 'cloning')); });
+
+    expect(getBrainLink.mock.calls.map(([id]) => id)).toEqual(['a', 'a', 'b']);
+    expect(screen.getAllByText('Cloned')).toHaveLength(2);
+    expect(getBrainLinks).toHaveBeenCalledTimes(1);
+  });
+
   it('reads only changed ids and updates completed clones without timer-driven reads', async () => {
     getBrainLinks.mockResolvedValue({ links: [link('a', 'cloning'), link('b', 'cloned')] });
     getBrainLink.mockResolvedValue(link('a', 'cloned'));

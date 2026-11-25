@@ -1,7 +1,6 @@
 /** Defines Music Video stages and derives project progress, header status, and the next action. */
-import { composedDrawsLyrics, isLayeredComposition, sceneRenderReady } from './musicVideoLayers.js';
 import {
-  AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LYRICS_STEP_LABELS, AUTONOMOUS_SONG_STEP_LABELS, AUTONOMOUS_STATUS_LABELS,
+  AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LYRICS_STEP_LABELS, AUTONOMOUS_SONG_STEP_LABELS,
 } from './musicVideoAutonomous.js';
 import { formatCount } from '../utils/formatters.js';
 import { isNonBlankStr } from './textUtils';
@@ -11,7 +10,10 @@ import { supersededStillsCheckpoint } from '../../../server/lib/musicVideo/music
 import { finishedOutside, finishedOutsideCovers } from '../../../server/lib/musicVideo/musicVideoFinishedOutside.js';
 import { shotSheetDoneProgress } from '../../../server/lib/musicVideo/musicVideoShotSheet.js';
 import { previzCoversShots } from '../../../server/lib/musicVideo/musicVideoPreviz.js';
-import { blenderShotsReady } from '../../../server/lib/musicVideo/musicVideoBlender.js';
+import {
+  RESUMABLE_RUN_STATUSES, FOOTAGE_OPTIONAL_MODES, currentRun, footageReady, codeComposed, blenderShotsDone, selectCurrentStage, shotsFacts,
+} from '../../../server/lib/musicVideo/musicVideoStageSelection.js';
+import { RUN_STATUS_LABELS } from './musicVideoRunStatus.js';
 
 /**
  * The steps of a music video, in the order the director decides them: the
@@ -52,17 +54,13 @@ const LEGACY_STAGE_IDS = { compose: 'produce', plan: 'board', storyboard: 'board
 
 export const isStageId = (value) => MUSIC_VIDEO_STAGES.some((stage) => stage.id === value);
 
-/** A production run in one of these states can still be resumed (or is live). */
-export const RESUMABLE_RUN_STATUSES = new Set(['running', 'stopped', 'limit-reached', 'blocked', 'needs-replan', 'awaiting-video']);
 // A stopped run that needs the director's attention rather than a click on Resume.
 const RUN_BLOCKED_STATUSES = new Set(['limit-reached', 'blocked', 'needs-replan', 'needs-human', 'failed']);
 const CAST_WORKING = new Set(['directing', 'imaging', 'assembling']);
 
 /** The run worth showing: the live one, else the most recent. */
-export const currentProductionRun = (project) => {
-  const runs = Array.isArray(project?.productionRuns) ? project.productionRuns : [];
-  return runs.find((r) => RESUMABLE_RUN_STATUSES.has(r.status)) || runs[runs.length - 1] || null;
-};
+const currentProductionRun = currentRun;
+export { RESUMABLE_RUN_STATUSES, currentProductionRun };
 
 /**
  * Current review guidance for a stopped approval-gated run; retain other failures.
@@ -128,16 +126,7 @@ export function castSetsPhase(cast) {
   return CAST_WORKING.has(cast.status) ? 'building' : 'settled';
 }
 
-/**
- * Scene footage gates Produce: a footage mode needs at least one scene and every
- * scene render-ready; modes that draw their own picture skip the gate.
- */
-export function footageReady(project) {
-  if (FOOTAGE_OPTIONAL_MODES.has(project?.composition?.mode || 'concat')) return true;
-  const scenes = project?.scenes || [];
-  const layered = isLayeredComposition(project);
-  return scenes.length > 0 && scenes.every((scene) => sceneRenderReady(scene, { layered, scenes }));
-}
+export { footageReady };
 
 /**
  * Whether the header sends the director to an approval panel: the project has a
@@ -152,7 +141,7 @@ function shouldJumpToReview(project, { run, art, board, pilotParked, busy, ownAc
 
 const autonomousChipLabel = (auto, { phase, step }) => {
   if (phase === 'running') return step ? `Autonomous run: ${step.toLowerCase()}` : 'Autonomous run running';
-  return `Autonomous run ${auto.interrupted ? 'interrupted' : (AUTONOMOUS_STATUS_LABELS[auto.status] || auto.status).toLowerCase()}`;
+  return `Autonomous run ${auto.interrupted ? 'interrupted' : (RUN_STATUS_LABELS[auto.status] || auto.status).toLowerCase()}`;
 };
 
 /**
@@ -238,30 +227,7 @@ export function publishPlatformProgress(project, publish = {}) {
 export const resolveStageParam = (value) => (isStageId(value) || MUSIC_VIDEO_PAGES.some((page) => page.id === value)
   ? value : LEGACY_STAGE_IDS[value] || null);
 
-// Footage-optional modes draw their own picture, so scene footage never gates Produce.
-export const FOOTAGE_OPTIONAL_MODES = new Set(['code', 'document', 'eidoverse', 'blender']);
-
-// A code video is composed once it was generated or the director holds sections to render.
-export const codeComposed = (project) => {
-  const code = project.composition?.codeVideo;
-  return !!code?.generatedAt || (code?.sections || []).length > 0;
-};
-
-// A Blender film is composed once every shot of its manifest has a complete, current final render.
-// The renders are on the server's disk, so it attaches the count to every project read, list row
-// and summary as `project.blenderShots` (`{ total, finalReady, ready }`); the open project's page
-// recomputes it from the film state as renders land. Same rule as the server's summary.
-export const blenderShotsDone = (project) => blenderShotsReady(project?.blenderShots);
-
-const composeDone = (project, mode) => {
-  if (mode === 'composed') return project.composition?.noTypography === true || (project.composition?.textCues || []).length > 0 || composedDrawsLyrics(project);
-  if (mode === 'document') return !!project.composition?.document;
-  if (mode === 'eidoverse') return !!project.composition?.eidoverseScene?.inlineScript;
-  if (mode === 'code') return codeComposed(project);
-  if (mode === 'blender') return blenderShotsDone(project);
-  // Footage has nothing to compose.
-  return true;
-};
+export { FOOTAGE_OPTIONAL_MODES, codeComposed, blenderShotsDone };
 
 /**
  * Lyric half of Setup: storyboard approval needs lyrics imported and their word
@@ -293,20 +259,13 @@ export function lyricSetupState(project, readiness = project?.productionReadines
  * nor the final render waits on a proof approval.
  */
 export function deriveStages(project, readiness = project?.productionReadiness, publish = {}) {
-  const mode = project?.composition?.mode || 'concat';
   const cast = project?.castAndSets || null;
   const run = currentProductionRun(project);
   const planned = !!readiness?.storyboard.approved;
   const shotsPlanned = (project?.scenes || []).length > 0 && !!readiness && !problemItemsOf(readiness.storyboard).some((p) => p.code !== ART_APPROVAL_CODE);
   const castStopped = castSetsPhase(cast) === 'stopped';
   const castDone = !!readiness?.art.approved;
-  // Code and document renders draw the picture themselves; scene footage is optional there.
-  const produceDone = planned && footageReady(project);
-
-  const shotsDone = produceDone && composeDone(project || {}, mode);
-  // A run parked short of running (stopped, awaiting video) whose shots are all done since is
-  // finished in fact: it no longer holds Shots open or owns the header.
-  const liveRun = !!run && RESUMABLE_RUN_STATUSES.has(run.status) && (run.status === 'running' || !shotsDone);
+  const { produceDone, liveRun } = shotsFacts(project, { planned, run });
   const done = {
     setup: projectHasAudio(project) && !!project?.audioAnalysis && lyricSetupState(project, readiness).ok,
     story: !!(project?.concept?.prompt?.trim() || project?.storySummary?.trim() || project?.treatment?.brief?.premise?.trim()),
@@ -316,7 +275,7 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
     // Optional: every timed shot has a cut in the greybox previz.
     previz: previzCoversShots(project),
     // Once the shot sheet is in use, Shots also waits on every shot being marked Done there.
-    produce: shotsDone && shotSheetDoneProgress(project)?.all !== false,
+    produce: produceDone,
     // A render made before later scene edits no longer counts as the final video.
     review: !!project?.renderHistoryId && !isFinalRenderStale(project),
     // #9281/#9282: published once every enabled platform has a recorded post.
@@ -336,9 +295,7 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
     'cast-sets': !!readiness?.art?.stale || !!readiness?.castAndSets?.stale,
     produce: !!readiness?.storyboard?.stale,
   };
-  const current = liveRun
-    ? 'produce'
-    : (MUSIC_VIDEO_STAGES.find((stage) => !stage.optional && !done[stage.id])?.id || 'publish');
+  const current = selectCurrentStage(project, done, { liveRun });
   const stages = MUSIC_VIDEO_STAGES.map((stage) => {
     let state = 'todo';
     if (done[stage.id] && !(stage.id === current && liveRun)) state = 'done';

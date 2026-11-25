@@ -33,9 +33,7 @@ vi.mock('../../../services/apiSystem', () => ({
   patchSettingsSlice: vi.fn(),
 }));
 vi.mock('../../../services/apiImageVideo', () => ({ listImageModels: vi.fn() }));
-vi.mock('../../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
-}));
+vi.mock('../../ui/Toast');
 
 import ComicScriptStage from './ComicScriptStage';
 import { generatePipelineComicCover } from '../../../services/apiPipeline.js';

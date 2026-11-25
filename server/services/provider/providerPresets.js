@@ -3,7 +3,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { requireToolkit } from '../../lib/aiToolkitState.js';
 import { isDerivedPreset } from '../../lib/provider/providerGraphRecords.js';
 import { effortLevelsForProvider } from '../../lib/provider/providerModels.js';
-import { listedModels, materializeDerivedPreset, refusedDerivedEdits } from '../../lib/provider/providerPresets.js';
+import { listedModels, materializeDerivedPreset, refusedDerivedEdits, repairCopiedTuiMethod } from '../../lib/provider/providerPresets.js';
 import { allocateServiceSlug } from '../../lib/provider/providerServiceInstances.js';
 import { listCredentialBootstraps } from '../credentialBootstrapApps.js';
 import { describeCompositeProvider, resolveCompositeParts } from '../compositeProviders.js';
@@ -63,7 +63,9 @@ async function presetInputs(record) {
  * @returns {Promise<object>} the record to hand `createProvider` / `updateProvider`
  */
 export async function materializeStoredPreset(candidate, { updates = {}, previous = null } = {}) {
-  const record = { ...candidate, method: candidate.method ?? candidate.type };
+  const record = previous?.type === 'tui' && !Object.hasOwn(updates, 'method')
+    ? repairCopiedTuiMethod({ ...candidate, method: candidate.method ?? candidate.type })
+    : { ...candidate, method: candidate.method ?? candidate.type };
   const { harness, connection, instance, bootstrap } = await presetInputs(record);
   const listed = listedModels(instance, connection.catalog);
   // An editor Save echoes the stored list back; only a CHANGED list is a

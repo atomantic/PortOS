@@ -47,6 +47,7 @@ import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 import useDrawerTab from '../hooks/useDrawerTab';
 import useUrlParams from '../hooks/useUrlParams';
 import useCancelableDebounce from '../hooks/useCancelableDebounce';
+import { formatCount } from '../utils/formatters';
 
 // All type-derived UI (chips, badge color, inline-form primary content
 // key/label, snippet fallback) flows from the merged registry (system +
@@ -113,6 +114,9 @@ export default function Catalog() {
   const [items, setItems] = useState([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [listError, setListError] = useState(null);
+  const [listVersion, setListVersion] = useState(0);
+  const pageGeneration = useRef(0);
   const [loadingMore, setLoadingMore] = useState(false);
 
   // Bump after a mutation (delete/add-to-ref/create/sync) to force the lazy
@@ -202,66 +206,68 @@ export default function Catalog() {
     return p;
   }, [selectedType, selectedTag, q, selectedSeries, selectedUniverse, selectedScrap]);
 
-  // Fetch one page for the current filters; returns the items array (or null on
-  // error, already toasted). The caller owns replace-vs-append and its loading
-  // flag + staleness guard, so this stays free of cancellation concerns.
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+    setSelectedItems(new Map());
+    setRemixMenuOpen(false);
+    setAddMenuOpen(false);
+  }, []);
+
   const fetchListPage = useCallback((offset) =>
     listCatalogIngredients({ ...buildListParams(), limit: PAGE_SIZE, offset, silent: true })
-      .then((data) => (Array.isArray(data?.items) ? data.items : []))
-      .catch((err) => {
-        toast.error(err?.message || 'Failed to load catalog');
-        return null;
+      .then((data) => {
+        if (!Array.isArray(data?.items)) throw new Error('Unexpected catalog response');
+        return data.items;
       }),
   [buildListParams]);
 
-  // Load page 1 for the grid, replacing the list. Used by the filter-change
-  // effect and the post-sync reload; the cancelled flag drops a stale response
-  // when the filters change mid-flight.
-  const loadFirstPage = useCallback(() => {
-    let cancelled = false;
-    setLoading(true);
-    fetchListPage(0).then((list) => {
-      if (cancelled) return;
-      if (list) {
-        setItems(list);
-        setHasMore(list.length === PAGE_SIZE);
-      }
-      setLoading(false);
-    });
-    return () => { cancelled = true; };
-  }, [fetchListPage]);
+  const loadFirstPage = () => setListVersion((version) => version + 1);
 
-  // Grid view: (re)load page 1 whenever the filters change. Albums manage their
-  // own lazy loads, so skip the grid fetch entirely in that view.
+  // All first-page reads use the current filters, including reloads triggered
+  // by a mutation that started before the user changed filters.
   useEffect(() => {
     if (view !== 'grid') return undefined;
-    return loadFirstPage();
-  }, [view, loadFirstPage]);
+    const generation = ++pageGeneration.current;
+    setLoading(true);
+    setLoadingMore(false);
+    fetchListPage(0).then((list) => {
+      if (generation !== pageGeneration.current) return;
+      setItems(list);
+      setHasMore(list.length === PAGE_SIZE);
+      setListError(null);
+      setLoading(false);
+    }).catch((error) => {
+      if (generation !== pageGeneration.current) return;
+      setItems([]);
+      setHasMore(false);
+      setListError(error);
+      clearSelection();
+      setArmedId(null);
+      setLoading(false);
+    });
+    return () => { pageGeneration.current += 1; };
+  }, [view, fetchListPage, listVersion, clearSelection]);
 
   useEffect(() => loadStats(), [loadStats]);
   useEffect(() => loadFacets(), [loadFacets]);
 
-  // Identity of the active filter set. loadMore captures it and drops its page
-  // if the filters changed while the request was in flight — otherwise a stale
-  // page would append into the freshly-reloaded (differently-filtered) list.
-  const filterKey = `${selectedType}|${selectedTag}|${q}|${selectedUniverse}|${selectedSeries}`;
-  const filterKeyRef = useRef(filterKey);
-  filterKeyRef.current = filterKey;
-
   const loadMore = () => {
-    const key = filterKey;
+    const generation = pageGeneration.current;
     setLoadingMore(true);
     fetchListPage(items.length).then((list) => {
-      if (key === filterKeyRef.current && list) {
-        setItems((prev) => [...prev, ...list]);
-        setHasMore(list.length === PAGE_SIZE);
-      }
-      setLoadingMore(false);
+      if (generation !== pageGeneration.current) return;
+      setItems((prev) => [...prev, ...list]);
+      setHasMore(list.length === PAGE_SIZE);
+    }).catch((error) => {
+      if (generation !== pageGeneration.current) return;
+      toast.error(error?.message || 'Failed to load more ingredients');
+    }).finally(() => {
+      if (generation === pageGeneration.current) setLoadingMore(false);
     });
   };
 
-  const totalCount = stats?.total ?? items.length;
-  const countForType = (id) => stats?.byType?.[id] || 0;
+  const totalCount = stats?.total;
+  const countForType = (id) => stats?.byType ? (stats.byType[id] ?? 0) : null;
 
   // The honest "of N" for the grid count line. We can answer it cheaply from
   // /facets only for the single-filter cases; for combined filters or a search
@@ -436,7 +442,7 @@ export default function Catalog() {
       );
     }
     if (promoted > 0) {
-      if (view === 'grid') loadFirstPage();
+      loadFirstPage();
       loadStats();
       loadFacets();
       setDataVersion((v) => v + 1);
@@ -463,13 +469,6 @@ export default function Catalog() {
       else next.set(it.id, it);
       return next;
     });
-  };
-
-  const clearSelection = () => {
-    setSelectedIds(new Set());
-    setSelectedItems(new Map());
-    setRemixMenuOpen(false);
-    setAddMenuOpen(false);
   };
 
   // Hand the selected ids off to the chosen remix target with a GENERIC state
@@ -506,7 +505,7 @@ export default function Catalog() {
     loadFacets();
     setDataVersion((v) => v + 1);
     // Placed items may no longer match a universe/series/unlinked-filtered grid.
-    if (view === 'grid') loadFirstPage();
+    loadFirstPage();
   };
 
   // Bulk-place targets are the FULL set of live universes/series — NOT the
@@ -565,7 +564,7 @@ export default function Catalog() {
           <span className="inline-flex items-baseline gap-2">
             Catalog
             <span className="text-sm font-normal text-gray-500 whitespace-nowrap">
-              {totalCount} ingredient{totalCount === 1 ? '' : 's'}
+              {formatCount(totalCount)} ingredient{totalCount === 1 ? '' : 's'}
             </span>
           </span>
         )}
@@ -691,7 +690,7 @@ export default function Catalog() {
               : 'border-port-border text-gray-300 hover:text-white'
           }`}
         >
-          All <span className="ml-1 text-[10px] opacity-70">{totalCount}</span>
+          All <span className="ml-1 text-[10px] opacity-70">{formatCount(totalCount)}</span>
         </button>
         {TYPES.map((t) => (
           <button
@@ -704,7 +703,7 @@ export default function Catalog() {
                 : 'border-port-border text-gray-300 hover:text-white'
             }`}
           >
-            {t.label} <span className="ml-1 text-[10px] opacity-70">{countForType(t.id)}</span>
+            {t.label} <span className="ml-1 text-[10px] opacity-70">{formatCount(countForType(t.id))}</span>
           </button>
         ))}
       </div>
@@ -880,6 +879,12 @@ export default function Catalog() {
         />
       ) : loading ? (
         <div className="text-gray-500 text-sm">Loading catalog…</div>
+      ) : listError ? (
+        <ListLoadError what="catalog ingredients" error={listError} onRetry={() => {
+          loadFirstPage();
+          if (!stats) loadStats();
+          if (!facets) loadFacets();
+        }} />
       ) : items.length === 0 ? (
         <div className="bg-port-card border border-port-border rounded-lg p-8 text-center">
           <p className="text-sm text-gray-400">

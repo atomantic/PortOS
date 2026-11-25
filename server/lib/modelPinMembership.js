@@ -7,6 +7,18 @@ import { localRuntimeNamespace, isAntigravityProvider, isOpencodeProvider, antig
 import { PORTS } from './ports.js';
 import { localEndpointPort } from './localEndpoint.js';
 
+export const LOCAL_RUNTIME_LABELS = Object.freeze({
+  llama: 'llama.cpp',
+  ollama: 'Ollama',
+  lmstudio: 'LM Studio',
+  vllm: 'vLLM (Qwen3.8-27B)',
+  sglang: 'SGLang (Qwen3.8-27B)',
+  splash: 'Splash',
+  mkserve: 'mkserve',
+  slotstream: 'Slotstream',
+  mtplx: 'MTPLX',
+});
+
 /**
  * Which PortOS page manages each local runtime (source for `LOCAL_RUNTIMES[*].manageUrl`); in this leaf
  * because the client cannot import the endpoint half. `null` = no PortOS page (operator-owned compose).
@@ -18,6 +30,8 @@ export const LOCAL_RUNTIME_MANAGE_URLS = Object.freeze({
   vllm: null,
   sglang: null,
   slotstream: '/models/llms-runtimes',
+  splash: '/models/llms-runtimes/splash',
+  mkserve: '/models/llms-runtimes/mkserve',
   mtplx: '/models/llms-runtimes',
 });
 
@@ -46,7 +60,7 @@ export function localBackendForProvider(provider) {
  * Local-runtime kind: authoritative `*Backed` markers first, endpoint/name as fallback. Hosted gateways
  * (`providerGateways.js`) are excluded: remote APIs with no local daemon.
  * @param {object|null|undefined} provider
- * @returns {'llama'|'ollama'|'lmstudio'|'mtplx'|'vllm'|'sglang'|'slotstream'|null}
+ * @returns {'llama'|'ollama'|'lmstudio'|'mtplx'|'vllm'|'sglang'|'slotstream'|'splash'|'mkserve'|null}
  */
 export function localRuntimeKind(provider) {
   if (!provider || typeof provider !== 'object') return null;
@@ -55,6 +69,8 @@ export function localRuntimeKind(provider) {
   if (namespace) return namespace;
   if (provider?.id === 'slotstream' || /slotstream/i.test(provider?.name || '')) return 'slotstream';
   if (Number(localEndpointPort(provider?.endpoint)) === PORTS.SLOTSTREAM) return 'slotstream';
+  // Same shape as Slotstream's arm above: no `*Backed` marker, a PortOS-dedicated loopback port.
+  if (provider?.id === 'mkserve' || /mkserve/i.test(provider?.name || '') || Number(localEndpointPort(provider?.endpoint)) === PORTS.MKSERVE) return 'mkserve';
   // The shipped `mtplx` record carries no marker (`mtplxBacked` only rides the CLI wrappers); `id` is its
   // one signal. No port arm: MTPLX's port is user-configurable with a generic default (`:8000`), unlike
   // slotstream's PortOS-dedicated one. `isMtplxProvider` in `mtplxServerManager.js` adds a live-port check.

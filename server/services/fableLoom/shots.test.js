@@ -192,7 +192,7 @@ describe('shot checkpoints and bounded inputs', () => {
 });
 
 it('deduplicates starts and preserves the last draft when canceled during a provider call', async () => {
-  const { startEpisodeShotRun, cancelEpisodeShotRun, getEpisodeShotRun, planEpisodeShotRun } = await import('./shotRuns.js');
+  const { startEpisodeShotRun, cancelEpisodeShotRun, getEpisodeShotRun } = await import('./shotRuns.js');
   const { fableLoomRunEvents } = await import('./runEvents.js');
   const { loom, ep, groups } = await setup();
   let finishCall, callStarted;
@@ -205,11 +205,9 @@ it('deduplicates starts and preserves the last draft when canceled during a prov
     const handler = run => { if (run.id === started.id && run.status === 'canceled') { fableLoomRunEvents.off('shots', handler); resolve(run); } };
     fableLoomRunEvents.on('shots', handler);
   });
-  const waiting = expect(planEpisodeShotRun(loom.id, ep)).rejects.toMatchObject({ status: 409, code: 'SHOT_PLAN_CANCELED' });
   expect((await cancelEpisodeShotRun(loom.id, ep)).status).toBe('canceling');
   finishCall({ content: { groups: [groups[0]] } });
   await terminal;
-  await waiting;
   expect(await getEpisodeShotRun(loom.id, ep)).toMatchObject({ errorStatus: 409, errorCode: 'SHOT_PLAN_CANCELED' });
   expect(runStagedLLM).toHaveBeenCalledTimes(1);
   expect((await getLoom(loom.id)).episodes).toEqual(loom.episodes);
@@ -242,38 +240,6 @@ it('repairs cross-scene consistency findings within the remaining rounds and kee
   expect(checkpoint.scenes[groups[0].sceneId].rounds[0].feedback).toContain('lamp');
 });
 
-it('keeps the synchronous compatibility response backed by a durable background journal', async () => {
-  const { planEpisodeShotRun, getEpisodeShotRun } = await import('./shotRuns.js');
-  const { loom, ep, groups } = await setup();
-  mockPlan(groups);
-  const result = await planEpisodeShotRun(loom.id, ep);
-  expect(result.validation.stats.ready).toBe(true);
-  expect((await getEpisodeShotRun(loom.id, ep))).toMatchObject({ status: 'completed', result: { sourceFingerprint: result.sourceFingerprint } });
-});
-
-it('detaches a disconnected compatibility waiter while its durable worker completes', async () => {
-  const { planEpisodeShotRun, getEpisodeShotRun } = await import('./shotRuns.js');
-  const { fableLoomRunEvents } = await import('./runEvents.js');
-  const { loom, ep, groups } = await setup();
-  mockPlan(groups);
-  const implementation = runStagedLLM.getMockImplementation();
-  let finishCall, startedCall;
-  const ready = new Promise(resolve => { startedCall = resolve; });
-  runStagedLLM.mockImplementationOnce(() => new Promise(resolve => { finishCall = resolve; startedCall(); }));
-  const controller = new AbortController();
-  const waiting = planEpisodeShotRun(loom.id, ep, {}, { signal: controller.signal });
-  await ready;
-  controller.abort();
-  await expect(waiting).rejects.toMatchObject({ code: 'SHOT_WAITER_CLOSED' });
-  expect((await getEpisodeShotRun(loom.id, ep)).status).toBe('running');
-  const completed = new Promise(resolve => {
-    const handler = run => { if (run.loomId === loom.id && run.status === 'completed') { fableLoomRunEvents.off('shots', handler); resolve(run); } };
-    fableLoomRunEvents.on('shots', handler);
-  });
-  finishCall(await implementation('fableloom-plan-shots', { source: JSON.stringify({ scenes: [{ id: groups[0].sceneId }] }) }));
-  expect((await completed).result.validation.stats.ready).toBe(true);
-});
-
 it('finalizes operation status once for failures before provider execution and round exhaustion', async () => {
   const { loom, ep, groups } = await setup();
   resolveStageRoute.mockRejectedValueOnce(new Error('Example route unavailable'));
@@ -289,24 +255,43 @@ it('finalizes operation status once for failures before provider execution and r
 });
 
 
-it('preserves provider failure status in the compatibility response and journal, then clears it on resume', async () => {
-  const { planEpisodeShotRun, getEpisodeShotRun } = await import('./shotRuns.js');
+// Starts a run and resolves with the first terminal snapshot the journal publishes for it.
+async function runToTerminal(loomId, episodeId, options) {
+  const { startEpisodeShotRun } = await import('./shotRuns.js');
+  const { fableLoomRunEvents } = await import('./runEvents.js');
+  let handler;
+  const terminal = new Promise(resolve => {
+    handler = run => {
+      if (run.loomId === loomId && run.episodeId === episodeId && ['completed', 'failed', 'canceled'].includes(run.status)) resolve(run);
+    };
+    fableLoomRunEvents.on('shots', handler);
+  });
+  try {
+    await startEpisodeShotRun(loomId, episodeId, options);
+    return await terminal;
+  } finally {
+    fableLoomRunEvents.off('shots', handler);
+  }
+}
+
+it('preserves provider failure status in the run journal, then clears it on resume', async () => {
+  const { getEpisodeShotRun } = await import('./shotRuns.js');
   const { loom, ep, groups } = await setup();
   runStagedLLM.mockRejectedValueOnce(new Error('CLI run timed out after 300000ms'));
-  await expect(planEpisodeShotRun(loom.id, ep)).rejects.toMatchObject({ status: 502, code: 'SHOT_STAGE_FAILED' });
+  expect(await runToTerminal(loom.id, ep)).toMatchObject({ status: 'failed', errorStatus: 502, errorCode: 'SHOT_STAGE_FAILED' });
   expect(await getEpisodeShotRun(loom.id, ep)).toMatchObject({ status: 'failed', errorStatus: 502, errorCode: 'SHOT_STAGE_FAILED' });
   mockPlan(groups);
-  await expect(planEpisodeShotRun(loom.id, ep, { resume: true })).resolves.toMatchObject({ validation: { stats: { ready: true } } });
+  expect(await runToTerminal(loom.id, ep, { resume: true })).toMatchObject({ status: 'completed', result: { validation: { stats: { ready: true } } } });
   const completed = await getEpisodeShotRun(loom.id, ep);
   expect(completed).not.toHaveProperty('errorStatus');
   expect(completed).not.toHaveProperty('errorCode');
 });
 
-it('preserves invalid-plan errors through the compatibility waiter', async () => {
-  const { planEpisodeShotRun, getEpisodeShotRun } = await import('./shotRuns.js');
+it('records invalid-plan errors in the run journal', async () => {
+  const { getEpisodeShotRun } = await import('./shotRuns.js');
   const { loom, ep, groups } = await setup();
   groups[0].shots[0].dialogue = [{ speaker: 'Courier', text: 'too many words '.repeat(30) }];
   mockPlan(groups);
-  await expect(planEpisodeShotRun(loom.id, ep, { maxRounds: 1 })).rejects.toMatchObject({ status: 422, code: 'SHOT_PLAN_INVALID' });
+  expect(await runToTerminal(loom.id, ep, { maxRounds: 1 })).toMatchObject({ status: 'failed', errorStatus: 422, errorCode: 'SHOT_PLAN_INVALID' });
   expect(await getEpisodeShotRun(loom.id, ep)).toMatchObject({ status: 'failed', errorStatus: 422, errorCode: 'SHOT_PLAN_INVALID' });
 });

@@ -14,6 +14,7 @@ import { countWords, pluralize } from '../../lib/textUtils';
 import { FormField } from '../ui/FormField';
 import useListResource from '../../hooks/useListResource';
 import useMounted from '../../hooks/useMounted';
+import { useSingleFlight } from '../../hooks/useSingleFlight';
 
 const DURATION_PRESETS = [
   { label: '5 min', seconds: 300 },
@@ -57,7 +58,7 @@ export default function ExercisePanel({ activeWork, onClose, editorDirty = false
   const wordsAdded = useMemo(() => countWords(text), [text]);
   const expired = active && remaining <= 0;
 
-  const start = async () => {
+  const start = useSingleFlight(async () => {
     // Word count lives on the active draft metadata, not the work root, so
     // walk drafts → activeDraftVersionId before falling back to a top-level
     // wordCount (which only the listWorks summary exposes).
@@ -76,7 +77,7 @@ export default function ExercisePanel({ activeWork, onClose, editorDirty = false
     setActive(session);
     setText('');
     setNow(Date.now());
-  };
+  });
 
   const finishSession = async ({ keep } = { keep: true }) => {
     if (!active) return;

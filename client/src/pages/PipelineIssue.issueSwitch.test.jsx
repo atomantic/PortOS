@@ -26,7 +26,7 @@ vi.mock('../services/apiPipeline.js', async (importOriginal) => ({
   cancelPipelineAutoRunText: vi.fn(async () => ({})),
   pipelineAutoRunSseUrl: (id) => `/sse/${id}`,
 }));
-vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
+vi.mock('../components/ui/Toast');
 vi.mock('../components/pipeline/stages/IdeaStage', () => ({
   default: (props) => {
     ideaProps.push(props);

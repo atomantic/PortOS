@@ -42,9 +42,11 @@ const observeOwnedBrowserProfile = (child) => {
  * owned kill (60%). A signal is never success: require exit and settlement of
  * Playwright's close/cleanup promise. Client callers also require profile absence
  * because Playwright can swallow removal errors. Server callers already verify
- * and remove their captured profile separately.
+ * and remove their captured profile separately. The exited browser's detached
+ * crash handlers then settle inside whatever the two phases left unspent.
  */
-export const reapOwnedBrowser = async (server, budgetMs, { requireProfileRemoval = false } = {}) => {
+export const reapOwnedBrowser = async (server, budgetMs, { requireProfileRemoval = false, crashHandlers } = {}) => {
+  const deadline = Date.now() + Math.floor(budgetMs * 0.9);
   const child = server.process();
   const profileState = observeOwnedBrowserProfile(child);
   const exitStatus = () => child?.exitCode ?? child?.signalCode ?? null;
@@ -98,14 +100,24 @@ export const reapOwnedBrowser = async (server, budgetMs, { requireProfileRemoval
     phases.push(`${phase} elapsed=${Date.now() - started}ms ${snapshot()}`);
     return failure;
   };
+  const settled = async () => {
+    // A child that never got a pid never started a handler.
+    if (crashHandlers && child?.pid) {
+      const evidence = await crashHandlers.settle(Math.max(1, deadline - Date.now())).catch(error => {
+        throw new Error(`${error.message}; cleanup phases: ${phases.join('; ')}`);
+      });
+      phases.push(`crashHandlers ${evidence}`);
+    }
+    return phases.join('; ');
+  };
   child?.once?.('exit', releaseExitedPipes);
   child?.once?.('close', onClose);
   try {
     releaseExitedPipes();
     const closeFailure = await run('close', Math.floor(budgetMs * 0.3));
-    if (!closeFailure) return phases.join('; ');
+    if (!closeFailure) return await settled();
     const killFailure = await run('kill', Math.floor(budgetMs * 0.6));
-    if (!killFailure) return phases.join('; ');
+    if (!killFailure) return await settled();
     const state = exitStatus() !== null ? ' (process exited)' : killFailure.endsWith('exit status') ? '' : ' (no exit status)';
     throw new Error(`browser close ${closeFailure}, then its kill ${killFailure}${state}; cleanup phases: ${phases.join('; ')}`);
   } finally {

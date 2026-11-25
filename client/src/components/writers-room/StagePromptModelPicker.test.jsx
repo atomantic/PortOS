@@ -10,9 +10,7 @@ vi.mock('../../services/apiProviders', () => ({
   getProviders: vi.fn(),
 }));
 
-vi.mock('../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 import StagePromptModelPicker from './StagePromptModelPicker';
 import { getPrompt } from '../../services/apiPrompts';

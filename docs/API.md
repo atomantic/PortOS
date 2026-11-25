@@ -26,7 +26,7 @@ and the current-vs-proposed boundary.
 
 Inferred entries are marked `generated` until a runtime-backed payload contract exists; detailed entries are marked `modeled`. Both inventories are derived from source on first use (`server/lib/apiRouteGraph.js`, `server/lib/socketEventInventory.js`), so there is no checked-in manifest or regeneration step.
 
-When adding an HTTP route, keep its request Zod schema in a reusable server library and register the detailed documentation in `server/lib/apiOperationContracts.js`; the route and OpenAPI should consume the same schema object. Add an `x-portos-tool` annotation to that contract entry to also publish the operation as an agent-callable tool in `tools.min.json`, and declare the codes its error responses really throw in `x-portos-error-codes` — the HTTP status alone does not identify the code, since `errorHandler` prefers an explicit `err.code` over the status map. Socket payload schemas follow the same pattern in `server/lib/socketEventContracts.js`. The live HTTP and Socket.IO source inventories guarantee coverage, while these small registries make richer contracts incremental without maintaining a second handwritten list of paths or events.
+When adding an HTTP route, keep its request Zod schema in a reusable server library and register the detailed documentation in `server/lib/apiOperationContracts.js`; the route and OpenAPI consume the same schema object. Add an `x-portos-tool` annotation to that contract entry to publish the operation as an agent-callable tool in `tools.min.json`, and declare the codes its error responses really throw in `x-portos-error-codes` — the HTTP status alone does not identify the code, since `errorHandler` prefers an explicit `err.code` over the status map. Socket payload schemas follow the same pattern in `server/lib/socketEventContracts.js`. The live HTTP and Socket.IO source inventories guarantee coverage; these registries add richer contracts incrementally.
 
 Building a native companion client? See [COMPANION_APP_API.md](./COMPANION_APP_API.md) — the stable, pre-auth-discoverable contract (discovery/identity, HTTP Basic auth vs. operator sessions, instance management, palette actions, daily-log, POST progress, and the iCloud-sync precedent) that the PortDeck app consumes. Basic auth alone does not grant peer management or host control — those need an operator session obtained via `POST /api/auth/login`, same as this section's [Security Model](#security-model) describes for host control below.
 
@@ -38,12 +38,11 @@ sibling settings and concurrent independent edits. Supplied objects and arrays
 replace that key; explicit null/empty values clear fields where their schema allows.
 Unreadable/malformed persisted settings and failed writes return errors.
 
-Supported paths are `localLlm.ollama`, `localLlm.lmstudio`, `localLlm.llama`,
-`localLlm.mtplx`, `localLlm.slotstream`, `imageGen`, `imageGen.external`,
-`imageGen.local`, `imageGen.codex`, `imageGen.grok`, `imageGen.agy`,
-`imageGen.fal`, `imageGen.expose`, `renderDefaults`, `videoGen`, `pipeline`,
-`writersRoom`, `seriesAutopilot`, `pipelineEditorialChecks`, `autoUpdate`,
-`music.chiptune` and `music.designer`. The Media settings drawer, Chiptune panel and Music Designer each save only the fields the user changed, one slice per request, so a stale snapshot never overwrites a sibling panel's value. A `loraTraining` slice stored by an older install is retired: it is not validated or patchable, but it is read and preserved. A `renderDefaults` target sent
+Supported paths are `localLlm.{ollama,lmstudio,llama,mtplx,slotstream}`,
+`imageGen`, `imageGen.{external,local,codex,grok,agy,fal,runway,higgsfield,google,expose}`,
+`renderDefaults`, `videoGen`, `videoGen.{grok,gemini,fal,runway,higgsfield,google,reactor}`,
+`pipeline`, `writersRoom`, `seriesAutopilot`, `pipelineEditorialChecks`,
+`autoUpdate`, and `music.{chiptune,designer}` (see `settingsSlicePartialSchemas` in `server/lib/settingsValidation.js`). The Media settings drawer, Chiptune panel and Music Designer each save only the fields the user changed, one slice per request, so a stale snapshot never overwrites a sibling panel's value. A `loraTraining` slice stored by an older install is retired: it is not validated or patchable, but it is read and preserved. A `renderDefaults` target sent
 as `null` clears that surface's pin.
 Only the current controls' fields are accepted; credential/auth paths and
 prototype-related keys are rejected. Execution-policy and changed executable
@@ -145,13 +144,14 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | `/api/catalog` | Creative ingredients catalog |
 | `/api/tribe` | Tribe relationship graph |
 | `/api/user-actions` | Read-only, machine-local operator-action ledger |
+| `/api/feature-priorities` | Area tiers, pins, visits |
 | `/api/skills` | Agent skill registry |
 | `/api/notes` | Notes |
 | `/api/calendar` | Calendar integration |
 | `/api/messages` | Messages (email) integration |
 | `/api/digital-twin/social-accounts`, `/api/digital-twin/identity`, `/api/digital-twin/autobiography` | Digital-twin sub-domains |
 | `/api/meatspace`, `/api/meatspace/genome` | MeatSpace (health, POST) and genome markers |
-| `/api/lmstudio`, `/api/local-llm` | Local LLM backends and the local runtime servers PortOS can start/stop (Ollama, LM Studio, `llama-server`, MTPLX, Slotstream — the last three as PM2 processes; `POST /api/local-llm/save-startup` is `pm2 save`), plus MTPLX's checkpoint catalog — `GET /api/local-llm/mtplx/models/search`, `POST .../models/pull` (byte progress on the `mtplx:download` socket event), `POST .../models/remove`. Slotstream lifecycle is `GET /api/local-llm/slotstream/status` (which also carries the curated checkpoint catalog), `POST .../start` (never downloads weights), `POST .../stop`, `POST .../install`, and `POST /api/local-llm/slotstream/models/download` — the separate, explicit action that fetches a checkpoint, with byte progress on the `slotstream:download` socket event. |
+| `/api/lmstudio`, `/api/local-llm` | Local LLM backends and managed runtimes (Ollama, LM Studio, plus PM2-managed `llama-server`, MTPLX, Slotstream, Splash, mkserve; `POST /api/local-llm/save-startup` runs `pm2 save`). MTPLX adds `GET /api/local-llm/mtplx/models/search` and `POST .../models/{pull,remove}` (`mtplx:download` progress). Slotstream adds `GET /api/local-llm/slotstream/status` (with catalog), `POST .../{start,stop,install}`, and `POST /api/local-llm/slotstream/models/download` (`slotstream:download` progress; `start` never downloads weights). Splash and mkserve each expose `/splash/*` and `/mkserve/*` (`status`, `install`, `upgrade`, `start`, `stop`). |
 | `/api/code-review` | Code review runs |
 | `/api/voice`, `/api/voice/public` | Voice assistant |
 | `/api/api-docs` | Generated HTTP/event catalogs, OpenAPI 3.0.3 documents, AsyncAPI 3 document, and the minimized semantic tool resource |
@@ -210,7 +210,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | `/api/games` | Game projects |
 | `/api/sprites` | Sprite catalog / export / import |
 | `/api/threejs-models` | Procedural Three.js models |
-| `/api/html-pages` | HTML Pages bench: run installed local models, downloaded MTPLX packs or any provider route (provider, model, effort) against page briefs, keep and compare the pages; each page is also a file under `data/html-pages/<runId>/` (`GET /runs/:id/pages/:index/file` downloads it, `…/path` returns its path) |
+| `/api/html-pages` | HTML Pages bench for installed models, downloaded MTPLX packs, API providers, and tool-free CLIs including local headless OpenCode MTPLX. Provider routes retain model and effort. Ineligible routes return `409` on start or resume. Download saved pages from `GET /runs/:id/pages/:index/file` or get their local path from `…/path`. |
 | `/api/film-styles` | Read-only film style grammar catalog: picker list (`GET /`), full grammar record (`GET /:id`) and rendered prompt-section preview (`GET /:id/prompt?parts=motion,camera`) |
 | `/api/code-animation` | Code Animation: LLM-written briefs, prompt building (a `baseJobId` forks a finished animation: its HTML rides the prompt as the cut to extend, refused whole above `baseHtmlMax`), persistent jobs gallery with poster thumbnails (`GET`/`POST /jobs/:id/poster`; captured in the jailed preview browser); `DELETE /jobs/:id` moves a finished item's HTML and poster to the system Trash, then removes it), generated HTML retrieval, frame-exact MP4 export (`POST /:id/export` → HTML-composition media job), a generated soundtrack for a finished animation (`POST /:id/soundtrack` → one local music-engine render at the film length onto a Music-library track that becomes the job audio; `POST /:id/soundtrack/track` returns that track, created on first use, for a coded score saved with `POST /api/music/code` + the track's code-take routes), the vendored three.js modules the `three` renderer's preview inlines (`GET /vendor/three`; the export stages the same files, hashed, beside the page), portable source download (`GET /:id/package`), and data-only package validation (`POST /packages/validate`; [contract](CODE_ANIMATION_PACKAGES.md)) |
 | `/api/code-animation/execution` | Code Animation contained production execution: platform sandbox and lane readiness (`GET /`), operator-owned tool paths (`PUT /tools`, host control) and the adversarial containment check (`POST /probe`, host control; re-run automatically after a restart for an unchanged, already checked configuration) ([contract](CODE_ANIMATION_PACKAGES.md#contained-production-execution)) |

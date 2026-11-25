@@ -3,9 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn() }),
-}));
+vi.mock('../../ui/Toast');
 vi.mock('../../../services/apiUniverseBuilder', () => ({
   refineUniverseCharacter: vi.fn(),
   getUniverseSeriesNames: vi.fn(() => Promise.resolve([])),

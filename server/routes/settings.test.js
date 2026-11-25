@@ -65,7 +65,6 @@ vi.mock('../services/settings.js', async () => {
 vi.mock('../services/codeReview.js', async (importOriginal) => ({
   ...await importOriginal(),
   getReviewerCliInstalled: vi.fn(async () => ({})),
-  getProviderReviewUnsupported: vi.fn(async () => ({})),
 }));
 const reviewerProviders = vi.hoisted(() => ({ current: [] }));
 vi.mock('../services/provider/providers.js', async (importOriginal) => ({
@@ -1625,6 +1624,20 @@ describe('Settings routes — atomic partial saves (#11045)', () => {
     } finally {
       actual.settingsEvents.off('settings:updated', emitted);
     }
+  });
+
+  it('retires the inert image Gemini slice while preserving stored data and the video lane', async () => {
+    fs.writeFileSync(settingsFile, JSON.stringify({ imageGen: { gemini: { parallelLimit: 7, cleanC2PA: true } } }));
+    actual.__resetSettingsCache();
+    const app = buildApp();
+    expect((await patch(app, 'imageGen.gemini', { parallelLimit: 2 })).status).toBe(400);
+    expect((await patch(app, 'videoGen.gemini', { parallelLimit: 2 })).status).toBe(200);
+    expect(persisted()).toMatchObject({
+      imageGen: { gemini: { parallelLimit: 7, cleanC2PA: true } },
+      videoGen: { gemini: { parallelLimit: 2 } },
+    });
+    const { syncParallelLimits } = await import('../services/mediaJobQueue/index.js');
+    expect(syncParallelLimits).toHaveBeenCalledWith(expect.objectContaining({ videoGen: { gemini: { parallelLimit: 2 } } }));
   });
 
   it('keeps unrelated fields, permits explicit clearing, and reconciles saved settings', async () => {

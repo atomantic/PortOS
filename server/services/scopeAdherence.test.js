@@ -9,11 +9,11 @@ vi.mock('./jevRouter.js', () => ({
   runJevDecision: vi.fn(),
   recordJevObservations: vi.fn(),
 }));
-vi.mock('./untrustedContent.js', () => ({ screenUntrustedContent: vi.fn() }));
+vi.mock('./untrustedContent.js', () => ({ screenForScopeAdvisory: vi.fn() }));
 
 const { readSettingsStrict } = await import('./settings.js');
 const { isJevFeatureEnabled, runJevDecision, recordJevObservations } = await import('./jevRouter.js');
-const { screenUntrustedContent } = await import('./untrustedContent.js');
+const { screenForScopeAdvisory } = await import('./untrustedContent.js');
 const { scoreAdherence, loadClauseCorpus, resetClauseCorpusCache } = await import('./scopeAdherence.js');
 const { getJevDecision } = await import('../lib/jevDecisions.js');
 
@@ -60,7 +60,7 @@ beforeEach(async () => {
   await writeFile(join(repoPath, 'PRD.md'), PRD);
   await writeFile(join(repoPath, 'GOALS.md'), GOALS);
   isJevFeatureEnabled.mockResolvedValue(true);
-  screenUntrustedContent.mockResolvedValue({ ok: true, safe: true });
+  screenForScopeAdvisory.mockResolvedValue({ ok: true });
   runJevDecision.mockResolvedValue(abstained(0.01));
   recordJevObservations.mockResolvedValue(null);
 });
@@ -79,7 +79,7 @@ describe('scoreAdherence', () => {
   it('does not screen or score when scope adherence alone is disabled', async () => {
     readSettingsStrict.mockResolvedValue({ corrupt: false, settings: { untrustedContent: { scopeAdherenceEnabled: false } } });
     expect(await score()).toEqual({ ok: false, code: 'scope-adherence-disabled' });
-    expect(screenUntrustedContent).not.toHaveBeenCalled();
+    expect(screenForScopeAdvisory).not.toHaveBeenCalled();
     expect(runJevDecision).not.toHaveBeenCalled();
   });
 
@@ -88,7 +88,7 @@ describe('scoreAdherence', () => {
     expect(await score()).toEqual({ ok: false, code: 'scope-adherence-disabled' });
     // The whole point of the feature gate: an install that never opted in must
     // not screen, read the corpus, or wake a 9 GB sidecar.
-    expect(screenUntrustedContent).not.toHaveBeenCalled();
+    expect(screenForScopeAdvisory).not.toHaveBeenCalled();
     expect(runJevDecision).not.toHaveBeenCalled();
   });
 
@@ -103,12 +103,12 @@ describe('scoreAdherence', () => {
   });
 
   it('screens the exact text it then scores, and reports a block with the screening code', async () => {
-    screenUntrustedContent.mockResolvedValue({ ok: false, code: 'untrusted-content-blocked' });
+    screenForScopeAdvisory.mockResolvedValue({ ok: false, code: 'scope-adherence-abuse-blocked' });
     expect(await score({ kind: 'issue', diffSummary: 'server/routes/public.js' }))
-      .toEqual({ ok: false, code: 'untrusted-content-blocked' });
+      .toEqual({ ok: false, code: 'scope-adherence-abuse-blocked' });
     expect(runJevDecision).not.toHaveBeenCalled();
 
-    const [[screenCall]] = screenUntrustedContent.mock.calls;
+    const [[screenCall]] = screenForScopeAdvisory.mock.calls;
     expect(screenCall.source).toBe('github-issue');
     // The regression: `diffSummary` reaches the model inside the premise, so
     // screening a title+body subset would let unscreened text past phase 1.
@@ -122,7 +122,7 @@ describe('scoreAdherence', () => {
     // Both steps are inert with respect to the untrusted text (file reads and
     // in-process BM25), and most managed apps have no PRD at all — paying a
     // model-abuse inference to be told so is the one cost that repeats.
-    expect(screenUntrustedContent).not.toHaveBeenCalled();
+    expect(screenForScopeAdvisory).not.toHaveBeenCalled();
     await rm(empty, { recursive: true, force: true });
   });
 

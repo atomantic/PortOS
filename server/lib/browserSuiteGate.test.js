@@ -155,7 +155,7 @@ describe('H.264 probe outcomes', () => {
       .toThrow('suite: browser suite skipped but PORTOS_REQUIRE_BROWSER_SUITES is set — Chrome with H.264 probe failed (probe-timeout)');
   });
 
-  posix('supplies background and credential suppression flags to prevent probe teardown hangs', async () => {
+  posix('supplies shutdown-safe flags for background services and credentials', async () => {
     const argsFile = join(mkdtempSync(join(tmpdir(), 'portos-fake-args-')), 'args.json');
     dirs.push(join(argsFile, '..'));
     const chrome = fakeChrome(`
@@ -175,6 +175,7 @@ describe('H.264 probe outcomes', () => {
       '--password-store=basic',
       '--use-mock-keychain',
     ]));
+    expect(passedArgs.includes('--enable-features=NetworkServiceInProcess2')).toBe(process.platform === 'darwin');
   });
 
   posix('isolates and cleans up a short-prefix MAC_CHROMIUM_TMPDIR/TMPDIR when PORTOS_TEST_TEMP_ROOT is unset', async () => {

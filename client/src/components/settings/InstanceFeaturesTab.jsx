@@ -5,6 +5,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import ToggleSwitch from '../ToggleSwitch';
 import RiggingRuntimeCard from './RiggingRuntimeCard';
 import DockerContainmentCard from './DockerContainmentCard';
+import FeaturePrioritiesSection from './FeaturePrioritiesSection';
 import { useInstanceFeatures, publishInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 import { isGitHubRepoUrl, parseGitHubUrl } from '../../lib/repoUrl.js';
 import { EIDOVERSE_SOLO_PATH } from '../../services/appUrls.js';
@@ -514,6 +515,8 @@ export function InstanceFeaturesTab() {
           </div>
         )}
       </div>
+
+      <FeaturePrioritiesSection />
     </div>
   );
 }

@@ -439,7 +439,9 @@ const daemon = createDaemonWatcher({
   getConfig: () => currentConfig,
   setConfig: (config) => { currentConfig = config; },
   getLastExitError: () => lastExitError,
+  setLastExitError: (error) => { lastExitError = error; },
   getAppStatus: (...args) => getAppStatusStrict(...args),
+  clearStatusCache: () => clearJlistCache(),
   getSavedProcessNames: (...args) => getSavedProcessNames(...args),
   execPm2: (...args) => execPm2(...args),
   getPortReleaseTimeoutMs: () => PORT_RELEASE_TIMEOUT_MS,
@@ -598,26 +600,19 @@ async function assertLaunchable(binaryPath, { model, host, port }) {
     );
   }
 
-  const pm2Status = await getAppStatusStrict(LLAMA_APP);
-  if (pm2Status && pm2Status.status === 'online') {
-    throw new ServerError(`llama-server is already running with PID ${pm2Status.pid}`, { status: 409 });
-  }
-
-  if (!model || typeof model !== 'string') {
-    throw new ServerError('model path is required to start llama-server', { status: 400 });
-  }
-
-  const endpoint = `http://${host}:${port}/v1`;
-  if (await probeEndpoint(endpoint)) {
-    throw new ServerError(`Port ${port} is already in use by an active server at ${endpoint}`, { status: 409 });
-  }
-  if (await isPortInUse(port)) {
-    throw new ServerError(
-      `Port ${port} is already in use on ${host}. Choose a different port under Advanced options before starting llama-server.`,
-      { status: 409, code: 'LLAMA_SERVER_PORT_IN_USE' }
-    );
-  }
-  return endpoint;
+  return daemon.assertPortFree({
+    host,
+    port,
+    label: 'llama-server',
+    codePrefix: 'LLAMA_SERVER',
+    portAdvice: 'Choose a different port under Advanced options before starting llama-server.',
+    // Keep the missing-model refusal between PM2 ownership and port probes.
+    beforeProbe: () => {
+      if (!model || typeof model !== 'string') {
+        throw new ServerError('model path is required to start llama-server', { status: 400 });
+      }
+    },
+  });
 }
 
 /**
@@ -757,42 +752,6 @@ function logLaunchResolution(r, args) {
   appendLog(`Starting: llama-server ${args.join(' ')}`);
 }
 
-const isDeadPm2Status = (proc) =>
-  Boolean(proc) && (proc.status === 'errored' || proc.status === 'stopped' || proc.status === 'not_found');
-
-/** Polls until the server answers, PM2 reports the process dead, or the wait times out. */
-async function waitForServerOnline(endpoint) {
-  const startTime = Date.now();
-  let online = false;
-  let proc = null;
-  while (Date.now() - startTime < startupWaitTimeoutMs) {
-    await sleep(startupPollDelayMs);
-    clearJlistCache();
-    proc = await getAppStatusStrict(LLAMA_APP);
-    if (isDeadPm2Status(proc)) break;
-    online = await probeEndpoint(endpoint);
-    if (online) break;
-  }
-  return { online, proc };
-}
-
-/** Surfaces the dead process's log tail, cleans up its PM2 entry, and throws. */
-async function failEarlyExit(proc) {
-  const exitLogs = await execPm2(['logs', LLAMA_APP, '--nostream', '--lines', '15']).catch(() => null);
-  const lines = (exitLogs?.stderr || exitLogs?.stdout || '').trim().split('\n').map((l) => l.trimEnd()).filter(Boolean);
-  for (const line of lines) appendLog(line);
-  const tail = (lines.length ? lines : daemon.snapshotLogs()).slice(-4).join(' | ');
-
-  lastExitError = `PM2 status: ${proc.status}`;
-
-  await execPm2(['delete', LLAMA_APP]).catch(() => {});
-  clearJlistCache();
-  throw new ServerError(
-    `llama-server exited immediately (${lastExitError}).${tail ? ` Last output: ${tail}` : ''}`,
-    { status: 500, code: 'LLAMA_SERVER_EXITED' }
-  );
-}
-
 /**
  * Starts llama-server with the specified model and options under PM2.
  */
@@ -805,9 +764,6 @@ async function startLlamaServerUnlocked(options = {}) {
 
   lastExitError = null;
   daemon.resetLogs();
-  // Truncated per launch so `failEarlyExit` tails THIS launch's output, not a
-  // previous crash's (PM2 appends across process deletion).
-  await llamaLogs.reset();
   logLaunchResolution(resolved, args);
 
   // A fresh launch line supersedes any baseline: whatever PortOS tuned is gone
@@ -817,74 +773,30 @@ async function startLlamaServerUnlocked(options = {}) {
   preTuningConfig = null;
   currentConfig = buildCurrentConfig(resolved);
 
-  // Delete stale PM2 entry so our own previous instance doesn't count as a collision
-  await execPm2(['delete', LLAMA_APP]).catch(() => {});
-  clearJlistCache();
-
   console.log(`🦙 llama-server starting on ${host}:${port} (model ${model}${draftPath ? `, drafter ${draftPath}` : ''}${projectorPath ? `, projector ${projectorPath}` : ''})`);
-  await execPm2([
-    'start', binaryPath,
-    '--name', LLAMA_APP,
-    '--interpreter', 'none',
-    '--no-autorestart',
-    '--output', llamaLogs.files().stdout,
-    '--error', llamaLogs.files().stderr,
-    '--',
-    ...args,
-  ]);
-  clearJlistCache();
-
-  const { online, proc } = await waitForServerOnline(endpoint);
-  if (isDeadPm2Status(proc)) await failEarlyExit(proc);
-
-  const finalProc = await getAppStatusStrict(LLAMA_APP);
-
-  return {
-    success: true,
-    running: true,
-    managed: true,
-    pid: finalProc?.pid || null,
+  return daemon.launch({
+    binaryPath,
+    args,
     endpoint,
-    online,
-    config: currentConfig,
-  };
+    waitMs: startupWaitTimeoutMs,
+    pollMs: startupPollDelayMs,
+    logs: llamaLogs,
+    label: 'llama-server',
+    codePrefix: 'LLAMA_SERVER',
+    // Keep the historical formatting of llama-server's exit tail.
+    trimExitOutput: true,
+  });
 }
 
-/**
- * Stops the managed llama-server process.
- */
+/** Stops the managed llama-server process. */
 export async function stopLlamaServer() {
-  const pm2Status = await getAppStatusStrict(LLAMA_APP);
-  const isManaged = Boolean(pm2Status && pm2Status.status === 'online');
-
-  if (!isManaged) {
-    const host = currentConfig?.host || '127.0.0.1';
-    const port = currentConfig?.port ?? PORTS.LLAMA_SERVER;
-    const endpoint = `http://${host}:${port}/v1`;
-    const reachable = await probeEndpoint(endpoint);
-    if (reachable) {
-      return {
-        success: false,
-        message: `An external process is listening on ${endpoint}. It was not started by PortOS and cannot be stopped here.`,
-      };
-    }
-    return { success: true, message: 'llama-server is not running' };
-  }
-
-  appendLog(`Stopping ${LLAMA_APP}`);
-  try {
-    await execPm2(['delete', LLAMA_APP]);
-    clearJlistCache();
-  } catch (err) {
-    throw new ServerError(`Failed to stop llama-server: ${err.message}`, { status: 500 });
-  }
-  currentConfig = null;
-  // The tuning died with the process, so there is no longer anything to clear.
-  // A relaunch that stops the daemon itself re-establishes this from its own
-  // captured baseline — see `relaunchLlamaServerWithTuning`.
-  preTuningConfig = null;
-
-  return { success: true, message: 'llama-server stopped' };
+  return daemon.stop({
+    label: 'llama-server',
+    onStopped: () => {
+      // A tuning relaunch re-establishes the baseline from its captured config.
+      preTuningConfig = null;
+    },
+  });
 }
 
 /**
@@ -1068,6 +980,9 @@ const waitForEndpoint = (endpoint) => waitForDaemonReady({
   timeoutMs: relaunchReadyTimeoutMs,
   pollMs: relaunchPollDelayMs,
 });
+
+/** Wait for a just-started server to answer (stops early when PM2 reports it dead); `{ready, reason}`. */
+export const waitForLlamaServerReady = waitForEndpoint;
 
 /**
  * Stop whatever is running and bring `next` up in its place, putting `previous`

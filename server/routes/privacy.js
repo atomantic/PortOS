@@ -48,7 +48,6 @@ import {
   privacyChangeIdParamsSchema,
   privacyChangeOrgParamsSchema,
   privacyOptOutPassSchema,
-  privacyOptOutVerifySchema,
   privacyRecheckConfigSchema,
 } from '../lib/privacyValidation.js';
 import {
@@ -105,7 +104,7 @@ import {
   clearCaseIdentityEvidence,
 } from '../services/privacyBrokers.js';
 import { runScanPass } from '../services/privacyScan.js';
-import { runOptOutPass, runVerificationPass, getOptOutDigest } from '../services/privacyOptOut.js';
+import { runOptOutPass, getOptOutDigest } from '../services/privacyOptOut.js';
 import {
   getPrivacyRecheckStatus,
   restartPrivacyRecheckScheduler,
@@ -427,12 +426,6 @@ router.post('/optout', asyncHandler(async (req, res) => {
     ...(runVerification === undefined ? {} : { runVerification }),
     subjectId,
   }));
-}));
-
-// User-triggered verification-only pass (inbox confirmation scan + removal re-scan).
-router.post('/optout/verify', asyncHandler(async (req, res) => {
-  const { subjectId } = validateRequest(privacyOptOutVerifySchema, req.body ?? {});
-  res.json(await runVerificationPass({ subjectId }));
 }));
 
 // Human-task digest: cases that need a person (blocked walls, auto-submit-off

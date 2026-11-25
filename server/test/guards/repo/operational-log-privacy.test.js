@@ -12,7 +12,7 @@ import { REPO_ROOT } from '../../../../scripts/lib/guardCorpus.js';
 
 const FORBIDDEN = {
   'server/services/socialAccounts.js': [/account\.username/],
-  'server/services/review.js': [/\$\{title\}/, /item\.title/, /reopened\.title/],
+  'server/services/review.js': [/\$\{title\}/, /\b(?:item|reopened|removed)\.title/],
   'server/routes/brainImport.js': [/originalname/],
   'server/services/telegramBridge.js': [/chatId/, /attachment\.filename/],
   'server/services/telegram.js': [/attachment\.filename/, /CHECKINS_FILE/],

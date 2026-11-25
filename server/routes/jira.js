@@ -411,24 +411,14 @@ router.post('/reports/generate', asyncHandler(async (req, res) => {
       throw new ServerError('JIRA is not enabled for this app', { status: 400, code: 'JIRA_NOT_ENABLED' });
     }
     const report = await jiraReports.generateReport(appId, app);
+    if (!report) {
+      throw new ServerError('Set this app\'s JIRA instance and project key before generating a report', { status: 400, code: 'JIRA_NOT_CONFIGURED' });
+    }
     res.json(report);
   } else {
     const reports = await jiraReports.generateAllReports();
     res.json(reports);
   }
-}));
-
-/**
- * GET /api/jira/reports/:appId/latest
- * Get the latest report for an app
- */
-router.get('/reports/:appId/latest', asyncHandler(async (req, res) => {
-  const { appId } = validateRequest(z.object({ appId: appIdSchema }), req.params);
-  const report = await jiraReports.getLatestReport(appId);
-  if (!report) {
-    throw new ServerError('No reports found for this app', { status: 404, code: 'NOT_FOUND' });
-  }
-  res.json(report);
 }));
 
 /**

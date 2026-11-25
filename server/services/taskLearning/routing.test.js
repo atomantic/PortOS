@@ -3,7 +3,6 @@ import {
   deriveFailureSignalAvoidance,
   getSkippedTaskTypes,
   getTaskTypeConfidence,
-  getTaskTypePriorityMultiplier,
   suggestModelTier,
   getPerformanceSummary
 } from './routing.js';
@@ -303,18 +302,6 @@ describe('windowed-rate decisions (issue #2617)', () => {
       const out = await getTaskTypeConfidence('never-seen');
       expect(out.tier).toBe('new');
       expect(out.successRate).toBeNull();
-    });
-  });
-
-  describe('getTaskTypePriorityMultiplier', () => {
-    it('boosts a recovered type instead of demoting it', async () => {
-      loadLearningData.mockResolvedValue(learningWith({ 'self-improve:x': recoveredMetrics() }));
-      expect(await getTaskTypePriorityMultiplier('self-improve:x')).toBe(1.2);
-    });
-
-    it('demotes on the lifetime rate when the window is too thin', async () => {
-      loadLearningData.mockResolvedValue(learningWith({ 'self-improve:x': thinWindowMetrics() }));
-      expect(await getTaskTypePriorityMultiplier('self-improve:x')).toBe(0.9);
     });
   });
 

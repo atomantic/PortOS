@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useInsightGeneration } from './useInsightGeneration.js';
 import { RefreshCw, Target, TrendingUp, TrendingDown, Minus, Sparkles, SlidersHorizontal, Users } from 'lucide-react';
 import {
   getGoalScorecard,
@@ -12,6 +13,7 @@ import {
 import { getProviders } from '../../services/apiProviders.js';
 import { formatCount, timeAgo } from '../../utils/formatters';
 import ProviderModelSelector from '../ProviderModelSelector';
+import ListLoadError from '../ui/ListLoadError';
 
 const fmtHours = (h) => `${Number(h ?? 0).toFixed(1)}h`;
 
@@ -49,32 +51,44 @@ function RulesEditor({ onClose }) {
   const [saving, setSaving] = useState(false);
   const [drafts, setDrafts] = useState({});
 
-  useEffect(() => {
-    getGoalScorecardRules().then((res) => {
-      setData(res);
-      const initial = {};
-      for (const [id, ov] of Object.entries(res?.overrides ?? {})) {
-        initial[id] = (ov.keywords ?? []).join(', ');
-      }
-      setDrafts(initial);
-    }).finally(() => setLoading(false));
+  const [loadError, setLoadError] = useState(null);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
+    getGoalScorecardRules({ silent: true })
+      .then((res) => {
+        const overrides = res?.overrides;
+        if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides) || !Array.isArray(res.rules)) {
+          throw new Error('Invalid mapping rules response');
+        }
+        setData(res);
+      })
+      .catch((error) => setLoadError(error))
+      .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => { load(); }, [load]);
+
   const handleSave = () => {
+    if (data === null || saving) return;
     setSaving(true);
-    const overrides = { ...(data?.overrides ?? {}) };
+    const overrides = { ...data.overrides };
     for (const [id, csv] of Object.entries(drafts)) {
       const keywords = csv.split(',').map((k) => k.trim()).filter(Boolean);
       overrides[id] = { ...(overrides[id] ?? {}), keywords };
     }
     saveGoalScorecardRules(overrides)
-      .then((res) => { setData(res); onClose?.(); })
+      .then(() => onClose?.())
+      .catch(() => { /* The request reports the error. Keep the draft for retry. */ })
       .finally(() => setSaving(false));
   };
 
   if (loading) return <div className="text-sm text-gray-500 p-4">Loading mapping rules…</div>;
 
-  const rules = data?.rules ?? [];
+  if (data === null) return <ListLoadError what="goal mapping rules" error={loadError} onRetry={load} />;
+
+  const { rules } = data;
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
       <div className="flex items-center justify-between">
@@ -98,7 +112,7 @@ function RulesEditor({ onClose }) {
             </div>
             <input
               type="text"
-              value={drafts[rule.id] ?? ''}
+              value={drafts[rule.id] ?? (data.overrides[rule.id]?.keywords ?? []).join(', ')}
               onChange={(e) => setDrafts((prev) => ({ ...prev, [rule.id]: e.target.value }))}
               placeholder="extra keywords, comma-separated"
               aria-label={`Extra keywords for ${rule.title}`}
@@ -123,15 +137,16 @@ export default function GoalScorecardTab() {
   const [settings, setSettings] = useState(null);
   const [providers, setProviders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [computing, setComputing] = useState(false);
-  const [generating, setGenerating] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [showRules, setShowRules] = useState(false);
 
   const load = useCallback(() => {
-    Promise.allSettled([getGoalScorecard(), getGoalScorecardSettings(), getProviders({ silent: true })])
+    Promise.allSettled([getGoalScorecard({ silent: true }), getGoalScorecardSettings(), getProviders({ silent: true })])
       .then(([sc, st, pr]) => {
         setData(sc.status === 'fulfilled' ? sc.value : null);
+        setLoadError(sc.status === 'rejected' ? (sc.reason ?? new Error('Request failed')) : null);
         setSettings(st.status === 'fulfilled' ? st.value : null);
         const p = pr.status === 'fulfilled' ? pr.value : null;
         setProviders(p?.providers || (Array.isArray(p) ? p : []));
@@ -159,12 +174,11 @@ export default function GoalScorecardTab() {
       .finally(() => setComputing(false));
   };
 
-  const handleNarrative = () => {
-    setGenerating(true);
-    refreshGoalScorecardNarrative()
-      .then((res) => { if (res?.available) setData(res); })
-      .finally(() => setGenerating(false));
-  };
+  const [handleNarrative, generating] = useInsightGeneration(
+    refreshGoalScorecardNarrative,
+    setData,
+    'Failed to generate the scorecard narrative'
+  );
 
   if (loading) {
     return (
@@ -175,6 +189,10 @@ export default function GoalScorecardTab() {
         <div className="h-4 bg-gray-700 rounded w-5/6" />
       </div>
     );
+  }
+
+  if (loadError) {
+    return <ListLoadError what="the goal scorecard" error={loadError} onRetry={() => { setLoading(true); load(); }} />;
   }
 
   if (!data?.available) {

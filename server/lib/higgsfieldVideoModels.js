@@ -24,6 +24,8 @@
  * `enable_thinking` rewrite knob is sent off.
  */
 
+import { durationLengths } from './hostedVideoClipRules.js';
+
 const SEEDANCE_RATIOS = Object.freeze(['16:9', '4:3', '1:1', '3:4', '9:16', '21:9']);
 const WAN_RATIOS = Object.freeze(['16:9', '4:3', '1:1', '3:4', '9:16']);
 const KLING_RATIOS = Object.freeze(['16:9', '9:16', '1:1']);
@@ -151,9 +153,7 @@ export const HIGGSFIELD_VIDEO_MODEL_IDS = Object.freeze(HIGGSFIELD_VIDEO_MODELS.
 export const getHiggsfieldVideoModel = (id) => HIGGSFIELD_VIDEO_MODELS.find((m) => m.id === id) || null;
 
 /** Every whole-second length the family accepts, for a picker. */
-export const higgsfieldVideoLengths = (model) => (model
-  ? Array.from({ length: model.duration.max - model.duration.min + 1 }, (_, i) => model.duration.min + i)
-  : []);
+export const higgsfieldVideoLengths = (model) => durationLengths(model?.duration);
 
 /** Picker hint for which inputs a family takes beyond text, e.g. "refs ≤30 · end frame · audio refs". */
 export function higgsfieldCapabilityHint(model) {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { act, render, screen, cleanup } from '@testing-library/react';
+import { act, fireEvent, render, screen, cleanup } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const api = vi.hoisted(() => ({
@@ -51,4 +51,19 @@ describe('JiraReports prerequisites', () => {
     expect(screen.getByRole('button', { name: /generate report/i })).toBeEnabled();
     expect(screen.queryByRole('link', { name: 'Apps' })).toBeNull();
   });
+});
+
+it.each([false, true])('retries a failed reports read (has reports: %s)', async (hasReports) => {
+  const reports = hasReports ? [{
+    appId: 'app-example', appName: 'Example report', date: '2026-01-01', summary: { done: 1, inProgress: 0, todo: 0 },
+  }] : [];
+  api.getApps.mockResolvedValue([]);
+  api.getJiraReports.mockRejectedValueOnce(new Error('Offline')).mockResolvedValueOnce(reports);
+  await renderPage();
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load JIRA reports');
+  expect(screen.queryByText(/No reports yet/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByText(hasReports ? 'Example report' : /No reports yet/)).toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 });

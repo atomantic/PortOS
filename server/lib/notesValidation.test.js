@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   vaultInputSchema,
-  vaultUpdateSchema,
   notePathSchema,
   createNoteSchema,
   updateNoteSchema,
@@ -83,9 +82,6 @@ describe('notesValidation', () => {
       expect(vaultInputSchema.safeParse({ name: 'Personal' }).success).toBe(false);
     });
 
-    it('vaultUpdateSchema accepts an empty object', () => {
-      expect(vaultUpdateSchema.safeParse({}).success).toBe(true);
-    });
   });
 
   describe('createNoteSchema', () => {

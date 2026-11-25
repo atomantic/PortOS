@@ -17,7 +17,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('../../services/apiMusicVideo.js', () => api);
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const project = (id) => ({ id, publishKit: { builtAt: '2026-01-01T00:00:00.000Z' } });
 // a platform row: its fold toggle names it (label first, then its status)

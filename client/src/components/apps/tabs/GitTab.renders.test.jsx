@@ -11,7 +11,7 @@ vi.mock('../../../services/apiGit.js', () => ({
   stageFiles: vi.fn(),
   createCommit: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
+vi.mock('../../ui/Toast');
 vi.mock('./RepositorySourcePanel', () => ({ default: () => null }));
 
 // Counts every time GitTab renders the history panel. The wrapper is not
@@ -100,5 +100,21 @@ describe('GitTab commit composer isolation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Commit' }));
     await waitFor(() => expect(createCommit).toHaveBeenCalledWith('/repo', 'wip message'));
     await waitFor(() => expect(screen.getByRole('textbox', { name: 'Commit message' })).toHaveValue(''));
+  });
+
+  it('keeps the message, re-enables Commit and reloads git status when the commit fails', async () => {
+    createCommit.mockRejectedValueOnce(new Error('pre-commit hook failed'));
+    render(<GitTab appId="app-example" appName="Example App" repoPath="/repo" />);
+    const input = await screen.findByRole('textbox', { name: 'Commit message' });
+    fireEvent.change(input, { target: { value: 'keep me' } });
+    const loadsBefore = getGitInfo.mock.calls.length;
+
+    fireEvent.click(screen.getByRole('button', { name: 'Commit' }));
+    await waitFor(() => expect(createCommit).toHaveBeenCalledWith('/repo', 'keep me'));
+    await waitFor(() => expect(getGitInfo.mock.calls.length).toBeGreaterThan(loadsBefore));
+
+    const after = await screen.findByRole('textbox', { name: 'Commit message' });
+    expect(after).toHaveValue('keep me');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Commit' })).toBeEnabled());
   });
 });

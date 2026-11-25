@@ -16,10 +16,7 @@
 // Local gallery only — no external/web search (deliberate, see plan).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Search, X, RefreshCw, Upload } from 'lucide-react';
-import Modal from '../ui/Modal';
-import FilePickerButton from '../ui/FilePickerButton';
-import MediaCard from '../media/MediaCard';
+import GalleryPickerShell from '../media/GalleryPickerShell';
 import { normalizeImage } from '../media/normalize';
 import { listImageGalleryFacets } from '../../services/apiImageVideo';
 import { listUniverseNames } from '../../services/apiUniverseBuilder';
@@ -80,9 +77,7 @@ export default function GalleryImagePicker({
     entryCategory: type.startsWith(CAT_PREFIX) ? type.slice(CAT_PREFIX.length) : undefined,
     entryKind: type.startsWith(KIND_PREFIX) ? type.slice(KIND_PREFIX.length) : undefined,
   }, { enabled: open });
-  const { loading } = page;
   const items = useMemo(() => page.items.map(normalizeImage), [page.items]);
-  const filtered = items;
   useEffect(() => {
     if (!open) { setQuery(''); setScope(''); setType(''); setFacets({ universes: [], categories: [], kinds: [], collections: [] }); setUniverses([]); return; }
     let cancelled = false;
@@ -121,150 +116,86 @@ export default function GalleryImagePicker({
     // would write this image onto whatever the host has open instead — so the
     // upload stays in the gallery, but nothing is picked.
     if (sessionRef.current !== session) return;
-    onSelect?.(normalizeImage({ filename: saved.filename, path: saved.path }));
-    onClose?.();
+    handleSelectCard(normalizeImage({ filename: saved.filename, path: saved.path }));
   };
 
+  const filters = (
+    <>
+      {(universeOptions.length > 0 || collectionOptions.length > 0) && (
+        <div className="sm:w-44">
+          <label htmlFor="gallery-picker-scope" className="sr-only">Filter by universe or collection</label>
+          <select
+            id="gallery-picker-scope"
+            value={scope}
+            onChange={(e) => setScope(e.target.value)}
+            className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-port-accent"
+          >
+            <option value="">All universes &amp; collections</option>
+            {universeOptions.length > 0 && (
+              <optgroup label="Universes">
+                {universeOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </optgroup>
+            )}
+            {collectionOptions.length > 0 && (
+              <optgroup label="Collections">
+                {collectionOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </optgroup>
+            )}
+          </select>
+        </div>
+      )}
+      {(categoryOptions.length > 0 || kindOptions.length > 0) && (
+        <div className="sm:w-36">
+          <label htmlFor="gallery-picker-type" className="sr-only">Filter by type</label>
+          <select
+            id="gallery-picker-type"
+            value={type}
+            onChange={(e) => setType(e.target.value)}
+            className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-port-accent"
+          >
+            <option value="">All types</option>
+            {categoryOptions.length > 0 && (
+              <optgroup label="Categories">
+                {categoryOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </optgroup>
+            )}
+            {kindOptions.length > 0 && (
+              <optgroup label="Entry kinds">
+                {kindOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </optgroup>
+            )}
+          </select>
+        </div>
+      )}
+    </>
+  );
+
   return (
-    <Modal
+    <GalleryPickerShell
       open={open}
       onClose={onClose}
-      size="3xl"
-      // Portal to <body> so the picker escapes every page/modal stacking
-      // context. Without this it renders inline and, under themes that ship a
-      // non-none --port-backdrop-filter (Lumen Glass, Blueprint Ops), each
-      // ancestor .bg-port-card becomes a stacking context that traps the fixed
-      // overlay beneath the page header/cards (and beneath a host modal when the
-      // picker is opened from inside one).
-      usePortal
-      panelClassName="bg-port-card border border-port-border rounded-xl flex flex-col"
+      title="Pick from gallery"
       ariaLabel="Pick an image from your gallery"
-    >
-      <div className="p-3 border-b border-port-border space-y-2">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-sm font-medium text-white shrink-0">Pick from gallery</h2>
-          <div className="flex items-center gap-2 shrink-0">
-            {allowUpload && (
-              <FilePickerButton
-                accept={UPLOAD_IMAGE_ACCEPT}
-                onChange={handleUpload}
-                disabled={uploading}
-                title="Upload an image from your device"
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-port-border bg-port-bg px-2.5 py-1.5 text-xs text-gray-300 hover:border-port-accent hover:text-white"
-              >
-                {uploading
-                  ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" /> Uploading…</>
-                  : <><Upload className="h-3.5 w-3.5" /> Upload</>}
-              </FilePickerButton>
-            )}
-            <button
-              type="button"
-              onClick={onClose}
-              className="shrink-0 p-1.5 text-gray-400 hover:text-white rounded min-h-[44px] min-w-[44px] flex items-center justify-center"
-              aria-label="Close"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-          <div className="relative flex-1 min-w-0">
-            <label htmlFor="gallery-picker-search" className="sr-only">Search gallery</label>
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
-            <input
-              id="gallery-picker-search"
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search prompt, model, seed, LoRA…"
-              className="w-full pl-7 pr-7 py-1.5 text-xs bg-port-bg border border-port-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
-              autoFocus
-            />
-            {query && (
-              <button
-                type="button"
-                onClick={() => setQuery('')}
-                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
-                aria-label="Clear search"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-          {(universeOptions.length > 0 || collectionOptions.length > 0) && (
-            <div className="sm:w-44">
-              <label htmlFor="gallery-picker-scope" className="sr-only">Filter by universe or collection</label>
-              <select
-                id="gallery-picker-scope"
-                value={scope}
-                onChange={(e) => setScope(e.target.value)}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-port-accent"
-              >
-                <option value="">All universes &amp; collections</option>
-                {universeOptions.length > 0 && (
-                  <optgroup label="Universes">
-                    {universeOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                  </optgroup>
-                )}
-                {collectionOptions.length > 0 && (
-                  <optgroup label="Collections">
-                    {collectionOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                  </optgroup>
-                )}
-              </select>
-            </div>
-          )}
-          {(categoryOptions.length > 0 || kindOptions.length > 0) && (
-            <div className="sm:w-36">
-              <label htmlFor="gallery-picker-type" className="sr-only">Filter by type</label>
-              <select
-                id="gallery-picker-type"
-                value={type}
-                onChange={(e) => setType(e.target.value)}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-port-accent"
-              >
-                <option value="">All types</option>
-                {categoryOptions.length > 0 && (
-                  <optgroup label="Categories">
-                    {categoryOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                  </optgroup>
-                )}
-                {kindOptions.length > 0 && (
-                  <optgroup label="Entry kinds">
-                    {kindOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                  </optgroup>
-                )}
-              </select>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-3">
-        {loading && items.length === 0 ? (
-          <div className="flex items-center justify-center gap-2 text-xs text-gray-400 py-10">
-            <RefreshCw className="w-4 h-4 animate-spin" /> Loading gallery…
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="text-xs text-gray-500 py-10 text-center">
-            {query || scope || type ? 'No images match your search or filters.' : 'No images in your gallery yet.'}
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-            {filtered.map((item) => (
-              <MediaCard
-                key={item.key}
-                item={item}
-                hideActions
-                showCollectionMenu={false}
-                onClick={handleSelectCard}
-              />
-            ))}
-          </div>
-        )}
-        {page.error && <p role="alert" className="text-sm text-port-error">{page.error} <button type="button" onClick={page.retry}>Retry</button></p>}
-        {page.hasMore && <button type="button" disabled={loading} onClick={page.loadMore} className="w-full min-h-[44px] text-port-accent">{loading ? 'Loading…' : `Show more (${page.total - items.length} remaining)`}</button>}
-      </div>
-    </Modal>
+      searchId="gallery-picker-search"
+      searchLabel="Search gallery"
+      searchPlaceholder="Search prompt, model, seed, LoRA…"
+      query={query}
+      onQueryChange={setQuery}
+      upload={allowUpload ? {
+        accept: UPLOAD_IMAGE_ACCEPT, onChange: handleUpload, uploading, title: 'Upload an image from your device',
+      } : null}
+      filters={filters}
+      items={items}
+      loading={page.loading}
+      loadingText="Loading gallery…"
+      error={page.error}
+      errorSubject="your image gallery"
+      onRetry={page.retry}
+      hasMore={page.hasMore}
+      remaining={page.total - items.length}
+      onLoadMore={page.loadMore}
+      emptyText={query || scope || type ? 'No images match your search or filters.' : 'No images in your gallery yet.'}
+      onSelect={handleSelectCard}
+    />
   );
 }

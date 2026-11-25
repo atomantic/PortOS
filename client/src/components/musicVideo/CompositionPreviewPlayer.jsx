@@ -1,3 +1,4 @@
+import { compactButtonClass as buttonCls } from './controlClasses.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pause, Play } from 'lucide-react';
 import { normalizeTitleCard, titleCardVisible, titleCardWindows } from '../../../../server/lib/musicVideo/musicVideoTitleCard.js';
@@ -11,8 +12,6 @@ import PreviewFilmLook, { usePreviewFilmLook } from './PreviewFilmLook.jsx';
 import toast from '../ui/Toast';
 import { upgradeMusicVideoCompositionEngine } from '../../services/apiMusicVideo.js';
 import { sceneShotName } from '../../lib/musicVideoStages.js';
-
-const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 
 // What the lyric playthrough page is built from: the song length, the word times,
 // the sheet's sections, the shots' timing and text zones, and the title card's spot. A change rebuilds it.
@@ -38,8 +37,8 @@ const lyricAt = (cues, t) => {
   return line?.text || '';
 };
 
-// The shot effect inputs a document session stages at open, including what
-// makes an end-frame effect eligible (its still's media and medium). A change
+// The shot pictures and effect inputs a document session stages at open (its
+// selected clip or still is copied in), including what makes an end-frame effect eligible (its still's media and medium). A change
 // reopens it, so a new effect draws (or is named as unsupported) and a removed one clears.
 const shotEffectsKey = (project) => JSON.stringify([project.audioAnalysis?.durationSec ?? null, project.productionPolicy?.strategy ?? null,
   project.overscan ?? null, project.templateEffects ?? null,
@@ -47,7 +46,7 @@ const shotEffectsKey = (project) => JSON.stringify([project.audioAnalysis?.durat
   (project.treatment?.shotDirections || []).map((d) => [d.sceneId, d.medium]),
   (project.scenes || []).map((s) => [s.sceneId, s.startSec, s.endSec,
     s.transitionIn, s.transitionOut, s.glitches, s.imageEffect, s.endImageId, s.visualLayer,
-    s.referenceImageId, s.photoSequence, s.direction?.medium, s.filmLook, s.templateEffects])]);
+    s.videoHistoryId, s.sourceTake, s.referenceImageId, s.photoSequence, s.direction?.medium, s.filmLook, s.templateEffects])]);
 const shotEffectsVersion = (project) => {
   const key = shotEffectsKey(project);
   return `fx-${key.length.toString(36)}-${hashString(key).toString(36)}`;

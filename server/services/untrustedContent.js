@@ -73,8 +73,8 @@ function jevObservations(plan, outcome, llmValue) {
   }));
 }
 
-/** Complete input crosses the classifier before any conversational model sees it. */
-export async function screenUntrustedContent({ content, source, policy: override = {}, provider, model } = {}) {
+/** Complete input crosses the classifier before any model sees it. */
+async function screenModelAbuse({ content, source, policy: override = {} } = {}) {
   const state = await readSettingsStrict();
   if (state.corrupt) return failure('untrusted-content-settings-unreadable', 'The untrusted-content settings could not be read. Repair Settings before retrying.');
   const policy = resolveUntrustedContentPolicy(state.settings.untrustedContent, source, override);
@@ -90,7 +90,22 @@ export async function screenUntrustedContent({ content, source, policy: override
   // legitimate block sends them to a status panel that will just say ready.
   if (!screening.ok) return { ...failure(screening.code || 'untrusted-content-screening-failed', 'Model-abuse screening could not run. Check Models > LLMs > Abuse Guard.'), screening };
   if (screening.safe !== true) return { ...failure(screening.code || 'untrusted-content-blocked', 'The model-abuse guard flagged this content and blocked it. This is expected screening behavior, not a guard setup problem.'), screening };
-  const screened = { ok: true, safe: true, policy, screening, fingerprint: modelAbuseContentFingerprint(source, {}, content) };
+  return { ok: true, safe: true, policy, screening, fingerprint: modelAbuseContentFingerprint(source, {}, content) };
+}
+
+/** For the fixed local scope classifier only. A pass never authorizes work on a contribution. */
+export async function screenForScopeAdvisory({ content, source } = {}) {
+  const result = await screenModelAbuse({ content, source });
+  if (result.ok) return { ok: true };
+  return { ok: false, code: result.screening?.ok === true
+    ? 'scope-adherence-abuse-blocked' : 'scope-adherence-screening-unavailable' };
+}
+
+/** Screen for contribution automation and other conversational analysis. */
+export async function screenUntrustedContent({ content, source, policy: override = {}, provider, model } = {}) {
+  const screened = await screenModelAbuse({ content, source, policy: override });
+  if (!screened.ok) return screened;
+  const { policy, screening } = screened;
   if (source !== 'github-issue' && source !== 'github-pr') return screened;
   // An injection classifier cannot establish whether a benign feature request
   // violates the host's trust model. This separate mandatory verdict uses the

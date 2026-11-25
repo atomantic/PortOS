@@ -4,15 +4,8 @@ import { Bot, Play, Pause, X } from 'lucide-react';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import { formatTimecode } from '../../utils/formatters.js';
+import { RUN_STATUS_LABELS, RUN_STATUS_TONES } from '../../lib/musicVideoRunStatus.js';
 
-const STATUS_LABELS = {
-  running: 'Running', stopped: 'Paused', 'limit-reached': 'Stopped at a limit', passed: 'Passed',
-  'needs-human': 'Needs you', failed: 'Failed', canceled: 'Cancelled',
-};
-const STATUS_TONES = {
-  running: 'text-port-accent', stopped: 'text-port-warning', 'limit-reached': 'text-port-warning', passed: 'text-port-success',
-  'needs-human': 'text-port-warning', failed: 'text-port-error', canceled: 'text-port-text-muted',
-};
 const CHECK_TONES = { pass: 'bg-port-success/20 text-port-success', fail: 'bg-port-error/20 text-port-error', unverified: 'bg-port-border text-port-text-muted' };
 const CHECK_LABELS = { composition: 'Composition', continuity: 'Continuity', motion: 'Motion', audioSync: 'Stream-duration parity', lipSync: 'Temporal lip-sync' };
 const ACTION_LABELS = {
@@ -72,7 +65,7 @@ function AttemptRow({ attempt }) {
         </p>
       )}
       {review?.evidence?.temporal && <p className="text-[10px] text-port-text-muted">
-        Temporal evidence: {review.evidence.temporal.status}
+        Temporal evidence: {review.evidence.temporal.status === 'unavailable' ? 'not measured' : review.evidence.temporal.status}
         {review.evidence.temporal.analyzer && ` · ${review.evidence.temporal.analyzer.id} ${review.evidence.temporal.analyzer.version}`}
         {review.evidence.temporal.reason && ` — ${review.evidence.temporal.reason}`}
       </p>}
@@ -183,7 +176,7 @@ export default function AutoReviewPanel({ project, startSec, endSec, rangeValid,
         <div className="space-y-1.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span>
-              <span className={STATUS_TONES[run.status]}>{STATUS_LABELS[run.status] || run.status}</span>
+              <span className={RUN_STATUS_TONES[run.status]}>{RUN_STATUS_LABELS[run.status] || run.status}</span>
               <span className="text-port-text-muted"> · {formatTimecode(run.startSec)}–{formatTimecode(run.endSec)} · reviews {run.usage.reviews}/{run.limits.maxAttempts} · paid generations {run.usage.generations}/{run.limits.maxGenerations}</span>
             </span>
             {active && (
@@ -200,7 +193,7 @@ export default function AutoReviewPanel({ project, startSec, endSec, rangeValid,
             )}
           </div>
           {actionLabel && <p className="text-port-text-muted">{actionLabel}</p>}
-          {run.stopReason && run.status !== 'running' && <p role="status" className={STATUS_TONES[run.status]}>{run.stopReason}</p>}
+          {run.stopReason && run.status !== 'running' && <p role="status" className={RUN_STATUS_TONES[run.status]}>{run.stopReason}</p>}
           {run.status === 'limit-reached' && (
             <div className="flex flex-wrap items-end gap-2">
               <LimitInputs idFor={(s) => idFor(`raise-${s}`)}

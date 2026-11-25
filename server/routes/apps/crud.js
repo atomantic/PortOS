@@ -42,9 +42,17 @@ const router = Router();
 // Lets the task form disable worktree/PR for a non-git app before submit (the
 // create route refuses it with NOT_A_GIT_REPO). Left undefined — i.e. unknown,
 // not "not a repo" — when the directory is missing or its probe cannot run.
+// Only a positive answer is remembered, so `git init` shows at once; without it every
+// list read spawns one git process per app. Spawn and create still ask git themselves.
+const GIT_REPO_TTL_MS = 5 * 60_000;
+const knownGitRepos = new Map(); // repoPath -> expiry
 async function withGitRepoFlag(app) {
   if (!app.repoPath || !existsSync(app.repoPath)) return app;
-  return { ...app, isGitRepo: await isRepo(app.repoPath, { unknownOnError: true }) };
+  if ((knownGitRepos.get(app.repoPath) ?? 0) > Date.now()) return { ...app, isGitRepo: true };
+  const isGitRepo = await isRepo(app.repoPath, { unknownOnError: true });
+  if (isGitRepo) knownGitRepos.set(app.repoPath, Date.now() + GIT_REPO_TTL_MS);
+  else knownGitRepos.delete(app.repoPath);
+  return { ...app, isGitRepo };
 }
 
 // Numeric local evidence only. This endpoint never invokes aggregate reads or forwards peer data.
@@ -85,9 +93,10 @@ router.get('/', asyncHandler(async (req, res) => {
     return;
   }
 
-  const apps = await Promise.all((await enrichAppsWithPm2Status(rawApps)).map(withGitRepoFlag));
+  const pm2Apps = await enrichAppsWithPm2Status(rawApps);
   if (view === 'probe') {
-    res.json(apps.map(({ id, name, icon, overallStatus, uiPort, apiPort, type, pm2ProcessNames }) => ({
+    // The probe projection drops isGitRepo, so skip the per-checkout Git calls.
+    res.json(pm2Apps.map(({ id, name, icon, overallStatus, uiPort, apiPort, type, pm2ProcessNames }) => ({
       // A null uiPort keeps peers from linking to a port only this machine can reach.
       id, name, icon, overallStatus, apiPort, type,
       uiPort: pm2ProcessNames?.includes(EIDOVERSE_PROCESS_NAME) ? null : uiPort,
@@ -95,6 +104,7 @@ router.get('/', asyncHandler(async (req, res) => {
     return;
   }
 
+  const apps = await Promise.all(pm2Apps.map(withGitRepoFlag));
   // The bare list is the frozen peer-probe contract. Local UI opts into
   // assessment prose explicitly so it never rides automatic federation probes.
   res.json(includeQuality === 'true' ? await enrichAppsWithQuality(apps) : apps);

@@ -7,7 +7,7 @@ vi.mock('../../services/apiProviders.js', () => ({
 vi.mock('../../services/apiPipeline.js', () => ({
   updatePipelineSeries: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import { getProviders } from '../../services/apiProviders.js';
 import { updatePipelineSeries } from '../../services/apiPipeline.js';

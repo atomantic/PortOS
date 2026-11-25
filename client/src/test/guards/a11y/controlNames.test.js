@@ -40,6 +40,7 @@ describe('a11y conventions: controlNames', () => {
     const offenders = [];
     for (const file of trackedJsxFiles()) {
       const src = rawSourceOf(file);
+      if (!src.includes('hidden')) continue;
       for (const tagName of ['button', 'a', 'Link']) {
         if (!src.includes(`<${tagName}`)) continue;
         for (const node of forEachOpeningTag(src, tagName)) {

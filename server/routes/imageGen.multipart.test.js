@@ -235,6 +235,19 @@ describe('POST /api/image-gen/generate — multipart reference-image packing', (
     }
   });
 
+  it.each([true, false])('preserves the JSON and multipart verification checkbox (%s) in queued params', async verifyImage => {
+    const path = '/api/image-gen/generate';
+    const json = await postJson(app, path, { prompt: 'a fantasy landscape', verifyImage });
+    const multipart = await postMultipart(app, path, [
+      { name: 'prompt', value: 'a fantasy landscape' },
+      { name: 'verifyImage', value: String(verifyImage) },
+    ]);
+
+    expect(json.status).toBe(200);
+    expect(multipart.status).toBe(200);
+    expect(enqueueJob.mock.calls.map(([job]) => job.params.verifyImage)).toEqual([verifyImage, verifyImage]);
+  });
+
   it('packs populated reference slots into referenceImagePaths in submit order with parallel strengths', async () => {
     const res = await postMultipart(app, '/api/image-gen/generate', [
       { name: 'prompt', value: 'multi-ref test' },

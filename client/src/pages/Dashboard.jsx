@@ -114,11 +114,11 @@ export default function Dashboard() {
       .catch(() => null)
       .then((value) => setStreams((prev) => ({ ...prev, [name]: value }))))), []);
 
-  const fetchApps = useCallback(() => getApps({ includeQuality: true })
+  const fetchApps = useCallback(() => getApps()
     .then((appsData) => {
       setDataError(null);
       if (Array.isArray(appsData)) setApps(appsData);
-    }, (err) => setDataError(err.message))
+    }, (err) => setDataError(err.message || 'Could not load apps'))
     .finally(() => setAppsReadSettled(true)), []);
 
   // One-shot per mount — guards against re-evaluation stomping manual picks.
@@ -177,6 +177,10 @@ export default function Dashboard() {
 
   const appList = useMemo(() => (Array.isArray(apps) ? apps : []), [apps]);
   const appsLoading = isAppsLoading(appsReadSettled);
+  // Failed FIRST read (no data ever landed): widgets show Retry instead of an
+  // empty/zero view. After a successful read, failures keep the loaded data
+  // and surface only through the page banner below.
+  const appsError = apps === null && dataError ? dataError : null;
   const sortedApps = useMemo(() =>
     [...appList].sort((a, b) => {
       const archiveDiff = (a.archived ? 1 : 0) - (b.archived ? 1 : 0);
@@ -262,8 +266,8 @@ export default function Dashboard() {
 
   const { tribeCare = null, feeds = null, meatspaceLogging = null, calendarAgenda = null, brainOnThisDay = null } = streams;
   const dashboardState = useMemo(
-    () => ({ apps: appList, appsLoading, sortedApps, activeApps, appStats, health: health ?? null, tribeCare, feeds, meatspaceLogging, calendarAgenda, brainOnThisDay, dailyDriver, instanceFeatures, refetch: fetchData, refetchHealth: refreshHealth }),
-    [appList, appsLoading, sortedApps, activeApps, appStats, health, tribeCare, feeds, meatspaceLogging, calendarAgenda, brainOnThisDay, dailyDriver, instanceFeatures, fetchData, refreshHealth]
+    () => ({ apps: appList, appsLoading, appsError, refetchApps: fetchApps, sortedApps, activeApps, appStats, health: health ?? null, tribeCare, feeds, meatspaceLogging, calendarAgenda, brainOnThisDay, dailyDriver, instanceFeatures, refetch: fetchData, refetchHealth: refreshHealth }),
+    [appList, appsLoading, appsError, fetchApps, sortedApps, activeApps, appStats, health, tribeCare, feeds, meatspaceLogging, calendarAgenda, brainOnThisDay, dailyDriver, instanceFeatures, fetchData, refreshHealth]
   );
 
   const visibleWidgets = useMemo(
@@ -468,9 +472,12 @@ export default function Dashboard() {
       />
       <FirstRunCard />
 
-      {dataError && (
-        <div role="status" className="p-4 bg-port-error/20 border border-port-error rounded-lg text-port-error">
-          {dataError}
+      {dataError && !appsError && (
+        <div role="status" className="flex items-center justify-between gap-3 p-4 bg-port-error/20 border border-port-error rounded-lg text-port-error">
+          <span>{dataError}</span>
+          <button type="button" onClick={fetchApps} className="shrink-0 px-3 py-1.5 min-h-10 rounded-lg border border-port-error hover:bg-port-error/20 text-sm">
+            Retry
+          </button>
         </div>
       )}
       {layoutsError && (

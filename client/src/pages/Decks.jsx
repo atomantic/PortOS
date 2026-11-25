@@ -8,7 +8,7 @@
  */
 
 import { sortByLabel } from '../lib/sortByLabel.js';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Globe, Plus, Spade, Trash2 } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
@@ -27,29 +27,20 @@ import { listUniverseSummaries } from '../services/apiUniverseBuilder.js';
 
 const INPUT_CLASS = 'w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent';
 
+const fetchDecks = () => listDecks({ silent: true });
+
 export default function Decks() {
   const navigate = useNavigate();
-  const [decks, setDecks] = useState([]);
+  const { items: decks, state: decksState, error: decksError, retry: retryDecks, setItems: setDecks } = useListResource(fetchDecks);
   const fetchUniverses = useCallback(() => listUniverseSummaries({ silent: true }), []);
   const universesResource = useListResource(fetchUniverses);
   const { items: universes } = universesResource;
-  const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [confirmingId, setConfirmingId] = useState(null);
   const [name, setName] = useState('');
   const [kind, setKind] = useState(DECK_KIND.TAROT);
   const [universeId, setUniverseId] = useState('');
   const [seedStyle, setSeedStyle] = useState(true);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    const rows = await listDecks({ silent: true }).catch(() => null);
-    if (rows) setDecks(Array.isArray(rows) ? rows : []);
-    else toast.error('Failed to load decks');
-    setLoading(false);
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
 
   const handleCreate = async (event) => {
     event.preventDefault();
@@ -121,8 +112,10 @@ export default function Decks() {
           </button>
         </form>
 
-        {loading ? (
+        {decksState === 'loading' ? (
           <PageSkeleton header="none" label="Loading decks" cards={3} sidebar={false} />
+        ) : decksState === 'error' ? (
+          <ListLoadError what="decks" error={decksError} onRetry={retryDecks} />
         ) : decks.length === 0 ? (
           <EmptyState
             icon={Spade}

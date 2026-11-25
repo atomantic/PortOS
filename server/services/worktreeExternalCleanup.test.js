@@ -1,4 +1,5 @@
 /** Real separate-repository fixtures for the public scheduled cleanup consumer. */
+// test-memo: git-fixture — git only ever runs in repositories this suite creates under the temp directory (docs/TEST_MEMO_GIT_FIXTURES.md).
 // Git/filesystem are synthetic in this suite; real durable admission has its own boundary tests.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'child_process';

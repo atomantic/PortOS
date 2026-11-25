@@ -6,6 +6,7 @@
  * persist it together with the proposed guidance.
  */
 
+import { PROVIDERS_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import { randomUUID } from 'crypto';
 import { parseLLMJSON, resolveAPIProvider } from './aiProvider.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -30,6 +31,26 @@ const listDiff = (before, after) => {
     changed: JSON.stringify(before) !== JSON.stringify(after),
   };
 };
+
+/**
+ * The style guide a model response proposes. A locked field keeps its current value
+ * verbatim whatever the model returned, and so does one the response omits or
+ * mistypes; the adopt write re-checks locks against the freshest persisted record.
+ */
+export function mergeStyleProposal({ styleNotes, influences, locked }, parsed) {
+  const proposed = parsed?.influences && typeof parsed.influences === 'object' ? parsed.influences : {};
+  const influence = (key, isLocked) => (!isLocked && Array.isArray(proposed[key])
+    ? sanitizeInfluences({ [key]: proposed[key] })[key]
+    : influences[key]);
+  const notes = !locked.styleNotes && typeof parsed?.styleNotes === 'string' ? parsed.styleNotes : styleNotes;
+  return {
+    styleNotes: trimTo(notes, STYLE_NOTES_MAX),
+    influences: {
+      embrace: influence('embrace', locked.influencesEmbrace),
+      avoid: influence('avoid', locked.influencesAvoid),
+    },
+  };
+}
 
 export function buildStyleReferenceDiff(current, proposed) {
   const beforeInfluences = sanitizeInfluences(current?.influences);
@@ -94,7 +115,7 @@ export async function analyzeUniverseStyleReference({
   }
   const provider = await resolveAPIProvider(providerId);
   assertProvider(provider, {
-    message: 'Analyzing an art reference needs an API-based provider with a vision-capable model. Configure one under Settings → Providers.',
+    message: `Analyzing an art reference needs an API-based provider with a vision-capable model. Configure one under ${PROVIDERS_PAGE_BREADCRUMB}.`,
     code: 'NO_API_PROVIDER',
     status: 503,
   });
@@ -129,28 +150,7 @@ export async function analyzeUniverseStyleReference({
       code: 'VISION_EMPTY',
     });
   }
-  const parsedInfluences = parsed?.influences && typeof parsed.influences === 'object'
-    ? parsed.influences
-    : {};
-  const proposed = {
-    styleNotes: safeLocked.styleNotes
-      ? trimTo(styleNotes, STYLE_NOTES_MAX)
-      : (typeof parsed?.styleNotes === 'string'
-        ? trimTo(parsed.styleNotes, STYLE_NOTES_MAX)
-        : trimTo(styleNotes, STYLE_NOTES_MAX)),
-    influences: {
-      embrace: safeLocked.influencesEmbrace
-        ? currentInfluences.embrace
-        : (Array.isArray(parsedInfluences.embrace)
-          ? sanitizeInfluences({ embrace: parsedInfluences.embrace }).embrace
-          : currentInfluences.embrace),
-      avoid: safeLocked.influencesAvoid
-        ? currentInfluences.avoid
-        : (Array.isArray(parsedInfluences.avoid)
-          ? sanitizeInfluences({ avoid: parsedInfluences.avoid }).avoid
-          : currentInfluences.avoid),
-    },
-  };
+  const proposed = mergeStyleProposal({ styleNotes, influences: currentInfluences, locked: safeLocked }, parsed);
 
   return {
     reference: {

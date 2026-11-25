@@ -26,6 +26,7 @@ import TribeCircleMap from '../components/tribe/TribeCircleMap.jsx';
 import TribeStatsBar from '../components/tribe/TribeStatsBar';
 import { safeReadStorage, safeRemoveStorage } from '../lib/safeStorage.js';
 import { STATUS_FILTER_IDS, matchesStatusFilter, ringFor, tagsToArray, tagsToInput } from '../lib/tribe.js';
+import { useSingleFlight } from '../hooks/useSingleFlight';
 
 const STORAGE_KEY = 'portos-tribe-v1';
 const TABS = [
@@ -273,7 +274,7 @@ export default function Tribe() {
     }, { replace: true });
   };
 
-  const logTouch = async (id) => {
+  const logTouch = useSingleFlight(async (id) => {
     const now = new Date();
     const date = localDateStr(now);
     const result = await createTribeTouchpoint(id, {
@@ -284,7 +285,7 @@ export default function Tribe() {
     if (!result?.id) return;
     setContacts((current) => current.map((contact) => (contact.id === id ? { ...contact, lastContact: date } : contact)));
     if (draft.id === id) setDraft((current) => ({ ...current, lastContact: date, loadedLastContact: date }));
-  };
+  }, (id) => id);
 
   const clearFilters = () => { setQuery(''); setRingFilter('all'); setStatusFilter(DEFAULT_STATUS); };
   const formProps = { draft, onChange: setDraft, onSave: saveDraft, onDelete: deleteDraft, onNew: startNewRelationship, isExisting: Boolean(draft.id), saving, deleting, nameInputRef, formRef };

@@ -1,3 +1,4 @@
+import { inputClass } from '../../../musicVideo/controlClasses.js';
 import CodeAuthoringPicker from '../../../musicVideo/CodeAuthoringPicker.jsx';
 import MediaModePicker from '../../../musicVideo/MediaModePicker.jsx';
 import MusicVideoLlmStagesPicker from '../../../musicVideo/MusicVideoLlmStagesPicker.jsx';
@@ -11,8 +12,6 @@ import useProviderModels from '../../../../hooks/useProviderModels';
 import {
   AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_CHECKPOINT_LABELS, autopilotDraftFromParams, autopilotParamsFromDraft,
 } from '../../../../lib/musicVideoAutonomous';
-
-const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 
 /**
  * Settings for the `music-video-autopilot` scheduled task, stored in

@@ -11,9 +11,7 @@ vi.mock('../../services/apiImageVideo', () => ({
   startTopazUpscale: vi.fn(),
 }));
 
-vi.mock('../ui/Toast', () => ({
-  default: { loading: vi.fn(), success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 const ITEM = { id: 'video-1' };
 

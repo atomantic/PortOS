@@ -20,6 +20,9 @@ vi.mock('../../services/socket', () => ({
   },
 }));
 
+// OutputTab only needs Link to render an href; the tests mount it without a router.
+vi.mock('react-router', () => ({ Link: ({ to, children, ...rest }) => <a href={to} {...rest}>{children}</a> }));
+
 import OutputTab from './OutputTab.jsx';
 
 beforeEach(() => {
@@ -134,6 +137,7 @@ describe('OutputTab live socket output', () => {
     getFeatureAgentOutput.mockResolvedValue({ output: 'initial', agentId: 'run-1' });
 
     render(<OutputTab agent={{ id: 'agent-a', currentAgentId: 'run-1' }} />);
+    expect(screen.getByRole('link', { name: 'run-1' })).toHaveAttribute('href', '/cos/agents/run-1');
     await act(async () => {});
 
     expect(screen.getByText(/initial/)).toBeInTheDocument();

@@ -8,13 +8,14 @@
 import { posix } from 'node:path';
 import { staticEdges } from '../sourceTokens.js';
 import {
-  CALL_SITE_CHECKED_READERS, DIR_READ_CALLEES, GIT_SPAWN, JS_EXT, MOCK_CALLEES, MOCK_REGISTER_CALLEES, NEVER_MARKER,
+  CALL_SITE_CHECKED_READERS, DIR_READ_CALLEES, GIT_FIXTURE_MARKER, GIT_SPAWN, JS_EXT, MOCK_CALLEES, MOCK_REGISTER_CALLEES, NEVER_MARKER,
   NON_READ_CALLEES, PATH_JOIN, PATH_LIKE_LITERAL, READ_CALLEES, SOURCE_READERS, SPAWN_CALLEES,
 } from './constants.js';
 import {
   bindingValue, collectBindings, evaluate, evaluateArgs, importsNamed, mockedSpecifiers, namedImports, namedInImportList, replacedSources, widestPathExpression,
 } from './evaluator.js';
 import { CLIMBS, isCryptoModule, isGuardModule, normalizeRel, openReadReason, unfollowedReason, variableCombinations } from './pathValues.js';
+import { gitFixtureDeclaration, startsGitThroughName } from './gitFixture.js';
 import { packageNameOf } from './specifiers.js';
 import { isPunct, isWord, matchBrackets, tokenArrays, tokenizeModule } from './tokens.js';
 
@@ -47,6 +48,10 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null, export
   for (let i = 0; i < tokens.length; i += 1) {
     if (!checkedBodies.some(([from, to]) => from < i && i < to)) scanToken(x, i);
   }
+  // Last, so these readings change nothing the scan recorded. A program that is a name holding
+  // 'git', or a parameter a caller passes it as, starts git like a literal one (#18634).
+  if (!facts.git && startsGitThroughName(x)) facts.git = true;
+  if (GIT_FIXTURE_MARKER.test(src)) noteGitFixture(x, src);
   return facts;
 }
 
@@ -66,6 +71,8 @@ function emptyFacts(src) {
     tools: new Set(), // external programs reached (TEST_MEMO_TOOLS)
     never: NEVER_MARKER.test(src),
     git: false,
+    gitFixture: false, // the file declares its git repositories fixtures and nothing in it says otherwise (`gitFixture.js`)
+    gitFixtureProblem: null, // why a declaration it does make was refused
     trusts: new Set(), // specifiers of the modules whose constants named a read: a member that mocks one voids it (`gather`)
   };
 }
@@ -111,6 +118,26 @@ function scanCodeText({ tokens, facts }) {
   if (/\bimport \. meta \. glob\b/.test(code)) facts.unresolvedEdges.push('import.meta.glob');
   // The browser suites resolve Chrome through CHROME_PATH or playwright-core.
   if (/\bCHROME_PATH\b/.test(code) || facts.edges.some((edge) => packageNameOf(edge.spec) === 'playwright-core')) facts.tools.add('chrome');
+  // The suites pass a resolved path to execFile, so there may be no literal command.
+  if (/\bawait findFfmpeg \(/.test(code)) facts.tools.add('ffmpeg');
+}
+
+/**
+ * A file that declares its git repositories fixtures: the declaration stands
+ * only when at least one git call was read and none contradicts it.
+ */
+function noteGitFixture({ tokens, match, ctx, facts }, src) {
+  const { declared, problem, calls } = gitFixtureDeclaration({ src, tokens, match, ctx });
+  if (!declared) return;
+  // A repository directory handed to code this file does not define (`commit(process.cwd(), …)`,
+  // `{ repoPath: ROOT }`) is where that code runs git, if it runs any: nothing here can tell.
+  // What the declaration's reading takes for a git call (a shell handed a git command line) puts the
+  // file under the git rule even where that rule alone would not: the file says it runs git.
+  if (calls > 0) facts.git = true;
+  const [handed] = facts.handedDirs;
+  facts.gitFixtureProblem = calls === 0 ? 'no git call the analyzer can read'
+    : problem ?? (handed === undefined ? null : `hands the repository directory ${handed || '<repo root>'} to code that may run git there`);
+  facts.gitFixture = facts.gitFixtureProblem === null;
 }
 
 function literalArg(source, brackets, open) {

@@ -34,11 +34,6 @@ export const HAILUO_VIDEO_PROMPT_GUIDANCE = [
   'Include the subject action, camera movement, timing or progression, lighting/atmosphere, and intended final beat. Keep the final render prompt under MiniMax’s 2000-character prompt limit.',
 ].join(' ');
 
-export function isMiniMaxVideoModel(modelId) {
-  return typeof modelId === 'string'
-    && (MINIMAX_H3_MODEL_PATTERN.test(modelId.trim()) || HAILUO_MODEL_PATTERN.test(modelId.trim()));
-}
-
 export function buildVideoPromptGuidance(modelId) {
   const normalized = typeof modelId === 'string' ? modelId.trim() : '';
   const modelLine = MINIMAX_H3_MODEL_PATTERN.test(normalized)

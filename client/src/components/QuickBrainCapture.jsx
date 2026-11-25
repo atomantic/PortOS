@@ -94,6 +94,8 @@ export default function QuickBrainCapture() {
     const note = linkNote.trim();
 
     if (isYoutube) {
+      // One ingest at a time; a thought is never held up by it.
+      if (ingest.active) return;
       if (nothingSelected) {
         toast.error('Pick at least one of transcript, video, or audio');
         return;
@@ -260,7 +262,7 @@ export default function QuickBrainCapture() {
         )}
         <button
           type="submit"
-          disabled={!input.trim() || isSubmitting || ingest.active}
+          disabled={!input.trim() || isSubmitting || (isYoutube && ingest.active)}
           aria-label="Capture"
           className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center gap-1 px-3 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 min-h-[40px]"
         >

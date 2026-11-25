@@ -22,7 +22,7 @@ vi.mock('../../services/apiSystem.js', () => ({
   searchJiraEpics: api.searchJiraEpics,
 }));
 vi.mock('../../services/apiApps.js', () => ({ updateApp: api.updateApp }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const app = { id: 'app-1', jira: { enabled: true } };
 const renderPanel = () => render(<MemoryRouter><JiraConfigPanel app={app} onSaved={() => {}} /></MemoryRouter>);
@@ -50,6 +50,16 @@ describe('JiraConfigPanel', () => {
     renderPanel();
     expect(await screen.findByText(/No JIRA instances configured/)).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('defaults the assignee when an instance is picked and lets it be cleared', async () => {
+    api.getJiraInstances.mockResolvedValue({ instances: { i1: { id: 'i1', name: 'Example', baseUrl: 'https://jira.example.com', email: 'bot@example.com' } } });
+    renderPanel();
+    fireEvent.change(await screen.findByLabelText('JIRA Instance'), { target: { value: 'i1' } });
+    const assignee = await screen.findByLabelText('Assignee');
+    expect(assignee).toHaveValue('bot@example.com');
+    fireEvent.change(assignee, { target: { value: '' } });
+    expect(assignee).toHaveValue('');
   });
 
   describe('with an instance selected', () => {

@@ -62,34 +62,6 @@ export async function addVault({ name, path }) {
   return vault;
 }
 
-export async function removeVault(id) {
-  const vaults = await getVaults();
-  const index = vaults.findIndex(v => v.id === id);
-  if (index === -1) return false;
-
-  const removed = vaults.splice(index, 1)[0];
-  await saveVaults(vaults);
-  console.log(`📓 Removed Obsidian vault: ${removed.id}`);
-  return true;
-}
-
-export async function updateVault(id, updates) {
-  const vaults = await getVaults();
-  const vault = vaults.find(v => v.id === id);
-  if (!vault) return null;
-
-  if (updates.name) vault.name = updates.name;
-  if (updates.path) {
-    if (!await pathExists(updates.path)) {
-      return { error: 'PATH_NOT_FOUND', message: `Directory not found: ${updates.path}` };
-    }
-    vault.path = updates.path;
-  }
-
-  await saveVaults(vaults);
-  return vault;
-}
-
 // Resolve `notePath` against `vault.path` and confirm the result is still
 // contained within the vault after symlinks are followed. Returns the
 // containable full path or null if the path escapes (including via symlinks,
@@ -187,8 +159,8 @@ export async function detectVaults(baseDir = DEFAULT_ICLOUD_OBSIDIAN) {
 // Returns `null` for an evicted note so each caller can skip it and degrade to
 // partial results, rather than failing the whole scan/search. Every other error
 // still propagates unchanged.
-async function readNoteContent(fullPath, skipped) {
-  return readIfMaterialized(fullPath, { label: 'Obsidian note' }).catch((err) => {
+async function readNoteContent(fullPath, skipped, readOptions = {}) {
+  return readIfMaterialized(fullPath, { label: 'Obsidian note', ...readOptions }).catch((err) => {
     if (err.code === ICLOUD_NOT_MATERIALIZED) {
       console.log('☁️ Obsidian note evicted from local storage; skipping');
       if (skipped) skipped.count += 1;
@@ -226,6 +198,8 @@ export async function scanVault(vaultId, { folder } = {}) {
  * Light scan: reads only file stats and first ~1KB for frontmatter/tags.
  * Skips full content parsing for performance on large vaults.
  */
+const METADATA_WINDOW = 2048;
+
 async function walkDir(rootPath, currentPath, results, folderFilter, skipped) {
   const entries = await readdir(currentPath, { withFileTypes: true });
 
@@ -247,9 +221,10 @@ async function walkDir(rootPath, currentPath, results, folderFilter, skipped) {
       const stats = await stat(fullPath);
 
       // Read only first 2KB for frontmatter + inline tags (skip full content)
-      const fd = await readNoteContent(fullPath, skipped);
+      // 4 bytes/code unit upper bound, so the decoded slice matches a full read.
+      const fd = await readNoteContent(fullPath, skipped, { prefixBytes: METADATA_WINDOW * 4 });
       if (fd === null) continue;
-      const header = fd.length > 2048 ? fd.slice(0, 2048) : fd;
+      const header = fd.length > METADATA_WINDOW ? fd.slice(0, METADATA_WINDOW) : fd;
       const { frontmatter, tags } = parseNoteMetadata(header);
 
       results.push({

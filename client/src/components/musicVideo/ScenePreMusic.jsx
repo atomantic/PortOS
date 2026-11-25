@@ -1,3 +1,4 @@
+import { selectXsClass as control } from './controlClasses.js';
 import { useEffect, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import {
@@ -15,7 +16,6 @@ const fetchTracks = async () => {
   const data = await listTracks({ silent: true });
   return Array.isArray(data) ? data : data?.tracks || [];
 };
-const control = 'bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 const percent = (v) => `${Math.round(v * 100)}%`;
 
 /** A level slider that keeps its own value while dragging and saves once it is let go. */

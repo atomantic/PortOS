@@ -1,5 +1,6 @@
 // Editorial checks — research group. Extracted from checkRegistry.js (#1829).
 // Each entry is a declarative check; see ../README.md and ../checkInfra.js.
+import { findingCapField, findingCapSchema } from '../checkInfra/findingCap.js';
 import { hasManuscript } from '../checkInfra/gates.js';
 import {
   FACT_ACCURACY_STAGE,
@@ -36,21 +37,8 @@ export const researchChecks = [
     // Reads the stitched manuscript corpus — so the runner only pays the
     // section-collection I/O when a manuscript-consuming check is enabled.
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long manuscript can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     // Gate on BOTH the per-series fact-critical opt-in AND a non-empty author
     // fact reference (plus a non-empty manuscript). Without a reference there's
     // nothing authoritative to reconcile against, and the flag keeps the check
@@ -89,21 +77,8 @@ export const researchChecks = [
     // Reads the stitched manuscript corpus — so the runner only pays the
     // section-collection I/O when a manuscript-consuming check is enabled.
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long manuscript can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     gate: hasManuscript,
     run: (ctx) => {
       // Both blocks are fixed per-call overhead (re-sent on each chunk) and pure

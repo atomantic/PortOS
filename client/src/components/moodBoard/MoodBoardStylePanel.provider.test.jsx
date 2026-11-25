@@ -34,9 +34,7 @@ vi.mock('../../services/socket', () => ({
   },
 }));
 
-vi.mock('../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
-}));
+vi.mock('../ui/Toast');
 
 vi.mock('../ProviderModelSelector', () => ({ default: ({ selectedModel, onModelChange, availableModels }) => <select aria-label="Analysis model" value={selectedModel} onChange={event => onModelChange(event.target.value)}>{availableModels.map(model => <option key={model}>{model}</option>)}</select> }));
 vi.mock('../pipeline/MediaJobThumb', () => ({ default: () => <div>rendering</div> }));

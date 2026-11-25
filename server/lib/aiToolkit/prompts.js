@@ -44,7 +44,7 @@ export function createPromptsService(config = {}) {
           if (typeof item === 'object') {
             return applyTemplate(content, item);
           }
-          return content.replace(/\{\{\.\}\}/g, item);
+          return content.replace(/\{\{\.\}\}/g, () => item);
         }).join('');
       }
       return applyTemplate(content, data);

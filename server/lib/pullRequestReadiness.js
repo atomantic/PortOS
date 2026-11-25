@@ -26,12 +26,24 @@ export function classifyChecks(statusCheckRollup) {
   return 'pending';
 }
 
+export const checkName = check => check?.name || check?.context || null;
+
 /**
  * @param {{state?: string, isDraft?: boolean, isCrossRepository?: boolean, reviewDecision?: string|null,
  *   mergeable?: string, statusCheckRollup?: Array<object>}|null|undefined} view - needs every listed field
+ * @param {Iterable<string>|null} [requiredCheckNames] - names branch protection requires; when given, advisory
+ *   checks are ignored. null/omitted judges every check in the rollup, the fail-closed default when the forge's
+ *   required set could not be read. An empty set leaves nothing to classify, so it stays `pending`, never `green`.
  * @returns {boolean}
  */
-export function awaitsRequiredHumanReview(view) {
+export function awaitsRequiredHumanReview(view, requiredCheckNames = null) {
+  if (requiredCheckNames) {
+    const required = new Set(requiredCheckNames);
+    const rollup = (Array.isArray(view?.statusCheckRollup) ? view.statusCheckRollup : []).filter(check => required.has(checkName(check)));
+    // A required check the lookup knows but the rollup lacks has not reported here yet: not green.
+    if (new Set(rollup.map(checkName)).size < required.size) return false;
+    return awaitsRequiredHumanReview({ ...view, statusCheckRollup: rollup });
+  }
   return view?.state === 'OPEN' && view.isDraft === false && view.isCrossRepository === false
     && view.reviewDecision === 'REVIEW_REQUIRED' && view.mergeable !== 'CONFLICTING'
     && classifyChecks(view.statusCheckRollup) === 'green';

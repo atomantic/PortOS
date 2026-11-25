@@ -1,4 +1,4 @@
-import { it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../lib/imageCleanDefaults.js', () => ({
   resolveImageCleaners: vi.fn(() => ({ cleanC2PA: false, denoise: false })),
@@ -28,13 +28,15 @@ vi.mock('../lib/mediaModels.js', async (importOriginal) => ({
   getImageModels: (...args) => mocks.getImageModels(...args),
 }));
 
-import { renderCharacterReferenceSheet } from './universeCharacterSheet.js';
-
-
+import { registerBootHooks } from './bootHooks.js';
+import { createMediaJobHookLoader } from './mediaJobQueue/hookRegistry.js';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
-import { __testing as slots } from './universeCharacterSheetSlot.js';
+import { claimPendingSheetSlot, getPendingSheetSlot, __testing as slots } from './universeCharacterSheetSlot.js';
+
+const renderCharacterReferenceSheet = async (...args) => (await import('./universeCharacterSheet.js')).renderCharacterReferenceSheet(...args);
 
 let universe;
+beforeAll(() => registerBootHooks());
 beforeEach(() => {
   vi.clearAllMocks();
   slots.reset();
@@ -52,6 +54,29 @@ const queuedJob = (index = 0) => ({ id: `job-${index + 1}`, params: structuredCl
 const completed = (job = queuedJob()) => mediaJobEvents.emit('completed', job);
 afterEach(() => vi.useRealTimers());
 const publication = () => new Promise(resolve => mediaJobEvents.once('reference-sheet:changed', resolve));
+
+it('publishes from persisted job metadata after boot without a route, subscriber or pending slot', async () => {
+  const requestId = '11111111-1111-4111-8111-111111111111';
+  universe.characters[0].referenceSheetRequests = { blueprint: requestId };
+  const job = { id: 'recovered-job', params: { characterSheet: {
+    universeId: 'universe-1', entryId: 'character-1', variant: 'blueprint', requestId,
+  } }, result: { filename: 'recovered.png' } };
+  await createMediaJobHookLoader()(job);
+  const result = publication();
+  expect(completed(job)).toBe(true);
+  expect(await result).toMatchObject({ jobId: 'recovered-job', variant: 'blueprint', status: 'ready' });
+  expect(mocks.copy).toHaveBeenCalledOnce();
+  expect(universe.characters[0].referenceSheets.blueprint).toContain('recovere');
+});
+
+it.each(['failed', 'canceled'])('releases the pending sheet slot after a %s job', async (outcome) => {
+  const tag = { universeId: 'universe-1', entryId: 'character-1', variant: 'blueprint' };
+  const job = { id: 'job-1', params: { characterSheet: tag } };
+  claimPendingSheetSlot(tag.universeId, tag.entryId, job.id, tag.variant);
+  await createMediaJobHookLoader()(job);
+  mediaJobEvents.emit(outcome, job);
+  expect(getPendingSheetSlot(tag.universeId, tag.entryId, tag.variant)).toBeUndefined();
+});
 
 it('announces readiness only after the destination copy and pointer persistence, with correlated recovery state', async () => {
   let finishCopy;
@@ -83,18 +108,6 @@ it('reports copy failure and releases pending state for reconnect recovery', asy
   completed();
   expect(await result).toMatchObject({ jobId: 'job-1', status: 'failed' });
   expect(mocks.update).toHaveBeenCalledTimes(1); // Only the durable request claim.
-});
-
-it('publishes from persisted job metadata after restart without a subscriber or pending slot', async () => {
-  const requestId = '11111111-1111-4111-8111-111111111111';
-  universe.characters[0].referenceSheetRequests = { blueprint: requestId };
-  const result = publication();
-  completed({ id: 'recovered-job', params: { characterSheet: {
-    universeId: 'universe-1', entryId: 'character-1', variant: 'blueprint', requestId,
-  } }, result: { filename: 'recovered.png' } });
-  expect(await result).toMatchObject({ jobId: 'recovered-job', variant: 'blueprint', status: 'ready' });
-  expect(mocks.copy).toHaveBeenCalledOnce();
-  expect(universe.characters[0].referenceSheets.blueprint).toContain('recovere');
 });
 
 it('releases an expired listener slot and still publishes its later completion', async () => {

@@ -5,12 +5,12 @@ import LookReferencesPanel from './LookReferencesPanel.jsx';
 import { getMoodBoard } from '../../services/apiMoodBoard.js';
 import { labelMusicVideoReferencesFromCatalog } from '../../services/apiMusicVideo.js';
 
-vi.mock('../../services/apiMoodBoard.js', () => ({ getMoodBoard: vi.fn() , listMoodBoards: vi.fn(async () => []), createMoodBoard: vi.fn() }));
+vi.mock('../../services/apiMoodBoard.js', () => ({ getMoodBoard: vi.fn() , listMoodBoards: vi.fn(async () => []), listMoodBoardNames: vi.fn(async () => []), createMoodBoard: vi.fn() }));
 vi.mock('../../services/apiMusicVideo.js', () => ({ labelMusicVideoReferencesFromCatalog: vi.fn() }));
 vi.mock('../../services/apiUniverseBuilder.js', () => ({ getUniverse: vi.fn() }));
 vi.mock('../../services/apiSystem.js', () => ({ uploadGalleryImage: vi.fn(async () => ({ filename: 'uploaded.png' })) }));
 vi.mock('../../utils/fileUpload.js', () => ({ IMAGE_ACCEPT: 'image/png,image/jpeg,image/webp', readFileAsBase64: vi.fn(async () => 'encoded'), validateImageFile: vi.fn(() => null) }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const mount = (project, props = {}) => render(
   <MemoryRouter>

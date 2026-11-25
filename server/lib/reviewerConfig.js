@@ -9,7 +9,7 @@ import { providersForReviewer } from './reviewerProviderMatchers.js';
 import { ANTIGRAVITY_COMMAND } from './antigravity.js';
 import { CURSOR_COMMAND } from './cursor.js';
 import { PR_COMPLETIONS } from './prDisposition.js';
-import { activeReviewerGroupIndex, isReviewerConfigFault } from './reviewerHealth.js';
+import { activeReviewerGroupIndex } from './reviewerHealth.js';
 export { isReviewerConfigFault } from './reviewerHealth.js';
 
 // Reviewer choices for the Review Loop. `copilot` requests a native GitHub Copilot review;
@@ -46,27 +46,6 @@ export const FORGE_REVIEWER_WAIT_NOTE = 'An `@<login>` is often a person, not a 
  * spelled out at each one it drifts.
  */
 export const ZERO_REVIEWER_COVERAGE_NOTE = 'No reviewer reviewed this branch — every configured reviewer returned a configuration fault. The review loop is currently a no-op. Check Settings → Code Reviewers for the setting that fixes each reviewer.';
-
-/**
- * Did any configured reviewer produce a verdict this run? Inputs: the configured reviewer list and
- * a map of per-reviewer statuses from the run, where each value is either `{ code }` (a fault code
- * from `REVIEWER_CONFIG_FAULT_CODES`) or `{ verdict }` (a real result).
- * @param {string[]} reviewers - the configured reviewer list for this run
- * @param {Object<string, { code?: string, verdict?: string }>} perReviewerStatus
- *   - per-reviewer status map keyed by reviewer token
- * @returns {boolean}
- */
-export function hasReviewerCoverage(reviewers, perReviewerStatus) {
-  const list = Array.isArray(reviewers) ? reviewers : [];
-  if (!list.length) return false;
-  const statuses = perReviewerStatus && typeof perReviewerStatus === 'object' ? perReviewerStatus : {};
-  return list.some(reviewer => {
-    const status = statuses[reviewer] || statuses[reviewer?.toLowerCase?.()];
-    if (!status || typeof status !== 'object') return false; // no status recorded = did not run
-    if (isReviewerConfigFault(status.code)) return false;
-    return typeof status.verdict === 'string' && status.verdict.trim().length > 0;
-  });
-}
 
 /**
  * Vendors PortOS can spawn that are deliberately NOT reviewers, each mapped to the reason. The

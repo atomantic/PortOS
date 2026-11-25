@@ -43,6 +43,8 @@ const isMainRun = (run) => run?.head_branch === 'main' && MAIN_EVENTS.has(run.ev
 const positiveInteger = (value) => Number.isSafeInteger(value) && value > 0;
 const HEX_SHA = /^[0-9a-f]{7,40}$/i;
 const GATE_JOB_NAMES = new Set(['CI Gate', 'Full CI Gate']);
+// The primary server suite runs on every complete main plan and is skipped by the generated-snapshot plan (#18457).
+const FULL_PLAN_EVIDENCE_JOB = /^Server tests \(/;
 
 const MERGE_COMMIT_RE = /^Merge pull request #(\d+) from \S+/;
 const SQUASH_SUFFIX_RE = /\(#(\d+)\)$/;
@@ -173,6 +175,14 @@ async function readNewerVerdict(run, target, fetchImpl, logger) {
     if (!attempt || attempt.id !== run.id || attempt.run_attempt !== previous
       || attempt.status !== 'completed' || typeof attempt.conclusion !== 'string') return null;
   }
+}
+
+/** Whether a green run proved the complete primary plan (a generated-snapshot push is green without it); null when the jobs cannot be read. */
+async function ranFullPlan(run, target, fetchImpl) {
+  const outcomes = await fetchRunJobOutcomes(fetchImpl, {
+    ...target, runId: String(run.id), runAttempt: run.run_attempt, timeoutMs: API_TIMEOUT_MS,
+  });
+  return outcomes ? outcomes.succeeded.some((name) => FULL_PLAN_EVIDENCE_JOB.test(name)) : null;
 }
 
 /**
@@ -374,6 +384,13 @@ export async function reportMainHealth({
     if (!outcomes) return syncFailure(`jobs for CI run #${runId} attempt ${current.run_attempt} could not be read.`);
     existing = await findOpenMainRedIssue(target, fetchImpl, logger);
     if (existing === undefined) return syncFailure('the open issue list could not be read.');
+  }
+
+  const fullPlan = red ? true : await ranFullPlan(current, target, fetchImpl);
+  if (fullPlan === null) return syncFailure(`jobs for CI run #${runId} could not be read.`);
+  if (!fullPlan) {
+    logger.log(`⏭️ Main health skipped: run #${runId} was scoped (no server suite ran), so it cannot close the alert.`);
+    return noChange;
   }
 
   const { action, ok } = await syncMainRedIssue({ existing, red, target, fetchImpl, logger, body: issueBody, runUrl, head });

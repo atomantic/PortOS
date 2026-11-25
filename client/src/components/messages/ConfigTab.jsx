@@ -39,7 +39,7 @@ Additional instructions: {{instructions}}
 
 Write a professional, concise reply. Match the tone of the original message.`;
 
-export default function ConfigTab({ accounts, setAccounts }) {
+export default function ConfigTab({ accounts, setAccounts, accountsUnavailable = false }) {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: '', type: 'gmail', email: '' });
   const [saving, setSaving] = useState(false);
@@ -279,6 +279,8 @@ export default function ConfigTab({ accounts, setAccounts }) {
       <p className="text-xs text-gray-500 mb-3">{description}</p>
       {hook.loading ? (
         <RefreshCw size={16} className="text-port-accent animate-spin" />
+      ) : hook.error && hook.providers.length === 0 ? (
+        <ListLoadError what="AI providers" error={hook.error} onRetry={hook.retry} />
       ) : hook.providers.length === 0 ? (
         <p className="text-sm text-gray-500">No AI providers configured. Add one in AI Providers.</p>
       ) : (
@@ -511,7 +513,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
           </div>
         )}
 
-        {accounts.length === 0 && !showForm && (
+        {!accountsUnavailable && accounts.length === 0 && !showForm && (
           <div className="text-center py-12 text-gray-500">
             <Mail size={48} className="mx-auto mb-4 opacity-50" />
             <p>No accounts configured</p>

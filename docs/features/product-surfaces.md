@@ -42,7 +42,6 @@ Manage local applications, terminal environments, system resources, and develope
 | **JIRA Sprint Manager & Reports** | `/devtools/jira`, `/devtools/jira/reports` | JIRA sprint planning, active board triage, backlog management, velocity metrics, and sprint burndown reports. | [JIRA Sprint Manager](./jira-sprint-manager.md) |
 | **DataDog Monitoring** | `/devtools/datadog` | APM dashboard, service error tracking, latency metrics, and synthetic monitoring. | — |
 | **GSD Project Planning** | `/cos/gsd`, app tab | "Get Stuff Done" hierarchical milestone tracking, project breakdown, and execution roadmaps. | — |
-| **Integration Flows** | `/devtools/flows` | Interactive visual architecture diagrams showing live data flows between PortOS subsystems and external services. | [ARCHITECTURE.md](../ARCHITECTURE.md) |
 | **Browser Control** | `/browser` | Persistent managed Chrome instance over Chrome DevTools Protocol (CDP) for automated web extraction, UI testing, and assisted browsing. | [Browser Management](./browser.md) |
 | **Image Cleaner** | `/devtools/image-clean` | Strips metadata, C2PA, and Content Credentials from images; Sharp-based image optimization and denoising. | — |
 | **Video Downloader** | `/devtools/video-download` | Video and audio capture from YouTube, X.com, and web links via `yt-dlp`. | — |

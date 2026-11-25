@@ -195,33 +195,4 @@ describe('Provider runtime installer routes', () => {
     expect(installer.getProviderRuntimeStatus).not.toHaveBeenCalled();
     expect(launch).not.toHaveBeenCalled();
   });
-
-  // A deployed client/dist can lag the server across an upgrade, so the
-  // OpenCode-only endpoints keep answering in their original shape.
-  it('keeps the legacy OpenCode status endpoint answering', async () => {
-    installer.getProviderRuntimeStatus.mockResolvedValueOnce(statusOf('opencode'));
-
-    const response = await request(app()).get('/api/providers/opencode/installation');
-
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual({ installed: false, npmAvailable: true });
-  });
-
-  it('routes the legacy OpenCode install POST through the shared installer', async () => {
-    const child = makeChild();
-    installer.getProviderRuntimeStatus
-      .mockResolvedValueOnce(statusOf('opencode'))
-      .mockResolvedValueOnce(statusOf('opencode', { installed: true }));
-    launch.mockReturnValueOnce(child);
-
-    const responsePromise = request(app()).post('/api/providers/opencode/install').then((response) => response);
-    await vi.waitFor(() => expectLaunch('opencode'));
-    child.stdout.end();
-    child.stderr.end();
-    child.emit('close', 0);
-    const response = await responsePromise;
-
-    expect(response.status).toBe(200);
-    expect(response.text).toContain('OpenCode CLI is installed and available to PortOS.');
-  });
 });

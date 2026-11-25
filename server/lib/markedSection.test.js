@@ -2,8 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   buildMarkers,
   replaceMarkedSection,
-  extractMarkedSection,
-  hasMarkedSection,
 } from './markedSection.js';
 
 const M = buildMarkers('activity-digest');
@@ -24,6 +22,13 @@ describe('replaceMarkedSection', () => {
   it('inserts a section after existing user content, separated by a blank line', () => {
     const out = replaceMarkedSection('My hand-written notes.', 'AUTO BODY', M);
     expect(out).toBe(`My hand-written notes.\n\n${M.start}\nAUTO BODY\n${M.end}`);
+  });
+
+  it('rewrites a region with replacement patterns in its body verbatim', () => {
+    const body = "Paid $$5, ran echo $' and $& and $`";
+    const first = replaceMarkedSection('Notes above.', 'FIRST', M);
+    const out = replaceMarkedSection(`${first}\n\nNotes below.`, body, M);
+    expect(out).toBe(`Notes above.\n\n${M.start}\n${body}\n${M.end}\n\nNotes below.`);
   });
 
   it('inserts into empty content with no leading whitespace', () => {
@@ -65,7 +70,6 @@ describe('replaceMarkedSection', () => {
     const withSection = replaceMarkedSection('Kept notes.', 'AUTO', M);
     const removed = replaceMarkedSection(withSection, '', M);
     expect(removed).toBe('Kept notes.');
-    expect(hasMarkedSection(removed, M)).toBe(false);
   });
 
   it('returns content untouched when removing a section that is not present', () => {
@@ -79,25 +83,6 @@ describe('replaceMarkedSection', () => {
     // Replacing M again must leave the `other` region intact.
     const out = replaceMarkedSection(content, 'A2', M);
     expect(out).toContain('A2');
-    expect(extractMarkedSection(out, other)).toBe('B');
-  });
-});
-
-describe('extractMarkedSection / hasMarkedSection', () => {
-  it('round-trips the body', () => {
-    const content = replaceMarkedSection('notes', 'the body', M);
-    expect(hasMarkedSection(content, M)).toBe(true);
-    expect(extractMarkedSection(content, M)).toBe('the body');
-  });
-
-  it('reports absence for content without markers', () => {
-    expect(hasMarkedSection('plain text', M)).toBe(false);
-    expect(extractMarkedSection('plain text', M)).toBeNull();
-  });
-
-  it('treats a start marker with no end as absent', () => {
-    const broken = `notes\n${M.start}\ndangling`;
-    expect(hasMarkedSection(broken, M)).toBe(false);
-    expect(extractMarkedSection(broken, M)).toBeNull();
+    expect(out).toContain(`${other.start}\nB\n${other.end}`);
   });
 });

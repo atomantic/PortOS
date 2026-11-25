@@ -11,6 +11,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { execFileSync, spawnSync } from 'child_process';
 import { PATHS } from '../../lib/fileUtils.js';
+import { cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
 import { setHttpsEnabledAtBoot } from '../../lib/httpsState.js';
 import { resolveBashBinary } from '../../lib/bashResolver.js';
 
@@ -47,6 +48,12 @@ assertProvider: (provider, { message, code, status = 503 } = {}) => {
   },
   runPromptThroughProvider: vi.fn().mockResolvedValue(null),
 }));
+// The app registry seeds data/apps.json on first read; keep that off the checkout's data/.
+vi.mock('../../lib/paths.js', async (importOriginal) => {
+  const { lazyTempDataRoot, makePathsProxy } = await import('../../lib/mockPathsDataRoot.js');
+  return makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('agent-prompt-builder-') });
+});
+afterAll(cleanupTempDataRoots);
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
   const { readFile } = await import('fs/promises');

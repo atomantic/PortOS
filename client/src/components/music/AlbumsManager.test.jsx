@@ -5,9 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 vi.mock('./ArtistPicker', () => ({ default: () => <div data-testid="artist-picker" /> }));
 vi.mock('./AlbumTrackPicker', () => ({ default: () => <div data-testid="track-picker" /> }));
 vi.mock('../imageGen/GalleryImagePicker', () => ({ default: () => null }));
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
-}));
+vi.mock('../ui/Toast');
 vi.mock('../../hooks/useMediaJobProgress', () => ({ default: () => ({ status: 'idle' }) }));
 
 const listAlbums = vi.fn();

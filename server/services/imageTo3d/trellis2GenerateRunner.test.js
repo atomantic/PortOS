@@ -2,9 +2,9 @@ import { execFileSync } from '../../lib/childProcess.js';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { trellis2GenerateRunnerScript } from './trellis2.js';
-import { trellis2FillHolesScript } from './trellis2MeshQuality.js';
 import { PY_SUBPROCESS_TIMEOUT_MS, PY_TEST_TIMEOUT_MS, resolveTestPython } from '../../lib/testHelper.js';
 
 // Probe for an interpreter that actually runs rather than assuming `python3`:
@@ -13,6 +13,7 @@ import { PY_SUBPROCESS_TIMEOUT_MS, PY_TEST_TIMEOUT_MS, resolveTestPython } from 
 // "Command failed" (see resolveTestPython).
 
 const pyBin = resolveTestPython();
+const FILL_HOLES_SCRIPT = fileURLToPath(new URL('./trellis2RestoreFillHoles.py', import.meta.url));
 
 // A stand-in for the two upstream modules the adapter patches. Records what it was
 // called with and models the one behaviour that matters: `to_glb` decimates down to
@@ -321,7 +322,7 @@ describe.skipIf(!pyBin)('trellis2RestoreFillHoles', () => {
     '',
   ].join('\n');
 
-  const patch = () => execFileSync(pyBin, [trellis2FillHolesScript(), dir],
+  const patch = () => execFileSync(pyBin, [FILL_HOLES_SCRIPT, dir],
     { encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS });
 
   // Python's `write_text` translates \n to the platform line ending, so the patched
@@ -366,7 +367,7 @@ describe.skipIf(!pyBin)('trellis2RestoreFillHoles', () => {
     // legacy locale reproduces that on any platform; without an explicit encoding= in
     // the patcher this test fails here too.
     writeFileSync(basePath(), STUBBED);
-    const out = execFileSync(pyBin, [trellis2FillHolesScript(), dir], {
+    const out = execFileSync(pyBin, [FILL_HOLES_SCRIPT, dir], {
       encoding: 'utf8',
       env: { ...process.env, PYTHONUTF8: '0', LC_ALL: 'C', LANG: 'C' },
       timeout: PY_SUBPROCESS_TIMEOUT_MS,

@@ -21,9 +21,7 @@ vi.mock('../../../services/apiPipeline.js', () => ({
   updatePipelineIssue: vi.fn(),
 }));
 
-vi.mock('../../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
-}));
+vi.mock('../../ui/Toast');
 
 // VoicePicker fetches voices on mount — stub it out so the component renders
 // without hitting the network.

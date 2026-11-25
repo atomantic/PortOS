@@ -474,6 +474,53 @@ describe('fableLoom production service', () => {
     await vi.waitFor(() => expect(getEpisodeProductionBatch(rejected.id).status).toBe('failed'));
     expect(queueMocks.enqueueJob).not.toHaveBeenCalled();
     expect(getEpisodeProductionBatch(rejected.id).error).toContain('1–800');
+    expect(getEpisodeProductionBatch(rejected.id).error).toContain('received 801');
+  });
+
+  it('replays an older Reactor recording with exclusions that were never sent', async () => {
+    const loom = structuredClone(sampleLoom);
+    const prompt = 'Match the storyboard in a continuous shot.';
+    const baseConditioning = {
+      version: 1, compilerVersion: '1.2.0', status: 'locked',
+      bindings: { characterAppearances: [], objectIds: [] },
+      assets: [], adapters: [], omitted: [], warnings: [],
+    };
+    const geometry = { width: 1024, height: 576, aspectRatio: '16:9' };
+    const still = {
+      ...baseConditioning,
+      capability: { kind: 'image', backend: 'local', modelId: 'image-model', modelRevision: 'image-revision-1' },
+      render: { parameters: { ...geometry, steps: 30, guidance: 4, quantize: '8', seed: 123 } },
+    };
+    const motion = {
+      ...baseConditioning,
+      capability: { kind: 'video', backend: 'reactor', modelId: 'reactor-video' },
+      render: { parameters: { ...geometry, seconds: 6, mode: 'reactor', videoMode: 'image' } },
+      compiledPrompt: prompt,
+      compiledNegativePrompt: 'subtitles, captions',
+    };
+    for (const node of loom.episodes[0].nodes) {
+      node.image = `${node.id}.png`;
+      node.visualConditioning = still;
+    }
+    loom.episodes[0].nodes[0].playbackAssets = {
+      visualConditioningByAsset: { 'asset-node-1-video-entry': motion },
+    };
+    records.getLoom.mockResolvedValue(loom);
+    settingsMocks.getSettings.mockResolvedValue({ videoGen: { reactor: { apiKey: 'example-key' } } });
+    visualConditioningMocks.compileFableLoomVisualRequest.mockImplementation(async ({ kind }) => (kind === 'image'
+      ? { prompt: 'Storyboard', negativePrompt: '', visualConditioning: still }
+      : { prompt, negativePrompt: '', sourceImagePath: '/example/frame.png', visualConditioning: { ...motion, compiledNegativePrompt: '' } }));
+
+    await startEpisodeProductionBatch('loom-1', 'ep-1', {
+      mode: 'exact_inputs', videoMode: 'reactor', assetTypes: ['video_entry'], nodeIds: ['node-1'],
+    });
+    await vi.waitFor(() => expect(queueMocks.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ kind: 'image' })));
+    queueMocks.mediaJobEvents.emit('completed', { id: 'job-1', result: { filename: 'node-1.png' } });
+    await vi.waitFor(() => expect(queueMocks.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'video',
+      params: expect.objectContaining({ mode: 'reactor', prompt, sourceImagePath: '/example/frame.png' }),
+    })));
+    expect(queueMocks.enqueueJob.mock.calls[1][0].params).not.toHaveProperty('negativePrompt');
   });
 
   it('refuses a batch when its selected assets are blocked', async () => {

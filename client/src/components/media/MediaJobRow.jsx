@@ -194,11 +194,23 @@ export default function JobRow({ job, snapshotRequestedAt, onCancel, onRetry, on
   const canRunNow = isQueuedCloud && typeof onRunNow === 'function';
   // Inline edit form for retry-with-overrides.
   const [editing, setEditing] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const submitRetry = async (overrides) => {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      await onRetry(job.id, overrides);
+    } finally {
+      setRetrying(false);
+    }
+  };
   // A federated job renders from the wire request inside its `remoteMedia`
   // marker, so a prompt/model edit here would never reach the peer — and the
   // server re-normalizes the retry anyway. Offer the plain Retry, not the
   // editor, rather than showing a form whose edits are silently discarded.
-  const canEdit = canRetry && job.renderer !== 'remote';
+  // The editors exist for image and video jobs only; the other kinds (audio,
+  // stitch, composition, ...) have no knob grid, so they keep the plain Retry.
+  const canEdit = canRetry && job.renderer !== 'remote' && (job.kind === 'image' || job.kind === 'video');
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const badge = modelLabel(job.params, job.renderer);
   return (
@@ -254,6 +266,7 @@ export default function JobRow({ job, snapshotRequestedAt, onCancel, onRetry, on
           )}
           {canEdit && (
             <button
+              disabled={retrying}
               onClick={() => setEditing((s) => !s)}
               className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center gap-1 px-2 py-1 bg-port-bg border rounded text-xs ${editing ? 'border-port-accent/60 text-port-accent' : 'border-port-border text-gray-500 hover:text-gray-300 hover:border-port-border'}`}
               title="Edit prompt / config, then retry"
@@ -264,7 +277,8 @@ export default function JobRow({ job, snapshotRequestedAt, onCancel, onRetry, on
           )}
           {canRetry && (
             <button
-              onClick={() => onRetry(job.id)}
+              disabled={retrying}
+              onClick={() => submitRetry(null)}
               className="flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-gray-300 hover:text-port-accent hover:border-port-accent/50"
               title="Re-queue this job with the same params"
             >
@@ -316,22 +330,18 @@ export default function JobRow({ job, snapshotRequestedAt, onCancel, onRetry, on
         {job.startedAt && ` · started ${formatTimeOfDaySeconds(job.startedAt)}`}
         {job.completedAt && ` · finished ${formatTimeOfDaySeconds(job.completedAt)}`}
       </div>
-      {editing && (job.kind === 'video' ? (
+      {editing && canEdit && (job.kind === 'video' ? (
           <VideoRetryForm
             job={job}
-            onSubmit={(overrides) => {
-              setEditing(false);
-              onRetry(job.id, overrides);
-            }}
+            retrying={retrying}
+            onSubmit={submitRetry}
             onCancel={() => setEditing(false)}
           />
         ) : (
           <EditRetryForm
             job={job}
-            onSubmit={(overrides) => {
-              setEditing(false);
-              onRetry(job.id, overrides);
-            }}
+            retrying={retrying}
+            onSubmit={submitRetry}
             onCancel={() => setEditing(false)}
           />
         ))}

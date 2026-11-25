@@ -8,12 +8,6 @@
 
 import { formatCount } from '../../utils/formatters';
 
-export const SUM_METRICS = new Set([
-  'step_count', 'active_energy', 'basal_energy_burned', 'flights_climbed',
-  'apple_exercise_time', 'apple_stand_time', 'walking_running_distance',
-  'distance_cycling', 'time_in_daylight'
-]);
-
 export const METRIC_CATEGORIES = [
   {
     id: 'core-vitals',

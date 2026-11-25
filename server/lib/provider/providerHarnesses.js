@@ -65,11 +65,8 @@ const CLI_ONLY_MODES = Object.freeze(['cli']);
 
 /**
  * Why a harness cannot be minted from a bare CONNECTION (an arbitrary
- * endpoint), as the clause the create endpoint refuses with (`bindingBlocker`
- * in `providerRouteRecipes.js`). `connectionBlocker` on the row.
+ * endpoint), as the `connectionBlocker` on the row.
  *
- * This is DATA on the row because the refusal quotes it, so each reason points
- * at the right remedy.
  *
  * Kilo and OpenChamber have no recipe and no `bindings`. The others carry a
  * recipe and compose onto the services their bindings name through
@@ -420,9 +417,6 @@ export const harnessById = (id) => PROVIDER_HARNESSES.find((h) => h.id === id) |
 export const CREATABLE_HARNESS_IDS = Object.freeze(
   PROVIDER_HARNESSES.filter((h) => h.recipe && !h.connectionBlocker).map((h) => h.id),
 );
-
-/** Why `harnessId` cannot be minted from a bare connection, or `null` when it can. */
-export const harnessConnectionBlocker = (harnessId) => harnessById(harnessId)?.connectionBlocker ?? null;
 
 /** The command recipe for a harness id, or `null` when it has none. */
 export const harnessRecipe = (id) => harnessById(id)?.recipe || null;

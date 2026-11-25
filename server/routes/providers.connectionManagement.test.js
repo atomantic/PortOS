@@ -1,25 +1,12 @@
 /**
- * Shared-backend management, end to end (#6369): real Express route → real Zod
- * schema → the real `providerGraph` service → a doubled store and toolkit.
- *
- * Only the two persistence edges are doubled, because everything worth pinning
- * here happens between them:
- *
- *   - one edit to a shared backend reaches EVERY harness on it, in one
- *     projection, without renaming a route or moving a pin;
- *   - a stale revision is refused BEFORE anything is written;
- *   - a failed catalog refresh keeps the models the connection already knew,
- *     while a successful empty one is recorded as a real empty answer;
- *   - narrowing a binding's model subset touches no executable record at all;
- *   - no response ever carries a credential or a projection snapshot.
+ * Boot reconciliation of a shared backend (#6369): the real `providerGraph`
+ * service over a doubled store and toolkit. The HTTP edit routes this suite
+ * once drove were removed in #18655; the reconcile pass is what remains.
  *
  * Fixtures are synthetic. Nothing here is read out of a running install.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import express, { Router } from 'express';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
 
 const store = {
   readGraph: vi.fn(),
@@ -30,7 +17,6 @@ const store = {
   deleteConnection: vi.fn(),
   mergeServiceInstances: vi.fn().mockResolvedValue(undefined),
   saveConnectionSettings: vi.fn().mockResolvedValue(2),
-  saveBindingSettings: vi.fn().mockResolvedValue(2),
 };
 vi.mock('../services/provider/providerGraphStore.js', () => store);
 
@@ -47,7 +33,6 @@ vi.mock('../lib/aiToolkitState.js', async (importOriginal) => ({
 }));
 
 const graph = await import('../services/provider/providerGraph.js');
-const { createPortOSProviderRoutes } = await import('./providers.js');
 
 const CONNECTION = '11111111-1111-4111-8111-111111111111';
 const OTHER_CONNECTION = '22222222-2222-4222-8222-222222222222';
@@ -149,21 +134,11 @@ const graphFixture = () => ({
   ],
 });
 
-function app() {
-  const toolkit = { services: { providers: providerService }, routes: { providers: Router() } };
-  const server = express();
-  server.use(express.json());
-  server.use('/api/providers', createPortOSProviderRoutes(toolkit));
-  server.use(errorMiddleware);
-  return server;
-}
-
 beforeEach(async () => {
   vi.clearAllMocks();
   graph.resetProviderGraphState();
   store.readGraph.mockResolvedValue(graphFixture());
   store.saveConnectionSettings.mockResolvedValue(4);
-  store.saveBindingSettings.mockResolvedValue(5);
   providerService.getAllProviders.mockResolvedValue({
     activeProvider: 'claude-ollama',
     providers: [structuredClone(CLAUDE_CLI), structuredClone(CLAUDE_TUI), structuredClone(CODEX_CLI)],
@@ -175,377 +150,10 @@ beforeEach(async () => {
   vi.clearAllMocks();
   store.readGraph.mockResolvedValue(graphFixture());
   store.saveConnectionSettings.mockResolvedValue(4);
-  store.saveBindingSettings.mockResolvedValue(5);
   providerService.applyProviderPatches.mockImplementation(async (patches) => Object.keys(patches));
 });
 
 afterEach(() => vi.restoreAllMocks());
-
-describe('PATCH /api/providers/connections/:id', () => {
-  it('moves every harness on the backend with one edit, keeping route ids', async () => {
-    const res = await request(app())
-      .patch(`/api/providers/connections/${CONNECTION}`)
-      .send({
-        expectedRevision: 3,
-        label: 'Renamed daemon',
-        // The daemon moved port. Both protocol ports move with it, because
-        // they are one backend, not two.
-        transports: {
-          anthropic: { baseUrl: 'http://127.0.0.1:22222' },
-          openai: { baseUrl: 'http://127.0.0.1:22222/v1' },
-        },
-      });
-
-    expect(res.status).toBe(200);
-    // All three executable routes — both Claude modes AND OpenCode — follow the
-    // one edit. That is the whole promise of a shared connection.
-    expect(res.body.affectedRouteIds.sort())
-      .toEqual(['claude-ollama', 'claude-ollama-tui', 'codex-ollama']);
-
-    const [patches] = providerService.applyProviderPatches.mock.calls.at(-1);
-    // Each harness follows the edit through ITS OWN protocol's env var — the
-    // projection is per-transport, not one URL smeared over every route.
-    expect(patches['claude-ollama'].envVars.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:22222');
-    expect(patches['claude-ollama-tui'].envVars.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:22222');
-    expect(patches['codex-ollama'].envVars.OPENAI_BASE_URL).toBe('http://127.0.0.1:22222/v1');
-    // A route's OWN settings are never in the patch: an endpoint edit is not a
-    // licence to rewrite a pin, a mode or an enabled flag.
-    expect(patches['claude-ollama']).not.toHaveProperty('defaultModel');
-    expect(patches['claude-ollama']).not.toHaveProperty('enabled');
-  });
-
-  it('projects an endpoint-backed route through its declared protocol, preserving executable settings', async () => {
-    const api = {
-      id: 'example-api', type: 'api', ollamaBacked: true, enabled: false,
-      endpoint: DAEMON_OPENAI, apiKey: 'example-api-key',
-      models: ['example-model'], defaultModel: 'example-model', customField: 'keep',
-    };
-    const data = graphFixture();
-    const bindingId = '55555555-5555-4555-8555-555555555555';
-    data.bindings.push({ ...data.bindings[1], id: bindingId, harnessId: null });
-    data.connections[0].credentials.apiKey = api.apiKey;
-    data.routes.push(route(api.id, bindingId, 'api', {
-      fields: { endpoint: api.endpoint, apiKey: api.apiKey }, envVars: {}, hasEnvVars: false,
-    }));
-    store.readGraph.mockResolvedValue(data);
-    providerService.getAllProviders.mockResolvedValue({
-      activeProvider: api.id, providers: [CLAUDE_CLI, CLAUDE_TUI, CODEX_CLI, api],
-    });
-    let executable;
-    providerService.applyProviderPatches.mockImplementation(async (patches) => {
-      executable = { ...api, ...patches[api.id] };
-      return Object.keys(patches);
-    });
-
-    const res = await request(app()).patch(`/api/providers/connections/${CONNECTION}`)
-      .send({
-        expectedRevision: 3,
-        // Anthropic is first deliberately: map order must not select the API wire.
-        transports: {
-          anthropic: { baseUrl: 'https://daemon.example.com/anthropic' },
-          openai: { baseUrl: 'https://daemon.example.com/v1' },
-        },
-      });
-
-    expect(res.status).toBe(200);
-    expect(executable).toEqual({ ...api, endpoint: 'https://daemon.example.com/v1' });
-    // Crash recovery must stage the same endpoint that execution receives.
-    const pending = store.commitPendingProjection.mock.calls[0][0]
-      .find((entry) => entry.providerId === api.id);
-    expect(pending.owned).toEqual({
-      fields: { endpoint: executable.endpoint, apiKey: api.apiKey },
-      envVars: {}, hasEnvVars: false,
-    });
-    expect(res.body).not.toHaveProperty('credentials');
-  });
-
-  it('stages the projection before writing the file and acknowledges only after', async () => {
-    const order = [];
-    store.commitPendingProjection.mockImplementation(async () => { order.push('stage'); });
-    providerService.applyProviderPatches.mockImplementation(async (patches) => {
-      order.push('write');
-      return Object.keys(patches);
-    });
-    store.acknowledgeProjection.mockImplementation(async () => { order.push('ack'); });
-
-    await request(app()).patch(`/api/providers/connections/${CONNECTION}`)
-      .send({ expectedRevision: 3, label: 'Renamed daemon' });
-
-    expect(order).toEqual(['stage', 'write', 'ack']);
-  });
-
-  it('refuses a stale revision without writing anything', async () => {
-    const res = await request(app())
-      .patch(`/api/providers/connections/${CONNECTION}`)
-      .send({ expectedRevision: 2, label: 'Renamed from a screen that had moved on' });
-
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('PROVIDER_GRAPH_STALE_REVISION');
-    expect(store.saveConnectionSettings).not.toHaveBeenCalled();
-    expect(providerService.applyProviderPatches).not.toHaveBeenCalled();
-  });
-
-  it('preserves an omitted credential and clears an explicitly null one', async () => {
-    await request(app()).patch(`/api/providers/connections/${CONNECTION}`)
-      .send({ expectedRevision: 3, label: 'Renamed daemon' });
-    expect(store.saveConnectionSettings.mock.calls[0][0].credentials)
-      .toEqual({ ANTHROPIC_AUTH_TOKEN: TOKEN, OPENAI_API_KEY: OPENAI_KEY });
-
-    // An explicit null clears exactly the one named key — the other harness's
-    // secret on the same backend is not collateral.
-    store.saveConnectionSettings.mockClear();
-    await request(app()).patch(`/api/providers/connections/${CONNECTION}`)
-      .send({ expectedRevision: 3, credentials: { ANTHROPIC_AUTH_TOKEN: null } });
-    expect(store.saveConnectionSettings.mock.calls[0][0].credentials)
-      .toEqual({ OPENAI_API_KEY: OPENAI_KEY });
-  });
-
-  it('refuses a credential echoed back as the redaction placeholder', async () => {
-    const res = await request(app()).patch(`/api/providers/connections/${CONNECTION}`)
-      .send({ expectedRevision: 3, credentials: { ANTHROPIC_AUTH_TOKEN: '***' } });
-
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe('PROVIDER_GRAPH_REDACTED_CREDENTIAL');
-    expect(store.saveConnectionSettings).not.toHaveBeenCalled();
-  });
-
-  it('refuses while a route on the backend is mid-projection', async () => {
-    const fixture = graphFixture();
-    fixture.routes[0].pending = ownedSnapshot();
-    store.readGraph.mockResolvedValue(fixture);
-
-    const res = await request(app()).patch(`/api/providers/connections/${CONNECTION}`)
-      .send({ expectedRevision: 3, label: 'Renamed daemon' });
-
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('PROVIDER_GRAPH_BINDING_BLOCKED');
-    expect(store.saveConnectionSettings).not.toHaveBeenCalled();
-  });
-
-  it('rejects an unknown field rather than persisting it', async () => {
-    const res = await request(app()).patch(`/api/providers/connections/${CONNECTION}`)
-      .send({ expectedRevision: 3, kind: 'lmstudio' });
-
-    expect(res.status).toBe(400);
-    expect(store.saveConnectionSettings).not.toHaveBeenCalled();
-  });
-});
-
-describe('PATCH /api/providers/bindings/:id', () => {
-  it('narrows one harness to a subset without touching any executable record', async () => {
-    const res = await request(app())
-      .patch(`/api/providers/bindings/${CLAUDE_BINDING}`)
-      .send({ expectedRevision: 4, selectedModels: ['example-model'] });
-
-    expect(res.status).toBe(200);
-    expect(res.body.selectedModels).toEqual(['example-model']);
-    // Management state only: no projection, so no route's enabled flag, consent
-    // or model pin can move as a side effect of a menu choice.
-    expect(providerService.applyProviderPatches).not.toHaveBeenCalled();
-    expect(store.commitPendingProjection).not.toHaveBeenCalled();
-  });
-
-  it('refuses a stale revision without writing', async () => {
-    const res = await request(app())
-      .patch(`/api/providers/bindings/${CLAUDE_BINDING}`)
-      .send({ expectedRevision: 3, selectedModels: [] });
-
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('PROVIDER_GRAPH_STALE_REVISION');
-    expect(store.saveBindingSettings).not.toHaveBeenCalled();
-  });
-
-  it('rejects an `enabled` field, so a menu edit can never grant execution', async () => {
-    const res = await request(app())
-      .patch(`/api/providers/bindings/${CLAUDE_BINDING}`)
-      .send({ expectedRevision: 4, enabled: true });
-
-    expect(res.status).toBe(400);
-    expect(store.saveBindingSettings).not.toHaveBeenCalled();
-  });
-
-  it('404s an unknown binding rather than creating one', async () => {
-    const res = await request(app())
-      .patch('/api/providers/bindings/55555555-5555-4555-8555-555555555555')
-      .send({ expectedRevision: 1, label: 'Invented' });
-
-    expect(res.status).toBe(404);
-    expect(store.saveBindingSettings).not.toHaveBeenCalled();
-  });
-});
-
-describe('the management graph a browser actually receives', () => {
-  it('reports credential PRESENCE and never a secret or a projection snapshot', async () => {
-    const res = await request(app()).get('/api/providers/management');
-    const body = JSON.stringify(res.body);
-
-    expect(res.status).toBe(200);
-    expect(res.body.connections[0].hasCredentials).toBe(true);
-    expect(body).not.toContain(TOKEN);
-    expect(res.body.connections[0]).not.toHaveProperty('credentials');
-    expect(res.body.routes[0]).not.toHaveProperty('projected');
-    expect(res.body.routes[0]).not.toHaveProperty('pending');
-  });
-});
-
-describe('PATCH /api/providers/routes/:providerId', () => {
-  /** The fingerprint the panel would have been holding. Read the way a browser reads it. */
-  const routeFromGraph = async (providerId) => {
-    const res = await request(app()).get('/api/providers/management');
-    return res.body.routes.find((route) => route.providerId === providerId);
-  };
-
-  it('changes ONE mode and leaves its sibling mode alone', async () => {
-    const cli = await routeFromGraph('claude-ollama');
-    providerService.applyProviderPatches.mockClear();
-
-    const res = await request(app())
-      .patch('/api/providers/routes/claude-ollama')
-      .send({
-        expectedRevision: cli.settingsRevision,
-        settings: { args: ['--verbose'], effort: 'high', heavyModel: 'example-model' },
-      });
-
-    expect(res.status).toBe(200);
-    const [patches] = providerService.applyProviderPatches.mock.calls.at(-1);
-    // The TUI route on the same harness shares this backend but NOT this
-    // mode's arguments — the whole reason the write skips `updateProvider`.
-    expect(Object.keys(patches)).toEqual(['claude-ollama']);
-    expect(patches['claude-ollama']).toEqual({ args: ['--verbose'], effort: 'high', heavyModel: 'example-model' });
-    // Route-owned, so no connection value moved and nothing was projected:
-    // the binding must not be detached by an override edit.
-    expect(store.saveConnectionSettings).not.toHaveBeenCalled();
-    expect(store.commitPendingProjection).not.toHaveBeenCalled();
-  });
-
-  it('refuses an edit made against settings that have since moved', async () => {
-    const res = await request(app())
-      .patch('/api/providers/routes/claude-ollama')
-      .send({ expectedRevision: 'from-a-panel-that-had-moved-on', settings: { effort: 'high' } });
-
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('PROVIDER_GRAPH_STALE_REVISION');
-    expect(providerService.applyProviderPatches).not.toHaveBeenCalled();
-  });
-
-  it('rejects a connection-owned field and an execution-consent field', async () => {
-    const cli = await routeFromGraph('claude-ollama');
-    providerService.applyProviderPatches.mockClear();
-
-    for (const settings of [{ endpoint: 'http://127.0.0.1:22222' }, { enabled: true }, { envVars: {} }]) {
-      const res = await request(app())
-        .patch('/api/providers/routes/claude-ollama')
-        .send({ expectedRevision: cli.settingsRevision, settings });
-      expect(res.status).toBe(400);
-    }
-    expect(providerService.applyProviderPatches).not.toHaveBeenCalled();
-  });
-
-  it('refuses an effort level this harness does not accept', async () => {
-    const cli = await routeFromGraph('claude-ollama');
-    providerService.applyProviderPatches.mockClear();
-
-    // `minimal` is a real effort level — for Codex. Claude's ladder starts at
-    // `low`, so storing it would be a value the spawn silently drops.
-    const res = await request(app())
-      .patch('/api/providers/routes/claude-ollama')
-      .send({ expectedRevision: cli.settingsRevision, settings: { effort: 'minimal' } });
-
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe('PROVIDER_ROUTE_EFFORT_UNSUPPORTED');
-    expect(providerService.applyProviderPatches).not.toHaveBeenCalled();
-  });
-
-  it('refuses launch arguments on a direct API route, which spawns nothing', async () => {
-    const API_BINDING = '66666666-6666-4666-8666-666666666666';
-    const API_PROVIDER = {
-      id: 'example-api',
-      name: 'Example API',
-      type: 'api',
-      endpoint: 'https://api.example.com/v1',
-      apiKey: 'example-api-key',
-      models: ['example-model'],
-      enabled: true,
-    };
-    const fixture = graphFixture();
-    fixture.bindings.push({
-      id: API_BINDING, revision: 1, connectionId: OTHER_CONNECTION, harnessId: null,
-      variantKey: 'default', label: 'Direct API', enabled: true, selectedModels: [],
-    });
-    fixture.routes.push({
-      providerId: 'example-api', bindingId: API_BINDING, mode: 'api',
-      modelMap: {}, projected: {}, pending: null, pendingRevision: null,
-    });
-    store.readGraph.mockResolvedValue(fixture);
-    providerService.getAllProviders.mockResolvedValue({
-      activeProvider: 'claude-ollama',
-      providers: [structuredClone(CLAUDE_CLI), structuredClone(CLAUDE_TUI), structuredClone(CODEX_CLI),
-        structuredClone(API_PROVIDER)],
-    });
-
-    const apiRoute = await routeFromGraph('example-api');
-    // An API route has no spawn, so it never offers the field in the first place.
-    expect(apiRoute.settings).not.toHaveProperty('args');
-    expect(apiRoute.settings).toHaveProperty('defaultModel');
-    providerService.applyProviderPatches.mockClear();
-
-    const res = await request(app())
-      .patch('/api/providers/routes/example-api')
-      .send({ expectedRevision: apiRoute.settingsRevision, settings: { args: ['--yolo'] } });
-
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe('PROVIDER_ROUTE_SETTING_UNSUPPORTED');
-    expect(providerService.applyProviderPatches).not.toHaveBeenCalled();
-  });
-
-  it('404s a provider id the graph does not route', async () => {
-    const res = await request(app())
-      .patch('/api/providers/routes/not-a-route')
-      .send({ expectedRevision: 'anything', settings: { effort: 'high' } });
-
-    expect(res.status).toBe(404);
-    expect(providerService.applyProviderPatches).not.toHaveBeenCalled();
-  });
-
-  it('refuses while the route is mid-projection', async () => {
-    const cli = await routeFromGraph('claude-ollama');
-    const fixture = graphFixture();
-    fixture.routes[0].pending = ownedSnapshot();
-    store.readGraph.mockResolvedValue(fixture);
-    providerService.applyProviderPatches.mockClear();
-
-    const res = await request(app())
-      .patch('/api/providers/routes/claude-ollama')
-      .send({ expectedRevision: cli.settingsRevision, settings: { effort: 'high' } });
-
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('PROVIDER_GRAPH_BINDING_BLOCKED');
-    expect(providerService.applyProviderPatches).not.toHaveBeenCalled();
-  });
-});
-
-describe('what a route row can act on', () => {
-  it('offers the Shell hand-off on the TUI route only, and never its env', async () => {
-    const res = await request(app()).get('/api/providers/management');
-    const byId = Object.fromEntries(res.body.routes.map((route) => [route.providerId, route]));
-
-    expect(byId['claude-ollama-tui'].tuiCommandLine).toContain('claude');
-    // A CLI route is not launchable by hand, so it carries no command at all —
-    // absent rather than empty, so the button cannot render on a blank string.
-    expect(byId['claude-ollama']).not.toHaveProperty('tuiCommandLine');
-    expect(JSON.stringify(res.body)).not.toContain(TOKEN);
-  });
-
-  it('publishes the effort ladder the harness really accepts', async () => {
-    const res = await request(app()).get('/api/providers/management');
-    const byId = Object.fromEntries(res.body.routes.map((route) => [route.providerId, route]));
-
-    expect(byId['claude-ollama'].effortLevels).toContain('high');
-    // Distinguishable from an empty ladder: `null` is "this harness has no
-    // effort control", which the panel renders as a disabled select.
-    expect(byId['codex-ollama'].effortLevels).toContain('minimal');
-  });
-});
 
 describe('boot reconciliation of the shared backend this suite edits', () => {
   it('leaves the two-protocol connection intact instead of cloning both bindings off it', async () => {

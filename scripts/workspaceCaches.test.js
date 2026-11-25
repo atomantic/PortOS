@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { checkWorkspaceCacheIsolation } from './lib/workspaceCacheFixture.js';
 import { readCiJobs } from './lib/ciWorkflowJobs.js';
@@ -19,6 +19,23 @@ describe('checkout-owned server Vite caches with shared dependencies', () => {
         expect(cache).toContain('server/.cache/vitest\n');
         expect(cache).toContain('server/.cache/vitest-db\n');
       } else expect(cache).toContain('client/.cache/vitest\n');
+    }
+  });
+
+  it('saves Vitest transform and APT caches only outside pull requests', () => {
+    // A PR-saved entry is scoped to its merge ref, so nothing reads it again.
+    const jobs = readCiJobs();
+    const bodies = [...['client', 'server', 'database', 'browser', 'windows-server', 'macos-native'].map(id => jobs[id]), readFileSync(new URL('../.github/actions/db-tools/action.yml', import.meta.url), 'utf8')];
+    for (const body of bodies) {
+      const steps = body.split(/\n\s*- name: /).filter(step => /^Cache (Vitest transform|APT package)/.test(step));
+      expect(steps.length).toBeGreaterThan(0);
+      for (const step of steps) {
+        if (step.includes('actions/cache/restore@')) expect(step).toContain("github.event_name == 'pull_request'");
+        else {
+          expect(step).toContain('actions/cache@');
+          expect(step).toContain("github.event_name != 'pull_request'");
+        }
+      }
     }
   });
 

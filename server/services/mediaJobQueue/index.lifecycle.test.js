@@ -343,7 +343,7 @@ describe('mediaJobQueue', () => {
     stubs.generateImage.mockResolvedValue({});
     const verification = { verdict: 'fail', summary: 'Extra fingers' };
     stubs.verifyImage.mockResolvedValue(verification);
-    const unverified = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'No verification' } });
+    const unverified = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'No verification', verifyImage: false } });
     await waitFor(() => stubs.generateImage.mock.calls.length === 1);
     imageGenEvents.emit('completed', { generationId: unverified.jobId, filename: 'unverified.png' });
     await waitFor(() => mediaJobQueue.getJob(unverified.jobId).status === 'completed');
@@ -366,6 +366,32 @@ describe('mediaJobQueue', () => {
     expect(stubs.verifyImage).toHaveBeenCalledTimes(2);
     expect(stubs.verifyImage).toHaveBeenLastCalledWith({ filename: 'reroll.png', prompt: params.prompt, profileId: params.verificationProfileId });
     expect(mediaJobQueue.listJobs()).toHaveLength(3);
+  });
+
+  it('verifies a profiled peer render and submits a fresh peer reroll with the next seed', async () => {
+    const remoteMedia = remoteImageMediaParams();
+    remoteMedia.request.seed = 41;
+    stubs.generateImageRemote.mockResolvedValue({});
+    stubs.finishVisualProfile.mockImplementation(async ({ result }) => ({ ...result }));
+    const verification = { verdict: 'fail', summary: 'Extra fingers' };
+    stubs.verifyImage.mockResolvedValueOnce(verification).mockResolvedValueOnce({ verdict: 'pass' });
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: {
+      remoteMedia, visualProfile: { version: 1 }, verifyImage: true,
+    } });
+
+    await waitFor(() => stubs.generateImageRemote.mock.calls.length === 1);
+    imageGenEvents.emit('completed', { generationId: jobId, filename: 'peer-render.png', remoteInputsDisposable: true });
+    await waitFor(() => stubs.generateImageRemote.mock.calls.length === 2);
+
+    expect(stubs.verifyImage).toHaveBeenCalledWith(expect.objectContaining({
+      filename: 'peer-render.png', prompt: remoteMedia.request.prompt,
+    }));
+    expect(mediaJobQueue.getJob(jobId).result.verification).toEqual(verification);
+    const reroll = mediaJobQueue.listJobs().find(job => job.params.parentJobId === jobId);
+    expect(reroll.params.remoteMedia.request).toEqual({ ...remoteMedia.request, seed: 42 });
+    expect(reroll.params).not.toHaveProperty('visualProfileSource');
+    imageGenEvents.emit('completed', { generationId: reroll.id, filename: 'peer-reroll.png', remoteInputsDisposable: true });
+    await waitFor(() => mediaJobQueue.getJob(reroll.id).status === 'completed');
   });
 
   it('keeps an image running through its finish and retains the ungraded reference', async () => {

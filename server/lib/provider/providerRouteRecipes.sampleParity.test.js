@@ -18,46 +18,33 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CREATABLE_HARNESS_IDS, PROVIDER_HARNESSES } from './providerHarnesses.js';
-import { buildRouteRecord, materializeRoute } from './providerRouteRecipes.js';
+import { PROVIDER_HARNESSES } from './providerHarnesses.js';
+import { materializeRoute } from './providerRouteRecipes.js';
 
 const SAMPLES = JSON.parse(readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), '../aiToolkit/defaults/providers.sample.json'),
   'utf8',
 )).providers;
 
-/** The local Ollama daemon the samples below are all configured against. */
-const ANTHROPIC_CONNECTION = {
-  kind: 'ollama',
-  transports: { anthropic: { baseUrl: 'http://localhost:11434' } },
-  credentials: { ANTHROPIC_AUTH_TOKEN: 'ollama' },
-};
-const OPENAI_CONNECTION = {
-  kind: 'ollama',
-  transports: { openai: { baseUrl: 'http://localhost:11434/v1' } },
-  credentials: {},
+const OLLAMA = {
+  definitionId: 'ollama',
+  transports: {
+    anthropic: { baseUrl: 'http://localhost:11434' },
+    openai: { baseUrl: 'http://localhost:11434/v1' },
+  },
+  credentials: { apiKey: 'ollama' },
 };
 
 const CASES = [
-  { harnessId: 'claude', mode: 'cli', sample: 'claude-ollama', connection: ANTHROPIC_CONNECTION },
-  { harnessId: 'claude', mode: 'tui', sample: 'claude-ollama-tui', connection: ANTHROPIC_CONNECTION },
-  { harnessId: 'opencode', mode: 'cli', sample: 'opencode-ollama', connection: OPENAI_CONNECTION },
-  { harnessId: 'opencode', mode: 'tui', sample: 'opencode-ollama-tui', connection: OPENAI_CONNECTION },
-  { harnessId: 'codex', mode: 'cli', sample: 'codex-ollama', connection: OPENAI_CONNECTION },
-  { harnessId: 'hermes', mode: 'cli', sample: 'hermes-cli', connection: OPENAI_CONNECTION },
-  { harnessId: 'hermes', mode: 'tui', sample: 'hermes-tui', connection: OPENAI_CONNECTION },
+  { harnessId: 'claude', mode: 'cli', sample: 'claude-ollama', service: OLLAMA },
+  { harnessId: 'claude', mode: 'tui', sample: 'claude-ollama-tui', service: OLLAMA },
+  { harnessId: 'opencode', mode: 'cli', sample: 'opencode-ollama', service: OLLAMA },
+  { harnessId: 'opencode', mode: 'tui', sample: 'opencode-ollama-tui', service: OLLAMA },
+  { harnessId: 'codex', mode: 'cli', sample: 'codex-ollama', service: OLLAMA },
+  { harnessId: 'hermes', mode: 'cli', sample: 'hermes-cli', service: OLLAMA },
+  { harnessId: 'hermes', mode: 'tui', sample: 'hermes-tui', service: OLLAMA },
 ];
 
-const mint = ({ harnessId, mode, connection, sample }) =>
-  buildRouteRecord({ harnessId, mode, providerId: sample, name: 'Example', connection });
-
-/**
- * The harnesses that carry a recipe but cannot be minted from a bare
- * connection (#7562): a subscription program composes onto its own service,
- * Pi onto a service it ships a provider name for. Their argv is pinned the
- * same way, through `materializeRoute`; Pi's `--provider` pair is the one
- * binding-added suffix, so the shipped argv is asserted as the prefix.
- */
 const COMPOSED_CASES = [
   { harnessId: 'antigravity', mode: 'cli', sample: 'antigravity-cli', service: 'antigravity' },
   { harnessId: 'antigravity', mode: 'tui', sample: 'antigravity-tui', service: 'antigravity' },
@@ -71,62 +58,13 @@ const COMPOSED_CASES = [
   { harnessId: 'pi', mode: 'tui', sample: 'pi-tui', service: { definitionId: 'nvidia-nim', credentials: { apiKey: 'example-key' } }, suffix: ['--provider', 'nvidia'] },
 ];
 
-describe('harness command recipes match the shipped provider samples', () => {
-  it('covers every creatable harness, so a new one cannot ship unpinned', () => {
-    expect([...new Set(CASES.map((entry) => entry.harnessId))].sort())
-      .toEqual([...CREATABLE_HARNESS_IDS].sort());
+describe('service composition matches shipped provider command lines', () => {
+  it('covers every recipe-bearing harness', () => {
+    const recipeHarnesses = PROVIDER_HARNESSES.filter((h) => h.recipe).map((h) => h.id);
+    expect([...new Set([...CASES, ...COMPOSED_CASES].map((entry) => entry.harnessId))].sort()).toEqual(recipeHarnesses.sort());
   });
 
-  it.each(CASES)('mints $harnessId $mode like $sample', ({ sample, ...input }) => {
-    const shipped = SAMPLES[sample];
-    expect(shipped, `${sample} is missing from providers.sample.json`).toBeDefined();
-    const minted = mint({ ...input, sample });
-
-    expect(minted.command).toBe(shipped.command);
-    expect(minted.args).toEqual(shipped.args);
-    expect(minted.type).toBe(shipped.type);
-    if (input.mode === 'cli') expect(minted.headlessArgs).toEqual(shipped.headlessArgs);
-    if (input.mode === 'tui') expect(minted.tuiPromptDelayMs).toBe(shipped.tuiPromptDelayMs);
-    expect(minted.secretEnvVars).toEqual(shipped.secretEnvVars);
-  });
-
-  it('materializes the backend the same way the Claude sample does', () => {
-    const minted = mint(CASES[0]);
-    const shipped = SAMPLES['claude-ollama'];
-    expect(minted.envVars.ANTHROPIC_BASE_URL).toBe(shipped.envVars.ANTHROPIC_BASE_URL);
-    expect(minted.envVars.ANTHROPIC_AUTH_TOKEN).toBe(shipped.envVars.ANTHROPIC_AUTH_TOKEN);
-    expect(minted.ollamaBacked).toBe(true);
-  });
-
-  it('declares the OpenCode provider the same way its sample does, name aside', () => {
-    const minted = JSON.parse(mint(CASES[2]).envVars.OPENCODE_CONFIG_CONTENT);
-    const shipped = JSON.parse(SAMPLES['opencode-ollama'].envVars.OPENCODE_CONFIG_CONTENT);
-    expect(minted.permission).toBe(shipped.permission);
-    // `name` is the label OpenCode shows; everything else is what makes the
-    // provider resolve, so only those are the contract.
-    expect(minted.provider.ollama.npm).toBe(shipped.provider.ollama.npm);
-    expect(minted.provider.ollama.options.baseURL).toBe(shipped.provider.ollama.options.baseURL);
-  });
-
-  it('mints nothing enabled, pinned or consented, whatever the recipe', () => {
-    for (const entry of CASES) {
-      const minted = mint(entry);
-      expect(minted.enabled).toBe(false);
-      expect(minted.models).toEqual([]);
-      expect(minted.defaultModel).toBeNull();
-      expect(minted).not.toHaveProperty('textTransportEnabled');
-      expect(minted).not.toHaveProperty('allowCustomEndpoint');
-    }
-  });
-});
-
-describe('composed-only harness recipes match the shipped provider samples', () => {
-  it('covers every recipe-bearing harness the connection path does not', () => {
-    const composedOnly = PROVIDER_HARNESSES.filter((h) => h.recipe && !CREATABLE_HARNESS_IDS.includes(h.id)).map((h) => h.id);
-    expect([...new Set(COMPOSED_CASES.map((entry) => entry.harnessId))].sort()).toEqual(composedOnly.sort());
-  });
-
-  it.each(COMPOSED_CASES)('composes $harnessId $mode like $sample', ({ harnessId, mode, sample, service, suffix = [] }) => {
+  it.each([...CASES, ...COMPOSED_CASES])('composes $harnessId $mode like $sample', ({ harnessId, mode, sample, service, suffix = [] }) => {
     const shipped = SAMPLES[sample];
     expect(shipped, `${sample} is missing from providers.sample.json`).toBeDefined();
     const minted = materializeRoute({ harness: harnessId, method: mode, serviceInstance: service });

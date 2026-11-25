@@ -1,3 +1,4 @@
+import { inputClass } from './controlClasses.js';
 import { sortByLabel } from '../../lib/sortByLabel.js';
 import { activeMusicVideoSubjects } from '../../../../server/lib/musicVideo/musicVideoCastSelection.js';
 import { useEffect, useState } from 'react';
@@ -15,7 +16,6 @@ import { ingredientPath } from '../../lib/creativeLibraries.js';
 import { VideoCastLinksDisclosure } from './VideoCastLinks.jsx';
 import { MUSIC_VIDEO_MAX_SUBJECTS } from '../../lib/musicVideoUniverseRefs.js';
 
-const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 // Past this many choices a plain select stops being scannable, so a name filter appears.
 const PICKER_FILTER_THRESHOLD = 12;
 const kinds = [['character', 'Cast'], ['place', 'Places'], ['object', 'Objects']];

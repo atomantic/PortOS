@@ -55,9 +55,7 @@ vi.mock('../../services/apiMusic.js', () => ({
 vi.mock('../../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn() },
 }));
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }),
-}));
+vi.mock('../ui/Toast');
 
 import {
   deleteLocalLlmModel,
@@ -82,13 +80,17 @@ const LocationProbe = () => {
   return <output data-testid="location">{location.pathname}{location.search}</output>;
 };
 
-const renderLibrary = async () => {
+const mountLibrary = () => {
   render(
     <MemoryRouter>
       <LocalLlmLibraryView />
       <LocationProbe />
     </MemoryRouter>,
   );
+};
+
+const renderLibrary = async () => {
+  mountLibrary();
   await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'llm-management-panel-library'));
   expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'llm-library-heading');
   await waitFor(() => expect(screen.getByText(/Installed on (Ollama|LM Studio)/)).toBeTruthy());
@@ -173,19 +175,20 @@ describe('LocalLlmLibraryView model-list diagnostics', () => {
       lmstudio: { installed: false, available: false, modelCount: 0, models: [] },
     });
 
-    await renderLibrary();
+    mountLibrary();
 
-    expect(screen.getByText(/Couldn't list Ollama models/)).toHaveTextContent('Ollama model list returned no data');
+    const error = await screen.findByRole('alert');
+    expect(error).toHaveTextContent('Ollama model list returned no data');
+    expect(screen.queryByText('No models installed yet.')).not.toBeInTheDocument();
 
     getLocalLlmStatus.mockResolvedValueOnce({
       backend: 'ollama',
       ollama: { ...emptyOllama, modelsError: null },
       lmstudio: { installed: false, available: false, modelCount: 0, models: [] },
     });
-    const progressHandler = socket.on.mock.calls.find(([event]) => event === 'localLlm:progress')[1];
-    act(() => progressHandler({ event: 'complete' }));
-
-    await waitFor(() => expect(screen.queryByText(/Couldn't list Ollama models/)).toBeNull());
+    fireEvent.click(within(error).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('No models installed yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
 
@@ -606,4 +609,35 @@ describe('audio library installation terminal evidence', () => {
     await waitFor(() => expect(succeeds ? toast.success : toast.error).toHaveBeenCalledTimes(1));
     expect(succeeds ? toast.error : toast.success).not.toHaveBeenCalled();
   });
+});
+
+it('shows loading before the first status read and retries a failed installed-model read', async () => {
+  let rejectStatus;
+  getLocalLlmStatus.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectStatus = reject; }));
+  mountLibrary();
+
+  expect(screen.getByRole('status', { name: 'Loading installed models' })).toBeInTheDocument();
+  expect(screen.queryByText(/Installed on Ollama/)).not.toBeInTheDocument();
+  expect(screen.queryByText('No models installed yet.')).not.toBeInTheDocument();
+
+  await act(async () => rejectStatus(new Error('Offline')));
+  const error = await screen.findByRole('alert');
+  expect(error).toHaveTextContent('Could not load installed Ollama models');
+  expect(screen.queryByText('No models installed yet.')).not.toBeInTheDocument();
+  fireEvent.click(within(error).getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByText(LONG_ID)).toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});
+
+it('retries a failed catalog read and shows the empty copy only when the retry succeeds', async () => {
+  getLocalLlmCatalog.mockRejectedValueOnce(new Error('Offline'));
+  mountLibrary();
+  expect(screen.queryByText(/No catalog matches/)).not.toBeInTheDocument();
+
+  const error = await screen.findByRole('alert');
+  expect(error).toHaveTextContent('Could not load model catalog');
+  expect(screen.queryByText(/No catalog matches/)).not.toBeInTheDocument();
+  fireEvent.click(within(error).getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByText(/No catalog matches/)).toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 });

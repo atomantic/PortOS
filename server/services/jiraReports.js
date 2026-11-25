@@ -11,6 +11,9 @@ import { getInstances, createJiraClient, resolveCustomFieldIds } from './jira.js
 import { getActiveApps } from './apps.js';
 import { callProviderAISimple } from './aiProvider.js';
 import { getActiveProvider, getAllProviders } from './provider/providers.js';
+import { getUserTimezone } from './userTimezone.js';
+import { todayInTimezone } from '../lib/timezone.js';
+import { ServerError } from '../lib/errorHandler.js';
 
 const REPORTS_DIR = join(PATHS.data, 'jira-reports');
 const isEnabledApiProvider = (p) => p?.type === 'api' && p.enabled !== false;
@@ -228,7 +231,7 @@ export async function generateReport(appId, app) {
     projectKey: jiraConfig.projectKey,
     instanceId: jiraConfig.instanceId,
     generatedAt: new Date().toISOString(),
-    date: new Date().toISOString().split('T')[0],
+    date: todayInTimezone(await getUserTimezone()),
     statusSummary,
     summary: {
       totalTickets: sprintTickets.length,
@@ -278,9 +281,32 @@ export async function generateAllReports() {
   const reports = results
     .filter(r => r.status === 'fulfilled' && r.value)
     .map(r => r.value);
+  let firstFailure = null;
+  results.forEach((result, index) => {
+    if (result.status !== 'rejected') return;
+    firstFailure ??= result.reason;
+    console.error(`❌ JIRA status report failed for ${jiraApps[index].name}: ${result.reason?.message || result.reason}`);
+  });
+  if (reports.length === 0 && firstFailure) {
+    throw new ServerError(`No JIRA report could be generated: ${firstFailure?.message || firstFailure}`, { status: 502, code: 'JIRA_REPORTS_FAILED' });
+  }
 
   console.log(`📊 Generated ${reports.length} JIRA status reports`);
   return reports;
+}
+
+/** Split `<appId>-<YYYY-MM-DD>.json`; an app id may itself contain dashes. */
+function parseReportFilename(filename) {
+  const match = /^(.+)-(\d{4}-\d{2}-\d{2})\.json$/.exec(filename);
+  return match ? { appId: match[1], date: match[2], filename } : null;
+}
+
+async function reportFiles(appId) {
+  await ensureDir(REPORTS_DIR);
+  return (await readdir(REPORTS_DIR))
+    .map(parseReportFilename)
+    .filter(entry => entry && (!appId || entry.appId === appId))
+    .sort((a, b) => b.date.localeCompare(a.date));
 }
 
 /**
@@ -297,19 +323,7 @@ export async function getReport(appId, date) {
  * Returns summary data from each report for display in lists.
  */
 export async function listReports(appId = null) {
-  await ensureDir(REPORTS_DIR);
-  const files = await readdir(REPORTS_DIR);
-
-  const entries = files
-    .filter(f => f.endsWith('.json'))
-    .filter(f => !appId || f.startsWith(`${appId}-`))
-    .map(f => {
-      const parts = f.replace('.json', '').split('-');
-      const date = parts.slice(-3).join('-');
-      const app = parts.slice(0, -3).join('-');
-      return { appId: app, date, filename: f };
-    })
-    .sort((a, b) => b.date.localeCompare(a.date));
+  const entries = await reportFiles(appId);
 
   const results = await Promise.all(
     entries.map(async entry => {
@@ -328,21 +342,4 @@ export async function listReports(appId = null) {
   );
 
   return results.filter(Boolean);
-}
-
-/**
- * Get the latest report for an app
- */
-export async function getLatestReport(appId) {
-  await ensureDir(REPORTS_DIR);
-  const files = await readdir(REPORTS_DIR);
-
-  const matching = files
-    .filter(f => f.endsWith('.json') && f.startsWith(`${appId}-`))
-    .sort()
-    .reverse();
-
-  if (matching.length === 0) return null;
-  const filepath = join(REPORTS_DIR, matching[0]);
-  return readJSONFile(filepath, null);
 }

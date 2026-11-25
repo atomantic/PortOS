@@ -1,3 +1,4 @@
+import { sceneButtonClass as SECONDARY_BUTTON, selectXsShrinkClass as SELECT } from './controlClasses.js';
 import { castLookForTake } from '../../../../server/lib/musicVideo/musicVideoCastLook.js';
 import { musicVideoGreyboxReference } from '../../../../server/lib/musicVideo/musicVideoGreybox.js';
 import { resolveSourceTake } from '../../../../server/lib/musicVideo/musicVideoSourceTake.js';
@@ -14,15 +15,13 @@ import SceneTakeStrip from './SceneTakeStrip.jsx';
 import SceneCameoLink from './SceneCameoLink.jsx';
 import SceneFrameReferences from './SceneFrameReferences.jsx';
 import SceneResearchSeed from './SceneResearchSeed.jsx';
+import { shotImageUrl } from './sceneImageTreatmentUrls.js';
 import { shotSheetDrivesPrompt } from '../../../../server/lib/musicVideo/musicVideoShotSheet.js';
 import { FAL_FEATURED_EDIT_MODEL_IDS, FAL_IMAGE_MODEL_OPTIONS } from '../../lib/imageGenBackends';
 
 const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0 whitespace-nowrap';
-const SECONDARY_BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0 whitespace-nowrap';
-const SELECT = 'min-w-0 bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
-
 /** One of a shot's two frames: tap it to see it full size. */
-function FrameTile({ label, imageId, empty, onOpen, openLabel }) {
+function FrameTile({ label, imageId, src, empty, onOpen, openLabel }) {
   const tag = <span className="port-media-overlay-strong absolute left-1 top-1 rounded px-1 text-[10px] leading-tight">{label}</span>;
   if (!imageId) {
     return (
@@ -35,7 +34,7 @@ function FrameTile({ label, imageId, empty, onOpen, openLabel }) {
   return (
     <button type="button" onClick={onOpen} aria-label={openLabel} title={openLabel}
       className="relative block w-full min-w-0 overflow-hidden rounded border border-port-border focus:outline-none focus:ring-2 focus:ring-port-accent">
-      <img src={`/data/images/${encodeURIComponent(imageId)}`} alt="" className="block aspect-video w-full bg-black object-cover" />
+      <img src={src || `/data/images/${encodeURIComponent(imageId)}`} alt="" className="block aspect-video w-full bg-black object-cover" />
       {tag}
     </button>
   );
@@ -88,7 +87,7 @@ const RERENDER_HINT = 'Renders this frame again from the current Casting look an
 export default function SceneFrames({
   project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, greyboxSaving = false, onGreyboxSaving, scene, index, endFrames: endFramesAllowed, endFrameToggle = false, plainStill = false, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame, onImageTargetChange = null,
   onEditLocal, onSave, onOpenPreview, shown = true, takeBusy = false, pendingTakes = null, onSelectTake, onReviewTake, onSwap = null, onImportTake = null,
-  onContinueFromPrevious = null, previousHasClip = false, onSwapFrames = null, assetMarks = null, onMarkTake = null, onCheckTake = null, checkingTakes = null, onApplyCameos = null,
+  onContinueFromPrevious = null, previousHasClip = false, onSwapFrames = null, assetMarks = null, onMarkTake = null, onMoveTake = null, onCheckTake = null, checkingTakes = null, onApplyCameos = null,
 }) {
   const endFrameOff = endFrameToggle && (plainStill || scene.endFrameOff === true);
   const endFrames = endFramesAllowed && !endFrameOff;
@@ -192,7 +191,7 @@ export default function SceneFrames({
     };
     return (
       <div key={which} className="min-w-0 space-y-1.5">
-        <FrameTile label={label} imageId={imageId} empty={start ? 'No still yet' : 'Optional'} onOpen={() => onOpenPreview?.(`image:${imageId}`)}
+        <FrameTile label={label} imageId={imageId} src={imageId ? shotImageUrl(project?.id, scene, imageId) : null} empty={start ? 'No still yet' : 'Optional'} onOpen={() => onOpenPreview?.(`image:${imageId}`)}
           openLabel={`View scene ${index + 1} ${start ? 'reference' : 'end'} frame full size`} />
         <FramePrompt id={id(`${which}-prompt`)} label={start ? (fromSheet ? 'General frame prompt' : endFrames ? 'Start frame prompt' : 'Frame prompt') : 'End frame prompt'} value={scene[field] || ''}
           help={start && fromSheet ? GENERAL_PROMPT_HELP : FRAME_PROMPT_HELP}
@@ -337,7 +336,8 @@ export default function SceneFrames({
           onSelect={(take) => onSelectTake?.(scene, take)}
           onReview={(take, review) => onReviewTake?.(scene, take, review)}
           onOpenPreview={onOpenPreview} marks={assetMarks} onMark={onMarkTake}
-          onCheck={onCheckTake ? (take) => onCheckTake(scene, take) : null} checking={checkingTakes} />
+          onCheck={onCheckTake ? (take) => onCheckTake(scene, take) : null} checking={checkingTakes}
+          onMove={onMoveTake ? (take, toSceneId) => onMoveTake(scene, take, toSceneId) : null} />
       </div>
     );
   };

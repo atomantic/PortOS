@@ -12,15 +12,16 @@ import FormField from '../../ui/FormField';
 import JobCard, {
   JOB_TYPE_OPTIONS,
   isAgentJobType,
-  normalizeJobPayload,
-  ScheduleFields
+  normalizeJobPayload
 } from '../JobCard';
+import { ScheduleFields } from '../JobScheduleFields';
 import useUserTimezone from '../../../hooks/useUserTimezone.js';
 import TaskDataInputs from '../TaskDataInputs';
 import ListLoadError from '../../ui/ListLoadError';
 import useListResource from '../../../hooks/useListResource';
 import { useSocketSubscription } from '../../../hooks/useSocketSubscription';
 import socket from '../../../services/socket';
+import { useSingleFlight } from '../../../hooks/useSingleFlight';
 
 const fetchApps = () => getApps({ silent: true }).then(data => data?.apps || data || []);
 
@@ -36,6 +37,7 @@ const INITIAL_JOB = {
   interval: 'daily',
   scheduledTime: '',
   scheduleAnchor: null,
+  weekdaysOnly: false,
   cronExpression: '',
   cronSchedule: null,
   priority: 'MEDIUM',
@@ -60,21 +62,24 @@ export default function JobsTab() {
   const [activeProviderId, setActiveProviderId] = useState('');
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [jobsError, setJobsError] = useState(null);
+  const jobsRequest = useRef(0);
   const [showCreate, setShowCreate] = useState(false);
   const [newJob, setNewJob] = useState(INITIAL_JOB);
   const [dataInputCatalog, setDataInputCatalog] = useState([]);
 
   const fetchJobs = useCallback(async () => {
-    const data = await getCosJobs({ silent: true }).catch(err => {
-      toast.error(`Failed to load jobs: ${err.message}`);
-      return null;
-    });
-    if (data) {
-      setJobs(data.jobs || []);
-      setStats(data.stats || null);
-      setDataInputCatalog(data.dataInputCatalog || []);
-    }
-    setLoading(false);
+    const request = ++jobsRequest.current;
+    await getCosJobs({ silent: true })
+      .then((data) => {
+        if (request !== jobsRequest.current) return;
+        setJobs(data.jobs || []);
+        setStats(data.stats || null);
+        setDataInputCatalog(data.dataInputCatalog || []);
+        setJobsError(null);
+      })
+      .catch((error) => { if (request === jobsRequest.current) setJobsError(error); })
+      .finally(() => { if (request === jobsRequest.current) setLoading(false); });
   }, []);
 
   useEffect(() => { fetchJobs(); }, [fetchJobs]);
@@ -108,7 +113,7 @@ export default function JobsTab() {
     [rawProviders, jobs]
   );
 
-  const handleCreate = async () => {
+  const handleCreate = useSingleFlight(async () => {
     if (!newJob.name.trim()) {
       toast.error('Name is required');
       return;
@@ -141,7 +146,7 @@ export default function JobsTab() {
     setNewJob(INITIAL_JOB);
     setShowCreate(false);
     fetchJobs();
-  };
+  });
 
   const handleToggle = async (jobId) => {
     const result = await toggleCosJob(jobId, { silent: true }).catch(err => {
@@ -373,7 +378,8 @@ export default function JobsTab() {
         </div>
       )}
 
-      {jobs.length === 0 ? (
+      {jobsError && <ListLoadError what="system tasks" error={jobsError} onRetry={fetchJobs} />}
+      {jobs.length === 0 ? !jobsError && (
         <div className="bg-port-card border border-port-border rounded-lg p-8 text-center">
           <div className="text-gray-500 mb-3">No system tasks configured.</div>
           <p className="text-xs text-gray-600 max-w-md mx-auto">

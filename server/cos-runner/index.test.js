@@ -337,7 +337,7 @@ describe('cos-runner /spawn — CLI shim, prompt delivery, stdin guard, and outp
 
     const missing = await post('/spawn', { agentId: 'a1' });
     expect(missing.status).toBe(400);
-    expect(missing.body.error).toContain('Missing required fields');
+    expect(missing.body.error).toContain('Invalid request body');
 
     const disallowed = await post('/spawn', {
       agentId: 'a2',
@@ -392,37 +392,24 @@ describe('cos-runner /spawn — CLI shim, prompt delivery, stdin guard, and outp
     expect(children).toHaveLength(1);
   });
 
-  it('builds legacy Claude args with optional --model when cliCommand is omitted', async () => {
+  it('refuses the retired legacy shape: no cliCommand, or an unlisted claudePath, never spawns', async () => {
     const { post, deps } = await bootTestRunner();
 
-    const withoutModel = await post('/spawn', {
-      agentId: 'a-legacy-1',
-      taskId: 't-legacy-1',
-      prompt: 'legacy run',
-    });
-    expect(withoutModel.status).toBe(200);
-    expect(deps.prepareCliPrompt).toHaveBeenNthCalledWith(
-      1,
-      'claude',
-      ['--dangerously-skip-permissions', '--print', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'],
-      'legacy run',
-      { cwd: '/example/root' },
-    );
+    const noCommand = await post('/spawn', { agentId: 'a-legacy-1', taskId: 't-legacy-1', prompt: 'legacy run' });
+    expect(noCommand.status).toBe(400);
+    expect(noCommand.body.error).toContain('cliCommand');
 
-    const withModel = await post('/spawn', {
-      agentId: 'a-legacy-2',
-      taskId: 't-legacy-2',
-      prompt: 'legacy model run',
-      model: 'claude-sonnet-4-6',
+    const smuggled = await post('/spawn', {
+      agentId: 'a-legacy-2', taskId: 't-legacy-2', prompt: 'p', claudePath: '/bin/sh',
     });
-    expect(withModel.status).toBe(200);
-    expect(deps.prepareCliPrompt).toHaveBeenNthCalledWith(
-      2,
-      'claude',
-      ['--dangerously-skip-permissions', '--print', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--model', 'claude-sonnet-4-6'],
-      'legacy model run',
-      { cwd: '/example/root' },
-    );
+    expect(smuggled.status).toBe(400);
+
+    const ignoredPath = await post('/spawn', {
+      agentId: 'a-legacy-3', taskId: 't-legacy-3', prompt: 'p', cliCommand: 'rm', claudePath: 'claude',
+    });
+    expect(ignoredPath.status).toBe(400);
+    expect(ignoredPath.body.error).toContain('Command not allowed: rm');
+    expect(deps.spawn).not.toHaveBeenCalled();
   });
 
   it('cleans up prompt temp file when shutdown starts before spawn commits', async () => {
@@ -564,8 +551,8 @@ describe('cos-runner /spawn — CLI shim, prompt delivery, stdin guard, and outp
     child.stdout.emit('data', Buffer.from(tailLine));
 
     const agent = runner.activeAgents.get('a-stream-chunk');
-    expect(agent.rawStreamBuffer.length).toBe(512 * 1024);
-    expect(agent.rawStreamBuffer.endsWith(tailLine)).toBe(true);
+    expect(agent.parser.rawStream().length).toBe(512 * 1024);
+    expect(agent.parser.rawStream().endsWith(tailLine)).toBe(true);
 
     child.emit('close', 0);
     await completed;
@@ -580,11 +567,8 @@ describe('cos-runner /spawn — CLI shim, prompt delivery, stdin guard, and outp
     );
   });
 
-  it('routes decolored Codex stderr through createCodexStderrFormatter and flushes on close', async () => {
-    const processChunk = vi.fn((text) => [`codex:${text.trim()}`]);
-    const flush = vi.fn(() => ['codex:flushed']);
-    const createCodexStderrFormatter = vi.fn(() => ({ processChunk, flush }));
-    const { post, connectClient, deps, children } = await bootTestRunner({ createCodexStderrFormatter });
+  it('formats Codex stderr by binary, hiding the config dump and echoed prompt, and flushes on close', async () => {
+    const { post, connectClient, deps, children } = await bootTestRunner();
     const client = await connectClient();
     const completed = new Promise(resolve => client.once('agent:completed', resolve));
 
@@ -595,18 +579,88 @@ describe('cos-runner /spawn — CLI shim, prompt delivery, stdin guard, and outp
       cliCommand: 'codex',
       cliArgs: ['exec'],
     });
-    expect(createCodexStderrFormatter).toHaveBeenCalledWith('fix bug');
-    children[0].stderr.emit('data', Buffer.from('\x1b[32mthinking\x1b[0m\n'));
-    expect(processChunk).toHaveBeenCalledWith('thinking\n');
+    const feed = '\x1b[32mOpenAI Codex v0.125.0\x1b[0m\n--------\nworkdir: /repo\n--------\nuser\nfix bug\nERROR: boom\n--------\nERROR: tail';
+    for (let i = 0; i < feed.length; i += 10) children[0].stderr.emit('data', Buffer.from(feed.slice(i, i + 10)));
     children[0].emit('close', 0);
 
     await completed;
-    expect(flush).toHaveBeenCalledTimes(1);
     expect(deps.persistRunnerCompletion).toHaveBeenCalledWith(
       '/example/agents',
       'a-codex',
-      'codex:thinking\ncodex:flushed\n',
+      'ERROR: boom\nERROR: tail\n',
       expect.objectContaining({ taskId: 't-codex', success: true }),
+    );
+  });
+
+  it('stops a headless run on a usage-limit banner and reports it failed even though the child exits 0', async () => {
+    const { post, connectClient, deps, children } = await bootTestRunner();
+    const client = await connectClient();
+    const completed = new Promise(resolve => client.once('agent:completed', resolve));
+
+    await post('/spawn', {
+      agentId: 'a-limit',
+      taskId: 't-limit',
+      prompt: 'work',
+      cliCommand: 'opencode',
+      cliArgs: ['run'],
+    });
+    // Split mid-banner: the detector buffers across chunks.
+    children[0].stdout.emit('data', Buffer.from('working\nNow using ex'));
+    children[0].stdout.emit('data', Buffer.from('tra usage\n'));
+    expect(deps.killProcessTree).toHaveBeenCalledWith(children[0], 'SIGTERM');
+    children[0].emit('close', 0);
+
+    const completion = await completed;
+    expect(completion).toMatchObject({
+      agentId: 'a-limit', exitCode: 0, success: false,
+      fallbackAnalysis: expect.objectContaining({ requiresFallback: true, category: expect.any(String) }),
+    });
+    expect(deps.persistRunnerCompletion).toHaveBeenCalledWith(
+      '/example/agents', 'a-limit', expect.any(String),
+      expect.objectContaining({ success: false, fallbackAnalysis: completion.fallbackAnalysis }),
+    );
+  });
+
+  it('does not stop a codex run whose prompt quotes a usage-limit banner', async () => {
+    const { post, connectClient, deps, children } = await bootTestRunner();
+    const client = await connectClient();
+    const completed = new Promise(resolve => client.once('agent:completed', resolve));
+    const prompt = 'Investigate this.\nNow using extra usage\nThen report.';
+
+    await post('/spawn', { agentId: 'a-echo', taskId: 't-echo', prompt, cliCommand: 'codex', cliArgs: ['exec'] });
+    children[0].stderr.emit('data', Buffer.from(`--------\nworkdir: /repo\n--------\nuser\n${prompt}\n`));
+    expect(deps.killProcessTree).not.toHaveBeenCalled();
+    children[0].emit('close', 0);
+
+    const completion = await completed;
+    expect(completion).toMatchObject({ success: true });
+    expect(completion).not.toHaveProperty('fallbackAnalysis');
+  });
+
+  it('carries the stream-json result as finalSummary, and the raw stream only for a failed run', async () => {
+    const { post, connectClient, deps, children } = await bootTestRunner();
+    const client = await connectClient();
+    const result = `${JSON.stringify({ type: 'result', result: 'The summary.' })}\n`;
+
+    const okCompleted = new Promise(resolve => client.once('agent:completed', resolve));
+    await post('/spawn', { agentId: 'a-ok', taskId: 't-ok', prompt: 'p', cliCommand: 'claude', cliArgs: ['--output-format', 'stream-json'] });
+    children[0].stdout.emit('data', Buffer.from(result.slice(0, 9)));
+    children[0].stdout.emit('data', Buffer.from(result.slice(9)));
+    children[0].emit('close', 0);
+    const ok = await okCompleted;
+    expect(ok).toMatchObject({ success: true, finalSummary: 'The summary.' });
+    expect(ok).not.toHaveProperty('rawStreamTail');
+    expect(ok).not.toHaveProperty('fallbackAnalysis');
+
+    const failCompleted = new Promise(resolve => client.once('agent:completed', resolve));
+    await post('/spawn', { agentId: 'a-fail', taskId: 't-fail', prompt: 'p', cliCommand: 'claude', cliArgs: ['--output-format', 'stream-json'] });
+    children[1].stdout.emit('data', Buffer.from(result));
+    children[1].emit('close', 1);
+    const failed = await failCompleted;
+    expect(failed).toMatchObject({ success: false, finalSummary: 'The summary.', rawStreamTail: result });
+    expect(deps.persistRunnerCompletion).toHaveBeenCalledWith(
+      '/example/agents', 'a-fail', 'The summary.',
+      expect.objectContaining({ success: false, rawStreamTail: result }),
     );
   });
 });

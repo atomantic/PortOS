@@ -3,7 +3,7 @@
  *
  *   drawWaveSketch()          musical description → a painted canvas
  *                             (lib/paintedCanvas.js, sketch v2, #8464).
- *                             Stateless (POST /api/music/waveform).
+ *                             Stateless (no store write); the engine drawWaveSketchForTrack persists.
  *   drawWaveSketchForTrack()  the same, persisted on the track as
  *                             `waveSketch`/`waveSketchPrompt` (#8376) so the
  *                             painting survives reloads, syncs to the user's

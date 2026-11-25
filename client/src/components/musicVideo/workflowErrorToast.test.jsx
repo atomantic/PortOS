@@ -4,7 +4,7 @@ import toast from '../ui/Toast';
 import { toastWorkflowError } from './workflowErrorToast.jsx';
 import { ATTENTION_ANCHOR_ID } from '../../lib/musicVideoAttention.js';
 
-vi.mock('../ui/Toast', () => ({ default: Object.assign(vi.fn(), { error: vi.fn(), info: vi.fn(), success: vi.fn(), dismiss: vi.fn() }) }));
+vi.mock('../ui/Toast');
 
 beforeEach(() => vi.clearAllMocks());
 

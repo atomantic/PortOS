@@ -19,7 +19,7 @@ PortOS integrates both through the **OpenCode llama TUI** provider preset and th
    - Seeded with default model aliases `["dflash", "qwen3.8-27b-dflash2", "Muse-Glimmer-30B-DFlash2"]` with default `dflash`. The launcher keeps `--alias dflash` for every drafter family so this alias resolves regardless of which one you run.
    - Fully enabled by default and equipped with OpenCode's agentic file-writing harness, tool calling, and session persistence.
 2. **Model Refresh**:
-   - Support for dynamic model discovery via the **Refresh Models** button on AI Providers, querying the local `llama-server` `/v1/models` endpoint.
+   - Dynamic model discovery from the local `llama-server` `/v1/models` endpoint: the presets' model lists update when PortOS starts the server and it answers. **Refresh Models** on AI Providers remains for a server you started yourself.
 3. **Local LLMs & AI Providers Guidance**:
    - UI instructions, command templates, and copyable run lines surfaced in **Models → Runtimes** and **AI Providers**.
 
@@ -211,7 +211,7 @@ Vision Projector / --mmproj**. Notes:
 ### 3. Use in PortOS
 1. Navigate to **AI Providers** (`/ai`) or **Models → Runtimes**.
 2. Verify **OpenCode llama TUI** is enabled.
-3. Click **Refresh Models** to pull the live aliases from `llama-server`, or use the default `dflash` model.
+3. Start the server from Models → Runtimes; the live aliases from `llama-server` appear once it answers (use **Refresh Models** only for a server you started yourself), or use the default `dflash` model.
 4. Select **OpenCode llama TUI** in the CoS task creator or terminal runner to execute coding and agent tasks with speculative acceleration.
 
 ### Generation defaults
@@ -303,3 +303,10 @@ pointing at a raw blob-store path; the one reported measurement through that
 path was ~13%, far below what the drafter delivers natively. Tracked upstream in
 [ollama#17016](https://github.com/ollama/ollama/issues/17016). **Use
 `llama-server` for speculative decoding in PortOS, not the Ollama backend.**
+
+## Comparing answers
+
+A running `llama-server` preset appears in the Local LLM Playground (Compare
+mode) under the llama.cpp group, so a DSpark/DFlash preset can be read next to an
+Ollama or LM Studio model on the same prompt. The Playground never starts the
+server and records no `/runs` entry for these runtimes.

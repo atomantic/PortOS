@@ -9,7 +9,7 @@ vi.mock('../../../services/apiPipeline.js', () => ({
   getEditorialHealth: (...a) => getEditorialHealth(...a),
   setEditorialReadinessGate: (...a) => setEditorialReadinessGate(...a),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../../ui/Toast');
 
 // Surfaces the live URL query string so a click that deep-links a triage filter
 // (#1606) is assertable.

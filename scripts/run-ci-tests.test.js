@@ -11,6 +11,7 @@ import {
   structuredFailureDiagnostics,
   extractCrashedTestFile,
   hasOtherTestFailures,
+  launcherDeadline,
   planCrashRetry,
   recordVitestDuration,
   repoRelativeFromCrashPath,
@@ -677,11 +678,12 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
       ].join('\n'));
       const guard = 'scripts/node-version-drift.guard.test.js';
       const runner = 'server/test/guards/repo.guard.test.js';
+      const scheduled = 'scripts/generate-prompt-stage-call-sites.test.js';
       const other = 'scripts/lib/releaseTitle.test.js';
       const run = (extraEnv) => spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
         encoding: 'utf8', timeout: 120000,
         env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, FAKE_SLOW_GUARD: guard,
-          CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify([other, guard, runner]), CI_TEST_SOURCES: '[]',
+          CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify([other, guard, runner, scheduled]), CI_TEST_SOURCES: '[]',
           PORTOS_TEST_MEMO: 'off', CI_SHARD: '', CI_GUARD_BUDGET: '', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', ...extraEnv },
       });
       const over = `${guard} 6.5s; ${runner} > fastCheck 4.6s; ${runner} > slowCheck 4.5s over the 4.0s per-guard budget.`;
@@ -689,23 +691,27 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
 
       const enforced = run({ CI_GUARD_BUDGET: 'enforce' });
       expect(enforced.status).toBe(1);
-      expect(enforced.stderr).toContain(`❌ Always-run guard over its time budget: ${over}`);
-      // The always-run guards ran alone, before the rest of the selection.
-      expect(ranSets(enforced.stdout)).toEqual([[`../${guard}`, 'test/guards/repo.guard.test.js'], [`../${other}`]]);
+      expect(enforced.stderr).toContain(`❌ Guard over its time budget: ${over}`);
+      expect(ranSets(enforced.stdout)).toEqual([[`../${guard}`, 'test/guards/repo.guard.test.js'], [`../${scheduled}`], [`../${other}`]]);
+
+      const slowScheduled = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: scheduled });
+      expect(slowScheduled.status).toBe(1);
+      expect(slowScheduled.stderr).toContain(`❌ Guard over its time budget: ${scheduled} 6.5s over the 4.0s per-guard budget.`);
 
       // Without enforcement (PR, push, release, local pregate, Windows, browser) an over-budget guard only warns:
       // it stays in the one normal pass with the rest of the selection and never fails the run.
       for (const extraEnv of [{}, { CI_GUARD_BUDGET: 'report' }]) {
         const reported = run(extraEnv);
         expect(reported.status, reported.stderr).toBe(0);
-        expect(ranSets(reported.stdout)).toEqual([[`../${guard}`, `../${other}`, 'test/guards/repo.guard.test.js'].sort()]);
-        expect(reported.stdout).toContain(`::warning title=Always-run guard over its time budget::${over}`);
-        expect(reported.stderr).not.toContain('Always-run guard over its time budget');
+        expect(ranSets(reported.stdout)).toEqual([[`../${guard}`, `../${other}`, `../${scheduled}`, 'test/guards/repo.guard.test.js'].sort()]);
+        expect(reported.stdout).toContain(`::warning title=Guard over its time budget::${over}`);
+        expect(reported.stderr).not.toContain('Guard over its time budget');
       }
 
       const fast = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: 'no-such-file' });
       expect(fast.status, fast.stderr).toBe(0);
-      expect(fast.stdout).toContain(`⏱️ Always-run guards, slowest of 3: ${guard} 0.0s; ${runner} > fastCheck 0.0s; ${runner} > slowCheck 0.0s (budget 4.0s).`);
+      expect(fast.stdout).toContain(`⏱️ Guards, slowest of 3: ${guard} 0.0s; ${runner} > fastCheck 0.0s; ${runner} > slowCheck 0.0s (budget 4.0s).`);
+      expect(fast.stdout).toContain(`⏱️ Guards, slowest of 1: ${scheduled} 0.0s (budget 4.0s).`);
     } finally {
       rmSync(fixture, { recursive: true, force: true });
     }
@@ -723,6 +729,47 @@ describe('ci.yml shard wiring', () => {
   // Composite actions expanded: these contracts hold for the steps GitHub runs.
   const CI_JOBS = readCiJobs();
   const runners = Object.entries(CI_JOBS).filter(([, body]) => /(?:run|watch)-ci-tests\.js/.test(body));
+
+  it('uses one server shard selection for both CTC NumPy setup steps', () => {
+    const steps = workflowJobs(WORKFLOW).server.split(/^ {6}- name: /m).slice(1);
+    const ctc = steps.filter(step => /^(Check CTC test selection|Cache CTC numpy virtualenv|Provide numpy for the CTC Viterbi tests)\n/.test(step));
+    expect(ctc).toHaveLength(3);
+    expect(ctc[0]).toContain('id: ctc-selection\n        run: node scripts/run-ci-tests.js server --check-ctc');
+    for (const step of ctc.slice(1)) expect(step).toContain("if: steps.ctc-selection.outputs.required == 'true'");
+    expect(ctc[2]).toContain("-I -c 'import numpy'");
+    expect(ctc[2]).toContain('CI_EXPECT_NUMPY_PYTHON=true');
+  });
+
+  it('requires NumPy for CTC in related, explicit and full plans on its owning shard', () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'portos-check-ctc-'));
+    const output = join(fixture, 'github_output');
+    const ctc = 'scripts/align_lyrics_ctc.test.js';
+    try {
+      const related = JSON.parse(execFileSync(process.execPath, [join(import.meta.dirname, 'ci-test-plan.js')], {
+        cwd: join(import.meta.dirname, '..'),
+        encoding: 'utf8', env: { ...process.env, CI_FORCE_FULL: 'false', CI_BASE_REF: 'main', CI_BASE_SHA: 'HEAD',
+          CI_CHANGED_FILES: '["server/lib/testHelper.js"]', GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
+      }));
+      expect(related.server_mode).toBe('related');
+      expect(related.server_files).toContain(ctc);
+      const requiresNumpy = (mode, files, sources = [], shard = '1/1') => {
+        writeFileSync(output, '');
+        execFileSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server', '--check-ctc'], {
+          env: { ...process.env, CI_TEST_MODE: mode, CI_TEST_FILES: JSON.stringify(files), CI_TEST_SOURCES: JSON.stringify(sources),
+            CI_SHARD: shard, GITHUB_OUTPUT: output, PORTOS_CI_BROWSER_OWNER: 'unit', PORTOS_BROWSER_TEST_PROFILE: undefined },
+        });
+        return readFileSync(output, 'utf8').trim();
+      };
+      expect(requiresNumpy(related.server_mode, related.server_files, related.server_sources)).toBe('required=true');
+      expect(requiresNumpy('related', [], related.server_sources)).toBe('required=true');
+      expect(requiresNumpy('files', [ctc])).toBe('required=true');
+      expect(requiresNumpy('files', ['scripts/run-ci-tests.test.js'])).toBe('required=false');
+      expect(['1/2', '2/2'].map(shard => requiresNumpy('full', [], [], shard)).sort())
+        .toEqual(['required=false', 'required=true']);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
 
   it('builds every test runner matrix from the planner and hands each slice to the runner', () => {
     expect(runners.map(([id]) => id).sort()).toEqual(['browser', 'client', 'database', 'server', 'windows-server']);
@@ -791,19 +838,30 @@ describe('ci.yml shard wiring', () => {
     const memoIndex = body.indexOf('- name: Restore the test memo');
     const planIndex = body.indexOf('- name: Check remaining browser suites');
     const toolsIndex = body.indexOf('- name: Install audio verification tools');
+    const recheckIndex = body.indexOf('- name: Recheck browser suites after audio setup');
     const clientIndex = body.indexOf('uses: ./.github/actions/setup-client');
     expect(memoIndex).toBeGreaterThan(0);
     expect(memoIndex).toBeLessThan(planIndex);
     expect(planIndex).toBeLessThan(toolsIndex);
-    expect(toolsIndex).toBeLessThan(clientIndex);
+    expect(toolsIndex).toBeLessThan(recheckIndex);
+    expect(recheckIndex).toBeLessThan(clientIndex);
     expect(clientIndex).toBeLessThan(start);
     const planStep = body.slice(planIndex, toolsIndex);
     expect(planStep).toContain('id: browser-plan');
     expect(planStep).toContain('run: node scripts/run-ci-tests.js server --check-remaining');
-    expect(planStep).toContain('PORTOS_CI_BROWSER_OWNER: browser');
-    expect(planStep).toContain("PORTOS_REQUIRE_BROWSER_SUITES: '1'");
-    const gate = 'if: fromJSON(steps.browser-plan.outputs.remaining) > 0';
-    expect(body.slice(toolsIndex, clientIndex)).toContain(gate);
+    expect(planStep).toContain("PORTOS_CI_BEFORE_AUDIO_SETUP: '1'");
+    expect(body.slice(toolsIndex, recheckIndex)).toContain('if: fromJSON(steps.browser-plan.outputs.remaining) > 0');
+    const recheckStep = body.slice(recheckIndex, clientIndex);
+    expect(recheckStep).toContain("if: steps.browser-plan.outputs.recheck == 'true'");
+    expect(recheckStep).toContain('run: node scripts/run-ci-tests.js server --check-remaining');
+    for (const name of ['PORTOS_TEST_MEMO_DIR', 'CI_TEST_MODE', 'CI_SHARD', 'PORTOS_CI_BROWSER_OWNER',
+      'CI_TEST_FILES', 'PORTOS_REQUIRE_BROWSER_SUITES', 'PORTOS_TEST_QUIET']) {
+      const envLine = step.match(new RegExp(`^ +${name}: .+$`, 'm'))?.[0];
+      expect(envLine).toBeDefined();
+      expect(planStep).toContain(envLine);
+      expect(recheckStep).toContain(envLine);
+    }
+    const gate = 'if: fromJSON(steps.browser-recheck.outputs.remaining || steps.browser-plan.outputs.remaining) > 0';
     expect(body.slice(clientIndex, start)).toContain(gate);
     expect(step).toContain(gate);
   });
@@ -1528,5 +1586,81 @@ describe('browser shard ownership', () => {
     ];
     const shardOf = (file) => [1, 2, 3, 4].find(index => browserShardSlice(BROWSER_SUITES, { index, count: 4 }, 'smoke').includes(file));
     expect(heavy.map(shardOf)).toEqual([1, 2, 3, 4]);
+  });
+});
+
+describe('launcher wall-clock deadline (#18636)', () => {
+  const crashing = { status: 1, output: 'Caused by: Error: Worker exited unexpectedly with exit code 3221226505 '
+    + 'during started state while running test file D:/a/PortOS/PortOS/server/services/sprites/importer.test.js' };
+
+  it('reads a positive number of minutes and ignores everything else', () => {
+    for (const value of [undefined, '', '0', '-3', 'abc', 'Infinity']) {
+      expect(launcherDeadline({ PORTOS_CI_TEST_DEADLINE_MINUTES: value })).toBeNull();
+    }
+    const deadline = launcherDeadline({ PORTOS_CI_TEST_DEADLINE_MINUTES: '20' });
+    expect(deadline.minutes).toBe(20);
+    expect(deadline.signal.aborted).toBe(false);
+  });
+
+  it('hands the one shared signal to the first run and the crash retry, and starts nothing once it expired', async () => {
+    const controller = new AbortController();
+    const run = vi.fn(async () => crashing);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await spawnNpm('server', 'test:ci', ['a.test.js'], 'pass', { run, diagnose: async () => {}, signal: controller.signal });
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run.mock.calls.map(call => call[3])).toEqual([{ signal: controller.signal }, { signal: controller.signal }]);
+      controller.abort();
+      run.mockClear();
+      expect(await spawnNpm('server', 'test:ci', [], 'next pass', { run, signal: controller.signal })).toBe(143);
+      expect(run).not.toHaveBeenCalled();
+    } finally { vi.restoreAllMocks(); quiet.mockRestore(); }
+  });
+
+  it('ends a child that never exits, names the deadline, keeps the output tail and hides the variable from nested launchers', () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'portos-deadline-'));
+    try {
+      installFakeNpm(fixture, [
+        'process.on("SIGTERM", () => {});',
+        'process.stdout.write("DEADLINE_SEEN=" + String(process.env.PORTOS_CI_TEST_DEADLINE_MINUTES) + "\\n");',
+        'process.stdout.write("LAST_OUTPUT_BEFORE_HANG\\n");',
+        'setInterval(() => {}, 1000);',
+      ].join('\n'));
+      const started = Date.now();
+      const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
+        encoding: 'utf8', timeout: 60000,
+        env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, PORTOS_CI_TEST_DEADLINE_MINUTES: '0.03',
+          CI_TEST_MODE: 'full', CI_TEST_FILES: '[]', CI_TEST_SOURCES: '[]', PORTOS_TEST_MEMO: 'off', PORTOS_TEST_MEMO_DIR: '',
+          CI_SHARD: '', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.status).not.toBeNull();
+      expect(result.stderr).toContain('Test launcher deadline of 0.03 minute(s) (PORTOS_CI_TEST_DEADLINE_MINUTES) expired');
+      expect(result.stderr).toContain('Vitest output tail');
+      expect(result.stderr).toContain('LAST_OUTPUT_BEFORE_HANG');
+      expect(result.stdout).toContain('DEADLINE_SEEN=undefined');
+      expect(Date.now() - started).toBeLessThan(30000);
+    } finally { rmSync(fixture, { recursive: true, force: true }); }
+  });
+
+  it('sets the variable on the four launcher test steps below their step or job limit', () => {
+    const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
+    const jobs = workflowJobs(workflow);
+    const steps = [['server', 'node scripts/run-ci-tests.js server\n'], ['client', 'node scripts/run-ci-tests.js client\n'],
+      ['database', 'node scripts/run-ci-tests.js db\n'], ['windows-server', 'node scripts/run-ci-tests.js server\n']];
+    for (const [id, command] of steps) {
+      const job = jobs[id];
+      expect(job, id).toBeTruthy();
+      const end = job.indexOf(`run: ${command}`) + command.length;
+      const start = job.lastIndexOf('      - name:', end);
+      const step = job.slice(start, end);
+      const deadline = Number(step.match(/PORTOS_CI_TEST_DEADLINE_MINUTES:\s*(\d+)/)?.[1]);
+      const stepMinutes = Number(step.match(/timeout-minutes:\s*(\d+)/)?.[1]);
+      const limit = stepMinutes || Number(job.match(/^ {4}timeout-minutes:\s*(\d+)/m)?.[1]);
+      expect(deadline, id).toBeGreaterThan(0);
+      expect(deadline, id).toBeLessThan(limit);
+    }
   });
 });

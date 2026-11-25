@@ -1,3 +1,4 @@
+import { resolveSplashHarnessContext } from '../lib/splashHarnessLaunch.js';
 import { runOwnership, runChildIdentity } from '../lib/aiToolkit/internal/runOwnership.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
@@ -305,7 +306,7 @@ ${prompt}`;
   // the PTY is always a truecolor xterm regardless of provider config. No
   // `guard`: this is a Run Prompt TUI, not an autonomous agent.
   const childEnv = buildCliChildEnv({
-    provider,
+    provider: await resolveSplashHarnessContext(provider, provider.defaultModel),
     cwd: workingDir,
     guard,
     extra: { TERM: 'xterm-256color', COLORTERM: 'truecolor' },

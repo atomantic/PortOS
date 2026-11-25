@@ -7,16 +7,13 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
 import { normalizeVideo } from '../components/media/normalize';
-import toast from '../components/ui/Toast';
-import { cancelVideoPendingDelete, deleteVideoHistoryItem, listVideoHistory } from '../services/apiImageVideo.js';
+import { listVideoHistory } from '../services/apiImageVideo.js';
 import { useMediaCompletionRefresh } from './useMediaCompletionRefresh';
 import { useMediaAnnotations } from './useMediaAnnotations';
-import { refreshMediaUsages } from './useMediaUsages';
 import { useMediaHideToggle } from './useMediaHideToggle';
 import usePreviewRoute from './usePreviewRoute';
-import usePendingDeletePeerNames from './usePendingDeletePeerNames';
+import { useMediaDelete } from './useMediaDelete';
 
 // The gallery shows the newest records; older ones are reached by id (Remix) or Media History.
 const HISTORY_PAGE_LIMIT = 200;
@@ -74,42 +71,15 @@ export function useVideoGenHistory() {
   ], [galleryVisibleItems, galleryHiddenItems, showHidden]);
   const [preview, setPreview] = usePreviewRoute(previewItems);
 
-  const { peerNames: pendingPeerNames, rememberPeerName } = usePendingDeletePeerNames(history);
-  const withPendingDelete = useCallback((id, pendingDelete) => setHistory((h) => h.map((v) => {
-    if (v.id !== id) return v;
-    const { pendingDelete: _previous, ...rest } = v;
-    return pendingDelete ? { ...rest, pendingDelete } : rest;
-  })), []);
-  const handleDeleteHistory = useCallback(async (item, { force = false } = {}) => {
-    const raw = item?.raw || item;
-    const result = await deleteVideoHistoryItem(raw.id, { silent: true, force })
-      .catch((err) => {
-        if (err.code === 'MEDIA_IN_USE') void refreshMediaUsages();
-        toast.error(err.message || 'Delete failed');
-        return null;
-      });
-    if (!result) return;
-    void refreshMediaUsages();
-    const outcome = mediaDeleteOutcome(result, 'video');
-    // A delete that waits on, or did not reach, this machine's copy keeps the row.
-    if (!outcome.remove) {
-      rememberPeerName(outcome.pendingDelete?.peerId, result.peerName);
-      withPendingDelete(raw.id, outcome.pendingDelete);
-      toast(outcome.notice);
-      return;
-    }
-    setHistory((h) => h.filter((v) => v.id !== raw.id));
-    if (outcome.tone === 'info') toast(outcome.notice);
-  }, [rememberPeerName, withPendingDelete]);
-  const handleCancelPendingDelete = useCallback(async (item) => {
-    const raw = item?.raw || item;
-    const cancelled = await cancelVideoPendingDelete(raw.id, { silent: true })
-      .then(() => true)
-      .catch((err) => { toast.error(err.message || 'Cancel failed'); return false; });
-    if (!cancelled) return;
-    withPendingDelete(raw.id, null);
-    toast.success('Pending delete cancelled');
-  }, [withPendingDelete]);
+  const { deleteItem: handleDeleteHistory, cancelPendingDelete, pendingPeerNames } = useMediaDelete({
+    rows: history,
+    onPending: useCallback((item, pendingDelete) => setHistory((current) => current.map((video) => {
+      if (video.id !== item.id) return video;
+      const { pendingDelete: _previous, ...rest } = video;
+      return pendingDelete ? { ...rest, pendingDelete } : rest;
+    })), []),
+    onRemoved: useCallback((item) => setHistory((current) => current.filter((video) => video.id !== item.id)), []),
+  });
   const handlePromptSaved = useCallback((item, prompt) => {
     const id = item?.id || item?.raw?.id;
     if (!id) return;
@@ -156,7 +126,7 @@ export function useVideoGenHistory() {
       onPreview: setPreview,
       onUpscale: handleUpscaleHistory,
       onDelete: handleDeleteHistory,
-      onCancelPendingDelete: handleCancelPendingDelete,
+      onCancelPendingDelete: cancelPendingDelete,
       pendingPeerNames,
       onToggleHidden: handleToggleHistoryHidden,
       getCardProps,

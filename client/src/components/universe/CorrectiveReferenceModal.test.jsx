@@ -17,7 +17,7 @@ vi.mock('./VisionProviderPicker', () => ({
     <button onClick={() => onChange({ providerId: 'ollama', model: 'qwen-vl', hasProviders: true })}>Select vision model</button>
   ),
 }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 const baseProps = {
   open: true, kind: 'character', entryName: 'Vex', universeId: 'uni-1', entryId: 'chr-1',

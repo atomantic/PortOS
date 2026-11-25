@@ -16,7 +16,7 @@ vi.mock('../../services/apiReferenceRepos.js', () => ({
   deleteReferenceRepo: api.deleteReferenceRepo,
 }));
 vi.mock('../../services/apiApps.js', () => ({ getAppWorkTracker: api.getAppWorkTracker }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import ReferenceReposPanel from './ReferenceReposPanel';
 

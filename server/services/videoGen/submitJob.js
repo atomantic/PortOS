@@ -423,7 +423,7 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
     mode: backend,
     videoMode: body.mode || (sourceImagePath ? 'image' : 'text'),
     prompt: body.prompt,
-    negativePrompt: body.negativePrompt || '',
+    negativePrompt: backend === VIDEO_GEN_MODE.REACTOR ? '' : body.negativePrompt || '',
     sourceImagePath,
     uploadedTempPath,
     ...submissionTagParams(body),

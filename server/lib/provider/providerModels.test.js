@@ -4,7 +4,6 @@ import {
   CODEX_CONFIGURED_DEFAULT,
   GROK_CONFIGURED_DEFAULT,
   KIMI_CONFIGURED_DEFAULT,
-  isCodexConfiguredDefault,
   isConfiguredDefaultModel,
   resolveCliModel,
   filterSelectableModels,
@@ -104,20 +103,6 @@ describe('providerModels', () => {
       expect(commandBasename(null)).toBe('');
       expect(commandBasename(undefined)).toBe('');
       expect(commandBasename(42)).toBe('');
-    });
-  });
-
-  describe('isCodexConfiguredDefault', () => {
-    it('matches the sentinel exactly', () => {
-      expect(isCodexConfiguredDefault(CODEX_CONFIGURED_DEFAULT)).toBe(true);
-      expect(isCodexConfiguredDefault('codex-configured-default')).toBe(true);
-    });
-
-    it('rejects everything else', () => {
-      expect(isCodexConfiguredDefault('gpt-5')).toBe(false);
-      expect(isCodexConfiguredDefault('')).toBe(false);
-      expect(isCodexConfiguredDefault(null)).toBe(false);
-      expect(isCodexConfiguredDefault(undefined)).toBe(false);
     });
   });
 

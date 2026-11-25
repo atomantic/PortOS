@@ -408,6 +408,24 @@ describe('alignProjectLyrics', () => {
       }
     });
 
+  it('still repairs a later run after an earlier one fails recoverably', async () => {
+    const record = { ...project, vocalStemFilename: 'stem.wav', lyricCues: Array.from({ length: 3 }, (_, i) => ({
+      id: String(i), text: 'one two three', startSec: null, endSec: null,
+    })) };
+    const words = (start, step) => ['one', 'two', 'three'].map((w, i) => ({
+      w, startSec: round3(start + i * step), endSec: round3(start + (i + 1) * step), conf: 'matched',
+    }));
+    const whole = [words(1, 0.1), words(3, 0.3), words(6, 0.1)];
+    const retry = words(6, 0.3);
+    const forceAlign = vi.fn().mockResolvedValueOnce(whole).mockRejectedValueOnce({ code: 'LYRIC_ALIGN_CTC_FAILED' }).mockResolvedValueOnce([retry]);
+    const h = harness(vi.fn(), record, { resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem' }) });
+    const stem = encodePcm16Wav(16000 * 10);
+    for (let i = 0; i < 16000 * 10; i++) stem.writeInt16LE(5000, 44 + i * 2);
+    h.decodeAudio.mockResolvedValue(stem);
+    const saved = await h.run({ deps: { forceAlign } });
+    expect(saved.lyricCues.map((cue) => cue.words)).toEqual([whole[0], whole[1], retry]);
+  });
+
   it('repairs a consecutive run together and keeps only improved lines', async () => {
     const record = { ...project, vocalStemFilename: 'stem.wav', lyricCues: Array.from({ length: 5 }, (_, i) => ({
       id: String(i), text: 'one two three', startSec: null, endSec: null,

@@ -15,6 +15,7 @@
 import { formatCount, formatRuntime, formatUsd } from '../utils/formatters.js';
 import {
   credentialSource,
+  hasLocalRuntimeMarker,
   isApiProvider,
   isLocalInstanceProvider,
   isOllamaBackedProvider,
@@ -40,9 +41,7 @@ export const MIND_ROUTE_BILLING = Object.freeze({
 });
 
 const isLocalBackedRecord = (provider) => Boolean(
-  localBackendForProvider(provider) || isOllamaBackedProvider(provider)
-  || provider?.llamaBacked === true || provider?.mtplxBacked === true
-  || provider?.vllmBacked === true || provider?.sglangBacked === true,
+  localBackendForProvider(provider) || isOllamaBackedProvider(provider) || hasLocalRuntimeMarker(provider),
 );
 
 /**

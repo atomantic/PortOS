@@ -1,7 +1,8 @@
 import { beforeEach, it, expect, vi } from 'vitest';
 import { mockNoPeers } from '../lib/mockPathsDataRoot.js';
-import { exportPortosQuality, collectPortosQuality, collectAppQuality, buildQualitySnapshot, readReleaseQuality, FEDERATION_LEGACY_CATEGORIES, resetQualityPeerPullState } from './appQualityFederation.js';
+import { exportPortosQuality, collectAppQuality, buildQualitySnapshot, readReleaseQuality, FEDERATION_LEGACY_CATEGORIES, resetQualityPeerPullState } from './appQualityFederation.js';
 import { instanceEvents } from './instanceEvents.js';
+import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 
 beforeEach(() => resetQualityPeerPullState());
 import { enrichAppsWithQuality, getAppQualityHistory } from './appQuality.js';
@@ -39,7 +40,7 @@ it('exports only validated local numeric evidence to approved sync peers', async
   for (const disabled of [{ enabled: false }, { syncEnabled: false }, { directions: ['inbound'] }]) {
     const blocked = { ...local, getPeers: async () => [{ ...peer, ...disabled }] };
     expect(await exportPortosQuality(peer.instanceId, 30, blocked)).toBeNull();
-    expect(await collectPortosQuality(30, blocked)).toMatchObject({ records: [], federation: { peers: 0 } });
+    expect(await collectAppQuality({ id: PORTOS_APP_ID }, 30, blocked)).toMatchObject({ records: [], federation: { peers: 0 } });
   }
   expect(await exportPortosQuality(peer.instanceId, 30, { ...local, getOriginInfo: async () => ({}) })).toBeNull();
 });
@@ -85,7 +86,7 @@ it('keeps a newer peer\'s known categories when it also sends one this install c
   const remote = await exportPortosQuality(peer.instanceId, 30, deps([row('security', 80)]));
   const withUnknown = { ...remote, measurements: [...remote.measurements,
     { ...remote.measurements[0], measurementId: 'c'.repeat(64), report: { ...remote.measurements[0].report, category: 'example-future-lens' } }] };
-  const { records, federation } = await collectPortosQuality(30, { ...deps([]), peerFetch: async () => response(withUnknown) });
+  const { records, federation } = await collectAppQuality({ id: PORTOS_APP_ID }, 30, { ...deps([]), peerFetch: async () => response(withUnknown) });
   expect(records.map(record => record.category)).toEqual(['security']);
   expect(federation).toMatchObject({ available: 1, unavailable: 0 });
 });
@@ -122,7 +123,7 @@ it('keeps local scores on old, offline, malformed, oversize or mismatched peers 
   const [partial] = await enrichAppsWithQuality([{ id: 'portos-default' }], { ...local, peerFetch: async () => response(oneBad) });
   expect(partial.quality).toMatchObject({ score: 20, federation: { available: 1, unavailable: 0 } });
   const future = { ...payload, measurements: [{ ...payload.measurements[0], assessedAt: '2026-09-11T00:00:00Z' }] };
-  expect((await collectPortosQuality(30, { ...local, peerFetch: async () => response(future) })).records).toEqual([]);
+  expect((await collectAppQuality({ id: PORTOS_APP_ID }, 30, { ...local, peerFetch: async () => response(future) })).records).toEqual([]);
 });
 
 it('keeps a fresh scored run in the window under newer partial evidence and breaks ties consistently', async () => {

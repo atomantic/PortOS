@@ -36,8 +36,8 @@
  * shared corpus, so placement is the registration there. A registration nobody
  * can forget to make only works if something fails when it is missing, so the
  * content detectors in scripts/lib/guardScanners.js stay as a one-way check
- * here: a test they recognise as a scanner must carry the suffix or live in a
- * guard directory. They select nothing.
+ * here: a test they recognise as a scanner must be selected, normally by the
+ * suffix or a guard directory. The detectors select nothing.
  */
 import { describe, it, expect } from 'vitest';
 import { join } from 'path';
@@ -156,10 +156,11 @@ describe('tree guards are selected by filename (#5055, #16085, #16553)', () => {
     expect(clientGuards.filter((p) => !plan.client.files.includes(p))).toEqual([]);
   });
 
-  it('has no scanner without the suffix', () => {
+  it('has no scanner without guard selection or a justified exemption', () => {
     const sources = Object.fromEntries(trackedTests.map((rel) => [rel, sourceOf(rel)]));
+    const accountedFor = new Set([...SCANNERS_WITHOUT_SUFFIX.keys(), ...EXPLICIT_ALWAYS_RUN_TESTS]);
     expect(
-      findUnsuffixedScanners(sources, new Set(SCANNERS_WITHOUT_SUFFIX.keys())),
+      findUnsuffixedScanners(sources, accountedFor),
       'these tests scan the tracked tree but no plan selects them: move each scan into server/test/guards/ '
       + '(client/src/test/guards/ for a client scan), out of any behavioural suite, or list it in SCANNERS_WITHOUT_SUFFIX with the reason',
     ).toEqual([]);

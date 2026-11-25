@@ -6,7 +6,7 @@ vi.mock('../../services/apiSystem', () => ({
   patchSettingsSlice: vi.fn(),
 }));
 vi.mock('../../services/apiAgents', () => ({ getCosConfig: vi.fn() }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
+vi.mock('../ui/Toast');
 
 import { getSettings, patchSettingsSlice } from '../../services/apiSystem';
 import { getCosConfig } from '../../services/apiAgents';

@@ -20,10 +20,7 @@ import {
   appendRecentOutcome,
   hasCountedAgent,
   markAgentCounted,
-  computeWindowedStats,
   executionDurationKey,
-  DEFAULT_WINDOW_MAX_COUNT,
-  DEFAULT_WINDOW_MAX_AGE_MS,
   ENVIRONMENTAL_ERROR_CATEGORIES
 } from './store.js';
 import { deriveFailureSignalAvoidance, isNonRoutableLearnedTier } from './routing.js';
@@ -763,26 +760,6 @@ export async function recordTaskCompletion(agent, task) {
   }
 
   return result;
-}
-
-/**
- * Recency-windowed success stats for a task type (issue #2460). Loads the
- * learning store, reads the task type's `recentOutcomes` ring, and windows it by
- * count and/or age via the pure `computeWindowedStats`. Read-only. Returns the
- * `null`-successRate sentinel when the task type is absent or has no in-window
- * samples, so callers (Layered Intelligence) can fall back to the lifetime rate
- * rather than treat "no recent runs" as a fabricated 0%.
- *
- * @param {string} taskType
- * @param {{ maxCount?:number, maxAgeMs?:number }} [opts]
- */
-export async function getWindowedStats(taskType, {
-  maxCount = DEFAULT_WINDOW_MAX_COUNT,
-  maxAgeMs = DEFAULT_WINDOW_MAX_AGE_MS
-} = {}) {
-  const data = await loadLearningData();
-  const metrics = data.byTaskType?.[taskType];
-  return computeWindowedStats(metrics?.recentOutcomes, { maxCount, maxAgeMs });
 }
 
 // `resetTaskTypeLearning` + `removeTaskTypeFromLearningData` live in the reset

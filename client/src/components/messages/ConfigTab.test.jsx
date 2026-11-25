@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const api = vi.hoisted(() => ({
@@ -207,4 +207,24 @@ describe('Messages prompt template settings', () => {
     expect(screen.queryByText(/Failed to load saved message settings/)).not.toBeInTheDocument();
     expect(api.updateSettings).not.toHaveBeenCalled();
   });
+});
+
+it('only suggests adding an account after a successful empty read', async () => {
+  api.getGoogleAuthStatus.mockResolvedValue({ hasCredentials: false, hasTokens: false });
+  const setAccounts = vi.fn();
+  const panel = (accounts, accountsUnavailable = false) => (
+    <MemoryRouter>
+      <ConfigTab accounts={accounts} accountsUnavailable={accountsUnavailable} setAccounts={setAccounts} />
+    </MemoryRouter>
+  );
+  const { rerender } = render(panel([], true));
+  await act(async () => {});
+  expect(screen.queryByText('No accounts configured')).not.toBeInTheDocument();
+
+  rerender(panel([]));
+  expect(screen.getByText('No accounts configured')).toBeInTheDocument();
+
+  await act(async () => { rerender(panel([gmailAccount])); });
+  expect(screen.getByText(gmailAccount.name)).toBeInTheDocument();
+  expect(screen.queryByText('No accounts configured')).not.toBeInTheDocument();
 });

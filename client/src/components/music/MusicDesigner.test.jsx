@@ -99,6 +99,38 @@ describe('<MusicDesigner>', () => {
 
   afterEach(cleanup);
 
+  describe('track load failures', () => {
+    const httpError = (status) => Object.assign(new Error(`HTTP ${status}`), { status });
+
+    it('keeps the stored draft on a read failure, shows Retry and loads on retry', async () => {
+      window.localStorage.setItem('portos.musicDesigner.activeDraft', 'track-saved');
+      getTrack.mockRejectedValueOnce(httpError(500));
+      getTrack.mockResolvedValueOnce({ id: 'track-saved', title: 'Untitled music draft', concept: 'folk', prompt: '', lyrics: '' });
+      renderAt('/music/generate/concept');
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+      expect(await screen.findByDisplayValue('folk')).toBeInTheDocument();
+      expect(createTrack).not.toHaveBeenCalled();
+      expect(window.localStorage.getItem('portos.musicDesigner.activeDraft')).toBe('track-saved');
+    });
+
+    it('starts one new draft when the stored draft is 404', async () => {
+      window.localStorage.setItem('portos.musicDesigner.activeDraft', 'gone');
+      getTrack.mockRejectedValueOnce(httpError(404));
+      renderAt('/music/generate/concept');
+      await findEnabledByLabelText(/what do you want to hear/i);
+      expect(createTrack).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not create a track for an explicit ?trackId= that is 404', async () => {
+      getTrack.mockRejectedValueOnce(httpError(404));
+      renderAt('/music/generate/concept?trackId=missing');
+      expect(await screen.findByText('Track not found.')).toBeInTheDocument();
+      expect(createTrack).not.toHaveBeenCalled();
+      expect(screen.getByTestId('location')).toHaveTextContent('trackId=missing');
+    });
+  });
+
   describe('step routing', () => {
     it('defaults a bare /music/generate to the concept step', async () => {
       renderAt('/music/generate');

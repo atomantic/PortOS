@@ -2,6 +2,7 @@ import { hardwareUnavailableReason } from '../../utils/systemCapabilities';
 import { useState } from 'react';
 import { AlertTriangle, Braces, Cpu, Plug, SlidersHorizontal } from 'lucide-react';
 import toast from '../ui/Toast';
+import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { deriveProviderPreset, updateProvider, createProvider } from '../../services/apiProviders.js';
 import { mergeModelLists, mergeObservedContextWindows, withRuntimeContextWindow, isOllamaBackedProvider, generationControlsFor } from '../../utils/providers';
 import Banner from '../ui/Banner';
@@ -13,6 +14,8 @@ import ProviderConnectionTab from './ProviderConnectionTab';
 import ProviderModelsTab from './ProviderModelsTab';
 import ProviderGenerationTab from './ProviderGenerationTab';
 import ProviderEnvironmentTab from './ProviderEnvironmentTab';
+import { getHarnessContextTarget, harnessContextError, harnessContextPayload, parseHarnessContext } from './harnessContextForm.js';
+import { CLAUDE_CONTEXT_ENV_KEY } from '../../../../server/lib/provider/splashHarnessContext.js';
 
 // The provider editor's Drawer tabs. `connection` is the default, so a bare
 // /ai/edit/:providerId deep link opens on the identity/transport fields; the
@@ -28,6 +31,7 @@ const PROVIDER_FORM_TAB_IDS = PROVIDER_FORM_TABS.map(t => t.id);
 export default function ProviderForm({ provider, daemonReadiness = null, onClose, onSave, onEditProvider, allProviders = [], localModels = { ollama: [], lmstudio: [], ctxById: {}, hardwareCompatibilityByBackend: {} }, runnerAllowedCommands = null }) {
   const [modelsText, setModelsText] = useState(() => providerModelCatalog(provider).join(', '));
   const [formData, setFormData] = useState(() => initialProviderFormData(provider));
+  const [harnessContextDraft, setHarnessContextDraft] = useState(null);
 
   const [activeTab, setActiveTab] = useDrawerTab('providerTab', 'connection', PROVIDER_FORM_TAB_IDS);
   // Preset structure (#7565). A DERIVED preset takes its program, endpoint,
@@ -117,8 +121,22 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
   // `capabilityProvider` for the same reason `showsNumCtx` does: `llamaBacked`
   // and friends are record markers, not form fields.
   const generationControls = generationControlsFor(capabilityProvider);
+  const harnessTarget = getHarnessContextTarget(capabilityProvider);
+  const editingHarnessContext = harnessTarget && harnessContextDraft?.key === harnessTarget.key;
+  const harnessContext = editingHarnessContext ? harnessContextDraft.value : harnessTarget?.value;
+  const servedHarnessContext = daemonReadiness?.contextWindows?.[harnessTarget?.model]
+    ?? daemonReadiness?.contextWindows?.[harnessTarget?.id] ?? null;
 
-  const handleSubmit = async (e) => {
+  const [save, saving] = useAsyncAction(async (data) => {
+    try {
+      await (provider ? updateProvider(provider.id, data) : createProvider(data));
+    } catch {
+      return; // The request helper toasted it; the form stays open with the edits.
+    }
+    onSave();
+  });
+
+  const handleSubmit = (e) => {
     e.preventDefault();
 
     const invalid = findProviderFormError({ formData, createsModePair, showsNumCtx, generationControls });
@@ -128,14 +146,17 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
       return;
     }
 
-    const data = buildProviderPayload({ provider, formData, modelsText, showsNumCtx, generationControls, createsModePair, tuiArgs });
-    if (provider) {
-      await updateProvider(provider.id, data);
-    } else {
-      await createProvider(data);
+    if (editingHarnessContext) {
+      const error = harnessContextError(harnessTarget, harnessContext);
+      if (error) {
+        setActiveTab('generation');
+        toast.error(error);
+        return;
+      }
     }
-
-    onSave();
+    const data = buildProviderPayload({ provider, formData, modelsText, showsNumCtx, generationControls, createsModePair, tuiArgs });
+    if (editingHarnessContext) data.harnessContext = harnessContextPayload(harnessTarget, harnessContext);
+    save(data);
   };
 
   return (
@@ -207,6 +228,10 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
               formData={formData}
               setFormData={setFormData}
               capabilityProvider={capabilityProvider}
+              harnessTarget={harnessTarget}
+              harnessContext={harnessContext}
+              setHarnessContext={(value) => setHarnessContextDraft({ key: harnessTarget.key, value })}
+              servedHarnessContext={servedHarnessContext}
               showsNumCtx={showsNumCtx}
               generationControls={generationControls}
             />
@@ -216,6 +241,12 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
             <ProviderEnvironmentTab
               formData={formData}
               setFormData={setFormData}
+              onEditHarnessContext={harnessTarget ? () => setActiveTab('generation') : null}
+              managedContext={harnessTarget?.splashManaged && harnessTarget.kind === 'claude' ? {
+                key: CLAUDE_CONTEXT_ENV_KEY,
+                tokens: parseHarnessContext(harnessContext) ?? servedHarnessContext ?? harnessTarget.fallback,
+                followsRuntime: harnessContext === '',
+              } : null}
               newEnvKey={newEnvKey}
               setNewEnvKey={setNewEnvKey}
               newEnvValue={newEnvValue}
@@ -235,7 +266,8 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
             </button>
             <button
               type="submit"
-              className="px-6 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
+              disabled={saving}
+              className="px-6 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors disabled:opacity-50"
             >
               {provider ? 'Save' : 'Create'}
             </button>

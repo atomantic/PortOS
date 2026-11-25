@@ -4,7 +4,6 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
 const mocks = vi.hoisted(() => ({
-  readRunEvents: vi.fn(),
   getRunProjections: vi.fn(),
   getRunDiagnostic: vi.fn(),
   getRunEventLedgerStats: vi.fn(),
@@ -17,7 +16,6 @@ vi.mock('../services/agent/agentRunReconciler.js', () => mocks);
 const activityMocks = vi.hoisted(() => ({
   getRecentActivities: vi.fn(async () => []),
   getActivityTimeline: vi.fn(async () => []),
-  getActivities: vi.fn(async () => []),
   getAgentStats: vi.fn(async () => ({})),
   cleanupOldActivity: vi.fn(async () => 0),
 }));
@@ -36,46 +34,6 @@ const app = () => {
 
 const get = (path) => request(app()).get(`/api/agents/activity${path}`);
 const post = (path, body) => request(app()).post(`/api/agents/activity${path}`).send(body);
-
-describe('GET /run-events', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.readRunEvents.mockResolvedValue([]);
-    mocks.getRunProjections.mockResolvedValue([]);
-    mocks.getRunDiagnostic.mockResolvedValue({ projection: null, events: [] });
-    mocks.getRunEventLedgerStats.mockResolvedValue({ activeEvents: 0, archivedEvents: 0 });
-  });
-
-  it('passes validated, coerced filters through to the ledger', async () => {
-    const res = await get('/run-events?runId=r1&kind=run.finalized&limit=25&since=2026-08-18T10:00:00.000Z');
-    expect(res.status).toBe(200);
-    // `limit` must arrive as a NUMBER — the service compares it numerically, so a
-    // raw query string would silently disable the cap.
-    expect(mocks.readRunEvents).toHaveBeenCalledWith({
-      runId: 'r1',
-      kind: 'run.finalized',
-      limit: 25,
-      since: '2026-08-18T10:00:00.000Z',
-    });
-  });
-
-  it('rejects a kind outside the closed event vocabulary', async () => {
-    const res = await get('/run-events?kind=run.invented');
-    expect(res.status).toBe(400);
-    expect(mocks.readRunEvents).not.toHaveBeenCalled();
-  });
-
-  it('rejects a limit above the ledger read ceiling', async () => {
-    expect((await get('/run-events?limit=100000')).status).toBe(400);
-    expect((await get('/run-events?limit=0')).status).toBe(400);
-    expect(mocks.readRunEvents).not.toHaveBeenCalled();
-  });
-
-  it('rejects an unknown query key rather than ignoring it', async () => {
-    expect((await get('/run-events?nope=1')).status).toBe(400);
-  });
-
-});
 
 describe('GET /run-events/projections', () => {
   beforeEach(() => {
@@ -248,40 +206,17 @@ describe('activity route validation', () => {
     });
   });
 
-  describe('GET /agent/:agentId', () => {
+  describe('GET /agent/:agentId/stats', () => {
     it('rejects a traversal segment in the agent id', async () => {
       // The separator is percent-encoded so the path survives URL normalization
       // and arrives as one decoded param — `agentId` is interpolated straight
       // into `data/agents/activity/<agentId>/<date>.json`.
-      expect((await get('/agent/..%2fetc')).status).toBe(400);
-      expect((await get('/agent/%2e%2e%2fetc')).status).toBe(400);
-      expect((await get('/agent/a b')).status).toBe(400);
-      expect(activityMocks.getActivities).not.toHaveBeenCalled();
+      expect((await get('/agent/..%2fetc/stats')).status).toBe(400);
+      expect((await get('/agent/%2e%2e%2fetc/stats')).status).toBe(400);
+      expect((await get('/agent/a b/stats')).status).toBe(400);
+      expect(activityMocks.getAgentStats).not.toHaveBeenCalled();
     });
 
-    it('hands the date through as a YYYY-MM-DD string, never a Date', async () => {
-      const res = await get('/agent/agent-a?date=2026-08-22&limit=10&offset=5');
-      expect(res.status).toBe(200);
-      expect(activityMocks.getActivities).toHaveBeenCalledWith('agent-a', {
-        date: '2026-08-22',
-        limit: 10,
-        offset: 5,
-        action: undefined,
-      });
-    });
-
-    it('rejects a free-form date string', async () => {
-      expect((await get('/agent/agent-a?date=yesterday')).status).toBe(400);
-      expect(activityMocks.getActivities).not.toHaveBeenCalled();
-    });
-
-    it('clamps the limit and refuses a negative offset', async () => {
-      expect((await get('/agent/agent-a?limit=999999')).status).toBe(400);
-      expect((await get('/agent/agent-a?offset=-1')).status).toBe(400);
-    });
-  });
-
-  describe('GET /agent/:agentId/stats', () => {
     it('bounds the stats window, which is one file read per day', async () => {
       expect((await get('/agent/agent-a/stats?days=100000')).status).toBe(400);
       expect((await get('/agent/agent-a/stats?days=0')).status).toBe(400);

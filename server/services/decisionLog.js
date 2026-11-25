@@ -129,23 +129,6 @@ export async function recordDecision(type, reason, context = {}) {
 }
 
 /**
- * Get recent decisions
- * @param {number} limit - Max decisions to return (default 20)
- * @param {string} type - Optional filter by type
- */
-export async function getRecentDecisions(limit = 20, type = null) {
-  const data = await loadDecisions();
-
-  let decisions = data.decisions;
-
-  if (type) {
-    decisions = decisions.filter(d => d.type === type);
-  }
-
-  return decisions.slice(0, limit);
-}
-
-/**
  * Get decision summary for dashboard
  * Returns counts and recent impactful decisions
  */

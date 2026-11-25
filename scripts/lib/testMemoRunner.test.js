@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CLIENT_BROWSER_SHARD_OWNERS, LOCAL_PRUNE_INTERVAL_MS, MEMO_UNRECORDED_LINE_LIMIT, VITEST_PROJECT_NAMES,
-  clearVitestDependencies, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, pruneTestMemo, readVitestDependencies,
+  clearVitestDependencies, createToolVersionResolver, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, pruneTestMemo, readVitestDependencies,
   SERVER_HEAVY_SHARD_OWNERS, recordTestMemo, seedVitestDependencies, serverShardSlice, vitestDependenciesPath, vitestShardHashInput, vitestShardRange, vitestShardSlice, writeSelectionFile,
 } from './testMemoRunner.js';
 import { EXCLUSIVE_CAPTURE_TESTS, EXCLUSIVE_TESTS, vitestCaptureProjects } from '../vitestCiPool.js';
@@ -49,6 +49,168 @@ function writeRepo(root, files) {
 
 const repoRootDir = fileURLToPath(new URL('../..', import.meta.url));
 
+it.each([
+  ['ffprobe version 6.1.1-3ubuntu5 Copyright (c) 2007-2023 the FFmpeg developers', 0, true],
+  ['ffprobe version 6.1.1-3ubuntu4 Copyright (c) 2007-2023 the FFmpeg developers', 0, false],
+  ['', 127, false],
+])('only uses the ffmpeg fingerprint with a verified companion probe (%s)', (probe, status, matches) => {
+  const ffmpeg = 'ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers';
+  const resolver = createToolVersionResolver({
+    verifyAudioPair: true,
+    run: (program) => ({ status: program === 'ffmpeg' ? 0 : status, stdout: program === 'ffmpeg' ? ffmpeg : probe, stderr: '' }),
+  });
+  expect(resolver('ffmpeg')).toBe(matches ? ffmpeg : null);
+});
+
+// What a git-fixture suite runs against besides its sources (#18634): the git
+// binary and everything a repository made on this machine inherits.
+describe('git tool identity', () => {
+  const HOME = '/home/example';
+  const GLOBAL = join(HOME, '.gitconfig');
+  const LIST = '--includes --show-origin --null --list';
+  // Settings as git lists them under --show-origin --null: origin, then key and value.
+  const listing = (settings, origin) => settings.map(([key, value, from = origin]) => `${from}\0${key}\n${value}\0`).join('');
+  /**
+   * A machine: `settings` is what git lists outside a repository (null: the listing fails), `included`
+   * the conditional include targets by path (null: git cannot list that one), `files` what can be read.
+   */
+  const machine = ({ settings = [['core.autocrlf', 'false', 'file:/etc/gitconfig'], ['user.name', 'Example']], included = {}, files = {}, unreadable = [], enclosing = 128, version = 'git version 2.50.1', systemAttributes = { status: 0, stdout: '/etc/gitattributes\n' }, env = { HOME } } = {}) => {
+    const calls = [];
+    const run = (program, args, options) => {
+      calls.push({ program, args, options });
+      if (args[0] === '--version') return version === null ? { status: 127, stdout: '', stderr: '' } : { status: 0, stdout: `${version}\n`, stderr: '' };
+      if (args[0] === 'rev-parse') return { status: enclosing, stdout: enclosing === 0 ? '.git\n' : '', stderr: '' };
+      if (args[0] === 'var') return { stderr: '', stdout: '', ...systemAttributes };
+      const listed = args[1] === '--file' ? included[args[2]] ?? null : settings;
+      return listed === null ? { status: 128, stdout: '', stderr: 'fatal: bad config' } : { status: 0, stdout: listing(listed, `file:${args[1] === '--file' ? args[2] : GLOBAL}`), stderr: '' };
+    };
+    const read = (path) => {
+      if (unreadable.includes(path)) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      if (path in files) return files[path];
+      if (path in included) return 'listed by git';
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    };
+    return { calls, identity: createToolVersionResolver({ env, run, scratch: '/scratch', read })('git') };
+  };
+  const IDENTITY = /^git version 2\.50\.1 settings [0-9a-f]{16}$/;
+  const base = [['core.autocrlf', 'false', 'file:/etc/gitconfig'], ['user.name', 'Example']];
+  const work = join(HOME, 'work.inc');
+  const conditional = [...base, ['includeif.gitdir:/work/.path', 'work.inc']];
+
+  it('is the version and a digest of the settings, and nothing of their content', () => {
+    const secret = { settings: [...base, ['http.extraheader', 'AUTHORIZATION: example-secret']] };
+    const { identity, calls } = machine(secret);
+    expect(identity).toMatch(IDENTITY);
+    expect(machine(secret).identity).toBe(identity);
+    // Every probe runs where the fixtures are made, never in the checkout.
+    expect(calls.every(({ program, options }) => program === 'git' && options.cwd === '/scratch')).toBe(true);
+    expect(calls.map(({ args }) => args.join(' '))).toEqual(['--version', 'rev-parse --git-dir', 'var GIT_ATTR_SYSTEM', `config ${LIST}`]);
+  });
+
+  it('moves with every setting a new repository inherits', () => {
+    const variants = {
+      'system configuration': machine({ settings: [['core.autocrlf', 'true', 'file:/etc/gitconfig'], ['user.name', 'Example']] }),
+      'global configuration': machine({ settings: [...base, ['init.defaultbranch', 'trunk']] }),
+      'no configuration': machine({ settings: [] }),
+      'default global ignore file': machine({ files: { [join(HOME, '.config', 'git', 'ignore')]: '*.log\n' } }),
+      'configured ignore file': machine({ settings: [...base, ['core.excludesfile', '~/ignored']], files: { [join(HOME, 'ignored')]: 'dist/\n' } }),
+      'system-wide attributes file': machine({ files: { '/etc/gitattributes': '*.txt -diff\n' } }),
+      'system-wide attributes switched off': machine({ systemAttributes: { status: 1 }, env: { HOME, GIT_ATTR_NOSYSTEM: '1' } }),
+      'configured attributes file': machine({ settings: [...base, ['core.attributesfile', '/etc/example-attributes']], files: { '/etc/example-attributes': '* text=auto\n' } }),
+      // GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS settings are listed with the rest, from no file.
+      'ignore file the environment names': machine({ settings: [...base, ['core.excludesfile', '/etc/example-ignore', 'command line:']], files: { '/etc/example-ignore': 'README.md\n' } }),
+      'ignore file the environment names, changed': machine({ settings: [...base, ['core.excludesfile', '/etc/example-ignore', 'command line:']], files: { '/etc/example-ignore': '*.md\n' } }),
+      'git environment': machine({ env: { HOME, GIT_CONFIG_GLOBAL: '/dev/null' } }),
+      // A conditional include is read whatever its condition: the probe is in no repository, the fixtures are.
+      'conditional include, target missing': machine({ settings: conditional }),
+      'conditional include': machine({ settings: conditional, included: { [work]: [['commit.gpgsign', 'false']] } }),
+      'conditional include, target changed': machine({ settings: conditional, included: { [work]: [['commit.gpgsign', 'true']] } }),
+      'conditional include of a conditional include': machine({ settings: conditional,
+        included: { [work]: [['commit.gpgsign', 'true'], ['includeif.onbranch:main.path', '/etc/example-nested.inc']], '/etc/example-nested.inc': [['user.signingkey', 'EXAMPLE']] } }),
+      'ignore file a conditional include names': machine({ settings: conditional,
+        included: { [work]: [['commit.gpgsign', 'true'], ['core.excludesfile', '~/work-ignore']] }, files: { [join(HOME, 'work-ignore')]: 'build/\n' } }),
+    };
+    const seen = new Set([machine().identity]);
+    for (const [label, { identity }] of Object.entries(variants)) {
+      expect(identity, label).toMatch(IDENTITY);
+      expect(seen.has(identity), label).toBe(false);
+      seen.add(identity);
+    }
+    // Only git's own variables count, and a missing include is never handed to git to fail on.
+    expect(machine({ env: { HOME, EDITOR: 'example' } }).identity).toBe(machine().identity);
+    expect(variants['conditional include, target missing'].calls.map(({ args }) => args.join(' '))).not.toContain(`config --file ${work} ${LIST}`);
+    expect(variants['conditional include'].calls.map(({ args }) => args.join(' '))).toContain(`config --file ${work} ${LIST}`);
+  });
+
+  // A failed probe is never an empty answer: the suite would keep a key its git no longer earns.
+  it.each([
+    ['git cannot run', { version: null }],
+    ['the fixtures would be made inside a repository', { enclosing: 0 }],
+    ['git predates --show-origin', { version: 'git version 2.7.4' }],
+    ['the configuration cannot be listed', { settings: null }],
+    ['a conditional include cannot be listed', { settings: conditional, included: { [work]: null }, files: { [work]: '[commit' } }],
+    ['a conditional include cannot be read', { settings: conditional, included: { [work]: [['commit.gpgsign', 'true']] }, unreadable: [work] }],
+    ['an ignore file cannot be read', { settings: [...base, ['core.excludesfile', '/etc/example-ignore']], unreadable: ['/etc/example-ignore'] }],
+    ['an ignore file is named relative to each repository', { settings: [...base, ['core.excludesfile', 'ignored']] }],
+    ['an include is named relative to no file', { settings: [...base, ['includeif.gitdir:/work/.path', 'work.inc', 'command line:']] }],
+    ['a path is in another home directory', { settings: [...base, ['core.attributesfile', '~other/attributes']] }],
+    ['an include is under git\'s own install prefix', { settings: [...base, ['includeif.gitdir:/work/.path', '%(prefix)/etc/example.inc']] }],
+    ['git cannot say where its system-wide attributes are', { systemAttributes: { status: 129 } }],
+    ['git has no system-wide attributes file and nothing switched it off', { systemAttributes: { status: 1 } }],
+    ['the include chain does not end', { settings: [...base, ['includeif.gitdir:/work/.path', '/etc/example.inc']],
+      included: new Proxy({}, { has: () => true, get: (_, path) => [['includeif.gitdir:/work/.path', `${String(path)}x`]] }) }],
+  ])('is unresolved when %s', (_label, state) => {
+    expect(machine(state).identity).toBeNull();
+  });
+
+  it('resolves from the first git that can say where a setting came from, and when nothing can be spawned at all', () => {
+    expect(machine({ version: 'git version 2.8.0' }).identity).toMatch(/^git version 2\.8\.0 settings /);
+    expect(createToolVersionResolver({ run: () => ({ error: new Error('spawn git ENOENT') }), scratch: '/scratch' })('git')).toBeNull();
+  });
+
+  it('reads a conditional include of the real git, which a probe outside any repository does not expand', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'portos-git-identity-'));
+    try {
+      const home = join(scratch, 'home');
+      const fixtures = join(scratch, 'fixtures');
+      for (const dir of [home, fixtures]) mkdirSync(dir);
+      writeFileSync(join(home, '.gitconfig'), '[includeIf "gitdir:/example/elsewhere/"]\n\tpath = conditional.inc\n');
+      writeFileSync(join(home, 'conditional.inc'), '[commit]\n\tgpgsign = false\n');
+      const env = { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, '.config'), GIT_CONFIG_NOSYSTEM: '1' };
+      for (const name of ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_DIR', 'GIT_WORK_TREE']) delete env[name];
+      const identity = () => createToolVersionResolver({ env, scratch: fixtures })('git');
+      // A machine whose temp directory already sits inside a repository gets no identity at all.
+      const enclosed = spawnSync('git', ['rev-parse', '--git-dir'], { cwd: fixtures, env }).status === 0;
+      const before = identity();
+      if (enclosed) expect(before).toBeNull();
+      else {
+        expect(before).toMatch(/^git version \S+.* settings [0-9a-f]{16}$/);
+        expect(identity()).toBe(before);
+        writeFileSync(join(home, 'conditional.inc'), '[commit]\n\tgpgsign = true\n');
+        const changed = identity();
+        expect(changed).not.toBe(before);
+        // An ignore file only the environment names is read too.
+        const ignore = join(scratch, 'example-ignore');
+        writeFileSync(ignore, 'README.md\n');
+        Object.assign(env, { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.excludesFile', GIT_CONFIG_VALUE_0: ignore });
+        const withIgnore = identity();
+        expect(withIgnore).toMatch(/ settings [0-9a-f]{16}$/);
+        writeFileSync(ignore, '*.md\n');
+        expect(identity()).not.toBe(withIgnore);
+        // Configuration git cannot parse is no identity, not an empty one.
+        writeFileSync(join(home, 'conditional.inc'), '[commit\n');
+        expect(identity()).toBeNull();
+        writeFileSync(join(home, 'conditional.inc'), '[commit]\n\tgpgsign = true\n');
+        writeFileSync(join(home, '.gitconfig'), '[user\n');
+        expect(identity()).toBeNull();
+        writeFileSync(join(home, '.gitconfig'), '[includeIf "gitdir:/example/elsewhere/"]\n\tpath = conditional.inc\n');
+      }
+      execFileSync('git', ['init', '-q'], { cwd: fixtures, env });
+      expect(identity()).toBeNull();
+    } finally { rmSync(scratch, { recursive: true, force: true }); }
+  });
+});
+
 describe('planTestMemo and recordTestMemo', () => {
   let root;
   let memoDir;
@@ -57,6 +219,156 @@ describe('planTestMemo and recordTestMemo', () => {
   const plan = (overrides = {}) => planTestMemo({
     scope: 'server', mode: 'files', repoFiles: TESTS.map((t) => `server/${t}`), repoSources: [], memoDir, repoRoot: root,
     env: { NODE_ENV: 'test' }, platform: 'linux', arch: 'x64', nodeVersion: '24.1.0', listTests: () => TESTS, ...overrides,
+  });
+
+  // #18634, the safety property of a `test-memo: git-fixture` suite: it is
+  // skipped only while every input it has is what the green run saw.
+  it('skips a git-fixture suite only while its sources, its git and its declaration are unchanged', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-git-fixture-plan-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-git-fixture-memo-'));
+    const fixture = 'server/lib/repo.test.js';
+    const unmarked = 'server/lib/a.test.js';
+    const source = [
+      '// test-memo: git-fixture',
+      "import { it } from 'vitest';",
+      "import { execFileSync } from 'node:child_process';",
+      "import { mkdtempSync } from 'node:fs';",
+      "import { tmpdir } from 'node:os';",
+      "import { describeRepo } from './repoHelper.js';",
+      "const git = (dir, ...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });",
+      "it('describes a repository it made', () => { const repo = mkdtempSync(tmpdir()); git(repo, 'init', '-q'); describeRepo(repo); });",
+    ].join('\n');
+    writeRepo(root, { ...FILES, [fixture]: source, 'server/lib/repoHelper.js': 'export const describeRepo = (dir) => dir;\n' });
+    const git = (identity) => (tool) => (tool === 'git' ? identity : null);
+    const GIT = 'git version 2.50.1 settings 0123456789abcdef';
+    const check = (overrides = {}) => plan({ repoFiles: [fixture, unmarked], toolVersion: git(GIT), ...overrides });
+    const record = (prepared) => recordTestMemo({
+      scope: 'server', repoRoot: root, memoDir, plan: prepared, passed: prepared.run,
+      dependencies: new Map(prepared.run.map((file) => [file, file === fixture ? [fixture, 'server/lib/repoHelper.js'] : [file, 'server/lib/a.js']])), source: 'ci',
+    });
+
+    expect(check().run).toEqual([unmarked, fixture]);
+    expect(record(check()).unrecorded).toEqual([]);
+    expect(check()).toMatchObject({ run: [], skipped: [{ test: unmarked, via: 'recorded' }, { test: fixture, via: 'recorded' }] });
+
+    // Another git, or other settings under the same git: only the suite that uses git runs again.
+    for (const identity of ['git version 2.51.0 settings 0123456789abcdef', 'git version 2.50.1 settings fedcba9876543210']) {
+      expect(check({ toolVersion: git(identity) }).run, identity).toEqual([fixture]);
+    }
+    // A git the runner cannot identify is never a hit, and never a new entry.
+    const unidentified = check({ toolVersion: git(null) });
+    expect(unidentified.run).toEqual([fixture]);
+    expect(record(unidentified).unrecorded).toEqual([{ test: fixture, reason: 'floor key: unverified tool: git; recorded key: unverified tool: git', declared: false }]);
+
+    // A source it loads.
+    writeRepo(root, { 'server/lib/repoHelper.js': 'export const describeRepo = (dir) => String(dir);\n' });
+    expect(check().run).toEqual([fixture]);
+    expect(record(check()).unrecorded).toEqual([]);
+    expect(check().run).toEqual([]);
+
+    // The suite starts reading this checkout: the declaration falls, the old entry no longer matches, and no new one is written.
+    writeRepo(root, { [fixture]: `${source}\nit('reads the checkout', () => { git(process.cwd(), 'rev-parse', 'HEAD'); });\n` });
+    const contradicted = check();
+    expect(contradicted.run).toEqual([fixture]);
+    const refused = 'spawns git (git-fixture declaration refused: hands git a path in this repository (server))';
+    expect(record(contradicted).unrecorded).toEqual([{ test: fixture, reason: `floor key: ${refused}; recorded key: ${refused}`, declared: false }]);
+    expect(check().run).toEqual([fixture]);
+
+    // Without the declaration it is the suite it always was.
+    writeRepo(root, { [fixture]: source.replace('// test-memo: git-fixture\n', '') });
+    expect(record(check()).unrecorded).toEqual([{ test: fixture, reason: 'floor key: spawns git; recorded key: spawns git', declared: false }]);
+    expect(check().run).toEqual([fixture]);
+  });
+
+  it('retains unverified audio suites until the runtime fingerprint proves coverage', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-audio-memo-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-audio-memo-store-'));
+    const audio = 'server/lib/audio.test.js';
+    const independent = 'server/lib/c.test.js';
+    writeRepo(root, {
+      ...FILES,
+      [audio]: "import { execFileSync } from 'node:child_process';\nconst ffmpeg = await findFfmpeg();\nexecFileSync(ffmpeg, ['-version']);\n",
+    });
+    const inputs = { repoFiles: [audio] };
+    const version = (value) => (tool) => tool === 'ffmpeg' ? value : null;
+    const record = (prepared) => recordTestMemo({
+      scope: 'server', repoRoot: root, memoDir, plan: prepared,
+      passed: [audio], dependencies: new Map([[audio, [audio]]]), source: 'ci',
+    }).written;
+    expect(record(plan(inputs))).toBe(2); // Legacy coverage with an absent tool.
+    const installed = { ...inputs, requireToolVersions: true, toolVersion: version('ffmpeg version 6') };
+    expect(record(plan(installed))).toBe(2);
+    const check = (fingerprint, overrides = {}) => plan({
+      ...installed, provisionableTool: 'ffmpeg', toolVersion: version(fingerprint), ...overrides,
+    });
+    expect(check('ffmpeg version 6')).toMatchObject({ run: [], unsettled: 0 });
+    expect(check(null)).toMatchObject({ run: [audio], unsettled: 1 });
+    expect(check('ffmpeg version 5')).toMatchObject({ run: [audio], unsettled: 1 });
+    expect(check('ffmpeg version 5', { repoFiles: [audio, independent] }))
+      .toMatchObject({ run: [audio, independent], unsettled: 1 });
+    expect(check('ffmpeg version 5', { provisionableTool: undefined }))
+      .toMatchObject({ run: [audio], unsettled: 0 });
+    expect(record(check(null))).toBe(0);
+    expect(record(check('ffmpeg version 5', { freshToolVersion: version('ffmpeg version 7') }))).toBe(0);
+  });
+
+  it('reuses a client browser fixture verdict before installing its exact locked packages', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-browser-lock-plan-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-browser-lock-memo-'));
+    const test = 'server/lib/view.test.js';
+    const panel = 'client/src/Panel.jsx';
+    const lock = { lockfileVersion: 3, packages: { '': {}, 'node_modules/react': { version: '19.2.0', integrity: 'sha512-example' } } };
+    const manifest = 'client/node_modules/react/package.json';
+    writeRepo(root, {
+      ...FILES,
+      'client/package.json': '{"name":"client"}',
+      'client/package-lock.json': JSON.stringify(lock),
+      'server/node_modules/playwright-core/package.json': '{"name":"playwright-core","version":"1.0.0"}',
+      [manifest]: '{"version":"19.2.0"}',
+      [panel]: "import { createElement } from 'react';\nexport const Panel = () => createElement('div');\n",
+      [test]: "import { it } from 'vitest';\nimport { chromium } from 'playwright-core';\nconst client = join(import.meta.dirname, '../../client');\n"
+        + 'fixture = await startBrowserFixture({ createServer, chromium, viteConfig: () => ({ configFile: false, root: client }) });\n',
+    });
+    const check = (planBeforeClientSetup = false) => plan({ repoFiles: [test], planBeforeClientSetup, toolVersion: () => 'Chrome test build' });
+    const served = new Map([[test, { roots: ['client'], files: [panel] }]]);
+    expect(recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: check(), passed: [test],
+      dependencies: new Map([[test, [test]]]), served, source: 'ci' }).written).toBeGreaterThan(0);
+    rmSync(join(root, 'client/node_modules'), { recursive: true });
+    expect(check().run).toEqual([test]);
+    expect(check(true).skipped).toEqual([{ test, via: 'recorded' }]);
+    writeRepo(root, { [manifest]: '{"version":"19.3.0"}' });
+    expect(check(true).run).toEqual([test]);
+    rmSync(join(root, 'client/node_modules'), { recursive: true });
+    writeRepo(root, { 'client/package-lock.json': JSON.stringify({ ...lock, name: 'changed' }) });
+    expect(check(true).run).toEqual([test]);
+  });
+
+  it('does not change coverage for a test that reads client source without resolving client packages', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-browser-source-plan-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-browser-source-memo-'));
+    const test = 'server/lib/view.test.js';
+    writeRepo(root, {
+      ...FILES,
+      'client/package-lock.json': '{"lockfileVersion":3,"packages":{"":{}}}',
+      'client/src/plain.js': 'export const plain = true;\n',
+      [test]: "import { plain } from '../../client/src/plain.js';\n",
+    });
+    const installed = plan({ repoFiles: [test] });
+    expect(recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: installed, passed: [test], source: 'ci' }).written).toBe(1);
+    expect(plan({ repoFiles: [test], planBeforeClientSetup: true }).run).toEqual([]);
+  });
+
+  it('runs the CTC contract in strict related CI even when a permissive verdict is available', () => {
+    const test = 'scripts/align_lyrics_ctc.test.js';
+    const source = 'server/lib/testHelper.js';
+    const result = plan({
+      repoRoot: repoRootDir, memoDir: 'unused', mode: 'related', repoFiles: [test], repoSources: [source],
+      env: { CI: 'true', CI_EXPECT_NUMPY_PYTHON: 'true' }, listTests: () => [`../${test}`],
+      readRecord: () => ({ modules: [test, source], digests: null }), readEntry: () => true,
+    });
+    expect(result.verdicts.get(test).floor.reasons).toContain('test-memo: never marker');
+    expect(result.skipped).toEqual([]);
+    expect(result.run).toEqual([test]);
   });
 
   // #17616: a real-Chromium suite's record carries what its fixture served, so an

@@ -9,9 +9,7 @@ vi.mock('../../../services/apiDigitalTwin.js', () => ({
 vi.mock('../../../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn() },
 }));
-vi.mock('../../ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
+vi.mock('../../ui/Toast');
 vi.mock('../../../lib/downloadBlob', () => ({
   downloadBlob: vi.fn(),
 }));

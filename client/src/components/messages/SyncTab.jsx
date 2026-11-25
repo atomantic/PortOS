@@ -37,7 +37,7 @@ const DEFAULT_SELECTORS = {
   teams: { messageItem: "[role='listitem']" },
 };
 
-export default function SyncTab({ accounts, onRefresh }) {
+export default function SyncTab({ accounts, onRefresh, accountsUnavailable = false }) {
   const [rawSelectors, setRawSelectors] = useState({});
   // null = loading, 'ready', or 'error'. After a failed read the rows show built-in
   // defaults, not the saved selectors, so editing is shut until a read succeeds.
@@ -162,7 +162,7 @@ export default function SyncTab({ accounts, onRefresh }) {
       {/* Sync Status */}
       <div>
         <h2 className="text-lg font-semibold text-white mb-3">Sync Status</h2>
-        {accounts.length === 0 && (
+        {!accountsUnavailable && accounts.length === 0 && (
           <p className="text-gray-500 text-sm">No accounts configured. Add one in the Accounts tab.</p>
         )}
         <div className="space-y-2">
@@ -366,13 +366,15 @@ export default function SyncTab({ accounts, onRefresh }) {
                 <div>
                   <div className="text-sm font-medium text-white capitalize">{status.provider}</div>
                   <div className="text-xs text-gray-500">
-                    {status.hasToken ? (
-                      <span className="text-port-success">Token present</span>
+                    {status.cached ? (
+                      <span className={status.valid ? 'text-port-success' : 'text-port-warning'}>
+                        {status.valid ? 'Token present' : 'Token expired'}
+                      </span>
                     ) : (
                       <span className="text-gray-500">No token</span>
                     )}
-                    {status.expiresAt && (
-                      <span className="ml-2">Expires: {formatDateTime(status.expiresAt)}</span>
+                    {status.cached && status.expires && status.expires !== 'unknown' && (
+                      <span className="ml-2">Expires: {formatDateTime(status.expires)}</span>
                     )}
                   </div>
                 </div>
@@ -385,7 +387,7 @@ export default function SyncTab({ accounts, onRefresh }) {
                   >
                     <TestTube size={12} /> Test token
                   </button>
-                  {status.hasToken && (
+                  {status.cached && (
                     <button
                       onClick={() => handleClearToken(status.provider)}
                       disabled={clearingTokens[status.provider]}

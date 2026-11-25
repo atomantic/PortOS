@@ -6,17 +6,24 @@ vi.mock('../../../services/apiDigitalTwin.js', () => ({
   getDigitalTwinEnrichProgress: vi.fn(),
   getDigitalTwinEnrichQuestion: vi.fn(),
   analyzeWritingSamples: vi.fn(),
+  createDigitalTwinDocument: vi.fn(),
+  getDigitalTwinDocuments: vi.fn(),
+  updateDigitalTwinDocument: vi.fn(),
 }));
 vi.mock('../../../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
 }));
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast');
 vi.mock('../TwinProviderPicker.jsx', () => ({
   default: ({ providers }) => <div data-testid="picker">{providers.map((p) => p.id).join(',')}</div>,
 }));
 vi.mock('../ListEnrichment', () => ({ default: () => null }));
 
-import { getDigitalTwinEnrichProgress, getDigitalTwinEnrichQuestion } from '../../../services/apiDigitalTwin.js';
+import {
+  getDigitalTwinEnrichProgress, getDigitalTwinEnrichQuestion, analyzeWritingSamples,
+  createDigitalTwinDocument, getDigitalTwinDocuments, updateDigitalTwinDocument
+} from '../../../services/apiDigitalTwin.js';
+import toast from '../../ui/Toast';
 import { getProviders } from '../../../services/apiProviders.js';
 import EnrichTab from './EnrichTab';
 
@@ -119,3 +126,38 @@ describe('EnrichTab question load', () => {
   });
 });
 
+
+describe('EnrichTab writing style save', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getProviders.mockResolvedValue({ providers: [{ id: 'example', enabled: true, defaultModel: 'm' }] });
+    getDigitalTwinEnrichProgress.mockResolvedValue({ categories: {} });
+    analyzeWritingSamples.mockResolvedValue({ suggestedContent: '# Style', analysis: {} });
+  });
+
+  const openAndSave = async () => {
+    render(<MemoryRouter><EnrichTab onRefresh={() => {}} /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: /Analyze Your Writing/i }));
+    fireEvent.change(await screen.findByLabelText('Writing sample 1'), { target: { value: 'x'.repeat(60) } });
+    await waitFor(() => expect(screen.getByTestId('picker')).toHaveTextContent('example'));
+    fireEvent.click(screen.getByRole('button', { name: /Analyze Writing/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Save to Soul/ }));
+  };
+
+  it('reports the create error when it fails and no document exists', async () => {
+    createDigitalTwinDocument.mockRejectedValue(new Error('disk full'));
+    getDigitalTwinDocuments.mockResolvedValue([]);
+    await openAndSave();
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to save writing style: disk full'));
+    expect(toast.success).not.toHaveBeenCalledWith('Writing style saved');
+  });
+
+  it('updates the existing document when the create fails', async () => {
+    createDigitalTwinDocument.mockRejectedValue(new Error('exists'));
+    getDigitalTwinDocuments.mockResolvedValue([{ id: 'd1', filename: 'WRITING_STYLE.md' }]);
+    updateDigitalTwinDocument.mockResolvedValue({});
+    await openAndSave();
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Writing style saved'));
+    expect(updateDigitalTwinDocument).toHaveBeenCalledWith('d1', { content: '# Style' }, { silent: true });
+  });
+});

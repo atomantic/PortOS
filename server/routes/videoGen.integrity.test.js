@@ -48,7 +48,12 @@ vi.mock('../services/settings.js', () => ({
 }));
 
 vi.mock('../lib/pythonSetup.js', () => ({
-  checkPackages: vi.fn(async () => ({ installed: [], missing: [], missingPip: [] })),
+  probePythonHealth: vi.fn(async () => ({ installed: [], missing: [], missingPip: [] })),
+  REQUIRED_PACKAGES: [],
+  HOST_ARCH: 'arm64',
+  hostIsAppleSilicon: vi.fn(() => false),
+  detectArm64Python: vi.fn(async () => null),
+  pipNameFor: vi.fn((pkg) => pkg),
   isAllowedPython: vi.fn(() => true),
 }));
 

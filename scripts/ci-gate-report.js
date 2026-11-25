@@ -29,9 +29,9 @@
  * Scope, so the next reader is not misled: this runs only when the GATE job
  * itself runs. A job timeout leaves the gate running (`if: always()`), so the
  * culprit lookup above explains it here. An EXTERNAL run-wide cancellation
- * takes the gate with it, and then the explanation comes from the recovery
- * workflow instead — see
- * "External cancellation and one automatic retry" in docs/GITHUB_ACTIONS.md.
+ * can take the gate with it, in which case no verdict is printed and the run is
+ * simply re-run by hand (docs/TROUBLESHOOTING.md, "CI cancelled with no
+ * successor run").
  *
  * Reads `CI_GATE_RESULT_<JOB>` out of the environment rather than taking
  * arguments, so adding a job to the gate is one workflow line and no code

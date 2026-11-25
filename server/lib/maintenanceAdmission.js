@@ -396,7 +396,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     });
     return status();
   };
-  // Cached read-only snapshot for trusted reconcilers (runs on every zombie sweep); releaseOperations re-verifies under the lock.
+  // Cached read-only snapshot for trusted reconcilers (runs on every orphan sweep); releaseOperations re-verifies under the lock.
   const operations = () => readForStatus().operations.map(op => ({ ...op }));
   // Removes only settled records still identical to what the caller inspected;
   // anything that changed (or settled elsewhere) since then is left alone.

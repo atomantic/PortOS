@@ -1,4 +1,4 @@
-import { EventEmitter } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { existsSync } from 'node:fs';
 import { PassThrough } from 'node:stream';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -51,6 +51,34 @@ it('retains bounded redacted probe phases in the required-browser failure before
   try {
     expect(() => browserSuiteCanRun('synthetic suite', { Chrome: verdict })).toThrow(/probe phases .*exitMs=.*closeMs=/);
   } finally { vi.unstubAllEnvs(); }
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('reports the browser exit status when inherited stdout holds close past the deadline', async () => {
+  vi.useFakeTimers();
+  const child = Object.assign(new EventEmitter(), { pid: 900001, stdout: new PassThrough(), kill: vi.fn(() => true) });
+  launch.mockReturnValue(child);
+  vi.spyOn(process, 'kill').mockReturnValue(true);
+  const pending = probeChromeH264('synthetic-chrome', { timeoutMs: 100, graceMs: 25 });
+  const profile = launch.mock.calls.at(-1)[1].find(arg => arg.startsWith('--user-data-dir=')).split('=')[1];
+  child.emit('spawn');
+  child.stdout.write('H264:probably');
+  await vi.advanceTimersByTimeAsync(80);
+  child.emit('exit', 2, null);
+  await vi.advanceTimersByTimeAsync(30);
+  expect(existsSync(profile)).toBe(true);
+  const stdoutEnded = once(child.stdout, 'end');
+  child.stdout.end();
+  await stdoutEnded;
+  child.emit('close', 2, null);
+
+  const result = await pending;
+  expect(result).toMatchObject({ ok: false, cause: 'probe-timeout', cleanupVerified: true,
+    diagnostics: { answerMs: expect.any(Number), exitStatus: 2, profile: 'removed' } });
+  const { exitMs, stdoutEndMs, closeMs } = result.diagnostics;
+  expect(stdoutEndMs).toBeGreaterThan(exitMs);
+  expect(closeMs).toBeGreaterThanOrEqual(stdoutEndMs);
+  expect(existsSync(profile)).toBe(false);
   expect(vi.getTimerCount()).toBe(0);
 });
 

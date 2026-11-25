@@ -18,14 +18,7 @@ vi.mock('../../services/apiScaffold.js', () => ({
 // attached — the component calls the bare form (`toast('Backup already
 // running')`) as well as the namespaced ones. Mock it faithfully so a future
 // test of those bare-call paths doesn't trip over a non-callable stub.
-vi.mock('../ui/Toast', () => ({
-  default: Object.assign(vi.fn(), {
-    success: vi.fn(),
-    error: vi.fn(),
-    warning: vi.fn(),
-    info: vi.fn(),
-  }),
-}));
+vi.mock('../ui/Toast');
 
 import {
   getSettings,

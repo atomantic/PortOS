@@ -66,7 +66,6 @@ import { createMutex } from '../lib/asyncMutex.js';
 import { createSettingsStore } from '../lib/settingsStore.js';
 import { cleanupYtDlpTemp, downloadAudioToTempMp3 } from './ytdlpAudioImport.js';
 import { downloadVideoIntoLibrary } from './videoDownload.js';
-import { YOUTUBE_VIDEO_URL_RE } from '../lib/youtubeUrl.js';
 import { assertYoutubeVideoUrl } from '../lib/youtubeUrlAssert.js';
 // The pure half of the ingest — yt-dlp metadata normalization, the Obsidian
 // note body, the CoS agent prompt, and the index's Obsidian-pointer rule — lives
@@ -87,6 +86,7 @@ import * as brainStorage from './brainStorage.js';
 import { createLinkFromUrl } from './brain.js';
 import * as brainJournal from './brainJournal.js';
 import { recordEvents } from './humanActivity.js';
+import { trackedRenderMap } from './renderActivity.js';
 // Straight from the task store rather than the cos.js facade — same reason
 // referenceRepos.js does: it avoids pulling the whole Chief-of-Staff graph in
 // behind a brain-side service. The `tasks:changed` event addTask emits is what
@@ -97,7 +97,6 @@ import { resolveTrackerFilingBlock } from '../lib/workTracker.js';
 // The accept rule and its validator are canonical in `lib/youtubeUrl.js` (#6014);
 // these aliases keep the ingest's established names for existing importers.
 export {
-  YOUTUBE_VIDEO_URL_RE as YOUTUBE_INGEST_URL_RE,
   assertYoutubeVideoUrl as assertYoutubeIngestUrl,
 };
 
@@ -379,13 +378,17 @@ const buildNotePath = (settings, meta, capturedAt) => {
 // ─── Job orchestration ─────────────────────────────────────────────────────
 
 // jobId -> { id, clients, lastPayload, process, canceled }
-const ingestJobs = new Map();
+const ingestJobs = trackedRenderMap('youtube-ingest', { noun: 'YouTube ingest', link: () => '/brain/youtube' });
 
 export const attachIngestSseClient = (jobId, res) => attachSse(ingestJobs, jobId, res);
 
 // Exposed for the same reason as videoDownload's — so the cancel path is
 // reachable from a test instead of only from a live ingest.
 export const __testing = { ingestJobs };
+
+/** Ingests still running, newest first, so a page that was left can watch or cancel one. */
+export const listActiveYoutubeIngests = () => [...ingestJobs.values()]
+  .filter((job) => job.status === 'running').reverse().map(({ id, videoId }) => ({ jobId: id, videoId }));
 
 /**
  * Cancel an in-flight ingest. Returns false if the job is unknown or finished.
@@ -464,7 +467,7 @@ export async function startYoutubeIngest({
   }
 
   const jobId = randomUUID();
-  const job = { id: jobId, clients: [], process: null, canceled: false };
+  const job = { id: jobId, videoId, status: 'running', clients: [], process: null, canceled: false };
   ingestJobs.set(jobId, job);
   const cleanTags = tags.map((t) => String(t).trim()).filter(Boolean);
   const linkNote = typeof note === 'string' ? note.trim() : '';
@@ -568,6 +571,7 @@ export async function startYoutubeIngest({
               ? await obsidian.upsertNote(vaultId, notePath, markdown)
                 .catch((err) => { console.error(`📓 Obsidian sync failed for ${meta.videoId}: ${err.message}`); return null; })
               : null;
+            if (notePath && !written) warn('The transcript was saved in PortOS, but its Obsidian note could not be written');
             landed.obsidian = resolveObsidianPointer({ written, vaultId, notePath, prior });
           }
         } else {
@@ -705,6 +709,7 @@ export async function startYoutubeIngest({
           reviewLoop: false,
         }, 'user').catch((err) => {
           console.error(`❌ CoS task for ingest ${meta.videoId} failed: ${err.message}`);
+          warn('The review task could not be queued. Ingest this video again to retry it');
           return null;
         });
         if (task?.duplicate) {
@@ -783,6 +788,7 @@ export async function startYoutubeIngest({
           console.error(`🧹 YouTube ingest temp cleanup failed for ${shortId(jobId)}: ${error.message}`);
         });
       }
+      job.status = 'done';
       if (terminalEvent) broadcastSse(job, terminalEvent);
       closeJobAfterDelay(ingestJobs, jobId);
     }

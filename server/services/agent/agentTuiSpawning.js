@@ -1,3 +1,4 @@
+import { resolveSplashHarnessContext } from '../../lib/splashHarnessLaunch.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Agent TUI Spawning
@@ -144,9 +145,10 @@ export async function createAgentTuiSession({
   // caller and both are `{}` for a public-content stage, whose allowlist would
   // strip them regardless.
   const credentialEnv = { ...forgeTokenEnv, ...agentApiEnv };
+  const launchProvider = await resolveSplashHarnessContext(provider, model);
   const env = restricted
-    ? buildCliChildEnv({ before: credentialEnv, provider, model, cwd, guard: true, safetyProfile })
-    : { ...composeProviderEnv({ before: credentialEnv, provider, model }), ...agentGuardEnv() };
+    ? buildCliChildEnv({ before: credentialEnv, provider: launchProvider, model, cwd, guard: true, safetyProfile })
+    : { ...composeProviderEnv({ before: credentialEnv, provider: launchProvider, model }), ...agentGuardEnv() };
   // How this session identifies itself in the Shell UI and the session registry.
   // Identical for all three spawn shapes below — an attached human sees the same
   // tab whichever one opened the PTY.

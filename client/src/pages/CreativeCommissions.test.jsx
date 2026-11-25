@@ -13,9 +13,7 @@ vi.mock('../services/apiCreativeCommission.js', async (importOriginal) => ({
 // The create drawer's config form loads model catalogs on mount — irrelevant to
 // the index's empty state, and it would put real requests behind these renders.
 vi.mock('../components/creative-commission/CommissionConfigForm.jsx', () => ({ default: () => null }));
-vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
-}));
+vi.mock('../components/ui/Toast');
 
 import CreativeCommissions from './CreativeCommissions';
 import { listCommissions } from '../services/apiCreativeCommission.js';

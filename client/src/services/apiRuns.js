@@ -20,3 +20,4 @@ export const getRunPrompt = (id) => request(`/runs/${id}/prompt`, { responseType
 export const stopRun = (id) => request(`/runs/${id}/stop`, { method: 'POST' });
 export const deleteRun = (id) => request(`/runs/${id}`, { method: 'DELETE' });
 export const deleteFailedRuns = () => request('/runs?filter=failed', { method: 'DELETE' });
+export const getRun = (id, options) => request(`/runs/${encodeURIComponent(id)}`, options);

@@ -4,7 +4,6 @@ import {
   BOOK_LENGTH_ESTIMATES,
   WRITING_PRINCIPLES,
   PLANNED_ANALYSES,
-  classifyByWordCount,
 } from './writingGuide.js';
 
 describe('writingGuide data shape', () => {
@@ -81,45 +80,4 @@ describe('writingGuide data shape', () => {
   });
 });
 
-describe('classifyByWordCount', () => {
-  it('rejects invalid input with null', () => {
-    expect(classifyByWordCount(undefined)).toBeNull();
-    expect(classifyByWordCount(NaN)).toBeNull();
-    expect(classifyByWordCount(-10)).toBeNull();
-    expect(classifyByWordCount('1000')).toBeNull();
-  });
-
-  it('labels counts within a band', () => {
-    expect(classifyByWordCount(0).id).toBe('microfiction');
-    expect(classifyByWordCount(500).id).toBe('microfiction');
-    expect(classifyByWordCount(900).id).toBe('flash-fiction');
-    expect(classifyByWordCount(5000).id).toBe('short-story');
-    expect(classifyByWordCount(12000).id).toBe('novelette');
-    expect(classifyByWordCount(25000).id).toBe('novella');
-  });
-
-  it('rounds a gap count up to the next band', () => {
-    // 600 sits between microfiction (≤500) and flash (750–1000) → rounds to flash.
-    expect(classifyByWordCount(600).id).toBe('flash-fiction');
-    // 1200 sits between flash (≤1000) and short story (1500–7500) → short story.
-    expect(classifyByWordCount(1200).id).toBe('short-story');
-  });
-
-  it('treats anything above every band as a novel', () => {
-    expect(classifyByWordCount(500000).id).toBe('novel');
-  });
-
-  it('assigns shared boundary values to the higher band', () => {
-    // Adjacent bands share boundary values by literary convention (the lower
-    // band's max equals the higher band's min). Classification must be
-    // deterministic, with the higher band owning the boundary.
-    expect(classifyByWordCount(7500).id).toBe('novelette'); // short-story.max === novelette.min
-    expect(classifyByWordCount(17500).id).toBe('novella'); // novelette.max === novella.min
-    expect(classifyByWordCount(40000).id).toBe('novel'); // novella.max === novel.min
-    // One word below each boundary still lands in the lower band.
-    expect(classifyByWordCount(7499).id).toBe('short-story');
-    expect(classifyByWordCount(17499).id).toBe('novelette');
-    expect(classifyByWordCount(39999).id).toBe('novella');
-  });
-});
 // @vitest-environment node

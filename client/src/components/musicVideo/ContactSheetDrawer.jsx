@@ -17,7 +17,7 @@ const FOCUS = '[data-take-focus]';
  * Up/Down to the first take of the previous/next scene.
  */
 export default function ContactSheetDrawer({
-  open, onClose, project, busy, saving = null, onSelectTake, onReviewTake, onOpenPreview,
+  open, onClose, project, busy, saving = null, onSelectTake, onReviewTake, onMoveTake = null, onOpenPreview,
   pendingOnly = false, onPendingOnlyChange, onRegenerateFrame, generatingScenes = {},
 }) {
   const listRef = useRef(null);
@@ -78,6 +78,7 @@ export default function ContactSheetDrawer({
                 <SceneTakeStrip key={kind} project={project} scene={scene} kind={kind} busy={busy} saving={saving} large
                   onSelect={(take) => onSelectTake(scene, take)}
                   onReview={(take, review) => onReviewTake(scene, take, review)}
+                  onMove={onMoveTake ? (take, toSceneId) => onMoveTake(scene, take, toSceneId) : null}
                   onOpenPreview={onOpenPreview} />
               ))}
             </li>

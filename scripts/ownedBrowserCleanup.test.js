@@ -61,3 +61,28 @@ it.each(['refused', 'failed', 'exit-without-cleanup'])(
     } finally { vi.useRealTimers(); }
   },
 );
+
+it.each([['a confirmed exit', 900001], ['a child that never started', undefined]])(
+  'settles crash handlers only once the browser is gone, after %s', async (_case, pid) => {
+    const { EventEmitter } = await import('node:events');
+    const child = Object.assign(new EventEmitter(), { pid, exitCode: null, signalCode: null });
+    const settle = vi.fn(async () => {
+      expect(child.exitCode).toBe(0);
+      return 'found=2 signalled=1 settled=2';
+    });
+    const server = { process: () => child, close: async () => { child.exitCode = 0; }, kill: vi.fn() };
+    const evidence = await reapOwnedBrowser(server, 1000, { crashHandlers: { settle } });
+    if (pid) expect(evidence).toMatch(/; crashHandlers found=2 signalled=1 settled=2$/);
+    else expect(settle).not.toHaveBeenCalled();
+
+    // Neither an unconfirmed exit nor a failed settlement is reported as clean.
+    child.exitCode = null;
+    settle.mockClear();
+    await expect(reapOwnedBrowser({ ...server, close: async () => {}, kill: async () => {} }, 1000, { crashHandlers: { settle } }))
+      .rejects.toThrow('returned without an exit status');
+    expect(settle).not.toHaveBeenCalled();
+    settle.mockRejectedValue(new Error('crash handler exit unconfirmed'));
+    if (pid) await expect(reapOwnedBrowser(server, 1000, { crashHandlers: { settle } }))
+      .rejects.toThrow(/^crash handler exit unconfirmed; cleanup phases: close elapsed=/);
+  },
+);

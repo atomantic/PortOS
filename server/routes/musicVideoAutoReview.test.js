@@ -17,6 +17,7 @@ import { promisify } from 'util';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
+import { registerAutoReviewCompletionListeners } from '../services/musicVideo/autoReviewCompletionListeners.js';
 
 const ROOT = () => lazyTempDataRoot('mv-auto-review-route-test-');
 vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot: ROOT }));
@@ -133,6 +134,7 @@ const { runPromptThroughProvider } = await import('../services/promptRunner.js')
 const { mediaJobEvents } = await import('../services/mediaJobQueue/index.js');
 const { __testing: autoReviewBackground } = await import('../services/musicVideo/autoReviewService.js');
 
+registerAutoReviewCompletionListeners();
 const app = express();
 app.use(express.json());
 app.use('/api/music-video', musicVideoRoutes);
@@ -222,10 +224,16 @@ beforeEach(() => {
   h.temporalCalls.length = 0;
   vi.clearAllMocks();
 });
-// A run advances in the background; let it go quiet before the next test
+async function settleAutoReviewBackground() {
+  await vi.dynamicImportSettled();
+  await autoReviewBackground.settleBackground();
+}
+
+// The boot listener imports the review service before advancing in the background.
+// Let both settle before the next test
 // resets the shared doubles, so one test's late step can never land in the
 // next test's queue (#10467).
-afterEach(() => autoReviewBackground.settleBackground());
+afterEach(settleAutoReviewBackground);
 afterAll(cleanupTempDataRoots);
 
 describe('opt-in automatic review/retries (#8988)', () => {
@@ -310,7 +318,7 @@ describe('opt-in automatic review/retries (#8988)', () => {
     // The take the board already paid for still lands — but a stopped run
     // does not advance on it: no re-render, no review.
     await landTake(p.id, 's2', 'clip-2b');
-    await autoReviewBackground.settleBackground();
+    await settleAutoReviewBackground();
     expect(h.procs).toHaveLength(1);
 
     // Resume: the revision renders (its section already holds a take — no
@@ -535,7 +543,6 @@ describe('temporal performance evidence (#9347)', () => {
   };
 
   it.each([
-    ['missing analyzer', false, null],
     ['missing evidence', true, null],
     ['unknown span status', true, { spans: [{ startSec: 0, endSec: 5, status: 'pass', offsetSec: 0, confidence: 1 }] }],
     ['out-of-bounds evidence', true, { spans: [{ startSec: 0, endSec: 20, status: 'verified', offsetSec: 0, confidence: 1 }] }],
@@ -556,6 +563,49 @@ describe('temporal performance evidence (#9347)', () => {
     } });
     expect(saved.revisions || []).toHaveLength(0);
     expect(h.procs).toHaveLength(1);
+  });
+
+  // #18626: an analyzer that is not installed is missing capability, not failed
+  // evidence, so lip-sync is recorded unmeasured without parking the run.
+  it('passes a lip-sync draft unattended when no analyzer is installed, recording lip-sync as not measured', async () => {
+    const p = await performanceProject();
+    h.temporalInstalled = false;
+    h.verdicts.push(PASS);
+    await start(p.id, { maxAttempts: 2, maxGenerations: 5 });
+    await finishDraft(p.id, 1);
+    const saved = await settled(p.id, (x) => expect(run(x).status).toBe('passed'));
+    expect(run(saved).attempts[0].review).toMatchObject({
+      verdict: 'pass', reason: 'Lip-sync was not measured: no temporal analyzer is installed',
+      checks: { audioSync: 'pass', lipSync: 'unverified' }, evidence: { temporal: { status: 'unavailable', analyzer: null } },
+    });
+    expect(run(saved).usage.generations).toBe(0);
+    expect(h.temporalCalls).toHaveLength(0);
+  });
+
+  it('treats an analyzer that fails its capability probe as not installed', async () => {
+    const p = await performanceProject();
+    h.temporalInstalled = true;
+    h.temporalCapability = { protocolVersion: 2 };
+    h.verdicts.push(PASS);
+    await start(p.id, { maxAttempts: 1, maxGenerations: 0 });
+    await finishDraft(p.id, 1);
+    const saved = await settled(p.id, (x) => expect(run(x).status).toBe('passed'));
+    expect(run(saved).attempts[0].review).toMatchObject({ verdict: 'pass', checks: { lipSync: 'unverified' }, evidence: { temporal: { status: 'unavailable' } } });
+    expect(h.temporalCalls).toHaveLength(1);
+  });
+
+  it('opens a revision for a blocking visual finding when no analyzer is installed', async () => {
+    const p = await performanceProject();
+    h.temporalInstalled = false;
+    h.verdicts.push(FAIL_S2);
+    await start(p.id, { maxAttempts: 3, maxGenerations: 5 });
+    await finishDraft(p.id, 1);
+    const saved = await settled(p.id, (x) => expect(run(x).attempts[0].revisionId).toBeTruthy());
+    expect(run(saved).status).not.toBe('needs-human');
+    expect(run(saved).attempts[0].review).toMatchObject({
+      verdict: 'revise', reason: null, checks: { lipSync: 'unverified' }, evidence: { temporal: { status: 'unavailable' } },
+    });
+    expect(saved.revisions.find((rv) => rv.id === run(saved).attempts[0].revisionId).sections.filter((s) => s.verdict === 'rejected').map((s) => s.sceneId)).toEqual(['s2']);
   });
 
   it('a legacy draft with missing section provenance cannot silently pass as having no performances', async () => {

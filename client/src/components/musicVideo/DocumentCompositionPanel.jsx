@@ -1,3 +1,4 @@
+import { compactButtonClass as buttonCls, inputXsClass as inputCls } from './controlClasses.js';
 import { supportsToolFreeOneShot, toolFreeOneShotSelectionPolicy } from '../../utils/providerSelection.js';
 import { musicVideoDocumentRenderer } from '../../../../server/lib/musicVideo/musicVideoMediaPolicy.js';
 import { useEffect, useState, useRef } from 'react';
@@ -25,8 +26,6 @@ import {
 } from '../../services/apiMusicVideo.js';
 import { pluralize } from '../../lib/textUtils';
 
-const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
-const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
 const SOURCE_LABELS = { template: 'template', zip: 'zip', directory: 'folder', generated: 'generated' };
 
 const linesOf = (value) => String(value || '').split('\n').map((line) => line.trim()).filter(Boolean);

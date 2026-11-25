@@ -6,6 +6,7 @@ import { isMediaAdmissionRefusal } from '../mediaJobQueue/admission.js';
 import { creativeDirectorVideoLimitsSchema } from '../../lib/creativeDirectorValidation.js';
 import { assertVideoOwner } from '../../lib/creativeDirectorVideoReview.js';
 import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, coerceFalVideoSeconds, estimateFalVideoCostUsd, getFalVideoModel } from '../../lib/falVideoModels.js';
+import { GEMINI_OMNI_WEB_MODEL, GEMINI_WEB_ASPECTS } from '../../lib/geminiWebVideo.js';
 
 const ACTIVE = new Set(['planning', 'rendering', 'stitching']);
 const isMediaAttempt = attempt => ['clip', 'audio'].includes(attempt.kind);
@@ -78,6 +79,10 @@ async function resolveChoices(project) {
   if (pin.mode === 'fal' && !pin.modelId) {
     const { FAL_DEFAULT_TEXT_MODEL, FAL_DEFAULT_IMAGE_MODEL } = await import('../videoGen/fal.js');
     video.modelDescription = `${FAL_DEFAULT_TEXT_MODEL} (text) / ${FAL_DEFAULT_IMAGE_MODEL} (image)`;
+  }
+  // Every clip of the run would be refused at enqueue (videoGen/backendPin.js), so say it before Start.
+  if (pin.mode === 'gemini' && !GEMINI_WEB_ASPECTS.includes(project.aspectRatio)) {
+    throw new ServerError(`Gemini renders ${GEMINI_WEB_ASPECTS.join(' or ')} only. Change the aspect ratio or the production backend before Start.`, { status: 409, code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED' });
   }
   if (pin.mode === 'local') {
     const { hasConfiguredMediaRoute } = await import('../federatedMedia/defaultRouting.js');
@@ -319,16 +324,30 @@ export async function assertVideoAttemptDispatch(projectId, attemptId, { jobId }
   return effective;
 }
 
+function submittedClipSeconds(params, clip) {
+  if (clip) return clip.coerceSeconds(params.duration);
+  if (params.mode === 'reactor') return Number(params.seconds);
+  if (params.mode === 'gemini') return GEMINI_OMNI_WEB_MODEL.clipSeconds;
+  if (['fal', 'grok'].includes(params.mode)) return Number(params.duration);
+  return Number(params.numFrames / params.fps);
+}
+
 export async function enqueueVideoProductionJob(project, { kind = 'video', params, sceneId, stepId, workRevision }) {
   if (kind !== 'video') throw new ServerError('Video plans currently render bounded video clips. Use attached references and the saved audio choice for other media.', { status: 409, code: 'VIDEO_PLAN_TOOL_UNSUPPORTED' });
-  const seconds = Number(params.mode === 'reactor' ? params.seconds
-    : ['fal', 'grok'].includes(params.mode) ? params.duration
-    : params.numFrames / params.fps);
-  if (!Number.isFinite(seconds) || seconds < 1 || seconds > 10.1 || Number(params.chunks || 1) !== 1 || Number(params.batchSize || 1) !== 1) {
+  const { validateVideoShot, videoShotClipOptions } = await import('../../lib/creativeDirectorVideoCompiler.js');
+  const clip = videoShotClipOptions(params, Boolean(params.sourceImagePath));
+  const requested = Number(params.duration);
+  const seconds = submittedClipSeconds(params, clip);
+  const boundedSeconds = clip ? (params.duration != null ? requested : undefined) : seconds;
+  if (Number(params.chunks || 1) !== 1 || Number(params.batchSize || 1) !== 1
+      || (boundedSeconds !== undefined && (!Number.isFinite(boundedSeconds) || boundedSeconds < 1 || boundedSeconds > 10.1))) {
     throw new ServerError('A Video submission must contain one clip of at most 10 seconds.', { status: 409, code: 'VIDEO_PLAN_CLIP_BOUNDS' });
   }
-  const { validateVideoShot } = await import('../../lib/creativeDirectorVideoCompiler.js');
-  validateVideoShot(project, { sceneId: sceneId || stepId, prompt: String(params.prompt || ''), durationSeconds: seconds }, false);
+  const shot = sceneId
+    ? project.treatment?.scenes?.find(scene => scene.sceneId === sceneId)
+    : project.plan?.steps?.find(step => step.stepId === stepId)?.args?.params;
+  validateVideoShot(project, { sceneId: sceneId || stepId, prompt: String(params.prompt || ''),
+    durationSeconds: clip ? shot?.durationSeconds ?? params.durationSeconds ?? requested : seconds }, false, { clip, clipSeconds: seconds });
   const { hasConfiguredMediaRoute, enqueueUnattendedMediaJob } = await import('../federatedMedia/defaultRouting.js');
   if (await hasConfiguredMediaRoute(kind)) throw new ServerError('A standing peer route would change the reviewed video backend. Change Settings before Resume.', { status: 409, code: 'VIDEO_ROUTE_CHANGED' });
   const costUsd = params.mode === 'fal'
@@ -338,7 +357,10 @@ export async function enqueueVideoProductionJob(project, { kind = 'video', param
   const marker = { projectId: project.id, attemptId: attempt.id, executionId: attempt.executionId };
   try {
     await assertVideoAttemptDispatch(project.id, attempt.id);
-    const result = await enqueueUnattendedMediaJob({ kind, params: { ...params, videoProduction: marker },
+    // Send the chosen catalog length explicitly. In particular, Google and Higgsfield
+    // round raw requests to the nearest length, which can be shorter than the shot.
+    const clipParams = clip ? { modelId: clip.model.id, duration: seconds } : {};
+    const result = await enqueueUnattendedMediaJob({ kind, params: { ...params, ...clipParams, videoProduction: marker },
       owner: sceneId ? `cd:${project.id}:${sceneId}` : `creative-director:${project.id}` });
     await settleVideoAttempt(project.id, attempt.id, { status: 'queued', jobId: result.jobId });
     return { ...result, attemptId: attempt.id };

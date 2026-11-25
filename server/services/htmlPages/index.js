@@ -1,7 +1,7 @@
 /**
  * HTML Pages bench: run installed local models against the fixed creative HTML brief and keep each model's pages as a durable run for side-by-side comparison.
  *
- * A run targets either an installed local model (`backend` + `modelId`, talked to directly) or a provider route (`route`: any configured provider, model and effort, run through the shared prompt runner with no fallback, so the gallery names what really answered). An MTPLX pack that is downloaded but not serving is a target too: MTPLX is switched to it for the run and switched back after.
+ * A run targets either an installed local model (`backend` + `modelId`, talked to directly) or a tool-free provider route (`route`: provider, model and effort, run through the shared prompt runner with no fallback, so the gallery names what really answered). An MTPLX pack that is downloaded but not serving is a target too: MTPLX is switched to it for the run and switched back after.
  *
  * Each page is also written as a file under `data/html-pages/<runId>/` (`pageFiles.js`) so it can be downloaded or opened by path; the record stays authoritative, and a page whose file is missing gets it written from the record when it is first asked for.
  *
@@ -10,11 +10,15 @@
  * Runs are queued and executed one at a time under the machine-wide heavy-job claim, each page a separate request. Nothing here runs from boot or a read path: `startRuns` is the only way a model is reached, from an explicit request that named the models and page count. Queued and generating runs are tracked live work (Live activity, the idle verdict and the update preflight see them), so the updater waits for them. A run a restart still cut off is reported as failed and never resumed on its own; `resumeRun` re-queues it from its first unfinished page when the person asks.
  */
 
+import { isDeepStrictEqual } from 'node:util';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
-import { ASSESSABLE_RUNTIMES, LOCAL_RUNTIMES } from '../../lib/localProviderRuntime.js';
+import { ASSESSABLE_RUNTIMES, LOCAL_RUNTIMES, localEndpointPort } from '../../lib/localProviderRuntime.js';
+import { awaitMtplxRequest, mtplxRequestLogPath } from '../../lib/mtplxRequestLog.js';
 import { isEmbeddingModel } from '../../lib/localModelHeuristics.js';
+import { htmlPagesProviderCapability } from '../../lib/provider/htmlPagesProvider.js';
+import { bareLocalModelId } from '../../lib/provider/providerModels.js';
 import {
   HTML_BRIEF_MAX_CHARS, HTML_PAGE_DEFAULT_BRIEFS, HTML_PAGES_MAX, htmlPagePlanPrompt, htmlPagePrompt, htmlPagePromptParts, extractHtmlDocument, extractHtmlPagePlan, scoreHtmlPage, scoreHtmlPages,
 } from '../../lib/htmlPageBench.js';
@@ -118,14 +122,27 @@ export const readRun = async (id) => {
   return isCutOff(run) ? markInterrupted(id) : run;
 };
 
-/** A provider route resolved to what the run record names; 409 when the provider is gone or switched off. */
-async function resolveRoute({ providerId, model, effort }) {
+/** Check the current configuration each time a route is admitted or dispatched. */
+async function requireRouteProvider({ providerId, providerName = providerId, model, effort }) {
   const { getProviderById } = await import('../provider/providers.js');
   const provider = await getProviderById(providerId).catch(() => null);
   if (!provider || provider.enabled === false) {
-    throw new ServerError(`Provider ${providerId} is not available`, { status: 409, code: 'HTML_PAGES_PROVIDER_UNAVAILABLE' });
+    throw new ServerError(`Provider ${providerName} is unavailable. Re-enable it or start a new run with another provider.`, {
+      status: 409, code: 'HTML_PAGES_PROVIDER_UNAVAILABLE',
+    });
   }
   const resolvedModel = model || provider.defaultModel || null;
+  const capability = htmlPagesProviderCapability(provider, resolvedModel, effort);
+  if (!capability) {
+    throw new ServerError(`Provider ${provider.name || providerName} cannot run HTML Pages without tools. Start a new run with an API provider, a tool-free CLI, or an installed model.`, {
+      status: 409, code: 'HTML_PAGES_PROVIDER_NOT_TOOL_FREE',
+    });
+  }
+  return { provider, model: resolvedModel, capability };
+}
+
+async function resolveRoute({ providerId, model, effort }) {
+  const { provider, model: resolvedModel } = await requireRouteProvider({ providerId, model, effort });
   return { providerId, providerName: provider.name || providerId, model: resolvedModel, effort: effort || null };
 }
 
@@ -179,6 +196,8 @@ export async function resumeRun(id) {
   liveRuns.set(id, { controller: new AbortController() });
   let run;
   try {
+    const saved = await getRun(id);
+    if (saved && !saved.deleted && isRetryable(saved) && saved.route) await requireRouteProvider(saved.route);
     run = await mutateRun(id, (current) => {
       if (!isRetryable(current)) return null;
       const firstMissing = current.pages.findIndex((page) => !page.html || page.passed !== page.total);
@@ -339,28 +358,67 @@ async function processRun(id) {
   }
 }
 
+const TIMEOUT_MESSAGE = /timed out|timeout/i;
+
+/**
+ * The benchmark error for a local MTPLX run that produced output tokens but no answer: it timed out with no answer text and MTPLX's own request log holds exactly one request, cancelled by this run and begun after it, with output tokens. Null keeps the caller's generic timeout, so a concurrent client, a missing log or a different model never produces a claim. Only the completion counter is read; the model, effort and prompt of the run are untouched.
+ */
+async function reasoningOnlyTimeoutError({ provider, route, capability, message, startedAtMs, aborted }) {
+  if (aborted || !TIMEOUT_MESSAGE.test(message)) return null;
+  const openCode = capability.kind === 'opencode-mtplx';
+  let endpoint = capability.endpoint;
+  if (!openCode) {
+    const { isMtplxProvider } = await import('../mtplxServerManager.js');
+    if (!isMtplxProvider(provider)) return null;
+    endpoint = provider.endpoint;
+  }
+  const port = localEndpointPort(endpoint);
+  if (!port) return null;
+  const model = openCode ? bareLocalModelId(route.model, 'mtplx') : route.model || null;
+  const attribution = await awaitMtplxRequest({ logPath: mtplxRequestLogPath(port), startedAtMs, endedAtMs: Date.now(), model }).catch(() => null);
+  if (attribution?.status !== 'matched' || !(attribution.completionTokens > 0)) return null;
+  return `${message} The run ended reasoning-only: MTPLX generated ${attribution.completionTokens} completion tokens before the deadline and no answer text was received.`;
+}
+
 /**
  * One page through a provider route: the configured provider, model and effort exactly as picked, no fallback (the gallery must name what answered) and tool-free (the reply is the page, not files an agent wrote). Resolves to the same `{ text, error, timings }` shape `generate` does.
  */
 async function generateViaProvider(route, prompt, signal) {
-  const [{ getProviderById }, { runPromptThroughProvider }, { stopRun }] = await Promise.all([
-    import('../provider/providers.js'), import('../promptRunner.js'), import('../runner.js'),
+  const [{ runPromptThroughProvider }, { stopRun }] = await Promise.all([
+    import('../promptRunner.js'), import('../runner.js'),
   ]);
-  const provider = await getProviderById(route.providerId).catch(() => null);
-  if (!provider) return { text: '', error: `Provider ${route.providerName || route.providerId} is not available`, timings: null };
+  // A provider can change after queueing or between the plan and page requests.
+  const { provider, capability } = await requireRouteProvider(route);
+  signal.throwIfAborted();
   let runId = null;
   const stop = () => { if (runId) stopRun(runId).catch(() => { /* best-effort cancel */ }); };
   signal.addEventListener('abort', stop, { once: true });
+  const startedAtMs = Date.now();
   try {
+    const isolateMtplxOpenCode = capability.kind === 'opencode-mtplx';
     const result = await runPromptThroughProvider({
-      provider, model: route.model || undefined, effort: route.effort || undefined, prompt,
+      // The restricted recipe is fresh. Saved argv model or variant pins
+      // cannot take precedence over the run's recorded selection.
+      provider: isolateMtplxOpenCode ? { ...provider, args: [] } : provider,
+      model: route.model || undefined, effort: route.effort || undefined, prompt,
       source: RUN_SOURCE, timeout: PAGE_TIMEOUT_MS, allowFallback: false, toolFree: true, cwd: PATHS.data,
+      ...(isolateMtplxOpenCode ? { isolateMtplxOpenCode } : {}),
+      beforeExecute: async () => {
+        const { provider: current } = await requireRouteProvider(route);
+        if (!isDeepStrictEqual(current, provider) || current.apiKey !== provider.apiKey) {
+          throw new ServerError('The HTML Pages provider changed during dispatch. Resume the run to use its current configuration.', {
+            status: 409, code: 'HTML_PAGES_PROVIDER_CHANGED',
+          });
+        }
+        signal.throwIfAborted();
+      },
       onRunCreated: (createdId) => { runId = createdId; if (signal.aborted) stop(); },
     });
     // A CLI transcript can echo the prompt, whose rules mention `<!doctype html>`; drop it so only the reply is read.
     return { text: String(result?.text || '').split(prompt).join(''), error: null, timings: null };
   } catch (err) {
-    return { text: '', error: err?.message || 'The provider run failed', timings: null };
+    const message = err?.message || 'The provider run failed';
+    return { text: '', error: await reasoningOnlyTimeoutError({ provider, route, capability, message, startedAtMs, aborted: signal.aborted }) ?? message, timings: null };
   } finally {
     signal.removeEventListener('abort', stop);
   }

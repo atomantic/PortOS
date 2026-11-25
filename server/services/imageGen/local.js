@@ -53,7 +53,7 @@ export { buildArgs } from './localArgs.js';
 export { parseImageExecutionMarker } from './localOutputParser.js';
 export { buildSidecarMeta, localSentPrompt, resolveOutputPlacement } from './localRenderMeta.js';
 export {
-  assertGalleryFilename, cacheImageSha256, deleteImage, fillImageSidecarFields, listGallery, listLoraFilenames,
+  assertGalleryFilename, cacheImageSha256, deleteImage, fillImageSidecarFields, listGallery,
   readImageSidecar, saveUploadedGalleryImage, setImageHidden, setImagePendingDelete, setImagePrimary, updateImagePrompt,
 } from './localGallery.js';
 

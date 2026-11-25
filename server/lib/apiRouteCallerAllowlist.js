@@ -1,10 +1,14 @@
 /**
- * Mounted API routes that no client service wrapper calls, each with the caller class that justifies keeping it.
+ * Mounted API routes that no client code reaches, each with the caller class that justifies keeping it.
  *
- * `apiRouteParity.test.js` fails when a mounted route is neither reached by a client wrapper path nor listed
- * here, and when a listed route is no longer mounted or gains a client caller, so the list can only shrink
- * toward the truth. Entries are keyed by route path (the scan matches by path, not method) and grouped by
- * caller class. Add a route here only with the strongest caller class you can name; delete a route nothing calls.
+ * "Reaches" is what `clientApiPaths.js` sees: service wrappers plus every non-test client file's `api.<verb>(`,
+ * `request(`, `fetch`, `EventSource` and URL-builder literals, so "the scanner cannot see the client call" is
+ * never a class; only a segment built at run time is (`client-dynamic`).
+ *
+ * `apiRouteParity.test.js` checks every mounted method and rejects entries that become
+ * unmounted or gain a client caller. Use a bare path when all its methods have the
+ * same non-client caller class. Use `METHOD /path` for an individual method.
+ * Cite the caller when adding an entry; delete a route nothing calls.
  */
 
 export const ROUTE_CALLER_CLASSES = Object.freeze({
@@ -14,14 +18,15 @@ export const ROUTE_CALLER_CLASSES = Object.freeze({
   'external-client': 'Third-party tools that speak an established API (the A1111-compatible /sdapi surface), not PortOS clients.',
   'oauth-callback': 'The redirect target of a third-party OAuth flow; the browser arrives here from the provider.',
   'operator-script': 'Called by a script under scripts/, or named in an operator-facing doc (a curl workflow or a feature route table) for a caller outside the browser.',
-  'client-direct': 'Requested from client code outside client/src/services (components, hooks, pages) with fetch or EventSource, which the parity scan does not read.',
-  'client-service-unscanned': 'Named in a client service module whose request shape the parity scan cannot fold to this route.',
+  'client-dynamic': 'Called from client code that builds a path segment at run time; the entry\'s comment names the call site.',
   'server-reference': 'Referenced by a server module (a loopback or provider-compatible request path); the reference was found by text search and not individually traced.',
   'legacy-client-compat': 'Kept for a client build that predates the current routes: a deployed client/dist can lag the server across an upgrade.',
 });
 
 export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
   peer: Object.freeze([
+    // server/services/appQualityFederation.js requests it from peers.
+    '/api/apps/quality-federation',
     '/api/brain/reconcile/checksum',
     '/api/brain/reconcile/manifest',
     '/api/brain/reconcile/snapshot',
@@ -29,7 +34,6 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/catalog/identity/peer/snapshot',
     '/api/catalog/identity/peer/status',
     '/api/catalog/sync',
-    '/api/character',
     '/api/eidoverse/travel/federation/capabilities',
     '/api/eidoverse/travel/federation/chat',
     '/api/eidoverse/travel/federation/leave',
@@ -49,6 +53,12 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/federation/media/v1/jobs/:id/result',
     '/api/federation/media/v1/status',
     '/api/instances/peers/:id/query',
+    // server/services/instances.js requests it from peers.
+    '/api/instances/peers/announce',
+    // server/services/instances.js requests it from peers.
+    '/api/instances/peers/pair-secret',
+    // server/services/instances.js requests it from peers.
+    '/api/instances/peers/sync-categories',
     '/api/instances/sync-status',
     '/api/managed-visitors/v1/admissions',
     '/api/managed-visitors/v1/admissions/cancel',
@@ -56,6 +66,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/managed-visitors/v1/sessions/:id/actions',
     '/api/managed-visitors/v1/sessions/:id/leave',
     '/api/managed-visitors/v1/sessions/:id/observations',
+    // server/services/syncOrchestrator.js requests it from peers.
+    '/api/memory/sync',
     '/api/peer-media/copy',
     '/api/peer-media/delete',
     '/api/peer-media/release',
@@ -76,7 +88,6 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/sync/:category/video-inventory',
     '/api/sync/mediaCollections/image-inventory',
     '/api/sync/mediaCollections/image-library-inventory',
-    '/api/video-gen',
   ]),
   'companion-app': Object.freeze([
     '/api/auth/whoami',
@@ -95,6 +106,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
   ]),
   'agent-facing': Object.freeze([
     '/api/alerts',
+    // server/lib/apiOperationContracts.js: a public OpenAPI operation exposed to agents through the API tool resource.
+    '/api/apps/:id/logs',
     '/api/auth/logout',
     '/api/browser/health',
     '/api/code-review/cli-outcome',
@@ -108,13 +121,15 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/cos/learning/insights',
     '/api/cos/merge-handoff',
     '/api/cos/tasks/:id/challenge',
+    // server/services/autonomousJobs/defaults.js: the generated job prompts tell the agent to call it.
+    '/api/cos/tasks/internal',
+    // server/services/autonomousJobs/defaults.js: the generated job prompts tell the agent to call it.
+    '/api/cos/tasks/user',
     '/api/cos/tools/call',
     '/api/cos/tools/calls/:requestId',
     '/api/creative-director/:id/plan',
     '/api/creative-director/:id/treatment',
     '/api/datadog/instances/:id',
-    '/api/eidoverse/travel/guest',
-    '/api/html-composition/:jobId/events',
     '/api/human-actions',
     '/api/human-actions/plans',
     '/api/jira/instances/:id',
@@ -126,8 +141,9 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/jira/instances/:instanceId/tickets/:ticketId/labels',
     '/api/providers/comparison/import',
     '/api/review/todo',
-    '/api/screenshots/:filename',
     '/api/user-actions',
+    // docs/API_TOOL_CONTRACT.md and docs/features/agent-context.md document the MCP endpoint local agents call.
+    '/api/agent-context/mcp',
   ]),
   'oauth-callback': Object.freeze([
     '/api/beeper/oauth/callback',
@@ -135,6 +151,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/spotify/oauth/callback',
   ]),
   'operator-script': Object.freeze([
+    // docs/API.md names the activity feed mount for API callers; the browser reads its sub-routes.
+    '/api/agents/activity',
     '/api/agents/tools/moltworld/queue/:id/complete',
     '/api/agents/tools/moltworld/queue/:id/fail',
     '/api/apple-health/days/:date',
@@ -149,6 +167,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     // Operator/API erasure path for data/contacts-cache.json + sync state (#18130).
     '/api/contacts/cache',
     '/api/cos/agents/:id/release-candidate',
+    // docs/features/chief-of-staff.md route table.
+    '/api/cos/jobs/incidents',
     '/api/cos/mind/maintainer/watchdog',
     // scripts/portos-acp.js (docs/ACP.md): the ACP stdio adapter's live Persistent Mind feed; the browser uses Socket.IO.
     '/api/cos/mind/stream',
@@ -171,8 +191,22 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/managed-visitor-admin',
     '/api/managed-visitor-admin/:appId/credential',
     '/api/meatspace/post/memory-drill',
+    // docs/features/post.md route table (spaced-repetition due list).
+    '/api/meatspace/post/memory-items/due',
+    // docs/features/memory-system.md route table (memory maintenance endpoints, #18655).
+    '/api/memory/categories',
+    '/api/memory/consolidate',
+    '/api/memory/decay',
+    '/api/memory/expired',
+    '/api/memory/link',
+    '/api/memory/tags',
+    '/api/memory/timeline',
+    // docs/features/product-surfaces.md: the read of a server-owned production run started over this API.
+    '/api/music-video/:id/production-runs/:runId',
     // docs/features/product-surfaces.md: a music video's spend by lane, for API callers; the page reads it off the project.
     '/api/music-video/:id/spend',
+    // docs/API.md: the full character style, for API callers; the client reads the list.
+    '/api/music-video/character-styles/:id',
     '/api/ports/allocate',
     '/api/ports/scan',
     // docs/features/agent-skills.md (P5 surfaces): the Skill Registry routes, for agents and API callers.
@@ -181,178 +215,56 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     // scripts/ops/reconcile-maintenance-reservations.mjs confirms terminal runner ownership.
     '/api/system/maintenance/runner-owner/:agentId',
     '/api/universe-builder/:id/canon/backfill-descriptions',
-    '/api/video-gen/models/:modelId/download',
-    '/api/video-gen/text-encoder/download',
-    '/api/voice/profiles',
-  ]),
-  'client-direct': Object.freeze([
-    '/api/agent-context/manifest',
-    '/api/agent-context/mcp',
-    '/api/api-docs/asyncapi.json',
-    '/api/attachments/:filename',
-    '/api/avatar/model.glb',
-    '/api/calendar/events/:accountId/:eventId',
-    '/api/character/damage',
-    '/api/character/event',
-    '/api/character/rest',
-    '/api/character/sync/jira',
-    '/api/character/sync/tasks',
-    '/api/character/xp',
-    '/api/client-errors',
-    '/api/data/cos/storage/recording/:date/:id',
-    '/api/datadog/instances/:id/test',
-    '/api/harnesses/action',
-    '/api/harnesses/review-update',
-    '/api/image-gen/:jobId/events',
-    '/api/image-gen/setup/flux2-install',
-    '/api/image-gen/setup/flux3-install',
-    '/api/image-gen/setup/install',
-    '/api/image-gen/setup/moss-install',
-    '/api/image-gen/setup/moss-weights',
-    '/api/image-to-3d/targets/:targetId/install',
-    '/api/jira/instances/:id/test',
-    '/api/meatspace/export/mortalloom',
-    '/api/meatspace/lifestyle',
-    '/api/media/audio',
-    '/api/media/devices',
-    '/api/media/sketches/:key/png',
-    '/api/media/start',
-    '/api/media/stop',
-    '/api/media/video',
-    '/api/midi-runtime/install',
-    '/api/music-video/:id/publish-kit/video',
-    '/api/music-video/:id/scenes/:sceneId/download',
-    '/api/music/setup/runtime-install',
-    '/api/pipeline/issues/:id/comic.pdf',
-    '/api/providers/fleet-host/setup',
-    '/api/providers/readiness/setup',
-    '/api/providers/runtimes/install',
-    '/api/search',
-    '/api/video-gen/ic-loras/:mode/download',
-    '/api/video-gen/setup/runtime-install',
-    '/api/video-gen/text-encoders/:id/download',
-    '/api/voice/config',
-    '/api/voice/public/synthesize',
-    '/api/voice/status',
-    '/api/voice/voices',
-    '/api/voice/whisper',
-    '/api/writers-room/works/:id/polish/progress',
-  ]),
-  'client-service-unscanned': Object.freeze([
-    '/api/agents/activity/agent/:agentId',
-    '/api/agents/activity/run-events',
-    '/api/apps/:id/forge-auth/refresh/:jobId/events',
-    '/api/brain/youtube/ingest/:jobId/events',
-    '/api/blender-models/:id/asset',
-    '/api/browser/downloads',
-    '/api/catalog/export',
-    '/api/catalog/scraps/:id',
-    '/api/continuous-video/:jobId/events',
-    '/api/cos/decisions',
-    '/api/cos/goal-progress',
-    '/api/cos/gsd/projects/:appId/concerns',
-    '/api/cos/gsd/projects/:appId/phases/:phaseId',
-    '/api/cos/learning/recommendations',
-    '/api/decks/:id/generate-prompts/progress',
+    // docs/features/eidoverse-guest-travel.md documents GET and DELETE.
     '/api/eidoverse/world/foundations/:id',
-    '/api/html-pages/runs/:id/pages/:index/file',
-    '/api/image-gen/setup/check',
-    '/api/image-gen/setup/create-venv',
-    '/api/image-gen/setup/python',
-    '/api/image-to-3d/models/:id/asset',
-    '/api/image-to-3d/models/:id/full-mesh',
-    '/api/local-llm/test',
-    '/api/lora-training/runs',
-    '/api/lora-training/runs/:id',
-    '/api/loras/install/huggingface',
-    '/api/meatspace/genome/clinvar',
+    // docs/features/music-video-autonomous.md route table.
     '/api/music-video/:id/autonomous',
-    '/api/music-video/:id/dcp/:artifactId/report',
-    '/api/music-video/:id/dev-artifacts/:artifactId/file',
-    '/api/music-video/:id/sequence-coverage',
-    '/api/music-video/:id/sharing-copy/download',
-    '/api/music-video/lyrics/align/:jobId/events',
-    '/api/music-video/lyrics/verify/:jobId/events',
-    '/api/music-video/publish/cover-fonts/:fontId/file',
-    '/api/music-video/vocal-stem/separate/:jobId/events',
-    '/api/music/models',
-    '/api/music/models/:engine',
-    '/api/music/supercollider/renders/:jobId/events',
-    '/api/music/supercollider/setup',
-    '/api/notes/vaults/:id',
-    '/api/pipeline/issues/:id/auto-run-text/progress',
-    '/api/pipeline/issues/:id/stages/:stageId/generate/progress',
-    '/api/pipeline/series/:id/autopilot/progress',
-    '/api/pipeline/series/:id/continuity-bible/generate/progress',
-    '/api/pipeline/series/:id/editorial/analyze/progress',
-    '/api/pipeline/series/:id/editorial/checks/run/progress',
-    '/api/pipeline/series/:id/editorial/panel/run/progress',
-    '/api/pipeline/series/:id/manuscript/completeness/progress',
-    '/api/pipeline/series/:id/reverse-outline/generate/progress',
-    '/api/pipeline/series/:id/review/fix/progress',
-    '/api/pipeline/series/:id/review/progress',
-    '/api/pipeline/series/:id/seasons/:seasonId/generate-beats/progress',
-    '/api/pipeline/series/:id/seasons/:seasonId/volume.pdf',
-    '/api/rounds/reference-audio/import/:jobId/events',
-    '/api/rounds/reference-audio/transcribe-midi/:jobId/events',
+    // docs/features/app-wizard.md route table.
     '/api/scaffold',
-    '/api/stacker-news/items',
-    '/api/story-builder/:id/steps/:stepId/progress',
-    '/api/timeline/import/browser',
-    '/api/timeline/import/discord',
-    '/api/timeline/import/spotify',
-    '/api/timeline/import/takeout-location',
-    '/api/timeline/import/whatsapp',
-    '/api/timeline/import/youtube',
-    '/api/tracks/:id/audio',
-    '/api/usage/claude-code',
-    '/api/voice/engines',
-    '/api/voice/facetime/call',
-    '/api/voice/facetime/hangup',
-    '/api/voice/facetime/probe',
-    '/api/voice/facetime/status',
-    '/api/voice/piper/fetch',
-    '/api/voice/profiles/:id',
-    '/api/voice/profiles/:id/assign',
-    '/api/voice/profiles/:id/benchmark',
-    '/api/voice/profiles/:id/benchmark-interactive',
-    '/api/voice/profiles/:id/benchmark-interactive/complete',
-    '/api/voice/profiles/:id/fine-tune',
-    '/api/voice/profiles/:id/fine-tune/:jobId',
-    '/api/voice/profiles/:id/fine-tune/:jobId/cancel',
-    '/api/voice/profiles/:id/fine-tune/:jobId/promote',
-    '/api/voice/profiles/:id/fine-tune/start',
-    '/api/voice/profiles/:id/promote',
-    '/api/voice/profiles/clone',
-    '/api/voice/profiles/design',
-    '/api/voice/profiles/preset',
-    '/api/voice/studio/design',
-    '/api/voice/studio/profiles',
-    '/api/voice/studio/setup',
-    '/api/voice/studio/status',
-    '/api/voice/studio/unload',
-    '/api/voice/test',
+  ]),
+  'client-dynamic': Object.freeze([
+    // client/src/pages/CharacterSheet.jsx: charPost builds `/character${path}`.
+    '/api/character/damage',
+    // client/src/pages/CharacterSheet.jsx: charPost builds `/character${path}`.
+    '/api/character/event',
+    // client/src/pages/CharacterSheet.jsx: charPost builds `/character${path}`.
+    '/api/character/rest',
+    // client/src/pages/CharacterSheet.jsx: charPost builds `/character${path}`.
+    '/api/character/sync/jira',
+    // client/src/pages/CharacterSheet.jsx: charPost builds `/character${path}`.
+    '/api/character/sync/tasks',
+    // client/src/pages/CharacterSheet.jsx: charPost builds `/character${path}`.
+    '/api/character/xp',
+    // client/src/components/integrations/IntegrationInstancesPage.jsx: builds `${apiBase}/instances/${instanceId}/test`.
+    '/api/datadog/instances/:id/test',
+    // client/src/components/integrations/IntegrationInstancesPage.jsx: builds `${apiBase}/instances/${instanceId}/test`.
+    '/api/jira/instances/:id/test',
+    // client/src/hooks/useMediaJobSse.js: builds `/api/${kind}-gen/${jobId}/events`.
+    '/api/image-gen/:jobId/events',
+    // client/src/hooks/useModelDownloadStatus.js: builds `/api/${kind}-gen/models/${modelId}/download`.
+    '/api/image-gen/models/:modelId/download',
   ]),
   'server-reference': Object.freeze([
     '/api/api-docs/tools.min.json',
     '/api/catalog/ingredients/:id/photoreal/blend',
     '/api/git/status',
+    // docs/features/tailcat-peers.md documents the operator read without the full capability.
+    'GET /api/instances/peers/tailcat/devices',
     '/api/html-composition/render',
     '/api/lora-training/runs/:id/samples/:filename',
+    // docs/features/post.md documents item editing over the API.
+    'PUT /api/meatspace/post/memory-items/:id',
     '/api/music-video/:id/composition/document/file',
     '/api/music/supercollider/renders/:jobId/audio',
-    '/api/music/waveform',
-    '/api/privacy/optout/verify',
-    '/api/providers/management/preview',
+    // docs/features/openclaw-operator-chat.md documents the non-streaming API.
+    'POST /api/openclaw/sessions/:id/messages',
     '/api/usage/messages',
-    '/api/video-gen/reactor/token',
     '/api/voice/speak',
   ]),
   'legacy-client-compat': Object.freeze([
-    '/api/fableloom/:id/episodes/:episodeId/shots/plan',
-    '/api/image-to-3d/trellis2/install',
-    '/api/providers/opencode/install',
-    '/api/providers/opencode/installation',
+    '/api/lora-training/runs',
+    // Universe pickers in older client builds request full records (before #17115).
+    'GET /api/universe-builder',
     '/api/voice/tts/status',
     '/api/voice/tts/unload',
   ]),
