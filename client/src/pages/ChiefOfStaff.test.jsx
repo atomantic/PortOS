@@ -1988,3 +1988,64 @@ describe('ChiefOfStaff tab switches', () => {
     expect(screen.getAllByText('40%').length).toBeGreaterThan(0);
   });
 });
+
+describe('ChiefOfStaff slice reads against concurrent refreshes (#18643)', () => {
+  const getSocketHandler = (event) => socketStub.on.mock.calls.find(([evt]) => evt === event)?.[1];
+  const taskList = (description) => ({ user: { tasks: [{ id: 'task-1', description, status: 'pending', metadata: {} }] }, cos: { tasks: [] } });
+  function NavProbe() {
+    const navigate = useNavigate();
+    return ['briefing', 'config', 'tasks'].map(id => (
+      <button key={id} type="button" onClick={() => navigate(`/cos/${id}`)}>{`go ${id}`}</button>
+    ));
+  }
+  const renderWithProbe = (tab) => render(
+    <MemoryRouter initialEntries={[`/cos/${tab}`]}>
+      <Routes>
+        <Route path="/cos/:tab" element={<><ChiefOfStaff /><NavProbe /></>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); });
+
+  it('keeps the recovered queue when a slower slice read from before a reconnect settles last', async () => {
+    renderWithProbe('briefing');
+    await waitForPageShell();
+    let releaseSlice;
+    api.getCosTasks.mockReturnValueOnce(new Promise(resolve => { releaseSlice = () => resolve(taskList('STALE slice read')); }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'go tasks' })); });
+    await waitFor(() => expect(api.getCosTasks).toHaveBeenCalledTimes(1));
+
+    api.getCosTasks.mockResolvedValue(taskList('RECOVERED after reconnect'));
+    await act(async () => { socketStub.receive('connect'); });
+    expect(await screen.findByText('RECOVERED after reconnect')).toBeInTheDocument();
+
+    await act(async () => { releaseSlice(); await new Promise(resolve => setTimeout(resolve, 20)); });
+    expect(screen.queryByText('STALE slice read')).not.toBeInTheDocument();
+    expect(screen.getByText('RECOVERED after reconnect')).toBeInTheDocument();
+  });
+
+  it('releases the loading skeleton for a tab that needs no queue while the initial queue read hangs', async () => {
+    api.getCosTasks.mockReturnValue(new Promise(() => {}));
+    renderWithProbe('tasks');
+    expect(await screen.findByRole('status', { name: 'Loading Chief of Staff' })).toBeInTheDocument();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'go config' })); });
+    await waitForPageShell();
+    expect(api.getCosStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes the learning summary from the persisted learning-change event', async () => {
+    withFakeTimers();
+    renderWithProbe('config');
+    await waitForPageShell();
+    await settle();
+    expect(api.getCosLearningSummary).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      getSocketHandler('cos:learning:changed')({});
+      await vi.advanceTimersByTimeAsync(450);
+    });
+    expect(api.getCosLearningSummary).toHaveBeenCalledTimes(2);
+    expect(api.getCosStatus).toHaveBeenCalledTimes(1);
+  });
+});

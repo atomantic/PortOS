@@ -107,6 +107,10 @@ export default function useCosPageData({ activeTab, selectedTask }) {
   const prevNeedsRef = useRef({ tasks: needsTasks, agents: needsAgents, providers: needsProviders, apps: needsApps });
   const tasksSliceRef = useRef(null);
   const agentsSliceRef = useRef(null);
+  // Resolvers for reads that a full refresh or queue refresh is still awaiting.
+  // Ending a slice's epoch releases them, so a hung Tasks read cannot hold the
+  // loading skeleton (or the rest of a refresh) after the user has moved on.
+  const sliceWaitersRef = useRef(new Set());
   const mountedRef = useMounted();
   const learningSeqRef = useRef(0);
   const inFlight = useRef(null);
@@ -325,6 +329,17 @@ export default function useCosPageData({ activeTab, selectedTask }) {
   // The full refresh: shell (status, health, learning) plus every slice the
   // current tab needs. Used on mount, reconnect, config/pause events and
   // explicit refreshes; opening a tab reads only the slices it newly needs.
+  // Await a slice read only while its epoch lasts: if the slice's flag flips
+  // first, resolve null and let the read settle into the void (its own writes are
+  // already epoch-guarded).
+  const awaitSlice = useCallback((kind, read) => {
+    return Promise.race([read, new Promise((resolve) => {
+      const waiter = { kind, resolve };
+      sliceWaitersRef.current.add(waiter);
+      read.finally(() => sliceWaitersRef.current.delete(waiter));
+    })]);
+  }, []);
+
   const fetchData = useCallback(async function refreshPageData() {
     if (inFlight.current && !inFlight.current.controller.signal.aborted) {
       inFlight.current.dirty = true;
@@ -336,11 +351,14 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       const needs = needsRef.current;
       const tasksEpoch = sliceEpochRef.current.tasks;
       const tasksCurrent = () => needsRef.current.tasks && sliceEpochRef.current.tasks === tasksEpoch;
+      // This read carries the queue, so it supersedes a slice read still in flight
+      // (a reconnect while a just-opened Tasks tab is loading).
+      if (needs.tasks) tasksSliceRef.current?.abort();
       // Paint the visible queue before ancillary summaries and references settle.
       const coreRead = Promise.all([
         getCosStatus().catch(() => null),
-        needs.tasks ? getCosTasks({ view: 'queue', selected: selectedTaskRef.current, signal: controller.signal, silent: true }).catch(() => null) : Promise.resolve(null),
-        readAgents(controller),
+        needs.tasks ? awaitSlice('tasks', getCosTasks({ view: 'queue', selected: selectedTaskRef.current, signal: controller.signal, silent: true }).catch(() => null)) : Promise.resolve(null),
+        awaitSlice('agents', readAgents(controller)),
       ]);
       const healthObservation = healthObservationRef.current;
       const healthRead = getCosHealth({ signal: controller.signal, silent: true }).catch(() => null).then((data) => {
@@ -364,7 +382,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       const secondaryRead = Promise.all([
         getCosLearningSummary().catch(() => null),
         // Preserve the last good insights on a transient refresh failure.
-        needs.tasks ? getCosActionableInsights({ cachedHealth: true, silent: true }).catch(() => null) : Promise.resolve(null)
+        needs.tasks ? awaitSlice('tasks', getCosActionableInsights({ cachedHealth: true, silent: true }).catch(() => null)) : Promise.resolve(null)
       ]);
 
       const [statusData, tasksData, agentResult] = await coreRead;
@@ -424,7 +442,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       if (pending.dirty && !controller.signal.aborted) refreshPageData();
     });
     return pending.promise;
-  }, [deriveAgentState, applyHealth, markHealthUnavailable, applyProviders, readApps, readAgents]);
+  }, [deriveAgentState, applyHealth, markHealthUnavailable, applyProviders, readApps, readAgents, awaitSlice]);
 
   // Coalesce event bursts into a read of the visible queue and scalar shell
   // status. Insights use persisted health; invalidation never runs PM2 repair.
@@ -440,12 +458,12 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     const tasksEpoch = sliceEpochRef.current.tasks;
     const tasksCurrent = () => needsRef.current.tasks && sliceEpochRef.current.tasks === tasksEpoch;
     const insightsRead = needsRef.current.tasks
-      ? getCosActionableInsights({ cachedHealth: true, silent: true }).catch(() => null)
+      ? awaitSlice('tasks', getCosActionableInsights({ cachedHealth: true, silent: true }).catch(() => null))
       : Promise.resolve(null);
     request.promise = Promise.all([
       getCosStatus().catch(() => null),
-      needsRef.current.tasks ? getCosTasks({ view: 'queue', selected: selectedTaskRef.current, signal: controller.signal, silent: true }).catch(() => null) : null,
-      readAgents(controller),
+      needsRef.current.tasks ? awaitSlice('tasks', getCosTasks({ view: 'queue', selected: selectedTaskRef.current, signal: controller.signal, silent: true }).catch(() => null)) : null,
+      awaitSlice('agents', readAgents(controller)),
     ]).then(async ([summary, tasksData]) => {
       if (controller.signal.aborted || queueSeqRef.current !== queueSeq) return;
       if (summary) setStatus(summary);
@@ -457,7 +475,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       if (request.dirty && !controller.signal.aborted) refreshQueueData();
     });
     return request.promise;
-  }, [readAgents]);
+  }, [readAgents, awaitSlice]);
 
   // A slice's first read when its flag turns true: queue + insights.
   // Deliberately reads no shell data; status, health and learning are
@@ -511,8 +529,15 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     const prev = prevNeedsRef.current;
     const next = { tasks: needsTasks, agents: needsAgents, providers: needsProviders, apps: needsApps };
     prevNeedsRef.current = next;
-    if (prev.tasks !== next.tasks) sliceEpochRef.current.tasks += 1;
-    if (prev.agents !== next.agents) sliceEpochRef.current.agents += 1;
+    for (const kind of ['tasks', 'agents']) {
+      if (prev[kind] === next[kind]) continue;
+      sliceEpochRef.current[kind] += 1;
+      for (const waiter of sliceWaitersRef.current) {
+        if (waiter.kind !== kind) continue;
+        sliceWaitersRef.current.delete(waiter);
+        waiter.resolve(null);
+      }
+    }
     if (next.tasks && !prev.tasks) readTasksSlice();
     if (next.agents && !prev.agents) readAgentsSlice();
     if (next.providers && !prev.providers) getProviders().then(applyProviders).catch(() => {});
@@ -575,9 +600,11 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     // spawnAgentForTask flips the task off 'pending', so the fetch it triggers
     // always reads the task as still-queued.
     const refreshQueue = coalesce(fetchQueue, 400);
-    // The learning summary changes when an agent finishes. The completion event
-    // is the only trigger: a tab switch must not be what refreshes the tile.
+    // The learning summary changes when learning data is persisted (the server's
+    // `cos:learning:changed`: outcomes, resets, backfills) and when an agent
+    // finishes. A tab switch must not be what refreshes the tile.
     const refreshLearning = coalesce(refreshLearningSummary, 400);
+    socket.on('cos:learning:changed', refreshLearning);
     const handleTaskMutation = data => {
       if (data?.completedChanged || data?.task?.status === 'completed' || data?.previousStatus === 'completed' || ['deleted', 'peer-merged'].includes(data?.action)) {
         setTaskHistoryRevision(value => value + 1);
@@ -740,6 +767,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       socket.off('cos:health:check', handleHealthCheck);
       socket.off('cos:log', handleCosLog);
       socket.off('cos:scheduler:changed', handleRecoveryScheduleChanged);
+      socket.off('cos:learning:changed', refreshLearning);
       socket.off('apps:changed', handleAppsChanged);
       refreshQueue.cancel();
       refreshLearning.cancel();
