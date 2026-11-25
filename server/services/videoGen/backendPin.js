@@ -40,6 +40,13 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { renderTargetDefaults } from '../imageGen/cloudProviderConfig.js';
 import { VIDEO_GEN_MODE, VIDEO_GEN_MODES, resolveVideoMode, hasVideoPin, isVideoModeUsable } from './modes.js';
 
+const PIN_MODEL_BY_MODE = Object.freeze({
+  [VIDEO_GEN_MODE.FAL]: id => id,
+  [VIDEO_GEN_MODE.RUNWAY]: id => getRunwayVideoModel(id)?.id ?? null,
+  [VIDEO_GEN_MODE.HIGGSFIELD]: id => getHiggsfieldVideoModel(id)?.id ?? null,
+  [VIDEO_GEN_MODE.GOOGLE]: id => getGoogleVideoModel(id)?.id ?? null,
+});
+
 /**
  * Resolve the video backend for a CD project through the pin ladder: the
  * project's own `renderBackend.video` pin (per-record, wins) → the surface's
@@ -54,8 +61,8 @@ import { VIDEO_GEN_MODE, VIDEO_GEN_MODES, resolveVideoMode, hasVideoPin, isVideo
  * params untouched instead of re-deriving them.
  *
  * `modelId` belongs to the resolved backend: local catalog pins follow the
- * existing project → target precedence; fal endpoint pins come only from an
- * explicit fal project pin. Grok and Reactor use their renderer's own model.
+ * existing project → target precedence; hosted model ids come only from
+ * an explicit project pin for that backend. Grok and Reactor use their renderer's own model.
  */
 export function resolveVideoBackendPin(project, settings, { target = RENDER_TARGET.CREATIVE_AGENT } = {}) {
   const raw = project?.renderBackend?.video || null;
@@ -72,24 +79,16 @@ export function resolveVideoBackendPin(project, settings, { target = RENDER_TARG
     throw new ServerError(`The selected ${strictMode} video backend is unavailable. Enable it and configure its credentials in Settings, or change the production backend.`, { status: 409, code: 'VIDEO_BACKEND_UNAVAILABLE' });
   }
   const resolvedMode = project?.workspace === 'video' ? strictMode : resolveVideoMode(mode, settings, { target });
-  // The target videoModel and project.modelId are local catalog choices. fal
-  // and Runway accept a model only from their own explicit project pin (Runway
-  // only a curated catalog id); Reactor and Grok choose their models in the
-  // renderer. A lapsed fal or Runway pin must not pass its model id into the
-  // legacy local fallback either.
-  const cloudModelPin = mode === VIDEO_GEN_MODE.FAL || mode === VIDEO_GEN_MODE.REACTOR || mode === VIDEO_GEN_MODE.RUNWAY || mode === VIDEO_GEN_MODE.HIGGSFIELD || mode === VIDEO_GEN_MODE.GOOGLE;
-  const localModelId = (!cloudModelPin && normalizeRenderPinValue(raw?.modelId))
-    || targetDefaults.videoModel || null;
-  const modelId = resolvedMode === VIDEO_GEN_MODE.LOCAL ? localModelId
-    : resolvedMode === VIDEO_GEN_MODE.FAL && mode === VIDEO_GEN_MODE.FAL
-      ? normalizeRenderPinValue(raw?.modelId)
-      : resolvedMode === VIDEO_GEN_MODE.RUNWAY && mode === VIDEO_GEN_MODE.RUNWAY
-        ? getRunwayVideoModel(normalizeRenderPinValue(raw?.modelId))?.id || null
-        : resolvedMode === VIDEO_GEN_MODE.HIGGSFIELD && mode === VIDEO_GEN_MODE.HIGGSFIELD
-          ? getHiggsfieldVideoModel(normalizeRenderPinValue(raw?.modelId))?.id || null
-          : resolvedMode === VIDEO_GEN_MODE.GOOGLE && mode === VIDEO_GEN_MODE.GOOGLE
-            ? getGoogleVideoModel(normalizeRenderPinValue(raw?.modelId))?.id || null
-            : null;
+  const hasHostedModel = Object.hasOwn(PIN_MODEL_BY_MODE, mode);
+  // A disabled hosted API pin must not pass its model id into the legacy local fallback.
+  const cloudModelPin = hasHostedModel || mode === VIDEO_GEN_MODE.REACTOR;
+  const requestedModel = normalizeRenderPinValue(raw?.modelId);
+  let modelId = null;
+  if (resolvedMode === VIDEO_GEN_MODE.LOCAL) {
+    modelId = (!cloudModelPin && requestedModel) || targetDefaults.videoModel || null;
+  } else if (resolvedMode === mode && hasHostedModel) {
+    modelId = PIN_MODEL_BY_MODE[mode](requestedModel);
+  }
   return {
     // A model pin counts as a pin even with no mode beside it. Naming a local
     // video model IS a configured choice, and the resolved mode for an
@@ -218,59 +217,23 @@ export function videoBackendJobParams(settings, pin, params = {}, { durationSeco
   if (pin.mode === VIDEO_GEN_MODE.GROK) {
     return { ...base, ...grokVideoJobParams(settings, { sourceImagePath, durationSeconds: duration }) };
   }
-  if (pin.mode === VIDEO_GEN_MODE.FAL) {
+  const hostedParams = { ...base, mode: pin.mode, videoMode: sourceImagePath ? 'image' : 'text' };
+  if (Object.hasOwn(PIN_MODEL_BY_MODE, pin.mode)) {
     return {
-      ...base,
-      mode: VIDEO_GEN_MODE.FAL,
-      videoMode: sourceImagePath ? 'image' : 'text',
+      ...hostedParams,
       ...(pin.modelId ? { modelId: pin.modelId } : {}),
       ...(duration != null ? { duration } : {}),
     };
   }
-  if (pin.mode === VIDEO_GEN_MODE.GOOGLE) {
-    return {
-      ...base,
-      mode: VIDEO_GEN_MODE.GOOGLE,
-      videoMode: sourceImagePath ? 'image' : 'text',
-      ...(pin.modelId ? { modelId: pin.modelId } : {}),
-      ...(duration != null ? { duration } : {}),
-    };
-  }
-  if (pin.mode === VIDEO_GEN_MODE.GEMINI) {
-    // Gemini takes the prompt, one of its two canvases and an optional start frame, and sets its own clip length.
-    return {
-      ...base,
-      mode: VIDEO_GEN_MODE.GEMINI,
-      videoMode: sourceImagePath ? 'image' : 'text',
-    };
-  }
-  if (pin.mode === VIDEO_GEN_MODE.HIGGSFIELD) {
-    return {
-      ...base,
-      mode: VIDEO_GEN_MODE.HIGGSFIELD,
-      videoMode: sourceImagePath ? 'image' : 'text',
-      ...(pin.modelId ? { modelId: pin.modelId } : {}),
-      ...(duration != null ? { duration } : {}),
-    };
-  }
-  if (pin.mode === VIDEO_GEN_MODE.RUNWAY) {
-    return {
-      ...base,
-      mode: VIDEO_GEN_MODE.RUNWAY,
-      videoMode: sourceImagePath ? 'image' : 'text',
-      ...(pin.modelId ? { modelId: pin.modelId } : {}),
-      ...(duration != null ? { duration } : {}),
-    };
-  }
+  // Gemini sets its own clip length and does not accept a model pin.
+  if (pin.mode === VIDEO_GEN_MODE.GEMINI) return hostedParams;
   if (pin.mode === VIDEO_GEN_MODE.REACTOR) {
     const seconds = params.seconds ?? duration;
     const aspect = Number(params.width) > 0 && Number(params.height) > 0
       ? nearestReactorAspect(params.width, params.height)
       : params.aspect ?? params.aspectRatio;
     return {
-      ...base,
-      mode: VIDEO_GEN_MODE.REACTOR,
-      videoMode: sourceImagePath ? 'image' : 'text',
+      ...hostedParams,
       ...(seconds != null ? { seconds } : {}),
       ...(aspect ? { aspect } : {}),
     };

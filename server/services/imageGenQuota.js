@@ -32,7 +32,8 @@
  */
 
 import { join } from 'path';
-import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE, IMAGE_TOOL_NAMES, modeLabel } from './imageGen/modes.js';
+import { CLOUD_IMAGE_GEN_MODES, METERED_IMAGE_GEN_MODES } from '../lib/generationModes.js';
+import { IMAGE_TOOL_NAMES, modeLabel } from './imageGen/modes.js';
 import { imageGenEvents } from './imageGenEvents.js';
 import { atomicWrite, PATHS, readJSONFileStrict } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
@@ -60,10 +61,10 @@ const UNKNOWN_BLOCK_TTL_MS = 60 * 60 * 1000;
 // added there. Display names come from `modeLabel` for the same reason — one
 // backend must not appear under two names across the UI.
 //
-// Metered fal.ai and Runway images are excluded: they do not draw from a
+// Metered image backends are excluded: they do not draw from a
 // subscription quota window. Policy/input failures must not become quota blocks.
 // Their spend is recorded per render (`estimatedCostUsd` in the sidecar).
-export const isQuotaTrackedImageMode = (mode) => CLOUD_IMAGE_GEN_MODES.includes(mode) && ![IMAGE_GEN_MODE.FAL, IMAGE_GEN_MODE.RUNWAY, IMAGE_GEN_MODE.HIGGSFIELD, IMAGE_GEN_MODE.GOOGLE].includes(mode);
+export const isQuotaTrackedImageMode = (mode) => CLOUD_IMAGE_GEN_MODES.includes(mode) && !METERED_IMAGE_GEN_MODES.includes(mode);
 
 /** Card id for the image-gen quota card, in the same namespace as the provider
  * family ids in providerUsage.js — a per-family read has to be able to name it. */

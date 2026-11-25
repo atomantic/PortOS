@@ -15,7 +15,7 @@ import { broadcastSse } from '../../lib/sseUtils.js';
 import { refuseRetiredTraining, assertRetiredDataAvailable } from '../../lib/retiredLoraTraining.js';
 import { assertFlux2InputsCompatible } from '../../lib/flux2Inputs.js';
 import { LOCAL_IMAGEGEN_DEFAULT_MODEL } from '../../lib/imageGenCapabilities.js';
-import { CLOUD_IMAGE_GEN_MODES } from '../imageGen/modes.js';
+import { CLOUD_IMAGE_GEN_MODES, CLOUD_VIDEO_GEN_MODES } from '../../lib/generationModes.js';
 import { routedJobParams } from '../federatedMedia/routedJobParams.js';
 import { mediaRecoveryPending } from '../../lib/mediaRecoveryActivity.js';
 import { isRemoteMediaJob } from './remoteMediaJob.js';
@@ -488,7 +488,7 @@ export async function cancelJob(jobId) {
       if (isRemoteMediaJob(runningJob)) await persist();
       return { ok: false, code: 'ALREADY_TERMINAL', status: runningJob.status, error: 'Job is already finishing' };
     }
-    if (runningJob.params?.videoProduction && ['reactor', 'fal', 'grok', 'runway', 'higgsfield', 'google'].includes(runningJob.params.mode)) {
+    if (runningJob.params?.videoProduction && CLOUD_VIDEO_GEN_MODES.includes(runningJob.params.mode)) {
       runningJob.params.videoProduction = { ...runningJob.params.videoProduction, submissionUncertain: true };
       await persist();
     }

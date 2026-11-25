@@ -8,7 +8,7 @@
 
 import { getSettings } from '../settings.js';
 import { parseQuotaDeferral, formatDeferral } from '../../lib/imageQuotaSignal.js';
-import { mediaJobExecutionLane, mediaJobSwimlane } from '../../lib/generationModes.js';
+import { CLOUD_IMAGE_GEN_MODES, CLOUD_VIDEO_GEN_MODES, mediaJobExecutionLane, mediaJobSwimlane } from '../../lib/generationModes.js';
 import { isRemoteMediaJob } from './remoteMediaJob.js';
 
 // Cloud-CLI jobs (Codex/Grok/Agy images, Grok videos) run in the parallel cloud
@@ -108,22 +108,14 @@ const setParallelLimit = _setParallelLimit;
 
 export function syncParallelLimits(s) {
   if (!s) return;
-  const ig = s.imageGen || {};
-  const vg = s.videoGen || {};
-  if (ig.codex?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'codex' }, ig.codex.parallelLimit);
-  if (ig.grok?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'grok' }, ig.grok.parallelLimit);
-  if (vg.grok?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'grok' }, vg.grok.parallelLimit);
-  if (vg.gemini?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'gemini' }, vg.gemini.parallelLimit);
-  if (ig.fal?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'fal' }, ig.fal.parallelLimit);
-  if (vg.fal?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'fal' }, vg.fal.parallelLimit);
-  if (ig.runway?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'runway' }, ig.runway.parallelLimit);
-  if (vg.runway?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'runway' }, vg.runway.parallelLimit);
-  if (ig.higgsfield?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'higgsfield' }, ig.higgsfield.parallelLimit);
-  if (vg.higgsfield?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'higgsfield' }, vg.higgsfield.parallelLimit);
-  if (ig.google?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'google' }, ig.google.parallelLimit);
-  if (vg.google?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'google' }, vg.google.parallelLimit);
-  if (ig.agy?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'agy' }, ig.agy.parallelLimit);
-  if (vg.reactor?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'reactor' }, vg.reactor.parallelLimit);
+  for (const mode of CLOUD_IMAGE_GEN_MODES) {
+    const parallelLimit = s.imageGen?.[mode]?.parallelLimit;
+    if (parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode }, parallelLimit);
+  }
+  for (const mode of CLOUD_VIDEO_GEN_MODES) {
+    const parallelLimit = s.videoGen?.[mode]?.parallelLimit;
+    if (parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode }, parallelLimit);
+  }
 }
 
 export async function refreshCodexParallelLimit() {

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   VIDEO_GEN_MODE, VIDEO_GEN_MODES, CLOUD_VIDEO_GEN_MODES,
   isVideoModeUsable, resolveVideoMode,
@@ -34,24 +34,25 @@ describe('isVideoModeUsable', () => {
     expect(isVideoModeUsable({}, undefined)).toBe(false);
   });
 
-  it('gates fal on a configured API key, settings or env', () => {
-    expect(isVideoModeUsable({ videoGen: { fal: { apiKey: 'key' } } }, 'fal')).toBe(true);
-    expect(isVideoModeUsable({ videoGen: { fal: { apiKey: '  ' } } }, 'fal')).toBe(false);
-    expect(isVideoModeUsable({}, 'fal')).toBe(false);
-    const prevEnv = process.env.FAL_KEY;
-    process.env.FAL_KEY = 'env-key';
-    expect(isVideoModeUsable({}, 'fal')).toBe(true);
-    if (prevEnv === undefined) delete process.env.FAL_KEY; else process.env.FAL_KEY = prevEnv;
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each([
+    ['fal', 'FAL_KEY'],
+    ['reactor', 'REACTOR_API_KEY'],
+    ['runway', 'RUNWAYML_API_SECRET'],
+    ['higgsfield', 'HIGGSFIELD_API_KEY'],
+    ['google', 'GOOGLE_CLOUD_API_KEY'],
+  ])('gates %s on a nonblank settings or environment key', (mode, envVar) => {
+    vi.stubEnv(envVar, '  ');
+    expect(isVideoModeUsable({}, mode)).toBe(false);
+    expect(isVideoModeUsable({ videoGen: { [mode]: { apiKey: '  ' } } }, mode)).toBe(false);
+    expect(isVideoModeUsable({ videoGen: { [mode]: { apiKey: 'key' } } }, mode)).toBe(true);
+    vi.stubEnv(envVar, 'env-key');
+    expect(isVideoModeUsable({}, mode)).toBe(true);
   });
 
-  it('gates reactor on a configured API key, settings or env', () => {
-    expect(isVideoModeUsable({ videoGen: { reactor: { apiKey: 'key' } } }, 'reactor')).toBe(true);
-    expect(isVideoModeUsable({ videoGen: { reactor: { apiKey: '  ' } } }, 'reactor')).toBe(false);
-    expect(isVideoModeUsable({}, 'reactor')).toBe(false);
-    const prevEnv = process.env.REACTOR_API_KEY;
-    process.env.REACTOR_API_KEY = 'env-key';
-    expect(isVideoModeUsable({}, 'reactor')).toBe(true);
-    if (prevEnv === undefined) delete process.env.REACTOR_API_KEY; else process.env.REACTOR_API_KEY = prevEnv;
+  it('accepts Gemini without a configured key or browser sign-in probe', () => {
+    expect(isVideoModeUsable(null, 'gemini')).toBe(true);
   });
 });
 

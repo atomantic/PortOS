@@ -62,10 +62,10 @@ import { HANDHELD_SEED_MAX } from '../lib/handheldCamera.js';
 import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
 import { submitVideoGenJob } from '../services/videoGen/submitJob.js';
 import { previewVideoPrompt } from '../services/videoGen/promptPreview.js';
-import { isVideoModeUsable, VIDEO_GEN_MODE } from '../services/videoGen/modes.js';
+import { isVideoModeUsable } from '../services/videoGen/modes.js';
 import { REFERENCE_AUDIO_FIELDS, VIDEO_REFERENCE_IMAGE_FIELDS } from '../services/videoGen/requestFields.js';
 import { attachSseClient, cancelJob, listJobs, laneConcurrencyFor } from '../services/mediaJobQueue/index.js';
-import { mediaJobExecutionLane } from '../lib/generationModes.js';
+import { HOSTED_MEDIA_BACKENDS, mediaJobExecutionLane } from '../lib/generationModes.js';
 import { getTextEncoderRepo, isHfRepoId, getVideoModels } from '../lib/mediaModels.js';
 import {
   icLoraSpecForMode, listIcLoraWeights,
@@ -127,6 +127,8 @@ const hardwareAwareVideoModels = async () => {
 // MLX import, no model load, cached both ways). /status keeps returning them
 // for its other readers — this is the single builder both routes share, so the
 // two can't drift.
+const videoStatusBackends = HOSTED_MEDIA_BACKENDS.filter(({ video, credentialId, alwaysUsable }) => video && (credentialId || alwaysUsable));
+
 const videoModelContext = async (loadedSettings = null) => {
   const { capabilities, models } = await hardwareAwareVideoModels();
   const settings = loadedSettings || await getSettings();
@@ -146,18 +148,9 @@ const videoModelContext = async (loadedSettings = null) => {
     // back-solve so it can reject out-of-budget keyframe indices before
     // submit instead of letting the worker 400 mid-render.
     fflfLtx2PixelBudget: resolveFflfLtx2PixelBudget(),
-    // Backend usability for the two metered-API video providers (#6213/#6214).
-    // Computed server-side through the SAME resolver `isVideoModeUsable` uses
-    // to gate an actual render, so a key set only via FAL_KEY/REACTOR_API_KEY
-    // env var (no Settings-form entry) still surfaces the backend switcher —
-    // the client can't see env vars, and re-deriving "has a key" from the
-    // settings object alone missed that case entirely.
-    falEnabled: isVideoModeUsable(settings, VIDEO_GEN_MODE.FAL),
-    reactorEnabled: isVideoModeUsable(settings, VIDEO_GEN_MODE.REACTOR),
-    runwayEnabled: isVideoModeUsable(settings, VIDEO_GEN_MODE.RUNWAY),
-    geminiEnabled: isVideoModeUsable(settings, VIDEO_GEN_MODE.GEMINI),
-    higgsfieldEnabled: isVideoModeUsable(settings, VIDEO_GEN_MODE.HIGGSFIELD),
-    googleEnabled: isVideoModeUsable(settings, VIDEO_GEN_MODE.GOOGLE),
+    // The client needs the renderer's usability decision even for env-only keys.
+    // Grok's shared settings toggle is already visible to it.
+    ...Object.fromEntries(videoStatusBackends.map(({ id }) => [`${id}Enabled`, isVideoModeUsable(settings, id)])),
     // Server-owned execution + policy scope per render backend (#3674). The
     // client renders these strings verbatim so the wording can't drift between
     // the two surfaces.
