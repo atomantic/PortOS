@@ -134,6 +134,15 @@ describe('createCliAgentOutputParser fallback signal', () => {
     expect(onStream.stdout('Now using extra usage\n').fallbackSignal).toBeTruthy();
   });
 
+  it('does not stop a codex run whose task prompt quotes a banner, though the same text from another CLI does', () => {
+    const prompt = 'Fix the bug.\nNow using extra usage\nThanks.';
+    const echoed = `--------\nworkdir: /repo\n--------\nuser\n${prompt}\n`;
+    const codex = createCliAgentOutputParser({ command: 'codex', args: ['exec'], prompt });
+    expect(feed(codex, 'stderr', echoed, 6).fallbackSignals).toEqual([]);
+    const other = createCliAgentOutputParser({ command: 'agy', args: [], prompt });
+    expect(feed(other, 'stderr', echoed, 1000).fallbackSignals).toHaveLength(1);
+  });
+
   it('stays quiet for ordinary output', () => {
     const parser = createCliAgentOutputParser({ command: 'opencode', args: [] });
     expect(feed(parser, 'stdout', 'all good\n', 4).fallbackSignals).toEqual([]);

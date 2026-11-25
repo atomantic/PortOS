@@ -621,6 +621,22 @@ describe('cos-runner /spawn — CLI shim, prompt delivery, stdin guard, and outp
     );
   });
 
+  it('does not stop a codex run whose prompt quotes a usage-limit banner', async () => {
+    const { post, connectClient, deps, children } = await bootTestRunner();
+    const client = await connectClient();
+    const completed = new Promise(resolve => client.once('agent:completed', resolve));
+    const prompt = 'Investigate this.\nNow using extra usage\nThen report.';
+
+    await post('/spawn', { agentId: 'a-echo', taskId: 't-echo', prompt, cliCommand: 'codex', cliArgs: ['exec'] });
+    children[0].stderr.emit('data', Buffer.from(`--------\nworkdir: /repo\n--------\nuser\n${prompt}\n`));
+    expect(deps.killProcessTree).not.toHaveBeenCalled();
+    children[0].emit('close', 0);
+
+    const completion = await completed;
+    expect(completion).toMatchObject({ success: true });
+    expect(completion).not.toHaveProperty('fallbackAnalysis');
+  });
+
   it('carries the stream-json result as finalSummary, and the raw stream only for a failed run', async () => {
     const { post, connectClient, deps, children } = await bootTestRunner();
     const client = await connectClient();
