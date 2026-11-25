@@ -9,6 +9,8 @@ import {
   IMAGE_GEN_MODE, localModelSelectOptions, supportsCloudModelOverride,
 } from '../../lib/imageGenBackends';
 
+const DEFAULT_MODEL_LABEL = 'Default (Settings)';
+
 /** Whether `mode` shows a model control. Callers use this to keep a grid cell when it does not. */
 export function imageModeHasModel(mode, { showLocal = true } = {}) {
   if (!mode) return false;
@@ -25,7 +27,7 @@ export function imageModeHasModel(mode, { showLocal = true } = {}) {
 // Nothing is fetched until a local backend is actually selected.
 export default function ImageModelField({
   id, mode, value = null, onChange, className = '', ariaLabel, disabled = false,
-  commit = 'blur', falDefaultLabel = 'Default (Settings)', showLocal = true, inline = false, label = 'Model',
+  commit = 'blur', falDefaultLabel, showLocal = true, inline = false, label = 'Model',
   editing = false,
 }) {
   const isLocal = showLocal && mode === IMAGE_GEN_MODE.LOCAL;
@@ -41,22 +43,22 @@ export default function ImageModelField({
   } else if (mode === IMAGE_GEN_MODE.RUNWAY) {
     control = (
       <RunwayModelSelect id={id} ariaLabel={named || 'Runway model'} value={value} disabled={disabled}
-        onChange={onChange} className={controlClass} />
+        onChange={onChange} className={controlClass} defaultLabel={falDefaultLabel} />
     );
   } else if (mode === IMAGE_GEN_MODE.FAL) {
     control = (
       <FalModelSelect id={id} ariaLabel={named} value={value || ''} disabled={disabled} editing={editing}
-        defaultLabel={falDefaultLabel} onChange={onChange} className={controlClass} />
+        defaultLabel={falDefaultLabel ?? DEFAULT_MODEL_LABEL} onChange={onChange} className={controlClass} />
     );
   } else if (mode === IMAGE_GEN_MODE.HIGGSFIELD) {
     control = (
       <HiggsfieldModelSelect id={id} ariaLabel={named} value={value || ''} disabled={disabled}
-        defaultLabel={falDefaultLabel} onChange={onChange} className={controlClass} />
+        defaultLabel={falDefaultLabel ?? DEFAULT_MODEL_LABEL} onChange={onChange} className={controlClass} />
     );
   } else if (mode === IMAGE_GEN_MODE.GOOGLE) {
     control = (
       <GoogleModelSelect id={id} ariaLabel={named} value={value || ''} disabled={disabled}
-        defaultLabel={falDefaultLabel} onChange={onChange} className={controlClass} />
+        defaultLabel={falDefaultLabel ?? DEFAULT_MODEL_LABEL} onChange={onChange} className={controlClass} />
     );
   } else if (supportsCloudModelOverride(mode)) {
     control = (
