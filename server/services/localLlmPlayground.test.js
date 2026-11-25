@@ -5,11 +5,13 @@ vi.mock('./localLlm.js', () => ({ ensureBackendProvider: vi.fn(() => Promise.res
 vi.mock('./provider/providers.js', () => ({ getProviderById: vi.fn() }));
 vi.mock('./provider/providerStatus.js', () => ({ markProviderAvailable: vi.fn(() => Promise.resolve()) }));
 vi.mock('./provider/providerExecutionReadiness.js', () => ({ ensureManagedRuntimeReady: vi.fn(() => Promise.resolve({ success: true })) }));
+vi.mock('./localRuntimeEndpoints.js', () => ({ runtimeEndpoint: vi.fn(), runtimeApiKey: vi.fn(async () => '') }));
 
-import { buildPrompt, summarizeTimings, runLocalLlmTest } from './localLlmPlayground.js';
+import { buildPrompt, summarizeTimings, runLocalLlmTest, compareLocalLlmModels } from './localLlmPlayground.js';
 import { __resetUsageSupport } from '../lib/openAiChatStream.js';
 import { createRun, finalizeRunRecord } from './runner.js';
 import { getProviderById } from './provider/providers.js';
+import { runtimeApiKey, runtimeEndpoint } from './localRuntimeEndpoints.js';
 
 describe('buildPrompt', () => {
   it('returns the bare prompt when no system instructions', () => {
@@ -470,5 +472,76 @@ describe('token counting through the stream', () => {
     const result = await runLocalLlmTest({ backend: 'lmstudio', modelId: 'm1', prompt: 'hi', timeoutMs: 5000 });
     expect(result.error).toContain('401');
     expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('endpoint runtimes in the Playground', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getProviderById.mockResolvedValue({ id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1' });
+    createRun.mockResolvedValue({ runId: 'run-1', provider: { id: 'ollama' } });
+    runtimeApiKey.mockResolvedValue('');
+  });
+  afterEach(() => { delete global.fetch; });
+
+  const stubStream = (reader) => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, body: { getReader: () => reader } });
+  };
+
+  it('sends the prompt unchanged to the resolved endpoint with its key, streams tokens, and records no run', async () => {
+    runtimeEndpoint.mockResolvedValue('http://127.0.0.1:9100/v1');
+    runtimeApiKey.mockResolvedValue('secret');
+    stubStream(makeReader([sse({ content: 'Hel' }), sse({ content: 'lo' })]));
+    const tokens = [];
+    const result = await runLocalLlmTest({ backend: 'llama', modelId: 'dflash', prompt: '  Say hi  ', systemPrompt: 'Be terse', maxTokens: 16, onToken: (d) => tokens.push(d) });
+
+    expect(runtimeEndpoint).toHaveBeenCalledWith('llama');
+    expect(result).toMatchObject({ backend: 'llama', modelId: 'dflash', endpoint: 'http://127.0.0.1:9100/v1', text: 'Hello' });
+    expect(result.error).toBeUndefined();
+    expect(tokens).toEqual(['Hel', 'lo']);
+    const [url, request] = global.fetch.mock.calls[0];
+    expect(url).toBe('http://127.0.0.1:9100/v1/chat/completions');
+    expect(request.headers.Authorization).toBe('Bearer secret');
+    expect(JSON.parse(request.body).messages).toEqual([
+      { role: 'system', content: 'Be terse' },
+      { role: 'user', content: '  Say hi  ' },
+    ]);
+    expect(createRun).not.toHaveBeenCalled();
+    expect(getProviderById).not.toHaveBeenCalled();
+  });
+
+  it('returns an inline error, not a throw, when the daemon is down', async () => {
+    runtimeEndpoint.mockResolvedValue('http://127.0.0.1:9100/v1');
+    global.fetch = vi.fn().mockRejectedValue(new Error('fetch failed'));
+    const result = await runLocalLlmTest({ backend: 'mtplx', modelId: 'm', prompt: 'hi' });
+    expect(result).toMatchObject({ backend: 'mtplx', modelId: 'm', text: '' });
+    expect(result.error).toMatch(/fetch failed/);
+    expect(createRun).not.toHaveBeenCalled();
+  });
+
+  it('returns an inline error when a runtime has no endpoint and makes no request', async () => {
+    runtimeEndpoint.mockResolvedValue(null);
+    global.fetch = vi.fn();
+    const result = await runLocalLlmTest({ backend: 'sglang', modelId: 'm', prompt: 'hi' });
+    expect(result.error).toBe('No endpoint is configured for the sglang runtime');
+    expect(result.timings).toBeTruthy();
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('compares an Ollama model beside an endpoint runtime, each through its own transport', async () => {
+    runtimeEndpoint.mockResolvedValue('http://127.0.0.1:9100/v1');
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, body: { getReader: () => makeReader([sse({ content: 'from ollama' })]) } })
+      .mockResolvedValueOnce({ ok: true, status: 200, body: { getReader: () => makeReader([sse({ content: 'from llama' })]) } });
+    finalizeRunRecord.mockResolvedValue(undefined);
+
+    const { results } = await compareLocalLlmModels({
+      prompt: 'p',
+      targets: [{ backend: 'ollama', modelId: 'a' }, { backend: 'llama', modelId: 'dflash' }],
+    });
+
+    expect(results.map((r) => [r.backend, r.text])).toEqual([['ollama', 'from ollama'], ['llama', 'from llama']]);
+    expect(global.fetch.mock.calls[1][0]).toBe('http://127.0.0.1:9100/v1/chat/completions');
+    expect(createRun).toHaveBeenCalledTimes(1);
   });
 });

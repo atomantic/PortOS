@@ -8,6 +8,7 @@ import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlay
 import { listModels, listVisionModels, listToolUseModels, installModel, cancelModelInstall, switchBackend } from '../services/localLlm.js';
 import { enrichCatalogWithVariants, applyMeasuredFit } from '../services/huggingFaceCatalog.js';
 import { getMeasuredFits } from '../services/localModelAssessmentStore.js';
+import { listEndpointRuntimeModels } from '../services/localRuntimeEndpoints.js';
 import { runAssessment } from '../services/localModelAssessments.js';
 import { startSweep, getSweepStatus, cancelSweep } from '../services/localModelAssessmentSweep.js';
 import { runOpenCodeAgentBenchmark } from '../services/localModelAgentBenchmark.js';
@@ -59,6 +60,8 @@ vi.mock('../services/modelAbuseGuard.js', () => ({
 vi.mock('../services/untrustedContent.js', () => ({
   getContributionAssessmentReadiness: vi.fn(async () => ({ ready: false, code: 'untrusted-content-model-required', sources: {} })),
 }));
+
+vi.mock('../services/localRuntimeEndpoints.js', () => ({ listEndpointRuntimeModels: vi.fn() }));
 
 vi.mock('../services/localLlmPlayground.js', () => ({
   runLocalLlmTest: vi.fn(),
@@ -486,6 +489,52 @@ describe('local LLM playground routes', () => {
       },
       signal: expect.any(AbortSignal),
     });
+  });
+
+  it('accepts an endpoint-runtime target, rejects an unknown backend, and keeps install/delete on the managed pair', async () => {
+    compareLocalLlmModels.mockResolvedValue({ mode: 'round-robin', results: [] });
+    const ok = await request(makeApp())
+      .post('/api/local-llm/compare')
+      .send({ prompt: 'p', targets: [{ backend: 'ollama', modelId: 'a' }, { backend: 'llama', modelId: 'dflash' }] });
+    expect(ok.status).toBe(200);
+    expect(compareLocalLlmModels.mock.calls.at(-1)[0].targets[1]).toEqual({ backend: 'llama', modelId: 'dflash' });
+
+    const unknown = await request(makeApp())
+      .post('/api/local-llm/compare')
+      .send({ prompt: 'p', targets: [{ backend: 'nope', modelId: 'x' }] });
+    expect(unknown.status).toBe(400);
+
+    const install = await request(makeApp()).post('/api/local-llm/install').send({ backend: 'llama', modelId: 'dflash' });
+    expect(install.status).toBe(400);
+    const del = await request(makeApp()).post('/api/local-llm/delete').send({ backend: 'llama', modelId: 'dflash' });
+    expect(del.status).toBe(400);
+  });
+
+  it('streams an mtplx test as token frames then a result, and a down daemon is an inline error result', async () => {
+    runLocalLlmTest.mockImplementationOnce(async ({ onToken }) => {
+      await onToken('Hi', 'content');
+      return { backend: 'mtplx', modelId: 'm', text: 'Hi', timings: {} };
+    });
+    const up = await request(makeApp()).post('/api/local-llm/test/stream').send({ backend: 'mtplx', modelId: 'm', prompt: 'hi' });
+    expect(up.status).toBe(200);
+    expect(runLocalLlmTest.mock.calls.at(-1)[0]).toMatchObject({ backend: 'mtplx', modelId: 'm', prompt: 'hi' });
+    const upFrames = up.text.trim().split('\n').map((l) => JSON.parse(l));
+    expect(upFrames.map((f) => f.type)).toEqual(['token', 'result']);
+
+    runLocalLlmTest.mockResolvedValueOnce({ backend: 'mtplx', modelId: 'm', error: 'fetch failed', text: '' });
+    const down = await request(makeApp()).post('/api/local-llm/test/stream').send({ backend: 'mtplx', modelId: 'm', prompt: 'hi' });
+    expect(down.status).toBe(200);
+    expect(JSON.parse(down.text.trim())).toMatchObject({ type: 'result', result: { error: 'fetch failed' } });
+  });
+
+  it('lists the runtime models without running a generation', async () => {
+    const runtimes = [{ id: 'llama', label: 'llama.cpp', models: [{ id: 'dflash' }], offline: false, error: null }];
+    listEndpointRuntimeModels.mockResolvedValue(runtimes);
+    const res = await request(makeApp()).get('/api/local-llm/runtime-models');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ runtimes });
+    expect(runLocalLlmTest).not.toHaveBeenCalled();
+    expect(compareLocalLlmModels).not.toHaveBeenCalled();
   });
 
   it('rejects empty prompts before running a model', () => {
