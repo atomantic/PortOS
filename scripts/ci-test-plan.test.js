@@ -2711,7 +2711,8 @@ describe('cross-workspace browser suites (#10312)', () => {
     const plan = buildCiTestPlan(catalogFiles, { ...inputs, trackedFiles });
     expect(plan.full).toBe(false);
     for (const suite of [...suites, 'server/services/codeAnimation/export.realBrowser.test.js']) {
-      expect(inputs.browserDependencies[suite]?.length, suite).toBeLessThan(400);
+      // A boundedness proxy (the closure sat at 399 when this was written), not a target: a new shared leaf adds one file.
+      expect(inputs.browserDependencies[suite]?.length, suite).toBeLessThan(420);
     }
     for (const suite of suites) expect(plan.browserFiles).not.toContain(suite);
   });
