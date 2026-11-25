@@ -19,6 +19,7 @@ vi.mock('../../ui/Toast', () => ({ default: mockToast }));
 const mockGetUpdateStatus = vi.fn();
 const mockCheckHealth = vi.fn();
 const mockExecutePortosUpdate = vi.fn();
+const mockSyncPortosFork = vi.fn();
 vi.mock('../../../services/apiSystem.js', () => ({
   getUpdateStatus: (...a) => mockGetUpdateStatus(...a),
   checkHealth: (...a) => mockCheckHealth(...a),
@@ -26,7 +27,7 @@ vi.mock('../../../services/apiSystem.js', () => ({
   checkForUpdate: vi.fn(),
   ignoreUpdateVersion: vi.fn(),
   clearIgnoredVersions: vi.fn(),
-  syncPortosFork: vi.fn(),
+  syncPortosFork: (...a) => mockSyncPortosFork(...a),
 }));
 
 vi.mock('./AutoUpdatePanel', () => ({ default: () => null }));
@@ -199,6 +200,61 @@ describe('UpdateTab reconcile flow', () => {
   });
 });
 
+describe('UpdateTab fork sync', () => {
+  const forkStatus = {
+    ...OUT_OF_SYNC_STATUS,
+    updateAvailable: true,
+    latestRelease: { version: '2.25.0' },
+    remoteInfo: { isFork: true, hasOrigin: true, fullName: 'example/PortOS' },
+    upstream: { fullName: 'upstream/PortOS' },
+  };
+
+  beforeEach(() => {
+    handlers.clear();
+    mockGetUpdateStatus.mockReset().mockResolvedValue(forkStatus);
+    mockCheckHealth.mockReset().mockResolvedValue({ version: '2.24.0', uptime: 120 });
+    mockExecutePortosUpdate.mockReset().mockResolvedValue({ restart: false });
+    mockSyncPortosFork.mockReset();
+    mockToast.success.mockClear();
+  });
+
+  it.each([
+    ['Sync Fork Only', null],
+    ['Sync Fork & Update', {}],
+    ['Sync Fork & Reconcile', { reconcile: true }],
+  ])('refreshes status after %s and runs only the requested action', async (name, options) => {
+    mockSyncPortosFork.mockResolvedValue({ alreadyUpToDate: true });
+    mockGetUpdateStatus.mockResolvedValueOnce(forkStatus)
+      .mockResolvedValue({ ...forkStatus, currentVersion: '2.24.1' });
+    render(<UpdateTab />);
+
+    const button = await screen.findByRole('button', { name });
+    await act(async () => { fireEvent.click(button); });
+
+    expect(mockSyncPortosFork).toHaveBeenCalledExactlyOnceWith({}, { silent: true });
+    expect(mockToast.success).toHaveBeenCalledExactlyOnceWith('Fork already up to date with upstream/PortOS');
+    expect(await screen.findByText('v2.24.1')).toBeTruthy();
+    if (options) {
+      expect(mockExecutePortosUpdate).toHaveBeenCalledExactlyOnceWith(options);
+    } else {
+      expect(mockExecutePortosUpdate).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(['Sync Fork Only', 'Sync Fork & Update'])('shows sync errors from %s and stops the action', async name => {
+    mockSyncPortosFork.mockRejectedValue(new Error('Fork has diverged'));
+    render(<UpdateTab />);
+
+    fireEvent.click(await screen.findByRole('button', { name }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Fork has diverged');
+    expect(screen.getByRole('button', { name })).toBeEnabled();
+    expect(mockGetUpdateStatus).toHaveBeenCalledTimes(1);
+    expect(mockExecutePortosUpdate).not.toHaveBeenCalled();
+    expect(mockToast.success).not.toHaveBeenCalled();
+  });
+});
+
 describe('UpdateTab — active CoS manual update availability', () => {
   it('offers late asynchronous continuation and retains reconcile, fork and image-backup acknowledgments', async () => {
     mockGetUpdateStatus.mockReset().mockResolvedValue({ ...OUT_OF_SYNC_STATUS,
@@ -244,14 +300,12 @@ describe('UpdateTab — active CoS manual update availability', () => {
     });
     render(<UpdateTab />);
 
-    // The paused notice appears in place of the reconcile action.
     await screen.findByText(/Updating will interrupt active work/i);
     expect(screen.getByText(/2 CoS agents are currently running/i)).toBeTruthy();
-    // The reconcile button must be gone — a restart would sever the agents.
     expect(screen.queryByRole('button', { name: 'Reconcile Now' })).toBeTruthy();
   });
 
-  it('shows the reconcile button again once no agents are running', async () => {
+  it('shows reconcile without an interruption warning when no agents are running', async () => {
     mockGetUpdateStatus.mockReset().mockResolvedValue({
       ...OUT_OF_SYNC_STATUS,
       activeCosAgents: 0,
@@ -262,10 +316,7 @@ describe('UpdateTab — active CoS manual update availability', () => {
     expect(screen.queryByText(/Updating will interrupt/i)).toBeNull();
   });
 
-  it('keeps safe non-restart actions (Ignore) available while agents run, keeps Update Now available', async () => {
-    // P2: only restart-triggering buttons are suppressed. A non-fork install with
-    // an available update and a live agent should hide "Update Now" (restarts)
-    // but still offer "Ignore" (no restart).
+  it('keeps Update Now and Ignore available while agents run', async () => {
     mockGetUpdateStatus.mockReset().mockResolvedValue({
       currentVersion: '2.24.0',
       updateAvailable: true,
@@ -277,11 +328,10 @@ describe('UpdateTab — active CoS manual update availability', () => {
 
     await screen.findByText(/Updating will interrupt active work/i);
     expect(screen.queryByRole('button', { name: 'Update Now' })).toBeTruthy();
-    // Ignore is safe (no restart) and must remain available.
     expect(screen.getByRole('button', { name: /Ignore v2\.25\.0/i })).toBeTruthy();
   });
 
-  it('keeps Sync Fork Only available while agents run (it does not restart), keeps fork update buttons available', async () => {
+  it('keeps all fork update and sync actions available while agents run', async () => {
     mockGetUpdateStatus.mockReset().mockResolvedValue({
       currentVersion: '2.24.0',
       updateAvailable: true,
@@ -293,10 +343,8 @@ describe('UpdateTab — active CoS manual update availability', () => {
     render(<UpdateTab />);
 
     await screen.findByText(/Updating will interrupt active work/i);
-    // Restart-triggering fork actions hidden.
     expect(screen.queryByRole('button', { name: 'Sync Fork & Update' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Update from Fork As-Is' })).toBeTruthy();
-    // Sync Fork Only only runs `gh repo sync` — no restart — so it stays.
     expect(screen.getByRole('button', { name: 'Sync Fork Only' })).toBeTruthy();
   });
 

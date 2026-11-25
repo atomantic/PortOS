@@ -107,9 +107,6 @@ export default function UpdateTab() {
     setChecking(false);
   };
 
-  // `fromStatus` lets callers (e.g. handleSyncForkAndUpdate) pass the freshly
-  // fetched status object instead of relying on the closure capture — `setStatus`
-  // only schedules a render; the action passes its fresh response directly.
   // `launch` lets the Node runtime panel start its restart through the same
   // baseline, step list and restart watch as a release update.
   const runUpdate = useCallback(async (opts = {}, fromStatus = null, launch = executePortosUpdate) => {
@@ -146,9 +143,7 @@ export default function UpdateTab() {
 
   const handleReconcileFromForkAsIs = () => runUpdate({ acknowledgeFork: true, reconcile: true });
 
-  // Shared fork-sync-then-run: syncs the fork, then runs update/reconcile with
-  // the freshly fetched status. `extraOpts` distinguishes update vs reconcile.
-  const syncForkThenRun = async (extraOpts = {}) => {
+  const syncFork = async () => {
     setSyncingFork(true);
     setForkSyncError(null);
     const synced = await syncPortosFork({}, { silent: true }).catch(err => {
@@ -156,37 +151,26 @@ export default function UpdateTab() {
       return null;
     });
     setSyncingFork(false);
-    if (!synced) return;
-    if (synced.alreadyUpToDate) {
-      toast.success(`Fork already up to date with ${status?.upstream?.fullName || 'upstream'}`);
-    } else {
-      toast.success(`Synced ${synced.fullName} from ${synced.source}`);
-    }
-    const fresh = await getUpdateStatus({ silent: true }).catch(() => null);
-    if (!fresh) return;
-    setStatus(fresh);
-    await runUpdate(extraOpts, fresh);
-  };
-
-  const handleSyncForkAndUpdate = () => syncForkThenRun({});
-
-  const handleSyncForkAndReconcile = () => syncForkThenRun({ reconcile: true });
-
-  const handleSyncForkOnly = async () => {
-    setSyncingFork(true);
-    setForkSyncError(null);
-    const synced = await syncPortosFork({}, { silent: true }).catch(err => {
-      setForkSyncError(err.message);
-      return null;
-    });
-    setSyncingFork(false);
-    if (!synced) return;
+    if (!synced) return null;
     toast.success(
       synced.alreadyUpToDate
         ? `Fork already up to date with ${status?.upstream?.fullName || 'upstream'}`
         : `Synced ${synced.fullName} from ${synced.source}`
     );
-    await fetchStatus();
+    return synced;
+  };
+
+  // Pass the fresh status to runUpdate because setStatus only schedules a render.
+  const syncForkThenRun = async (opts = {}) => {
+    if (!(await syncFork())) return;
+    const fresh = await getUpdateStatus({ silent: true }).catch(() => null);
+    if (!fresh) return;
+    setStatus(fresh);
+    await runUpdate(opts, fresh);
+  };
+
+  const handleSyncForkOnly = async () => {
+    if (await syncFork()) await fetchStatus();
   };
 
   const handleIgnore = async (version) => {
@@ -215,11 +199,6 @@ export default function UpdateTab() {
   const hasUpdate = status?.updateAvailable;
   const remote = status?.remoteInfo;
   const upstreamName = status?.upstream?.fullName;
-  const isFork = !!remote?.isFork;
-  const lastForkSync = status?.lastForkSync;
-  // Server is the source of truth for the freshness window — don't
-  // re-implement the time math here.
-  const forkSyncFresh = !!status?.forkSyncFresh;
 
   // Install-sync state (issue #1779) — surfaces a half-updated install (bare
   // `git pull`, no ./update.sh). Distinct from "a new release is available".
@@ -229,25 +208,6 @@ export default function UpdateTab() {
   // Manual actions remain available; the server names interruption risks.
   const activeCosAgents = status?.activeCosAgents || 0;
   const agentsActive = activeCosAgents > 0;
-  const installIssues = [];
-  if (installState?.runningStaleCode) {
-    installIssues.push('Running code is older than what’s checked out — a restart/update is required.');
-  }
-  if (installState?.staleDeps?.stale) {
-    const ws = (installState.staleDeps.workspaces || []).filter(w => w.stale).map(w => w.name);
-    installIssues.push(`Dependencies are out of date${ws.length ? ` (${ws.join(', ')})` : ''} — run update.sh to npm install.`);
-  }
-  if (installState?.staleBuild === true) {
-    installIssues.push('The served client build is older than the UI source — a rebuild is needed.');
-  }
-  if (installState?.pendingMigrations?.count > 0) {
-    const n = installState.pendingMigrations.count;
-    installIssues.push(`${n} pending data migration${n === 1 ? '' : 's'} not yet applied.`);
-  }
-  if (installState?.submodules?.stale) {
-    const n = installState.submodules.paths?.length || 0;
-    installIssues.push(`${n || 'One or more'} submodule checkout${n === 1 ? ' is' : 's are'} out of sync with the revisions pinned by PortOS.`);
-  }
 
   return (
     <div className="space-y-6">
@@ -270,38 +230,14 @@ export default function UpdateTab() {
         </button>
       </div>
 
-      {/* Origin / Fork status */}
       {remote?.hasOrigin && (
-        <div className={`p-3 rounded-lg border text-sm ${
-          isFork
-            ? 'border-port-warning/40 bg-port-warning/5'
-            : remote.isUpstream
-              ? 'border-port-border bg-port-card'
-              : 'border-port-border bg-port-card'
-        }`}>
-          <div className="flex items-start gap-2">
-            {isFork ? <GitFork size={16} className="text-port-warning shrink-0 mt-0.5" /> : <GitBranch size={16} className="text-gray-400 shrink-0 mt-0.5" />}
-            <div className="flex-1">
-              <div className="text-white">
-                {remote.isUpstream && <>Running from upstream <span className="font-mono">{remote.fullName}</span></>}
-                {isFork && <>Running from fork <span className="font-mono">{remote.fullName}</span></>}
-                {!remote.isUpstream && !isFork && <>Origin: <span className="font-mono">{remote.fullName || remote.originUrl}</span></>}
-              </div>
-              {isFork && (
-                <div className="text-xs text-gray-400 mt-1 space-y-1">
-                  <div>Updates pull from your fork's <span className="font-mono">main</span>. Sync it from <span className="font-mono">{upstreamName}</span> before updating, or apply upstream changes onto a working branch first to preserve customizations.</div>
-                  <div>Tip: PR shareable fixes upstream; keep private changes on a separate branch and rebase that branch onto <span className="font-mono">main</span> after each sync.</div>
-                  {forkSyncFresh && (
-                    <div className="text-port-success">✓ Fork synced {formatTimeOfDaySeconds(lastForkSync.syncedAt)} — ready to update.</div>
-                  )}
-                </div>
-              )}
-              {forkSyncError && (
-                <div role="alert" className="mt-2 text-xs text-port-error whitespace-pre-wrap">{forkSyncError}</div>
-              )}
-            </div>
-          </div>
-        </div>
+        <ForkStatusCard
+          remote={remote}
+          upstreamName={upstreamName}
+          lastForkSync={status.lastForkSync}
+          forkSyncFresh={!!status.forkSyncFresh}
+          forkSyncError={forkSyncError}
+        />
       )}
 
       {/* Manual actions remain available; continuing requires acknowledgment of interruption. */}
@@ -313,161 +249,36 @@ export default function UpdateTab() {
         </Banner>
       )}
 
-      {/* Install out of sync (issue #1779) — distinct from "new release available" */}
       {outOfSync && (
-        <div className="p-4 rounded-lg border border-port-warning/50 bg-port-warning/5">
-          <div className="flex items-start gap-2">
-            <AlertTriangle size={18} className="text-port-warning shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <div className="text-sm text-white font-medium">Install out of sync</div>
-              <div className="text-xs text-gray-400 mt-1">
-                Your checked-out code is ahead of what’s running or installed — this happens after a
-                manual <span className="font-mono">git pull</span> without <span className="font-mono">./update.sh</span>.
-                Reconcile to finish the update (sync submodules, install dependencies, rebuild, run migrations, restart).
-              </div>
-              <ul className="text-xs text-gray-300 mt-2 space-y-1 list-disc list-inside">
-                {installIssues.map((msg, i) => (
-                  <li key={i}>{msg}</li>
-                ))}
-              </ul>
-              <div className="flex flex-wrap gap-2 mt-3">
-                {isFork ? (
-                  <>
-                    <button
-                      onClick={handleSyncForkAndReconcile}
-                      disabled={updating || polling || syncingFork}
-                      className="px-4 py-2 bg-port-warning text-black rounded-lg text-sm flex items-center gap-2 hover:bg-port-warning/80 disabled:opacity-50"
-                      title={`Fast-forwards ${remote?.fullName} main from ${upstreamName}, then runs update.sh to sync pinned submodules and reconcile the install.`}
-                    >
-                      <GitFork size={14} className={syncingFork ? 'animate-pulse' : ''} />
-                      {syncingFork ? 'Syncing fork...' : updating ? 'Reconciling...' : polling ? 'Restarting...' : 'Sync Fork & Reconcile'}
-                    </button>
-                    <button
-                      onClick={handleReconcileFromForkAsIs}
-                      disabled={updating || polling || syncingFork}
-                      className="px-4 py-2 bg-port-border text-gray-300 rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 hover:text-white disabled:opacity-50"
-                      title="Skip the fork sync and reconcile from your fork's origin as-is."
-                    >
-                      <RefreshCw size={14} className={updating ? 'animate-spin' : ''} />
-                      Reconcile from Fork As-Is
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    onClick={handleReconcile}
-                    disabled={updating || polling || syncingFork}
-                    className="px-4 py-2 bg-port-warning text-black rounded-lg text-sm flex items-center gap-2 hover:bg-port-warning/80 disabled:opacity-50"
-                    title="Run update.sh to sync pinned submodules, install dependencies, rebuild the client, run migrations, and restart."
-                  >
-                    <RefreshCw size={14} className={updating ? 'animate-spin' : ''} />
-                    {updating ? 'Reconciling...' : polling ? 'Restarting...' : 'Reconcile Now'}
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
+        <OutOfSyncCard
+          installState={installState}
+          remote={remote}
+          upstreamName={upstreamName}
+          updating={updating}
+          polling={polling}
+          syncingFork={syncingFork}
+          onSyncAndReconcile={() => syncForkThenRun({ reconcile: true })}
+          onReconcileFromFork={handleReconcileFromForkAsIs}
+          onReconcile={handleReconcile}
+        />
       )}
 
-      {/* Available Update */}
-      {release && (
-        <div className={`p-4 rounded-lg border ${hasUpdate ? 'border-port-accent/50 bg-port-accent/5' : 'border-port-border bg-port-card'}`}>
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-400">Latest Release:</span>
-              <span className="text-lg font-mono text-white">v{release.version}</span>
-              {hasUpdate && (
-                <span className="px-2 py-0.5 bg-port-accent/20 text-port-accent text-xs rounded-full">New</span>
-              )}
-            </div>
-            {release.url && (
-              <a
-                href={release.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-gray-400 hover:text-white transition-colors flex items-center gap-1 text-xs"
-              >
-                <ExternalLink size={12} /> GitHub
-              </a>
-            )}
-          </div>
-          {release.publishedAt && (
-            <div className="text-xs text-gray-500 mb-2">
-              Released {formatDateNumeric(release.publishedAt)}
-            </div>
-          )}
-          {release.body && (
-            <div className="mt-3 p-3 bg-port-bg rounded border border-port-border">
-              <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Release Notes</div>
-              <div className="max-h-[32rem] overflow-y-auto">
-                <MarkdownOutput content={release.body} />
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+      {release && <ReleaseUpdateCard release={release} hasUpdate={hasUpdate} />}
 
-      {/* Manual actions share the server warning and explicit-continuation flow. */}
       {hasUpdate && (
-        <div className="flex flex-wrap gap-2">
-          {isFork ? (
-            <>
-              {(
-                <button
-                  onClick={handleSyncForkAndUpdate}
-                  disabled={updating || polling || syncingFork}
-                  className="px-4 py-2 bg-port-accent text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-accent/80 disabled:opacity-50"
-                  title={`Fast-forwards ${remote?.fullName} main from ${upstreamName} via gh repo sync, then runs the local update including pinned submodules. Refuses to overwrite divergent fork commits.`}
-                >
-                  <GitFork size={14} className={syncingFork ? 'animate-pulse' : ''} />
-                  {syncingFork ? 'Syncing fork...' : updating ? 'Updating...' : polling ? 'Restarting...' : 'Sync Fork & Update'}
-                </button>
-              )}
-              <button
-                onClick={handleSyncForkOnly}
-                disabled={updating || polling || syncingFork}
-                className="px-4 py-2 bg-port-border text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 disabled:opacity-50"
-                title={`Run gh repo sync ${remote?.fullName} only — useful if you want to merge upstream into a feature branch yourself before applying.`}
-              >
-                <GitFork size={14} />
-                Sync Fork Only
-              </button>
-              {(
-                <button
-                  onClick={handleUpdateFromForkAsIs}
-                  disabled={updating || polling || syncingFork}
-                  className="px-4 py-2 bg-port-border text-gray-400 rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 hover:text-white disabled:opacity-50"
-                  title="Skip the fork sync and pull from your fork's origin as-is, then sync pinned submodules. Use this if you already merged upstream into your fork via your own workflow."
-                >
-                  {updating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-                  Update from Fork As-Is
-                </button>
-              )}
-            </>
-          ) : (
-            (
-              <button
-                onClick={handleUpdate}
-                disabled={updating || polling}
-                className="px-4 py-2 bg-port-accent text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-accent/80 disabled:opacity-50"
-                title="Pull PortOS, sync pinned submodules, install dependencies, rebuild, run migrations, and restart."
-              >
-                {updating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-                {updating ? 'Updating...' : polling ? 'Restarting...' : 'Update Now'}
-              </button>
-            )
-          )}
-          {release && (
-            <button
-              onClick={() => handleIgnore(release.version)}
-              disabled={updating || syncingFork}
-              className="px-4 py-2 bg-port-border text-gray-400 rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 hover:text-white disabled:opacity-50"
-            >
-              <XCircle size={14} />
-              Ignore v{release.version}
-            </button>
-          )}
-        </div>
+        <ReleaseUpdateActions
+          release={release}
+          remote={remote}
+          upstreamName={upstreamName}
+          updating={updating}
+          polling={polling}
+          syncingFork={syncingFork}
+          onSyncAndUpdate={() => syncForkThenRun()}
+          onSyncOnly={handleSyncForkOnly}
+          onUpdateFromFork={handleUpdateFromForkAsIs}
+          onUpdate={handleUpdate}
+          onIgnore={handleIgnore}
+        />
       )}
 
       {/* Last Check */}
@@ -483,21 +294,7 @@ export default function UpdateTab() {
       />
       <ChromeUpdatePanel />
 
-      {/* Update Progress */}
-      {steps.length > 0 && (
-        <div>
-          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Update Progress</div>
-          <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-2">
-            {steps.map(({ step, status: stepStatus, message }) => (
-              <div key={step} className="flex items-center gap-3">
-                <StepIndicator status={stepStatus} />
-                <span className="text-sm text-white font-medium">{STEP_LABELS[step] || step}</span>
-                <span className="text-xs text-gray-500 flex-1 truncate">{message}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {steps.length > 0 && <UpdateProgressCard steps={steps} />}
 
       {/* Update Error */}
       {updateError && (
@@ -516,35 +313,7 @@ export default function UpdateTab() {
       {/* Automatic updates — configuration plus what the scheduler is waiting on */}
       <AutoUpdatePanel />
 
-      {/* Last Update Result */}
-      {status?.lastUpdateResult && (
-        <div>
-          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Last Update</div>
-          <div className={`p-3 rounded-lg border ${
-            status.lastUpdateResult.success
-              ? 'border-port-success/30 bg-port-success/5'
-              : 'border-port-error/30 bg-port-error/5'
-          }`}>
-            <div className="flex items-center gap-2">
-              {status.lastUpdateResult.success
-                ? <Check size={14} className="text-port-success" />
-                : <XCircle size={14} className="text-port-error" />
-              }
-              <span className="text-sm text-white">
-                v{status.lastUpdateResult.version} — {status.lastUpdateResult.success ? 'Success' : 'Failed'}
-              </span>
-              {status.lastUpdateResult.completedAt && (
-                <span className="text-xs text-gray-500">
-                  {formatDateTime(status.lastUpdateResult.completedAt)}
-                </span>
-              )}
-            </div>
-            {status.lastUpdateResult.log && (
-              <pre className="text-xs text-gray-400 mt-2 font-mono whitespace-pre-wrap break-all max-h-48 overflow-y-auto">{status.lastUpdateResult.log}</pre>
-            )}
-          </div>
-        </div>
-      )}
+      {status?.lastUpdateResult && <LastUpdateCard result={status.lastUpdateResult} />}
 
       {/* Ignored Versions */}
       {status?.ignoredVersions?.length > 0 && (
@@ -570,6 +339,270 @@ export default function UpdateTab() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ForkStatusCard({ remote, upstreamName, lastForkSync, forkSyncFresh, forkSyncError }) {
+  const isFork = !!remote.isFork;
+  return (
+    <div className={`p-3 rounded-lg border text-sm ${
+      isFork
+        ? 'border-port-warning/40 bg-port-warning/5'
+        : 'border-port-border bg-port-card'
+    }`}>
+      <div className="flex items-start gap-2">
+        {isFork ? <GitFork size={16} className="text-port-warning shrink-0 mt-0.5" /> : <GitBranch size={16} className="text-gray-400 shrink-0 mt-0.5" />}
+        <div className="flex-1">
+          <div className="text-white">
+            {remote.isUpstream && <>Running from upstream <span className="font-mono">{remote.fullName}</span></>}
+            {isFork && <>Running from fork <span className="font-mono">{remote.fullName}</span></>}
+            {!remote.isUpstream && !isFork && <>Origin: <span className="font-mono">{remote.fullName || remote.originUrl}</span></>}
+          </div>
+          {isFork && (
+            <div className="text-xs text-gray-400 mt-1 space-y-1">
+              <div>Updates pull from your fork's <span className="font-mono">main</span>. Sync it from <span className="font-mono">{upstreamName}</span> before updating, or apply upstream changes onto a working branch first to preserve customizations.</div>
+              <div>Tip: PR shareable fixes upstream; keep private changes on a separate branch and rebase that branch onto <span className="font-mono">main</span> after each sync.</div>
+              {forkSyncFresh && (
+                <div className="text-port-success">✓ Fork synced {formatTimeOfDaySeconds(lastForkSync.syncedAt)} — ready to update.</div>
+              )}
+            </div>
+          )}
+          {forkSyncError && (
+            <div role="alert" className="mt-2 text-xs text-port-error whitespace-pre-wrap">{forkSyncError}</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OutOfSyncCard({
+  installState, remote, upstreamName, updating, polling, syncingFork,
+  onSyncAndReconcile, onReconcileFromFork, onReconcile,
+}) {
+  const installIssues = [];
+  if (installState.runningStaleCode) {
+    installIssues.push('Running code is older than what’s checked out — a restart/update is required.');
+  }
+  if (installState.staleDeps?.stale) {
+    const ws = (installState.staleDeps.workspaces || []).filter(w => w.stale).map(w => w.name);
+    installIssues.push(`Dependencies are out of date${ws.length ? ` (${ws.join(', ')})` : ''} — run update.sh to npm install.`);
+  }
+  if (installState.staleBuild === true) {
+    installIssues.push('The served client build is older than the UI source — a rebuild is needed.');
+  }
+  if (installState.pendingMigrations?.count > 0) {
+    const n = installState.pendingMigrations.count;
+    installIssues.push(`${n} pending data migration${n === 1 ? '' : 's'} not yet applied.`);
+  }
+  if (installState.submodules?.stale) {
+    const n = installState.submodules.paths?.length || 0;
+    installIssues.push(`${n || 'One or more'} submodule checkout${n === 1 ? ' is' : 's are'} out of sync with the revisions pinned by PortOS.`);
+  }
+
+  const busy = updating || polling || syncingFork;
+  return (
+    <div className="p-4 rounded-lg border border-port-warning/50 bg-port-warning/5">
+      <div className="flex items-start gap-2">
+        <AlertTriangle size={18} className="text-port-warning shrink-0 mt-0.5" />
+        <div className="flex-1">
+          <div className="text-sm text-white font-medium">Install out of sync</div>
+          <div className="text-xs text-gray-400 mt-1">
+            Your checked-out code is ahead of what’s running or installed — this happens after a
+            manual <span className="font-mono">git pull</span> without <span className="font-mono">./update.sh</span>.
+            Reconcile to finish the update (sync submodules, install dependencies, rebuild, run migrations, restart).
+          </div>
+          <ul className="text-xs text-gray-300 mt-2 space-y-1 list-disc list-inside">
+            {installIssues.map(msg => (
+              <li key={msg}>{msg}</li>
+            ))}
+          </ul>
+          <div className="flex flex-wrap gap-2 mt-3">
+            {remote?.isFork ? (
+              <>
+                <button
+                  onClick={onSyncAndReconcile}
+                  disabled={busy}
+                  className="px-4 py-2 bg-port-warning text-black rounded-lg text-sm flex items-center gap-2 hover:bg-port-warning/80 disabled:opacity-50"
+                  title={`Fast-forwards ${remote?.fullName} main from ${upstreamName}, then runs update.sh to sync pinned submodules and reconcile the install.`}
+                >
+                  <GitFork size={14} className={syncingFork ? 'animate-pulse' : ''} />
+                  {syncingFork ? 'Syncing fork...' : updating ? 'Reconciling...' : polling ? 'Restarting...' : 'Sync Fork & Reconcile'}
+                </button>
+                <button
+                  onClick={onReconcileFromFork}
+                  disabled={busy}
+                  className="px-4 py-2 bg-port-border text-gray-300 rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 hover:text-white disabled:opacity-50"
+                  title="Skip the fork sync and reconcile from your fork's origin as-is."
+                >
+                  <RefreshCw size={14} className={updating ? 'animate-spin' : ''} />
+                  Reconcile from Fork As-Is
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={onReconcile}
+                disabled={busy}
+                className="px-4 py-2 bg-port-warning text-black rounded-lg text-sm flex items-center gap-2 hover:bg-port-warning/80 disabled:opacity-50"
+                title="Run update.sh to sync pinned submodules, install dependencies, rebuild the client, run migrations, and restart."
+              >
+                <RefreshCw size={14} className={updating ? 'animate-spin' : ''} />
+                {updating ? 'Reconciling...' : polling ? 'Restarting...' : 'Reconcile Now'}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReleaseUpdateCard({ release, hasUpdate }) {
+  return (
+    <div className={`p-4 rounded-lg border ${hasUpdate ? 'border-port-accent/50 bg-port-accent/5' : 'border-port-border bg-port-card'}`}>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-400">Latest Release:</span>
+          <span className="text-lg font-mono text-white">v{release.version}</span>
+          {hasUpdate && (
+            <span className="px-2 py-0.5 bg-port-accent/20 text-port-accent text-xs rounded-full">New</span>
+          )}
+        </div>
+        {release.url && (
+          <a
+            href={release.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-gray-400 hover:text-white transition-colors flex items-center gap-1 text-xs"
+          >
+            <ExternalLink size={12} /> GitHub
+          </a>
+        )}
+      </div>
+      {release.publishedAt && (
+        <div className="text-xs text-gray-500 mb-2">
+          Released {formatDateNumeric(release.publishedAt)}
+        </div>
+      )}
+      {release.body && (
+        <div className="mt-3 p-3 bg-port-bg rounded border border-port-border">
+          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Release Notes</div>
+          <div className="max-h-[32rem] overflow-y-auto">
+            <MarkdownOutput content={release.body} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReleaseUpdateActions({
+  release, remote, upstreamName, updating, polling, syncingFork,
+  onSyncAndUpdate, onSyncOnly, onUpdateFromFork, onUpdate, onIgnore,
+}) {
+  const busy = updating || polling || syncingFork;
+  return (
+    <div className="flex flex-wrap gap-2">
+      {remote?.isFork ? (
+        <>
+          <button
+            onClick={onSyncAndUpdate}
+            disabled={busy}
+            className="px-4 py-2 bg-port-accent text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-accent/80 disabled:opacity-50"
+            title={`Fast-forwards ${remote?.fullName} main from ${upstreamName} via gh repo sync, then runs the local update including pinned submodules. Refuses to overwrite divergent fork commits.`}
+          >
+            <GitFork size={14} className={syncingFork ? 'animate-pulse' : ''} />
+            {syncingFork ? 'Syncing fork...' : updating ? 'Updating...' : polling ? 'Restarting...' : 'Sync Fork & Update'}
+          </button>
+          <button
+            onClick={onSyncOnly}
+            disabled={busy}
+            className="px-4 py-2 bg-port-border text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 disabled:opacity-50"
+            title={`Run gh repo sync ${remote?.fullName} only — useful if you want to merge upstream into a feature branch yourself before applying.`}
+          >
+            <GitFork size={14} />
+            Sync Fork Only
+          </button>
+          <button
+            onClick={onUpdateFromFork}
+            disabled={busy}
+            className="px-4 py-2 bg-port-border text-gray-400 rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 hover:text-white disabled:opacity-50"
+            title="Skip the fork sync and pull from your fork's origin as-is, then sync pinned submodules. Use this if you already merged upstream into your fork via your own workflow."
+          >
+            {updating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+            Update from Fork As-Is
+          </button>
+        </>
+      ) : (
+        <button
+          onClick={onUpdate}
+          disabled={updating || polling}
+          className="px-4 py-2 bg-port-accent text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-accent/80 disabled:opacity-50"
+          title="Pull PortOS, sync pinned submodules, install dependencies, rebuild, run migrations, and restart."
+        >
+          {updating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+          {updating ? 'Updating...' : polling ? 'Restarting...' : 'Update Now'}
+        </button>
+      )}
+      {release && (
+        <button
+          onClick={() => onIgnore(release.version)}
+          disabled={updating || syncingFork}
+          className="px-4 py-2 bg-port-border text-gray-400 rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 hover:text-white disabled:opacity-50"
+        >
+          <XCircle size={14} />
+          Ignore v{release.version}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function UpdateProgressCard({ steps }) {
+  return (
+    <div>
+      <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Update Progress</div>
+      <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-2">
+        {steps.map(({ step, status: stepStatus, message }) => (
+          <div key={step} className="flex items-center gap-3">
+            <StepIndicator status={stepStatus} />
+            <span className="text-sm text-white font-medium">{STEP_LABELS[step] || step}</span>
+            <span className="text-xs text-gray-500 flex-1 truncate">{message}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LastUpdateCard({ result }) {
+  return (
+    <div>
+      <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Last Update</div>
+      <div className={`p-3 rounded-lg border ${
+        result.success
+          ? 'border-port-success/30 bg-port-success/5'
+          : 'border-port-error/30 bg-port-error/5'
+      }`}>
+        <div className="flex items-center gap-2">
+          {result.success
+            ? <Check size={14} className="text-port-success" />
+            : <XCircle size={14} className="text-port-error" />
+          }
+          <span className="text-sm text-white">
+            v{result.version} — {result.success ? 'Success' : 'Failed'}
+          </span>
+          {result.completedAt && (
+            <span className="text-xs text-gray-500">
+              {formatDateTime(result.completedAt)}
+            </span>
+          )}
+        </div>
+        {result.log && (
+          <pre className="text-xs text-gray-400 mt-2 font-mono whitespace-pre-wrap break-all max-h-48 overflow-y-auto">{result.log}</pre>
+        )}
+      </div>
     </div>
   );
 }
