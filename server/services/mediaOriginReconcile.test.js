@@ -5,17 +5,21 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll, onTestFinished } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, utimesSync } from 'fs';
-import { readFile } from 'fs/promises';
+import { readFile, readdir } from 'fs/promises';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
 const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-origin-reconcile-' });
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
+vi.mock('fs/promises', async (importOriginal) => {
+  const fs = await importOriginal();
+  return { ...fs, readdir: vi.fn(fs.readdir) };
+});
 const SECRET = 's'.repeat(40);
 const peers = vi.hoisted(() => ({ list: [] }));
 vi.mock('./instances.js', async () => ({
   ...(await vi.importActual('./instances.js')),
-  getPeers: async () => peers.list,
+  getPeers: vi.fn(async () => peers.list),
 }));
 vi.mock('./instanceIdentity.js', () => ({ UNKNOWN_INSTANCE_ID: 'unknown', getInstanceId: async () => 'me' }));
 vi.mock('./mediaAssetIndex/index.js', () => ({ indexImage: async () => {} }));
@@ -39,7 +43,9 @@ const touch = (path, ms) => utimesSync(path, new Date(ms), new Date(ms));
 const videoRow = { id: 'v1', filename: 'v1.mp4', createdAt: '2026-05-22T00:00:00Z' };
 
 beforeEach(async () => {
+  vi.clearAllMocks();
   mkdirSync(PATHS.videos, { recursive: true });
+  rmSync(PATHS.images, { recursive: true, force: true });
   mkdirSync(PATHS.images, { recursive: true });
   for (const name of ['peer-hosted-media.json', 'media-holders.json', 'video-history.json', 'media-delete-queue.json']) rmSync(join(PATHS.data, name), { force: true });
   writeFileSync(join(PATHS.videos, 'v1.mp4'), 'bytes');
@@ -289,7 +295,7 @@ describe('earliest holder of a pre-upgrade collection image', () => {
     writeFileSync(join(PATHS.images, 'lib1.png'), 'png');
     writeFileSync(join(PATHS.images, 'lib1.metadata.json'), JSON.stringify({ prompt: 'p' }));
     touch(join(PATHS.images, 'lib1.png'), T);
-    expect((await dataSync.getImageLibraryInventory()).mtimes).toEqual({ 'lib1.png': T, 'i1.png': expect.any(Number) });
+    expect((await dataSync.getImageLibraryInventory()).mtimes).toEqual({ 'lib1.png': T });
     await recordPeerHoldings('a', 'image', 'imageLibrary', { mtimes: { 'lib1.png': T + DAY }, checked: ['lib1.png'] });
     expect(await reconcileMediaOrigins('image')).toBe(0); // b has not reported
     await recordPeerHoldings('b', 'image', 'imageLibrary', { mtimes: { 'lib1.png': T }, checked: ['lib1.png'] });
@@ -297,5 +303,74 @@ describe('earliest holder of a pre-upgrade collection image', () => {
     await recordPeerHoldings('b', 'image', 'imageLibrary', { mtimes: {}, checked: [], complete: true }); // b lists its whole library and lacks the image
     expect(await reconcileMediaOrigins('image')).toBe(1);
     expect(JSON.parse(await readFile(join(PATHS.images, 'lib1.metadata.json'), 'utf8')).originInstanceId).toBe('me');
+  });
+});
+
+describe('origin scan reuse', () => {
+  const filename = 'cached.png';
+  const sidecar = 'cached.metadata.json';
+  const report = (peerId) => recordPeerHoldings(peerId, 'image', 'imageLibrary', {
+    mtimes: { [filename]: T + DAY }, checked: [filename],
+  });
+  const galleryScans = () => vi.mocked(readdir).mock.calls.filter(([path]) => path === PATHS.images).length;
+
+  it('shares one scan of unclaimed images across concurrent checks and reconciliation, then invalidates on stamp', async () => {
+    writeFileSync(join(PATHS.images, filename), 'png');
+    writeFileSync(join(PATHS.images, sidecar), JSON.stringify({ prompt: 'p' }));
+    touch(join(PATHS.images, filename), T);
+    expect(await Promise.all([hasUnattributedMedia('image'), hasUnattributedMedia('image')])).toEqual([true, true]);
+    await report('a');
+    expect(await reconcileMediaOrigins('image')).toBe(0);
+    expect(galleryScans()).toBe(1);
+    await report('b');
+    expect(await reconcileMediaOrigins('image')).toBe(1);
+    expect(galleryScans()).toBe(1);
+    expect(await hasUnattributedMedia('image')).toBe(false);
+    expect(galleryScans()).toBe(2);
+  });
+
+  it('refreshes a fresh empty scan on a directory change and periodically rechecks in-place edits', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    onTestFinished(() => vi.useRealTimers());
+    expect(await hasUnattributedMedia('image')).toBe(false);
+    writeFileSync(join(PATHS.images, filename), 'png');
+    touch(PATHS.images, T);
+    expect(await hasUnattributedMedia('image')).toBe(true);
+    expect(galleryScans()).toBe(2);
+    writeFileSync(join(PATHS.images, sidecar), JSON.stringify({ originInstanceId: 'a' }));
+    touch(PATHS.images, T);
+    expect(await hasUnattributedMedia('image')).toBe(true);
+    vi.advanceTimersByTime(11 * 60_000);
+    expect(await hasUnattributedMedia('image')).toBe(false);
+    expect(galleryScans()).toBe(3);
+  });
+
+  it('skips settled attribution for repeated inventory and checks again when an unstamped file appears', async () => {
+    const { getPeers } = await import('./instances.js');
+    const inventory = (peerId) => dataSync.applyRemote('mediaCollections', {
+      version: 1, filenames: [filename], checked: [filename], mtimes: { [filename]: T + DAY },
+    }, { peerId, inventory: true, inventoryKind: 'image', inventoryScope: 'library' });
+    await inventory('a');
+    await inventory('b');
+    vi.mocked(getPeers).mockClear();
+    await inventory('b');
+    expect(getPeers).toHaveBeenCalledTimes(1); // Inventory admission alone.
+    expect(galleryScans()).toBe(1);
+
+    writeFileSync(join(PATHS.images, filename), 'png');
+    writeFileSync(join(PATHS.images, sidecar), JSON.stringify({ prompt: 'p' }));
+    touch(join(PATHS.images, filename), T);
+    touch(PATHS.images, T);
+    await inventory('b');
+    expect(JSON.parse(await readFile(join(PATHS.images, sidecar), 'utf8')).originInstanceId).toBe('me');
+    expect(galleryScans()).toBe(2);
+  });
+
+  it('refreshes video candidates when history changes while the video directory is unchanged', async () => {
+    touch(join(PATHS.videos, 'v1.mp4'), T);
+    await saveHistory([{ ...videoRow, originInstanceId: 'a' }]);
+    expect(await hasUnattributedMedia('video')).toBe(false);
+    await saveHistory([{ ...videoRow }]);
+    expect(await hasUnattributedMedia('video')).toBe(true);
   });
 });

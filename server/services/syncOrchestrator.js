@@ -564,10 +564,10 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
     const { hasUnattributedMedia } = await import('./mediaOriginReconcile.js');
     for (const kind of kinds) {
       // The gallery-wide image library is asked for only while some media here has no settled origin.
-      const unattributed = await hasUnattributedMedia(kind, { peerId: peer.instanceId }).catch(() => false);
+      const unattributed = kind === 'image' && await hasUnattributedMedia(kind, { peerId: peer.instanceId }).catch(() => false);
       const inventory = await fetchHostedInventory(peer, category, kind, { probeOlderPeers: hostMode }).catch(() => null);
       if (inventory) await dataSync.applyRemote(category, inventory, { peerId, portosMeta: inventory.portosMeta, inventory: true, inventoryKind: kind });
-      if (kind === 'image' && unattributed) {
+      if (unattributed) {
         const library = await fetchImageLibraryInventory(peer);
         if (library) await dataSync.applyRemote(category, library, { peerId, portosMeta: library.portosMeta, inventory: true, inventoryKind: kind, inventoryScope: 'library' });
       }

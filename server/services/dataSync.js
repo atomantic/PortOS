@@ -1719,9 +1719,9 @@ export async function applyRemote(category, remoteData, options = {}) {
       if (options.inventoryScope === 'library') {
         // File times only: a whole-library listing must not drive host-mode reconciliation.
         if (kind === 'image' && category === 'mediaCollections' && isPlainObject(remoteData.mtimes)) {
-          const { recordPeerHoldings, reconcileMediaOrigins } = await import('./mediaOriginReconcile.js');
-          await recordPeerHoldings(peer.instanceId, 'image', 'imageLibrary', { mtimes: remoteData.mtimes, checked, complete: remoteData.complete === true });
-          await reconcileMediaOrigins('image');
+          const { recordPeerHoldings, hasMediaOriginCandidates, reconcileMediaOrigins } = await import('./mediaOriginReconcile.js');
+          const changed = await recordPeerHoldings(peer.instanceId, kind, 'imageLibrary', { mtimes: remoteData.mtimes, checked, complete: remoteData.complete === true });
+          if (changed || await hasMediaOriginCandidates(kind)) await reconcileMediaOrigins(kind);
         }
       } else if (kind === 'video' || category === 'mediaCollections') {
         if (peer.mediaSyncMode === 'host') await reconcileHostedMedia(peer.instanceId, kind, filenames, checked);
@@ -1729,11 +1729,11 @@ export async function applyRemote(category, remoteData, options = {}) {
           await recoverCollectionVideoCopies(peer, filenames, checked);
         }
         if (isPlainObject(remoteData.mtimes)) {
-          const { recordPeerHoldings, reconcileMediaOrigins } = await import('./mediaOriginReconcile.js');
+          const { recordPeerHoldings, hasMediaOriginCandidates, reconcileMediaOrigins } = await import('./mediaOriginReconcile.js');
           const mtimes = Object.fromEntries(filenames.filter((name) => Object.hasOwn(remoteData.mtimes, name))
             .map((name) => [name, remoteData.mtimes[name]]));
-          await recordPeerHoldings(peer.instanceId, kind, category, { mtimes, checked });
-          await reconcileMediaOrigins(kind);
+          const changed = await recordPeerHoldings(peer.instanceId, kind, category, { mtimes, checked });
+          if (changed || await hasMediaOriginCandidates(kind)) await reconcileMediaOrigins(kind);
         }
       }
     }

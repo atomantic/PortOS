@@ -47,7 +47,7 @@ export async function saveHistory(h) {
   historySnapshot = undefined;
 }
 
-async function historyRevision() {
+export async function historyRevision() {
   try {
     const info = await stat(HISTORY_FILE, { bigint: true });
     await access(HISTORY_FILE, constants.R_OK);
