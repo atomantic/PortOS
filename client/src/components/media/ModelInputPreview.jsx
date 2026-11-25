@@ -6,7 +6,7 @@ import ModelReferenceImages from './ModelReferenceImages';
  * code as the render, shown under a form's prompt box. The box above keeps only
  * the user's words; a refusal the render would give shows here instead.
  */
-export default function ModelInputPreview({ preview, prompt, onOpenPreview, onToggleLikeness, referencesIntro = null }) {
+export default function ModelInputPreview({ preview, prompt, onOpenPreview, onToggleLikeness, referencesIntro = null, alwaysShowFull = false }) {
   if (preview?.error) return <p role="alert" className="text-xs text-port-warning">{preview.error}</p>;
   const sent = preview?.preview;
   if (!sent) return null;
@@ -31,6 +31,8 @@ export default function ModelInputPreview({ preview, prompt, onOpenPreview, onTo
         sentPrompt={sent.sentPrompt}
         sentNegativePrompt={sent.sentNegativePrompt}
         additions={sent.promptAdditions || []}
+        segmentPrompts={sent.segmentPrompts}
+        alwaysShowFull={alwaysShowFull}
         asWrittenText="Sent to the model as written."
       />
     </div>

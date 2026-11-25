@@ -474,6 +474,7 @@ describe('fableLoom production service', () => {
     await vi.waitFor(() => expect(getEpisodeProductionBatch(rejected.id).status).toBe('failed'));
     expect(queueMocks.enqueueJob).not.toHaveBeenCalled();
     expect(getEpisodeProductionBatch(rejected.id).error).toContain('1–800');
+    expect(getEpisodeProductionBatch(rejected.id).error).toContain('received 801');
   });
 
   it('refuses a batch when its selected assets are blocked', async () => {

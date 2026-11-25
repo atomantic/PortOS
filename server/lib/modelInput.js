@@ -36,7 +36,7 @@ export function sentPromptRecord({ sentPrompt, sentNegativePrompt = null, carrie
   const additions = [...carried, ...added].filter(Boolean);
   return {
     sentPrompt: typeof sentPrompt === 'string' ? sentPrompt : '',
-    ...(typeof sentNegativePrompt === 'string' && sentNegativePrompt.trim() ? { sentNegativePrompt: sentNegativePrompt.trim() } : {}),
+    ...(typeof sentNegativePrompt === 'string' && sentNegativePrompt.trim() ? { sentNegativePrompt } : {}),
     ...(additions.length ? { promptAdditions: additions } : {}),
   };
 }

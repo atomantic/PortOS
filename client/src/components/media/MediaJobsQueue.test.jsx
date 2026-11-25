@@ -10,6 +10,7 @@ const listQueueMediaJobs = vi.fn();
 const cancelMediaJob = vi.fn();
 const deleteFailedCanceledMediaJobs = vi.fn();
 const retryMediaJob = vi.fn();
+const previewMediaJobRetry = vi.fn();
 const resumeMediaVideoHold = vi.fn();
 const listMediaVideoHolds = vi.fn();
 vi.mock('../../services/apiMediaJobs.js', () => ({
@@ -19,6 +20,7 @@ vi.mock('../../services/apiMediaJobs.js', () => ({
   deleteMediaJob: vi.fn(),
   deleteFailedCanceledMediaJobs: (...a) => deleteFailedCanceledMediaJobs(...a),
   retryMediaJob: (...a) => retryMediaJob(...a),
+  previewMediaJobRetry: (...a) => previewMediaJobRetry(...a),
   runMediaJobNow: vi.fn(),
   resumeMediaVideoHold: (...a) => resumeMediaVideoHold(...a),
   listMediaVideoHolds: (...a) => listMediaVideoHolds(...a),
@@ -88,6 +90,7 @@ const trainingJob = {
 
 beforeEach(() => {
   listQueueMediaJobs.mockReset();
+  previewMediaJobRetry.mockReset().mockResolvedValue({ sentPrompt: 'Example' });
   socketEmit.mockClear();
   cancelMediaJob.mockReset().mockResolvedValue({ ok: true, status: 'canceling' });
   deleteFailedCanceledMediaJobs.mockReset();
@@ -744,14 +747,14 @@ describe('MediaJobsQueue — federated render badge', () => {
     expect(await screen.findByText(/local \/ z-image-turbo/)).toBeInTheDocument();
   });
 
-  it('offers plain Retry but not the editor on a failed federated job', async () => {
+  it.each(['image', 'video'])('offers plain Retry but not the editor on a failed federated %s job', async (kind) => {
     // A prompt/model edit would never reach the peer — the remote executor
     // renders from the wire request inside the marker — so showing the form
     // would silently discard what the user typed.
     const user = userEvent.setup();
-    listQueueMediaJobs.mockResolvedValue([{ ...failedLocalJob, id: 'remotefail0000beef', renderer: 'remote' }]);
+    listQueueMediaJobs.mockResolvedValue([{ ...failedLocalJob, id: 'remotefail0000beef', kind, renderer: 'remote' }]);
 
-    render(<MediaJobsQueue kind="image" />);
+    render(<MediaJobsQueue kind={kind} />);
     await expandReel(user);
 
     expect(await screen.findByRole('button', { name: /^Retry$/ })).toBeInTheDocument();
@@ -1372,4 +1375,65 @@ describe('MediaJobsQueue — hosted video retry editor (#10741)', () => {
     await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
     expect(retryMediaJob).toHaveBeenCalledWith(HOSTED_JOBS[mode].id, null, { silent: true });
   });
+});
+
+it.each([
+  ['image', 'codex', 'Style preset: Print'],
+  ['video', 'grok', 'Grok video tool instructions'],
+])('shows authored text, additions, full prompt and Copy in the %s retry editor', async (kind, mode, label) => {
+  const job = {
+    id: `${kind}-preview`, kind, status: 'failed',
+    params: { mode, prompt: 'styled original', retryPrompt: 'original', negativePrompt: '' },
+  };
+  listQueueMediaJobs.mockResolvedValue([job]);
+  previewMediaJobRetry.mockImplementation(async (_id, overrides) => ({
+    sentPrompt: `Style. ${overrides?.prompt ?? 'original'}`,
+    promptAdditions: [{ id: 'instructions', label, text: 'Style.' }],
+    referenceImages: [{ filename: 'anchor.png', source: 'Reference image', status: 'included' }],
+  }));
+  const user = userEvent.setup();
+  render(<MediaJobsQueue />);
+  await expandReel(user);
+  await user.click(await screen.findByRole('button', { name: /edit and retry/i }));
+  const prompt = screen.getByRole('textbox', { name: /^prompt$/i });
+  expect(prompt).toHaveValue('original');
+  await user.clear(prompt);
+  await user.type(prompt, '  revised  ');
+  await user.click(await screen.findByRole('button', { name: `+ ${label}` }));
+  expect(screen.getByText('Style.')).toBeInTheDocument();
+  expect(screen.getByText('anchor.png')).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Show full prompt' }));
+  expect(screen.getByText('Style. revised').textContent).toBe('Style.   revised  ');
+  await user.click(screen.getByRole('button', { name: 'Copy full prompt' }));
+  expect(await navigator.clipboard.readText()).toBe('Style.   revised  ');
+  await user.click(screen.getByRole('button', { name: /retry with changes/i }));
+  expect(previewMediaJobRetry).toHaveBeenLastCalledWith(job.id, { prompt: '  revised  ' }, { silent: true });
+  expect(retryMediaJob).toHaveBeenCalledWith(job.id, { prompt: '  revised  ' }, { silent: true });
+});
+
+it('keeps edited prompt text when the retry is refused', async () => {
+  listQueueMediaJobs.mockResolvedValue([failedCodexJob]);
+  retryMediaJob.mockRejectedValueOnce(new Error('Prompt is 8001/8000 characters. Shorten it to retry.'));
+  const user = userEvent.setup();
+  render(<MediaJobsQueue kind="image" />);
+  await expandReel(user);
+  await user.click(await screen.findByLabelText('Edit and retry'));
+  const prompt = screen.getByRole('textbox', { name: /^prompt$/i });
+  await user.clear(prompt);
+  await user.type(prompt, '  edited  ');
+  await user.click(screen.getByRole('button', { name: /retry with changes/i }));
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Prompt is 8001/8000 characters. Shorten it to retry.'));
+  expect(prompt).toHaveValue('  edited  ');
+});
+
+it('submits a style-only video retry with an empty authored prompt', async () => {
+  const job = { id: 'video-style-only', kind: 'video', status: 'failed', params: { mode: 'grok', prompt: 'Woodcut', retryPrompt: '' } };
+  listQueueMediaJobs.mockResolvedValue([job]);
+  const user = userEvent.setup();
+  render(<MediaJobsQueue kind="video" />);
+  await expandReel(user);
+  await user.click(await screen.findByLabelText('Edit and retry'));
+  expect(screen.getByRole('textbox', { name: /^prompt$/i })).toHaveValue('');
+  await user.click(screen.getByRole('button', { name: /retry with changes/i }));
+  expect(retryMediaJob).toHaveBeenCalledWith(job.id, null, { silent: true });
 });

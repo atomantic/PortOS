@@ -1,3 +1,4 @@
+import { retryPromptParts } from '../services/mediaJobQueue/retryPrompt.js';
 import { a2vLoraStageStrengthsSchema } from '../lib/videoLoraStageValidation.js';
 /**
  * Media Job Queue Routes — read + cancel access to the unified image/video
@@ -27,6 +28,7 @@ import { VIDEO_TILING_MODES } from '../lib/videoTiling.js';
 import { DRAFT_DECODE_IDS, isFullDecode } from '../lib/videoDraftDecoders.js';
 import { VIDEO_STREAMING_MODES, isDefaultVideoStreamingMode } from '../lib/videoStreamingMode.js';
 import { imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE } from '../lib/sharedSchemas.js';
+import { IMAGE_GEN_MODE, VIDEO_GEN_MODE } from '../lib/generationModes.js';
 import { MAX_CONTEXT_FRAMES, resolveContinuityRequest } from '../lib/videoContinuity.js';
 
 const router = Router();
@@ -259,8 +261,8 @@ const EFFORT_CLEAR_SENTINEL = 'default';
 const RETRY_OVERRIDE_SCHEMA = z.object({
   visualProfile: universeVisualProfileSchema.optional(),
   visualProfileSource: z.never().optional(),
-  prompt: z.string().trim().min(1).max(8000).optional(),
-  negativePrompt: z.string().trim().max(8000).optional(),
+  prompt: z.string().optional(),
+  negativePrompt: z.string().optional(),
   model: z.string().max(200).optional().transform(emptyToUndef),
   modelId: z.string().max(200).optional().transform(emptyToUndef),
   // Codex reasoning-effort override: a valid CODEX_EFFORT_LEVELS value pins the
@@ -308,7 +310,7 @@ const RETRY_OVERRIDE_SCHEMA = z.object({
   streamingMode: z.enum(VIDEO_STREAMING_MODES).nullable().optional()
     .transform((v) => (v === undefined ? undefined : (isDefaultVideoStreamingMode(v) ? null : v))),
   chunks: z.number().int().min(1).max(8).optional(),
-  chunkPrompts: z.array(z.string().max(8000)).max(8).optional(),
+  chunkPrompts: z.array(z.string().nullable()).max(8).optional(),
   contextFrames: z.number().int().min(0).max(MAX_CONTEXT_FRAMES).optional(),
   continuityStrategy: z.enum(['frame', 'window']).optional(),
   a2vLoraStageStrengths: a2vLoraStageStrengthsSchema.nullable().optional(),
@@ -336,17 +338,14 @@ const IMAGE_RETRY_BOUNDS_SCHEMA = z.object({
   height: imageEdgeSchema,
 }).passthrough();
 
-const retryBodySchema = z.object({
-  params: RETRY_OVERRIDE_SCHEMA.optional(),
-}).optional();
+const retryBodySchema = z.object({ params: RETRY_OVERRIDE_SCHEMA.optional() });
 
 // Re-enqueue a terminal job. Optional `body.params` overrides specific
 // user-facing fields (prompt, model, dimensions, etc.) so a user can edit
 // a failed job's config in the UI before retrying without losing the rest
 // of the original params. Non-listed params (interpreter paths, session ids)
 // always inherit from the original job.
-router.post('/:id/retry', asyncHandler(async (req, res) => {
-  const job = getJob(req.params.id);
+async function buildRetryJob(job, body) {
   if (!job) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
   if (job.kind === 'video-upscale' && job.params?.mode === 'topaz') {
     throw new ServerError('Request a new Topaz estimate before starting another job. Check the original provider request if its outcome was uncertain.', { status: 409, code: 'TOPAZ_REQUOTE_REQUIRED' });
@@ -363,7 +362,6 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
       { status: 409, code: 'JOB_REMOTE_OUTCOME_UNCERTAIN' },
     );
   }
-  const body = validateRequest(retryBodySchema, req.body ?? {});
   const rawOverrides = body.params ?? {};
   if (Object.hasOwn(rawOverrides, 'visualProfileSource')) throw new ServerError('A saved finish source cannot be supplied by a retry request', { status: 400, code: 'VALIDATION_ERROR' });
   if (Object.hasOwn(rawOverrides, 'visualProfile')) {
@@ -389,6 +387,32 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
     ),
   );
   const params = { ...job.params, ...overrides };
+  const characterLimit = 8000;
+  const editedText = [
+    ['Prompt', overrides.prompt],
+    ['Negative prompt', overrides.negativePrompt],
+    ...(overrides.chunkPrompts ?? []).map((text, index) => [`Segment ${index + 1} prompt`, text]),
+  ];
+  for (const [label, value] of editedText) {
+    if (value?.length > characterLimit) {
+      throw new ServerError(`${label} is ${value.length}/${characterLimit} characters. Shorten it to retry.`, { status: 400, code: 'VALIDATION_ERROR' });
+    }
+  }
+  if (overrides.prompt !== undefined && !overrides.prompt.trim()) {
+    throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if ((overrides.prompt !== undefined || overrides.negativePrompt !== undefined)
+    && ['image', 'video'].includes(job.kind) && !isRemoteMediaJob(job)) {
+    const parts = retryPromptParts(job.params ?? {});
+    for (const [key, authoredKey] of [['prompt', 'authoredPrompt'], ['negativePrompt', 'authoredNegativePrompt']]) {
+      if (overrides[key] === undefined) continue;
+      const { prefix, suffix } = parts[key];
+      const trailing = !overrides[key] && key === 'negativePrompt' ? suffix.replace(/^, /, '') : suffix;
+      params[key] = `${prefix}${overrides[key]}${trailing}`;
+      if (prefix || suffix || typeof params[authoredKey] === 'string') params[authoredKey] = overrides[key];
+    }
+  }
+
   if (params.visualProfile) params.visualProfileRevision = imageVisualProfileRevision(params.visualProfile);
   if (Object.entries(overrides).some(([key, value]) => key !== 'visualProfile' && JSON.stringify(value) !== JSON.stringify(job.params?.[key]))) delete params.visualProfileSource;
   const priorSegments = job.kind === 'video' && !isRemoteMediaJob(job)
@@ -472,10 +496,32 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
     const { cancelRequested: _canceled, reconcile: _reconcile, ...marker } = params.remoteMedia ?? {};
     params.remoteMedia = { ...marker, cancelRequested: false, reconcile: false };
   }
-  const result = await enqueueJob({ kind: job.kind, params, owner: job.owner });
+  return { kind: job.kind, params, owner: job.owner, keepArchived: priorSegments?.success === true };
+}
+
+router.post('/:id/retry/preview', asyncHandler(async (req, res) => {
+  const body = validateRequest(retryBodySchema, req.body ?? {});
+  const { kind, params } = await buildRetryJob(getJob(req.params.id), body);
+  const { previewRetryModelInput } = await import('../services/mediaJobRetryPreview.js');
+  res.json(await previewRetryModelInput(kind, params));
+}));
+
+router.post('/:id/retry', asyncHandler(async (req, res) => {
+  const job = getJob(req.params.id);
+  const body = validateRequest(retryBodySchema, req.body ?? {});
+  const { keepArchived, ...retry } = await buildRetryJob(job, body);
+  const hasPromptEdit = body.params?.prompt !== undefined || body.params?.negativePrompt !== undefined;
+  const mode = retry.params.mode;
+  const providerPromptCap = mode === IMAGE_GEN_MODE.RUNWAY
+    || (retry.kind === 'video' && [VIDEO_GEN_MODE.FAL, VIDEO_GEN_MODE.HIGGSFIELD, VIDEO_GEN_MODE.REACTOR].includes(mode));
+  if (hasPromptEdit && (providerPromptCap || retry.params.quickEdit) && !isRemoteMediaJob(retry)) {
+    const { previewRetryModelInput } = await import('../services/mediaJobRetryPreview.js');
+    await previewRetryModelInput(retry.kind, retry.params);
+  }
+  const result = await enqueueJob(retry);
   // Prior chain attempts keep their only execution evidence under the existing
   // archive retention policy. The new job carries one snapshot, not a ledger.
-  if (!priorSegments?.success && !removeArchivedJob(job.id)) {
+  if (!keepArchived && !removeArchivedJob(job.id)) {
     console.log(`⚠️ media-job [${job.id.slice(0, 8)}] retry: archive prune found nothing to drop — old row may persist in /api/media-jobs`);
   }
   res.json({ ...result, retriedFrom: job.id });

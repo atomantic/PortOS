@@ -41,9 +41,9 @@ describe('buildVideoRetryOverrides', () => {
     expect(buildVideoRetryOverrides(draftFrom(baseParams), baseParams, ctxFor())).toBeNull();
   });
 
-  it('sends only the edited keys, trimmed', () => {
+  it('sends only the edited keys and preserves prompt whitespace', () => {
     const out = buildVideoRetryOverrides(draftFrom(baseParams, { prompt: '  a dog ', width: '640' }), baseParams, ctxFor());
-    expect(out).toEqual({ prompt: 'a dog', width: 640 });
+    expect(out).toEqual({ prompt: '  a dog ', width: 640 });
   });
 
   it('clears a clearable knob with null when the field is blanked', () => {
@@ -120,9 +120,9 @@ describe('buildImageRetryOverrides', () => {
     expect(buildImageRetryOverrides(draftOf(codex), codex)).toBeNull();
   });
 
-  it('sends only the changed keys, trimming prompt text', () => {
+  it('sends only the changed keys and preserves prompt whitespace', () => {
     expect(buildImageRetryOverrides(draftOf(local, { prompt: ' a red fox ', width: 704, steps: '30' }), local))
-      .toEqual({ prompt: 'a red fox', width: 704, steps: 30 });
+      .toEqual({ prompt: ' a red fox ', width: 704, steps: 30 });
   });
 
   it('writes the model to the wire key its backend reads', () => {

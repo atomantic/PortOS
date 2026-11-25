@@ -105,8 +105,9 @@ export const cancelAll = () => {
 export function validateReactorRequest({
   prompt, continueFromClipId, sourceImagePath, seconds = REACTOR_DEFAULT_CLIP_LENGTH, seed, aspect,
 }) {
-  if (typeof prompt !== 'string' || !prompt.trim() || prompt.trim().length > REACTOR_MAX_PROMPT_LENGTH) {
-    throw new ServerError(`Reactor prompts must contain 1–${REACTOR_MAX_PROMPT_LENGTH} characters; shorten the shot prompt before rendering`, { status: 400, code: 'VALIDATION_ERROR' });
+  const promptLength = typeof prompt === 'string' ? prompt.trim().length : 0;
+  if (promptLength < 1 || promptLength > REACTOR_MAX_PROMPT_LENGTH) {
+    throw new ServerError(`Reactor prompts must contain 1–${REACTOR_MAX_PROMPT_LENGTH} characters (received ${promptLength}); shorten the shot prompt before rendering`, { status: 400, code: 'VALIDATION_ERROR' });
   }
   if (continueFromClipId) {
     // A clip id addresses a clip fast-h3 already rendered, so continuation and

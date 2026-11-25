@@ -254,6 +254,82 @@ describe('mediaJobs routes', () => {
     });
   });
 
+  it('previews a styled image retry without changing the original job', async () => {
+    const additions = [
+      { id: 'style-1', label: 'Print style', text: 'woodcut' },
+      { id: 'style-negatives', label: 'Style negatives', text: 'blur' },
+    ];
+    const params = { mode: 'external', prompt: 'woodcut. a fox', negativePrompt: 'noise, blur', promptAdditions: additions };
+    const job = { id: 'styled', kind: 'image', status: 'failed', params };
+    jobStore.set(job.id, job);
+    const app = makeApp();
+    const overrides = { params: { prompt: '  an owl  ', negativePrompt: '  glare  ' } };
+    const preview = await request(app).post('/api/media-jobs/styled/retry/preview').send(overrides);
+    expect(preview.status).toBe(200);
+    expect(stubs.enqueueJob).not.toHaveBeenCalled();
+    expect(stubs.removeArchivedJob).not.toHaveBeenCalled();
+    expect(jobStore.get(job.id)).toEqual(job);
+    const list = await request(app).get('/api/media-jobs');
+    expect(list.body[0].params).toMatchObject({ retryPrompt: 'a fox', retryNegativePrompt: 'noise' });
+
+    const retry = await request(app).post('/api/media-jobs/styled/retry').send(overrides);
+    expect(retry.status).toBe(200);
+    const [queued] = stubs.enqueueJob.mock.lastCall;
+    expect(queued.params).toMatchObject({
+      prompt: 'woodcut.   an owl  ', negativePrompt: '  glare  , blur', promptAdditions: additions,
+    });
+    expect(preview.body).toMatchObject({
+      sentPrompt: queued.params.prompt, sentNegativePrompt: queued.params.negativePrompt, promptAdditions: queued.params.promptAdditions,
+    });
+  });
+
+  it('previews the Grok video wrapper and the same saved starting frame the retry passes to the worker', async () => {
+    const { grokVideoSentPrompt } = await import('../services/videoGen/grok.js');
+    const params = { mode: 'grok', prompt: 'a fox', duration: 6, sourceImagePath: '/example/start.png' };
+    jobStore.set('shot', { id: 'shot', kind: 'video', status: 'failed', params });
+    const app = makeApp();
+    const overrides = { params: { prompt: '  look up  ', negativePrompt: 'blur' } };
+    const preview = await request(app).post('/api/media-jobs/shot/retry/preview').send(overrides);
+    expect(preview.status).toBe(200);
+    expect(stubs.enqueueJob).not.toHaveBeenCalled();
+    expect(stubs.removeArchivedJob).not.toHaveBeenCalled();
+    const retry = await request(app).post('/api/media-jobs/shot/retry').send(overrides);
+    expect(retry.status).toBe(200);
+    const [queued] = stubs.enqueueJob.mock.lastCall;
+    expect(queued.params.prompt).toBe(overrides.params.prompt);
+    expect(preview.body).toEqual({
+      ...grokVideoSentPrompt(queued.params).record,
+      referenceImages: [{ filename: 'start.png', status: 'included', source: 'Start frame' }],
+    });
+    expect(preview.body.sentPrompt).toContain('look up');
+    expect(preview.body.promptAdditions[0].label).toBe('Grok video tool instructions');
+  });
+
+  it('previews edited chain beats and inherits the main prompt for saved blank beats', async () => {
+    const job = { id: 'chain', kind: 'video', status: 'failed', params: { prompt: 'Main', chunks: 2, chunkPrompts: [null, 'Old beat'] } };
+    jobStore.set(job.id, job);
+    const app = makeApp();
+    const overrides = { params: { chunkPrompts: [null, '  New beat  '] } };
+    const preview = await request(app).post('/api/media-jobs/chain/retry/preview').send(overrides);
+    expect(preview.status).toBe(200);
+    expect(stubs.enqueueJob).not.toHaveBeenCalled();
+    const retry = await request(app).post('/api/media-jobs/chain/retry').send(overrides);
+    expect(retry.status).toBe(200);
+    const [queued] = stubs.enqueueJob.mock.lastCall;
+    expect(queued.params.chunkPrompts).toEqual(overrides.params.chunkPrompts);
+    expect(preview.body.segmentPrompts).toEqual([queued.params.prompt, queued.params.chunkPrompts[1]]);
+  });
+
+  it.each(['/retry', '/retry/preview'])('refuses an oversized prompt with its original count on %s', async (route) => {
+    jobStore.set('long', { id: 'long', kind: 'image', status: 'failed', params: { prompt: 'original' } });
+    const result = await request(makeApp()).post(`/api/media-jobs/long${route}`)
+      .send({ params: { prompt: ` ${'a'.repeat(8000)} ` } });
+    expect(result.status).toBe(400);
+    expect(result.body.error).toContain('8002/8000 characters');
+    expect(stubs.enqueueJob).not.toHaveBeenCalled();
+    expect(stubs.removeArchivedJob).not.toHaveBeenCalled();
+  });
+
   it('POST /:id/retry rejects an image size override past the compose limits', async () => {
     jobStore.set('j-big', {
       id: 'j-big', kind: 'image', owner: null, status: 'failed',
