@@ -17,7 +17,7 @@ import { peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
  * (`remoteTarget`, the BYOV probe, the weight assets, the model-context request).
  */
 export function useVideoGenSubmitGates({
-  form, remoteTarget, rendersOffMachine, rendersOnThisMachine, remixHandoffPending, notConnected,
+  form, remoteTarget, rendersOffMachine, rendersOnThisMachine, remixHandoffPending, notConnected, interpreterPending,
   byov, blockedAsset, modelContext, modelContextRequest, runwayCatalog,
 }) {
   const { lane, prompt: promptFields, model, sampler, frames, keyframes, extend, audio, ic, runway, higgsfield } = form;
@@ -147,6 +147,7 @@ export function useVideoGenSubmitGates({
     remoteBlocked,
     rendersOffMachine,
     notConnected,
+    interpreterPending,
     byovRuntime: byov.byovRuntime,
     byovLabel: byov.byovStatus?.label,
     byovGateBlocked: byov.byovGateBlocked,

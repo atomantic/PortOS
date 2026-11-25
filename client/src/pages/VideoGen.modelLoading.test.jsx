@@ -76,7 +76,7 @@ describe('VideoGen model picker vs the /status python probe', () => {
     await waitFor(() => expect(screen.getByText('Python 3.12.1')).toBeInTheDocument());
   });
 
-  it('keeps the hosted backend switch and Generate usable while /status is still pending', async () => {
+  it('keeps the hosted backend switch and Generate usable for hosted lanes while /status is still pending', async () => {
     // The hosted-lane flags and the weights gate come from the probe-free
     // model context, so the python probe may take as long as it likes.
     state.getVideoGenModelContext.mockResolvedValue(modelContextPayload({ falEnabled: true, byovRuntimes: [], backendDisclosures: [] }));
@@ -86,9 +86,14 @@ describe('VideoGen model picker vs the /status python probe', () => {
 
     expect(await screen.findByRole('button', { name: 'fal.ai' })).toBeInTheDocument();
     fireEvent.change(await screen.findByLabelText('Prompt'), { target: { value: 'a fox in the rain' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Generate', exact: true })).toBeEnabled());
+    const generate = () => screen.getByRole('button', { name: 'Generate', exact: true });
+    // A legacy local render waits on the unanswered health verdict, and says so rather than blaming the weights.
+    await waitFor(() => expect(generate()).toHaveAttribute('title', 'Checking the Python runtime…'));
     expect(screen.getByText('Checking…')).toBeInTheDocument();
-    expect(screen.queryByText(/Download the selected model weights/)).toBeNull();
+
+    // A hosted lane does not wait on the interpreter at all.
+    fireEvent.click(screen.getByRole('button', { name: 'fal.ai' }));
+    await waitFor(() => expect(generate()).toBeEnabled());
   });
 
   it('asks for a fresh probe only when the Refresh button is pressed', async () => {
