@@ -10,6 +10,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
+import { measureChartHost } from '../test/measureChartHost';
 import { TABS } from '../components/models/ModelsTabsHeader';
 
 vi.mock('../components/settings/LocalModelAssessments.jsx', () => ({
@@ -82,13 +83,19 @@ const renderAt = (path) => render(
 
 describe('Models', () => {
   it('opens Coding benchmarks from Comparison and returns to the unchanged general view', async () => {
-    renderAt('/models/comparison');
-    expect(await screen.findByText('comparison panel')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('tab', { name: 'Coding benchmarks' }));
-    expect(await screen.findByRole('heading', { name: 'Coding benchmark comparison' })).toBeInTheDocument();
-    expect(screen.queryByText('comparison panel')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('tab', { name: 'General intelligence' }));
-    expect(await screen.findByText('comparison panel')).toBeInTheDocument();
+    const restoreMeasurement = measureChartHost();
+    try {
+      renderAt('/models/comparison');
+      expect(await screen.findByText('comparison panel')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('tab', { name: 'Coding benchmarks' }));
+      expect(await screen.findByRole('heading', { name: 'Coding benchmark comparison' })).toBeInTheDocument();
+      expect(await screen.findByRole('application')).toBeInTheDocument();
+      expect(screen.queryByText('comparison panel')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('tab', { name: 'General intelligence' }));
+      expect(await screen.findByText('comparison panel')).toBeInTheDocument();
+    } finally {
+      restoreMeasurement();
+    }
   });
 
   it('names every destination served outside /models', () => {

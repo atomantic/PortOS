@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { MemoryRouter, Routes, Route } from 'react-router';
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router';
 
 // Mock the api barrel (RoundEditor.test.jsx harness style).
 const api = vi.hoisted(() => ({
@@ -16,10 +16,18 @@ vi.mock('../lib/clipboard.js', () => clipboard);
 import toast from '../components/ui/Toast';
 import SongBookImport from './SongBookImport.jsx';
 
+function SavedSongLocation() {
+  const { pathname, search } = useLocation();
+  return <output>{pathname}{search}</output>;
+}
+
 const renderPage = async (path = '/songbook/import') => {
   const result = render(
     <MemoryRouter initialEntries={[path]}>
-      <Routes><Route path="/songbook/import" element={<SongBookImport />} /></Routes>
+      <Routes>
+        <Route path="/songbook/import" element={<SongBookImport />} />
+        <Route path="/songbook/:id" element={<SavedSongLocation />} />
+      </Routes>
     </MemoryRouter>,
   );
   await act(async () => {});
@@ -79,6 +87,7 @@ describe('SongBookImport', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(api.createSong).toHaveBeenCalledTimes(1));
     expect(api.createSong.mock.calls[0][0].title).toBe('Example Song');
+    expect(await screen.findByText('/songbook/new-song-1')).toBeInTheDocument();
   });
 
   it('clamps ChordPro meta before sending: out-of-range capo dropped, long key sliced to 20', async () => {
