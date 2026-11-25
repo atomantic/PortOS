@@ -233,6 +233,8 @@ describe('client ↔ server API route parity', () => {
         "switch (url) { case '/api/probe-case/one': break; }",
         "const docs = <code>GET /api/probe-jsx-text/one</code>;",
         "const bare = '/api/';",
+        "console.log(\"api.get('/probe-quoted-verb/one')\");",
+        "const example = \"request('/probe-quoted-request/one')\";",
         "const tail = `/api/${kind}-gen/${id}/events`;",
       ].join('\n'),
       'components/Mentions.test.jsx': "fetch('/api/probe-in-test/one');",
