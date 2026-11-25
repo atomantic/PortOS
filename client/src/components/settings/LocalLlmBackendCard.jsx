@@ -3,10 +3,11 @@ import BrailleSpinner from '../BrailleSpinner';
 import { formatContextLength } from '../../utils/formatters';
 import { patchSettingsSlice } from '../../services/apiSystem.js';
 import { switchLocalLlmBackend, upgradeLocalLlmBackend } from '../../services/apiLocalLlm.js';
+import { LOCAL_RUNTIME_LABELS } from '../../../../server/lib/modelPinMembership.js';
 
 const btnClass = 'flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors disabled:opacity-50';
 
-const labelForBackend = (id) => ({ ollama: 'Ollama', lmstudio: 'LM Studio' }[id] || id);
+const labelForBackend = (id) => ({ ollama: LOCAL_RUNTIME_LABELS.ollama, lmstudio: LOCAL_RUNTIME_LABELS.lmstudio }[id] || id);
 
 export default function LocalLlmBackendCard({
   backend, status, isDefault, busy, actionInProgress, runAction, setConfirmAction,

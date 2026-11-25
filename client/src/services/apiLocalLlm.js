@@ -140,63 +140,63 @@ export const controlOllamaService = (action) =>
 export const controlLmStudioService = (action) =>
   request('/local-llm/lmstudio-service', { method: 'POST', body: JSON.stringify({ action }) });
 
-// MTPLX (native-MTP Qwen on Apple Silicon) — a PM2-managed process, same
-// lifecycle shape as llama-server below.
-export const getMtplxServerStatus = (options) =>
-  request('/local-llm/mtplx/status', options);
-
-// `config` is optional: with none of it PortOS serves the checkpoint already in
-// MTPLX's cache on the port the shipped provider presets point at.
-export const startMtplxServer = (config = {}) =>
-  request('/local-llm/mtplx/start', { method: 'POST', body: JSON.stringify(config) });
-
-export const stopMtplxServer = () =>
-  request('/local-llm/mtplx/stop', { method: 'POST' });
-
-export const installMtplx = () =>
-  request('/local-llm/mtplx/install', { method: 'POST' });
-
-// Managed Inkling runtimes. Mutations enqueue work; status and the runtime
-// progress event report completion independently of the request.
-const inklingRequests = {
+// Start payloads differ by runtime: llama-server requires a chosen GGUF,
+// MTPLX and Slotstream default to their verified cache, and the bundles own
+// their prepared weights. Bundle mutations report completion via progress events.
+const managedRuntimeRequests = {
+  llama: {
+    status: (options) => request('/local-llm/llama-server/status', options),
+    install: (options) => request('/local-llm/llama-server/install', { ...options, method: 'POST' }),
+    start: (config) => request('/local-llm/llama-server/start', { method: 'POST', body: JSON.stringify(config) }),
+    stop: (options) => request('/local-llm/llama-server/stop', { ...options, method: 'POST' }),
+    upgrade: (options) => request('/local-llm/llama-server/upgrade', { ...options, method: 'POST' }),
+  },
+  mtplx: {
+    status: (options) => request('/local-llm/mtplx/status', options),
+    install: (options) => request('/local-llm/mtplx/install', { ...options, method: 'POST' }),
+    start: (config = {}) => request('/local-llm/mtplx/start', { method: 'POST', body: JSON.stringify(config) }),
+    stop: (options) => request('/local-llm/mtplx/stop', { ...options, method: 'POST' }),
+  },
+  slotstream: {
+    status: (options) => request('/local-llm/slotstream/status', options),
+    install: (options) => request('/local-llm/slotstream/install', { ...options, method: 'POST' }),
+    start: (config = {}) => request('/local-llm/slotstream/start', { method: 'POST', body: JSON.stringify(config) }),
+    stop: (options) => request('/local-llm/slotstream/stop', { ...options, method: 'POST' }),
+  },
   splash: {
     status: (options) => request('/local-llm/splash/status', options),
     install: (options) => request('/local-llm/splash/install', { ...options, method: 'POST' }),
-    upgrade: (options) => request('/local-llm/splash/upgrade', { ...options, method: 'POST' }),
     start: (options) => request('/local-llm/splash/start', { ...options, method: 'POST' }),
     stop: (options) => request('/local-llm/splash/stop', { ...options, method: 'POST' }),
+    upgrade: (options) => request('/local-llm/splash/upgrade', { ...options, method: 'POST' }),
   },
   mkserve: {
     status: (options) => request('/local-llm/mkserve/status', options),
     install: (options) => request('/local-llm/mkserve/install', { ...options, method: 'POST' }),
-    upgrade: (options) => request('/local-llm/mkserve/upgrade', { ...options, method: 'POST' }),
     start: (options) => request('/local-llm/mkserve/start', { ...options, method: 'POST' }),
     stop: (options) => request('/local-llm/mkserve/stop', { ...options, method: 'POST' }),
+    upgrade: (options) => request('/local-llm/mkserve/upgrade', { ...options, method: 'POST' }),
   },
 };
 
 export const getManagedInklingRuntimeStatus = (runtime, options) =>
-  inklingRequests[runtime].status(options);
+  managedRuntimeRequests[runtime].status(options);
 
 export const saveSplashContextWindow = (contextWindow, options) =>
   request('/local-llm/splash/context', { ...options, method: 'PUT', body: JSON.stringify({ contextWindow }) });
 
 export const controlManagedInklingRuntime = (runtime, action, options) =>
-  inklingRequests[runtime][action](options);
+  managedRuntimeRequests[runtime][action](options);
 
-// Slotstream (SSD-streaming MoE on Apple Silicon) — a PM2-managed process,
-// same lifecycle shape as MTPLX. A start never downloads weights.
-export const getSlotstreamServerStatus = (options) =>
-  request('/local-llm/slotstream/status', options);
+export const getMtplxServerStatus = managedRuntimeRequests.mtplx.status;
+export const startMtplxServer = managedRuntimeRequests.mtplx.start;
+export const stopMtplxServer = () => managedRuntimeRequests.mtplx.stop();
+export const installMtplx = () => managedRuntimeRequests.mtplx.install();
 
-export const startSlotstreamServer = (config = {}) =>
-  request('/local-llm/slotstream/start', { method: 'POST', body: JSON.stringify(config) });
-
-export const stopSlotstreamServer = () =>
-  request('/local-llm/slotstream/stop', { method: 'POST' });
-
-export const installSlotstream = () =>
-  request('/local-llm/slotstream/install', { method: 'POST' });
+export const getSlotstreamServerStatus = managedRuntimeRequests.slotstream.status;
+export const startSlotstreamServer = managedRuntimeRequests.slotstream.start;
+export const stopSlotstreamServer = () => managedRuntimeRequests.slotstream.stop();
+export const installSlotstream = () => managedRuntimeRequests.slotstream.install();
 
 // Fetch one checkpoint into Slotstream's cache. `model` is a catalog id from
 // the status payload, or a Hugging Face `owner/name`. Byte progress arrives on
@@ -240,8 +240,7 @@ export const saveRuntimeStartupList = () =>
   request('/local-llm/save-startup', { method: 'POST' });
 
 // llama-server (DFlash 2 / Speculative Decoding) process controls
-export const getLlamaServerStatus = (options) =>
-  request('/local-llm/llama-server/status', options);
+export const getLlamaServerStatus = managedRuntimeRequests.llama.status;
 
 // Optional version/package-manager metadata for the Local LLMs runtime card.
 // Kept separate from lifecycle status because the provider version probe and the
@@ -249,20 +248,13 @@ export const getLlamaServerStatus = (options) =>
 export const getLlamaServerUpdateStatus = (options) =>
   request('/local-llm/llama-server/update-status', options);
 
-export const startLlamaServer = (config) =>
-  request('/local-llm/llama-server/start', { method: 'POST', body: JSON.stringify(config) });
+export const startLlamaServer = managedRuntimeRequests.llama.start;
+export const stopLlamaServer = () => managedRuntimeRequests.llama.stop();
+export const installLlamaServer = () => managedRuntimeRequests.llama.install();
 
-export const stopLlamaServer = () =>
-  request('/local-llm/llama-server/stop', { method: 'POST' });
-
-export const installLlamaServer = () =>
-  request('/local-llm/llama-server/install', { method: 'POST' });
-
-// Upgrade a package-manager-installed llama.cpp binary (Homebrew on macOS/Linux,
-// winget on Windows). A managed llama-server is restarted by the server with its
-// existing launch configuration.
-export const upgradeLlamaServer = () =>
-  request('/local-llm/llama-server/upgrade', { method: 'POST' });
+// Upgrade a package-manager-installed binary. The server restarts a managed
+// llama-server using its existing launch configuration.
+export const upgradeLlamaServer = () => managedRuntimeRequests.llama.upgrade();
 
 // Size/destination/free-disk numbers for the confirm step, before any
 // transfer starts. `body.kind` picks which download this previews

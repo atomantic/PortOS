@@ -4,6 +4,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import ProgressBar from '../ui/ProgressBar';
 import { formatBytes } from '../../utils/formatters';
 import { PORTS } from '../../lib/ports.js';
+import RuntimeLogDisclosure from './RuntimeLogDisclosure.jsx';
 
 /**
  * Slotstream launcher — the same shape as the MTPLX launcher above it: a PM2
@@ -74,7 +75,6 @@ export default function SlotstreamServerCard({
   const [port, setPort] = useState('');
   const [memoryGb, setMemoryGb] = useState('');
   const [seeded, setSeeded] = useState(false);
-  const [showLogs, setShowLogs] = useState(false);
 
   // Seed the form from the saved launch line ONCE the status arrives.
   // Without this the memory cap the user saved is invisible on the next visit,
@@ -293,23 +293,7 @@ export default function SlotstreamServerCard({
         </div>
       )}
 
-      {status?.recentLogs?.length > 0 && (
-        <div className="space-y-1">
-          <button
-            type="button"
-            onClick={() => setShowLogs((prev) => !prev)}
-            className="text-[11px] text-gray-500 hover:text-gray-300 flex items-center gap-1"
-          >
-            <Terminal size={11} />
-            {showLogs ? 'Hide server logs' : `View server logs (${status.recentLogs.length} lines)`}
-          </button>
-          {showLogs && (
-            <pre className="text-[10px] text-gray-400 bg-port-bg border border-port-border/60 p-2.5 rounded max-h-40 overflow-y-auto font-mono whitespace-pre-wrap break-all">
-              {status.recentLogs.join('\n')}
-            </pre>
-          )}
-        </div>
-      )}
+      <RuntimeLogDisclosure logs={status?.recentLogs} />
     </div>
   );
 }

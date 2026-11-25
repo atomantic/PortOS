@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { CheckCircle2, Cpu, Gauge, Sparkles } from 'lucide-react';
 import { getSystemCapabilities } from '../../services/apiSystem.js';
+import { LOCAL_RUNTIME_LABELS } from '../../../../server/lib/modelPinMembership.js';
 
 /**
  * The curated coding-agent path is data: each model below carries the facts
@@ -103,7 +104,7 @@ function appleProfile(tier) {
     maxMemoryGb: tier.maxMemoryGb,
     machine: `${tier.minMemoryGb} GB Apple Silicon`,
     contextTokens,
-    runtime: 'MTPLX',
+    runtime: LOCAL_RUNTIME_LABELS.mtplx,
     harness: 'OpenCode MTPLX TUI',
     modelLabel: model.label,
     model: `${model.label} ${tier.pack}`,
@@ -118,7 +119,7 @@ const RTX_3090_PROFILE = {
   id: 'rtx-3090',
   machine: 'Windows + NVIDIA RTX 3090 (24 GB VRAM)',
   contextTokens: 65_536,
-  runtime: 'llama.cpp',
+  runtime: LOCAL_RUNTIME_LABELS.llama,
   harness: 'OpenCode llama TUI',
   modelLabel: 'Qwen3.8-27B',
   model: 'Qwen3.8-27B GGUF (Q4)',
