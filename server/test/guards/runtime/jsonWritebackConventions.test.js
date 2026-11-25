@@ -11,13 +11,16 @@ function sourceFiles() {
   return trackedFiles(serverRoot, ['*.js']).filter(path => !path.endsWith('.test.js'));
 }
 
+// An imported alias still spells the exported name unless it uses an escape.
+const mayWriteJsonFile = source => source.includes('atomicWrite') || source.includes('\\u');
+
 // Regression: a newly introduced fallback cannot silently become a write-back
 // base. Existing exceptions must disappear when their source pair disappears.
 it('classifies every same-path non-strict service read/write pair with no stale exceptions', () => {
   const modules = new Map(sourceFiles().map(file => [file, readText(join(serverRoot, file))]));
   const registry = buildJsonReadWrapperRegistry(modules);
   const candidates = [...modules].flatMap(([file, source]) => {
-    if (!file.startsWith('services/') || !mayReadJsonFile(source, registry)) return [];
+    if (!file.startsWith('services/') || !mayWriteJsonFile(source) || !mayReadJsonFile(source, registry)) return [];
     return scanJsonWriteback(source, { module: file, registry }).candidates.map(path => `${file.slice('services/'.length)} :: ${path}`);
   });
   const result = reconcileJsonWriteback(candidates, JSON_WRITEBACK_EXCEPTIONS);
@@ -33,9 +36,11 @@ describe('syntax scanner regression contracts', () => {
       "import { readJSONFile as read } from './fileUtils.js'; read(A, {}); atomicWrite(A, {});",
       "import { readJSONFileStrict as read } from './fileUtils.js'; read(A, {}); atomicWrite(A, {});",
       String.raw`import { readJSON\u0046ile as read } from './fileUtils.js'; read(A, {}); atomicWrite(A, {});`,
+      String.raw`import { atomic\u0057rite as write } from './fileUtils.js'; readJSONFile(A, {}); write(A, {});`,
     ];
     for (const source of sources) {
       expect(mayReadJsonFile(source)).toBe(true);
+      expect(mayWriteJsonFile(source)).toBe(true);
       expect(scanJsonWriteback(source)).toEqual(source.includes('Strict')
         ? { candidates: [], strict: ['A'] } : { candidates: ['A'], strict: [] });
     }
