@@ -146,18 +146,16 @@ describe('scheduled audit measurement workflow', () => {
       run(2, 40, { confidence: 'medium' }), // half weight
       run(3, 90, { confidence: 'low' }), // never contributes
       { category: 'security', agentId: 'run-4', assessedAt: daysAgo(4), report: report({ category: 'security', score: 50, worstSeverity: 3 }) }, // a stored v1 run counts too
-      run(5, 10, { worstSeverity: 7 }),
-      run(6, 20),
-      run(7, 100), // sixth qualifying run: outside the window
+      run(5, 10, { worstSeverity: 7 }), // fourth qualifying run: outside the window
       run(40, 0), // older than the freshness window
     ];
-    expect(QUALITY_WINDOW_RUNS).toBe(5);
+    expect(QUALITY_WINDOW_RUNS).toBe(3);
     const quality = summarizeAppQuality(records, now);
-    // Confidence weights (1, 0.5, 1, 1, 1) each times 0.5^(ageDays/14): the newer runs weigh slightly more.
-    expect(quality).toMatchObject({ score: 42, ratedCategories: 1 });
+    // Confidence weights (1, 0.5, 1) each times 0.5^(ageDays/7).
+    expect(quality).toMatchObject({ score: 62, ratedCategories: 1 });
     expect(quality.categories.find(c => c.id === 'security')).toMatchObject({
-      score: 42, runScore: 60, slice: 'slice-0', coverage: 'partial', worstSeverity: 9, agentId: 'run-0', stale: false,
-      window: { runs: 5, worstSeverity: 7 },
+      score: 62, runScore: 60, slice: 'slice-0', coverage: 'partial', worstSeverity: 9, agentId: 'run-0', stale: false,
+      window: { runs: 3, worstSeverity: 3 },
     });
     // No qualifying run: the row shows the newest run's own score beside its evidence label, and does not contribute.
     const unqualified = summarizeAppQuality([run(3, 90, { confidence: 'low' }), run(40, 0)], now);
@@ -188,11 +186,11 @@ describe('scheduled audit measurement workflow', () => {
     expect(read.mock.calls[1][1][1]).toEqual(['ui-runtime-bugs', 'app-bugs', 'ui-bugs', 'console-errors', 'ui-lifecycle', 'react-lifecycle']);
   });
 
-  it('decays older runs with a 14-day half-life alongside confidence weights', () => {
+  it('decays older runs with a 7-day half-life alongside confidence weights', () => {
     const now = Date.parse('2026-09-10T12:00:00Z');
     const mk = (daysAgo, score, agentId) => ({ category: 'security', agentId, assessedAt: new Date(now - daysAgo * 86400000).toISOString(),
       report: { version: 2, category: 'security', slice: `slice-${agentId}`, sliceScore: score, worstSeverity: 1, coverage: 'broad', confidence: 'high', summary: 'x', scannedFiles: 1, totalFiles: 1 } });
-    const records = [mk(0, 90, 'a'), mk(14, 30, 'b')];
+    const records = [mk(0, 90, 'a'), mk(7, 30, 'b')];
     // weights 1 and 0.5 → (90 + 15) / 1.5 = 70
     expect(summarizeAppQuality(records, now).categories.find(c => c.id === 'security').score).toBe(70);
   });
@@ -206,7 +204,7 @@ describe('scheduled audit measurement workflow', () => {
     const older = { category: 'react-lifecycle', agentId: 'run-b', assessedAt: '2026-09-08T10:00:00Z', report: sliceReport({ category: 'react-lifecycle', slice: 'client/src/hooks', sliceScore: 20 }) };
     const daily = dailyQualityRecords([release, local, older, { ...local, agentId: 'run-c', assessedAt: '2026-09-08T09:00:00Z', report: sliceReport({ category: 'security', slice: 'server/lib', sliceScore: 20 }) }]);
     expect(daily.map(r => [r.category, r.agentId])).toEqual([['security', 'run-c'], ['ui-lifecycle', 'run-b'], ['security', 'run-a']]);
-    expect(summarizeAppQuality(daily, now).categories.find(c => c.id === 'security')).toMatchObject({ score: 52, window: { runs: 2 } });
+    expect(summarizeAppQuality(daily, now).categories.find(c => c.id === 'security')).toMatchObject({ score: 53, window: { runs: 2 } });
   });
 
   // #18216: same-day slice re-verification and same-day partial/low-confidence
@@ -302,12 +300,34 @@ describe('scheduled audit measurement workflow', () => {
       // Older imported rows are displaced, but local slice-less evidence from a different day still counts.
       { category: 'security', agentId: 'peer-1', sourcePeerId: 'peer-a', assessedAt: daysAgo(4), report: report({ category: 'security', score: 88, worstSeverity: 2 }) },
       { category: 'security', sourcePeerName: 'Release snapshot', assessedAt: daysAgo(5), report: report({ category: 'security', score: 84, worstSeverity: 2 }) },
-      v2Run(6, 'server/routes', 82),
       { category: 'security', assessedAt: daysAgo(7), report: report({ category: 'security', score: 84, worstSeverity: 2 }) },
     ];
     const row = summarizeAppQuality(records, now).categories.find(c => c.id === 'security');
-    expect(row.window).toEqual({ runs: 4, worstSeverity: 2 });
-    expect(row.score).toBe(86);
+    expect(row.window).toEqual({ runs: 3, worstSeverity: 2 });
+    expect(row.score).toBe(87);
+  });
+
+  it.each([
+    ['./Server\\Services\\Foo.js/', 'server/services/foo.js, server/routes/foo.js', 1],
+    ['server/lib, server/routes, server/services', 'server/services/foo.js, server/lib/db.js', 1],
+    ['server/lib, server/routes/foo.js', 'server/routes/foo.js, server/lib', 1],
+    ['server/lib-extra', 'server/lib', 2],
+    ['server/lib/db.js', 'server/lib', 2],
+    ['server/routes/foo.js, server/lib', 'server/services/foo.js, server/lib', 2],
+  ])('compares qualifying canonical slices (%s versus %s)', (newerSlice, olderSlice, runs) => {
+    const now = Date.parse('2026-09-10T12:00:00Z');
+    const record = (slice, sliceScore, worstSeverity, assessedAt, coverage = 'broad') => ({
+      category: 'security', assessedAt,
+      report: sliceReport({ category: 'security', slice, sliceScore, worstSeverity, coverage }),
+    });
+    const row = summarizeAppQuality([
+      record(olderSlice, 99, 0, '2026-09-10T11:00:00Z', 'partial'),
+      record(newerSlice, 92, 1, '2026-09-09T12:00:00Z'),
+      record(olderSlice, 50, 8, '2026-09-08T12:00:00Z'),
+    ], now).categories.find(category => category.id === 'security');
+    expect(row).toMatchObject(runs === 1
+      ? { score: 92, window: { runs: 1, worstSeverity: 1 } }
+      : { score: 72, window: { runs: 2, worstSeverity: 8 } });
   });
 
   it.each([
@@ -374,7 +394,7 @@ describe('scheduled audit measurement workflow', () => {
     ];
     const legacyRow = summarizeAppQuality(legacyOnly, now).categories.find(c => c.id === 'ui-runtime-bugs');
     expect(legacyRow.window.runs).toBe(2);
-    expect(legacyRow.score).toBe(65);
+    expect(legacyRow.score).toBe(64);
   });
 
   it('selects local slice columns for superseding without leaking slice through federation v1 or .quality.json v3', async () => {
@@ -410,7 +430,8 @@ describe('scheduled audit measurement workflow', () => {
 
   it('calibrates audit instructions for whole-slice scoring and below-target re-verification', () => {
     const instructions = auditQualityInstructions('code-quality');
-    expect(instructions).toContain(`audit-slice-history that scored below ${QUALITY_HEALTHY_THRESHOLD} once its filed issues are closed`);
+    expect(instructions).toContain(`Before rotating to a new offender, prefer to re-verify a slice in audit-slice-history that scored below ${QUALITY_HEALTHY_THRESHOLD} once its filed issues are closed`);
+    expect(instructions).toContain('A finding that led you to choose the slice is only one part of that evidence.');
     expect(instructions).toContain('88–95: Clean, healthy slice without speculative hardening');
     expect(instructions).toContain('75–84: One or two localized defects in secondary paths');
     expect(instructions).toContain('40–69: Recurring or systemic defects across multiple files or in core paths');
@@ -603,9 +624,9 @@ it('retains historical scores without hindsight, expires old evidence, and rolls
   expect(points.find(p => p.date === '2026-09-01').score).toBeNull();
   expect(points.find(p => p.date === '2026-09-08')).toMatchObject({ score: 30, ratedCategories: 1 });
   // 09-09 averages the two fresh runs (the 08-01 run has expired); the next day adds security.
-  expect(points.find(p => p.date === '2026-09-09')).toMatchObject({ score: 50, ratedCategories: 1 });
-  expect(points.at(-1)).toMatchObject({ score: 70, ratedCategories: 2 });
-  expect(points.at(-1).categories['better-complexity']).toMatchObject({ score: 50, coverage: 'broad', confidence: 'high' });
+  expect(points.find(p => p.date === '2026-09-09')).toMatchObject({ score: 51, ratedCategories: 1 });
+  expect(points.at(-1)).toMatchObject({ score: 71, ratedCategories: 2 });
+  expect(points.at(-1).categories['better-complexity']).toMatchObject({ score: 51, coverage: 'broad', confidence: 'high' });
 });
 
 

@@ -19,21 +19,23 @@ the check again to rerun it. Status updates arrive through the existing maintena
 reconnecting or returning to the tab. Loading and failed reads are shown beside
 a retry action rather than reported as an empty queue.
 
-Every scheduled audit category first inventory first-party source roots, scan
-for their category's signals, rank the top five candidates (or all if fewer),
-and validate the strongest candidates before selecting a bounded investigation.
-The raw worst offender may be passed over only with an explanation such as a
-verified exemption or an existing issue. Existing unresolved issues still affect
-the assessment. Low churn alone does not exempt a severe hotspot. Each category
-has its own discovery strategy in `server/lib/auditQuality.js`; these instructions
-are injected at dispatch even when an install customized its stored prompt.
-File-only versus fix mode remains authoritative.
+Each scheduled audit inventories first-party source roots, scans for its
+category's signals, ranks the top five candidates (or all if fewer), and
+validates the strongest candidates before selecting a bounded investigation.
+Prefer to re-verify a slice that scored below 85 once its filed issues are
+closed and their fixes are present in the checkout. When no remediated slice
+needs verification, pick the highest-ranked actionable candidate. Existing
+unresolved issues still affect the assessment. Low churn alone does not exempt
+a severe hotspot. Dispatch injects the discovery strategy from
+`server/lib/auditQuality.js`, including for customized prompts. The selected
+file-only or fix mode remains authoritative.
 
 ## Scoring
 
 Auditors assess the entire **pre-fix slice** they deep-reviewed on a scale from
 0–100, where higher is healthier. The score reflects the severity, prevalence,
-and reach of verified defects across the slice.
+and reach of verified defects across all deep-reviewed paths. The defect that
+led to selecting the slice is one part of that evidence.
 
 | Score | Meaning |
 | --- | --- |
@@ -58,19 +60,21 @@ slice the agent picked — a 20-point swing between consecutive runs was normal.
 Stored v1 reports stay readable; their `score` is read as that run's score.
 
 A category's score is derived server-side: the confidence- and recency-weighted
-mean (high 1, medium 0.5, each further halved per 14 days of age so remediated
-pre-fix runs stop pinning the figure) of its newest five eligible runs — **broad** discovery coverage,
-medium/high confidence, scored, and at most 30 days old. The newest qualifying
-run for each normalized slice supersedes its earlier runs. Distinct slices may
-contribute on the same UTC day. For each audit category and UTC day, the window
+mean of up to three qualifying runs from the last 30 days. Qualifying runs
+have broad discovery coverage, medium or high confidence, and a score. High
+confidence starts at weight 1 and medium at 0.5, with each weight halved every
+seven days. A newer qualifying run supersedes an older slice when both share
+the same canonical primary path (the first listed segment), or when the newer
+slice covers all of the older slice's comma-separated segments. Paths match
+exactly or by directory prefix at a slash boundary after normalizing case,
+whitespace, and slash notation. Distinct slices may contribute on the same UTC
+day. For each audit category and UTC day, the window
 takes at most one slice-less run and gives a retained slice precedence, even
 over a later slice-less run that day. Peer and release snapshot rows omit slice
 names. These rows can fill otherwise eligible days when there is no qualifying
 local slice or their timestamp is at least as recent as the newest qualifying
 local slice in the category window's eligible set.
 The pragmatic target band is **85–95**, and the healthy threshold is **85**.
-The `audit-slice-history` input shows each prior slice's score so a lane can
-re-verify a remediated slice that scored below 85.
 The breakdown shows how many runs fed the figure and the worst severity any of
 them found; the row's coverage, confidence, date, slice and summary describe the
 newest run. A newer partial run does not erase a fresh scored one. With no
@@ -112,8 +116,8 @@ audit batch is enabled automatically. The summary also carries one
 `slice` column (null for runs that predate it, or the v2 report's `slice` when
 the line is missing). Every audit lane preloads its last eight slices for the
 app through the `audit-slice-history` task data input ("Recent audit slices")
-so consecutive runs rotate to other areas instead of re-scanning the same
-inventory; the `ux` and `module-hygiene` prompts read that block for their
+to identify remediated slices that need re-verification and uncovered areas
+for future runs. The `ux` and `module-hygiene` prompts read that block for their
 route and slice choice. Peers and the `.quality.json` snapshot
 receive the numeric v1 wire shape with a v2 run's `sliceScore` in `score`, so
 an older install keeps reading it; the slice text never leaves the machine.
