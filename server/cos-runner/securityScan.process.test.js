@@ -1,4 +1,4 @@
-// test-memo: git-fixture — git only ever runs in repositories this suite creates under the temp directory (docs/TEST_MEMO.md#git-fixtures).
+// test-memo: git-fixture — git only ever runs in repositories this suite creates under the temp directory (docs/TEST_MEMO_GIT_FIXTURES.md).
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'fs/promises';

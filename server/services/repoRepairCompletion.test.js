@@ -1,4 +1,4 @@
-// test-memo: git-fixture — git only ever runs in repositories this suite creates under the temp directory (docs/TEST_MEMO.md#git-fixtures).
+// test-memo: git-fixture — git only ever runs in repositories this suite creates under the temp directory (docs/TEST_MEMO_GIT_FIXTURES.md).
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, unlinkSync, symlinkSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';

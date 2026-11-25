@@ -35,7 +35,7 @@
  * What stays on the declaration's word is a value the source does not
  * spell: a call's result, a property, a callback's parameter. The marker is
  * therefore added only after the suite has been read, and reviewed as a
- * claim about it (docs/TEST_MEMO.md, "Git fixtures").
+ * claim about it (docs/TEST_MEMO_GIT_FIXTURES.md).
  */
 
 import { posix } from 'node:path';

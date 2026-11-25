@@ -97,6 +97,7 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 | [GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md) | CI and release workflows |
 | [PREGATE.md](./PREGATE.md) | The local pre-push gate: what it runs, its receipt, interrupts and test process containment |
 | [TEST_MEMO.md](./TEST_MEMO.md) | Test memo: skipping verified test files, record-aware related selection |
+| [TEST_MEMO_GIT_FIXTURES.md](./TEST_MEMO_GIT_FIXTURES.md) | Test memo: the `test-memo: git-fixture` declaration for suites that only run git in repositories they create |
 | [VERSIONING.md](./VERSIONING.md) | SemVer + release process (`/do:release`) |
 | [SELF_UPDATE.md](./SELF_UPDATE.md) | Fork-aware self-update flow — release polling, `FORK_SYNC_REQUIRED`, fork sync, running a customized fork, and the unattended idle-gated automatic update |
 | [MANAGED_APP_UPDATES.md](./MANAGED_APP_UPDATES.md) | Safe managed-app update default and the opt-in app lifecycle contract |
