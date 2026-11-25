@@ -61,11 +61,22 @@ Complete verified coverage passes temporal lip-sync only when all absolute
 offsets are at most 0.12 seconds. A larger measured offset produces a timecoded
 finding independent of duration parity.
 
-Unavailable, unsupported, failed, malformed, gapped or inconclusive evidence
-remains unverified with no invented score. The run stops as needs-human before
-opening a revision, including when the vision reviewer flags another problem.
-It cannot spend money trying to fix unknown temporal quality. A measured failure
-can enter the existing explicitly budgeted revision workflow.
+An analyzer that is not installed, or that fails its `--capabilities` probe, is
+missing capability rather than failed evidence: the review records
+`evidence.temporal.status: "unavailable"` (shown as "not measured") and keeps
+`checks.lipSync: "unverified"`, but lip-sync no longer gates the verdict. The
+other checks decide it, a clean review passes with the reason "Lip-sync was not
+measured: no temporal analyzer is installed", and a blocking visual finding opens
+a revision as usual, so unattended review, production and autonomous runs finish
+without an analyzer.
+
+An installed analyzer that ran and returned failed, malformed, gapped,
+low-confidence or otherwise inconclusive evidence remains `unverified` with no
+invented score. The run stops as needs-human before opening a revision, including
+when the vision reviewer flags another problem, so it cannot spend money trying
+to fix unknown temporal quality. A draft with no performance-section provenance
+also stays `unverified`. A measured failure can enter the existing explicitly
+budgeted revision workflow.
 
 Analyzer identity/version, shot/source provenance, measured offsets/confidence
 and spans persist in existing auto-review records. Excerpts snapshot performance
