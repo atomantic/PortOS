@@ -129,7 +129,14 @@ function scanCodeText({ tokens, facts }) {
 function noteGitFixture({ tokens, match, ctx, facts }, src) {
   const { declared, problem, calls } = gitFixtureDeclaration({ src, tokens, match, ctx });
   if (!declared) return;
-  facts.gitFixtureProblem = calls === 0 ? 'no git call the analyzer can read' : problem;
+  // A repository directory handed to code this file does not define (`commit(process.cwd(), …)`,
+  // `{ repoPath: ROOT }`) is where that code runs git, if it runs any: nothing here can tell.
+  // What the declaration's reading takes for a git call (a shell handed a git command line) puts the
+  // file under the git rule even where that rule alone would not: the file says it runs git.
+  if (calls > 0) facts.git = true;
+  const [handed] = facts.handedDirs;
+  facts.gitFixtureProblem = calls === 0 ? 'no git call the analyzer can read'
+    : problem ?? (handed === undefined ? null : `hands the repository directory ${handed || '<repo root>'} to code that may run git there`);
   facts.gitFixture = facts.gitFixtureProblem === null;
 }
 

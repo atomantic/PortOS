@@ -52,7 +52,8 @@ as `spawns git (git-fixture declaration refused: …)`, wherever its own text
 contradicts it (`scripts/lib/testMemo/gitFixture.js`):
 
 - a git call that is not the literal program `git` with its arguments apart
-  (a command line hides the directory it runs in). A spawn call is a git
+  (a command line hides the directory it runs in), a git command line
+  handed to another program (`sh -c 'git log'`) included. A spawn call is a git
   call when its program can spell git: written in the call, held by the
   name the call reads (`const command = 'git'`, `tool || 'git'`), or passed
   by a caller as that parameter (`run('git', …)` into `(program, args) =>
@@ -86,13 +87,17 @@ contradicts it (`scripts/lib/testMemo/gitFixture.js`):
   reaches one, or in any value assigned to a name used in one of those
   places. Names are followed by spelling, not by scope, so two
   tests that each declare `repo` are both read. A function that runs git and
-  is used other than by a direct call has callers the file does not show.
+  is used other than by a direct call has callers the file does not show;
+- a repository directory handed to code the file does not define
+  (`commit(process.cwd(), …)`, `{ repoPath: ROOT }`): that is where such
+  code runs git, if it runs any.
 
 What stays on the declaration's word is a value the source does not spell: a
 call's result, a property of something that is no parameter, the parameter
 of a callback (its caller is not this file's to read), an argument behind a
-spread, an options object that is no literal, and whatever another program
-the suite starts (a shell script, a node child) goes on to run. So the marker goes on a
+spread, an options object that is no literal, and what another program the
+suite starts goes on to run where the line it is handed does not spell git
+(a shell script read from a module, a node child). So the marker goes on a
 suite only after it has been read end to end, with every repository it makes
 accounted for, and it is reviewed as a claim about the suite. Three kinds of
 suite stay unmarked even though each git call names a temp directory: one
