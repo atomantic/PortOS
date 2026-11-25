@@ -45,7 +45,7 @@ let skipReason = '';
     else skipReason = 'catalog schema not present';
   }
 }
-const runDb = requireDbOrSkip('services/catalog/catalogCanonProjection.test', dbReady, skipReason);
+const runDb = requireDbOrSkip('services/catalog/catalogCanonProjection.db.test', dbReady, skipReason);
 
 const createdIngredientIds = new Set();
 afterAll(async () => {

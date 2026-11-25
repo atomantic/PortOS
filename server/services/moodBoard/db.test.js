@@ -1,7 +1,7 @@
 /**
  * Postgres-backed round-trip for the mood board store (issue #911).
  *
- * Like projectsDB.test.js / mediaAssetIndex/db.test.js, this needs a live
+ * Like projectsDB.db.test.js / mediaAssetIndex/db.test.js, this needs a live
  * PostgreSQL with the schema applied. If no DB is reachable (CI, fresh
  * checkout), it SKIPS cleanly rather than failing red. When a DB IS reachable it
  * exercises create/list/get/update + the item add/update/remove ops + the #1564

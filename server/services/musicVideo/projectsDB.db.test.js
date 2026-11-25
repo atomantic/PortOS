@@ -61,7 +61,7 @@ let skipReason = '';
   }
 }
 
-const runDb = requireDbOrSkip('services/musicVideo/projectsDB.test', dbReady, skipReason);
+const runDb = requireDbOrSkip('services/musicVideo/projectsDB.db.test', dbReady, skipReason);
 
 afterAll(() => rmSync(testState.dataRoot, { recursive: true, force: true }));
 

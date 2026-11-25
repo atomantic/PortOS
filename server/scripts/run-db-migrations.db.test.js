@@ -38,7 +38,7 @@ let skipReason = '';
   }
 }
 
-const runDb = requireDbOrSkip('scripts/run-db-migrations.test', dbReady, skipReason);
+const runDb = requireDbOrSkip('scripts/run-db-migrations.db.test', dbReady, skipReason);
 
 // Test fixtures use a unique id prefix so we can clean ONLY our own rows /
 // scratch tables without touching a developer's real migration history.

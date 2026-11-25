@@ -39,7 +39,7 @@ let skipReason = '';
     else skipReason = 'catalog schema not present (ensureSchema did not create catalog tables)';
   }
 }
-const runDb = requireDbOrSkip('services/catalog/catalogDB.test', dbReady, skipReason);
+const runDb = requireDbOrSkip('services/catalog/catalogDB.db.test', dbReady, skipReason);
 
 // Secondary guard for the (registered) tests: when the suite runs, dbReady is
 // always true here, so this is a no-op; describe.skipIf is the real gate.

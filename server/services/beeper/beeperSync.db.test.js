@@ -17,9 +17,8 @@
  *   - a stored `is_sender` TRUE survives a later sweep whose payload omits the
  *     optional field.
  *
- * `*.db.test.js` → runs ONLY via `npm run test:db` against `portos_test`
- * (registered in vitest.config.db.js's DB_TEST_INCLUDE — a `<name>.db.test.js`
- * file is not auto-globbed). Every fixture uses placeholder names/handles per
+ * `*.db.test.js` → runs ONLY via `npm run test:db` against `portos_test`.
+ * Every fixture uses placeholder names/handles per
  * root AGENTS.md Sensitive Data & Privacy — no real handle, name, or content.
  *
  * The credential path is the ONLY mocked part: the sweep resolves its token
