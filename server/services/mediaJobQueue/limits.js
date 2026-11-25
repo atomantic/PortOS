@@ -113,7 +113,6 @@ export function syncParallelLimits(s) {
   if (ig.codex?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'codex' }, ig.codex.parallelLimit);
   if (ig.grok?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'grok' }, ig.grok.parallelLimit);
   if (vg.grok?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'grok' }, vg.grok.parallelLimit);
-  if (ig.gemini?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'gemini' }, ig.gemini.parallelLimit);
   if (vg.gemini?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'gemini' }, vg.gemini.parallelLimit);
   if (ig.fal?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'fal' }, ig.fal.parallelLimit);
   if (vg.fal?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'fal' }, vg.fal.parallelLimit);

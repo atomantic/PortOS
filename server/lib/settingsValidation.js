@@ -316,13 +316,6 @@ export const imageGenAgySettingsSchema = z.object({
   denoise: z.boolean().optional(),
 });
 
-export const imageGenGeminiSettingsSchema = z.object({
-  enabled: z.boolean().optional(),
-  parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
-  cleanC2PA: z.boolean().optional(),
-  denoise: z.boolean().optional(),
-});
-
 // Local backend availability is machine-local configuration. Disabled means
 // the user intentionally does not run that backend; it does not remove any
 // installed models or prevent an explicit model-management action.
@@ -425,7 +418,6 @@ export const settingsSlicePartialSchemas = Object.freeze({
   'imageGen.runway': imageGenRunwaySettingsSchema.strict(),
   'imageGen.higgsfield': imageGenHiggsfieldSettingsSchema.strict(),
   'imageGen.google': imageGenGoogleSettingsSchema.strict(),
-  'imageGen.gemini': imageGenGeminiSettingsSchema.strict(),
   'imageGen.expose': z.object({ a1111: z.boolean().optional() }).strict(),
   renderDefaults: renderDefaultsSettingsSchema,
   videoGen: videoGenSettingsSchema.pick({
