@@ -15,7 +15,6 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   previewMusicVideoTreatmentApply: vi.fn(),
   applyMusicVideoTreatment: vi.fn(),
   syncMusicVideoTreatmentFromShotSheet: vi.fn(),
-  reviewMusicVideoTreatmentProof: vi.fn(),
 }));
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
 

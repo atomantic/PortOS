@@ -20,7 +20,6 @@ import {
   applyTreatmentPatch,
   applyTreatmentToProject,
   buildApplyPreview,
-  reviewTreatmentProof,
   syncShotSheetDirections,
   treatmentBasis,
   writeCompiledTreatment,
@@ -124,10 +123,4 @@ export async function applyTreatment(id, options) {
   const { result } = outcome;
   console.log(`🎬 Music Video treatment: applied to ${result.directed} scene${result.directed === 1 ? '' : 's'} of ${id} (${result.promptsWritten.length} prompts written, ${result.promptsKept.length} kept)`);
   return { project: outcome.project, result };
-}
-
-/** Record a proof-checklist verdict. */
-export async function reviewProof(id, proofId, review) {
-  const { project } = await mutateProjectRecord(id, (current) => ({ project: reviewTreatmentProof(current, proofId, review) }));
-  return { project, treatment: project.treatment };
 }

@@ -569,9 +569,6 @@ export function musicVideoDependencyImpact(project, performanceChanges = []) {
   for (const excerpt of project.excerpts || []) {
     if (excerpt.status === 'complete') check('excerpt', excerpt.id, excerpt.dependencies, { startSec: excerpt.startSec, endSec: excerpt.endSec });
   }
-  for (const proof of project.treatment?.proofs || []) {
-    if (proof.status === 'passed') check('proof', proof.id, proof.evidence?.dependencies);
-  }
   for (const run of project.autoReviews || []) {
     for (const attempt of run.attempts || []) {
       if (attempt.review?.verdict === 'pass') check('review', run.id, attempt.review.dependencies);
@@ -610,9 +607,6 @@ export function presentMusicVideoDependencies(project) {
       return { ...take, ...(dependencyState ? { dependencyState } : {}) };
     }) })),
     ...(project.excerpts ? { excerpts: project.excerpts.map((excerpt) => ({ ...excerpt, dependencyState: state(excerpt.dependencies) })) } : {}),
-    ...(Array.isArray(project.treatment?.proofs) ? { treatment: { ...project.treatment, proofs: (project.treatment.proofs || []).map((proof) => ({ ...proof,
-      ...(proof.evidence ? { evidence: { ...proof.evidence, dependencyState: state(proof.evidence.dependencies) } } : {}),
-    })) } } : {}),
     ...(project.autoReviews ? { autoReviews: project.autoReviews.map((run) => ({ ...run, attempts: (run.attempts || []).map((attempt) => ({ ...attempt,
       ...(attempt.review ? { review: { ...attempt.review, dependencyState: state(attempt.review.dependencies) } } : {}),
     })) })) } : {}),

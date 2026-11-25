@@ -23,7 +23,7 @@ import { finishedOutsideBlocker } from '../lib/musicVideo/musicVideoFinishedOuts
 import { musicVideoCompletionBlocker, musicVideoCompletionOverride } from '../lib/musicVideo/musicVideoCompletion.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { musicVideoAudioTimingPreviewSchema, musicVideoAudioTimingApplySchema, musicVideoProjectCreateSchema, musicVideoProjectCloneSchema, musicVideoProjectUpdateSchema, musicVideoPacingRecutSchema, musicVideoPlanRequestSchema, musicVideoManualAnalysisSchema, musicVideoSectionsEditSchema, musicVideoTranscribeMidiRequestSchema, musicVideoLyricsImportSchema, musicVideoLyricsImportTrackSchema, musicVideoLyricsAlignSchema, musicVideoLyricsVerifySchema, musicVideoSongPrepareSchema, musicVideoTakeInputSchema, musicVideoHandoffImportSchema, musicVideoTreatmentUpdateSchema, musicVideoTreatmentCompileSchema, musicVideoTreatmentApplySchema, musicVideoTreatmentSyncShotSheetSchema, musicVideoSequenceRenderSchema, musicVideoSequenceTakeSchema, musicVideoTreatmentProofReviewSchema, musicVideoCodeGenerateSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
+import { musicVideoAudioTimingPreviewSchema, musicVideoAudioTimingApplySchema, musicVideoProjectCreateSchema, musicVideoProjectCloneSchema, musicVideoProjectUpdateSchema, musicVideoPacingRecutSchema, musicVideoPlanRequestSchema, musicVideoManualAnalysisSchema, musicVideoSectionsEditSchema, musicVideoTranscribeMidiRequestSchema, musicVideoLyricsImportSchema, musicVideoLyricsImportTrackSchema, musicVideoLyricsAlignSchema, musicVideoLyricsVerifySchema, musicVideoSongPrepareSchema, musicVideoTakeInputSchema, musicVideoHandoffImportSchema, musicVideoTreatmentUpdateSchema, musicVideoTreatmentCompileSchema, musicVideoTreatmentApplySchema, musicVideoTreatmentSyncShotSheetSchema, musicVideoSequenceRenderSchema, musicVideoSequenceTakeSchema, musicVideoCodeGenerateSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { recordRenderPinFields } from '../lib/sharedSchemas.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { isSupportedMusicUpload, MUSIC_UPLOAD_MAX_BYTES } from '../services/pipeline/musicLibrary.js';
@@ -54,7 +54,7 @@ import { attachLyricAlignSseClient, cancelLyricAlign, getActiveLyricAlignJobId, 
 import { startLyricVerify, attachLyricVerifySseClient, cancelLyricVerify } from '../services/musicVideo/lyricVerifyJob.js';
 import { importTrackLyrics, MAX_LYRIC_CUES } from '../services/musicVideo/trackLyrics.js';
 import { offsetLyricMarkers } from '../lib/lyricMarkers.js';
-import { updateTreatment, compileTreatment, previewTreatmentApply, applyTreatment, syncTreatmentFromShotSheet, reviewProof } from '../services/musicVideo/treatmentService.js';
+import { updateTreatment, compileTreatment, previewTreatmentApply, applyTreatment, syncTreatmentFromShotSheet } from '../services/musicVideo/treatmentService.js';
 import { writeOriginScope } from '../lib/writeOrigin.js';
 import { presentProjectForRead } from '../services/musicVideo/projectPresentation.js';
 import { summarizeMusicVideoProject, compareMusicVideoProjectsNewestFirst } from '../lib/musicVideo/musicVideoSummary.js';
@@ -401,7 +401,7 @@ router.use('/', spendRoutes);
 
 // --- Pre-production treatment (#8980) ---
 // A structured brief, a compiled whole-song arc, per-shot direction keyed to
-// the board's scene ids and a proof checklist (services/musicVideo/treatment.js).
+// the board's scene ids (services/musicVideo/treatment.js).
 // Every write names the revision it was made against; a stale one is a 409.
 router.patch('/:id/treatment', asyncHandler(async (req, res) => {
   const patch = validateRequest(musicVideoTreatmentUpdateSchema, req.body);
@@ -448,11 +448,6 @@ router.post('/:id/treatment/apply', asyncHandler(async (req, res) => {
 router.post('/:id/treatment/sync-shot-sheet', asyncHandler(async (req, res) => {
   const options = validateRequest(musicVideoTreatmentSyncShotSheetSchema, req.body);
   res.json(await syncTreatmentFromShotSheet(req.params.id, options));
-}));
-
-router.post('/:id/treatment/proofs/:proofId/review', asyncHandler(async (req, res) => {
-  const review = validateRequest(musicVideoTreatmentProofReviewSchema, req.body);
-  res.json(await reviewProof(req.params.id, req.params.proofId, review));
 }));
 
 // Import timed lyric cues (#8964) from pasted LRC, SRT/WebVTT, or plain lines

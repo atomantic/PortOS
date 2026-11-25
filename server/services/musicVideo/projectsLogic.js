@@ -318,11 +318,9 @@ export function cloneProjectRecord(source, {
         ...section, sceneId: sceneIdMap.get(section.sceneId) ?? section.sceneId,
       })) } } : {}),
     } } : {}),
-    // #8980 — the treatment's shot directions and proofs follow the scenes to
-    // their new ids; proof evidence the clone can't back is dropped.
+    // #8980 — the treatment's shot directions follow the scenes to
+    // their new ids.
     treatment: source.treatment ? remapTreatmentForClone(source.treatment, sceneIdMap, {
-      includeGeneratedMedia,
-      sourceRenderId: source.renderHistoryId ?? null,
       sourceScenesFingerprint: scenesFingerprint(source.scenes || []),
       cloneScenesFingerprint: scenesFingerprint(scenes),
     }) : null,
