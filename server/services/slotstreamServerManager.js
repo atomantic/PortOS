@@ -534,6 +534,9 @@ async function savedLaunchConfig() {
 // identical block in `mtplxServerManager.js`.
 export const markSlotstreamUsed = () => onDemand.markUsed();
 
+/** Wait for a just-started server to answer (stops early when PM2 reports it dead); `{ready, reason}`. */
+export const waitForSlotstreamReady = (endpoint) => onDemand.waitForReady(endpoint);
+
 /**
  * Bring Slotstream up if the idle reaper (or the user) stopped it. See
  * `onDemand.ensureRunning` for the shared mechanism; Slotstream's own

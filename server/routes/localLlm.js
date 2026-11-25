@@ -57,19 +57,21 @@ import {
   stopLlamaServer,
   installLlamaServer,
   upgradeLlamaServer,
+  waitForLlamaServerReady,
 } from '../services/llamaServerManager.js'
 import { onDemandRuntimeAppNames } from '../lib/managedRuntimeApps.js'
-import { getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx } from '../services/mtplxServerManager.js'
+import { getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx, waitForMtplxReady } from '../services/mtplxServerManager.js'
 import { getSplashRuntimeStatus } from '../services/splashRuntimeStatus.js'
 import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer } from '../services/splashServerManager.js'
 import { getMkserveRuntimeStatus, installMkserve, startMkserveServer, stopMkserveServer } from '../services/mkserveRuntimeManager.js'
-import { getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream } from '../services/slotstreamServerManager.js'
+import { getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream, waitForSlotstreamReady } from '../services/slotstreamServerManager.js'
 import { cancelSlotstreamModelDownload, downloadSlotstreamModel, previewSlotstreamDownload } from '../services/slotstreamModelManager.js'
 import { searchMtplxCatalog, pullMtplxModel, previewMtplxPull, removeMtplxModel } from '../services/mtplxModelManager.js'
 import { saveProcessList } from '../services/pm2.js'
 import { getSpecDecodePresetStatus, downloadSpecDecodeModel, previewSpecDecodeDownload, cancelSpecDecodeModelDownload, removeSpecDecodeModel } from '../services/specDecodeModels.js'
 import { SPEC_TYPE_SUGGESTIONS } from '../lib/specDecodePresets.js'
 import { resetProviderReadinessCache } from '../services/provider/providerReadiness.js'
+import { syncRuntimeProviderModels } from '../services/localRuntimeProviderSync.js'
 import { MODEL_ABUSE_GUARD, MODEL_ABUSE_GUARD_MAX_INPUT_CHARS } from '../lib/modelAbuseGuard.js'
 import { JEV_MODEL, jevScoreRequestSchema } from '../lib/jev.js'
 import { jevHeadActionRequestSchema, jevHeadTrainRequestSchema } from '../lib/jevHead.js'
@@ -142,6 +144,18 @@ const emitter = (req) => {
   return (event, message, extra) => io?.emit('localLlm:progress', { event, message, ...extra })
 }
 
+// After a user-triggered start, checkpoint download or removal, bring the presets fronting that runtime up to date
+// (what "Refresh Models" does by hand). Called after the response is sent and never awaited: it owns its rejections
+// and must not delay or fail the lifecycle action. `started.online === false` means the start returned before the
+// endpoint answered, so the refresh waits on `waitFor` first.
+const refreshRuntimeModels = (req, kind, started = null, waitFor = null) => {
+  const pending = started?.online === false && waitFor && started.endpoint
+  void syncRuntimeProviderModels({
+    kind,
+    io: req.app.get('io'),
+    waitForReady: pending ? () => waitFor(started.endpoint) : null,
+  })
+}
 
 // GET /api/local-llm/persistent-mind-setup — Grok-box / CPU-only free local
 // Persistent Mind checklist (Ollama + Qwen2.5 7B Instruct). Applicable hosts
@@ -1025,6 +1039,7 @@ router.post('/llama-server/start', asyncHandler(async (req, res) => {
   const result = await startLlamaServer(options)
   resetProviderReadinessCache()
   res.json(result)
+  refreshRuntimeModels(req, 'llama', result, waitForLlamaServerReady)
 }))
 
 // POST /api/local-llm/llama-server/stop — stop managed llama-server
@@ -1089,6 +1104,7 @@ router.post('/mtplx/start', asyncHandler(async (req, res) => {
   resetProviderReadinessCache()
   emit('complete', `MTPLX is running at ${result.endpoint}`)
   res.json(result)
+  refreshRuntimeModels(req, 'mtplx', result, waitForMtplxReady)
 }))
 
 // POST /api/local-llm/mtplx/stop — stop the managed MTPLX process
@@ -1135,6 +1151,7 @@ router.post('/mtplx/models/pull', asyncHandler(async (req, res) => {
   // probes remember as "MTPLX setup incomplete".
   if (result.success) resetProviderReadinessCache()
   res.json(result)
+  if (result.success) refreshRuntimeModels(req, 'mtplx')
 }))
 
 // POST /api/local-llm/mtplx/models/remove — delete one checkpoint from the cache
@@ -1143,6 +1160,7 @@ router.post('/mtplx/models/remove', asyncHandler(async (req, res) => {
   const result = await removeMtplxModel(model)
   resetProviderReadinessCache()
   res.json(result)
+  refreshRuntimeModels(req, 'mtplx')
 }))
 
 // Downloads outlive a browser request. Keep progress and the last failure
@@ -1178,6 +1196,8 @@ const runtimeActionRoute = (runtime, label, action, run) => asyncHandler(async (
       resetProviderReadinessCache()
       const done = { install: 'installation complete', upgrade: 'update complete', start: 'start completed', stop: 'stopped' }[action]
       emit('complete', `${label}: ${done}.`, scope)
+      // Their start only resolves once the model answers, so no readiness wait.
+      if (action === 'start') refreshRuntimeModels(req, runtime)
     },
     (err) => {
       inklingOperations.delete(runtime)
@@ -1228,6 +1248,7 @@ router.post('/slotstream/start', asyncHandler(async (req, res) => {
   resetProviderReadinessCache()
   emit('complete', `Slotstream is running at ${result.endpoint}`)
   res.json(result)
+  refreshRuntimeModels(req, 'slotstream', result, waitForSlotstreamReady)
 }))
 
 router.post('/slotstream/stop', asyncHandler(async (_req, res) => {
@@ -1262,6 +1283,7 @@ router.post('/slotstream/models/download', asyncHandler(async (req, res) => {
   // probes remember as "Slotstream has no checkpoint".
   if (result.success) resetProviderReadinessCache()
   res.json(result)
+  if (result.success) refreshRuntimeModels(req, 'slotstream')
 }))
 
 // POST /api/local-llm/slotstream/models/download/cancel — a checkpoint download
