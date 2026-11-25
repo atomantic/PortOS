@@ -287,6 +287,15 @@ and the rest concluded on their own results, so **Re-run failed jobs** repeats
 only the red shard. Runners on this public repository are not billed, so the
 siblings that keep running cost concurrency, not money.
 
+**The launcher bounds itself.** A step timeout did not end a hung Windows test run
+on 2026-11-24 and the job log was lost (#18636). `scripts/run-ci-tests.js` therefore reads
+`PORTOS_CI_TEST_DEADLINE_MINUTES` (Windows 20, Linux server 25, client 25, DB 15, each below
+its step or job limit). One deadline covers every pass and the crash retry; when it expires the launcher
+logs the deadline, ends the test process tree, prints the diagnostics and the Vitest output tail,
+and exits non-zero even if a detached descendant holds a handle. The step and job timeouts stay
+as the outer fallback, and the browser job keeps its own watchdog. A runner that stops executing
+entirely cannot be reported by any in-process deadline.
+
 **Cancelled is not mergeable.** Every consumer allowlists green results:
 branch protection requires `CI Gate` to conclude `success`; the gate accepts
 only `success` or `skipped` per job; `scripts/verify-ci-status.js` accepts a
