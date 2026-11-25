@@ -582,6 +582,47 @@ describe('MusicVideo project video renderer', () => {
   });
 });
 
+describe('MusicVideo clip timing saves', () => {
+  it('previews each nudge immediately and coalesces unsent speed and offset changes while a save is slow', async () => {
+    const project = {
+      ...PROJECT_WITH_CLIP,
+      scenes: [{ ...PROJECT_WITH_CLIP.scenes[0], startSec: 0, endSec: 4, beatAligned: true }],
+    };
+    const reply = savedSceneReplies(project);
+    let finishFirst;
+    let finishNext;
+    updateMusicVideoScene
+      .mockImplementationOnce((...args) => new Promise((resolve) => { finishFirst = () => resolve(reply(...args)); }))
+      .mockImplementationOnce((...args) => new Promise((resolve) => { finishNext = () => resolve(reply(...args)); }));
+    await openProject(project, 'produce');
+    const faster = await screen.findByRole('button', { name: 'Play the clip one fps faster' });
+    const further = screen.getByRole('button', { name: 'Start the clip one frame further in' });
+    fireEvent.click(faster);
+    fireEvent.click(faster);
+    fireEvent.click(further);
+    fireEvent.click(faster);
+    fireEvent.click(further);
+
+    expect(screen.getByLabelText('Speed')).toHaveValue(3);
+    expect(screen.getByLabelText('Offset')).toHaveValue(2);
+    expect(updateMusicVideoScene).toHaveBeenCalledTimes(1);
+    expect(updateMusicVideoScene).toHaveBeenLastCalledWith('mv-1', 's1', { speedFps: 1 }, { silent: true });
+    expect(screen.getByRole('button', { name: 'Prepare clip with music' })).toBeDisabled();
+
+    await act(async () => finishFirst());
+    expect(screen.getByLabelText('Speed')).toHaveValue(3);
+    expect(screen.getByLabelText('Offset')).toHaveValue(2);
+    expect(updateMusicVideoScene).toHaveBeenCalledTimes(2);
+    expect(updateMusicVideoScene).toHaveBeenLastCalledWith('mv-1', 's1', { speedFps: 3, offsetFrames: 2 }, { silent: true });
+    expect(screen.getByRole('button', { name: 'Prepare clip with music' })).toBeDisabled();
+
+    await act(async () => finishNext());
+    expect(screen.getByLabelText('Speed')).toHaveValue(3);
+    expect(screen.getByLabelText('Offset')).toHaveValue(2);
+    expect(screen.getByRole('button', { name: 'Prepare clip with music' })).toBeEnabled();
+  });
+});
+
 describe('MusicVideo musical timeline', () => {
   it('renders waveform, beat evidence, legend, and the detected rhythmic window', async () => {
     await openProject(PROJECT_ANALYZED, 'produce');

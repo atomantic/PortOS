@@ -62,7 +62,7 @@ function SceneClipMediaPreview({
       )}
       {/* Speed and offset by hand, from the same clip file, in the player and the final render. */}
       {scene.videoHistoryId && layer === 'footage' && (
-        <SceneClipTiming fieldId={fieldId} scene={scene} onChange={applyPatch} />
+        <SceneClipTiming fieldId={fieldId} scene={scene} onChange={applyPatch} disabled={takes.busy || takes.pending?.size > 0} />
       )}
       {/* A clip of another shape (a 3:2 local render) zooms to fill, or keeps its ratio with covered edges. */}
       {clipId && (
