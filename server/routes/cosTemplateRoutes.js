@@ -9,8 +9,7 @@ import { limitQuerySchema, parsePagination } from '../lib/queryValidation.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import {
   createTaskTemplateSchema,
-  updateTaskTemplateSchema,
-  taskTemplateFromTaskSchema
+  updateTaskTemplateSchema
 } from '../lib/cos/cosValidation.js';
 
 const router = Router();
@@ -28,22 +27,9 @@ router.get('/templates/popular', asyncHandler(async (req, res) => {
   res.json({ templates });
 }));
 
-// GET /api/cos/templates/categories - Get template categories
-router.get('/templates/categories', asyncHandler(async (req, res) => {
-  const categories = await taskTemplates.getCategories();
-  res.json({ categories });
-}));
-
 // POST /api/cos/templates - Create a new template
 router.post('/templates', asyncHandler(async (req, res) => {
   const template = await taskTemplates.createTemplate(validateRequest(createTaskTemplateSchema, req.body));
-  res.json({ success: true, template });
-}));
-
-// POST /api/cos/templates/from-task - Create template from task
-router.post('/templates/from-task', asyncHandler(async (req, res) => {
-  const { task, templateName } = validateRequest(taskTemplateFromTaskSchema, req.body);
-  const template = await taskTemplates.createTemplateFromTask(task, templateName);
   res.json({ success: true, template });
 }));
 

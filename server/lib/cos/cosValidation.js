@@ -188,7 +188,6 @@ const taskStatusInputSchema = z.preprocess(
 // Query schemas for the CoS insight/learning/workflow reads. Counts stay strings: each handler
 // clamps or defaults them itself, so a bad number degrades exactly as before; unknown keys are stripped.
 export const cosActivityCalendarQuerySchema = z.object({ weeks: z.string().optional() });
-export const cosDigestCompareQuerySchema = z.object({ week1: z.string().optional(), week2: z.string().optional() });
 export const cosWorkflowQuerySchema = z.object({ hours: z.string().optional() });
 
 export const cosTaskDeleteQuerySchema = z.object({ type: cosTaskTypeSchema.default('user') });
@@ -665,21 +664,6 @@ export const createTaskTemplateSchema = z.object({
 
 // PUT accepts any subset — the route only forwards the keys actually present.
 export const updateTaskTemplateSchema = createTaskTemplateSchema.partial();
-
-// POST /templates/from-task snapshots a live task into a user template. Only the
-// fields createTemplateFromTask actually reads are accepted.
-export const taskTemplateFromTaskSchema = z.object({
-  task: z.object({
-    description: z.string().min(1).max(4000),
-    context: z.string().max(4000).optional(),
-    provider: providerRefFieldSchema.optional(),
-    model: z.string().max(200).optional(),
-    effort: z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).optional()),
-    executionOptions: executionOptionsSchema.optional(),
-    app: z.string().max(200).optional(),
-  }),
-  templateName: z.string().trim().min(1).max(120).optional(),
-});
 
 // CLI outcome reports carry only a bounded projection, never raw output or
 // provider headers. A successful process exit alone is not a review verdict.

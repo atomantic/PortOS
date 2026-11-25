@@ -230,11 +230,5 @@ export function createPortOSPromptsRoutes(aiToolkit) {
     res.json({ preview });
   }));
 
-  // POST /api/prompts/reload - Reload prompts from disk
-  router.post('/reload', asyncHandler(async (req, res) => {
-    await promptsService.init();
-    res.json({ success: true });
-  }));
-
   return router;
 }

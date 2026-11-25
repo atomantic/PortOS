@@ -19,7 +19,6 @@ import {
   deleteProject,
   renderProject,
   attachSseClient,
-  cancelRender,
 } from '../services/videoTimeline/local.js';
 import {
   IMAGE_ASSET_KINDS,
@@ -168,11 +167,6 @@ router.post('/projects/:id/render', asyncHandler(async (req, res) => {
 router.get('/:jobId/events', (req, res) => {
   const ok = attachSseClient(req.params.jobId, res);
   if (!ok) throw new ServerError('Job not found or expired', { status: 404 });
-});
-
-router.post('/:jobId/cancel', (req, res) => {
-  const cancelled = cancelRender(req.params.jobId);
-  res.json({ ok: cancelled });
 });
 
 export default router;

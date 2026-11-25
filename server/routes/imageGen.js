@@ -381,10 +381,6 @@ router.post('/models/:modelId/download', asyncHandler(async (req, res) => {
   await startHfDownloadStream({ req, res, repos, force });
 }));
 
-router.get('/loras', asyncHandler(async (_req, res) => {
-  res.json(await local.listLoraFilenames());
-}));
-
 const galleryReads = createImageGalleryHandlers(local.listGallery);
 router.get('/gallery/collections', galleryReads.collections);
 router.get('/gallery/facets', galleryReads.facets);

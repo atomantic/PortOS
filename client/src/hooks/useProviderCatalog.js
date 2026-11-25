@@ -92,11 +92,10 @@ function listenForProviderChanges() {
  *   harness), named `"<harness label> · <METHOD> · <service label>"`,
  *   `" (free)"` suffixed for a free-plan service — `null` when the id resolves to
  *   neither grammar or the composite names a harness/service this catalog
- *   doesn't know. Never contacts the server: unlike
- *   `GET /providers/composites/:id`, this is a pure lookup over the fetched
+ *   doesn't know. Never contacts the server: a pure lookup over the fetched
  *   catalog, so it renders a saved value instantly without a round trip, and
- *   carries no ELIGIBILITY verdict — pair it with the readiness/composites
- *   endpoints when "is this composite runnable right now" matters.
+ *   carries no ELIGIBILITY verdict — pair it with the readiness
+ *   endpoint when "is this composite runnable right now" matters.
  * - `savePreset(input)` — `POST /providers/presets` ("Save as preset"),
  *   returned rather than imported separately so the popover doesn't need its
  *   own service import.

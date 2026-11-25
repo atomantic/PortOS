@@ -1,5 +1,5 @@
 /**
- * App runtime lifecycle: PM2 start/stop/restart, update, build, status, logs,
+ * App runtime lifecycle: PM2 start/stop/restart, update, build, logs,
  * and ecosystem-config refresh.
  *
  *   POST /:id/native-launch  → { success, processName, result }
@@ -8,7 +8,6 @@
  *   POST /:id/restart        → { success, results }  (self-restart for PortOS)
  *   POST /:id/update         → { success, steps, progress }
  *   POST /:id/build          → { success, output }
- *   GET  /:id/status         → { [process]: status }
  *   GET  /:id/logs           → { processName, lines, logs }
  *   POST /:id/refresh-config → { success, updated, app, processes }
  */
@@ -271,25 +270,6 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
   }
 
   res.json({ success: true, output: result.output });
-}));
-
-// GET /api/apps/:id/status - Get PM2 status
-router.get('/:id/status', loadApp, asyncHandler(async (req, res) => {
-  const app = req.loadedApp;
-
-  if (!usesPm2(app.type)) {
-    return res.json({});
-  }
-
-  const statuses = {};
-
-  for (const name of app.pm2ProcessNames || []) {
-    const status = await pm2Service.getAppStatus(name, app.pm2Home)
-      .catch(err => ({ status: 'error', error: err.message }));
-    statuses[name] = status;
-  }
-
-  res.json(statuses);
 }));
 
 // GET /api/apps/:id/logs - Get logs

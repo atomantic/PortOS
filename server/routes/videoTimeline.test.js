@@ -161,12 +161,4 @@ describe('videoTimeline routes', () => {
     });
   });
 
-  describe('POST /:jobId/cancel', () => {
-    it('returns the cancel result', async () => {
-      svc.cancelRender.mockReturnValue(true);
-      const r = await request(app).post('/api/video-timeline/job-1/cancel').send({});
-      expect(r.status).toBe(200);
-      expect(r.body.ok).toBe(true);
-    });
-  });
 });

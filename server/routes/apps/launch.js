@@ -1,9 +1,8 @@
 /**
- * Local launch helpers: open the app in an editor, in Claude Code, in Xcode, or
+ * Local launch helpers: open the app in an editor, in Xcode, or
  * in the OS file manager. Each spawns a detached child process.
  *
  *   POST /:id/open-editor → { success, command, path }
- *   POST /:id/open-claude → { success, path }
  *   POST /:id/open-folder → { success, path }
  *   POST /:id/open-xcode  → { success, path }
  */
@@ -114,25 +113,6 @@ router.post('/:id/open-editor', loadApp, asyncHandler(async (req, res) => {
   });
 
   res.json({ success: true, command: editorCommand, path: app.repoPath });
-}));
-
-// POST /api/apps/:id/open-claude - Open Claude Code in app directory
-router.post('/:id/open-claude', loadApp, asyncHandler(async (req, res) => {
-  const app = req.loadedApp;
-
-  if (!await pathExists(app.repoPath)) {
-    throw new ServerError('App path does not exist', { status: 400, code: 'PATH_NOT_FOUND' });
-  }
-
-  // shell:true on Windows so `claude.cmd` resolves (see open-editor above for the
-  // Node 20.12.2 rationale). No user args reach the command line here.
-  spawnDetached('claude', [], {
-    cwd: app.repoPath,
-    shell: process.platform === 'win32'
-  });
-
-  console.log(`🤖 Opened Claude Code in ${app.name}`);
-  res.json({ success: true, path: app.repoPath });
 }));
 
 // POST /api/apps/:id/open-folder - Open app folder in file manager

@@ -10,7 +10,6 @@ import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.j
 import { recordLearningInsightSchema, dismissRecommendationSchema, restoreRecommendationSchema, generateWeeklyDigestSchema } from '../lib/cos/cosValidation.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { limitQuerySchema, parsePagination } from '../lib/queryValidation.js';
-import { cosDigestCompareQuerySchema } from '../lib/cos/cosValidation.js';
 
 const router = Router();
 
@@ -170,27 +169,6 @@ router.get('/digest/list', asyncHandler(async (req, res) => {
 router.get('/digest/progress', asyncHandler(async (req, res) => {
   const progress = await weeklyDigest.getCurrentWeekProgress();
   res.json(progress);
-}));
-
-// GET /api/cos/digest/text - Get text summary suitable for notifications
-router.get('/digest/text', asyncHandler(async (req, res) => {
-  const text = await weeklyDigest.generateTextSummary();
-  res.type('text/plain').send(text);
-}));
-
-// GET /api/cos/digest/compare - Compare two weeks (must be before :weekId)
-router.get('/digest/compare', asyncHandler(async (req, res) => {
-  const { week1, week2 } = validateRequest(cosDigestCompareQuerySchema, req.query);
-
-  if (!week1 || !week2) {
-    throw new ServerError('Both week1 and week2 query parameters are required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-
-  const comparison = await weeklyDigest.compareWeeks(week1, week2);
-  if (!comparison) {
-    throw new ServerError('One or both weeks not found', { status: 404, code: 'NOT_FOUND' });
-  }
-  res.json(comparison);
 }));
 
 // GET /api/cos/digest/:weekId - Get digest for specific week

@@ -33,7 +33,7 @@ A preset id is `^[a-z0-9][a-z0-9-]*$`; `.` and `@` are outside that alphabet, so
 
 The record is cached per (composite, service revision, settings revision) and **never persisted**: it does not appear in `providers.json`, in `GET /api/providers`, or in the management graph. A `field` credential is attached non-enumerably (the `attachGatewaySiblingKey` discipline) so a spread or JSON round-trip drops it; an env-borne key sits under a `secretEnvVars` name every client-facing sanitizer redacts.
 
-An ineligible composite resolves to `null`, and the caller's existing "provider not found" path names it — a saved selection is never silently substituted. `GET /api/providers/composites/:id` returns the verdict with a `code` / `reason` (`harness-disabled`, `service-disabled`, `service-unknown`, `incompatible`, `bootstrap-unknown`, `SERVICE_CREDENTIAL_REQUIRED`, …) for a picker to show beside it. Re-enabling the harness or the service restores it with nothing to migrate.
+An ineligible composite resolves to `null`, and the caller's existing "provider not found" path names it — a saved selection is never silently substituted. The resolver's verdict carries a `code` / `reason` (`harness-disabled`, `service-disabled`, `service-unknown`, `incompatible`, `bootstrap-unknown`, `SERVICE_CREDENTIAL_REQUIRED`, …) (`describeCompositeProvider`) for a picker to show beside it. Re-enabling the harness or the service restores it with nothing to migrate.
 
 ## Where a composite is accepted
 
@@ -50,9 +50,8 @@ Fallback selection admits a composite only where a stored candidate would be adm
 | `settings.harnesses` | `{ [harnessId]: { enabled } }` — the user's explicit word per harness; validated on `PUT /api/settings` |
 | `settings.credentialBootstraps` | `{ [slug]: { label, command, args?, argsSeparator?, setupCommand?, harnessNames? } }` — the wrapper CLIs a `+suffix` names; saving never spawns |
 | `GET /api/providers/catalog` | Every axis a picker composes over: harnesses (with `enabled` / `detected` / `version`), services, bootstraps, `compatibility` (harness → service slugs), `effortLevels` per harness, `effortLevelsByModel`, and the sanitized presets — derived from cache and settings only |
-| `GET/PUT /api/providers/harnesses[/:id]` | Read / flip enablement |
+| `PUT /api/providers/harnesses/:id` | Flip a harness's enablement (the read rides `GET /api/providers/catalog`) |
 | `GET/PUT /api/providers/bootstraps` | Read / replace the bootstrap table |
-| `GET /api/providers/composites/:id` | One composite's verdict and sanitized record |
 | `GET /api/providers/readiness?providerId=<composite>` | Readiness for one composition |
 
 `GET /api/providers` stays presets-only, so existing consumers are unaffected; each record now also carries its preset structure (see **Presets**). The management surface over these axes is the AI Providers page — [AI_PROVIDERS.md](./AI_PROVIDERS.md) (#7567). `GET /api/providers/service-definitions` lists every definition an instance can be created from, with its plans, transports (and default base URLs) and where a key is obtained.

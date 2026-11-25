@@ -79,13 +79,8 @@ describe('notifications routes', () => {
   });
 
   describe('counts', () => {
-    it('reports the unread count and the counts grouped by type', async () => {
+    it('reports the unread count', async () => {
       expect((await get('/count')).body).toEqual({ count: 4 });
-      expect((await get('/counts')).body).toEqual({
-        total: 5,
-        unread: 4,
-        byType: { [MEMORY_APPROVAL]: 3, [TASK_APPROVAL]: 1, [BRIEFING_READY]: 1 },
-      });
     });
   });
 
@@ -119,11 +114,10 @@ describe('notifications routes', () => {
   });
 
   describe('DELETE /api/notifications/:id', () => {
-    it('removes the notification from later lists and counts', async () => {
+    it('removes the notification from later lists', async () => {
       const res = await request(app).delete('/api/notifications/n5');
       expect(res.status).toBe(200);
       expect(ids(await get())).toEqual(['n4', 'n3', 'n2', 'n1']);
-      expect((await get('/counts')).body.total).toBe(4);
     });
 
     it('returns 404 when the notification is missing', async () => {
@@ -134,12 +128,12 @@ describe('notifications routes', () => {
   describe('DELETE /api/notifications', () => {
     // Notifications whose source still owns an obligation (approvals) stay as hidden
     // history; everything else is dropped. Both leave the visible list empty.
-    it('clears the visible list and the counts', async () => {
+    it('clears the visible list and the unread count', async () => {
       const res = await request(app).delete('/api/notifications');
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ success: true, cleared: 5 });
       expect(ids(await get())).toEqual([]);
-      expect((await get('/counts')).body).toEqual({ total: 0, unread: 0, byType: {} });
+      expect((await get('/count')).body).toEqual({ count: 0 });
     });
   });
 });

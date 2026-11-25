@@ -5,7 +5,7 @@
  */
 
 import { musicVideoSceneCreateSchema, musicVideoSceneUpdateSchema } from '../lib/musicVideo/musicVideoValidation.js';
-import { musicVideoColorMatchTakePatchSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoSceneReorderSchema, musicVideoVaryWipesSchema, musicVideoSceneSplitSchema, musicVideoLyricCutSchema, musicVideoSceneStartSchema, musicVideoSceneEndSchema, musicVideoSceneFrameRenderSchema, musicVideoSceneFramesRenderSchema, musicVideoSceneClipRenderSchema, musicVideoSceneClipsRenderSchema, musicVideoTakeInputSchema, musicVideoTakeReviewSchema, musicVideoPerformanceRepairSchema, musicVideoApproveFinalSchema, musicVideoUpgradeSchema, musicVideoTakeSelectSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
+import { musicVideoColorMatchTakePatchSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoSceneReorderSchema, musicVideoVaryWipesSchema, musicVideoSceneSplitSchema, musicVideoLyricCutSchema, musicVideoSceneStartSchema, musicVideoSceneEndSchema, musicVideoSceneFrameRenderSchema, musicVideoSceneClipRenderSchema, musicVideoTakeInputSchema, musicVideoTakeReviewSchema, musicVideoPerformanceRepairSchema, musicVideoApproveFinalSchema, musicVideoUpgradeSchema, musicVideoTakeSelectSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { renderShotDownload } from '../services/musicVideo/shotDownload.js';
 import { Router } from 'express';
 import { z } from 'zod';
@@ -115,21 +115,6 @@ router.post('/:id/scenes/:sceneId/merge-previous', asyncHandler(async (req, res)
   const { backend } = validateRequest(musicVideoSceneSplitSchema, req.body ?? {});
   const { scene, edit } = await mergeProjectPreviousScene(req.params.id, req.params.sceneId, { backend });
   res.json({ scene, edit });
-}));
-
-// The shot card's frame and clip (#15583). One action loads cast media, resolves
-// the shot's references and submits the same image or video job the card would.
-router.post('/:id/scenes/frames', asyncHandler(async (req, res) => {
-  const project = await requireProject(req.params.id);
-  const { sceneIds, ...options } = validateRequest(musicVideoSceneFramesRenderSchema, req.body ?? {});
-  res.json(await renderSceneFrames(project, { sceneIds, ...options }));
-}));
-
-router.post('/:id/scenes/clips', asyncHandler(async (req, res) => {
-  const project = await requireProject(req.params.id);
-  const parsed = validateRequest(musicVideoSceneClipsRenderSchema, req.body ?? {});
-  const { sceneIds, ...options } = parsed;
-  res.json(await renderSceneClips(project, { sceneIds, ...options }));
 }));
 
 router.post('/:id/scenes/:sceneId/frame', asyncHandler(async (req, res) => {

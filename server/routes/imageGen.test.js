@@ -103,7 +103,6 @@ vi.mock('../services/imageGen/index.js', () => ({
   resolveImageCleaners,
   local: {
     listImageModels: vi.fn(() => []),
-    listLoraFilenames: vi.fn(async () => []),
     listGallery: vi.fn(async () => []),
     assertGalleryFilename: vi.fn(),
     readImageSidecar: vi.fn(async () => ({ path: '', metadata: {} })),

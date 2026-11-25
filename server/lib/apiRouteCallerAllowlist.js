@@ -22,6 +22,8 @@ export const ROUTE_CALLER_CLASSES = Object.freeze({
 
 export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
   peer: Object.freeze([
+    // server/services/appQualityFederation.js requests it from peers.
+    '/api/apps/quality-federation',
     '/api/brain/reconcile/checksum',
     '/api/brain/reconcile/manifest',
     '/api/brain/reconcile/snapshot',
@@ -49,6 +51,12 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/federation/media/v1/jobs/:id/result',
     '/api/federation/media/v1/status',
     '/api/instances/peers/:id/query',
+    // server/services/instances.js requests it from peers.
+    '/api/instances/peers/announce',
+    // server/services/instances.js requests it from peers.
+    '/api/instances/peers/pair-secret',
+    // server/services/instances.js requests it from peers.
+    '/api/instances/peers/sync-categories',
     '/api/instances/sync-status',
     '/api/managed-visitors/v1/admissions',
     '/api/managed-visitors/v1/admissions/cancel',
@@ -56,6 +64,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/managed-visitors/v1/sessions/:id/actions',
     '/api/managed-visitors/v1/sessions/:id/leave',
     '/api/managed-visitors/v1/sessions/:id/observations',
+    // server/services/syncOrchestrator.js requests it from peers.
+    '/api/memory/sync',
     '/api/peer-media/copy',
     '/api/peer-media/delete',
     '/api/peer-media/release',
@@ -95,6 +105,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
   ]),
   'agent-facing': Object.freeze([
     '/api/alerts',
+    // server/lib/apiOperationContracts.js: a public OpenAPI operation exposed to agents through the API tool resource.
+    '/api/apps/:id/logs',
     '/api/auth/logout',
     '/api/browser/health',
     '/api/code-review/cli-outcome',
@@ -108,6 +120,10 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/cos/learning/insights',
     '/api/cos/merge-handoff',
     '/api/cos/tasks/:id/challenge',
+    // server/services/autonomousJobs/defaults.js: the generated job prompts tell the agent to call it.
+    '/api/cos/tasks/internal',
+    // server/services/autonomousJobs/defaults.js: the generated job prompts tell the agent to call it.
+    '/api/cos/tasks/user',
     '/api/cos/tools/call',
     '/api/cos/tools/calls/:requestId',
     '/api/creative-director/:id/plan',
@@ -135,6 +151,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/spotify/oauth/callback',
   ]),
   'operator-script': Object.freeze([
+    // docs/API.md names the activity feed mount for API callers; the browser reads its sub-routes.
+    '/api/agents/activity',
     '/api/agents/tools/moltworld/queue/:id/complete',
     '/api/agents/tools/moltworld/queue/:id/fail',
     '/api/apple-health/days/:date',
@@ -149,6 +167,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     // Operator/API erasure path for data/contacts-cache.json + sync state (#18130).
     '/api/contacts/cache',
     '/api/cos/agents/:id/release-candidate',
+    // docs/features/chief-of-staff.md route table.
+    '/api/cos/jobs/incidents',
     '/api/cos/mind/maintainer/watchdog',
     // scripts/portos-acp.js (docs/ACP.md): the ACP stdio adapter's live Persistent Mind feed; the browser uses Socket.IO.
     '/api/cos/mind/stream',
@@ -171,8 +191,22 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/managed-visitor-admin',
     '/api/managed-visitor-admin/:appId/credential',
     '/api/meatspace/post/memory-drill',
+    // docs/features/post.md route table (spaced-repetition due list).
+    '/api/meatspace/post/memory-items/due',
+    // docs/features/memory-system.md route table (memory maintenance endpoints, #18655).
+    '/api/memory/categories',
+    '/api/memory/consolidate',
+    '/api/memory/decay',
+    '/api/memory/expired',
+    '/api/memory/link',
+    '/api/memory/tags',
+    '/api/memory/timeline',
+    // docs/features/product-surfaces.md: the read of a server-owned production run started over this API.
+    '/api/music-video/:id/production-runs/:runId',
     // docs/features/product-surfaces.md: a music video's spend by lane, for API callers; the page reads it off the project.
     '/api/music-video/:id/spend',
+    // docs/API.md: the full character style, for API callers; the client reads the list.
+    '/api/music-video/character-styles/:id',
     '/api/ports/allocate',
     '/api/ports/scan',
     // docs/features/agent-skills.md (P5 surfaces): the Skill Registry routes, for agents and API callers.
@@ -189,6 +223,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/agent-context/manifest',
     '/api/agent-context/mcp',
     '/api/api-docs/asyncapi.json',
+    // client/src/components/AppIcon.jsx builds the <img> URL.
+    '/api/apps/:id/icon',
     '/api/attachments/:filename',
     '/api/avatar/model.glb',
     '/api/calendar/events/:accountId/:eventId',
@@ -204,6 +240,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/harnesses/action',
     '/api/harnesses/review-update',
     '/api/image-gen/:jobId/events',
+    // client/src/hooks/useModelDownloadStatus.js builds the SSE URL per kind.
+    '/api/image-gen/models/:modelId/download',
     '/api/image-gen/setup/flux2-install',
     '/api/image-gen/setup/flux3-install',
     '/api/image-gen/setup/install',
@@ -224,13 +262,19 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/music-video/:id/scenes/:sceneId/download',
     '/api/music/setup/runtime-install',
     '/api/pipeline/issues/:id/comic.pdf',
+    // client/src/components/providers/ExecutionOptionsSelect.jsx.
+    '/api/providers/:id/execution-options',
     '/api/providers/fleet-host/setup',
     '/api/providers/readiness/setup',
     '/api/providers/runtimes/install',
     '/api/search',
+    // client/src/hooks/useMediaJobSse.js builds the EventSource URL per kind.
+    '/api/video-gen/:jobId/events',
     '/api/video-gen/ic-loras/:mode/download',
     '/api/video-gen/setup/runtime-install',
     '/api/video-gen/text-encoders/:id/download',
+    // client/src/pages/VideoTimelineEditor.jsx EventSource.
+    '/api/video-timeline/:jobId/events',
     '/api/voice/config',
     '/api/voice/public/synthesize',
     '/api/voice/status',
@@ -246,6 +290,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/catalog/export',
     '/api/continuous-video/:jobId/events',
     '/api/decks/:id/generate-prompts/progress',
+    // client/src/services/apiVideoDownload.js: videoDownloadEventsUrl.
+    '/api/devtools/video-download/:jobId/events',
     '/api/eidoverse/world/foundations/:id',
     '/api/html-pages/runs/:id/pages/:index/file',
     '/api/image-gen/setup/check',
@@ -258,9 +304,19 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/music-video/:id/dcp/:artifactId/report',
     '/api/music-video/:id/dev-artifacts/:artifactId/file',
     '/api/music-video/:id/sharing-copy/download',
+    // client/src/services/apiMusicVideo.js: musicVideoDcpEventsUrl.
+    '/api/music-video/dcp/:jobId/events',
+    // client/src/services/apiMusicVideo.js: excerpt events URL helper.
+    '/api/music-video/excerpt/:jobId/events',
     '/api/music-video/lyrics/align/:jobId/events',
     '/api/music-video/lyrics/verify/:jobId/events',
+    // client/src/services/apiMusicVideo.js: musicVideoPublishKitEventsUrl.
+    '/api/music-video/publish-kit/:jobId/events',
     '/api/music-video/publish/cover-fonts/:fontId/file',
+    // client/src/services/apiMusicVideo.js: render events URL helper.
+    '/api/music-video/render/:jobId/events',
+    // client/src/services/apiMusicVideo.js: transcribe-midi events URL helper.
+    '/api/music-video/transcribe-midi/:jobId/events',
     '/api/music-video/vocal-stem/separate/:jobId/events',
     '/api/music/models',
     '/api/music/models/:engine',
@@ -289,6 +345,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/timeline/import/takeout-location',
     '/api/timeline/import/whatsapp',
     '/api/timeline/import/youtube',
+    // client/src/services/apiTracks.js: import events URL helper.
+    '/api/tracks/import/:jobId/events',
     '/api/voice/engines',
     '/api/voice/facetime/call',
     '/api/voice/facetime/hangup',

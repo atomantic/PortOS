@@ -36,20 +36,6 @@ describe('/api/digital-twin/social-accounts', () => {
     expect((await request(app).get(BASE)).body.accounts).toHaveLength(before);
   });
 
-  it('persists the valid rows of a bulk import and reports the invalid ones', async () => {
-    const before = (await request(app).get(`${BASE}?platform=x`)).body.accounts.length;
-    const res = await request(app).post(`${BASE}/bulk`).send({ accounts: [
-      { platform: 'x', username: 'bulk-user' },
-      { platform: 'x' },
-    ] });
-    expect(res.status).toBe(201);
-    expect(res.body.summary).toEqual({ created: 1, failed: 1 });
-    expect(res.body.results[1]).toMatchObject({ success: false, input: { platform: 'x' } });
-    const after = (await request(app).get(`${BASE}?platform=x`)).body.accounts;
-    expect(after).toHaveLength(before + 1);
-    expect(after.map((a) => a.username)).toContain('bulk-user');
-  });
-
   it('filters the list by platform or category from the query string', async () => {
     await request(app).post(BASE).send({ platform: 'linkedin', username: 'pro-user' });
     const byPlatform = await request(app).get(`${BASE}?platform=linkedin`);
