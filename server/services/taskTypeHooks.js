@@ -45,7 +45,6 @@ const HOOK_MODULES = {
     load: () => import('./errorLogTriageHooks.js')
   },
 };
-const PAYLOAD_OPTIONAL_OUTPUT_HOOKS = new Set();
 
 async function loadHookModule(taskType) {
   if (!isProgrammaticIoTaskType(taskType)) return null;
@@ -59,11 +58,6 @@ async function loadHookModule(taskType) {
  */
 export function isProgrammaticIoTaskType(taskType) {
   return typeof taskType === 'string' && Object.hasOwn(HOOK_MODULES, taskType);
-}
-
-/** Whether recovery may run this output hook with no worktree/sentinel left. */
-export function canRunTaskOutputHookWithoutPayload(taskType) {
-  return PAYLOAD_OPTIONAL_OUTPUT_HOOKS.has(taskType);
 }
 
 /**

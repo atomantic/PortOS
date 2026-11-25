@@ -80,7 +80,6 @@ vi.mock('./agentState.js', () => ({
   consumePausedAgentExit: vi.fn(),
   registerSpawnedAgent: vi.fn(),
   unregisterSpawnedAgent: vi.fn(),
-  metaStringOr: (value, fallback) => (typeof value === 'string' && value) ? value : fallback,
 }));
 vi.mock('../../lib/fileUtils.js', () => ({
   tryReadFile: vi.fn().mockResolvedValue(null),

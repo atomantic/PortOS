@@ -36,7 +36,6 @@ vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn(async () => nu
 vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})), addTask: vi.fn(async () => ({ id: 'investigation-test' })) }));
 vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(), on: vi.fn() } }));
 vi.mock('../taskTypeHooks.js', () => ({
-  canRunTaskOutputHookWithoutPayload: vi.fn(() => true),
   getTaskOutputHook: vi.fn(async () => null),
   getTaskOutputPayloadPredicate: vi.fn(async () => null),
   declaresNoCommitCriterion: vi.fn(() => false),
@@ -188,12 +187,16 @@ describe('retireDeadAgent (#8440)', () => {
     const hook = vi.fn(async () => ({ accepted: true }));
     getTaskOutputHook.mockResolvedValueOnce(hook);
     isProgrammaticIoTaskType.mockReturnValueOnce(true);
-    const result = await retireDeadAgent({ agent: { ...AGENT, result: { taskOutcome } }, task: TASK,
-      success: true, exitCode: 0, duration: 100 });
-    expect(result).toEqual({ success: true, taskOutcome, deliveryHeld: false });
-    expect(completeAgent).toHaveBeenCalledWith(AGENT.id, expect.objectContaining({ success: true,
-      validationPassed: true, taskOutcome }));
-    expect(updateTask).not.toHaveBeenCalled();
+    const workspacePath = await mkdtemp(join(tmpdir(), 'retire-verified-noop-'));
+    try {
+      await writeFile(join(workspacePath, '.agent-done-agent-dead'), JSON.stringify({ summary: 'Verified no-op.', payload: { verified: true }, taskOutcome }));
+      const result = await retireDeadAgent({ agent: { ...AGENT, metadata: { workspacePath }, result: { taskOutcome } }, task: TASK,
+        success: true, exitCode: 0, duration: 100 });
+      expect(result).toEqual({ success: true, taskOutcome, deliveryHeld: false });
+      expect(completeAgent).toHaveBeenCalledWith(AGENT.id, expect.objectContaining({ success: true,
+        validationPassed: true, taskOutcome }));
+      expect(updateTask).not.toHaveBeenCalled();
+    } finally { await rm(workspacePath, { recursive: true, force: true }); }
   });
 
   it.each([
@@ -245,14 +248,17 @@ describe('retireDeadAgent (#8440)', () => {
     removeCompletionSentinel.mockImplementation(async () => { order.push('sentinel-removed'); });
     completeAgentRun.mockImplementation(async () => { order.push('run'); });
     completeAgent.mockImplementation(async () => { order.push('agent'); });
-
-    await retireDeadAgent({
-      agent: { ...AGENT, metadata: { runId: 'run-1' } },
-      task: TASK,
-      success: false,
-      exitCode: 1,
-      duration: 0,
-    });
+    const workspacePath = await mkdtemp(join(tmpdir(), 'retire-hook-order-'));
+    try {
+      await writeFile(join(workspacePath, '.agent-done-agent-dead'), JSON.stringify({ summary: 'Done.', payload: { verified: true } }));
+      await retireDeadAgent({
+        agent: { ...AGENT, metadata: { runId: 'run-1', workspacePath } },
+        task: TASK,
+        success: false,
+        exitCode: 1,
+        duration: 0,
+      });
+    } finally { await rm(workspacePath, { recursive: true, force: true }); }
 
     expect(removeCompletionSentinel).toHaveBeenCalledWith({ agentId: 'agent-dead', agentState: expect.objectContaining({ id: 'agent-dead' }), task: TASK });
     expect(order).toEqual(['hook', 'run', 'agent', 'sentinel-removed']);
