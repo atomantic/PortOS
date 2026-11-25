@@ -2,38 +2,25 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import PageHeader from '../components/PageHeader';
 import { useSocketResource } from '../hooks/useSocketResource';
 import useMounted from '../hooks/useMounted';
-import {
-  Globe, Play, Square, RefreshCw, Settings, Activity,
-  Monitor, Wifi, WifiOff, Clock, Cpu, MemoryStick,
-  FileText, ChevronDown, ChevronRight, ExternalLink,
-  Mail, MessageSquare, Download, FolderOpen, Trash2
-} from 'lucide-react';
+import { Globe, RefreshCw, Settings, FileText, ExternalLink, Mail, MessageSquare } from 'lucide-react';
 import {
   getBrowserStatus,
   getBrowserConfig,
   updateBrowserConfig,
   getBrowserUpdatePreflight,
-  launchBrowser,
-  stopBrowser,
   restartBrowser,
   getBrowserLogs,
   navigateBrowser,
-  browserDownloadUrl,
   deleteBrowserDownload,
 } from '../services/apiSystem.js';
-import FolderPicker from '../components/FolderPicker';
 import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
-import { FormField } from '../components/ui/FormField';
-import { formatBytes, formatDateTime, formatDurationMs } from '../utils/formatters';
-import { pluralize } from '../lib/textUtils';
-import { PORTS } from '../lib/ports.js';
-import DraftNumber from '../components/ui/DraftNumber';
+import { BrowserConfigPanel } from '../components/browser/BrowserConfigPanel';
+import { BrowserControls, BrowserRestartBanner } from '../components/browser/BrowserControls';
+import { BrowserStatusCard, BrowserSidebar } from '../components/browser/BrowserStatus';
+import { BrowserPagesSection, BrowserDownloadsSection } from '../components/browser/BrowserContentSections';
 
 const STATUS_EVENTS = ['browser:changed'];
-// Mirrors HOST_CONTROL_FORBIDDEN_MESSAGE; the status read stays open but omits
-// page and download listings for a caller without host control (#12488).
-const HOST_CONTROL_NOTE = 'Open pages and downloads need an operator session, or a local connection when no password is set. Set an instance password to use them remotely.';
 const readStatus = () => getBrowserStatus({ silent: true });
 
 function deriveMacAppBundle(chromePath) {
@@ -41,11 +28,6 @@ function deriveMacAppBundle(chromePath) {
   const normalized = chromePath.trim().replaceAll('\\', '/');
   const appIndex = normalized.toLowerCase().indexOf('.app/');
   return appIndex >= 0 ? normalized.slice(0, appIndex + '.app'.length) : null;
-}
-
-function formatUptime(timestamp) {
-  if (!timestamp) return '-';
-  return formatDurationMs(Date.now() - timestamp);
 }
 
 export default function BrowserPage() {
@@ -245,100 +227,13 @@ export default function BrowserPage() {
         </p>
       )}
 
-      {/* Config panel */}
       {showConfig && configDraft && (
-        <div className="mb-6 p-4 bg-port-card border border-port-border rounded-xl">
-          <h3 className="text-lg font-semibold text-white mb-4">Browser Configuration</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <DraftNumber integer min={1} value={configDraft.cdpPort} onCommit={cdpPort => setConfigDraft(d => ({ ...d, cdpPort }))}>
-              {(field) => (
-                <FormField label="CDP Port">
-                  <input type="number" className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:outline-hidden focus:border-port-accent" {...field} />
-                </FormField>
-              )}
-            </DraftNumber>
-            <FormField label="CDP Host">
-              <input
-                type="text"
-                value={configDraft.cdpHost}
-                onChange={e => setConfigDraft(d => ({ ...d, cdpHost: e.target.value }))}
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:outline-hidden focus:border-port-accent"
-              />
-            </FormField>
-            <DraftNumber integer min={1} value={configDraft.healthPort} onCommit={healthPort => setConfigDraft(d => ({ ...d, healthPort }))}>
-              {(field) => (
-                <FormField label="Health Port">
-                  <input type="number" className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:outline-hidden focus:border-port-accent" {...field} />
-                </FormField>
-              )}
-            </DraftNumber>
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="headless"
-                checked={configDraft.headless}
-                onChange={e => setConfigDraft(d => ({ ...d, headless: e.target.checked }))}
-                className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
-              />
-              <label htmlFor="headless" className="text-sm text-gray-400">Headless mode</label>
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="autoConnect"
-                checked={configDraft.autoConnect}
-                onChange={e => setConfigDraft(d => ({ ...d, autoConnect: e.target.checked }))}
-                className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
-              />
-              <label htmlFor="autoConnect" className="text-sm text-gray-400">Auto-connect on startup</label>
-            </div>
-            <div className="sm:col-span-2 lg:col-span-3">
-              <label htmlFor="chromePath" className="block text-sm text-gray-400 mb-1">
-                Chrome binary path
-                <span className="ml-2 text-xs text-gray-600">(leave empty to use system default)</span>
-              </label>
-              <div className="flex items-center gap-2">
-                <input
-                  id="chromePath"
-                  type="text"
-                  value={configDraft.chromePath || ''}
-                  onChange={e => handleChromePathChange(e.target.value)}
-                  placeholder="/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary"
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono focus:outline-hidden focus:border-port-accent placeholder-gray-600"
-                />
-                <FolderPicker value={configDraft.chromePath || ''} mode="file" ariaLabel="Browse Chrome binary" onChange={handleChromePathChange} />
-              </div>
-              <p className="text-xs text-gray-500 mt-1">
-                Browse files on the PortOS host. Point at Chrome Canary, Chromium, Brave, or any Chromium-based browser to differentiate the PortOS-managed browser from your daily-driver Chrome.
-              </p>
-            </div>
-            <div className="sm:col-span-2 lg:col-span-3">
-              <label htmlFor="macAppBundle" className="block text-sm text-gray-400 mb-1">
-                macOS app bundle
-                <span className="ml-2 text-xs text-gray-600">(headed mode only; leave empty for system default)</span>
-              </label>
-              <div className="flex items-center gap-2">
-                <input
-                  id="macAppBundle"
-                  type="text"
-                  value={configDraft.macAppBundle || ''}
-                  onChange={e => setConfigDraft(d => ({ ...d, macAppBundle: e.target.value }))}
-                  placeholder="/Applications/Google Chrome Canary.app"
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono focus:outline-hidden focus:border-port-accent placeholder-gray-600"
-                />
-                <FolderPicker value={configDraft.macAppBundle || ''} ariaLabel="Browse macOS app bundle" onChange={macAppBundle => setConfigDraft(d => ({ ...d, macAppBundle }))} />
-              </div>
-            </div>
-          </div>
-          <div className="mt-4 flex justify-end">
-            <button
-              onClick={handleSaveConfig}
-              className="px-3 py-1.5 bg-port-accent text-white rounded-lg text-sm hover:bg-port-accent/80 transition-colors"
-            >
-              Save Config
-            </button>
-          </div>
-        </div>
+        <BrowserConfigPanel
+          configDraft={configDraft}
+          setConfigDraft={setConfigDraft}
+          handleChromePathChange={handleChromePathChange}
+          handleSaveConfig={handleSaveConfig}
+        />
       )}
 
       {/* Logs panel */}
@@ -364,171 +259,26 @@ export default function BrowserPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Status + Controls */}
         <div className="lg:col-span-2 min-w-0 space-y-6">
-          {/* Controls */}
-          <div className="bg-port-card border border-port-border rounded-xl p-5">
-            <h3 className="text-lg font-semibold text-white mb-4">Controls</h3>
-            {isRunning && !isConnected && (
-              <div role="status" className="mb-4 rounded-lg border border-port-warning/30 bg-port-warning/10 p-3 text-sm">
-                <p className="font-medium text-port-warning">Chrome is not reachable</p>
-                <p className="mt-1 text-gray-400">
-                  The launcher is running, but Chrome’s control connection is unavailable. Startup can take a few seconds.
-                  If this persists, restart the browser below. Restart may interrupt browser tasks.
-                </p>
-                {status.error && <p className="mt-2 text-port-warning break-words">{status.error}</p>}
-                <p className="mt-2 text-gray-400">
-                  If restarting does not help, open Logs for the launch error and Config to check the Chrome binary path
-                  and ports. On a machine without a desktop session, enable Headless mode, save, then restart.
-                </p>
-                <div className="mt-3 flex flex-wrap gap-3">
-                  <button onClick={() => setShowLogs(true)} className="text-port-accent underline">Show logs</button>
-                  <button onClick={() => setShowConfig(true)} className="text-port-accent underline">Edit configuration</button>
-                </div>
-              </div>
-            )}
-            <div className="flex flex-wrap gap-2">
-              {!isRunning ? (
-                <button
-                  onClick={() => handleAction('launch', launchBrowser)}
-                  disabled={loading || !status || actionLoading !== null}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-port-success text-white rounded-lg hover:bg-port-success/80 transition-colors disabled:opacity-50"
-                >
-                  {actionLoading === 'launch'
-                    ? <RefreshCw size={14} className="animate-spin" />
-                    : <Play size={14} />
-                  }
-                  Launch
-                </button>
-              ) : (
-                <>
-                  <button
-                    onClick={() => handleAction('stop', stopBrowser)}
-                    disabled={loading || !status || actionLoading !== null}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-port-error text-white rounded-lg hover:bg-port-error/80 transition-colors disabled:opacity-50"
-                  >
-                    {actionLoading === 'stop'
-                      ? <RefreshCw size={14} className="animate-spin" />
-                      : <Square size={14} />
-                    }
-                    Stop
-                  </button>
-                  <button
-                    onClick={reviewRestart}
-                    disabled={loading || !status || actionLoading !== null}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-port-warning text-white rounded-lg hover:bg-port-warning/80 transition-colors disabled:opacity-50"
-                  >
-                    {actionLoading === 'restart'
-                      ? <RefreshCw size={14} className="animate-spin" />
-                      : <RefreshCw size={14} />
-                    }
-                    {isConnected ? 'Restart' : 'Restart browser to reconnect'}
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-
+          <BrowserControls
+            status={status}
+            isRunning={isRunning}
+            isConnected={isConnected}
+            loading={loading}
+            actionLoading={actionLoading}
+            handleAction={handleAction}
+            reviewRestart={reviewRestart}
+            setShowLogs={setShowLogs}
+            setShowConfig={setShowConfig}
+          />
           {confirmRestart && isRunning && (
-            <div role="alert" className="rounded-lg border border-port-warning/30 bg-port-warning/10 p-4 text-sm text-gray-200 space-y-3">
-              <p>Restarting closes browser tabs, interrupts downloads and agent connections, and may lose unsaved work.</p>
-              {!restartPreflight && <p>Checking the running and installed browser versions…</p>}
-              {restartPreflight?.runningVersion && restartPreflight.state !== 'configuration-mismatch' && <p>Running Chrome {restartPreflight.runningVersion}; installed {restartPreflight.installedVersion}.</p>}
-              {restartPreflight?.state === 'configuration-mismatch' && <p>The connected browser differs from the configured app; the next app and version are unverified.</p>}
-              {restartPreflight?.state === 'downgrade-risk' && <p>Installed Chrome is older than the running browser; update the installed app before restarting.</p>}
-              {restartPreflight?.state === 'forbidden' && <p>{restartPreflight.message}</p>}
-              {restartPreflight && restartPreflight.state !== 'forbidden' && !restartPreflight.ticket && <p>The browser version could not be verified. A restart may load a different or older browser.</p>}
-              <div className="flex flex-wrap gap-2">
-                <button onClick={confirmBrowserRestart} disabled={actionLoading !== null || !restartPreflight || restartPreflight.state === 'forbidden'}
-                  className="rounded-lg bg-port-warning px-3 py-1.5 text-white disabled:opacity-50">
-                  {!restartPreflight ? 'Checking browser…' : restartPreflight.state === 'forbidden' ? 'Restart unavailable' : !restartPreflight.ticket ? 'Restart without version verification'
-                    : restartPreflight.state === 'downgrade-risk' ? 'Restart with older Chrome' : 'Restart browser now'}
-                </button>
-                <button onClick={cancelRestart} className="rounded-lg border border-port-border px-3 py-1.5">Cancel</button>
-              </div>
-            </div>
+            <BrowserRestartBanner
+              restartPreflight={restartPreflight}
+              actionLoading={actionLoading}
+              confirmBrowserRestart={confirmBrowserRestart}
+              cancelRestart={cancelRestart}
+            />
           )}
-
-          {/* Status card */}
-          <div className="bg-port-card border border-port-border rounded-xl p-5">
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-              <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-                <Activity size={20} className="text-port-accent" />
-                Browser Status
-              </h3>
-              <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-sm font-medium ${
-                isConnected
-                  ? 'bg-port-success/10 text-port-success'
-                  : isRunning
-                    ? 'bg-port-warning/10 text-port-warning'
-                    : 'bg-port-error/10 text-port-error'
-              }`}>
-                {isConnected ? <Wifi size={14} /> : <WifiOff size={14} />}
-                {isConnected ? 'Connected' : isRunning ? 'Running (not connected)' : loading ? 'Checking…' : !status ? 'Unknown' : 'Stopped'}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div className="bg-port-bg rounded-lg p-3">
-                <div className="text-xs text-gray-500 mb-1">Process</div>
-                <div className={`text-sm font-medium ${
-                  isRunning ? 'text-port-success' : 'text-port-error'
-                }`}>
-                  {status?.process?.status || 'unknown'}
-                </div>
-              </div>
-              <div className="bg-port-bg rounded-lg p-3">
-                <div className="text-xs text-gray-500 mb-1">CDP Endpoint</div>
-                <div className="text-sm font-medium text-white truncate" title={status?.cdpEndpoint}>
-                  {status?.cdpEndpoint || '-'}
-                </div>
-              </div>
-              <div className="bg-port-bg rounded-lg p-3">
-                <div className="text-xs text-gray-500 mb-1">Open Pages</div>
-                <div className="text-sm font-medium text-white">
-                  {status?.pageCount ?? '-'}
-                </div>
-              </div>
-              <div className="bg-port-bg rounded-lg p-3">
-                <div className="text-xs text-gray-500 mb-1">Uptime</div>
-                <div className="text-sm font-medium text-white flex items-center gap-1">
-                  <Clock size={12} />
-                  {formatUptime(status?.process?.uptime)}
-                </div>
-              </div>
-            </div>
-
-            {/* Process details row */}
-            {status?.process?.exists && (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-3">
-                <div className="bg-port-bg rounded-lg p-3">
-                  <div className="text-xs text-gray-500 mb-1 flex items-center gap-1"><Cpu size={10} /> CPU</div>
-                  <div className="text-sm font-medium text-white">{status.process.cpu ?? 0}%</div>
-                </div>
-                <div className="bg-port-bg rounded-lg p-3">
-                  <div className="text-xs text-gray-500 mb-1 flex items-center gap-1"><MemoryStick size={10} /> Memory</div>
-                  <div className="text-sm font-medium text-white">{formatBytes(status.process.memory)}</div>
-                </div>
-                <div className="bg-port-bg rounded-lg p-3">
-                  <div className="text-xs text-gray-500 mb-1">PID</div>
-                  <div className="text-sm font-medium text-white">{status.process.pid ?? '-'}</div>
-                </div>
-                <div className="bg-port-bg rounded-lg p-3">
-                  <div className="text-xs text-gray-500 mb-1">Restarts</div>
-                  <div className="text-sm font-medium text-white">{status.process.restarts ?? 0}</div>
-                </div>
-              </div>
-            )}
-
-            {/* Version info */}
-            {status?.version && (
-              <div className="mt-3 bg-port-bg rounded-lg p-3">
-                <div className="text-xs text-gray-500 mb-1">Browser Version</div>
-                <div className="text-sm text-white">
-                  {status.version.Browser || status.version['User-Agent'] || 'Unknown'}
-                </div>
-              </div>
-            )}
-          </div>
-
+          <BrowserStatusCard status={status} isRunning={isRunning} isConnected={isConnected} loading={loading} />
           {/* Navigate to URL */}
           {isConnected && (
             <div className="bg-port-card border border-port-border rounded-xl p-5">
@@ -588,187 +338,11 @@ export default function BrowserPage() {
             </div>
           )}
 
-          {/* Open Pages */}
-          <div className="bg-port-card border border-port-border rounded-xl overflow-hidden">
-            <button
-              onClick={() => setShowPages(s => !s)}
-              className="w-full flex items-center justify-between p-4 text-left hover:bg-port-border/30 transition-colors"
-            >
-              <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-                <Monitor size={20} className="text-port-accent" />
-                Open Pages
-                {status?.pages?.length > 0 && (
-                  <span className="ml-2 px-2 py-0.5 text-xs rounded-full bg-port-accent/20 text-port-accent">
-                    {status.pages.length}
-                  </span>
-                )}
-              </h3>
-              {showPages ? <ChevronDown size={18} className="text-gray-400" /> : <ChevronRight size={18} className="text-gray-400" />}
-            </button>
-            {showPages && (
-              <div className="border-t border-port-border">
-                {status?.contentRedacted ? (
-                  <div className="p-4 text-sm text-gray-500">{HOST_CONTROL_NOTE}</div>
-                ) : !status?.pages || status.pages.length === 0 ? (
-                  <div className="p-4 text-sm text-gray-500">
-                    {isConnected ? 'No pages open' : 'Browser not connected'}
-                  </div>
-                ) : (
-                  <div className="divide-y divide-port-border">
-                    {status.pages.map(page => (
-                      <div key={page.id} className="p-3 hover:bg-port-border/20 transition-colors">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="text-sm font-medium text-white truncate">
-                              {page.title}
-                            </div>
-                            <div className="text-xs text-gray-500 truncate mt-0.5">
-                              {page.url}
-                            </div>
-                          </div>
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-port-border text-gray-400 shrink-0">
-                            {page.type}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Downloads */}
-          <div className="bg-port-card border border-port-border rounded-xl overflow-hidden">
-            <button
-              onClick={() => setShowDownloads(s => !s)}
-              className="w-full flex items-center justify-between p-4 text-left hover:bg-port-border/30 transition-colors"
-            >
-              <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-                <Download size={20} className="text-port-accent" />
-                Downloads
-                {status?.downloads?.files?.length > 0 && (
-                  <span className="ml-2 px-2 py-0.5 text-xs rounded-full bg-port-accent/20 text-port-accent">
-                    {status.downloads.files.length}
-                  </span>
-                )}
-              </h3>
-              {showDownloads ? <ChevronDown size={18} className="text-gray-400" /> : <ChevronRight size={18} className="text-gray-400" />}
-            </button>
-            {showDownloads && (
-              <div className="border-t border-port-border">
-                {status?.downloads?.downloadDir && (
-                  <div className="px-4 py-2 bg-port-bg/50 border-b border-port-border flex items-center gap-2 text-xs text-gray-500">
-                    <FolderOpen size={12} />
-                    <span className="font-mono truncate">{status.downloads.downloadDir}</span>
-                  </div>
-                )}
-                {status?.contentRedacted ? (
-                  <div className="p-4 text-sm text-gray-500">{HOST_CONTROL_NOTE}</div>
-                ) : !status?.downloads?.files || status.downloads.files.length === 0 ? (
-                  <div className="p-4 text-sm text-gray-500">No downloads</div>
-                ) : (
-                  <div className="divide-y divide-port-border">
-                    {status.downloads.files.map(file => (
-                      <div key={file.name} className="p-3 hover:bg-port-border/20 transition-colors">
-                        <div className="flex items-center justify-between gap-2">
-                          <a
-                            href={browserDownloadUrl(file.name)}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="min-w-0 flex-1 group"
-                            title="Open in new tab"
-                          >
-                            <div className="text-sm font-medium text-white truncate group-hover:text-port-accent">
-                              {file.name}
-                            </div>
-                            <div className="text-xs text-gray-500 mt-0.5">
-                              {formatBytes(file.size)} &middot; {formatDateTime(file.modified)}
-                            </div>
-                          </a>
-                          <div className="flex items-center gap-1 shrink-0">
-                            <a
-                              href={`${browserDownloadUrl(file.name)}?attachment=1`}
-                              download={file.name}
-                              className="p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-port-border/50 transition-colors"
-                              title="Save to device"
-                              aria-label={`Save ${file.name} to device`}
-                            >
-                              <Download size={16} />
-                            </a>
-                            <button
-                              onClick={() => handleDeleteDownload(file.name)}
-                              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded-md text-gray-400 hover:text-port-error hover:bg-port-border/50 transition-colors"
-                              title="Delete file" aria-label="Delete file"
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          <BrowserPagesSection status={status} isConnected={isConnected} showPages={showPages} setShowPages={setShowPages} />
+          <BrowserDownloadsSection status={status} showDownloads={showDownloads} setShowDownloads={setShowDownloads} handleDeleteDownload={handleDeleteDownload} />
         </div>
 
-        {/* Sidebar */}
-        <div className="space-y-4">
-          {/* Quick Status */}
-          <div className="bg-port-card border border-port-border rounded-xl p-4">
-            <h3 className="font-semibold text-white mb-4">Connection Info</h3>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-gray-400 text-sm">CDP Port</span>
-                <span className="text-sm font-mono text-white">{status?.config?.cdpPort || '-'}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-400 text-sm">Health Port</span>
-                <span className="text-sm font-mono text-white">{status?.config?.healthPort || '-'}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-400 text-sm">Mode</span>
-                <span className={`text-sm font-medium ${(status?.headless ?? status?.config?.headless) === false ? 'text-port-warning' : 'text-port-success'}`}>
-                  {(status?.headless ?? status?.config?.headless) === false ? 'Headed (visible)' : 'Headless'}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-400 text-sm">Auto-connect</span>
-                <span className={`text-sm font-medium ${status?.config?.autoConnect ? 'text-port-success' : 'text-gray-500'}`}>
-                  {status?.config?.autoConnect ? 'Yes' : 'No'}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-400 text-sm">Downloads</span>
-                <span className="text-sm font-medium text-port-success">{pluralize(status?.downloads?.files?.length ?? 0, 'file')}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* CDP Endpoint card */}
-          <div className="bg-port-card border border-port-border rounded-xl p-4">
-            <h3 className="font-semibold text-white mb-3">CDP Endpoint</h3>
-            <div className="bg-port-bg rounded-lg p-3 font-mono text-xs text-port-accent break-all">
-              {status?.cdpEndpoint || `ws://127.0.0.1:${PORTS.CDP}`}
-            </div>
-            <p className="text-xs text-gray-500 mt-2">
-              Use this endpoint to connect Playwright or other CDP clients to the running browser instance.
-            </p>
-          </div>
-
-          {/* Instructions */}
-          <div className="bg-port-card border border-port-border rounded-xl p-4">
-            <h3 className="font-semibold text-white mb-3">Usage</h3>
-            <ul className="space-y-2 text-sm text-gray-400">
-              <li>1. Launch the browser using the controls</li>
-              <li>2. To sign in to sites, disable headless in Config, restart, then navigate to the login page</li>
-              <li>3. Auth cookies persist across restarts in the browser profile</li>
-              <li>4. Switch back to headless after authenticating</li>
-            </ul>
-          </div>
-        </div>
+        <BrowserSidebar status={status} />
       </div>
       </div>
     </div>
