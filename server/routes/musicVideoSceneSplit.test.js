@@ -8,7 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
-import { mkdirSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -44,6 +44,23 @@ beforeEach(async () => {
 afterAll(cleanupTempDataRoots);
 
 const split = (sceneId, body = {}) => request(app).post(`/api/music-video/${project.id}/scenes/${sceneId}/split`).send(body);
+const readiness = async () => {
+  const res = await request(app).get(`/api/music-video/${project.id}/production-review/readiness`);
+  expect(res.status).toBe(200);
+  return res.body.readiness;
+};
+
+const approver = { approvedAt: '2026-01-01T00:00:00.000Z', approvedBy: 'director', reviewer: { model: 'example' } };
+async function approveBoardFixture() {
+  const { productionReviewBasis } = await import('../services/musicVideo/productionReview.js');
+  await projects.mutateProjectRecord(project.id, (current) => {
+    const basis = productionReviewBasis(current);
+    return { project: { ...current, productionReview: { ...current.productionReview, approvals: { storyboard: {
+      ...approver, stage: 'storyboard', basis: basis.storyboard, shotsBasis: basis.storyboardShots,
+      values: Object.fromEntries(current.scenes.map((_, i) => [`scene ${i + 1} still direction`, 'Example storyboard direction. '.repeat(80)])),
+    } } } } };
+  });
+}
 
 describe('POST /:id/scenes/:sceneId/split', () => {
   it('splits an over-long performance shot at the lyric pauses, keeping the original id, takes and neighbours', async () => {
@@ -112,7 +129,7 @@ describe('POST /:id/scenes/:sceneId/split', () => {
 
   // Uniquely catches a cut at a chosen time losing the director's still locks, or a new mid-song shot landing at the end of the board.
   it('cuts a shot in two at a chosen time, keeping its still locked on both pieces and the board in song order', async () => {
-    const { productionReviewBasis, shotLocks } = await import('../services/musicVideo/productionReview.js');
+    const { shotLocks } = await import('../services/musicVideo/productionReview.js');
     const intro = await projects.addProjectScene(project.id, { label: 'Intro', startSec: 0, endSec: 10, prompt: 'Wide room' });
     const outro = await projects.addProjectScene(project.id, { label: 'Outro', startSec: 20, endSec: 30, prompt: 'Door' });
     // Added after the outro but timed between the two: it goes in between.
@@ -120,8 +137,10 @@ describe('POST /:id/scenes/:sceneId/split', () => {
     expect((await projects.getProject(project.id)).scenes.map((s) => [s.sceneId, s.order])).toEqual([[intro.sceneId, 0], [middle.sceneId, 1], [outro.sceneId, 2]]);
     await projects.updateScene(project.id, middle.sceneId, { referenceImageId: 'singer.png' });
     // A board approved before lock removal reads every shot it covers as locked.
-    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
-      productionReview: { ...current.productionReview, approvals: { storyboard: { basis: productionReviewBasis(current).storyboard } } } } }));
+    await approveBoardFixture();
+    expect((await readiness()).storyboard.shotLocks).toEqual(Object.fromEntries([intro, middle, outro].map(s => [s.sceneId, 'locked'])));
+    const before = (await projects.getProject(project.id)).productionReview;
+    expect(before.shotApprovals).toBeUndefined();
 
     expect((await split(middle.sceneId, { atSec: 25 })).body.code).toBe('MUSIC_VIDEO_SPLIT_OUT_OF_RANGE');
     const res = await split(middle.sceneId, { atSec: 13.5 });
@@ -129,6 +148,14 @@ describe('POST /:id/scenes/:sceneId/split', () => {
     const [first, second] = res.body.scenes;
     expect([first.sceneId, first.startSec, first.endSec, second.startSec, second.endSec]).toEqual([middle.sceneId, 10, 13.5, 13.5, 20]);
     expect(second).toMatchObject({ prompt: 'Close-up', referenceImageId: 'singer.png', videoHistoryId: null });
+    const review = (await projects.getProject(project.id)).productionReview;
+    expect(Buffer.byteLength(JSON.stringify(review)) - Buffer.byteLength(JSON.stringify(before))).toBeLessThan(1024 * res.body.edit.sceneIds.length);
+    expect(Object.keys(review.shotApprovals)).toHaveLength(4);
+    for (const approval of Object.values(review.shotApprovals)) {
+      expect(approval).toMatchObject({ ...approver, fromBoardApproval: true, basis: expect.any(String), v: 2 });
+      expect(approval).not.toHaveProperty('shotsBasis');
+      expect(approval).not.toHaveProperty('values');
+    }
 
     // A shot added after the split, mid-song, keeps every lock in place.
     const insert = await projects.addProjectScene(project.id, { label: 'Insert', startSec: 5, endSec: 6 });
@@ -138,5 +165,52 @@ describe('POST /:id/scenes/:sceneId/split', () => {
     const locks = shotLocks(stored);
     expect([locks[intro.sceneId], locks[middle.sceneId], locks[second.sceneId], locks[outro.sceneId], locks[insert.sceneId]])
       .toEqual(['locked', 'locked', 'locked', 'locked', 'open']);
+  });
+
+  it('opens the new piece when its borrowed still is replaced, while an original shot reads changed', async () => {
+    const shot = await projects.addProjectScene(project.id, { startSec: 0, endSec: 10 });
+    await projects.updateScene(project.id, shot.sceneId, { referenceImageId: 'singer.png' });
+    await approveBoardFixture();
+    const cut = await split(shot.sceneId, { atSec: 5 });
+    expect(cut.status).toBe(200);
+    const [, piece] = cut.body.scenes;
+    expect((await readiness()).storyboard.shotLocks).toEqual({ [shot.sceneId]: 'locked', [piece.sceneId]: 'locked' });
+
+    writeFileSync(join(ROOT(), 'images', 'replacement.png'), 'png-bytes');
+    for (const sceneId of [piece.sceneId, shot.sceneId]) {
+      const edit = await request(app).patch(`/api/music-video/${project.id}/scenes/${sceneId}`).send({ referenceImageId: 'replacement.png' });
+      expect(edit.status).toBe(200);
+    }
+    expect((await readiness()).storyboard.shotLocks).toEqual({ [shot.sceneId]: 'changed', [piece.sceneId]: 'open' });
+  });
+
+  it('compacts persisted legacy board-derived locks on the next write while retaining their lock states', async () => {
+    const shot = await projects.addProjectScene(project.id, { startSec: 0, endSec: 10, prompt: 'Original direction' });
+    await approveBoardFixture();
+    const cut = await split(shot.sceneId, { atSec: 5 });
+    expect(cut.status).toBe(200);
+    const [, piece] = cut.body.scenes;
+    const file = join(ROOT(), 'music-video-projects.json');
+    const records = JSON.parse(readFileSync(file, 'utf8'));
+    const review = records.find(record => record.id === project.id).productionReview;
+    const board = review.approvals.storyboard;
+    const compact = { ...approver, fromBoardApproval: true, v: 2 };
+    for (const [id, approval] of Object.entries(review.shotApprovals)) {
+      // Older splits copied the board approval and knew nothing about borrowed stills.
+      review.shotApprovals[id] = { ...board, ...compact, basis: id === piece.sceneId ? 'stale-basis' : approval.basis };
+    }
+    writeFileSync(file, JSON.stringify(records));
+
+    const states = { [shot.sceneId]: 'locked', [piece.sceneId]: 'changed' };
+    expect((await readiness()).storyboard.shotLocks).toEqual(states);
+    const edit = await request(app).patch(`/api/music-video/${project.id}/scenes/${shot.sceneId}`).send({ label: 'Renamed shot' });
+    expect(edit.status).toBe(200);
+    expect((await readiness()).storyboard.shotLocks).toEqual(states);
+    const saved = JSON.parse(readFileSync(file, 'utf8')).find(record => record.id === project.id).productionReview;
+    expect(saved.shotApprovals).toEqual({
+      [shot.sceneId]: { ...compact, basis: review.shotApprovals[shot.sceneId].basis },
+      [piece.sceneId]: { ...compact, basis: 'stale-basis' },
+    });
+    expect(saved.approvals.storyboard.values).toEqual(board.values);
   });
 });
