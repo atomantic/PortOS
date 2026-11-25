@@ -72,14 +72,20 @@ describe('syncRuntimeProviderModels', () => {
     expect(io.emit).not.toHaveBeenCalled();
   });
 
-  it('coalesces a start followed by a download into one probe per runtime', async () => {
+  it('runs one trailing pass for notifications that arrive mid-refresh, so a later change is never read past', async () => {
     let release;
     providers.refreshProviderModelsBatch.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
     const first = syncRuntimeProviderModels({ kind: 'mtplx', io });
-    const second = syncRuntimeProviderModels({ kind: 'mtplx', io });
     await vi.waitFor(() => expect(release).toBeTypeOf('function'));
-    release([{ ids: ['mtplx'], leadId: 'mtplx', status: 'updated' }]);
-    await Promise.all([first, second]);
+    const second = syncRuntimeProviderModels({ kind: 'mtplx', io });
+    const third = syncRuntimeProviderModels({ kind: 'mtplx', io });
     expect(providers.refreshProviderModelsBatch).toHaveBeenCalledTimes(1);
+    release([{ ids: ['mtplx'], leadId: 'mtplx', status: 'updated' }]);
+    await Promise.all([first, second, third]);
+    expect(providers.refreshProviderModelsBatch).toHaveBeenCalledTimes(2);
+
+    // The slot is free again afterwards.
+    await syncRuntimeProviderModels({ kind: 'mtplx', io });
+    expect(providers.refreshProviderModelsBatch).toHaveBeenCalledTimes(3);
   });
 });
