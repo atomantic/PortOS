@@ -226,6 +226,7 @@ module.exports = {
         PGUSER: PG_USER,
         PGDATABASE: PG_DATABASE,
         PGPASSWORD: PG_PASSWORD,
+        PORTOS_PSQL: process.env.PORTOS_PSQL || envValue('PORTOS_PSQL') || '',
         ...(pgMode === 'file' ? { MEMORY_BACKEND: 'file' } : {}),
         PATH: process.env.PATH // Inherit PATH for git/node access in child processes
       },
