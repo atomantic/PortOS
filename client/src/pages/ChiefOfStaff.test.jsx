@@ -1789,3 +1789,202 @@ describe('ChiefOfStaff active-agent snapshot readiness', () => {
     expect(screen.getByText(/Sync PR/)).toBeInTheDocument();
   });
 });
+
+// #18643 — the page used to key every read on the tab id, so each tab switch
+// refetched status, health and learning and tore down and re-registered every
+// socket listener. Shell data now loads once per visit and each slice (queue +
+// insights, active agents, providers, apps) when it first becomes needed.
+describe('ChiefOfStaff tab switches', () => {
+  const TABS_TO_VISIT = ['briefing', 'config', 'health', 'tasks', 'agents', 'mind'];
+  function NavProbe() {
+    const navigate = useNavigate();
+    return TABS_TO_VISIT.map(id => (
+      <button key={id} type="button" onClick={() => navigate(`/cos/${id}`)}>{`go ${id}`}</button>
+    ));
+  }
+  const getSocketHandler = (event) => socketStub.on.mock.calls.find(([evt]) => evt === event)?.[1];
+  const queueReads = () => api.getCosTasks.mock.calls.filter(([args]) => args?.view === 'queue').length;
+  // The page hook registers all its listeners in one effect; these two events
+  // have no other client subscriber, so their counts are that effect's runs.
+  const HOOK_ONLY_EVENTS = ['cos:log', 'cos:health:check'];
+  const hookRegistrations = (fn) => fn.mock.calls.filter(([event]) => HOOK_ONLY_EVENTS.includes(event)).length;
+  const shellReads = () => [api.getCosStatus, api.getCosHealth, api.getCosLearningSummary].map(fn => fn.mock.calls.length);
+  const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); });
+  const goTo = async (id) => {
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: `go ${id}` })); });
+    await settle();
+  };
+  const renderWithProbe = async (tab) => {
+    render(
+      <MemoryRouter initialEntries={[`/cos/${tab}`]}>
+        <Routes>
+          <Route path="/cos/:tab" element={<><ChiefOfStaff /><NavProbe /></>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await waitForPageShell();
+    await settle();
+  };
+
+  it('reads status, health and learning once and registers listeners once across tabs that need no slice', async () => {
+    await renderWithProbe('briefing');
+    expect(shellReads()).toEqual([1, 1, 1]);
+    const registrations = { on: hookRegistrations(socketStub.on), off: hookRegistrations(socketStub.off) };
+    expect(registrations).toEqual({ on: HOOK_ONLY_EVENTS.length, off: 0 });
+
+    await goTo('config');
+    await goTo('health');
+
+    expect(shellReads()).toEqual([1, 1, 1]);
+    expect(hookRegistrations(socketStub.on)).toBe(registrations.on);
+    expect(hookRegistrations(socketStub.off)).toBe(registrations.off);
+    expect(api.getCosAgents).not.toHaveBeenCalled();
+    expect(queueReads()).toBe(0);
+  });
+
+  it('does not refetch anything the Agents tab already holds when moving from Tasks', async () => {
+    await renderWithProbe('tasks');
+    const before = {
+      shell: shellReads(), agents: api.getCosAgents.mock.calls.length, queue: queueReads(),
+      insights: api.getCosActionableInsights.mock.calls.length, providers: api.getProviders.mock.calls.length,
+      apps: api.getApps.mock.calls.length, on: hookRegistrations(socketStub.on), off: hookRegistrations(socketStub.off),
+    };
+    expect(before.agents).toBe(1);
+
+    await goTo('agents');
+
+    expect(shellReads()).toEqual(before.shell);
+    expect(api.getCosAgents.mock.calls.length).toBe(before.agents);
+    expect(queueReads()).toBe(before.queue);
+    expect(api.getCosActionableInsights.mock.calls.length).toBe(before.insights);
+    expect(api.getProviders.mock.calls.length).toBe(before.providers);
+    expect(api.getApps.mock.calls.length).toBe(before.apps);
+    expect(hookRegistrations(socketStub.on)).toBe(before.on);
+    expect(hookRegistrations(socketStub.off)).toBe(before.off);
+  });
+
+  it('reads exactly the queue, agents and insights slices when Tasks is first opened, and no shell data', async () => {
+    await renderWithProbe('briefing');
+    const shell = shellReads();
+    expect(api.getCosAgents).not.toHaveBeenCalled();
+
+    await goTo('tasks');
+
+    expect(queueReads()).toBe(1);
+    expect(api.getCosAgents).toHaveBeenCalledTimes(1);
+    expect(api.getCosActionableInsights).toHaveBeenCalledTimes(1);
+    expect(api.getCosActionableInsights).toHaveBeenCalledWith({ cachedHealth: true, silent: true });
+    expect(api.getProviders).toHaveBeenCalledTimes(1);
+    expect(shellReads()).toEqual(shell);
+  });
+
+  it('reads agents again when Agents is re-entered, because events were ignored while it was away', async () => {
+    await renderWithProbe('agents');
+    expect(api.getCosAgents).toHaveBeenCalledTimes(1);
+    await goTo('mind');
+    expect(api.getCosAgents).toHaveBeenCalledTimes(1);
+    await goTo('agents');
+    expect(api.getCosAgents).toHaveBeenCalledTimes(2);
+    expect(shellReads()).toEqual([1, 1, 1]);
+  });
+
+  it('still refreshes the queue for an event received just before a tab switch', async () => {
+    withFakeTimers();
+    await renderWithProbe('briefing');
+    const shell = shellReads();
+
+    await act(async () => { getSocketHandler('cos:tasks:changed')({ type: 'internal', action: 'updated' }); });
+    await goTo('tasks');
+    expect(queueReads()).toBe(1);
+
+    // The coalesced refresh survives the switch and reads the slices the page
+    // needs when it fires: a second queue read plus the status summary, but
+    // neither health nor learning.
+    await act(async () => { await vi.advanceTimersByTimeAsync(450); });
+    await settle();
+    expect(queueReads()).toBe(2);
+    expect(api.getCosStatus.mock.calls.length).toBe(shell[0] + 1);
+    expect(api.getCosHealth.mock.calls.length).toBe(shell[1]);
+    expect(api.getCosLearningSummary.mock.calls.length).toBe(shell[2]);
+  });
+
+  it('drops a slice read that a round trip through another tab has superseded', async () => {
+    const task = (description) => ({ user: { tasks: [{ id: 'task-1', description, status: 'pending', metadata: {} }] }, cos: { tasks: [] } });
+    let releaseStale;
+    await renderWithProbe('briefing');
+    api.getCosTasks.mockReturnValueOnce(new Promise(resolve => { releaseStale = () => resolve(task('STALE first activation')); }));
+    await goTo('tasks');
+    await goTo('briefing');
+    api.getCosTasks.mockResolvedValue(task('FRESH second activation'));
+    await goTo('tasks');
+    expect(await screen.findByText('FRESH second activation')).toBeInTheDocument();
+
+    await act(async () => { releaseStale(); await new Promise(resolve => setTimeout(resolve, 20)); });
+    expect(screen.queryByText('STALE first activation')).not.toBeInTheDocument();
+    expect(screen.getByText('FRESH second activation')).toBeInTheDocument();
+  });
+
+  it('applies an agent update that arrives while a newly opened Agents tab is still reading', async () => {
+    await renderWithProbe('config');
+    const agent = { id: 'agent-example', taskId: 'task-example', status: 'running', startedAt: '2026-01-01T00:00:00.000Z', metadata: { taskDescription: 'Example active work' } };
+    let resolveAgents;
+    api.getCosAgents.mockReturnValueOnce(new Promise(resolve => { resolveAgents = resolve; }));
+    await goTo('agents');
+    await act(async () => {
+      getSocketHandler('cos:agent:updated')({ ...agent, status: 'paused' });
+      resolveAgents([agent]);
+    });
+    expect(await screen.findByText('Paused Agents')).toBeInTheDocument();
+    expect(screen.queryByText('1 running')).toBeNull();
+  });
+
+  it('recovers everything the current tab needs on reconnect, including after a switch', async () => {
+    await renderWithProbe('briefing');
+    await goTo('tasks');
+    const before = { shell: shellReads(), agents: api.getCosAgents.mock.calls.length, queue: queueReads() };
+
+    await act(async () => { socketStub.receive('connect'); });
+    await settle();
+
+    expect(shellReads()).toEqual(before.shell.map(count => count + 1));
+    expect(api.getCosAgents.mock.calls.length).toBe(before.agents + 1);
+    expect(queueReads()).toBe(before.queue + 1);
+  });
+
+  it('refreshes the learning summary when an agent completes, without a tab switch', async () => {
+    withFakeTimers();
+    api.getCosLearningSummary.mockResolvedValue({ overallSuccessRate: 40, totalCompleted: 5, status: 'ok' });
+    await renderWithProbe('config');
+    expect(api.getCosLearningSummary).toHaveBeenCalledTimes(1);
+    expect((await screen.findAllByText('40%')).length).toBeGreaterThan(0);
+
+    api.getCosLearningSummary.mockResolvedValue({ overallSuccessRate: 75, totalCompleted: 6, status: 'ok' });
+    await act(async () => {
+      getSocketHandler('cos:agent:completed')({ id: 'agent-done', result: { success: true } });
+      getSocketHandler('cos:agent:completed')({ id: 'agent-done-too', result: { success: true } });
+      await vi.advanceTimersByTimeAsync(450);
+    });
+    await settle();
+
+    expect(api.getCosLearningSummary).toHaveBeenCalledTimes(2);
+    expect((await screen.findAllByText('75%')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('40%')).toBeNull();
+  });
+
+  it('keeps the last good learning summary when a completion refresh fails', async () => {
+    withFakeTimers();
+    api.getCosLearningSummary.mockResolvedValue({ overallSuccessRate: 40, totalCompleted: 5, status: 'ok' });
+    await renderWithProbe('config');
+    expect((await screen.findAllByText('40%')).length).toBeGreaterThan(0);
+
+    api.getCosLearningSummary.mockRejectedValue(new Error('offline'));
+    await act(async () => {
+      getSocketHandler('cos:agent:completed')({ id: 'agent-done', result: { success: true } });
+      await vi.advanceTimersByTimeAsync(450);
+    });
+    await settle();
+
+    expect(api.getCosLearningSummary).toHaveBeenCalledTimes(2);
+    expect(screen.getAllByText('40%').length).toBeGreaterThan(0);
+  });
+});
