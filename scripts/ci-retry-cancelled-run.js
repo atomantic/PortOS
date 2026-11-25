@@ -12,7 +12,7 @@
  *
  * Six guards keep that from becoming a retry loop or from re-running work
  * somebody deliberately stopped — the reasoning for each is the table under
- * "External cancellation and one automatic retry" in docs/GITHUB_ACTIONS.md.
+ * "External cancellation and one automatic retry" in docs/CI_NATIVE_JOBS.md.
  * The two least obvious, stated here because the code alone does not show them:
  *
  *   - `run_attempt === 1` IS the retry budget. `POST /rerun` re-runs the same

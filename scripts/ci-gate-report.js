@@ -31,7 +31,7 @@
  * culprit lookup above explains it here. An EXTERNAL run-wide cancellation
  * takes the gate with it, and then the explanation comes from the recovery
  * workflow instead — see
- * "External cancellation and one automatic retry" in docs/GITHUB_ACTIONS.md.
+ * "External cancellation and one automatic retry" in docs/CI_NATIVE_JOBS.md.
  *
  * Reads `CI_GATE_RESULT_<JOB>` out of the environment rather than taking
  * arguments, so adding a job to the gate is one workflow line and no code

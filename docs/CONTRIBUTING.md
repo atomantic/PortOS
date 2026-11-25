@@ -360,7 +360,7 @@ conservative fallbacks to the runner's related-test mode or the complete suite; 
 pull request into `release`, nightly CI, and manual CI runs always run the
 complete server, client, DB, lint, build, and smoke checks. Pushes to `main`
 run the full primary CI suite with path-gated native jobs (see
-[GitHub Actions](./GITHUB_ACTIONS.md#native-jobs-on-a-push-to-main)). Release
+[GitHub Actions](./CI_NATIVE_JOBS.md#native-jobs-on-a-push-to-main)). Release
 publication is blocked until a full CI gate has succeeded on the exact tree
 being released. See [GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md).
 
