@@ -197,8 +197,15 @@ describe.skipIf(!chrome)('Goals responsive controls', () => {
             const action = await addSubGoal.boundingBox();
             expect(action.x + action.width).toBeLessThanOrEqual(panelBox.x);
             await addSubGoal.click({ trial: true });
+            await panel.getByRole('button', { name: 'Close panel' }).click();
+          } else {
+            const heading = panel.getByRole('heading', { level: 2, name: 'Nested example 9' });
+            await heading.waitFor();
+            expect(await heading.evaluate(element => document.activeElement === element)).toBe(true);
+            await page.keyboard.press('Escape');
+            await panel.waitFor({ state: 'hidden' });
+            expect(await selectGoal.evaluate(element => document.activeElement === element)).toBe(true);
           }
-          await page.getByRole('button', { name: 'Close panel' }).click();
         }
       }
       await page.addStyleTag({ content: 'html { font-size: 20px; }' });

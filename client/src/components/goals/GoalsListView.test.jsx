@@ -476,8 +476,22 @@ it('organizes with the chosen provider and model only after submission', async (
   expect(provider).toBeDisabled();
   expect(model).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Analyzing...' })).toBeDisabled();
-  await act(async () => { finish(NEW_APEX_SUGGESTION); });
-  expect(screen.getByText('Goal Organization')).toBeInTheDocument();
+  expect(screen.queryByRole('dialog', { name: 'Goal Organization' })).not.toBeInTheDocument();
+  await act(async () => {
+    finish({
+      ...NEW_APEX_SUGGESTION,
+      suggestedSubApex: [{ title: 'Example sub-goal', description: 'An example suggestion' }],
+    });
+  });
+  const dialog = screen.getByRole('dialog', { name: 'Goal Organization' });
+  const headings = within(dialog);
+  expect(headings.getByRole('heading', { name: 'Goal Organization', level: 2 })).toHaveFocus();
+  for (const name of ['Apex Goal (North Star)', 'Proposed Hierarchy', 'Suggested Sub-Apex Goals']) {
+    expect(headings.getByRole('heading', { name, level: 3 })).toBeInTheDocument();
+  }
+  await user.keyboard('{Escape}');
+  expect(dialog).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Organize' })).toHaveFocus();
   expect(createGoal).not.toHaveBeenCalled();
 });
 

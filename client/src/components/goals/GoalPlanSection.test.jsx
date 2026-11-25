@@ -51,7 +51,7 @@ describe('GoalPlanSection', () => {
       proposedPhases: phases, pendingActions: new Set(['accept-phases'])
     });
     expect(screen.getByRole('button', { name: 'Accept Plan' }).disabled).toBe(true);
-    fireEvent.click(screen.getAllByLabelText('Move up')[1]);
+    fireEvent.click(screen.getByRole('button', { name: 'Move phase 2 up' }));
     const next = setProposedPhases.mock.calls[0][0];
     expect(next.map(p => p._key)).toEqual(['b', 'a']);
     expect(next.map(p => p.order)).toEqual([0, 1]);

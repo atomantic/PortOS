@@ -15,6 +15,7 @@ export function useGoalOrganize(onRefresh) {
   const [orgSuggestion, setOrgSuggestion] = useState(null);
   const [applyingOrg, setApplyingOrg] = useState(false);
   const busy = useRef(false);
+  const organizeButtonRef = useRef(null);
 
   const requestOrganize = async ({ providerId, model }) => {
     if (busy.current) return;
@@ -42,8 +43,12 @@ export function useGoalOrganize(onRefresh) {
     toast.success('Goal hierarchy applied');
   };
 
-  const dismiss = () => { if (!busy.current) setOrgSuggestion(null); };
-  return { organizing, orgSuggestion, applyingOrg, requestOrganize, applySuggestion, dismiss };
+  const dismiss = () => {
+    if (busy.current) return;
+    setOrgSuggestion(null);
+    organizeButtonRef.current?.focus({ preventScroll: true });
+  };
+  return { organizing, orgSuggestion, applyingOrg, requestOrganize, applySuggestion, dismiss, organizeButtonRef };
 }
 
 export function useGoalCreate(onRefresh) {
