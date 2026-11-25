@@ -622,6 +622,10 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     // finishes. A tab switch must not be what refreshes the tile.
     const refreshLearning = coalesce(refreshLearningSummary, 400);
     socket.on('cos:learning:changed', refreshLearning);
+    // Deletion and cleanup change the agent list without a lifecycle event, and a
+    // slice kept across tab switches no longer gets a fresh read to hide that.
+    const refreshAgents = coalesce(() => { if (needsRef.current.agents) readAgentsSlice(); }, 400);
+    socket.on('cos:agents:changed', refreshAgents);
     const handleTaskMutation = data => {
       if (data?.completedChanged || data?.task?.status === 'completed' || data?.previousStatus === 'completed' || ['deleted', 'peer-merged'].includes(data?.action)) {
         setTaskHistoryRevision(value => value + 1);
@@ -785,11 +789,13 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       socket.off('cos:log', handleCosLog);
       socket.off('cos:scheduler:changed', handleRecoveryScheduleChanged);
       socket.off('cos:learning:changed', refreshLearning);
+      socket.off('cos:agents:changed', refreshAgents);
+      refreshAgents.cancel();
       socket.off('apps:changed', handleAppsChanged);
       refreshQueue.cancel();
       refreshLearning.cancel();
     };
-  }, [socket, fetchData, fetchQueue, refreshLearningSummary, readApps, applyProviders, setSpeakingFor]);
+  }, [socket, fetchData, fetchQueue, refreshLearningSummary, readAgentsSlice, readApps, applyProviders, setSpeakingFor]);
 
   const handleStart = async () => {
     const result = await startCos({ silent: true }).catch(err => {
