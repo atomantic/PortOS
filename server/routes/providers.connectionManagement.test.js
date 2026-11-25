@@ -17,7 +17,6 @@ const store = {
   deleteConnection: vi.fn(),
   mergeServiceInstances: vi.fn().mockResolvedValue(undefined),
   saveConnectionSettings: vi.fn().mockResolvedValue(2),
-  saveBindingSettings: vi.fn().mockResolvedValue(2),
 };
 vi.mock('../services/provider/providerGraphStore.js', () => store);
 
@@ -140,7 +139,6 @@ beforeEach(async () => {
   graph.resetProviderGraphState();
   store.readGraph.mockResolvedValue(graphFixture());
   store.saveConnectionSettings.mockResolvedValue(4);
-  store.saveBindingSettings.mockResolvedValue(5);
   providerService.getAllProviders.mockResolvedValue({
     activeProvider: 'claude-ollama',
     providers: [structuredClone(CLAUDE_CLI), structuredClone(CLAUDE_TUI), structuredClone(CODEX_CLI)],
@@ -152,7 +150,6 @@ beforeEach(async () => {
   vi.clearAllMocks();
   store.readGraph.mockResolvedValue(graphFixture());
   store.saveConnectionSettings.mockResolvedValue(4);
-  store.saveBindingSettings.mockResolvedValue(5);
   providerService.applyProviderPatches.mockImplementation(async (patches) => Object.keys(patches));
 });
 

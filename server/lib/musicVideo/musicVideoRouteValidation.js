@@ -1511,10 +1511,6 @@ export const musicVideoSceneFrameRenderSchema = z.object({
 
 const musicVideoSceneIdListSchema = z.array(z.string().min(1).max(64)).min(1).max(200);
 
-export const musicVideoSceneFramesRenderSchema = musicVideoSceneFrameRenderSchema.extend({
-  sceneIds: musicVideoSceneIdListSchema,
-}).strict();
-
 // A clip is either the video body the shot card already builds, or a short
 // form (`card` / `target`) the server expands. The video route re-validates
 // the assembled body, so provider fields stay on this object.
@@ -1554,10 +1550,6 @@ export const musicVideoSceneClipRenderSchema = z.object({
   card: musicVideoClipCardSchema.optional(),
   target: musicVideoClipTargetSchema.optional(),
 }).passthrough();
-
-export const musicVideoSceneClipsRenderSchema = musicVideoSceneClipRenderSchema.and(z.object({
-  sceneIds: musicVideoSceneIdListSchema,
-}));
 
 // #16136: approve (or clear) shots for the final-resolution upgrade.
 export const musicVideoApproveFinalSchema = z.object({

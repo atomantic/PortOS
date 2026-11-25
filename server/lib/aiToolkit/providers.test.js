@@ -255,7 +255,7 @@ describe('Provider Service', () => {
   });
 
   it('refuses rather than suffixing when the sibling id is already taken', async () => {
-    // `mintRouteIds` suffixes a whole set on collision because it owns both
+    // Creation of a fresh pair can suffix the full set because it owns both
     // halves; here the CLI id is fixed, so a taken sibling id means something
     // else is standing there — and a `example-tui-2` would group with nothing.
     await providerService.createProvider({ name: 'Example Agent', id: 'example', type: 'cli', command: 'example' });

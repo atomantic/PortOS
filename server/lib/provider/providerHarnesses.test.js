@@ -22,7 +22,6 @@ import {
 } from './providerHarnesses.js';
 import { CODEX_OSS_LOCAL_PROVIDERS } from './providerModels.js';
 import { PROVIDER_VENDORS } from './providerVendors.js';
-import { bindingBlocker } from './providerRouteRecipes.js';
 import { SERVICE_DEFINITIONS, resolveServiceInstance } from '../serviceDefinitions.js';
 
 /**
@@ -34,9 +33,6 @@ const VENDOR_WITHOUT_HARNESS = 'gemini-legacy';
 const spawnableVendors = PROVIDER_VENDORS.filter((vendor) => vendor.id !== VENDOR_WITHOUT_HARNESS);
 
 describe('harness rows say why they cannot be minted from a connection', () => {
-  // The refusal quotes this field. While `bindingBlocker` hardcoded one reason,
-  // a row added for a different one told the user their harness "reaches only
-  // its own vendor service" — wrong, and it points at the wrong remedy.
   it('gives every non-creatable program a reason, and every creatable one none', () => {
     for (const harness of PROVIDER_HARNESSES.filter((row) => row.id !== 'direct')) {
       expect(Boolean(harness.connectionBlocker), `${harness.id}`).toBe(!CREATABLE_HARNESS_IDS.includes(harness.id));
@@ -55,29 +51,6 @@ describe('harness rows say why they cannot be minted from a connection', () => {
     }
     expect(harnessById('direct').recipe).toBeNull();
     expect(harnessById('direct').bindings).toHaveLength(1);
-  });
-
-  it('refuses each uncreatable harness with its own reason, not a shared guess', () => {
-    const connection = { kind: 'ollama', transports: { openai: { baseUrl: 'http://localhost:11434/v1' } }, credentials: {} };
-    const messages = PROVIDER_HARNESSES
-      .filter((harness) => harness.id !== 'direct' && !CREATABLE_HARNESS_IDS.includes(harness.id))
-      .map((harness) => bindingBlocker({ harnessId: harness.id, modes: ['cli'], connection }).message);
-
-    // Kilo and OpenChamber are `openai`-protocol rows that still cannot be
-    // minted — the case that makes "reaches only its own vendor service" false.
-    expect(messages).toContain(`${harnessById('kilo').label} ${harnessById('kilo').connectionBlocker}, so it cannot be pointed at a backend connection. Add it from the provider editor instead.`);
-    expect(messages).toContain(`${harnessById('pi').label} ${harnessById('pi').connectionBlocker}, so it cannot be pointed at a backend connection. Add it from the provider editor instead.`);
-    expect(new Set(messages).size).toBeGreaterThan(2);
-    for (const message of messages) expect(message).not.toMatch(/undefined|has no command recipe/);
-  });
-
-  // The graph names a direct binding `null`; the registry names it `direct`.
-  // Either spelling must be the same request to the create endpoint.
-  it('treats a "direct" harnessId exactly like the graph\'s null', () => {
-    const connection = { kind: 'ollama', transports: { openai: { baseUrl: 'http://localhost:11434/v1' } }, credentials: {} };
-    expect(bindingBlocker({ harnessId: 'direct', modes: ['api'], connection }))
-      .toEqual(bindingBlocker({ harnessId: null, modes: ['api'], connection }));
-    expect(bindingBlocker({ harnessId: 'direct', modes: ['cli'], connection })?.code).toBe('PROVIDER_HARNESS_MODE_UNSUPPORTED');
   });
 });
 
