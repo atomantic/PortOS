@@ -131,15 +131,17 @@ function awaitOperandEnd(blanked, awaitIndex) {
 
 /** Every spawned-child binding in one file's source that awaits before wiring a terminal listener. */
 export function findLateChildListeners(src) {
-  return lateChildListeners(blankLiterals(src, { includeCommentOnly: true }));
+  const views = blankLiterals(src, { includeCommentOnly: true });
+  return lateChildListeners(views, [...views.blanked.matchAll(SPAWN_BINDING)]);
 }
 
-function lateChildListeners({ code, blanked }) {
+function lateChildListeners({ code, blanked }, bindings) {
+  if (bindings.length === 0) return [];
   // `code` keeps literal text, so `'error'` is still readable; `blanked` is what
   // await/bracket walks use.
   const spans = asyncBodySpans(blanked);
   const offenders = [];
-  for (const match of blanked.matchAll(SPAWN_BINDING)) {
+  for (const match of bindings) {
     const name = match[1];
     const callEnd = matchBracket(blanked, match.index + match[0].length - 1);
     if (callEnd === -1) continue;
@@ -187,9 +189,10 @@ function scanTree() {
     lexMs += elapsed;
     if (elapsed > slowest.ms) slowest = { file, ms: elapsed, bytes: Buffer.byteLength(src) };
     const analysisStart = performance.now();
+    const bindings = [...views.blanked.matchAll(SPAWN_BINDING)];
     // Retain the recognition case's raw-source condition as well as its lexer match.
-    if (/\b(?:spawn|spawnDetached)\s*\(/.test(src) && [...views.blanked.matchAll(SPAWN_BINDING)].length > 0) sites.push(file);
-    for (const hit of lateChildListeners(views)) violations.push(`server/${file} ${hit}`);
+    if (bindings.length > 0 && /\b(?:spawn|spawnDetached)\s*\(/.test(src)) sites.push(file);
+    for (const hit of lateChildListeners(views, bindings)) violations.push(`server/${file} ${hit}`);
     analysisMs += performance.now() - analysisStart;
   }
   treeScan = { sites, violations };
@@ -278,6 +281,16 @@ describe('the child-listener-order recognizer', () => {
       await prepare();
       state.child.on('error', onError);
     `)).toHaveLength(1);
+  });
+
+  it('reports a binding when a comment separates the callee from its arguments', () => {
+    expect(findLateChildListeners([
+      'const child = pty.spawn /* start the child */ (cmd);',
+      'await prepare();',
+      'child.onExit(handler);',
+    ].join('\n'))).toEqual([
+      'line 1: child is awaited past (await prepare()) before an error/exit listener',
+    ]);
   });
 
   it('walks out of a try block but skips its catch clause', () => {
