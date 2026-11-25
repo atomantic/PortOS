@@ -57,6 +57,12 @@ import { addItem } from '../mediaCollections.js';
 // can cause near-still frames. 0.85 lands near the sweet spot in practice.
 export const DEFAULT_CONTINUATION_IMAGE_STRENGTH = 0.85;
 
+const sceneRenderCleanups = new Map();
+
+export function clearSceneRenderListeners(projectId) {
+  for (const cleanup of sceneRenderCleanups.get(projectId) || []) cleanup();
+}
+
 export function resolveImageStrength({ explicit, isContinuation }) {
   if (explicit != null) return explicit;
   if (isContinuation) return DEFAULT_CONTINUATION_IMAGE_STRENGTH;
@@ -297,31 +303,44 @@ export async function runSceneRender(project, scene) {
   let settled = false;
   const onCompleted = (job) => {
     if (settled || job.id !== jobId) return;
-    settled = true;
     cleanup();
     maintenance.continueSettlement(() => settleReceipt('completed').then(() => handleRenderCompleted(project.id, scene.sceneId, jobId, { continuationFellBack, workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined })))
       .catch(error => console.error(`❌ CD render completion failed: ${error.message}`));
   };
   const onFailed = (job) => {
     if (settled || job.id !== jobId) return;
-    settled = true;
     cleanup();
     maintenance.continueSettlement(() => settleReceipt(/timeout|timed out|interrupted/i.test(job.error || '') ? 'uncertain' : 'failed').then(() => handleRenderFailed(project.id, scene.sceneId, job.error || 'render failed', { workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined })))
       .catch(error => console.error(`❌ CD render failure handling failed: ${error.message}`));
   };
   const onCanceled = (job) => {
     if (settled || job.id !== jobId) return;
-    settled = true;
-    cleanup();
+    detach();
     // Treat user-initiated cancel as a terminal stop for this scene — do
     // NOT route through handleRenderFailed (which would retry up to
     // CD_MAX_SCENE_RETRIES); the user explicitly stopped this. Mark the scene
     // failed and let the completionHook flag the project so the user can
     // resume from the UI.
-    maintenance.continueSettlement(() => settleReceipt(job.params?.videoProduction?.submissionUncertain ? 'uncertain' : 'canceled').then(() => handleRenderCanceled(project.id, scene.sceneId, project.workspace === 'video' ? scene.workRevision || 0 : undefined)))
-      .catch(error => console.error(`❌ CD render cancellation handling failed: ${error.message}`));
+    // Keep the cleanup registered until the callback finishes so Stop can
+    // invalidate a cancellation already waiting on the receipt or project read.
+    const isCurrent = () => cleanups.has(cleanup);
+    maintenance.continueSettlement(() => settleReceipt(job.params?.videoProduction?.submissionUncertain ? 'uncertain' : 'canceled').then(() => handleRenderCanceled(project.id, scene.sceneId, project.workspace === 'video' ? scene.workRevision || 0 : undefined, isCurrent)))
+      .catch(error => {
+        if (error.code !== 'VIDEO_WORK_STALE') console.error(`❌ CD render cancellation handling failed: ${error.message}`);
+      })
+      .finally(cleanup);
   };
+  const cleanups = sceneRenderCleanups.get(project.id) || new Set();
+  cleanups.add(cleanup);
+  sceneRenderCleanups.set(project.id, cleanups);
   function cleanup() {
+    if (!cleanups.delete(cleanup)) return;
+    if (!cleanups.size) sceneRenderCleanups.delete(project.id);
+    detach();
+  }
+  function detach() {
+    if (settled) return;
+    settled = true;
     mediaJobEvents.off('completed', onCompleted);
     mediaJobEvents.off('failed', onFailed);
     mediaJobEvents.off('canceled', onCanceled);
@@ -487,7 +506,10 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
   await dispatchSceneEvaluation(fresh, { ...scene, renderedJobId: jobId, status: 'evaluating', evaluationFrames });
 }
 
-async function handleRenderCanceled(projectId, sceneId, workRevision) {
+async function handleRenderCanceled(projectId, sceneId, workRevision, isCurrent) {
+  const project = await getProject(projectId);
+  const scene = project?.treatment?.scenes?.find((s) => s.sceneId === sceneId);
+  if (!isCurrent() || scene?.status !== 'rendering' || (workRevision !== undefined && workRevision !== (scene.workRevision || 0))) return;
   console.log(`🛑 CD scene ${sceneId} render canceled by user`);
   await updateScene(projectId, sceneId, { ...(workRevision === undefined ? {} : { expectedWorkRevision: workRevision }),
     status: 'failed',

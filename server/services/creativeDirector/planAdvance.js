@@ -233,6 +233,12 @@ const inflightPlanner = new Set();
 const inflightPlanStep = new Set();
 const planJobCleanups = new Map();
 
+export function clearPlanListenersForProject(projectId) {
+  for (const [key, teardown] of planJobCleanups) {
+    if (key.startsWith(`${projectId}:`)) teardown();
+  }
+}
+
 async function pausePlanWithResidual(projectId, reason) {
   await updateProject(projectId, { status: 'paused', failureReason: reason })
     .catch((e) => console.log(`⚠️ CD plan pause for ${projectId} failed: ${e.message}`));
@@ -246,6 +252,26 @@ async function finishRun(projectId, runId, status, failureReason) {
     completedAt: nowISO(),
     ...(failureReason ? { failureReason } : {}),
   }).catch((e) => console.log(`⚠️ CD plan finishRun ${runId} on ${projectId} failed: ${e.message}`));
+}
+
+// Pause is soft: a still-running step can settle while paused. Stop retires the
+// listener and resets the step, and a subsequent dispatch records a different run.
+async function isCurrentPlanRun(projectId, stepId, runId) {
+  const project = await getProject(projectId);
+  const step = project?.plan?.steps?.find(step => step.stepId === stepId);
+  if (step?.status !== 'running') return false;
+  const run = project.runs?.findLast(run => run.kind === 'plan-step' && run.stepId === stepId);
+  return !runId || run?.runId === runId;
+}
+
+async function finishCurrentPlanRun(projectId, stepId, runId, status, reason) {
+  if (!await isCurrentPlanRun(projectId, stepId, runId)) return false;
+  await finishRun(projectId, runId, status, reason);
+  return isCurrentPlanRun(projectId, stepId, runId);
+}
+
+function logPlanSettlementFailure(message, error) {
+  if (error.code !== 'VIDEO_WORK_STALE') logFailureWithStack(message, error);
 }
 
 // Compact, id-only summary of a tool result so the plan step's `result` never
@@ -534,6 +560,7 @@ function armPlanJobListener(projectId, stepId, jobId, runId, expectedProductionR
   const key = `${projectId}:${stepId}`;
   let fired = false;
   const teardown = () => {
+    fired = true;
     mediaJobEvents.off('completed', settle);
     mediaJobEvents.off('failed', settle);
     mediaJobEvents.off('canceled', settle);
@@ -541,12 +568,11 @@ function armPlanJobListener(projectId, stepId, jobId, runId, expectedProductionR
   };
   function settle(job) {
     if (fired || job?.id !== jobId) return;
-    fired = true;
     teardown();
     const success = job.status === 'completed';
     // Runs outside the request lifecycle (media-queue emitter) — never throw out.
     maintenance.continueSettlement(async () => {
-      await finishRun(projectId, runId, success ? 'completed' : 'failed', success ? undefined : `job ${job.status}`);
+      if (!await finishCurrentPlanRun(projectId, stepId, runId, success ? 'completed' : 'failed', success ? undefined : `job ${job.status}`)) return;
       if (success) {
         await updatePlanStep(projectId, stepId, { ...(expectedProductionRevision === undefined ? {} : { expectedProductionRevision }), status: 'done', result: { jobId } });
         await advanceAfterPlanStepSettled(projectId);
@@ -554,7 +580,7 @@ function armPlanJobListener(projectId, stepId, jobId, runId, expectedProductionR
         await updatePlanStep(projectId, stepId, { ...(expectedProductionRevision === undefined ? {} : { expectedProductionRevision }), status: 'failed', result: { jobId, jobStatus: job.status } });
         await handlePlanStepFailure(projectId, { stepId, toolName: '(long-running job)', retryCount: 0 });
       }
-    }).catch((e) => logFailureWithStack(`❌ CD plan ${projectId} job settle for ${stepId} failed`, e));
+    }).catch((e) => logPlanSettlementFailure(`❌ CD plan ${projectId} job settle for ${stepId} failed`, e));
   }
   mediaJobEvents.on('completed', settle);
   mediaJobEvents.on('failed', settle);
@@ -590,7 +616,7 @@ function summarizeAutopilotResult(payload) {
 async function settleAutopilotStep(projectId, stepId, runId, payload, expectedProductionRevision) {
   const type = payload?.type;
   if (type === 'complete') {
-    await finishRun(projectId, runId, 'completed');
+    if (!await finishCurrentPlanRun(projectId, stepId, runId, 'completed')) return;
     await updatePlanStep(projectId, stepId, { ...(expectedProductionRevision === undefined ? {} : { expectedProductionRevision }), status: 'done', result: summarizeAutopilotResult(payload) });
     console.log(`✅ CD plan ${projectId}: autopilot step "${stepId}" complete`);
     return advanceAfterPlanStepSettled(projectId);
@@ -598,7 +624,7 @@ async function settleAutopilotStep(projectId, stepId, runId, payload, expectedPr
   if (type === 'paused' || type === 'canceled') {
     const reason = payload?.reason
       || (type === 'canceled' ? 'autopilot run was canceled' : 'autopilot paused for human review');
-    await finishRun(projectId, runId, 'failed', reason);
+    if (!await finishCurrentPlanRun(projectId, stepId, runId, 'failed', reason)) return;
     // BLOCKED, not failed — a pause is a human-review gate. The advance loop sees
     // the blocked step and pauses the whole plan with the reason; it is never
     // silently retried around (the autopilot pause contract).
@@ -611,7 +637,7 @@ async function settleAutopilotStep(projectId, stepId, runId, payload, expectedPr
   }
   // error frame.
   const error = payload?.error || 'autopilot run error';
-  await finishRun(projectId, runId, 'failed', error);
+  if (!await finishCurrentPlanRun(projectId, stepId, runId, 'failed', error)) return;
   await updatePlanStep(projectId, stepId, { ...(expectedProductionRevision === undefined ? {} : { expectedProductionRevision }), status: 'failed', result: { error } });
   return handlePlanStepFailure(projectId, { stepId, toolName: '(series autopilot)', retryCount: 0 });
 }
@@ -659,6 +685,7 @@ function armAutopilotListener(projectId, stepId, seriesId, runId, apResult, expe
   let fired = false;
   let idleTimer;
   const teardown = () => {
+    fired = true;
     autopilotEvents.off(seriesId, handler);
     clearTimeout(idleTimer);
     planJobCleanups.delete(key);
@@ -667,15 +694,15 @@ function armAutopilotListener(projectId, stepId, seriesId, runId, apResult, expe
     clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
       if (fired) return;
-      fired = true;
       teardown();
       console.log(`⏱️ CD plan ${projectId}: step "${stepId}" autopilot run for series ${String(seriesId).slice(0, 8)} went silent for ${AUTOPILOT_LISTENER_IDLE_MS}ms — settling failed`);
       // Runs outside the request lifecycle (in-process event bus) — never throw out.
       (async () => {
-        await finishRun(projectId, runId, 'failed', `autopilot run stalled — no activity for ${Math.round(AUTOPILOT_LISTENER_IDLE_MS / 60000)}m`);
+        const reason = `autopilot run stalled — no activity for ${Math.round(AUTOPILOT_LISTENER_IDLE_MS / 60000)}m`;
+        if (!await finishCurrentPlanRun(projectId, stepId, runId, 'failed', reason)) return;
         await updatePlanStep(projectId, stepId, { ...(expectedProductionRevision === undefined ? {} : { expectedProductionRevision }), status: 'failed', result: { error: 'autopilot run stalled (idle backstop)' } });
         await handlePlanStepFailure(projectId, { stepId, toolName: '(series autopilot)', retryCount: 0 });
-      })().catch((e) => logFailureWithStack(`❌ CD plan ${projectId} autopilot idle-backstop settle for ${stepId} failed`, e));
+      })().catch((e) => logPlanSettlementFailure(`❌ CD plan ${projectId} autopilot idle-backstop settle for ${stepId} failed`, e));
     }, AUTOPILOT_LISTENER_IDLE_MS);
     idleTimer.unref?.();
   };
@@ -687,10 +714,9 @@ function armAutopilotListener(projectId, stepId, seriesId, runId, apResult, expe
       armIdleTimer();
       return;
     }
-    fired = true;
     teardown();
     settleAutopilotStep(projectId, stepId, runId, payload, expectedProductionRevision)
-      .catch((e) => logFailureWithStack(`❌ CD plan ${projectId} autopilot settle for ${stepId} failed`, e));
+      .catch((e) => logPlanSettlementFailure(`❌ CD plan ${projectId} autopilot settle for ${stepId} failed`, e));
   }
   autopilotEvents.on(seriesId, handler);
   planJobCleanups.set(key, teardown);
@@ -703,11 +729,10 @@ function armAutopilotListener(projectId, stepId, seriesId, runId, apResult, expe
     (async () => {
       const marker = await readAutopilotMarker(seriesId);
       if (marker && !fired) {
-        fired = true;
         teardown();
         await settleAutopilotStep(projectId, stepId, runId, marker, expectedProductionRevision);
       }
-    })().catch((e) => logFailureWithStack(`❌ CD plan ${projectId} autopilot marker settle for ${stepId} failed`, e));
+    })().catch((e) => logPlanSettlementFailure(`❌ CD plan ${projectId} autopilot marker settle for ${stepId} failed`, e));
   }
 }
 

@@ -1,13 +1,18 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { registerLateBoundService } from '../../lib/lateBoundServices.js';
+import { mediaJobEvents } from '../mediaJobQueue/state.js';
+import { autopilotEvents } from '../pipeline/seriesAutopilot/state.js';
+import { resolveCreativeDirectorProjectCommand } from './projectCommands.js';
 
 registerLateBoundService('agentManagement', () => import('../agent/agentManagement.js'));
+registerLateBoundService('creativeToolRegistry', async () => ({ dispatchCreativeTool: dispatchMock }));
 
 const getProjectMock = vi.fn();
 const updateProjectMock = vi.fn(async () => ({}));
 const updateRunMock = vi.fn(async () => ({}));
 const updateSceneMock = vi.fn(async () => ({}));
 const updatePlanStepMock = vi.fn(async () => ({}));
+const recordRunMock = vi.fn();
 vi.mock('./local.js', () => ({
   getProject: (...a) => getProjectMock(...a),
   mutateVideoProject: async (_id, mutate) => { const result = mutate(await getProjectMock(_id)); getProjectMock.mockResolvedValue(result.project); return result; },
@@ -15,6 +20,7 @@ vi.mock('./local.js', () => ({
   updateRun: (...a) => updateRunMock(...a),
   updateScene: (...a) => updateSceneMock(...a),
   updatePlanStep: (...a) => updatePlanStepMock(...a),
+  recordRun: (...a) => recordRunMock(...a),
 }));
 
 vi.mock('../instanceIdentity.js', () => ({ getInstanceId: async () => 'example-owner' }));
@@ -31,19 +37,45 @@ vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: (...a) => updateTaskMock(
 
 const listJobsMock = vi.fn(() => []);
 const cancelJobMock = vi.fn(async () => ({}));
-vi.mock('../mediaJobQueue/index.js', () => ({
+vi.mock('../mediaJobQueue/index.js', async () => ({
+  mediaJobEvents: (await import('../mediaJobQueue/state.js')).mediaJobEvents,
+  getJob: () => null,
   listJobs: (...a) => listJobsMock(...a),
   cancelJob: (...a) => cancelJobMock(...a),
 }));
 
+const enqueueMock = vi.fn();
+const dispatchMock = vi.fn();
+vi.mock('../settings.js', () => ({
+  getSettings: async () => ({ imageGen: { local: { pythonPath: '/usr/bin/python3' } } }),
+}));
+vi.mock('../federatedMedia/defaultRouting.js', () => ({
+  enqueueUnattendedMediaJob: (...args) => enqueueMock(...args),
+  hasConfiguredMediaRoute: async () => false,
+}));
+vi.mock('../pipeline/seriesAutopilot/session.js', () => ({ isAutopilotActive: () => true }));
+vi.mock('./videoReview.js', () => ({ videoReviewAllowsDispatch: async () => true }));
+vi.mock('./videoExecution.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  enqueueVideoProductionJob: async () => ({ jobId: 'pending-job', attemptId: 'clip-attempt' }),
+}));
+
 const { stopProject, retireRuns, inflightRuns, ownedLiveJobs } = await import('./stopProject.js');
+const { clearSceneRenderListeners, runSceneRender } = await import('./sceneRunner.js');
+const { clearPlanListenersForProject } = await import('./planAdvance.js');
+const { startCreativeDirectorProject } = await import('./completionHook.js');
 
 const project = (over = {}) => ({ id: 'cd-1', status: 'planning', runs: [], ...over });
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   getActiveAgentsMock.mockReturnValue([]);
   listJobsMock.mockReturnValue([]);
+});
+
+afterEach(() => {
+  clearSceneRenderListeners('cd-1');
+  clearPlanListenersForProject('cd-1');
 });
 
 describe('inflightRuns', () => {
@@ -251,22 +283,108 @@ describe('stopProject', () => {
     expect(updateTaskMock).not.toHaveBeenCalled();
     expect(updateRunMock).toHaveBeenCalledWith('cd-1', 'r1', expect.objectContaining({ status: 'failed' }));
   });
+
+  it.each(['scene', 'scene with a queued cancellation', 'media step', 'media step with a queued cancellation', 'autopilot step'])('detaches the %s listener at Stop and dispatches again on Resume', async (kind) => {
+    const isScene = kind.startsWith('scene');
+    const queuedCancellation = kind.endsWith('queued cancellation');
+    const isAutopilot = kind === 'autopilot step';
+    const saved = project({ status: 'rendering', aspectRatio: '16:9', quality: 'standard',
+      ...(isScene ? { treatment: { scenes: [{ sceneId: 'sc-1', order: 0, durationSeconds: 6, status: 'pending' }] } }
+        : { directive: { goal: 'Create a clip' }, plan: { steps: [{
+          stepId: 'step-1', status: 'pending', args: { seriesId: 'series-1' }, dependsOn: [],
+          toolName: isAutopilot ? 'pipeline_startSeriesAutopilot' : 'media_enqueueVideoJob',
+        }] } }),
+    });
+    const stage = isScene ? saved.treatment.scenes[0] : saved.plan.steps[0];
+    getProjectMock.mockImplementation(async () => structuredClone(saved));
+    updateProjectMock.mockImplementation(async (_id, patch) => Object.assign(saved, patch));
+    updateSceneMock.mockImplementation(async (_id, _sceneId, patch) => Object.assign(stage, patch));
+    updatePlanStepMock.mockImplementation(async (_id, _stepId, patch) => Object.assign(stage, patch));
+    recordRunMock.mockImplementation(async (_id, entry) => {
+      const run = { ...entry, runId: `run-${saved.runs.length + 1}` };
+      saved.runs.push(run);
+      return run;
+    });
+    updateRunMock.mockImplementation(async (_id, runId, patch) => Object.assign(saved.runs.find(run => run.runId === runId), patch));
+    enqueueMock.mockResolvedValueOnce({ jobId: 'job-1' }).mockResolvedValueOnce({ jobId: 'job-2' });
+    dispatchMock.mockResolvedValueOnce({ ok: true, longRunning: true,
+      result: isAutopilot ? { runId: 'autopilot-1' } : { jobId: 'job-1' },
+    }).mockResolvedValueOnce({ ok: true, longRunning: true,
+      result: isAutopilot ? { runId: 'autopilot-2' } : { jobId: 'job-2' },
+    });
+
+    const job = { id: 'job-1', status: 'running', owner: 'creative-director:cd-1' };
+    listJobsMock.mockReturnValue([job]);
+    const emitter = isAutopilot ? autopilotEvents : mediaJobEvents;
+    const event = isAutopilot ? 'series-1' : 'canceled';
+    const baseline = emitter.listenerCount(event);
+    cancelJobMock.mockImplementationOnce(async () => {
+      expect(emitter.listenerCount(event)).toBe(baseline);
+      mediaJobEvents.emit('canceled', { ...job, status: 'canceled' });
+      if (isAutopilot) autopilotEvents.emit(event, { type: 'canceled', runId: 'autopilot-1' });
+    });
+    await startCreativeDirectorProject(saved.id);
+    expect(emitter.listenerCount(event)).toBe(baseline + 1);
+
+    const delayedRead = Promise.withResolvers();
+    if (queuedCancellation) {
+      const readStarted = Promise.withResolvers();
+      getProjectMock.mockImplementationOnce(() => {
+        readStarted.resolve();
+        return delayedRead.promise;
+      });
+      mediaJobEvents.emit('canceled', { ...job, status: 'canceled' });
+      await readStarted.promise;
+    }
+    expect(await stopProject(saved.id)).toMatchObject({ stopped: true, jobs: 1 });
+    expect(saved.status).toBe('paused');
+    expect(stage.status).toBe('pending');
+
+    const resume = resolveCreativeDirectorProjectCommand(saved, 'resume');
+    expect(resume).toMatchObject({ outcome: 'apply', advance: true });
+    await updateProjectMock(saved.id, resume.patch);
+    await startCreativeDirectorProject(saved.id);
+    if (queuedCancellation) {
+      delayedRead.resolve(structuredClone(saved));
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    expect(isScene ? enqueueMock : dispatchMock).toHaveBeenCalledTimes(2);
+    expect(stage.status).toBe(isScene ? 'rendering' : 'running');
+    expect(emitter.listenerCount(event)).toBe(baseline + 1);
+  });
 });
 
 it('revokes Video authorization before canceling jobs and retains completed clips', async () => {
-  getProjectMock.mockResolvedValue(project({ workspace: 'video', videoOwnerInstanceId: 'example-owner', videoWorkRevision: 2,
+  const video = project({ workspace: 'video', videoOwnerInstanceId: 'example-owner', videoWorkRevision: 2,
+    aspectRatio: '16:9', quality: 'standard',
     videoExecution: { authorized: true, attempts: [{ id: 'agent-attempt', kind: 'treatment', status: 'running' }] },
-    treatment: { scenes: [{ sceneId: 'pending-shot', status: 'rendering', renderedJobId: 'pending-job', workRevision: 3 }, { sceneId: 'done-shot', status: 'evaluating', renderedJobId: 'done-job', workRevision: 1 }] },
-  }));
-  listJobsMock.mockReturnValue([{ id: 'pending-job', status: 'running', owner: 'cd:cd-1:pending-shot' }, { id: 'unrelated-job', status: 'running', owner: 'other' }]);
+    treatment: { scenes: [{ sceneId: 'pending-shot', order: 0, durationSeconds: 6, status: 'pending', workRevision: 3 }, { sceneId: 'done-shot', order: 1, status: 'evaluating', renderedJobId: 'done-job', workRevision: 1 }] },
+  });
+  getProjectMock.mockResolvedValue(video);
+  const shot = video.treatment.scenes[0];
+  updateSceneMock.mockImplementation(async (_id, _sceneId, patch) => Object.assign(shot, patch));
+  const job = { id: 'pending-job', status: 'running', owner: 'cd:cd-1:pending-shot' };
+  const baseline = mediaJobEvents.listenerCount('canceled');
+  expect(await runSceneRender(video, shot)).toBe(job.id);
+  expect(mediaJobEvents.listenerCount('canceled')).toBe(baseline + 1);
+  updateSceneMock.mockClear();
+  listJobsMock.mockReturnValue([job, { id: 'unrelated-job', status: 'running', owner: 'other' }]);
   cancelJobMock.mockImplementationOnce(async () => {
     const saved = await getProjectMock('cd-1');
     expect(saved.status).toBe('paused');
     expect(saved.videoExecution.authorized).toBe(false);
     expect(saved.videoWorkRevision).toBe(3);
     expect(saved.treatment.scenes[0].workRevision).toBe(4);
+    expect(mediaJobEvents.listenerCount('canceled')).toBe(baseline);
+    mediaJobEvents.emit('canceled', { ...job, status: 'canceled' });
   });
-  await stopProject('cd-1');
+  const stderr = vi.spyOn(console, 'error');
+  try {
+    expect(await stopProject('cd-1')).toMatchObject({ stopped: true, jobs: 1 });
+    expect(stderr).not.toHaveBeenCalled();
+  } finally {
+    stderr.mockRestore();
+  }
   expect(cancelJobMock).toHaveBeenCalledExactlyOnceWith('pending-job');
   expect(updateSceneMock).toHaveBeenCalledExactlyOnceWith('cd-1', 'pending-shot', { status: 'pending', renderedJobId: null });
   expect((await getProjectMock('cd-1')).videoExecution.attempts[0].status).toBe('failed');
