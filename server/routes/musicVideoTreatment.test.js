@@ -131,7 +131,7 @@ describe('treatment compile', () => {
       expect(d.negativeSpace).not.toBe('none');
     }
 
-    expect(stored).not.toHaveProperty('proofs');
+    expect(stored.proofs).toEqual([]);
     expect(stored.capabilityGaps.map((g) => g.id)).toContain('aspect-ratio');
     expect(stored.capabilityGaps.map((g) => g.id)).not.toContain('lip-sync');
   });
@@ -488,7 +488,7 @@ describe('legacy proofs, clone and motion references', () => {
     const { sanitizeRecordForWire } = await import('../lib/syncWire.js');
     const project = await plannedProject();
     const { body } = await compile(project.id, { baseRevision: 0, useAi: false });
-    expect(body.treatment).not.toHaveProperty('proofs');
+    expect(body.treatment.proofs).toEqual([]);
     const [firstId] = project.scenes.map((scene) => scene.sceneId);
     const legacyProofs = [{ id: 'mvp-legacy', kind: 'risk-shot', sceneIds: [firstId], artifact: 'example', risk: 'example', route: 'example', checks: ['identity-continuity'], passCriteria: ['example'],
       status: 'passed', evidence: { videoHistoryId: 'render-old', imageId: null, note: 'looked fine', reviewedAt: '2026-01-01T00:00:00.000Z' } }];
@@ -507,14 +507,14 @@ describe('legacy proofs, clone and motion references', () => {
     const cloned = await request(app).post(`${base(project.id)}/clone`).send({ includeGeneratedMedia: true });
     expect(cloned.status).toBe(201);
     const clone = await reload(cloned.body.id);
-    expect(clone.treatment).not.toHaveProperty('proofs');
+    expect(clone.treatment.proofs).toEqual([]);
     expect(clone.treatment.shotDirections.map((d) => d.sceneId)).toEqual(clone.scenes.map((s) => s.sceneId));
 
     const saved = await patchTreatment(project.id, { baseRevision: (await reload(project.id)).treatment.revision, brief: { premise: 'a fresh premise' } });
     expect(saved.status).toBe(200);
-    expect(saved.body.treatment).not.toHaveProperty('proofs');
+    expect(saved.body.treatment.proofs).toEqual([]);
     expect(await reload(project.id)).toMatchObject({ treatment: { brief: { premise: 'a fresh premise' } } });
-    expect((await reload(project.id)).treatment).not.toHaveProperty('proofs');
+    expect((await reload(project.id)).treatment.proofs).toEqual([]);
 
     const applied = await request(app).post(`${base(project.id)}/treatment/apply`).send({ revision: saved.body.treatment.revision });
     expect(applied.status).toBe(200);
