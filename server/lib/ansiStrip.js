@@ -15,54 +15,50 @@
 // TUIs emit: nF (`ESC` + intermediates 0x20-0x2F + final, e.g. the charset select
 // `ESC ( B`) and the two-byte Fp/Fe/Fs escapes (`ESC 7`/`ESC 8` save and restore
 // the cursor). Matching only Fe used to leak `(B`, `7` and `8` into transcripts.
-export const ANSI_PATTERN = /\x1B(?:\](?:[^\x07\x1B]|\x1B(?!\\))*(?:\x07|\x1B\\)|[ -/]+[0-~]|[0-Z\\-~]|\[[0-?]*[ -/]*[@-~])/g;
+export const ANSI_PATTERN = /(?:\x1B\]|\x9D)(?:[^\x07\x1B\x9C]|\x1B(?!\\))*(?:\x07|\x1B\\|\x9C)|(?:\x1B\[|\x9B)[0-?]*[ -/]*[@-~]|\x1B(?:[ -/]+[0-~]|[0-Z\\-~])|[\x00\x0E\x0F]/g;
 
-const INCOMPLETE_CSI = /^\x1B\[[0-?]*[ -/]*$/;
+const INCOMPLETE_CSI = /^(?:\x1B\[|\x9B)[0-?]*[ -/]*$/;
 const INCOMPLETE_ESC_2BYTE = /^\x1B$/;
 const INCOMPLETE_NF = /^\x1B[ -/]+$/;
 // OSC terminators (BEL or ST). Module-level `g`-regex; reset `lastIndex` per use.
-const OSC_TERMINATOR = /\x07|\x1B\\/g;
+const OSC_TERMINATOR = /\x07|\x1B\\|\x9C/g;
 
 // `[@-_]` is the range that legitimately follows `\x1B` (CSI, OSC, single-byte
 // forms); the lookahead spares those starts so the main pattern can match them.
 const STRIP = (s) => s
   .replace(ANSI_PATTERN, '')
-  .replace(/\x1B(?![@-_])/g, '')
-  // NUL, and the SO/SI shift bytes a charset select is paired with (`ESC ( B` + SI).
-  .replace(/[\x00\x0E\x0F]/g, '');
+  .replace(/\x1B(?![@-_])/g, '');
+
+// After the last OSC terminator, the first opener owns any nested OSC-looking
+// bytes. Scanning once avoids quadratic backtracking on incomplete sequences.
+// The display stripper limits its carry; the recording spool enforces its own byte cap.
+export function incompleteAnsiStart(text, maxTail = 4096) {
+  OSC_TERMINATOR.lastIndex = 0;
+  let lastTermEnd = 0;
+  let terminator;
+  while ((terminator = OSC_TERMINATOR.exec(text)) !== null) {
+    lastTermEnd = terminator.index + terminator[0].length;
+  }
+  const searchStart = Math.max(lastTermEnd, text.length - maxTail);
+  const oscOpen = text.indexOf('\x1B]', searchStart);
+  const c1Open = text.indexOf('\x9D', searchStart);
+  if (c1Open !== -1 && (oscOpen === -1 || c1Open < oscOpen)) return c1Open;
+  if (oscOpen !== -1) return oscOpen;
+  const lastEsc = Math.max(text.lastIndexOf('\x1B'), text.lastIndexOf('\x9B'));
+  if (lastEsc !== -1 && text.length - lastEsc <= maxTail) {
+    const candidate = text.slice(lastEsc);
+    if (INCOMPLETE_ESC_2BYTE.test(candidate) || INCOMPLETE_NF.test(candidate) || INCOMPLETE_CSI.test(candidate)) return lastEsc;
+  }
+  return text.length;
+}
 
 export function createStreamingAnsiStripper() {
   let tail = '';
   return (text) => {
     const combined = tail + text;
-    tail = '';
-    // Linear-time OSC tail detection: find the position after the LAST terminator,
-    // then (clipped to the trailing 4096 bytes so an unbounded body leaks instead
-    // of pinning memory) the first `\x1B]` opener: the outermost in-progress OSC.
-    // A single end-anchored regex goes quadratic with many `\x1B]` candidates.
-    OSC_TERMINATOR.lastIndex = 0;
-    let lastTermEnd = 0;
-    let tMatch;
-    while ((tMatch = OSC_TERMINATOR.exec(combined)) !== null) {
-      lastTermEnd = tMatch.index + tMatch[0].length;
-    }
-    const oscSearchStart = Math.max(lastTermEnd, combined.length - 4096);
-    const oscOpen = combined.indexOf('\x1B]', oscSearchStart);
-    if (oscOpen !== -1) {
-      tail = combined.slice(oscOpen);
-      return STRIP(combined.slice(0, oscOpen));
-    }
-    // CSI parameter bytes exclude `\x1B`, so the rightmost `\x1B` is the
-    // unambiguous anchor for incomplete CSI / bare-ESC tails.
-    const lastEsc = combined.lastIndexOf('\x1B');
-    if (lastEsc !== -1 && combined.length - lastEsc <= 4096) {
-      const candidate = combined.slice(lastEsc);
-      if (INCOMPLETE_ESC_2BYTE.test(candidate) || INCOMPLETE_NF.test(candidate) || INCOMPLETE_CSI.test(candidate)) {
-        tail = candidate;
-        return STRIP(combined.slice(0, lastEsc));
-      }
-    }
-    return STRIP(combined);
+    const cut = incompleteAnsiStart(combined);
+    tail = combined.slice(cut);
+    return STRIP(combined.slice(0, cut));
   };
 }
 

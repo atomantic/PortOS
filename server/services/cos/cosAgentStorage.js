@@ -25,7 +25,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { publishRuntimeFiles, withRuntimeFileTurn } from '../../lib/runtimeFilePublication.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { redactActivePrivateOutput } from '../../lib/privacyPrompt.js';
+import { scrubPlainRecording, scrubTerminalRecording } from '../../lib/privacyRecording.js';
 import { AGENTS_DIR, loadConfig, saveConfig, withConfigLock, withStateLock, readAgentsStateForSafetyCheck } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
 import { RECORDING_STAGE_NAME } from './recordingStages.js';
@@ -82,23 +82,22 @@ async function retireRecordingStages(dir, before = Infinity) {
 
 // The scrubber holds backup admission and the CoS state lock across directory
 // discovery and this rewrite so maintenance cannot republish an older recording.
-export async function scrubAgentRecordings(dir, scrubValue) {
+export async function scrubAgentRecordings(dir, values) {
   const plainPath = join(dir, 'raw.txt');
   await recordingStageTurn(dir, () => withRuntimeFileTurn(plainPath, async () => {
     // Let any staging and verification finish, then invalidate its unpublished
     // copy along with residue from earlier runs. Publication checks for absence.
     if (DATE.test(basename(dirname(dir)))) await retireRecordingStages(dir);
-    redactActivePrivateOutput(plainPath, scrubValue);
-    if (!(await info(plainPath))?.isFile()) return;
-    const original = await readFile(plainPath, 'utf8');
-    const cleaned = scrubValue(original);
-    if (cleaned !== original) await atomicWrite(plainPath, cleaned);
+    const stat = await info(plainPath);
+    if (stat && !stat.isFile()) return;
+    const original = stat ? await readFile(plainPath, 'utf8') : '';
+    await scrubPlainRecording(plainPath, original, values, cleaned => atomicWrite(plainPath, cleaned));
   }));
 
   const gzipPath = `${plainPath}.gz`;
   if (!(await info(gzipPath))?.isFile()) return;
   const original = (await unzipRecording(await readFile(gzipPath))).toString('utf8');
-  const cleaned = scrubValue(original);
+  const cleaned = scrubTerminalRecording(original, values);
   if (cleaned === original) return;
 
   const bytes = Buffer.from(cleaned);

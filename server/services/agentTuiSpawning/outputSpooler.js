@@ -20,7 +20,8 @@ import { appendFile, writeFile } from 'fs/promises';
 import { appendAgentOutputLines, updateAgent } from '../cos/cosAgentLifecycle.js';
 import { OUTPUT_BUFFER_CAP, OUTPUT_BUFFER_HEADROOM, RAW_SPOOL_MAX_BYTES } from '../../lib/tuiHandshake.js';
 import { withRuntimeFileTurn } from '../../lib/runtimeFilePublication.js';
-import { trackPrivateRunOutput } from '../../lib/privacyPrompt.js';
+import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
+import { trackPrivateRecording } from '../../lib/privacyRecording.js';
 
 // Status updates stay responsive; raw recovery output can tolerate a longer
 // batching window. Neither timer delays an explicit final drain.
@@ -93,7 +94,6 @@ export function createTranscriptWriteReporter({ agentId, isDrained = () => false
  * @param {string} [opts.prompt]  Sent prompt, for private recording provenance.
  */
 export function createOutputSpooler({ agentId, outputFile, rawFile, prompt = '' }) {
-  const privateRaw = trackPrivateRunOutput(rawFile, prompt, withRuntimeFileTurn);
   let outputBuffer = '';
   let lastLine = '';
   // True once outputBuffer crossed its HEADROOM and the head was dropped.
@@ -109,6 +109,7 @@ export function createOutputSpooler({ agentId, outputFile, rawFile, prompt = '' 
   let rawFlushTimer = null;
   let rawFlushing = null;
   let rawBytesWritten = 0;
+  const rawRecording = trackPrivateRecording(rawFile, prompt, bytes => { rawBytesWritten = bytes; });
   let rawSpoolTruncationWarned = false;
   // A drain owns its pipeline until it returns: the debounce timer must not
   // launch a second concurrent flush, or the drain can see an empty queue and
@@ -160,39 +161,34 @@ export function createOutputSpooler({ agentId, outputFile, rawFile, prompt = '' 
   // scheduleRawFlush is gated by rawFlushing); join() runs once per flush
   // tick, so peak in-memory raw data is bounded by one debounce-plus-IO
   // window of TUI output (typically hundreds of KB on a chatty agent).
-  const writeRawBatch = (batch, truncate) => withRuntimeFileTurn(rawFile, async () => {
-    const cleaned = privateRaw?.redact(batch) ?? batch;
-    // Count UTF-8 bytes actually written to disk, NOT the UTF-16 code-unit
-    // length of the JS string — non-ASCII output would otherwise under-
-    // report and let the spool exceed the safety cap.
-    const batchBytes = Buffer.byteLength(cleaned, 'utf8');
-    if (!truncate && rawBytesWritten + batchBytes > RAW_SPOOL_MAX_BYTES) return false;
+  const writeRawBatch = (batch, truncate, final) => withRuntimeFileTurn(rawFile, async () => {
+    const next = rawRecording.prepare(batch, final, truncate ? RAW_SPOOL_MAX_BYTES : Infinity);
+    const batchBytes = Buffer.byteLength(next.output);
+    // Charge unpublished matching context to the spool cap even when a stream
+    // of formatting bytes interrupts a single visible word.
+    const size = batchBytes + Buffer.byteLength(next.tail);
+    if (!truncate && size > 0 && rawBytesWritten + size > RAW_SPOOL_MAX_BYTES) return false;
     if (truncate) {
-      // Safety valve: rewrite the file with just this batch instead of
-      // appending. The tail-read at finalize wants the MOST RECENT bytes,
-      // not the oldest, so truncating preserves what analyzeAgentFailure
-      // actually uses while bounding disk usage at ~RAW_SPOOL_MAX_BYTES.
-      // If a single debounce-window batch exceeds the cap (runaway producer
-      // emitting MB/sec), slice to the trailing RAW_SPOOL_MAX_BYTES bytes
-      // first — Buffer-slice to keep UTF-8 byte semantics correct (a
-      // string.slice would index by UTF-16 code units and produce torn
-      // multi-byte sequences at the boundary).
-      const writeBuf = batchBytes > RAW_SPOOL_MAX_BYTES ? Buffer.from(cleaned).subarray(-RAW_SPOOL_MAX_BYTES) : cleaned;
-      await writeFile(rawFile, writeBuf);
-      rawBytesWritten = Math.min(batchBytes, RAW_SPOOL_MAX_BYTES);
-    } else {
-      await appendFile(rawFile, cleaned);
+      await writeFile(rawFile, next.output);
+      rawBytesWritten = batchBytes;
+    } else if (next.output) {
+      await appendFile(rawFile, next.output);
       rawBytesWritten += batchBytes;
     }
+    rawRecording.commit(next);
+    if (final) rawRecording.release();
     return true;
   });
 
-  const flushPendingRawChunks = () => withBackupAssetPublication(async () => {
+  // Keep explicit flushes and final drains behind both halves of a cap rewrite.
+  // The per-file turn is deliberately released in between for state metadata.
+  const queueRawFlush = createFileWriteQueue();
+  const flushPendingRawChunks = (final = false) => withBackupAssetPublication(() => queueRawFlush(async () => {
     if (rawFlushTimer) { clearTimeout(rawFlushTimer); rawFlushTimer = null; }
-    if (pendingRawChunks.length === 0) return;
+    if (pendingRawChunks.length === 0 && !(rawRecording.isPrivate && final)) return;
     const batch = pendingRawChunks.join('');
     pendingRawChunks = [];
-    const handled = await writeRawBatch(batch, false).catch(async (err) => {
+    const handled = await writeRawBatch(batch, false, final).catch(async (err) => {
       await reporter.report('raw.txt', err);
       return true;
     });
@@ -210,8 +206,8 @@ export function createOutputSpooler({ agentId, outputFile, rawFile, prompt = '' 
       if (!published) return;
       rawSpoolTruncationWarned = true;
     }
-    await writeRawBatch(batch, true).catch(err => reporter.report('raw.txt', err));
-  });
+    await writeRawBatch(batch, true, final).catch(err => reporter.report('raw.txt', err));
+  }));
 
   const scheduleRawFlush = () => {
     if (rawFlushTimer || rawFlushing || rawDraining) return;
@@ -251,6 +247,7 @@ export function createOutputSpooler({ agentId, outputFile, rawFile, prompt = '' 
 
   // Queue a raw PTY chunk for the debounced raw.txt spool.
   const pushRaw = (text) => {
+    if (rawRecording.isPrivate && rawDrained) return;
     pendingRawChunks.push(text);
     scheduleRawFlush();
   };
@@ -299,14 +296,20 @@ export function createOutputSpooler({ agentId, outputFile, rawFile, prompt = '' 
       flush: flushPendingRawChunks,
       hasPending: () => pendingRawChunks.length > 0,
     });
+    if (rawRecording.isPrivate && !rawDrained) {
+      try {
+        await flushPendingRawChunks(true);
+      } finally {
+        rawRecording.release();
+      }
+    }
     rawDrained = true;
-    privateRaw?.release();
   };
 
   return {
     appendLine,
     pushRaw,
-    // Flush only the raw pipeline immediately (no in-flight await) — used by the
+    // Flush the raw pipeline immediately — used by the
     // startup-failure path so the captured raw.txt tail includes the CLI's most
     // recent output before it's read back.
     flushRaw: flushPendingRawChunks,

@@ -277,7 +277,7 @@ it('waits for active staging before scrubbing and retires a pending candidate ev
     scrubAdmitted.resolve();
     // The revoked fact may exist only in residue, so the source fingerprint
     // can stay identical even though this candidate has been invalidated.
-    await storage.scrubAgentRecordings(dir, value => value);
+    await storage.scrubAgentRecordings(dir, ['absent synthetic fact']);
     scrubFinished = true;
   }));
   try {
