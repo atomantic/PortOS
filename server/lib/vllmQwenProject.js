@@ -118,15 +118,16 @@ async function completeTensor(path) {
   return result.ok;
 }
 
-async function completeCheckpoint(dir, { preparedBase = false, drafter = false } = {}) {
+async function completeCheckpoint(dir, { preparedBase = false, fast = false, drafter = false } = {}) {
   const metadata = drafter ? ['config.json'] : ['config.json', 'tokenizer.json', 'tokenizer_config.json'];
+  if (fast) metadata.push('mtp_draft_vocab_ids.pt');
   for (const name of metadata) {
     if (!await readableFile(join(dir, name))) return false;
   }
 
   const indexPath = join(dir, INDEX);
   const indexInfo = await fileStat(indexPath);
-  if (!indexInfo) return !preparedBase && completeTensor(join(dir, SINGLE_WEIGHT));
+  if (!indexInfo) return !preparedBase && !fast && completeTensor(join(dir, SINGLE_WEIGHT));
   if (!indexInfo.isFile()) return false;
 
   let index;
@@ -194,14 +195,13 @@ async function inspectWeights(dir, env) {
   const model = configuredModel || `/app/models/${fast ? FAST_MODEL : BASE_MODEL}`;
   const checkpoint = await checkpointPath(model, modelsRoot, hubRoot);
   const preparedBase = checkpoint === join(modelsRoot, BASE_MODEL);
-  let complete = Boolean(checkpoint && await completeCheckpoint(checkpoint, { preparedBase }));
-  if (complete && checkpoint === join(modelsRoot, FAST_MODEL)) {
-    complete = Boolean(await readableFile(join(checkpoint, 'mtp_draft_vocab_ids.pt')));
-    // The container entrypoint verifies the default base before launch, even
-    // when the single-user launcher will then choose the fast variant.
-    if (complete && fast && settings.VERIFY !== '0') {
-      complete = await completeCheckpoint(join(modelsRoot, BASE_MODEL), { preparedBase: true });
-    }
+  const usesFast = checkpoint === join(modelsRoot, FAST_MODEL);
+  let complete = Boolean(checkpoint && await completeCheckpoint(checkpoint, { preparedBase, fast: usesFast }));
+  const fastWeightsIncomplete = usesFast && !complete;
+  // The container entrypoint verifies the default base before launch, even
+  // when the single-user launcher will then choose the fast variant.
+  if (complete && fast && settings.VERIFY !== '0') {
+    complete = await completeCheckpoint(join(modelsRoot, BASE_MODEL), { preparedBase: true });
   }
   if (complete && settings.SPEC === 'dflash2') {
     let draft = configuredDraft;
@@ -216,7 +216,7 @@ async function inspectWeights(dir, env) {
     const draftPath = await checkpointPath(draft, modelsRoot, hubRoot);
     complete = Boolean(draftPath && await completeCheckpoint(draftPath, { drafter: true }));
   }
-  return { hasWeights: complete, weightsRoot: complete ? root : null };
+  return { hasWeights: complete, weightsRoot: complete ? root : null, fastWeightsIncomplete };
 }
 
 /**
@@ -228,7 +228,7 @@ async function inspectWeights(dir, env) {
  *   path this module derives has to be answerable by a test's sandbox rather
  *   than by whatever the developer's own install happens to have recorded.
  * @returns {Promise<{dir:string, hasProject:boolean, composeFile:string|null,
- *   hasWeights:boolean|null, weightsRoot:string|null}>}
+ *   hasWeights:boolean|null, weightsRoot:string|null, fastWeightsIncomplete?:boolean}>}
  */
 export async function inspectVllmQwenProject(env = process.env, envPath = PORTOS_ENV_PATH) {
   const dir = resolveVllmProjectDir(env, envPath);

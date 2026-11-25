@@ -199,23 +199,34 @@ async function applyVllmApiKeyToProviders(apiKey, emit) {
   return stored;
 }
 
+const VLLM_ARTIFACTS = new URL('../../docker/vllm-qwen/', import.meta.url);
+const FAST_CHECKPOINT_SCRIPT = 'fast_checkpoint.py';
+
+async function readVllmManifest() {
+  const manifest = await readFile(new URL('manifest.sha256', VLLM_ARTIFACTS), 'utf8');
+  if (manifest.split(/\r?\n/, 1)[0] !== `# HyperQwen ${VLLM_UPSTREAM_REVISION}`) {
+    throw new Error('vLLM artifact manifest does not match the pinned source revision.');
+  }
+  return manifest;
+}
+
+async function readVllmArtifact(manifest, name) {
+  const bytes = await readFile(new URL(name, VLLM_ARTIFACTS));
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  if (!manifest.split(/\r?\n/).includes(`${digest}  ${name}`)) {
+    throw new Error(`vLLM artifact checksum mismatch for ${name}.`);
+  }
+  return bytes;
+}
+
 // Stage every build input before publishing. A retry after a bad bundle must
 // never find an apparently reusable, unpatched checkout.
 async function installVllmArtifacts(staging, git) {
-  const bundle = new URL('../../docker/vllm-qwen/', import.meta.url);
-  const manifest = await readFile(new URL('manifest.sha256', bundle), 'utf8');
-  const [revision, ...checksums] = manifest.split(/\r?\n/);
-  if (revision !== `# HyperQwen ${VLLM_UPSTREAM_REVISION}`) {
-    throw new Error('vLLM artifact manifest does not match the pinned source revision.');
-  }
+  const manifest = await readVllmManifest();
   const destination = join(staging, 'docker', 'portos');
   await mkdir(destination);
-  for (const name of ['provision.patch', 'install-apt.sh', 'cuda-packages.sha256', 'requirements.lock']) {
-    const bytes = await readFile(new URL(name, bundle));
-    const digest = createHash('sha256').update(bytes).digest('hex');
-    if (!checksums.includes(`${digest}  ${name}`)) {
-      throw new Error(`vLLM artifact checksum mismatch for ${name}.`);
-    }
+  for (const name of ['provision.patch', 'install-apt.sh', 'cuda-packages.sha256', 'requirements.lock', FAST_CHECKPOINT_SCRIPT]) {
+    const bytes = await readVllmArtifact(manifest, name);
     await writeFile(join(destination, name), bytes, { flag: 'wx' });
   }
   await bufferedSpawnOrThrow(git, ['-C', staging, 'apply', '--index', 'docker/portos/provision.patch'], { timeoutMs: CONTROL_TIMEOUT_MS });
@@ -286,7 +297,8 @@ export async function provisionVllmQwenProject({ emit, isCancelled }) {
 
   let project = await inspectVllmQwenProject();
   const dir = project.dir;
-  const alreadyPrepared = vllmProjectSetupState(project) === 'ready';
+  const existingCheckout = project.hasProject;
+  const alreadyPrepared = project.hasWeights === true;
 
   if (!project.hasProject) {
     const checkout = await checkoutVllmSource(dir, emit);
@@ -310,9 +322,13 @@ export async function provisionVllmQwenProject({ emit, isCancelled }) {
 
   // Provisioning can add the default SPEC=dflash2 to a previously prepared
   // operator checkout. Recheck the selection before deciding to skip prepare.
-  if (alreadyPrepared && vllmProjectSetupState(await inspectVllmQwenProject()) === 'ready') {
-    return { success: true };
-  }
+  project = await inspectVllmQwenProject();
+  if (alreadyPrepared && project.hasWeights === true) return { success: true };
+
+  // Old prepare scripts treat the fast index as a completion marker. Let them
+  // prepare their base and drafter, then run the verified assembly in that same
+  // container configuration without touching the checkout or Compose files.
+  const repairFast = existingCheckout && project.fastWeightsIncomplete;
   if (isCancelled()) return { success: false, error: 'cancelled before the image was built' };
 
   emit('Building the vLLM image locally (~9.5 GB).');
@@ -323,10 +339,33 @@ export async function provisionVllmQwenProject({ emit, isCancelled }) {
 
   if (env.wsl2) warnAboutWsl2PrepareMemory(emit);
   emit('Downloading and requantizing the weights (~20 GB). This step is idempotent and its download resumes, so it is safe to leave running.');
-  const prepared = await runStreamingCommand('docker', ['compose', 'run', '--rm', 'prepare'], emit, { timeoutMs: PROVISION_TIMEOUT_MS, cwd: dir, splitRe: PROGRESS_SPLIT_RE });
+  const runOptions = { timeoutMs: PROVISION_TIMEOUT_MS, cwd: dir, splitRe: PROGRESS_SPLIT_RE };
+  const prepareArgs = ['compose', 'run', '--rm', ...(repairFast ? ['--env', 'FAST_VARIANT=0'] : []), 'prepare'];
+  const prepared = await runStreamingCommand('docker', prepareArgs, emit, runOptions);
   if (!prepared.success) return { success: false, error: `docker compose run --rm prepare failed: ${prepared.error}` };
 
-  return { success: true };
+  if (repairFast) {
+    if (isCancelled()) return { success: false, error: 'cancelled before repairing the fast checkpoint — re-running resumes from here' };
+    emit('Restoring the incomplete fast checkpoint from the prepared base and pinned Hub files.');
+    let script;
+    try {
+      script = await readVllmArtifact(await readVllmManifest(), FAST_CHECKPOINT_SCRIPT);
+    } catch (err) {
+      return { success: false, error: `Could not load the verified vLLM fast repair script: ${err.message}` };
+    }
+    const repaired = await runStreamingCommand('docker', [
+      'compose', 'run', '--rm', '-T', '--entrypoint', '/app/venv/bin/python', 'prepare',
+      '-c', script.toString('utf8'),
+    ], emit, runOptions);
+    if (!repaired.success) return { success: false, error: `Could not repair the vLLM fast checkpoint: ${repaired.error}` };
+  }
+
+  const verified = await inspectVllmQwenProject();
+  if (verified.hasWeights === true) return { success: true };
+  const detail = verified.fastWeightsIncomplete
+    ? 'The selected fast checkpoint is still incomplete. Check its indexed shards and the prepared base.'
+    : vllmStartBlockedReason(verified);
+  return { success: false, error: `vLLM prepare finished without verifiable weights. ${detail}` };
 }
 
 /**
