@@ -65,6 +65,25 @@ describe('scheduled audit measurement workflow', () => {
 
   });
 
+  it('strips nested protocol lines before storing a quality assessment', async () => {
+    const assessment = sliceReport({ summary: 'The dispatcher has a branching hotspot.\r\n  AUDIT_SLICE: incorrect slice\n\tQUALITY_AUDIT_JSON: {}\nThe retry path adds another branch.' });
+    const summary = `${sentinel(assessment)}AUDIT_SLICE: server/services`;
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    await expect(recordAuditQuality({ task, taskType: 'better-complexity', agentId: 'mixed-summary',
+      workspacePath: '/repo', success: true, assessedAt }, {
+      readFile: async () => JSON.stringify({ summary }), query, ensureSchema: vi.fn(),
+    })).resolves.toBe(true);
+    expect(query.mock.calls[0][1].slice(4)).toEqual([
+      JSON.stringify({ ...assessment, summary: 'The dispatcher has a branching hotspot.\nThe retry path adds another branch.' }),
+      'server/services',
+    ]);
+  });
+
+  it('rejects reports with only protocol lines in the assessment summary', () => {
+    const markerOnly = report({ summary: '  AUDIT_SLICE: server/services\r\n\tQUALITY_AUDIT_JSON:\n ' });
+    expect(parseAuditQualityReport(sentinel(markerOnly), 'better-complexity')).toBeNull();
+  });
+
   it('records an in-flight task under the current UI lifecycle category', async () => {
     const legacyReport = report({ category: 'react-lifecycle', score: 73 });
     const query = vi.fn().mockResolvedValue({ rows: [] });

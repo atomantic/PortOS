@@ -139,7 +139,7 @@ ${category === 'security' ? `   Security assessment: require evidence of attacke
 4. Keep investigation bounded after this scan. Report scanned roots, tools/commands, candidate ranking, exclusions, reviewed paths, unreviewed inventory and stopping reason. If tools or budget prevent broad discovery, report partial coverage, never claim a global worst or a clean repository.
 5. Assess the PRE-FIX state of the SLICE you deep-reviewed on 0–100 (higher is healthier): 90–100 target met / high quality, no material defect found after real inspection; 85–89 healthy with minor polish; 70–84 mostly healthy slice with 1–2 localized moderate defects; 40–69 recurring or systemic defects across multiple files/paths in the slice; 10–39 severe/core-workflow defects; 0–9 pervasive critical failure. The pragmatic target band is 85–95: do not chase 100/100 through speculative hardening, defensive layers or extra abstractions, and do not deduct points for absent hardening or ceremony without demonstrated harm. Name the slice (the top-level paths or area actually read, not the whole inventory) and rate only what you read; the dashboard derives the category trend server-side from recent slice scores, so never extrapolate a repository-wide number from a signal scan. Rate the slice, not the agent's performance or issue count. Explain the sliceScore using severity, prevalence and concrete evidence from the slice. Do not award points merely for filing or fixing this run. Use sliceScore:null for unavailable or inapplicable assessment; zero is a real score.
 6. Score the worst finding's severity separately on 1–10: 1–3 minor localized impact, 4–6 material recurring cost, 7–8 major workflow/reliability impact, 9–10 critical data/security/availability failure. Use 0 only when no material finding was verified. List this severity for every finding in the narrative.
-7. Include exactly one single-line QUALITY_AUDIT_JSON: {...} in your completion sentinel summary AND final response, with no secrets or personal data. Replace the example values with observed evidence. The category is fixed to this task; do not rate other categories. Beside it, include exactly one line AUDIT_SLICE: <comma-separated top-level paths or areas deep-reviewed> naming the same slice; PortOS records it so later runs of this lane rotate to other areas. Keep ordinary completion/PR instructions and summaries too.
+7. Include exactly one single-line QUALITY_AUDIT_JSON: {...} in your completion sentinel summary AND final response, with no secrets or personal data. Replace the example values with observed evidence. The category is fixed to this task; do not rate other categories. Beside it, include exactly one line AUDIT_SLICE: <comma-separated top-level paths or areas deep-reviewed> naming the same slice; PortOS records it so later runs of this lane rotate to other areas. Keep ordinary completion/PR instructions and summaries too. The report's inner JSON "summary" field must contain plain assessment prose only, with no QUALITY_AUDIT_JSON: or AUDIT_SLICE: lines.
 QUALITY_AUDIT_JSON: {"version":2,"category":"${category}","slice":"top-level paths or area deep-reviewed","sliceScore":null,"worstSeverity":0,"coverage":"unavailable","confidence":"low","summary":"Explain the slice assessment and strongest evidence","scannedFiles":0,"totalFiles":0}
 Allowed coverage: broad, partial, unavailable, not-applicable. Allowed confidence: low, medium, high. coverage describes the signal scan in step 1, not the deep review: scannedFiles counts files actually included in the category signal scan; totalFiles is the eligible inventory. Broad requires the whole inventory to be scanned (deep review remains bounded). Partial assessments are excluded from the overall score. For partial coverage, use sliceScore:null when the inspected evidence cannot support a slice score; explain why rather than inventing one. A numeric partial score is provisional. If unavailable or not-applicable, sliceScore must be null and explain why. Even a zero-finding audit returns this assessment.
 
@@ -207,11 +207,18 @@ export function numericQualityReport(report) {
   return { version: 1, category, score: qualityRunScore(report), worstSeverity, coverage, confidence, scannedFiles, totalFiles };
 }
 
+function sanitizeReportSummary(value) {
+  return value.split(/\r?\n/)
+    .filter(line => !/^\s*(?:AUDIT_SLICE|QUALITY_AUDIT_JSON):/.test(line))
+    .join('\n');
+}
+
 export function parseAuditQualityReport(summary, category) {
   if (typeof summary !== 'string') return null;
   const lines = summary.split(/\r?\n/).filter(line => line.startsWith(REPORT_PREFIX));
   if (lines.length !== 1) return null;
   const raw = safeJSONParse(lines[0].slice(REPORT_PREFIX.length), null);
+  if (typeof raw?.summary === 'string') raw.summary = sanitizeReportSummary(raw.summary);
   // An agent that scanned only part of the inventory but labelled it "broad"
   // (the common slip) still measured something real. Record it as the partial
   // assessment it honestly is rather than dropping the whole run's measurement.
