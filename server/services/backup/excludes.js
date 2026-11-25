@@ -227,7 +227,7 @@ export const OS_METADATA_RSYNC_EXCLUDES = [...OS_METADATA_FILES, '._*'].map(name
  */
 const RESTORE_PRESERVED_FILES = Object.freeze([
   'certs', 'tailcat-serve.json', 'tailcat-serve.addr', 'tailcat-forwards.json',
-  'database-authority.json', 'peer-execution', 'peer-execution-catalog.json', 'peer-execution-grants.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance', 'backup-admission', 'cos/agents/.branch-policy-revision',
+  'database-authority.json', 'database-restore-recovery.json', 'peer-execution', 'peer-execution-catalog.json', 'peer-execution-grants.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance', 'backup-admission', 'cos/agents/.branch-policy-revision',
 ]);
 // Matched case-insensitively (rsync has no such flag, so each letter becomes a
 // `[xX]` class): on a case-insensitive volume a `Database-Authority.json` entry
@@ -237,11 +237,13 @@ export const RESTORE_PRESERVED_RSYNC_EXCLUDES = [
   ...RESTORE_PRESERVED_FILES.map(name => `--exclude=/${caseInsensitiveGlob(name)}`),
   `--exclude=/${caseInsensitiveGlob('tailcat-serve.json.*.tmp')}`,
   `--exclude=/${caseInsensitiveGlob('tailcat-forwards.json.*.tmp')}`,
+  `--exclude=/${caseInsensitiveGlob('.database-restore-recovery-*.pending')}`,
 ];
 export const isRestorePreservedPath = (relativePath) => {
   if (typeof relativePath !== 'string') return false;
   const normalized = relativePath.toLowerCase();
   return /^tailcat-(?:serve|forwards)\.json\.[^/]+\.tmp$/.test(normalized)
+    || /^\.database-restore-recovery-[^/]*\.pending(?:\/|$)/.test(normalized)
     || RESTORE_PRESERVED_FILES.some(path => normalized === path || normalized.startsWith(`${path}/`));
 };
 

@@ -341,7 +341,56 @@ describe('restoreSnapshot manifest verification', () => {
       await expect(pending).resolves.toMatchObject({ verification: { status: 'verified', checkedFiles: 1 } });
     });
 
-    for (const subdirFilter of ['database-authority.json', './database-authority.json', 'database-authority.json/', 'Database-Authority.json', 'certs', './Certs/', 'certs/key.pem']) {
+    for (const withManifest of [true, false]) {
+      it(`preserves local database restore recovery with manifest=${withManifest} (#18834)`, async context => {
+        await withRealRsync(context, async () => {
+          const journal = 'database-restore-recovery.json';
+          const pending = '.database-restore-recovery-fixture.pending';
+          const protectedPaths = withManifest
+            ? ['Database-Restore-Recovery.json', '.Database-Restore-Recovery-Fixture.Pending']
+            : [journal, pending];
+          const record = '{"value":"snapshot"}';
+          const hash = await writeSnapshotFile(RECORD, record);
+          for (const path of protectedPaths) await writeSnapshotFile(path, 'obsolete snapshot recovery');
+          // The protected files are outside verification even when present in the snapshot tree.
+          if (withManifest) await writeManifest({ [RECORD]: hash });
+          try {
+            for (const scope of [{}, { subdirFilter: 'brain' }]) {
+              for (const live of [null, 'current local recovery']) {
+                for (const path of [journal, pending]) {
+                  const localPath = joinPath(PATHS.data, path);
+                  if (live === null) await realFs.rm(localPath, { force: true });
+                  else await realFs.writeFile(localPath, live);
+                }
+                const liveRecord = joinPath(PATHS.data, RECORD);
+                await realFs.rm(liveRecord, { force: true });
+                for (const dryRun of [true, false]) {
+                  const result = await restoreSnapshot(tmpRoot, 'snap-1', { ...scope, dryRun });
+                  expect(result.changedFiles).toHaveLength(1);
+                  expect(result.changedFiles[0]).toContain(RECORD);
+                  expect(existsSync(liveRecord)).toBe(!dryRun);
+                  for (const path of [journal, pending]) {
+                    const localPath = joinPath(PATHS.data, path);
+                    if (live === null) expect(existsSync(localPath)).toBe(false);
+                    else expect(await realFs.readFile(localPath, 'utf8')).toBe(live);
+                  }
+                  if (live === null) {
+                    for (const path of protectedPaths) expect(existsSync(joinPath(PATHS.data, path))).toBe(false);
+                  }
+                }
+                expect(await realFs.readFile(liveRecord, 'utf8')).toBe(record);
+              }
+            }
+          } finally {
+            for (const path of new Set([journal, pending, ...protectedPaths])) {
+              await realFs.rm(joinPath(PATHS.data, path), { force: true });
+            }
+          }
+        });
+      });
+    }
+
+    for (const subdirFilter of ['database-authority.json', './database-authority.json', 'database-authority.json/', 'Database-Authority.json', 'database-restore-recovery.json', './Database-Restore-Recovery.json/', './.Database-Restore-Recovery-Fixture.Pending', 'certs', './Certs/', 'certs/key.pem']) {
       it(`refuses an explicit ${subdirFilter} selection before verification or transfer, for preview and execution alike`, async () => {
         await seedSnapshot();
         for (const dryRun of [true, false]) {
