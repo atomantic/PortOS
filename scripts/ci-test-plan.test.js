@@ -2715,6 +2715,8 @@ describe('cross-workspace browser suites (#10312)', () => {
       }
       expect(plan.browserFiles).not.toContain(suite);
     }
+    // Code-animation export reaches systemCapabilities.js through the media
+    // queue's model registry, which checks hardware compatibility.
     const openCodeConfig = 'server/lib/opencodeConfig.js';
     for (const suite of [...suites, 'server/services/codeAnimation/export.realBrowser.test.js']) {
       expect(inputs.browserDependencies[suite], `${suite} reaches ${openCodeConfig}`).not.toContain(openCodeConfig);
