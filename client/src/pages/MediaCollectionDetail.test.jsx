@@ -15,6 +15,8 @@ const mockGetMediaCollection = vi.fn();
 const mockAddMediaCollectionItem = vi.fn();
 const mockRemoveMediaCollectionItem = vi.fn();
 const mockLocalizeMediaCollection = vi.fn();
+const mockCancelImagePendingDelete = vi.fn();
+const mockDeleteImage = vi.fn();
 const mockGetMediaCollectionPrimary = vi.fn();
 const mockSetMediaCollectionPrimary = vi.fn();
 
@@ -23,6 +25,7 @@ vi.mock('../services/apiPeerSync.js', () => ({
 }));
 
 vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
+vi.mock('../services/apiSystem.js', () => ({ getInstances: vi.fn().mockResolvedValue({ peers: [] }) }));
 
 vi.mock('../services/apiImageVideo', () => ({
   listMediaGalleryPage: async ({ collectionId, limit, offset }) => {
@@ -44,7 +47,8 @@ vi.mock('../services/apiImageVideo', () => ({
   setMediaCollectionPrimary: (...args) => mockSetMediaCollectionPrimary(...args),
   addMediaCollectionItem: (...args) => mockAddMediaCollectionItem(...args),
   removeMediaCollectionItem: (...args) => mockRemoveMediaCollectionItem(...args),
-  deleteImage: vi.fn(),
+  deleteImage: (...args) => mockDeleteImage(...args),
+  cancelImagePendingDelete: (...args) => mockCancelImagePendingDelete(...args),
   deleteVideoHistoryItem: vi.fn(),
   localizeMediaCollection: (...args) => mockLocalizeMediaCollection(...args),
 }));
@@ -82,7 +86,18 @@ vi.mock('../hooks/usePreviewRoute', () => ({
 }));
 
 vi.mock('../components/media/MediaCard', () => ({
-  default: ({ item, onClick }) => <button type="button" data-testid="media-card" onClick={() => onClick?.(item)}>{item.filename || item.key}</button>,
+  default: ({ item, onClick, onDelete, onCancelPendingDelete, pendingPeerName }) => (
+    <>
+      <button type="button" data-testid="media-card" onClick={() => onClick?.(item)}>{item.filename || item.key}</button>
+      {onDelete && !item.pendingDelete && <button type="button" onClick={() => onDelete(item)}>Delete {item.filename || item.key}</button>}
+      {item.pendingDelete && (
+        <>
+          <span>Delete pending on {pendingPeerName}</span>
+          <button type="button" onClick={() => onCancelPendingDelete(item)}>Cancel pending delete</button>
+        </>
+      )}
+    </>
+  ),
 }));
 
 vi.mock('../components/media/MediaPreview', () => ({
@@ -109,6 +124,7 @@ vi.mock('../components/media/normalize', () => {
     key: `image:${i.filename}`,
     filename: i.filename,
     ref: i.filename,
+    pendingDelete: i.pendingDelete,
   });
   const normalizeVideo = (v) => ({
     kind: 'video',
@@ -608,6 +624,30 @@ describe('MediaCollectionDetail — bulkMoveOrCopy move/remove failures', () => 
     expect(await screen.findByText('hosted-on-peer.png')).toBeInTheDocument();
     expect(screen.getByTitle(/Delete pending until Studio Mac is reachable/)).toBeInTheDocument();
     expect(screen.queryByTitle(/Hosted by Studio Mac/)).toBeNull();
+
+    expect(screen.getByText('Delete pending on Studio Mac')).toBeInTheDocument();
+    mockCancelImagePendingDelete.mockResolvedValueOnce({});
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Cancel pending delete' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Cancel pending delete' })).toBeNull());
+    expect(mockCancelImagePendingDelete).toHaveBeenCalledWith('hosted-on-peer.png', { silent: true });
+    expect(screen.getByTitle(/Hosted by Studio Mac/)).toBeInTheDocument();
+    expect(screen.getByText('hosted-on-peer.png')).toBeInTheDocument();
+  });
+
+  it('removes a hosted image stub after the peer confirms deletion', async () => {
+    mockListImageGallery.mockResolvedValue([]);
+    mockListVideoHistory.mockResolvedValue([]);
+    mockGetMediaCollection.mockResolvedValue({
+      ...REAL_COLLECTION,
+      items: [{ kind: 'image', ref: 'hosted-on-peer.png', location: 'remote' }],
+    });
+    mockDeleteImage.mockResolvedValueOnce({ status: 'deleted' });
+    renderReal();
+
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Delete hosted-on-peer.png' }));
+
+    expect(mockDeleteImage).toHaveBeenCalledWith('hosted-on-peer.png', { silent: true, force: false });
+    await waitFor(() => expect(screen.queryByText('hosted-on-peer.png')).not.toBeInTheDocument());
   });
 });
 

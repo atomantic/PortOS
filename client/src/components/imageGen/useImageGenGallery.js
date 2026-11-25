@@ -9,17 +9,13 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { normalizeImage } from '../media/normalize';
 import usePreviewRoute from '../../hooks/usePreviewRoute';
-import usePendingDeletePeerNames from '../../hooks/usePendingDeletePeerNames';
+import { useMediaDelete } from '../../hooks/useMediaDelete';
 import { useMediaAnnotations } from '../../hooks/useMediaAnnotations';
 import { useRecentImageGallery } from './useRecentImageGallery';
 import toast from '../ui/Toast';
-import { mediaDeleteOutcome } from '../../lib/mediaDeleteOutcome';
-import { refreshMediaUsages } from '../../hooks/useMediaUsages';
 import { useMediaHideToggle } from '../../hooks/useMediaHideToggle';
 import {
-  cancelImagePendingDelete,
   cleanGalleryImage,
-  deleteImage,
   removeImageWatermark,
 } from '../../services/apiImageVideo.js';
 
@@ -80,46 +76,18 @@ export function useImageGenGallery({ previewParam }) {
   }, [visibleGalleryItems, hiddenGalleryItems, showHidden, previewImage]);
   const [preview, setPreview] = usePreviewRoute(previewItems);
 
-  const { peerNames, rememberPeerName } = usePendingDeletePeerNames(gallery);
-
-  const withPendingDelete = useCallback((filename, pendingDelete) => setGallery((current) => current.map((image) => {
-    if (image.filename !== filename) return image;
-    const { pendingDelete: _previous, ...rest } = image;
-    return pendingDelete ? { ...rest, pendingDelete } : rest;
-  })), [setGallery]);
-
-  const handleDelete = useCallback(async (item, { force = false } = {}) => {
-    const filename = item?.filename;
-    if (!filename) return;
-    const result = await deleteImage(filename, { force }).catch((err) => {
-      if (err?.code === 'MEDIA_IN_USE') void refreshMediaUsages();
-      return null;
-    });
-    if (!result) return;
-    void refreshMediaUsages();
-    const outcome = mediaDeleteOutcome(result, 'image');
-    // A delete that waits on, or did not reach, this machine's copy keeps the image.
-    if (!outcome.remove) {
-      rememberPeerName(outcome.pendingDelete?.peerId, result.peerName);
-      withPendingDelete(filename, outcome.pendingDelete);
-      toast(outcome.notice);
-      return;
-    }
-    setGallery((current) => current.filter((image) => image.filename !== filename));
-    refreshGallery();
-    if (outcome.tone === 'info') toast(outcome.notice);
-  }, [refreshGallery, setGallery, rememberPeerName, withPendingDelete]);
-
-  const handleCancelPendingDelete = useCallback(async (item) => {
-    const filename = item?.filename;
-    if (!filename) return;
-    const cancelled = await cancelImagePendingDelete(filename, { silent: true })
-      .then(() => true)
-      .catch((err) => { toast.error(err.message || 'Cancel failed'); return false; });
-    if (!cancelled) return;
-    withPendingDelete(filename, null);
-    toast.success('Pending delete cancelled');
-  }, [withPendingDelete]);
+  const { deleteItem, cancelPendingDelete, pendingPeerNames } = useMediaDelete({
+    rows: gallery,
+    onPending: useCallback((item, pendingDelete) => setGallery((current) => current.map((image) => {
+      if (image.filename !== item.filename) return image;
+      const { pendingDelete: _previous, ...rest } = image;
+      return pendingDelete ? { ...rest, pendingDelete } : rest;
+    })), [setGallery]),
+    onRemoved: useCallback((item) => {
+      setGallery((current) => current.filter((image) => image.filename !== item.filename));
+      refreshGallery();
+    }, [refreshGallery, setGallery]),
+  });
 
   const handlePromptSaved = useCallback((item, prompt) => {
     const filename = item?.filename || item?.raw?.filename;
@@ -187,8 +155,8 @@ export function useImageGenGallery({ previewParam }) {
       updateAnnotation,
     },
     actions: {
-      delete: handleDelete,
-      cancelPendingDelete: handleCancelPendingDelete,
+      delete: deleteItem,
+      cancelPendingDelete,
       promptSaved: handlePromptSaved,
       toggleHidden: handleToggleHidden,
       clean: handleClean,
@@ -197,7 +165,7 @@ export function useImageGenGallery({ previewParam }) {
       prependVariant,
     },
     getCardProps,
-    pendingPeerNames: peerNames,
+    pendingPeerNames,
     refreshRecent,
   };
 }
