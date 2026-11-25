@@ -21,11 +21,12 @@ import {
   streamLocalLlmTest,
 } from '../services/apiLocalLlm.js';
 import { getNavPageForPath } from '../../../server/lib/navManifest.js';
+import { LOCAL_RUNTIME_LABELS } from '../../../server/lib/modelPinMembership.js';
 
 const LOADED_EVENTS = ['loaded-models:changed'];
 
 // Managed backends come from `/status`; every other runtime id and its label comes from `/runtime-models`.
-const BACKEND_LABEL = { ollama: 'Ollama', lmstudio: 'LM Studio' };
+const BACKEND_LABEL = { ollama: LOCAL_RUNTIME_LABELS.ollama, lmstudio: LOCAL_RUNTIME_LABELS.lmstudio };
 const MANAGED_BACKENDS = ['ollama', 'lmstudio'];
 const NO_RUNTIMES = Object.freeze([]);
 // A saved `?targets=` link may name any runtime the server serves; the server's schema is the real gate, so the

@@ -7,6 +7,18 @@ import { localRuntimeNamespace, isAntigravityProvider, isOpencodeProvider, antig
 import { PORTS } from './ports.js';
 import { localEndpointPort } from './localEndpoint.js';
 
+export const LOCAL_RUNTIME_LABELS = Object.freeze({
+  llama: 'llama.cpp',
+  ollama: 'Ollama',
+  lmstudio: 'LM Studio',
+  vllm: 'vLLM (Qwen3.8-27B)',
+  sglang: 'SGLang (Qwen3.8-27B)',
+  splash: 'Splash',
+  mkserve: 'mkserve',
+  slotstream: 'Slotstream',
+  mtplx: 'MTPLX',
+});
+
 /**
  * Which PortOS page manages each local runtime (source for `LOCAL_RUNTIMES[*].manageUrl`); in this leaf
  * because the client cannot import the endpoint half. `null` = no PortOS page (operator-owned compose).

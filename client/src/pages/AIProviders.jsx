@@ -45,6 +45,7 @@ import OverflowMenu from '../components/ui/OverflowMenu';
 import { providerPageTabForPath } from '../components/providers/ProviderPageTabs';
 import { lazyWithReload } from '../utils/lazyWithReload';
 import { useSingleFlight } from '../hooks/useSingleFlight';
+import { LOCAL_RUNTIME_LABELS } from '../../../server/lib/modelPinMembership.js';
 
 // Routed views and heavy drawers/modals stay out of the entry chunk so visiting
 // `/ai/presets` never downloads Harnesses, Services, Fleet Setup, or the form.
@@ -71,7 +72,6 @@ const VIEW_HEADERS = {
 // The two local apps an API provider can front. Their installer lives on the
 // Models → LLMs page (it starts the service too), so the provider card
 // links there instead of offering an install of its own.
-const LOCAL_APP_LABELS = { ollama: 'Ollama', lmstudio: 'LM Studio' };
 
 // Presets are grouped by HARNESS (#7567) — the program that drives them — and
 // within a group ordered by readiness: what can run first, what the user
@@ -761,7 +761,7 @@ export default function AIProviders() {
     const installed = localModels.installed?.[backend];
     // `null` = status not fetched — never offer an install from an unknown state.
     if (typeof installed !== 'boolean') return null;
-    return { id: backend, label: LOCAL_APP_LABELS[backend], installed, installable: false, manageUrl: '/models/llms' };
+    return { id: backend, label: LOCAL_RUNTIME_LABELS[backend], installed, installable: false, manageUrl: '/models/llms' };
   }, [runtimes, localModels.installed, readiness]);
 
   // Everything the cards are derived from, in one pass: each provider's runtime,

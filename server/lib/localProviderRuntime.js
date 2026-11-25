@@ -10,7 +10,7 @@
 
 import { isOpencodeCommand, parseOpencodeConfigContent } from './provider/providerModels.js';
 import { opencodeLocalBaseUrl } from './opencodeLocalProviders.js';
-import { localRuntimeKind, LOCAL_RUNTIME_MANAGE_URLS } from './modelPinMembership.js';
+import { localRuntimeKind, LOCAL_RUNTIME_LABELS, LOCAL_RUNTIME_MANAGE_URLS } from './modelPinMembership.js';
 import { PORTS } from './ports.js';
 import { isLocalInstanceEndpoint } from './localEndpoint.js';
 
@@ -27,7 +27,7 @@ export { localBackendForProvider, localRuntimeKind, modelPinIsOffered, LOCAL_RUN
 export const LOCAL_RUNTIMES = Object.freeze({
   llama: Object.freeze({
     id: 'llama',
-    label: 'llama.cpp',
+    label: LOCAL_RUNTIME_LABELS.llama,
     // The server binary, not the `llama` wrapper: what `llamaServerManager` resolves and starts.
     command: 'llama-server',
     defaultBaseUrl: opencodeLocalBaseUrl('llama'),
@@ -45,7 +45,7 @@ export const LOCAL_RUNTIMES = Object.freeze({
   }),
   ollama: Object.freeze({
     id: 'ollama',
-    label: 'Ollama',
+    label: LOCAL_RUNTIME_LABELS.ollama,
     command: 'ollama',
     defaultBaseUrl: opencodeLocalBaseUrl('ollama'),
     manageUrl: LOCAL_RUNTIME_MANAGE_URLS.ollama,
@@ -54,7 +54,7 @@ export const LOCAL_RUNTIMES = Object.freeze({
   }),
   lmstudio: Object.freeze({
     id: 'lmstudio',
-    label: 'LM Studio',
+    label: LOCAL_RUNTIME_LABELS.lmstudio,
     command: 'lms',
     defaultBaseUrl: opencodeLocalBaseUrl('lmstudio'),
     manageUrl: LOCAL_RUNTIME_MANAGE_URLS.lmstudio,
@@ -65,7 +65,7 @@ export const LOCAL_RUNTIMES = Object.freeze({
   }),
   vllm: Object.freeze({
     id: 'vllm',
-    label: 'vLLM (Qwen3.8-27B)',
+    label: LOCAL_RUNTIME_LABELS.vllm,
     // The stack ships as an upstream compose project and PortOS never vendors the engine or image; "is docker here?" is the only install question it can answer.
     command: 'docker',
     defaultBaseUrl: opencodeLocalBaseUrl('vllm'),
@@ -83,7 +83,7 @@ export const LOCAL_RUNTIMES = Object.freeze({
   }),
   sglang: Object.freeze({
     id: 'sglang',
-    label: 'SGLang (Qwen3.8-27B)',
+    label: LOCAL_RUNTIME_LABELS.sglang,
     // Docker for the same reason as vLLM, but the LAUNCH LINE is ours (`lib/sglangQwenRecipe.js`) since SGLang publishes no compose project.
     command: 'docker',
     defaultBaseUrl: opencodeLocalBaseUrl('sglang'),
@@ -96,7 +96,7 @@ export const LOCAL_RUNTIMES = Object.freeze({
   }),
   splash: Object.freeze({
     id: 'splash',
-    label: 'Splash',
+    label: LOCAL_RUNTIME_LABELS.splash,
     command: 'splash',
     defaultBaseUrl: opencodeLocalBaseUrl('splash'),
     manageUrl: LOCAL_RUNTIME_MANAGE_URLS.splash,
@@ -106,7 +106,7 @@ export const LOCAL_RUNTIMES = Object.freeze({
   }),
   mkserve: Object.freeze({
     id: 'mkserve',
-    label: 'mkserve',
+    label: LOCAL_RUNTIME_LABELS.mkserve,
     command: 'mkserve',
     defaultBaseUrl: `http://127.0.0.1:${PORTS.MKSERVE}/v1`,
     manageUrl: LOCAL_RUNTIME_MANAGE_URLS.mkserve,
@@ -116,7 +116,7 @@ export const LOCAL_RUNTIMES = Object.freeze({
   }),
   slotstream: Object.freeze({
     id: 'slotstream',
-    label: 'Slotstream',
+    label: LOCAL_RUNTIME_LABELS.slotstream,
     command: 'slotstream',
     // Dedicated loopback port — never 11434, which is a PortOS-managed Ollama.
     defaultBaseUrl: `http://127.0.0.1:${PORTS.SLOTSTREAM}/v1`,
@@ -129,7 +129,7 @@ export const LOCAL_RUNTIMES = Object.freeze({
   }),
   mtplx: Object.freeze({
     id: 'mtplx',
-    label: 'MTPLX',
+    label: LOCAL_RUNTIME_LABELS.mtplx,
     command: 'mtplx',
     defaultBaseUrl: opencodeLocalBaseUrl('mtplx'),
     // No model CATALOG in PortOS, but Models → Runtimes owns its server (install, checkpoint, start/stop); the checklist's one-click setup (`services/localRuntimeSetup.js`) still runs in place.
