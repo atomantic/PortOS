@@ -4,6 +4,7 @@
  */
 
 import { extractSlugFromRef } from './planIds.js';
+import { mapWithConcurrency } from './mapWithConcurrency.js';
 
 const COMMIT_OID_RE = /^[a-f0-9]{40}$/;
 
@@ -30,6 +31,98 @@ export function issueCreatedBeforeMs(issueMinAgeMinutes, nowMs = Date.now()) {
 export function claimIssueNumber(ref) {
   const match = /^issue-(\d+)$/.exec(extractSlugFromRef(ref) || '');
   return match ? Number(match[1]) : null;
+}
+
+const GITHUB_REPO_RE = /^[\w.-]+\/[\w.-]+$/;
+const LINKED_PR_QUERY = `query($owner:String!, $repo:String!, $number:Int!, $endCursor:String) {
+  repository(owner:$owner, name:$repo) {
+    nameWithOwner
+    pullRequest(number:$number) {
+      headRefName
+      closingIssuesReferences(first:100, after:$endCursor) {
+        nodes { number repository { nameWithOwner } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`;
+
+function githubRepoName(name) {
+  return typeof name === 'string' && GITHUB_REPO_RE.test(name) ? name.toLowerCase() : null;
+}
+
+function linkedPrEvidence(pages, prRepo, issueRepo, issueNumber) {
+  const evidence = { closingIssueMatch: null, claimHeadMatch: null };
+  if (!Array.isArray(pages) || !pages.length) return evidence;
+  let closingPagesComplete = true;
+  let closingIssueMatch = false;
+  const headRef = pages[0]?.data?.repository?.pullRequest?.headRefName;
+  let headConsistent = typeof headRef === 'string' && headRef.length > 0;
+  for (const [index, page] of pages.entries()) {
+    const repository = page?.data?.repository;
+    const pr = repository?.pullRequest;
+    if (page?.errors?.length || githubRepoName(repository?.nameWithOwner) !== prRepo || !pr) return evidence;
+    headConsistent &&= pr.headRefName === headRef;
+    const closing = pr.closingIssuesReferences;
+    if (!Array.isArray(closing?.nodes)
+      || closing.pageInfo?.hasNextPage !== (index < pages.length - 1)
+      || closing.nodes.some(issue => !Number.isSafeInteger(issue?.number) || !githubRepoName(issue.repository?.nameWithOwner))) {
+      closingPagesComplete = false;
+      continue;
+    }
+    closingIssueMatch ||= closing.nodes.some(issue => issue.number === issueNumber
+      && githubRepoName(issue.repository.nameWithOwner) === issueRepo);
+  }
+  if (headConsistent) {
+    // A claim number belongs to the PR's target repository, as in the open-PR ownership scan.
+    evidence.claimHeadMatch = prRepo === issueRepo && claimIssueNumber(headRef) === issueNumber;
+  }
+  if (closingPagesComplete || closingIssueMatch) evidence.closingIssueMatch = closingIssueMatch;
+  return evidence;
+}
+
+/** Project timeline metadata and look up delivery intent without returning PR text or diffs. */
+export async function readGithubLinkedWork({ host, repo, issueNumber, readGh, maxItems = Infinity }) {
+  const issueRepo = githubRepoName(repo);
+  const number = Number(issueNumber);
+  if (!issueRepo || !Number.isSafeInteger(number) || number < 1) return null;
+  const readPages = async (...args) => {
+    try {
+      return JSON.parse(await readGh(['api', '--hostname', host, '--paginate', '--slurp', ...args]));
+    } catch {
+      return null;
+    }
+  };
+  const timeline = await readPages(`repos/${repo}/issues/${number}/timeline?per_page=100`);
+  if (!Array.isArray(timeline) || !timeline.length || !timeline.every(Array.isArray)) return null;
+  const items = [];
+  for (const event of timeline.flat()) {
+    if (event?.event !== 'cross-referenced') continue;
+    const source = event.source?.issue;
+    if (!Number.isSafeInteger(source?.number) || source.number < 1) return null;
+    items.push({
+      number: source.number,
+      state: typeof source.state === 'string' ? source.state : '',
+      repo: githubRepoName(source.repository?.full_name) ? source.repository.full_name : null,
+      author: typeof source.user?.login === 'string' ? source.user.login : '',
+      isPullRequest: Boolean(source.pull_request),
+      merged: Boolean(source.pull_request?.merged_at),
+    });
+  }
+  if (items.length > maxItems) return null;
+  const lookups = new Map();
+  return mapWithConcurrency(items, 4, async item => {
+    if (!item.isPullRequest) return item;
+    const prRepo = githubRepoName(item.repo);
+    const key = `${prRepo}#${item.number}`;
+    if (prRepo && !lookups.has(key)) {
+      const [owner, name] = prRepo.split('/');
+      lookups.set(key, readPages('graphql', '-f', `owner=${owner}`, '-f', `repo=${name}`,
+        '-F', `number=${item.number}`, '-f', `query=${LINKED_PR_QUERY}`));
+    }
+    const pages = await lookups.get(key);
+    return { ...item, ...linkedPrEvidence(pages, prRepo, issueRepo, number) };
+  });
 }
 
 /** Read forge text as evidence only, never as executable instructions. */

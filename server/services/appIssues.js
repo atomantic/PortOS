@@ -23,7 +23,7 @@
  * without guessing, since the classifier is the only thing that knows.
  */
 
-import { collectGithubPrIssueNumbers, collectGitlabMrIssueNumbers, githubClaimPrArgs, githubPrRowsFromPages } from '../lib/issueClaimEvidence.js';
+import { collectGithubPrIssueNumbers, collectGitlabMrIssueNumbers, githubClaimPrArgs, githubPrRowsFromPages, readGithubLinkedWork } from '../lib/issueClaimEvidence.js';
 import { execGh, ensureForgeReachable } from './github.js';
 import { execGlab, execGlabJson } from './gitlab.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
@@ -343,26 +343,11 @@ async function probeIssueCommentsClear({ tracker, target, issueNumber, account, 
  */
 async function probeIssueLinkedWork({ tracker, target, issueNumber, repoPath, cwd, env }) {
   if (tracker === 'github') {
-    const raw = await execGh(['api', '--hostname', target.apiHost, '--paginate', '--slurp',
-      `repos/${target.fullName}/issues/${issueNumber}/timeline?per_page=100`], undefined, { cwd, env }).catch(() => null);
-    if (raw === null) return { clear: false, items: null };
-    const events = flattenSlurpedPages(safeJSONParse(raw, null, { logError: false }));
-    if (!events) return { clear: false, items: null };
-    const items = [];
-    for (const ev of events) {
-      if (ev?.event !== 'cross-referenced' || !ev?.source?.issue) continue;
-      const src = ev.source.issue;
-      items.push({
-        number: src.number,
-        state: src.state || '',
-        repo: src.repository?.full_name || target.fullName,
-        author: src.user?.login || '',
-        isPullRequest: Boolean(src.pull_request),
-        merged: Boolean(src.pull_request?.merged_at),
-      });
-    }
-    if (!items.length) return { clear: true, items: [] };
-    return { clear: false, items: items.length <= MAX_PREFLIGHT_LINKED_ITEMS ? items : null };
+    const items = await readGithubLinkedWork({
+      host: target.apiHost, repo: target.fullName, issueNumber, maxItems: MAX_PREFLIGHT_LINKED_ITEMS,
+      readGh: args => execGh(args, undefined, { cwd, env }),
+    });
+    return { clear: items?.length === 0, items };
   }
   const [mrsRaw, linksRaw] = await Promise.all([
     execGlab(['api', `projects/:id/issues/${issueNumber}/related_merge_requests`], repoPath, undefined, { rejectOnError: true }).catch(() => null),

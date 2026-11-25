@@ -173,12 +173,37 @@ describe('assembled forge claim prompts', () => {
       target: '42',
       preverified: true,
       nonEpic: true,
-      linkedItems: [{ number: 99, state: 'open', repo: 'acme/widget', author: 'bob', isPullRequest: true, merged: false }],
+      linkedItems: [{ number: 99, state: 'open', repo: 'acme/widget', author: 'bob', isPullRequest: true, merged: false,
+        closingIssueMatch: false, claimHeadMatch: false }],
     });
     expect(claim.prompt).toContain('## Phase 3b — Check linked issues and PRs');
     expect(claim.prompt).toContain('PortOS prefetched the cross-referenced items below');
     expect(claim.prompt).toContain('"number": 99');
-    expect(claim.prompt).not.toContain('issues/${NUM}/timeline');
+    expect(claim.prompt).toContain('"closingIssueMatch": false');
+    expect(claim.prompt).toContain('"claimHeadMatch": false');
+    expect(claim.prompt).not.toContain('github-linked-claim-work.js');
+  });
+
+  it.each([[null], [[{ number: 99, state: 'open', isPullRequest: true }]]])(
+    'uses the same conservative Phase 3b rules with or without prefetched evidence', async linkedItems => {
+      const { prompt } = await buildClaimWorkTask(app, { target: '42', nonEpic: true, linkedItems });
+      if (!linkedItems) {
+        expect(prompt).toContain(`node "${PATHS.root}/scripts/github-linked-claim-work.js" "$GH_HOST" "$REPO" "$NUM"`);
+        expect(prompt).toContain('If the lookup fails or returns null or unreadable data, stop via Phase 3');
+      }
+      expect(prompt).toContain('if either `closingIssueMatch` or `claimHeadMatch` is true for the selected repository and issue');
+      expect(prompt).toContain('or either match is missing or null');
+      expect(prompt).toContain('If both matches are explicitly false, continue with the PR as incidental context');
+      expect(prompt).toContain('do not print or read that file yet. Screen it first');
+    },
+  );
+
+  it('looks up the final issue when an epic may change the selected number', async () => {
+    const { prompt } = await buildClaimWorkTask(app, {
+      target: '42', preverified: true, linkedWorkClear: true,
+    });
+    expect(prompt).toContain('## Phase 1b');
+    expect(prompt).toContain('github-linked-claim-work.js" "$GH_HOST" "$REPO" "$NUM"');
   });
 
   it('keeps the agent-cut checkout for an epic or an unverified target', async () => {
