@@ -72,7 +72,7 @@ const handoffBundleFilename = (name) => `${handoffSlug(name)}-handoff.zip`;
  * routes (image → data/images, video → video history), then asks the server to
  * associate them with scenes by the file tags the exported manifest assigned.
  */
-export default function useMusicVideoTakes({ project, applyScenePatch, patchProject = null, reloadProject = null, applyEdit = null }) {
+export default function useMusicVideoTakes({ project, applyScenePatch, patchProject = null, reloadProject = null, applyEdit = null, beforeWrite = null }) {
   const [busy, setBusy] = useState(false);
   const chainRef = useRef(Promise.resolve());
   const [reconcileError, setReconcileError] = useState(null);
@@ -124,7 +124,9 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
     startedRef.current += 1;
     runningRef.current += 1;
     optimistic?.(projectId);
-    const run = chainRef.current.then(() => work(projectId));
+    // Give edits already made to the old take their place before a take mutation.
+    const timingSaved = beforeWrite?.();
+    const run = chainRef.current.then(() => (timingSaved ? timingSaved.then(() => work(projectId)) : work(projectId)));
     chainRef.current = run.then((scene) => {
       // A reply that carries the edit result also corrects readiness and the neighbours' take staleness. Its
       // copy of the shots predates any decision still queued behind this one, so then only this shot is patched.
