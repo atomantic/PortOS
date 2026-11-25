@@ -75,6 +75,41 @@ describe('memorySummarizer — summarizeForEmbedding', () => {
     expect(usedModel).not.toBe('model-on-missing-provider');
   });
 
+  const privateApi = { type: 'api', enabled: true, endpoint: 'http://ollama.internal:11434/v1' };
+  const rejectedProviders = [
+    ['a disabled private API', { ...privateApi, enabled: false }],
+    ['a public API', { ...privateApi, endpoint: 'https://api.example.com/v1' }],
+    ['a CLI', { ...privateApi, type: 'cli' }],
+  ];
+
+  it.each(rejectedProviders)('skips %s as Brain default and uses private Ollama', async (_label, rejected) => {
+    const ollama = { ...privateApi, id: 'ollama', defaultModel: 'local-model' };
+    loadMeta.mockResolvedValue({ defaultProvider: 'brain-default', defaultModel: 'brain-model' });
+    getProviderById.mockImplementation(async (id) => id === 'ollama' ? ollama : rejected);
+    runPromptThroughProvider.mockResolvedValue({ text: 'summary' });
+
+    expect(await summarizer.summarizeForEmbedding({ type: 'observation' }, 'text')).toBe('summary');
+    expect(runPromptThroughProvider).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      provider: ollama,
+      model: 'local-model',
+      allowFallback: false,
+    }));
+  });
+
+  it.each(rejectedProviders)('skips %s as Ollama fallback before accessing the archive', async (_label, rejected) => {
+    loadMeta.mockResolvedValue({ defaultProvider: 'missing' });
+    getProviderById.mockImplementation(async (id) => id === 'ollama' ? rejected : null);
+
+    const out = await summarizer.summarizeForEmbedding(
+      { source: 'chatgpt-import', sourceRef: 'abc.json' },
+      'preview'
+    );
+
+    expect(out).toBeNull();
+    expect(readArchivedConversation).not.toHaveBeenCalled();
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
+  });
+
   it('returns null when no provider is configured (caller then truncates)', async () => {
     loadMeta.mockResolvedValue({});
     getProviderById.mockResolvedValue(null);

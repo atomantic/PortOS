@@ -40,7 +40,7 @@ import { loadMeta } from '../services/brainStorage.js';
 import { runPromptThroughProvider } from '../services/promptRunner.js';
 
 const embeddingProvider = { id: 'embed', type: 'api', endpoint: 'https://embedding.example.com/v1' };
-const summaryProvider = { id: 'summary', type: 'cli', command: 'claude', defaultModel: 'example-model' };
+const summaryProvider = { id: 'summary', type: 'api', endpoint: 'http://localhost:11434/v1', defaultModel: 'example-model' };
 const vector = [0.1, 0.2, 0.3];
 const budget = Math.floor(2048 * 0.85 * 3);
 const longContent = 'Reference text. '.repeat(420);
@@ -117,10 +117,15 @@ describe('memory creation embedding authority (#11038)', () => {
   });
 
   it.each([
-    { id: 'summary', type: 'tui', command: 'claude' },
-    { id: 'summary', type: 'cli', command: 'codex' },
-  ])('truncates safely when the configured summarizer cannot disable tools ($type)', async (provider) => {
-    getProviderById.mockImplementation(async (id) => id === 'embed' ? embeddingProvider : provider);
+    ['TUI', { id: 'summary', type: 'tui', command: 'claude' }],
+    ['CLI', { id: 'summary', type: 'cli', command: 'codex' }],
+    ['public API', { ...summaryProvider, endpoint: 'https://summary.example.com/v1' }],
+    ['disabled private API', { ...summaryProvider, enabled: false }],
+  ])('truncates safely when the configured summarizer is a %s', async (_label, provider) => {
+    getProviderById.mockImplementation(async (id) => {
+      if (id === 'embed') return embeddingProvider;
+      return id === 'summary' ? provider : null;
+    });
 
     const response = await request(app).post('/api/memory').send({ type: 'fact', content: longContent });
 
