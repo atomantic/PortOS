@@ -16,6 +16,7 @@ export { PROVIDER_TYPES } from '../../../server/lib/aiToolkit/constants.js';
 // The public `aiToolkit/providers.js` barrel reaches `fs` and `child_process`,
 // so the browser takes the dependency-free leaf that barrel itself re-exports.
 export { isOllamaBackedProvider } from '../../../server/lib/aiToolkit/internal/ollamaBacked.js';
+export { hasLocalRuntimeMarker, markedLocalRuntime } from '../../../server/lib/aiToolkit/internal/localRuntimeMarkers.js';
 export {
   commandBasename,
   isAntigravityProvider,

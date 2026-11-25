@@ -1,4 +1,5 @@
 import { executionOptionsSchema } from './internal/executionOptionsValidation.js';
+import { LOCAL_RUNTIME_MARKER_KEYS } from './internal/localRuntimeMarkers.js';
 import { z } from 'zod';
 import { MAX_MODEL_ACCESS_PATTERNS, MAX_MODEL_ACCESS_PATTERN_LENGTH, MODEL_ACCESS_MODES } from './internal/modelAccess.js';
 import { basename, extname } from 'path';
@@ -174,21 +175,11 @@ export const providerSchema = z.object({
   // The read-only sandbox blocks writes but not absolute-path reads; separate so
   // the transport cannot be enabled without recording explicit consent.
   textTransportReadRiskAcknowledged: z.boolean().optional(),
-  // A `claude` CLI/TUI provider whose ANTHROPIC_BASE_URL points at a local Ollama
-  // daemon; refresh pulls tool-use-capable Ollama models, not the Anthropic list.
-  ollamaBacked: z.boolean().optional(),
-  // Harness wrapper backed by the local LM Studio server. Unlike Ollama its
-  // context window is fixed at model LOAD, so PortOS prepares nothing before a
-  // spawn (`localRuntimeNamespace` in ../provider/providerModels.js).
-  lmstudioBacked: z.boolean().optional(),
-  // OpenCode wrappers for separately started local servers: MTPLX, llama.cpp,
-  // vLLM (behind an API key) and SGLang (optional key). Engines, ports and
-  // protocol config are not interchangeable with each other or `ollamaBacked`.
-  mtplxBacked: z.boolean().optional(),
-  llamaBacked: z.boolean().optional(),
-  vllmBacked: z.boolean().optional(),
-  sglangBacked: z.boolean().optional(),
-  splashBacked: z.boolean().optional(),
+  // The local-runtime markers (ollama, lmstudio, mtplx, llama, vllm, sglang, splash), one
+  // boolean per runtime from internal/localRuntimeMarkers.js. They are not interchangeable:
+  // engines, ports and protocol config differ, and e.g. LM Studio fixes its context window at
+  // model LOAD (`localRuntimeNamespace` in ../provider/providerModels.js).
+  ...Object.fromEntries(LOCAL_RUNTIME_MARKER_KEYS.map((key) => [key, z.boolean().optional()])),
   // Wrapper for a hosted OpenAI-compatible gateway (see internal/gateways.js);
   // its API key is read from the sibling API record of the SAME id at
   // spawn/refresh time and never stored here.

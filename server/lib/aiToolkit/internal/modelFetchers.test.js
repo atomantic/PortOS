@@ -180,12 +180,12 @@ describe('resolveModelFetcher — the ordering the old chains encoded in prose',
 
   it('routes an MTPLX-backed OpenCode CLI to the MTPLX endpoint fetcher', () => {
     const p = { id: 'opencode-mtplx', type: 'cli', command: 'opencode', mtplxBacked: true };
-    expect(resolveModelFetcher(p).fetch).toBe('_fetchMtplxModels');
+    expect(resolveModelFetcher(p).fetch).toBe('_fetchOpenAiCompatibleModels');
   });
 
   it('routes a llama-backed OpenCode TUI to the llama endpoint fetcher', () => {
     const p = { id: 'opencode-llama-tui', type: 'tui', command: 'opencode', llamaBacked: true };
-    expect(resolveModelFetcher(p).fetch).toBe('_fetchLlamaModels');
+    expect(resolveModelFetcher(p).fetch).toBe('_fetchOpenAiCompatibleModels');
   });
 
   it('lets a command beat a display name — a renamed cursor still reaches cursor-agent', () => {
@@ -252,7 +252,7 @@ describe('resolveModelFetcher — the TUI arm never consults the display name', 
 
   it('serves an MTPLX-backed OpenCode TUI from its local endpoint', () => {
     expect(resolveModelFetcher({ id: 'opencode-mtplx-tui', type: 'tui', command: 'opencode', mtplxBacked: true }).fetch)
-      .toBe('_fetchMtplxModels');
+      .toBe('_fetchOpenAiCompatibleModels');
   });
 
   it('admits a shipped TUI id repointed at a wrapper script', () => {
