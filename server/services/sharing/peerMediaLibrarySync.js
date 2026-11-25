@@ -17,6 +17,8 @@
 import { join } from 'path';
 import { readdir, stat } from 'fs/promises';
 import { createHash } from 'crypto';
+import { sidecarPathForImage } from '../../lib/assetHash.js';
+import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
@@ -158,6 +160,38 @@ async function hashCachedLibraryAsset(name, kind, dir) {
   return entry;
 }
 
+const libraryImageCache = new Map(); // fullPath → { signature, plain, stamped, localInstanceId }
+
+async function hashCachedLibraryImage(name, dir, withCreatedAt, localInstanceId) {
+  const safeName = sanitizeAssetFilename(name);
+  if (!safeName) return null;
+  const fullPath = join(dir, safeName);
+  const [fileStat, sidecarStat] = await Promise.all([
+    stat(fullPath).catch(() => null),
+    stat(sidecarPathForImage(fullPath)).catch(err => err.code === 'ENOENT' ? null : undefined),
+  ]);
+  if (!fileStat?.isFile()) {
+    libraryImageCache.delete(fullPath);
+    return null;
+  }
+  // Use the pre-read signature. A sidecar rewritten during hashing must be
+  // checked again on the next walk so an intervening edit cannot be missed.
+  const signature = JSON.stringify([fileStat.mtimeMs, fileStat.size, sidecarStat?.mtimeMs, sidecarStat?.size]);
+  const options = { withCreatedAt, localInstanceId, fileStat };
+  if (sidecarStat === undefined) return hashImageForManifest(safeName, options);
+  const previous = libraryImageCache.get(fullPath);
+  const cached = previous?.signature === signature ? previous : { signature };
+  const entryKey = withCreatedAt ? 'stamped' : 'plain';
+  if (cached[entryKey] && (!withCreatedAt || cached.localInstanceId === localInstanceId)) return cached[entryKey];
+  const entry = await hashImageForManifest(safeName, options);
+  if (entry) {
+    cached[entryKey] = entry;
+    if (withCreatedAt) cached.localInstanceId = localInstanceId;
+    libraryImageCache.set(fullPath, cached);
+  }
+  return entry;
+}
+
 /**
  * Build the standalone media-library manifest this instance advertises to
  * full-sync peers. Walks each media dir, hashes every file (reusing the
@@ -180,17 +214,28 @@ export async function buildMediaLibraryManifest({ models = false, tombstones = f
     if (truncated) break;
     if (excluded.has(kind) || (kind === 'model' && !models)) continue;
     const names = await readdir(dir).catch(() => []); // missing dir → empty (nothing of that kind yet)
-    for (const name of names) {
-      // Image sidecars are metadata, not standalone assets — they ride the image
-      // entry's sidecarSha256 + the receiver's pullSidecarForImage, so skip the
-      // `.json` files in the images dir.
-      if (kind === 'image' && name.endsWith('.json')) continue;
-      const entry = kind === 'image'
-        ? await hashImageForManifest(name, { withCreatedAt: tombstones, localInstanceId: localId }) // sidecar-cached
-        : await hashCachedLibraryAsset(name, kind, dir); // (mtime,size)-cached
-      if (!entry) continue;
-      if (assets.length >= MEDIA_LIBRARY_MANIFEST_CAP) { truncated = true; break; }
-      assets.push(entry);
+    if (kind === 'image') {
+      const imagePaths = new Set(names.map(name => join(dir, name)));
+      for (const fullPath of libraryImageCache.keys()) {
+        if (!imagePaths.has(fullPath)) libraryImageCache.delete(fullPath);
+      }
+    }
+    // Bound speculative hashing near the manifest cap while filling holes
+    // left by skipped files. The mapper preserves the original selection order.
+    for (let offset = 0; offset < names.length && !truncated;) {
+      const batch = names.slice(offset, offset + Math.min(256, MEDIA_LIBRARY_MANIFEST_CAP - assets.length + 1));
+      offset += batch.length;
+      const entries = await mapWithConcurrency(batch, 8, name => {
+        if (kind !== 'image') return hashCachedLibraryAsset(name, kind, dir);
+        // Sidecars ride the image entry's sidecarSha256.
+        if (name.endsWith('.json')) return null;
+        return hashCachedLibraryImage(name, dir, tombstones, localId);
+      });
+      for (const entry of entries) {
+        if (!entry) continue;
+        if (assets.length >= MEDIA_LIBRARY_MANIFEST_CAP) { truncated = true; break; }
+        assets.push(entry);
+      }
     }
   }
   if (truncated) {
@@ -397,7 +442,7 @@ export async function syncMediaLibraryWithAllPeers() {
   allPeersSweepInFlight = true;
   try {
     const peers = await getPeers().catch(() => []);
-    const fullSyncPeers = peers.filter((p) => p?.fullSync === true && p?.enabled !== false && isStr(p.instanceId));
+    const fullSyncPeers = peers.filter((p) => p?.fullSync === true && p?.enabled !== false && p?.status !== 'offline' && isStr(p.instanceId));
     for (const peer of fullSyncPeers) {
       await syncMediaLibraryFromPeer(peer).catch((err) => {
         console.log(`⚠️ peerSync: media-library sweep for ${peer.name || peer.instanceId} failed: ${err.message}`);

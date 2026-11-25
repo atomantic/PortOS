@@ -11,7 +11,7 @@
  */
 import { extname, join } from 'path';
 import { existsSync } from 'fs';
-import { link, stat } from 'fs/promises';
+import { link } from 'fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir, sha256File, createWriteStreamGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
@@ -184,7 +184,7 @@ const blockedByVideoTombstone = (ids, entry) => entry?.kind === 'video' && isStr
  * deleted one. Only the library manifest asks for it, and only from receivers
  * that understand it (see PEER_LIBRARY_TOMBSTONES_HEADER).
  */
-export async function hashImageForManifest(filename, { withCreatedAt = false, localInstanceId = null } = {}) {
+export async function hashImageForManifest(filename, { withCreatedAt = false, localInstanceId = null, fileStat } = {}) {
   // Sanitize before join — a record with `imageRefs` containing a path-
   // traversal filename (peer-pushed via linkedCollection, hand-edited,
   // or import bug) would otherwise let us stat/hash files outside
@@ -193,7 +193,7 @@ export async function hashImageForManifest(filename, { withCreatedAt = false, lo
   const safeName = sanitizeAssetFilename(filename);
   if (!safeName) return null;
   const fullPath = join(PATHS.images, safeName);
-  const result = await getOrComputeImageSha256(fullPath);
+  const result = await getOrComputeImageSha256(fullPath, fileStat);
   if (!result) return null;
   // Advertise a sidecarSha256 only when the sidecar carries gen-params beyond
   // the `sha256` cache block. CRITICAL: we hash the GEN-PARAMS ONLY (sorted-key
@@ -207,7 +207,7 @@ export async function hashImageForManifest(filename, { withCreatedAt = false, lo
   const sidecarSha256 = sidecarGenParamsHash(result.sidecar);
   // A pulled copy without a sidecar stamp advertises none, so receivers keep a
   // tombstoned name blocked rather than taking its pull time as new.
-  const createdAt = withCreatedAt ? imageLiveStamp(result.sidecar, await stat(fullPath).catch(() => null), { localInstanceId }) : null;
+  const createdAt = withCreatedAt ? imageLiveStamp(result.sidecar, result.fileStat, { localInstanceId }) : null;
   return { filename: safeName, kind: 'image', sha256: result.hash, ...(sidecarSha256 ? { sidecarSha256 } : {}), ...(createdAt ? { createdAt } : {}) };
 }
 

@@ -319,9 +319,10 @@ describe('pulling a peer offering', () => {
     expect(peerFetch).not.toHaveBeenCalled();
   });
 
-  it('sweeps only enabled full-sync peers', async () => {
+  it('sweeps only enabled full-sync peers that are not explicitly offline', async () => {
     vi.mocked(getPeers).mockResolvedValue([
       PEER,
+      { ...PEER, instanceId: 'instance-offline', status: 'offline' },
       { ...PEER, instanceId: 'instance-disabled', enabled: false },
       { ...PEER, instanceId: 'instance-partial', fullSync: false },
     ]);

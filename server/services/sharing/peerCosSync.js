@@ -390,7 +390,7 @@ export async function syncCosHistoryFromPeer(peer) {
  */
 export async function syncCosHistoryWithAllPeers() {
   const peers = await getPeers().catch(() => []);
-  const fullSyncPeers = peers.filter((p) => p?.fullSync === true && p?.enabled !== false && isStr(p.instanceId));
+  const fullSyncPeers = peers.filter((p) => p?.fullSync === true && p?.enabled !== false && p?.status !== 'offline' && isStr(p.instanceId));
   for (const peer of fullSyncPeers) {
     await syncCosHistoryFromPeer(peer).catch((err) => {
       logFailureWithStack(`⚠️ peerSync: cos-history sweep for ${peer.name || peer.instanceId} failed`, err);
@@ -579,7 +579,7 @@ export async function syncCosTasksFromPeer(peer) {
  */
 export async function syncCosTasksWithAllPeers() {
   const peers = await getPeers().catch(() => []);
-  const fullSyncPeers = peers.filter((p) => p?.fullSync === true && p?.enabled !== false && isStr(p.instanceId));
+  const fullSyncPeers = peers.filter((p) => p?.fullSync === true && p?.enabled !== false && p?.status !== 'offline' && isStr(p.instanceId));
   for (const peer of fullSyncPeers) {
     await syncCosTasksFromPeer(peer).catch((err) => {
       logFailureWithStack(`⚠️ peerSync: cos-tasks sweep for ${peer.name || peer.instanceId} failed`, err);
