@@ -329,7 +329,7 @@ describe('MusicVideo stage-only nav URLs (#10303)', () => {
     await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent('/music-video/mv-1/board'));
     expect(screen.queryByText(/Project not found/)).not.toBeInTheDocument();
     expect(await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name })).toBeInTheDocument();
-    expect(listMusicVideoProjectVersions).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, { silent: true });
+    await waitFor(() => expect(listMusicVideoProjectVersions).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, { silent: true }));
   });
 
   it('falls back to the project list when there are no projects', async () => {
