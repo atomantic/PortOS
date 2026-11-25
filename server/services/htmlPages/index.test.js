@@ -271,15 +271,39 @@ describe('other targets', () => {
     expect(writePageFile).not.toHaveBeenCalled();
   });
 
-  it('uses the Claude harness ceiling for both Splash requests without changing prompts or effort', async () => {
-    runPromptThroughProvider.mockImplementation(async ({ prompt }) => ({ text: isPlanRequest(prompt) ? PLAN : goodPage }));
+  it.each([
+    { name: 'an exhausted first turn explains the missing page', reply: 'No page was generated.', matched: true },
+    { name: 'valid HTML wins after an exhausted first turn', reply: goodPage, matched: true },
+    { name: 'an unsupported response keeps the generic error', reply: 'I reached the token limit while thinking.', matched: false },
+  ])('uses the selected Splash route and preserves prompts when $name', async ({ reply, matched }) => {
+    const reasoningOutputLimit = matched ? { stopReason: 'max_tokens', outputTokens: 48000, thinkingTokens: 47998 } : undefined;
+    runPromptThroughProvider.mockImplementation(async ({ prompt }) => (
+      isPlanRequest(prompt) ? { text: PLAN } : { text: reply, reasoningOutputLimit }
+    ));
     const [queued] = await startRuns({ routes: [{ providerId: 'example-splash', effort: 'xhigh' }], pages: [PAGES[0]] });
     const run = await settled(queued.id);
-    expect(run.pages[0]).toMatchObject({ html: goodPage, plan: PLAN });
+    const recovered = reply === goodPage;
+    const error = recovered ? null : matched
+      ? 'Model returned no HTML. The first turn reached the 48000-token output limit, using 47998 tokens on thinking and returning no answer text.'
+      : 'Model returned no HTML';
+    expect(run).toMatchObject({
+      status: recovered ? 'complete' : 'failed',
+      error,
+      pages: [{
+        html: recovered ? goodPage : '', plan: PLAN, error,
+        hitTokenLimit: matched && !recovered ? true : null,
+        completionTokens: matched && !recovered ? 48000 : null,
+      }],
+    });
     const [[plan], [page]] = runPromptThroughProvider.mock.calls;
-    const routeOptions = { model: 'inkling2-mini', effort: 'xhigh', maxTokens: 128_000, toolFree: true, allowFallback: false };
+    const routeOptions = {
+      provider: expect.objectContaining({ id: 'example-splash' }),
+      model: 'inkling2-mini', effort: 'xhigh', maxTokens: 128_000, toolFree: true, allowFallback: false,
+    };
     expect(plan).toMatchObject({ ...routeOptions, prompt: queued.planPrompts[0] });
-    expect(page).toMatchObject({ ...routeOptions, prompt: htmlPagePrompt(PAGES[0], PLAN) });
+    expect(plan).not.toHaveProperty('captureClaudeOutputLimit');
+    expect(page).toMatchObject({ ...routeOptions, prompt: htmlPagePrompt(PAGES[0], PLAN), captureClaudeOutputLimit: true });
+    expect(writePageFile).toHaveBeenCalledTimes(recovered ? 1 : 0);
   });
 
   it('keeps the successful page when another provider reply contains no HTML', async () => {

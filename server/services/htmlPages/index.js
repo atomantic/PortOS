@@ -301,21 +301,25 @@ async function processRun(id) {
         }
         const prompt = planPrompt ? htmlPagePrompt(theme, plan) : (run.prompts?.[index] ?? htmlPagePrompt(theme));
         const startedAt = Date.now();
-        const result = await send(prompt);
+        const result = await send(prompt, { captureOutputLimit: true });
         if (controller.signal.aborted) return;
         // Cut to the document, never repaired: a truncated page must read as truncated.
         const html = extractHtmlDocument(String(result?.text || '')).slice(0, MAX_PAGE_HTML_CHARS);
+        const limit = html ? null : result?.reasoningOutputLimit;
+        const missingHtmlError = limit
+          ? `Model returned no HTML. The first turn reached the ${limit.outputTokens}-token output limit, using ${limit.thinkingTokens} tokens on thinking and returning no answer text.`
+          : noHtmlError;
         const page = {
           theme,
           html,
           ...scoreHtmlPage(html),
-          error: result?.error || (html ? null : noHtmlError),
+          error: result?.error || (html ? null : missingHtmlError),
           // The runtime reported using (nearly) the whole token budget: the page, or the reasoning before it, was cut off.
-          hitTokenLimit: Number.isFinite(result?.timings?.completionTokens) ? result.timings.completionTokens >= PAGE_MAX_TOKENS * TRUNCATION_SHARE : null,
+          hitTokenLimit: limit ? true : Number.isFinite(result?.timings?.completionTokens) ? result.timings.completionTokens >= PAGE_MAX_TOKENS * TRUNCATION_SHARE : null,
           elapsedMs: Math.max(0, Date.now() - startedAt),
           tokensPerSecond: result?.timings?.tokensPerSecond ?? null,
-          // What the runtime reported generating, reasoning included; null when it reported no count (a provider route). Pages stored before this field have neither it nor finishedAt.
-          completionTokens: Number.isFinite(result?.timings?.completionTokens) ? result.timings.completionTokens : null,
+          // Runtime count, or the exhausted first turn when it explains a missing page.
+          completionTokens: limit?.outputTokens ?? (Number.isFinite(result?.timings?.completionTokens) ? result.timings.completionTokens : null),
           finishedAt: new Date().toISOString(),
           // Exactly what each request sent and what the plan step returned, so both can be copied and reused on another model.
           planPrompt,
@@ -334,7 +338,7 @@ async function processRun(id) {
       temperature: PAGE_TEMPERATURE, timeoutMs: PAGE_TIMEOUT_MS, signal: controller.signal,
     });
     if (run.route) {
-      await generatePages((prompt) => generateViaProvider(run.route, prompt, controller.signal));
+      await generatePages((prompt, options) => generateViaProvider(run.route, prompt, controller.signal, options));
     } else if (isMtplxCheckpoint(run.backend, run.modelId)) {
       const { runOnMtplxCheckpoint } = await import('../mtplxServerManager.js');
       await runOnMtplxCheckpoint(run.modelId, (served) => generatePages(local(served || run.modelId)), { signal: controller.signal });
@@ -388,7 +392,7 @@ async function reasoningOnlyTimeoutError({ provider, route, capability, message,
 /**
  * One page through a provider route: the configured provider, model and effort exactly as picked, no fallback (the gallery must name what answered) and tool-free (the reply is the page, not files an agent wrote). Resolves to the same `{ text, error, timings }` shape `generate` does.
  */
-async function generateViaProvider(route, prompt, signal) {
+async function generateViaProvider(route, prompt, signal, { captureOutputLimit = false } = {}) {
   const [{ runPromptThroughProvider }, { stopRun }] = await Promise.all([
     import('../promptRunner.js'), import('../runner.js'),
   ]);
@@ -401,6 +405,7 @@ async function generateViaProvider(route, prompt, signal) {
   const startedAtMs = Date.now();
   try {
     const isolateMtplxOpenCode = capability.kind === 'opencode-mtplx';
+    const splashClaude = splashHarnessTarget(provider, model)?.kind === 'claude';
     const result = await runPromptThroughProvider({
       // The restricted recipe is fresh. Saved argv model or variant pins
       // cannot take precedence over the run's recorded selection.
@@ -408,7 +413,7 @@ async function generateViaProvider(route, prompt, signal) {
       model: route.model || undefined, effort: route.effort || undefined, prompt,
       source: RUN_SOURCE, timeout: PAGE_TIMEOUT_MS, allowFallback: false, toolFree: true, cwd: PATHS.data,
       ...(isolateMtplxOpenCode ? { isolateMtplxOpenCode } : {}),
-      ...(splashHarnessTarget(provider, model)?.kind === 'claude' ? { maxTokens: SPLASH_CLAUDE_MAX_TOKENS } : {}),
+      ...(splashClaude ? { maxTokens: SPLASH_CLAUDE_MAX_TOKENS, ...(captureOutputLimit ? { captureClaudeOutputLimit: true } : {}) } : {}),
       beforeExecute: async () => {
         const { provider: current } = await requireRouteProvider(route);
         if (!isDeepStrictEqual(current, provider) || current.apiKey !== provider.apiKey) {
@@ -421,7 +426,10 @@ async function generateViaProvider(route, prompt, signal) {
       onRunCreated: (createdId) => { runId = createdId; if (signal.aborted) stop(); },
     });
     // A CLI transcript can echo the prompt, whose rules mention `<!doctype html>`; drop it so only the reply is read.
-    return { text: String(result?.text || '').split(prompt).join(''), error: null, timings: null };
+    return {
+      text: String(result?.text || '').split(prompt).join(''), error: null, timings: null,
+      ...(splashClaude && captureOutputLimit ? { reasoningOutputLimit: result?.reasoningOutputLimit } : {}),
+    };
   } catch (err) {
     const message = err?.message || 'The provider run failed';
     return { text: '', error: await reasoningOnlyTimeoutError({ provider, route, capability, message, startedAtMs, aborted: signal.aborted }) ?? message, timings: null };

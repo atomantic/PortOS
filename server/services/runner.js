@@ -1,3 +1,4 @@
+import { splashHarnessTarget } from '../lib/provider/splashHarnessContext.js';
 import { resolveSplashHarnessContext } from '../lib/splashHarnessLaunch.js';
 import { runOwnership, runChildIdentity } from '../lib/aiToolkit/internal/runOwnership.js';
 import { publishRuntimeFiles, withRuntimeFileTurn } from '../lib/runtimeFilePublication.js';
@@ -9,11 +10,12 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
 import { spawn } from '../lib/childProcess.js';
 import { readFile } from 'fs/promises';
 import { join, resolve } from 'path';
+import { StringDecoder } from 'string_decoder';
 import { atomicWrite, ensureDir, tryReadFile, PATHS } from '../lib/fileUtils.js';
 import { resolveSpawnCwd } from '../lib/spawnCwd.js';
 import { hasModelFlag, extractBakedModel, isCodexProvider, isClaudeProvider, isOpencodeCommand } from '../lib/provider/providerModels.js';
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
-import { imageReadOneShotArgs, toolFreeOneShotArgs } from '../lib/provider/providerVendors.js';
+import { claudeMessagesOneShotArgs, imageReadOneShotArgs, toolFreeOneShotArgs } from '../lib/provider/providerVendors.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { getClaudeSettingsEnv } from '../lib/claudeSettingsEnv.js';
 import { resolveCliSpawn, needsProcessGroup, processGroupKillable, trackDetachedGroup } from '../lib/credentialBootstrap.js';
@@ -375,7 +377,7 @@ export async function executeCliRun(options) {
 
 async function executeAdmittedCliRun({
   runId, provider, prompt, workspacePath, screenshots = [], onData, onComplete, timeout,
-  toolFree = false, isolateMtplxOpenCode = false, beforeExecute, maxTokens,
+  toolFree = false, isolateMtplxOpenCode = false, beforeExecute, maxTokens, captureClaudeOutputLimit = false,
 }, permit) {
   const toolkit = requireToolkit();
   await patchRunMetadata(runId, runOwnership('cli'));
@@ -455,9 +457,17 @@ async function executeAdmittedCliRun({
   // only the read tool its vendor opens the staged image with (#15576); a vendor
   // with no such posture gets the tool-free argv and fails closed rather than
   // running with its tools on.
-  const builtArgs = vision
+  let builtArgs = vision
     ? (toolFree ? (imageReadOneShotArgs(provider, vision.invocation.args) ?? toolFreeOneShotArgs(provider, vision.invocation.args)).args : vision.invocation.args)
     : buildCliArgs(provider, { toolFree });
+  const launchModel = extractBakedModel(builtArgs) || provider.defaultModel;
+  const useClaudeMessages = captureClaudeOutputLimit && toolFree && !vision
+    && splashHarnessTarget(provider, launchModel)?.kind === 'claude';
+  const claudeMessages = useClaudeMessages
+    ? await import('./claudeCodeMessages.js').then(({ createClaudeCodeMessages }) => createClaudeCodeMessages())
+    : null;
+  const stdoutDecoder = claudeMessages ? new StringDecoder('utf8') : null;
+  if (claudeMessages) builtArgs = claudeMessagesOneShotArgs(builtArgs);
   // Rewrite the argv for prompt delivery and learn whether to still write stdin:
   //   - Antigravity (`agy`): prompt spliced in as the --print VALUE (agy doesn't
   //     read stdin) → useStdin=false.
@@ -494,7 +504,6 @@ async function executeAdmittedCliRun({
   const visionSettingsEnv = vision && toolFree && isClaude
     ? await getClaudeSettingsEnv()
     : null;
-  const launchModel = extractBakedModel(builtArgs) || provider.defaultModel;
   const childEnv = buildCliChildEnv({
     before: visionSettingsEnv,
     provider: await resolveSplashHarnessContext(provider, launchModel),
@@ -613,6 +622,10 @@ async function executeAdmittedCliRun({
   }, effectiveTimeout) : null;
 
   childProcess.stdout?.on('data', (data) => {
+    if (claudeMessages) {
+      claudeMessages.push(stdoutDecoder.write(data));
+      return;
+    }
     const text = data.toString();
     output += text;
     if (stdoutIsResponse) assistantOutput += text;
@@ -682,6 +695,14 @@ async function executeAdmittedCliRun({
       metadata.duration = Date.now() - startTime;
       metadata.exitCode = exitCode;
       metadata.success = spawnError ? false : exitCode === 0 && !immediateFallbackAnalysis && !canceled;
+      let reasoningOutputLimit;
+      if (claudeMessages) {
+        claudeMessages.push(stdoutDecoder.end());
+        const reply = claudeMessages.finish();
+        assistantOutput = reply.text;
+        output += assistantOutput;
+        reasoningOutputLimit = reply.reasoningOutputLimit;
+      }
       metadata.outputSize = Buffer.byteLength(output);
       if (claudeSignInExpiring) metadata.claudeSignInExpiring = true;
 
@@ -737,7 +758,9 @@ async function executeAdmittedCliRun({
       } else {
         settleCompletion(() => runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output), `Run ${runId} onRunFailed hook`);
       }
-      settleCompletion(() => onComplete?.(stdoutIsResponse && metadata.success ? { ...metadata, text: assistantOutput } : metadata), `Run ${runId} onComplete`);
+      settleCompletion(() => onComplete?.(stdoutIsResponse && metadata.success
+        ? { ...metadata, text: assistantOutput, ...(reasoningOutputLimit ? { reasoningOutputLimit } : {}) }
+        : metadata), `Run ${runId} onComplete`);
       permit.finish();
       return metadata;
     } catch (err) {

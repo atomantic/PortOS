@@ -148,6 +148,20 @@ describe('promptRunner — happy paths', () => {
     expect(runner.executeCliRun).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ toolFree: true, maxTokens: 48_000 }));
   });
 
+  it('returns the first-turn output evidence alongside the CLI final response without a retry', async () => {
+    const reasoningOutputLimit = { stopReason: 'max_tokens', outputTokens: 48000, thinkingTokens: 47998 };
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => onComplete({
+      success: true, text: 'No page was generated.', reasoningOutputLimit,
+    }));
+    const result = await runPromptThroughProvider({
+      provider: cliProvider({ command: 'claude' }), prompt: 'p', source: 'html-pages-bench',
+      toolFree: true, allowFallback: false, captureClaudeOutputLimit: true,
+    });
+    expect(result).toMatchObject({ text: 'No page was generated.', reasoningOutputLimit });
+    expect(runner.executeCliRun).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ captureClaudeOutputLimit: true, toolFree: true, prompt: 'p' }));
+    expect(runner.createRun).toHaveBeenCalledTimes(1);
+  });
+
   it('returns a CLI output limit immediately when fallback is enabled', async () => {
     runner.executeCliRun.mockImplementation(async ({ onComplete }) => onComplete({
       success: false, error: 'Output allowance exceeded', errorAnalysis: { category: 'output-limit' },

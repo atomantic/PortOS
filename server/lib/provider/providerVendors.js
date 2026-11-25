@@ -260,6 +260,15 @@ const CLAUDE_TOOL_FREE_ARGS = [
   '--mcp-config', '{"mcpServers":{}}',
   '--setting-sources', 'user',
 ];
+// Keep structured Messages events in the child pipe and disable native transcript writes.
+export function claudeMessagesOneShotArgs(args) {
+  const booleans = ['--verbose', '--include-partial-messages', '--no-session-persistence'];
+  return [
+    ...dropOptions(args, ['--output-format']).filter((arg) => typeof arg !== 'string' || !booleans.some((flag) => flagMatches(arg, flag))),
+    '--output-format', 'stream-json', ...booleans,
+  ];
+}
+
 function claudeToolFreeArgs(args) {
   const cleared = dropOptions(
     dropOptions(args, ['--tools', '--allowedTools', '--allowed-tools', '--mcp-config'], { variadic: true }),
