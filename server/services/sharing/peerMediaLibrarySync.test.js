@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
@@ -11,7 +11,7 @@ vi.mock('../instances.js', () => ({ getPeers: vi.fn(async () => []) }));
 vi.mock('../../lib/peerHttpClient.js', async importOriginal => ({ ...(await importOriginal()), peerFetch: vi.fn() }));
 vi.mock('./peerSyncAssets.js', async importOriginal => {
   const actual = await importOriginal();
-  return { ...actual, diffAssetManifestAgainstLocal: vi.fn(actual.diffAssetManifestAgainstLocal) };
+  return { ...actual, hashImageForManifest: vi.fn(actual.hashImageForManifest), diffAssetManifestAgainstLocal: vi.fn(actual.diffAssetManifestAgainstLocal) };
 });
 vi.mock('../../lib/databaseMaintenanceJournal.js', async importOriginal => ({ ...(await importOriginal()), assertDatabaseAdmission: () => {} }));
 
@@ -24,8 +24,8 @@ const { PORTOS_SCHEMA_VERSIONS } = await import('../../lib/schemaVersions.js');
 const { PATHS } = await import('../../lib/fileUtils.js');
 const { getPeers } = await import('../instances.js');
 const { peerFetch } = await import('../../lib/peerHttpClient.js');
-const { syncMediaLibraryFromPeer, buildMediaLibraryManifest } = await import('./peerMediaLibrarySync.js');
-const { diffAssetManifestAgainstLocal } = await import('./peerSyncAssets.js');
+const { syncMediaLibraryFromPeer, syncMediaLibraryWithAllPeers, buildMediaLibraryManifest } = await import('./peerMediaLibrarySync.js');
+const { diffAssetManifestAgainstLocal, hashImageForManifest } = await import('./peerSyncAssets.js');
 const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
 
 const rows = new Map();
@@ -71,10 +71,59 @@ afterEach(async () => {
 });
 afterAll(async () => { await rm(tempRoot, { recursive: true, force: true }); });
 
+it('reuses image entries, invalidates changed files and sidecars, and prunes deleted paths', async () => {
+  const filename = 'cached.png';
+  const image = join(PATHS.images, filename);
+  const sidecar = join(PATHS.images, 'cached.metadata.json');
+  const parkedImage = join(tempRoot, filename);
+  const sidecarContents = async prompt => {
+    const info = await stat(image);
+    return JSON.stringify({ prompt, createdAt: '2026-01-01T00:00:00.000Z',
+      sha256: { value: createHash('sha256').update(await readFile(image)).digest('hex'), mtimeMs: info.mtimeMs, size: info.size } });
+  };
+
+  await writeFile(image, bytes);
+  await writeFile(sidecar, await sidecarContents('Example'));
+  vi.mocked(hashImageForManifest).mockClear();
+  const first = await buildMediaLibraryManifest();
+  expect(await buildMediaLibraryManifest()).toEqual(first);
+  expect(hashImageForManifest).toHaveBeenCalledTimes(1);
+
+  const stamped = await buildMediaLibraryManifest({ tombstones: true });
+  expect(stamped.assets).toContainEqual(expect.objectContaining({ filename, createdAt: '2026-01-01T00:00:00.000Z' }));
+  expect(await buildMediaLibraryManifest()).toEqual(first);
+  expect(hashImageForManifest).toHaveBeenCalledTimes(2);
+
+  await writeFile(sidecar, await sidecarContents('Changed metadata'));
+  const metadataChanged = await buildMediaLibraryManifest();
+  expect(metadataChanged.manifestHash).not.toBe(first.manifestHash);
+  expect(hashImageForManifest).toHaveBeenCalledTimes(3);
+
+  await rename(image, parkedImage);
+  expect((await buildMediaLibraryManifest()).assets.some(asset => asset.filename === filename)).toBe(false);
+  await rename(parkedImage, image);
+  expect(await buildMediaLibraryManifest()).toEqual(metadataChanged);
+  expect(hashImageForManifest).toHaveBeenCalledTimes(4);
+
+  await writeFile(image, 'replacement image bytes');
+  const imageChanged = await buildMediaLibraryManifest();
+  expect(imageChanged.assets.find(asset => asset.filename === filename).sha256)
+    .not.toBe(first.assets.find(asset => asset.filename === filename).sha256);
+  expect(hashImageForManifest).toHaveBeenCalledTimes(5);
+});
+
+it('sweeps online and unprobed peers without dialing explicitly offline peers', async () => {
+  const online = { ...peer(), status: 'online' };
+  const unprobed = peer();
+  vi.mocked(getPeers).mockResolvedValue([{ ...peer(), status: 'offline' }, online, unprobed]);
+  vi.mocked(peerFetch).mockResolvedValue({ ok: false });
+  expect(await syncMediaLibraryWithAllPeers()).toEqual({ peers: 2 });
+  expect(vi.mocked(peerFetch).mock.calls.map(([, , source]) => source)).toEqual([online, unprobed]);
+});
+
 describe('peer library index recovery', () => {
   it('keeps model entries out of legacy manifests and advertises them only to capable receivers', async () => {
     await mkdir(PATHS.models, { recursive: true });
-    const { writeFile } = await import('node:fs/promises');
     await writeFile(join(PATHS.models, 'export.glb'), 'synthetic-model');
     const legacy = await buildMediaLibraryManifest();
     const capable = await buildMediaLibraryManifest({ models: true });

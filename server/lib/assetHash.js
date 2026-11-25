@@ -40,13 +40,14 @@ export function sidecarPathForImage(imageFilenameOrPath) {
 
 /**
  * sha256 of the image at `imagePath`, from the sidecar cache (keyed on mtimeMs + size) or
- * computed fresh and persisted.
+ * computed fresh and persisted. Callers that already statted the image can pass
+ * that snapshot as fileStat.
  *
- * Returns `{ hash, sidecar }` (latest sidecar JSON with the sha256 entry merged in, so
+ * Returns `{ hash, sidecar, fileStat }` (latest sidecar JSON with the sha256 entry merged in, so
  * callers can skip a re-read), or null when the image is missing or unreadable.
  */
-export async function getOrComputeImageSha256(imagePath) {
-  const info = await stat(imagePath).catch(() => null);
+export async function getOrComputeImageSha256(imagePath, fileStat) {
+  const info = fileStat ?? await stat(imagePath).catch(() => null);
   if (!info) return null;
   const sidecarPath = sidecarPathForImage(imagePath);
   if (!sidecarPath) return null;
@@ -58,7 +59,7 @@ export async function getOrComputeImageSha256(imagePath) {
     && cached.mtimeMs === info.mtimeMs
     && cached.size === info.size
   ) {
-    return { hash: cached.value, sidecar };
+    return { hash: cached.value, sidecar, fileStat: info };
   }
   const hash = await sha256File(imagePath);
   const entry = { value: hash, mtimeMs: info.mtimeMs, size: info.size };
@@ -69,20 +70,20 @@ export async function getOrComputeImageSha256(imagePath) {
     await atomicWrite(sidecarPath, fallback).catch((err) => {
       console.error(`⚠️ assetHash: sidecar write failed for ${sidecarPath}: ${err?.message || err}`);
     });
-    return { hash, sidecar: fallback };
+    return { hash, sidecar: fallback, fileStat: info };
   }
   // Write via the gallery sidecar edit queue, which re-reads the CURRENT sidecar; our own
   // read-modify-write would drop an edit (hidden flag, supplying peer) landed since the
   // read above. services/ registers the writer (lib never imports upward); without one the
   // hash is simply not persisted.
-  if (!gallerySha256Writer) return { hash, sidecar: fallback };
+  if (!gallerySha256Writer) return { hash, sidecar: fallback, fileStat: info };
   const merged = await Promise.resolve()
     .then(() => gallerySha256Writer(filename, entry))
     .catch((err) => {
       console.error(`⚠️ assetHash: sidecar write failed for ${sidecarPath}: ${err?.message || err}`);
       return null;
     });
-  return { hash, sidecar: merged || fallback };
+  return { hash, sidecar: merged || fallback, fileStat: info };
 }
 
 let gallerySha256Writer = null;

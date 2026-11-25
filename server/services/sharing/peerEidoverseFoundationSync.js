@@ -267,7 +267,7 @@ async function applyOffering(candidates, tombstones, { peer, localInstanceId }) 
  */
 export async function syncEidoverseFoundationsWithAllPeers() {
   const peers = await getPeers().catch(() => []);
-  for (const peer of peers.filter((p) => p?.fullSync === true && p?.enabled !== false && isStr(p.instanceId))) {
+  for (const peer of peers.filter((p) => p?.fullSync === true && p?.enabled !== false && p?.status !== 'offline' && isStr(p.instanceId))) {
     await syncEidoverseFoundationsFromPeer(peer).catch((err) => {
       console.log(`⚠️ peerSync: eidoverse-foundations sweep for ${peerLabel(peer)} failed: ${err.message}`);
     });
