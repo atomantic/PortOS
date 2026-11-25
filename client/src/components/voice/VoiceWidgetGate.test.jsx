@@ -269,11 +269,21 @@ describe('VoiceWidgetGate — voice stays out of the page until it is on', () =>
 });
 
 describe('VoiceWidgetGate — a start requested before the chunk resolves', () => {
-  it.each([false, true])('is replayed exactly once after the widget loads (StrictMode: %s)', async (strict) => {
+  const renderWhileLoading = async (options) => {
     const chunk = deferWidgetChunk();
-    renderGate({ strict });
+    renderGate(options);
+    // The toggle can render before the gate's effect attaches the listeners
+    // that accept input on behalf of the still-loading widget.
+    await settle();
+    expect(mocks.loadWidget).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('complementary', { name: 'Voice assistant' })).toBeNull();
+    return chunk;
+  };
 
-    fireEvent.click(await screen.findByRole('button', { name: ENGAGE }));
+  it.each([false, true])('is replayed exactly once after the widget loads (StrictMode: %s)', async (strict) => {
+    const chunk = await renderWhileLoading({ strict });
+
+    fireEvent.click(screen.getByRole('button', { name: ENGAGE }));
     await settle();
     expect(mocks.loadWidget).toHaveBeenCalledOnce();
     expect(mocks.startContinuous).not.toHaveBeenCalled();
@@ -297,10 +307,9 @@ describe('VoiceWidgetGate — a start requested before the chunk resolves', () =
   });
 
   it('is dropped when the toggle is pressed again before the widget loads', async () => {
-    const chunk = deferWidgetChunk();
-    renderGate();
+    const chunk = await renderWhileLoading();
 
-    fireEvent.click(await screen.findByRole('button', { name: ENGAGE }));
+    fireEvent.click(screen.getByRole('button', { name: ENGAGE }));
     fireEvent.click(screen.getByRole('button', { name: DISENGAGE }));
     await chunk.release();
     await settle();
@@ -309,10 +318,9 @@ describe('VoiceWidgetGate — a start requested before the chunk resolves', () =
   });
 
   it('is dropped when voice is turned off before the widget loads', async () => {
-    const chunk = deferWidgetChunk();
-    renderGate();
+    const chunk = await renderWhileLoading();
 
-    fireEvent.click(await screen.findByRole('button', { name: ENGAGE }));
+    fireEvent.click(screen.getByRole('button', { name: ENGAGE }));
     act(() => emitSocket('voice:config:changed', { enabled: false }));
     await chunk.release();
     act(() => emitSocket('voice:config:changed', { enabled: true }));
@@ -324,9 +332,7 @@ describe('VoiceWidgetGate — a start requested before the chunk resolves', () =
 
   it('holds a push-to-talk press on the configured hotkey', async () => {
     mocks.getVoiceConfig.mockResolvedValue({ ...ENABLED_CONFIG, hotkey: 'KeyV' });
-    const chunk = deferWidgetChunk();
-    renderGate();
-    await screen.findByRole('button', { name: ENGAGE });
+    const chunk = await renderWhileLoading();
 
     expect(fireEvent.keyDown(window, { code: 'Space' })).toBe(true);
     // Claimed (preventDefault) so the page does not also act on the key.
@@ -341,9 +347,7 @@ describe('VoiceWidgetGate — a start requested before the chunk resolves', () =
   });
 
   it('treats a second hotkey press as the stop it would be on a live capture', async () => {
-    const chunk = deferWidgetChunk();
-    renderGate();
-    await screen.findByRole('button', { name: ENGAGE });
+    const chunk = await renderWhileLoading();
 
     fireEvent.keyDown(window, { code: 'Space' });
     fireEvent.keyDown(window, { code: 'Space' });
@@ -367,9 +371,7 @@ describe('VoiceWidgetGate — a start requested before the chunk resolves', () =
 
   it('opens the mic for a Daily Log dictation that began while the widget was loading', async () => {
     localStorage.setItem(HIDDEN_KEY, '0');
-    const chunk = deferWidgetChunk();
-    renderGate();
-    await screen.findByRole('button', { name: DISENGAGE });
+    const chunk = await renderWhileLoading();
 
     // The server answers Daily Log's Dictate button once; nobody repeats it.
     act(() => emitSocket('voice:dictation', { enabled: true, date: '2026-01-02' }));
@@ -383,9 +385,8 @@ describe('VoiceWidgetGate — a start requested before the chunk resolves', () =
 
   it('forgets a dictation, and the start it implied, that ended before the widget loaded', async () => {
     localStorage.setItem(HIDDEN_KEY, '0');
-    const chunk = deferWidgetChunk();
-    renderGate();
-    fireEvent.click(await screen.findByRole('button', { name: DISENGAGE }));
+    const chunk = await renderWhileLoading();
+    fireEvent.click(screen.getByRole('button', { name: DISENGAGE }));
     fireEvent.click(screen.getByRole('button', { name: ENGAGE }));
 
     act(() => emitSocket('voice:dictation', { enabled: true, date: '2026-01-02' }));
@@ -400,9 +401,8 @@ describe('VoiceWidgetGate — a start requested before the chunk resolves', () =
 
   it('keeps the mic closed for a held dictation once the controls are hidden', async () => {
     localStorage.setItem(HIDDEN_KEY, '0');
-    const chunk = deferWidgetChunk();
-    renderGate();
-    const hide = await screen.findByRole('button', { name: DISENGAGE });
+    const chunk = await renderWhileLoading();
+    const hide = screen.getByRole('button', { name: DISENGAGE });
 
     act(() => emitSocket('voice:dictation', { enabled: true, date: '2026-01-02' }));
     // Hiding the controls stops a live capture; it must also stop a held one,
@@ -437,9 +437,7 @@ describe('VoiceWidgetGate — a start requested before the chunk resolves', () =
   it('still opens the mic for a held dictation when the first load fails and a retry succeeds', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     localStorage.setItem(HIDDEN_KEY, '0');
-    const chunk = deferWidgetChunk();
-    renderGate();
-    await screen.findByRole('button', { name: DISENGAGE });
+    const chunk = await renderWhileLoading();
 
     act(() => emitSocket('voice:dictation', { enabled: true, date: '2026-01-02' }));
     await chunk.fail(new Error('network unreachable'));
@@ -453,10 +451,9 @@ describe('VoiceWidgetGate — a start requested before the chunk resolves', () =
 
   it('says so and tries again on the next press when the chunk fails to load', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const chunk = deferWidgetChunk();
-    renderGate();
+    const chunk = await renderWhileLoading();
 
-    fireEvent.click(await screen.findByRole('button', { name: ENGAGE }));
+    fireEvent.click(screen.getByRole('button', { name: ENGAGE }));
     await chunk.fail(new Error('network unreachable'));
     expect(mocks.toast.error).toHaveBeenCalledExactlyOnceWith('Voice controls could not load. Try again.');
     expect(mocks.reloadOnceForStaleChunk).not.toHaveBeenCalled();
@@ -474,9 +471,8 @@ describe('VoiceWidgetGate — a start requested before the chunk resolves', () =
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     let finishProbe;
     mocks.reloadOnceForStaleChunk.mockReturnValueOnce(new Promise((resolve) => { finishProbe = resolve; }));
-    const chunk = deferWidgetChunk();
-    renderGate();
-    const engage = await screen.findByRole('button', { name: ENGAGE });
+    const chunk = await renderWhileLoading();
+    const engage = screen.getByRole('button', { name: ENGAGE });
     await chunk.fail(new Error('Failed to fetch dynamically imported module'));
     expect(mocks.reloadOnceForStaleChunk).toHaveBeenCalledOnce();
 
@@ -502,10 +498,9 @@ describe('VoiceWidgetGate — a start requested before the chunk resolves', () =
 
   it('hands a chunk from a replaced build to the stale-build reload instead of reporting it', async () => {
     mocks.reloadOnceForStaleChunk.mockResolvedValue(true);
-    const chunk = deferWidgetChunk();
-    renderGate();
+    const chunk = await renderWhileLoading();
 
-    fireEvent.click(await screen.findByRole('button', { name: ENGAGE }));
+    fireEvent.click(screen.getByRole('button', { name: ENGAGE }));
     await chunk.fail(new Error('Failed to fetch dynamically imported module'));
 
     expect(mocks.reloadOnceForStaleChunk).toHaveBeenCalledOnce();
