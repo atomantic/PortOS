@@ -23,7 +23,7 @@ describe('parsePm2JlistStdout (issue #968 — custom PM2_HOME absent-vs-empty)',
     // The literal '[]' is a successful "nothing running" — NOT a failure.
     expect(parsePm2JlistStdout('[]')).toEqual([]);
     // Tolerates ANSI/log noise around the array literal.
-    expect(parsePm2JlistStdout('[2K[]\n')).toEqual([]);
+    expect(parsePm2JlistStdout('\x1b[2K[]\n')).toEqual([]);
   });
 
   it('returns null for empty stdout (failed read, not "no processes")', () => {
@@ -42,6 +42,6 @@ describe('parsePm2JlistStdout (issue #968 — custom PM2_HOME absent-vs-empty)',
   it('does not mistake an ANSI color code like [31m for an empty array', () => {
     // The /\[\](?![0-9])/ guard means '[]' inside '[31m' style noise without a
     // real array still resolves to null, not a bogus empty success.
-    expect(parsePm2JlistStdout('[31mERROR[0m no pm2')).toBeNull();
+    expect(parsePm2JlistStdout('\x1b[31mERROR\x1b[0m no pm2')).toBeNull();
   });
 });
