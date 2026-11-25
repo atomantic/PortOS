@@ -94,7 +94,14 @@ const VENDOR_CHUNK_GROUPS = [
 // into chunks of at least `minSize`, capped near `maxSize` so a coalesced
 // chunk stays under `chunkSizeWarningLimit`. Priority -20 loses to
 // `app-initial`, so a module the shell already loads is not duplicated into
-// the lazy shared chunks. Recursive capture stays off: a shared helper must
+// the lazy shared chunks. `entriesAware` splits shared modules by the set of
+// lazy entries that use them, so a route loads only chunks some module of its
+// own reaches. A size-only split makes every consumer load a whole grab-bag
+// chunk and chains them into one closure that reaches `vendor-three` and
+// `vendor-charts` from nearly every page. `entriesAwareMergeThreshold` folds a
+// consumer-set chunk below it into a neighbour; it stays small because each
+// merge widens a route's closure (15_000 still reached three.js from the 404
+// page). The cost is more, smaller files; the build test bounds both. Recursive capture stays off: a shared helper must
 // not drag a page-only dependency into every consumer.
 const APP_MODULE = /\.(?:jsx?|tsx?|mjs|cjs|json)(?:\?.*)?$/;
 // Anchor to this checkout. A build that loads vite.config.js with a scratch
@@ -121,6 +128,8 @@ const APP_CHUNK_GROUPS = [
     name: 'app-shared',
     test: isAppModule,
     minShareCount: 2,
+    entriesAware: true,
+    entriesAwareMergeThreshold: 3_000,
     minSize: 15_000,
     maxSize: 500_000,
     priority: -20,
