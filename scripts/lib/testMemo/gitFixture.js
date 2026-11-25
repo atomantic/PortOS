@@ -14,7 +14,9 @@
  *   apart (a command line hides the directory it runs in), a git command
  *   line handed to another program (`sh -c 'git log'`) included. A call is
  *   a git call when its program can spell git: written in place, assigned
- *   to the name it is read from, or passed by a caller as that parameter;
+ *   to the name it is read from, or passed by a caller as that parameter.
+ *   A name the file gives a spawn callee (`const run = execFileSync`,
+ *   `promisify(execFile)`, a renaming import) is a spawn callee;
  * - a git call that names no directory: no `cwd` in a literal options object
  *   (one a spread cannot replace) and no leading `-C <dir>` in a literal
  *   argument array. Without one, git runs where the test process does,
@@ -27,7 +29,8 @@
  *   passes for the parameter the directory is read from, an argument or an
  *   options property it leaves out where nothing defaults it, and any use of
  *   the wrapper through `.call`, `.apply` or `.bind`;
- * - a repository or home path anywhere a git process can take it from:
+ * - a repository or home path, or the process directory out of the
+ *   environment (`process.env.PWD`), anywhere a git process can take it from:
  *   inside a git call, in the arguments of any call of a function that runs
  *   git (followed through the functions that call those, and counting the
  *   repository's own `execGit`), in the iterable of a loop whose variable
@@ -76,6 +79,38 @@ function declaredInComment(src, arrays) {
     || (token.t === 'tpl' && token.quasis.some((quasi) => GIT_FIXTURE_MARKER.test(quasi)))));
 }
 
+/** Environment variables that hold the directory the test process was started in, or the checkout itself. */
+const CHECKOUT_ENV = new Set(['PWD', 'OLDPWD', 'INIT_CWD', 'GITHUB_WORKSPACE']);
+
+/**
+ * The names a file gives a spawn callee besides its own: `const run =
+ * execFileSync`, `promisify(execFile)`, `childProcess.spawnSync` bound to a
+ * name, and a renaming import or destructuring (`execFileSync as run`,
+ * `{ execFileSync: run }`). A call of one starts whatever program it is
+ * handed, as a call of the callee does.
+ */
+function spawnAliases(arrays) {
+  const aliases = new Set();
+  const spawner = (token) => token?.t === 'id' && (SPAWN_CALLEES.has(token.v) || aliases.has(token.v));
+  // Twice: an alias of an alias is found whichever is written first.
+  for (let pass = 0; pass < 2; pass += 1) {
+    for (const { arr } of arrays) {
+      for (let i = 0; i + 2 < arr.length; i += 1) {
+        if (arr[i].t !== 'id') continue;
+        if (spawner(arr[i]) && (isWord(arr[i + 1], 'as') || isPunct(arr[i + 1], ':')) && arr[i + 2].t === 'id' && isPunct(arr[i + 3], ',', '}')) aliases.add(arr[i + 2].v);
+        if (!isPunct(arr[i + 1], '=') || isPunct(arr[i + 2], '=')) continue;
+        let at = i + 2;
+        if (arr[at]?.t === 'id' && isPunct(arr[at + 1], '.') && arr[at + 2]?.t === 'id') at += 2; // util.promisify, childProcess.spawnSync
+        const wrapped = isWord(arr[at], 'promisify') && isPunct(arr[at + 1], '(');
+        let callee = wrapped ? at + 2 : at;
+        if (wrapped && arr[callee]?.t === 'id' && isPunct(arr[callee + 1], '.') && arr[callee + 2]?.t === 'id') callee += 2;
+        if (spawner(arr[callee]) && !isPunct(arr[callee + 1], '(', '.', '?.')) aliases.add(arr[i].v);
+      }
+    }
+  }
+  return aliases;
+}
+
 const isGitProgram = (text) => posix.basename(text.trim().split(/\s+/)[0]) === 'git';
 /** A git command inside a shell line: `sh -c 'git status'`, `cd x && git log`, `$(git rev-parse HEAD)`. */
 const SHELL_GIT = /(?:^|[\s;&|(`$])git\s+[a-z-]/;
@@ -121,8 +156,9 @@ function spelledTexts(w, arr, m, from, to, seen, texts) {
 }
 
 /**
- * Every call of a spawn callee whose program can be git, in the file and in
- * its template holes: a superset of what raises `facts.git` (`GIT_SPAWN`,
+ * Every call of a spawn callee, or of a name the file gives one
+ * (`spawnAliases`), whose program can be git, in the file and in its
+ * template holes: a superset of what raises `facts.git` (`GIT_SPAWN`,
  * `noteLiteralProgram`), which reads only a literal written in the call.
  * `whole`: every such spelling is the literal `git` alone, arguments apart.
  *
@@ -135,7 +171,7 @@ function gitCalls(w, { shell = false } = {}) {
   const calls = [];
   for (const { arr, m } of w.arrays) {
     for (let i = 0; i + 2 < arr.length; i += 1) {
-      if (arr[i].t !== 'id' || !SPAWN_CALLEES.has(arr[i].v) || !isPunct(arr[i + 1], '(') || m[i + 1] === undefined) continue;
+      if (arr[i].t !== 'id' || !(SPAWN_CALLEES.has(arr[i].v) || w.spawners.has(arr[i].v)) || !isPunct(arr[i + 1], '(') || m[i + 1] === undefined) continue;
       const [program] = listRanges(arr, m, i + 1);
       if (program === undefined) continue;
       const texts = [];
@@ -266,6 +302,9 @@ function rangeProblem(w, arr, m, from, to) {
     }
     // A member name and a property key are no values of their own.
     if (token.t !== 'id' || isPunct(arr[i - 1], '.', '?.') || (isPunct(arr[i + 1], ':') && isPunct(arr[i - 1], '{', ','))) continue;
+    if (isWord(token, 'process') && isPunct(arr[i + 1], '.') && isWord(arr[i + 2], 'env') && isPunct(arr[i + 3], '.') && CHECKOUT_ENV.has(arr[i + 4]?.v)) {
+      return `hands git the directory the test process runs in (process.env.${arr[i + 4].v})`;
+    }
     const { value } = evaluate(arr, m, i, w.ctx);
     if (value.k === 'path') return `hands git a path in this repository (${value.v || '<repo root>'})`;
     if (value.k === 'home') return 'hands git a path in the home directory';
@@ -510,6 +549,7 @@ function reading(arrays, ctx) {
   const functions = namedFunctions(arrays);
   return {
     arrays, ctx, functions,
+    spawners: spawnAliases(arrays),
     definitions: new Set(functions.map((fn) => fn.token)),
     names: new Set(), runners: new Set(GIT_HELPERS), iterables: new Set(), directoryNames: new Set(), directoryParameters: new Set(),
     pending: GIT_HELPERS.map((runner) => ({ runner })), // { name } to read the assignments of, { runner } to read the calls of

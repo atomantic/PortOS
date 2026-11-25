@@ -57,8 +57,10 @@ contradicts it (`scripts/lib/testMemo/gitFixture.js`):
   call when its program can spell git: written in the call, held by the
   name the call reads (`const command = 'git'`, `tool || 'git'`), or passed
   by a caller as that parameter (`run('git', …)` into `(program, args) =>
-  spawn(program, args)`). The git rule reads the program the same way for a
-  file that declares nothing;
+  spawn(program, args)`). A name the file gives a spawn callee (`const run =
+  execFileSync`, `promisify(execFile)`, a renaming import) is a spawn
+  callee. The git rule reads the program the same way for a file that
+  declares nothing;
 - a git call that names no directory: no `cwd` in a literal options object
   no spread can replace, and no leading `-C <dir>` in a literal argument
   array. Without one git runs where the test process does, inside the
@@ -80,7 +82,9 @@ contradicts it (`scripts/lib/testMemo/gitFixture.js`):
   writes: a literal without the property gives no directory. `.call`,
   `.apply` and `.bind` put the arguments where no call's are, so a function
   that runs git and is reached through one of them is refused outright;
-- a repository or home path anywhere a git process can take it from: inside
+- a repository or home path, or the process directory out of the
+  environment (`process.env.PWD`, `INIT_CWD`, `GITHUB_WORKSPACE`), anywhere
+  a git process can take it from: inside
   a git call, in the arguments of any call of a function that runs git
   (followed through the functions that call those, and counting the
   repository's own `execGit`), in the iterable of a loop whose variable

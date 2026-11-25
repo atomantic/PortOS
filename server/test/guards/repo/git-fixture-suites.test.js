@@ -41,6 +41,8 @@ describe('test-memo: git-fixture declarations', () => {
     ['gives a nullish directory', "execFileSync('git', ['rev-parse', 'HEAD'], { cwd: undefined });", /nullish directory/],
     ['names git through a constant', "const __probeProgram = 'git';\nexecFileSync(__probeProgram, ['rev-parse', 'HEAD']);", /starts git without naming the directory/],
     ['hands git to a runner as its program', "const __probe = (__probeProgram, __probeArgs) => execFileSync(__probeProgram, __probeArgs);\n__probe('git', ['rev-parse', 'HEAD']);", /starts git without naming the directory/],
+    ['starts git through an alias of the spawn callee', "const __probeSpawn = execFileSync;\n__probeSpawn('git', ['rev-parse', 'HEAD']);", /starts git without naming the directory/],
+    ['takes the process directory out of the environment', "execFileSync('git', ['rev-parse', 'HEAD'], { cwd: process.env.PWD });", /process\.env\.PWD/],
     ['hands a shell a git command line', "execFileSync('sh', ['-c', 'git rev-parse HEAD']);", /runs git through a command line/],
     ['hands the checkout to code it does not define', '__probeImported(process.cwd());', /hands the repository directory \S+ to code that may run git there/],
     ['calls a wrapper without its directory', `${WRAPPER}\n__probe();`, /__probe\(\) is called without the directory/],
