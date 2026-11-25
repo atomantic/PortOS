@@ -8,12 +8,10 @@
  * limits?), stop(runId), cancel(runId) }`. Use when: The Music Video excerpt panel.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import toast from '../../ui/Toast';
-import socket from '../../../services/socket';
-import { toastWorkflowError } from '../workflowErrorToast.jsx';
+import useMusicVideoRun from './useMusicVideoRun.js';
 import {
-  getMusicVideoProject,
   startMusicVideoAutoReview,
   resumeMusicVideoAutoReview,
   stopMusicVideoAutoReview,
@@ -41,47 +39,19 @@ const OUTCOME_TOASTS = {
  */
 export default function useMusicVideoAutoReview({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
-  const [busy, setBusy] = useState(false);
   const [action, setAction] = useState(null);
-  const handlers = useRef({ replaceProject });
-  const lastStatus = useRef(new Map());
   useEffect(() => {
-    handlers.current = { replaceProject };
-  });
-
-  useEffect(() => {
-    if (!projectId) return undefined;
     setAction(null);
-    const onAutoReview = (data) => {
-      if (data?.projectId !== projectId) return;
-      if (data.project) handlers.current.replaceProject?.(data.project);
-      setAction(data.action || null);
-      const run = data.run;
-      if (run?.id && lastStatus.current.get(run.id) !== run.status) {
-        const seen = lastStatus.current.has(run.id);
-        lastStatus.current.set(run.id, run.status);
-        if (seen || run.status !== 'running') OUTCOME_TOASTS[run.status]?.(run);
-      }
-    };
-    socket.on('music-video:auto-review', onAutoReview);
-    return () => socket.off('music-video:auto-review', onAutoReview);
   }, [projectId]);
 
-  // A refusal for an open revision links to it; reload so the banner can show
-  // a revision this tab never saw.
-  const reload = () => getMusicVideoProject(projectId, { silent: true }).then((next) => handlers.current.replaceProject?.(next));
-
-  const call = (request) => {
-    setBusy(true);
-    return request()
-      .then((res) => {
-        if (res?.project) handlers.current.replaceProject?.(res.project);
-        if (res?.run) lastStatus.current.set(res.run.id, res.run.status);
-        return res;
-      })
-      .catch((err) => { toastWorkflowError(err, 'Auto-review request failed', { reload }); return null; })
-      .finally(() => setBusy(false));
-  };
+  const { busy, call } = useMusicVideoRun({
+    projectId,
+    event: 'music-video:auto-review',
+    toasts: OUTCOME_TOASTS,
+    errorLabel: 'Auto-review request failed',
+    replaceProject,
+    onEvent: (data) => setAction(data.action || null),
+  });
 
   const start = (startSec, endSec, limits, { providerId = null, model = null } = {}) =>
     call(() => startMusicVideoAutoReview(projectId, {
