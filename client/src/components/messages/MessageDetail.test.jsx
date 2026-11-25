@@ -36,7 +36,7 @@ const baseMessage = {
   bodyFull: true,
 };
 
-function renderMessage(message, accounts = [{ id: 'acct-1', name: 'Personal' }]) {
+function renderMessage(message, accounts = [{ id: 'acct-1', name: 'Personal', type: 'outlook', supportsBodyRefresh: true }]) {
   return render(
     <MessageDetail
       message={message}
@@ -57,6 +57,24 @@ it.each([
   await act(async () => {});
   expect(Boolean(screen.queryByRole('button', { name: 'Archive' }))).toBe(archive);
   expect(Boolean(screen.queryByRole('button', { name: 'Delete' }))).toBe(remove);
+});
+
+it.each([
+  ['gmail', false],
+  ['outlook', true],
+  ['teams', false],
+  ['missing', false],
+])('offers body refresh only for a supported message account (%s)', async (type, supported) => {
+  const otherAccount = { id: 'other-account', type: 'outlook', supportsBodyRefresh: true };
+  const accounts = type === 'missing' ? [otherAccount] : [
+    otherAccount,
+    { id: baseMessage.accountId, type, supportsBodyRefresh: supported },
+  ];
+  renderMessage({ ...baseMessage, bodyFull: false, bodyText: 'Message preview' }, accounts);
+  await act(async () => {});
+  expect(screen.getByText('Message preview')).toBeInTheDocument();
+  expect(Boolean(screen.queryByRole('button', { name: 'Refresh' }))).toBe(supported);
+  expect(Boolean(screen.queryByText('Preview only — re-sync for full content'))).toBe(supported);
 });
 
 // Reads the CSP directive string the iframe's own document head carries —
@@ -131,7 +149,7 @@ describe('MessageDetail SafeHtmlBody remote content blocking', () => {
     rerender(
       <MessageDetail
         message={{ ...baseMessage, bodyHtml: '<img src="https://tracker.example/pixel.gif" alt="">' }}
-        accounts={[{ id: 'acct-1', name: 'Personal' }]}
+        accounts={[{ id: 'acct-1', name: 'Personal', type: 'outlook', supportsBodyRefresh: true }]}
         onBack={() => {}}
       />,
     );
@@ -237,7 +255,7 @@ describe('MessageDetail refresh ordering', () => {
     expect(await screen.findByText('Original message')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     const next = { ...threaded, ...identity, bodyText: 'Selected thread' };
-    rerender(<MessageDetail message={next} accounts={[{ id: next.accountId }]} onBack={() => {}} />);
+    rerender(<MessageDetail message={next} accounts={[{ id: next.accountId, type: 'outlook', supportsBodyRefresh: true }]} onBack={() => {}} />);
     expect(await screen.findByText('Selected thread')).toBeInTheDocument();
     await act(async () => refresh.resolve(fresh));
     expect(screen.getByText('Selected thread')).toBeInTheDocument();

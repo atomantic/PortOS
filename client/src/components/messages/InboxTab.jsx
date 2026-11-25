@@ -419,6 +419,7 @@ export default function InboxTab({ accounts }) {
   // account timestamps; absent both, these accounts have genuinely never synced.
   // Enabled accounts a sync action in the current view would run on, and which
   // sync actions that scope still offers (no unread action for a Teams-only view).
+  const supportsBodyRefresh = accountList.some(a => a.id === selectedAccount && a.supportsBodyRefresh === true);
   const syncTargets = useMemo(() => accountList.filter(a => a.enabled && (!selectedAccount || a.id === selectedAccount)), [accountList, selectedAccount]);
   const unreadSyncExcluded = useMemo(() => partitionAccountsBySyncMode(syncTargets, 'unread').excluded, [syncTargets]);
   const offerUnreadSync = syncTargets.length === 0 || unreadSyncExcluded.length < syncTargets.length;
@@ -533,7 +534,7 @@ export default function InboxTab({ accounts }) {
         >
           Full Sync
         </button>
-        {selectedAccount && (
+        {supportsBodyRefresh && (
           <button
             onClick={async () => {
               setFetchingFull(true);
@@ -551,7 +552,7 @@ export default function InboxTab({ accounts }) {
             {fetchingFull ? 'Fetching...' : 'Fetch Full Content'}
           </button>
         )}
-        {selectedAccount && (
+        {supportsBodyRefresh && (
           <button
             onClick={async () => {
               setFetchingFull(true);

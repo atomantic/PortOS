@@ -677,8 +677,41 @@ describe('Messages Routes', () => {
     });
   });
 
+  describe('Body refresh endpoints', () => {
+    it.each(['gmail', 'teams'])('rejects both refresh endpoints for %s accounts', async type => {
+      messageAccounts.getAccount.mockResolvedValue({ id: VALID_UUID, type });
+
+      for (const path of [`${VALID_UUID}/msg-1/refresh`, `fetch-full/${VALID_UUID}`]) {
+        const response = await request(app).post(`/api/messages/${path}`);
+        expect(response.status).toBe(400);
+        expect(response.body).toMatchObject({
+          code: 'BODY_REFRESH_NOT_SUPPORTED',
+          error: 'This account does not support refreshing message content',
+        });
+      }
+      expect(messageSync.getMessage).not.toHaveBeenCalled();
+      expect(messageSync.getMessages).not.toHaveBeenCalled();
+      expect(messageSync.refreshMessage).not.toHaveBeenCalled();
+      expect(messageSync.refreshMessages).not.toHaveBeenCalled();
+    });
+
+    it('refreshes a single Outlook message', async () => {
+      messageAccounts.getAccount.mockResolvedValue({ id: VALID_UUID, type: 'outlook' });
+      const message = { id: 'msg-1', accountId: VALID_UUID };
+      messageSync.getMessage.mockResolvedValue(message);
+      const refreshed = { ...message, bodyFull: true };
+      messageSync.refreshMessage.mockResolvedValue(refreshed);
+
+      const response = await request(app).post(`/api/messages/${VALID_UUID}/msg-1/refresh`);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual(refreshed);
+      expect(messageSync.refreshMessage).toHaveBeenCalledWith(VALID_UUID, 'msg-1');
+    });
+  });
+
   describe('POST /api/messages/fetch-full/:accountId', () => {
-    it('refreshes preview-only messages in one batch', async () => {
+    it.each([false, true])('refreshes Outlook messages in one batch (force: %s)', async force => {
       messageAccounts.getAccount.mockResolvedValue({ id: VALID_UUID, type: 'outlook' });
       messageSync.getMessages.mockResolvedValue({
         messages: [
@@ -688,14 +721,15 @@ describe('Messages Routes', () => {
         ],
         total: 3,
       });
-      messageSync.refreshMessages.mockResolvedValue({ updated: 2, results: [[], []] });
+      const expectedIds = force ? ['msg-1', 'msg-2', 'msg-3'] : ['msg-1', 'msg-3'];
+      messageSync.refreshMessages.mockResolvedValue({ updated: expectedIds.length });
 
-      const response = await request(app).post(`/api/messages/fetch-full/${VALID_UUID}`);
+      const response = await request(app).post(`/api/messages/fetch-full/${VALID_UUID}`).send({ force });
 
       expect(response.status).toBe(200);
-      expect(response.body).toEqual({ updated: 2, total: 2, truncated: false });
+      expect(response.body).toEqual({ updated: expectedIds.length, total: expectedIds.length, truncated: false });
       expect(messageSync.refreshMessages).toHaveBeenCalledTimes(1);
-      expect(messageSync.refreshMessages).toHaveBeenCalledWith(VALID_UUID, ['msg-1', 'msg-3']);
+      expect(messageSync.refreshMessages).toHaveBeenCalledWith(VALID_UUID, expectedIds);
     });
   });
 

@@ -18,9 +18,9 @@ const EMAIL_MESSAGE_ACTIONS = Object.freeze(['archive', 'delete']);
 const NO_MESSAGE_ACTIONS = Object.freeze([]);
 
 export const MESSAGE_ACCOUNT_TRANSPORT = Object.freeze({
-  gmail: Object.freeze({ sendVia: 'api', email: true, syncModes: Object.freeze(['unread', 'full']), readState: true, actions: EMAIL_MESSAGE_ACTIONS }),
-  outlook: Object.freeze({ sendVia: 'playwright', email: true, syncModes: Object.freeze(['unread', 'full']), readState: true, actions: EMAIL_MESSAGE_ACTIONS }),
-  teams: Object.freeze({ sendVia: 'playwright', email: false, syncModes: Object.freeze(['full']), readState: false, actions: NO_MESSAGE_ACTIONS })
+  gmail: Object.freeze({ sendVia: 'api', email: true, syncModes: Object.freeze(['unread', 'full']), readState: true, supportsBodyRefresh: false, actions: EMAIL_MESSAGE_ACTIONS }),
+  outlook: Object.freeze({ sendVia: 'playwright', email: true, syncModes: Object.freeze(['unread', 'full']), readState: true, supportsBodyRefresh: true, actions: EMAIL_MESSAGE_ACTIONS }),
+  teams: Object.freeze({ sendVia: 'playwright', email: false, syncModes: Object.freeze(['full']), readState: false, supportsBodyRefresh: false, actions: NO_MESSAGE_ACTIONS })
 });
 
 export const MESSAGE_ACCOUNT_TYPES = Object.freeze(Object.keys(MESSAGE_ACCOUNT_TRANSPORT));

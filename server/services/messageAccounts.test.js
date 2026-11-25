@@ -57,16 +57,16 @@ describe('messageAccounts', () => {
     ]);
   });
 
-  it('derives the offered sync modes and read-state capability per provider (#9968)', async () => {
+  it('derives sync modes, read state and body refresh capabilities per provider', async () => {
     await messageAccounts.createAccount({ name: 'Gmail', type: 'gmail' });
     uuid.mockReturnValueOnce('outlook-id');
     await messageAccounts.createAccount({ name: 'Outlook', type: 'outlook' });
     uuid.mockReturnValueOnce('teams-id');
     await messageAccounts.createAccount({ name: 'Teams', type: 'teams' });
-    expect((await messageAccounts.listAccounts()).map(({ type, syncModes, hasReadState }) => ({ type, syncModes, hasReadState }))).toEqual([
-      { type: 'gmail', syncModes: ['unread', 'full'], hasReadState: true },
-      { type: 'outlook', syncModes: ['unread', 'full'], hasReadState: true },
-      { type: 'teams', syncModes: ['full'], hasReadState: false }
+    expect((await messageAccounts.listAccounts()).map(({ type, syncModes, hasReadState, supportsBodyRefresh }) => ({ type, syncModes, hasReadState, supportsBodyRefresh }))).toEqual([
+      { type: 'gmail', syncModes: ['unread', 'full'], hasReadState: true, supportsBodyRefresh: false },
+      { type: 'outlook', syncModes: ['unread', 'full'], hasReadState: true, supportsBodyRefresh: true },
+      { type: 'teams', syncModes: ['full'], hasReadState: false, supportsBodyRefresh: false }
     ]);
   });
 
