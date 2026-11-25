@@ -66,7 +66,7 @@ local slice or their timestamp is at least as recent as the newest qualifying
 local slice in the category window's eligible set.
 The pragmatic target band is **85–95**; the audit rubric tells agents not to
 chase 100/100 with speculative hardening. The `audit-slice-history` input shows each
-prior slice's score so a lane can re-verify a remediated slice that scored below 75.
+prior slice's score so a lane can re-verify a remediated slice that scored below 85.
 The breakdown shows how many runs fed the figure and the worst severity any of
 them found; the row's coverage, confidence, date, slice and summary describe the
 newest run. A newer partial run does not erase a fresh scored one. With no
@@ -225,8 +225,8 @@ rules as today's score. Coverage is shown with each value because adding or
 losing a category can change the mean without same-category improvement.
 History begins with newly reported assessments; no scores are invented for old
 runs. The local detail endpoint `/api/apps/:id/quality-history?days=90` reads only
-that app's measurements and bounds results to the last measurement per UTC day
-and category, including a 30-day lookback to seed the selected range.
+that app's measurements, including multiple local runs per UTC day, with a
+30-day lookback to seed the selected range.
 
 ## Release snapshot file
 
