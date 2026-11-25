@@ -15,7 +15,6 @@ import { hasModelFlag, extractBakedModel, isCodexProvider, isClaudeProvider, isO
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { imageReadOneShotArgs, toolFreeOneShotArgs } from '../lib/provider/providerVendors.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
-import { isMtplxOpenCodeCli } from '../lib/opencodeConfig.js';
 import { getClaudeSettingsEnv } from '../lib/claudeSettingsEnv.js';
 import { resolveCliSpawn, needsProcessGroup, processGroupKillable, trackDetachedGroup } from '../lib/credentialBootstrap.js';
 import { createImmediateFallbackSignalDetector, ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
@@ -374,7 +373,10 @@ export async function executeCliRun(options) {
   }
 }
 
-async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, screenshots = [], onData, onComplete, timeout, toolFree = false, beforeExecute }, permit) {
+async function executeAdmittedCliRun({
+  runId, provider, prompt, workspacePath, screenshots = [], onData, onComplete, timeout,
+  toolFree = false, isolateMtplxOpenCode = false, beforeExecute,
+}, permit) {
   const toolkit = requireToolkit();
   await patchRunMetadata(runId, runOwnership('cli'));
 
@@ -398,7 +400,9 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
   let assistantOutput = '';
   const isClaude = isClaudeProvider(provider);
   const toolFreeOpenCode = toolFree && isOpencodeCommand(provider.command);
-  const restrictedMtplxOpenCode = toolFreeOpenCode && isMtplxOpenCodeCli(provider);
+  if (isolateMtplxOpenCode && (!toolFreeOpenCode || screenshots.length)) {
+    throw new Error('The isolated MTPLX recipe requires a tool-free OpenCode text request');
+  }
   const stdoutIsResponse = isCodexProvider(provider) || isClaude || toolFreeOpenCode;
   const signInWarningPrefix = '\nWarning: this sign-in ends between ';
   let stderrTail = '\n';
@@ -496,7 +500,7 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
     cwd: vision?.invocation.cwd || effectiveCwd,
     guard: true,
     ...(toolFreeOpenCode ? { toolFree: true, model: extractBakedModel(builtArgs) || provider.defaultModel } : {}),
-    ...(restrictedMtplxOpenCode ? { openCodeIsolationDir: resolve(runDir, 'opencode') } : {}),
+    ...(isolateMtplxOpenCode ? { openCodeIsolationDir: resolve(runDir, 'opencode') } : {}),
   });
 
   // See the executeCliRun docblock above for why this is a resolve+wrap, not

@@ -569,7 +569,7 @@ describe('executeCliRun — tool-free OpenCode', () => {
           }),
         },
       },
-      prompt, workspacePath: TEST_WORKSPACE, toolFree: true, onComplete,
+      prompt, workspacePath: TEST_WORKSPACE, toolFree: true, isolateMtplxOpenCode: true, onComplete,
     });
 
     const [command, args, { env }] = spawn.mock.calls[0];
@@ -596,6 +596,23 @@ describe('executeCliRun — tool-free OpenCode', () => {
     await flushMicrotasks();
     expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ success: true, text: page }));
     expect(writeFile).toHaveBeenCalledWith(expect.stringContaining('output.txt'), diagnostics + page);
+  });
+
+  it('keeps the ordinary tool-free recipe for other callers', async () => {
+    const child = makeChild();
+    spawn.mockReturnValueOnce(child);
+    await executeCliRun({
+      runId: 'ordinary-opencode',
+      provider: {
+        id: 'opencode-mtplx', command: 'opencode', type: 'cli', mtplxBacked: true,
+        envVars: { OPENCODE_CONFIG: '/example/opencode.json' },
+        args: ['run', '-m', 'mtplx/example'],
+      },
+      prompt: 'One-shot text', workspacePath: TEST_WORKSPACE, toolFree: true,
+    });
+    expect(spawn.mock.calls[0][2].env.OPENCODE_CONFIG).toBe('/example/opencode.json');
+    child.emit('close', 0);
+    await flushMicrotasks();
   });
 });
 

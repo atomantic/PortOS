@@ -36,6 +36,7 @@ import { SPLASH_CONTEXT, SPLASH_MODEL, SPLASH_ORIGIN } from './splashRuntime.js'
 import { isTruthyMeta } from './metadataFlags.js';
 import { isLocalInstanceEndpoint } from './localEndpoint.js';
 import { isGenerationModel } from './localModelHeuristics.js';
+import { executionOptionsError } from './executionOptions.js';
 const LLAMA_SERVER_BASE_URL = `http://127.0.0.1:${PORTS.LLAMA_SERVER}/v1`;
 const VLLM_QWEN_BASE_URL = `http://127.0.0.1:${PORTS.VLLM_QWEN}/v1`;
 const SGLANG_QWEN_BASE_URL = `http://127.0.0.1:${PORTS.SGLANG_QWEN}/v1`;
@@ -376,8 +377,9 @@ export function restrictedMtplxOpenCodeConfig(provider, model) {
   if (!isMtplxOpenCodeCli(provider) || provider.authOnly || provider.credentialBootstrap
     || Object.keys(provider.executionOptions || {}).length || hasManagedOpenCodeConfig()) return null;
   const id = bareLocalModelId(model, 'mtplx');
+  const models = Array.isArray(provider.models) ? provider.models : [];
   if (!id || model !== model.trim() || !isGenerationModel(id) || !/^[\w][\w.:-]*$/.test(id)
-    || ![provider.defaultModel, ...(provider.models ?? [])].some((listed) => bareLocalModelId(listed, 'mtplx') === id)) return null;
+    || ![provider.defaultModel, ...models].some((listed) => bareLocalModelId(listed, 'mtplx') === id)) return null;
 
   const raw = provider.envVars?.OPENCODE_CONFIG_CONTENT;
   const stored = parseOpencodeConfigContent(raw);
@@ -529,7 +531,7 @@ export function buildOpencodeEnvVars(provider, model, { safetyProfile = null, to
   const base = restrictedMtplx
     ? restrictedMtplxOpenCodeConfig(provider, model)
     : parseOpencodeConfigContent(provider?.envVars?.OPENCODE_CONFIG_CONTENT);
-  if (restrictedMtplx && (!base || !toolFree)) throw new Error('OpenCode MTPLX cannot start with the tool-free configuration');
+  if (restrictedMtplx && (!base || !toolFree)) throw executionOptionsError('OpenCode MTPLX cannot start with the tool-free configuration');
   // A NAMESPACE-LESS record with no stored config is a hand-made plain `opencode`
   // provider running against the user's `~/.config/opencode`; `OPENCODE_CONFIG_CONTENT`
   // REPLACES that file wholesale, so synthesizing one would drop their providers.

@@ -269,7 +269,7 @@ describe('other targets', () => {
     expect(runPromptThroughProvider.mock.lastCall[0]).toMatchObject({
       provider: expect.objectContaining({ id: route.providerId, args: [] }),
       model: route.model, effort: route.effort, prompt: htmlPagePrompt(PAGES[0], PLAN),
-      toolFree: true, allowFallback: false,
+      toolFree: true, allowFallback: false, isolateMtplxOpenCode: true,
     });
   });
 

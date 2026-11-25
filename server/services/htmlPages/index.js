@@ -395,12 +395,14 @@ async function generateViaProvider(route, prompt, signal) {
   signal.addEventListener('abort', stop, { once: true });
   const startedAtMs = Date.now();
   try {
+    const isolateMtplxOpenCode = capability.kind === 'opencode-mtplx';
     const result = await runPromptThroughProvider({
       // The restricted recipe is fresh. Saved argv model or variant pins
       // cannot take precedence over the run's recorded selection.
-      provider: capability.kind === 'opencode-mtplx' ? { ...provider, args: [] } : provider,
+      provider: isolateMtplxOpenCode ? { ...provider, args: [] } : provider,
       model: route.model || undefined, effort: route.effort || undefined, prompt,
       source: RUN_SOURCE, timeout: PAGE_TIMEOUT_MS, allowFallback: false, toolFree: true, cwd: PATHS.data,
+      ...(isolateMtplxOpenCode ? { isolateMtplxOpenCode } : {}),
       beforeExecute: async () => {
         const { provider: current } = await requireRouteProvider(route);
         if (!isDeepStrictEqual(current, provider) || current.apiKey !== provider.apiKey) {
