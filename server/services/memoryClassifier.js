@@ -304,6 +304,7 @@ function parseLLMResponse(response, promptToStrip = '') {
 
   // Validate each memory — reject implementation details and low-value noise
   const validMemories = parsed.memories.filter(m => {
+    if (!m || typeof m !== 'object') return false;
     if (!m.type || !m.content || typeof m.confidence !== 'number') return false;
     if (m.confidence < 0.7) return false;
     if (m.content.length < 15) return false;
@@ -315,7 +316,7 @@ function parseLLMResponse(response, promptToStrip = '') {
     // Reject implementation details — file paths, function names, CSS values
     if (/\.(jsx?|tsx?|css|json|md|py|sh|yml)\b/i.test(m.content) && m.type !== 'preference') return false;
     if (/\b\d+px\b/.test(m.content)) return false;
-    if (/\b#[0-9a-f]{6}\b/i.test(m.content) && m.type !== 'preference') return false;
+    if (/(?<!\w)#[0-9a-f]{6}\b/i.test(m.content) && m.type !== 'preference') return false;
     if (/\bport\s+\d{4}\b/i.test(m.content)) return false;
 
     // Reject architecture descriptions (easily discoverable from code)
