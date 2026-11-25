@@ -402,15 +402,17 @@ describe('codeReview helpers', () => {
       const code = 'EXECUTION_OPTIONS_UNSUPPORTED'
       const raw = 'synthetic private process output'
       mockedSettings.current = { codeReview: { reviewers: [reviewer] } }
-      await reportReviewerFailure(reviewer, { code, probeFailure, error: raw }, 100)
+      const stage = probeFailure === 'timeout' ? { probeStage: 'config/read' } : {}
+      await reportReviewerFailure(reviewer, { code, probeFailure, ...stage, error: raw }, 100)
       const config = mockedSettings.current.codeReview
-      expect(config.reviewerHealth[reviewer]).toEqual({ code, reason: 'configuration', probeFailure, failureCount: 1, lastFailureAt: 100 })
+      expect(config.reviewerHealth[reviewer]).toEqual({ code, reason: 'configuration', probeFailure, ...stage, failureCount: 1, lastFailureAt: 100 })
       expect(codeReviewSettingsSchema.parse(config)).toEqual(config)
       expect(await getReviewerConfigHealth()).toMatchObject({ status: 'warning', configFaults: {
-        [reviewer]: { code, probeFailure, message: expect.stringContaining(action) },
+        [reviewer]: { code, probeFailure, ...stage, message: expect.stringContaining(action) },
       } })
       expect(pickCodeReviewDefaults(mockedSettings.current).reviewerConfigFaults[reviewer].message).toContain(action)
-      await reportReviewerFailure(reviewer, { code, probeFailure: raw, error: raw }, 200)
+      if (stage.probeStage) expect(pickCodeReviewDefaults(mockedSettings.current).reviewerConfigFaults[reviewer].message).toContain('Last awaited RPC: config/read.')
+      await reportReviewerFailure(reviewer, { code, probeFailure: raw, probeStage: raw, error: raw }, 200)
       expect(reviewerConfigFaultsFromHealth(mockedSettings.current.codeReview)).toEqual({ [reviewer]: { code, lastFailureAt: 200 } })
       expect(JSON.stringify(mockedSettings.current)).not.toContain(raw)
       await reportReviewerSuccess(reviewer, 300)

@@ -7,7 +7,7 @@ import { buildCodexAuthModeArgs, isCodexCommand } from '../codex.js';
 import { isGrokCommand, grokSpeedArgsConflict, grokSpeedTarget } from '../grok.js';
 import { probeGrokModelCatalog } from '../grokModelCatalog.js';
 import { codexOssLocalProvider, extractBakedModel } from './providerModels.js';
-import { EXECUTION_OPTION_DEFINITIONS, resolveExecutionOptions, executionOptionsError, codexSpeedProbeFailureMessage } from '../executionOptions.js';
+import { EXECUTION_OPTION_DEFINITIONS, resolveExecutionOptions, executionOptionsError, codexSpeedProbeFailureMessage, codexSpeedProbeStage } from '../executionOptions.js';
 import { probeCodexModelsViaAppServer } from '../aiToolkit/internal/codexModelListProbe.js';
 import { prepareCliSpawn } from '../bufferedSpawn.js';
 
@@ -40,8 +40,10 @@ async function inspectExecutionOptionCapabilities(provider, model, context = {})
     ], { ...process.env, ...provider.envVars });
     details = await probeCodexModelsViaAppServer(invocation.command, invocation.args, provider, { includeDetails: true, cwd: context.cwd, ...(Number.isFinite(context.timeoutMs) ? { timeoutMs: Math.max(1, Math.min(15000, context.timeoutMs)) } : {}) });
   } catch (error) {
-    const reason = codexSpeedProbeFailureMessage(error?.probeFailure);
-    return { ...descriptor, probeFailure: reason ? error.probeFailure : 'unknown', reason: reason ?? codexSpeedProbeFailureMessage('unknown') };
+    const probeStage = codexSpeedProbeStage(error?.probeFailure, error?.probeStage);
+    const reason = codexSpeedProbeFailureMessage(error?.probeFailure, probeStage);
+    return { ...descriptor, probeFailure: reason ? error.probeFailure : 'unknown',
+      ...(probeStage ? { probeStage } : {}), reason: reason ?? codexSpeedProbeFailureMessage('unknown') };
   }
   if (!['chatgpt', 'chatgptAuthTokens'].includes(details.accountType)
       || (details.config?.model_provider && details.config.model_provider !== 'openai')
@@ -118,11 +120,18 @@ export async function prepareExecutionOptions(provider, model, options, source =
     { source, options },
   );
   if (Object.keys(attribution.requested).length === 0) return { provider, attribution };
-  const capabilities = await getExecutionOptionCapabilities(provider, model, { fresh: true, cwd: context.cwd, timeoutMs: context.timeoutMs })
+  const readCapabilities = (timeoutMs) => getExecutionOptionCapabilities(provider, model, { fresh: true, cwd: context.cwd, timeoutMs })
     .catch(() => { throw executionOptionsError('Execution speed capabilities could not be verified; retry capability inspection before dispatch.'); });
+  const deadline = context.codexProbeDeadline;
+  let capabilities = await readCapabilities(Number.isFinite(deadline) ? deadline - Date.now() : context.timeoutMs);
+  // Retry only the read-only capability check. Never retry inference or a
+  // permanent refusal, or start a second probe after the shared deadline.
+  if (capabilities.probeFailure === 'timeout' && Date.now() < deadline && context.reserveCodexProbeRetry?.()) {
+    capabilities = await readCapabilities(deadline - Date.now());
+  }
   for (const [key, value] of Object.entries(attribution.requested)) {
     if (!capabilities.options.find((option) => option.key === key)?.values.includes(value)) {
-      throw executionOptionsError(capabilities.reason || `Execution option ${key}=${value} is unsupported by this route and model`, capabilities.probeFailure);
+      throw executionOptionsError(capabilities.reason || `Execution option ${key}=${value} is unsupported by this route and model`, capabilities.probeFailure, capabilities.probeStage);
     }
   }
   attribution.model = capabilities.model;

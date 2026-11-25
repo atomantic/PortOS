@@ -7,7 +7,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { EXECUTION_OPTIONS_ERROR, codexSpeedProbeFailureMessage } from './executionOptions.js';
+import { EXECUTION_OPTIONS_ERROR, codexSpeedProbeFailureMessage, codexSpeedProbeStage } from './executionOptions.js';
 
 // A conservative transport bound, not a claim about any model's token window.
 // A file that cannot fit stays explicitly unreviewed; its contents are never cut.
@@ -134,7 +134,10 @@ export async function runCodeReviewBatches({ diff, headSha = null, budgetMs, max
     if (!result.ok) {
       failure ||= capacity ? reviewContextCapacityFailure() : {
         code: result.code || 'REVIEW_BATCH_FAILED', error: result.error, diagnostics: result.diagnostics,
-        ...(result.code === EXECUTION_OPTIONS_ERROR && codexSpeedProbeFailureMessage(result.probeFailure) ? { probeFailure: result.probeFailure } : {}),
+        ...(result.code === EXECUTION_OPTIONS_ERROR && codexSpeedProbeFailureMessage(result.probeFailure) ? {
+          probeFailure: result.probeFailure,
+          ...(codexSpeedProbeStage(result.probeFailure, result.probeStage) ? { probeStage: result.probeStage } : {}),
+        } : {}),
       };
       // An input-specific capacity refusal does not prevent reviewing other files.
       // Other failures stop spending, preserving any earlier actionable findings.
@@ -159,6 +162,7 @@ export async function runCodeReviewBatches({ diff, headSha = null, budgetMs, max
       code: failure?.code || 'REVIEW_INCOMPLETE',
       ...(failure?.diagnostics ? { diagnostics: failure.diagnostics } : {}),
       ...(failure?.probeFailure ? { probeFailure: failure.probeFailure } : {}),
+      ...(failure?.probeStage ? { probeStage: failure.probeStage } : {}),
       error: failure?.code === 'REVIEW_CONTEXT_CAPACITY'
         ? 'The selected reviewer could not cover every file within its context capacity; review coverage is incomplete.'
         : failure?.code === 'REVIEW_BUDGET_EXHAUSTED'
