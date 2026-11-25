@@ -1,7 +1,7 @@
 /**
  * Client ↔ server API route parity.
  *
- * `client/src/services/api*.js` is where the browser learns which URL a feature
+ * `client/src/services/api*.js` is where the browser mostly learns which URL a feature
  * lives at, and each wrapper's co-located test asserts the wrapper produced the
  * string the wrapper produces. Nothing compared those strings to the routes
  * `server/index.js` actually mounts, so renaming an `app.use('/api/<x>', …)`
@@ -42,9 +42,20 @@ const CALLER_SUPPLIED_PATH_SITES = [
   // `fetchByIds(path, ids)` is the shared id-batching wrapper; its path comes
   // from callers across client/src, outside the scanned services directory.
   { file: 'client/src/services/apiBatch.js', expression: '`${path}?${params}`' },
-  // `importFile(path, file, …)` is a module-local multipart-upload helper with a
-  // block body, so its `path` parameter is only bound at its own call sites.
-  { file: 'client/src/services/apiTimeline.js', expression: 'path' },
+];
+
+/**
+ * Services-pass call sites whose LAST segment is chosen at run time from a closed set of server literals
+ * (`controlFaceTime(action)` posts to `/facetime/call`, `/hangup` or `/probe`), so the forward check sees a
+ * `:p` where the server mounts literals and cannot prove them. The unmounted set must equal this list EXACTLY:
+ * a new site that fails the forward check is a real mismatch, and a listed one that starts matching must leave.
+ * The server routes behind them sit in the `client-dynamic` class when the reverse scan cannot reach them.
+ */
+const DYNAMIC_SEGMENT_SITES = [
+  { file: 'client/src/services/apiVoice.js', expression: '`/voice/facetime/${action}`' },
+  // `fineTunePath(profileId, jobId)` also folds its no-job branch, which a cancel or promote never takes.
+  { file: 'client/src/services/apiVoice.js', expression: '`${fineTunePath(profileId, jobId)}/cancel`' },
+  { file: 'client/src/services/apiVoice.js', expression: '`${fineTunePath(profileId, jobId)}/promote`' },
 ];
 
 const allowlistClassOf = new Map(Object.entries(UNCALLED_ROUTE_ALLOWLIST)
@@ -55,7 +66,9 @@ const describeSite = (site) => `${site.file}: ${site.expression}`;
 
 const catalog = getApiRouteCatalog();
 const serverPaths = catalog.routes.map((route) => route.path);
-const { paths: clientPaths, unresolved } = scanClientApiPaths({ repoRoot: REPO_ROOT });
+const { paths: clientPaths, unresolved, referenced } = scanClientApiPaths({ repoRoot: REPO_ROOT });
+// Everything any client file reaches; the unmounted check keeps using `clientPaths` only.
+const reachedPaths = [...clientPaths, ...referenced.map((path) => ({ path }))];
 
 describe('client ↔ server API route parity', () => {
   it('resolves every client API path to a mounted server route', () => {
@@ -65,7 +78,8 @@ describe('client ↔ server API route parity', () => {
     expect(clientPaths.map((entry) => entry.path)).toContain('/api/settings/features/:p');
 
     const unmounted = findUnmountedClientPaths(clientPaths, serverPaths);
-    expect(unmounted.map((site) => `${describeSite(site)} → ${site.path}`)).toEqual([]);
+    expect([...new Set(unmounted.map(describeSite))].sort())
+      .toEqual(DYNAMIC_SEGMENT_SITES.map(describeSite).sort());
   });
 
   it('declares every call site whose path it cannot resolve', () => {
@@ -78,7 +92,8 @@ describe('client ↔ server API route parity', () => {
       route.replace(/^\/api\/games(?=\/|$)/, '/api/games-renamed'));
     expect(renamed).not.toEqual(serverPaths);
 
-    const stranded = findUnmountedClientPaths(clientPaths, renamed);
+    const declared = new Set(DYNAMIC_SEGMENT_SITES.map(describeSite));
+    const stranded = findUnmountedClientPaths(clientPaths, renamed).filter((site) => !declared.has(describeSite(site)));
     expect(stranded.length).toBeGreaterThan(0);
     // The failure has to name BOTH sides for a human to act on it: the client
     // module still pointing at the old prefix, and the path it now 404s on.
@@ -89,7 +104,7 @@ describe('client ↔ server API route parity', () => {
   // ── reverse direction: mounted routes with no client caller ────────────────
 
   it('has a client caller or a justified allowlist entry for every mounted route', () => {
-    const uncalled = findUncalledServerRoutes(catalog.routes, clientPaths);
+    const uncalled = findUncalledServerRoutes(catalog.routes, reachedPaths);
     expect(
       uncalled.filter((route) => !allowlistClassOf.has(route.path)).map(describeRoute),
       'mounted routes nothing calls: delete the route, or add it to apiRouteCallerAllowlist.js under the class of its caller',
@@ -97,7 +112,7 @@ describe('client ↔ server API route parity', () => {
   });
 
   it('keeps the allowlist honest: every entry is mounted, still uncalled, unique and in a known class', () => {
-    const uncalled = new Set(findUncalledServerRoutes(catalog.routes, clientPaths).map((route) => route.path));
+    const uncalled = new Set(findUncalledServerRoutes(catalog.routes, reachedPaths).map((route) => route.path));
     const entries = Object.values(UNCALLED_ROUTE_ALLOWLIST).flat();
     expect(entries.filter((route, index) => entries.indexOf(route) !== index), 'duplicate entries').toEqual([]);
     expect(Object.keys(UNCALLED_ROUTE_ALLOWLIST).filter((callerClass) => !ROUTE_CALLER_CLASSES[callerClass])).toEqual([]);
@@ -152,6 +167,74 @@ describe('client ↔ server API route parity', () => {
       .toEqual(['GET/POST /api/definitely-uncalled-probe']);
     // An empty client scan must leave every mounted route uncalled rather than pass silently.
     expect(findUncalledServerRoutes(catalog.routes, []).length).toBeGreaterThan(1000);
+  });
+
+  // ── widened client scan (#18656): each call shape marks a route reached; a mention does not ──
+
+  const scanProbe = (sources) => scanClientApiPaths({ sources });
+  const reachedBy = (sources) => scanProbe(sources).referenced;
+
+  it('marks a route reached from a URL builder, api.<verb>, request and a component fetch/EventSource (call-shape bypass probes)', () => {
+    const scanned = scanProbe({
+      'apiProbe.js': [
+        "import api from './apiCore';",
+        "import { API_BASE } from './apiCore';",
+        'export const probeStreamUrl = (id) => `${API_BASE}/probe-builder/${encodeURIComponent(id)}/stream`;',
+        "export const sendProbe = (id) => api.post(`/probe-verb/${id}/send`, {});",
+      ].join('\n'),
+      'components/ProbePanel.jsx': [
+        "const load = () => fetch('/api/probe-component/list');",
+        'const open = (id) => new EventSource(`/api/probe-events/${id}`);',
+        "const ask = () => request('/probe-request/ask');",
+        'const icon = (base, id) => `${base}/api/probe-icon/${id}`;',
+        "const forward = () => api.get('/probe-page/read');",
+      ].join('\n'),
+    });
+    expect(scanned.referenced).toEqual(expect.arrayContaining([
+      '/api/probe-builder/:p/stream', '/api/probe-verb/:p/send', '/api/probe-component/list',
+      '/api/probe-events/:p', '/api/probe-request/ask', '/api/probe-icon/:p', '/api/probe-page/read',
+    ]));
+    // The services pass folds api.<verb> and request the same way, and reports them to the forward check.
+    expect(scanned.paths.map((entry) => entry.path)).toContain('/api/probe-verb/:p/send');
+    const server = [
+      { method: 'GET', path: '/api/probe-component/list' },
+      { method: 'GET', path: '/api/probe-events/:id' },
+      { method: 'GET', path: '/api/probe-never-called' },
+    ];
+    expect(findUncalledServerRoutes(server, scanned.referenced.map((path) => ({ path }))).map((route) => route.path))
+      .toEqual(['/api/probe-never-called']);
+  });
+
+  it('does not let a component literal reach the forward check, and reads no unresolved site from one', () => {
+    const scanned = scanProbe({ 'pages/Help.jsx': "const url = '/api/probe-help/not-mounted';" });
+    expect(scanned.referenced).toEqual(['/api/probe-help/not-mounted']);
+    expect(scanned.paths).toEqual([]);
+    expect(scanned.unresolved).toEqual([]);
+    expect(findUnmountedClientPaths(scanned.paths, [])).toEqual([]);
+  });
+
+  it('treats comments, logs, comparisons, prose, tests and fixtures as mentions, not calls (mention probes)', () => {
+    const mentions = {
+      'components/Mentions.jsx': [
+        "// fetch('/api/probe-comment/one')",
+        "/* const x = '/api/probe-block-comment/one'; */",
+        "console.log('/api/probe-log/one');",
+        "console.warn(`calling /api/probe-log/${id}`);",
+        "const help = 'GET /api/probe-prose/one returns the list';",
+        "const gone = '/api/probe-trailing-prose/one is gone';",
+        "if (url.startsWith('/api/probe-startswith/')) return;",
+        "if (url === '/api/probe-equals/one') return;",
+        "switch (url) { case '/api/probe-case/one': break; }",
+        "const docs = <code>GET /api/probe-jsx-text/one</code>;",
+        "const bare = '/api/';",
+        "const tail = `/api/${kind}-gen/${id}/events`;",
+      ].join('\n'),
+      'components/Mentions.test.jsx': "fetch('/api/probe-in-test/one');",
+      'test/fixtureMocks.jsx': "const url = '/api/probe-fixture/one';",
+    };
+    expect(reachedBy(mentions)).toEqual([]);
+    // Control: the same literal as a real URL value IS seen, so the probe is not vacuous.
+    expect(reachedBy({ 'components/Real.jsx': "const url = '/api/probe-control/one';" })).toEqual(['/api/probe-control/one']);
   });
 
   it('does not count a client id wrapper as a caller of a static sibling route (sibling-param bypass probe, #18655)', () => {

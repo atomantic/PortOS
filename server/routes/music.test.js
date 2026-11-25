@@ -712,13 +712,6 @@ describe('music routes', () => {
     expect(r.body.engines.find((e) => e.id === 'acestep').platformSupported).toBe(true);
   });
 
-  it('GET /models/:engine returns the merged model list; 404s for an unknown engine', async () => {
-    const r = await request(app).get('/api/music/models/acestep');
-    expect(r.status).toBe(200);
-    expect(r.body.models).toEqual([{ id: 'm', name: 'M', userAdded: false }]);
-    expect((await request(app).get('/api/music/models/nope')).status).toBe(404);
-  });
-
   it('POST /models registers the model then streams the download (SSE)', async () => {
     models.add.mockResolvedValueOnce({ id: 'facebook/musicgen-large', repo: 'facebook/musicgen-large', name: 'musicgen-large' });
     const r = await request(app).post('/api/music/models').send({ engine: 'musicgen', repo: 'facebook/musicgen-large' });
@@ -1303,20 +1296,6 @@ describe('music routes', () => {
 
   describe("engine names are checked against the engine table own keys", () => {
     const PROTO_KEYS = ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"];
-
-    it("GET /models/:engine lists a real engine and 404s unknown and prototype names", async () => {
-      models.list.mockResolvedValue([{ id: "m" }]);
-      const ok = await request(app).get("/api/music/models/musicgen");
-      expect(ok.status).toBe(200);
-      expect(models.list).toHaveBeenCalledWith("musicgen");
-      models.list.mockClear();
-      for (const name of ["nope", ...PROTO_KEYS]) {
-        const r = await request(app).get(`/api/music/models/${name}`);
-        expect(r.status, name).toBe(404);
-        expect(r.body.code, name).toBe("AUDIO_MODEL_UNKNOWN_ENGINE");
-      }
-      expect(models.list).not.toHaveBeenCalled();
-    });
 
     it("POST /models rejects unknown and prototype engine names with 400 before touching the registry", async () => {
       for (const engine of ["nope", ...PROTO_KEYS]) {

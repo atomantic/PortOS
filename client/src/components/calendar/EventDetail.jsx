@@ -18,9 +18,8 @@ export default function EventDetail({ event, onClose }) {
   //
   // The cancelled/declined terms are NOT redundant with the list filter: the
   // four parent views read `GET /api/calendar/events`, which drops those
-  // events, but `GET /api/calendar/events/:accountId/:eventId` serves them
-  // unfiltered — so any deep link or future single-event fetch reaches here
-  // with them intact.
+  // events, but a cached event handed straight to this drawer (a deep link or
+  // a future single-event fetch) can still carry them.
   const canJoin =
     isHttpUrl(event.meetingUrl) && !event.isCancelled && event.myStatus !== 'declined';
 

@@ -166,15 +166,6 @@ router.get('/events', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-router.get('/events/:accountId/:eventId', asyncHandler(async (req, res) => {
-  if (!UUID_RE.test(req.params.accountId)) {
-    throw new ServerError('Invalid accountId format', { status: 400 });
-  }
-  const event = await calendarSync.getEvent(req.params.accountId, req.params.eventId);
-  if (!event) throw new ServerError('Event not found', { status: 404 });
-  res.json(event);
-}));
-
 // === Subcalendar Routes ===
 router.get('/accounts/:id/subcalendars', asyncHandler(async (req, res) => {
   if (!UUID_RE.test(req.params.id)) {

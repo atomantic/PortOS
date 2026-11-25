@@ -7,7 +7,7 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { configUpdateSchema, lifestyleUpdateSchema } from '../lib/meatspaceValidation.js';
+import { configUpdateSchema } from '../lib/meatspaceValidation.js';
 import { birthDateInputSchema } from '../lib/identityValidation.js';
 import * as meatspaceService from '../services/meatspace/meatspace.js';
 import { getLoggingStats } from '../services/meatspace/meatspaceLoggingStats.js';
@@ -50,16 +50,6 @@ router.get('/config', asyncHandler(async (req, res) => {
 router.put('/config', asyncHandler(async (req, res) => {
   const data = validateRequest(configUpdateSchema, req.body);
   const config = await meatspaceService.updateConfig(data);
-  res.json(config);
-}));
-
-/**
- * PUT /api/meatspace/lifestyle
- * Update lifestyle questionnaire
- */
-router.put('/lifestyle', asyncHandler(async (req, res) => {
-  const data = validateRequest(lifestyleUpdateSchema, req.body);
-  const config = await meatspaceService.updateLifestyle(data);
   res.json(config);
 }));
 
