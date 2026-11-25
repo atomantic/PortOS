@@ -13,7 +13,7 @@
  */
 import { createReadStream } from 'node:fs';
 import { lstat, readdir, readFile, rename } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { createGzip, createGunzip, gzip, gunzip } from 'node:zlib';
 import { promisify } from 'node:util';
@@ -22,17 +22,19 @@ import { Writable, Transform } from 'node:stream';
 import { z } from 'zod';
 import { atomicWrite, createWriteStreamGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { publishRuntimeFiles, withRuntimeFileTurn } from '../../lib/runtimeFilePublication.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { redactActivePrivateOutput } from '../../lib/privacyPrompt.js';
 import { AGENTS_DIR, loadConfig, saveConfig, withConfigLock, withStateLock, readAgentsStateForSafetyCheck } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
+import { RECORDING_STAGE_NAME } from './recordingStages.js';
 
 const DAY = 86400000;
 const SAFE_ID = /^[a-zA-Z0-9_-]+$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
-const TEMP_RECORDING = /^raw\.txt\.gz\.[0-9a-f-]{36}\.tmp$/;
 const MANIFEST = 'raw-storage.json';
+const recordingStageTurn = createKeyCachedQueue();
 const zipRecording = promisify(gzip);
 const unzipRecording = promisify(gunzip);
 export const agentStoragePolicySchema = z.object({
@@ -69,17 +71,29 @@ async function manifest(dir) {
   return await readManifest(dir) ?? { version: 1, pinned: false };
 }
 
+async function retireRecordingStages(dir, before = Infinity) {
+  for (const name of await readdir(dir).catch(missing) ?? []) {
+    if (!RECORDING_STAGE_NAME.test(name)) continue;
+    const path = join(dir, name);
+    const st = await info(path);
+    if (st?.isFile() && st.mtimeMs < before) await unlinkGuarded(path).catch(missing);
+  }
+}
+
 // The scrubber holds backup admission and the CoS state lock across directory
 // discovery and this rewrite so maintenance cannot republish an older recording.
 export async function scrubAgentRecordings(dir, scrubValue) {
   const plainPath = join(dir, 'raw.txt');
-  await withRuntimeFileTurn(plainPath, async () => {
+  await recordingStageTurn(dir, () => withRuntimeFileTurn(plainPath, async () => {
+    // Let any staging and verification finish, then invalidate its unpublished
+    // copy along with residue from earlier runs. Publication checks for absence.
+    if (DATE.test(basename(dirname(dir)))) await retireRecordingStages(dir);
     redactActivePrivateOutput(plainPath, scrubValue);
     if (!(await info(plainPath))?.isFile()) return;
     const original = await readFile(plainPath, 'utf8');
     const cleaned = scrubValue(original);
     if (cleaned !== original) await atomicWrite(plainPath, cleaned);
-  });
+  }));
 
   const gzipPath = `${plainPath}.gz`;
   if (!(await info(gzipPath))?.isFile()) return;
@@ -224,27 +238,27 @@ async function compress(entry, signal, revalidate) {
   const source = join(entry.dir, 'raw.txt');
   const target = `${source}.gz`;
   const temporary = `${target}.${randomUUID()}.tmp`;
-  // Recover only our reserved, old temporary files after an interrupted process.
-  for (const name of await readdir(entry.dir)) {
-    if (!TEMP_RECORDING.test(name)) continue;
-    const path = join(entry.dir, name);
-    const st = await info(path);
-    if (st?.isFile() && st.mtimeMs < Date.now() - DAY) await unlinkGuarded(path);
-  }
-  const hash = createHash('sha256');
-  const tap = new Transform({ transform(chunk, encoding, done) { hash.update(chunk); done(null, chunk); } });
   // The old plain file remains authoritative until a verified gzip is published.
-  return (async () => {
-    await pipeline(createReadStream(source), tap, createGzip(), await createWriteStreamGuarded(temporary, { flags: 'wx' }), { signal });
-    const expected = hash.digest('hex');
-    const gunzip = createGunzip();
-    const verifying = pipeline(createReadStream(temporary), gunzip, { signal });
-    const [actual] = await Promise.all([hashStream(gunzip, signal), verifying]);
-    if (actual !== expected) throw new Error('Recording verification failed');
-    return withBackupAssetPublication(() => withStateLock(async () => {
+  try {
+    // Release the staging turn before acquiring backup admission or the state
+    // lock, which a revocation can already hold while waiting for staging.
+    const expected = await recordingStageTurn(entry.dir, async () => {
+      await retireRecordingStages(entry.dir, Date.now() - DAY);
+      const hash = createHash('sha256');
+      const tap = new Transform({ transform(chunk, encoding, done) { hash.update(chunk); done(null, chunk); } });
+      await pipeline(createReadStream(source), tap, createGzip(), await createWriteStreamGuarded(temporary, { flags: 'wx' }), { signal });
+      const expected = hash.digest('hex');
+      const gunzip = createGunzip();
+      const verifying = pipeline(createReadStream(temporary), gunzip, { signal });
+      const [actual] = await Promise.all([hashStream(gunzip, signal), verifying]);
+      if (actual !== expected) throw new Error('Recording verification failed');
+      return expected;
+    });
+    return await withBackupAssetPublication(() => withStateLock(async () => {
       const fresh = await revalidate();
       if (!fresh || signal.aborted) return 0;
       const zipped = await info(temporary);
+      if (!zipped) return 0;
       if (zipped.size >= fresh.raw.size) {
         await atomicWrite(join(entry.dir, MANIFEST), { ...fresh.storage, compressionSkippedFingerprint: fingerprint(fresh.raw) });
         return 0;
@@ -254,7 +268,9 @@ async function compress(entry, signal, revalidate) {
       await unlinkGuarded(source);
       return Math.max(0, fresh.raw.size + (fresh.gzip?.size || 0) - zipped.size);
     }));
-  })().finally(() => unlinkGuarded(temporary).catch(err => { if (err.code !== 'ENOENT') throw err; }));
+  } finally {
+    await unlinkGuarded(temporary).catch(missing);
+  }
 }
 async function purge(entry, signal, revalidate) {
   return withBackupAssetPublication(() => withStateLock(async () => {

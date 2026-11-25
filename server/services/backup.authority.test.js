@@ -235,6 +235,33 @@ describe('restoreSnapshot manifest verification', () => {
     }
 
     for (const withManifest of [true, false]) {
+      it(`excludes unpublished CoS recording stages from a scoped restore (manifest: ${withManifest})`, async context => {
+        await withRealRsync(context, async () => {
+          const run = 'cos/agents/2001-01-01/agent-example';
+          const stage = `${run}/raw.txt.gz.00000000-0000-4000-8000-000000000001.tmp`;
+          const nearby = `${run}/raw.txt.gz.00000000-0000-4000-8000-00000000000g.tmp`;
+          const files = {
+            [`${run}/raw.txt`]: 'published plain recording',
+            [`${run}/raw.txt.gz`]: 'published compressed recording',
+            [nearby]: 'unrelated scratch',
+          };
+          const hashes = Object.fromEntries(await Promise.all(Object.entries(files).map(async ([path, bytes]) => [
+            path, await writeSnapshotFile(path, bytes),
+          ])));
+          const staleHash = await writeSnapshotFile(stage, 'stage from an older snapshot');
+          if (withManifest) await writeManifest({ ...hashes, [stage]: staleHash });
+          await writeSnapshotFile(stage, 'disk bytes differ from the sealed stage');
+
+          const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true, subdirFilter: run });
+          expect(preview.changedFiles.some(line => line.includes(stage))).toBe(false);
+          await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter: run });
+          await expect(realFs.readFile(joinPath(PATHS.data, stage))).rejects.toMatchObject({ code: 'ENOENT' });
+          for (const [path, bytes] of Object.entries(files)) {
+            expect(await realFs.readFile(joinPath(PATHS.data, path), 'utf8')).toBe(bytes);
+          }
+        });
+      });
+
       it(`preserves local HTTPS material on full restore (manifest: ${withManifest})`, async context => {
         await withRealRsync(context, async () => {
           const paths = ['certs/cert.pem', 'certs/key.pem', 'certs/meta.json'];

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import { gzipSync, gunzipSync } from 'node:zlib';
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fenceBlock } from '../lib/promptFencing.js';
@@ -160,6 +160,29 @@ describe('privacy vault mutations and existing local run artifacts', () => {
     expect(await readFile(join(paths.agent, 'raw.txt'))).toEqual(expectedRaw);
     expect(gunzipSync(await readFile(join(paths.agent, 'raw.txt.gz')))).toEqual(expectedRaw);
     await expect(readFile(join(paths.agent, 'raw-storage.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('retires abandoned regular-file compression stages in affected archives only', async () => {
+    const stage = 'raw.txt.gz.00000000-0000-4000-8000-000000000001.tmp';
+    const directory = 'raw.txt.gz.00000000-0000-4000-8000-000000000002.tmp';
+    const link = 'raw.txt.gz.00000000-0000-4000-8000-000000000003.tmp';
+    const nearby = 'raw.txt.gz.00000000-0000-4000-8000-00000000000g.tmp';
+    await Promise.all([
+      ...[paths.agent, paths.unrelatedAgent, paths.flatAgent].map(dir => writeFixture(join(dir, stage), compressedRaw)),
+      writeFixture(join(paths.agent, directory, 'keep.txt'), survivor),
+      writeFixture(join(paths.agent, nearby), survivor),
+    ]);
+    // This stage-looking symlink must survive without its target being followed.
+    if (process.platform !== 'win32') await symlink(nearby, join(paths.agent, link));
+    await deleteVaultRecord('record-example');
+
+    await expect(readFile(join(paths.agent, stage))).rejects.toMatchObject({ code: 'ENOENT' });
+    for (const dir of [paths.unrelatedAgent, paths.flatAgent]) {
+      expect(await readFile(join(dir, stage))).toEqual(compressedRaw);
+    }
+    expect(await readFile(join(paths.agent, directory, 'keep.txt'), 'utf8')).toBe(survivor);
+    expect(await readFile(join(paths.agent, nearby), 'utf8')).toBe(survivor);
+    if (process.platform !== 'win32') expect(await readFile(join(paths.agent, link), 'utf8')).toBe(survivor);
   });
 
   it('restores the original compressed recording if its manifest update fails', async () => {
