@@ -63,7 +63,7 @@ Parsers, security/privacy/destructive-action guards, migrations and schema bound
 
 ## Findings and review scope
 
-Retiring a rule requires assessing feasibility as well as value. A bounded audit may track accepted work that remains. Investigate headless Linux CI failures. The review does not require a separate full-repository audit.
+Retiring a rule requires assessing feasibility as well as value. Difficulty alone does not justify retirement. Never demote a rule to obtain a passing check. A bounded audit may track accepted work that remains. Investigate headless Linux CI failures. The review does not require a separate full-repository audit.
 
 Review scope stays tied to the requested change and affected contracts; subjective preferences are not defects. The ephemeral-state rule also covers branches, agent completion state and state-preservation findings, and never justifies a two-step review endpoint.
 
@@ -107,7 +107,7 @@ Drills, keyers and transports are examples of Space-owning surfaces. Global key 
 
 Implementation detail for rules in `client/src/AGENTS.md`.
 
-For a prerequisite involving a linked record, lock or approval, link to the exact place where it can be resolved. Keep that destination reachable for stale and already-approved records.
+Use existing setup and check controls, preserving the user’s work. For prerequisites that need setup outside the app, give concrete steps and a retry. Keep existing authority checks. For a prerequisite involving a linked record, lock or approval, link to the exact place where it can be resolved. Keep that destination reachable for stale and already-approved records.
 
 **Mobile responsive, always.** A `grid-cols-N` with N > 3 and no `…:grid-cols-*` in the same class string is a bug: give text-bearing cards a phone default and widen by breakpoint (`grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4`); a wider gap is not a column breakpoint. Square thumbnail/heatmap grids may stay 4+ on a phone but still need a breakpoint. *Enforced:* `client/src/test/guards/ui/responsiveGridConventions.test.js`.
 
@@ -146,6 +146,8 @@ Local execution does not sanitize external content or dependencies. Untrusted co
 Preserve the command allowlists in `server/lib/commandSecurity.js` and the agent guard. Password-free installs warn after upgrade until the operator accepts the risk or sets a password.
 
 ## Distribution model detail
+
+The [root distribution rules](../AGENTS.md#security-model) govern migrations, cross-version sync and fork updates.
 
 - Each install records applied migrations in `data/migrations.applied.json`.
 - `setup-data.js` copies missing seeds first, so a seeded derived output looks “already done” (`scripts/migrations/340-cos-config-seed-repair.js`). Declare the path in the migration's `OWNED_OUTPUT_PATHS` as well as the central registry so the guard can match them.
