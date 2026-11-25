@@ -426,6 +426,11 @@ export default function LocalLlmPlayground() {
   }, [installedTargets.length, loadingStatus]);
 
   const selectedKeys = useMemo(() => new Set(selectedTargets.map(localLlmTargetKey)), [selectedTargets]);
+  // Selections kept while their runtime's inventory is unknown have no picker row, so they get a removable one.
+  const unavailableSelected = useMemo(() => {
+    const listed = new Set(installedTargets.map(localLlmTargetKey));
+    return selectedTargets.filter((target) => !listed.has(localLlmTargetKey(target)));
+  }, [installedTargets, selectedTargets]);
   // `/api/ps` reports what's resident but not which model is mid-generation, so
   // derive the "processing" flag from our own in-flight run: the streaming chat
   // target, or every target in a busy comparison. Intentionally backend-agnostic
@@ -686,6 +691,16 @@ export default function LocalLlmPlayground() {
                     </div>
                   );
                 })}
+              </div>
+            )}
+            {unavailableSelected.length > 0 && (
+              <div className="space-y-1" data-testid="local-llm-unavailable-selected">
+                {unavailableSelected.map((target) => (
+                  <button key={localLlmTargetKey(target)} onClick={() => toggleTarget(target)} className="w-full min-h-10 flex items-center justify-between gap-2 rounded-lg border border-port-warning/40 px-3 py-2 text-left text-xs text-port-warning">
+                    <span className="truncate">{backendLabel(target.backend)} · {target.modelId} (not listed)</span>
+                    <X size={13} aria-label={`Remove ${target.modelId}`} />
+                  </button>
+                ))}
               </div>
             )}
             {runtimeError && (

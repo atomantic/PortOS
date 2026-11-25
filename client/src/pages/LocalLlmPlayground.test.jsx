@@ -393,6 +393,22 @@ describe('LocalLlmPlayground endpoint runtimes', () => {
     expect(streamLocalLlmTest.mock.calls[0][0]).toMatchObject({ backend: 'vllm', modelId: 'm' });
   });
 
+  it('lets the user remove a retained unavailable target and run a listed model instead', async () => {
+    getLocalRuntimeModels.mockResolvedValue({ runtimes: [
+      { id: 'vllm', label: 'vLLM', models: [], offline: true, error: 'HTTP 401 from the model listing' },
+      { id: 'llama', label: 'llama.cpp', models: [{ id: 'dflash' }], offline: false, error: null },
+    ] });
+    streamLocalLlmTest.mockResolvedValue({ backend: 'llama', modelId: 'dflash', text: 'x', timings: {} });
+    const targets = encodeURIComponent(JSON.stringify([{ backend: 'vllm', modelId: 'm' }]));
+    renderPlayground(`/local-llm/playground?targets=${targets}`);
+    const row = await screen.findByTestId('local-llm-unavailable-selected');
+    fireEvent.click(screen.getAllByText('dflash')[0]);
+    fireEvent.click(row.querySelector('button'));
+    fireEvent.click(screen.getByText('Run chat'));
+    await waitFor(() => expect(streamLocalLlmTest).toHaveBeenCalled());
+    expect(streamLocalLlmTest.mock.calls[0][0]).toMatchObject({ backend: 'llama', modelId: 'dflash' });
+  });
+
   it('still lists Ollama models when the runtime listing fails', async () => {
     getLocalRuntimeModels.mockRejectedValue(new Error('boom'));
     renderPlayground();
