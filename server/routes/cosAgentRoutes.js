@@ -4,7 +4,8 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { cleanupZombieAgents, deleteAgent, getAgent, getAgentPrompt, getAgentRecord, getAgents, sendBtwToAgent } from '../services/cos/cosAgentLifecycle.js';
+import { deleteAgent, getAgent, getAgentPrompt, getAgentRecord, getAgents, sendBtwToAgent } from '../services/cos/cosAgentLifecycle.js';
+import { requireCosOrphanRecoveryHandlers } from '../services/bootHookRegistry.js';
 import { getTaskView } from '../services/cos/cosTaskStore.js';
 import { clearCompletedAgents } from '../services/cos/cosAgentArchive.js';
 import { getAgentDates, getAgentsByDate, getCompletedAgentPage } from '../services/cos/cosAgentIndex.js';
@@ -110,18 +111,42 @@ router.post('/health/check', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// GET /api/cos/agents - Get state-resident agents (running + recently completed, auto-cleans zombies)
+// How often an agent list read may start the dead-agent sweep. The page reads
+// the list on every load and socket-driven refresh; the sweep probes the
+// runner, reads the host-shutdown marker and reconciles reservations, which is
+// worth doing a few times a minute, not once per read.
+const DEAD_AGENT_SWEEP_INTERVAL_MS = 15_000;
+let lastDeadAgentSweepAt = Number.NEGATIVE_INFINITY;
+
+/**
+ * Start the dead-agent sweep without waiting for it. It probes the standalone
+ * runner (up to its transport timeout while that process restarts) and awaits
+ * forge and git work for each record it retires, and the listing is useful
+ * before any of that lands: `completeAgent` pushes `cos:agent:completed` for
+ * each retired record, so the page updates without another read.
+ *
+ * Reached through the boot hook registry, so the route keeps no static edge
+ * into the agent orchestration graph. The sweep is single-flight, so a read
+ * that arrives while one is running joins it.
+ */
+function sweepDeadAgentsInBackground() {
+  const now = Date.now();
+  if (now - lastDeadAgentSweepAt < DEAD_AGENT_SWEEP_INTERVAL_MS) return;
+  lastDeadAgentSweepAt = now;
+  // The promise chain owns an unregistered slot too: that is a wiring defect
+  // to log, not a reason to fail the listing.
+  void Promise.resolve()
+    .then(() => requireCosOrphanRecoveryHandlers().cleanupOrphanedAgents())
+    .catch((err) => {
+      console.error(`🧹 Background dead-agent sweep failed: ${err.message}`);
+    });
+}
+
+// GET /api/cos/agents - Get state-resident agents (running + recently completed)
 // Output arrays and over-long task descriptions are stripped from every listing
 // here — both are loaded on demand via GET /agents/:id. See cosAgentListProjection.js.
 router.get('/agents', asyncHandler(async (req, res) => {
-  // Zombie cleanup probes the standalone runner and can wait up to its
-  // transport timeout when that optional process is restarting or offline.
-  // The state listing is still useful while that repair runs, so keep cleanup
-  // off the response critical path and let it complete independently; the next
-  // normal refresh will see any repaired records.
-  void cleanupZombieAgents().catch((err) => {
-    console.error(`🧹 Background zombie cleanup failed: ${err.message}`);
-  });
+  sweepDeadAgentsInBackground();
   const { active } = validateRequest(z.object({ active: z.literal('1').optional() }), req.query);
   const [agents, taskView] = await Promise.all([
     getAgents(),

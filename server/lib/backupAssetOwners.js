@@ -470,7 +470,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     modules: ['services/cos/cosAgentStorage.js'],
   },
   {
-    // Completion, zombie/stale archival and deletion pair moved/removed trees
+    // Completion, stale archival and deletion pair moved/removed trees
     // with state, the primary date index and completion projection. Admission
     // precedes the state lock. Legacy layout migration owns the same pair.
     id: 'cos-agent-archive-and-index-publication',

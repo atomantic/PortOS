@@ -323,7 +323,7 @@ describe('TasksTab spawning window', () => {
 
     await waitFor(() => expect(screen.getByText('Active (1)')).toBeInTheDocument());
     fireEvent.click(screen.getByText('Task details and actions'));
-    // An agent stuck at `running` (the zombie state cleanupZombieAgents clears)
+    // An agent stuck at `running` (the dead-process state the orphan sweep clears)
     // would otherwise leave the row with no way to re-dispatch it. Duplicate
     // dispatch is refused server-side by forceSpawnTask, not by hiding this.
     expect(screen.getByRole('button', { name: /Process task now/i })).toBeInTheDocument();
