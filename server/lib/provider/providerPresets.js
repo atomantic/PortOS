@@ -374,6 +374,12 @@ export function impliedCatalogNarrowing(record, listed) {
     : null;
 }
 
+// Older Add interactive mode writes copied the CLI's method metadata into
+// an otherwise working TUI. Keep its actual mode during rematerialization;
+// a record already converted to CLI cannot safely be inferred from its id.
+export const repairCopiedTuiMethod = (record) =>
+  record.type === 'tui' && record.method === 'cli' ? { ...record, method: 'tui' } : record;
+
 /**
  * Re-derive one DERIVED preset from `instance`: the materialized record and the
  * patch that writes it, or `null` when it cannot be derived there (an unknown
@@ -389,7 +395,7 @@ export function rederivePreset(record, { instance, catalog, bootstraps, stored =
   const app = record.credentialBootstrapId ? bootstraps[record.credentialBootstrapId] : null;
   if (!harness || (record.credentialBootstrapId && !app)) return null;
   const { record: derived } = materializeDerivedPreset({
-    record, harness, instance, catalog, bootstrap: app ? bootstrapInputFor(record.credentialBootstrapId, app) : null,
+    record: repairCopiedTuiMethod(record), harness, instance, catalog, bootstrap: app ? bootstrapInputFor(record.credentialBootstrapId, app) : null,
   });
   return derived ? { derived, patch: derivedPresetPatch(stored, derived) } : null;
 }
