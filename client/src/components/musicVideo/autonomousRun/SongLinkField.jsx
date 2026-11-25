@@ -1,4 +1,4 @@
-import { inputClass } from './controlClasses.js';
+import { inputClass } from '../controlClasses.js';
 
 export default function SongLinkField({ song }) {
   return (

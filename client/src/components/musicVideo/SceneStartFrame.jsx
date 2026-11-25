@@ -1,10 +1,10 @@
+import { stepButtonClass as STEP } from './controlClasses.js';
 import { useState } from 'react';
 import { Minus, Plus } from 'lucide-react';
 import { formatTimecode } from '../../utils/formatters.js';
 
 // The cut grid: shots start on a 24 fps frame (the render's default canvas rate).
 const FPS = 24;
-const STEP = 'flex items-center justify-center rounded bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-[28px] pointer-fine:sm:min-w-[28px]';
 const frameOf = (sec) => Math.round(sec * FPS);
 const secOf = (frame) => Math.round((frame / FPS) * 1000) / 1000;
 

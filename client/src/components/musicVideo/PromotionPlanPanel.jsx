@@ -1,3 +1,4 @@
+import { inputXsFullClass as inputCls } from './controlClasses.js';
 import { useCallback, useState } from 'react';
 import { Link } from 'react-router';
 import { CalendarClock, Sparkles } from 'lucide-react';
@@ -9,7 +10,6 @@ import useListResource from '../../hooks/useListResource.js';
 import ListLoadError from '../ui/ListLoadError.jsx';
 import PublishCard from './PublishCard.jsx';
 
-const inputCls = 'w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
 const DAY_CHOICES = [3, 7, 14];
 
 /**

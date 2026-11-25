@@ -1,3 +1,4 @@
+import { selectXsShrinkClass as FIELD } from './controlClasses.js';
 import { useState } from 'react';
 import { MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS } from '../../lib/musicVideoTransitions.js';
 import {
@@ -14,8 +15,6 @@ const SIDES = Object.freeze([
 const VARY_COUNTS = Object.freeze([4, 8, 16, 32]);
 // Hundredths of a second and the frames they cover at 24 fps.
 const lengthLabel = (sec) => `${sec.toFixed(2)} s · ${Math.max(1, Math.round(sec * 24))} f`;
-const FIELD = 'min-w-0 bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
-
 /**
  * The effect over the cut into and out of a shot, Off by default: a glitch (a VHS,
  * film or camera look over the cut) or a wipe (the incoming picture taking over

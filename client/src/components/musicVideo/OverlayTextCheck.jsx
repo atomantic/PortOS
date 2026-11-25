@@ -1,6 +1,6 @@
+import { reviewButtonClass as buttonClass } from './controlClasses.js';
 import { formatCount, formatTimecode } from '../../utils/formatters.js';
 
-const buttonClass = 'min-h-[44px] rounded border border-port-border px-3 py-2 text-sm disabled:opacity-50';
 const KIND_LABELS = { overlap: 'Collision', 'off-frame': 'Cut off', contrast: 'Hard to read', small: 'Too small' };
 // The first few findings stay in view; the rest fold so the approval stays above the fold on a phone.
 const SHOWN = 3;

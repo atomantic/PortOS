@@ -1,3 +1,4 @@
+import { reviewButtonClass as buttonClass } from './controlClasses.js';
 import { useEffect, useRef, useState } from 'react';
 import { FileText } from 'lucide-react';
 import { getMusicVideoFestivalPacket, previewMusicVideoFestivalPacket, saveMusicVideoFestivalPacket } from '../../services/apiMusicVideo.js';
@@ -8,8 +9,6 @@ import PublishCard from './PublishCard.jsx';
 import CollapsibleListItem from '../ui/CollapsibleListItem.jsx';
 
 const inputClass = 'w-full rounded border border-port-border bg-port-bg p-2 text-sm';
-const buttonClass = 'rounded border border-port-border px-3 py-2 text-sm min-h-[44px] disabled:opacity-50';
-
 function PacketEditor({ project }) {
   const [data, setData] = useState(null);
   const [packet, setPacket] = useState(null);

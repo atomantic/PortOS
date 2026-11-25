@@ -1,3 +1,4 @@
+import { bareButtonClass as buttonClass } from './controlClasses.js';
 import { useState } from 'react';
 import { CheckCircle2, RotateCcw, Trash2, ExternalLink, MessageSquarePlus } from 'lucide-react';
 import Drawer from '../Drawer.jsx';
@@ -7,8 +8,6 @@ import { musicVideoDevArtifactFileUrl } from '../../services/apiMusicVideo.js';
 import { timeAgo } from '../../utils/formatters.js';
 import { isStandalonePwa } from '../../lib/standaloneDownload.js';
 import { DEV_ARTIFACT_KIND_LABELS, devArtifactStatus } from './DevArtifactsPanel.jsx';
-
-const buttonClass = 'flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 
 /** What a Cast & Sets note can point at: the sheet's images, or the direction as a whole. */
 function castAndSetsTargets(stage) {

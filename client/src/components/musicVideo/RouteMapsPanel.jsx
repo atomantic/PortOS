@@ -1,3 +1,5 @@
+import { inputXsShrinkClass as inputCls } from './controlClasses.js';
+import { previzButtonClass as buttonCls } from './controlClasses.js';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { ArrowDown, ArrowUp, Navigation, Plus, Trash2 } from 'lucide-react';
@@ -14,8 +16,6 @@ import {
 } from '../../../../server/lib/musicVideo/musicVideoRouteMaps.js';
 
 export const ROUTE_MAPS_ANCHOR = 'mv-route-maps';
-const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
-const buttonCls = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs disabled:opacity-50 pointer-fine:sm:min-h-0';
 const iconButtonCls = 'flex min-h-[44px] min-w-[44px] items-center justify-center rounded border border-port-border text-port-text-muted disabled:opacity-40 pointer-fine:sm:min-h-8 pointer-fine:sm:min-w-8';
 const HEADING_DEGREES = Object.fromEntries(ROUTE_MAP_HEADINGS.map((heading, at) => [heading, at * 45]));
 const newStopId = () => `rstop-${uuidv4().slice(0, 8)}`;

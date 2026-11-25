@@ -1,3 +1,4 @@
+import { inputClass } from './controlClasses.js';
 import CodeAuthoringPicker from './CodeAuthoringPicker.jsx';
 import MediaModePicker from './MediaModePicker.jsx';
 import AutoApproveFields from './AutoApproveFields.jsx';
@@ -19,8 +20,6 @@ import {
   AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LIMIT_BOUNDS, ORCHESTRATOR_CHECKPOINTS, REUSED_SONG_SKIPPED_CHECKPOINTS, SUNO_LIMITS, SUNO_VOCAL_GENDERS, autonomousRequestFromDraft, emptyAutonomousDraft,
   isSunoModelValid,
 } from '../../lib/musicVideoAutonomous.js';
-
-const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 
 /**
  * "Autonomous music video" — the alternate entry point: one prompt, no track,

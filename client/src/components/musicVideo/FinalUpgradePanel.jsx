@@ -1,11 +1,10 @@
+import { sceneButtonClass as BUTTON } from './controlClasses.js';
 import { useEffect, useId, useState } from 'react';
 import { Activity, ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
 import { finalTierCounts, sceneClipIsFinal, sceneFinalApproved, selectedVideoTake } from '../../../../server/lib/musicVideo/musicVideoFinalApproval.js';
 import { upgradeMusicVideoShots } from '../../services/apiMusicVideo.js';
 import { formatUsd } from '../../utils/formatters.js';
 import toast from '../ui/Toast';
-
-const BUTTON = 'flex items-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-xs hover:bg-port-border/40 disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 whitespace-nowrap';
 
 const UPGRADE_METHODS = Object.freeze([
   { id: 'upscale', label: 'Upscale the draft', help: 'Keeps the exact approved take and runs the 2x upscaler over it; the upscaled take is selected. No provider spend.' },

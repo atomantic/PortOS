@@ -1,3 +1,4 @@
+import { compactButtonClass as buttonCls } from './controlClasses.js';
 import { useState } from 'react';
 import useMusicVideoShotRenders from '../../hooks/useMusicVideoShotRenders.js';
 import { formatCount } from '../../utils/formatters.js';
@@ -20,7 +21,6 @@ import { batchActive, batchSummary, scenesWaitingForFrame, videoBatchPreview, vi
  * `renderJob`) and the page-owned in-flight flags in `busy`.
  */
 
-const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 const groupCls = 'flex min-w-0 flex-wrap items-center gap-2';
 
 const uniqueCount = (scenes, key) => new Set(scenes.map((scene) => scene[key]).filter(Boolean)).size;

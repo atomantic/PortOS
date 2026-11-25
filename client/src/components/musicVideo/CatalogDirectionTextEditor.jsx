@@ -1,8 +1,8 @@
+import { bareButtonClass as buttonClass } from './controlClasses.js';
+import { inputClass } from './controlClasses.js';
 import { useState } from 'react';
 import { Pencil, Plus, Save, Trash2 } from 'lucide-react';
 
-const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
-const buttonClass = 'flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 // Caps mirror musicVideoCastAndSetsDirectionTextEditSchema / CAST_SETS_LIMITS.
 const MAX = { rules: 6, expressions: 8, props: 6, elements: 4 };
 

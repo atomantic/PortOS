@@ -1,9 +1,9 @@
+import { shotButtonClass as BUTTON } from './controlClasses.js';
 import { useRef, useState } from 'react';
 import { mergeTakeColorMatch } from '../../lib/musicVideoTakes.js';
 import { COLOR_MATCH_LIMITS, colorMatchGroupOf, selectedColorMatchTake, shotSkipsColorMatch } from '../../../../server/lib/shotColorMatch.js';
 import { measureMusicVideoColorMatch, updateMusicVideoTakeColorMatch } from '../../services/apiMusicVideo.js';
 
-const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-xs hover:bg-port-border/40 disabled:opacity-50 pointer-fine:sm:min-h-0';
 const FIELD = 'min-h-[44px] w-full rounded border border-port-border bg-port-bg px-2 py-1 text-xs pointer-fine:sm:min-h-0';
 
 const FIELDS = [
