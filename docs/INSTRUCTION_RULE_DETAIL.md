@@ -17,6 +17,8 @@ Read the nested instructions before editing these trees (each an `AGENTS.md` wit
 
 ## Federation between the user's own machines
 
+The Privacy Center, message mirrors and provider configuration require a scoped change before they gain sync. Non-self peers, guests, public worlds and external services follow their own audience controls (see the [ADRs](decisions/)).
+
 Personal content alone is no reason to block federation ([ADR](decisions/2026-09-19-user-controlled-federation.md)), and Brain records (including tracked-topic threads) may travel the Brain sync channel. Keep the configured peer/category controls and each domain's wire contract. Status/capability endpoints keep bounded projections, never an export path.
 
 ## Logging levels
@@ -35,7 +37,7 @@ Outside the request lifecycle, a caught hook failure logs in the emoji `console.
 
 ## Server conventions
 
-The original, unabridged wording of rules whose one-sentence form now sits in `server/AGENTS.md`.
+Implementation detail for rules in `server/AGENTS.md`.
 
 **Schema parity when adding fields.** A field added to a sanitizer, `createXxx` or payload shape gets its Zod schema in the same change (`lib/aiToolkit/validation.js` for toolkit shapes, the domain `lib/*Validation.js` file for routes), wired into POST and PUT (`schema.partial()`); an unwired sub-schema is false confidence. Polymorphic stores (`PUT /api/settings`) validate the present slice with `schema.partial()` (`backupConfigSchema.partial()` in `server/routes/settings.js`). Tolerate UI sentinels (`endpoint: ''`) with `z.preprocess(v => v === '' ? undefined : v, …)`; a service migrating legacy keys on read keeps accepting the legacy shape.
 
@@ -53,13 +55,21 @@ A `!read lib/<name>.md` in a nested file or a `~/.claude/lib/` reference resolve
 
 ## Testing
 
+Pregate skips imports past two hops and omits boot-smoke suites. Its `--full` DB plan targets `portos_test`. It also links worktree dependencies. The `dependency-updates` task is the exception to shared dependencies: its worktree has no dependency symlinks and installs locally.
+
+Parsers, security/privacy/destructive-action guards, migrations and schema boundaries are unit-test territory when a public-boundary test cannot pin their behavior precisely or cheaply. Name the regression a new test uniquely catches.
+
 `server/vitest.config.js` forces `NODE_ENV=test` so a suite never inherits PM2's `development` environment and aims at the real Postgres. What pregate runs, and its Windows and interrupt behavior: [PREGATE.md](PREGATE.md). The full test policy, including retry, timeout and process-lifecycle state machines as unit-test territory: [CONTRIBUTING.md](CONTRIBUTING.md#test-strategy-value-over-assertion-count).
 
 ## Findings and review scope
 
+Retiring a rule requires assessing feasibility as well as value. A bounded audit may track accepted work that remains. Investigate headless Linux CI failures. The review does not require a separate full-repository audit.
+
 Review scope stays tied to the requested change and affected contracts; subjective preferences are not defects. The ephemeral-state rule also covers branches, agent completion state and state-preservation findings, and never justifies a two-step review endpoint.
 
 ## Filing and routing issues
+
+The pinned `GH_TOKEN` uses the repository's configured or owner-matched account (`atomantic` for the owner's local agents, `picodot` for Pico-delegated work). Do not use a provider-bundled GitHub connector to reach another identity. The pin also applies to tracker comments. State whether a flake is suspected or reproduced. An inconclusive current-need check does not establish that an issue is resolved.
 
 Cross-link an issue in slashdo and PortOS only when both need changes.
 
@@ -71,7 +81,7 @@ Static additions shown as chips beside the user's own words include universe/pro
 
 ## Security exemptions
 
-The free-API-key exemption's CivitAI case lives in `applyDownloadToken` (`server/services/loras.js`).
+The CivitAI decision (#2200) covers host allowlisting and redirect stripping for the free key used by `applyDownloadToken` (`server/services/loras.js`). Quota-billed keys are outside this exemption.
 
 ## Realtime updates
 
@@ -83,19 +93,21 @@ Also remove walkthroughs; keep meaningful type/JSDoc and public API docs. There 
 
 ## Documentation
 
+Read [ETHOS.md](../ETHOS.md) before proposing external edits to a mind’s own memories. Write commit subjects and bodies for people reading the release notes.
+
 [ETHOS.md](../ETHOS.md) also lists the commitments a change must not break. `docs/README.md` indexes ADRs (`docs/decisions/`) and plans (`docs/plans/`, conventions in `docs/plans/README.md`); start with `docs/STORAGE.md`, `docs/ARCHITECTURE.md` and `docs/API.md`.
 
 ## Keyboard ownership and web storage
 
-**Space is a global push-to-talk hotkey.** A surface owning Space (drill, keyer, transport) claims it with `useKeyCapture`. Global key handlers stand down for native button activation through one predicate, `shouldIgnoreGlobalKey(event, opts)` in `lib/a11yKeyboard.js`; add guards there, never at one caller (#4748). A key-owning surface spreads `noPointerFocusSurfaceProps` on its root so a click focusing an inner button doesn't take the key over.
+Drills, keyers and transports are examples of Space-owning surfaces. Global key handlers stand down for native button activation through one predicate, `shouldIgnoreGlobalKey(event, opts)` in `lib/a11yKeyboard.js`; add guards there, never at one caller (#4748). A key-owning surface spreads `noPointerFocusSurfaceProps` on its root so a click focusing an inner button doesn't take the key over.
 
 **Web Storage goes through `lib/safeStorage.js`** (`safeReadStorage` / `safeWriteStorage` / `safeRemoveStorage` and their `Json`/`*Session` variants). Raw `localStorage`/`sessionStorage` throws in Safari private mode, sandboxed iframes, disabled cookies and at quota (`typeof`/`?.` don't guard it), unmounting the route (#5689). *Enforced:* `client/lint-no-raw-web-storage.grit` (Biome plugin; exemptions are negated globs on its override in `client/biome.jsonc`).
 
 ## Client rules
 
-The original, unabridged wording of rules whose one-sentence form now sits in `client/src/AGENTS.md`.
+Implementation detail for rules in `client/src/AGENTS.md`.
 
-**Fix missing prerequisites in place.** Show the missing tool or setting beside the blocked action with the existing setup/check controls, and preserve the user's work; for setup outside the app, give concrete steps and a retry. For linked records, locks or approvals, link to the exact place it's resolved (reachable for stale and already-approved records), not just a disabled control. Keep existing authority checks.
+For a prerequisite involving a linked record, lock or approval, link to the exact place where it can be resolved. Keep that destination reachable for stale and already-approved records.
 
 **Mobile responsive, always.** A `grid-cols-N` with N > 3 and no `…:grid-cols-*` in the same class string is a bug: give text-bearing cards a phone default and widen by breakpoint (`grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4`); a wider gap is not a column breakpoint. Square thumbnail/heatmap grids may stay 4+ on a phone but still need a breakpoint. *Enforced:* `client/src/test/guards/ui/responsiveGridConventions.test.js`.
 
@@ -117,98 +129,45 @@ Settings-over-a-feature surfaces use the shared `client/src/components/Drawer.js
 
 ## Authentication and HTTPS detail
 
-- **Auth**: an optional instance password (`server/services/auth.js`, enforced by `server/services/authGate.js`) gates `/api/*` and `/data/*`, except `ALWAYS_PUBLIC_API_PATHS` in `server/lib/apiAccessPolicy.js` (`/api/auth/status`, `/api/auth/whoami`, `/api/auth/login`, `/api/auth/logout`, `/api/system/health`, `/api/eidoverse/travel/guest`). Paired peers use scoped pair credentials attached by `peerFetch` (`server/lib/peerHttpClient.js`); legacy Basic uses the instance password and is not scoped (`docs/PEER_PUSH_AUTH.md`).
-- **PortOS-spawned agents** authenticate with `PORTOS_API_TOKEN`, a loopback session token injected into their environment (`server/services/agent/agentApiAuth.js`). Any `curl` against this install's API carries `-H "Authorization: Bearer ${PORTOS_API_TOKEN:-}"`; on `401 AUTH_REQUIRED`, check for a missing, expired or invalid token before diagnosing availability. It is empty when no password is set and never given to a public-content review stage.
-- **Agents PortOS did not spawn** call the API with `node scripts/portos-api.js …` (`PORTOS_API_TOKEN` when set, else the opt-in key in `~/.portos/agent-key.json`); never ask for or type the instance password ([docs/AGENT_API_KEY.md](./AGENT_API_KEY.md), `portos-api` skill).
-- **HTTPS**: `npm run setup:cert` flips `:5555` to TLS with a loopback-only HTTP mirror on `:5553`. Peer hops set `rejectUnauthorized: false` because WireGuard authenticates tailnet nodes; a non-tailnet peer (plain LAN IP or non-`.ts.net` host, see `peerRequiresTailscale()`) gets no server authentication.
+Paired peers use scoped pair credentials attached by `peerFetch` (`server/lib/peerHttpClient.js`). Legacy Basic uses the instance password and is unscoped ([peer push auth](PEER_PUSH_AUTH.md)).
 
-Full federation rule (moved from root):
+`server/services/agent/agentApiAuth.js` injects the loopback agent session token. For agents outside PortOS, the API helper falls back to the opt-in key in `~/.portos/agent-key.json` when the session token is absent.
 
-(see root) Credentials, tokens, encryption keys and machine-local execution/sync settings stay local; guarded local-only stores (Privacy Center, message mirrors, provider configuration) gain sync only through a scoped change, never a doc clarification; non-self peers, guests, public worlds and external services follow that surface's audience controls (ADRs in `docs/decisions/`). Wire contract and permitted Brain sync: [detail](#federation-between-the-users-own-machines).
+Peer hops set `rejectUnauthorized: false` because WireGuard authenticates tailnet nodes. A non-tailnet peer (plain LAN IP or non-`.ts.net` host, see `peerRequiresTailscale()`) gets no server authentication.
 
 ## Security posture detail
 
-**Preserve delegated agent authority.** In the host-control gate an operator session includes a verified `PORTOS_API_TOKEN` agent session; operator does not mean human-only. Genuine local callers keep host access when auth is disabled; network reachability and scoped peer credentials do not grant it. A Basic password holder can already exchange it for a session, so refusing Basic is credential-use policy, not isolation. Security findings distinguish these principals and test both unauthorized refusal and the preserved authorized workflow (trace the real path, fallback and deferred work included). Authorized agent execution is an intended capability, not a vulnerability; a configured tool-capable provider still never lets an anonymous remote caller launch it.
+Genuine local callers keep host access when auth is disabled. A Basic password holder can already exchange it for a session, so refusing Basic controls credential use. Trace the real authorization path when reviewing a finding, including fallback and deferred work. Anonymous remote callers cannot launch a configured tool-capable provider.
 
-**Assess security findings against actual control, reachability and impact.** Follow [security risk assessment](./SECURITY_RISK_ASSESSMENT.md): distinguish owner-input reliability and conditional exposure from unauthorized harm, retain external-content and browser/network defenses, reuse the existing abuse guard only on paths it covers, and record dispositions with reevaluation conditions.
+The [risk assessment](SECURITY_RISK_ASSESSMENT.md) distinguishes owner-input reliability and conditional exposure from unauthorized harm. Reuse the existing abuse guard only on paths it covers and record dispositions with reevaluation conditions.
 
-**Audit the external boundary, not delegated autonomy.** Trusted local agents in a user-granted workflow are operators, not adversaries. Protect against malicious third-party code and dependencies, issue/PR/review content, retrieved pages and files, model output, and unauthorized LAN/tailnet callers; local execution does not sanitize them, and untrusted content cannot expand a grant, pick a new audience, change policy or gain host authority. Fix the actual crossing instead of adding human-only approvals, repeated passwords, blanket tool restrictions or per-step confirmations. Keep revision/evidence checks, data protection, budgets and explicit publication controls.
+Local execution does not sanitize external content or dependencies. Untrusted content cannot expand a grant, pick a new audience, change policy or gain host authority. Keep revision and evidence checks, budgets, explicit publication controls, provider permissions, quotas and purchase authorization. The `portos-music-video-*` skills cover delegated review.
 
-(see root) Provider permissions, quotas, budgets and purchase authorization still apply (the `portos-music-video-*` skills carry the delegated-review detail).
+Preserve the command allowlists in `server/lib/commandSecurity.js` and the agent guard. Password-free installs warn after upgrade until the operator accepts the risk or sets a password.
 
 ## Distribution model detail
 
-(see root)
-
-- **Never delete or skip migration/compatibility code because "there's only one install."**
-- On-disk format changes need a migration in `scripts/migrations/` (applied-list per install in `data/migrations.applied.json`). Seed files ship in `data.reference/`.
-- **A migration that DERIVES `data/<x>` from existing records ships NO `data.reference/<x>` seed and gates on its INPUT, never its output's absence**: `setup-data.js` copies missing seeds first, so a seeded output looks "already done" and the next write destroys the user's data (`scripts/migrations/340-cos-config-seed-repair.js`). Declare such a path in `scripts/lib/migrationOwnedPaths.js` and in the migration's `OWNED_OUTPUT_PATHS`; the guard checks both.
-- Prompt-default changes: edit the body, then run the integrity-snapshot regen, which bumps the version so other installs upgrade stored defaults (procedure: `server/AGENTS.md` "Prompt templates").
-- Cross-machine sync payloads stay version-gated (`server/lib/schemaVersions.js`).
-- Self-update stays fork-aware. **Never add `--force` to the server-side `gh repo sync`** (it discards fork commits; the 409 `FORK_DIVERGED` message tells the user to run it themselves). The upstream slug lives only in `server/lib/gitRemote.js`; UI claiming "you are running PortOS" reads `remoteInfo.isUpstream` ([docs/SELF_UPDATE.md](./SELF_UPDATE.md)).
+- Each install records applied migrations in `data/migrations.applied.json`.
+- `setup-data.js` copies missing seeds first, so a seeded derived output looks “already done” (`scripts/migrations/340-cos-config-seed-repair.js`). Declare the path in the migration's `OWNED_OUTPUT_PATHS` as well as the central registry so the guard can match them.
+- `server/AGENTS.md` “Prompt templates” gives the integrity snapshot procedure. `server/lib/schemaVersions.js` declares the cross-machine schema versions.
+- The 409 `FORK_DIVERGED` response tells the user to run the fork sync themselves. The upstream slug lives only in `server/lib/gitRemote.js`. The UI reads `remoteInfo.isUpstream` for “you are running PortOS” ([self-update](SELF_UPDATE.md)).
 
 ## Privacy detail
 
-Use obviously fake placeholders (`example.com`, `alice@example.com`, `192.0.2.10`, `Acme Corp`, `host-XXXX`) and redact repro logs (`<hostname>`, `<user-email>`, `<tailscale-ip>`, `<record-id>`). Read `hostname`, `whoami`, `ifconfig`/`ip addr`, `tailscale status`, `env` or `git config user.*` only for in-session logic, never into an artifact. Scan your diff and prose before committing or posting; if real data was already committed, rewrite the branch before pushing, not a redaction commit. Prefer repo-relative paths (`~/…` or `<repo-root>/…` when absolute is unavoidable). **Never link AI conversation sessions** (`claude.ai`, `chatgpt.com` or any chat share URL) in PRs, commits, issues or reviews; reference issue/PR numbers, SHAs and file paths.
+Additional fake values include `alice@example.com`, `Acme Corp` and `host-XXXX`. Use `<user-email>` and `<tailscale-ip>` in redacted logs. Port forwards and gateways are sensitive network details too. On Linux, `ip addr` is another in-session-only source.
+
+If real data was committed, a follow-up redaction leaves the original in history. Use `~/…` or `<repo-root>/…` when a relative path is insufficient. Reference issue or PR numbers, SHAs and file paths in place of conversation links.
 
 ## AI provider policy detail
 
-**No cold-bootstrap LLM calls.** PortOS never queues provider calls the user hasn't knowingly triggered: none from server boot or `server/index.js` init (warm-ups, pre-generation, backfills), and no background job that grows "what the user asked for" into "a batch for later." User-configured scheduled automations (`taskSchedule.js`, `backupScheduler.js`, autopilot gates, CoS agents) are the one exception; anything else needs a direct user action in the same request or an explicit consent/config step. For cache pre-generation, boot loads only what is on disk; the cold fill runs only from a user-triggered endpoint behind a prompt naming the provider/model that lets the user change or decline it; replenishing an item the user consumed may run silently. Reference: `meatspacePostDrillCache.js`.
+Unscheduled calls need a direct user action in the same request or an explicit consent/config step. The cache-fill consent prompt lets the user change or decline the provider and model. Replenishing an item the user consumed may run silently.
 
 ## Live Node inspector
 
 - **Live Node inspector**: no dynamic `import()` from an inspector-evaluated callback ([safe cleanup](./TROUBLESHOOTING.md#dynamic-import-callback-missing-after-profiling)).
 
-## Moved from root (issue triage, findings, storage)
+## Architecture
 
-- **Route to the owner.** Shared slashdo command, renderer or workflow defects go to [atomantic/slashdo](https://github.com/atomantic/slashdo/issues); PortOS behavior, integration, configuration and instructions go here; forks and managed apps use their configured remote. File, comment and push only as the GitHub identity your run was given: PortOS pins `GH_TOKEN` to the repository's configured or owner-matched account (the owner's local agents: `atomantic`; Pico-delegated work: `picodot`), so filing as the repository owner through that pin is correct. Never switch accounts, read another logged-in account's token (`gh auth switch`, `gh auth token --user …`, `GH_TOKEN=$(…)`) or use a provider-bundled GitHub connector to reach a different identity, and never impersonate an account you were not given. Another account on the same machine is not yours to use and must never appear on, or be linked to, this repository. If the pinned identity lacks a permission (labels dropped, push refused), report that blocker rather than retrying as someone else.
-- **Search before filing.** Reuse an existing issue and add evidence; a new issue carries redacted evidence or repro steps, expected vs actual, affected files, a next step and acceptance criteria, and says whether a flake is suspected or reproduced. (see root) For PortOS, read [portos-file-issue](../.claude/skills/portos-file-issue/SKILL.md) and the label guidance in `server/lib/dispatchLabels.js`.
+`npm start` serves the built client on `:5555`. PM2 manages app lifecycles. `server/lib/ports.js` re-exports the port registry from `ecosystem.config.cjs`.
 
-A rule may be retired after reassessing its value and feasibility, with concise rationale; difficulty alone is not an exemption, and retiring never hides a known important defect. Never suppress findings, weaken tests, demote rules or disable useful checks to get green; invest in high-quality fixes. A hardware, permission or genuinely user-owned blocker stays explicitly unresolved with evidence, an owner and a tracked next step, never relabeled clean. Bounded audits may track remaining accepted work; severity alone never justifies deferral.
-
-**Storage backend.** PostgreSQL (system `:5432` or Docker `:5561`, `npm run setup:db`) is mandatory for every install and peer (`docs/STORAGE.md`). `MEMORY_BACKEND=file` is a dev/test escape hatch selected by `NODE_ENV=test`; with it unset, `server/services/memoryBackend.js` fails fast without a healthy DB, intentionally: add no silent fallback or file choice to `scripts/setup-db.js`.
-
-**API keys for free, non-monetary services are not security findings.** Host-allowlisting or redirect-stripping one (CivitAI, #2200) is won't-fix; the key is still never committed or logged. Paid/quota-billed keys and keys gating money-bearing or destructive actions are not exempt.
-
-## Moved from root (commands, worktrees, privacy lists)
-
-**Run pregate before every push and again after rebasing onto a moved base** (`node scripts/pregate.js` on Windows). It skips imports past two hops and browser/DB/build/boot-smoke suites, so run a focused public-boundary regression as you implement; `--full` runs CI's broad plan, still pinned to `portos_test`. Its receipt is local evidence only; hosted CI and provider-enforced checks and reviews stay mandatory ([what it runs](./PREGATE.md)).
-
-Use linked binaries (`server/node_modules/.bin/vitest run --configLoader runner <files>`). Only the `dependency-updates` task's worktree has no symlinks and installs inside itself. A worktree PortOS did not create runs `node scripts/link-worktree-deps.js <primary-checkout> <worktree>` right after `git worktree add` (pregate links too).
-
-- **Network info**: LAN/Tailscale/public IPs, MACs, subnets, port forwards, gateways, VPN keys, `.env` secrets, DB passwords other than the `portos` dev fallback, API tokens, cookies, auth headers.
-
-## Moved from root (platform, host control, changelog)
-
-macOS is the primary interactive app/browser target; Windows is secondary; Linux interactive browser compatibility is not a support target (Linux server support is unchanged), and headless Linux CI failures still get investigated. Linux-browser-only work needs a supported-target reproduction or concrete shared-code, server, security or data impact. Triage: [portos-file-issue](../.claude/skills/portos-file-issue/SKILL.md) and [docs/CONTRIBUTING.md](./CONTRIBUTING.md#platform-support-and-issue-triage).
-
-(see root) Encourage a strong, unique instance password. Password-free installs warn after upgrade until the operator accepts the risk or sets one; acceptance is machine-local and grants peers no execution authority.
-
-- **No changelog entries in PRs.** Commit messages are the record; `/do:release` writes `.changelog/RELEASE.md` from the log, so write subjects and bodies for a human reading release notes (`.changelog/README.md`).
-
-**Scope boundary**: work on managed apps outside PortOS (research, plans, docs, code) goes in that app's repository.
-
-## Moved from root (architecture, tests)
-
-The server is user-facing on `:5555` (HTTP or HTTPS); `npm run dev` serves the client from Vite on `:5554`, `npm start` the built client from `:5555`. PM2 manages app lifecycles. **Ports**: PortOS owns 5553–5569 (`docs/PORTS.md`; PostgreSQL 5432 system, 5561 Docker); with HTTPS on, local scripts use the loopback HTTP mirror on `:5553`. Define ports in the top-level `PORTS` object in `ecosystem.config.cjs` (re-exported by `server/lib/ports.js`).
-
-Test at the highest practical public boundary (route, service workflow, store adapter, socket exchange, rendered interaction); add focused unit tests only where that can't pin behavior precisely or cheaply (parsers, security/privacy/destructive-action guards, migrations, schema boundaries). Name the regression a new test uniquely catches. Full policy: [docs/CONTRIBUTING.md](./CONTRIBUTING.md#test-strategy-value-over-assertion-count).
-
-A focused file run is not a full-suite result. `PORTOS_TEST_MEMO=off` disables the passed-input test memo (`docs/TEST_MEMO.md`).
-
-## Moved from root (claiming, docs, modules)
-
-**Revalidate issues before claiming** against the freshly fetched default branch, `ETHOS.md` and this security model; skip resolved, superseded or incompatible work with concrete evidence (an inconclusive check is not proof of resolution) and preserve active owners. Procedure: [portos-file-issue](../.claude/skills/portos-file-issue/SKILL.md).
-
-[ETHOS.md](../ETHOS.md) states why unsupervised agent operation is the design target; read it before proposing supervision gates, per-action confirmations, external edits to a mind's own memories, or new data crossing federation. `docs/README.md` indexes `docs/`.
-
-(see root) **Search the catalog (`node scripts/lib-catalog.js <term>`) before writing a helper** and reuse a close match; before adding a file there, read [portos-add-module](../.claude/skills/portos-add-module/SKILL.md). Decide Postgres vs a `data/` file with `docs/STORAGE.md` *before* adding a `data/*.json`. One concern per file; tests sit beside their source.
-
-## Moved from root (misc)
-
-(see root) Network reachability and scoped peer credentials never grant host access. Security findings distinguish these principals and test both unauthorized refusal and the preserved authorized workflow. Authorized agent execution is an intended capability, not a vulnerability.
-
-- **Zod** route validation: domain `lib/*Validation.js`.
-- **Command allowlists**: preserve the policies in `server/lib/commandSecurity.js` and the agent guard.
-
-Before finishing, leave every problem you discovered (product bugs, broken expectations, workflow/process defects, flaky tests, concrete inefficiencies) either fixed and verified or filed in the owning project's tracker. "Pre-existing," "unrelated" and "out of scope" are reasons to file, not to drop it. No unrelated full-repository audit is required.
+**Storage backend.** `npm run setup:db` configures system PostgreSQL on `:5432` or Docker PostgreSQL on `:5561`. With the file-backend override unset, `server/services/memoryBackend.js` fails fast without a healthy database.
