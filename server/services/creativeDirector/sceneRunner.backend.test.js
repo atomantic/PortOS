@@ -229,7 +229,7 @@ describe('runSceneRender — Reactor and fal pins', () => {
     resolveGalleryImage.mockReturnValue(galleryFrame);
     const jobId = await runSceneRender(
       project({ aspectRatio: '9:16', renderBackend: { video: { mode: 'reactor' } } }),
-      scene({ sourceImageFile: 'example-frame.png' }),
+      scene({ sourceImageFile: 'example-frame.png', negativePrompt: '' }),
     );
     expect(jobId).toBe('job-1');
     expect(enqueuedParams()).toMatchObject({
@@ -240,6 +240,20 @@ describe('runSceneRender — Reactor and fal pins', () => {
     for (const key of ['pythonPath', 'modelId', 'numFrames', 'steps', 'apiKey', 'settings']) {
       expect(enqueuedParams()).not.toHaveProperty(key);
     }
+  });
+
+  it('refuses a Reactor scene with a negative prompt before enqueue', async () => {
+    getSettings.mockResolvedValue({ videoGen: { reactor: { apiKey: 'example-test-key' } } });
+    const shot = scene({ negativePrompt: 'fog, crowds' });
+    const selected = project({ renderBackend: { video: { mode: 'reactor' } }, treatment: { scenes: [shot] } });
+    getProject.mockResolvedValue(selected);
+
+    expect(await runSceneRender(selected, shot)).toBeNull();
+    expect(enqueueJob).not.toHaveBeenCalled();
+    expect(updateScene).toHaveBeenLastCalledWith('proj-1', 'scene-1', expect.objectContaining({
+      status: 'failed', evaluation: expect.objectContaining({ notes: expect.stringMatching(/reactor.*a negative prompt/) }),
+    }));
+    expect(updateScene.mock.calls.filter(([, , patch]) => patch.status === 'rendering')).toHaveLength(1);
   });
 
   it('queues fal with its pinned endpoint and scene duration when no local Python exists', async () => {

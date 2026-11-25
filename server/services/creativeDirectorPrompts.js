@@ -27,7 +27,7 @@ import {
 import { GROK_VIDEO_DURATIONS } from '../lib/grokVideoClip.js';
 import { REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS, REACTOR_MAX_PROMPT_LENGTH, REACTOR_ASPECTS } from '../lib/reactorVideoClip.js';
 import { GEMINI_OMNI_WEB_MODEL, GEMINI_WEB_ASPECTS } from '../lib/geminiWebVideo.js';
-import { GENERATION_MODE_LABELS, VIDEO_GEN_MODE } from '../lib/generationModes.js';
+import { GENERATION_MODE_LABELS, VIDEO_BACKENDS_WITHOUT_NEGATIVE_PROMPT, VIDEO_GEN_MODE } from '../lib/generationModes.js';
 import { buildPrompt } from './promptService.js';
 import { PORTOS_API_URL_TOKEN } from '../lib/portosUrls.js';
 
@@ -60,11 +60,6 @@ function buildProjectView(project) {
   };
 }
 
-// Backends whose request has no negative-prompt field. The enqueue boundary refuses one
-// (videoGen/backendPin.js), so the writer is told not to author it rather than having a
-// finished treatment fail scene by scene.
-const takesNoNegativePrompt = (videoBackend) => videoBackend === VIDEO_GEN_MODE.GEMINI;
-
 function buildTreatmentView(project, videoBackend) {
   const aspect = resolveAspectDimensions(project.aspectRatio);
   const quality = QUALITY_PRESETS[project.quality] || { steps: 0, guidance: 0, fps: 0 };
@@ -86,7 +81,7 @@ function buildTreatmentView(project, videoBackend) {
     startingImageFileLiteral,
     hasCast,
     render: {
-      noNegativePrompt: takesNoNegativePrompt(videoBackend),
+      noNegativePrompt: VIDEO_BACKENDS_WITHOUT_NEGATIVE_PROMPT.includes(videoBackend),
       backendLabel: GENERATION_MODE_LABELS[videoBackend] || videoBackend || '',
     },
     standaloneVideo: project.workspace === 'video',
@@ -148,7 +143,7 @@ function buildPlanView(project, toolSpecs, videoModels, videoBackend) {
     targetDurationSeconds: project.targetDurationSeconds,
     modelId: project.modelId,
     modelName: videoModel?.name || project.modelId,
-    supportsNegativePrompt: !takesNoNegativePrompt(videoBackend) && videoModel?.supportsNegativePrompt !== false,
+    supportsNegativePrompt: !VIDEO_BACKENDS_WITHOUT_NEGATIVE_PROMPT.includes(videoBackend) && videoModel?.supportsNegativePrompt !== false,
     modelOptionsJson: JSON.stringify({
       resolutions: videoModel?.resolutionOptions || [],
       frameCounts: videoModel?.frameOptions || [],
