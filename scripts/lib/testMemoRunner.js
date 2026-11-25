@@ -41,7 +41,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import * as nodeFs from 'node:fs';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import * as nodePath from 'node:path';
 import { join, relative, sep } from 'node:path';
 import { resolveTestChrome } from './testChrome.js';
@@ -484,13 +484,57 @@ export function seedVitestDependencies(repoRoot, scope, tests) {
   writeFileSync(path, JSON.stringify({ version: 2, projects: Object.fromEntries(VITEST_PROJECT_NAMES.map((name) => [name, { modules: [], files }])) }));
 }
 
+const sha256Hex = (data) => createHash('sha256').update(data).digest('hex');
+
+/**
+ * What a `test-memo: git-fixture` suite runs against besides its own
+ * sources: the git it finds and everything a repository made on this machine
+ * inherits. The first line of `git --version`, then a digest of the system
+ * and global configuration (includes followed), the global ignore and
+ * attributes files, and every `GIT_*` environment variable. Only the digest
+ * leaves this function, so no setting or credential reaches a log. What a
+ * setting points at beyond those two files (a hooks or template directory)
+ * is the machine's, as the rest of its userland is to every key.
+ *
+ * Null, which the analyzer never keys (`TEST_MEMO_REQUIRED_TOOLS`), when git
+ * cannot be run or the directory the fixtures are made under is itself
+ * inside a repository: git started in a fixture directory that is no
+ * repository of its own would find that one, whose state is in no key.
+ */
+function gitToolIdentity({ env, run, scratch, read }) {
+  const git = (args) => run('git', args, { env, cwd: scratch, encoding: 'utf8', timeout: 15_000 });
+  const version = git(['--version']);
+  if (version.error || version.status !== 0) return null;
+  const enclosing = git(['rev-parse', '--git-dir']);
+  if (enclosing.error || enclosing.status === 0) return null;
+  // A scope with no file exits non-zero, which is the same input as an empty one.
+  const settings = ['--system', '--global'].map((scope) => {
+    const listed = git(['config', scope, '--includes', '--null', '--list']);
+    return listed.error || listed.status !== 0 ? '' : listed.stdout;
+  });
+  // `--null` entries are `key\nvalue\0`; a later scope overrides an earlier one.
+  const setting = (key) => settings.flatMap((listed) => listed.split('\0')).findLast((entry) => entry.startsWith(`${key}\n`))?.slice(key.length + 1);
+  const home = env.HOME || env.USERPROFILE || homedir();
+  const defaults = join(env.XDG_CONFIG_HOME || join(home, '.config'), 'git');
+  const fileDigest = (key, fallback) => {
+    const named = setting(key);
+    try { return sha256Hex(read(named ? named.replace(/^~(?=[\\/])/, home) : join(defaults, fallback))); } catch { return 'absent'; }
+  };
+  const gitEnv = Object.keys(env).filter((name) => name.startsWith('GIT_')).sort().map((name) => `${name}=${env[name]}`);
+  const digest = sha256Hex([...settings, fileDigest('core.excludesfile', 'ignore'), fileDigest('core.attributesfile', 'attributes'), ...gitEnv].join('\0'));
+  return `${String(version.stdout).trim().split('\n')[0]} settings ${digest.slice(0, 16)}`;
+}
+
 /**
  * Version strings for `TEST_MEMO_TOOLS`, resolved once per process the way
  * the suites find the programs: `PORTOS_TEST_PYTHON` or `python3`, `ffmpeg`
- * on PATH, and Chrome through the suites' own candidate list
- * (`resolveTestChrome`). Null when the program cannot be run.
+ * on PATH, Chrome through the suites' own candidate list
+ * (`resolveTestChrome`), and git with what its repositories inherit
+ * (`gitToolIdentity`; `scratch` is the directory the suites' temp root is
+ * made under, as `bootstrapVitestTempRoot` picks it, and `read` reads a
+ * file). Null when the program cannot be run.
  */
-export function createToolVersionResolver({ env = process.env, verifyAudioPair = false, run = spawnSync } = {}) {
+export function createToolVersionResolver({ env = process.env, verifyAudioPair = false, run = spawnSync, scratch = env.PORTOS_TEST_TEMP_ROOT || tmpdir(), read = readFileSync } = {}) {
   const cache = new Map();
   const firstLine = (command, args) => {
     if (!command) return null;
@@ -512,7 +556,8 @@ export function createToolVersionResolver({ env = process.env, verifyAudioPair =
     const version = tool === 'python' ? firstLine(env.PORTOS_TEST_PYTHON || 'python3', ['--version'])
       : tool === 'ffmpeg' ? audioVersion()
         : tool === 'chrome' ? firstLine(resolveTestChrome(env), ['--version'])
-          : null;
+          : tool === 'git' ? gitToolIdentity({ env, run, scratch, read })
+            : null;
     cache.set(tool, version);
     return version;
   };

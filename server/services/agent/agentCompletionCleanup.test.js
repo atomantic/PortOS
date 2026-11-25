@@ -7,6 +7,7 @@
  * These were previously exercised only indirectly via the agentLifecycle
  * completion path; the extraction gives them a direct home.
  */
+// test-memo: git-fixture — git only ever runs in repositories this suite creates under the temp directory (docs/TEST_MEMO.md#git-fixtures).
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { AsyncLocalStorage } from 'node:async_hooks';

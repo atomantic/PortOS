@@ -44,6 +44,7 @@ export const FACTS_CODE = Object.freeze([
   'scripts/lib/testMemo/constants.js',
   'scripts/lib/testMemo/evaluator.js',
   'scripts/lib/testMemo/fileFacts.js',
+  'scripts/lib/testMemo/gitFixture.js',
   'scripts/lib/testMemo/pathValues.js',
   'scripts/lib/testMemo/scopes.js',
   'scripts/lib/testMemo/specifiers.js',
