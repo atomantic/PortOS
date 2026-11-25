@@ -19,6 +19,8 @@ describe('cos-runner request schemas', () => {
     expect(bad.success).toBe(false);
     const message = bodyErrorMessage(bad.error);
     for (const field of ['agentId:', 'cliArgs:', 'envVars:']) expect(message).toContain(field);
+    expect(spawnBodySchema.safeParse({ agentId: 'a', taskId: 't', prompt: 'p' }).success).toBe(false);
+    expect(spawnBodySchema.safeParse({ agentId: 'a', taskId: 't', prompt: 'p', cliCommand: '' }).success).toBe(false);
     expect(spawnTuiBodySchema.safeParse({ args: 'rm -rf' }).success).toBe(false);
     expect(spawnTuiBodySchema.safeParse({ cols: 0 }).success).toBe(false);
     expect(btwBodySchema.safeParse({ message: '' }).success).toBe(false);

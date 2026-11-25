@@ -418,11 +418,8 @@ export async function spawnAgentViaRunner(options) {
     envVars,
     providerAuth,
     securityScanGrant,
-    // New: CLI-agnostic parameters
     cliCommand,
-    cliArgs,
-    // Legacy (deprecated)
-    claudePath
+    cliArgs
   } = options;
 
   const { response, transportError } = await postSpawn('/spawn', {
@@ -435,8 +432,7 @@ export async function spawnAgentViaRunner(options) {
     providerAuth,
     securityScanGrant,
     cliCommand,
-    cliArgs,
-    claudePath
+    cliArgs
   });
 
   // Anything but a 4xx may have left a child running. Ask the runner before
