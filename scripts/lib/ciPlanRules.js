@@ -55,7 +55,7 @@ export const sourceReferencePattern = (sourcePath) => (
 // actually installs; primary-only configuration/schema changes do not need it.
 const FULL_TRIGGER_RULES = [
   // ci.yml defines the windows-server job itself. The other workflows (release,
-  // acceptance, cancel recovery) never run on windows-latest.
+  // acceptance) never run on windows-latest.
   { re: /^\.github\/workflows\/ci\.yml$/, reason: 'workflow definition changed', windowsRelevant: true },
   // ci.yml's composite actions (setup-server, diff-base, test-memo, …) are part
   // of its job definitions, windows-server included.
