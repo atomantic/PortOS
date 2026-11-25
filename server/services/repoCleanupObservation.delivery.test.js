@@ -6,13 +6,13 @@ import { materializeGitRepo } from '../lib/gitTestRepo.js';
 import { execGit } from '../lib/execGit.js';
 import { inspectOpenDeliveryRepair } from './repoCleanupObservation.js';
 
-const forge = vi.hoisted(() => ({ view: null, calls: [], afterAncestry: null, required: null, requiredFails: false }));
+const forge = vi.hoisted(() => ({ view: null, calls: [], afterAncestry: null, required: null, requiredFails: false, oid: null }));
 // `required` lists the check names branch protection requires; null leaves the GraphQL answer unparseable.
 vi.mock('./github.js', () => ({ execGh: vi.fn(async args => {
   if (args[1] !== 'graphql') return JSON.stringify(forge.view);
   if (forge.requiredFails) throw new Error('graphql unavailable');
   const nodes = (forge.view.statusCheckRollup || []).map(check => ({ __typename: 'CheckRun', name: check.name, isRequired: forge.required?.includes(check.name) === true }));
-  return JSON.stringify(forge.required ? { data: { repository: { pullRequest: { commits: { nodes: [{ commit: { statusCheckRollup: { contexts: { pageInfo: { hasNextPage: false }, nodes } } } }] } } } } } : {});
+  return JSON.stringify(forge.required ? { data: { repository: { pullRequest: { commits: { nodes: [{ commit: { oid: forge.oid ?? forge.view.headRefOid, statusCheckRollup: { contexts: { pageInfo: { hasNextPage: false }, nodes } } } }] } } } } } : {});
 }) }));
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({}) }));
 vi.mock('../lib/execGit.js', async original => {
@@ -60,6 +60,7 @@ describe('open delivery relationship from exact local Git history', () => {
     forge.afterAncestry = null;
     forge.required = null;
     forge.requiredFails = false;
+    forge.oid = null;
   });
   afterEach(async () => { await rm(root, { recursive: true, force: true, maxRetries: 3 }); });
 
@@ -130,6 +131,12 @@ describe('open delivery relationship from exact local Git history', () => {
 
     it.each([['unparseable answer', () => {}], ['failed lookup', () => { forge.requiredFails = true; }]])('keeps today\'s all-checks verdict on a %s', async (_, arrange) => {
       arrange();
+      expect(await inspect()).toMatchObject({ actionable: true, headSha: two });
+    });
+
+    it('ignores required-ness read for a different head', async () => {
+      forge.required = ['CI'];
+      forge.oid = other;
       expect(await inspect()).toMatchObject({ actionable: true, headSha: two });
     });
 

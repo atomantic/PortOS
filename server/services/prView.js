@@ -55,17 +55,18 @@ export async function readPullRequest(prRef, fields, opts) {
 }
 
 const REQUIRED_CHECKS_QUERY = `query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){
-commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{__typename
+commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{__typename
 ... on CheckRun{name isRequired(pullRequestNumber:$number)} ... on StatusContext{context isRequired(pullRequestNumber:$number)}}}}}}}}}}`;
 
 /**
  * Names of the checks branch protection requires on a PR's head, or null when that cannot be established
  * (lookup failure, truncated rollup, malformed answer). Null must never be read as "nothing is required".
  * @param {number} number
+ * @param {string|null} headOid - the head the caller's rollup came from; requiredness read for any other head is refused
  * @param {{ repoSpec: string, repoPath?: string|null, forgeAccount?: string|null, timeoutMs?: number, execGh?: Function }} opts
  * @returns {Promise<Set<string>|null>}
  */
-export async function readRequiredCheckNames(number, { repoPath = null, repoSpec = null, forgeAccount = null, timeoutMs, execGh = null } = {}) {
+export async function readRequiredCheckNames(number, headOid, { repoPath = null, repoSpec = null, forgeAccount = null, timeoutMs, execGh = null } = {}) {
   const parts = String(repoSpec || '').split('/');
   const prNumber = Number(number);
   if (parts.length !== 3 || !Number.isSafeInteger(prNumber) || prNumber <= 0) return null;
@@ -75,9 +76,14 @@ export async function readRequiredCheckNames(number, { repoPath = null, repoSpec
   const raw = await exec(['api', 'graphql', '--hostname', host, '-f', `query=${REQUIRED_CHECKS_QUERY}`,
     '-f', `owner=${owner}`, '-f', `repo=${repo}`, '-F', `number=${prNumber}`], timeoutMs,
   { cwd: options.cwd, env: options.env, backoffKey: repoSpec }).catch(() => null);
-  const contexts = safeJSONParse(raw, null)?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts;
-  if (!contexts || contexts.pageInfo?.hasNextPage !== false || !Array.isArray(contexts.nodes)) return null;
-  return new Set(contexts.nodes.filter(node => node?.isRequired === true).map(checkName).filter(Boolean));
+  const parsed = safeJSONParse(raw, null);
+  const commit = parsed?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit;
+  const contexts = commit?.statusCheckRollup?.contexts;
+  if (parsed?.errors || !headOid || String(commit?.oid || '').toLowerCase() !== String(headOid).toLowerCase()
+    || contexts?.pageInfo?.hasNextPage !== false || !Array.isArray(contexts.nodes)) return null;
+  // A node without a boolean verdict or a name is unreadable, never "advisory".
+  if (contexts.nodes.some(node => typeof node?.isRequired !== 'boolean' || !checkName(node))) return null;
+  return new Set(contexts.nodes.filter(node => node.isRequired).map(checkName));
 }
 
 /**
@@ -87,6 +93,6 @@ export async function readRequiredCheckNames(number, { repoPath = null, repoSpec
 export async function awaitsHumanReviewOnRequiredChecks(view, opts) {
   if (awaitsRequiredHumanReview(view)) return true;
   if (view?.reviewDecision !== 'REVIEW_REQUIRED' || classifyChecks(view.statusCheckRollup) !== 'failed') return false;
-  const names = await readRequiredCheckNames(view.number, opts).catch(() => null);
+  const names = await readRequiredCheckNames(view.number, view.headRefOid, opts).catch(() => null);
   return names ? awaitsRequiredHumanReview(view, names) : false;
 }

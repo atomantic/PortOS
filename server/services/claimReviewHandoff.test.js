@@ -59,7 +59,7 @@ beforeEach(() => {
 
 describe('claim human-review handoff with advisory failures', () => {
   const rollup = [{ name: 'CI', conclusion: 'SUCCESS' }, { name: 'ruleset drift', conclusion: 'FAILURE' }];
-  const answerRequired = required => execGh.mockResolvedValue(JSON.stringify({ data: { repository: { pullRequest: { commits: { nodes: [{ commit: { statusCheckRollup: {
+  const answerRequired = required => execGh.mockResolvedValue(JSON.stringify({ data: { repository: { pullRequest: { commits: { nodes: [{ commit: { oid: head, statusCheckRollup: {
     contexts: { pageInfo: { hasNextPage: false }, nodes: rollup.map(c => ({ name: c.name, isRequired: required.includes(c.name) })) } } } }] } } } } }));
   beforeEach(() => { views['claim/issue-42'] = view('claim/issue-42', 7, { statusCheckRollup: rollup }); });
 
@@ -69,6 +69,17 @@ describe('claim human-review handoff with advisory failures', () => {
   });
   it('refuses when a required check failed', async () => {
     answerRequired(['CI', 'ruleset drift']);
+    expect(await verify()).toEqual({ status: 'unverified', reason: 'pull-request-not-awaiting-human-review' });
+  });
+  it('refuses when a node lacks a boolean requiredness', async () => {
+    execGh.mockResolvedValue(JSON.stringify({ data: { repository: { pullRequest: { commits: { nodes: [{ commit: { oid: head, statusCheckRollup: {
+      contexts: { pageInfo: { hasNextPage: false }, nodes: [{ name: 'CI', isRequired: true }, { name: 'ruleset drift' }] } } } }] } } } } }));
+    expect(await verify()).toEqual({ status: 'unverified', reason: 'pull-request-not-awaiting-human-review' });
+  });
+  it('refuses when requiredness was read for a newer head', async () => {
+    answerRequired(['CI']);
+    views['claim/issue-42'] = view('claim/issue-42', 7, { statusCheckRollup: rollup, headRefOid: otherHead });
+    tips['claim/issue-42'] = otherHead;
     expect(await verify()).toEqual({ status: 'unverified', reason: 'pull-request-not-awaiting-human-review' });
   });
   it('refuses when the required set cannot be read', async () => {
