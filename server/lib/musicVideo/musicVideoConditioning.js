@@ -17,7 +17,7 @@ import { RUNNER_FAMILIES } from '../runners.js';
 import { escapeRegExp } from '../textUtils.js';
 import { musicVideoCameoReferences } from './musicVideoCameos.js';
 import { GEMINI_WEB_CLIP_REFERENCE_LIMIT } from '../geminiWebVideo.js';
-import { musicVideoGreyboxReferences } from './musicVideoGreybox.js';
+import { isMusicVideoSetOmitted, musicVideoGreyboxReferences } from './musicVideoGreybox.js';
 
 /**
  * Browser-safe reference selection shared by the board and production lanes.
@@ -722,7 +722,7 @@ export function musicVideoStyleImages(project, identityImages, capacity) {
 export function musicVideoConditioningReferences(project, scene, castMedia = null, greybox = null, { limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES } = {}) {
   const references = baseConditioningReferences(project, scene, castMedia, limit);
   // The chosen camera replaces the section's generic set plate, which shows the place from another side.
-  const leading = scene?.omittedCatalogSubjectIds?.includes(scene.setReference?.subjectId) ? [] : musicVideoGreyboxReferences(greybox);
+  const leading = isMusicVideoSetOmitted(scene) ? [] : musicVideoGreyboxReferences(greybox);
   const leadingIds = new Set(leading.map((r) => r.imageId));
   const ordered = leading.length
     ? [...leading, ...references.filter((r) => !leadingIds.has(r.imageId) && !r.id?.startsWith('mvr-cs-set-') && !(r.catalogSubjectId && r.role === 'set'))]

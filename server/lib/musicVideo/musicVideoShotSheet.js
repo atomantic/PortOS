@@ -88,6 +88,12 @@ function frameFreshness(project, scene) {
 export const shotSheetDrivesPrompt = (scene) => scene?.shotSheet?.promptFromSheet === true;
 
 const sheetText = (value) => (typeof value === 'string' ? value.trim() : '');
+export function shotSheetCharacterNames(project, scene) {
+  const omitted = omittedShotSubjectNames(project, scene, 'character');
+  const characters = scene?.shotSheet?.characters;
+  return (Array.isArray(characters) ? characters : []).map(sheetText).filter(name => name && !omitted.has(name.toLowerCase()));
+}
+
 const listNames = (names) => (names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0] || '');
 
 /**
@@ -112,8 +118,7 @@ export function shotSheetPromptLines(project, scene) {
   if (cameraText && rule) cameraText += `. ${rule}`;
   const location = sheetText(sheet.location);
   const place = [omittedShotSubjectNames(project, scene, 'place').has(location.toLowerCase()) ? '' : location, sheetText(sheet.timeOfDay), sheetText(sheet.light) ? `lit by ${sheetText(sheet.light)}` : ''].filter(Boolean).join(', ');
-  const omittedCast = omittedShotSubjectNames(project, scene, 'character');
-  const who = (Array.isArray(sheet.characters) ? sheet.characters : []).map(sheetText).filter(name => name && !omittedCast.has(name.toLowerCase()));
+  const who = shotSheetCharacterNames(project, scene);
   return [
     ['camera', 'Camera', cameraText],
     ['view', 'View', sheetText(sheet.view)],

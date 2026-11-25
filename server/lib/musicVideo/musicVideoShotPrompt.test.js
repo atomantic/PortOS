@@ -379,6 +379,18 @@ describe('framing-aware production bible additions', () => {
     expect(bible(musicVideoShotModelInput(cast, shot, { hears: true, backend: 'local' }))).toBeUndefined();
   });
 
+  it('leaves omitted cast out of the clip bible and performer count while keeping authored words', () => {
+    const other = { id: 'other', kind: 'character', name: 'Example Other' };
+    const projectWithPair = { concept: { subjects: [...cast.concept.subjects, other] } };
+    const shot = { prompt: 'Example Lead exits the frame.', shotSheet: { promptFromSheet: true, characters: ['Example Lead', 'Example Other'] }, omittedCatalogSubjectIds: ['lead'] };
+    const input = musicVideoShotModelInput(projectWithPair, shot, { hears: true, backend: 'fal' });
+    expect(input.prompt).toContain(shot.prompt);
+    expect(bible(input)).toContain('Example Other');
+    expect(bible(input)).not.toContain('Example Lead');
+    expect(input.promptAdditions).toContainEqual({ id: 'shot-sheet-who', label: 'Who', text: 'Who: Example Other.' });
+    expect(input.promptAdditions.some(item => item.id === 'performer-individuality')).toBe(false);
+  });
+
   it('falls back through direction and live panel shot size while preserving close and unknown framing', () => {
     const shot = { framePrompt: authored, shotSheet: { view: 'from behind' } };
     expect(bible(musicVideoFrameModelInput(cast, { ...shot, direction: { framing: 'wide' } }))).not.toContain('freckles');

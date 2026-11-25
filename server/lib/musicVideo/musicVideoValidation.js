@@ -574,7 +574,7 @@ const sceneLayerFields = {
   // Independent clip picks; null/absent retains the legacy automatic cast set.
   clipReferenceIds: z.array(z.string().min(1).max(128)).max(MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT).nullable().optional(),
   // Catalog subjects deliberately left out of this shot's conditioning (not deleted from the project).
-  omittedCatalogSubjectIds: z.array(z.string().min(1).max(128)).max(100).optional(),
+  omittedCatalogSubjectIds: z.array(z.string().min(1).max(64)).max(MUSIC_VIDEO_MAX_SUBJECTS).optional(),
   // #14822: researched photos of the shot's subject, offered first among its frame references.
   researchReferences: z.array(musicVideoResearchReferenceSchema).max(MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT).nullable().optional(),
   setReference: musicVideoSceneSetReferenceSchema.nullable().optional(),

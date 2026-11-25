@@ -23,7 +23,7 @@ import { musicVideoSubjectScaleText } from './musicVideoSubjectScale.js';
 import { musicVideoReferenceSubjectIds } from './musicVideoCastSelection.js';
 import { musicVideoConditioningReferences } from './musicVideoConditioning.js';
 import { routeMapShotText } from './musicVideoRouteMaps.js';
-import { sceneFramingScale, lyricOverlayOff, shotCameraRuleText, shotSheetDrivesPrompt, shotSheetFocalSubject, shotSheetFramingConflicts, shotSheetPromptLines } from './musicVideoShotSheet.js';
+import { sceneFramingScale, lyricOverlayOff, shotCameraRuleText, shotSheetCharacterNames, shotSheetDrivesPrompt, shotSheetFocalSubject, shotSheetFramingConflicts, shotSheetPromptLines } from './musicVideoShotSheet.js';
 import { shotFilmLook } from './musicVideoFilmLook.js';
 
 /**
@@ -146,12 +146,16 @@ function composeShotModelInput(project, scene, {
   // A local renderer animates a start frame that already shows who and where, and its text
   // encoder is short (LTX-2: 1024 Gemma tokens), so the production bible would overflow it.
   const bible = backend !== 'local';
+  const omitted = scene?.omittedCatalogSubjectIds;
+  const concept = project?.concept;
+  const clipConcept = omitted?.length && Array.isArray(concept?.subjects)
+    ? { ...concept, subjects: concept.subjects.filter(subject => !omitted.includes(subject.id)) } : concept;
   const look = !asTyped && hears ? [
     addition('project-style', 'Project style', project?.concept?.style),
-    bible ? addition('creative-context', 'Production bible', musicVideoCreativeContext(project?.concept, { moodBoard: false, look: musicVideoDirectorLook(project), framingScale: sceneFramingScale(scene) })) : null,
+    bible ? addition('creative-context', 'Production bible', musicVideoCreativeContext(clipConcept, { moodBoard: false, look: musicVideoDirectorLook(project), framingScale: sceneFramingScale(scene) })) : null,
     addition('visual-direction', 'Palette and camera rules', visualDirection(project?.visualSpec)),
   ] : [];
-  const characters = asTyped ? 0 : Math.max(scene?.shotSheet?.characters?.length || 0,
+  const characters = asTyped ? 0 : Math.max(shotSheetCharacterNames(project, scene).length,
     (shotSubjects(project, scene) || []).filter((subject) => subject?.kind === 'character').length);
   const lipSync = scene?.shotMode === 'performance' && scene?.performanceStyle !== 'music';
   const activeSpeaker = String(scene?.direction?.actionContract?.activeSpeaker || '').trim();

@@ -7,6 +7,7 @@ import { googleShotRequestFields } from '../../lib/googleVideoModels.js';
 import { ServerError, failValidation } from '../../lib/errorHandler.js';
 import { musicVideoClipConditioningReferences } from '../../lib/musicVideo/musicVideoConditioning.js';
 import { shotWantsClipSound } from '../../lib/musicVideo/musicVideoClipSound.js';
+import { isMusicVideoSetOmitted } from '../../lib/musicVideo/musicVideoGreybox.js';
 import { sceneEndFrameRequestFields } from '../../lib/musicVideo/musicVideoEndFrame.js';
 import { authoredShotPrompt } from '../../lib/musicVideo/musicVideoShotPrompt.js';
 import { shotActionContractProblem } from '../../lib/musicVideo/musicVideoActionContract.js';
@@ -100,7 +101,8 @@ async function buildShortClipBody(project, scene, input) {
   if (performanceBlocked) throw new ServerError(performanceBlocked, { status: 409, code: 'MUSIC_VIDEO_CLIP_UNAVAILABLE' });
   const hostedPerformance = performance && settings.backend === 'fal';
   const localCutaway = settings.backend === 'local' && !performance && !audioReactive;
-  const projectLtx = settings.generationMode === LTX_REFERENCES_MODE && localCutaway && model?.runtime === 'ltx25' && !scene.setReference?.greyboxShotId;
+  const projectLtx = settings.generationMode === LTX_REFERENCES_MODE && localCutaway && model?.runtime === 'ltx25'
+    && (!scene.setReference?.greyboxShotId || isMusicVideoSetOmitted(scene));
   const useLtx = localCutaway && (typeof card.ltxReferences === 'boolean' ? card.ltxReferences : projectLtx);
   let ltxFiles = null;
   let ltxFrames = null;

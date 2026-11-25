@@ -1469,9 +1469,12 @@ it('passes the selected LTX character references and prompt labels from the shot
 
 describe('LTX reference box default', () => {
   const models = [{ id: 'ltx25_example', name: 'LTX 2.5', runtime: 'ltx25', supportedModes: ['image', 'a2v'] }];
-  const project = (scene) => ({ id: 'mv-reference', scenes: [scene], visualSpec: { references: [
-    { id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider', condition: true },
-  ] } });
+  const project = (scene) => ({ id: 'mv-reference', scenes: [scene],
+    concept: { subjects: [{ id: 'cast-rider', kind: 'character', name: 'Rider' }] },
+    visualSpec: { references: [
+      { id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider', condition: true, catalogSubjectId: 'cast-rider' },
+    ] },
+  });
   const renderCard = (over) => {
     const scene = { sceneId: 's1', prompt: 'The rider turns', referenceImageId: 'start.png', startSec: 0, endSec: 6, takes: [], ...over };
     const onGenerateVideo = vi.fn();
@@ -1486,6 +1489,13 @@ describe('LTX reference box default', () => {
     renderCard({ frameReferenceIds: ['rider'] });
     expect(box()).not.toBeChecked();
     expect(screen.getByRole('status')).toHaveTextContent('These references are not sent');
+  });
+
+  it('keeps the clip render available when its only saved pick was omitted', () => {
+    const onGenerateVideo = renderCard({ clipReferenceIds: ['rider'], omittedCatalogSubjectIds: ['cast-rider'] });
+    expect(box()).not.toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+    expect(onGenerateVideo.mock.calls[0][1].card).toMatchObject({ expectedClipReferenceFiles: [] });
   });
 
   it('honors unticking a picked selection and warns the references stay behind', () => {

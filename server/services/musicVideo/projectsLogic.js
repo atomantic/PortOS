@@ -798,6 +798,7 @@ function carryOver(prior, fresh) {
     referenceImageId: prior.referenceImageId ?? null,
     videoHistoryId: prior.videoHistoryId ?? null,
     ...(prior.setReference ? { setReference: prior.setReference } : {}),
+    ...(prior.omittedCatalogSubjectIds?.length ? { omittedCatalogSubjectIds: prior.omittedCatalogSubjectIds } : {}),
     // The director's own plan: a planner never sees it, so it can't recreate it.
     ...(prior.shotSheet ? { shotSheet: prior.shotSheet } : {}),
     ...(prior.endImageId ? { endImageId: prior.endImageId } : {}),
@@ -1197,6 +1198,7 @@ export function applySceneSplit(project, sceneId, plannedPieces, { preserveClip 
         performanceStyle: scene.performanceStyle ?? null,
         ...(scene.coverage === 'sequence' ? { coverage: 'sequence' } : {}),
         ...(scene.setReference ? { setReference: scene.setReference } : {}),
+        ...(scene.omittedCatalogSubjectIds?.length ? { omittedCatalogSubjectIds: scene.omittedCatalogSubjectIds } : {}),
         ...(scene.camera ? { camera: scene.camera } : {}),
         ...(scene.panelId ? { panelId: scene.panelId, panelRev: scene.panelRev ?? null, panelArt: scene.panelArt ?? null } : {}),
         ...timing,
