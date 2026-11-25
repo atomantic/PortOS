@@ -234,6 +234,35 @@ describe('restoreSnapshot manifest verification', () => {
       });
     }
 
+    for (const withManifest of [true, false]) {
+      it(`preserves local HTTPS material on full restore (manifest: ${withManifest})`, async context => {
+        await withRealRsync(context, async () => {
+          const paths = ['certs/cert.pem', 'certs/key.pem', 'certs/meta.json'];
+          const files = Object.fromEntries(await Promise.all(paths.map(async path => [
+            path, await writeSnapshotFile(path, 'snapshot HTTPS material'),
+          ])));
+          files[RECORD] = await writeSnapshotFile(RECORD, '{"value":"snapshot"}');
+          if (withManifest) await writeManifest(files);
+
+          const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
+          expect(preview.changedFiles.some(line => line.includes('certs/'))).toBe(false);
+          await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+          expect(existsSync(joinPath(PATHS.data, 'certs'))).toBe(false);
+          expect(await realFs.readFile(joinPath(PATHS.data, RECORD), 'utf8')).toBe('{"value":"snapshot"}');
+
+          const localCertDir = joinPath(PATHS.data, 'certs');
+          await realFs.mkdir(localCertDir);
+          try {
+            for (const path of paths) await realFs.writeFile(joinPath(PATHS.data, path), 'current HTTPS material');
+            await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+            for (const path of paths) expect(await realFs.readFile(joinPath(PATHS.data, path), 'utf8')).toBe('current HTTPS material');
+          } finally {
+            await realFs.rm(localCertDir, { recursive: true, force: true });
+          }
+        });
+      });
+    }
+
     for (const { name, options } of [
       { name: 'full restore', options: {} },
       { name: 'brain-scoped restore', options: { subdirFilter: 'brain' } },
@@ -312,7 +341,7 @@ describe('restoreSnapshot manifest verification', () => {
       await expect(pending).resolves.toMatchObject({ verification: { status: 'verified', checkedFiles: 1 } });
     });
 
-    for (const subdirFilter of ['database-authority.json', './database-authority.json', 'database-authority.json/', 'Database-Authority.json']) {
+    for (const subdirFilter of ['database-authority.json', './database-authority.json', 'database-authority.json/', 'Database-Authority.json', 'certs', './Certs/', 'certs/key.pem']) {
       it(`refuses an explicit ${subdirFilter} selection before verification or transfer, for preview and execution alike`, async () => {
         await seedSnapshot();
         for (const dryRun of [true, false]) {

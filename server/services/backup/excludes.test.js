@@ -21,3 +21,11 @@ describe('Managed Python environment backup exclusions', () => {
     expect(excludes).not.toContain('venvs/');
   });
 });
+
+describe('HTTPS certificate backup exclusion', () => {
+  it('keeps machine-local HTTPS material out of backups even if disabled', () => {
+    const path = '/certs/';
+    expect(DEFAULT_EXCLUDES).toContainEqual(expect.objectContaining({ path, overridable: false }));
+    expect(computeEffectiveExcludes({ disabledDefaultExcludes: [path] })).toContain(path);
+  });
+});

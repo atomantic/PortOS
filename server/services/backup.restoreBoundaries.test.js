@@ -127,6 +127,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=desktop.ini',
         '--exclude=._*',
         // Machine-local admission state is never installed by a restore (#10064).
+        '--exclude=/[cC][eE][rR][tT][sS]',
         '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN]',
         '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[aA][dD][dD][rR]',
         '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[fF][oO][rR][wW][aA][rR][dD][sS].[jJ][sS][oO][nN]',
@@ -169,6 +170,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=Thumbs.db',
         '--exclude=desktop.ini',
         '--exclude=._*',
+        '--exclude=/[cC][eE][rR][tT][sS]',
         '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN]',
         '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[aA][dD][dD][rR]',
         '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[fF][oO][rR][wW][aA][rR][dD][sS].[jJ][sS][oO][nN]',

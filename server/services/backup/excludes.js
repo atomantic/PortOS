@@ -26,6 +26,7 @@ export const DEFAULT_EXCLUDES = [
   { path: '/images/.media-copy-*.tmp', reason: 'Unpublished collection media transfer bytes', overridable: false },
   { path: '/videos/.media-copy-*.tmp', reason: 'Unpublished collection media transfer bytes', overridable: false },
   { path: '/videos/.topaz-staging/', reason: 'Ephemeral Topaz upload and result staging', overridable: false },
+  { path: '/certs/', reason: 'Machine-local HTTPS certificates and private keys — provisioned per host', overridable: false },
   { path: '/backup-admission/', reason: 'Machine-local publication ownership and snapshot fences', overridable: false },
   { path: '/image-thumbnails/', reason: 'Regenerable image grid previews', overridable: false },
   { path: '/python/', reason: 'Managed Python virtualenvs and the Laya-MLX runtime/weights — rebuilt by the next Python-backed run; a restored venv has absolute interpreter paths and is broken on another machine', overridable: false },
@@ -213,7 +214,7 @@ export const isOsMetadataFile = (name) => OS_METADATA_FILES.has(name) || name.st
 export const OS_METADATA_RSYNC_EXCLUDES = [...OS_METADATA_FILES, '._*'].map(name => `--exclude=${name}`);
 
 /**
- * Data-root files a restore never installs. Some snapshots retain them as
+ * Data-root paths a restore never installs. Some snapshots retain them as
  * recovery evidence; Tailcat authority is excluded from new snapshots too. `database-authority.json` names which database backend a
  * completed cutover retired ON THE MACHINE THAT RAN IT. Installing another
  * machine's record (or an older snapshot's, after a reverse cutover) would fence
@@ -225,7 +226,7 @@ export const OS_METADATA_RSYNC_EXCLUDES = [...OS_METADATA_FILES, '._*'].map(name
  * verification and execution cannot disagree.
  */
 const RESTORE_PRESERVED_FILES = Object.freeze([
-  'tailcat-serve.json', 'tailcat-serve.addr', 'tailcat-forwards.json',
+  'certs', 'tailcat-serve.json', 'tailcat-serve.addr', 'tailcat-forwards.json',
   'database-authority.json', 'peer-execution', 'peer-execution-catalog.json', 'peer-execution-grants.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance', 'backup-admission', 'cos/agents/.branch-policy-revision',
 ]);
 // Matched case-insensitively (rsync has no such flag, so each letter becomes a
