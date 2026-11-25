@@ -56,6 +56,7 @@ describe.skipIf(!chrome && !auditCdp)('run actions without hover', () => {
                 prompt: 'Example failed task', error: new URLSearchParams(location.search).has('failure') ? ${JSON.stringify(failureReason)} : 'Example failure', suggestedFix: ${JSON.stringify(suggestedFix)}, exitCode: 1 };
               let stopped = false;
               window.runsFixture = { loads: 0, stops: [] };
+              export async function getRun() { return null; }
               export async function getRuns() {
                 window.runsFixture.loads++;
                 if (new URLSearchParams(location.search).has('failure')) return { runs: [failed] };

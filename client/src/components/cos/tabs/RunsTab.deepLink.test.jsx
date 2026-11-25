@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router';
 
 const api = vi.hoisted(() => ({
   getRuns: vi.fn(),
+  getRun: vi.fn(),
   getRunPrompt: vi.fn(),
   getRunOutput: vi.fn(),
   deleteRun: vi.fn(),
@@ -23,6 +24,7 @@ const socket = vi.hoisted(() => {
 
 vi.mock('../../../services/apiRuns.js', () => ({
   getRuns: api.getRuns,
+  getRun: api.getRun,
   getRunPrompt: api.getRunPrompt,
   getRunOutput: api.getRunOutput,
   deleteRun: api.deleteRun,
@@ -145,11 +147,44 @@ describe('RunsTab ?run= deep link', () => {
     expect(api.getRunPrompt).not.toHaveBeenCalled();
   });
 
-  it('ignores a ?run= id that is not in the loaded list', async () => {
+  it('resolves a ?run= id outside the loaded list with one by-id read and pins it expanded', async () => {
+    api.getRun.mockResolvedValue({ id: 'run-old', prompt: 'old prompt', providerName: 'demo', success: true, startTime: '2025-01-01T00:00:00Z' });
+    renderTab('/cos/runs?run=run-old');
+
+    const pinned = await screen.findByTestId('pinned-run');
+    expect(within(pinned).getByText('old prompt')).toBeInTheDocument();
+    expect(api.getRun).toHaveBeenCalledTimes(1);
+    expect(api.getRun.mock.calls[0][0]).toBe('run-old');
+    expect(api.getRunPrompt).toHaveBeenCalledWith('run-old');
+  });
+
+  it('shows a not-found notice for an unknown ?run= id', async () => {
+    api.getRun.mockRejectedValue(new Error('404'));
     renderTab('/cos/runs?run=run-missing');
 
-    expect(await screen.findByText('first prompt')).toBeInTheDocument();
+    expect(await screen.findByText('Run not found or deleted.')).toBeInTheDocument();
     expect(api.getRunPrompt).not.toHaveBeenCalled();
+  });
+
+  it('makes no by-id read when the run is in the loaded list or no ?run= is given', async () => {
+    renderTab('/cos/runs?run=run-b');
+    await screen.findByText('full output for run-b');
+    expect(api.getRun).not.toHaveBeenCalled();
+  });
+
+  it('notes the server total when more runs exist than were loaded', async () => {
+    api.getRuns.mockResolvedValue({ runs: RUNS, total: 250 });
+    renderTab('/cos/runs');
+    expect(await screen.findByText('Showing the newest 2 of 250 runs')).toBeInTheDocument();
+  });
+
+  it('links a CoS run to its agent and task', async () => {
+    api.getRuns.mockResolvedValue({ runs: [
+      { ...RUNS[0], id: 'cos-run', source: 'cos-agent', agentId: 'agent-1', taskId: 'sys-task-1', success: false },
+    ] });
+    renderTab('/cos/runs?run=cos-run');
+    expect(await screen.findByRole('link', { name: 'View agent' })).toHaveAttribute('href', '/cos/agents/agent-1');
+    expect(screen.getByRole('link', { name: 'View task' })).toHaveAttribute('href', '/cos/tasks?task=sys-task-1&source=internal');
   });
 
   it('shows each execution state and complete failure guidance before optional diagnostics', async () => {
