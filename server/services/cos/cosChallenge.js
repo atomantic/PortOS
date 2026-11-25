@@ -20,9 +20,6 @@ export const MAX_CHALLENGES_PER_TASK = 1;
 // Mirrored by `resolveChallengeSchema` in cosValidation.js; a parity test keeps them in lockstep.
 export const CHALLENGE_OUTCOMES = Object.freeze(['upheld', 'escalated']);
 
-// The metadata keys this module owns on a task, exported so callers/tests can strip them in one place.
-export const CHALLENGE_METADATA_KEYS = Object.freeze(['challengeCount', 'challenge', 'challengeResolution']);
-
 /**
  * How many challenges a task has consumed: a number, or its string (`"1"`) on rows stored before #16407 and peers on older versions, so parse it and treat non-positive/unparseable as 0.
  */

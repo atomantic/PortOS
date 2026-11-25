@@ -411,5 +411,3 @@ export function normalizeProject(project) {
 export const segmentDuration = (segment) => (segment.type === 'still'
   ? segment.durationSec
   : Math.max(0, segment.outSec - segment.inSec));
-
-export const laneDuration = (segments) => segments.reduce((sum, s) => sum + segmentDuration(s), 0);

@@ -7,7 +7,6 @@ import { randomUUID } from 'crypto';
 import { homedir } from 'os';
 import { atomicWrite, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { parseCommandArgs } from '../lib/commandSecurity.js';
-import { parsePm2JlistStdout } from '../lib/pm2Jlist.js';
 import { beginLoadSample, formatLoadAttribution, roundMs } from '../lib/eventLoopLagProbe.js';
 import { PATHS } from '../lib/paths.js';
 import { serverSecretEnvKeys, withoutServerSecretsEnv } from '../lib/processEnv.js';
@@ -517,20 +516,6 @@ function shapeProcStatus(proc) {
     args: proc.pm2_env?.args || null
   };
 }
-
-/**
- * Parse the stdout of a `pm2 jlist` (custom PM2_HOME CLI path) into a raw
- * process array, or `null` when the read effectively failed.
- *
- * Compatibility re-export: the strict parser now lives in the pure
- * `server/lib/pm2Jlist.js` (issue #8164) so package-local consumers like the
- * autofixer can import it without the rest of this service. Kept exported here
- * under its original name for existing first-party callers/tests.
- *
- * @param {string} stdout Raw `pm2 jlist` stdout (may carry ANSI noise).
- * @returns {Array|null} The parsed process array (incl. `[]`), or `null` on failure.
- */
-export const parseJlistStdout = parsePm2JlistStdout;
 
 /**
  * Fetch PM2 process list with TTL caching.

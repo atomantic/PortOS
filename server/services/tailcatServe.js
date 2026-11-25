@@ -779,4 +779,4 @@ export function _liveServeForTests() {
   return liveServe;
 }
 
-export { DEFAULT_KEY_NAME, DEFAULT_LOCAL_PORT as DEFAULT_SERVE_PORT };
+export { DEFAULT_KEY_NAME };

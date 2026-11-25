@@ -1306,14 +1306,6 @@ export function weakestSkillsFromStats(stats) {
 }
 
 /**
- * The single weakest scored drill by recent (windowed) accuracy — the head of
- * `weakestSkillsFromStats`. `null` when there's no accuracy signal yet.
- */
-export function weakestSkillFromStats(stats) {
-  return weakestSkillsFromStats(stats)[0] || null;
-}
-
-/**
  * Stalled-progression descriptors from the resolved multiplication, Powers, and cognitive
  * ladders: a laddered drill the user is partway up but not yet advancing, with
  * how many more clean/fast reps remain to reach the next rung. Pure — takes the

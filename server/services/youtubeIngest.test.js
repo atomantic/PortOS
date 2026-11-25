@@ -4,6 +4,7 @@ import { PassThrough } from 'node:stream';
 import { readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { basename, join } from 'path';
+import { YOUTUBE_VIDEO_URL_RE } from '../lib/youtubeUrl.js';
 
 const testDoubles = vi.hoisted(() => ({
   spawn: vi.fn(),
@@ -63,7 +64,6 @@ vi.mock('./ytdlpAudioImport.js', async (importOriginal) => ({
 
 import {
   startYoutubeIngest,
-  YOUTUBE_INGEST_URL_RE,
   assertYoutubeIngestUrl,
   cancelYoutubeIngest,
   listActiveYoutubeIngests,
@@ -87,7 +87,7 @@ describe('YouTube ingest URL allowlist', () => {
       'https://www.youtube.com/live/oCnxnaVg0bY',
       'https://www.youtube.com/embed/oCnxnaVg0bY',
     ]) {
-      expect(YOUTUBE_INGEST_URL_RE.test(url)).toBe(true);
+      expect(YOUTUBE_VIDEO_URL_RE.test(url)).toBe(true);
       expect(() => assertYoutubeIngestUrl(url)).not.toThrow();
     }
   });

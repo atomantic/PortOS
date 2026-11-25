@@ -33,7 +33,6 @@ import { resolveYtDlpBinaries, downloadAudioToTempMp3, cleanupYtDlpTemp } from '
 // links, which the brain ingest and the Takeout importer already handled.
 export {
   YOUTUBE_VIDEO_URL_RE as YOUTUBE_URL_RE,
-  assertYoutubeVideoUrl as assertYoutubeUrl,
 };
 
 // jobId -> { clients, lastPayload, process, canceled }

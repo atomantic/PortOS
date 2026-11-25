@@ -40,7 +40,6 @@ import {
   recordMessages,
   recordRunUsage,
   recordSession,
-  recordTokens,
   rollupOldDailyActivity
 } from './usage.js';
 
@@ -443,7 +442,7 @@ describe('usage.js — summary', () => {
     it('attributes directly recorded tokens to reportable unknown usage', async () => {
       readJSONFile.mockResolvedValueOnce(makeUsage({}));
       await loadUsage();
-      await recordTokens(1_000_000, 500_000);
+      await recordRunUsage({ tokensIn: 1_000_000, tokensOut: 500_000 });
 
       const report = getUsageSummary().report;
       expect(report.providers).toEqual([

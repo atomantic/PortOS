@@ -97,7 +97,7 @@ const { videoGenEvents } = await import('./events.js');
 const { PATHS, unlinkGuarded } = await import('../../lib/fileUtils.js');
 const realFiles = await vi.importActual('../../lib/fileUtils.js');
 const { createMaintenanceAdmission } = await import('../../lib/maintenanceAdmission.js');
-const { LTX_UPSCALE_JOB_KIND, LTX_PROVENANCE_FIELDS } = await import('./upscalePlan.js');
+const { LTX_UPSCALE_JOB_KIND, UPSCALE_PROVENANCE_FIELDS } = await import('./upscalePlan.js');
 
 const SOURCE_ID = '11111111-1111-4111-8111-111111111111';
 const JOB_ID = 'job-11112222-3333';
@@ -406,7 +406,7 @@ describe('runVideoUpscale — success', () => {
     const entry = await runWith(() => finishChild(0));
     videoGenEvents.removeAllListeners('completed');
 
-    for (const field of LTX_PROVENANCE_FIELDS) expect(entry[field]).toBeDefined();
+    for (const field of UPSCALE_PROVENANCE_FIELDS) expect(entry[field]).toBeDefined();
     expect(entry).toMatchObject({
       upscaledFrom: SOURCE_ID,
       upscaleMethod: 'ltx',

@@ -4,9 +4,9 @@
  * agree on. Both properties are structural, so they get a test.
  */
 import { describe, expect, it } from 'vitest';
-import { findContributionById, listContributionModulePaths, listRegisteredContributionIds, loadContributionModule } from './eidoverseResilienceContributions.js';
+import { listContributionModulePaths, listRegisteredContributions, loadContributionModule } from './eidoverseResilienceContributions.js';
 import { runResilienceAssay } from './eidoverseResilienceAssay.js';
-import { listControllerDefinitionIds } from './eidoverseControllerRegistry.js';
+import { describeControllerDefinitions } from './eidoverseControllerRegistry.js';
 
 describe('resilience-assay contribution registry', () => {
   it('registers only *.contribution.js, so the deliberately-failing fixture is not promotable', async () => {
@@ -15,13 +15,6 @@ describe('resilience-assay contribution registry', () => {
     expect(paths.length).toBeGreaterThan(0);
     expect(paths.every((path) => path.endsWith('.contribution.js'))).toBe(true);
     expect(paths.some((path) => path.includes('narratedOnly'))).toBe(false);
-  });
-
-  it('resolves by id and reports a miss instead of importing what the caller named', async () => {
-    expect((await findContributionById('beacon-relay-demo')).id).toBe('beacon-relay-demo');
-    // The shapes an id can never resolve to — a path is data here, not a module.
-    expect(await findContributionById('../../../etc/passwd')).toBeNull();
-    expect(await findContributionById('eidoverseResilienceAssayFixtures/narratedOnly.failing.fixture.js')).toBeNull();
   });
 
   it('refuses an ordinary multi-export module rather than calling its first function', async () => {
@@ -37,14 +30,14 @@ describe('resilience-assay contribution registry', () => {
   // the controller still runs with its author gone. Neither the CLI nor the
   // promote path changed shape to gain it.
   it('resolves an executable world controller by id, from the second source', async () => {
-    const controllerIds = await listControllerDefinitionIds();
+    const controllerIds = (await describeControllerDefinitions()).map(({ id }) => id);
     expect(controllerIds.length).toBeGreaterThan(0);
 
-    const registered = await listRegisteredContributionIds();
-    expect(registered).toEqual(expect.arrayContaining(['beacon-relay-demo', ...controllerIds]));
+    const registered = new Map((await listRegisteredContributions()).map(({ contribution }) => [contribution.id, contribution]));
+    expect([...registered.keys()]).toEqual(expect.arrayContaining(['beacon-relay-demo', ...controllerIds]));
 
     for (const id of controllerIds) {
-      const contribution = await findContributionById(id);
+      const contribution = registered.get(id);
       expect(contribution.id).toBe(id);
       // Every shipped controller must survive the agent-free assay — a
       // controller PortOS ships that cannot outlive its author is not a

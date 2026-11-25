@@ -84,7 +84,6 @@ const SIDECAR_SCRIPT = MUSICGEN_SCRIPT;
 // default engine, so these mirror its ENGINES entry.
 export const MIN_DURATION_SEC = 1;
 export const MAX_DURATION_SEC = 30;
-export const DEFAULT_DURATION_SEC = 12;
 
 // MusicGen model tiers; medium is the default — a quality/speed balance that
 // fits comfortably in unified memory. Kept as a small in-module constant rather
@@ -398,11 +397,6 @@ export function getEngine(engineId) {
 export function getEngineModel(engineId, modelId) {
   const engine = getEngine(engineId);
   return engine.models.find((m) => m.id === modelId) || null;
-}
-
-// Back-compat: MusicGen-specific model lookup (pre-multi-engine callers/tests).
-export function getMusicgenModel(modelId) {
-  return MUSICGEN_MODELS.find((m) => m.id === modelId) || null;
 }
 
 // Whether this host can run a backend at all. An engine with no

@@ -56,24 +56,3 @@ export async function listRegisteredContributions() {
     .map((contribution) => ({ label: `controller:${contribution.id}`, contribution }));
   return [...fixtures, ...controllers];
 }
-
-/**
- * The registered contribution with this id, or `null` (not a throw, so the promote
- * path reports it as one refusal reason rather than a 500).
- */
-export async function findContributionById(contributionId) {
-  for (const { contribution } of await listRegisteredContributions()) {
-    if (contribution?.id === contributionId) return contribution;
-  }
-  return null;
-}
-
-/**
- * The id of every registered contribution, in stable order. Authoring surfaces need
- * the real list; ids only, so module paths stay behind this resolver.
- */
-export async function listRegisteredContributionIds() {
-  return (await listRegisteredContributions())
-    .map(({ contribution }) => contribution?.id)
-    .filter((id) => typeof id === 'string' && id.length > 0);
-}

@@ -7,7 +7,7 @@ import {
   COMMISSION_INTENT_MAX, COMMISSION_STYLE_SPEC_MAX, COMMISSION_BRIEF_TAG_MAX,
 } from '../../lib/creativeBriefLimits.js';
 import { MAX_DIRECTIVE_GOAL_LEN, MAX_STYLE_SOURCE_LEN } from './directive.js';
-import { buildVideoPromptGuidance, isMiniMaxVideoModel } from './videoPromptGuidance.js';
+import { buildVideoPromptGuidance } from './videoPromptGuidance.js';
 
 const MAXED_INTENT = 'x'.repeat(COMMISSION_INTENT_MAX);
 
@@ -94,7 +94,6 @@ describe('buildCommissionDirective — video (unchanged brief/feedback fold)', (
   });
 
   it('keeps model-specific guidance off the generic path while retaining the shot recipe', () => {
-    expect(isMiniMaxVideoModel('ltx-2.5')).toBe(false);
     expect(buildVideoPromptGuidance('ltx-2.5')).toContain('production-ready prompt');
     expect(buildVideoPromptGuidance('ltx-2.5')).not.toContain('[Tracking shot]');
   });

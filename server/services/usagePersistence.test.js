@@ -11,8 +11,8 @@ const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-usage-commit-
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 const { PATHS } = await import('../lib/fileUtils.js');
 const {
-  USAGE_FILE, getUsage, loadUsage, resetUsage, recordSession, recordRunUsage, addDatedUsageBatch, flushPendingUsageWrites,
-  recordTokens, applyHistoricalUsageCorrections, getReconciledUsageRunIds, getRecentCodexUsageClaims, buildUsageDigest
+  USAGE_FILE, getUsage, loadUsage, resetUsage, recordSession, recordMessages, recordRunUsage, addDatedUsageBatch, flushPendingUsageWrites,
+  applyHistoricalUsageCorrections, getReconciledUsageRunIds, getRecentCodexUsageClaims, buildUsageDigest
 } = await import('./usage.js');
 const { __resetUsageClaims, mergeUsageClaims, recordCompletedRunUsage, snapshotUsageClaims } = await import('./usageReconciler.js');
 const home = join(PATHS.data, 'synthetic-home');
@@ -133,7 +133,7 @@ describe('durable usage batches', () => {
       return Promise.reject(failure);
     });
     const first = recordSession('codex-cli', 'Codex', run.model).catch((error) => error);
-    const later = recordTokens(0, 7);
+    const later = recordMessages('codex-cli', run.model, 1, 7);
     let flushSettled = false;
     const flushed = flushPendingUsageWrites().catch((error) => error).finally(() => { flushSettled = true; });
     try {
@@ -270,7 +270,7 @@ describe('usage commit failure recovery', () => {
     const failed = recordRunUsage({ providerId: 'codex-cli', tokensIn: 120, tokensOut: 30 }, { reconciledRunId: 'retry', codexHighWater });
     const failure = expect(failed).rejects.toThrow('synthetic disk write failure');
     await entered.promise;
-    const successful = recordTokens(7, 9);
+    const successful = recordRunUsage({ providerId: 'codex-cli', tokensIn: 7, tokensOut: 9 });
     expect(getUsage()).toEqual(before);
     expect(await getRecentCodexUsageClaims(0)).toEqual([]);
     rejectWrite(Object.assign(new Error('synthetic disk write failure'), { code: 'EIO' }));

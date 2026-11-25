@@ -21,7 +21,6 @@ import {
   buildMinimaxInstrumentalLyrics,
   ensureClosingSection,
   clampDuration,
-  getMusicgenModel,
   getEngine,
   getEngineModel,
   isEngineReady,
@@ -36,7 +35,6 @@ import {
   DEFAULT_AUDIOLDM2_MODEL_ID,
   MIN_DURATION_SEC,
   MAX_DURATION_SEC,
-  DEFAULT_DURATION_SEC,
   MUSIC_VRAM_READINESS,
   resolveVramReadiness,
   resolveEngineVramReadiness,
@@ -44,6 +42,10 @@ import {
 } from './musicGen.js';
 
 describe('MUSICGEN_MODELS registry', () => {
+  it('default model id resolves to a real entry', () => {
+    expect(getEngineModel('musicgen', DEFAULT_MUSICGEN_MODEL_ID)).toBeTruthy();
+  });
+
   it('has a stable, unique id + repo for each model', () => {
     const ids = MUSICGEN_MODELS.map((m) => m.id);
     expect(new Set(ids).size).toBe(ids.length);
@@ -52,15 +54,6 @@ describe('MUSICGEN_MODELS registry', () => {
       expect(m.repo).toMatch(/^facebook\/musicgen-/);
       expect(typeof m.name).toBe('string');
     }
-  });
-
-  it('default model id resolves to a real entry', () => {
-    expect(getMusicgenModel(DEFAULT_MUSICGEN_MODEL_ID)).toBeTruthy();
-  });
-
-  it('getMusicgenModel returns null for unknown ids', () => {
-    expect(getMusicgenModel('nope')).toBeNull();
-    expect(getMusicgenModel(undefined)).toBeNull();
   });
 });
 
@@ -143,10 +136,10 @@ describe('ENGINES backend registry', () => {
     ]);
   });
 
-  it('musicgen window mirrors the legacy module-level constants', () => {
+  it('uses the legacy MusicGen bounds and the shipped default duration', () => {
     expect(ENGINES.musicgen.minDurationSec).toBe(MIN_DURATION_SEC);
     expect(ENGINES.musicgen.maxDurationSec).toBe(MAX_DURATION_SEC);
-    expect(ENGINES.musicgen.defaultDurationSec).toBe(DEFAULT_DURATION_SEC);
+    expect(ENGINES.musicgen.defaultDurationSec).toBe(12);
   });
 
   it('declares MiniMax VRAM requirements per execution profile and pins its immutable HF revision', () => {
@@ -228,6 +221,8 @@ describe('getEngine / getEngineModel', () => {
     // musicgen-small is not an audioldm2 model — selection must not bleed across engines.
     expect(getEngineModel('audioldm2', 'musicgen-small')).toBeNull();
     expect(getEngineModel('musicgen', 'audioldm2')).toBeNull();
+    expect(getEngineModel('musicgen', 'nope')).toBeNull();
+    expect(getEngineModel('musicgen', undefined)).toBeNull();
   });
 });
 
@@ -248,7 +243,7 @@ describe('clampDuration', () => {
   it('falls back to the engine default on non-finite input', () => {
     expect(clampDuration(NaN, 'musicgen')).toBe(ENGINES.musicgen.defaultDurationSec);
     expect(clampDuration('abc', 'audioldm2')).toBe(ENGINES.audioldm2.defaultDurationSec);
-    expect(clampDuration(undefined)).toBe(DEFAULT_DURATION_SEC);
+    expect(clampDuration(undefined)).toBe(12);
   });
 });
 

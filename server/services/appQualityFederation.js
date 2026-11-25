@@ -206,11 +206,6 @@ export async function buildQualitySnapshot(app = { id: PORTOS_APP_ID }, days = 3
   return { schemaVersion: PLATFORM_SCHEMA_VERSIONS.appQuality, repository, measurements };
 }
 
-/** No persistence or forwarding: disabled/offline peers cannot leave a hidden stale contribution. */
-export async function collectPortosQuality(days, deps = {}) {
-  return collectAppQuality({ id: PORTOS_APP_ID }, days, deps);
-}
-
 // Why a peer contributed nothing, so the UI can name it and say what to fix.
 // Reasons are a fixed vocabulary: peer error text never reaches the client.
 const peerFailure = (reason, extra) => Object.assign(new Error(reason), { peerFailureReason: reason, ...extra });
