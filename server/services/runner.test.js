@@ -616,6 +616,33 @@ describe('executeCliRun — tool-free OpenCode', () => {
   });
 });
 
+it.each([
+  [524288, undefined, '48000'],
+  [32768, undefined, '24576'],
+  [524288, '12000', '12000'],
+])('composes a tool-free Splash page allowance with context %i and explicit output %s', async (tokens, explicit, expected) => {
+  const child = makeChild();
+  spawn.mockReturnValueOnce(child);
+  const onComplete = vi.fn();
+  setAIToolkit(fakeToolkit({ analyzeError }));
+  await executeCliRun({
+    runId: 'splash-page',
+    provider: {
+      id: 'claude-splash', command: 'claude', type: 'cli', splashBacked: true, defaultModel: 'inkling2-mini',
+      harnessContext: { tokens },
+      envVars: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8001', ...(explicit ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: explicit } : {}) },
+    },
+    prompt: 'Write a standalone HTML page.', workspacePath: TEST_WORKSPACE, toolFree: true, maxTokens: 48_000, onComplete,
+  });
+  const [, args, { env }] = spawn.mock.calls[0];
+  expect(args).toContain('--tools');
+  expect(env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe(expected);
+  child.stderr.emit('data', Buffer.from("API Error: Claude's response exceeded the 8192 output token maximum. To configure this behavior, set the CLAUDE_CODE_MAX_OUTPUT_TOKENS environment variable.\n"));
+  child.emit('close', 1);
+  await flushMicrotasks();
+  expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ success: false, errorCategory: 'output-limit' }));
+});
+
 describe('executeCliRun — wall-clock timeout classification', () => {
   // The CLI runner kills its own child on timeout, so the close event carries
   // `exitCode: null` rather than the 124 finalizeRunRecord keys on. Without the

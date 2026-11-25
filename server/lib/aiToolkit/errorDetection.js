@@ -17,6 +17,7 @@ export const ERROR_CATEGORIES = {
   TIMEOUT: 'timeout',
   // An explicitly shortened caller spending cap, not provider health.
   RUNTIME_BUDGET_EXHAUSTED: 'runtime-budget-exhausted',
+  OUTPUT_LIMIT: 'output-limit',
   QUOTA_EXCEEDED: 'quota-exceeded',
   // A model safety refusal is terminal for this request. Never retry it or
   // switch providers; it says nothing about provider health.
@@ -928,6 +929,15 @@ export function analyzeError(errorText, exitCode = null, { prompt } = {}) {
     text = text.replace(/\r\n/g, '\n');
     const echo = `\nuser\n${prompt.replace(/\r\n/g, '\n').replace(/\n+$/, '')}\n`;
     text = text.replace(echo, '\n');
+  }
+
+  const outputLimit = exitCode && text.match(/^API Error: (Claude's response exceeded the \d+ output token maximum\.[ \t\r\n]+To configure this behavior, set the CLAUDE_CODE_MAX_OUTPUT_TOKENS environment variable\.)[ \t\r]*$/m);
+  if (outputLimit) {
+    return {
+      hasError: true, category: ERROR_CATEGORIES.OUTPUT_LIMIT, message: outputLimit[1].replace(/\s+/g, ' '),
+      waitTime: null, requiresFallback: false, actionable: true,
+      suggestedFix: 'Increase the configured output allowance or request a shorter response.',
+    };
   }
 
   for (const errorPattern of ERROR_PATTERNS) {

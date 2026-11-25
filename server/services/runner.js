@@ -375,7 +375,7 @@ export async function executeCliRun(options) {
 
 async function executeAdmittedCliRun({
   runId, provider, prompt, workspacePath, screenshots = [], onData, onComplete, timeout,
-  toolFree = false, isolateMtplxOpenCode = false, beforeExecute,
+  toolFree = false, isolateMtplxOpenCode = false, beforeExecute, maxTokens,
 }, permit) {
   const toolkit = requireToolkit();
   await patchRunMetadata(runId, runOwnership('cli'));
@@ -494,12 +494,14 @@ async function executeAdmittedCliRun({
   const visionSettingsEnv = vision && toolFree && isClaude
     ? await getClaudeSettingsEnv()
     : null;
+  const launchModel = extractBakedModel(builtArgs) || provider.defaultModel;
   const childEnv = buildCliChildEnv({
     before: visionSettingsEnv,
-    provider: await resolveSplashHarnessContext(provider, extractBakedModel(builtArgs) || provider.defaultModel),
+    provider: await resolveSplashHarnessContext(provider, launchModel),
     cwd: vision?.invocation.cwd || effectiveCwd,
     guard: true,
-    ...(toolFreeOpenCode ? { toolFree: true, model: extractBakedModel(builtArgs) || provider.defaultModel } : {}),
+    ...(toolFreeOpenCode ? { toolFree: true, model: launchModel } : {}),
+    ...(toolFree && maxTokens != null ? { model: launchModel, splashClaudeMaxTokens: maxTokens } : {}),
     ...(isolateMtplxOpenCode ? { openCodeIsolationDir: resolve(runDir, 'opencode') } : {}),
   });
 

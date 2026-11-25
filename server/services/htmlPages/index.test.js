@@ -49,6 +49,10 @@ vi.mock('../mtplxServerManager.js', () => ({
 const providers = {
   'example-api': { name: 'Example API', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' },
   'example-cli': { name: 'Example CLI', type: 'cli', command: 'claude' },
+  'example-splash': {
+    name: 'Example Splash', type: 'cli', command: 'claude', splashBacked: true, defaultModel: 'inkling2-mini',
+    envVars: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8001' },
+  },
   'example-tui': { name: 'Example TUI', type: 'tui', command: 'claude' },
   'example-sandbox': { name: 'Example Sandbox', type: 'cli', command: 'codex' },
   'opencode-mtplx': {
@@ -265,6 +269,19 @@ describe('other targets', () => {
       detail: { verdict: 'failed', rendered: 0, pages: [failure] },
     });
     expect(writePageFile).not.toHaveBeenCalled();
+  });
+
+  it('requests a larger Splash Claude budget for the page while keeping the recorded prompts and effort', async () => {
+    runPromptThroughProvider.mockImplementation(async ({ prompt }) => ({ text: isPlanRequest(prompt) ? PLAN : goodPage }));
+    const [queued] = await startRuns({ routes: [{ providerId: 'example-splash', effort: 'xhigh' }], pages: [PAGES[0]] });
+    const run = await settled(queued.id);
+    expect(run.pages[0]).toMatchObject({ html: goodPage, plan: PLAN });
+    const [[plan], [page]] = runPromptThroughProvider.mock.calls;
+    expect(plan).not.toHaveProperty('maxTokens');
+    expect(page).toMatchObject({
+      prompt: htmlPagePrompt(PAGES[0], PLAN), model: 'inkling2-mini', effort: 'xhigh',
+      maxTokens: 48_000, toolFree: true, allowFallback: false,
+    });
   });
 
   it('keeps the successful page when another provider reply contains no HTML', async () => {

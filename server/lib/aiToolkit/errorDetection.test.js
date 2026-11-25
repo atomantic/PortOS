@@ -31,6 +31,13 @@ const QUOTA_BANNER_LINE = '⚠ Individual quota reached. Please upgrade your sub
 
 describe('Error Detection', () => {
   describe('analyzeError', () => {
+    it('recognizes Claude Code output exhaustion only on a failed run with the actual banner', () => {
+      const banner = "API Error: Claude's response exceeded the 8192 output token maximum.\nTo configure this behavior, set the CLAUDE_CODE_MAX_OUTPUT_TOKENS environment variable.";
+      expect(analyzeError(banner, 1)).toMatchObject({ category: ERROR_CATEGORIES.OUTPUT_LIMIT, requiresFallback: false });
+      expect(analyzeError(banner, 0).hasError).toBe(false);
+      expect(analyzeError('> ' + banner, 1).category).toBe(ERROR_CATEGORIES.UNKNOWN);
+    });
+
     it('excludes only a complete known prompt echo, preserving real errors with the same words', () => {
       const prompt = 'authentication\nuser\ncredit  \n';
       const echoed = `OpenAI Codex v1\nuser\n${prompt}\nERROR: Unrecognized provider failure\n`;
