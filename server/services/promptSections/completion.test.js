@@ -261,7 +261,8 @@ describe('claim flow workflow-scope handoff', () => {
     expect(missing).toContain('lacks the `workflow` scope');
     expect(missing).toContain('gh auth refresh -h github.com -s workflow');
     expect(missing).toContain('status "blocked"');
-    expect(missing).toContain('"mode":"approval"');
+    expect(missing).toContain('"mode":"approval","code":"github-workflow-scope"');
+    expect(missing).toContain('held branch if publication was refused');
     expect(missing).toContain('This is a warning, not a merge refusal.');
     expect(missing).toContain('After the configured review and required CI gates pass');
     expect(missing).toContain('one normal head-pinned merge attempt using the assigned credential');

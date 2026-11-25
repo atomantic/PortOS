@@ -359,6 +359,32 @@ describe('TaskItem blocked reason', () => {
     expect(screen.getByText('Abandon the candidate')).toBeVisible();
   });
 
+  it.each([
+    ['coded', { status: 'blocked', reason: 'GitHub rejected the push.', recovery: { mode: 'approval', code: 'github-workflow-scope' } }],
+    ['saved before the recovery code', { status: 'blocked', reason: 'The assigned GitHub OAuth credential still lacks the required workflow scope.', recovery: { mode: 'approval' } }],
+  ])('shows workflow permission recovery for a %s task', async (_kind, taskOutcome) => {
+    const task = { id: 'sys-workflow-approval', description: 'Claim issue', status: 'blocked', metadata: {
+      blockedCategory: 'task-approval', blockedReason: taskOutcome.reason, taskOutcome,
+    } };
+    render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
+    expect(screen.getByRole('region', { name: 'GitHub workflow access' })).toHaveTextContent('On the instance that ran this task');
+    expect(screen.getByText('gh auth refresh -h github.com -s workflow')).toBeVisible();
+    expect(screen.getByRole('region', { name: 'GitHub workflow access' })).toHaveTextContent('The refresh updates the stored login, not an injected token.');
+    expect(api.updateCosTask).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Unblock task sys-workflow-approval and move it to pending' }));
+    await waitFor(() => expect(api.updateCosTask).toHaveBeenCalledWith(task.id, { status: 'pending', type: 'internal' }, { silent: true }));
+  });
+
+  it('does not confuse a GitHub branch rule with a missing workflow scope', () => {
+    const reason = 'GitHub rejected this merge because required branch checks did not pass.';
+    const task = { id: 'sys-branch-policy', description: 'Claim issue', status: 'blocked', metadata: {
+      blockedCategory: 'task-approval', blockedReason: reason, taskOutcome: { status: 'blocked', reason, recovery: { mode: 'approval' } },
+    } };
+    render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
+    expect(screen.getByText(reason)).toBeVisible();
+    expect(screen.queryByRole('region', { name: 'GitHub workflow access' })).toBeNull();
+  });
+
   it('renders blockedReason when a blocked task has no user-set blocker', () => {
     // Every server-side auto-block (max-spawns, retries, provider-config, …) writes
     // metadata.blockedReason, never `blocker`, so the display must fall back to it.

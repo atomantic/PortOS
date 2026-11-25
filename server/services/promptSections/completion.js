@@ -2,6 +2,7 @@
  * Completion workflow, worktree, and sentinel prompt sections.
  */
 
+import { GITHUB_WORKFLOW_SCOPE } from '../../lib/agent/agentOutcome.js';
 import { buildAutoMergeHandoffInstructions } from '../../lib/mergeGateContract.js';
 import { DEFAULT_REVIEWER, REVIEW_UNAVAILABLE_REPORTING_NOTE, ZERO_REVIEWER_COVERAGE_NOTE, hasRequiredReviewer, isCliReviewer, isToolFreeReviewer, normalizeReviewUsernames, resolveClaimReviewerConfig, buildReviewerPinNote, buildReviewerEffortNote, buildReviewWithArgs } from '../../lib/reviewerConfig.js';
 import { isAuditTaskType } from '../../lib/auditCatalog.js';
@@ -729,7 +730,7 @@ export function buildWorkflowScopeSection(workflowScope) {
   return [
     '## Forge token lacks the `workflow` scope',
     'The GitHub token scope probe did not find the classic OAuth `workflow` scope. This is a warning, not a merge refusal. After the configured review and required CI gates pass, if merge is authorized and this PR changes `.github/workflows/**`, make one normal head-pinned merge attempt using the assigned credential and the repository’s normal merge settings. Do not use admin/bypass options, another credential, or a retry to work around a rejection.',
-    `If GitHub explicitly refuses the operation for missing workflow permission, keep the PR open and preserve the issue, claim markers and checkout. Write taskOutcome with status "blocked" and recovery {"mode":"approval","options":["Merge the existing verified PR using already authorized workflow authority","Authorize the assigned GitHub credential for workflow changes before delivery resumes"]}. Name the PR and quote the actual permission error. For a supported CLI OAuth login, the owner can authorize it through GitHub (\`${workflowScope.remedy}\`). Never refresh credentials or retry a denied merge yourself.`,
+    `If GitHub explicitly refuses the operation for missing workflow permission, keep any existing PR open and preserve the issue, claim markers and checkout. Write taskOutcome with status "blocked" and recovery {"mode":"approval","code":"${GITHUB_WORKFLOW_SCOPE}","options":["Merge the existing verified PR using already authorized workflow authority","Authorize the assigned GitHub credential for workflow changes before delivery resumes"]}. Name the PR or the held branch if publication was refused, and quote the actual permission error. For a supported CLI OAuth login, the owner can authorize it through GitHub (\`${workflowScope.remedy}\`). Never refresh credentials or retry a denied merge yourself.`,
     'A generic branch-policy or merge conflict error is not proof of missing workflow permission. Report the actual result and follow the existing repository policy. Only a confirmed merge for this exact PR and head allows normal merged-claim cleanup. PRs without workflow changes follow the ordinary delivery path.',
   ].join('\n');
 }
