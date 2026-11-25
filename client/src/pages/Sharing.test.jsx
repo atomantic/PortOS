@@ -290,6 +290,6 @@ describe('Sharing accessibility semantics (#17714)', () => {
   it('announces inbox loading as a status', async () => {
     listShareInbox.mockReturnValue(new Promise(() => {}));
     renderAt('/sharing/buckets/b1?tab=inbox');
-    expect(await screen.findByText('Loading inbox…')).toHaveAttribute('role', 'status');
+    expect(await screen.findByRole('status', { name: 'Loading inbox' })).toHaveAttribute('aria-busy', 'true');
   });
 });
