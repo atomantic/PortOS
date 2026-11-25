@@ -12,6 +12,7 @@ import { __resetUsageSupport } from '../lib/openAiChatStream.js';
 import { createRun, finalizeRunRecord } from './runner.js';
 import { getProviderById } from './provider/providers.js';
 import { runtimeApiKey, runtimeEndpoint } from './localRuntimeEndpoints.js';
+import { isLocalEndpointBusy, _resetLocalLlmSlotsForTests } from '../lib/localLlmConcurrency.js';
 
 describe('buildPrompt', () => {
   it('returns the bare prompt when no system instructions', () => {
@@ -508,6 +509,67 @@ describe('endpoint runtimes in the Playground', () => {
     ]);
     expect(createRun).not.toHaveBeenCalled();
     expect(getProviderById).not.toHaveBeenCalled();
+  });
+
+  it('reads the runtime as busy for the whole generation and idle after it, including after an abort', async () => {
+    _resetLocalLlmSlotsForTests();
+    runtimeEndpoint.mockResolvedValue('http://127.0.0.1:9100/v1');
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const heldReader = () => {
+      let step = 0;
+      return {
+        read: vi.fn(async () => {
+          if (step++ === 0) return { done: false, value: new TextEncoder().encode(sse({ content: 'a' })) };
+          await gate;
+          return { done: true, value: undefined };
+        }),
+        cancel: vi.fn(async () => {}),
+      };
+    };
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, body: { getReader: heldReader } });
+
+    const running = runLocalLlmTest({ backend: 'mtplx', modelId: 'm', prompt: 'hi' });
+    await vi.waitFor(() => expect(isLocalEndpointBusy('http://127.0.0.1:9100/v1')).toBe(true));
+    release();
+    const result = await running;
+    expect(result.text).toBe('a');
+    expect(isLocalEndpointBusy('http://127.0.0.1:9100/v1')).toBe(false);
+
+    // Aborted mid-run: the slot is released and the result is a canceled one, not a throw.
+    const controller = new AbortController();
+    let aborted;
+    global.fetch = vi.fn().mockImplementation(async (_url, init) => ({
+      ok: true,
+      status: 200,
+      body: { getReader: () => ({
+        read: vi.fn(() => new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => { const e = new Error('aborted'); e.name = 'AbortError'; reject(e); });
+        })),
+        cancel: vi.fn(async () => {}),
+      }) },
+    }));
+    aborted = runLocalLlmTest({ backend: 'mtplx', modelId: 'm', prompt: 'hi', signal: controller.signal });
+    await vi.waitFor(() => expect(isLocalEndpointBusy('http://127.0.0.1:9100/v1')).toBe(true));
+    controller.abort();
+    expect(await aborted).toMatchObject({ canceled: true });
+    expect(isLocalEndpointBusy('http://127.0.0.1:9100/v1')).toBe(false);
+  });
+
+  it('resolves a canceled result when aborted while queued behind another run, leaking no slot', async () => {
+    _resetLocalLlmSlotsForTests();
+    runtimeEndpoint.mockResolvedValue('http://127.0.0.1:9100/v1');
+    const { acquireLocalSlot, releaseLocalSlot } = await import('../lib/localLlmConcurrency.js');
+    await acquireLocalSlot('http://127.0.0.1:9100/v1');
+    global.fetch = vi.fn();
+    const controller = new AbortController();
+    const queued = runLocalLlmTest({ backend: 'mtplx', modelId: 'm', prompt: 'hi', signal: controller.signal });
+    await Promise.resolve();
+    controller.abort();
+    expect(await queued).toMatchObject({ canceled: true });
+    expect(global.fetch).not.toHaveBeenCalled();
+    releaseLocalSlot('http://127.0.0.1:9100/v1');
+    expect(isLocalEndpointBusy('http://127.0.0.1:9100/v1')).toBe(false);
   });
 
   it('returns an inline error, not a throw, when the daemon is down', async () => {

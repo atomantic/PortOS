@@ -77,7 +77,7 @@ export async function durableRuntimeModels(runtime) {
  *   `models: null` means the list could not be read; `[]` means it was read and
  *   is genuinely empty.
  */
-export async function listRuntimeModels(runtime) {
+export async function listRuntimeModels(runtime, { durable = true } = {}) {
   // `listManagedBackendModels` carries the "empty vs unreadable" sentinel for these backends.
   if (MANAGED_ASSESSMENT_BACKENDS.includes(runtime)) return listManagedBackendModels(runtime);
 
@@ -86,8 +86,10 @@ export async function listRuntimeModels(runtime) {
 
   // Daemon down is common and fixable: fall back to disk and mark `offline` so consumers know
   // nothing can run until the runtime starts.
+  // `durable: false` skips the disk fallback: MTPLX's status sizes its cache directory, which can take tens of
+  // seconds, and a caller that cannot run a model on a stopped daemon has no use for the list.
   const offlineListing = async (error) => {
-    const models = await durableRuntimeModels(runtime).catch(() => []);
+    const models = durable ? await durableRuntimeModels(runtime).catch(() => []) : [];
     return { models: models.length ? models : null, error, offline: true };
   };
 
@@ -101,12 +103,13 @@ export async function listRuntimeModels(runtime) {
 /**
  * One row per bare-endpoint runtime for the Playground's model picker. Reads model lists only
  * (`/v1/models` and disk): it never generates, so the page can call it on load.
- * `offline` means the daemon did not answer; `models` then holds only what is on disk.
+ * `offline` means the daemon did not answer; `models` is then empty (the disk catalog is skipped on purpose,
+ * see `listRuntimeModels`), because nothing can run on a stopped daemon.
  */
 export async function listEndpointRuntimeModels() {
   const runtimes = ASSESSABLE_RUNTIMES.filter(isEndpointRuntime);
   return Promise.all(runtimes.map(async (id) => {
-    const listing = await listRuntimeModels(id).catch((err) => ({ models: null, error: err?.message || 'model listing failed', offline: true }));
+    const listing = await listRuntimeModels(id, { durable: false }).catch((err) => ({ models: null, error: err?.message || 'model listing failed', offline: true }));
     return {
       id,
       label: LOCAL_RUNTIMES[id]?.label || id,
