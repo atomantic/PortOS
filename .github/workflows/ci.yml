@@ -23,14 +23,17 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'schedule') || github.ref }}
   # A newer PR push supersedes the run in flight. On main the run in flight
   # finishes and only the newest waiting push runs next (GitHub cancels a
   # pending run when a newer one queues, and its tree contains the older
   # ones): with merges minutes apart, cancelling in flight meant no push run
   # ever finished, so main went untested and never saved the memo records
   # that related selection narrows with (#16424). `github.ref` is the
-  # caller's ref when release.yml calls this workflow.
+  # caller's ref when release.yml calls this workflow. The schedule has its
+  # own group: in the ref group it was the pending run a merge to main
+  # dropped before it started, so the enforced guard budget, ungated native
+  # jobs, cache seeding and Full CI Gate silently lapsed for 12 hours.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

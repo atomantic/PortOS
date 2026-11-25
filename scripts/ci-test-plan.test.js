@@ -3094,6 +3094,16 @@ describe('path-gated single-purpose jobs', () => {
     expect(jobs.gate).toContain('CI_GATE_RESULT_DOCKER_CONTAINMENT_LIVE: ${{ needs.docker-containment-live.result }}');
   });
 
+  // #18633: a scheduled run in the main ref group was the pending run a push
+  // dropped, so its enforced budget, ungated native jobs and cache seeding lapsed.
+  it('keeps scheduled runs in their own concurrency group and cancels only superseded PR runs', () => {
+    const ci = readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8');
+    expect(ci).toContain(
+      "group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'schedule') || github.ref }}",
+    );
+    expect(ci).toContain("cancel-in-progress: ${{ github.event_name == 'pull_request' }}");
+  });
+
   // #16555: ci.yml reads every decision from the one `plan` output. A read of
   // a key the planner never emits is `null` in Actions, which silently skips
   // the job (or, in a gate's `!…` test, silently passes it) instead of failing.
