@@ -742,14 +742,61 @@ describe('prepareAppIssueClaim', () => {
             },
           },
         },
-      ]]));
+      ]]))
+      .mockRejectedValueOnce(new Error('PR metadata unavailable'));
 
     const result = await prepareAppIssueClaim(APP, '42', 'github', { includePreflight: true });
     expect(result.commentsClear).toBe(false);
     expect(result.linkedWorkClear).toBe(false);
     expect(result.linkedItems).toEqual([
-      { number: 99, state: 'open', repo: 'acme/widget', author: 'bob', isPullRequest: true, merged: false },
+      { number: 99, state: 'open', repo: 'acme/widget', author: 'bob', isPullRequest: true, merged: false,
+        closingIssueMatch: null, claimHeadMatch: null },
     ]);
+  });
+
+  it.each([
+    ['incidental reference', 'acme/widget', 'claim/issue-41', [[['acme/widget', 41]]], false, false],
+    ['closing reference on a later page', 'acme/widget', 'fix/widget', [[['acme/widget', 41]], [['Acme/Widget', 42]]], true, false],
+    ['claim head', 'acme/widget', 'cos/claim-issue/issue-42/agent-a', [[]], false, true],
+    ['same number in another repository', 'acme/other', 'claim/issue-42', [[['acme/other', 42]]], false, false],
+    ['cross-repository closing reference', 'acme/other', 'claim/issue-42', [[['acme/widget', 42]]], true, false],
+    ['missing repository', null, 'claim/issue-42', [[]], null, null],
+    ['missing closing refs', 'acme/widget', 'fix/widget', [null], null, false],
+    ['unreadable PR', 'acme/widget', null, null, null, null],
+  ])('scopes linked PR intent in preflight: %s', async (_case, repo, headRefName, closingPages, closingIssueMatch, claimHeadMatch) => {
+    execGh
+      .mockResolvedValueOnce(issue())
+      .mockResolvedValueOnce(prs())
+      .mockResolvedValueOnce('alice\n')
+      .mockResolvedValueOnce('[[]]')
+      .mockResolvedValueOnce(JSON.stringify([[{ event: 'cross-referenced', source: { issue: {
+        number: 99, state: 'open', repository: repo ? { full_name: repo } : undefined,
+        user: { login: 'alice' }, pull_request: {}, body: 'Untrusted text',
+      } } }]]));
+    if (repo && headRefName === null) {
+      execGh.mockRejectedValueOnce(new Error('rate limited'));
+    } else if (repo) {
+      const pages = closingPages.map((closing, index) => {
+        const closingIssuesReferences = closing && {
+          nodes: closing.map(([nameWithOwner, number]) => ({ number, repository: { nameWithOwner } })),
+          pageInfo: { hasNextPage: index < closingPages.length - 1 },
+        };
+        return { data: { repository: { nameWithOwner: repo, pullRequest: { headRefName, closingIssuesReferences } } } };
+      });
+      execGh.mockResolvedValueOnce(JSON.stringify(pages));
+    }
+    const result = await prepareAppIssueClaim(APP, '42', 'github', { includePreflight: true });
+    expect(result.linkedWorkClear).toBe(false);
+    expect(result.linkedItems).toEqual([{
+      number: 99, state: 'open', repo, author: 'alice', isPullRequest: true, merged: false,
+      closingIssueMatch, claimHeadMatch,
+    }]);
+    const detailCall = execGh.mock.calls[5]?.[0];
+    if (repo) {
+      expect(detailCall).toEqual(expect.arrayContaining(['--hostname', 'github.com', 'graphql', 'number=99', `repo=${repo.split('/')[1]}`]));
+    } else {
+      expect(detailCall).toBeUndefined();
+    }
   });
 
   it('fails closed when comment or timeline preflight lookups fail', async () => {
