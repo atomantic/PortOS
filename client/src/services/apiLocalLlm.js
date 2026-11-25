@@ -143,26 +143,40 @@ export const controlLmStudioService = (action) =>
 // Start payloads differ by runtime: llama-server requires a chosen GGUF,
 // MTPLX and Slotstream default to their verified cache, and the bundles own
 // their prepared weights. Bundle mutations report completion via progress events.
-function runtimeRequests(path, { startBody, upgrade = false } = {}) {
-  const post = (action, options) => request(`${path}/${action}`, { ...options, method: 'POST' });
-  return {
-    status: (options) => request(`${path}/status`, options),
-    install: (options) => post('install', options),
-    start: startBody
-      ? (config) => post('start', { body: JSON.stringify(startBody(config)) })
-      : (options) => post('start', options),
-    stop: (options) => post('stop', options),
-    ...(upgrade && { upgrade: (options) => post('upgrade', options) }),
-  };
-}
-
-const defaultLaunch = (config = {}) => config;
 const managedRuntimeRequests = {
-  llama: runtimeRequests('/local-llm/llama-server', { startBody: (config) => config, upgrade: true }),
-  mtplx: runtimeRequests('/local-llm/mtplx', { startBody: defaultLaunch }),
-  slotstream: runtimeRequests('/local-llm/slotstream', { startBody: defaultLaunch }),
-  splash: runtimeRequests('/local-llm/splash', { upgrade: true }),
-  mkserve: runtimeRequests('/local-llm/mkserve', { upgrade: true }),
+  llama: {
+    status: (options) => request('/local-llm/llama-server/status', options),
+    install: (options) => request('/local-llm/llama-server/install', { ...options, method: 'POST' }),
+    start: (config) => request('/local-llm/llama-server/start', { method: 'POST', body: JSON.stringify(config) }),
+    stop: (options) => request('/local-llm/llama-server/stop', { ...options, method: 'POST' }),
+    upgrade: (options) => request('/local-llm/llama-server/upgrade', { ...options, method: 'POST' }),
+  },
+  mtplx: {
+    status: (options) => request('/local-llm/mtplx/status', options),
+    install: (options) => request('/local-llm/mtplx/install', { ...options, method: 'POST' }),
+    start: (config = {}) => request('/local-llm/mtplx/start', { method: 'POST', body: JSON.stringify(config) }),
+    stop: (options) => request('/local-llm/mtplx/stop', { ...options, method: 'POST' }),
+  },
+  slotstream: {
+    status: (options) => request('/local-llm/slotstream/status', options),
+    install: (options) => request('/local-llm/slotstream/install', { ...options, method: 'POST' }),
+    start: (config = {}) => request('/local-llm/slotstream/start', { method: 'POST', body: JSON.stringify(config) }),
+    stop: (options) => request('/local-llm/slotstream/stop', { ...options, method: 'POST' }),
+  },
+  splash: {
+    status: (options) => request('/local-llm/splash/status', options),
+    install: (options) => request('/local-llm/splash/install', { ...options, method: 'POST' }),
+    start: (options) => request('/local-llm/splash/start', { ...options, method: 'POST' }),
+    stop: (options) => request('/local-llm/splash/stop', { ...options, method: 'POST' }),
+    upgrade: (options) => request('/local-llm/splash/upgrade', { ...options, method: 'POST' }),
+  },
+  mkserve: {
+    status: (options) => request('/local-llm/mkserve/status', options),
+    install: (options) => request('/local-llm/mkserve/install', { ...options, method: 'POST' }),
+    start: (options) => request('/local-llm/mkserve/start', { ...options, method: 'POST' }),
+    stop: (options) => request('/local-llm/mkserve/stop', { ...options, method: 'POST' }),
+    upgrade: (options) => request('/local-llm/mkserve/upgrade', { ...options, method: 'POST' }),
+  },
 };
 
 export const getManagedInklingRuntimeStatus = (runtime, options) =>
