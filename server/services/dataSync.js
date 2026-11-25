@@ -13,6 +13,7 @@ import { isDeepStrictEqual } from 'util';
 import { atomicWrite, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { canonicalStringify, isEmptyScalar, isPlainObject } from '../lib/objects.js';
 import { snapshotChecksum } from '../lib/snapshotChecksum.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { parseTsMs } from '../lib/lwwTimestamp.js';
 import { isTombstoned, mergeTombstones, pruneTombstones } from '../lib/tombstones.js';
 import { GOAL_TOMBSTONES_KEY, reconcileGoalTombstones } from './identity/goalTombstones.js';
@@ -820,10 +821,7 @@ async function applyPipelineRemote(remoteData, source, { senderSchemaVersions = 
 // so image bytes flow via the existing asset-pull worker — the snapshot path
 // covers the JSON, the push path covers the image bytes.
 
-async function getMediaCollectionsSnapshot({ exclude } = {}) {
-  // listCollections re-reads + sanitizes from disk; we don't cache here since
-  // the checksum cache (`CHECKSUM_PATHS` fingerprint check) already short-
-  // circuits the I/O when the file hasn't moved.
+async function getWireCollections(exclude, { strictParents = false } = {}) {
   // includeDeleted:true so tombstones cross the wire — matches getUniverseSnapshot
   // / getPipelineSnapshot. Without it, a peer that missed the live delete push
   // (offline/unsubscribed at delete time) never learns the collection was deleted
@@ -839,8 +837,14 @@ async function getMediaCollectionsSnapshot({ exclude } = {}) {
   // anyway, but the snapshot path is independent).
   // Independent reads — fetch the universe and series lists concurrently.
   const [allUniversesForEphemeral, allSeriesForEphemeral] = await Promise.all([
-    listUniverses({ includeDeleted: true }).catch(() => []),
-    listSeries({ includeDeleted: true }).catch(() => []),
+    listUniverses({ includeDeleted: true }).catch((error) => {
+      if (strictParents) throw error;
+      return [];
+    }),
+    listSeries({ includeDeleted: true }).catch((error) => {
+      if (strictParents) throw error;
+      return [];
+    }),
   ]);
   const ephemeralUniverseIds = new Set(
     allUniversesForEphemeral.filter((u) => u?.ephemeral === true).map((u) => u.id),
@@ -875,13 +879,16 @@ async function getMediaCollectionsSnapshot({ exclude } = {}) {
   // added in #3311 so an upgraded peer's checksum stays byte-stable against a
   // not-yet-upgraded one).
   const { data: wire } = sanitizeStateForWire('mediaCollections', { collections: filtered });
-  const canonical = wire.collections
+  return wire.collections
     .map((c) => ({
       ...c,
       items: [...(c.items || [])].sort((a, b) => itemKey(a).localeCompare(itemKey(b))),
     }))
     .sort((a, b) => a.id.localeCompare(b.id));
-  const data = { collections: canonical };
+}
+
+async function getMediaCollectionsSnapshot({ exclude } = {}) {
+  const data = { collections: await getWireCollections(exclude) };
   return { data, checksum: computeChecksum(data) };
 }
 
@@ -954,7 +961,7 @@ async function applyMediaCollectionsRemote(remoteData, source) {
 // never disagree on which rows are keyable — see the convergence note below.
 const hasVideoRowId = (r) => typeof r?.id === 'string' && r.id;
 
-async function getVideoHistorySnapshot() {
+async function readSyncableVideoRows() {
   // STRICT (#4115): an unreadable history would publish a valid CHECKSUM over an
   // empty set — peers conclude this machine holds no videos and the category
   // thrashes forever. Absent is a real empty; unreadable must not go on the wire.
@@ -964,7 +971,11 @@ async function getVideoHistorySnapshot() {
   // un-appliable on the receiver — its recomputed checksum would never match the
   // sender's and the two peers would re-download this category forever. Treat
   // id-less rows as strictly local-only on BOTH sides.
-  const rows = (Array.isArray(raw) ? raw : []).filter((r) => r && hasVideoRowId(r));
+  return (Array.isArray(raw) ? raw : []).filter(hasVideoRowId);
+}
+
+async function getVideoHistorySnapshot() {
+  const rows = await readSyncableVideoRows();
   // `hidden` is a LOCAL-ONLY visibility flag (e.g. inner chunks of a stitched
   // clip, or a clip the user tucked away). It must NOT influence the wire
   // payload: if the snapshot's content depended on it, two peers that disagree
@@ -996,17 +1007,47 @@ async function getVideoHistorySnapshot() {
   return { data, checksum: computeChecksum(data) };
 }
 
+let collectionInventoryCache;
+
 async function getCollectionInventoryReferences(kind, { alternateNamesOnly = false } = {}) {
-  const { data } = await getMediaCollectionsSnapshot();
-  const items = data.collections.filter((collection) => !collection.deleted)
-    .flatMap((collection) => collection.items.filter((item) => item.kind === kind));
-  if (kind === 'image') return items.map((item) => item.ref);
-  const history = await loadCollectionVideoFilenames(items);
-  return items.flatMap((item) => {
-    const filename = resolveCollectionVideoFilename(item.ref, history);
-    if (!filename || (alternateNamesOnly && filename === collectionVideoRefToFilename(item.ref))) return [];
-    return [filename];
+  const fingerprints = await readFingerprintMap(CHECKSUM_PATHS.mediaCollections);
+  let cached = collectionInventoryCache;
+  if (!cached || !fingerprintsEqual(cached.fingerprints, fingerprints)) {
+    // A failed parent read cannot safely classify these collections for a peer.
+    const collections = await getWireCollections(undefined, { strictParents: true });
+    const items = collections.filter((collection) => !collection.deleted).flatMap((collection) => collection.items);
+    cached = {
+      fingerprints,
+      images: items.filter((item) => item.kind === 'image').map((item) => item.ref),
+      videoItems: items.filter((item) => item.kind === 'video'),
+    };
+    collectionInventoryCache = cached;
+  }
+  if (kind === 'image') return cached.images;
+
+  // The filename index has stable identity until its video history changes.
+  const history = await loadCollectionVideoFilenames(cached.videoItems);
+  if (!history) return [];
+  if (cached.videos?.history !== history) {
+    const filenames = [];
+    const alternateNames = [];
+    for (const { ref } of cached.videoItems) {
+      const filename = resolveCollectionVideoFilename(ref, history);
+      if (!filename) continue;
+      filenames.push(filename);
+      if (filename !== collectionVideoRefToFilename(ref)) alternateNames.push(filename);
+    }
+    cached.videos = { history, filenames, alternateNames };
+  }
+  return alternateNamesOnly ? cached.videos.alternateNames : cached.videos.filenames;
+}
+
+async function inventoryFileMtimes(dir, filenames) {
+  const entries = await mapWithConcurrency(filenames, 16, async (name) => {
+    const info = await stat(join(dir, name)).catch(() => null);
+    return info ? [name, info.mtimeMs] : null;
   });
+  return Object.fromEntries(entries.filter(Boolean));
 }
 
 // This separate inventory describes only bytes on this machine, never the
@@ -1015,8 +1056,9 @@ async function getCollectionInventoryReferences(kind, { alternateNamesOnly = fal
 export async function getHostedMediaInventory(category = 'videoHistory', kind = 'video') {
   const references = category === 'mediaCollections'
     ? await getCollectionInventoryReferences(kind)
-    : (await getVideoHistorySnapshot()).data.videos.map((row) => row.filename);
-  const names = await readdir(kind === 'image' ? PATHS.images : PATHS.videos, { withFileTypes: true }).catch((err) => {
+    : (await readSyncableVideoRows()).map((row) => row.filename);
+  const dir = kind === 'image' ? PATHS.images : PATHS.videos;
+  const names = await readdir(dir, { withFileTypes: true }).catch((err) => {
     if (err.code === 'ENOENT') return [];
     throw err;
   });
@@ -1026,12 +1068,7 @@ export async function getHostedMediaInventory(category = 'videoHistory', kind = 
   const filenames = checked.filter((name) => local.has(name));
   // File times let paired peers settle who made an unattributed copy
   // (mediaOriginReconcile.js); an older peer ignores the extra field.
-  const dir = kind === 'image' ? PATHS.images : PATHS.videos;
-  const mtimes = {};
-  for (const name of filenames) {
-    const info = await stat(join(dir, name)).catch(() => null);
-    if (info) mtimes[name] = info.mtimeMs;
-  }
+  const mtimes = await inventoryFileMtimes(dir, filenames);
   return { version: 1, filenames, checked, mtimes, portosMeta: await buildPortosMeta() };
 }
 
@@ -1073,11 +1110,7 @@ export async function getImageLibraryInventory() {
     throw err;
   });
   const filenames = entries.filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.png') && sanitizeAssetFilename(e.name) === e.name).map((e) => e.name).sort();
-  const mtimes = {};
-  for (const name of filenames) {
-    const info = await stat(join(PATHS.images, name)).catch(() => null);
-    if (info) mtimes[name] = info.mtimeMs;
-  }
+  const mtimes = await inventoryFileMtimes(PATHS.images, filenames);
   return { version: 1, filenames, checked: filenames, complete: true, mtimes, portosMeta: await buildPortosMeta() };
 }
 

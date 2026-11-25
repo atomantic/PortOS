@@ -133,8 +133,8 @@ describe('video history peer ownership', () => {
   });
 
   it('publishes only history files physically present on this peer', async () => {
-    await dataSync.applyRemote('videoHistory', { videos: [row] }, { peerId: 'a' });
-    expect((await dataSync.getHostedMediaInventory()).filenames).toEqual([]);
+    writeFileSync(join(PATHS.data, 'video-history.json'), JSON.stringify([row, { filename: 'local-only.mp4' }]));
+    expect(await dataSync.getHostedMediaInventory()).toMatchObject({ filenames: [], checked: ['v1.mp4'] });
     mkdirSync(PATHS.videos, { recursive: true });
     writeFileSync(join(PATHS.videos, 'v1.mp4'), 'local');
     expect((await dataSync.getHostedMediaInventory()).filenames).toEqual(['v1.mp4']);
@@ -142,6 +142,7 @@ describe('video history peer ownership', () => {
 
   it('publishes the history filename in standalone and bundled collection manifests and inventory', async () => {
     await syncImportedCollection();
+    expect((await dataSync.getHostedMediaInventory('mediaCollections')).checked).toContain('imported-id.mp4');
     await syncImportedHistory();
     expect((await dataSync.getHostedMediaInventory('mediaCollections')).filenames).not.toContain(imported.filename);
     mkdirSync(PATHS.videos, { recursive: true });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdirSync, writeFileSync, rmSync, statSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { Readable } from 'stream';
 import express from 'express';
@@ -35,6 +35,7 @@ app.use('/data/image-thumbnails', hostedAssetFallback('/data/image-thumbnails'))
 describe('collection image ownership', () => {
   beforeEach(() => {
     rmSync(join(PATHS.data, 'peer-hosted-media.json'), { force: true });
+    rmSync(join(PATHS.data, 'media-holders.json'), { force: true });
     rmSync(join(PATHS.images, 'art.png'), { force: true });
     peers.list = ['relay', 'owner', 'alternate'].map(instanceId => ({ instanceId, host: `${instanceId}.example.com`, mediaSyncMode: 'host' }));
     streamPeer.mockReset();
@@ -68,6 +69,20 @@ describe('collection image ownership', () => {
     await inventory('alternate', []);
     expect(await location()).toEqual({ location: 'missing' });
     expect(await dataSync.getChecksum('mediaCollections')).toEqual(before);
+  });
+
+  it('leaves both stores untouched when a host reports the same inventory again', async () => {
+    const report = () => inventory('owner', ['art.png'], { mtimes: { 'art.png': 123 } });
+    const stores = ['peer-hosted-media.json', 'media-holders.json'].map((name) => join(PATHS.data, name));
+    const state = () => stores.map((path) => ({
+      inode: statSync(path).ino,
+      contents: readFileSync(path, 'utf8'),
+    }));
+
+    await report();
+    const first = state();
+    await report();
+    expect(state()).toEqual(first);
   });
 
   it('retains offline hosts, tries alternates, and removes only confirmed missing originals', async () => {
