@@ -62,7 +62,8 @@ their own checks, including the hidden-content scan.
 
 The early guards run before broad tests and resource probes. Use
 `node scripts/pregate.js --guards-only` to run just the structural checks.
-Focused runs execute each selected guard once and run lint on every invocation.
+Focused runs execute each workspace's selected guards and focused tests in
+one stage and run lint on every invocation.
 Full runs perform the early checks and keep the CI planner's broad selections.
 The receipt records guard outcomes and per-guard wall times (`guardDurations`):
 each structural guard runner's checks, and every other guard file whole. A guard

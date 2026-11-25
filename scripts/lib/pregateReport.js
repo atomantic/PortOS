@@ -88,7 +88,8 @@ export function buildPregateReport({
 }) {
   const stageRecords = stages.map(({ name, suite, command, status, durationMs, exitCode = null, signal = null, guard, files, guardDurations }) => ({
     name, suite, command, status, durationMs, exitCode, signal,
-    ...(guard ? { guard: true, files, guardDurations: guardDurations ?? {} } : {}),
+    ...(guard ? { guard: true, files } : {}),
+    ...(guard || guardDurations ? { guardDurations: guardDurations ?? {} } : {}),
   }));
   const treeStable = tree !== null && tree === treeAfterRun;
   const passed = treeStable && stageRecords.length > 0 && stageRecords.every((stage) => stage.status === 'passed');
