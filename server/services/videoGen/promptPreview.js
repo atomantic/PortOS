@@ -10,6 +10,7 @@ import { resolveGalleryImage } from '../../lib/fileUtils.js';
 import { carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
 import { getSettings } from '../settings.js';
 import { VIDEO_GEN_MODE } from './modes.js';
+import { assertReactorNegativePromptSupported } from './negativePrompt.js';
 import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
 import { RUNWAY_FORM_REFERENCE_LABEL } from '../../lib/runwayVideoModels.js';
 import { hostedReferenceInputsError, referenceImageUploadsError, resolveRequestedVideoBackend } from './prepareParams.js';
@@ -49,6 +50,7 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
   if (body.musicVideo && backend !== VIDEO_GEN_MODE.GROK) return { backend, shotPreviewUnavailable: true };
   // A federated provider receives the prompt as written; its own backend may add lines there.
   if (body.mediaProviderPeerId) return asWritten(body, { backend: 'remote', remote: true });
+  assertReactorNegativePromptSupported(backend, body.negativePrompt);
 
   const hosted = HOSTED_VIDEO_SUBMISSIONS[backend];
   // The same refusal POST /video-gen gives a backend that is off or has no key.
@@ -175,6 +177,6 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
       prompt: body.prompt, negativePrompt: body.negativePrompt, loraFilenames, promptAdditions,
     })).record };
   }
-  // reactor.inc receives the trimmed prompt with nothing added.
-  return asWritten(body, { backend });
+  // Reactor submits the trimmed prompt and has no negative-prompt field.
+  return { backend, ...sentPromptRecord({ sentPrompt: body.prompt.trim(), carried: promptAdditions }) };
 }

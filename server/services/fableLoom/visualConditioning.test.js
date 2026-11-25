@@ -174,9 +174,9 @@ describe('FableLoom visual conditioning compiler', () => {
     const current = loom.episodes[0].nodes[1];
     current.prose = 'ARIA\nThe last shuttle leaves tonight.';
     current.videoPrompt = 'She folds the ticket.';
-    const compile = () => compileFableLoomVisualRequest({
+    const compile = (authoredNegativePrompt) => compileFableLoomVisualRequest({
       tag: { loomId: loom.id, episodeId: 'episode-1', nodeId: 'shot' }, kind: 'video',
-      sourceImagePath: '/approved/storyboard.png',
+      sourceImagePath: '/approved/storyboard.png', authoredNegativePrompt,
       capability: fableLoomVideoCapabilities({ backend: 'reactor', model: { supportedModes: ['image'] } }), ...deps(loom),
     });
     const result = await compile();
@@ -188,9 +188,12 @@ describe('FableLoom visual conditioning compiler', () => {
       'She folds the ticket.',
       'Script: ARIA\nThe last shuttle leaves tonight.',
     ].join('\n'));
-    expect(result.negativePrompt).toBe('subtitles, captions, dialogue lettering, speech balloons, text overlays, photoreal, gore, wrong aria face');
+    expect(result.sourceImagePath).toBe('/approved/storyboard.png');
+    expect(result.negativePrompt).toBe('');
+    expect(result.promptAdditions.map(({ id }) => id)).not.toContain('canon-avoid');
     expect(result.visualConditioning.compiledPrompt).toBe(result.prompt);
-    expect(result.visualConditioning.compiledNegativePrompt).toBe(result.negativePrompt);
+    expect(result.visualConditioning.compiledNegativePrompt).toBe('');
+    await expect(compile('  fog  ')).rejects.toMatchObject({ status: 400, code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED' });
     current.visualCanon = { ...lockedBinding, mode: 'draft', storyboardImageApproved: false };
     await expect(compile()).rejects.toMatchObject({ code: 'FABLELOOM_REACTOR_REFERENCE_REQUIRED' });
     current.visualCanon = lockedBinding;
