@@ -11,7 +11,6 @@ import {
   assetPathFor,
   fitFades,
   segmentDuration,
-  laneDuration,
 } from './segments.js';
 
 const CLIP_A = '11111111-1111-4111-8111-111111111111';
@@ -201,12 +200,6 @@ describe('duration helpers', () => {
     expect(segmentDuration({ type: 'clip', inSec: 1, outSec: 4 })).toBe(3);
   });
 
-  it('sums the lane', () => {
-    expect(laneDuration([
-      { type: 'clip', inSec: 0, outSec: 2 },
-      { type: 'still', durationSec: 3 },
-    ])).toBe(5);
-  });
 });
 
 describe('deriveLegacyClips', () => {

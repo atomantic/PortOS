@@ -17,7 +17,6 @@ import {
 import { PERSISTENT_MIND_ID } from '../../lib/persistent/persistentMindTrajectory.js';
 import { boundedByJsonChars, canonicalStringify } from '../../lib/objects.js';
 import { antigravityBaseModels, effortLevelsForProvider, filterSelectableModels } from '../../lib/provider/providerModels.js';
-import { PR_COMPLETIONS } from '../../lib/prDisposition.js';
 import { sha256Text } from '../../lib/fileUtils.js';
 import { boundedErrorMessage } from '../../lib/errorHandler.js';
 import { MANAGED_ASSESSMENT_BACKENDS, localRuntimeKind } from '../../lib/localProviderRuntime.js';
@@ -468,5 +467,3 @@ export async function executePersistentMindTaskRequests({
   }
   return results;
 }
-
-export const PERSISTENT_MIND_TASK_PR_COMPLETIONS = PR_COMPLETIONS;

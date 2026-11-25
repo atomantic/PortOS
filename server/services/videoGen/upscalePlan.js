@@ -212,7 +212,3 @@ export const ltxAlignmentIsNoop = (alignment) => (
   ltxAlignmentBlocker(alignment) === null
   && alignment.padWidth === 0 && alignment.padHeight === 0 && alignment.padFrames === 0
 );
-
-// The provenance the generative pass writes ITSELF: it measures its own output
-// and rolls its own seed, so unlike Lanczos it owns the whole contract.
-export const LTX_PROVENANCE_FIELDS = UPSCALE_PROVENANCE_FIELDS;

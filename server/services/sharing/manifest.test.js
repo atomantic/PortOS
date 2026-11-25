@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, existsSync, writeFileSync, readdirSync, mkdirSync 
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { vi } from 'vitest';
+import { SHARING_SCHEMA_VERSION } from './version.js';
 import { makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 let tempRoot;
@@ -38,8 +39,8 @@ describe('sharing/manifest', () => {
     expect(m.source).toBe('me');
     expect(m.recordIds).toEqual(['ser-1', 'iss-2']);
     expect(m.assetRefs).toEqual([{ kind: 'image', ref: 'abc.png' }]);
-    expect(m.schemaVersion).toBe(manifest.MANIFEST_SCHEMA_VERSION);
-    expect(m.sharingSchemaVersion).toBe(manifest.MANIFEST_SCHEMA_VERSION);
+    expect(m.schemaVersion).toBe(SHARING_SCHEMA_VERSION);
+    expect(m.sharingSchemaVersion).toBe(SHARING_SCHEMA_VERSION);
   });
 
   it('buildManifest stamps producedByVersion from the caller', () => {

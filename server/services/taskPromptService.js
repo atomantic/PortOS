@@ -50,10 +50,6 @@ export {
 // Prompt getters
 // ============================================================
 
-export function getDefaultPrompt(taskType) {
-  return getDefaultTaskPrompt(taskType);
-}
-
 // Cache slashdo command bodies loaded from the bundled submodule
 const _slashdoCache = {};
 async function loadSlashdoCommandBody(commandName) {

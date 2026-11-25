@@ -25,9 +25,10 @@ vi.mock('./persistentMindContext.js', () => ({
 
 import {
   inspectPersistentMindRuntime,
-  persistentMindLocalBackend,
   persistentMindModelMatches,
 } from './persistentMindRuntime.js';
+
+import { localRuntimeForProvider } from '../../lib/localProviderRuntime.js';
 
 describe('persistent mind runtime telemetry', () => {
   beforeEach(() => {
@@ -41,11 +42,11 @@ describe('persistent mind runtime telemetry', () => {
   });
 
   it('only treats the configured local endpoints as directly observable backends', () => {
-    expect(persistentMindLocalBackend({ id: 'ollama', endpoint: 'http://localhost:11434/v1' })).toBe('ollama');
-    expect(persistentMindLocalBackend({ id: 'lmstudio', endpoint: 'http://localhost:1234/v1' })).toBe('lmstudio');
-    expect(persistentMindLocalBackend({ command: 'opencode', llamaBacked: true, endpoint: 'http://localhost:5568/v1' })).toBe('llama');
-    expect(persistentMindLocalBackend({ id: 'ollama', endpoint: 'http://example.com:11434/v1' })).toBeNull();
-    expect(persistentMindLocalBackend({ id: 'codex' })).toBeNull();
+    expect(localRuntimeForProvider({ id: 'ollama', endpoint: 'http://localhost:11434/v1' })?.kind).toBe('ollama');
+    expect(localRuntimeForProvider({ id: 'lmstudio', endpoint: 'http://localhost:1234/v1' })?.kind).toBe('lmstudio');
+    expect(localRuntimeForProvider({ command: 'opencode', llamaBacked: true, endpoint: 'http://localhost:5568/v1' })?.kind).toBe('llama');
+    expect(localRuntimeForProvider({ id: 'ollama', endpoint: 'http://example.com:11434/v1' })).toBeNull();
+    expect(localRuntimeForProvider({ id: 'codex' })).toBeNull();
   });
 
   it('reconciles Ollama latest tags and LM Studio repository ids', () => {

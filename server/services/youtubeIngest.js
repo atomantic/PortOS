@@ -66,7 +66,6 @@ import { createMutex } from '../lib/asyncMutex.js';
 import { createSettingsStore } from '../lib/settingsStore.js';
 import { cleanupYtDlpTemp, downloadAudioToTempMp3 } from './ytdlpAudioImport.js';
 import { downloadVideoIntoLibrary } from './videoDownload.js';
-import { YOUTUBE_VIDEO_URL_RE } from '../lib/youtubeUrl.js';
 import { assertYoutubeVideoUrl } from '../lib/youtubeUrlAssert.js';
 // The pure half of the ingest — yt-dlp metadata normalization, the Obsidian
 // note body, the CoS agent prompt, and the index's Obsidian-pointer rule — lives
@@ -98,7 +97,6 @@ import { resolveTrackerFilingBlock } from '../lib/workTracker.js';
 // The accept rule and its validator are canonical in `lib/youtubeUrl.js` (#6014);
 // these aliases keep the ingest's established names for existing importers.
 export {
-  YOUTUBE_VIDEO_URL_RE as YOUTUBE_INGEST_URL_RE,
   assertYoutubeVideoUrl as assertYoutubeIngestUrl,
 };
 

@@ -208,24 +208,9 @@ export async function parseEcosystemFromPath(dirPath) {
   return { processes: [], pm2Home: null };
 }
 
-/** Pure compatibility writers use the same attributable, atomic edit plan. */
-export function rewriteEcosystemPortsByProcess(content, edits) {
-  const { content: updated, applied, unapplied } = planEcosystemPortEdits(content, [], edits);
-  return { content: updated, applied, unapplied };
-}
-
-export function rewriteEcosystemPorts(content, remap) {
-  return planEcosystemPortEdits(content, remap).content;
-}
-
 export async function writeEcosystemPorts(repoPath, remap) {
   const { file, changed } = await writeEcosystemPortEdits(repoPath, remap, []);
   return { file, changed };
-}
-
-export async function writeEcosystemPortsByProcess(repoPath, edits) {
-  const { file, changed, applied, unapplied } = await writeEcosystemPortEdits(repoPath, [], edits);
-  return { file, changed, applied, unapplied };
 }
 
 /** Plan every requested process/label against one original snapshot, then write once. */

@@ -51,7 +51,6 @@ export const SUPPORTED_QWEN3_MODELS = Object.freeze([
 
 export const DEFAULT_DESIGN_MODEL = 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign';
 export const DEFAULT_CLONE_MODEL = 'Qwen/Qwen3-TTS-12Hz-1.7B-Base';
-export const DEFAULT_INTERACTIVE_MODEL = 'Qwen/Qwen3-TTS-12Hz-0.6B-Base';
 
 /**
  * Resolve an executable Python binary: uses isolated venv if present, otherwise

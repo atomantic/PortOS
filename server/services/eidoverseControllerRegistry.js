@@ -70,11 +70,6 @@ export async function findControllerDefinitionById(controllerId) {
   return (await definitions()).get(controllerId) || null;
 }
 
-/** Every shipped controller id, in stable order. */
-export async function listControllerDefinitionIds() {
-  return [...(await definitions()).keys()];
-}
-
 /** What an author needs to choose a controller: id, title, summary, example config (not the Zod schema). */
 export async function describeControllerDefinitions() {
   return [...(await definitions()).values()].map((definition) => ({

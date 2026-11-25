@@ -1125,22 +1125,6 @@ async function addDatedUsageBatchDraft(additions = []) {
 }
 
 /**
- * Record token usage
- */
-async function recordTokensDraft(inputTokens, outputTokens) {
-  if (!usageData) await loadUsageDraft();
-  await refreshDayKeyTimezone();
-  usageData.totalTokens.input += inputTokens;
-  usageData.totalTokens.output += outputTokens;
-  const day = todayBucket();
-  day.tokens = (day.tokens || 0) + outputTokens;
-  const providerDay = providerDayBucket(day, UNKNOWN_PROVIDER_ID, UNKNOWN_PROVIDER_NAME);
-  providerDay.tokensIn += inputTokens;
-  providerDay.tokensOut += outputTokens;
-  await saveUsage();
-}
-
-/**
  * Two reports of one incident, one minute apart, are the same block. The
  * runner benches a failed provider AND the agent finalizer benches it again
  * for the same failure, so without this every limit event would stack twice.
@@ -1492,10 +1476,6 @@ export async function addDatedUsage(...args) {
     if (options?.repairId) await loadDraftRepairIds([options.repairId]);
     return addDatedUsageDraft(day, record, options);
   }, args);
-}
-
-export async function recordTokens(...args) {
-  return mutateUsage(recordTokensDraft, args);
 }
 
 export async function recordLimitBlock(...args) {

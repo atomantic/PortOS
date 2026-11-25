@@ -25,7 +25,7 @@ const effects = vi.hoisted(() => ({
   deleteAccount: vi.fn(async () => true), deleteTerritory: vi.fn(async () => state.account.id),
 }));
 vi.mock('../services/stackerNews.js', () => ({
-  ...effects, getAccount: async () => state.account, getTerritory: async () => state.territory,
+  ...effects, getAccount: async () => state.account,
   listTerritories: async () => state.territory ? [state.territory] : [],
 }));
 vi.mock('../services/stackerNewsScheduler.js', () => effects);
