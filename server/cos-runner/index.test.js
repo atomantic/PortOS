@@ -337,7 +337,7 @@ describe('cos-runner /spawn — CLI shim, prompt delivery, stdin guard, and outp
 
     const missing = await post('/spawn', { agentId: 'a1' });
     expect(missing.status).toBe(400);
-    expect(missing.body.error).toContain('Missing required fields');
+    expect(missing.body.error).toContain('Invalid request body');
 
     const disallowed = await post('/spawn', {
       agentId: 'a2',
@@ -392,37 +392,24 @@ describe('cos-runner /spawn — CLI shim, prompt delivery, stdin guard, and outp
     expect(children).toHaveLength(1);
   });
 
-  it('builds legacy Claude args with optional --model when cliCommand is omitted', async () => {
+  it('refuses the retired legacy shape: no cliCommand, or an unlisted claudePath, never spawns', async () => {
     const { post, deps } = await bootTestRunner();
 
-    const withoutModel = await post('/spawn', {
-      agentId: 'a-legacy-1',
-      taskId: 't-legacy-1',
-      prompt: 'legacy run',
-    });
-    expect(withoutModel.status).toBe(200);
-    expect(deps.prepareCliPrompt).toHaveBeenNthCalledWith(
-      1,
-      'claude',
-      ['--dangerously-skip-permissions', '--print', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'],
-      'legacy run',
-      { cwd: '/example/root' },
-    );
+    const noCommand = await post('/spawn', { agentId: 'a-legacy-1', taskId: 't-legacy-1', prompt: 'legacy run' });
+    expect(noCommand.status).toBe(400);
+    expect(noCommand.body.error).toContain('cliCommand');
 
-    const withModel = await post('/spawn', {
-      agentId: 'a-legacy-2',
-      taskId: 't-legacy-2',
-      prompt: 'legacy model run',
-      model: 'claude-sonnet-4-6',
+    const smuggled = await post('/spawn', {
+      agentId: 'a-legacy-2', taskId: 't-legacy-2', prompt: 'p', claudePath: '/bin/sh',
     });
-    expect(withModel.status).toBe(200);
-    expect(deps.prepareCliPrompt).toHaveBeenNthCalledWith(
-      2,
-      'claude',
-      ['--dangerously-skip-permissions', '--print', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--model', 'claude-sonnet-4-6'],
-      'legacy model run',
-      { cwd: '/example/root' },
-    );
+    expect(smuggled.status).toBe(400);
+
+    const ignoredPath = await post('/spawn', {
+      agentId: 'a-legacy-3', taskId: 't-legacy-3', prompt: 'p', cliCommand: 'rm', claudePath: 'claude',
+    });
+    expect(ignoredPath.status).toBe(400);
+    expect(ignoredPath.body.error).toContain('Command not allowed: rm');
+    expect(deps.spawn).not.toHaveBeenCalled();
   });
 
   it('cleans up prompt temp file when shutdown starts before spawn commits', async () => {

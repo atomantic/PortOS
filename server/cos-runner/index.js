@@ -583,50 +583,31 @@ export function createCosRunner(deps = {}) {
       taskId,
       prompt,
       workspacePath,
-      model,
       envVars = {},
       // Non-secret provider identity used to retain that provider's ambient auth
       // allowlist when the runner builds the child environment.
       providerAuth = null,
-      // New: CLI-agnostic parameters
       cliCommand,
       cliArgs,
-      // Legacy: Claude-specific (deprecated)
-      claudePath = proc.env?.CLAUDE_PATH || 'claude',
     } = body.data;
 
     if (!agentId || !taskId || !prompt) {
       return res.status(400).json({ error: 'Missing required fields: agentId, taskId, prompt' });
     }
 
-    // Use new CLI params if provided, otherwise fallback to legacy Claude defaults
-    let command, spawnArgs;
-    if (cliCommand) {
-      // Validate command against allowlist to prevent arbitrary code execution
-      if (!isAllowedCommand(cliCommand)) {
-        return res.status(400).json({
-          error: `Command not allowed: ${cliCommand}. Permitted commands: ${[...allowedCommands].join(', ')}`,
-        });
-      }
-      command = cliCommand;
-      // cliArgs is an array or a single string (the schema rejects anything else);
-      // default to empty args when not provided.
-      const args = cliArgs ?? [];
-      spawnArgs = Array.isArray(args) ? args : [args];
-    } else {
-      // Legacy: Claude-specific args
-      command = claudePath;
-      spawnArgs = [
-        '--dangerously-skip-permissions',
-        '--print',
-        '--output-format', 'stream-json',
-        '--verbose',
-        '--include-partial-messages',
-      ];
-      if (model) {
-        spawnArgs.push('--model', model);
-      }
+    // Every spawn names its command and it must pass the allowlist; the runner
+    // never falls back to a default binary. The server has sent cliCommand on every
+    // /spawn since e9d563d535 (2026-01), so no mixed-version window sends it absent.
+    if (!isAllowedCommand(cliCommand)) {
+      return res.status(400).json({
+        error: `Command not allowed: ${cliCommand}. Permitted commands: ${[...allowedCommands].join(', ')}`,
+      });
     }
+    const command = cliCommand;
+    // cliArgs is an array or a single string (the schema rejects anything else);
+    // default to empty args when not provided.
+    const args = cliArgs ?? [];
+    const spawnArgs = Array.isArray(args) ? args : [args];
 
     if (activeAgents.has(agentId)) {
       return res.status(409).json({ error: `Agent ${agentId} is already running` });
