@@ -60,15 +60,14 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
     optOutGrantId = (await subjects.recordConsent({ scope: 'broker_optout', method: 'self', note: 'privacyOptOut.db.test' })).id;
     // Clean slate for cases so cross-suite ordering can't leak state in.
     await query(`DELETE FROM privacy_broker_cases`).catch(() => {});
-    // A web-form broker + an email broker, inserted directly (auto source so the
-    // curated seed idempotency is untouched).
+    // Exercise trusted web-form and email automation with dedicated curated IDs.
     for (const [id, name, optout, _antibot] of [
       [brokerId, 'Test OptOut Broker', { method: 'web_form', url: 'https://test-optout.example/optout', playbook: ['step 1'] }, false],
       [emailBrokerId, 'Test OptOut Email', { method: 'email', email: 'privacy@test-optout.example', url: 'https://test-optout.example' }, false],
     ]) {
       await query(
         `INSERT INTO privacy_brokers (id, name, urls, optout, tier, disclosure_fields, source, confidence, enabled, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,2,$5,'badbool','auto',TRUE,NOW(),NOW()) ON CONFLICT (id) DO NOTHING`,
+         VALUES ($1,$2,$3,$4,2,$5,'curated','documented',TRUE,NOW(),NOW()) ON CONFLICT (id) DO NOTHING`,
         [id, name, JSON.stringify({ home: 'https://test-optout.example' }), JSON.stringify(optout), ['full_name', 'email', 'city', 'state', 'listing_url']],
       );
     }
