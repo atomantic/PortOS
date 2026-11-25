@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const store = new Map();
 vi.mock('./db.js', () => ({
@@ -41,9 +44,10 @@ vi.mock('../../lib/heavyJobClaim.js', () => ({
 vi.mock('../mtplxServerManager.js', () => ({
   getMtplxServerStatus: vi.fn(async () => ({ running: true, config: { model: 'Example/Served-MTPLX' }, cachedModels: ['Example/Served-MTPLX', 'Example/Other-MTPLX'] })),
   runOnMtplxCheckpoint: vi.fn(async (_model, fn) => fn('mtplx-example-other')),
+  isMtplxProvider: vi.fn(() => false),
 }));
 const providers = {
-  'example-api': { name: 'Example API', type: 'api' },
+  'example-api': { name: 'Example API', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' },
   'example-cli': { name: 'Example CLI', type: 'cli', command: 'claude' },
   'example-tui': { name: 'Example TUI', type: 'tui', command: 'claude' },
   'example-sandbox': { name: 'Example Sandbox', type: 'cli', command: 'codex' },
@@ -58,7 +62,7 @@ import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { generate } from '../modelCapabilityTests.js';
 import { listActiveRenders } from '../renderActivity.js';
 import { ensurePageFile, removeRunFiles, writePageFile } from './pageFiles.js';
-import { getMtplxServerStatus, runOnMtplxCheckpoint } from '../mtplxServerManager.js';
+import { getMtplxServerStatus, isMtplxProvider, runOnMtplxCheckpoint } from '../mtplxServerManager.js';
 import { runPromptThroughProvider } from '../promptRunner.js';
 import { getProviderById } from '../provider/providers.js';
 import { htmlPagePromptParts, htmlPagePrompt } from '../../lib/htmlPageBench.js';
@@ -241,6 +245,56 @@ describe('other targets', () => {
       prompt: run.pages[0].prompt, model: 'example-default', effort: 'high', allowFallback: false, toolFree: true, source: 'html-pages-bench',
     });
     expect(generate).not.toHaveBeenCalled();
+  });
+
+  describe('a local MTPLX route that times out', () => {
+    let home;
+    const timeoutError = () => runPromptThroughProvider.mockRejectedValue(new Error('CLI run timed out after 1200s'));
+    const logLine = (offsetMs, extra = {}) => JSON.stringify({ request_id: `req-${offsetMs}`, logged_at_s: (Date.now() + offsetMs) / 1000, request_model: 'example-default', completion_tokens: 52256, request_last_user_preview: 'PRIVATE-PROMPT', ...extra });
+    const runRoute = async () => {
+      const [queued] = await startRuns({ routes: [{ providerId: 'example-api', effort: 'xhigh' }], pages: PAGES.slice(0, 1) });
+      return (await settled(queued.id)).pages[0];
+    };
+    beforeEach(async () => {
+      home = await mkdtemp(join(tmpdir(), 'mtplx-home-'));
+      await mkdir(join(home, 'logs'));
+      vi.stubEnv('MTPLX_HOME', home);
+      isMtplxProvider.mockReturnValue(true);
+    });
+    afterEach(async () => {
+      vi.unstubAllEnvs();
+      isMtplxProvider.mockReturnValue(false);
+      await rm(home, { recursive: true, force: true });
+    });
+
+    it('reports reasoning with no answer when one logged request is attributable to the run', async () => {
+      timeoutError();
+      await writeFile(join(home, 'logs', 'request-log-8000.jsonl'), `${logLine(-3_600_000)}\n${logLine(10_000)}\n`);
+      const page = await runRoute();
+      expect(page.error).toBe('CLI run timed out after 1200s The local MTPLX request spent the whole deadline reasoning: 52256 completion tokens and no answer text.');
+      expect(page.html).toBe('');
+      expect(JSON.stringify(page)).not.toContain('PRIVATE-PROMPT');
+      expect(runPromptThroughProvider.mock.calls[0][0]).toMatchObject({ model: 'example-default', effort: 'xhigh', allowFallback: false });
+    });
+
+    it.each([
+      ['concurrent requests', (l) => `${l(10_000)}\n${l(20_000, { request_id: 'other' })}\n`],
+      ['another model', (l) => `${l(10_000, { request_model: 'someone-else' })}\n`],
+      ['no request in the window', (l) => `${l(-3_600_000)}\n`],
+      ['a request that produced no tokens', (l) => `${l(10_000, { completion_tokens: 0 })}\n`],
+    ])('keeps the generic timeout for %s', async (_name, log) => {
+      timeoutError();
+      await writeFile(join(home, 'logs', 'request-log-8000.jsonl'), log(logLine));
+      expect((await runRoute()).error).toBe('CLI run timed out after 1200s');
+    });
+
+    it('keeps the generic timeout when the log is missing or the failure is not a timeout', async () => {
+      timeoutError();
+      expect((await runRoute()).error).toBe('CLI run timed out after 1200s');
+      runPromptThroughProvider.mockRejectedValue(new Error('boom'));
+      await writeFile(join(home, 'logs', 'request-log-8000.jsonl'), `${logLine(10_000)}\n`);
+      expect((await runRoute()).error).toBe('boom');
+    });
   });
 
   it('refuses a provider that is not configured before queueing anything', async () => {
