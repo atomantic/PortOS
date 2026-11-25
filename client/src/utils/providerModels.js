@@ -152,8 +152,9 @@ export const resolveProviderModelOptions = (provider, selectedModel) => {
   if (!catalog) {
     // SELECTABLE and FLAGGED differ: anything stored and not already an option must become one (or the select is blank); only the flag asks if the pin is dead.
     const stored = !!selectedModel && !isConfiguredDefaultModel(selectedModel);
+    const listed = shipped.some((entry) => (typeof entry === 'string' ? entry : entry?.id) === selectedModel);
     return {
-      models: stored && !shipped.includes(selectedModel) ? [...shipped, selectedModel] : shipped,
+      models: stored && !listed ? [...shipped, selectedModel] : shipped,
       source: MODEL_SOURCE.shipped,
       unlistedSelection: stored && !modelPinIsOffered(provider, selectedModel),
     };
