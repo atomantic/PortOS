@@ -142,6 +142,45 @@ it('passes proxy and CA settings to prepare only, without forwarding provider cr
   expect(mocks.pm2.args.join(' ')).not.toMatch(/HTTPS_PROXY|SSL_CERT_FILE|OPENAI_API_KEY/);
 });
 
+it('resets the release idle timeout on progress and stops before extraction when the transfer stalls', async () => {
+  const { streamResumableDownload, partialPathFor } = await vi.importActual('../lib/downloadPreflight.js');
+  const requested = Promise.withResolvers();
+  let body;
+  const response = new Response(new ReadableStream({ start(controller) { body = controller; } }));
+  mocks.download.mockImplementation((options) => streamResumableDownload({
+    ...options,
+    fetchImpl: async (_url, { signal }) => {
+      signal.addEventListener('abort', () => body.error(signal.reason), { once: true });
+      requested.resolve(signal);
+      return response;
+    },
+  }));
+
+  vi.useFakeTimers();
+  const result = installSplashRuntime().catch((err) => err);
+  try {
+    const signal = await requested.promise;
+    await vi.advanceTimersByTimeAsync(30_000);
+    body.enqueue(Buffer.from('release prefix'));
+    const partial = partialPathFor(mocks.download.mock.lastCall[0].destPath);
+    await vi.waitFor(async () => {
+      expect(await readFile(partial, 'utf8')).toBe('release prefix');
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(signal.aborted).toBe(true);
+    expect(await result).toMatchObject({ code: 'SPLASH_DOWNLOAD_STALLED' });
+    expect(mocks.command).not.toHaveBeenCalled();
+    expect(await readFile(partial, 'utf8')).toBe('release prefix');
+  } finally {
+    body.error(new Error('Test transfer ended'));
+    await result;
+    vi.useRealTimers();
+  }
+});
+
 it('refuses to replace a listening process or delete a reserved-name PM2 process it did not launch', async () => {
   await installSplashRuntime();
   mocks.portUsed.mockResolvedValue(true);
