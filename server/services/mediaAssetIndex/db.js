@@ -40,7 +40,7 @@ import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 // old completion hook cannot overwrite a restore's newer reconstruction.
 export const queueMediaIndexRefresh = createFileWriteQueue();
 import {
-  imageToRow, videoToRow, compactGalleryRecord, compactSource, compactSourceToRow,
+  imageToRow, videoToRow, compactSource, compactSourceToRow, recordSearchText,
   COMPACT_SOURCE_FIELDS, COMPACT_PREVIEW_KEY, COMPACT_PROMPT_CHARS,
 } from './logic.js';
 import { toPgJson } from '../../lib/pgJson.js';
@@ -117,14 +117,34 @@ export async function removeAsset(mediaKey) {
   await query(`DELETE FROM media_assets WHERE media_key = $1`, [mediaKey]);
 }
 
-// Parameters stay bound, including literal substring search (percent and underscore
-// in a prompt are not SQL wildcards). Count and page share exactly one predicate.
-function assetFilter({ kind, q = '', hidden, filename, cleanedFrom, mediaKeys, excludeKeys, universeId, entryCategory, entryKind, cover } = {}, params = []) {
+const searchTokens = q => String(q ?? '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+
+// Predicates that read the stored read columns (schema/media.js) and mean the
+// same thing to every consumer of one request, so a multi-aggregate reader can
+// run them once per row at the source. Tokens are literal substrings (percent
+// and underscore in a prompt are not SQL wildcards) of `search_text`, which
+// already holds the lower-cased record text and its derived words.
+function sharedClauses({ q = '', universeId, entryCategory, entryKind } = {}, params) {
+  const clauses = [];
+  for (const [column, value] of [['universe_id', universeId], ['entry_category', entryCategory], ['entry_kind', entryKind]]) {
+    if (value !== undefined) {
+      params.push(value);
+      clauses.push(`${column} = $${params.length}`);
+    }
+  }
+  for (const token of searchTokens(q)) {
+    params.push(token);
+    clauses.push(`strpos(search_text, $${params.length}) > 0`);
+  }
+  return clauses;
+}
+
+// Parameters stay bound. Count and page share exactly one predicate. `shared:
+// false` leaves out sharedClauses() for a caller that applied them at the source.
+function assetFilter({ kind, hidden, filename, cleanedFrom, mediaKeys, excludeKeys, cover, ...rest } = {}, params = [], { shared = true } = {}) {
   const clauses = [];
   if (kind) { params.push(kind); clauses.push(`kind = $${params.length}`); }
-  if (hidden !== undefined) {
-    clauses.push(hidden ? `data->>'hidden' = 'true'` : `COALESCE(data->>'hidden', 'false') <> 'true'`);
-  }
+  if (hidden !== undefined) clauses.push(hidden ? 'is_hidden' : 'NOT is_hidden');
   if (filename !== undefined) {
     params.push(filename);
     clauses.push(`(ref = $${params.length} OR data->>'filename' = $${params.length})`);
@@ -139,24 +159,17 @@ function assetFilter({ kind, q = '', hidden, filename, cleanedFrom, mediaKeys, e
   }
   // `cleanedFrom` is the variant-lineage reverse lookup: given an original
   // filename it returns every cleaned/regenerated/de-watermarked copy that
-  // points back at it. Same jsonb-scalar shape as the universe filters below.
-  for (const [field, value] of Object.entries({ cleanedFrom, universeId, entryCategory, entryKind })) {
-    if (value !== undefined) {
-      params.push(value);
-      clauses.push(`data->>'${field}' = $${params.length}`);
-    }
+  // points back at it.
+  if (cleanedFrom !== undefined) {
+    params.push(cleanedFrom);
+    clauses.push(`data->>'cleanedFrom' = $${params.length}`);
   }
   if (cover) clauses.push("(kind = 'image' OR NULLIF(data->>'thumbnail', '') IS NOT NULL)");
-  for (const token of q.trim().toLowerCase().split(/\s+/).filter(Boolean)) {
-    params.push(token);
-    clauses.push(`strpos(lower(concat_ws(' ', data::text, kind,
-      (data->>'width') || 'x' || (data->>'height'),
-      CASE WHEN data->>'extractedFromVideoId' IS NOT NULL THEN 'extracted frame' END,
-      CASE WHEN data->>'stitchedFrom' IS NOT NULL THEN 'stitched' END,
-      CASE WHEN data->>'upscaledFrom' IS NOT NULL THEN 'upscaled 2x' END)), $${params.length}) > 0`);
-  }
-  return { params, where: clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '' };
+  if (shared) clauses.push(...sharedClauses(rest, params));
+  return clauses;
 }
+
+const whereOf = clauses => clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '';
 
 // The characters String.prototype.trim() removes, as a regex bracket body, so
 // the SQL "non-blank prompt" test agrees with logic.js (an all-whitespace
@@ -182,50 +195,81 @@ function compactSourceSql(column) {
     FROM jsonb_each(${column}) AS field)`;
 }
 
-// Compact rows are projected before SQL only without a search: search matches
-// words anywhere in the full stored metadata, beyond any preview.
-const projectsCompact = (compact, q = '') => Boolean(compact) && !String(q).trim();
+// A compact reader returns card rows cut from the projected source (#9676);
+// internal keys are dropped on the way out.
+const rowShape = compact => compact ? compactSourceToRow : data => data;
 
-// Final row shape for a reader: full records, compact rows cut from full
-// records (search), or compact rows from a projected source (internal keys dropped).
-const rowShape = (compact, projected) => !compact ? data => data
-  : projected ? compactSourceToRow : compactGalleryRecord;
+const videoFacetSql = field => `CASE WHEN jsonb_typeof(video.data->'${field}') = 'string' THEN video.data->>'${field}' END`;
 
-// Videos stay authoritative in video-history: prompt/visibility edits and uploads
-// do not all refresh the derived index. Mixed pages join that snapshot in SQL,
-// rather than using stale video rows or downloading either full list to the client.
-// A compact source (#9676) carries only card/filter fields of either kind, so
-// neither the bound parameter nor the materialized CTE holds full detail bodies.
-function assetSource(params, videos, { materialized = false, compact = false, localImages } = {}) {
-  const data = compact ? `${compactSourceSql('data')} AS data` : 'data';
-  let imageScope = "kind = 'image'";
+/**
+ * The rows a gallery read ranges over, filtered at the source by `clauses`
+ * BEFORE any projection, so a search never materializes or compacts a row it
+ * is about to discard. Returns `(clauses) => ({ cte, from, data })`.
+ *
+ * Without `videos` that is the index itself. With them, videos come from the
+ * caller's video-history snapshot rather than their index rows: prompt and
+ * visibility edits and uploads do not all refresh the derived index. They are
+ * joined in SQL rather than downloading either full list to the client, and
+ * expose the same read columns as an image row so one predicate serves both.
+ *
+ * Video search runs HERE, in JS: a video's text lives in video-history, not in
+ * `search_text`, so non-matching videos are dropped before binding and the
+ * survivors carry the query's own tokens as their search text (every token is
+ * then a substring of it, and no record body is bound to satisfy a predicate).
+ * `searchTextOf(video)` supplies the lower-cased text; the default derives it
+ * from the record, and the gallery passes the per-revision cache in
+ * videoGen/history.js so a keystroke does not re-serialize the history.
+ *
+ * `compact` (#9676) projects card/filter fields of either kind, so neither the
+ * bound parameter nor a materialized CTE holds full detail bodies.
+ */
+function assetSource(params, videos, { materialized = false, compact = false, localImages, q = '', searchTextOf } = {}) {
+  const scope = [];
   if (localImages !== undefined) {
     params.push(localImages);
-    imageScope += ` AND ref = ANY($${params.length}::text[])`;
+    scope.push("kind = 'image'", `ref = ANY($${params.length}::text[])`);
   }
-  if (videos === undefined) return localImages === undefined
-    ? { cte: '', table: 'media_assets', data }
-    : { cte: `WITH gallery_assets AS (SELECT * FROM media_assets WHERE ${imageScope}) `, table: 'gallery_assets', data };
-  params.push(toPgJson(videos.map(video => ({ data: compact ? compactSource(video) : video,
+  if (videos === undefined) {
+    const data = compact ? `${compactSourceSql('data')} AS data` : 'data';
+    return clauses => ({ cte: '', from: `media_assets${whereOf([...scope, ...clauses])}`, data });
+  }
+  if (!scope.length) scope.push("kind = 'image'");
+  const tokens = searchTokens(q);
+  const textOf = searchTextOf || (video => recordSearchText('video', video));
+  const matching = tokens.length ? videos.filter((video) => {
+    const text = textOf(video);
+    return tokens.every(token => text.includes(token));
+  }) : videos;
+  params.push(toPgJson(matching.map(video => ({ data: compact ? compactSource(video) : video,
     createdAt: Number.isFinite(Date.parse(video.createdAt)) ? new Date(video.createdAt).toISOString() : new Date(0).toISOString() }))));
-  return {
+  const rows = params.length;
+  params.push(tokens.join(' '));
+  const text = params.length;
+  // Videos arrive already compact; only index rows are projected in SQL.
+  const data = compact ? `CASE WHEN kind = 'image' THEN ${compactSourceSql('data')} ELSE data END` : 'data';
+  return clauses => ({
     data: 'data',
+    from: 'gallery_assets',
     cte: `WITH gallery_assets AS ${materialized ? 'MATERIALIZED ' : ''}(
-      SELECT media_key, kind, ref, ${data}, created_at FROM media_assets WHERE ${imageScope}
-      UNION ALL
-      SELECT 'video:' || (value->'data'->>'id'), 'video', value->'data'->>'id', value->'data',
-        (value->>'createdAt')::timestamptz
-      FROM jsonb_array_elements($${params.length}::jsonb)
+      SELECT media_key, kind, ref, ${data} AS data, created_at, is_hidden FROM (
+        SELECT media_key, kind, ref, data, created_at, search_text, is_hidden, universe_id, entry_category, entry_kind
+        FROM media_assets WHERE ${scope.join(' AND ')}
+        UNION ALL
+        SELECT 'video:' || (video.data->>'id'), 'video', video.data->>'id', video.data, video.created_at,
+          $${text}::text, COALESCE(video.data->>'hidden', 'false') = 'true',
+          ${videoFacetSql('universeId')}, ${videoFacetSql('entryCategory')}, ${videoFacetSql('entryKind')}
+        FROM (SELECT value->'data' AS data, (value->>'createdAt')::timestamptz AS created_at
+          FROM jsonb_array_elements($${rows}::jsonb)) AS video
+      ) AS source${whereOf(clauses)}
     ) `,
-    table: 'gallery_assets',
-  };
+  });
 }
 
 /** List index rows. Omitting limit retains the legacy array contract. */
-export async function listAssets({ limit, offset = 0, videos, typed = false, orderedKeys, compact = false, localImages, ...filters } = {}) {
-  const projected = projectsCompact(compact, filters.q);
-  const { params, where } = assetFilter(filters);
-  const { cte, table, data } = assetSource(params, videos, { compact: projected, localImages });
+export async function listAssets({ limit, offset = 0, videos, typed = false, orderedKeys, compact = false, localImages, searchTextOf, ...filters } = {}) {
+  const params = [];
+  const source = assetSource(params, videos, { compact, localImages, q: filters.q, searchTextOf });
+  const { cte, from, data } = source(assetFilter(filters, params));
   let order = 'created_at DESC, media_key ASC';
   if (orderedKeys) {
     params.push(orderedKeys);
@@ -237,9 +281,9 @@ export async function listAssets({ limit, offset = 0, videos, typed = false, ord
     paging = ` LIMIT $${params.length - 1} OFFSET $${params.length}`;
   }
   const result = await query(
-    `${cte}SELECT ${typed ? 'kind, ' : ''}${data} FROM ${table}${where} ORDER BY ${order}${paging}`, params,
+    `${cte}SELECT ${typed ? 'kind, ' : ''}${data} FROM ${from} ORDER BY ${order}${paging}`, params,
   );
-  const shape = rowShape(compact, projected);
+  const shape = rowShape(compact);
   return result.rows.map(row => typed ? { kind: row.kind, data: shape(row.data) } : shape(rowToAsset(row)));
 }
 
@@ -250,21 +294,25 @@ export async function listGalleryImageRefs() {
 }
 
 /** Count matching rows without materializing their JSONB payloads. */
-export async function countAssets({ videos, compact = false, localImages, ...filters } = {}) {
-  const { params, where } = assetFilter(filters);
-  const { cte, table } = assetSource(params, videos, { compact: projectsCompact(compact, filters.q), localImages });
-  const result = await query(`${cte}SELECT COUNT(*) AS count FROM ${table}${where}`, params);
+export async function countAssets({ videos, localImages, searchTextOf, ...filters } = {}) {
+  const params = [];
+  // Compact: a count reads no payload, so bind the small video source.
+  const source = assetSource(params, videos, { compact: true, localImages, q: filters.q, searchTextOf });
+  const { cte, from } = source(assetFilter(filters, params));
+  const result = await query(`${cte}SELECT COUNT(*) AS count FROM ${from}`, params);
   return parseInt(result.rows[0].count, 10);
 }
 
 /** One snapshot expansion serves the mixed page and every summary count. */
 export async function listMixedGalleryPage({
-  videos = [], limit = 60, offset = 0, orderedKeys, cover, countMediaKeys, compact = false, localImages, ...filters
+  videos = [], limit = 60, offset = 0, orderedKeys, cover, countMediaKeys, compact = false, localImages, searchTextOf, ...filters
 } = {}) {
   const params = [];
-  const projected = projectsCompact(compact, filters.q);
-  const { cte, table } = assetSource(params, videos, { materialized: true, compact: projected, localImages });
-  const predicate = options => assetFilter(options, params).where.slice(' WHERE '.length) || 'TRUE';
+  const source = assetSource(params, videos, { materialized: true, compact, localImages, q: filters.q, searchTextOf });
+  // The page and all four aggregates share the search and facet predicates, so
+  // they run once per row at the source; the rest differ per consumer.
+  const { cte, from } = source(sharedClauses(filters, params));
+  const predicate = options => assetFilter(options, params, { shared: false }).join(' AND ') || 'TRUE';
   const totalFilter = predicate(filters);
   const hiddenFilter = predicate({ ...filters, hidden: true });
   // Chips follow search/collection/visibility, before kind and favorites.
@@ -277,7 +325,7 @@ export async function listMixedGalleryPage({
   }
   params.push(limit, offset);
   const result = await query(`${cte}, gallery_page AS (
-      SELECT * FROM ${table} WHERE ${pageFilter}
+      SELECT * FROM ${from} WHERE ${pageFilter}
       ORDER BY ${order} LIMIT $${params.length - 1} OFFSET $${params.length}
     )
     SELECT
@@ -287,11 +335,11 @@ export async function listMixedGalleryPage({
       COUNT(*) FILTER (WHERE ${hiddenFilter}) AS "hiddenTotal",
       COUNT(*) FILTER (WHERE (${facetFilter}) AND kind = 'image') AS image,
       COUNT(*) FILTER (WHERE (${facetFilter}) AND kind = 'video') AS video
-    FROM ${table}`, params);
+    FROM ${from}`, params);
   const row = result.rows[0];
   const image = Number(row.image);
   const video = Number(row.video);
-  const shape = rowShape(compact, projected);
+  const shape = rowShape(compact);
   return { items: row.items.map(item => ({ kind: item.kind, data: shape(item.data) })), total: Number(row.total), hiddenTotal: Number(row.hiddenTotal),
     counts: { image, video, all: image + video } };
 }
@@ -347,17 +395,16 @@ export async function visibleImageCollections(collections) {
   const result = await query(`SELECT DISTINCT m.id
     FROM jsonb_to_recordset($1::jsonb) AS m(id text, key text)
     JOIN media_assets a ON a.media_key = m.key
-    WHERE a.kind = 'image' AND COALESCE(a.data->>'hidden', 'false') <> 'true'`, [toPgJson(memberships)]);
+    WHERE a.kind = 'image' AND NOT a.is_hidden`, [toPgJson(memberships)]);
   const populated = new Set(result.rows.map(row => row.id));
   return collections.filter(collection => populated.has(collection.id)).map(({ id, name }) => ({ id, name }));
 }
 
 /** Compact global picker options, independent of the loaded page/search. */
 export async function galleryFacets() {
-  const fields = ['universeId', 'universeName', 'entryCategory', 'entryKind'];
-  const result = await query(`SELECT DISTINCT ${fields.map(field =>
-    `CASE WHEN jsonb_typeof(data->'${field}') = 'string' THEN data->>'${field}' END AS "${field}"`).join(', ')}
-    FROM media_assets WHERE kind = 'image' AND COALESCE(data->>'hidden', 'false') <> 'true'`);
+  const result = await query(`SELECT DISTINCT universe_id AS "universeId", universe_name AS "universeName",
+      entry_category AS "entryCategory", entry_kind AS "entryKind"
+    FROM media_assets WHERE kind = 'image' AND NOT is_hidden`);
   return result.rows;
 }
 
