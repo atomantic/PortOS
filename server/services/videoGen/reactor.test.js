@@ -110,6 +110,7 @@ describe('Reactor SDK adapter', () => {
     expect(failed).not.toHaveBeenCalled();
     expect(records).toHaveLength(1);
     expect(records[0].id).toBe(job.jobId);
+    expect(records[0]).not.toHaveProperty('negativePrompt');
     expect(await readFile(input.outputPath, 'utf8')).toBe('example-video');
     expect(reactor.cancel(job.jobId)).toBe(false);
   });

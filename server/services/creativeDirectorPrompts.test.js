@@ -273,25 +273,29 @@ describe('buildEvaluatePrompt — imageStrength surfacing', () => {
   });
 });
 
-// #18683: Gemini has no negative-prompt field and the enqueue boundary refuses one, so the
-// writer is told not to author it instead of having its treatment fail scene by scene.
 describe('negative prompts on a backend that takes none', () => {
-  it('tells the treatment writer to leave it out on Gemini, and offers it everywhere else', async () => {
-    const gemini = await buildTreatmentPrompt(baseProject, { videoBackend: 'gemini' });
-    expect(gemini).toContain('(Gemini) has no negative-prompt field');
-    expect(gemini).not.toContain('"negativePrompt": "<optional>"');
-    expect(gemini).toMatch(/"prompt": "<full render prompt with style spec inlined>",\n {6}"durationSeconds": 5,/);
-    expect(gemini).not.toMatch(/{{[#/^]?[a-zA-Z]/);
+  it.each([['gemini', 'Gemini'], ['reactor', 'Reactor.inc']])('tells the treatment writer to omit it on %s', async (videoBackend, label) => {
+    const prompt = await buildTreatmentPrompt(baseProject, { videoBackend });
+    expect(prompt).toContain(`(${label}) has no negative-prompt field`);
+    expect(prompt).not.toContain('"negativePrompt": "<optional>"');
+    expect(prompt).toMatch(/"prompt": "<full render prompt with style spec inlined>",\n {6}"durationSeconds": 5,/);
+    expect(prompt).not.toMatch(/{{[#/^]?[a-zA-Z]/);
+  });
+
+  it('keeps the option in treatment prompts for local and fal', async () => {
     for (const other of [await buildTreatmentPrompt(baseProject), await buildTreatmentPrompt(baseProject, { videoBackend: 'fal' })]) {
       expect(other).not.toContain('has no negative-prompt field');
       expect(other).toMatch(/"negativePrompt": "<optional>",\n {6}"durationSeconds": 5,/);
     }
   });
 
-  it('tells the planner not to set it on Gemini', async () => {
-    const gemini = await buildPlanPrompt({ ...baseProject, aspectRatio: '9:16' }, { toolSpecs: [], videoBackend: 'gemini' });
-    expect(gemini).toContain('Do NOT set `negativePrompt`');
-    expect(gemini).not.toContain('You may also set `negativePrompt`');
+  it.each(['gemini', 'reactor'])('tells the planner to omit it on %s', async (videoBackend) => {
+    const prompt = await buildPlanPrompt({ ...baseProject, aspectRatio: '9:16' }, { toolSpecs: [], videoBackend });
+    expect(prompt).toContain('Do NOT set `negativePrompt`');
+    expect(prompt).not.toContain('You may also set `negativePrompt`');
+  });
+
+  it('keeps the option in local plan prompts', async () => {
     expect(await buildPlanPrompt({ ...baseProject, aspectRatio: '9:16' }, { toolSpecs: [] })).toContain('You may also set `negativePrompt`');
   });
 });

@@ -219,7 +219,7 @@ function captureClip(entry, input, pythonPath, job, jobId) {
 export const generateVideo = (params) => preparations.run(params, generateVideoPrepared);
 
 async function generateVideoPrepared({
-  settings, prompt = '', negativePrompt,
+  settings, prompt = '',
   continueFromClipId, seconds, seed, aspect,
   sourceImagePath = null, jobId: providedJobId = null,
 }) {
@@ -246,7 +246,6 @@ async function generateVideoPrepared({
   const meta = {
     id: jobId,
     prompt: prompt.trim(),
-    negativePrompt: negativePrompt || '',
     modelId: `reactor:${REACTOR_MODEL_ID}`,
     ...(continueFromClipId ? { continueFromClipId } : {}),
     ...(seconds ? { seconds } : {}),

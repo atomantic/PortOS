@@ -722,7 +722,7 @@ describe('cloud video pins reach the queue without local model reconciliation', 
     getProject.mockResolvedValue(cloudProject({ mode: 'reactor' }));
     await run('media_enqueueVideoJob', {
       prompt: 'An example lighthouse', mode: 'grok', modelId: 'local-planner-model',
-      sourceImagePath: libraryFrame, durationSeconds: 8,
+      sourceImagePath: libraryFrame, durationSeconds: 8, negativePrompt: '',
     }, { projectId: 'cd-1' });
 
     const { params } = enqueued();
@@ -734,6 +734,18 @@ describe('cloud video pins reach the queue without local model reconciliation', 
     for (const key of ['modelId', 'pythonPath', 'numFrames', 'fps', 'steps', 'apiKey', 'settings']) {
       expect(params).not.toHaveProperty(key);
     }
+  });
+
+  it('refuses a planner-authored negative prompt on Reactor before enqueue', async () => {
+    getSettings.mockResolvedValue({ videoGen: { reactor: { apiKey: 'example-test-key' } } });
+    getProject.mockResolvedValue(cloudProject({ mode: 'reactor' }));
+
+    await expect(run('media_enqueueVideoJob', {
+      prompt: 'An example lighthouse', negativePrompt: 'fog, crowds',
+    }, { projectId: 'cd-1' })).rejects.toMatchObject({
+      code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED', message: expect.stringMatching(/reactor.*a negative prompt/),
+    });
+    expect(enqueueJob).not.toHaveBeenCalled();
   });
 
   it('preserves Reactor native continuation parameters', async () => {

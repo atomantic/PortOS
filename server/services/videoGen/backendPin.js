@@ -35,6 +35,7 @@ import { getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
 import { getHiggsfieldVideoModel } from '../../lib/higgsfieldVideoModels.js';
 import { getGoogleVideoModel } from '../../lib/googleVideoModels.js';
 import { GEMINI_WEB_ASPECTS, geminiWebRendersCanvas } from '../../lib/geminiWebVideo.js';
+import { VIDEO_BACKENDS_WITHOUT_NEGATIVE_PROMPT } from '../../lib/generationModes.js';
 import { resolveImageInputPath } from '../../lib/pathSafety.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { renderTargetDefaults } from '../imageGen/cloudProviderConfig.js';
@@ -190,10 +191,11 @@ export function videoBackendJobParams(settings, pin, params = {}, { durationSeco
   if (params.disableAudio === true) unsupported.push('audio-disabled output');
   if (params.i2vReferenceMode && params.i2vReferenceMode !== 'anchor') unsupported.push('inspire reference mode');
   if (params.continueFromClipId && pin.mode !== VIDEO_GEN_MODE.REACTOR) unsupported.push('Reactor clip continuation');
+  if (VIDEO_BACKENDS_WITHOUT_NEGATIVE_PROMPT.includes(pin.mode) && String(params.negativePrompt ?? '').trim()) {
+    unsupported.push('a negative prompt');
+  }
   if (pin.mode === VIDEO_GEN_MODE.GEMINI) {
-    // The composer has no negative-prompt field and two canvases. The worker would drop the
-    // first and answer any other shape with Landscape, so neither is left for it to decide.
-    if (String(params.negativePrompt ?? '').trim()) unsupported.push('a negative prompt');
+    // The composer answers every unsupported shape with Landscape.
     if (!geminiWebRendersCanvas(params.frameAspect || params.aspectRatio, params.width, params.height)) {
       unsupported.push(`this canvas (it renders ${GEMINI_WEB_ASPECTS.join(' or ')} only)`);
     }

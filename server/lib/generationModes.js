@@ -44,6 +44,9 @@ export const IMAGE_GEN_MODE = modeEnum(IMAGE_GEN_MODES);
 export const VIDEO_GEN_MODES = Object.freeze([LOCAL, ...CLOUD_VIDEO_GEN_MODES]);
 export const VIDEO_GEN_MODE = modeEnum(VIDEO_GEN_MODES);
 
+// The Creative Director writer, shot validator and enqueue boundary share this request constraint.
+export const VIDEO_BACKENDS_WITHOUT_NEGATIVE_PROMPT = Object.freeze([VIDEO_GEN_MODE.GEMINI, VIDEO_GEN_MODE.REACTOR]);
+
 export const GENERATION_MODE_LABELS = Object.freeze(Object.fromEntries(GENERATION_BACKENDS.map(({ id, label }) => [id, label])));
 
 /**
