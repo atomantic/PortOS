@@ -32,7 +32,13 @@ export default function VoiceSpeechSection({ cfg, patch, inputCls, onRegisterRet
   const [previewingVoice, setPreviewingVoice] = useState(null);
   const [downloadingVoice, setDownloadingVoice] = useState(null);
 
-  const currentEngine = cfg?.tts?.engine;
+  const configuredEngine = cfg?.tts?.engine || 'piper';
+  const engineMeta = ttsEngines.find((item) => (
+    item.id === configuredEngine || item.aliases?.includes(configuredEngine)
+  ));
+  // Display registry aliases without turning a saved engine into a form edit.
+  const engine = engineMeta?.id || configuredEngine;
+  const currentEngine = cfg?.tts?.engine ? engine : undefined;
   // Piper download callbacks resolve long after the click; they must see the
   // engine/mount state at resolve time, not the closure from the click.
   const currentEngineRef = useRef(currentEngine);
@@ -50,15 +56,6 @@ export default function VoiceSpeechSection({ cfg, patch, inputCls, onRegisterRet
     onRegisterRetryVoices?.(retryVoices);
     return () => onRegisterRetryVoices?.(null);
   }, [onRegisterRetryVoices, retryVoices]);
-
-  useEffect(() => {
-    if (!currentEngine || ttsEngines.length === 0) return;
-    const registered = ttsEngines.find((item) => (
-      item.id === currentEngine || item.aliases?.includes(currentEngine)
-    ));
-    if (!registered || registered.id === currentEngine) return;
-    patch('tts.engine', registered.id);
-  }, [currentEngine, ttsEngines, patch]);
 
   useEffect(() => {
     let active = true;
@@ -97,12 +94,7 @@ export default function VoiceSpeechSection({ cfg, patch, inputCls, onRegisterRet
     patch('stt.modelPath', `~/.portos/voice/models/${m.file}`);
   };
 
-  const configuredEngine = cfg?.tts?.engine || 'piper';
   const sttEngine = cfg?.stt?.engine || 'whisper';
-  const engineMeta = ttsEngines.find((item) => (
-    item.id === configuredEngine || item.aliases?.includes(configuredEngine)
-  ));
-  const engine = engineMeta?.id || configuredEngine;
   const engineConfigKey = typeof engineMeta?.configKey === 'string' ? engineMeta.configKey : null;
   const fallbackConfigKey = [configuredEngine, configuredEngine.replace(/-tts$/, '')]
     .find((key) => cfg?.tts?.[key] && typeof cfg.tts[key] === 'object');
