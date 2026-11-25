@@ -113,7 +113,10 @@ const VEC_FAR = axis(300);            // orthogonal to VEC_A / VEC_NEAR_A
 const VEC_UNSEEN = axis(500);         // orthogonal to every seeded embedding
 const VEC_HALFWAY = tilted(0, 1, 2);  // ≈ 0.447 to VEC_A, ≈ 0.534 to VEC_NEAR_A
 
-const resetMemories = () => query('DELETE FROM memories');
+const resetMemories = async () => {
+  await query('DELETE FROM memories');
+  await query('DELETE FROM memory_tombstones');
+};
 
 const backdate = (id, days) => query(
   `UPDATE memories SET created_at = NOW() - ($1::double precision * INTERVAL '1 day'), last_accessed = NULL WHERE id = $2`,
@@ -358,6 +361,18 @@ describe.skipIf(!runDb)('memoryDB CRUD (#3447)', () => {
     const hard = await memoryDB.createMemory({ type: 'fact', content: 'Hard delete me.' });
     await memoryDB.purgeMemory(hard.id);
     expect(await memoryDB.peekMemory(hard.id)).toBeNull();
+    expect((await query('SELECT id FROM memory_tombstones WHERE id = ANY($1)', [[soft.id, hard.id]])).rows).toEqual([{ id: hard.id }]);
+  });
+
+  it.each([
+    { sourceAgentId: 'brain-bridge' },
+    { sourceAgentId: 'cos-persistent-mind' },
+    { tags: ['mind:chosen-name'] },
+  ])('keeps a machine-local purge out of federation', async (privateFields) => {
+    const row = await memoryDB.createMemory({ type: 'fact', content: 'Synthetic private memory.', ...privateFields });
+    await memoryDB.purgeMemory(row.id);
+    expect(await memoryDB.peekMemory(row.id)).toBeNull();
+    expect((await query('SELECT id FROM memory_tombstones WHERE id = $1', [row.id])).rows).toEqual([]);
   });
 
   it('locks current pending records throughout approval publication and omits retired records', async () => {

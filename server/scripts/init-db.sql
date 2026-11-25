@@ -175,6 +175,12 @@ CREATE INDEX IF NOT EXISTS idx_memories_origin_instance ON memories (origin_inst
 
 CREATE INDEX IF NOT EXISTS idx_memories_sync_sequence ON memories (sync_sequence);
 
+CREATE TABLE IF NOT EXISTS memory_tombstones (
+      id UUID PRIMARY KEY,
+      deleted_at TIMESTAMPTZ NOT NULL,
+      sync_sequence BIGSERIAL NOT NULL UNIQUE
+    );
+
 CREATE OR REPLACE FUNCTION update_memory_timestamp()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -2995,7 +3001,7 @@ CREATE OR REPLACE FUNCTION sync_feed_capture()
        END IF;
        IF TG_OP <> 'DELETE' THEN
          INSERT INTO sync_feed (stream, row_sequence, position)
-         VALUES (TG_TABLE_NAME, NEW.sync_sequence, nextval(format('%I', TG_TABLE_NAME || '_sync_feed_seq')::regclass))
+         VALUES (TG_TABLE_NAME, NEW.sync_sequence, nextval(COALESCE(TG_ARGV[0], TG_TABLE_NAME || '_sync_feed_seq')::regclass))
          ON CONFLICT (stream, row_sequence) DO UPDATE SET position = EXCLUDED.position;
        END IF;
        RETURN NULL;
@@ -3009,6 +3015,14 @@ CREATE CONSTRAINT TRIGGER trg_memories_sync_feed AFTER INSERT OR DELETE ON memor
 DROP TRIGGER IF EXISTS trg_memories_sync_feed_update ON memories;
 
 CREATE CONSTRAINT TRIGGER trg_memories_sync_feed_update AFTER UPDATE ON memories DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();
+
+DROP TRIGGER IF EXISTS trg_memory_tombstones_sync_feed ON memory_tombstones;
+
+CREATE CONSTRAINT TRIGGER trg_memory_tombstones_sync_feed AFTER INSERT OR DELETE ON memory_tombstones DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture('memories_sync_feed_seq');
+
+DROP TRIGGER IF EXISTS trg_memory_tombstones_sync_feed_update ON memory_tombstones;
+
+CREATE CONSTRAINT TRIGGER trg_memory_tombstones_sync_feed_update AFTER UPDATE ON memory_tombstones DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture('memories_sync_feed_seq');
 
 DROP TRIGGER IF EXISTS trg_catalog_scraps_sync_feed ON catalog_scraps;
 

@@ -24,9 +24,14 @@
  * `fileParallelism: false` means nothing else is touching it meanwhile.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { checkHealth, ensureSchema, close, query, withTransaction } from '../lib/db.js';
+import { mockPathsDataRoot, mockNoPeers } from '../lib/mockPathsDataRoot.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
+
+const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-memory-sync-' });
+vi.mock('../lib/fileUtils.js', async (original) => makeProxy(await original()));
+vi.mock('./instances.js', async (original) => mockNoPeers(await original()));
 
 let dbReady = false;
 let skipReason = '';
@@ -98,11 +103,14 @@ describe.skipIf(!runDb)('memorySync.applyRemoteChanges', () => {
     expect(await contentOf(ID_B)).toBeNull();
   });
   beforeEach(async () => {
+    await query('DELETE FROM memory_tombstones');
     await query(`DELETE FROM memories`);
   });
   afterAll(async () => {
     await query(`DELETE FROM memories`).catch(() => {});
+    await query('DELETE FROM memory_tombstones');
     await close();
+    cleanup();
   });
 
   // Replay two successive exported states into the same row to exercise the
@@ -114,6 +122,76 @@ describe.skipIf(!runDb)('memorySync.applyRemoteChanges', () => {
     expect(await contentOf(ID_A)).toBe(second.content);
     expect((await memorySync.getChangesSince()).memories[0].updatedAt).toBe(second.updatedAt);
   };
+
+  it('pages a hard purge with live writes and applies it on a peer, including replay at the purge clock', async () => {
+    const { purgeMemory } = await import('./memoryDB.js');
+    const stale = remoteMemory(ID_A, '2099-01-01T01:00:00.000Z');
+    await memorySync.applyRemoteChanges([stale]);
+    const cursor = await memorySync.getMaxSequence();
+    await purgeMemory(ID_A);
+    const markerPosition = await memorySync.getMaxSequence();
+    await memorySync.applyRemoteChanges([remoteMemory(ID_B, stale.updatedAt)]);
+    const page = await memorySync.getChangesSince(cursor, 1, 1, true);
+    expect(page).toMatchObject({
+      memories: [], deletedIds: [{ id: ID_A, deletedAt: stale.updatedAt }], maxSequence: markerPosition, hasMore: true,
+    });
+    const next = await memorySync.getChangesSince(markerPosition, 1, 1, true);
+    expect(next).toMatchObject({ memories: [{ id: ID_B }], deletedIds: [], hasMore: false });
+    expect(next.maxSequence).toBe(await memorySync.getMaxSequence());
+    expect((await memorySync.getChangesSince(cursor, 1, 1)).memories.map(m => m.id)).toEqual([ID_B]);
+    expect(await memorySync.applyRemoteChanges([stale])).toMatchObject({ skipped: 1 });
+
+    // Restore the pre-purge copy as a second install, including its own history.
+    await query('DELETE FROM memory_tombstones');
+    await memorySync.applyRemoteChanges([remoteMemory(ID_A, '2098-01-01T00:00:00.000Z')]);
+    await memorySync.applyRemoteChanges([stale]);
+    expect(await memorySync.applyRemoteChanges([], 1, page.deletedIds)).toMatchObject({ deleted: 1 });
+    expect(await contentOf(ID_A)).toBeNull();
+    expect((await query('SELECT 1 FROM memory_versions WHERE memory_id = $1', [ID_A])).rowCount).toBe(0);
+    const relayed = await memorySync.getMaxSequence();
+    expect(await memorySync.applyRemoteChanges([stale], 1, [...page.deletedIds, ...page.deletedIds]))
+      .toMatchObject({ skipped: 1, deleted: 0 });
+    expect(await memorySync.getMaxSequence()).toBe(relayed);
+    expect(await memorySync.applyRemoteChanges([remoteMemory(ID_A, '2099-01-01T01:00:00.001Z')])).toMatchObject({ inserted: 1 });
+    expect(await memorySync.applyRemoteChanges([], 1, page.deletedIds)).toMatchObject({ deleted: 0 });
+    expect(await contentOf(ID_A)).toBe('content @ 2099-01-01T01:00:00.001Z');
+    const beforeSecondPurge = await memorySync.getMaxSequence();
+    const laterMarker = { id: ID_A, deletedAt: '2099-01-01T01:00:00.002Z' };
+    expect(await memorySync.applyRemoteChanges([], 1, [laterMarker])).toMatchObject({ deleted: 1 });
+    expect(await memorySync.getChangesSince(beforeSecondPurge, 1, 1, true)).toMatchObject({ memories: [], deletedIds: [laterMarker] });
+  });
+
+  it('retries local notification cleanup after a peer deletion has committed', async () => {
+    const notifications = await import('./notifications.js');
+    const review = await import('./review.js');
+    const stale = remoteMemory(ID_A, '2026-01-01T00:00:00.000Z');
+    await memorySync.applyRemoteChanges([stale]);
+    const notification = await notifications.addNotification({ type: 'memory_approval', title: 'Example', metadata: { memoryId: ID_A } });
+    const preview = await review.createMemoryApprovalItem(stale, 'example-agent', 'example-task');
+    const markers = [{ id: ID_A, deletedAt: stale.updatedAt }];
+    const cleanupSpy = vi.spyOn(notifications, 'removeByMetadata').mockRejectedValueOnce(new Error('temporary write failure'));
+    try {
+      await expect(memorySync.applyRemoteChanges([], 1, markers)).rejects.toThrow('temporary write failure');
+      expect(await contentOf(ID_A)).toBeNull();
+      expect((await review.getItems()).map(row => row.id)).not.toContain(preview.id);
+      expect(await memorySync.applyRemoteChanges([stale], 1, markers)).toMatchObject({ deleted: 0, skipped: 1 });
+      expect((await notifications.getNotifications()).map(row => row.id)).not.toContain(notification.id);
+    } finally {
+      cleanupSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ['brain-bridge', []], ['cos-persistent-mind', []], [null, ['mind:chosen-name']],
+  ])('preserves a machine-local row on peer live and deletion collisions', async (agent, tags) => {
+    await memorySync.applyRemoteChanges([remoteMemory(ID_A, '2026-01-01T00:00:00.000Z')]);
+    await query('UPDATE memories SET source_agent_id = $2, tags = $3 WHERE id = $1', [ID_A, agent, tags]);
+    const stamp = '2099-12-31T00:00:00.000Z';
+    const result = await memorySync.applyRemoteChanges([remoteMemory(ID_A, stamp)], 1, [{ id: ID_A, deletedAt: stamp }]);
+    expect(result).toMatchObject({ skipped: 1, deleted: 0 });
+    expect(await contentOf(ID_A)).toBe('content @ 2026-01-01T00:00:00.000Z');
+    expect(await memorySync.getChangesSince('0', 100, 1, true)).toMatchObject({ memories: [], deletedIds: [] });
+  });
 
   it('exports overlapping transaction edits with clocks peers accept in commit order', async () => {
     await memorySync.applyRemoteChanges([remoteMemory(ID_A, '2026-01-01T00:00:00.000Z')]);

@@ -184,7 +184,7 @@ describe('Memory Routes', () => {
       const response = await request(app).get('/api/memory/sync?since=10&limit=50').set(PEER_INSTANCE_ID_HEADER, 'peer-a-instance-id');
 
       expect(response.status).toBe(200);
-      expect(memorySync.getChangesSince).toHaveBeenCalledWith('10', 50);
+      expect(memorySync.getChangesSince).toHaveBeenCalledWith('10', 50, undefined, false);
     });
 
     it('should default since to 0 and limit to 100', async () => {
@@ -193,7 +193,7 @@ describe('Memory Routes', () => {
 
       await request(app).get('/api/memory/sync').set(PEER_INSTANCE_ID_HEADER, 'peer-a-instance-id');
 
-      expect(memorySync.getChangesSince).toHaveBeenCalledWith('0', 100);
+      expect(memorySync.getChangesSince).toHaveBeenCalledWith('0', 100, undefined, false);
     });
 
     it('should cap limit at 1000', async () => {
@@ -202,17 +202,17 @@ describe('Memory Routes', () => {
 
       await request(app).get('/api/memory/sync?limit=5000').set(PEER_INSTANCE_ID_HEADER, 'peer-a-instance-id');
 
-      expect(memorySync.getChangesSince).toHaveBeenCalledWith('0', 1000);
+      expect(memorySync.getChangesSince).toHaveBeenCalledWith('0', 1000, undefined, false);
     });
 
     it('forwards the sender schema version', async () => {
       ensureBackend.mockResolvedValue('postgres');
       memorySync.getChangesSince.mockResolvedValue({ memories: [], maxSequence: '0' });
 
-      const response = await request(app).get('/api/memory/sync?since=10&limit=50&schemaVersion=3').set(PEER_INSTANCE_ID_HEADER, 'peer-a-instance-id');
+      const response = await request(app).get('/api/memory/sync?since=10&limit=50&schemaVersion=3&tombstoneVersion=1').set(PEER_INSTANCE_ID_HEADER, 'peer-a-instance-id');
 
       expect(response.status).toBe(200);
-      expect(memorySync.getChangesSince).toHaveBeenCalledWith('10', 50, 3);
+      expect(memorySync.getChangesSince).toHaveBeenCalledWith('10', 50, 3, true);
     });
 
     it('refuses a peer the user does not share memory with by default', async () => {
@@ -323,16 +323,24 @@ describe('Memory Routes', () => {
       expect(response.body.error).toMatch(/Validation failed/);
     });
 
-    it('forwards the sender schema version with remote changes', async () => {
+    it('rejects an invalid deletion before applying a sync page', async () => {
+      ensureBackend.mockResolvedValue('postgres');
+      const response = await request(app).post('/api/memory/sync')
+        .send({ memories: [], deletedIds: [{ id: 'invalid', deletedAt: 'yesterday' }] });
+      expect(response.status).toBe(400);
+      expect(memorySync.applyRemoteChanges).not.toHaveBeenCalled();
+    });
+
+    it('forwards the sender schema version and deletions with remote changes', async () => {
       ensureBackend.mockResolvedValue('postgres');
       memorySync.applyRemoteChanges.mockResolvedValue({ inserted: 0, updated: 0, skipped: 0 });
 
       const response = await request(app)
         .post('/api/memory/sync')
-        .send({ memories: [], schemaVersion: 3 });
+        .send({ memories: [], schemaVersion: 3, deletedIds: [{ id: '00000000-0000-4000-8000-00000000aaaa', deletedAt: '2026-01-02T00:00:00Z' }] });
 
       expect(response.status).toBe(200);
-      expect(memorySync.applyRemoteChanges).toHaveBeenCalledWith([], 3);
+      expect(memorySync.applyRemoteChanges).toHaveBeenCalledWith([], 3, [{ id: '00000000-0000-4000-8000-00000000aaaa', deletedAt: '2026-01-02T00:00:00Z' }]);
     });
   });
 
