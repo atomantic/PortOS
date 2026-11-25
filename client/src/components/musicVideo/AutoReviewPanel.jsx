@@ -72,7 +72,7 @@ function AttemptRow({ attempt }) {
         </p>
       )}
       {review?.evidence?.temporal && <p className="text-[10px] text-port-text-muted">
-        Temporal evidence: {review.evidence.temporal.status}
+        Temporal evidence: {review.evidence.temporal.status === 'unavailable' ? 'not measured' : review.evidence.temporal.status}
         {review.evidence.temporal.analyzer && ` · ${review.evidence.temporal.analyzer.id} ${review.evidence.temporal.analyzer.version}`}
         {review.evidence.temporal.reason && ` — ${review.evidence.temporal.reason}`}
       </p>}

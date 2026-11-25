@@ -49,3 +49,44 @@ describe('footage visibility evidence admission', () => {
     expect(result.checks.composition).toBe('unverified');
   });
 });
+
+describe('lip-sync evidence gate (#18626)', () => {
+  const parsed = (findings = []) => ({ checks: { composition: 'pass', continuity: 'pass', motion: 'pass' }, findings, summary: '' });
+  const analysis = { ok: true, spanSec: 8, avDriftSec: 0, freezes: [] };
+  const blocking = [{ atSec: 3, check: 'composition', severity: 'blocking', source: 'reviewer', note: 'The hands warp.' }];
+  const temporal = (status, extra = {}) => ({ version: 1, status, analyzer: null, reason: 'Example reason', shots: [{ sceneId: 's1', startSec: 0, endSec: 4, spans: [] }], ...extra });
+  const gate = (parsedValue, temporalValue) => gateAutoReview({ parsed: parsedValue, analysis, evidence: { temporal: temporalValue } });
+
+  it('passes a clean review when no analyzer is installed, keeping lipSync unverified with the not-measured reason', () => {
+    expect(gate(parsed(), temporal('unavailable'))).toMatchObject({
+      verdict: 'pass', reason: 'Lip-sync was not measured: no temporal analyzer is installed', checks: { lipSync: 'unverified', audioSync: 'pass' },
+    });
+  });
+
+  it('lets a blocking finding open a revision when no analyzer is installed', () => {
+    expect(gate(parsed(blocking), temporal('unavailable'))).toMatchObject({ verdict: 'revise', reason: null, checks: { lipSync: 'unverified' } });
+  });
+
+  it('still needs a reviewer verdict and still reports other unverified checks when no analyzer is installed', () => {
+    expect(gate(null, temporal('unavailable')).verdict).toBe('inconclusive');
+    const noContinuous = gateAutoReview({ parsed: parsed(), analysis: { ok: false }, evidence: { temporal: temporal('unavailable') } });
+    expect(noContinuous.verdict).toBe('inconclusive');
+    expect(noContinuous.reason).toMatch(/audioSync/);
+    expect(noContinuous.reason).not.toMatch(/lipSync/);
+  });
+
+  it('fails closed for an installed analyzer that could not verify, even with a blocking finding', () => {
+    const unverified = temporal('unverified', { analyzer: { id: 'example-analyzer', version: '1.0', protocolVersion: 1 } });
+    expect(gate(parsed(), unverified)).toMatchObject({ verdict: 'inconclusive', reason: 'Example reason' });
+    expect(gate(parsed(blocking), unverified).verdict).toBe('inconclusive');
+    expect(gate(parsed(), temporal('unverified', { analyzer: null, reason: 'The draft has no performance-section provenance' })).verdict).toBe('inconclusive');
+  });
+
+  it('still fails a measured offset above 0.12s with a timecoded finding', () => {
+    const measured = temporal('verified', { analyzer: { id: 'example-analyzer', version: '1.0', protocolVersion: 1 },
+      shots: [{ sceneId: 's1', startSec: 0, endSec: 4, spans: [{ startSec: 0, endSec: 4, status: 'verified', offsetSec: 0.3, confidence: 0.95 }] }] });
+    const result = gate(parsed(), measured);
+    expect(result).toMatchObject({ verdict: 'revise', checks: { lipSync: 'fail' } });
+    expect(result.findings).toEqual([expect.objectContaining({ atSec: 0, check: 'lipSync', severity: 'blocking' })]);
+  });
+});

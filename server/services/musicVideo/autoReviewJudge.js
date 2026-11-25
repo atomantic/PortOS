@@ -13,7 +13,11 @@
  *
  * `audioSync` measures stream-length parity only. It proves neither mouth
  * timing nor isolated voice correctness. `lipSync` requires separate local
- * temporal evidence against the encoded output, or stays unverified.
+ * temporal evidence against the encoded output, or stays unverified. An
+ * analyzer that ran and could not verify gates the verdict (inconclusive); an
+ * analyzer that is not installed (`temporal.status === 'unavailable'`) is
+ * missing capability, not failed evidence: the record keeps `lipSync`
+ * unverified, but it neither blocks a pass nor suppresses a revise (#18626).
  *
  * A vision model cannot hear, and a set of stills cannot show motion, so the
  * gate never lets frames alone pass `motion` or `audioSync`: without a
@@ -28,6 +32,7 @@ import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
 import { AUTO_REVIEW_CHECKS } from './autoReview.js';
 
 const CHECK_VALUES = new Set(['pass', 'fail']);
+const LIP_SYNC_NOT_MEASURED_REASON = 'Lip-sync was not measured: no temporal analyzer is installed';
 const MODEL_CHECKS = ['composition', 'continuity', 'motion'];
 // A frozen span shorter than this inside footage reads as a held beat, not a stall.
 export const FREEZE_MIN_SEC = 1;
@@ -236,7 +241,10 @@ export function gateAutoReview({ parsed, analysis, evidence = {} }) {
     }
   }
   const failed = AUTO_REVIEW_CHECKS.filter((c) => checks[c] === 'fail');
-  const unverified = AUTO_REVIEW_CHECKS.filter((c) => checks[c] === 'unverified');
+  // No analyzer installed: lip-sync is recorded unverified but never gates. An
+  // installed analyzer that failed keeps the fail-closed halt below.
+  const lipSyncNotMeasured = checks.lipSync === 'unverified' && temporal?.status === 'unavailable';
+  const unverified = AUTO_REVIEW_CHECKS.filter((c) => checks[c] === 'unverified' && !(c === 'lipSync' && lipSyncNotMeasured));
   const blocking = findings.filter((f) => f.severity === 'blocking');
   const base = {
     checks,
@@ -244,7 +252,7 @@ export function gateAutoReview({ parsed, analysis, evidence = {} }) {
     summary: parsed?.summary || '',
     evidence: { ...evidence, continuous, continuousError: continuous ? null : (analysis?.error || 'The continuous excerpt was not analysed'), avDriftSec: continuous ? analysis.avDriftSec ?? null : null },
   };
-  if (checks.lipSync === 'unverified') return { ...base, verdict: 'inconclusive', reason: temporal?.reason || 'Lip-sync needs temporal evidence — watch the performance yourself' };
+  if (checks.lipSync === 'unverified' && !lipSyncNotMeasured) return { ...base, verdict: 'inconclusive', reason: temporal?.reason || 'Lip-sync needs temporal evidence — watch the performance yourself' };
   if (!parsed) return { ...base, verdict: 'inconclusive', reason: 'The reviewer returned no usable verdict — watch this draft yourself' };
   // A blocking finding is something to regenerate, whatever else was verified —
   // revising never claims a pass, so it needs no continuous evidence.
@@ -253,5 +261,5 @@ export function gateAutoReview({ parsed, analysis, evidence = {} }) {
   if (unverified.length) {
     return { ...base, verdict: 'inconclusive', reason: `Could not verify ${unverified.join(', ')}${continuous ? '' : ' — frames alone cannot prove motion or audio sync'}` };
   }
-  return { ...base, verdict: 'pass', reason: null };
+  return { ...base, verdict: 'pass', reason: lipSyncNotMeasured ? LIP_SYNC_NOT_MEASURED_REASON : null };
 }

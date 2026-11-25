@@ -90,4 +90,13 @@ describe('AutoReviewPanel (#8988)', () => {
     fireEvent.click(screen.getByRole('button', { name: /resume/i }));
     await waitFor(() => expect(api.resumeMusicVideoAutoReview).toHaveBeenCalledWith('mv-1', 'mvar-1', { limits: { maxAttempts: 3 } }, { silent: true }));
   });
+
+  it('labels a missing temporal analyzer "not measured" so it is not read as a failure (#18626)', () => {
+    const review = { verdict: 'pass', reason: 'Lip-sync was not measured: no temporal analyzer is installed', checks: { lipSync: 'unverified' },
+      evidence: { temporal: { status: 'unavailable', analyzer: null, reason: 'No supported local temporal analyzer is installed' } } };
+    const run = { ...limitRun, status: 'passed', attempts: [{ n: 1, excerptId: 'mve-1', revisionId: null, review }] };
+    render(<Harness initial={{ ...baseProject, autoReviews: [run] }} />);
+    expect(screen.getByText(/Temporal evidence: not measured/)).toBeInTheDocument();
+    expect(screen.queryByText(/Temporal evidence: unavailable/)).not.toBeInTheDocument();
+  });
 });

@@ -543,7 +543,6 @@ describe('temporal performance evidence (#9347)', () => {
   };
 
   it.each([
-    ['missing analyzer', false, null],
     ['missing evidence', true, null],
     ['unknown span status', true, { spans: [{ startSec: 0, endSec: 5, status: 'pass', offsetSec: 0, confidence: 1 }] }],
     ['out-of-bounds evidence', true, { spans: [{ startSec: 0, endSec: 20, status: 'verified', offsetSec: 0, confidence: 1 }] }],
@@ -564,6 +563,49 @@ describe('temporal performance evidence (#9347)', () => {
     } });
     expect(saved.revisions || []).toHaveLength(0);
     expect(h.procs).toHaveLength(1);
+  });
+
+  // #18626: an analyzer that is not installed is missing capability, not failed
+  // evidence, so lip-sync is recorded unmeasured without parking the run.
+  it('passes a lip-sync draft unattended when no analyzer is installed, recording lip-sync as not measured', async () => {
+    const p = await performanceProject();
+    h.temporalInstalled = false;
+    h.verdicts.push(PASS);
+    await start(p.id, { maxAttempts: 2, maxGenerations: 5 });
+    await finishDraft(p.id, 1);
+    const saved = await settled(p.id, (x) => expect(run(x).status).toBe('passed'));
+    expect(run(saved).attempts[0].review).toMatchObject({
+      verdict: 'pass', reason: 'Lip-sync was not measured: no temporal analyzer is installed',
+      checks: { audioSync: 'pass', lipSync: 'unverified' }, evidence: { temporal: { status: 'unavailable', analyzer: null } },
+    });
+    expect(run(saved).usage.generations).toBe(0);
+    expect(h.temporalCalls).toHaveLength(0);
+  });
+
+  it('treats an analyzer that fails its capability probe as not installed', async () => {
+    const p = await performanceProject();
+    h.temporalInstalled = true;
+    h.temporalCapability = { protocolVersion: 2 };
+    h.verdicts.push(PASS);
+    await start(p.id, { maxAttempts: 1, maxGenerations: 0 });
+    await finishDraft(p.id, 1);
+    const saved = await settled(p.id, (x) => expect(run(x).status).toBe('passed'));
+    expect(run(saved).attempts[0].review).toMatchObject({ verdict: 'pass', checks: { lipSync: 'unverified' }, evidence: { temporal: { status: 'unavailable' } } });
+    expect(h.temporalCalls).toHaveLength(1);
+  });
+
+  it('opens a revision for a blocking visual finding when no analyzer is installed', async () => {
+    const p = await performanceProject();
+    h.temporalInstalled = false;
+    h.verdicts.push(FAIL_S2);
+    await start(p.id, { maxAttempts: 3, maxGenerations: 5 });
+    await finishDraft(p.id, 1);
+    const saved = await settled(p.id, (x) => expect(run(x).attempts[0].revisionId).toBeTruthy());
+    expect(run(saved).status).not.toBe('needs-human');
+    expect(run(saved).attempts[0].review).toMatchObject({
+      verdict: 'revise', reason: null, checks: { lipSync: 'unverified' }, evidence: { temporal: { status: 'unavailable' } },
+    });
+    expect(saved.revisions.find((rv) => rv.id === run(saved).attempts[0].revisionId).sections.filter((s) => s.verdict === 'rejected').map((s) => s.sceneId)).toEqual(['s2']);
   });
 
   it('a legacy draft with missing section provenance cannot silently pass as having no performances', async () => {
