@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { selectMusicVideoPreview, musicVideoImageSrc, musicVideoImageFallback } from './musicVideoPreview.js';
 import { summarizeMusicVideoProject } from '../../../server/lib/musicVideo/musicVideoSummary.js';

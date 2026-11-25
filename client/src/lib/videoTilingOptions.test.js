@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { VIDEO_TILING_OPTIONS, normalizeVideoTiling } from './videoTilingOptions';
 import { VIDEO_TILING_MODES } from '../../../server/lib/videoTiling.js';
