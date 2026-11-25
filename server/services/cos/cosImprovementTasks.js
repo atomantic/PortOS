@@ -657,6 +657,7 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
       ignoreTaskId,
       targetPullRequest,
       onDemand: selectionReason === 'on-demand',
+      onDemandOrigin: stolenRequest?.origin ?? null,
       runOverrides: stolenRunOverrides,
       providerOverride: stolenRequest?.providerOverride ?? null,
       // The deterministic pre-agent work (pr-reviewer's security preflight)

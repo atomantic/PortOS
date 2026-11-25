@@ -229,6 +229,31 @@ describe('pr-reviewer model-abuse preflight', () => {
     expect(result.prs[0].linkedIssues).toEqual([])
   })
 
+  it('supplies deterministic feedback on an uncertain targeted patch without blocking a passed scan', async () => {
+    const diff = [
+      'diff --git a/src/page.jsx b/src/page.jsx',
+      '--- a/src/page.jsx',
+      '+++ b/src/page.jsx',
+      '@@ -7,0 +7,5 @@',
+      '+<<<<<<< HEAD',
+      '+<main />',
+      '+=======',
+      '+<section />',
+      '+>>>>>>> branch',
+    ].join('\n')
+    routeGh({ prs: [listedPr(12, 'contributor-a', 'b'.repeat(40))], diffs: { 12: diff } })
+    runModelAbuseScanMock.mockResolvedValue({ ok: false, code: 'security-model-uncertain' })
+
+    expect(await runPrReviewerSecurityScan({ app, detectPatchDefects: true }))
+      .toEqual({ ok: false, passed: false, code: 'patch-conflict-markers' })
+    expect(await runPrReviewerSecurityScan({ app }))
+      .toMatchObject({ ok: false, code: 'security-model-uncertain' })
+    runModelAbuseScanMock.mockResolvedValue(guardVerdict())
+    expect(await runPrReviewerSecurityScan({ app, detectPatchDefects: true }))
+      .toMatchObject({ ok: true, passed: true })
+    expect(runModelAbuseScanMock).toHaveBeenCalledTimes(3)
+  })
+
   it('fails the scan closed when a PR commit log cannot be read', async () => {
     // Commit messages are screened content. Screening a PR whose log failed to
     // load would hand the guard a PR that looks commit-free and let anything

@@ -219,8 +219,9 @@ async function findActiveSecurityScanTask(appId, scanKey) {
  * sandbox, and the generic agent resolver rejects API providers anyway.
  *
  * External contributor PRs are held for human approval before the stage that
- * can review, comment, or merge. The preflight itself remains read-only and
- * does not checkout or execute any contributor branch.
+ * can review, comment, or merge. Only a manual targeted run may publish a
+ * fixed, comment-only review of independently verified conflict-marker text.
+ * No contribution branch is checked out or executed.
  *
  * `targetPullRequest` narrows the run to ONE open PR — the per-row "Review this
  * PR" trigger on an app's PRs / MRs tab. The narrowing happens BEFORE the
@@ -229,7 +230,7 @@ async function findActiveSecurityScanTask(appId, scanKey) {
  * hook's strict envelope check) is scoped to that one PR by construction rather
  * than by a prompt asking the agent to ignore the rest.
  */
-export async function runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest = null, taskSchedule = null, { progress = null } = {}) {
+export async function runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest = null, taskSchedule = null, { progress = null, allowPatchFeedback = false } = {}) {
   if (taskType !== 'pr-reviewer') return { skipped: false };
 
   // Report the deterministic phase into the user's task card as it happens, so
@@ -322,7 +323,23 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
     app,
     target,
     largeInputFallback: securityStage.largeInputFallback,
+    ...(allowPatchFeedback && targetPullRequest ? { detectPatchDefects: true } : {}),
   });
+  if (scan.code === 'patch-conflict-markers' && allowPatchFeedback && targetPullRequest) {
+    const { publishConflictReview } = await import('./prConflictReview.js');
+    const outcome = await publishConflictReview({ app, target, pr: target.prs[0] });
+    const detail = {
+      posted: 'Posted a comment review about conflict-marker lines. No agent started.',
+      'already-posted': 'A comment review already reports conflict-marker lines on this revision. No agent started.',
+      changed: 'The PR changed before the conflict feedback could be posted. Review the current revision again.',
+      unavailable: 'Found conflict-marker lines, but could not confirm publication. Check the PR reviews before retrying.',
+      'in-flight': 'A conflict feedback submission for this revision is already in progress.',
+    }[outcome] || 'Conflict feedback could not be confirmed. Check the PR reviews before retrying.';
+    const delivered = outcome === 'posted' || outcome === 'already-posted';
+    await step('security-scan', { status: 'done', detail });
+    emitLog(delivered ? 'info' : 'warn', `PR #${targetPullRequest}: ${detail}`, { appId: app.id, analysisType: taskType });
+    return { skipped: true, reason: 'patch-conflict-markers', patchFeedback: { delivered, detail } };
+  }
   if (!scan.ok) {
     const { reportReviewInfrastructureFailure } = await import('./reviewInfrastructureFailure.js');
     await reportReviewInfrastructureFailure({ code: scan.code, task: { metadata: { app: app.id } } }).catch(() => {});

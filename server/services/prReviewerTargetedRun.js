@@ -71,11 +71,16 @@ export function reviewActionFor(pullRequest, tasks, requests, appId) {
   if (task) return { taskId: task.id, status: task.status };
   const queued = requests?.find(request => isReviewRequestFor(request, appId, pullRequest));
   if (queued) return { taskId: null, status: 'pending' };
-  const failure = tasks?.findLast(candidate => candidate.status === 'completed'
+  const finished = tasks?.findLast(candidate => candidate.status === 'completed'
     && candidate.metadata?.analysisType === PR_REVIEWER_TASK_TYPE
     && candidate.metadata?.app === appId
     && Number(candidate.metadata?.targetPullRequest) === pullRequest.number);
-  return failure?.metadata?.preflightFailure ? { taskId: failure.id, status: 'failed', error: failure.metadata.note } : null;
+  const preflight = finished?.metadata?.preflight;
+  if (preflight?.outcome === 'programmatic' && preflight.reason === 'patch-conflict-markers') {
+    return { taskId: finished.id, status: 'feedback', error: preflight.note };
+  }
+  const failureReason = finished?.metadata?.preflightFailure;
+  return failureReason ? { taskId: finished.id, status: 'failed', failureReason, error: finished.metadata.note } : null;
 }
 
 /**
@@ -123,7 +128,7 @@ export async function queueTargetedPrReview(app, number, { provider, model, effo
     });
   }
   const existing = reviewActionFor({ number }, tasks, requests, app.id);
-  if (existing && existing.status !== 'failed') return { duplicate: true, reviewAction: existing };
+  if (ACTIVE_TASK_STATUSES.has(existing?.status)) return { duplicate: true, reviewAction: existing };
 
   const request = await triggerOnDemandTask(PR_REVIEWER_TASK_TYPE, app.id, {
     targetPullRequest: number,

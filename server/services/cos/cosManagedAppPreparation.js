@@ -40,7 +40,8 @@ import {
   resolveReferenceWatchBlock,
   resolveRepoSyncBlock,
 } from './cosTaskPreStepBlocks.js';
-import { recordPreflightOutcome, preflightReporter } from '../preflightTaskCard.js';
+import { recordPreflightOutcome, preflightReporter, finishPreflightCard } from '../preflightTaskCard.js';
+import { ON_DEMAND_ORIGINS } from '../taskScheduleConstants.js';
 import { applyPerpetualWorkGate } from './cosPerpetualDrain.js';
 import { applyPlanIdMetadata } from './cosPlanBinding.js';
 import {
@@ -309,6 +310,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // maintenance step), whichever lane picked it up. Exempts it from the
   // scheduled lane's audit-applicability gate.
   onDemand = false,
+  onDemandOrigin = null,
   targetPullRequest = null,
   // Per-request provider/model/effort pin — see applyProviderModelPins.
   providerOverride = null,
@@ -396,9 +398,22 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   initializePipelineMetadata(metadata);
   const securityPreflight = await runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest, taskSchedule, {
     progress: preflightReporter(preflightCardId),
+    // Scope new public feedback to a proven operator request, not a schedule,
+    // automatic notification, or older recovered request with no provenance.
+    ...(onDemandOrigin === ON_DEMAND_ORIGINS.USER && onDemand && targetPullRequest
+      ? { allowPatchFeedback: true } : {}),
   });
   // The preflight's reason rides the skip result to emitOnDemandEmpty, so a user
   // "Run" of pr-reviewer that hits the security guard toasts WHY.
+  if (securityPreflight.patchFeedback) {
+    const { delivered, detail } = securityPreflight.patchFeedback;
+    await finishPreflightCard(preflightCardId, {
+      outcome: delivered ? 'programmatic' : 'failed',
+      reason: securityPreflight.reason,
+      note: detail,
+    });
+    return skipped('security-preflight', { reason: delivered ? 'patch-feedback-delivered' : detail });
+  }
   if (securityPreflight.skipped) return skipped('security-preflight', { reason: securityPreflight.reason || null });
   if (!skipPreconditions && shouldSkipForPrecondition(metadata, app, taskType)) return skipped('precondition');
 
