@@ -157,7 +157,7 @@ The selected work is split across parallel jobs:
   to be a shard-1 step on the client job. Steps within a job run sequentially, so
   that put ~31 s of Biome in front of the slowest shard's tests rather than beside
   them, and it meant a lint-only diff started a whole client test job. It was
-  **not** what made shard 1 flaky — see "Client suite time budgets" below. It
+  **not** what made shard 1 flaky — see [Client suite time budgets](CI_TEST_SELECTION.md#client-suite-time-budgets). It
   cannot move to a later shard instead: a scoped plan emits `client_shards: [1]`,
   so a second-shard pin would skip lint on every scoped pull request. It shares
   `Cache client node_modules` with the client job, so on a hit it pays no install.
@@ -191,7 +191,7 @@ The selected work is split across parallel jobs:
   submission, cmd/PowerShell behavior, process settlement and filesystem/path
   compatibility. Relevant source/tooling changes and explicit full validation
   select it. Application import graphs and platform-neutral product suites stay
-  on the primary jobs; see "Windows native contract coverage" below.
+  on the primary jobs; see [Windows native contract coverage](CI_NATIVE_JOBS.md#windows-native-contract-coverage).
 
 - **Node minimum compatibility** — installs every workspace and runs the
   runtime gate on the oldest supported Node. On a pull request it runs only
@@ -224,7 +224,7 @@ The selected work is split across parallel jobs:
 - **macOS native release-agent supervision** — runs the launchd-coalition
   release-agent suites on `macos-latest`. It is part of `CI Gate` and runs on a
   pull request only when the `macos_native` plan key is true; see
-  "macOS native release-agent supervision" below.
+  [macOS native release-agent supervision](CI_NATIVE_JOBS.md#macos-native-release-agent-supervision).
 - **SuperCollider native containment** — builds `docker/supercollider/`, runs
   `npm run setup:supercollider` twice and executes the opt-in live suite
   (`server/services/superColliderRender.live.test.js`) against real Docker on
@@ -245,8 +245,8 @@ The selected work is split across parallel jobs:
   selected job failed or was cancelled. Both block, but the message distinguishes
   them: `scripts/ci-gate-report.js` says *cancelled, not failed* and names the
   cancelled jobs when nothing actually failed — as far as the gate job itself
-  runs, which a run-wide cancel prevents. See "External cancellation and one
-  automatic retry" below. A job the planner skipped
+  runs, which a run-wide cancel prevents. See [External cancellation and one
+  automatic retry](CI_NATIVE_JOBS.md#external-cancellation-and-one-automatic-retry). A job the planner skipped
   counts as passing here; the impact summary and `suite_reasons` say which
   ones, and why.
 - **Full CI Gate** — published only when the plan chose the complete suite and
