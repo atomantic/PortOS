@@ -4,12 +4,19 @@ How CI selects, partitions and sizes the test suites. Split out of [GITHUB_ACTIO
 
 ## Browser workload partition
 
-The browser job uses two runners. Each receives the complete planner selection
-and `CI_SHARD`; the runner assigns files by alternating the canonical
-`BROWSER_SUITES` registry before subtracting any memo entries. Scoped selections
-keep those same owners. This separates the long document-rendering and HTML
-composition suites, which the generic Vitest hash partition clustered together.
-Unknown browser selectors fail rather than being dropped.
+The browser job uses one runner for one selected suite, two for two or three,
+and four for four or more. Each runner receives the complete planner selection
+and `CI_SHARD`. For a given shard count and profile, the registry pins suite
+owners before subtracting memo hits. The two-runner smoke profile moves GPU
+film look away from animatic capture. With four runners, both profiles separate
+those suites through the shared ownership table. Unknown browser selectors fail
+rather than being dropped.
+
+The four-runner layout spreads the expensive memo misses from hosted run
+45642241181. That run's fastest runner skipped its only suite, while the
+slowest ran template parity, production review and animatic capture. A cold
+run has a different floor. In uncached run 45038139135, document render and
+HTML composition each exceeded 115 seconds by themselves.
 
 Each shard retains the full selected browser profile, the quiet capture project,
 normal motion, fidelity assertions, process containment and the existing
