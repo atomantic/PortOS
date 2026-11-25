@@ -3,6 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BoxGeometry, Group, Mesh, MeshStandardMaterial } from 'three';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { withThreeSceneDom } from '../../test/threeSceneDom';
+
+const sceneHostTypes = vi.hoisted(() => ['ambientLight', 'directionalLight']);
+vi.mock('react/jsx-runtime', async (importOriginal) => withThreeSceneDom(await importOriginal(), sceneHostTypes));
+vi.mock('react/jsx-dev-runtime', async (importOriginal) => withThreeSceneDom(await importOriginal(), sceneHostTypes));
 
 // The three.js stack can't run in jsdom (no WebGL context) and none of it is
 // under test here — this file covers the chrome AROUND the canvas (the download

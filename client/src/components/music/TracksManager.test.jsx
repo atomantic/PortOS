@@ -74,6 +74,7 @@ function LocationDisplay() {
 const renderAt = (id) => render(
   <MemoryRouter initialEntries={[`/music/tracks/${id}`]}>
     <Routes>
+      <Route path="/music/tracks" element={<LocationDisplay />} />
       <Route path="/music/tracks/:id" element={<TracksManager />} />
       <Route path="/music/generate/:step" element={<LocationDisplay />} />
       <Route path="/media/video" element={<LocationDisplay />} />
@@ -394,6 +395,7 @@ describe('<TracksManager> delete confirm + save wiring', () => {
 
     expect(deleteTrack).toHaveBeenCalledTimes(1);
     expect(deleteTrack).toHaveBeenCalledWith('track-1', { silent: true });
+    expect(await screen.findByTestId('location')).toHaveTextContent(/^\/music\/tracks$/);
   });
 
   it('disarms on Cancel without ever calling deleteTrack', async () => {

@@ -102,7 +102,7 @@ describe('AutopilotPanel', () => {
     await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
     await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalled());
-    sseLatest = { type: 'complete', runId: 'dry1', dryRun: true, plan: [{ label: 'plan-step-a' }] };
+    sseLatest = { type: 'complete', runId: 'dry1', dryRun: true, plan: [{ kind: 'verifyArc', count: 1 }] };
     sseFrames = [sseLatest];
     rerenderSeries(view, 'sA');
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Autopilot plan ready'));

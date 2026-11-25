@@ -354,7 +354,7 @@ describe('AiAssignmentsTab assignment management', () => {
   // land in the catch-all group rather than vanish, or a rotted pin becomes
   // unreachable from the one control that could retarget it.
   it('still offers an assigned provider the install no longer carries', async () => {
-    getAiAssignments.mockResolvedValue(payload([entry({ providerId: 'retired-provider', model: 'old-model' })]));
+    getAiAssignments.mockResolvedValue(payload([entry({ id: 'settings.creativeDirector.plan', providerId: 'retired-provider', model: 'old-model' })]));
     renderTab();
 
     const from = await screen.findByLabelText('Replace from provider');

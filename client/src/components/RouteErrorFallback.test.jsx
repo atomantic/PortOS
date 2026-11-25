@@ -14,6 +14,7 @@ const renderRouteError = async (error) => {
   const router = createMemoryRouter([
     {
       path: '/',
+      hydrateFallbackElement: <div>Loading page</div>,
       errorElement: <RouteErrorFallback />,
       element: <Outlet />,
       children: [

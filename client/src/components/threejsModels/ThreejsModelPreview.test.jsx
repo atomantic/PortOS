@@ -1,6 +1,11 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { withThreeSceneDom } from '../../test/threeSceneDom';
+
+const sceneHostTypes = vi.hoisted(() => ['group', 'mesh', 'primitive', 'boxGeometry', 'sphereGeometry', 'cylinderGeometry', 'coneGeometry', 'torusGeometry', 'capsuleGeometry', 'latheGeometry', 'meshNormalMaterial', 'meshBasicMaterial', 'meshStandardMaterial', 'meshPhysicalMaterial', 'ambientLight', 'hemisphereLight', 'pointLight', 'spotLight', 'directionalLight', 'color', 'gridHelper']);
+vi.mock('react/jsx-runtime', async (importOriginal) => withThreeSceneDom(await importOriginal(), sceneHostTypes));
+vi.mock('react/jsx-dev-runtime', async (importOriginal) => withThreeSceneDom(await importOriginal(), sceneHostTypes));
 
 // The preview reads the live renderer and scene off the r3f context to install a
 // PMREM environment. There is no GL context under jsdom, so the stand-ins below
@@ -65,9 +70,7 @@ vi.mock('@react-three/drei', () => ({
   OrbitControls: () => null,
 }));
 
-// r3f object props stringify to "[object Object]" under the DOM renderer, so the
-// only way to see WHICH geometry the preview attached is to record it as the real
-// builder hands it back.
+// Capture the actual geometry returned by the builder alongside its scene attachment.
 const built = vi.hoisted(() => []);
 vi.mock('../../lib/threejsSculpt', async (importOriginal) => {
   const actual = await importOriginal();
@@ -137,7 +140,7 @@ const LocationProbe = () => <output data-testid="location-probe">{useLocation().
 
 const box = { type: 'box', width: 1, height: 1, depth: 1 };
 const positionOf = (container, name) =>
-  container.querySelector(`group[name="${name}"]`).getAttribute('position').split(',').map(Number);
+  container.querySelector(`[data-three="group"][data-name="${name}"]`).getAttribute('data-position').split(',').map(Number);
 const setExplode = (value) => fireEvent.change(screen.getByLabelText('Explode'), { target: { value: String(value) } });
 
 describe('ThreejsModelPreview', () => {
@@ -235,7 +238,7 @@ describe('ThreejsModelPreview', () => {
       ],
     }} />);
 
-    expect(container.querySelectorAll('primitive[attach="geometry"]')).toHaveLength(2);
+    expect(container.querySelectorAll('[data-three="primitive"][data-attach="geometry"]')).toHaveLength(2);
     expect(built.map((geometry) => geometry.type)).toEqual(['ExtrudeGeometry', 'TubeGeometry']);
     expect(built.every((geometry) => geometry.getAttribute('position').count > 0)).toBe(true);
   });
@@ -253,17 +256,17 @@ describe('ThreejsModelPreview', () => {
       ],
     }} />);
 
-    const physical = container.querySelector('meshPhysicalMaterial');
-    expect(physical.getAttribute('ior')).toBe('1.45');
-    expect(physical.getAttribute('transmission')).toBe('0.8');
-    expect(physical.getAttribute('thickness')).toBe('0.6');
-    expect(physical.getAttribute('sheen')).toBe('0.3');
-    expect(physical.getAttribute('iridescence')).toBe('0.7');
-    expect(physical.getAttribute('anisotropy')).toBe('0.9');
+    const physical = container.querySelector('[data-three="meshPhysicalMaterial"]');
+    expect(physical.getAttribute('data-ior')).toBe('1.45');
+    expect(physical.getAttribute('data-transmission')).toBe('0.8');
+    expect(physical.getAttribute('data-thickness')).toBe('0.6');
+    expect(physical.getAttribute('data-sheen')).toBe('0.3');
+    expect(physical.getAttribute('data-iridescence')).toBe('0.7');
+    expect(physical.getAttribute('data-anisotropy')).toBe('0.9');
 
-    const standard = container.querySelector('meshStandardMaterial');
-    expect(standard.getAttribute('ior')).toBeNull();
-    expect(standard.getAttribute('transmission')).toBeNull();
+    const standard = container.querySelector('[data-three="meshStandardMaterial"]');
+    expect(standard.getAttribute('data-ior')).toBeNull();
+    expect(standard.getAttribute('data-transmission')).toBeNull();
   });
 });
 
@@ -278,7 +281,7 @@ describe('ThreejsModelPreview environment', () => {
     parts: [part('shell', box, 'chrome')],
   });
   const intensityOf = (container) =>
-    container.querySelector('meshStandardMaterial').getAttribute('envMapIntensity');
+    container.querySelector('[data-three="meshStandardMaterial"]').getAttribute('data-envmapintensity');
 
   beforeEach(() => {
     environmentBuilds.length = 0;
@@ -397,16 +400,16 @@ describe('ThreejsModelPreview disassembly', () => {
 
     expect(screen.queryByRole('button', { name: 'Clear part selection' })).not.toBeInTheDocument();
 
-    fireEvent.click(container.querySelector('group[name="Serrations"] mesh'));
+    fireEvent.click(container.querySelector('[data-three="group"][data-name="Serrations"] [data-three="mesh"]'));
 
     // The sliver is not the answer — the blade it rides is.
     expect(screen.getByText('Blade')).toBeInTheDocument();
     expect(screen.getByText('blade')).toBeInTheDocument();
 
-    const highlighted = container.querySelectorAll('meshStandardMaterial[emissive="#38bdf8"]');
+    const highlighted = container.querySelectorAll('[data-three="meshStandardMaterial"][data-emissive="#38bdf8"]');
     // Blade + its relief light up together; the handle stays as authored.
     expect(highlighted).toHaveLength(2);
-    expect(container.querySelector('group[name="Handle"] meshStandardMaterial').getAttribute('emissive')).toBe('#000000');
+    expect(container.querySelector('[data-three="group"][data-name="Handle"] [data-three="meshStandardMaterial"]').getAttribute('data-emissive')).toBe('#000000');
   });
 
   it('moves a container-with-geometry\'s own shell without dragging its child part', () => {
@@ -423,20 +426,20 @@ describe('ThreejsModelPreview disassembly', () => {
     }} />);
 
     // Assembled: the body's group sits at the origin and its shell is not offset.
-    expect(container.querySelector('group[name="Body"] > group:not([name])')).toBeNull();
+    expect(container.querySelector('[data-three="group"][data-name="Body"] > [data-three="group"]:not([data-name])')).toBeNull();
 
     setExplode(1);
 
     // The body's GROUP must not move — that would carry the trim with it and
     // separate nothing. Its shell moves inside an offset group instead.
     expect(positionOf(container, 'Body')).toEqual([0, 0, 0]);
-    const shell = container.querySelector('group[name="Body"] > group:not([name])');
-    expect(shell.getAttribute('position').split(',').map(Number).some((value) => value !== 0)).toBe(true);
-    expect(shell.querySelector('mesh')).not.toBeNull();
+    const shell = container.querySelector('[data-three="group"][data-name="Body"] > [data-three="group"]:not([data-name])');
+    expect(shell.getAttribute('data-position').split(',').map(Number).some((value) => value !== 0)).toBe(true);
+    expect(shell.querySelector('[data-three="mesh"]')).not.toBeNull();
     // The shell's own engraving rides INSIDE that offset group — its authored
     // transform is untouched; it moves only because its wrapper does. Hoist it
     // out and the body separates from its own surface detail.
-    expect(container.querySelector('group[name="Body"] > group:not([name]) > group[name="Engraving"]')).not.toBeNull();
+    expect(container.querySelector('[data-three="group"][data-name="Body"] > [data-three="group"]:not([data-name]) > [data-three="group"][data-name="Engraving"]')).not.toBeNull();
     expect(positionOf(container, 'Engraving')).toEqual([0, 0.5, 0]);
     // And the trim moves on its own.
     expect(positionOf(container, 'Trim')).not.toEqual([0, 0, 1]);
@@ -445,7 +448,7 @@ describe('ThreejsModelPreview disassembly', () => {
   it('keeps the picked part in the URL so it survives a reload and a stale id degrades', () => {
     const { container, unmount } = renderPreview(<ThreejsModelPreview spec={knifeSpec()} />, '/?part=handle');
     expect(screen.getByText('Handle')).toBeInTheDocument();
-    expect(container.querySelectorAll('meshStandardMaterial[emissive="#38bdf8"]')).toHaveLength(1);
+    expect(container.querySelectorAll('[data-three="meshStandardMaterial"][data-emissive="#38bdf8"]')).toHaveLength(1);
     unmount();
 
     // A link to a part this model no longer has must not render an empty label.
@@ -456,12 +459,12 @@ describe('ThreejsModelPreview disassembly', () => {
   it('selects a plain part on its own and clears the selection', () => {
     const { container } = renderPreview(<ThreejsModelPreview spec={knifeSpec()} />);
 
-    fireEvent.click(container.querySelector('group[name="Handle"] mesh'));
+    fireEvent.click(container.querySelector('[data-three="group"][data-name="Handle"] [data-three="mesh"]'));
     expect(screen.getByText('Handle')).toBeInTheDocument();
-    expect(container.querySelectorAll('meshStandardMaterial[emissive="#38bdf8"]')).toHaveLength(1);
+    expect(container.querySelectorAll('[data-three="meshStandardMaterial"][data-emissive="#38bdf8"]')).toHaveLength(1);
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear part selection' }));
-    expect(container.querySelectorAll('meshStandardMaterial[emissive="#38bdf8"]')).toHaveLength(0);
+    expect(container.querySelectorAll('[data-three="meshStandardMaterial"][data-emissive="#38bdf8"]')).toHaveLength(0);
   });
 });
 
@@ -503,16 +506,16 @@ describe('ThreejsModelPreview articulation status', () => {
   it('names the joint driving a picked part, and the fact when it has no pivot', () => {
     const { container } = renderPreview(<ThreejsModelPreview spec={articulatedKnifeSpec()} />);
 
-    fireEvent.click(container.querySelector('group[name="Blade"] mesh'));
+    fireEvent.click(container.querySelector('[data-three="group"][data-name="Blade"] [data-three="mesh"]'));
     expect(screen.getByText('joint bladeJoint · pivot bladePivot')).toBeInTheDocument();
 
-    fireEvent.click(container.querySelector('group[name="Handle"] mesh'));
+    fireEvent.click(container.querySelector('[data-three="group"][data-name="Handle"] [data-three="mesh"]'));
     expect(screen.getByText('joint rootJoint · no pivot')).toBeInTheDocument();
   });
 
   it('renders a legacy spec with no articulation key without crashing the picker', () => {
     const { container } = renderPreview(<ThreejsModelPreview spec={knifeSpec()} />);
-    fireEvent.click(container.querySelector('group[name="Handle"] mesh'));
+    fireEvent.click(container.querySelector('[data-three="group"][data-name="Handle"] [data-three="mesh"]'));
     expect(screen.getByText('Handle')).toBeInTheDocument();
     expect(screen.queryByText(/^joint /)).not.toBeInTheDocument();
   });
@@ -575,7 +578,7 @@ const clipSpec = () => ({
 
 const scrub = (value) => fireEvent.change(screen.getByLabelText('Time'), { target: { value: String(value) } });
 const opacityOf = (container, name) =>
-  container.querySelector(`group[name="${name}"] meshStandardMaterial`).getAttribute('opacity');
+  container.querySelector(`[data-three="group"][data-name="${name}"] [data-three="meshStandardMaterial"]`).getAttribute('data-opacity');
 
 describe('ThreejsModelPreview clips', () => {
   let frames = [];
@@ -725,11 +728,11 @@ describe('ThreejsModelPreview clips', () => {
     expect(positionOf(container, 'Blade')).toEqual([-1, 2, 0]);
     expect(screen.getByText('Showing Blade and Handle')).toBeInTheDocument();
     // The blade's relief rides it, so the two named parts light three meshes.
-    expect(container.querySelectorAll('meshStandardMaterial[emissive="#38bdf8"]')).toHaveLength(3);
+    expect(container.querySelectorAll('[data-three="meshStandardMaterial"][data-emissive="#38bdf8"]')).toHaveLength(3);
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear highlighted parts' }));
     expect(screen.getByTestId('location-probe')).not.toHaveTextContent('highlight');
-    expect(container.querySelectorAll('meshStandardMaterial[emissive="#38bdf8"]')).toHaveLength(0);
+    expect(container.querySelectorAll('[data-three="meshStandardMaterial"][data-emissive="#38bdf8"]')).toHaveLength(0);
   });
 
   it('seeks again when the same moment is requested after scrubbing away, and clamps to the clip', () => {
@@ -771,7 +774,7 @@ describe('ThreejsModelPreview clips', () => {
     expect(bladeY).toBe(4);
     expect(bladeX).toBeCloseTo(-2.18, 6);
 
-    fireEvent.click(container.querySelector('group[name="Blade"] mesh'));
+    fireEvent.click(container.querySelector('[data-three="group"][data-name="Blade"] [data-three="mesh"]'));
     expect(screen.getByText('Blade')).toBeInTheDocument();
   });
 });
