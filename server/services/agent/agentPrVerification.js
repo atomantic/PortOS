@@ -1,5 +1,5 @@
 
-import { PR_COMPLETIONS, PR_MISSING_CATEGORY, } from '../../lib/prDisposition.js';
+import { agentPrHeldForOperator, PR_COMPLETIONS, PR_MISSING_CATEGORY, } from '../../lib/prDisposition.js';
 import { execGit } from '../../lib/execGit.js';
 import { resolveTaskHookType, } from '../taskTypeHooks.js';
 import { issueNumberFromRef } from '../issueReconcile.js';
@@ -358,8 +358,12 @@ export async function observePrClaim({ task, workspacePath, success, prExpected,
       return prObservation(PR_OBSERVATION.INVALID_DISPOSITION, { branch,
         message: `This run requires an open draft ${noun}; the forge did not confirm that disposition for ${branch}` });
     }
+    const claim = { branch, url: found.url };
+    if (String(found.detail).toUpperCase() === 'MERGED' && found.sameRepository === true && found.headBranch === branch) {
+      claim.merge = { head: found.headRefOid, base: found.baseBranch, at: found.mergedAt, cli };
+    }
     const issueNumber = issueNumberFromRef(branch);
-    if (issueNumber === null) return prObservation(PR_OBSERVATION.VERIFIED_CLAIM, { branch, url: found.url });
+    if (issueNumber === null) return prObservation(PR_OBSERVATION.VERIFIED_CLAIM, claim);
     if (typeof found.body !== 'string') {
       // An unreadable body cannot distinguish a missing trailer from a present
       // one, so it is a forge failure, never the agent's.
@@ -369,10 +373,10 @@ export async function observePrClaim({ task, workspacePath, success, prExpected,
         inconclusive: true,
       });
     }
-    if (hasIssueClosingTrailer(found.body, issueNumber)) return prObservation(PR_OBSERVATION.VERIFIED_CLAIM, { branch, url: found.url });
+    if (hasIssueClosingTrailer(found.body, issueNumber)) return prObservation(PR_OBSERVATION.VERIFIED_CLAIM, claim);
     if (hasIssuePartialTrailer(found.body, issueNumber)) {
       return prObservation(PR_OBSERVATION.VERIFIED_CLAIM, {
-        branch, url: found.url,
+        ...claim,
         advisory: `${titleNoun} for branch ${branch} partially ships issue #${issueNumber}; reconcile the remaining scope after merge.`,
       });
     }
@@ -428,6 +432,52 @@ export async function observePrClaim({ task, workspacePath, success, prExpected,
     message: `Could not confirm a ${noun} for branch ${branch} — the forge is unreachable${found.detail ? ` (${String(found.detail).split('\n')[0].slice(0, 120)})` : ''}`,
     inconclusive: true,
   });
+}
+
+/** Only the registered task's own published head can replace an unreadable
+ * run-window count. Other delivery gates and the normal PR-creation backstop
+ * still own their respective verdicts. */
+export async function verifyRunMergedPr({ agent, task, workspacePath, startedAt, observation }) {
+  const meta = agent?.metadata;
+  const { PR_OPENED_BY } = await import('../../lib/slashdoInvocation.js');
+  if (agent?.taskId !== task.id || !meta?.isWorktree || !meta.configOpenPR
+    || ![PR_OPENED_BY.AGENT_INLINE, PR_OPENED_BY.AGENT_SLASHDO].includes(meta.prOpenedBy)
+    || agentPrHeldForOperator(agent, task) || !meta.worktreeBranch || !meta.sourceWorkspace
+    || meta.workspacePath !== workspacePath || meta.sourceWorkspace === workspacePath) return 'The run has no matching assigned PR checkout.';
+
+  // Inline publishers may skip the primary claim check. Reuse any actual
+  // observation, including a refusal, and ask only when the check was skipped.
+  const claim = observation?.outcome === PR_OBSERVATION.SKIPPED
+    ? await observePrClaim({ task, workspacePath, success: true, prExpected: true }) : observation;
+  if (!claim || claim.inconclusive || claim.outcome === PR_OBSERVATION.CHECK_THREW) return 'The assigned PR could not be verified.';
+  const merge = claim.merge;
+  if (!merge || claim.branch !== meta.worktreeBranch || !(Date.parse(merge.at) >= startedAt)) {
+    return 'No merge of the assigned branch was verified during this run.';
+  }
+  const { parsePullRequestUrl } = await import('../../lib/gitForge.js');
+  const { repoIssueUrlBase } = await import('../../lib/workTracker.js');
+  const pr = parsePullRequestUrl(claim.url);
+  const repository = pr && repoIssueUrlBase({ forge: merge.cli === 'glab' ? 'gitlab' : 'github',
+    webHost: pr.host, fullName: `${pr.owner}/${pr.repo}` });
+  const assignedUrl = meta.reviewLoopMergeTarget?.url || meta.recoveryMergeTarget?.url || task.metadata?.prRemediationUrl;
+  if (!repository || repository !== meta.repoIssueUrl || (assignedUrl && assignedUrl !== claim.url)) {
+    return 'The merged PR does not match the assigned repository or PR.';
+  }
+  const { getDefaultBranch } = await import('../git/status.js');
+  const base = meta.worktreeBaseBranch || await getDefaultBranch(meta.sourceWorkspace, { allowRemote: false, strict: true });
+  if (!base || merge.base !== base) return 'The merged PR target does not match the assigned base branch.';
+
+  const { listWorktrees, readWorktreeStatus } = await import('../worktree/status.js');
+  const { pathsEqual } = await import('../worktree/paths.js');
+  const [trees, status] = await Promise.all([listWorktrees(meta.sourceWorkspace), readWorktreeStatus(workspacePath)]);
+  const tree = trees.find(entry => pathsEqual(entry.path, workspacePath));
+  if (!tree || tree.prunable || tree.branch !== `refs/heads/${meta.worktreeBranch}` || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(tree.head)
+    || tree.head !== merge.head) return 'The assigned checkout head does not match the merged PR head.';
+  const { doneSentinelName } = await import('../../lib/agent/agentSentinel.js');
+  if (status === null || status.split(/\r?\n/).some(line => line && line !== `?? ${doneSentinelName(agent.id)}`)) {
+    return 'The assigned checkout could not be verified free of unpublished changes.';
+  }
+  return null;
 }
 
 /**

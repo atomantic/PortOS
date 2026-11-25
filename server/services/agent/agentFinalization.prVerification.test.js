@@ -19,6 +19,9 @@ vi.mock('../codeReview.js', async (importOriginal) => ({
 }));
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const execGitMock = vi.fn();
 vi.mock('../../lib/execGit.js', () => ({
@@ -79,7 +82,8 @@ const resolveFailedTaskUpdateMock = vi.fn(async (_task, analysis) => ({
   status: 'pending',
   metadata: { lastErrorCategory: analysis?.category || null },
 }));
-vi.mock('./agentErrorAnalysis.js', () => ({
+vi.mock('./agentErrorAnalysis.js', async importOriginal => ({
+  ...await importOriginal(),
   resolveFailedTaskUpdate: (...args) => resolveFailedTaskUpdateMock(...args),
   resolveTypeFailureSignal: vi.fn(() => ({ record: 'skip' })),
 }));
@@ -93,7 +97,8 @@ vi.mock('./agentRunTracking.js', () => ({
   completeAgentRun: (...args) => completeAgentRunMock(...args),
 }));
 
-vi.mock('../taskTypeHooks.js', () => ({
+vi.mock('../taskTypeHooks.js', async importOriginal => ({
+  ...await importOriginal(),
   isProgrammaticIoTaskType: vi.fn(() => false),
   resolveTaskHookType: vi.fn(() => null),
   declaresNoCommitCriterion: vi.fn(() => false),
@@ -114,6 +119,9 @@ vi.mock('./agentSummaryExtraction.js', () => ({
   extractFinalSummary: vi.fn(() => summaryText),
 }));
 
+import { getAgentRecord } from '../cos/cosAgentLifecycle.js';
+import { committedDuringRun } from '../../lib/gitCommitProbe.js';
+import { createTuiSessionController } from '../agentTuiSpawning/sessionController.js';
 import { resolveTaskHookType } from "../taskTypeHooks.js";
 import { finalizeAgent } from './agentFinalization.js';
 import {
@@ -506,6 +514,75 @@ describe('finalizeAgent — a PR-shaped run with no PR is not a success (#3358)'
     workspacePath: '/w',
     prExpected: true,
     ...overrides,
+  });
+
+  it.each([
+    ['inline merge', true], ['slashdo merge', true], ['forge unavailable', false], ['open PR', false],
+    ['wrong repo', false], ['fork branch', false], ['wrong base', false], ['wrong branch', false],
+    ['stale merge', false], ['no-change eligible investigation', true], ['budget exhausted', false], ['unpublished commit', false], ['dirty checkout', false], ['zero commits', false],
+  ])('settles the runner-owned investigation with %s and preserves its retry budget', async (scenario, delivered) => {
+    const cwd = await mkdtemp(join(tmpdir(), 'investigation-'));
+    const branch = 'cos/investigation/agent-1';
+    const head = 'a'.repeat(40);
+    const url = 'https://github.com/example/project/pull/7';
+    const startedAt = Date.now() - 60000;
+    const task = { ...prTask(), metadata: { openPR: true, isInvestigation: true,
+      noChangeSuccess: ['no-change eligible investigation', 'forge unavailable'].includes(scenario),
+      failureCount: 1, totalSpawnCount: scenario === 'budget exhausted' ? 30 : 2 } };
+    const agent = { id: 'agent-1', taskId: task.id, metadata: {
+      worktreeBranch: branch, worktreeBaseBranch: 'main', isWorktree: true, prOpenedBy: scenario === 'slashdo merge' ? 'agent-slashdo' : 'agent-inline',
+      workspacePath: cwd, sourceWorkspace: '/example/source', configOpenPR: true, repoIssueUrl: 'https://github.com/example/project/issues',
+    } };
+    const sentinelName = '.agent-done-agent-1';
+    const sentinelPath = join(cwd, sentinelName);
+    const payload = JSON.stringify({ summary: `Shipped ${url}`, taskOutcome: { status: 'completed', reason: 'Investigation fix shipped.' } });
+    try {
+      await writeFile(sentinelPath, payload);
+      getAgentRecord.mockResolvedValue(agent);
+      committedDuringRun.mockResolvedValueOnce(scenario === 'zero commits' ? false : null);
+      const found = { status: 'found', detail: scenario === 'open PR' ? 'OPEN' : 'MERGED',
+        url: scenario === 'wrong repo' ? url.replace('project', 'other') : url, sameRepository: scenario !== 'fork branch',
+        headBranch: scenario === 'wrong branch' ? 'other' : branch, baseBranch: scenario === 'wrong base' ? 'release' : 'main',
+        headRefOid: head, mergedAt: new Date(scenario === 'stale merge' ? startedAt - 1000 : Date.now()).toISOString() };
+      findPullRequestForBranchMock.mockResolvedValue(['forge unavailable', 'budget exhausted'].includes(scenario) ? { status: 'unavailable' } : found);
+      execGitMock.mockImplementation(async args => {
+        if (args.includes('--abbrev-ref')) return ok(branch);
+        if (args.includes('--show-toplevel')) return ok(cwd);
+        if (args[0] === 'worktree') return ok(`worktree ${cwd}\nHEAD ${scenario === 'unpublished commit' ? 'b'.repeat(40) : head}\nbranch refs/heads/${branch}\n`);
+        if (args[0] === 'status') return ok(scenario === 'dirty checkout' ? ' M src.js\n' : `?? ${sentinelName}\n`);
+        return routeGit(args);
+      });
+      const cleanup = vi.fn(async () => {});
+      const controller = createTuiSessionController({
+        agentId: agent.id, task, cwd, runId: 'run-1', provider: { id: 'example-tui' }, launchShape: 'runner',
+        tuiConfig: { command: 'example', spawnCommand: 'example' },
+        prOwnership: { agentOpensOwnPr: true, prClaimExpected: scenario === 'slashdo merge', prOpenedBy: agent.metadata.prOpenedBy },
+        spooler: { appendLine: vi.fn(), drainLines: async () => {}, drainRaw: async () => {}, getOutputBuffer: () => payload },
+        session: {}, persistence: { readRunRecord: () => ({ startedAt }), releaseRunRecord: vi.fn() },
+        sentinel: { path: sentinelPath, exists: () => true, read: async () => payload },
+        finalization: { finalizeAgent, shouldAbandonRun: () => false, finalizeRunCommon: () => ({ finalSuccess: true }),
+          resolveErrorAnalysis: async () => null, runCompletionCleanup: cleanup },
+      });
+      await controller.finish({ success: true, exitCode: 0, reason: 'agent-signaled-done' });
+      expect(cleanup).toHaveBeenCalledWith(expect.objectContaining({ success: delivered }));
+      expect(completeAgentMock.mock.calls[0][1]).toMatchObject({ success: delivered, executionSuccess: true,
+        validationPassed: delivered, taskOutcome: { status: delivered ? 'completed' : 'incomplete' } });
+      const update = updateTaskMock.mock.calls.at(-1)[1];
+      if (delivered) {
+        expect(update.status).toBe('completed');
+        expect(update.metadata).not.toHaveProperty('retryPendingCleanup');
+        expect(findPullRequestForBranchMock).toHaveBeenCalledTimes(1);
+      } else if (scenario === 'budget exhausted') {
+        expect(update).toMatchObject({ status: 'blocked', metadata: { blockedCategory: 'task-recovery-exhausted', totalSpawnCount: 30 } });
+      } else {
+        expect(update).toMatchObject({ status: 'in_progress', metadata: { retryPendingCleanup: agent.id, failureCount: 2, totalSpawnCount: 2 } });
+        if (scenario === 'forge unavailable') expect(update.metadata.taskOutcome.reason).toMatch(/Git commit count unavailable.*PR could not be verified/);
+        if (scenario === 'zero commits') expect(findPullRequestForBranchMock).not.toHaveBeenCalled();
+      }
+    } finally {
+      getAgentRecord.mockResolvedValue(null);
+      await rm(cwd, { force: true, recursive: true });
+    }
   });
 
   it('records success when the PR exists', async () => {

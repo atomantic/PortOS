@@ -1028,7 +1028,7 @@ export async function ensureForgeReachable(label, { hostname = null, env = null 
 export async function findPullRequestForBranch(branch, { cwd = null, env = null, includeDraft = false } = {}) {
   if (!branch) return { status: 'unavailable', number: null, url: null, detail: 'no branch name' };
   const raw = await execGh(
-    ['pr', 'list', '--head', branch, '--state', 'all', '--limit', '1', '--json', 'number,url,body,state,isDraft,mergedAt,autoMergeRequest,headRefOid,statusCheckRollup'],
+    ['pr', 'list', '--head', branch, '--state', 'all', '--limit', '1', '--json', 'number,url,body,state,isDraft,mergedAt,autoMergeRequest,headRefName,headRefOid,baseRefName,isCrossRepository,statusCheckRollup'],
     DEFAULT_EXEC_GH_TIMEOUT_MS,
     { cwd, env }
   ).catch(err => err);
@@ -1044,7 +1044,14 @@ export async function findPullRequestForBranch(branch, { cwd = null, env = null,
   const pr = parsed[0];
   if (!pr) return { status: 'none', number: null, url: null, detail: null };
   const mergedAt = typeof pr.mergedAt === 'string' && Number.isFinite(Date.parse(pr.mergedAt)) ? pr.mergedAt : null;
-  return { status: 'found', number: pr.number ?? null, url: pr.url || null, body: typeof pr.body === 'string' ? pr.body : null, detail: pr.state || null, headRefOid: typeof pr.headRefOid === 'string' ? pr.headRefOid : null, autoMergeEnabled: hasHealthyAutoMergeRequest(pr), ...(mergedAt ? { mergedAt } : {}), ...(includeDraft ? { isDraft: pr.isDraft === true } : {}) };
+  return {
+    status: 'found',
+    number: pr.number ?? null, url: pr.url || null, body: typeof pr.body === 'string' ? pr.body : null,
+    detail: pr.state || null, headRefOid: typeof pr.headRefOid === 'string' ? pr.headRefOid : null,
+    headBranch: pr.headRefName, baseBranch: pr.baseRefName, sameRepository: pr.isCrossRepository === false,
+    autoMergeEnabled: hasHealthyAutoMergeRequest(pr),
+    ...(mergedAt ? { mergedAt } : {}), ...(includeDraft ? { isDraft: pr.isDraft === true } : {}),
+  };
 }
 
 /**
