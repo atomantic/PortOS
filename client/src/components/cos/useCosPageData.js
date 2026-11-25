@@ -155,6 +155,10 @@ export default function useCosPageData({ activeTab, selectedTask }) {
   const [appsStatus, setAppsStatus] = useState('loading');
   const [loading, setLoading] = useState(true);
   const [agentState, setAgentState] = useState('sleeping');
+  const agentStateRef = useRef(agentState);
+  agentStateRef.current = agentState;
+  const providersLoadedRef = useRef(false);
+  const lastTabRef = useRef(activeTab);
   const [statusReadFailed, setStatusReadFailed] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   // Socket events and manual checks share one visible speaking window. Each
@@ -265,6 +269,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     setProviders(prev => (sameJsonShape(prev, data.providers || []) ? prev : data.providers || []));
     setActiveProviderId(data.activeProvider || null);
     setProvidersLoaded(true);
+    providersLoadedRef.current = true;
     return data;
   }, []);
 
@@ -300,6 +305,24 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     // When running but idle, show as thinking (ready to work)
     return 'thinking';
   }, []);
+
+  // Derive the avatar state and its default message from the newest committed
+  // status, agents and health. Every transition that changes one of those inputs
+  // without a richer message of its own calls this, so no state depends on a tab
+  // switch's full refresh to be corrected.
+  const settleAgentState = useCallback(() => {
+    const liveStatus = statusRef.current;
+    const liveHealth = healthRef.current;
+    const nextState = deriveAgentState(liveStatus, needsRef.current.agents ? agentsRef.current : [], liveHealth);
+    setAgentState(nextState);
+    // Default state message — richer messages come from socket events. The one
+    // state whose default is useless is `investigating`: only a health issue
+    // gets us here, so name it rather than saying "Investigating issue..." next
+    // to an Active count of 0 with no agent to inspect.
+    setStatusMessage(liveStatus?.paused
+      ? `Paused${liveStatus.pauseReason ? ` — ${liveStatus.pauseReason}` : ''}`
+      : (nextState === 'investigating' && summarizeHealthIssues(liveHealth?.issues)) || STATE_MESSAGES[nextState]);
+  }, [deriveAgentState]);
 
   // Agent snapshots settle independently of status/tasks. Overlay socket changes
   // received during the read so a slow snapshot cannot undo a live transition.
@@ -426,12 +449,11 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       setActiveAgentMeta(runningAgent?.metadata || null);
 
       const [learningSummaryData, insightsData] = await secondaryRead;
-      // All three self-committing reads are barriers, not values: `mergedHealth`
-      // below reads what `healthRead` wrote, so it must not run before they settle.
+      // All three self-committing reads are barriers, not values: the state derivation
+      // below reads what `healthRead` wrote (via `healthRef`), so it must not run before they settle.
       await Promise.all([healthRead, providersRead, appsRead]);
       // Health events may have delivered a newer snapshot while these reads settled.
       if (controller.signal.aborted) return;
-      const mergedHealth = healthRef.current;
       if (learningSeqRef.current === learningSeq) setLearningSummary(learningSummaryData);
       // Apply a real insights payload (including a legitimately-empty []); a null
       // from a failed/transient fetch preserves the last-good array so the banner
@@ -440,17 +462,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
 
       // Status and agents may have moved on (an agent slice read, a spawn event, a
       // pause) while the ancillary reads settled; derive from the newest of both.
-      const liveStatus = statusRef.current;
-      const newState = deriveAgentState(liveStatus, needsRef.current.agents ? agentsRef.current : [], mergedHealth);
-      setAgentState(newState);
-      // Default state message — richer messages come from socket events. The one
-      // state whose default is useless is `investigating`: only a health issue
-      // gets us here, so name it rather than saying "Investigating issue..." next
-      // to an Active count of 0 with no agent to inspect.
-      setStatusMessage(liveStatus?.paused
-        ? `Paused${liveStatus.pauseReason ? ` — ${liveStatus.pauseReason}` : ''}`
-        : (newState === 'investigating' && summarizeHealthIssues(mergedHealth?.issues)) || STATE_MESSAGES[newState]);
-
+      settleAgentState();
     };
     const pending = { promise: null, controller, dirty: false };
     inFlight.current = pending;
@@ -459,7 +471,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       if (pending.dirty && !controller.signal.aborted) refreshPageData();
     });
     return pending.promise;
-  }, [deriveAgentState, applyHealth, markHealthUnavailable, applyProviders, readApps, readAgents, awaitSlice, applyStatus]);
+  }, [deriveAgentState, applyHealth, markHealthUnavailable, applyProviders, readApps, readAgents, awaitSlice, applyStatus, settleAgentState]);
 
   // Coalesce event bursts into a read of the visible queue and scalar shell
   // status. Insights use persisted health; invalidation never runs PM2 repair.
@@ -483,7 +495,11 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       awaitSlice('agents', readAgents(controller)),
     ]).then(async ([summary, tasksData]) => {
       if (controller.signal.aborted || queueSeqRef.current !== queueSeq) return;
-      if (summary) applyStatus(summary);
+      if (summary) {
+        applyStatus(summary);
+        // A failed first status read is recovered by any later successful one.
+        setStatusReadFailed(typeof summary.running !== 'boolean');
+      }
       if (tasksData && tasksCurrent()) setTasks(tasksData);
       const insightsData = await insightsRead;
       if (!controller.signal.aborted && queueSeqRef.current === queueSeq && tasksCurrent() && insightsData?.insights) setInsights(insightsData.insights);
@@ -557,9 +573,13 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     }
     if (next.tasks && !prev.tasks) readTasksSlice();
     if (next.agents && !prev.agents) readAgentsSlice();
-    if (next.providers && !prev.providers) getProviders().then(applyProviders).catch(() => {});
+    // A provider read that failed is silent, so retry it on the next tab switch
+    // that still needs providers; once loaded, providers:changed keeps it current.
+    const tabChanged = lastTabRef.current !== activeTab;
+    lastTabRef.current = activeTab;
+    if (next.providers && (!prev.providers || (tabChanged && !providersLoadedRef.current))) getProviders().then(applyProviders).catch(() => {});
     if (next.apps && !prev.apps) readApps();
-  }, [needsTasks, needsAgents, needsProviders, needsApps, readTasksSlice, readAgentsSlice, applyProviders, readApps]);
+  }, [activeTab, needsTasks, needsAgents, needsProviders, needsApps, readTasksSlice, readAgentsSlice, applyProviders, readApps]);
 
   // The selection-dependent read. The mount read already carries `selected`,
   // so a deep link costs nothing extra; a later selection that is not in the
@@ -604,6 +624,9 @@ export default function useCosPageData({ activeTab, selectedTask }) {
         setAgentState('sleeping');
         setStatusMessage("Stopped - daemon not running");
         setActiveAgentMeta(null);
+      } else {
+        // Started from elsewhere: leave Sleeping without waiting for a refresh.
+        settleAgentState();
       }
     };
     socket.on('cos:status', handleCosStatus);
@@ -732,6 +755,9 @@ export default function useCosPageData({ activeTab, selectedTask }) {
         setAgentState('investigating');
         setStatusMessage(summarizeHealthIssues(data.issues));
         setSpeakingFor();
+      } else if (agentStateRef.current === 'investigating') {
+        // The issue that parked the avatar is gone.
+        settleAgentState();
       }
     };
     socket.on('cos:health:check', handleHealthCheck);
@@ -795,7 +821,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       refreshQueue.cancel();
       refreshLearning.cancel();
     };
-  }, [socket, fetchData, fetchQueue, refreshLearningSummary, readAgentsSlice, readApps, applyProviders, setSpeakingFor]);
+  }, [socket, fetchData, fetchQueue, refreshLearningSummary, readAgentsSlice, readApps, applyProviders, setSpeakingFor, settleAgentState]);
 
   const handleStart = async () => {
     const result = await startCos({ silent: true }).catch(err => {

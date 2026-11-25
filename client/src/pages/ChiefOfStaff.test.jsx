@@ -1878,6 +1878,18 @@ describe('ChiefOfStaff tab switches', () => {
     expect(shellReads()).toEqual(shell);
   });
 
+  it('retries a failed provider read on the next tab switch that still needs providers', async () => {
+    api.getProviders.mockRejectedValueOnce(new Error('offline'));
+    await renderWithProbe('tasks');
+    expect(api.getProviders).toHaveBeenCalledTimes(1);
+
+    await goTo('agents');
+    expect(api.getProviders).toHaveBeenCalledTimes(2);
+
+    await goTo('tasks');
+    expect(api.getProviders).toHaveBeenCalledTimes(2);
+  });
+
   it('reads agents again when Agents is re-entered, because events were ignored while it was away', async () => {
     await renderWithProbe('agents');
     expect(api.getCosAgents).toHaveBeenCalledTimes(1);
@@ -2093,6 +2105,39 @@ describe('ChiefOfStaff slice reads against concurrent refreshes (#18643)', () =>
     await act(async () => { socketStub.receive('cos:agents:changed', {}); await vi.advanceTimersByTimeAsync(450); });
     await settle();
     expect(api.getCosAgents).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves Sleeping when the daemon is started from elsewhere, on any tab', async () => {
+    renderWithProbe('config');
+    await waitForPageShell();
+    expect(screen.getAllByText('Sleeping').length).toBeGreaterThan(0);
+
+    api.getCosStatus.mockResolvedValue({ running: true, config, stats: {} });
+    await act(async () => { socketStub.receive('cos:status', { running: true }); });
+    await settle();
+
+    expect(screen.getAllByText('Thinking').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Sleeping')).toBeNull();
+    // The daemon status event is what corrected it: no full page read.
+    expect(api.getCosHealth).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns the avatar to its default state when the health check that parked it reports no issues', async () => {
+    withFakeTimers();
+    api.getCosStatus.mockResolvedValue({ running: true, config, stats: {} });
+    renderWithProbe('config');
+    await waitForPageShell();
+    await settle();
+
+    await act(async () => {
+      getSocketHandler('cos:health:check')({ metrics: { timestamp: 1 }, issues: [{ type: 'warning', category: 'memory', message: 'EXAMPLE_ISSUE' }] });
+      await vi.advanceTimersByTimeAsync(SPEAKING_MS + 50);
+    });
+    expect(screen.getAllByText('Investigating').length).toBeGreaterThan(0);
+
+    await act(async () => { getSocketHandler('cos:health:check')({ metrics: { timestamp: 2 }, issues: [] }); });
+    expect(screen.queryByText('Investigating')).toBeNull();
+    expect(screen.getAllByText('Thinking').length).toBeGreaterThan(0);
   });
 
   it('refreshes the learning summary from the persisted learning-change event', async () => {
