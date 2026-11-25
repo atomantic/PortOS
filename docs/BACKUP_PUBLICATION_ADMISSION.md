@@ -370,26 +370,23 @@ animation/reference write tails. Their file-primary manifests and runtime
 pointers need the same protection even when the PostgreSQL sprite row contains
 no path: writing a record last alone cannot protect a multi-file rsync pass.
 
-**Snapshot consistency claim.** `server/lib/backupAssetOwners.js` inventories
-each durable owner as `admitted`, `reference-only` or `outstanding`, and its
-test fails when an `admitted` entry stops taking the lease or a module that
-takes the lease is missing from the inventory. Every snapshot records the claim
-derived from it as `assetConsistency` in its `manifest.json`, the backup status
+**Snapshot consistency claim.** `server/lib/backupAssetOwners.js` records
+`reference-only` exceptions and `outstanding` workflows that still need
+admission. Find workflows that hold the lease by searching the source for
+`withBackupAssetPublication`. Every snapshot records the claim as
+`assetConsistency` in its `manifest.json`, the backup status
 (`GET /api/backup/status`) and the run result. `scope: "global"` is reported
-only when no owner is outstanding; until then the scope is `admitted-owners`
-and `outstanding` lists the owner ids still outside admission. An unrecognized
-status counts as outstanding, never as covered. Snapshots written before this
-field existed carry no claim and must be treated as partial.
+when the inventory has no outstanding entries. An `outstanding` or
+unrecognized status yields `scope: "admitted-owners"` with the affected IDs in
+`outstanding`. Treat snapshots written before this field existed as partial.
 
-The completed inventory covers the identified managed runtime workflows in this
-repository. New byte-plus-record workflows must be classified before they can
-participate in the guarantee; an `outstanding` or unknown status downgrades the
-snapshot claim. The global scope requires both server and CoS runner to use the
-shared protocol. It excludes arbitrary external scripts/tools and does not repair
-preexisting missing assets, deliberate operator deletion, or corruption left by a
-failed migration. Managed startup migrations finish before backup routes and the
-scheduler become available; this ordering prevents concurrent capture, not a
-claim that every migration necessarily succeeded.
+New byte-plus-record workflows enter admission at the lease boundary. Record
+any exception and its rationale in the inventory. The global scope requires
+both server and CoS runner to use the shared protocol. It excludes arbitrary
+external scripts and tools. Preexisting missing assets, deliberate operator
+deletion and corruption left by failed migrations fall outside the claim.
+Managed startup migrations finish before backup routes and the scheduler become
+available, which prevents concurrent capture.
 
 No authoritative asset domain is excluded merely to satisfy readiness. Existing
 explicit backup exclusions still apply; the derived media index is reconstructed
