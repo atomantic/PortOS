@@ -24,6 +24,7 @@ import { atomicWrite, createWriteStreamGuarded, unlinkGuarded } from '../../lib/
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { publishRuntimeFiles, withRuntimeFileTurn } from '../../lib/runtimeFilePublication.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { redactActivePrivateOutput } from '../../lib/privacyPrompt.js';
 import { AGENTS_DIR, loadConfig, saveConfig, withConfigLock, withStateLock, readAgentsStateForSafetyCheck } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
 
@@ -73,6 +74,7 @@ async function manifest(dir) {
 export async function scrubAgentRecordings(dir, scrubValue) {
   const plainPath = join(dir, 'raw.txt');
   await withRuntimeFileTurn(plainPath, async () => {
+    redactActivePrivateOutput(plainPath, scrubValue);
     if (!(await info(plainPath))?.isFile()) return;
     const original = await readFile(plainPath, 'utf8');
     const cleaned = scrubValue(original);

@@ -20,6 +20,7 @@ import { appendFile, writeFile } from 'fs/promises';
 import { appendAgentOutputLines, updateAgent } from '../cos/cosAgentLifecycle.js';
 import { OUTPUT_BUFFER_CAP, OUTPUT_BUFFER_HEADROOM, RAW_SPOOL_MAX_BYTES } from '../../lib/tuiHandshake.js';
 import { withRuntimeFileTurn } from '../../lib/runtimeFilePublication.js';
+import { trackPrivateRunOutput } from '../../lib/privacyPrompt.js';
 
 // Status updates stay responsive; raw recovery output can tolerate a longer
 // batching window. Neither timer delays an explicit final drain.
@@ -89,8 +90,10 @@ export function createTranscriptWriteReporter({ agentId, isDrained = () => false
  * @param {string} opts.agentId  Agent id (used for warn logs + metadata writes).
  * @param {string} opts.outputFile  Absolute path to output.txt.
  * @param {string} opts.rawFile  Absolute path to raw.txt.
+ * @param {string} [opts.prompt]  Sent prompt, for private recording provenance.
  */
-export function createOutputSpooler({ agentId, outputFile, rawFile }) {
+export function createOutputSpooler({ agentId, outputFile, rawFile, prompt = '' }) {
+  const privateRaw = trackPrivateRunOutput(rawFile, prompt, withRuntimeFileTurn);
   let outputBuffer = '';
   let lastLine = '';
   // True once outputBuffer crossed its HEADROOM and the head was dropped.
@@ -157,16 +160,14 @@ export function createOutputSpooler({ agentId, outputFile, rawFile }) {
   // scheduleRawFlush is gated by rawFlushing); join() runs once per flush
   // tick, so peak in-memory raw data is bounded by one debounce-plus-IO
   // window of TUI output (typically hundreds of KB on a chatty agent).
-  const flushPendingRawChunks = () => withBackupAssetPublication(async () => {
-    if (rawFlushTimer) { clearTimeout(rawFlushTimer); rawFlushTimer = null; }
-    if (pendingRawChunks.length === 0) return;
-    const batch = pendingRawChunks.join('');
-    pendingRawChunks = [];
+  const writeRawBatch = (batch, truncate) => withRuntimeFileTurn(rawFile, async () => {
+    const cleaned = privateRaw?.redact(batch) ?? batch;
     // Count UTF-8 bytes actually written to disk, NOT the UTF-16 code-unit
     // length of the JS string — non-ASCII output would otherwise under-
     // report and let the spool exceed the safety cap.
-    const batchBytes = Buffer.byteLength(batch, 'utf8');
-    if (rawBytesWritten + batchBytes > RAW_SPOOL_MAX_BYTES) {
+    const batchBytes = Buffer.byteLength(cleaned, 'utf8');
+    if (!truncate && rawBytesWritten + batchBytes > RAW_SPOOL_MAX_BYTES) return false;
+    if (truncate) {
       // Safety valve: rewrite the file with just this batch instead of
       // appending. The tail-read at finalize wants the MOST RECENT bytes,
       // not the oldest, so truncating preserves what analyzeAgentFailure
@@ -176,44 +177,40 @@ export function createOutputSpooler({ agentId, outputFile, rawFile }) {
       // first — Buffer-slice to keep UTF-8 byte semantics correct (a
       // string.slice would index by UTF-16 code units and produce torn
       // multi-byte sequences at the boundary).
-      let writeBuf;
-      if (batchBytes > RAW_SPOOL_MAX_BYTES) {
-        const buf = Buffer.from(batch, 'utf8');
-        writeBuf = buf.subarray(buf.length - RAW_SPOOL_MAX_BYTES);
-      } else {
-        writeBuf = batch;
-      }
-      const writeBytes = typeof writeBuf === 'string' ? batchBytes : writeBuf.length;
-      if (!rawSpoolTruncationWarned) {
-        console.warn(`⚠️ TUI agent ${agentId} raw PTY spool reached ${Math.round(RAW_SPOOL_MAX_BYTES / 1024 / 1024)}MB — truncating spool (oldest bytes dropped; tail-read still reflects most recent)`);
-        // Publish the warning before dropping bytes; if this fails, preserve
-        // the previous spool and retry the warning on the next flush. Reported,
-        // never thrown: drainRaw runs inside finish(), where a rejection would
-        // abandon the run's teardown.
-        const published = await updateAgent(agentId, { metadata: { rawSpoolTruncated: true } })
-          .then(() => true)
-          .catch(async (err) => {
-            await reporter.report('state', err);
-            return false;
-          });
-        if (!published) return;
-        rawSpoolTruncationWarned = true;
-      }
-      // Only update the byte counter on successful write — a failed write
-      // would otherwise inflate rawBytesWritten and make subsequent flush
-      // decisions race the actual on-disk state.
-      const wrote = await withRuntimeFileTurn(rawFile, () => writeFile(rawFile, writeBuf)).then(() => true).catch(async (err) => {
-        await reporter.report('raw.txt', err);
-        return false;
-      });
-      if (wrote) rawBytesWritten = writeBytes;
-      return;
+      const writeBuf = batchBytes > RAW_SPOOL_MAX_BYTES ? Buffer.from(cleaned).subarray(-RAW_SPOOL_MAX_BYTES) : cleaned;
+      await writeFile(rawFile, writeBuf);
+      rawBytesWritten = Math.min(batchBytes, RAW_SPOOL_MAX_BYTES);
+    } else {
+      await appendFile(rawFile, cleaned);
+      rawBytesWritten += batchBytes;
     }
-    const wrote = await withRuntimeFileTurn(rawFile, () => appendFile(rawFile, batch)).then(() => true).catch(async (err) => {
+    return true;
+  });
+
+  const flushPendingRawChunks = () => withBackupAssetPublication(async () => {
+    if (rawFlushTimer) { clearTimeout(rawFlushTimer); rawFlushTimer = null; }
+    if (pendingRawChunks.length === 0) return;
+    const batch = pendingRawChunks.join('');
+    pendingRawChunks = [];
+    const handled = await writeRawBatch(batch, false).catch(async (err) => {
       await reporter.report('raw.txt', err);
-      return false;
+      return true;
     });
-    if (wrote) rawBytesWritten += batchBytes;
+    if (handled) return;
+    if (!rawSpoolTruncationWarned) {
+      console.warn(`⚠️ TUI agent ${agentId} raw PTY spool reached ${Math.round(RAW_SPOOL_MAX_BYTES / 1024 / 1024)}MB — truncating spool (oldest bytes dropped; tail-read still reflects most recent)`);
+      // Publish metadata before dropping bytes, outside the raw file turn.
+      // The privacy scrubber takes the state lock before the raw file turn.
+      const published = await updateAgent(agentId, { metadata: { rawSpoolTruncated: true } })
+        .then(() => true)
+        .catch(async (err) => {
+          await reporter.report('state', err);
+          return false;
+        });
+      if (!published) return;
+      rawSpoolTruncationWarned = true;
+    }
+    await writeRawBatch(batch, true).catch(err => reporter.report('raw.txt', err));
   });
 
   const scheduleRawFlush = () => {
@@ -303,6 +300,7 @@ export function createOutputSpooler({ agentId, outputFile, rawFile }) {
       hasPending: () => pendingRawChunks.length > 0,
     });
     rawDrained = true;
+    privateRaw?.release();
   };
 
   return {

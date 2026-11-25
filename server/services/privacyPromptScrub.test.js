@@ -14,6 +14,7 @@ import { clearSubjectIdentityEvidence } from './privacyBrokers.js';
 import { createRunnerService } from '../lib/aiToolkit/runner.js';
 import { withRuntimeFileTurn } from '../lib/runtimeFilePublication.js';
 import { deleteSubject } from './privacySubjects.js';
+import { createOutputSpooler } from './agentTuiSpawning/outputSpooler.js';
 
 const fixtures = vi.hoisted(() => ({ paths: {}, query: vi.fn(), failWrite: null }));
 vi.mock('../lib/db.js', () => ({
@@ -172,6 +173,23 @@ describe('privacy vault mutations and existing local run artifacts', () => {
     await expect(deleteVaultRecord('record-example')).rejects.toMatchObject({ code: 'PRIVACY_RUN_SCRUB_FAILED' });
     expect(await readFile(compressedPath)).toEqual(compressedRaw);
     expect(await readFile(manifestPath, 'utf8')).toBe(JSON.stringify(recordingManifest));
+  });
+
+  it('redacts pending and subsequent PTY output from an active private agent', async () => {
+    const rawFile = join(paths.flatAgent, 'raw.txt');
+    const spooler = createOutputSpooler({
+      agentId: 'agent-active', outputFile: join(paths.flatAgent, 'output.txt'), rawFile, prompt,
+    });
+    spooler.pushRaw(rawOutput);
+    try {
+      await deleteVaultRecord('record-example');
+      await spooler.flushRaw();
+      spooler.pushRaw(rawOutput);
+      await spooler.drainRaw();
+      expect(await readFile(rawFile, 'utf8')).toBe(rawOutput.replace(fact, '[redacted]').repeat(2));
+    } finally {
+      await spooler.drainRaw();
+    }
   });
 
   it('clears broker identity evidence when a legal_name value is overwritten', async () => {
