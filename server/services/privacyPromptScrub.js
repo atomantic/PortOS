@@ -9,7 +9,7 @@ import { atomicWrite, PATHS, safeJSONParse } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { COS_AGENT_ID_RE, COS_ARCHIVE_DATE_RE } from '../lib/peerSyncValidation.js';
 import { hasStoredPrivacyFacts, redactActivePrivateOutput, redactStoredPrivacyPrompt } from '../lib/privacyPrompt.js';
-import { escapeRegExp } from '../lib/textUtils.js';
+import { privacyFactPattern } from '../lib/privacyRecording.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { withRuntimeFileTurn } from '../lib/runtimeFilePublication.js';
 import { scrubAgentRecordings } from './cos/cosAgentStorage.js';
@@ -47,21 +47,21 @@ async function* agentDirectories(root) {
   }
 }
 
-async function scrubDirectory(directory, scrubValue, privateAgentIds, isAgent) {
+async function scrubDirectory(directory, scrubValue, privateAgentIds, values) {
   const promptPath = join(directory, 'prompt.txt');
   const prompt = await readArtifact(promptPath);
   const promptHasFacts = prompt !== null && hasStoredPrivacyFacts(prompt);
   const metadataPath = join(directory, 'metadata.json');
-  const metadata = isAgent ? null : safeJSONParse(await readArtifact(metadataPath), null);
+  const metadata = values ? null : safeJSONParse(await readArtifact(metadataPath), null);
   const preview = typeof metadata?.prompt === 'string' ? metadata.prompt : null;
   const previewHasFacts = preview !== null && hasStoredPrivacyFacts(preview);
   const outputPath = join(directory, 'output.txt');
   const activePrivateOutput = redactActivePrivateOutput(outputPath, scrubValue);
   if (!activePrivateOutput && !promptHasFacts && !previewHasFacts && !privateAgentIds.has(metadata?.agentId)) return;
 
-  if (isAgent) {
+  if (values) {
     privateAgentIds.add(basename(directory));
-    await scrubAgentRecordings(directory, scrubValue);
+    await scrubAgentRecordings(directory, values);
   }
   const stored = promptHasFacts ? redactStoredPrivacyPrompt(prompt) : prompt;
   const output = await readArtifact(outputPath);
@@ -90,19 +90,16 @@ export async function scrubRevokedPrivacyFacts(encryptedValues) {
     const { decryptValue } = await import('../lib/vaultCrypto.js');
     const values = [...new Set(encryptedValues.map(decryptValue).filter(value => value.trim()))];
     if (values.length === 0) return;
-    const alternatives = values.sort((a, b) => b.length - a.length).map(escapeRegExp).join('|');
-    // A custom fact may be a short word. Do not redact it inside another
-    // word, and only look for it in runs with evidence of vault injection.
-    const pattern = new RegExp(`(?<![\\p{L}\\p{N}_])(?:${alternatives})(?![\\p{L}\\p{N}_])`, 'gu');
+    const pattern = privacyFactPattern(values);
     const scrubValue = text => text.replace(pattern, '[redacted]');
     const privateAgentIds = new Set();
     await withStateLock(async () => {
       for await (const directory of agentDirectories(PATHS.cosAgents)) {
-        await scrubDirectory(directory, scrubValue, privateAgentIds, true);
+        await scrubDirectory(directory, scrubValue, privateAgentIds, values);
       }
     });
     for await (const directory of childDirectories(PATHS.runs, COS_AGENT_ID_RE)) {
-      await withRuntimeFileTurn(join(directory, 'output.txt'), () => scrubDirectory(directory, scrubValue, privateAgentIds, false));
+      await withRuntimeFileTurn(join(directory, 'output.txt'), () => scrubDirectory(directory, scrubValue, privateAgentIds));
     }
   })).catch(() => {
     throw new ServerError('Could not scrub local Digital Twin run artifacts', {

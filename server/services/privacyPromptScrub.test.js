@@ -14,7 +14,11 @@ import { clearSubjectIdentityEvidence } from './privacyBrokers.js';
 import { createRunnerService } from '../lib/aiToolkit/runner.js';
 import { withRuntimeFileTurn } from '../lib/runtimeFilePublication.js';
 import { deleteSubject } from './privacySubjects.js';
+import { scrubRevokedPrivacyFacts } from './privacyPromptScrub.js';
 import { createOutputSpooler } from './agentTuiSpawning/outputSpooler.js';
+
+vi.mock('./cos/cosAgentLifecycle.js', () => ({ updateAgent: vi.fn(async () => {}), appendAgentOutputLines: vi.fn() }));
+vi.mock('../lib/tuiHandshake.js', async actual => ({ ...await actual(), RAW_SPOOL_MAX_BYTES: 256 }));
 
 const fixtures = vi.hoisted(() => ({ paths: {}, query: vi.fn(), failWrite: null }));
 vi.mock('../lib/db.js', () => ({
@@ -213,6 +217,107 @@ describe('privacy vault mutations and existing local run artifacts', () => {
     } finally {
       await spooler.drainRaw();
     }
+  });
+
+  it.each(['before the first flush', 'between flushes', 'after finalization'])('preserves terminal formatting when a fact is revoked %s', async when => {
+    const rawFile = join(paths.flatAgent, 'raw.txt');
+    const spooler = createOutputSpooler({ agentId: 'agent-active', outputFile: join(paths.flatAgent, 'output.txt'), rawFile, prompt });
+    const color = '\x1b[32m';
+    const bold = '\x9b1m';
+    const reset = '\x1b[0m';
+    const open = '\x1b]8;;https://example.com\x1b\\';
+    const close = '\x9d8;;\x9c';
+    const batches = [`keep ${color}Sky\x9b`, `1mlar Ex`, `ample${reset}, ${open}${fact}`, `${close}son\r\n${fact}`];
+    const original = batches.join('');
+    await writeFixture(join(paths.agent, 'raw.txt.gz'), gzipSync(original));
+    await writeFixture(join(paths.unrelatedAgent, 'raw.txt'), original);
+    if (when === 'before the first flush') await deleteVaultRecord('record-example');
+    for (const [index, batch] of batches.entries()) {
+      spooler.pushRaw(batch);
+      await spooler.flushRaw();
+      if (index === 0 && when === 'between flushes') await deleteVaultRecord('record-example');
+    }
+    await spooler.drainRaw();
+    if (when === 'after finalization') await deleteVaultRecord('record-example');
+    const expected = `keep ${color}[redacted]${bold}${reset}, ${open}${fact}${close}son\r\n[redacted]`;
+    expect(await readFile(rawFile, 'utf8')).toBe(expected);
+    expect(gunzipSync(await readFile(join(paths.agent, 'raw.txt.gz'))).toString()).toBe(expected);
+    expect(await readFile(join(paths.unrelatedAgent, 'raw.txt'), 'utf8')).toBe(original);
+  });
+
+  it('keeps the original Unicode word boundaries and longest match across output batches', async () => {
+    const rawFile = join(paths.flatAgent, 'raw.txt');
+    const spooler = createOutputSpooler({ agentId: 'agent-active', outputFile: join(paths.flatAgent, 'output.txt'), rawFile, prompt });
+    await scrubRevokedPrivacyFacts(['!+', 'Cat', 'Cat Dog'].map(value => encryptValue(value)));
+    for (const batch of ['Cat ', 'Dog / Cat ', 'Dogwood / ', '𐐀', '!+ / ', '!+']) {
+      spooler.pushRaw(batch);
+      await spooler.flushRaw();
+    }
+    await spooler.drainRaw();
+    expect(await readFile(rawFile, 'utf8')).toBe('[redacted] / [redacted] Dogwood / 𐐀!+ / [redacted]');
+  });
+
+  it('replays the written prefix and pending suffix together when another fact is revoked', async () => {
+    const rawFile = join(paths.flatAgent, 'raw.txt');
+    const spooler = createOutputSpooler({ agentId: 'agent-active', outputFile: join(paths.flatAgent, 'output.txt'), rawFile, prompt });
+    await scrubRevokedPrivacyFacts([encryptValue('Exhibit')]);
+    spooler.pushRaw('Exhibit Skylar Ex');
+    await spooler.flushRaw();
+    expect(await readFile(rawFile, 'utf8')).toBe('[redacted] Skylar ');
+    await deleteVaultRecord('record-example');
+    spooler.pushRaw('ample');
+    await spooler.drainRaw();
+    expect(await readFile(rawFile, 'utf8')).toBe('[redacted] [redacted]');
+  });
+
+  it('re-evaluates a capped batch with revocations received while publishing truncation metadata', async () => {
+    const rawFile = join(paths.flatAgent, 'raw.txt');
+    const spooler = createOutputSpooler({ agentId: 'agent-active', outputFile: join(paths.flatAgent, 'output.txt'), rawFile, prompt });
+    const { updateAgent } = await import('./cos/cosAgentLifecycle.js');
+    updateAgent.mockImplementationOnce(() => deleteVaultRecord('record-example'));
+    spooler.pushRaw('x'.repeat(245));
+    await spooler.flushRaw();
+    spooler.pushRaw(`\r\n${fact} / Skylar`);
+    await spooler.flushRaw();
+    spooler.pushRaw(' Example!');
+    await spooler.drainRaw();
+    // The current batch survives rollover with both its complete and split fact scrubbed.
+    expect(await readFile(rawFile, 'utf8')).toBe('\r\n[redacted] / [redacted]!');
+    expect(updateAgent).toHaveBeenCalledWith('agent-active', { metadata: { rawSpoolTruncated: true } });
+  });
+
+  it.each([false, true])('rechecks a newly exposed whole word at the start of a cap rewrite (oversized batch %s)', async oversized => {
+    const rawFile = join(paths.flatAgent, 'raw.txt');
+    const spooler = createOutputSpooler({ agentId: 'agent-active', outputFile: join(paths.flatAgent, 'output.txt'), rawFile, prompt });
+    await deleteVaultRecord('record-example');
+    spooler.pushRaw('x'.repeat(256));
+    await spooler.flushRaw();
+    // Before rollover the preceding x makes the fact part of a longer word.
+    const remainder = '!'.repeat(256 - fact.length);
+    spooler.pushRaw(`${oversized ? 'x' : ''}${fact}${remainder}`);
+    await spooler.drainRaw();
+    expect(await readFile(rawFile, 'utf8')).toBe(`[redacted]${remainder}`);
+  });
+
+  it('bounds formatting held inside an undecided fact and preserves intact UTF-8 on rollover', async () => {
+    const rawFile = join(paths.flatAgent, 'raw.txt');
+    const spooler = createOutputSpooler({ agentId: 'agent-active', outputFile: join(paths.flatAgent, 'output.txt'), rawFile, prompt });
+    await deleteVaultRecord('record-example');
+    const controls = '\x1b[1m'.repeat(64);
+    spooler.pushRaw(`Sky${controls}`);
+    await spooler.flushRaw();
+    spooler.pushRaw(`lar Example! ${fact}`);
+    await spooler.drainRaw();
+    const retained = await readFile(rawFile, 'utf8');
+    expect(Buffer.byteLength(retained)).toBeLessThanOrEqual(256);
+    expect(retained).toMatch(/lar Example! \[redacted\]$/);
+    expect(retained).not.toContain('Sky');
+
+    const unicodeFile = join(paths.agent, 'raw.txt');
+    const other = createOutputSpooler({ agentId: 'agent-example', rawFile: unicodeFile, outputFile: join(paths.agent, 'output.txt'), prompt });
+    other.pushRaw('界'.repeat(100));
+    await other.drainRaw();
+    expect(await readFile(unicodeFile, 'utf8')).toBe('界'.repeat(85));
   });
 
   it('clears broker identity evidence when a legal_name value is overwritten', async () => {
