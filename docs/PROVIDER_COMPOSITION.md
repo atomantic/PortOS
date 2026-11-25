@@ -29,7 +29,7 @@ A preset id is `^[a-z0-9][a-z0-9-]*$`; `.` and `@` are outside that alphabet, so
 3. loads the **service instance** by slug (must be enabled and carry a definition), resolves its endpoints and the key it runs under;
 4. checks the harness reaches that service (`isCompatible`) in that method;
 5. resolves the bootstrap app for a `+suffix` (unknown slug → refused; a `bootstrap`-credentialed service with no suffix → refused);
-6. materializes the record through `materializeRoute` — the same writer `POST /api/providers/bindings` uses — with the instance's plan-filtered catalog as `models` and its first entry as `defaultModel`.
+6. materializes the record through `materializeRoute` — the writer that mints a harness binding's routes — with the instance's plan-filtered catalog as `models` and its first entry as `defaultModel`.
 
 The record is cached per (composite, service revision, settings revision) and **never persisted**: it does not appear in `providers.json`, in `GET /api/providers`, or in the management graph. A `field` credential is attached non-enumerably (the `attachGatewaySiblingKey` discipline) so a spread or JSON round-trip drops it; an env-borne key sits under a `secretEnvVars` name every client-facing sanitizer redacts.
 
