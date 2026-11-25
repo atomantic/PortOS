@@ -92,6 +92,34 @@ function PublishHistoryList({ publications }) {
   );
 }
 
+function PublishConfirmation({ stage, bindingSettled, destLabel, publishing, publish, onCancel }) {
+  if (!bindingSettled) return null;
+  if (stage === 'publish') {
+    return (
+      <InlineConfirmRow
+        question={`Replace ${destLabel}?`}
+        confirmText={publishing ? 'Publishing…' : 'Publish'}
+        tone="warning"
+        onConfirm={() => { if (!publishing) publish(); }}
+        onCancel={onCancel}
+      />
+    );
+  }
+  if (!stage?.revision) return null;
+  return (
+    <InlineConfirmRow
+      question={<>
+        {stage.changed && 'The binding or files changed. '}Overwrite these files in {stage.appLabel}?
+        {stage.paths.map((path) => <code key={path} className="block break-all">{path}</code>)}
+      </>}
+      confirmText={publishing ? 'Publishing…' : 'Overwrite'}
+      tone="error"
+      onConfirm={() => { if (!publishing) publish(stage.revision); }}
+      onCancel={onCancel}
+    />
+  );
+}
+
 export default function PublishWorkflow({
   record, walk, tracks = {}, trackDefinitions = EMPTY_TRACK_DEFINITIONS, atlas, onChanged,
 }) {
@@ -264,27 +292,14 @@ export default function PublishWorkflow({
               </button>
             )}
           </div>
-          {confirmStage === 'publish' && bindingSettled && (
-            <InlineConfirmRow
-              question={`Replace ${destLabel}?`}
-              confirmText={publishing ? 'Publishing…' : 'Publish'}
-              tone="warning"
-              onConfirm={() => { if (!publishing) publish(); }}
-              onCancel={() => setConfirmStage(null)}
-            />
-          )}
-          {confirmStage?.revision && bindingSettled && (
-            <InlineConfirmRow
-              question={<>
-                {confirmStage.changed && 'The binding or files changed. '}Overwrite these files in {confirmStage.appLabel}?
-                {confirmStage.paths.map((path) => <code key={path} className="block break-all">{path}</code>)}
-              </>}
-              confirmText={publishing ? 'Publishing…' : 'Overwrite'}
-              tone="error"
-              onConfirm={() => { if (!publishing) publish(confirmStage.revision); }}
-              onCancel={() => setConfirmStage(null)}
-            />
-          )}
+          <PublishConfirmation
+            stage={confirmStage}
+            bindingSettled={bindingSettled}
+            destLabel={destLabel}
+            publishing={publishing}
+            publish={publish}
+            onCancel={() => setConfirmStage(null)}
+          />
         </div>
       </div>
 
