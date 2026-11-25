@@ -360,6 +360,23 @@ describe.skipIf(!runDb)('memoryDB CRUD (#3447)', () => {
     expect(await memoryDB.peekMemory(hard.id)).toBeNull();
   });
 
+  it('locks current pending records throughout approval publication and omits retired records', async () => {
+    const pending = await memoryDB.createMemory({ type: 'fact', content: 'Original preview.', status: 'pending_approval' });
+    const active = await memoryDB.createMemory({ type: 'fact', content: 'Active memory.' });
+    await memoryDB.updateMemory(pending.id, { content: 'Current preview.' });
+
+    await memoryDB.withPendingMemories([active.id, pending.id], async records => {
+      expect(records).toMatchObject([{ id: pending.id, content: 'Current preview.' }]);
+      // A second connection cannot acquire the lock that DELETE requires.
+      await expect(withTransaction(client =>
+        client.query('SELECT id FROM memories WHERE id = $1 FOR UPDATE NOWAIT', [pending.id])
+      )).rejects.toMatchObject({ code: '55P03' });
+    });
+
+    await memoryDB.purgeMemory(pending.id);
+    await memoryDB.withPendingMemories([pending.id], records => expect(records).toEqual([]));
+  });
+
   it('removes persisted purge notifications and decrements pending approval once', async () => {
     const { addNotification } = await import('./notifications.js');
     const updateAgent = vi.fn();

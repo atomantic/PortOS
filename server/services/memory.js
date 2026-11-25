@@ -143,6 +143,18 @@ function memoryIdList(ids) {
   return unique;
 }
 
+// Hold the purge/update lock through every secondary write derived from these records.
+export function withPendingMemories(ids, publish) {
+  return withMemoryLock(async () => {
+    const pending = [];
+    for (const id of memoryIdList(ids)) {
+      const memory = await loadMemory(id, { strict: true });
+      if (memory?.status === 'pending_approval') pending.push(memory);
+    }
+    return publish(pending);
+  });
+}
+
 /** One locked pass. The stored record keeps its embedding; the default return does not. */
 export async function peekMemories(ids, { includeEmbedding = false } = {}) {
   const unique = memoryIdList(ids);
@@ -353,6 +365,8 @@ export async function purgeMemory(id) {
       await decrementAgentPendingApproval(memory.sourceAgentId);
     }
     await removeMemoryFromIndexes(id);
+    const { removeMemoryApprovalItems } = await import('./review.js');
+    await removeMemoryApprovalItems(id);
     await notifications.removeByMetadata('memoryId', id);
 
     console.log(`🧠 Memory purged: ${id}`);

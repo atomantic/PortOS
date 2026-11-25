@@ -37,7 +37,7 @@ import {
   PRIORITY_LEVELS,
   notificationEvents
 } from './notifications.js'
-import { readJSONFile } from '../lib/fileUtils.js'
+import { atomicWrite, readJSONFile } from '../lib/fileUtils.js'
 import { adaptNotification } from './reviewActionAdapters.js'
 
 describe('notifications', () => {
@@ -266,6 +266,14 @@ describe('notifications', () => {
   })
 
   describe('removeByMetadata', () => {
+    it('retries a failed removal against the persisted notification', async () => {
+      atomicWrite.mockRejectedValueOnce(new Error('write failed'))
+      await expect(removeByMetadata('memoryId', 'mem-1')).rejects.toThrow('write failed')
+      expect(await exists(NOTIFICATION_TYPES.MEMORY_APPROVAL, 'memoryId', 'mem-1')).toBe(true)
+      expect(await removeByMetadata('memoryId', 'mem-1')).toEqual({ success: true, removed: 1 })
+      expect(atomicWrite.mock.lastCall[1].notifications.map(n => n.id)).toEqual(['n2', 'n3'])
+    })
+
     it('should remove notifications matching metadata field/value', async () => {
       const result = await removeByMetadata('memoryId', 'mem-1')
       expect(result.success).toBe(true)
