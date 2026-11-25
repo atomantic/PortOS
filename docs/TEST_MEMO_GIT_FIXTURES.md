@@ -45,7 +45,8 @@ include chain does not end; or the temp directory is itself inside a repository,
 a fixture directory that is no repository of its own would find that one.
 
 A product or library module that spawns Git adds the same `tool git` line to
-each key that includes it. The floor key walks static and lazy imports, while
+each key that includes it. The test controls the repository state it exercises
+through product code. The floor key walks static and lazy imports, while
 the recorded key starts with the modules the green run loaded. Reaching a
 module does not prove that the suite ran Git, so a key with only this kind of
 Git use records an unresolved identity as `tool git absent`. A test's own

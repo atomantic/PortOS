@@ -580,6 +580,17 @@ describe('git-fixture declaration', () => {
     expect(plain(() => GIT)).toBe(keyOf(TREE, 'server/lib/plain.test.js').floor.key);
   });
 
+  it('requires a verified Git identity even when a declaring test also reaches product Git', () => {
+    const product = 'server/lib/gitProduct.js';
+    const files = {
+      ...TREE,
+      [product]: "import { execFileSync } from 'node:child_process';\nexport const status = (cwd) => execFileSync('git', ['status'], { cwd });\n",
+      [test]: `${FIXTURE}\nimport './gitProduct.js';\n`,
+    };
+    const { floor, recorded } = keyOf(files, test, { records: new Map([[test, [test, product]]]), toolVersion: () => null });
+    for (const verdict of [floor, recorded]) expect(verdict).toMatchObject({ memoizable: false, reason: 'unverified tool: git' });
+  });
+
   it('changes nothing for a suite that does not declare, or whose marker is not a comment', () => {
     const undeclared = FIXTURE.replace('// test-memo: git-fixture\n', '');
     expect(floorOf(undeclared)).toMatchObject({ memoizable: false, reason: 'spawns git' });
@@ -1853,20 +1864,6 @@ describe('Git reached through a product module', () => {
       expect(first[kind]).toMatchObject({ memoizable: true, tools: new Set() });
       expect(absent[kind].key).toBe(first[kind].key);
     }
-  });
-
-  it('still requires a Git identity when the test declares its own fixtures', () => {
-    const tree = { ...files, [test]: [
-      '// test-memo: git-fixture',
-      "import { execFileSync } from 'node:child_process';",
-      "import { mkdtempSync } from 'node:fs';",
-      "import { tmpdir } from 'node:os';",
-      "import { join } from 'node:path';",
-      files[test],
-      "it('initializes a fixture', () => execFileSync('git', ['init'], { cwd: mkdtempSync(join(tmpdir(), 'fixture-')) }));",
-    ].join('\n') };
-    const { floor, recorded } = analyze(null, { tree });
-    for (const verdict of [floor, recorded]) expect(verdict).toMatchObject({ memoizable: false, reason: 'unverified tool: git' });
   });
 
   it('keeps the refusal for a Git-spawning scripts member', () => {
