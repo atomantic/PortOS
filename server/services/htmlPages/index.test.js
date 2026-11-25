@@ -271,17 +271,15 @@ describe('other targets', () => {
     expect(writePageFile).not.toHaveBeenCalled();
   });
 
-  it('requests a larger Splash Claude budget for the page while keeping the recorded prompts and effort', async () => {
+  it('uses the Claude harness ceiling for both Splash requests without changing prompts or effort', async () => {
     runPromptThroughProvider.mockImplementation(async ({ prompt }) => ({ text: isPlanRequest(prompt) ? PLAN : goodPage }));
     const [queued] = await startRuns({ routes: [{ providerId: 'example-splash', effort: 'xhigh' }], pages: [PAGES[0]] });
     const run = await settled(queued.id);
     expect(run.pages[0]).toMatchObject({ html: goodPage, plan: PLAN });
     const [[plan], [page]] = runPromptThroughProvider.mock.calls;
-    expect(plan).not.toHaveProperty('maxTokens');
-    expect(page).toMatchObject({
-      prompt: htmlPagePrompt(PAGES[0], PLAN), model: 'inkling2-mini', effort: 'xhigh',
-      maxTokens: 48_000, toolFree: true, allowFallback: false,
-    });
+    const routeOptions = { model: 'inkling2-mini', effort: 'xhigh', maxTokens: 128_000, toolFree: true, allowFallback: false };
+    expect(plan).toMatchObject({ ...routeOptions, prompt: queued.planPrompts[0] });
+    expect(page).toMatchObject({ ...routeOptions, prompt: htmlPagePrompt(PAGES[0], PLAN) });
   });
 
   it('keeps the successful page when another provider reply contains no HTML', async () => {

@@ -103,19 +103,18 @@ function claudeContextOverride(provider, model, splashClaudeMaxTokens) {
   const hasSplashBudget = Number.isSafeInteger(splashClaudeMaxTokens) && splashClaudeMaxTokens > 0
     && splashHarnessTarget(provider, model)?.kind === 'claude';
   if (!pinnedContext && !hasSplashBudget) return {};
+  const contextEnv = pinnedContext ? { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(value.tokens) } : {};
+  if (provider.envVars?.CLAUDE_CODE_MAX_OUTPUT_TOKENS != null) return contextEnv;
+  // Splash clamps a tool-free request to the real context left after its
+  // prompt. A harness pin is not evidence of how much the runtime is serving.
+  if (hasSplashBudget) {
+    return { ...contextEnv, CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(splashClaudeMaxTokens) };
+  }
   const defaultOutput = provider.splashBacked === true ? 8192 : isLocalBackedClaude(provider) ? Number(CLAUDE_LOCAL_MAX_OUTPUT_TOKENS) : 32000;
-  const output = hasSplashBudget ? splashClaudeMaxTokens : defaultOutput;
-  const configuredContext = Number(provider.envVars?.CLAUDE_CODE_MAX_CONTEXT_TOKENS);
-  const context = pinnedContext ? value.tokens
-    : Number.isSafeInteger(configuredContext) && configuredContext >= 512 ? configuredContext : SPLASH_CONTEXT;
-  // Tool-free Splash requests have no accumulating tool results. Leave a
-  // quarter of the window for input there and three quarters in coding sessions.
-  const outputCap = Math.floor(context * (hasSplashBudget ? 0.75 : 0.25));
+  const outputCap = Math.floor(value.tokens / 4);
   return {
-    ...(pinnedContext ? { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(context) } : {}),
-    ...(provider.envVars?.CLAUDE_CODE_MAX_OUTPUT_TOKENS == null && (hasSplashBudget || output > outputCap)
-      ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(Math.min(output, outputCap)) }
-      : {}),
+    ...contextEnv,
+    ...(defaultOutput > outputCap ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(outputCap) } : {}),
   };
 }
 

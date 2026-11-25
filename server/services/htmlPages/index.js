@@ -32,6 +32,9 @@ import { ensurePageFile, pageFileName, removeRunFiles, writePageFile } from './p
 const ACTIVE = new Set(['queued', 'generating']);
 // Thinking models spend most of their budget reasoning before the page starts (8,000 left pages cut off mid-CSS; 24,000 still cut off a 35B thinking model mid-page), and a designed page itself runs several thousand tokens. At ~70 tok/s the cap takes about 12 minutes, inside the page timeout.
 const PAGE_MAX_TOKENS = 48_000;
+// Claude Code requires a request allowance. Ask for its documented ceiling
+// for custom model IDs; Splash enforces the actual room left in context.
+const SPLASH_CLAUDE_MAX_TOKENS = 128_000;
 const PAGE_TIMEOUT_MS = 20 * 60 * 1000;
 // Within this share of the cap the model was cut off, not finished.
 const TRUNCATION_SHARE = 0.98;
@@ -298,7 +301,7 @@ async function processRun(id) {
         }
         const prompt = planPrompt ? htmlPagePrompt(theme, plan) : (run.prompts?.[index] ?? htmlPagePrompt(theme));
         const startedAt = Date.now();
-        const result = await send(prompt, { page: true });
+        const result = await send(prompt);
         if (controller.signal.aborted) return;
         // Cut to the document, never repaired: a truncated page must read as truncated.
         const html = extractHtmlDocument(String(result?.text || '')).slice(0, MAX_PAGE_HTML_CHARS);
@@ -331,7 +334,7 @@ async function processRun(id) {
       temperature: PAGE_TEMPERATURE, timeoutMs: PAGE_TIMEOUT_MS, signal: controller.signal,
     });
     if (run.route) {
-      await generatePages((prompt, options) => generateViaProvider(run.route, prompt, controller.signal, options));
+      await generatePages((prompt) => generateViaProvider(run.route, prompt, controller.signal));
     } else if (isMtplxCheckpoint(run.backend, run.modelId)) {
       const { runOnMtplxCheckpoint } = await import('../mtplxServerManager.js');
       await runOnMtplxCheckpoint(run.modelId, (served) => generatePages(local(served || run.modelId)), { signal: controller.signal });
@@ -385,7 +388,7 @@ async function reasoningOnlyTimeoutError({ provider, route, capability, message,
 /**
  * One page through a provider route: the configured provider, model and effort exactly as picked, no fallback (the gallery must name what answered) and tool-free (the reply is the page, not files an agent wrote). Resolves to the same `{ text, error, timings }` shape `generate` does.
  */
-async function generateViaProvider(route, prompt, signal, { page = false } = {}) {
+async function generateViaProvider(route, prompt, signal) {
   const [{ runPromptThroughProvider }, { stopRun }] = await Promise.all([
     import('../promptRunner.js'), import('../runner.js'),
   ]);
@@ -405,7 +408,7 @@ async function generateViaProvider(route, prompt, signal, { page = false } = {})
       model: route.model || undefined, effort: route.effort || undefined, prompt,
       source: RUN_SOURCE, timeout: PAGE_TIMEOUT_MS, allowFallback: false, toolFree: true, cwd: PATHS.data,
       ...(isolateMtplxOpenCode ? { isolateMtplxOpenCode } : {}),
-      ...(page && splashHarnessTarget(provider, model)?.kind === 'claude' ? { maxTokens: PAGE_MAX_TOKENS } : {}),
+      ...(splashHarnessTarget(provider, model)?.kind === 'claude' ? { maxTokens: SPLASH_CLAUDE_MAX_TOKENS } : {}),
       beforeExecute: async () => {
         const { provider: current } = await requireRouteProvider(route);
         if (!isDeepStrictEqual(current, provider) || current.apiKey !== provider.apiKey) {
