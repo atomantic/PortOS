@@ -42,7 +42,7 @@ import {
   localLlmSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, seriesAutopilotSettingsSchema,
   imageGenGrokSettingsSchema, imageGenAgySettingsSchema, imageGenFalSettingsSchema,
   imageGenRunwaySettingsSchema, imageGenHiggsfieldSettingsSchema, imageGenGoogleSettingsSchema,
-  imageGenGeminiSettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema
+  renderDefaultsSettingsSchema, videoGenSettingsSchema
 } from '../lib/settingsValidation.js';
 import {
   privateCredentialParamsSchema, privateCredentialInputSchemaFor, harnessSettingsSchema,
@@ -92,7 +92,7 @@ const LOCAL_PARALLEL_BOUNDS = Object.freeze({
 // Backends whose settings slice carries a render-lane parallelLimitBounds
 // decoration. imageGen.codex is always decorated (even when absent); the rest
 // only when the stored slice exists. `local` uses the memory-governed bounds.
-const IMAGE_GEN_BOUNDED_BACKENDS = ['grok', 'agy', 'fal', 'runway', 'higgsfield', 'google', 'gemini'];
+const IMAGE_GEN_BOUNDED_BACKENDS = ['grok', 'agy', 'fal', 'runway', 'higgsfield', 'google'];
 const VIDEO_GEN_BOUNDED_BACKENDS = ['grok', 'gemini', 'fal', 'runway', 'higgsfield', 'google', 'reactor'];
 
 // Backends whose `videoGen.<backend>.apiKey` is write-only (#8997): redacted on
@@ -506,7 +506,6 @@ const SETTINGS_SLICE_VALIDATORS = [
   ['imageGen.fal', imageGenFalSettingsSchema.partial()],
   ['imageGen.higgsfield', imageGenHiggsfieldSettingsSchema.partial()],
   ['imageGen.google', imageGenGoogleSettingsSchema.partial()],
-  ['imageGen.gemini', imageGenGeminiSettingsSchema.partial()],
   ['renderDefaults', renderDefaultsSettingsSchema],
   ['videoGen', videoGenSettingsSchema],
   ['layeredIntelligence', layeredIntelligenceSettingsSchema.partial()],
