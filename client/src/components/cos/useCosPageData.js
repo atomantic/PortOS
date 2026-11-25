@@ -118,14 +118,24 @@ export default function useCosPageData({ activeTab, selectedTask }) {
   const appsReadRef = useRef(null);
 
   const [status, setStatus] = useState(null);
+  const statusRef = useRef(null);
+  const applyStatus = useCallback((next) => {
+    statusRef.current = typeof next === 'function' ? next(statusRef.current) : next;
+    setStatus(statusRef.current);
+  }, []);
   const [tasks, setTasks] = useState({ user: null, cos: null });
   const tasksRef = useRef(tasks);
   tasksRef.current = tasks;
   const [agents, setAgents] = useState([]);
-  // The newest committed agent list, so a shell read that settles after an agent
-  // slice read derives from it instead of from its own (possibly superseded) result.
-  const agentsRef = useRef(agents);
-  agentsRef.current = agents;
+  // `agents` and `status` are written through `applyAgents` / `applyStatus`, which
+  // update a ref in the same call. A shell read that settles after an agent slice
+  // read or a socket event then derives avatar state from the newest values
+  // instead of from its own captured, possibly superseded, snapshot.
+  const agentsRef = useRef([]);
+  const applyAgents = useCallback((next) => {
+    agentsRef.current = typeof next === 'function' ? next(agentsRef.current) : next;
+    setAgents(agentsRef.current);
+  }, []);
   const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [agentsError, setAgentsError] = useState(null);
   const agentReadRef = useRef(null);
@@ -308,7 +318,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       const merged = new Map(data.map(agent => [agent.id, agent]));
       for (const [id, agent] of request.updates) merged.set(id, mergeAgentRecords(merged.get(id), agent));
       const snapshot = [...merged.values()].filter(agent => agent.status !== 'completed' || agent.deliveryPending);
-      setAgents(snapshot);
+      applyAgents(snapshot);
       setAgentsLoaded(true);
       setAgentsError(null);
     } else {
@@ -317,7 +327,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     // Opening Agents must not wait for unrelated status or task summaries.
     if (needsRef.current.tab === 'agents') setLoading(false);
     return data;
-  }, []);
+  }, [applyAgents]);
 
   // The learning tile is shell data fed by two writers (the full read and an
   // agent completion), so the newest request wins and a failed refresh keeps
@@ -389,12 +399,9 @@ export default function useCosPageData({ activeTab, selectedTask }) {
         needs.tasks ? awaitSlice('tasks', getCosActionableInsights({ cachedHealth: true, silent: true }).catch(() => null)) : Promise.resolve(null)
       ]);
 
-      const [statusData, tasksData, agentResult] = await coreRead;
+      const [statusData, tasksData] = await coreRead;
       if (controller.signal.aborted) return;
-      // A null result means this read's agent snapshot was superseded (or never
-      // needed); the committed list is then the newer truth.
-      const agentsData = Array.isArray(agentResult) ? agentResult : (needsRef.current.agents ? agentsRef.current : []);
-      setStatus(statusData);
+      applyStatus(statusData);
       setStatusReadFailed(typeof statusData?.running !== 'boolean');
       // A queue refresh started later can still resolve first. Its task payload
       // must not be clobbered by this older, pre-flip read — otherwise the row
@@ -409,12 +416,13 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       // learning, and insights. Those values fill in below without delaying the
       // tab the user asked to open.
       const initialHealth = healthRef.current;
-      const initialState = deriveAgentState(statusData, agentsData, initialHealth);
+      const initialAgents = needsRef.current.agents ? agentsRef.current : [];
+      const initialState = deriveAgentState(statusData, initialAgents, initialHealth);
       setAgentState(initialState);
       setStatusMessage(statusData?.paused
         ? `Paused${statusData.pauseReason ? ` — ${statusData.pauseReason}` : ''}`
         : (initialState === 'investigating' && summarizeHealthIssues(initialHealth?.issues)) || STATE_MESSAGES[initialState]);
-      const runningAgent = agentsData.find(a => a.status === 'running');
+      const runningAgent = initialAgents.find(a => a.status === 'running');
       setActiveAgentMeta(runningAgent?.metadata || null);
 
       const [learningSummaryData, insightsData] = await secondaryRead;
@@ -430,14 +438,17 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       // doesn't flicker empty on a blip.
       if (insightsData?.insights && queueSeqRef.current === queueSeq && tasksCurrent()) setInsights(insightsData.insights);
 
-      const newState = deriveAgentState(statusData, agentsData, mergedHealth);
+      // Status and agents may have moved on (an agent slice read, a spawn event, a
+      // pause) while the ancillary reads settled; derive from the newest of both.
+      const liveStatus = statusRef.current;
+      const newState = deriveAgentState(liveStatus, needsRef.current.agents ? agentsRef.current : [], mergedHealth);
       setAgentState(newState);
       // Default state message — richer messages come from socket events. The one
       // state whose default is useless is `investigating`: only a health issue
       // gets us here, so name it rather than saying "Investigating issue..." next
       // to an Active count of 0 with no agent to inspect.
-      setStatusMessage(statusData?.paused
-        ? `Paused${statusData.pauseReason ? ` — ${statusData.pauseReason}` : ''}`
+      setStatusMessage(liveStatus?.paused
+        ? `Paused${liveStatus.pauseReason ? ` — ${liveStatus.pauseReason}` : ''}`
         : (newState === 'investigating' && summarizeHealthIssues(mergedHealth?.issues)) || STATE_MESSAGES[newState]);
 
     };
@@ -448,7 +459,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       if (pending.dirty && !controller.signal.aborted) refreshPageData();
     });
     return pending.promise;
-  }, [deriveAgentState, applyHealth, markHealthUnavailable, applyProviders, readApps, readAgents, awaitSlice]);
+  }, [deriveAgentState, applyHealth, markHealthUnavailable, applyProviders, readApps, readAgents, awaitSlice, applyStatus]);
 
   // Coalesce event bursts into a read of the visible queue and scalar shell
   // status. Insights use persisted health; invalidation never runs PM2 repair.
@@ -472,7 +483,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       awaitSlice('agents', readAgents(controller)),
     ]).then(async ([summary, tasksData]) => {
       if (controller.signal.aborted || queueSeqRef.current !== queueSeq) return;
-      if (summary) setStatus(summary);
+      if (summary) applyStatus(summary);
       if (tasksData && tasksCurrent()) setTasks(tasksData);
       const insightsData = await insightsRead;
       if (!controller.signal.aborted && queueSeqRef.current === queueSeq && tasksCurrent() && insightsData?.insights) setInsights(insightsData.insights);
@@ -481,7 +492,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       if (request.dirty && !controller.signal.aborted) refreshQueueData();
     });
     return request.promise;
-  }, [readAgents, awaitSlice]);
+  }, [readAgents, awaitSlice, applyStatus]);
 
   // A slice's first read when its flag turns true: queue + insights.
   // Deliberately reads no shell data; status, health and learning are
@@ -587,7 +598,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     socket.on('connect', reconnect);
 
     const handleCosStatus = (data) => {
-      setStatus(prev => ({ ...prev, running: data.running }));
+      applyStatus(prev => ({ ...prev, running: data.running }));
       fetchQueue();
       if (!data.running) {
         setAgentState('sleeping');
@@ -636,7 +647,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     const handleAgentSpawned = (data) => {
       if (needsRef.current.agents && data?.id) {
         agentReadRef.current?.updates.set(data.id, data);
-        setAgents(prev => [...prev.filter(agent => agent.id !== data.id), data]);
+        applyAgents(prev => [...prev.filter(agent => agent.id !== data.id), data]);
       }
       setAgentState('coding');
       // Show actual task description if available
@@ -659,7 +670,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       const updates = agentReadRef.current?.updates;
       updates?.set(updatedAgent.id, mergeAgentRecords(updates.get(updatedAgent.id), updatedAgent));
       // Update the specific agent in the agents list without fetching all data
-      setAgents(prev => prev.map(agent =>
+      applyAgents(prev => prev.map(agent =>
         agent.id === updatedAgent.id ? mergeAgentRecords(agent, updatedAgent) : agent
       ).filter(agent => agent.status !== 'completed' || agent.deliveryPending));
       if (updatedAgent.status === 'completed' || updatedAgent.metadata?.releaseSynchronization) {
@@ -683,7 +694,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       const id = data?.id || data?.agentId;
       if (needsRef.current.agents && id) {
         agentReadRef.current?.updates.set(id, { ...data, id, status: 'completed' });
-        setAgents(prev => prev.filter(agent => agent.id !== id));
+        applyAgents(prev => prev.filter(agent => agent.id !== id));
       }
       setCompletedRevision(value => value + 1);
       refreshLearning();
@@ -815,7 +826,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     });
     if (result?.success) {
       toast.success('Chief of Staff paused');
-      setStatus(prev => ({ ...prev, paused: true, pausedAt: result.pausedAt, pauseReason: reason }));
+      applyStatus(prev => ({ ...prev, paused: true, pausedAt: result.pausedAt, pauseReason: reason }));
       setAgentState('sleeping');
       setStatusMessage(`Paused — ${reason}`);
       fetchData();
@@ -829,7 +840,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     });
     if (result?.success) {
       toast.success('Chief of Staff resumed');
-      setStatus(prev => ({ ...prev, paused: false, pausedAt: null, pauseReason: null }));
+      applyStatus(prev => ({ ...prev, paused: false, pausedAt: null, pauseReason: null }));
       setAgentState('thinking');
       setStatusMessage('Resuming daemon - scanning for tasks...');
       fetchData();
