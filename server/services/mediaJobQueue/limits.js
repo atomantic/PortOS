@@ -110,11 +110,11 @@ export function syncParallelLimits(s) {
   if (!s) return;
   for (const mode of CLOUD_IMAGE_GEN_MODES) {
     const parallelLimit = s.imageGen?.[mode]?.parallelLimit;
-    if (parallelLimit !== undefined) setParallelLimit('image', mode, parallelLimit);
+    if (parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode }, parallelLimit);
   }
   for (const mode of CLOUD_VIDEO_GEN_MODES) {
     const parallelLimit = s.videoGen?.[mode]?.parallelLimit;
-    if (parallelLimit !== undefined) setParallelLimit('video', mode, parallelLimit);
+    if (parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode }, parallelLimit);
   }
 }
 
