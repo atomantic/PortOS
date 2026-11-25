@@ -1,12 +1,15 @@
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
-import { mkdir, writeFile, readFile, rm, utimes, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, mkdtemp, writeFile, readFile, rm, utimes, readdir } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import express from 'express';
 import { request } from '../../lib/testHelper.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { cosEvents } from './cosEvents.js';
+import { computeEffectiveExcludes } from '../backup/excludes.js';
+import { runRsync } from '../backup/rsync.js';
 const fixture = await vi.hoisted(async () => {
   const { mkdtemp } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
@@ -14,7 +17,7 @@ const fixture = await vi.hoisted(async () => {
   return { root: await mkdtemp(join(tmpdir(), 'cos-storage-')), state: {}, config: {}, trusted: true, failWrite: false, corruptVerification: false, onWrite: null };
 });
 vi.mock('./cosState.js', () => ({
-  AGENTS_DIR: fixture.root,
+  AGENTS_DIR: join(fixture.root, 'cos', 'agents'),
   readAgentsStateForSafetyCheck: async () => ({ trusted: fixture.trusted, agents: fixture.state }),
   loadConfig: async () => fixture.config,
   saveConfig: async value => { fixture.config = value; },
@@ -46,13 +49,15 @@ vi.mock('../../lib/backupSnapshotBoundary.js', async importOriginal => {
 });
 vi.mock('../codexSummaryRepair.js', () => ({ repairCodexTaskSummary: async () => null }));
 const storage = await import('./cosAgentStorage.js');
-const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
+const { acquireBackupSnapshotCut, withBackupAssetPublication } = await import('../../lib/backupSnapshotBoundary.js');
+const { withStateLock } = await import('./cosState.js');
 const { default: routes } = await import('../../routes/dataManager.js');
 const app = express();
 app.use(express.json()); app.use('/api/data', routes); app.use(errorMiddleware);
 const date = '2001-01-01';
 const source = 'Example terminal redraw\n'.repeat(4000);
-const runDir = id => join(fixture.root, date, id);
+const recordingPath = id => join('cos', 'agents', date, id);
+const runDir = id => join(fixture.root, recordingPath(id));
 async function seed(id = 'agent-example', metadata = {}) {
   const dir = runDir(id);
   await mkdir(dir, { recursive: true });
@@ -213,6 +218,79 @@ it.each(['compress', 'purge'])('%s waits out an open backup cut before changing 
   } finally { release(); }
   expect((await settled()).state).toBe('completed');
   await expectSettledRecording(dir, action);
+});
+
+it('copies published recordings and nearby files during a cut while verified compression waits to publish', async context => {
+  if (process.platform === 'win32' && spawnSync('rsync', ['--version']).error?.code === 'ENOENT') {
+    context.skip('Windows runner has no rsync executable; real rsync remains required on Linux/macOS.');
+    return;
+  }
+  const id = 'agent-example';
+  const dir = await seed(id);
+  const nearby = 'raw.txt.gz.00000000-0000-4000-7000-000000000001.tmp';
+  await writeFile(join(dir, nearby), 'unrelated file');
+  await writeFile(join(dir, 'raw.txt.gz'), gzipSync('prior published recording'));
+  await utimes(join(dir, 'raw.txt.gz'), new Date(date), new Date(date));
+  const snapshot = await mkdtemp(join(dirname(fixture.root), 'cos-storage-cut-'));
+  const reached = deferred();
+  fixture.onAdmission = reached.resolve;
+  const release = await acquireBackupSnapshotCut();
+  let started = false;
+  try {
+    await startStorageAction('compress');
+    started = true;
+    await reached.promise;
+    const stage = (await readdir(dir)).find(name => name.endsWith('.tmp') && name !== nearby);
+    expect(stage).toBeDefined();
+    expect(gunzipSync(await readFile(join(dir, stage))).toString()).toBe(source);
+    await writeFile(join(fixture.root, stage), 'same basename outside the CoS archive');
+
+    const defaults = computeEffectiveExcludes();
+    const flags = computeEffectiveExcludes({ disabledDefaultExcludes: defaults }).flatMap(path => ['--exclude', path]);
+    await runRsync(fixture.root, snapshot, flags);
+    const copied = join(snapshot, recordingPath(id));
+    await expect(readFile(join(copied, stage))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(join(copied, nearby), 'utf8')).toBe('unrelated file');
+    expect(await readFile(join(snapshot, stage), 'utf8')).toBe('same basename outside the CoS archive');
+    expect(await readFile(join(copied, 'raw.txt'), 'utf8')).toBe(source);
+    expect(gunzipSync(await readFile(join(copied, 'raw.txt.gz'))).toString()).toBe('prior published recording');
+  } finally {
+    release();
+    await rm(snapshot, { recursive: true, force: true });
+    if (started) expect(await settled()).toMatchObject({ state: 'completed', skipped: 0 });
+  }
+  await expect(readFile(join(dir, 'raw.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(gunzipSync(await readFile(join(dir, 'raw.txt.gz'))).toString()).toBe(source);
+  expect((await readdir(dir)).filter(name => name.endsWith('.tmp'))).toEqual([nearby]);
+});
+
+it('waits for active staging before scrubbing and retires a pending candidate even when the plain file is unchanged', async () => {
+  const dir = await seed();
+  const writing = deferred();
+  const resume = deferred();
+  fixture.onWrite = async () => { writing.resolve(); await resume.promise; };
+  await startStorageAction('compress');
+  await writing.promise;
+  const scrubAdmitted = deferred();
+  let scrubFinished = false;
+  const scrub = withBackupAssetPublication(() => withStateLock(async () => {
+    scrubAdmitted.resolve();
+    // The revoked fact may exist only in residue, so the source fingerprint
+    // can stay identical even though this candidate has been invalidated.
+    await storage.scrubAgentRecordings(dir, value => value);
+    scrubFinished = true;
+  }));
+  try {
+    await scrubAdmitted.promise;
+    await settleTurn();
+    expect(scrubFinished).toBe(false);
+  } finally {
+    resume.resolve();
+    await scrub;
+    expect(await settled()).toMatchObject({ state: 'completed', skipped: 1, failed: 0 });
+  }
+  expect(await readFile(join(dir, 'raw.txt'), 'utf8')).toBe(source);
+  expect((await readdir(dir)).filter(name => name.startsWith('raw.txt'))).toEqual(['raw.txt']);
 });
 
 it.each(['compress', 'purge'])('%s drains the file-primary manifest and byte deletion together', async action => {

@@ -10,6 +10,7 @@ import { reloadSettings, withLiveSettingsRestore } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 import { restoreSnapshot } from './backup.js';
 import { withLiveCosRestore } from './cos/cosState.js';
+import { RECORDING_STAGE_RSYNC_GLOB } from './cos/recordingStages.js';
 import { withLiveMediaModelsRestore } from '../lib/mediaModels.js';
 import { withLiveTaskScheduleRestore, updateSchedule } from './taskScheduleStore.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
@@ -141,6 +142,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=/[wW][oO][rR][kK][fF][lL][oO][wW]-[mM][aA][iI][nN][tT][eE][nN][aA][nN][cC][eE]',
         '--exclude=/[bB][aA][cC][kK][uU][pP]-[aA][dD][mM][iI][sS][sS][iI][oO][nN]',
         '--exclude=/[cC][oO][sS]/[aA][gG][eE][nN][tT][sS]/.[bB][rR][aA][nN][cC][hH]-[pP][oO][lL][iI][cC][yY]-[rR][eE][vV][iI][sS][iI][oO][nN]',
+        `--exclude=${RECORDING_STAGE_RSYNC_GLOB}`,
         '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN].*.[tT][mM][pP]',
         '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[fF][oO][rR][wW][aA][rR][dD][sS].[jJ][sS][oO][nN].*.[tT][mM][pP]',
         '--exclude=/.[dD][aA][tT][aA][bB][aA][sS][eE]-[rR][eE][sS][tT][oO][rR][eE]-[rR][eE][cC][oO][vV][eE][rR][yY]-*.[pP][eE][nN][dD][iI][nN][gG]',
@@ -186,6 +188,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=/[wW][oO][rR][kK][fF][lL][oO][wW]-[mM][aA][iI][nN][tT][eE][nN][aA][nN][cC][eE]',
         '--exclude=/[bB][aA][cC][kK][uU][pP]-[aA][dD][mM][iI][sS][sS][iI][oO][nN]',
         '--exclude=/[cC][oO][sS]/[aA][gG][eE][nN][tT][sS]/.[bB][rR][aA][nN][cC][hH]-[pP][oO][lL][iI][cC][yY]-[rR][eE][vV][iI][sS][iI][oO][nN]',
+        `--exclude=${RECORDING_STAGE_RSYNC_GLOB}`,
         '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN].*.[tT][mM][pP]',
         '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[fF][oO][rR][wW][aA][rR][dD][sS].[jJ][sS][oO][nN].*.[tT][mM][pP]',
         '--exclude=/.[dD][aA][tT][aA][bB][aA][sS][eE]-[rR][eE][sS][tT][oO][rR][eE]-[rR][eE][cC][oO][vV][eE][rR][yY]-*.[pP][eE][nN][dD][iI][nN][gG]',

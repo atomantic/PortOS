@@ -5,6 +5,7 @@
  */
 
 import { anchorUserExcludes } from '../../lib/sharedSchemas.js';
+import { RECORDING_STAGE_PATH, RECORDING_STAGE_RSYNC_GLOB } from '../cos/recordingStages.js';
 
 // Paths under data/ that are skipped by default on top of user-configured excludes.
 // Two classes live here: (1) ephemeral/cache data the user almost never wants in a
@@ -33,6 +34,7 @@ export const DEFAULT_EXCLUDES = [
   { path: '/venvs/', reason: 'Reactor environment, its private Python and downloaded uv — rebuilt by npm run setup:reactor; absolute paths make a restored copy unusable', overridable: false },
   { path: '/browser-profile/', reason: 'Browser CDP profile — cache/cookies, can be several GB', overridable: false },
   { path: '/cos/agents/.branch-policy-revision*', reason: 'Machine-local archive policy index revision', overridable: false },
+  { path: RECORDING_STAGE_RSYNC_GLOB, reason: 'Unpublished CoS recording compression scratch, including interrupted writes', overridable: false },
   { path: '/cos/worktrees/', reason: 'Ephemeral agent git worktrees — recreated on demand', overridable: false },
   { path: '/cos/initialized-checkout-fixtures/', reason: 'Retired CoS checkout test fixtures — regenerable, removed by migration 461', overridable: false },
   { path: '/autofixer/worktrees/', reason: 'Disposable Autofixer repair worktrees — recreated for each repair', overridable: false },
@@ -235,6 +237,7 @@ const RESTORE_PRESERVED_FILES = Object.freeze([
 const caseInsensitiveGlob = (name) => name.replace(/[a-z]/gi, ch => `[${ch.toLowerCase()}${ch.toUpperCase()}]`);
 export const RESTORE_PRESERVED_RSYNC_EXCLUDES = [
   ...RESTORE_PRESERVED_FILES.map(name => `--exclude=/${caseInsensitiveGlob(name)}`),
+  `--exclude=${RECORDING_STAGE_RSYNC_GLOB}`,
   `--exclude=/${caseInsensitiveGlob('tailcat-serve.json.*.tmp')}`,
   `--exclude=/${caseInsensitiveGlob('tailcat-forwards.json.*.tmp')}`,
   `--exclude=/${caseInsensitiveGlob('.database-restore-recovery-*.pending')}`,
@@ -242,7 +245,8 @@ export const RESTORE_PRESERVED_RSYNC_EXCLUDES = [
 export const isRestorePreservedPath = (relativePath) => {
   if (typeof relativePath !== 'string') return false;
   const normalized = relativePath.toLowerCase();
-  return /^tailcat-(?:serve|forwards)\.json\.[^/]+\.tmp$/.test(normalized)
+  return RECORDING_STAGE_PATH.test(relativePath)
+    || /^tailcat-(?:serve|forwards)\.json\.[^/]+\.tmp$/.test(normalized)
     || /^\.database-restore-recovery-[^/]*\.pending(?:\/|$)/.test(normalized)
     || RESTORE_PRESERVED_FILES.some(path => normalized === path || normalized.startsWith(`${path}/`));
 };
@@ -251,7 +255,7 @@ export const isRestorePreservedPath = (relativePath) => {
 // Compared case-insensitively after dropping empty/`.` segments, so
 // `./Database-Authority.json/` cannot slip past on a case-insensitive volume.
 export const restoreScopeIsPreservedFile = (subdirFilter) => {
-  const normalized = subdirFilter?.split('/').filter(part => part && part !== '.').join('/').toLowerCase();
+  const normalized = subdirFilter?.split('/').filter(part => part && part !== '.').join('/');
   return isRestorePreservedPath(normalized);
 };
 

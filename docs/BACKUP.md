@@ -48,6 +48,8 @@ A backup run (`runBackup` in `server/services/backup.js`) writes to:
 
 A Music Video [Blender film](./features/music-video-blender.md) is split the same way: its scripts (`data/music-video/<projectId>/blender/src/`), synced shot list and `song.json` are backed up, while `/music-video/*/blender/renders/` (frames, shot videos, stills, cuts and logs, all re-rendered from those scripts) is excluded and overridable.
 
+CoS archives include published terminal recordings (`raw.txt` and `raw.txt.gz`). Compression stages named `raw.txt.gz.<uuid-v4>.tmp` directly under dated CoS run directories are always excluded from new snapshots and skipped when restoring older snapshots. Privacy Vault revocation also removes regular files with those staging names from affected recording directories.
+
 Rendered frames are the bulk of `renders/` (a long film's final PNG frames run to many gigabytes), and PortOS does not read them again once a shot's video is encoded. They are kept on disk by this rule (`server/services/film/usage.js`):
 
 - An unfinished render keeps its frames, so the next render of that shot resumes them.
