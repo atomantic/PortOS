@@ -4,62 +4,10 @@ import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import ToggleSwitch from '../ToggleSwitch';
 import SettingsLoadError from '../ui/SettingsLoadError';
+import useSettingsForm from '../../hooks/useSettingsForm.js';
 import { getSettings, updateSettings } from '../../services/apiSystem.js';
 import { getMortalLoomStatus, importMortalLoom } from '../../services/apiMortalLoom.js';
 import { formatBytes, formatDateTime } from '../../utils/formatters';
-
-export function MortalLoomTab() {
-  const icloudPathId = useId();
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [importing, setImporting] = useState(false);
-  const [enabled, setEnabled] = useState(false);
-  const [path, setPath] = useState('');
-  const [status, setStatus] = useState(null);
-  const [lastImport, setLastImport] = useState(null);
-
-  const refreshStatus = async () => {
-    const s = await getMortalLoomStatus().catch(() => null);
-    if (s) setStatus(s);
-  };
-
-  const loadAll = useCallback(() => {
-    setLoading(true);
-    setLoadError(false);
-    return Promise.all([getSettings().catch(() => null), getMortalLoomStatus().catch(() => null)])
-      .then(([settings, s]) => {
-        if (s) setStatus(s);
-        if (!settings) { setLoadError(true); return; }
-        const ml = settings.mortalloom || {};
-        setEnabled(Boolean(ml.enabled));
-        setPath(ml.path || '');
-        setLastImport(ml.lastImportAt || null);
-      })
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => { loadAll(); }, [loadAll]);
-
-  const handleSave = async () => {
-    if (loadError) return;
-    setSaving(true);
-    try {
-      await updateSettings({
-        mortalloom: {
-          enabled,
-          path: path.trim(),
-          lastImportAt: lastImport
-        }
-      }, { silent: true });
-      toast.success('MortalLoom settings saved');
-      await refreshStatus();
-    } catch (err) {
-      toast.error(err.message || 'Failed to save settings');
-    } finally {
-      setSaving(false);
-    }
-  };
 
 // The server reports a machine-readable `reason`; these are the ones worth
 // rewriting for a human. An evicted (iCloud-offloaded) store is deliberately
@@ -70,32 +18,94 @@ const IMPORT_FAILURE_MESSAGES = {
   'mortalloom-file-unreadable': 'MortalLoom.json is in iCloud but has not been downloaded to this Mac yet. A download was requested — try again shortly.',
 };
 
+export function MortalLoomTab() {
+  const icloudPathId = useId();
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const { values, saved, isDirty, set, load, markSaved } = useSettingsForm({ enabled: false, path: '' });
+  const { enabled, path } = values;
+  const [status, setStatus] = useState(null);
+  const [lastImport, setLastImport] = useState(null);
+
+  const [statusError, setStatusError] = useState(false);
+  const [checkingStatus, setCheckingStatus] = useState(false);
+
+  const refreshStatus = useCallback(async () => {
+    setCheckingStatus(true);
+    try {
+      setStatus(await getMortalLoomStatus({ silent: true }));
+      setStatusError(false);
+    } catch {
+      setStatus(null);
+      setStatusError(true);
+    } finally {
+      setCheckingStatus(false);
+    }
+  }, []);
+
+  const loadAll = useCallback(() => {
+    setLoading(true);
+    setLoadError(false);
+    return Promise.all([
+      getSettings({ silent: true }).then(settings => {
+        const ml = settings.mortalloom ?? {};
+        load({ enabled: Boolean(ml.enabled), path: ml.path || '' });
+        setLastImport(ml.lastImportAt || null);
+      }).catch(() => setLoadError(true)),
+      refreshStatus(),
+    ]).finally(() => setLoading(false));
+  }, [load, refreshStatus]);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
+
+  const saveDisabled = saving || importing || loadError || checkingStatus;
+  const importDisabled = saveDisabled || !saved.enabled || isDirty || !status?.exists;
+
+  const handleSave = async () => {
+    if (saveDisabled) return;
+    setSaving(true);
+    const submitted = { enabled, path: path.trim() };
+    try {
+      await updateSettings({
+        mortalloom: { ...submitted, lastImportAt: lastImport }
+      }, { silent: true });
+      markSaved(submitted, values);
+      toast.success('MortalLoom settings saved');
+      await refreshStatus();
+    } catch (err) {
+      toast.error(err.message || 'Failed to save settings');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleImport = async () => {
-    if (loadError) return;
-    if (!status?.exists) {
-      toast.error('MortalLoom.json not found at configured path');
-      return;
-    }
+    if (importDisabled) return;
     setImporting(true);
-    const res = await importMortalLoom({ silent: true }).catch(() => null);
-    setImporting(false);
-    if (!res?.ok) {
-      toast.error('Import failed: ' + (IMPORT_FAILURE_MESSAGES[res?.reason] || res?.reason || 'unknown'));
-      return;
+    try {
+      const res = await importMortalLoom({ silent: true }).catch(() => null);
+      if (!res?.ok) {
+        toast.error('Import failed: ' + (IMPORT_FAILURE_MESSAGES[res?.reason] || res?.reason || 'unknown'));
+        return;
+      }
+      const totalAdded = Object.values(res.added || {}).reduce((a, b) => a + b, 0);
+      const totalSkipped = Object.values(res.skipped || {}).reduce((a, b) => a + b, 0);
+      toast.success(`Imported ${totalAdded} new records (${totalSkipped} already present)`);
+      const now = new Date().toISOString();
+      setLastImport(now);
+      await updateSettings({ mortalloom: { ...saved, lastImportAt: now } })
+        .catch((err) => { console.warn(`⚠️ Failed to persist import timestamp: ${err?.message || err}`); });
+      await refreshStatus();
+    } finally {
+      setImporting(false);
     }
-    const totalAdded = Object.values(res.added || {}).reduce((a, b) => a + b, 0);
-    const totalSkipped = Object.values(res.skipped || {}).reduce((a, b) => a + b, 0);
-    toast.success(`Imported ${totalAdded} new records (${totalSkipped} already present)`);
-    const now = new Date().toISOString();
-    setLastImport(now);
-    await updateSettings({ mortalloom: { enabled, path: path.trim(), lastImportAt: now } })
-      .catch((err) => { console.warn(`⚠️ Failed to persist import timestamp: ${err?.message || err}`); });
-    await refreshStatus();
   };
 
   if (loading) return <BrailleSpinner text="Loading MortalLoom settings" />;
 
-  const effectivePath = path.trim() || status?.defaultPath || '';
+  const effectivePath = status?.path || saved.path.trim() || status?.defaultPath || '';
 
   return (
     <div className="space-y-5">
@@ -122,7 +132,7 @@ const IMPORT_FAILURE_MESSAGES = {
           <span className="text-sm text-gray-400">Enabled</span>
           <ToggleSwitch
             enabled={enabled}
-            onChange={() => setEnabled(!enabled)}
+            onChange={() => set('enabled', !enabled)}
             size="sm"
             ariaLabel={enabled ? 'Disable MortalLoom sync' : 'Enable MortalLoom sync'}
           />
@@ -137,7 +147,7 @@ const IMPORT_FAILURE_MESSAGES = {
             id={icloudPathId}
             type="text"
             value={path}
-            onChange={e => setPath(e.target.value)}
+            onChange={e => set('path', e.target.value)}
             className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent font-mono"
             placeholder={status?.defaultPath || ''}
           />
@@ -149,7 +159,7 @@ const IMPORT_FAILURE_MESSAGES = {
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <button
             onClick={handleSave}
-            disabled={saving || loadError}
+            disabled={saveDisabled}
             className="inline-flex items-center justify-center min-h-[40px] px-4 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50"
           >
             <Save size={14} className="inline mr-1" />
@@ -157,14 +167,19 @@ const IMPORT_FAILURE_MESSAGES = {
           </button>
           <button
             onClick={handleImport}
-            disabled={importing || loadError || !status?.exists || !enabled}
+            disabled={importDisabled}
             className="inline-flex items-center justify-center min-h-[40px] px-4 py-2 bg-port-bg border border-port-border hover:border-port-accent text-white rounded-lg text-sm transition-colors disabled:opacity-50"
-            title={!enabled ? 'Enable sync first' : !status?.exists ? 'MortalLoom.json not found' : 'Import into PortOS'}
+            title={status?.exists === false ? 'MortalLoom.json not found' : 'Import into PortOS'}
           >
             <Download size={14} className="inline mr-1" />
             {importing ? 'Importing…' : 'Import from MortalLoom'}
           </button>
         </div>
+        {(saving || isDirty) && (
+          <p role="status" className="text-xs text-gray-400">
+            {saving ? 'Wait for settings to finish saving before importing.' : 'Save your changes before importing.'}
+          </p>
+        )}
         <p className="text-xs text-gray-500">
           Import is non-destructive: records already present in PortOS (matched by id) are kept
           as-is. Only missing records are added.
@@ -173,26 +188,33 @@ const IMPORT_FAILURE_MESSAGES = {
 
       <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-3">
         <h3 className="text-sm font-semibold text-white">iCloud file status</h3>
-        <div className="text-xs text-gray-400 space-y-1 font-mono">
-          <div className="flex items-start gap-2">
+        {checkingStatus && <BrailleSpinner text="Checking iCloud file status" />}
+        {!checkingStatus && statusError && (loadError
+          ? <p className="text-xs text-port-warning">MortalLoom file status is unavailable.</p>
+          : <SettingsLoadError onRetry={refreshStatus}>MortalLoom file status is unavailable.</SettingsLoadError>
+        )}
+        {!checkingStatus && status && (
+          <div className="text-xs text-gray-400 space-y-1 font-mono">
+            <div className="flex items-start gap-2">
+              {status?.exists ? (
+                <CheckCircle2 size={14} className="text-port-success mt-0.5 shrink-0" />
+              ) : (
+                <AlertCircle size={14} className="text-port-warning mt-0.5 shrink-0" />
+              )}
+              <span className="break-all">{effectivePath || '(no path)'}</span>
+            </div>
             {status?.exists ? (
-              <CheckCircle2 size={14} className="text-port-success mt-0.5 shrink-0" />
-            ) : (
-              <AlertCircle size={14} className="text-port-warning mt-0.5 shrink-0" />
+              <>
+                <div>Size: {formatBytes(status.size)}</div>
+                <div>Modified: {status.mtime ? formatDateTime(status.mtime) : '—'}</div>
+                {lastImport && <div>Last import: {formatDateTime(lastImport)}</div>}
+              </>
+            ) : status.exists === false && (
+              <div className="text-port-warning">File not found. Open MortalLoom on iPhone/Mac to create it, or verify the path.</div>
             )}
-            <span className="break-all">{effectivePath || '(no path)'}</span>
           </div>
-          {status?.exists ? (
-            <>
-              <div>Size: {formatBytes(status.size)}</div>
-              <div>Modified: {status.mtime ? formatDateTime(status.mtime) : '—'}</div>
-              {lastImport && <div>Last import: {formatDateTime(lastImport)}</div>}
-            </>
-          ) : (
-            <div className="text-port-warning">File not found. Open MortalLoom on iPhone/Mac to create it, or verify the path.</div>
-          )}
-        </div>
-        {status?.summary && (
+        )}
+        {!checkingStatus && status?.summary && (
           <div className="grid grid-cols-2 gap-2 text-xs text-gray-300 mt-2">
             <div>Goals: <span className="text-white">{status.summary.goals}</span></div>
             <div>Alcohol drinks: <span className="text-white">{status.summary.alcoholDrinks}</span></div>
