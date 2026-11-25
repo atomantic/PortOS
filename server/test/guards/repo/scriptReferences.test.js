@@ -35,12 +35,15 @@ export function isSiblingTest(candidate, file) {
 }
 
 // A whole `[\w.-]+` token equal to a key once its trailing dots are dropped.
-// One scan for the known keys instead of tokenizing ~47 MB into per-file sets
+// One scan for the known keys instead of tokenizing the corpus into per-file sets
 // keeps this always-run check cheap (it also beat a linear tokenizer, #16996).
-const keyPattern = (keys) => new RegExp(
-  `(?<![\\w.-])(?:${[...keys].sort((a, b) => b.length - a.length).map(escapeRegExp).join('|')})(?=\\.*(?:[^\\w.-]|$))`,
-  'g',
-);
+const keyPattern = (keys) => {
+  const byLength = [...keys].sort((a, b) => b.length - a.length);
+  // A token ending in a word character, dot or hyphen cannot double as the next token's delimiter.
+  // Consuming that delimiter is cheaper than checking a lookbehind throughout the corpus.
+  const boundary = byLength.every((key) => /[\w.-]/.test(key.slice(-1))) ? '(?:^|[^\\w.-])' : '(?<![\\w.-])';
+  return new RegExp(`${boundary}(${byLength.map(escapeRegExp).join('|')})(?=\\.*(?:[^\\w.-]|$))`, 'g');
+};
 
 /** Map each candidate's referencing key (file name, plus stem for Python) to its owner path. */
 export function referenceKeys(candidates) {
@@ -55,23 +58,34 @@ export function referenceKeys(candidates) {
 
 /** Candidate scripts that no other live tracked file references. */
 export function unreferencedScripts(candidates, corpus) {
+  const pending = new Set(candidates);
+  if (pending.size === 0) return [];
   const keys = referenceKeys(candidates);
   const pattern = keyPattern(keys.keys());
-  const referenced = new Set();
+  const repo = guardCorpus();
   for (const path of corpus) {
     // Tracked symlinks (.claude/commands/do/*) point into the lib/slashdo submodule; a symlink holds no text of its own.
-    if (!guardCorpus().lstat(path).isFile()) continue;
+    if (!repo.lstat(path).isFile()) continue;
     // A binary asset (git's NUL-in-the-first-8000-bytes heuristic) holds no pointer to a script.
-    if (guardCorpus().bytes(path).subarray(0, 8000).includes(0)) continue;
-    for (const [token] of guardCorpus().read(path).matchAll(pattern)) {
+    if (repo.bytes(path).subarray(0, 8000).includes(0)) continue;
+    for (const [, token] of repo.read(path).matchAll(pattern)) {
       const owner = keys.get(token);
-      if (owner && owner !== path && !isSiblingTest(owner, path)) referenced.add(owner);
+      if (pending.has(owner) && owner !== path && !isSiblingTest(owner, path)) {
+        pending.delete(owner);
+        if (pending.size === 0) return [];
+      }
     }
   }
-  return candidates.filter((path) => !referenced.has(path));
+  return candidates.filter((path) => pending.has(path));
 }
 
 describe('scripts/ reference guard (#16089, #16909)', () => {
+  it('finds adjacent references while excluding longer tokens and preserving punctuation in a filename', () => {
+    const matches = (text, keys) => [...text.matchAll(keyPattern(keys))].map(([, token]) => token);
+    expect(matches('foo.js,bar.py... not-foo.js foo.js.bak', ['foo.js', 'bar.py'])).toEqual(['foo.js', 'bar.py']);
+    expect(matches('foo!?bar.py', ['foo!', '?bar.py'])).toEqual(['foo!', '?bar.py']);
+  });
+
   it('identifies sibling tests accurately', () => {
     expect(isSiblingTest('scripts/foo.js', 'scripts/foo.test.js')).toBe(true);
     expect(isSiblingTest('scripts/foo.py', 'scripts/foo_test.py')).toBe(true);
@@ -122,5 +136,5 @@ describe('scripts/ reference guard (#16089, #16909)', () => {
     expect(candidates.some((path) => path.startsWith('scripts/fixtures/'))).toBe(true);
     const corpus = files.filter((path) => !HISTORICAL.test(path));
     expect(unreferencedScripts(candidates, corpus), 'document in docs/SCRIPTS.md or delete').toEqual([]);
-  }, 60_000); // reads every tracked file once; slower than the default 5 s on a loaded machine
+  }, 60_000); // An orphan requires searching the whole live corpus.
 });

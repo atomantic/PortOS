@@ -21,13 +21,19 @@ import {
 } from '../../../lib/featureAreas.js';
 
 const files = trackedFiles(REPO_ROOT);
+// Independent of the catalog's ownership index: retain every tracked path under each literal prefix.
+const filesByPrefix = new Map();
+const filesUnder = (prefix) => {
+  if (!filesByPrefix.has(prefix)) filesByPrefix.set(prefix, files.filter((file) => file.startsWith(prefix)));
+  return filesByPrefix.get(prefix);
+};
 // Ownership of the whole tree is computed once; each guard below reads it.
 let ownersByFile;
 const owners = () => ownersByFile ??= new Map(files.map((file) => [file, areasForFile(file)]));
-const globMatches = (glob) => expandCodeGlob(glob).flatMap(({ glob: pattern, prefix }) => files
-  .filter((file) => file.startsWith(prefix) && matchesCodeGlob(file, pattern)));
-const isLive = (glob) => expandCodeGlob(glob).some(({ glob: pattern, prefix }) => files
-  .some((file) => file.startsWith(prefix) && matchesCodeGlob(file, pattern)));
+const globMatches = (glob) => expandCodeGlob(glob).flatMap(({ glob: pattern, prefix }) => filesUnder(prefix)
+  .filter((file) => matchesCodeGlob(file, pattern)));
+const isLive = (glob) => expandCodeGlob(glob).some(({ glob: pattern, prefix }) => filesUnder(prefix)
+  .some((file) => matchesCodeGlob(file, pattern)));
 
 describe('feature area catalog', () => {
   it('has unique kebab-case ids and one owner per nav path prefix', () => {
@@ -77,8 +83,8 @@ describe('feature area catalog', () => {
 
   it('compiles globs to the same matches the platform matchesGlob finds across the tracked tree', () => {
     const disagreements = FEATURE_AREAS.flatMap((entry) => entry.codeGlobs
-      .flatMap((glob) => expandCodeGlob(glob).flatMap(({ glob: pattern, prefix }) => files
-        .filter((file) => file.startsWith(prefix) && matchesCodeGlob(file, pattern) !== posix.matchesGlob(file, pattern))
+      .flatMap((glob) => expandCodeGlob(glob).flatMap(({ glob: pattern, prefix }) => filesUnder(prefix)
+        .filter((file) => matchesCodeGlob(file, pattern) !== posix.matchesGlob(file, pattern))
         .map((file) => `${entry.id}: ${pattern} vs ${file}`))));
     expect(disagreements.slice(0, 20)).toEqual([]);
     expect(globMatches('server/lib/featureAreas.js')).toEqual(['server/lib/featureAreas.js']);
