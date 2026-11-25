@@ -28,15 +28,14 @@ function scanTree() {
 
   for (const file of trackedClientSources()) {
     const src = readText(join(CLIENT_ROOT, file));
-    if (!src.includes('useEffect')) continue;
-
-    const unguided = unguardedEffects(src).map((v) => `${file}:${v.line}  deps=[${v.deps}] → ${v.setter}()`);
+    const { unguarded, selfDisposing: selfDisposingEffectsInFile } = scanEffects(src);
+    const unguided = unguarded.map((v) => `${file}:${v.line}  deps=[${v.deps}] → ${v.setter}()`);
     if (unguided.length > 0) {
       violationsByFile.set(file, unguided);
       if (!(file in ALLOWED)) violations.push(...unguided);
     }
 
-    const selfDisp = selfDisposingEffects(src).map((v) => `${file}:${v.line}  ${v.setter}() re-runs the effect via dep \`${v.dep}\``);
+    const selfDisp = selfDisposingEffectsInFile.map((v) => `${file}:${v.line}  ${v.setter}() re-runs the effect via dep \`${v.dep}\``);
     if (selfDisp.length > 0) selfDisposing.push(...selfDisp);
   }
 
@@ -86,9 +85,16 @@ const ALLOWED = {
  * hold real code.
  */
 export function blankLexical(src) {
+  const lexicalStart = /[/'"`]/g;
   let out = '';
   let i = 0;
   while (i < src.length) {
+    // Copy ordinary code in spans. Only a slash or quote can start masking.
+    lexicalStart.lastIndex = i;
+    const match = lexicalStart.exec(src);
+    if (!match) return out + src.slice(i);
+    out += src.slice(i, match.index);
+    i = match.index;
     const c = src[i];
     const next = src[i + 1];
     if (c === '/' && next === '/') {
@@ -239,19 +245,17 @@ function flipFlagEnd(body) {
 const hasFlipFlag = (body) => flipFlagEnd(body) !== -1;
 
 /** Whether `body` disposes of a superseded response by any sanctioned shape. */
-export function hasDisposalGuard(body) {
-  return hasFlipFlag(body)
+function hasDisposalGuard(body, hasFlip) {
+  return hasFlip
     || (GENERATION_BUMP.test(body) && GENERATION_COMPARE.test(body))
     || (ABORT_CONTROLLER.test(body) && ABORT_CALL.test(body));
 }
 
 /** The first `set*` call positioned after the effect's first async boundary. */
-function setterAfterAsync(body) {
-  const async = ASYNC_BOUNDARY.exec(body);
-  if (!async) return null;
+function setterAfterAsync(body, asyncIndex) {
   for (const match of body.matchAll(SETTER_CALL)) {
     if (TIMER_SETTERS.has(match[2])) continue;
-    if (match.index + match[1].length > async.index) return match[2];
+    if (match.index + match[1].length > asyncIndex) return match[2];
   }
   return null;
 }
@@ -263,29 +267,6 @@ function setterAfterAsync(body) {
 function depsAllStable(deps, stableNames) {
   const entries = deps.split(',').map((d) => d.trim()).filter(Boolean);
   return entries.length > 0 && entries.every((d) => stableNames.has(d));
-}
-
-/** Identity-keyed async effects in `src` that apply their response unguarded. */
-export function unguardedEffects(src) {
-  const blanked = blankLexical(src);
-  const stableNames = new Set([...blanked.matchAll(STABLE_DECL)].map((m) => m[1]));
-  const found = [];
-  for (const match of blanked.matchAll(/\buseEffect\s*\(/g)) {
-    const args = balancedArgs(blanked, match.index + match[0].length - 1);
-    if (args === null) continue;
-    const split = splitDeps(args);
-    if (!split || !split.deps.trim()) continue;
-    if (depsAllStable(split.deps, stableNames)) continue;
-    const setter = setterAfterAsync(split.body);
-    if (!setter) continue;
-    if (hasDisposalGuard(split.body)) continue;
-    found.push({
-      line: blanked.slice(0, match.index).split('\n').length,
-      deps: split.deps.replace(/\s+/g, ' ').trim(),
-      setter,
-    });
-  }
-  return found;
 }
 
 /**
@@ -360,44 +341,59 @@ function bailingBlocks(body) {
  * (`if (!enabled) { setOffset(0); return; }`) is on a path that bails before any
  * request exists.
  */
-export function selfDisposingEffects(src) {
+function selfDisposingSetter(body, deps, asyncIndex) {
+  const bailing = bailingBlocks(body);
+  const depNames = new Set(deps.split(',').map((d) => d.trim()).filter(Boolean));
+  for (const setter of body.matchAll(SETTER_CALL)) {
+    if (TIMER_SETTERS.has(setter[2])) continue;
+    const at = setter.index + setter[1].length;
+    if (at > asyncIndex) continue;
+    if (bailing.some(([open, close]) => at > open && at < close)) continue;
+    // `setLoadingOutput` → `loadingOutput`, the state value it writes.
+    const stateName = setter[2][3].toLowerCase() + setter[2].slice(4);
+    if (depNames.has(stateName)) return { setter: setter[2], dep: stateName };
+  }
+  return null;
+}
+
+function scanEffects(src) {
+  const unguarded = [];
+  const selfDisposing = [];
+  // Masking preserves code or replaces text with spaces. These spellings
+  // must already be present even when a comment separates `.then` and `(`.
+  if (!src.includes('useEffect') || !src.includes('set') || (!src.includes('await') && !src.includes('then'))) {
+    return { unguarded, selfDisposing };
+  }
   const blanked = blankLexical(src);
-  const found = [];
+  const stableNames = new Set([...blanked.matchAll(STABLE_DECL)].map((m) => m[1]));
   for (const match of blanked.matchAll(/\buseEffect\s*\(/g)) {
     const args = balancedArgs(blanked, match.index + match[0].length - 1);
     if (args === null) continue;
     const split = splitDeps(args);
     if (!split || !split.deps.trim()) continue;
+
     const { body, deps } = split;
     const async = ASYNC_BOUNDARY.exec(body);
     if (!async) continue;
-    if (flipFlagEnd(body) === -1) continue;
-    const bailing = bailingBlocks(body);
-    const depNames = new Set(deps.split(',').map((d) => d.trim()).filter(Boolean));
-    for (const setter of body.matchAll(SETTER_CALL)) {
-      if (TIMER_SETTERS.has(setter[2])) continue;
-      const at = setter.index + setter[1].length;
-      if (at > async.index) continue;
-      if (bailing.some(([open, close]) => at > open && at < close)) continue;
-      // `setLoadingOutput` → `loadingOutput`, the state value it writes.
-      const stateName = setter[2][3].toLowerCase() + setter[2].slice(4);
-      if (!depNames.has(stateName)) continue;
-      found.push({
-        line: blanked.slice(0, match.index).split('\n').length,
-        setter: setter[2],
-        dep: stateName,
-      });
-      break;
-    }
+    const setter = depsAllStable(deps, stableNames) ? null : setterAfterAsync(body, async.index);
+    const hasFlip = hasFlipFlag(body);
+    const violation = setter && !hasDisposalGuard(body, hasFlip);
+    const disposing = hasFlip && selfDisposingSetter(body, deps, async.index);
+    if (!violation && !disposing) continue;
+    const line = blanked.slice(0, match.index).split('\n').length;
+    if (violation) unguarded.push({ line, deps: deps.replace(/\s+/g, ' ').trim(), setter });
+    if (disposing) selfDisposing.push({ line, ...disposing });
   }
-  return found;
+  return { unguarded, selfDisposing };
 }
+
+const unguardedEffects = (src) => scanEffects(src).unguarded;
+const selfDisposingEffects = (src) => scanEffects(src).selfDisposing;
 
 const violationsIn = (file) => {
   const cached = scanTree().violationsByFile.get(file);
   if (cached) return cached;
   const src = readText(join(CLIENT_ROOT, file));
-  if (!src.includes('useEffect')) return [];
   return unguardedEffects(src).map((v) => `${file}:${v.line}  deps=[${v.deps}] → ${v.setter}()`);
 };
 
@@ -756,12 +752,12 @@ describe('identity-keyed async effects drop superseded responses', () => {
       `)).toBe(0);
     });
 
-    it('reports the line of the offending effect', () => {
+    it('reports the line of an offending effect with a comment in the async boundary', () => {
       const found = unguardedEffects([
         'const a = 1;',
         'const b = 2;',
         'useEffect(() => {',
-        '  load(id).then(setValue);',
+        '  load(id).then /* note */ (setValue);',
         '}, [id]);',
       ].join('\n'));
       expect(found[0].line).toBe(3);

@@ -496,6 +496,15 @@ export function* jsxScanner(src, { from = 0, mode: startMode = 'code', tokens = 
 
   for (let i = from; i < src.length; i++) {
     const c = src[i];
+    if (!allTokens) {
+      // These characters cannot change lexer mode or emit a tag/comment.
+      const code = src.charCodeAt(i);
+      if (code === 32 || code === 10 || code === 9 || code === 13) continue;
+      if ((code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57)) {
+        previous = i;
+        continue;
+      }
+    }
 
     // Strings, comments, and regex literals exist only outside element text —
     // in `<option>Use the provider's default</option>` the apostrophe is text,
