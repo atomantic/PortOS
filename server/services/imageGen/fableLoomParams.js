@@ -6,7 +6,7 @@ import { asFableLoomRenderSettings, inspectEpisodeProductionOrder } from '../../
 import { isFlux2, loraCompatKey, usesDiffusersRunner } from '../../lib/runners.js';
 import { usesMossSwift } from '../../lib/imageRuntimeRemedies.js';
 import { PATHS, sha256File } from '../../lib/fileUtils.js';
-import { assertFlux2InputsCompatible } from '../../lib/flux2Inputs.js';
+import { assertLocalImageModelInputs } from '../../lib/localImageModelInputs.js';
 import { sanitizeVisualConditioning } from '../../lib/fableLoomPlayback.js';
 import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
 import { readTriggerWordsByFilename } from '../loras.js';
@@ -137,9 +137,11 @@ function validateFableLoomBackendInputs(params, compiled, { selected, providerMo
     throw new ServerError('This backend cannot apply per-reference strengths. Use full strength or choose FLUX.2.', { status: 400, code: 'FABLELOOM_REFERENCE_STRENGTH_UNSUPPORTED' });
   }
   try {
-    // This phase checks the merged LoRA/reference set. Init-image compatibility
-    // is validated by the normal local request and dispatch boundaries.
-    assertFlux2InputsCompatible(selected, { referenceCount, loraCount: adapterCount });
+    assertLocalImageModelInputs(selected, {
+      ...params,
+      negativePrompt: compiled.negativePrompt,
+      referenceImageStrengths: [...compiled.referenceImageStrengths, ...requestStrengths],
+    }, { referenceCount, loraCount: adapterCount });
   } catch (error) {
     if (error.code !== 'IMAGE_GEN_FLUX2_INPUTS_INCOMPATIBLE') throw error;
     throw new ServerError(error.message, { status: 400, code: 'FABLELOOM_INPUTS_INCOMPATIBLE' });
@@ -226,6 +228,7 @@ export async function prepareFableLoomImageParams({ params, mode, settings }) {
   } else {
     // Legacy unlinked scenes still use the request's own photography and finish.
     Object.assign(params, applyImageVisualProfile(params, params.visualProfileOverride));
+    assertLocalImageModelInputs(backend.selected, params);
   }
   return params;
 }

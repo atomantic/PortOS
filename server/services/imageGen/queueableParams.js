@@ -34,6 +34,6 @@ export async function queueableImageParams(settings, { mode = null, model = null
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, resolved.mode);
   if (resolved.cloud) return { ...resolved.cloud.jobParams, ...common, cleanC2PA, denoise };
   const { resolveLocalImageModel } = await import('./prepareParams.js');
-  const { pythonPath, selectedModel } = resolveLocalImageModel(settings, { modelId: model || undefined });
+  const { pythonPath, selectedModel } = resolveLocalImageModel(settings, { ...common, modelId: model || common.modelId }, resolved.modelCandidates);
   return { ...common, cleanC2PA, denoise, pythonPath, ...(selectedModel?.id ? { modelId: selectedModel.id } : {}) };
 }

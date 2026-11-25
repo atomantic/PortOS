@@ -5,10 +5,11 @@ import { execFile } from '../../lib/childProcess.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { isAppleSilicon } from '../../lib/platform.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
-import { ServerError } from '../../lib/errorHandler.js';
+import { assertMossInputs } from '../../lib/localImageModelInputs.js';
 import { getHfCacheRoot, repoToDirName } from '../../lib/hfCache.js';
 import manifest from './moss-manifest.json' with { type: 'json' };
 
+export { assertMossInputs };
 export const MOSS_MANIFEST = manifest;
 export const mossRuntimeRoot = () => join(PATHS.data, 'repos', 'moss-swift-runtime');
 export const mossRuntimeDirectory = () => join(mossRuntimeRoot(), `v${manifest.adapterVersion}-${manifest.sourceRevision}`);
@@ -64,15 +65,10 @@ export async function diagnoseMossRuntime() {
 
 export function mossRenderArgs({ prompt, negativePrompt = '', width, height, steps, guidance, seed, outputPath,
   loraPaths = [], initImagePath, referenceImagePaths = [] }) {
-  const reject = message => { throw new ServerError(message, { status: 400, code: 'MOSS_INPUT_UNSUPPORTED' }); };
-  if (loraPaths.length || initImagePath || referenceImagePaths.length) reject('MOSS SFT supports text-to-image only; remove LoRAs and input images.');
-  if (![width, height].every(n => Number.isInteger(n) && n >= 256 && n <= 1024 && n % 16 === 0)) {
-    reject('MOSS dimensions must be multiples of 16 between 256 and 1024.');
-  }
-  if (!Number.isInteger(steps) || steps < 1 || steps > 100) reject('MOSS steps must be an integer between 1 and 100.');
-  if (!Number.isFinite(guidance) || guidance < 0 || guidance > 10) reject('MOSS guidance must be between 0 and 10.');
-  if (guidance === 1 && negativePrompt) reject('MOSS negative prompts require guidance other than 1.');
-  if (!Number.isSafeInteger(seed) || seed < 0) reject('MOSS seed must be a nonnegative safe integer.');
+  assertMossInputs({
+    negativePrompt, width, height, steps, guidance, seed,
+    loraCount: loraPaths.length, hasInitImage: Boolean(initImagePath), referenceCount: referenceImagePaths.length,
+  });
   return {
     bin: mossBinary(),
     args: ['--snapshot', mossSnapshot(), '--prompt', prompt, '--negative', negativePrompt,

@@ -5,6 +5,23 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
 import { validateVideoRetryParams } from '../services/videoGen/prepareParams.js';
 
+vi.mock('../services/settings.js', async importOriginal => ({
+  ...await importOriginal(),
+  getSettings: vi.fn(async () => ({ imageGen: { higgsfield: { enabled: true } } })),
+}));
+vi.mock('../lib/mediaModels.js', async importOriginal => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    getImageModels: () => [
+      ...actual.getImageModels(),
+      { id: 'test-flux3', runner: 'flux3' },
+      { id: 'test-minimax', runner: 'minimax-h3-image', steps: 6 },
+      { id: 'test-moss', runner: 'moss-swift', steps: 50, guidance: 3 },
+    ],
+  };
+});
+
 // Stub the queue so we control which jobs exist for the retry endpoint without
 // running the real worker. enqueueJob / cancelJob etc. are returned as vi.fn so
 // we can assert the route calls them with the right args.
@@ -662,6 +679,42 @@ describe('mediaJobs routes', () => {
     const r = await request(makeApp()).get('/api/media-jobs/j-eff');
     expect(r.status).toBe(200);
     expect(r.body.params.effort).toBe('high');
+  });
+
+  it.each([
+    ['test-flux3', { negativePrompt: 'blur' }, 'FLUX3_INPUT_UNSUPPORTED'],
+    ['test-flux3', { width: 1040 }, 'FLUX3_INPUT_UNSUPPORTED'],
+    ['test-minimax', { negativePrompt: 'blur' }, 'MINIMAX_H3_IMAGE_INPUT_UNSUPPORTED'],
+    ['test-minimax', { steps: 8 }, 'MINIMAX_H3_IMAGE_INPUT_UNSUPPORTED'],
+    ['test-moss', { height: 1040 }, 'MOSS_INPUT_UNSUPPORTED'],
+  ])('preserves the archived %s attempt when retry inputs are invalid: %j', async (modelId, overrides, code) => {
+    const params = { mode: 'local', modelId, width: 1024, height: 1024, prompt: 'A lighthouse' };
+    const job = { id: 'invalid-retry', kind: 'image', status: 'failed', params };
+    jobStore.set(job.id, job);
+    for (const path of ['retry/preview', 'retry']) {
+      const rejected = await request(makeApp()).post(`/api/media-jobs/${job.id}/${path}`).send({ params: overrides });
+      expect([rejected.status, rejected.body.code]).toEqual([400, code]);
+    }
+    expect(stubs.enqueueJob).not.toHaveBeenCalled();
+    expect(stubs.removeArchivedJob).not.toHaveBeenCalled();
+    expect(jobStore.get(job.id)).toEqual(job);
+  });
+
+  it.each([
+    ['edited prompt', 'ideogram/v4.0', 'a fox', { prompt: 'x'.repeat(2049) }],
+    ['model-only switch', 'higgsfield-ai/soul/v2/standard', 'x'.repeat(2049), { model: 'ideogram/v4.0' }],
+    ['stored prompt', 'ideogram/v4.0', 'x'.repeat(2049), {}],
+  ])('checks the complete Higgsfield request for an over-limit %s', async (_case, model, prompt, overrides) => {
+    const params = { mode: 'higgsfield', model, prompt, width: 1024, height: 1024 };
+    const job = { id: 'higgsfield-retry', kind: 'image', status: 'failed', params };
+    jobStore.set(job.id, job);
+    for (const path of ['retry/preview', 'retry']) {
+      const rejected = await request(makeApp()).post(`/api/media-jobs/${job.id}/${path}`).send({ params: overrides });
+      expect(rejected.status).toBe(400);
+      expect(rejected.body.error).toMatch(/2048 characters \(sent text is 2049\)/);
+    }
+    expect(stubs.enqueueJob).not.toHaveBeenCalled();
+    expect(stubs.removeArchivedJob).not.toHaveBeenCalled();
   });
 
   it('POST /:id/retry preserves an explicit Codex effort on a plain retry', async () => {

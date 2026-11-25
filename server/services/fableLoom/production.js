@@ -589,48 +589,46 @@ async function prepareImageJob(run, asset) {
   const replayParameters = exactRenderParameters(run, recordedConditioning);
 
   if (mode === IMAGE_GEN_MODE.LOCAL) {
-    const local = resolveLocalImageModel(settings, {
-      modelId: requestedModel,
-      initImagePath: localInitImagePath,
-    });
+    const selectedIsEditOnly = isEditOnly(provisionalModel);
+    // An edit-only model takes the lead reference as its init image, so a fresh
+    // (non-replay) render must not send that frame twice.
+    const dropLeadReference = !replayInputs && selectedIsEditOnly;
+    const params = applyImageVisualProfile({
+      prompt: conditioned?.prompt ?? asset.prompt,
+      ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
+      negativePrompt: conditioned?.negativePrompt || '',
+      // Conditioning and sampler defaults belong to the same model the job validates.
+      modelId: requestedModel || provisionalModel?.id,
+      width: geometry.width,
+      height: geometry.height,
+      aspectRatio: geometry.aspectRatio,
+      steps: settings.imageGen?.local?.steps ?? provisionalModel?.steps,
+      guidance: settings.imageGen?.local?.guidance ?? provisionalModel?.guidance,
+      quantize: settings.imageGen?.local?.quantize ?? '8',
+      seed: randomInt(0, 2_147_483_647),
+      ...replayParameters,
+      ...((replayInputs || selectedIsEditOnly) && localInitImagePath ? { initImagePath: localInitImagePath } : {}),
+      ...(replayInputs?.initStrength != null ? { initImageStrength: replayInputs.initStrength } : {}),
+      referenceImagePaths: dropLeadReference ? referenceImagePaths.slice(1) : referenceImagePaths,
+      referenceImageStrengths: (conditioned?.referenceImageStrengths || []).slice(dropLeadReference ? 1 : 0),
+      loraFilenames: conditioned?.loraFilenames || [],
+      loraPaths: conditioned?.loraPaths || [],
+      loraScales: conditioned?.loraScales || [],
+      ...jobProvenanceFields(run, asset, conditioned),
+    }, conditioned?.visualProfile);
+    const local = resolveLocalImageModel(settings, params);
     if (!local.selectedModel) {
       throw new ServerError('No compatible local image model is available.', {
         status: 409,
         code: 'IMAGE_GEN_UNKNOWN_MODEL',
       });
     }
-    const selectedIsEditOnly = isEditOnly(local.selectedModel);
-    // An edit-only model takes the lead reference as its init image, so a fresh
-    // (non-replay) render must not send that frame twice.
-    const dropLeadReference = !replayInputs && selectedIsEditOnly;
     return {
       kind: 'image',
       provider: mode,
       modelId: local.selectedModel.id,
       modelRevision: local.selectedModel.revision || null,
-      params: applyImageVisualProfile({
-        pythonPath: local.pythonPath,
-        prompt: conditioned?.prompt ?? asset.prompt,
-        ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
-        negativePrompt: conditioned?.negativePrompt || '',
-        modelId: local.selectedModel.id,
-        width: geometry.width,
-        height: geometry.height,
-        aspectRatio: geometry.aspectRatio,
-        steps: settings.imageGen?.local?.steps ?? local.selectedModel.steps,
-        guidance: settings.imageGen?.local?.guidance ?? local.selectedModel.guidance,
-        quantize: settings.imageGen?.local?.quantize ?? '8',
-        seed: randomInt(0, 2_147_483_647),
-        ...replayParameters,
-        ...((replayInputs || selectedIsEditOnly) && localInitImagePath ? { initImagePath: localInitImagePath } : {}),
-        ...(replayInputs?.initStrength != null ? { initImageStrength: replayInputs.initStrength } : {}),
-        referenceImagePaths: dropLeadReference ? referenceImagePaths.slice(1) : referenceImagePaths,
-        referenceImageStrengths: (conditioned?.referenceImageStrengths || []).slice(dropLeadReference ? 1 : 0),
-        loraFilenames: conditioned?.loraFilenames || [],
-        loraPaths: conditioned?.loraPaths || [],
-        loraScales: conditioned?.loraScales || [],
-        ...jobProvenanceFields(run, asset, conditioned),
-      }, conditioned?.visualProfile),
+      params: { ...params, modelId: local.selectedModel.id, pythonPath: local.pythonPath },
     };
   }
 

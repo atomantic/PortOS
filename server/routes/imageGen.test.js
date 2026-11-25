@@ -922,6 +922,30 @@ describe('Image Gen Routes', () => {
       expect(mediaJobQueue.enqueueJob).toHaveBeenCalledOnce();
     });
 
+    it('validates final scene dimensions and compiled inputs on both HTTP entry points', async () => {
+      canonLoom.renderSettings = { formatId: 'portrait-9-16' };
+      canonLoom.episodes[0].nodes[0].visualCanon = { mode: 'locked', characterAppearances: [], placeId: null, objectIds: [] };
+      const body = {
+        mode: 'local', modelId: 'moss-image-sft-bf16', prompt: 'The scout arrives',
+        width: 1536, height: 1536, guidance: 1,
+        fableLoom: { loomId: canonLoom.id, episodeId: 'ep-1', nodeId: 'node-1' },
+      };
+      const settings = { imageGen: { mode: 'local' } };
+      for (const endpoint of ['prompt-preview', 'generate']) {
+        getSettings.mockResolvedValueOnce(settings);
+        const blocked = await request(app).post(`/api/image-gen/${endpoint}`).send({ ...body, negativePrompt: 'blur' });
+        expect([blocked.status, blocked.body.code, blocked.body.error]).toEqual([
+          400, 'MOSS_INPUT_UNSUPPORTED', 'MOSS negative prompts require guidance other than 1.',
+        ]);
+        expect(compileFableLoomVisualRequest).toHaveBeenCalled();
+        expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      }
+      getSettings.mockResolvedValueOnce(settings);
+      const valid = await request(app).post('/api/image-gen/generate').send({ ...body, guidance: 3 });
+      expect(valid.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob.mock.calls[0][0].params).toMatchObject({ width: 576, height: 1024 });
+    });
+
     it.each(['fal'])('retains more than four authored references on %s', async mode => {
       const references = Array.from({ length: 5 }, (_, index) => `example-cloud-${index}.png`);
       await Promise.all(references.map(name => writeFile(pathJoin(fileUtils.PATHS.images, name), 'synthetic image fixture')));
@@ -2556,6 +2580,48 @@ describe('Image Gen Routes', () => {
       const response = await request(app).post('/api/image-gen/generate').send({ mode: 'local', modelId: 'flux3-klein-q4', prompt: 'Example', ...unsupported });
       expect([response.status, response.body.code]).toEqual([400, 'FLUX3_INPUT_UNSUPPORTED']);
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    ['flux3-klein-q4', { width: 1040 }, 'FLUX3_INPUT_UNSUPPORTED'],
+    ['minimax-h3-image-bf16', { steps: 8 }, 'MINIMAX_H3_IMAGE_INPUT_UNSUPPORTED'],
+    ['moss-image-sft-bf16', { seed: Number.MAX_SAFE_INTEGER + 1 }, 'MOSS_INPUT_UNSUPPORTED'],
+  ])('validates shared queue parameters against the pinned local model %s', async (modelId, invalid, code) => {
+    const { queueableImageParams } = await import('../services/imageGen/queueableParams.js');
+    const settings = { imageGen: { mode: 'local', local: { modelId } } };
+    const common = { prompt: 'A lighthouse', width: 1024, height: 1024 };
+    const refusal = { what: 'test image', code: 'TEST_UNSUPPORTED' };
+    await expect(queueableImageParams(settings, {}, { ...common, ...invalid }, refusal)).rejects.toMatchObject({ status: 400, code });
+    await expect(queueableImageParams(settings, {}, common, refusal)).resolves.toMatchObject({ ...common, modelId });
+  });
+
+  describe('MOSS SFT HTTP generation', () => {
+    it.each([
+      [{ width: 1040 }, /dimensions/],
+      [{ steps: 101 }, /steps/],
+      [{ cfgScale: 11 }, /guidance/],
+      [{ guidance: 1, negativePrompt: 'blur' }, /negative prompts/],
+      [{ loraFilenames: ['example.safetensors'] }, /text-to-image/],
+      [{ initImageFile: 'example.png' }, /text-to-image/],
+    ])('rejects unsupported inputs before generation or preview proceeds: %j', async (overrides, message) => {
+      for (const endpoint of ['generate', 'prompt-preview']) {
+        getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local' } });
+        const response = await request(app).post(`/api/image-gen/${endpoint}`).send({
+          mode: 'local', modelId: 'moss-image-sft-bf16', prompt: 'A lighthouse', ...overrides,
+        });
+        expect([response.status, response.body.code]).toEqual([400, 'MOSS_INPUT_UNSUPPORTED']);
+        expect(response.body.error).toMatch(message);
+      }
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('rejects a preview upload before resolving an input image', async () => {
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local' } });
+      const response = await request(app).post('/api/image-gen/prompt-preview').send({
+        mode: 'local', modelId: 'moss-image-sft-bf16', prompt: 'A lighthouse', uploadedInitImage: true,
+      });
+      expect([response.status, response.body.code]).toEqual([400, 'MOSS_INPUT_UNSUPPORTED']);
     });
   });
 

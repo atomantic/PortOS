@@ -29,7 +29,9 @@ import { VIDEO_TILING_MODES } from '../lib/videoTiling.js';
 import { DRAFT_DECODE_IDS, isFullDecode } from '../lib/videoDraftDecoders.js';
 import { VIDEO_STREAMING_MODES, isDefaultVideoStreamingMode } from '../lib/videoStreamingMode.js';
 import { imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE } from '../lib/sharedSchemas.js';
-import { IMAGE_GEN_MODE, VIDEO_GEN_MODE } from '../lib/generationModes.js';
+import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE, VIDEO_GEN_MODE } from '../lib/generationModes.js';
+import { LOCAL_IMAGEGEN_DEFAULT_MODEL } from '../lib/imageGenCapabilities.js';
+import { assertLocalImageModelInputs } from '../lib/localImageModelInputs.js';
 import { MAX_CONTEXT_FRAMES, resolveContinuityRequest } from '../lib/videoContinuity.js';
 
 const router = Router();
@@ -451,6 +453,12 @@ async function buildRetryJob(job, body) {
   for (const key of ['seed', 'steps', 'guidanceScale', 'imageStrength', 'i2vReferenceMode', 'speedProfileId', 'draftDecode', 'streamingMode', 'a2vLoraStageStrengths']) {
     if (rawOverrides[key] === null) delete params[key];
   }
+  if (job.kind === 'image' && !CLOUD_IMAGE_GEN_MODES.includes(params.mode) && !isRemoteMediaJob(job)) {
+    const { getImageModels } = await import('../lib/mediaModels.js');
+    const localInputs = params.reviewedReferenceRequest ? { ...params, ...params.reviewedReferenceRequest } : params;
+    const modelId = localInputs.modelId === undefined ? LOCAL_IMAGEGEN_DEFAULT_MODEL : localInputs.modelId;
+    assertLocalImageModelInputs(getImageModels().find(model => model.id === modelId), localInputs);
+  }
   if (rawOverrides.chunks === 1) delete params.chunkPrompts;
   // Hosted video jobs (grok / fal / reactor) use `mode` as the cloud-dispatch
   // discriminator, not the local semantic mode prepareParams validates, and their
@@ -522,11 +530,13 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
   const job = getJob(req.params.id);
   const body = validateRequest(retryBodySchema, req.body ?? {});
   const { keepArchived, ...retry } = await buildRetryJob(job, body);
-  const hasPromptEdit = body.params?.prompt !== undefined || body.params?.negativePrompt !== undefined;
+  const hasInputEdit = body.params?.prompt !== undefined || body.params?.negativePrompt !== undefined
+    || body.params?.model !== undefined || body.params?.modelId !== undefined;
   const mode = retry.params.mode;
   const providerPromptCap = mode === IMAGE_GEN_MODE.RUNWAY
     || (retry.kind === 'video' && [VIDEO_GEN_MODE.FAL, VIDEO_GEN_MODE.HIGGSFIELD, VIDEO_GEN_MODE.REACTOR].includes(mode));
-  if (hasPromptEdit && (providerPromptCap || retry.params.quickEdit) && !isRemoteMediaJob(retry)) {
+  const higgsfieldImage = retry.kind === 'image' && mode === IMAGE_GEN_MODE.HIGGSFIELD;
+  if ((higgsfieldImage || (hasInputEdit && (providerPromptCap || retry.params.quickEdit))) && !isRemoteMediaJob(retry)) {
     const { previewRetryModelInput } = await import('../services/mediaJobRetryPreview.js');
     await previewRetryModelInput(retry.kind, retry.params);
   }

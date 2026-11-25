@@ -10,6 +10,9 @@ import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { runStreamingCommand } from '../../lib/streamingSpawn.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { inspectModelCache } from '../../lib/hfCache.js';
+import { assertFlux3Inputs } from '../../lib/localImageModelInputs.js';
+
+export { assertFlux3Inputs };
 
 const isNonBlank = (v) => typeof v === 'string' && v.trim().length > 0;
 
@@ -102,18 +105,6 @@ export function installFlux3Runtime(emit) {
     } finally { installing = false; }
   })();
   return { promise, kill: () => { cancelled = true; } };
-}
-
-export function assertFlux3Inputs({ negativePrompt, width, height, initImagePath, referenceImagePaths = [], referenceImageStrengths = [], loraPaths = [], hasInitImage = Boolean(initImagePath), referenceCount = referenceImagePaths.length, loraCount = loraPaths.length }) {
-  const reject = message => { throw new ServerError(message, { status: 400, code: 'FLUX3_INPUT_UNSUPPORTED' }); };
-  if (negativePrompt) reject('FLUX.3 Klein has no negative prompt. Describe the desired scene in the prompt.');
-  if (hasInitImage) reject('FLUX.3 edits use reference images. Move the init image into a reference slot; image strength is unavailable.');
-  if (loraCount) reject('This FLUX.3 integration does not support LoRAs. Remove them before rendering.');
-  if (referenceCount > 10) reject('FLUX.3 accepts at most 10 reference images.');
-  if (referenceImageStrengths.some(value => Number(value) !== 1)) reject('FLUX.3 reference strength is fixed. Remove per-reference strength overrides.');
-  if (![width, height].every(n => Number.isInteger(n) && n >= 256 && n <= 1024 && n % 16 === 0)) {
-    reject('FLUX.3 dimensions must be multiples of 16 between 256 and 1024.');
-  }
 }
 
 export function flux3RenderArgs(inputs) {
