@@ -19,6 +19,7 @@
  * Routes consume this and forward as Server-Sent Events.
  */
 
+import { resolveSplashHarnessContext } from '../lib/splashHarnessLaunch.js';
 import { getActiveProvider, getProviderById } from './provider/providers.js';
 import { hybridSearchMemories, peekMemories, recordMemoryAccess } from './memoryBackend.js';
 import { generateQueryEmbedding } from './memoryEmbeddings.js';
@@ -617,7 +618,7 @@ async function* streamCompletion(provider, model, prompt, signal) {
   // for the first time, so the `--model` this path injects above isn't rejected
   // by an Ollama-backed OpenCode provider (the #2190 fix, previously applied
   // only at the runner/agent sites).
-  const childEnv = buildCliChildEnv({ provider, model: cliModel });
+  const childEnv = buildCliChildEnv({ provider: await resolveSplashHarnessContext(provider, cliModel), model: cliModel });
   // Resolve a bare npm-installed CLI (a .cmd/.bat shim on Windows) to its real
   // path and wrap it as `cmd.exe /c <path>` so spawn() under shell:false can
   // launch it — a bare shim name ENOENTs otherwise. No-op off Windows. Mirrors

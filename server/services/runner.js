@@ -1,3 +1,4 @@
+import { resolveSplashHarnessContext } from '../lib/splashHarnessLaunch.js';
 import { runOwnership, runChildIdentity } from '../lib/aiToolkit/internal/runOwnership.js';
 import { publishRuntimeFiles, withRuntimeFileTurn } from '../lib/runtimeFilePublication.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
@@ -489,7 +490,7 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
     : null;
   const childEnv = buildCliChildEnv({
     before: visionSettingsEnv,
-    provider,
+    provider: await resolveSplashHarnessContext(provider, extractBakedModel(builtArgs) || provider.defaultModel),
     cwd: vision?.invocation.cwd || effectiveCwd,
     guard: true,
     ...(toolFreeOpenCode ? { toolFree: true, model: extractBakedModel(builtArgs) || provider.defaultModel } : {}),

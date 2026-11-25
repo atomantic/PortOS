@@ -4,8 +4,9 @@ import {
 } from '../../../../server/lib/provider/providerModels.js';
 import { isGatewayNamespace } from '../../../../server/lib/provider/providerGateways.js';
 import { SPLASH_CONTEXT, SPLASH_MODEL } from '../../../../server/lib/splashRuntime.js';
+import { CLAUDE_CONTEXT_ENV_KEY, followsSplashContext, splashHarnessTarget } from '../../../../server/lib/provider/splashHarnessContext.js';
 
-const CLAUDE_WINDOW = 'CLAUDE_CODE_MAX_CONTEXT_TOKENS';
+const CLAUDE_WINDOW = CLAUDE_CONTEXT_ENV_KEY;
 const OPENCODE_CONFIG = 'OPENCODE_CONFIG_CONTENT';
 const MIN_TOKENS = 512;
 const MAX_TOKENS = 2097152;
@@ -56,7 +57,7 @@ function opencodeContextTarget(provider) {
   };
 }
 
-export function getHarnessContextTarget(provider) {
+function harnessContextTarget(provider) {
   if (!['cli', 'tui'].includes(provider?.type) || !provider.command) return null;
   if (isOpencodeCommand(provider.command)) return opencodeContextTarget(provider);
   if (!isClaudeCommand(provider.command) || (provider.secretEnvVars || []).includes(CLAUDE_WINDOW)) return null;
@@ -68,9 +69,20 @@ export function getHarnessContextTarget(provider) {
     inherited: parseHarnessContext(value), fallback: provider.splashBacked === true ? SPLASH_CONTEXT : null, splash: provider.splashBacked === true };
 }
 
+export function getHarnessContextTarget(provider) {
+  const target = harnessContextTarget(provider);
+  const splash = splashHarnessTarget(provider);
+  if (!target || !splash) return target;
+  const followsRuntime = followsSplashContext(provider, splash);
+  return {
+    ...target, followsRuntime, splashManaged: true,
+    value: followsRuntime ? '' : target.value || parseHarnessContext(splash.legacy) || '',
+  };
+}
+
 export function harnessContextError(target, value) {
   const parsed = parseHarnessContext(value);
-  if (parsed === undefined) return 'Enter a context window from 512 to 2,097,152 tokens, such as 64K, 256K, or 1M.';
+  if (parsed === undefined || (target.splashManaged && value !== '' && parsed == null)) return 'Enter a context window from 512 to 2,097,152 tokens, such as 64K, 256K, or 1M.';
   if (parsed != null && target.output >= parsed) return 'The context window must be larger than the configured OpenCode output limit.';
   if (parsed != null && target.input > parsed) return 'The context window cannot be smaller than the configured OpenCode input limit.';
   return null;
@@ -78,5 +90,5 @@ export function harnessContextError(target, value) {
 
 export function harnessContextPayload(target, value) {
   const tokens = parseHarnessContext(value);
-  return tokens == null ? null : { tokens, ...(target.kind === 'opencode' ? { model: target.model } : {}) };
+  return tokens == null ? target.splashManaged ? { followRuntime: true } : null : { tokens, ...(target.kind === 'opencode' ? { model: target.model } : {}) };
 }
