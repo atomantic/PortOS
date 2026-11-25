@@ -11,7 +11,9 @@
  * otherwise:
  *
  * - a git call that is not the literal program `git` with its arguments
- *   apart (a command line hides the directory it runs in);
+ *   apart (a command line hides the directory it runs in). A call is a git
+ *   call when its program can spell git: written in place, assigned to the
+ *   name it is read from, or passed by a caller as that parameter;
  * - a git call that names no directory: no `cwd` in a literal options object
  *   (one a spread cannot replace) and no leading `-C <dir>` in a literal
  *   argument array. Without one, git runs where the test process does,
@@ -39,7 +41,8 @@
  * What stays on the declaration's word is a value the source does not
  * spell: a call's result, a property of something that is no parameter, a
  * callback's parameter, an argument behind a spread, an options object that
- * is no literal. The marker is
+ * is no literal, and whatever another program the suite starts goes on to
+ * run. The marker is
  * therefore added only after the suite has been read, and reviewed as a
  * claim about it (docs/TEST_MEMO_GIT_FIXTURES.md).
  */
@@ -72,21 +75,60 @@ function declaredInComment(src, arrays) {
     || (token.t === 'tpl' && token.quasis.some((quasi) => GIT_FIXTURE_MARKER.test(quasi)))));
 }
 
+const isGitProgram = (text) => posix.basename(text.trim().split(/\s+/)[0]) === 'git';
+
 /**
- * Every call of a spawn callee whose program is git, in the file and in its
- * template holes: a superset of what raises `facts.git` (`GIT_SPAWN`,
- * `noteLiteralProgram`). `whole`: the literal `git` alone, arguments apart.
+ * Every text the program expression in `[from, to)` can spell, into `texts`
+ * as `{ text, exact }` (`exact`: a whole literal, not the start of a
+ * template with holes): the literals written there, and those a name there
+ * can hold. A name is followed like a directory's: every value the file
+ * assigns to it, and for a parameter of a named function what each call of
+ * that function passes there, so `const command = 'git'`, `tool || 'git'`
+ * and `run('git', …)` into `(program, args) => spawn(program, args)` are
+ * all read as the git calls they are.
  */
-function gitCalls(arrays) {
+function programTexts(w, arr, m, from, to, seen, texts) {
+  for (let i = from; i < to; i += 1) {
+    const token = arr[i];
+    if (token.t === 's') texts.push({ text: token.v, exact: true });
+    else if (token.t === 'tpl') texts.push({ text: token.quasis[0], exact: token.exprs.length === 0 });
+    if (token.t !== 'id' || isPunct(arr[i - 1], '.', '?.') || isPunct(arr[i + 1], '(')) continue;
+    if (!seen.has(token.v)) {
+      seen.add(token.v);
+      for (const assigned of assignmentsOf(w, token.v)) programTexts(w, assigned.arr, assigned.m, assigned.at, expressionEnd(assigned.arr, assigned.m, assigned.at), seen, texts);
+    }
+    const binder = scopesOf(w.ctx).binderAt(token.v, token.i);
+    const owner = binder === null ? undefined : w.functions.find((fn) => fn.parameters.some((parameter) => parameter.token === binder.token && parameter.prop === null));
+    if (owner === undefined || seen.has(binder)) continue;
+    seen.add(binder);
+    const { index } = owner.parameters.find((parameter) => parameter.token === binder.token);
+    for (const call of w.arrays) {
+      for (let at = 0; at + 1 < call.arr.length; at += 1) {
+        const open = isWord(call.arr[at], owner.name) && !w.definitions.has(call.arr[at]) ? callOpen(call.arr, call.m, at) : null;
+        const passed = open === null ? [] : listRanges(call.arr, call.m, open);
+        if (index < passed.length) programTexts(w, call.arr, call.m, passed[index][0], passed[index][1], seen, texts);
+      }
+    }
+  }
+}
+
+/**
+ * Every call of a spawn callee whose program can be git, in the file and in
+ * its template holes: a superset of what raises `facts.git` (`GIT_SPAWN`,
+ * `noteLiteralProgram`), which reads only a literal written in the call.
+ * `whole`: every such spelling is the literal `git` alone, arguments apart.
+ */
+function gitCalls(w) {
   const calls = [];
-  for (const { arr, m } of arrays) {
+  for (const { arr, m } of w.arrays) {
     for (let i = 0; i + 2 < arr.length; i += 1) {
       if (arr[i].t !== 'id' || !SPAWN_CALLEES.has(arr[i].v) || !isPunct(arr[i + 1], '(') || m[i + 1] === undefined) continue;
-      const program = arr[i + 2];
-      const text = program.t === 's' ? program.v : program.t === 'tpl' ? program.quasis[0] : null;
-      if (text === null || posix.basename(text.trim().split(/\s+/)[0]) !== 'git') continue;
-      const whole = text === 'git' && (program.t === 's' || program.exprs.length === 0) && isPunct(arr[i + 3], ',', ')');
-      calls.push({ arr, m, open: i + 1, whole });
+      const [program] = listRanges(arr, m, i + 1);
+      if (program === undefined) continue;
+      const texts = [];
+      programTexts(w, arr, m, program[0], program[1], new Set(), texts);
+      const git = texts.filter(({ text }) => isGitProgram(text));
+      if (git.length) calls.push({ arr, m, open: i + 1, whole: git.every(({ text, exact }) => exact && text === 'git') });
     }
   }
   return calls;
@@ -447,6 +489,31 @@ function helperDirectoryProblem(w, arr, m, open) {
   return ranges.length < 2 ? NO_DIRECTORY : directoryProblem(w, arr, m, ranges[1][0], ranges[1][1]);
 }
 
+/** The state one file is read with: its token arrays, its named functions and what has been followed so far. */
+function reading(arrays, ctx) {
+  const functions = namedFunctions(arrays);
+  return {
+    arrays, ctx, functions,
+    definitions: new Set(functions.map((fn) => fn.token)),
+    names: new Set(), runners: new Set(GIT_HELPERS), iterables: new Set(), directoryNames: new Set(), directoryParameters: new Set(),
+    pending: GIT_HELPERS.map((runner) => ({ runner })), // { name } to read the assignments of, { runner } to read the calls of
+  };
+}
+
+/**
+ * True when a spawn call of the file can start git though no call names it
+ * literally: the program is a name that holds `'git'`, or a parameter a
+ * caller passes it as (`capture('git', …)` into `(command, args) =>
+ * spawnSync(command, args)`). The git rule applies to such a file as to one
+ * that writes `spawnSync('git', …)`, declaring or not.
+ */
+export function startsGitThroughName({ tokens, match, ctx }) {
+  const arrays = tokenArrays(tokens, match);
+  // No literal in the file spells git: no name can hold it.
+  const spelled = arrays.some(({ arr }) => arr.some((token) => (token.t === 's' && isGitProgram(token.v)) || (token.t === 'tpl' && isGitProgram(token.quasis[0]))));
+  return spelled && gitCalls(reading(arrays, ctx)).length > 0;
+}
+
 /**
  * `declared`: the file carries the marker in a comment. `problem`: null, or
  * the first way its text contradicts the declaration. `calls`: how many git
@@ -459,14 +526,8 @@ function helperDirectoryProblem(w, arr, m, open) {
 export function gitFixtureDeclaration({ src, tokens, match, ctx }) {
   const arrays = tokenArrays(tokens, match);
   if (!declaredInComment(src, arrays)) return { declared: false, problem: null, calls: 0 };
-  const functions = namedFunctions(arrays);
-  const w = {
-    arrays, ctx, functions,
-    definitions: new Set(functions.map((fn) => fn.token)),
-    names: new Set(), runners: new Set(GIT_HELPERS), iterables: new Set(), directoryNames: new Set(), directoryParameters: new Set(),
-    pending: GIT_HELPERS.map((runner) => ({ runner })), // { name } to read the assignments of, { runner } to read the calls of
-  };
-  const calls = gitCalls(arrays);
+  const w = reading(arrays, ctx);
+  const calls = gitCalls(w);
   let problem = null;
   for (const call of calls) {
     problem = gitCallProblem(w, call);

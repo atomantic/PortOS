@@ -279,7 +279,8 @@ suffix, see [CI_HIDDEN_CONTENT_GATE.md](CI_HIDDEN_CONTENT_GATE.md#guard-selectio
 planner's always-run set or in `TEST_MEMO_NEVER` (the catalog and enumeration
 tests another selector reaches); a
 file whose closure contains the `// test-memo: never` marker; a test file or
-`scripts/` module that spawns `git` (repository state is not in the key —
+`scripts/` module that spawns `git`, named in the call, by a name that holds
+it or by a caller of a runner (repository state is not in the key —
 product modules that run git on their own targets are under the test's
 control; a test file that declares its repositories fixtures with
 `// test-memo: git-fixture` is keyed by git itself instead:
