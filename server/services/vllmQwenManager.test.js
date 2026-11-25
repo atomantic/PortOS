@@ -23,6 +23,7 @@ const sourceFiles = vi.hoisted(() => ({
   mkdtemp: vi.fn(),
   rename: vi.fn(async () => {}),
   rm: vi.fn(async () => {}),
+  writeFile: vi.fn(async () => {}),
 }));
 vi.mock('fs/promises', async (importOriginal) => ({ ...(await importOriginal()), ...sourceFiles }));
 
@@ -161,8 +162,15 @@ describe('provisionVllmQwenProject', () => {
       '/usr/bin/git', ['-C', STAGING, 'rev-parse', 'HEAD'], expect.objectContaining({ timeoutMs: expect.any(Number) }),
     );
     expect(buffered.bufferedSpawnOrThrow.mock.invocationCallOrder[0]).toBeGreaterThan(streaming.runStreamingCommand.mock.invocationCallOrder[3]);
+    expect(sourceFiles.writeFile).toHaveBeenCalledWith(
+      join(STAGING, 'compose.override.yaml'),
+      expect.stringContaining('127.0.0.1:${PORT:-18020}:${PORT:-18020}'),
+      { flag: 'wx' },
+    );
+    expect(sourceFiles.writeFile.mock.calls[0][1]).toContain('pull_policy: never');
+    expect(sourceFiles.writeFile).toHaveBeenCalledAfter(buffered.bufferedSpawnOrThrow);
     expect(sourceFiles.rename).toHaveBeenCalledWith(STAGING, DIR);
-    expect(sourceFiles.rename).toHaveBeenCalledAfter(buffered.bufferedSpawnOrThrow);
+    expect(sourceFiles.rename).toHaveBeenCalledAfter(sourceFiles.writeFile);
     expect(files.atomicWrite).toHaveBeenCalledAfter(sourceFiles.rename);
     expect(files.atomicWrite.mock.invocationCallOrder[0]).toBeLessThan(streaming.runStreamingCommand.mock.invocationCallOrder[4]);
     expect(emitted(lines)).toMatch(/~9\.5 GB/);

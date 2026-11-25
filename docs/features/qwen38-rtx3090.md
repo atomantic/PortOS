@@ -71,10 +71,8 @@ would.
 
 ### 1. Prepare the stack (on the 3090 host)
 
-The host itself is yours: Docker, the NVIDIA Container Toolkit (driver ≥ 580 /
-CUDA 13), and — on Windows — WSL2. PortOS will not install any of those; they are
-operator decisions with driver requirements it cannot judge, and the readiness
-checklist's **Install** button keeps saying so.
+Install Docker with Compose 2.24.4 or newer and the NVIDIA Container Toolkit
+(driver ≥ 580 / CUDA 13) on the 3090 host. Windows hosts also need WSL2.
 
 The *project* on top of them can go either way.
 
@@ -86,9 +84,9 @@ then start"**. The label names the payload because the click IS the consent — 
 is the one button in PortOS that spends tens of gigabytes. For a new install,
 PortOS fetches the [pinned upstream revision](https://github.com/syv-ai/HyperQwen/commit/18db5cb3b56e63e30f64eee7901f0e97e632ab32)
 and verifies the detached checkout before writing `.env` or running Compose.
-It writes the settings below, builds the image, runs `prepare`, and brings the
-container up, streaming every line. PortOS reuses existing project directories
-as supplied.
+It installs a Compose override that binds the API to loopback and uses the local
+build, writes the settings below, builds the image, runs `prepare`, and brings
+the container up. PortOS reuses existing project directories as supplied.
 
 It is idempotent: re-running skips whatever already landed, and `prepare`'s
 download resumes, so a cancelled run costs minutes rather than the 20 GB. An
@@ -131,7 +129,18 @@ The compose project and its 20 GB of weights belong on the Linux filesystem.
   git fetch --no-tags --depth 1 https://github.com/syv-ai/qwen38-27b-rtx3090 "$revision"
   git checkout --detach FETCH_HEAD
   test "$(git rev-parse HEAD)" = "$revision"
-  echo "VLLM_API_KEY=$(openssl rand -hex 24)" > .env
+  cat > compose.override.yaml <<'YAML'
+services:
+  prepare:
+    pull_policy: never
+  single: &local
+    pull_policy: never
+    ports: !override
+      - "127.0.0.1:${PORT:-18020}:${PORT:-18020}"
+  batch: *local
+YAML
+  api_key=$(openssl rand -hex 24)
+  (umask 077; printf 'VLLM_API_KEY=%s\n' "$api_key" > .env)
   printf 'SPEC=dflash2\nPREFIX_CACHE=1\n' >> .env
   echo 'EXTRA_ARGS=--enable-auto-tool-choice --tool-call-parser qwen3_xml' >> .env   # required for agent use
   if grep -qi microsoft /proc/version; then                                          # WSL2 only
@@ -143,10 +152,10 @@ The compose project and its 20 GB of weights belong on the Linux filesystem.
 )
 ```
 
-`docker compose --profile single up -d` on its own does all three — `prepare` is
-a `depends_on` of the server. Running them separately is worth it anyway: it is
-the long, unattended part, and PortOS's Start button deliberately refuses until
-`prepare` has actually landed weights on disk (see below).
+After the image is built, `docker compose --profile single up -d` also runs
+`prepare` as a service dependency. Running `prepare` separately shows progress
+during the download and requantization. The PortOS Start button checks for the
+weights on disk before it starts the server.
 
 **Tool calling must be switched on, or the coding agent is useless.** Upstream's
 `single-user/start_qwen.sh` serves without it, and vLLM then rejects every

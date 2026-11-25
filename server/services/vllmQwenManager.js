@@ -16,7 +16,7 @@
  * failure comes back as a value the caller turns into a terminal frame.
  */
 
-import { chmod, mkdir, mkdtemp, rename, rm } from 'fs/promises';
+import { chmod, mkdir, mkdtemp, rename, rm, writeFile } from 'fs/promises';
 import { totalmem } from 'os';
 import { dirname, join } from 'path';
 
@@ -51,6 +51,17 @@ import { ensureWslProjectDir } from './wslProjectPlacement.js';
 export const VLLM_UPSTREAM_REPO = 'https://github.com/syv-ai/qwen38-27b-rtx3090';
 // This revision builds vLLM 0.27.1 locally and documents the WSL2 settings PortOS supplies.
 export const VLLM_UPSTREAM_REVISION = '18db5cb3b56e63e30f64eee7901f0e97e632ab32';
+
+// Keep this revision's runtime private, and run only the image built from its source.
+const VLLM_COMPOSE_OVERRIDE = `services:
+  prepare:
+    pull_policy: never
+  single: &local
+    pull_policy: never
+    ports: !override
+      - "127.0.0.1:\${PORT:-${PORTS.VLLM_QWEN}}:\${PORT:-${PORTS.VLLM_QWEN}}"
+  batch: *local
+`;
 
 /** A daemon question, and a compose `up` on an image that is already built. */
 const CONTROL_TIMEOUT_MS = 60 * 1000;
@@ -208,6 +219,7 @@ async function checkoutVllmSource(dir, emit) {
     if (stdout.trim() !== VLLM_UPSTREAM_REVISION) {
       return { success: false, error: `vLLM source revision mismatch: expected ${VLLM_UPSTREAM_REVISION}.` };
     }
+    await writeFile(join(staging, 'compose.override.yaml'), VLLM_COMPOSE_OVERRIDE, { flag: 'wx' });
     await rename(staging, dir);
     return { success: true };
   } catch (err) {
@@ -270,7 +282,7 @@ export async function provisionVllmQwenProject({ emit, isCancelled }) {
   if (alreadyPrepared) return { success: true };
   if (isCancelled()) return { success: false, error: 'cancelled before the image was built' };
 
-  emit('Building the vLLM image (~9.5 GB, built here — there is no registry to pull it from).');
+  emit('Building the vLLM image locally (~9.5 GB).');
   const built = await runStreamingCommand('docker', ['compose', 'build'], emit, { timeoutMs: PROVISION_TIMEOUT_MS, cwd: dir, splitRe: PROGRESS_SPLIT_RE });
   if (!built.success) return { success: false, error: `docker compose build failed: ${built.error}` };
 
