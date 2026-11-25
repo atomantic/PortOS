@@ -380,15 +380,21 @@ describe('framing-aware production bible additions', () => {
   });
 
   it('leaves omitted cast out of the clip bible and performer count while keeping authored words', () => {
+    const lead = { ...cast.concept.subjects[0], ingredientId: 'cat-lead' };
+    const alternate = { ...lead, id: 'alternate', description: 'red coat' };
     const other = { id: 'other', kind: 'character', name: 'Example Other' };
-    const projectWithPair = { concept: { subjects: [...cast.concept.subjects, other] } };
-    const shot = { prompt: 'Example Lead exits the frame.', shotSheet: { promptFromSheet: true, characters: ['Example Lead', 'Example Other'] }, omittedCatalogSubjectIds: ['lead'] };
-    const input = musicVideoShotModelInput(projectWithPair, shot, { hears: true, backend: 'fal' });
-    expect(input.prompt).toContain(shot.prompt);
-    expect(bible(input)).toContain('Example Other');
-    expect(bible(input)).not.toContain('Example Lead');
-    expect(input.promptAdditions).toContainEqual({ id: 'shot-sheet-who', label: 'Who', text: 'Who: Example Other.' });
-    expect(input.promptAdditions.some(item => item.id === 'performer-individuality')).toBe(false);
+    const projectWithPair = { concept: { subjects: [lead, alternate, other] } };
+    const shot = { prompt: 'Example Lead exits the frame.', shotSheet: { promptFromSheet: true, characters: ['Example Lead', 'Example Other'] },
+      characterVariant: { ingredientId: lead.ingredientId }, omittedCatalogSubjectIds: ['lead'] };
+    const clip = musicVideoShotModelInput(projectWithPair, shot, { hears: true, backend: 'fal' });
+    for (const input of [clip, musicVideoFrameModelInput(projectWithPair, shot)]) {
+      expect(bible(input)).toContain('Example Other');
+      expect(bible(input)).not.toContain('Example Lead');
+      expect(bible(input)).not.toContain('red coat');
+      expect(input.promptAdditions).toContainEqual({ id: 'shot-sheet-who', label: 'Who', text: 'Who: Example Other.' });
+    }
+    expect(clip.prompt).toContain(shot.prompt);
+    expect(clip.promptAdditions.some(item => item.id === 'performer-individuality')).toBe(false);
   });
 
   it('falls back through direction and live panel shot size while preserving close and unknown framing', () => {

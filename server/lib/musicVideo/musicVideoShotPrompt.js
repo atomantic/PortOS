@@ -20,7 +20,7 @@ import { peopleLightLine } from './musicVideoSnapshotLight.js';
 import { falHearsAudioReference, getFalVideoModel } from '../falVideoModels.js';
 import { storyboardPanelShotText } from '../storyboardRecipe.js';
 import { musicVideoSubjectScaleText } from './musicVideoSubjectScale.js';
-import { musicVideoReferenceSubjectIds } from './musicVideoCastSelection.js';
+import { activeMusicVideoSubjects, musicVideoReferenceSubjectIds } from './musicVideoCastSelection.js';
 import { musicVideoConditioningReferences } from './musicVideoConditioning.js';
 import { routeMapShotText } from './musicVideoRouteMaps.js';
 import { sceneFramingScale, lyricOverlayOff, shotCameraRuleText, shotSheetCharacterNames, shotSheetDrivesPrompt, shotSheetFocalSubject, shotSheetFramingConflicts, shotSheetPromptLines } from './musicVideoShotSheet.js';
@@ -128,6 +128,13 @@ function audioReferencePrompt(modelId) {
   return `${frame}${model.referenceAudio.promptName || 'Audio 1'} is the song playing under this shot: time the movement to its beat.`;
 }
 
+function subjectsAfterShotOmissions(concept, scene) {
+  const omitted = scene?.omittedCatalogSubjectIds;
+  if (!omitted?.length || !Array.isArray(concept?.subjects)) return concept?.subjects;
+  // Settle the cast first so omitting a chosen look cannot promote an unchosen alternate.
+  return activeMusicVideoSubjects(concept).filter(subject => !omitted.includes(subject.id));
+}
+
 /**
  * `{ prompt, promptAdditions }` for one clip. `authored` is the director's text
  * (the shot card's box, or the scene's saved prompt). `asTyped` is the shot
@@ -146,10 +153,9 @@ function composeShotModelInput(project, scene, {
   // A local renderer animates a start frame that already shows who and where, and its text
   // encoder is short (LTX-2: 1024 Gemma tokens), so the production bible would overflow it.
   const bible = backend !== 'local';
-  const omitted = scene?.omittedCatalogSubjectIds;
   const concept = project?.concept;
-  const clipConcept = omitted?.length && Array.isArray(concept?.subjects)
-    ? { ...concept, subjects: concept.subjects.filter(subject => !omitted.includes(subject.id)) } : concept;
+  const clipConcept = concept && scene?.omittedCatalogSubjectIds?.length
+    ? { ...concept, subjects: subjectsAfterShotOmissions(concept, scene) } : concept;
   const look = !asTyped && hears ? [
     addition('project-style', 'Project style', project?.concept?.style),
     bible ? addition('creative-context', 'Production bible', musicVideoCreativeContext(clipConcept, { moodBoard: false, look: musicVideoDirectorLook(project), framingScale: sceneFramingScale(scene) })) : null,
@@ -221,7 +227,7 @@ const PANEL_SUBJECT_IDS = { character: 'castIds', place: 'environmentIds', objec
  * does not know what it sends.
  */
 function shotSubjects(project, scene, { panel = null, references } = {}) {
-  const subjects = project?.concept?.subjects;
+  const subjects = subjectsAfterShotOmissions(project?.concept, scene);
   if (!Array.isArray(subjects)) return subjects;
   const refs = Array.isArray(references) ? references : musicVideoConditioningReferences(project, scene);
   const ids = new Set(refs.flatMap((ref) => musicVideoReferenceSubjectIds(project, ref)));
@@ -231,7 +237,7 @@ function shotSubjects(project, scene, { panel = null, references } = {}) {
   const attachable = (subject) => Boolean(subject?.ingredientId) || String(subject?.id || '').startsWith('cs-') || checkedIn.has(subject?.id);
   const inShot = (subject) => ids.has(subject.id) || (Boolean(subject.ingredientId)
     && (subject.ingredientId === variant || (panel?.[PANEL_SUBJECT_IDS[subject.kind]] || []).includes(subject.ingredientId)));
-  return subjects.filter((subject) => !scene?.omittedCatalogSubjectIds?.includes(subject.id) && (!attachable(subject) || inShot(subject)));
+  return subjects.filter((subject) => !attachable(subject) || inShot(subject));
 }
 
 /**
