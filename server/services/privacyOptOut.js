@@ -238,24 +238,24 @@ export async function renderOptOutEmail({ broker, payload, disclosedFields, list
 
 // ─── Verification anti-phishing scoring (pure) ──────────────────────────────
 
-// Extract every http(s) link host from an email body.
-function extractLinkHosts(text) {
-  const hosts = new Set();
-  const re = /https?:\/\/([^/\s"'>)]+)/gi;
-  let m;
-  while ((m = re.exec(String(text || ''))) !== null) {
-    hosts.add(m[1].toLowerCase().replace(/^www\./, ''));
+function parseHttpHost(raw) {
+  if (typeof raw !== 'string') return null;
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
   }
-  return [...hosts];
+  if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password) return null;
+  return url.hostname.toLowerCase().replace(/\.$/, '').replace(/^www\./, '');
 }
 
 // The broker's own domains, from its urls.* + optout.url + optout.email.
 export function brokerDomains(broker) {
   const domains = new Set();
   const addUrl = (u) => {
-    if (typeof u !== 'string') return;
-    const host = extractLinkHosts(u)[0];
-    if (host) domains.add(host.replace(/^www\./, ''));
+    const host = parseHttpHost(u);
+    if (host) domains.add(host);
   };
   for (const u of Object.values(broker?.urls || {})) addUrl(u);
   addUrl(broker?.optout?.url);
@@ -281,17 +281,16 @@ function hostMatchesDomain(host, domain) {
  */
 export function scoreVerificationEmail(message, broker) {
   const domains = brokerDomains(broker);
-  const text = `${message?.subject || ''}\n${message?.body || message?.snippet || ''}`;
-  const lower = text.toLowerCase();
-  const links = extractLinkHosts(text);
-  const bodyForUrls = `${message?.body || message?.snippet || ''}`;
-  const urlMatches = (String(bodyForUrls).match(/https?:\/\/[^\s"'>)]+/gi) || []);
-
-  const matchingUrl = urlMatches.find((u) => {
-    const host = extractLinkHosts(u)[0];
+  const subject = String(message?.subject || '');
+  const body = String(message?.body || message?.snippet || '');
+  const lower = `${subject}\n${body}`.toLowerCase();
+  const matchesBroker = (raw) => {
+    const host = parseHttpHost(raw);
     return host && domains.some((d) => hostMatchesDomain(host, d));
-  }) || null;
-  const domainMatch = links.some((h) => domains.some((d) => hostMatchesDomain(h, d)));
+  };
+  const linkPattern = /https?:\/\/[^\s"'<>)]+/gi;
+  const matchingUrl = body.match(linkPattern)?.find(matchesBroker) || null;
+  const domainMatch = Boolean(matchingUrl) || Boolean(subject.match(linkPattern)?.some(matchesBroker));
 
   const confirmWords = ['confirm', 'verify', 'verification', 'opt-out', 'opt out', 'removal', 'suppress', 'unsubscribe', 'request received'];
   const looksLikeConfirmation = confirmWords.some((w) => lower.includes(w));
