@@ -12,7 +12,7 @@ import { execGit } from '../lib/execGit.js';
 
 // The single `gh pr view` reader lives in a leaf so `git.js` can use it without
 // importing this module, which imports `git.js` (#17499).
-export { readPullRequest, readPullRequestOutcome } from './prView.js';
+export { readPullRequest, readPullRequestOutcome, awaitsHumanReviewOnRequiredChecks } from './prView.js';
 
 // `resolveForgeForRepo` spawns `git remote get-url` + `gh auth status` + `gh
 // auth token` with no internal timeout, so a stalled `gh` (network / keychain

@@ -6,8 +6,14 @@ import { materializeGitRepo } from '../lib/gitTestRepo.js';
 import { execGit } from '../lib/execGit.js';
 import { inspectOpenDeliveryRepair } from './repoCleanupObservation.js';
 
-const forge = vi.hoisted(() => ({ view: null, calls: [], afterAncestry: null }));
-vi.mock('./github.js', () => ({ execGh: vi.fn(async () => JSON.stringify(forge.view)) }));
+const forge = vi.hoisted(() => ({ view: null, calls: [], afterAncestry: null, required: null, requiredFails: false }));
+// `required` lists the check names branch protection requires; null leaves the GraphQL answer unparseable.
+vi.mock('./github.js', () => ({ execGh: vi.fn(async args => {
+  if (args[1] !== 'graphql') return JSON.stringify(forge.view);
+  if (forge.requiredFails) throw new Error('graphql unavailable');
+  const nodes = (forge.view.statusCheckRollup || []).map(check => ({ __typename: 'CheckRun', name: check.name, isRequired: forge.required?.includes(check.name) === true }));
+  return JSON.stringify(forge.required ? { data: { repository: { pullRequest: { commits: { nodes: [{ commit: { statusCheckRollup: { contexts: { pageInfo: { hasNextPage: false }, nodes } } } }] } } } } } : {});
+}) }));
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({}) }));
 vi.mock('../lib/execGit.js', async original => {
   const actual = await original();
@@ -52,6 +58,8 @@ describe('open delivery relationship from exact local Git history', () => {
       headRefName: branch, headRefOid: two, mergeable: 'MERGEABLE', reviewDecision: '', statusCheckRollup: [] };
     forge.calls = [];
     forge.afterAncestry = null;
+    forge.required = null;
+    forge.requiredFails = false;
   });
   afterEach(async () => { await rm(root, { recursive: true, force: true, maxRetries: 3 }); });
 
@@ -96,6 +104,39 @@ describe('open delivery relationship from exact local Git history', () => {
     forge.view.reviewDecision = 'REVIEW_REQUIRED';
     forge.view.statusCheckRollup = [{ name: 'CI', conclusion: 'FAILURE' }];
     expect(await inspect()).toMatchObject({ actionable: true, headSha: two });
+  });
+
+  describe('advisory check failures on a review-required PR', () => {
+    beforeEach(() => {
+      forge.view.reviewDecision = 'REVIEW_REQUIRED';
+      forge.view.statusCheckRollup = [
+        { name: 'CI', conclusion: 'SUCCESS' },
+        { name: 'ruleset drift', conclusion: 'FAILURE' },
+      ];
+    });
+
+    it('holds for the human when every REQUIRED check is green', async () => {
+      forge.required = ['CI'];
+      const result = await inspect();
+      expect(result).toMatchObject({ reason: 'delivery-human-review-pending' });
+      expect(result.headSha).toBeUndefined();
+      expect(result.actionable).not.toBe(true);
+    });
+
+    it('stays actionable when a REQUIRED check failed', async () => {
+      forge.required = ['CI', 'ruleset drift'];
+      expect(await inspect()).toMatchObject({ actionable: true, headSha: two });
+    });
+
+    it.each([['unparseable answer', () => {}], ['failed lookup', () => { forge.requiredFails = true; }]])('keeps today\'s all-checks verdict on a %s', async (_, arrange) => {
+      arrange();
+      expect(await inspect()).toMatchObject({ actionable: true, headSha: two });
+    });
+
+    it('never treats an empty required set as green', async () => {
+      forge.required = [];
+      expect(await inspect()).toMatchObject({ actionable: true, headSha: two });
+    });
   });
 
   it('retains unknown for an unavailable published object without fetching it', async () => {
