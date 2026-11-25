@@ -21,6 +21,7 @@
 import { unlink } from 'fs/promises';
 import { join, resolve as pathResolve, sep as PATH_SEP } from 'path';
 import { PATHS, readJSONFileStrict, atomicWrite, sleep } from '../../lib/fileUtils.js';
+import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 import { holdsBackupAssetPublication, runOutsideBackupAssetPublication, withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { reapAndCleanDetachedDirs } from '../../lib/detachedSpawn.js';
@@ -143,9 +144,8 @@ let prepareHooks = null;
 // backup never delays them.
 // The output is already rendered, so the commit waits out a whole backup cut
 // rather than stranding a finished job half-terminated.
-const COMPLETION_ADMISSION_MS = 60 * 60 * 1000;
 export const admitCompletion = (state, commit) => (state === 'completed'
-  ? withBackupAssetPublication(commit, { timeoutMs: COMPLETION_ADMISSION_MS, onWait: () => console.log('⏸️ media-job completion waiting for the backup to finish') })
+  ? withBackupAssetPublication(commit, { timeoutMs: FINISHED_OUTPUT_ADMISSION_MS, onWait: () => console.log('⏸️ media-job completion waiting for the backup to finish') })
   : commit());
 export function stageTerminalTransition(job, apply, acknowledge) {
   job.terminating = true;
