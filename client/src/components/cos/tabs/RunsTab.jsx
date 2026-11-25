@@ -195,19 +195,25 @@ export default function RunsTab() {
 
   // A link can name a run older than the newest-100 page. Resolve it by id (one
   // GET, only on this miss) and pin it above the list; 404 shows a notice.
-  const deepLinkFetched = useRef(false);
+  // Holds the id being resolved so a response for a superseded ?run= is dropped
+  // without a cleanup flag (a re-read of `runs` must not cancel the one read).
+  const deepLinkFetched = useRef(null);
+  const deepLinkGen = useRef(0);
   useEffect(() => {
-    if (deepLinkFetched.current || deepLinkOpened.current || !deepLinkRunId || runsState !== 'ready') return;
+    if (deepLinkFetched.current === deepLinkRunId || deepLinkOpened.current || !deepLinkRunId || runsState !== 'ready') return;
     if (runs.some(run => run.id === deepLinkRunId)) return;
-    deepLinkFetched.current = true;
+    const id = deepLinkRunId;
+    deepLinkFetched.current = id;
+    const gen = ++deepLinkGen.current;
     setPinned({ status: 'loading', run: null });
-    getRun(deepLinkRunId, { silent: true }).then(
+    getRun(id, { silent: true }).then(
       (run) => {
+        if (gen !== deepLinkGen.current) return;
         if (!run?.id) { setPinned({ status: 'missing', run: null }); return; }
         setPinned({ status: 'ready', run });
         expandRun(run.id);
       },
-      () => setPinned({ status: 'missing', run: null })
+      () => { if (gen === deepLinkGen.current) setPinned({ status: 'missing', run: null }); }
     );
   }, [deepLinkRunId, runsState, runs, expandRun]);
 
