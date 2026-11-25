@@ -318,7 +318,8 @@ export default function LocalLlmPlayground() {
       .then(async ([nextStatus, runtimes]) => {
         if (!mountedRef.current) return;
         setStatus(nextStatus);
-        setRuntimeRows(runtimes.rows);
+        // A failed listing keeps the last good rows (or none yet); it is never an empty inventory.
+        setRuntimeRows((previous) => (runtimes.error ? (previous ?? NO_RUNTIMES) : runtimes.rows));
         setRuntimeError(runtimes.error);
         const backendsWithModels = MANAGED_BACKENDS.filter((backend) => (nextStatus?.[backend]?.models || []).length > 0);
         const catalogs = await Promise.all(backendsWithModels.map((backend) =>
@@ -395,10 +396,12 @@ export default function LocalLlmPlayground() {
     if (loadingStatus || status == null || runtimeRows == null) return;
     const installedKeys = new Set(installedTargets.map(localLlmTargetKey));
     setSelectedTargets((previous) => {
-      const next = previous.filter((target) => installedKeys.has(localLlmTargetKey(target)));
+      // With the runtime listing failed, a runtime target's inventory is unknown, not empty: keep it.
+      const next = previous.filter((target) => installedKeys.has(localLlmTargetKey(target))
+        || (runtimeError && !MANAGED_BACKENDS.includes(target.backend)));
       return next.length === previous.length ? previous : next;
     });
-  }, [installedTargets, loadingStatus, runtimeRows, status]);
+  }, [installedTargets, loadingStatus, runtimeError, runtimeRows, status]);
 
   useEffect(() => {
     if (selectedTargets.length > 0 || installedTargets.length === 0) return;
@@ -691,7 +694,8 @@ export default function LocalLlmPlayground() {
                 {offlineRuntimes.map((runtime) => (
                   <div key={runtime.id} className="text-xs text-gray-500 flex flex-wrap items-center gap-x-1.5">
                     <span className="text-gray-400">{runtime.label}</span>
-                    <span>not running</span>
+                    <span>{runtime.offline ? 'not running' : 'serves no models'}</span>
+                    {runtime.error && !/^not reachable/.test(runtime.error) && <span className="text-port-warning">({runtime.error})</span>}
                     <Link to="/models/llms-runtimes" className="text-port-accent hover:underline">
                       {getNavPageForPath('/models/llms-runtimes')?.breadcrumb || 'Runtimes'}
                     </Link>
