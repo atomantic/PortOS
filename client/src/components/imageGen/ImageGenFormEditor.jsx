@@ -184,9 +184,11 @@ function resolveSubmitGuard({ derived, loraTest, remix, modelUnavailable }) {
   const backendBlocked = derived.remoteTargetActive
     ? derived.remoteBlocked !== null
     : derived.localBackendPending || derived.notConnected || derived.editImageMissing || derived.cloudNeedsPrompt;
-  const disabled = Boolean(modelUnavailable || derived.loraHandoffBlocked || derived.unsupportedLocalInputs || derived.unsupportedCloudInputs || remix.pending || backendBlocked);
+  const disabled = Boolean(modelUnavailable || derived.loraHandoffBlocked || derived.unsupportedLocalInputs
+    || derived.invalidLocalResolution || derived.unsupportedCloudInputs || remix.pending || backendBlocked);
 
-  if (derived.unsupportedLocalInputs) return { disabled, title: 'Remove unsupported LoRAs and input images in Options before rendering.' };
+  if (derived.unsupportedLocalInputs) return { disabled, title: 'Clear unsupported LoRAs, input images, or negative prompts in Options. A style preset or universe style can also add a negative prompt.' };
+  if (derived.invalidLocalResolution) return { disabled, title: 'Set a supported width and height in Options before rendering.' };
   if (loraTest.pending) return { disabled, title: 'Preparing this LoRA test…' };
   if (loraTest.error) return { disabled, title: loraTest.error };
   if (remix.pending) return { disabled, title: 'Restoring this image’s settings…' };

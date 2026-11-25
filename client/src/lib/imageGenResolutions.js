@@ -19,6 +19,11 @@ import { IMAGE_GEN_MODE } from './imageGenBackends';
 // asked for, so it takes the high-resolution presets local runners cannot.
 const MINIMAX_H3_IMAGE = 'minimax-h3-image';
 
+const ALIGNED_LOCAL_IMAGE_BOUNDS = { min: 256, max: 1024, step: 16 };
+export const localImageResolutionBounds = (runner) => (
+  runner === 'flux3' || runner === 'moss-swift' ? ALIGNED_LOCAL_IMAGE_BOUNDS : undefined
+);
+
 // `flux1` and `external` aren't members of RUNNER_FAMILIES — they're synthetic
 // compatibility-only keys ('flux1' = mflux/diffusers fallback when no `runner`
 // field is set; 'external' = Codex/API providers). Keep them as bare strings.

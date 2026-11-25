@@ -25,7 +25,7 @@ import {
   referenceSlotsFor,
   supportsReferenceStrength,
 } from '../../lib/imageGenBackends';
-import { clampImageDimensions } from '../../lib/imageGenResolutions';
+import { clampImageDimensions, clampImageEdge, localImageResolutionBounds } from '../../lib/imageGenResolutions';
 import { peerModelRequiresInput } from '../../lib/federatedMediaReadiness.js';
 import { isHardwareCompatible } from '../../utils/systemCapabilities';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
@@ -538,8 +538,8 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
     selectedUniverse ? withUniverseLabel(universeStylePreset(selectedUniverse)) : null,
     stylePreset,
   ].filter(Boolean), [selectedUniverse, stylePreset]);
-  const styledPrompt = useMemo(
-    () => composeStyledPrompt(prompt, negativePrompt, activeStylePresets).prompt,
+  const composedPrompt = useMemo(
+    () => composeStyledPrompt(prompt, negativePrompt, activeStylePresets),
     [prompt, negativePrompt, activeStylePresets],
   );
   const activeReferenceImages = useMemo(
@@ -555,8 +555,16 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
     [referenceImages, referenceSlotCount],
   );
   const unsupportedCloudInputs = textOnlyCloudModel && (initImage.source != null || droppedRefCount > 0);
-  const unsupportedLocalInputs = isLocalMode && !remoteTargetActive && currentModel?.runner === 'moss-swift'
-    && (selectedLoras.length > 0 || initImage.source != null || referenceImages.some(slot => slot.file != null));
+  const localModel = isLocalMode && !remoteTargetActive ? currentModel : null;
+  const unsupportedLocalInputs = (
+    (localModel?.supportsLoras === false && selectedLoras.length > 0)
+    || (localModel?.supportsImg2Img === false && initImage.source != null)
+    || (localModel?.supportsNegativePrompt === false && composedPrompt.negativePrompt !== '')
+    || (localModel?.runner === 'moss-swift' && referenceImages.some(slot => slot.file != null))
+  );
+  const resolutionBounds = localImageResolutionBounds(localModel?.runner);
+  const invalidLocalResolution = Boolean(resolutionBounds
+    && [width, height].some(edge => clampImageEdge(edge, resolutionBounds) !== edge));
   const remoteUnsupportedInputs = useMemo(() => {
     if (!remoteTargetActive) return null;
     const model = remoteTarget.model;
@@ -782,6 +790,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
     derived: {
       loraHandoffBlocked,
       unsupportedLocalInputs,
+      invalidLocalResolution,
       unsupportedCloudInputs,
       currentModel,
       isFlux2Model,
@@ -790,7 +799,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
       i2iCapable,
       referenceSlotCount,
       showReferenceStrength: supportsReferenceStrength(effectiveMode) && isFlux2Model,
-      styledPrompt,
+      styledPrompt: composedPrompt.prompt,
       activeStylePresets,
       populatedRefs,
       droppedRefCount,

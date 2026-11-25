@@ -76,6 +76,18 @@ describe('ImageGenControls — custom dimensions', () => {
     expect(screen.getByLabelText('Height').value).toBe('1280');
   });
 
+  it.each(['flux3', 'moss-swift'])('shows aligned custom dimension bounds for %s', (runner) => {
+    const model = { id: runner, name: runner, runner };
+    render(<ImageGenControls {...baseProps({ models: [model], modelId: model.id, width: 705, height: 1280 })} />);
+    for (const label of ['Width', 'Height']) {
+      const input = screen.getByLabelText(label);
+      expect(input).toHaveAttribute('min', '256');
+      expect(input).toHaveAttribute('max', '1024');
+      expect(input).toHaveAttribute('step', '16');
+    }
+    expect(screen.getByText('Each edge must be 256–1024px, in multiples of 16.')).toBeVisible();
+  });
+
   it('emits the new width while preserving height', () => {
     const onResolutionChange = vi.fn();
     render(<ImageGenControls {...baseProps({ width: 704, height: 1280, onResolutionChange })} />);
