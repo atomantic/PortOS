@@ -37,6 +37,25 @@ beforeEach(() => {
 });
 
 describe('operation-scoped catalog projection echoes', () => {
+  it('does not reverse-project an unchanged sibling at the same catalog clock', async () => {
+    const sibling = { ...entry('ingredient-b'), updatedAt: ingredient.updatedAt };
+    const updateUniverse = async (universeId, mutate, options) => {
+      const current = { characters: [entry('ingredient-a-alias')], objects: [sibling] };
+      const saved = { ...current, ...await mutate(current) };
+      expect(saved.objects[0]).toEqual(sibling);
+      expect(await projectToCatalog(universeId, saved, {
+        guardToken: options.canonProjectionGuard,
+        guardIdentityIds: options.canonProjectionIdentityIds,
+      })).toEqual({ written: 0, skipped: 2 });
+      return saved;
+    };
+
+    const stats = await projectToCanon(ingredient.id, ingredient, { updateUniverse });
+    expect(stats).toMatchObject({ written: 1 });
+    expect(catalogDB.getIngredientTimestamps).not.toHaveBeenCalled();
+    expect(catalogDB.updateIngredientIfFresh).not.toHaveBeenCalled();
+  });
+
   it('lets independent saves in the same and another universe write while a forward projection waits', async () => {
     const held = heldProjection();
     const forward = projectToCanon(ingredient.id, ingredient, held);

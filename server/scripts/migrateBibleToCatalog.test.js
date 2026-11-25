@@ -36,7 +36,7 @@ vi.mock('../services/universeBuilder.js', () => ({
   updateUniverse: vi.fn(async (id, patchOrMutator) => {
     const u = universes.find((x) => x.id === id);
     if (!u) return null;
-    const patch = typeof patchOrMutator === 'function' ? patchOrMutator(u) : patchOrMutator;
+    const patch = typeof patchOrMutator === 'function' ? await patchOrMutator(u) : patchOrMutator;
     if (!patch) return u;
     Object.assign(u, patch);
     return u;
@@ -81,6 +81,7 @@ const linkIngredientToRef = vi.fn(async (ingredientId, refKind, refId, role) => 
 vi.mock('../services/catalog/catalogDB.js', () => ({
   createIngredient: (...args) => createIngredient(...args),
   getIngredient: (...args) => getIngredient(...args),
+  getIngredientIdentityIds: async (id) => [id, `${id}-alias`],
   reviveDeletedIngredient: (...args) => reviveDeletedIngredient(...args),
   linkIngredientToRef: (...args) => linkIngredientToRef(...args),
 }));
@@ -95,7 +96,7 @@ vi.mock('../lib/migrationMarker.js', () => ({
 }));
 
 import { migrateBibleToCatalog, promoteUniverseCanon, hasUnpromotedCanon } from './migrateBibleToCatalog.js';
-import { listUniverses } from '../services/universeBuilder.js';
+import { listUniverses, updateUniverse } from '../services/universeBuilder.js';
 
 function makeUniverse(overrides = {}) {
   return {
@@ -120,6 +121,19 @@ beforeEach(() => {
 });
 
 describe('migrateBibleToCatalog', () => {
+  it('guards all linked canon and the newly promoted identities', async () => {
+    const world = universes[0];
+    world.objects[0].ingredientId = 'existing-object';
+    ingredients.set('existing-object', { id: 'existing-object' });
+
+    await migrateBibleToCatalog();
+
+    const stampedIds = [...world.characters, ...world.places].map((entry) => entry.ingredientId);
+    expect(new Set(updateUniverse.mock.calls[0][2].canonProjectionIdentityIds)).toEqual(new Set([
+      'existing-object', ...stampedIds.flatMap((id) => [id, `${id}-alias`]),
+    ]));
+  });
+
   it('promotes every embedded canon entry on the first run', async () => {
     const result = await migrateBibleToCatalog();
     expect(result.skipped).toBe(false);

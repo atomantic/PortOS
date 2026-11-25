@@ -8,17 +8,22 @@ vi.mock('../../lib/db.js', () => ({
   query: async (sql, params) => {
     if (sql.includes('FROM catalog_identity_read_refs')) return { rows: state.refs.filter((ref) => ref.ingredientId === params[0] && !ref.deleted) };
     if (sql.includes('SELECT id FROM universes')) return { rows: state.missing ? [] : [{ id: params[0] }] };
+    if (sql.includes('SELECT type FROM catalog_ingredients')) return { rows: [{ type: 'character' }] };
+    if (sql.includes('INSERT INTO catalog_commit_receipts')) return { rowCount: 1 };
+    if (sql.includes('FOR SHARE') || sql.includes('INSERT INTO catalog_ingredient_relations')
+      || sql.includes('UPDATE catalog_commit_receipts')) return { rows: [] };
     throw new Error(`Unexpected membership query: ${sql}`);
   },
   withTransaction: async () => { throw new Error('Membership must use the universe store queue'); },
 }));
 vi.mock('../catalogDB/ingredients.js', () => ({
-  getIngredient: async () => ({ id: 'primitive', type: 'character', name: state.ingredientName,
+  getIngredient: async (id) => ({ id, type: 'character', name: state.ingredientName,
     payload: { physicalDescription: 'A coat' }, updatedAt: '2026-10-01T00:00:00.000Z' }),
-  getIngredientIdentityIds: async () => ['primitive', 'alias'],
-  createIngredient: vi.fn(),
+  getIngredientIdentityIds: async (id) => [id, `${id}-alias`],
+  createIngredient: async (input) => ({ ...input, id: input.id ?? 'new-primitive' }),
 }));
 vi.mock('../catalogDB/identityAccess.js', () => ({
+  getCatalogIdentityAccess: async () => null,
   assertCatalogIdentityWritable: async (id) => {
     if (state.readonly) throw Object.assign(new Error('Identity is retained'), { code: 'CATALOG_IDENTITY_RETAINED', status: 409 });
     return id;
@@ -28,6 +33,7 @@ vi.mock('../catalogDB/identityAccess.js', () => ({
   },
 }));
 vi.mock('../catalogDB/refs.js', () => ({
+  linkIngredientRelation: vi.fn(),
   linkIngredientToRef: async (ingredientId, refKind, refId, role) => {
     state.linkStarted?.resolve();
     if (state.linkGate) await state.linkGate.promise;
@@ -63,7 +69,7 @@ vi.mock('../universeBuilder.js', () => ({
   }),
 }));
 
-import { addPrimitiveToUniverse, removePrimitiveFromUniverse } from './catalogPrimitives.js';
+import { addPrimitiveToUniverse, createOwnedPrimitive, forkPrimitive, removePrimitiveFromUniverse } from './catalogPrimitives.js';
 import { query } from '../../lib/db.js';
 import { updateUniverse } from '../universeBuilder.js';
 import { BIBLE_LIMITS } from '../../lib/bibleLimits.js';
@@ -100,8 +106,37 @@ describe('creative primitive universe membership', () => {
     expect(updateUniverse).toHaveBeenCalledWith('world', expect.any(Function), expect.objectContaining({
       transactional: true,
       canonProjectionGuard: 'primitive',
-      canonProjectionIdentityIds: expect.arrayContaining(['primitive', 'alias', 'existing-place']),
+      canonProjectionIdentityIds: expect.arrayContaining(['primitive', 'primitive-alias', 'existing-place']),
     }));
+  });
+
+  it.each([
+    ['create', () => createOwnedPrimitive({ type: 'character', name: 'New character' }, 'world')],
+    ['fork', () => forkPrimitive('primitive', { universeId: 'world', operationKey: 'fork-key' })],
+  ])('guards the %s identity and every existing canon bucket', async (_operation, save) => {
+    state.world.characters = [{ id: 'canon-character', ingredientId: 'primitive' }];
+    state.world.places = [{ id: 'canon-place', ingredientId: 'existing-place' }];
+    state.world.objects = [{ id: 'canon-object', ingredientId: 'existing-object' }];
+    const { id } = await save();
+
+    expect(state.world.characters.at(-1).ingredientId).toBe(id);
+    expect(new Set(updateUniverse.mock.calls[0][2].canonProjectionIdentityIds)).toEqual(new Set([
+      id, `${id}-alias`, 'primitive', 'existing-place', 'existing-object',
+    ]));
+  });
+
+  it('guards the removed identity and remaining canon', async () => {
+    state.world.characters = [{ id: 'canon-character', ingredientId: 'primitive-alias' }];
+    state.world.places = [{ id: 'canon-place', ingredientId: 'existing-place' }];
+    state.refs.push(canonRef());
+
+    await removePrimitiveFromUniverse('primitive', 'world', 'canon-character');
+
+    expect(state.world.characters).toEqual([]);
+    expect(activeCanonRefs()).toEqual([]);
+    expect(new Set(updateUniverse.mock.calls[0][2].canonProjectionIdentityIds)).toEqual(new Set([
+      'primitive', 'primitive-alias', 'existing-place',
+    ]));
   });
 
   it('serializes an overlapping removal after the add association finishes', async () => {
@@ -120,10 +155,10 @@ describe('creative primitive universe membership', () => {
   });
 
   it('repairs a missing association on a no-op retry without duplicating alias canon', async () => {
-    state.world.characters = [{ id: 'canon-existing', ingredientId: 'alias', name: 'Example character' }];
+    state.world.characters = [{ id: 'canon-existing', ingredientId: 'primitive-alias', name: 'Example character' }];
     await addPrimitiveToUniverse('primitive', 'world', 'canon-character');
     await addPrimitiveToUniverse('primitive', 'world', 'canon-character');
-    expect(state.world.characters).toEqual([{ id: 'canon-existing', ingredientId: 'alias', name: 'Example character' }]);
+    expect(state.world.characters).toEqual([{ id: 'canon-existing', ingredientId: 'primitive-alias', name: 'Example character' }]);
     expect(state.writes).toBe(0);
     expect(activeCanonRefs()).toEqual([expect.objectContaining(canonRef())]);
   });

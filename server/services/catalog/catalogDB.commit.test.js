@@ -9,8 +9,10 @@ const mocks = vi.hoisted(() => ({
   withTransaction: vi.fn(),
 }));
 
-vi.mock('../universeBuilder.js', () => ({ updateUniverse: async (_id, mutate) => mocks.withTransaction((client) => mutate({}, { client })) }));
-vi.mock('./catalogPrimitives.js', () => ({ canonEntryFor: vi.fn() }));
+vi.mock('../universeBuilder.js', () => ({ updateUniverse: vi.fn(async (_id, mutate) =>
+  mocks.withTransaction((client) => mutate({ objects: [{ ingredientId: 'existing-object' }] }, { client }))) }));
+vi.mock('./catalogPrimitives.js', () => ({ canonEntryFor: ({ id }) => ({ ingredientId: id }) }));
+vi.mock('../catalogDB/identityAccess.js', () => ({ assertCatalogIdentityWritable: vi.fn() }));
 
 vi.mock('../../lib/db.js', () => ({
   withTransaction: mocks.withTransaction,
@@ -18,6 +20,8 @@ vi.mock('../../lib/db.js', () => ({
 
 vi.mock('../catalogDB/ingredients.js', () => ({
   createIngredient: mocks.createIngredient,
+  getIngredient: async (id) => ({ id, type: 'character' }),
+  getIngredientIdentityIds: async (id) => [id, `${id}-alias`],
 }));
 
 vi.mock('../catalogDB/refs.js', () => ({
@@ -30,6 +34,7 @@ vi.mock('../catalogDB/refs.js', () => ({
 }));
 
 import { commitScrap } from '../catalogDB/commit.js';
+import { updateUniverse } from '../universeBuilder.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -145,8 +150,8 @@ describe('commitScrap', () => {
 
   it('links every ingredient to universeRef with the type-derived role, in the transaction client (#7615)', async () => {
     mocks.createIngredient
-      .mockResolvedValueOnce({ id: 'cat-chr-example' })
-      .mockResolvedValueOnce({ id: 'cat-idea-example' });
+      .mockResolvedValueOnce({ id: 'cat-chr-example', type: 'character' })
+      .mockResolvedValueOnce({ id: 'cat-idea-example', type: 'idea' });
 
     await commitScrap({
       scrapId: 'cat-scrap-example',
@@ -160,6 +165,10 @@ describe('commitScrap', () => {
     expect(mocks.linkIngredientToRef).toHaveBeenCalledWith('cat-chr-example', 'universe', 'universe-1', 'owner', { client: mocks.client });
     expect(mocks.linkIngredientToRef).toHaveBeenNthCalledWith(2, 'cat-chr-example', 'universe', 'universe-1', 'canon-character', { client: mocks.client });
     expect(mocks.linkIngredientToRef).toHaveBeenNthCalledWith(4, 'cat-idea-example', 'universe', 'universe-1', 'reference', { client: mocks.client });
+    expect(await updateUniverse.mock.results[0].value).toEqual({ characters: [{ ingredientId: 'cat-chr-example' }] });
+    expect(new Set(updateUniverse.mock.calls[0][2].canonProjectionIdentityIds)).toEqual(new Set([
+      'cat-chr-example', 'cat-chr-example-alias', 'existing-object',
+    ]));
   });
 
   it('an explicit role overrides the type-derived default', async () => {

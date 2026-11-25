@@ -3,7 +3,7 @@ import { query, withTransaction } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { canonicalStringify } from '../../lib/objects.js';
 import { toPgJson } from '../../lib/pgJson.js';
-import { CATALOG_OWNER_ROLE, catalogUniverseContext } from '../../lib/catalog/catalogUniverseContext.js';
+import { CATALOG_OWNER_ROLE, catalogUniverseContext, collectUniverseCanonIngredientIds } from '../../lib/catalog/catalogUniverseContext.js';
 import { ingredientIdPrefix } from '../../lib/catalog/catalogTypes.js';
 import { BIBLE_LIMITS } from '../../lib/storyBible.js';
 import { CATALOG_REDESIGN_FIELDS } from '../../lib/catalog/catalogRedesign.js';
@@ -48,7 +48,7 @@ export async function setPrimitiveOwner(id, universeId) {
     import('../universeBuilder.js'), import('../universeBuilder/store.js'),
   ]);
   if (!isValidUniverseId(universeId)) fail('Destination universe not found', 'UNIVERSE_NOT_FOUND', 404);
-  const identityIds = [];
+  const projectionIdentityIds = [];
   let membershipRole = null;
   await updateUniverse(universeId, async (current, { client }) => {
     await assertCatalogIdentityWritable(id, { client });
@@ -71,18 +71,13 @@ export async function setPrimitiveOwner(id, universeId) {
     const field = CANON_FIELD[ingredient.type];
     membershipRole = field ? `canon-${ingredient.type}` : 'reference';
     if (!field) return null;
-    const members = await client.query('SELECT unnest(catalog_identity_member_ids($1)) AS id', [id]);
-    identityIds.push(...members.rows.map((row) => row.id));
+    const identityIds = new Set(await getIngredientIdentityIds(id, { client }));
     const list = current[field] || [];
-    if (list.some((entry) => identityIds.includes(entry.ingredientId))) return null;
+    if (list.some((entry) => identityIds.has(entry.ingredientId))) return null;
     if (list.length >= BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX) fail('This universe’s canon bucket is full. Remove a membership before adding another.', 'UNIVERSE_CANON_FULL');
-    // This write only appends a catalog-sourced entry. Do not reverse-project
-    // unchanged canon entries into unrelated catalog records and revisions.
-    for (const canonField of Object.values(CANON_FIELD)) {
-      for (const entry of current[canonField] || []) if (entry.ingredientId) identityIds.push(entry.ingredientId);
-    }
+    projectionIdentityIds.push(...collectUniverseCanonIngredientIds(current), id, ...identityIds);
     return { [field]: [...list, canonEntryFor(ingredient)] };
-  }, { transactional: true, canonProjectionGuard: id, canonProjectionIdentityIds: identityIds,
+  }, { transactional: true, canonProjectionGuard: id, canonProjectionIdentityIds: projectionIdentityIds,
     afterWrite: (_universe, { client }) => membershipRole
       ? linkIngredientToRef(id, 'universe', universeId, membershipRole, { client }) : Promise.resolve() }).catch((error) => {
     if (error.code === 'NOT_FOUND') fail('Destination universe not found', 'UNIVERSE_NOT_FOUND', 404);
@@ -129,6 +124,7 @@ export async function createOwnedPrimitive(rawInput, universeId, operationKey, r
   }
   const role = `canon-${input.type}`;
   const { updateUniverse } = await import('../universeBuilder.js');
+  const projectionIdentityIds = [];
   let saved;
   let skipLink = false;
   await updateUniverse(universeId, async (current, { client }) => {
@@ -147,13 +143,13 @@ export async function createOwnedPrimitive(rawInput, universeId, operationKey, r
         return null;
       }
     }
-    const { rows } = await client.query('SELECT unnest(catalog_identity_member_ids($1)) AS id', [ingredient.id]);
-    const identityIds = new Set(rows.map((row) => row.id));
+    const identityIds = new Set(await getIngredientIdentityIds(ingredient.id, { client }));
     const list = current[field] || [];
     if (list.some((entry) => identityIds.has(entry.ingredientId))) return null;
     if (list.length >= BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX) fail('This universe’s canon bucket is full. Remove a membership before adding another.', 'UNIVERSE_CANON_FULL');
+    projectionIdentityIds.push(...collectUniverseCanonIngredientIds(current), ingredient.id, ...identityIds);
     return { [field]: [...list, canonEntryFor(ingredient)] };
-  }, { transactional: true, afterWrite: (_universe, { client }) => skipLink
+  }, { transactional: true, canonProjectionIdentityIds: projectionIdentityIds, afterWrite: (_universe, { client }) => skipLink
     ? Promise.resolve() : linkIngredientToRef(saved.id, 'universe', universeId, role, { client }) }).catch((error) => {
     if (error.code === 'NOT_FOUND') fail('Destination universe not found', 'UNIVERSE_NOT_FOUND', 404);
     throw error;
@@ -221,11 +217,7 @@ export async function addPrimitiveToUniverse(id, universeId, role) {
       const list = current[field] || [];
       if (list.some((entry) => identityIds.has(entry.ingredientId))) return null;
       if (list.length >= BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX) fail('This universe’s canon bucket is full. Remove a membership before adding another.', 'UNIVERSE_CANON_FULL');
-      // A catalog-sourced append does not edit any of the embedded identities.
-      projectionIdentityIds.push(...identityIds, ingredient.id);
-      for (const canonField of Object.values(CANON_FIELD)) {
-        for (const entry of current[canonField] || []) if (entry.ingredientId) projectionIdentityIds.push(entry.ingredientId);
-      }
+      projectionIdentityIds.push(...collectUniverseCanonIngredientIds(current), ingredient.id, ...identityIds);
       return { [field]: [...list, canonEntryFor(ingredient)] };
     }, { transactional: true, canonProjectionGuard: id, canonProjectionIdentityIds: projectionIdentityIds,
       afterWrite: (_universe, { client }) => linkIngredientToRef(ingredient.id, 'universe', universeId, role, { client }) });
@@ -243,6 +235,7 @@ export async function removePrimitiveFromUniverse(id, universeId, role) {
   const field = CANON_FIELD[ingredient.type];
   if (containers.length && field && role === `canon-${ingredient.type}`) {
     const { updateUniverse } = await import('../universeBuilder.js');
+    const projectionIdentityIds = [];
     await updateUniverse(universeId, async (current, { client }) => {
       await assertCatalogIdentityWritable(id, { client });
       await assertCatalogAssociationRemovable(id, 'refs', ['universe', universeId, role], { client });
@@ -250,11 +243,13 @@ export async function removePrimitiveFromUniverse(id, universeId, role) {
       if (!ingredient) fail('Ingredient not found', 'CATALOG_NOT_FOUND', 404);
       const identityIds = new Set(await getIngredientIdentityIds(ingredient.id, { client }));
       const list = current[field] || [];
+      const removed = list.filter((entry) => identityIds.has(entry.ingredientId));
+      if (!removed.length) return null;
       const { assertCanonRemovable } = await import('./catalogPrimitiveUsage.js');
-      for (const entry of list.filter((entry) => identityIds.has(entry.ingredientId))) await assertCanonRemovable(universeId, ingredient.type, entry.id, { client });
-      return list.some((entry) => identityIds.has(entry.ingredientId))
-        ? { [field]: list.filter((entry) => !identityIds.has(entry.ingredientId)) } : null;
-    }, { transactional: true,
+      for (const entry of removed) await assertCanonRemovable(universeId, ingredient.type, entry.id, { client });
+      projectionIdentityIds.push(...collectUniverseCanonIngredientIds(current), ingredient.id, ...identityIds);
+      return { [field]: list.filter((entry) => !identityIds.has(entry.ingredientId)) };
+    }, { transactional: true, canonProjectionIdentityIds: projectionIdentityIds,
       afterWrite: (_universe, { client }) => unlinkIngredientFromRef(ingredient.id, 'universe', universeId, role, { client }) });
   } else await unlinkIngredientFromRef(ingredient.id, 'universe', universeId, role);
   catalogEvents.emit('primitive-changed', { ingredientId: ingredient.id });
@@ -332,14 +327,17 @@ export async function forkPrimitive(sourceId, request) {
   const { universeId } = request;
   const role = `canon-${sourceRow.type}`;
   const { updateUniverse } = await import('../universeBuilder.js');
+  const projectionIdentityIds = [];
   let result;
   await updateUniverse(universeId, async (current, { client }) => {
     result = await forkRecord(client, sourceId, request);
     if (result.replayed) return null;
     const list = current[field] || [];
     if (list.length >= BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX) fail('This universe’s canon bucket is full. Remove a membership before adding another.', 'UNIVERSE_CANON_FULL');
+    const identityIds = await getIngredientIdentityIds(result.fork.id, { client });
+    projectionIdentityIds.push(...collectUniverseCanonIngredientIds(current), result.fork.id, ...identityIds);
     return { [field]: [...list, canonEntryFor(result.fork)] };
-  }, { transactional: true, afterWrite: (_universe, { client }) => result?.replayed
+  }, { transactional: true, canonProjectionIdentityIds: projectionIdentityIds, afterWrite: (_universe, { client }) => result?.replayed
     ? Promise.resolve() : linkIngredientToRef(result.fork.id, 'universe', universeId, role, { client }) }).catch((error) => {
     if (error.code === 'NOT_FOUND') fail('Destination universe not found', 'UNIVERSE_NOT_FOUND', 404);
     throw error;
