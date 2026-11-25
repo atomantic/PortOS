@@ -79,6 +79,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   listMusicVideoProjectVersions: vi.fn(async () => []),
   getMusicVideoCatalogCompletion: vi.fn(async () => []),
   createMusicVideoProject: vi.fn(),
+  startAutonomousMusicVideo: vi.fn(),
   cloneMusicVideoProject: vi.fn(),
   updateMusicVideoProject: vi.fn(async (id, patch) => ({
     id,
@@ -288,10 +289,10 @@ vi.mock('../services/apiMoodBoard.js', () => ({
   addMoodBoardItem: vi.fn(),
   removeMoodBoardItem: vi.fn(),
 }));
-const providerModelsState = vi.hoisted(() => ({ selectedProviderId: '' }));
+const providerModelsState = vi.hoisted(() => ({ selectedProviderId: '', providers: [] }));
 vi.mock('../hooks/useProviderModels', () => ({
   default: () => ({
-    providers: [], selectedProviderId: providerModelsState.selectedProviderId, selectedModel: '', availableModels: [],
+    providers: providerModelsState.providers, selectedProviderId: providerModelsState.selectedProviderId, selectedModel: '', availableModels: [],
     setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn(), loading: false,
   }),
 }));

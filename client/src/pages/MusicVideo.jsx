@@ -472,14 +472,17 @@ export default function MusicVideo() {
   // listening for anymore) and misattribute its progress UI to whichever
   // project is now selected. Block switching until that import settles. (The
   // hook re-asserts the same invariant against URL-driven navigation.)
-  const selectProject = (id, stage = null) => {
+  const selectProject = (id, stage = null, { clearNew = false } = {}) => {
     if (youtube.editJob.active && id !== selectedId) {
       toast.error(youtube.switchBlockedMessage);
       return;
     }
     if (id && !selectedId) setSummariesWanted(true);
-    const search = searchParams.toString();
-    navigate(id ? `/music-video/${id}${stage ? `/${stage}` : ''}${search ? `?${search}` : ''}` : `/music-video${search ? `?${search}` : ''}`);
+    const nextSearch = new URLSearchParams(searchParams);
+    if (clearNew) nextSearch.delete('new');
+    const path = id ? `/music-video/${id}${stage ? `/${stage}` : ''}` : '/music-video';
+    // Replace the submitted drawer's entry so Back returns to the index.
+    navigate({ pathname: path, search: nextSearch.toString() }, { replace: clearNew });
   };
 
   const trackName = useCallback((id) => tracks.find((t) => t.id === id)?.title || id || '—', [tracks]);
@@ -509,9 +512,8 @@ export default function MusicVideo() {
     }, { silent: true })
       .then((proj) => {
         openProject(proj);
-        selectProject(proj.id);
+        selectProject(proj.id, null, { clearNew: true });
         setForm(emptyCreateForm());
-        setCreateOpen(false);
         toast.success('Project created');
         if (proj.trackId) prepareSong(proj.id);
       })
@@ -664,8 +666,7 @@ export default function MusicVideo() {
         onClose={() => setAutonomousOpen(false)}
         onStarted={(proj) => {
           openProject(proj);
-          selectProject(proj.id);
-          setAutonomousOpen(false);
+          selectProject(proj.id, null, { clearNew: true });
         }}
       />
 

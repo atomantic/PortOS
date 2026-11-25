@@ -8,6 +8,7 @@ import { beforeAll, describe, it, expect, vi } from 'vitest';
 // The scaffold registers the mocks, so it loads before any mocked module.
 import {
   PROJECT_WITH_CLIP,
+  providerModelsState,
   PROJECT_NO_CLIP,
   pushSocket,
   PROJECT_ANALYZED,
@@ -27,7 +28,7 @@ import {
 import { MUSIC_VIDEO_STAGES } from '../lib/musicVideoStages.js';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router';
-import { listMusicVideoProjects, listMusicVideoProjectSummaries, listMusicVideoProjectVersions, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject, updateMusicVideoScene, deleteMusicVideoProject, analyzeMusicVideoProject, importMusicVideoTrackLyrics, getMusicVideoProject, resumeMusicVideoRevision, cancelMusicVideoRevision, approveMusicVideoCastAndSets, stopMusicVideoProduction, buildMusicVideoPublishKit, getMusicVideoCatalogCompletion } from '../services/apiMusicVideo.js';
+import { createMusicVideoProject, startAutonomousMusicVideo, listMusicVideoProjects, listMusicVideoProjectSummaries, listMusicVideoProjectVersions, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject, updateMusicVideoScene, deleteMusicVideoProject, analyzeMusicVideoProject, importMusicVideoTrackLyrics, getMusicVideoProject, resumeMusicVideoRevision, cancelMusicVideoRevision, approveMusicVideoCastAndSets, stopMusicVideoProduction, buildMusicVideoPublishKit, getMusicVideoCatalogCompletion } from '../services/apiMusicVideo.js';
 import { listTracks } from '../services/apiTracks.js';
 
 import toast from '../components/ui/Toast';
@@ -1529,6 +1530,52 @@ describe('MusicVideo deep-linking and drawer URL routing (#10168)', () => {
       </MemoryRouter>
     );
     expect(await screen.findByRole('heading', { level: 2, name: 'Autonomous music video' })).toBeInTheDocument();
+  });
+
+  it.each([
+    { drawer: 'project', open: 'New project', title: 'New music video', input: 'Name', submit: 'Create autopilot project' },
+    { drawer: 'autonomous', open: 'Autonomous', title: 'Autonomous music video', input: 'Prompt', submit: 'Start autonomous video' },
+  ])('opens the workspace after submitting the $drawer drawer and returns to the index on Back', async ({ drawer, open, title, input, submit }) => {
+    const project = { ...PROJECT_NO_CLIP, id: 'mv-created', name: 'Example music video', trackId: null };
+    const autonomous = drawer === 'autonomous';
+    const start = autonomous ? startAutonomousMusicVideo : createMusicVideoProject;
+    start.mockResolvedValueOnce(autonomous ? { project } : project);
+    if (autonomous) providerModelsState.providers = [{ id: 'example-api', name: 'Example API', type: 'api', defaultModel: 'example-model' }];
+    const SearchProbe = () => <span data-testid="drawer-search">{useLocation().search}</span>;
+
+    try {
+      render(
+        <MemoryRouter initialEntries={['/music-video']}>
+          <LocationProbe />
+          <SearchProbe />
+          <NavTo to={-1} />
+          {MV_ROUTES}
+        </MemoryRouter>,
+      );
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: open })));
+      const dialog = await screen.findByRole('dialog', { name: title });
+      expect(screen.getByTestId('drawer-search')).toHaveTextContent(`?new=${drawer}`);
+      fireEvent.change(within(dialog).getByLabelText(input), { target: { value: project.name } });
+      if (autonomous) {
+        fireEvent.change(within(dialog).getByLabelText('Code authoring provider'), { target: { value: 'example-api' } });
+      }
+      const submitButton = within(dialog).getByRole('button', { name: submit });
+      expect(submitButton).toBeEnabled();
+      await act(async () => fireEvent.click(submitButton));
+
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('loc').textContent).toBe(`/music-video/${project.id}`);
+      expect(screen.getByTestId('drawer-search')).toBeEmptyDOMElement();
+      expect(await screen.findByRole('heading', { level: 2, name: project.name })).toBeInTheDocument();
+      expect(screen.queryByRole('dialog', { name: title })).not.toBeInTheDocument();
+
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'go--1' })));
+      expect(screen.getByTestId('loc').textContent).toBe('/music-video');
+      expect(screen.getByTestId('drawer-search')).toBeEmptyDOMElement();
+      expect(screen.queryByRole('dialog', { name: title })).not.toBeInTheDocument();
+    } finally {
+      providerModelsState.providers = [];
+    }
   });
 
   it('updates the URL when a scene is expanded and removes it when collapsed', async () => {
