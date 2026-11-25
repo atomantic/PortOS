@@ -56,6 +56,16 @@ async function recordReconciliationCheckpoint(patch) {
   });
 }
 
+// Legacy PortOS components are visually inert and may contain private data.
+// Both rollback paths must keep that data out of new append-only entries.
+function canRestoreComponent(type, data) {
+  return type !== COMPONENT_TYPE || (
+    data?.managedBy === 'portos'
+    && data?.designVersion === EIDOVERSE_WORLD_DESIGN_VERSION
+    && data?.disclosure === 'aggregate'
+  );
+}
+
 function restoreEntityOperations(id, entity) {
   if (!entity) return [];
   if (entity.kind === 'light') {
@@ -79,14 +89,7 @@ function restoreEntityOperations(id, entity) {
     ...(entity.collide ? { collide: entity.collide } : {}),
   } }];
   for (const [type, data] of Object.entries(entity.comp || {})) {
-    // Legacy PortOS components may predate the privacy-safe WorldSignal shape.
-    // They are visually inert, so do not duplicate their old contents into a
-    // new append-only log during rollback.
-    if (type === COMPONENT_TYPE && !(
-      data?.managedBy === 'portos'
-      && data?.designVersion === EIDOVERSE_WORLD_DESIGN_VERSION
-      && data?.disclosure === 'aggregate'
-    )) continue;
+    if (!canRestoreComponent(type, data)) continue;
     operations.push({ layer: 'compensation', verb: 'comp', args: { id, type, data } });
   }
   return operations;
@@ -105,12 +108,15 @@ function inverseOperationsFor(operation, currentState) {
         yaw: existing.yaw || 0,
         ...(existing.scale !== undefined ? { scale: existing.scale } : {}),
       } }] : [];
-    case 'comp':
+    case 'comp': {
+      const { type } = operation.args;
+      const prior = existing?.comp?.[type] ?? null;
       return [{ layer: 'compensation', verb: 'comp', args: {
         id,
-        type: operation.args.type,
-        data: existing?.comp?.[operation.args.type] ?? null,
+        type,
+        data: canRestoreComponent(type, prior) ? prior : null,
       } }];
+    }
     case 'remove':
       return restoreEntityOperations(id, existing);
     case 'light':
