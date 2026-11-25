@@ -106,11 +106,6 @@ def emit_stage(stage: int, step: int, total: int, label: str) -> None:
     print(f"STAGE:{stage}:STEP:{step}:{total}:{label}", file=sys.stderr, flush=True)
 
 
-def emit_download(msg: str) -> None:
-    """DOWNLOAD: line — first-use HF download status routed to SSE as `status`."""
-    print(f"DOWNLOAD:{msg}", file=sys.stderr, flush=True)
-
-
 def _resolve_pipeline(*names: str, method: str | None = None):
     """Return the first available pipeline class from ltx_pipelines_mlx.
 
