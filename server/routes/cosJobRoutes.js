@@ -6,7 +6,7 @@ import { Router } from 'express';
 import { addTask, reviveBlockedTask } from '../services/cos/cosTaskStore.js';
 import { forceSpawnTask } from '../services/cos/cos.js';
 import * as autonomousJobs from '../services/autonomousJobs.js';
-import { checkJobGate, hasGate, getRegisteredGates } from '../services/jobGates.js';
+import { hasGate, getRegisteredGates } from '../services/jobGates.js';
 import { computeNextJobRun } from '../services/autonomousJobs/scheduler.js';
 import { getJobNotepad, getJobNote, setJobNote, deleteJobNote, clearJobNotes } from '../services/autonomousJobs/notepad.js';
 import { noteKeySchema, putNoteBodySchema } from '../lib/autonomousJobNotepadValidation.js';
@@ -72,39 +72,6 @@ router.get('/jobs', asyncHandler(async (req, res) => {
     };
   });
   res.json({ jobs: jobsWithGates, stats, registeredGates: getRegisteredGates(), dataInputCatalog: getTaskDataInputCatalog() });
-}));
-
-// GET /api/cos/jobs/due - Get jobs that are due to run
-router.get('/jobs/due', asyncHandler(async (req, res) => {
-  const due = await autonomousJobs.getDueJobs();
-  res.json({ due });
-}));
-
-// GET /api/cos/jobs/intervals - Get available interval options
-router.get('/jobs/intervals', (req, res) => {
-  res.json({ intervals: autonomousJobs.INTERVAL_OPTIONS });
-});
-
-// GET /api/cos/jobs/allowed-commands - Get allowed commands for shell jobs
-router.get('/jobs/allowed-commands', (req, res) => {
-  res.json({ commands: autonomousJobs.getAllowedCommands() });
-});
-
-// GET /api/cos/jobs/gates - Get all registered LLM gates
-router.get('/jobs/gates', asyncHandler(async (req, res) => {
-  const gateIds = getRegisteredGates();
-  const settled = await Promise.allSettled(
-    gateIds.map(async (id) => {
-      const result = await checkJobGate(id);
-      return { jobId: id, ...result };
-    })
-  );
-  const results = settled.map((s, i) =>
-    s.status === 'fulfilled'
-      ? s.value
-      : { jobId: gateIds[i], shouldRun: true, reason: `Gate error (fail-open): ${s.reason?.message || s.reason}`, error: true }
-  );
-  res.json({ gates: results });
 }));
 
 // GET /api/cos/jobs/incidents - Deduplicated failure incidents (open first, then resolved), newest first

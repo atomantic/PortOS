@@ -28,7 +28,6 @@ vi.mock('../services/jiraReports.js', () => ({
   listReports: vi.fn(),
   generateReport: vi.fn(),
   generateAllReports: vi.fn(),
-  getLatestReport: vi.fn(),
   getReport: vi.fn()
 }));
 vi.mock('../services/apps.js', () => ({ getAppById: vi.fn() }));
@@ -80,44 +79,6 @@ describe('GET /reports/:appId/:date', () => {
 
     expect(response.status).toBe(400);
     expect(jiraReports.getReport).not.toHaveBeenCalled();
-  });
-});
-
-describe('GET /reports/:appId/latest', () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it('rejects invalid appId characters with 400 VALIDATION_ERROR', async () => {
-    const response = await request(makeApp()).get('/api/jira/reports/bad@app/latest');
-
-    expect(response.status).toBe(400);
-    expect(response.body.code).toBe('VALIDATION_ERROR');
-    expect(jiraReports.getLatestReport).not.toHaveBeenCalled();
-  });
-
-  it('rejects appId with spaces and special characters', async () => {
-    const response = await request(makeApp()).get('/api/jira/reports/bad%20app/latest');
-
-    expect(response.status).toBe(400);
-    expect(response.body.code).toBe('VALIDATION_ERROR');
-    expect(jiraReports.getLatestReport).not.toHaveBeenCalled();
-  });
-
-  it('accepts valid appId with alphanumeric, dot, underscore, and dash', async () => {
-    jiraReports.getLatestReport.mockResolvedValue({ appId: 'valid-app.v2_0', date: '2026-01-01', status: 'ok' });
-
-    const response = await request(makeApp()).get('/api/jira/reports/valid-app.v2_0/latest');
-
-    expect(response.status).toBe(200);
-    expect(jiraReports.getLatestReport).toHaveBeenCalledWith('valid-app.v2_0');
-  });
-
-  it('returns 404 when no reports found', async () => {
-    jiraReports.getLatestReport.mockResolvedValue(null);
-
-    const response = await request(makeApp()).get('/api/jira/reports/example-app/latest');
-
-    expect(response.status).toBe(404);
-    expect(response.body.code).toBe('NOT_FOUND');
   });
 });
 

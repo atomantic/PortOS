@@ -24,6 +24,4 @@ export const socialAccountSchema = z.object({
   notes: z.string().max(2000).optional().default('')
 });
 
-// Bulk create: each entry is validated per-account (a bad one is reported, not fatal).
-export const socialAccountBulkBodySchema = z.object({ accounts: z.array(z.unknown()).min(1, 'accounts array is required') });
 export const socialAccountUpdateSchema = partialWithoutDefaults(socialAccountSchema);

@@ -10,12 +10,6 @@ import { logsQuerySchema, pm2ProcessNameSchema } from '../lib/sharedSchemas.js';
 
 const router = Router();
 
-// GET /api/logs/processes - List all PM2 processes for log selection
-router.get('/processes', asyncHandler(async (req, res) => {
-  const processes = await pm2Service.listProcesses().catch(() => []);
-  res.json(processes);
-}));
-
 // GET /api/logs/:processName - Get logs for a process (static or streaming)
 router.get('/:processName', asyncHandler(async (req, res) => {
   const { processName } = req.params;

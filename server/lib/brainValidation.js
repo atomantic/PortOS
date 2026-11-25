@@ -147,13 +147,6 @@ export const updateInboxInputSchema = z.object({
   capturedText: z.string().min(1).max(10000)
 });
 
-// Batch mark a set of creative inbox notes as consumed by a catalog ingest that
-// just committed. Bounded to keep a malformed/runaway payload from stamping the
-// whole inbox in one call.
-export const markInboxSentToCatalogSchema = z.object({
-  ids: z.array(z.string().guid()).min(1).max(200)
-}).strict();
-
 // Create/Update People input schema
 export const peopleInputSchema = z.object({
   name: z.string().min(1).max(200),

@@ -6,16 +6,10 @@ import { observeModelResource, observeModelMutations } from '../services/modelOb
 import { providerModeGroups } from '../lib/aiToolkit/internal/providerModes.js';
 import { tuiModeAddition } from '../lib/provider/providerModePairing.js';
 import {
-  createBinding,
-  createConnection,
   findConnectionByRef,
-  getManagementGraph,
   presetSkipReason,
   providerGraphEnabled,
   removeConnection,
-  updateBindingSettings,
-  updateConnectionSettings,
-  updateRouteSettings,
 } from '../services/provider/providerGraph.js';
 import { readGraph } from '../services/provider/providerGraphStore.js';
 import {
@@ -82,10 +76,9 @@ import { presentServiceDefinition } from '../lib/provider/providerServiceInstanc
 import {
   executionOptionSelectionSchema, providerExecutionOptionsQuerySchema, codexLoginCancelSchema,
   codexLoginStartSchema, modelPinClearSchema, providerVisionTestSchema, providerVisionSuiteSchema,
-  providerBindingCreateSchema, providerBindingUpdateSchema, providerConnectionCreateSchema,
-  providerConnectionUpdateSchema, providerServiceCreateSchema, providerServiceUpdateSchema,
+  providerServiceCreateSchema, providerServiceUpdateSchema,
   credentialPoolKeyCreateSchema, credentialPoolKeyUpdateSchema, credentialPoolResetSchema, credentialPoolSettingsSchema,
-  providerRouteSettingsUpdateSchema, providerPresetCreateSchema, credentialBootstrapsSettingsSchema,
+  providerPresetCreateSchema, credentialBootstrapsSettingsSchema,
   harnessEnablementUpdateSchema, harnessIdParamSchema
 } from '../lib/providerValidation.js';
 
@@ -482,81 +475,12 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
   }));
 
   /**
-   * The DURABLE provider connection graph (#6367) — the same shape as the
-   * preview above, but read from ai_connections / ai_harness_bindings /
-   * ai_route_bindings rather than derived on every request.
-   *
-   * Sanitized identically: credential PRESENCE only, no projection snapshots,
-   * no raw provider records. An install whose database is unavailable gets an
-   * explicit 503 `PROVIDER_GRAPH_UNAVAILABLE` rather than a silent empty graph,
-   * so a client can fall back to the flat list on a known answer instead of
-   * guessing from a failed request.
-   */
-  router.get('/management', asyncHandler(async (_req, res) => {
-    res.set('Cache-Control', 'no-store').json(await getManagementGraph());
-  }));
-
-  /**
-   * Add a NEW backend to the graph (#6369) — mock flow 3 in the decision
-   * record: a distinct remote endpoint with its own credentials, created as its
-   * own identity even when its model names match a backend already configured.
-   *
-   * Creation only. Nothing is probed, no model list is fetched, no route is
-   * minted and `activeProvider` does not move: a connection with no binding is
-   * a legitimate row the user then attaches a harness to.
-   */
-  router.post('/connections', asyncHandler(async (req, res) => {
-    const input = validateRequest(providerConnectionCreateSchema, req.body ?? {});
-    res.status(201).json(await createConnection(input));
-  }));
-
-  /**
-   * Add a harness to an existing backend (#6369) — mock flow 2: the same
-   * daemon, driven by a second program, as an INDEPENDENT binding with its own
-   * executable route ids.
-   *
-   * The route records are minted from the harness's command recipe
-   * (`PROVIDER_HARNESSES[].recipe`), which is what this endpoint waited on: the
-   * registry could classify an existing record but not describe how to spawn a
-   * fresh one.
-   *
-   * Every minted route arrives DISABLED with no model pins. Creating a route is
-   * a management act; executing one is a separate grant on `PATCH
-   * /api/providers/:id`, and nothing here launches, probes or generates.
-   */
-  router.post('/bindings', asyncHandler(async (req, res) => {
-    const input = validateRequest(providerBindingCreateSchema, req.body ?? {});
-    res.status(201).json(await createBinding(input));
-  }));
-
-  // Remove a connection no binding uses. Refused with a 409 while one still
-  // does — the graph never silently orphans a binding to tidy a row away.
-  router.delete('/connections/:id', asyncHandler(async (req, res) => {
-    res.json(await removeConnection(req.params.id));
-  }));
-
-  /**
-   * Edit one SHARED backend (#6369) — its label, transports and credentials —
-   * and materialize the result into every executable route on it.
-   *
-   * This is the edit the graph exists for: an endpoint or key changed once
-   * rather than retyped per harness. `expectedRevision` is required and
-   * re-checked inside the serialized pass, so an edit made against a row that
-   * has since moved is a 409 instead of a silent overwrite.
-   */
-  router.patch('/connections/:id', asyncHandler(async (req, res) => {
-    const input = validateRequest(providerConnectionUpdateSchema, req.body ?? {});
-    res.json(await updateConnectionSettings({ connectionId: req.params.id, ...input }));
-  }));
-
-  /**
    * Service INSTANCES (#7563) — the same `ai_connections` rows read as one
    * instance each of a `SERVICE_DEFINITIONS` entry: slug, definition, plan,
    * enabled, how it authenticates, and the catalog it last listed. Sanitized
    * like the graph: credential PRESENCE and SOURCE only, never a value.
    *
-   * `:slug` also accepts the row's UUID, and every `/connections/:id` route
-   * above accepts a slug, so the two surfaces address one row either way.
+   * `:slug` also accepts the row's UUID.
    */
   router.get('/services', asyncHandler(async (_req, res) => {
     res.set('Cache-Control', 'no-store').json(await listServices());
@@ -650,34 +574,6 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
     res.json(await (await credentialPools()).resetPoolCredentialCooldowns(req.params.slug, input));
   }));
 
-  /**
-   * Edit one harness binding's management state: its label and the subset of
-   * the shared catalog it offers. Never its routes' enablement or consent —
-   * those stay on `PATCH /api/providers/:id`, where granting them is explicit.
-   */
-  router.patch('/bindings/:id', asyncHandler(async (req, res) => {
-    const input = validateRequest(providerBindingUpdateSchema, req.body ?? {});
-    res.json(await updateBindingSettings({ bindingId: req.params.id, ...input }));
-  }));
-
-  /**
-   * Edit ONE route's mode overrides (#6369) — args, timeout, effort, model pins.
-   *
-   * The per-mode counterpart to the shared-backend edit above, so a whole
-   * backend is configurable from one screen instead of a connection plus three
-   * route editors. Route-owned only: an endpoint, a credential and the `enabled`
-   * flag are all unreachable here by construction, and `PATCH
-   * /api/providers/:id` remains the place execution consent is granted.
-   *
-   * `expectedRevision` is the route's `settingsRevision` from
-   * `GET /api/providers/management` — a fingerprint of the values on disk, so an
-   * edit made in the route editor while this panel was open is a 409 too.
-   */
-  router.patch('/routes/:providerId', asyncHandler(async (req, res) => {
-    const input = validateRequest(providerRouteSettingsUpdateSchema, req.body ?? {});
-    res.json(await updateRouteSettings({ providerId: req.params.providerId, ...input }));
-  }));
-
   router.get('/samples', asyncHandler(async (req, res) => {
     const providers = await providerService.getSampleProviders();
     const capabilities = await detectSystemCapabilities();
@@ -742,12 +638,6 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
     res.json({ ...catalog, harnesses: (catalog.harnesses || []).map(harness => ({ ...harness, executionOptionKeys: executionOptionKeysForHarness(harness.id) })), presets: data.providers.map((provider) => presentProvider(provider, capabilities)) });
   }));
 
-  /** Per-harness enablement (#7564): the user's word, else PATH detection, `direct` always on. */
-  router.get('/harnesses', asyncHandler(async (_req, res) => {
-    const { listHarnessEnablement } = await import('../services/harnessEnablement.js');
-    res.json({ harnesses: await listHarnessEnablement() });
-  }));
-
   router.put('/harnesses/:id', asyncHandler(async (req, res) => {
     const harnessId = validateRequest(harnessIdParamSchema, req.params.id);
     const { enabled } = validateRequest(harnessEnablementUpdateSchema, req.body || {});
@@ -769,18 +659,6 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
     const bootstraps = validateRequest(credentialBootstrapsSettingsSchema, req.body?.bootstraps ?? req.body ?? {});
     const { saveCredentialBootstraps } = await import('../services/credentialBootstrapApps.js');
     res.json({ bootstraps: await saveCredentialBootstraps(bootstraps) });
-  }));
-
-  /**
-   * One composite's verdict (#7564): eligible or not, with the reason a picker
-   * shows beside a saved selection that names it, and — when eligible — the
-   * materialized record sanitized exactly as a stored one (`presentProvider`:
-   * `apiKey` → `hasApiKey`, secret env values redacted).
-   */
-  router.get('/composites/:id', asyncHandler(async (req, res) => {
-    const { describeCompositeProvider } = await import('../services/compositeProviders.js');
-    const { record, ...verdict } = await describeCompositeProvider(req.params.id);
-    res.json({ ...verdict, provider: record ? presentProvider(record, await detectSystemCapabilities()) : null });
   }));
 
   /**
@@ -1124,14 +1002,6 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
   });
   router.get('/status', asyncHandler(async (_req, res) => {
     res.json(await statusObservation.read());
-  }));
-
-  router.get('/:id/status', asyncHandler(async (req, res) => {
-    const status = presentProviderStatus(providerStatusService.getStatus(req.params.id));
-    res.json({
-      ...status,
-      timeUntilRecovery: providerStatusService.getTimeUntilRecovery(req.params.id)
-    });
   }));
 
   router.post('/:id/status/recover', asyncHandler(async (req, res) => {

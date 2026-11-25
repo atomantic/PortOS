@@ -402,14 +402,32 @@ export const findUnmountedClientPaths = (clientPaths, serverPaths) => {
  *
  * A route counts as reached when a client path matches it segment by segment, where
  * a `:param` (server) or `:p` (client, fully dynamic) segment matches anything and
- * an Express wildcard swallows one or more segments. This is deliberately
- * permissive on the client side: a dynamic client segment may be calling a literal
- * route. Matching is by path, not method, mirroring the forward check.
+ * an Express wildcard swallows one or more segments. A client param does NOT reach a
+ * server literal when a sibling mounted route (same segment count, same preceding
+ * segments) has a param at that position: Express registers the literal as its own
+ * handler, so a wrapper for `/jobs/:id` only hits `/jobs/due` by accident, and
+ * counting it as a caller hid dead static routes beside every id wrapper (#18655).
+ * Matching is by path, not method, mirroring the forward check, so a GET wrapper
+ * still counts as calling a POST route on the same path.
  */
 export const findUncalledServerRoutes = (serverRoutes, clientPaths) => {
   const clientSegments = [...new Set(clientPaths.map((entry) => entry.path))]
     .map((path) => path.split('/').filter(Boolean));
   const isParam = (segment) => segment.startsWith(':');
+  const serverSegments = [...new Set(serverRoutes.map((route) => route.path))]
+    .map((path) => path.split('/').filter(Boolean))
+    .filter((segments) => !segments.some(isWildcard));
+  const siblingParamCache = new Map();
+  const hasSiblingParam = (segments, index) => {
+    const key = `${segments.join('/')}|${index}`;
+    if (!siblingParamCache.has(key)) {
+      siblingParamCache.set(key, serverSegments.some((other) =>
+        other.length === segments.length
+        && isParam(other[index])
+        && segments.slice(0, index).every((segment, at) => isParam(segment) || isParam(other[at]) || segment === other[at])));
+    }
+    return siblingParamCache.get(key);
+  };
   const reached = (route) => {
     const segments = route.split('/').filter(Boolean);
     const wildcardAt = segments.findIndex(isWildcard);
@@ -417,7 +435,10 @@ export const findUncalledServerRoutes = (serverRoutes, clientPaths) => {
       if (wildcardAt === -1 && client.length !== segments.length) return false;
       if (wildcardAt !== -1 && client.length < segments.length) return false;
       const limit = wildcardAt === -1 ? segments.length : wildcardAt;
-      return segments.slice(0, limit).every((segment, index) => isParam(segment) || isParam(client[index]) || segment === client[index]);
+      return segments.slice(0, limit).every((segment, index) => {
+        if (segment === client[index] || isParam(segment)) return true;
+        return isParam(client[index]) && (wildcardAt !== -1 || !hasSiblingParam(segments, index));
+      });
     });
   };
   const methodsByPath = new Map();

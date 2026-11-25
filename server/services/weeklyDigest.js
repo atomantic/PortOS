@@ -397,28 +397,6 @@ export async function listWeeklyDigests() {
 }
 
 /**
- * Get comparative stats between two weeks
- */
-export async function compareWeeks(weekId1, weekId2) {
-  const digest1 = await loadDigest(weekId1);
-  const digest2 = await loadDigest(weekId2);
-
-  if (!digest1 || !digest2) {
-    return null;
-  }
-
-  return {
-    week1: { weekId: weekId1, ...digest1.summary },
-    week2: { weekId: weekId2, ...digest2.summary },
-    comparison: {
-      tasksChange: percentChange(digest1.summary.totalTasks, digest2.summary.totalTasks),
-      successRateChange: digest1.summary.successRate - digest2.summary.successRate,
-      workTimeChange: percentChange(digest1.summary.totalWorkTimeMs, digest2.summary.totalWorkTimeMs)
-    }
-  };
-}
-
-/**
  * Get current week progress (partial digest for in-progress week)
  */
 export async function getCurrentWeekProgress() {
@@ -488,50 +466,4 @@ export async function getCurrentWeekProgress() {
         completedAt: a.completedAt
       }))
   };
-}
-
-/**
- * Generate a text summary suitable for notifications or logging
- */
-export async function generateTextSummary(weekId = null) {
-  const digest = await getWeeklyDigest(weekId);
-  if (!digest) return null;
-
-  const lines = [
-    `Weekly Digest: ${digest.weekId}`,
-    `=====================================`,
-    ``,
-    `Summary:`,
-    `  - Tasks Completed: ${digest.summary.totalTasks}`,
-    `  - Success Rate: ${digest.summary.successRate}%`,
-    `  - Total Work Time: ${digest.summary.totalWorkTime}`,
-    ``
-  ];
-
-  if (digest.weekOverWeek.tasksChange !== null) {
-    lines.push(`Week-over-Week:`);
-    lines.push(`  - Tasks: ${digest.weekOverWeek.tasksChange > 0 ? '+' : ''}${digest.weekOverWeek.tasksChange}%`);
-    if (digest.weekOverWeek.successRateChange !== null) {
-      lines.push(`  - Success Rate: ${digest.weekOverWeek.successRateChange > 0 ? '+' : ''}${digest.weekOverWeek.successRateChange} pts`);
-    }
-    lines.push(``);
-  }
-
-  if (digest.accomplishments.length > 0) {
-    lines.push(`Top Accomplishments:`);
-    for (const acc of digest.accomplishments.slice(0, 5)) {
-      lines.push(`  - ${acc.description}`);
-    }
-    lines.push(``);
-  }
-
-  if (digest.insights.length > 0) {
-    lines.push(`Insights:`);
-    for (const insight of digest.insights) {
-      const icon = insight.type === 'success' ? '+' : insight.type === 'warning' ? '!' : '-';
-      lines.push(`  [${icon}] ${insight.title}: ${insight.message}`);
-    }
-  }
-
-  return lines.join('\n');
 }

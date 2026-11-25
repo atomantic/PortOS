@@ -12,19 +12,10 @@ import * as toolsService from '../services/tools.js';
 
 const router = Router();
 
-// Reserved subpaths that would shadow the parameterized /:id route
-const RESERVED_TOOL_IDS = ['enabled', 'summary'];
-
 const toolIdSchema = z.string()
   .min(1)
   .max(100)
-  .regex(/^[a-zA-Z0-9_-]+$/, 'Tool ID must contain only alphanumeric characters, hyphens, and underscores')
-  .refine(
-    (id) => !RESERVED_TOOL_IDS.includes(id),
-    (ctx) => ({
-      message: `Tool ID cannot be a reserved route slug (${RESERVED_TOOL_IDS.join(', ')})`
-    })
-  );
+  .regex(/^[a-zA-Z0-9_-]+$/, 'Tool ID must contain only alphanumeric characters, hyphens, and underscores');
 
 const registerToolSchema = z.object({
   id: toolIdSchema.optional(),
@@ -42,18 +33,6 @@ const updateToolSchema = registerToolSchema.omit({ id: true }).partial();
 router.get('/', asyncHandler(async (req, res) => {
   const tools = await toolsService.getTools();
   res.json(tools);
-}));
-
-// GET /api/tools/enabled - List enabled tools
-router.get('/enabled', asyncHandler(async (req, res) => {
-  const tools = await toolsService.getEnabledTools();
-  res.json(tools);
-}));
-
-// GET /api/tools/summary - Get prompt-ready summary for agents
-router.get('/summary', asyncHandler(async (req, res) => {
-  const summary = await toolsService.getToolsSummaryForPrompt();
-  res.json({ summary });
 }));
 
 // GET /api/tools/:id - Get single tool

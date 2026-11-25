@@ -422,19 +422,6 @@ router.post('/reports/generate', asyncHandler(async (req, res) => {
 }));
 
 /**
- * GET /api/jira/reports/:appId/latest
- * Get the latest report for an app
- */
-router.get('/reports/:appId/latest', asyncHandler(async (req, res) => {
-  const { appId } = validateRequest(z.object({ appId: appIdSchema }), req.params);
-  const report = await jiraReports.getLatestReport(appId);
-  if (!report) {
-    throw new ServerError('No reports found for this app', { status: 404, code: 'NOT_FOUND' });
-  }
-  res.json(report);
-}));
-
-/**
  * GET /api/jira/reports/:appId/:date
  * Get a specific report by app and date
  */

@@ -529,34 +529,6 @@ describe('Apps Lifecycle Routes', () => {
     });
   });
 
-  describe('GET /api/apps/:id/status', () => {
-    it('should return PM2 status for app processes', async () => {
-      const mockApp = {
-        id: 'app-001',
-        name: 'Test App',
-        pm2ProcessNames: ['test-api', 'test-worker']
-      };
-      appsService.getAppById.mockResolvedValue(mockApp);
-      pm2Service.getAppStatus
-        .mockResolvedValueOnce({ status: 'online', cpu: 2.5 })
-        .mockResolvedValueOnce({ status: 'stopped' });
-
-      const response = await request(app).get('/api/apps/app-001/status');
-
-      expect(response.status).toBe(200);
-      expect(response.body['test-api']).toEqual({ status: 'online', cpu: 2.5 });
-      expect(response.body['test-worker']).toEqual({ status: 'stopped' });
-    });
-
-    it('should return 404 if app not found', async () => {
-      appsService.getAppById.mockResolvedValue(null);
-
-      const response = await request(app).get('/api/apps/app-999/status');
-
-      expect(response.status).toBe(404);
-    });
-  });
-
   describe('GET /api/apps/:id/logs', () => {
     it.each(['--force', '-1', '.hidden', 'other-app', '', 'x'.repeat(121)])('rejects unsafe or foreign process %s before PM2 reads', async (processName) => {
       appsService.getAppById.mockResolvedValue({ id: 'app-001', pm2ProcessNames: ['test-app', 'test-worker'] });

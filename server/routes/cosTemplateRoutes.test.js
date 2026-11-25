@@ -40,7 +40,6 @@ describe('CoS template routes', () => {
     expect((await api('post', `/${id}/use`)).body.useCount).toBe(2);
     expect((await listed()).find((t) => t.id === id).useCount).toBe(2);
     expect((await api('get', '/popular?limit=1')).body.templates.map((t) => t.id)).toEqual([id]);
-    expect((await api('get', '/categories')).body.categories).toContainEqual({ name: 'bugs', count: 1 });
 
     const deleted = await api('delete', `/${id}`);
     expect(deleted.status).toBe(200);
@@ -53,31 +52,19 @@ describe('CoS template routes', () => {
     expect((await api('get', '/popular')).body.templates).toHaveLength(5);
   });
 
-  it('snapshots a task into a from-task template and falls back to a derived name', async () => {
-    const named = await api('post', '/from-task', { task: { description: 'Fix login', app: 'demo' }, templateName: 'Login Fix' });
-    expect(named.status).toBe(200);
-    expect(named.body.template).toMatchObject({ name: 'Login Fix', category: 'from-task', description: 'Fix login', app: 'demo' });
-
-    const derived = await api('post', '/from-task', { task: { description: 'Fix login' } });
-    expect(derived.body.template.name).toBe('Custom: Fix login...');
-    expect((await userTemplates()).map((t) => t.id)).toEqual(expect.arrayContaining([named.body.template.id, derived.body.template.id]));
-  });
-
   it('persists a valid slashdo binding on a user template', async () => {
     const settings = { useWorktree: false, openPR: false, simplify: false };
     const { body } = await api('post', '', { name: 'Plan', description: 'Plan a task', slashdoCommand: 'plan-task', settings });
     expect((await userTemplates()).find((t) => t.id === body.template.id)).toMatchObject({ slashdoCommand: 'plan-task', settings });
   });
 
-  it('refuses invalid creates and from-task bodies without persisting anything', async () => {
+  it('refuses invalid create bodies without persisting anything', async () => {
     const before = await userTemplates();
     expect((await api('post', '', { description: 'No name' })).status).toBe(400);
     expect((await api('post', '', { name: 'No description' })).status).toBe(400);
     // The bare command name is joined into a commands/do/<name>.md path, so the schema keeps it inert (#3089).
     expect((await api('post', '', { name: 'Escape', description: 'nope', slashdoCommand: '../../etc/passwd' })).status).toBe(400);
     expect((await api('post', '', { name: 'Odd', description: 'nope', settings: { autoMerge: true } })).status).toBe(400);
-    expect((await api('post', '/from-task', {})).status).toBe(400);
-    expect((await api('post', '/from-task', { task: {} })).status).toBe(400);
     expect(await userTemplates()).toEqual(before);
   });
 

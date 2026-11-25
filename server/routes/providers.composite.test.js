@@ -93,27 +93,6 @@ describe('GET /api/providers/catalog', () => {
   });
 });
 
-describe('GET /api/providers/composites/:id', () => {
-  it('publishes the verdict with the record sanitized like a stored one — never the key', async () => {
-    compositeService.describeCompositeProvider.mockResolvedValue({
-      id: COMPOSITE, eligible: true, code: null, reason: null, parts: { harnessId: 'pi', method: 'tui', serviceSlug: 'nvidia-nim', bootstrapSlug: null }, record: materialized(),
-    });
-    const res = await request(app()).get(`/api/providers/composites/${encodeURIComponent(COMPOSITE)}`);
-    expect(res.status).toBe(200);
-    expect(compositeService.describeCompositeProvider).toHaveBeenCalledWith(COMPOSITE);
-    expect(res.body).toMatchObject({ id: COMPOSITE, eligible: true, parts: { harnessId: 'pi' } });
-    expect(res.body.provider).toMatchObject({ id: COMPOSITE, hasApiKey: true, harnessId: 'pi', envVars: { NVIDIA_API_KEY: '***' } });
-    expect(res.body.provider).not.toHaveProperty('apiKey');
-    expect(JSON.stringify(res.body)).not.toContain('nim-key');
-  });
-
-  it('carries an ineligible composite\'s reason with no provider', async () => {
-    compositeService.describeCompositeProvider.mockResolvedValue({ id: COMPOSITE, eligible: false, code: 'harness-disabled', reason: 'Pi is switched off', parts: null, record: null });
-    const res = await request(app()).get(`/api/providers/composites/${encodeURIComponent(COMPOSITE)}`);
-    expect(res.body).toEqual({ id: COMPOSITE, eligible: false, code: 'harness-disabled', reason: 'Pi is switched off', parts: null, provider: null });
-  });
-});
-
 describe('GET /api/providers/readiness?providerId=', () => {
   it('answers for one composite through the same lookup the run paths use', async () => {
     readinessService.getProviderReadinessMap.mockImplementation(async (providers) => Object.fromEntries(providers.map((p) => [p.id, { ready: true }])));
@@ -132,11 +111,8 @@ describe('GET /api/providers/readiness?providerId=', () => {
 });
 
 describe('harnesses and bootstraps', () => {
-  it('GET /harnesses lists the verdicts; PUT /harnesses/:id records one flip and refuses an unknown id', async () => {
-    enablementService.listHarnessEnablement.mockResolvedValue([{ id: 'pi', enabled: true, source: 'detected' }]);
+  it('PUT /harnesses/:id records one flip and refuses an unknown id', async () => {
     enablementService.setHarnessEnabled.mockResolvedValue({ enabled: false, source: 'setting', detected: true, version: '1.0.0' });
-    expect((await request(app()).get('/api/providers/harnesses')).body).toEqual({ harnesses: [{ id: 'pi', enabled: true, source: 'detected' }] });
-
     const res = await request(app()).put('/api/providers/harnesses/pi').send({ enabled: false });
     expect(res.status).toBe(200);
     expect(enablementService.setHarnessEnabled).toHaveBeenCalledWith('pi', false);

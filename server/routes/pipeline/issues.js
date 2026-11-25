@@ -383,35 +383,6 @@ router.get('/config', (_req, res) => {
   res.json({ arcRoles: [...ARC_ROLES] });
 });
 
-const recentIssuesQuerySchema = z.object({ limit: z.string().optional() });
-
-// Recent issues across all series — used by the sidebar's dynamic Pipeline
-// child list. Routes through `listRecentIssues` which sorts the FULL issue
-// set by `updatedAt` desc before applying limit; `listIssues` would
-// silently miss the most-recent items once the dataset grows past
-// `ISSUES_PER_RESPONSE_MAX` (1000).
-router.get('/issues/recent', asyncHandler(async (req, res) => {
-  // Forward the raw query value to the service — it owns clamping +
-  // non-finite handling, and applying our own `Number(...) || 10` here
-  // would silently disagree with the service (e.g. limit=0 ends up as 10
-  // via the route but clamps to 1 in the service). Pass through and let
-  // listRecentIssues coerce.
-  const [issues, series] = await Promise.all([
-    // Fetch only the fields this endpoint returns, with the limit in SQL.
-    issuesSvc.listRecentIssues({ limit: validateRequest(recentIssuesQuerySchema, req.query).limit, withHistory: false, summary: true }),
-    seriesSvc.listSeries(),
-  ]);
-  const seriesById = new Map(series.map((s) => [s.id, s.name]));
-  res.json(issues.map((i) => ({
-    id: i.id,
-    title: i.title,
-    number: i.number,
-    seriesId: i.seriesId,
-    seriesName: seriesById.get(i.seriesId) || '(unknown series)',
-    updatedAt: i.updatedAt,
-  })));
-}));
-
 router.get('/issues/:id', asyncHandler(async (req, res) => {
   const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
   res.json(issue);

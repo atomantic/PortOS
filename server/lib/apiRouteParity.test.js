@@ -153,4 +153,21 @@ describe('client ↔ server API route parity', () => {
     // An empty client scan must leave every mounted route uncalled rather than pass silently.
     expect(findUncalledServerRoutes(catalog.routes, []).length).toBeGreaterThan(1000);
   });
+
+  it('does not count a client id wrapper as a caller of a static sibling route (sibling-param bypass probe, #18655)', () => {
+    const probe = [
+      { method: 'GET', path: '/api/probe/:id' },
+      { method: 'GET', path: '/api/probe/static' },
+      { method: 'GET', path: '/api/probe/:id/child' },
+      { method: 'GET', path: '/api/probe/static/child' },
+      { method: 'GET', path: '/api/probe-alone/static' },
+    ];
+    // `:p` is a fully dynamic client segment: it reaches the param routes, and a literal
+    // only when no mounted sibling has a param at that position.
+    const uncalled = findUncalledServerRoutes(probe, [{ path: '/api/probe/:p' }, { path: '/api/probe/:p/child' }, { path: '/api/probe-alone/:p' }]);
+    expect(uncalled.map((route) => route.path)).toEqual(['/api/probe/static', '/api/probe/static/child']);
+    // A wrapper that names the literal does reach it.
+    expect(findUncalledServerRoutes(probe, [{ path: '/api/probe/:p' }, { path: '/api/probe/static' }, { path: '/api/probe/:p/child' }, { path: '/api/probe/static/child' }, { path: '/api/probe-alone/:p' }]))
+      .toEqual([]);
+  });
 });

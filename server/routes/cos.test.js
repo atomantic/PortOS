@@ -70,8 +70,6 @@ vi.mock('../services/cos/cosAgentLifecycle.js', () => ({
   sendBtwToAgent: vi.fn()
 }));
 vi.mock('../services/cos/cosAgentIndex.js', () => ({
-  getAgentDates: vi.fn(),
-  getAgentsByDate: vi.fn(),
   getCompletedAgentPage: vi.fn()
 }));
 vi.mock('../services/cos/cosAgentFeedback.js', () => ({
@@ -160,7 +158,7 @@ const cleanupOrphanedAgents = vi.fn();
 import { clearCompletedAgents } from '../services/cos/cosAgentArchive.js';
 import { evaluateTasks } from '../services/cos/cosTaskGenerator.js';
 import { getBriefing, getWhileAwayActivity, listBriefings, } from '../services/cos/cosReports.js';
-import { getAgentDates, getAgentsByDate, getCompletedAgentPage } from '../services/cos/cosAgentIndex.js';
+import { getCompletedAgentPage } from '../services/cos/cosAgentIndex.js';
 import { getFeedbackStats, getPendingAgentFeedback, submitAgentFeedback } from '../services/cos/cosAgentFeedback.js';
 import { getHealthStatus, runHealthCheck } from '../services/cos/cosHealthMonitor.js';
 import { pause, resume, start, stop, updateConfig } from '../services/cos/cos.js';
@@ -667,78 +665,6 @@ describe('CoS Routes', () => {
         identity,
         prUrl: 'https://github.com/example/repo/pull/101',
       });
-    });
-  });
-
-  describe('GET /api/cos/agents/history', () => {
-    it('should return available date buckets', async () => {
-      getAgentDates.mockResolvedValue([
-        { date: '2026-02-25', count: 5 },
-        { date: '2026-02-24', count: 3 }
-      ]);
-
-      const response = await request(app).get('/api/cos/agents/history');
-
-      expect(response.status).toBe(200);
-      expect(response.body.dates).toHaveLength(2);
-      expect(response.body.dates[0]).toEqual({ date: '2026-02-25', count: 5 });
-      expect(response.body).not.toHaveProperty('latest');
-      expect(getAgentsByDate).not.toHaveBeenCalled();
-    });
-
-    it('?hydrate=1 also returns the newest bucket, so the tab needs one round trip', async () => {
-      getAgentDates.mockResolvedValue([
-        { date: '2026-02-25', count: 5 },
-        { date: '2026-02-24', count: 3 }
-      ]);
-      getAgentsByDate.mockResolvedValue([
-        { id: 'agent-001', status: 'completed', output: ['a'], metadata: { taskDescription: 'Short' } }
-      ]);
-
-      const response = await request(app).get('/api/cos/agents/history?hydrate=1');
-
-      expect(response.status).toBe(200);
-      expect(getAgentsByDate).toHaveBeenCalledWith('2026-02-25');
-      expect(response.body.latest.date).toBe('2026-02-25');
-      expect(response.body.latest.agents).toHaveLength(1);
-      // The hydrated bucket goes through the same listing projection.
-      expect(response.body.latest.agents[0]).not.toHaveProperty('output');
-    });
-
-    it('hydrates to null on an install with no archived runs', async () => {
-      getAgentDates.mockResolvedValue([]);
-
-      const response = await request(app).get('/api/cos/agents/history?hydrate=1');
-
-      expect(response.status).toBe(200);
-      expect(response.body.latest).toBeNull();
-      expect(getAgentsByDate).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('GET /api/cos/agents/history/:date', () => {
-    it('should return agents for a valid date', async () => {
-      getAgentsByDate.mockResolvedValue([
-        { id: 'agent-001', status: 'completed' }
-      ]);
-
-      const response = await request(app).get('/api/cos/agents/history/2026-02-25');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveLength(1);
-      expect(getAgentsByDate).toHaveBeenCalledWith('2026-02-25');
-    });
-
-    it('should return 400 for invalid date format', async () => {
-      const response = await request(app).get('/api/cos/agents/history/not-a-date');
-
-      expect(response.status).toBe(400);
-    });
-
-    it('should return 400 for partial date format', async () => {
-      const response = await request(app).get('/api/cos/agents/history/2026-02');
-
-      expect(response.status).toBe(400);
     });
   });
 

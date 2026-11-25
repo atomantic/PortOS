@@ -26,14 +26,10 @@ describe('tools routes', () => {
 
     expect((await api('get', '/sd-api')).body).toMatchObject({ name: 'Stable Diffusion', category: 'image-generation' });
     expect((await api('get')).body.map((t) => t.id)).toContain('sd-api');
-    expect((await api('get', '/enabled')).body.map((t) => t.id)).toContain('sd-api');
-    expect((await api('get', '/summary')).body.summary).toContain('**Stable Diffusion** (image-generation): SD API tool — use for pictures');
 
     const updated = await api('put', '/sd-api', { name: 'Updated SD', enabled: false });
     expect(updated.status).toBe(200);
     expect((await api('get', '/sd-api')).body).toMatchObject({ id: 'sd-api', name: 'Updated SD', category: 'image-generation', enabled: false });
-    expect((await api('get', '/enabled')).body.map((t) => t.id)).not.toContain('sd-api');
-    expect((await api('get', '/summary')).body.summary).not.toContain('Updated SD');
 
     expect((await api('delete', '/sd-api')).status).toBe(204);
     expect((await api('get', '/sd-api')).status).toBe(404);
@@ -53,15 +49,10 @@ describe('tools routes', () => {
     expect((await api('get', '/nonexistent')).status).toBe(404);
   });
 
-  it('refuses a missing name, path-traversal ids and reserved route slugs without persisting anything', async () => {
+  it('refuses a missing name, and path-traversal ids without persisting anything', async () => {
     const before = (await api('get')).body.length;
     expect((await api('post', '', { category: 'test' })).status).toBe(400);
     expect((await api('post', '', { id: '../etc/passwd', name: 'Bad', category: 'test' })).status).toBe(400);
-    for (const id of ['enabled', 'summary']) {
-      const reserved = await api('post', '', { id, name: 'Bad Tool', category: 'test' });
-      expect(reserved.status).toBe(400);
-      expect(reserved.body.code).toBe('VALIDATION_ERROR');
-    }
     expect((await api('get', '/..%2F..%2Fetc')).status).toBe(400);
     expect((await api('put', '/..%2Fhack', { name: 'Test' })).status).toBe(400);
     expect((await api('delete', '/..%2Fhack')).status).toBe(400);

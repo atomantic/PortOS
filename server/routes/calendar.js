@@ -298,15 +298,6 @@ router.post('/sync/:accountId/discover-api', asyncHandler(async (req, res) => {
 }));
 
 // === Daily Review Routes ===
-// NOTE: /review/history must come before /review/:date so Express doesn't match "history" as a date param
-const reviewHistoryQuerySchema = z.object({ startDate: z.string().optional(), endDate: z.string().optional() });
-
-router.get('/review/history', asyncHandler(async (req, res) => {
-  const { startDate, endDate } = validateRequest(reviewHistoryQuerySchema, req.query);
-  const history = await dailyReview.getDailyReviewHistory(startDate, endDate);
-  res.json(history);
-}));
-
 router.get('/review/:date', asyncHandler(async (req, res) => {
   const dateStr = req.params.date;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
