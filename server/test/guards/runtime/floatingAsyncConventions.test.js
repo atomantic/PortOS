@@ -108,14 +108,19 @@ function relativeLiteralValues(src) {
 
 // Import spellings share a binding summary. Only a caller visit walks its
 // program, which is then discarded while the async exports stay cached.
-function createFloatingAsyncScanner(readSource = (file) => readText(file)) {
+function createFloatingAsyncScanner(readSource = (file) => readText(file), onParsed = () => {}) {
   const summaries = new Map();
   const resolutions = new Map();
   const summaryOf = (file) => {
     if (!summaries.has(file)) {
       const src = readSource(file);
       // Nothing here is async; a visit still needs the text to check what it imports.
-      summaries.set(file, ASYNC_KEYWORD.test(src) ? summarizeSource(src, dirname(file)) : { exported: NO_EXPORTS, src });
+      if (ASYNC_KEYWORD.test(src)) {
+        summaries.set(file, summarizeSource(src, dirname(file)));
+        onParsed(file);
+      } else {
+        summaries.set(file, { exported: NO_EXPORTS, src });
+      }
     }
     return summaries.get(file);
   };
@@ -189,6 +194,24 @@ export function findFloatingAsyncCalls(src, dir = null) {
   return createFloatingAsyncScanner().findInSource(src, dir);
 }
 
+function scanFiles(files, readSource) {
+  const remaining = new Set(files);
+  const pending = [];
+  const scanner = createFloatingAsyncScanner(readSource, (file) => {
+    if (remaining.has(file)) pending.push(file);
+  });
+  // Give parsed imports their own caller visit promptly so their programs
+  // do not accumulate in memory while waiting for filename order.
+  const visit = (file) => {
+    if (remaining.delete(file)) scanner.findInFile(file);
+  };
+  for (const file of remaining) {
+    visit(file);
+    while (pending.length) visit(pending.pop());
+  }
+  return files.flatMap((file) => scanner.findInFile(file).map((hit) => `${relative(REPO_ROOT, file).replaceAll('\\', '/')} ${hit}`));
+}
+
 const files = trackedFiles(SERVER_ROOT, ['*.js', '*.mjs', '*.cjs']).filter((file) => !file.includes('.test.'));
 
 describe('async calls own their rejections (#12978)', () => {
@@ -197,13 +220,7 @@ describe('async calls own their rejections (#12978)', () => {
   });
 
   it('has no bare statement-level call to an async function', () => {
-    const violations = [];
-    const scanner = createFloatingAsyncScanner();
-    for (const file of files) {
-      for (const hit of scanner.findInFile(join(SERVER_ROOT, file))) {
-        violations.push(`server/${file} ${hit}`);
-      }
-    }
+    const violations = scanFiles(files.map((file) => join(SERVER_ROOT, file)));
     expect(
       violations,
       'These statements call an `async` function without `await`, `.catch(…)` or `void`, so a '
@@ -273,6 +290,24 @@ function check() { run(); run(); }`;
     expect(scanner.findInSource(source('./services/history.js'), SERVER_ROOT)).toEqual(['line 2: log()']);
     expect(scanner.findInFile(join(SERVER_ROOT, 'services/history.js'))).toEqual([]);
     expect(reads.get(join(SERVER_ROOT, 'services/history.js'))).toBe(1);
+  });
+
+  it('reports calls in imported files that are also part of the tree scan', () => {
+    const caller = join(SERVER_ROOT, 'floating-async-caller.js');
+    const importer = join(SERVER_ROOT, 'services/commands.js');
+    const imported = join(SERVER_ROOT, 'services/history.js');
+    const sources = new Map([
+      [caller, "import { run } from './services/history.js';\nrun();"],
+      [importer, 'async function check() {}\ncheck();'],
+      [imported, 'export async function run() {}\nrun();'],
+    ]);
+    expect(scanFiles([caller, importer, imported], (file) => sources.get(file))).toEqual([
+      'server/floating-async-caller.js line 2: run()',
+      'server/services/commands.js line 2: check()',
+      'server/services/history.js line 2: run()',
+    ]);
+    expect(scanFiles([caller], (file) => sources.get(file)))
+      .toEqual(['server/floating-async-caller.js line 2: run()']);
   });
 
   it('starts a fresh import cache for each scan and propagates unreadable or invalid imports', () => {
