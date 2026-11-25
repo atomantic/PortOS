@@ -1,10 +1,11 @@
 /**
  * Owns every Chief of Staff page read, socket subscription and task/daemon mutation, and returns one state object for the page's panels and tabs.
  *
- * Single-owner hook (ChiefOfStaff page only), so it lives beside the CoS components rather than in `hooks/`. The page-level reads are keyed on the active tab alone; the selected task travels through a ref so a click never refetches or re-registers the socket listeners (#12032).
+ * Single-owner hook (ChiefOfStaff page only), so it lives beside the CoS components rather than in `hooks/`. Reads are split by what changes them, not by tab (#18643): the shell (status, health, learning) loads on mount and on reconnect/config events; each slice (queue + insights, active agents, providers, apps) loads when its `needs*` flag first turns true. Tab, selection and the `needs*` flags all travel through refs, so neither a tab switch nor a task click refetches the page or re-registers the socket listeners (#12032).
  */
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSocket } from '../../hooks/useSocket';
+import useMounted from '../../hooks/useMounted';
 import { useSocketSubscription } from '../../hooks/useSocketSubscription';
 import {
   updateCosConfig,
@@ -93,10 +94,21 @@ export default function useCosPageData({ activeTab, selectedTask }) {
   const needsAgents = needsTasks || activeTab === 'agents';
   const needsProviders = ['tasks', 'agents', 'schedule', 'workflow'].includes(activeTab);
   const needsApps = needsProviders || activeTab === 'memory';
-  // Page-level reads are keyed on the tab alone; the selection is not a page.
-  const queryKey = activeTab;
-  const queryRef = useRef(queryKey);
-  queryRef.current = queryKey;
+  // Handlers and reads consult the live flags through this ref, so a tab switch
+  // changes none of their identities (the socket listeners register once per
+  // visit). The selection is not a page and is not part of it.
+  const needsRef = useRef({});
+  needsRef.current = { tab: activeTab, tasks: needsTasks, agents: needsAgents, providers: needsProviders, apps: needsApps };
+  // Bumped whenever a slice's flag flips either way. A read that began under an
+  // earlier epoch belongs to an activation that has since ended, so it is dropped
+  // rather than written (the Mind -> Agents -> Mind -> Agents round trip must not
+  // let the first read land after the second).
+  const sliceEpochRef = useRef({ tasks: 0, agents: 0 });
+  const prevNeedsRef = useRef({ tasks: needsTasks, agents: needsAgents, providers: needsProviders, apps: needsApps });
+  const tasksSliceRef = useRef(null);
+  const agentsSliceRef = useRef(null);
+  const mountedRef = useMounted();
+  const learningSeqRef = useRef(0);
   const inFlight = useRef(null);
   const queuePending = useRef(null);
   const appsReadRef = useRef(null);
@@ -164,11 +176,12 @@ export default function useCosPageData({ activeTab, selectedTask }) {
   const [eventLogs, setEventLogs] = useState([]);
   const [activeAgentMeta, setActiveAgentMeta] = useState(null);
   const [learningSummary, setLearningSummary] = useState(null);
-  // Actionable insights (blocked/approval/health counts) are fetched here in
-  // fetchData and passed to ActionableInsightsBanner as a prop, so every trigger
-  // that refetches CoS data — task mutations, socket-driven changes, health
-  // checks, explicit refresh or reconnect — refreshes the banner without a separate signal. null
-  // until the first fetch resolves; preserved across transient fetch failures.
+  // Actionable insights (blocked/approval/health counts) are fetched here with
+  // the queue and passed to ActionableInsightsBanner as a prop, so every trigger
+  // that refetches the queue — task mutations, socket-driven changes, explicit
+  // refresh, reconnect or opening the Tasks tab — refreshes the banner without a
+  // separate signal. null until the first fetch resolves; preserved across
+  // transient fetch failures.
   const [insights, setInsights] = useState(null);
   // Monotonic counter for queue/insight-state writes, so a slow fetchData cannot
   // overwrite a fresher optimistic mutation or fetchQueue result.
@@ -273,11 +286,15 @@ export default function useCosPageData({ activeTab, selectedTask }) {
   // Agent snapshots settle independently of status/tasks. Overlay socket changes
   // received during the read so a slow snapshot cannot undo a live transition.
   const readAgents = useCallback(async (controller) => {
-    if (!needsAgents) return null;
+    if (!needsRef.current.agents) return null;
+    const epoch = sliceEpochRef.current.agents;
     const request = { updates: new Map() };
     agentReadRef.current = request;
     const data = await getCosAgents({ active: true, signal: controller.signal, silent: true }).catch(() => null);
-    if (controller.signal.aborted || queryRef.current !== queryKey || agentReadRef.current !== request) return null;
+    if (controller.signal.aborted || sliceEpochRef.current.agents !== epoch || !needsRef.current.agents || agentReadRef.current !== request) {
+      if (agentReadRef.current === request) agentReadRef.current = null;
+      return null;
+    }
     agentReadRef.current = null;
     if (Array.isArray(data)) {
       const merged = new Map(data.map(agent => [agent.id, agent]));
@@ -290,29 +307,44 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       setAgentsError('Could not load active agents.');
     }
     // Opening Agents must not wait for unrelated status or task summaries.
-    if (activeTab === 'agents') setLoading(false);
+    if (needsRef.current.tab === 'agents') setLoading(false);
     return data;
-  }, [needsAgents, queryKey, activeTab]);
+  }, []);
 
+  // The learning tile is shell data fed by two writers (the full read and an
+  // agent completion), so the newest request wins and a failed refresh keeps
+  // the last good summary instead of blanking the tile.
+  const refreshLearningSummary = useCallback(async () => {
+    const seq = ++learningSeqRef.current;
+    let failed = false;
+    const data = await getCosLearningSummary().catch(() => { failed = true; return null; });
+    if (failed || seq !== learningSeqRef.current || !mountedRef.current) return;
+    setLearningSummary(data);
+  }, [mountedRef]);
+
+  // The full refresh: shell (status, health, learning) plus every slice the
+  // current tab needs. Used on mount, reconnect, config/pause events and
+  // explicit refreshes; opening a tab reads only the slices it newly needs.
   const fetchData = useCallback(async function refreshPageData() {
-    const route = activeTab;
-    if (inFlight.current?.key === queryKey && !inFlight.current.controller.signal.aborted) {
+    if (inFlight.current && !inFlight.current.controller.signal.aborted) {
       inFlight.current.dirty = true;
       return inFlight.current.promise;
     }
-    inFlight.current?.controller.abort();
     const controller = new AbortController();
     const read = async () => {
       const queueSeq = queueSeqRef.current;
+      const needs = needsRef.current;
+      const tasksEpoch = sliceEpochRef.current.tasks;
+      const tasksCurrent = () => needsRef.current.tasks && sliceEpochRef.current.tasks === tasksEpoch;
       // Paint the visible queue before ancillary summaries and references settle.
       const coreRead = Promise.all([
         getCosStatus().catch(() => null),
-        needsTasks ? getCosTasks({ view: 'queue', selected: selectedTaskRef.current, signal: controller.signal, silent: true }).catch(() => null) : Promise.resolve(null),
+        needs.tasks ? getCosTasks({ view: 'queue', selected: selectedTaskRef.current, signal: controller.signal, silent: true }).catch(() => null) : Promise.resolve(null),
         readAgents(controller),
       ]);
       const healthObservation = healthObservationRef.current;
       const healthRead = getCosHealth({ signal: controller.signal, silent: true }).catch(() => null).then((data) => {
-        if (controller.signal.aborted || queryRef.current !== queryKey) return null;
+        if (controller.signal.aborted) return null;
         if (!Array.isArray(data?.issues)) {
           markHealthUnavailable(healthObservation);
           return null;
@@ -324,25 +356,26 @@ export default function useCosPageData({ activeTab, selectedTask }) {
         return data;
       });
       // The API shares its provider snapshot across all pages and pickers.
-      const providersRead = needsProviders ? getProviders().then(applyProviders).catch(() => {}) : Promise.resolve();
+      const providersRead = needs.providers ? getProviders().then(applyProviders).catch(() => {}) : Promise.resolve();
       // Same rationale as providersRead above: apps commits on its own settle
       // instead of waiting on the slower siblings in secondaryRead.
-      const appsRead = needsApps ? readApps() : Promise.resolve();
+      const appsRead = needs.apps ? readApps() : Promise.resolve();
+      const learningSeq = ++learningSeqRef.current;
       const secondaryRead = Promise.all([
         getCosLearningSummary().catch(() => null),
         // Preserve the last good insights on a transient refresh failure.
-        needsTasks ? getCosActionableInsights({ cachedHealth: true, silent: true }).catch(() => null) : Promise.resolve(null)
+        needs.tasks ? getCosActionableInsights({ cachedHealth: true, silent: true }).catch(() => null) : Promise.resolve(null)
       ]);
 
       const [statusData, tasksData, agentResult] = await coreRead;
-      if (controller.signal.aborted || queryRef.current !== queryKey) return;
+      if (controller.signal.aborted) return;
       const agentsData = agentResult || [];
       setStatus(statusData);
       setStatusReadFailed(typeof statusData?.running !== 'boolean');
       // A queue refresh started later can still resolve first. Its task payload
       // must not be clobbered by this older, pre-flip read — otherwise the row
       // returns to the pending-AND-active state this guard exists to remove.
-      if (queueSeqRef.current === queueSeq) {
+      if (queueSeqRef.current === queueSeq && tasksCurrent()) {
         if (tasksData) setTasks(tasksData);
       }
 
@@ -365,13 +398,13 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       // below reads what `healthRead` wrote, so it must not run before they settle.
       await Promise.all([healthRead, providersRead, appsRead]);
       // Health events may have delivered a newer snapshot while these reads settled.
-      if (controller.signal.aborted || queryRef.current !== queryKey) return;
+      if (controller.signal.aborted) return;
       const mergedHealth = healthRef.current;
-      setLearningSummary(learningSummaryData);
+      if (learningSeqRef.current === learningSeq) setLearningSummary(learningSummaryData);
       // Apply a real insights payload (including a legitimately-empty []); a null
       // from a failed/transient fetch preserves the last-good array so the banner
       // doesn't flicker empty on a blip.
-      if (insightsData?.insights && queueSeqRef.current === queueSeq) setInsights(insightsData.insights);
+      if (insightsData?.insights && queueSeqRef.current === queueSeq && tasksCurrent()) setInsights(insightsData.insights);
 
       const newState = deriveAgentState(statusData, agentsData, mergedHealth);
       setAgentState(newState);
@@ -384,56 +417,107 @@ export default function useCosPageData({ activeTab, selectedTask }) {
         : (newState === 'investigating' && summarizeHealthIssues(mergedHealth?.issues)) || STATE_MESSAGES[newState]);
 
     };
-    const pending = { route, key: queryKey, promise: null, controller, dirty: false };
+    const pending = { promise: null, controller, dirty: false };
     inFlight.current = pending;
     pending.promise = read().finally(() => {
       if (inFlight.current === pending) inFlight.current = null;
-      if (pending.dirty && !controller.signal.aborted && queryRef.current === queryKey) refreshPageData();
+      if (pending.dirty && !controller.signal.aborted) refreshPageData();
     });
     return pending.promise;
-  }, [activeTab, queryKey, needsTasks, needsAgents, needsProviders, needsApps, deriveAgentState, applyHealth, markHealthUnavailable, applyProviders, readApps, readAgents]);
+  }, [deriveAgentState, applyHealth, markHealthUnavailable, applyProviders, readApps, readAgents]);
 
   // Coalesce event bursts into a read of the visible queue and scalar shell
   // status. Insights use persisted health; invalidation never runs PM2 repair.
   const fetchQueue = useCallback(async function refreshQueueData() {
-    if (queuePending.current?.key === queryKey && !queuePending.current.controller.signal.aborted) {
+    if (queuePending.current && !queuePending.current.controller.signal.aborted) {
       queuePending.current.dirty = true;
       return queuePending.current.promise;
     }
-    queuePending.current?.controller.abort();
     const controller = new AbortController();
-    const request = { key: queryKey, controller, dirty: false, promise: null };
+    const request = { controller, dirty: false, promise: null };
     queuePending.current = request;
     const queueSeq = ++queueSeqRef.current;
-    const insightsRead = needsTasks
+    const tasksEpoch = sliceEpochRef.current.tasks;
+    const tasksCurrent = () => needsRef.current.tasks && sliceEpochRef.current.tasks === tasksEpoch;
+    const insightsRead = needsRef.current.tasks
       ? getCosActionableInsights({ cachedHealth: true, silent: true }).catch(() => null)
       : Promise.resolve(null);
     request.promise = Promise.all([
       getCosStatus().catch(() => null),
-      needsTasks ? getCosTasks({ view: 'queue', selected: selectedTaskRef.current, signal: controller.signal, silent: true }).catch(() => null) : null,
+      needsRef.current.tasks ? getCosTasks({ view: 'queue', selected: selectedTaskRef.current, signal: controller.signal, silent: true }).catch(() => null) : null,
       readAgents(controller),
     ]).then(async ([summary, tasksData]) => {
-      if (controller.signal.aborted || queryRef.current !== queryKey || queueSeqRef.current !== queueSeq) return;
+      if (controller.signal.aborted || queueSeqRef.current !== queueSeq) return;
       if (summary) setStatus(summary);
-      if (tasksData) setTasks(tasksData);
+      if (tasksData && tasksCurrent()) setTasks(tasksData);
       const insightsData = await insightsRead;
-      if (!controller.signal.aborted && queueSeqRef.current === queueSeq && insightsData?.insights) setInsights(insightsData.insights);
+      if (!controller.signal.aborted && queueSeqRef.current === queueSeq && tasksCurrent() && insightsData?.insights) setInsights(insightsData.insights);
     }).finally(() => {
       if (queuePending.current === request) queuePending.current = null;
-      if (request.dirty && !controller.signal.aborted && queryRef.current === queryKey) refreshQueueData();
+      if (request.dirty && !controller.signal.aborted) refreshQueueData();
     });
     return request.promise;
-  }, [queryKey, needsTasks, readAgents]);
+  }, [readAgents]);
+
+  // A slice's first read when its flag turns true: queue + insights.
+  // Deliberately reads no shell data; status, health and learning are
+  // socket-maintained. The task sequence is captured, not advanced, so a status
+  // summary from an overlapping queue refresh is not discarded by this read.
+  const readTasksSlice = useCallback(async () => {
+    tasksSliceRef.current?.abort();
+    const controller = new AbortController();
+    tasksSliceRef.current = controller;
+    const epoch = sliceEpochRef.current.tasks;
+    const queueSeq = queueSeqRef.current;
+    const current = () => !controller.signal.aborted && sliceEpochRef.current.tasks === epoch && queueSeqRef.current === queueSeq;
+    const insightsRead = getCosActionableInsights({ cachedHealth: true, silent: true }).catch(() => null);
+    const tasksData = await getCosTasks({ view: 'queue', selected: selectedTaskRef.current, signal: controller.signal, silent: true }).catch(() => null);
+    if (!current()) return;
+    if (tasksData) setTasks(tasksData);
+    const insightsData = await insightsRead;
+    if (current() && insightsData?.insights) setInsights(insightsData.insights);
+  }, []);
+
+  const readAgentsSlice = useCallback(async () => {
+    agentsSliceRef.current?.abort();
+    const controller = new AbortController();
+    agentsSliceRef.current = controller;
+    const data = await readAgents(controller);
+    if (!Array.isArray(data) || controller.signal.aborted) return;
+    setActiveAgentMeta(data.find(agent => agent.status === 'running')?.metadata || null);
+  }, [readAgents]);
 
   // All page insight reads use cached health. Explicit Run Check owns repairs;
   // task invalidations must never trigger a health-check/socket feedback loop.
 
 
-  // Initial route load only. Socket invalidations and reconnect recover updates.
+  // Initial page load only: `fetchData` is stable, so this runs once per visit.
+  // Socket invalidations and reconnect recover updates; tab switches are the
+  // slice effect below.
   useEffect(() => {
     fetchData();
-    return () => { inFlight.current?.controller.abort(); queuePending.current?.controller.abort(); };
+    return () => {
+      inFlight.current?.controller.abort();
+      queuePending.current?.controller.abort();
+      tasksSliceRef.current?.abort();
+      agentsSliceRef.current?.abort();
+    };
   }, [fetchData]);
+
+  // Read a slice when its flag turns true, and only then: a slice that stays
+  // needed across a tab switch (Tasks <-> Agents) is already held and kept
+  // current by its socket events. A slice's flag turning false ends its epoch.
+  useEffect(() => {
+    const prev = prevNeedsRef.current;
+    const next = { tasks: needsTasks, agents: needsAgents, providers: needsProviders, apps: needsApps };
+    prevNeedsRef.current = next;
+    if (prev.tasks !== next.tasks) sliceEpochRef.current.tasks += 1;
+    if (prev.agents !== next.agents) sliceEpochRef.current.agents += 1;
+    if (next.tasks && !prev.tasks) readTasksSlice();
+    if (next.agents && !prev.agents) readAgentsSlice();
+    if (next.providers && !prev.providers) getProviders().then(applyProviders).catch(() => {});
+    if (next.apps && !prev.apps) readApps();
+  }, [needsTasks, needsAgents, needsProviders, needsApps, readTasksSlice, readAgentsSlice, applyProviders, readApps]);
 
   // The selection-dependent read. The mount read already carries `selected`,
   // so a deep link costs nothing extra; a later selection that is not in the
@@ -491,6 +575,9 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     // spawnAgentForTask flips the task off 'pending', so the fetch it triggers
     // always reads the task as still-queued.
     const refreshQueue = coalesce(fetchQueue, 400);
+    // The learning summary changes when an agent finishes. The completion event
+    // is the only trigger: a tab switch must not be what refreshes the tile.
+    const refreshLearning = coalesce(refreshLearningSummary, 400);
     const handleTaskMutation = data => {
       if (data?.completedChanged || data?.task?.status === 'completed' || data?.previousStatus === 'completed' || ['deleted', 'peer-merged'].includes(data?.action)) {
         setTaskHistoryRevision(value => value + 1);
@@ -514,7 +601,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     socket.on('cos:tasks:changed', handleTaskMutation);
 
     const handleAgentSpawned = (data) => {
-      if (needsAgents && data?.id) {
+      if (needsRef.current.agents && data?.id) {
         agentReadRef.current?.updates.set(data.id, data);
         setAgents(prev => [...prev.filter(agent => agent.id !== data.id), data]);
       }
@@ -535,7 +622,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     socket.on('cos:agent:spawned', handleAgentSpawned);
 
     const handleAgentUpdated = (updatedAgent) => {
-      if (!needsAgents) return;
+      if (!needsRef.current.agents) return;
       const updates = agentReadRef.current?.updates;
       updates?.set(updatedAgent.id, mergeAgentRecords(updates.get(updatedAgent.id), updatedAgent));
       // Update the specific agent in the agents list without fetching all data
@@ -549,7 +636,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     socket.on('cos:agent:updated', handleAgentUpdated);
 
     const handleAgentOutput = (data) => {
-      if (needsAgents && data?.agentId && data?.line) {
+      if (needsRef.current.agents && data?.agentId && data?.line) {
         setLiveOutputs(prev => {
           const existing = prev[data.agentId] || [];
           const updated = [...existing, { line: data.line, timestamp: Date.now() }];
@@ -561,11 +648,12 @@ export default function useCosPageData({ activeTab, selectedTask }) {
 
     const handleAgentCompleted = (data) => {
       const id = data?.id || data?.agentId;
-      if (needsAgents && id) {
+      if (needsRef.current.agents && id) {
         agentReadRef.current?.updates.set(id, { ...data, id, status: 'completed' });
         setAgents(prev => prev.filter(agent => agent.id !== id));
       }
       setCompletedRevision(value => value + 1);
+      refreshLearning();
       setAgentState('reviewing');
       // Three outcomes, not two: a run retired by Resume/Relaunch never reached a
       // verdict, so announcing "Task failed" for it tells the user their own
@@ -616,17 +704,17 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     };
     socket.on('cos:log', handleCosLog);
     const handleRecoveryScheduleChanged = event => {
-      if (needsAgents && event?.id === 'cos-pending-merge-sweep') refreshQueue();
+      if (needsRef.current.agents && event?.id === 'cos-pending-merge-sweep') refreshQueue();
     };
     socket.on('cos:scheduler:changed', handleRecoveryScheduleChanged);
 
     // Stable reference data has its own invalidation path, independent of the queue.
     const handleAppsChanged = coalesce(() => {
       appsReadRef.current = null;
-      if (needsApps) readApps();
+      if (needsRef.current.apps) readApps();
     }, 400);
     const handleProvidersChanged = coalesce(() => {
-      if (needsProviders) getProviders().then(applyProviders).catch(() => {});
+      if (needsRef.current.providers) getProviders().then(applyProviders).catch(() => {});
     }, 400);
     const handleConfigChanged = () => fetchData();
     socket.on('providers:changed', handleProvidersChanged);
@@ -654,8 +742,9 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       socket.off('cos:scheduler:changed', handleRecoveryScheduleChanged);
       socket.off('apps:changed', handleAppsChanged);
       refreshQueue.cancel();
+      refreshLearning.cancel();
     };
-  }, [socket, fetchData, fetchQueue, needsAgents, needsTasks, needsApps, needsProviders, readApps, applyProviders, setSpeakingFor]);
+  }, [socket, fetchData, fetchQueue, refreshLearningSummary, readApps, applyProviders, setSpeakingFor]);
 
   const handleStart = async () => {
     const result = await startCos({ silent: true }).catch(err => {
