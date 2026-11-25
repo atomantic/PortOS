@@ -173,7 +173,9 @@ const daemon = createDaemonWatcher({
   getConfig: () => currentConfig,
   setConfig: (config) => { currentConfig = config; },
   getLastExitError: () => lastExitError,
+  setLastExitError: (error) => { lastExitError = error; },
   getAppStatus: (...args) => getAppStatusStrict(...args),
+  clearStatusCache: () => clearJlistCache(),
   getSavedProcessNames: (...args) => getSavedProcessNames(...args),
   execPm2: (...args) => execPm2(...args),
   getPortReleaseTimeoutMs: () => portReleaseTimeoutMs,
@@ -522,21 +524,13 @@ async function launchMtplxServer(options = {}) {
     throw new ServerError(MTPLX_RUNTIME_NOT_BOOTSTRAPPED_ERROR, { status: 400, code: 'MTPLX_RUNTIME_NOT_BOOTSTRAPPED' });
   }
 
-  const pm2Status = await getAppStatusStrict(MTPLX_APP);
-  if (pm2Status && pm2Status.status === 'online') {
-    throw new ServerError(`MTPLX is already running with PID ${pm2Status.pid}`, { status: 409 });
-  }
-
-  const endpoint = `http://${DEFAULT_HOST}:${port}/v1`;
-  if (await probeEndpoint(endpoint)) {
-    throw new ServerError(`Port ${port} is already in use by an active server at ${endpoint}`, { status: 409 });
-  }
-  if (await isPortInUse(port)) {
-    throw new ServerError(
-      `Port ${port} is already in use on ${DEFAULT_HOST}. Point MTPLX at a different port before starting it.`,
-      { status: 409, code: 'MTPLX_PORT_IN_USE' }
-    );
-  }
+  const endpoint = await daemon.assertPortFree({
+    host: DEFAULT_HOST,
+    port,
+    label: 'MTPLX',
+    codePrefix: 'MTPLX',
+    portAdvice: 'Point MTPLX at a different port before starting it.',
+  });
 
   daemon.resetLogs();
   lastExitError = null;
@@ -555,101 +549,29 @@ async function launchMtplxServer(options = {}) {
   currentConfig = { port, model, tuning: normalizedTuning };
   appendLog(`Starting: mtplx ${args.join(' ')}`);
 
-  // Delete any stale PM2 entry so our own previous instance doesn't count as a collision.
-  await execPm2(['delete', MTPLX_APP]).catch(() => {});
-  clearJlistCache();
-
   console.log(`🚄 MTPLX starting on ${DEFAULT_HOST}:${port}${model ? ` (model ${model})` : ' (MTPLX default model)'}${tuningArgs.length ? ` with ${tuningArgs.join(' ')}` : ''}`);
-  const logsReset = await mtplxLogs.reset();
-  await execPm2([
-    'start', binaryPath,
-    '--name', MTPLX_APP,
-    '--interpreter', 'none',
-    '--no-autorestart',
-    '--output', mtplxLogs.files().stdout,
-    '--error', mtplxLogs.files().stderr,
-    '--',
-    ...args,
-  ]);
-  clearJlistCache();
 
-  const deadline = Date.now() + (Number.isFinite(waitMs) ? waitMs : startupWaitMs);
-  let online = false;
-  let currentProc = null;
-  while (Date.now() < deadline) {
-    await sleep(startupPollMs);
-    clearJlistCache();
-    currentProc = await getAppStatusStrict(MTPLX_APP);
-    if (currentProc && ['errored', 'stopped', 'not_found'].includes(currentProc.status)) break;
-    online = await probeEndpoint(endpoint);
-    if (online) break;
-  }
-
-  if (currentProc && ['errored', 'stopped', 'not_found'].includes(currentProc.status)) {
-    const pm2Logs = await execPm2(['logs', MTPLX_APP, '--nostream', '--lines', '15']).catch(() => null);
-    const lines = `${pm2Logs?.stderr || pm2Logs?.stdout || ''}`.split('\n').map((l) => l.trimEnd()).filter(Boolean);
-    const currentLines = logsReset ? lines : [];
-    for (const line of currentLines) appendLog(line);
-    const tail = (currentLines.length ? currentLines : daemon.snapshotLogs()).slice(-4).join(' | ');
-    lastExitError = `PM2 status: ${currentProc.status}`;
-    const message = logsReset && isMtplxRuntimeBootstrapFailure(currentLines.join('\n'))
-      ? `${MTPLX_RUNTIME_BOOTSTRAP_ERROR}${tail ? ` Last output: ${tail}` : ''}`
-      : `MTPLX exited immediately (${lastExitError}).${tail ? ` Last output: ${tail}` : ''}`;
-
-    await execPm2(['delete', MTPLX_APP]).catch(() => {});
-    clearJlistCache();
-    currentConfig = null;
-    throw new ServerError(
-      message,
-      { status: 500, code: 'MTPLX_EXITED' }
-    );
-  }
-
-  // Persist the launch line every successful start used — including `tuning` —
-  // so the next on-demand restart (after an idle stop) replays exactly this
-  // configuration instead of falling back to a resolved default. Additive
-  // field: an older install's saved launch simply has no `tuning` key, which
-  // `onDemand`'s `resolveLaunch` reads as untuned. Fixes the bug Slotstream's
-  // own `persistLaunchConfig` did not have: MTPLX used to forget a tuning
-  // applied through an assessment relaunch the moment the idle reaper stopped
-  // it (#8105).
-  await persistDaemonLaunchConfig({ key: 'mtplx', label: 'MTPLX', launch: { port, model, tuning: normalizedTuning } });
-
-  const finalProc = await getAppStatusStrict(MTPLX_APP);
-  return {
-    success: true,
-    running: true,
-    managed: true,
-    pid: finalProc?.pid || null,
+  // Keep the tuning so an on-demand restart after an idle stop replays the
+  // assessed launch line (#8105). An older saved launch without it is untuned.
+  return daemon.launch({
+    binaryPath,
+    args,
     endpoint,
-    online,
-    config: currentConfig,
-  };
+    waitMs: Number.isFinite(waitMs) ? waitMs : startupWaitMs,
+    pollMs: startupPollMs,
+    logs: mtplxLogs,
+    label: 'MTPLX',
+    codePrefix: 'MTPLX',
+    describeExit: (lines) => isMtplxRuntimeBootstrapFailure(lines.join('\n'))
+      ? MTPLX_RUNTIME_BOOTSTRAP_ERROR
+      : null,
+    onStarted: () => persistDaemonLaunchConfig({ key: 'mtplx', label: 'MTPLX', launch: { port, model, tuning: normalizedTuning } }),
+  });
 }
 
 /** Stop the managed MTPLX process. */
 export async function stopMtplxServer() {
-  const pm2Status = await getAppStatusStrict(MTPLX_APP);
-  const isManaged = Boolean(pm2Status && pm2Status.status === 'online');
-
-  if (!isManaged) {
-    const endpoint = endpointFor(currentConfig);
-    if (await probeEndpoint(endpoint)) {
-      return {
-        success: false,
-        message: `An external process is listening on ${endpoint}. It was not started by PortOS and cannot be stopped here.`,
-      };
-    }
-    return { success: true, message: 'MTPLX is not running' };
-  }
-
-  appendLog(`Stopping ${MTPLX_APP}`);
-  await execPm2(['delete', MTPLX_APP]).catch((err) => {
-    throw new ServerError(`Failed to stop MTPLX: ${err.message}`, { status: 500 });
-  });
-  clearJlistCache();
-  currentConfig = null;
-  return { success: true, message: 'MTPLX stopped' };
+  return daemon.stop({ label: 'MTPLX' });
 }
 
 /**
