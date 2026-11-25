@@ -208,26 +208,16 @@ it('checks the duration the backend actually consumes and rejects batch expansio
   expect(enqueueUnattendedMediaJob).not.toHaveBeenCalled();
 });
 
-// Admission reads the field each backend renders from. Reading local frames over fps for a
-// hosted job (which carries neither) refused every clip of the run as out of bounds.
-it.each([
-  ['runway', { duration: 8 }],
-  ['higgsfield', { duration: 8 }],
-  ['google', { duration: 8 }],
-  ['gemini', {}],
-])('admits a %s clip on the length that backend renders', async (mode, lengthParams) => {
-  state.project.renderBackend = { video: { mode } };
-  state.settings = { videoGen: { [mode]: { apiKey: 'example-key' } } };
+// #18680: a Gemini job carries no frames, fps or duration, so reading frames over fps refused
+// every clip of the run as out of bounds. It always renders its fixed length.
+it('admits a Gemini clip on its fixed clip length', async () => {
+  state.project.renderBackend = { video: { mode: 'gemini' } };
+  state.settings = {};
   await startVideoExecution('example-video', await startInput());
   const queued = await enqueueVideoProductionJob(state.project, { sceneId: 'opening', workRevision: 0,
-    params: { mode, videoMode: 'text', prompt: 'Example landscape', ...lengthParams } });
+    params: { mode: 'gemini', videoMode: 'text', prompt: 'Example landscape' } });
   expect(queued).toMatchObject({ jobId: 'example-job-1' });
-  expect(enqueueUnattendedMediaJob).toHaveBeenCalledWith(expect.objectContaining({ kind: 'video', params: expect.objectContaining({ mode }) }));
-  // A hosted clip longer than one Video shot is still refused, and Gemini has no length to overstate.
-  if (mode !== 'gemini') {
-    await expect(enqueueVideoProductionJob(state.project, { sceneId: 'opening', workRevision: 0,
-      params: { mode, videoMode: 'text', prompt: 'Example landscape', duration: 60 } })).rejects.toMatchObject({ code: 'VIDEO_PLAN_CLIP_BOUNDS' });
-  }
+  expect(enqueueUnattendedMediaJob).toHaveBeenCalledWith(expect.objectContaining({ kind: 'video', params: expect.objectContaining({ mode: 'gemini' }) }));
 });
 
 it('blocks Start for a Gemini production on a canvas Gemini does not render', async () => {

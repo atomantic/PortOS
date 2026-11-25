@@ -7,7 +7,6 @@ import { creativeDirectorVideoLimitsSchema } from '../../lib/creativeDirectorVal
 import { assertVideoOwner } from '../../lib/creativeDirectorVideoReview.js';
 import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, coerceFalVideoSeconds, estimateFalVideoCostUsd, getFalVideoModel } from '../../lib/falVideoModels.js';
 import { GEMINI_OMNI_WEB_MODEL, GEMINI_WEB_ASPECTS } from '../../lib/geminiWebVideo.js';
-import { CLOUD_VIDEO_GEN_MODES } from '../../lib/generationModes.js';
 
 const ACTIVE = new Set(['planning', 'rendering', 'stitching']);
 const isMediaAttempt = attempt => ['clip', 'audio'].includes(attempt.kind);
@@ -326,15 +325,17 @@ export async function assertVideoAttemptDispatch(projectId, attemptId, { jobId }
 }
 
 /**
- * The clip length a job will actually render, read from the field its backend consumes
- * (videoGen/backendPin.js builds them): Reactor takes `seconds`, Gemini always returns its
- * fixed length, the other hosted backends take `duration`, and the local lane derives it
- * from frames over fps.
+ * The clip length a job will render, for the backends whose length is known here: Reactor
+ * renders its `seconds`, fal and Grok their `duration`, Gemini always its fixed length (it
+ * takes none), and the local lane frames over fps. Runway, Higgsfield and Google snap a
+ * request to their model's own lengths (a 10-second shot can come back as 8), so they stay
+ * unadmitted until admission can read the delivered length (#18701): assembly refuses a
+ * clip shorter than its shot, after the render is paid for.
  */
 function submittedClipSeconds(params) {
   if (params.mode === 'reactor') return Number(params.seconds);
   if (params.mode === 'gemini') return GEMINI_OMNI_WEB_MODEL.clipSeconds;
-  if (CLOUD_VIDEO_GEN_MODES.includes(params.mode)) return Number(params.duration);
+  if (['fal', 'grok'].includes(params.mode)) return Number(params.duration);
   return Number(params.numFrames / params.fps);
 }
 
