@@ -486,7 +486,7 @@ export function seedVitestDependencies(repoRoot, scope, tests) {
 
 const sha256Hex = (data) => createHash('sha256').update(data).digest('hex');
 
-/** Configuration files one identity reads before it gives up: the two scopes plus their conditional includes. */
+/** Configuration listings one identity reads before it gives up: what git reads by itself, plus each conditional include. */
 const GIT_CONFIG_SOURCES_LIMIT = 32;
 
 /**
@@ -494,7 +494,9 @@ const GIT_CONFIG_SOURCES_LIMIT = 32;
  * sources: the git it finds and everything a repository made on this machine
  * inherits. The first line of `git --version`, then a digest of:
  *
- * - the system and global configuration, includes followed;
+ * - the configuration git reads outside any repository: the system and
+ *   global files and what the environment supplies (`GIT_CONFIG_COUNT`,
+ *   `GIT_CONFIG_PARAMETERS`), includes followed;
  * - every file a conditional include (`includeIf`) names, whatever its
  *   condition: which of them a fixture repository meets depends on where and
  *   how the suite makes it, so each one counts;
@@ -506,12 +508,15 @@ const GIT_CONFIG_SOURCES_LIMIT = 32;
  * a log. What a setting points at beyond those files (a hooks or template
  * directory) is the machine's, as the rest of its userland is to every key.
  *
- * Null, which the analyzer never keys (`TEST_MEMO_REQUIRED_TOOLS`), when
- * this cannot be established: git cannot be run or is too old to say where
- * a setting came from (`--show-origin`, 2.8), the include chain does not
- * end, or the directory the fixtures are made under is itself inside a
- * repository, so git started in a fixture directory that is no repository of
- * its own would find that one, whose state is in no key.
+ * Null, which the analyzer never keys (`TEST_MEMO_REQUIRED_TOOLS`), wherever
+ * this cannot be established. A failed probe is never read as an empty
+ * answer: git cannot be run or is too old to say where a setting came from
+ * (`--show-origin`, 2.8); the configuration cannot be listed (malformed,
+ * unreadable, a probe that timed out); a file it names cannot be placed or
+ * read; the include chain does not end; or the directory the fixtures are
+ * made under is itself inside a repository, so git started in a fixture
+ * directory that is no repository of its own would find that one, whose
+ * state is in no key.
  */
 function gitToolIdentity({ env, run, scratch, read }) {
   const git = (args) => run('git', args, { env, cwd: scratch, encoding: 'utf8', timeout: 15_000 });
@@ -520,38 +525,49 @@ function gitToolIdentity({ env, run, scratch, read }) {
   const line = String(version.stdout).trim().split('\n')[0];
   const [, major, minor] = line.match(/(\d+)\.(\d+)/) ?? [];
   if (!(Number(major) > 2 || (Number(major) === 2 && Number(minor) >= 8))) return null;
+  // Outside a repository git lists exactly what every new repository starts from, and exits 0 with no file at all.
   const enclosing = git(['rev-parse', '--git-dir']);
   if (enclosing.error || enclosing.status === 0) return null;
 
   const home = env.HOME || env.USERPROFILE || homedir();
   const defaults = join(env.XDG_CONFIG_HOME || join(home, '.config'), 'git');
+  // A file that is not there is an input like any other; one that cannot be read is no answer.
+  const digestOf = (file) => {
+    try { return sha256Hex(read(file)); } catch (error) { return error?.code === 'ENOENT' || error?.code === 'ENOTDIR' ? 'absent' : null; }
+  };
   const files = new Set([join(defaults, 'ignore'), join(defaults, 'attributes')]);
-  const sources = [['--system'], ['--global']];
+  const sources = [[]];
   const listings = [];
   for (let at = 0; at < sources.length; at += 1) {
     if (at >= GIT_CONFIG_SOURCES_LIMIT) return null;
-    // A scope with no file exits non-zero, which is the same input as an empty one.
+    // git skips a conditional include whose file is missing; any other one has to be readable and listable.
+    const target = sources[at].length ? digestOf(sources[at][1]) : '';
+    if (target === null) return null;
+    if (target === 'absent') { listings.push(`${sources[at][1]} absent`); continue; }
     const listed = git(['config', ...sources[at], '--includes', '--show-origin', '--null', '--list']);
-    const text = listed.error || listed.status !== 0 ? '' : String(listed.stdout);
+    if (listed.error || listed.status !== 0) return null;
+    const text = String(listed.stdout);
     listings.push(`${sources[at].join(' ')}\n${text}`);
     // `--show-origin --null` writes `origin\0key\nvalue\0` per setting.
     const fields = text.split('\0');
     for (let i = 0; i + 1 < fields.length; i += 2) {
       const [key, ...rest] = fields[i + 1].split('\n');
+      const include = /^includeif\..*\.path$/.test(key);
+      if (!include && key !== 'core.excludesfile' && key !== 'core.attributesfile') continue;
       const value = rest.join('\n');
-      // git reads `~/` as the home directory and any other relative path beside the file that names it.
-      const beside = fields[i].startsWith('file:') ? dirname(fields[i].slice('file:'.length)) : home;
-      const named = /^~[\\/]/.test(value) ? join(home, value.slice(2)) : isAbsolute(value) ? value : join(beside, value);
-      if (/^includeif\..*\.path$/.test(key)) {
-        if (!sources.some(([flag, file]) => flag === '--file' && file === named)) sources.push(['--file', named]);
-      } else if (key === 'core.excludesfile' || key === 'core.attributesfile') files.add(named);
+      // `~/` is the home directory. An include is otherwise read beside the file that names it; an
+      // ignore or attributes file beside whichever repository reads the setting, which is no one place.
+      const beside = include && fields[i].startsWith('file:') ? dirname(fields[i].slice('file:'.length)) : null;
+      const named = /^~[\\/]/.test(value) ? join(home, value.slice(2)) : isAbsolute(value) ? value : beside === null || value.startsWith('~') ? null : join(beside, value);
+      if (named === null) return null;
+      if (!include) files.add(named);
+      else if (!sources.some(([, file]) => file === named)) sources.push(['--file', named]);
     }
   }
-  const fileDigests = [...files].sort().map((file) => {
-    try { return `${file} ${sha256Hex(read(file))}`; } catch { return `${file} absent`; }
-  });
+  const fileDigests = [...files].sort().map((file) => [file, digestOf(file)]);
+  if (fileDigests.some(([, digest]) => digest === null)) return null;
   const gitEnv = Object.keys(env).filter((name) => name.startsWith('GIT_')).sort().map((name) => `${name}=${env[name]}`);
-  return `${line} settings ${sha256Hex([...listings, ...fileDigests, ...gitEnv].join('\0')).slice(0, 16)}`;
+  return `${line} settings ${sha256Hex([...listings, ...fileDigests.map((pair) => pair.join(' ')), ...gitEnv].join('\0')).slice(0, 16)}`;
 }
 
 /**
