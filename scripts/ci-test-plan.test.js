@@ -2709,11 +2709,18 @@ describe('cross-workspace browser suites (#10312)', () => {
       !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
     const plan = buildCiTestPlan(catalogFiles, { ...inputs, trackedFiles });
     expect(plan.full).toBe(false);
-    for (const suite of [...suites, 'server/services/codeAnimation/export.realBrowser.test.js']) {
-      // A boundedness proxy (the closure sat at 399 when this was written), not a target: a new shared leaf adds one file.
-      expect(inputs.browserDependencies[suite]?.length, suite).toBeLessThan(420);
+    for (const suite of suites) {
+      for (const file of catalogFiles) {
+        expect(inputs.browserDependencies[suite], `${suite} reaches ${file}`).not.toContain(file);
+      }
+      expect(plan.browserFiles).not.toContain(suite);
     }
-    for (const suite of suites) expect(plan.browserFiles).not.toContain(suite);
+    // Code-animation export reaches systemCapabilities.js through the media
+    // queue's model registry, which checks hardware compatibility.
+    const openCodeConfig = 'server/lib/opencodeConfig.js';
+    for (const suite of [...suites, 'server/services/codeAnimation/export.realBrowser.test.js']) {
+      expect(inputs.browserDependencies[suite], `${suite} reaches ${openCodeConfig}`).not.toContain(openCodeConfig);
+    }
   });
 
   it('selects only the music-video browser suites that mount ProductionReviewPanel when it changes', () => {
