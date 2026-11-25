@@ -52,17 +52,21 @@ const CALLER_SUPPLIED_PATH_SITES = [
  * The server routes behind them sit in the `client-dynamic` class when the reverse scan cannot reach them.
  */
 const DYNAMIC_SEGMENT_SITES = [
-  { file: 'client/src/services/apiVoice.js', expression: '`/voice/facetime/${action}`' },
+  { file: 'client/src/services/apiVoice.js', expression: '`/voice/facetime/${action}`', path: '/api/voice/facetime/:p' },
   // `fineTunePath(profileId, jobId)` also folds its no-job branch, which a cancel or promote never takes.
-  { file: 'client/src/services/apiVoice.js', expression: '`${fineTunePath(profileId, jobId)}/cancel`' },
-  { file: 'client/src/services/apiVoice.js', expression: '`${fineTunePath(profileId, jobId)}/promote`' },
+  // Only that synthetic path is exempt: the real `/fine-tune/:p/cancel` path still has to be mounted.
+  { file: 'client/src/services/apiVoice.js', expression: '`${fineTunePath(profileId, jobId)}/cancel`', path: '/api/voice/profiles/:p/fine-tune/cancel' },
+  { file: 'client/src/services/apiVoice.js', expression: '`${fineTunePath(profileId, jobId)}/promote`', path: '/api/voice/profiles/:p/fine-tune/promote' },
 ];
+// What `controlFaceTime(action)` can reach: the forward check cannot see these, so pin that they stay mounted.
+const FACETIME_ACTIONS = ['call', 'hangup', 'probe'];
 
 const allowlistClassOf = new Map(Object.entries(UNCALLED_ROUTE_ALLOWLIST)
   .flatMap(([callerClass, paths]) => paths.map((route) => [route, callerClass])));
 const describeRoute = (route) => `${route.methods.join('/')} ${route.path}`;
 
 const describeSite = (site) => `${site.file}: ${site.expression}`;
+const describeSitePath = (site) => `${describeSite(site)} → ${site.path}`;
 
 const catalog = getApiRouteCatalog();
 const serverPaths = catalog.routes.map((route) => route.path);
@@ -78,8 +82,10 @@ describe('client ↔ server API route parity', () => {
     expect(clientPaths.map((entry) => entry.path)).toContain('/api/settings/features/:p');
 
     const unmounted = findUnmountedClientPaths(clientPaths, serverPaths);
-    expect([...new Set(unmounted.map(describeSite))].sort())
-      .toEqual(DYNAMIC_SEGMENT_SITES.map(describeSite).sort());
+    expect([...new Set(unmounted.map(describeSitePath))].sort())
+      .toEqual(DYNAMIC_SEGMENT_SITES.map(describeSitePath).sort());
+    expect(FACETIME_ACTIONS.filter((action) => !serverPaths.includes(`/api/voice/facetime/${action}`)),
+      'facetime actions the client can post that the server no longer mounts').toEqual([]);
   });
 
   it('declares every call site whose path it cannot resolve', () => {
@@ -92,8 +98,8 @@ describe('client ↔ server API route parity', () => {
       route.replace(/^\/api\/games(?=\/|$)/, '/api/games-renamed'));
     expect(renamed).not.toEqual(serverPaths);
 
-    const declared = new Set(DYNAMIC_SEGMENT_SITES.map(describeSite));
-    const stranded = findUnmountedClientPaths(clientPaths, renamed).filter((site) => !declared.has(describeSite(site)));
+    const declared = new Set(DYNAMIC_SEGMENT_SITES.map(describeSitePath));
+    const stranded = findUnmountedClientPaths(clientPaths, renamed).filter((site) => !declared.has(describeSitePath(site)));
     expect(stranded.length).toBeGreaterThan(0);
     // The failure has to name BOTH sides for a human to act on it: the client
     // module still pointing at the old prefix, and the path it now 404s on.
