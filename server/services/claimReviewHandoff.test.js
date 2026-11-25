@@ -71,6 +71,11 @@ describe('claim human-review handoff with advisory failures', () => {
     answerRequired(['CI', 'ruleset drift']);
     expect(await verify()).toEqual({ status: 'unverified', reason: 'pull-request-not-awaiting-human-review' });
   });
+  it('refuses when a required check is missing from the viewed rollup', async () => {
+    views['claim/issue-42'] = view('claim/issue-42', 7, { statusCheckRollup: [rollup[1]] });
+    answerRequired(['CI', 'ruleset drift']);
+    expect(await verify()).toEqual({ status: 'unverified', reason: 'pull-request-not-awaiting-human-review' });
+  });
   it('refuses when a node lacks a boolean requiredness', async () => {
     execGh.mockResolvedValue(JSON.stringify({ data: { repository: { pullRequest: { commits: { nodes: [{ commit: { oid: head, statusCheckRollup: {
       contexts: { pageInfo: { hasNextPage: false }, nodes: [{ name: 'CI', isRequired: true }, { name: 'ruleset drift' }] } } } }] } } } } }));

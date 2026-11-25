@@ -40,6 +40,8 @@ export function awaitsRequiredHumanReview(view, requiredCheckNames = null) {
   if (requiredCheckNames) {
     const required = new Set(requiredCheckNames);
     const rollup = (Array.isArray(view?.statusCheckRollup) ? view.statusCheckRollup : []).filter(check => required.has(checkName(check)));
+    // A required check the lookup knows but the rollup lacks has not reported here yet: not green.
+    if (new Set(rollup.map(checkName)).size < required.size) return false;
     return awaitsRequiredHumanReview({ ...view, statusCheckRollup: rollup });
   }
   return view?.state === 'OPEN' && view.isDraft === false && view.isCrossRepository === false
