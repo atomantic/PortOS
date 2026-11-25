@@ -127,6 +127,8 @@ describe('instance identity stays a leaf (#6836)', () => {
 const MUSIC_VIDEO_STORE = /^services\/musicVideo\/(?:projects|requireProject)\.js$/;
 const MUSIC_VIDEO_STORE_UPWARD = /^services\/(?:musicVideo\/(?:projectPresentation|editResult|plateReview|shotSegments|pacingRecut|handoff|projectBoardEdits|projectFilmActions|blender\/[^/]+)\.js|storyboards\/followShots\.js|trackSunoImport\.js|imageGen\/local\.js|film\/[^/]+\.js)$/;
 const SELECTION_CUTS = [
+  ['lib/localProviderRuntime.js', 'lib/opencodeConfig.js',
+    'reads default base URLs from the opencodeLocalProviders.js leaf so the OpenCode config builder stays out of runtime checks (#18697)'],
   ['services/llamaServerManager.js', 'services/specDecodeModels.js',
     'resolves launcher paths from the leaf preset module so the download stack stays out of its closure'],
   ['services/branchReconcile/classify.js', /^services\/(?:git\.js$|worktreeManager\.js$|branchReconcile\.js$|cos\/)/,
