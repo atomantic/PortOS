@@ -30,6 +30,7 @@ import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import * as catalogDB from './catalogDB.js';
 import { projectToCanon, projectToCatalog } from './catalogCanonProjection.js';
 import { sanitizePlace } from '../../lib/storyBible.js';
+import { updateUniverse } from '../universeBuilder.js';
 import { reconcileCanonCatalog } from '../../scripts/reconcileCanonCatalog.js';
 
 let dbReady = false;
@@ -124,6 +125,43 @@ describe.skipIf(!runDb)('a place Photoreal look across canon sync (#14946)', () 
     const mirror = { id: 'e1', ingredientId: place.id, name: place.name, photoreal: look, updatedAt: future() };
     expect((await projectToCatalog(uId, { places: [mirror] })).written).toBe(1);
     expect((await catalogDB.getIngredient(place.id)).payload).not.toHaveProperty('photoreal');
+  });
+
+  it('replaces stale canon payloads without projecting the universe back to Catalog', async () => {
+    const uId = `u-look-${Date.now()}-removed`;
+    const place = await makeLinkedPlace(uId);
+    const winner = await catalogDB.setIngredientPayloadKey(place.id, 'photoreal', null);
+    const sibling = await makeLinkedCharacter(uId);
+    const unchanged = canonEntry(sibling.id, sibling.name, sibling.updatedAt);
+    const stale = { ...canonEntry(place.id, 'Old name', PINNED_AT), createdAt: PINNED_AT, photoreal: look };
+    const universe = { id: uId, places: [stale], characters: [unchanged] };
+    reconcileUniverses.list = [universe];
+
+    let persisted;
+    let echo;
+    updateUniverse.mockImplementationOnce(async (id, mutator, options) => {
+      persisted = { ...universe, ...await mutator(universe) };
+      echo = await projectToCatalog(id, persisted, { guardIdentityIds: options.canonProjectionIdentityIds });
+      return persisted;
+    });
+    try {
+      const result = await reconcileCanonCatalog({ force: true });
+      expect(result.stats).toMatchObject({ catalogWon: 1, canonWon: 0, errors: 0 });
+      expect(persisted.places[0]).toMatchObject({
+        id: stale.id, ingredientId: place.id, name: winner.name, createdAt: stale.createdAt,
+        updatedAt: winner.updatedAt, description: 'old',
+      });
+      expect(persisted.places[0]).not.toHaveProperty('photoreal');
+      expect(persisted.characters).toEqual([unchanged]);
+      expect(updateUniverse).toHaveBeenLastCalledWith(uId, expect.any(Function), {
+        silent: true, canonProjectionIdentityIds: expect.arrayContaining([place.id, sibling.id]),
+      });
+      expect(echo.written).toBe(0);
+      expect((await catalogDB.getIngredient(place.id)).syncSequence).toBe(winner.syncSequence);
+      expect((await catalogDB.getIngredient(sibling.id)).syncSequence).toBe(sibling.syncSequence);
+    } finally {
+      reconcileUniverses.list = [];
+    }
   });
 
   it('survives a boot reconcile where an older-shape canon entry wins', async () => {

@@ -48,6 +48,12 @@ export function entryToPayload(entry) {
   return payload;
 }
 
+export function pickCanonControlFields(entry) {
+  return Object.fromEntries(
+    NON_PAYLOAD_KEYS.filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]]),
+  );
+}
+
 /**
  * Project a catalog edit into every universe that references the ingredient.
  * Best-effort: returns `{ universes, written, skipped }` and never throws on a per-universe failure;
@@ -104,10 +110,7 @@ export async function projectToCanon(ingredientId, updatedIngredient, deps = {})
           // the canonical identity; an explicit catalog edit refreshes them.
           if (e.ingredientId === ingredientId && Date.parse(e.updatedAt || '') > sourceAt) return e;
           touched = true;
-          const controlFields = Object.fromEntries(
-            NON_PAYLOAD_KEYS.filter((key) => e[key] !== undefined).map((key) => [key, e[key]]),
-          );
-          return { ...controlFields, ...payload, name, ingredientId, updatedAt };
+          return { ...pickCanonControlFields(e), ...payload, name, ingredientId, updatedAt };
         });
       }
       return touched ? patch : null;
