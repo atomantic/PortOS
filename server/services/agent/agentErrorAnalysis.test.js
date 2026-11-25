@@ -434,6 +434,35 @@ describe('analyzeAgentFailure — provenance origin (#2642)', () => {
     expect(generic.origin).toBe('output-scan');
   });
 
+  // One signature for both tables (aiToolkit/errorDetection.js): every real
+  // Claude Code banner kind must bench, and prose containing the words must not.
+  it.each([
+    "You've hit your session limit · resets 12:40am (UTC)",
+    "You've hit your weekly limit · resets Mon",
+    "You've hit your 5-hour limit",
+    "You've hit your Opus usage limit",
+    'Claude usage limit reached',
+  ])('promotes the usage-limit banner %j to a provider signal', (banner) => {
+    const analysis = analyzeAgentFailure(withLead(banner), { id: 't' }, 'x');
+    expect(analysis.category).toBe('usage-limit');
+    expect(analysis.origin).toBe('provider');
+  });
+
+  it.each([
+    'he had hit your limit of patience',
+    'the tool hit your tool call limit while indexing',
+  ])('does not promote prose that merely contains limit words: %j', (prose) => {
+    const analysis = analyzeAgentFailure(withLead(prose), { id: 't' }, 'x');
+    expect(analysis.origin).not.toBe('provider');
+    expect(analysis.category).not.toBe('usage-limit');
+  });
+
+  it('keeps promoting the older "<N>-hour limit reached" banner', () => {
+    const analysis = analyzeAgentFailure(withLead('5-hour limit reached ∙ resets 3pm'), { id: 't' }, 'x');
+    expect(analysis.category).toBe('usage-limit');
+    expect(analysis.origin).toBe('provider');
+  });
+
   // A spent agy subscription used to match no usage-limit alternative at all
   // ("quota reached" is not "quota exceeded", "your limits" is not "usage
   // limit"), so it stayed `unknown` and agy was never benched — every

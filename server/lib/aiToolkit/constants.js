@@ -25,17 +25,6 @@ export const DEFAULT_TIMEOUT = 300000;
 export const MAX_TIMEOUT = 43_200_000;
 export const MIN_TIMEOUT = 1000;
 
-export const ERROR_CATEGORIES = {
-  RATE_LIMIT: 'rate-limit',
-  USAGE_LIMIT: 'usage-limit',
-  AUTH_ERROR: 'auth-error',
-  MODEL_NOT_FOUND: 'model-not-found',
-  NETWORK_ERROR: 'network-error',
-  TIMEOUT: 'timeout',
-  QUOTA_EXCEEDED: 'quota-exceeded',
-  UNKNOWN: 'unknown'
-};
-
 /** Resolve a capability request against one provider, preserving legacy defaults. */
 export function resolveProviderModelTier(provider, tier) {
   if (!Object.values(MODEL_TIERS).includes(tier)) return null;

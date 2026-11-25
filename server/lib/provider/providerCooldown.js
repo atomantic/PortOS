@@ -22,6 +22,10 @@ export const COOLDOWN_MS_BY_CATEGORY = {
   [ERROR_CATEGORIES.TIMEOUT]: 60 * 1000,
   [ERROR_CATEGORIES.UNKNOWN]: 60 * 1000,
 };
+// Categories only the CoS agent analysis (services/agent/agentErrorAnalysis.js) emits, mapped to the toolkit category with the same meaning so the bench window matches. The returned `category` is unchanged.
+const COOLDOWN_CATEGORY_ALIASES = {
+  forbidden: ERROR_CATEGORIES.AUTH_ERROR,
+};
 export const DEFAULT_COOLDOWN_MS = 60 * 1000;
 // A usage limit with no parsed reset window; matches QUOTA_EXCEEDED's hour (both mean "the plan is spent").
 export const DEFAULT_USAGE_LIMIT_COOLDOWN_MS = 60 * 60 * 1000;
@@ -86,7 +90,7 @@ export function resolveProviderBench(analysis) {
   if (category === ERROR_CATEGORIES.USAGE_LIMIT) {
     return { marker: 'usage-limit', category, message, waitTime: analysis?.waitTime ?? null };
   }
-  const floorMs = COOLDOWN_MS_BY_CATEGORY[category] ?? DEFAULT_COOLDOWN_MS;
+  const floorMs = COOLDOWN_MS_BY_CATEGORY[COOLDOWN_CATEGORY_ALIASES[category] ?? category] ?? DEFAULT_COOLDOWN_MS;
   return {
     marker: 'unavailable',
     category,

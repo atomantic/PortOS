@@ -1,4 +1,4 @@
-import { createContentRefusalDetector } from '../../lib/aiToolkit/errorDetection.js';
+import { createContentRefusalDetector, RATE_LIMIT_SIGNATURE, USAGE_LIMIT_SIGNATURE } from '../../lib/aiToolkit/errorDetection.js';
 import { classifyCodexTurnError } from '../../lib/codexTurn.js';
 import { PR_COMPLETIONS, resolvePrCompletion } from '../../lib/prDisposition.js';
 import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
@@ -284,7 +284,7 @@ export const ERROR_PATTERNS = [
     })
   },
   {
-    pattern: /API Error: 429|rate.?limit|too many requests/i,
+    pattern: RATE_LIMIT_SIGNATURE, // vendor wording lives in aiToolkit/errorDetection.js
     category: 'rate-limit',
     actionable: false, // Transient, retry will handle
     origin: 'provider',
@@ -295,8 +295,12 @@ export const ERROR_PATTERNS = [
     })
   },
   {
-    // Catches both "hit your usage limit" and session limits like "hit your limit · resets 6am"
-    pattern: /(?:hit your (?:usage )?limit|usage.?limit|quota exceeded|Upgrade to Pro|upgrade your subscription to increase your limits|plan.?limit|daily.?limit|session.?limit|\d+-hour limit reached|(?:^|\n)\s*(?:\[stderr\]\s*)?Now using extra usage\s*(?:\r?\n|$))/i,
+    // The vendor banner wording (every `hit your <kind> limit` form, `usage limit`,
+    // Upgrade to Pro, the Antigravity upgrade sentence, `Now using extra usage`)
+    // is declared once, in aiToolkit/errorDetection.js. Only the agent-specific
+    // output-scan alternatives below are listed here; the generic ones stay
+    // unpromoted (see structuredMarker).
+    pattern: new RegExp(`${USAGE_LIMIT_SIGNATURE.source}|usage.?limit|quota exceeded|plan.?limit|daily.?limit|session.?limit|\\d+-hour limit reached`, 'i'),
     category: 'usage-limit',
     actionable: true, // Need to switch provider
     // Promote only the distinctive provider-billing idioms (the matched
@@ -321,7 +325,10 @@ export const ERROR_PATTERNS = [
     // burned both foundation-judge attempts on the dead provider and reported the
     // resulting screen scrape as a placeholder rubric (2026-08-13). The banner
     // itself is caught in-stream by AGY_QUOTA_BANNER in aiToolkit/errorDetection.js.
-    structuredMarker: /hit your (?:usage )?limit|(?:usage|session) limit reached|\d+-hour limit reached|Upgrade to Pro|upgrade your subscription to increase your limits|Now using extra usage/i,
+    // Marker = the shared vendor signature plus the two reached-banners older
+    // CLIs print (`session limit reached`, `<N>-hour limit reached`). A bare
+    // `hit your limit` is deliberately NOT promoted: prose reaches it.
+    structuredMarker: new RegExp(`${USAGE_LIMIT_SIGNATURE.source}|session limit reached|\\d+-hour limit reached`, 'i'),
     extract: (match, output) => {
       const timeMatch = output.match(/(?:try again in|resets?)\s+(.+?)(?:\.|·|\n|$)/im);
       const waitTime = timeMatch ? timeMatch[1].trim() : null;

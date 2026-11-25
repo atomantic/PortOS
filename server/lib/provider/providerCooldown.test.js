@@ -67,11 +67,21 @@ describe('resolveProviderBench', () => {
   });
 
   // Categories outside the table (agentErrorAnalysis carries its own, richer
-  // set — 'forbidden', 'claude-error') still bench, just briefly.
+  // set — 'claude-error') still bench, just briefly.
   it('falls back to the default cooldown for an untabled category', () => {
-    expect(resolveProviderBench({ category: 'forbidden' })).toMatchObject({
+    expect(resolveProviderBench({ category: 'claude-error' })).toMatchObject({
       marker: 'unavailable',
       waitTimeMs: DEFAULT_COOLDOWN_MS,
+    });
+  });
+
+  // The agent analysis emits 'forbidden' for a structured 403; it benches for
+  // the auth-error window but keeps its own category for downstream branches.
+  it('benches a forbidden provider failure for the auth-error window', () => {
+    expect(resolveProviderBench({ category: 'forbidden', origin: 'provider' })).toMatchObject({
+      marker: 'unavailable',
+      category: 'forbidden',
+      waitTimeMs: COOLDOWN_MS_BY_CATEGORY['auth-error'],
     });
   });
 
