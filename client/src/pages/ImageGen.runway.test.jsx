@@ -21,6 +21,7 @@ describe('ImageGen Runway default model', () => {
     await renderImageGenPage();
     const model = await screen.findByLabelText('Runway model');
     await waitFor(() => expect(model).toHaveValue(''));
+    expect(state.referenceImagePickerProps.referenceImages).toHaveLength(3);
     expect(screen.getByRole('option', { name: 'Settings default (gen4_image_turbo)' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /unavailable/ })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'A lighthouse at dusk' } });

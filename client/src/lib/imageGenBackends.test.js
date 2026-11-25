@@ -60,18 +60,18 @@ describe('input-image capability helpers', () => {
     // agy's tool takes 3 images TOTAL, so an init image leaves 2 ref slots.
     expect(referenceSlotsFor(IMAGE_GEN_MODE.AGY, { hasInitImage: false })).toBe(3);
     expect(referenceSlotsFor(IMAGE_GEN_MODE.AGY, { hasInitImage: true })).toBe(2);
-    // codex/grok declare no cap, so the form's own 4 slots are the ceiling and
-    // an init image doesn't eat into them.
-    expect(referenceSlotsFor(IMAGE_GEN_MODE.CODEX, { hasInitImage: true })).toBe(4);
+    expect(referenceSlotsFor(IMAGE_GEN_MODE.CODEX, { maxSlots: 16 })).toBe(5);
+    expect(referenceSlotsFor(IMAGE_GEN_MODE.CODEX, { maxSlots: 16, hasInitImage: true })).toBe(4);
+    expect(referenceSlotsFor(IMAGE_GEN_MODE.RUNWAY, { maxSlots: 16, cloudModelId: 'gen4_image' })).toBe(3);
     expect(referenceSlotsFor(IMAGE_GEN_MODE.GROK, { hasInitImage: false })).toBe(4);
   });
 
   it('caps fal.ai per model — the chosen model\'s limit, else the smallest in the catalog', () => {
-    const options = { maxSlots: 10, hasInitImage: true };
+    const options = { maxSlots: 16, hasInitImage: true };
     // FLUX.2 [pro] edit takes 9 images total; an init image leaves 8 refs.
     expect(referenceSlotsFor(IMAGE_GEN_MODE.FAL, { ...options, cloudModelId: 'fal-ai/flux-2-pro' })).toBe(8);
-    // Nano Banana takes 14, so the form's own 10 slots are the ceiling.
-    expect(referenceSlotsFor(IMAGE_GEN_MODE.FAL, { ...options, cloudModelId: 'fal-ai/nano-banana-pro' })).toBe(10);
+    // Nano Banana takes 14 images total, leaving 13 references with an init image.
+    expect(referenceSlotsFor(IMAGE_GEN_MODE.FAL, { ...options, cloudModelId: 'fal-ai/nano-banana-pro' })).toBe(13);
     // Unknown model → the catalog floor, never a slot some fal model would drop.
     expect(referenceSlotsFor(IMAGE_GEN_MODE.FAL, options)).toBe(8);
   });
