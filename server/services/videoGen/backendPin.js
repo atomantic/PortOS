@@ -182,8 +182,9 @@ export function videoBackendJobParams(settings, pin, params = {}, { durationSeco
     'icReferenceVideoIds', 'icReferenceImageFiles', 'referenceImageFiles', 'referenceImagePaths', 'referenceVideoIds', 'referenceVideoPaths', 'referenceAudioPaths', 'loras', 'loraPaths', 'loraFilenames',
     'castReferences', 'guidanceImagePath', 'sourceVideoPath', 'runwayVideoPath', 'runwayCharacterVideoPath', 'uploadedTempPath', 'uploadedTempPaths',
   ].filter((key) => hasInput(params[key]));
-  const sourceImagePath = hasInput(params.sourceImagePath) ? resolveImageInputPath(params.sourceImagePath) : null;
-  if (hasInput(params.sourceImagePath) && !sourceImagePath) unsupported.push('a start frame that is missing or outside the image library');
+  const startFrame = hasInput(params.sourceImagePath) ? params.sourceImagePath : params.sourceImageFile;
+  const sourceImagePath = hasInput(startFrame) ? resolveImageInputPath(startFrame) : null;
+  if (hasInput(startFrame) && !sourceImagePath) unsupported.push('a start frame that is missing or outside the image library');
   if (!isDefaultA2vLoraStages(params.a2vLoraStageStrengths)) unsupported.push('per-stage user LoRA strengths');
   if (semantic && semantic !== 'text' && semantic !== 'image') unsupported.push(`mode ${semantic}`);
   if (Number(params.chunks) > 1) unsupported.push('chained chunks');
@@ -212,7 +213,7 @@ export function videoBackendJobParams(settings, pin, params = {}, { durationSeco
   const {
     modelId: _model, pythonPath: _python, numFrames: _frames, fps: _fps,
     steps: _steps, guidanceScale: _guidance, tiling: _tiling,
-    imageStrength: _strength, disableAudio: _audio, ...rest
+    imageStrength: _strength, disableAudio: _audio, sourceImageFile: _sourceFile, ...rest
   } = params;
   const base = sourceImagePath ? { ...rest, sourceImagePath } : rest;
   const duration = params.duration ?? params.durationSeconds ?? durationSeconds;

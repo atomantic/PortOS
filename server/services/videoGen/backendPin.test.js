@@ -281,9 +281,17 @@ describe('videoBackendJobParams hosted attachments', () => {
     }
   });
 
+  it('prefers the explicit path over the filename on hosted pins', () => {
+    const result = videoBackendJobParams({}, { mode: VIDEO_GEN_MODE.GEMINI }, {
+      sourceImagePath: 'frame.png', sourceImageFile: 'missing.png',
+    });
+    expect(result).toMatchObject({ videoMode: 'image', sourceImagePath: libraryFrame });
+    expect(result).not.toHaveProperty('sourceImageFile');
+  });
+
   it('leaves a local pin alone: the local runner validates its own inputs and sends nothing out', () => {
-    expect(videoBackendJobParams({}, { mode: VIDEO_GEN_MODE.LOCAL }, { prompt: 'x', sourceImagePath: outsideFile }))
-      .toEqual({ prompt: 'x', sourceImagePath: outsideFile });
+    expect(videoBackendJobParams({}, { mode: VIDEO_GEN_MODE.LOCAL }, { prompt: 'x', sourceImagePath: outsideFile, sourceImageFile: 'frame.png' }))
+      .toEqual({ prompt: 'x', sourceImagePath: outsideFile, sourceImageFile: 'frame.png' });
   });
 });
 
