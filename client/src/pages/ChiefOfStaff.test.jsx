@@ -2201,6 +2201,38 @@ describe('ChiefOfStaff slice reads against concurrent refreshes (#18643)', () =>
     expect(screen.getAllByText('Thinking').length).toBeGreaterThan(0);
   });
 
+  it('does not let an older shell status read put back a stopped daemon a newer read reported running', async () => {
+    api.getCosStatus.mockResolvedValue({ running: false, config, stats: {} });
+    renderWithProbe('briefing');
+    await waitForPageShell();
+
+    let releaseOld;
+    api.getCosStatus.mockReturnValueOnce(new Promise(resolve => { releaseOld = () => resolve({ running: false, config, stats: {} }); }));
+    await act(async () => { getSocketHandler('cos:config:changed')(); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'go config' })); });
+    api.getCosStatus.mockResolvedValue({ running: true, config, stats: {} });
+    await act(async () => { socketStub.receive('cos:status', { running: true }); });
+    await settle();
+    expect((await screen.findAllByRole('button', { name: 'Stop Chief of Staff agent' })).length).toBeGreaterThan(0);
+
+    await act(async () => { releaseOld(); await new Promise(resolve => setTimeout(resolve, 20)); });
+    expect(screen.getAllByRole('button', { name: 'Stop Chief of Staff agent' }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: 'Start Chief of Staff agent' })).toBeNull();
+  });
+
+  it('keeps an idle running daemon Thinking, not Sleeping, after a passing manual health check', async () => {
+    api.getCosStatus.mockResolvedValue({ running: true, config, stats: {} });
+    renderWithProbe('health');
+    await waitForPageShell();
+    expect(screen.getAllByText('Thinking').length).toBeGreaterThan(0);
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Run Check' })); });
+    await settle();
+    expect(api.forceHealthCheck).toHaveBeenCalled();
+    expect(screen.getAllByText('Thinking').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Sleeping')).toBeNull();
+  });
+
   it('returns the avatar to its default state when the health check that parked it reports no issues', async () => {
     withFakeTimers();
     api.getCosStatus.mockResolvedValue({ running: true, config, stats: {} });
