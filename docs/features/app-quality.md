@@ -56,10 +56,17 @@ Stored v1 reports stay readable; their `score` is read as that run's score.
 A category's score is derived server-side: the confidence- and recency-weighted
 mean (high 1, medium 0.5, each further halved per 14 days of age so remediated
 pre-fix runs stop pinning the figure) of its newest five eligible runs — **broad** discovery coverage,
-medium/high confidence, scored, and at most 30 days old — one run per UTC day.
+medium/high confidence, scored, and at most 30 days old. The newest qualifying
+run for each normalized slice supersedes its earlier runs. Distinct slices may
+contribute on the same UTC day. For each audit category and UTC day, the window
+takes at most one slice-less run and gives a retained slice precedence, even
+over a later slice-less run that day. Peer and release snapshot rows omit slice
+names. These rows can fill otherwise eligible days when there is no qualifying
+local slice or their timestamp is at least as recent as the newest qualifying
+local slice in the category window's eligible set.
 The pragmatic target band is **85–95**; the audit rubric tells agents not to
 chase 100/100 with speculative hardening. The `audit-slice-history` input shows each
-prior slice's score so a lane can re-verify a remediated slice that scored below 75.
+prior slice's score so a lane can re-verify a remediated slice that scored below 85.
 The breakdown shows how many runs fed the figure and the worst severity any of
 them found; the row's coverage, confidence, date, slice and summary describe the
 newest run. A newer partial run does not erase a fresh scored one. With no
@@ -218,8 +225,8 @@ rules as today's score. Coverage is shown with each value because adding or
 losing a category can change the mean without same-category improvement.
 History begins with newly reported assessments; no scores are invented for old
 runs. The local detail endpoint `/api/apps/:id/quality-history?days=90` reads only
-that app's measurements and bounds results to the last measurement per UTC day
-and category, including a 30-day lookback to seed the selected range.
+that app's measurements, including multiple local runs per UTC day, with a
+30-day lookback to seed the selected range.
 
 ## Release snapshot file
 

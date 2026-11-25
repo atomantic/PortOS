@@ -264,7 +264,7 @@ describe('scheduled audit measurement workflow', () => {
     });
   });
 
-  it('supersedes older pre-fix runs for the same normalized slice while leaving slice-less rows unaffected', () => {
+  it('supersedes older pre-fix runs and older imported scores while preserving legacy local runs', () => {
     const now = Date.parse('2026-09-10T12:00:00Z');
     const daysAgo = n => new Date(now - n * 86400000).toISOString();
     const v2Run = (n, slice, sliceScore, extra = {}) => ({
@@ -280,15 +280,48 @@ describe('scheduled audit measurement workflow', () => {
       v2Run(2, 'client/src/pages', 86),
       // Older pre-fix run on the same normalized slice is superseded.
       v2Run(3, 'server/services/auth, server/lib/db.js', 40, { worstSeverity: 8 }),
-      // Slice-less rows (v1 / peer / .quality.json v3) stay unaffected and never supersede each other.
+      // Older imported rows are displaced, but local slice-less evidence from a different day still counts.
       { category: 'security', agentId: 'peer-1', sourcePeerId: 'peer-a', assessedAt: daysAgo(4), report: report({ category: 'security', score: 88, worstSeverity: 2 }) },
       { category: 'security', sourcePeerName: 'Release snapshot', assessedAt: daysAgo(5), report: report({ category: 'security', score: 84, worstSeverity: 2 }) },
-      // Sixth qualifying run fills the 5th window slot freed by superseding run-3.
       v2Run(6, 'server/routes', 82),
+      { category: 'security', assessedAt: daysAgo(7), report: report({ category: 'security', score: 84, worstSeverity: 2 }) },
     ];
     const row = summarizeAppQuality(records, now).categories.find(c => c.id === 'security');
-    expect(row.window).toEqual({ runs: 5, worstSeverity: 2 });
-    expect(row.score).toBeGreaterThanOrEqual(85);
+    expect(row.window).toEqual({ runs: 4, worstSeverity: 2 });
+    expect(row.score).toBe(86);
+  });
+
+  it.each([
+    [{ sourcePeerId: 'peer-a' }, '2026-09-10T09:00:00Z'],
+    [{ sourcePeerId: 'peer-a' }, '2026-09-10T13:00:00Z'],
+    [{ sourcePeerName: 'Release snapshot' }, '2026-09-10T13:00:00Z'],
+  ])('gives a qualifying local slice precedence over same-day imported evidence (%j, %s)', (source, importedAt) => {
+    const now = Date.parse('2026-09-10T16:00:00Z');
+    const local = { category: 'security', assessedAt: '2026-09-10T10:00:00Z',
+      report: sliceReport({ category: 'security', sliceScore: 92, worstSeverity: 1 }) };
+    const imported = { category: 'security', assessedAt: importedAt,
+      report: report({ category: 'security', score: 50 }), ...source };
+    const daily = dailyQualityRecords([local, imported]);
+    expect(summarizeAppQuality(daily, now).categories.find(c => c.id === 'security'))
+      .toMatchObject({ score: 92, window: { runs: 1, worstSeverity: 1 } });
+
+    // A partial local scan cannot displace a qualifying imported run.
+    const partial = { ...local, report: { ...local.report, coverage: 'partial', scannedFiles: 50 } };
+    expect(summarizeAppQuality(dailyQualityRecords([partial, imported]), now).categories.find(c => c.id === 'security'))
+      .toMatchObject({ score: 50, window: { runs: 1, worstSeverity: 8 } });
+  });
+
+  it('uses newer imported evidence on another UTC day until a qualifying local re-audit supersedes it', () => {
+    const now = Date.parse('2026-09-12T16:00:00Z');
+    const local = { category: 'security', assessedAt: '2026-09-10T10:00:00Z',
+      report: sliceReport({ category: 'security', sliceScore: 92, worstSeverity: 1 }) };
+    const peer = { category: 'security', assessedAt: '2026-09-11T11:00:00Z',
+      sourcePeerId: 'peer-a', report: report({ category: 'security', score: 50 }) };
+    const fixed = { ...local, assessedAt: '2026-09-12T12:00:00Z', report: { ...local.report, sliceScore: 95 } };
+    expect(summarizeAppQuality([local, peer], now).categories.find(c => c.id === 'security'))
+      .toMatchObject({ score: 70, window: { runs: 2, worstSeverity: 8 } });
+    expect(summarizeAppQuality([local, peer, fixed], now).categories.find(c => c.id === 'security'))
+      .toMatchObject({ score: 95, window: { runs: 1, worstSeverity: 1 } });
   });
 
   it('isolates consolidated domain windows from pre-consolidation legacy member runs while preserving member history and legacy-only repos', () => {
