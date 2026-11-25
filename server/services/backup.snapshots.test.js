@@ -14,6 +14,7 @@ import * as fs from 'fs/promises';
 import { reloadSettings } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshotStream, restoreSnapshot, resolveRsyncBinary, deleteSnapshot } from './backup.js';
+import { pruneOldSnapshots } from './backup/snapshots.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { EXCLUDE_PATTERN_MAX_LENGTH, anchorUserExclude, anchorUserExcludes, isSafeExcludePattern } from '../lib/sharedSchemas.js';
 
@@ -460,7 +461,7 @@ describe('listSnapshots', () => {
   });
 });
 
-describe('deleteSnapshot', () => {
+describe('snapshot deletion and retention', () => {
   let destRoot;
 
   beforeEach(async () => {
@@ -511,6 +512,9 @@ describe('deleteSnapshot', () => {
     const id = '2026-06-08T15-18-34';
     const dir = await makeSnapshot(machineHost, id, { marker: '.in-progress', markerContent });
 
+    const reservation = joinPath(destRoot, 'snapshots', machineHost, `.${id}.in-progress`);
+    await fs.writeFile(reservation, markerContent);
+
     const [snapshot] = await listSnapshots(destRoot);
     expect(snapshot).toMatchObject({ id, incomplete: false, failed: false, interrupted: true });
     await expect(openSnapshotStream(destRoot, id, { source: machineHost }))
@@ -519,7 +523,21 @@ describe('deleteSnapshot', () => {
       .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INTERRUPTED' });
 
     await deleteSnapshot(destRoot, id, { source: machineHost });
-    await expect(fs.stat(dir)).rejects.toThrow();
+    await expect(fs.stat(dir)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(reservation)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('prunes an interrupted snapshot and its reservation after a newer backup completes', async () => {
+    const id = '2026-06-08T15-18-34';
+    const dir = await makeSnapshot(machineHost, id, { marker: '.in-progress', markerContent: 'previous-process-token' });
+    const reservation = joinPath(destRoot, 'snapshots', machineHost, `.${id}.in-progress`);
+    await fs.writeFile(reservation, 'previous-process-token');
+    const newer = await makeSnapshot(machineHost, '2026-06-09T15-18-34');
+
+    await expect(pruneOldSnapshots(destRoot, null)).resolves.toEqual({ pruned: 1 });
+    await expect(fs.stat(dir)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(reservation)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(newer)).resolves.toBeDefined();
   });
 
   it("keeps another machine's in-progress snapshot incomplete (409 SNAPSHOT_INCOMPLETE), leaving it on disk", async () => {
