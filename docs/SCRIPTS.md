@@ -40,7 +40,3 @@ Python ML runners and probes live under `scripts/ml/`. Their input and lock file
 | `scripts/ops/seed-readme-demo-data.mjs --root <empty-dir>` | Builds a synthetic data root for README screenshots from `data.reference/`. It never reads the install's `data/`. Give it an empty directory. |
 | `scripts/ml/align_lyrics_ctc_accuracy.py --model-dir <dir>` | Opt-in accuracy check of the lyric aligner against the real MMS_FA checkpoint (about 1.2 GB, downloaded on first use). CI never runs it. Run it with the `lyric-align` venv's interpreter. |
 | `scripts/prune-model-comparison-seed.js [--check]` | Prunes `data.reference/model-comparison.json` to models in provider scope and public benchmark observations. Run with `--check` in CI or after modifying `providers.json`. |
-| `scripts/ml/diagnose_minimax_h3.py --output-dir <dir> [--run]` | Reproduces MiniMax H3 continuity scenarios (#8867) on synthetic keyframes without private inputs. See `docs/research/minimax-h3-continuity.md`. |
-| `scripts/ml/diagnose_minimax_h3_processor.py --cases <all\|production\|undersized>` | Compares H3 torchvision vs PIL image-processor backends across synthetic canvas resolutions. |
-| `scripts/ml/diagnose_minimax_h3_vision.py <torch\|mlx> --output-dir <dir>` | Inspects H3 vision precision across backends/devices with cached weights and synthetic inputs. |
-| `scripts/ml/compare_minimax_h3_vision.py --actual <dir> --reference <dir>` | Compares synthetic H3 vision traces produced by `diagnose_minimax_h3_vision.py`. |
