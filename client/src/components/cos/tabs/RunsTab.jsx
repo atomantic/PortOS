@@ -48,9 +48,15 @@ export default function RunsTab() {
   const [totalRuns, setTotalRuns] = useState(null);
   // A deep-linked run outside the loaded page: { status: 'loading'|'ready'|'missing', run }.
   const [pinned, setPinned] = useState(null);
+  // The totals are a side effect of the fetcher, which useListResource cannot
+  // drop with the rows: apply them only while their source filter is still current.
+  const sourceFilterRef = useRef(sourceFilter);
+  sourceFilterRef.current = sourceFilter;
   const fetchRuns = useCallback(
     () => getRuns(100, 0, sourceFilter, { silent: true }).then(data => {
-      setTotalRuns({ source: sourceFilter, total: Number.isFinite(data?.total) ? data.total : null });
+      if (sourceFilterRef.current === sourceFilter) {
+        setTotalRuns({ source: sourceFilter, total: Number.isFinite(data?.total) ? data.total : null });
+      }
       return data?.runs || [];
     }),
     [sourceFilter]
@@ -207,6 +213,11 @@ export default function RunsTab() {
   const pinRef = useRef(null);
   pinRef.current = pinned;
   const [pinRetry, setPinRetry] = useState(0);
+  // At most one pinned read in flight plus one follow-up, like the list refresh:
+  // a burst of invalidations must not keep superseding the read that would land.
+  const pinFlight = useRef(false);
+  const pinPending = useRef(false);
+  const pinFlightToken = useRef(0);
   const dropPin = useCallback(() => {
     pinGen.current += 1;
     setPinned(null);
@@ -228,19 +239,33 @@ export default function RunsTab() {
       }
     );
   }, [expandRun]);
+  const startPinnedRead = useCallback((id) => {
+    pinFlight.current = true;
+    const token = pinFlightToken.current;
+    readPinned(id).finally(() => {
+      if (token !== pinFlightToken.current) return;
+      pinFlight.current = false;
+      if (!pinPending.current) return;
+      pinPending.current = false;
+      if (pinTarget.current && pinRef.current) startPinnedRead(pinTarget.current);
+    });
+  }, [readPinned]);
   // Any change of the ?run= selection (including clearing it) retires the pin
   // and the read in flight for the previous one.
   useEffect(() => () => {
     dropPin();
     pinTarget.current = null;
+    pinFlight.current = false;
+    pinPending.current = false;
+    pinFlightToken.current += 1;
   }, [deepLinkRunId, dropPin]);
   useEffect(() => {
     if (!deepLinkRunId || pinTarget.current === deepLinkRunId || deepLinkOpened.current === deepLinkRunId || runsState !== 'ready') return;
     if (runs.some(run => run.id === deepLinkRunId)) return;
     pinTarget.current = deepLinkRunId;
     setPinned({ status: 'loading', run: null });
-    readPinned(deepLinkRunId);
-  }, [deepLinkRunId, runsState, runs, readPinned, pinRetry]);
+    startPinnedRead(deepLinkRunId);
+  }, [deepLinkRunId, runsState, runs, startPinnedRead, pinRetry]);
   const retryPinned = () => {
     pinTarget.current = null;
     setPinRetry(n => n + 1);
@@ -248,9 +273,14 @@ export default function RunsTab() {
 
   // Lifecycle invalidations and a Stop reach the pinned run too: re-read it by
   // id (newest read wins) so it cannot keep showing Running after it ended.
-  const refreshPinned = useCallback(() => (
-    pinTarget.current && pinRef.current ? readPinned(pinTarget.current) : Promise.resolve()
-  ), [readPinned]);
+  const refreshPinned = useCallback(() => {
+    if (!pinTarget.current || !pinRef.current) return Promise.resolve();
+    if (pinFlight.current) {
+      pinPending.current = true;
+      return Promise.resolve();
+    }
+    return startPinnedRead(pinTarget.current);
+  }, [startPinnedRead]);
   refreshPinnedRef.current = refreshPinned;
 
   const handleResume = async (run, e) => {
@@ -315,7 +345,7 @@ export default function RunsTab() {
       supersedeRefresh();
       setRuns(prev => prev.filter(r => r.success !== false));
       if (pinRef.current?.run?.success === false) dropPin();
-      else if (pinRef.current?.status === 'loading') readPinned(pinTarget.current);
+      else if (pinRef.current?.status === 'loading') refreshPinned();
     }
   };
 
