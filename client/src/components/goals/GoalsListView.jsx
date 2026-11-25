@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import {
-  ChevronRight, ChevronDown, Plus, GripVertical, Search, Tag, Link2, Crown, Star, Wand2, AlertTriangle
+  ChevronRight, ChevronDown, Plus, GripVertical, Search, Tag, Link2, Crown, Star, Wand2, AlertTriangle, Minus, Circle
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import { DndContext, DragOverlay, KeyboardSensor, PointerSensor, useSensor, useSensors, useDraggable, useDroppable } from '@dnd-kit/core';
@@ -15,7 +15,6 @@ import EmptyState from '../EmptyState';
 import useProviderModels from '../../hooks/useProviderModels';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { enabledApiProviderFilter } from '../../utils/providers';
-import { clickableProps, onActivateKeyDown } from '../../lib/a11yKeyboard.js';
 
 // Arrow keys step row-to-row through the tree instead of nudging the drag 25px
 // at a time. The dragged goal's own row is skipped: it IS a drop target (every
@@ -26,8 +25,16 @@ const goalsKeyboardCoordinates = createFreeDroppableKeyboardCoordinates({
 
 function urgencyIndicator(urgency) {
   if (urgency == null) return null;
-  const color = urgency >= 0.7 ? 'bg-red-400' : urgency >= 0.4 ? 'bg-yellow-400' : 'bg-port-success';
-  return <div className={`w-2 h-2 rounded-full ${color}`} title={`${Math.round(urgency * 100)}% urgency`} />;
+  const [Icon, color] = urgency >= 0.7 ? [AlertTriangle, 'text-red-400']
+    : urgency >= 0.4 ? [Minus, 'text-yellow-400']
+      : [Circle, 'text-port-success'];
+  const label = `${Math.round(urgency * 100)}% urgency`;
+  return (
+    <span className="shrink-0" title={label}>
+      <Icon className={`w-3.5 h-3.5 ${color}`} aria-hidden="true" />
+      <span className="sr-only">{label}</span>
+    </span>
+  );
 }
 
 function GoalRowContent({ goal, isDragOverlay }) {
@@ -76,15 +83,12 @@ function GoalRow({ goal, depth, expandedIds, onToggle, onSelect, selectedId, onA
     <>
       <div
         ref={(node) => { setDragRef(node); setDropRef(node); }}
-        className={`flex items-center gap-1 @md/goal-list:gap-1.5 @xl/goal-list:gap-2 pr-2 py-2 pl-[calc(8px+var(--goal-depth)*4px)] @xl/goal-list:pl-[calc(8px+var(--goal-depth)*16px)] cursor-pointer transition-colors border-b border-port-border/50 ${
+        className={`flex items-center gap-1 @md/goal-list:gap-1.5 @xl/goal-list:gap-2 pr-2 py-2 pl-[calc(8px+var(--goal-depth)*4px)] @xl/goal-list:pl-[calc(8px+var(--goal-depth)*16px)] transition-colors border-b border-port-border/50 ${
           isSelected ? 'bg-port-accent/10' : ''
         } ${isOver && !isDragging ? 'bg-port-accent/20 border-port-accent' : 'hover:bg-port-border/30'} ${
           isDragging ? 'opacity-30' : ''
         }`}
         style={{ '--goal-depth': Math.min(depth, 4) }}
-        onClick={() => onSelect(goal)}
-        {...clickableProps(() => onSelect(goal))}
-        onKeyDown={onActivateKeyDown(() => onSelect(goal))}
       >
         {/* dnd-kit's `attributes` make this a focusable role="button", so it
             needs a name of its own — otherwise it is announced as an unlabeled
@@ -94,17 +98,18 @@ function GoalRow({ goal, depth, expandedIds, onToggle, onSelect, selectedId, onA
           aria-label={`Reparent ${goal.title}`}
           {...attributes}
           {...listeners}
-          onClick={e => e.stopPropagation()}
-          onKeyDown={listeners?.onKeyDown}
         >
           <GripVertical className="w-3.5 h-3.5 text-gray-600 hover:text-gray-400" />
         </div>
 
         {hasChildren ? (
           <button
-            onClick={(e) => { e.stopPropagation(); onToggle(goal.id); }}
+            type="button"
+            onClick={() => onToggle(goal.id)}
+            aria-expanded={expanded}
+            aria-label={`${expanded ? 'Collapse' : 'Expand'} ${goal.title}`}
             className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-0.5 text-gray-500 hover:text-white shrink-0"
-            title={expanded ? 'Collapse' : 'Expand'} aria-label={expanded ? 'Collapse' : 'Expand'}
+            title={expanded ? 'Collapse' : 'Expand'}
           >
             {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
           </button>
@@ -112,64 +117,73 @@ function GoalRow({ goal, depth, expandedIds, onToggle, onSelect, selectedId, onA
           <div className="w-[44px] shrink-0" />
         )}
 
-        <div className={`p-1 rounded ${cat.bg} shrink-0`}>
-          <CatIcon className={`w-3.5 h-3.5 ${cat.color}`} />
-        </div>
-
-        <span className="text-sm text-white truncate flex-1 min-w-0">{goal.title}</span>
-
-        {goal.goalType && goal.goalType !== 'standard' && (
-          <span className={`shrink-0 text-xs px-1.5 py-0.5 rounded ${GOAL_TYPE_CONFIG[goal.goalType]?.bg} ${GOAL_TYPE_CONFIG[goal.goalType]?.color}`}>
-            {goal.goalType === 'apex' ? <Crown className="w-3 h-3 inline mr-0.5" /> : <Star className="w-3 h-3 inline mr-0.5" />}
-            <span className="hidden @2xl/goal-list:inline">{GOAL_TYPE_CONFIG[goal.goalType]?.label}</span>
+        <button
+          type="button"
+          onClick={() => onSelect(goal)}
+          aria-current={isSelected ? 'true' : undefined}
+          className="flex flex-1 items-center gap-1.5 @xl/goal-list:gap-2 min-w-0 min-h-[44px] text-left cursor-pointer"
+        >
+          <span className={`p-1 rounded ${cat.bg} shrink-0`}>
+            <CatIcon className={`w-3.5 h-3.5 ${cat.color}`} />
           </span>
-        )}
 
-        {(goal.progress > 0 || goal.todos?.length > 0) && (
-          <span className="hidden @2xl/goal-list:flex shrink-0 items-center gap-1 text-xs text-gray-500">
-            <div className="w-12 h-1.5 rounded-full bg-gray-700 overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all ${
-                  goal.progress >= 100 ? 'bg-port-success' : goal.progress >= 50 ? 'bg-port-accent' : 'bg-port-warning'
-                }`}
-                style={{ width: `${goal.progress ?? 0}%` }}
-              />
-            </div>
-            <span className="w-7 text-right">{goal.progress ?? 0}%</span>
-          </span>
-        )}
+          <span className="text-sm text-white truncate flex-1 min-w-0">{goal.title}</span>
 
-        <span className="hidden @md/goal-list:inline text-xs text-gray-500 shrink-0 px-1.5 py-0.5 rounded bg-gray-800">
-          {HORIZON_OPTIONS.find(h => h.value === goal.horizon)?.label}
-        </span>
+          {goal.goalType && goal.goalType !== 'standard' && (
+            <span className={`shrink-0 text-xs px-1.5 py-0.5 rounded ${GOAL_TYPE_CONFIG[goal.goalType]?.bg} ${GOAL_TYPE_CONFIG[goal.goalType]?.color}`}>
+              {goal.goalType === 'apex' ? <Crown className="w-3 h-3 inline mr-0.5" /> : <Star className="w-3 h-3 inline mr-0.5" />}
+              <span className="hidden @2xl/goal-list:inline">{GOAL_TYPE_CONFIG[goal.goalType]?.label}</span>
+            </span>
+          )}
 
-        {urgencyIndicator(goal.urgency)}
-
-        {goal.linkedActivities?.length > 0 && (
-          <span className="hidden @2xl/goal-list:flex items-center gap-0.5 text-xs text-gray-500 shrink-0" title={`${goal.linkedActivities.length} linked ${goal.linkedActivities.length === 1 ? 'activity' : 'activities'}`}>
-            <Link2 className="w-3 h-3" />
-            {goal.linkedActivities.length}
-          </span>
-        )}
-
-        {goal.tags?.length > 0 && (
-          <div className="hidden @min-[60rem]/goal-list:flex items-center gap-1 shrink-0">
-            {goal.tags.slice(0, 3).map(tag => (
-              <span key={tag} title={tag} className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-port-accent/10 text-port-accent text-xs">
-                <Tag className="w-2.5 h-2.5 shrink-0" />
-                <span className="max-w-16 truncate">{tag}</span>
+          {(goal.progress > 0 || goal.todos?.length > 0) && (
+            <span className="hidden @2xl/goal-list:flex shrink-0 items-center gap-1 text-xs text-gray-500">
+              <span className="w-12 h-1.5 rounded-full bg-gray-700 overflow-hidden">
+                <span
+                  className={`block h-full rounded-full transition-all ${
+                    goal.progress >= 100 ? 'bg-port-success' : goal.progress >= 50 ? 'bg-port-accent' : 'bg-port-warning'
+                  }`}
+                  style={{ width: `${goal.progress ?? 0}%` }}
+                />
               </span>
-            ))}
-            {goal.tags.length > 3 && (
-              <span className="text-xs text-gray-500">+{goal.tags.length - 3}</span>
-            )}
-          </div>
-        )}
+              <span className="w-7 text-right">{goal.progress ?? 0}%</span>
+            </span>
+          )}
+
+          <span className="hidden @md/goal-list:inline text-xs text-gray-500 shrink-0 px-1.5 py-0.5 rounded bg-gray-800">
+            {HORIZON_OPTIONS.find(h => h.value === goal.horizon)?.label}
+          </span>
+
+          {urgencyIndicator(goal.urgency)}
+
+          {goal.linkedActivities?.length > 0 && (
+            <span className="hidden @2xl/goal-list:flex items-center gap-0.5 text-xs text-gray-500 shrink-0" title={`${goal.linkedActivities.length} linked ${goal.linkedActivities.length === 1 ? 'activity' : 'activities'}`}>
+              <Link2 className="w-3 h-3" />
+              {goal.linkedActivities.length}
+            </span>
+          )}
+
+          {goal.tags?.length > 0 && (
+            <span className="hidden @min-[60rem]/goal-list:flex items-center gap-1 shrink-0">
+              {goal.tags.slice(0, 3).map(tag => (
+                <span key={tag} title={tag} className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-port-accent/10 text-port-accent text-xs">
+                  <Tag className="w-2.5 h-2.5 shrink-0" />
+                  <span className="max-w-16 truncate">{tag}</span>
+                </span>
+              ))}
+              {goal.tags.length > 3 && (
+                <span className="text-xs text-gray-500">+{goal.tags.length - 3}</span>
+              )}
+            </span>
+          )}
+        </button>
 
         <button
-          onClick={(e) => { e.stopPropagation(); onAddChild(goal.id); }}
+          type="button"
+          onClick={() => onAddChild(goal.id)}
+          aria-label={`Add sub-goal under ${goal.title}`}
           className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-accent shrink-0"
-          title="Add sub-goal" aria-label="Add sub-goal"
+          title="Add sub-goal"
         >
           <Plus className="w-3.5 h-3.5" />
         </button>
