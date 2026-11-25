@@ -1,16 +1,9 @@
 import ExecutionOptionsSelect from '../../../providers/ExecutionOptionsSelect.jsx';
 import { useState, useEffect } from 'react';
 import useFieldDraft from '../../../../hooks/useFieldDraft';
-import { AlertCircle } from 'lucide-react';
-import CronInput from '../../../CronInput';
-import { describeCron } from '../../../../utils/cronHelpers.js';
 import { AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, DEPFREE_MODE_TASK_TYPES, LOG_TRIAGE_CAPS, LOG_TRIAGE_TASK_TYPES, RELEASE_OPTIONS, RELEASE_OPTIONS_TASK_TYPES, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_TASK_TYPES } from '../../constants';
-import CollapsibleSection from '../../../ui/CollapsibleSection';
-import Banner from '../../../ui/Banner';
-import InfoTooltip from '../../../ui/InfoTooltip';
 import { FormField } from '../../../ui/FormField';
 import { formatDateTime } from '../../../../utils/formatters';
-import ToggleSwitch from '../../../ToggleSwitch';
 import useTaskModelPins from '../../../../hooks/useTaskModelPins';
 import { effectiveModelFor, selectableProviders } from '../../../../utils/providers';
 import EffortSelect from '../../EffortSelect';
@@ -19,14 +12,17 @@ import TaskDependencyPicker from './TaskDependencyPicker';
 import RunTaskButton from './RunTaskButton';
 import TaskDataInputs from '../../TaskDataInputs';
 import PerpetualStatusSummary from './PerpetualStatusSummary';
+import TaskCadenceFields from './TaskCadenceFields';
+import TaskEnabledToggle from './TaskEnabledToggle';
+import TaskPerpetualFields from './TaskPerpetualFields';
+import useTaskScheduleEdit from './useTaskScheduleEdit';
 import PrAndIssueFilterSection from './PrAndIssueFilterSection';
 import ReviewerPolicySection from './ReviewerPolicySection';
 import SwarmAndAgentOptionsSection from './SwarmAndAgentOptionsSection';
 import TaskOverrides from './TaskOverrides';
-import { INTERVAL_DESCRIPTIONS, PERPETUAL_DESCRIPTION, ON_DEMAND_PERPETUAL_LABEL, ON_DEMAND_PERPETUAL_DESCRIPTION, pipelineStages, IMPROVEMENT_DISABLED_TITLE, SAVING_TITLE, managedAgentOptionsFor } from './scheduleConstants';
+import { pipelineStages, IMPROVEMENT_DISABLED_TITLE, SAVING_TITLE, managedAgentOptionsFor } from './scheduleConstants';
 
 export default function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, category: _category, providers, providersLoaded = true, activeProviderId, apps, appsStatus, updating, setUpdating, allTaskTypes, improvementDisabled, dataInputCatalog }) {
-  const [selectedType, setSelectedType] = useState(config.type);
   const [editingPrompt, setEditingPrompt] = useState(false);
   const [promptValue, setPromptValue] = useState(config.prompt || '');
   // Every save routes through here so `updating` covers the whole in-flight PATCH:
@@ -73,55 +69,14 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
   } = useTaskModelPins({ taskType, config, providers, activeProviderId, onUpdate, onBusyChange: setUpdating });
 
   useEffect(() => {
-    setSelectedType(config.type);
     if (!editingPrompt) {
       setPromptValue(config.prompt || '');
     }
-  }, [config.type, config.prompt, editingPrompt]);
+  }, [config.prompt, editingPrompt]);
 
   const activeApps = apps?.filter(app => !app.archived) || [];
 
-  const [cronEditing, setCronEditing] = useState(false);
-  const [recheckEditing, setRecheckEditing] = useState(false);
-  const [cronDirty, setCronDirty] = useState(false);
-  const [recheckDirty, setRecheckDirty] = useState(false);
-
-  const handleTypeChange = async (newType) => {
-    if (newType === 'cron') {
-      // Open the editor rather than saving: the cadence isn't chosen until an
-      // expression is committed (handleCronSave writes both fields together).
-      setCronEditing(true);
-      setSelectedType('cron');
-      return;
-    }
-    setCronEditing(false);
-    setSelectedType(newType);
-    const ok = await runUpdate({ type: newType, cronExpression: null, autoStart: false }).catch(() => false);
-    if (ok === false) setSelectedType(config.type);
-  };
-
-  // Perpetual is orthogonal to the cadence — toggling it never touches `type`,
-  // so a Scheduled task keeps its expression and an On-Demand one stays manual.
-  // No local optimistic state to roll back, so this awaits bare like
-  // handleToggleEnabled rather than attaching its own rejection handler.
-  const handlePerpetualToggle = () => runUpdate({
-    perpetual: !config.perpetual,
-    ...(config.type === 'on-demand' && !config.perpetual ? { autoStart: config.autoStart ?? false } : {}),
-  });
-
-  const handleCronSave = async (expr) => {
-    const ok = await runUpdate({ type: 'cron', cronExpression: expr }).catch(() => false);
-    if (ok !== false) setCronEditing(false);
-  };
-
-  const handleRecheckCronSave = async (expr) => {
-    const ok = await runUpdate({ recheckCron: expr }).catch(() => false);
-    if (ok !== false) setRecheckEditing(false);
-  };
-
-  const isPaused = !config.enabled;
-
-  const handleToggleEnabled = () => runUpdate({ enabled: isPaused });
+  const edit = useTaskScheduleEdit({ config, runUpdate });
 
   const handleSavePrompt = async () => {
     const prompt = promptValue.trim() === '' ? null : promptValue;
@@ -137,12 +92,10 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
   const userInvokable = config.invocation?.userInvokable !== false;
   const invocationDescription = config.invocation?.description || 'Runs as part of another automation and is not directly invokable.';
 
-  const rechecksOnDemand = config.perpetual && selectedType === 'on-demand' && config.autoStart !== false;
-  const hasUnsavedSchedule = selectedType !== config.type || cronDirty || recheckDirty;
   const hasUnsavedPrompt = editingPrompt && promptValue !== (config.prompt || '');
   const runDisabledReason = improvementDisabled ? IMPROVEMENT_DISABLED_TITLE
     : updating ? SAVING_TITLE
-    : hasUnsavedSchedule || hasUnsavedPrompt ? 'Save or discard task changes before running.' : '';
+    : edit.hasUnsavedSchedule || hasUnsavedPrompt ? 'Save or discard task changes before running.' : '';
 
   const activeFields = new Set(config.globalOverrideFields || []);
   const countOverrides = (...fields) => fields.filter((field) => activeFields.has(field)).length;
@@ -161,62 +114,11 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5">
-          <span className="text-sm text-gray-400">Global Pause</span>
-          <InfoTooltip label="What does Global Pause do?">
-            When paused, no scheduled runs will execute for this task — even if individual apps are enabled.
-          </InfoTooltip>
-        </div>
-        <ToggleSwitch
-          enabled={isPaused}
-          onChange={handleToggleEnabled}
-          disabled={updating}
-          ariaLabel={isPaused ? 'Resume runs' : 'Pause all runs'}
-        />
-      </div>
-      {isPaused && (
-        <Banner icon={AlertCircle} align="center">
-          All scheduled runs are paused for this task
-        </Banner>
-      )}
+      <TaskEnabledToggle edit={edit} updating={updating} />
 
-      {rechecksOnDemand && <PerpetualStatusSummary config={config} status={status} />}
+      {edit.rechecksOnDemand && <PerpetualStatusSummary config={config} status={status} />}
 
-      <FormField label="Interval Type" labelClassName="text-sm text-gray-400 block mb-2">
-        <select
-          value={selectedType}
-          onChange={(e) => handleTypeChange(e.target.value)}
-          disabled={updating}
-          className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
-        >
-          <option value="on-demand">{config.perpetual && config.autoStart !== false ? ON_DEMAND_PERPETUAL_LABEL : 'On Demand (manual trigger only)'}</option>
-          <option value="cron">Scheduled (cron)</option>
-        </select>
-        {selectedType === 'on-demand' && (
-          <p className="text-xs text-gray-500 mt-1">{config.perpetual && config.autoStart !== false ? ON_DEMAND_PERPETUAL_DESCRIPTION : INTERVAL_DESCRIPTIONS[selectedType]}</p>
-        )}
-      </FormField>
-
-      {selectedType === 'cron' && (cronEditing || config.type === 'cron') && (
-        <CollapsibleSection
-          label="Edit schedule"
-          summary={describeCron(config.cronExpression)}
-          open={cronEditing}
-          onOpenChange={(open) => {
-            if (open || config.type === 'cron') setCronEditing(open);
-          }}
-          size="bar"
-          keepMounted
-        >
-          <CronInput
-            value={config.cronExpression || '0 7 * * *'}
-            onSave={handleCronSave}
-            onDirtyChange={setCronDirty}
-            onCancel={() => { setCronEditing(false); setSelectedType(config.type); }}
-          />
-        </CollapsibleSection>
-      )}
+      <TaskCadenceFields config={config} edit={edit} updating={updating} />
 
       {pipelineStages(config).length === 0 && (
         <>
@@ -280,68 +182,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
 
       <TaskOverrides label="Schedule & execution options"
         activeCount={countOverrides('perpetual', 'autoStart', 'recheckCron', 'effort', 'executionOptions')}>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <span className="text-sm text-gray-400">Perpetual</span>
-            <InfoTooltip label="What does Perpetual do?">
-              {PERPETUAL_DESCRIPTION}. It applies to either cadence: an On-Demand
-              perpetual task starts manually when automatic starts are off, and a Scheduled
-              one starts its drain on the cron slot and rechecks on the same schedule.
-            </InfoTooltip>
-          </div>
-          <ToggleSwitch
-            enabled={!!config.perpetual}
-            onChange={handlePerpetualToggle}
-            disabled={updating}
-            ariaLabel={config.perpetual ? 'Disable perpetual drain' : 'Enable perpetual drain'}
-          />
-        </div>
-
-        {config.perpetual && selectedType === 'cron' && (
-          <p className="text-xs text-gray-500">
-            Each cron slot starts a drain that runs back-to-back while actionable work remains;
-            once it parks, the same schedule gates the next attempt.
-          </p>
-        )}
-
-        {config.perpetual && selectedType === 'on-demand' && (
-          <label className="flex items-center justify-between gap-3 text-sm text-gray-400">
-            Automatic starts and rechecks
-            <input type="checkbox" checked={config.autoStart !== false} disabled={updating}
-              onChange={event => runUpdate({ autoStart: event.target.checked }).catch(() => {})} />
-          </label>
-        )}
-        {config.perpetual && selectedType === 'on-demand' && config.autoStart === false && (
-          <p className="text-xs text-gray-500">Run Now starts a drain until no actionable work remains. No timer starts or resumes it.</p>
-        )}
-
-        {rechecksOnDemand && (
-          <div>
-            <span className="text-sm text-gray-400 block mb-2">Recheck Cadence</span>
-            {(recheckEditing || config.recheckCron) ? (
-              <CronInput
-                value={config.recheckCron || '0 9 * * *'}
-                onDirtyChange={setRecheckDirty}
-                onSave={handleRecheckCronSave}
-                onCancel={() => setRecheckEditing(false)}
-              />
-            ) : (
-              <button
-                type="button"
-                onClick={() => setRecheckEditing(true)}
-                disabled={updating}
-                className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-left text-sm text-gray-300 hover:border-gray-500"
-              >
-                Daily (default) — click to set a custom recheck schedule
-              </button>
-            )}
-            <p className="text-xs text-gray-500 mt-1">
-              Runs back-to-back while actionable work remains, then parks and re-probes on this schedule.
-              The check is programmatic (no LLM) — e.g. claim-issue counts open, claimable issues; an issue
-              the agent tags <code>needs-input</code> is excluded so the drain converges.
-            </p>
-          </div>
-        )}
+        <TaskPerpetualFields config={config} edit={edit} updating={updating} />
 
           {pipelineStages(config).length === 0 && (
             <>
