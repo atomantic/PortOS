@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { mkdir, writeFile, readFile, realpath, symlink, unlink } from 'fs/promises';
+import { mkdir, writeFile, readFile, readdir, realpath, symlink, unlink } from 'fs/promises';
 import { createHash } from 'crypto';
 import sharp from 'sharp';
 import { trackSpan as fullSpan } from './spriteTestFixtures.js';
@@ -76,6 +76,7 @@ vi.mock('./presentationIdle.js', () => ({
 
 const records = await import('./records.js');
 const { setPublishBinding, publishAtlas, validatePublishBinding, listPublishBindingsForApp } = await import('./publish.js');
+const { spritePublishBindingSchema } = await import('../../lib/spriteValidation.js');
 const { walkPhaseLabels } = await import('./walkBounds.js');
 
 let seq = 0;
@@ -171,6 +172,57 @@ beforeEach(async () => {
   await mkdir(OTHER_APP_REPO, { recursive: true });
 });
 afterAll(() => rmSync(TEST_ROOT, { recursive: true, force: true }));
+
+describe('overlapping publish destinations', () => {
+  const codeBinding = (path) => ({ path, resourcePath: 'res://hero-atlas.png' });
+  const cases = [
+    ['the same atlas and portrait path', { portraitDestPath: BINDING.atlasDestPath },
+      ['atlasDestPath', 'portraitDestPath']],
+    ['equivalent atlas and portrait paths', { portraitDestPath: './assets//sprites/./hero/hero-atlas.png' },
+      ['atlasDestPath', 'portraitDestPath']],
+    ['the atlas sidecar and code source', { codeBinding: codeBinding(sidecarPath(BINDING.atlasDestPath)) },
+      ['layoutDestPath', 'codeBinding.path']],
+    ['the picker sidecar and code source', {
+      presentationIdleDestPath: 'picker/hero.png', codeBinding: codeBinding('picker/./hero.presentation.json'),
+    }, ['presentationIdleLayoutDestPath', 'codeBinding.path']],
+    ['an output used as another output’s parent directory', { portraitDestPath: `${BINDING.atlasDestPath}/portrait.png` },
+      ['atlasDestPath', 'portraitDestPath']],
+  ];
+  if (process.platform === 'darwin' || process.platform === 'win32') {
+    cases.push(['case aliases for the atlas and portrait', { portraitDestPath: BINDING.atlasDestPath.toUpperCase() },
+      ['atlasDestPath', 'portraitDestPath']]);
+  }
+
+  it.each(cases)('refuses to save %s and preserves the previous binding', async (_case, fields, conflict) => {
+    const { id } = await characterWithAtlas();
+    const saved = await setPublishBinding(id, BINDING);
+    const binding = spritePublishBindingSchema.parse({ ...BINDING, ...fields });
+
+    await expect(setPublishBinding(id, binding)).rejects.toMatchObject({
+      status: 400, code: 'PUBLISH_DESTINATIONS_OVERLAP', context: { fields: conflict },
+    });
+    expect((await records.getRecord(id)).publishBinding).toEqual(saved.publishBinding);
+  });
+
+  it.each(cases)('refuses a saved binding with %s before changing any app files or history', async (_case, fields, conflict) => {
+    const { id } = await characterWithAtlas();
+    await addLockedMainReference(id);
+    const strip = Buffer.from('synthetic-picker-strip');
+    presentationIdleMocks.buildPresentationIdle.mockResolvedValue({
+      buffer: strip, sha256: sha256(strip), frameCount: 3, frameRate: 6, cellSize: 512,
+    });
+    // Recreate a binding saved before overlap validation existed.
+    await records.updateRecord(id, { publishBinding: { ...BINDING, ...fields } });
+
+    const refusal = await publishAtlas(id).catch((error) => error);
+    expect(await readdir(APP_REPO)).toEqual([]);
+    await expect(readFile(join(TEST_ROOT, 'sprites', id, 'runtime/publications.json')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+    expect(refusal).toMatchObject({
+      status: 409, code: 'PUBLISH_DESTINATIONS_OVERLAP', context: { fields: conflict },
+    });
+  });
+});
 
 describe('validatePublishBinding / setPublishBinding', () => {
   it('persists a normalized binding on the record', async () => {
