@@ -177,7 +177,7 @@ describe('startRuns', () => {
     generate.mockResolvedValue({ text: 'Let me think about the <svg> and the <div> first. Then I will write the code.', timings: { completionTokens: 48_000 } });
     const [queued] = await startRuns({ models: [model], pages: PAGES.slice(0, 1) });
     const run = await settled(queued.id);
-    expect(run.pages[0]).toMatchObject({ html: '', hitTokenLimit: true });
+    expect(run.pages[0]).toMatchObject({ html: '', error: 'Model returned no HTML', hitTokenLimit: true });
     expect(run.detail.verdict).toBe('failed');
   });
 
@@ -242,6 +242,7 @@ describe('other targets', () => {
     expect(queued).toMatchObject({ backend: 'provider', modelId: 'example-default', route: { providerId, providerName: providers[providerId].name, model: 'example-default', effort: 'high' } });
     const run = await settled(queued.id);
     expect(run.pages[0]).toMatchObject({ html: goodPage, plan: PLAN });
+    expect(run).toMatchObject({ status: 'complete', error: null, detail: { verdict: 'passed', rendered: 1 } });
     // A provider route reports no token count; null, never a made-up zero.
     expect(run.pages[0]).toMatchObject({ completionTokens: null, tokensPerSecond: null });
     expect(runPromptThroughProvider.mock.calls.map(([args]) => args.prompt)).toEqual([queued.planPrompts[0], htmlPagePrompt(PAGES[0], PLAN)]);
@@ -252,11 +253,40 @@ describe('other targets', () => {
     expect(generate).not.toHaveBeenCalled();
   });
 
+  it.each(['', 'I cannot generate that page.'])('fails a provider run whose page reply has no HTML (%j)', async (reply) => {
+    runPromptThroughProvider.mockImplementation(async ({ prompt }) => ({ text: isPlanRequest(prompt) ? PLAN : reply }));
+    const [queued] = await startRuns({ routes: [{ providerId: 'example-api' }], pages: [PAGES[0]] });
+    const run = await settled(queued.id);
+    const failure = { error: 'Model returned no HTML', passed: 0, total: 6, bytes: 0 };
+    expect(run).toMatchObject({
+      status: 'failed',
+      error: failure.error,
+      pages: [{ ...failure, html: '' }],
+      detail: { verdict: 'failed', rendered: 0, pages: [failure] },
+    });
+    expect(writePageFile).not.toHaveBeenCalled();
+  });
+
+  it('keeps the successful page when another provider reply contains no HTML', async () => {
+    runPromptThroughProvider.mockImplementation(async ({ prompt }) => ({
+      text: isPlanRequest(prompt) ? PLAN : prompt === htmlPagePrompt(PAGES[1], PLAN) ? goodPage : 'No page today.',
+    }));
+    const [queued] = await startRuns({ routes: [{ providerId: 'example-api' }], pages: PAGES });
+    const run = await settled(queued.id);
+    expect(run).toMatchObject({
+      status: 'complete',
+      error: null,
+      pages: [{ html: '', error: 'Model returned no HTML', passed: 0 }, { html: goodPage, error: null, passed: 6 }],
+      detail: { verdict: 'partial', rendered: 1, complete: 1 },
+    });
+    expect(writePageFile.mock.calls).toEqual([[queued.id, 1, PAGES[1], goodPage]]);
+  });
+
   it('starts and resumes the restricted OpenCode route with the recorded selection', async () => {
     const route = { providerId: 'opencode-mtplx', model: providers['opencode-mtplx'].models[0], effort: 'xhigh' };
     runPromptThroughProvider.mockRejectedValue(new Error('CLI run timed out'));
     const [queued] = await startRuns({ routes: [route], pages: [PAGES[0]] });
-    expect((await settled(queued.id)).status).toBe('failed');
+    expect(await settled(queued.id)).toMatchObject({ status: 'failed', error: 'CLI run timed out', pages: [{ error: 'CLI run timed out', passed: 0 }] });
     expect(queued.route).toMatchObject(route);
     runPromptThroughProvider.mockImplementation(async ({ beforeExecute, prompt }) => {
       await beforeExecute();

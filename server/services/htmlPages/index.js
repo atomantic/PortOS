@@ -274,6 +274,7 @@ async function processRun(id) {
     await mutateRun(id, (c) => ({ ...c, status: 'generating', startedAt: new Date().toISOString() }));
     console.log(`🧩 HTML pages: ${run.modelId} on ${run.route?.providerName || runtimeLabel(run.backend)} — ${run.themes.length - run.pages.length} page(s)`);
 
+    const noHtmlError = 'Model returned no HTML';
     const generatePages = async (send) => {
       for (const [index, theme] of run.themes.entries()) {
         // A resumed run keeps the pages it already finished.
@@ -304,7 +305,7 @@ async function processRun(id) {
           theme,
           html,
           ...scoreHtmlPage(html),
-          error: result?.error || null,
+          error: result?.error || (html ? null : noHtmlError),
           // The runtime reported using (nearly) the whole token budget: the page, or the reasoning before it, was cut off.
           hitTokenLimit: Number.isFinite(result?.timings?.completionTokens) ? result.timings.completionTokens >= PAGE_MAX_TOKENS * TRUNCATION_SHARE : null,
           elapsedMs: Math.max(0, Date.now() - startedAt),
@@ -340,12 +341,12 @@ async function processRun(id) {
 
     await mutateRun(id, (c) => {
       const detail = scoreHtmlPages(c.pages);
-      const failedAll = c.pages.length > 0 && c.pages.every((p) => !p.html && p.error);
+      const failedAll = detail.rendered === 0;
       return {
         ...c,
         status: failedAll ? 'failed' : 'complete',
         detail,
-        error: failedAll ? c.pages[0].error : null,
+        error: failedAll ? (c.pages[0]?.error || noHtmlError) : null,
         finishedAt: new Date().toISOString(),
       };
     });
