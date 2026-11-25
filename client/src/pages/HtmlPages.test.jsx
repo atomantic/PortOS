@@ -42,6 +42,8 @@ vi.mock('../hooks/useProviderModels', async () => {
       const providers = [
         { id: 'example-cli', name: 'Example CLI', type: 'cli', toolFreeOneShot: true },
         { id: 'example-api', name: 'Example API', type: 'api' },
+        { id: 'opencode-mtplx', name: 'OpenCode MTPLX', type: 'cli', htmlPagesModels: ['example-model'] },
+        { id: 'example-opencode', name: 'Other OpenCode', type: 'cli', htmlPagesModels: [] },
         { id: 'example-tui', name: 'Example TUI', type: 'tui' },
         { id: 'example-sandbox', name: 'Example Sandbox', type: 'cli', authoringOneShot: true },
       ].filter(filter);
@@ -155,6 +157,8 @@ describe('HtmlPages', () => {
     await screen.findByText('Models');
     const picker = within(screen.getByLabelText('Provider 1'));
     expect(picker.getByRole('option', { name: 'Example API' })).toBeInTheDocument();
+    expect(picker.getByRole('option', { name: 'OpenCode MTPLX' })).toBeInTheDocument();
+    expect(picker.queryByRole('option', { name: 'Other OpenCode' })).not.toBeInTheDocument();
     expect(picker.queryByRole('option', { name: 'Example TUI' })).not.toBeInTheDocument();
     expect(picker.queryByRole('option', { name: 'Example Sandbox' })).not.toBeInTheDocument();
     expect(picker.queryByRole('option', { name: 'Custom combination…' })).not.toBeInTheDocument();

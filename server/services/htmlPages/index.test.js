@@ -51,6 +51,11 @@ const providers = {
   'example-cli': { name: 'Example CLI', type: 'cli', command: 'claude' },
   'example-tui': { name: 'Example TUI', type: 'tui', command: 'claude' },
   'example-sandbox': { name: 'Example Sandbox', type: 'cli', command: 'codex' },
+  'opencode-mtplx': {
+    name: 'Example OpenCode MTPLX', type: 'cli', command: 'opencode', mtplxBacked: true,
+    endpoint: 'http://127.0.0.1:8000/v1', models: ['mtplx-inkling-2-mini-optimized-speed'],
+    args: ['run', '--model', 'some-other-model', '--variant', 'low'],
+  },
 };
 vi.mock('../provider/providers.js', () => ({
   getProviderById: vi.fn(async (id) => (Object.hasOwn(providers, id) ? { id, enabled: true, defaultModel: 'example-default', ...providers[id] } : null)),
@@ -247,12 +252,69 @@ describe('other targets', () => {
     expect(generate).not.toHaveBeenCalled();
   });
 
+  it('starts and resumes the restricted OpenCode route with the recorded selection', async () => {
+    const route = { providerId: 'opencode-mtplx', model: providers['opencode-mtplx'].models[0], effort: 'xhigh' };
+    runPromptThroughProvider.mockRejectedValue(new Error('CLI run timed out'));
+    const [queued] = await startRuns({ routes: [route], pages: [PAGES[0]] });
+    expect((await settled(queued.id)).status).toBe('failed');
+    expect(queued.route).toMatchObject(route);
+    runPromptThroughProvider.mockImplementation(async ({ beforeExecute, prompt }) => {
+      await beforeExecute();
+      return { text: isPlanRequest(prompt) ? PLAN : goodPage };
+    });
+    await resumeRun(queued.id);
+    const run = await settled(queued.id);
+    expect(run.status).toBe('complete');
+    expect(run.pages[0]).toMatchObject({ html: goodPage, plan: PLAN });
+    expect(runPromptThroughProvider.mock.lastCall[0]).toMatchObject({
+      provider: expect.objectContaining({ id: route.providerId, args: [] }),
+      model: route.model, effort: route.effort, prompt: htmlPagePrompt(PAGES[0], PLAN),
+      toolFree: true, allowFallback: false, isolateMtplxOpenCode: true,
+    });
+  });
+
+  it.each([
+    { type: 'tui' },
+    { endpoint: 'https://example.com/v1' },
+    { envVars: { OPENCODE_CONFIG_CONTENT: '{"provider":{"mtplx":{"npm":"example-adapter"}}}' } },
+    { credentialBootstrap: { launchCommand: 'example-wrapper' } },
+  ])('refuses an unsupported OpenCode configuration (%j)', async (override) => {
+    const provider = providers['opencode-mtplx'];
+    getProviderById.mockResolvedValueOnce({ ...provider, ...override });
+    await expect(startRuns({ routes: [{ providerId: 'opencode-mtplx', model: provider.models[0] }], pages: [PAGES[0]] }))
+      .rejects.toMatchObject({ code: 'HTML_PAGES_PROVIDER_NOT_TOOL_FREE' });
+    expect(createRun).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unconfigured OpenCode model before queueing', async () => {
+    await expect(startRuns({ routes: [{ providerId: 'opencode-mtplx', model: 'other/unknown' }], pages: [PAGES[0]] }))
+      .rejects.toMatchObject({ code: 'HTML_PAGES_PROVIDER_NOT_TOOL_FREE' });
+    expect(createRun).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ type: 'tui' }, 'cannot run HTML Pages without tools'],
+    [{ endpoint: 'http://127.0.0.1:8001/v1' }, 'provider changed during dispatch'],
+  ])('rechecks the OpenCode route when it changes during preparation (%j)', async (change, message) => {
+    const spawnHarness = vi.fn();
+    runPromptThroughProvider.mockImplementation(async ({ beforeExecute }) => {
+      getProviderById.mockResolvedValueOnce({ ...providers['opencode-mtplx'], enabled: true, defaultModel: 'example-default', id: 'opencode-mtplx', ...change });
+      await beforeExecute();
+      spawnHarness();
+    });
+    const [queued] = await startRuns({ routes: [{ providerId: 'opencode-mtplx', model: providers['opencode-mtplx'].models[0] }], pages: [PAGES[0]] });
+    const run = await settled(queued.id);
+    expect(run.status).toBe('failed');
+    expect(run.pages[0].error).toContain(message);
+    expect(spawnHarness).not.toHaveBeenCalled();
+  });
+
   describe('a local MTPLX route that times out', () => {
     let home;
     const timeoutError = () => runPromptThroughProvider.mockRejectedValue(new Error('CLI run timed out after 1200s'));
     const logLine = (offsetMs, extra = {}) => JSON.stringify({ request_id: `req-${offsetMs}`, logged_at_s: (Date.now() + offsetMs) / 1000, request_model: 'example-default', request_cancelled: true, request_elapsed_s: 5, completion_tokens: 52256, request_last_user_preview: 'PRIVATE-PROMPT', ...extra });
-    const runRoute = async () => {
-      const [queued] = await startRuns({ routes: [{ providerId: 'example-api', effort: 'xhigh' }], pages: PAGES.slice(0, 1) });
+    const runRoute = async (route = { providerId: 'example-api' }) => {
+      const [queued] = await startRuns({ routes: [{ ...route, effort: 'xhigh' }], pages: PAGES.slice(0, 1) });
       return (await settled(queued.id)).pages[0];
     };
     beforeEach(async () => {
@@ -275,6 +337,16 @@ describe('other targets', () => {
       expect(page.html).toBe('');
       expect(JSON.stringify(page)).not.toContain('PRIVATE-PROMPT');
       expect(runPromptThroughProvider.mock.calls[0][0]).toMatchObject({ model: 'example-default', effort: 'xhigh', allowFallback: false });
+    });
+
+    it('matches the served model in an OpenCode timeout even when the route model is prefixed', async () => {
+      timeoutError();
+      isMtplxProvider.mockReturnValue(false);
+      const model = providers['opencode-mtplx'].models[0];
+      await writeFile(join(home, 'logs', 'request-log-8000.jsonl'), `${logLine(10_000, { request_model: model })}\n`);
+      const page = await runRoute({ providerId: 'opencode-mtplx', model: `mtplx/${model}` });
+      expect(page.error).toContain('MTPLX generated 52256 completion tokens');
+      expect(page.html).toBe('');
     });
 
     it.each([

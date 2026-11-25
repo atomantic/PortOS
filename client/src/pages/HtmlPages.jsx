@@ -85,12 +85,16 @@ const installedProviders = (models) => {
 
 /** What a row would run, as a comparable key: two rows naming the same target are one run, which the server refuses. */
 const targetKey = (t) => (t.backend ? `m:${t.backend}:${t.modelId}` : `r:${t.providerId}:${t.model ?? ''}:${t.effort ?? ''}`);
+const supportsHtmlPages = (provider) => supportsStrictToolFreeOneShot(provider)
+  || (provider.enabled !== false && provider.htmlPagesModels?.length > 0);
+const supportsHtmlPagesModel = (model, provider) => supportsStrictToolFreeOneShot(provider)
+  || provider.htmlPagesModels?.includes(model);
 
 /**
  * One model to run: the shared provider > model > effort picker, with the installed local models as extra providers. Reports `{ backend, modelId }` for an installed model, `{ providerId, model, effort }` for a provider route, or null until something is picked.
  */
 function TargetRow({ rowKey, index, installed, duplicate, onChange, onRemove }) {
-  const { providers, loading, selectedProviderId, selectedModel, availableModels, setSelectedProviderId, setSelectedModel } = useProviderModels({ filter: supportsStrictToolFreeOneShot, withEffort: true, silent: true, preselectDefaults: true });
+  const { providers, loading, selectedProviderId, selectedModel, availableModels, setSelectedProviderId, setSelectedModel } = useProviderModels({ filter: supportsHtmlPages, modelFilter: supportsHtmlPagesModel, withEffort: true, silent: true, preselectDefaults: true });
   // An installed pick lives here; the hook only knows configured providers.
   const [local, setLocal] = useState(null);
   const [effort, setEffort] = useState('');

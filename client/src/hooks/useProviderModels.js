@@ -133,8 +133,9 @@ export default function useProviderModels({ filter, allowDefault = false, presel
     }
     const filtered = models.filter((m) => modelFilter(m, provider));
     const defaultModel = provider?.defaultModel;
-    return defaultModel && filterSelectableModels([defaultModel]).length
-      && isProviderModelHardwareCompatible(provider, defaultModel) && modelFilter(defaultModel, provider)
+    // A capability filter can permit a configured-default sentinel as the
+    // selected value, even though it stays out of the explicit model list.
+    return defaultModel && isProviderModelHardwareCompatible(provider, defaultModel) && modelFilter(defaultModel, provider)
       ? defaultModel : (filtered[0] || '');
   }, [modelFilter, withEffort]);
 

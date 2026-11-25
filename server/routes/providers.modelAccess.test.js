@@ -45,6 +45,25 @@ describe('provider payloads carry the model-access-scoped catalog', () => {
     expect(res.status).toBe(200);
     expect(res.body.providers.map(p => [p.id, p.toolFreeOneShot])).toEqual([['nvidia-nim', true], ['headless', true], ['interactive', false], ['agent', false]]);
   });
+
+  it('reports the restricted OpenCode models only for eligible HTML Pages routes', async () => {
+    const model = 'mtplx-inkling-2-mini-optimized-speed';
+    const cli = {
+      id: 'opencode-mtplx', type: 'cli', command: 'opencode', mtplxBacked: true,
+      models: [model, 'mtplx-embedding-model'], defaultModel: model,
+    };
+    const providers = [
+      cli,
+      { ...cli, id: 'opencode-mtplx-tui', type: 'tui', htmlPagesModels: [model] },
+      { ...cli, id: 'opencode-remote', endpoint: 'https://example.com/v1' },
+      { ...cli, id: 'opencode-disabled', enabled: false },
+    ];
+    const app = appWith({ getAllProviders: vi.fn().mockResolvedValue({ providers }) });
+    const res = await request(app).get('/api/providers');
+    expect(res.status).toBe(200);
+    expect(res.body.providers.map((provider) => provider.htmlPagesModels)).toEqual([[model], [], [], []]);
+    expect(res.body.providers[0].toolFreeOneShot).toBe(false);
+  });
   it('GET / narrows models, keeps the full catalog, and still strips the key', async () => {
     const app = appWith({
       getAllProviders: vi.fn().mockResolvedValue({ activeProvider: 'nvidia-nim', providers: [NVIDIA] }),

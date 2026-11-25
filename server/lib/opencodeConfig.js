@@ -14,7 +14,11 @@
  * reports it) and `<id> does not support tools` (filtered by `_fetchOllamaToolCapableModels`).
  */
 
+import { existsSync } from 'node:fs';
+import { userInfo } from 'node:os';
+import { join } from 'node:path';
 import {
+  bareLocalModelId,
   getOpencodeLocalProviderNamespace,
   isOpencodeCommand,
   prefixOpencodeModel,
@@ -30,6 +34,9 @@ import { PORTS } from './ports.js';
 import { SPLASH_CONTEXT, SPLASH_MODEL, SPLASH_ORIGIN } from './splashRuntime.js';
 
 import { isTruthyMeta } from './metadataFlags.js';
+import { isLocalInstanceEndpoint } from './localEndpoint.js';
+import { isGenerationModel } from './localModelHeuristics.js';
+import { executionOptionsError } from './executionOptions.js';
 const LLAMA_SERVER_BASE_URL = `http://127.0.0.1:${PORTS.LLAMA_SERVER}/v1`;
 const VLLM_QWEN_BASE_URL = `http://127.0.0.1:${PORTS.VLLM_QWEN}/v1`;
 const SGLANG_QWEN_BASE_URL = `http://127.0.0.1:${PORTS.SGLANG_QWEN}/v1`;
@@ -341,6 +348,68 @@ const DENY_ALL_TOOLS = Object.freeze({ '*': false });
 const DENY_ALL_PERMISSIONS = 'deny';
 const DENY_ALL_AGENT_PERMISSIONS = Object.freeze({ edit: 'deny', bash: 'deny', webfetch: 'deny' });
 
+export const isMtplxOpenCodeCli = (provider) => provider?.type === 'cli'
+  && isOpencodeCommand(provider.command)
+  && getOpencodeLocalProviderNamespace(provider) === 'mtplx';
+
+// OpenCode 1.19 loads system policies after the inline config. Leave those
+// installations ineligible rather than shadowing their managed configuration.
+function hasManagedOpenCodeConfig() {
+  let directory = '/etc/opencode';
+  if (process.platform === 'darwin') {
+    directory = '/Library/Application Support/opencode';
+    const preferences = '/Library/Managed Preferences';
+    const domain = 'ai.opencode.managed.plist';
+    let username = 'user';
+    try { username = userInfo().username; } catch { /* OpenCode uses the same fallback. */ }
+    if (existsSync(join(preferences, domain)) || existsSync(join(preferences, username, domain))) return true;
+  }
+  if (process.platform === 'win32') directory = join(process.env.ProgramData || 'C:\\ProgramData', 'opencode');
+  return ['opencode.json', 'opencode.jsonc'].some((file) => existsSync(join(directory, file)));
+}
+
+/**
+ * The base for the restricted MTPLX launch, or null when the route can't use it.
+ * Only the compatible local adapter and the selected model's context limits
+ * carry over. Ambient files and provider-supplied env are isolated at spawn.
+ */
+export function restrictedMtplxOpenCodeConfig(provider, model) {
+  if (!isMtplxOpenCodeCli(provider) || provider.authOnly || provider.credentialBootstrap
+    || Object.keys(provider.executionOptions || {}).length || hasManagedOpenCodeConfig()) return null;
+  const id = bareLocalModelId(model, 'mtplx');
+  const models = Array.isArray(provider.models) ? provider.models : [];
+  if (!id || model !== model.trim() || !isGenerationModel(id) || !/^[\w][\w.:-]*$/.test(id)
+    || ![provider.defaultModel, ...models].some((listed) => bareLocalModelId(listed, 'mtplx') === id)) return null;
+
+  const raw = provider.envVars?.OPENCODE_CONFIG_CONTENT;
+  const stored = parseOpencodeConfigContent(raw);
+  if (raw != null && !stored) return null;
+  const entry = stored?.provider?.mtplx;
+  const standard = OPENCODE_LOCAL_BASE_PROVIDERS.mtplx;
+  const baseURL = entry?.options?.baseURL ?? provider.endpoint ?? standard.options.baseURL;
+  if (entry && entry.npm !== standard.npm) return null;
+  if (typeof baseURL !== 'string' || !/^https?:\/\//i.test(baseURL) || !isLocalInstanceEndpoint(baseURL)) return null;
+  const endpoint = new URL(baseURL);
+  if (endpoint.username || endpoint.password || endpoint.search || endpoint.hash
+    || !['/v1', '/v1/'].includes(endpoint.pathname)) return null;
+  const storedLimit = entry?.models?.[id]?.limit;
+  const limit = Object.fromEntries(['context', 'input', 'output']
+    .filter((key) => Number.isSafeInteger(storedLimit?.[key]) && storedLimit[key] > 0)
+    .map((key) => [key, storedLimit[key]]));
+  return {
+    enabled_providers: ['mtplx'],
+    // A title request competes for the same daemon and uses a separate effort.
+    agent: { title: { disable: true } },
+    provider: {
+      mtplx: {
+        ...standard,
+        options: { baseURL },
+        ...(limit.context && limit.output ? { models: { [id]: { limit } } } : {}),
+      },
+    },
+  };
+}
+
 /**
  * Harden an OpenCode config for the `no-tool` public-review posture. OpenCode has no
  * argv equivalent of codex's `--sandbox read-only`, so its tool posture lives in
@@ -450,16 +519,19 @@ function applyOpenCodeContext(config, namespace, override) {
  *
  * @param {{command?:string, ollamaBacked?:boolean, lmstudioBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, gatewayBacked?:string, orcarouterBacked?:boolean, models?:string[], defaultModel?:string|null, apiKey?:string, orcarouterApiKey?:string, envVars?:object}} provider
  * @param {string|null|undefined} model - the model being run (may differ from defaultModel)
- * @param {{safetyProfile?:string|null,toolFree?:boolean}} [options] - apply the no-tool config for a public review or a private one-shot.
+ * @param {{safetyProfile?:string|null,toolFree?:boolean,restrictedMtplx?:boolean}} [options] - apply a no-tool config and optionally restrict it to the isolated MTPLX recipe.
  * @returns {{OPENCODE_CONFIG_CONTENT?: string}} env vars to merge
  */
-export function buildOpencodeEnvVars(provider, model, { safetyProfile = null, toolFree = false } = {}) {
+export function buildOpencodeEnvVars(provider, model, { safetyProfile = null, toolFree = false, restrictedMtplx = false } = {}) {
   const providerKey = getOpencodeLocalProviderNamespace(provider);
   if (!isOpencodeCommand(provider?.command)) {
     return {};
   }
   // Parse the stored config as the base so user customization is preserved.
-  const base = parseOpencodeConfigContent(provider?.envVars?.OPENCODE_CONFIG_CONTENT);
+  const base = restrictedMtplx
+    ? restrictedMtplxOpenCodeConfig(provider, model)
+    : parseOpencodeConfigContent(provider?.envVars?.OPENCODE_CONFIG_CONTENT);
+  if (restrictedMtplx && (!base || !toolFree)) throw executionOptionsError('OpenCode MTPLX cannot start with the tool-free configuration');
   // A NAMESPACE-LESS record with no stored config is a hand-made plain `opencode`
   // provider running against the user's `~/.config/opencode`; `OPENCODE_CONFIG_CONTENT`
   // REPLACES that file wholesale, so synthesizing one would drop their providers.
