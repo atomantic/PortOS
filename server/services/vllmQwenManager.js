@@ -16,7 +16,8 @@
  * failure comes back as a value the caller turns into a terminal frame.
  */
 
-import { chmod, mkdir, mkdtemp, rename, rm, writeFile } from 'fs/promises';
+import { createHash } from 'crypto';
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'fs/promises';
 import { totalmem } from 'os';
 import { dirname, join } from 'path';
 
@@ -52,16 +53,20 @@ export const VLLM_UPSTREAM_REPO = 'https://github.com/syv-ai/qwen38-27b-rtx3090'
 // This revision builds vLLM 0.27.1 locally and documents the WSL2 settings PortOS supplies.
 export const VLLM_UPSTREAM_REVISION = '18db5cb3b56e63e30f64eee7901f0e97e632ab32';
 
-// Keep this revision's runtime private, and run only the image built from its source.
-const VLLM_COMPOSE_OVERRIDE = `services:
-  prepare:
+// Compose's image namespace is shared with other checkouts on the same daemon.
+// Start and prepare must resolve the same local build, even across a retry.
+function vllmComposeOverride(tag) {
+  return `services:
+  prepare: &built
+    image: portos-vllm-qwen:${tag}
     pull_policy: never
   single: &local
-    pull_policy: never
+    <<: *built
     ports: !override
       - "127.0.0.1:\${PORT:-${PORTS.VLLM_QWEN}}:\${PORT:-${PORTS.VLLM_QWEN}}"
   batch: *local
 `;
+}
 
 /** A daemon question, and a compose `up` on an image that is already built. */
 const CONTROL_TIMEOUT_MS = 60 * 1000;
@@ -194,6 +199,29 @@ async function applyVllmApiKeyToProviders(apiKey, emit) {
   return stored;
 }
 
+// Stage every build input before publishing. A retry after a bad bundle must
+// never find an apparently reusable, unpatched checkout.
+async function installVllmArtifacts(staging, git) {
+  const bundle = new URL('../../docker/vllm-qwen/', import.meta.url);
+  const manifest = await readFile(new URL('manifest.sha256', bundle), 'utf8');
+  const [revision, ...checksums] = manifest.split(/\r?\n/);
+  if (revision !== `# HyperQwen ${VLLM_UPSTREAM_REVISION}`) {
+    throw new Error('vLLM artifact manifest does not match the pinned source revision.');
+  }
+  const destination = join(staging, 'docker', 'portos');
+  await mkdir(destination);
+  for (const name of ['provision.patch', 'install-apt.sh', 'cuda-packages.sha256', 'requirements.lock']) {
+    const bytes = await readFile(new URL(name, bundle));
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    if (!checksums.includes(`${digest}  ${name}`)) {
+      throw new Error(`vLLM artifact checksum mismatch for ${name}.`);
+    }
+    await writeFile(join(destination, name), bytes, { flag: 'wx' });
+  }
+  await bufferedSpawnOrThrow(git, ['-C', staging, 'apply', '--index', 'docker/portos/provision.patch'], { timeoutMs: CONTROL_TIMEOUT_MS });
+  return createHash('sha256').update(manifest).digest('hex');
+}
+
 async function checkoutVllmSource(dir, emit) {
   const git = findCommandOnPath('git');
   if (!git) return { success: false, error: '`git` was not found on PortOS\'s PATH, so the compose project cannot be checked out.' };
@@ -219,7 +247,8 @@ async function checkoutVllmSource(dir, emit) {
     if (stdout.trim() !== VLLM_UPSTREAM_REVISION) {
       return { success: false, error: `vLLM source revision mismatch: expected ${VLLM_UPSTREAM_REVISION}.` };
     }
-    await writeFile(join(staging, 'compose.override.yaml'), VLLM_COMPOSE_OVERRIDE, { flag: 'wx' });
+    const imageTag = await installVllmArtifacts(staging, git);
+    await writeFile(join(staging, 'compose.override.yaml'), vllmComposeOverride(imageTag), { flag: 'wx' });
     await rename(staging, dir);
     return { success: true };
   } catch (err) {

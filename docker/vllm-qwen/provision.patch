@@ -1,0 +1,84 @@
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -9,19 +9,17 @@
+ # that only happens once.
+ #
+ #   docker compose --profile single up -d      (see docs/docker.md)
+-FROM nvidia/cuda:13.0.1-base-ubuntu24.04
++FROM nvidia/cuda@sha256:995e80db6d0c3a53d56bd00bba48a0ebd633b67b99a57e16acf9a306e7c744a7
+
+ ENV DEBIAN_FRONTEND=noninteractive PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1
+-RUN apt-get update && apt-get install -y --no-install-recommends \
+-      python3.12 python3.12-venv python3.12-dev \
+-      cuda-nvcc-13-0 cuda-cudart-dev-13-0 libcurand-dev-13-0 \
+-      build-essential patch curl ca-certificates \
+-    && rm -rf /var/lib/apt/lists/*
++COPY docker/portos/install-apt.sh docker/portos/cuda-packages.sha256 /tmp/portos-vllm/
++RUN bash /tmp/portos-vllm/install-apt.sh
+
+ WORKDIR /app
+-RUN python3.12 -m venv venv && venv/bin/pip install --upgrade pip
+-COPY docker/requirements.txt docker/requirements.txt
+-RUN venv/bin/pip install -r docker/requirements.txt
++COPY docker/portos/requirements.lock docker/portos/requirements.lock
++RUN python3.12 -m venv venv \
++    && venv/bin/pip --isolated install --only-binary=:all: --require-hashes -r docker/portos/requirements.lock \
++    && venv/bin/pip check
+
+ COPY . .
+ RUN set -e; SP=$(venv/bin/python -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' | tail -n1); \
+--- a/docker/prepare.sh
++++ b/docker/prepare.sh
+@@ -32,7 +32,8 @@
+ if "mtp.draft_lm_head.weight_packed" not in idx or not os.path.exists(d + "mtp_draft_vocab_ids.pt"): todo.append("draft")
+ if os.environ.get("FAST_VARIANT", "1") != "0" and not os.path.exists(d[:-1] + "-fast/model.safetensors.index.json"):
+     todo.append("fast")
+-if os.environ.get("DFLASH2", "1") != "0" and not os.path.exists(os.path.dirname(d[:-1]) + "/Qwen3.8-27B-DFlash2-W4A16/model.safetensors"):
++drafter = os.path.join(os.path.dirname(d[:-1]), "Qwen3.8-27B-DFlash2-W4A16")
++if os.environ.get("DFLASH2", "1") != "0" and not all(os.path.isfile(os.path.join(drafter, f)) for f in ("config.json", "model.safetensors")):
+     todo.append("dflash2")
+ print(" ".join(todo))
+ EOF
+@@ -41,7 +42,7 @@
+ TODO=$(state)
+ if [ "$TODO" = "download" ]; then
+   echo "== downloading $HF_REPO -> $BASE (~19.5 GB, resumable)"
+-  hf download "$HF_REPO" --local-dir "$BASE"
++  hf download "$HF_REPO" --revision 1f05c441c4e64ae0549de44fa9ea5a6d43610314 --local-dir "$BASE"
+   TODO=$(state)
+ fi
+ [ "$TODO" = "download" ] && { echo "prepare: download incomplete (shards missing after hf download)"; exit 1; }
+@@ -55,10 +56,9 @@
+     fast)    echo "== fetch_fast_variant.py (int4-GPTQ lm_head/MTP + own-output draft vocab, ~1 GB)"
+              python prepare/fetch_fast_variant.py "$BASE" "$BASE-fast" ;;
+     dflash2) echo "== fetch_dflash2.py (W4A16 DFlash2 drafter for SPEC=dflash2, ~1 GB; optional)"
+-             python prepare/fetch_dflash2.py "$(dirname "$BASE")/Qwen3.8-27B-DFlash2-W4A16" \
+-               || echo "prepare: DFlash2 drafter not fetched (optional: SPEC=dflash2 unavailable; DFLASH2=0 silences this)" ;;
++             python prepare/fetch_dflash2.py "$(dirname "$BASE")/Qwen3.8-27B-DFlash2-W4A16" ;;
+   esac
+ done
+-LEFT=$(state | sed 's/\bdflash2\b//')
++LEFT=$(state)
+ [ -z "${LEFT// /}" ] || { echo "prepare: steps still missing after run: $LEFT"; exit 1; }
+ echo "prepare: model ready at $BASE$([ "${FAST_VARIANT:-1}" != 0 ] && echo " (+ $BASE-fast)")"
+--- a/prepare/fetch_fast_variant.py
++++ b/prepare/fetch_fast_variant.py
+@@ -32,6 +32,7 @@
+     f"no tokenizer.json in {S} — the base model dir is incomplete; re-run the download "
+     f"(README: Setup) before building the fast variant")
+ hub = snapshot_download("syvai/qwen3.8-27b-3090-fast-variant",
++                        revision="124c14e7e8c7d2f5402933b9af368e772a9fcf0c",
+                         allow_patterns=["model-00007-of-00007.safetensors", "model_extra_tensors.safetensors",
+                                         "mtp_draft_vocab_ids.pt", "config.json", "model.safetensors.index.json"])
+ for f in ["model-00007-of-00007.safetensors", "model_extra_tensors.safetensors", "mtp_draft_vocab_ids.pt",
+--- a/prepare/fetch_dflash2.py
++++ b/prepare/fetch_dflash2.py
+@@ -15,6 +15,7 @@
+ REPO = "incoai/Qwen3.8-27B-DFlash2" if BF16 else "syvai/Qwen3.8-27B-DFlash2-W4A16"
+ D = args[0] if args else os.path.join(ROOT, "models", "Qwen3.8-27B-DFlash2" + ("" if BF16 else "-W4A16"))
+ os.makedirs(D, exist_ok=True)
+-snapshot_download(REPO, local_dir=D, allow_patterns=["*.json", "*.safetensors", "README.md"])
++revision = "dedf8df68adfb1afeaf7b7480c0a0243108177b4" if BF16 else "4d30ec736ffc6b8688dc2ae2b502d9b48bdec279"
++snapshot_download(REPO, revision=revision, local_dir=D, allow_patterns=["*.json", "*.safetensors", "README.md"])
+ print("drafter ready:", D)
+ print("serve with: SPEC=dflash2 bash single-user/start_qwen.sh")
