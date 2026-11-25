@@ -157,10 +157,17 @@ describe('forceSpawnTask — stale running holder (#14039)', () => {
 
     expect(await forceSpawnTask(TASK_ID)).toEqual({ success: true, taskId: TASK_ID });
 
+    // Only the block is cleared, under a fence naming it: the store merges
+    // metadata, so a task edit that landed since the read is neither overwritten
+    // nor allowed to hand a different block to this lift.
     expect(vi.mocked(updateTask).mock.calls).toEqual([[TASK_ID, {
       status: 'pending',
-      metadata: { ...cooling.metadata, blockedReason: undefined, blockedCategory: undefined, blockedAt: undefined, cooldownUntil: undefined },
-    }, 'user', { expectedStatus: 'blocked', suppressDequeue: true }]]);
+      metadata: { blockedReason: undefined, blockedCategory: undefined, blockedAt: undefined, cooldownUntil: undefined },
+    }, 'user', {
+      expectedStatus: 'blocked',
+      expectedMetadata: { blockedCategory: 'orphan-cooldown', lastOrphanedAgentId: HOLDER_ID },
+      suppressDequeue: true,
+    }]]);
     expect(taskReadyEmits(emit)).toEqual([['task:ready', revived]]);
   });
 
