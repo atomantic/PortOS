@@ -979,6 +979,9 @@ export function _resetMtplxServerStateForTests({
 /** Record real MTPLX traffic. Never call this from a status poll — see `markDaemonUsed`. */
 export const markMtplxUsed = () => onDemand.markUsed();
 
+/** Wait for a just-started server to answer (stops early when PM2 reports it dead); `{ready, reason}`. */
+export const waitForMtplxReady = (endpoint) => onDemand.waitForReady(endpoint);
+
 /**
  * Bring MTPLX up if the idle reaper (or the user) stopped it, and mark it used
  * either way. See `onDemand.ensureRunning` for the shared mechanism; MTPLX's

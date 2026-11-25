@@ -109,9 +109,10 @@ you are already on.
 
 Then, either way:
 
-4. Use **Refresh Models** on the provider once the server is up; PortOS reads
-   `/v1/models` on demand. The seeded model id is `mtplx-qwen38-27b-optimized-speed` — refresh it if your
-   running server publishes a different one.
+4. The presets that front MTPLX update their model lists on their own when PortOS starts the server, or
+   downloads or removes a checkpoint (PortOS reads `/v1/models`, never generates). The seeded model id is
+   `mtplx-qwen38-27b-optimized-speed`. Use **Refresh Models** on the provider only for a server you started
+   yourself.
 5. Choose **MTPLX (local MTP)** for supported non-coding tasks, or choose an
    **OpenCode MTPLX** CLI/TUI preset for a CoS coding task.
 

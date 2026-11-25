@@ -53,6 +53,8 @@ const vllmManager = vi.hoisted(() => ({
   startVllmQwenProject: vi.fn(async () => ({ success: true })),
 }));
 vi.mock('./vllmQwenManager.js', () => vllmManager);
+const providerSync = vi.hoisted(() => ({ syncRuntimeProviderModels: vi.fn(async () => false) }));
+vi.mock('./localRuntimeProviderSync.js', () => providerSync);
 // The SGLang project on disk, and the CUDA probe its start row consults BEFORE
 // docker — mocked so no assertion depends on the developer's actual GPU.
 // PARTIAL: the env-var name and directory leaf the placement loop is keyed on
@@ -316,6 +318,25 @@ describe('runLocalRuntimeSetup', () => {
 
     expect(mtplx.startMtplxServer).toHaveBeenCalledWith(expect.objectContaining({ port: 8010 }));
     expect(result).toMatchObject({ success: true, message: expect.stringContaining('http://127.0.0.1:8010/v1') });
+  });
+
+  it('refreshes the presets fronting a managed runtime once its start is confirmed, and only then', async () => {
+    pathLookup.findCommandOnPath.mockReturnValue('/opt/homebrew/bin/mtplx');
+    const io = { emit: vi.fn() };
+    const restore = pinPlatform('darwin');
+    probe.probeOpenAiModels.mockResolvedValueOnce(unreachable).mockResolvedValueOnce(unreachable).mockResolvedValueOnce(reachable(['mtplx']));
+    await runLocalRuntimeSetup('mtplx', { endpoint: 'http://127.0.0.1:8000/v1', io });
+    expect(providerSync.syncRuntimeProviderModels).toHaveBeenCalledWith({ kind: 'mtplx', io });
+
+    // An already-answering daemon, a failed start and an Ollama start (own sync) refresh nothing.
+    providerSync.syncRuntimeProviderModels.mockClear();
+    probe.probeOpenAiModels.mockResolvedValueOnce(reachable(['mtplx']));
+    await runLocalRuntimeSetup('mtplx', { endpoint: 'http://127.0.0.1:8000/v1', io });
+    probe.probeOpenAiModels.mockResolvedValue(unreachable);
+    mtplx.startMtplxServer.mockResolvedValueOnce({ success: false, error: 'boom' });
+    await runLocalRuntimeSetup('mtplx', { endpoint: 'http://127.0.0.1:8000/v1', io });
+    restore();
+    expect(providerSync.syncRuntimeProviderModels).not.toHaveBeenCalled();
   });
 
   it('waits out a cold model load rather than the launcher\'s short beat', async () => {

@@ -1069,6 +1069,9 @@ const waitForEndpoint = (endpoint) => waitForDaemonReady({
   pollMs: relaunchPollDelayMs,
 });
 
+/** Wait for a just-started server to answer (stops early when PM2 reports it dead); `{ready, reason}`. */
+export const waitForLlamaServerReady = waitForEndpoint;
+
 /**
  * Stop whatever is running and bring `next` up in its place, putting `previous`
  * back when the new launch line is rejected or never answers.

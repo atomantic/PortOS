@@ -845,6 +845,7 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
       emit,
       isCancelled: () => clientGone,
       action,
+      io: req.app.get('io'),
     }).catch((err) => ({ success: false, error: err.message }));
 
     if (holdsLock) { runtimeSetupInFlight = false; holdsLock = false; }
