@@ -65,7 +65,7 @@ Install never downloads model weights or starts inference.
 
 ## Regeneration and audit
 
-Use a private patched uv **0.13.6**. Choose a cutoff at least three days old,
+Use hash-verified uv **0.13.7** (or a reviewed patched successor). Choose a cutoff at least three days old,
 update `registryCutoff` in the profile, and regenerate both closures:
 
 ```sh

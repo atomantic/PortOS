@@ -49,10 +49,12 @@ SLUG=acestep15-cuda
 LABEL="ACE-Step 1.5 CUDA"
 DOC=docs/ACESTEP15_CUDA.md
 CUDA_SCOPED="torch torchcodec"
+LINUX_CUDA_SCOPED="torchao"
 ```
 
 Scope Torch and retained CUDA-local packages (currently Torchcodec) to the
-explicit CUDA index; Torchvision/TorchAudio stay on PyPI. Run the
+explicit CUDA index; Linux also routes `torchao==0.16.0+cu126` there, while
+Windows keeps PyPI `torchao==0.16.0`. Torchvision/TorchAudio stay on PyPI. Run the
 [OSV audit](./RUNTIME_LOCKS.md#osv-audit) with `acestep15-cuda`.
 
 ## Fresh install and readiness evidence

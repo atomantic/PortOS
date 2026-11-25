@@ -9,9 +9,10 @@ no provider quota. See the ADR
 for why it exists and what was rejected.
 
 It is an **optional** feature, off by default. Turn it on in **Settings >
-Features** or **Models > LLMs > jev**. The management page and navigation stay
-visible at `/models/llms/jev` even when integrations are disabled. Browsing the
-page never installs or loads the model.
+Features** or **Models > Decision Classifiers > Jev**. The management page and
+navigation stay visible at `/models/decision-classifiers/jev` even when
+integrations are disabled (`/models/llms/jev` is a legacy redirect). Browsing
+the page never installs or loads the model.
 
 ## What gets installed
 
@@ -21,7 +22,7 @@ page never installs or loads the model.
 | License | MIT, ungated — **no Hugging Face token or model-card approval** |
 | Download | 4 files, ~9.1 GB (weights dominate). The repository's 35B variant, its trained MLP heads, and its `code/` directory are never fetched and never executed |
 | Runtime | A dedicated virtualenv at `data/python/venv-jev` (fallback `~/.portos/venv-jev`) — separate from Prompt Guard's and from the image/video runtimes |
-| Packages | `torch`, `transformers`, `safetensors`, `huggingface_hub`, pinned in `server/lib/jev.js` |
+| Packages | Hash-locked `torch`, `transformers`, `safetensors`, and `huggingface_hub` from `scripts/ml/requirements/requirements-guard-runtime.lock.txt`; `server/lib/jev.js` holds version-probe assertions |
 | Port | `PORTS.JEV` = 5566, loopback only, bound on demand |
 
 Nothing above happens at boot, on a status refresh, or on first request. The
@@ -29,10 +30,11 @@ download runs only from an explicit operator install.
 
 ## Install and diagnose
 
-Models → LLMs → jev shows the four install stages (`python`, `venv`,
-`packages`, `model`), the failed runtime check, expected package versions, and
-the last failed installation stage with its diagnosis. Overall **ready** is true
-only when the pinned packages import *and* the pinned snapshot is cached.
+Models → Decision Classifiers → Jev (`/models/decision-classifiers/jev`) shows
+the four install stages (`python`, `venv`, `packages`, `model`), the failed
+runtime check, expected package versions, and the last failed installation
+stage with its diagnosis. Overall **ready** is true only when the pinned
+packages import *and* the pinned snapshot is cached.
 
 For unattended local diagnosis, run from the PortOS checkout:
 
@@ -46,8 +48,11 @@ progress goes to stderr. `--status` never installs, downloads, or loads a model.
 Run these from the primary installation after updating it — CoS worktrees
 deliberately use isolated data and ignore `PORTOS_DATA_ROOT`.
 
-Install prefers an already-installed `uv` package installer and falls back to
-Python pip, for machines where uv can reach the package index but pip cannot.
+Install uses the hash-pinned `requirements-guard-runtime.lock.txt` closure via
+PortOS-private uv 0.13.7 at `~/.portos/tools/uv-0.13.7` (bootstrapped from
+`scripts/ml/requirements/requirements-uv-bootstrap.lock.txt`), never an ambient
+`uv` found on `PATH`. If the private uv cannot be provisioned, it falls back
+to Python pip with the same hash-verified, wheel-only lock install.
 Repair retries the dedicated runtime without touching Prompt Guard or the image
 and video environments.
 
@@ -91,12 +96,17 @@ nothing from the sidecar's stderr ever reaches a payload or a log line.
 
 | Code | Meaning |
 |---|---|
-| `jev-not-installed` | No dedicated virtualenv, or the pinned snapshot is not cached. Install from Models → LLMs → jev. |
+| `jev-not-installed` | No dedicated virtualenv, or the pinned snapshot is not cached. Install from Models → Decision Classifiers → Jev. |
 | `jev-start-failed` | The sidecar could not be started, or died before reporting a loaded model. Check the install stages, then free memory — the checkpoint needs roughly its 9 GB on disk plus room to load. |
 | `jev-timeout` | A scoring request exceeded its timeout (default 30 s). |
 | `jev-request-invalid` | The premise or hypothesis list failed the bounds in `server/lib/jev.js`, or fewer than two options reached `decide()`. |
 | `jev-response-invalid` | The sidecar's reply did not match the wire schema, or described a different hypothesis list than the one asked about. |
 | `jev-premise-too-large` | The premise exceeded 32,000 characters, or the rendered pair exceeded the model window. The request is refused, not truncated. |
+| `jev-head-not-found` | The adopted project head is missing; discard it to return to the stock scorer. |
+| `jev-head-invalid` | The adopted project head could not be read or failed validation; discard it. |
+| `jev-head-too-large` | The adopted project head is larger than PortOS will load; discard it. |
+| `jev-head-unreadable` | The adopted project head's file could not be read; discard it. |
+| `jev-head-revision-mismatch` | The head was trained on a different scorer version; retrain or discard it. |
 
 Install-stage failures reuse the shared Python diagnosis vocabulary —
 `package-missing`, `package-version-mismatch`, `network-failed`,
