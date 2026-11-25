@@ -1568,24 +1568,39 @@ describe('browser shard ownership', () => {
     }
   });
 
-  it('gives document render its own runner in both four-shard profiles', () => {
-    for (const profile of ['full', 'smoke']) {
-      const shard = index => browserShardSlice(BROWSER_SUITES, { index, count: 4 }, profile);
-      expect(shard(1)).toEqual(['server/services/musicVideo/documentRender.browser.test.js']);
-      expect(shard(3)).toContain('server/services/musicVideo/documentTemplateParity.browser.test.js');
-      expect(shard(4)).toContain('server/services/musicVideo/documentRenderGeneration.browser.test.js');
-    }
+  it.each(['full', 'smoke'])('distributes the observed memo misses in the four-shard %s profile', (profile) => {
+    const expected = [
+      [
+        'server/services/greyboxRender.browser.test.js',
+        'server/services/musicVideo/documentTemplateParity.browser.test.js',
+      ],
+      ['server/routes/musicVideoRichAuthoring.browser.test.js'],
+      ['server/services/musicVideo/animaticCapture.browser.test.js'],
+      [
+        'server/routes/catalogGreyboxViewer.browser.test.js',
+        'server/routes/musicVideoProductionReview.browser.test.js',
+        'server/routes/musicVideoSongRevision.browser.test.js',
+      ],
+    ];
+    const misses = expected.flat();
+    expect(expected.map((_, i) => browserShardSlice(misses, { index: i + 1, count: 4 }, profile))).toEqual(expected);
   });
 
-  it('keeps the four heaviest serial capture suites on separate four-shard runners', () => {
-    const heavy = [
-      'server/services/musicVideo/documentRender.browser.test.js',
-      'server/services/htmlComposition/index.test.js',
-      'server/services/musicVideo/animaticCapture.browser.test.js',
-      'server/lib/filmLookGpu.browser.test.js',
-    ];
-    const shardOf = (file) => [1, 2, 3, 4].find(index => browserShardSlice(BROWSER_SUITES, { index, count: 4 }, 'smoke').includes(file));
-    expect(heavy.map(shardOf)).toEqual([1, 2, 3, 4]);
+  it.each(['full', 'smoke'])('keeps heavy serial capture on separate four-shard %s runners', (profile) => {
+    const shardOf = file => [1, 2, 3, 4].find(index => browserShardSlice([file], { index, count: 4 }, profile).includes(file));
+    expect(shardOf('server/services/musicVideo/documentRender.browser.test.js')).toBe(1);
+    expect(shardOf('server/services/htmlComposition/index.test.js')).toBe(2);
+    expect(shardOf('server/lib/filmLook.browser.test.js')).toBe(2);
+    expect(shardOf('server/services/musicVideo/animaticCapture.browser.test.js')).toBe(3);
+    expect(shardOf('server/lib/filmLookGpu.browser.test.js')).toBe(4);
+    expect(shardOf('server/services/musicVideo/documentRenderGeneration.browser.test.js')).toBe(4);
+  });
+
+  it('applies the smoke GPU override only to two-shard plans', () => {
+    const gpu = 'server/lib/filmLookGpu.browser.test.js';
+    expect(browserShardSlice([gpu], { index: 2, count: 2 }, 'full')).toEqual([]);
+    expect(browserShardSlice([gpu], { index: 2, count: 2 }, 'smoke')).toEqual([gpu]);
+    expect(browserShardSlice([gpu], { index: 4, count: 4 }, 'smoke')).toEqual([gpu]);
   });
 });
 

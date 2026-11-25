@@ -40,28 +40,30 @@ const BROWSER_SUITE_OWNERS = {
 };
 export const BROWSER_SUITES = Object.keys(BROWSER_SUITE_OWNERS);
 
-// Keep the four heaviest serial capture suites on separate shards (#17748).
-// Give document render its own runner and spread the generation and template
-// parity suites across shards 4 and 3 respectively (#18335).
+// Keep document render, HTML composition, animatic capture, and GPU film look
+// on separate runners (#17748). On hosted run 45642241181, memo misses put
+// 107s of animatic capture, 48s of template parity, and 14s of production
+// review on one runner while document render hit the memo. Spread those misses
+// while keeping serial capture and parallel work in their existing projects.
 const FOUR_SHARD_OWNERS = {
   'server/lib/filmLook.browser.test.js': 2,
   'server/lib/filmLookGpu.browser.test.js': 4,
   'server/lib/musicVideo/musicVideoTitleCard.browser.test.js': 4,
   'server/routes/catalogGreyboxViewer.browser.test.js': 4,
-  'server/routes/musicVideoProductionReview.browser.test.js': 3,
+  'server/routes/musicVideoProductionReview.browser.test.js': 4,
   'server/routes/musicVideoRichAuthoring.browser.test.js': 2,
   'server/routes/musicVideoSongRevision.browser.test.js': 4,
-  'server/services/codeAnimation/export.realBrowser.test.js': 3,
+  'server/services/codeAnimation/export.realBrowser.test.js': 1,
   'server/services/fableLoom/static-player/player.browser.test.js': 3,
   'server/services/federatedMedia/sourceAudio.browser.test.js': 4,
-  'server/services/browserVaultFill.browser.test.js': 3,
-  'server/services/greyboxRender.browser.test.js': 2,
+  'server/services/browserVaultFill.browser.test.js': 1,
+  'server/services/greyboxRender.browser.test.js': 1,
   'server/services/htmlComposition/index.test.js': 2,
   'server/services/musicVideo/animaticCapture.browser.test.js': 3,
   'server/services/musicVideo/compositionRender.test.js': 4,
   'server/services/musicVideo/documentRender.browser.test.js': 1,
   'server/services/musicVideo/documentRenderGeneration.browser.test.js': 4,
-  'server/services/musicVideo/documentTemplateParity.browser.test.js': 3,
+  'server/services/musicVideo/documentTemplateParity.browser.test.js': 1,
   'server/services/musicVideo/documentFilmLook.browser.test.js': 4,
   'server/services/musicVideo/documentVignette.browser.test.js': 2,
   'server/services/musicVideo/filmLookFinish.browser.test.js': 3,
@@ -73,16 +75,16 @@ const FOUR_SHARD_OWNERS = {
   'server/services/musicVideo/publish/linkedin.browser.test.js': 4,
   'server/services/musicVideo/publish/x.browser.test.js': 2,
   'server/services/musicVideo/publish/sunoHook.browser.test.js': 4,
-  'server/routes/manualUpdateRecovery.browser.test.js': 3,
-  'server/routes/autofixerUi.browser.test.js': 3,
+  'server/routes/manualUpdateRecovery.browser.test.js': 1,
+  'server/routes/autofixerUi.browser.test.js': 1,
   'server/services/musicVideo/overlayTextService.browser.test.js': 4,
   'server/services/codeAnimation/poster.realBrowser.test.js': 2,
 };
 
-// Smoke omits rich authoring on shard 2 and some document-render cases.
 // Moving the serial GPU suite (82s on smoke run 45081031945) splits it from
-// the 106s animatic capture. Leave the full-profile owners intact.
-const SMOKE_SUITE_OWNERS = {
+// the 106s animatic capture. Four-shard smoke already
+// separates GPU film look from animatic capture and shares the full owners.
+const TWO_SHARD_SMOKE_OVERRIDES = {
   'server/lib/filmLookGpu.browser.test.js': 2,
 };
 
@@ -97,7 +99,7 @@ export function browserShardSlice(files, { index, count }, profile) {
   const selected = new Set(files);
   const unknown = [...selected].filter(file => !BROWSER_SUITES.includes(file));
   if (unknown.length) throw new Error(`Unregistered browser shard inputs: ${unknown.join(', ')}`);
-  const overrides = profile === 'smoke' ? SMOKE_SUITE_OWNERS : {};
+  const overrides = count === 2 && profile === 'smoke' ? TWO_SHARD_SMOKE_OVERRIDES : {};
   return BROWSER_SUITES.filter((file, position) => {
     let owner = (position % count) + 1;
     if (count === 2) owner = overrides[file] ?? BROWSER_SUITE_OWNERS[file];
