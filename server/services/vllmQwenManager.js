@@ -5,7 +5,7 @@
  * the `.env` must say; this module runs the commands (same split `mtplxServerManager.js` and
  * `llamaServerManager.js` have from `localRuntimeSetup.js`).
  *
- *   - **Provision** (`provisionVllmQwenProject`) — clone, write `.env`, build, prepare. This
+ *   - **Provision** (`provisionVllmQwenProject`) — verify source, write `.env`, build, prepare. This
  *     is the ~30 GB and runs ONLY behind the checklist's `provision-start` action, whose
  *     button names the payload. `install()` in the registry still refuses: Docker Desktop, the
  *     NVIDIA Container Toolkit and WSL2 are host-level operator decisions.
@@ -16,10 +16,11 @@
  * failure comes back as a value the caller turns into a terminal frame.
  */
 
-import { chmod } from 'fs/promises';
+import { chmod, mkdir, mkdtemp, rename, rm } from 'fs/promises';
 import { totalmem } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 
+import { bufferedSpawnOrThrow } from '../lib/bufferedSpawn.js';
 import { atomicWrite, formatBytes, tryReadFile } from '../lib/fileUtils.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
@@ -48,12 +49,14 @@ import { ensureWslProjectDir } from './wslProjectPlacement.js';
 
 /** Upstream's frozen packaging of patched vLLM + the requantized checkpoint. */
 export const VLLM_UPSTREAM_REPO = 'https://github.com/syv-ai/qwen38-27b-rtx3090';
+// This revision builds vLLM 0.27.1 locally and documents the WSL2 settings PortOS supplies.
+export const VLLM_UPSTREAM_REVISION = '18db5cb3b56e63e30f64eee7901f0e97e632ab32';
 
 /** A daemon question, and a compose `up` on an image that is already built. */
 const CONTROL_TIMEOUT_MS = 60 * 1000;
 
-/** Bound on the clone: source and a compose file; the 30 GB arrives in the two later steps. */
-const CLONE_TIMEOUT_MS = 30 * 60 * 1000;
+/** Bound on fetching source; the 30 GB arrives in the two later steps. */
+const SOURCE_FETCH_TIMEOUT_MS = 30 * 60 * 1000;
 
 /**
  * The image build and the weights prepare. Sized for a slow line: a bound that kills a 20 GB
@@ -180,8 +183,44 @@ async function applyVllmApiKeyToProviders(apiKey, emit) {
   return stored;
 }
 
+async function checkoutVllmSource(dir, emit) {
+  const git = findCommandOnPath('git');
+  if (!git) return { success: false, error: '`git` was not found on PortOS\'s PATH, so the compose project cannot be checked out.' };
+
+  let staging;
+  try {
+    const parent = dirname(dir);
+    await mkdir(parent, { recursive: true });
+    // Inspection treats any existing project directory as operator-managed. Publish only a
+    // verified checkout so a failed provision cannot enter the reuse branch on retry.
+    staging = await mkdtemp(join(parent, '.portos-vllm-'));
+    emit(`Fetching vLLM source revision ${VLLM_UPSTREAM_REVISION} from ${VLLM_UPSTREAM_REPO} for ${dir}…`);
+    const steps = [
+      ['initialize source checkout', ['init', staging], CONTROL_TIMEOUT_MS],
+      ['fetch pinned source revision', ['-C', staging, 'fetch', '--no-tags', '--depth', '1', VLLM_UPSTREAM_REPO, VLLM_UPSTREAM_REVISION], SOURCE_FETCH_TIMEOUT_MS],
+      ['check out pinned source revision', ['-C', staging, 'checkout', '--detach', 'FETCH_HEAD'], CONTROL_TIMEOUT_MS],
+    ];
+    for (const [step, args, timeoutMs] of steps) {
+      const result = await runStreamingCommand(git, args, emit, { timeoutMs, splitRe: PROGRESS_SPLIT_RE });
+      if (!result.success) return { success: false, error: `Could not ${step}: ${result.error}` };
+    }
+    const { stdout } = await bufferedSpawnOrThrow(git, ['-C', staging, 'rev-parse', 'HEAD'], { timeoutMs: CONTROL_TIMEOUT_MS });
+    if (stdout.trim() !== VLLM_UPSTREAM_REVISION) {
+      return { success: false, error: `vLLM source revision mismatch: expected ${VLLM_UPSTREAM_REVISION}.` };
+    }
+    await rename(staging, dir);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: `Could not install verified vLLM source: ${err.message}` };
+  } finally {
+    if (staging) await rm(staging, { recursive: true, force: true }).catch((err) => {
+      emit(`Could not remove the temporary vLLM source checkout at ${staging}: ${err.message}`);
+    });
+  }
+}
+
 /**
- * Clone / build / prepare the upstream compose project, streaming every step. Each step is
+ * Check out / build / prepare the upstream compose project, streaming every step. Each step is
  * skipped once landed (upstream's `prepare` is idempotent and resumes), so a cancelled run
  * costs minutes rather than 20 GB.
  *
@@ -209,11 +248,8 @@ export async function provisionVllmQwenProject({ emit, isCancelled }) {
   const alreadyPrepared = vllmProjectSetupState(project) === 'ready';
 
   if (!project.hasProject) {
-    const git = findCommandOnPath('git');
-    if (!git) return { success: false, error: '`git` was not found on PortOS\'s PATH, so the compose project cannot be cloned.' };
-    emit(`Cloning ${VLLM_UPSTREAM_REPO} into ${dir}…`);
-    const cloned = await runStreamingCommand(git, ['clone', VLLM_UPSTREAM_REPO, dir], emit, { timeoutMs: CLONE_TIMEOUT_MS, splitRe: PROGRESS_SPLIT_RE });
-    if (!cloned.success) return { success: false, error: `cloning ${VLLM_UPSTREAM_REPO} failed: ${cloned.error}` };
+    const checkout = await checkoutVllmSource(dir, emit);
+    if (!checkout.success) return checkout;
     project = await inspectVllmQwenProject();
   } else {
     emit(alreadyPrepared

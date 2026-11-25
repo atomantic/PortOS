@@ -15,6 +15,17 @@ vi.mock('../lib/processEnv.js', () => pathLookup);
 const streaming = vi.hoisted(() => ({ runStreamingCommand: vi.fn(async () => ({ success: true })) }));
 vi.mock('../lib/streamingSpawn.js', () => streaming);
 
+const buffered = vi.hoisted(() => ({ bufferedSpawnOrThrow: vi.fn() }));
+vi.mock('../lib/bufferedSpawn.js', async (importOriginal) => ({ ...(await importOriginal()), ...buffered }));
+
+const sourceFiles = vi.hoisted(() => ({
+  mkdir: vi.fn(async () => {}),
+  mkdtemp: vi.fn(),
+  rename: vi.fn(async () => {}),
+  rm: vi.fn(async () => {}),
+}));
+vi.mock('fs/promises', async (importOriginal) => ({ ...(await importOriginal()), ...sourceFiles }));
+
 // The compose project on disk. Mocked so the suite never stats a real checkout.
 // PARTIAL for the rest of the module: `vllmProjectSetupState` is a pure
 // classifier, and stubbing it would let a wrong reading of a real inspection
@@ -45,9 +56,16 @@ const providers = vi.hoisted(() => ({
 }));
 vi.mock('./provider/providers.js', () => providers);
 
-import { provisionVllmQwenProject, readVllmQwenSetupState, startVllmQwenProject, VLLM_UPSTREAM_REPO } from './vllmQwenManager.js';
+import {
+  provisionVllmQwenProject,
+  readVllmQwenSetupState,
+  startVllmQwenProject,
+  VLLM_UPSTREAM_REPO,
+  VLLM_UPSTREAM_REVISION,
+} from './vllmQwenManager.js';
 
 const DIR = '/home/example/qwen-serving';
+const STAGING = '/home/example/.portos-vllm-stage';
 /** What `wsl.exe` says on a Windows host with an ordinary distro. */
 const WSL_DIR = '\\\\wsl.localhost\\Ubuntu\\home\\example\\qwen-serving';
 const emptyProject = { dir: DIR, hasProject: false, composeFile: null, hasWeights: null, weightsRoot: null };
@@ -90,6 +108,8 @@ beforeEach(() => {
   files.tryReadFile.mockResolvedValue(null);
   providers.getAllProviders.mockResolvedValue({ activeProvider: null, providers: [] });
   streaming.runStreamingCommand.mockResolvedValue({ success: true });
+  buffered.bufferedSpawnOrThrow.mockResolvedValue({ stdout: `${VLLM_UPSTREAM_REVISION}\n` });
+  sourceFiles.mkdtemp.mockResolvedValue(STAGING);
 });
 
 afterEach(() => {
@@ -121,25 +141,74 @@ describe('readVllmQwenSetupState', () => {
 });
 
 describe('provisionVllmQwenProject', () => {
-  it('clones, writes .env, builds, prepares — in that order', async () => {
+  it('verifies and installs the pinned checkout before writing .env, building and preparing', async () => {
     stageFreshProject();
     const lines = [];
 
     const result = await provision(lines);
 
     expect(result.success).toBe(true);
-    expect(streaming.runStreamingCommand).toHaveBeenCalledWith(
-      '/usr/bin/git',
-      ['clone', VLLM_UPSTREAM_REPO, DIR],
-      expect.any(Function),
-      expect.objectContaining({ splitRe: expect.any(RegExp) }),
+    expect(VLLM_UPSTREAM_REVISION).toMatch(/^[0-9a-f]{40}$/);
+    expect(streaming.runStreamingCommand.mock.calls.map(([cmd, args]) => [cmd, args])).toEqual([
+      ['docker', ['version', '--format', '{{.Server.Version}}']],
+      ['/usr/bin/git', ['init', STAGING]],
+      ['/usr/bin/git', ['-C', STAGING, 'fetch', '--no-tags', '--depth', '1', VLLM_UPSTREAM_REPO, VLLM_UPSTREAM_REVISION]],
+      ['/usr/bin/git', ['-C', STAGING, 'checkout', '--detach', 'FETCH_HEAD']],
+      ['docker', ['compose', 'build']],
+      ['docker', ['compose', 'run', '--rm', 'prepare']],
+    ]);
+    expect(buffered.bufferedSpawnOrThrow).toHaveBeenCalledWith(
+      '/usr/bin/git', ['-C', STAGING, 'rev-parse', 'HEAD'], expect.objectContaining({ timeoutMs: expect.any(Number) }),
     );
+    expect(buffered.bufferedSpawnOrThrow.mock.invocationCallOrder[0]).toBeGreaterThan(streaming.runStreamingCommand.mock.invocationCallOrder[3]);
+    expect(sourceFiles.rename).toHaveBeenCalledWith(STAGING, DIR);
+    expect(sourceFiles.rename).toHaveBeenCalledAfter(buffered.bufferedSpawnOrThrow);
+    expect(files.atomicWrite).toHaveBeenCalledAfter(sourceFiles.rename);
+    expect(files.atomicWrite.mock.invocationCallOrder[0]).toBeLessThan(streaming.runStreamingCommand.mock.invocationCallOrder[4]);
+    expect(emitted(lines)).toMatch(/~9\.5 GB/);
+  });
+
+  it('refuses a mismatched HEAD before publishing the checkout, writing .env or running compose', async () => {
+    stageFreshProject();
+    buffered.bufferedSpawnOrThrow.mockResolvedValueOnce({ stdout: `${'0'.repeat(40)}\n` });
+
+    const result = await provision();
+
+    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/vLLM source revision mismatch/) });
+    expect(sourceFiles.rename).not.toHaveBeenCalled();
+    expect(sourceFiles.rm).toHaveBeenCalledWith(STAGING, { recursive: true, force: true });
+    expect(files.atomicWrite).not.toHaveBeenCalled();
+    expect(dockerCalls()).toEqual(['version --format {{.Server.Version}}']);
+  });
+
+  it.each(['fetch', 'checkout'])('aborts safely when Git %s fails', async (operation) => {
+    stageFreshProject();
+    streaming.runStreamingCommand.mockImplementation(async (cmd, args) => (
+      cmd === '/usr/bin/git' && args[2] === operation ? { success: false, error: 'Git source error' } : { success: true }
+    ));
+
+    const result = await provision();
+
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('Git source error') });
+    expect(buffered.bufferedSpawnOrThrow).not.toHaveBeenCalled();
+    expect(sourceFiles.rename).not.toHaveBeenCalled();
+    expect(sourceFiles.rm).toHaveBeenCalledWith(STAGING, { recursive: true, force: true });
+    expect(files.atomicWrite).not.toHaveBeenCalled();
+    expect(dockerCalls()).toEqual(['version --format {{.Server.Version}}']);
+  });
+
+  it('reuses an existing operator checkout without running Git', async () => {
+    project.inspectVllmQwenProject.mockResolvedValue(clonedProject);
+
+    expect(await provision()).toEqual({ success: true });
+    expect(sourceFiles.mkdtemp).not.toHaveBeenCalled();
+    expect(buffered.bufferedSpawnOrThrow).not.toHaveBeenCalled();
+    expect(streaming.runStreamingCommand.mock.calls.every(([cmd]) => cmd === 'docker')).toBe(true);
     expect(dockerCalls()).toEqual([
       'version --format {{.Server.Version}}',
       'compose build',
       'compose run --rm prepare',
     ]);
-    expect(emitted(lines)).toMatch(/~9\.5 GB/);
   });
 
   it('writes the tool-parser line every time, and the WSL2 pair only on a WSL2 engine', async () => {
