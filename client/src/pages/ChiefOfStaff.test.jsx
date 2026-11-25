@@ -1903,6 +1903,21 @@ describe('ChiefOfStaff tab switches', () => {
     expect(api.getApps).toHaveBeenCalledTimes(2);
   });
 
+  it('retries a failed provider invalidation after an earlier good load', async () => {
+    withFakeTimers();
+    await renderWithProbe('tasks');
+    expect(api.getProviders).toHaveBeenCalledTimes(1);
+
+    api.getProviders.mockRejectedValueOnce(new Error('offline'));
+    await act(async () => { getSocketHandler('providers:changed')(); await vi.advanceTimersByTimeAsync(450); });
+    expect(api.getProviders).toHaveBeenCalledTimes(2);
+
+    await goTo('agents');
+    expect(api.getProviders).toHaveBeenCalledTimes(3);
+    await goTo('tasks');
+    expect(api.getProviders).toHaveBeenCalledTimes(3);
+  });
+
   it('reads agents again when Agents is re-entered, because events were ignored while it was away', async () => {
     await renderWithProbe('agents');
     expect(api.getCosAgents).toHaveBeenCalledTimes(1);
@@ -2150,6 +2165,39 @@ describe('ChiefOfStaff slice reads against concurrent refreshes (#18643)', () =>
     });
     await settle();
     expect(screen.queryByText('Coding')).toBeNull();
+    expect(screen.getAllByText('Thinking').length).toBeGreaterThan(0);
+  });
+
+  it('keeps a spawn event\'s task message through the queue reconciliation it triggers', async () => {
+    withFakeTimers();
+    api.getCosStatus.mockResolvedValue({ running: true, activeAgents: 1, config, stats: {} });
+    renderWithProbe('config');
+    await waitForPageShell();
+    await settle();
+    await act(async () => {
+      getSocketHandler('cos:agent:spawned')({ id: 'agent-example', metadata: { taskDescription: 'Example described work' } });
+      await vi.advanceTimersByTimeAsync(SPEAKING_MS + 50);
+    });
+    await settle();
+    expect(screen.getAllByText('Running: Example described work').length).toBeGreaterThan(0);
+  });
+
+  it('ends the Reviewing state at the next tab switch once no agent is active', async () => {
+    withFakeTimers();
+    api.getCosStatus.mockResolvedValue({ running: true, activeAgents: 0, config, stats: {} });
+    renderWithProbe('config');
+    await waitForPageShell();
+    await settle();
+    await act(async () => {
+      getSocketHandler('cos:agent:completed')({ id: 'agent-example', result: { success: true } });
+      await vi.advanceTimersByTimeAsync(SPEAKING_MS + 50);
+    });
+    await settle();
+    expect(screen.getAllByText('Reviewing').length).toBeGreaterThan(0);
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'go briefing' })); });
+    await settle();
+    expect(screen.queryByText('Reviewing')).toBeNull();
     expect(screen.getAllByText('Thinking').length).toBeGreaterThan(0);
   });
 
