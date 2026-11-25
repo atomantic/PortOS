@@ -128,11 +128,15 @@ function InputToggle({ id, label, input, onChange }) {
 /** The card's "Sent to the model" block: the exact prompt and the inputs going with it. `shown` false (the shot editor is on its frames view) holds the prompt preview request until the clip view shows. */
 export default function SceneRenderInputs({ id, request, onChange, grokPreview = null, previewRevision = null, shown = true }) {
   const { authored, prompt, promptAdditions, promptUsed, maxChars, endFrame, songAudio, wholeLine } = request;
-  const preview = useModelInputPreview(previewVideoPrompt, grokPreview, { enabled: !!grokPreview && shown, revision: previewRevision });
+  // Background project updates may affect the server composer. Recheck without
+  // pulling the chips out from under someone reading or scrolling the card.
+  const preview = useModelInputPreview(previewVideoPrompt, grokPreview, {
+    enabled: !!grokPreview && shown, revision: previewRevision, retainOnContextChange: true,
+  });
   const over = maxChars != null && prompt.length > maxChars;
   return (
-    <div className="min-w-0 space-y-1 rounded border border-port-border p-2 text-xs" data-testid="render-inputs">
-      <div className="text-port-text-muted">Sent to the model</div>
+    <div className="min-w-0 space-y-1 rounded border border-port-border p-2 text-xs" data-testid="render-inputs" aria-busy={preview.refreshing}>
+      <div className="text-port-text-muted">Sent to the model{preview.refreshing && <span> · Refreshing preview…</span>}</div>
       {!promptUsed
         ? <p className="text-port-text-muted">No prompt: this model takes the still and the song only.</p>
         : prompt
