@@ -7,6 +7,7 @@ import { canonicalSnapshotChecksum } from '../snapshotChecksum.js';
 import { isFilmLookNeutral } from '../filmLook.js';
 import { musicVideoOverscan } from './musicVideoFilmLook.js';
 import { activeShotColorMatch } from '../shotColorMatch.js';
+import { shotImageTreatment } from './musicVideoImageTreatments.js';
 import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
 import { isCatalogMediaReferenceId, isLegacyCatalogReference, musicVideoClipConditioningReferences, musicVideoClipReferenceChoices, musicVideoPanelArtReferences, musicVideoSceneCastIds, musicVideoShotSheetCastIds } from './musicVideoConditioning.js';
 import { presentCharacterReferenceStates } from './musicVideoCharacterReferenceAge.js';
@@ -18,10 +19,17 @@ const takeKinds = { plate: 'image', clip: 'video', endPlate: 'endImage' };
 const checksum = (value) => canonicalSnapshotChecksum(value);
 const selectedTake = (scene, role, assetId = scene?.[slots[role]]) => (scene?.takes || [])
   .find((take) => take.kind === takeKinds[role] && take.assetId === assetId);
-const assetRef = (scene, role, assetId = scene?.[slots[role]]) => ({
-  role, sceneId: scene.sceneId, assetId: assetId || null,
-  revision: checksum({ assetId: assetId || null, inputs: selectedTake(scene, role, assetId)?.inputAssets || [] }),
-});
+const assetRef = (scene, role, assetId = scene?.[slots[role]]) => {
+  const treatment = role !== 'clip' && shotImageTreatment(scene, assetId);
+  return { role, sceneId: scene.sceneId, assetId: assetId || null,
+    revision: checksum({ assetId: assetId || null, inputs: selectedTake(scene, role, assetId)?.inputAssets || [],
+      ...(treatment ? { imageTreatment: treatment } : {}) }) };
+};
+const photoTreatmentEntries = (scene) => {
+  if (!scene.photoSequence || scene.photoSequence.enabled === false) return [];
+  const selected = (scene.photoSequence.imageIds || []).map(id => shotImageTreatment(scene, id)).filter(Boolean);
+  return selected.length ? [['photoTreatments', selected]] : [];
+};
 // #16418 entered main at this instant. A final export on a record last touched
 // before it could not have captured the four new keys. Do not infer age from
 // the absence of a version marker: newer v1 records used the same version.
@@ -51,6 +59,7 @@ const layerRef = (scene, { legacy = false } = {}) => ({ role: 'layer', sceneId: 
     // An image effect over a still changes the render; a still without one keeps its evidence.
     .concat(scene.imageEffect ? [['imageEffect', scene.imageEffect], ['imageEffectSec', scene.imageEffectSec ?? null]] : [])
     .concat(scene.photoSequence && scene.photoSequence.enabled !== false ? [['photoSequence', scene.photoSequence]] : [])
+    .concat(photoTreatmentEntries(scene))
     // An effect from the start frame to the end frame renders the end frame too.
     // Use end frame off plays the start frame only, so it changes the render.
     .concat(scene.imageEffect && isEndFrameImageEffect(scene.imageEffect) ? [['endImageId', scene.endImageId ?? null]] : [])

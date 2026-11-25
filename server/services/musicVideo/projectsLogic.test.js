@@ -1328,6 +1328,7 @@ describe('create-schema parity', () => {
     clipModelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video',
     imageEffect: 'end-fade',
     imageEffectSec: 2,
+    imageTreatments: [{ imageId: 'photo-example.png', type: 'quartz', date: '1985-07-14', format: 'ymd', position: 'bottom-right', color: '#ff8528', size: 0.045, opacity: 0.88, intensity: 0.6 }],
     photoSequence: { enabled: true, imageIds: ['photo-example.png'], intervalFrames: 6, rate: 'frames' },
     cardText: 'Card',
     codeOverlay: true,

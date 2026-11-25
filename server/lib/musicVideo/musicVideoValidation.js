@@ -16,6 +16,7 @@ import { filmLookSchema } from '../filmLookValidation.js';
 import { TEMPLATE_EFFECT_CONTROLS } from './musicVideoTemplateEffects.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT, MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT, MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT } from '../referenceLimits.js';
 import { z } from 'zod';
+import { musicVideoImageTreatmentsSchema } from './musicVideoImageTreatmentValidation.js';
 
 export const musicVideoTemplateEffectsSchema = z.object(Object.fromEntries(TEMPLATE_EFFECT_CONTROLS.map(({ id }) => [id, z.number().min(0).max(1).nullable().optional()]))).strict();
 import { TIMELINE_BEAT_KINDS, TIMELINE_BEATS_MAX, TIMELINE_LENGTH_MAX_MIN, TIMELINE_PACES, PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLOR_IDS, PREVIZ_POSES, PREVIZ_TRACKS_MAX, PREVIZ_VEHICLES_MAX, PREVIZ_VISIBLE_MAX, VEHICLE_SPEED_MAX_METERS_PER_MIN } from './musicVideoPrevizLimits.js';
@@ -616,6 +617,7 @@ const sceneLayerFields = {
   // it takes to finish; null clears it.
   imageEffect: z.enum(MUSIC_VIDEO_IMAGE_EFFECTS).nullable().optional(),
   imageEffectSec: z.number().min(IMAGE_EFFECT_SEC_RANGE.min).max(IMAGE_EFFECT_SEC_RANGE.max).nullable().optional(),
+  imageTreatments: musicVideoImageTreatmentsSchema.optional(),
   photoSequence: z.object({
     enabled: z.boolean().optional(),
     imageIds: z.array(z.string().min(1).max(256).regex(/^[^/\\\\]+$/)).max(PHOTO_SEQUENCE_LIMIT),

@@ -1,4 +1,5 @@
 import { assertMusicVideoMediaSelections, musicVideoMediaMode } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
+import { shotImageTreatmentAspect } from '../../lib/musicVideo/musicVideoImageTreatments.js';
 import { isEndFrameImageEffect, MUSIC_VIDEO_IMAGE_EFFECTS, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideo/musicVideoImageEffects.js';
 import { musicVideoGlitchRuntime } from '../../lib/musicVideo/musicVideoGlitchCanvas.js';
 import { applyCameraCutDefaults, glitchFrameParams, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, sceneWipeCuts, transitionGlitchFrames } from '../../lib/musicVideo/musicVideoTransitions.js';
@@ -137,6 +138,17 @@ function documentTargetFrame(contract, project) {
  * `history` is the video history list; `probe(path)` measures a clip the
  * history did not (hosted renders record no geometry).
  */
+async function documentStill(project, scene, id) {
+  if (!id) return null;
+  const path = safeUnder(PATHS.images, id);
+  if (!path || !existsSync(path)) return null;
+  if (scene.imageTreatments?.length) {
+    const { treatedShotImageMedia } = await import('./imageTreatments.js');
+    return treatedShotImageMedia(scene, id, path, shotImageTreatmentAspect(project, scene, id));
+  }
+  return { path, ext: (/\.([a-z0-9]{2,5})$/i.exec(id)?.[1] || 'png').toLowerCase().replace('jpeg', 'jpg') };
+}
+
 export async function resolveSceneMedia(project, { history = [], probe = async () => null, strictLayers = false, retimed = false } = {}) {
   assertMusicVideoMediaSelections(project);
   const byId = new Map((Array.isArray(history) ? history : []).map((entry) => [entry.id, entry]));
@@ -146,17 +158,15 @@ export async function resolveSceneMedia(project, { history = [], probe = async (
     const layer = documentSceneVisualLayer(project, scene, { generated: strictLayers });
     // A code shot (#10297) is drawn by the document itself; it is handed no media.
     if (layer === 'code' || (strictLayers && layer === 'card')) continue;
-    const endPath = isEndFrameImageEffect(scene.imageEffect) && scene.endFrameOff !== true && scene.endImageId
-      ? safeUnder(PATHS.images, scene.endImageId) : null;
-    const end = endPath && existsSync(endPath)
-      ? { path: endPath, ext: (/\.([a-z0-9]{2,5})$/i.exec(scene.endImageId)?.[1] || 'png').toLowerCase().replace('jpeg', 'jpg') } : null;
+    const end = isEndFrameImageEffect(scene.imageEffect) && scene.endFrameOff !== true
+      ? await documentStill(project, scene, scene.endImageId) : null;
     const sequence = scenePhotoSequence(scene);
     if (sequence) {
-      const photos = sequence.imageIds.map(id => ({ path: safeUnder(PATHS.images, id), ext: (/\.([a-z0-9]{2,5})$/i.exec(id)?.[1] || 'png').toLowerCase() }));
-      if (!photos.length || photos.some(photo => !photo.path || !existsSync(photo.path))) {
+      const photos = await Promise.all(sequence.imageIds.map(id => documentStill(project, scene, id)));
+      if (!photos.length || photos.some(photo => !photo)) {
         throw new ServerError('A selected sequence photo is missing. Pick the missing photos before rendering.', {
           status: 404, code: 'MISSING_SEQUENCE_PHOTOS', context: { sceneId: scene.sceneId,
-            imageIds: sequence.imageIds.filter((id, i) => !photos[i].path || !existsSync(photos[i].path)) },
+            imageIds: sequence.imageIds.filter((_id, i) => !photos[i]) },
         });
       }
       out.set(scene.sceneId, { kind: 'image', ...photos[0], photos, ...(end ? { end } : {}), inSec: null, outSec: null, fps: null, width: null, height: null });
@@ -212,10 +222,9 @@ export async function resolveSceneMedia(project, { history = [], probe = async (
       continue;
     }
     const imageId = resolved?.referenceImageId || scene.referenceImageId;
-    const imagePath = (!strictLayers || layer === 'still') && imageId ? safeUnder(PATHS.images, imageId) : null;
-    if (imagePath && existsSync(imagePath)) {
-      const ext = (/\.([a-z0-9]{2,5})$/i.exec(imageId)?.[1] || 'png').toLowerCase();
-      out.set(scene.sceneId, { kind: 'image', path: imagePath, ext: ext === 'jpeg' ? 'jpg' : ext, ...(end ? { end } : {}), inSec: null, outSec: null, fps: null, width: null, height: null });
+    const still = !strictLayers || layer === 'still' ? await documentStill(project, scene, imageId) : null;
+    if (still) {
+      out.set(scene.sceneId, { kind: 'image', ...still, ...(end ? { end } : {}), inSec: null, outSec: null, fps: null, width: null, height: null });
     }
   }
   return out;

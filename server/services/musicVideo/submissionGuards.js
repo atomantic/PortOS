@@ -7,6 +7,7 @@
  * Loaded on demand by `videoGen/submitJob.js`, only for a tagged submission.
  */
 import { basename } from 'path';
+import { musicVideoAspect } from '../../lib/musicVideo/musicVideoAspect.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { musicVideoBriefAllowsVideo } from '../../lib/musicVideo/musicVideoMediumPlan.js';
 import { assertShotActionContract, withShotActionPrompt } from '../../lib/musicVideo/musicVideoActionContract.js';
@@ -248,5 +249,9 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
   captureDependencies({ body, params, scene, prepared, project });
   assertClipLength({ body, scene, backend, project });
   stampSceneTakeCost({ body, params, scene, project, performance, backend });
+  if (scene?.imageTreatments?.length) {
+    const { applyVideoImageTreatments } = await import('./imageTreatments.js');
+    await applyVideoImageTreatments(scene, params, musicVideoAspect(project));
+  }
   return composedAdditions;
 }

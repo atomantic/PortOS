@@ -120,8 +120,9 @@ export function unionSequenceTakeReferences({ frames = [], extras = [], max = In
   const seen = new Set();
   const references = [];
   for (const frame of frames) {
-    if (seen.has(frame.key)) continue;
-    seen.add(frame.key);
+    const key = frame.treatmentKey || frame.key;
+    if (seen.has(key)) continue;
+    seen.add(key);
     references.push({ ...frame, kind: 'frame' });
   }
   let omitted = 0;

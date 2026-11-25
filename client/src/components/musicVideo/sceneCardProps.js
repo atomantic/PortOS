@@ -7,7 +7,7 @@ export const STILL_MOVE_LABELS = [['hold', 'Hold'], ['push', 'Push in'], ['pan',
 export const SHOT_MODE_LABELS = { cutaway: 'Cutaway', performance: 'Performance (lip-sync)', music: 'Performance (music-driven)' };
 export const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0 whitespace-nowrap';
 export const SECONDARY_BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0 whitespace-nowrap';
-export const DOWNLOAD_FIELDS = new Set(['startSec', 'endSec', 'offsetFrames', 'speedFps', 'reverse', 'loop', 'holdLastFrame', 'sourceTake', 'videoHistoryId', 'frameFit']);
+export const DOWNLOAD_FIELDS = new Set(['startSec', 'endSec', 'offsetFrames', 'speedFps', 'reverse', 'loop', 'holdLastFrame', 'sourceTake', 'videoHistoryId', 'frameFit', 'imageTreatments']);
 // The two timeline-bound scene fields rendered as identical number inputs.
 export const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
 

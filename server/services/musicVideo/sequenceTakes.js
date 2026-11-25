@@ -1,3 +1,4 @@
+import { shotImageTreatment } from '../../lib/musicVideo/musicVideoImageTreatments.js';
 /**
  * Music Video sequence takes (#16128): render a director-picked run of 2-6
  * consecutive shots as ONE hosted reference-to-video take. `dryRun` returns the
@@ -29,7 +30,9 @@ async function gatherReferences(project, members, model) {
   const frames = members.map((scene) => {
     const path = scene.referenceImageId ? resolveGalleryImage(scene.referenceImageId) : null;
     if (!path) refuse(409, 'PRODUCTION_FRAME_MISSING', `"${scene.label || scene.sceneId}" has no start frame yet. Render or pick one first.`, { sceneId: scene.sceneId });
-    return { key: path, sceneId: scene.sceneId, label: scene.label || '', imageId: scene.referenceImageId };
+    const treatment = shotImageTreatment(scene, scene.referenceImageId);
+    return { key: path, sceneId: scene.sceneId, label: scene.label || '', imageId: scene.referenceImageId,
+      ...(treatment ? { treatmentKey: JSON.stringify([path, treatment]) } : {}) };
   });
   const extras = [];
   for (const [i, scene] of members.entries()) {
@@ -105,7 +108,13 @@ export async function sequenceTake(projectId, { sceneIds, modelId: requestedMode
     import('../../lib/musicVideo/musicVideoAspect.js'), import('../mediaJobQueue/index.js'),
   ]);
   members.forEach((scene) => assertShotActionContract(scene));
-  const built = build(references.map((ref) => ref.key));
+  const referencePaths = await Promise.all(references.map(async (ref) => {
+    const scene = members.find(item => item.sceneId === ref.sceneId);
+    if (!scene?.imageTreatments?.length) return ref.key;
+    const { resolveTreatedShotImage } = await import('./imageTreatments.js');
+    return resolveTreatedShotImage(scene, ref.imageId, ref.key, musicVideoAspect(project));
+  }));
+  const built = build(referencePaths);
   const aspect = musicVideoAspect(project);
   const dependencies = Object.fromEntries(members.map((scene) => [scene.sceneId, captureTakeDependencies(scene, basename(scene.referenceImageId))]));
   const params = {
@@ -117,7 +126,7 @@ export async function sequenceTake(projectId, { sceneIds, modelId: requestedMode
     duration: built.seconds,
     ...(built.resolution ? { resolution: built.resolution } : {}),
     ...(aspect ? { aspectRatio: aspect, frameAspect: aspect } : {}),
-    referenceImagePaths: references.map((ref) => ref.key),
+    referenceImagePaths: referencePaths,
     ...(promptAdditions.length ? { promptAdditions } : {}),
     // No sceneId: the per-scene hooks ignore this job; the sequence-take hook files it on every shot.
     musicVideo: { projectId, sequenceTake: { sceneIds: plan.sceneIds, windows: composed.windows } },

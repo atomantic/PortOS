@@ -74,6 +74,16 @@ describe('unionSequenceTakeReferences', () => {
     expect(omitted).toBe(0);
   });
 
+  it('keeps differently treated versions of the same original as separate shot frames', () => {
+    const same = [
+      { key: '/f1', sceneId: 's1', treatmentKey: 'quartz' },
+      { key: '/f1', sceneId: 's2', treatmentKey: 'print' },
+      { key: '/f1', sceneId: 's3', treatmentKey: 'print' },
+    ];
+    const { references } = unionSequenceTakeReferences({ frames: same, max: 9 });
+    expect(references.map(frame => frame.sceneId)).toEqual(['s1', 's2']);
+  });
+
   it('drops references past the cap and counts them, never a frame', () => {
     const { references, omitted, overCap } = unionSequenceTakeReferences({
       frames, extras: [[{ key: '/a' }, { key: '/b' }], [{ key: '/c' }]], max: 3,

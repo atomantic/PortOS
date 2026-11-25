@@ -13,6 +13,7 @@ import SceneCameraControls from './SceneCameraControls.jsx';
 import SceneClipSound from './SceneClipSound.jsx';
 import SceneCutEffect from './SceneCutEffect.jsx';
 import SceneGlitches from './SceneGlitches.jsx';
+import SceneImageTreatments from './SceneImageTreatments.jsx';
 import SceneLyricType from './SceneLyricType.jsx';
 import { PreMusicSound, PreMusicTiming } from './ScenePreMusic.jsx';
 import SceneShotCuts, { SceneCutField, SceneDuration } from './SceneShotCuts.jsx';
@@ -241,7 +242,7 @@ function SceneDirectionGroup({ project, scene }) {
 export default function SceneSettingsGroups({
   scene, project, layer, codeShot, fromSheet, loops, sourceWindow,
   renderPlan, position, composition, actions, fieldId,
-  applyPatch, applySaved, markDirty, saveIfDirty, moveStart, moveEnd,
+  applyPatch, applySaved, markDirty, saveIfDirty, moveStart, moveEnd, saveShot,
   setSpeakerDirty, setSpeakerSaving,
 }) {
   const preMusic = isPreMusicShot(scene);
@@ -305,6 +306,7 @@ export default function SceneSettingsGroups({
         {/* Glitches at moments inside the shot, set and moved on a slider; they add no time. */}
         <SceneGlitches fieldId={fieldId} scene={scene} onChange={applyPatch} />
       </ShotEditorGroup>
+      <SceneImageTreatments key={scene.sceneId} project={project} scene={scene} onSave={saveShot} />
       {/* Where the lyrics over this shot sit, their style and size, whenever the render draws lyrics (a card draws its own text). */}
       {lyricType && (
         <ShotEditorGroup title="Lyrics" testId="shot-group-lyrics">

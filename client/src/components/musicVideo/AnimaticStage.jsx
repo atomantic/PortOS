@@ -14,6 +14,7 @@ import ExactDocumentFrame from './ExactDocumentFrame.jsx';
 import { DocumentFootageMove, DocumentTemplateFinish } from './DocumentTemplateLayers.jsx';
 import DocumentTemplateCanvas from './DocumentTemplateCanvas.jsx';
 import ImageEffectStill from './ImageEffectStill.jsx';
+import { shotImageUrl } from './sceneImageTreatmentUrls.js';
 import { clipOffsetSec, clipReversed, clipSpeedRate, isSelfDrawnLayer, sceneVisualLayer, stillFrameTransform } from '../../lib/musicVideoLayers.js';
 import { sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
 import { ANIMATIC_FPS, clipTimeAt, playedScene, releaseVideo, useSongFrames } from './animaticTiming.js';
@@ -135,8 +136,9 @@ function ShotClip({ scene, audioRef, time, current, preload = 'auto', src: given
 }
 
 // `camera` (a composition document's move for the scene) replaces the composed render's still move.
-function StillShot({ scene, audioRef, time, effect = null, fps, beats = [], startSec = scene.startSec, endSec = scene.endSec, camera = null }) {
+function StillShot({ scene, projectId, audioRef, time, effect = null, fps, beats = [], startSec = scene.startSec, endSec = scene.endSec, camera = null }) {
   const ref = useRef(null);
+  const imageUrl = useCallback(id => shotImageUrl(projectId, scene, id), [projectId, scene]);
   const sequence = useMemo(() => scenePhotoSequence(scene, { fps, beats }), [scene, fps, beats]);
   const getTime = useCallback(() => audioRef.current?.currentTime || 0, [audioRef]);
   const apply = useCallback((t) => {
@@ -148,11 +150,11 @@ function StillShot({ scene, audioRef, time, effect = null, fps, beats = [], star
     <div className="h-full w-full overflow-hidden">
       <div ref={ref} data-testid="animatic-still" className="h-full w-full">
         {effect || sequence ? (
-          <ImageEffectStill src={`/data/images/${scene.referenceImageId}`} effect={effect} sequence={sequence}
-            endSrc={scene.endImageId ? `/data/images/${scene.endImageId}` : null}
+          <ImageEffectStill src={imageUrl(scene.referenceImageId)} imageUrl={imageUrl} effect={effect} sequence={sequence}
+            endSrc={scene.endImageId ? imageUrl(scene.endImageId) : null}
             startSec={startSec} time={time} playing={!!audioRef.current && !audioRef.current.paused} getTime={getTime} fps={fps} />
         ) : (
-          <img src={`/data/images/${scene.referenceImageId}`} alt="" className="h-full w-full object-cover" />
+          <img src={shotImageUrl(projectId, scene, scene.referenceImageId)} alt="" className="h-full w-full object-cover" />
         )}
       </div>
     </div>
@@ -167,7 +169,7 @@ const incomingOpacity = (effect, t, fps) => {
   return Math.min(1, (t - effect.windowStartSec) / (effect.cutSec - effect.windowStartSec + 1 / fps));
 };
 
-function ToggleClip({ scene, toggle, audioRef, time, layered, fps, beats = [] }) {
+function ToggleClip({ scene, projectId, toggle, audioRef, time, layered, fps, beats = [] }) {
   const mediaRef = useRef(null);
   const still = sceneVisualLayer(scene, { layered }) === 'still';
   const file = useVideoFileSrc(!still ? scene.videoHistoryId || null : null);
@@ -206,12 +208,12 @@ function ToggleClip({ scene, toggle, audioRef, time, layered, fps, beats = [] })
   if (layered) {
     return (
       <div ref={mediaRef} data-testid="beat-toggle-clip" style={{ opacity: 0 }} className={className}>
-        <StillShot scene={scene} audioRef={audioRef} time={time} fps={fps} beats={beats} effect={sceneImageEffect(scene, { layered })}
+        <StillShot scene={scene} projectId={projectId} audioRef={audioRef} time={time} fps={fps} beats={beats} effect={sceneImageEffect(scene, { layered })}
           startSec={toggle.windowStartSec} endSec={toggle.cutSec} />
       </div>
     );
   }
-  return <img ref={mediaRef} src={`/data/images/${scene.referenceImageId}`} alt="" data-testid="beat-toggle-clip" style={{ opacity: 0 }} className={className} />;
+  return <img ref={mediaRef} src={shotImageUrl(projectId, scene, scene.referenceImageId)} alt="" data-testid="beat-toggle-clip" style={{ opacity: 0 }} className={className} />;
 }
 
 function FadeBlack({ fade, audioRef, time }) {
@@ -241,7 +243,7 @@ function AnimaticBasePicture({ project, film, shot, filmGap, filmClip, picture, 
   if ((picture?.referenceImageId || scenePhotoSequence(picture)?.imageIds.length) && stillShot) {
     return (
       <ShotColorMatchFrame key={picture.sceneId} project={project} scene={picture}>
-        <StillShot scene={picture} audioRef={clock.ref} time={clock.time} fps={stillFps} beats={beats} effect={shotEffect} camera={documentCamera} />
+        <StillShot scene={picture} projectId={project?.id} audioRef={clock.ref} time={clock.time} fps={stillFps} beats={beats} effect={shotEffect} camera={documentCamera} />
       </ShotColorMatchFrame>
     );
   }
@@ -251,7 +253,7 @@ function AnimaticBasePicture({ project, film, shot, filmGap, filmClip, picture, 
     // Behind a VHS-edged clip the still stands in, blurred and faded, for the render's blur of the clip.
     return (
       <ShotColorMatchFrame project={project} scene={picture}>
-        <img src={`/data/images/${picture.referenceImageId}`} alt=""
+        <img src={shotImageUrl(project?.id, picture, picture.referenceImageId)} alt=""
           className={`h-full w-full ${vhsEdges ? 'object-cover blur-md saturate-50 brightness-75' : stillEdges ? 'object-cover' : 'object-contain'}`} />
       </ShotColorMatchFrame>
     );
@@ -303,7 +305,7 @@ function AnimaticPictures({ project, playback }) {
         const incoming = playedScene(scenes.find((scene) => scene.sceneId === toggle.toSceneId), allScenes);
         return incoming ? (
           <ShotColorMatchFrame key={`toggle:${toggle.toSceneId}:${incoming.videoHistoryId || ''}`} project={project} scene={incoming} className="pointer-events-none absolute inset-0 h-full w-full">
-            <ToggleClip scene={incoming} toggle={toggle} audioRef={audioRef} time={time} layered={layered} fps={stillFps} beats={beats} />
+            <ToggleClip scene={incoming} projectId={project?.id} toggle={toggle} audioRef={audioRef} time={time} layered={layered} fps={stillFps} beats={beats} />
           </ShotColorMatchFrame>
         ) : null;
       })}
