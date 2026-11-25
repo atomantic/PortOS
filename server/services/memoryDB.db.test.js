@@ -629,6 +629,32 @@ describe.skipIf(!runDb)('stored memory search lexemes', () => {
   });
 });
 
+describe.skipIf(!runDb)('memoryDB prompt audience filtering', () => {
+  it('excludes owner and tag matches from list and rankers while preserving owned recall', async () => {
+    await resetMemories();
+    const common = { type: 'fact', content: 'Sample observatory notes.' };
+    const shared = await memoryDB.createMemory(common, VEC_NEAR_A);
+    // Legacy memories may have neither provenance nor tags.
+    await query('UPDATE memories SET tags = NULL WHERE id = $1', [shared.id]);
+    const owned = await memoryDB.createMemory({ ...common, importance: 1, sourceAgentId: 'cos-persistent-mind' }, VEC_A);
+    for (const tag of ['mind:chosen-name', 'mind:core-identity', 'mind:important', 'mind:continuation-note']) {
+      await memoryDB.createMemory({ ...common, importance: 1, tags: [tag] }, VEC_A);
+    }
+    await memoryDB.createMemory({ ...common, status: 'pending_approval', tags: ['mind:core-identity'] }, VEC_A);
+    const pending = await memoryDB.createMemory({ ...common, status: 'pending_approval' }, VEC_A);
+
+    const options = { excludePersistentMind: true, types: ['fact'], limit: 1 };
+    expect(await memoryDB.countMemories(options)).toBe(1);
+    expect((await memoryDB.getMemories({ ...options, sortBy: 'importance' })).memories.map(m => m.id)).toEqual([shared.id]);
+    expect((await memoryDB.getMemories({ ...options, status: 'pending_approval' })).memories.map(m => m.id)).toEqual([pending.id]);
+    expect((await memoryDB.searchMemories(VEC_A, options)).memories.map(m => m.id)).toEqual([shared.id]);
+    const hybrid = await memoryDB.hybridSearchMemories('observatory', VEC_A, options);
+    expect(hybrid.memories).toMatchObject([{ id: shared.id, searchMethod: 'hybrid' }]);
+    const ownRecall = await memoryDB.hybridSearchMemories('observatory', null, { sourceAgentId: 'cos-persistent-mind' });
+    expect(ownRecall.memories.map(m => m.id)).toEqual([owned.id]);
+  });
+});
+
 describe.skipIf(!runDb)('memoryDB search (#3447)', () => {
   let quasar;      // VEC_A,      app 'brain'
   let zebrafish;   // VEC_NEAR_A, app 'studio'

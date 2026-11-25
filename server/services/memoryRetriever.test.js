@@ -26,6 +26,36 @@ beforeEach(() => {
 });
 
 describe('memory prompt reference boundary (#9040)', () => {
+  it('excludes private memories after hydration, before budgeting or recording access', async () => {
+    const privateMemories = [
+      { id: 'owned', sourceAgentId: 'cos-persistent-mind' },
+      { id: 'name', tags: ['mind:chosen-name'] },
+      { id: 'identity', tags: ['mind:core-identity'] },
+      { id: 'important', tags: ['mind:important'] },
+      { id: 'continuation', tags: ['mind:continuation-note'] },
+    ];
+    vi.mocked(generateQueryEmbedding).mockResolvedValue([0.1]);
+    vi.mocked(hybridSearchMemories).mockResolvedValue({ memories: [{ id: 'owned' }, { id: 'name' }] });
+    vi.mocked(getMemories)
+      .mockResolvedValueOnce({ memories: [{ id: 'identity' }, { id: 'important' }] })
+      .mockResolvedValueOnce({ memories: [{ id: 'continuation' }, { id: 'shared' }] });
+    vi.mocked(peekMemories).mockResolvedValue([
+      ...privateMemories.map(memory => ({ ...memory, type: 'fact', content: 'Private context', importance: 1 })),
+      { id: 'shared', type: 'fact', content: 'Shared context', importance: 1 },
+    ]);
+
+    const onInjected = vi.fn();
+    const text = await getMemorySection({ description: 'query', metadata: { app: 'demo' } }, { onInjected });
+    expect(hybridSearchMemories).toHaveBeenCalledWith('query', [0.1], expect.objectContaining({ excludePersistentMind: true }));
+    for (const call of vi.mocked(getMemories).mock.calls) {
+      expect(call[0].excludePersistentMind).toBe(true);
+    }
+    expect(text).toContain('Shared context');
+    expect(text).not.toContain('Private context');
+    expect(onInjected).toHaveBeenCalledExactlyOnceWith([{ id: 'shared', version: null, relevance: 0.8 }]);
+    expect(recordMemoryAccess).toHaveBeenCalledExactlyOnceWith(['shared']);
+  });
+
   it('keeps the notice and complete fence inside the configured budget for a boundary-sized memory', async () => {
     vi.mocked(peekMemories).mockResolvedValueOnce([{ id: 'example-memory', type: 'preference', content: 'x'.repeat(7990), importance: 1 }]);
     const text = await getMemorySection({}, { maxTokens: 2000 });

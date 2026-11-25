@@ -8,6 +8,7 @@
 import { getMemories, searchMemories, hybridSearchMemories, peekMemories, recordMemoryAccess, DEFAULT_MEMORY_CONFIG } from './memoryBackend.js';
 import { generateQueryEmbedding, estimateTokens } from './memoryEmbeddings.js';
 import { fenceBlock, UNTRUSTED_REFERENCE_NOTICE } from '../lib/promptFencing.js';
+import { isPersistentMindPrivateMemory } from '../lib/memoryQuery.js';
 
 // Search mode preference: 'hybrid' (FTS + vector) or 'vector' (embedding-only)
 const SEARCH_MODE = 'hybrid';
@@ -42,6 +43,7 @@ export async function getRelevantMemories(task, options = {}) {
     sortOrder: 'desc',
     limit: 5,
     includeCount: false,
+    excludePersistentMind: true,
   });
   const codebasePromise = task.metadata?.app
     ? getMemories({
@@ -52,6 +54,7 @@ export async function getRelevantMemories(task, options = {}) {
       sortOrder: 'desc',
       limit: 5,
       includeCount: false,
+      excludePersistentMind: true,
     })
     : Promise.resolve({ memories: [] });
 
@@ -78,7 +81,10 @@ export async function getRelevantMemories(task, options = {}) {
   // were still read, but they are not written: access bumps happen below,
   // only for memories that fit.
   const hydrated = candidateIds.length > 0 ? await peekMemories(candidateIds) : [];
-  const byId = new Map(hydrated.filter(Boolean).map(memory => [memory.id, memory]));
+  // A file index or result from before a concurrent update can have stale tags.
+  const byId = new Map(hydrated
+    .filter(memory => memory && !isPersistentMindPrivateMemory(memory))
+    .map(memory => [memory.id, memory]));
 
   const memories = [];
   let tokenCount = 0;
@@ -122,6 +128,7 @@ async function retrieveSearchHits(description, { searchLimit, minRelevance }) {
     const searchResults = await hybridSearchMemories(description, queryEmbedding, {
       limit: searchLimit,
       minRelevance,
+      excludePersistentMind: true,
       ftsWeight: 0.4,
       vectorWeight: 0.6
     });
@@ -130,7 +137,8 @@ async function retrieveSearchHits(description, { searchLimit, minRelevance }) {
   if (queryEmbedding) {
     const searchResults = await searchMemories(queryEmbedding, {
       minRelevance,
-      limit: searchLimit
+      limit: searchLimit,
+      excludePersistentMind: true,
     });
     return searchResults.memories || [];
   }

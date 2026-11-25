@@ -456,13 +456,11 @@ export async function searchMemories(queryEmbedding, options = {}) {
 
   const similar = findAboveThreshold(queryEmbedding, embeddings.vectors, minRelevance);
 
-  // Filter by additional options
-  let results = similar.slice(0, limit);
-
-  // Get memory metadata from index
   const indexMap = new Map(index.memories.map(m => [m.id, m]));
 
-  results = results
+  // Privacy-scoped searches must fill their limit from eligible records.
+  const candidates = options.excludePersistentMind ? similar : similar.slice(0, limit);
+  const results = candidates
     .map(r => {
       const meta = indexMap.get(r.id);
       if (!passesSearchMetaFilters(meta, options)) return null;
@@ -470,7 +468,8 @@ export async function searchMemories(queryEmbedding, options = {}) {
     })
     .filter(Boolean);
 
-  return { total: results.length, memories: results };
+  const memories = options.excludePersistentMind ? results.slice(0, limit) : results;
+  return { total: memories.length, memories };
 }
 
 /**

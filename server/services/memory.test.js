@@ -906,6 +906,33 @@ describe('memory service', () => {
   // ===========================================================================
 
   describe('searchMemories', () => {
+    it('applies the prompt audience filter before limiting file-backed lists and searches', async () => {
+      const records = [
+        { id: 'owned', sourceAgentId: 'cos-persistent-mind' },
+        { id: 'name', tags: ['mind:chosen-name'] },
+        { id: 'identity', tags: ['mind:core-identity'] },
+        { id: 'important', tags: ['mind:important'] },
+        { id: 'continuation', tags: ['mind:continuation-note'] },
+        { id: 'shared', tags: null },
+      ].map((record, i) => ({ ...record, status: 'active', importance: 1 - i / 10 }));
+      const index = { version: 1, lastUpdated: '', count: records.length, memories: records };
+      const vectors = Object.fromEntries(records.map(({ id }) => [id, [0.1]]));
+      readJSONFile.mockImplementation(async (path, fallback) => {
+        if (path.includes('index.json')) return index;
+        if (path.includes('embeddings.json')) return { model: 'test', dimension: 1, vectors };
+        return fallback;
+      });
+      memoryBM25.searchBM25.mockResolvedValue(records.map(({ id }) => ({ id, score: 0.9 })));
+      findAboveThreshold.mockReturnValue(records.map(({ id }) => ({ id, similarity: 0.9 })));
+
+      const options = { excludePersistentMind: true, limit: 1 };
+      expect((await getMemories({ ...options, sortBy: 'importance' })).memories.map(m => m.id)).toEqual(['shared']);
+      expect(await countMemories(options)).toBe(1);
+      expect((await searchMemories([0.1], options)).memories.map(m => m.id)).toEqual(['shared']);
+      expect((await hybridSearchMemories('query', [0.1], options)).memories.map(m => m.id)).toEqual(['shared']);
+      expect((await hybridSearchMemories('query', null, { sourceAgentId: 'cos-persistent-mind' })).memories.map(m => m.id)).toEqual(['owned']);
+    });
+
     it('should return empty when no query embedding provided', async () => {
       const result = await searchMemories(null);
 
