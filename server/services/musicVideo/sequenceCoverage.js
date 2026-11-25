@@ -56,15 +56,14 @@ const refuse = (status, code, message) => { throw new ServerError(message, { sta
  * run no longer matches the plan. Returns `{ jobId, sceneIds, prompt }`.
  */
 export async function submitSequenceCoverage(projectId, { sceneIds } = {}) {
-  const [{ requireProject }, { musicVideoBriefAllowsVideo }, { captureTakeDependencies },
+  const [{ requireProject }, { musicVideoGenerationAllowance, musicVideoNoVideoMessage }, { captureTakeDependencies },
     { resolveGalleryImage }, { musicVideoAspect }] = await Promise.all([
     import('./requireProject.js'), import('../../lib/musicVideo/musicVideoMediumPlan.js'),
     import('../../lib/musicVideo/musicVideoDependencies.js'), import('../../lib/pathSafety.js'), import('../../lib/musicVideo/musicVideoAspect.js'),
   ]);
   const project = await requireProject(projectId);
-  if (!musicVideoBriefAllowsVideo(project)) {
-    refuse(409, 'MUSIC_VIDEO_NO_VIDEO_TOOL', 'No video tool is selected in this project\'s brief, so generated footage is not dispatched.');
-  }
+  const allowance = musicVideoGenerationAllowance(project);
+  if (!allowance.video) refuse(409, 'MUSIC_VIDEO_NO_VIDEO_TOOL', musicVideoNoVideoMessage(allowance));
   const backend = project?.videoSettings?.backend || null;
   const modelId = sequenceModelId(project);
   if (backend !== 'grok' && backend !== 'local' && !modelId) {

@@ -48,13 +48,12 @@ async function gatherReferences(project, members, model) {
  * sent exactly as written, with no additions.
  */
 export async function sequenceTake(projectId, { sceneIds, modelId: requestedModelId, resolution: requestedResolution, prompt: override, dryRun = false } = {}) {
-  const [{ requireProject }, { musicVideoBriefAllowsVideo }] = await Promise.all([
+  const [{ requireProject }, { musicVideoGenerationAllowance, musicVideoNoVideoMessage }] = await Promise.all([
     import('./requireProject.js'), import('../../lib/musicVideo/musicVideoMediumPlan.js'),
   ]);
   const project = await requireProject(projectId);
-  if (!musicVideoBriefAllowsVideo(project)) {
-    refuse(409, 'MUSIC_VIDEO_NO_VIDEO_TOOL', 'No video tool is selected in this project\'s brief, so generated footage is not dispatched.');
-  }
+  const allowance = musicVideoGenerationAllowance(project);
+  if (!allowance.video) refuse(409, 'MUSIC_VIDEO_NO_VIDEO_TOOL', musicVideoNoVideoMessage(allowance));
   const modelId = requestedModelId || defaultSequenceTakeModelId(project);
   const modelProblem = sequenceTakeModelProblem(modelId);
   if (modelProblem) refuse(400, 'SEQUENCE_TAKE_MODEL', modelProblem);

@@ -47,7 +47,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { musicVideoCreativeContext, musicVideoSongStyleContext, withoutPeople } from '../../lib/musicVideo/musicVideoCreativeContext.js';
 import { isOutsideMusicVideoReference } from '../../lib/musicVideo/musicVideoConditioning.js';
-import { musicVideoBriefTools as briefTools } from '../../lib/musicVideo/musicVideoMediumPlan.js';
+import { musicVideoBriefTools as briefTools, musicVideoGenerationAllowance } from '../../lib/musicVideo/musicVideoMediumPlan.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { moodBoardItemCaption } from '../../lib/moodBoardStyleContext.js';
 import { CAST_SETS_DEFINITION_LIMITS, normalizeDefinitions } from './castAndSetsDefinitions.js';
@@ -94,26 +94,22 @@ const MOOD_ITEM_TEXT = 280;
 // ---- medium ------------------------------------------------------------------
 
 /**
- * The medium the check-in is directed in. A code-first production policy with
- * no generated footage, or a brief that selected code tools and no video tool,
- * is procedural; everything else (an image-only brief included) stays
+ * The medium the check-in is directed in. A project that may generate no video
+ * is procedural when it is code-first or its brief selected code tools; a
+ * project that may generate video, and an image-only legacy brief, stay
  * photographic, so footage always has a character sheet to hold identity.
- * Tools and policy are read together because either can be saved without the other.
+ * The generation allowance folds the media mode, the brief's tools and the
+ * production policy together, because each can be saved without the others.
  */
 export function castAndSetsMedium(project) {
   if (!musicVideoAllowsMedia(project, 'image')) return 'procedural';
-  const policy = project?.productionPolicy;
-  if (policy?.strategy === 'code-first' && !(policy.maxGeneratedVideoPercent > 0 && musicVideoAllowsMedia(project, 'video'))) return 'procedural';
-  const tools = briefTools(project);
-  return tools.some((t) => t.startsWith('code:')) && !tools.some((t) => t.startsWith('video:')) ? 'procedural' : 'photographic';
+  const { video, strategy } = musicVideoGenerationAllowance(project);
+  if (video) return 'photographic';
+  return strategy === 'code-first' || briefTools(project).some((t) => t.startsWith('code:')) ? 'procedural' : 'photographic';
 }
 
-/** False when the brief names tools and none of them makes images (a code-only project). */
-export function castAndSetsAllowsImages(project) {
-  if (!musicVideoAllowsMedia(project, 'image')) return false;
-  const tools = briefTools(project);
-  return tools.length === 0 || tools.some((t) => t.startsWith('image:'));
-}
+/** False when the media mode forbids images or the brief names tools and none of them makes images. */
+export const castAndSetsAllowsImages = (project) => musicVideoGenerationAllowance(project).image;
 
 // ---- context ---------------------------------------------------------------
 

@@ -285,6 +285,15 @@ describe('Cast & Sets procedural medium', () => {
     expect(castAndSetsAllowsImages(project)).toBe(true);
   });
 
+  it('directs a project that can never dispatch footage in code, even when its policy still allows some', () => {
+    // Code-first with a non-zero allowance but no video tool: the planner draws every shot in code, so the cast is code too.
+    expect(castAndSetsMedium({ ...project, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 20 }, automation: { tools: ['image:codex'] } })).toBe('procedural');
+    expect(castAndSetsMedium({ ...project, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 20 }, automation: { tools: ['image:codex', 'video:local'] } })).toBe('photographic');
+    // A media mode that rules video out with code tools selected: no footage to hold identity for.
+    expect(castAndSetsMedium({ mediaMode: 'code-images', automation: { tools: ['code:render', 'image:codex', 'video:local'] } })).toBe('procedural');
+    expect(castAndSetsMedium({ mediaMode: 'code-images', automation: { tools: ['image:codex'] } })).toBe('photographic');
+  });
+
   it('asks for construction, world and image roles instead of a photographic cast', () => {
     const prompt = buildCastAndSetsPrompt(procedural);
     expect(prompt).toContain('PROCEDURAL music video');
