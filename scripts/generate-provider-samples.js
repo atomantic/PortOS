@@ -60,7 +60,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { materializeRoute } from '../server/lib/provider/providerRouteRecipes.js';
-import { SPLASH_CONTEXT, SPLASH_MODEL, SPLASH_ORIGIN } from '../server/lib/splashRuntime.js';
+import { SPLASH_MODEL, SPLASH_ORIGIN } from '../server/lib/splashRuntime.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(HERE, '..');
@@ -425,7 +425,6 @@ const TUPLES = [
         ANTHROPIC_DEFAULT_HAIKU_MODEL: SPLASH_MODEL,
         ANTHROPIC_SMALL_FAST_MODEL: SPLASH_MODEL,
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-        CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(SPLASH_CONTEXT),
       },
     },
   },

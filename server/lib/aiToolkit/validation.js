@@ -144,10 +144,10 @@ export const providerSchema = z.object({
   contextWindow: z.number().int().min(512).max(2097152).nullable().optional(),
   // Harness budget, not daemon allocation or PortOS planning. OpenCode pins
   // one explicit model; Claude Code's environment applies across the preset.
-  harnessContext: z.object({
+  harnessContext: z.union([z.object({
     tokens: z.number().int().min(512).max(2097152),
     model: z.string().trim().min(1).max(300).optional(),
-  }).strict().nullable().optional(),
+  }).strict(), z.object({ followRuntime: z.literal(true) }).strict()]).nullable().optional(),
   // Per-model context windows read from the provider's `/models` catalog, written
   // by model refresh; beats the hardcoded table, loses to `contextWindow`. The
   // ceiling is wider than `contextWindow`'s because it must accept whatever a

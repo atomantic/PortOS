@@ -16,6 +16,7 @@
  * null/''; an empty CLI reply is reported as a plain refusal, not a token-budget guess.
  */
 
+import { resolveSplashHarnessContext } from '../lib/splashHarnessLaunch.js';
 import { spawn } from '../lib/childProcess.js';
 import { writeFile, rm, mkdtemp, copyFile } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -213,7 +214,7 @@ async function runCliVisionSpawn({ provider, model, invocation, timeout, spawnIm
   // PortOS checkout. The OpenCode declared-models map also keeps the injected `--model`
   // from being rejected by an Ollama-backed provider. No `guard`: vision is a one-shot
   // describe, not an agent.
-  const childEnv = buildCliChildEnv({ provider, model, cwd });
+  const childEnv = buildCliChildEnv({ provider: await resolveSplashHarnessContext(provider, model), model, cwd });
 
   // npm-installed CLI providers are .cmd/.bat shims on Windows; resolve+wrap (cmd.exe /c)
   // instead of enabling a shell. Critical here: the codex branch puts the free-text

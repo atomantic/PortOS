@@ -14,7 +14,8 @@ import ProviderConnectionTab from './ProviderConnectionTab';
 import ProviderModelsTab from './ProviderModelsTab';
 import ProviderGenerationTab from './ProviderGenerationTab';
 import ProviderEnvironmentTab from './ProviderEnvironmentTab';
-import { getHarnessContextTarget, harnessContextError, harnessContextPayload } from './harnessContextForm.js';
+import { getHarnessContextTarget, harnessContextError, harnessContextPayload, parseHarnessContext } from './harnessContextForm.js';
+import { CLAUDE_CONTEXT_ENV_KEY } from '../../../../server/lib/provider/splashHarnessContext.js';
 
 // The provider editor's Drawer tabs. `connection` is the default, so a bare
 // /ai/edit/:providerId deep link opens on the identity/transport fields; the
@@ -241,6 +242,11 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
               formData={formData}
               setFormData={setFormData}
               onEditHarnessContext={harnessTarget ? () => setActiveTab('generation') : null}
+              managedContext={harnessTarget?.splashManaged && harnessTarget.kind === 'claude' ? {
+                key: CLAUDE_CONTEXT_ENV_KEY,
+                tokens: parseHarnessContext(harnessContext) ?? servedHarnessContext ?? harnessTarget.fallback,
+                followsRuntime: harnessContext === '',
+              } : null}
               newEnvKey={newEnvKey}
               setNewEnvKey={setNewEnvKey}
               newEnvValue={newEnvValue}

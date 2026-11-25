@@ -676,15 +676,29 @@ describe('harness context editor', () => {
   it('saves a friendly Claude context choice without altering other environment or planning limits', async () => {
     renderForm({ provider: { ...claude, contextWindow: 32768 } });
     switchTab('Environment');
+    expect(screen.queryByLabelText('CLAUDE_CODE_MAX_CONTEXT_TOKENS value')).not.toBeInTheDocument();
+    expect(screen.getByText(/Current preview: 65,536 tokens/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Edit context in Generation' }));
-    expect(screen.getByLabelText('Claude Code context')).toHaveAttribute('placeholder', '65,536 (inherited)');
-    fireEvent.click(screen.getByRole('button', { name: '1M' }));
+    expect(screen.getByLabelText('Claude Code context')).toHaveValue('');
+    fireEvent.change(screen.getByLabelText('Claude Code context'), { target: { value: '1000000' } });
     switchTab('Connection');
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(api.updateProvider).toHaveBeenCalledWith('claude-splash', expect.objectContaining({
       contextWindow: 32768,
       envVars: claude.envVars, harnessContext: { tokens: 1000000 },
     })));
+  });
+
+  it('switches an existing Splash pin to follow rather than copying the live size', async () => {
+    renderForm({ provider: { ...claude, envVars: { ...claude.envVars, CLAUDE_CODE_MAX_CONTEXT_TOKENS: '131072' } },
+      daemonReadiness: { contextWindows: { 'inkling2-mini': 262144 } } });
+    switchTab('Generation');
+    expect(screen.getByLabelText('Claude Code context')).toHaveValue('131072');
+    expect(screen.queryByRole('button', { name: 'Match server' })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Claude Code context'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalledWith('claude-splash',
+      expect.objectContaining({ harnessContext: { followRuntime: true } })));
   });
 
   it('can match a running OpenCode backend without replacing other model or output settings', async () => {
@@ -701,7 +715,8 @@ describe('harness context editor', () => {
   it('does not write an invalid shorthand or rewrite settings on unrelated edits', async () => {
     renderForm({ provider: claude });
     switchTab('Generation');
-    fireEvent.change(screen.getByLabelText('Claude Code context'), { target: { value: '1e6' } });
+    fireEvent.change(screen.getByLabelText('Claude Code context'), { target: { value: 'custom' } });
+    fireEvent.change(screen.getByLabelText('Custom context tokens'), { target: { value: '1e6' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('Enter a context window'));
     expect(api.updateProvider).not.toHaveBeenCalled();

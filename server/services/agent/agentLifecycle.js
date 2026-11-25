@@ -1,3 +1,4 @@
+import { resolveSplashHarnessContext } from '../../lib/splashHarnessLaunch.js';
 import { EXECUTION_OPTIONS_ERROR } from '../../lib/executionOptions.js';
 import { PROVIDER_CONFIG_BLOCKED_CATEGORY } from '../../lib/taskBlockCategories.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
@@ -285,7 +286,7 @@ export async function spawnViaRunner(agentId, task, opts) {
       // the site that sweep originally missed).
       envVars: composeProviderEnv({
         before: { ...forgeTokenEnv, ...claudeSettingsEnv, ...agentApiEnv },
-        provider,
+        provider: await resolveSplashHarnessContext(provider, model),
         model,
       }),
       cliCommand: cliConfig.command,

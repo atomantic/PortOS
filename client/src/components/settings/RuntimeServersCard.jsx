@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { Cpu, Box, Zap, Gauge, HardDrive, Play, Square, Download, ArrowUpCircle, Power, PowerOff, RefreshCw, Save, Settings2, ExternalLink, Server } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
+import ContextWindowSelect from '../ui/ContextWindowSelect.jsx';
 import { formatContextTokens, formatCount } from '../../utils/formatters';
 import { SPLASH_CONTEXT, SPLASH_CONTEXT_WINDOWS } from '../../../../server/lib/splashRuntime.js';
 import { MANAGED_INKLING_RUNTIMES, managedInklingRow } from './managedInklingRuntimes.js';
@@ -607,23 +608,20 @@ function SplashContextPicker({ status, busy, onSave }) {
   return (
     <div className="space-y-1.5">
       <label htmlFor="splash-context" className="block text-sm font-medium text-gray-300">Splash context window</label>
-      <select
+      <ContextWindowSelect
         id="splash-context"
-        className="rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white disabled:opacity-60"
+        label="Splash context window"
         value={contextWindow}
         disabled={busy || !editable}
         onChange={(event) => onSave(Number(event.target.value))}
         aria-describedby="splash-context-help"
-      >
-        {SPLASH_CONTEXT_WINDOWS.map((window) => (
-          <option key={window} value={window}>
-            {formatContextTokens(window)}{window === SPLASH_CONTEXT ? ' (default)' : ''}
-          </option>
-        ))}
-      </select>
+        options={SPLASH_CONTEXT_WINDOWS.map((window) => ({
+          value: window, label: `${formatContextTokens(window)}${window === SPLASH_CONTEXT ? ' (default)' : ''}`,
+        }))}
+      />
       <p id="splash-context-help" className="text-xs text-gray-400">
         {editable
-          ? 'Applies the next time you start Splash. Larger windows need more free memory or SSD space and can slow down long prompts.'
+          ? 'Applies the next time you start Splash. Claude Code and OpenCode presets that follow Splash pick up the running limit automatically. Larger windows can need more memory or SSD space.'
           : 'Stop Splash before changing its next-start context window.'}
       </p>
       {status.servedContextWindow != null && (

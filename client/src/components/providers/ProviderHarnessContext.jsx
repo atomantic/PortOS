@@ -1,9 +1,11 @@
 import { Link } from 'react-router';
 import { FormField } from '../ui/FormField';
 import { formatCount } from '../../utils/formatters';
+import SplashHarnessContext from './SplashHarnessContext.jsx';
 import { CONTEXT_CHOICES, parseHarnessContext } from './harnessContextForm.js';
 
 export default function ProviderHarnessContext({ target, value, onChange, onUseServed, servedWindow }) {
+  if (target.splashManaged) return <SplashHarnessContext {...{ target, value, onChange, servedWindow }} />;
   const inherited = target.inherited ?? target.fallback;
   const parsed = parseHarnessContext(value) ?? inherited;
   return (

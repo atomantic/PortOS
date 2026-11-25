@@ -607,8 +607,7 @@
         "ANTHROPIC_DEFAULT_SONNET_MODEL": "inkling2-mini",
         "ANTHROPIC_DEFAULT_HAIKU_MODEL": "inkling2-mini",
         "ANTHROPIC_SMALL_FAST_MODEL": "inkling2-mini",
-        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "65536"
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
       },
       "secretEnvVars": [
         "ANTHROPIC_AUTH_TOKEN"

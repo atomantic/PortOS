@@ -1,3 +1,4 @@
+import { resolveSplashHarnessContext } from '../../lib/splashHarnessLaunch.js';
 import { prepareWindowsAgentLaunch, watchWindowsAgentProcess } from '../../lib/windowsAgentProcess.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
@@ -172,7 +173,7 @@ async function prepareDirectCliLaunch({ agentId, task, prompt, workspacePath, mo
   // shared daemon.
   const childEnv = buildCliChildEnv({
     before: { ...forgeTokenEnv, ...claudeSettingsEnv, ...agentApiEnv },
-    provider,
+    provider: await resolveSplashHarnessContext(provider, model),
     model,
     cwd,
     guard: true,
