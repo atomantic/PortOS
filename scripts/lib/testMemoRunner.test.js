@@ -65,70 +65,103 @@ it.each([
 // What a git-fixture suite runs against besides its sources (#18634): the git
 // binary and everything a repository made on this machine inherits.
 describe('git tool identity', () => {
-  const VERSION = 'git version 2.50.1\n';
-  const machine = ({ system = 'core.autocrlf\nfalse\0', global = 'user.name\nExample\0', enclosing = 128, version = 0, files = {}, env = { HOME: '/home/example' } } = {}) => {
+  const HOME = '/home/example';
+  const GLOBAL = join(HOME, '.gitconfig');
+  // One configuration file as git lists it under --show-origin --null: origin, then key and value.
+  const listing = (origin, settings) => settings.map(([key, value]) => `file:${origin}\0${key}\n${value}\0`).join('');
+  const machine = ({ system = [['core.autocrlf', 'false']], global = [['user.name', 'Example']], included = {}, files = {}, enclosing = 128, version = 'git version 2.50.1', env = { HOME } } = {}) => {
     const calls = [];
     const run = (program, args, options) => {
       calls.push({ program, args, options });
-      if (args[0] === '--version') return { status: version, stdout: VERSION, stderr: '' };
+      if (args[0] === '--version') return version === null ? { status: 127, stdout: '', stderr: '' } : { status: 0, stdout: `${version}\n`, stderr: '' };
       if (args[0] === 'rev-parse') return { status: enclosing, stdout: enclosing === 0 ? '.git\n' : '', stderr: '' };
-      const listed = args[1] === '--system' ? system : global;
-      return listed === null ? { status: 128, stdout: '', stderr: 'fatal: unable to read config file' } : { status: 0, stdout: listed, stderr: '' };
+      const [origin, settings] = args[1] === '--system' ? ['/etc/gitconfig', system] : args[1] === '--global' ? [GLOBAL, global] : [args[2], included[args[2]] ?? null];
+      return settings === null ? { status: 128, stdout: '', stderr: 'fatal: unable to read config file' } : { status: 0, stdout: listing(origin, settings), stderr: '' };
     };
     const read = (path) => { if (path in files) return files[path]; throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); };
     return { calls, identity: createToolVersionResolver({ env, run, scratch: '/scratch', read })('git') };
   };
+  const IDENTITY = /^git version 2\.50\.1 settings [0-9a-f]{16}$/;
 
   it('is the version and a digest of the settings, and nothing of their content', () => {
-    const { identity, calls } = machine({ global: 'user.name\nExample\0http.extraheader\nAUTHORIZATION: example-secret\0' });
-    expect(identity).toMatch(/^git version 2\.50\.1 settings [0-9a-f]{16}$/);
-    expect(machine({ global: 'user.name\nExample\0http.extraheader\nAUTHORIZATION: example-secret\0' }).identity).toBe(identity);
+    const secret = { global: [['user.name', 'Example'], ['http.extraheader', 'AUTHORIZATION: example-secret']] };
+    const { identity, calls } = machine(secret);
+    expect(identity).toMatch(IDENTITY);
+    expect(machine(secret).identity).toBe(identity);
     // Every probe runs where the fixtures are made, never in the checkout.
     expect(calls.every(({ program, options }) => program === 'git' && options.cwd === '/scratch')).toBe(true);
     expect(calls.map(({ args }) => args.join(' '))).toEqual([
-      '--version', 'rev-parse --git-dir', 'config --system --includes --null --list', 'config --global --includes --null --list',
+      '--version', 'rev-parse --git-dir', 'config --system --includes --show-origin --null --list', 'config --global --includes --show-origin --null --list',
     ]);
   });
 
   it('moves with every setting a new repository inherits', () => {
     const base = machine().identity;
-    const ignore = join('/home/example', '.config', 'git', 'ignore');
+    const work = join(HOME, 'work.inc');
+    const conditional = [['user.name', 'Example'], ['includeif.gitdir:/work/.path', 'work.inc']];
     const variants = {
-      'system configuration': machine({ system: 'core.autocrlf\ntrue\0' }),
-      'global configuration': machine({ global: 'user.name\nExample\0init.defaultbranch\ntrunk\0' }),
+      'system configuration': machine({ system: [['core.autocrlf', 'true']] }),
+      'global configuration': machine({ global: [['user.name', 'Example'], ['init.defaultbranch', 'trunk']] }),
       'no global configuration': machine({ global: null }),
-      'default global ignore file': machine({ files: { [ignore]: '*.log\n' } }),
-      'configured ignore file': machine({ global: 'core.excludesfile\n~/ignored\0', files: { [join('/home/example', 'ignored')]: 'dist/\n' } }),
-      'configured attributes file': machine({ global: 'core.attributesfile\n/etc/example-attributes\0', files: { '/etc/example-attributes': '* text=auto\n' } }),
-      'git environment': machine({ env: { HOME: '/home/example', GIT_CONFIG_GLOBAL: '/dev/null' } }),
+      'default global ignore file': machine({ files: { [join(HOME, '.config', 'git', 'ignore')]: '*.log\n' } }),
+      'configured ignore file': machine({ global: [['core.excludesfile', '~/ignored']], files: { [join(HOME, 'ignored')]: 'dist/\n' } }),
+      'configured attributes file': machine({ global: [['core.attributesfile', '/etc/example-attributes']], files: { '/etc/example-attributes': '* text=auto\n' } }),
+      'git environment': machine({ env: { HOME, GIT_CONFIG_GLOBAL: '/dev/null' } }),
+      // A conditional include is read whatever its condition: the probe is in no repository, the fixtures are.
+      'conditional include, target missing': machine({ global: conditional }),
+      'conditional include': machine({ global: conditional, included: { [work]: [['commit.gpgsign', 'false']] } }),
+      'conditional include, target changed': machine({ global: conditional, included: { [work]: [['commit.gpgsign', 'true']] } }),
+      'conditional include of a conditional include': machine({ global: conditional,
+        included: { [work]: [['commit.gpgsign', 'true'], ['includeif.onbranch:main.path', '/etc/example-nested.inc']], '/etc/example-nested.inc': [['user.signingkey', 'EXAMPLE']] } }),
+      'ignore file a conditional include names': machine({ global: conditional,
+        included: { [work]: [['commit.gpgsign', 'true'], ['core.excludesfile', 'work-ignore']] }, files: { [join(HOME, 'work-ignore')]: 'build/\n' } }),
     };
     const seen = new Set([base]);
     for (const [label, { identity }] of Object.entries(variants)) {
-      expect(identity, label).toMatch(/^git version 2\.50\.1 settings [0-9a-f]{16}$/);
+      expect(identity, label).toMatch(IDENTITY);
       expect(seen.has(identity), label).toBe(false);
       seen.add(identity);
     }
     // Only git's own variables count.
-    expect(machine({ env: { HOME: '/home/example', EDITOR: 'example' } }).identity).toBe(base);
+    expect(machine({ env: { HOME, EDITOR: 'example' } }).identity).toBe(base);
   });
 
-  it('is unresolved when git cannot run or the fixtures would be made inside a repository', () => {
-    expect(machine({ version: 127 }).identity).toBeNull();
+  it('is unresolved wherever it could not say what the fixtures inherit', () => {
+    expect(machine({ version: null }).identity).toBeNull();
     // Git started in a fixture directory that is no repository of its own would find the enclosing one.
     expect(machine({ enclosing: 0 }).identity).toBeNull();
+    // Before --show-origin (2.8) a conditional include cannot be found.
+    expect(machine({ version: 'git version 2.7.4' }).identity).toBeNull();
+    expect(machine({ version: 'git version 2.8.0' }).identity).toMatch(/^git version 2\.8\.0 settings /);
+    // An include chain that does not end.
+    const endless = new Proxy({}, { get: (_, path) => [['includeif.gitdir:/work/.path', `${String(path)}x`]] });
+    expect(machine({ global: [['includeif.gitdir:/work/.path', '/etc/example.inc']], included: endless }).identity).toBeNull();
     expect(createToolVersionResolver({ run: () => ({ error: new Error('spawn git ENOENT') }), scratch: '/scratch' })('git')).toBeNull();
   });
 
-  it('resolves against the real git on this machine', () => {
+  it('reads a conditional include of the real git, which a probe outside any repository does not expand', () => {
     const scratch = mkdtempSync(join(tmpdir(), 'portos-git-identity-'));
     try {
+      const home = join(scratch, 'home');
+      const fixtures = join(scratch, 'fixtures');
+      for (const dir of [home, fixtures]) mkdirSync(dir);
+      writeFileSync(join(home, '.gitconfig'), '[includeIf "gitdir:/example/elsewhere/"]\n\tpath = conditional.inc\n');
+      writeFileSync(join(home, 'conditional.inc'), '[commit]\n\tgpgsign = false\n');
+      const env = { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, '.config'), GIT_CONFIG_NOSYSTEM: '1' };
+      for (const name of ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_DIR', 'GIT_WORK_TREE']) delete env[name];
+      const identity = () => createToolVersionResolver({ env, scratch: fixtures })('git');
       // A machine whose temp directory already sits inside a repository gets no identity at all.
-      const enclosed = spawnSync('git', ['rev-parse', '--git-dir'], { cwd: scratch }).status === 0;
-      const identity = createToolVersionResolver({ scratch })('git');
-      if (enclosed) expect(identity).toBeNull();
-      else expect(identity).toMatch(/^git version \S+.* settings [0-9a-f]{16}$/);
-      execFileSync('git', ['init', '-q'], { cwd: scratch });
-      expect(createToolVersionResolver({ scratch })('git')).toBeNull();
+      const enclosed = spawnSync('git', ['rev-parse', '--git-dir'], { cwd: fixtures, env }).status === 0;
+      const before = identity();
+      if (enclosed) expect(before).toBeNull();
+      else {
+        expect(before).toMatch(/^git version \S+.* settings [0-9a-f]{16}$/);
+        expect(identity()).toBe(before);
+        writeFileSync(join(home, 'conditional.inc'), '[commit]\n\tgpgsign = true\n');
+        expect(identity()).not.toBe(before);
+      }
+      execFileSync('git', ['init', '-q'], { cwd: fixtures, env });
+      expect(identity()).toBeNull();
     } finally { rmSync(scratch, { recursive: true, force: true }); }
   });
 });
