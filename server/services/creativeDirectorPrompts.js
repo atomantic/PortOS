@@ -30,6 +30,7 @@ import { GEMINI_OMNI_WEB_MODEL, GEMINI_WEB_ASPECTS } from '../lib/geminiWebVideo
 import { GENERATION_MODE_LABELS, VIDEO_BACKENDS_WITHOUT_NEGATIVE_PROMPT, VIDEO_GEN_MODE } from '../lib/generationModes.js';
 import { buildPrompt } from './promptService.js';
 import { PORTOS_API_URL_TOKEN } from '../lib/portosUrls.js';
+import { videoShotClipOptions } from '../lib/creativeDirectorVideoCompiler.js';
 
 // Shared project-block view used by both prompt stages. Defaults out
 // nullable fields to `''` so the templates' `{{#x}}`/`{{^x}}` Mustache-spec
@@ -61,6 +62,8 @@ function buildProjectView(project) {
 }
 
 function buildTreatmentView(project, videoBackend) {
+  const hostedClip = videoShotClipOptions(project.renderBackend?.video, Boolean(project.startingImageFile));
+  const renderedClipSeconds = hostedClip?.lengths.filter(seconds => seconds <= 10);
   const aspect = resolveAspectDimensions(project.aspectRatio);
   const quality = QUALITY_PRESETS[project.quality] || { steps: 0, guidance: 0, fps: 0 };
   // The example block in the JSON output contract shows a literal value
@@ -95,7 +98,9 @@ function buildTreatmentView(project, videoBackend) {
           : project.renderBackend?.video?.mode === VIDEO_GEN_MODE.GEMINI
             // Every clip comes back at the fixed length and is trimmed to its shot.
             ? { minSeconds: 1, maxSeconds: GEMINI_OMNI_WEB_MODEL.clipSeconds, aspectRatios: GEMINI_WEB_ASPECTS }
-            : { minSeconds: 1, maxSeconds: 10, backendCompatibility: 'unresolved' }),
+            : renderedClipSeconds
+              ? { minSeconds: 1, maxSeconds: renderedClipSeconds.at(-1) ?? null, renderedClipSeconds }
+              : { minSeconds: 1, maxSeconds: 10, backendCompatibility: 'unresolved' }),
       sourcesJson: JSON.stringify(project.videoDraft?.sources || []),
       currentTreatmentJson: JSON.stringify(project.treatment ? {
         script: project.treatment.script,

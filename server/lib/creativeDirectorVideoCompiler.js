@@ -15,11 +15,37 @@ import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
 import { REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS, REACTOR_MAX_PROMPT_LENGTH, REACTOR_ASPECTS } from './reactorVideoClip.js';
 import { GEMINI_WEB_ASPECTS } from './geminiWebVideo.js';
 import { GENERATION_MODE_LABELS, VIDEO_BACKENDS_WITHOUT_NEGATIVE_PROMPT } from './generationModes.js';
+import { hostedVideoClipOptions } from './hostedVideoClipOptions.js';
+import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL } from './falVideoModels.js';
+import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL } from './runwayVideoModels.js';
+import { HIGGSFIELD_DEFAULT_VIDEO_MODEL } from './higgsfieldVideoModels.js';
+import { GOOGLE_DEFAULT_VIDEO_MODEL } from './googleVideoModels.js';
+import { normalizeRenderPinValue } from './renderTargets.js';
 
-export function validateVideoShot(project, scene, isFirst) {
+export function videoShotClipOptions(pin, hasImage = false) {
+  const { mode, modelId } = pin ?? {};
+  const defaults = {
+    fal: hasImage ? FAL_DEFAULT_IMAGE_VIDEO_MODEL : FAL_DEFAULT_TEXT_VIDEO_MODEL,
+    runway: RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL,
+    higgsfield: HIGGSFIELD_DEFAULT_VIDEO_MODEL,
+    google: GOOGLE_DEFAULT_VIDEO_MODEL,
+  };
+  return hostedVideoClipOptions(mode, normalizeRenderPinValue(modelId) || defaults[mode]);
+}
+
+export function validateVideoShot(project, scene, isFirst, {
+  clip = videoShotClipOptions(project.renderBackend?.video, Boolean(scene.sourceImageFile || scene.useContinuationFromPrior || project.startingImageFile)),
+  clipSeconds = clip?.coerceSeconds(scene.durationSeconds),
+} = {}) {
   const backend = project.renderBackend?.video?.mode;
   const unsupported = [];
   if (isFirst && scene.useContinuationFromPrior) unsupported.push('continuation without a prior shot');
+  if (clip && (clipSeconds == null || clipSeconds + 1e-6 < scene.durationSeconds || clipSeconds > 10)) {
+    const lengths = clip.lengths.filter(seconds => seconds <= 10);
+    unsupported.push(lengths.length
+      ? `duration (${clip.model.label} renders ${lengths.join(', ')} seconds within the Video clip limit)`
+      : `duration (${clip.model.label} has no fixed clip length within the Video clip limit)`);
+  }
   if (backend === 'grok' && !GROK_VIDEO_DURATIONS.includes(scene.durationSeconds)) {
     unsupported.push(`duration (choose ${GROK_VIDEO_DURATIONS.slice(0, -1).join(', ')} or ${GROK_VIDEO_DURATIONS.at(-1)} seconds)`);
   }

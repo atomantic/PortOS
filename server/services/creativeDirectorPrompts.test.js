@@ -93,6 +93,11 @@ describe('Creative Director stage prompts — API origin', () => {
 });
 
 describe('buildTreatmentPrompt — template-rendered output', () => {
+  it('tells the Video writer the pinned model’s clip lengths and maximum shot length', async () => {
+    const out = await buildTreatmentPrompt({ ...baseProject, workspace: 'video', renderBackend: { video: { mode: 'google' } } });
+    expect(out).toContain('{"minSeconds":1,"maxSeconds":8,"renderedClipSeconds":[4,6,8]}');
+  });
+
   it('passes resolved Video source descriptions and the matching revision in the treatment output contract', async () => {
     const revision = 'a'.repeat(32);
     const out = await buildTreatmentPrompt({ ...baseProject, workspace: 'video', videoPlanningContext: { revision }, resolvedVideoSources: [{ kind: 'universe', id: 'example-universe', summary: { canon: 'The traveler wears a silver cloak.' } }] });
