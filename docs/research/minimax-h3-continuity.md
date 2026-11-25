@@ -1,5 +1,7 @@
 # MiniMax H3 scene-continuity comparison
 
+The diagnostic scripts named below were removed after the investigation closed; they are recoverable from git at the parent of the deleting commit.
+
 Controlled validation for #8867 found that H3 preserves the tested synthetic
 scene with a motion-only prompt at both canvases, while a conflicting prompt
 replaces it. The geometry correction follows the reference contract but does

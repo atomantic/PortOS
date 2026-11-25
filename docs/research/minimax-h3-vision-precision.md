@@ -1,5 +1,7 @@
 # H3 vision precision on Metal
 
+The diagnostic scripts named below were removed after the investigation closed; they are recoverable from git at the parent of the deleting commit.
+
 Investigation for #8948, 2026-09-27. **No production precision or adapter change
 is justified by these measurements.** The first bfloat16 discrepancy is
 positional interpolation, followed by independently measurable normalization,
