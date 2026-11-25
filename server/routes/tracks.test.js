@@ -386,13 +386,6 @@ describe('tracks routes', () => {
     expect(tracks.buildRenderAppend).toHaveBeenCalledWith(fresh, expect.objectContaining({ audioFilename: 'music-1.mp3' }));
   });
 
-  it('DELETE /:id/audio clears the pointer', async () => {
-    tracks.getTrack.mockResolvedValue({ id: 'track-1', title: 'Intro' });
-    const r = await request(app).delete('/api/tracks/track-1/audio');
-    expect(r.status).toBe(200);
-    expect(tracks.updateTrack).toHaveBeenCalledWith('track-1', { audioFilename: '' });
-  });
-
   it('POST /:id/renders/:renderId/select makes a past render active', async () => {
     tracks.getTrack.mockResolvedValue({
       id: 'track-1', title: 'Intro', audioFilename: 'b.wav',

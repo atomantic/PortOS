@@ -16,7 +16,7 @@ import * as decisionLog from '../services/decisionLog.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { limitQuerySchema, parsePagination } from '../lib/queryValidation.js';
-import { cosActivityCalendarQuerySchema, cosDecisionsQuerySchema } from '../lib/cos/cosValidation.js';
+import { cosActivityCalendarQuerySchema } from '../lib/cos/cosValidation.js';
 import { runningAgentsByTaskId, withoutSpawningTasks } from '../lib/cos/cosSpawnWindow.js';
 import { detectIdleLeftoverBranches } from '../services/userActionDetectors.js';
 import { requestHasHostControl } from '../services/authGate.js';
@@ -277,13 +277,6 @@ router.get('/quick-summary', asyncHandler(async (req, res) => {
   });
 }));
 
-// GET /api/cos/goal-progress - Get progress toward user goals
-// Maps completed tasks to goal categories from GOALS.md
-router.get('/goal-progress', asyncHandler(async (req, res) => {
-  const progress = await goalProgress.getGoalProgress();
-  res.json(progress);
-}));
-
 // GET /api/cos/goal-progress/summary - Get compact goal progress for dashboard
 router.get('/goal-progress/summary', asyncHandler(async (req, res) => {
   const summary = await goalProgress.getGoalProgressSummary();
@@ -293,15 +286,6 @@ router.get('/goal-progress/summary', asyncHandler(async (req, res) => {
 // ============================================================
 // Decision Log Routes
 // ============================================================
-
-// GET /api/cos/decisions - Get recent decisions
-router.get('/decisions', asyncHandler(async (req, res) => {
-  const query = validateRequest(cosDecisionsQuerySchema, req.query);
-  const { limit } = parsePagination(query, { defaultLimit: 20, maxLimit: 500 });
-  const type = query.type || null;
-  const decisions = await decisionLog.getRecentDecisions(limit, type);
-  res.json({ decisions });
-}));
 
 // GET /api/cos/decisions/summary - Get decision summary for dashboard
 router.get('/decisions/summary', asyncHandler(async (req, res) => {

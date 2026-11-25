@@ -45,19 +45,6 @@ const territorySchema = z.object({
   inheritAccountRules: z.boolean().optional(),
   rules,
 }).strict();
-const itemSchema = z.object({
-  accountId: uuid,
-  territoryId: uuid.nullable().optional(),
-  remoteId: z.string().trim().min(1).max(200),
-  kind: z.enum(['post', 'comment']),
-  authorName: z.string().max(120).optional(),
-  title: z.string().max(2_000).optional(),
-  body: z.string().max(40_000).optional(),
-  sourceUrl: z.string().url().max(2_000).optional(),
-  imageUrls: z.array(z.string().url().max(2_000)).max(12).optional(),
-  remoteCreatedAt: z.iso.datetime().nullable().optional(),
-  remoteUpdatedAt: z.iso.datetime().nullable().optional(),
-}).strict();
 const actionBase = { accountId: uuid, itemId: uuid.nullable().optional(), territoryId: uuid.nullable().optional() };
 const itemHandoffPayload = z.object({ intent: z.enum(['inspect', 'zap', 'moderate']).optional() }).strict().optional();
 const actionSchema = z.discriminatedUnion('kind', [
@@ -182,12 +169,6 @@ router.get('/accounts/:id/items', asyncHandler(async (req, res) => {
   requireId(req.params.id, 'account ID');
   await requireAccount(req.params.id);
   res.json({ items: await stackerNews.listItems(req.params.id) });
-}));
-
-router.post('/items', asyncHandler(async (req, res) => {
-  const item = await stackerNews.ingestItem(validateRequest(itemSchema, req.body));
-  emitChanged(req, item.accountId);
-  res.status(201).json(item);
 }));
 
 router.post('/items/:id/analyze', asyncHandler(async (req, res) => {

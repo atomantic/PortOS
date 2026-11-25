@@ -11,7 +11,6 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import {
   vaultInputSchema,
-  vaultUpdateSchema,
   notePathSchema,
   createNoteSchema,
   updateNoteSchema,
@@ -74,21 +73,6 @@ router.post('/vaults', asyncHandler(async (req, res) => {
   const result = await obsidian.addVault(data);
   throwOnError(result);
   res.status(201).json(result);
-}));
-
-router.put('/vaults/:id', asyncHandler(async (req, res) => {
-  const data = validateRequest(vaultUpdateSchema, req.body);
-  const result = await obsidian.updateVault(req.params.id, data);
-  throwOnError(result, 'Vault not found');
-  res.json(result);
-}));
-
-router.delete('/vaults/:id', asyncHandler(async (req, res) => {
-  const deleted = await obsidian.removeVault(req.params.id);
-  if (!deleted) {
-    throw new ServerError('Vault not found', { status: 404, code: 'NOT_FOUND' });
-  }
-  res.status(204).send();
 }));
 
 // =============================================================================

@@ -354,7 +354,7 @@ describe('local LLM playground routes', () => {
     expect(installModel).toHaveBeenCalledWith('ollama', 'llama3.2', expect.any(Function), { force: false });
   });
 
-  it('runs a single local model test with validated defaults', async () => {
+  it('streams a single local model test with validated defaults', async () => {
     runLocalLlmTest.mockResolvedValue({
       backend: 'ollama',
       modelId: 'llama3.2',
@@ -364,11 +364,11 @@ describe('local LLM playground routes', () => {
     });
 
     const res = await request(makeApp())
-      .post('/api/local-llm/test')
+      .post('/api/local-llm/test/stream')
       .send({ backend: 'ollama', modelId: 'llama3.2', prompt: 'Say hello' });
 
     expect(res.status).toBe(200);
-    expect(res.body.text).toBe('hello');
+    expect(JSON.parse(res.text.trim()).result.text).toBe('hello');
     expect(runLocalLlmTest).toHaveBeenCalledWith({
       backend: 'ollama',
       modelId: 'llama3.2',
@@ -377,6 +377,7 @@ describe('local LLM playground routes', () => {
       temperature: 0.3,
       maxTokens: 1000,
       timeoutMs: 300000,
+      onToken: expect.any(Function),
       // Derived from res — lets a client disconnect tear down the upstream stream.
       signal: expect.any(AbortSignal),
     });

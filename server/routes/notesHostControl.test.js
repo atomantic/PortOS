@@ -13,7 +13,6 @@ vi.mock('../services/auth.js', async (importOriginal) => ({
 
 const obsidian = vi.hoisted(() => ({
   addVault: vi.fn(),
-  updateVault: vi.fn(),
   getVaults: vi.fn(),
   detectVaults: vi.fn(),
 }));
@@ -51,36 +50,26 @@ const expectRefused = (response) => {
   expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
 };
 
-describe('host-control gate on notes vault add/repoint (#9007)', () => {
+describe('host-control gate on notes vault registration (#9007)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     obsidian.addVault.mockResolvedValue({ id: 'v1', name: 'x', path: '/tmp/example-vault' });
-    obsidian.updateVault.mockResolvedValue({ id: 'v1', name: 'x', path: '/tmp/example-vault' });
   });
 
-  it('refuses a remote password-free caller registering or repointing a vault, direct or proxied, with no vault persisted', async () => {
-    const writes = [
-      ['post', '/api/notes/vaults', { path: '/tmp/example-vault' }],
-      ['put', '/api/notes/vaults/v1', { path: '/tmp/other-vault' }],
-    ];
-    for (const write of writes) {
-      expectRefused(await call(remote(), write));
-      expectRefused(await call(local(), write, '192.0.2.10'));
-    }
+  it('refuses a remote password-free caller registering a vault, direct or proxied, with no vault persisted', async () => {
+    const write = ['post', '/api/notes/vaults', { path: '/tmp/example-vault' }];
+    expectRefused(await call(remote(), write));
+    expectRefused(await call(local(), write, '192.0.2.10'));
     expect(obsidian.addVault).not.toHaveBeenCalled();
-    expect(obsidian.updateVault).not.toHaveBeenCalled();
   });
 
-  it('keeps a local caller, direct or through the dev proxy, able to add and repoint vaults', async () => {
+  it('keeps a local caller, direct or through the dev proxy, able to add vaults', async () => {
     for (const proxyClient of [undefined, '::ffff:127.0.0.1']) {
       const app = local();
       const add = await call(app, ['post', '/api/notes/vaults', { path: '/tmp/example-vault' }], proxyClient);
-      const update = await call(app, ['put', '/api/notes/vaults/v1', { path: '/tmp/other-vault' }], proxyClient);
       expect(add.status).toBe(201);
-      expect(update.status).toBe(200);
     }
     expect(obsidian.addVault).toHaveBeenCalledTimes(2);
-    expect(obsidian.updateVault).toHaveBeenCalledTimes(2);
   });
 
   it('leaves read-only vault listing and detection open to a remote caller', async () => {
