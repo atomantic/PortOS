@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./agent/agentAppWorkspace.js', () => ({ getAppDataForTask: vi.fn() }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: vi.fn() }));
-vi.mock('./prProbe.js', () => ({ readPullRequest: vi.fn() }));
+vi.mock('./prProbe.js', async () => {
+  const { awaitsHumanReviewOnRequiredChecks } = await vi.importActual('./prView.js');
+  return { readPullRequest: vi.fn(), awaitsHumanReviewOnRequiredChecks };
+});
+vi.mock('./github.js', () => ({ execGh: vi.fn() }));
+vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({}) }));
 vi.mock('./worktreeManager.js', () => ({ listWorktrees: vi.fn() }));
 vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn() }));
 vi.mock('../lib/localReviewLifecycle.js', () => ({ localReviewLifecycle: vi.fn() }));
@@ -13,6 +18,7 @@ import { readPullRequest } from './prProbe.js';
 import { listWorktrees } from './worktreeManager.js';
 import { execGit } from '../lib/execGit.js';
 import { localReviewLifecycle } from '../lib/localReviewLifecycle.js';
+import { execGh } from './github.js';
 import { verifyClaimReviewHandoff } from './claimReviewHandoff.js';
 
 const head = 'a'.repeat(40);
@@ -49,6 +55,42 @@ beforeEach(() => {
   });
   readPullRequest.mockImplementation(async branch => views[branch] ?? null);
   localReviewLifecycle.mockImplementation(async (_cwd, { prUrl }) => ({ reusable: true, receipt: { status: 'partial', prUrl } }));
+});
+
+describe('claim human-review handoff with advisory failures', () => {
+  const rollup = [{ name: 'CI', conclusion: 'SUCCESS' }, { name: 'ruleset drift', conclusion: 'FAILURE' }];
+  const answerRequired = required => execGh.mockResolvedValue(JSON.stringify({ data: { repository: { pullRequest: { commits: { nodes: [{ commit: { oid: head, statusCheckRollup: {
+    contexts: { pageInfo: { hasNextPage: false }, nodes: rollup.map(c => ({ name: c.name, isRequired: required.includes(c.name) })) } } } }] } } } } }));
+  beforeEach(() => { views['claim/issue-42'] = view('claim/issue-42', 7, { statusCheckRollup: rollup }); });
+
+  it('verifies when only a non-required check failed', async () => {
+    answerRequired(['CI']);
+    expect(await verify()).toMatchObject({ status: 'verified', pullRequests: [{ awaitingHumanReview: true }] });
+  });
+  it('refuses when a required check failed', async () => {
+    answerRequired(['CI', 'ruleset drift']);
+    expect(await verify()).toEqual({ status: 'unverified', reason: 'pull-request-not-awaiting-human-review' });
+  });
+  it('refuses when a required check is missing from the viewed rollup', async () => {
+    views['claim/issue-42'] = view('claim/issue-42', 7, { statusCheckRollup: [rollup[1]] });
+    answerRequired(['CI', 'ruleset drift']);
+    expect(await verify()).toEqual({ status: 'unverified', reason: 'pull-request-not-awaiting-human-review' });
+  });
+  it('refuses when a node lacks a boolean requiredness', async () => {
+    execGh.mockResolvedValue(JSON.stringify({ data: { repository: { pullRequest: { commits: { nodes: [{ commit: { oid: head, statusCheckRollup: {
+      contexts: { pageInfo: { hasNextPage: false }, nodes: [{ name: 'CI', isRequired: true }, { name: 'ruleset drift' }] } } } }] } } } } }));
+    expect(await verify()).toEqual({ status: 'unverified', reason: 'pull-request-not-awaiting-human-review' });
+  });
+  it('refuses when requiredness was read for a newer head', async () => {
+    answerRequired(['CI']);
+    views['claim/issue-42'] = view('claim/issue-42', 7, { statusCheckRollup: rollup, headRefOid: otherHead });
+    tips['claim/issue-42'] = otherHead;
+    expect(await verify()).toEqual({ status: 'unverified', reason: 'pull-request-not-awaiting-human-review' });
+  });
+  it('refuses when the required set cannot be read', async () => {
+    execGh.mockRejectedValue(new Error('graphql unavailable'));
+    expect(await verify()).toEqual({ status: 'unverified', reason: 'pull-request-not-awaiting-human-review' });
+  });
 });
 
 describe('claim human-review handoff', () => {
