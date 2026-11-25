@@ -302,6 +302,37 @@ it('generates one explicitly selected soundtrack, retains its Track, and reuses 
   expect(enqueueJob).toHaveBeenCalledTimes(1);
 });
 
+it.each([
+  ['dispatch preflight', 'VIDEO_AUDIO_BLOCKED', 0],
+  ['queue admission', 'MEDIA_QUEUE_FULL', 1],
+  ['queue dispatch guard', 'VIDEO_DISPATCH_BLOCKED', 1],
+])('resumes soundtrack generation after a refusal at %s within one audio job', async (_boundary, code, enqueueCalls) => {
+  const { prepareVideoSoundtrack } = await import('./videoAudio.js');
+  const { enqueueJob } = await import('../mediaJobQueue/index.js');
+  const { isEngineHealthy } = await import('../pipeline/musicGen.js');
+  state.project.videoDraft.audio = { mode: 'generated', providerId: 'example-audio', model: 'example-model', prompt: 'A quiet invented melody.' };
+  const limits = { maxAudioJobs: 1, maxRetries: 0 };
+  await startVideoExecution('example-video', await startInput(limits));
+
+  if (enqueueCalls === 0) isEngineHealthy.mockResolvedValueOnce(false);
+  else enqueueJob.mockRejectedValueOnce(Object.assign(new Error('Dispatch refused'), { code }));
+  await expect(prepareVideoSoundtrack(state.project, async () => true)).rejects.toMatchObject({ code });
+  expect(enqueueJob).toHaveBeenCalledTimes(enqueueCalls);
+  expect(state.jobs).toHaveLength(0);
+  expect(state.project.videoExecution.attempts).toEqual([
+    expect.objectContaining({ kind: 'audio', status: 'failed', notSubmitted: true }),
+  ]);
+
+  await pauseVideoExecution('example-video', 'Soundtrack dispatch refused.');
+  await startVideoExecution('example-video', await startInput(limits));
+  await expect(prepareVideoSoundtrack(state.project, async () => true)).resolves.toMatchObject({ filename: 'example-bed.wav' });
+  expect(state.jobs).toHaveLength(1);
+  expect(state.project.videoExecution.attempts).toEqual([
+    expect.objectContaining({ status: 'failed', notSubmitted: true }),
+    expect.objectContaining({ status: 'queued', jobId: state.jobs[0].id }),
+  ]);
+});
+
 const HAILUO_T2V = 'fal-ai/minimax/hailuo-02/standard/text-to-video';
 const falProject = (modelId = HAILUO_T2V) => { state.project.renderBackend = { video: { mode: 'fal', modelId } }; state.settings = { videoGen: { fal: { apiKey: 'example-key' } } }; };
 const enqueueFal = (params = {}, sceneId = 'opening') => enqueueVideoProductionJob(state.project, { sceneId, workRevision: 0,
