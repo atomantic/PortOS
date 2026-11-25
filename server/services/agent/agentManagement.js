@@ -1339,7 +1339,7 @@ async function runCleanupOrphanedAgents() {
         if (receipt) {
           console.log(`📬 Finalizing runner agent ${agent.id} from its completion receipt (exit ${receipt.exitCode})`);
           const { handleAgentCompletion } = await import('./agentLifecycle.js');
-          await handleAgentCompletion(agent.id, receipt.exitCode, receipt.success, receipt.duration);
+          await handleAgentCompletion(agent.id, receipt.exitCode, receipt.success, receipt.duration, receipt);
           continue;
         }
       }
