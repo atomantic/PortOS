@@ -348,7 +348,7 @@ router.post('/gmail/enable-api', asyncHandler(async (req, res) => {
 
 // === Selector Routes ===
 router.get('/selectors', asyncHandler(async (req, res) => {
-  const selectors = await getSelectors();
+  const selectors = await getSelectors({ strict: true });
   res.json(selectors);
 }));
 

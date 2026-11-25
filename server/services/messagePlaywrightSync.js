@@ -5,6 +5,7 @@ import { ensureDir, PATHS, readJSONFileStrict, unreadableStoreError, atomicWrite
 import { isPlainObject } from '../lib/objects.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { messageLogError } from '../lib/messageLogError.js';
+import { MESSAGE_SELECTOR_DEFAULTS } from '../lib/messageSelectorDefaults.js';
 import {
   COMPOSE_PROVIDER_LABEL, SUBMIT_EVALUATE_TIMEOUT_MS, SUBMIT_OBSERVE_MS, buildComposePhaseScript, checkAccountIdentity, classifySendOutcome,
   describeComposeFailure, planDelivery, recipientsMatch, resolveComposeConfig
@@ -20,8 +21,9 @@ const SELECTORS_FILE = join(PATHS.messages, 'selectors.json');
 const OUTLOOK_URL = 'https://outlook.office.com/mail/';
 const TEAMS_URL = 'https://teams.microsoft.com/';
 
-const DEFAULT_OUTLOOK_ROW_SELECTOR = "[role='listbox'] [role='option']";
-const outlookRowSelector = sels => sels.messageRow ?? DEFAULT_OUTLOOK_ROW_SELECTOR;
+const outlookRowSelector = sels => sels.messageRow ?? MESSAGE_SELECTOR_DEFAULTS.outlook.list.messageRow;
+const teamsMessageSelector = sels => sels.messageItem || MESSAGE_SELECTOR_DEFAULTS.teams.list.messageItem;
+const withSelectorsLock = createMutex();
 
 // Serialized into the provider page for Test, summary extraction and detail lookup.
 // Selectors always address the document, including on subsequent virtualized paints.
@@ -60,21 +62,20 @@ function outlookRowContext(selector, requireScroll = true) {
   return { rows, scrollContainer };
 }
 
-export async function getSelectors() {
-  const { value } = await readJSONFileStrict(SELECTORS_FILE, {}, { allowArray: false });
+export async function getSelectors({ strict = false } = {}) {
+  const { ok, value } = await readJSONFileStrict(SELECTORS_FILE, {}, { allowArray: false });
+  if (strict && (!ok || !isPlainObject(value))) throw unreadableStoreError(SELECTORS_FILE);
   return isPlainObject(value) ? value : {};
 }
 
 export async function updateSelectors(provider, selectors) {
-  // Display readers get {} for an unreadable file; the update refuses instead of
-  // replacing every provider's selectors with one.
-  const { ok, value } = await readJSONFileStrict(SELECTORS_FILE, {}, { allowArray: false });
-  if (!ok) throw unreadableStoreError(SELECTORS_FILE);
-  const all = isPlainObject(value) ? value : {};
-  all[provider] = selectors;
-  await ensureDir(PATHS.messages);
-  await atomicWrite(SELECTORS_FILE, all);
-  return all[provider];
+  return withSelectorsLock(async () => {
+    const all = await getSelectors({ strict: true });
+    all[provider] = selectors;
+    await ensureDir(PATHS.messages);
+    await atomicWrite(SELECTORS_FILE, all);
+    return selectors;
+  });
 }
 
 /**
@@ -449,7 +450,7 @@ function buildExtractionScript(type, sels, mode = 'unread') {
     `;
   }
   if (type === 'teams') {
-    const msgSel = sels.messageItem || "[role='listitem']";
+    const msgSel = teamsMessageSelector(sels);
     return `
       (function() {
         const items = document.querySelectorAll(${JSON.stringify(msgSel)});
@@ -641,25 +642,31 @@ export async function testSelectors(provider) {
     return { provider, results: {}, status: 'auth-required', error: 'Login required — sign into the provider first' };
   }
 
-  const allSelectors = await getSelectors();
-  const sels = allSelectors[provider] || {};
+  const allSelectors = await getSelectors({ strict: true });
+  const stored = allSelectors[provider] || {};
+  const { compose } = MESSAGE_SELECTOR_DEFAULTS[provider];
+  const sels = {
+    ...stored,
+    ...(provider === 'outlook' ? { messageRow: outlookRowSelector(stored) } : { messageItem: teamsMessageSelector(stored) })
+  };
   const results = {};
 
   for (const [name, selector] of Object.entries(sels)) {
-    const effective = provider === 'outlook' && name === 'messageRow' ? outlookRowSelector(sels) : selector;
+    // Compose controls need a compose view. Test checks the current list page.
+    if (Object.hasOwn(compose, name) || name === 'sendAckPattern' || name === 'sendRefusalPattern') continue;
     const script = provider === 'outlook' && name === 'messageRow'
       ? `(function() {
-          const context = (${outlookRowContext.toString()})(${JSON.stringify(effective)}, false);
+          const context = (${outlookRowContext.toString()})(${JSON.stringify(selector)}, false);
           return context.error ? context : context.rows().length;
         })()`
-      : `document.querySelectorAll(${JSON.stringify(effective)}).length`;
+      : `document.querySelectorAll(${JSON.stringify(selector)}).length`;
     const count = await evaluateOnPage(page, script);
-    results[name] = { selector: effective, matches: typeof count === 'number' ? count : 0,
+    results[name] = { selector, matches: typeof count === 'number' ? count : 0,
       ...(count?.error ? { error: count.message } : {}) };
   }
 
   const entries = Object.values(results);
-  const status = entries.length === 0 ? 'no-selectors' : entries.every(r => r.matches > 0) ? 'ok' : 'partial';
+  const status = entries.every(r => r.matches > 0) ? 'ok' : 'partial';
   console.log(`📧 Selector test for ${provider}: ${status}`);
   return { provider, results, status };
 }

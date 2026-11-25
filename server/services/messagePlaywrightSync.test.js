@@ -8,6 +8,7 @@ const listCdpPages = vi.fn();
 vi.mock('./browserService.js', () => ({ findOrOpenPage, isAuthPage, evaluateOnPage, listCdpPages }));
 
 const tryReadFile = vi.fn();
+const atomicWrite = vi.fn();
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
   // Selector reads are strict now; drive them from the same bytes mock.
@@ -16,10 +17,10 @@ vi.mock('../lib/fileUtils.js', async () => {
     if (raw == null) return { ok: true, value: fallback };
     try { return { ok: true, value: JSON.parse(raw) }; } catch { return { ok: false, value: fallback }; }
   };
-  return { ...actual, tryReadFile, readJSONFileStrict };
+  return { ...actual, tryReadFile, readJSONFileStrict, ensureDir: vi.fn(), atomicWrite };
 });
 
-const { testSelectors, syncPlaywright, sendPlaywright, refreshMessageDetail } = await import('./messagePlaywrightSync.js');
+const { getSelectors, updateSelectors, testSelectors, syncPlaywright, sendPlaywright, refreshMessageDetail } = await import('./messagePlaywrightSync.js');
 
 const OPEN_PAGE = { url: 'https://outlook.office.com/mail/', webSocketDebuggerUrl: 'ws://x' };
 
@@ -51,15 +52,40 @@ describe('testSelectors', () => {
     expect(evaluateOnPage).not.toHaveBeenCalled();
   });
 
-  it('reports no-selectors when the provider has none configured', async () => {
+  it.each([
+    ['outlook', 'messageRow', "[role='listbox'] [role='option']"],
+    ['teams', 'messageItem', "[role='listitem']"],
+  ])('tests the built-in %s list selector when the selectors file is absent', async (provider, key, selector) => {
     findOrOpenPage.mockResolvedValue(OPEN_PAGE);
-    isAuthPage.mockReturnValue(false);
-    tryReadFile.mockResolvedValue(JSON.stringify({}));
+    const querySelectorAll = vi.fn((value) => value === selector ? [{}] : []);
+    evaluateOnPage.mockImplementation((_, script) => vm.runInNewContext(script, { document: { querySelectorAll } }));
 
-    const result = await testSelectors('outlook');
+    expect(await testSelectors(provider)).toEqual({
+      provider,
+      status: 'ok',
+      results: { [key]: { selector, matches: 1 } },
+    });
+    expect(querySelectorAll).toHaveBeenCalledWith(selector);
+  });
 
-    expect(result.status).toBe('no-selectors');
-    expect(evaluateOnPage).not.toHaveBeenCalled();
+  it('tests the saved list override without looking for compose controls on the list page', async () => {
+    findOrOpenPage.mockResolvedValue(OPEN_PAGE);
+    tryReadFile.mockResolvedValue(JSON.stringify({
+      teams: { messageItem: '.chat-row', composeSend: '.send-button', sendAckPattern: 'sent' },
+    }));
+    evaluateOnPage.mockResolvedValue(3);
+
+    expect(await testSelectors('teams')).toMatchObject({
+      status: 'ok',
+      results: { messageItem: { selector: '.chat-row', matches: 3 } },
+    });
+    expect(evaluateOnPage).toHaveBeenCalledExactlyOnceWith(OPEN_PAGE, 'document.querySelectorAll(".chat-row").length');
+  });
+
+  it('distinguishes a missing selectors file from an unreadable one for the editor', async () => {
+    tryReadFile.mockResolvedValueOnce(null).mockResolvedValueOnce('{');
+    await expect(getSelectors({ strict: true })).resolves.toEqual({});
+    await expect(getSelectors({ strict: true })).rejects.toThrow(/unreadable|could not read/i);
   });
 
   it('reports ok when every configured selector matches at least one element', async () => {
@@ -99,6 +125,21 @@ describe('testSelectors', () => {
     expect(result.status).toBe('partial');
     expect(result.results.messageRow.matches).toBe(0);
   });
+});
+
+it('preserves both providers when their selector overrides are saved concurrently', async () => {
+  let file;
+  tryReadFile.mockImplementation(async () => file);
+  atomicWrite.mockImplementation(async (_, value) => { file = JSON.stringify(value); });
+  try {
+    const outlook = { composeSend: '.send-mail' };
+    const teams = { newChat: '.new-chat' };
+    await Promise.all([updateSelectors('outlook', outlook), updateSelectors('teams', teams)]);
+    expect(await getSelectors({ strict: true })).toEqual({ outlook, teams });
+  } finally {
+    atomicWrite.mockReset();
+    tryReadFile.mockReset();
+  }
 });
 
 it('retains the ingested provider row ID when detail is unavailable', async () => {
