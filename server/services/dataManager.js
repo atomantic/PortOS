@@ -7,6 +7,7 @@ import { execFile } from '../lib/childProcess.js';
 import { promisify } from 'util';
 import { parseFilesystemStats, sha256Text } from '../lib/fileCore.js';
 import { PATHS, ensureDir, isTopLevelEntryName, rmGuarded, writeFileGuarded } from '../lib/fileUtils.js';
+import { isPersistentMindScreenshotEntry } from '../lib/persistent/persistentMindAttachmentOwnership.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { ARCHIVE_FILENAME, CATEGORIES } from './dataManagerCategories.js';
