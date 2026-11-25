@@ -321,7 +321,7 @@ describe('LocalLlmPlayground endpoint runtimes', () => {
   const runtimes = [
     { id: 'llama', label: 'llama.cpp', models: [{ id: 'dflash' }], offline: false, error: null },
     { id: 'mtplx', label: 'MTPLX', models: [{ id: 'mlx-community/qwen' }], offline: false, error: null },
-    { id: 'splash', label: 'Splash', models: [], offline: true, error: 'not reachable' },
+    { id: 'splash', label: 'Splash', models: [], offline: true, error: 'not reachable at http://127.0.0.1:1/v1 (refused)' },
   ];
 
   it('groups a running runtime under its response label, sends its backend id and links stopped runtimes to the Runtimes page', async () => {
@@ -354,6 +354,29 @@ describe('LocalLlmPlayground endpoint runtimes', () => {
     fireEvent.click(screen.getByText('Run comparison'));
     await waitFor(() => expect(compareLocalLlmModels).toHaveBeenCalled());
     expect(compareLocalLlmModels.mock.calls[0][0].targets).toEqual([{ backend: 'mtplx', modelId: 'mlx-community/qwen' }]);
+  });
+
+  it('names a listing error and an empty catalog instead of calling every runtime stopped', async () => {
+    getLocalRuntimeModels.mockResolvedValue({ runtimes: [
+      { id: 'vllm', label: 'vLLM', models: [], offline: true, error: 'HTTP 401 from the model listing' },
+      { id: 'sglang', label: 'SGLang', models: [], offline: false, error: null },
+    ] });
+    renderPlayground();
+    const panel = await screen.findByTestId('local-llm-offline-runtimes');
+    expect(panel.textContent).toContain('(HTTP 401 from the model listing)');
+    expect(panel.textContent).toContain('SGLang');
+    expect(panel.textContent).toContain('serves no models');
+  });
+
+  it('keeps a runtime target selected when the runtime listing request fails', async () => {
+    getLocalRuntimeModels.mockRejectedValue(new Error('boom'));
+    const targets = encodeURIComponent(JSON.stringify([{ backend: 'llama', modelId: 'dflash' }]));
+    streamLocalLlmTest.mockResolvedValue({ backend: 'llama', modelId: 'dflash', text: 'x', timings: {} });
+    renderPlayground(`/local-llm/playground?targets=${targets}`);
+    await screen.findByText(/could not be listed: boom/);
+    fireEvent.click(screen.getByText('Run chat'));
+    await waitFor(() => expect(streamLocalLlmTest).toHaveBeenCalled());
+    expect(streamLocalLlmTest.mock.calls[0][0]).toMatchObject({ backend: 'llama', modelId: 'dflash' });
   });
 
   it('still lists Ollama models when the runtime listing fails', async () => {
