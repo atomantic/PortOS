@@ -223,7 +223,10 @@ operator must trace the owning workflow and explain how its records relate to
 the **selected** reservation. Use the repository's
 [backup publication guide](BACKUP_PUBLICATION_ADMISSION.md) or search the
 source for `withBackupAssetPublication` to trace the owner's lease boundary.
-Use PID and age only as supporting evidence.
+For toolkit writers, follow the injected `withAssetPublication` callback from
+`server/services/bootstrap.js`. For delegated runtime writes, trace
+`publishRuntimeFiles` callers to `server/lib/runtimeFilePublication.js`. Use PID
+and age only as supporting evidence.
 
 | Owner | Evidence to inspect |
 |---|---|
