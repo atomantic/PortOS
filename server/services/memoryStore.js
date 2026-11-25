@@ -89,9 +89,9 @@ export async function saveEmbeddings(embeddings) {
 /**
  * Load full memory by ID
  */
-export async function loadMemory(id) {
+export async function loadMemory(id, options) {
   const memoryFile = join(MEMORIES_DIR, id, 'memory.json');
-  return readJSONFile(memoryFile, null);
+  return readJSONFile(memoryFile, null, options);
 }
 
 /**

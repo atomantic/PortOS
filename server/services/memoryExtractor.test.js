@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cosEvents } from './cos/cosEvents.js';
 import { getDomainAutonomyMode } from './cos/cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
-import { createMemory, getMemories, searchMemories } from './memoryBackend.js';
+import { createMemory, getMemories, searchMemories, withPendingMemories } from './memoryBackend.js';
 import { classifyMemories, getConfig, isAvailable } from './memoryClassifier.js';
 import { generateMemoryEmbedding } from './memoryEmbeddings.js';
 import { extractAndStoreMemories } from './memoryExtractor.js';
@@ -15,11 +15,13 @@ vi.mock('./domainUsage.js', () => ({
 }));
 vi.mock('./memoryBackend.js', () => ({
   createMemory: vi.fn(),
+  withPendingMemories: vi.fn(),
   getMemories: vi.fn(),
   searchMemories: vi.fn()
 }));
 vi.mock('./memoryClassifier.js', () => ({ classifyMemories: vi.fn(), getConfig: vi.fn(), isAvailable: vi.fn() }));
 vi.mock('./memoryEmbeddings.js', () => ({ generateMemoryEmbedding: vi.fn() }));
+vi.mock('./review.js', () => ({ createMemoryApprovalItem: vi.fn() }));
 vi.mock('./notifications.js', async () => ({
   NOTIFICATION_TYPES: (await import('../lib/notificationTypes.js')).NOTIFICATION_TYPES,
   PRIORITY_LEVELS: { MEDIUM: 'medium' },
@@ -64,6 +66,10 @@ describe('extractAndStoreMemories', () => {
       id: `memory-${createMemory.mock.calls.length}`,
       status: data.status || 'active'
     }));
+    withPendingMemories.mockImplementation(async (ids, publish) => {
+      const created = await Promise.all(createMemory.mock.results.map(result => result.value));
+      return publish(created.filter(memory => ids.includes(memory.id)));
+    });
     notifications.exists.mockResolvedValue(false);
     cosEvents.on('memory:approval-needed', approvalNeeded);
     cosEvents.on('memory:extracted', extracted);

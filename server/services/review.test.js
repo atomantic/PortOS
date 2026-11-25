@@ -42,6 +42,7 @@ const {
   reopenItem,
   dismissItem,
   dismissByReferenceId,
+  removeMemoryApprovalItems,
   updateItem,
   deleteItem,
   getBriefing,
@@ -359,7 +360,7 @@ describe('review service', () => {
   });
 
   describe('cosEvents bridge', () => {
-    it('erases memory approval items from both stores only on hard deletion', async () => {
+    it('erases memory approval items from both stores on hard purge', async () => {
       const metadata = { referenceId: 'mem-1', category: 'memory-approval' };
       const live = { id: 'live', status: 'pending', metadata };
       const archived = { id: 'archived', status: 'dismissed', metadata };
@@ -369,10 +370,7 @@ describe('review service', () => {
       const emit = vi.spyOn(reviewEvents, 'emit');
 
       try {
-        await registeredHandlers['memory:deleted']({ id: 'mem-1', hard: false });
-        expect(atomicWrite).not.toHaveBeenCalled();
-
-        await registeredHandlers['memory:deleted']({ id: 'mem-1', hard: true });
+        await removeMemoryApprovalItems('mem-1');
         expect(atomicWrite).toHaveBeenCalledWith('/test/data/review/items.json', [unrelated]);
         expect(atomicWrite).toHaveBeenCalledWith('/test/data/review/archive.json', []);
         expect(emit.mock.calls).toEqual([

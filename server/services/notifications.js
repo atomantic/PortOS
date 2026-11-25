@@ -66,8 +66,8 @@ async function loadNotifications() {
  */
 async function saveNotifications(data) {
   await ensureDirectory();
-  notificationsCache = data;
   await atomicWrite(NOTIFICATIONS_FILE, data);
+  notificationsCache = data;
 }
 
 /**
@@ -225,10 +225,9 @@ export async function removeByMetadata(field, value) {
     // socket bridge fans 'removed' (not 'count-changed') to the client list.
     const removedIds = data.notifications.filter(n => n.metadata?.[field] === value).map(n => n.id);
 
-    data.notifications = data.notifications.filter(n => n.metadata?.[field] !== value);
-
     if (removedIds.length > 0) {
-      await saveNotifications(data);
+      // A failed purge must leave the persisted matches visible to a retry.
+      await saveNotifications({ ...data, notifications: data.notifications.filter(n => n.metadata?.[field] !== value) });
       console.log(`🔔 Removed ${removedIds.length} notifications with ${field}=${value}`);
       for (const id of removedIds) notificationEvents.emit('removed', { id });
       notificationEvents.emit('count-changed', await getUnreadCount());

@@ -5,7 +5,7 @@
  * Supports structured MEMORY blocks and pattern-based extraction.
  */
 
-import { createMemory, searchMemories, getMemories } from './memoryBackend.js';
+import { createMemory, searchMemories, getMemories, withPendingMemories } from './memoryBackend.js';
 import { generateMemoryEmbedding } from './memoryEmbeddings.js';
 import { cosEvents } from './cos/cosEvents.js';
 import * as notifications from './notifications.js';
@@ -196,6 +196,48 @@ async function findExistingDuplicate(embedding, content, pendingMemories) {
   return null;
 }
 
+async function publishApprovals(memories, agentId, taskId) {
+  if (!memories.length) return memories;
+  const { createMemoryApprovalItem } = await import('./review.js');
+  for (const mem of memories) {
+    await createMemoryApprovalItem(mem, agentId, taskId);
+    const alreadyExists = await notifications.exists(
+      notifications.NOTIFICATION_TYPES.MEMORY_APPROVAL,
+      'memoryId',
+      mem.id
+    );
+    if (!alreadyExists) {
+      await notifications.addNotification({
+        type: notifications.NOTIFICATION_TYPES.MEMORY_APPROVAL,
+        title: `Memory needs approval`,
+        description: (mem.summary || mem.content || '').slice(0, 300),
+        priority: notifications.PRIORITY_LEVELS.MEDIUM,
+        link: '/cos/memory',
+        metadata: {
+          memoryId: mem.id,
+          category: 'memory-approval',
+          actionKind: 'memory.approval',
+          sourceOwned: true,
+          memoryType: mem.type,
+          agentId,
+          taskId
+        }
+      });
+    }
+  }
+  cosEvents.emit('memory:approval-needed', {
+    agentId,
+    taskId,
+    memories: memories.map(m => ({
+      id: m.id,
+      type: m.type,
+      content: (m.content || '').slice(0, 500),
+      confidence: m.confidence
+    }))
+  });
+  return memories;
+}
+
 /**
  * Main extraction function
  * Processes agent output and creates memories
@@ -310,11 +352,11 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
   // instead routed to pending approval — nothing enters active memory without a
   // human confirm, but the extraction work is still surfaced for review.
   const created = [];
-  const pendingMemories = [];
+  const pendingIds = [];
   for (const mem of highConfidence) {
     if (mode === 'dry-run') {
       const memory = await dedupAndCreate(mem, { status: 'pending_approval' });
-      if (memory) pendingMemories.push(memory);
+      if (memory) pendingIds.push(memory.id);
     } else {
       const memory = await dedupAndCreate(mem);
       if (memory) created.push(memory);
@@ -323,49 +365,13 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
 
   for (const mem of mediumConfidence) {
     const memory = await dedupAndCreate(mem, { status: 'pending_approval' });
-    if (memory) pendingMemories.push(memory);
+    if (memory) pendingIds.push(memory.id);
   }
 
-  if (pendingMemories.length > 0) {
-    console.log(`🧠 ${pendingMemories.length} memories pending approval`);
-    cosEvents.emit('memory:approval-needed', {
-      agentId,
-      taskId,
-      memories: pendingMemories.map(m => ({
-        id: m.id,
-        type: m.type,
-        content: (m.content || '').slice(0, 500),
-        confidence: m.confidence
-      }))
-    });
-
-    // Create notification for user
-    for (const mem of pendingMemories) {
-      const alreadyExists = await notifications.exists(
-        notifications.NOTIFICATION_TYPES.MEMORY_APPROVAL,
-        'memoryId',
-        mem.id
-      );
-      if (!alreadyExists) {
-        await notifications.addNotification({
-          type: notifications.NOTIFICATION_TYPES.MEMORY_APPROVAL,
-          title: `Memory needs approval`,
-          description: (mem.summary || mem.content || '').slice(0, 300),
-          priority: notifications.PRIORITY_LEVELS.MEDIUM,
-          link: '/cos/memory',
-          metadata: {
-            memoryId: mem.id,
-            category: 'memory-approval',
-            actionKind: 'memory.approval',
-            sourceOwned: true,
-            memoryType: mem.type,
-            agentId,
-            taskId
-          }
-        });
-      }
-    }
-  }
+  const pendingMemories = pendingIds.length
+    ? await withPendingMemories(pendingIds, memories => publishApprovals(memories, agentId, taskId))
+    : [];
+  if (pendingMemories.length) console.log(`🧠 ${pendingMemories.length} memories pending approval`);
 
   if (skippedDuplicates > 0) {
     console.log(`🧠 Skipped ${skippedDuplicates} duplicate memories from agent ${agentId}`);
