@@ -23,10 +23,10 @@
     "@react-three/drei": "10.7.9",
     "@react-three/fiber": "9.8.2",
     "@xterm/xterm": "6.0.0",
-    "lucide-react": "1.79.0",
+    "lucide-react": "1.80.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "react-router": "8.5.2",
+    "react-router": "8.5.3",
     "recharts": "3.11.1",
     "socket.io-client": "4.8.4",
     "three": "0.187.0"
