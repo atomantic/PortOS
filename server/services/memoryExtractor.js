@@ -9,7 +9,7 @@ import { createMemory, searchMemories, getMemories } from './memoryBackend.js';
 import { generateMemoryEmbedding } from './memoryEmbeddings.js';
 import { cosEvents } from './cos/cosEvents.js';
 import * as notifications from './notifications.js';
-import { classifyMemories, isAvailable as isClassifierAvailable } from './memoryClassifier.js';
+import { classifyMemories, getConfig, isAvailable as isClassifierAvailable } from './memoryClassifier.js';
 import { getDomainAutonomyMode } from './cos/cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 
@@ -223,37 +223,30 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
   // Time the extraction (incl. the LLM classify) for the minutes budget.
   const startTime = Date.now();
   const allMemories = [];
-  let usedLLM = false;
+  let llmResult;
 
-  // Try LLM-based classification first (if available)
   const classifierAvailable = await isClassifierAvailable().catch(() => false);
-
   if (classifierAvailable && task) {
-    const llmResult = await classifyMemories(task, output).catch(err => {
+    llmResult = await classifyMemories(task, output).catch(err => {
       console.log(`⚠️ LLM memory classification failed: ${err.message}`);
       return null;
     });
-
-    if (llmResult?.memories?.length > 0) {
-      usedLLM = true;
-      console.log(`🧠 LLM classified ${llmResult.memories.length} memories`);
-
-      // Convert LLM results to our format
-      for (const mem of llmResult.memories) {
-        allMemories.push({
-          type: mem.type || 'observation',
-          category: mem.category || 'other',
-          content: mem.content,
-          confidence: mem.confidence || 0.7,
-          tags: mem.tags || [],
-          reasoning: mem.reasoning
-        });
-      }
-    }
   }
 
-  // Fall back to pattern-based extraction if LLM didn't produce results
-  if (!usedLLM) {
+  // A successful empty verdict is authoritative.
+  const llmSucceeded = Boolean(llmResult?.usedLLM && !llmResult?.error);
+  if (llmSucceeded) {
+    for (const mem of llmResult.memories) {
+      allMemories.push({
+        type: mem.type || 'observation',
+        category: mem.category || 'other',
+        content: mem.content,
+        confidence: mem.confidence || 0.7,
+        tags: mem.tags || [],
+        reasoning: mem.reasoning
+      });
+    }
+  } else if ((llmResult?.fallbackAvailable ?? (await getConfig()).fallbackToPatterns) !== false) {
     // Parse structured memory blocks
     const structured = parseMemoryBlocks(output);
     allMemories.push(...structured);
