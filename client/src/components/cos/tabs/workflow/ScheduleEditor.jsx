@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Bot, GitBranch, Loader2, Save, X } from 'lucide-react';
 import toast from '../../../ui/Toast';
 import { updateCosTaskInterval, updateCosJob } from '../../../../services/apiAgents.js';
@@ -28,6 +28,9 @@ function taskConfigFromNode(node) {
   };
 }
 
+// The schedule fields a PUT /api/cos/schedule/task response echoes back.
+const TASK_CONFIG_FIELDS = ['enabled', 'type', 'cronExpression', 'perpetual', 'autoStart', 'recheckCron', 'runAfter'];
+
 function jobFormFromNode(node) {
   const schedule = node.schedule || {};
   const isCron = !!(schedule.cronSchedule || schedule.cronExpression);
@@ -46,7 +49,21 @@ function jobFormFromNode(node) {
 function TaskScheduleForm({ node, allNodes, onSaved }) {
   const taskType = node.id.slice(TASK_NODE_PREFIX.length);
   const [updating, setUpdating] = useState(false);
-  const config = useMemo(() => taskConfigFromNode(node), [node]);
+  // The graph refetch after a save is asynchronous, so the saved response is
+  // applied here first: the controls reflect it at once and a failed refetch
+  // cannot leave them showing the pre-save value.
+  const [applied, setApplied] = useState(null);
+  useEffect(() => setApplied(null), [node]);
+  const config = useMemo(() => {
+    const base = taskConfigFromNode(node);
+    if (!applied) return base;
+    const merged = { ...base };
+    for (const field of TASK_CONFIG_FIELDS) {
+      if (field in applied) merged[field] = applied[field];
+    }
+    merged.runAfter = merged.runAfter || [];
+    return merged;
+  }, [node, applied]);
   const allTaskTypes = useMemo(
     () => allNodes.filter(candidate => candidate.kind === 'task').map(candidate => candidate.id.slice(TASK_NODE_PREFIX.length)),
     [allNodes]
@@ -61,6 +78,7 @@ function TaskScheduleForm({ node, allNodes, onSaved }) {
       });
       if (!result?.success) return false;
       toast.success(`Updated ${node.label}`);
+      setApplied(current => ({ ...current, ...(result.interval || patch) }));
       onSaved();
       return true;
     } finally {
