@@ -9,7 +9,7 @@
 import { basename } from 'path';
 import { musicVideoAspect } from '../../lib/musicVideo/musicVideoAspect.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { musicVideoBriefAllowsVideo } from '../../lib/musicVideo/musicVideoMediumPlan.js';
+import { musicVideoGenerationAllowance, musicVideoNoVideoMessage } from '../../lib/musicVideo/musicVideoMediumPlan.js';
 import { assertShotActionContract, withShotActionPrompt } from '../../lib/musicVideo/musicVideoActionContract.js';
 import { captureClipReferenceDependency, captureTakeDependencies, musicVideoDependencyChanges } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { clipCastInputs } from '../../lib/musicVideo/musicVideoCharacterReferenceAge.js';
@@ -194,10 +194,12 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
     && params.modelId === 'minimax/h3-max/reference-to-video' && params.referenceImagePaths?.length) {
     refuse(409, 'PRODUCTION_COST_UNKNOWN', 'The selected H3 reference-image cost is unknown, so this run\'s dollar cap cannot price the clip.');
   }
-  // A brief that names tools and no video tool never dispatches generated footage;
-  // an approved plan or sheet stays as saved until the director replans.
-  if (project && !musicVideoBriefAllowsVideo(project)) {
-    refuse(409, 'MUSIC_VIDEO_NO_VIDEO_TOOL', 'No video tool is selected in this project\'s brief, so generated footage is not dispatched. Add a video tool, or replan the project without generated video.');
+  // The second line of defense behind the planner: a project whose generation allowance
+  // rules out video (media mode, brief tools or a zero allowance) never dispatches generated
+  // footage; an approved plan or sheet stays as saved until the director replans.
+  const allowance = project && musicVideoGenerationAllowance(project);
+  if (allowance && !allowance.video) {
+    refuse(409, 'MUSIC_VIDEO_NO_VIDEO_TOOL', musicVideoNoVideoMessage(allowance, { remedy: true }));
   }
   const scene = project?.scenes?.find((entry) => entry.sceneId === musicVideo.sceneId);
   let referencePromptPrefix = null;

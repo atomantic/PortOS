@@ -4,9 +4,10 @@
  *
  * `normalizeMusicVideoProductionPolicy`, `planMusicVideoMedia`, `summarizeMusicVideoMediumPlan`, and
  * `codeFirstProductionAssets`: pinned shot media, union-of-intervals video allowance, and
- * selected-asset preflight shared by planning and Board review. `musicVideoBriefTools`,
- * `musicVideoBriefAllowsVideo` and `musicVideoToolPolicyConflict` read the brief's selected tools
- * against the policy (the setup warning and the video-dispatch refusal).
+ * selected-asset preflight shared by planning and Board review. `musicVideoGenerationAllowance` is the
+ * one answer to "may this project generate images or video" over its three stored fields (media mode,
+ * production policy, brief tools); planning, direction, pooling and dispatch all read it.
+ * `musicVideoToolPolicyConflict` explains the disagreement the setup panel warns about.
  */
 
 import { musicVideoAllowsMedia } from './musicVideoMediaPolicy.js';
@@ -40,23 +41,60 @@ export function normalizeMusicVideoProductionPolicy(patch, base = null) {
 /** The brief's selected render tools (`image:*`, `video:*`, `code:render`); empty when the brief names none. */
 export const musicVideoBriefTools = (project) => (Array.isArray(project?.automation?.tools) ? project.automation.tools.filter((t) => typeof t === 'string') : []);
 
-/** False when the brief names tools and none of them makes video. A brief naming no tools restricts nothing. */
-export function musicVideoBriefAllowsVideo(project) {
-  if (!musicVideoAllowsMedia(project, 'video')) return false;
+/**
+ * The one answer to "may this project generate images or video". Three stored fields each
+ * restrict it and can be saved without the others: `mediaMode`, `productionPolicy` and the brief's
+ * `automation.tools`, so every reader goes through here instead of re-checking one of them.
+ *
+ * - `video`: the media mode allows video AND the brief names no tools or names a video tool AND the
+ *   policy is legacy or its generated-video allowance is above zero.
+ * - `videoPercent`: the effective allowance, 0 whenever `video` is false (the stored percent is
+ *   kept on the policy untouched).
+ * - `image`: the media mode allows images AND the brief names no tools or names an image tool.
+ * - `reason`: why `video` is false, first match of `MEDIA_MODE`, `NO_VIDEO_TOOL`, `ZERO_ALLOWANCE`
+ *   (`null` when it is true).
+ * - `policyAllowsVideo`: the policy alone still plans generated footage, so a false `video` with a
+ *   `MEDIA_MODE`/`NO_VIDEO_TOOL` reason is a mismatch rather than a deliberate code-first choice.
+ */
+export function musicVideoGenerationAllowance(project) {
+  const policy = normalizeMusicVideoProductionPolicy(project?.productionPolicy);
   const tools = musicVideoBriefTools(project);
-  return tools.length === 0 || tools.some((t) => t.startsWith('video:'));
+  const policyAllowsVideo = policy.strategy === 'legacy' || policy.maxGeneratedVideoPercent > 0;
+  const toolsAllowVideo = tools.length === 0 || tools.some((t) => t.startsWith('video:'));
+  const modeAllowsVideo = musicVideoAllowsMedia(project, 'video');
+  const video = modeAllowsVideo && toolsAllowVideo && policyAllowsVideo;
+  let reason = null;
+  if (!video) reason = !modeAllowsVideo ? 'MEDIA_MODE' : !toolsAllowVideo ? 'NO_VIDEO_TOOL' : 'ZERO_ALLOWANCE';
+  return {
+    image: musicVideoAllowsMedia(project, 'image') && (tools.length === 0 || tools.some((t) => t.startsWith('image:'))),
+    video,
+    videoPercent: video ? policy.maxGeneratedVideoPercent : 0,
+    strategy: policy.strategy,
+    reason,
+    policyAllowsVideo,
+  };
 }
 
 /**
- * The saved tools and production policy disagree: the brief selected tools but
- * no video tool, while the policy still plans generated footage (legacy, or
- * code-first with a non-zero allowance). Describes the mismatch; never edits
- * anything — an approved plan stays as saved until the director replans.
+ * The dispatch refusal message for a project whose allowance has `video: false`. A media mode that
+ * forbids video keeps the tool wording it has always had; `remedy` appends how to fix it.
+ */
+export function musicVideoNoVideoMessage(allowance, { remedy = false } = {}) {
+  if (allowance.reason === 'ZERO_ALLOWANCE') {
+    return `This project's production policy allows no generated video, so generated footage is not dispatched.${remedy ? ' Raise the generated-video allowance, or replan the project without generated video.' : ''}`;
+  }
+  return `No video tool is selected in this project's brief, so generated footage is not dispatched.${remedy ? ' Add a video tool, or replan the project without generated video.' : ''}`;
+}
+
+/**
+ * The saved tools and production policy disagree: the media mode or the brief's tools rule out
+ * video, while the policy still plans generated footage (legacy, or code-first with a non-zero
+ * allowance). Describes the mismatch; never edits anything — an approved plan stays as saved
+ * until the director replans.
  */
 export function musicVideoToolPolicyConflict(project) {
-  if (musicVideoBriefAllowsVideo(project)) return null;
-  const policy = normalizeMusicVideoProductionPolicy(project?.productionPolicy);
-  if (policy.strategy === 'code-first' && policy.maxGeneratedVideoPercent <= 0) return null;
+  const { video, policyAllowsVideo } = musicVideoGenerationAllowance(project);
+  if (video || !policyAllowsVideo) return null;
   return {
     code: 'NO_VIDEO_TOOL',
     message: 'No video tool is selected, but the production policy still allows generated footage. Replan as code-first with no generated video, or add a video tool to the brief.',
@@ -76,6 +114,7 @@ function unionSeconds(intervals) {
 /** Read current scene timing on every call; retiming cannot retain an old allowance. */
 export function summarizeMusicVideoMediumPlan(project, directions = project?.treatment?.shotDirections || []) {
   const policy = normalizeMusicVideoProductionPolicy(project?.productionPolicy);
+  const allowance = musicVideoGenerationAllowance(project);
   const durationSec = project?.audioAnalysis?.durationSec;
   const validDuration = typeof durationSec === 'number' && Number.isFinite(durationSec) && durationSec > 0;
   const intervals = Object.fromEntries(MUSIC_VIDEO_MEDIA.map((medium) => [medium, []]));
@@ -113,13 +152,15 @@ export function summarizeMusicVideoMediumPlan(project, directions = project?.tre
   }
   const secondsByMedium = Object.fromEntries(MUSIC_VIDEO_MEDIA.map((medium) => [medium, unionSeconds(intervals[medium])]));
   const generatedSec = secondsByMedium['generated-footage'];
-  const allowedGeneratedSec = validDuration ? durationSec * policy.maxGeneratedVideoPercent / 100 : 0;
+  const allowedGeneratedSec = validDuration ? durationSec * allowance.videoPercent / 100 : 0;
   if (codeFirst && !validDuration) unresolved.push({ blocking: true, message: 'Analyze the song duration before applying a medium plan.' });
   if (codeFirst && generatedSec > allowedGeneratedSec + 0.000001) {
-    unresolved.push({ blocking: true, message: 'Generated footage exceeds the final-edit allowance. Shorten its intervals, change its medium, or explicitly increase the allowance.' });
+    unresolved.push({ blocking: true, message: allowance.reason === 'NO_VIDEO_TOOL'
+      ? 'Generated footage needs a video tool, but the brief selected none. Change its medium, or add a video tool to the brief.'
+      : 'Generated footage exceeds the final-edit allowance. Shorten its intervals, change its medium, or explicitly increase the allowance.' });
   }
   return {
-    ...policy, durationSec: validDuration ? durationSec : null, allowedGeneratedSec,
+    ...policy, maxGeneratedVideoPercent: allowance.videoPercent, durationSec: validDuration ? durationSec : null, allowedGeneratedSec,
     generatedSec, secondsByMedium, exceptions, unresolved,
     blocked: unresolved.some((item) => item.blocking),
   };
@@ -182,10 +223,10 @@ export function codeFirstProductionAssets(project) {
 
 /** Retain director pins; allocate optional generated shots only within the union budget. */
 export function planMusicVideoMedia(project, directions) {
-  const policy = normalizeMusicVideoProductionPolicy(project.productionPolicy);
-  const codeFirst = policy.strategy === 'code-first';
+  const allowance = musicVideoGenerationAllowance(project);
+  const codeFirst = allowance.strategy === 'code-first';
   // A brief that explicitly selected a video tool expects footage; the allowance below trims it.
-  const footageSeeded = codeFirst && policy.maxGeneratedVideoPercent > 0 && musicVideoBriefTools(project).some((t) => t.startsWith('video:'));
+  const footageSeeded = codeFirst && allowance.video && musicVideoBriefTools(project).some((t) => t.startsWith('video:'));
   const scenes = new Map((project.scenes || []).map((s) => [s.sceneId, s]));
   const previous = new Map((project.treatment?.shotDirections || []).map((d) => [d.sceneId, d]));
   const planned = directions.map((d) => {
@@ -239,7 +280,7 @@ export function planMusicVideoMedia(project, directions) {
     const candidate = [...accepted];
     candidate[i] = planned[i];
     const summary = summarizeMusicVideoMediumPlan(project, candidate);
-    if (!summary.blocked && policy.maxGeneratedVideoPercent > 0) accepted[i] = planned[i];
+    if (!summary.blocked && allowance.video) accepted[i] = planned[i];
     else accepted[i] = { ...accepted[i], mediumRationale: 'Use procedural visuals to stay within the generated-video allowance; any visible performance remains unresolved.' };
   }
   return (codeFirst ? accepted : planned).map(({ fromSheet, ...rest }) => rest);
