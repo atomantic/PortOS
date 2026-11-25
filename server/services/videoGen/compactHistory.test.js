@@ -121,6 +121,23 @@ describe('compact history through gallery reads', () => {
     expect(await history.loadCompactHistory()).toEqual([{ id: 'restored' }]);
   });
 
+  it('answers a compact row\'s search text from its full record, per revision, without another read', async () => {
+    await persist([{ id: 'a', prompt: 'Card', sentPrompt: 'Deep NEEDLE', width: 640, height: 360, upscaledFrom: 'b' }]);
+    const [row] = await history.loadCompactHistory();
+    expect(row).not.toHaveProperty('sentPrompt');
+    const text = history.videoSearchText(row);
+    expect(text).toContain('"sentprompt": "deep needle"');
+    expect(text.endsWith(' video 640x360 upscaled 2x')).toBe(true);
+    await history.saveHistory([{ id: 'a', prompt: 'changed' }]);
+    const [next] = await history.loadCompactHistory();
+    expect(history.videoSearchText(next)).toContain('"prompt": "changed"');
+    // A snapshot a reader still holds keeps the text of the revision it was cut from.
+    expect(history.videoSearchText(row)).toBe(text);
+    expect(io.reads).toBe(2);
+    // A row that did not come from the snapshot is searched as given.
+    expect(history.videoSearchText({ id: 'x', stitchedFrom: [] })).toBe('{\n "id": "x",\n "stitchedfrom": []\n} video stitched');
+  });
+
   it('does not publish a read overtaken by a save or external replacement', async () => {
     await persist([{ id: 'old' }]);
     io.afterRead = async () => {

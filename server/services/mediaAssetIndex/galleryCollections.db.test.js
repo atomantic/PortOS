@@ -13,14 +13,25 @@ import { createDbPhaseDiagnostics } from '../../test/dbPhaseDiagnostics.js';
 
 const { it, drain } = ownTestBodies(vitestIt);
 
-const state = vi.hoisted(() => ({ file: false, images: [], videos: [], collections: [], annotations: {}, query: vi.fn() }));
+const state = vi.hoisted(() => ({ file: false, images: [], videos: [], collections: [], annotations: {}, query: vi.fn(), fullReads: 0 }));
 vi.mock('../../lib/pgFileFacade.js', () => ({ isFileBackend: () => state.file }));
 vi.mock('../../lib/paths.js', async original =>
   makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-gallery-location-') }));
 vi.mock('../../lib/db.js', () => ({ query: (...args) => state.query(...args) }));
+// Stands in for history.js: compact rows that answer for their full record's
+// search text, and a count of the full reads a compact search must not make.
 vi.mock('../videoGen/history.js', async () => {
-  const { compactSource } = await import('./logic.js');
-  return { loadHistory: async () => state.videos, loadCompactHistory: async () => state.videos.map(compactSource) };
+  const { compactSource, recordSearchText } = await import('./logic.js');
+  const texts = new WeakMap();
+  return {
+    loadHistory: async () => { state.fullReads++; return state.videos; },
+    loadCompactHistory: async () => state.videos.map((video) => {
+      const row = compactSource(video);
+      texts.set(row, recordSearchText('video', video));
+      return row;
+    }),
+    videoSearchText: row => texts.get(row) ?? recordSearchText('video', row),
+  };
 });
 vi.mock('../mediaCollections.js', () => ({ listCollections: async () => state.collections,
   getCollection: async id => state.collections.find(collection => collection.id === id) }));
@@ -255,14 +266,109 @@ it('projects compact no-search pages before SQL with identical rows, previews an
   expect(card('v2')).toMatchObject({ thumbnail: null, prompt: 'video nested' });
   expect(card('v3').prompt).toBe('…');
 
-  // Search keeps full-metadata matching beyond the preview, in both kinds.
+  // Search keeps full-metadata matching beyond the preview, in both kinds,
+  // without binding the matched text (#18631).
+  state.query.mockClear();
   const found = await listGalleryPage({ media: true, kind: 'all', summary: true, compact: true, q: beyond });
   expect(found.items.map(item => item.data.id || item.data.filename)).toEqual(['v1', 'long.png']);
   expect(found.items.every(item => item.data.compact)).toBe(true);
+  expect(JSON.parse(state.query.mock.calls[0][1][0]).map(row => Object.keys(row.data))).toEqual([expect.not.arrayContaining(['prompt'])]);
   // Non-compact and lookup callers still receive full records with saved prompts/settings.
   const full = await listGalleryPage({ media: true, kind: 'video', filename: 'v1.mp4' });
   expect(full.items).toEqual([{ kind: 'video', data: state.videos[0] }]);
   expect((await listGalleryPage({ limit: 200, mediaKeys: ['image:nested.png'] })).items).toEqual([images[0]]);
+});
+
+// The pre-#18631 search, verbatim: every token against the decoded record plus
+// the derived kind / WxH / lineage words, over index images and FULL video records.
+const LEGACY_HAYSTACK = `lower(concat_ws(' ', data::text, kind,
+  (data->>'width') || 'x' || (data->>'height'),
+  CASE WHEN data->>'extractedFromVideoId' IS NOT NULL THEN 'extracted frame' END,
+  CASE WHEN data->>'stitchedFrom' IS NOT NULL THEN 'stitched' END,
+  CASE WHEN data->>'upscaledFrom' IS NOT NULL THEN 'upscaled 2x' END))`;
+async function legacySearch(q, { kind } = {}) {
+  const tokens = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const { rows } = await client.query(`WITH assets AS (
+      SELECT media_key, kind, data, created_at FROM pg_temp.media_assets WHERE kind = 'image'
+      UNION ALL
+      SELECT 'video:' || (value->>'id'), 'video', value, (value->>'createdAt')::timestamptz
+      FROM jsonb_array_elements($1::jsonb))
+    SELECT media_key, kind, COALESCE(data->>'hidden', 'false') = 'true' AS hidden FROM assets
+    WHERE ${tokens.map((_, i) => `strpos(${LEGACY_HAYSTACK}, $${i + 2}) > 0`).join(' AND ') || 'TRUE'}
+    ORDER BY created_at DESC, media_key ASC`, [JSON.stringify(state.videos), ...tokens]);
+  const visible = rows.filter(row => !row.hidden);
+  const count = of => visible.filter(row => row.kind === of).length;
+  const paged = visible.filter(row => !kind || row.kind === kind);
+  return { keys: paged.map(row => row.media_key), total: paged.length,
+    matchedVideos: rows.filter(row => row.kind === 'video').map(row => row.media_key).sort(),
+    hiddenTotal: rows.filter(row => row.hidden && (!kind || row.kind === kind)).length,
+    counts: { image: count('image'), video: count('video'), all: visible.length } };
+}
+const pageKeys = page => page.items.map(item => item.kind ? `${item.kind}:${item.kind === 'image' ? item.data.filename : item.data.id}` : `image:${item.filename}`);
+
+it('searches stored columns and the cached video text with the results the decoded-record search gave', async context => {
+  if (!available) return context.skip();
+  await seed([
+    { filename: 'fox.png', createdAt: '2026-03-01', prompt: 'A Red FOX at dusk', width: 1024, height: 768 },
+    { filename: 'key.png', createdAt: '2026-03-02', prompt: 'plain', customFieldZeta: 1, negativePrompt: 'Gloomy 100% fo_ggy' },
+    { filename: 'lineage.png', createdAt: '2026-03-03', prompt: 'red barn', upscaledFrom: 'fox.png', extractedFromVideoId: 'v-fox', width: 0, height: 0 },
+    { filename: 'hidden.png', createdAt: '2026-03-04', prompt: 'red fox hidden', hidden: true, stitchedFrom: ['a.png'] },
+    { filename: 'null.png', createdAt: '2026-03-05', prompt: null, width: 512, height: null, upscaledFrom: null, hidden: 'true' },
+    { filename: 'facet.png', createdAt: '2026-03-06', prompt: 'fox', universeId: 'u1', entryCategory: 'places', entryKind: 7 },
+  ], [{ id: 'v-fox', prompt: 'stale index row that must never match: zebra' }]);
+  state.videos = [
+    { id: 'v-fox', filename: 'v-fox.mp4', createdAt: '2026-03-07', prompt: 'card text', sentPrompt: 'a RED fox beyond the card',
+      promptAdditions: [{ label: 'style', text: 'needle addition' }], width: 1024, height: 768 },
+    { id: 'v-up', filename: 'v-up.mp4', createdAt: '2026-03-08', prompt: 'barn', upscaledFrom: 'v-fox', settings: { customFieldZeta: true } },
+    { id: 'v-hidden', filename: 'v-hidden.mp4', createdAt: '2026-03-09', prompt: 'red fox', hidden: true, stitchedFrom: ['v-fox', 'v-up'] },
+    { id: 'v-plain', filename: 'v-plain.mp4', createdAt: '2026-03-10', prompt: 'nothing', universeId: 'u1', entryCategory: 'places' },
+  ];
+  state.collections = []; state.annotations = {};
+  const queries = ['fox', 'FOX', 'red fox', 'fox red', '1024x768', '0x0', '512x', 'image', 'video', 'video fox', 'upscaled 2x',
+    'extracted frame', 'stitched', 'customfieldzeta', '"customfieldzeta":', 'gloomy', 'needle', '"sentprompt":', '100%', 'fo_',
+    'f_x', 'true', 'zebra', 'zzz-no-match', '2026-03-0', 'v-fox'];
+  const mixed = { media: true, kind: 'all', summary: true, hidden: false, limit: 200 };
+  for (const q of queries) {
+    const expected = await legacySearch(q);
+    for (const compact of [true, false]) {
+      state.query.mockClear();
+      state.fullReads = 0;
+      const page = await listGalleryPage({ ...mixed, compact, q });
+      expect({ keys: pageKeys(page), total: page.total, hiddenTotal: page.hiddenTotal, counts: page.counts }, `${q} compact=${compact}`)
+        .toEqual({ keys: expected.keys, total: expected.total, hiddenTotal: expected.hiddenTotal, counts: expected.counts });
+      if (!compact) continue;
+      // One query; the full history is never read, and no full video body is bound.
+      expect(state.fullReads).toBe(0);
+      expect(state.query).toHaveBeenCalledTimes(1);
+      const [sql, params] = state.query.mock.calls[0];
+      const bound = JSON.parse(params[0]).map(row => row.data);
+      expect(bound.map(video => `video:${video.id}`).sort(), q).toEqual(expected.matchedVideos);
+      for (const video of bound) for (const field of ['prompt', 'sentPrompt', 'promptAdditions', 'settings']) expect(video).not.toHaveProperty(field);
+      // The plan decodes no record to filter it: no JSON-to-text cast, no lower().
+      const plan = (await client.query(`EXPLAIN (VERBOSE) ${sql}`, params)).rows.map(row => row['QUERY PLAN']).join('\n');
+      expect(plan, q).not.toMatch(/\bdata\)?::text|lower\(/);
+    }
+    // Video-only and image-only surfaces share the predicate.
+    const videoOnly = await legacySearch(q, { kind: 'video' });
+    const videos = await listGalleryPage({ ...mixed, kind: 'video', summary: false, compact: true, q });
+    expect({ keys: pageKeys(videos), total: videos.total }, `${q} video`).toEqual({ keys: videoOnly.keys, total: videoOnly.total });
+    const imageOnly = await legacySearch(q, { kind: 'image' });
+    const images = await listGalleryPage({ hidden: false, summary: true, limit: 200, q });
+    expect({ keys: pageKeys(images), total: images.total, hiddenTotal: images.hiddenTotal }, `${q} image`)
+      .toEqual({ keys: imageOnly.keys, total: imageOnly.total, hiddenTotal: imageOnly.hiddenTotal });
+  }
+  // Facet filters read their columns for both kinds, alongside a search.
+  const scoped = await listGalleryPage({ ...mixed, compact: true, universeId: 'u1', entryCategory: 'places' });
+  expect(pageKeys(scoped)).toEqual(['video:v-plain', 'image:facet.png']);
+  expect(pageKeys(await listGalleryPage({ ...mixed, compact: true, universeId: 'u1', q: 'fox' }))).toEqual(['image:facet.png']);
+  // The facet picker reads columns only; a non-string facet value stays out, as before.
+  state.query.mockClear();
+  const facets = await listGalleryFacets(disk);
+  expect(facets).toMatchObject({ universes: [{ id: 'u1', name: 'u1' }], categories: ['places'], kinds: [] });
+  for (const [sql, params] of state.query.mock.calls) {
+    const plan = (await client.query(`EXPLAIN (VERBOSE) ${sql}`, params)).rows.map(row => row['QUERY PLAN']).join('\n');
+    expect(plan).not.toMatch(/\bdata ->|\bdata\)?::text/);
+  }
 });
 
 it('sends no full video detail to SQL and does not spill for the synthetic 2400-image/1200-video page', async context => {

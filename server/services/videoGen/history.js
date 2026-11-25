@@ -15,7 +15,7 @@
 import { join } from 'path';
 import { stat, access } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { compactSource } from '../mediaAssetIndex/logic.js';
+import { compactSource, recordSearchText } from '../mediaAssetIndex/logic.js';
 import { PATHS, readJSONFile, atomicWrite } from '../../lib/fileUtils.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 
@@ -66,7 +66,27 @@ function freezeRecord(value) {
   return value;
 }
 
-/** Fresh, immutable card/filter data; search and detail still use loadHistory. */
+// Search text of each compact snapshot row, derived from its FULL record once
+// per history revision. Keyed by the row object, so a snapshot a caller still
+// holds keeps the text of the revision it was cut from and nothing needs
+// invalidating.
+const searchTexts = new WeakMap();
+
+function compactRow(record) {
+  const row = compactSource(record);
+  if (row && typeof row === 'object') searchTexts.set(row, recordSearchText('video', record));
+  return row;
+}
+
+/**
+ * Lower-cased text a gallery search matches for a video row. A row from
+ * loadCompactHistory() answers for its full record (prompts and settings the
+ * compact row dropped) without re-reading the history; any other object is
+ * searched as given.
+ */
+export const videoSearchText = row => searchTexts.get(row) ?? recordSearchText('video', row);
+
+/** Fresh, immutable card/filter data, searchable through videoSearchText(); detail still uses loadHistory. */
 export function loadCompactHistory() {
   if (compactRead) return compactRead;
   compactRead = (async () => {
@@ -81,7 +101,7 @@ export function loadCompactHistory() {
       const history = await loadHistory();
       const after = await historyRevision();
       if (epoch !== revisionEpoch || before !== after) continue;
-      const rows = freezeRecord(history.map(compactSource));
+      const rows = freezeRecord(history.map(compactRow));
       compactSnapshot = after === null ? undefined : { revision: after, rows };
       return rows;
     }

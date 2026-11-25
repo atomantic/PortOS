@@ -3,8 +3,12 @@ import { listGalleryPage, listGalleryFacets, listGalleryCollectionSummaries, lis
 import { imageToRow } from './logic.js';
 import { query } from '../../lib/db.js';
 
-const { listAnnotations, loadHistory, listCollections, getCollection } = vi.hoisted(() => ({ listAnnotations: vi.fn(), loadHistory: vi.fn(), listCollections: vi.fn(), getCollection: vi.fn() }));
-vi.mock('../videoGen/history.js', () => ({ loadHistory, loadCompactHistory: loadHistory }));
+const { listAnnotations, loadHistory, loadCompactHistory, searchText, listCollections, getCollection } = vi.hoisted(() => ({
+  listAnnotations: vi.fn(), loadHistory: vi.fn(), loadCompactHistory: vi.fn(), searchText: vi.fn(), listCollections: vi.fn(), getCollection: vi.fn() }));
+// `searchText` stands in for the per-revision cache: unset, a row is searched as given.
+vi.mock('../videoGen/history.js', () => ({ loadHistory, loadCompactHistory,
+  videoSearchText: row => searchText(row) ?? JSON.stringify(row).toLowerCase() }));
+const setHistory = (videos) => { loadHistory.mockResolvedValue(videos); loadCompactHistory.mockResolvedValue(videos); };
 vi.mock('../mediaCollections.js', () => ({ listCollections, getCollection }));
 vi.mock('../mediaAnnotations.js', () => ({ listAnnotations }));
 const { resolveMediaLocations } = vi.hoisted(() => ({ resolveMediaLocations: vi.fn() }));
@@ -56,8 +60,9 @@ describe('indexed gallery page', () => {
     const [sql, params] = query.mock.calls.find(([sql]) => sql.startsWith('SELECT data'));
     expect(sql).toContain('ORDER BY created_at DESC, media_key ASC LIMIT $4 OFFSET $5');
     expect(params).toEqual(['image', '100%', 'fox', 5, 10]);
-    expect(sql).toContain("strpos(lower(concat_ws(' ', data::text, kind");
-    expect(sql).toContain("COALESCE(data->>'hidden', 'false') <> 'true'");
+    // Search and visibility read stored columns: nothing decodes `data` to filter.
+    expect(sql).toContain('FROM media_assets WHERE kind = $1 AND NOT is_hidden AND strpos(search_text, $2) > 0 AND strpos(search_text, $3) > 0');
+    for (const [counted] of query.mock.calls) expect(counted).not.toMatch(/data::text|lower\(|data->/);
     expect(disk).not.toHaveBeenCalled();
   });
 
@@ -69,7 +74,7 @@ describe('indexed gallery page', () => {
     const videos = Array.from({ length: 200 }, (_, i) => ({
       id: `example-${i}`, createdAt: '2026-01-01', toJSON: serialize,
     }));
-    loadHistory.mockResolvedValue(videos);
+    setHistory(videos);
     listAnnotations.mockResolvedValue({ 'video:example-1': { own: { starred: true } } });
     query.mockResolvedValue({ rows: [{ items: [], total: '1', hiddenTotal: '0', image: '0', video: '200' }] });
     expect(await listGalleryPage({ kind: 'video', summary: true, starred: true, limit: 1, offset: 1 }))
@@ -86,16 +91,16 @@ describe('indexed gallery page', () => {
 
   // Row/count equivalence against real PostgreSQL lives in
   // galleryCollections.db.test.js; this pins what crosses into SQL (#9676).
-  it('binds compact video sources for a no-search compact page and full records for a search', async () => {
+  it('binds compact video sources for a compact page, and only the matching ones for a search', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('VITEST', undefined);
     vi.stubEnv('MEMORY_BACKEND', 'db');
     const video = { id: 'clip-1', filename: 'clip.mp4', thumbnail: 'clip.png', prompt: 'x'.repeat(8192), stitchedFrom: ['a', 'b'], guidanceScale: 3, universeId: 'u' };
-    loadHistory.mockResolvedValue([video]);
+    setHistory([video]);
     const compactCard = { compact: true, id: 'clip-1', filename: 'clip.mp4', thumbnail: 'clip.png', stitchedFrom: ['a', 'b'], prompt: 'x'.repeat(240) + '…' };
     const input = { kind: 'all', media: true, summary: true, hidden: false, compact: true, limit: 60 };
 
-    query.mockImplementation(async (_sql, params) => ({ rows: [{ items: [{ kind: 'video', data: JSON.parse(params[0])[0].data }],
+    query.mockImplementation(async (_sql, params) => ({ rows: [{ items: JSON.parse(params[0]).map(row => ({ kind: 'video', data: row.data })),
       total: '9', hiddenTotal: '2', image: '4', video: '5' }] }));
     const page = await listGalleryPage(input);
     expect(page).toMatchObject({ total: 9, hiddenTotal: 2, counts: { image: 4, video: 5, all: 9 } });
@@ -105,10 +110,31 @@ describe('indexed gallery page', () => {
       stitchedFrom: ['a', 'b'], universeId: 'u', _promptPreviewSource: 'x'.repeat(241) });
     expect(sql).toContain('jsonb_each(data)');
 
-    query.mockClear();
-    expect((await listGalleryPage({ ...input, q: 'x' })).items).toEqual([{ kind: 'video', data: compactCard }]);
-    expect(JSON.parse(query.mock.calls[0][1][0])[0].data).toEqual(video);
-    expect(query.mock.calls[0][0]).not.toContain('jsonb_each(data)');
+    // A search reads the cached compact snapshot and its search text (#18631):
+    // the full history is never loaded, and only matching compact rows are bound.
+    const other = { id: 'clip-2', filename: 'other.mp4', width: 640, height: 360 };
+    const texts = new Map([[video, '{"sentprompt": "a needle beyond the card"} video'], [other, '{"prompt": "unrelated"} video 640x360']]);
+    loadHistory.mockClear();
+    loadCompactHistory.mockResolvedValue([video, other]);
+    searchText.mockImplementation(row => texts.get(row));
+    const boundFor = async (q) => {
+      query.mockClear();
+      const found = await listGalleryPage({ ...input, q });
+      const [searchSql, searchParams] = query.mock.calls[0];
+      // The source filter runs once, inside the CTE, not once per aggregate.
+      expect(searchSql.match(/strpos\(search_text/g)).toHaveLength(q.trim().split(/\s+/).length);
+      expect(searchSql).not.toMatch(/data::text|lower\(/);
+      return { found, videos: JSON.parse(searchParams[0]).map(row => row.data), text: searchParams[1] };
+    };
+    const needle = await boundFor('Needle  BEYOND');
+    expect(needle.found.items).toEqual([{ kind: 'video', data: compactCard }]);
+    expect(needle.videos).toEqual([{ id: 'clip-1', filename: 'clip.mp4', thumbnail: 'clip.png',
+      stitchedFrom: ['a', 'b'], universeId: 'u', _promptPreviewSource: 'x'.repeat(241) }]);
+    // Survivors carry the query, not their record text, as the text SQL matches.
+    expect(needle.text).toBe('needle beyond');
+    expect((await boundFor('640x360 video')).videos).toEqual([other]);
+    expect((await boundFor('needle unrelated')).videos).toEqual([]);
+    expect(loadHistory).not.toHaveBeenCalled();
   });
 
   it('does not turn an index failure into a full disk scan', async () => {
@@ -133,7 +159,7 @@ describe('recent image filters', () => {
       'image:peer.png': { own: null, others: [{ starred: true }] },
     });
     query.mockImplementation(async sql => sql.includes('COUNT(*)')
-      ? { rows: [{ count: sql.includes("data->>'hidden' = 'true'") ? '2' : '12' }] }
+      ? { rows: [{ count: sql.includes('NOT is_hidden') ? '12' : '2' }] }
       : { rows: [{ data: { filename: 'own.png' } }] });
     const disk = vi.fn();
     const page = await listGalleryPage({ limit: 5, starred: true, hidden: false, summary: true }, disk);
@@ -184,7 +210,7 @@ describe('scoped browsing compatibility', () => {
       { filename: 'b.png', prompt: 'loose', hidden: true, createdAt: '2026-01-01' },
     ];
     const video = { id: 'v', filename: 'v.mp4', upscaledFrom: 'source', createdAt: '2026-01-02' };
-    loadHistory.mockResolvedValue([video]);
+    setHistory([video]);
     const collection = { id: 'col', name: 'Example collection', items: [
       { kind: 'image', ref: 'a.png', addedAt: '2026-01-01' },
       { kind: 'video', ref: 'v', addedAt: '2026-01-04' },
@@ -208,7 +234,7 @@ describe('scoped browsing compatibility', () => {
 describe('collection cover projection', () => {
   it('serves thumbnails and nulls covers whose asset is gone locally and on every peer', async () => {
     vi.stubEnv('MEMORY_BACKEND', 'file');
-    loadHistory.mockResolvedValue([]);
+    setHistory([]);
     const collections = [
       { id: 'ok', items: [{ kind: 'image', ref: 'a.png', addedAt: '2026-01-01' }] },
       { id: 'gone', items: [{ kind: 'image', ref: 'b.png', addedAt: '2026-01-01' }] },
@@ -227,7 +253,7 @@ describe('collection cover probes', () => {
   it('probes a poster-style video thumbnail by its real filename and leaves uppercase PNG covers unprobed', async () => {
     vi.stubEnv('MEMORY_BACKEND', 'file');
     const video = { id: 'vid', filename: 'vid.mp4', thumbnail: 'vid-poster-1234.jpg', createdAt: '2026-01-02' };
-    loadHistory.mockResolvedValue([video]);
+    setHistory([video]);
     const collections = [
       { id: 'poster', items: [{ kind: 'video', ref: 'vid', addedAt: '2026-01-01' }] },
       { id: 'upper', items: [{ kind: 'image', ref: 'NAME.PNG', addedAt: '2026-01-01' }] },
@@ -291,7 +317,7 @@ describe('Unsorted transfer inventory', () => {
     vi.stubEnv('MEMORY_BACKEND', 'db');
     const refs = Array.from({ length: 250 }, (_, i) => ({ ref: `image-${i}.png` }));
     query.mockResolvedValue({ rows: refs });
-    loadHistory.mockResolvedValue([
+    setHistory([
       { id: 'filed', filename: 'shared.mp4' },
       { id: 'alias', filename: 'shared.mp4' },
       { id: 'unfiled', filename: 'free.webm' },
@@ -315,7 +341,7 @@ describe('Unsorted transfer inventory', () => {
   });
 
   it('does not treat inaccessible memberships as an empty collection set', async () => {
-    loadHistory.mockResolvedValue([]);
+    setHistory([]);
     listCollections.mockRejectedValue(new Error('Unavailable'));
     await expect(listUnsortedGalleryFiles(async () => [{ filename: 'image.png' }]))
       .rejects.toThrow('Unavailable');

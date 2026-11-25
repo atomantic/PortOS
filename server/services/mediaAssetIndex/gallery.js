@@ -92,7 +92,11 @@ export async function listGalleryPage({
 } = {}, diskReader) {
   const mixed = media || kind !== 'image';
   const videoReader = mixed && videoSnapshot == null ? await import('../videoGen/history.js') : null;
-  let videos = mixed ? videoSnapshot ?? await (compact && !q.trim()
+  // The index reader searches the cached compact snapshot through
+  // videoSearchText, so a search never re-reads or binds full video records;
+  // the file backend below still matches full records itself.
+  const compactVideos = compact && (!q.trim() || !isFileBackend());
+  let videos = mixed ? videoSnapshot ?? await (compactVideos
     ? videoReader.loadCompactHistory() : videoReader.loadHistory()) : undefined;
   // A copied file is local even if its metadata or hosted entry names a peer.
   // Snapshot filenames once before paging so counts use the same inventory.
@@ -103,7 +107,7 @@ export async function listGalleryPage({
   const scope = await resolveScope({ collectionId, starred, rating, mediaKeys, collectionSnapshot });
   const filters = { kind: kind === 'all' ? undefined : kind, q, hidden, filename,
     universeId, entryCategory, entryKind, mediaKeys: scope.mediaKeys, excludeKeys: scope.excludeKeys, videos,
-    localImages: localImages && [...localImages] };
+    searchTextOf: videoReader?.videoSearchText, localImages: localImages && [...localImages] };
   let items;
   let total;
   let hiddenTotal;
@@ -145,8 +149,8 @@ export async function listGalleryPage({
       items = items.map(item => mixed ? { kind: item.kind, data: compactGalleryRecord(item.data) } : compactGalleryRecord(item));
     }
   } else if (summary && mixed) {
-    // The DB reader returns compact rows itself: without a search it never
-    // sends or buffers full prompts/detail bodies (#9676).
+    // The DB reader returns compact rows itself: it never sends or buffers full
+    // prompts/detail bodies (#9676), with or without a search (#18631).
     const countScope = starred || rating ? await resolveScope({ collectionId, mediaKeys, collectionSnapshot }) : scope;
     ({ items, total, hiddenTotal, counts } = await listMixedGalleryPage({
       ...filters, limit, offset, orderedKeys: scope.orderedKeys, cover, countMediaKeys: countScope.mediaKeys, compact,
@@ -154,7 +158,7 @@ export async function listGalleryPage({
   } else {
     [items, total, hiddenTotal] = await Promise.all([
       listAssets({ ...filters, limit, offset, typed: mixed, orderedKeys: scope.orderedKeys, cover, compact }),
-      countAssets({ ...filters, compact }), summary ? countAssets({ ...filters, hidden: true, compact }) : undefined,
+      countAssets(filters), summary ? countAssets({ ...filters, hidden: true }) : undefined,
     ]);
   }
   // The indexed snapshot can predate the sidecar read projection; normalize

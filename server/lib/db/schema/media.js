@@ -1,6 +1,34 @@
 // Media-project DDL — creative-director projects, music-video projects, mood
 // boards, and media assets. Extracted verbatim from ensureSchemaImpl() in
 // server/lib/db.js (#2832); idempotent, runs on every boot.
+
+// Gallery read columns on media_assets (#18631). Every gallery predicate used to
+// decode the whole `data` blob of every row; PostgreSQL now computes these from
+// `data` and `kind` alone, so the JSONB record stays the only thing a writer
+// produces and an older build's INSERT keeps working against the upgraded table.
+//   search_text  everything a gallery search matches: the record's JSON text plus
+//                the derived kind / WxH / lineage words, lower-cased once.
+//                mediaAssetIndex/logic.js recordSearchText() is its JS twin for
+//                the video rows, which never come from this table.
+//   is_hidden    the visibility flag every page and count filters on.
+//   universe_id… the picker facets: strings only, as the facet reader always was.
+// The expressions are frozen: ADD COLUMN IF NOT EXISTS never revisits a column
+// that exists, so a changed definition needs a NEW column name, not an edit here.
+const facetColumn = (column, field) =>
+  `${column} TEXT GENERATED ALWAYS AS (CASE WHEN jsonb_typeof(data->'${field}') = 'string' THEN data->>'${field}' END) STORED`;
+const MEDIA_ASSET_READ_COLUMNS = [
+  `search_text TEXT GENERATED ALWAYS AS (lower(data::text || ' ' || kind
+        || COALESCE(' ' || (data->>'width') || 'x' || (data->>'height'), '')
+        || CASE WHEN data->>'extractedFromVideoId' IS NOT NULL THEN ' extracted frame' ELSE '' END
+        || CASE WHEN data->>'stitchedFrom' IS NOT NULL THEN ' stitched' ELSE '' END
+        || CASE WHEN data->>'upscaledFrom' IS NOT NULL THEN ' upscaled 2x' ELSE '' END)) STORED`,
+  `is_hidden BOOLEAN GENERATED ALWAYS AS (COALESCE(data->>'hidden', 'false') = 'true') STORED`,
+  facetColumn('universe_id', 'universeId'),
+  facetColumn('universe_name', 'universeName'),
+  facetColumn('entry_category', 'entryCategory'),
+  facetColumn('entry_kind', 'entryKind'),
+];
+
 export const mediaDdl = [
     `CREATE TABLE IF NOT EXISTS media_prompt_examinations (
       id TEXT PRIMARY KEY,
@@ -251,8 +279,17 @@ export const mediaDdl = [
       data JSONB NOT NULL DEFAULT '{}'::jsonb,
       provenance_refs TEXT[] NOT NULL DEFAULT '{}',
       created_at TIMESTAMPTZ DEFAULT NOW(),
-      indexed_at TIMESTAMPTZ DEFAULT NOW()
+      indexed_at TIMESTAMPTZ DEFAULT NOW(),
+      ${MEDIA_ASSET_READ_COLUMNS.join(',\n      ')}
     )`,
+    // Upgrade path for the read columns: ONE statement, because adding a stored
+    // generated column rewrites the table under an exclusive lock and one
+    // statement per column would rewrite it six times. The rewrite happens once
+    // (later boots skip every column) and scales with the library, measured at
+    // about 0.4 s per 1,000 indexed images; docs/STORAGE.md ("Boot schema
+    // upgrades & lock windows") records why it is not batched.
+    `ALTER TABLE media_assets
+      ${MEDIA_ASSET_READ_COLUMNS.map(column => `ADD COLUMN IF NOT EXISTS ${column}`).join(',\n      ')}`,
     // provenance_refs (#17754): distinct filenames an image's sidecar names as
     // provenance, so listRelatedImages hits a GIN index instead of scanning the
     // gallery. Upgrade path: add nullable, backfill (mirrors
