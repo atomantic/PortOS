@@ -659,6 +659,13 @@ describe('git-fixture declaration', () => {
     ['git passed to a runner called without its directory', ['const run = (program, args, dir) => execFileSync(program, args, { cwd: dir });', "run('git', ['status']);"], /run\(\) is called without the directory/],
     ['git passed to a runner with a relative directory', ['const run = (program, args, dir) => execFileSync(program, args, { cwd: dir });', "run('git', ['status'], '.');"], /relative to the test process \(\.\)/],
     ['a git command line named through a constant', ['const scratch = mkdtempSync(tmpdir());', "const command = 'git status';", 'execSync(command, { cwd: scratch });'], /runs git through a command line/],
+    // A spawn callee under another name is a spawn callee, and the process directory out of the environment is the checkout.
+    ['git through an alias of the spawn callee', ['const run = execFileSync;', "run('git', ['rev-parse', 'HEAD']);"], /starts git without naming the directory/],
+    ['git through a promisified spawn callee', ["import { promisify } from 'node:util';", "import { execFile } from 'node:child_process';", 'const execFileAsync = promisify(execFile);', "await execFileAsync('git', ['rev-parse', 'HEAD']);"], /starts git without naming the directory/],
+    ['git through a renamed import of the spawn callee', ["import { spawnSync as launch } from 'node:child_process';", "launch('git', ['status'], { cwd: '.' });"], /relative to the test process \(\.\)/],
+    ['git through a namespace member bound to a name', ["import * as childProcess from 'node:child_process';", 'const launch = childProcess.spawnSync;', "launch('git', ['status']);"], /starts git without naming the directory/],
+    ['the process directory out of the environment', ["execFileSync('git', ['status'], { cwd: process.env.PWD });"], /hands git the directory the test process runs in \(process\.env\.PWD\)/],
+    ['the workspace directory out of the environment, through a name', ['const workspace = process.env.GITHUB_WORKSPACE;', "execFileSync('git', ['status'], { cwd: workspace });"], /process\.env\.GITHUB_WORKSPACE/],
     // git started by a shell the suite hands a command line, and by code it hands the checkout.
     ['a git command line handed to a shell', ["execFileSync('sh', ['-c', 'git rev-parse HEAD']);"], /runs git through a command line/],
     ['a git command line handed to a shell in a fixture directory', ['const scratch = mkdtempSync(tmpdir());', "execFileSync('sh', ['-c', 'cd nested && git log -1'], { cwd: scratch });"], /runs git through a command line/],
@@ -726,6 +733,9 @@ describe('git-fixture declaration', () => {
       "  execFileSync('sh', ['-c', 'printf %s done'], { cwd: repo });",
       "  execFileSync(process.execPath, [fileURLToPath(new URL('./a.js', import.meta.url))], { cwd: repo });",
       "  execFileSync('git', ['commit', '-m', 'explain git status output'], { cwd: repo });",
+      // An alias of a spawn callee is held to the same rules, and may stand.
+      "  const launch = promisify(execFile);",
+      "  await launch('git', ['status'], { cwd: repo, env: { ...process.env, TMPDIR: process.env.TMPDIR } });",
       // A property that only shares a function's name is no use of that function.
       "  expect(facts.runGit).toBeUndefined();",
       "  execFileSync('git', ['commit', '--allow-empty', '-m', 'example'], { cwd: launch.cwd });",
@@ -764,6 +774,9 @@ describe('git-fixture declaration', () => {
     // A product module's git use was never the refusal, and a runner nobody hands git is no git call.
     expect(floorOf(importing('./tool.js'), {}, { ...TREE, 'server/lib/tool.js': reading })).toMatchObject({ memoizable: true });
     expect(floorOf(`import { it } from 'vitest';\n${runner}capture(process.execPath, ['-e', '']);\nit('x', () => {});\n`)).toMatchObject({ memoizable: true });
+    // An alias of a spawn callee is one.
+    expect(floorOf("import { it } from 'vitest';\nimport { promisify } from 'node:util';\nimport { execFile } from 'node:child_process';\nconst run = promisify(execFile);\nawait run('git', ['status']);\nit('x', () => {});\n"))
+      .toMatchObject({ memoizable: false, reason: 'spawns git' });
   });
 
   it('keeps the recorded key under the same rule', () => {
