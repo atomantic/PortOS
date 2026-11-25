@@ -643,6 +643,80 @@ it.each([
   expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ success: false, errorCategory: 'output-limit' }));
 });
 
+describe('tool-free Splash Claude page output evidence', () => {
+  const sessionId = 'example-session';
+  const stream = (type, fields = {}) => ({ type: 'stream_event', session_id: sessionId, parent_tool_use_id: null, event: { type, ...fields } });
+  const counts = { output_tokens: 48000, output_tokens_details: { thinking_tokens: 47998 } };
+  const limit = (usage = counts) => stream('message_delta', { delta: { stop_reason: 'max_tokens' }, usage });
+  const thinking = stream('content_block_delta', { delta: { type: 'thinking_delta', thinking: 'private reasoning' } });
+  const finalReply = 'No page was generated 🧪';
+
+  it.each([
+    { name: 'first turn exhausted its output on thinking', firstTurn: [thinking, limit()], matched: true },
+    { name: 'answer text was emitted', firstTurn: [thinking, stream('content_block_delta', { delta: { type: 'text_delta', text: 'An answer' } }), limit()] },
+    { name: 'thinking usage is unsupported', firstTurn: [thinking, limit({ output_tokens: 48000 })] },
+    { name: 'usage is empty', firstTurn: [thinking, limit({})] },
+    { name: 'usage is inconsistent', firstTurn: [thinking, limit({ ...counts, output_tokens: 1 })] },
+    { name: 'two top-level messages overlap', firstTurn: [thinking, stream('message_start'), limit()] },
+    { name: 'the limit belongs to an unrelated session', firstTurn: [thinking, { ...limit(), session_id: 'unrelated' }] },
+    { name: 'the limit belongs to a subagent', firstTurn: [thinking, { ...limit(), parent_tool_use_id: 'example-tool' }] },
+    { name: 'the stop reason is unsupported', firstTurn: [thinking, stream('message_delta', { delta: { stop_reason: 'model_context_window_exceeded' }, usage: counts })] },
+  ])('completes with only the final reply and matching counts when $name', async ({ firstTurn, matched }) => {
+    const child = makeChild();
+    spawn.mockReturnValueOnce(child);
+    const onComplete = vi.fn();
+    const onData = vi.fn();
+    const prompt = 'Write a standalone HTML page from this private prompt.';
+    await executeCliRun({
+      runId: 'splash-page',
+      provider: {
+        id: 'claude-splash', type: 'cli', command: 'claude', splashBacked: true, defaultModel: 'inkling2-mini', effort: 'xhigh',
+        harnessContext: { tokens: 524288 },
+        envVars: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8001' },
+        args: ['--output-format=json', '--verbose'],
+      },
+      prompt, workspacePath: TEST_WORKSPACE, toolFree: true, maxTokens: 128_000, captureClaudeOutputLimit: true, onData, onComplete,
+    });
+    const [command, args, { env }] = spawn.mock.calls[0];
+    expect(command).toBe('claude');
+    expect(args).toEqual([
+      '-p', '-', '--model', 'inkling2-mini', '--effort', 'xhigh', '--tools', '', '--strict-mcp-config',
+      '--mcp-config', '{"mcpServers":{}}', '--setting-sources', 'user',
+      '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--no-session-persistence',
+    ]);
+    expect(env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('128000');
+    expect(child.stdin.write).toHaveBeenCalledWith(prompt);
+    const records = [
+      { type: 'system', subtype: 'init', session_id: sessionId },
+      { type: 'user', session_id: sessionId, message: { content: prompt } },
+      stream('message_start'),
+      stream('content_block_start', { content_block: { type: 'thinking' } }),
+      stream('content_block_start', { content_block: { type: 'text', text: '' } }),
+      ...firstTurn,
+      stream('message_stop'),
+      stream('message_start'),
+      stream('content_block_delta', { delta: { type: 'text_delta', text: finalReply } }),
+      stream('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 10 } }),
+      stream('message_stop'),
+      { type: 'result', subtype: 'success', is_error: false, session_id: sessionId, result: finalReply },
+    ];
+    const bytes = Buffer.from(records.map((row) => JSON.stringify(row)).join('\n'));
+    // Split the NDJSON inside a multibyte code point and omit the final newline.
+    const split = bytes.lastIndexOf(Buffer.from('🧪')) + 1;
+    child.stdout.emit('data', bytes.subarray(0, split));
+    child.stdout.emit('data', bytes.subarray(split));
+    child.emit('close', 0);
+    await flushMicrotasks();
+    expect(onComplete).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ success: true, text: finalReply }));
+    expect(onComplete.mock.calls[0][0].reasoningOutputLimit).toEqual(matched
+      ? { stopReason: 'max_tokens', outputTokens: 48000, thinkingTokens: 47998 }
+      : undefined);
+    expect(onData).not.toHaveBeenCalled();
+    expect(writeFile).toHaveBeenCalledWith(expect.stringContaining('output.txt'), finalReply);
+    expect(JSON.stringify(writeFile.mock.calls)).not.toMatch(/private reasoning|private prompt|example-session|unrelated|thinking_delta/);
+  });
+});
+
 describe('executeCliRun — wall-clock timeout classification', () => {
   // The CLI runner kills its own child on timeout, so the close event carries
   // `exitCode: null` rather than the 124 finalizeRunRecord keys on. Without the
