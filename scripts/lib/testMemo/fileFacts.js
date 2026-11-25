@@ -48,10 +48,10 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null, export
   for (let i = 0; i < tokens.length; i += 1) {
     if (!checkedBodies.some(([from, to]) => from < i && i < to)) scanToken(x, i);
   }
-  // Last, so these readings change nothing the scan recorded. A program that is a name holding
-  // 'git', or a parameter a caller passes it as, starts git like a literal one (#18634).
-  if (!facts.git && startsGitThroughName(x)) facts.git = true;
+  // Check the declaration first: it also detects git reached through a name, and includes
+  // shell invocations. An undeclared file still needs the narrower named-program check.
   if (GIT_FIXTURE_MARKER.test(src)) noteGitFixture(x, src);
+  if (!facts.git && facts.gitFixtureProblem === null && startsGitThroughName(x)) facts.git = true;
   return facts;
 }
 
