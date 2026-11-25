@@ -41,6 +41,14 @@ beforeAll(warmSceneCard, 30000);
 
 installMusicVideoPageHooks();
 
+// Stage interaction tests can enter through the real route. This avoids mounting
+// the default step and scanning its DOM for the picker and stage tabs on every run.
+const renderProjectStage = async (project, stage, sceneId) => {
+  listMusicVideoProjects.mockResolvedValue([project]);
+  const path = `/music-video/${project.id}/${stage}${sceneId ? `/scene/${sceneId}` : ''}`;
+  await act(async () => { renderMV(path); });
+};
+
 describe('MusicVideo selective section revision (#8987)', () => {
   // A reviewed draft: s1 approved, s2 flagged (song time 10 + 7 = 17s).
   const REVIEWED = {
@@ -646,7 +654,7 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
       ],
     };
     updateMusicVideoScene.mockImplementation(savedSceneReplies(project));
-    await openProject(project, 'produce');
+    await renderProjectStage(project, 'produce', 's1');
     // The card's summary row and its editor both quote the lyric.
     expect(screen.getAllByText(/first line/).length).toBeGreaterThan(0);
 
@@ -813,12 +821,8 @@ describe('MusicVideo section layers (#8985)', () => {
 // Shared MediaLightbox for scene frames, scene clips, and the final render (#3718).
 // View-only — no remix/clean action handlers. Keys are deep-linkable via ?preview=.
 describe('MusicVideo media lightbox (#3718)', () => {
-  const renderMVAt = (path) => render(
-    <MemoryRouter initialEntries={[path]}>{MV_ROUTES}</MemoryRouter>,
-  );
-
   it('opens the lightbox from a reference-frame thumbnail click', async () => {
-    await openProject(PROJECT_WITH_CLIP, 'produce');
+    await renderProjectStage(PROJECT_WITH_CLIP, 'produce', 's1');
     await showFrames();
     fireEvent.click(await screen.findByRole('button', { name: 'View scene 1 reference frame full size' }));
     const dialog = await screen.findByRole('dialog', { name: /Media viewer/i });
@@ -829,7 +833,7 @@ describe('MusicVideo media lightbox (#3718)', () => {
   });
 
   it('opens the lightbox from an end-frame thumbnail click', async () => {
-    await openProject({ ...PROJECT_WITH_CLIP, scenes: [{ ...PROJECT_WITH_CLIP.scenes[0], endImageId: 'end1' }] }, 'produce');
+    await renderProjectStage({ ...PROJECT_WITH_CLIP, scenes: [{ ...PROJECT_WITH_CLIP.scenes[0], endImageId: 'end1' }] }, 'produce', 's1');
     await showFrames();
     fireEvent.click(await screen.findByRole('button', { name: 'View scene 1 end frame full size' }));
     const dialog = await screen.findByRole('dialog', { name: /Media viewer/i });
@@ -838,7 +842,7 @@ describe('MusicVideo media lightbox (#3718)', () => {
 
   it('opens the lightbox from a scene-clip expand control without hijacking play/pause', async ({ onTestFailed }) => {
     const phase = createTestPhaseDiagnostics(onTestFailed);
-    await openProject(PROJECT_WITH_CLIP, 'produce', phase);
+    await phase('render-selected-shot', () => renderProjectStage(PROJECT_WITH_CLIP, 'produce', 's1'));
     // Inline thumb keeps its own controls attribute for native play/pause.
     const inlineVideo = document.querySelector('video[src="/data/videos/h1.mp4"]');
     expect(inlineVideo).toBeTruthy();
@@ -854,7 +858,7 @@ describe('MusicVideo media lightbox (#3718)', () => {
   it('opens the final render from the resolved filename, not the history-id reconstruction', async () => {
     // getVideoHistoryItem is mocked → { id: 'rh-9', filename: 'final.mp4' }; the
     // final-render id is NOT its filename stem, so /data/videos/rh-9.mp4 404s.
-    await openProject({ ...PROJECT_WITH_CLIP, renderHistoryId: 'rh-9' }, 'review');
+    await renderProjectStage({ ...PROJECT_WITH_CLIP, renderHistoryId: 'rh-9' }, 'review');
     const expand = await screen.findByRole('button', { name: 'View final video full size' });
     fireEvent.click(expand);
     const dialog = await screen.findByRole('dialog', { name: /Media viewer/i });
@@ -869,7 +873,7 @@ describe('MusicVideo media lightbox (#3718)', () => {
     // the image model never saw. The sidecar is the only record of the real
     // one — and it also carries the `cleanedFrom` lineage the hand-rolled item
     // shape used to drop.
-    await openProject(PROJECT_WITH_CLIP, 'produce');
+    await renderProjectStage(PROJECT_WITH_CLIP, 'produce', 's1');
     await showFrames();
     fireEvent.click(await screen.findByRole('button', { name: 'View scene 1 reference frame full size' }));
     const dialog = await screen.findByRole('dialog', { name: /Media viewer/i });
@@ -885,7 +889,7 @@ describe('MusicVideo media lightbox (#3718)', () => {
       images: { lead: { status: 'done', imageId: 'lead.png', submittedPrompt: 'Lead portrait', submittedRevision: 1, submittedReferences: [{ kind: 'image-ref', filename: 'mood.png' }] } },
       moodImages: [{ kind: 'image-ref', filename: 'mood.png' }],
     };
-    await openProject({ ...PROJECT_NO_CLIP, castAndSets }, 'cast-sets');
+    await renderProjectStage({ ...PROJECT_NO_CLIP, castAndSets }, 'cast-sets');
     const card = within(await screen.findByRole('article', { name: 'Lead' }));
     expect(card.queryByRole('link')).toBeNull();
     fireEvent.click(card.getByRole('button', { name: 'Preview Lead' }));
@@ -900,8 +904,8 @@ describe('MusicVideo media lightbox (#3718)', () => {
 
   it('opens the lightbox from a ?preview= deep link on mount', async () => {
     listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP]);
-    renderMVAt('/music-video/mv-1?preview=image%3Aimg1');
-    await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    await act(async () => { renderMV('/music-video/mv-1?preview=image%3Aimg1'); });
+    expect(screen.getByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name })).toBeInTheDocument();
     const dialog = await screen.findByRole('dialog', { name: /Media viewer/i });
     expect(dialog.getAttribute('aria-label')).toMatch(/img1|image:img1/);
   });
@@ -958,7 +962,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
       new Error('Reference images are only supported for FLUX.2 and Qwen Image 2.1 models on the local backend'),
       { code: 'REFERENCE_IMAGES_FLUX2_ONLY', status: 400 },
     ));
-    await openProject(SPEC_PROJECT, 'produce');
+    await renderProjectStage(SPEC_PROJECT, 'produce', 's1');
     fireEvent.click(screen.getByRole('button', { name: /^Generate frame$/ }));
     await waitFor(() => expect(renderMusicVideoSceneFrame).toHaveBeenCalledWith(
       'mv-spec', 's1', { slot: 'start' }, { silent: true },
@@ -969,7 +973,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
   });
 
   it('asks the server for a frame on a shot whose section plate is approved', async () => {
-    await openProject({ ...SPEC_PROJECT,
+    await renderProjectStage({ ...SPEC_PROJECT,
       scenes: [{ ...SPEC_PROJECT.scenes[0], sectionIndex: 1 }],
       castAndSets: { status: 'approved', direction: { songMap: [{ section: 0, setId: 'harbor' }, { section: 1, setId: 'roof' }] } },
       visualSpec: { ...SPEC_PROJECT.visualSpec, references: [
@@ -978,7 +982,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
         { id: 'mvr-cs-set-harbor', imageId: 'harbor.png', condition: true },
         { id: 'mvr-cs-set-roof', imageId: 'roof.png', condition: false },
       ] },
-    }, 'produce');
+    }, 'produce', 's1');
     fireEvent.click(screen.getByRole('button', { name: /^Generate frame$/ }));
     await waitFor(() => expect(renderMusicVideoSceneFrame).toHaveBeenCalledWith(
       'mv-spec', 's1', { slot: 'start' }, { silent: true },
@@ -987,7 +991,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
 
   // Uniquely catches a frame picked as the render's image reference not reaching the request.
   it('renders a new frame take from the shot\'s own start frame when it is picked as the reference', async () => {
-    await openProject({ ...SPEC_PROJECT, scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
+    await renderProjectStage({ ...SPEC_PROJECT, scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce', 's1');
     fireEvent.change(screen.getByLabelText('From', { selector: '#mv-scene-s1-start-from' }), { target: { value: 'start' } });
     await showFrames();
     fireEvent.click(screen.getByRole('button', { name: /^New frame take$/ }));
@@ -997,7 +1001,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
   });
 
   it('submits a model override for one new frame take without saving it as the shot default', async () => {
-    await openProject({ ...SPEC_PROJECT, imageMode: 'grok', scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
+    await renderProjectStage({ ...SPEC_PROJECT, imageMode: 'grok', scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce', 's1');
     await showFrames();
     fireEvent.click(screen.getByRole('button', { name: /Image model for this (start )?frame take/ }));
     const override = within(screen.getByRole('group', { name: 'One-take image model' }));
@@ -1019,7 +1023,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
 
   // Uniquely catches Refine sending the shot prompt instead of the instruction, the frame not leading, or the shot's picked references not riding along.
   it('refines the start frame by a short instruction, sending the references picked on the shot after that frame', async () => {
-    await openProject({ ...SPEC_PROJECT, scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
+    await renderProjectStage({ ...SPEC_PROJECT, scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce', 's1');
     // The automatic set shows as chips; swap the flagged Lead for the Pier set.
     await showFrames();
     const refs = within(screen.getByRole('group', { name: 'References selected for the frames' }));
@@ -1041,8 +1045,8 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
   // The board sends the refine instruction and the frame; the server applies the shot's picks.
   it('refines a shot with four references by sending the instruction and the start frame', async () => {
     const references = ['a', 'b', 'c', 'd'].map((key) => ({ id: `r-${key}`, imageId: `${key}.png`, role: 'character', label: key, note: '', condition: true }));
-    await openProject({ ...SPEC_PROJECT, visualSpec: { ...SPEC_PROJECT.visualSpec, references },
-      scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
+    await renderProjectStage({ ...SPEC_PROJECT, visualSpec: { ...SPEC_PROJECT.visualSpec, references },
+      scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce', 's1');
     await showFrames();
     fireEvent.click(screen.getByRole('button', { name: 'How references are sent' }));
     expect(screen.getByRole('tooltip').textContent).toContain('A refine or end frame counts its frame first');
@@ -1063,7 +1067,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     trimVideo.mockResolvedValueOnce({ video: { id: 'h1-trim' } });
     addMusicVideoSceneTake.mockResolvedValueOnce({ scene: { ...scene, takes: [...scene.takes, trimmedTake] }, take: trimmedTake });
     selectMusicVideoSceneTake.mockResolvedValueOnce({ ...scene, videoHistoryId: 'h1-trim', takes: [{ ...scene.takes[0], status: 'candidate' }, { ...trimmedTake, status: 'selected' }] });
-    await openProject({ ...PROJECT_WITH_CLIP, id: 'mv-trim', scenes: [scene] }, 'produce');
+    await renderProjectStage({ ...PROJECT_WITH_CLIP, id: 'mv-trim', scenes: [scene] }, 'produce', 's1');
     const render = within(await screen.findByRole('region', { name: 'Render' }));
     for (let i = 0; i < 12; i += 1) fireEvent.click(render.getByRole('button', { name: 'Next frame' }));
     fireEvent.click(render.getByRole('button', { name: /Start clip here/ }));
@@ -1086,7 +1090,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
       referenceImageId: 'take-b.png',
       takes: [{ ...scene.takes[0], status: 'rejected' }, scene.takes[1]],
     });
-    await openProject({ ...PROJECT_NO_CLIP, id: 'mv-takes', name: 'Takes Project', scenes: [scene] }, 'produce');
+    await renderProjectStage({ ...PROJECT_NO_CLIP, id: 'mv-takes', name: 'Takes Project', scenes: [scene] }, 'produce', 's1');
 
     await showFrames();
     const strip = screen.getByRole('list', { name: /Frame takes/ });
@@ -1175,7 +1179,7 @@ describe('MusicVideo scene clip non-MP4 playback (#8978)', () => {
     getVideoHistoryItem.mockImplementation((id) => (id === 'h1'
       ? Promise.resolve({ id: 'h1', filename: 'h1.mov' })
       : Promise.reject(Object.assign(new Error('Not found'), { status: 404 }))));
-    await openProject(PROJECT_WITH_CLIP, 'produce');
+    await renderProjectStage(PROJECT_WITH_CLIP, 'produce', 's1');
 
     await waitFor(() => expect(document.querySelector('video[src="/data/videos/h1.mov"]')).toBeTruthy());
     expect(document.querySelector('video[src="/data/videos/h1.mp4"]')).toBeNull();
@@ -1269,7 +1273,7 @@ describe('stage checklist and project options', () => {
       productionReview: { draft: { storyboard: [] }, feedback: [note] },
       productionReadiness: { readyForProduction: false, basis: { storyboard: 'board' }, art: { approved: true, problems: [] },
         storyboard: withProblems({ approved: false }, [problem('feedback', `Resolve storyboard feedback for ${note.target}: ${note.text}`)]), proof: { approved: false, problems: [] } } };
-    await openProject(project, 'board');
+    await renderProjectStage(project, 'board');
     const checklist = screen.getByRole('region', { name: 'What this step needs' });
     expect(within(checklist).queryByText('Lyrics')).toBeNull();
     expect(within(checklist).queryByRole('button', { name: /Import lyrics/ })).toBeNull();
@@ -1291,7 +1295,7 @@ describe('stage checklist and project options', () => {
       productionReadiness: { readyForProduction: false, basis: {}, art: { approved: true, problems: [] },
         storyboard: withProblems({ approved: false,
           lyricAnchors: [{ sceneId: 's-b', sung: ['If you think this is slop'], anchored: [] }] }, [problem('lyric-anchors', 'Review lyric anchors for Singer.', 's-b')]), proof: { approved: false, problems: [] } } };
-    await openProject(project, 'board');
+    await renderProjectStage(project, 'board');
     const checklist = screen.getByRole('region', { name: 'What this step needs' });
     expect(checklist).not.toHaveTextContent('need lyric anchors reviewed');
     const shots = within(checklist).getByRole('list', { name: 'Lyric anchors shots' });
@@ -1311,7 +1315,7 @@ describe('stage checklist and project options', () => {
           coverage: [{ sceneId: 's-b', issue: 'gap', startSec: 4, endSec: 4.5 }],
           incompleteShots: [{ sceneId: 's-b', missing: ['staging'] }] },
         [problem('coverage', 'Storyboard shots must cover the master without unintended gaps or overlaps.'), problem('shot-incomplete', 'Complete timing, action, staging, camera and transition for Singer.', 's-b')]), proof: { approved: false, problems: [] } } };
-    await openProject(project, 'board');
+    await renderProjectStage(project, 'board');
     const checklist = screen.getByRole('region', { name: 'What this step needs' });
     expect(within(checklist).getByRole('list', { name: 'Shot coverage shots' })).toHaveTextContent('Shot 2Gap of 0.50 s before this shot, 0:04.00–0:04.50');
     expect(checklist).not.toHaveTextContent('without unintended gaps');
@@ -1719,8 +1723,9 @@ describe('take decisions then shot edits keep the takes as the server holds them
   };
   const openShot = async (name, project = board) => {
     await asThisTab();
-    await openProject(project, 'produce');
-    await act(async () => fireEvent.click(await screen.findByRole('button', { name })));
+    await renderProjectStage(project, 'produce');
+    const thumbnails = within(screen.getByLabelText('Storyboard thumbnails'));
+    await act(async () => fireEvent.click(thumbnails.getByRole('button', { name })));
   };
   const markDone = async () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'Done', exact: true }));
