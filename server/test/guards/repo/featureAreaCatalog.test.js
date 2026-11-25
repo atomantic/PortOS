@@ -27,6 +27,32 @@ const filesUnder = (prefix) => {
   if (!filesByPrefix.has(prefix)) filesByPrefix.set(prefix, files.filter((file) => file.startsWith(prefix)));
   return filesByPrefix.get(prefix);
 };
+const foldsGlobCase = process.platform === 'darwin' || process.platform === 'win32';
+const startsWithGlobPrefix = (prefix) => {
+  if (!foldsGlobCase) return (file) => file.startsWith(prefix);
+  // A wildcard segment can match a differently cased literal prefix. Folding the
+  // directory too keeps either matcher's case rules from hiding a disagreement.
+  const start = new RegExp(`^${RegExp.escape(prefix)}`, 'iu');
+  return (file) => start.test(file);
+};
+const equivalencePrefix = (pattern, directory) => {
+  // Escapes and path normalization can change the apparent literal directory.
+  if (/\\|\/\/|(?:^|\/)\.{1,2}(?:\/|$)/.test(pattern)) return '';
+  // Brackets and extglobs keep their full directory bucket. In simple patterns,
+  // everything before the first star or question mark is literal.
+  if (!/^[A-Za-z0-9_./*?-]+$/.test(pattern)) return directory;
+  const wildcard = pattern.search(/[*?]/);
+  return wildcard === -1 ? pattern : pattern.slice(0, wildcard);
+};
+const equivalenceBuckets = new Map();
+const equivalenceCandidates = (pattern, directory) => {
+  const prefix = equivalencePrefix(pattern, directory);
+  if (!foldsGlobCase) return filesUnder(prefix);
+  if (!equivalenceBuckets.has(prefix)) {
+    equivalenceBuckets.set(prefix, files.filter(startsWithGlobPrefix(prefix)));
+  }
+  return equivalenceBuckets.get(prefix);
+};
 // Ownership of the whole tree is computed once; each guard below reads it.
 let ownersByFile;
 const owners = () => ownersByFile ??= new Map(files.map((file) => [file, areasForFile(file)]));
@@ -83,11 +109,33 @@ describe('feature area catalog', () => {
 
   it('compiles globs to the same matches the platform matchesGlob finds across the tracked tree', () => {
     const disagreements = FEATURE_AREAS.flatMap((entry) => entry.codeGlobs
-      .flatMap((glob) => expandCodeGlob(glob).flatMap(({ glob: pattern, prefix }) => filesUnder(prefix)
+      .flatMap((glob) => expandCodeGlob(glob).flatMap(({ glob: pattern, prefix }) => equivalenceCandidates(pattern, prefix)
         .filter((file) => matchesCodeGlob(file, pattern) !== posix.matchesGlob(file, pattern))
         .map((file) => `${entry.id}: ${pattern} vs ${file}`))));
     expect(disagreements.slice(0, 20)).toEqual([]);
     expect(globMatches('server/lib/featureAreas.js')).toEqual(['server/lib/featureAreas.js']);
+  });
+
+  it('keeps platform matches when narrowing simple wildcard buckets', () => {
+    const paths = ['src/Clip.js', 'src/clip.js', 'Src/Clip.js', 'src/Other.js', 'src/nested/Clip.js'];
+    for (const [glob, expectedPrefix] of [
+      ['src/Clip.js', 'src/Clip.js'],
+      ['src/Clip*.js', 'src/Clip'],
+      ['src/Cl?p.js', 'src/Cl'],
+      ['src/**/Clip*.js', 'src/'],
+      ['src/Clip[.-]*', 'src/'],
+      ['src/Clip!(Test)*', 'src/'],
+      ['src//Clip*.js', ''],
+    ]) {
+      const [{ prefix }] = expandCodeGlob(glob);
+      const candidatePrefix = equivalencePrefix(glob, prefix);
+      const candidates = paths.filter(startsWithGlobPrefix(candidatePrefix));
+      expect(candidatePrefix, glob).toBe(expectedPrefix);
+      for (const matcher of [posix.matchesGlob, matchesCodeGlob]) {
+        const matches = (file) => matcher(file, glob);
+        expect(candidates.filter(matches), glob).toEqual(paths.filter(matches));
+      }
+    }
   });
 
   it('writes globs that match the same files on case-insensitive and case-sensitive platforms', () => {
