@@ -44,6 +44,7 @@ import {
   planUpscaleHistoryItem,
   resolveFflfLtx2PixelBudget,
 } from '../services/videoGen/local.js';
+import { readHistorySnapshot } from '../services/videoGen/history.js';
 // The method enum comes from the pure contract module rather than through
 // local.js's re-export: it is a constant, and reading it off the mockable
 // provider surface would make every suite that mocks local.js responsible for
@@ -929,7 +930,7 @@ router.get('/history', asyncHandler(async (req, res) => {
   // No query keeps the legacy full array; see historyList.js for the opt-in form.
   if (!isHistoryListQuery(req.query)) return res.json(await withMediaFileSizes(await loadHistory(), 'video'));
   const options = validateRequest(historyListQuerySchema, req.query);
-  res.json(await listVideoHistoryQuery(options, await loadHistory()));
+  res.json(await listVideoHistoryQuery(options, await readHistorySnapshot()));
 }));
 
 // One history entry by id (#4165) — see videoHistoryRead.js.

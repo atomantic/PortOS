@@ -293,6 +293,18 @@ export async function listGalleryImageRefs() {
   return rows.map(row => row.ref);
 }
 
+/** Prompt-only library picker search. Exclude filed images before taking the page. */
+export async function searchImagePrompts(words, limit, excludedRefs = []) {
+  // PostgreSQL JSONB cannot contain a NUL, and text parameters reject it too.
+  if (words.some(word => word.includes('\0'))) return [];
+  const matches = words.map((_, index) => `AND strpos(lower(data->>'prompt'), $${index + 3}) > 0`).join(' ');
+  const { rows } = await query(`SELECT ref, data->>'prompt' AS prompt, data->'createdAt' AS "createdAt"
+    FROM media_assets WHERE kind = 'image' AND jsonb_typeof(data->'prompt') = 'string'
+      AND ref <> ALL($2::text[]) ${matches}
+    ORDER BY created_at DESC, ref COLLATE "C" ASC LIMIT $1`, [limit, excludedRefs, ...words]);
+  return rows;
+}
+
 /** Count matching rows without materializing their JSONB payloads. */
 export async function countAssets({ videos, localImages, searchTextOf, ...filters } = {}) {
   const params = [];

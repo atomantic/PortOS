@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, expect, it as vitestIt, vi } from 'vitest';
 import pg from 'pg';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { mediaDdl } from '../../lib/db/schema/media.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
@@ -8,16 +8,21 @@ import { mediaFixture } from '../../../scripts/perf/collectionFixtureData.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, ownTestBodies } from '../../lib/mockPathsDataRoot.js';
 import { listGalleryCollectionSummaries, listGalleryFacets, listGalleryPage } from './gallery.js';
 import { compactGalleryRecord } from './logic.js';
+import { searchImagePrompts } from './db.js';
+import { searchMediaLibraryForPool } from '../musicVideo/mediaPool.js';
 import { PATHS } from '../../lib/paths.js';
+import { sidecarPathForImage } from '../../lib/assetHash.js';
 import { createDbPhaseDiagnostics } from '../../test/dbPhaseDiagnostics.js';
 
 const { it, drain } = ownTestBodies(vitestIt);
 
-const state = vi.hoisted(() => ({ file: false, images: [], videos: [], collections: [], annotations: {}, query: vi.fn(), fullReads: 0 }));
+const state = vi.hoisted(() => ({ file: false, images: [], videos: [], collections: [], annotations: {}, query: vi.fn(),
+  listGallery: vi.fn(), fullReads: 0 }));
 vi.mock('../../lib/pgFileFacade.js', () => ({ isFileBackend: () => state.file }));
 vi.mock('../../lib/paths.js', async original =>
   makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-gallery-location-') }));
 vi.mock('../../lib/db.js', () => ({ query: (...args) => state.query(...args) }));
+vi.mock('../imageGen/local.js', () => ({ listGallery: state.listGallery }));
 // Stands in for history.js: compact rows that answer for their full record's
 // search text, and a count of the full reads a compact search must not make.
 vi.mock('../videoGen/history.js', async () => {
@@ -25,6 +30,7 @@ vi.mock('../videoGen/history.js', async () => {
   const texts = new WeakMap();
   return {
     loadHistory: async () => { state.fullReads++; return state.videos; },
+    readHistorySnapshot: async () => state.videos,
     loadCompactHistory: async () => state.videos.map((video) => {
       const row = compactSource(video);
       texts.set(row, recordSearchText('video', video));
@@ -34,6 +40,7 @@ vi.mock('../videoGen/history.js', async () => {
   };
 });
 vi.mock('../mediaCollections.js', () => ({ listCollections: async () => state.collections,
+  musicVideoCollectionId: id => `mvc-${id}`,
   getCollection: async id => state.collections.find(collection => collection.id === id) }));
 vi.mock('../peerHostedMedia.js', () => ({ resolveMediaLocations: async items => items.map(() => ({ location: 'local' })) }));
 vi.mock('../mediaAnnotations.js', () => ({ listAnnotations: async () => state.annotations }));
@@ -90,6 +97,61 @@ async function seed(images, indexedVideos = [], phase = (_name, operation) => op
 }
 const member = (kind, ref, addedAt = '2026-01-01') => ({ kind, ref, addedAt });
 const disk = async () => state.images;
+
+it('returns the same prompt-only library page on disk and in PostgreSQL', async context => {
+  if (!available) return context.skip();
+  const time = index => new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString();
+  const matching = Array.from({ length: 300 }, (_, index) => ({
+    filename: `picker-${index}.png`, prompt: 'BLUE 50% Cat_Fur', createdAt: time(index),
+  }));
+  const filed = { filename: 'picker-filed.png', prompt: 'blue 50% cat_fur', createdAt: time(501) };
+  const alsoFiled = { ...filed, filename: 'picker-also-filed.png' };
+  const images = [...matching, filed, alsoFiled,
+    { filename: 'picker-wildcard.png', prompt: 'blue 500 catxfur', createdAt: time(502) },
+    { filename: 'picker-metadata.png', model: filed.prompt, createdAt: time(503) },
+    { filename: 'picker-object.png', prompt: { text: filed.prompt }, createdAt: time(504) },
+  ];
+  const clip = { id: 'picker-video', prompt: filed.prompt, createdAt: time(500) };
+  const project = { id: 'library-picker', scenes: [] };
+  const previous = { file: state.file, videos: state.videos, collections: state.collections };
+  const { listGallery } = await import('../imageGen/localGallery.js');
+  state.listGallery.mockImplementation(listGallery);
+  await mkdir(PATHS.images, { recursive: true });
+  try {
+    await Promise.all(images.flatMap(({ filename, ...metadata }) => [
+      writeFile(join(PATHS.images, filename), 'synthetic image'),
+      writeFile(sidecarPathForImage(filename), JSON.stringify(metadata)),
+    ]));
+    await seed(await listGallery(), [{ ...clip, id: 'picker-indexed-video' }]);
+    state.videos = [clip];
+    const excluded = [filed.filename, alsoFiled.filename];
+    state.collections = [{ id: 'mvc-library-picker', items: excluded.map(ref => member('image', ref)) }];
+    const words = ['blue', '50%', 'cat_fur'];
+    expect(await searchImagePrompts(words, 2, excluded)).toEqual(matching.slice(-2).reverse()
+      .map(({ filename, ...item }) => ({ ref: filename, ...item })));
+    state.file = true;
+    const filePage = await searchMediaLibraryForPool(project, 'BLUE 50% Cat_Fur');
+    expect(state.listGallery).toHaveBeenCalledOnce();
+    expect(filePage.items).toHaveLength(300);
+    expect(filePage.more).toBe(true);
+    expect(filePage.items[0]).toEqual({ kind: 'video', assetId: clip.id, prompt: clip.prompt, createdAt: clip.createdAt });
+    expect(filePage.items.at(-1).assetId).toBe('picker-1.png');
+
+    state.listGallery.mockClear();
+    state.file = false;
+    state.query.mockClear();
+    expect(await searchMediaLibraryForPool(project, 'BLUE 50% Cat_Fur')).toEqual(filePage);
+    expect(state.query).toHaveBeenCalledOnce();
+    expect(state.listGallery).not.toHaveBeenCalled();
+  } finally {
+    Object.assign(state, previous);
+    state.listGallery.mockReset();
+    await Promise.all(images.flatMap(({ filename }) => [
+      rm(join(PATHS.images, filename), { force: true }),
+      rm(sidecarPathForImage(filename), { force: true }),
+    ]));
+  }
+});
 
 it('uses original files on this machine for local gallery pages and counts on both backends', async context => {
   if (!available) return context.skip();
