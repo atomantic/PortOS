@@ -15,6 +15,7 @@ import {
   generateThumbnail, optimizeForStreaming, probeFrameCount, probeVideoDuration,
 } from '../../lib/ffmpeg.js';
 import { formatBytes, PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
+import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import { isAppleSilicon } from '../../lib/platform.js';
@@ -701,9 +702,6 @@ export function bufferChildExit(proc, { bufferOutput = false } = {}) {
     return output.length ? { ...(buffered || { type: 'output' }), output } : buffered;
   };
 }
-
-/** How long a finished output waits for a backup cut before giving up (a cut spans rsync and the database dump). */
-export const FINISHED_OUTPUT_ADMISSION_MS = 60 * 60 * 1000;
 
 // Only fresh, unreferenced outputs belong here; callers keep the publication latch so a later
 // notification failure never sends committed bytes to cleanup.

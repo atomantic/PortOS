@@ -18,6 +18,7 @@
  */
 
 import { captureMusicVideoEvidence } from '../../lib/musicVideo/musicVideoDependencies.js';
+import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { unlink } from 'fs/promises';
 import { join } from 'path';
@@ -81,9 +82,14 @@ const unlinkUnder = (root, filename) => {
 // The encoder wrote the excerpt and its contact sheet in place; the settling
 // row that first names them commits under a backup lease (#9982), so a
 // snapshot never dumps a row naming bytes its file copy missed.
+// The encode already finished, so a backup cut holding admission is a pause, not a reason to
+// delete the excerpt: wait out a whole cut (see backupPublicationWait.js).
 const settleExcerptRecord = (projectId, excerptId, patch) => withBackupAssetPublication(() => mutateProjectRecord(projectId, (current) => ({
   project: settleRevisionRender(applyExcerptPatch(current, excerptId, { ...patch, partialFilename: null, renderingOn: null }), excerptId, patch),
-})));
+})), {
+  timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
+  onWait: () => console.log(`⏸️ Music-video excerpt ${excerptId.slice(0, 8)} waiting for the backup to finish before saving`),
+});
 
 /**
  * Kick off a draft excerpt render. Returns `{ jobId, excerptId }`.
