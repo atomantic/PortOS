@@ -1,4 +1,4 @@
-import { Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { Suspense, useState, useEffect, useMemo, useRef, useCallback, useId } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Billboard, OrbitControls, Text } from '@react-three/drei';
 import * as THREE from 'three';
@@ -24,6 +24,8 @@ import GoalDetailPanel, { CATEGORY_CONFIG, HORIZON_OPTIONS, GOAL_TYPE_CONFIG, DE
 import OrganizePanel from './OrganizePanel';
 import { useGoalOrganize, useGoalCreate } from '../../hooks/useGoalOrganize';
 import useProviderModels from '../../hooks/useProviderModels';
+import usePrefersReducedMotion from '../../hooks/usePrefersReducedMotion';
+import { graphMotionSettings } from '../graph3d/GraphScene';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { enabledApiProviderFilter } from '../../utils/providers';
 
@@ -176,20 +178,24 @@ function GoalCameraRig({ bounds, fitKey, onFit }) {
   return null;
 }
 
-function GoalScene({ graph, selectedId, adjacentIds, onSelect, onHover, showLabels }) {
+function GoalScene({ graph, bounds, selectedId, adjacentIds, onSelect, onHover, showLabels }) {
+  const invalidate = useThree(state => state.invalidate);
   const sphereGeo = useMemo(() => new THREE.SphereGeometry(1, 16, 12), []);
   const octaGeo = useMemo(() => new THREE.OctahedronGeometry(1, 0), []);
 
   const selNode = selectedId ? graph.idMap.get(selectedId) : null;
   const selRadius = selNode ? goalNodeRadius(selNode) : 0;
 
-  const bounds = useMemo(() => computeGraphBounds(graph.nodes), [graph.nodes]);
   const fitKey = useMemo(() => graph.nodes.map(n => n.id).join('|'), [graph.nodes]);
-  const orbitLimits = useMemo(() => orbitDistanceLimits(bounds), [bounds]);
 
   const [fitDistance, setFitDistance] = useState(null);
   const handleFit = useCallback((distance) => setFitDistance(distance), []);
   const fadeRange = useMemo(() => labelFadeRange(fitDistance), [fitDistance]);
+
+  // Label opacity and edge geometry are written outside React's host props.
+  useEffect(() => {
+    invalidate();
+  }, [invalidate, graph, selectedId, showLabels, fadeRange]);
 
   return (
     <>
@@ -251,14 +257,6 @@ function GoalScene({ graph, selectedId, adjacentIds, onSelect, onHover, showLabe
           <meshBasicMaterial color="#ffffff" transparent opacity={0.15} wireframe />
         </mesh>
       )}
-
-      <OrbitControls
-        makeDefault
-        enableDamping
-        dampingFactor={0.05}
-        minDistance={orbitLimits.min}
-        maxDistance={orbitLimits.max}
-      />
     </>
   );
 }
@@ -266,7 +264,8 @@ function GoalScene({ graph, selectedId, adjacentIds, onSelect, onHover, showLabe
 export default function GoalsTreeView({ data, onRefresh, selectedGoalId }) {
   // Selection lives in the URL (/goals/tree/:goalId) so it survives reload, Back and tab switches.
   const navigate = useNavigate();
-  const selectedNode = selectedGoalId ? { id: selectedGoalId } : null;
+  const reducedMotion = usePrefersReducedMotion();
+  const { frameloop } = graphMotionSettings(reducedMotion);
   const clearSelection = useCallback(() => navigate(GOALS_TREE_PATH), [navigate]);
   const [hoveredNode, setHoveredNode] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -286,6 +285,10 @@ export default function GoalsTreeView({ data, onRefresh, selectedGoalId }) {
   } = useProviderModels({ filter: enabledApiProviderFilter });
 
   const dragStartRef = useRef(null);
+  const addButtonRef = useRef(null);
+  const addFormId = useId();
+  const detailPanelRef = useRef(null);
+  const goalButtonRef = useRef(null);
 
   const filteredGoals = useMemo(() => {
     if (!data?.flat?.length) return [];
@@ -302,22 +305,55 @@ export default function GoalsTreeView({ data, onRefresh, selectedGoalId }) {
     return layoutGoalNodes(filteredGoals);
   }, [filteredGoals]);
 
+  const bounds = useMemo(() => graph && computeGraphBounds(graph.nodes), [graph]);
+  const orbitLimits = useMemo(() => bounds && orbitDistanceLimits(bounds), [bounds]);
+
   const adjacentIds = useMemo(() => {
-    if (!selectedNode || !graph) return null;
+    if (!selectedGoalId || !graph) return null;
     const set = new Set();
     for (const e of graph.edges) {
-      if (e.source === selectedNode.id) set.add(e.target);
-      if (e.target === selectedNode.id) set.add(e.source);
+      if (e.source === selectedGoalId) set.add(e.target);
+      if (e.target === selectedGoalId) set.add(e.source);
     }
     return set;
-  }, [selectedNode, graph]);
+  }, [selectedGoalId, graph]);
 
   // Find the full goal data for the selected node
-  const selectedGoal = selectedNode ? data?.flat?.find(g => g.id === selectedNode.id) : null;
+  const selectedGoal = selectedGoalId ? data?.flat?.find(g => g.id === selectedGoalId) : null;
 
-  const handleSelect = useCallback((node) => {
-    navigate(node.id === selectedGoalId ? GOALS_TREE_PATH : goalTreeDetailPath(node.id));
-  }, [navigate, selectedGoalId]);
+  useEffect(() => {
+    // The detail panel covers the picker at narrow widths.
+    if (selectedGoalId && goalButtonRef.current) detailPanelRef.current?.focus();
+  }, [selectedGoalId]);
+
+  const closeGoalDetails = useCallback(() => {
+    clearSelection();
+    goalButtonRef.current?.focus();
+    goalButtonRef.current = null;
+  }, [clearSelection]);
+
+  const handleSelect = useCallback((node, goalButton = null) => {
+    if (node.id === selectedGoalId) {
+      closeGoalDetails();
+      return;
+    }
+    goalButtonRef.current = goalButton;
+    navigate(goalTreeDetailPath(node.id));
+  }, [navigate, selectedGoalId, closeGoalDetails]);
+
+  const closeAddForm = () => {
+    setShowNewGoal(false);
+    addButtonRef.current?.focus();
+  };
+
+  const handleEscape = (event) => {
+    if (event.key !== 'Escape' || event.defaultPrevented || event.repeat) return;
+    if (showNewGoal) closeAddForm();
+    else if (selectedGoalId) closeGoalDetails();
+    else return;
+    event.preventDefault();
+    event.stopPropagation();
+  };
 
   const handleHover = useCallback((node) => {
     setHoveredNode(node);
@@ -351,7 +387,7 @@ export default function GoalsTreeView({ data, onRefresh, selectedGoalId }) {
   const handleOrganize = () => requestOrganize({ providerId: selectedProviderId, model: selectedModel });
 
   return (
-    <div className="@container/goals h-full flex relative">
+    <div className="@container/goals h-full flex relative" onKeyDown={handleEscape}>
       <div className="flex-1 min-w-0 min-h-0 relative flex flex-col">
         {/* Filter bar */}
         <div className="relative z-10 shrink-0 m-2 sm:m-3">
@@ -372,6 +408,8 @@ export default function GoalsTreeView({ data, onRefresh, selectedGoalId }) {
               return (
                 <button
                   key={key}
+                  type="button"
+                  aria-pressed={Boolean(categoryFilters[key])}
                   onClick={() => toggleCategory(key)}
                   className={`flex items-center justify-center shrink-0 min-w-11 min-h-11 gap-1 px-1.5 sm:px-2 py-1 rounded-lg text-xs font-medium border transition-colors ${
                     categoryFilters[key]
@@ -400,12 +438,74 @@ export default function GoalsTreeView({ data, onRefresh, selectedGoalId }) {
               <span className="hidden sm:inline">Labels</span>
             </button>
             <button
-              onClick={() => setShowNewGoal(!showNewGoal)}
+              ref={addButtonRef}
+              type="button"
+              aria-expanded={showNewGoal}
+              aria-controls={showNewGoal ? addFormId : undefined}
+              onClick={() => setShowNewGoal(open => !open)}
               className="flex items-center justify-center shrink-0 min-w-11 min-h-11 gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-port-accent text-white"
             >
               <Plus className="w-3 h-3" />
               Add
             </button>
+            {/* New goal form */}
+            {showNewGoal && (
+              <div id={addFormId} className="absolute top-full mt-2 left-0 z-10 bg-port-card border border-port-border rounded-lg p-3 w-72 max-w-[calc(100vw-1rem)] space-y-2 shadow-lg">
+                <input
+                  type="text"
+                  value={newGoal.title}
+                  onChange={e => setNewGoal({ ...newGoal, title: e.target.value })}
+                  placeholder="Goal title..."
+                  aria-label="New goal title"
+                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
+                  onKeyDown={e => e.key === 'Enter' && handleCreateGoal()}
+                  disabled={isCreating}
+                />
+                <textarea
+                  value={newGoal.description}
+                  onChange={e => setNewGoal({ ...newGoal, description: e.target.value })}
+                  placeholder="Description..."
+                  aria-label="New goal description"
+                  rows={2}
+                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white resize-none"
+                  disabled={isCreating}
+                />
+                <div className="flex gap-2">
+                  <select
+                    value={newGoal.horizon}
+                    onChange={e => setNewGoal({ ...newGoal, horizon: e.target.value })}
+                    aria-label="New goal horizon"
+                    className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
+                    disabled={isCreating}
+                  >
+                    {HORIZON_OPTIONS.map(h => <option key={h.value} value={h.value}>{h.label}</option>)}
+                  </select>
+                  <select
+                    value={newGoal.category}
+                    onChange={e => setNewGoal({ ...newGoal, category: e.target.value })}
+                    aria-label="New goal category"
+                    className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
+                    disabled={isCreating}
+                  >
+                    {Object.entries(CATEGORY_CONFIG).map(([k, v]) => (
+                      <option key={k} value={k}>{v.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleCreateGoal}
+                    disabled={!newGoal.title.trim() || isCreating}
+                    className="px-3 py-1 text-sm rounded bg-port-accent text-white disabled:opacity-50"
+                  >
+                    Create
+                  </button>
+                  <button type="button" onClick={closeAddForm} className="px-3 py-1 text-sm rounded bg-port-border text-gray-300">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
             {(data?.flat?.length ?? 0) >= 2 && (
               <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2 w-full sm:w-auto">
                 <div className="w-full min-w-0 sm:w-auto sm:flex-1">
@@ -433,66 +533,6 @@ export default function GoalsTreeView({ data, onRefresh, selectedGoalId }) {
               </div>
             )}
           </div>
-
-          {/* New goal form */}
-          {showNewGoal && (
-            <div className="absolute top-full mt-2 left-0 z-10 bg-port-card border border-port-border rounded-lg p-3 w-72 max-w-[calc(100vw-1rem)] space-y-2 shadow-lg">
-              <input
-                type="text"
-                value={newGoal.title}
-                onChange={e => setNewGoal({ ...newGoal, title: e.target.value })}
-                placeholder="Goal title..."
-                aria-label="New goal title"
-                className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
-                onKeyDown={e => e.key === 'Enter' && handleCreateGoal()}
-                disabled={isCreating}
-              />
-              <textarea
-                value={newGoal.description}
-                onChange={e => setNewGoal({ ...newGoal, description: e.target.value })}
-                placeholder="Description..."
-                aria-label="New goal description"
-                rows={2}
-                className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white resize-none"
-                disabled={isCreating}
-              />
-              <div className="flex gap-2">
-                <select
-                  value={newGoal.horizon}
-                  onChange={e => setNewGoal({ ...newGoal, horizon: e.target.value })}
-                  aria-label="New goal horizon"
-                  className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
-                  disabled={isCreating}
-                >
-                  {HORIZON_OPTIONS.map(h => <option key={h.value} value={h.value}>{h.label}</option>)}
-                </select>
-                <select
-                  value={newGoal.category}
-                  onChange={e => setNewGoal({ ...newGoal, category: e.target.value })}
-                  aria-label="New goal category"
-                  className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
-                  disabled={isCreating}
-                >
-                  {Object.entries(CATEGORY_CONFIG).map(([k, v]) => (
-                    <option key={k} value={k}>{v.label}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={handleCreateGoal}
-                  disabled={!newGoal.title.trim() || isCreating}
-                  className="px-3 py-1 text-sm rounded bg-port-accent text-white disabled:opacity-50"
-                >
-                  Create
-                </button>
-                <button onClick={() => setShowNewGoal(false)} className="px-3 py-1 text-sm rounded bg-port-border text-gray-300">
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-
         </div>
 
         {/* Organization panel */}
@@ -531,7 +571,7 @@ export default function GoalsTreeView({ data, onRefresh, selectedGoalId }) {
         </div>
 
         {/* Tooltip */}
-        {hoveredNode && !selectedNode && (
+        {hoveredNode && !selectedGoalId && (
           <div className="absolute top-14 left-1/2 -translate-x-1/2 z-10 bg-port-card border border-port-border rounded-lg px-3 py-2 text-sm pointer-events-none shadow-lg">
             <div className="text-white font-medium">{hoveredNode.title}</div>
             <div className="text-gray-500 text-xs">
@@ -546,51 +586,90 @@ export default function GoalsTreeView({ data, onRefresh, selectedGoalId }) {
           </div>
         )}
 
-        {/* 3D Canvas */}
-        {graph?.nodes?.length ? (
-          <Canvas
-            camera={{ position: [0, 15, 40], fov: 60 }}
-            onPointerDown={(e) => { dragStartRef.current = { x: e.clientX, y: e.clientY }; }}
-            onPointerMissed={handlePointerMissed}
-            style={{ background: 'rgb(var(--port-bg))', flex: 1, minHeight: 0 }}
-          >
-            <GoalScene
-              graph={graph}
-              selectedId={selectedNode?.id}
-              adjacentIds={adjacentIds}
-              onSelect={handleSelect}
-              onHover={handleHover}
-              showLabels={showLabels}
-            />
-          </Canvas>
-        ) : (
-          (data?.flat?.length ?? 0) > 0 ? (
-            <div className="flex flex-col items-center justify-center gap-3 h-full text-gray-500">
-              <span>No goals match the current search or category filters.</span>
-              <button
-                type="button"
-                onClick={resetFilters}
-                className="px-3 py-1.5 min-h-[40px] rounded-lg bg-port-accent/20 text-port-accent hover:bg-port-accent/30 text-sm"
-              >
-                Reset filters
-              </button>
-            </div>
+        <section aria-label="Goals 3D tree visualization" className="flex flex-1 min-h-0 flex-col">
+          {filteredGoals.length > 0 && (
+            <details className="mx-2 mb-2 sm:mx-3 shrink-0">
+              <summary className="w-fit cursor-pointer rounded-lg border border-port-border bg-port-card px-2 text-sm text-gray-300">
+                Browse goals
+              </summary>
+              <ul className="mt-1 max-h-32 overflow-y-auto rounded-lg border border-port-border bg-port-card p-1">
+                {filteredGoals.map(goal => (
+                  <li key={goal.id}>
+                    <button
+                      type="button"
+                      aria-current={goal.id === selectedGoalId ? 'true' : undefined}
+                      className="w-full break-words rounded px-2 py-1.5 text-left text-sm text-white hover:bg-port-border aria-[current=true]:bg-port-accent/20"
+                      onClick={event => handleSelect(goal, event.currentTarget)}
+                    >
+                      {goal.title}
+                      <span className="text-gray-400">
+                        {' · '}{CATEGORY_CONFIG[goal.category].label}
+                        {' · '}{HORIZON_OPTIONS.find(h => h.value === goal.horizon)?.label || goal.horizon}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+          {graph?.nodes?.length ? (
+            <Canvas
+              frameloop={frameloop}
+              camera={{ position: [0, 15, 40], fov: 60 }}
+              onPointerDown={(e) => { dragStartRef.current = { x: e.clientX, y: e.clientY }; }}
+              onPointerMissed={handlePointerMissed}
+              style={{ background: 'rgb(var(--port-bg))', flex: 1, minHeight: 0 }}
+            >
+              <GoalScene
+                graph={graph}
+                bounds={bounds}
+                selectedId={selectedGoalId}
+                adjacentIds={adjacentIds}
+                onSelect={handleSelect}
+                onHover={handleHover}
+                showLabels={showLabels}
+              />
+              <OrbitControls
+                makeDefault
+                enableDamping={!reducedMotion}
+                dampingFactor={0.05}
+                minDistance={orbitLimits.min}
+                maxDistance={orbitLimits.max}
+              />
+            </Canvas>
           ) : (
-            <div className="flex items-center justify-center h-full text-gray-500">
-              No goals to display. Add a goal to get started.
-            </div>
-          )
-        )}
+            (data?.flat?.length ?? 0) > 0 ? (
+              <div className="flex flex-col items-center justify-center gap-3 h-full text-gray-500">
+                <span>No goals match the current search or category filters.</span>
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  className="px-3 py-1.5 min-h-[40px] rounded-lg bg-port-accent/20 text-port-accent hover:bg-port-accent/30 text-sm"
+                >
+                  Reset filters
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-center h-full text-gray-500">
+                No goals to display. Add a goal to get started.
+              </div>
+            )
+          )}
+        </section>
       </div>
 
       {/* Detail panel — overlay until the workspace can fit both panes */}
       {selectedGoal && (
-        <div className="absolute inset-0 z-20 @min-[900px]/goals:relative @min-[900px]/goals:inset-auto @min-[900px]/goals:z-auto @min-[900px]/goals:w-80 shrink-0">
+        <div
+          ref={detailPanelRef}
+          tabIndex={-1}
+          className="absolute inset-0 z-20 @min-[900px]/goals:relative @min-[900px]/goals:inset-auto @min-[900px]/goals:z-auto @min-[900px]/goals:w-80 shrink-0"
+        >
           <GoalDetailPanel
             key={selectedGoal.id}
             goal={selectedGoal}
             allGoals={data?.flat}
-            onClose={clearSelection}
+            onClose={closeGoalDetails}
             onRefresh={onRefresh}
           />
         </div>
