@@ -1,5 +1,6 @@
 import { assertVideoOwner, applyVideoReviewAction, videoReviewStages } from '../../lib/creativeDirectorVideoReview.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { logFailureWithStack } from '../../lib/failureLogging.js';
 import { getInstanceId } from '../instanceIdentity.js';
 import { getProject, mutateVideoProject } from './local.js';
 
@@ -24,8 +25,14 @@ export async function reviewVideo(projectId, input) {
   });
   // A duplicate approval and either feedback gesture can never enqueue work.
   if (result.changed && input.action === 'approve' && project.videoExecution?.authorized) {
-    const { startCreativeDirectorProject } = await import('./completionHook.js');
-    await startCreativeDirectorProject(projectId);
+    import('./completionHook.js')
+      .then(({ startCreativeDirectorProject }) => startCreativeDirectorProject(projectId))
+      .catch(error => {
+        logFailureWithStack(`❌ CD review resumption failed for ${projectId}`, error);
+        return import('./videoExecution.js')
+          .then(({ pauseVideoExecution }) => pauseVideoExecution(projectId, error.message))
+          .catch(() => {});
+      });
   }
   return getVideoReview(projectId);
 }
