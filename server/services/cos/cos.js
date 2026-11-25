@@ -698,12 +698,20 @@ async function taskAfterHolderRetired(taskId, holder, resetSpawnBudget) {
     return { error: `Agent ${holder.id} is no longer running and its task is now ${task.status}${blockedReason ? ` (${blockedReason})` : ''}` };
   }
   const taskType = task.taskType || 'user';
-  // Same field set the cooldown sweeper clears (unblockExpiredCooldowns). The
-  // dequeue is suppressed because this call dispatches the task itself.
+  // Same field set the cooldown sweeper clears (unblockExpiredCooldowns), and
+  // only that: the store merges metadata, so an edit that landed since the read
+  // above (a re-pinned provider, new context) survives and is what gets
+  // spawned. The fence names the block being lifted, so one that changed hands
+  // in that time is left alone. The dequeue is suppressed because this call
+  // dispatches the task itself.
   const revived = await updateTask(taskId, {
     status: 'pending',
-    metadata: { ...task.metadata, blockedReason: undefined, blockedCategory: undefined, blockedAt: undefined, cooldownUntil: undefined },
-  }, taskType, { expectedStatus: 'blocked', suppressDequeue: true });
+    metadata: { blockedReason: undefined, blockedCategory: undefined, blockedAt: undefined, cooldownUntil: undefined },
+  }, taskType, {
+    expectedStatus: 'blocked',
+    expectedMetadata: { blockedCategory: 'orphan-cooldown', lastOrphanedAgentId: holder.id },
+    suppressDequeue: true,
+  });
   if (revived?.error) return { error: revived.error };
   if (!revived || revived.statusChanged) return { error: 'Task changed while its dead agent was being retired' };
   return { task: { ...revived, taskType } };
