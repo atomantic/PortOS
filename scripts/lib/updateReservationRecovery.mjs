@@ -1,27 +1,25 @@
 /** Inspect the running install from a fresh updater, including older servers. */
-import { realpathSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { PORTS } from '../../server/lib/ports.js';
 import { certPaths } from '../../lib/certPaths.js';
 import { hasTailscaleCert } from '../../lib/tailscale-https.js';
 import { parseEnvFile, resolveHttpMirrorPort } from './envFile.js';
 import { resolveCredentials } from '../portos-api.js';
 import { createMaintenanceJournal } from '../../server/lib/maintenanceJournal.js';
-import { legacyProcessCwds, snapshotLegacyProcesses } from './legacyUpdateActivity.mjs';
+import { canonicalPath, legacyProcessCwds, snapshotLegacyProcesses } from './legacyUpdateActivity.mjs';
 import { manualUpdateBlockers } from '../../server/lib/systemIdle.js';
 
 const refuse = message => { throw Object.assign(new Error(message), { code: 'MAINTENANCE_STALE' }); };
-const canonical = path => { try { return realpathSync(path); } catch { return resolve(path); } };
 
 async function localServicePresent(rows, root, relative) {
-  const path = canonical(join(root, relative)).replaceAll('\\', '/').toLowerCase();
+  const path = canonicalPath(join(root, relative)).replaceAll('\\', '/').toLowerCase();
   const escaped = relative.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const relativeCommand = new RegExp(`(?:^|[\\s"'])\\.?/?${escaped}(?=$|[\\s"'])`, 'i');
   const live = rows.filter(row => !String(row.state ?? '').startsWith('Z'));
   if (live.some(row => String(row.command ?? '').replaceAll('\\', '/').toLowerCase().includes(path))) return true;
   const candidates = live.filter(row => relativeCommand.test(String(row.command ?? '').replaceAll('\\', '/')));
   const cwds = await legacyProcessCwds(candidates.map(row => row.pid)).catch(() => new Map());
-  return candidates.some(row => !cwds.has(row.pid) || canonical(cwds.get(row.pid)) === canonical(root));
+  return candidates.some(row => !cwds.has(row.pid) || canonicalPath(cwds.get(row.pid)) === canonicalPath(root));
 }
 
 export async function createUpdateReservationRecovery({ directory, root, signal, env = process.env,
@@ -95,7 +93,7 @@ export async function createUpdateReservationRecovery({ directory, root, signal,
     const operation = activity.appOperations[0];
     if (operation.type !== 'update' || typeof operation.appId !== 'string') return false;
     const app = await read(`/api/apps/${encodeURIComponent(operation.appId)}`, true);
-    if (typeof app?.repoPath !== 'string' || canonical(app.repoPath) !== canonical(root)) return false;
+    if (typeof app?.repoPath !== 'string' || canonicalPath(app.repoPath) !== canonicalPath(root)) return false;
     if (activity.update?.handoffTracking === true) return operation.deferredUpdateOwnerPid === update.ownerPid;
     // Older servers have no explicit handoff field. Their first real STEP
     // closes "starting" only after this supervisor has registered ownership.
@@ -150,7 +148,7 @@ export async function createUpdateReservationRecovery({ directory, root, signal,
         op.kind === 'deferred-update' && op.pid === update.ownerPid && op.startedAt === update.requestedAt);
       if (!belongs) {
         const app = await read('/api/apps/portos-default', true).catch(() => null);
-        belongs = typeof app?.repoPath === 'string' && canonical(app.repoPath) === canonical(root);
+        belongs = typeof app?.repoPath === 'string' && canonicalPath(app.repoPath) === canonicalPath(root);
       }
       const agents = belongs || env.COS_RUNNER_URL || dotenv.COS_RUNNER_URL ? await read('/agents', false, true).catch(() => []) : [];
       const own = activity?.appOperations?.find(op => op.deferredUpdateOwnerPid === update.ownerPid);

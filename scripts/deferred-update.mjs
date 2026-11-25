@@ -9,7 +9,7 @@ import { assertUpdateImageSafety } from '../server/lib/updateImageGuard.js';
 import { createMaintenanceJournal, maintenanceError, syncMaintenanceDirectory } from '../server/lib/maintenanceJournal.js';
 import { createDeferredUpdateAdmission, processAbsent, reconcileReusedLaunch } from '../server/lib/maintenanceDeferredUpdate.js';
 import * as fs from 'node:fs';
-import { legacyLauncherGroups, legacyProcessCwds, observedDatabaseRestoreProcess, observedLegacyUpdate, observedLocalMediaProcesses, snapshotLegacyProcesses } from './lib/legacyUpdateActivity.mjs';
+import { canonicalPath, legacyLauncherGroups, legacyProcessCwds, observedDatabaseRestoreProcess, observedLegacyUpdate, observedLocalMediaProcesses, snapshotLegacyProcesses } from './lib/legacyUpdateActivity.mjs';
 import { isCompletedLocalClaim, isEmptyLegacyMediaJob, remoteMediaRecoveryPending } from '../server/lib/mediaRecoveryActivity.js';
 import { parseCommandArgs } from '../server/lib/commandSecurity.js';
 import { offerManualUpdateRecovery } from './lib/manualUpdateRecovery.mjs';
@@ -82,23 +82,31 @@ export function legacyHeavyClaimPending(admission, processes, absent = processAb
   return !(Number.isFinite(owner?.startedAt) && owner.startedAt > stat.mtimeMs + 2000);
 }
 
-/** Both launch paths arrive here before the script touches logs, git or PM2. */
-export async function runDeferredUpdate({ admission = maintenance, launch = spawn, cwd = root,
-  platform = process.platform, wait = () => delay(1000), absent = processAbsent, launchId = process.env.PORTOS_DEFERRED_UPDATE_LAUNCH_ID,
-  legacySnapshot = snapshotLegacyProcesses, legacyCwds = legacyProcessCwds, legacyGroups = legacyLauncherGroups,
-  signal, emit = message => console.log(message), legacyRunning, recoverReservations, observeWork, policy = 'automatic',
-  confirmInterruption = async () => {
-    if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
-    const input = createInterface({ input: process.stdin, output: process.stdout });
-    try { return (await input.question('Update now? Active work may be interrupted; saved state and queued work are preserved. Type update to continue: ', { signal })).trim() === 'update'; }
-    finally { input.close(); }
-  } } = {}) {
-  if (!['automatic', 'manual', 'interrupt'].includes(policy)) throw new Error('Invalid update policy');
+function checkDatabaseMaintenanceMarkers(admission) {
+  for (const name of ['database-maintenance', 'database-restore-recovery.json']) {
+    try { fs.lstatSync(join(admission.directory, '..', name)); return name; }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  return null;
+}
+
+function checkSavedWork(admission, { stopFirst, processes, absent, heavyObservation, emit }) {
+  try {
+    const marker = checkDatabaseMaintenanceMarkers(admission);
+    if (marker === 'database-maintenance') throw maintenanceError('MAINTENANCE_HELD', 'Database cutover maintenance is active or needs recovery. Inspect scripts/database-maintenance.mjs status.');
+    if (marker && stopFirst) throw maintenanceError('MAINTENANCE_HELD', 'Database restore recovery must finish before updating.');
+    return Boolean(marker) || (!stopFirst && (savedMediaPending(admission) || legacyHeavyClaimPending(admission, processes, absent, heavyObservation, emit)));
+  } catch (error) {
+    if (error.code === 'MAINTENANCE_HELD') throw error;
+    throw maintenanceError('MAINTENANCE_STALE', 'Saved work inventory could not be inspected.');
+  }
+}
+
+function createLegacyWorkChecker({ admission, cwd, platform, legacySnapshot, legacyGroups, legacyCwds,
+  settledControl, legacyRunning, signal, emit }) {
   let reportedLegacyLimit = false;
-  const heavyObservation = {};
   let manualLegacyWork = false;
-  let settledControl = null;
-  const checkLegacy = legacyRunning ?? (async () => {
+  const checkLegacy = async policy => {
     const control = join(admission.directory, '..', 'update-detached');
     const raw = (await readControl(join(control, 'pid')).catch(() => '')).trim();
     const candidate = Number(raw);
@@ -128,10 +136,70 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
     }
     if (policy === 'manual') {
       manualLegacyWork = localMedia.running;
-      return observed.running || observedDatabaseRestoreProcess(rows);
+      return false;
     }
-    return observed.running || localMedia.running || observedDatabaseRestoreProcess(rows);
+    return localMedia.running;
+  };
+  return {
+    async checkExclusiveWork(policy) {
+      manualLegacyWork = false;
+      try { return await (legacyRunning == null ? checkLegacy(policy) : legacyRunning()); }
+      catch (error) { signal?.throwIfAborted(); if (policy === 'automatic') throw error; return false; }
+    },
+    manualBlockers: () => manualLegacyWork ? [{ kind: 'media-worker', label: 'A media worker is running', count: 1 }] : [],
+  };
+}
+
+function spawnUpdateScript({ launch, cwd, windows, policy, id }) {
+  const args = windows ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(cwd, 'update.ps1')] : [join(cwd, 'update.sh')];
+  const env = { ...process.env, PORTOS_DEFERRED_UPDATE_ID: id };
+  if (policy !== 'automatic') env.PORTOS_UPDATE_STOP_FIRST = '1';
+  else delete env.PORTOS_UPDATE_STOP_FIRST;
+  if (policy === 'interrupt') env.PORTOS_UPDATE_INTERRUPT = '1';
+  else delete env.PORTOS_UPDATE_INTERRUPT;
+  delete env.PORTOS_DEFERRED_UPDATE_LAUNCH_ID;
+  return launch(windows ? 'powershell' : 'bash', args, {
+    cwd, env,
+    detached: !windows, stdio: 'inherit',
   });
+}
+
+async function waitForUpdateScript(child, { windows, signal, absent, wait }) {
+  const stop = () => {
+    if (!windows && child.pid) {
+      try { process.kill(-child.pid, 'SIGTERM'); } catch (err) { if (err.code !== 'ESRCH') throw err; }
+    } else child.kill('SIGTERM');
+  };
+  signal?.addEventListener('abort', stop, { once: true });
+  // Install terminal handlers in the spawn tick, before any await.
+  const result = await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code, reason) => { signal?.removeEventListener('abort', stop); resolve({ code, signal: reason }); });
+  });
+  // A killed shell can leave npm/git descendants. Never release on leaf exit.
+  if (!windows && child.pid) while (!absent(-child.pid)) await wait();
+  return result;
+}
+
+function loadRecovery({ directory, cwd, signal }) {
+  return import('./lib/updateReservationRecovery.mjs').then(module => module.createUpdateReservationRecovery({
+    directory, root: cwd, signal,
+  }));
+}
+
+/** Both launch paths arrive here before the script touches logs, git or PM2. */
+export async function runDeferredUpdate({ admission = maintenance, launch = spawn, cwd = root,
+  platform = process.platform, wait = () => delay(1000), absent = processAbsent, launchId = process.env.PORTOS_DEFERRED_UPDATE_LAUNCH_ID,
+  legacySnapshot = snapshotLegacyProcesses, legacyCwds = legacyProcessCwds, legacyGroups = legacyLauncherGroups,
+  signal, emit = message => console.log(message), legacyRunning, recoverReservations, observeWork, policy = 'automatic',
+  confirmInterruption = async () => {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
+    const input = createInterface({ input: process.stdin, output: process.stdout });
+    try { return (await input.question('Update now? Active work may be interrupted; saved state and queued work are preserved. Type update to continue: ', { signal })).trim() === 'update'; }
+    finally { input.close(); }
+  } } = {}) {
+  if (!['automatic', 'manual', 'interrupt'].includes(policy)) throw new Error('Invalid update policy');
+  const heavyObservation = {};
   await reconcileReusedLaunch(admission, () => legacySnapshot(platform));
   admission.deferredUpdate.reconcile();
   const operation = launchId ? admission.deferredUpdate.claimLaunch(launchId) : admission.deferredUpdate.request({ recoverWaiting: true });
@@ -141,7 +209,9 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
   let takeoverChecks = 0;
   try {
     const previous = admission.deferredUpdate.get().result;
-    if (previous && platform !== 'win32') settledControl = join(admission.directory, '..', 'update-detached', previous.id);
+    const settledControl = previous && platform !== 'win32' ? join(admission.directory, '..', 'update-detached', previous.id) : null;
+    const { checkExclusiveWork, manualBlockers } = createLegacyWorkChecker({ admission, cwd, platform, legacySnapshot,
+      legacyGroups, legacyCwds, settledControl, legacyRunning, signal, emit });
     const handoff = await readControl(join(admission.directory, `update-handoff-${operation.id}.json`));
     const transferred = handoff ? JSON.parse(handoff) : null;
     const waitingTakeover = transferred?.successorId === operation.id && transferred.previous?.phase === 'waiting'
@@ -150,9 +220,7 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
     const observedWork = async () => {
       try {
         if (observeWork) return await observeWork(operation);
-        recovery ??= await import('./lib/updateReservationRecovery.mjs').then(module => module.createUpdateReservationRecovery({
-          directory: admission.directory, root: cwd, signal,
-        }));
+        recovery ??= await loadRecovery({ directory: admission.directory, cwd, signal });
         return await recovery.observeManualWork(operation);
       } catch { signal?.throwIfAborted(); return []; }
     };
@@ -163,12 +231,6 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
       if (page) emit(`STEP:waiting:warning:Open ${page} in this PortOS instance to review and explicitly continue the update in your browser.`);
       throw Object.assign(new Error(`Running work needs interruption acknowledgment. ${page ? `Open ${page} to continue in your browser. ` : ''}Re-run update.sh/update.ps1 with --interrupt to continue, or --automatic to wait for idle.`), { code: 'UPDATE_INTERRUPTION_REQUIRED' });
     };
-    const checkExclusiveWork = async () => {
-      manualLegacyWork = false;
-      try { return await checkLegacy(); }
-      catch (error) { signal?.throwIfAborted(); if (policy === 'automatic') throw error; return false; }
-    };
-    const legacyWork = () => manualLegacyWork ? [{ kind: 'media-worker', label: 'A media worker is running', count: 1 }] : [];
     for (;;) {
       signal?.throwIfAborted();
       let recoveryBlocked = false;
@@ -176,9 +238,7 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
         try {
           if (recoverReservations) await recoverReservations();
           else {
-            recovery ??= await import('./lib/updateReservationRecovery.mjs').then(module => module.createUpdateReservationRecovery({
-              directory: admission.directory, root: cwd, signal,
-            }));
+            recovery ??= await loadRecovery({ directory: admission.directory, cwd, signal });
             const receipt = await recovery.run();
             if (receipt) emit(`STEP:waiting:running:Recovered ${receipt.request.operations.length} inactive work reservations`);
           }
@@ -191,9 +251,9 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
           }
         }
       }
-      const externalWorkPending = recoveryBlocked || await checkExclusiveWork();
+      const externalWorkPending = recoveryBlocked || await checkExclusiveWork(policy);
       if (policy === 'manual') {
-        const blockers = [...await observedWork(), ...legacyWork()];
+        const blockers = [...await observedWork(), ...manualBlockers()];
         if (blockers.length) {
           if (++manualChecks < 6) { await wait(); continue; }
           await requestInterruption(blockers);
@@ -204,25 +264,13 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
       const heavyPath = join(admission.directory, '..', 'heavy-local-job.claim.json');
       const processes = !stopFirst && fs.existsSync(heavyPath) ? await legacySnapshot(platform) : [];
       const acquired = admission.deferredUpdate.acquire(operation.id, {
-        externalWorkPending, interrupt: policy === 'interrupt', stopFirst, checkExternal: () => {
-          try {
-            const dbRecovery = join(admission.directory, '..', 'database-restore-recovery.json');
-            const dbMaintenance = join(admission.directory, '..', 'database-maintenance');
-            try { fs.lstatSync(dbMaintenance); throw maintenanceError('MAINTENANCE_HELD', 'Database cutover maintenance is active or needs recovery. Inspect scripts/database-maintenance.mjs status.'); }
-            catch (error) { if (error.code !== 'ENOENT') throw error; }
-            let databasePending;
-            try { fs.lstatSync(dbRecovery); databasePending = true; }
-            catch (error) { if (error.code !== 'ENOENT') throw error; databasePending = false; }
-            if (databasePending && stopFirst) throw maintenanceError('MAINTENANCE_HELD', 'Database restore recovery must finish before updating.');
-            return databasePending || (!stopFirst && (savedMediaPending(admission) || legacyHeavyClaimPending(admission, processes, absent, heavyObservation, emit)));
-          }
-          catch (error) { if (error.code === 'MAINTENANCE_HELD') throw error; throw maintenanceError('MAINTENANCE_STALE', 'Saved work inventory could not be inspected.'); }
-        },
+        externalWorkPending, interrupt: policy === 'interrupt', stopFirst,
+        checkExternal: () => checkSavedWork(admission, { stopFirst, processes, absent, heavyObservation, emit }),
       });
       if (acquired) {
-        if (stopFirst && await checkExclusiveWork()) throw maintenanceError('MAINTENANCE_HELD', 'Another installer or database restore is still running; no update was started.');
+        if (stopFirst && await checkExclusiveWork(policy)) throw maintenanceError('MAINTENANCE_HELD', 'Another installer or database restore is still running; no update was started.');
         if (policy === 'manual') {
-          const raced = [...await observedWork(), ...legacyWork()];
+          const raced = [...await observedWork(), ...manualBlockers()];
           if (raced.length) await requestInterruption(raced);
         }
         break;
@@ -239,31 +287,9 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
     catch (error) { if (policy === 'automatic') throw error; }
     emit(`STEP:waiting:done:${policy === 'automatic' ? 'Install idle; update admission acquired' : 'Closing intake and stopping PortOS before changing the checkout'}`);
     const windows = platform === 'win32';
-    const args = windows ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(cwd, 'update.ps1')] : [join(cwd, 'update.sh')];
-    const env = { ...process.env, PORTOS_DEFERRED_UPDATE_ID: operation.id };
-    if (policy !== 'automatic') env.PORTOS_UPDATE_STOP_FIRST = '1';
-    else delete env.PORTOS_UPDATE_STOP_FIRST;
-    if (policy === 'interrupt') env.PORTOS_UPDATE_INTERRUPT = '1';
-    else delete env.PORTOS_UPDATE_INTERRUPT;
-    delete env.PORTOS_DEFERRED_UPDATE_LAUNCH_ID;
-    const child = launch(windows ? 'powershell' : 'bash', args, {
-      cwd, env,
-      detached: !windows, stdio: 'inherit',
-    });
+    const child = spawnUpdateScript({ launch, cwd, windows, policy, id: operation.id });
     childStarted = true;
-    const stop = () => {
-      if (!windows && child.pid) {
-        try { process.kill(-child.pid, 'SIGTERM'); } catch (err) { if (err.code !== 'ESRCH') throw err; }
-      } else child.kill('SIGTERM');
-    };
-    signal?.addEventListener('abort', stop, { once: true });
-    // Install terminal handlers in the spawn tick, before any await.
-    const result = await new Promise((resolve, reject) => {
-      child.once('error', reject);
-      child.once('close', (code, reason) => { signal?.removeEventListener('abort', stop); resolve({ code, signal: reason }); });
-    });
-    // A killed shell can leave npm/git descendants. Never release on leaf exit.
-    if (!windows && child.pid) while (!absent(-child.pid)) await wait();
+    const result = await waitForUpdateScript(child, { windows, signal, absent, wait });
     const current = admission.deferredUpdate.get().operation;
     const terminal = current?.terminal;
     if (windows && current?.childPid && !terminal) throw Object.assign(new Error('Windows update settlement is unverified; admission remains held'), { code: 'UPDATE_UNVERIFIED' });
@@ -292,10 +318,7 @@ export function enterUpdate(id, childPid, admission = maintenance) {
 }
 
 export async function settleInterruptedUpdate(id, { admission = maintenance, cwd = root, snapshot = snapshotLegacyProcesses, probeCwds = legacyProcessCwds } = {}) {
-  for (const name of ['database-maintenance', 'database-restore-recovery.json']) {
-    try { fs.lstatSync(join(admission.directory, '..', name)); throw new Error('Database restore or cutover is active; no reservations were retired.'); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; }
-  }
+  if (checkDatabaseMaintenanceMarkers(admission)) throw new Error('Database restore or cutover is active; no reservations were retired.');
   const rows = await Promise.resolve().then(snapshot).catch(() => []);
   const inspected = Array.isArray(rows) ? rows : [];
   const services = ['server/start.js', 'server/index.js', 'server/cos-runner/index.js', 'browser/server.js', 'autofixer/server.js'];
@@ -303,11 +326,10 @@ export async function settleInterruptedUpdate(id, { admission = maintenance, cwd
   const nodes = alive.map(row => ({ row, args: parseCommandArgs(String(row.command ?? '')) }))
     .filter(({ args }) => /^node(?:js|\.exe)?$/i.test(basename((args[0] ?? '').replaceAll('\\', '/'))));
   const cwds = await Promise.resolve().then(() => probeCwds(nodes.map(({ row }) => row.pid))).catch(() => new Map());
-  const canonical = path => { try { return fs.realpathSync(path); } catch { return resolve(path); } };
-  const servicePaths = services.map(path => canonical(join(cwd, path)));
+  const servicePaths = services.map(path => canonicalPath(join(cwd, path)));
   const survivor = nodes.find(({ row, args }) => {
     const script = args.slice(1).find(arg => !arg.startsWith('-'));
-    return script && (isAbsolute(script) || cwds.has(row.pid)) && servicePaths.includes(canonical(isAbsolute(script) ? script : resolve(cwds.get(row.pid), script)));
+    return script && (isAbsolute(script) || cwds.has(row.pid)) && servicePaths.includes(canonicalPath(isAbsolute(script) ? script : resolve(cwds.get(row.pid), script)));
   });
   if (survivor) throw new Error(`PortOS runtime PID ${survivor.row.pid} is still running outside the stopped PM2 apps. Stop that runtime, then retry the update; the checkout has not changed.`);
   if (observedDatabaseRestoreProcess(inspected)) throw new Error('A database restore process is still running; update stopped.');

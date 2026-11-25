@@ -6,36 +6,13 @@ import { tmpdir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { recordedMediaChildIds } from '../../server/lib/mediaRecoveryActivity.js';
-import { PORTS } from '../../server/lib/ports.js';
-import { parseEnvFile, resolveHttpMirrorPort } from './envFile.js';
 import { parseCommandArgs } from '../../server/lib/commandSecurity.js';
 import { isDetachedSupervisorCommand } from './posixDetachedLauncher.mjs';
 
 const runFile = promisify(execFile);
 
-/** Attribute a still-bound service to its PID, without guessing from a cwd. */
-export async function portosServiceListeners(root, { platform = process.platform, env = process.env, run = runFile } = {}) {
-  const dotenv = parseEnvFile(join(root, '.env'));
-  const ports = new Set([Number(env.PORT || dotenv.PORT || PORTS.API), resolveHttpMirrorPort({ env, dotenv }), PORTS.CDP_HEALTH, PORTS.AUTOFIXER_UI]);
-  const runner = new URL(env.COS_RUNNER_URL || dotenv.COS_RUNNER_URL || `http://127.0.0.1:${PORTS.COS}`);
-  if (['127.0.0.1', 'localhost', '[::1]'].includes(runner.hostname)) ports.add(Number(runner.port || (runner.protocol === 'https:' ? 443 : 80)));
-  if (platform === 'win32') {
-    const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-      'Get-NetTCPConnection -State Listen -ErrorAction Stop | Select-Object LocalPort,OwningProcess | ConvertTo-Json -Compress'], { timeout: 10000, maxBuffer: 4 * 1024 * 1024 });
-    const value = stdout.trim() ? JSON.parse(stdout.replace(/^\uFEFF/, '')) : [];
-    return (Array.isArray(value) ? value : [value]).filter(row => ports.has(Number(row.LocalPort)))
-      .map(row => ({ pid: Number(row.OwningProcess), port: Number(row.LocalPort) }));
-  }
-  const { stdout } = await run('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN', '-Fpn'], { timeout: 10000, maxBuffer: 4 * 1024 * 1024 });
-  const listeners = []; let pid;
-  for (const line of stdout.split('\n')) {
-    if (line.startsWith('p')) pid = Number(line.slice(1));
-    else if (line.startsWith('n')) {
-      const port = Number(/:(\d+)$/.exec(line)?.[1]);
-      if (Number.isSafeInteger(pid) && ports.has(port)) listeners.push({ pid, port });
-    }
-  }
-  return listeners;
+export function canonicalPath(value) {
+  try { return realpathSync(value); } catch { return resolve(value); }
 }
 
 export const observedDatabaseRestoreProcess = (rows, selfPid = process.pid) => rows.some(row =>
@@ -53,7 +30,6 @@ export async function observedLocalMediaProcesses(rows, jobs, data, { selfPid = 
   const path = `${data.replaceAll('\\', '/').toLowerCase().replace(/\/$/, '')}/`;
   const candidates = rows.filter(row => row.pid !== selfPid && !String(row.state ?? '').startsWith('Z'));
   const direct = candidates.some(row => {
-    if (row.pid === selfPid || String(row.state ?? '').startsWith('Z')) return false;
     const command = String(row.command ?? '').replaceAll('\\', '/').toLowerCase();
     return ids.some(id => command.includes(id.toLowerCase()))
       || (/(?:^|[\s"'/])(?:ffmpeg|ffprobe)(?:\.exe)?(?=$|[\s"'])/i.test(command) && command.includes(path));
@@ -61,9 +37,8 @@ export async function observedLocalMediaProcesses(rows, jobs, data, { selfPid = 
   if (direct) return { running: true, limitations: [] };
   const grok = candidates.filter(row => /(?:^|[\s"'/\\])grok(?:[\s./\\'"-]|$)/i.test(String(row.command ?? '')));
   const cwds = await probeCwds(grok.map(row => row.pid), platform).catch(() => new Map());
-  const canonical = value => { try { return realpathSync(value); } catch { return resolve(value); } };
-  const roots = grokIds.map(id => canonical(join(tmpdir(), `portos-grok-video-${id}`)));
-  return { running: grok.some(row => cwds.has(row.pid) && roots.includes(canonical(cwds.get(row.pid)))),
+  const roots = grokIds.map(id => canonicalPath(join(tmpdir(), `portos-grok-video-${id}`)));
+  return { running: grok.some(row => cwds.has(row.pid) && roots.includes(canonicalPath(cwds.get(row.pid)))),
     limitations: grok.some(row => !cwds.has(row.pid)) ? ['grok-cwd-unavailable'] : [] };
 }
 
@@ -138,8 +113,7 @@ export async function observedLegacyUpdate({ root, priorPid = null, priorAt = nu
   let pid = selfPid;
   while (pid && !ancestors.has(pid)) { ancestors.add(pid); pid = byPid.get(pid)?.ppid; }
   const normalize = value => platform === 'win32' ? value.replaceAll('\\', '/').toLowerCase() : value;
-  const canonical = value => { try { return realpathSync(value); } catch { return resolve(value); } };
-  const install = normalize(canonical(root));
+  const install = normalize(canonicalPath(root));
   const script = /(?:^|[\s"'=])((?:\.[\\/])?(?:scripts[\\/])?(?:deferred-update\.mjs|update\.(?:sh|ps1|mjs)))(?=$|[\s"'])/i;
   const child = /(?:^|[\s"'/\\])(?:git|npm|npx|pnpm|yarn|npm-cli\.js)(?:\.exe)?(?=$|[\s"'])|scripts[\\/](?:setup-[\w-]+|run-migrations|trusted-rebuilds|pm2-[\w-]+)\.js/i;
   const candidates = rows.filter(row => !ancestors.has(row.pid) && !String(row.state ?? '').startsWith('Z')
@@ -149,9 +123,9 @@ export async function observedLegacyUpdate({ root, priorPid = null, priorAt = nu
   const escaped = install.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const absolute = new RegExp(`(?:^|[\\s"'=])${escaped}/(?:scripts/)?(?:deferred-update\\.mjs|update\\.(?:sh|ps1|mjs))(?=$|[\\s"'])`);
   const expectedPaths = new Set(['update.sh', 'update.ps1', 'scripts/update.mjs', 'scripts/deferred-update.mjs']
-    .map(path => normalize(canonical(join(root, path)))));
+    .map(path => normalize(canonicalPath(join(root, path)))));
   const inInstall = cwd => {
-    const path = normalize(canonical(cwd));
+    const path = normalize(canonicalPath(cwd));
     return path === install || path.startsWith(`${install}/`);
   };
   const modifyingChild = /(?:^|[\s"'/\\])(?:npm|pnpm|yarn|npm-cli\.js)(?:\.exe)?\s+(?:install|ci)(?=$|\s)|(?:^|[\s"'/\\])git(?:\.exe)?\s+(?:pull|fetch|checkout|merge|rebase|reset|submodule)(?=$|\s)/i;
@@ -164,10 +138,10 @@ export async function observedLegacyUpdate({ root, priorPid = null, priorAt = nu
     if (settledControl && executable === 'sh' && args[0] === '-c'
       && isDetachedSupervisorCommand(command) && command.includes(` sh ${settledControl} `)) return false;
     if (/^(?:bash|sh|zsh|node|nodejs|powershell|pwsh)(?:\.exe)?$/i.test(executable)
-      && args.some(arg => isAbsolute(arg) && expectedPaths.has(normalize(canonical(arg))))) return true;
+      && args.some(arg => isAbsolute(arg) && expectedPaths.has(normalize(canonicalPath(arg))))) return true;
     const relative = script.exec(command)?.[1];
     if (absolute.test(command) || (relative && cwds.has(row.pid)
-      && expectedPaths.has(normalize(canonical(resolve(cwds.get(row.pid), relative)))))) return true;
+      && expectedPaths.has(normalize(canonicalPath(resolve(cwds.get(row.pid), relative)))))) return true;
     // Windows cannot inspect another process's cwd with the built-in probes.
     // An actually running relative PowerShell updater must finish first.
     if (platform === 'win32' && relative && /update\.ps1$/i.test(relative) && !cwds.has(row.pid)
