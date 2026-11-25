@@ -240,6 +240,9 @@ function normalizeTreatment(input, now = new Date().toISOString()) {
     arc: normalizeArc(input.arc),
     ...(typeof input.styleLook === 'string' ? { styleLook: input.styleLook.slice(0, 1000), styleReferencesBasis: input.styleReferencesBasis } : {}),
     shotDirections: normalizeShotDirections(input.shotDirections),
+    // Retired checklist, always written empty: an older peer's panel reads `treatment.proofs.length`
+    // and throws when a synced record lacks the array. Any stored or peer-sent entries are discarded.
+    proofs: [],
     capabilityGaps: normalizeGaps(input.capabilityGaps),
     basis: normalizeBasis(input.basis),
     compiledAt: typeof input.compiledAt === 'string' ? input.compiledAt : null,
