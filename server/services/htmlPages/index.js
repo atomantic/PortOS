@@ -10,6 +10,7 @@
  * Runs are queued and executed one at a time under the machine-wide heavy-job claim, each page a separate request. Nothing here runs from boot or a read path: `startRuns` is the only way a model is reached, from an explicit request that named the models and page count. Queued and generating runs are tracked live work (Live activity, the idle verdict and the update preflight see them), so the updater waits for them. A run a restart still cut off is reported as failed and never resumed on its own; `resumeRun` re-queues it from its first unfinished page when the person asks.
  */
 
+import { isDeepStrictEqual } from 'node:util';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
@@ -401,7 +402,12 @@ async function generateViaProvider(route, prompt, signal) {
       model: route.model || undefined, effort: route.effort || undefined, prompt,
       source: RUN_SOURCE, timeout: PAGE_TIMEOUT_MS, allowFallback: false, toolFree: true, cwd: PATHS.data,
       beforeExecute: async () => {
-        await requireRouteProvider(route);
+        const { provider: current } = await requireRouteProvider(route);
+        if (!isDeepStrictEqual(current, provider) || current.apiKey !== provider.apiKey) {
+          throw new ServerError('The HTML Pages provider changed during dispatch. Resume the run to use its current configuration.', {
+            status: 409, code: 'HTML_PAGES_PROVIDER_CHANGED',
+          });
+        }
         signal.throwIfAborted();
       },
       onRunCreated: (createdId) => { runId = createdId; if (signal.aborted) stop(); },

@@ -292,17 +292,20 @@ describe('other targets', () => {
     expect(createRun).not.toHaveBeenCalled();
   });
 
-  it('rechecks the OpenCode route when dispatch is admitted after preparation', async () => {
+  it.each([
+    [{ type: 'tui' }, 'cannot run HTML Pages without tools'],
+    [{ endpoint: 'http://127.0.0.1:8001/v1' }, 'provider changed during dispatch'],
+  ])('rechecks the OpenCode route when it changes during preparation (%j)', async (change, message) => {
     const spawnHarness = vi.fn();
-    runPromptThroughProvider.mockImplementation(async ({ beforeExecute, provider }) => {
-      getProviderById.mockResolvedValueOnce({ ...provider, type: 'tui' });
+    runPromptThroughProvider.mockImplementation(async ({ beforeExecute }) => {
+      getProviderById.mockResolvedValueOnce({ ...providers['opencode-mtplx'], enabled: true, defaultModel: 'example-default', id: 'opencode-mtplx', ...change });
       await beforeExecute();
       spawnHarness();
     });
     const [queued] = await startRuns({ routes: [{ providerId: 'opencode-mtplx', model: providers['opencode-mtplx'].models[0] }], pages: [PAGES[0]] });
     const run = await settled(queued.id);
     expect(run.status).toBe('failed');
-    expect(run.pages[0].error).toContain('cannot run HTML Pages without tools');
+    expect(run.pages[0].error).toContain(message);
     expect(spawnHarness).not.toHaveBeenCalled();
   });
 
