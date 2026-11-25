@@ -88,7 +88,9 @@ export function useTaskModelPins({ taskType, config, providers, activeProviderId
     onBusyChange?.(true);
     write.done = Promise.resolve().then(async () => {
       let saved = persisted;
-      while (activeTask.current === task && Object.keys(write.next).length) {
+      // Finish edits already accepted for this task, even if the view has
+      // switched. Only the active task may publish draft or busy state.
+      while (Object.keys(write.next).length) {
         const next = write.next;
         write.next = {};
         const settings = Object.fromEntries(
@@ -98,8 +100,8 @@ export function useTaskModelPins({ taskType, config, providers, activeProviderId
         if (!ok) break;
         saved = { ...saved, ...next };
       }
-      if (activeTask.current !== task) return;
       task.write = null;
+      if (activeTask.current !== task) return;
       setDraft({ task, pins: saved });
       setBusyTask(null);
       onBusyChange?.(false);

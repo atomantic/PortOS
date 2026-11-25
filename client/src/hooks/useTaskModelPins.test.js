@@ -95,7 +95,7 @@ it('isolates pending pin writes when the active task changes', async () => {
   let finishPrevious;
   const onUpdate = vi.fn()
     .mockImplementationOnce(() => new Promise(resolve => { finishPrevious = resolve; }))
-    .mockResolvedValueOnce(true);
+    .mockResolvedValue(true);
   const onBusyChange = vi.fn();
   const config = { providerId: AGY.id, model: 'gemini-3.6-flash' };
   const { result, rerender } = renderHook(({ taskType }) => useTaskModelPins({
@@ -119,6 +119,7 @@ it('isolates pending pin writes when the active task changes', async () => {
   expect(onUpdate.mock.calls).toEqual([
     ['code-review', { providerId: 'codex.cli@openai', model: null, effort: null }],
     ['feature-ideas', { effort: 'low' }],
+    ['code-review', { model: 'gpt-5.6-terra' }],
   ]);
   expect(result.current).toMatchObject({ providerId: AGY.id, model: 'gemini-3.6-flash', effort: 'low', saving: false });
 });
