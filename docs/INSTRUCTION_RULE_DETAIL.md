@@ -152,6 +152,7 @@ The [root distribution rules](../AGENTS.md#security-model) govern migrations, cr
 - Each install records applied migrations in `data/migrations.applied.json`.
 - `setup-data.js` copies missing seeds first, so a seeded derived output looks “already done” (`scripts/migrations/340-cos-config-seed-repair.js`). Declare the path in the migration's `OWNED_OUTPUT_PATHS` as well as the central registry so the guard can match them.
 - `server/AGENTS.md` “Prompt templates” gives the integrity snapshot procedure. `server/lib/schemaVersions.js` declares the cross-machine schema versions.
+- Ship each new image or video model as one entry in `server/lib/mediaModels/catalogDefaults.js`. Change an existing entry in `VIDEO_REGISTRY_UPGRADES` or the image backfill chain, matching the previous shipped values to preserve customizations. Keep the pre-ledger video baseline frozen so the loader can append future models while respecting old deletions. Existing registry migrations remain in place. `server/test/guards/repo/mediaModelRegistryMigrations.test.js` rejects new ones.
 - The 409 `FORK_DIVERGED` response tells the user to run the fork sync themselves. The upstream slug lives only in `server/lib/gitRemote.js`. The UI reads `remoteInfo.isUpstream` for “you are running PortOS” ([self-update](SELF_UPDATE.md)).
 
 ## Privacy detail

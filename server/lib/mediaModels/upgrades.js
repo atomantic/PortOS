@@ -501,31 +501,50 @@ const resolveRetiredDefault = (configuredId, entries) => {
   return entries.some((entry) => entry?.id === replacement) ? replacement : configuredId;
 };
 
-// Build the initial shippedIds set for one bucket on first encounter
-// (no _shippedDefaults field yet).
-//
-// Pre-snapshot bootstrap: existing installs without _shippedDefaults can't
-// distinguish "user explicitly removed this built-in" from "this built-in
-// is new in this release". We choose to UNION the user's current ids with
-// the current default ids, treating both as "already shipped". That preserves
-// any deletions the user made before this feature existed, at the cost of new
-// built-in models in this release also being marked as shipped — so they won't
-// appear on this install until the user edits data/media-models.json directly.
-//
-// Trade-off favors data preservation over feature visibility: a user who curated
-// their model list won't have it silently re-populated. Users who want the new
-// built-ins can delete media-models.json and restart to re-seed from scratch,
-// or add the entries manually.
-//
-// When the bucket key is absent from their registry (e.g. the whole `video`
-// section is missing), we return an empty set so the defaults are treated as
-// genuinely new and get added as on a fresh install.
-const bootstrapShippedIds = (userList, defaultList) => {
-  if (!Array.isArray(userList)) return new Set(); // missing key → treat as fresh
-  const safeDefaults = Array.isArray(defaultList) ? defaultList : [];
+// Pre-ledger registries cannot tell an old deletion from an unseen built-in.
+// Keep the #18668 catalog fixed here so absent baseline rows stay deleted
+// and future catalog entries are delivered even on the first ledger bootstrap.
+export const BOOTSTRAP_VIDEO_BASELINE_IDS = Object.freeze({
+  mlx: Object.freeze([
+    'ltx23_unified',
+    'ltx23_distilled_q4',
+    'ltx23_dgrauet_q4',
+    'ltx23_dgrauet_q8',
+    'ltx25_mlx_q8',
+    'minimax_h3_8bit',
+    'minimax_h3_6bit',
+    'minimax_h3_4bit',
+    'minimax_h3_ref2va_8bit',
+    'wan22_ti2v_5b',
+    'wan22_t2v_a14b',
+    'wan22_i2v_a14b',
+    'wan22_t2v_a14b_lightning',
+    'wan22_i2v_a14b_lightning',
+    'fastmetal_1_3b_qad',
+    'fastmetal_5b_qad',
+    'fastmetal_14b_qad',
+    'fasth3_dense_datafree_int8',
+    'fasth3_dense_datafree_int6',
+    'fasth3_dense_datafree_int4',
+    'fasth3_v2_int8',
+    'fasth3_v2_int6',
+    'fasth3_omni_int6',
+    'fasth3_dense_datafree_mlx_int4',
+  ]),
+  cuda: Object.freeze([
+    'ltx_video',
+    'ltx25_cuda_distilled',
+    'wan22_cuda_ti2v_5b',
+    'minimax_h3_cuda',
+  ]),
+});
+
+const bootstrapShippedIds = (userList, baselineIds) => {
+  // An absent bucket gets all defaults, as on a fresh install.
+  if (!Array.isArray(userList)) return new Set();
   const ids = new Set();
-  for (const e of userList) if (typeof e?.id === 'string') ids.add(e.id);
-  for (const e of safeDefaults) if (typeof e?.id === 'string') ids.add(e.id);
+  for (const entry of userList) if (typeof entry?.id === 'string') ids.add(entry.id);
+  for (const id of baselineIds) ids.add(id);
   return ids;
 };
 
@@ -544,7 +563,7 @@ export const normalizeRegistry = (parsed) => {
   // still keyed `macos` / `windows` (any install written before #4142) resolves
   // exactly as it did before. The OUTPUT below is canonical-only.
   const shippedIdsFor = (bucket) => (isVideoBootstrap
-    ? bootstrapShippedIds(readVideoBucket(safeVideo, bucket), DEFAULT_REGISTRY.video[bucket])
+    ? bootstrapShippedIds(readVideoBucket(safeVideo, bucket), BOOTSTRAP_VIDEO_BASELINE_IDS[bucket])
     : new Set(arrayOrDefault(readVideoBucket(shippedVideo, bucket), [])));
 
   const shippedIds = Object.fromEntries(VIDEO_BUCKETS.map((b) => [b, shippedIdsFor(b)]));
