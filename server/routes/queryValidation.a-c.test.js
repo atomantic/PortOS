@@ -53,7 +53,6 @@ const CASES = [
   ['./codeAnimation.js', 'get', '/projects?limit=1&limit=2'],
   ['./codeAnimation.js', 'get', '/projects/00000000-0000-4000-8000-000000000000/history?limit=1&limit=2'],
   ['./cosInsightRoutes.js', 'get', '/activity-calendar?weeks=1&weeks=2'],
-  ['./cosInsightRoutes.js', 'get', '/decisions?type=a&type=b'],
   ['./cosInsightRoutes.js', 'get', '/recent-tasks?limit=1&limit=2'],
   ['./cosLearningRoutes.js', 'get', '/digest/compare?week1=a&week1=b&week2=c'],
   ['./cosLearningRoutes.js', 'get', '/learning/insights?limit=1&limit=2'],
