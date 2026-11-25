@@ -12,6 +12,8 @@ import { hasStoredPrivacyFacts, redactActivePrivateOutput, redactStoredPrivacyPr
 import { escapeRegExp } from '../lib/textUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { withRuntimeFileTurn } from '../lib/runtimeFilePublication.js';
+import { scrubAgentRecordings } from './cos/cosAgentStorage.js';
+import { withStateLock } from './cos/cosState.js';
 
 const scrubQueue = createFileWriteQueue();
 
@@ -57,7 +59,10 @@ async function scrubDirectory(directory, scrubValue, privateAgentIds, isAgent) {
   const activePrivateOutput = redactActivePrivateOutput(outputPath, scrubValue);
   if (!activePrivateOutput && !promptHasFacts && !previewHasFacts && !privateAgentIds.has(metadata?.agentId)) return;
 
-  if (isAgent) privateAgentIds.add(basename(directory));
+  if (isAgent) {
+    privateAgentIds.add(basename(directory));
+    await scrubAgentRecordings(directory, scrubValue);
+  }
   const stored = promptHasFacts ? redactStoredPrivacyPrompt(prompt) : prompt;
   const output = await readArtifact(outputPath);
   const metadataPatch = {};
@@ -91,9 +96,11 @@ export async function scrubRevokedPrivacyFacts(encryptedValues) {
     const pattern = new RegExp(`(?<![\\p{L}\\p{N}_])(?:${alternatives})(?![\\p{L}\\p{N}_])`, 'gu');
     const scrubValue = text => text.replace(pattern, '[redacted]');
     const privateAgentIds = new Set();
-    for await (const directory of agentDirectories(PATHS.cosAgents)) {
-      await scrubDirectory(directory, scrubValue, privateAgentIds, true);
-    }
+    await withStateLock(async () => {
+      for await (const directory of agentDirectories(PATHS.cosAgents)) {
+        await scrubDirectory(directory, scrubValue, privateAgentIds, true);
+      }
+    });
     for await (const directory of childDirectories(PATHS.runs, COS_AGENT_ID_RE)) {
       await withRuntimeFileTurn(join(directory, 'output.txt'), () => scrubDirectory(directory, scrubValue, privateAgentIds, false));
     }

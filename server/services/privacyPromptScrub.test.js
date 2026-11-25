@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHash } from 'node:crypto';
+import { gzipSync, gunzipSync } from 'node:zlib';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -12,13 +14,27 @@ import { clearSubjectIdentityEvidence } from './privacyBrokers.js';
 import { createRunnerService } from '../lib/aiToolkit/runner.js';
 import { withRuntimeFileTurn } from '../lib/runtimeFilePublication.js';
 import { deleteSubject } from './privacySubjects.js';
+import { createOutputSpooler } from './agentTuiSpawning/outputSpooler.js';
 
-const fixtures = vi.hoisted(() => ({ paths: {}, query: vi.fn() }));
+const fixtures = vi.hoisted(() => ({ paths: {}, query: vi.fn(), failWrite: null }));
 vi.mock('../lib/db.js', () => ({
   query: fixtures.query,
   withTransaction: fn => fn({ query: fixtures.query }),
 }));
-vi.mock('../lib/fileUtils.js', async actual => ({ ...await actual(), PATHS: fixtures.paths }));
+vi.mock('../lib/fileUtils.js', async actual => {
+  const module = await actual();
+  return {
+    ...module,
+    PATHS: Object.assign(fixtures.paths, module.PATHS),
+    atomicWrite: async (path, ...args) => {
+      if (fixtures.failWrite === path) {
+        fixtures.failWrite = null;
+        throw new Error('Fixture write failure');
+      }
+      return module.atomicWrite(path, ...args);
+    },
+  };
+});
 vi.mock('../lib/backupSnapshotBoundary.js', () => ({ withBackupAssetPublication: work => work() }));
 vi.mock('./messageDrafts.js', () => ({ erasePrivacyDrafts: vi.fn(async () => ({})), scrubLegacyPrivacyDraftValues: vi.fn(async () => 0) }));
 vi.mock('./privacyBrokers.js', () => ({ clearSubjectIdentityEvidence: vi.fn() }));
@@ -30,6 +46,12 @@ const prompt = `${previewStart}\n${fenceBlock('Digital twin reference data', [
   PRIVACY_FACTS_HEADING, PRIVACY_FACTS_NOTICE, `- Name — legal_name: ${fact}`, '', '---', '', survivor,
 ].join('\n'), 4000)}`;
 const output = `${fact} — ${survivor}; similar: ${fact}son`;
+const rawOutput = `\u001b[32m> ${output}\u001b[0m\r\n`;
+const compressedRaw = gzipSync(rawOutput);
+const recordingManifest = {
+  version: 1, pinned: true, disposition: 'compressed', compressedAt: '2026-01-02T00:00:00.000Z',
+  sha256: createHash('sha256').update(rawOutput).digest('hex'), originalBytes: Buffer.byteLength(rawOutput),
+};
 
 let root;
 let paths;
@@ -56,10 +78,11 @@ beforeEach(async () => {
     twinRun: join(fixtures.paths.runs, 'twin-run'),
     cosRun: join(fixtures.paths.runs, 'cos-run'),
     unrelated: join(fixtures.paths.runs, 'unrelated-run'),
+    unrelatedAgent: join(fixtures.paths.cosAgents, '2026-01-01', 'unrelated-agent'),
     backup: join(root, 'backups', 'runs', 'twin-run'),
   };
   await Promise.all(Object.values(paths).flatMap(directory => [
-    writeFixture(join(directory, 'prompt.txt'), [paths.cosRun, paths.unrelated].includes(directory) ? survivor : prompt),
+    writeFixture(join(directory, 'prompt.txt'), [paths.cosRun, paths.unrelated, paths.unrelatedAgent].includes(directory) ? survivor : prompt),
     writeFixture(join(directory, 'output.txt'), output),
   ]));
   await Promise.all([
@@ -75,6 +98,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  fixtures.failWrite = null;
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -88,6 +112,14 @@ describe('privacy vault mutations and existing local run artifacts', () => {
     ['deleting a vault record', () => deleteVaultRecord('record-example')],
     ['deleting a subject', () => deleteSubject('subject-example')],
   ])('scrubs legacy prompts and echoed values when %s', async (_label, mutate) => {
+    await Promise.all([
+      writeFixture(join(paths.flatAgent, 'raw.txt'), rawOutput),
+      ...[paths.agent, paths.unrelatedAgent].flatMap(directory => [
+        writeFixture(join(directory, 'raw.txt.gz'), compressedRaw),
+        writeFixture(join(directory, 'raw-storage.json'), JSON.stringify(recordingManifest)),
+      ]),
+      writeFixture(join(paths.unrelatedAgent, 'raw.txt'), rawOutput),
+    ]);
     await mutate();
 
     for (const directory of [paths.agent, paths.flatAgent, paths.twinRun]) {
@@ -105,7 +137,59 @@ describe('privacy vault mutations and existing local run artifacts', () => {
     expect(await readFile(join(paths.cosRun, 'prompt.txt'), 'utf8')).toBe(survivor);
     expect(await readFile(join(paths.unrelated, 'output.txt'), 'utf8')).toBe(output);
     expect(await readFile(join(paths.backup, 'prompt.txt'), 'utf8')).toBe(prompt);
+
+    const expectedRaw = Buffer.from(rawOutput.replace(fact, '[redacted]'));
+    expect(await readFile(join(paths.flatAgent, 'raw.txt'))).toEqual(expectedRaw);
+    expect(gunzipSync(await readFile(join(paths.agent, 'raw.txt.gz')))).toEqual(expectedRaw);
+    expect(JSON.parse(await readFile(join(paths.agent, 'raw-storage.json'), 'utf8'))).toEqual({
+      ...recordingManifest, sha256: createHash('sha256').update(expectedRaw).digest('hex'), originalBytes: expectedRaw.length,
+    });
+    expect(await readFile(join(paths.unrelatedAgent, 'raw.txt'), 'utf8')).toBe(rawOutput);
+    expect(await readFile(join(paths.unrelatedAgent, 'raw.txt.gz'))).toEqual(compressedRaw);
+    expect(await readFile(join(paths.unrelatedAgent, 'raw-storage.json'), 'utf8')).toBe(JSON.stringify(recordingManifest));
     expect([log, warn, error].flatMap(spy => spy.mock.calls.flat()).join('\n')).not.toContain(fact);
+  });
+
+  it('scrubs both formats when a compressed recording has no manifest', async () => {
+    await Promise.all([
+      writeFixture(join(paths.agent, 'raw.txt'), rawOutput),
+      writeFixture(join(paths.agent, 'raw.txt.gz'), compressedRaw),
+    ]);
+    await deleteVaultRecord('record-example');
+    const expectedRaw = Buffer.from(rawOutput.replace(fact, '[redacted]'));
+    expect(await readFile(join(paths.agent, 'raw.txt'))).toEqual(expectedRaw);
+    expect(gunzipSync(await readFile(join(paths.agent, 'raw.txt.gz')))).toEqual(expectedRaw);
+    await expect(readFile(join(paths.agent, 'raw-storage.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('restores the original compressed recording if its manifest update fails', async () => {
+    const compressedPath = join(paths.agent, 'raw.txt.gz');
+    const manifestPath = join(paths.agent, 'raw-storage.json');
+    await Promise.all([
+      writeFixture(compressedPath, compressedRaw),
+      writeFixture(manifestPath, JSON.stringify(recordingManifest)),
+    ]);
+    fixtures.failWrite = manifestPath;
+    await expect(deleteVaultRecord('record-example')).rejects.toMatchObject({ code: 'PRIVACY_RUN_SCRUB_FAILED' });
+    expect(await readFile(compressedPath)).toEqual(compressedRaw);
+    expect(await readFile(manifestPath, 'utf8')).toBe(JSON.stringify(recordingManifest));
+  });
+
+  it('redacts pending and subsequent PTY output from an active private agent', async () => {
+    const rawFile = join(paths.flatAgent, 'raw.txt');
+    const spooler = createOutputSpooler({
+      agentId: 'agent-active', outputFile: join(paths.flatAgent, 'output.txt'), rawFile, prompt,
+    });
+    spooler.pushRaw(rawOutput);
+    try {
+      await deleteVaultRecord('record-example');
+      await spooler.flushRaw();
+      spooler.pushRaw(rawOutput);
+      await spooler.drainRaw();
+      expect(await readFile(rawFile, 'utf8')).toBe(rawOutput.replace(fact, '[redacted]').repeat(2));
+    } finally {
+      await spooler.drainRaw();
+    }
   });
 
   it('clears broker identity evidence when a legal_name value is overwritten', async () => {
