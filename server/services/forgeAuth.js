@@ -3,6 +3,7 @@
  * Keep account probing and token overlays here; repository mutations stay in git.js
  * and pure remote/account parsing stays in lib/gitForge.js.
  */
+import { GITHUB_WORKFLOW_SCOPE_REMEDY } from '../lib/agent/agentOutcome.js';
 // Aliased: `spawnCli`'s promise executor already binds `resolve` in its own scope.
 import { dirname, isAbsolute, resolve as resolvePath } from 'path';
 import { realpath } from 'fs/promises';
@@ -319,7 +320,6 @@ export async function resolveForgeTokenEnv(dir, { timeoutMs = 10000, forgeAccoun
 // never a map key or logged. A token's scopes only change on re-auth, which
 // mints a different token, so a process-lifetime cache is safe.
 const scopeStatusCache = new Map();
-const WORKFLOW_SCOPE_REMEDY = 'gh auth refresh -h github.com -s workflow';
 
 /**
  * Parse the `X-OAuth-Scopes` header out of `gh api -i` output.
@@ -351,11 +351,11 @@ export async function getWorkflowScopeStatus(dir, { timeoutMs = DEFAULT_SPAWN_CL
   const scopes = code === 0 ? parseOAuthScopes(stdout) : null;
   const result = !scopes ? { status: 'unknown' }
     : scopes.includes('workflow') ? { status: 'granted' }
-    : { status: 'missing', remedy: WORKFLOW_SCOPE_REMEDY };
+    : { status: 'missing', remedy: GITHUB_WORKFLOW_SCOPE_REMEDY };
   // Unknown is a transient or unreadable answer: do not pin it for the process.
   if (result.status !== 'unknown') scopeStatusCache.set(digest, result);
   if (result.status === 'missing') {
-    console.log(`⚠️ Forge token for ${forge.host} does not report the workflow scope; GitHub may reject changes to .github/workflows. For supported CLI OAuth, the owner can authorize it with: ${WORKFLOW_SCOPE_REMEDY}`);
+    console.log(`⚠️ Forge token for ${forge.host} does not report the workflow scope; GitHub may reject changes to .github/workflows. For supported CLI OAuth, the owner can authorize it with: ${GITHUB_WORKFLOW_SCOPE_REMEDY}`);
   }
   return result;
 }

@@ -47,6 +47,21 @@ export function agentHandoffReason(agent) {
 }
 
 
+export const GITHUB_WORKFLOW_SCOPE = 'github-workflow-scope';
+export const GITHUB_WORKFLOW_SCOPE_REMEDY = 'gh auth refresh -h github.com -s workflow';
+
+// Older task outcomes lack the fixed code. Recognize only an explicit
+// workflow-scope deficiency, not a branch policy error or an advisory probe.
+const missingWorkflowScope = /(?:\b(?:lacks?|missing|without)\b[^.\n]{0,60}\bworkflow.{0,5}\s+scope\b|\bworkflow.{0,5}\s+scope\b[^.\n]{0,25}\b(?:missing|required)\b)/i;
+
+export function isGitHubWorkflowScopeBlock(task) {
+  const metadata = task?.metadata;
+  if (task?.status !== 'blocked' || metadata?.blocker || metadata?.blockedCategory !== 'task-approval') return false;
+  const outcome = metadata.taskOutcome;
+  return outcome?.recovery?.mode === 'approval' && (outcome.recovery.code === GITHUB_WORKFLOW_SCOPE
+    || (typeof outcome.reason === 'string' && /github|\.github\/workflows/i.test(outcome.reason) && missingWorkflowScope.test(outcome.reason)));
+}
+
 /** Explicit delivery evidence, separate from a process ending normally. */
 export function normalizeTaskOutcome(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -68,7 +83,9 @@ export function normalizeTaskOutcome(value) {
       const options = Array.isArray(value.recovery.options)
         ? value.recovery.options.filter(option => typeof option === 'string' && option.trim()).map(option => option.trim()) : [];
       // Malformed approval requests fail closed, with concrete default choices.
-      outcome.recovery = { mode: 'approval', options: options.length >= 2 ? options : [
+      outcome.recovery = { mode: 'approval',
+        ...(value.recovery.code === GITHUB_WORKFLOW_SCOPE ? { code: GITHUB_WORKFLOW_SCOPE } : {}),
+        options: options.length >= 2 ? options : [
         'Address the named prerequisite, then retry the retained work.',
         'Keep the task stopped and preserve its work.',
       ] };

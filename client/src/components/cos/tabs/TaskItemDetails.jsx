@@ -1,3 +1,4 @@
+import { GITHUB_WORKFLOW_SCOPE_REMEDY, isGitHubWorkflowScopeBlock } from '../../../../../server/lib/agent/agentOutcome.js';
 import { AlertCircle, Ban, CheckCircle, ExternalLink, FileText, Paperclip, Scale } from 'lucide-react';
 import { formatBytes } from '../../../utils/formatters';
 import CollapsibleText from '../../ui/CollapsibleText';
@@ -70,6 +71,15 @@ function SecurityScanReport({ scan, idScope, taskId }) {
 function TaskItemBlocker({ task, idScope }) {
   return (
     <>
+      {isGitHubWorkflowScopeBlock(task) && (
+        <section className="mt-2 space-y-1 rounded border border-port-warning/30 p-2 text-sm" aria-label="GitHub workflow access">
+          <p className="font-medium text-port-warning">GitHub workflow access required</p>
+          <p>Repository ownership does not grant the GitHub CLI credential permission to write workflow files.</p>
+          <p>On the instance that ran this task, use the GitHub CLI account assigned to the project. For a GitHub.com OAuth login, run:</p>
+          <code className="block select-all break-words rounded bg-port-bg px-2 py-1">{GITHUB_WORKFLOW_SCOPE_REMEDY}</code>
+          <p>Approve the GitHub prompt, then select <strong>Unblock</strong> to retry the retained work. If the project uses a different credential, update that credential instead.</p>
+        </section>
+      )}
       {/* Blocker reason display. Prefer the user-set `blocker`, but fall
           back to `blockedReason` — the field every server-side block
           writes (max-spawns, retries, provider-config, terminated, …), so
