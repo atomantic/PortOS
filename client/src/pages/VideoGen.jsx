@@ -225,10 +225,12 @@ export default function VideoGen() {
   // via the modal would stay stuck behind a "not configured" error from the
   // unrelated legacy probe.
   const notConnected = !!status && status.connected === false && !byov.needsByovProbe;
+  // /status no longer gates the form's rendering, but an unanswered probe is not a healthy one.
+  const interpreterPending = !status && !byov.needsByovProbe;
   const reactorContinuableClips = useReactorContinuableClips({ visibleHistory: history.visibleHistory, reactor, mode });
   const gates = useVideoGenSubmitGates({
     form, remoteTarget, rendersOffMachine, rendersOnThisMachine,
-    remixHandoffPending: remix.remixHandoffPending, notConnected, byov,
+    remixHandoffPending: remix.remixHandoffPending, notConnected, interpreterPending, byov,
     blockedAsset: weights.blockedAsset, modelContext, modelContextRequest, runwayCatalog,
   });
   const { canEnqueue } = gates;
