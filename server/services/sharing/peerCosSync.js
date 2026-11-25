@@ -10,8 +10,7 @@
  */
 import { isFederatableCosArchive, isMachineLocalCosTask } from '../../lib/cos/cosFederationPolicy.js';
 import { join } from 'path';
-import { existsSync } from 'fs';
-import { mkdtemp, readFile, readdir } from 'fs/promises';
+import { mkdtemp, readFile, readdir, stat } from 'fs/promises';
 import { tmpdir } from 'os';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { createHash } from 'crypto';
@@ -36,6 +35,7 @@ import {
   ASSET_PULL_TIMEOUT_MS,
 } from './peerSyncAssets.js';
 import { findPeerById, FORCE_REVALIDATE_EVERY, peerSyncEvents } from './peerSyncShared.js';
+import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { isStr } from '../../lib/textUtils.js';
 
 
@@ -81,6 +81,44 @@ const COS_HISTORY_MANIFEST_MAX_BYTES = 32 * 1024 * 1024;
 // logged + skipped (it stays "missing" and is retried, never silently dropped).
 const COS_ARCHIVE_PULL_MAX_BYTES = 64 * 1024 * 1024;
 
+const COS_ARCHIVE_CONCURRENCY = 8;
+const COS_ARCHIVE_WALK_BATCH = 64;
+const cosArchiveHashCache = new Map();
+const cosArchiveFederatableCache = new Map();
+
+async function cosFileKey(fullPath) {
+  const info = await stat(fullPath).catch(error => error.code === 'ENOENT' ? null : undefined);
+  if (info === null) return null;
+  if (!info?.isFile()) return undefined;
+  // Include ctime so permission changes also invalidate a cached privacy decision.
+  return `${info.mtimeMs}:${info.size}:${info.ino}:${info.ctimeMs}`;
+}
+
+async function hashCachedCosFile(fullPath) {
+  const key = await cosFileKey(fullPath);
+  const cached = cosArchiveHashCache.get(fullPath);
+  if (key && cached?.key === key) return cached.sha256;
+  cosArchiveHashCache.delete(fullPath);
+  if (!key) return null;
+  const sha256 = await sha256File(fullPath).catch(() => null);
+  if (sha256) cosArchiveHashCache.set(fullPath, { key, sha256 });
+  return sha256;
+}
+
+async function isCachedCosArchiveFederatable(agentDir) {
+  const metaKey = await cosFileKey(join(agentDir, 'metadata.json'));
+  const promptKey = await cosFileKey(join(agentDir, 'prompt.txt'));
+  if (!metaKey || promptKey === undefined) {
+    cosArchiveFederatableCache.delete(agentDir);
+    return false;
+  }
+  const cached = cosArchiveFederatableCache.get(agentDir);
+  if (cached?.metaKey === metaKey && cached.promptKey === promptKey) return cached.federatable;
+  const federatable = await isFederatableCosArchive(agentDir);
+  cosArchiveFederatableCache.set(agentDir, { metaKey, promptKey, federatable });
+  return federatable;
+}
+
 /**
  * Build the completed-agent history manifest this instance advertises to
  * full-sync peers. Walks data/cos/agents/<date>/<agentId>/, hashing each of the
@@ -92,24 +130,43 @@ const COS_ARCHIVE_PULL_MAX_BYTES = 64 * 1024 * 1024;
 export async function buildCosHistoryManifest() {
   const root = cosAgentsDir();
   const entries = [];
+  const seenAgents = new Set();
+  const seenFiles = new Set();
   let truncated = false;
-  // Top level: date buckets only. Skip index.json and any flat (running-agent)
-  // dirs — only date-bucketed dirs hold COMPLETED archives.
+  // Top level: date buckets only. Skip index.json and flat running-agent dirs.
   const dates = (await readdir(root).catch(() => [])).filter((d) => COS_ARCHIVE_DATE_RE.test(d));
   outer: for (const date of dates.sort()) {
     const dateDir = join(root, date);
-    const agentIds = (await readdir(dateDir).catch(() => [])).filter((a) => COS_AGENT_ID_RE.test(a));
-    for (const agentId of agentIds.sort()) {
-      const agentDir = join(dateDir, agentId);
-      if (!await isFederatableCosArchive(agentDir)) continue;
-      for (const file of COS_ARCHIVE_FILES) {
-        const full = join(agentDir, file);
-        if (!existsSync(full)) continue;
-        const sha256 = await sha256File(full).catch(() => null);
-        if (!sha256) continue;
+    const agentIds = (await readdir(dateDir).catch(() => [])).filter((a) => COS_AGENT_ID_RE.test(a)).sort();
+    // Bound read-ahead even when one date bucket can fill the whole manifest.
+    for (let offset = 0; offset < agentIds.length; offset += COS_ARCHIVE_WALK_BATCH) {
+      const batch = await mapWithConcurrency(agentIds.slice(offset, offset + COS_ARCHIVE_WALK_BATCH), COS_ARCHIVE_CONCURRENCY, async (agentId) => {
+        const agentDir = join(dateDir, agentId);
+        seenAgents.add(agentDir);
+        if (!await isCachedCosArchiveFederatable(agentDir)) return [];
+        const archiveEntries = [];
+        for (const file of COS_ARCHIVE_FILES) {
+          const fullPath = join(agentDir, file);
+          const sha256 = await hashCachedCosFile(fullPath);
+          if (!sha256) continue;
+          seenFiles.add(fullPath);
+          archiveEntries.push({ date, agentId, file, sha256 });
+        }
+        return archiveEntries;
+      });
+      for (const entry of batch.flat()) {
         if (entries.length >= COS_HISTORY_MANIFEST_CAP) { truncated = true; break outer; }
-        entries.push({ date, agentId, file, sha256 });
+        entries.push(entry);
       }
+    }
+  }
+  // A capped walk has not seen the rest of the tree.
+  if (!truncated) {
+    for (const path of cosArchiveHashCache.keys()) {
+      if (!seenFiles.has(path)) cosArchiveHashCache.delete(path);
+    }
+    for (const path of cosArchiveFederatableCache.keys()) {
+      if (!seenAgents.has(path)) cosArchiveFederatableCache.delete(path);
     }
   }
   if (truncated) {
@@ -134,17 +191,15 @@ export async function buildCosHistoryManifest() {
 export async function diffCosHistoryManifestAgainstLocal(manifestEntries) {
   if (!Array.isArray(manifestEntries)) return [];
   const root = cosAgentsDir();
-  const missing = [];
-  for (const entry of manifestEntries) {
-    if (!isPlainObject(entry)) continue;
+  const results = await mapWithConcurrency(manifestEntries, COS_ARCHIVE_CONCURRENCY, async (entry) => {
+    if (!isPlainObject(entry)) return null;
     const { date, agentId, file, sha256 } = entry;
-    if (!COS_ARCHIVE_DATE_RE.test(date || '') || !COS_AGENT_ID_RE.test(agentId || '') || !COS_ARCHIVE_FILES.includes(file)) continue;
-    const full = join(root, date, agentId, file);
-    if (!existsSync(full)) { missing.push(entry); continue; }
-    const localHash = await sha256File(full).catch(() => null);
-    if (localHash !== sha256) missing.push(entry);
-  }
-  return missing;
+    if (typeof date !== 'string' || typeof agentId !== 'string'
+      || !COS_ARCHIVE_DATE_RE.test(date) || !COS_AGENT_ID_RE.test(agentId) || !COS_ARCHIVE_FILES.includes(file)) return null;
+    const localHash = await hashCachedCosFile(join(root, date, agentId, file));
+    return localHash === null || localHash !== sha256 ? entry : null;
+  });
+  return results.filter(Boolean);
 }
 
 // Receiver-side state — mirrors the media-library sweep's bookkeeping.
