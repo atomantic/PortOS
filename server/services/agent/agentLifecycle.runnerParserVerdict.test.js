@@ -37,8 +37,10 @@ vi.mock('./agentCompletionCleanup.js', () => ({
 
 import { handleAgentCompletion, normalizeRunnerCompletionExtras } from './agentLifecycle.js';
 import { runnerAgents, completingAgents, pausedAgents } from './agentState.js';
-import { getAgentRecord } from '../cos/cosAgentLifecycle.js';
-import { finalizeAgent } from './agentFinalization.js';
+import { getAgentRecord, getAgent } from '../cos/cosAgentLifecycle.js';
+import { getTaskById } from '../cos/cosTaskStore.js';
+import { finalizeAgent, retireDeadAgent } from './agentFinalization.js';
+import { handleOrphanedTask } from './agentManagement.js';
 
 const AGENT_ID = 'agent-parser-verdict';
 const USAGE_LIMIT = { hasError: true, category: 'usage-limit', message: 'Usage limit reached', requiresFallback: true };
@@ -81,6 +83,27 @@ describe('handleAgentCompletion — runner output-parser verdict', () => {
     const input = await complete(1, false, undefined);
     expect(input).toMatchObject({ success: false, finalSummary: null });
     expect(input.errorAnalysis).toBeTruthy();
+  });
+});
+
+describe('handleAgentCompletion — runner verdict after a server restart (no runnerAgents entry)', () => {
+  beforeEach(() => {
+    runnerAgents.clear();
+    getAgent.mockResolvedValue({ agentId: AGENT_ID, status: 'running', taskId: 'task-1', metadata: {} });
+    getTaskById.mockResolvedValue({ id: 'task-1', status: 'in_progress', taskType: 'user', metadata: {} });
+  });
+
+  it('retires a usage-limit stop as a failure and never lets an existing commit promote the task', async () => {
+    await handleAgentCompletion(AGENT_ID, 0, true, 1000, { fallbackAnalysis: { ...USAGE_LIMIT, message: 'Usage limit reached' } });
+    expect(retireDeadAgent).toHaveBeenCalledWith(expect.objectContaining({
+      success: false, category: 'usage-limit', errorMessage: 'Usage limit reached',
+    }));
+    expect(handleOrphanedTask).toHaveBeenCalledWith('task-1', AGENT_ID, getTaskById, expect.objectContaining({ providerStopped: true }));
+  });
+
+  it('keeps today’s recovery for a completion without a parser verdict', async () => {
+    await handleAgentCompletion(AGENT_ID, 1, false, 1000);
+    expect(handleOrphanedTask).toHaveBeenCalledWith('task-1', AGENT_ID, getTaskById, expect.not.objectContaining({ providerStopped: true }));
   });
 });
 

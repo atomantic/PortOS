@@ -463,7 +463,7 @@ export async function extractPipelineOutputSummary(task, workspacePath, outputBu
  * "route, then complete the live agent" instead of two unrelated jobs sharing
  * one name.
  */
-async function completeUntrackedAgentFromCosState(agentId, exitCode, success, duration, { interruptedStartup = null } = {}) {
+async function completeUntrackedAgentFromCosState(agentId, exitCode, success, duration, { interruptedStartup = null, fallbackAnalysis = null } = {}) {
   const cosAgent = await getAgent(agentId).catch(() => null);
   if (!cosAgent) {
     console.log(`⚠️ Received completion for unknown agent: ${agentId} (not in cos state)`);
@@ -493,8 +493,9 @@ async function completeUntrackedAgentFromCosState(agentId, exitCode, success, du
     success,
     exitCode,
     duration,
-    errorMessage: interruptedStartup?.message ?? (willSucceed ? undefined : 'Agent completed after server restart'),
-    ...(interruptedStartup ? { category: 'interrupted', agentResultExtra: { interruptedByRestart: true } } : {}),
+    errorMessage: interruptedStartup?.message ?? fallbackAnalysis?.message ?? (willSucceed ? undefined : 'Agent completed after server restart'),
+    ...(interruptedStartup ? { category: 'interrupted', agentResultExtra: { interruptedByRestart: true } }
+      : fallbackAnalysis ? { category: fallbackAnalysis.category } : {}),
   });
   if (cosAgent.taskId && task && task.status !== 'completed' && !deliveryHeld) {
     if (retiredSuccess) {
@@ -516,6 +517,9 @@ async function completeUntrackedAgentFromCosState(agentId, exitCode, success, du
         agentMetadata: cosAgent.metadata,
         agentStartedAt: cosAgent.startedAt,
         ...(interruptedStartup ? { interrupted: true } : {}),
+        // The runner stopped the provider on a usage-limit signal: a commit already in the repo is not proof
+        // the task finished, exactly as the live completion path refuses to promote it.
+        ...(fallbackAnalysis ? { providerStopped: true } : {}),
       });
     }
   }
@@ -590,7 +594,7 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, reportedSuccess,
   const agent = runnerAgents.get(agentId);
   if (!agent) {
     // Agent not in memory map (server restarted). Retire it from cos state.
-    return completeUntrackedAgentFromCosState(agentId, exitCode, success, duration);
+    return completeUntrackedAgentFromCosState(agentId, exitCode, success, duration, { fallbackAnalysis });
   }
 
   const { task, runId, model } = agent;

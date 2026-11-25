@@ -84,9 +84,14 @@ export function createCliAgentOutputParser({ command, args, streamFormat, prompt
 
   const stderr = (chunk) => {
     const text = stripStderrAnsi(chunk.toString());
+    // Codex stderr: show thinking + tool names, skip the config dump and command output. Codex echoes the
+    // task prompt to stderr, so its signal is read from the formatted lines (prompt echo already removed)
+    // rather than the raw stream: a prompt that quotes a usage-limit banner must not stop a healthy run.
+    if (codexStderrFormatter) {
+      const lines = codexStderrFormatter.processChunk(text);
+      return { lines, text: '', fallbackSignal: lines.length ? detect(`[stderr] ${lines.join('\n')}\n`) : null };
+    }
     const fallbackSignal = detect(`[stderr] ${text}`);
-    // Codex stderr: show thinking + tool names, skip the config dump and command output.
-    if (codexStderrFormatter) return { lines: codexStderrFormatter.processChunk(text), text: '', fallbackSignal };
     // A chunk that decolors down to whitespace was pure terminal control (`opencode run` emits a bare reset per
     // progress redraw); tagging it would add one blank noise line to the tail per redraw.
     const trimmed = text.trim();

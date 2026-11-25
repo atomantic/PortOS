@@ -1525,8 +1525,10 @@ async function runCleanupOrphanedAgents() {
  *   WITHOUT charging orphan-retry budget or arming the orphan cooldown — see the
  *   retry-budget note below (#3202). Pass it when the caller knows (the orphan sweep
  *   reads the host-shutdown marker); leave it null to derive from `agentMetadata`.
+ * @param {boolean} [options.providerStopped] - the runner killed the provider on a usage-limit / auth signal,
+ *   so an existing commit must not be read as the task having finished.
  */
-export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agentMetadata = null, agentStartedAt = null, interrupted = null } = {}) {
+export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agentMetadata = null, agentStartedAt = null, interrupted = null, providerStopped = false } = {}) {
   // Callers that watched the agent die (the orphan sweep, which reads the
   // host-shutdown marker) say so explicitly. The ones that didn't —
   // `resetOrphanedTasks`, post-restart completion recovery — fall back to the
@@ -1559,7 +1561,7 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
   // prove publication and synchronization. Preserve its same-task recovery.
   const releaseTask = agentMetadata?.taskAnalysisType === 'do-release'
     || currentTaskTypeName(task.metadata?.analysisType || task.metadata?.selfImprovementType) === 'do-release';
-  if (!releaseTask && await completeIfCommitted(ctx)) return;
+  if (!releaseTask && !providerStopped && await completeIfCommitted(ctx)) return;
 
   const decision = decideOrphanRetry({ task, wasInterrupted, now: Date.now() });
   await applyOrphanDecision(ctx, decision);
