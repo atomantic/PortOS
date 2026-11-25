@@ -34,14 +34,14 @@ import { emitLog } from '../cos/cosEvents.js';
 const delta = (text) => `${JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text } } })}\n`;
 const settle = () => new Promise((resolve) => setTimeout(resolve, 5));
 
-function build({ streamFormat, providerId = 'claude-code', killed = false } = {}) {
+function build({ streamFormat, command, args = [], providerId = 'claude-code', killed = false } = {}) {
   const stopProcess = vi.fn();
   const pipeline = createCliOutputPipeline({
     agentId: 'agent-1',
     task: { id: 'task-1' },
     runId: 'run-1',
     provider: { id: providerId, name: providerId },
-    cliConfig: { streamFormat },
+    cliConfig: { streamFormat, command, args },
     prompt: 'do the thing',
     agentDir: '/agents/agent-1',
     isProcessStopped: () => killed,
@@ -102,6 +102,25 @@ describe('createCliOutputPipeline', () => {
     expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('provider fallback signal'), expect.any(Object));
     await pipeline.finish();
     expect(pipeline.snapshot().immediateFallbackAnalysis).toMatchObject({ category: expect.any(String) });
+  });
+
+  it('formats codex stderr by binary, so a codex-ollama run does not get the config dump or echoed prompt', async () => {
+    const { pipeline } = build({ command: 'codex', args: ['exec', '--oss'], providerId: 'codex-ollama' });
+    const feed = 'OpenAI Codex v0.125.0\n--------\nworkdir: /repo\nmodel: qwen\n--------\nuser\ndo the thing\nERROR: boom\n';
+    for (let i = 0; i < feed.length; i += 9) pipeline.onStderr(Buffer.from(feed.slice(i, i + 9)));
+    await pipeline.finish();
+    expect(pipeline.snapshot().outputBuffer).toBe('ERROR: boom\n');
+  });
+
+  it('assembles stream-json events split across stdout chunks and surfaces the result as the summary', async () => {
+    const { pipeline } = build({ streamFormat: 'stream-json' });
+    const feed = delta('split progress\n') + `${JSON.stringify({ type: 'result', result: 'Final answer.' })}\n`;
+    for (let i = 0; i < feed.length; i += 13) pipeline.onStdout(Buffer.from(feed.slice(i, i + 13)));
+    await pipeline.finish();
+    const snap = pipeline.snapshot();
+    expect(snap.rawStreamBuffer).toBe(feed);
+    expect(snap.outputBuffer).toBe('Final answer.');
+    expect(snap.finalSummary).toBe('Final answer.');
   });
 
   it('ignores a fallback signal once the process is already stopped', async () => {

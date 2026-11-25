@@ -44,10 +44,7 @@ import {
   probePtyRuntime as defaultProbePtyRuntime,
   PTY_WORKSPACE_MISSING_PREFIX,
 } from '../lib/ptySpawnDiagnostics.js';
-import { createCodexStderrFormatter as defaultCreateCodexStderrFormatter } from '../lib/codexCliOutput.js';
-import { isKnownCliStderrNoise as defaultIsKnownCliStderrNoise } from '../lib/cliStderrNoise.js';
-import { createStreamingAnsiStripper as defaultCreateStreamingAnsiStripper } from '../lib/ansiStrip.js';
-import { createStreamJsonParser as defaultCreateStreamJsonParser } from '../lib/streamJsonParser.js';
+import { createCliAgentOutputParser as defaultCreateCliAgentOutputParser } from '../lib/cliAgentOutputParser.js';
 import { withState as defaultWithState, drainState as defaultDrainState } from './runnerState.js';
 import {
   getProcessStats as defaultGetProcessStats,
@@ -146,10 +143,7 @@ export function createCosRunner(deps = {}) {
   const findCommandOnPath = deps.findCommandOnPath ?? defaultFindCommandOnPath;
   const diagnosePtySpawnFailure = deps.diagnosePtySpawnFailure ?? defaultDiagnosePtySpawnFailure;
   const probePtyRuntime = deps.probePtyRuntime ?? defaultProbePtyRuntime;
-  const createCodexStderrFormatter = deps.createCodexStderrFormatter ?? defaultCreateCodexStderrFormatter;
-  const isKnownCliStderrNoise = deps.isKnownCliStderrNoise ?? defaultIsKnownCliStderrNoise;
-  const createStreamingAnsiStripper = deps.createStreamingAnsiStripper ?? defaultCreateStreamingAnsiStripper;
-  const createStreamJsonParser = deps.createStreamJsonParser ?? defaultCreateStreamJsonParser;
+  const createCliAgentOutputParser = deps.createCliAgentOutputParser ?? defaultCreateCliAgentOutputParser;
   const withState = deps.withState ?? defaultWithState;
   const drainState = deps.drainState ?? defaultDrainState;
   const getProcessStats = deps.getProcessStats ?? defaultGetProcessStats;
@@ -663,11 +657,10 @@ export function createCosRunner(deps = {}) {
     });
     watchWindowsAgentProcess(claudeProcess, launch);
 
-    // Detect if stream-json format is active (Claude CLI with streaming)
-    const isStreamJson = spawnArgs.includes('stream-json');
-    const streamParser = isStreamJson ? createStreamJsonParser() : null;
-    const isCodexCli = basename(command).replace(/\.exe$/i, '') === 'codex';
-    const codexStderrFormatter = isCodexCli ? createCodexStderrFormatter(prompt) : null;
+    // The same parser the direct spawner feeds (lib/cliAgentOutputParser.js): ANSI stripping, stream-json,
+    // the codex stderr formatter, stderr noise, the capped raw stream and the usage-limit detector. The
+    // runner keeps only its own I/O: socket emits and the completion receipt.
+    const parser = createCliAgentOutputParser({ command, args: spawnArgs, prompt });
 
     // Store in memory
     const agent = {
@@ -676,21 +669,36 @@ export function createCosRunner(deps = {}) {
       pid: claudeProcess.pid,
       startedAt: Date.now(),
       outputBuffer: '',
-      rawStreamBuffer: '',
-      streamParser,
-      codexStderrFormatter,
-      // Per-stream ANSI strippers, mirroring spawnDirectly's headless path — the
-      // same providers land here when the run is dispatched through the runner, so
-      // without these the `[stderr] [0m` noise reproduces on that half of the
-      // dispatch matrix. Stateful: each buffers an escape split across two chunks.
-      // A stream-json stdout is NDJSON with no raw ESC byte, so it skips the scan.
-      stripStdoutAnsi: isStreamJson ? (text) => text : createStreamingAnsiStripper(),
-      stripStderrAnsi: createStreamingAnsiStripper(),
+      parser,
+      // Set once when the parser reports a usage-limit / auth banner; the run is then failed even if the
+      // killed child exits 0, and the server reads this verdict instead of re-deriving one.
+      fallbackAnalysis: null,
       workspacePath: cwd,
       securityScan,
       stopSecurityScan: () => securityScans.stop(agentId).catch(err => lifecycle.reportFailure(err)),
     };
     activeAgents.set(agentId, agent);
+
+    const emitParsed = ({ lines, text }) => {
+      for (const line of lines) {
+        agent.outputBuffer += line + '\n';
+        emitToServer('agent:output', { agentId, text: line + '\n' });
+      }
+      if (text) {
+        agent.outputBuffer += text;
+        emitToServer('agent:output', { agentId, text });
+      }
+    };
+
+    // Stop the provider on its first usage-limit / auth signal, as the direct spawner does. Skipped for a run
+    // being paused: that stop has its own owner and verdict.
+    const stopForFallbackSignal = (signal) => {
+      if (!signal || agent.fallbackAnalysis || agent.paused) return;
+      agent.fallbackAnalysis = signal;
+      console.log(`🛑 Agent ${agentId} detected provider fallback signal (${signal.category}); stopping ${command}`);
+      killProcessTree(claudeProcess, 'SIGTERM');
+      armForceKill(agentId, agent);
+    };
 
     // Guard the stdin pipe BEFORE writing: a child that exits before reading it
     // (bad flag, missing CLI) emits EPIPE, and an unlistened stream 'error' out
@@ -701,54 +709,25 @@ export function createCosRunner(deps = {}) {
     // antigravity's --print value, or grok's Windows temp file).
     deliverChildStdin(claudeProcess, useStdin ? prompt : null, `agent ${agentId}`);
 
-    // Handle stdout
+    // Child listeners handle bad chunks locally: an uncaught throw in a data callback would crash the runner.
     claudeProcess.stdout.on('data', (data) => {
-      const text = agent?.stripStdoutAnsi ? agent.stripStdoutAnsi(data.toString()) : data.toString();
-
-      if (agent?.streamParser) {
-        // Parse stream-json and emit extracted text lines (cap buffer at 512KB for error analysis)
-        agent.rawStreamBuffer += text;
-        if (agent.rawStreamBuffer.length > 512 * 1024) {
-          agent.rawStreamBuffer = agent.rawStreamBuffer.slice(-512 * 1024);
-        }
-        const lines = agent.streamParser.processChunk(text);
-        for (const line of lines) {
-          agent.outputBuffer += line + '\n';
-          emitToServer('agent:output', { agentId, text: line + '\n' });
-        }
-      } else {
-        // Non-stream providers: emit stdout as-is once decolored. A chunk that was
-        // purely terminal control has nothing left to show. Unlike stderr below,
-        // whitespace is NOT dropped here — a blank line is legitimate formatting
-        // when it isn't wearing an `[stderr]` tag.
-        if (!text) return;
-        if (agent) {
-          agent.outputBuffer += text;
-        }
-        emitToServer('agent:output', { agentId, text });
+      try {
+        const parsed = agent.parser.stdout(data);
+        stopForFallbackSignal(parsed.fallbackSignal);
+        emitParsed(parsed);
+      } catch (err) {
+        console.error(`❌ Agent ${agentId} stdout handler failed: ${err.message}`);
       }
     });
 
-    // Handle stderr
     claudeProcess.stderr.on('data', (data) => {
-      const decolored = agent?.stripStderrAnsi ? agent.stripStderrAnsi(data.toString()) : data.toString();
-      if (agent?.codexStderrFormatter) {
-        const lines = agent.codexStderrFormatter.processChunk(decolored);
-        for (const line of lines) {
-          agent.outputBuffer += line + '\n';
-          emitToServer('agent:output', { agentId, text: line + '\n' });
-        }
-        return;
+      try {
+        const parsed = agent.parser.stderr(data);
+        stopForFallbackSignal(parsed.fallbackSignal);
+        emitParsed(parsed);
+      } catch (err) {
+        console.error(`❌ Agent ${agentId} stderr handler failed: ${err.message}`);
       }
-
-      // A chunk that decolors down to whitespace was pure terminal control
-      // (`opencode run` emits a bare reset per progress redraw). Tagging it
-      // `[stderr]` would add one blank noise line to the tail per redraw.
-      const trimmedDecolored = decolored.trim();
-      if (!trimmedDecolored || isKnownCliStderrNoise(trimmedDecolored)) return;
-      const text = `[stderr] ${decolored}`;
-      if (agent) agent.outputBuffer += text;
-      emitToServer('agent:output', { agentId, text });
     });
 
     // Handle errors
@@ -772,35 +751,29 @@ export function createCosRunner(deps = {}) {
         }
         const duration = Date.now() - (agent?.startedAt || Date.now());
 
-        // Flush remaining stream parser data
-        if (agent?.streamParser) {
-          const remaining = agent.streamParser.flush();
-          for (const line of remaining) {
-            agent.outputBuffer += line + '\n';
-            emitToServer('agent:output', { agentId, text: line + '\n' });
-          }
-          // Use the parsed final result for the output file if available
-          const finalResult = agent.streamParser.getFinalResult();
-          if (finalResult) {
-            agent.outputBuffer = finalResult;
-          }
-        }
-        if (agent?.codexStderrFormatter) {
-          const remaining = agent.codexStderrFormatter.flush();
-          for (const line of remaining) {
-            agent.outputBuffer += line + '\n';
-            emitToServer('agent:output', { agentId, text: line + '\n' });
-          }
-        }
+        // Flush the parsers' unterminated tails, then prefer the parsed final result as the transcript.
+        const flushed = agent.parser.flush();
+        emitParsed({ lines: flushed.lines, text: '' });
+        if (flushed.finalResult) agent.outputBuffer = flushed.finalResult;
 
         const output = agent?.outputBuffer || '';
         const paused = agent?.paused === true;
+        // A usage-limit stop can race to exit 0; it must not be recorded as a success or the provider
+        // fallback / retry never fires. Optional fields below: an older server ignores them.
+        const success = code === 0 && !agent.fallbackAnalysis;
+        const verdictFields = {
+          ...(agent.fallbackAnalysis ? { fallbackAnalysis: agent.fallbackAnalysis } : {}),
+          ...(flushed.completionResult ? { finalSummary: flushed.completionResult } : {}),
+          // The parsed transcript above lost the raw stream-json payload failure analysis reads, so a failed
+          // run carries the capped raw tail with it. A success never needs it.
+          ...(!success && agent.parser.rawStream() ? { rawStreamTail: agent.parser.rawStream() } : {}),
+        };
 
         // A non-zero exit is a failure line, so it belongs on stderr where a
         // stderr-based monitor can see it (#7945). A pause or a clean exit is
         // ordinary progress and stays on stdout.
-        const logExit = !paused && code !== 0 ? console.error : console.log;
-        logExit(`${paused ? '⏸️' : code === 0 ? '✅' : '❌'} Agent ${agentId} exited with code ${code}${paused ? ' after pause' : ''}`);
+        const logExit = !paused && !success ? console.error : console.log;
+        logExit(`${paused ? '⏸️' : success ? '✅' : '❌'} Agent ${agentId} exited with code ${code}${paused ? ' after pause' : ''}${agent.fallbackAnalysis ? ` (stopped on ${agent.fallbackAnalysis.category})` : ''}`);
 
         // Persist output and terminal evidence before publishing completion or
         // removing durable ownership. Failed writes leave recovery evidence intact.
@@ -809,9 +782,10 @@ export function createCosRunner(deps = {}) {
             taskId,
             completedAt: new Date().toISOString(),
             exitCode: code,
-            success: code === 0,
+            success,
             duration,
             securityScan: agent.securityScan,
+            ...verdictFields,
           });
           if (paused) {
             activeAgents.delete(agentId);
@@ -823,16 +797,17 @@ export function createCosRunner(deps = {}) {
             agentId,
             taskId,
             exitCode: code,
-            success: code === 0,
+            success,
             duration,
             outputLength: output.length,
             securityScan: agent.securityScan,
+            ...verdictFields,
           });
 
           // Update state — serialize with the spawn write path via withState.
           await withState((state) => {
             state.stats.completed++;
-            if (code !== 0) state.stats.failed++;
+            if (!success) state.stats.failed++;
             delete state.agents[agentId];
           });
         });

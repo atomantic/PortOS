@@ -330,7 +330,7 @@ async function runInitSpawner() {
   });
 
   onCosRunnerEvent('agent:completed', async (data) => {
-    const { agentId, exitCode, success, duration } = data;
+    const { agentId, exitCode, success, duration, fallbackAnalysis, finalSummary, rawStreamTail } = data;
     const agent = runnerAgents.get(agentId);
     // A runner-owned TUI is finalized by spawnTuiAgent while this server stays connected; only a TUI recovered into
         // runnerAgents after a restart should use the generic runner completion path. `syncRunnerAgents` must not adopt
@@ -342,7 +342,7 @@ async function runInitSpawner() {
     // state before handleAgentCompletion writes the terminal record.
     await flushRunnerOutputBatcher(agentId);
     const { handleAgentCompletion } = await import('./agent/agentLifecycle.js');
-    await handleAgentCompletion(agentId, exitCode, success, duration);
+    await handleAgentCompletion(agentId, exitCode, success, duration, { fallbackAnalysis, finalSummary, rawStreamTail });
   });
 
   // Batch handler for orphaned agents (runner startup cleanup)
@@ -356,7 +356,7 @@ async function runInitSpawner() {
       }
       await flushRunnerOutputBatcher(orphan.agentId);
       const { handleAgentCompletion } = await import('./agent/agentLifecycle.js');
-      await handleAgentCompletion(orphan.agentId, orphan.exitCode, orphan.success, 0);
+      await handleAgentCompletion(orphan.agentId, orphan.exitCode, orphan.success, 0, orphan);
     }
   });
 

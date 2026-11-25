@@ -1,12 +1,12 @@
 /**
- * Stream-JSON parsing layer shared by cos-runner and agentCliSpawning.
+ * Stream-JSON parsing layer under the shared headless-agent output parser.
  *
  * Stream-JSON parser for Claude CLI `--output-format stream-json`. `createStreamJsonParser()` returns
  * a stateful parser with `processChunk`/`flush`/`getFinalResult` that extracts human-readable lines
  * from streaming NDJSON events (text deltas, tool-use markers, tool input summaries, intermediate
  * assistant results). Also exports `summarizeToolInput(toolName, input)` for concise tool-call
- * descriptions and `safeParse(str)` as a plain `JSON.parse` try/catch. Shared by `cos-runner/index.js`
- * and `services/agent/agentCliSpawning.js`.
+ * descriptions and `safeParse(str)` as a plain `JSON.parse` try/catch. Consumed through
+ * `lib/cliAgentOutputParser.js`, which `cos-runner/index.js` and `services/agent/agentCliOutputStream.js` share.
  *
  * Self-contained — no imports, pure functions only — so the isolated
  * `portos-cos` PM2 process stays standalone.

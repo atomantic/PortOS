@@ -272,5 +272,6 @@ export async function readRunnerCompletionReceipt(agentId, { taskId, startedAt }
   const startedAtMs = toEpoch(startedAt);
   if (!Number.isFinite(completedAtMs) || !Number.isFinite(startedAtMs) || completedAtMs < startedAtMs) return null;
   const duration = Number.isFinite(receipt.duration) ? receipt.duration : Math.max(0, completedAtMs - startedAtMs);
-  return { exitCode: receipt.exitCode, success: receipt.success === true, duration };
+  const { fallbackAnalysis, finalSummary, rawStreamTail } = receipt;
+  return { exitCode: receipt.exitCode, success: receipt.success === true, duration, fallbackAnalysis, finalSummary, rawStreamTail };
 }

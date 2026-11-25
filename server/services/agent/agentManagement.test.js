@@ -414,6 +414,7 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
     it.each([
       [{ exitCode: 0, success: true, duration: 4200 }],
       [{ exitCode: 2, success: false, duration: 4200 }],
+      [{ exitCode: 0, success: false, duration: 4200, fallbackAnalysis: { category: 'usage-limit' }, finalSummary: 'done', rawStreamTail: '{"type":"result"}' }],
     ])('finalizes through the normal completion path with the receipt verdict %o', async (receipt) => {
       readRunnerCompletionReceipt.mockResolvedValueOnce(receipt);
 
@@ -422,7 +423,7 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
       expect(readRunnerCompletionReceipt).toHaveBeenCalledWith('agent-exited', {
         taskId: 'task-1', startedAt: '2026-01-01T00:00:01.000Z',
       });
-      expect(handleAgentCompletion).toHaveBeenCalledExactlyOnceWith('agent-exited', receipt.exitCode, receipt.success, 4200);
+      expect(handleAgentCompletion).toHaveBeenCalledExactlyOnceWith('agent-exited', receipt.exitCode, receipt.success, 4200, receipt);
       expect(retireDeadAgent).not.toHaveBeenCalled();
       expect(orphanCharges()).toEqual([]);
       expect(appendRunEvent).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'run.orphan-recovered' }));
