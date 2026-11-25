@@ -8,7 +8,6 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { REDACTED_CREDENTIAL, providerConnectionProfile } from './providerConnections.js';
 import { buildProviderGraphPreview } from './providerGraphPreview.js';
-import { sanitizeModelAliases } from './providerModelAliases.js';
 import { SERVICE_CREDENTIAL_VIAS, SERVICE_PLANS } from '../serviceDefinitions.js';
 import { isNonBlankStr } from '../textUtils.js';
 

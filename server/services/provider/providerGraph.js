@@ -1,12 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
-  providerConnectionProfile,
   projectConnectionOwnedFields,
   withConnectionOwnedFields,
 } from '../../lib/provider/providerConnections.js';
 import {
-  connectionOwnedSnapshot,
   isDerivedPreset,
   mergeConnectionCredentials,
   planGraphReconciliation,
