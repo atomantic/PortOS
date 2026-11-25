@@ -142,6 +142,9 @@ it('rejects future, unrecognized, malformed, and invalid-index documents; collap
   expect(classifyQualitySnapshot(JSON.stringify({ schemaVersion: 4, repository })).status).toBe('future');
   expect(classifyQualitySnapshot(JSON.stringify({ ...v1Document([security]), schemaVersion: 2 })).status).toBe('malformed');
   expect(classifyQualitySnapshot(JSON.stringify({ ...v1Document([security]), note: true })).status).toBe('malformed');
+  const unprojected = { ...security, scannedFiles: 119 };
+  expect(classifyQualitySnapshot(JSON.stringify(v1Document([unprojected]))).status).toBe('malformed');
+  expect(serializeQualitySnapshot(repository, [unprojected])).toBeNull();
 
   const sameDay = v1Document([
     security,

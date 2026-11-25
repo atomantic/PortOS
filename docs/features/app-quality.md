@@ -90,6 +90,9 @@ the bottom of the breakdown with their reason; `totalCategories` keeps the
 catalog size for existing readers. An app with no eligible assessments shows **not assessed**, not zero.
 Database failures show **unavailable** while app management stays usable.
 
+Broad coverage requires a signal scan of at least 95% of a nonempty eligible
+inventory. A scored broad claim below that threshold is recorded as partial.
+
 For PortOS itself, scores cover the install's `P0`-`P2` feature scope: an audit drops
 areas this install marks `P3` (dormant) from its inventory, so `totalFiles`,
 `scannedFiles` and **broad** coverage are measured against what remains. The
@@ -116,7 +119,9 @@ so consecutive runs rotate to other areas instead of re-scanning the same
 inventory; the `ux` and `module-hygiene` prompts read that block for their
 route and slice choice. Peers and the `.quality.json` snapshot
 receive the numeric v1 wire shape with a v2 run's `sliceScore` in `score`, so
-an older install keeps reading it; the slice text never leaves the machine.
+older installs can read it. Exports set `scannedFiles` to `totalFiles` for
+qualifying broad rows to satisfy older readers' equal-count rule. PostgreSQL and
+the local category tooltip keep the actual counts. Slice text stays local.
 
 ### Lane health
 

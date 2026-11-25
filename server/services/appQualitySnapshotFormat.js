@@ -91,6 +91,8 @@ function numericReport(report) {
   const parsed = historicalQualityReportSchema.safeParse({ ...report, summary: PLACEHOLDER_SUMMARY });
   if (!parsed.success) return null;
   const { summary: _summary, ...kept } = parsed.data;
+  // Snapshot rows use the v1 numeric projection that older readers validate.
+  if (kept.coverage === 'broad' && kept.scannedFiles !== kept.totalFiles) return null;
   return kept;
 }
 

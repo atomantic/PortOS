@@ -482,6 +482,30 @@ describe('scheduled audit measurement workflow', () => {
     expect(history.points[0]).toMatchObject({ score: 80, ratedCategories: 1, categories: { 'retired-audit': { score: 20 } } });
   });
 
+  it.each([
+    [report, 12710, 12721, 'broad'],
+    [sliceReport, 95, 100, 'broad'],
+    [report, 949, 1000, 'partial'],
+  ])('counts qualifying near-complete scans without altering stored evidence', async (makeReport, scannedFiles, totalFiles, coverage) => {
+    const evidence = makeReport({ scannedFiles, totalFiles });
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const run = { task, taskType: 'better-complexity', agentId: 'agent-coverage',
+      workspacePath: '/repo', success: true, assessedAt };
+    expect(await recordAuditQuality(run, {
+      readFile: async () => sentinel(evidence), query, ensureSchema: vi.fn(),
+    })).toBe(true);
+    const stored = JSON.parse(query.mock.calls[0][1][4]);
+    expect(stored).toEqual({ ...evidence, coverage });
+    const summary = summarizeAppQuality([{ category: run.taskType, report: stored, assessedAt }], Date.parse(assessedAt));
+    expect(summary).toMatchObject(coverage === 'broad' ? { score: 35, ratedCategories: 1 } : { score: null, ratedCategories: 0 });
+    expect(summary.categories.find(category => category.id === 'code-simplification'))
+      .toMatchObject({ coverage, scannedFiles, totalFiles });
+    expect(numericQualityReport(stored)).toMatchObject({
+      version: 1, coverage, scannedFiles: coverage === 'broad' ? totalFiles : scannedFiles, totalFiles,
+    });
+    expect(stored.scannedFiles).toBe(scannedFiles);
+  });
+
   // Unique regression: a "broad" claim over a partial scan (5907/8923 files) used to drop the whole run's measurement.
   it('records a broad claim over a partial scan as partial coverage instead of discarding it', () => {
     const parsed = parseAuditQualityReport(sentinel(report({ scannedFiles: 59, totalFiles: 89 })), 'better-complexity');
