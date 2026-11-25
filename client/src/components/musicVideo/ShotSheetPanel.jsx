@@ -1,3 +1,4 @@
+import { inputXsShrinkClass as inputCls } from './controlClasses.js';
 import { useMemo, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import ColorMatchBoard from './ColorMatchBoard.jsx';
@@ -17,8 +18,6 @@ import { MUSIC_VIDEO_CAMERA_FRAME_ASPECTS } from '../../../../server/lib/musicVi
 import { sceneClipIsFinal, sceneFinalApproved, selectedVideoTake } from '../../../../server/lib/musicVideo/musicVideoFinalApproval.js';
 import { FILM_LOOK_PRESETS, filmLookPreset } from '../../lib/filmLook.js';
 import { MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS } from '../../lib/musicVideoTransitions.js';
-
-const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
 
 /** A text box that grows to fit its text and commits on blur, only when its text changed. */
 function SheetText({ label, value = '', rows = 2, disabled, onCommit, maxLength }) {

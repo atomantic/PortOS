@@ -1,3 +1,4 @@
+import { inputXsFullClass as control } from './controlClasses.js';
 import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useEffect, useMemo, useState } from 'react';
 import { RotateCcw, Save, Trash2, Type, Upload } from 'lucide-react';
@@ -27,7 +28,6 @@ const humanize = (value) => {
   const text = String(value).replace(/-/g, ' ');
   return text.charAt(0).toUpperCase() + text.slice(1);
 };
-const control = 'w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
 const button = 'flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] pointer-fine:sm:min-h-0';
 
 // A face is registered with the page once per upload (a re-upload changes `addedAt`), so the preview sets the title in the file the server will.

@@ -2,7 +2,7 @@ import { ExternalLink, Play, RotateCcw } from 'lucide-react';
 import { AUTONOMOUS_CHECKPOINT_LABELS } from '../../../lib/musicVideoAutonomous.js';
 import ToggleChip from '../../ui/ToggleChip.jsx';
 import SongLinkField from './SongLinkField.jsx';
-import { buttonClass, inputClass } from './controlClasses.js';
+import { buttonClass, inputClass } from '../controlClasses.js';
 
 export default function CheckpointApprovalBox({ awaiting, editable, draft, missingVideoTools, tools, song, busy, resume }) {
   const changed = editable && draft.value !== editable.value;

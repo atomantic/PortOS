@@ -1,3 +1,4 @@
+import { inputClass } from './controlClasses.js';
 import { sortByLabel } from '../../lib/sortByLabel.js';
 import { listMusicVideoProjectSummaries } from '../../services/apiMusicVideo.js';
 import useListResource from '../../hooks/useListResource.js';
@@ -5,8 +6,6 @@ import ListLoadError from '../ui/ListLoadError.jsx';
 
 const fetchSongProjects = () => listMusicVideoProjectSummaries({ limit: 500 }, { silent: true })
   .then((page) => (page?.items || []).filter((p) => p.trackId || p.uploadedAudioFilename));
-
-const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 
 /**
  * Start an autonomous run on another project's song instead of making one: the

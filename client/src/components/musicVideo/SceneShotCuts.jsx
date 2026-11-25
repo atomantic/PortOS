@@ -1,10 +1,10 @@
+import { stepButtonClass as STEP } from './controlClasses.js';
 import { useState } from 'react';
 import { Merge, Minus, Plus, Scissors } from 'lucide-react';
 import { formatDurationSec } from '../../utils/formatters.js';
 import { CLIP_TIMING_FPS } from '../../lib/musicVideoLayers.js';
 
 const BUTTON = 'inline-flex items-center gap-1 rounded bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 px-2 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
-const STEP = 'flex items-center justify-center rounded bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-[28px] pointer-fine:sm:min-w-[28px]';
 // The shortest piece the server leaves on either side of a split or a moved cut (projectsLogic MIN_SPLIT_PIECE_SEC).
 const MIN_PIECE_SEC = 0.1;
 const tenth = (sec) => Math.round(sec * 10) / 10;

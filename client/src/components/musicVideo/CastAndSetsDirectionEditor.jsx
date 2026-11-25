@@ -1,7 +1,7 @@
+import { inputClass } from './controlClasses.js';
 import { useState } from 'react';
 import { Pencil, Save } from 'lucide-react';
 
-const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 const IMAGE_ROLES = ['background', 'texture', 'decoration', 'cutout'];
 
 // Text fields the director edits directly, with the server's caps (musicVideoCastAndSetsDirectionEditSchema).

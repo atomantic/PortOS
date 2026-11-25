@@ -1,7 +1,7 @@
 import { Pause, Play, X } from 'lucide-react';
 import { VideoModelField } from '../ToolPicker.jsx';
 import SongLinkField from './SongLinkField.jsx';
-import { buttonClass } from './controlClasses.js';
+import { buttonClass } from '../controlClasses.js';
 
 export default function ParkedRunControls({ run, auto, resume, videoTools, videoDraft, song, canAct, canRetry, awaiting, reopenable }) {
   const { value: videoSwaps, setValue: setVideoSwaps } = videoDraft;

@@ -1,3 +1,4 @@
+import { previzButtonClass as buttonCls } from '../controlClasses.js';
 import { useState } from 'react';
 import { Sparkles } from 'lucide-react';
 import ProviderModelSelector from '../../ProviderModelSelector.jsx';
@@ -9,7 +10,6 @@ import { saveCatalogWorld } from '../../../services/apiCatalog.js';
 import { formatCount } from '../../../utils/formatters.js';
 import { worldClockText } from '../../../../../server/lib/worldMap.js';
 
-const buttonCls = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs disabled:opacity-50 pointer-fine:sm:min-h-0';
 const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs';
 const PART_ORDER = ['world', 'timeline', 'vehicles', 'cuts', 'pawnColors', 'cameraStyles'];
 const plural = (n, word) => `${formatCount(n)} ${word}${n === 1 ? '' : 's'}`;

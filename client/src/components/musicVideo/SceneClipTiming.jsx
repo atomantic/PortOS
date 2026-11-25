@@ -1,8 +1,8 @@
+import { stepButtonClass as STEP } from './controlClasses.js';
 import { useState } from 'react';
 import { Minus, Plus } from 'lucide-react';
 import { CLIP_OFFSET_FRAMES_RANGE, CLIP_SPEED_FPS_RANGE, CLIP_TIMING_FPS, clipReversed, clipSpeedRate } from '../../lib/musicVideoLayers.js';
 
-const STEP = 'flex items-center justify-center rounded bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-[28px] pointer-fine:sm:min-w-[28px]';
 const plural = (n) => `${n} frame${n === 1 ? '' : 's'}`;
 
 function Stepper({ id, label, value, range, disabled, onSet, readout, less, more }) {

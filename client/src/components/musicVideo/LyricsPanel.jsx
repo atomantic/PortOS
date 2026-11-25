@@ -1,3 +1,4 @@
+import { inputXsClass as inputCls } from './controlClasses.js';
 import { useRef, useState } from 'react';
 import { ListMusic, Plus, Trash2, Upload } from 'lucide-react';
 import Modal from '../ui/Modal.jsx';
@@ -8,7 +9,6 @@ import { lyricSetupState } from '../../lib/musicVideoStages.js';
 // tailnet origin PortOS is usually opened from).
 const mintId = (prefix) => `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 const toSec = (value) => (value === '' ? null : Number(value));
-const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
 const round3 = (n) => Math.round(n * 1000) / 1000;
 const MIN_WORD_SEC = 0.02;
 

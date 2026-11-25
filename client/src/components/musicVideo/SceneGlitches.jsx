@@ -1,3 +1,4 @@
+import { selectXsClass as selectCls } from './controlClasses.js';
 import { useEffect, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import {
@@ -16,8 +17,6 @@ const EDGE_LABELS = { left: 'Left edge', right: 'Right edge', top: 'Top edge', b
 export const NEW_GLITCH_STYLE = 'color-block';
 const DEFAULT_LEAK_COLOR = '#ff4f8a';
 const round3 = (n) => Math.round(n * 1000) / 1000;
-const selectCls = 'bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
-
 /** One glitch: its style, when it hits (a slider over the shot), how long and strong it is, and how often it repeats. */
 function GlitchRow({ fieldId, index, glitch, spanSec, onCommit, onRemove, disabled }) {
   // The sliders and color keep their own value while dragging and save once let go.

@@ -1,3 +1,4 @@
+import { sceneButtonClass as BUTTON } from './controlClasses.js';
 import { useId, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Film } from 'lucide-react';
 import {
@@ -8,7 +9,6 @@ import { formatUsd } from '../../utils/formatters.js';
 import SentPromptPanel from '../media/SentPromptPanel';
 import toast from '../ui/Toast';
 
-const BUTTON = 'flex items-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-xs hover:bg-port-border/40 disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 whitespace-nowrap';
 const FIELD = 'min-w-0 rounded border border-port-border bg-port-bg px-2 py-1 text-base sm:text-xs min-h-[44px] pointer-fine:sm:min-h-0';
 
 /**

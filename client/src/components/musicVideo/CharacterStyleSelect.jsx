@@ -1,11 +1,10 @@
+import { inputClass } from './controlClasses.js';
 import { sortByLabel } from '../../lib/sortByLabel.js';
 import { listMusicVideoCharacterStyles } from '../../services/apiMusicVideo.js';
 import useListResource from '../../hooks/useListResource.js';
 import ListLoadError from '../ui/ListLoadError.jsx';
 
 const fetchStyles = () => listMusicVideoCharacterStyles({ silent: true });
-
-const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 
 /**
  * Character style choice for a project that does not exist yet (New music

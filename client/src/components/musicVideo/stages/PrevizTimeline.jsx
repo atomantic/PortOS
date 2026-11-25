@@ -1,3 +1,4 @@
+import { previzButtonClass as buttonCls } from '../controlClasses.js';
 import { sortByLabel } from '../../../lib/sortByLabel.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
@@ -16,7 +17,6 @@ import {
 } from '../../../../../server/lib/musicVideo/musicVideoPrevizTimeline.js';
 
 const selectCls = 'min-h-[44px] min-w-0 max-w-full rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs text-port-text pointer-fine:sm:min-h-0';
-const buttonCls = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs disabled:opacity-50 pointer-fine:sm:min-h-0';
 const chipCls = (on) => `inline-flex min-h-[44px] items-center gap-1 rounded-full border px-2 text-xs pointer-fine:sm:min-h-7 ${on ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`;
 // Hour choices: up to two days, since a timeline can span a day or several.
 const HOURS = [...Array.from({ length: 24 }, (_, i) => i + 1), 30, 36, 42, 48];

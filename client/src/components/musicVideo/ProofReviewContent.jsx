@@ -1,5 +1,5 @@
+import { reviewButtonClass as buttonClass } from './controlClasses.js';
 const fieldClass = 'mt-1 w-full rounded border border-port-border bg-port-bg p-2 text-sm';
-const buttonClass = 'min-h-[44px] rounded border border-port-border px-3 py-2 text-sm disabled:opacity-50';
 const timeFieldClass = 'mt-1 block w-24 rounded border border-port-border bg-port-bg p-2 text-sm';
 
 export function ProofRenderControls({ proof, fieldId, review, ready, blocked }) {

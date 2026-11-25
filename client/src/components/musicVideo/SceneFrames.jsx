@@ -1,3 +1,4 @@
+import { sceneButtonClass as SECONDARY_BUTTON, selectXsShrinkClass as SELECT } from './controlClasses.js';
 import { castLookForTake } from '../../../../server/lib/musicVideo/musicVideoCastLook.js';
 import { musicVideoGreyboxReference } from '../../../../server/lib/musicVideo/musicVideoGreybox.js';
 import { resolveSourceTake } from '../../../../server/lib/musicVideo/musicVideoSourceTake.js';
@@ -19,9 +20,6 @@ import { shotSheetDrivesPrompt } from '../../../../server/lib/musicVideo/musicVi
 import { FAL_FEATURED_EDIT_MODEL_IDS, FAL_IMAGE_MODEL_OPTIONS } from '../../lib/imageGenBackends';
 
 const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0 whitespace-nowrap';
-const SECONDARY_BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0 whitespace-nowrap';
-const SELECT = 'min-w-0 bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
-
 /** One of a shot's two frames: tap it to see it full size. */
 function FrameTile({ label, imageId, src, empty, onOpen, openLabel }) {
   const tag = <span className="port-media-overlay-strong absolute left-1 top-1 rounded px-1 text-[10px] leading-tight">{label}</span>;

@@ -1,3 +1,4 @@
+import { inputXsFullClass as inputCls } from './controlClasses.js';
 import { useEffect, useRef, useState } from 'react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { safeReadJsonStorage, safeRemoveStorage } from '../../lib/safeStorage.js';
@@ -51,8 +52,6 @@ const LEGACY_REMEMBERED = { songwriterFirst: 'first', songwriterLast: 'last', so
 // Options that ARE the account named under Where you post: editing one here updates it there.
 const ACCOUNT_OPTION = { distrokid: 'artistName', substack: 'publication' };
 const REMEMBERED_OPTIONS = { distrokid: DISTROKID_REMEMBERED_OPTIONS };
-
-const inputCls = 'w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
 
 const summaryRows = (summary) => Object.entries(summary || {})
   .filter(([, v]) => v != null && v !== '' && (typeof v !== 'object' || (Array.isArray(v) && v.every((x) => typeof x === 'string'))))

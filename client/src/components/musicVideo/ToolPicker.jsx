@@ -1,3 +1,4 @@
+import { inputClass } from './controlClasses.js';
 import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useEffect, useState } from 'react';
 import useLocalImageModels from '../../hooks/useLocalImageModels.js';
@@ -11,8 +12,6 @@ const LOCAL_VIDEO_TOOL_ID = 'video:local';
 // Codex image gen always uses the PortOS Codex Imagegen config (Settings → Image Gen),
 // so it takes no per-run model pin.
 const NO_MODEL_PIN_TOOL_IDS = new Set(['image:codex']);
-const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
-
 /**
  * The local-video `<select>` while its catalog loads, after it fails, or once
  * the hardware-compatible models are in. A blank value is the install default.

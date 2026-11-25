@@ -1,3 +1,4 @@
+import { inputClass } from './controlClasses.js';
 import ToggleChip from '../ui/ToggleChip.jsx';
 import MusicVideoLlmPicker from './MusicVideoLlmPicker.jsx';
 import MusicVideoLlmStagesPicker from './MusicVideoLlmStagesPicker.jsx';
@@ -7,8 +8,6 @@ const GROUPS = [['image', 'Image'], ['video', 'Video'], ['code', 'Code']];
 // The LLM stages a saved project runs from its brief. The brief and lyric
 // stages belong to an autonomous run, which keeps its own pins on the run.
 const PROJECT_LLM_STAGES = ['castAndSets', 'plan', 'authoring'];
-const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
-
 /** Tool picker + guidance + direction LLM + budget for an automation-first music video. */
 export default function AutomationBriefFields({ idPrefix, draft, onChange }) {
   const picked = new Set(draft.tools);
