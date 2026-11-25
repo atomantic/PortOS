@@ -23,6 +23,7 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   listProjectNames: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
   listMidiSourceRows: vi.fn(),
   listProjectPage: vi.fn(),
+  listProjectVersionPage: vi.fn(),
   getProject: vi.fn(),
   createProject: vi.fn(async (d) => ({ id: 'mv-new', ...d })),
   updateProject: vi.fn(async (id, p) => ({ id, ...p })),
@@ -353,6 +354,19 @@ describe('musicVideo routes', () => {
     expect(r2.body.nextCursor).toBeNull();
     expect(r2.body.items).toHaveLength(1);
     expect(r2.body.items[0].id).toBe('mv-older');
+  });
+
+  it('pages version family identities independently from status and search', async () => {
+    svc.listProjectVersionPage
+      .mockResolvedValueOnce({ offset: 0, limit: 1, total: 2, items: [{ id: 'fork', rootProjectId: 'root', name: 'Renamed Fork', version: 2 }] })
+      .mockResolvedValueOnce({ offset: 1, limit: 1, total: 2, items: [{ id: 'root', rootProjectId: 'root', name: 'Original', version: 1 }] });
+    const first = await request(app).get('/api/music-video?summary=1&versionRoot=root&limit=1&q=Another&statusFilter=completed');
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({ total: 2, nextCursor: '1', items: [{ id: 'fork', rootProjectId: 'root', name: 'Renamed Fork', version: 2 }] });
+    expect(svc.listProjectVersionPage).toHaveBeenCalledWith('root', expect.objectContaining({ limit: 1, offset: 0 }));
+    expect(svc.listProjectPage).not.toHaveBeenCalled();
+    const second = await request(app).get('/api/music-video?summary=1&versionRoot=root&limit=1&cursor=1');
+    expect(second.body).toMatchObject({ total: 2, nextCursor: null, items: [{ id: 'root', rootProjectId: 'root', name: 'Original', version: 1 }] });
   });
 
   it('filters project status before paging and keeps missing and failed statuses in progress', async () => {

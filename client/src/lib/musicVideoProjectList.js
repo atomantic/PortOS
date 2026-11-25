@@ -64,3 +64,38 @@ export function groupMusicVideoProjects(projects, query = '') {
     .sort((a, b) => b.touchedAt - a.touchedAt)
     .map(({ rootId, versions }) => ({ rootId, versions }));
 }
+
+/** Use a stable copy number when the human-readable labels still collide. */
+export function distinctMusicVideoLabels(projects, labelFor) {
+  const groups = new Map();
+  for (const project of projects) {
+    const label = labelFor(project);
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(project.id);
+  }
+  const used = new Set(groups.keys());
+  const labels = new Map();
+  for (const [label, ids] of groups) {
+    if (ids.length === 1) {
+      labels.set(ids[0], label);
+      continue;
+    }
+    let copy = 1;
+    for (const id of ids.sort()) {
+      let choice;
+      do { choice = `${label} · Copy ${copy++}`; } while (used.has(choice));
+      used.add(choice);
+      labels.set(id, choice);
+    }
+  }
+  return labels;
+}
+
+export function musicVideoVersionLabels(versions) {
+  const counts = new Map();
+  for (const { version } of versions) counts.set(version || 1, (counts.get(version || 1) ?? 0) + 1);
+  return distinctMusicVideoLabels(versions, (project) => {
+    const number = project.version || 1;
+    return counts.get(number) > 1 && project.name?.trim() ? `v${number} · ${project.name.trim()}` : `v${number}`;
+  });
+}

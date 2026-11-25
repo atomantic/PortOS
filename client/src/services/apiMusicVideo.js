@@ -29,6 +29,20 @@ export const listMusicVideoProjectSummaries = ({ cursor, limit, statusFilter, q 
   if (q) query.set('q', q);
   return request(`/music-video?${query}`, options);
 };
+/** Version picker reads only the selected lineage, including siblings outside the project picker page. */
+export async function listMusicVideoProjectVersions(rootId, options = {}) {
+  const versions = new Map();
+  const query = new URLSearchParams({ summary: '1', versionRoot: rootId, limit: '100' });
+  let cursor;
+  do {
+    if (cursor != null) query.set('cursor', cursor);
+    const page = await request(`/music-video?${query}`, options);
+    for (const version of page.items) versions.set(version.id, version);
+    if (cursor != null && page.nextCursor === cursor) throw new Error('Version list did not advance');
+    cursor = page.nextCursor;
+  } while (cursor != null);
+  return [...versions.values()];
+}
 export const getMusicVideoCatalogCompletion = (ingredientIds, options = {}) => {
   const query = new URLSearchParams(ingredientIds.map(id => ['ingredientId', id]));
   return request(`/music-video/catalog-completion?${query}`, options);

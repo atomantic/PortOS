@@ -1677,6 +1677,7 @@ export const musicVideoProjectListQuerySchema = z.object({
   statusFilter: z.enum(['completed', 'in-progress']).optional(),
   // Case-insensitive name substring, applied before paging so a match on a later page is found.
   q: z.string().max(200).optional(),
+  versionRoot: z.string().min(1).max(128).optional(),
   limit: z.string().optional(),
   offset: z.string().optional(),
   cursor: z.string().max(64).optional(),
