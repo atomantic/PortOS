@@ -593,15 +593,20 @@ describe('client mirror parity', () => {
   });
 
   it('keeps the publish form registry-driven instead of mirroring walk bounds', () => {
-    // PublishWorkflow.jsx is a React component (not importable under the server
-    // runner), so assert the source consumes each served definition's bounds
-    // and cannot drift through reintroduced walk-specific constants.
-    const src = readFileSync(
-      join(SERVER_DIR, '..', 'client', 'src', 'components', 'sprites', 'PublishWorkflow.jsx'),
-      'utf-8',
-    );
-    expect(src).toContain('min={definition.minFrameCount}');
-    expect(src).toContain('max={definition.maxFrameCount}');
-    expect(src).not.toMatch(/WALK_(?:MIN|MAX)_FRAME_COUNT/);
+    // The bounds belong to the rendered contract editor. Check the workflow
+    // and extracted helpers too so none can reintroduce walk-specific limits.
+    const spritesDir = join(SERVER_DIR, '..', 'client', 'src', 'components', 'sprites');
+    const readSource = (file) => readFileSync(join(spritesDir, file), 'utf-8');
+    const fields = readSource('PublishWorkflowFields.jsx');
+    expect(fields).toContain('min={definition.minFrameCount}');
+    expect(fields).toContain('max={definition.maxFrameCount}');
+    for (const source of [
+      fields,
+      readSource('PublishWorkflow.jsx'),
+      readSource('publishRuntimeContract.js'),
+      readSource('usePublishBindingDraft.js'),
+    ]) {
+      expect(source).not.toMatch(/WALK_(?:MIN|MAX)_FRAME_COUNT/);
+    }
   });
 });
