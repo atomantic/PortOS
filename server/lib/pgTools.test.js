@@ -32,6 +32,7 @@ import {
   discoverPgDumpCandidates,
   resolvePgDump,
   resolvePgDumpBinary,
+  resolvePsqlBinary,
 } from './pgTools.js';
 
 describe('pickPgDump', () => {
@@ -172,6 +173,56 @@ describe('resolvePgDumpBinary', () => {
     expect(result).toEqual({ binary: 'pg_dump', satisfies: true });
     // Unknown version + no override ⇒ skip discovery I/O entirely.
     expect(execFileAsync).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolvePsqlBinary', () => {
+  beforeEach(() => {
+    vi.stubEnv('PORTOS_PSQL', undefined);
+    readdir.mockReset().mockResolvedValue([]);
+    execFileAsync.mockReset().mockResolvedValue({ stdout: '' });
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('honors PORTOS_PSQL without probing installed clients', async () => {
+    vi.stubEnv('PORTOS_PSQL', '/custom/bin/psql');
+    await expect(resolvePsqlBinary(17)).resolves.toBe('/custom/bin/psql');
+    expect(readdir).not.toHaveBeenCalled();
+    expect(execFileAsync).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['/opt/homebrew/opt', 'postgresql@17'],
+    ['/usr/local/opt', 'postgresql@17'],
+    ['/Applications/Postgres.app/Contents/Versions', '17'],
+  ])('discovers psql under %s when it is missing from PATH', async (directory, entry) => {
+    const installed = `${directory}/${entry}/bin/psql`;
+    readdir.mockImplementation(async dir => dir === directory ? [entry] : []);
+    execFileAsync.mockImplementation(async binary => {
+      if (posixPath(binary) === installed) return { stdout: 'psql (PostgreSQL) 17.12' };
+      throw Object.assign(new Error('not installed'), { code: 'ENOENT' });
+    });
+    expect(posixPath(await resolvePsqlBinary(17))).toBe(installed);
+  });
+
+  it.each([
+    ['16.12', 17],
+    ['17.5', 17],
+    ['16.12', 19],
+  ])('selects the closest available major and latest patch with PATH %s and server %s', async (pathVersion, serverMajor) => {
+    readdir.mockImplementation(async dir => dir === '/opt/homebrew/opt' ? ['postgresql@17', 'postgresql@18'] : []);
+    const versions = {
+      psql: pathVersion,
+      '/opt/homebrew/opt/postgresql@17/bin/psql': '17.12',
+      '/opt/homebrew/opt/postgresql@18/bin/psql': '18.2',
+    };
+    execFileAsync.mockImplementation(async binary => ({ stdout: `psql (PostgreSQL) ${versions[posixPath(binary)]}` }));
+    const expectedMajor = serverMajor === 19 ? 18 : 17;
+    expect(posixPath(await resolvePsqlBinary(serverMajor))).toBe(`/opt/homebrew/opt/postgresql@${expectedMajor}/bin/psql`);
+  });
+
+  it('falls back to bare psql when no client can be identified', async () => {
+    await expect(resolvePsqlBinary(17)).resolves.toBe('psql');
   });
 });
 

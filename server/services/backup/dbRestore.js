@@ -12,7 +12,7 @@ import { acquireBackupSnapshotCut } from '../../lib/backupSnapshotBoundary.js';
 import {
   POOL_CONFIG, checkHealth, databaseRestoreRecovery, getServerMajorVersion, query, withDatabaseMaintenance,
 } from '../../lib/db.js';
-import { withPgToolEnv } from '../../lib/pgTools.js';
+import { resolvePsqlBinary, withPgToolEnv } from '../../lib/pgTools.js';
 import { inspectDatabaseDump, prepareDatabaseReplay } from '../backupDatabaseDump.js';
 import {
   captureSyncFeedPositions, pendingRecoveryResult, repairCommittedRestore, restoreApplicationName, restoreReceiptSql,
@@ -187,6 +187,8 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
   }
   if (dryRun) return { status: 'ok', dryRun: true, sizeBytes, tableCount };
 
+  const psqlBinary = await resolvePsqlBinary(targetServerMajor);
+
   // The replay replaces every row. Take the backup boundary first so no admitted
   // file-plus-row publication is half done underneath it and no backup cut is
   // capturing the database mid-replay. Only this restore's own cut is released.
@@ -203,7 +205,7 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
     };
   }
   try {
-    return await replayAdmittedDump({ tableCount, sizeBytes, snapshotId, dump, reset, replayPath });
+    return await replayAdmittedDump({ tableCount, sizeBytes, snapshotId, dump, reset, replayPath, psqlBinary });
   } catch (err) {
     if (err.code !== 'DATABASE_RESTORE_BUSY') throw err;
     console.log(`🚫 restore: refused for snapshot ${snapshotId}: ${err.message}`);
@@ -213,7 +215,7 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
   }
 }
 
-async function replayAdmittedDump({ tableCount, sizeBytes, snapshotId, dump, reset, replayPath }) {
+async function replayAdmittedDump({ tableCount, sizeBytes, snapshotId, dump, reset, replayPath, psqlBinary }) {
   return withDatabaseMaintenance(async ({ adoptRestoreRecovery }) => {
     // Read before the replay rewinds them, then make them durable together
     // with this operation's identity BEFORE anything destructive runs: a
@@ -253,7 +255,7 @@ async function replayAdmittedDump({ tableCount, sizeBytes, snapshotId, dump, res
       // spool copy, never the snapshot path. The trailing receipt commits with
       // the dump or not at all, and the application name identifies this
       // replay's session to recovery (#9725).
-      const proc = spawn('psql', [
+      const proc = spawn(psqlBinary, [
         '-X', '-v', 'ON_ERROR_STOP=1',
         '--single-transaction',
         '--echo-all',

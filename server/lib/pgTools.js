@@ -1,7 +1,9 @@
 /**
- * pg_dump binary resolution and libpq env helpers: `withPgToolEnv(config, run)` stages Node trust roots with guaranteed cleanup and isolates libpq settings from inherited PG variables.
+ * PostgreSQL client binary resolution and libpq env helpers.
  *
- * `resolvePgDumpBinary(serverMajor)` (PORTOS_PGDUMP override → version-aware auto-select → bare `pg_dump`) plus `pickPgDump` / `discoverPgDumpCandidates` / `resolvePgDump`. `pg_dump` REFUSES to dump a newer server ("server version mismatch") but a newer one dumps an older server, and on machines with several Postgres installs (an old Homebrew `postgresql@NN` keg shadowing a newer server in PATH) the bare binary is often wrong, so the closest installed major >= the server's is picked. Shared by the backup snapshot path (`server/services/backup.js`) and the native↔Docker export path (`server/services/dbAdmin.js`). Self-contained: no imports out to other PortOS services.
+ * `resolvePgDumpBinary` and `resolvePsqlBinary` honor operator overrides and
+ * discover clients in PATH, Homebrew kegs and Postgres.app. `withPgToolEnv`
+ * stages Node trust roots and isolates libpq settings from inherited PG variables.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -12,13 +14,13 @@ import { join } from 'path';
 import { execFileAsync } from './fileUtils.js';
 
 /**
- * Choose which discovered pg_dump to run given the server's major: the closest binary whose major is >= the server's. Pure and exported for tests (discovery I/O lives in resolvePgDump).
+ * Choose the closest client major >= the server's, preserving discovery order on ties.
  *
  * @param {number|null} serverMajor - server's PG major version (null = unknown)
- * @param {Array<{binary: string, major: number}>} candidates - runnable pg_dumps
+ * @param {Array<{binary: string, major: number}>} candidates - runnable clients
  * @returns {string|null} chosen binary path, or null if none discovered
  */
-export function pickPgDump(serverMajor, candidates) {
+function pickPgTool(serverMajor, candidates) {
   if (!candidates?.length) return null;
   // Unknown server version: trust the first (PATH) entry.
   if (!Number.isFinite(serverMajor)) return candidates[0].binary;
@@ -29,31 +31,31 @@ export function pickPgDump(serverMajor, candidates) {
   return [...candidates].sort((a, b) => b.major - a.major)[0].binary;
 }
 
-/** Read a pg_dump binary's major version (`pg_dump --version` → "pg_dump (PostgreSQL) 17.10 (Homebrew)"), or null if not runnable. */
-async function pgDumpMajor(binary) {
-  const { stdout } = await execFileAsync(binary, ['--version']).catch(() => ({ stdout: '' }));
-  const m = stdout.match(/PostgreSQL\)\s+(\d+)/i);
-  return m ? parseInt(m[1], 10) : null;
-}
+export { pickPgTool as pickPgDump };
 
-/** Enumerate candidate pg_dump locations: the bare PATH binary, then versioned Homebrew kegs and Postgres.app bundles (where PATH order silently picks the wrong major). */
-export async function discoverPgDumpCandidates() {
-  // The PORTOS_PGDUMP override is NOT a candidate: resolvePgDumpBinary honors it before discovery.
-  const paths = ['pg_dump']; // whatever PATH resolves — preserves the old default
+async function discoverPgToolCandidates(tool) {
+  const paths = [tool];
   const kegDirs = ['/opt/homebrew/opt', '/usr/local/opt', '/Applications/Postgres.app/Contents/Versions'];
   for (const dir of kegDirs) {
     const entries = await readdir(dir).catch(() => []);
     for (const entry of entries) {
       if (dir.endsWith('Versions') || entry.startsWith('postgresql')) {
-        paths.push(join(dir, entry, 'bin', 'pg_dump'));
+        paths.push(join(dir, entry, 'bin', tool));
       }
     }
   }
-  // Probe versions concurrently; `[...new Set(paths)]` de-dups keeping priority order, which Promise.all preserves (PATH > kegs).
-  const probed = await Promise.all(
-    [...new Set(paths)].map(async (binary) => ({ binary, major: await pgDumpMajor(binary) }))
-  );
-  return probed.filter(c => c.major != null);
+  // Promise.all preserves PATH priority for candidates with equal versions.
+  const probed = await Promise.all(paths.map(async binary => {
+    const { stdout } = await execFileAsync(binary, ['--version']).catch(() => ({ stdout: '' }));
+    const version = stdout.match(/PostgreSQL\)\s+(\d+)(?:\.(\d+))?/i);
+    return version && { binary, major: Number(version[1]), minor: Number(version[2] ?? 0) };
+  }));
+  return probed.filter(Boolean);
+}
+
+export async function discoverPgDumpCandidates() {
+  const candidates = await discoverPgToolCandidates('pg_dump');
+  return candidates.map(({ binary, major }) => ({ binary, major }));
 }
 
 /**
@@ -65,7 +67,7 @@ export async function discoverPgDumpCandidates() {
  */
 export async function resolvePgDump(serverMajor) {
   const candidates = await discoverPgDumpCandidates();
-  const binary = pickPgDump(serverMajor, candidates) || 'pg_dump';
+  const binary = pickPgTool(serverMajor, candidates) || 'pg_dump';
   const chosen = candidates.find(c => c.binary === binary);
   const satisfies = !Number.isFinite(serverMajor) || !chosen || chosen.major >= serverMajor;
   return { binary, satisfies };
@@ -87,6 +89,16 @@ export async function resolvePgDumpBinary(serverMajor) {
     return resolvePgDump(serverMajor);
   }
   return { binary: 'pg_dump', satisfies: true };
+}
+
+/** Select the closest suitable psql major, favoring the newest patch within it. */
+export async function resolvePsqlBinary(serverMajor) {
+  if (process.env.PORTOS_PSQL) return process.env.PORTOS_PSQL;
+  const candidates = await discoverPgToolCandidates('psql');
+  // Patched clients can understand dump commands that older clients in the
+  // same release series reject (e.g. \restrict).
+  candidates.sort((a, b) => b.major - a.major || b.minor - a.minor);
+  return pickPgTool(serverMajor, candidates) ?? 'psql';
 }
 
 /** Build a libpq environment from the pool's captured connection policy.
