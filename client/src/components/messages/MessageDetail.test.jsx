@@ -36,15 +36,28 @@ const baseMessage = {
   bodyFull: true,
 };
 
-function renderMessage(message) {
+function renderMessage(message, accounts = [{ id: 'acct-1', name: 'Personal' }]) {
   return render(
     <MessageDetail
       message={message}
-      accounts={[{ id: 'acct-1', name: 'Personal' }]}
+      accounts={accounts}
       onBack={() => {}}
     />,
   );
 }
+
+it.each([
+  [{ type: 'teams' }, false, false],
+  [{ type: 'teams', actions: [] }, false, false],
+  [{ type: 'gmail', actions: [] }, false, false],
+  [{ type: 'gmail', actions: ['archive'] }, true, false],
+  [{ type: 'outlook' }, true, true],
+])('renders only supported detail actions for %j', async (account, archive, remove) => {
+  renderMessage(baseMessage, [{ id: 'acct-1', ...account }]);
+  await act(async () => {});
+  expect(Boolean(screen.queryByRole('button', { name: 'Archive' }))).toBe(archive);
+  expect(Boolean(screen.queryByRole('button', { name: 'Delete' }))).toBe(remove);
+});
 
 // Reads the CSP directive string the iframe's own document head carries —
 // the mechanism that actually blocks the fetch, independent of whether the

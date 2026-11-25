@@ -846,7 +846,23 @@ describe('Messages Routes', () => {
   });
 });
 
-describe('message browser action conflict envelope', () => {
+describe('message action refusals', () => {
+  it.each(['archive', 'delete'])('returns a typed 501 for Teams %s without broadcasting a change', async action => {
+    const { executeAction: actualExecuteAction } = await vi.importActual('../services/messageActions.js');
+    const app = express();
+    const emit = vi.fn();
+    app.set('io', { emit });
+    app.use(express.json());
+    app.use('/api/messages', messagesRoutes);
+    messageAccounts.getAccount.mockResolvedValueOnce({ type: 'teams' });
+    messageSync.getMessage.mockResolvedValueOnce({ id: VALID_UUID_2 });
+    executeAction.mockImplementationOnce(actualExecuteAction);
+    const response = await request(app).post(`/api/messages/${VALID_UUID}/${VALID_UUID_2}/action`).send({ action });
+    expect(response.status).toBe(501);
+    expect(response.body).toMatchObject({ error: `${action} not supported for teams`, code: 'ACTION_NOT_SUPPORTED' });
+    expect(emit).not.toHaveBeenCalledWith('messages:changed', expect.anything());
+  });
+
   it('preserves both IDs and returns a typed 409 without broadcasting a change', async () => {
     const app = express();
     const emit = vi.fn();
