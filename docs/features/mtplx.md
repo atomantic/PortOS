@@ -290,8 +290,8 @@ single-token Qwen-style markers, and Inkling uses a native message protocol, so 
 as the only reasoning control. When an HTML Pages run through a local MTPLX
 provider times out with no answer text and MTPLX's request log
 (`<MTPLX_HOME or ~/.mtplx>/logs/request-log-<port>.jsonl`) holds exactly one request
-for the run's window and model, the saved page error adds the completion-token
-count and says the deadline went to reasoning. Only counters and the request id
+for the run's window and model, cancelled by the run and begun after it, the saved
+page error adds the completion-token count and says no answer text was received. Only counters and the request id
 are read; with concurrent requests or no log the plain timeout stays.
 
 Measured on a 128 GB Apple Silicon host (warm, 3 samples), the Optimized-Speed

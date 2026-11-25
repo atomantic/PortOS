@@ -85,7 +85,7 @@ const settled = (id) => vi.waitFor(async () => {
   const run = await readRun(id);
   expect(['complete', 'failed']).toContain(run.status);
   return run;
-});
+}, { timeout: 10_000 });
 
 beforeEach(() => {
   store.clear();
@@ -250,7 +250,7 @@ describe('other targets', () => {
   describe('a local MTPLX route that times out', () => {
     let home;
     const timeoutError = () => runPromptThroughProvider.mockRejectedValue(new Error('CLI run timed out after 1200s'));
-    const logLine = (offsetMs, extra = {}) => JSON.stringify({ request_id: `req-${offsetMs}`, logged_at_s: (Date.now() + offsetMs) / 1000, request_model: 'example-default', completion_tokens: 52256, request_last_user_preview: 'PRIVATE-PROMPT', ...extra });
+    const logLine = (offsetMs, extra = {}) => JSON.stringify({ request_id: `req-${offsetMs}`, logged_at_s: (Date.now() + offsetMs) / 1000, request_model: 'example-default', request_cancelled: true, request_elapsed_s: 5, completion_tokens: 52256, request_last_user_preview: 'PRIVATE-PROMPT', ...extra });
     const runRoute = async () => {
       const [queued] = await startRuns({ routes: [{ providerId: 'example-api', effort: 'xhigh' }], pages: PAGES.slice(0, 1) });
       return (await settled(queued.id)).pages[0];
@@ -271,7 +271,7 @@ describe('other targets', () => {
       timeoutError();
       await writeFile(join(home, 'logs', 'request-log-8000.jsonl'), `${logLine(-3_600_000)}\n${logLine(10_000)}\n`);
       const page = await runRoute();
-      expect(page.error).toBe('CLI run timed out after 1200s The local MTPLX request spent the whole deadline reasoning: 52256 completion tokens and no answer text.');
+      expect(page.error).toBe('CLI run timed out after 1200s The run ended reasoning-only: MTPLX generated 52256 completion tokens before the deadline and no answer text was received.');
       expect(page.html).toBe('');
       expect(JSON.stringify(page)).not.toContain('PRIVATE-PROMPT');
       expect(runPromptThroughProvider.mock.calls[0][0]).toMatchObject({ model: 'example-default', effort: 'xhigh', allowFallback: false });
@@ -279,6 +279,8 @@ describe('other targets', () => {
 
     it.each([
       ['concurrent requests', (l) => `${l(10_000)}\n${l(20_000, { request_id: 'other' })}\n`],
+      ['a request another client finished normally', (l) => `${l(10_000, { request_cancelled: false })}\n`],
+      ['a request that began before the run', (l) => `${l(10_000, { request_elapsed_s: 7_200 })}\n`],
       ['another model', (l) => `${l(10_000, { request_model: 'someone-else' })}\n`],
       ['no request in the window', (l) => `${l(-3_600_000)}\n`],
       ['a request that produced no tokens', (l) => `${l(10_000, { completion_tokens: 0 })}\n`],

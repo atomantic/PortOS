@@ -41,13 +41,26 @@ function project(line) {
     requestId: typeof record.request_id === 'string' ? record.request_id : null,
     loggedAtMs: record.logged_at_s * 1000,
     model: typeof record.request_model === 'string' ? record.request_model : null,
+    // PortOS stopping the run is a client cancel; a request another client finished normally is not this run's.
+    cancelled: record.request_cancelled === true || record.stream_cancelled_by_client === true,
+    startedAtMs: Number.isFinite(record.request_elapsed_s) ? (record.logged_at_s - record.request_elapsed_s) * 1000 : null,
     completionTokens: Math.max(counter(record.completion_tokens), counter(record.generated_tokens), counter(record.streamed_completion_tokens)),
   };
 }
 
+/** `attributeMtplxRequest`, re-read for a short while: MTPLX writes the record when the cancelled request unwinds, which can trail the caller's deadline. */
+export async function awaitMtplxRequest(args, { attempts = 4, delayMs = 500 } = {}) {
+  let result = await attributeMtplxRequest(args);
+  for (let attempt = 1; attempt < attempts && result.reason === 'no request in window'; attempt += 1) {
+    await new Promise((resolve) => { setTimeout(resolve, delayMs); });
+    result = await attributeMtplxRequest(args);
+  }
+  return result;
+}
+
 /**
  * The completion counter of the one MTPLX request that ended inside `[startedAtMs, endedAtMs]`.
- * `matched` carries `{ requestId, completionTokens }`; `unavailable` (no readable log) and `unattributed` (no request, several requests, or a different model) carry a `reason`.
+ * `matched` carries `{ requestId, completionTokens }`; `unavailable` (no readable log) and `unattributed` (no request, several requests, a request this run did not cancel or begin, or a different model) carry a `reason`.
  */
 export async function attributeMtplxRequest({ logPath, startedAtMs, endedAtMs, model = null }) {
   let text;
@@ -55,8 +68,11 @@ export async function attributeMtplxRequest({ logPath, startedAtMs, endedAtMs, m
   const from = startedAtMs - CLOCK_SLACK_MS;
   const to = endedAtMs + LATE_GRACE_MS;
   const inWindow = text.split('\n').map(project).filter((r) => r && r.loggedAtMs >= from && r.loggedAtMs <= to);
-  if (inWindow.length !== 1) return { status: 'unattributed', reason: inWindow.length ? 'concurrent requests' : 'no request in window' };
   const [request] = inWindow;
+  if (inWindow.length !== 1) return { status: 'unattributed', reason: inWindow.length ? 'concurrent requests' : 'no request in window' };
+  if (!request.cancelled) return { status: 'unattributed', reason: 'request was not cancelled by the run' };
+  // A request that began before the run did is another client's, still ending inside the window.
+  if (request.startedAtMs !== null && request.startedAtMs < from) return { status: 'unattributed', reason: 'request began before the run' };
   if (model && request.model && request.model !== model) return { status: 'unattributed', reason: 'request names a different model' };
   return { status: 'matched', requestId: request.requestId, completionTokens: request.completionTokens };
 }

@@ -14,7 +14,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { ASSESSABLE_RUNTIMES, LOCAL_RUNTIMES, localEndpointPort } from '../../lib/localProviderRuntime.js';
-import { attributeMtplxRequest, mtplxRequestLogPath } from '../../lib/mtplxRequestLog.js';
+import { awaitMtplxRequest, mtplxRequestLogPath } from '../../lib/mtplxRequestLog.js';
 import { isEmbeddingModel } from '../../lib/localModelHeuristics.js';
 import { isToolFreeOneShotProvider } from '../../lib/provider/providerVendors.js';
 import {
@@ -358,16 +358,16 @@ async function processRun(id) {
 const TIMEOUT_MESSAGE = /timed out|timeout/i;
 
 /**
- * The benchmark error for a local MTPLX run that spent its whole deadline reasoning: it timed out with no answer text and MTPLX's own request log attributes exactly one request, with output tokens, to this run. Null keeps the caller's generic timeout, so a concurrent client, a missing log or a different model never produces a claim. Only the completion counter is read; the model, effort and prompt of the run are untouched.
+ * The benchmark error for a local MTPLX run that produced output tokens but no answer: it timed out with no answer text and MTPLX's own request log holds exactly one request, cancelled by this run and begun after it, with output tokens. Null keeps the caller's generic timeout, so a concurrent client, a missing log or a different model never produces a claim. Only the completion counter is read; the model, effort and prompt of the run are untouched.
  */
 async function reasoningOnlyTimeoutError({ provider, route, message, startedAtMs, aborted }) {
   if (aborted || !TIMEOUT_MESSAGE.test(message)) return null;
   const { isMtplxProvider } = await import('../mtplxServerManager.js');
   const port = isMtplxProvider(provider) ? localEndpointPort(provider.endpoint) : null;
   if (!port) return null;
-  const attribution = await attributeMtplxRequest({ logPath: mtplxRequestLogPath(port), startedAtMs, endedAtMs: Date.now(), model: route.model || null }).catch(() => null);
+  const attribution = await awaitMtplxRequest({ logPath: mtplxRequestLogPath(port), startedAtMs, endedAtMs: Date.now(), model: route.model || null }).catch(() => null);
   if (attribution?.status !== 'matched' || !(attribution.completionTokens > 0)) return null;
-  return `${message} The local MTPLX request spent the whole deadline reasoning: ${attribution.completionTokens} completion tokens and no answer text.`;
+  return `${message} The run ended reasoning-only: MTPLX generated ${attribution.completionTokens} completion tokens before the deadline and no answer text was received.`;
 }
 
 /**
