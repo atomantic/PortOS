@@ -5,7 +5,6 @@ import { harnessForProvider } from '../lib/provider/providerHarnesses.js';
 import { observeModelResource, observeModelMutations } from '../services/modelObservation.js';
 import { providerModeGroups } from '../lib/aiToolkit/internal/providerModes.js';
 import { tuiModeAddition } from '../lib/provider/providerModePairing.js';
-import { buildProviderGraphPreview, toManagementPreviewDto } from '../lib/provider/providerGraphPreview.js';
 import {
   createBinding,
   createConnection,
@@ -32,13 +31,12 @@ import { requestHasHostControl } from '../services/authGate.js';
 import { auditModelPins, clearModelPin } from '../services/modelPinAudit.js';
 import { providerCreateSchema, providerSchema, providerActiveSchema, validate } from '../lib/aiToolkit/validation.js';
 import { canRefreshModels, withRefreshCapability } from '../lib/aiToolkit/internal/modelFetchers.js';
-import { applyModelAccess, applyModelAccessList } from '../lib/aiToolkit/internal/modelAccess.js';
+import { applyModelAccess } from '../lib/aiToolkit/internal/modelAccess.js';
 import { ALLOWED_COMMANDS } from '../cos-runner/allowedCommands.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import {
-  getProviderRuntimeStatus,
   getProviderRuntimeStatuses,
 } from '../services/provider/providerRuntimeInstaller.js';
 import { harnessCatalogRuntime, refreshHarnessModels } from '../services/harnesses.js';
@@ -473,30 +471,6 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
       throw new ServerError('Provider not found', { status: 404 });
     }
     res.json(presentProvider(provider, await detectSystemCapabilities()));
-  }));
-
-  /**
-   * READ-ONLY preview of the provider connection graph (#6366) — what an
-   * import WOULD create from the records this install already runs, and which
-   * records it would leave isolated, with reasons.
-   *
-   * Nothing is persisted, no provider is written, and no AI provider is
-   * contacted: this is a pure projection of `providers.json` and must stay one,
-   * because it is meant to be safe to open from a configuration screen. The
-   * flat `GET /api/providers` shape is untouched and remains the execution
-   * contract; `activeProvider` here is the same executable provider id string.
-   *
-   * A client talking to a server without this endpoint gets a 404 and falls
-   * back to the flat list — an explicit unsupported answer, not a guess.
-   */
-  router.get('/management/preview', asyncHandler(async (_req, res) => {
-    const data = await providerService.getAllProviders();
-    // Scoped like every other picker payload: the preview's connection catalogs
-    // and binding model menus are what the Backend Connections page offers, so
-    // an unscoped read here would contradict the model-access policy four
-    // handlers below (docs/MODEL_ACCESS.md).
-    const scoped = { ...data, providers: applyModelAccessList(data.providers) };
-    res.set('Cache-Control', 'no-store').json(toManagementPreviewDto(buildProviderGraphPreview(scoped)));
   }));
 
   /**
@@ -1092,18 +1066,6 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
   // already appends it there for every BYO-runtime installer.
   router.post('/runtimes/install', asyncHandler(async (req, res) => {
     await streamRuntimeInstall(req, res, validateRequest(runtimeQuerySchema, req.query).runtime);
-  }));
-
-  // Back-compat for a client build that predates the generalized routes (a
-  // deployed `client/dist` can lag the server across an upgrade). Both mirror
-  // the old OpenCode-only response shape exactly.
-  router.get('/opencode/installation', asyncHandler(async (_req, res) => {
-    const status = await getProviderRuntimeStatus('opencode');
-    res.json({ installed: status.installed, npmAvailable: status.installable });
-  }));
-
-  router.post('/opencode/install', asyncHandler(async (req, res) => {
-    await streamRuntimeInstall(req, res, 'opencode');
   }));
 
   // Provider status routes MUST be defined before toolkit routes,

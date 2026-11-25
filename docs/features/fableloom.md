@@ -447,7 +447,7 @@ a starting image are mutually exclusive.
 
 The shot planner starts a background run with `POST /api/fableloom/:id/episodes/:episodeId/shots/start`.
 `GET .../shots/status` reattaches to its latest state; `POST .../shots/cancel` stops after the active provider call.
-The UI receives `fableloom:shots:run` snapshots and reloads status on reconnect. The legacy `POST .../shots/plan` waits for the same durable worker and returns the completed plan for existing callers; its HTTP connection does not own that worker. Both start paths accept explicit resume.
+The UI receives `fableloom:shots:run` snapshots and reloads status on reconnect. The start path accepts explicit resume.
 
 Draft and review run on one source scene at a time with the episode's compact graph digest. A final text consistency review receives every shot action/dialogue, the graph, and scene-boundary compositions; full render prompts were already reviewed per scene, and the complete teleplay is not resent. Existing stage and provider timeout settings stay in effect; large inputs show a reminder to check the effective timeout. Stage failures name the stage, round, scene and provider.
 

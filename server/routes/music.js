@@ -4,7 +4,6 @@
  *   GET  /api/music/engines              → { engines, defaultEngine }
  *   POST /api/music/describe             → { description, llm }
  *   POST /api/music/lyrics               → { lyrics, llm }
- *   POST /api/music/waveform             → { sketch, llm }
  *   POST /api/music/code                 → { language, code, llm }
  *   POST /api/music/generate             → { jobId, position, status }
  *
@@ -45,9 +44,7 @@ import {
 import { listEngineModels, addAudioModel, removeAudioModel, isValidRepoId } from '../services/audioModels.js';
 import { listMusicEngineCapabilities } from '../services/musicEngineCapabilities.js';
 import { describeMusic, writeLyrics } from '../services/musicDesigner.js';
-import { drawWaveSketch } from '../services/musicWaveform.js';
 import { MUSIC_CODE_LANGUAGES, MUSIC_CODE_MAX, previewMusicCodePrompt, writeMusicCode } from '../services/musicCode.js';
-import { PAINTED_CANVAS_LIMITS } from '../lib/paintedCanvas.js';
 import { startHfDownloadStream } from '../services/hfDownloadStream.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
@@ -377,26 +374,6 @@ router.post('/lyrics', asyncHandler(async (req, res) => {
     effort: body.effort,
   });
   res.json({ lyrics, llm, sentPrompt, promptAdditions });
-}));
-
-const waveformSchema = z.object({
-  description: z.string().trim().min(1, 'description is required').max(8000),
-  lyrics: z.string().trim().max(20000).optional(),
-  durationSec: z.number().min(PAINTED_CANVAS_LIMITS.DURATION_MIN_SEC).max(PAINTED_CANVAS_LIMITS.DURATION_MAX_SEC).optional(),
-  // The painting to revise — normalized (and size-bounded) by the service.
-  current: z.record(z.string(), z.unknown()).optional(),
-  review: z.boolean().optional(),
-  // The drawing contract is fixed (no meta-prompt override like describe/lyrics).
-  ...designerPickerShape,
-}).omit({ template: true });
-
-// POST /api/music/waveform — stateless: have the LLM PAINT the music on a
-// spectrogram canvas (lib/paintedCanvas.js) without storing it. The
-// designer draws via POST /api/tracks/:id/waveform/draw, which persists it.
-// One explicit user action per call.
-router.post('/waveform', asyncHandler(async (req, res) => {
-  const body = validateRequest(waveformSchema, req.body ?? {});
-  res.json(await drawWaveSketch(body));
 }));
 
 const codeShape = z.object({

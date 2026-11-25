@@ -61,7 +61,6 @@ import { HANDHELD_SEED_MAX } from '../lib/handheldCamera.js';
 import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
 import { submitVideoGenJob } from '../services/videoGen/submitJob.js';
 import { previewVideoPrompt } from '../services/videoGen/promptPreview.js';
-import { resolveReactorApiKey, mintReactorToken } from '../services/videoGen/reactor.js';
 import { isVideoModeUsable, VIDEO_GEN_MODE } from '../services/videoGen/modes.js';
 import { REFERENCE_AUDIO_FIELDS, VIDEO_REFERENCE_IMAGE_FIELDS } from '../services/videoGen/requestFields.js';
 import { attachSseClient, cancelJob, listJobs, laneConcurrencyFor } from '../services/mediaJobQueue/index.js';
@@ -242,18 +241,6 @@ router.get('/status', asyncHandler(async (_req, res) => {
     // sleep is there to avoid.
     displaySleepOnRender: isDisplaySleepEnabled(s.videoGen),
   });
-}));
-
-// Mints a short-lived reactor.inc session JWT scoped to `reactor/fast-h3`
-// (#6214) — the raw REACTOR_API_KEY never reaches the client. Load-bearing
-// security pattern: never cached, and the scope/session bound is set by
-// reactor.js#mintReactorToken, not by the caller.
-router.get('/reactor/token', asyncHandler(async (_req, res) => {
-  res.set('Cache-Control', 'private, no-store');
-  const settings = await getSettings();
-  const apiKey = resolveReactorApiKey(settings);
-  const { jwt, expiresAt } = await mintReactorToken(apiKey);
-  res.json({ jwt, expires_at: expiresAt });
 }));
 
 // `installed` here means "fully ready to render" — both the venv binary

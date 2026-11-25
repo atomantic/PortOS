@@ -48,7 +48,7 @@ describe('useInstallStream', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const { result } = renderHook(() => useInstallStream('/api/providers/opencode/install', {
+    const { result } = renderHook(() => useInstallStream('/api/providers/runtimes/install', {
       enabled: true,
       method: 'POST',
     }));
@@ -57,7 +57,7 @@ describe('useInstallStream', () => {
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/providers/opencode/install',
+      '/api/providers/runtimes/install',
       expect.objectContaining({ method: 'POST' }),
     );
     expect(MockEventSource.instances).toHaveLength(0);

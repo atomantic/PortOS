@@ -389,8 +389,6 @@ export const privacyOptOutPassSchema = z.object({
   ...subjectIdField,
 }).strict();
 
-// POST /api/privacy/optout/verify — run only the verification pass. No body.
-export const privacyOptOutVerifySchema = z.object({ ...subjectIdField }).strict();
 
 // A basic 5-field cron expression validator (minute hour dom month dow). Kept
 // permissive (tokens can be `*`, numbers, ranges, lists, steps) — the scheduler

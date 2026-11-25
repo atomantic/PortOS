@@ -59,8 +59,7 @@ export function resolveReactorApiKey(settings) {
 
 /**
  * Mint a short-lived session JWT scoped to `reactor/fast-h3`, bounded to one
- * concurrent session. Called by the `/api/video-gen/reactor/token` route AND
- * internally before every submit — the raw API key never leaves this module.
+ * concurrent session. Called internally before every submit — the raw API key never leaves this module.
  */
 export async function mintReactorToken(apiKey) {
   if (!apiKey) {
