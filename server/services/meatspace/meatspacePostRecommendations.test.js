@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Recommendation composition (issue #2100). The pure functions
-// (composePostRecommendations / weakestSkillFromStats / stalledProgressions)
+// (composePostRecommendations / weakestSkillsFromStats / stalledProgressions)
 // need no mocks; getPostRecommendations is exercised through the same
 // mocked-fileUtils harness the other POST service tests use.
 const state = { sessions: [], training: [], memoryItems: [], reviewSchedule: { skills: {} }, morse: { kochLevel: null, settings: null, rounds: [] }, config: {} };
