@@ -181,6 +181,23 @@ describe('extractAndStoreMemories', () => {
     });
   });
 
+  it('logs the matched memory ID without duplicate prose', async () => {
+    classifyMemories.mockResolvedValue({ usedLLM: true, memories: [preference('Example private content', 0.9)] });
+    searchMemories.mockResolvedValue({
+      memories: [{ id: 'active-match', summary: 'Example private summary', relevance: 0.82 }]
+    });
+
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await extractAndStoreMemories(agentId, taskId, output, task);
+
+      expect(log).toHaveBeenCalledWith('🧠 Skipping duplicate memory (matches active-match)');
+      expect(log.mock.calls.flat().join(' ')).not.toMatch(/example private/i);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('suppresses a pending duplicate using the normalized summary prefix even without an embedding', async () => {
     const summary = 'Written summaries before meetings should include decisions, their owners, and review dates';
     const duplicate = preference(`${summary} so attendees can prepare`, 0.84);

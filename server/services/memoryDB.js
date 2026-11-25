@@ -197,7 +197,7 @@ async function insertSymmetricRelatedLinks(client, id, relatedIds) {
 
 export async function createMemory(data, embedding = null) {
   const memory = await withTransaction(client => insertMemory(client, data, embedding));
-  console.log(`🧠 Memory created: ${memory.type} - ${memory.summary.substring(0, 50)}...`);
+  console.log(`🧠 Memory created: ${memory.id} (${memory.type})`);
   cosEvents.emit('memory:created', { id: memory.id, type: memory.type, summary: memory.summary });
   return memory;
 }
