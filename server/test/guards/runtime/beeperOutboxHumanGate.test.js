@@ -18,35 +18,22 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readdirSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
-import { readText, REPO_ROOT } from '../../../../scripts/lib/guardCorpus.js';
+import { join } from 'node:path';
+import { readText, REPO_ROOT, workingTreeFiles } from '../../../../scripts/lib/guardCorpus.js';
 
 const SERVER_ROOT = join(REPO_ROOT, 'server');
-
-function collectSources(dir, out = []) {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      collectSources(full, out);
-      continue;
-    }
-    if (!entry.name.endsWith('.js')) continue;
-    out.push({ path: relative(SERVER_ROOT, full).split(sep).join('/'), source: readText(full) });
-  }
-  return out;
-}
-
-const SOURCES = collectSources(SERVER_ROOT);
-const PRODUCTION_SOURCES = SOURCES.filter((file) => !file.path.endsWith('.test.js'));
+const SOURCE_PATHS = workingTreeFiles(SERVER_ROOT, ['*.js'])
+  .filter((path) => !path.split('/').some((segment) => segment === 'node_modules' || segment.startsWith('.')));
+const PRODUCTION_SOURCES = SOURCE_PATHS
+  .filter((path) => !path.endsWith('.test.js'))
+  .map((path) => ({ path, source: readText(join(SERVER_ROOT, path)) }));
 
 // The send entry point, and the two service functions that reach it.
 const SEND_SYMBOLS = ['sendOutboxEntry', 'createOutboxEntry'];
 
 describe('beeper outbox has no agent-initiated send path (#36)', () => {
   it('scanned a recognizably complete server tree', () => {
-    expect(SOURCES.length).toBeGreaterThan(200);
+    expect(SOURCE_PATHS.length).toBeGreaterThan(200);
     expect(PRODUCTION_SOURCES.length).toBeGreaterThan(100);
     expect(PRODUCTION_SOURCES.some((file) => file.path === 'services/beeper/beeperOutbox.js')).toBe(true);
   });
