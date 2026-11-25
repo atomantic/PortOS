@@ -10,6 +10,8 @@
  * Veo is intentionally included under the all-model scope adopted on 2026-10-22,
  * reversing the earlier project exclusion in #12344; see docs/RUNWAY_MODELS.md.
  */
+
+import { coverOrLongest, durationLengths, matchResolution } from './hostedVideoClipRules.js';
 import { RUNWAY_CATALOG_SNAPSHOT } from './runwayCatalogSnapshot.js';
 
 /** Date the schemas and prices below were last verified against Runway's docs. */
@@ -106,11 +108,8 @@ export const runwayModelTakesText = (model) => !!model?.textToVideo;
 export const runwayVideoResolutions = (model) => (model?.size ? Object.keys(model.size.byResolution) : []);
 
 /** The model's spelling of `requested` (case-insensitive), else its default; null without a size parameter. */
-export function resolveRunwayVideoResolution(model, requested) {
-  if (!model?.size) return null;
-  const want = typeof requested === 'string' ? requested.trim().toLowerCase() : '';
-  return runwayVideoResolutions(model).find((r) => r.toLowerCase() === want) || model.size.default;
-}
+export const resolveRunwayVideoResolution = (model, requested) =>
+  matchResolution(runwayVideoResolutions(model), model?.size?.default ?? null, requested);
 
 /**
  * The clip length `model` renders for a request of `seconds`: the shortest
@@ -118,25 +117,13 @@ export function resolveRunwayVideoResolution(model, requested) {
  * be under-covered, and nothing loops or stretches footage). An absent or
  * invalid request gets the model's default.
  */
-export function coerceRunwayVideoSeconds(model, seconds) {
-  const rule = model?.duration;
-  if (!rule) return null;
-  const n = Number(seconds);
-  if (seconds == null || seconds === '' || !Number.isFinite(n) || n <= 0) return rule.defaultSec;
-  if (rule.kind === 'enum') return rule.values.find((v) => v >= n - 1e-6) ?? rule.values[rule.values.length - 1];
-  return Math.min(rule.max, Math.max(rule.min, Math.ceil(n - 1e-6)));
-}
+export const coerceRunwayVideoSeconds = (model, seconds) => coverOrLongest(model?.duration, seconds);
 
 /** What a video-gen form's unlabeled pick is called in the prompt. */
 export const RUNWAY_FORM_REFERENCE_LABEL = 'what it shows';
 
 /** Clip lengths a model renders, for a length picker. */
-export function runwayVideoLengths(model) {
-  const rule = model?.duration;
-  if (rule?.kind === 'enum') return [...rule.values];
-  if (rule?.kind === 'range') return Array.from({ length: rule.max - rule.min + 1 }, (_, i) => rule.min + i);
-  return [];
-}
+export const runwayVideoLengths = (model) => durationLengths(model?.duration);
 
 const ratioOf = (r) => { const [w, h] = String(r).split(':').map(Number); return w / h; };
 const aspectOf = ({ aspectRatio, width, height }) => {
