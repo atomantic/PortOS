@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
-import { accountTypeCanSend, accountTypeHasReadState, sendViaForAccountType, syncModesForAccountType } from '../lib/messageTransport.js';
+import { accountTypeCanSend, accountTypeHasReadState, actionsForAccountType, sendViaForAccountType, syncModesForAccountType } from '../lib/messageTransport.js';
 
 const ACCOUNTS_FILE = join(PATHS.messages, 'accounts.json');
 // All account IDs share this file, including sync metadata writes.
@@ -23,14 +23,15 @@ async function saveAccounts(accounts) {
   noteReadinessChanged();
 }
 
-// `canSend`, `syncModes` and `hasReadState` are derived from the transport table, never
+// Account capabilities are derived from the transport table, never
 // stored: they flip with the code that implements a provider, not with data an install
 // carries. `syncModes` tells the UI which sync actions to offer (#9968).
 const withDerivedCapabilities = account => ({
   ...account,
   canSend: accountTypeCanSend(account.type),
   syncModes: [...syncModesForAccountType(account.type)],
-  hasReadState: accountTypeHasReadState(account.type)
+  hasReadState: accountTypeHasReadState(account.type),
+  actions: [...actionsForAccountType(account.type)]
 });
 
 export async function listAccounts() {
@@ -74,7 +75,7 @@ export async function createAccount(data) {
     };
     await saveAccounts(accounts);
     console.log(`📧 Message account created: ${id} (${data.type})`);
-    return accounts[id];
+    return withDerivedCapabilities(accounts[id]);
   });
 }
 
@@ -89,7 +90,7 @@ export async function updateAccount(id, updates) {
     if (syncConfig) accounts[id].syncConfig = { ...accounts[id].syncConfig, ...syncConfig };
     accounts[id].updatedAt = new Date().toISOString();
     await saveAccounts(accounts);
-    return accounts[id];
+    return withDerivedCapabilities(accounts[id]);
   });
 }
 

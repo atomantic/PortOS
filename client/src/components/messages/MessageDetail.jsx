@@ -13,6 +13,7 @@ import {
 } from '../../services/apiMessages.js';
 import useListResource from '../../hooks/useListResource';
 import ListLoadError from '../ui/ListLoadError';
+import { supportedMessageActions } from './messageActionCapabilities';
 import { useSingleFlight } from '../../hooks/useSingleFlight';
 
 // Any src/href/poster/url()/@import that points at a remote http(s) or
@@ -147,7 +148,9 @@ export default function MessageDetail({ message, accounts, onBack }) {
       .catch(err => console.warn(`⚠️ Failed to load voice mode setting: ${err.message}`));
   }, []);
 
-  const account = accounts.find(a => a.id === displayedMessage.accountId) || accounts[0];
+  const messageAccount = accounts.find(a => a.id === displayedMessage.accountId);
+  const account = messageAccount || accounts[0];
+  const actions = supportedMessageActions(displayedMessage, messageAccount);
 
   // Load thread messages if this message is part of a thread. A failed read
   // falls back to the single message but says so, so a missing conversation is
@@ -270,8 +273,8 @@ export default function MessageDetail({ message, accounts, onBack }) {
           <button onClick={handleGenerateReply} disabled={generating} aria-label="AI Reply" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-accent-2 hover:bg-port-accent-2/10 rounded transition-colors disabled:opacity-50" title="AI Reply"><Sparkles size={14} className={generating ? 'animate-pulse' : ''} /></button>
           <button onClick={handleRefresh} disabled={refreshing} aria-label="Refresh" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-accent hover:bg-port-accent/10 rounded transition-colors disabled:opacity-50" title="Refresh"><RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /></button>
           <span className="w-px h-4 bg-port-border mx-0.5" />
-          <button onClick={() => handleAction('archive')} disabled={!!actioning} aria-label="Archive" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-warning hover:bg-port-warning/10 rounded transition-colors disabled:opacity-50" title="Archive"><Archive size={14} /></button>
-          <button onClick={() => handleAction('delete')} disabled={!!actioning} aria-label="Delete" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-error hover:bg-port-error/10 rounded transition-colors disabled:opacity-50" title="Delete"><Trash2 size={14} /></button>
+          {displayedMessage.accountId && actions.includes('archive') && <button onClick={() => handleAction('archive')} disabled={!!actioning} aria-label="Archive" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-warning hover:bg-port-warning/10 rounded transition-colors disabled:opacity-50" title="Archive"><Archive size={14} /></button>}
+          {displayedMessage.accountId && actions.includes('delete') && <button onClick={() => handleAction('delete')} disabled={!!actioning} aria-label="Delete" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-error hover:bg-port-error/10 rounded transition-colors disabled:opacity-50" title="Delete"><Trash2 size={14} /></button>}
         </div>
       </div>
 

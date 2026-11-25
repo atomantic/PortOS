@@ -15,6 +15,7 @@ import {
 import { timeAgo, formatDateNumeric } from '../../utils/formatters';
 import { pluralize } from '../../lib/textUtils';
 import MessageDetail from './MessageDetail';
+import { supportedMessageActions } from './messageActionCapabilities';
 import AddToThreadButton from '../threads/AddToThreadButton';
 import { messageReadState, partitionAccountsBySyncMode } from '../../lib/messageSyncModes';
 import LoadFailedState from '../ui/LoadFailedState';
@@ -31,9 +32,6 @@ const ACTION_CONFIG = {
 const ACTION_ORDER = ['reply', 'review', 'archive', 'delete'];
 const INBOX_EVENTS = ['messages:sync:completed'];
 const EMPTY_MESSAGES = [];
-
-// Email sources that support archive/delete actions
-const ACTIONABLE_SOURCES = ['outlook', 'gmail'];
 
 const PRIORITY_DOT = {
   high: 'bg-port-error',
@@ -375,7 +373,7 @@ export default function InboxTab({ accounts }) {
     if (actionInProgress) return;
     const account = accountList.find(a => a.id === msg.accountId);
     if (!account) return toast.error('No account found for this message');
-    if (!ACTIONABLE_SOURCES.includes(msg.source || account.type)) {
+    if (!supportedMessageActions(msg, account).includes(action)) {
       return toast.error(`${action} not supported for ${msg.source || account.type}`);
     }
     setActionInProgress(msg.id);
@@ -609,6 +607,8 @@ export default function InboxTab({ accounts }) {
       <div className="space-y-1">
         {visibleMessages.map((msg) => {
           const ev = msg.evaluation;
+          const account = accountList.find(a => a.id === msg.accountId);
+          const actions = supportedMessageActions(msg, account);
           // 'unknown' (provider can't measure read state) renders neutrally, never as read or unread.
           const readState = messageReadState(msg);
           return (
@@ -654,16 +654,14 @@ export default function InboxTab({ accounts }) {
                   const cfg = ACTION_CONFIG[actionKey];
                   const Icon = cfg.icon;
                   const isRecommended = ev?.action === actionKey;
-                  const msgSource = msg.source || accountList.find(a => a.id === msg.accountId)?.type;
-                  const isActionable = ['archive', 'delete'].includes(actionKey) && ACTIONABLE_SOURCES.includes(msgSource);
+                  const isMessageAction = actionKey === 'archive' || actionKey === 'delete';
+                  if (isMessageAction && !actions.includes(actionKey)) return null;
 
                   const onClick = actionKey === 'reply'
                     ? (e) => { e.stopPropagation(); handleQuickReply(msg); }
                     : actionKey === 'review'
                       ? (e) => { e.stopPropagation(); openMessage(msg); }
-                      : isActionable
-                        ? (e) => handleAction(msg, actionKey, e)
-                        : (e) => { e.stopPropagation(); openMessage(msg); };
+                      : (e) => handleAction(msg, actionKey, e);
 
                   const title = isRecommended && ev?.reason
                     ? `AI: ${cfg.label} — ${ev.reason}`
@@ -681,7 +679,7 @@ export default function InboxTab({ accounts }) {
                       }`}
                       title={title} aria-label={title}
                     >
-                      {actionInProgress === msg.id && isActionable
+                      {actionInProgress === msg.id && isMessageAction
                         ? <Loader2 size={14} className="animate-spin" />
                         : <Icon size={14} />
                       }

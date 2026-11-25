@@ -517,3 +517,21 @@ describe('fetchFullToastMessage', () => {
     expect(fetchFullToastMessage({ updated: 0, total: 0 })).toBe('Nothing to fetch');
   });
 });
+
+it.each([
+  [{ type: 'teams' }, false],
+  [{ type: 'teams', actions: [] }, false],
+  [{ type: 'gmail', actions: ['archive'] }, true],
+])('renders only supported inbox actions for %j', async (capabilities, archive) => {
+  const account = { ...syncedAccount, ...capabilities };
+  const row = {
+    id: 'teams-message', accountId: account.id, source: account.type, subject: 'Example message',
+    date: HOUR_AGO, evaluation: { action: 'delete', reason: 'Example recommendation' },
+  };
+  api.getMessageInbox.mockResolvedValueOnce({ messages: [row] });
+  renderInbox([account]);
+  expect(await screen.findByText(row.subject)).toBeInTheDocument();
+  expect(Boolean(screen.queryByRole('button', { name: 'Archive' }))).toBe(archive);
+  expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Review' })).toBeInTheDocument();
+});
