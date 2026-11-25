@@ -272,7 +272,8 @@ The complete server, client, DB, lint, build, and smoke suite runs:
   and the memo records that related selection narrows with were never saved
   (#16424). A miss is caught by the next run that completes, which covers every
   merge since the previous one started;
-- on the schedule, 09:17 and 21:17 UTC;
+- on the schedule, 09:17 and 21:17 UTC, in a concurrency group of its own so a
+  push to `main` never replaces a scheduled run waiting behind it;
 - from manual workflow dispatch;
 - as a reusable workflow called by a release whose tree has no verifiable gate.
 
