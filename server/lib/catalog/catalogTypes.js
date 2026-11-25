@@ -552,13 +552,6 @@ export const MEDIA_KINDS = Object.freeze(MEDIA_KIND_REGISTRY.map((m) => Object.f
 /** Frozen ordered list of media kind ids — the canonical enum source. */
 export const MEDIA_KIND_IDS = Object.freeze(MEDIA_KINDS.map((m) => m.id));
 
-const MEDIA_BY_ID = Object.freeze(Object.fromEntries(MEDIA_KINDS.map((m) => [m.id, m])));
-
-/** Look up a media-kind entry by id. Returns `undefined` for unknown ids. */
-export function getMediaKind(id) {
-  return MEDIA_BY_ID[id];
-}
-
 /**
  * Run a payload through its registered upgrader chain up to the current
  * version. Each upgrader is keyed by the FROM version. Returns the upgraded

@@ -1,10 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  KIMI_CLI_ID,
-  KIMI_TUI_ID,
   isKimiCommand,
-  isKimiCliProvider,
-  isKimiTuiProvider,
   ensureKimiHeadlessArgs,
   ensureKimiTuiArgs,
   prepareKimiPrompt,
@@ -23,20 +19,6 @@ describe('kimi.js', () => {
       expect(isKimiCommand('')).toBe(false);
       expect(isKimiCommand(null)).toBe(false);
       expect(isKimiCommand(undefined)).toBe(false);
-    });
-  });
-
-  describe('provider predicates', () => {
-    it('detects the CLI provider by id or type+command', () => {
-      expect(isKimiCliProvider({ id: KIMI_CLI_ID })).toBe(true);
-      expect(isKimiCliProvider({ type: 'cli', command: '/usr/local/bin/kimi' })).toBe(true);
-      expect(isKimiCliProvider({ type: 'tui', command: 'kimi' })).toBe(false);
-      expect(isKimiCliProvider({ id: 'grok-cli', type: 'cli', command: 'grok' })).toBe(false);
-    });
-    it('detects the TUI provider by id or type+command', () => {
-      expect(isKimiTuiProvider({ id: KIMI_TUI_ID })).toBe(true);
-      expect(isKimiTuiProvider({ type: 'tui', command: 'kimi' })).toBe(true);
-      expect(isKimiTuiProvider({ type: 'cli', command: 'kimi' })).toBe(false);
     });
   });
 

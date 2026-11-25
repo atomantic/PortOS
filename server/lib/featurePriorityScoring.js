@@ -5,7 +5,6 @@
 // learned tier, then P1. The learned tier needs MIN_EVIDENCE_DAYS distinct active days install-wide, so a fresh,
 // headless or rarely opened install stays at P1 instead of marking every area dormant.
 import { QUALITY_RECENCY_HALF_LIFE_DAYS } from './auditDomains.js';
-import { areasForFile } from './featureAreas.js';
 
 // Highest priority first; the index is the rank.
 export const FEATURE_PRIORITY_TIERS = Object.freeze(['P0', 'P1', 'P2', 'P3']);
@@ -75,6 +74,3 @@ export function highestTier(areaIds, areaTiers) {
     .filter((rank) => rank >= 0);
   return FEATURE_PRIORITY_TIERS[ranks.length ? Math.min(...ranks) : FEATURE_PRIORITY_TIERS.indexOf(DEFAULT_FEATURE_PRIORITY_TIER)];
 }
-
-/** The highest-priority tier among the areas owning a file; P1 for shared code. */
-export const tierForFile = (areaTiers, path) => highestTier(areasForFile(path).map((entry) => entry.id), areaTiers);

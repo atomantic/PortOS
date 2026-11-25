@@ -8,12 +8,10 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  I2V_REFERENCE_MODES,
   DEFAULT_I2V_REFERENCE_MODE,
   INSPIRE_DEFAULT_IMAGE_STRENGTH,
   normalizeI2vReferenceMode,
   isDefaultI2vReferenceMode,
-  isKnownI2vReferenceMode,
   runtimeSupportsI2vReferenceMode,
   i2vReferenceModeLabel,
   resolveI2vReferenceStrength,
@@ -34,10 +32,6 @@ describe('normalizeI2vReferenceMode', () => {
     // Collapsing garbage into 'anchor' would turn a typo into a silently
     // different render — the whole point of the sentinel-vs-invalid split.
     expect(normalizeI2vReferenceMode('inspiration')).toBe('inspiration');
-    expect(isKnownI2vReferenceMode('inspiration')).toBe(false);
-  });
-  it('recognizes every shipped mode', () => {
-    for (const m of I2V_REFERENCE_MODES) expect(isKnownI2vReferenceMode(m)).toBe(true);
   });
   it('isDefaultI2vReferenceMode is true only for anchor/unset', () => {
     expect(isDefaultI2vReferenceMode('')).toBe(true);

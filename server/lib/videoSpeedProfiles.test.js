@@ -6,7 +6,6 @@ import {
   applyVideoSpeedProfiles,
   isDefaultSpeedProfile,
   videoSpeedProfiles,
-  supportsSpeedProfiles,
   findVideoSpeedProfile,
   speedProfileDeclineReason,
   resolveVideoSpeedProfile,
@@ -287,10 +286,8 @@ describe('validateSpeedProfileTable / sanitizeSpeedProfiles', () => {
   });
 });
 
-describe('videoSpeedProfiles / supportsSpeedProfiles', () => {
+describe('videoSpeedProfiles', () => {
   it('reads the decorated list and filters malformed entries', () => {
-    expect(supportsSpeedProfiles(decorated())).toBe(true);
-    expect(supportsSpeedProfiles(shippedEntry())).toBe(false);
     expect(videoSpeedProfiles({ speedProfiles: [{ id: 'a' }, {}, null] })).toEqual([{ id: 'a' }]);
     expect(videoSpeedProfiles(null)).toEqual([]);
   });

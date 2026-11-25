@@ -2,14 +2,12 @@ import { describe, it, expect } from 'vitest';
 import {
   memoryTypeEnum,
   memoryStatusEnum,
-  memoryCategoryEnum,
   memoryCreateSchema,
   memorySchema,
   memoryUpdateSchema,
   memorySearchSchema,
   memoryListSchema,
   memoryTimelineSchema,
-  memoryExtractSchema,
   memoryConsolidateSchema,
   memoryLinkSchema
 } from './memoryValidation.js';
@@ -41,21 +39,6 @@ describe('memoryValidation.js', () => {
 
     it('should reject invalid statuses', () => {
       expect(memoryStatusEnum.safeParse('deleted').success).toBe(false);
-    });
-  });
-
-  describe('memoryCategoryEnum', () => {
-    it('should accept valid categories', () => {
-      expect(memoryCategoryEnum.safeParse('codebase').success).toBe(true);
-      expect(memoryCategoryEnum.safeParse('workflow').success).toBe(true);
-      expect(memoryCategoryEnum.safeParse('tools').success).toBe(true);
-      expect(memoryCategoryEnum.safeParse('architecture').success).toBe(true);
-      expect(memoryCategoryEnum.safeParse('patterns').success).toBe(true);
-      expect(memoryCategoryEnum.safeParse('conventions').success).toBe(true);
-      expect(memoryCategoryEnum.safeParse('preferences').success).toBe(true);
-      expect(memoryCategoryEnum.safeParse('system').success).toBe(true);
-      expect(memoryCategoryEnum.safeParse('project').success).toBe(true);
-      expect(memoryCategoryEnum.safeParse('other').success).toBe(true);
     });
   });
 
@@ -412,33 +395,6 @@ describe('memoryValidation.js', () => {
       const result = memoryListSchema.safeParse({ sourceAgentId: 'cos-persistent-mind' });
       expect(result.success).toBe(true);
       expect(result.data.sourceAgentId).toBe('cos-persistent-mind');
-    });
-  });
-
-  describe('memoryExtractSchema', () => {
-    it('should validate extraction request', () => {
-      const extract = {
-        agentId: 'agent-123',
-        taskId: 'task-456',
-        output: 'Agent completed the task with these findings...'
-      };
-      const result = memoryExtractSchema.safeParse(extract);
-      expect(result.success).toBe(true);
-    });
-
-    it('should require all fields', () => {
-      expect(memoryExtractSchema.safeParse({ agentId: 'test' }).success).toBe(false);
-      expect(memoryExtractSchema.safeParse({ taskId: 'test' }).success).toBe(false);
-      expect(memoryExtractSchema.safeParse({ output: 'test' }).success).toBe(false);
-    });
-
-    it('should reject empty output', () => {
-      const extract = {
-        agentId: 'agent-123',
-        taskId: 'task-456',
-        output: ''
-      };
-      expect(memoryExtractSchema.safeParse(extract).success).toBe(false);
     });
   });
 

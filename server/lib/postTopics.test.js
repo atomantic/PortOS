@@ -5,7 +5,6 @@ import {
   resolveTopicForDrillType,
   getTopic,
   isTopicEnabled,
-  enabledTopicIds,
   isMemoryItemEnabled,
 } from './postTopics.js';
 import { LLM_DRILL_TYPES, MATH_DRILL_TYPES, MEMORY_DRILL_TYPES, COGNITIVE_DRILL_TYPES, MORSE_DRILL_TYPES } from './postValidation.js';
@@ -90,17 +89,6 @@ describe('isTopicEnabled — absent = enabled (no migration)', () => {
 
   it('treats an unknown topic id as enabled (forward-compat)', () => {
     expect(isTopicEnabled({ topics: {} }, 'not-a-topic')).toBe(true);
-  });
-});
-
-describe('enabledTopicIds', () => {
-  it('returns every topic for a legacy config', () => {
-    expect(enabledTopicIds({})).toEqual(TOPIC_IDS);
-  });
-
-  it('drops only the explicitly disabled ones, in registry order', () => {
-    const config = { topics: { morse: { enabled: false }, verbal: { enabled: false } } };
-    expect(enabledTopicIds(config)).toEqual(['math', 'memory', 'wordplay', 'imagination', 'cognitive']);
   });
 });
 

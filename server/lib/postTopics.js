@@ -127,11 +127,6 @@ export function isTopicEnabled(config, topicId) {
   return config?.topics?.[topicId]?.enabled !== false;
 }
 
-/** Ids of every currently-enabled topic, in registry order. */
-export function enabledTopicIds(config) {
-  return TOPIC_IDS.filter(id => isTopicEnabled(config, id));
-}
-
 /**
  * Whether memory practice participates AT ALL — the topic entry and the module
  * block, WITHOUT consulting any drill type.

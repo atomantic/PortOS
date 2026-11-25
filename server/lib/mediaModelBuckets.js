@@ -58,11 +58,6 @@ export const activeVideoBucket = () => (
   process.platform === 'darwin' ? VIDEO_BUCKET_MLX : VIDEO_BUCKET_CUDA
 );
 
-/** The bucket this machine cannot run. */
-export const otherVideoBucket = (bucket) => (
-  bucket === VIDEO_BUCKET_MLX ? VIDEO_BUCKET_CUDA : VIDEO_BUCKET_MLX
-);
-
 const hasKey = (obj, key) => (
   obj !== null && typeof obj === 'object' && Object.hasOwn(obj, key)
 );

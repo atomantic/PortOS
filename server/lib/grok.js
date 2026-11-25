@@ -23,7 +23,6 @@
  * spawn a process.
  */
 
-import { isCliProvider, isTuiProvider } from './provider/providerTypes.js';
 import os from 'os';
 import { writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
@@ -32,7 +31,6 @@ import { argvHasFlag, hasModelFlag, commandBasename, GROK_CONFIGURED_DEFAULT } f
 
 const NOOP_CLEANUP = () => {};
 
-export const GROK_CLI_ID = 'grok-cli';
 export const GROK_TUI_ID = 'grok-tui';
 // Shipped CLI/TUI providers pin a concrete model for accurate attribution.
 // Legacy configured-default selections still omit --model for compatibility.
@@ -50,18 +48,6 @@ export const GROK_STDIN_PROMPT_PATH = '/dev/stdin';
  */
 export function isGrokCommand(command) {
   return commandBasename(command) === 'grok';
-}
-
-/** True for the CLI (headless) Grok provider. */
-export function isGrokCliProvider(provider) {
-  return provider?.id === GROK_CLI_ID
-    || (isCliProvider(provider) && isGrokCommand(provider?.command));
-}
-
-/** True for the TUI (interactive) Grok provider. */
-export function isGrokTuiProvider(provider) {
-  return provider?.id === GROK_TUI_ID
-    || (isTuiProvider(provider) && isGrokCommand(provider?.command));
 }
 
 // A prompt source already declared (single-turn prompt, prompt file, or JSON

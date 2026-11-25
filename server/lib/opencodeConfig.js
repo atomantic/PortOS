@@ -401,18 +401,6 @@ function hardenOpencodeConfigForNoTool(config) {
 }
 
 /**
- * Build the `OPENCODE_CONFIG_CONTENT` JSON string; see `buildOpencodeConfig`.
- *
- * @param {string|string[]|null|undefined} models
- * @param {object|null} [base] - existing config to merge into
- * @param {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|string} [providerKey='ollama']
- * @returns {string} JSON string for OPENCODE_CONFIG_CONTENT
- */
-export function buildOpencodeConfigContent(models, base = null, providerKey = 'ollama', generation = null) {
-  return JSON.stringify(buildOpencodeConfig(models, base, providerKey, generation));
-}
-
-/**
  * The provider record as a GENERATION source for THIS run's model, with a stored
  * effort the model rejects clamped to the nearest accepted rung (`resolveCliEffort`).
  * OpenCode forwards `reasoningEffort` verbatim and only the upstream validates it

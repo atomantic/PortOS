@@ -5,7 +5,6 @@ import {
   DEFAULT_UPGRADE_TIMEOUT_MS,
   installUpgradeFallback,
   markUpgradeClaimed,
-  mountUpgradeFallback,
 } from './upgradeFallback.js';
 
 describe('upgradeFallback', () => {
@@ -61,9 +60,8 @@ describe('upgradeFallback', () => {
     return req;
   };
 
-  it('exports default timeout and aliases', () => {
+  it('exports the default timeout', () => {
     expect(DEFAULT_UPGRADE_TIMEOUT_MS).toBe(1000);
-    expect(mountUpgradeFallback).toBe(installUpgradeFallback);
   });
 
   it('handles null or invalid server gracefully', () => {

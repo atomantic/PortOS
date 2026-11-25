@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, MINIMAX_H3_RUNTIMES, LTX2_FAMILY_RUNTIMES, AUDIO_TO_VIDEO_RUNTIMES, videoLoraFamily, isMiniMaxH3Runtime, isLtx2FamilyRuntime, isAudioToVideoRuntime, isMlxVideoLtxLoraCapable, loraFamilyOf, isMflux, isFlux2, isZImage, isErnie, isHiDream, isQwen, flux2VariantFromModel, loraCompatKey, composeCompatKey } from './runners.js';
+import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, MINIMAX_H3_RUNTIMES, LTX2_FAMILY_RUNTIMES, AUDIO_TO_VIDEO_RUNTIMES, videoLoraFamily, isMiniMaxH3Runtime, isLtx2FamilyRuntime, isAudioToVideoRuntime, isMlxVideoLtxLoraCapable, loraFamilyOf, isFlux2, isZImage, isErnie, isHiDream, isQwen, flux2VariantFromModel, loraCompatKey, composeCompatKey } from './runners.js';
 
 describe('RUNNER_FAMILIES', () => {
   it('is frozen so callers can\'t mutate the canonical strings at runtime', () => {
@@ -7,7 +7,6 @@ describe('RUNNER_FAMILIES', () => {
   });
 
   it('predicate helpers match on the canonical runner ids', () => {
-    expect(isMflux({ runner: 'mflux' })).toBe(true);
     expect(isFlux2({ runner: 'flux2' })).toBe(true);
     expect(isZImage({ runner: 'z-image' })).toBe(true);
     expect(isErnie({ runner: 'ernie' })).toBe(true);

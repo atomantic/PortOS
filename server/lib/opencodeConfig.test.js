@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   buildAgentGeneration,
   buildOpencodeConfig,
-  buildOpencodeConfigContent,
   buildOpencodeEnvVars,
   opencodeLocalBaseUrl,
   toBareModelIds,
@@ -165,24 +164,6 @@ describe('buildOpencodeConfig', () => {
     expect(Object.keys(cfg.provider.orcarouter.models).sort()).toEqual([
       'anthropic/claude-sonnet-4.6', 'orcarouter/auto',
     ]);
-  });
-});
-
-describe('buildOpencodeConfigContent', () => {
-  it('returns valid JSON with the models map nested under the provider', () => {
-    const json = buildOpencodeConfigContent('ollama/qwen2.5:7b');
-    expect(() => JSON.parse(json)).not.toThrow();
-    const parsed = JSON.parse(json);
-    expect(parsed.provider.ollama.models['qwen2.5:7b']).toEqual({
-      name: 'qwen2.5:7b',
-      tool_call: true,
-    });
-  });
-
-  it('serializes the base config (no models) for null model', () => {
-    const parsed = JSON.parse(buildOpencodeConfigContent(null));
-    expect(parsed.permission).toEqual(gated('allow'));
-    expect(parsed.provider.ollama.models).toBeUndefined();
   });
 });
 

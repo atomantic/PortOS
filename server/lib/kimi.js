@@ -25,7 +25,6 @@
  * from the standalone autofixer.
  */
 
-import { isCliProvider, isTuiProvider } from './provider/providerTypes.js';
 import { argvHasFlag, commandBasename, hasModelFlag } from './provider/providerModels.js';
 
 const NOOP_CLEANUP = () => {};
@@ -33,9 +32,6 @@ const NOOP_CLEANUP = () => {};
 // A `-`-leading token after a bare trailing `--prompt` is ambiguous on any CLI,
 // so it is treated as a flag rather than the existing prompt value.
 const isFlagToken = (a) => typeof a === 'string' && a.startsWith('-');
-
-export const KIMI_CLI_ID = 'kimi-cli';
-export const KIMI_TUI_ID = 'kimi-tui';
 
 // kimi reads the prompt as this flag's VALUE; its presence selects non-interactive mode.
 const PROMPT_FLAGS = ['--prompt', '-p'];
@@ -50,16 +46,6 @@ const APPROVAL_FLAGS = ['--yolo', '-y'];
  */
 export function isKimiCommand(command) {
   return commandBasename(command) === 'kimi';
-}
-
-export function isKimiCliProvider(provider) {
-  return provider?.id === KIMI_CLI_ID
-    || (isCliProvider(provider) && isKimiCommand(provider?.command));
-}
-
-export function isKimiTuiProvider(provider) {
-  return provider?.id === KIMI_TUI_ID
-    || (isTuiProvider(provider) && isKimiCommand(provider?.command));
 }
 
 /**

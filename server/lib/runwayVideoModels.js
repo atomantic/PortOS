@@ -14,9 +14,6 @@
 import { coverOrLongest, durationLengths, matchResolution } from './hostedVideoClipRules.js';
 import { RUNWAY_CATALOG_SNAPSHOT } from './runwayCatalogSnapshot.js';
 
-/** Date the schemas and prices below were last verified against Runway's docs. */
-export const RUNWAY_VIDEO_PRICING_VERIFIED_AT = '2026-11-06';
-
 /** Runway's own Gen-4.5: the default when a request names no model. */
 export const RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL = 'gen4.5';
 

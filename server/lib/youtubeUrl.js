@@ -21,9 +21,6 @@ export function youtubeVideoIdFromUrl(url) {
   return pathId ? pathId[1] : null;
 }
 
-/** Alias kept for the call sites (and the client re-export) that read better with it. */
-export const youtubeVideoId = youtubeVideoIdFromUrl;
-
 /** True when `url` is a single-video YouTube URL the server will accept. */
 export function isYoutubeVideoUrl(url) {
   return typeof url === 'string' && YOUTUBE_VIDEO_URL_RE.test(url.trim()) && !!youtubeVideoIdFromUrl(url);

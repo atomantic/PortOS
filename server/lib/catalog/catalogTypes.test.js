@@ -30,7 +30,6 @@ import {
   getRelationKind,
   MEDIA_KINDS,
   MEDIA_KIND_IDS,
-  getMediaKind,
   canonicalTagKey,
   tagIdForKey,
   defaultTagsForType,
@@ -365,10 +364,6 @@ describe('catalogTypes — media kinds', () => {
     }
   });
 
-  it('getMediaKind resolves a known id and returns undefined for unknown', () => {
-    expect(getMediaKind('portrait')?.label).toBe('Portrait');
-    expect(getMediaKind('hologram')).toBeUndefined();
-  });
 });
 
 describe('payloadSnippet', () => {

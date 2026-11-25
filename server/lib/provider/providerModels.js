@@ -24,8 +24,6 @@ const CONFIGURED_DEFAULT_SENTINELS = new Set([
   KIMI_CONFIGURED_DEFAULT,
 ]);
 
-export const isCodexConfiguredDefault = (model) => model === CODEX_CONFIGURED_DEFAULT;
-
 /** True for any provider "use CLI's own default" sentinel (Codex / Antigravity / Grok Build). */
 export const isConfiguredDefaultModel = (model) => CONFIGURED_DEFAULT_SENTINELS.has(model);
 

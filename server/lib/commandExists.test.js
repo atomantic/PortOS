@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { existsSync } from 'node:fs'
+import { setTimeout as realDelay } from 'node:timers/promises'
 import { isProcessAlive } from '../test/processAlive.js'
 
 // A scripted stand-in for a spawned child. It has no `pid`, so killProcessTree
@@ -224,7 +225,7 @@ describe('commandOutput lifecycle (#10604)', () => {
   // escalation must reach everything in the probe's own process group.
   const waitUntilGone = async (pid) => {
     const until = Date.now() + 5_000
-    while (isProcessAlive(pid) && Date.now() < until) await new Promise((r) => setTimeout(r, 50))
+    while (isProcessAlive(pid) && Date.now() < until) await realDelay(50)
     return !isProcessAlive(pid)
   }
 
@@ -263,8 +264,10 @@ describe('commandOutput lifecycle (#10604)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'probe-test-'))
     const pidFile = join(dir, 'grandchild.pid')
     const grandchild = `process.on('SIGTERM', () => {});
-      require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
-      setInterval(() => { if (!require('fs').existsSync(${JSON.stringify(dir)})) process.kill(process.pid, 'SIGKILL'); }, 50)`
+      const fs = require('fs');
+      fs.writeFileSync(${JSON.stringify(pidFile + '.tmp')}, String(process.pid));
+      fs.renameSync(${JSON.stringify(pidFile + '.tmp')}, ${JSON.stringify(pidFile)});
+      setInterval(() => { if (!fs.existsSync(${JSON.stringify(dir)})) process.kill(process.pid, 'SIGKILL'); }, 50)`
     // The parent keeps the default SIGTERM behavior (exits); its child ignores it.
     const parent = `const c = require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(grandchild)}], { stdio: 'ignore' });
       setInterval(() => {}, 1000)`
@@ -277,26 +280,35 @@ describe('commandOutput lifecycle (#10604)', () => {
       if (pid === -lastSpawn()?.child?.pid) return true
       return originalKill(pid, signal)
     }) : null
+    const timeoutMs = 500
+    const escalationGraceMs = 2_000
+    // Keep both child processes real, but let their startup complete before
+    // advancing the probe deadline. The PID file signals the handler is installed.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     const exercise = async () => {
-      let settledAt = Date.now() + 500
       try {
-        const result = await commandOutput(process.execPath, ['-e', parent], { timeoutMs: 500 })
-        settledAt = Date.now()
-        expect(result).toBeNull()
+        const result = commandOutput(process.execPath, ['-e', parent], { timeoutMs })
+        const readyBy = Date.now() + 4_000
+        while (!existsSync(pidFile) && Date.now() < readyBy) await realDelay(25)
 
+        expect(existsSync(pidFile), 'probe fixture grandchild did not become ready').toBe(true)
         const grandchildPid = Number(readFileSync(pidFile, 'utf8'))
         expect(grandchildPid).toBeGreaterThan(0)
+        await vi.advanceTimersByTimeAsync(timeoutMs)
+        await expect(result).resolves.toBeNull()
         if (forceFailure) {
           expect(isProcessAlive(grandchildPid)).toBe(true)
           throw Error('controlled escalation assertion failure')
         }
+        expect(await waitUntilGone(lastSpawn().child.pid), 'probe parent survived SIGTERM').toBe(true)
+        expect(isProcessAlive(grandchildPid), 'probe grandchild exited before escalation').toBe(true)
+        await vi.advanceTimersByTimeAsync(escalationGraceMs)
         expect(await waitUntilGone(grandchildPid)).toBe(true)
       } finally {
         // Stop the parent before reading the record so it cannot create another
         // child after cleanup. Keep the record until the owned grandchild exits.
         try {
-          const graceRemaining = settledAt + 2_100 - Date.now()
-          if (graceRemaining > 0) await new Promise(resolve => setTimeout(resolve, graceRemaining))
+          await vi.advanceTimersByTimeAsync(timeoutMs + escalationGraceMs)
           try {
             await cleanupChild(lastSpawn()?.child)
           } finally {
@@ -316,6 +328,7 @@ describe('commandOutput lifecycle (#10604)', () => {
       else await exercise()
     } finally {
       killSpy?.mockRestore()
+      vi.useRealTimers()
     }
   }, 10_000)
 })
