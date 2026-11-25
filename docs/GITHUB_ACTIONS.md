@@ -45,7 +45,7 @@ tree, so `main` is also tested after the merge:
 | Event | What runs |
 |-------|-----------|
 | PR into `main` | Impact-scoped plan (only the surfaces the diff touches) |
-| Push/merge to `main` | **Full suite**, native jobs path-gated (see "Native jobs on a push to `main`"); the run in flight finishes, and only the newest waiting push runs next |
+| Push/merge to `main` | **Full suite**, native jobs path-gated (see [Native jobs on a push to `main`](CI_NATIVE_JOBS.md#native-jobs-on-a-push-to-main)); the run in flight finishes, and only the newest waiting push runs next |
 | PR candidate → `release` | **Full suite**, forced regardless of the diff |
 | Push/merge to `release` | Reuses the release PR's green gate; full suite only if it cannot be verified |
 | Scheduled 09:17 and 21:17 UTC | Full suite — catches what no commit caused (dependency or runner changes) |
@@ -90,7 +90,7 @@ as composite actions under `.github/actions/`:
 Every `run:` step in an action names `shell: bash`, as composite actions
 require. On `windows-latest` that replaces the pwsh default for the server
 install and stamp check too; the trusted rebuild was already pinned to bash for
-the fail-fast reason under "Reusing the server install". Local actions resolve
+the fail-fast reason under [Reusing the server install](CI_TEST_SELECTION.md#reusing-the-server-install). Local actions resolve
 from each job's own checkout, so `release.yml`'s `workflow_call` of `ci.yml`
 runs the actions from the commit it checked out.
 

@@ -94,6 +94,8 @@ changed path matches `TOOLING_OWNER_RE`, and `planTestMemo` keeps one from the w
 only when a changed source reaches its closure ([TEST_MEMO.md](./TEST_MEMO.md#related-selection)).
 Full plans and pushes to `main` run all of them.
 
+## Guard selection and registration
+
 **A tree guard registers by its filename.** The planner selects every tracked
 `*.guard.test.js` (`getGuardTests()`: one `git ls-files`, no test source
 read): a guard outside `client/src` joins every plan, and a client guard rides
