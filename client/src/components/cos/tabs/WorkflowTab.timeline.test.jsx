@@ -133,8 +133,8 @@ describe('WorkflowTab timeline defaults and layout', () => {
       );
     });
 
-    await screen.findByRole('button', { name: 'Save schedule' });
-    const editorContainer = screen.getByRole('button', { name: 'Save schedule' }).closest('.lg\\:col-start-2');
+    const closeButton = await screen.findByRole('button', { name: 'Close schedule editor' });
+    const editorContainer = closeButton.closest('.lg\\:col-start-2');
     expect(editorContainer).toBeInTheDocument();
     expect(editorContainer.className).toContain('lg:row-start-1');
     expect(editorContainer.className).toContain('lg:row-span-3');

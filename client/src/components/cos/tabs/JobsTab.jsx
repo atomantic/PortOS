@@ -12,9 +12,9 @@ import FormField from '../../ui/FormField';
 import JobCard, {
   JOB_TYPE_OPTIONS,
   isAgentJobType,
-  normalizeJobPayload,
-  ScheduleFields
+  normalizeJobPayload
 } from '../JobCard';
+import { ScheduleFields } from '../JobScheduleFields';
 import useUserTimezone from '../../../hooks/useUserTimezone.js';
 import TaskDataInputs from '../TaskDataInputs';
 import ListLoadError from '../../ui/ListLoadError';
@@ -37,6 +37,7 @@ const INITIAL_JOB = {
   interval: 'daily',
   scheduledTime: '',
   scheduleAnchor: null,
+  weekdaysOnly: false,
   cronExpression: '',
   cronSchedule: null,
   priority: 'MEDIUM',

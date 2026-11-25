@@ -4,8 +4,8 @@ import { AlertTriangle, Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLeft,
 import toast from '../ui/Toast';
 import { updateCosJob, acknowledgeCosJobIncident } from '../../services/apiAgents.js';
 import { timeAgo, timeUntil, formatDateNumeric } from '../../utils/formatters';
-import { DEFAULT_CRON, describeCron, describeRecurrence, parseCronToRecurrence, buildCronFromRecurrence, JOB_INTERVAL_OPTIONS as INTERVAL_OPTIONS, ON_DEMAND_INTERVAL, scheduleAnchorKindForInterval } from '../../utils/cronHelpers';
-import CronSchedulePicker from '../CronSchedulePicker';
+import { describeCron, describeRecurrence, parseCronToRecurrence, JOB_INTERVAL_OPTIONS as INTERVAL_OPTIONS, ON_DEMAND_INTERVAL } from '../../utils/cronHelpers';
+import { ScheduleFields, normalizeJobSchedule } from './JobScheduleFields';
 import AgentJobProviderFields, { hasRunnableAgentProvider } from './AgentJobProviderFields';
 import { AGENT_OPTIONS, agentOptionButtonClass } from './constants';
 import { triggerButtonClass } from './tabs/schedule/scheduleConstants';
@@ -13,17 +13,11 @@ import InlineConfirmRow from '../ui/InlineConfirmRow';
 import FormField from '../ui/FormField';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import TaskDataInputs from './TaskDataInputs';
-import ScheduleAnchorSelect from './ScheduleAnchorSelect';
 import JobNotepad from './JobNotepad';
 import { JobFormFieldsEditor, JobFormValueInputs, missingRequiredJobFormFields } from './JobFormFields';
 
 // Footer actions beside Run now — same shape, quieter than the accent trigger.
 const SECONDARY_ACTION_CLASS = 'flex items-center gap-1.5 min-h-[44px] px-3 py-1.5 text-sm rounded text-gray-300 hover:text-white hover:bg-port-border/50 transition-colors';
-
-const SCHEDULE_MODE_OPTIONS = [
-  { value: 'interval', label: 'Interval' },
-  { value: 'cron', label: 'Cron' }
-];
 
 export const JOB_TYPE_OPTIONS = [
   { value: 'agent', label: 'AI Agent' },
@@ -76,98 +70,7 @@ export function normalizeJobPayload(formData) {
   // preserve the old scope). The schema maps '' → null too; sending null directly
   // is unambiguous across create and update.
   if (!payload.appId) payload.appId = null;
-  if (payload.scheduleMode === 'cron') {
-    const derivedCron = buildCronFromRecurrence(payload.cronSchedule);
-    payload.cronExpression = derivedCron || payload.cronExpression?.trim() || null;
-    payload.cronSchedule = payload.cronSchedule || null;
-    payload.scheduledTime = null;
-    payload.scheduleAnchor = null;
-  } else {
-    payload.cronExpression = null;
-    payload.cronSchedule = null;
-  }
-  delete payload.scheduleMode;
-  return payload;
-}
-
-export function ScheduleFields({ data, onChange, timezone }) {
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-gray-400">Schedule:</span>
-        {SCHEDULE_MODE_OPTIONS.map(opt => (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => {
-              onChange('scheduleMode', opt.value);
-              // Seed the expression with the picker's displayed default (07:00
-              // daily) so an untouched Cron picker is actually saveable.
-              if (opt.value === 'cron' && !data.cronExpression && !data.cronSchedule) onChange('cronExpression', DEFAULT_CRON);
-            }}
-            className={`px-2 py-1 text-xs rounded transition-colors ${
-              data.scheduleMode === opt.value
-                ? 'bg-port-accent/20 text-port-accent'
-                : 'bg-port-bg text-gray-500 hover:text-gray-300'
-            }`}
-          >
-            {opt.label}
-          </button>
-        ))}
-      </div>
-      {data.scheduleMode === 'cron' ? (
-        <div className="space-y-2">
-          <CronSchedulePicker
-            value={data.cronSchedule || data.cronExpression || DEFAULT_CRON}
-            valueShape="recurrence"
-            timezone={timezone}
-            onChange={rule => {
-              onChange('cronSchedule', rule);
-              const cron = buildCronFromRecurrence(rule);
-              onChange('cronExpression', cron || null);
-            }}
-          />
-        </div>
-      ) : (
-        <div className="flex flex-wrap items-center gap-3">
-          <select
-            aria-label="Interval"
-            value={data.interval}
-            onChange={e => {
-              onChange('interval', e.target.value);
-              // The on-demand cadence has no recurrence for a time-of-day to
-              // align to; the server clears it too, so drop it here rather than
-              // saving a value the job will never honor.
-              if (e.target.value === ON_DEMAND_INTERVAL) onChange('scheduledTime', null);
-              // A weekday and a day of month are not interchangeable: let the server
-              // re-default it. Weekly <-> biweekly keeps the day the user picked.
-              if (scheduleAnchorKindForInterval(e.target.value) !== scheduleAnchorKindForInterval(data.interval)) onChange('scheduleAnchor', null);
-            }}
-            className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-          >
-            {INTERVAL_OPTIONS.map(opt => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-          {data.interval === ON_DEMAND_INTERVAL ? (
-            <span className="text-xs text-gray-500">Runs only when you press Run now.</span>
-          ) : (
-            <input
-              type="time"
-              value={data.scheduledTime || ''}
-              onChange={e => onChange('scheduledTime', e.target.value || null)}
-              className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-              title="Run at specific time (leave empty for any time)"
-              aria-label="Run at a specific time (leave empty for any time)"
-            />
-          )}
-          {data.scheduledTime && data.interval !== ON_DEMAND_INTERVAL && (
-            <ScheduleAnchorSelect interval={data.interval} value={data.scheduleAnchor} onChange={value => onChange('scheduleAnchor', value)} />
-          )}
-        </div>
-      )}
-    </div>
-  );
+  return normalizeJobSchedule(payload);
 }
 
 // null reads as the epoch to Date, so it must be excluded before the finite check.
@@ -347,6 +250,7 @@ export default function JobCard({
       scheduleMode: job.cronExpression || job.cronSchedule ? 'cron' : 'interval',
       interval: job.interval,
       scheduledTime: job.scheduledTime || '',
+      weekdaysOnly: !!job.weekdaysOnly,
       scheduleAnchor: job.scheduleAnchor ?? null,
       cronExpression: job.cronExpression || '',
       cronSchedule: job.cronSchedule || (job.cronExpression ? parseCronToRecurrence(job.cronExpression) : null),
