@@ -57,7 +57,7 @@ import { musicVideoEvents } from './events.js';
 import { applyFrameHold, projectFrameHold } from './frameHold.js';
 import { isProjectRenderActive, projectRenders, releaseProjectRender } from './renderActivityState.js';
 import { resolveMasterAudioPath } from './masterAudioPath.js';
-import { planMusicVideoRender, resolveSoundBedPath } from './renderPlan.js';
+import { planMusicVideoRender } from './renderPlan.js';
 import { buildMusicVideoFfmpegArgs } from './renderFfmpegArgs.js';
 import { normalizeBlenderRecord } from '../../lib/musicVideo/musicVideoBlender.js';
 
