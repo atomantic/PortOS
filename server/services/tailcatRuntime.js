@@ -6,14 +6,14 @@ import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { delimiter, join, posix, win32 } from 'node:path';
 import { commandOutput } from '../lib/commandExists.js';
-import { MIN_TAILCAT_VERSION, parseTailcatVersion, isTailcatVersionAtLeast, tailcatVersionTooOldMessage } from '../lib/tailcatVersion.js';
+import { MIN_TAILCAT_VERSION, PINNED_TAILCAT_VERSION, parseTailcatVersion, isTailcatVersionAtLeast, tailcatVersionTooOldMessage } from '../lib/tailcatVersion.js';
 import { bufferedSpawn, spawnFailureDetail } from '../lib/bufferedSpawn.js';
 import { atomicWrite } from '../lib/fileUtils.js';
 import { isTestRunner } from '../lib/runtimeEnv.js';
 import { findCommandOnPath, safeChildProcessEnv } from '../lib/processEnv.js';
 import { ServerError } from '../lib/errorHandler.js';
 
-const GO_INSTALL_PKG = 'github.com/tailscale/tailcat/cmd/tailcat@latest';
+const GO_INSTALL_PKG = `github.com/tailscale/tailcat/cmd/tailcat@v${PINNED_TAILCAT_VERSION}`;
 const BREW_FORMULA = 'tailcat';
 const RELEASES_URL = 'https://github.com/tailscale/tailcat/releases';
 const DEFAULT_DERP_MAP_URL = 'https://tailcat.dev/derpmap.json';
