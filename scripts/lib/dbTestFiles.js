@@ -6,8 +6,7 @@ export const DB_TEST_INCLUDE = ['**/*.db.test.js', '**/db.test.js', '../scripts/
 
 const patterns = DB_TEST_INCLUDE.map((pattern) => posix.normalize(posix.join('server', pattern)));
 
-/** Resolve the canonical, server-rooted include patterns without loading Vitest. */
-export const resolveDbTestFiles = (files) => files.filter((file) => {
-  const serverPath = file.startsWith('server/') ? file : posix.normalize(posix.join('server', file));
-  return patterns.some((pattern) => posix.matchesGlob(file, pattern) || posix.matchesGlob(serverPath, pattern));
-});
+/** Match repository-relative paths against the DB runner's include patterns. */
+export const resolveDbTestFiles = (files) => files.filter(
+  (file) => patterns.some((pattern) => posix.matchesGlob(file, pattern)),
+);

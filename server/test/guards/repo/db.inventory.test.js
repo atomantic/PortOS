@@ -1,8 +1,7 @@
 /**
  * Inventory guard for the DB-backed suites: every test that gates on
- * checkHealth()+dbReady must be in the db-config include set. Split from
- * db.guards.test.js, which covers db.js's own
- * test-runner write guards.
+ * checkHealth()+dbReady must be in the db-config include set. The separate
+ * db.guards.test.js covers db.js's test-runner write guards.
  */
 import { describe, it, expect } from 'vitest';
 import { readdirSync, openSync, readSync, closeSync } from 'node:fs';
@@ -58,7 +57,7 @@ describe('DB-backed test files are covered by vitest.config.db.js', () => {
     };
 
     const offenders = [];
-    for (const [root, prefix] of [[SERVER, ''], [REPO_SCRIPTS, '../scripts/']]) {
+    for (const [root, prefix] of [[SERVER, 'server/'], [REPO_SCRIPTS, 'scripts/']]) {
       const files = collect(root);
       const covered = new Set(resolveDbTestFiles(files.map((rel) => prefix + rel.split(sep).join('/'))));
       for (const rel of files) {
@@ -68,7 +67,7 @@ describe('DB-backed test files are covered by vitest.config.db.js', () => {
         // This check itself references checkHealth/dbReady (the detector
         // regex), and so does the db.js guard suite it was split from (imports);
         // neither is a DB-backed suite — exclude both.
-        if ((prefix === '' && rel === join('test', 'guards', 'repo', 'db.inventory.test.js')) || base === 'db.guards.test.js') continue;
+        if ((prefix === 'server/' && rel === join('test', 'guards', 'repo', 'db.inventory.test.js')) || base === 'db.guards.test.js') continue;
         const head = readHead(join(root, rel));
         // A real DB-backed suite gates on checkHealth() and either exposes dbReady or
         // gates through requireDbOrSkip (the cos_tasks suites slipped past a

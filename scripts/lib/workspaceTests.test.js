@@ -7,6 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { resolveDbTestFiles } from './dbTestFiles.js';
 import { globToRegExp, listWorkspaceTests, toRepoPath, toWorkspacePath } from './workspaceTests.js';
 
 const REPO_ROOT = join(import.meta.dirname, '..', '..');
@@ -62,6 +63,13 @@ describe('workspace test enumeration', () => {
     expect(found.length).toBeGreaterThanOrEqual(80);
     expect(toRepoPath('db', found[0])).toMatch(/^(server|scripts)\//);
   }, 120_000);
+
+  it('only plans DB suites that the DB runner can collect', () => {
+    const included = ['server/services/store.db.test.js', 'server/services/store/db.test.js', 'scripts/setup.db.test.js'];
+    expect(resolveDbTestFiles([
+      ...included, 'scripts/db.test.js', 'client/src/store.db.test.js', 'docs/example.db.test.js',
+    ])).toEqual(included);
+  });
 
   it('drops the registered browser suites for an explicit unit owner on every platform', () => {
     const all = listWorkspaceTests('server', { repoRoot: REPO_ROOT, platform: 'linux', env: {} });
