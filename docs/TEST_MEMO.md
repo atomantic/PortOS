@@ -38,9 +38,10 @@ version of an external program a member reaches (`TEST_MEMO_TOOLS`: the
 python the sidecar tests spawn — a literal, `PORTOS_TEST_PYTHON`, or an
 interpreter bound from `resolveTestPython()`; ffmpeg/ffprobe; Chrome for
 the browser suites, found with the suites' own candidate list,
-`resolveTestChrome` in `scripts/lib/testChrome.js`; and git, with the
-settings its repositories inherit, for a suite that declares its repositories
-fixtures: [TEST_MEMO_GIT_FIXTURES.md](./TEST_MEMO_GIT_FIXTURES.md)); an unknown program
+`resolveTestChrome` in `scripts/lib/testChrome.js`; and Git, with the
+settings its repositories inherit, when a product module in the key spawns it
+or the test declares its repositories fixtures
+([Git fixtures](./TEST_MEMO_GIT_FIXTURES.md))); an unknown program
 handed a `.py` file fails closed; the workspace Vitest config closure, setup files,
 `scripts/vitestCiPool.js`, `package.json` and lockfile (the workspace base,
 below); the full Node

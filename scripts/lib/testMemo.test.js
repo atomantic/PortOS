@@ -580,6 +580,17 @@ describe('git-fixture declaration', () => {
     expect(plain(() => GIT)).toBe(keyOf(TREE, 'server/lib/plain.test.js').floor.key);
   });
 
+  it('requires a verified Git identity even when a declaring test also reaches product Git', () => {
+    const product = 'server/lib/gitProduct.js';
+    const files = {
+      ...TREE,
+      [product]: "import { execFileSync } from 'node:child_process';\nexport const status = (cwd) => execFileSync('git', ['status'], { cwd });\n",
+      [test]: `${FIXTURE}\nimport './gitProduct.js';\n`,
+    };
+    const { floor, recorded } = keyOf(files, test, { records: new Map([[test, [test, product]]]), toolVersion: () => null });
+    for (const verdict of [floor, recorded]) expect(verdict).toMatchObject({ memoizable: false, reason: 'unverified tool: git' });
+  });
+
   it('changes nothing for a suite that does not declare, or whose marker is not a comment', () => {
     const undeclared = FIXTURE.replace('// test-memo: git-fixture\n', '');
     expect(floorOf(undeclared)).toMatchObject({ memoizable: false, reason: 'spawns git' });
@@ -1803,6 +1814,63 @@ describe('python sidecars, external tools and machine-local state', () => {
     expect(keyOf({ ...TREE, 'server/lib/a.test.js': read("join(process.env.HOME, '.portos')") }).floor.memoizable).toBe(false);
     const product = { ...TREE, 'server/lib/a.js': `import { readFileSync } from 'node:fs';\nimport { join } from 'node:path';\nexport const a = () => readFileSync(join(__dirname, '..', '..', '${DATA}', 'settings.json'));\n` };
     expect(keyOf(product).floor.memoizable).toBe(true);
+  });
+});
+
+describe('Git reached through a product module', () => {
+  const test = 'server/lib/a.test.js';
+  const gitModule = 'server/lib/lazy.js';
+  const files = {
+    ...TREE,
+    [gitModule]: "import { execFileSync } from 'node:child_process';\nexport const status = (cwd) => execFileSync('git', ['status'], { cwd });\n",
+  };
+  const analyze = (identity, { recorded = [test, gitModule], tree = files } = {}) => {
+    const analyzer = createTestMemoAnalyzer({
+      ...options(tree), workspaceRel: 'server', requireToolVersions: true,
+      toolVersion: (tool) => tool === 'git' ? identity : null,
+    });
+    const baseClosure = analyzer.workspaceBase(WORKSPACE_BASE_INPUTS.server, WORKSPACE_SETUP_ENTRIES.server);
+    return analyzer.analyzeTest(test, { baseClosure, recorded });
+  };
+
+  it('keys the resolved Git identity in both keys and can key an unresolved identity', () => {
+    const first = analyze('git version 2.52.0 settings config-a');
+    const changed = analyze('git version 2.52.0 settings config-b');
+    const absent = analyze(null);
+    const absentLine = analyze('absent');
+    for (const kind of ['floor', 'recorded']) {
+      expect(first[kind]).toMatchObject({ memoizable: true, tools: new Set(['git']) });
+      expect(changed[kind].key).not.toBe(first[kind].key);
+      expect(absent[kind]).toMatchObject({ memoizable: true, tools: new Set(['git']) });
+      expect(absent[kind].key).not.toBe(first[kind].key);
+      expect(absent[kind].key).toBe(absentLine[kind].key);
+    }
+  });
+
+  it('leaves Git out of the recorded key when the run did not load the spawner', () => {
+    const recorded = [test];
+    const first = analyze('git version 2.52.0 settings config-a', { recorded });
+    const changed = analyze('git version 2.53.0 settings config-a', { recorded });
+    expect(first.floor.tools.has('git')).toBe(true);
+    expect(changed.floor.key).not.toBe(first.floor.key);
+    expect(first.recorded).toMatchObject({ memoizable: true, tools: new Set() });
+    expect(changed.recorded.key).toBe(first.recorded.key);
+  });
+
+  it('leaves both keys unchanged for a test that reaches no Git spawner', () => {
+    const first = analyze('git version 2.52.0 settings config-a', { tree: TREE });
+    const absent = analyze(null, { tree: TREE });
+    for (const kind of ['floor', 'recorded']) {
+      expect(first[kind]).toMatchObject({ memoizable: true, tools: new Set() });
+      expect(absent[kind].key).toBe(first[kind].key);
+    }
+  });
+
+  it('keeps the refusal for a Git-spawning scripts member', () => {
+    const script = 'scripts/tool.js';
+    const tree = { ...files, [script]: files[gitModule], [test]: `import '../../${script}';\n${files[test]}` };
+    const { floor, recorded } = analyze('git version 2.52.0 settings config-a', { tree, recorded: [test, gitModule, script] });
+    for (const verdict of [floor, recorded]) expect(verdict).toMatchObject({ memoizable: false, reason: 'spawns git' });
   });
 });
 
