@@ -105,6 +105,15 @@ describe('buildInternalOpenApiSpec', () => {
     expect(spec.paths['/api/apps'].get.responses.default).toBeDefined();
   });
 
+  it('documents the settings PATCH input envelope and allowed slice paths', () => {
+    const spec = buildInternalOpenApiSpec({});
+    const body = spec.paths['/api/settings/slice'].patch.requestBody.content['application/json'].schema;
+    expect(body.required).toEqual(['slicePath', 'partial']);
+    expect(body.properties.slicePath.enum).toContain('videoGen.google');
+    expect(body.properties.partial.type).toBe('object');
+    expect(body.additionalProperties).toBe(false);
+  });
+
   it('resolves every key in API_OPERATION_CONTRACTS to a modeled route in buildApiCatalog', () => {
     const catalog = buildApiCatalog({});
     const byKey = new Map(catalog.operations.map((operation) => [`${operation.method} ${operation.path}`, operation]));

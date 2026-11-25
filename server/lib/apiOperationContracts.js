@@ -22,9 +22,9 @@ import {
 } from './gitValidation.js';
 import { logsQuerySchema, pm2ProcessNameSchema } from './sharedSchemas.js';
 
-const jsonBody = (schema, required = true) => ({
-  required,
-  content: { 'application/json': { schema: zodToOpenApiSchema(schema) } },
+const jsonBody = (schema, options) => ({
+  required: true,
+  content: { 'application/json': { schema: zodToOpenApiSchema(schema, options) } },
 });
 
 const gitWriteOperation = (summary, schema) => ({
@@ -43,7 +43,7 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
     patch: {
       summary: 'Atomically merge a partial settings slice',
       description: 'Shallow merge at the allowlisted slice against the freshest persisted settings. Explicit values replace keys; legacy PUT semantics are unchanged. Executable and execution-policy changes require operator authority.',
-      requestBody: jsonBody(settingsSlicePatchSchema),
+      requestBody: jsonBody(settingsSlicePatchSchema, { io: 'input' }),
       responses: {
         200: { description: 'Saved settings with protected values redacted' },
         400: { description: 'Invalid path, partial settings, or interpreter', 'x-portos-error-codes': ['VALIDATION_ERROR', 'INVALID_PYTHON_PATH'] },
