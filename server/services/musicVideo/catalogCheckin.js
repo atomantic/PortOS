@@ -166,7 +166,7 @@ export async function resolveCatalogCheckin(project, {
   if (includeShotChecks && isCatalogCheckin(project) && allowsImages) {
     const resolved = { ...project, castAndSets: { ...project.castAndSets, catalogCheckin: { items, problems } } };
     const checks = await musicVideoShotReferenceChecks(resolved, shotMedia);
-    report.shotReferenceProblems.push(...(includeRepairPatches ? checks : checks.map(({ patch: _patch, ...row }) => row)));
+    report.shotReferenceProblems.push(...(includeRepairPatches ? checks : checks.map(({ patch: _patch, omit, ...row }) => omit ? { ...row, omit: { id: omit.id, label: omit.label } } : row)));
   }
   return { items, problems, basis, approved: isCatalogCheckin(project) && project.castAndSets.status === 'approved'
     && !problems.length && project.castAndSets.catalogApprovedBasis === basis, ...report };

@@ -1,10 +1,10 @@
-import { musicVideoGreyboxReference } from '../../lib/musicVideo/musicVideoGreybox.js';
+import { isMusicVideoSetOmitted, musicVideoGreyboxReference } from '../../lib/musicVideo/musicVideoGreybox.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { resolveImageInputPath } from '../../lib/pathSafety.js';
 
 /** Read the live catalog and capture bytes immediately before generation. No provider work. */
 export async function loadMusicVideoGreybox(project, scene, deps = {}) {
-  if (!scene?.setReference?.greyboxShotId) return null;
+  if (!scene?.setReference?.greyboxShotId || isMusicVideoSetOmitted(scene)) return null;
   const subject = project?.concept?.subjects?.find((s) => s.id === scene.setReference.subjectId && s.kind === 'place');
   const places = {};
   if (subject?.ingredientId) {

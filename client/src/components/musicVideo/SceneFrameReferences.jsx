@@ -4,6 +4,7 @@ import { isCatalogMediaReferenceId, musicVideoCastGuideReferences, musicVideoCat
 import { musicVideoGreyboxReferences } from '../../../../server/lib/musicVideo/musicVideoGreybox.js';
 import { MUSIC_VIDEO_OTHER_REFERENCES_NOTE } from '../../../../server/lib/musicVideo/musicVideoShotPrompt.js';
 import { musicVideoCameoReferences } from '../../../../server/lib/musicVideo/musicVideoCameos.js';
+import { isIncludedShotReference } from '../../../../server/lib/musicVideo/musicVideoCastSelection.js';
 import MediaImage from '../MediaImage';
 import SceneReferencePicker from './SceneReferencePicker.jsx';
 import InfoTooltip from '../ui/InfoTooltip';
@@ -41,11 +42,12 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
   const chosen = musicVideoConditioningReferences(project, scene, castMedia, greybox, { limit: MUSIC_VIDEO_MAX_REFERENCE_CHOICES + musicVideoGreyboxReferences(greybox).length });
   const chosenIds = chosen.map((ref) => ref.id);
   const ids = chosen.filter((ref) => !ref.greybox).map((ref) => ref.id);
-  const others = musicVideoOfferedReferences(choices).filter((ref) => !chosenIds.includes(ref.id));
+  const others = musicVideoOfferedReferences(choices).filter((ref) => !chosenIds.includes(ref.id) && isIncludedShotReference(project, scene, ref));
   const auto = !Array.isArray(scene.frameReferenceIds);
   // Unresolved saved guides still occupy slots and must survive an edit.
   // Compared as resolved: a saved id that moved to a listed reference is that chip, not an unresolved guide.
-  const unresolvedGuides = resolvedFramePickIds(project, scene, castMedia).filter((refId) => isCatalogMediaReferenceId(refId) && !ids.includes(refId));
+  const unresolvedGuides = resolvedFramePickIds(project, scene, castMedia).filter((refId) => !ids.includes(refId)
+    && (isCatalogMediaReferenceId(refId) || choices.some(ref => ref.id === refId && !isIncludedShotReference(project, scene, ref))));
   const full = ids.length + unresolvedGuides.length >= MUSIC_VIDEO_MAX_REFERENCE_CHOICES;
   const notOffered = auto ? [] : musicVideoCatalogPickPlans(project, [scene])[0]?.unmappedFrame || [];
   const previewProps = (ref) => ({

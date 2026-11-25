@@ -618,6 +618,7 @@ function buildScene(input, { order }) {
     visualIntent: input.visualIntent ?? null,
     ...(input.frameReferenceIds ? { frameReferenceIds: input.frameReferenceIds } : {}),
     ...(input.clipReferenceIds ? { clipReferenceIds: input.clipReferenceIds } : {}),
+    ...(input.omittedCatalogSubjectIds?.length ? { omittedCatalogSubjectIds: input.omittedCatalogSubjectIds } : {}),
     ...(input.researchReferences?.length ? { researchReferences: input.researchReferences } : {}),
     ...(input.setReference ? { setReference: input.setReference } : {}),
     ...(input.characterVariant ? { characterVariant: input.characterVariant } : {}),
@@ -797,6 +798,7 @@ function carryOver(prior, fresh) {
     referenceImageId: prior.referenceImageId ?? null,
     videoHistoryId: prior.videoHistoryId ?? null,
     ...(prior.setReference ? { setReference: prior.setReference } : {}),
+    ...(prior.omittedCatalogSubjectIds?.length ? { omittedCatalogSubjectIds: prior.omittedCatalogSubjectIds } : {}),
     // The director's own plan: a planner never sees it, so it can't recreate it.
     ...(prior.shotSheet ? { shotSheet: prior.shotSheet } : {}),
     ...(prior.endImageId ? { endImageId: prior.endImageId } : {}),
@@ -924,7 +926,7 @@ export function applyStoryboardShotSync(project, plan) {
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'pacingCut', 'label', 'prompt', 'framePrompt', 'visualIntent',
   'referenceImageId', 'videoHistoryId', 'endImageId', 'endFrameOff', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'clipLengthSec', 'clipModelId', 'reverse', 'holdLastFrame', 'filmLook', 'templateEffects', 'transitionIn', 'transitionOut', 'wipeIn', 'wipeOut', 'glitches', 'cutEffect',
-  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'imageTreatments', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'clipSound', 'coverage', 'sourceTake', 'lyricAnchor',
+  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'imageTreatments', 'frameReferenceIds', 'clipReferenceIds', 'omittedCatalogSubjectIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'clipSound', 'coverage', 'sourceTake', 'lyricAnchor',
   'cameoId', 'cameoVariantId', 'cameoLabel', 'shotSheet'];
 
 /**
@@ -1196,6 +1198,7 @@ export function applySceneSplit(project, sceneId, plannedPieces, { preserveClip 
         performanceStyle: scene.performanceStyle ?? null,
         ...(scene.coverage === 'sequence' ? { coverage: 'sequence' } : {}),
         ...(scene.setReference ? { setReference: scene.setReference } : {}),
+        ...(scene.omittedCatalogSubjectIds?.length ? { omittedCatalogSubjectIds: scene.omittedCatalogSubjectIds } : {}),
         ...(scene.camera ? { camera: scene.camera } : {}),
         ...(scene.panelId ? { panelId: scene.panelId, panelRev: scene.panelRev ?? null, panelArt: scene.panelArt ?? null } : {}),
         ...timing,

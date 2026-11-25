@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { loadMusicVideoGreybox, withMusicVideoGreyboxInput } from './greyboxReferences.js';
+import { musicVideoGreyboxReference } from '../../lib/musicVideo/musicVideoGreybox.js';
 import { musicVideoFrameModelInput, musicVideoShotModelInput } from '../../lib/musicVideo/musicVideoShotPrompt.js';
 import { musicVideoSceneCreateSchema } from '../../lib/musicVideo/musicVideoValidation.js';
 import { buildProjectRecord, addScene, replaceScenes, splitScene } from './projectsLogic.js';
@@ -22,6 +23,17 @@ describe('music video greybox selection', () => {
   it('adds no plate to a clip that animates its start frame', async () => {
     const request = { prompt: 'The singer waves', sourceImageFile: 'start.png', musicVideo: { projectId: 'p', sceneId: 's1' } };
     await expect(withMusicVideoGreyboxInput(request, project)).resolves.toBe(request);
+  });
+
+  it('leaves out a selected camera for an omitted set while preserving the saved selection', async () => {
+    const omittedScene = { ...scene, omittedCatalogSubjectIds: [subject.id] };
+    const d = deps();
+    const request = { prompt: 'The singer waves', musicVideo: { projectId: 'p', sceneId: 's1' } };
+    expect(musicVideoGreyboxReference(project, omittedScene)).toBeNull();
+    await expect(loadMusicVideoGreybox(project, omittedScene, d)).resolves.toBeNull();
+    expect(d.catalog.getIngredient).not.toHaveBeenCalled();
+    await expect(withMusicVideoGreyboxInput(request, { ...project, scenes: [omittedScene] })).resolves.toBe(request);
+    expect(omittedScene.setReference).toEqual(setReference);
   });
 
   it('resolves the selected camera and records figure additions in both sent prompts without editing authored fields', async () => {
@@ -105,11 +117,13 @@ describe('music video greybox selection', () => {
 
   it('persists the optional selection through create, replan and split and rejects invalid camera ids', () => {
     const base = buildProjectRecord({ name: 'Example Video' }, { id: 'mv-example', now: '2026-01-01' });
-    const added = addScene(base, { prompt: scene.prompt, startSec: 0, endSec: 8, setReference });
-    expect(added.scene.setReference).toEqual(setReference);
+    const omittedCatalogSubjectIds = [subject.id];
+    const added = addScene(base, { prompt: scene.prompt, startSec: 0, endSec: 8, setReference, omittedCatalogSubjectIds });
+    expect(added.scene).toMatchObject({ setReference, omittedCatalogSubjectIds });
     const replanned = replaceScenes(added.project, [{ startSec: 0, endSec: 8, prompt: 'A new direction' }]);
-    expect(replanned.scenes[0].setReference).toEqual(setReference);
-    expect(splitScene(replanned.project, replanned.scenes[0].sceneId, { atSec: 4 }).project.scenes.every((s) => s.setReference?.greyboxShotId === 'wide')).toBe(true);
+    expect(replanned.scenes[0]).toMatchObject({ setReference, omittedCatalogSubjectIds });
+    const split = splitScene(replanned.project, replanned.scenes[0].sceneId, { atSec: 4 });
+    expect(split.project.scenes).toMatchObject([{ setReference, omittedCatalogSubjectIds }, { setReference, omittedCatalogSubjectIds }]);
     for (const greyboxShotId of ['../wide', '2wide', 'x'.repeat(52)]) {
       expect(musicVideoSceneCreateSchema.safeParse({ setReference: { ...setReference, greyboxShotId } }).success).toBe(false);
     }
