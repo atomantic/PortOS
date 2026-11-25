@@ -83,6 +83,7 @@ import {
 } from '../lib/systemCapabilities.js'
 import { searchHuggingFaceModels, enrichCatalogWithVariants, applyMeasuredFit } from '../services/huggingFaceCatalog.js'
 import { getMeasuredFits } from '../services/localModelAssessmentStore.js'
+import { listEndpointRuntimeModels } from '../services/localRuntimeEndpoints.js'
 import {
   getStatus, listModels, listVisionModels, listToolUseModels, listContextPlans, installModel, cancelModelInstall, previewInstallModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer,
   describeInstallProgress
@@ -778,6 +779,12 @@ router.post('/test/stream', asyncHandler(async (req, res) => {
 router.post('/compare', asyncHandler(async (req, res) => {
   const body = validateRequest(localLlmCompareSchema, req.body)
   res.json(await compareLocalLlmModels({ ...body, signal: abortSignalFromResponse(res) }))
+}))
+
+// GET /api/local-llm/runtime-models — the models each bare-endpoint runtime (llama.cpp, MTPLX,
+// Splash, ...) serves, for the Playground picker. Lists only; never generates, so it is safe on page load.
+router.get('/runtime-models', asyncHandler(async (_req, res) => {
+  res.json({ runtimes: await listEndpointRuntimeModels() })
 }))
 
 // === Measured local-model assessments ========================================

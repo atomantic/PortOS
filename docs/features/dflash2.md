@@ -303,3 +303,10 @@ pointing at a raw blob-store path; the one reported measurement through that
 path was ~13%, far below what the drafter delivers natively. Tracked upstream in
 [ollama#17016](https://github.com/ollama/ollama/issues/17016). **Use
 `llama-server` for speculative decoding in PortOS, not the Ollama backend.**
+
+## Comparing answers
+
+A running `llama-server` preset appears in the Local LLM Playground (Compare
+mode) under the llama.cpp group, so a DSpark/DFlash preset can be read next to an
+Ollama or LM Studio model on the same prompt. The Playground never starts the
+server and records no `/runs` entry for these runtimes.

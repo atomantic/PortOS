@@ -10,6 +10,8 @@ import { anyAbortSignal } from '../lib/requestAbort.js';
 import { buildMessages, streamOllamaChat, streamOpenAiChat } from '../lib/openAiChatStream.js';
 import { assertSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
 import { withModelNumCtx } from '../lib/aiToolkit/internal/ollamaBacked.js';
+import { isEndpointRuntime } from '../lib/localProviderRuntime.js';
+import { runtimeApiKey, runtimeEndpoint } from './localRuntimeEndpoints.js';
 
 const PROVIDER_BY_BACKEND = { ollama: 'ollama', lmstudio: 'lmstudio' };
 
@@ -188,6 +190,31 @@ export async function runLocalLlmTest({
   // chat; other playground runs keep the OpenAI-compatible transport.
   nativeOllamaUsage = false,
 }) {
+  // llama.cpp, MTPLX, Splash, vLLM and the other bare loopback daemons have no provider record, so
+  // they take the endpoint transport. A daemon that is not running comes back as an inline `error`
+  // result: the Playground never starts a runtime (a start can load tens of gigabytes).
+  if (isEndpointRuntime(backend)) {
+    const endpoint = await runtimeEndpoint(backend);
+    if (!endpoint) {
+      const now = Date.now();
+      return {
+        backend,
+        modelId,
+        error: `No endpoint is configured for the ${backend} runtime`,
+        text: '',
+        timings: summarizeTimings({ startedAt: now, firstChunkAt: null, endedAt: now, text: '' }),
+        options: { temperature, maxTokens, timeoutMs },
+      };
+    }
+    return runEndpointLlmTest({
+      runtime: backend,
+      endpoint,
+      apiKey: await runtimeApiKey(backend),
+      modelId, prompt, systemPrompt, images, temperature, maxTokens, timeoutMs, extraBody,
+      signal: clientSignal,
+      onToken,
+    });
+  }
   const provider = await resolveLocalProvider(backend);
   const fullPrompt = buildPrompt({ systemPrompt, prompt });
   const startedAt = Date.now();

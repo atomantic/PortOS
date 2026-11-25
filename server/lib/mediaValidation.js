@@ -336,16 +336,17 @@ export const localLlmPlaygroundOptionsSchema = z.object({
   maxTokens: z.coerce.number().int().min(1).max(8192).optional().default(1000),
   timeoutMs: z.coerce.number().int().min(1000).max(600000).optional().default(300000),
 });
-export const localLlmTestSchema = localLlmPlaygroundOptionsSchema.extend({
-  backend: localLlmBackendSchema,
-  modelId: localLlmModelIdSchema,
-  prompt: z.string().trim().min(1).max(50000),
-});
 // Assessments reach EVERY local runtime PortOS can talk to, not just the two it
 // installs models for — llama.cpp, MTPLX, and vLLM are bare OpenAI-compatible
 // daemons with no PortOS-side catalog. `localLlmBackendSchema` stays narrow
 // because install/delete/migrate genuinely only work on the managed pair.
 export const localLlmRuntimeSchema = z.enum(ASSESSABLE_RUNTIMES);
+// The Playground targets every runtime Assessments can reach; install/delete/switch keep the narrow managed pair.
+export const localLlmTestSchema = localLlmPlaygroundOptionsSchema.extend({
+  backend: localLlmRuntimeSchema,
+  modelId: localLlmModelIdSchema,
+  prompt: z.string().trim().min(1).max(50000),
+});
 // Tuning knobs are validated for SHAPE only (a flat map of scalars). Which keys
 // a runtime accepts, and their ranges, live in `lib/localModelTuning.js` — one
 // catalog, applied by `normalizeTuning`, rather than a Zod copy that would drift
@@ -441,7 +442,7 @@ export const localLlmCompareSchema = z.object({
   mode: z.enum(['round-robin', 'parallel']).optional().default('round-robin'),
   prompt: z.string().trim().min(1).max(50000),
   targets: z.array(z.object({
-    backend: localLlmBackendSchema,
+    backend: localLlmRuntimeSchema,
     modelId: localLlmModelIdSchema,
   })).min(1).max(6),
   options: localLlmPlaygroundOptionsSchema.optional().default({}),

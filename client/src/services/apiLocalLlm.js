@@ -20,6 +20,9 @@ import { request, API_BASE, throwApiError } from './apiCore.js';
 // Installed models per backend come back inside getLocalLlmStatus().
 export const getLocalLlmStatus = (options) => request('/local-llm/status', options);
 
+// Models served by each bare-endpoint runtime (llama.cpp, MTPLX, Splash, ...); lists only, never generates.
+export const getLocalRuntimeModels = (options) => request('/local-llm/runtime-models', options);
+
 // Vision-capable installed models across both backends, each tagged with the
 // provider id that serves it. Powers the LoRA caption-model picker.
 export const getVisionModels = (options) => request('/local-llm/vision-models', options);
