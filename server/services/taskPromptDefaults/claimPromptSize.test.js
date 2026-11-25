@@ -19,7 +19,11 @@ import { deferClaimSections } from '../promptSections/claimOnDemand.js';
 // Prompts name repo files by absolute path (PATHS.root), so the checkout's location would change
 // the size: a CoS claim worktree's longer path failed every completion variant. Measure with the
 // root replaced by a fixed placeholder so a ceiling tracks only the prompt's own text.
-const bytes = (text) => Buffer.byteLength(text.replaceAll(PATHS.root, '<repo-root>'), 'utf8');
+const normalizeCheckoutRoot = (text, root = PATHS.root) => text.replace(
+  new RegExp(`(^|[^A-Za-z0-9._-])${root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=/|$)`, 'g'),
+  '$1<repo-root>',
+);
+const bytes = (text) => Buffer.byteLength(normalizeCheckoutRoot(text), 'utf8');
 
 const SHAPES = {
   unpinned: {},
@@ -135,6 +139,12 @@ const SIZES = Object.fromEntries(
 );
 
 describe('claim prompt size ratchet', () => {
+  it('normalizes checkout paths without rewriting repository slugs', () => {
+    const rendered = 'owner/repo at /repo/server/file.js';
+    expect(normalizeCheckoutRoot(rendered, '/repo')).toBe('owner/repo at <repo-root>/server/file.js');
+    expect(bytes(`${rendered}!`)).toBe(bytes(rendered) + 1);
+  });
+
   it('retains the 30% reduction in combined claim catalog source', () => {
     const catalog = new URL('./catalog/', import.meta.url);
     const files = readdirSync(catalog).filter(file => /^claim.*\.js$/.test(file));
