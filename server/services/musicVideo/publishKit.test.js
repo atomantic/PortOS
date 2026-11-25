@@ -412,7 +412,7 @@ describe('renderSeekedWindow (the kit\'s native 9:16 cut)', () => {
     const out = await excerptRender.renderSeekedWindow(stored, { videoArgs, startSec: 20, endSec: 45, aspect: '9:16', fade: true, outputPath: '/tmp/v.mp4', jobId: 'job' }, { renderers, resolveAudio: async () => '/tmp/song.wav' });
     expect(out).toMatchObject({ width: 1080, height: 1920 });
     const input = encode.mock.calls[0][0];
-    expect(input).toMatchObject({ startSec: 20, endSec: 30, fade: true, videoArgs, outputPath: '/tmp/v.mp4', audioPath: '/tmp/song.wav', soundBed: null });
+    expect(input).toMatchObject({ window: { startSec: 20, endSec: 30 }, fade: true, videoArgs, outputPath: '/tmp/v.mp4', audioPath: '/tmp/song.wav', soundBed: null });
     expect(renderers.document.prepare.mock.calls[0][0]).not.toBe(stored); // re-framed view, the record untouched
   });
 });
