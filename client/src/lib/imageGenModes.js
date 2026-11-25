@@ -61,6 +61,7 @@ import {
   IMAGE_RUNTIME_READINESS,
   IMAGE_RUNTIME_REMEDY,
   MOSS_IMAGE_MODEL_ID,
+  isSelfManagedLocalImageModelId,
 } from '../../../server/lib/imageRuntimeRemedies.js';
 import {
   FAL_FEATURED_EDIT_MODEL_IDS,
@@ -141,6 +142,7 @@ export {
   IMAGE_RUNTIME_READINESS,
   IMAGE_RUNTIME_REMEDY,
   MOSS_IMAGE_MODEL_ID,
+  isSelfManagedLocalImageModelId,
   // The local model a blank `imageGen.local.modelId` resolves to, so the
   // Settings Local tab can name the install default instead of showing a blank
   // select whose meaning the user has to guess.

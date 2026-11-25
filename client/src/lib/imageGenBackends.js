@@ -1,8 +1,8 @@
 /**
  * Image-gen backend metadata for the UI.
  *
- * Icon metadata, `deriveAvailableBackends`, `isLocalImageConfigured(local)` (Python or a native MOSS
- * pin), and `imageGenReadiness(status)` — a compatibility-safe `ready` / `unavailable` / `unknown`
+ * Icon metadata, `deriveAvailableBackends`, `isLocalImageConfigured`, and
+ * `imageGenReadiness(status)` — a compatibility-safe `ready` / `unavailable` / `unknown`
  * read of image-gen status responses; re-exports everything from `imageGenModes.js` so consumers keep
  * one import site.
  *
@@ -13,7 +13,9 @@
  */
 
 import { Cpu, Terminal, Cloud, Sparkles, Zap } from 'lucide-react';
-import { IMAGE_GEN_MODE, IMAGE_RUNTIME_READINESS, MODE_LABELS, MOSS_IMAGE_MODEL_ID } from './imageGenModes.js';
+import {
+  IMAGE_GEN_MODE, IMAGE_RUNTIME_READINESS, LOCAL_IMAGEGEN_DEFAULT_MODEL, MODE_LABELS, isSelfManagedLocalImageModelId,
+} from './imageGenModes.js';
 
 export * from './imageGenModes.js';
 
@@ -39,16 +41,17 @@ export const imageGenReadiness = (status) => {
   return status?.connected ? 'ready' : 'unavailable';
 };
 
-// Configuration makes Local selectable; the per-model status probe still decides
-// whether it can render. The native MOSS pin needs no Python interpreter.
-export const isLocalImageConfigured = (local) => Boolean(
-  (local?.pythonPath || '').trim() || local?.modelId === MOSS_IMAGE_MODEL_ID,
-);
+// Selecting Local without a pin opts into the shipped default. The per-model
+// status probe still decides whether the runtime can render.
+export function isLocalImageConfigured(local, mode) {
+  const modelId = local?.modelId || (mode === IMAGE_GEN_MODE.LOCAL ? LOCAL_IMAGEGEN_DEFAULT_MODEL : null);
+  return Boolean((local?.pythonPath || '').trim() || isSelfManagedLocalImageModelId(modelId));
+}
 
 export function deriveAvailableBackends(settings, { excludeExternal = false } = {}) {
   const ig = settings?.imageGen || {};
   const out = [];
-  if (isLocalImageConfigured(ig.local))
+  if (isLocalImageConfigured(ig.local, ig.mode))
     out.push({ id: IMAGE_GEN_MODE.LOCAL, ...metaFor(IMAGE_GEN_MODE.LOCAL) });
   if (ig.codex?.enabled === true)
     out.push({ id: IMAGE_GEN_MODE.CODEX, ...metaFor(IMAGE_GEN_MODE.CODEX) });
