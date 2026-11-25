@@ -279,7 +279,7 @@ is also more correct: GitHub rebuilds the merge ref when the base branch moves,
 so the payload value can name a commit the tested tree was never merged with.
 
 Non-pull-request runs (push, nightly, dispatch, release fallback) force the
-complete suite and get no base; a push gets `CI_GATED_BASE_SHA` (below).
+complete suite and get no base; a push gets `CI_GATED_BASE_SHA` (see [Native jobs on a push to `main`](CI_NATIVE_JOBS.md#native-jobs-on-a-push-to-main)).
 
 ## Browser fidelity cases
 
@@ -330,7 +330,7 @@ runner; record-aware selection ([TEST_MEMO.md](./TEST_MEMO.md#related-selection)
 each selected suite runs. The runner slices the selection itself and never hands Vitest
 `--shard`, so a shard whose slice is empty exits green. Once-only steps — smoke boot and the client build —
 pin themselves to shard 1; lint is not among them,
-because it has its own job (see above). `CI Gate` sees a matrix job as one
+because it has its own job (see the lint job under [CI Workflow](GITHUB_ACTIONS.md#ci-workflow-ciyml)). `CI Gate` sees a matrix job as one
 `needs` result, so nothing downstream changes; public-repo runner minutes are
 free, so the fan-out costs only concurrency.
 
