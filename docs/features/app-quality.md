@@ -31,15 +31,19 @@ File-only versus fix mode remains authoritative.
 
 ## Scoring
 
-Auditors assess the **pre-fix** category from 0–100, where higher is healthier:
+Auditors assess the entire **pre-fix slice** they deep-reviewed on a scale from
+0–100, where higher is healthier. The score reflects the severity, prevalence,
+and reach of verified defects across the slice.
 
 | Score | Meaning |
 | --- | --- |
-| 90–100 | No material defect found after broad evidence |
-| 70–89 | Localized moderate debt |
-| 40–69 | Significant recurring or widespread problems |
-| 10–39 | Severe defects in core workflows |
-| 0–9 | Pervasive critical failure |
+| 96–100 | Exceptional quality demonstrated by inspection |
+| 88–95 | Clean, healthy slice without speculative hardening |
+| 85–87 | Healthy with minor polish remaining |
+| 75–84 | One or two localized defects in secondary paths |
+| 70–74 | Material but contained defects with wider impact than isolated secondary-path defects |
+| 40–69 | Recurring or systemic defects across multiple files or in core paths |
+| 0–39 | Severe core workflow breakage, data loss, or verified reachable exploits |
 
 Worst-finding severity is a separate 0–10 value (higher is worse; 0 means no
 material finding verified). An issue being filed, or one fix being made, is not
@@ -64,9 +68,9 @@ over a later slice-less run that day. Peer and release snapshot rows omit slice
 names. These rows can fill otherwise eligible days when there is no qualifying
 local slice or their timestamp is at least as recent as the newest qualifying
 local slice in the category window's eligible set.
-The pragmatic target band is **85–95**; the audit rubric tells agents not to
-chase 100/100 with speculative hardening. The `audit-slice-history` input shows each
-prior slice's score so a lane can re-verify a remediated slice that scored below 85.
+The pragmatic target band is **85–95**, and the healthy threshold is **85**.
+The `audit-slice-history` input shows each prior slice's score so a lane can
+re-verify a remediated slice that scored below 85.
 The breakdown shows how many runs fed the figure and the worst severity any of
 them found; the row's coverage, confidence, date, slice and summary describe the
 newest run. A newer partial run does not erase a fresh scored one. With no

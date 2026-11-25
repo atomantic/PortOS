@@ -31,7 +31,7 @@ it('shows zero as a real score up front and keeps the scoring explanation in a t
   const tooltip = screen.getByRole('tooltip');
   expect(tooltip).toHaveTextContent(/Recency-weighted equal-weight mean/);
   expect(tooltip).toHaveTextContent(/re-auditing the same slice supersedes its older pre-fix run/);
-  expect(tooltip).toHaveTextContent(/90–100 no material defect · 85–89 healthy with minor polish · 70–84 localized moderate debt · 40–69 significant problems · 10–39 severe defects · 0–9 pervasive failure/);
+  expect(tooltip).toHaveTextContent('96–100 exceptional quality demonstrated by inspection · 88–95 clean, healthy slice without speculative hardening · 85–87 healthy with minor polish remaining · 75–84 one or two localized defects in secondary paths · 70–74 material but contained defects with wider impact than isolated secondary-path defects · 40–69 recurring or systemic defects across multiple files or in core paths · 0–39 severe core workflow breakage, data loss, or verified reachable exploits');
   expect(tooltip).not.toHaveTextContent(/70–89/);
   // Metrics-only visitors never see the run or schedule forms until they ask.
   expect(screen.queryByText('Runner')).not.toBeInTheDocument();
