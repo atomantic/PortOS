@@ -137,7 +137,7 @@ import { registerAutobiographyReminderSchedule } from './autobiographyReminder.j
 import { recoverInterruptedRepoClones, recoverStuckClassifications } from './brain.js';
 import { recoverStuckAnalyses } from './writersRoom/analysisSnapshots.js';
 import { recoverStuckGeneratingStages, recoverStuckAutoRuns, recoverStuckAutopilots } from './pipeline/recovery.js';
-import { recoverInFlightProjects, markRecoveryDone } from './creativeDirector/recovery.js';
+import { recoverInFlightProjects } from './creativeDirector/recovery.js';
 import { requireMusicVideoRecovery } from './bootHookRegistry.js';
 import { recoverInterruptedBlenderModels, recoverInterruptedImageTo3dModels, recoverInterruptedThreejsModels } from './modelRecovery.js';
 import { startPolling } from './instances.js';
@@ -979,12 +979,8 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
     // died. The queue reload above just reclassified their renders as 'failed
     // (interrupted by restart)'; this nudges the orchestrator so projects don't
     // sit frozen waiting for listeners that no longer exist.
-    // recoverInFlightProjects resolves cdRecoveryDone on success. On any failure
-    // path here, explicitly resolve it so cos.start's gate doesn't hit the 60s
-    // timeout fallback for nothing.
-    recoverCreativeDirectorProjects: () => recoverInFlightProjects().catch(async (e) => {
+    recoverCreativeDirectorProjects: () => recoverInFlightProjects().catch((e) => {
       logBootstrapFailure('⚠️ CD boot recovery failed', e, console.log);
-      markRecoveryDone();
     }),
 
     runDatabasePhase: async () => {

@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { registerLateBoundService } from '../../lib/lateBoundServices.js';
+
+registerLateBoundService('agentManagement', async () => ({ getActiveAgents: () => [], killAgent: vi.fn() }));
 
 // Mocks must be declared before importing the module under test.
 const mockListProjects = vi.fn();
@@ -11,6 +14,21 @@ const mockAdvancePlanStep = vi.fn();
 const mockListJobs = vi.fn();
 const mockCancelJob = vi.fn();
 const mockUpdateTask = vi.fn();
+const mockGetInstanceId = vi.fn();
+const mockReconcileVideoExecution = vi.fn();
+const mockLogFailureWithStack = vi.fn();
+
+vi.mock('../instanceIdentity.js', () => ({
+  getInstanceId: (...args) => mockGetInstanceId(...args),
+}));
+
+vi.mock('./videoExecution.js', () => ({
+  reconcileVideoExecution: (...args) => mockReconcileVideoExecution(...args),
+}));
+
+vi.mock('../../lib/failureLogging.js', () => ({
+  logFailureWithStack: (...args) => mockLogFailureWithStack(...args),
+}));
 
 vi.mock('./local.js', () => ({
   listProjects: (...args) => mockListProjects(...args),
@@ -41,10 +59,13 @@ vi.mock('../cos/cosTaskStore.js', () => ({
   updateTask: (...args) => mockUpdateTask(...args),
 }));
 
-const { recoverInFlightProjects } = await import('./recovery.js');
+const { cdRecoveryDone, recoverInFlightProjects } = await import('./recovery.js');
 
 beforeEach(() => {
   mockListProjects.mockReset();
+  mockGetInstanceId.mockReset().mockResolvedValue('local-install');
+  mockReconcileVideoExecution.mockReset().mockResolvedValue(undefined);
+  mockLogFailureWithStack.mockReset();
   mockUpdateScene.mockReset().mockResolvedValue(undefined);
   mockUpdateRun.mockReset().mockResolvedValue(undefined);
   mockAdvance.mockReset().mockResolvedValue(undefined);
@@ -57,6 +78,54 @@ beforeEach(() => {
 });
 
 describe('recoverInFlightProjects', () => {
+  it('releases the boot gate when project discovery fails', async () => {
+    const error = new Error('project listing failed');
+    mockListProjects.mockRejectedValueOnce(error);
+
+    await expect(recoverInFlightProjects()).rejects.toBe(error);
+    const onRecoveryDone = vi.fn();
+    await Promise.race([cdRecoveryDone.then(onRecoveryDone), Promise.resolve()]);
+    expect(onRecoveryDone).toHaveBeenCalledOnce();
+  });
+
+  it('only retires and reconciles Video projects owned by this install', async () => {
+    const videoProject = {
+      workspace: 'video',
+      status: 'rendering',
+      runs: [{ runId: 'run-stale', kind: 'evaluate', status: 'running' }],
+    };
+    mockListProjects.mockResolvedValue([
+      { ...videoProject, id: 'foreign-video', videoOwnerInstanceId: 'previous-install' },
+      { ...videoProject, id: 'replica-video', videoOwnerInstanceId: 'local-install', videoReplica: true },
+      { ...videoProject, id: 'unowned-video' },
+      { ...videoProject, id: 'local-video', videoOwnerInstanceId: 'local-install' },
+      { id: 'cd-local', status: 'planning' },
+    ]);
+
+    await expect(recoverInFlightProjects()).resolves.toEqual({ resumed: 1 });
+    expect(mockGetInstanceId).toHaveBeenCalledOnce();
+    expect(mockUpdateRun).toHaveBeenCalledExactlyOnceWith('local-video', 'run-stale', expect.objectContaining({
+      status: 'failed',
+    }));
+    expect(mockReconcileVideoExecution).toHaveBeenCalledExactlyOnceWith('local-video', { restarting: true });
+    expect(mockAdvance).toHaveBeenCalledExactlyOnceWith('cd-local');
+    expect(mockLogFailureWithStack).not.toHaveBeenCalled();
+  });
+
+  it('logs a project reconciliation failure and continues recovering later projects', async () => {
+    const error = new Error('Video project write failed');
+    mockReconcileVideoExecution.mockRejectedValueOnce(error);
+    mockListProjects.mockResolvedValue([
+      { id: 'broken-video', workspace: 'video', status: 'rendering', videoOwnerInstanceId: 'local-install' },
+      { id: 'cd-local', status: 'rendering', treatment: { scenes: [{ sceneId: 's1', status: 'rendering' }] } },
+    ]);
+
+    await expect(recoverInFlightProjects()).resolves.toEqual({ resumed: 1 });
+    expect(mockLogFailureWithStack).toHaveBeenCalledExactlyOnceWith('❌ CD recovery: project broken-video failed', error);
+    expect(mockUpdateScene).toHaveBeenCalledExactlyOnceWith('cd-local', 's1', { status: 'pending' });
+    expect(mockAdvance).toHaveBeenCalledExactlyOnceWith('cd-local');
+  });
+
   it('skips terminal and draft projects entirely', async () => {
     mockListProjects.mockResolvedValue([
       { id: 'cd-1', status: 'complete', treatment: { scenes: [{ sceneId: 's1', status: 'accepted' }] } },
