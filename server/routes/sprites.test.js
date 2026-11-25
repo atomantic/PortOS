@@ -1083,9 +1083,13 @@ describe('sprites routes', () => {
     expect(publish.setPublishBinding).toHaveBeenCalledTimes(2);
   });
 
-  it('POST /:id/atlas/publish delegates to publishAtlas with the acknowledge flag', async () => {
-    const r = await request(app).post('/api/sprites/pioneer/atlas/publish').send({});
-    expect(r.status).toBe(200);
-    expect(publish.publishAtlas.mock.calls[0][0]).toBe('pioneer');
+  it('POST /:id/atlas/publish forwards the confirmed revision and rejects blanket approval', async () => {
+    const path = '/api/sprites/pioneer/atlas/publish';
+    const body = { acknowledgeOverwrite: 'a'.repeat(64) };
+    expect((await request(app).post(path).send({})).status).toBe(200);
+    expect((await request(app).post(path).send(body)).status).toBe(200);
+    expect(publish.publishAtlas).toHaveBeenLastCalledWith('pioneer', body);
+    expect((await request(app).post(path).send({ acknowledgeOverwrite: true })).status).toBe(400);
+    expect(publish.publishAtlas).toHaveBeenCalledTimes(2);
   });
 });

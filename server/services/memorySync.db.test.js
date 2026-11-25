@@ -163,14 +163,17 @@ describe.skipIf(!runDb)('memorySync.applyRemoteChanges', () => {
 
   it('retries local notification cleanup after a peer deletion has committed', async () => {
     const notifications = await import('./notifications.js');
+    const review = await import('./review.js');
     const stale = remoteMemory(ID_A, '2026-01-01T00:00:00.000Z');
     await memorySync.applyRemoteChanges([stale]);
     const notification = await notifications.addNotification({ type: 'memory_approval', title: 'Example', metadata: { memoryId: ID_A } });
+    const preview = await review.createMemoryApprovalItem(stale, 'example-agent', 'example-task');
     const markers = [{ id: ID_A, deletedAt: stale.updatedAt }];
     const cleanupSpy = vi.spyOn(notifications, 'removeByMetadata').mockRejectedValueOnce(new Error('temporary write failure'));
     try {
       await expect(memorySync.applyRemoteChanges([], 1, markers)).rejects.toThrow('temporary write failure');
       expect(await contentOf(ID_A)).toBeNull();
+      expect((await review.getItems()).map(row => row.id)).not.toContain(preview.id);
       expect(await memorySync.applyRemoteChanges([stale], 1, markers)).toMatchObject({ deleted: 0, skipped: 1 });
       expect((await notifications.getNotifications()).map(row => row.id)).not.toContain(notification.id);
     } finally {

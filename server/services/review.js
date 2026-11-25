@@ -548,27 +548,21 @@ export async function getBriefing() {
   };
 }
 
-/**
- * Bridge CoS events into review items
- */
-cosEvents.on('memory:approval-needed', (data) => {
-  const memories = data?.memories ?? [];
-  for (const mem of memories) {
-    createItem({
-      type: 'alert',
-      title: `Memory approval: ${mem.content?.slice(0, 80) || 'New memory entry'}`,
-      description: `Type: ${mem.type ?? 'unknown'} | Confidence: ${mem.confidence ?? 'N/A'}`,
-      metadata: {
-        referenceId: mem.id,
-        category: 'memory-approval',
-        actionKind: 'memory.approval',
-        sourceOwned: true,
-        agentId: data?.agentId,
-        taskId: data?.taskId,
-      }
-    }).catch(err => console.error(`❌ Failed to create review alert: ${err.message}`));
-  }
-});
+export function createMemoryApprovalItem(mem, agentId, taskId) {
+  return createItem({
+    type: 'alert',
+    title: `Memory approval: ${mem.content?.slice(0, 80) || 'New memory entry'}`,
+    description: `Type: ${mem.type ?? 'unknown'} | Confidence: ${mem.confidence ?? 'N/A'}`,
+    metadata: {
+      referenceId: mem.id,
+      category: 'memory-approval',
+      actionKind: 'memory.approval',
+      sourceOwned: true,
+      agentId,
+      taskId,
+    }
+  });
+}
 
 // Goal-fidelity hold (#5994): a run that shipped clean, reviewed code which does
 // something other than what the task asked for. It is recorded as needs-attention
@@ -629,7 +623,7 @@ cosEvents.on('memory:rejected', (data) => {
   if (data?.id) dismissByReferenceId(data.id).catch(err => console.error(`❌ Failed to dismiss rejected memory review item: ${err.message}`));
 });
 
-function removeByReferenceId(referenceId) {
+export function removeMemoryApprovalItems(referenceId) {
   return runMutation(async () => {
     const items = await loadItems();
     const archive = await loadArchive();
@@ -646,9 +640,3 @@ function removeByReferenceId(referenceId) {
     return { result: ids.size, events: [...ids].map(id => ['item:deleted', { id }]) };
   });
 }
-
-cosEvents.on('memory:deleted', ({ id, hard } = {}) => {
-  if (hard === true && id) {
-    return removeByReferenceId(id).catch(err => console.error(`❌ Failed to remove purged memory review item: ${err.message}`));
-  }
-});

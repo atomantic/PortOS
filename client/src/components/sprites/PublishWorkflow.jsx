@@ -18,14 +18,6 @@ import { timeAgo } from '../../utils/formatters.js';
 // divergence-refusing) into the game repo.
 // Appears only once that primary set is finalized — the compile input.
 
-const OCCUPIED_TARGETS = new Map([
-  ['PUBLISH_DEST_OCCUPIED', (destLabel) => `${destLabel} already contains an atlas PortOS did not publish. Overwrite it?`],
-  ['PUBLISH_LAYOUT_OCCUPIED', (destLabel) => `${destLabel} already has a layout sidecar PortOS did not write. Overwrite it?`],
-  ['PUBLISH_PORTRAIT_OCCUPIED', () => 'The selector portrait destination already contains an image PortOS did not publish. Overwrite it?'],
-  ['PUBLISH_PRESENTATION_IDLE_OCCUPIED', () => 'The picker animation destination already contains an image PortOS did not publish. Overwrite it?'],
-  ['PUBLISH_PRESENTATION_IDLE_LAYOUT_OCCUPIED', () => 'The picker animation layout destination already contains metadata PortOS did not publish. Overwrite it?'],
-]);
-
 const EMPTY_TRACK_DEFINITIONS = Object.freeze([]);
 const DEFAULT_COMPILE_GEOMETRY = Object.freeze({
   cellSize: 96,
@@ -113,7 +105,7 @@ export default function PublishWorkflow({
 
   // The picker displays repository paths from the full sidebar app records.
   const apps = useSidebarApps({ includeDetails: true });
-  // null → idle; 'publish' → normal confirm; an occupied code → overwrite confirm.
+  // 'publish' opens the initial confirmation. A 409 supplies the overwrite review.
   const [confirmStage, setConfirmStage] = useState(null);
   const {
     binding, setBindingField, bindingDirty,
@@ -165,13 +157,10 @@ export default function PublishWorkflow({
   // The confirm row stays mounted while the request is in flight (so the
   // "Publishing…" label is actually visible) and clears on completion.
   const [publish, publishing] = useAsyncAction(async (acknowledgeOverwrite) => {
-    const body = acknowledgeOverwrite ? { acknowledgeOverwrite: true } : {};
+    const body = acknowledgeOverwrite ? { acknowledgeOverwrite } : {};
     const result = await publishSpriteAtlas(record.id, body, { silent: true }).catch((err) => {
-      // The destination holds an atlas — or a layout sidecar — PortOS never
-      // published. Escalate to an explicit overwrite consent instead of
-      // toasting a dead end the UI offers no way to act on.
-      if (OCCUPIED_TARGETS.has(err?.code)) {
-        setConfirmStage(err.code);
+      if (err?.code === 'PUBLISH_OUTPUTS_OCCUPIED' && err.context?.revision && err.context.paths?.length) {
+        setConfirmStage({ ...err.context, changed: Boolean(acknowledgeOverwrite) });
         return null;
       }
       setConfirmStage(null);
@@ -201,7 +190,6 @@ export default function PublishWorkflow({
   // edited — consent never carries across a binding change.
   const bindingSettled = Boolean(saved?.appId && saved?.atlasDestPath) && !bindingDirty && !savingBinding;
   const canPublish = bindingSettled && !publishing;
-  const overwriteQuestion = OCCUPIED_TARGETS.get(confirmStage);
   const boundApp = apps.find((a) => a.id === saved?.appId);
   const destLabel = `${boundApp?.name || saved?.appId}: ${saved?.atlasDestPath}`;
 
@@ -281,16 +269,19 @@ export default function PublishWorkflow({
               question={`Replace ${destLabel}?`}
               confirmText={publishing ? 'Publishing…' : 'Publish'}
               tone="warning"
-              onConfirm={() => { if (!publishing) publish(false); }}
+              onConfirm={() => { if (!publishing) publish(); }}
               onCancel={() => setConfirmStage(null)}
             />
           )}
-          {overwriteQuestion && bindingSettled && (
+          {confirmStage?.revision && bindingSettled && (
             <InlineConfirmRow
-              question={overwriteQuestion(destLabel)}
+              question={<>
+                {confirmStage.changed && 'The binding or files changed. '}Overwrite these files in {confirmStage.appLabel}?
+                {confirmStage.paths.map((path) => <code key={path} className="block break-all">{path}</code>)}
+              </>}
               confirmText={publishing ? 'Publishing…' : 'Overwrite'}
               tone="error"
-              onConfirm={() => { if (!publishing) publish(true); }}
+              onConfirm={() => { if (!publishing) publish(confirmStage.revision); }}
               onCancel={() => setConfirmStage(null)}
             />
           )}

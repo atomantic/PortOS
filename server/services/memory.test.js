@@ -29,6 +29,8 @@ vi.mock('../lib/vectorMath.js', () => ({
   clusterBySimilarity: vi.fn().mockReturnValue([])
 }));
 
+vi.mock('./review.js', () => ({ removeMemoryApprovalItems: vi.fn() }));
+
 // Mock notifications
 vi.mock('./notifications.js', () => ({
   removeByMetadata: vi.fn().mockResolvedValue(undefined)

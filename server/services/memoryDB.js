@@ -319,6 +319,19 @@ export async function peekMemory(id) {
   return rowToMemory(result.rows[0]);
 }
 
+// DELETE and status updates must wait until the file-backed approval writes settle.
+export function withPendingMemories(ids, publish) {
+  return withTransaction(async client => {
+    const unique = memoryIdList(ids);
+    const { rows } = await client.query(
+      "SELECT * FROM memories WHERE id = ANY($1::uuid[]) AND status = 'pending_approval' ORDER BY id FOR UPDATE",
+      [unique]
+    );
+    const byId = new Map(rows.map(row => [row.id, rowToMemory(row)]));
+    return publish(unique.flatMap(id => byId.has(id) ? [byId.get(id)] : []));
+  });
+}
+
 /** One SELECT for many ids. Embedding stays out unless includeEmbedding is set. */
 export async function peekMemories(ids, { includeEmbedding = false } = {}) {
   const unique = memoryIdList(ids);

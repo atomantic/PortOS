@@ -138,6 +138,11 @@ export async function peekMemories(ids, options) {
   return b.peekMemories(ids, options);
 }
 
+export async function withPendingMemories(ids, publish) {
+  const b = await getBackend();
+  return b.withPendingMemories(ids, publish);
+}
+
 export async function recordMemoryAccess(ids) {
   const b = await getBackend();
   return b.recordMemoryAccess(ids);
