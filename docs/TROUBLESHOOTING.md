@@ -754,12 +754,7 @@ A run where every job reads `cancelled` has one of three causes:
    spending limit (`gh auth refresh -s user`, then
    `gh api /users/<your-login>/settings/billing/actions`).
 
-**What PortOS does about it.** `.github/workflows/ci-cancel-recovery.yml`
-re-dispatches a cancelled pull-request run exactly once when no job failed, no
-job hit its timeout, and no newer run exists for the branch. Its summary page
-says which of those applied. A run you cancel by hand looks like an external
-cancel and gets the same single retry; push a new commit or close the PR if you
-want it to stay stopped.
+**What to do about it.** PortOS does not retry a cancelled run automatically. Re-run it with `gh run rerun <run-id>` (or push a new commit); the red `CI Gate` clears when the re-run passes.
 
 ### Windows server unit tests fail but macOS/Linux pass
 

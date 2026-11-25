@@ -491,7 +491,7 @@ finalization. Interpret the first unconfirmed boundary in order: stage start →
 command exit → command close → owned-process snapshot → checkout post-action →
 runner `Complete job` → overall job result. A successful repository checkpoint
 cannot attest the later runner/result-service handoff. Keep the ten-minute impact
-timeout, fail-closed `CI Gate`, and real-job-timeout exclusion in cancel recovery.
+timeout, and fail-closed `CI Gate`.
 
 #### Retained evidence rule
 

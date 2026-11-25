@@ -162,8 +162,7 @@ describe('summarizeGateResults', () => {
 
   it('keeps the cancelled verdict when the lookup could not run at all', () => {
     // A genuine external cancel, or a lookup that failed. Either way it must
-    // stay `cancelled`, so the run still earns its one automatic retry from
-    // ci-cancel-recovery.yml.
+    // stay `cancelled`, so the gate keeps the "CANCELLED, not failed" wording.
     const summary = summarizeGateResults(results({ server: 'cancelled' }), 'CI Gate', { culprits: null });
     expect(summary.verdict).toBe('cancelled');
     expect(summary.lines.join('\n')).toContain('CANCELLED, not failed');
@@ -280,8 +279,8 @@ describe('reportGate culprit lookup', () => {
   });
 
   it('falls back to the cancelled wording when the API is unavailable', async () => {
-    // A network blip must never flip a cancelled run red — the run still needs
-    // its one automatic retry from ci-cancel-recovery.yml. The lookup's own
+    // A network blip must never flip a cancelled run red — the run should keep
+    // the "CANCELLED, not failed" wording. The lookup's own
     // failure modes are pinned in lib/githubActionsApi.test.js; this is the
     // gate's side of that contract.
     const { outcome, errored } = await run({ fetchImpl: vi.fn().mockRejectedValue(new Error('network unavailable')) });

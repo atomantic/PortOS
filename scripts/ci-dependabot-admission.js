@@ -11,7 +11,7 @@ export function requireDependabotAdmission({ eventName, event, attempt, triggeri
   if (!event?.pull_request?.user?.login) throw new Error('Missing pull request author; refusing CI admission.');
   if (event.pull_request.user.login !== 'dependabot[bot]') return;
   const runAttempt = Number(attempt);
-  // Actions cancel recovery is automated, so an attempt counter alone must
+  // Automatic re-runs (such as an Actions retry) also raise the attempt counter, so it alone must
   // never release a held update. Only a writer's explicit rerun may do that.
   if (!Number.isSafeInteger(runAttempt) || runAttempt < 2
       || !/^[a-z\d](?:[a-z\d-]*[a-z\d])?$/i.test(triggeringActor ?? '')
