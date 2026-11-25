@@ -1,5 +1,4 @@
-import { inputXsClass as inputCls } from './controlClasses.js';
-import { compactButtonClass as buttonCls } from './controlClasses.js';
+import { compactButtonClass as buttonCls, inputXsClass as inputCls } from './controlClasses.js';
 import { supportsToolFreeOneShot, toolFreeOneShotSelectionPolicy } from '../../utils/providerSelection.js';
 import { musicVideoDocumentRenderer } from '../../../../server/lib/musicVideo/musicVideoMediaPolicy.js';
 import { useEffect, useState, useRef } from 'react';

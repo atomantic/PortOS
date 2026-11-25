@@ -1,5 +1,4 @@
-import { selectXsShrinkClass as SELECT } from './controlClasses.js';
-import { sceneButtonClass as SECONDARY_BUTTON } from './controlClasses.js';
+import { sceneButtonClass as SECONDARY_BUTTON, selectXsShrinkClass as SELECT } from './controlClasses.js';
 import { castLookForTake } from '../../../../server/lib/musicVideo/musicVideoCastLook.js';
 import { musicVideoGreyboxReference } from '../../../../server/lib/musicVideo/musicVideoGreybox.js';
 import { resolveSourceTake } from '../../../../server/lib/musicVideo/musicVideoSourceTake.js';

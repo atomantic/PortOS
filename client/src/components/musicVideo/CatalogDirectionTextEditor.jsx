@@ -1,5 +1,4 @@
-import { bareButtonClass as buttonClass } from './controlClasses.js';
-import { inputClass } from './controlClasses.js';
+import { bareButtonClass as buttonClass, inputClass } from './controlClasses.js';
 import { useState } from 'react';
 import { Pencil, Plus, Save, Trash2 } from 'lucide-react';
 

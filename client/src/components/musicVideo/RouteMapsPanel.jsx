@@ -1,5 +1,4 @@
-import { inputXsShrinkClass as inputCls } from './controlClasses.js';
-import { previzButtonClass as buttonCls } from './controlClasses.js';
+import { inputXsShrinkClass as inputCls, previzButtonClass as buttonCls } from './controlClasses.js';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { ArrowDown, ArrowUp, Navigation, Plus, Trash2 } from 'lucide-react';
