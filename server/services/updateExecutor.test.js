@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pinPlatform } from '../lib/testHelper.js';
+import { canonicalStringify } from '../lib/objects.js';
 
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
@@ -26,7 +28,7 @@ vi.mock('./updateChecker.js', () => ({
 }));
 
 import { spawnDetached, isDetachedRunning } from '../lib/detachedSpawn.js';
-import { readFile } from 'fs/promises';
+import { readFile, unlink } from 'fs/promises';
 import { getCurrentVersion, recordUpdateResult } from './updateChecker.js';
 import { createMaintenanceAdmission, maintenance } from '../lib/maintenanceAdmission.js';
 import { executeUpdate, launchUpdate } from './updateExecutor.js';
@@ -178,6 +180,38 @@ describe('executeUpdate', () => {
       await expect(launched.completion).resolves.toMatchObject({ success: true });
     } finally {
       vi.useRealTimers();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rechecks receiver ownership after awaiting the detached peer process check', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'update-peer-ownership-'));
+    const admission = createMaintenanceAdmission(root);
+    try {
+      const intent = { action: 'portos.update' };
+      const evidence = Object.freeze({ intent: Object.freeze(intent),
+        target: Object.freeze({ headSha: 'a'.repeat(40), targetSha: 'b'.repeat(40) }) });
+      const evidenceDigest = createHash('sha256').update(canonicalStringify(evidence)).digest('hex');
+      const hold = admission.begin({ reason: 'Fixture drain', owner: 'Fixture operator' }).hold;
+      const operation = { operationId: randomUUID(), requestId: randomUUID(), peerInstanceId: randomUUID(),
+        hostInstanceId: randomUUID(), grantId: randomUUID(), grantGeneration: 1, scope: 'execution-v1',
+        pairBinding: 'd'.repeat(64), intent, receiverVersion: '1.0.0', evidenceDigest };
+      const claim = admission.claimReady({ id: hold.id, revision: hold.revision, operation }, admission.observeIdle());
+      const token = value => ({ id: value.id, revision: value.revision, fingerprint: value.fingerprint });
+      const started = admission.transitionExclusive(token(claim), 'in-flight', admission.observeIdle());
+      const capability = admission.issueExecutionCapability(started);
+      isDetachedRunning.mockImplementationOnce(async () => {
+        await Promise.resolve();
+        admission.transitionExclusive(token(started), 'uncertain');
+        return false;
+      });
+
+      await expect(launchUpdate('v2.0.0', vi.fn(), { admission, peerExecution: { capability, evidence } }))
+        .rejects.toMatchObject({ code: 'MAINTENANCE_STALE' });
+      expect(isDetachedRunning).toHaveBeenCalledExactlyOnceWith(join('/mock/data', 'peer-execution', operation.operationId),
+        { executable: 'bash', args: ['/mock/update.sh'] });
+      expect(spawnDetached).not.toHaveBeenCalled();
+    } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -460,6 +494,35 @@ describe('executeUpdate', () => {
     expect(recordUpdateResult).toHaveBeenCalledWith(
       expect.objectContaining({ version: '2.0.0', success: true })
     );
+  });
+
+  it.each([false, true])('retains the completion marker when persistence fails (journal result: %s)', async journalResult => {
+    const child = createMockChild();
+    const emit = vi.fn();
+    const completedAt = '2026-01-01T00:00:00Z';
+    const logError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    readFile.mockResolvedValue(JSON.stringify({ version: '2.0.0', completedAt }));
+    recordUpdateResult.mockRejectedValueOnce(new Error('fixture persistence failure'));
+    if (journalResult) {
+      child.pid = null;
+      maintenance.deferredUpdate.cancelLaunch.mockReturnValue({ state: 'finished',
+        result: { success: true, completedAt: '2026-01-02T00:00:00Z' } });
+    }
+    spawnDetached.mockResolvedValue(child);
+    try {
+      const { promise } = await startUpdate('v1.0.0', emit);
+      if (!journalResult) {
+        emitStep(child);
+        child.emit('close', 0);
+      }
+
+      await expect(promise).resolves.toEqual({ success: true, version: '2.0.0' });
+      expect(recordUpdateResult).toHaveBeenCalledWith({ version: '2.0.0', success: true, completedAt, log: '' });
+      expect(unlink).not.toHaveBeenCalled();
+      expect(emit).toHaveBeenCalledWith('complete', 'done', 'Update complete — restarting');
+    } finally {
+      logError.mockRestore();
+    }
   });
 
   it('handles spawn error', async () => {
