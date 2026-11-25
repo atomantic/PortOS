@@ -16,30 +16,24 @@ import { resolveRemoteDefaultRef } from './primaryCheckoutGuard.js';
  * agent created or rewrote are stamped now, while commits merely pulled from the remote keep their
  * older committer date, so they don't count as this agent's work.
  *
- * Non-throwing: no commits yet, a missing/detached/broken checkout, or a git timeout all return 0.
+ * Returns null when Git cannot establish a count. Only a successful count proves zero.
  *
  * @param {string} workspacePath
  * @param {number} sinceMs - epoch ms marking the start of the run window
- * @returns {Promise<number>}
+ * @returns {Promise<number|null>}
  */
 export async function commitsSince(workspacePath, sinceMs) {
-  if (!workspacePath || typeof workspacePath !== 'string') return 0;
-  if (!Number.isFinite(sinceMs)) return 0;
-  // A finite but out-of-range epoch (±1e15) makes `toISOString()` throw RangeError, which would break
-  // the non-throwing contract outside the request lifecycle.
+  if (!workspacePath || typeof workspacePath !== 'string' || !Number.isFinite(sinceMs)) return null;
   const since = new Date(sinceMs);
-  if (Number.isNaN(since.getTime())) return 0;
-  // `ignoreExitCode` so a repo with no HEAD reads as "no commits" instead of rejecting (house
-  // convention for probe-shaped git calls). The 10s `timeout` (not execGit's 30s default) keeps a git
-  // wedged on a locked index or slow mount from holding agent finalize open; a timeout rejects -> 0.
+  if (Number.isNaN(since.getTime())) return null;
   const result = await execGit(
     ['rev-list', '--count', `--since=${since.toISOString()}`, 'HEAD'],
     workspacePath,
     { ignoreExitCode: true, timeout: 10_000 },
   ).catch(() => null);
-  if (!result || result.exitCode !== 0) return 0;
-  const count = parseInt(result.stdout.trim(), 10);
-  return Number.isFinite(count) ? count : 0;
+  const value = result?.exitCode === 0 ? result.stdout.trim() : '';
+  const count = Number(value);
+  return /^\d+$/.test(value) && Number.isSafeInteger(count) ? count : null;
 }
 
 /**
@@ -56,9 +50,10 @@ export function toEpochMs(startedAt) {
   return NaN;
 }
 
-/** Boolean form of `commitsSince`: did this run leave a commit behind? */
+/** Did this run leave a commit behind? null preserves an unavailable count. */
 export async function committedDuringRun(workspacePath, sinceMs) {
-  return (await commitsSince(workspacePath, sinceMs)) > 0;
+  const count = await commitsSince(workspacePath, sinceMs);
+  return count === null ? null : count > 0;
 }
 
 /**

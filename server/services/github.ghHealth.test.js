@@ -255,8 +255,9 @@ describe('findPullRequestForBranch (#3358)', () => {
   };
 
   it('reports `found` with the PR number', async () => {
-    spawnMock.mockImplementation(() => ghChild({ stdout: '[{"number":7,"url":"https://example.com/pr/7","body":"Closes #1","state":"OPEN"}]' }));
-    await expect(findPullRequestForBranch('claim/issue-1')).resolves.toMatchObject({ status: 'found', number: 7, body: 'Closes #1' });
+    spawnMock.mockImplementation(() => ghChild({ stdout: '[{"number":7,"url":"https://example.com/pr/7","body":"Closes #1","state":"OPEN","headRefName":"claim/issue-1","baseRefName":"trunk","isCrossRepository":false}]' }));
+    await expect(findPullRequestForBranch('claim/issue-1')).resolves.toMatchObject({ status: 'found', number: 7, body: 'Closes #1',
+      headBranch: 'claim/issue-1', baseBranch: 'trunk', sameRepository: true });
   });
 
   it.each([
