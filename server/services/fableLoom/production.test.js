@@ -432,7 +432,7 @@ describe('fableLoom production service', () => {
     });
     expect(imagePrepareMocks.resolveLocalImageModel.mock.calls.at(-1)[1]).toEqual(
       expect.objectContaining({
-        prompt: params.prompt, negativePrompt: params.negativePrompt,
+        modelId: params.modelId, prompt: params.prompt, negativePrompt: params.negativePrompt,
         width: params.width, height: params.height,
         referenceImagePaths: params.referenceImagePaths, referenceImageStrengths: params.referenceImageStrengths,
       }),

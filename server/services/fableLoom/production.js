@@ -597,7 +597,8 @@ async function prepareImageJob(run, asset) {
       prompt: conditioned?.prompt ?? asset.prompt,
       ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
       negativePrompt: conditioned?.negativePrompt || '',
-      modelId: requestedModel,
+      // Conditioning and sampler defaults belong to the same model the job validates.
+      modelId: requestedModel || provisionalModel?.id,
       width: geometry.width,
       height: geometry.height,
       aspectRatio: geometry.aspectRatio,
