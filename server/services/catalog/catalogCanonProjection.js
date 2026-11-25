@@ -10,8 +10,8 @@
  *     SYNCHRONOUSLY inside updateUniverse so the cache never lags the authoritative row.
  *
  * Loop safety: projectToCanon calls updateUniverse, which calls projectToCatalog (A->B->A). Each call
- * carries its canonical id and aliases so only that operation's own echo is skipped; independent canon
- * edits still run the normal freshness checks.
+ * guards the identities in its universe snapshot, including unchanged siblings. Independent canon edits
+ * still run the normal freshness checks in their own write.
  *
  * Conflict policy: LWW on `updatedAt` (no field-level merge). projectToCatalog writes only when the
  * embedded entry is newer-or-equal; projectToCanon accepts only the current catalog revision and never
@@ -22,11 +22,8 @@ import { isDeepStrictEqual } from 'node:util';
 import * as catalogDB from './catalogDB.js';
 import { catalogEvents } from './catalogEvents.js';
 import { getCatalogIdentityAccess } from '../catalogDB/identityAccess.js';
-import { BIBLE_FIELD } from '../../lib/storyBible.js';
-
-// Canon array keys, derived from the bible registry so a future kind added
-// there flows through without editing this file.
-const CANON_ARRAY_KEYS = Object.freeze(Object.values(BIBLE_FIELD));
+import { collectUniverseCanonIngredientIds } from '../../lib/catalog/catalogUniverseContext.js';
+import { BIBLE_KEYS } from '../../lib/storyBible.js';
 
 // Fields that live on the embedded canon entry but are NOT part of the catalog
 // row's `payload` (the catalog row owns `id`/`name`/timestamps as columns, and
@@ -92,6 +89,7 @@ export async function projectToCanon(ingredientId, updatedIngredient, deps = {})
     // restore and leak stale canon back into Catalog). `silent: true` suppresses per-universe peer-sync
     // fan-out; `guardToken` makes updateUniverse's projectToCatalog skip this ingredient (loop break).
     let touched = false;
+    const projectionIdentityIds = [...identityIds];
     const result = await updateUniverse(universeId, async (cur) => {
       // Read without taking the catalog write queue: reverse projection already
       // runs inside this universe queue. Waiting on both queues can deadlock.
@@ -101,7 +99,7 @@ export async function projectToCanon(ingredientId, updatedIngredient, deps = {})
         || current.name !== name
         || !isDeepStrictEqual(entryToPayload(current.payload || {}), payload)) return null;
       const patch = {};
-      for (const arrayKey of CANON_ARRAY_KEYS) {
+      for (const arrayKey of BIBLE_KEYS) {
         const list = Array.isArray(cur[arrayKey]) ? cur[arrayKey] : [];
         if (!list.some((e) => identityIds.has(e?.ingredientId))) continue;
         patch[arrayKey] = list.map((e) => {
@@ -113,8 +111,10 @@ export async function projectToCanon(ingredientId, updatedIngredient, deps = {})
           return { ...pickCanonControlFields(e), ...payload, name, ingredientId, updatedAt };
         });
       }
-      return touched ? patch : null;
-    }, { silent: true, canonProjectionGuard: ingredientId, canonProjectionIdentityIds: [...identityIds] }).catch((err) => {
+      if (!touched) return null;
+      projectionIdentityIds.push(...collectUniverseCanonIngredientIds(cur));
+      return patch;
+    }, { silent: true, canonProjectionGuard: ingredientId, canonProjectionIdentityIds: projectionIdentityIds }).catch((err) => {
       console.error(`🔁 projectToCanon: universe ${universeId} update failed: ${err.message}`);
       return null;
     });
@@ -130,7 +130,7 @@ export async function projectToCanon(ingredientId, updatedIngredient, deps = {})
  *
  *   canonArrays: the PERSISTED universe record (or a `{ characters, places, objects }` subset).
  *   guardToken: when set (a projectToCanon-originated write), the entry with that ingredientId is skipped (loop break).
- *   guardIdentityIds: aliases captured by that originating operation, also skipped.
+ *   guardIdentityIds: aliases and unchanged canon entries captured by the originating operation, also skipped.
  *
  * LWW: writes only when the embedded entry's `updatedAt` is newer-or-equal to the stored row's,
  * re-checked under the row lock. Best-effort per entry; a write refused because the row changed
@@ -145,13 +145,12 @@ export async function projectToCatalog(universeId, canonArrays, { guardToken = n
   const guardedIds = new Set(guardIdentityIds);
   if (guardToken) guardedIds.add(guardToken);
   const candidates = [];
-  for (const arrayKey of CANON_ARRAY_KEYS) {
+  for (const arrayKey of BIBLE_KEYS) {
     const list = Array.isArray(canonArrays[arrayKey]) ? canonArrays[arrayKey] : [];
     for (const entry of list) {
       const ingredientId = entry?.ingredientId;
       if (!ingredientId) continue;
-      // Loop break: skip the ingredient the originating projectToCanon is
-      // writing FROM (its catalog row is already authoritative this request).
+      // A Catalog-originated write has no canon edits to send back.
       if (guardedIds.has(ingredientId)) {
         stats.skipped++;
         continue;

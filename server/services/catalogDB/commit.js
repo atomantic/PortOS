@@ -14,8 +14,9 @@ import { createHash } from 'node:crypto';
 import { canonicalStringify } from '../../lib/objects.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { catalogScrapCommitSchema } from '../../lib/catalog/catalogValidation.js';
+import { collectUniverseCanonIngredientIds } from '../../lib/catalog/catalogUniverseContext.js';
 import { query, withTransaction } from '../../lib/db.js';
-import { createIngredient, getIngredient } from './ingredients.js';
+import { createIngredient, getIngredient, getIngredientIdentityIds } from './ingredients.js';
 import { linkIngredientToSource, linkIngredientToRef, linkIngredientRelation, universeRefRoleForType } from './refs.js';
 import { BIBLE_LIMITS } from '../../lib/storyBible.js';
 import { assertCatalogIdentityWritable } from './identityAccess.js';
@@ -65,6 +66,7 @@ async function withScrapCanon({ universeRef, role, accepted = [] }, produce) {
   if (!universeRef || !accepted.some((draft) => eligible(draft.type))) return withTransaction(produce);
   const { updateUniverse } = await import('../universeBuilder.js');
   const { canonEntryFor } = await import('../catalog/catalogPrimitives.js');
+  const projectionIdentityIds = [];
   let ingredients;
   await updateUniverse(universeRef, async (current, { client }) => {
     ingredients = await produce(client);
@@ -80,16 +82,18 @@ async function withScrapCanon({ universeRef, role, accepted = [] }, produce) {
       if (!ingredient) continue;
       const field = CANON_FIELD[ingredient.type];
       const list = patch[field] || current[field] || [];
-      const { rows: members } = await client.query('SELECT unnest(catalog_identity_member_ids($1)) AS id', [ingredient.id]);
-      const identityIds = new Set(members.map((member) => member.id));
+      const identityIds = new Set(await getIngredientIdentityIds(ingredient.id, { client }));
       if (list.some((entry) => identityIds.has(entry.ingredientId))) continue;
       if (list.length >= BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX) {
         throw new ServerError('This universe’s canon bucket is full. Remove a membership before adding another.', { status: 409, code: 'UNIVERSE_CANON_FULL' });
       }
+      projectionIdentityIds.push(ingredient.id, ...identityIds);
       patch[field] = [...list, canonEntryFor(ingredient)];
     }
-    return Object.keys(patch).length ? patch : null;
-  }, { transactional: true }).catch((error) => {
+    if (!Object.keys(patch).length) return null;
+    projectionIdentityIds.push(...collectUniverseCanonIngredientIds(current));
+    return patch;
+  }, { transactional: true, canonProjectionIdentityIds: projectionIdentityIds }).catch((error) => {
     if (error.code === 'NOT_FOUND') throw new ServerError('Owning universe not found', { status: 404 });
     throw error;
   });

@@ -68,6 +68,7 @@ const catalogDB = await import('../services/catalog/catalogDB.js');
 const { createUniverse, getUniverse, updateUniverse } = await import('../services/universeBuilder.js');
 const { getUniverseMutationEpoch } = await import('../services/universeBuilder/store.js');
 const { setPrimitiveOwner } = await import('../services/catalog/catalogPrimitives.js');
+const { promoteUniverseCanon } = await import('../scripts/migrateBibleToCatalog.js');
 const { default: forkCanonMigration } = await import('../../scripts/migrations/452-fork-canon-membership.js');
 const catalogRouter = (await import('./catalog.js')).default;
 const sheetRouter = (await import('./catalogSheets.js')).default;
@@ -200,8 +201,10 @@ describe.skipIf(!runDb)('POST /api/catalog/ingredients inside a universe', () =>
     const cast = (await getUniverse(universe.id)).characters.filter((entry) => entry.ingredientId === created.id);
     expect(cast).toHaveLength(1);
     expect(cast[0]).toMatchObject({ name: 'Ada', locked: false, physicalDescription: 'Short grey hair, brass goggles.' });
-    // The canon→catalog projection must not write a default lock back.
+    expect(cast[0].updatedAt).toBe(created.updatedAt);
     expect((await catalogDB.getIngredient(created.id)).payload.locked).toBe(false);
+    expect((await catalogDB.getIngredient(created.id)).payload.schemaVersion).toBeDefined();
+    expect((await catalogDB.listIngredientRevisions(created.id)).items).toHaveLength(1);
 
     const preview = await request(app).post(`/api/catalog/ingredients/${created.id}/sheets/preview`).send({});
     expect(preview.status).toBe(200);
@@ -211,6 +214,7 @@ describe.skipIf(!runDb)('POST /api/catalog/ingredients inside a universe', () =>
   it('joins places and objects to the universe canon the same way', async () => {
     const universe = await makeUniverse();
     const place = await createInUniverse(universe.id, { type: 'place', name: 'Example Harbor', payload: { description: 'Fog over piers.' } });
+    const before = await catalogDB.listIngredientRevisions(place.id);
     const object = await createInUniverse(universe.id, { type: 'object', name: 'Example Lantern', payload: {} });
 
     const saved = await getUniverse(universe.id);
@@ -218,6 +222,27 @@ describe.skipIf(!runDb)('POST /api/catalog/ingredients inside a universe', () =>
     expect(saved.objects.filter((entry) => entry.ingredientId === object.id)).toMatchObject([{ name: 'Example Lantern', locked: false }]);
     expect(await liveUniverseRefs(place.id)).toEqual(['canon-place', 'owner']);
     expect(await liveUniverseRefs(object.id)).toEqual(['canon-object', 'owner']);
+    expect(await catalogDB.getIngredient(place.id)).toMatchObject({ payload: place.payload, syncSequence: place.syncSequence });
+    expect(await catalogDB.listIngredientRevisions(place.id)).toEqual(before);
+    expect((await catalogDB.listIngredientRevisions(object.id)).items).toHaveLength(1);
+  });
+
+  it('stamps promoted canon IDs without revising the new or existing Catalog rows', async () => {
+    const universe = await makeUniverse();
+    const place = await createInUniverse(universe.id, { type: 'place', name: 'Example Harbor', payload: {} });
+    const before = await catalogDB.listIngredientRevisions(place.id);
+    await query("UPDATE universes SET data = jsonb_set(data, '{objects}', $2::jsonb) WHERE id = $1", [universe.id,
+      toPgJson([{ id: 'object-legacy', name: 'Example Compass', updatedAt: '2020-01-01T00:00:00.000Z' }])]);
+
+    const result = await promoteUniverseCanon(universe.id);
+    const [entry] = (await getUniverse(universe.id)).objects;
+    if (entry?.ingredientId) ingredientIds.add(entry.ingredientId);
+    expect(result).toMatchObject({ promoted: 1, errors: 0 });
+    expect(entry).toMatchObject({ ingredientId: expect.any(String), updatedAt: '2020-01-01T00:00:00.000Z' });
+    expect((await catalogDB.getIngredient(entry.ingredientId)).payload.schemaVersion).toBeDefined();
+    expect((await catalogDB.listIngredientRevisions(entry.ingredientId)).items).toHaveLength(1);
+    expect(await catalogDB.getIngredient(place.id)).toMatchObject({ payload: place.payload, syncSequence: place.syncSequence });
+    expect(await catalogDB.listIngredientRevisions(place.id)).toEqual(before);
   });
 
   // The Universe Builder create flow sends an operation key and then links the
@@ -548,6 +573,13 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit universe canon', ()
     const first = await commit();
     expect(first.status).toBe(201);
     for (const ingredient of first.body.ingredients) ingredientIds.add(ingredient.id);
+    const assertCatalogUnchanged = async () => {
+      for (const { id, payload, syncSequence } of first.body.ingredients) {
+        expect(payload.schemaVersion).toBeDefined();
+        expect(await catalogDB.getIngredient(id)).toMatchObject({ payload, syncSequence });
+        expect((await catalogDB.listIngredientRevisions(id)).items).toHaveLength(1);
+      }
+    };
     const fields = { character: 'characters', place: 'places', object: 'objects' };
     const assertCanon = async () => {
       const saved = await getUniverse(universe.id);
@@ -574,6 +606,7 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit universe canon', ()
     expect(concurrentReplay.status).toBe(201);
     expect((await commit()).status).toBe(201);
     expect((await getUniverse(universe.id)).characters).toEqual([]);
+    await assertCatalogUnchanged();
   });
 
   it('rolls back the entire batch when canon is full, even without an operation key', async () => {
@@ -620,6 +653,7 @@ describe.skipIf(!runDb)('POST /api/catalog/ingredients/:id/fork canon membership
   it('adds a forked character to its universe canon once, across a replay', async () => {
     const universe = await makeUniverse();
     const source = await createInUniverse(universe.id, { type: 'character', name: 'Ada Source', payload: { physicalDescription: 'Brass goggles.' } });
+    const sourceRevisions = await catalogDB.listIngredientRevisions(source.id);
     const body = { universeId: universe.id, name: 'Ada v2', operationKey: randomUUID() };
     const created = await fork(source.id, body);
     expect(await liveUniverseRefs(created.id)).toEqual(['canon-character', 'owner']);
@@ -627,6 +661,10 @@ describe.skipIf(!runDb)('POST /api/catalog/ingredients/:id/fork canon membership
     expect(await entries()).toMatchObject([{ name: 'Ada v2', locked: false, physicalDescription: 'Brass goggles.' }]);
     expect((await fork(source.id, body)).id).toBe(created.id);
     expect(await entries()).toHaveLength(1);
+    expect(created.payload.schemaVersion).toBeDefined();
+    expect((await catalogDB.listIngredientRevisions(created.id)).items).toHaveLength(1);
+    expect(await catalogDB.getIngredient(source.id)).toMatchObject({ payload: source.payload, syncSequence: source.syncSequence });
+    expect(await catalogDB.listIngredientRevisions(source.id)).toEqual(sourceRevisions);
   });
 
   it('migration 452 adds legacy owner-only forks to canon and leaves a removed membership removed', async () => {
