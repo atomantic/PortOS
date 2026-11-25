@@ -46,6 +46,48 @@ function renderMessage(message, accounts = [{ id: 'acct-1', name: 'Personal', ty
   );
 }
 
+describe('MessageDetail Teams reply recipients', () => {
+  const accounts = [{ id: 'acct-1', type: 'teams' }];
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    ['Reply', api.createMessageDraft, 'Manual reply'],
+    ['AI Reply', api.updateMessageDraft, 'Generated reply'],
+  ])('requires a valid email when saving a Teams draft from %s', async (action, saveDraft, replyBody) => {
+    if (action === 'AI Reply') api.generateMessageDraft.mockResolvedValueOnce({ id: 'draft-1', body: replyBody });
+    saveDraft.mockResolvedValueOnce({ id: 'draft-1' });
+    renderMessage({ ...baseMessage, from: { name: 'Alice', email: '' } }, accounts);
+
+    await userEvent.click(screen.getByRole('button', { name: action }));
+    const recipient = await screen.findByRole('textbox', { name: 'Recipient email' });
+    const save = screen.getByRole('button', { name: 'Save Draft' });
+    expect(save).toBeDisabled();
+    fireEvent.change(recipient, { target: { value: 'Alice' } });
+    expect(save).toBeDisabled();
+    expect(saveDraft).not.toHaveBeenCalled();
+
+    const body = screen.getByRole('textbox', { name: 'Reply message body' });
+    if (action === 'Reply') fireEvent.change(body, { target: { value: replyBody } });
+    fireEvent.change(recipient, { target: { value: 'Alice@Example.com' } });
+    await userEvent.click(save);
+    const fields = { to: ['alice@example.com'], subject: 'Re: Hello', body: replyBody };
+    if (action === 'AI Reply') expect(saveDraft).toHaveBeenCalledWith('draft-1', fields);
+    else expect(saveDraft).toHaveBeenCalledWith(expect.objectContaining({ ...fields, accountId: 'acct-1', replyToMessageId: 'msg-1' }));
+    expect(screen.queryByRole('textbox', { name: 'Recipient email' })).not.toBeInTheDocument();
+  });
+
+  it('uses a known Teams sender address without requiring manual entry', async () => {
+    api.createMessageDraft.mockResolvedValueOnce({ id: 'draft-1' });
+    renderMessage(baseMessage, accounts);
+    await userEvent.click(screen.getByRole('button', { name: 'Reply' }));
+    expect(screen.queryByRole('textbox', { name: 'Recipient email' })).not.toBeInTheDocument();
+    await userEvent.type(screen.getByRole('textbox', { name: 'Reply message body' }), 'Manual reply');
+    await userEvent.click(screen.getByRole('button', { name: 'Save Draft' }));
+    expect(api.createMessageDraft).toHaveBeenCalledWith(expect.objectContaining({ to: ['alice@example.com'] }));
+  });
+});
+
 it.each([
   [{ type: 'teams' }, false, false],
   [{ type: 'teams', actions: [] }, false, false],

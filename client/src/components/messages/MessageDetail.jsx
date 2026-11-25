@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, useId } from 'react';
+import { normalizeEmail } from '../../../../server/lib/messageRecipientEmail.js';
 import { ArrowLeft, Reply, Sparkles, Send, RefreshCw, Archive, Trash2, User, ImageOff } from 'lucide-react';
 import toast from '../ui/Toast';
 import { formatCount, formatDateTime } from '../../utils/formatters';
@@ -128,6 +129,8 @@ function SafeHtmlBody({ html }) {
 export default function MessageDetail({ message, accounts, onBack }) {
   const [showReply, setShowReply] = useState(false);
   const [replyBody, setReplyBody] = useState('');
+  const [replyEmail, setReplyEmail] = useState('');
+  const replyEmailId = useId();
   const [generating, setGenerating] = useState(false);
   const [generatedDraftId, setGeneratedDraftId] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -151,6 +154,10 @@ export default function MessageDetail({ message, accounts, onBack }) {
   const messageAccount = accounts.find(a => a.id === displayedMessage.accountId);
   const account = messageAccount || accounts[0];
   const actions = supportedMessageActions(displayedMessage, messageAccount);
+  const senderEmail = displayedMessage.from?.email;
+  const teamsSenderEmail = account?.type === 'teams' ? normalizeEmail(senderEmail) : null;
+  const needsReplyEmail = account?.type === 'teams' && !teamsSenderEmail;
+  const recipientEmail = needsReplyEmail ? normalizeEmail(replyEmail) : teamsSenderEmail || senderEmail;
 
   // Load thread messages if this message is part of a thread. A failed read
   // falls back to the single message but says so, so a missing conversation is
@@ -219,9 +226,17 @@ export default function MessageDetail({ message, accounts, onBack }) {
     }
   };
 
+  const closeReply = () => {
+    setShowReply(false);
+    setReplyBody('');
+    setReplyEmail('');
+    setGeneratedDraftId(null);
+  };
+
   const handleCreateDraft = useSingleFlight(async () => {
     if (!account) return toast.error('No account available');
-    const to = [displayedMessage.from?.email].filter(Boolean);
+    if (needsReplyEmail && !recipientEmail) return;
+    const to = recipientEmail ? [recipientEmail] : [];
     const subject = `Re: ${displayedMessage.subject || ''}`;
     const result = generatedDraftId
       ? await updateMessageDraft(generatedDraftId, { to, subject, body: replyBody }).catch(() => null)
@@ -234,9 +249,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
         }).catch(() => null);
     if (!result) return;
     toast.success('Draft saved');
-    setShowReply(false);
-    setReplyBody('');
-    setGeneratedDraftId(null);
+    closeReply();
   });
 
   const handleAction = (action) => {
@@ -284,6 +297,21 @@ export default function MessageDetail({ message, accounts, onBack }) {
       {/* Reply composer */}
       {showReply && (
         <div className="p-4 bg-port-card rounded-lg border border-port-border space-y-3">
+          {needsReplyEmail && (
+            <div>
+              <label htmlFor={replyEmailId} className="block text-xs text-gray-400 mb-1">Recipient email</label>
+              <input
+                id={replyEmailId}
+                type="email"
+                required
+                value={replyEmail}
+                onChange={e => setReplyEmail(e.target.value)}
+                aria-describedby={`${replyEmailId}-help`}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white focus:outline-none focus:border-port-accent"
+              />
+              <p id={`${replyEmailId}-help`} className="mt-1 text-xs text-gray-400">Enter a valid email address for the Teams recipient.</p>
+            </div>
+          )}
           <textarea
             value={replyBody}
             onChange={(e) => setReplyBody(e.target.value)}
@@ -295,12 +323,13 @@ export default function MessageDetail({ message, accounts, onBack }) {
           <div className="flex gap-2">
             <button
               onClick={handleCreateDraft}
-              className="flex items-center gap-2 px-4 py-2 bg-port-accent text-white rounded-lg text-sm hover:bg-port-accent/80 transition-colors"
+              disabled={needsReplyEmail && !recipientEmail}
+              className="flex items-center gap-2 px-4 py-2 bg-port-accent text-white rounded-lg text-sm hover:bg-port-accent/80 transition-colors disabled:opacity-50"
             >
               <Send size={16} /> Save Draft
             </button>
             <button
-              onClick={() => { setShowReply(false); setReplyBody(''); setGeneratedDraftId(null); }}
+              onClick={closeReply}
               className="px-4 py-2 bg-port-border text-gray-300 rounded-lg text-sm hover:bg-port-border/80 transition-colors"
             >
               Cancel

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { normalizeEmail } from '../../../../server/lib/messageRecipientEmail.js';
 import { FileText, Trash2, Send, Check, RefreshCw, Copy, Pencil } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
@@ -215,6 +216,10 @@ export default function DraftsTab({ accounts }) {
   const isCopyOnly = draft => draft.sendVia === 'review' ||
     accounts.find(account => account.id === draft.accountId)?.canSend === false;
 
+  const needsTeamsRecipient = draft =>
+    accounts.find(account => account.id === draft.accountId)?.type === 'teams' &&
+    (!draft.to?.length || !draft.to.every(normalizeEmail));
+
   const statusColors = {
     draft: 'bg-gray-700 text-gray-300',
     pending_review: 'bg-port-warning/20 text-port-warning',
@@ -286,7 +291,8 @@ export default function DraftsTab({ accounts }) {
                 {APPROVABLE_DRAFT_STATUSES.includes(draft.status) && !isCopyOnly(draft) && editingId !== draft.id && (
                   <button
                     onClick={() => handleApprove(draft.id)}
-                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-success transition-colors"
+                    disabled={needsTeamsRecipient(draft)}
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-success transition-colors disabled:opacity-50"
                     title="Approve" aria-label="Approve"
                   >
                     <Check size={16} />
@@ -299,9 +305,9 @@ export default function DraftsTab({ accounts }) {
                 {draft.status === 'approved' && !isCopyOnly(draft) && editingId !== draft.id && (
                   <button
                     onClick={() => handleSend(draft.id)}
-                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-accent transition-colors"
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-accent transition-colors disabled:opacity-50"
                     title="Send" aria-label="Send"
-                    disabled={sendingIds.has(draft.id)}
+                    disabled={sendingIds.has(draft.id) || needsTeamsRecipient(draft)}
                     aria-busy={sendingIds.has(draft.id)}
                     data-voice-guard="confirm"
                   >
@@ -337,6 +343,13 @@ export default function DraftsTab({ accounts }) {
                 )}
               </div>
             </div>
+            {EDITABLE_DRAFT_STATUSES.includes(draft.status) && !isCopyOnly(draft) && needsTeamsRecipient(draft) && (
+              <p className="text-sm text-port-warning">
+                {editingId === draft.id
+                  ? 'Enter a valid Teams recipient email in the To field. Use an email address for each recipient.'
+                  : 'Choose Edit and enter a valid Teams recipient email in the To field before approval or sending.'}
+              </p>
+            )}
             {editingId === draft.id ? (
               <form onSubmit={handleSaveEdit} className="space-y-2">
                 <div>

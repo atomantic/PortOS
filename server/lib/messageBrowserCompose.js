@@ -19,6 +19,7 @@
 //     is "delivery unknown" — never success, never an automatic retry.
 import { readOutlookMessageRow } from './messageBrowserIdentity.js';
 import { MESSAGE_SELECTOR_DEFAULTS, resolveComposeSelectors } from './messageSelectorDefaults.js';
+import { normalizeEmail } from './messageRecipientEmail.js';
 
 // What the page says when a send went through / was refused. Matched against NEW
 // live-region text only (anything already on screen before the click is ignored).
@@ -43,16 +44,6 @@ export function resolveComposeConfig(provider, stored) {
     ackPattern: validPattern('sendAckPattern') ?? SEND_ACK_PATTERN,
     refusalPattern: validPattern('sendRefusalPattern') ?? SEND_REFUSAL_PATTERN
   };
-}
-
-const EMAIL_RE = /^[^\s<>@,;"]+@[^\s<>@,;"]+\.[^\s<>@,;"]+$/;
-
-/** `Alice <alice@example.com>` / `alice@example.com` → lowercase address, else null. */
-function normalizeEmail(value) {
-  if (typeof value !== 'string') return null;
-  const angle = value.match(/<([^<>]+)>\s*$/);
-  const candidate = (angle ? angle[1] : value).trim().toLowerCase();
-  return EMAIL_RE.test(candidate) ? candidate : null;
 }
 
 const asList = value => (Array.isArray(value) ? value : value ? [value] : []);

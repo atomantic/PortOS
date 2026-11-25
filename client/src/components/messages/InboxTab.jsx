@@ -467,6 +467,7 @@ export default function InboxTab({ accounts }) {
   if (messageId && selectedMessage) {
     return (
       <MessageDetail
+        key={`${selectedMessage.accountId}:${selectedMessage.id}`}
         message={selectedMessage}
         accounts={accountList}
         onBack={() => { closeMessage(); fetchMessages(); }}

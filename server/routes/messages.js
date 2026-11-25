@@ -5,6 +5,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { UUID_RE } from '../lib/fileUtils.js';
 import { MESSAGE_ACCOUNT_TRANSPORT, MESSAGE_ACCOUNT_TYPES, sendViaForAccountType } from '../lib/messageTransport.js';
+import { normalizeEmail } from '../lib/messageRecipientEmail.js';
 import * as messageAccounts from '../services/messageAccounts.js';
 import * as messageSync from '../services/messageSync.js';
 import * as messageDrafts from '../services/messageDrafts.js';
@@ -221,12 +222,15 @@ router.post('/drafts/generate', asyncHandler(async (req, res) => {
   if (data.replyToMessageId) {
     const originalMsg = await messageSync.getMessage(data.accountId, data.replyToMessageId);
     if (!originalMsg) throw new ServerError('The message being replied to was not found', { status: 404, code: 'REPLY_ORIGINAL_NOT_FOUND' });
-    // Email replies need explicit delivery fields; Teams/browser chats target a conversation, not a mailbox.
+    // Teams can draft without an address, which the user supplies before sending.
+    const sender = originalMsg.from?.email;
     if (MESSAGE_ACCOUNT_TRANSPORT[account.type]?.email) {
-      const sender = originalMsg.from?.email;
       if (!sender) throw new ServerError('The original message has no sender address to reply to', { status: 422, code: 'REPLY_TARGET_UNAVAILABLE' });
       to = [sender];
       subject = replySubject(originalMsg.subject);
+    } else if (account.type === 'teams') {
+      const recipient = normalizeEmail(sender);
+      if (recipient) to = [recipient];
     }
     // Load thread context if available
     let threadMessages = null;
