@@ -7,74 +7,44 @@
  * swim-lane key, kept below validation and generation services so schemas never import orchestration.
  */
 
-export const IMAGE_GEN_MODE = Object.freeze({
-  EXTERNAL: 'external',
-  LOCAL: 'local',
-  CODEX: 'codex',
-  GROK: 'grok',
-  AGY: 'agy',
-  // fal.ai's metered queue REST API; same literal as VIDEO_GEN_MODE.FAL (one provider, one key, one id).
-  FAL: 'fal',
-  RUNWAY: 'runway',
-  HIGGSFIELD: 'higgsfield',
-  GOOGLE: 'google',
-});
+const LOCAL = 'local';
+const EXTERNAL = 'external';
 
-export const IMAGE_GEN_MODES = Object.freeze(Object.values(IMAGE_GEN_MODE));
+// One row per backend, ordered so each lane and the shared labels retain their
+// published order. Local and external participate only in the mode alphabets.
+const GENERATION_BACKENDS = Object.freeze([
+  { id: LOCAL, label: 'Local', hosted: false },
+  { id: 'codex', label: 'Codex', image: true },
+  { id: 'grok', label: 'Grok', image: true, video: true, enabledSetting: 'imageGen.grok.enabled' },
+  { id: 'agy', label: 'Agy', image: true },
+  { id: EXTERNAL, label: 'External', hosted: false },
+  { id: 'fal', label: 'fal.ai', image: true, video: true, credentialId: 'fal', metered: true },
+  { id: 'reactor', label: 'Reactor.inc', video: true, credentialId: 'reactor', metered: true },
+  { id: 'runway', label: 'Runway', image: true, video: true, credentialId: 'runway', metered: true },
+  // Only the render can check whether the PortOS Browser is signed in.
+  { id: 'gemini', label: 'Gemini', video: true, alwaysUsable: true },
+  { id: 'higgsfield', label: 'Higgsfield', image: true, video: true, credentialId: 'higgsfield', metered: true },
+  { id: 'google', label: 'Google', image: true, video: true, credentialId: 'google-cloud', metered: true },
+].map(Object.freeze));
 
-// Cloud image backends spend remote quota or metered credit and run
-// through the media queue's parallel cloud lane rather than the local
-// accelerator lane.
-export const CLOUD_IMAGE_GEN_MODES = Object.freeze([
-  IMAGE_GEN_MODE.CODEX,
-  IMAGE_GEN_MODE.GROK,
-  IMAGE_GEN_MODE.AGY,
-  IMAGE_GEN_MODE.FAL,
-  IMAGE_GEN_MODE.RUNWAY,
-  IMAGE_GEN_MODE.HIGGSFIELD,
-  IMAGE_GEN_MODE.GOOGLE,
-]);
+export const HOSTED_MEDIA_BACKENDS = Object.freeze(GENERATION_BACKENDS.filter(({ hosted }) => hosted !== false));
 
-// The external SD-API backend remains synchronous; every other image backend
-// can be queued through mediaJobQueue.
-export const QUEUEABLE_IMAGE_MODES = Object.freeze([
-  IMAGE_GEN_MODE.LOCAL,
-  ...CLOUD_IMAGE_GEN_MODES,
-]);
+export const CLOUD_IMAGE_GEN_MODES = Object.freeze(HOSTED_MEDIA_BACKENDS.filter(({ image }) => image).map(({ id }) => id));
+export const CLOUD_VIDEO_GEN_MODES = Object.freeze(HOSTED_MEDIA_BACKENDS.filter(({ video }) => video).map(({ id }) => id));
+export const METERED_IMAGE_GEN_MODES = Object.freeze(HOSTED_MEDIA_BACKENDS.filter(({ image, metered }) => image && metered).map(({ id }) => id));
 
-// Video deliberately shares the image backend discriminator namespace. Local
-// video's text/image/fflf modes are a separate semantic value carried elsewhere.
-// REACTOR has no image-gen counterpart.
-export const VIDEO_GEN_MODE = Object.freeze({
-  LOCAL: IMAGE_GEN_MODE.LOCAL,
-  GROK: IMAGE_GEN_MODE.GROK,
-  FAL: IMAGE_GEN_MODE.FAL,
-  REACTOR: 'reactor',
-  RUNWAY: IMAGE_GEN_MODE.RUNWAY,
-  // Gemini Omni through the Gemini web app in the PortOS Browser.
-  GEMINI: 'gemini',
-  HIGGSFIELD: IMAGE_GEN_MODE.HIGGSFIELD,
-  GOOGLE: IMAGE_GEN_MODE.GOOGLE,
-});
+const modeEnum = (ids) => Object.freeze(Object.fromEntries(ids.map(id => [id.toUpperCase(), id])));
 
-export const VIDEO_GEN_MODES = Object.freeze(Object.values(VIDEO_GEN_MODE));
-export const CLOUD_VIDEO_GEN_MODES = Object.freeze([
-  VIDEO_GEN_MODE.GROK, VIDEO_GEN_MODE.FAL, VIDEO_GEN_MODE.REACTOR, VIDEO_GEN_MODE.RUNWAY, VIDEO_GEN_MODE.GEMINI, VIDEO_GEN_MODE.HIGGSFIELD, VIDEO_GEN_MODE.GOOGLE,
-]);
+// External SD-API remains synchronous; every other image backend is queueable.
+export const QUEUEABLE_IMAGE_MODES = Object.freeze([LOCAL, ...CLOUD_IMAGE_GEN_MODES]);
+export const IMAGE_GEN_MODES = Object.freeze([EXTERNAL, ...QUEUEABLE_IMAGE_MODES]);
+export const IMAGE_GEN_MODE = modeEnum(IMAGE_GEN_MODES);
 
-export const GENERATION_MODE_LABELS = Object.freeze({
-  [IMAGE_GEN_MODE.LOCAL]: 'Local',
-  [IMAGE_GEN_MODE.CODEX]: 'Codex',
-  [IMAGE_GEN_MODE.GROK]: 'Grok',
-  [IMAGE_GEN_MODE.AGY]: 'Agy',
-  [IMAGE_GEN_MODE.EXTERNAL]: 'External',
-  [VIDEO_GEN_MODE.FAL]: 'fal.ai',
-  [VIDEO_GEN_MODE.REACTOR]: 'Reactor.inc',
-  [VIDEO_GEN_MODE.RUNWAY]: 'Runway',
-  [VIDEO_GEN_MODE.GEMINI]: 'Gemini',
-  [VIDEO_GEN_MODE.HIGGSFIELD]: 'Higgsfield',
-  [VIDEO_GEN_MODE.GOOGLE]: 'Google',
-});
+// Local video's text/image/fflf modes are a separate semantic value.
+export const VIDEO_GEN_MODES = Object.freeze([LOCAL, ...CLOUD_VIDEO_GEN_MODES]);
+export const VIDEO_GEN_MODE = modeEnum(VIDEO_GEN_MODES);
+
+export const GENERATION_MODE_LABELS = Object.freeze(Object.fromEntries(GENERATION_BACKENDS.map(({ id, label }) => [id, label])));
 
 /**
  * THE media-queue execution-lane rule, shared by the scheduler and the public job projection so the UI

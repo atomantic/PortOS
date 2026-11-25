@@ -141,6 +141,17 @@ describe('resolveVideoBackendPin', () => {
     });
   });
 
+  it.each([
+    ['higgsfield', 'bytedance/seedance-2.5'],
+    ['google', 'veo-3.1-generate-001'],
+  ])('keeps a curated %s project model through dispatch', (mode, modelId) => {
+    const settings = { videoGen: { [mode]: { apiKey: 'key' } } };
+    const pin = resolveVideoBackendPin(project({ mode, modelId }), settings);
+    expect(videoBackendJobParams(settings, pin, { prompt: 'A lighthouse' }, { durationSeconds: 8 }))
+      .toMatchObject({ mode, modelId, videoMode: 'text', duration: 8 });
+    expect(resolveVideoBackendPin(project({ mode, modelId: 'unknown-model' }), settings).modelId).toBeNull();
+  });
+
   // A Runway model pin renders on the pinned catalog model (its price and
   // end-frame support differ from the Gen-4.5 default), and never leaks into
   // the local fallback when the Runway key goes away.

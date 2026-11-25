@@ -808,7 +808,9 @@ describe('videoGen routes', () => {
         const ctx = await request(app).get('/api/video-gen/model-context');
         const status = await request(app).get('/api/video-gen/status');
         expect(ctx.body.falEnabled).toBe(true);
-        for (const key of ['falEnabled', 'reactorEnabled', 'runwayEnabled', 'geminiEnabled', 'higgsfieldEnabled', 'googleEnabled']) {
+        const enabledKeys = ['falEnabled', 'geminiEnabled', 'googleEnabled', 'higgsfieldEnabled', 'reactorEnabled', 'runwayEnabled'];
+        expect(Object.keys(status.body).filter(key => key.endsWith('Enabled')).sort()).toEqual(enabledKeys);
+        for (const key of enabledKeys) {
           expect(typeof ctx.body[key]).toBe('boolean');
           expect(status.body[key]).toBe(ctx.body[key]);
         }

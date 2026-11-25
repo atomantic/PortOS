@@ -22,7 +22,7 @@
 
 import { ANTIGRAVITY_CLI_ID } from '../lib/antigravity.js';
 import { CODEX_CLI_ID } from '../lib/codex.js';
-import { IMAGE_GEN_MODE } from '../lib/generationModes.js';
+import { IMAGE_GEN_MODE, METERED_IMAGE_GEN_MODES } from '../lib/generationModes.js';
 import { MODEL_OVERRIDE_CAPABLE_MODES } from '../lib/imageGenCapabilities.js';
 import { resolveGoalFidelityConfig } from '../lib/goalFidelity.js';
 import { catalogOfferings, pinProviderIds, reconcileModelPins } from '../lib/modelPinReconcile.js';
@@ -98,7 +98,7 @@ export const PINNED_IMAGE_MODE_IDS = Object.freeze(Object.keys(PINNED_IMAGE_MODE
  * a vendor refresh can retire. `resolveCloudProviderConfig` already refuses a
  * per-render id outside it and degrades a stale saved one to the shipped default.
  */
-export const CATALOG_VALIDATED_IMAGE_MODE_IDS = Object.freeze([IMAGE_GEN_MODE.FAL, IMAGE_GEN_MODE.RUNWAY, IMAGE_GEN_MODE.HIGGSFIELD, IMAGE_GEN_MODE.GOOGLE]);
+export const CATALOG_VALIDATED_IMAGE_MODE_IDS = METERED_IMAGE_GEN_MODES;
 export { MODEL_OVERRIDE_CAPABLE_MODES };
 
 const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
