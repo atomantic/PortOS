@@ -13,6 +13,7 @@ import { createCreativeDirectorProject, updateCreativeDirectorProject } from '..
 import { startVideoFromStoryboard } from '../../services/apiStoryboards.js';
 import { storyboardVideoPlan } from '../../../../server/lib/storyboardVideo.js';
 import { ASPECT_RATIOS } from '../../../../server/lib/creativeDirectorPresets.js';
+import { GEMINI_OMNI_WEB_MODEL, GEMINI_WEB_ASPECTS } from '../../../../server/lib/geminiWebVideo.js';
 import StoryboardVideoShots from './StoryboardVideoShots.jsx';
 import { listUniverseNames } from '../../services/apiUniverseBuilder.js';
 import { listPipelineSeriesNames } from '../../services/apiPipeline.js';
@@ -105,6 +106,7 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
           : form.videoMode === 'fal' ? input('backendModelId', 'fal.ai model (optional)', { placeholder: 'Use configured fal.ai default', maxLength: 64 })
           : form.videoMode === 'runway' ? select('backendModelId', 'Runway model', [['', `${getRunwayVideoModel(RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL).label} (backend default)`], ...(form.backendModelId && !runwayCatalog.videoModels.some((m) => m.id === form.backendModelId) ? [[form.backendModelId, `${form.backendModelId} (saved model unavailable)`]] : []), ...runwayCatalog.videoModels.map(m => [m.id, m.label])])
           : select('backendModelId', 'Media model', [['', form.videoMode === 'reactor' ? 'fast-h3 (backend default)' : 'Backend default'], ...(form.backendModelId ? [[form.backendModelId, `${form.backendModelId} (saved model)`]] : [])])}
+        {form.videoMode === 'gemini' && <p className="text-sm text-port-text-muted">Gemini renders in the PortOS Browser on the Google account signed in there. It renders {GEMINI_WEB_ASPECTS.join(' or ')} only, takes no negative prompt, and returns clips of about {GEMINI_OMNI_WEB_MODEL.clipSeconds} seconds that are trimmed to each shot.{GEMINI_WEB_ASPECTS.includes(form.aspectRatio) ? '' : ` Choose ${GEMINI_WEB_ASPECTS.join(' or ')} above before production.`}</p>}
         <p className="text-sm text-port-text-muted">Backend selections are saved without running providers. Cloud renders may incur charges when production is enabled.</p>
         {select('transition', 'Shot joins', [['cut', 'Straight cuts'], ['fade', 'Fade through black (no overlap)']])}
         <h3 className="font-medium">Soundtrack</h3>

@@ -208,6 +208,40 @@ it('checks the duration the backend actually consumes and rejects batch expansio
   expect(enqueueUnattendedMediaJob).not.toHaveBeenCalled();
 });
 
+// Admission reads the field each backend renders from. Reading local frames over fps for a
+// hosted job (which carries neither) refused every clip of the run as out of bounds.
+it.each([
+  ['runway', { duration: 8 }],
+  ['higgsfield', { duration: 8 }],
+  ['google', { duration: 8 }],
+  ['gemini', {}],
+])('admits a %s clip on the length that backend renders', async (mode, lengthParams) => {
+  state.project.renderBackend = { video: { mode } };
+  state.settings = { videoGen: { [mode]: { apiKey: 'example-key' } } };
+  await startVideoExecution('example-video', await startInput());
+  const queued = await enqueueVideoProductionJob(state.project, { sceneId: 'opening', workRevision: 0,
+    params: { mode, videoMode: 'text', prompt: 'Example landscape', ...lengthParams } });
+  expect(queued).toMatchObject({ jobId: 'example-job-1' });
+  expect(enqueueUnattendedMediaJob).toHaveBeenCalledWith(expect.objectContaining({ kind: 'video', params: expect.objectContaining({ mode }) }));
+  // A hosted clip longer than one Video shot is still refused, and Gemini has no length to overstate.
+  if (mode !== 'gemini') {
+    await expect(enqueueVideoProductionJob(state.project, { sceneId: 'opening', workRevision: 0,
+      params: { mode, videoMode: 'text', prompt: 'Example landscape', duration: 60 } })).rejects.toMatchObject({ code: 'VIDEO_PLAN_CLIP_BOUNDS' });
+  }
+});
+
+it('blocks Start for a Gemini production on a canvas Gemini does not render', async () => {
+  state.project.renderBackend = { video: { mode: 'gemini' } };
+  state.settings = {};
+  expect(await getVideoExecutionPreview('example-video')).toMatchObject({ canStart: true, blockers: [], choices: { video: { mode: 'gemini' } } });
+  state.project.aspectRatio = '1:1';
+  const preview = await getVideoExecutionPreview('example-video');
+  expect(preview.canStart).toBe(false);
+  expect(preview.blockers).toEqual([expect.stringContaining('Gemini renders 16:9 or 9:16 only')]);
+  await expect(startVideoExecution('example-video', { configurationRevision: preview.configurationRevision, limits: {} }))
+    .rejects.toMatchObject({ code: 'VIDEO_START_BLOCKED' });
+});
+
 it('generates one explicitly selected soundtrack, retains its Track, and reuses it within audio job limits', async () => {
   const { prepareVideoSoundtrack } = await import('./videoAudio.js');
   const { enqueueJob } = await import('../mediaJobQueue/index.js');

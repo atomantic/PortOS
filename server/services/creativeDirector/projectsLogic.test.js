@@ -548,6 +548,14 @@ describe('applyPlan', () => {
     // The revised remaining step is fresh pending.
     expect(revised.plan.steps[1]).toMatchObject({ stepId: 'c', status: 'pending' });
   });
+  it('refuses a Video plan step its pinned backend cannot render, so the planner reads why and revises', () => {
+    const video = { id: 'cd-1', status: 'planning', workspace: 'video', aspectRatio: '16:9', renderBackend: { video: { mode: 'gemini' } } };
+    const step = (params) => ({ steps: [{ stepId: 'a', toolName: 'media_enqueueVideoJob', args: { params: { prompt: 'An example lighthouse', durationSeconds: 8, ...params } } }] });
+    expect(applyPlan(video, step({})).plan.steps).toHaveLength(1);
+    // Gemini has no negative-prompt field: the step is refused here rather than rendered without it.
+    expect(() => applyPlan(video, step({ negativePrompt: 'fog, crowds' }))).toThrow(/negative prompt \(Gemini takes none/);
+    expect(applyPlan({ ...video, renderBackend: { video: { mode: 'fal' } } }, step({ negativePrompt: 'fog, crowds' })).plan.steps).toHaveLength(1);
+  });
   it('does NOT preserve a failed step across a re-plan (re-runs it)', () => {
     const first = applyPlan({ id: 'cd-1', status: 'planning' }, VALID_PLAN);
     first.plan.steps[0].status = 'failed';
