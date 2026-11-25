@@ -95,9 +95,9 @@ describe('indexed gallery page', () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('VITEST', undefined);
     vi.stubEnv('MEMORY_BACKEND', 'db');
-    const video = { id: 'clip-1', filename: 'clip.mp4', thumbnail: 'clip.png', prompt: 'x'.repeat(8192), stitchedFrom: ['a', 'b'], guidanceScale: 3, universeId: 'u' };
+    const video = { id: 'clip-1', filename: 'clip.mp4', thumbnail: 'clip.png', prompt: 'x'.repeat(8192), stitchedFrom: ['a', 'b'], trimmedFrom: 'original-clip', guidanceScale: 3, universeId: 'u' };
     setHistory([video]);
-    const compactCard = { compact: true, id: 'clip-1', filename: 'clip.mp4', thumbnail: 'clip.png', stitchedFrom: ['a', 'b'], prompt: 'x'.repeat(240) + '…' };
+    const compactCard = { compact: true, id: 'clip-1', filename: 'clip.mp4', thumbnail: 'clip.png', stitchedFrom: ['a', 'b'], trimmedFrom: 'original-clip', prompt: 'x'.repeat(240) + '…' };
     const input = { kind: 'all', media: true, summary: true, hidden: false, compact: true, limit: 60 };
 
     query.mockImplementation(async (_sql, params) => ({ rows: [{ items: JSON.parse(params[0]).map(row => ({ kind: 'video', data: row.data })),
@@ -107,7 +107,7 @@ describe('indexed gallery page', () => {
     expect(page.items).toEqual([{ kind: 'video', data: compactCard }]);
     const [sql, params] = query.mock.calls[0];
     expect(JSON.parse(params[0])[0].data).toEqual({ id: 'clip-1', filename: 'clip.mp4', thumbnail: 'clip.png',
-      stitchedFrom: ['a', 'b'], universeId: 'u', _promptPreviewSource: 'x'.repeat(241) });
+      stitchedFrom: ['a', 'b'], trimmedFrom: 'original-clip', universeId: 'u', _promptPreviewSource: 'x'.repeat(241) });
     expect(sql).toContain('jsonb_each(data)');
 
     // A search reads the cached compact snapshot and its search text (#18631):
@@ -129,7 +129,7 @@ describe('indexed gallery page', () => {
     const needle = await boundFor('Needle  BEYOND');
     expect(needle.found.items).toEqual([{ kind: 'video', data: compactCard }]);
     expect(needle.videos).toEqual([{ id: 'clip-1', filename: 'clip.mp4', thumbnail: 'clip.png',
-      stitchedFrom: ['a', 'b'], universeId: 'u', _promptPreviewSource: 'x'.repeat(241) }]);
+      stitchedFrom: ['a', 'b'], trimmedFrom: 'original-clip', universeId: 'u', _promptPreviewSource: 'x'.repeat(241) }]);
     // Survivors carry the query, not their record text, as the text SQL matches.
     expect(needle.text).toBe('needle beyond');
     expect((await boundFor('640x360 video')).videos).toEqual([other]);

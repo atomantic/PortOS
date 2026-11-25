@@ -18,12 +18,10 @@ export const historyListQuerySchema = z.object(queryShape).refine(v => v.offset 
 export const isHistoryListQuery = query =>
   Object.keys(queryShape).some(key => query[key] !== undefined);
 
-// The shared card projection plus the two lineage/ownership scalars the timeline
-// surfaces read (the gallery's compact source drops them).
+// Retain timeline ownership alongside the shared gallery card fields.
 const catalogRow = entry => ({
   ...compactGalleryRecord(entry),
   ...(entry.timelineProjectId ? { timelineProjectId: entry.timelineProjectId } : {}),
-  ...(entry.trimmedFrom ? { trimmedFrom: entry.trimmedFrom } : {}),
 });
 
 // Mirrors client lib/mediaSearch.js buildMediaHaystack: field-scoped, so a token
