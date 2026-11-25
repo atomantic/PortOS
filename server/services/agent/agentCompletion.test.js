@@ -29,8 +29,47 @@ vi.mock('../malwareScanReports.js', () => ({
 
 import { processAgentCompletion } from './agentCompletion.js';
 import * as appActivity from '../appActivity.js';
+import { updateAgent } from '../cos/cosAgentLifecycle.js';
 import { getConfig } from '../cos/cosState.js';
 import { extractAndStoreMemories } from '../memoryExtractor.js';
+
+describe('processAgentCompletion - memory extraction', () => {
+  const agentId = 'agent-memory-test';
+  const task = {
+    id: 'task-memory-test',
+    description: 'Review the sample report',
+    metadata: { app: 'example-app' }
+  };
+  const output = 'The sample report includes a written decision log, clear review deadlines, and an owner for each follow-up.';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    { created: 2, pendingApproval: 0 },
+    { created: 0, pendingApproval: 3 }
+  ])('persists nonempty extraction counts (%j)', async counts => {
+    extractAndStoreMemories.mockResolvedValueOnce(counts);
+
+    await processAgentCompletion(agentId, task, true, output);
+
+    expect(extractAndStoreMemories).toHaveBeenCalledExactlyOnceWith(agentId, task.id, output, task);
+    expect(updateAgent).toHaveBeenCalledExactlyOnceWith(agentId, {
+      memoryExtraction: { ...counts, extractedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T.*Z$/) }
+    });
+  });
+
+  it('starts the app cooldown even if memory extraction rejects', async () => {
+    extractAndStoreMemories.mockRejectedValueOnce(new Error('Memory storage unavailable'));
+
+    await processAgentCompletion(agentId, task, true, output);
+
+    expect(extractAndStoreMemories).toHaveBeenCalledExactlyOnceWith(agentId, task.id, output, task);
+    expect(updateAgent).not.toHaveBeenCalled();
+    expect(appActivity.startAppCooldown).toHaveBeenCalledExactlyOnceWith('example-app', 1800000);
+  });
+});
 
 describe('processAgentCompletion - cooldown handling for recovery tasks', () => {
   beforeEach(() => {
