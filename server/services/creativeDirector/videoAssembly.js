@@ -169,8 +169,14 @@ export async function runVideoAssembly(projectId) {
     // Revalidate at delivery, including a resume after the file was reviewed or removed.
     await validateVideoCut(project, entry);
     if (project.collectionId) {
-      const { addItem } = await import('../mediaCollections.js');
-      await addItem(project.collectionId, { kind: 'video', ref: entry.id });
+      try {
+        const { addItem } = await import('../mediaCollections.js');
+        await addItem(project.collectionId, { kind: 'video', ref: entry.id });
+      } catch (error) {
+        if (error?.code !== 'ERR_DUPLICATE') {
+          console.log(`⚠️ CD video assembly addItem failed: ${error?.message ?? String(error)}`);
+        }
+      }
     }
     await save({ finalVideoId: entry.id, status: 'complete', failureReason: null });
   } catch (error) {

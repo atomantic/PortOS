@@ -21,7 +21,7 @@ vi.mock('../instanceIdentity.js', () => ({ getInstanceId: async () => 'example-o
 vi.mock('./videoSources.js', () => ({ assertVideoSourcesAvailable: async () => {} }));
 vi.mock('../mediaCollections.js', async importOriginal => ({
   ...await importOriginal(),
-  addItem: async (_id, item) => { state.collection.push(item); },
+  addItem: vi.fn(async (_id, item) => { state.collection.push(item); }),
 }));
 vi.mock('../tracks/index.js', () => ({ getTrack: async id => state.tracks.find(track => track.id === id) }));
 // Keep library lookup inside this test's music directory while exercising the real mux.
@@ -30,6 +30,7 @@ import { findFfmpeg, findFfprobe, hasAudioStream } from '../../lib/ffmpeg.js';
 import { videoConfigurationRevision } from './videoExecution.js';
 import { videoReviewStages, applyVideoReviewAction } from '../../lib/creativeDirectorVideoReview.js';
 import { runVideoAssembly, validateVideoCut } from './videoAssembly.js';
+import { addItem } from '../mediaCollections.js';
 const exec = promisify(execFile);
 let ffmpeg;
 
@@ -107,7 +108,11 @@ it('assembles a one-minute standalone cut from fake Reactor clips through real T
   expect(state.collection).toEqual([{ kind: 'video', ref: state.project.finalVideoId }]);
 }, 30000);
 
-it('holds real rough/final artifacts for distinct approvals and reuses the rendered file on each continuation', async context => {
+it.for([
+  { code: 'success', error: null },
+  { code: 'ERR_DUPLICATE', error: 'Video is already in the collection' },
+  { code: 'ERR_NOT_FOUND', error: 'Collection no longer exists' },
+])('delivers the approved rough/final artifacts without rerendering when collection filing returns $code', async ({ code, error }, context) => {
   requireFfmpeg(context);
   state.project.videoDraft.reviewPolicy = 'review';
   state.project.videoExecution.inputRevision = videoConfigurationRevision(state.project);
@@ -126,8 +131,22 @@ it('holds real rough/final artifacts for distinct approvals and reuses the rende
   expect(state.project.videoFinalCut.videoId).toBe(state.project.videoRoughCut.videoId);
   expect(state.project.finalVideoId).toBeUndefined();
   approve('final-cut');
-  await ownAssembly(runVideoAssembly('example-video'));
+  const { videoRoughCut, videoFinalCut } = state.project;
+  if (error) addItem.mockRejectedValueOnce(Object.assign(new Error(error), { code }));
+  const log = vi.spyOn(console, 'log');
+  try {
+    await ownAssembly(runVideoAssembly('example-video'));
+    const collectionWarnings = log.mock.calls.filter(([message]) => message?.startsWith?.('⚠️ CD video assembly addItem failed:'));
+    expect(collectionWarnings).toEqual(code === 'ERR_NOT_FOUND' ? [[`⚠️ CD video assembly addItem failed: ${error}`]] : []);
+  } finally {
+    log.mockRestore();
+  }
+  expect(addItem).toHaveBeenLastCalledWith(state.project.collectionId, { kind: 'video', ref: videoFinalCut.videoId });
   expect(state.project.status).toBe('complete');
+  expect(state.project.failureReason).toBeNull();
+  expect(state.project.finalVideoId).toBe(videoFinalCut.videoId);
+  expect(state.project.videoRoughCut).toEqual(videoRoughCut);
+  expect(state.project.videoFinalCut).toEqual(videoFinalCut);
   expect(state.history.length).toBe(rendered);
 }, 30000);
 
