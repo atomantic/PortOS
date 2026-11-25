@@ -680,6 +680,59 @@ describe('MusicVideo project versions', () => {
     expect(await screen.findByRole('combobox', { name: 'Project version' })).toHaveValue(v1.id);
   });
 
+  it('distinguishes sibling forks with the same version number, even after equal renames', async () => {
+    const v1 = { ...PROJECT_WITH_CLIP, version: 1 };
+    const fork = (id, name) => ({ ...v1, id, name, rootProjectId: v1.id, parentProjectId: v1.id, version: 2 });
+    const a = fork('mv-fork-a', 'Legato');
+    const b = fork('mv-fork-b', 'Legato');
+    const c = fork('mv-fork-c', 'Staccato');
+    const versions = [v1, c, b, a];
+    getMusicVideoProject.mockImplementation(async id => versions.find(project => project.id === id));
+    listMusicVideoProjectVersions.mockResolvedValue(versions);
+    render(
+      <MemoryRouter initialEntries={[`/music-video/${v1.id}/board`]}>
+        <LocationProbe />
+        {MV_ROUTES}
+      </MemoryRouter>,
+    );
+
+    const versionPicker = async () => screen.findByRole('combobox', { name: 'Project version' });
+    const projectPicker = screen.getByRole('combobox', { name: 'Project' });
+    for (const [project, titleLabel, headerLabel] of [
+      [a, 'v2 · Legato · Copy 1', 'Legato (v2) · Copy 1'],
+      [b, 'v2 · Legato · Copy 2', 'Legato (v2) · Copy 2'],
+      [c, 'v2 · Staccato', 'Staccato (v2)'],
+    ]) {
+      const picker = await versionPicker();
+      expect(within(picker).getByRole('option', { name: titleLabel })).toHaveValue(project.id);
+      expect(within(projectPicker).getByRole('option', { name: headerLabel })).toHaveValue(project.id);
+      fireEvent.change(picker, { target: { value: project.id } });
+      expect(await versionPicker()).toHaveValue(project.id);
+      expect(screen.getByTestId('loc')).toHaveTextContent(`/music-video/${project.id}/board`);
+      expect(getMusicVideoProject).toHaveBeenCalledWith(project.id, { silent: true });
+    }
+  });
+
+  it('keeps known versions available while refreshing the family after a fork', async () => {
+    const v1 = { ...PROJECT_WITH_CLIP, version: 1 };
+    const v2 = { ...v1, id: 'mv-v2', rootProjectId: v1.id, parentProjectId: v1.id, version: 2, name: 'Other take' };
+    const newFork = { ...v2, id: 'mv-new-fork', name: 'New take' };
+    let failRefresh;
+    listMusicVideoProjectVersions.mockResolvedValueOnce([v1, v2]).mockImplementation(() => new Promise((_, reject) => { failRefresh = reject; }));
+    getMusicVideoProject.mockImplementation(async id => [v1, v2, newFork].find(project => project.id === id));
+    cloneMusicVideoProject.mockResolvedValue(newFork);
+    render(<MemoryRouter initialEntries={[`/music-video/${v1.id}/board`]}>{MV_ROUTES}</MemoryRouter>);
+    await screen.findByRole('combobox', { name: 'Project version' });
+    await openSettings('Project');
+    fireEvent.click(await screen.findByRole('button', { name: /^Fork v2$/ }));
+
+    await screen.findByRole('heading', { level: 2, name: newFork.name });
+    const picker = screen.getByRole('combobox', { name: 'Project version' });
+    expect(within(picker).getByRole('option', { name: 'v2 · Other take' })).toHaveValue(v2.id);
+    await act(async () => failRefresh(new Error('Could not update versions')));
+    expect(within(picker).getByRole('option', { name: 'v2 · Other take' })).toHaveValue(v2.id);
+  });
+
   it('omits media type parenthetical in the project picker options', async () => {
     const parentheticalProject = {
       ...PROJECT_WITH_CLIP,

@@ -28,7 +28,7 @@ import AutonomousStartDrawer from '../components/musicVideo/AutonomousStartDrawe
 import { automationDraftFrom, automationFromDraft } from '../lib/musicVideoAutomation.js';
 import { listUniverseNames } from '../services/apiUniverseBuilder.js';
 import { MUSIC_VIDEO_PAGE_ID, MUSIC_VIDEO_SCROLL_ID } from '../components/musicVideo/MusicVideoLayout.jsx';
-import { groupMusicVideoProjects } from '../lib/musicVideoProjectList.js';
+import { distinctMusicVideoLabels, groupMusicVideoProjects, musicVideoVersionLabels } from '../lib/musicVideoProjectList.js';
 import ProjectIndex from '../components/musicVideo/ProjectIndex.jsx';
 import useMusicVideoJobSlots from '../components/musicVideo/useMusicVideoJobSlots.js';
 import useProjectSummarySync from '../components/musicVideo/useProjectSummarySync.js';
@@ -189,8 +189,11 @@ export default function MusicVideo() {
     : () => { const collection = stageOnlyParam ? summaries : indexSummaries; if (!collection.loading) collection.reload(); };
   const selected = selectedLoaded ? selectedProject : null;
   const selectedRoot = selected ? selected.rootProjectId || selected.id : null;
-  const loadVersions = useCallback(() => listMusicVideoProjectVersions(selectedRoot, { silent: true }), [selectedRoot]);
-  const versionFamily = useListResource(loadVersions, { enabled: !!selectedRoot });
+  // Keep the request identity through the brief gap between the cached record
+  // and its URL changing on a fork. Only the selected root may display results.
+  const versionRequestRoot = selectedId && selectedProject ? selectedProject.rootProjectId || selectedProject.id : null;
+  const loadVersions = useCallback(() => listMusicVideoProjectVersions(versionRequestRoot, { silent: true }), [versionRequestRoot]);
+  const versionFamily = useListResource(loadVersions, { enabled: !!versionRequestRoot, retainOnRetry: true });
 
   const { retry: retryVersions, setItems: setFamilyVersions } = versionFamily;
 
@@ -261,8 +264,13 @@ export default function MusicVideo() {
     return [...byId.values()].sort(compareMusicVideoProjectsNewestFirst);
   }, [selected, summaries.items, summaries.loaded, indexSummaries.items, stageOnlyParam, versionFamily.items, selectedRoot]);
   const versionGroups = useMemo(() => groupMusicVideoProjects(sortedProjects), [sortedProjects]);
-  const versionedRoots = new Set(versionGroups.filter(({ versions }) => versions.length > 1).map(({ rootId }) => rootId));
+  const projectPickerLabels = useMemo(() => {
+    const versionedRoots = new Set(versionGroups.filter(({ versions }) => versions.length > 1).map(({ rootId }) => rootId));
+    return distinctMusicVideoLabels(sortedProjects, (project) =>
+      formatProjectPickerLabel(project, Number.isInteger(project.version) || versionedRoots.has(project.rootProjectId || project.id)));
+  }, [sortedProjects, versionGroups]);
   const selectedVersions = versionGroups.find(({ rootId }) => rootId === selectedRoot)?.versions ?? [];
+  const versionLabels = musicVideoVersionLabels(selectedVersions);
   useEffect(() => {
     if (!stageOnlyParam || !summaries.loaded || summaries.error) return;
     const newest = sortedProjects[0];
@@ -597,7 +605,7 @@ export default function MusicVideo() {
             >
               <option value="">{loading ? 'Loading projects…' : 'Select a project…'}</option>
               {sortedProjects.map((project) => (
-                <option key={project.id} value={project.id}>{formatProjectPickerLabel(project, Number.isInteger(project.version) || versionedRoots.has(project.rootProjectId || project.id))}</option>
+                <option key={project.id} value={project.id}>{projectPickerLabels.get(project.id)}</option>
               ))}
             </select>
             {!selected && (
@@ -746,9 +754,9 @@ export default function MusicVideo() {
                   value={selected.id}
                   disabled={youtube.editJob.active}
                   onChange={(e) => selectProject(e.target.value, resolveStageParam(routeStage))}
-                  className="ml-1 min-h-[44px] shrink-0 rounded border border-port-border bg-port-bg px-1.5 text-xs text-port-text-muted disabled:opacity-50 pointer-fine:sm:min-h-[32px]"
+                  className="ml-1 min-h-[44px] max-w-[45vw] shrink-0 rounded border border-port-border bg-port-bg sm:max-w-52 px-1.5 text-xs text-port-text-muted disabled:opacity-50 pointer-fine:sm:min-h-[32px]"
                 >
-                  {selectedVersions.map((version) => <option key={version.id} value={version.id}>v{version.version || 1}</option>)}
+                  {selectedVersions.map((version) => <option key={version.id} value={version.id}>{versionLabels.get(version.id)}</option>)}
                 </select>
               ) : versionFamily.state === 'error' ? (
                 <button type="button" aria-label="Retry loading project versions" onClick={retryVersions}
