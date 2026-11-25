@@ -430,6 +430,14 @@ describe('fableLoom production service', () => {
       referenceImagePaths: ['/example/lead.png', '/example/second.png'],
       referenceImageStrengths: [0.4, 0.6],
     });
+    expect(imagePrepareMocks.resolveLocalImageModel.mock.calls.at(-1)[1]).toEqual(
+      expect.objectContaining({
+        prompt: params.prompt, negativePrompt: params.negativePrompt,
+        width: params.width, height: params.height,
+        referenceImagePaths: params.referenceImagePaths, referenceImageStrengths: params.referenceImageStrengths,
+      }),
+    );
+    expect(imagePrepareMocks.resolveLocalImageModel.mock.calls.at(-1)[1]).not.toHaveProperty('initImagePath');
   });
 
   it('fails a local video render whose model cannot take the resolved input mode', async () => {

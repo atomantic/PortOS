@@ -39,7 +39,7 @@ import { captureImageFrameDependencies } from '../../lib/musicVideo/musicVideoDe
 import { musicVideoGreyboxReferences } from '../../lib/musicVideo/musicVideoGreybox.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideo/musicVideoAspect.js';
 import { join } from 'node:path';
-import { assertFlux2InputsCompatible } from '../../lib/flux2Inputs.js';
+import { assertLocalImageModelInputs } from '../../lib/localImageModelInputs.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir, resolveGalleryImage, copyFileGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { resolveImageInputPath } from '../../lib/pathSafety.js';
@@ -415,26 +415,6 @@ async function prepareMusicVideoScene(data, { mode, localModel, cloudModel, musi
   assertCatalogReferenceFiles(project, namedReferenceFiles);
 }
 
-async function assertLocalModelInputs(localModel, data, { initInputCount, referenceImageCount }) {
-  if (!localModel) return;
-  const inputs = {
-    negativePrompt: data.negativePrompt,
-    hasInitImage: Boolean(initInputCount),
-    referenceCount: referenceImageCount,
-    referenceImageStrengths: data.referenceStrengths || [],
-    loraCount: (data.loraFilenames?.length || 0) + (data.loraPaths?.length || 0),
-  };
-  if (localModel.runner === 'flux3') {
-    const { assertFlux3Inputs } = await import('./flux3Runtime.js');
-    assertFlux3Inputs({ ...inputs, width: Number(data.width ?? 1024), height: Number(data.height ?? 1024) });
-  }
-  if (usesMinimaxH3Image(localModel)) {
-    const { assertMinimaxH3ImageInputs } = await import('./minimaxH3ImageRuntime.js');
-    assertMinimaxH3ImageInputs({ ...inputs, width: Number(data.width ?? 2048), height: Number(data.height ?? 2048), steps: data.steps || null });
-  }
-  assertFlux2InputsCompatible(localModel, inputs);
-}
-
 async function assertPreStageGates(data, { settings, mode, cloudModel, localModel, referenceImageCount, initInputCount, preview }) {
   const peerRouted = Boolean(data.mediaProviderPeerId);
   const inputImageCount = initInputCount + referenceImageCount;
@@ -597,7 +577,19 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
       ? data.cloudModel || resolveCloudProviderConfig(settings, mode)?.modelId : data.cloudModel || null;
     await prepareMusicVideoScene(data, { mode, localModel, cloudModel, musicVideoProject, namedReferenceFiles, referenceUploads, initInputCount });
     const referenceImageCount = namedReferenceFiles.length + referenceUploads.length;
-    await assertLocalModelInputs(localModel, data, { initInputCount, referenceImageCount });
+    if (data.guidance == null && data.cfgScale != null) data.guidance = data.cfgScale;
+    // FableLoom validates its effective scene dimensions after loading the loom.
+    const localInputs = {
+      ...data,
+      ...(data.fableLoom ? { width: undefined, height: undefined } : {}),
+      referenceImageStrengths: data.referenceStrengths,
+    };
+    // FableLoom preserves its own init-image refusal for MOSS before compilation.
+    if (!data.fableLoom || !usesMossSwift(localModel)) {
+      assertLocalImageModelInputs(localModel, localInputs, {
+        hasInitImage: Boolean(initInputCount), referenceCount: referenceImageCount,
+      });
+    }
     // Freeze the selected preference, leaving explicit ids for dispatch validation.
     if (!data.modelId && localModel?.id) data.modelId = localModel.id;
     await assertPreStageGates(data, { settings, mode, cloudModel, localModel, referenceImageCount, initInputCount, preview });
@@ -608,7 +600,6 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
       initUpload, namedReferenceFiles, referenceUploads, preview, stagedRefPaths,
     });
     assertCloudPrompt(data, mode, hasInputImage);
-    if (data.guidance == null && data.cfgScale != null) data.guidance = data.cfgScale;
     return { data, mode, settings, uploadedTempPaths, stagedRefPaths };
   } catch (error) {
     const tempPaths = Object.values(files || {}).map(file => file?.path).filter(Boolean);
@@ -632,9 +623,10 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
  *
  * @param {object} settings - raw settings object (as returned by getSettings())
  * @param {object} params   - in-flight generate params (post prepareGenerateParams)
+ * @param {string[]|null} modelCandidates - inherited target preferences
  * @returns {{ pythonPath: string|null, selectedModel: object|undefined }}
  */
-export function resolveLocalImageModel(settings, params) {
+export function resolveLocalImageModel(settings, params, modelCandidates = null) {
   const pythonPath = settings.imageGen?.local?.pythonPath || null;
   // Pre-validate config: mflux models need pythonPath, FLUX.2 doesn't
   // (it uses its own bundled venv). Without this guard, the queue would
@@ -652,17 +644,14 @@ export function resolveLocalImageModel(settings, params) {
   // An explicit pin must fail clearly when the host cannot run it. For an
   // omitted pin, prefer the shipped default only when compatible, then choose
   // the first known-compatible model.
-  const selectedModel = selectLocalImageModelFromSettings(settings, params.modelId, allModels);
+  const selectedModel = selectLocalImageModelFromSettings(settings, params.modelId, allModels, modelCandidates);
   if (selectedModel && !isHardwareCompatible(selectedModel.hardwareCompatibility)) {
     throw new ServerError(
       hardwareUnavailableReason(`Image model "${selectedModel.id}"`, selectedModel.hardwareCompatibility),
       { status: 400, code: 'MODEL_HARDWARE_UNAVAILABLE' },
     );
   }
-  assertFlux2InputsCompatible(selectedModel, {
-    hasInitImage: Boolean(params.initImagePath), referenceCount: params.referenceImagePaths?.length || 0,
-    loraCount: (params.loraFilenames?.length || 0) + (params.loraPaths?.length || 0),
-  });
+  assertLocalImageModelInputs(selectedModel, params);
   // Edit-only models (Qwen-Image-Edit) load a pipeline that REQUIRES a
   // source image. Reject a text-only submission up-front rather than
   // enqueueing a job that crashes deep inside diffusers. `params.initImagePath`

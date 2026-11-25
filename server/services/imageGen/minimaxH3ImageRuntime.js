@@ -20,6 +20,10 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { verifyCachedRepoFiles } from '../../lib/hfCache.js';
 import { imageModelDownloadTargets } from '../../lib/mediaModels/metadata.js';
 import { IMAGE_RUNTIME_REMEDY } from '../../lib/imageRuntimeRemedies.js';
+import { assertMinimaxH3ImageInputs, MINIMAX_H3_IMAGE_STEPS } from '../../lib/localImageModelInputs.js';
+
+export { assertMinimaxH3ImageInputs, MINIMAX_H3_IMAGE_STEPS };
+export { MINIMAX_H3_IMAGE_MAX_REFERENCES, MINIMAX_H3_IMAGE_MAX_ASPECT } from '../../lib/localImageModelInputs.js';
 
 // videoGen/runtimes.js is heavy and resolves paths at load, so it is imported
 // only on the paths that need it, never by the modules that merely list models.
@@ -32,13 +36,6 @@ export async function loadMinimaxH3Runtime() {
 }
 
 export const MINIMAX_H3_IMAGE_SCRIPT = () => join(PATHS.root, 'scripts', 'ml', 'generate_minimax_h3_image.py');
-export const MINIMAX_H3_IMAGE_MAX_REFERENCES = 16;
-export const MINIMAX_H3_IMAGE_STEPS = 6;
-// The adapter renders on a 32px-aligned same-aspect canvas (enlarged below
-// 2048x2048) and resizes back, so any size inside the image route's own pixel
-// cap works; only the release's 1:3 to 3:1 aspect range is a real limit.
-export const MINIMAX_H3_IMAGE_MAX_ASPECT = 3;
-
 const hostProblem = ({ platform = process.platform, osRelease = release(), appleSilicon } = {}) => {
   if (platform !== 'darwin' || !(appleSilicon ?? isAppleSilicon())) return 'MiniMax H3-Image (MLX) requires an Apple Silicon Mac.';
   if (Number(osRelease.split('.')[0]) < 23) return 'MiniMax H3-Image (MLX) requires macOS 14 or later.';
@@ -62,20 +59,6 @@ export async function diagnoseMinimaxH3ImageRuntime(host) {
     reason: 'The MiniMax H3 MLX runtime (shared with H3 video) is missing or needs repair.',
     remedy: { kind: IMAGE_RUNTIME_REMEDY.INSTALL_MINIMAX_H3, label: 'Install / repair MiniMax H3 runtime' },
   };
-}
-
-export function assertMinimaxH3ImageInputs({ negativePrompt, width, height, steps = null, hasInitImage = false, referenceCount = 0, loraCount = 0, referenceImageStrengths = [] }) {
-  const reject = message => { throw new ServerError(message, { status: 400, code: 'MINIMAX_H3_IMAGE_INPUT_UNSUPPORTED' }); };
-  if (negativePrompt) reject('MiniMax H3-Image is CFG-distilled and has no negative prompt. Describe the desired scene in the prompt.');
-  if (hasInitImage) reject('MiniMax H3-Image edits use reference images. Move the init image into a reference slot; image strength is unavailable.');
-  if (loraCount) reject('MiniMax H3-Image does not support LoRAs. Remove them before rendering.');
-  if (referenceCount > MINIMAX_H3_IMAGE_MAX_REFERENCES) reject(`MiniMax H3-Image accepts at most ${MINIMAX_H3_IMAGE_MAX_REFERENCES} reference images.`);
-  if (referenceImageStrengths.some(value => Number(value) !== 1)) reject('MiniMax H3-Image reference strength is fixed. Remove per-reference strength overrides.');
-  const w = Number(width);
-  const h = Number(height);
-  if (![w, h].every(n => Number.isInteger(n) && n > 0)) reject('MiniMax H3-Image needs a whole-pixel width and height.');
-  if (Math.max(w, h) > MINIMAX_H3_IMAGE_MAX_ASPECT * Math.min(w, h)) reject('MiniMax H3-Image supports aspect ratios from 1:3 to 3:1.');
-  if (steps != null && Number(steps) !== MINIMAX_H3_IMAGE_STEPS) reject(`MiniMax H3-Image is distilled for exactly ${MINIMAX_H3_IMAGE_STEPS} steps.`);
 }
 
 export function minimaxH3ImageRenderArgs(inputs) {

@@ -20,7 +20,7 @@ import { randomUUID } from 'crypto';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { spawn } from '../../lib/childProcess.js';
 import { atomicWrite, ensureDir, PATHS, resolveImageInputPath, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
-import { assertFlux2InputsCompatible } from '../../lib/flux2Inputs.js';
+import { assertLocalImageModelInputs, DEFAULT_LOCAL_IMAGE_DIMENSION } from '../../lib/localImageModelInputs.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
@@ -39,9 +39,9 @@ import { IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL } from './modes.js';
 import { bufferChildExit } from '../videoGen/generateVideoHelpers.js';
 import { getImageModels } from '../../lib/mediaModels.js';
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
-import { assertFlux3Inputs, flux3Env, resolveFlux3Snapshot } from './flux3Runtime.js';
+import { flux3Env, resolveFlux3Snapshot } from './flux3Runtime.js';
 import {
-  assertMinimaxH3ImageInputs, minimaxH3ImageEnv, minimaxH3ImageWeightsCached, loadMinimaxH3Runtime,
+  minimaxH3ImageEnv, minimaxH3ImageWeightsCached, loadMinimaxH3Runtime,
 } from './minimaxH3ImageRuntime.js';
 import { readTriggerWordsByFilename, readLoraLicensesByFilename } from '../loras.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
@@ -96,7 +96,8 @@ export const cancel = () => {
   return true;
 };
 
-async function preflightLocalModel({ modelId, pythonPath, negativePrompt, width, height, steps, initImagePath, referenceImagePaths, referenceImageStrengths, loraPaths, loraFilenames }) {
+async function preflightLocalModel(params) {
+  const { modelId, pythonPath } = params;
   // loadMediaModels memoizes — on-disk edits to data/media-models.json still
   // need a server restart to apply. Don't re-check model.broken here:
   // getImageModels() already filtered current-platform entries; an extra
@@ -110,6 +111,7 @@ async function preflightLocalModel({ modelId, pythonPath, negativePrompt, width,
       { status: 400, code: 'MODEL_HARDWARE_UNAVAILABLE' },
     );
   }
+  assertLocalImageModelInputs(model, params);
   const assertRuntimeReady = async (code) => {
     const { diagnoseLocalRuntime } = await import('./localRuntime.js');
     const runtime = await diagnoseLocalRuntime({ modelId });
@@ -117,15 +119,11 @@ async function preflightLocalModel({ modelId, pythonPath, negativePrompt, width,
   };
   let flux3ModelPath = null;
   if (usesFlux3(model)) {
-    assertFlux3Inputs({ negativePrompt, width: Number(width), height: Number(height), initImagePath, referenceImagePaths, referenceImageStrengths,
-      loraPaths: [...loraPaths, ...loraFilenames] });
     await assertRuntimeReady('FLUX3_NOT_READY');
     flux3ModelPath = await resolveFlux3Snapshot(model);
   }
   let minimaxRuntime = null;
   if (usesMinimaxH3Image(model)) {
-    assertMinimaxH3ImageInputs({ negativePrompt, width: Number(width), height: Number(height), steps: steps || null, hasInitImage: Boolean(initImagePath),
-      referenceCount: referenceImagePaths.length, referenceImageStrengths, loraCount: loraPaths.length + loraFilenames.length });
     await assertRuntimeReady('MINIMAX_H3_IMAGE_NOT_READY');
     if (!await minimaxH3ImageWeightsCached(model)) {
       throw new ServerError('MiniMax H3-Image weights are not downloaded. Use Download beside the model in Image Gen, then retry.',
@@ -133,20 +131,10 @@ async function preflightLocalModel({ modelId, pythonPath, negativePrompt, width,
     }
     minimaxRuntime = await loadMinimaxH3Runtime();
   }
-  assertFlux2InputsCompatible(model, {
-    hasInitImage: Boolean(initImagePath), referenceCount: referenceImagePaths.length,
-    loraCount: loraFilenames.length + loraPaths.length,
-  });
   // Both flux2 and z-image runners resolve their own Python via the FLUX.2
   // venv — only the legacy mflux/imagine_win path needs the user-configured
   // Settings > Image Gen pythonPath.
-  if (usesMossSwift(model)) {
-    // Check raw requests before sidecar normalization can discard a missing input file or LoRA.
-    if (loraFilenames.length || loraPaths.length || initImagePath || referenceImagePaths.length) {
-      throw new ServerError('MOSS SFT supports text-to-image only; remove LoRAs and input images.', { status: 400, code: 'MOSS_INPUT_UNSUPPORTED' });
-    }
-    await assertRuntimeReady('MOSS_NOT_READY');
-  }
+  if (usesMossSwift(model)) await assertRuntimeReady('MOSS_NOT_READY');
   if (!usesTorchVenv(model) && !usesMossSwift(model) && !usesFlux3(model) && !usesMinimaxH3Image(model) && !pythonPath) {
     throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
   }
@@ -686,7 +674,7 @@ function wireLocalChild(render, child, stepwiseDir) {
   }
 }
 
-export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = LOCAL_IMAGEGEN_DEFAULT_MODEL, width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], visualConditioning = null, jobId: providedJobId = null, reviewedReferenceSnapshot = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null, outputTarget = null, promptAdditions = [] }) {
+export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = LOCAL_IMAGEGEN_DEFAULT_MODEL, width = DEFAULT_LOCAL_IMAGE_DIMENSION, height = DEFAULT_LOCAL_IMAGE_DIMENSION, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], visualConditioning = null, jobId: providedJobId = null, reviewedReferenceSnapshot = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null, outputTarget = null, promptAdditions = [] }) {
   // The ingestion instant `renderTimingFields` measures from — the queue calls
   // generateImage the moment it picks this job up. See lib/renderTiming.js.
   const renderStartedAtMs = Date.now();
@@ -699,7 +687,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   // activeProcess handle below would be clobbered and cancel() would orphan
   // the first child.
   const { model, minimaxRuntime, flux3ModelPath } = await preflightLocalModel({
-    modelId, pythonPath, negativePrompt, width, height, steps, initImagePath,
+    modelId, pythonPath, negativePrompt, width, height, steps, guidance, seed, initImagePath,
     referenceImagePaths, referenceImageStrengths, loraPaths, loraFilenames,
   });
   // Non-gallery render target (issue #2264): the Image Cleaner's GPU FLUX

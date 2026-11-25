@@ -162,7 +162,12 @@ export async function previewPreparedImagePrompt({ params, mode = params.mode, s
 
 /** Retry the prepared request without running a new compose or staging its inputs. */
 export async function previewRetryImagePrompt(params, settings) {
-  const mode = params.mode || settings.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
+  const mode = params.mode || IMAGE_GEN_MODE.LOCAL;
+  // Archived Higgsfield jobs carry the worker's provider model on `model`.
+  // Older rows without it run the worker's shipped default, irrespective of the install pin.
+  if (mode === IMAGE_GEN_MODE.HIGGSFIELD) {
+    params = { ...params, cloudModel: params.model || HIGGSFIELD_IMAGE_DEFAULT_MODEL };
+  }
   const referenceImages = previewImageRetryReferences(params, mode, settings);
   const context = { params, mode, settings, envelope: referenceImages.length ? { referenceImages } : {} };
   if (params.quickEdit) return previewQuickImageEdit(context);
