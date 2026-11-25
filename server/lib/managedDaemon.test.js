@@ -10,6 +10,8 @@ const makeWatcher = (overrides = {}) => {
     ? overrides.pm2Status
     : { status: 'online', pid: 42, args: ['--port', '9001'] });
   const execPm2 = vi.fn(async () => ({ stdout: 'pm2 output', stderr: '' }));
+  const clearStatusCache = vi.fn();
+  const setLastExitError = vi.fn();
   const isPortInUse = vi.fn(async () => false);
   const probe = vi.fn(async () => overrides.reachable ?? false);
   const watcher = createDaemonWatcher({
@@ -23,13 +25,15 @@ const makeWatcher = (overrides = {}) => {
     getConfig: () => config,
     setConfig: (value) => { config = value; },
     getLastExitError: () => null,
+    setLastExitError,
     getAppStatus,
+    clearStatusCache,
     getSavedProcessNames: vi.fn(async () => ['example-daemon']),
     execPm2,
     getPortReleaseTimeoutMs: () => 5_000,
     ...overrides.options,
   });
-  return { watcher, getAppStatus, execPm2, isPortInUse, probe, getConfig: () => config };
+  return { watcher, getAppStatus, clearStatusCache, setLastExitError, execPm2, isPortInUse, probe, getConfig: () => config };
 };
 
 describe('createDaemonWatcher', () => {
@@ -77,6 +81,132 @@ describe('createDaemonWatcher', () => {
 
     expect(isPortInUse).toHaveBeenCalledTimes(2);
     expect(isPortInUse).toHaveBeenCalledWith(9001);
+  });
+});
+
+describe('createDaemonWatcher lifecycle', () => {
+  const label = 'Example';
+  const codePrefix = 'EXAMPLE';
+  const port = 9001;
+  const host = '127.0.0.1';
+  const endpoint = `http://${host}:${port}/v1`;
+  const config = { port };
+
+  const launchOptions = (reset = true) => ({
+    binaryPath: 'example',
+    args: ['--port', String(port)],
+    endpoint,
+    waitMs: 60_000,
+    pollMs: 5,
+    logs: {
+      reset: vi.fn(async () => reset),
+      files: () => ({ stdout: 'out.log', stderr: 'error.log' }),
+    },
+    label,
+    codePrefix,
+  });
+
+  it('refuses a managed online process before probing the port', async () => {
+    const { watcher, probe, isPortInUse } = makeWatcher();
+
+    await expect(watcher.assertPortFree({ host, port, label, codePrefix })).rejects.toMatchObject({
+      status: 409,
+      message: 'Example is already running with PID 42',
+    });
+    expect(probe).not.toHaveBeenCalled();
+    expect(isPortInUse).not.toHaveBeenCalled();
+  });
+
+  it('refuses an active external server before checking the raw port', async () => {
+    const { watcher, isPortInUse } = makeWatcher({ pm2Status: { status: 'not_found' }, reachable: true });
+
+    await expect(watcher.assertPortFree({ host, port, label, codePrefix })).rejects.toMatchObject({
+      status: 409,
+      message: `Port ${port} is already in use by an active server at ${endpoint}`,
+    });
+    expect(isPortInUse).not.toHaveBeenCalled();
+  });
+
+  it('uses custom code and advice for a bound port without a responding server', async () => {
+    const { watcher, isPortInUse } = makeWatcher({ pm2Status: null });
+    isPortInUse.mockResolvedValueOnce(true);
+    const options = { host, port, label, codePrefix, portAdvice: 'Choose a different port.' };
+
+    await expect(watcher.assertPortFree(options)).rejects.toMatchObject({
+      status: 409,
+      code: 'EXAMPLE_PORT_IN_USE',
+      message: `Port ${port} is already in use on ${host}. Choose a different port.`,
+    });
+    await expect(watcher.assertPortFree(options)).resolves.toBe(endpoint);
+  });
+
+  it('deletes the stale entry and truncates the logs before starting, then returns the live result', async () => {
+    const { watcher, execPm2, probe } = makeWatcher({ config, reachable: true });
+    const options = launchOptions();
+
+    await expect(watcher.launch(options)).resolves.toEqual({
+      success: true, running: true, managed: true, pid: 42, endpoint, online: true, config,
+    });
+    expect(execPm2.mock.calls).toEqual([
+      [['delete', 'example-daemon']],
+      [['start', 'example', '--name', 'example-daemon', '--interpreter', 'none',
+        '--no-autorestart', '--output', 'out.log', '--error', 'error.log', '--', '--port', '9001']],
+    ]);
+    expect(execPm2.mock.invocationCallOrder[0]).toBeLessThan(options.logs.reset.mock.invocationCallOrder[0]);
+    expect(options.logs.reset.mock.invocationCallOrder[0]).toBeLessThan(execPm2.mock.invocationCallOrder[1]);
+    expect(probe).toHaveBeenCalledWith(endpoint);
+  });
+
+  it('includes the last four launch lines and clears the config after an early exit', async () => {
+    const { watcher, execPm2, probe, setLastExitError, getConfig } = makeWatcher({
+      config,
+      pm2Status: { status: 'errored' },
+    });
+    execPm2.mockResolvedValue({ stderr: 'one\ntwo\nthree\nfour\nfive\n' });
+
+    await expect(watcher.launch(launchOptions())).rejects.toMatchObject({
+      status: 500,
+      code: 'EXAMPLE_EXITED',
+      message: 'Example exited immediately (PM2 status: errored). Last output: two | three | four | five',
+    });
+    expect(execPm2).toHaveBeenNthCalledWith(3, ['logs', 'example-daemon', '--nostream', '--lines', '15']);
+    expect(execPm2).toHaveBeenNthCalledWith(4, ['delete', 'example-daemon']);
+    expect(setLastExitError).toHaveBeenCalledWith('PM2 status: errored');
+    expect(probe).not.toHaveBeenCalled();
+    expect(getConfig()).toBeNull();
+  });
+
+  it('uses only the current launch buffer when log truncation fails', async () => {
+    const { watcher, execPm2 } = makeWatcher({ config, pm2Status: { status: 'errored' } });
+    execPm2.mockResolvedValue({ stderr: 'stale output' });
+    watcher.appendLog('current launch');
+
+    await expect(watcher.launch(launchOptions(false))).rejects.toMatchObject({
+      code: 'EXAMPLE_EXITED',
+      message: expect.stringMatching(/^Example exited immediately \(PM2 status: errored\)\. Last output: \[.+\] current launch$/),
+    });
+    expect(execPm2).not.toHaveBeenCalledWith(['logs', 'example-daemon', '--nostream', '--lines', '15']);
+  });
+
+  it('refuses to stop an external listener', async () => {
+    const { watcher, execPm2 } = makeWatcher({ config, pm2Status: { status: 'not_found' }, reachable: true });
+
+    await expect(watcher.stop({ label })).resolves.toEqual({
+      success: false,
+      message: `An external process is listening on ${endpoint}. It was not started by PortOS and cannot be stopped here.`,
+    });
+    expect(execPm2).not.toHaveBeenCalled();
+  });
+
+  it('deletes a managed process and clears its config and PM2 status cache', async () => {
+    const { watcher, execPm2, clearStatusCache, getConfig } = makeWatcher({ config });
+    const onStopped = vi.fn();
+
+    await expect(watcher.stop({ label, onStopped })).resolves.toEqual({ success: true, message: 'Example stopped' });
+    expect(execPm2).toHaveBeenCalledWith(['delete', 'example-daemon']);
+    expect(clearStatusCache).toHaveBeenCalledOnce();
+    expect(getConfig()).toBeNull();
+    expect(onStopped).toHaveBeenCalledOnce();
   });
 });
 
