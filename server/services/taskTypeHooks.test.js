@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { canRunTaskOutputHookWithoutPayload, getTaskInputHook, getTaskOutputHook, isProgrammaticIoTaskType, resolveTaskHookType } from './taskTypeHooks.js';
+import { getTaskInputHook, getTaskOutputHook, isProgrammaticIoTaskType, resolveTaskHookType } from './taskTypeHooks.js';
 
 describe('taskTypeHooks registry', () => {
   it('resolves both hooks for layered-intelligence to callables', async () => {
@@ -33,14 +33,6 @@ describe('taskTypeHooks registry', () => {
     expect(await getTaskOutputHook('does-not-exist')).toBeNull();
   });
 
-  it('declares only payload-independent hooks safe for sentinel-less recovery', () => {
-    // No registered type is payload-independent today (quota-burn was, until it
-    // stopped being a scheduled task type entirely — see quotaBurnRunner.js).
-    // The predicate must still fail CLOSED for everything else.
-    expect(canRunTaskOutputHookWithoutPayload('layered-intelligence')).toBe(false);
-    expect(canRunTaskOutputHookWithoutPayload('issue-watcher')).toBe(false);
-    expect(canRunTaskOutputHookWithoutPayload('does-not-exist')).toBe(false);
-  });
 });
 
 describe('isProgrammaticIoTaskType (#2700)', () => {

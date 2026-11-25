@@ -70,7 +70,6 @@ vi.mock('./agentRunTracking.js', () => ({
   completeAgentRun: (...args) => completeAgentRunMock(...args),
 }));
 vi.mock('../taskTypeHooks.js', () => ({
-  canRunTaskOutputHookWithoutPayload: vi.fn(() => false),
   isProgrammaticIoTaskType: vi.fn(() => false),
   resolveTaskHookType: vi.fn(() => null),
   declaresNoCommitCriterion: vi.fn(() => false),

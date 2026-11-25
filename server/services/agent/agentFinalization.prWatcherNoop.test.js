@@ -69,7 +69,6 @@ vi.mock('./agentErrorAnalysis.js', () => ({
 vi.mock('../../lib/gitCommitProbe.js', () => ({ committedDuringRun: vi.fn(async () => false) }));
 vi.mock('./agentRunTracking.js', () => ({ createAgentRun: vi.fn(), completeAgentRun: vi.fn(async () => null) }));
 vi.mock('../taskTypeHooks.js', () => ({
-  canRunTaskOutputHookWithoutPayload: vi.fn(() => false),
   isProgrammaticIoTaskType: vi.fn(() => false),
   resolveTaskHookType: vi.fn(() => 'pr-watcher'),
   declaresNoCommitCriterion: vi.fn(() => false),

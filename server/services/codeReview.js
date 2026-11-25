@@ -595,32 +595,17 @@ export async function getReviewerCliInstalled() {
 }
 
 /**
- * Which `provider:<id>` reviewers this machine cannot invoke a code
- * review on — `{ 'provider:opencode-zen-cli': 'REVIEWER_UNSUPPORTED' }`.
+ * Both halves of the provider code-review answer from one provider read.
  *
- * The sibling of `getReviewerCliInstalled()` for provider-backed reviewers, and
- * warn-only for the same reason (#3606): the reviewer list is federation-wide
- * config, and a peer may hold a provider record this install does not. It never
- * filters or rejects a reviewer — it only lets a picker say so up front instead
- * of leaving the user to discover it as a permanently unsatisfied review gate.
+ * `unsupported`: which `provider:<id>` reviewers this machine cannot invoke a
+ * code review on, e.g. `{ 'provider:opencode-zen-cli': 'REVIEWER_UNSUPPORTED' }`.
+ * Warn-only (#3606): the reviewer list is federation-wide config, so it never
+ * filters or rejects a reviewer. Only refusing providers appear; a capable one
+ * is absent rather than `false`. Deliberately NOT memoized, because a stale
+ * answer would contradict a Settings change the user just made.
  *
- * Only providers that would REFUSE appear; a capable one is absent rather than
- * `false`, so a caller that never fetched this map is indistinguishable from a
- * machine where nothing is wrong (both read `undefined`).
- *
- * Deliberately NOT memoized: unlike the CLI probe this runs no subprocess — it
- * is a read of provider records the toolkit already holds plus a pure
- * predicate, and a stale answer here would contradict a Settings change the
- * user just made on the very page that renders it.
- */
-export async function getProviderReviewUnsupported() {
-  return (await getProviderReviewCapability()).unsupported
-}
-
-/**
- * Both halves of the provider code-review answer from one provider read:
- * `unsupported` (above) and `capable`, the `provider:<id>` tokens that CAN
- * review here — what `withoutResolvedUnsupportedFaults` clears stale faults by.
+ * `capable`: the `provider:<id>` tokens that CAN review here — what
+ * `withoutResolvedUnsupportedFaults` clears stale faults by.
  */
 export async function getProviderReviewCapability() {
   const providers = await listProviders().catch(() => [])

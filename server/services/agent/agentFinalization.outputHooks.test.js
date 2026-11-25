@@ -49,7 +49,6 @@ vi.mock('../cos/cosAgentLifecycle.js', () => ({
 }));
 
 vi.mock('../taskTypeHooks.js', () => ({
-  canRunTaskOutputHookWithoutPayload: vi.fn(() => true),
   getTaskOutputHook: vi.fn(),
   getTaskOutputPayloadPredicate: vi.fn(async () => null),
   declaresNoCommitCriterion: vi.fn(() => false),
@@ -59,7 +58,7 @@ vi.mock('../taskTypeHooks.js', () => ({
 }));
 
 import { getAgent, getAgentRecord, updateAgent, completeAgent } from '../cos/cosAgentLifecycle.js';
-import { canRunTaskOutputHookWithoutPayload, declaresNoCommitCriterion, getTaskOutputHook, isProgrammaticIoTaskType } from '../taskTypeHooks.js';
+import { declaresNoCommitCriterion, getTaskOutputHook, isProgrammaticIoTaskType } from '../taskTypeHooks.js';
 import {
   finalizeAgent,
   retireDeadAgent,
@@ -1129,7 +1128,7 @@ describe('recovery output-hook dispatch (#3182)', () => {
     completeAgent.mockRejectedValueOnce(new Error('invented persistence failure'));
     const finish = () => retireDeadAgent({ agent: persistedAgent, task: TASK, success: true, exitCode: 0, duration: 1000 });
     try {
-      await writeFile(join(workspacePath, '.agent-done-agent-example'), JSON.stringify({ taskOutcome }));
+      await writeFile(join(workspacePath, '.agent-done-agent-example'), JSON.stringify({ summary: 'Verified no-op.', payload: { verified: true }, taskOutcome }));
       await expect(finish()).rejects.toThrow('invented persistence failure');
       await expect(finish()).resolves.toEqual({ success: true, taskOutcome, deliveryHeld: false });
       expect(hook).toHaveBeenCalledOnce();
@@ -1215,27 +1214,16 @@ it('finishes extended Deep with an honest partial summary through ordinary compl
   it.each([
     ['orphan cleanup', false],
     ['post-restart completion', true],
-  ])('runs a registered processTaskOutput hook for %s with no stale sentinel payload', async (_path, success) => {
+  ])('withholds a registered processTaskOutput hook for %s with no sentinel payload', async (_path, success) => {
     const result = await dispatchRecoveredTaskOutputHook({
       agentId: persistedAgent.id,
       task: TASK,
       success,
     });
 
-    expect(result).toEqual({ ran: true, outcome: { recorded: true } });
-    expect(hook).toHaveBeenCalledOnce();
-    expect(hook).toHaveBeenCalledWith(expect.objectContaining({
-      agentId: persistedAgent.id,
-      task: TASK,
-      appId: 'app-example',
-      success,
-      payload: null,
-      workspacePath: null,
-    }));
-    expect(updateAgent).toHaveBeenCalledWith(
-      persistedAgent.id,
-      { metadata: { outputHookDispatchedAt: expect.any(String), outputHookValidationPassed: expect.any(Boolean) } },
-    );
+    expect(result).toEqual({ ran: false, recoveryPayloadUnavailable: true });
+    expect(hook).not.toHaveBeenCalled();
+    expect(updateAgent).not.toHaveBeenCalled();
   });
 
   it('deduplicates concurrent normal/recovery completion and persists the gate', async () => {
@@ -1336,8 +1324,6 @@ it('finishes extended Deep with an honest partial summary through ordinary compl
   });
 
   it('does not invoke a payload-dependent hook when recovery cannot read a sentinel', async () => {
-    canRunTaskOutputHookWithoutPayload.mockReturnValueOnce(false);
-
     await expect(dispatchRecoveredTaskOutputHook({
       agentId: persistedAgent.id,
       task: TASK,
@@ -1352,7 +1338,6 @@ it('finishes extended Deep with an honest partial summary through ordinary compl
     expect(hook).toHaveBeenCalledWith(expect.objectContaining({ workspacePath: '/example/repo' }));
 
     persistedAgent.metadata = {};
-    canRunTaskOutputHookWithoutPayload.mockReturnValueOnce(false);
     await expect(dispatchRecoveredTaskOutputHook({ agentId: 'agent-recovered', task: TASK, success: true }))
       .resolves.toEqual({ ran: false, recoveryPayloadUnavailable: true });
     expect(hook).toHaveBeenCalledOnce();

@@ -45,7 +45,6 @@ vi.mock('../cos/cosAgentLifecycle.js', () => ({
 }));
 
 vi.mock('../taskTypeHooks.js', () => ({
-  canRunTaskOutputHookWithoutPayload: vi.fn(() => false),
   declaresNoCommitCriterion: vi.fn(() => false),
   isProgrammaticIoTaskType: vi.fn(() => true),
   resolveTaskHookType: vi.fn(task => task?.metadata?.analysisType || null),

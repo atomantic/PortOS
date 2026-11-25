@@ -8,7 +8,7 @@ import { emitLog } from '../cos/cosEvents.js';
 import { getAgent, getAgentRecord, updateAgent, } from '../cos/cosAgentLifecycle.js';
 import { resolveTypeFailureSignal, } from './agentErrorAnalysis.js';
 import { SKIP_LEARNING_VERDICT } from '../../lib/learningVerdict.js';
-import { canRunTaskOutputHookWithoutPayload, getTaskOutputPayloadPredicate, isProgrammaticIoTaskType, resolveTaskHookType, getTaskOutputHook } from '../taskTypeHooks.js';
+import { getTaskOutputPayloadPredicate, isProgrammaticIoTaskType, resolveTaskHookType, getTaskOutputHook } from '../taskTypeHooks.js';
 
 /**
  * Hard bound on output-hook dispatch (#2727). The hook is only awaited BEFORE
@@ -418,7 +418,7 @@ export async function dispatchTaskOutputHook({ agentId, task, success, workspace
 
   const cwd = hookPayloadDir({ task, workspacePath, recovery });
   const payload = cwd ? await readHookPayload({ agentId, taskType, cwd }) : null;
-  if (recovery && payload == null && !canRunTaskOutputHookWithoutPayload(taskType)) {
+  if (recovery && payload == null) {
     return { ran: false, recoveryPayloadUnavailable: true };
   }
 
