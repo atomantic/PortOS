@@ -409,6 +409,20 @@ describe('LocalLlmPlayground endpoint runtimes', () => {
     expect(streamLocalLlmTest.mock.calls[0][0]).toMatchObject({ backend: 'llama', modelId: 'dflash' });
   });
 
+  it('renders Ollama models while the runtime listing is still pending', async () => {
+    getLocalRuntimeModels.mockReturnValue(new Promise(() => {}));
+    renderPlayground();
+    await waitFor(() => expect(screen.getAllByText('command-r-plus:104b').length).toBeGreaterThan(0));
+  });
+
+  it('renders runtime models and names the error when the managed status request fails', async () => {
+    getLocalLlmStatus.mockRejectedValue(new Error('status down'));
+    getLocalRuntimeModels.mockResolvedValue({ runtimes });
+    renderPlayground();
+    expect((await screen.findAllByText('dflash')).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Ollama and LM Studio could not be listed: status down/)).toBeTruthy();
+  });
+
   it('still lists Ollama models when the runtime listing fails', async () => {
     getLocalRuntimeModels.mockRejectedValue(new Error('boom'));
     renderPlayground();

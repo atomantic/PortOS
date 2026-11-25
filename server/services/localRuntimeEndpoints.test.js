@@ -4,9 +4,10 @@ const probeOpenAiModels = vi.fn();
 vi.mock('../lib/openAiModelsProbe.js', () => ({ probeOpenAiModels: (...args) => probeOpenAiModels(...args) }));
 vi.mock('./provider/providers.js', () => ({ listProviders: vi.fn(async () => []) }));
 vi.mock('./llamaServerManager.js', () => ({ getLlamaServerEndpoint: vi.fn(async () => 'http://127.0.0.1:9100/v1') }));
+const getMtplxServerStatus = vi.fn(async () => ({ cachedModels: ['cached'] }));
 vi.mock('./mtplxServerManager.js', () => ({
   getMtplxServerEndpoint: vi.fn(async () => null),
-  getMtplxServerStatus: vi.fn(async () => ({ cachedModels: [] })),
+  getMtplxServerStatus: (...args) => getMtplxServerStatus(...args),
 }));
 vi.mock('./slotstreamServerManager.js', () => ({ getSlotstreamServerEndpoint: vi.fn(async () => null) }));
 vi.mock('./specDecodeModels.js', () => ({ getSpecDecodePresetStatus: vi.fn(async () => []) }));
@@ -37,6 +38,8 @@ describe('listEndpointRuntimeModels', () => {
     expect(mtplx.error).toMatch(/not reachable/);
     expect(probeOpenAiModels).toHaveBeenCalledTimes(rows.length);
     expect(global.fetch).not.toHaveBeenCalled();
+    // A stopped runtime never pays for the slow disk/status fallback.
+    expect(getMtplxServerStatus).not.toHaveBeenCalled();
   });
 
   it('reports a failing listing as an offline row instead of throwing', async () => {

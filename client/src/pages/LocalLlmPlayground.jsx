@@ -253,7 +253,9 @@ export default function LocalLlmPlayground() {
   // `null` until /runtime-models answers, so the stale-selection prune below waits for it.
   const [runtimeRows, setRuntimeRows] = useState(null);
   const [runtimeError, setRuntimeError] = useState('');
-  const [loadingStatus, setLoadingStatus] = useState(true);
+  const [loadingManaged, setLoadingManaged] = useState(true);
+  const [loadingRuntimes, setLoadingRuntimes] = useState(true);
+  const loadingStatus = loadingManaged || loadingRuntimes;
   const [modelLoadError, setModelLoadError] = useState('');
   // Ollama models currently resident in VRAM/unified memory (from `/api/ps`),
   // observed so the sidebar can flag which models are warm — and which one is
@@ -307,20 +309,29 @@ export default function LocalLlmPlayground() {
 
   const cancelRun = () => runControllerRef.current?.abort();
 
+  // The managed pair (/status) and the endpoint runtimes (/runtime-models) load independently: a stopped runtime can
+  // make its listing slow, and either request failing must not hide what the other already returned.
   const loadStatus = useCallback(() => {
-    setLoadingStatus(true);
+    setLoadingManaged(true);
+    setLoadingRuntimes(true);
     setModelLoadError('');
-    // A failed runtime listing leaves Ollama and LM Studio usable; the rows just stay empty.
-    const runtimesPromise = getLocalRuntimeModels({ silent: true })
-      .then((r) => ({ rows: r?.runtimes ?? NO_RUNTIMES, error: '' }))
-      .catch((err) => ({ rows: NO_RUNTIMES, error: err?.message || 'Failed to list runtime models' }));
-    return Promise.all([getLocalLlmStatus({ silent: true }), runtimesPromise])
-      .then(async ([nextStatus, runtimes]) => {
+    setRuntimeError('');
+    getLocalRuntimeModels({ silent: true })
+      .then((r) => {
+        if (!mountedRef.current) return;
+        setRuntimeRows(r?.runtimes ?? NO_RUNTIMES);
+      })
+      .catch((err) => {
+        if (!mountedRef.current) return;
+        // A failed listing keeps the last good rows (or none yet); it is never an empty inventory.
+        setRuntimeRows((previous) => previous ?? NO_RUNTIMES);
+        setRuntimeError(err?.message || 'Failed to list runtime models');
+      })
+      .finally(() => { if (mountedRef.current) setLoadingRuntimes(false); });
+    return getLocalLlmStatus({ silent: true })
+      .then(async (nextStatus) => {
         if (!mountedRef.current) return;
         setStatus(nextStatus);
-        // A failed listing keeps the last good rows (or none yet); it is never an empty inventory.
-        setRuntimeRows((previous) => (runtimes.error ? (previous ?? NO_RUNTIMES) : runtimes.rows));
-        setRuntimeError(runtimes.error);
         const backendsWithModels = MANAGED_BACKENDS.filter((backend) => (nextStatus?.[backend]?.models || []).length > 0);
         const catalogs = await Promise.all(backendsWithModels.map((backend) =>
           getLocalLlmCatalog(backend).then((result) => [backend, result?.models || []]).catch(() => [backend, []])
@@ -333,7 +344,7 @@ export default function LocalLlmPlayground() {
         setCatalogByBackend({});
         setModelLoadError(err?.message || 'Failed to load local models');
       })
-      .finally(() => { if (mountedRef.current) setLoadingStatus(false); });
+      .finally(() => { if (mountedRef.current) setLoadingManaged(false); });
   }, []);
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
@@ -702,6 +713,9 @@ export default function LocalLlmPlayground() {
                   </button>
                 ))}
               </div>
+            )}
+            {modelLoadError && installedTargets.length > 0 && (
+              <p role="status" className="text-xs text-port-warning">Ollama and LM Studio could not be listed: {modelLoadError}</p>
             )}
             {runtimeError && (
               <p role="status" className="text-xs text-port-warning">Other runtimes could not be listed: {runtimeError}</p>
