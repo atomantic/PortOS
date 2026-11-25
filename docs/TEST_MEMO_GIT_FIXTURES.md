@@ -59,11 +59,21 @@ contradicts it (`scripts/lib/testMemo/gitFixture.js`):
   checkout;
 - a relative literal, or a spelled `null`/`undefined`, that can become that
   directory (git then runs where the test process does, inside the
-  checkout): written in place, assigned to a name the directory
-  is read from, passed by a caller as the parameter it is read from, or the
-  first segment of a `join()`/`resolve()` there. The repository's own
-  `execGit(args, dir)` is read the same way, and a call of it with no
-  directory is a git call that names none;
+  checkout): written in place, assigned to a name the directory is read
+  from, or the first segment of a `join()`/`resolve()` there. A name
+  declared with no value and never assigned is `undefined` too. The
+  repository's own `execGit(args, dir)` is read the same way, and a call of
+  it with no directory is a git call that names none;
+- a caller that gives a git wrapper no fixture directory. Where the
+  directory is a parameter of a named function (a declaration, an arrow or
+  function bound to a name or a property, a method), every call of that
+  function is read: the argument it passes is a directory like any other,
+  and an argument it leaves out is `undefined` unless the parameter has a
+  default, which is read as an assignment. The same holds for a `{ cwd }`
+  pattern and for `options.cwd`, against the object literal each caller
+  writes: a literal without the property gives no directory. `.call`,
+  `.apply` and `.bind` put the arguments where no call's are, so a function
+  that runs git and is reached through one of them is refused outright;
 - a repository or home path anywhere a git process can take it from: inside
   a git call, in the arguments of any call of a function that runs git
   (followed through the functions that call those, and counting the
@@ -74,7 +84,9 @@ contradicts it (`scripts/lib/testMemo/gitFixture.js`):
   is used other than by a direct call has callers the file does not show.
 
 What stays on the declaration's word is a value the source does not spell: a
-call's result, a property, a callback's parameter. So the marker goes on a
+call's result, a property of something that is no parameter, the parameter
+of a callback (its caller is not this file's to read), an argument behind a
+spread, an options object that is no literal. So the marker goes on a
 suite only after it has been read end to end, with every repository it makes
 accounted for, and it is reviewed as a claim about the suite. Three kinds of
 suite stay unmarked even though each git call names a temp directory: one
