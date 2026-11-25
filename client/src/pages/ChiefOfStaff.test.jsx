@@ -2034,6 +2034,24 @@ describe('ChiefOfStaff slice reads against concurrent refreshes (#18643)', () =>
     expect(api.getCosStatus).toHaveBeenCalledTimes(1);
   });
 
+  it('derives avatar state from the newer agent slice when an older shell refresh settles last', async () => {
+    api.getCosStatus.mockResolvedValue({ running: true, config, stats: {} });
+    renderWithProbe('briefing');
+    await waitForPageShell();
+    expect(screen.getAllByText('Thinking').length).toBeGreaterThan(0);
+
+    let releaseStatus;
+    api.getCosStatus.mockReturnValueOnce(new Promise(resolve => { releaseStatus = () => resolve({ running: true, config, stats: {} }); }));
+    await act(async () => { getSocketHandler('cos:config:changed')(); });
+    api.getCosAgents.mockResolvedValue([{ id: 'agent-example', taskId: 'task-example', status: 'running', startedAt: '2026-01-01T00:00:00.000Z', metadata: {} }]);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'go tasks' })); });
+    await settle();
+
+    await act(async () => { releaseStatus(); await new Promise(resolve => setTimeout(resolve, 20)); });
+    expect(screen.getAllByText('Coding').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Thinking')).toBeNull();
+  });
+
   it('refreshes the learning summary from the persisted learning-change event', async () => {
     withFakeTimers();
     renderWithProbe('config');

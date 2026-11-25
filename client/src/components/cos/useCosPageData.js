@@ -122,6 +122,10 @@ export default function useCosPageData({ activeTab, selectedTask }) {
   const tasksRef = useRef(tasks);
   tasksRef.current = tasks;
   const [agents, setAgents] = useState([]);
+  // The newest committed agent list, so a shell read that settles after an agent
+  // slice read derives from it instead of from its own (possibly superseded) result.
+  const agentsRef = useRef(agents);
+  agentsRef.current = agents;
   const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [agentsError, setAgentsError] = useState(null);
   const agentReadRef = useRef(null);
@@ -387,7 +391,9 @@ export default function useCosPageData({ activeTab, selectedTask }) {
 
       const [statusData, tasksData, agentResult] = await coreRead;
       if (controller.signal.aborted) return;
-      const agentsData = agentResult || [];
+      // A null result means this read's agent snapshot was superseded (or never
+      // needed); the committed list is then the newer truth.
+      const agentsData = Array.isArray(agentResult) ? agentResult : (needsRef.current.agents ? agentsRef.current : []);
       setStatus(statusData);
       setStatusReadFailed(typeof statusData?.running !== 'boolean');
       // A queue refresh started later can still resolve first. Its task payload
