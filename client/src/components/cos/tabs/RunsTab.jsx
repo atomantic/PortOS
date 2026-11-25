@@ -188,11 +188,11 @@ export default function RunsTab() {
   // Open the run named by `?run=<id>` on entry — the Local LLM Playground links
   // straight at a run it just finished. One-shot: switching CoS tabs drops the
   // param, and the user stays free to collapse the row afterwards.
-  const deepLinkOpened = useRef(false);
+  const deepLinkOpened = useRef(null);
   useEffect(() => {
-    if (deepLinkOpened.current || !deepLinkRunId || loading) return;
+    if (deepLinkOpened.current === deepLinkRunId || !deepLinkRunId || loading) return;
     if (!runs.some(run => run.id === deepLinkRunId)) return;
-    deepLinkOpened.current = true;
+    deepLinkOpened.current = deepLinkRunId;
     expandRun(deepLinkRunId);
   }, [deepLinkRunId, loading, runs, expandRun]);
 
@@ -212,7 +212,7 @@ export default function RunsTab() {
     setPinned(null);
   }, []);
   const readPinned = useCallback((id) => {
-    const initial = pinRef.current?.status !== 'ready';
+    const initial = !(pinRef.current?.status === 'ready' && pinRef.current.run.id === id);
     const gen = ++pinGen.current;
     return getRun(id, { silent: true }).then(
       (run) => {
@@ -235,7 +235,7 @@ export default function RunsTab() {
     pinTarget.current = null;
   }, [deepLinkRunId, dropPin]);
   useEffect(() => {
-    if (!deepLinkRunId || pinTarget.current === deepLinkRunId || deepLinkOpened.current || runsState !== 'ready') return;
+    if (!deepLinkRunId || pinTarget.current === deepLinkRunId || deepLinkOpened.current === deepLinkRunId || runsState !== 'ready') return;
     if (runs.some(run => run.id === deepLinkRunId)) return;
     pinTarget.current = deepLinkRunId;
     setPinned({ status: 'loading', run: null });
@@ -315,6 +315,7 @@ export default function RunsTab() {
       supersedeRefresh();
       setRuns(prev => prev.filter(r => r.success !== false));
       if (pinRef.current?.run?.success === false) dropPin();
+      else if (pinRef.current?.status === 'loading') readPinned(pinTarget.current);
     }
   };
 
