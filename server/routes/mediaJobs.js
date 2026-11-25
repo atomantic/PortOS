@@ -1,4 +1,4 @@
-import { retryPromptParts } from '../services/mediaJobQueue/retryPrompt.js';
+import { isRetryNegativePromptAddition, retryPromptParts } from '../services/mediaJobQueue/retryPrompt.js';
 import { a2vLoraStageStrengthsSchema } from '../lib/videoLoraStageValidation.js';
 /**
  * Media Job Queue Routes — read + cancel access to the unified image/video
@@ -22,6 +22,7 @@ import { CODEX_EFFORT_LEVELS } from '../lib/provider/providerModels.js';
 import { videoSegmentReplayReceiptSchema } from '../services/mediaJobQueue/videoExecution.js';
 import { sanitizeJob } from '../services/mediaJobQueue/sanitizeJob.js';
 import { isRemoteMediaJob } from '../services/mediaJobQueue/remoteMediaJob.js';
+import { assertReactorNegativePromptSupported } from '../services/videoGen/negativePrompt.js';
 import { hostedVideoRetryValidator } from '../services/videoGen/hostedSubmission.js';
 import { I2V_REFERENCE_MODES } from '../lib/videoReferenceModes.js';
 import { VIDEO_TILING_MODES } from '../lib/videoTiling.js';
@@ -363,6 +364,7 @@ async function buildRetryJob(job, body) {
     );
   }
   const rawOverrides = body.params ?? {};
+  if (job.kind === 'video') assertReactorNegativePromptSupported(job.params?.mode, rawOverrides.negativePrompt);
   if (Object.hasOwn(rawOverrides, 'visualProfileSource')) throw new ServerError('A saved finish source cannot be supplied by a retry request', { status: 400, code: 'VALIDATION_ERROR' });
   if (Object.hasOwn(rawOverrides, 'visualProfile')) {
     const profile = validateRequest(universeVisualProfileSchema, rawOverrides.visualProfile);
@@ -410,6 +412,16 @@ async function buildRetryJob(job, body) {
       const trailing = !overrides[key] && key === 'negativePrompt' ? suffix.replace(/^, /, '') : suffix;
       params[key] = `${prefix}${overrides[key]}${trailing}`;
       if (prefix || suffix || typeof params[authoredKey] === 'string') params[authoredKey] = overrides[key];
+    }
+  }
+
+  if (job.kind === 'video' && params.mode === VIDEO_GEN_MODE.REACTOR && !isRemoteMediaJob(job)) {
+    // Legacy retries can carry negatives that Reactor never received. Keep
+    // the saved attempt untouched and record only what this retry sends.
+    delete params.negativePrompt;
+    delete params.authoredNegativePrompt;
+    if (Array.isArray(params.promptAdditions)) {
+      params.promptAdditions = params.promptAdditions.filter((item) => !isRetryNegativePromptAddition(item));
     }
   }
 

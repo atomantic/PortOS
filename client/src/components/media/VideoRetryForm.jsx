@@ -8,6 +8,7 @@ import { isDefaultA2vLoraStages } from '../../lib/videoLoraStages';
 import { FormField } from '../ui/FormField';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea';
 import { isCloudVideoMode } from '../../lib/imageGenBackends';
+import { VIDEO_GEN_MODE } from '../../../../server/lib/generationModes.js';
 import {
   normalizeI2vReferenceMode, resolveI2vReferenceStrength,
 } from '../../lib/videoReferenceModes';
@@ -98,6 +99,7 @@ export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
   // dispatch discriminator and `modelId` is a provider id the local catalog
   // doesn't know, so the local model / size / sampler / chaining controls don't apply.
   const isHosted = isCloudVideoMode(p.mode);
+  const isReactor = p.mode === VIDEO_GEN_MODE.REACTOR;
   const loraFamily = videoLoraFamily(currentModel);
   const videoLoras = loraFamily ? availableLoras.filter((lora) => loraFamilyOf(lora) === loraFamily) : [];
   const encoderOptions = textEncoderOptionsForModel(currentModel);
@@ -143,7 +145,8 @@ export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
   const displayedFps = fps === '' ? 24 : fps;
 
   const draft = {
-    prompt, negativePrompt, modelId, width, height, numFrames, fps, chunks, chunkPrompts, seed, steps,
+    prompt, negativePrompt: isReactor ? (p.retryNegativePrompt ?? p.negativePrompt ?? '') : negativePrompt,
+    modelId, width, height, numFrames, fps, chunks, chunkPrompts, seed, steps,
     guidanceScale, imageStrength, i2vReferenceMode, tiling, disableAudio, textEncoderId, speedProfileId,
     draftDecode, a2vLoraStageStrengths, streamingMode, selectedLoras,
   };
@@ -164,9 +167,13 @@ export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
         <FormField label="Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
           <AutoSizeTextarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3} className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white min-h-[80px]" />
         </FormField>
-        <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-          <AutoSizeTextarea value={negativePrompt} onChange={(e) => setNegativePrompt(e.target.value)} rows={3} className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white min-h-[80px]" />
-        </FormField>
+        {isReactor ? (
+          <p className="self-center text-xs text-gray-400">Reactor does not support a negative prompt. Put exclusions in the main prompt.</p>
+        ) : (
+          <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+            <AutoSizeTextarea value={negativePrompt} onChange={(e) => setNegativePrompt(e.target.value)} rows={3} className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white min-h-[80px]" />
+          </FormField>
+        )}
       </div>
       <ModelInputPreview preview={modelInputPreview} prompt={prompt} alwaysShowFull
         referencesIntro="The retry uses the saved inputs from the original job." />

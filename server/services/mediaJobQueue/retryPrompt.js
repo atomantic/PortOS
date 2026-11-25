@@ -21,11 +21,15 @@ function splitPrompt(value, authored, prefix, additions, separators) {
   return { text: text.slice(prefix.length, end), prefix, suffix: text.slice(end) };
 }
 
+export const isRetryNegativePromptAddition = (item) => (
+  ['style-negatives', 'source-negative-prompt', 'universe-photography-avoid', 'canon-avoid'].includes(item?.id)
+);
+
 export function retryPromptParts(params) {
   const additions = Array.isArray(params.promptAdditions) ? params.promptAdditions : [];
   const styles = additions.filter((item) => /^style-\d+$/.test(item?.id)).map((item) => item.text).filter(Boolean).join('. ');
   const authoredNegative = params.authoredNegativePrompt;
-  const negatives = additions.filter((item) => ['style-negatives', 'source-negative-prompt', 'universe-photography-avoid', 'canon-avoid'].includes(item?.id));
+  const negatives = additions.filter(isRetryNegativePromptAddition);
   const negativesText = negatives.map((item) => item.text).filter(Boolean);
   const positive = additions.filter((item) => item?.text && !negatives.includes(item) && !/^style-\d+$/.test(item.id))
     .map((item) => item.id?.startsWith('universe-photography-') ? `${item.label}: ${item.text}` : item.text);

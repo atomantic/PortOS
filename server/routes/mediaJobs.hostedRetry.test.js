@@ -51,7 +51,7 @@ const makeApp = () => {
 const HOSTED_JOB_PARAMS = {
   grok: { prompt: 'a fox', mode: 'grok', videoMode: 'text', grokPath: '/bin/grok', aspectRatio: '16:9', width: 1280, height: 720, duration: 6 },
   fal: { prompt: 'a fox', mode: 'fal', videoMode: 'text', modelId: 'fal-ai/provider-model', aspectRatio: '16:9', width: 1280, height: 720, duration: 5 },
-  reactor: { prompt: 'a fox', mode: 'reactor', videoMode: 'text', seconds: 4, seed: 7, aspect: '16:9' },
+  reactor: { prompt: 'a fox', mode: 'reactor', videoMode: 'text', seconds: 6, seed: 7, aspect: '16:9' },
   gemini: { prompt: 'a fox', mode: 'gemini', videoMode: 'image', sourceImagePath: '/data/images/frame.png', modelId: 'gemini-omni-1.2-flash', width: 1280, height: 720 },
   runway: { prompt: 'a fox', mode: 'runway', videoMode: 'image', sourceImagePath: '/data/images/frame.png', modelId: 'gen4.5', width: 1280, height: 720, duration: 5 },
   higgsfield: { prompt: 'a fox', mode: 'higgsfield', videoMode: 'text', modelId: 'bytedance/seedance-2.5', width: 1280, height: 720, duration: 5 },
@@ -98,6 +98,33 @@ describe('hosted video retry admission', () => {
     const r = await retry('j-fal', { params: { prompt: 'a wolf', mode: 'local', pythonPath: '/evil', sourceImagePath: '/etc/passwd' } });
     expect(r.status).toBe(200);
     expect(enqueueJob.mock.calls[0][0].params).toEqual({ ...HOSTED_JOB_PARAMS.fal, prompt: 'a wolf' });
+  });
+
+  it.each(['/retry', '/retry/preview'])('refuses a Reactor negative override before preview or queueing on %s', async (path) => {
+    seedJob('j-reactor', HOSTED_JOB_PARAMS.reactor);
+    const res = await request(makeApp()).post(`/api/media-jobs/j-reactor${path}`).send({ params: { negativePrompt: '  fog  ' } });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED', error: expect.stringMatching(/exclusions in the main prompt/),
+    });
+    expect(enqueueJob).not.toHaveBeenCalled();
+    expect(jobStore.has('j-reactor')).toBe(true);
+  });
+
+  it.each([{}, { params: { negativePrompt: '  ' } }])('retries a legacy Reactor job without claiming to send ignored exclusions (%j)', async (body) => {
+    const positive = { id: 'style-1', label: 'Main style', text: 'a fox' };
+    const original = { ...HOSTED_JOB_PARAMS.reactor, negativePrompt: 'fog', authoredNegativePrompt: 'fog',
+      promptAdditions: [positive, { id: 'style-negatives', label: 'Style negatives', text: 'fog' }] };
+    seedJob('j-reactor', original);
+    const preview = await request(makeApp()).post('/api/media-jobs/j-reactor/retry/preview').send(body);
+    expect(preview.status).toBe(200);
+    expect(preview.body).toEqual({ sentPrompt: 'a fox', promptAdditions: [positive] });
+
+    const result = await retry('j-reactor', body);
+    expect(result.status).toBe(200);
+    expect(enqueueJob).toHaveBeenCalledTimes(1);
+    expect(enqueueJob.mock.calls[0][0].params).toEqual({ ...HOSTED_JOB_PARAMS.reactor, promptAdditions: [positive] });
+    expect(original.negativePrompt).toBe('fog');
   });
 
   it('still validates a local job against the local catalog', async () => {
