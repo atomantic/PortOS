@@ -99,7 +99,7 @@ describe('compact history through gallery reads', () => {
     expect(await history.getHistoryItem(rows[0].id)).toEqual(rows[0]);
     const snapshot = await history.loadCompactHistory();
     expect(() => snapshot[0].stitchedFrom.push('mutated')).toThrow();
-    expect(io.reads).toBe(3);
+    expect(io.reads).toBe(2);
   });
 
   it('refreshes after local create/update/delete and external same-size or atomic replacement', async () => {

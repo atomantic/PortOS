@@ -14,6 +14,7 @@
 
 import { TAKE_SLOT } from './takes.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { isFileBackend } from '../../lib/pgFileFacade.js';
 
 export const KIND_OF_SLOT = { image: 'image', endImage: 'image', video: 'video' };
 
@@ -489,10 +490,10 @@ async function stampClipProvenance(clips) {
  * gallery or history) is left out rather than shown as a broken tile.
  */
 export async function getMusicVideoMediaPool(project) {
-  const [{ getCollection, musicVideoCollectionId }, { loadHistory }, { resolveGalleryImage }] = await Promise.all([
+  const [{ getCollection, musicVideoCollectionId }, { readHistorySnapshot }, { resolveGalleryImage }] = await Promise.all([
     import('../mediaCollections.js'), import('../videoGen/history.js'), import('../../lib/pathSafety.js'),
   ]);
-  const history = new Map((await loadHistory()).filter((entry) => entry?.id).map((entry) => [entry.id, entry]));
+  const history = new Map((await readHistorySnapshot()).filter((entry) => entry?.id).map((entry) => [entry.id, entry]));
   // A clip stamped with this video (a trim or upscale of one of its clips copies the stamp) belongs here too.
   const stamped = [...history.values()].filter((entry) => entry.musicVideo?.projectId === project.id)
     .map((entry) => ({ kind: 'video', ref: entry.id }));
@@ -539,18 +540,34 @@ const LIBRARY_MATCH_MAX = 300;
 export async function searchMediaLibraryForPool(project, query) {
   const words = String(query).toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return { items: [], more: false };
-  const [{ items: pool }, { listGallery }, { loadHistory }] = await Promise.all([
-    getMusicVideoMediaPool(project), import('../imageGen/local.js'), import('../videoGen/history.js'),
+  const [{ items: pool }, { readHistorySnapshot }] = await Promise.all([
+    getMusicVideoMediaPool(project), import('../videoGen/history.js'),
   ]);
-  const inPool = new Set(pool.map((item) => `${item.kind}:${item.assetId}`));
-  const matches = (prompt) => typeof prompt === 'string' && words.every((word) => prompt.toLowerCase().includes(word));
+  const imagesInPool = new Set(pool.filter(item => item.kind === 'image').map(item => item.assetId));
+  const videosInPool = new Set(pool.filter(item => item.kind === 'video').map(item => item.assetId));
+  const matches = (prompt) => {
+    if (typeof prompt !== 'string') return false;
+    const text = prompt.toLowerCase();
+    return words.every(word => text.includes(word));
+  };
+  const images = isFileBackend()
+    ? (await (await import('../imageGen/local.js')).listGallery())
+      .filter(image => matches(image.prompt) && !imagesInPool.has(image.filename))
+      .map(image => ({ ref: image.filename, prompt: image.prompt, createdAt: image.createdAt }))
+    : await (await import('../mediaAssetIndex/db.js')).searchImagePrompts(words, LIBRARY_MATCH_MAX + 1, [...imagesInPool]);
   const found = [
-    ...(await listGallery()).filter((image) => matches(image.prompt) && !inPool.has(`image:${image.filename}`))
-      .map((image) => ({ kind: 'image', assetId: image.filename, prompt: image.prompt, createdAt: image.createdAt || null })),
-    ...(await loadHistory()).filter((entry) => entry?.id && matches(entry.prompt) && !inPool.has(`video:${entry.id}`))
+    ...images.map(image => ({ kind: 'image', assetId: image.ref, prompt: image.prompt, createdAt: image.createdAt || null })),
+    ...(await readHistorySnapshot()).filter((entry) => entry?.id && matches(entry.prompt) && !videosInPool.has(entry.id))
       .map((entry) => ({ kind: 'video', assetId: entry.id, prompt: entry.prompt, createdAt: entry.createdAt || null })),
-  ].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  ].sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0)
+    || compareLibraryMatches(a, b));
   return { items: found.slice(0, LIBRARY_MATCH_MAX), more: found.length > LIBRARY_MATCH_MAX };
+}
+
+// Match the SQL image tie-breaker so limiting before the merge keeps the same page.
+function compareLibraryMatches(a, b) {
+  if (a.kind !== b.kind) return a.kind === 'image' ? -1 : 1;
+  return Buffer.compare(Buffer.from(String(a.assetId)), Buffer.from(String(b.assetId)));
 }
 
 /**

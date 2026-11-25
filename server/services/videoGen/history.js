@@ -38,13 +38,13 @@ export function videoRowLiveStamp(row) {
 // render history. The Media History page also counts this list ("Show more (N
 // remaining)"), where a fake 0 reads as fact. Absent stays a real first-run empty.
 export const loadHistory = () => readJSONFile(HISTORY_FILE, [], { strict: true });
-let compactSnapshot;
-let compactRead;
+let historySnapshot;
+let snapshotRead;
 let revisionEpoch = 0;
 export async function saveHistory(h) {
   await atomicWrite(HISTORY_FILE, h);
   revisionEpoch++;
-  compactSnapshot = undefined;
+  historySnapshot = undefined;
 }
 
 async function historyRevision() {
@@ -59,7 +59,7 @@ async function historyRevision() {
 }
 
 function freezeRecord(value) {
-  if (value && typeof value === 'object') {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
     for (const child of Object.values(value)) freezeRecord(child);
     Object.freeze(value);
   }
@@ -86,29 +86,41 @@ function compactRow(record) {
  */
 export const videoSearchText = row => searchTexts.get(row) ?? recordSearchText('video', row);
 
-/** Fresh, immutable card/filter data, searchable through videoSearchText(); detail still uses loadHistory. */
-export function loadCompactHistory() {
-  if (compactRead) return compactRead;
-  compactRead = (async () => {
+function loadSnapshot() {
+  if (snapshotRead) return snapshotRead;
+  snapshotRead = (async () => {
     // One builder owns admission. A save during its read invalidates the epoch;
     // external writers/replacements are detected on both sides of the read.
     for (let attempt = 0; attempt < 3; attempt++) {
       const epoch = revisionEpoch;
       const before = await historyRevision();
-      if (before !== null && compactSnapshot?.revision === before && epoch === revisionEpoch) {
-        return compactSnapshot.rows;
+      if (before !== null && historySnapshot?.revision === before && epoch === revisionEpoch) {
+        return historySnapshot;
       }
       const history = await loadHistory();
       const after = await historyRevision();
       if (epoch !== revisionEpoch || before !== after) continue;
-      const rows = freezeRecord(history.map(compactRow));
-      compactSnapshot = after === null ? undefined : { revision: after, rows };
-      return rows;
+      if (!Array.isArray(history)) throw new Error('Video history must contain an array');
+      const rows = freezeRecord(history);
+      const byId = new Map();
+      for (const row of rows) {
+        // Preserve the original lookup's first match if a legacy file repeats an id.
+        if (row?.id !== undefined && !byId.has(row.id)) byId.set(row.id, row);
+      }
+      const snapshot = { revision: after, rows, byId, compact: freezeRecord(rows.map(compactRow)) };
+      historySnapshot = after === null ? undefined : snapshot;
+      return snapshot;
     }
-    throw new Error('Video history changed repeatedly while reading its compact snapshot');
-  })().finally(() => { compactRead = undefined; });
-  return compactRead;
+    throw new Error('Video history changed repeatedly while reading its snapshot');
+  })().finally(() => { snapshotRead = undefined; });
+  return snapshotRead;
 }
+
+/** Fresh, immutable card/filter data, searchable through videoSearchText(). */
+export const loadCompactHistory = async () => (await loadSnapshot()).compact;
+
+/** Immutable full history for readers. Mutators use the fresh parse from loadHistory(). */
+export const readHistorySnapshot = async () => (await loadSnapshot()).rows;
 
 // Resolve ONE entry by its history id, or `null` when no entry carries it (#4165).
 // A history id is NOT the filename stem — `videoGen/local.js` names a clip
@@ -124,9 +136,7 @@ export function loadCompactHistory() {
 // read, which still throws on an unreadable history file rather than reporting
 // a bogus "no such entry".
 export async function getHistoryItem(id) {
-  const history = await loadHistory();
-  if (!Array.isArray(history)) return null;
-  return history.find((entry) => entry?.id === id) || null;
+  return (await loadSnapshot()).byId.get(id) ?? null;
 }
 
 // Serialized read-modify-write for the shared history file. `loadHistory` +

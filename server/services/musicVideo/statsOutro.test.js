@@ -31,7 +31,10 @@ vi.mock('../mediaCollections.js', () => ({
   musicVideoCollectionId: (id) => `mvc-${id}`,
   getCollection: async () => ({ items: [{ kind: 'image', ref: 'floor.png' }, { kind: 'image', ref: 'photo.jpg' }, { kind: 'video', ref: 'clip-floor' }] }),
 }));
-vi.mock('../videoGen/history.js', () => ({ loadHistory: async () => [{ id: 'clip-stamped', musicVideo: { projectId: 'mv-1' } }] }));
+vi.mock('../videoGen/history.js', () => {
+  const read = async () => [{ id: 'clip-stamped', musicVideo: { projectId: 'mv-1' } }];
+  return { loadHistory: read, readHistorySnapshot: read };
+});
 vi.mock('../htmlComposition/browser.js', () => ({
   openComposition: async (directory, options) => {
     const { readFile: read, readdir } = await import('node:fs/promises');

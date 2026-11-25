@@ -177,6 +177,7 @@ const videoGenLeaves = vi.hoisted(() => ({
   }]),
   defaultVideoModelId: vi.fn(() => 'ltx2_unified'),
   loadHistory: vi.fn(async () => []),
+  readHistorySnapshot: vi.fn(async () => []),
   getHistoryItem: vi.fn(async () => null),
 }));
 vi.mock('../services/videoGen/modelCatalog.js', () => ({
@@ -186,6 +187,7 @@ vi.mock('../services/videoGen/modelCatalog.js', () => ({
 vi.mock('../services/videoGen/history.js', async (importOriginal) => ({
   ...(await importOriginal()),
   loadHistory: videoGenLeaves.loadHistory,
+  readHistorySnapshot: videoGenLeaves.readHistorySnapshot,
   getHistoryItem: videoGenLeaves.getHistoryItem,
 }));
 
@@ -3694,10 +3696,14 @@ describe('videoGen routes', () => {
     });
 
     it('validates the opt-in query and returns a bounded page', async () => {
-      videoGenService.loadHistory.mockResolvedValue([{ id: 'a', createdAt: '2026-01-01' }, { id: 'b', createdAt: '2026-02-01' }]);
+      videoGenLeaves.readHistorySnapshot.mockResolvedValue(Object.freeze([
+        Object.freeze({ id: 'a', createdAt: '2026-01-01' }),
+        Object.freeze({ id: 'b', createdAt: '2026-02-01' }),
+      ]));
       const page = await request(app).get('/api/video-gen/history?limit=1&compact=true');
       expect(page.status).toBe(200);
       expect(page.body.map((i) => i.id)).toEqual(['b']);
+      expect(videoGenService.loadHistory).not.toHaveBeenCalled();
       expect((await request(app).get('/api/video-gen/history?limit=999')).status).toBe(400);
     });
   });
@@ -3705,7 +3711,7 @@ describe('videoGen routes', () => {
   describe('GET /history/:id', () => {
     // Hosted clips lack stored geometry; the animatic needs the cadence the renderer measures.
     it('measures geometry only when requested and missing, without changing the stored entry', async () => {
-      const entry = { id: 'hosted', filename: 'hosted.mp4' };
+      const entry = Object.freeze({ id: 'hosted', filename: 'hosted.mp4' });
       videoGenService.getHistoryItem.mockResolvedValue(entry);
       probeVideoGeometry.mockResolvedValue({ width: 1280, height: 720, fps: 30, numFrames: 60 });
       const plain = await request(app).get('/api/video-gen/history/hosted');
@@ -3744,6 +3750,14 @@ describe('videoGen routes', () => {
       expect(videoGenService.getHistoryItem).toHaveBeenCalledWith('final-1');
       // Never the full list — that fan-out is exactly what this replaced.
       expect(videoGenService.loadHistory).not.toHaveBeenCalled();
+    });
+
+    it('returns the full generated clip record', async () => {
+      const entry = Object.freeze({ id: 'clip-1', filename: 'clip-1.mp4', prompt: 'Full prompt', provider: 'local', fps: 24 });
+      videoGenService.getHistoryItem.mockResolvedValueOnce(entry);
+      const r = await request(app).get('/api/video-gen/history/clip-1');
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual(entry);
     });
 
     it('404s for an id that is not in history', async () => {
