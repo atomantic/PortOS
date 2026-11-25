@@ -1890,6 +1890,19 @@ describe('ChiefOfStaff tab switches', () => {
     expect(api.getProviders).toHaveBeenCalledTimes(2);
   });
 
+  it('retries a failed app read on the next tab switch between app-dependent tabs, and keeps a good snapshot', async () => {
+    api.getApps.mockRejectedValueOnce(new Error('offline'));
+    await renderWithProbe('tasks');
+    expect(api.getApps).toHaveBeenCalledTimes(1);
+
+    await goTo('agents');
+    expect(api.getApps).toHaveBeenCalledTimes(2);
+
+    await goTo('tasks');
+    await goTo('agents');
+    expect(api.getApps).toHaveBeenCalledTimes(2);
+  });
+
   it('reads agents again when Agents is re-entered, because events were ignored while it was away', async () => {
     await renderWithProbe('agents');
     expect(api.getCosAgents).toHaveBeenCalledTimes(1);
@@ -2120,6 +2133,24 @@ describe('ChiefOfStaff slice reads against concurrent refreshes (#18643)', () =>
     expect(screen.queryByText('Sleeping')).toBeNull();
     // The daemon status event is what corrected it: no full page read.
     expect(api.getCosHealth).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops the Coding state once a status summary shows no active agents, without a tab switch', async () => {
+    withFakeTimers();
+    api.getCosStatus.mockResolvedValue({ running: true, activeAgents: 1, config, stats: {} });
+    renderWithProbe('config');
+    await waitForPageShell();
+    await settle();
+    expect(screen.getAllByText('Coding').length).toBeGreaterThan(0);
+
+    api.getCosStatus.mockResolvedValue({ running: true, activeAgents: 0, config, stats: {} });
+    await act(async () => {
+      getSocketHandler('cos:tasks:changed')({ type: 'internal', action: 'updated' });
+      await vi.advanceTimersByTimeAsync(450);
+    });
+    await settle();
+    expect(screen.queryByText('Coding')).toBeNull();
+    expect(screen.getAllByText('Thinking').length).toBeGreaterThan(0);
   });
 
   it('returns the avatar to its default state when the health check that parked it reports no issues', async () => {
