@@ -31,7 +31,7 @@ function urgencyIndicator(urgency) {
   const label = `${Math.round(urgency * 100)}% urgency`;
   return (
     <span className="shrink-0" title={label}>
-      <Icon className={`w-3.5 h-3.5 ${color}`} aria-hidden="true" />
+      <Icon className={`w-3 h-3 ${color}`} aria-hidden="true" />
       <span className="sr-only">{label}</span>
     </span>
   );
@@ -121,7 +121,7 @@ function GoalRow({ goal, depth, expandedIds, onToggle, onSelect, selectedId, onA
           type="button"
           onClick={() => onSelect(goal)}
           aria-current={isSelected ? 'true' : undefined}
-          className="flex flex-1 items-center gap-1.5 @xl/goal-list:gap-2 min-w-0 min-h-[44px] text-left cursor-pointer"
+          className="flex flex-1 items-center gap-1 @md/goal-list:gap-1.5 @xl/goal-list:gap-2 min-w-0 min-h-[44px] text-left cursor-pointer"
         >
           <span className={`p-1 rounded ${cat.bg} shrink-0`}>
             <CatIcon className={`w-3.5 h-3.5 ${cat.color}`} />
