@@ -137,8 +137,8 @@ function flagOverrides(draft, p) {
 // originalDraftDecode }.
 export function buildVideoRetryOverrides(draft, p, context) {
   const overrides = {};
-  if (textChanged(draft.prompt, p.prompt)) overrides.prompt = draft.prompt.trim();
-  if (textChanged(draft.negativePrompt, p.negativePrompt)) overrides.negativePrompt = draft.negativePrompt.trim();
+  if (draft.prompt !== (p.retryPrompt ?? p.prompt ?? '')) overrides.prompt = draft.prompt;
+  if (draft.negativePrompt !== (p.retryNegativePrompt ?? p.negativePrompt ?? '')) overrides.negativePrompt = draft.negativePrompt;
   // A hosted retry edits only the prompts: size, duration and model are the
   // provider's own params, and every field below is a local-render knob that
   // would rewrite them.
@@ -190,11 +190,11 @@ function clearableNumber(draftValue, original, overrides, key) {
 
 // Diff the image retry draft against the original job params and return only the
 // keys the user changed (null when nothing changed). Prompt text is sent exactly
-// as edited, trimmed the way the retry schema trims it.
+// as edited, including surrounding whitespace.
 export function buildImageRetryOverrides(draft, p) {
   const overrides = {};
-  if (textChanged(draft.prompt, p.prompt) && draft.prompt.trim()) overrides.prompt = draft.prompt.trim();
-  if (textChanged(draft.negativePrompt, p.negativePrompt)) overrides.negativePrompt = draft.negativePrompt.trim();
+  if (draft.prompt !== (p.retryPrompt ?? p.prompt ?? '')) overrides.prompt = draft.prompt;
+  if (draft.negativePrompt !== (p.retryNegativePrompt ?? p.negativePrompt ?? '')) overrides.negativePrompt = draft.negativePrompt;
   const modelKey = imageRetryModelKey(p.mode);
   if (modelKey && textChanged(draft.model, originalImageModel(p))) overrides[modelKey] = draft.model.trim();
   if (numberChanged(draft.width, p.width) && draft.width !== '') overrides.width = Number(draft.width);

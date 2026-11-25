@@ -11,6 +11,7 @@ import { copyToClipboard } from '../../lib/clipboard';
  */
 export default function SentPromptPanel({
   prompt = '', sentPrompt = null, sentNegativePrompt = null, additions = [],
+  segmentPrompts, alwaysShowFull = false,
   asWrittenText = 'Sent to the model exactly as written.',
 }) {
   const [openChip, setOpenChip] = useState(null);
@@ -18,9 +19,10 @@ export default function SentPromptPanel({
   if (typeof sentPrompt !== 'string') return null;
 
   const asWritten = !additions.length && !sentNegativePrompt && sentPrompt.trim() === (prompt || '').trim();
-  if (asWritten) return <p className="text-[11px] text-gray-500">{asWrittenText}</p>;
+  if (asWritten && !alwaysShowFull && !segmentPrompts) return <p className="text-[11px] text-gray-500">{asWrittenText}</p>;
 
-  const base = sentNegativePrompt ? `${sentPrompt}\n\nNegative prompt: ${sentNegativePrompt}` : sentPrompt;
+  const positive = segmentPrompts?.map((text, index) => `Segment ${index + 1}:\n${text}`).join('\n\n') ?? sentPrompt;
+  const base = sentNegativePrompt ? `${positive}\n\nNegative prompt: ${sentNegativePrompt}` : positive;
   // A request setting (not prose) travels with the copied text so the copy matches the request.
   const expansion = additions.find((addition) => addition.id === 'prompt-expansion');
   const fullText = expansion ? `${base}\n\n${expansion.text}` : base;

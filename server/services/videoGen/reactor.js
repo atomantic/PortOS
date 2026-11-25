@@ -105,7 +105,10 @@ export const cancelAll = () => {
 export function validateReactorRequest({
   prompt, continueFromClipId, sourceImagePath, seconds = REACTOR_DEFAULT_CLIP_LENGTH, seed, aspect,
 }) {
-  if (typeof prompt !== 'string' || !prompt.trim() || prompt.trim().length > REACTOR_MAX_PROMPT_LENGTH) {
+  if (typeof prompt === 'string' && prompt.trim().length > REACTOR_MAX_PROMPT_LENGTH) {
+    throw new ServerError(`Reactor prompt is ${prompt.trim().length}/${REACTOR_MAX_PROMPT_LENGTH} characters; shorten the shot prompt before rendering`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (typeof prompt !== 'string' || !prompt.trim()) {
     throw new ServerError(`Reactor prompts must contain 1–${REACTOR_MAX_PROMPT_LENGTH} characters; shorten the shot prompt before rendering`, { status: 400, code: 'VALIDATION_ERROR' });
   }
   if (continueFromClipId) {

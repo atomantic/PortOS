@@ -1,4 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useModelInputPreview } from '../../hooks/useModelInputPreview';
+import { previewMediaJobRetry } from '../../services/apiMediaJobs';
+import ModelInputPreview from './ModelInputPreview';
+import { useCallback, useState, useEffect } from 'react';
 import { RotateCw } from 'lucide-react';
 import A2vLoraStageControls from '../videoGen/A2vLoraStageControls';
 import { isDefaultA2vLoraStages } from '../../lib/videoLoraStages';
@@ -31,8 +34,8 @@ export default function VideoRetryForm({ job, onSubmit, onCancel }) {
   const p = job.params || {};
   const [models, setModels] = useState([]);
   const [modelId, setModelId] = useState(p.modelId || '');
-  const [prompt, setPrompt] = useState(p.prompt || '');
-  const [negativePrompt, setNegativePrompt] = useState(p.negativePrompt || '');
+  const [prompt, setPrompt] = useState(p.retryPrompt ?? p.prompt ?? '');
+  const [negativePrompt, setNegativePrompt] = useState(p.retryNegativePrompt ?? p.negativePrompt ?? '');
   const [width, setWidth] = useState(p.width ?? '');
   const [height, setHeight] = useState(p.height ?? '');
   const [numFrames, setNumFrames] = useState(p.numFrames ?? '');
@@ -139,30 +142,34 @@ export default function VideoRetryForm({ job, onSubmit, onCancel }) {
   const displayedNumFrames = numFrames === '' ? (currentModel?.defaultFrames ?? 121) : numFrames;
   const displayedFps = fps === '' ? 24 : fps;
 
-  const submit = (e) => {
-    e.preventDefault();
-    if (!prompt.trim() || continuationPending) return;
-    const draft = {
-      prompt, negativePrompt, modelId, width, height, numFrames, fps, chunks, chunkPrompts, seed, steps,
-      guidanceScale, imageStrength, i2vReferenceMode, tiling, disableAudio, textEncoderId, speedProfileId,
-      draftDecode, a2vLoraStageStrengths, streamingMode, selectedLoras,
-    };
-    onSubmit(buildVideoRetryOverrides(draft, p, {
-      currentModel, isHosted, chainingActive, displayedContextFrames,
-      originalEncoder, originalSpeedProfileForModel, originalDraftDecode,
-    }));
+  const draft = {
+    prompt, negativePrompt, modelId, width, height, numFrames, fps, chunks, chunkPrompts, seed, steps,
+    guidanceScale, imageStrength, i2vReferenceMode, tiling, disableAudio, textEncoderId, speedProfileId,
+    draftDecode, a2vLoraStageStrengths, streamingMode, selectedLoras,
+  };
+  const overrides = buildVideoRetryOverrides(draft, p, {
+    currentModel, isHosted, chainingActive, displayedContextFrames,
+    originalEncoder, originalSpeedProfileForModel, originalDraftDecode,
+  });
+  const fetchPreview = useCallback((body, options) => previewMediaJobRetry(job.id, body, options), [job.id]);
+  const modelInputPreview = useModelInputPreview(fetchPreview, overrides, { enabled: !continuationPending });
+  const submit = (event) => {
+    event.preventDefault();
+    if (prompt.trim() && !continuationPending && !modelInputPreview.error) onSubmit(overrides);
   };
 
   return (
     <form onSubmit={submit} className="mt-3 pt-3 border-t border-port-border space-y-3">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <FormField label="Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-          <AutoSizeTextarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3} maxLength={8000} className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white min-h-[80px]" />
+          <AutoSizeTextarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3} className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white min-h-[80px]" />
         </FormField>
         <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-          <AutoSizeTextarea value={negativePrompt} onChange={(e) => setNegativePrompt(e.target.value)} rows={3} maxLength={8000} className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white min-h-[80px]" />
+          <AutoSizeTextarea value={negativePrompt} onChange={(e) => setNegativePrompt(e.target.value)} rows={3} className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white min-h-[80px]" />
         </FormField>
       </div>
+      <ModelInputPreview preview={modelInputPreview} prompt={prompt} alwaysShowFull
+        referencesIntro="The retry uses the saved inputs from the original job." />
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         {!isHosted && (
           <FormField className="col-span-2 sm:col-span-3" label="Model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
@@ -216,7 +223,7 @@ export default function VideoRetryForm({ job, onSubmit, onCancel }) {
       )}
       <div className="flex items-center justify-end gap-2 pt-1">
         <button type="button" onClick={onCancel} className="px-3 py-1 text-xs text-port-text-muted hover:text-white">Cancel</button>
-        <button type="submit" disabled={continuationPending} title={continuationPending ? 'Waiting for the model continuation capability.' : undefined} className="inline-flex items-center gap-1 px-3 py-1 bg-port-accent text-white text-xs rounded hover:bg-port-accent/90 disabled:opacity-50"><RotateCw className="w-3 h-3" />Retry with changes</button>
+        <button type="submit" disabled={continuationPending || !!modelInputPreview.error} title={continuationPending ? 'Waiting for the model continuation capability.' : undefined} className="inline-flex items-center gap-1 px-3 py-1 bg-port-accent text-white text-xs rounded hover:bg-port-accent/90 disabled:opacity-50"><RotateCw className="w-3 h-3" />Retry with changes</button>
       </div>
     </form>
   );

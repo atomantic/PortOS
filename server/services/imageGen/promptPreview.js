@@ -8,6 +8,7 @@ import { basename } from 'node:path';
 import { fableLoomMultipartUnsupported, prepareFableLoomImageParams } from './fableLoomParams.js';
 import { getRunwayImageModel, RUNWAY_IMAGE_DEFAULT_MODEL } from '../../lib/runwayImageModels.js';
 import { IMAGE_GEN_MODE } from '../../lib/generationModes.js';
+import { isEditCapableMode } from './modes.js';
 import { CLI_IMAGE_INPUT_PROVENANCE } from '../../lib/imageInputProvenance.js';
 import { carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
 import { FAL_IMAGE_DEFAULT_MODEL, falImageFamily } from '../../lib/falImageModels.js';
@@ -22,7 +23,7 @@ import { codexSentPrompt } from './codex.js';
 import { grokSentPrompt } from './grok.js';
 import { agySentPrompt } from './agy.js';
 import { falImageSentPrompt } from './fal.js';
-import { runwayImageSentPrompt } from './runway.js';
+import { assertRunwayImagePromptLength, runwayImageSentPrompt } from './runway.js';
 import { higgsfieldImageSentPrompt } from './higgsfield.js';
 import { googleImageSentPrompt } from './google.js';
 import { localSentPrompt } from './local.js';
@@ -86,6 +87,19 @@ export async function previewImagePrompt({ uploadedInitImage = false, uploadedRe
   return params.quickEdit ? previewQuickImageEdit({ params, mode, settings, envelope }) : previewPreparedImagePrompt({ params, mode, settings, envelope });
 }
 
+/** Show the saved references in the same attachment order as the retry. */
+function previewImageRetryReferences(params, mode, settings) {
+  if (!isEditCapableMode(mode) || !(params.initImagePath || params.referenceImagePaths?.length)) return [];
+  const modelId = resolveCloudProviderConfig(settings, mode, {
+    model: params.cloudModel || params.model, modelIsShippedDefault: params.cloudModelIsShippedDefault,
+  })?.providerParams.model;
+  const { initPath, paths } = previewInputImages(mode, params, modelId);
+  return paths.map((path, index) => ({
+    filename: basename(path), status: 'included',
+    source: index === 0 && initPath ? 'Init image' : 'Reference image',
+  }));
+}
+
 /** Apply the render backend's prompt builder to an already-prepared request. */
 export async function previewPreparedImagePrompt({ params, mode = params.mode, settings, envelope = {} }) {
   if (!params.mediaProviderPeerId && Object.hasOwn(CLI_IMAGE_INPUT_PROVENANCE, mode)) {
@@ -97,7 +111,7 @@ export async function previewPreparedImagePrompt({ params, mode = params.mode, s
     width: params.width, height: params.height, initImageStrength: params.initImageStrength,
     promptAdditions: carried,
   };
-  const cloud = params.mediaProviderPeerId ? null : resolveCloudProviderConfig(settings, mode, { model: params.cloudModel || params.model });
+  const cloud = params.mediaProviderPeerId ? null : resolveCloudProviderConfig(settings, mode, { model: params.cloudModel || params.model, modelIsShippedDefault: params.cloudModelIsShippedDefault });
   // The same refusal POST /generate gives a disabled provider, text-to-image included.
   if (cloud && !cloud.enabled) throw cloud.disabledError;
 
@@ -144,6 +158,23 @@ export async function previewPreparedImagePrompt({ params, mode = params.mode, s
     ...(params.mediaProviderPeerId ? { remote: true } : {}),
     ...sentPromptRecord({ sentPrompt: common.prompt, sentNegativePrompt: common.negativePrompt, carried }),
   };
+}
+
+/** Retry the prepared request without running a new compose or staging its inputs. */
+export async function previewRetryImagePrompt(params, settings) {
+  const mode = params.mode || settings.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
+  const referenceImages = previewImageRetryReferences(params, mode, settings);
+  const context = { params, mode, settings, envelope: referenceImages.length ? { referenceImages } : {} };
+  if (params.quickEdit) return previewQuickImageEdit(context);
+  const record = await previewPreparedImagePrompt(context);
+  if (mode === IMAGE_GEN_MODE.RUNWAY) {
+    const cloud = resolveCloudProviderConfig(settings, mode, {
+      model: params.cloudModel || params.model, modelIsShippedDefault: params.cloudModelIsShippedDefault,
+    });
+    const family = getRunwayImageModel(cloud?.providerParams.model || RUNWAY_IMAGE_DEFAULT_MODEL);
+    if (family) assertRunwayImagePromptLength(record.sentPrompt, params.prompt?.length ?? 0, family.promptMaxChars);
+  }
+  return record;
 }
 
 /** Quick edits validate the complete composed text before queue admission as well as preview. */
