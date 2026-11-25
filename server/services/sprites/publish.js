@@ -10,6 +10,7 @@
  * repoPath, and atomically replaces the file — refusing when the destination
  * bytes no longer match the previous publish (something else changed the
  * game's atlas; clobbering it silently would destroy that change).
+ * Every output, sidecar, and code-binding source needs its own destination.
  *
  * The optional codeBinding is a verify-or-rewrite guard over the game source
  * file that references the atlas: the binding's resourcePath must appear in
@@ -37,6 +38,7 @@ import {
   atomicWrite, isPathInsideDir, readJSONFile, safeJSONParse, sha256File,
 } from '../../lib/fileUtils.js';
 import { isSymlinkFreeRepoPath } from '../../lib/repoPublishPath.js';
+import { canonicalizePath, isPathAtOrInsideDir } from '../../lib/pathContainment.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { getAppById } from '../apps.js';
@@ -83,6 +85,41 @@ async function anchorRepoPath(repoRoot, relPath, label) {
     throw bindingError(`${label} must stay inside the app repository without symlinks: ${relPath}`, 'INVALID_PUBLISH_PATH');
   }
   return abs;
+}
+
+function publishDestinations({ atlasDestPath, portraitDestPath, presentationIdleDestPath, codeBinding }) {
+  return {
+    atlasDestPath,
+    layoutDestPath: typeof atlasDestPath === 'string' ? layoutSidecarPath(atlasDestPath) : undefined,
+    ...(portraitDestPath ? { portraitDestPath } : {}),
+    ...(presentationIdleDestPath ? {
+      presentationIdleDestPath,
+      presentationIdleLayoutDestPath: typeof presentationIdleDestPath === 'string'
+        ? presentationIdleSidecarPath(presentationIdleDestPath)
+        : undefined,
+    } : {}),
+    ...(codeBinding ? { 'codeBinding.path': codeBinding.path } : {}),
+  };
+}
+
+async function validatePublishDestinations(repoRoot, destinations, status) {
+  const anchored = {};
+  const checked = new Map();
+  for (const [field, path] of Object.entries(destinations)) {
+    const abs = await anchorRepoPath(repoRoot, path, field);
+    const canonical = canonicalizePath(abs);
+    for (const [otherField, otherPath] of checked) {
+      // Each destination is a file, so it cannot also serve as an output directory.
+      if (isPathAtOrInsideDir(otherPath, canonical) || isPathAtOrInsideDir(canonical, otherPath)) {
+        throw new ServerError(`Publish destinations overlap: ${otherField} and ${field}. Choose separate paths for both files.`, {
+          status, code: 'PUBLISH_DESTINATIONS_OVERLAP', context: { fields: [otherField, field] },
+        });
+      }
+    }
+    anchored[field] = abs;
+    checked.set(field, canonical);
+  }
+  return anchored;
 }
 
 /**
@@ -140,22 +177,9 @@ export async function validatePublishBinding(binding) {
     codeBinding, runtimeContract,
   } = binding;
   const { repoRoot } = await requireAppRepo(appId, 400);
-  await anchorRepoPath(repoRoot, atlasDestPath, 'atlasDestPath');
-  // The sidecar lands beside the atlas, so its path must anchor too — catch a
-  // destination whose sidecar would escape the repo at SAVE time, not mid-publish.
-  await anchorRepoPath(repoRoot, layoutSidecarPath(atlasDestPath), 'atlas layout sidecar');
-  if (portraitDestPath) {
-    await anchorRepoPath(repoRoot, portraitDestPath, 'portraitDestPath');
-  }
-  if (presentationIdleDestPath) {
-    await anchorRepoPath(repoRoot, presentationIdleDestPath, 'presentationIdleDestPath');
-    await anchorRepoPath(repoRoot, presentationIdleSidecarPath(presentationIdleDestPath), 'picker animation sidecar');
-  }
-  if (codeBinding) {
-    await anchorRepoPath(repoRoot, codeBinding.path, 'codeBinding.path');
-    if (typeof codeBinding.resourcePath !== 'string' || !codeBinding.resourcePath.trim()) {
-      throw bindingError('codeBinding.resourcePath is required', 'INVALID_CODE_BINDING');
-    }
+  await validatePublishDestinations(repoRoot, publishDestinations(binding), 400);
+  if (codeBinding && (typeof codeBinding.resourcePath !== 'string' || !codeBinding.resourcePath.trim())) {
+    throw bindingError('codeBinding.resourcePath is required', 'INVALID_CODE_BINDING');
   }
   return {
     appId,
@@ -357,7 +381,8 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
   });
   const layoutBuffer = Buffer.from(`${JSON.stringify(layout, null, 2)}\n`);
   const layoutSha256 = sha256Buffer(layoutBuffer);
-  const layoutDestPath = layoutSidecarPath(binding.atlasDestPath);
+  const destinations = publishDestinations(binding);
+  const { layoutDestPath, presentationIdleLayoutDestPath = null } = destinations;
   const portrait = binding.portraitDestPath
     ? await buildPresentationPortrait(recordId, record)
     : null;
@@ -373,9 +398,6 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
   const presentationIdleLayoutSha256 = presentationIdleLayoutBuffer
     ? sha256Buffer(presentationIdleLayoutBuffer)
     : null;
-  const presentationIdleLayoutDestPath = presentationIdle
-    ? presentationIdleSidecarPath(binding.presentationIdleDestPath)
-    : null;
 
   return repoPublishTail(resolve(repoRoot), async () => {
     // Don't mutate a tree a deploy is currently building from — appDeployer
@@ -384,44 +406,23 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     if (isDeploying(app.repoPath)) {
       throw new ServerError(`App ${appLabel} is deploying — retry when the deploy finishes`, { status: 409, code: 'APP_DEPLOY_IN_PROGRESS' });
     }
-    const destAbs = await anchorRepoPath(repoRoot, binding.atlasDestPath, 'atlasDestPath');
-    // The sidecar is repo-anchored and written inside this same per-repo tail
-    // as the PNG, so the pair is never interleaved with another publish into
-    // the same checkout.
-    const layoutAbs = await anchorRepoPath(repoRoot, layoutDestPath, 'atlas layout sidecar');
-    const portraitAbs = portrait
-      ? await anchorRepoPath(repoRoot, binding.portraitDestPath, 'portraitDestPath')
-      : null;
-    const presentationIdleAbs = presentationIdle
-      ? await anchorRepoPath(repoRoot, binding.presentationIdleDestPath, 'presentationIdleDestPath')
-      : null;
-    const presentationIdleLayoutAbs = presentationIdle
-      ? await anchorRepoPath(repoRoot, presentationIdleLayoutDestPath, 'picker animation sidecar')
-      : null;
-    const destinations = [
-      [binding.atlasDestPath, 'atlasDestPath'],
-      [layoutDestPath, 'atlas layout sidecar'],
-      ...(portrait ? [[binding.portraitDestPath, 'portraitDestPath']] : []),
-      ...(presentationIdle ? [
-        [binding.presentationIdleDestPath, 'presentationIdleDestPath'],
-        [presentationIdleLayoutDestPath, 'picker animation sidecar'],
-      ] : []),
-      ...(binding.codeBinding ? [[binding.codeBinding.path, 'codeBinding.path']] : []),
-    ];
-    const preflightDestinations = async () => {
-      for (const [path, label] of destinations) await anchorRepoPath(repoRoot, path, label);
-    };
-    // Media paths were checked above; check source before any app-file reads.
-    if (binding.codeBinding) await anchorRepoPath(repoRoot, binding.codeBinding.path, 'codeBinding.path');
+    const {
+      atlasDestPath: destAbs,
+      layoutDestPath: layoutAbs,
+      portraitDestPath: portraitAbs,
+      presentationIdleDestPath: presentationIdleAbs,
+      presentationIdleLayoutDestPath: presentationIdleLayoutAbs,
+    } = await validatePublishDestinations(repoRoot, destinations, 409);
     // Repeat the complete preflight after creating output parents, before
     // either branch can rewrite source.
     const prepareDestinations = async () => {
-      for (const [path, label] of destinations) {
+      const entries = Object.entries(destinations);
+      for (const [label, path] of entries) {
         const abs = await anchorRepoPath(repoRoot, path, label);
         await mkdir(dirname(abs), { recursive: true });
         await anchorRepoPath(repoRoot, path, label);
       }
-      await preflightDestinations();
+      for (const [label, path] of entries) await anchorRepoPath(repoRoot, path, label);
     };
     const writeDestination = async (path, label, buffer) => {
       const abs = await anchorRepoPath(repoRoot, path, label);
