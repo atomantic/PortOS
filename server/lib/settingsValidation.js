@@ -5,6 +5,7 @@
  */
 
 import { z } from 'zod';
+import { isPlainObject } from './objects.js';
 import { isSplashContextWindow } from './splashRuntime.js';
 import {
   AUTO_UPDATE_CHANNELS, AUTO_UPDATE_MIN_INTERVAL_HOURS_MIN, AUTO_UPDATE_MIN_INTERVAL_HOURS_MAX,
@@ -442,6 +443,8 @@ export const settingsSlicePartialSchemas = Object.freeze({
   'music.chiptune': musicSettingsSchema.shape.chiptune.unwrap().strict(),
   'music.designer': musicSettingsSchema.shape.designer.unwrap().strict(),
 });
+
+export const settingsPutSchema = z.custom(isPlainObject, 'Expected a settings object').default({});
 
 // Check raw JSON before Zod can strip a dangerous key. Arrays can contain
 // nested objects too; none may smuggle prototype-related property names.
