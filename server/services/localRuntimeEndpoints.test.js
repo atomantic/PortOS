@@ -12,8 +12,11 @@ vi.mock('./mtplxServerManager.js', () => ({
 vi.mock('./slotstreamServerManager.js', () => ({ getSlotstreamServerEndpoint: vi.fn(async () => null) }));
 vi.mock('./specDecodeModels.js', () => ({ getSpecDecodePresetStatus: vi.fn(async () => []) }));
 vi.mock('./localLlm.js', () => ({ listManagedBackendModels: vi.fn() }));
+vi.mock('./settings.js', () => ({ getSettings: vi.fn() }));
+import { getSettings } from './settings.js';
+import { listManagedBackendModels } from './localLlm.js';
 
-import { listEndpointRuntimeModels } from './localRuntimeEndpoints.js';
+import { listEndpointRuntimeModels, listRuntimeModels } from './localRuntimeEndpoints.js';
 import { ASSESSABLE_RUNTIMES, isEndpointRuntime } from '../lib/localProviderRuntime.js';
 
 describe('listEndpointRuntimeModels', () => {
@@ -46,5 +49,34 @@ describe('listEndpointRuntimeModels', () => {
     probeOpenAiModels.mockRejectedValue(new Error('probe exploded'));
     const rows = await listEndpointRuntimeModels();
     expect(rows.every((r) => r.offline && r.models.length === 0 && r.error === 'probe exploded')).toBe(true);
+  });
+});
+
+describe('model-list availability', () => {
+  it('skips a disabled managed runtime without querying its daemon', async () => {
+    getSettings.mockResolvedValue({ localLlm: { lmstudio: { disabled: true } } });
+    listManagedBackendModels.mockClear();
+    expect(await listRuntimeModels('lmstudio', { respectDisabled: true })).toEqual({ models: null, error: null, offline: true, inactive: true });
+    expect(listManagedBackendModels).not.toHaveBeenCalled();
+  });
+
+  it('marks a stopped managed runtime inactive without suppressing HTTP listing failures', async () => {
+    listManagedBackendModels.mockResolvedValueOnce({ models: [], error: 'fetch failed: ECONNREFUSED' });
+    expect(await listRuntimeModels('ollama')).toMatchObject({ inactive: true, offline: true });
+    listManagedBackendModels.mockResolvedValueOnce({ models: [], error: 'LM Studio API error: 401' });
+    expect(await listRuntimeModels('lmstudio')).toEqual({ models: [], error: 'LM Studio API error: 401' });
+  });
+
+  it.each([
+    [false, 'ECONNREFUSED', true],
+    [false, 'timed out', false],
+    [false, 'HTTP 500', false],
+    [true, 'authentication required', false],
+    [true, 'model listing was not readable', false],
+  ])('distinguishes inactive runtimes from failures (reachable: %s, %s)', async (reachable, error, inactive) => {
+    probeOpenAiModels.mockResolvedValue({ reachable, models: null, error });
+    const result = await listRuntimeModels('llama');
+    expect(Boolean(result.inactive)).toBe(inactive);
+    expect(result.error).toContain(error);
   });
 });

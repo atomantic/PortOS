@@ -99,6 +99,7 @@ vi.mock('./specDecodeModels.js', () => ({
 // (`{ models, error }`), so these tests drive that shape directly rather than
 // re-deriving it from a manager error getter. Its composition is covered in
 // localLlm.test.js.
+vi.mock('./settings.js', async (importOriginal) => ({ ...await importOriginal(), getSettings: vi.fn(async () => ({})) }));
 const listManagedBackendModels = vi.fn();
 const managedModels = (models, error = null) => ({ models, error });
 vi.mock('./localLlm.js', () => ({
@@ -293,6 +294,16 @@ describe('loadAssessments / getAssessmentReport (read path)', () => {
       ? managedModels(null, 'Ollama unreachable')
       : managedModels([])));
     expect((await svc.getAssessmentReport()).listErrors).toEqual(['ollama']);
+  });
+
+  it('does not warn about a stopped runtime but still warns about an auth error', async () => {
+    probeOpenAiModels.mockImplementation(async (endpoint) => endpoint.includes(':5568')
+      ? { reachable: false, models: null, error: 'ECONNREFUSED' }
+      : { reachable: true, models: null, error: 'authentication required' });
+    const report = await svc.getAssessmentReport();
+    expect(report.runtimes.find(({ id }) => id === 'llama')).toMatchObject({ inactive: true, modelCount: null });
+    expect(report.listErrors).not.toContain('llama');
+    expect(report.listErrors).toContain('vllm');
   });
 
   it('falls back to the balanced intent for an unrecognized one', async () => {

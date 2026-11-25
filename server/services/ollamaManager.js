@@ -383,7 +383,7 @@ async function checkOllamaAvailable(forceRefresh = false) {
     // The daemon we handed a window to is gone; whatever comes up next has to
     // be re-checked rather than credited with that window or that launch env.
     forgetDaemon()
-    status.lastError = err.message
+    status.lastError = describeFetchError(err)
     status.consecutiveErrors++
     lastCheckAt = now
     return false
