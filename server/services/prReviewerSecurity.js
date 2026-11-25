@@ -426,7 +426,6 @@ export async function runPrReviewerSecurityScan({ app, target = null, largeInput
     }
     if (!diff.trim()) return failure('security-scan-empty-diff', { reviewedPrs, scanKey });
 
-
     // The linked issue's own text is contributor-authored public content, and it
     // is about to be quoted to a downstream reviewer as the requirement the diff
     // is judged against. It crosses the boundary in the same pass as the PR — an

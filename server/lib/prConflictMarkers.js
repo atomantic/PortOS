@@ -4,7 +4,7 @@ export function findAddedConflictMarkers(diff) {
   let path = null;
   let nextLine = null;
   let block = null;
-  for (const line of diff.split('\n')) {
+  for (const line of diff.split(/\r?\n/)) {
     if (line.startsWith('diff --git ')) {
       path = null;
       nextLine = null;

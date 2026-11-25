@@ -239,6 +239,7 @@ function mergeSummary(pullRequest) {
 }
 
 function actionStatusFromRecord(record) {
+  if (record?.status === 'feedback') return 'feedback';
   return record ? actionStatusForTask(record.status) : null;
 }
 
@@ -361,6 +362,7 @@ export default function PullRequestsTab({ appId, appName }) {
             taskId: handedOff || action.taskId || task.id,
             status: nextStatus,
             error: feedbackPosted ? preflight.note : task.metadata?.note,
+            failureReason: task.metadata?.preflightFailure,
           };
           changed = true;
         }
@@ -403,6 +405,7 @@ export default function PullRequestsTab({ appId, appName }) {
               taskId: current?.taskId || record.taskId || null,
               status: serverAction,
               error: record.error,
+              failureReason: record.failureReason,
             };
           }
         }
@@ -793,10 +796,10 @@ export default function PullRequestsTab({ appId, appName }) {
                         : null;
                       if (actionStatus === 'feedback') return (
                         <div key={kind} className="max-w-md text-xs text-port-success space-y-2">
-                          <p>{action.error || 'Posted review feedback; no agent started.'}</p>
-                          <div className="flex flex-wrap gap-3">
+                          <p>{action.error || 'Posted review feedback. No agent started.'}</p>
+                          <div className="flex flex-wrap items-center gap-3">
                             <Link className="underline" to={taskHref}>View feedback record</Link>
-                            <button type="button" className="underline" onClick={() => queueAction(kind, pullRequest)}>Run {label} again</button>
+                            <button type="button" className="rounded border border-port-border px-2 py-1 hover:bg-port-success/10 focus-visible:outline-2" onClick={() => queueAction(kind, pullRequest)}>Run {label} again</button>
                           </div>
                         </div>
                       );
@@ -807,7 +810,8 @@ export default function PullRequestsTab({ appId, appName }) {
                             <div className="flex flex-wrap gap-3">
                               <Link className="underline" to={taskHref}>View failure record</Link>
                               {/* Only pr-reviewer's preflight can fail on the model-abuse scan. */}
-                              {kind === 'review' && <Link className="underline" to="/models/llms/abuse">Abuse Guard setup</Link>}
+                              {kind === 'review' && action.failureReason !== 'patch-conflict-markers'
+                                && <Link className="underline" to="/models/llms/abuse">Abuse Guard setup</Link>}
                               <button type="button" className="underline" onClick={() => queueAction(kind, pullRequest)}>Retry {label}</button>
                             </div>
                           </div>

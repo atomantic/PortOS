@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { findAddedConflictMarkers } from '../lib/prConflictMarkers.js';
 import { publishConflictReview } from './prConflictReview.js';
 
-const mocks = vi.hoisted(() => ({ gh: vi.fn(), resolve: vi.fn() }));
+const mocks = vi.hoisted(() => ({ gh: vi.fn(), resolve: vi.fn(), getSelfLogin: vi.fn() }));
 vi.mock('./github.js', () => ({ execGh: mocks.gh }));
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: mocks.resolve }));
+vi.mock('./prWatcher.js', () => ({ getSelfLogin: mocks.getSelfLogin }));
 
 const head = 'a'.repeat(40);
 const app = { repoPath: '/repo', forgeAccount: 'bound-account' };
@@ -45,12 +46,15 @@ function routeGh({ first = unchanged, last = unchanged, reviews = [[]], diff = d
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.getSelfLogin.mockResolvedValue('reviewer');
   mocks.resolve.mockResolvedValue({ cwd: '/repo', env: { GH_TOKEN: 'test-not-a-secret' } });
 });
 
 describe('deterministic conflict marker feedback', () => {
   it('reports only added complete blocks in safe source paths', () => {
-    expect(findAddedConflictMarkers(defect)).toEqual([{ path: 'src/page.jsx', line: 9, endLine: 13 }]);
+    const findings = [{ path: 'src/page.jsx', line: 9, endLine: 13 }];
+    expect(findAddedConflictMarkers(defect)).toEqual(findings);
+    expect(findAddedConflictMarkers(defect.replaceAll('\n', '\r\n'))).toEqual(findings);
     expect(findAddedConflictMarkers(defect.replaceAll('.jsx', '.md'))).toEqual([]);
     expect(findAddedConflictMarkers(defect.replaceAll('src/page', 'src/`page'))).toEqual([]);
     expect(findAddedConflictMarkers(defect.replace('+=======', ' ======='))).toEqual([]);
@@ -90,6 +94,12 @@ describe('deterministic conflict marker feedback', () => {
   ])('does not submit a review when %s', async (_label, options, outcome) => {
     routeGh(options);
     expect(await publishConflictReview({ app, target, pr })).toBe(outcome);
+    expect(written()).toEqual([]);
+  });
+  it('does not publish with a different authenticated login', async () => {
+    routeGh();
+    mocks.getSelfLogin.mockResolvedValue('other-reviewer');
+    expect(await publishConflictReview({ app, target, pr })).toBe('unavailable');
     expect(written()).toEqual([]);
   });
   it('does not claim successful delivery on an unverified response', async () => {

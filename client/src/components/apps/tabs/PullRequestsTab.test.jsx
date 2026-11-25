@@ -408,6 +408,16 @@ describe('PullRequestsTab', () => {
     expect(await screen.findByRole('link', { name: /Untrusted:Review: Queued/ })).toBeInTheDocument();
   });
 
+  it('restores the feedback record after reloading the PR list', async () => {
+    getAppPullRequests.mockResolvedValue(okPayload([{ ...PULL_REQUEST,
+      reviewAction: { taskId: 'preflight-17', status: 'feedback', error: 'Posted a comment review.' },
+    }]));
+    await renderTab();
+    expect(await screen.findByRole('link', { name: 'View feedback record' }))
+      .toHaveAttribute('href', '/cos/tasks?task=preflight-17&source=internal');
+    expect(screen.getByRole('button', { name: 'Run Untrusted:Review again' })).toBeInTheDocument();
+  });
+
   it('shows delivered feedback without preventing review of a corrected patch', async () => {
     await renderTab();
     fireEvent.click(await screen.findByRole('button', { name: /Untrusted:Review/ }));

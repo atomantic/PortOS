@@ -3,6 +3,7 @@
  * GitHub COMMENT review. It is not security clearance or a model review.
  */
 import { execGh } from './github.js';
+import { getSelfLogin } from './prWatcher.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { findAddedConflictMarkers, matchesConflictMarkerBlock } from '../lib/prConflictMarkers.js';
@@ -64,8 +65,11 @@ export async function publishConflictReview({ app, target, pr } = {}) {
     const candidates = findAddedConflictMarkers(diff);
     if (!candidates.length) return 'changed';
     const findings = await verifyAtHead({ runGh, hostname, headRepo, headRefOid, candidates });
+    if (!findings.length) return 'changed';
+    const login = await getSelfLogin(hostname, { cwd, env });
+    if (login?.toLowerCase() !== selfLogin.toLowerCase()) return 'unavailable';
     const latest = await readCurrent();
-    if (!findings.length || !isCurrent(latest) || latest.headRepository?.nameWithOwner !== headRepo) return 'changed';
+    if (!isCurrent(latest) || latest.headRepository?.nameWithOwner !== headRepo) return 'changed';
 
     const body = [
       MARKER,
