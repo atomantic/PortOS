@@ -3,12 +3,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
-  PROVIDER_GRAPH_SCHEMA_VERSION,
   buildProviderGraphPreview,
   projectPreviewToProviders,
   providerGraphUniquenessViolations,
   routeModeEligibility,
-  toManagementPreviewDto,
 } from './providerGraphPreview.js';
 
 const SAMPLE_PROVIDERS = join(
@@ -221,20 +219,10 @@ describe('import fidelity and the wire DTO', () => {
     expect(projectPreviewToProviders(previewOf([future]))['claude-future']).toEqual(future);
   });
 
-  it('publishes no credential material and no raw provider record', () => {
-    const dto = toManagementPreviewDto(previewOf(FIXTURES, 'claude-ollama'));
-    expect(dto.schemaVersion).toBe(PROVIDER_GRAPH_SCHEMA_VERSION);
-    expect(dto.activeProvider).toBe('claude-ollama');
-    const serialized = JSON.stringify(dto);
-    expect(serialized).not.toContain('example-token');
-    expect(serialized).not.toContain('example-remote-key');
-    expect(dto.connections.find((c) => c.kind === 'ollama').hasCredentials).toBe(true);
-  });
-
   it('keeps secrets out of the internal preview serialization too', () => {
     // Belt and braces: the raw records and credential map hang off the preview
     // as non-enumerable properties, so an accidental log of the whole object
-    // cannot leak them even before the DTO's `.strict()` guard runs.
+    // cannot leak them.
     expect(JSON.stringify(previewOf(FIXTURES))).not.toContain('example-token');
   });
 });

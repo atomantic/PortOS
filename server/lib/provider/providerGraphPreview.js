@@ -3,11 +3,8 @@
  * connections, harness bindings and routes from existing provider records.
  */
 
-import { z } from 'zod';
 import { providerModeGroups } from '../aiToolkit/internal/providerModes.js';
 import {
-  CONNECTION_ISOLATION_REASONS,
-  CONNECTION_PROTOCOLS,
   compareBackendEndpoints,
   connectionBucketKey,
   providerConnectionProfile,
@@ -16,7 +13,6 @@ import {
   withoutConnectionOwnedFields,
 } from './providerConnections.js';
 import {
-  PROVIDER_HARNESS_IDS,
   ROUTE_MODES,
   graphHarnessId,
   harnessForProvider,
@@ -53,7 +49,7 @@ import { isConfiguredDefaultModel } from './providerModels.js';
  * call, probe a backend or launch a runtime.
  */
 
-/** Wire version of the management DTOs. Bump with any breaking shape change. */
+/** Wire version of the graph records. Bump with any breaking shape change. */
 export const PROVIDER_GRAPH_SCHEMA_VERSION = 1;
 
 /** Model pins a route can carry, in the order the management UI shows them. */
@@ -65,110 +61,6 @@ export const ROUTE_MODEL_PINS = Object.freeze([
   'ultraModel',
   'fallbackModel',
 ]);
-
-/** Why a route is not eligible to execute in its own mode. */
-export const ROUTE_ELIGIBILITY_REASONS = Object.freeze([
-  'mode-unsupported',
-  'mode-not-allowed',
-  'route-disabled',
-  'consent-required',
-]);
-
-/** Why a stored model string or pin could not be resolved to the catalog. */
-export const MODEL_RESOLUTION_REASONS = Object.freeze([
-  'unmappable-model-alias',
-  'pin-not-in-catalog',
-]);
-
-// --- version-1 management DTOs ----------------------------------------------
-// `.strict()` throughout is a boundary guard, not tidiness: a field added to a
-// provider record must never ride out to a client because a builder forgot to
-// drop it. Validation failure is a bug in this module, so it throws.
-
-const transportSchema = z.object({ baseUrl: z.string().min(1) }).strict();
-
-// A record keyed by an enum is EXHAUSTIVE in zod 4 — every protocol would
-// become required. A connection declares only the protocols it actually
-// speaks, so the key set is checked rather than enumerated.
-const transportsSchema = z.record(z.string(), transportSchema)
-  .refine((value) => Object.keys(value).every((protocol) => CONNECTION_PROTOCOLS.includes(protocol)),
-    { message: `transports keys must be one of: ${CONNECTION_PROTOCOLS.join(', ')}` });
-
-const connectionDtoSchema = z.object({
-  id: z.string().min(1),
-  revision: z.number().int().positive(),
-  kind: z.string().min(1),
-  label: z.string(),
-  transports: transportsSchema,
-  hasCredentials: z.boolean(),
-  catalog: z.object({
-    state: z.enum(['unknown', 'known', 'failed']),
-    models: z.array(z.string()),
-  }).strict(),
-}).strict();
-
-const bindingDtoSchema = z.object({
-  id: z.string().min(1),
-  revision: z.number().int().positive(),
-  variantKey: z.string().min(1),
-  connectionId: z.string().min(1),
-  harnessId: z.enum(PROVIDER_HARNESS_IDS).nullable(),
-  label: z.string(),
-  enabled: z.boolean(),
-  selectedModels: z.array(z.string()),
-}).strict();
-
-const routeDtoSchema = z.object({
-  providerId: z.string().min(1),
-  bindingId: z.string().min(1).nullable(),
-  mode: z.enum(ROUTE_MODES).nullable(),
-  modelMap: z.record(z.string(), z.string()),
-  unresolvedModels: z.array(z.object({
-    model: z.string(),
-    reason: z.enum(MODEL_RESOLUTION_REASONS),
-  }).strict()),
-  unresolvedPins: z.array(z.object({
-    pin: z.enum(ROUTE_MODEL_PINS),
-    model: z.string(),
-    reason: z.enum(MODEL_RESOLUTION_REASONS),
-  }).strict()),
-  eligibility: z.object({
-    mode: z.enum(ROUTE_MODES).nullable(),
-    supported: z.boolean(),
-    enabled: z.boolean(),
-    consentRequired: z.boolean(),
-    consentGranted: z.boolean(),
-    eligible: z.boolean(),
-    reasons: z.array(z.enum(ROUTE_ELIGIBILITY_REASONS)),
-  }).strict(),
-}).strict();
-
-const unresolvedDtoSchema = z.object({
-  providerId: z.string().min(1),
-  reasons: z.array(z.object({
-    code: z.enum(CONNECTION_ISOLATION_REASONS),
-    detail: z.string(),
-  }).strict()),
-}).strict();
-
-const suggestedLinkDtoSchema = z.object({
-  connectionIds: z.array(z.string().min(1)).length(2),
-  harnessIds: z.array(z.enum(PROVIDER_HARNESS_IDS).nullable()).length(2),
-  reason: z.literal('same-backend-endpoint'),
-  differences: z.array(z.string()),
-  requiresExplicitLink: z.literal(true),
-}).strict();
-
-/** The full `GET /api/providers/management/preview` body. */
-export const managementPreviewSchema = z.object({
-  schemaVersion: z.literal(PROVIDER_GRAPH_SCHEMA_VERSION),
-  activeProvider: z.string().nullable(),
-  connections: z.array(connectionDtoSchema),
-  bindings: z.array(bindingDtoSchema),
-  routes: z.array(routeDtoSchema),
-  unresolved: z.array(unresolvedDtoSchema),
-  suggestedLinks: z.array(suggestedLinkDtoSchema),
-}).strict();
 
 // --- builder ----------------------------------------------------------------
 
@@ -441,27 +333,6 @@ export function providerGraphUniquenessViolations(preview) {
     .filter((binding) => binding.harnessId === null)
     .map((binding) => `${binding.connectionId}|${binding.variantKey}`));
   return violations;
-}
-
-/**
- * The sanitized, validated body a client receives.
- *
- * Credentials, raw provider records and the connection-owned snapshots never
- * appear: the browser is told only WHETHER a connection has credentials, and
- * every identity decision was already made server-side on real values.
- */
-export function toManagementPreviewDto(preview) {
-  return managementPreviewSchema.parse({
-    schemaVersion: preview.schemaVersion,
-    activeProvider: preview.activeProvider,
-    connections: preview.connections.map(({ id, revision, kind, label, transports, hasCredentials, catalog }) =>
-      ({ id, revision, kind, label, transports, hasCredentials, catalog })),
-    bindings: preview.bindings,
-    routes: preview.routes.map(({ providerId, bindingId, mode, modelMap, unresolvedModels, unresolvedPins, eligibility }) =>
-      ({ providerId, bindingId, mode, modelMap, unresolvedModels, unresolvedPins, eligibility })),
-    unresolved: preview.unresolved,
-    suggestedLinks: preview.suggestedLinks,
-  });
 }
 
 /**

@@ -277,20 +277,9 @@ router.post('/targets/:targetId/install', asyncHandler(async (req, res) => {
   await handleTargetInstall(req.params.targetId, target, adapter, repair === '1', req, res);
 }));
 
-// Compatibility alias for the pre-#3080 TRELLIS.2-specific install URL — existing
-// client bookmarks/links keep working.
-router.get('/trellis2/install', asyncHandler(async (_req, res) => {
-  await sendTargetInstallStatus('trellis2', res);
-}));
-router.post('/trellis2/install', asyncHandler(async (req, res) => {
-  const { target, adapter } = requireInstallTarget('trellis2');
-  const { repair } = validateRequest(installQuerySchema, req.query);
-  await handleTargetInstall('trellis2', target, adapter, repair === '1', req, res);
-}));
-
 // ── Image-to-3D model records ─────────────────────────────────────────────
-// Namespaced under /models so `/:id` never shadows the `/targets` and
-// `/trellis2/install` routes above. These drive the /3d page: create a
+// Namespaced under /models so `/:id` never shadows the `/targets`
+// routes above. These drive the /3d page: create a
 // record from a gallery image (which kicks off the local render), poll the
 // record for status, re-generate, delete, and download the exported GLB.
 
