@@ -156,6 +156,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
   // falls back to the single message but says so, so a missing conversation is
   // not mistaken for a one-message thread.
   const { threadId, accountId } = message;
+  const supportsBodyRefresh = accounts.some(a => a.id === accountId && a.supportsBodyRefresh === true);
   const hasThreadRef = !!(threadId && accountId);
   const fetchThread = useCallback(
     () => getMessageThread(accountId, threadId, { silent: true }).then(data => data?.messages || []),
@@ -271,7 +272,9 @@ export default function MessageDetail({ message, accounts, onBack }) {
           <button onClick={() => setShowReply(!showReply)} aria-label="Reply" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-accent hover:bg-port-accent/10 rounded transition-colors" title="Reply"><Reply size={14} /></button>
           <button onClick={() => setUseVoice(v => !v)} aria-label={useVoice ? 'Conversational tone ON — private identity documents stay separate' : 'Conversational tone OFF — replies use professional tone'} className={`p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center rounded transition-colors ${useVoice ? 'text-port-accent-2 bg-port-accent-2/10' : 'text-gray-500 hover:text-gray-300'}`} title={useVoice ? 'Conversational tone ON — private identity documents stay separate' : 'Conversational tone OFF — replies use professional tone'}><User size={14} /></button>
           <button onClick={handleGenerateReply} disabled={generating} aria-label="AI Reply" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-accent-2 hover:bg-port-accent-2/10 rounded transition-colors disabled:opacity-50" title="AI Reply"><Sparkles size={14} className={generating ? 'animate-pulse' : ''} /></button>
-          <button onClick={handleRefresh} disabled={refreshing} aria-label="Refresh" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-accent hover:bg-port-accent/10 rounded transition-colors disabled:opacity-50" title="Refresh"><RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /></button>
+          {supportsBodyRefresh && (
+            <button onClick={handleRefresh} disabled={refreshing} aria-label="Refresh" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-accent hover:bg-port-accent/10 rounded transition-colors disabled:opacity-50" title="Refresh"><RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /></button>
+          )}
           <span className="w-px h-4 bg-port-border mx-0.5" />
           {displayedMessage.accountId && actions.includes('archive') && <button onClick={() => handleAction('archive')} disabled={!!actioning} aria-label="Archive" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-warning hover:bg-port-warning/10 rounded transition-colors disabled:opacity-50" title="Archive"><Archive size={14} /></button>}
           {displayedMessage.accountId && actions.includes('delete') && <button onClick={() => handleAction('delete')} disabled={!!actioning} aria-label="Delete" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-error hover:bg-port-error/10 rounded transition-colors disabled:opacity-50" title="Delete"><Trash2 size={14} /></button>}
@@ -339,7 +342,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
                   <div className="whitespace-pre-wrap">{msg.bodyText || '(no content)'}</div>
                 )}
               </div>
-              {!msg.bodyFull && msg.bodyText && (
+              {supportsBodyRefresh && !msg.bodyFull && msg.bodyText && (
                 <div className="text-xs text-gray-600 italic">Preview only — re-sync for full content</div>
               )}
             </div>

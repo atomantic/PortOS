@@ -381,12 +381,22 @@ router.get('/thread/:accountId/:threadId', asyncHandler(async (req, res) => {
   res.json({ messages });
 }));
 
-// === Message params schema (shared by detail + refresh routes) ===
+async function requireBodyRefreshAccount(accountId) {
+  const account = await messageAccounts.getAccount(accountId);
+  if (!account) throw new ServerError('Account not found', { status: 404 });
+  if (MESSAGE_ACCOUNT_TRANSPORT[account.type]?.supportsBodyRefresh !== true) {
+    throw new ServerError('This account does not support refreshing message content', {
+      status: 400, code: 'BODY_REFRESH_NOT_SUPPORTED'
+    });
+  }
+}
+
 // === Per-message refresh ===
 router.post('/:accountId/:messageId/refresh', asyncHandler(async (req, res) => {
   const parsed = messageParamsSchema.safeParse(req.params);
   if (!parsed.success) throw new ServerError('Invalid accountId or messageId format', { status: 400 });
   const { accountId, messageId } = parsed.data;
+  await requireBodyRefreshAccount(accountId);
   const message = await messageSync.getMessage(accountId, messageId);
   if (!message) throw new ServerError('Message not found', { status: 404 });
   const result = await messageSync.refreshMessage(accountId, messageId);
@@ -404,9 +414,7 @@ router.post('/fetch-full/:accountId', asyncHandler(async (req, res) => {
     throw new ServerError('Invalid account ID format', { status: 400 });
   }
   const { accountId } = req.params;
-  const account = await messageAccounts.getAccount(accountId);
-  if (!account) throw new ServerError('Account not found', { status: 404 });
-  if (account.type !== 'outlook') return res.json({ updated: 0, total: 0 });
+  await requireBodyRefreshAccount(accountId);
 
   const { force } = validateRequest(messageFetchFullBodySchema, req.body ?? {});
   const allResult = await messageSync.getMessages({ accountId, limit: FULL_BODY_REFRESH_LIMIT });

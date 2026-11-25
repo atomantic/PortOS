@@ -85,6 +85,20 @@ beforeEach(() => {
   api.syncMessageAccount.mockResolvedValue({ newMessages: 0, pruned: 0 });
 });
 
+it('shows both body refresh actions only with Outlook selected', async () => {
+  const accounts = ['gmail', 'outlook', 'teams'].map(type => ({
+    ...syncedAccount, id: type, name: type, type, supportsBodyRefresh: type === 'outlook',
+  }));
+  renderInbox(accounts);
+  const picker = screen.getByRole('combobox', { name: 'Account' });
+
+  for (const selected of ['', 'gmail', 'outlook', 'teams']) {
+    await act(async () => fireEvent.change(picker, { target: { value: selected } }));
+    expect(Boolean(screen.queryByRole('button', { name: 'Fetch Full Content' }))).toBe(selected === 'outlook');
+    expect(Boolean(screen.queryByRole('button', { name: 'Re-fetch All Content' }))).toBe(selected === 'outlook');
+  }
+});
+
 describe('InboxTab sync reconciliation', () => {
   const rows = Array.from({ length: 50 }, (_, i) => ({
     id: `synthetic-${i}`, externalId: `external-${i}`, accountId: syncedAccount.id,

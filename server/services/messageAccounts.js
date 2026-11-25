@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
-import { accountTypeCanSend, accountTypeHasReadState, actionsForAccountType, sendViaForAccountType, syncModesForAccountType } from '../lib/messageTransport.js';
+import { MESSAGE_ACCOUNT_TRANSPORT, accountTypeCanSend, accountTypeHasReadState, actionsForAccountType, sendViaForAccountType, syncModesForAccountType } from '../lib/messageTransport.js';
 
 const ACCOUNTS_FILE = join(PATHS.messages, 'accounts.json');
 // All account IDs share this file, including sync metadata writes.
@@ -31,6 +31,7 @@ const withDerivedCapabilities = account => ({
   canSend: accountTypeCanSend(account.type),
   syncModes: [...syncModesForAccountType(account.type)],
   hasReadState: accountTypeHasReadState(account.type),
+  supportsBodyRefresh: MESSAGE_ACCOUNT_TRANSPORT[account.type]?.supportsBodyRefresh === true,
   actions: [...actionsForAccountType(account.type)]
 });
 
