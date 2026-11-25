@@ -274,8 +274,11 @@ export function isResponsiveHiddenOnlyLabelControl(src, node) {
   if (node.selfClosing) return false;
   const closing = node.matchingClose;
   if (!closing) return false;
-  const rawBody = maskComments(src.slice(node.contentStart, closing.index), { startMode: 'jsx-text' });
-  const withoutA11yHidden = stripHiddenElementContent(rawBody);
+  const rawBody = src.slice(node.contentStart, closing.index);
+  // The wrapper's required class must occur in the body before masking.
+  if (!rawBody.includes('hidden')) return false;
+  const maskedBody = maskComments(rawBody, { startMode: 'jsx-text' });
+  const withoutA11yHidden = stripHiddenElementContent(maskedBody);
   // Any text left once the responsive-hidden wrappers are ALSO blanked is
   // visible at every width, so the control is never nameless.
   const withoutResponsiveHidden = stripResponsiveHiddenLabelContent(withoutA11yHidden);
