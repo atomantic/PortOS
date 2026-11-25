@@ -4,7 +4,7 @@
  * CoS Runner GET /agents liveness. Presence in the runner's handle map is not proof of life:
  * `runnerAgentLivenessFields` produces `processActive` + `liveness` (`pty` from TUI onExit
  * bookkeeping, `pid` from a CLI probe) so Windows ConPTY `pid: 0` no longer reports every TUI as dead;
- * `runnerEntryShieldsRunningRecord` is the corroboration gate both zombie/orphan sweeps use before a
+ * `runnerEntryShieldsRunningRecord` is the corroboration gate the orphan sweep uses before a
  * listing can keep a durable `running` record.
  *
  * The runner's map is a list of PTY/child handles it has not seen exit. A

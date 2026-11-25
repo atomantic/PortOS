@@ -228,7 +228,7 @@ export default function LearningTab() {
     // Deleting or clearing runs removes their verdicts; archiving moves a record
     // without changing what the aggregate counts, so it needs no re-read.
     const handleAgentsChanged = (change) => {
-      if (change?.action === 'auto-archive' || change?.action === 'zombie-cleanup') return;
+      if (change?.action === 'auto-archive') return;
       refreshVerdicts();
     };
     socket.on('cos:reviewer-verdict:recorded', refreshVerdicts);

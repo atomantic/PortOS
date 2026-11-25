@@ -1,8 +1,10 @@
 /**
  * CoS Agent Lifecycle Module
  *
- * Agent register/update/complete/output/terminate/pause/kill/BTW/zombie-cleanup
- * and single-agent reads. Extracted from the former monolithic cosAgents.js
+ * Agent register/update/complete/output/terminate/pause/kill/BTW and
+ * single-agent reads. `completeAgent` is the only writer of a terminal agent
+ * record: a `running` record whose process is gone is retired through it by
+ * `cleanupOrphanedAgents` (agent/agentManagement.js), never written here (#18637). Extracted from the former monolithic cosAgents.js
  * (issue #2530); the date-bucket index + archive layout lives in cosAgentIndex.js
  * and is shared via loadAgentIndex/saveAgentIndex/getAgentDir.
  *
@@ -19,18 +21,16 @@ import { cosEvents } from './cosEvents.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { loadState, saveState, withStateLock, readAgentsStateForSafetyCheck, AGENTS_DIR } from './cosState.js';
 import { atomicWrite, ensureDir, readFileTail, safeJSONParse, tryReadFile } from '../../lib/fileUtils.js';
-import { runnerEntryShieldsRunningRecord } from '../../lib/runnerAgentLiveness.js';
 import { recordDomainUsage } from '../domainUsage.js';
 import { repairCodexTaskSummary } from '../codexSummaryRepair.js';
 import { loadAgentIndex, saveAgentIndex, getAgentDir, recordArchivedAgentOrder, moveAgentDir, writeArchivedAgentMetadata } from './cosAgentIndex.js';
 import { hasClaimCheckoutBindings, hasReleaseCandidateBinding, readCompletedCheckoutIdentity, readMergedClaimEvidence, captureCompletedCheckouts } from '../completedCheckoutEvidence.js';
 import { isAgentHandoff } from '../../lib/agent/agentOutcome.js';
 import { collectProtectedCleanupOwners } from '../../lib/taskRetryHold.js';
-import { reconcileStaleAgentReservations, releaseAgentReservation } from '../agent/agentMaintenanceReservations.js';
+import { releaseAgentReservation } from '../agent/agentMaintenanceReservations.js';
 import { initialCandidateLifecycle } from '../releaseCandidateLifecycle.js';
 import { PORTOS_APP_ID } from '../../lib/appIdentity.js';
 import { isHistoricalReleaseReceipt } from '../../lib/releasePublication.js';
-import { isTruthyMeta } from '../../lib/metadataFlags.js';
 import { COMPLETION_RECEIPT_VERSION, COMPLETION_STAGE, completionReceiptDone, completionStagesDone,
   completionStagesDoneExceptWorktree, verifiedRepositoryWorktreeStage } from '../../lib/agent/agentCompletionStages.js';
 
@@ -1292,163 +1292,6 @@ export async function sendBtwToAgent(agentId, message) {
 
   cosEvents.emit('agent:btw', { agentId, message, timestamp });
   return { success: true, delivered: 'tui-paste', tuiSessionId: agentInfo.tuiSessionId };
-}
-
-// Check if a PID is still running
-async function isPidAlive(pid) {
-  if (!pid) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Cleanup zombie agents - agents marked as running but whose process is dead
-export async function cleanupZombieAgents() {
-  // Direct-spawn handles in this process (not leftover runnerAgents adopts —
-  // those are only a handle, same as GET /agents). Read from the side-effect-free
-  // state module, not subAgentSpawner.
-  const { activeAgents, completingAgents, spawningTasks } = await import('../agent/agentState.js');
-
-  // Also check with the CoS runner for agents it's actively tracking
-  const { getActiveAgentsFromRunner } = await import('./cosRunnerClient.js');
-  const runnerProbe = await getActiveAgentsFromRunner().then(
-    (agents) => Array.isArray(agents)
-      ? { available: true, agents }
-      : { available: false, agents: [] },
-    () => ({ available: false, agents: [] }),
-  );
-  const runnerById = new Map(
-    runnerProbe.agents
-      .filter((row) => row?.id)
-      .map((row) => [row.id, row]),
-  );
-
-  // Finalized records, emitted as `agent:completed` once the lock and archive
-  // pass are done (same ordering as completeAgent) so listeners that re-read
-  // state see them finished.
-  const finalized = [];
-
-  const summary = await withBackupAssetPublication(() => withStateLock(async () => {
-    const state = await loadState();
-    const runningAgents = Object.values(state.agents).filter(a => a.status === 'running');
-    const cleaned = [];
-
-    for (const agent of runningAgents) {
-      // A runner listing is only a shield when corroborated (live pid or
-      // processActive from onExit/pid probe). Leftover runnerAgents ownership
-      // from an earlier adopt is not.
-      if (activeAgents.has(agent.id)) continue;
-      // The record is written before the spawn finishes (prompt build, claim
-      // update, forge/env lookups, PTY open), and that window can run for
-      // minutes under load — well past the pid grace below. While the dispatch
-      // still owns the task, a missing pid means 'not spawned yet', not 'never
-      // started'. Reaping here archives a run that goes on to launch normally.
-      if (agent.taskId && spawningTasks.has(agent.taskId)) continue;
-      const executionMode = agent.metadata?.executionMode;
-      const runnerOwned = isTruthyMeta(agent.metadata?.useRunner)
-        || executionMode === 'runner'
-        || executionMode === 'runner-tui';
-      // Same as the orphan sweep: a failed probe is not evidence the runner
-      // process died. A pid-0 TUI after restart would otherwise be archived
-      // as "never started" the moment the runner is unreachable.
-      if (!runnerProbe.available && runnerOwned) continue;
-      if (await runnerEntryShieldsRunningRecord(runnerById.get(agent.id), isPidAlive)) {
-        continue;
-      }
-
-      // If agent has a PID, verify the process is actually dead
-      if (agent.pid) {
-        const alive = await isPidAlive(agent.pid);
-        if (alive) continue;
-      } else {
-        // No PID yet - agent might still be initializing
-        // Give it a 30 second grace period before marking as zombie
-        const startedAt = agent.startedAt ? new Date(agent.startedAt).getTime() : 0;
-        const ageMs = Date.now() - startedAt;
-        if (ageMs < 30000) continue;
-      }
-
-      // Completion may have started while the liveness probes awaited. Its
-      // hook/validation/persistence chain owns the outcome even after PTY exit.
-      if (completingAgents.has(agent.id)) continue;
-
-      // Agent is not tracked anywhere and process is dead — it's a zombie.
-      // A record that never recorded a pid never spawned at all (the pid is
-      // written only after a successful spawn), so "terminated unexpectedly"
-      // is the wrong diagnosis: it points at a crash when the real cause is
-      // upstream, at spawn time. Spawn failures now finalize themselves with
-      // the actual error, so reaching here without a pid means the spawn died
-      // somewhere that still doesn't report — say so rather than inventing a
-      // termination that never happened.
-      const neverStarted = !agent.pid;
-      console.log(`🧟 Zombie agent detected: ${agent.id} (${neverStarted ? 'no process was ever launched' : `PID ${agent.pid} not running`})`);
-      state.agents[agent.id] = {
-        ...agent,
-        status: 'completed',
-        completedAt: new Date().toISOString(),
-        result: {
-          success: false,
-          error: neverStarted
-            ? 'Agent never started — no process was ever launched (check the provider command and CoS Runner logs)'
-            : 'Agent process terminated unexpectedly'
-        }
-      };
-      cleaned.push(agent.id);
-    }
-
-    if (cleaned.length > 0) {
-      await saveState(state, { changedAgentIds: cleaned });
-
-      // Persist zombie-cleaned agents to date-bucketed dirs and update index
-      const idx = await loadAgentIndex();
-      const archived = [];
-      for (const agentId of cleaned) {
-        const agent = state.agents[agentId];
-        const dateStr = agent.completedAt?.slice(0, 10);
-        if (!dateStr) continue;
-        const bucketDir = join(AGENTS_DIR, dateStr);
-        await ensureDir(bucketDir);
-
-        const flatDir = join(AGENTS_DIR, agentId);
-        const { output, ...agentWithoutOutput } = agent;
-
-        // Ensure metadata is written before move
-        if (!existsSync(flatDir)) await ensureDir(flatDir);
-        await atomicWrite(join(flatDir, 'metadata.json'), agentWithoutOutput).catch(() => {});
-
-        // Move to date bucket
-        const targetDir = join(bucketDir, agentId);
-        if (!existsSync(targetDir)) await moveAgentDir(flatDir, targetDir);
-
-        idx.set(agentId, dateStr);
-        archived.push({ ...agent, id: agentId });
-      }
-      await recordArchivedAgentOrder(archived);
-      await saveAgentIndex();
-      finalized.push(...cleaned.map(agentId => state.agents[agentId]));
-
-      console.log(`🧹 Cleaned up ${cleaned.length} zombie agents: ${cleaned.join(', ')}`);
-      cosEvents.emit('agents:changed', { action: 'zombie-cleanup', cleaned });
-    }
-
-    return { cleaned, count: cleaned.length };
-  }));
-
-  // Every `agent:completed` consumer (feature-agent pointer release, task
-  // settlement/dequeue, maintenance and quota-burn step advancement, learning)
-  // keys off this event, so a zombie-finalized run must fire it too (#11766).
-  // The sweep can't route through completeAgent: it batches one lock/archive
-  // pass, and completeAgent's duplicate guard would see these as already done.
-  for (const agent of finalized) {
-    cosEvents.emit('agent:completed', agent);
-  }
-  for (const agentId of summary.cleaned) await releaseAgentReservation(agentId);
-  await reconcileStaleAgentReservations({ agents: await getAgents() });
-
-  return summary;
 }
 
 // Delete a single agent from state and disk

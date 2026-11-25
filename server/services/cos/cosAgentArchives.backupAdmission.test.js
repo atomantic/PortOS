@@ -40,7 +40,6 @@ vi.mock('../../lib/backupSnapshotBoundary.js', async importOriginal => {
 });
 vi.mock('../domainUsage.js', () => ({ recordDomainUsage: async () => {} }));
 vi.mock('../codexSummaryRepair.js', () => ({ repairCodexTaskSummary: async () => null }));
-vi.mock('./cosRunnerClient.js', () => ({ getActiveAgentsFromRunner: async () => [] }));
 const deferred = () => {
   let resolve; const promise = new Promise(done => { resolve = done; });
   return { promise, resolve };
@@ -216,7 +215,8 @@ it.each(['user', 'cos'])('preserves cleanup-owner evidence in the %s queue until
 
 const cases = [
   { name: 'completion', setup: () => seed(), run: () => api.completeAgent(id, { success: true }) },
-  { name: 'zombie archive', setup: () => seed(), run: () => api.cleanupZombieAgents() },
+  // A dead run is retired through the same write, with the orphan sweep's failed verdict.
+  { name: 'dead-run retirement', setup: () => seed(), run: () => api.completeAgent(id, { success: false, orphaned: true, exitCode: 1, error: 'Agent process terminated unexpectedly' }) },
   { name: 'stale archive', setup: () => seed({ completed: true }), run: () => api.archiveStaleAgents() },
   { name: 'single deletion', setup: () => seed({ completed: true, indexed: true }), run: () => api.deleteAgent(id) },
   { name: 'clear completed', setup: () => seed({ completed: true, indexed: true }), run: () => api.clearCompletedAgents() },
