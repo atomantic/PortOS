@@ -49,6 +49,13 @@ export const markerPath = (snapshotDir) => join(snapshotDir, SNAPSHOT_IN_PROGRES
 export const failedMarkerPath = (snapshotDir) => join(snapshotDir, SNAPSHOT_FAILED_MARKER);
 export const parentMarkerPath = (snapshotDir, snapshotId) =>
   join(resolve(snapshotDir, '..'), `.${snapshotId}${SNAPSHOT_IN_PROGRESS_MARKER}`);
+const removeIfPresent = (path) => unlink(path).catch(err => { if (err.code !== 'ENOENT') throw err; });
+
+async function removeSnapshot(snapshotDir, id) {
+  await rm(snapshotDir, { recursive: true, force: true });
+  await removeIfPresent(parentMarkerPath(snapshotDir, id));
+}
+
 const markerExistsAt = (path) =>
   access(path).then(
     () => true,
@@ -330,7 +337,6 @@ export async function markInterruptedSnapshotsFailed(snapshotsRoot) {
     try {
       const exists = await stat(snapshotDir).then(info => info.isDirectory(), () => false);
       if (!exists || !isCandidate(await snapshotState(snapshotDir, id, true))) continue;
-      const removeIfPresent = (path) => unlink(path).catch(err => { if (err.code !== 'ENOENT') throw err; });
       await writeFile(failedMarkerPath(snapshotDir), INTERRUPTED_FAILURE_REASON)
         .then(() => removeIfPresent(markerPath(snapshotDir)))
         .then(() => removeIfPresent(parentMarkerPath(snapshotDir, id)))
@@ -435,7 +441,7 @@ export async function pruneOldSnapshots(destPath, retentionCount) {
       console.warn(`⚠️ Backup retention: skipped snapshot ${id} (${refusal})`);
       continue;
     }
-    await rm(snapshotDir, { recursive: true, force: true }).then(
+    await removeSnapshot(snapshotDir, id).then(
       () => { pruned += 1; },
       err => console.error(`❌ Backup retention: failed to remove snapshot ${id}: ${err.message}`),
     );
@@ -554,7 +560,7 @@ export async function deleteSnapshot(destPath, snapshotId, { source } = {}) {
         code: 'SNAPSHOT_INCOMPLETE',
       });
     }
-    await rm(snapshotDir, { recursive: true, force: true });
+    await removeSnapshot(snapshotDir, snapshotId);
   } finally {
     release();
   }
