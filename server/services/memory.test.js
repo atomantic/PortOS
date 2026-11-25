@@ -182,6 +182,20 @@ describe('memory service', () => {
       expect(result.updatedAt).toBeDefined();
     });
 
+    it('logs creation metadata without memory prose', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        const memory = await createMemory({ type: 'fact', summary: 'Example private summary', content: 'Example private content' });
+
+        expect(log.mock.calls.filter(([message]) => message.startsWith('🧠 Memory created:'))).toEqual([
+          [`🧠 Memory created: ${memory.id} (fact)`]
+        ]);
+        expect(log.mock.calls.flat().join(' ')).not.toMatch(/example private/i);
+      } finally {
+        log.mockRestore();
+      }
+    });
+
     it('should create directories when they do not exist', async () => {
       existsSync.mockReturnValue(false);
       const data = { type: 'fact', content: 'new dir test' };

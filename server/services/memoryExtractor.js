@@ -297,10 +297,7 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
     const embedding = await generateMemoryEmbedding(mem);
     const existing = await findExistingDuplicate(embedding, mem.content, pendingForDedup.memories);
     if (existing) {
-      // Active-memory hits from searchMemories() return metadata with \`summary\`
-      // but no \`content\`; pending hits carry \`content\`. Prefer whichever is present.
-      const existingText = existing.content || existing.summary || '';
-      console.log(`🧠 Skipping duplicate memory (similar to "${normalizeText(existingText).substring(0, 60)}…")`);
+      console.log(`🧠 Skipping duplicate memory (matches ${existing.id || 'existing'})`);
       skippedDuplicates++;
       return null;
     }

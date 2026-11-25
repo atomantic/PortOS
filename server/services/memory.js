@@ -118,7 +118,7 @@ export async function createMemory(data, embedding = null) {
       source: memory.sourceAppId
     }).catch(err => console.error(`⚠️ BM25 index error: ${err.message}`));
 
-    console.log(`🧠 Memory created: ${memory.type} - ${memory.summary.substring(0, 50)}...`);
+    console.log(`🧠 Memory created: ${memory.id} (${memory.type})`);
     cosEvents.emit('memory:created', { id, type: memory.type, summary: memory.summary });
 
     return memory;
