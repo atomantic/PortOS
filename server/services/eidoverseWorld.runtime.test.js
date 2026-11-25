@@ -1275,6 +1275,42 @@ describe('Eidoverse private-world lifecycle', () => {
     });
   });
 
+  it.each(['legacy', 'aggregate'])('compensates an in-place update of a %s PortOS component', async (shape) => {
+    await world.projectEidoverseWorld();
+    const id = 'portos-design-v2-city-surface';
+    const spawn = mocks.sent.find(({ verb, args }) => verb === 'spawn' && args.id === id);
+    const update = mocks.sent.find(({ verb, args }) => verb === 'comp' && args.id === id && args.type === 'portos');
+    const legacyLabel = 'Synthetic legacy component label';
+    const prior = shape === 'legacy'
+      ? { managedBy: 'portos', label: legacyLabel }
+      : { ...update.args.data, districtId: 'example-prior-district', disclosure: 'aggregate' };
+    await world.__resetEidoverseWorldForTests();
+    mocks.worlds.get('portos').entities = { [id]: { ...spawn.args, comp: { portos: prior } } };
+    mocks.sent.length = 0;
+    mocks.rejectVerb = 'terrain';
+
+    await expect(world.projectEidoverseWorld()).rejects.toMatchObject({
+      code: 'EIDOVERSE_WORLD_VERB_REJECTED',
+      compensationStatus: 'complete',
+    });
+
+    const failedIndex = mocks.sent.findIndex(({ verb }) => verb === 'terrain');
+    expect(mocks.sent.slice(0, failedIndex)).toContainEqual(expect.objectContaining({
+      verb: 'comp',
+      args: update.args,
+    }));
+    expect(mocks.sent.filter(({ verb, args }) => verb === 'spawn' && args.id === id)).toEqual([]);
+    const rollback = mocks.sent.slice(failedIndex + 1);
+    expect(rollback.filter(({ verb, args }) => verb === 'comp' && args.id === id && args.type === 'portos')
+      .map(({ args }) => args.data)).toEqual([shape === 'legacy' ? null : prior]);
+    expect(JSON.stringify(rollback)).not.toContain(legacyLabel);
+    expect(mocks.persistedState.reconciliation).toMatchObject({
+      status: 'failed',
+      checkpoint: 'compensation-complete',
+      compensationStatus: 'complete',
+    });
+  });
+
   it('mows a newly applied field when a later environment operation fails', async () => {
     mocks.rejectVerb = 'light';
 
