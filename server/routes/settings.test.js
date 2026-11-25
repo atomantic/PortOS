@@ -774,7 +774,7 @@ describe('Settings routes — agent context and federated media provider slices'
     peers = [routablePeer()];
     const res = await request(buildApp())
       .put('/api/settings')
-      .send({ federation: { mediaRouting: { image: { peerId: 'peer-1', engine: 'ltx', modelId: 'ltx-1' } } } });
+      .send({ federation: { mediaRouting: { image: { peerId: ' peer-1 ', engine: ' ltx ', modelId: ' ltx-1 ' } } } });
     expect(res.status).toBe(200);
     expect(res.body.federation.mediaRouting.image).toEqual({ peerId: 'peer-1', engine: 'ltx', modelId: 'ltx-1' });
   });
@@ -1604,6 +1604,46 @@ describe('Settings routes — atomic partial saves (#11045)', () => {
   const patch = (app, slicePath, partial) => request(app).patch('/api/settings/slice').send({ slicePath, partial });
   const persisted = () => JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
 
+  it('persists normalized PUT fields with unknown settings intact', async () => {
+    const response = await request(buildApp()).put('/api/settings').send({
+      imageGen: { grok: { grokPath: ' /example/bin/grok ', aspectRatio: ' 16:9 ' }, agy: { enabled: false, agyPath: '' } },
+      videoGen: { defaultModelId: ' example-video ', google: { location: ' europe-west4 ', futureField: true } },
+      federation: { mediaProvider: { videoModels: [{ engine: ' local ', modelId: ' example-video ', futureField: true }] } },
+      renderDefaults: { 'universe-bible': { videoModel: '', futureField: true } },
+      backup: { excludePaths: [' example-cache '] },
+    });
+    expect(response.status).toBe(200);
+    expect(persisted()).toMatchObject({
+      imageGen: { grok: { grokPath: '/example/bin/grok', aspectRatio: '16:9' } },
+      videoGen: { defaultModelId: 'example-video', google: { location: 'europe-west4', futureField: true } },
+      federation: { mediaProvider: { videoModels: [{ engine: 'local', modelId: 'example-video', futureField: true }] } },
+      renderDefaults: { 'universe-bible': { videoModel: null, futureField: true } },
+    });
+    expect(persisted().imageGen.agy).toEqual({ enabled: false });
+    expect(persisted().backup).toEqual({ excludePaths: ['example-cache'] });
+  });
+
+  it('normalizes PATCH fields and persists sentinel clears without altering omitted settings', async () => {
+    const app = buildApp();
+    expect((await patch(app, 'imageGen.grok', { grokPath: ' /example/bin/grok ', aspectRatio: ' 16:9 ' })).status).toBe(200);
+    expect((await patch(app, 'videoGen.google', { location: ' europe-west4 ' })).status).toBe(200);
+    expect((await patch(app, 'videoGen', { defaultModelId: ' example-video ' })).status).toBe(200);
+    expect(persisted().imageGen.grok).toEqual({ grokPath: '/example/bin/grok', aspectRatio: '16:9' });
+    expect(persisted().videoGen).toEqual({ defaultModelId: 'example-video', google: { location: 'europe-west4' } });
+
+    expect((await patch(app, 'imageGen.grok', { grokPath: '' })).status).toBe(200);
+    expect((await patch(app, 'videoGen', { defaultModelId: '' })).status).toBe(200);
+    expect((await patch(app, 'renderDefaults', { 'universe-bible': { videoModel: '', futureField: true } })).status).toBe(200);
+    expect((await patch(app, 'seriesAutopilot', {
+      schedules: [{ seriesId: 'example', cron: '0 0 * * *', provider: '', model: '', effort: '' }],
+    })).status).toBe(200);
+    expect((await patch(app, 'seriesAutopilot', {})).status).toBe(200);
+    expect(persisted().imageGen.grok).toEqual({ aspectRatio: '16:9' });
+    expect(persisted().videoGen).toEqual({ defaultModelId: null, google: { location: 'europe-west4' } });
+    expect(persisted().renderDefaults).toEqual({ 'universe-bible': { videoModel: null, futureField: true } });
+    expect(persisted().seriesAutopilot.schedules).toEqual([{ seriesId: 'example', cron: '0 0 * * *', enabled: false }]);
+  });
+
   it('retains sibling runtimes and keys when separate clients patch concurrently', async () => {
     const emitted = vi.fn();
     actual.settingsEvents.on('settings:updated', emitted);
@@ -1884,8 +1924,10 @@ describe('autofixer settings operator authority', () => {
     const response = await request(app).put('/api/settings').send({ autofixer: { verifyCommand: 'echo example-verification', autoPromote: true } });
     expect(response.status).toBe(200);
     expect(store.autofixer).toEqual({ ...original, verifyCommand: 'echo example-verification', autoPromote: true });
-    expect((await request(app).put('/api/settings').send({ autofixer: { verifyCommand: '', autoPromote: false } })).status).toBe(200);
-    expect(store.autofixer).toEqual({ ...original, verifyCommand: '' });
+    const cleared = await request(app).put('/api/settings').send({ autofixer: { verifyCommand: '', autoPromote: false } });
+    expect(cleared.status).toBe(200);
+    expect(store.autofixer).toStrictEqual({ ...original, verifyCommand: undefined });
+    expect(cleared.body.autofixer).not.toHaveProperty('verifyCommand');
   });
 
   it('gates the assignment facade that can replace the same repair policy', async () => {

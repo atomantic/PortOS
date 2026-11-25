@@ -22,7 +22,8 @@ import { isGitHubRepoUrl } from '../lib/repoUrl.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { isAllowedPython } from '../lib/pythonSetup.js';
 import { CLOUD_IMAGE_GEN_MODES, CLOUD_VIDEO_GEN_MODES, HOSTED_MEDIA_BACKENDS, IMAGE_GEN_MODE } from '../lib/generationModes.js';
-import { isPlainObject } from '../lib/objects.js';
+import { deepMerge, isPlainObject } from '../lib/objects.js';
+import { partialWithoutDefaults } from '../lib/zodCompat.js';
 import { resolveBackupConfig } from '../lib/backupConfig.js';
 import { storableAutoUpdateConfig } from '../lib/sharedSchemas.js';
 import { DEFAULT_UNTRUSTED_CONTENT_POLICY, untrustedContentSettingsSchema } from '../lib/untrustedContent.js';
@@ -466,8 +467,8 @@ router.delete('/orchestration-profiles/:id', asyncHandler(async (req, res) => {
 // Declarative slice → schema table. Each slice is validated only when present
 // (`!== undefined`), so null/false/'' payloads are checked like any other value.
 // Dotted paths reach nested slices (the imageGen parent stays polymorphic; only
-// its per-backend sub-slices have schemas). Slices needing custom logic
-// (sharing pair, federation routing, imageGen.local.pythonPath) stay explicit below.
+// its per-backend sub-slices have schemas). Federation routing and the local
+// Python path also need checks beyond their schemas.
 const SETTINGS_SLICE_VALIDATORS = [
   ['orchestrationProfiles', orchestrationProfilesSettingsSchema],
   ['filmLookPresets', filmLookSavedPresetsSchema],
@@ -475,7 +476,7 @@ const SETTINGS_SLICE_VALIDATORS = [
   ['skills', skillsSettingsSchema],
   ['harnesses', harnessSettingsSchema],
   ['credentialBootstraps', credentialBootstrapsSettingsSchema],
-  ['backup', backupConfigSchema.partial()],
+  ['backup', partialWithoutDefaults(backupConfigSchema)],
   ['autoUpdate', autoUpdateSettingsSchema],
   ['autofixer', autofixerSettingsSchema.partial()],
   ['calendarSync', featureProviderConfigSchema.partial()],
@@ -515,42 +516,43 @@ const SETTINGS_SLICE_VALIDATORS = [
   ['subscriptionCosts', subscriptionCostsMapSchema],
   ['subscriptionPlanTiers', subscriptionPlanTiersMapSchema],
   ['usageApiBilledInstanceIds', usageApiBilledInstanceIdsSchema],
+  ['sharingDisplayName', sharingSettingsPatchSchema.shape.sharingDisplayName],
+  ['sharingBio', sharingSettingsPatchSchema.shape.sharingBio],
+  ['federation', federationSettingsSchema],
 ];
 
-const readSlicePath = (body, path) => path.split('.').reduce((node, key) => (node == null ? undefined : node[key]), body);
-
-// Shared validation keeps PATCH and legacy PUT on the same configuration contracts.
-const validateSettingsPatch = async (body) => {
+// Overlay parsed fields on the submitted slice to preserve forward-compatible
+// fields, including nested fields stripped by Zod's default object policy.
+const parseSettingsPatch = async (body) => {
+  const patch = { ...body };
   for (const [path, schema] of SETTINGS_SLICE_VALIDATORS) {
-    const slice = readSlicePath(body, path);
-    if (slice !== undefined) validateRequest(schema, slice);
+    const [root, child] = path.split('.');
+    const slice = child ? patch[root]?.[child] : patch[root];
+    if (slice === undefined) continue;
+    const parsed = validateRequest(schema, slice);
+    const normalized = isPlainObject(parsed) ? deepMerge(slice, parsed) : parsed;
+    patch[root] = child ? { ...patch[root], [child]: normalized } : normalized;
   }
-  if (body?.sharingDisplayName !== undefined || body?.sharingBio !== undefined) {
-    validateRequest(sharingSettingsPatchSchema.partial(), {
-      sharingDisplayName: body.sharingDisplayName,
-      sharingBio: body.sharingBio,
-    });
-  }
-  if (body?.federation !== undefined) {
-    validateRequest(federationSettingsSchema, body.federation);
+  if (patch.federation !== undefined) {
     // The schema only proves a route is well-SHAPED. A route naming a peer that
     // is unknown, switched off, not a media provider, not allowlisted for that
     // model, or outside the tailnet is well-shaped and permanently unusable —
     // and unattended work has no human at the moment it fails, so it would just
     // break every future Creative Director / Commission render in silence.
     // Refuse it here, where there IS a human. See routingPolicy.js.
-    await assertMediaRoutingConfig(body.federation.mediaRouting);
+    await assertMediaRoutingConfig(patch.federation.mediaRouting);
   }
   // Every local media lane spawns this interpreter (and image gen spawns the
   // `mflux-generate` beside it), so hold it to the guard the setup routes use:
   // a python basename, never an arbitrary binary (#8751). A cleared value
   // (`''`/`null`) falls back to interpreter discovery, so it stays allowed.
-  const localPython = body?.imageGen?.local?.pythonPath;
+  const localPython = patch.imageGen?.local?.pythonPath;
   if (localPython != null && localPython !== '' && !isAllowedPython(localPython)) {
     throw new ServerError('imageGen.local.pythonPath must be a python interpreter (basename python/python3/python3.NN)', {
       status: 400, code: 'INVALID_PYTHON_PATH',
     });
   }
+  return patch;
 };
 
 const saveSettingsPatch = async (body, slicePatch) => {
@@ -609,7 +611,9 @@ const saveSettingsPatch = async (body, slicePatch) => {
       // as values replace that key, including explicit clearing.
       const updated = { ...(isPlainObject(existing) ? existing : {}), ...partial };
       settingsPatch = { [root]: child ? { ...parent, [child]: updated } : updated };
-      await validateSettingsPatch(settingsPatch);
+      // The request partial is already normalized. Recheck the merged slice
+      // against the shared contracts without rewriting stored, omitted fields.
+      await parseSettingsPatch(settingsPatch);
     }
     previousBeeperEnabled = current?.beeper?.enabled === true;
     previousBeeperIntervalMinutes = current?.beeper?.intervalMinutes;
@@ -703,8 +707,7 @@ const saveSettingsPatch = async (body, slicePatch) => {
 
 // PUT remains a top-level replacement contract for whole-form and older callers.
 router.put('/', asyncHandler(async (req, res) => {
-  const patch = validateRequest(settingsPutSchema, req.body);
-  await validateSettingsPatch(patch);
+  const patch = await parseSettingsPatch(validateRequest(settingsPutSchema, req.body));
   res.json(await saveSettingsPatch(patch));
 }));
 
