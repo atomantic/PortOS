@@ -333,7 +333,7 @@ const INPUT_LOADERS = {
     if (runs === null) return unavailableMessage('Recent audit slices', 'measurement store unavailable');
     if (!runs.length) return 'No slice recorded for this lane on this app yet; choose the slice by evidence and name it in AUDIT_SLICE.';
     const lines = runs.map(({ assessedAt, slice, sliceScore }) => `- ${assessedAt.slice(0, 10)}${Number.isFinite(sliceScore) ? ` (score: ${sliceScore})` : ''}: ${redactPii(scrubSecretTokens(slice)).slice(0, 300)}`);
-    return truncateWithNotice(`Recently audited by this lane (rotate to uncovered areas, OR re-verify a slice that scored below ${QUALITY_HEALTHY_THRESHOLD} once its filed issues are closed):\n${lines.join('\n')}`, MAX_INPUT_CHARS);
+    return truncateWithNotice(`Recently audited by this lane (prefer to re-verify a slice that scored below ${QUALITY_HEALTHY_THRESHOLD} once its filed issues are closed and its fixes are present. Rotate to uncovered areas when no such slice needs re-verification):\n${lines.join('\n')}`, MAX_INPUT_CHARS);
   },
   'lane-health': async ({ app, deps, forge, taskType }) => {
     if (!isAuditTaskType(taskType)) return 'This input applies to audit lanes only; no lane health applies to this task.';

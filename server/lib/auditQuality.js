@@ -129,17 +129,17 @@ ${rules.join('\n')}
 export function auditQualityInstructions(taskType, app, { priorityScope = null } = {}) {
   const category = normalizeAuditTaskType(taskType);
   if (!isAuditTaskType(category)) return '';
-  return `## Repository-wide discovery, worst offender first, and quality assessment
+  return `## Repository-wide discovery, remediation verification, and quality assessment
 
 This contract overrides narrower slice-selection or ranking advice in the mission, including customized prompts. Preserve the selected file-issues/fix mode and documented non-issues. Read the lane-health block: do not re-file a finding it lists as reverted or not-planned without new evidence.
 1. Inventory all first-party source roots with git ls-files or rg --files, excluding vendored/generated/build/dependency output. Do a cheap repository-wide signal scan BEFORE choosing where to investigate. Do not deep-read the entire repository.
 2. Category search: ${AUDIT_DISCOVERY[category]}
-3. Rank at least the top five candidates (or all if fewer), with paths, measured signals, impact, reach, confidence and why higher candidates win. Validate the top candidates through callers, tests and relevant history before filing or fixing. Severity and user impact outrank ease, small scope and recency. Churn and fan-in break ties; inactivity alone never dismisses a severe offender. If the raw worst is exempt, already filed or not actionable, report why and continue down the ranking. Existing unresolved issues still count against quality. Never pick a nit while a verified major problem remains actionable. You may also choose to re-verify a remediated slice listed in audit-slice-history that scored below ${QUALITY_HEALTHY_THRESHOLD} once its filed issues are closed; re-auditing the same slice with the same AUDIT_SLICE supersedes its older pre-fix score in the rolling window.
+3. Rank at least the top five candidates (or all if fewer), with paths, measured signals, impact, reach, confidence and why higher candidates win. Validate the top candidates through callers, tests and relevant history before filing or fixing. Severity and user impact outrank ease, small scope and recency. Churn and fan-in break ties; inactivity alone never dismisses a severe offender. If the raw worst is exempt, already filed or not actionable, report why and continue down the ranking. Existing unresolved issues still count against quality. Never pick a nit while a verified major problem remains actionable. Before rotating to a new offender, prefer to re-verify a slice in audit-slice-history that scored below ${QUALITY_HEALTHY_THRESHOLD} once its filed issues are closed and the fixes are present in the checkout. Skip slices already re-verified since those fixes. For a re-verification, retain the same primary path or cover the original paths in AUDIT_SLICE. Otherwise, choose the highest-ranked actionable candidate.
    Proportionality check, before filing or fixing any candidate: the proposed fix must be the smallest change that removes the demonstrated harm, and should avoid unnecessary validation layers, archives, ledgers, retries, recovery workflows, extra CI stages or slower processes. A demonstrated security boundary may require a new or strengthened control; do not reject one solely because it adds validation. Speed of execution (CI time, agent turnaround, local build/test gate time) counts as a cost: a fix that slows CI or process needs a measured harm that outweighs it. Defer to the project's existing sources of truth (for example its code host or CI system, whether GitHub, GitLab or a self-hosted/enterprise instance, for branch, merge and review state; the platform toolchain for build and signing state) instead of building a parallel verification of them. If proposed process machinery lacks demonstrated harm or a reachable failure to justify it, do not file that robust-process fix; file at most one documentation or decision-gap item stating the question and the simple options, and score the slice without penalizing the gap. When the audited code is itself machinery of that kind, prefer a finding that removes or simplifies it.
    Reachability check, before ranking: apply the section below to every candidate.
 ${category === 'security' ? `   Security assessment: require evidence of attacker control, a reachable sink and unauthorized impact, including configuration and existing controls. Distinguish accidental owner-input reliability harm, conditional exposure, unconfirmed candidates and justified dispositions. Do not count rejected or unconfirmed candidates as verified security defects. Preserve defenses against compromised dependencies, external content and browser-origin access to local services; trace and reuse existing screening only where the actual path invokes it. For PortOS, follow docs/SECURITY_RISK_ASSESSMENT.md, search prior dispositions and record conditions for reevaluation.` : ''}
 4. Keep investigation bounded after this scan. Report scanned roots, tools/commands, candidate ranking, exclusions, reviewed paths, unreviewed inventory and stopping reason. If tools or budget prevent broad discovery, report partial coverage, never claim a global worst or a clean repository.
-5. Assess the PRE-FIX state of the SLICE you deep-reviewed on 0–100 (higher is healthier). Score the whole reviewed slice proportionally using the severity, prevalence and reach of verified defects. Record the worst defect separately in step 6. Use these anchors:
+5. Assess the PRE-FIX state of the SLICE you deep-reviewed on 0–100 (higher is healthier). Score the whole reviewed slice proportionally using the severity, prevalence and reach of verified defects across all deep-reviewed paths. A finding that led you to choose the slice is only one part of that evidence. Record the worst defect separately in step 6. Use these anchors:
    - 96–100: Exceptional quality demonstrated by inspection.
    - 88–95: Clean, healthy slice without speculative hardening.
    - 85–87: Healthy with minor polish remaining.
@@ -148,9 +148,9 @@ ${category === 'security' ? `   Security assessment: require evidence of attacke
    - 40–69: Recurring or systemic defects across multiple files or in core paths.
    - 0–39: Severe core workflow breakage, data loss, or verified reachable exploits.
    Reserve 40–69 for the recurring or systemic pattern above and scores below 40 for the severe outcomes above. One or two localized defects in secondary paths score 75–84 unless the evidence establishes a severe outcome. The pragmatic target band is 85–95. Avoid speculative hardening, defensive layers or extra abstractions to chase 100, and deduct points only for demonstrated harm.
-   Name the slice by the top-level paths or area you actually read. The dashboard derives the category trend from recent slice scores. Never extrapolate a repository-wide score from a signal scan. Explain the sliceScore with concrete evidence from the reviewed paths. Filing or fixing an issue earns no points for this pre-fix assessment. Use sliceScore:null for unavailable or inapplicable assessment. Zero is a real score.
+   Name the slice by the top-level paths or area you actually read, with the primary path first. The dashboard derives the category trend from recent slice scores. Never extrapolate a repository-wide score from a signal scan. Explain the sliceScore with concrete evidence from the reviewed paths. Filing or fixing an issue earns no points for this pre-fix assessment. Use sliceScore:null for unavailable or inapplicable assessment. Zero is a real score.
 6. Score the worst finding's severity separately on 1–10: 1–3 minor localized impact, 4–6 material recurring cost, 7–8 major workflow/reliability impact, 9–10 critical data/security/availability failure. Use 0 only when no material finding was verified. List this severity for every finding in the narrative.
-7. Include exactly one single-line QUALITY_AUDIT_JSON: {...} in your completion sentinel summary AND final response, with no secrets or personal data. Replace the example values with observed evidence. The category is fixed to this task; do not rate other categories. Beside it, include exactly one line AUDIT_SLICE: <comma-separated top-level paths or areas deep-reviewed> naming the same slice; PortOS records it so later runs of this lane rotate to other areas. Keep ordinary completion/PR instructions and summaries too. The report's inner JSON "summary" field must contain plain assessment prose only, with no QUALITY_AUDIT_JSON: or AUDIT_SLICE: lines.
+7. Include exactly one single-line QUALITY_AUDIT_JSON: {...} in your completion sentinel summary AND final response, with no secrets or personal data. Replace the example values with observed evidence. The category is fixed to this task; do not rate other categories. Beside it, include exactly one line AUDIT_SLICE: <comma-separated top-level paths or areas deep-reviewed> naming the same slice; PortOS records it so later runs of this lane can re-verify remediated slices or rotate to uncovered areas. Keep ordinary completion/PR instructions and summaries too. The report's inner JSON "summary" field must contain plain assessment prose only, with no QUALITY_AUDIT_JSON: or AUDIT_SLICE: lines.
 QUALITY_AUDIT_JSON: {"version":2,"category":"${category}","slice":"top-level paths or area deep-reviewed","sliceScore":null,"worstSeverity":0,"coverage":"unavailable","confidence":"low","summary":"Explain the slice assessment and strongest evidence","scannedFiles":0,"totalFiles":0}
 Allowed coverage: broad, partial, unavailable, not-applicable. Allowed confidence: low, medium, high. coverage describes the signal scan in step 1, not the deep review: scannedFiles counts files actually included in the category signal scan; totalFiles is the eligible inventory. Broad requires scanning at least ${broadCoverageMinPercent}% of a nonempty inventory (deep review remains bounded). Partial assessments are excluded from the overall score. For partial coverage, use sliceScore:null when the inspected evidence cannot support a slice score; explain why rather than inventing one. A numeric partial score is provisional. If unavailable or not-applicable, sliceScore must be null and explain why. Even a zero-finding audit returns this assessment.
 
@@ -297,7 +297,7 @@ export function isFreshAssessment(assessedAt, now = Date.now()) {
 }
 
 /** How many recent run scores a category's dashboard figure averages (#12076). */
-export const QUALITY_WINDOW_RUNS = 5;
+export const QUALITY_WINDOW_RUNS = 3;
 // A low-confidence run never contributes; the window weights the rest so a
 // hedged assessment moves the figure half as far as a confident one.
 const CONFIDENCE_WEIGHT = Object.freeze({ high: 1, medium: 0.5 });
@@ -309,14 +309,22 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 function normalizeSliceText(value) {
   if (typeof value !== 'string') return null;
-  const segments = [...new Set(value.split(',').map(segment => segment.trim().toLowerCase()).filter(Boolean))].sort();
-  return segments.length ? segments.join(',') : null;
+  const segments = value.split(',')
+    .map(segment => segment.trim().toLowerCase().replaceAll('\\', '/').replace(/^\.\/+|\/+$/g, ''))
+    .filter(Boolean);
+  return segments.length ? [...new Set(segments)] : null;
 }
 
-/** Canonical slice key for same-slice superseding; null for slice-less v1/peer/snapshot rows. */
-function normalizeSliceKey(run) {
+/** Canonical slice segments in reported order, with the primary path first. */
+function normalizeSliceSegments(run) {
   const raw = run?.record?.slice ?? (run?.report?.version === 2 ? run.report.slice : null);
   return normalizeSliceText(raw) ?? (run?.report?.version === 2 ? normalizeSliceText(run.report.slice) : null);
+}
+
+function coversSlice(newer, older) {
+  return newer[0] === older[0] || older.every(path =>
+    newer.some(candidate => path === candidate || path.startsWith(`${candidate}/`))
+  );
 }
 
 function utcDay(assessedAt) {
@@ -337,8 +345,8 @@ function qualifiesForWindow(run, now) {
  * Select up to `QUALITY_WINDOW_RUNS` qualifying runs (already sorted newest-first) for a category:
  * - For a consolidated domain with >= 1 fresh qualifying domain-native run, drop pre-consolidation
  *   legacy member runs whose `assessedAt` is strictly earlier than the earliest domain-native run.
- * - Skip any older run whose non-empty normalized slice key already appeared in a newer qualifying
- *   run, so re-auditing a remediated slice supersedes its older pre-fix run.
+ * - Skip older slices when a newer qualifying run shares their canonical primary path or covers
+ *   every segment. Directory prefixes match only on path boundaries.
  * - Give distinct slices precedence over slice-less runs from the same category and UTC day.
  * - Keep one slice-less winner per eligible day. Peer and snapshot rows must also be at
  *   least as recent as the newest qualifying local slice in the window's eligible set.
@@ -355,7 +363,7 @@ function selectCategoryWindow(id, runs, now) {
       );
     }
   }
-  const seenSlices = new Set();
+  const seenSlices = [];
   const seenDays = new Set();
   const candidates = [];
   let newestLocalSliceMs = -Infinity;
@@ -363,20 +371,21 @@ function selectCategoryWindow(id, runs, now) {
   // since a newer timestamp on the same day does not give them precedence.
   for (const run of eligible) {
     const { assessedAt, category, sourcePeerId, sourcePeerName } = run.record;
-    const sliceKey = normalizeSliceKey(run);
+    const slice = normalizeSliceSegments(run);
     const dayKey = `${normalizeAuditTaskType(category)}|${utcDay(assessedAt)}`;
     const imported = Boolean(sourcePeerId || sourcePeerName);
-    if (sliceKey !== null) {
-      if (seenSlices.has(sliceKey)) continue;
-      seenSlices.add(sliceKey);
+    if (slice !== null) {
+      const superseded = seenSlices.some(newer => coversSlice(newer, slice));
+      seenSlices.push(slice);
+      if (superseded) continue;
       seenDays.add(dayKey);
       if (!imported) newestLocalSliceMs = Math.max(newestLocalSliceMs, Date.parse(assessedAt));
     }
-    candidates.push({ run, sliceKey, dayKey, imported });
+    candidates.push({ run, slice, dayKey, imported });
   }
   const window = [];
-  for (const { run, sliceKey, dayKey, imported } of candidates) {
-    if (sliceKey === null) {
+  for (const { run, slice, dayKey, imported } of candidates) {
+    if (slice === null) {
       if (seenDays.has(dayKey) || (imported && Date.parse(run.record.assessedAt) < newestLocalSliceMs)) continue;
       seenDays.add(dayKey);
     }
@@ -400,10 +409,9 @@ function windowScore(window, now = Date.now()) {
 /**
  * Roll each category's recent measurements into the app's quality summary.
  *
- * A category's `score` is the confidence- and recency-weighted mean (14-day half-life) of its newest
+ * A category's `score` is the confidence- and recency-weighted mean of its newest
  * `QUALITY_WINDOW_RUNS` qualifying runs (fresh, broad coverage, medium/high
- * confidence, scored), deduplicated by normalized slice key so re-auditing a
- * remediated slice supersedes its older pre-fix run, and isolating consolidated
+ * confidence, scored), superseding re-audited slices and isolating consolidated
  * domains from pre-consolidation legacy member runs older than the earliest
  * fresh qualifying domain-native run; `window` reports how many runs fed it and the worst
  * severity any of them found. One run's slice score is slice noise — a 20-point
@@ -576,7 +584,7 @@ function releaseCoveredByDayRecords(release, dayRecords) {
  * release snapshot (`.quality.json`) so published evidence is never counted
  * twice, and return remaining runs in ascending order. Distinct local runs
  * from the same UTC day stay intact so `selectCategoryWindow` can apply
- * `qualifiesForWindow` and `normalizeSliceKey` superseding across all of them.
+ * qualification and slice superseding across all of them.
  */
 export function dailyQualityRecords(records) {
   const nonReleaseByDay = new Map();

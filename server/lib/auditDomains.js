@@ -4,7 +4,7 @@
 export const QUALITY_HEALTHY_THRESHOLD = 85;
 
 /** A run's weight halves every this many days, so remediated pre-fix runs stop pinning the score. Feature-area usage decays on the same clock. */
-export const QUALITY_RECENCY_HALF_LIFE_DAYS = 14;
+export const QUALITY_RECENCY_HALF_LIFE_DAYS = 7;
 
 // A folded task is still its own executable schedule and measurement series.
 // Mapping it into a domain for selection or scoring must never merge its cron,
