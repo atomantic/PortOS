@@ -899,7 +899,7 @@ export async function listManagedBackendModels(backend, forceRefresh = false) {
   if (backend === 'lmstudio' && !error) {
     const status = await lmStudioManager.getStatus().catch(() => null)
     if (!status?.available) {
-      error = 'LM Studio is unavailable'
+      error = status?.lastError || 'LM Studio is unavailable'
     }
   }
   return { models, error: error || null }

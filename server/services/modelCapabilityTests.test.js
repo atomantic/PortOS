@@ -556,6 +556,15 @@ describe('a runtime that is not running', () => {
     })]);
   });
 
+  it('keeps cached models but does not warn about a stopped runtime', async () => {
+    listRuntimeModels.mockImplementation(async (id) => (id === 'llama'
+      ? { models: [{ id: 'cached' }], error: 'ECONNREFUSED', offline: true, inactive: true }
+      : { models: [], error: null }));
+    const report = await getCapabilityTestReport();
+    expect(report.listErrors).toEqual([]);
+    expect(report.models).toContainEqual(expect.objectContaining({ modelId: 'cached', offline: true }));
+  });
+
   it('says nothing was recovered when PortOS holds no catalog for it', async () => {
     // vLLM and SGLang are containers the user runs — an honest zero, not a gap.
     listRuntimeModels.mockImplementation(async (id) => (id === 'vllm'

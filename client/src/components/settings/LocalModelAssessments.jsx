@@ -704,10 +704,11 @@ function TuningComparison({ rows, runtimeLabelFor }) {
  * installed" when the fix is to start it.
  */
 function RuntimeRoster({ runtimes }) {
-  if (!runtimes?.length) return null;
+  const visibleRuntimes = runtimes?.filter((runtime) => !runtime.inactive);
+  if (!visibleRuntimes?.length) return null;
   return (
     <div className="flex flex-wrap gap-1.5">
-      {runtimes.map((runtime) => (
+      {visibleRuntimes.map((runtime) => (
         <span
           key={runtime.id}
           title={runtime.error || undefined}
@@ -1267,6 +1268,7 @@ export function LocalModelAssessments({ view, taskView, assessmentKey } = {}) {
               <AlertTriangle size={12} />
               Could not list installed models for {report.listErrors.map((b) => backendLabel(report, b)).join(', ')} —
               models there may be missing from this list.
+              <Link to="/models/llms-runtimes" className="text-port-accent hover:underline">View runtimes</Link>
             </p>
           )}
 

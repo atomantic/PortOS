@@ -675,7 +675,7 @@ export async function getAssessmentReport({ intent = 'balanced' } = {}) {
   // One listing per assessable runtime. `models: null` is a FAILED read, never
   // an empty catalog — see `listRuntimeModels`.
   const listed = Object.fromEntries(await Promise.all(
-    ASSESSABLE_RUNTIMES.map(async (runtime) => [runtime, await listRuntimeModels(runtime)])
+    ASSESSABLE_RUNTIMES.map(async (runtime) => [runtime, await listRuntimeModels(runtime, { durable: false, respectDisabled: true })])
   ));
 
   const runtimes = ASSESSABLE_RUNTIMES.map((id) => ({
@@ -686,6 +686,7 @@ export async function getAssessmentReport({ intent = 'balanced' } = {}) {
     // and this runtime genuinely serves nothing.
     modelCount: Array.isArray(listed[id].models) ? listed[id].models.length : null,
     error: listed[id].error,
+    inactive: listed[id].inactive === true,
     tuningSpecs: tuningSpecsFor(id),
     // The tuning grid a sweep of this runtime would run — literally the same
     // call `localModelAssessmentSweep.js` makes when one starts, so the count
@@ -699,7 +700,7 @@ export async function getAssessmentReport({ intent = 'balanced' } = {}) {
     tuningGrid: isTuningSweepable(id) ? tuningGridFor(id) : [],
   }));
 
-  const listErrors = ASSESSABLE_RUNTIMES.filter((id) => listed[id].error);
+  const listErrors = ASSESSABLE_RUNTIMES.filter((id) => listed[id].error && !listed[id].inactive);
   const installedKeys = new Set(
     ASSESSABLE_RUNTIMES.flatMap((runtime) => (listed[runtime].models || []).map((m) => assessmentKey(runtime, m?.id)))
   );
@@ -800,8 +801,7 @@ export async function getAssessmentReport({ intent = 'balanced' } = {}) {
     // "Measure all" consent gate can name a real number rather than an estimate.
     // Derived from the same selector the sweep uses, so the two cannot disagree.
     sweepScopes: summarizeSweepScopes({ assessments: stillInstalled, unassessed }),
-    // Runtimes whose model list could not be trusted — distinct from "listed,
-    // and legitimately empty".
+    // Unexpected listing failures. An inactive runtime is not a warning.
     listErrors,
     // Measurements for models that are no longer installed. Kept on disk (a
     // re-install should not cost another run) but excluded from the ranking.
