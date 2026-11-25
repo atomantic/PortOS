@@ -41,22 +41,6 @@ describe('attachments routes (#2518)', () => {
     expect(res.body.path).toBe(`/api/attachments/${encodeURIComponent(res.body.filename)}`);
   });
 
-  it('GET list returns API-relative URLs, never absolute FS paths', async () => {
-    const app = buildApp();
-    await request(app)
-      .post('/api/attachments')
-      .send({ data: Buffer.from('another doc').toString('base64'), filename: 'more.txt' });
-
-    const res = await request(app).get('/api/attachments');
-    expect(res.status).toBe(200);
-    expect(Array.isArray(res.body.attachments)).toBe(true);
-    expect(res.body.attachments.length).toBeGreaterThan(0);
-    for (const att of res.body.attachments) {
-      expect(att.path).toMatch(/^\/api\/attachments\//);
-      expect(att.path).not.toContain(PATHS.cosAttachments);
-    }
-  });
-
   it('rejects a disallowed extension', async () => {
     const res = await request(buildApp())
       .post('/api/attachments')

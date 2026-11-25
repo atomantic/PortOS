@@ -5,14 +5,13 @@
 
 import { Router } from 'express';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
-import { readdir, stat } from 'fs/promises';
-import { join, resolve } from 'path';
+import { resolve } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   pathExists, PATHS, isPathInsideDir, unlinkGuarded,
 } from '../lib/fileUtils.js';
 import {
-  sanitizeFilename, getFileExtension, getMimeType, ATTACHMENT_ALLOWED_EXTENSIONS,
+  sanitizeFilename, ATTACHMENT_ALLOWED_EXTENSIONS,
 } from '../lib/mimeTypes.js';
 import {
   saveBase64Upload, serveLocalFile,
@@ -78,29 +77,5 @@ router.delete('/:filename', asyncHandler(async (req, res) => withBackupAssetPubl
 
   res.json({ success: true, filename: safeFilename });
 })));
-
-// GET /api/attachments - List all attachments (for debugging)
-router.get('/', asyncHandler(async (req, res) => {
-  if (!(await pathExists(ATTACHMENTS_DIR))) {
-    return res.json({ attachments: [] });
-  }
-
-  const files = await readdir(ATTACHMENTS_DIR);
-  const attachments = await Promise.all(files.map(async filename => {
-    const filepath = join(ATTACHMENTS_DIR, filename);
-    const stats = await stat(filepath);
-    const ext = getFileExtension(filename);
-    return {
-      filename,
-      // API-relative URL only — never the absolute FS path (leaks install layout).
-      path: `/api/attachments/${encodeURIComponent(filename)}`,
-      size: stats.size,
-      mimeType: getMimeType(ext),
-      createdAt: stats.birthtime
-    };
-  }));
-
-  res.json({ attachments });
-}));
 
 export default router;

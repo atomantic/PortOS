@@ -5,10 +5,10 @@
  * `request(`, `fetch`, `EventSource` and URL-builder literals, so "the scanner cannot see the client call" is
  * never a class; only a segment built at run time is (`client-dynamic`).
  *
- * `apiRouteParity.test.js` fails when a mounted route is neither reached by a client path nor listed
- * here, and when a listed route is no longer mounted or gains a client caller, so the list can only shrink
- * toward the truth. Entries are keyed by route path (the scan matches by path, not method) and grouped by
- * caller class. Add a route here only with the strongest caller class you can name; delete a route nothing calls.
+ * `apiRouteParity.test.js` checks every mounted method and rejects entries that become
+ * unmounted or gain a client caller. Use a bare path when all its methods have the
+ * same non-client caller class. Use `METHOD /path` for an individual method.
+ * Cite the caller when adding an entry; delete a route nothing calls.
  */
 
 export const ROUTE_CALLER_CLASSES = Object.freeze({
@@ -248,10 +248,16 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/api-docs/tools.min.json',
     '/api/catalog/ingredients/:id/photoreal/blend',
     '/api/git/status',
+    // docs/features/tailcat-peers.md documents the operator read without the full capability.
+    'GET /api/instances/peers/tailcat/devices',
     '/api/html-composition/render',
     '/api/lora-training/runs/:id/samples/:filename',
+    // docs/features/post.md documents item editing over the API.
+    'PUT /api/meatspace/post/memory-items/:id',
     '/api/music-video/:id/composition/document/file',
     '/api/music/supercollider/renders/:jobId/audio',
+    // docs/features/openclaw-operator-chat.md documents the non-streaming API.
+    'POST /api/openclaw/sessions/:id/messages',
     '/api/usage/messages',
     '/api/voice/speak',
   ]),

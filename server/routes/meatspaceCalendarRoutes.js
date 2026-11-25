@@ -87,15 +87,6 @@ router.delete('/activities/:index', asyncHandler(async (req, res) => {
 // ============================================================
 
 /**
- * GET /api/meatspace/life-events
- * List all life events (or defaults if none configured).
- */
-router.get('/life-events', asyncHandler(async (_req, res) => {
-  const events = await calendarService.getLifeEvents();
-  res.json(events);
-}));
-
-/**
  * POST /api/meatspace/life-events
  * Add a new life event.
  */
