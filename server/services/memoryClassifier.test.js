@@ -205,22 +205,28 @@ describe('memoryClassifier', () => {
       });
     });
 
-    it('injects content from active memory and summary from pending memory', async () => {
+    it('only injects shared content and summaries from active and pending memory', async () => {
       getMemories
         .mockResolvedValueOnce({
-          memories: [{ type: 'fact', content: 'The group meets monthly.', summary: 'Unused summary.' }]
+          memories: [
+            { type: 'fact', content: 'Private recall.', sourceAgentId: 'cos-persistent-mind' },
+            { type: 'fact', content: 'The group meets monthly.', summary: 'Unused summary.' }
+          ]
         })
         .mockResolvedValueOnce({
-          memories: [{ type: 'preference', summary: 'The group prefers evening meetings.' }]
+          memories: [
+            { type: 'fact', summary: 'Private continuation.', tags: ['mind:continuation-note'] },
+            { type: 'preference', summary: 'The group prefers evening meetings.' }
+          ]
         });
       mockClassification(JSON.stringify({ memories: [], rejected: [] }));
 
       await classifier.classifyMemories(task, output);
 
       expect(getMemories).toHaveBeenNthCalledWith(1, {
-        status: 'active', sortBy: 'importance', sortOrder: 'desc', limit: 30
+        status: 'active', sortBy: 'importance', sortOrder: 'desc', limit: 30, excludePersistentMind: true
       });
-      expect(getMemories).toHaveBeenNthCalledWith(2, { status: 'pending_approval', limit: 30 });
+      expect(getMemories).toHaveBeenNthCalledWith(2, { status: 'pending_approval', limit: 30, excludePersistentMind: true });
       const [, request] = fetchWithTimeout.mock.lastCall;
       expect(JSON.parse(request.body).messages.at(-1).content).toBe(
         `Existing memories:\n- [fact] The group meets monthly.\n- [preference] The group prefers evening meetings.\nNotes: ${output}`

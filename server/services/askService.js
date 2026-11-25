@@ -23,6 +23,7 @@ import { resolveSplashHarnessContext } from '../lib/splashHarnessLaunch.js';
 import { getActiveProvider, getProviderById } from './provider/providers.js';
 import { hybridSearchMemories, peekMemories, recordMemoryAccess } from './memoryBackend.js';
 import { generateQueryEmbedding } from './memoryEmbeddings.js';
+import { isPersistentMindPrivateMemory } from '../lib/memoryQuery.js';
 import { embedSearchQuery } from './embeddings.js';
 import { hybridSearchIngredients } from './catalog/catalogDB.js';
 import { getCatalogType } from '../lib/catalog/catalogTypes.js';
@@ -108,6 +109,7 @@ async function retrieveMemories(question, queryEmbeddingPromise = generateQueryE
     limit: PER_SOURCE_LIMIT.memory,
     ftsWeight: 0.4,
     vectorWeight: 0.6,
+    excludePersistentMind: true,
   });
   const hits = result?.memories || [];
   const hitIds = [];
@@ -119,7 +121,9 @@ async function retrieveMemories(question, queryEmbeddingPromise = generateQueryE
   }
   // One peek for the whole hit list. A missing id is skipped; the rest stay.
   const fetched = hitIds.length > 0 ? await peekMemories(hitIds) : [];
-  const byId = new Map(fetched.filter(Boolean).map(memory => [memory.id, memory]));
+  const byId = new Map(fetched
+    .filter(memory => memory && !isPersistentMindPrivateMemory(memory))
+    .map(memory => [memory.id, memory]));
   const sources = [];
   const foundIds = [];
   for (const hit of hits) {

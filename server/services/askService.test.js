@@ -143,23 +143,27 @@ describe('gatherSources', () => {
     expect(memoryBackend.hybridSearchMemories).not.toHaveBeenCalled();
   });
 
-  it('returns memories with stable ids and tagged kind', async () => {
+  it('returns shared memories with stable ids and omits private hits after hydration', async () => {
     memoryBackend.hybridSearchMemories.mockResolvedValue({
-      memories: [{ id: 'mem-1', rrfScore: 0.9 }, { id: 'mem-2', rrfScore: 0.7 }],
+      memories: [{ id: 'private', rrfScore: 1 }, { id: 'mem-1', rrfScore: 0.9 }, { id: 'mem-2', rrfScore: 0.7 }],
     });
     memoryBackend.peekMemories.mockImplementation((ids) => Promise.resolve(ids.map((id) => ({
       id,
       content: `body of ${id}`,
       summary: `summary ${id}`,
       type: 'fact',
+      tags: id === 'private' ? ['mind:core-identity'] : [],
     }))));
 
     const sources = await askService.gatherSources('what did i decide about X');
     expect(sources).toHaveLength(2);
     expect(sources[0].kind).toBe('memory');
     expect(sources[0].id).toBe('memory:mem-1');
+    expect(memoryBackend.hybridSearchMemories).toHaveBeenCalledWith(
+      'what did i decide about X', [0.1, 0.2, 0.3], expect.objectContaining({ excludePersistentMind: true })
+    );
     expect(memoryBackend.peekMemories).toHaveBeenCalledTimes(1);
-    expect(memoryBackend.peekMemories).toHaveBeenCalledWith(['mem-1', 'mem-2']);
+    expect(memoryBackend.peekMemories).toHaveBeenCalledWith(['private', 'mem-1', 'mem-2']);
     expect(memoryBackend.recordMemoryAccess).toHaveBeenCalledTimes(1);
     expect(memoryBackend.recordMemoryAccess).toHaveBeenCalledWith(['mem-1', 'mem-2']);
   });

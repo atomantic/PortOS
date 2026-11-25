@@ -17,7 +17,7 @@
  */
 
 import { ServerError } from '../lib/errorHandler.js';
-import { PERSISTENT_MIND_MEMORY_PROTECTION_TAGS, existingPersistentMindReview, createPersistentMindReview, mergePersistentMindReview, createPersistentMindReviewOrigin } from '../lib/persistent/persistentMindMemory.js';
+import { PERSISTENT_MIND_MEMORY_PROTECTION_TAGS, PERSISTENT_MIND_PRIVATE_TAGS, existingPersistentMindReview, createPersistentMindReview, mergePersistentMindReview, createPersistentMindReviewOrigin } from '../lib/persistent/persistentMindMemory.js';
 import { PERSISTENT_MIND_ID } from '../lib/persistent/persistentMindTrajectory.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { query, withTransaction, pgvectorToArray, arrayToPgvector } from '../lib/db.js';
@@ -387,6 +387,12 @@ export async function getMemoryVersion(id, version) {
   return result.rows[0] ?? null;
 }
 
+function excludePersistentMindWhere(params) {
+  const sourceParam = params.push(PERSISTENT_MIND_ID);
+  const tagsParam = params.push(PERSISTENT_MIND_PRIVATE_TAGS);
+  return `source_agent_id IS DISTINCT FROM $${sourceParam} AND NOT COALESCE(tags && $${tagsParam}, false)`;
+}
+
 /**
  * Build shared filters for memory list/count queries.
  */
@@ -439,6 +445,8 @@ function buildMemoryFilterWhere(options = {}) {
       params.push(options.sourceTaskId);
     }
   }
+
+  if (options.excludePersistentMind) conditions.push(excludePersistentMindWhere(params));
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   return { where, params };
@@ -690,6 +698,8 @@ export async function searchMemories(queryEmbedding, options = {}) {
     params.push(options.appId);
   }
 
+  if (options.excludePersistentMind) conditions.push(excludePersistentMindWhere(params));
+
   const where = conditions.join(' AND ');
 
   // Use pgvector cosine distance operator <=>
@@ -748,7 +758,10 @@ export async function hybridSearchMemories(queryText, queryEmbedding, options = 
     filterParams.push(options.sourceAgentId);
   }
 
+  if (options.excludePersistentMind) filterConditions.push(excludePersistentMindWhere(filterParams));
+
   const filterWhere = filterConditions.join(' AND ');
+  const queryParam = filterParams.length + 1;
   const fetchLimit = limit * 2;
   const searches = [];
 
@@ -758,8 +771,8 @@ export async function hybridSearchMemories(queryText, queryEmbedding, options = 
     // websearch syntax ANDs every term, so conversational text rarely matches.
     // 'any' ORs the same lexemes; ts_rank already favors covering more of them.
     const tsQuery = lexicalMatch === 'any'
-      ? `replace(plainto_tsquery('english', $${paramIdx})::text, ' & ', ' | ')::tsquery`
-      : `websearch_to_tsquery('english', $${paramIdx})`;
+      ? `replace(plainto_tsquery('english', $${queryParam})::text, ' & ', ' | ')::tsquery`
+      : `websearch_to_tsquery('english', $${queryParam})`;
     searches.push(query(
       `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id, source_agent_id,
               ts_rank(search_tsv, ${tsQuery}) AS fts_score
@@ -767,21 +780,20 @@ export async function hybridSearchMemories(queryText, queryEmbedding, options = 
        WHERE ${filterWhere}
          AND search_tsv @@ ${tsQuery}
        ORDER BY fts_score DESC
-       LIMIT $${paramIdx + 1}`,
+       LIMIT $${queryParam + 1}`,
       [...filterParams, queryText, fetchLimit]
     ).then(result => ({ kind: 'fts', rows: result.rows })));
   }
 
   if (queryEmbedding) {
-    const vecParamStart = filterParams.length + 1;
     searches.push(query(
       `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id, source_agent_id,
-              1 - (embedding <=> $${vecParamStart}) AS similarity
+              1 - (embedding <=> $${queryParam}) AS similarity
        FROM memories
        WHERE embedding IS NOT NULL AND ${filterWhere}
-         AND 1 - (embedding <=> $${vecParamStart}) >= $${vecParamStart + 1}
-       ORDER BY embedding <=> $${vecParamStart}
-       LIMIT $${vecParamStart + 2}`,
+         AND 1 - (embedding <=> $${queryParam}) >= $${queryParam + 1}
+       ORDER BY embedding <=> $${queryParam}
+       LIMIT $${queryParam + 2}`,
       [...filterParams, arrayToPgvector(queryEmbedding), minRelevance * 0.5, fetchLimit]
     ).then(result => ({ kind: 'vector', rows: result.rows })));
   }

@@ -13,6 +13,7 @@ import { extractJson } from '../lib/jsonExtract.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
 import { getMemories } from './memoryBackend.js';
+import { isPersistentMindPrivateMemory } from '../lib/memoryQuery.js';
 
 const MODEL_LIST_TIMEOUT_MS = 5000;
 const MODEL_LOAD_TIMEOUT_MS = 120000;
@@ -88,13 +89,13 @@ export async function updateConfig(updates) {
  */
 async function loadExistingMemorySummary() {
   const [active, pending] = await Promise.all([
-    getMemories({ status: 'active', sortBy: 'importance', sortOrder: 'desc', limit: 30 })
+    getMemories({ status: 'active', sortBy: 'importance', sortOrder: 'desc', limit: 30, excludePersistentMind: true })
       .catch(() => ({ memories: [] })),
-    getMemories({ status: 'pending_approval', limit: 30 })
+    getMemories({ status: 'pending_approval', limit: 30, excludePersistentMind: true })
       .catch(() => ({ memories: [] }))
   ]);
 
-  const allMemories = [...active.memories, ...pending.memories];
+  const allMemories = [...active.memories, ...pending.memories].filter(m => !isPersistentMindPrivateMemory(m));
   if (allMemories.length === 0) return '';
 
   // getMemories() returns index/metadata rows without \`content\` — fall back
