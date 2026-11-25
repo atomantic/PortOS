@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import { Plus, Film, Wand2 } from 'lucide-react';
@@ -104,12 +104,18 @@ export default function MusicVideo() {
   // An edit reply is a diff against the record before it, and a read can be older than a reply that
   // landed first, so neither is applied over a newer one (#16247).
   const savedRevision = useRef({ id: null, updatedAt: null });
-  const isOlderThanApplied = (projectId, updatedAt) => savedRevision.current.id === projectId
-    && !!updatedAt && !!savedRevision.current.updatedAt && updatedAt < savedRevision.current.updatedAt;
-  const noteApplied = (projectId, updatedAt) => {
+  const isOlderThanApplied = useCallback((projectId, updatedAt) => savedRevision.current.id === projectId
+    && !!updatedAt && !!savedRevision.current.updatedAt && updatedAt < savedRevision.current.updatedAt, []);
+  const noteApplied = useCallback((projectId, updatedAt) => {
     if (!updatedAt || isOlderThanApplied(projectId, updatedAt)) return;
     savedRevision.current = { id: projectId, updatedAt };
-  };
+  }, [isOlderThanApplied]);
+  const appliedProjectId = selectedProject?.id;
+  const appliedUpdatedAt = selectedProject?.updatedAt;
+  // Functional patches derive their revision from the record they actually update.
+  useLayoutEffect(() => {
+    if (appliedProjectId) noteApplied(appliedProjectId, appliedUpdatedAt);
+  }, [appliedProjectId, appliedUpdatedAt, noteApplied]);
   // The music library the pickers read. A failed read is shown as such, with
   // Retry, never as an empty library; an import appends to it locally.
   const trackLibrary = useListResource(loadTracks);
@@ -243,6 +249,7 @@ export default function MusicVideo() {
   // `renderSpend` is attached only when the server presents a read (#16506); a mutation or run
   // event's record without it keeps the one already held until the next read or spend event.
   const replaceProject = (next) => {
+    if (next.id === savedRevision.current.id) noteApplied(next.id, next.updatedAt);
     const withSpend = (prev) => (next.renderSpend || !prev?.renderSpend ? next : { ...next, renderSpend: prev.renderSpend });
     setSelectedProject((prev) => (prev?.id === next.id ? withSpend(prev) : prev));
     summaries.setItems((prev) => prev.map((p) => (p.id === next.id ? withSpend(p) : p)));
@@ -365,11 +372,16 @@ export default function MusicVideo() {
   // The open workspace's take actions: a change made elsewhere is read once this tab's queued take decisions land.
   const takesRef = useRef(null);
   // A freshly read record replaces the open project; shot fields typed and not yet saved keep their text.
-  // Resolves true when a kept field differed from the saved one.
+  // Returns true for a conflict, or null when a queued patch made the read stale.
   const mergeFetchedProject = (fresh) => {
     let conflict = false;
-    setSelectedProject((prev) => {
+    let stale = false;
+    flushSync(() => setSelectedProject((prev) => {
       if (prev?.id !== fresh.id) return prev;
+      if (fresh.updatedAt && prev.updatedAt && fresh.updatedAt < prev.updatedAt) {
+        stale = true;
+        return prev;
+      }
       const local = new Map((prev.scenes || []).map((s) => [s.sceneId, s]));
       const scenes = (fresh.scenes || []).map((scene) => {
         const mine = local.get(scene.sceneId);
@@ -380,7 +392,8 @@ export default function MusicVideo() {
         return kept;
       });
       return { ...fresh, scenes };
-    });
+    }));
+    if (stale) return null;
     noteApplied(fresh.id, fresh.updatedAt);
     summaries.setItems((prev) => prev.map((p) => (p.id === fresh.id ? fresh : p)));
     return conflict;
@@ -393,8 +406,8 @@ export default function MusicVideo() {
     const read = () => getMusicVideoProject(projectId, { silent: true });
     const attempt = (left) => (takesRef.current ? takesRef.current.afterTakeWrites(read) : read()).then((fresh) => {
       if (!fresh || fresh.id !== projectId) return;
-      if (isOlderThanApplied(projectId, fresh.updatedAt)) return left > 0 ? attempt(left - 1) : undefined;
-      const conflict = mergeFetchedProject(fresh);
+      const conflict = isOlderThanApplied(projectId, fresh.updatedAt) ? null : mergeFetchedProject(fresh);
+      if (conflict === null) return left > 0 ? attempt(left - 1) : undefined;
       onMerged?.(conflict);
     });
     return attempt(2).catch(() => {});

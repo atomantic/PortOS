@@ -27,8 +27,11 @@ import {
 import { MUSIC_VIDEO_STAGES } from '../lib/musicVideoStages.js';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router';
-import { listMusicVideoProjects, listMusicVideoProjectSummaries, listMusicVideoProjectVersions, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject, deleteMusicVideoProject, analyzeMusicVideoProject, importMusicVideoTrackLyrics, getMusicVideoProject, resumeMusicVideoRevision, cancelMusicVideoRevision, approveMusicVideoCastAndSets, stopMusicVideoProduction, buildMusicVideoPublishKit, getMusicVideoCatalogCompletion } from '../services/apiMusicVideo.js';
+import { listMusicVideoProjects, listMusicVideoProjectSummaries, listMusicVideoProjectVersions, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject, updateMusicVideoScene, deleteMusicVideoProject, analyzeMusicVideoProject, importMusicVideoTrackLyrics, getMusicVideoProject, resumeMusicVideoRevision, cancelMusicVideoRevision, approveMusicVideoCastAndSets, stopMusicVideoProduction, buildMusicVideoPublishKit, getMusicVideoCatalogCompletion } from '../services/apiMusicVideo.js';
 import { listTracks } from '../services/apiTracks.js';
+
+import toast from '../components/ui/Toast';
+import socket from '../services/socket';
 
 installMusicVideoPageHooks();
 beforeAll(async () => {
@@ -408,6 +411,71 @@ describe('MusicVideo bounded summary index and project isolation (#10169)', () =
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name })).toBeInTheDocument();
+  });
+});
+
+describe('MusicVideo open project synchronization', () => {
+  const initial = { ...PROJECT_WITH_CLIP, updatedAt: '2026-10-04T00:00:00Z' };
+  const newer = { ...initial, name: 'Newer Project', updatedAt: '2026-10-04T00:00:02Z' };
+
+  const startReload = async () => {
+    let resolveReload;
+    getMusicVideoProject.mockImplementationOnce(() => new Promise(resolve => { resolveReload = resolve; }));
+    await pushSocket('music-video:project:changed', { id: initial.id });
+    expect(resolveReload).toBeTypeOf('function');
+    return resolveReload;
+  };
+
+  it.each(['production event', 'rename reply'])('keeps a newer %s when an older reload resolves', async (source) => {
+    await openProject(initial, 'produce');
+    const resolveReload = await startReload();
+    if (source === 'production event') {
+      await pushSocket('music-video:production', { projectId: initial.id, project: newer });
+    } else {
+      updateMusicVideoProject.mockResolvedValueOnce(newer);
+      fireEvent.click(screen.getByRole('button', { name: 'Rename v1' }));
+      fireEvent.change(screen.getByLabelText('Project title'), { target: { value: newer.name } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    }
+    await screen.findByRole('heading', { level: 2, name: newer.name });
+    getMusicVideoProject.mockResolvedValue(newer);
+    const calls = getMusicVideoProject.mock.calls.length;
+
+    await act(async () => resolveReload({ ...initial, updatedAt: '2026-10-04T00:00:01Z' }));
+
+    expect(getMusicVideoProject).toHaveBeenCalledTimes(calls + 1);
+    expect(screen.getByRole('heading', { level: 2, name: newer.name })).toBeInTheDocument();
+  });
+
+  it('warns about a remote shot edit when another project update is queued in the same batch', async () => {
+    const subscriptions = vi.spyOn(socket, 'on');
+    getMusicVideoProject.mockResolvedValue(initial);
+    render(
+      <MemoryRouter initialEntries={[`/music-video/${initial.id}/produce/scene/s1`]}>
+        {MV_ROUTES}
+      </MemoryRouter>,
+    );
+    const prompt = await screen.findByRole('textbox', { name: 'Clip prompt' });
+    updateMusicVideoScene.mockImplementationOnce(() => new Promise(() => {}));
+    fireEvent.change(prompt, { target: { value: 'Local draft' } });
+    fireEvent.blur(prompt);
+    expect(updateMusicVideoScene).toHaveBeenCalledWith(initial.id, 's1', { prompt: 'Local draft' }, expect.anything());
+    const resolveReload = await startReload();
+
+    const [, onSpend] = subscriptions.mock.calls.find(([event]) => event === 'music-video:render-spend');
+    // Let React schedule this socket batch as it does in the browser. The act queue
+    // defers the updater even when application code calls flushSync.
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', false);
+    try {
+      onSpend({ projectId: initial.id, renderSpend: { spentUsd: 1 } });
+      resolveReload({ ...newer, scenes: [{ ...initial.scenes[0], prompt: 'Remote edit' }] });
+      await screen.findByRole('heading', { level: 2, name: newer.name });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(screen.getByRole('textbox', { name: 'Clip prompt' })).toHaveValue('Local draft');
+    expect(toast.info).toHaveBeenCalledWith(expect.stringContaining('A shot changed elsewhere'));
   });
 });
 
