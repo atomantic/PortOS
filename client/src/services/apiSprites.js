@@ -262,8 +262,7 @@ export const setSpritePublishBinding = (id, binding, options = {}) => request(`/
 });
 
 // Publish the compiled atlas into the bound managed app's repo. Pass
-// { acknowledgeOverwrite: true } after a 409 PUBLISH_DEST_OCCUPIED to
-// consent to replacing a destination atlas PortOS never published.
+// the confirmed PUBLISH_OUTPUTS_OCCUPIED revision as acknowledgeOverwrite on retry.
 export const publishSpriteAtlas = (id, body = {}, options = {}) => request(`/sprites/${encodeURIComponent(id)}/atlas/publish`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });

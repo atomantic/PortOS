@@ -164,10 +164,9 @@ export const spritePublishBindingSchema = z.object({
   runtimeContract: spriteRuntimeContractSchema.nullable().optional(),
 }).nullable();
 
-// acknowledgeOverwrite: explicit consent to replace a destination atlas
-// PortOS never published (409 PUBLISH_DEST_OCCUPIED otherwise).
+// A 409 supplies the revision of the binding and occupied files shown for consent.
 export const spriteAtlasPublishSchema = z.object({
-  acknowledgeOverwrite: z.boolean().optional(),
+  acknowledgeOverwrite: z.union([z.literal(false), z.string().regex(/^[0-9a-f]{64}$/)]).optional(),
 });
 
 // Optional per-compile geometry overrides (player default: 96px cells,

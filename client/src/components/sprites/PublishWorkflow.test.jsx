@@ -20,7 +20,7 @@ vi.mock('../../hooks/useSidebarApps.js', () => ({
 }));
 
 import PublishWorkflow from './PublishWorkflow';
-import { compileSpriteAtlas, setSpritePublishBinding } from '../../services/apiSprites.js';
+import { compileSpriteAtlas, publishSpriteAtlas, setSpritePublishBinding } from '../../services/apiSprites.js';
 
 const GEOMETRY = {
   columns: ['idle', 'frame-00', 'frame-01', 'frame-02', 'frame-03', 'frame-04',
@@ -98,6 +98,31 @@ const savedContractBinding = {
 };
 
 const lastBindingArg = () => setSpritePublishBinding.mock.calls.at(-1)[1];
+
+it('shows every occupied path and requires a fresh confirmation for a changed review', async () => {
+  const paths = ['atlas.png', 'atlas.layout.json', 'portrait.png', 'idle.png', 'idle.presentation.json'];
+  const occupied = (paths, revision) => ({
+    code: 'PUBLISH_OUTPUTS_OCCUPIED', context: { appLabel: 'Example App', paths, revision },
+  });
+  publishSpriteAtlas.mockRejectedValueOnce(occupied(paths, 'a'.repeat(64)))
+    .mockRejectedValueOnce(occupied(['new-atlas.png'], 'b'.repeat(64)))
+    .mockResolvedValueOnce({ published: true, publication: { version: 3 } });
+  renderWorkflow(savedContractBinding);
+  fireEvent.click(screen.getByRole('button', { name: 'Publish to app' }));
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Publish' })); });
+  expect(publishSpriteAtlas).toHaveBeenLastCalledWith('example-walker', {}, { silent: true });
+  expect(screen.getByText(/Overwrite these files in Example App/)).toBeInTheDocument();
+  for (const path of paths) expect(screen.getByText(path)).toBeInTheDocument();
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Overwrite' })); });
+  expect(publishSpriteAtlas).toHaveBeenCalledTimes(2);
+  expect(publishSpriteAtlas).toHaveBeenLastCalledWith('example-walker', { acknowledgeOverwrite: 'a'.repeat(64) }, { silent: true });
+  expect(screen.getByText(/The binding or files changed/)).toBeInTheDocument();
+  expect(screen.getByText('new-atlas.png')).toBeInTheDocument();
+  expect(screen.queryByText('portrait.png')).toBeNull();
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Overwrite' })); });
+  expect(publishSpriteAtlas).toHaveBeenLastCalledWith('example-walker', { acknowledgeOverwrite: 'b'.repeat(64) }, { silent: true });
+  expect(screen.queryByRole('button', { name: 'Overwrite' })).toBeNull();
+});
 
 describe('PublishWorkflow runtime contract', () => {
   beforeEach(() => {
