@@ -1646,14 +1646,14 @@ describe('instances.js', () => {
       readJSONFile.mockResolvedValue({ self: null, peers });
 
       const mockData = { apps: ['app1'] };
-      fetch.mockResolvedValue({ json: () => Promise.resolve(mockData) });
+      fetch.mockResolvedValue({ ok: true, json: () => Promise.resolve(mockData) });
 
       const result = await queryPeer('peer-1', '/api/apps');
 
       expect(result).toEqual({ success: true, data: mockData });
       expect(fetch).toHaveBeenCalledWith(
         'http://10.0.0.1:5555/api/apps',
-        expect.objectContaining({ signal: expect.any(AbortSignal) })
+        expect.objectContaining({ signal: expect.any(AbortSignal), maxBytes: 64 * 1024 * 1024 })
       );
     });
 
@@ -1662,8 +1662,20 @@ describe('instances.js', () => {
 
       const result = await queryPeer('missing', '/api/apps');
 
-      expect(result).toEqual({ error: 'Peer not found' });
+      expect(result).toEqual({ error: 'Peer not found', status: 404 });
       expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it.each([401, 403, 404, 500])('reports upstream HTTP %i as a gateway failure', async (status) => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [{ id: 'peer-1', address: '10.0.0.1', port: 5555 }] });
+      const response = new Response(JSON.stringify({ error: 'Remote error detail' }), { status });
+      fetch.mockResolvedValue(response);
+
+      await expect(queryPeer('peer-1', '/api/apps')).resolves.toEqual({
+        error: `Peer query failed (upstream HTTP ${status})`,
+        status: 502,
+      });
+      expect(response.bodyUsed).toBe(true);
     });
 
     it('should return error when fetch fails', async () => {
@@ -1681,7 +1693,7 @@ describe('instances.js', () => {
   describe('queryPeer federation-surface allowlist', () => {
     beforeEach(() => {
       readJSONFile.mockResolvedValue({ self: null, peers: [{ id: 'peer-1', address: '10.0.0.1', port: 5555 }] });
-      fetch.mockResolvedValue({ json: () => Promise.resolve({}) });
+      fetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({}) });
     });
 
     it.each([

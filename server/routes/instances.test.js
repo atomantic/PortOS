@@ -31,6 +31,7 @@ vi.mock('../services/instances.js', async (importOriginal) => ({
   getAssignableInstances: vi.fn(),
   getPeers: vi.fn(),
   probePeer: vi.fn(),
+  queryPeer: vi.fn(),
 }));
 // This suite's routes/instances.js import pulls getSelf/updateSelf from the
 // identity leaf (#6836) — double it too so an untested route (e.g. GET /
@@ -97,6 +98,22 @@ const buildApp = () => {
   app.use(errorMiddleware);
   return app;
 };
+
+describe('GET /api/instances/peers/:id/query', () => {
+  it.each([
+    [404, 'NOT_FOUND', 'Peer not found'],
+    [502, 'BAD_GATEWAY', 'Peer query failed (upstream HTTP 403)'],
+    [502, 'BAD_GATEWAY', 'Peer query failed (upstream HTTP 500)'],
+  ])('returns HTTP %i and %s for %s', async (status, code, error) => {
+    instances.queryPeer.mockResolvedValueOnce({ status, error });
+
+    const res = await request(buildApp()).get('/api/instances/peers/peer-1/query?path=/api/apps');
+
+    expect(res.status).toBe(status);
+    expect(res.body).toMatchObject({ code, error });
+    expect(instances.queryPeer).toHaveBeenLastCalledWith('peer-1', '/api/apps');
+  });
+});
 
 describe('POST /api/instances/provision-cert', () => {
   beforeEach(() => { provisionTailscaleCert.mockReset(); });
