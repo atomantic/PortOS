@@ -39,7 +39,7 @@ import { filmLookSavedPresetsSchema } from '../lib/filmLookValidation.js';
 import { dockerContainmentSettingsSchema } from '../lib/dockerContainmentValidation.js';
 import { codeAnimationExecutionArmedSchema } from '../lib/codeAnimationContainment.js';
 import {
-  settingsSlicePatchSchema, autoUpdateSettingsSchema, featureProviderConfigSchema, autofixerSettingsSchema,
+  settingsPutSchema, settingsSlicePatchSchema, autoUpdateSettingsSchema, featureProviderConfigSchema, autofixerSettingsSchema,
   localLlmSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, seriesAutopilotSettingsSchema,
   imageGenGrokSettingsSchema, imageGenAgySettingsSchema, imageGenFalSettingsSchema,
   imageGenRunwaySettingsSchema, imageGenHiggsfieldSettingsSchema, imageGenGoogleSettingsSchema,
@@ -703,8 +703,9 @@ const saveSettingsPatch = async (body, slicePatch) => {
 
 // PUT remains a top-level replacement contract for whole-form and older callers.
 router.put('/', asyncHandler(async (req, res) => {
-  await validateSettingsPatch(req.body);
-  res.json(await saveSettingsPatch(req.body));
+  const patch = validateRequest(settingsPutSchema, req.body);
+  await validateSettingsPatch(patch);
+  res.json(await saveSettingsPatch(patch));
 }));
 
 router.patch('/slice', asyncHandler(async (req, res) => {

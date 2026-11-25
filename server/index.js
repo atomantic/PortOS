@@ -335,6 +335,8 @@ mountEidoverseOnServer(app);
 // Body limit is set slightly above the 50MB combined base64 cap enforced by sendMessageSchema
 // so the Zod validation (not the body parser) is the binding constraint for attachment payloads.
 // Every per-file upload cap is derived from this value — see lib/uploadLimits.js.
+// Let the settings PUT schema report a consistent validation error for JSON scalars and arrays.
+app.put('/api/settings', express.json({ limit: JSON_BODY_LIMIT, strict: false }));
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 app.use(express.urlencoded({ limit: JSON_BODY_LIMIT, extended: true }));
 app.use(defaultRequestBody);

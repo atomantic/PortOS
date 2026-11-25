@@ -28,7 +28,6 @@ const ALLOWED_UNVALIDATED = new Map([
   ['routes/brainImport.js POST /chatgpt/zip', 'multipart upload: req.body only carries optional text fields beside the ZIP'],
   ['routes/federatedMedia.js POST /assets', 'raw binary body (express.raw); authenticated and byte-validated by storeFederatedMediaAsset'],
   ['routes/imageClean.js POST /', 'raw image bytes (express.raw Buffer); the JSON-shaped options are validated from req.query'],
-  ['routes/settings.js PUT /', 'polymorphic settings store: only the slices with a known schema are validated, slice by slice, by design'],
   ['routes/imageTo3d.js POST /models/:id/usdz', 'raw binary body (express.raw); validated by byte checks (non-empty, size cap, zip magic)'],
   ['routes/pipeline/audio.js POST /issues/:id/stages/audio/music/upload', 'multipart upload: req.body only carries an optional label text field'],
 ]);

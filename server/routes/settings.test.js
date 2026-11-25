@@ -161,6 +161,7 @@ import { ensureEidoverseHost } from '../services/eidoverseHost.js';
 
 const buildApp = () => {
   const app = express();
+  app.put('/api/settings', express.json({ strict: false }));
   app.use(express.json());
   app.use('/api/settings', settingsRoutes);
   app.use('/api/code-review', codeReviewRoutes);
@@ -1935,9 +1936,18 @@ describe('Settings routes — declarative slice validation', () => {
     expect(res.status).toBe(400);
   });
 
-  it('does not 500 on an empty body', async () => {
-    const res = await request(buildApp()).put('/api/settings').send({});
-    expect(res.status).not.toBe(500);
+  it.each([[[{ theme: 'light' }]], [null], [false], [42], ['light']])('rejects a non-object body (%j) without writing settings', async (body) => {
+    store = { theme: 'dark' };
+    const res = await request(buildApp()).put('/api/settings').set('Content-Type', 'application/json').send(JSON.stringify(body));
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(updateSettingsWith).not.toHaveBeenCalled();
+    expect(store).toEqual({ theme: 'dark' });
+  });
+
+  it('accepts a PUT with no body', async () => {
+    const res = await request(buildApp()).put('/api/settings');
+    expect(res.status).toBe(200);
   });
 
   it('still validates a nested imageGen backend slice', async () => {
