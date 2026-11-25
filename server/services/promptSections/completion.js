@@ -644,11 +644,10 @@ function buildClaimOwnershipSection(agentId) {
   ].join('\n');
 }
 
-// The record a review phase leaves for the handoff: one REVIEW_HEAD line naming
-// the commit its final clean round covered or its optional review attempted.
-// A missing status file stays missing: a REVIEW_HEAD alone would read as unreadable evidence.
-const RECORD_OPTIONAL_INCONCLUSIVE = 'F="$(git rev-parse --git-path portos-review-status)"; [ -f "$F" ] && [ "$(grep -c "^REVIEW_STATUS=" "$F")" = 1 ] && grep -qxE "REVIEW_STATUS=(clean|optional-inconclusive)" "$F" && [ "${REVIEW_ATTEMPTED_HEAD:-}" = "$(git rev-parse HEAD)" ] && printf "REVIEW_STATUS=optional-inconclusive\\nREVIEW_HEAD=%s\\n" "$REVIEW_ATTEMPTED_HEAD" > "$F.tmp" && mv "$F.tmp" "$F"';
-const RECORD_REVIEW_HEAD = 'F="$(git rev-parse --git-path portos-review-status)"; if [ -f "$F" ]; then { grep -v "^REVIEW_HEAD=" "$F"; printf "REVIEW_HEAD=%s\\n" "$(git rev-parse HEAD)"; } > "$F.tmp" && mv "$F.tmp" "$F"; fi';
+const reviewLifecycleCommand = `node ${shellQuote(LOCAL_REVIEW_LIFECYCLE_SCRIPT)}`;
+const reviewTarget = '"$REVIEW_WORKTREE" "$REVIEW_BRANCH"';
+const RECORD_OPTIONAL_INCONCLUSIVE = `${reviewLifecycleCommand} write-status ${reviewTarget} optional-inconclusive "$REVIEW_ATTEMPTED_HEAD"`;
+const RECORD_REVIEW_HEAD = `${reviewLifecycleCommand} record-head ${reviewTarget} "$REVIEW_ATTEMPTED_HEAD"`;
 
 /**
  * A GitHub participant may hand its pending CI to the server coordinator, which
@@ -660,7 +659,7 @@ function buildPendingMergeHandoffLines(agentId, { review = true } = {}) {
   return [
     '**PortOS pending-merge handoff (GitHub, same-repository PR, only for measured CI backlog):** By default this run owns CI, confirmed merge and safe cleanup. Early finish requires the app setting `mergeHandoffMinQueuedRuns` and a fresh server-observed queued workflow count meeting that threshold; absent settings or unknown backlog keep ownership here. The server coordinator then owns the exact published head, failure recovery, merge confirmation and cleanup across restarts.',
     ...(review ? [
-      'When a configured local review round returns clean, record the head it reviewed beside REVIEW_STATUS (retain that historical reviewed head after later commits; completed pre-PR local review is scoped to this PR delivery, so feedback/CI pushes do not automatically respawn it):',
+      'Capture REVIEW_ATTEMPTED_HEAD before each review call. When the round returns clean, record that captured head beside REVIEW_STATUS (retain that historical reviewed head after later commits; completed pre-PR local review is scoped to this PR delivery, so feedback/CI pushes do not automatically respawn it):',
       '```bash', RECORD_REVIEW_HEAD, '```',
       'For handoff evidence, before each local review attempt capture `REVIEW_ATTEMPTED_HEAD=$(git rev-parse HEAD)` and retain that exact value across shell calls. When the completed loop has a nonempty all-optional roster and its only non-clean outcomes are availability, quota/provider, timeout, transport, malformed/empty, or no-verdict failures, record the aggregate status below. This handoff-specific record overrides instructions to leave REVIEW_STATUS=clean for optional unavailability; it does not label any reviewer verdict clean. Never use it for pending review, a required reviewer, accepted unresolved findings or rejection, failed validation, or unpushed fixes. Do not overwrite review-blocked. Later PR commits do not require new local review attempts; never replace the attempted head with the later head. Preserve the PR-bound completed lifecycle receipt across restarts. If writing fails, do not hand off:',
       '```bash', RECORD_OPTIONAL_INCONCLUSIVE, '```',
@@ -750,7 +749,7 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
   const lines = [
     ...(resumeOverride ? [resumeOverride, ''] : []),
     ...(pin ? [pin, ''] : []),
-    ...(!isMergeOnGreen ? [`**One-time local review lifecycle (overrides claim/delegated head-invalidation guidance):** Before Phase 5 or any local reviewer, read \`${LOCAL_REVIEW_LIFECYCLE_GUIDE}\` and apply its resume gate in the actual claim worktree. Use \`${LOCAL_REVIEW_LIFECYCLE_SCRIPT}\` to check/complete/publish the durable receipt for the resolved base and exact PR/MR. Keep each successful reviewer's private outcome through interrupted/blocked phases. Once this delivery's local phase completes, GitHub/GitLab feedback or CI pushes do not restart it. Preserve original reviewed-head and model evidence; required current-head hosted approvals/CI remain mandatory.`, ''] : []),
+    ...(!isMergeOnGreen ? [`**One-time local review lifecycle:** Before Phase 5, follow \`${LOCAL_REVIEW_LIFECYCLE_GUIDE}\`. Use \`${LOCAL_REVIEW_LIFECYCLE_SCRIPT}\` to check/complete/publish the exact PR/MR receipt and write all phase/status state, including review-blocked. Use the bound claim path/branch. This overrides inline writes and resets. Keep each successful reviewer’s outcome and inspection/model evidence on resume. Feedback/CI pushes do not restart review. Required hosted approvals/CI still apply.`, ''] : []),
     ownershipSection, '',
     ...(workflowScopeSection ? [workflowScopeSection, ''] : []),
     ...(!prStaysOpen ? [
