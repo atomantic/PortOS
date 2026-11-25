@@ -41,6 +41,66 @@ const isInstalled = (name) => {
 
 const groupNamed = (name) => CHUNK_GROUPS.find((group) => group.name === name);
 
+// Static import graph of the emitted chunks. A lazy entry is the target of a
+// dynamic `import("./x.js")` or of a `__vite__mapDeps` list; its closure is
+// every chunk reachable through static `from"./x.js"` / `import"./x.js"`.
+// This is what a route downloads before it can run, which the modulepreload
+// tags in index.html do not show (#18630).
+const staticClosures = (outDir) => {
+  const assets = join(outDir, 'assets');
+  const files = readdirSync(assets).filter((name) => name.endsWith('.js'));
+  const known = new Set(files);
+  const sizes = new Map();
+  const edges = new Map();
+  const lazy = new Set();
+  for (const file of files) {
+    const code = readFileSync(join(assets, file), 'utf8');
+    sizes.set(file, statSync(join(assets, file)).size);
+    const targets = (re) => [...code.matchAll(re)].map((m) => m[1]).filter((name) => known.has(name));
+    edges.set(file, new Set(targets(/(?:\bfrom\s*|\bimport\s*)["']\.\/([^"']+\.js)["']/g)));
+    for (const name of targets(/import\(\s*["']\.\/([^"']+\.js)["']\s*\)/g)) lazy.add(name);
+    for (const list of code.matchAll(/__vite__mapDeps=[^[]*\[([^\]]*)\]/g)) {
+      for (const dep of list[1].matchAll(/assets\/([^"']+\.js)/g)) if (known.has(dep[1])) lazy.add(dep[1]);
+    }
+  }
+  const closure = (entry) => {
+    const seen = new Set();
+    const stack = [entry];
+    while (stack.length) {
+      const file = stack.pop();
+      if (seen.has(file)) continue;
+      seen.add(file);
+      for (const next of edges.get(file)) stack.push(next);
+    }
+    return seen;
+  };
+  return { files, lazy, sizes, closure };
+};
+
+const assertRouteClosures = (outDir, preloads) => {
+  const { files, lazy, sizes, closure } = staticClosures(outDir);
+  const initial = new Set();
+  for (const href of preloads) for (const file of closure(href.split('/').pop())) initial.add(file);
+  const reaches = (set, prefix) => [...set].some((file) => file.startsWith(prefix));
+  const reachCount = (prefix) => [...lazy].filter((entry) => reaches(closure(entry), prefix)).length;
+  // Source truth is ~16 lazy boundaries for three, ~12 for recharts and 1 for xterm.
+  expect(reachCount('vendor-three-')).toBeLessThanOrEqual(40);
+  expect(reachCount('vendor-charts-')).toBeLessThanOrEqual(40);
+  expect(reachCount('vendor-term-')).toBeLessThanOrEqual(3);
+  for (const route of ['Dashboard-', 'Settings-', 'NotFound-']) {
+    const entry = files.find((file) => file.startsWith(route) && lazy.has(file));
+    expect(entry, route).toBeDefined();
+    const extra = [...closure(entry)].filter((file) => !initial.has(file));
+    for (const vendor of ['vendor-three-', 'vendor-charts-', 'vendor-term-']) {
+      expect(reaches(new Set(extra), vendor), `${route} reaches ${vendor}`).toBe(false);
+    }
+    if (route === 'Dashboard-') {
+      const bytes = extra.reduce((sum, file) => sum + sizes.get(file), 0);
+      expect(bytes).toBeLessThan(1_500_000);
+    }
+  }
+};
+
 describe('vite chunk groups', () => {
   // The regression: a group regex naming a package that is not installed matches
   // nothing, so the named chunk quietly stops capturing what its comment claims.
@@ -165,6 +225,8 @@ describe('vite chunk groups', () => {
     expect(initial.priority).toBeLessThan(0);
     expect(shared.minShareCount).toBe(2);
     expect(shared.minSize).toBe(15_000);
+    expect(shared.entriesAware).toBe(true);
+    expect(shared.entriesAwareMergeThreshold).toBe(3_000);
     expect(shared.priority).toBeLessThan(initial.priority);
     for (const group of groups) {
       if (!group.name.startsWith('vendor-')) continue;
@@ -208,7 +270,8 @@ describe('vite chunk groups', () => {
         if (bytes < 2048) expect(name, name).toMatch(/^(?:rolldown-runtime|preload-helper|client)-/);
       }
       const jsCount = readdirSync(join(outDir, 'assets')).filter((name) => name.endsWith('.js')).length;
-      expect(jsCount).toBeLessThanOrEqual(600);
+      expect(jsCount).toBeLessThanOrEqual(1000);
+      assertRouteClosures(outDir, preloads);
       expect(warnings, warnings.join('\n')).toEqual([]);
     } finally {
       rmSync(outDir, { recursive: true, force: true });
