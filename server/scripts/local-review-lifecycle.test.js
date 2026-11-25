@@ -180,3 +180,81 @@ async function exerciseDelivery() {
     await rm(cwd, { recursive: true, force: true });
   }
 }
+
+it('confines writes to the selected linked checkout across a blocked review and resumed publication', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'review-worktrees-'));
+  const primary = join(root, 'primary');
+  const claim = join(root, 'claim');
+  const other = join(root, 'other');
+  const branch = 'claim/issue-123';
+  const git = async (cwd, ...args) => (await execGit(args, cwd)).stdout.trim();
+  const cli = (cwd, ...args) => exec(process.execPath, [script, ...args], { cwd, timeout: 15000 });
+  const writer = (cwd, action, ...args) => cli(cwd, action, claim, branch, ...args);
+  const commit = cwd => git(cwd, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'change');
+  try {
+    await mkdir(primary);
+    await git(primary, 'init', '-q', '-b', 'main');
+    await git(primary, 'remote', 'add', 'origin', 'https://github.com/example/repo.git');
+    await commit(primary);
+    await git(primary, 'worktree', 'add', '-qb', branch, claim);
+    await git(primary, 'worktree', 'add', '-qb', 'other', other);
+    const inspected = await git(claim, 'rev-parse', 'HEAD');
+    const records = ['portos-local-review-state', 'portos-review-status'];
+    await writer(claim, 'init-phase');
+    await writer(claim, 'init-status');
+    const filesFor = cwd => Promise.all(records.map(name => git(cwd, 'rev-parse', '--path-format=absolute', '--git-path', name)));
+    const claimFiles = await filesFor(claim);
+    const claimBefore = await Promise.all(claimFiles.map(path => readFile(path)));
+    for (const cwd of [primary, other]) {
+      const files = await filesFor(cwd);
+      await Promise.all(files.map((path, index) => writeFile(path, `old private bytes ${index}\n`)));
+      const before = await Promise.all(files.map(path => readFile(path)));
+      const actions = [
+        ['init-phase'], ['write-phase', 'LOCAL_OVERALL_STATUS=review-blocked'],
+        ['init-status'], ['write-status', 'review-blocked'], ['record-head', inspected],
+      ];
+      for (const [action, ...args] of actions) {
+        await expect(writer(cwd, action, ...args)).rejects.toMatchObject({ code: 1 });
+      }
+      expect(await Promise.all(files.map(path => readFile(path)))).toEqual(before);
+    }
+    await expect(cli(claim, 'write-status', claim, 'other', 'review-blocked')).rejects.toMatchObject({ code: 1 });
+    const claimGitDir = await git(claim, 'rev-parse', '--absolute-git-dir');
+    await expect(exec(process.execPath, [script, 'write-status', claim, branch, 'review-blocked'], {
+      cwd: primary, env: { ...process.env, GIT_DIR: claimGitDir, GIT_WORK_TREE: claim }, timeout: 15000,
+    })).rejects.toMatchObject({ code: 1 });
+    expect(await Promise.all(claimFiles.map(path => readFile(path)))).toEqual(claimBefore);
+
+    await writer(claim, 'write-phase', `LOCAL_REVIEWED_HEAD_SHA=${inspected}`);
+    await commit(claim);
+    const completed = await git(claim, 'rev-parse', 'HEAD');
+    await writer(claim, 'write-phase', 'LOCAL_OVERALL_STATUS=review-blocked',
+      'LOCAL_PHASE_COMMITS=1', `LOCAL_REMEDIATED_HEAD_SHA=${completed}`);
+    await writer(claim, 'write-status', 'review-blocked');
+    await cli(claim, 'complete', 'main', 'review-blocked');
+    const pr = 'https://github.com/example/repo/pull/123';
+    await cli(claim, 'publish', 'main', pr);
+    const blocked = await Promise.all(claimFiles.map(path => readFile(path)));
+    await expect(writer(claim, 'init-phase')).rejects.toMatchObject({ code: 1 });
+    await writer(claim, 'init-status');
+    expect(await Promise.all(claimFiles.map(path => readFile(path)))).toEqual(blocked);
+
+    await writer(claim, 'write-phase', 'LOCAL_OVERALL_STATUS=clean');
+    await writer(claim, 'write-status', 'clean', inspected);
+    await cli(claim, 'complete', 'main', 'clean');
+    const { stdout } = await cli(claim, 'check', 'main', pr);
+    expect(JSON.parse(stdout)).toMatchObject({
+      reusable: true, receipt: { status: 'clean', prUrl: pr },
+      inspection: { reviewedHead: inspected, completedHead: completed },
+    });
+
+    // An ordinary review can explicitly select the primary checkout.
+    const [primaryPhase] = await filesFor(primary);
+    await rm(primaryPhase);
+    await cli(primary, 'init-phase', primary, 'main');
+    expect(await readFile(primaryPhase, 'utf8')).toContain(`LOCAL_PHASE_START_SHA=${inspected}\n`);
+  } finally {
+    assertGitWorkSettled(root);
+    await rm(root, { recursive: true, force: true });
+  }
+}, 30000);
