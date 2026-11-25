@@ -112,8 +112,9 @@ export function createStageScanDiagnostics({ budgetMs = Infinity, onProgress = (
     },
     checkpoint(update) {
       counts = { ...counts, ...update };
-      // Sample once per source, rather than retaining ASTs to measure them.
-      snapshot();
+      // Sampling every file adds an OS memory query to each parse. Keep
+      // periodic samples without charging the scan for thousands of queries.
+      if (update.scannedSources && update.scannedSources % 64 === 0) snapshot();
     },
     finish: report,
   };
@@ -175,12 +176,20 @@ export function readShippedStageKeys(repoRoot = REPO_ROOT) {
  * `data/`, which would make the manifest non-deterministic across installs.
  */
 export function collectServerSources(repoRoot = REPO_ROOT, { diagnostics = createStageScanDiagnostics() } = {}) {
-  const tracked = diagnostics.measure('inventory', () => trackedFiles(repoRoot, ['server'])
-    .filter((p) => p.endsWith('.js') && !p.endsWith('.test.js') && !EXCLUDED_SOURCES.has(p)));
+  const tracked = diagnostics.measure('inventory', () => trackedFiles(repoRoot, ['server/*.js', ':!server/*.test.js'])
+    .filter((p) => !EXCLUDED_SOURCES.has(p)));
 
   diagnostics.checkpoint({ sources: tracked.length });
   return diagnostics.measure('read', () => tracked.map((path) => ({ path, source: readFileSync(join(repoRoot, path), 'utf8') })));
 }
+
+// These ubiquitous Babel nodes are leaves with the module + JSX parser below.
+// Avoid allocating a values array just to inspect their scalar/position metadata.
+// Other node shapes, including parser additions, still use the generic walk.
+const LEAF_NODE_TYPES = new Set([
+  'BigIntLiteral', 'BooleanLiteral', 'Identifier', 'JSXIdentifier', 'JSXText',
+  'NullLiteral', 'NumericLiteral', 'RegExpLiteral', 'StringLiteral', 'TemplateElement',
+]);
 
 /** Visit each node once without materializing or retaining the corpus's ASTs. */
 function walkNodes(root, visit) {
@@ -188,6 +197,7 @@ function walkNodes(root, visit) {
   while (pending.length) {
     const node = pending.pop();
     visit(node);
+    if (LEAF_NODE_TYPES.has(node.type)) continue;
     // Babel's node metadata has no type and cannot contain references.
     for (const child of Object.values(node)) {
       if (Array.isArray(child)) {
@@ -242,9 +252,13 @@ export function buildStageCallSites({ shippedStageKeys, sources, diagnostics = c
   const literals = new Map();
   const prefixes = new Map();
   const record = (references, key, path) => {
-    if (!references.has(key)) references.set(key, new Set());
-    references.get(key).add(path);
+    const current = references.get(key);
+    if (current === undefined) references.set(key, path);
+    else if (typeof current !== 'string') current.add(path);
+    else if (current !== path) references.set(key, new Set([current, path]));
   };
+  // Most literal values occur in only one file; only shared values need sets.
+  const pathsFor = (value) => typeof value === 'string' ? [value] : value ?? [];
   let nodes = 0;
   let scannedSources = 0;
   diagnostics.checkpoint({ sources: sources.length, sourceBytes: sources.reduce((n, { source }) => n + Buffer.byteLength(source), 0) });
@@ -285,10 +299,10 @@ export function buildStageCallSites({ shippedStageKeys, sources, diagnostics = c
   return diagnostics.measure('resolve', () => {
     const index = new Map();
     for (const key of keys) {
-      const paths = new Set(literals.get(key));
+      const paths = new Set(pathsFor(literals.get(key)));
       for (const [prefix, references] of prefixes) {
         if (key.length > prefix.length && key.startsWith(prefix)) {
-          for (const path of references) paths.add(path);
+          for (const path of pathsFor(references)) paths.add(path);
         }
       }
       if (paths.size) index.set(key, paths);

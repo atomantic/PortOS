@@ -46,7 +46,7 @@
 
 import { spawnSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
-import { join, isAbsolute, posix, relative } from 'path';
+import { join, posix } from 'path';
 import { staticImportSpecifiersFromSource } from '../../server/lib/staticImportGraph.js';
 import { createGuardCorpus } from './guardCorpus.js';
 
@@ -496,17 +496,12 @@ export function resolveImportGrowthBase({
   return { sha, source: `merge-base ${ref}` };
 }
 
-function diskRead(repoRoot, readText = (abs) => readFileSync(abs, 'utf8')) {
+function diskRead(readText) {
+  // Callers first check membership in Git's repo-relative path inventory.
+  // Trust that boundary instead of normalizing every candidate twice.
   return (rel) => {
-    if (!rel || rel.includes('\0') || rel.startsWith('/')) return null;
-    const parts = rel.split('/');
-    if (parts.includes('..')) return null;
-    const abs = join(repoRoot, ...parts);
-    const back = relative(repoRoot, abs);
-    if (back.startsWith('..') || isAbsolute(back)) return null;
-    // One syscall instead of exists + stat + read; absent and non-file stay null.
     try {
-      return readText(abs);
+      return readText(rel);
     } catch (error) {
       if (error.code === 'ENOENT' || error.code === 'EISDIR' || error.code === 'ENOTDIR') return null;
       throw error;
@@ -523,7 +518,7 @@ export function measureWorkingTree(repoRoot, corpus = createGuardCorpus(repoRoot
   } catch (error) {
     throw importGrowthBaseError(`git ls-files failed (exit ${error.status ?? 'spawn'}). The import-growth guard does not pass when the file list cannot be read.`);
   }
-  const readDisk = diskRead(repoRoot, corpus.read);
+  const readDisk = diskRead(corpus.read);
   const testFiles = [...paths].filter(isServerTest).sort();
   return measureClosures(testFiles, (rel) => (paths.has(rel) ? readDisk(rel) : null));
 }
@@ -613,13 +608,16 @@ export function measureGitTree(repoRoot, sha, headTexts = null) {
   const tree = listTree(repoRoot, sha);
   const testFiles = [...tree].filter(isServerTest).sort();
   // git diff exits 1 when the trees differ and 0 when they do not. Above 1 is a real failure.
-  const diff = git(repoRoot, ['diff', '-z', '--name-status', '--find-renames', sha]);
+  // Only old paths are used, so rename detection and the parallel index
+  // preload are unnecessary. One stat pass avoids fanning out filesystem
+  // work alongside the other guard workers.
+  const diff = git(repoRoot, ['-c', 'core.preloadIndex=false', 'diff', '-z', '--name-status', '--no-renames', sha]);
   if (diff.error || diff.status > 1) {
     throw importGrowthBaseError(`Cannot diff the worktree against ${String(sha).slice(0, 12)}. The import-growth guard does not pass when the base diff is unreadable.`);
   }
   const dirty = new Set(basePathsToReadFromGit(diff.stdout).filter((rel) => tree.has(rel)));
   const blobs = readBlobs(repoRoot, sha, [...dirty]);
-  const fromDisk = diskRead(repoRoot);
+  const fromDisk = diskRead((rel) => readFileSync(join(repoRoot, rel), 'utf8'));
   const readText = (rel) => {
     if (!tree.has(rel)) return null;
     if (blobs.has(rel)) return blobs.get(rel);
