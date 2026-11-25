@@ -526,8 +526,9 @@ jobs:
     # Owns the registered browser suites; the Linux unit job excludes that
     # exact registry. PRs run the smoke profile; scheduled, release and
     # dispatched runs run the complete profile. No Postgres: the suites run on
-    # the file backend under NODE_ENV=test. Two or more suites use two shards
-    # without changing quiet-project sequencing or the per-runner watchdog.
+    # the file backend under NODE_ENV=test. The planner uses one shard for one
+    # suite, two for two or three, and four for four or more. Quiet-project
+    # sequencing and the per-runner watchdog are unchanged.
     name: Browser suites (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: impact
     if: fromJSON(needs.impact.outputs.plan).browser
@@ -551,8 +552,9 @@ jobs:
         with:
           vitest-key-suffix: -browser-${{ matrix.shard }}of${{ strategy.job-total }}
 
-      # Smoke uses both trusted full-run lineages because its shard owners
-      # differ. Per-test keys still require compatible inputs and coverage.
+      # Smoke can use all four trusted full-run lineages because smaller
+      # selections can use different shard owners. Per-test keys still require
+      # compatible inputs and coverage.
       - name: Restore the test memo
         id: test-memo
         uses: ./.github/actions/test-memo
