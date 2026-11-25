@@ -185,7 +185,10 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     }
   });
 
-  it('publishes caller runtime exhaustion as a bounded warning without an investigation', async () => {
+  it.each([
+    ['runtime-budget-exhausted', 'AI_RUNTIME_BUDGET_EXHAUSTED'],
+    ['output-limit', 'AI_OUTPUT_LIMIT_EXCEEDED'],
+  ])('publishes %s as a warning without an investigation', async (category, code) => {
     // Execute the real bootstrap hook without booting daemons/DB/schedulers.
     const source = readFileSync(new URL('./bootstrap.js', import.meta.url), 'utf8')
       .replace('onRunFailed: (metadata, error) => {', 'function failureHook(metadata, error) {');
@@ -197,9 +200,9 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     try {
       hook({ id: 'budget-run', providerName: 'Example API', providerId: 'example-api', model: 'm-1',
         timeoutBound: 'absolute', timeoutOrigin: 'caller-budget', runtimeBudgetMs: 120000,
-        errorAnalysis: { category: 'runtime-budget-exhausted' } }, 'Caller runtime budget exhausted after 120000ms');
+        errorAnalysis: { category } }, 'Caller budget exhausted');
       expect(observed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-        code: 'AI_RUNTIME_BUDGET_EXHAUSTED', severity: 'warning', canAutoFix: false,
+        code, severity: 'warning', canAutoFix: false,
         context: expect.objectContaining({ timeoutOrigin: 'caller-budget', runtimeBudgetMs: 120000 }),
       }));
       await vi.advanceTimersByTimeAsync(6000);

@@ -325,7 +325,7 @@ export function noteFallbackFailed({ provider, model }) {
 export async function escalateProviderFailure(error) {
   const ctx = error?.context || {};
   // Before dedupe: a later real fault on this route must still investigate.
-  if ([ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED, ERROR_CATEGORIES.IMAGE_UNSUPPORTED].includes(ctx.errorAnalysis?.category)) return;
+  if ([ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED, ERROR_CATEGORIES.OUTPUT_LIMIT, ERROR_CATEGORIES.IMAGE_UNSUPPORTED].includes(ctx.errorAnalysis?.category)) return;
 
   const errorKey = aiProviderErrorKey(ctx.provider, ctx.model);
   const now = Date.now();
@@ -451,7 +451,7 @@ export function _resetAutoFixerForTests() {
  */
 async function handleAIProviderError(error) {
   const ctx = error.context || {};
-  if (ctx.errorAnalysis?.category === ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED) return;
+  if ([ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED, ERROR_CATEGORIES.OUTPUT_LIMIT].includes(ctx.errorAnalysis?.category)) return;
 
   // A content/safety refusal is not a provider fault — we know exactly why it
   // failed (the model declined the prompt), so there's nothing for a CoS agent

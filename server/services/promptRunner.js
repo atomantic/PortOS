@@ -566,6 +566,8 @@ const COMPLETION_ARGS = new Set([
  *   a provider attr. A function is resolved against the provider that actually
  *   runs (fallbacks included), for callers whose bound depends on its type:
  *   CLI/TUI treat it as a total cap, API runs as a no-progress (stall) bound.
+ * @param {number} [args.maxTokens] — per-call API output cap or managed Splash
+ *   Claude output allowance for a pinned tool-free run.
  * @param {number} [args.outputReserveTokens=8000] — expected completion budget
  *   included in fallback context admission. Callers with a tighter known
  *   output budget may lower it.
@@ -731,7 +733,8 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
   // Neither enters correction/fallback, benching, or fault investigation.
   if (firstError?.code === EXECUTION_OPTIONS_ERROR) throw stripFallbackContext(firstError);
 
-  if (isRunCanceledError(firstError) || isRuntimeBudgetError(firstError) || isContentRefusalError(firstError)) {
+  if (isRunCanceledError(firstError) || isRuntimeBudgetError(firstError) || isContentRefusalError(firstError)
+    || firstError?.errorAnalysis?.category === ERROR_CATEGORIES.OUTPUT_LIMIT) {
     throw stripFallbackContext(firstError);
   }
 
@@ -1577,6 +1580,7 @@ async function executeProviderRunOnce({
       executeCliRun({
         runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, screenshots,
         onData, onComplete, timeout: effectiveTimeout, toolFree,
+        ...(toolFree && !allowFallback && maxTokens != null ? { maxTokens } : {}),
         ...(isolateMtplxOpenCode ? { isolateMtplxOpenCode } : {}),
         ...(admitDispatch ? { beforeExecute: admitDispatch } : {}),
       }).catch(safeReject);

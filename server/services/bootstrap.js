@@ -225,17 +225,19 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       // declined, stopped" notice instead of a red error toast. Automatic retry
       // and provider fallback are disabled.
       const isBudget = metadata.errorAnalysis?.category === ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED;
+      const isOutputLimit = metadata.errorAnalysis?.category === ERROR_CATEGORIES.OUTPUT_LIMIT;
       const isRefusal = metadata.errorAnalysis?.category === ERROR_CATEGORIES.CONTENT_REFUSAL;
       const isImageUnsupported = metadata.errorAnalysis?.category === ERROR_CATEGORIES.IMAGE_UNSUPPORTED;
+      const hasKnownCause = isBudget || isOutputLimit || isRefusal || isImageUnsupported;
       errorEvents.emit('error', {
-        code: isBudget ? 'AI_RUNTIME_BUDGET_EXHAUSTED' : isRefusal ? 'AI_PROVIDER_CONTENT_REFUSED'
+        code: isBudget ? 'AI_RUNTIME_BUDGET_EXHAUSTED' : isOutputLimit ? 'AI_OUTPUT_LIMIT_EXCEEDED' : isRefusal ? 'AI_PROVIDER_CONTENT_REFUSED'
           : isImageUnsupported ? 'AI_PROVIDER_IMAGE_UNSUPPORTED' : 'AI_PROVIDER_EXECUTION_FAILED',
-        message: isBudget ? errorMessage : isRefusal
+        message: isBudget || isOutputLimit ? errorMessage : isRefusal
           ? `${metadata.providerName} declined this prompt on content/safety grounds — stopped without automatic retry or provider fallback.`
           : isImageUnsupported ? errorMessage
           : `AI provider ${metadata.providerName} execution failed: ${errorMessage}`,
-        severity: isBudget || isRefusal || isImageUnsupported ? 'warning' : 'error',
-        canAutoFix: !isBudget && !isRefusal && !isImageUnsupported,
+        severity: hasKnownCause ? 'warning' : 'error',
+        canAutoFix: !hasKnownCause,
         timestamp: Date.now(),
         context: {
           runId: metadata.id,

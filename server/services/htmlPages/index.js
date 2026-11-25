@@ -19,6 +19,7 @@ import { awaitMtplxRequest, mtplxRequestLogPath } from '../../lib/mtplxRequestLo
 import { isEmbeddingModel } from '../../lib/localModelHeuristics.js';
 import { htmlPagesProviderCapability } from '../../lib/provider/htmlPagesProvider.js';
 import { bareLocalModelId } from '../../lib/provider/providerModels.js';
+import { splashHarnessTarget } from '../../lib/provider/splashHarnessContext.js';
 import {
   HTML_BRIEF_MAX_CHARS, HTML_PAGE_DEFAULT_BRIEFS, HTML_PAGES_MAX, htmlPagePlanPrompt, htmlPagePrompt, htmlPagePromptParts, extractHtmlDocument, extractHtmlPagePlan, scoreHtmlPage, scoreHtmlPages,
 } from '../../lib/htmlPageBench.js';
@@ -297,7 +298,7 @@ async function processRun(id) {
         }
         const prompt = planPrompt ? htmlPagePrompt(theme, plan) : (run.prompts?.[index] ?? htmlPagePrompt(theme));
         const startedAt = Date.now();
-        const result = await send(prompt);
+        const result = await send(prompt, { page: true });
         if (controller.signal.aborted) return;
         // Cut to the document, never repaired: a truncated page must read as truncated.
         const html = extractHtmlDocument(String(result?.text || '')).slice(0, MAX_PAGE_HTML_CHARS);
@@ -330,7 +331,7 @@ async function processRun(id) {
       temperature: PAGE_TEMPERATURE, timeoutMs: PAGE_TIMEOUT_MS, signal: controller.signal,
     });
     if (run.route) {
-      await generatePages((prompt) => generateViaProvider(run.route, prompt, controller.signal));
+      await generatePages((prompt, options) => generateViaProvider(run.route, prompt, controller.signal, options));
     } else if (isMtplxCheckpoint(run.backend, run.modelId)) {
       const { runOnMtplxCheckpoint } = await import('../mtplxServerManager.js');
       await runOnMtplxCheckpoint(run.modelId, (served) => generatePages(local(served || run.modelId)), { signal: controller.signal });
@@ -384,12 +385,12 @@ async function reasoningOnlyTimeoutError({ provider, route, capability, message,
 /**
  * One page through a provider route: the configured provider, model and effort exactly as picked, no fallback (the gallery must name what answered) and tool-free (the reply is the page, not files an agent wrote). Resolves to the same `{ text, error, timings }` shape `generate` does.
  */
-async function generateViaProvider(route, prompt, signal) {
+async function generateViaProvider(route, prompt, signal, { page = false } = {}) {
   const [{ runPromptThroughProvider }, { stopRun }] = await Promise.all([
     import('../promptRunner.js'), import('../runner.js'),
   ]);
   // A provider can change after queueing or between the plan and page requests.
-  const { provider, capability } = await requireRouteProvider(route);
+  const { provider, capability, model } = await requireRouteProvider(route);
   signal.throwIfAborted();
   let runId = null;
   const stop = () => { if (runId) stopRun(runId).catch(() => { /* best-effort cancel */ }); };
@@ -404,6 +405,7 @@ async function generateViaProvider(route, prompt, signal) {
       model: route.model || undefined, effort: route.effort || undefined, prompt,
       source: RUN_SOURCE, timeout: PAGE_TIMEOUT_MS, allowFallback: false, toolFree: true, cwd: PATHS.data,
       ...(isolateMtplxOpenCode ? { isolateMtplxOpenCode } : {}),
+      ...(page && splashHarnessTarget(provider, model)?.kind === 'claude' ? { maxTokens: PAGE_MAX_TOKENS } : {}),
       beforeExecute: async () => {
         const { provider: current } = await requireRouteProvider(route);
         if (!isDeepStrictEqual(current, provider) || current.apiKey !== provider.apiKey) {
