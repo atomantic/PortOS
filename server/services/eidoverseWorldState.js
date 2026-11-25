@@ -433,6 +433,7 @@ export async function updateWorldConfigState(patch) {
     const previousPresenceConfig = presenceConfigFromState(state);
     let designChanged = false;
     if (patch.world !== undefined) state.world = validWorldName(patch.world);
+    const worldChanged = previousPresenceConfig.world !== state.world;
     if (Object.hasOwn(patch, 'humanName')) {
       state.human.name = patch.humanName
         ? validIdentity(patch.humanName, fallback.name)
@@ -512,7 +513,14 @@ export async function updateWorldConfigState(patch) {
       }
       designChanged = true;
     }
-    if (designChanged) {
+    if (worldChanged) {
+      state.lastAppliedDesignVersion = null;
+      state.pendingDesignVersion = state.selectedDesignVersion;
+      state.projection = clone(DEFAULT_STATE.projection);
+      state.reconciliation = { ...DEFAULT_STATE.reconciliation, checkpoint: 'configuration-saved' };
+      // A legacy migration report would let boot reconciliation write to the newly selected world.
+      state.migrationReport = null;
+    } else if (designChanged) {
       state.pendingDesignVersion = EIDOVERSE_WORLD_DESIGN_VERSION;
       state.reconciliation.status = 'pending';
       state.reconciliation.checkpoint = 'configuration-saved';
@@ -525,7 +533,6 @@ export async function updateWorldConfigState(patch) {
       state.reconciliation.compensationStatus = null;
     }
     state.recipe = resolveEidoverseDesign(state.userOverrides, state.assetResolutions);
-    const worldChanged = previousPresenceConfig.world !== state.world;
     const humanChanged = previousPresenceConfig.humanName !== state.human.name;
     const cosChanged = previousPresenceConfig.cosId !== state.cos.id;
     const previousOwner = {

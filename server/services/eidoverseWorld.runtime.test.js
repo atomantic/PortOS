@@ -541,6 +541,60 @@ describe('Eidoverse private-world lifecycle', () => {
     });
   });
 
+  it('keeps a new world pending for an explicit first projection without carrying over the previous result', async () => {
+    mocks.persistedState = {
+      schemaVersion: 1,
+      world: 'portos',
+      recipe: EIDOVERSE_WORLD_DESIGN_V1,
+    };
+    const { recipe } = await world.ensureEidoverseWorldConfig();
+    await world.updateEidoverseWorldConfig({
+      recipe: { ...recipe, name: 'Example Systems Garden' },
+      assetOverrides: { app: 'store/example-local-asset' },
+    });
+    await world.projectEidoverseWorld();
+    const first = await world.getEidoverseWorldProjectionStatus();
+    expect(first).toMatchObject({
+      design: { lastAppliedVersion: first.design.selectedVersion, reconciliation: { status: 'complete' } },
+      projection: { lastSuccessAt: expect.any(String), lastSummary: expect.any(Object) },
+    });
+    expect((await world.getEidoverseWorldStatus()).design.migrationReport).toMatchObject({ status: 'applied' });
+
+    await world.updateEidoverseWorldConfig({ world: ' PORTOS ' });
+    expect(await world.getEidoverseWorldProjectionStatus()).toEqual(first);
+
+    mocks.sent.length = 0;
+    await world.updateEidoverseWorldConfig({ world: 'second-world' });
+    const projectionStatus = await world.getEidoverseWorldProjectionStatus();
+    expect(projectionStatus).toEqual({
+      design: {
+        selectedVersion: first.design.selectedVersion,
+        lastAppliedVersion: null,
+        pendingVersion: first.design.selectedVersion,
+        reconciliation: {
+          status: 'pending', checkpoint: 'configuration-saved', error: null, errorCode: null,
+          errorContext: null, startedAt: null, completedAt: null, planFingerprint: null,
+          operationCount: 0, appliedOperations: 0, compensationStatus: null,
+        },
+      },
+      projection: { lastRunAt: null, lastSuccessAt: null, lastError: null, lastSummary: null },
+    });
+    expect(await world.getEidoverseWorldStatus()).toMatchObject({
+      world: 'second-world',
+      recipe: expect.objectContaining({ name: 'Example Systems Garden' }),
+      design: {
+        ...projectionStatus.design,
+        migrationReport: null,
+        userOverrides: { assets: { app: 'store/example-local-asset' } },
+        assetResolutions: { app: { path: 'store/example-local-asset' } },
+      },
+      projection: projectionStatus.projection,
+    });
+    await expect(world.reconcilePendingEidoverseWorld()).resolves.toEqual({ reconciled: false, reason: 'current' });
+    expect(mocks.sent.some(({ type }) => type === 'verb')).toBe(false);
+    expect(mocks.worlds.has('second-world')).toBe(false);
+  });
+
   it('migrates a stale V1 recipe submitted after the update instead of pinning V1 defaults', async () => {
     const updated = await world.updateEidoverseWorldConfig({ recipe: EIDOVERSE_WORLD_DESIGN_V1 });
 
@@ -705,7 +759,6 @@ describe('Eidoverse private-world lifecycle', () => {
     };
 
     const reset = await world.updateEidoverseWorldConfig({
-      world: 'example-reset-world',
       humanName: 'Example Reset Human',
       reset: { scope: 'all' },
     });
