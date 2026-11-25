@@ -3,7 +3,7 @@ import { cosEvents } from './cos/cosEvents.js';
 import { getDomainAutonomyMode } from './cos/cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 import { createMemory, getMemories, searchMemories } from './memoryBackend.js';
-import { classifyMemories, isAvailable } from './memoryClassifier.js';
+import { classifyMemories, getConfig, isAvailable } from './memoryClassifier.js';
 import { generateMemoryEmbedding } from './memoryEmbeddings.js';
 import { extractAndStoreMemories } from './memoryExtractor.js';
 import * as notifications from './notifications.js';
@@ -18,7 +18,7 @@ vi.mock('./memoryBackend.js', () => ({
   getMemories: vi.fn(),
   searchMemories: vi.fn()
 }));
-vi.mock('./memoryClassifier.js', () => ({ classifyMemories: vi.fn(), isAvailable: vi.fn() }));
+vi.mock('./memoryClassifier.js', () => ({ classifyMemories: vi.fn(), getConfig: vi.fn(), isAvailable: vi.fn() }));
 vi.mock('./memoryEmbeddings.js', () => ({ generateMemoryEmbedding: vi.fn() }));
 vi.mock('./notifications.js', async () => ({
   NOTIFICATION_TYPES: (await import('../lib/notificationTypes.js')).NOTIFICATION_TYPES,
@@ -31,6 +31,15 @@ const agentId = 'agent-example';
 const taskId = 'task-example';
 const task = { id: taskId, description: 'Review a sample report', metadata: { app: 'example-app' } };
 const output = 'The sample report review is complete.';
+const fallbackOutput = [
+  '<MEMORY type="learning" category="communication" confidence="0.92">',
+  'Reviewers benefit from a written recap before group discussion.',
+  'Tags: reviews, communication',
+  '</MEMORY>',
+  'The user prefers a written decision log for every handoff.',
+  'The user wants a status badge with 16px spacing.',
+  'The user pushed back on unexplained changes to team priorities.'
+].join('\n');
 const embedding = [0.1, 0.2, 0.3];
 const approvalNeeded = vi.fn();
 const extracted = vi.fn();
@@ -46,6 +55,7 @@ describe('extractAndStoreMemories', () => {
     getDomainBudgetStatus.mockResolvedValue({ withinBudget: true });
     recordDomainUsage.mockResolvedValue(undefined);
     isAvailable.mockResolvedValue(true);
+    getConfig.mockResolvedValue({ fallbackToPatterns: true });
     generateMemoryEmbedding.mockResolvedValue(embedding);
     getMemories.mockResolvedValue({ memories: [] });
     searchMemories.mockResolvedValue({ memories: [] });
@@ -71,7 +81,7 @@ describe('extractAndStoreMemories', () => {
   ])('skips all extraction side effects for $skipped', async ({ mode, withinBudget, skipped }) => {
     getDomainAutonomyMode.mockResolvedValue(mode);
     getDomainBudgetStatus.mockResolvedValue({ withinBudget, exceeded: 'actions' });
-    classifyMemories.mockResolvedValue({ memories: [preference('Written summaries before meetings', 0.9)] });
+    classifyMemories.mockResolvedValue({ usedLLM: true, memories: [preference('Written summaries before meetings', 0.9)] });
 
     await expect(extractAndStoreMemories(agentId, taskId, output, task)).resolves.toEqual({
       created: 0, pendingApproval: 0, memories: [], pendingMemories: [], skipped
@@ -103,7 +113,7 @@ describe('extractAndStoreMemories', () => {
     const low = preference('Short agendas for planning sessions', 0.699);
     classifyMemories.mockImplementation(async () => {
       vi.setSystemTime(1250);
-      return { memories: [high, medium, low] };
+      return { usedLLM: true, memories: [high, medium, low] };
     });
 
     const result = await extractAndStoreMemories(agentId, taskId, output, task);
@@ -128,7 +138,7 @@ describe('extractAndStoreMemories', () => {
   it('queues high-confidence memories in dry-run mode', async () => {
     getDomainAutonomyMode.mockResolvedValue('dry-run');
     const high = preference('Written summaries before meetings', 0.95);
-    classifyMemories.mockResolvedValue({ memories: [high] });
+    classifyMemories.mockResolvedValue({ usedLLM: true, memories: [high] });
 
     const result = await extractAndStoreMemories(agentId, taskId, output, task);
 
@@ -146,7 +156,7 @@ describe('extractAndStoreMemories', () => {
   it('embeds and stores a normalized duplicate in the same batch only once', async () => {
     const first = preference('Written summaries before meetings', 0.9);
     const duplicate = preference('  WRITTEN summaries   before meetings  ', 0.95);
-    classifyMemories.mockResolvedValue({ memories: [first, duplicate] });
+    classifyMemories.mockResolvedValue({ usedLLM: true, memories: [first, duplicate] });
 
     const result = await extractAndStoreMemories(agentId, taskId, output, task);
 
@@ -156,7 +166,7 @@ describe('extractAndStoreMemories', () => {
   });
 
   it('suppresses a memory when active vector search finds a match at the dedup threshold', async () => {
-    classifyMemories.mockResolvedValue({ memories: [preference('Written summaries before meetings', 0.9)] });
+    classifyMemories.mockResolvedValue({ usedLLM: true, memories: [preference('Written summaries before meetings', 0.9)] });
     searchMemories.mockResolvedValue({
       memories: [{ id: 'active-match', summary: 'Send a written recap ahead of meetings', relevance: 0.82 }]
     });
@@ -175,7 +185,7 @@ describe('extractAndStoreMemories', () => {
     const summary = 'Written summaries before meetings should include decisions, their owners, and review dates';
     const duplicate = preference(`${summary} so attendees can prepare`, 0.84);
     const distinct = preference('Review deadlines belong in the weekly planning agenda', 0.84);
-    classifyMemories.mockResolvedValue({ memories: [duplicate, distinct] });
+    classifyMemories.mockResolvedValue({ usedLLM: true, memories: [duplicate, distinct] });
     generateMemoryEmbedding.mockResolvedValue(null);
     getMemories.mockResolvedValue({
       memories: [{ id: 'pending-match', summary: summary.toUpperCase().replace(' ', '   ') }]
@@ -194,21 +204,35 @@ describe('extractAndStoreMemories', () => {
     });
   });
 
-  it('falls back to structured blocks and user preference patterns while rejecting implementation details', async () => {
-    isAvailable.mockResolvedValue(false);
-    const fallbackOutput = [
-      '<MEMORY type="learning" category="communication" confidence="0.92">',
-      'Reviewers benefit from a written recap before group discussion.',
-      'Tags: reviews, communication',
-      '</MEMORY>',
-      'The user prefers a written decision log for every handoff.',
-      'The user wants a status badge with 16px spacing.',
-      'The user pushed back on unexplained changes to team priorities.'
-    ].join('\n');
+  it.each([
+    { scenario: 'a successful empty verdict', available: true, verdict: { usedLLM: true, memories: [], rejected: ['Routine output'] } },
+    { scenario: 'a parse failure with fallback disabled', available: true, verdict: { usedLLM: true, error: 'Parse failed', fallbackAvailable: false } },
+    { scenario: 'an unavailable classifier with fallback disabled', available: false, fallbackToPatterns: false },
+    { scenario: 'a skipped classification with fallback disabled', available: true, verdict: { usedLLM: false, skipped: 'output-too-short' }, fallbackToPatterns: false }
+  ])('stores nothing and sends no approval for $scenario', async ({ available, verdict, fallbackToPatterns = true }) => {
+    isAvailable.mockResolvedValue(available);
+    classifyMemories.mockResolvedValue(verdict);
+    getConfig.mockResolvedValue({ fallbackToPatterns });
+
+    await expect(extractAndStoreMemories(agentId, taskId, fallbackOutput, task)).resolves.toEqual({
+      created: 0, pendingApproval: 0, memories: [], pendingMemories: []
+    });
+    expect(createMemory).not.toHaveBeenCalled();
+    expect(approvalNeeded).not.toHaveBeenCalled();
+    expect(notifications.addNotification).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { scenario: 'an unavailable classifier', available: false },
+    { scenario: 'an LLM failure', available: true, verdict: { usedLLM: false, error: 'LLM call failed', fallbackAvailable: true } },
+    { scenario: 'a parse failure', available: true, verdict: { usedLLM: true, error: 'Parse failed', fallbackAvailable: true } }
+  ])('falls back to structured blocks and user preference patterns after $scenario', async ({ available, verdict }) => {
+    isAvailable.mockResolvedValue(available);
+    classifyMemories.mockResolvedValue(verdict);
 
     const result = await extractAndStoreMemories(agentId, taskId, fallbackOutput, task);
 
-    expect(classifyMemories).not.toHaveBeenCalled();
+    expect(classifyMemories).toHaveBeenCalledTimes(available ? 1 : 0);
     expect(createMemory).toHaveBeenCalledTimes(3);
     expect(result.memories).toEqual([expect.objectContaining({
       type: 'learning',
@@ -240,7 +264,7 @@ describe('extractAndStoreMemories', () => {
     const first = preference('Written summaries before meetings', 0.8);
     const second = preference('One owner for each follow-up', 0.8);
     const active = preference('Explicit review deadlines for decisions', 0.9);
-    classifyMemories.mockResolvedValue({ memories: [first, second, active] });
+    classifyMemories.mockResolvedValue({ usedLLM: true, memories: [first, second, active] });
     notifications.exists.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 
     const { pendingMemories: [firstPending, secondPending] } =
