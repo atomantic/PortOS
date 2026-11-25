@@ -22,7 +22,10 @@ const INPUT_CLS = 'w-full bg-port-bg border border-port-border rounded-lg px-2 p
 // per-backend picker, exactly as VideoRetryForm reuses the video compose
 // controls: every bound, gate and picker compose has applies here without being
 // re-derived. Only the keys the user changed are submitted; unchanged fields stay
-// out of the patch so the original job's values ride through.
+// out of the patch so the original job's values ride through. `noValidate`: the
+// compose inputs' native min/max/step would otherwise block a prompt-only retry of
+// a stored job whose size, steps or guidance sit outside the compose ranges; the
+// retry route validates every value that is actually sent.
 export default function EditRetryForm({ job, onSubmit, onCancel }) {
   const p = job.params || {};
   const isCodex = p.mode === IMAGE_GEN_MODE.CODEX;
@@ -51,10 +54,12 @@ export default function EditRetryForm({ job, onSubmit, onCancel }) {
     }
   }, [codexEffortLevels, effort]);
 
+  const stepsLocked = isLocal && models?.find((m) => m.id === model)?.samplerLocked === true;
+
   const submit = (e) => {
     e.preventDefault();
     onSubmit(buildImageRetryOverrides({
-      prompt, negativePrompt, model, width, height, seed, steps, guidance, effort,
+      prompt, negativePrompt, model, width, height, seed, steps, guidance, effort, stepsLocked,
     }, p));
   };
 
@@ -62,7 +67,7 @@ export default function EditRetryForm({ job, onSubmit, onCancel }) {
   const modelLabel = isLocal || modelKey === 'modelId' ? 'Model id' : `${modeLabel(p.mode)} model`;
 
   return (
-    <form onSubmit={submit} className="mt-3 pt-3 border-t border-port-border space-y-3">
+    <form onSubmit={submit} noValidate className="mt-3 pt-3 border-t border-port-border space-y-3">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <FormField label="Prompt" labelClassName={LABEL_CLS}>
           <AutoSizeTextarea
