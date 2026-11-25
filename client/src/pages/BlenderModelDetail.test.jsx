@@ -439,7 +439,7 @@ describe('BlenderModelDetail', () => {
       api.addBlenderModelCamera.mockResolvedValue(compared({ cameras: [hinge, { ...hinge, id: 'camera-2', label: 'Sheet top', view: 'top', orbit: null }] }));
       await user.click(screen.getByRole('button', { name: 'Save camera' }));
       expect(api.addBlenderModelCamera).toHaveBeenCalledWith(ID, { label: 'Sheet top', referenceId: 'overall', crop: { x: 0, y: 0, width: 0.25, height: 1 }, view: 'top' }, { silent: true });
-      expect(await screen.findByLabelText('Current location')).toHaveTextContent('cam=camera-2');
+      await waitFor(() => expect(screen.getByLabelText('Current location')).toHaveTextContent('cam=camera-2'));
 
       await user.selectOptions(screen.getByLabelText('Camera'), 'camera-1');
       await user.click(screen.getByRole('button', { name: 'Edit camera' }));
