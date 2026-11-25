@@ -2,7 +2,7 @@ vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => '
 /**
  * Postgres-backed round-trip for the Creative Director DB store.
  *
- * Like catalogDB.test.js, this needs a live PostgreSQL with the schema applied.
+ * Like catalogDB.db.test.js, this needs a live PostgreSQL with the schema applied.
  * If no DB is reachable (CI, fresh checkout), it SKIPS cleanly rather than
  * failing red. When a DB IS reachable it exercises the full project lifecycle
  * (create → treatment → scene patch → run append/update → delete) and a
@@ -51,7 +51,7 @@ let skipReason = '';
   }
 }
 
-const runDb = requireDbOrSkip('services/creativeDirector/projectsDB.test', dbReady, skipReason);
+const runDb = requireDbOrSkip('services/creativeDirector/projectsDB.db.test', dbReady, skipReason);
 
 const CREATE_INPUT = {
   name: 'DB round-trip', aspectRatio: '1:1', quality: 'draft', modelId: 'm', targetDurationSeconds: 9,

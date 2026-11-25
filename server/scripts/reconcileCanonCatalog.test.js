@@ -38,7 +38,7 @@ vi.mock('../services/catalog/catalogDB.js', () => ({
   getIngredient: vi.fn(async (id) => dbState.rows[id] || null),
   updateIngredientIfFresh: vi.fn(async (id, patch, ctx) => {
     // The locked freshness re-check itself is covered against Postgres in
-    // catalogCanonProjection.test.js; here a fixture id opts into a refusal.
+    // catalogCanonProjection.db.test.js; here a fixture id opts into a refusal.
     if (dbState.stale.has(id)) return { status: 'stale', ingredient: null };
     dbState.updates.push({ id, patch, ctx });
     // Simulate the real DB trigger: a write bumps updated_at to "now" (a clock

@@ -842,8 +842,7 @@ it('requests DB verification for every shape of suite in the real canonical inve
   // per inventory shape proves the rule; planning all 50+ only repeated it.
   const shapes = {
     scripts: (path) => path.startsWith('scripts/'),
-    globbed: (path) => path.endsWith('/db.test.js'),
-    unmarked: (path) => !path.includes('.db.') && !path.endsWith('/db.test.js'),
+    store: (path) => path.endsWith('/db.test.js'),
     realBrowser: (path) => path.includes('.realBrowser.db.'),
     named: (path) => path.startsWith('server/') && /\.db\.test\.js$/.test(path) && !path.includes('.realBrowser.'),
   };

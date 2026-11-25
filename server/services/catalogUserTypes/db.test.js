@@ -1,7 +1,7 @@
 /**
  * Postgres-backed round-trip for the catalog user-type store (#1001).
  *
- * Like projectsDB.test.js / mediaAssetIndex/db.test.js, this needs a live
+ * Like projectsDB.db.test.js / mediaAssetIndex/db.test.js, this needs a live
  * PostgreSQL with the schema applied. If no DB is reachable (CI, fresh
  * checkout) it SKIPS cleanly rather than failing red. When a DB IS reachable it
  * exercises the whole-slice writeUserTypes contract: upsert-everything +

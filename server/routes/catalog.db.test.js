@@ -11,7 +11,7 @@
  *     records the restore as a new (auditable) revision.
  *
  * Needs a live Postgres with the catalog schema (same probe as
- * services/catalog/catalogDB.test.js); SKIPS cleanly when unreachable. Embeddings are
+ * services/catalog/catalogDB.db.test.js); SKIPS cleanly when unreachable. Embeddings are
  * mocked so the route never reaches an AI provider.
  */
 
@@ -74,7 +74,7 @@ let skipReason = '';
     else skipReason = 'catalog schema not present';
   }
 }
-const runDb = requireDbOrSkip('routes/catalog.test', dbReady, skipReason);
+const runDb = requireDbOrSkip('routes/catalog.db.test', dbReady, skipReason);
 
 function makeApp() {
   const app = express();

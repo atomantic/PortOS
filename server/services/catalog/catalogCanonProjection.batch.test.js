@@ -7,12 +7,12 @@
  * `getIngredientTimestamps` lookup for every candidate id and writes only the
  * rows the LWW comparison says are stale; each write re-checks freshness under
  * the row lock (`updateIngredientIfFresh`, exercised against Postgres in
- * catalogCanonProjection.test.js).
+ * catalogCanonProjection.db.test.js).
  *
  * `catalogDB` is mocked wholesale (no Postgres): the assertions are the query
  * COUNT + shape and that the skip/write accounting is byte-identical to the
  * per-entry version. The live-DB round-trip (loop break, exactly-once writes)
- * stays in `catalogCanonProjection.test.js`.
+ * stays in `catalogCanonProjection.db.test.js`.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';

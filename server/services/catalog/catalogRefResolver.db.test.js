@@ -45,7 +45,7 @@ let skipReason = '';
     else skipReason = 'catalog_ingredient_refs table not present';
   }
 }
-const runDb = requireDbOrSkip('services/catalog/catalogRefResolver.test', dbReady, skipReason);
+const runDb = requireDbOrSkip('services/catalog/catalogRefResolver.db.test', dbReady, skipReason);
 
 // The catalog refs table FKs ingredient_id → catalog_ingredients(id), so we
 // need a real ingredient row (ING) to hang refs on. Synthetic target rows use a

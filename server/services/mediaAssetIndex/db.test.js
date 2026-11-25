@@ -1,7 +1,7 @@
 /**
  * Postgres-backed round-trip for the media asset index.
  *
- * Like projectsDB.test.js, this needs a live PostgreSQL with the schema applied.
+ * Like projectsDB.db.test.js, this needs a live PostgreSQL with the schema applied.
  * If no DB is reachable (CI, fresh checkout), it SKIPS cleanly rather than
  * failing red. When a DB IS reachable it exercises upsert/list/remove and the
  * full reconcile (upsert-everything + prune-stale), using INJECTED disk readers
