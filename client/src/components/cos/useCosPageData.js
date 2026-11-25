@@ -123,6 +123,22 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     statusRef.current = typeof next === 'function' ? next(statusRef.current) : next;
     setStatus(statusRef.current);
   }, []);
+  // Status reads (the shell read and every queue refresh) are applied in the order
+  // they were issued: a read that started before an already-applied one is dropped,
+  // so an older shell response cannot put back a stopped daemon a newer one has
+  // reported running. Socket merges are not reads and are not ranked.
+  const statusReadIssuedRef = useRef(0);
+  const statusReadAppliedRef = useRef(0);
+  const readStatus = useCallback(() => {
+    const seq = ++statusReadIssuedRef.current;
+    return getCosStatus().catch(() => null).then(data => ({ seq, data }));
+  }, []);
+  const applyStatusRead = useCallback(({ seq, data }) => {
+    if (seq < statusReadAppliedRef.current) return false;
+    statusReadAppliedRef.current = seq;
+    applyStatus(data);
+    return true;
+  }, [applyStatus]);
   const [tasks, setTasks] = useState({ user: null, cos: null });
   const tasksRef = useRef(tasks);
   tasksRef.current = tasks;
@@ -403,7 +419,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       if (needs.tasks) tasksSliceRef.current?.abort();
       // Paint the visible queue before ancillary summaries and references settle.
       const coreRead = Promise.all([
-        getCosStatus().catch(() => null),
+        readStatus(),
         needs.tasks ? awaitSlice('tasks', getCosTasks({ view: 'queue', selected: selectedTaskRef.current, signal: controller.signal, silent: true }).catch(() => null)) : Promise.resolve(null),
         awaitSlice('agents', readAgents(controller)),
       ]);
@@ -432,10 +448,9 @@ export default function useCosPageData({ activeTab, selectedTask }) {
         needs.tasks ? awaitSlice('tasks', getCosActionableInsights({ cachedHealth: true, silent: true }).catch(() => null)) : Promise.resolve(null)
       ]);
 
-      const [statusData, tasksData] = await coreRead;
+      const [statusRead, tasksData] = await coreRead;
       if (controller.signal.aborted) return;
-      applyStatus(statusData);
-      setStatusReadFailed(typeof statusData?.running !== 'boolean');
+      if (applyStatusRead(statusRead)) setStatusReadFailed(typeof statusRead.data?.running !== 'boolean');
       // A queue refresh started later can still resolve first. Its task payload
       // must not be clobbered by this older, pre-flip read — otherwise the row
       // returns to the pending-AND-active state this guard exists to remove.
@@ -450,10 +465,11 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       // tab the user asked to open.
       const initialHealth = healthRef.current;
       const initialAgents = needsRef.current.agents ? agentsRef.current : [];
-      const initialState = deriveAgentState(statusData, initialAgents, initialHealth);
+      const initialStatus = statusRef.current;
+      const initialState = deriveAgentState(initialStatus, initialAgents, initialHealth);
       setAgentState(initialState);
-      setStatusMessage(statusData?.paused
-        ? `Paused${statusData.pauseReason ? ` — ${statusData.pauseReason}` : ''}`
+      setStatusMessage(initialStatus?.paused
+        ? `Paused${initialStatus.pauseReason ? ` — ${initialStatus.pauseReason}` : ''}`
         : (initialState === 'investigating' && summarizeHealthIssues(initialHealth?.issues)) || STATE_MESSAGES[initialState]);
       const runningAgent = initialAgents.find(a => a.status === 'running');
       setActiveAgentMeta(runningAgent?.metadata || null);
@@ -481,7 +497,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       if (pending.dirty && !controller.signal.aborted) refreshPageData();
     });
     return pending.promise;
-  }, [deriveAgentState, applyHealth, markHealthUnavailable, readApps, readAgents, awaitSlice, applyStatus, settleAgentState, readProviders]);
+  }, [deriveAgentState, applyHealth, markHealthUnavailable, readApps, readAgents, awaitSlice, settleAgentState, readProviders, readStatus, applyStatusRead]);
 
   // Coalesce event bursts into a read of the visible queue and scalar shell
   // status. Insights use persisted health; invalidation never runs PM2 repair.
@@ -500,13 +516,13 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       ? awaitSlice('tasks', getCosActionableInsights({ cachedHealth: true, silent: true }).catch(() => null))
       : Promise.resolve(null);
     request.promise = Promise.all([
-      getCosStatus().catch(() => null),
+      readStatus(),
       needsRef.current.tasks ? awaitSlice('tasks', getCosTasks({ view: 'queue', selected: selectedTaskRef.current, signal: controller.signal, silent: true }).catch(() => null)) : null,
       awaitSlice('agents', readAgents(controller)),
-    ]).then(async ([summary, tasksData]) => {
+    ]).then(async ([statusRead, tasksData]) => {
       if (controller.signal.aborted || queueSeqRef.current !== queueSeq) return;
-      if (summary) {
-        applyStatus(summary);
+      const summary = statusRead.data;
+      if (summary && applyStatusRead(statusRead)) {
         // A failed first status read is recovered by any later successful one.
         setStatusReadFailed(typeof summary.running !== 'boolean');
         // Coding and Thinking are the states a missed agent event leaves wrong (an
@@ -523,7 +539,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       if (request.dirty && !controller.signal.aborted) refreshQueueData();
     });
     return request.promise;
-  }, [readAgents, awaitSlice, applyStatus]);
+  }, [readAgents, awaitSlice, applyStatusRead, settleAgentState, readStatus]);
 
   // A slice's first read when its flag turns true: queue + insights.
   // Deliberately reads no shell data; status, health and learning are
@@ -1060,7 +1076,8 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       if (checkedHealth.issues.length > 0) {
         setStatusMessage(summarizeHealthIssues(checkedHealth.issues));
       } else {
-        setAgentState('sleeping');
+        // Sleeping only when the daemon is not running; an idle running one is Thinking.
+        setAgentState(deriveAgentState(statusRef.current, needsRef.current.agents ? agentsRef.current : [], healthRef.current));
         setStatusMessage("Health check passed - all systems OK");
       }
     } else {
