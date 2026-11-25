@@ -2075,6 +2075,26 @@ describe('ChiefOfStaff slice reads against concurrent refreshes (#18643)', () =>
     expect(screen.queryByText('Thinking')).toBeNull();
   });
 
+  it('re-reads the retained agent list when agents are deleted, and only while agents are needed', async () => {
+    withFakeTimers();
+    const agent = { id: 'agent-deleted', taskId: 'task-example', status: 'paused', startedAt: '2026-01-01T00:00:00.000Z', metadata: { taskDescription: 'Example paused work' } };
+    api.getCosAgents.mockResolvedValue([agent]);
+    renderWithProbe('config');
+    await waitForPageShell();
+    await settle();
+    await act(async () => { socketStub.receive('cos:agents:changed', {}); await vi.advanceTimersByTimeAsync(450); });
+    expect(api.getCosAgents).not.toHaveBeenCalled();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'go tasks' })); });
+    await settle();
+    expect(api.getCosAgents).toHaveBeenCalledTimes(1);
+
+    api.getCosAgents.mockResolvedValue([]);
+    await act(async () => { socketStub.receive('cos:agents:changed', {}); await vi.advanceTimersByTimeAsync(450); });
+    await settle();
+    expect(api.getCosAgents).toHaveBeenCalledTimes(2);
+  });
+
   it('refreshes the learning summary from the persisted learning-change event', async () => {
     withFakeTimers();
     renderWithProbe('config');
