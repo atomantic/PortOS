@@ -18,6 +18,10 @@ vi.mock('../../../../hooks/useReviewerModelOptions', () => ({
   default: () => ({ optionsByReviewer: {}, freeText: {}, unavailable: {}, loaded: true }),
 }));
 
+vi.mock('../../../../hooks/useToolUseModelIds.js', () => ({
+  default: () => ({ idsByProvider: null, loaded: false }),
+}));
+
 import GlobalConfigControls from './GlobalConfigControls';
 
 const BASE_CONFIG = {

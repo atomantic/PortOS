@@ -1,3 +1,4 @@
+import AppContextPicker from '../../AppContextPicker.jsx';
 import ProviderModelSelector from '../../ProviderModelSelector.jsx';
 import { taskExecutionOptions } from '../../../../../server/lib/executionOptions.js';
 import { useState, useRef } from 'react';
@@ -213,19 +214,13 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
             )}
           </div>
 
-          {/* App Selection */}
-          <FormField label="Target App">
-            <select
-              value={formData.app}
-              onChange={e => setFormData({ ...formData, app: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
-            >
-              <option value="">PortOS (default)</option>
-              {apps?.map(app => (
-                <option key={app.id} value={app.id}>{app.name}</option>
-              ))}
-            </select>
-          </FormField>
+          <AppContextPicker
+            apps={apps ?? []}
+            value={formData.app}
+            onChange={app => setFormData(d => ({ ...d, app }))}
+            showRepoPath={false}
+            label="Target App"
+          />
 
           <ProviderModelSelector providers={providers || []} selectedProviderId={formData.provider}
             selectedModel={formData.model} availableModels={availableModels} loading={!providersLoaded}

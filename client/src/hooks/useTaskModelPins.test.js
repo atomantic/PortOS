@@ -60,3 +60,33 @@ describe('useTaskModelPins — Antigravity base models + effort', () => {
     expect(onUpdate).toHaveBeenCalledWith('code-review', { model: 'gemini-3.1-pro' });
   });
 });
+
+it('keeps a composed route busy while its provider and remaining fields save in order', async () => {
+  let finishProvider;
+  let finishRoute;
+  const onUpdate = vi.fn()
+    .mockImplementationOnce(() => new Promise(resolve => { finishProvider = resolve; }))
+    .mockImplementationOnce(() => new Promise(resolve => { finishRoute = resolve; }));
+  const { result } = mount({ providerId: AGY.id, model: 'gemini-3.6-flash', effort: 'high' }, onUpdate);
+  const composite = 'codex.cli@openai';
+
+  await act(async () => { result.current.changeProvider(composite); });
+  expect(onUpdate).toHaveBeenCalledTimes(1);
+  expect(onUpdate).toHaveBeenNthCalledWith(1, 'code-review', { providerId: composite, model: null, effort: null });
+
+  await act(async () => {
+    result.current.changeModel('gpt-5.6-terra');
+    result.current.changeEffort('high');
+  });
+  expect(onUpdate).toHaveBeenCalledTimes(1);
+  expect(result.current.saving).toBe(true);
+
+  await act(async () => { finishProvider(true); });
+  expect(onUpdate).toHaveBeenCalledTimes(2);
+  expect(onUpdate).toHaveBeenNthCalledWith(2, 'code-review', { model: 'gpt-5.6-terra', effort: 'high' });
+  expect(result.current.saving).toBe(true);
+
+  await act(async () => { finishRoute(true); });
+  expect(result.current.saving).toBe(false);
+  expect(result.current).toMatchObject({ providerId: composite, model: 'gpt-5.6-terra', effort: 'high' });
+});
