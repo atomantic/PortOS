@@ -1,8 +1,8 @@
 # vLLM Qwen3.8-27B (DFlash 2) on an RTX 3090
 
 [syv-ai/qwen38-27b-rtx3090](https://github.com/syv-ai/qwen38-27b-rtx3090) is a
-frozen, reproducible packaging of patched vLLM 0.27.1 + a requantized
-Qwen3.8-27B + a Docker compose file, targeted at **one specific card**: a 24 GB
+packaging of patched vLLM 0.27.1 + a requantized Qwen3.8-27B + a Docker compose
+file. The revision PortOS provisions targets **one specific card**: a 24 GB
 RTX 3090. It serves an OpenAI-compatible API with DFlash 2 speculative drafting
 and prefix caching turned on.
 
@@ -71,10 +71,8 @@ would.
 
 ### 1. Prepare the stack (on the 3090 host)
 
-The host itself is yours: Docker, the NVIDIA Container Toolkit (driver ≥ 580 /
-CUDA 13), and — on Windows — WSL2. PortOS will not install any of those; they are
-operator decisions with driver requirements it cannot judge, and the readiness
-checklist's **Install** button keeps saying so.
+Install Docker with Compose 2.24.4 or newer and the NVIDIA Container Toolkit
+(driver ≥ 580 / CUDA 13) on the 3090 host. Windows hosts also need WSL2.
 
 The *project* on top of them can go either way.
 
@@ -83,9 +81,12 @@ The *project* on top of them can go either way.
 On a host that already has Docker and the NVIDIA runtime, the provider
 readiness checklist offers **"Clone, build & prepare vLLM (Qwen3.8-27B) (~30 GB),
 then start"**. The label names the payload because the click IS the consent — this
-is the one button in PortOS that spends tens of gigabytes. It clones this repo,
-writes the `.env` below (including the settings in §1a, which is the point), builds
-the image, runs `prepare`, and brings the container up, streaming every line.
+is the one button in PortOS that spends tens of gigabytes. For a new install,
+PortOS fetches the [pinned upstream revision](https://github.com/syv-ai/HyperQwen/commit/18db5cb3b56e63e30f64eee7901f0e97e632ab32)
+and verifies the detached checkout before writing `.env` or running Compose.
+It installs a Compose override that binds the API to loopback and uses the local
+build, writes the settings below, builds the image, runs `prepare`, and brings
+the container up. PortOS reuses existing project directories as supplied.
 
 It is idempotent: re-running skips whatever already landed, and `prepare`'s
 download resumes, so a cancelled run costs minutes rather than the 20 GB. An
@@ -97,7 +98,7 @@ step 2 below is just "enable it".
 **On Windows it places the project inside WSL2 for you.** The default
 `~/qwen-serving` resolves to a *Windows* home, and 20 GB of weights reached from
 the WSL2 VM across a 9p share is a mistake that costs 20 GB to discover — so
-before it clones anything, PortOS asks WSL for the default distro's name and home
+before it fetches anything, PortOS asks WSL for the default distro's name and home
 (`wsl.exe -e sh -c 'echo "$WSL_DISTRO_NAME"; echo "$HOME"'`), checks that
 `\\wsl.localhost\<distro>\home\<user>` is readable from Windows, and records
 the result as `VLLM_QWEN_PROJECT_DIR` in PortOS's own `.env` so the readiness
@@ -114,27 +115,47 @@ The one thing it deliberately will not do is raise the WSL2 memory ceiling — s
 #### By hand
 
 Still fully supported, and the explanation of what the button does. Run the
-commands below *inside the WSL2 distro*, not in PowerShell — the compose project
-and its 20 GB of weights belong on the Linux filesystem.
+commands below *inside the WSL2 distro* for a fresh `~/qwen-serving` checkout.
+The compose project and its 20 GB of weights belong on the Linux filesystem.
 
 ```bash
-git clone https://github.com/syv-ai/qwen38-27b-rtx3090 ~/qwen-serving
-cd ~/qwen-serving
-echo "VLLM_API_KEY=$(openssl rand -hex 24)" > .env
-printf 'SPEC=dflash2\nPREFIX_CACHE=1\n' >> .env
-echo 'EXTRA_ARGS=--enable-auto-tool-choice --tool-call-parser qwen3_xml' >> .env   # required for any agent use
-if grep -qi microsoft /proc/version; then                                          # WSL2 only, both required
-  printf 'VLLM_WSL2_ENABLE_PIN_MEMORY=1\nPYTORCH_CUDA_ALLOC_CONF=expandable_segments:False\n' >> .env
-fi
-docker compose build              # ~9.5 GB image, built here — there is no registry to pull from
-docker compose run --rm prepare   # ~20 GB download + CPU requantization, idempotent, resumable
-docker compose --profile single up -d
+(
+  set -e
+  revision=18db5cb3b56e63e30f64eee7901f0e97e632ab32
+  project_dir="$HOME/qwen-serving"
+  test ! -e "$project_dir"
+  git init "$project_dir"
+  cd "$project_dir"
+  git fetch --no-tags --depth 1 https://github.com/syv-ai/qwen38-27b-rtx3090 "$revision"
+  git checkout --detach FETCH_HEAD
+  test "$(git rev-parse HEAD)" = "$revision"
+  cat > compose.override.yaml <<'YAML'
+services:
+  prepare:
+    pull_policy: never
+  single: &local
+    pull_policy: never
+    ports: !override
+      - "127.0.0.1:${PORT:-18020}:${PORT:-18020}"
+  batch: *local
+YAML
+  api_key=$(openssl rand -hex 24)
+  (umask 077; printf 'VLLM_API_KEY=%s\n' "$api_key" > .env)
+  printf 'SPEC=dflash2\nPREFIX_CACHE=1\n' >> .env
+  echo 'EXTRA_ARGS=--enable-auto-tool-choice --tool-call-parser qwen3_xml' >> .env   # required for agent use
+  if grep -qi microsoft /proc/version; then                                          # WSL2 only
+    printf 'VLLM_WSL2_ENABLE_PIN_MEMORY=1\nPYTORCH_CUDA_ALLOC_CONF=expandable_segments:False\n' >> .env
+  fi
+  docker compose build              # ~9.5 GB image, built locally
+  docker compose run --rm prepare   # ~20 GB download + CPU requantization, idempotent, resumable
+  docker compose --profile single up -d
+)
 ```
 
-`docker compose --profile single up -d` on its own does all three — `prepare` is
-a `depends_on` of the server. Running them separately is worth it anyway: it is
-the long, unattended part, and PortOS's Start button deliberately refuses until
-`prepare` has actually landed weights on disk (see below).
+After the image is built, `docker compose --profile single up -d` also runs
+`prepare` as a service dependency. Running `prepare` separately shows progress
+during the download and requantization. The PortOS Start button checks for the
+weights on disk before it starts the server.
 
 **Tool calling must be switched on, or the coding agent is useless.** Upstream's
 `single-user/start_qwen.sh` serves without it, and vLLM then rejects every
