@@ -369,6 +369,7 @@ describe('TaskItem blocked reason', () => {
     render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
     expect(screen.getByRole('region', { name: 'GitHub workflow access' })).toHaveTextContent('On the instance that ran this task');
     expect(screen.getByText('gh auth refresh -h github.com -s workflow')).toBeVisible();
+    expect(screen.getByRole('region', { name: 'GitHub workflow access' })).toHaveTextContent('The refresh updates the stored login, not an injected token.');
     expect(api.updateCosTask).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Unblock task sys-workflow-approval and move it to pending' }));
     await waitFor(() => expect(api.updateCosTask).toHaveBeenCalledWith(task.id, { status: 'pending', type: 'internal' }, { silent: true }));

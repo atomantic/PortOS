@@ -75,8 +75,9 @@ function TaskItemBlocker({ task, idScope }) {
         <section className="mt-2 space-y-1 rounded border border-port-warning/30 p-2 text-sm" aria-label="GitHub workflow access">
           <p className="font-medium text-port-warning">GitHub workflow access required</p>
           <p>Repository ownership does not grant the GitHub CLI credential permission to write workflow files.</p>
-          <p>On the instance that ran this task, use the GitHub CLI account assigned to the project. For a GitHub.com OAuth login, run:</p>
+          <p>On the instance that ran this task, open a normal terminal and use the GitHub CLI account assigned to the project. For GitHub.com OAuth, run:</p>
           <code className="block select-all break-words rounded bg-port-bg px-2 py-1">{GITHUB_WORKFLOW_SCOPE_REMEDY}</code>
+          <p>If the CLI says it is using <code>GH_TOKEN</code> or <code>GITHUB_TOKEN</code>, use a terminal without those overrides for the refresh. The refresh updates the stored login, not an injected token.</p>
           <p>Approve the GitHub prompt, then select <strong>Unblock</strong> to retry the retained work. If the project uses a different credential, update that credential instead.</p>
         </section>
       )}
