@@ -17,7 +17,6 @@
  * the SAME project while one is already in flight.
  */
 
-import { documentSceneVisualLayer } from '../../lib/musicVideo/musicVideoLayers.js';
 import { captureMusicVideoEvidence } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { unlink } from 'fs/promises';
@@ -35,11 +34,10 @@ import { filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import { encodeFileContactSheetAtTimes } from '../htmlComposition/encode.js';
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
-import { assertCurrentPerformanceTakes, withDraftPerformanceFallbacks } from './performanceShot.js';
-import { planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes, isLocalRenderMark, resolveMasterAudioPath, resolveSoundBedPath } from './render.js';
+import { planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes, isLocalRenderMark, resolveMasterAudioPath } from './render.js';
 import { SOCIAL_VIDEO_ARGS } from './socialCuts.js';
-import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
-import { encodeDocumentComposition, prepareDocumentRender } from './documentRender.js';
+import { writeCodeProofSheet } from './codeRender.js';
+import { SEEKED_RENDERERS, resolveSeekedInputs, seekedRendererFor } from './seekedRenderers.js';
 // Lazy: the stager pulls the document preview stack, which only a composed lyric render needs, not the boot closure.
 const stageLyricOverlayLazy = async (...args) => (await import('./lyricOverlayStage.js')).stageLyricOverlay(...args);
 import { composedLyricWindows, projectTypographyPlan } from './composition.js';
@@ -92,59 +90,6 @@ const settleExcerptRecord = (projectId, excerptId, patch) => withBackupAssetPubl
  * `revisionId` (#8987) links the render to an open selective revision in the
  * same write that creates the excerpt, so its finish settles that revision.
  */
-// A code-rendered or composition-document project excerpts the same seekable
-// composition, windowed on song time, instead of the footage concat.
-const SEEKED_EXCERPTS = Object.freeze({
-  // A Blender film cuts the window out of its rendered shot videos. Its frame is the film's
-  // own, so it cannot be re-laid-out at another aspect; the film look is a finishing pass.
-  blender: {
-    label: 'Blender film', fixedFrame: true, filmLookFinish: true,
-    prepare: async (project) => (await import('./blender/finalRender.js')).prepareBlenderExcerpt(project),
-    assertWindow: async (input) => (await import('./blender/finalRender.js')).assertBlenderExcerptWindow(input),
-    encode: async (input) => (await import('./blender/finalRender.js')).encodeBlenderExcerpt(input),
-  },
-  eidoverse: {
-    label: 'Eidoverse Video',
-    prepare: async (project) => {
-      const plan = await (await import('./eidoverseRender.js')).prepareEidoverseRender(project);
-      return { plan, totalSec: plan.durationSec, songSections: (project.scenes || [])
-        .filter(s => s.endSec > s.startSec).map(s => ({ sceneId: s.sceneId, startSec: s.startSec, endSec: s.endSec })) };
-    },
-    encode: async ({ prepared, startSec, endSec, ...input }) => (await import('./eidoverseRender.js')).encodeEidoverseComposition({
-      ...input, plan: prepared.plan, windowStart: startSec, windowEnd: endSec,
-    }),
-  },
-  code: {
-    label: 'code',
-    prepare: async (project) => {
-      const full = prepareCodeRender(project);
-      return { full, totalSec: full.durationSec, songSections: full.song.sections.map((s) => ({ sceneId: s.sceneId || s.id, startSec: s.startSec, endSec: s.endSec })) };
-    },
-    encode: async ({ project, projectId, jobId, audioPath, outputPath, signal, onProgress, startSec, endSec, fade, videoArgs }) => {
-      const plan = prepareCodeRender(project, { windowStart: startSec, windowEnd: endSec });
-      await encodeCodeComposition({
-        ...plan, audioPath, audioStartSec: startSec, outputPath, directory: `compositions/music-video/${projectId}/${jobId}`, signal, onProgress, fade, videoArgs,
-      });
-      return { width: plan.width, height: plan.height, fps: plan.fps, boundaryTimes: plan.sectionTimes };
-    },
-  },
-  document: {
-    label: 'composition document',
-    soundBed: true,
-    performanceTakes: true,
-    prepare: async (project) => {
-      const plan = await prepareDocumentRender(project);
-      const songSections = (project.scenes || [])
-        .filter((s) => s?.sceneId && typeof s.startSec === 'number' && typeof s.endSec === 'number' && s.endSec > s.startSec)
-        .map((s) => ({ sceneId: s.sceneId, layer: documentSceneVisualLayer(project, s, { generated: project.composition?.document?.source?.kind === 'generated' }), startSec: s.startSec, endSec: s.endSec }));
-      return { plan, totalSec: plan.durationSec, songSections };
-    },
-    encode: ({ prepared, project, jobId, audioPath, soundBed, outputPath, signal, onProgress, startSec, endSec, fade, videoArgs }) => encodeDocumentComposition({
-      project, plan: prepared.plan, jobId, audioPath, soundBed, outputPath, signal, onProgress, windowStart: startSec, windowEnd: endSec, fade, videoArgs, collectFootageVisibility: true,
-    }),
-  },
-});
-
 async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSec, revisionId, handOff, renderer, aspect = null, fade = false }) {
   // A social cut renders the same composition at another frame (#9280): the
   // re-framed view drives planning, staging and capture; the record keeps its own aspect.
@@ -154,16 +99,11 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
     });
   }
   const project = musicVideoAtAspect(stored, aspect);
-  // A missing master throws before the excerpt is marked rendering.
-  const audioPath = await resolveMasterAudioPath(project);
-  // A draft draws a stale performance shot as a cutaway; the excerpt still records the real selection.
-  const drawn = renderer.performanceTakes ? await withDraftPerformanceFallbacks(project, audioPath) : project;
-  const prepared = await renderer.prepare(drawn);
-  if (renderer.performanceTakes) {
-    await assertCurrentPerformanceTakes(drawn, audioPath);
-  }
-  const soundBed = renderer.soundBed ? await resolveSoundBedPath(project) : null;
-  if (!excerptRangeFits(startSec, endSec, prepared.totalSec, prepared.plan?.fps ?? prepared.full?.fps)) {
+  // A missing master throws before the excerpt is marked rendering. A draft draws a stale
+  // performance shot as a cutaway; the excerpt still records the real selection.
+  const { audioPath, soundBed, drawn } = await resolveSeekedInputs(renderer, project, { draft: true });
+  const prepared = await renderer.prepare(drawn, { windowed: true });
+  if (!excerptRangeFits(startSec, endSec, prepared.totalSec, prepared.plan?.fps)) {
     throw new ServerError(
       `The excerpt range must fall within the project's ${prepared.totalSec.toFixed(2)}s song`,
       { status: 422, code: 'INVALID_EXCERPT_RANGE', context: { totalDuration: prepared.totalSec } },
@@ -214,7 +154,7 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
   const finishing = Boolean(renderer.filmLookFinish) && filmLookFinishNeeded(project, { shotLooks: true });
   const encodeTop = finishing ? 0.5 : 1;
   Promise.resolve().then(() => renderer.encode({
-    prepared, project: drawn, projectId, jobId, audioPath, soundBed, outputPath, signal, startSec, endSec: endClamped, fade, lookPass: finishing,
+    prepared, project: drawn, projectId, jobId, audioPath, soundBed, outputPath, signal, window: { startSec, endSec: endClamped }, fade, lookPass: finishing,
     videoArgs: aspect === '9:16' && !renderer.fixedFrame ? SOCIAL_VIDEO_ARGS : undefined,
     onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: encodeTop * fraction }),
   })).then(async (encoded) => {
@@ -266,20 +206,16 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
  * COMPOSITION_DOCUMENT_FORMAT, which the caller takes as "not available".
  * `deps` (tests): `renderers` stands in for the seeked renderers, `resolveAudio` for the master lookup.
  */
-export async function renderSeekedWindow(stored, { startSec, endSec, aspect, fade = false, videoArgs, outputPath, jobId, signal, onProgress }, { renderers = SEEKED_EXCERPTS, resolveAudio = resolveMasterAudioPath } = {}) {
+export async function renderSeekedWindow(stored, { startSec, endSec, aspect, fade = false, videoArgs, outputPath, jobId, signal, onProgress }, { renderers = SEEKED_RENDERERS, resolveAudio = resolveMasterAudioPath } = {}) {
   const renderer = renderers[stored?.composition?.mode];
   // A fixed-frame renderer (a Blender film) cannot draw itself at another aspect: the caller fits the master.
   if (!renderer || renderer.fixedFrame) return null;
   const project = musicVideoAtAspect(stored, aspect);
-  const prepared = await renderer.prepare(project);
-  const audioPath = await resolveAudio(project);
-  if (renderer.performanceTakes) {
-    await assertCurrentPerformanceTakes(project, audioPath);
-  }
-  const soundBed = renderer.soundBed ? await resolveSoundBedPath(project) : null;
+  const prepared = await renderer.prepare(project, { windowed: true });
+  const { audioPath, soundBed } = await resolveSeekedInputs(renderer, project, { resolveAudio });
   return renderer.encode({
     prepared, project, projectId: project.id, jobId, audioPath, soundBed, outputPath, signal,
-    startSec, endSec: Math.min(endSec, prepared.totalSec), fade, videoArgs, onProgress,
+    window: { startSec, endSec: Math.min(endSec, prepared.totalSec) }, fade, videoArgs, onProgress,
   });
 }
 
@@ -307,7 +243,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
 async function beginExcerptRender({ projectId, stored, project, startSec, endSec, aspect, fade, revisionId, pilotEvidence, verifyCurrent }) {
   let handedOff = false;
   try {
-    const seeked = SEEKED_EXCERPTS[project.composition?.mode];
+    const seeked = seekedRendererFor(project);
     if (seeked) {
       return await launchSeekedExcerpt({
         projectId, project, startSec, endSec, revisionId, handOff: () => { handedOff = true; }, renderer: seeked, aspect, fade,

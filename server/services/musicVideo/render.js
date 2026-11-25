@@ -43,15 +43,15 @@ import { requireProject } from './requireProject.js';
 import { applyProjectPatch } from './projectsLogic.js';
 import { isLocalRenderMark, settledRender, settleMusicVideoRender } from './renderSettlement.js';
 import { assertSongAudioCurrent, audioRevisionOf } from '../../lib/musicVideo/musicVideoSongAudio.js';
-import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
-import { documentRenderInitScripts, encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
+import { writeCodeProofSheet } from './codeRender.js';
+import { sweepDocumentScratch } from './documentRender.js';
+import { resolveSeekedInputs, seekedRendererFor } from './seekedRenderers.js';
 import { sweepCompositionScratch } from './compositionRender.js';
 import { applyFilmLookFinish, filmLookFinishNeeded, sweepFilmLookScratch } from './filmLookFinish.js';
 import { appendStatsOutro, sweepStatsOutroScratch } from './statsOutro.js';
 import { endingSeconds } from '../../lib/musicVideo/musicVideoEnding.js';
 import { coldOpenScenes } from '../../lib/musicVideo/musicVideoColdOpen.js';
 import { captureMusicVideoEvidence, } from '../../lib/musicVideo/musicVideoDependencies.js';
-import { assertCurrentPerformanceTakes } from './performanceShot.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
 import { musicVideoEvents } from './events.js';
 import { applyFrameHold, projectFrameHold } from './frameHold.js';
@@ -166,66 +166,19 @@ export function cancelRender(jobId) {
 }
 
 
-// Code-rendered mode (#9076) and the composition-document mode seek a
-// composition instead of concatenating footage. They share this module's job
-// map so the existing SSE and cancel routes apply. Code mode never asks a
-// footage model for pixels; a document draws the scenes' selected takes.
-const SEEKED_RENDERERS = Object.freeze({
-  // A Blender film: the final shot videos joined with the song. It is an ffmpeg
-  // join like a footage cut, so the project's film look is a finishing pass.
-  blender: {
-    label: 'Blender film', modelId: 'music-video-blender', filmLookFinish: true,
-    prepare: async (project) => (await import('./blender/finalRender.js')).prepareBlenderFinal(project),
-    encode: async (input) => (await import('./blender/finalRender.js')).encodeBlenderFinal(input),
-    recordFinal: async (input) => (await import('./blender/finalRender.js')).recordBlenderFinal(input),
-  },
-  eidoverse: {
-    label: 'Eidoverse Video', modelId: 'music-video-eidoverse',
-    prepare: async (project) => (await import('./eidoverseRender.js')).prepareEidoverseRender(project),
-    encode: async (input) => (await import('./eidoverseRender.js')).encodeEidoverseComposition(input),
-  },
-  code: {
-    label: 'code',
-    modelId: 'music-video-code',
-    // Draws the film look in its page, so the outro page draws it too.
-    filmLookInPage: true,
-    prepare: async (project) => prepareCodeRender(project),
-    encode: async ({ plan, project, projectId, jobId, audioPath, outputPath, signal, onProgress }) => {
-      await encodeCodeComposition({
-        ...plan, audioPath, outputPath, directory: `compositions/music-video/${projectId}/${jobId}`, signal, onProgress,
-        initScripts: documentRenderInitScripts(project),
-      });
-      return { width: plan.width, height: plan.height, fps: plan.fps, durationSec: plan.durationSec, boundaryTimes: plan.sectionTimes };
-    },
-  },
-  document: {
-    label: 'composition document',
-    modelId: 'music-video-document',
-    filmLookInPage: true,
-    soundBed: true,
-    // A document draws the scenes' selected takes, so it runs the same
-    // performance-take gate as a footage render (#9266).
-    performanceTakes: true,
-    prepare: (project) => prepareDocumentRender(project),
-    encode: ({ plan, project, jobId, audioPath, soundBed, outputPath, signal, onProgress }) => encodeDocumentComposition({
-      project, plan, jobId, audioPath, soundBed, outputPath, signal, onProgress,
-    }),
-  },
-});
-
-/** The seeked renderer for a project's render mode, or null for footage modes. */
-export const seekedRendererFor = (project) => SEEKED_RENDERERS[project?.composition?.mode] || null;
+// Code-rendered mode (#9076) and the composition-document mode seek a composition instead of
+// concatenating footage; their renderers live in seekedRenderers.js, shared with the draft excerpts.
+// They share this module's job map so the existing SSE and cancel routes apply.
+export { seekedRendererFor };
 
 async function renderSeekedMode(projectId, project, handOff, renderer, options = {}) {
-  const plan = await renderer.prepare(project);
   // Resolve the master before any rendering mark. A missing track throws here
   // and the caller releases the pending slot without leaving a job running.
-  const audioPath = await resolveMasterAudioPath(project);
-  assertSongAudioCurrent(project, basename(audioPath));
-  if (renderer.performanceTakes) {
-    await assertCurrentPerformanceTakes(project, audioPath);
-  }
-  const soundBed = renderer.soundBed ? await resolveSoundBedPath(project) : null;
+  const { audioPath, soundBed } = await resolveSeekedInputs(renderer, project, {
+    checkAudio: (path) => assertSongAudioCurrent(project, basename(path)),
+  });
+  const prepared = await renderer.prepare(project);
+  const { plan } = prepared;
   await ensureDir(PATHS.videos);
   await ensureDir(PATHS.videoThumbnails);
   const renderingOn = await ensureInstanceId();
@@ -276,7 +229,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
     await assertCurrentRenderApproval(projectId, project, options);
     if (signal.aborted) throw Object.assign(new Error('Render cancelled'), { code: 'CANCELED' });
     const encoded = await renderer.encode({
-      plan, project, projectId, jobId, audioPath, soundBed, outputPath, signal, lookPass: finishing,
+      prepared, project, projectId, jobId, audioPath, soundBed, outputPath, signal, lookPass: finishing,
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: encodeTop * fraction }),
     });
     // The ending (cutting room floor, credits; when on) joins after the song.
