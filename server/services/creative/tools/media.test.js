@@ -309,15 +309,24 @@ describe('planner-authored attachments on a hosted video pin', () => {
     expect(enqueueJob).not.toHaveBeenCalled();
   });
 
-  it('still renders a Gemini clip from a start frame the image library holds', async () => {
+  it.each(['sourceImagePath', 'sourceImageFile'])('renders a Gemini clip from a library start frame given as %s', async (key) => {
     getSettings.mockResolvedValue({});
     getProject.mockResolvedValue(pinned('gemini', { aspectRatio: '9:16', quality: 'standard', targetDurationSeconds: 8 }));
-    await run('media_enqueueVideoJob', { prompt: 'An example lighthouse', sourceImagePath: 'example-frame.png' }, { projectId: 'cd-1' });
+    await run('media_enqueueVideoJob', { prompt: 'An example lighthouse', [key]: 'example-frame.png' }, { projectId: 'cd-1' });
     expect(enqueued().params).toMatchObject({
       mode: 'gemini', videoMode: 'image', prompt: 'An example lighthouse', sourceImagePath: libraryFrame,
     });
     expect(enqueued().params.height).toBeGreaterThan(enqueued().params.width);
-    for (const key of ['modelId', 'numFrames', 'fps', 'steps']) expect(enqueued().params).not.toHaveProperty(key);
+    for (const key of ['modelId', 'numFrames', 'fps', 'steps', 'sourceImageFile']) expect(enqueued().params).not.toHaveProperty(key);
+  });
+
+  it.each(['missing file', 'host file'])('refuses a sourceImageFile pointing at a %s before enqueue', async (location) => {
+    const sourceImageFile = location === 'host file' ? hostFile : 'missing-frame.png';
+    getSettings.mockResolvedValue({});
+    getProject.mockResolvedValue(pinned('gemini'));
+    await expect(run('media_enqueueVideoJob', { prompt: 'p', sourceImageFile }, { projectId: 'cd-1' }))
+      .rejects.toMatchObject({ code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED' });
+    expect(enqueueJob).not.toHaveBeenCalled();
   });
 
   it.each([
