@@ -122,7 +122,7 @@ export function recordSearchText(kind, data) {
 // demand (`/gallery/lookup`, `/video-gen/history/:id`).
 const COMPACT_FIELDS = ['id', 'filename', 'path', 'thumbnail', 'createdAt', 'hidden', 'width', 'height',
   'appId', 'model', 'modelId', 'mode', 'seed', 'steps', 'numFrames', 'fps', 'fileSizeBytes', 'renderMs', 'loraFilenames',
-  'lora_filenames', 'loraPaths', 'lora_paths', 'stitchedFrom', 'upscaledFrom', 'extractedFromVideoId',
+  'lora_filenames', 'loraPaths', 'lora_paths', 'stitchedFrom', 'upscaledFrom', 'trimmedFrom', 'extractedFromVideoId',
   'cleanedFrom', 'autoCleaned', 'regenerated', 'watermarkRemoved', 'pendingDelete'];
 export const COMPACT_PROMPT_CHARS = 240;
 // Scalars the list predicates read (db.js assetFilter) that are not card
