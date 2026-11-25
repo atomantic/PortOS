@@ -11,7 +11,6 @@ import { trackedRenderMap } from '../server/services/renderActivity.js';
 import { runDeferredUpdate, settleInterruptedUpdate } from './deferred-update.mjs';
 import { installUpdateTestSupervisor } from './lib/updateTestSupervisor.js';
 import { installAdmittedUpdateFixture } from './lib/updateContractHarness.js';
-import { portosServiceListeners } from './lib/legacyUpdateActivity.mjs';
 import { POSIX_DETACHED_LAUNCHER } from './lib/posixDetachedLauncher.mjs';
 
 const roots = [];
@@ -80,17 +79,14 @@ describe('deferred update admission', () => {
       expect(wait).toHaveBeenCalledOnce();
     }
   });
-  it.each(['node start.js', 'node --watch start.js', 'node "C:\\npm\\pm2\\lib\\ProcessContainerFork.js"'])('does not infer a Windows runtime from a generic Node command or service port: %s', async command => {
+  it.each(['node start.js', 'node --watch start.js', 'node "C:\\npm\\pm2\\lib\\ProcessContainerFork.js"'])('does not infer a Windows runtime from a generic Node command: %s', async command => {
     const { root, admission } = fixture();
     const operation = admission.deferredUpdate.request();
     admission.deferredUpdate.acquire(operation.id, { interrupt: true }); admission.deferredUpdate.enter(operation.id, process.pid);
-    const options = { admission, cwd: root, platform: 'win32', snapshot: async () => [
+    const options = { admission, cwd: root, snapshot: async () => [
       { pid: process.pid, command: 'node updater', state: 'S' }, { pid: 2468, command, state: 'S' },
     ], probeCwds: async () => new Map() };
-    await expect(settleInterruptedUpdate(operation.id, { ...options, listeners: async () => [{ pid: 2468, port: 6003 }] })).resolves.toBeUndefined();
-    await expect(settleInterruptedUpdate(operation.id, { ...options, listeners: async () => { throw new Error('denied'); } })).resolves.toBeUndefined();
-    // A generic relative Node command is not attributed to PortOS by name.
-    await expect(settleInterruptedUpdate(operation.id, { ...options, listeners: async () => [{ pid: 9999, port: 6003 }] })).resolves.toBeUndefined();
+    await expect(settleInterruptedUpdate(operation.id, options)).resolves.toBeUndefined();
   });
 
   it.each(['absolute', 'relative'])('refuses a positively identified PortOS runtime after shutdown: %s', async form => {
@@ -103,14 +99,17 @@ describe('deferred update admission', () => {
       probeCwds: async () => new Map([[2468, root]]) })).rejects.toThrow('PortOS runtime PID 2468 is still running');
   });
 
-  it('uses configured mirror and runner listener ports and excludes standalone Chrome CDP', async () => {
-    const { root } = fixture();
-    writeFileSync(join(root, '.env'), 'PORTOS_HTTP_PORT=6003\nCOS_RUNNER_URL=http://127.0.0.1:6008\n');
-    const result = await portosServiceListeners(root, { platform: 'win32', env: {}, run: async () => ({ stdout: JSON.stringify([
-      { OwningProcess: 1, LocalPort: 6003 }, { OwningProcess: 2, LocalPort: 6008 },
-      { OwningProcess: 3, LocalPort: 5553 }, { OwningProcess: 4, LocalPort: 5558 }, { OwningProcess: 5, LocalPort: 5556 },
-    ]) }) });
-    expect(result).toEqual([{ pid: 1, port: 6003 }, { pid: 2, port: 6008 }]);
+  it.each(['database-maintenance', 'database-restore-recovery.json'])('blocks interrupted settlement while %s exists', async marker => {
+    const { root, admission } = fixture();
+    const operation = admission.deferredUpdate.request();
+    admission.deferredUpdate.acquire(operation.id, { stopFirst: true });
+    admission.deferredUpdate.enter(operation.id, process.pid);
+    writeFileSync(join(root, 'data', marker), '');
+    const snapshot = vi.fn(async () => []);
+
+    await expect(settleInterruptedUpdate(operation.id, { admission, cwd: root, snapshot }))
+      .rejects.toThrow('Database restore or cutover is active');
+    expect(snapshot).not.toHaveBeenCalled();
   });
 
   it('updates normally with stale reservations and unavailable telemetry, without manufacturing consent or output success', async () => {
@@ -131,7 +130,7 @@ describe('deferred update admission', () => {
       expect(() => admission.admit('agent', 'new-task')).toThrow();
       setImmediate(async () => {
         await settleInterruptedUpdate(id, { admission, cwd: root, snapshot: async () => { throw new Error('unavailable'); },
-          probeCwds: async () => new Map(), listeners: async () => { throw new Error('unavailable'); } });
+          probeCwds: async () => new Map() });
         admission.deferredUpdate.terminal(id, child.pid, true);
         child.emit('close', 0);
       });
