@@ -102,13 +102,14 @@ export { getClaudeSettingsEnv };
  * analyze — a successful run, or a private security assessment whose transcript
  * must not be read (its findings stay in the local assessment archive).
  *
- * The raw stream buffer is preferred over the display buffer: it still carries
- * the full stream-json payload, error details included. A fallback signal the
+ * The raw stream buffer is analyzed together with the display buffer: the raw
+ * stream still carries the full stream-json payload, error details included,
+ * and the display buffer keeps stderr diagnostics the stream never saw. A fallback signal the
  * run already raised (a usage-limit hit, say) outranks a keyword sweep.
  */
 function resolveCliErrorAnalysis({ finalSuccess, task, model, rawStreamBuffer, outputBuffer, immediateFallbackAnalysis }) {
   if (finalSuccess || isPrivateSecurityTask(task)) return null;
-  return immediateFallbackAnalysis || analyzeAgentFailure(rawStreamBuffer || outputBuffer, task, model);
+  return immediateFallbackAnalysis || analyzeAgentFailure(rawStreamBuffer ? `${rawStreamBuffer}\n${outputBuffer}` : outputBuffer, task, model);
 }
 
 
