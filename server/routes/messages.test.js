@@ -785,6 +785,7 @@ describe('Messages Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body).toEqual(selectors);
+      expect(messagePlaywrightSync.getSelectors).toHaveBeenCalledWith({ strict: true });
     });
   });
 

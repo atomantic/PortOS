@@ -5,7 +5,7 @@
 // `buildComposePhaseScript` (probe/open/fill/submit/discard CDP scripts, args as JSON),
 // `classifySendOutcome` (confirmed only on a closed compose surface plus a fresh provider signal;
 // anything else after the single submit click is `unknown`), `recipientsMatch`,
-// `checkAccountIdentity`, and overridable `COMPOSE_SELECTOR_DEFAULTS`/`resolveComposeConfig`. Defaults
+// `checkAccountIdentity`, and overridable selectors from `resolveComposeConfig`. Defaults
 // are unvalidated against a live mailbox.
 //
 // Everything here is pure: it plans a delivery, builds the scripts the CDP page
@@ -18,35 +18,7 @@
 //   - once the click has happened, anything short of a positive provider signal
 //     is "delivery unknown" — never success, never an automatic retry.
 import { readOutlookMessageRow } from './messageBrowserIdentity.js';
-
-// Best-effort defaults for each provider's web UI. They are NOT validated against
-// a live mailbox in this repository — the DOM changes without notice — so every
-// key can be overridden per provider in the Messages selectors file
-// (`data/messages/selectors.json`). A selector that stops matching degrades to a
-// definite "control missing" failure before anything is sent.
-export const COMPOSE_SELECTOR_DEFAULTS = Object.freeze({
-  outlook: Object.freeze({
-    accountIdentity: '#O365_MainLink_Me, button[aria-label^="Account manager"]',
-    newMail: 'button[aria-label="New mail"]',
-    replyButton: 'button[aria-label="Reply"]',
-    composeBody: '[role="textbox"][aria-label="Message body"]',
-    composeSend: 'button[aria-label="Send"]',
-    composeDiscard: 'button[aria-label="Discard"]',
-    composeSubject: 'input[aria-label="Add a subject"]',
-    toField: '[aria-label="To"]',
-    ccField: '[aria-label="Cc"]',
-    showCc: 'button[aria-label="Cc"]'
-  }),
-  teams: Object.freeze({
-    accountIdentity: 'button[aria-label^="Your profile"], [data-tid="me-control-avatar"]',
-    newChat: 'button[aria-label="New chat"]',
-    recipientInput: 'input[aria-label^="To"]',
-    recipientSuggestion: '[role="option"]',
-    composeBox: '[role="textbox"][aria-label^="Type a"]',
-    composeSend: 'button[aria-label="Send"]',
-    sentMessage: '[data-tid="chat-pane-message"]'
-  })
-});
+import { MESSAGE_SELECTOR_DEFAULTS, resolveComposeSelectors } from './messageSelectorDefaults.js';
 
 // What the page says when a send went through / was refused. Matched against NEW
 // live-region text only (anything already on screen before the click is ignored).
@@ -59,17 +31,15 @@ export const SUBMIT_EVALUATE_TIMEOUT_MS = SUBMIT_OBSERVE_MS + 10000;
 
 /** Merge the stored per-provider overrides over the defaults. Unknown keys are ignored. */
 export function resolveComposeConfig(provider, stored) {
-  const defaults = COMPOSE_SELECTOR_DEFAULTS[provider];
-  if (!defaults) return null;
+  if (!Object.hasOwn(MESSAGE_SELECTOR_DEFAULTS, provider)) return null;
   const override = key => (typeof stored?.[key] === 'string' && stored[key].trim() ? stored[key].trim() : null);
   const validPattern = key => {
     const candidate = override(key);
     if (!candidate) return null;
     try { new RegExp(candidate, 'i'); return candidate; } catch { return null; }
   };
-  const sels = Object.fromEntries(Object.entries(defaults).map(([key, value]) => [key, override(key) ?? value]));
   return {
-    sels,
+    sels: resolveComposeSelectors(provider, stored),
     ackPattern: validPattern('sendAckPattern') ?? SEND_ACK_PATTERN,
     refusalPattern: validPattern('sendRefusalPattern') ?? SEND_REFUSAL_PATTERN
   };
@@ -98,7 +68,7 @@ const unique = list => [...new Set(list)];
 export function planDelivery(accountType, draft, replyTarget = null) {
   const refuse = (status, code, error) => ({ ok: false, status, code, error });
   const isTeams = accountType === 'teams';
-  if (!COMPOSE_SELECTOR_DEFAULTS[accountType]) {
+  if (!Object.hasOwn(MESSAGE_SELECTOR_DEFAULTS, accountType)) {
     return refuse(501, 'SEND_NOT_SUPPORTED', "Sending from this account isn't supported yet — copy the draft");
   }
   const body = typeof draft.body === 'string' ? draft.body : '';

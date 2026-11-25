@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { findEnabledByRole } from '../../test/enabledBarrier.js';
 
 const api = vi.hoisted(() => ({
@@ -51,8 +51,10 @@ describe('SyncTab DOM selector test', () => {
     });
     renderTab();
 
+    expect(screen.getByText("[role='listitem']")).toBeVisible();
     fireEvent.click(screen.getAllByText('Test')[1]); // teams card
 
+    expect(api.testMessageSelectors).toHaveBeenCalledWith('teams');
     await waitFor(() => expect(screen.getByText(/all selectors matched/i)).toBeTruthy());
     expect(toast.success).toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: /queue agent to investigate/i })).toBeNull();
@@ -174,6 +176,39 @@ describe('Messages sync actions by provider capability (#9968)', () => {
 
     expect(screen.getAllByRole('button', { name: 'Sync Unread' })).toHaveLength(2);
     expect(screen.getAllByRole('button', { name: 'Full Sync' })).toHaveLength(3);
+  });
+});
+
+describe('SyncTab compose selectors', () => {
+  it.each([
+    ['outlook', 'composeBody', '[role="textbox"][aria-label="Message body"]'],
+    ['teams', 'recipientInput', 'input[aria-label^="To"]'],
+  ])('displays and saves a %s compose override without persisting untouched defaults', async (provider, key, defaultValue) => {
+    const saved = { composeSend: '.saved-send' };
+    const updated = { ...saved, [key]: '.updated-control' };
+    api.getMessageSelectors.mockResolvedValueOnce({ [provider]: saved }).mockResolvedValue({ [provider]: updated });
+    api.updateMessageSelectors.mockResolvedValue(updated);
+    renderTab();
+
+    const card = screen.getByRole('heading', { name: provider }).closest('.bg-port-card');
+    const controls = within(card);
+    await waitFor(() => expect(controls.getByRole('button', { name: 'Edit selectors' })).toBeEnabled());
+
+    const summary = controls.getByText('Browser compose selectors');
+    expect(summary.closest('details')).not.toHaveAttribute('open');
+    fireEvent.click(summary);
+    expect(controls.getByText(defaultValue)).toBeVisible();
+
+    fireEvent.click(controls.getByRole('button', { name: 'Edit selectors' }));
+    const input = controls.getByRole('textbox', { name: key });
+    expect(input).toHaveValue(defaultValue);
+    expect(controls.getByRole('textbox', { name: 'composeSend' })).toHaveValue('.saved-send');
+    fireEvent.change(input, { target: { value: '.updated-control' } });
+    expect(controls.getByRole('button', { name: 'Test' })).toBeDisabled();
+    fireEvent.click(controls.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(api.updateMessageSelectors).toHaveBeenCalledExactlyOnceWith(provider, updated));
+    expect(await controls.findByText('.updated-control')).toBeVisible();
   });
 });
 
