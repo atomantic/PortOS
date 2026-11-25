@@ -255,6 +255,27 @@ describe('MediaJobsQueue — image retry editor knobs', () => {
     expect(retryMediaJob).toHaveBeenCalledWith('localfail0000beef', { modelId: 'z-image-turbo' }, { silent: true });
   });
 
+  it('retries a prompt-only edit of a job stored outside the compose ranges', async () => {
+    const user = userEvent.setup();
+    await open(user, { ...failedLocalJob, params: { ...failedLocalJob.params, modelId: 'flux-dev', width: 4096, height: 1024, steps: 180, guidance: 4.2 } });
+    await retypeSettled(user, await screen.findByLabelText('Prompt'), 'a red fox');
+    await retry(user);
+    expect(retryMediaJob).toHaveBeenCalledWith('localfail0000beef', { prompt: 'a red fox' }, { silent: true });
+  });
+
+  it('clears inherited steps when switching to a locked-sampler model', async () => {
+    const user = userEvent.setup();
+    listImageModels.mockResolvedValue([
+      { id: 'flux-dev', name: 'Flux Dev', steps: 25, guidance: 3.5 },
+      { id: 'h3-image', name: 'H3 Image', samplerLocked: true },
+    ]);
+    await open(user, { ...failedLocalJob, params: { ...failedLocalJob.params, modelId: 'flux-dev', width: 1024, height: 1024, steps: 25 } });
+    await user.selectOptions(await screen.findByRole('combobox', { name: 'Model id' }), 'h3-image');
+    expect(screen.queryByLabelText(/^Steps/)).not.toBeInTheDocument();
+    await retry(user);
+    expect(retryMediaJob).toHaveBeenCalledWith('localfail0000beef', { modelId: 'h3-image', steps: null }, { silent: true });
+  });
+
   it('shows resolution and the backend model control only for a cloud retry', async () => {
     const user = userEvent.setup();
     await open(user, failedCodexJob);

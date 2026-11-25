@@ -146,6 +146,12 @@ describe('buildImageRetryOverrides', () => {
     expect(buildImageRetryOverrides(draftOf(bare, { seed: '', steps: '' }), bare)).toBeNull();
   });
 
+  it('drops an inherited steps value when the picked model locks its sampler', () => {
+    expect(buildImageRetryOverrides(draftOf(local, { stepsLocked: true }), local)).toEqual({ steps: null });
+    const bare = { prompt: 'a fox', mode: 'local', modelId: 'm' };
+    expect(buildImageRetryOverrides(draftOf(bare, { stepsLocked: true }), bare)).toBeNull();
+  });
+
   it('does not send a blank guidance (the wire has no clear for it)', () => {
     expect(buildImageRetryOverrides(draftOf(local, { guidance: '' }), local)).toBeNull();
     expect(buildImageRetryOverrides(draftOf(local, { guidance: '5' }), local)).toEqual({ guidance: 5 });

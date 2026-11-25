@@ -200,7 +200,11 @@ export function buildImageRetryOverrides(draft, p) {
   if (numberChanged(draft.width, p.width) && draft.width !== '') overrides.width = Number(draft.width);
   if (numberChanged(draft.height, p.height) && draft.height !== '') overrides.height = Number(draft.height);
   clearableNumber(draft.seed, p.seed, overrides, 'seed');
-  clearableNumber(draft.steps, p.steps, overrides, 'steps');
+  // A locked sampler (MiniMax H3-Image) hides Steps and fixes its own count, so an
+  // inherited value would be stranded behind a hidden control and fail the render.
+  if (draft.stepsLocked) {
+    if (p.steps != null) overrides.steps = null;
+  } else clearableNumber(draft.steps, p.steps, overrides, 'steps');
   // `guidance` has no clear on the wire (the retry schema is non-nullable), so a
   // blank field is no change rather than a reset.
   if (draft.guidance !== '' && draft.guidance != null && numberChanged(draft.guidance, p.guidance)) overrides.guidance = Number(draft.guidance);
