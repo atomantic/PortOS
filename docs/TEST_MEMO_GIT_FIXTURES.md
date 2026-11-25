@@ -44,6 +44,13 @@ relative to each repository, a path under git's own `%(prefix)`); the
 include chain does not end; or the temp directory is itself inside a repository, so git started in
 a fixture directory that is no repository of its own would find that one.
 
+A product or library module that spawns Git adds the same `tool git` line to
+each key that includes it. The floor key walks static and lazy imports, while
+the recorded key starts with the modules the green run loaded. Reaching a
+module does not prove that the suite ran Git, so a key with only this kind of
+Git use records an unresolved identity as `tool git absent`. A test's own
+accepted fixture declaration still requires a verified Git identity.
+
 The marker is honored for the test file only. A `scripts/` module that
 spawns git is repository tooling whatever the importing test declares, and a
 git library (`simple-git` and its kind) takes its directory wherever its API

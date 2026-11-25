@@ -735,6 +735,7 @@ function gather(a, roots, { walk, testRel = null, stop = null, followMockOnly = 
     hasOpenReads: false,
     never: false,
     git: false,
+    gitFixture: false,
     gitRefusal: null, // why the test's own `git-fixture` declaration was refused
     gitMember: null, // the first other member that spawns git
   };
@@ -762,8 +763,8 @@ function gather(a, roots, { walk, testRel = null, stop = null, followMockOnly = 
   // other test keeps the older reading (a directory passed along is a value).
   if (testRel !== null && g.members.has(testRel) && reachesChrome(a, roots, walk)) addBrowserInputs(a, g, testRel, served);
   for (const [name, version] of g.dataPackages) if (!g.packageVersions.has(name)) g.packageVersions.set(name, version);
-  const { members, inputs, absent, packageVersions: packages, tools, trees, servedRoots, unresolvedEdges, unresolvedInputs, hasOpenReads, never, git, gitRefusal, gitMember } = g;
-  return { members, inputs, absent, packages, tools, trees, servedRoots, unresolvedEdges, unresolvedInputs, hasOpenReads, never, git, gitRefusal, gitMember };
+  const { members, inputs, absent, packageVersions: packages, tools, trees, servedRoots, unresolvedEdges, unresolvedInputs, hasOpenReads, never, git, gitFixture, gitRefusal, gitMember } = g;
+  return { members, inputs, absent, packages, tools, trees, servedRoots, unresolvedEdges, unresolvedInputs, hasOpenReads, never, git, gitFixture, gitRefusal, gitMember };
 }
 
 /** Fold one closure member's own facts into the gathering `g`. */
@@ -807,7 +808,10 @@ function foldMember(a, g, rel, f, testRel) {
     foldDataTree(g, dir, data);
   }
   if (f.never) g.never = true;
-  if (f.git && ownsTrees) foldGitUse(g, rel, f, testRel);
+  if (f.git) {
+    if (ownsTrees) foldGitUse(g, rel, f, testRel);
+    else g.tools.add('git');
+  }
 }
 
 /**
@@ -819,17 +823,20 @@ function foldMember(a, g, rel, f, testRel) {
  * test's to declare, and the workspace base has no test.
  */
 function foldGitUse(g, rel, f, testRel) {
-  if (rel === testRel && f.gitFixture) { g.tools.add('git'); return; }
+  if (rel === testRel && f.gitFixture) {
+    g.gitFixture = true;
+    g.tools.add('git');
+    return;
+  }
   g.git = true;
   if (rel === testRel) g.gitRefusal = f.gitFixtureProblem;
   else g.gitMember ??= rel;
 }
 
 /** The git refusal, saying what a declaring test would need to know: why its declaration fell, or which member it does not cover. */
-function gitReason({ tools, gitRefusal, gitMember }) {
+function gitReason({ gitFixture, gitRefusal, gitMember }) {
   if (gitRefusal !== null) return `spawns git (git-fixture declaration refused: ${gitRefusal})`;
-  // Only an accepted declaration adds the tool.
-  return tools.has('git') && gitMember !== null ? `spawns git (through ${gitMember}, which the test's git-fixture declaration does not cover)` : 'spawns git';
+  return gitFixture && gitMember !== null ? `spawns git (through ${gitMember}, which the test's git-fixture declaration does not cover)` : 'spawns git';
 }
 
 /**
@@ -978,7 +985,8 @@ function verdict(a, testRel, gathered, extra, baseClosure, { requireEdges }) {
   const unavailableTools = [];
   for (const tool of [...gathered.tools].sort()) {
     const version = a.toolVersion(tool);
-    if (!version) unavailableTools.push(tool);
+    // Reaching a product module does not prove that the suite exercised its Git path.
+    if (!version && (tool !== 'git' || gathered.gitFixture)) unavailableTools.push(tool);
     lines.push(`tool ${tool} ${version ?? 'absent'}`);
   }
   // A required tool the runner could not identify is never keyed as `absent`: the suite ran against something.

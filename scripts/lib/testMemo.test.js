@@ -1806,6 +1806,77 @@ describe('python sidecars, external tools and machine-local state', () => {
   });
 });
 
+describe('Git reached through a product module', () => {
+  const test = 'server/lib/a.test.js';
+  const gitModule = 'server/lib/lazy.js';
+  const files = {
+    ...TREE,
+    [gitModule]: "import { execFileSync } from 'node:child_process';\nexport const status = (cwd) => execFileSync('git', ['status'], { cwd });\n",
+  };
+  const analyze = (identity, { recorded = [test, gitModule], tree = files } = {}) => {
+    const analyzer = createTestMemoAnalyzer({
+      ...options(tree), workspaceRel: 'server', requireToolVersions: true,
+      toolVersion: (tool) => tool === 'git' ? identity : null,
+    });
+    const baseClosure = analyzer.workspaceBase(WORKSPACE_BASE_INPUTS.server, WORKSPACE_SETUP_ENTRIES.server);
+    return analyzer.analyzeTest(test, { baseClosure, recorded });
+  };
+
+  it('keys the resolved Git identity in both keys and can key an unresolved identity', () => {
+    const first = analyze('git version 2.52.0 settings config-a');
+    const changed = analyze('git version 2.52.0 settings config-b');
+    const absent = analyze(null);
+    const absentLine = analyze('absent');
+    for (const kind of ['floor', 'recorded']) {
+      expect(first[kind]).toMatchObject({ memoizable: true, tools: new Set(['git']) });
+      expect(changed[kind].key).not.toBe(first[kind].key);
+      expect(absent[kind]).toMatchObject({ memoizable: true, tools: new Set(['git']) });
+      expect(absent[kind].key).not.toBe(first[kind].key);
+      expect(absent[kind].key).toBe(absentLine[kind].key);
+    }
+  });
+
+  it('leaves Git out of the recorded key when the run did not load the spawner', () => {
+    const recorded = [test];
+    const first = analyze('git version 2.52.0 settings config-a', { recorded });
+    const changed = analyze('git version 2.53.0 settings config-a', { recorded });
+    expect(first.floor.tools.has('git')).toBe(true);
+    expect(changed.floor.key).not.toBe(first.floor.key);
+    expect(first.recorded).toMatchObject({ memoizable: true, tools: new Set() });
+    expect(changed.recorded.key).toBe(first.recorded.key);
+  });
+
+  it('leaves both keys unchanged for a test that reaches no Git spawner', () => {
+    const first = analyze('git version 2.52.0 settings config-a', { tree: TREE });
+    const absent = analyze(null, { tree: TREE });
+    for (const kind of ['floor', 'recorded']) {
+      expect(first[kind]).toMatchObject({ memoizable: true, tools: new Set() });
+      expect(absent[kind].key).toBe(first[kind].key);
+    }
+  });
+
+  it('still requires a Git identity when the test declares its own fixtures', () => {
+    const tree = { ...files, [test]: [
+      '// test-memo: git-fixture',
+      "import { execFileSync } from 'node:child_process';",
+      "import { mkdtempSync } from 'node:fs';",
+      "import { tmpdir } from 'node:os';",
+      "import { join } from 'node:path';",
+      files[test],
+      "it('initializes a fixture', () => execFileSync('git', ['init'], { cwd: mkdtempSync(join(tmpdir(), 'fixture-')) }));",
+    ].join('\n') };
+    const { floor, recorded } = analyze(null, { tree });
+    for (const verdict of [floor, recorded]) expect(verdict).toMatchObject({ memoizable: false, reason: 'unverified tool: git' });
+  });
+
+  it('keeps the refusal for a Git-spawning scripts member', () => {
+    const script = 'scripts/tool.js';
+    const tree = { ...files, [script]: files[gitModule], [test]: `import '../../${script}';\n${files[test]}` };
+    const { floor, recorded } = analyze('git version 2.52.0 settings config-a', { tree, recorded: [test, gitModule, script] });
+    for (const verdict of [floor, recorded]) expect(verdict).toMatchObject({ memoizable: false, reason: 'spawns git' });
+  });
+});
+
 describe('closure-based related selection', () => {
   it('follows static, dynamic and mock edges, JSON inputs, and treats unresolved edges as related to everything', () => {
     const withJson = { ...TREE, 'server/lib/plain.test.js': "import { it } from 'vitest';\nimport manifest from './manifest.json';\nit('plain', () => {});\n", 'server/lib/manifest.json': '{}' };
