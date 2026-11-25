@@ -50,7 +50,7 @@ export default function RunsTab() {
   const [pinned, setPinned] = useState(null);
   const fetchRuns = useCallback(
     () => getRuns(100, 0, sourceFilter, { silent: true }).then(data => {
-      setTotalRuns(Number.isFinite(data?.total) ? data.total : null);
+      setTotalRuns({ source: sourceFilter, total: Number.isFinite(data?.total) ? data.total : null });
       return data?.runs || [];
     }),
     [sourceFilter]
@@ -136,7 +136,7 @@ export default function RunsTab() {
     supersedeRefresh();
     setRuns(prev => prev.filter(run => run.id !== id));
     if (expandedId === id) setExpandedId(null);
-    setPinned(prev => (prev?.run?.id === id ? null : prev));
+    if (pinRef.current?.run?.id === id) dropPin();
   };
 
   const handleStop = async (id, e) => {
@@ -198,62 +198,59 @@ export default function RunsTab() {
 
   // A link can name a run older than the newest-100 page. Resolve it by id (one
   // GET, only on this miss) and pin it above the list; a 404 shows a notice, any
-  // other failure a retryable error. Clearing ?run= drops the pin and any read
-  // still in flight.
-  // Holds the id being resolved so one miss costs one read, and a generation ref
-  // drops a response for a superseded selection (a re-read of `runs` must not
-  // cancel the read, so there is no cleanup flag).
-  const deepLinkFetched = useRef(null);
-  const deepLinkGen = useRef(0);
+  // other failure a retryable error. Every pinned read (first lookup and the
+  // re-reads below) takes a generation from pinGen and applies only while it is
+  // still the newest, so a changed selection, a delete or a later read drops it;
+  // pinTarget is the id in play, which also keeps one miss to one read.
+  const pinTarget = useRef(null);
+  const pinGen = useRef(0);
+  const pinRef = useRef(null);
+  pinRef.current = pinned;
   const [pinRetry, setPinRetry] = useState(0);
-  const pinnedId = useRef(null);
-  pinnedId.current = pinned?.status === 'ready' ? pinned.run.id : null;
-  useEffect(() => {
-    if (!deepLinkRunId) {
-      if (deepLinkFetched.current !== null) {
-        deepLinkFetched.current = null;
-        deepLinkGen.current += 1;
-        setPinned(null);
-      }
-      return;
-    }
-    if (deepLinkFetched.current === deepLinkRunId || deepLinkOpened.current || runsState !== 'ready') return;
-    if (runs.some(run => run.id === deepLinkRunId)) return;
-    const id = deepLinkRunId;
-    deepLinkFetched.current = id;
-    const gen = ++deepLinkGen.current;
-    setPinned({ status: 'loading', run: null });
-    getRun(id, { silent: true }).then(
+  const dropPin = useCallback(() => {
+    pinGen.current += 1;
+    setPinned(null);
+  }, []);
+  const readPinned = useCallback((id) => {
+    const initial = pinRef.current?.status !== 'ready';
+    const gen = ++pinGen.current;
+    return getRun(id, { silent: true }).then(
       (run) => {
-        if (gen !== deepLinkGen.current) return;
-        if (!run?.id) { setPinned({ status: 'missing', run: null }); return; }
+        if (gen !== pinGen.current) return;
+        if (!run?.id) { if (initial) setPinned({ status: 'missing', run: null }); return; }
         setPinned({ status: 'ready', run });
-        expandRun(run.id);
+        if (initial) expandRun(run.id);
       },
       (err) => {
-        if (gen !== deepLinkGen.current) return;
-        setPinned(err?.status === 404
-          ? { status: 'missing', run: null }
-          : { status: 'error', run: null, message: err?.message || 'request failed' });
+        if (gen !== pinGen.current) return;
+        if (err?.status === 404) setPinned({ status: 'missing', run: null });
+        else if (initial) setPinned({ status: 'error', run: null, message: err?.message || 'request failed' });
       }
     );
-  }, [deepLinkRunId, runsState, runs, expandRun, pinRetry]);
+  }, [expandRun]);
+  // Any change of the ?run= selection (including clearing it) retires the pin
+  // and the read in flight for the previous one.
+  useEffect(() => () => {
+    dropPin();
+    pinTarget.current = null;
+  }, [deepLinkRunId, dropPin]);
+  useEffect(() => {
+    if (!deepLinkRunId || pinTarget.current === deepLinkRunId || deepLinkOpened.current || runsState !== 'ready') return;
+    if (runs.some(run => run.id === deepLinkRunId)) return;
+    pinTarget.current = deepLinkRunId;
+    setPinned({ status: 'loading', run: null });
+    readPinned(deepLinkRunId);
+  }, [deepLinkRunId, runsState, runs, readPinned, pinRetry]);
   const retryPinned = () => {
-    deepLinkFetched.current = null;
+    pinTarget.current = null;
     setPinRetry(n => n + 1);
   };
 
-  // Lifecycle invalidations, a Stop and a bulk delete reach the pinned run too:
-  // re-read it by id so it cannot keep showing Running after it ended.
-  const refreshPinned = useCallback(() => {
-    const id = pinnedId.current;
-    if (!id) return Promise.resolve();
-    const gen = deepLinkGen.current;
-    return getRun(id, { silent: true }).then(
-      (run) => { if (gen === deepLinkGen.current && run?.id === id) setPinned({ status: 'ready', run }); },
-      (err) => { if (gen === deepLinkGen.current && err?.status === 404) setPinned({ status: 'missing', run: null }); }
-    );
-  }, []);
+  // Lifecycle invalidations and a Stop reach the pinned run too: re-read it by
+  // id (newest read wins) so it cannot keep showing Running after it ended.
+  const refreshPinned = useCallback(() => (
+    pinTarget.current && pinRef.current ? readPinned(pinTarget.current) : Promise.resolve()
+  ), [readPinned]);
   refreshPinnedRef.current = refreshPinned;
 
   const handleResume = async (run, e) => {
@@ -317,7 +314,7 @@ export default function RunsTab() {
     if (ok) {
       supersedeRefresh();
       setRuns(prev => prev.filter(r => r.success !== false));
-      setPinned(prev => (prev?.run?.success === false ? null : prev));
+      if (pinRef.current?.run?.success === false) dropPin();
     }
   };
 
@@ -625,8 +622,8 @@ export default function RunsTab() {
         ))}
       </div>
 
-      {totalRuns !== null && totalRuns > runs.length && (
-        <p className="text-xs text-gray-500">Showing the newest {runs.length} of {totalRuns} runs</p>
+      {totalRuns?.source === sourceFilter && totalRuns.total > runs.length && (
+        <p className="text-xs text-gray-500">Showing the newest {runs.length} of {totalRuns.total} runs</p>
       )}
       {pinned?.status === 'missing' && (
         <Banner tone="info" size="md" srLabel={false} role="note">Run not found or deleted.</Banner>
