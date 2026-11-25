@@ -601,7 +601,14 @@ export async function archiveMemory(id, options = {}) {
  * Purge a memory: DELETE the row (cascades to memory_links) and its embedding. Not restorable.
  */
 export async function purgeMemory(id) {
-  await query('DELETE FROM memories WHERE id = $1', [id]);
+  const { rows: [removed] } = await query(
+    'DELETE FROM memories WHERE id = $1 RETURNING status, source_agent_id',
+    [id]
+  );
+  if (removed?.status === 'pending_approval') {
+    await decrementAgentPendingApproval(removed.source_agent_id);
+  }
+  await notifications.removeByMetadata('memoryId', id);
 
   console.log(`🧠 Memory purged: ${id}`);
   cosEvents.emit('memory:deleted', { id, hard: true });

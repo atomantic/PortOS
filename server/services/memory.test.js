@@ -714,16 +714,23 @@ describe('memory service', () => {
       expect(savedMemory.status).toBe('archived');
     });
 
-    it('should purge', async () => {
+    it.each(['pending_approval', 'active', null])('purges a memory with status %s', async (status) => {
+      const memory = status ? { id: 'mem-1', status, sourceAgentId: 'agent-1' } : null;
       const mockIndex = { version: 1, lastUpdated: '', count: 1, memories: [{ id: 'mem-1', status: 'active' }] };
       const mockEmbeddings = { model: 'test', dimension: 3, vectors: { 'mem-1': [0.1, 0.2, 0.3] } };
-      readJSONFile.mockImplementation(makeReadMock(null, mockIndex, mockEmbeddings));
+      readJSONFile.mockImplementation(makeReadMock(memory, mockIndex, mockEmbeddings));
 
       const result = await purgeMemory('mem-1');
 
       expect(result).toEqual({ success: true, id: 'mem-1' });
       expect(rmGuarded).toHaveBeenCalled();
       expect(memoryBM25.removeMemoryFromIndex).toHaveBeenCalledWith('mem-1');
+      expect(notifications.removeByMetadata).toHaveBeenCalledWith('memoryId', 'mem-1');
+      if (status === 'pending_approval') {
+        expect(decrementAgentPendingApproval).toHaveBeenCalledExactlyOnceWith('agent-1');
+      } else {
+        expect(decrementAgentPendingApproval).not.toHaveBeenCalled();
+      }
     });
 
     it('should emit memory:deleted event', async () => {

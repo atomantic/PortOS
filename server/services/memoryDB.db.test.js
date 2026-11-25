@@ -27,6 +27,9 @@
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import pg from 'pg';
+import { readFile } from 'fs/promises';
+import { join } from 'path';
+import { registerLateBoundService } from '../lib/lateBoundServices.js';
 import { checkHealth, ensureSchema, close, query, withTransaction } from '../lib/db.js';
 import * as dbConnection from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
@@ -36,7 +39,7 @@ import { up as upgradeMemorySearch } from '../scripts/db-migrations/017-memory-s
 
 // Keep every filesystem side effect this module graph can reach (notifications
 // pruning on approve/reject, the instance registry) inside a temp dir.
-const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-memorydb-' });
+const { makeProxy, cleanup, tempRoot } = mockPathsDataRoot({ prefix: 'portos-memorydb-' });
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
   return makeProxy(actual);
@@ -355,6 +358,34 @@ describe.skipIf(!runDb)('memoryDB CRUD (#3447)', () => {
     const hard = await memoryDB.createMemory({ type: 'fact', content: 'Hard delete me.' });
     await memoryDB.purgeMemory(hard.id);
     expect(await memoryDB.peekMemory(hard.id)).toBeNull();
+  });
+
+  it('removes persisted purge notifications and decrements pending approval once', async () => {
+    const { addNotification } = await import('./notifications.js');
+    const updateAgent = vi.fn();
+    registerLateBoundService('cosAgentLifecycle', () => ({
+      getAgent: async () => ({ memoryExtraction: { pendingApproval: 2 } }),
+      updateAgent,
+    }));
+    const sourceAgentId = '00000000-0000-4000-8000-00000000aa01';
+    const memory = await memoryDB.createMemory({
+      type: 'fact', content: 'Synthetic pending memory.', status: 'pending_approval', sourceAgentId
+    });
+    const matching = await addNotification({
+      type: 'memory_approval', title: 'Approval', description: memory.content, metadata: { memoryId: memory.id }
+    });
+    const unrelated = await addNotification({ type: 'info', title: 'Unrelated' });
+
+    await memoryDB.purgeMemory(memory.id);
+    await memoryDB.purgeMemory(memory.id);
+
+    const { notifications } = JSON.parse(await readFile(join(tempRoot, 'notifications.json'), 'utf8'));
+    expect(notifications.map(item => item.id)).toContain(unrelated.id);
+    expect(notifications.map(item => item.id)).not.toContain(matching.id);
+    expect(await memoryDB.peekMemory(memory.id)).toBeNull();
+    expect(updateAgent).toHaveBeenCalledExactlyOnceWith(sourceAgentId, {
+      memoryExtraction: { pendingApproval: 1 }
+    });
   });
 
   it('approves and rejects pending memories, and rejects the transition from any other status', async () => {
