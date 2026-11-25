@@ -77,7 +77,7 @@ const buildCard = (entry, model) => {
     runnerFamily: entry.family,
     previewImageUrl: pickHfPreview(model),
     hfUrl: `https://huggingface.co/${entry.repo}`,
-    // The same value /api/loras/install/huggingface accepts — the UI passes it
+    // The same value /api/loras/install/huggingface/stream accepts — the UI passes it
     // back without re-deriving, mirroring the Civitai card's installUrl.
     installUrl: `https://huggingface.co/${entry.repo}`,
   };

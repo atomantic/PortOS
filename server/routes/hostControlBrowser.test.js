@@ -25,7 +25,6 @@ vi.mock('../services/settings.js', () => ({
 const svc = vi.hoisted(() => ({
   navigateToUrlPinned: vi.fn(async (url) => ({ id: 'tab-1', url })),
   getOpenPages: vi.fn(async () => [{ id: 'p1', title: 'Inbox', url: 'https://example.com/inbox' }]),
-  getDownloads: vi.fn(async () => ({ downloadDir: '/d', files: [{ name: 'secret.json' }] })),
   getRecentLogs: vi.fn(async () => ({ stdout: 'browser ok', stderr: '' })),
   resolveDownload: vi.fn(async () => null),
 }));
@@ -49,7 +48,6 @@ const mounts = [['/api/browser', (await import('./browser.js')).default]];
 const fill = ['post', '/api/browser/vault/fill', { targetId: 'tab-1', loginId: '00000000-0000-4000-8000-0000000000cc' }, vaultFill, 200];
 const listings = [
   ['get', '/api/browser/pages', undefined, svc.getOpenPages, 200],
-  ['get', '/api/browser/downloads', undefined, svc.getDownloads, 200],
   ['get', '/api/browser/downloads/secret.json', undefined, svc.resolveDownload, 404],
   ['get', '/api/browser/logs', undefined, svc.getRecentLogs, 200],
 ];

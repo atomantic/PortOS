@@ -1,7 +1,11 @@
 /**
- * Mounted API routes that no client service wrapper calls, each with the caller class that justifies keeping it.
+ * Mounted API routes that no client code reaches, each with the caller class that justifies keeping it.
  *
- * `apiRouteParity.test.js` fails when a mounted route is neither reached by a client wrapper path nor listed
+ * "Reaches" is what `clientApiPaths.js` sees: service wrappers plus every non-test client file's `api.<verb>(`,
+ * `request(`, `fetch`, `EventSource` and URL-builder literals, so "the scanner cannot see the client call" is
+ * never a class; only a segment built at run time is (`client-dynamic`).
+ *
+ * `apiRouteParity.test.js` fails when a mounted route is neither reached by a client path nor listed
  * here, and when a listed route is no longer mounted or gains a client caller, so the list can only shrink
  * toward the truth. Entries are keyed by route path (the scan matches by path, not method) and grouped by
  * caller class. Add a route here only with the strongest caller class you can name; delete a route nothing calls.
@@ -14,8 +18,7 @@ export const ROUTE_CALLER_CLASSES = Object.freeze({
   'external-client': 'Third-party tools that speak an established API (the A1111-compatible /sdapi surface), not PortOS clients.',
   'oauth-callback': 'The redirect target of a third-party OAuth flow; the browser arrives here from the provider.',
   'operator-script': 'Called by a script under scripts/, or named in an operator-facing doc (a curl workflow or a feature route table) for a caller outside the browser.',
-  'client-direct': 'Requested from client code outside client/src/services (components, hooks, pages) with fetch or EventSource, which the parity scan does not read.',
-  'client-service-unscanned': 'Named in a client service module whose request shape the parity scan cannot fold to this route.',
+  'client-dynamic': 'Called from client code that builds a path segment at run time; the entry\'s comment names the call site.',
   'server-reference': 'Referenced by a server module (a loopback or provider-compatible request path); the reference was found by text search and not individually traced.',
   'legacy-client-compat': 'Kept for a client build that predates the current routes: a deployed client/dist can lag the server across an upgrade.',
 });
@@ -31,7 +34,6 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/catalog/identity/peer/snapshot',
     '/api/catalog/identity/peer/status',
     '/api/catalog/sync',
-    '/api/character',
     '/api/eidoverse/travel/federation/capabilities',
     '/api/eidoverse/travel/federation/chat',
     '/api/eidoverse/travel/federation/leave',
@@ -86,7 +88,6 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/sync/:category/video-inventory',
     '/api/sync/mediaCollections/image-inventory',
     '/api/sync/mediaCollections/image-library-inventory',
-    '/api/video-gen',
   ]),
   'companion-app': Object.freeze([
     '/api/auth/whoami',
@@ -129,8 +130,6 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/creative-director/:id/plan',
     '/api/creative-director/:id/treatment',
     '/api/datadog/instances/:id',
-    '/api/eidoverse/travel/guest',
-    '/api/html-composition/:jobId/events',
     '/api/human-actions',
     '/api/human-actions/plans',
     '/api/jira/instances/:id',
@@ -142,8 +141,9 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/jira/instances/:instanceId/tickets/:ticketId/labels',
     '/api/providers/comparison/import',
     '/api/review/todo',
-    '/api/screenshots/:filename',
     '/api/user-actions',
+    // docs/API_TOOL_CONTRACT.md and docs/features/agent-context.md document the MCP endpoint local agents call.
+    '/api/agent-context/mcp',
   ]),
   'oauth-callback': Object.freeze([
     '/api/beeper/oauth/callback',
@@ -215,166 +215,34 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     // scripts/ops/reconcile-maintenance-reservations.mjs confirms terminal runner ownership.
     '/api/system/maintenance/runner-owner/:agentId',
     '/api/universe-builder/:id/canon/backfill-descriptions',
-    '/api/video-gen/models/:modelId/download',
-    '/api/video-gen/text-encoder/download',
-    '/api/voice/profiles',
-  ]),
-  'client-direct': Object.freeze([
-    '/api/agent-context/manifest',
-    '/api/agent-context/mcp',
-    '/api/api-docs/asyncapi.json',
-    // client/src/components/AppIcon.jsx builds the <img> URL.
-    '/api/apps/:id/icon',
-    '/api/attachments/:filename',
-    '/api/avatar/model.glb',
-    '/api/calendar/events/:accountId/:eventId',
-    '/api/character/damage',
-    '/api/character/event',
-    '/api/character/rest',
-    '/api/character/sync/jira',
-    '/api/character/sync/tasks',
-    '/api/character/xp',
-    '/api/client-errors',
-    '/api/data/cos/storage/recording/:date/:id',
-    '/api/datadog/instances/:id/test',
-    '/api/harnesses/action',
-    '/api/harnesses/review-update',
-    '/api/image-gen/:jobId/events',
-    // client/src/hooks/useModelDownloadStatus.js builds the SSE URL per kind.
-    '/api/image-gen/models/:modelId/download',
-    '/api/image-gen/setup/flux2-install',
-    '/api/image-gen/setup/flux3-install',
-    '/api/image-gen/setup/install',
-    '/api/image-gen/setup/moss-install',
-    '/api/image-gen/setup/moss-weights',
-    '/api/image-to-3d/targets/:targetId/install',
-    '/api/jira/instances/:id/test',
-    '/api/meatspace/export/mortalloom',
-    '/api/meatspace/lifestyle',
-    '/api/media/audio',
-    '/api/media/devices',
-    '/api/media/sketches/:key/png',
-    '/api/media/start',
-    '/api/media/stop',
-    '/api/media/video',
-    '/api/midi-runtime/install',
-    '/api/music-video/:id/publish-kit/video',
-    '/api/music-video/:id/scenes/:sceneId/download',
-    // Music Video's still preview loads this binary response via <img src>.
-    '/api/music-video/:id/scenes/:sceneId/image-treatment',
-    '/api/music/setup/runtime-install',
-    '/api/pipeline/issues/:id/comic.pdf',
-    // client/src/components/providers/ExecutionOptionsSelect.jsx.
-    '/api/providers/:id/execution-options',
-    '/api/providers/fleet-host/setup',
-    '/api/providers/readiness/setup',
-    '/api/providers/runtimes/install',
-    '/api/search',
-    // client/src/hooks/useMediaJobSse.js builds the EventSource URL per kind.
-    '/api/video-gen/:jobId/events',
-    '/api/video-gen/ic-loras/:mode/download',
-    '/api/video-gen/setup/runtime-install',
-    '/api/video-gen/text-encoders/:id/download',
-    // client/src/pages/VideoTimelineEditor.jsx EventSource.
-    '/api/video-timeline/:jobId/events',
-    '/api/voice/config',
-    '/api/voice/public/synthesize',
-    '/api/voice/status',
-    '/api/voice/voices',
-    '/api/voice/whisper',
-    '/api/writers-room/works/:id/polish/progress',
-  ]),
-  'client-service-unscanned': Object.freeze([
-    '/api/apps/:id/forge-auth/refresh/:jobId/events',
-    '/api/brain/youtube/ingest/:jobId/events',
-    '/api/blender-models/:id/asset',
-    '/api/browser/downloads',
-    '/api/catalog/export',
-    '/api/continuous-video/:jobId/events',
-    '/api/decks/:id/generate-prompts/progress',
-    // client/src/services/apiVideoDownload.js: videoDownloadEventsUrl.
-    '/api/devtools/video-download/:jobId/events',
+    // docs/features/eidoverse-guest-travel.md documents GET and DELETE.
     '/api/eidoverse/world/foundations/:id',
-    '/api/html-pages/runs/:id/pages/:index/file',
-    '/api/image-gen/setup/check',
-    '/api/image-gen/setup/create-venv',
-    '/api/image-gen/setup/python',
-    '/api/image-to-3d/models/:id/asset',
-    '/api/image-to-3d/models/:id/full-mesh',
-    '/api/loras/install/huggingface',
+    // docs/features/music-video-autonomous.md route table.
     '/api/music-video/:id/autonomous',
-    '/api/music-video/:id/dcp/:artifactId/report',
-    '/api/music-video/:id/dev-artifacts/:artifactId/file',
-    '/api/music-video/:id/sharing-copy/download',
-    // client/src/services/apiMusicVideo.js: musicVideoDcpEventsUrl.
-    '/api/music-video/dcp/:jobId/events',
-    // client/src/services/apiMusicVideo.js: excerpt events URL helper.
-    '/api/music-video/excerpt/:jobId/events',
-    '/api/music-video/lyrics/align/:jobId/events',
-    '/api/music-video/lyrics/verify/:jobId/events',
-    // client/src/services/apiMusicVideo.js: musicVideoPublishKitEventsUrl.
-    '/api/music-video/publish-kit/:jobId/events',
-    '/api/music-video/publish/cover-fonts/:fontId/file',
-    // client/src/services/apiMusicVideo.js: render events URL helper.
-    '/api/music-video/render/:jobId/events',
-    // client/src/services/apiMusicVideo.js: transcribe-midi events URL helper.
-    '/api/music-video/transcribe-midi/:jobId/events',
-    '/api/music-video/vocal-stem/separate/:jobId/events',
-    '/api/music/models',
-    '/api/music/models/:engine',
-    '/api/music/supercollider/renders/:jobId/events',
-    '/api/music/supercollider/setup',
-    '/api/pipeline/issues/:id/auto-run-text/progress',
-    '/api/pipeline/issues/:id/stages/:stageId/generate/progress',
-    '/api/pipeline/series/:id/autopilot/progress',
-    '/api/pipeline/series/:id/continuity-bible/generate/progress',
-    '/api/pipeline/series/:id/editorial/analyze/progress',
-    '/api/pipeline/series/:id/editorial/checks/run/progress',
-    '/api/pipeline/series/:id/editorial/panel/run/progress',
-    '/api/pipeline/series/:id/manuscript/completeness/progress',
-    '/api/pipeline/series/:id/reverse-outline/generate/progress',
-    '/api/pipeline/series/:id/review/fix/progress',
-    '/api/pipeline/series/:id/review/progress',
-    '/api/pipeline/series/:id/seasons/:seasonId/generate-beats/progress',
-    '/api/pipeline/series/:id/seasons/:seasonId/volume.pdf',
-    '/api/rounds/reference-audio/import/:jobId/events',
-    '/api/rounds/reference-audio/transcribe-midi/:jobId/events',
+    // docs/features/app-wizard.md route table.
     '/api/scaffold',
-    '/api/story-builder/:id/steps/:stepId/progress',
-    '/api/timeline/import/browser',
-    '/api/timeline/import/discord',
-    '/api/timeline/import/spotify',
-    '/api/timeline/import/takeout-location',
-    '/api/timeline/import/whatsapp',
-    '/api/timeline/import/youtube',
-    // client/src/services/apiTracks.js: import events URL helper.
-    '/api/tracks/import/:jobId/events',
-    '/api/voice/engines',
-    '/api/voice/facetime/call',
-    '/api/voice/facetime/hangup',
-    '/api/voice/facetime/probe',
-    '/api/voice/facetime/status',
-    '/api/voice/piper/fetch',
-    '/api/voice/profiles/:id',
-    '/api/voice/profiles/:id/assign',
-    '/api/voice/profiles/:id/benchmark',
-    '/api/voice/profiles/:id/benchmark-interactive',
-    '/api/voice/profiles/:id/benchmark-interactive/complete',
-    '/api/voice/profiles/:id/fine-tune',
-    '/api/voice/profiles/:id/fine-tune/:jobId',
-    '/api/voice/profiles/:id/fine-tune/:jobId/cancel',
-    '/api/voice/profiles/:id/fine-tune/:jobId/promote',
-    '/api/voice/profiles/:id/fine-tune/start',
-    '/api/voice/profiles/:id/promote',
-    '/api/voice/profiles/clone',
-    '/api/voice/profiles/design',
-    '/api/voice/profiles/preset',
-    '/api/voice/studio/design',
-    '/api/voice/studio/profiles',
-    '/api/voice/studio/setup',
-    '/api/voice/studio/status',
-    '/api/voice/studio/unload',
-    '/api/voice/test',
+  ]),
+  'client-dynamic': Object.freeze([
+    // client/src/pages/CharacterSheet.jsx: charPost builds `/character${path}`.
+    '/api/character/damage',
+    // client/src/pages/CharacterSheet.jsx: charPost builds `/character${path}`.
+    '/api/character/event',
+    // client/src/pages/CharacterSheet.jsx: charPost builds `/character${path}`.
+    '/api/character/rest',
+    // client/src/pages/CharacterSheet.jsx: charPost builds `/character${path}`.
+    '/api/character/sync/jira',
+    // client/src/pages/CharacterSheet.jsx: charPost builds `/character${path}`.
+    '/api/character/sync/tasks',
+    // client/src/pages/CharacterSheet.jsx: charPost builds `/character${path}`.
+    '/api/character/xp',
+    // client/src/components/integrations/IntegrationInstancesPage.jsx: builds `${apiBase}/instances/${instanceId}/test`.
+    '/api/datadog/instances/:id/test',
+    // client/src/components/integrations/IntegrationInstancesPage.jsx: builds `${apiBase}/instances/${instanceId}/test`.
+    '/api/jira/instances/:id/test',
+    // client/src/hooks/useMediaJobSse.js: builds `/api/${kind}-gen/${jobId}/events`.
+    '/api/image-gen/:jobId/events',
+    // client/src/hooks/useModelDownloadStatus.js: builds `/api/${kind}-gen/models/${modelId}/download`.
+    '/api/image-gen/models/:modelId/download',
   ]),
   'server-reference': Object.freeze([
     '/api/api-docs/tools.min.json',

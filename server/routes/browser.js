@@ -218,12 +218,6 @@ router.get('/logs', asyncHandler(async (req, res) => {
   res.json(logs);
 }));
 
-// GET /api/browser/downloads - List downloaded files
-router.get('/downloads', asyncHandler(async (req, res) => {
-  const downloads = await browserService.getDownloads();
-  res.json(downloads);
-}));
-
 // Extensions that could execute scripts when served inline at the same origin —
 // always force attachment to keep XSS via a downloaded asset off the table.
 const RISKY_DOWNLOAD_EXTS = new Set(['.html', '.htm', '.svg', '.js', '.mjs', '.xml']);

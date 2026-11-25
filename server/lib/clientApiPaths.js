@@ -1,9 +1,10 @@
 /**
- * Static scanner for the URL paths `client/src/services/api*.js` asks the server
- * for.
+ * Static scanner for the URL paths the browser client asks the server for.
  *
- * The client's ~87 `apiX.js` wrappers are the only place a browser learns which
- * server route a feature lives at, and their co-located tests assert the wrapper
+ * The client's ~87 `apiX.js` wrappers are where a browser mostly learns which
+ * server route a feature lives at (components, hooks and pages also call `fetch`,
+ * `EventSource` and `api.<verb>` directly, and services build URL strings for
+ * `href`/`src`), and their co-located tests assert the wrapper
  * produced the string the wrapper produces — nothing compares those strings to
  * the routes `server/index.js` actually mounts. `apiRouteParity.test.js` closes
  * that gap by diffing this scanner's output against the server-side route
@@ -27,16 +28,43 @@
  * read — and its `blankComments` is line-based, which shifts the offsets a
  * balanced expression scan depends on.
  *
+ * Two passes, with different strictness (#18656):
+ *
+ * 1. The CALL pass reads `client/src/services/api*.js` and folds the first argument
+ *    of `request(`, `api.<verb>(` and `fetch(` (the last only when it mentions
+ *    `API_BASE`). Its paths feed both directions of the parity test, and what it
+ *    cannot fold is reported as `unresolved`.
+ * 2. The REFERENCE pass reads every non-test file under `client/src` and collects
+ *    (a) `api.<verb>(` first arguments and (b) string or template literals that
+ *    BEGIN with `/api/` or `${API_BASE}/`. Its paths (`referenced`) only mark
+ *    server routes as reached; they never feed the unmounted-path check and are
+ *    never reported as unresolved, so help text cannot fail the forward direction.
+ *
+ * How pass 2 tells a call site from a mention: comments are blanked first, test
+ * files are never read, and a literal counts only when the whole literal IS the URL
+ * (a prose string like `'GET /api/x'` or `'/api/x is gone'` does not start with the
+ * prefix or has whitespace in its path). Literals that are an operand of a
+ * comparison or a string-matching call (`=== '/api/x'`, `.startsWith('/api/')`,
+ * `case`) or sit inside a `console.*(` call are skipped. What remains is a URL the
+ * code builds, hands to `fetch`/`EventSource`/`href`/`src` or returns from a
+ * builder; a mention that still has that exact shape is indistinguishable from a
+ * call statically, so the matcher stays permissive only in that direction.
+ *
  * Nothing here records a line number in a checked-in artifact — the results are
  * computed fresh in the test and used only to name a failing call site.
  */
 
 import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { escapeRegExp } from './textUtils.js';
 
-/** Client wrappers live here; the scan reads `api*.js` minus tests. */
+/** Client wrappers live here; the call pass reads `api*.js` minus tests. */
 const CLIENT_SERVICES_DIR = 'client/src/services';
+
+/** The reference pass reads every non-test source file under here. */
+const CLIENT_SRC_DIR = 'client/src';
+const CLIENT_SOURCE_FILE = /\.(?:js|jsx)$/;
+const CLIENT_TEST_FILE = /(?:\.(?:test|spec)\.[jt]sx?$|(?:^|\/)(?:__tests__|__mocks__|test)\/)/;
 
 /**
  * `apiCore.js` is the transport itself — its `request(endpoint, …)` calls take a
@@ -50,7 +78,8 @@ const TRANSPORT_MODULE = 'apiCore.js';
  * `` `${API_BASE}/…` `` directly, so those are scanned too — but only when the
  * argument mentions `API_BASE`, since a bare `fetch` may target any origin.
  */
-const REQUEST_CALL = /\b(request|fetch)\s*\(/g;
+const REQUEST_CALL = /(?<![.\w$])(request|fetch|api\.(?:get|post|put|patch|delete))\s*\(/g;
+const API_VERB_CALL = /(?<![.\w$])(?:request|api\.(?:get|post|put|patch|delete))\s*\(/g;
 const API_BASE_SCOPE = new Map([['API_BASE', ['']]]);
 
 /**
@@ -344,16 +373,121 @@ const wildcardMatcher = (path) => new RegExp(`^${
     .join('')
 }$`);
 
-const lineOf = (source, index) => source.slice(0, index).split('\n').length;
+/** A literal operand of a comparison or a string-matching call is a test on a URL, not a request for it. */
+const MATCHING_CONTEXT = /(?:\.(?:startsWith|endsWith|includes|indexOf|lastIndexOf|replace|replaceAll|match|split|test)\s*\(\s*|[=!]==?\s*|\bcase\s+)$/;
+
+/** Keep a reference only when it names at least one static segment under `/api`. */
+const isNamedApiPath = (path) => path !== null && (path.split('/')[2] ?? PARAM_SEGMENT) !== PARAM_SEGMENT;
 
 /**
- * Scan the client service modules and return every `/api/...` path they request.
+ * Fold one string or template literal into the `/api/...` path it is the whole
+ * URL of, or `null` when it is anything else. The raw literal must BEGIN with
+ * `/api/` or `${API_BASE}/`, and its path (up to the query) must hold no
+ * whitespace — prose that merely mentions a route fails one or the other. A
+ * trailing `/` is a prefix a caller appends an id to (`'/api/x/' + id`).
+ */
+function foldReferencedLiteral(literal, context) {
+  const quoted = stringLiteralValue(literal);
+  const isApiBase = literal.startsWith('`${API_BASE}/');
+  if (quoted === null && !isApiBase && !/^`(?:\$\{[\w$.]+\})?\/api(?:\/|\$\{)/.test(literal)) return null;
+  if (quoted !== null && !quoted.startsWith('/api/')) return null;
+  const values = quoted !== null ? [quoted] : resolveTemplate(literal, context);
+  const paths = values
+    .map((value) => (isApiBase || !/^(?:\{dyn\})?\/api\//.test(value) ? (isApiBase ? value : null) : value.replace(/^(?:\{dyn\})?\/api(?=\/)/, '')))
+    .filter((value) => value !== null)
+    .filter((value) => !/\s/.test(value.split(/[?#]/)[0]))
+    .map((value) => normalizeClientPath(value.endsWith('/') ? `${value}${DYNAMIC}` : value))
+    .filter(isNamedApiPath);
+  return paths.length ? paths : null;
+}
+
+/**
+ * Pass 2 over one file: every `api.<verb>(` first argument and every URL-shaped
+ * literal, as `/api/...` paths. See the header for how a call differs from a mention.
+ */
+function scanReferencedPaths(rawSource) {
+  const source = stripComments(rawSource);
+  const helpers = parsePathHelpers(source);
+  const context = { helpers, scope: API_BASE_SCOPE, depth: 0 };
+  const found = [];
+
+  for (const match of source.matchAll(API_VERB_CALL)) {
+    const { text } = scanTo(source, match.index + match[0].length, [',']);
+    const values = resolvePathExpression(text.trim(), context) ?? [];
+    for (const value of values) {
+      const path = normalizeClientPath(value);
+      if (isNamedApiPath(path)) found.push(path);
+    }
+  }
+
+  const loggingSpans = [...source.matchAll(/\bconsole\.\w+\s*\(/g)]
+    .map((match) => [match.index, scanTo(source, match.index + match[0].length, []).end]);
+  let i = 0;
+  while (i < source.length) {
+    const char = source[i];
+    if (char !== "'" && char !== '"' && char !== '`') { i++; continue; }
+    const end = char === '`' ? skipTemplate(source, i) : skipQuoted(source, i, char);
+    // A quote that does not close on its own line is an apostrophe in JSX text, not a literal.
+    if (char !== '`' && source.slice(i, end).includes('\n')) { i++; continue; }
+    const insideLog = loggingSpans.some(([from, to]) => i > from && i < to);
+    if (!insideLog && !MATCHING_CONTEXT.test(source.slice(Math.max(0, i - 40), i))) {
+      found.push(...(foldReferencedLiteral(source.slice(i, end), context) ?? []));
+    }
+    i = end;
+  }
+  return found;
+}
+
+/**
+ * Module-local helpers that forward a `path` PARAMETER into `request(path, …)`
+ * (apiTimeline's `importFile`): the path lives at the helper's call sites, so
+ * fold the argument each caller passes in that position. Returns `null` when the
+ * expression is not a parameter of an earlier helper or any call site is unfoldable,
+ * which leaves the site `unresolved` for the caller to declare.
+ */
+function resolveForwardedParameter(source, siteIndex, name, context) {
+  const declaration = /(?:^|\n)[ \t]*(?:export\s+)?(?:(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(|(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\()/g;
+  let helper = null;
+  for (const match of source.slice(0, siteIndex).matchAll(declaration)) {
+    const { text } = scanTo(source, match.index + match[0].length, []);
+    const position = splitArguments(text).map(parseParameter).findIndex((parameter) => parameter.name === name);
+    if (position !== -1) helper = { name: match[1] ?? match[2], position, declaredAt: match.index };
+  }
+  if (!helper) return null;
+  const calls = [...source.matchAll(new RegExp(`(?<![.\\w$])${escapeRegExp(helper.name)}\\s*\\(`, 'g'))]
+    .filter((call) => call.index > helper.declaredAt + 1 && !/(?:function\s+|(?:const|let)\s+)$/.test(source.slice(Math.max(0, call.index - 12), call.index)));
+  const values = [];
+  for (const call of calls) {
+    const args = splitArguments(scanTo(source, call.index + call[0].length, []).text);
+    const folded = resolvePathExpression(args[helper.position], context);
+    if (!folded) return null;
+    values.push(...folded);
+  }
+  return values.length ? values : null;
+}
+
+const lineOf = (source, index) => source.slice(0, index).split('\n').length;
+
+/** Every non-test `.js`/`.jsx` under client/src, relative to it. */
+const listClientSourceFiles = (repoRoot) => readdirSync(join(repoRoot, CLIENT_SRC_DIR), { recursive: true })
+  .map((file) => file.split(sep).join('/'))
+  .filter((file) => CLIENT_SOURCE_FILE.test(file) && !CLIENT_TEST_FILE.test(file))
+  .sort();
+
+/**
+ * Scan the client and return the `/api/...` paths its service modules request
+ * (`paths`, `unresolved`) and the wider set any client file references (`referenced`).
  *
  * `sources` injects `{ 'apiThing.js': '<source>' }` instead of reading the tree —
  * the parity test's bypass probes use it to prove the matcher still reports a
  * path the server does not mount.
  */
 export function scanClientApiPaths({ repoRoot, sources } = {}) {
+  const referencedSources = sources
+    ? Object.entries(sources).filter(([file]) => !CLIENT_TEST_FILE.test(file))
+    : listClientSourceFiles(repoRoot).map((file) => [file, readFileSync(join(repoRoot, CLIENT_SRC_DIR, file), 'utf8')]);
+  const referenced = [...new Set(referencedSources.flatMap(([, source]) => scanReferencedPaths(source)))].sort();
+
   const modules = sources
     ? Object.entries(sources)
     : readdirSync(join(repoRoot, CLIENT_SERVICES_DIR))
@@ -372,7 +506,9 @@ export function scanClientApiPaths({ repoRoot, sources } = {}) {
       const expression = text.trim().replace(/\s+/g, ' ');
       if (match[1] === 'fetch' && !/\bAPI_BASE\b/.test(expression)) continue;
       const site = { file: `${CLIENT_SERVICES_DIR}/${file}`, line: lineOf(source, match.index), expression };
-      const values = resolvePathExpression(text.trim(), { helpers, scope: API_BASE_SCOPE });
+      const context = { helpers, scope: API_BASE_SCOPE };
+      const values = resolvePathExpression(text.trim(), context)
+        ?? (/^[A-Za-z_$][\w$]*$/.test(text.trim()) ? resolveForwardedParameter(source, match.index, text.trim(), context) : null);
       if (!values) { unresolved.push(site); continue; }
       for (const value of values) {
         const path = normalizeClientPath(value);
@@ -382,7 +518,7 @@ export function scanClientApiPaths({ repoRoot, sources } = {}) {
     }
   }
 
-  return { paths, unresolved };
+  return { paths, unresolved, referenced };
 }
 
 /** Client call sites whose path no mounted server route can serve. */
