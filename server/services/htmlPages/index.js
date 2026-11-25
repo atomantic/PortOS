@@ -13,7 +13,8 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
-import { ASSESSABLE_RUNTIMES, LOCAL_RUNTIMES } from '../../lib/localProviderRuntime.js';
+import { ASSESSABLE_RUNTIMES, LOCAL_RUNTIMES, localEndpointPort } from '../../lib/localProviderRuntime.js';
+import { awaitMtplxRequest, mtplxRequestLogPath } from '../../lib/mtplxRequestLog.js';
 import { isEmbeddingModel } from '../../lib/localModelHeuristics.js';
 import { isToolFreeOneShotProvider } from '../../lib/provider/providerVendors.js';
 import {
@@ -354,6 +355,21 @@ async function processRun(id) {
   }
 }
 
+const TIMEOUT_MESSAGE = /timed out|timeout/i;
+
+/**
+ * The benchmark error for a local MTPLX run that produced output tokens but no answer: it timed out with no answer text and MTPLX's own request log holds exactly one request, cancelled by this run and begun after it, with output tokens. Null keeps the caller's generic timeout, so a concurrent client, a missing log or a different model never produces a claim. Only the completion counter is read; the model, effort and prompt of the run are untouched.
+ */
+async function reasoningOnlyTimeoutError({ provider, route, message, startedAtMs, aborted }) {
+  if (aborted || !TIMEOUT_MESSAGE.test(message)) return null;
+  const { isMtplxProvider } = await import('../mtplxServerManager.js');
+  const port = isMtplxProvider(provider) ? localEndpointPort(provider.endpoint) : null;
+  if (!port) return null;
+  const attribution = await awaitMtplxRequest({ logPath: mtplxRequestLogPath(port), startedAtMs, endedAtMs: Date.now(), model: route.model || null }).catch(() => null);
+  if (attribution?.status !== 'matched' || !(attribution.completionTokens > 0)) return null;
+  return `${message} The run ended reasoning-only: MTPLX generated ${attribution.completionTokens} completion tokens before the deadline and no answer text was received.`;
+}
+
 /**
  * One page through a provider route: the configured provider, model and effort exactly as picked, no fallback (the gallery must name what answered) and tool-free (the reply is the page, not files an agent wrote). Resolves to the same `{ text, error, timings }` shape `generate` does.
  */
@@ -367,6 +383,7 @@ async function generateViaProvider(route, prompt, signal) {
   let runId = null;
   const stop = () => { if (runId) stopRun(runId).catch(() => { /* best-effort cancel */ }); };
   signal.addEventListener('abort', stop, { once: true });
+  const startedAtMs = Date.now();
   try {
     const result = await runPromptThroughProvider({
       provider, model: route.model || undefined, effort: route.effort || undefined, prompt,
@@ -376,7 +393,8 @@ async function generateViaProvider(route, prompt, signal) {
     // A CLI transcript can echo the prompt, whose rules mention `<!doctype html>`; drop it so only the reply is read.
     return { text: String(result?.text || '').split(prompt).join(''), error: null, timings: null };
   } catch (err) {
-    return { text: '', error: err?.message || 'The provider run failed', timings: null };
+    const message = err?.message || 'The provider run failed';
+    return { text: '', error: await reasoningOnlyTimeoutError({ provider, route, message, startedAtMs, aborted: signal.aborted }) ?? message, timings: null };
   } finally {
     signal.removeEventListener('abort', stop);
   }

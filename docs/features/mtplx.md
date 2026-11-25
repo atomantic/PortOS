@@ -284,6 +284,16 @@ On the MTPLX API provider an Inkling model's run effort reaches the server as
 the provider's `enable_thinking`, and the output-token cap is sent as
 `max_tokens`.
 
+A reasoning budget is not enforced on Inkling: MTPLX 2.13's thinking guard needs
+single-token Qwen-style markers, and Inkling uses a native message protocol, so a
+`thinking_budget` request field was observed to be ignored. Treat the effort level
+as the only reasoning control. When an HTML Pages run through a local MTPLX
+provider times out with no answer text and MTPLX's request log
+(`<MTPLX_HOME or ~/.mtplx>/logs/request-log-<port>.jsonl`) holds exactly one request
+for the run's window and model, cancelled by the run and begun after it, the saved
+page error adds the completion-token count and says no answer text was received. Only counters and the request id
+are read; with concurrent requests or no log the plain timeout stays.
+
 Measured on a 128 GB Apple Silicon host (warm, 3 samples), the Optimized-Speed
 pack averaged 59 tok/s decode with a 3 s first token, against 39 tok/s and 5.8 s
 for the Qwen3.8 27B Optimized Speed pack, and passed the sandbox-repair agent
