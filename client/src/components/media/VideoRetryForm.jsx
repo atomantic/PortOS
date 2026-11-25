@@ -30,7 +30,7 @@ import { buildVideoRetryOverrides, reconcileModelBoundParams } from './retryOver
 // The retry editor deliberately reuses the same resolution and advanced
 // controls rendered by VideoGen. Keeping the capability predicates in those
 // components means a newly-supported video knob is not silently absent here.
-export default function VideoRetryForm({ job, onSubmit, onCancel }) {
+export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
   const p = job.params || {};
   const [models, setModels] = useState([]);
   const [modelId, setModelId] = useState(p.modelId || '');
@@ -222,8 +222,8 @@ export default function VideoRetryForm({ job, onSubmit, onCancel }) {
           supported={!isHosted && p.mode === 'a2v' && currentModel?.a2vLoraStageCapable && selectedLoras.length > 0} loras={selectedLoras} />
       )}
       <div className="flex items-center justify-end gap-2 pt-1">
-        <button type="button" onClick={onCancel} className="px-3 py-1 text-xs text-port-text-muted hover:text-white">Cancel</button>
-        <button type="submit" disabled={continuationPending || !!modelInputPreview.error} title={continuationPending ? 'Waiting for the model continuation capability.' : undefined} className="inline-flex items-center gap-1 px-3 py-1 bg-port-accent text-white text-xs rounded hover:bg-port-accent/90 disabled:opacity-50"><RotateCw className="w-3 h-3" />Retry with changes</button>
+        <button type="button" disabled={retrying} onClick={onCancel} className="px-3 py-1 text-xs text-port-text-muted hover:text-white">Cancel</button>
+        <button type="submit" disabled={retrying || continuationPending || !!modelInputPreview.error} title={continuationPending ? 'Waiting for the model continuation capability.' : undefined} className="inline-flex items-center gap-1 px-3 py-1 bg-port-accent text-white text-xs rounded hover:bg-port-accent/90 disabled:opacity-50"><RotateCw className="w-3 h-3" />Retry with changes</button>
       </div>
     </form>
   );

@@ -747,14 +747,14 @@ describe('MediaJobsQueue — federated render badge', () => {
     expect(await screen.findByText(/local \/ z-image-turbo/)).toBeInTheDocument();
   });
 
-  it('offers plain Retry but not the editor on a failed federated job', async () => {
+  it.each(['image', 'video'])('offers plain Retry but not the editor on a failed federated %s job', async (kind) => {
     // A prompt/model edit would never reach the peer — the remote executor
     // renders from the wire request inside the marker — so showing the form
     // would silently discard what the user typed.
     const user = userEvent.setup();
-    listQueueMediaJobs.mockResolvedValue([{ ...failedLocalJob, id: 'remotefail0000beef', renderer: 'remote' }]);
+    listQueueMediaJobs.mockResolvedValue([{ ...failedLocalJob, id: 'remotefail0000beef', kind, renderer: 'remote' }]);
 
-    render(<MediaJobsQueue kind="image" />);
+    render(<MediaJobsQueue kind={kind} />);
     await expandReel(user);
 
     expect(await screen.findByRole('button', { name: /^Retry$/ })).toBeInTheDocument();
@@ -1409,4 +1409,19 @@ it.each([
   await user.click(screen.getByRole('button', { name: /retry with changes/i }));
   expect(previewMediaJobRetry).toHaveBeenLastCalledWith(job.id, { prompt: '  revised  ' }, { silent: true });
   expect(retryMediaJob).toHaveBeenCalledWith(job.id, { prompt: '  revised  ' }, { silent: true });
+});
+
+it('keeps edited prompt text when the retry is refused', async () => {
+  listQueueMediaJobs.mockResolvedValue([failedCodexJob]);
+  retryMediaJob.mockRejectedValueOnce(new Error('Prompt is 8001/8000 characters. Shorten it to retry.'));
+  const user = userEvent.setup();
+  render(<MediaJobsQueue kind="image" />);
+  await expandReel(user);
+  await user.click(await screen.findByLabelText('Edit and retry'));
+  const prompt = screen.getByRole('textbox', { name: /^prompt$/i });
+  await user.clear(prompt);
+  await user.type(prompt, '  edited  ');
+  await user.click(screen.getByRole('button', { name: /retry with changes/i }));
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Prompt is 8001/8000 characters. Shorten it to retry.'));
+  expect(prompt).toHaveValue('  edited  ');
 });

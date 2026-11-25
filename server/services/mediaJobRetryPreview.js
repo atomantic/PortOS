@@ -14,6 +14,8 @@ function referenceInputs(groups) {
 }
 
 export async function previewRetryModelInput(kind, params) {
+  // Federated queue rows only offer plain Retry. Their immutable wire request
+  // ignores local edits, so a preview of merged local overrides would be false.
   if ((kind !== 'image' && kind !== 'video') || isRemoteMediaJob({ kind, params })) {
     throw new ServerError('This job does not support an editable retry preview', { status: 400, code: 'JOB_RETRY_PREVIEW_UNSUPPORTED' });
   }
@@ -80,8 +82,9 @@ async function previewVideo(params) {
       const { localVideoSentPrompt } = await import('./videoGen/generateVideo.js');
       const context = { ...params, loraFilenames: params.loras?.map((lora) => lora.filename) };
       const { record } = await localVideoSentPrompt(context);
-      if (!(params.chunks > 1) || !params.chunkPrompts?.some((beat) => beat?.trim())) return record;
-      const segmentPrompts = await Promise.all(Array.from({ length: params.chunks }, async (_, index) => {
+      const chunks = Math.min(8, Math.trunc(Number(params.chunks) || 1));
+      if (chunks <= 1 || !params.chunkPrompts?.some((beat) => beat?.trim())) return record;
+      const segmentPrompts = await Promise.all(Array.from({ length: chunks }, async (_, index) => {
         const beat = params.chunkPrompts[index];
         return beat?.trim() ? (await localVideoSentPrompt({ ...context, prompt: beat })).record.sentPrompt : record.sentPrompt;
       }));

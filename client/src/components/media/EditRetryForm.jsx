@@ -29,7 +29,7 @@ const INPUT_CLS = 'w-full bg-port-bg border border-port-border rounded-lg px-2 p
 // compose inputs' native min/max/step would otherwise block a prompt-only retry of
 // a stored job whose size, steps or guidance sit outside the compose ranges; the
 // retry route validates every value that is actually sent.
-export default function EditRetryForm({ job, onSubmit, onCancel }) {
+export default function EditRetryForm({ job, retrying, onSubmit, onCancel }) {
   const p = job.params || {};
   const isCodex = p.mode === IMAGE_GEN_MODE.CODEX;
   const isLocal = p.mode === IMAGE_GEN_MODE.LOCAL;
@@ -161,14 +161,14 @@ export default function EditRetryForm({ job, onSubmit, onCancel }) {
       <div className="flex items-center justify-end gap-2 pt-1">
         <button
           type="button"
-          onClick={onCancel}
+          disabled={retrying} onClick={onCancel}
           className="px-3 py-1 text-xs text-port-text-muted hover:text-white"
         >
           Cancel
         </button>
         <button
           type="submit"
-          disabled={!!modelInputPreview.error}
+          disabled={retrying || !!modelInputPreview.error}
           className="inline-flex items-center gap-1 px-3 py-1 bg-port-accent text-white text-xs rounded hover:bg-port-accent/90 disabled:opacity-50"
         >
           <RotateCw className="w-3 h-3" />
