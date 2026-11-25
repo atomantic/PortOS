@@ -617,10 +617,10 @@ describe('executeCliRun — tool-free OpenCode', () => {
 });
 
 it.each([
-  [524288, undefined, '48000'],
-  [32768, undefined, '24576'],
+  [524288, undefined, '128000'],
+  [32768, undefined, '128000'],
   [524288, '12000', '12000'],
-])('composes a tool-free Splash page allowance with context %i and explicit output %s', async (tokens, explicit, expected) => {
+])('lets Splash enforce the context ceiling for a tool-free request with context %i and explicit output %s', async (tokens, explicit, expected) => {
   const child = makeChild();
   spawn.mockReturnValueOnce(child);
   const onComplete = vi.fn();
@@ -632,7 +632,7 @@ it.each([
       harnessContext: { tokens },
       envVars: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8001', ...(explicit ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: explicit } : {}) },
     },
-    prompt: 'Write a standalone HTML page.', workspacePath: TEST_WORKSPACE, toolFree: true, maxTokens: 48_000, onComplete,
+    prompt: 'Write a standalone HTML page.', workspacePath: TEST_WORKSPACE, toolFree: true, maxTokens: 128_000, onComplete,
   });
   const [, args, { env }] = spawn.mock.calls[0];
   expect(args).toContain('--tools');
