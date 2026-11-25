@@ -25,6 +25,7 @@ vi.mock('../services/apiPeerSync.js', () => ({
 }));
 
 vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
+vi.mock('../services/apiMediaUsage.js', () => ({ getMediaUsages: vi.fn().mockResolvedValue({ items: {} }) }));
 vi.mock('../services/apiSystem.js', () => ({ getInstances: vi.fn().mockResolvedValue({ peers: [] }) }));
 
 vi.mock('../services/apiImageVideo', () => ({
