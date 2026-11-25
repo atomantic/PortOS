@@ -408,12 +408,15 @@ describe('scheduled audit measurement workflow', () => {
     expect(compactV3).not.toMatch(/slice|server\/services\/auth/i);
   });
 
-  it('calibrates audit instructions for <85 slice re-verification and 70-84 localized defect scoring', () => {
+  it('calibrates audit instructions for whole-slice scoring and below-target re-verification', () => {
     const instructions = auditQualityInstructions('code-quality');
     expect(instructions).toContain(`audit-slice-history that scored below ${QUALITY_HEALTHY_THRESHOLD} once its filed issues are closed`);
-    expect(instructions).toContain('70–84 mostly healthy slice with 1–2 localized moderate defects');
-    expect(instructions).toContain('40–69 recurring or systemic defects across multiple files/paths in the slice');
-    expect(instructions).toContain('The pragmatic target band is 85–95: do not chase 100/100 through speculative hardening');
+    expect(instructions).toContain('88–95: Clean, healthy slice without speculative hardening');
+    expect(instructions).toContain('75–84: One or two localized defects in secondary paths');
+    expect(instructions).toContain('40–69: Recurring or systemic defects across multiple files or in core paths');
+    expect(instructions).toContain('0–39: Severe core workflow breakage, data loss, or verified reachable exploits');
+    expect(instructions).toContain('Score the whole reviewed slice proportionally');
+    expect(instructions).toContain('The pragmatic target band is 85–95. Avoid speculative hardening');
   });
 
   it('retains both same-day profile scores across snapshot serialization and counts their domain once', () => {
