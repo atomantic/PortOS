@@ -815,6 +815,30 @@ describe('Eidoverse private-world lifecycle', () => {
     expect(result.operations[1].reason).toMatch(/pos, yaw, or scale/);
   });
 
+  it('refuses an overlong removal ID without touching the entity that shares its prefix', async () => {
+    const id = 'Entity_1-'.padEnd(64, 'a');
+    const spawn = { verb: 'spawn', args: { id, lib: 'eidoverse/assets/models/example.glb' } };
+    await expect(world.augmentEidoverseWorld([spawn])).resolves.toMatchObject({ success: true, applied: 1 });
+    mocks.sent.length = 0;
+
+    const result = await world.augmentEidoverseWorld([
+      { verb: 'remove', args: { id: `${id}b` } },
+      { ...spawn, args: { ...spawn.args, id: 'another-entity' } },
+    ]);
+
+    expect(result).toMatchObject({
+      success: false,
+      applied: 1,
+      operations: [
+        { verb: 'remove', outcome: 'refused', committed: null, reason: expect.stringContaining('64') },
+        { verb: 'spawn', id: 'another-entity', outcome: 'accepted' },
+      ],
+    });
+    expect(mocks.sent.filter(({ type }) => type === 'verb')).toEqual([
+      expect.objectContaining({ verb: 'spawn', args: expect.objectContaining({ id: 'another-entity' }) }),
+    ]);
+  });
+
   it('stops the rest of a batch once the world refuses one operation, leaving the remainder unattempted', async () => {
     await world.ensureEidoverseWorldPresence();
     mocks.rejectVerb = 'place';

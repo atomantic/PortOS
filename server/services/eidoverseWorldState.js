@@ -110,9 +110,9 @@ export function validRole(value) {
 }
 
 export function validEntityId(value) {
-  const clean = safeText(value, '').slice(0, 64);
+  const clean = safeText(value, '', Infinity);
   if (!ENTITY_ID_RE.test(clean)) {
-    throw new ServerError('Eidoverse entity ids must contain only letters, numbers, hyphens, and underscores.', {
+    throw new ServerError('Eidoverse entity ids must be 1–64 characters and contain only letters, numbers, hyphens, and underscores.', {
       status: 400,
       code: 'EIDOVERSE_ARGUMENT_INVALID',
     });
