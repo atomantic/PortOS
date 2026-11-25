@@ -379,6 +379,22 @@ describe('other targets', () => {
       expect(page.html).toBe('');
     });
 
+    it('attributes one OpenCode request that MTPLX logs as both a cancellation and a final summary', async () => {
+      timeoutError();
+      const model = providers['opencode-mtplx'].models[0];
+      const shared = { request_id: 'chatcmpl-cancelled', request_model: model };
+      await writeFile(join(home, 'logs', 'request-log-8000.jsonl'), [
+        // The just-finished plan's end timestamp is inside the clock slack,
+        // but its earlier start proves it isn't the timed-out page.
+        logLine(0, { request_model: model, request_cancelled: undefined, request_elapsed_s: 240 }),
+        logLine(10_000, { ...shared, stream_cancelled_by_client: true, completion_tokens: 52738 }),
+        logLine(10_050, { ...shared, request_cancelled: undefined, completion_tokens: 52738 }),
+      ].join('\n'));
+      const page = await runRoute({ providerId: 'opencode-mtplx', model });
+      expect(page.error).toContain('MTPLX generated 52738 completion tokens');
+      expect(page.html).toBe('');
+    });
+
     it.each([
       ['concurrent requests', (l) => `${l(10_000)}\n${l(20_000, { request_id: 'other' })}\n`],
       ['a request another client finished normally', (l) => `${l(10_000, { request_cancelled: false })}\n`],
