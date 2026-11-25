@@ -85,6 +85,7 @@ export default function VideoGen() {
   const {
     status, statusLoading, refreshStatus, refreshGrokEnabled,
     modelContextRequest, modelContext, models, refreshModelContext, laneEnabled,
+    byovRuntimes, backendDisclosures, displaySleepOnRender,
   } = useVideoGenServiceStatus();
   const settingsOpen = searchParams.get('settings') === '1';
   const openSettings = () => setSearchParams(prev => { const n = new URLSearchParams(prev); n.set('settings', '1'); return n; });
@@ -94,6 +95,8 @@ export default function VideoGen() {
     // key fields — re-read both so the backend switch appears/disappears
     // without a reload.
     refreshGrokEnabled();
+    // Hosted-lane flags ride the model context, not the python probe.
+    refreshModelContext();
     refreshStatus();
   };
 
@@ -119,12 +122,12 @@ export default function VideoGen() {
   // payload builder rather than sitting beside it.
   const remoteTarget = useFederatedMediaTarget('video');
   // `null` = no per-render override yet — follow the install default
-  // (settings.videoGen.displaySleep, /status-reported so it can't drift from
+  // (settings.videoGen.displaySleep, server-reported so it can't drift from
   // the server's own opt-in read). Set once the user touches the checkbox.
   // Computed before the form hook call because it feeds buildGeneratePayload()
   // the same way `remoteSubmissionFields` does.
   const [displaySleepOverride, setDisplaySleepOverride] = useState(null);
-  const displaySleepEnabled = displaySleepOverride ?? !!status?.displaySleepOnRender;
+  const displaySleepEnabled = displaySleepOverride ?? displaySleepOnRender;
   const form = useVideoGenForm({
     models, modelContext, availableLoras: loraLibrary.items,
     grokEnabled: laneEnabled.grok, falEnabled: laneEnabled.fal, reactorEnabled: laneEnabled.reactor,
@@ -199,8 +202,8 @@ export default function VideoGen() {
       if (job.params?.displaySleep !== undefined) setDisplaySleepOverride(!!job.params.displaySleep);
     },
   });
-  const byov = useVideoGenByovRuntime({ currentModel, status });
-  const weights = useVideoGenWeightAssets({ model, ic, statusLoading, rendersOffMachine });
+  const byov = useVideoGenByovRuntime({ currentModel, byovRuntimes });
+  const weights = useVideoGenWeightAssets({ model, ic, catalogLoading: modelContextRequest.state === 'loading', rendersOffMachine });
 
   // The form's request plus the music video it is filed under, if one is picked.
   const generatePayload = () => ({ ...actions.buildGeneratePayload(), ...musicVideoFilingFields(searchParams) });
@@ -360,7 +363,7 @@ export default function VideoGen() {
                 remoteTarget={remoteTarget}
                 remoteUnsupportedInputs={gates.remoteUnsupportedInputs}
                 rendersOffMachine={rendersOffMachine}
-                status={status}
+                backendDisclosures={backendDisclosures}
                 systemMemoryGb={modelContext?.systemMemoryGb}
                 runwayCatalog={runwayCatalog}
                 reactorContinuableClips={reactorContinuableClips}
@@ -439,7 +442,7 @@ export default function VideoGen() {
           // The capability probe decorates the model list, and the install
           // also moves python health. Refresh both after install/repair so
           // H3's LoRA picker and warning react without a manual page reload.
-          refreshStatus();
+          refreshStatus({ fresh: true });
           refreshModelContext();
         }}
       />

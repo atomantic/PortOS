@@ -43,7 +43,7 @@ export default function VideoGenStatusBar({ status, statusLoading, onRefresh, on
         )}
         <div className="flex items-center gap-1">
           <button
-            onClick={onRefresh}
+            onClick={() => onRefresh({ fresh: true })}
             disabled={statusLoading}
             className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50 disabled:opacity-50"
             title="Refresh status" aria-label="Refresh status"

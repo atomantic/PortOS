@@ -20,7 +20,7 @@ const LTX25_REFERENCE_ID = 'ic-ingredients-25';
  * `model` and `ic` are `useVideoGenForm()` groups. `rendersOffMachine` turns
  * the gate off for a hosted lane, whose weights live with the provider.
  */
-export function useVideoGenWeightAssets({ model, ic, statusLoading, rendersOffMachine }) {
+export function useVideoGenWeightAssets({ model, ic, catalogLoading, rendersOffMachine }) {
   const { modelId, currentModel, speedProfileId, textEncoderOptions, textEncoderId, setTextEncoderId } = model;
   const { icSpec, icModeActive } = ic;
   // Inline cache-status badge for the picked video model + the active text
@@ -72,7 +72,7 @@ export function useVideoGenWeightAssets({ model, ic, statusLoading, rendersOffMa
   const assets = useDownloadableAssets([
     {
       key: 'model', id: modelId, label: 'selected model weights',
-      applies: true, extraBlocked: statusLoading || !modelId || !currentModel,
+      applies: true, extraBlocked: catalogLoading || !modelId || !currentModel,
       status: modelStatus, keyPrefix: modelId,
       name: currentModel?.name || modelId, repairLabel: 'Repair model',
     },
