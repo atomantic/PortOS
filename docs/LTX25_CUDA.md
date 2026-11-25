@@ -47,23 +47,42 @@ version along with the source hashes.
 
 ## Regenerating locks
 
-Edit exact direct pins in `scripts/ml/requirements/requirements-ltx25-cuda.txt`, then use uv
-0.10.6 from the repository root (Bash):
+Edit exact direct pins in `scripts/ml/requirements/requirements-ltx25-cuda.txt`.
+Use hash-verified uv **0.13.7** from
+`scripts/ml/requirements/requirements-uv-bootstrap.lock.txt` (install with
+`--require-hashes --no-deps --only-binary :all:` in an isolated tool venv).
+Set `UV` to that executable's absolute path. Inspect both LTX source package
+manifests and the locked build backend before compiling, as uv may prepare source
+metadata. Run from the repository root in Bash:
 
 ```bash
+set -euo pipefail
+: "${UV:?set UV to the verified uv 0.13.7 executable}"
+[[ $("$UV" --no-config --version) == 'uv 0.13.7' ]]
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
 for target in windows linux; do
   case "$target" in
     windows) platform=x86_64-pc-windows-msvc ;;
     linux) platform=x86_64-manylinux_2_28 ;;
   esac
-  uv pip compile scripts/ml/requirements/requirements-ltx25-cuda.txt \
+  out="scripts/ml/requirements/requirements-ltx25-cuda-${target}.lock.txt"
+  cp "$out" "$tmp/$target.lock.txt"
+  "$UV" --no-config pip compile scripts/ml/requirements/requirements-ltx25-cuda.txt \
     --python-version 3.11 --python-platform "$platform" \
     --generate-hashes --only-binary :all: \
     --index-url https://pypi.org/simple \
     --extra-index-url https://download.pytorch.org/whl/cu132 \
     --index-strategy unsafe-best-match --emit-index-url \
     --no-header --annotation-style line \
-    -o "scripts/ml/requirements/requirements-ltx25-cuda-${target}.lock.txt"
+    -o "$tmp/$target.lock.txt"
+  {
+    head -n 3 "$out"
+    cat "$tmp/$target.lock.txt"
+  } > "$tmp/$target.with-header"
+done
+for target in windows linux; do
+  cp "$tmp/$target.with-header" "scripts/ml/requirements/requirements-ltx25-cuda-${target}.lock.txt"
 done
 python3 - <<'PY'
 import re
@@ -78,14 +97,20 @@ Path('scripts/ml/requirements/requirements-ltx25-cuda-build.lock.txt').write_tex
 PY
 ```
 
-Keep each lock's target header. Existing output pins preserve the previous
-transitive set; use `--upgrade` deliberately when refreshing that set. The
-multi-index strategy permits PyPI packages alongside CUDA wheels; installation
-still requires the committed hashes. Verify publication dates using PyPI's
-release metadata when reviewing updates: some upstream simple-index entries
-omit timestamps, so uv's exclude-newer cannot resolve this set reliably.
-The source manifests/build backend must be inspected before running compile,
-which may prepare source metadata.
+The three header lines preserve the target, LTX version and source revision,
+and regeneration guide. If the immutable source changes, update the second
+line in both locks to match the reviewed archive. Seeding the scratch output
+preserves existing transitive pins; use `--upgrade` deliberately to refresh them.
+
+Choose a UTC cutoff at least three days old and record it in the refresh PR.
+Some entries in this runtime's multi-index resolve lack timestamps, so verify
+the cooldown against authoritative metadata before committing the locks. Check
+every allowed wheel hash and upload date against PyPI or the official CUDA 13.2
+index, and verify the immutable LTX archive hash and source release date against
+upstream. Require matching hashes, non-yanked registry artifacts and dates at
+or before the cutoff. Hold the refresh if any of that evidence is missing.
+See [Runtime locks](./RUNTIME_LOCKS.md#regenerating-locks) and
+[Python runtime refresh](./PYTHON_RUNTIME_REFRESH.md#selective-regeneration).
 
 Query OSV for every exact resolved package, including `MAL-` records,
 immediately before merge. This includes the two source package versions and
