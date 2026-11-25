@@ -305,6 +305,21 @@ describe('mediaJobs routes', () => {
     expect(preview.body.promptAdditions[0].label).toBe('Grok video tool instructions');
   });
 
+  it('previews edited chain beats and inherits the main prompt for saved blank beats', async () => {
+    const job = { id: 'chain', kind: 'video', status: 'failed', params: { prompt: 'Main', chunks: 2, chunkPrompts: [null, 'Old beat'] } };
+    jobStore.set(job.id, job);
+    const app = makeApp();
+    const overrides = { params: { chunkPrompts: [null, '  New beat  '] } };
+    const preview = await request(app).post('/api/media-jobs/chain/retry/preview').send(overrides);
+    expect(preview.status).toBe(200);
+    expect(stubs.enqueueJob).not.toHaveBeenCalled();
+    const retry = await request(app).post('/api/media-jobs/chain/retry').send(overrides);
+    expect(retry.status).toBe(200);
+    const [queued] = stubs.enqueueJob.mock.lastCall;
+    expect(queued.params.chunkPrompts).toEqual(overrides.params.chunkPrompts);
+    expect(preview.body.segmentPrompts).toEqual([queued.params.prompt, queued.params.chunkPrompts[1]]);
+  });
+
   it.each(['/retry', '/retry/preview'])('refuses an oversized prompt with its original count on %s', async (route) => {
     jobStore.set('long', { id: 'long', kind: 'image', status: 'failed', params: { prompt: 'original' } });
     const result = await request(makeApp()).post(`/api/media-jobs/long${route}`)

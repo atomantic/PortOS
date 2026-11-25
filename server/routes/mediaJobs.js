@@ -310,7 +310,7 @@ const RETRY_OVERRIDE_SCHEMA = z.object({
   streamingMode: z.enum(VIDEO_STREAMING_MODES).nullable().optional()
     .transform((v) => (v === undefined ? undefined : (isDefaultVideoStreamingMode(v) ? null : v))),
   chunks: z.number().int().min(1).max(8).optional(),
-  chunkPrompts: z.array(z.string()).max(8).optional(),
+  chunkPrompts: z.array(z.string().nullable()).max(8).optional(),
   contextFrames: z.number().int().min(0).max(MAX_CONTEXT_FRAMES).optional(),
   continuityStrategy: z.enum(['frame', 'window']).optional(),
   a2vLoraStageStrengths: a2vLoraStageStrengthsSchema.nullable().optional(),

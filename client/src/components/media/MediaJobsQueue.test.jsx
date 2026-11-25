@@ -1425,3 +1425,15 @@ it('keeps edited prompt text when the retry is refused', async () => {
   await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Prompt is 8001/8000 characters. Shorten it to retry.'));
   expect(prompt).toHaveValue('  edited  ');
 });
+
+it('submits a style-only video retry with an empty authored prompt', async () => {
+  const job = { id: 'video-style-only', kind: 'video', status: 'failed', params: { mode: 'grok', prompt: 'Woodcut', retryPrompt: '' } };
+  listQueueMediaJobs.mockResolvedValue([job]);
+  const user = userEvent.setup();
+  render(<MediaJobsQueue kind="video" />);
+  await expandReel(user);
+  await user.click(await screen.findByLabelText('Edit and retry'));
+  expect(screen.getByRole('textbox', { name: /^prompt$/i })).toHaveValue('');
+  await user.click(screen.getByRole('button', { name: /retry with changes/i }));
+  expect(retryMediaJob).toHaveBeenCalledWith(job.id, null, { silent: true });
+});

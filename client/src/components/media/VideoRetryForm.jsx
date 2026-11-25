@@ -155,7 +155,7 @@ export default function VideoRetryForm({ job, retrying, onSubmit, onCancel }) {
   const modelInputPreview = useModelInputPreview(fetchPreview, overrides, { enabled: !continuationPending });
   const submit = (event) => {
     event.preventDefault();
-    if (prompt.trim() && !continuationPending && !modelInputPreview.error) onSubmit(overrides);
+    if (!continuationPending && !modelInputPreview.error && (overrides?.prompt === undefined || prompt.trim())) onSubmit(overrides);
   };
 
   return (

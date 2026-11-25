@@ -83,10 +83,11 @@ async function previewVideo(params) {
       const context = { ...params, loraFilenames: params.loras?.map((lora) => lora.filename) };
       const { record } = await localVideoSentPrompt(context);
       const chunks = Math.min(8, Math.trunc(Number(params.chunks) || 1));
-      if (chunks <= 1 || !params.chunkPrompts?.some((beat) => beat?.trim())) return record;
+      const beats = Array.isArray(params.chunkPrompts) ? params.chunkPrompts : [];
+      if (chunks <= 1 || !beats.some((beat) => typeof beat === 'string' && beat.trim())) return record;
       const segmentPrompts = await Promise.all(Array.from({ length: chunks }, async (_, index) => {
-        const beat = params.chunkPrompts[index];
-        return beat?.trim() ? (await localVideoSentPrompt({ ...context, prompt: beat })).record.sentPrompt : record.sentPrompt;
+        const beat = beats[index];
+        return typeof beat === 'string' && beat.trim() ? (await localVideoSentPrompt({ ...context, prompt: beat })).record.sentPrompt : record.sentPrompt;
       }));
       return { ...record, segmentPrompts };
     }
