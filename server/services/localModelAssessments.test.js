@@ -456,6 +456,7 @@ describe('runAssessment', () => {
     const result = await svc.runAssessment({ backend: 'ollama', modelId: 'example-model:7b', contextTokens: [512, 4096] });
     expect(runLocalLlmTest).toHaveBeenCalledTimes(3);
     expect(runLocalLlmTest.mock.calls[0][0].maxTokens).toBeLessThan(runLocalLlmTest.mock.calls[1][0].maxTokens);
+    expect(runLocalLlmTest.mock.calls.map(([options]) => options.timeoutMs)).toEqual([300000, 120000, 120000]);
     expect(result.warmup).toMatchObject({ ok: true, ttftMs: 9000, totalMs: 12000 });
     expect(result.samples).toHaveLength(2);
     expect(result.samples.every((sample) => sample.ttftMs !== 9000)).toBe(true);
