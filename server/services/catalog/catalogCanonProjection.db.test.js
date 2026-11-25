@@ -75,7 +75,7 @@ async function pinClock(id, at = PINNED_AT) {
 }
 const canonEntry = (ingredientId, name, updatedAt) => ({ id: `e-${ingredientId}`, ingredientId, name, updatedAt });
 
-describe.skipIf(!runDb)('a place Photoreal look across canon sync (#14946)', () => {
+describe.skipIf(!runDb)('Place spatial payloads across canon sync', () => {
   const look = {
     version: 1,
     materials: [],
@@ -84,11 +84,17 @@ describe.skipIf(!runDb)('a place Photoreal look across canon sync (#14946)', () 
     textures: { 'wood-floor': 'example_planks' },
   };
 
+  const spatial = {
+    greybox: { source: 'glb' },
+    photoreal: look,
+    world: { version: 1, seed: 42, sets: [], paths: [] },
+  };
+
   async function makeLinkedPlace(universeId) {
-    const place = await catalogDB.createIngredient({ type: 'place', name: 'Example Rink', payload: { description: 'old' } });
+    const place = await catalogDB.createIngredient({ type: 'place', name: 'Example Rink', payload: { description: 'old', ...spatial } });
     createdIngredientIds.add(place.id);
     await catalogDB.linkIngredientToRef(place.id, 'universe', universeId, 'canon-place');
-    return catalogDB.setIngredientPayloadKey(place.id, 'photoreal', look);
+    return place;
   }
   const future = () => new Date(Date.now() + 60_000).toISOString();
 
@@ -110,21 +116,39 @@ describe.skipIf(!runDb)('a place Photoreal look across canon sync (#14946)', () 
     expect(row.payload.photoreal).toEqual(look);
   });
 
-  it('survives a sync from a canon entry saved before the sanitizer kept it', async () => {
+  it('preserves spatial payloads when an incoming canon edit omits them', async () => {
     const uId = `u-look-${Date.now()}-b`;
     const place = await makeLinkedPlace(uId);
     const stale = { id: 'e1', ingredientId: place.id, name: place.name, description: 'stale mirror', updatedAt: future() };
     expect((await projectToCatalog(uId, { places: [stale] })).written).toBe(1);
-    expect((await catalogDB.getIngredient(place.id)).payload.photoreal).toEqual(look);
+    const { description, greybox, photoreal, world } = (await catalogDB.getIngredient(place.id)).payload;
+    expect({ description, greybox, photoreal, world }).toEqual({
+      description: 'stale mirror', greybox: place.payload.greybox, photoreal: look, world: spatial.world,
+    });
   });
 
-  it('a removed look is not brought back by a canon entry still holding it', async () => {
-    const uId = `u-look-${Date.now()}-c`;
+  it.each(['projection', 'reconciliation'])('keeps cleared spatial payloads absent during %s', async (path) => {
+    const uId = `u-spatial-clear-${path}`;
     const place = await makeLinkedPlace(uId);
-    await catalogDB.setIngredientPayloadKey(place.id, 'photoreal', null);
-    const mirror = { id: 'e1', ingredientId: place.id, name: place.name, photoreal: look, updatedAt: future() };
-    expect((await projectToCatalog(uId, { places: [mirror] })).written).toBe(1);
-    expect((await catalogDB.getIngredient(place.id)).payload).not.toHaveProperty('photoreal');
+    for (const key of Object.keys(spatial)) {
+      await catalogDB.setIngredientPayloadKey(place.id, key, null);
+    }
+    const universe = { id: uId, places: [
+      { ...canonEntry(place.id, place.name, future()), ...spatial, description: 'new canon edit' },
+    ] };
+    if (path === 'projection') {
+      expect((await projectToCatalog(uId, universe)).written).toBe(1);
+    } else {
+      reconcileUniverses.list = [universe];
+      try {
+        expect((await reconcileCanonCatalog({ force: true })).stats.canonWon).toBe(1);
+      } finally {
+        reconcileUniverses.list = [];
+      }
+    }
+    const { payload } = await catalogDB.getIngredient(place.id);
+    expect(payload.description).toBe('new canon edit');
+    for (const key of Object.keys(spatial)) expect(payload).not.toHaveProperty(key);
   });
 
   it('replaces stale canon payloads without projecting the universe back to Catalog', async () => {
@@ -174,8 +198,10 @@ describe.skipIf(!runDb)('a place Photoreal look across canon sync (#14946)', () 
     reconcileUniverses.list = [];
     expect(result.stats.canonWon).toBe(1);
     const row = await catalogDB.getIngredient(place.id);
-    expect(row.payload.description).toBe('canon won');
-    expect(row.payload.photoreal).toEqual(look);
+    const { description, greybox, photoreal, world } = row.payload;
+    expect({ description, greybox, photoreal, world }).toEqual({
+      description: 'canon won', greybox: place.payload.greybox, photoreal: look, world: spatial.world,
+    });
   });
 });
 
