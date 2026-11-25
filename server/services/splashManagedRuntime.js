@@ -153,10 +153,16 @@ async function stageRelease(staging, emit) {
   // A persistent partial lets a retry resume the 103 MB asset. Only this
   // version's reviewed official SHA may pass the extraction boundary.
   const archive = join(splashRoot(), `${FILE}.tar.gz`);
+  const idle = new AbortController();
   emit(`Downloading and verifying Splash ${SPLASH_VERSION}.`);
   await streamResumableDownload({
     url: ASSET_URL, destPath: archive, expectedSha256: ASSET_SHA256,
-    signal: AbortSignal.timeout(20 * 60_000), idleStallTimeoutMs: 60_000,
+    signal: AbortSignal.any([AbortSignal.timeout(20 * 60_000), idle.signal]),
+    idleStallTimeoutMs: 60_000,
+    onIdleStall: () => idle.abort(new ServerError(
+      'The Splash release download stalled for one minute. Retry Install or Update to resume.',
+      { status: 504, code: 'SPLASH_DOWNLOAD_STALLED' },
+    )),
   });
   await runInstallStep('/usr/bin/tar', ['-xzf', archive, '-C', staging], {
     cwd: staging, timeoutMs: 120_000, label: 'Splash could not extract the verified release.',
