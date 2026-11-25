@@ -158,8 +158,30 @@ describe('RunsTab ?run= deep link', () => {
     expect(api.getRunPrompt).toHaveBeenCalledWith('run-old');
   });
 
+  it('keeps a failed by-id read distinct from a missing run and retries it', async () => {
+    api.getRun.mockRejectedValueOnce(Object.assign(new Error('boom'), { status: 500 }));
+    api.getRun.mockResolvedValue({ id: 'run-old', prompt: 'old prompt', providerName: 'demo', success: true, startTime: '2025-01-01T00:00:00Z' });
+    renderTab('/cos/runs?run=run-old');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load run run-old — boom');
+    expect(screen.queryByText('Run not found or deleted.')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByTestId('pinned-run')).toBeInTheDocument();
+  });
+
+  it('re-reads the pinned run on a lifecycle invalidation so it does not stay Running', async () => {
+    api.getRun.mockResolvedValueOnce({ id: 'run-old', prompt: 'old prompt', providerName: 'demo', success: null, startTime: '2025-01-01T00:00:00Z' });
+    api.getRun.mockResolvedValue({ id: 'run-old', prompt: 'old prompt', providerName: 'demo', success: true, startTime: '2025-01-01T00:00:00Z' });
+    renderTab('/cos/runs?run=run-old');
+
+    const pinned = await screen.findByTestId('pinned-run');
+    expect(within(pinned).getAllByText('Running').length).toBeGreaterThan(0);
+    await act(async () => { socket.fire('connect'); });
+    expect(within(screen.getByTestId('pinned-run')).getAllByText('Succeeded').length).toBeGreaterThan(0);
+  });
+
   it('shows a not-found notice for an unknown ?run= id', async () => {
-    api.getRun.mockRejectedValue(new Error('404'));
+    api.getRun.mockRejectedValue(Object.assign(new Error('not found'), { status: 404 }));
     renderTab('/cos/runs?run=run-missing');
 
     expect(await screen.findByText('Run not found or deleted.')).toBeInTheDocument();
