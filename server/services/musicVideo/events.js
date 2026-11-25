@@ -29,10 +29,11 @@ import { EventEmitter } from 'events';
 //     A server-owned production run advanced (steps, route choices, spend, halts).
 //   'autonomous' -> { projectId, runId, run }
 //     An autonomous run (autonomousService.js) changed stage or status.
-//   'render' -> { projectId, jobId, status: 'completed'|'failed'|'canceled', error }   (server-only)
-//     A final render job settled and its project write landed.
+//   'render' -> { projectId, jobId, status: 'completed'|'failed'|'canceled', error, abandoned? }   (server-only)
+//     A final render job settled: its project write landed and its render slot is free.
+//     `abandoned: true` means the song changed under it, so the project does not name this render.
 //   'audio-changed' -> { projectId, project }   (server-only)
-//     A project write changed the song (`audioRevision`); render.js cancels this
+//     A project write changed the song (`audioRevision`); finalRenderJob.js cancels this
 //     instance's render of the old song (#15154).
 //   'cast-and-sets' -> { projectId, stage, project }
 //     The Cast & Sets check-in advanced; productionService.js also listens so a
