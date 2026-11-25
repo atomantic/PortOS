@@ -43,7 +43,7 @@ import * as nodeFs from 'node:fs';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import * as nodePath from 'node:path';
-import { join, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { resolveTestChrome } from './testChrome.js';
 import { TOOLING_TESTS, getAlwaysRunTests } from './ciPlanRules.js';
 import { isGuardTest } from './guardScanners.js';
@@ -486,43 +486,72 @@ export function seedVitestDependencies(repoRoot, scope, tests) {
 
 const sha256Hex = (data) => createHash('sha256').update(data).digest('hex');
 
+/** Configuration files one identity reads before it gives up: the two scopes plus their conditional includes. */
+const GIT_CONFIG_SOURCES_LIMIT = 32;
+
 /**
  * What a `test-memo: git-fixture` suite runs against besides its own
  * sources: the git it finds and everything a repository made on this machine
- * inherits. The first line of `git --version`, then a digest of the system
- * and global configuration (includes followed), the global ignore and
- * attributes files, and every `GIT_*` environment variable. Only the digest
- * leaves this function, so no setting or credential reaches a log. What a
- * setting points at beyond those two files (a hooks or template directory)
- * is the machine's, as the rest of its userland is to every key.
+ * inherits. The first line of `git --version`, then a digest of:
  *
- * Null, which the analyzer never keys (`TEST_MEMO_REQUIRED_TOOLS`), when git
- * cannot be run or the directory the fixtures are made under is itself
- * inside a repository: git started in a fixture directory that is no
- * repository of its own would find that one, whose state is in no key.
+ * - the system and global configuration, includes followed;
+ * - every file a conditional include (`includeIf`) names, whatever its
+ *   condition: which of them a fixture repository meets depends on where and
+ *   how the suite makes it, so each one counts;
+ * - the global ignore and attributes files, at their default place and
+ *   wherever any of that configuration puts them;
+ * - every `GIT_*` environment variable.
+ *
+ * Only the digest leaves this function, so no setting or credential reaches
+ * a log. What a setting points at beyond those files (a hooks or template
+ * directory) is the machine's, as the rest of its userland is to every key.
+ *
+ * Null, which the analyzer never keys (`TEST_MEMO_REQUIRED_TOOLS`), when
+ * this cannot be established: git cannot be run or is too old to say where
+ * a setting came from (`--show-origin`, 2.8), the include chain does not
+ * end, or the directory the fixtures are made under is itself inside a
+ * repository, so git started in a fixture directory that is no repository of
+ * its own would find that one, whose state is in no key.
  */
 function gitToolIdentity({ env, run, scratch, read }) {
   const git = (args) => run('git', args, { env, cwd: scratch, encoding: 'utf8', timeout: 15_000 });
   const version = git(['--version']);
   if (version.error || version.status !== 0) return null;
+  const line = String(version.stdout).trim().split('\n')[0];
+  const [, major, minor] = line.match(/(\d+)\.(\d+)/) ?? [];
+  if (!(Number(major) > 2 || (Number(major) === 2 && Number(minor) >= 8))) return null;
   const enclosing = git(['rev-parse', '--git-dir']);
   if (enclosing.error || enclosing.status === 0) return null;
-  // A scope with no file exits non-zero, which is the same input as an empty one.
-  const settings = ['--system', '--global'].map((scope) => {
-    const listed = git(['config', scope, '--includes', '--null', '--list']);
-    return listed.error || listed.status !== 0 ? '' : listed.stdout;
-  });
-  // `--null` entries are `key\nvalue\0`; a later scope overrides an earlier one.
-  const setting = (key) => settings.flatMap((listed) => listed.split('\0')).findLast((entry) => entry.startsWith(`${key}\n`))?.slice(key.length + 1);
+
   const home = env.HOME || env.USERPROFILE || homedir();
   const defaults = join(env.XDG_CONFIG_HOME || join(home, '.config'), 'git');
-  const fileDigest = (key, fallback) => {
-    const named = setting(key);
-    try { return sha256Hex(read(named ? named.replace(/^~(?=[\\/])/, home) : join(defaults, fallback))); } catch { return 'absent'; }
-  };
+  const files = new Set([join(defaults, 'ignore'), join(defaults, 'attributes')]);
+  const sources = [['--system'], ['--global']];
+  const listings = [];
+  for (let at = 0; at < sources.length; at += 1) {
+    if (at >= GIT_CONFIG_SOURCES_LIMIT) return null;
+    // A scope with no file exits non-zero, which is the same input as an empty one.
+    const listed = git(['config', ...sources[at], '--includes', '--show-origin', '--null', '--list']);
+    const text = listed.error || listed.status !== 0 ? '' : String(listed.stdout);
+    listings.push(`${sources[at].join(' ')}\n${text}`);
+    // `--show-origin --null` writes `origin\0key\nvalue\0` per setting.
+    const fields = text.split('\0');
+    for (let i = 0; i + 1 < fields.length; i += 2) {
+      const [key, ...rest] = fields[i + 1].split('\n');
+      const value = rest.join('\n');
+      // git reads `~/` as the home directory and any other relative path beside the file that names it.
+      const beside = fields[i].startsWith('file:') ? dirname(fields[i].slice('file:'.length)) : home;
+      const named = /^~[\\/]/.test(value) ? join(home, value.slice(2)) : isAbsolute(value) ? value : join(beside, value);
+      if (/^includeif\..*\.path$/.test(key)) {
+        if (!sources.some(([flag, file]) => flag === '--file' && file === named)) sources.push(['--file', named]);
+      } else if (key === 'core.excludesfile' || key === 'core.attributesfile') files.add(named);
+    }
+  }
+  const fileDigests = [...files].sort().map((file) => {
+    try { return `${file} ${sha256Hex(read(file))}`; } catch { return `${file} absent`; }
+  });
   const gitEnv = Object.keys(env).filter((name) => name.startsWith('GIT_')).sort().map((name) => `${name}=${env[name]}`);
-  const digest = sha256Hex([...settings, fileDigest('core.excludesfile', 'ignore'), fileDigest('core.attributesfile', 'attributes'), ...gitEnv].join('\0'));
-  return `${String(version.stdout).trim().split('\n')[0]} settings ${digest.slice(0, 16)}`;
+  return `${line} settings ${sha256Hex([...listings, ...fileDigests, ...gitEnv].join('\0')).slice(0, 16)}`;
 }
 
 /**
