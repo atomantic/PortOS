@@ -17,9 +17,13 @@
  *   argument array. Without one, git runs where the test process does,
  *   inside this checkout;
  * - a relative literal, or a spelled `null`/`undefined`, that can become
- *   that directory, for the same reason: written in place, assigned to a name the directory is read from, passed
- *   by a caller as the parameter it is read from, or the first segment of a
+ *   that directory, for the same reason: written in place, assigned to a
+ *   name the directory is read from, or the first segment of a
  *   `join()`/`resolve()` there;
+ * - a caller that gives a git wrapper no fixture directory: the argument it
+ *   passes for the parameter the directory is read from, an argument or an
+ *   options property it leaves out where nothing defaults it, and any use of
+ *   the wrapper through `.call`, `.apply` or `.bind`;
  * - a repository or home path anywhere a git process can take it from:
  *   inside a git call, in the arguments of any call of a function that runs
  *   git (followed through the functions that call those, and counting the
@@ -33,7 +37,9 @@
  * of that name does. That only ever refuses more.
  *
  * What stays on the declaration's word is a value the source does not
- * spell: a call's result, a property, a callback's parameter. The marker is
+ * spell: a call's result, a property of something that is no parameter, a
+ * callback's parameter, an argument behind a spread, an options object that
+ * is no literal. The marker is
  * therefore added only after the suite has been read, and reviewed as a
  * claim about it (docs/TEST_MEMO_GIT_FIXTURES.md).
  */
@@ -95,6 +101,37 @@ function functionStartsAt(arr, m, at) {
 }
 
 /**
+ * The parameters a function binds by position, for the function expression
+ * that starts at `at` (`functionStartsAt`) or the parameter list opened at
+ * `open`: a plain or defaulted name is the argument itself (`prop` null), a
+ * name in an object pattern is that property of it. A rest parameter and a
+ * deeper pattern are no one argument, and are left out.
+ */
+function parametersAt(arr, m, at, open = null) {
+  let list = open;
+  if (list === null) {
+    let start = isWord(arr[at], 'async') ? at + 1 : at;
+    if (isWord(arr[start], 'function')) {
+      start += isPunct(arr[start + 1], '*') ? 2 : 1;
+      if (arr[start]?.t === 'id') start += 1;
+    } else if (!isPunct(arr[start], '(')) return [{ index: 0, token: arr[start], defaulted: false, prop: null }];
+    list = start;
+  }
+  if (!isPunct(arr[list], '(') || m[list] === undefined) return [];
+  const parameters = [];
+  listRanges(arr, m, list).forEach(([from, to], index) => {
+    if (arr[from].t === 'id' && (to === from + 1 || isPunct(arr[from + 1], '='))) parameters.push({ index, token: arr[from], defaulted: to > from + 1, prop: null });
+    if (!isPunct(arr[from], '{') || m[from] === undefined) return;
+    for (const [pf, pt] of listRanges(arr, m, from)) {
+      if (arr[pf].t !== 'id' && arr[pf].t !== 's') continue;
+      const bound = isPunct(arr[pf + 1], ':') ? pf + 2 : pf;
+      if (arr[bound]?.t === 'id' && (bound + 1 === pt || isPunct(arr[bound + 1], '='))) parameters.push({ index, token: arr[bound], defaulted: bound + 1 < pt, prop: arr[pf].v });
+    }
+  });
+  return parameters;
+}
+
+/**
  * The named functions of the file, by spelling: `name = <function>` (a
  * declaration, an assignment), `name: <function>`, `function name(…) {…}`
  * and a method `name(…) {…}`. `from` and `to` are source offsets.
@@ -107,12 +144,12 @@ function namedFunctions(arrays) {
       if (token.t !== 'id' && token.t !== 's') continue;
       if (isPunct(arr[i + 1], '=', ':') && functionStartsAt(arr, m, i + 2)) {
         const end = expressionEnd(arr, m, i + 2);
-        functions.push({ name: token.v, token, from: token.i, to: end < arr.length ? arr[end].i : Infinity });
+        functions.push({ name: token.v, token, from: token.i, to: end < arr.length ? arr[end].i : Infinity, parameters: parametersAt(arr, m, i + 2) });
         continue;
       }
       const body = isPunct(arr[i + 1], '(') && m[i + 1] !== undefined ? m[i + 1] + 1 : null;
       if (token.t === 'id' && body !== null && isPunct(arr[body], '{') && m[body] !== undefined && !STATEMENT_HEADS.has(token.v)) {
-        functions.push({ name: token.v, token, from: token.i, to: arr[m[body]].i });
+        functions.push({ name: token.v, token, from: token.i, to: arr[m[body]].i, parameters: parametersAt(arr, m, i + 1, i + 1) });
       }
     }
   }
@@ -136,6 +173,12 @@ function directoryOf(arr, m, args) {
   const leadsWithC = from !== undefined && isPunct(arr[from], '[') && m[from] === to - 1
     && arr[from + 1]?.t === 's' && arr[from + 1].v === '-C' && isPunct(arr[from + 2], ',');
   return leadsWithC && from + 3 < m[from] && !isPunct(arr[from + 3], '...') ? from + 3 : null;
+}
+
+/** The `(` of the call the name at `i` makes, `name(…)` or `name?.(…)`, or null when it is not called there. */
+function callOpen(arr, m, i) {
+  const open = isPunct(arr[i + 1], '?.') ? i + 2 : i + 1;
+  return isPunct(arr[open], '(') && m[open] !== undefined ? open : null;
 }
 
 /** Note that code at source offset `offset` can start git: every named function around it is one that runs git. */
@@ -223,6 +266,11 @@ function directoryProblem(w, arr, m, from, to) {
       if (isWord(token, 'null', 'undefined', 'void')) return NULLISH_DIRECTORY;
       const problem = directoryNameProblem(w, token);
       if (problem !== null) return problem;
+    } else if (token.t === 'id' && !isPunct(arr[i - 1], '.', '?.') && isPunct(arr[i + 1], '.', '?.') && arr[i + 2]?.t === 'id' && !isPunct(arr[i + 3], '(', '.', '?.', '[')) {
+      // `options.cwd`: where `options` is a parameter, the property each caller's object spells.
+      const problem = parameterProblem(w, token, arr[i + 2].v);
+      if (problem !== null) return problem;
+      i += 2;
     }
   }
   return null;
@@ -231,35 +279,98 @@ function directoryProblem(w, arr, m, from, to) {
 /**
  * What a name the directory is read from can hold: every value the file
  * assigns to it (by spelling, as everywhere here) and, where the name is a
- * positional parameter of a named function, what each call of that function
- * passes there.
+ * parameter of a named function, what each call of that function passes
+ * there (`parameterProblem`). A name declared with no value and never
+ * assigned holds `undefined`, which is no directory.
  */
 function directoryNameProblem(w, token) {
   if (!w.directoryNames.has(token.v)) {
     w.directoryNames.add(token.v);
-    for (const { arr, m, at } of assignmentsOf(w, token.v)) {
+    const assigned = assignmentsOf(w, token.v);
+    if (assigned.length === 0 && declaredBare(w, token.v)) return `${NULLISH_DIRECTORY} (${token.v} is declared and never assigned)`;
+    for (const { arr, m, at } of assigned) {
       const problem = directoryProblem(w, arr, m, at, expressionEnd(arr, m, at));
       if (problem !== null) return problem;
     }
   }
+  return parameterProblem(w, token, null);
+}
+
+/** True when the file declares `name` with no initializer: `let name;`, or one name in such a list. */
+function declaredBare(w, name) {
+  return w.arrays.some(({ arr }) => arr.some((token, i) => isWord(token, name) && isPunct(arr[i + 1], ';', ',')
+    && (isWord(arr[i - 1], 'let', 'var') || (isPunct(arr[i - 1], ',') && bareDeclarationBefore(arr, i - 1)))));
+}
+
+/** True when the `,` at `comma` continues a `let a, b` list of bare names. */
+function bareDeclarationBefore(arr, comma) {
+  let i = comma;
+  while (isPunct(arr[i], ',') && arr[i - 1]?.t === 'id') i -= 2;
+  return isWord(arr[i], 'let', 'var');
+}
+
+/**
+ * Null, or why a caller hands git no fixture directory through the use of a
+ * parameter at `token`: the argument itself (`prop` null, for `dir` or a
+ * `{ cwd }` pattern's own property) or its property `prop` (`options.cwd`).
+ * Every call of the function, by spelling, is read:
+ *
+ * - an argument that is passed is a directory expression like any other;
+ * - one that is left out is `undefined` unless the parameter has a default
+ *   (which the assignments already read), so git runs where the process is;
+ * - one behind a spread, or an object that is no literal, is not spelled.
+ *
+ * A parameter of a function with no name here (a callback) is whatever its
+ * caller passes, which stays on the declaration's word.
+ */
+function parameterProblem(w, token, memberProp) {
   const binder = scopesOf(w.ctx).binderAt(token.v, token.i);
-  if (binder?.role?.kind !== 'named' || !Number.isInteger(binder.index) || w.directoryBinders.has(binder)) return null;
-  w.directoryBinders.add(binder);
-  for (const { arr, m } of w.arrays) {
-    for (let i = 0; i + 1 < arr.length; i += 1) {
-      if (!isWord(arr[i], binder.role.nameToken.v) || w.definitions.has(arr[i]) || !isPunct(arr[i + 1], '(') || m[i + 1] === undefined) continue;
-      const passed = argumentAt(arr, m, i + 1, binder.index);
-      const problem = passed === null ? null : directoryProblem(w, arr, m, passed[0], passed[1]);
-      if (problem !== null) return problem;
-    }
+  if (binder === null) return null;
+  for (const fn of w.functions) {
+    const parameter = fn.parameters.find((candidate) => candidate.token === binder.token);
+    if (parameter === undefined) continue;
+    // `options.cwd` off a `{ cwd }` pattern's name is a property of a property: not followed.
+    if (memberProp !== null && parameter.prop !== null) return null;
+    const prop = memberProp ?? parameter.prop;
+    const key = `${fn.token.i}:${parameter.index}:${prop}`;
+    if (w.directoryParameters.has(key)) return null;
+    w.directoryParameters.add(key);
+    // A default stands in for a property the pattern names; nothing does for a property read off the argument.
+    const defaulted = parameter.defaulted && memberProp === null;
+    return callersProblem(w, fn.name, parameter.index, prop, defaulted);
   }
   return null;
 }
 
-/** The `[from, to)` of argument `index` of the call opened at `open`, or null: left out, or behind a spread. */
-function argumentAt(arr, m, open, index) {
-  const ranges = listRanges(arr, m, open);
-  return index < ranges.length && !ranges.slice(0, index + 1).some(([from]) => isPunct(arr[from], '...')) ? ranges[index] : null;
+function callersProblem(w, name, index, prop, defaulted) {
+  const omitted = `${name}() is called without the directory its git call reads, which runs git where the test process is`;
+  for (const { arr, m } of w.arrays) {
+    for (let i = 0; i + 1 < arr.length; i += 1) {
+      const open = isWord(arr[i], name) && !w.definitions.has(arr[i]) ? callOpen(arr, m, i) : null;
+      if (open === null) continue;
+      const passed = listRanges(arr, m, open);
+      if (passed.slice(0, index + 1).some(([from]) => isPunct(arr[from], '...'))) continue;
+      if (index >= passed.length) {
+        if (!defaulted) return omitted;
+        continue;
+      }
+      let [from, to] = passed[index];
+      if (prop !== null) {
+        if (!isPunct(arr[from], '{') || m[from] !== to - 1) continue;
+        const entries = listRanges(arr, m, from);
+        if (entries.some(([at]) => isPunct(arr[at], '...'))) continue;
+        const entry = entries.find(([at, until]) => (arr[at].t === 'id' || arr[at].t === 's') && arr[at].v === prop && (until === at + 1 || isPunct(arr[at + 1], ':')));
+        if (entry === undefined) {
+          if (!defaulted) return omitted;
+          continue;
+        }
+        [from, to] = [entry[1] === entry[0] + 1 ? entry[0] : entry[0] + 2, entry[1]];
+      }
+      const problem = directoryProblem(w, arr, m, from, to);
+      if (problem !== null) return problem;
+    }
+  }
+  return null;
 }
 
 /** One git call: the literal program, a named directory no relative literal can become, and nothing of this repository inside it. */
@@ -298,22 +409,30 @@ function assignmentsProblem(w, name) {
 
 /**
  * A function that runs git takes whatever its callers hand it, so every
- * call's arguments are read. A use that is no call (handed on, stored,
- * exported) has callers this file does not show; for a helper the file only
- * imports (`GIT_HELPERS`) such a use is its import, and proves nothing.
- * Such a helper takes its directory second (`execGit(args, dir)`), which is
- * read as a git call's own directory is.
+ * call's arguments are read. A use of the plain name that is no call (handed
+ * on, stored, exported) has callers this file does not show, and so does
+ * `.call`, `.apply` or `.bind` on the name or on a property of that
+ * spelling: their arguments are not where a call's are. Two mentions prove
+ * nothing either way and are left alone: any other property of that spelling
+ * (`facts.repo` beside `function repo()`), and a bare mention of a helper
+ * the file only imports (`GIT_HELPERS`: its import, a mock of it). Such a
+ * helper takes its directory second (`execGit(args, dir)`), which is read as
+ * a git call's own directory is.
  */
 function runnerProblem(w, name) {
   for (const { arr, m } of w.arrays) {
     for (let i = 0; i < arr.length; i += 1) {
       const token = arr[i];
       if (!isWord(token, name) || w.definitions.has(token)) continue;
-      if (isPunct(arr[i + 1], '(') && m[i + 1] !== undefined) {
+      const open = callOpen(arr, m, i);
+      const indirect = isPunct(arr[i + 1], '.', '?.') && isWord(arr[i + 2], 'call', 'apply', 'bind');
+      if (open !== null) {
         reaches(w, token.i);
-        const problem = (GIT_HELPERS.includes(name) ? helperDirectoryProblem(w, arr, m, i + 1) : null) ?? rangeProblem(w, arr, m, i + 2, m[i + 1]);
+        const problem = (GIT_HELPERS.includes(name) ? helperDirectoryProblem(w, arr, m, open) : null) ?? rangeProblem(w, arr, m, open + 1, m[open]);
         if (problem !== null) return problem;
-      } else if (!GIT_HELPERS.includes(name) && !isPunct(arr[i - 1], '.', '?.') && !(isPunct(arr[i + 1], ':') && isPunct(arr[i - 1], '{', ','))) {
+      } else if (isPunct(arr[i + 1], ':') && isPunct(arr[i - 1], '{', ',')) {
+        continue; // an object key of that spelling
+      } else if (indirect || !(GIT_HELPERS.includes(name) || isPunct(arr[i - 1], '.', '?.'))) {
         return `${name}() runs git and is used other than by a direct call, so its callers are not all in view`;
       }
     }
@@ -344,7 +463,7 @@ export function gitFixtureDeclaration({ src, tokens, match, ctx }) {
   const w = {
     arrays, ctx, functions,
     definitions: new Set(functions.map((fn) => fn.token)),
-    names: new Set(), runners: new Set(GIT_HELPERS), iterables: new Set(), directoryNames: new Set(), directoryBinders: new Set(),
+    names: new Set(), runners: new Set(GIT_HELPERS), iterables: new Set(), directoryNames: new Set(), directoryParameters: new Set(),
     pending: GIT_HELPERS.map((runner) => ({ runner })), // { name } to read the assignments of, { runner } to read the calls of
   };
   const calls = gitCalls(arrays);
