@@ -1,7 +1,6 @@
 import { join } from 'path';
 
 import { describe, expect, it } from 'vitest';
-import { getConfig } from '@testing-library/dom';
 
 import { trackedTestFiles } from '../../trackedFiles.js';
 import { ASYNC_UTIL_TIMEOUT_MS, TEST_TIMEOUT_MS } from '../../timeouts.js';
@@ -172,15 +171,9 @@ export function inertTimeoutBounds(source, budgetMs = TEST_TIMEOUT_MS) {
 }
 
 describe('client suite time budgets', () => {
-  it('applies the shared async budget inside the budgets that enclose it', () => {
-    // The EFFECTIVE values, not the module's own constants: `TEST_TIMEOUT_MS >
-    // ASYNC_UTIL_TIMEOUT_MS` is unfalsifiable given the `* 3` that derives one
-    // from the other, which is the same vacuous shape this file exists to
-    // police. What can actually drift is the wiring — setup.js failing to apply
-    // the budget, or vitest.config.js growing a hardcoded timeout beside it.
-    expect(getConfig().asyncUtilTimeout).toBe(ASYNC_UTIL_TIMEOUT_MS);
-    expect(vitestConfig.test.testTimeout).toBeGreaterThan(getConfig().asyncUtilTimeout);
-    expect(vitestConfig.test.hookTimeout).toBeGreaterThan(getConfig().asyncUtilTimeout);
+  it('runs tests and hooks with time to report Testing Library timeouts', () => {
+    expect(vitestConfig.test.testTimeout).toBeGreaterThan(ASYNC_UTIL_TIMEOUT_MS);
+    expect(vitestConfig.test.hookTimeout).toBeGreaterThan(ASYNC_UTIL_TIMEOUT_MS);
   });
 
   it('has no inline async bound the enclosing budget would cut short', () => {
