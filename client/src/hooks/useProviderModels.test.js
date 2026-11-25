@@ -96,8 +96,8 @@ describe('useProviderModels — Antigravity base models', () => {
     ]);
   });
 
-  it('does not re-surface the configured-default sentinel as the auto-selected pin', async () => {
-    const { result } = await mountWith([AGY]);
+  it.each([undefined, () => true])('keeps an eligible configured default selected and out of the explicit options', async (modelFilter) => {
+    const { result } = await mountWith([AGY], { withEffort: true, modelFilter });
     // The sentinel is the provider's defaultModel, so it IS the selected value —
     // but filterSelectableModels exists to keep it out of the options.
     expect(result.current.selectedModel).toBe('antigravity-configured-default');

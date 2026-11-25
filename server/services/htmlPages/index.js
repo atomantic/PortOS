@@ -16,7 +16,8 @@ import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { ASSESSABLE_RUNTIMES, LOCAL_RUNTIMES, localEndpointPort } from '../../lib/localProviderRuntime.js';
 import { awaitMtplxRequest, mtplxRequestLogPath } from '../../lib/mtplxRequestLog.js';
 import { isEmbeddingModel } from '../../lib/localModelHeuristics.js';
-import { isToolFreeOneShotProvider } from '../../lib/provider/providerVendors.js';
+import { htmlPagesProviderCapability } from '../../lib/provider/htmlPagesProvider.js';
+import { bareLocalModelId } from '../../lib/provider/providerModels.js';
 import {
   HTML_BRIEF_MAX_CHARS, HTML_PAGE_DEFAULT_BRIEFS, HTML_PAGES_MAX, htmlPagePlanPrompt, htmlPagePrompt, htmlPagePromptParts, extractHtmlDocument, extractHtmlPagePlan, scoreHtmlPage, scoreHtmlPages,
 } from '../../lib/htmlPageBench.js';
@@ -121,7 +122,7 @@ export const readRun = async (id) => {
 };
 
 /** Check the current configuration each time a route is admitted or dispatched. */
-async function requireRouteProvider({ providerId, providerName = providerId }) {
+async function requireRouteProvider({ providerId, providerName = providerId, model, effort }) {
   const { getProviderById } = await import('../provider/providers.js');
   const provider = await getProviderById(providerId).catch(() => null);
   if (!provider || provider.enabled === false) {
@@ -129,17 +130,18 @@ async function requireRouteProvider({ providerId, providerName = providerId }) {
       status: 409, code: 'HTML_PAGES_PROVIDER_UNAVAILABLE',
     });
   }
-  if (!isToolFreeOneShotProvider(provider)) {
+  const resolvedModel = model || provider.defaultModel || null;
+  const capability = htmlPagesProviderCapability(provider, resolvedModel, effort);
+  if (!capability) {
     throw new ServerError(`Provider ${provider.name || providerName} cannot run HTML Pages without tools. Start a new run with an API provider, a tool-free CLI, or an installed model.`, {
       status: 409, code: 'HTML_PAGES_PROVIDER_NOT_TOOL_FREE',
     });
   }
-  return provider;
+  return { provider, model: resolvedModel, capability };
 }
 
 async function resolveRoute({ providerId, model, effort }) {
-  const provider = await requireRouteProvider({ providerId });
-  const resolvedModel = model || provider.defaultModel || null;
+  const { provider, model: resolvedModel } = await requireRouteProvider({ providerId, model, effort });
   return { providerId, providerName: provider.name || providerId, model: resolvedModel, effort: effort || null };
 }
 
@@ -360,12 +362,19 @@ const TIMEOUT_MESSAGE = /timed out|timeout/i;
 /**
  * The benchmark error for a local MTPLX run that produced output tokens but no answer: it timed out with no answer text and MTPLX's own request log holds exactly one request, cancelled by this run and begun after it, with output tokens. Null keeps the caller's generic timeout, so a concurrent client, a missing log or a different model never produces a claim. Only the completion counter is read; the model, effort and prompt of the run are untouched.
  */
-async function reasoningOnlyTimeoutError({ provider, route, message, startedAtMs, aborted }) {
+async function reasoningOnlyTimeoutError({ provider, route, capability, message, startedAtMs, aborted }) {
   if (aborted || !TIMEOUT_MESSAGE.test(message)) return null;
-  const { isMtplxProvider } = await import('../mtplxServerManager.js');
-  const port = isMtplxProvider(provider) ? localEndpointPort(provider.endpoint) : null;
+  const openCode = capability.kind === 'opencode-mtplx';
+  let endpoint = capability.endpoint;
+  if (!openCode) {
+    const { isMtplxProvider } = await import('../mtplxServerManager.js');
+    if (!isMtplxProvider(provider)) return null;
+    endpoint = provider.endpoint;
+  }
+  const port = localEndpointPort(endpoint);
   if (!port) return null;
-  const attribution = await awaitMtplxRequest({ logPath: mtplxRequestLogPath(port), startedAtMs, endedAtMs: Date.now(), model: route.model || null }).catch(() => null);
+  const model = openCode ? bareLocalModelId(route.model, 'mtplx') : route.model || null;
+  const attribution = await awaitMtplxRequest({ logPath: mtplxRequestLogPath(port), startedAtMs, endedAtMs: Date.now(), model }).catch(() => null);
   if (attribution?.status !== 'matched' || !(attribution.completionTokens > 0)) return null;
   return `${message} The run ended reasoning-only: MTPLX generated ${attribution.completionTokens} completion tokens before the deadline and no answer text was received.`;
 }
@@ -378,7 +387,7 @@ async function generateViaProvider(route, prompt, signal) {
     import('../promptRunner.js'), import('../runner.js'),
   ]);
   // A provider can change after queueing or between the plan and page requests.
-  const provider = await requireRouteProvider(route);
+  const { provider, capability } = await requireRouteProvider(route);
   signal.throwIfAborted();
   let runId = null;
   const stop = () => { if (runId) stopRun(runId).catch(() => { /* best-effort cancel */ }); };
@@ -386,15 +395,22 @@ async function generateViaProvider(route, prompt, signal) {
   const startedAtMs = Date.now();
   try {
     const result = await runPromptThroughProvider({
-      provider, model: route.model || undefined, effort: route.effort || undefined, prompt,
+      // The restricted recipe is fresh. Saved argv model or variant pins
+      // cannot take precedence over the run's recorded selection.
+      provider: capability.kind === 'opencode-mtplx' ? { ...provider, args: [] } : provider,
+      model: route.model || undefined, effort: route.effort || undefined, prompt,
       source: RUN_SOURCE, timeout: PAGE_TIMEOUT_MS, allowFallback: false, toolFree: true, cwd: PATHS.data,
+      beforeExecute: async () => {
+        await requireRouteProvider(route);
+        signal.throwIfAborted();
+      },
       onRunCreated: (createdId) => { runId = createdId; if (signal.aborted) stop(); },
     });
     // A CLI transcript can echo the prompt, whose rules mention `<!doctype html>`; drop it so only the reply is read.
     return { text: String(result?.text || '').split(prompt).join(''), error: null, timings: null };
   } catch (err) {
     const message = err?.message || 'The provider run failed';
-    return { text: '', error: await reasoningOnlyTimeoutError({ provider, route, message, startedAtMs, aborted: signal.aborted }) ?? message, timings: null };
+    return { text: '', error: await reasoningOnlyTimeoutError({ provider, route, capability, message, startedAtMs, aborted: signal.aborted }) ?? message, timings: null };
   } finally {
     signal.removeEventListener('abort', stop);
   }

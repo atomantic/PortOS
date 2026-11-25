@@ -67,6 +67,8 @@ import {
   PUBLIC_REVIEW_NO_TOOL_POSTURE,
   PUBLIC_REVIEW_ACTIONS_POSTURE,
 } from '../lib/provider/providerVendors.js';
+import { htmlPagesProviderCapability } from '../lib/provider/htmlPagesProvider.js';
+import { isMtplxOpenCodeCli } from '../lib/opencodeConfig.js';
 import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
 import { isMaskedEnvVar } from '../lib/credentialEnvVars.js';
 import { presetDerivable, presetKind } from '../lib/provider/providerPresets.js';
@@ -194,8 +196,14 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
   // untouched list rides along as `modelCatalog` — the editor seeds its
   // "Available Models" box from it, so an ordinary Save on a scoped provider
   // cannot persist the narrowed list over the real one.
+  const scoped = applyModelAccess(decorated);
+  const htmlPagesModels = isMtplxOpenCodeCli(provider)
+    ? [...new Set([...(scoped.models ?? []), scoped.defaultModel])]
+        .filter((model) => htmlPagesProviderCapability(provider, model)?.kind === 'opencode-mtplx')
+    : [];
   return sanitizeProvider({
-    ...applyModelAccess(decorated),
+    ...scoped,
+    htmlPagesModels,
     // The RAW record's key: an inherited or materialized one rides
     // NON-enumerably (`withGatewayApiKey`, the composite resolver), so the
     // decorating spreads above dropped it — re-carried here so `hasApiKey`

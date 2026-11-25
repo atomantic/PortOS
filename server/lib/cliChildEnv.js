@@ -218,6 +218,30 @@ export function buildPublicReviewCliEnv(env = {}) {
   return allowlistEnv(env, PUBLIC_REVIEW_ENV_KEYS);
 }
 
+function isolatedMtplxOpenCodeEnv(baseEnv, provider, model, directory, cwd) {
+  // OpenCode deep-merges MCP and permissions, so an empty inline map can't
+  // clear definitions loaded from user files. Give it fresh config and auth
+  // directories and disable project discovery before the CLI can read either.
+  const inherited = Object.fromEntries(Object.entries(baseEnv).filter(([key]) => [
+    'PATH', 'Path', 'SystemRoot', 'ComSpec', 'PATHEXT', 'ProgramData', 'TMPDIR', 'TMP', 'TEMP', 'LANG',
+  ].includes(key)));
+  return withSpawnCwdEnv({
+    ...inherited,
+    HOME: directory,
+    USERPROFILE: directory,
+    XDG_CONFIG_HOME: join(directory, 'config'),
+    XDG_DATA_HOME: join(directory, 'data'),
+    XDG_STATE_HOME: join(directory, 'state'),
+    XDG_CACHE_HOME: join(directory, 'cache'),
+    OPENCODE_DISABLE_PROJECT_CONFIG: '1',
+    OPENCODE_DISABLE_CLAUDE_CODE: '1',
+    OPENCODE_DISABLE_MODELS_FETCH: '1',
+    OPENCODE_DISABLE_AUTOUPDATE: '1',
+    OPENCODE_DISABLE_AUTOCOMPACT: '1',
+    ...buildOpencodeEnvVars(provider, model, { toolFree: true, restrictedMtplx: true }),
+  }, cwd);
+}
+
 // The actions stage may use its vendor's workspace sandbox but must never inherit
 // forge credentials, SSH config, cloud keys or arbitrary provider env. An
 // allowlist, not a blocklist, so a new server secret never leaks into a
@@ -258,6 +282,7 @@ export function buildPublicReviewActionsCliEnv(env = {}) {
  * @param {object|null} [options.extra] - see `composeProviderEnv`.
  * @param {object|null} [options.bootstrapEnv] - Explicit credential-command output; only recognized auth keys pass, in ordinary runs or an opted-in no-tool review.
  * @param {boolean} [options.toolFree=false] - see `composeProviderEnv`.
+ * @param {string} [options.openCodeIsolationDir] - private per-run directory for the restricted MTPLX OpenCode recipe.
  * @param {boolean} [options.guard=false] - prepend the pm2 guard shim onto the
  *   final `PATH` so an unrestricted agent can't `pm2 kill` the shared daemon.
  *   Only agent-spawning sites opt in.
@@ -274,7 +299,9 @@ export function buildCliChildEnv({
   bootstrapEnv = null,
   safetyProfile = null,
   toolFree = false,
+  openCodeIsolationDir,
 } = {}) {
+  if (toolFree && openCodeIsolationDir) return isolatedMtplxOpenCodeEnv(baseEnv, provider, model, openCodeIsolationDir, cwd);
   const composed = withTorchCompilerCacheEnv(withSpawnCwdEnv(
     { ...buildSafeCliBaseEnv(baseEnv, provider), ...composeProviderEnv({ before, provider, model, extra, safetyProfile, toolFree }) },
     cwd,

@@ -8,13 +8,14 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
  */
 import { spawn } from '../lib/childProcess.js';
 import { readFile } from 'fs/promises';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { atomicWrite, ensureDir, tryReadFile, PATHS } from '../lib/fileUtils.js';
 import { resolveSpawnCwd } from '../lib/spawnCwd.js';
 import { hasModelFlag, extractBakedModel, isCodexProvider, isClaudeProvider, isOpencodeCommand } from '../lib/provider/providerModels.js';
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { imageReadOneShotArgs, toolFreeOneShotArgs } from '../lib/provider/providerVendors.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
+import { isMtplxOpenCodeCli } from '../lib/opencodeConfig.js';
 import { getClaudeSettingsEnv } from '../lib/claudeSettingsEnv.js';
 import { resolveCliSpawn, needsProcessGroup, processGroupKillable, trackDetachedGroup } from '../lib/credentialBootstrap.js';
 import { createImmediateFallbackSignalDetector, ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
@@ -397,6 +398,7 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
   let assistantOutput = '';
   const isClaude = isClaudeProvider(provider);
   const toolFreeOpenCode = toolFree && isOpencodeCommand(provider.command);
+  const restrictedMtplxOpenCode = toolFreeOpenCode && isMtplxOpenCodeCli(provider);
   const stdoutIsResponse = isCodexProvider(provider) || isClaude || toolFreeOpenCode;
   const signInWarningPrefix = '\nWarning: this sign-in ends between ';
   let stderrTail = '\n';
@@ -494,6 +496,7 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
     cwd: vision?.invocation.cwd || effectiveCwd,
     guard: true,
     ...(toolFreeOpenCode ? { toolFree: true, model: extractBakedModel(builtArgs) || provider.defaultModel } : {}),
+    ...(restrictedMtplxOpenCode ? { openCodeIsolationDir: resolve(runDir, 'opencode') } : {}),
   });
 
   // See the executeCliRun docblock above for why this is a resolve+wrap, not

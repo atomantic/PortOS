@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import EventEmitter from 'events';
+import { join } from 'node:path';
 import { ChildProcess } from '../lib/childProcess.js';
 import { parseLLMJSON } from '../lib/llmText.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
@@ -546,17 +547,26 @@ describe('executeCliRun — tool-free OpenCode', () => {
     spawn.mockReturnValueOnce(child);
     const onComplete = vi.fn();
     const prompt = 'Return a standalone HTML document.';
-    const model = 'mtplx/example';
+    const model = 'mtplx/mtplx-inkling-2-mini-optimized-speed';
     const diagnostics = '\u001b[0m\n> build · example\n\u001b[0m\n';
     const page = '<!doctype html><html><body>Example</body></html>\n';
     await executeCliRun({
       runId: 'html-page',
       provider: {
         id: 'opencode-mtplx', command: 'opencode', type: 'cli', mtplxBacked: true,
+        models: [model], effort: 'xhigh',
         args: ['run', '--agent', 'custom', '--attach', 'http://localhost:4096', '--model', model, '--thinking', '--variant=low'],
         envVars: {
           OPENCODE_PERMISSION: '{"bash":"allow"}',
-          OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission: 'allow', agent: { build: { permission: { bash: 'allow' } } } }),
+          OPENCODE_CONFIG: '/example/opencode.json',
+          OPENCODE_DISABLE_PROJECT_CONFIG: '0',
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+            permission: 'allow',
+            mode: { build: { permission: { bash: 'allow' } } },
+            agent: { build: { permission: { bash: 'allow' } } },
+            plugin: ['example-plugin'],
+            mcp: { example: { type: 'remote', url: 'https://example.com/mcp' } },
+          }),
         },
       },
       prompt, workspacePath: TEST_WORKSPACE, toolFree: true, onComplete,
@@ -566,10 +576,17 @@ describe('executeCliRun — tool-free OpenCode', () => {
     expect(command).toBe('opencode');
     expect(args).toEqual(['run', '--pure', '--agent', 'build', '--variant', 'low', '-m', model]);
     expect(JSON.parse(env.OPENCODE_PERMISSION)).toBe('deny');
-    expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT)).toMatchObject({
+    expect(env.OPENCODE_CONFIG).toBeUndefined();
+    expect(env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe('1');
+    expect(env.XDG_CONFIG_HOME).toBe(join(env.HOME, 'config'));
+    const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT);
+    expect(config.mode).toBeUndefined();
+    expect(config.mcp).toEqual({});
+    expect(config.plugin).toEqual([]);
+    expect(config).toMatchObject({
       permission: 'deny',
-      agent: { build: { permission: { bash: 'deny' } } },
-      provider: { mtplx: { models: { example: { tool_call: false } } } },
+      agent: { build: { permission: { bash: 'deny' }, reasoningEffort: 'xhigh' }, title: { disable: true } },
+      provider: { mtplx: { models: { 'mtplx-inkling-2-mini-optimized-speed': { tool_call: false } } } },
     });
     expect(child.stdin.write).toHaveBeenCalledWith(prompt);
 
