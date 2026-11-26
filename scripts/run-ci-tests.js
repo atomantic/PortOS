@@ -518,10 +518,9 @@ function warmTestChrome() {
   spawnSync('bash', [join(repoRoot, 'scripts', 'ci-warm-test-chrome.sh')], { stdio: 'inherit' });
 }
 
-async function main() {
-  const cliArgs = process.argv.slice(2);
-  const preplannedPath = process.env.PORTOS_CI_PREPLANNED_RUN;
-  delete process.env.PORTOS_CI_PREPLANNED_RUN;
+function parseLauncherInput(cliArgs, env) {
+  const preplannedPath = env.PORTOS_CI_PREPLANNED_RUN;
+  delete env.PORTOS_CI_PREPLANNED_RUN;
   const checkRemaining = cliArgs.includes('--check-remaining');
   const checkCtc = cliArgs.includes('--check-ctc');
   const positionalArgs = cliArgs.filter(arg => arg !== '--check-remaining' && arg !== '--check-ctc');
@@ -534,33 +533,33 @@ async function main() {
   const { script } = TEST_SCOPES[scope];
 
   // Pregate's guard stage asks for per-file wall times for this runner only.
-  const durationsPath = process.env.PORTOS_PREGATE_DURATIONS_PATH;
-  delete process.env.PORTOS_PREGATE_DURATIONS_PATH;
+  const durationsPath = env.PORTOS_PREGATE_DURATIONS_PATH;
+  delete env.PORTOS_PREGATE_DURATIONS_PATH;
   // Set by ci.yml's Linux server job only; a nested runner a test spawns must not inherit it.
-  const enforceGuardBudget = process.env.CI_GUARD_BUDGET === 'enforce';
-  delete process.env.CI_GUARD_BUDGET;
+  const enforceGuardBudget = env.CI_GUARD_BUDGET === 'enforce';
+  delete env.CI_GUARD_BUDGET;
   // Same inheritance rule: a nested launcher a test spawns must not arm its own copy. The signal is created
   // once here so every pass and the crash retry spend the same budget.
-  const deadline = launcherDeadline();
-  delete process.env[DEADLINE_ENV];
+  const deadline = launcherDeadline(env);
+  delete env[DEADLINE_ENV];
   if (deadline) {
     deadline.signal.addEventListener('abort', () => {
       deadlineExpired = true;
       console.error(`⏱️ Test launcher deadline of ${deadline.minutes} minute(s) (${DEADLINE_ENV}) expired; ending the test process tree.`);
     }, { once: true });
   }
-  const mode = process.env.CI_TEST_MODE || 'full';
-  const inputFiles = JSON.parse(process.env.CI_TEST_FILES || '[]');
+  const mode = env.CI_TEST_MODE || 'full';
+  const inputFiles = JSON.parse(env.CI_TEST_FILES || '[]');
   // Explicit planner selectors must respect the same browser and DB ownership as
   // workspace discovery and Vitest.
   const browserExcludes = new Set(scope === 'server'
-    ? browserOwnerExcludes().map(path => `server/${path}`) : []);
+    ? browserOwnerExcludes({ env }).map(path => `server/${path}`) : []);
   const dbExcludes = new Set(scope === 'server'
     ? resolveDbTestFiles(inputFiles) : []);
-  const profile = process.env.PORTOS_BROWSER_TEST_PROFILE;
+  const profile = env.PORTOS_BROWSER_TEST_PROFILE;
   const profileFiles = profile !== undefined ? browserTestProfileFiles(profile, inputFiles) : inputFiles;
   const repoFiles = profileFiles.filter(path => !browserExcludes.has(path) && !dbExcludes.has(path));
-  const repoSources = JSON.parse(process.env.CI_TEST_SOURCES || '[]');
+  const repoSources = JSON.parse(env.CI_TEST_SOURCES || '[]');
   const selectedFiles = repoFiles.map((path) => toRunnerPath(workspace, path));
 
   if (!['full', 'files', 'related'].includes(mode)) {
@@ -573,45 +572,32 @@ async function main() {
     process.exit(2);
   }
 
-  const browserJob = process.env.PORTOS_CI_BROWSER_OWNER === 'browser';
-  const beforeAudioSetup = browserJob && checkRemaining && process.env.PORTOS_CI_BEFORE_AUDIO_SETUP === '1';
+  const browserJob = env.PORTOS_CI_BROWSER_OWNER === 'browser';
+  const beforeAudioSetup = browserJob && checkRemaining && env.PORTOS_CI_BEFORE_AUDIO_SETUP === '1';
   if (preplannedPath && (!browserJob || scope !== 'server' || mode !== 'files' || beforeAudioSetup || checkCtc)) {
     throw new Error('Preplanned runs require the post-audio browser files job.');
   }
 
+  let emptySelectionMessage = null;
   if (mode === 'files' && selectedFiles.length === 0) {
     const deferredOnly = profile === 'smoke' && inputFiles.length > 0
       && inputFiles.every(file => BROWSER_FIDELITY_ONLY_FILES.includes(file));
     if (profile !== undefined && !deferredOnly) throw Error('Browser profile selected no executable cases.');
-    console.log(`No ${scope} tests selected.${deferredOnly ? ' Fidelity-only inputs require separate evidence.' : ''}`);
-    if (checkRemaining) writeStepOutput('remaining', '0');
-    if (checkCtc) writeStepOutput('required', 'false');
-    process.exitCode = 0;
-    return;
+    emptySelectionMessage = `No ${scope} tests selected.${deferredOnly ? ' Fidelity-only inputs require separate evidence.' : ''}`;
   }
 
-  const shard = parseShard(process.env.CI_SHARD);
-  if (checkCtc) {
-    // Related mode can reach beyond CI_TEST_FILES. Use its full candidate
-    // inventory, which the runner partitions before checking related reach.
-    const { slice } = planTestMemo({ scope, mode: mode === 'related' ? 'full' : mode, repoFiles, repoRoot, shard, memoDir: null });
-    writeStepOutput('required', String(slice.includes('scripts/align_lyrics_ctc.test.js')));
-    return;
-  }
-  const label = mode === 'full' ? (shard ? `full suite shard ${process.env.CI_SHARD}` : 'full suite')
+  const shardName = env.CI_SHARD;
+  const shard = emptySelectionMessage === null ? parseShard(shardName) : null;
+  const label = mode === 'full' ? (shard ? `full suite shard ${shardName}` : 'full suite')
     : mode === 'files' ? 'selected tests' : 'related and contract tests';
-  // process.exitCode, not process.exit(): the runner streams the child's
-  // output through this process's own stdout/stderr, and process.exit() can
-  // terminate before those writes (and this function's own diagnostic lines)
-  // finish flushing. Setting exitCode lets Node drain normally once main()
-  // returns.
-  const memoDir = resolveMemoDir();
-  const readOnlyMemo = process.env.GITHUB_EVENT_NAME === 'pull_request';
-  if (mode === 'full' && !memoDir && !shard && !checkRemaining) {
-    process.exitCode = await spawnNpm(workspace, script, [], label, { name: scope, signal: deadline?.signal });
-    return;
-  }
+  return { scope, workspace, script, mode, repoFiles, repoSources, checkCtc, checkRemaining, browserJob,
+    beforeAudioSetup, preplannedPath, profile, shard, shardName, label, deadline, durationsPath,
+    enforceGuardBudget, emptySelectionMessage };
+}
 
+function planLauncherMemo({
+  scope, mode, repoFiles, repoSources, shard, profile, browserJob, preplannedPath, checkRemaining, beforeAudioSetup,
+}, { memoDir, readOnlyMemo }) {
   // The selection is closure-based (scripts/lib/testMemo.js): in related
   // mode a test is selected when a changed source is in its module closure
   // or inputs, or that walk fails closed on an unresolved edge or unbounded
@@ -650,54 +636,35 @@ async function main() {
   }
   // A trusted planning step can warm the post-audio recheck and the test run.
   if (memoDir && !readOnlyMemo && plan.factsCache) saveFactsCache(memoDir, scope, plan.factsCache);
-  if (checkRemaining) {
-    console.log(plan.run.length === 0
-      ? `No ${scope} tests left to run${shard ? ' in this shard' : ''}.`
-      : `Remaining ${scope} tests${shard ? ` (shard ${process.env.CI_SHARD})` : ''}: ${plan.run.length}.`);
-    if (preplannedPath) writeFileSync(preplannedPath, JSON.stringify(plan.run));
-    writeStepOutput('remaining', String(plan.run.length));
-    // Once any file definitely needs to run, the normal runner will replan
-    // after setup. Only a potentially empty shard needs a separate check.
-    if (beforeAudioSetup && plan.unsettled > 0 && plan.unsettled === plan.run.length) {
-      console.log('Recheck after audio setup: all remaining memo verdicts may depend on ffmpeg.');
-      writeStepOutput('recheck', 'true');
-    }
-    process.exitCode = 0;
-    return;
-  }
-  // A run that may save its store bounds it first (the cache save follows a green step).
-  const pruneMemo = () => {
-    if (!memoDir || readOnlyMemo) return;
-    const pruned = pruneTestMemo({ memoDir, repoRoot, trustedCi: Boolean(process.env.CI) });
-    if (pruned) console.log(`🧠 Test memo: pruned ${pruned.removedEntries} entries and ${pruned.removedRecords} records; kept ${pruned.entries} entries and ${pruned.records} records.`);
-  };
-  if (plan.run.length === 0) {
-    console.log(`No ${scope} tests left to run${shard ? ' in this shard' : ''}.`);
-    pruneMemo();
-    process.exitCode = 0;
-    return;
-  }
-  if (shouldWarmTestChrome({ scope, run: plan.run })) warmTestChrome();
+  return { plan, caseFilter };
+}
+
+function buildExecutionPasses(runFiles, label, enforceGuardBudget) {
   // The scheduled run budgets the always-run guard pass and the prompt-stage
   // scan separately. The scan parses the server tree and competes for CPU
   // with the other scanners even when isolated from the broad test shard.
   const alwaysRun = new Set(getAlwaysRunTests());
-  const guardRun = plan.run.filter(test => alwaysRun.has(test));
-  const promptStageRun = plan.run.includes(PROMPT_STAGE_GUARD) ? [PROMPT_STAGE_GUARD] : [];
-  const passes = enforceGuardBudget
+  const guardRun = runFiles.filter(test => alwaysRun.has(test));
+  const promptStageRun = runFiles.includes(PROMPT_STAGE_GUARD) ? [PROMPT_STAGE_GUARD] : [];
+  return enforceGuardBudget
     ? [
       [guardRun, `${label}: always-run guards`, guardRun],
       [promptStageRun, `${label}: prompt-stage guard`, promptStageRun],
-      [plan.run.filter(test => !alwaysRun.has(test) && test !== PROMPT_STAGE_GUARD), label, []],
+      [runFiles.filter(test => !alwaysRun.has(test) && test !== PROMPT_STAGE_GUARD), label, []],
     ]
-    : [[plan.run, label, guardRun]];
-  const extraArgs = memoDir && !readOnlyMemo ? ['--experimental.recordDependencies'] : [];
+    : [[runFiles, label, guardRun]];
+}
+
+async function executeTestPasses(passes, {
+  scope, workspace, script, enforceGuardBudget, deadline, durationsPath,
+}, { recordDependencies, caseFilter, runFiles }) {
+  const extraArgs = recordDependencies ? ['--experimental.recordDependencies'] : [];
   // What each real-Chromium fixture's Vite server served, for the records written below (#17616).
   let servedDir = null;
   if (extraArgs.length) {
     clearVitestDependencies(repoRoot, scope);
     // Vitest records nothing for a case-filtered run unless each file already has a record to merge into.
-    if (caseFilter.length) seedVitestDependencies(repoRoot, scope, plan.run);
+    if (caseFilter.length) seedVitestDependencies(repoRoot, scope, runFiles);
     servedDir = mkdtempSync(join(tmpdir(), 'portos-served-files-'));
     process.env[SERVED_FILES_ENV] = servedDir;
   }
@@ -742,7 +709,16 @@ async function main() {
     }
     if (durationsPath) writeFileSync(durationsPath, JSON.stringify(guardDurations(results, loads)));
   }
-  process.exitCode = status;
+  return { status, passed, served };
+}
+
+function finalizeTestMemo({ scope, plan, browserJob, memoDir, readOnlyMemo }, { status, passed, served }) {
+  // A run that may save its store bounds it first (the cache save follows a green step).
+  const pruneMemo = () => {
+    if (!memoDir || readOnlyMemo) return;
+    const pruned = pruneTestMemo({ memoDir, repoRoot, trustedCi: Boolean(process.env.CI) });
+    if (pruned) console.log(`🧠 Test memo: pruned ${pruned.removedEntries} entries and ${pruned.removedRecords} records; kept ${pruned.entries} entries and ${pruned.records} records.`);
+  };
   if (!memoDir || passed.length === 0) {
     if (status === 0) pruneMemo();
     return;
@@ -765,6 +741,72 @@ async function main() {
   // A passed file that stores nothing re-runs on every trusted run; say which and why.
   for (const line of memoUnrecordedLines(unrecorded)) console.log(line);
   if (status === 0) pruneMemo();
+}
+
+async function main() {
+  const input = parseLauncherInput(process.argv.slice(2), process.env);
+  const { scope, workspace, script, mode, repoFiles, checkCtc, checkRemaining, beforeAudioSetup,
+    preplannedPath, shard, shardName, label, deadline, enforceGuardBudget, browserJob, emptySelectionMessage } = input;
+  if (emptySelectionMessage !== null) {
+    console.log(emptySelectionMessage);
+    if (checkRemaining) writeStepOutput('remaining', '0');
+    if (checkCtc) writeStepOutput('required', 'false');
+    process.exitCode = 0;
+    return;
+  }
+  if (checkCtc) {
+    // Related mode can reach beyond CI_TEST_FILES. Use its full candidate
+    // inventory, which the runner partitions before checking related reach.
+    const { slice } = planTestMemo({ scope, mode: mode === 'related' ? 'full' : mode, repoFiles, repoRoot, shard, memoDir: null });
+    writeStepOutput('required', String(slice.includes('scripts/align_lyrics_ctc.test.js')));
+    return;
+  }
+  // process.exitCode, not process.exit(): the runner streams the child's
+  // output through this process's own stdout/stderr, and process.exit() can
+  // terminate before those writes (and this function's own diagnostic lines)
+  // finish flushing. Setting exitCode lets Node drain normally once main()
+  // returns.
+  const memoDir = resolveMemoDir();
+  const readOnlyMemo = process.env.GITHUB_EVENT_NAME === 'pull_request';
+  if (mode === 'full' && !memoDir && !shard && !checkRemaining) {
+    process.exitCode = await spawnNpm(workspace, script, [], label, { name: scope, signal: deadline?.signal });
+    return;
+  }
+
+  const { plan, caseFilter } = planLauncherMemo(input, { memoDir, readOnlyMemo });
+  const noTestsMessage = `No ${scope} tests left to run${shard ? ' in this shard' : ''}.`;
+  if (checkRemaining) {
+    console.log(plan.run.length === 0
+      ? noTestsMessage
+      : `Remaining ${scope} tests${shard ? ` (shard ${shardName})` : ''}: ${plan.run.length}.`);
+    if (preplannedPath) writeFileSync(preplannedPath, JSON.stringify(plan.run));
+    writeStepOutput('remaining', String(plan.run.length));
+    // Once any file definitely needs to run, the normal runner will replan
+    // after setup. Only a potentially empty shard needs a separate check.
+    if (beforeAudioSetup && plan.unsettled > 0 && plan.unsettled === plan.run.length) {
+      console.log('Recheck after audio setup: all remaining memo verdicts may depend on ffmpeg.');
+      writeStepOutput('recheck', 'true');
+    }
+    process.exitCode = 0;
+    return;
+  }
+
+  const memo = { scope, plan, browserJob, memoDir, readOnlyMemo };
+  if (plan.run.length === 0) {
+    console.log(noTestsMessage);
+    finalizeTestMemo(memo, { status: 0, passed: [] });
+    process.exitCode = 0;
+    return;
+  }
+  if (shouldWarmTestChrome({ scope, run: plan.run })) warmTestChrome();
+  const passes = buildExecutionPasses(plan.run, label, enforceGuardBudget);
+  const execution = await executeTestPasses(passes, input, {
+    recordDependencies: Boolean(memoDir) && !readOnlyMemo,
+    caseFilter,
+    runFiles: plan.run,
+  });
+  process.exitCode = execution.status;
+  finalizeTestMemo(memo, execution);
 }
 
 if (isDirectlyInvoked(import.meta.url)) {
