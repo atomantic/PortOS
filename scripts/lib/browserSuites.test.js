@@ -49,6 +49,21 @@ describe('browser shard ownership', () => {
     }
   });
 
+  it.each([
+    ['server/services/musicVideo/overlayTextService.browser.test.js', 2, 5],
+    ['server/services/codeAnimation/poster.realBrowser.test.js', 2, 5],
+    ['server/services/musicVideo/documentRenderGeneration.browser.test.js', 3, 7],
+    ['server/services/musicVideo/publish/sunoHook.browser.test.js', 3, 7],
+    ['server/services/greyboxRender.browser.test.js', 4, 7],
+    ['server/routes/catalogGreyboxViewer.browser.test.js', 7, 7],
+    ['server/services/musicVideo/documentVignette.browser.test.js', 5, 5],
+    ['server/routes/musicVideoProductionReview.browser.test.js', 5, 6],
+  ])('keeps %s on its balanced broad owner for each profile', (file, full, smoke) => {
+    const count = FULL_BROWSER_SHARD_COUNT;
+    expect(browserShardSlice([file], { index: full, count }, 'full')).toEqual([file]);
+    expect(browserShardSlice([file], { index: smoke, count }, 'smoke')).toEqual([file]);
+  });
+
   it('applies the smoke GPU override only to two-shard plans', () => {
     const gpu = 'server/lib/filmLookGpu.browser.test.js';
     expect(browserShardSlice([gpu], { index: 2, count: 2 }, 'full')).toEqual([]);
