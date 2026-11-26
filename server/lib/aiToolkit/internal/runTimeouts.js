@@ -7,7 +7,10 @@ export const DEFAULT_API_RUN_TIMEOUT_MS = 300000;
 // model must not be killed by the no-progress bound, but a trickle still needs a cap.
 export const DEFAULT_API_RUN_MAX_RUNTIME_MS = 1800000;
 
-/** Total-runtime ceiling a host's own backstop must arm against (not `provider.timeout`); `Math.max` keeps a raised `provider.timeout` from being clamped DOWN. */
+// Hosts wrapping executeApiRun need this same absolute cap and caller override.
+// A host backstop based on the stall setting can stop a healthy stream and
+// record a user cancellation, which suppresses fallback. The default cap
+// cannot undercut a raised stall bound.
 export const apiRunAbsoluteTimeoutMs = (stallTimeout, requestedCap) => {
   // Zero is an explicit caller opt-out; omission retains ordinary provider bounds.
   if (requestedCap === 0) return 0;

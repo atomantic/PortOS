@@ -81,8 +81,8 @@ const INSTRUCTION_DIRS = [
  * (`.claude/skills/`) or a doc rather than raising the number. Rules guarding
  * data loss, destructive actions, privacy and spend stay in root.
  */
-const ROOT_MAX_BYTES = 28 * 1024;
-const NESTED_MAX_BYTES = 12 * 1024;
+const ROOT_MAX_BYTES = 16 * 1024;
+const NESTED_MAX_BYTES = 6 * 1024;
 // An absolute 90% line failed concurrent branches: two edits that each fit
 // under it merged separately and broke main (five branches on 2026-11-15). The
 // headroom rule is therefore relative to the merge base: a file already above

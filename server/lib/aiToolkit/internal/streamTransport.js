@@ -32,6 +32,7 @@ function providerResponse(res, signal) {
   const headers = Object.entries(res.headersDistinct)
     .flatMap(([name, values]) => values.map(value => [name, value]));
   let body = null;
+  // The same run signal covers headers, the socket body and decompression.
   if (BODYLESS_STATUSES.has(status)) {
     res.destroy();
   } else {
