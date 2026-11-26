@@ -14,6 +14,7 @@
  *   POST   /api/devtools/video-download/:jobId/cancel    → { ok }
  */
 
+import { assertCancelResult } from '../lib/cancelResponse.js';
 import { emitToOperatorsOn } from '../services/socketIo.js';
 import { Router } from 'express';
 import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
@@ -89,7 +90,7 @@ router.get('/:jobId/events', (req, res) => {
 });
 
 router.post('/:jobId/cancel', (req, res) => {
-  res.json({ ok: cancelVideoDownload(req.params.jobId) });
+  res.json(assertCancelResult(cancelVideoDownload(req.params.jobId), { notFoundMessage: 'Video download not found' }));
 });
 
 export default router;

@@ -6,6 +6,7 @@
 
 import { unlink } from 'fs/promises';
 import { Router } from 'express';
+import { assertCancelResult } from '../lib/cancelResponse.js';
 import { requireProductionReviewer } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
@@ -50,7 +51,7 @@ router.get('/publish-kit/:jobId/events', (req, res) => {
 });
 
 router.post('/publish-kit/:jobId/cancel', (req, res) => {
-  res.json({ ok: cancelPublishKitBuild(req.params.jobId) });
+  res.json(assertCancelResult(cancelPublishKitBuild(req.params.jobId), { notFoundMessage: 'Publish kit job not found' }));
 });
 
 router.post('/:id/publish-kit/copy', asyncHandler(async (req, res) => {

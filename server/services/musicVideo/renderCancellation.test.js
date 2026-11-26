@@ -27,10 +27,10 @@ describe('cancelMusicVideoRenderJob', () => {
 
   it('refuses once committing or settled, leaving the job untouched', () => {
     const committing = running({ committing: true });
-    expect(cancelMusicVideoRenderJob(committing, { label: 't' })).toBe(false);
+    expect(cancelMusicVideoRenderJob(committing, { label: 't' })).toEqual({ ok: false, code: 'ALREADY_TERMINAL' });
     expect(committing.cancelRequested).toBeUndefined();
     expect(committing.overlayAbort.signal.aborted).toBe(false);
-    expect(cancelMusicVideoRenderJob(running({ status: 'complete' }), { label: 't' })).toBe(false);
+    expect(cancelMusicVideoRenderJob(running({ status: 'complete' }), { label: 't' })).toEqual({ ok: false, code: 'ALREADY_TERMINAL' });
     expect(cancelMusicVideoRenderJob(undefined, { label: 't' })).toBe(false);
   });
 });

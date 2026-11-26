@@ -504,8 +504,13 @@ export function useImageGenPageRuntime() {
     // Cancel exactly the render this page owns. Only a render with no owned job
     // (a synchronous external-service call) falls back to the legacy
     // "most recent job" cancel.
-    const owned = await cancelRun();
-    if (!owned) await cancelImageGen().catch(() => {});
+    try {
+      const owned = await cancelRun();
+      if (!owned) await cancelImageGen();
+    } catch (err) {
+      if (!err?.toasted) toast.error(err?.message || 'Cancel failed');
+      return;
+    }
     setGenerating(false);
     setStatusMsg('Cancelled');
   };

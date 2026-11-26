@@ -21,7 +21,7 @@ import { atomicWrite } from '../../lib/fileCore.js';
 import { assertInsideWithoutSymlinks } from '../blenderWorkspace/containment.js';
 import { runBlenderModelDriver } from './driver.js';
 import { BLENDER_MODEL_BAKE_IMAGES, BLENDER_MODEL_BAKE_UV_OVERLAP_MAX } from './bakePlan.js';
-import { activeJobs, ownerOf, registry } from './jobs.js';
+import { cancelJob, ownerOf, registry } from './jobs.js';
 import { blenderModelBuildDir, blenderModelWorkspaceDir } from './workspace.js';
 
 const IMAGE_NAMES = Object.keys(BLENDER_MODEL_BAKE_IMAGES);
@@ -171,11 +171,6 @@ export const exportableSets = (sets) => sets.filter((set) => set.images.length &
 /** The folder a set's images were baked into, for the export job. */
 export const blenderModelBakeSetDir = setDir;
 
-/** Cancel the running bake of `setId` in `buildId`; false when it is not running. */
-export function cancelBlenderModelBake(id, buildId, setId) {
-  const entry = activeJobs(id, 'bake').find(({ job }) => job.buildId === buildId && job.setId === setId);
-  if (!entry) return false;
-  entry.abort.abort();
-  return true;
-}
+/** Cancel the bake of `setId` in `buildId`. */
+export const cancelBlenderModelBake = (id, buildId, setId) => cancelJob(id, 'bake', buildId, setId);
 

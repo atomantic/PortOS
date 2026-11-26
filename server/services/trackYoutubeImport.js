@@ -13,6 +13,7 @@
 
 import { randomUUID } from 'crypto';
 import { join } from 'path';
+import { CANCEL_ALREADY_TERMINAL } from '../lib/cancelResponse.js';
 import { YOUTUBE_VIDEO_URL_RE } from '../lib/youtubeUrl.js';
 import { assertYoutubeVideoUrl } from '../lib/youtubeUrlAssert.js';
 import { shortId, PATHS } from '../lib/fileUtils.js';
@@ -46,8 +47,7 @@ export const attachImportSseClient = (jobId, res) => attachSse(importJobs, jobId
 export const __testing = { importJobs };
 
 /**
- * Cancel an in-flight import. Returns false if the job is unknown or already
- * cancelled.
+ * Cancel an in-flight import. A retained finished or canceled job reports a conflict.
  *
  * `job.process` is transient — it is null while the job is awaiting setup and
  * again during post-processing (runYtDlp clears it on exit) — so cancellation
@@ -57,9 +57,9 @@ export const __testing = { importJobs };
 export function cancelYoutubeImport(jobId) {
   const job = importJobs.get(jobId);
   // The job lingers in the map after it ends (closeJobAfterDelay evicts it on
-  // a timer), so a terminal status — not just the flag — is what makes a cancel
-  // for an already-finished import report false.
-  if (!job || job.canceled || job.status !== 'running') return false;
+  // a timer), so inspect both the terminal status and the cancellation flag.
+  if (!job) return false;
+  if (job.canceled || job.status !== 'running') return CANCEL_ALREADY_TERMINAL;
   job.canceled = true;
   const proc = job.process;
   if (proc) killWithEscalation(proc, { label: 'yt-dlp import', stillRunning: () => job.process === proc });

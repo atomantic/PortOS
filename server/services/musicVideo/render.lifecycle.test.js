@@ -193,7 +193,7 @@ describe.each(PIPELINES)('final render job lifecycle: $name pipeline', (pipeline
     await expect.poll(() => steps().includes('close'), { timeout: 5000 }).toBe(true);
     await expect.poll(() => blockersSince(blockersBefore), { timeout: 5000 }).toEqual(retained);
     expect(getActiveRenderJobId(pid)).toBeNull();
-    expect(cancelRender(jobId)).toBe(false);
+    expect(cancelRender(jobId)).toEqual({ ok: false, code: 'ALREADY_TERMINAL' });
   };
   const outputPath = () => expect.stringMatching(/music-video-.*\.mp4$/);
   // Every announcement comes after the slot is free, reading the row the job last settled.

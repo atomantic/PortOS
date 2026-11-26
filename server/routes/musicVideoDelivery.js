@@ -4,6 +4,7 @@
  * against the remaining routes is unchanged.
  */
 
+import { assertCancelResult } from '../lib/cancelResponse.js';
 import { musicVideoExcerptRequestSchema } from '../lib/musicVideo/musicVideoValidation.js';
 import { musicVideoDcpRequestSchema, musicVideoSocialCutsQuerySchema, musicVideoExcerptNoteSchema, musicVideoExcerptNoteUpdateSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { inspectDcpReadiness } from '../services/musicVideo/dcpPreflight.js';
@@ -42,7 +43,7 @@ router.get('/dcp/:jobId/events', (req, res) => {
   if (!attachDcp(req.params.jobId, res)) throw new ServerError('Cinema package job not found or expired', { status: 404, code: 'NOT_FOUND' });
 });
 
-router.post('/dcp/:jobId/cancel', (req, res) => res.json({ ok: cancelDcp(req.params.jobId) }));
+router.post('/dcp/:jobId/cancel', (req, res) => res.json(assertCancelResult(cancelDcp(req.params.jobId), { notFoundMessage: 'DCP export job not found' })));
 
 router.get('/:id/dcp/:artifactId/location', asyncHandler(async (req, res) => {
   const { packagePath } = await dcpArtifactPaths(req.params.id, req.params.artifactId);
@@ -66,7 +67,7 @@ router.get('/excerpt/:jobId/events', (req, res) => {
 });
 
 router.post('/excerpt/:jobId/cancel', (req, res) => {
-  res.json({ ok: cancelExcerptRender(req.params.jobId) });
+  res.json(assertCancelResult(cancelExcerptRender(req.params.jobId), { notFoundMessage: 'Draft render job not found' }));
 });
 
 router.delete('/:id/excerpt/:excerptId', asyncHandler(async (req, res) => {

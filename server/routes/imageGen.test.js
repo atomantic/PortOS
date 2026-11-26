@@ -2157,11 +2157,11 @@ describe('Image Gen Routes', () => {
       expect(imageGen.attachSseClient).toHaveBeenCalledWith('missing-job', expect.anything());
     });
 
-    it('POST /cancel returns ok=false when no provider had a job', async () => {
+    it('POST /cancel returns 404 when no provider had a job', async () => {
       imageGen.cancel.mockReturnValueOnce(false);
       const response = await request(app).post('/api/image-gen/cancel');
-      expect(response.status).toBe(200);
-      expect(response.body.ok).toBe(false);
+      expect(response.status).toBe(404);
+      expect(response.body).toMatchObject({ code: 'NOT_FOUND' });
       expect(imageGen.cancel).toHaveBeenCalled();
     });
 

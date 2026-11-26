@@ -104,7 +104,7 @@ musicVideoEvents.on('audio-changed', ({ projectId, project }) => {
   const job = jobId ? jobs.get(jobId) : null;
   if (!job || job.audioRevision === audioRevisionOf(project)) return;
   ensureInstanceId().then((instanceId) => {
-    if (isLocalRenderMark(project.renderingOn, instanceId) && cancelRender(jobId)) {
+    if (isLocalRenderMark(project.renderingOn, instanceId) && cancelRender(jobId) === true) {
       console.log(`🛑 Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)}: the song changed, canceling the render`);
     }
   }).catch((err) => console.error(`❌ Music-video render [${jobId.slice(0, 8)}] cancel after a song change failed: ${err.message}`));

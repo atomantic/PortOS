@@ -55,19 +55,18 @@ export default function ShotFinalRender({ project, scene, onChange, onLocal, fie
             <button
               type="button"
               className={BUTTON}
-              // { ok: false } means the server has no running job for this shot: settle the card from its status.
+              // Refresh when the server no longer has a cancellable render for this shot.
               // The clear is scoped to the render this click targeted, so a late response can't wipe a newer render;
               // when the row was replaced meanwhile, the newer render is left as it is and no re-read is needed.
               onClick={() => {
                 const since = live?.since;
                 cancelMusicVideoShotRender(projectId, sceneId)
-                  .then((result) => {
-                    if (result?.ok !== false) return;
+                  .catch((err) => {
+                    if (err?.status !== 404 && err?.status !== 409) return;
                     // No row at click time: the card was showing the server's own rendering flag, so re-read it.
                     const settled = since === undefined || clearLive(sceneId, since);
                     if (settled) retry?.();
-                  })
-                  .catch(() => {});
+                  });
               }}
             >
               <Square size={12} aria-hidden="true" /> Stop

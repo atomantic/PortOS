@@ -3,6 +3,7 @@
  * list per model, one tracked map (so the unattended updater waits for them) and
  * one set of running promises a delete can wait on.
  */
+import { CANCEL_ALREADY_TERMINAL } from '../../lib/cancelResponse.js';
 import { trackedRenderMap } from '../renderActivity.js';
 import { createBlenderJobRegistry } from '../blenderWorkspace/jobRegistry.js';
 import * as store from './store.js';
@@ -19,10 +20,12 @@ export const listBlenderModelJobs = (id) => registry.list(ownerOf(id));
 /** The unfinished job entries of one kind (`build` or `review`). */
 export const activeJobs = (id, kind) => registry.active(ownerOf(id)).filter(({ job }) => job.kind === kind);
 
-/** Cancel the running `kind` job of `buildId`; false when it is not running. */
-export function cancelJob(id, kind, buildId) {
-  const entry = activeJobs(id, kind).find(({ job }) => job.buildId === buildId);
-  if (!entry) return false;
+/** Cancel the matching build, review, or set bake. */
+export function cancelJob(id, kind, buildId, setId) {
+  const matches = (job) => job.kind === kind && job.buildId === buildId && job.setId === setId;
+  const owner = ownerOf(id);
+  const entry = registry.active(owner).find(({ job }) => matches(job));
+  if (!entry) return registry.list(owner).some(matches) ? CANCEL_ALREADY_TERMINAL : false;
   entry.abort.abort();
   return true;
 }

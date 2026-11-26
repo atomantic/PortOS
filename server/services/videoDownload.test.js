@@ -213,11 +213,11 @@ describe('a running download', () => {
 describe('cancelVideoDownload', () => {
   beforeEach(() => __testing.downloadJobs.clear());
 
-  it('returns false for an unknown or already-finished job', () => {
+  it('distinguishes an unknown job from an already-finished job', () => {
     expect(cancelVideoDownload('nope')).toBe(false);
     // A job past its download has no process to signal.
-    __testing.downloadJobs.set('done', { id: 'done', clients: [], process: null });
-    expect(cancelVideoDownload('done')).toBe(false);
+    __testing.downloadJobs.set('done', { id: 'done', status: 'done', clients: [], process: null });
+    expect(cancelVideoDownload('done')).toEqual({ ok: false, code: 'ALREADY_TERMINAL' });
   });
 
   // Actually RUNS the cancel body. Without this the path had no coverage at all,
@@ -226,7 +226,7 @@ describe('cancelVideoDownload', () => {
   it('signals the running child and escalates to SIGKILL if it survives the grace window', () => {
     vi.useFakeTimers();
     const proc = { exitCode: null, signalCode: null, kill: vi.fn() };
-    const job = { id: 'live', clients: [], process: proc };
+    const job = { id: 'live', status: 'running', clients: [], process: proc };
     __testing.downloadJobs.set('live', job);
 
     expect(cancelVideoDownload('live')).toBe(true);
@@ -240,7 +240,7 @@ describe('cancelVideoDownload', () => {
   it('does not escalate when the child already exited', () => {
     vi.useFakeTimers();
     const proc = { exitCode: null, signalCode: null, kill: vi.fn() };
-    __testing.downloadJobs.set('live', { id: 'live', clients: [], process: proc });
+    __testing.downloadJobs.set('live', { id: 'live', status: 'running', clients: [], process: proc });
 
     cancelVideoDownload('live');
     proc.exitCode = 0; // the child honored SIGTERM

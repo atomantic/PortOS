@@ -207,6 +207,24 @@ describe('tracks routes', () => {
       expect(r.body).toEqual({ ok: true });
       expect(ytImport.cancelYoutubeImport).toHaveBeenCalledWith('job-1');
     });
+
+    it('returns 404 after checking both import services for an unknown job', async () => {
+      ytImport.cancelYoutubeImport.mockReturnValueOnce(false);
+      sunoImport.cancelSunoImport.mockReturnValueOnce(false);
+      const response = await request(app).post('/api/tracks/import/unknown-job/cancel');
+      expect(response.status).toBe(404);
+      expect(response.body).toMatchObject({ code: 'NOT_FOUND' });
+      expect(sunoImport.cancelSunoImport).toHaveBeenCalledWith('unknown-job');
+    });
+
+    it('returns 409 for a terminal job and leaves provider selection unchanged', async () => {
+      ytImport.cancelYoutubeImport.mockReturnValueOnce({ ok: false, code: 'ALREADY_TERMINAL' });
+      sunoImport.cancelSunoImport.mockClear();
+      const response = await request(app).post('/api/tracks/import/finished-job/cancel');
+      expect(response.status).toBe(409);
+      expect(response.body).toMatchObject({ code: 'ALREADY_TERMINAL' });
+      expect(sunoImport.cancelSunoImport).not.toHaveBeenCalled();
+    });
   });
 
   describe('Suno import', () => {

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
+import { CANCEL_ALREADY_TERMINAL } from '../../lib/cancelResponse.js';
 import { execFile } from '../../lib/childProcess.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { mkdir, mkdtemp, readdir, readFile, writeFile, appendFile, rename, rm, stat, statfs } from 'node:fs/promises';
@@ -49,7 +50,8 @@ export const activeDcp = id => {
 export const attachDcp = (id, res) => attachSseClient(jobs, id, res);
 export function cancelDcp(id) {
   const job = jobs.get(id);
-  if (!job || job.status !== 'running' || job.committing) return false;
+  if (!job) return false;
+  if (job.status !== 'running' || job.committing) return CANCEL_ALREADY_TERMINAL;
   job.abort.abort();
   return true;
 }

@@ -172,11 +172,11 @@ describe('cancelYoutubeImport', () => {
     __testing.importJobs.delete('j1');
   });
 
-  it('returns false once the job has finished, while it lingers in the map', () => {
+  it('reports a conflict while the finished job remains in the map', () => {
     // closeJobAfterDelay evicts on a timer, so a finished job is still present —
     // cancelling it must not report an accepted cancel to the client.
     __testing.importJobs.set('j3', { id: 'j3', status: 'done', clients: [], process: null, canceled: false });
-    expect(cancelYoutubeImport('j3')).toBe(false);
+    expect(cancelYoutubeImport('j3')).toEqual({ ok: false, code: 'ALREADY_TERMINAL' });
     __testing.importJobs.delete('j3');
   });
 
@@ -186,7 +186,7 @@ describe('cancelYoutubeImport', () => {
     __testing.importJobs.set('j2', job);
     expect(cancelYoutubeImport('j2')).toBe(true);
     expect(killWithEscalation).toHaveBeenCalledWith(proc, expect.objectContaining({ label: 'yt-dlp import' }));
-    expect(cancelYoutubeImport('j2')).toBe(false);
+    expect(cancelYoutubeImport('j2')).toEqual({ ok: false, code: 'ALREADY_TERMINAL' });
     expect(killWithEscalation).toHaveBeenCalledOnce();
     __testing.importJobs.delete('j2');
   });

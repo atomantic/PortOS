@@ -14,6 +14,7 @@ import { randomUUID } from 'crypto';
 import { copyFile, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { CANCEL_ALREADY_TERMINAL } from '../lib/cancelResponse.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { shortId } from '../lib/fileUtils.js';
 import { findFfmpeg, probeVideoDuration, runFfmpegProcess } from '../lib/ffmpeg.js';
@@ -232,10 +233,11 @@ export const attachSunoImportSseClient = (jobId, res) => attachSse(importJobs, j
 
 export const __testing = { importJobs, limits };
 
-/** Cancel an in-flight import; false when the job is unknown or already over. */
+/** Cancel an in-flight import, or report a conflict for a retained finished job. */
 export function cancelSunoImport(jobId) {
   const job = importJobs.get(jobId);
-  if (!job || job.canceled || job.status !== 'running') return false;
+  if (!job) return false;
+  if (job.canceled || job.status !== 'running') return CANCEL_ALREADY_TERMINAL;
   job.canceled = true;
   job.abort.abort(); // stops an audio extraction in flight
   return true;

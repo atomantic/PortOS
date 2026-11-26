@@ -1,3 +1,4 @@
+import { CANCEL_ALREADY_TERMINAL } from '../../lib/cancelResponse.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 
 /**
@@ -7,7 +8,8 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
  * (`job.committing`) or has settled.
  */
 export function cancelMusicVideoRenderJob(job, { label }) {
-  if (!job || job.status !== 'running' || job.committing) return false;
+  if (!job) return false;
+  if (job.status !== 'running' || job.committing) return CANCEL_ALREADY_TERMINAL;
   // ffmpeg can handle SIGTERM and exit nonzero with a null close-event signal.
   // Record the request before kill, including a synchronous error/close race.
   job.cancelRequested = true;
