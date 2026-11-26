@@ -253,7 +253,13 @@ describe('catalogExtraction — scanProseForIngredientRefs', () => {
   });
 
   it('unions candidates across multiple scope targets and de-dupes by id', async () => {
+    let active = 0;
+    let peak = 0;
     catalogDB.listIngredientsForRef.mockImplementation(async (kind) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await Promise.resolve();
+      active -= 1;
       if (kind === 'universe') return [row('cat-chr-mira', 'Mira'), row('cat-chr-shared', 'Shared')];
       if (kind === 'work') return [row('cat-chr-shared', 'Shared'), row('cat-chr-tomas', 'Tomas')];
       return [];
@@ -264,6 +270,7 @@ describe('catalogExtraction — scanProseForIngredientRefs', () => {
     // Shared appears in both refs but is returned once. All three matched.
     expect(ids).toEqual(['cat-chr-mira', 'cat-chr-shared', 'cat-chr-tomas'].sort());
     expect(catalogDB.listIngredientsForRef).toHaveBeenCalledTimes(2);
+    expect(peak).toBe(2);
   });
 
   it('returns [] when the linked cast is empty', async () => {

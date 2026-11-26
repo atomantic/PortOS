@@ -25,6 +25,7 @@ const { checkHealth, close, ensureSchema, query } = await import('../../lib/db.j
 const { requireDbOrSkip } = await import('../../lib/dbTestGate.js');
 const { listIngredients, getIngredientCards, setIngredientLock } = await import('./ingredients.js');
 const { HOMING_REF_KINDS_SQL, liveHomingTargetSql } = await import('./shared.js');
+const { listSourcesForIngredient } = await import('./refs.js');
 
 const health = await checkHealth().catch((error) => ({ connected: false, error: error.message }));
 const ready = requireDbOrSkip('services/catalogDB/listIngredients.db.test', health.connected, health.error);
@@ -176,6 +177,28 @@ const FILTERS = {
 const project = ({ items }) => items.map(({ id: itemId, thumbnailKey, usage }) => ({ id: itemId, thumbnailKey, usage }));
 
 describe.skipIf(!ready)('listIngredients identity read views (#12989)', () => {
+  it('pushes source identity members into the indexed table predicate', async () => {
+    const ingredientRows = [{ id: id('source') }, { id: id('survivor') }];
+    await query(`INSERT INTO catalog_ingredients (id, type, name, payload, origin_instance_id) VALUES
+      ($1, 'character', 'Source plan', '{}', 'list-test-local'),
+      ($2, 'character', 'Source plan survivor', '{}', 'list-test-local')`, ingredientRows.map(row => row.id));
+    const scrapId = id('scrap-source');
+    await query(`INSERT INTO catalog_scraps (id, title, raw_text, source_kind) VALUES ($1, 'Plan scrap', 'text', 'manual')`, [scrapId]);
+    await query(`INSERT INTO catalog_ingredient_merges (id, source_id, survivor_id, before_state, after_fingerprint)
+      VALUES ($1, $2, $3, '{}', 'fixture')`, [id('source-merge'), ingredientRows[0].id, ingredientRows[1].id]);
+    await query(`INSERT INTO catalog_ingredient_sources (ingredient_id, scrap_id) VALUES ($1, $2)`, [ingredientRows[0].id, scrapId]);
+
+    const listed = await listSourcesForIngredient(ingredientRows[1].id);
+    expect(listed.map(row => row.ingredientId)).toEqual([ingredientRows[0].id]);
+    const { rows: plan } = await query(`EXPLAIN (FORMAT JSON) SELECT s.ingredient_id
+      FROM catalog_ingredient_sources s
+      WHERE s.ingredient_id = ANY(catalog_identity_member_ids($1))`, [ingredientRows[1].id]);
+    expect(JSON.stringify(plan)).toMatch(/Index Scan/);
+    await query('DELETE FROM catalog_ingredient_sources WHERE ingredient_id = ANY($1)', [[...ingredientRows.map(row => row.id)]]);
+    await query('DELETE FROM catalog_ingredient_merges WHERE id = $1', [id('source-merge')]);
+    await query('DELETE FROM catalog_scraps WHERE id = $1', [scrapId]);
+    await query('DELETE FROM catalog_ingredients WHERE id = ANY($1)', [[...ingredientRows.map(row => row.id)]]);
+  });
   // Uniquely catches a rewritten filter or decoration diverging from the
   // correlated statement on any view branch (live, merge, shared operation).
   it.each(Object.entries(FILTERS))('matches the correlated statement for the %s view', async (_label, filter) => {

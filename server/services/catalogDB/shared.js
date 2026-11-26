@@ -110,7 +110,6 @@ export const CATALOG_REVISION_RETENTION = (() => {
 // for AI refinement passes, 'sync' for peer-apply changes.
 export const REVISION_SOURCES = new Set(['user', 'extract', 'refine', 'sync']);
 
-
 export function rowToScrap(row) {
   if (!row) return null;
   return {

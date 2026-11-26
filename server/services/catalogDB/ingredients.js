@@ -455,7 +455,7 @@ export async function reviveDeletedIngredient(id, { type, name, payload = {}, ta
 // endpoint sets includeEmbedding: true.
 // `embeddingMissing: true` is for the backfill admin path so SQL filters
 // directly instead of fetching-then-JS-filtering.
-const INGREDIENT_LIGHT_COLS = 'id, type, name, payload, tags, embedding_model, origin_instance_id, created_at, updated_at, deleted, deleted_at, sync_sequence';
+export const INGREDIENT_LIGHT_COLS = 'id, type, name, payload, tags, embedding_model, origin_instance_id, created_at, updated_at, deleted, deleted_at, sync_sequence';
 
 // Card decorations for one already-limited page, in one grouped pass over each
 // identity read view (#12989 — a per-row correlated subquery re-evaluated the
@@ -673,13 +673,15 @@ export async function findIngredientsByName(type, names, { firstWord = false } =
   const keys = [...new Set((names || []).map((n) => String(n || '').trim().toLowerCase()).filter(Boolean))];
   if (!type || !keys.length) return [];
   const key = (column) => (firstWord ? `split_part(lower(btrim(${column})), ' ', 1)` : `lower(btrim(${column}))`);
+  const ingredientCols = INGREDIENT_LIGHT_COLS.split(', ').map((column) => `i.${column}`).join(', ');
+  const aliasKey = firstWord ? "split_part(lower(btrim(a)), ' ', 1)" : 'lower(btrim(a))';
   const result = await query(
-    `SELECT * FROM catalog_ingredients
-       WHERE deleted = false AND id = catalog_canonical_ingredient_id(id) AND type = $1
-         AND (${key('name')} = ANY($2)
-           OR (jsonb_typeof(payload->'aliases') = 'array'
-             AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(payload->'aliases') a WHERE ${key('a')} = ANY($2))))
-       ORDER BY created_at, id`,
+    `SELECT ${ingredientCols} FROM catalog_ingredients i
+       WHERE i.deleted = false AND i.id = catalog_canonical_ingredient_id(i.id) AND i.type = $1
+         AND (${key('i.name')} = ANY($2)
+           OR (jsonb_typeof(i.payload->'aliases') = 'array'
+             AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(i.payload->'aliases') a WHERE ${aliasKey} = ANY($2))))
+       ORDER BY i.created_at, i.id`,
     [type, keys],
   );
   return result.rows.map(rowToIngredient);

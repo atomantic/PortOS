@@ -117,8 +117,8 @@ export async function scanProseForIngredientRefs(text, scope = {}) {
   // ingredient can be linked to more than one target (a character attached to
   // both its universe and its work) — de-dupe by id so we scan its name once.
   const byId = new Map();
-  for (const [kind, id] of targets) {
-    const rows = await listIngredientsForRef(kind, id);
+  const targetRows = await Promise.all(targets.map(([kind, id]) => listIngredientsForRef(kind, id)));
+  for (const rows of targetRows) {
     for (const { ingredient } of rows) {
       if (ingredient?.id && ingredient?.name && !byId.has(ingredient.id)) {
         byId.set(ingredient.id, ingredient.name);
