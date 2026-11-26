@@ -50,6 +50,22 @@ describe('upsertInstance token preservation', () => {
     expect(updated).toMatchObject({ name: 'Renamed', apiToken: 'stored-secret', tokenUpdatedAt });
     expect((await getInstances()).instances.example).toMatchObject({ apiToken: 'stored-secret', tokenUpdatedAt });
   });
+
+  it('does not write an empty config when a read encounters ENOENT', async () => {
+    await fs.rm(join(tempRoot, 'jira.json'), { force: true });
+    await expect(getInstances()).resolves.toEqual({ instances: {} });
+    await expect(fs.stat(join(tempRoot, 'jira.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('preserves concurrent upserts and deletes', async () => {
+    await saveInstances({ instances: {} });
+    await Promise.all([
+      upsertInstance('one', { name: 'One', baseUrl: 'https://jira.example.com', email: 'one@example.com', apiToken: 'one' }),
+      upsertInstance('two', { name: 'Two', baseUrl: 'https://jira.example.com', email: 'two@example.com', apiToken: 'two' })
+    ]);
+    await Promise.all([deleteInstance('one'), deleteInstance('two')]);
+    expect(await getInstances()).toEqual({ instances: {} });
+  });
 });
 
 describe('isCloudInstance', () => {

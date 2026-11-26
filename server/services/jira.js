@@ -13,11 +13,13 @@ import { PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { writeSecureJson } from '../lib/secureAuthStore.js';
 import { hostFromOriginUrl } from '../lib/workTracker.js';
 import { countConfiguredInstances } from '../lib/instanceFeatureRegistry.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 
 const instanceNotFound = (instanceId) =>
   new ServerError(`JIRA instance ${instanceId} not found`, { status: 404, code: 'NOT_FOUND' });
 
 const JIRA_CONFIG_FILE = path.join(PATHS.data, 'jira.json');
+const queueInstanceWrite = createFileWriteQueue();
 
 // Resolved Cloud user-search results are stable until the instance credentials
 // change, and ticket creation can happen repeatedly in one run. Keep only
@@ -66,10 +68,7 @@ export async function getInstances() {
     return JSON.parse(content);
   } catch (error) {
     if (error.code === 'ENOENT') {
-      // Initialize with empty config
-      const defaultConfig = { instances: {} };
-      await saveInstances(defaultConfig);
-      return defaultConfig;
+      return { instances: {} };
     }
     throw error;
   }
@@ -86,6 +85,7 @@ export async function saveInstances(config) {
  * Add or update JIRA instance
  */
 export async function upsertInstance(instanceId, instanceData) {
+  return queueInstanceWrite(async () => {
   const config = await getInstances();
 
   const existing = config.instances[instanceId];
@@ -108,17 +108,20 @@ export async function upsertInstance(instanceId, instanceData) {
   clearCloudAssigneeCache(instanceId);
   clearCurrentUserCache(instanceId);
   return config.instances[instanceId];
+  });
 }
 
 /**
  * Delete JIRA instance
  */
 export async function deleteInstance(instanceId) {
+  return queueInstanceWrite(async () => {
   const config = await getInstances();
   delete config.instances[instanceId];
   await saveInstances(config);
   clearCloudAssigneeCache(instanceId);
   clearCurrentUserCache(instanceId);
+  });
 }
 
 /**
