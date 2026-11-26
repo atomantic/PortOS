@@ -729,6 +729,79 @@ describe('LoomPlayPanel', () => {
     await waitFor(() => expect(screen.getAllByText('Ending')).not.toHaveLength(0));
   });
 
+  it('commits a choice when its exit video fails and skips the failed clip on retry', async () => {
+    const user = userEvent.setup();
+    const videoEpisode = {
+      ...episode,
+      nodes: [{
+        ...episode.nodes[0],
+        playbackAssets: {
+          holdLoopVideoHistoryIds: ['hold-video'],
+          exitByTransition: { t1: 'missing-exit' },
+        },
+      }, episode.nodes[1]],
+    };
+    playLoomTurn
+      .mockRejectedValueOnce(new Error('Connection lost'))
+      .mockResolvedValueOnce({
+        action: 'move', narration: '', ended: false,
+        node: { id: 'n2', title: 'Inside', prose: 'Torchlight.', choices: [] },
+      });
+
+    render(<LoomPlayPanel loom={loom} episode={videoEpisode} />);
+    const choice = screen.getByRole('button', { name: 'Take path: enter the gate' });
+    await user.click(choice);
+
+    const exitVideo = screen.getByLabelText('The Gate');
+    expect(exitVideo).toHaveAttribute('src', expect.stringContaining('missing-exit'));
+    expect(playLoomTurn).not.toHaveBeenCalled();
+
+    fireEvent.error(exitVideo);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Connection lost'));
+    expect(playLoomTurn).toHaveBeenCalledExactlyOnceWith(
+      'loom-1', 'ep-1', {
+        nodeId: 'n1',
+        transitionId: 't1',
+        transcript: [{ role: 'reader', text: 'enter the gate' }],
+      }, { silent: true },
+    );
+    expect(screen.getByLabelText('The Gate')).toHaveAttribute('src', expect.stringContaining('hold-video'));
+
+    await user.click(choice);
+    expect(await screen.findByText('Torchlight.')).toBeInTheDocument();
+    expect(playLoomTurn).toHaveBeenCalledTimes(2);
+    expect(playLoomTurn.mock.calls[1][2]).toMatchObject({ nodeId: 'n1', transitionId: 't1' });
+  });
+
+  it('opens the decision voice window when its entry video fails', () => {
+    const videoEpisode = {
+      ...episode,
+      nodes: [{
+        ...episode.nodes[0],
+        playbackAssets: {
+          entryVideoHistoryId: 'missing-entry',
+          holdLoopVideoHistoryIds: ['hold-video'],
+          audioOccupancy: {
+            'hold-video': { durationMs: 6000, music: [{ startMs: 0, endMs: 6000 }] },
+          },
+        },
+        interactionWindow: { enabled: true, protagonistPresence: 'offscreen' },
+      }, episode.nodes[1]],
+    };
+
+    render(<LoomPlayPanel loom={loom} episode={videoEpisode} />);
+    const entryVideo = screen.getByLabelText('The Gate');
+    expect(entryVideo).toHaveAttribute('src', expect.stringContaining('missing-entry'));
+    expect(screen.queryByText('Off-screen voice window open')).not.toBeInTheDocument();
+
+    fireEvent.error(entryVideo);
+
+    expect(screen.getByLabelText('The Gate')).toHaveAttribute('src', expect.stringContaining('hold-video'));
+    expect(screen.getByText('Off-screen voice window open')).toBeInTheDocument();
+    expect(playLoomTurn).not.toHaveBeenCalled();
+  });
+
   it('shows rehearsal details with inspector drawer', async () => {
     const user = userEvent.setup();
     const episodeWithOccupancy = {
