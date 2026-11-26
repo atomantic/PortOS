@@ -407,25 +407,48 @@ describe('saved schedule hydration', () => {
 });
 
 describe('applyQualitySchedulePlan', () => {
-  // Without the recorded override the scheduled lane's applicability gate would
-  // skip, every week, a check the user deliberately selected.
-  it('leaves independently scheduled legacy profiles intact and avoids their occupied hours', async () => {
+  it('reuses the hours of retired legacy audits and keeps the cadences of unselected domains', async () => {
     loadSchedule.mockResolvedValue({ tasks: {
       simplify: { type: 'on-demand', enabled: true },
       'better-complexity': { type: 'on-demand', enabled: true },
+      'code-quality': { type: 'on-demand', enabled: true },
     } });
     getAppTaskTypeOverrides.mockResolvedValue({
       simplify: { enabled: true, interval: '0 8 * * *', providerId: 'fixture-a' },
-      'better-complexity': { enabled: true, interval: '0 18 * * *', providerId: 'fixture-b' },
+      'better-complexity': { enabled: true, interval: '0 18 * * *' },
+      'better-cognitive-load': { enabled: false, interval: '0 19 * * *' },
+      'code-quality': { enabled: true, interval: '0 12 * * *' },
     });
     const app = appWith(NODE_SERVICE);
-    const plan = await applyQualitySchedulePlan(app, { taskTypes: ['code-simplification'] });
-    expect(plan.checks).toHaveLength(16);
-    expect(plan.busySources.map(source => source.cron)).toEqual(['0 8 * * *', '0 18 * * *']);
+    const built = await applyQualitySchedulePlan(app, {
+      taskTypes: ['code-simplification'], windowStartHour: 8, windowEndHour: 8, claimBetween: false,
+    });
+
+    expect(built.checks).toHaveLength(16);
+    expect(built.busySources).toEqual([{ taskType: 'code-quality', cron: '0 12 * * *', origin: 'app' }]);
+    expect(built.plan.slots).toEqual([expect.objectContaining({ taskType: 'code-simplification', hour: 8 })]);
+    expect(built.plan.warnings).toEqual([]);
     const [, patches] = updateAppTaskTypeOverrides.mock.calls[0];
-    expect(patches).not.toHaveProperty('simplify');
-    expect(patches).not.toHaveProperty('better-complexity');
+    expect(patches.simplify).toEqual({ enabled: false, interval: null });
+    expect(patches['better-complexity']).toEqual({ enabled: false, interval: null });
+    expect(patches).not.toHaveProperty('better-cognitive-load');
+    expect(patches).not.toHaveProperty('code-quality');
     expect(patches['code-simplification']).toMatchObject({ enabled: true, taskMetadata: { fileIssues: true } });
+  });
+
+  it('keeps a legacy audit scheduled when an older client explicitly requests it alongside its domain', async () => {
+    getAppTaskTypeOverrides.mockResolvedValue({
+      simplify: { enabled: true, interval: '0 8 * * *', taskMetadata: { reviewer: 'fixture-a' } },
+    });
+    const built = await applyQualitySchedulePlan(appWith(NODE_SERVICE), {
+      taskTypes: ['code-simplification', 'simplify'], claimBetween: false,
+    });
+
+    const legacySlot = built.plan.slots.find(slot => slot.taskType === 'simplify');
+    const [, patches] = updateAppTaskTypeOverrides.mock.calls[0];
+    expect(patches.simplify).toMatchObject({
+      enabled: true, interval: legacySlot.cron, taskMetadata: { reviewer: 'fixture-a' },
+    });
   });
 
   it('records an override on a check selected although it does not apply, and clears it once it does', async () => {
