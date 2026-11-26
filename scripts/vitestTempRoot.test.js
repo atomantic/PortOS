@@ -13,6 +13,10 @@ import { isProcessAlive } from '../server/test/processAlive.js';
 // Vitest can cancel a wrapper before its async body reaches finally.
 const owned = ownTestBodies(it);
 afterAll(() => owned.drain());
+const SERVER_CONFIGS = Object.freeze({
+  'vitest.config.js': new URL('../server/vitest.config.js', import.meta.url),
+  'vitest.config.db.js': new URL('../server/vitest.config.db.js', import.meta.url),
+});
 
 describe('real workspace runner temp lifecycle', () => {
   const workspace = 'server';
@@ -29,7 +33,8 @@ describe('real workspace runner temp lifecycle', () => {
           const body = outcome === 'failure' ? "expect(true).toBe(false);"
             : outcome === 'leak' ? "writeFileSync(join(tmpdir(), 'fixture-leak'), 'unexpected');"
               : 'expect(true).toBe(true);';
-          const { args, options } = createVitestTempFixture(host, workspace, body, config);
+          const configUrl = SERVER_CONFIGS[config];
+          const { args, options } = createVitestTempFixture(host, workspace, body, configUrl);
           const result = spawnSync(process.execPath, args, options);
           expect(result.error).toBeUndefined();
           expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(outcome === 'success' ? 0 : 1);
@@ -92,7 +97,7 @@ describe('real workspace runner temp lifecycle', () => {
     recordTempRootOwner(host);
     let cleanupConfirmed = true;
     try {
-      await runWatchConfigRestart(host, 'server', ({ first, restarted, pid }) => {
+      await runWatchConfigRestart(host, 'server', new URL('../server/vitest.config.js', import.meta.url), ({ first, restarted, pid }) => {
         // The restart reused the pathname and the main process re-stamped it.
         expect(restarted.root).toBe(first.root);
         expect(restarted.owner.split(' ')[0]).toBe(String(pid));

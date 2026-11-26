@@ -20,7 +20,7 @@ for (const removalFailure of [false, true]) {
       const ready = join(host, 'ready');
       const resultPath = join(host, 'result.json');
       writeFileSync(join(host, 'keep'), 'unrelated');
-      const run = createVitestTempFixture(host, 'server', '');
+      const run = createVitestTempFixture(host, 'server', '', new URL('../../server/vitest.config.js', import.meta.url));
       const root = run.args[run.args.indexOf('--root') + 1];
       writeFileSync(join(root, 'vitest.setup.js'), `import ${JSON.stringify(new URL('../vitest.setup.js', import.meta.url).href)};`);
       writeFileSync(join(root, 'neighbor.test.js'), fixtureReadyFailureSource(ready));
