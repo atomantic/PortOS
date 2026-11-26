@@ -1,8 +1,17 @@
 import { join } from 'node:path';
+import { rm } from 'node:fs/promises';
 import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { pinPlatform } from '../lib/testHelper.js';
 import { slotstreamBinDir } from '../lib/slotstreamModels.js';
+import { getModelManifest, resetModelManifestCache } from './modelManifest.js';
+
+const { tempRoot, makeProxy, cleanup } = await vi.hoisted(async () => {
+  const { mockPathsDataRoot } = await import('../lib/mockPathsDataRoot.js');
+  return mockPathsDataRoot({ prefix: 'portos-local-runtime-setup-' });
+});
+vi.mock('../lib/fileUtils.js', async (importOriginal) => makeProxy(await importOriginal()));
+afterAll(cleanup);
 
 const probe = vi.hoisted(() => ({ probeOpenAiModels: vi.fn() }));
 vi.mock('../lib/openAiModelsProbe.js', () => probe);
@@ -131,7 +140,7 @@ beforeEach(() => {
   mtplx.startMtplxServer.mockResolvedValue({ success: true, endpoint: 'http://127.0.0.1:8000/v1' });
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.clearAllMocks();
   pathLookup.findCommandOnPath.mockReturnValue(null);
   lmStudio.isAppInstalled.mockReturnValue(false);
@@ -140,6 +149,8 @@ afterEach(() => {
   // The placement loop writes this on a Windows host so the rest of the run
   // resolves the detected directory; it must not leak into the next test.
   delete process.env.SGLANG_QWEN_PROJECT_DIR;
+  await rm(join(tempRoot, 'model-manifest.json'), { force: true });
+  resetModelManifestCache();
 });
 
 describe('describeRuntimeSetup', () => {
@@ -412,26 +423,66 @@ describe('runLocalRuntimeSetup', () => {
     // The other half of the fix: the button the checklist now offers actually
     // fetches the weights, so the user is not sent to a terminal.
     pathLookup.findCommandOnPath.mockReturnValue('/opt/homebrew/bin/mtplx');
-    // The cache is read by the START step, which runs AFTER the pull — so what
-    // it reports here is what the download just landed.
-    mtplxCache.listMtplxCachedModels
-      .mockResolvedValueOnce(cachedModels([{ repo_id: 'Example/Fresh', validation: { ok: true } }]));
+    mtplxCache.listMtplxCachedModels.mockResolvedValue(cachedModels([
+      { repo_id: 'Example/Partial', validation: { ok: false } },
+      { repo_id: 'Example/Fresh', validation: { ok: true }, has_runtime_contract: true },
+      { repo_id: 'Example/Existing', validation: { ok: true } },
+    ]));
+    streaming.runStreamingCommand.mockImplementationOnce(async (_binary, _args, onLine) => {
+      onLine('Downloading checkpoint files');
+      onLine('model: Example/Fresh');
+      return { success: true };
+    });
     probe.probeOpenAiModels
       .mockResolvedValueOnce(unreachable)
       .mockResolvedValueOnce(unreachable)
       .mockResolvedValueOnce(reachable(['mtplx']));
     const restore = pinPlatform('darwin');
 
-    const result = await runLocalRuntimeSetup('mtplx', { endpoint: 'http://127.0.0.1:8000/v1', action: 'pull-start' });
+    const beforePull = Date.now();
+    const emit = vi.fn();
+    const result = await runLocalRuntimeSetup('mtplx', { endpoint: 'http://127.0.0.1:8000/v1', action: 'pull-start', emit });
     restore();
 
     expect(streaming.runStreamingCommand).toHaveBeenCalledWith(
       '/opt/homebrew/bin/mtplx', ['pull'], expect.any(Function), expect.objectContaining({ splitRe: expect.any(RegExp) }),
     );
+    expect(emit).toHaveBeenCalledWith('Downloading checkpoint files');
     // The checkpoint the pull just landed is handed to the manager, so it does
     // not walk the same cache a second time for one start.
     expect(mtplx.startMtplxServer).toHaveBeenCalledWith(expect.objectContaining({ port: 8000, model: 'Example/Fresh' }));
     expect(result.success).toBe(true);
+    const manifest = await getModelManifest();
+    expect(manifest.reconciledAt).toBeNull();
+    expect(manifest.models).toEqual([expect.objectContaining({
+      id: 'mtplx:Example--Fresh',
+      name: 'Example/Fresh',
+      source: 'download',
+    })]);
+    expect(Date.parse(manifest.models[0].installedAt)).toBeGreaterThanOrEqual(beforePull);
+    expect(Date.parse(manifest.models[0].installedAt)).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('records the checkpoint before a subsequent start fails', async () => {
+    pathLookup.findCommandOnPath.mockReturnValue('/opt/homebrew/bin/mtplx');
+    probe.probeOpenAiModels.mockResolvedValue(unreachable);
+    mtplxCache.listMtplxCachedModels.mockResolvedValue(cachedModels([{ repo_id: 'Example/Downloaded', validation: { ok: true } }]));
+    const manifestAtStart = vi.fn();
+    mtplx.startMtplxServer.mockImplementation(async () => {
+      manifestAtStart(await getModelManifest());
+      throw new Error('Port is already in use');
+    });
+    const restore = pinPlatform('darwin');
+
+    const result = await runLocalRuntimeSetup('mtplx', { endpoint: 'http://127.0.0.1:8000/v1', action: 'pull-start' });
+    restore();
+
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('Port is already in use') });
+    expect(manifestAtStart).toHaveBeenCalledWith({
+      reconciledAt: null,
+      models: [expect.objectContaining({ id: 'mtplx:Example--Downloaded', source: 'download' })],
+    });
+    expect((await getModelManifest()).models).toHaveLength(1);
   });
 
   it('never downloads weights behind an explicit plain start', async () => {
@@ -460,7 +511,7 @@ describe('runLocalRuntimeSetup', () => {
     pathLookup.findCommandOnPath.mockReturnValue('/opt/homebrew/bin/mtplx');
     mtplxCache.listMtplxCachedModels
       .mockResolvedValueOnce(cachedModels([]))
-      .mockResolvedValueOnce(cachedModels([{ repo_id: 'Example/Fresh', validation: { ok: true } }]));
+      .mockResolvedValue(cachedModels([{ repo_id: 'Example/Fresh', validation: { ok: true } }]));
     probe.probeOpenAiModels
       .mockResolvedValueOnce(unreachable)
       .mockResolvedValueOnce(unreachable)
@@ -532,17 +583,30 @@ describe('runLocalRuntimeSetup', () => {
     expect(mtplxCache.listMtplxCachedModels).not.toHaveBeenCalled();
   });
 
-  it('stops at a failed download rather than starting a server that cannot serve', async () => {
-    streaming.runStreamingCommand.mockResolvedValue({ success: false, error: 'exit 1: connection reset' });
+  it.each([
+    ['failed', 'exit 1: connection reset'],
+    ['cancelled', 'cancelled'],
+  ])('neither records nor starts after a %s download', async (outcome, error) => {
+    let cancelled = false;
+    streaming.runStreamingCommand.mockImplementationOnce(async (_binary, _args, onLine, options) => {
+      cancelled = outcome === 'cancelled';
+      onLine('model: Example/Interrupted');
+      return options.isCancelled() || outcome === 'failed'
+        ? { success: false, error }
+        : { success: true };
+    });
     pathLookup.findCommandOnPath.mockReturnValue('/opt/homebrew/bin/mtplx');
     probe.probeOpenAiModels.mockResolvedValue(unreachable);
     const restore = pinPlatform('darwin');
 
-    const result = await runLocalRuntimeSetup('mtplx', { endpoint: 'http://127.0.0.1:8000/v1', action: 'pull-start' });
+    const result = await runLocalRuntimeSetup('mtplx', {
+      endpoint: 'http://127.0.0.1:8000/v1', action: 'pull-start', isCancelled: () => cancelled,
+    });
     restore();
 
     expect(mtplx.startMtplxServer).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ success: false, error: expect.stringContaining('connection reset') });
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining(error) });
+    expect((await getModelManifest()).models).toEqual([]);
   });
 
   it('announces the cached checkpoint once, not once per layer', async () => {

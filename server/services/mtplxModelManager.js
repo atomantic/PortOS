@@ -27,7 +27,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { assessDownloadPreflight, assertDownloadFits } from '../lib/downloadPreflight.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { modelStoreInventoryRow } from '../lib/modelInventory.js';
-import { listMtplxCachedModels } from '../lib/mtplxModels.js';
+import { listMtplxCachedModels, servableMtplxCachedModels } from '../lib/mtplxModels.js';
 import { recordModelInstall, recordModelUninstall } from './modelManifest.js';
 import { resolveMtplxBinary } from '../lib/mtplxRuntime.js';
 import { fetchRepoPublishedDates } from './huggingFaceMetadata.js';
@@ -204,6 +204,21 @@ export function cancelMtplxModelPull() {
   return true;
 }
 
+/** Record a successful pull under the checkpoint's MTPLX store identity. */
+export async function registerMtplxDownload(repo, models) {
+  // With no repo in the pull output, only an unambiguous usable cache entry
+  // can identify the default checkpoint.
+  if (!repo) {
+    const candidates = servableMtplxCachedModels(models === undefined ? (await listMtplxCachedModels()).models : models);
+    if (candidates.length !== 1) return;
+    repo = candidates[0].repo_id;
+  }
+  await recordModelInstall({
+    ...modelStoreInventoryRow({ backend: 'mtplx', key: mtplxCheckpointKey(repo), name: repo, detail: 'MTPLX checkpoint', sizeBytes: null }),
+    source: 'download',
+  });
+}
+
 /**
  * Download one MTP checkpoint into MTPLX's cache.
  *
@@ -237,12 +252,14 @@ export async function pullMtplxModel({ model = null, onProgress = () => {} } = {
     console.log(`⬇️  MTPLX pull started for ${label}`);
 
     const args = ['pull', ...(repo ? [repo] : []), '--progress-json'];
+    let checkpoint = repo;
     const result = await runStreamingCommand(
       binary,
       args,
       (line) => {
         if (!transfer.cancellable || controller.signal.aborted) return;
         const frame = parseMtplxPullFrame(line, repo);
+        if (frame?.event === 'result' && isMtplxRepoId(frame.model)) checkpoint = frame.model;
         // Upstream's terminal frames can arrive before the child exits. The
         // client clears the progress bar only when PortOS reports the outcome.
         if (frame && !['complete', 'error', 'result'].includes(frame.event)) onProgress(frame);
@@ -263,21 +280,10 @@ export async function pullMtplxModel({ model = null, onProgress = () => {} } = {
       return { success: false, model: repo, error: result.error };
     }
 
-    // Report what actually landed rather than what was asked for: an interrupted
-    // pull can exit 0 with an incomplete pack, and the cache listing is the only
-    // honest answer to "can this be served now".
-    const cache = await listMtplxCachedModels();
-    const cached = (cache.models || []).map((m) => m?.repo_id).filter(Boolean);
+    const { models } = await listMtplxCachedModels();
+    const cached = (models || []).map((model) => model?.repo_id).filter(Boolean);
+    await registerMtplxDownload(checkpoint, models);
     console.log(`✅ MTPLX pull complete for ${label} (${cached.length} checkpoint(s) cached)`);
-    // A pull lands in MTPLX's own store (see `mtplxCachePath`), which Models → Status
-    // inventories as the `mtplx` backend. A default pull has no repo to name,
-    // so use the cache listing to record what arrived.
-    for (const repoId of repo ? [repo] : cached) {
-      await recordModelInstall({
-        ...modelStoreInventoryRow({ backend: 'mtplx', key: mtplxCheckpointKey(repoId), name: repoId, detail: 'MTPLX checkpoint', sizeBytes: null }),
-        source: 'download',
-      });
-    }
     onProgress({ event: 'complete', model: repo, message: `${label} downloaded` });
     return { success: true, model: repo, cachedModels: cached };
   } finally {
