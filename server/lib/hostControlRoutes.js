@@ -50,6 +50,22 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/apps/:id/forge-auth/refresh/:jobId/events',
   // Raw backup archives export private records and credentials (#8772).
   'GET /api/backup/snapshots/:snapshotId/download',
+  // Household records, subject-scoped counts and account links expose private data.
+  'GET /api/privacy/subjects',
+  'GET /api/privacy/subjects/:id',
+  'GET /api/privacy/subjects/:id/consents',
+  'GET /api/privacy/status',
+  'GET /api/privacy/vault',
+  'GET /api/privacy/vault/:id',
+  'GET /api/privacy/logins',
+  'GET /api/privacy/orgs',
+  'GET /api/privacy/orgs/:id',
+  'GET /api/privacy/orgs/:id/holdings',
+  'GET /api/privacy/social-account-links',
+  'GET /api/privacy/changes',
+  'GET /api/privacy/changes/:id',
+  'GET /api/privacy/broker-cases',
+  'GET /api/privacy/scan/status',
   // Broker evidence and digest search URLs reveal sealed identity data (#18851).
   'GET /api/privacy/broker-cases/:id/evidence',
   'GET /api/privacy/optout/digest',
@@ -75,6 +91,8 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/browser/pages',
   'GET /api/browser/downloads/:name',
   'GET /api/browser/logs',
+  // Lists saved website-login metadata across household subjects.
+  'GET /api/browser/vault/logins',
   'GET /api/harnesses/update-reference',
   // The private FableLoom package an export produced.
   'GET /api/fableloom/:id/export/:jobId/download',
