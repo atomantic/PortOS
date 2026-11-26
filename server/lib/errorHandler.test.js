@@ -271,7 +271,7 @@ describe('errorHandler.js', () => {
       ['string error', 'string error'],
       [new Error('plain error'), 'plain error'],
     ])('responds with a 500 envelope and emits telemetry for %s', (thrown, message) => {
-      const io = { emit: vi.fn() };
+      const io = recordingOperatorIo();
       const { req, res } = makeReqRes(io);
       const next = vi.fn();
       using errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
