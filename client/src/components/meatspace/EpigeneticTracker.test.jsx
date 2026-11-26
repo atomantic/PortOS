@@ -88,7 +88,7 @@ describe('EpigeneticTracker delete (#17354)', () => {
     render(<EpigeneticTracker markerCategories={CATEGORIES} />);
     await screen.findByText('Tracking (1)');
     fireEvent.click(screen.getByRole('button', { name: /Omega-3/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Omega-3' }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
   };
 

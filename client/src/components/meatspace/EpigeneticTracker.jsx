@@ -366,7 +366,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
                         />
                       ) : (
                         <button
-                          aria-label="Delete"
+                          aria-label={`Delete ${intervention.name}`}
                           onClick={() => requestDelete(key)}
                           className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-2 py-1 bg-port-error/10 border border-port-error/20 rounded text-port-error hover:bg-port-error/20"
                         >

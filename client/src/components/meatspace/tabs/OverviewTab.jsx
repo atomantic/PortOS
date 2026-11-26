@@ -16,6 +16,7 @@ import ProvenanceChip from '../../ui/ProvenanceChip';
 import { useSocketResource } from '../../../hooks/useSocketResource';
 import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard.js';
 import { formatWeight, formatPercent, formatDateShort, formatCount } from '../../../utils/formatters';
+import LoadFailureNotice from '../LoadFailureNotice';
 
 function HealthTile({ icon: Icon, iconColor, label, metrics, onClick }) {
   return (
@@ -168,7 +169,7 @@ function useOverviewResource(resource, fetchResource) {
 }
 
 export default function OverviewTab() {
-  const { data, loading } = useOverviewResource('overview', getMeatspaceOverview);
+  const { data, loading, refetch: refetchOverview } = useOverviewResource('overview', getMeatspaceOverview);
   const { data: alcohol } = useOverviewResource('alcohol', getAlcoholSummary);
   const { data: body } = useOverviewResource('body', getBodyHistory);
   const { data: healthBody } = useOverviewResource('healthBody', fetchHealthBody);
@@ -187,7 +188,7 @@ export default function OverviewTab() {
   }
 
   if (!data) {
-    return <p className="text-gray-500">Failed to load overview data.</p>;
+    return <LoadFailureNotice message="Could not load overview data. Retry." onRetry={refetchOverview} />;
   }
 
   const { deathClock, lev, summary } = data;
@@ -212,7 +213,7 @@ export default function OverviewTab() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 bg-port-card border border-port-border rounded-xl p-4">
           {deathClock?.error ? (
-            <p className="text-port-warning">{deathClock.error}</p>
+            <p role="alert" className="text-port-warning">{deathClock.error}</p>
           ) : (
             <CompactCountdown
               deathDate={deathClock?.deathDate}

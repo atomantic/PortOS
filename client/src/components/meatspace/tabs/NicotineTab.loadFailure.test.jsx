@@ -55,10 +55,10 @@ describe('NicotineTab history load', () => {
 it('sends the rendered event identity when editing and deleting a history row', async () => {
   getDailyNicotine.mockResolvedValue([{ date: '2024-06-01', nicotine: { items: [{ id: 'event-id', product: 'Example', mgPerUnit: 3, count: 1 }] } }]);
   render(<NicotineTab />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Edit', exact: true }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit Example entry for 2024-06-01', exact: true }));
   fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true }));
   await waitFor(() => expect(updateNicotineEntry).toHaveBeenCalledWith('2024-06-01', 0, expect.objectContaining({ id: 'event-id' })));
-  fireEvent.click(await screen.findByRole('button', { name: 'Delete', exact: true }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Delete Example entry for 2024-06-01', exact: true }));
   fireEvent.click(screen.getByRole('button', { name: 'Remove', exact: true }));
   await waitFor(() => expect(removeNicotineEntry).toHaveBeenCalledWith('2024-06-01', 0, 'event-id'));
 });
@@ -92,7 +92,7 @@ it('applies an added and a removed product button in place without re-reading th
   await waitFor(() => expect(addCustomNicotineProduct).toHaveBeenCalled());
   expect(await screen.findByText('Sample Gum')).toBeTruthy();
 
-  fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0]);
+  fireEvent.click(screen.getAllByRole('button', { name: 'Delete Example Pouch' })[0]);
   fireEvent.click(screen.getByRole('button', { name: 'Remove', exact: true }));
   await waitFor(() => expect(removeCustomNicotineProduct).toHaveBeenCalledWith(0));
   await waitFor(() => expect(screen.queryByText('Example Pouch')).toBeNull());
@@ -139,7 +139,7 @@ it('leaves the nicotine editor open when the update rejects', async () => {
   }]);
   updateNicotineEntry.mockRejectedValueOnce(new Error('boom'));
   render(<NicotineTab />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Edit', exact: true }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit Example entry for 2024-06-01', exact: true }));
   fireEvent.change(screen.getByLabelText('Entry product'), { target: { value: 'Corrected' } });
   const readsBeforeSave = getDailyNicotine.mock.calls.length;
   fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true }));

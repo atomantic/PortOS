@@ -149,7 +149,7 @@ export default function HealthTab() {
 
       <section className="border border-port-border rounded-lg overflow-hidden">
         <div className="px-4 py-3 border-b border-port-border bg-port-bg/40">
-          <h3 className="text-sm font-medium text-white">Workouts</h3>
+          <h2 className="text-sm font-medium text-white">Workouts</h2>
         </div>
         {workoutsFailed ? (
           <div className="p-3">

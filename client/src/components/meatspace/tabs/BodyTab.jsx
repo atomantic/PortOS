@@ -102,7 +102,7 @@ export default function BodyTab() {
       <div>
         <div className="flex items-center gap-2 mb-3">
           <Scale size={18} className="text-port-accent" />
-          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Body Composition</h3>
+          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Body Composition</h2>
         </div>
         <BodyCompChart />
       </div>
@@ -115,9 +115,9 @@ export default function BodyTab() {
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <Eye size={18} className="text-port-accent" />
-            <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
+            <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
               Eye Prescriptions ({eyeLoading || eyeFailed ? '...' : eyeExams.length})
-            </h3>
+            </h2>
           </div>
           {!showEyeForm && editingEyeId == null && (
             <button
@@ -131,9 +131,9 @@ export default function BodyTab() {
 
         {(showEyeForm || editingEyeId != null) && (
           <div className="bg-port-card border border-port-border rounded-xl p-4 mb-3">
-            <h4 className="text-sm font-medium text-gray-300 mb-3">
+            <h3 className="text-sm font-medium text-gray-300 mb-3">
               {editingEyeId != null ? 'Edit Eye Exam' : 'New Eye Exam'}
-            </h4>
+            </h3>
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 mb-3">
               <div className="col-span-2 sm:col-span-4 lg:col-span-1">
                 <label htmlFor="eye-date" className="text-xs text-gray-500">Date</label>
@@ -211,14 +211,14 @@ export default function BodyTab() {
             <table className="w-full text-sm min-w-[640px]">
               <thead>
                 <tr className="text-xs text-gray-500 uppercase border-b border-port-border">
-                  <th className="text-left py-2 px-3">Date</th>
-                  <th className="text-right py-2 px-2">L SPH</th>
-                  <th className="text-right py-2 px-2">L CYL</th>
-                  <th className="text-right py-2 px-2">L AXIS</th>
-                  <th className="text-right py-2 px-2">R SPH</th>
-                  <th className="text-right py-2 px-2">R CYL</th>
-                  <th className="text-right py-2 px-2">R AXIS</th>
-                  <th className="w-16"></th>
+                  <th scope="col" className="text-left py-2 px-3">Date</th>
+                  <th scope="col" className="text-right py-2 px-2">L SPH</th>
+                  <th scope="col" className="text-right py-2 px-2">L CYL</th>
+                  <th scope="col" className="text-right py-2 px-2">L AXIS</th>
+                  <th scope="col" className="text-right py-2 px-2">R SPH</th>
+                  <th scope="col" className="text-right py-2 px-2">R CYL</th>
+                  <th scope="col" className="text-right py-2 px-2">R AXIS</th>
+                  <th scope="col" className="w-16"><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
               <tbody>
@@ -237,7 +237,7 @@ export default function BodyTab() {
                           <button
                             onClick={() => startEditEye(exam)}
                             className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-accent transition-colors"
-                            title="Edit" aria-label="Edit"
+                            title="Edit" aria-label={`Edit eye exam for ${exam.date}`}
                           >
                             <Pencil size={12} />
                           </button>
@@ -253,7 +253,7 @@ export default function BodyTab() {
                             <button
                               onClick={() => requestDelete(exam.id)}
                               className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-error transition-colors"
-                              title="Delete" aria-label="Delete"
+                              title="Delete" aria-label={`Delete eye exam for ${exam.date}`}
                             >
                               <Trash2 size={12} />
                             </button>

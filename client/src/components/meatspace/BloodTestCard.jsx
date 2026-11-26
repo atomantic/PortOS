@@ -30,7 +30,7 @@ export default function BloodTestCard({ test, confirming = false, onRequestDelet
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-4">
       <div className="flex items-center justify-between gap-2 mb-3">
-        <h4 className="text-sm font-medium text-gray-300">{date}</h4>
+        <h3 className="text-sm font-medium text-gray-300">{date}</h3>
         {test.id && onRequestDelete && (
           confirming ? (
             <ConfirmButtonPair
@@ -55,7 +55,7 @@ export default function BloodTestCard({ test, confirming = false, onRequestDelet
       <div className="space-y-3">
         {Object.entries(categories).map(([category, items]) => (
           <div key={category}>
-            <h5 className="text-xs font-medium text-gray-500 uppercase mb-1">{category}</h5>
+            <h4 className="text-xs font-medium text-gray-500 uppercase mb-1">{category}</h4>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
               {items.map(item => (
                 <div key={item.key} className="flex flex-wrap items-baseline gap-x-2 gap-y-1 px-2 py-1 rounded bg-port-bg/50">

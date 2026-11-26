@@ -63,9 +63,9 @@ export default function ExportTab() {
       <div className="print:hidden flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <FileText size={18} className="text-port-accent" />
-          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
+          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
             Clinician Summary
-          </h3>
+          </h2>
         </div>
         <div className="flex gap-2">
           <button
@@ -134,7 +134,7 @@ export default function ExportTab() {
             report.bloodTests.map(test => (
               <div key={test.date} className="space-y-3 print:break-inside-avoid">
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                  <h4 className="text-base font-semibold text-gray-200 print:text-black">{test.date}</h4>
+                  <h3 className="text-base font-semibold text-gray-200 print:text-black">{test.date}</h3>
                   {test.outOfRange.length > 0 && (
                     <span className="text-xs text-port-error print:text-red-700">
                       {test.outOfRange.length} marker{test.outOfRange.length === 1 ? '' : 's'} out of range
@@ -143,9 +143,9 @@ export default function ExportTab() {
                 </div>
                 {test.categories.map(({ category, markers }) => (
                   <div key={category} className="overflow-x-auto print:overflow-visible">
-                    <h5 className="text-xs font-medium text-gray-500 print:text-gray-700 uppercase mb-1">
+                    <h4 className="text-xs font-medium text-gray-500 print:text-gray-700 uppercase mb-1">
                       {category}
-                    </h5>
+                    </h4>
                     <table className="w-full text-sm border-collapse">
                       <thead>
                         <tr className="text-left text-xs text-gray-600 print:text-gray-700">
@@ -185,8 +185,8 @@ export default function ExportTab() {
 
 function SectionTitle({ children }) {
   return (
-    <h3 className="text-sm font-medium text-gray-400 print:text-black uppercase tracking-wider mb-3 border-b border-port-border print:border-gray-400 pb-1">
+    <h2 className="text-sm font-medium text-gray-400 print:text-black uppercase tracking-wider mb-3 border-b border-port-border print:border-gray-400 pb-1">
       {children}
-    </h3>
+    </h2>
   );
 }
