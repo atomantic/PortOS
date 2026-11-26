@@ -36,10 +36,10 @@ describe('shot intent in the treatment and scene board', () => {
     fireEvent.change(screen.getAllByLabelText('End (s)')[1], { target: { value: '2' } });
     fireEvent.change(screen.getByLabelText('Purpose'), { target: { value: 'The listener chooses to return' } });
     fireEvent.click(screen.getByText('Save shot intent'));
-    await waitFor(() => expect(screen.queryByText('Save shot intent')).toBeNull());
+    const editAgain = await screen.findByText('Edit shot intent');
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(onSave.mock.calls[0][0]).toMatchObject({ shotDirections: [{ sceneId: 's', actionContract: { ...contract, purpose: 'The listener chooses to return' } }] });
-    fireEvent.click(screen.getByText('Edit shot intent'));
+    fireEvent.click(editAgain);
     fireEvent.click(screen.getByText('Clear shot intent'));
     await waitFor(() => expect(onSave).toHaveBeenLastCalledWith({ shotDirections: [{ sceneId: 's', actionContract: null }] }));
   });
