@@ -53,9 +53,6 @@ vi.mock('../taskSchedule.js', async (importActual) => {
       : actual.getTaskInterval(key))),
   };
 });
-// emitOnDemandEmpty's gh-health read spawns `gh api rate_limit` for real. Stub it
-// so the transient-verdict tests assert OUR branching, not the machine's gh.
-const ghHealth = vi.fn(async () => ({ status: 'ok', ok: true, detail: null, remedy: null }));
 const detectorMocks = vi.hoisted(() => ({
   detectIdleLeftoverBranches: vi.fn(async () => []),
   formatUserActionDetectorBlock: vi.fn(() => ''),
@@ -69,11 +66,6 @@ vi.mock('../userActionDetectors.js', () => ({
   formatUserActionDetectorBlock: (...args) => detectorMocks.formatUserActionDetectorBlock(...args),
 }));
 
-vi.mock('../github.js', async (importActual) => ({
-  ...(await importActual()),
-  checkGhHealth: (...a) => ghHealth(...a),
-}));
-
 import {
   selectDryRunAutoApproved,
   admitAutoApprovedSystemTasks,
@@ -82,14 +74,11 @@ import {
   isCooldownExemptTask,
 } from './cosTaskGenerator.js';
 import {
-  shouldParkUnchangedPerpetualWork,
-  emitOnDemandEmpty,
   applyOnDemandConsent,
   isConfiguredApprovalRequired,
   buildImprovementDedupSets,
   queueDueInstallWideImprovementTasks,
   prepareManagedAppImprovementTask,
-  recordDeferredPerpetualDispatch,
   resolveTaskInputHook,
   resolveUserActionDeliveryBlock,
   applyUserActionDeliveryMode,
@@ -101,7 +90,6 @@ import { resolveConfidenceApproval } from './cosImprovementPolicy.js';
 import * as cosTaskPreStepBlocks from './cosTaskPreStepBlocks.js';
 import { resolveIssueExcludeLabelsBlock } from './cosTaskPreStepBlocks.js';
 import { normalizeWorkItemRef, buildTargetWorkItemBlock, buildPrefetchedIssueContextBlock, buildClaimOverrideContextBlock, buildLocalReviewerInstructions } from './cosTaskPrompts.js';
-import { cosEvents } from './cosEvents.js';
 import { DEFAULT_TASK_INTERVALS, getTaskInterval } from '../taskSchedule.js';
 import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
 import { createDequeueCapacity } from './cosDequeueAdmission.js';
@@ -149,28 +137,6 @@ it('assembles the install-wide user-action review from its input hook without re
   } finally {
     vi.doUnmock('../taskTypeHooks.js');
   }
-});
-
-describe('claim drain convergence', () => {
-  it('parks a successful no-progress run when the actionable set is unchanged', () => {
-    const detection = { actionable: true, signature: '[101,202]' };
-    expect(shouldParkUnchangedPerpetualWork(detection, '[101,202]', 2)).toBe(true);
-    expect(shouldParkUnchangedPerpetualWork(detection, '[101,202]', 1)).toBe(false);
-  });
-
-  it('continues when the candidate set changed or has no progress identity', () => {
-    expect(shouldParkUnchangedPerpetualWork({ actionable: true, signature: '[202]' }, '[101,202]', 2)).toBe(false);
-    expect(shouldParkUnchangedPerpetualWork({ actionable: true }, '[101,202]', 2)).toBe(false);
-    expect(shouldParkUnchangedPerpetualWork({ actionable: false, signature: '[]' }, '[]', 2)).toBe(false);
-  });
-
-  it('does not confuse tracker-specific signatures', () => {
-    expect(shouldParkUnchangedPerpetualWork(
-      { actionable: true, signature: '{"taskType":"claim-issue-gitlab","candidates":"[1]"}' },
-      '{"taskType":"claim-issue","candidates":"[1]"}',
-      2
-    )).toBe(false);
-  });
 });
 
 describe('claim reviewer resolution', () => {
@@ -756,212 +722,6 @@ describe('admitPendingUserTasks', () => {
   });
 });
 
-// Layered Intelligence's on-demand feedback bridge (emitHandlerBackedOnDemand) was
-// removed when LI migrated off the handler-backed path onto a normal agent task
-// (see taskTypeHooks.js + layeredIntelligenceHooks.js). A "Run now" now generates a
-// visible agent task (or the shared emitOnDemandEmpty no-dispatch feedback when the
-// buildTaskInput hook skips), and the filing outcome surfaces via the agent + the
-// app's lastRun bookkeeping — so the bespoke bridge is no longer needed.
-
-describe('emitOnDemandEmpty', () => {
-  // Minimal taskScheduleMod stub: no park (→ 'idle' for a non-perpetual type),
-  // and the INTERVAL_TYPES enum the perpetual check reads.
-  const stubMod = {
-    getPerpetualParkInfo: async () => null,
-    INTERVAL_TYPES: { ON_DEMAND: 'on-demand', CRON: 'cron' }
-  };
-
-  it("emits an 'idle' event with reason null for a non-LI task type", async () => {
-    const events = [];
-    const handler = (d) => events.push(d);
-    cosEvents.on('schedule:on-demand-empty', handler);
-    try {
-      await emitOnDemandEmpty({
-        taskScheduleMod: stubMod,
-        request: { id: 'req-1', taskType: 'pr-watcher' },
-        targetApp: { id: 'app-1', name: 'App One' },
-        taskConfig: { type: 'cron', cronExpression: '0 7 * * *' }
-      });
-    } finally {
-      cosEvents.off('schedule:on-demand-empty', handler);
-    }
-    expect(events).toHaveLength(1);
-    // A non-LI task type never reads a last-run reason (that read is LI-only).
-    expect(events[0]).toMatchObject({ taskType: 'pr-watcher', outcome: 'idle', reason: null });
-  });
-
-  it.each([
-    ['manual', { shouldRun: false, reason: 'on-demand-only' }, null],
-    ['disabled app', { shouldRun: false, reason: 'disabled-for-app' }, null],
-    ['disabled task', { shouldRun: false, reason: 'disabled' }, null],
-    ['app cron', { shouldRun: false, reason: 'cron-cooldown', nextRunAt: '2999-01-02T00:00:00Z' }, '2999-01-02T00:00:00Z'],
-  ])('emits only the actual automatic retry for %s', async (_name, readiness, expected) => {
-    const events = [];
-    const handler = event => events.push(event);
-    cosEvents.on('schedule:on-demand-empty', handler);
-    const shouldRunTask = vi.fn(async () => readiness);
-    try {
-      await emitOnDemandEmpty({
-        taskScheduleMod: { ...stubMod, shouldRunTask,
-          getPerpetualParkInfo: async () => ({ parkedUntil: '2999-01-01T00:00:00Z', parkReason: 'branches-blocked', parkCounts: { heldDetached: 1 }, parkSkipCauses: { 'worktree-locked': 1 } }) },
-        request: { id: 'retry-test', taskType: 'branch-reconcile' },
-        targetApp: { id: 'app-1', name: 'Example App' },
-        taskConfig: { enabled: true, type: 'on-demand', perpetual: false }
-      });
-    } finally { cosEvents.off('schedule:on-demand-empty', handler); }
-    expect(shouldRunTask).toHaveBeenCalledWith('branch-reconcile', 'app-1');
-    expect(events[0]).toMatchObject({ outcome: 'parked', nextAutoRecheckAt: expected,
-      counts: { heldDetached: 1 }, skipCauses: { 'worktree-locked': 1 } });
-  });
-
-  // Default: gh is healthy, so no test inherits a previous one's stubbed fault.
-  beforeEach(() => {
-    ghHealth.mockReset();
-    ghHealth.mockResolvedValue({ status: 'ok', ok: true, detail: null, remedy: null });
-  });
-
-  const emitTransient = async (taskType, skip = null, perpetual = true) => {
-    const events = [];
-    const handler = (d) => events.push(d);
-    cosEvents.on('schedule:on-demand-empty', handler);
-    try {
-      await emitOnDemandEmpty({
-        taskScheduleMod: stubMod,
-        request: { id: 'req-2', taskType },
-        targetApp: { id: 'app-1', name: 'App One' },
-        taskConfig: { type: 'on-demand', perpetual },
-        skip
-      });
-    } finally {
-      cosEvents.off('schedule:on-demand-empty', handler);
-    }
-    return events[0];
-  };
-
-  it('emits no forge block when the gate recorded no transient verdict', async () => {
-    // Nothing recorded ⇒ we cannot name the fault, so the client keeps the
-    // generic "try again shortly" copy rather than guessing at a CLI.
-    expect(await emitTransient('claim-issue')).toMatchObject({ outcome: 'transient', forge: null });
-  });
-
-  it('treats a one-shot branch sweep as detector-driven for transient feedback', async () => {
-    const skip = { gate: 'perpetual-work', cli: null, reason: 'probe-failed', remedy: null, detail: null };
-    expect(await emitTransient('branch-reconcile', skip, false)).toMatchObject({ taskType: 'branch-reconcile', outcome: 'transient', forge: null });
-  });
-
-  it('skips the gh probe for a non-gh transient verdict, so a glab/git fault never toasts a gh remedy', async () => {
-    // branch-reconcile and quota-burn go transient over git / provider faults with
-    // no forge at all (cli: null); claim-issue-gitlab fails on glab. None of them
-    // should be attributed to gh — the pre-fix suffix check got all three wrong.
-    for (const [taskType, cli] of [['claim-issue-gitlab', 'glab'], ['branch-reconcile', null], ['quota-burn', null]]) {
-      const skip = { gate: 'perpetual-work', cli, reason: 'probe-failed', remedy: null, detail: null };
-      expect(await emitTransient(taskType, skip)).toMatchObject({ outcome: 'transient', forge: null });
-    }
-    expect(ghHealth).not.toHaveBeenCalled();
-  });
-
-  it('names gh + its remedy when a gh verdict meets a gh that is broken for good', async () => {
-    ghHealth.mockResolvedValueOnce({
-      status: 'unreachable', ok: false, detail: 'bad file descriptor', remedy: 'Allow the gh binary outbound.'
-    });
-    expect(await emitTransient('claim-issue', { gate: 'perpetual-work', cli: 'gh', reason: 'gh-list-failed', remedy: null, detail: null })).toMatchObject({
-      outcome: 'transient',
-      forge: { cli: 'gh', remedy: 'Allow the gh binary outbound.' }
-    });
-  });
-
-  it('stays generic when gh itself is healthy — that failure really was a blip', async () => {
-    expect(await emitTransient('claim-issue', { gate: 'perpetual-work', cli: 'gh', reason: 'gh-list-failed', remedy: null, detail: null })).toMatchObject({ forge: null });
-  });
-
-  it('passes a remedy the detector already named straight through, without asking gh', async () => {
-    // A per-repo permission the token lacks passes checkGhHealth's global-auth
-    // probe, so consulting it would drop the remedy this channel exists to carry.
-    expect(await emitTransient('claim-issue', { gate: 'perpetual-work', cli: 'gh', reason: 'gh-list-failed', detail: null, remedy: 'Grant the token collaborator read.' })).toMatchObject({
-      forge: { cli: 'gh', remedy: 'Grant the token collaborator read.' }
-    });
-    expect(ghHealth).not.toHaveBeenCalled();
-  });
-
-  it('ignores a skip from a different gate, so only the work detector\'s verdict names a forge fault', async () => {
-    ghHealth.mockResolvedValue({ status: 'not-installed', ok: false, detail: null, remedy: 'Install gh.' });
-    expect(await emitTransient('claim-issue', { gate: 'precondition', cli: 'gh', reason: null, remedy: null, detail: null })).toMatchObject({ forge: null });
-    expect(ghHealth).not.toHaveBeenCalled();
-  });
-
-  // The streak counter itself is exercised through prepare in cosTaskGenerator.providerPin.test.js.
-
-  it('reads the latest layered-intelligence skip reason only for an idle run', async () => {
-    const app = { id: 'app-1', layeredIntelligence: { lastRunReason: 'stale reason' } };
-    const getApp = vi.spyOn(apps, 'getAppById').mockResolvedValue({
-      id: app.id, layeredIntelligence: { lastRunReason: 'Choose a CLI provider' },
-    });
-    const listener = vi.fn();
-    cosEvents.on('schedule:on-demand-empty', listener);
-    try {
-      for (const [taskType, perpetual] of [['layered-intelligence', false], ['security', false], ['layered-intelligence', true]]) {
-        await emitOnDemandEmpty({
-          taskScheduleMod: { getPerpetualParkInfo: async () => null }, targetApp: app,
-          request: { id: 'request', taskType }, taskConfig: { perpetual },
-        });
-      }
-      expect(listener.mock.calls.map(([event]) => [event.outcome, event.reason])).toEqual([
-        ['idle', 'Choose a CLI provider'], ['idle', null], ['transient', null],
-      ]);
-      expect(getApp).toHaveBeenCalledExactlyOnceWith(app.id);
-    } finally {
-      cosEvents.off('schedule:on-demand-empty', listener);
-      getApp.mockRestore();
-    }
-  });
-
-  it("surfaces the pr-reviewer preflight's skip reason on an idle outcome", async () => {
-    const persist = vi.spyOn(taskStore, 'addTask').mockResolvedValue({ id: 'diagnostic' });
-    const events = [];
-    const handler = (d) => events.push(d);
-    cosEvents.on('schedule:on-demand-empty', handler);
-    try {
-      await emitOnDemandEmpty({
-        taskScheduleMod: stubMod,
-        request: { id: 'req-pr-reviewer', taskType: 'pr-reviewer' },
-        targetApp: { id: 'app-1', name: 'PortOS' },
-        taskConfig: { type: 'on-demand', perpetual: false },
-        skip: { gate: 'security-preflight', reason: 'security-guard-not-ready', cli: null, remedy: null, detail: null }
-      });
-    } finally {
-      cosEvents.off('schedule:on-demand-empty', handler);
-    }
-    expect(events[0]).toMatchObject({ taskType: 'pr-reviewer', outcome: 'idle', reason: 'security-guard-not-ready' });
-    expect(persist).toHaveBeenCalledWith(expect.objectContaining({
-      status: 'completed',
-      metadata: expect.objectContaining({ preflightFailure: 'security-guard-not-ready', note: expect.stringContaining('before an agent started') }),
-    }), 'internal', { raw: true, suppressDequeue: true });
-    persist.mockRestore();
-  });
-
-  it('reports no pr-reviewer reason when the skip came from a later gate or there was none', async () => {
-    const reasonFor = async (skip) => {
-      const events = [];
-      const handler = (d) => events.push(d);
-      cosEvents.on('schedule:on-demand-empty', handler);
-      try {
-        await emitOnDemandEmpty({
-          taskScheduleMod: stubMod,
-          request: { id: 'req-b', taskType: 'pr-reviewer' },
-          targetApp: { id: 'app-1', name: 'PortOS' },
-          taskConfig: { type: 'on-demand', perpetual: false },
-          skip
-        });
-      } finally {
-        cosEvents.off('schedule:on-demand-empty', handler);
-      }
-      return events[0].reason;
-    };
-    expect(await reasonFor(null)).toBeNull();
-    expect(await reasonFor({ gate: 'precondition', reason: 'ignored', cli: null, remedy: null, detail: null })).toBeNull();
-  });
-});
-
 describe('buildImprovementDedupSets (#2614 — failure-blocked tasks occupy their slot)', () => {
   const liTask = (over = {}, meta = {}) => ({
     id: 'sys-t1',
@@ -1323,36 +1083,6 @@ describe('perpetual drain defaults', () => {
     for (const taskType of ['claim-issue', 'claim-work', 'plan-task']) {
       expect(DEFAULT_TASK_INTERVALS[taskType].drainDispatchCap).toBeUndefined();
     }
-  });
-});
-
-/**
- * recordDeferredPerpetualDispatch used to be keyed on the GENERATOR's task
- * object via a WeakMap — a caller that recorded against any other object (the
- * store's re-wrapped multi-line-description task, a clone, a stub) missed
- * silently. The record is now a plain `{ taskType, appId, signature }` value
- * threaded through the return, so recording no longer depends on which
- * task-object variant the caller happens to be holding (#6871). The
- * admission-site behavior (a re-wrapped addTask result still gets recorded; a
- * duplicate result records nothing) is pinned at the boundary in
- * onDemandDrain.test.js — this is the helper's own direct contract.
- */
-describe('recordDeferredPerpetualDispatch (#6871)', () => {
-  it('spends the budget from the record, independent of any task object', async () => {
-    const recordPerpetualDispatch = vi.fn(async () => 1);
-    const pendingPerpetualDispatch = { taskType: 'code-quality', appId: 'app-1', signature: 'sig-abc' };
-
-    const recorded = await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, { recordPerpetualDispatch });
-
-    expect(recorded).toBe(true);
-    expect(recordPerpetualDispatch).toHaveBeenCalledWith('code-quality', 'app-1', 'sig-abc');
-  });
-
-  it('is a no-op when there is nothing to record', async () => {
-    const recordPerpetualDispatch = vi.fn(async () => 1);
-
-    expect(await recordDeferredPerpetualDispatch(null, { recordPerpetualDispatch })).toBe(false);
-    expect(recordPerpetualDispatch).not.toHaveBeenCalled();
   });
 });
 
