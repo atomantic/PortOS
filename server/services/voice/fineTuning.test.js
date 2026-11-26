@@ -11,7 +11,7 @@ let voiceProfilesRoot = '';
 const queryMock = vi.fn();
 
 // Both overrides default to null = "use the real thing". The runner's own
-// publication contract is covered in scripts/qwen3_tts_runner.test.js; these
+// publication contract is covered in scripts/ml/qwen3_tts_runner.test.js; these
 // lifecycle cases script its stdout frames instead of training a model.
 let spawnOverride = null;
 let runtimeOverride = null;

@@ -388,7 +388,7 @@ describe('planTestMemo and recordTestMemo', () => {
   });
 
   it('runs the CTC contract in strict related CI even when a permissive verdict is available', () => {
-    const test = 'scripts/align_lyrics_ctc.test.js';
+    const test = 'scripts/ml/align_lyrics_ctc.test.js';
     const source = 'server/lib/testHelper.js';
     const result = plan({
       repoRoot: repoRootDir, memoDir: 'unused', mode: 'related', repoFiles: [test], repoSources: [source],
@@ -1200,7 +1200,7 @@ describe('planTestMemo and recordTestMemo', () => {
       'scripts/setup-voice.ps1.test.js': 12.3,
       'server/routes/musicVideoDcp.test.js': 10.1,
       'scripts/vitestTempRoot.test.js': 18.7,
-      'scripts/generate_ltx2.test.js': 19.4,
+      'scripts/ml/generate_ltx2.test.js': 19.4,
       'server/lib/workTracker.trackerInstructions.test.js': 0.4,
       'server/services/databaseMaintenanceCutover.test.js': 24.7,
       'server/services/creativeDirector/videoAssembly.test.js': 6.1,

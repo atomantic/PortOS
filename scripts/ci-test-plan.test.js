@@ -131,7 +131,7 @@ it('selects checkout-cache contracts only in their installed-dependency runners'
   ];
   const client = [
     'ecosystem.config.cjs', 'client/package.json', 'client/package-lock.json',
-    'client/vite.config.js', 'client/vite.buildEnv.js', 'client/vite.chunkGroups.js',
+    'client/vite.config.js', 'lib/viteBuildEnv.js', 'client/vite.chunkGroups.js',
     'client/vitest.config.js', 'client/src/test/timeouts.js',
     'scripts/dev-start.js', 'scripts/publish-client-build.js',
     'scripts/lib/envFile.cjs', 'scripts/lib/databaseSettings.cjs',
@@ -1100,10 +1100,10 @@ describe('CI test impact planner', () => {
   it('routes always-run selectors to the runner that globs them', () => {
     expect(splitByRunner([
       'server/services/taskPromptDefaults.test.js',
-      'scripts/node-version-drift.guard.test.js',
+      'server/test/guards/repo.guard.test.js',
       'client/src/test/guards/a11y.guard.test.js',
     ])).toEqual({
-      server: ['server/services/taskPromptDefaults.test.js', 'scripts/node-version-drift.guard.test.js'],
+      server: ['server/services/taskPromptDefaults.test.js', 'server/test/guards/repo.guard.test.js'],
       client: ['client/src/test/guards/a11y.guard.test.js'],
     });
   });
@@ -1598,13 +1598,13 @@ describe('CI test impact planner', () => {
       ...TRACKED,
       'scripts/ml/generate_ltx2.py',
       'scripts/ml/_runner_common.py',
-      'scripts/generate_ltx2.test.js',
+      'scripts/ml/generate_ltx2.test.js',
       'server/services/videoGen/runtimes.test.js',
       'client/src/lib/videoRenderPhase.test.js',
     ];
     const pathContractTests = {
       'scripts/ml/_runner_common.py': [
-        'scripts/generate_ltx2.test.js',
+        'scripts/ml/generate_ltx2.test.js',
         'server/services/videoGen/runtimes.test.js',
         'client/src/lib/videoRenderPhase.test.js',
         'server/lib/deleted.test.js',
@@ -1623,7 +1623,7 @@ describe('CI test impact planner', () => {
       db: false,
     });
     expect(plan.server.files).toEqual(expect.arrayContaining([
-      'scripts/generate_ltx2.test.js',
+      'scripts/ml/generate_ltx2.test.js',
       'server/services/videoGen/runtimes.test.js',
       'server/services/taskPromptDefaults.test.js',
     ]));
@@ -1638,7 +1638,7 @@ describe('CI test impact planner', () => {
     });
     expect(mixed.reason).toBe('Vitest related-test fallback');
     expect(mixed.server).toMatchObject({ mode: 'related', sources: ['server/services/auth.js'] });
-    expect(mixed.server.files).toContain('scripts/generate_ltx2.test.js');
+    expect(mixed.server.files).toContain('scripts/ml/generate_ltx2.test.js');
     expect(mixed.smoke).toBe(true);
   });
 
@@ -1752,7 +1752,7 @@ describe('CI test impact planner', () => {
         'scripts/ml/requirements/requirements-trellis2-mps.txt',
         'scripts/ml/requirements/requirements-trellis2-mps.lock.txt',
       ];
-      const owners = ['scripts/setup-trellis2-mps.test.js', 'server/routes/imageTo3d.test.js'];
+      const owners = ['scripts/ml/setup-trellis2-mps.test.js', 'server/routes/imageTo3d.test.js'];
       for (const input of inputs) {
         const plan = buildCiTestPlan([input], { trackedFiles: [...TRACKED, ...inputs, ...owners] });
         expect(plan.full, input).toBe(false);
@@ -1976,8 +1976,8 @@ describe('CI test impact planner', () => {
   it('fails closed to the full suite for a python script nothing pins', () => {
     // Per script: a pinned sibling in the same diff does not vouch for the orphan.
     const plan = buildCiTestPlan(['scripts/ml/generate_ltx2.py', 'scripts/orphan.py'], {
-      trackedFiles: [...TRACKED, 'scripts/ml/generate_ltx2.py', 'scripts/orphan.py', 'scripts/generate_ltx2.test.js'],
-      pathContractTests: { 'scripts/ml/generate_ltx2.py': ['scripts/generate_ltx2.test.js'] },
+      trackedFiles: [...TRACKED, 'scripts/ml/generate_ltx2.py', 'scripts/orphan.py', 'scripts/ml/generate_ltx2.test.js'],
+      pathContractTests: { 'scripts/ml/generate_ltx2.py': ['scripts/ml/generate_ltx2.test.js'] },
     });
     expect(plan.full).toBe(true);
     expect(plan.reason).toMatch(/python script with no parsing contract: scripts\/orphan\.py/);
@@ -3236,7 +3236,7 @@ describe('path-gated single-purpose jobs', () => {
 
   it('runs the Node minimum job only for the manifests, runtime gate and workflow that can change its answer', () => {
     for (const file of ['package.json', 'server/package-lock.json', 'client/.npmrc', '.nvmrc',
-      'scripts/checkNodeVersion.js', 'scripts/lib/directInvocation.js', 'scripts/node-version-drift.guard.test.js', '.github/workflows/ci.yml',
+      'scripts/checkNodeVersion.js', 'scripts/lib/directInvocation.js', 'server/test/guards/repo/node-version-drift.test.js', 'server/test/guards/repo.guard.test.js', '.github/workflows/ci.yml',
     ]) expect(buildCiTestPlan([file]).nodeMinimum, file).toBe(true);
     for (const file of ['docs/README.md', 'server/lib/processEnv.js', 'client/src/App.jsx', 'browser/package.json', '.github/workflows/release.yml']) {
       expect(buildCiTestPlan([file]).nodeMinimum, file).toBe(false);

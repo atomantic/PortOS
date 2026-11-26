@@ -718,7 +718,7 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
         '    { status: "passed", ancestorTitles: ["slowCheck", "case"], duration: slow === "no-such-file" ? 5 : 4500 },',
         '    { status: "passed", ancestorTitles: ["fastCheck", "case"], duration: 5 }] }',
         '  : { name: require("path").resolve(repo, "server", rel), status: "passed", startTime: 0,',
-        '    endTime: rel.endsWith(slow) ? 6500 : 10, assertionResults: [{ status: "passed" }] });',
+        '    endTime: rel === slow ? 6500 : 10, assertionResults: [{ status: "passed" }] });',
         'if (selection.include.some(rel => rel.endsWith("repo.guard.test.js")) && process.env.PORTOS_GUARD_LOAD_LOG) {',
         '  fs.appendFileSync(process.env.PORTOS_GUARD_LOAD_LOG, JSON.stringify({ runner: "server/test/guards/repo.guard.test.js", check: "fastCheck", ms: slow === "no-such-file" ? 1 : 4600 }) + "\\n");',
         '}',
@@ -726,13 +726,14 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
         'fs.writeFileSync(process.env.PORTOS_CI_DIAGNOSTICS_PATH, JSON.stringify({ reason: "passed", errorCount: 0, errors: [] }));',
         'process.stdout.write("RAN " + JSON.stringify(selection.include) + "\\n");',
       ].join('\n'));
-      const guard = 'scripts/node-version-drift.guard.test.js';
+      const guard = 'server/lib/apiRouteParity.test.js';
+      const guardSelector = 'lib/apiRouteParity.test.js';
       const runner = 'server/test/guards/repo.guard.test.js';
       const scheduled = 'scripts/generate-prompt-stage-call-sites.test.js';
       const other = 'scripts/lib/releaseTitle.test.js';
       const run = (extraEnv) => spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
         encoding: 'utf8', timeout: 120000,
-        env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, FAKE_SLOW_GUARD: guard,
+        env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, FAKE_SLOW_GUARD: guardSelector,
           CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify([other, guard, runner, scheduled]), CI_TEST_SOURCES: '[]',
           PORTOS_TEST_MEMO: 'off', CI_SHARD: '', CI_GUARD_BUDGET: '', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', ...extraEnv },
       });
@@ -742,9 +743,9 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
       const enforced = run({ CI_GUARD_BUDGET: 'enforce' });
       expect(enforced.status).toBe(1);
       expect(enforced.stderr).toContain(`❌ Guard over its time budget: ${over}`);
-      expect(ranSets(enforced.stdout)).toEqual([[`../${guard}`, 'test/guards/repo.guard.test.js'], [`../${scheduled}`], [`../${other}`]]);
+      expect(ranSets(enforced.stdout)).toEqual([[guardSelector, 'test/guards/repo.guard.test.js'], [`../${scheduled}`], [`../${other}`]]);
 
-      const slowScheduled = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: scheduled });
+      const slowScheduled = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: `../${scheduled}` });
       expect(slowScheduled.status).toBe(1);
       expect(slowScheduled.stderr).toContain(`❌ Guard over its time budget: ${scheduled} 6.5s over the 4.0s per-guard budget.`);
 
@@ -753,7 +754,7 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
       for (const extraEnv of [{}, { CI_GUARD_BUDGET: 'report' }]) {
         const reported = run(extraEnv);
         expect(reported.status, reported.stderr).toBe(0);
-        expect(ranSets(reported.stdout)).toEqual([[`../${guard}`, `../${other}`, `../${scheduled}`, 'test/guards/repo.guard.test.js'].sort()]);
+        expect(ranSets(reported.stdout)).toEqual([[guardSelector, `../${other}`, `../${scheduled}`, 'test/guards/repo.guard.test.js'].sort()]);
         expect(reported.stdout).toContain(`::warning title=Guard over its time budget::${over}`);
         expect(reported.stderr).not.toContain('Guard over its time budget');
       }
@@ -793,7 +794,7 @@ describe('ci.yml shard wiring', () => {
   it('requires NumPy for CTC in related, explicit and full plans on its owning shard', () => {
     const fixture = mkdtempSync(join(tmpdir(), 'portos-check-ctc-'));
     const output = join(fixture, 'github_output');
-    const ctc = 'scripts/align_lyrics_ctc.test.js';
+    const ctc = 'scripts/ml/align_lyrics_ctc.test.js';
     try {
       const related = JSON.parse(execFileSync(process.execPath, [join(import.meta.dirname, 'ci-test-plan.js')], {
         cwd: join(import.meta.dirname, '..'),
