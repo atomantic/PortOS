@@ -247,7 +247,7 @@ export default function App() {
   const { pathname } = useLocation();
   const isHostedAudienceRoute = isPublicGuestRoute(pathname);
   useTimezoneBootstrap(!isHostedAudienceRoute);
-  useDocumentTitle(pathname, !isHostedAudienceRoute);
+  useDocumentTitle(!isHostedAudienceRoute);
   useFeatureUsageBeacon(!isHostedAudienceRoute);
 
   const routeContent = (

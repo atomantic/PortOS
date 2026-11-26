@@ -1,5 +1,6 @@
 // Keeps the browser title in sync with the active navigation page and instance.
 import { useEffect, useState } from 'react';
+import { useLocation } from 'react-router';
 import { getSelfInstance } from '../services/apiSystem.js';
 import { readShellBootstrap } from '../services/shellBootstrap.js';
 import { getNavPageForPath } from '../../../server/lib/navManifest.js';
@@ -10,7 +11,8 @@ export function setDocumentTitleInstanceName(name) {
   window.dispatchEvent(new CustomEvent(INSTANCE_NAME_EVENT, { detail: { name } }));
 }
 
-export default function useDocumentTitle(pathname, enabled = true) {
+export default function useDocumentTitle(enabled = true) {
+  const { pathname } = useLocation();
   const [instanceName, setInstanceName] = useState('');
 
   useEffect(() => {
