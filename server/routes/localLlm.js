@@ -1085,7 +1085,10 @@ router.post('/llama-server/stop', asyncHandler(async (_req, res) => {
 router.post('/llama-server/install', asyncHandler(async (req, res) => {
   const io = req.app.get('io')
   const onProgress = (data) => io?.emit('localLlm:progress', data)
-  const result = await installLlamaServer({ onProgress })
+  const result = await installLlamaServer({ onProgress }).catch((err) => {
+    onProgress({ event: 'error', message: `llama.cpp install failed: ${err.message}` })
+    throw err
+  })
   resetProviderReadinessCache()
   res.json(result)
 }))

@@ -1507,18 +1507,14 @@ export async function installLlamaServer({ onProgress = () => {} } = {}) {
   const child = spawn(plan.manager, plan.installArgs, spawnOpts);
 
   return new Promise((resolve, reject) => {
-    child.stdout?.on('data', (d) => {
-      onProgress({ event: 'progress', message: d.toString().trim() });
-    });
-    child.stderr?.on('data', (d) => {
-      onProgress({ event: 'progress', message: d.toString().trim() });
-    });
-    // `error` and `exit` can both fire for one child (an `error` raised after a
-    // successful spawn is followed by the process's own exit). Without this
-    // guard the exit path would still emit a `complete` progress event to the
-    // UI after the request had already been rejected — the client would render
-    // "installed successfully" alongside a 500.
+    // Once error or exit takes ownership of settlement, late process output
+    // must not replace the terminal frame or restart the progress banner.
     let settled = false;
+    const reportOutput = (data) => {
+      if (!settled) onProgress({ event: 'progress', message: data.toString().trim() });
+    };
+    child.stdout?.on('data', reportOutput);
+    child.stderr?.on('data', reportOutput);
     child.on('error', (err) => {
       if (settled) return;
       settled = true;
