@@ -15,13 +15,13 @@ import { assertRenderCleanupIdle } from './renderCleanupActivity.js';
  */
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
-import { copyFile, unlink, writeFile } from 'fs/promises';
+import { copyFile, rename, unlink, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
-import { safeUnder, edgeFadeFilter, findFfmpeg, runFfmpegProcess, probeVideoDuration, probeVideoStreamInfo } from '../../lib/ffmpeg.js';
+import { safeUnder, edgeFadeFilter, findFfmpeg, runFfmpegProcess, probeVideoDuration, probeVideoStreamInfo, probeVideoAudioSampleCount, planLoudnessMaster, reportMasteredLoudness, MASTER_LOUDNESS, AAC_ENCODE_ARGS } from '../../lib/ffmpeg.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { listProjects, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
@@ -39,7 +39,7 @@ const jobs = new Map();
 const projectBuilds = admittedRenderMap('music-video-publish-kit', { noun: 'publishing kit build', link: (projectId) => `/music-video/${encodeURIComponent(projectId)}` });
 // 9:16 canvas: the full frame fitted to width over a blurred, cover-scaled copy of itself, so edge text is never cropped.
 export const VERTICAL_FIT_FILTER = 'split[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:4[b];[fg]scale=1080:1920:force_original_aspect_ratio=decrease[f];[b][f]overlay=(W-w)/2:(H-h)/2,setsar=1';
-const AUDIO_ARGS = ['-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart'];
+const AUDIO_ARGS = [...AAC_ENCODE_ARGS, '-movflags', '+faststart'];
 
 export const attachPublishKitSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 export const projectPublishKit = (project) => (project?.publishKit && typeof project.publishKit === 'object' ? project.publishKit : {});
@@ -87,12 +87,47 @@ export async function releaseKitFiles(filenames, keep = []) {
   }
 }
 
+async function masterPublishCopy(bin, path, signal) {
+  const samples = await probeVideoAudioSampleCount(path);
+  signal.throwIfAborted();
+  if (samples == null) throw new Error('The copy has no measurable audio track duration');
+  // The MP4 carries the intended audio length even when its last AAC frame
+  // decodes more samples. Keep that length and the original stream timestamps.
+  const trim = `atrim=end_sample=${samples}`;
+  const { filter, before } = await planLoudnessMaster({ bin, inputArgs: ['-i', path], prefilter: trim, signal, preserveDynamics: true });
+  const outputPath = `${path}.mastering.mp4`;
+  let attenuation = '';
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await runFfmpegProcess({ bin, signal, args: [
+        '-hide_banner', '-loglevel', 'error', '-copyts', '-i', path,
+        '-map', '0:v:0', '-map', '0:a:0', '-c:v', 'copy', '-af', `${trim},${filter}${attenuation}`, ...AUDIO_ARGS,
+        '-avoid_negative_ts', 'disabled', '-y', outputPath,
+      ] });
+      if (!result.ok) throw new Error(`Audio remux failed: ${result.reason || 'ffmpeg error'}`);
+      const loudness = await reportMasteredLoudness({ bin, outputPath, before, signal });
+      signal.throwIfAborted();
+      // A rounded reading equal to the ceiling can still be over it. If AAC
+      // used up the headroom, back off and encode again from the same source.
+      if (loudness.truePeakDb < MASTER_LOUDNESS.truePeakDb) {
+        await rename(outputPath, path);
+        return loudness;
+      }
+      const correction = MASTER_LOUDNESS.truePeakDb - loudness.truePeakDb - 0.5;
+      attenuation = `,volume=${correction.toFixed(2)}dB`;
+    }
+    throw new Error(`The delivered audio exceeds the ${MASTER_LOUDNESS.truePeakDb} dB true-peak ceiling`);
+  } finally {
+    await unlink(outputPath).catch(() => {});
+  }
+}
+
 /**
  * Start a kit build: encodes, thumbnails, captions and chapters from the
  * current final render. Returns `{ jobId }`; progress streams over SSE and the
  * record carries the result.
  */
-export async function startPublishKitBuild(projectId) {
+export async function startPublishKitBuild(projectId, { loudnessPreset = 'as-mixed' } = {}) {
   assertRenderCleanupIdle(projectId);
   if (projectBuilds.has(projectId)) throw kitError(409, 'PUBLISH_KIT_BUILD_IN_PROGRESS', 'A publishing kit build is already running for this project', getActivePublishKitBuild(projectId) || undefined);
   const jobId = `mvpk-${randomUUID()}`;
@@ -100,19 +135,21 @@ export async function startPublishKitBuild(projectId) {
   // another request before there is a background job to put in the registry.
   projectBuilds.set(projectId, jobId);
   try {
-    return await projectBuilds.run(projectId, () => beginPublishKitBuild(projectId, jobId));
+    return await projectBuilds.run(projectId, () => beginPublishKitBuild(projectId, jobId, loudnessPreset));
   } catch (error) {
     projectBuilds.delete(projectId);
     throw error;
   }
 }
 
-async function beginPublishKitBuild(projectId, jobId) {
+async function beginPublishKitBuild(projectId, jobId, loudnessPreset) {
   const project = await requireProject(projectId);
   const { entry, path: masterPath } = await finalRenderFile(project);
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw kitError(500, 'FFMPEG_MISSING', 'ffmpeg not found on PATH');
   const job = { id: jobId, projectId, status: 'running', clients: [], abort: new AbortController() };
+  const { signal } = job.abort;
+  const pendingFiles = new Set();
   jobs.set(jobId, job);
   const tag = jobId.slice(5, 13);
   console.log(`📦 Building music-video publishing kit [${tag}]: project=${projectId.slice(0, 8)}`);
@@ -121,7 +158,7 @@ async function beginPublishKitBuild(projectId, jobId) {
     await ensureDir(PATHS.videos);
     await ensureDir(PATHS.videoThumbnails);
     const durationSec = Number(entry.durationSec) > 0 ? Number(entry.durationSec) : await probeVideoDuration(masterPath);
-    const stem = `music-video-${projectId.slice(3, 11)}-${Date.now()}`;
+    const stem = `music-video-${projectId.slice(3, 11)}-${Date.now()}-${tag}`;
     // The vertical cut follows the teaser's hook unless the director posts Suno Hooks and that hook opens too late for one.
     const platforms = await (await import('./publish/platforms.js')).getPublishPlatforms().catch(() => null);
     const { teaser, vertical } = kitCutWindows(project, { sunoHook: platforms?.sunoHook?.enabled === true });
@@ -139,7 +176,7 @@ async function beginPublishKitBuild(projectId, jobId) {
       ...(vertical && musicVideoAspect(project) === '16:9' ? [{ kind: 'vertical-9x16', label: `Vertical 9:16 ${Math.round(vertical.endSec - vertical.startSec)}s`, filename: `${stem}-vertical.mp4`, window: vertical,
         layout: 'fit',
         native: async (outputPath, onProgress) => (await import('./excerptRender.js')).renderSeekedWindow(project, {
-          startSec: vertical.startSec, endSec: vertical.endSec, aspect: '9:16', fade: true, videoArgs: SOCIAL_VIDEO_ARGS, outputPath, jobId: `${jobId}-vertical`, signal: job.abort.signal, onProgress,
+          startSec: vertical.startSec, endSec: vertical.endSec, aspect: '9:16', fade: true, videoArgs: SOCIAL_VIDEO_ARGS, outputPath, jobId: `${jobId}-vertical`, signal, onProgress,
         }),
         args: ['-ss', String(vertical.startSec), '-t', String(vertical.endSec - vertical.startSec), '-i', masterPath,
           '-vf', VERTICAL_FIT_FILTER, ...SOCIAL_VIDEO_ARGS,
@@ -147,7 +184,6 @@ async function beginPublishKitBuild(projectId, jobId) {
     ];
     const candidates = thumbnailCandidates(project, durationSec);
     const total = encodes.length + candidates.length;
-    const written = [];
     let done = 0;
     const step = () => broadcastSse(job, { type: 'progress', progress: Math.min(0.99, ++done / total) });
     // The native cut renders the composition as it is now; the rest of the kit is the master.
@@ -168,10 +204,7 @@ async function beginPublishKitBuild(projectId, jobId) {
         if (await encode.native(out, progress)) { encode.layout = 'native'; return true; }
         encode.fitReason = 'footage';
       } catch (error) {
-        if (job.abort.signal.aborted) {
-          await unlink(out).catch(() => {});
-          throw error;
-        }
+        if (signal.aborted) throw error;
         encode.fitReason = 'unavailable';
         console.warn(`⚠️ Native ${encode.label} unavailable [${tag}], fitting the master instead: ${error.message}`);
       }
@@ -179,51 +212,68 @@ async function beginPublishKitBuild(projectId, jobId) {
       return false;
     };
     for (const encode of encodes) {
+      signal.throwIfAborted();
       const out = join(PATHS.videos, encode.filename);
+      pendingFiles.add(out);
       if (!(encode.native && await renderNative(encode, out))) {
-        const result = await runFfmpegProcess({ bin: ffmpeg, signal: job.abort.signal, args: ['-hide_banner', '-loglevel', 'error', ...encode.args, '-y', out] });
+        const result = await runFfmpegProcess({ bin: ffmpeg, signal, args: ['-hide_banner', '-loglevel', 'error', ...encode.args, '-y', out] });
         if (!result.ok) throw new Error(`${encode.label} encode failed: ${result.reason || 'ffmpeg error'}`);
+      }
+      if (loudnessPreset === 'web') {
+        encode.loudness = await masterPublishCopy(ffmpeg, out, signal).catch(error => {
+          throw new Error(`${encode.label} Web mastering failed: ${error.message}`, { cause: error });
+        });
       }
       const { width, height } = await probeVideoStreamInfo(out);
       Object.assign(encode, { width, height });
-      written.push(encode.filename);
       step();
     }
     // Cut every candidate, keep the best frame of each shot, and drop the rest.
     // Keep the master dimensions; the cover and YouTube composers apply their own crops.
     const scored = [];
     for (const [i, c] of candidates.entries()) {
+      signal.throwIfAborted();
       const name = `${stem}-thumb-${i + 1}.jpg`;
       const path = join(PATHS.videoThumbnails, name);
-      const result = await runFfmpegProcess({ bin: ffmpeg, signal: job.abort.signal, args: ['-hide_banner', '-loglevel', 'error', '-ss', String(c.t), '-i', masterPath, '-frames:v', '1', '-q:v', '2', '-y', path] });
+      pendingFiles.add(path);
+      const result = await runFfmpegProcess({ bin: ffmpeg, signal, args: ['-hide_banner', '-loglevel', 'error', '-ss', String(c.t), '-i', masterPath, '-frames:v', '1', '-q:v', '2', '-y', path] });
       if (result.ok) scored.push({ ...c, name, score: await scoreThumbnailFrame(path).catch(() => NaN) });
+      else await unlink(path).catch(() => {});
       step();
     }
     const thumbnails = pickThumbnailFrames(scored).map((c) => c.name);
     await Promise.all(scored.filter((c) => !thumbnails.includes(c.name)).map((c) => unlink(join(PATHS.videoThumbnails, c.name)).catch(() => {})));
-    written.push(...thumbnails);
     const srt = buildSrt(project);
     const captionsFilename = srt ? `${stem}-captions.srt` : null;
-    if (srt) { await writeFile(join(PATHS.videos, captionsFilename), srt); written.push(captionsFilename); }
+    if (srt) {
+      const path = join(PATHS.videos, captionsFilename);
+      pendingFiles.add(path);
+      await writeFile(path, srt);
+    }
     const previous = projectPublishKit(project);
     const staleFiles = [...(previous.exports || []).map((e) => e.filename), ...(previous.thumbnails || []), previous.captionsFilename].filter(Boolean);
     // ffmpeg wrote the kit's files in place; the row that first names them
     // commits under a backup lease (#9982). Stale files go only after it.
+    signal.throwIfAborted();
     await withBackupAssetPublication(() => mutateProjectRecord(projectId, (current) => {
+      signal.throwIfAborted();
+      job.committing = true;
       const kit = projectPublishKit(current);
       return { project: { ...current, publishKit: {
         ...kit,
         builtAt: new Date().toISOString(),
         master: { filename: entry.filename, renderHistoryId: project.renderHistoryId },
-        exports: encodes.map(({ kind, label, filename, width, height, window, layout, fitReason }) => ({ kind, label, filename, width, height, ...(window ? { startSec: window.startSec, endSec: window.endSec } : {}), ...(layout ? { layout } : {}), ...(layout === 'fit' && fitReason ? { fitReason } : {}) })),
+        exports: encodes.map(({ kind, label, filename, width, height, window, layout, fitReason, loudness }) => ({ kind, label, filename, width, height, ...(window ? { startSec: window.startSec, endSec: window.endSec } : {}), ...(layout ? { layout } : {}), ...(layout === 'fit' && fitReason ? { fitReason } : {}), ...(loudness ? { loudness } : {}) })),
         thumbnails,
         thumbnail: thumbnails.includes(kit.thumbnail) ? kit.thumbnail : (thumbnails[0] || null),
         captionsFilename,
         chapters: buildChapters(current),
       } } };
-    }), waitForBackup('kit build')).catch(err => { projectBuilds.markUnsettled(projectId); throw err; });
-    await releaseKitFiles(staleFiles, written);
-    return written;
+    }), waitForBackup('kit build', signal)).catch(err => {
+      if (!signal.aborted) projectBuilds.markUnsettled(projectId);
+      throw err;
+    });
+    await releaseKitFiles(staleFiles, [...encodes.map(e => e.filename), ...thumbnails, captionsFilename]);
   };
 
   Promise.resolve().then(run).then(() => {
@@ -232,8 +282,10 @@ async function beginPublishKitBuild(projectId, jobId) {
     console.log(`✅ Music-video publishing kit built [${tag}]`);
     broadcastSse(job, { type: 'complete', result: { projectId } });
     closeJobAfterDelay(jobs, jobId);
-  }).catch((err) => {
-    const canceled = job.abort.signal.aborted;
+  }).catch(async (err) => {
+    // A write that entered the record transform may already have committed.
+    if (!job.committing) await Promise.all([...pendingFiles].map(path => unlink(path).catch(() => {})));
+    const canceled = signal.aborted;
     job.status = canceled ? 'canceled' : 'error';
     projectBuilds.delete(projectId);
     const log = canceled ? console.log : console.error;
@@ -246,7 +298,7 @@ async function beginPublishKitBuild(projectId, jobId) {
 
 export function cancelPublishKitBuild(jobId) {
   const job = jobs.get(jobId);
-  if (!job || job.status !== 'running') return false;
+  if (!job || job.status !== 'running' || job.committing) return false;
   job.abort.abort();
   return true;
 }
@@ -282,9 +334,12 @@ export async function capturePublishKitFrame(projectId, atSec) {
 }
 
 /** The files already exist, so a backup cut holding admission is a pause, never a reason to fail the build. */
-const waitForBackup = (what) => ({
+const waitForBackup = (what, signal) => ({
   timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
-  onWait: () => console.log(`⏸️ Music-video publishing kit ${what} waiting for the backup to finish before saving`),
+  onWait: () => {
+    signal?.throwIfAborted();
+    console.log(`⏸️ Music-video publishing kit ${what} waiting for the backup to finish before saving`);
+  },
 });
 
 /** Merge edited copy fields per platform (only known platforms and string/array fields). */

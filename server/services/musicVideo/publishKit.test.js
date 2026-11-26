@@ -7,7 +7,7 @@
  */
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
@@ -74,12 +74,12 @@ const scene = (startSec, endSec, sectionLabel, shotMode = 'performance') => ({ s
 
 // The 25s teaser floor pins a 36s song, so the fixture shrinks per-second cost instead (#10479, #10643): 1 fps keeps
 // the 1080x1920 vertical encode to ~25 frames, and 8 kHz audio cuts the AAC re-encode every kit encode repeats.
-async function renderedProject() {
+async function renderedProject(audio = 'sine=frequency=440:duration=36:sample_rate=8000') {
   const created = await projects.createProject({ name: 'Example Song' });
   await mkdir(PATHS.videos, { recursive: true });
   const filename = `master-${created.id.slice(3, 11)}.mp4`;
   const made = await runFfmpegProcess({ bin: ffmpeg, args: ['-hide_banner', '-loglevel', 'error',
-    '-f', 'lavfi', '-i', 'testsrc2=s=320x180:r=1:d=36', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=36:sample_rate=8000',
+    '-f', 'lavfi', '-i', 'testsrc2=s=320x180:r=1:d=36', '-f', 'lavfi', '-i', audio,
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', '-y', join(PATHS.videos, filename)] });
   expect(made.ok).toBe(true);
   await saveHistory([{ id: 'render-1', filename, durationSec: 36 }]);
@@ -91,6 +91,40 @@ async function renderedProject() {
     lyricCues: [cue('first verse line', 1, 4), cue('the chorus line', 13, 16), cue('last words', 25, 28)],
   } }));
   return created.id;
+}
+
+const publishFiles = async () => Promise.all([PATHS.videos, PATHS.videoThumbnails].map(async dir => (await readdir(dir)).sort()));
+
+async function mediaTimeline(path) {
+  const bin = await ffmpegService.findFfprobe();
+  let output = '';
+  const result = await runFfmpegProcess({ bin, onStdout: b => { output += b; }, args: [
+    '-v', 'error', '-show_entries', 'stream=codec_type,start_time,duration,nb_frames', '-of', 'json', path,
+  ] });
+  expect(result.ok).toBe(true);
+  const [video, audio] = JSON.parse(output).streams;
+  return { video, audioEnd: Number(audio.start_time) + Number(audio.duration) };
+}
+
+async function deliveredAudio(path, { checkFades, startSec, endSec } = {}) {
+  const filters = [
+    ...(checkFades ? ['silencedetect=n=-24dB:d=0.01'] : []),
+    'loudnorm=print_format=json',
+  ];
+  const result = await runFfmpegProcess({ bin: ffmpeg, returnStderr: true, stderrTailBytes: 4000, args: [
+    '-hide_banner', '-nostats', '-copyts', '-i', path, '-vn', '-af', filters.join(','), '-f', 'null', '-',
+  ] });
+  expect(result.ok).toBe(true);
+  const { input_i, input_tp } = JSON.parse(result.stderr.match(/\{[^{}]*"input_i"[^{}]*\}/)[0]);
+  if (checkFades) {
+    const onsets = [...result.stderr.matchAll(/silence_end: ([\d.]+)/g)].map(m => Number(m[1]));
+    const offsets = [...result.stderr.matchAll(/silence_start: ([\d.]+)/g)].map(m => Number(m[1]));
+    expect(onsets[0]).toBeGreaterThan(startSec);
+    expect(onsets[0]).toBeLessThan(startSec + 0.08);
+    expect(offsets.at(-1)).toBeGreaterThan(endSec - 0.6);
+    expect(offsets.at(-1)).toBeLessThan(endSec - 0.01);
+  }
+  return { integratedLufs: Number(input_i), truePeakDb: Number(input_tp) };
 }
 
 describe('publishing kit build (#9281)', () => {
@@ -335,6 +369,112 @@ describe('publishing kit build (#9281)', () => {
     });
     return id;
   };
+
+  it.skipIf(!ffmpeg).each(['fit', 'native'])('measures each delivered Web copy, including the %s vertical cut', { timeout: 120000 }, async (layout) => {
+    // The loud transient outside the hook limits full-length gain only.
+    const id = await renderedProject("aevalsrc=if(between(t\\,32\\,32.04)\\,0.9\\,0.045)*sin(2*PI*440*t):s=8000:d=36");
+    const source = await kit.finalRenderFile(await projects.getProject(id));
+    const master = await readFile(source.path);
+    const mix = (await projects.getProject(id)).audioAnalysis;
+    let native;
+    if (layout === 'native') {
+      await projects.mutateProjectRecord(id, current => {
+        const next = { ...current, composition: { mode: 'document', version: 'v1' } };
+        return { project: { ...next, renderDependencies: captureMusicVideoEvidence(next) } };
+      });
+      native = vi.spyOn(excerptRender, 'renderSeekedWindow').mockImplementation(async (_project, { outputPath, startSec, endSec, fade }) => {
+        expect(fade).toBe(true);
+        const duration = endSec - startSec;
+        const audioDuration = duration - 0.381;
+        const made = await runFfmpegProcess({ bin: ffmpeg, args: ['-hide_banner', '-loglevel', 'error',
+          '-f', 'lavfi', '-i', `testsrc2=s=180x320:r=1:d=${duration}`,
+          '-itsoffset', '0.375', '-f', 'lavfi', '-i', `sine=f=880:r=8000:d=${audioDuration}`,
+          '-af', `volume=0.4${ffmpegService.edgeFadeFilter(audioDuration)}`, '-c:v', 'libx264', '-c:a', 'aac', '-y', outputPath,
+        ] });
+        expect(made.ok).toBe(true);
+        return { width: 180, height: 320 };
+      });
+    }
+    try {
+      const first = await kit.startPublishKitBuild(id);
+      expect((await buildEnded(first.jobId)).type).toBe('complete');
+      const previous = (await projects.getProject(id)).publishKit;
+      const timelines = new Map();
+      for (const e of previous.exports) {
+        expect(e).not.toHaveProperty('loudness');
+        timelines.set(e.kind, await mediaTimeline(join(PATHS.videos, e.filename)));
+      }
+
+      const web = await kit.startPublishKitBuild(id, { loudnessPreset: 'web' });
+      expect(await buildEnded(web.jobId)).toMatchObject({ type: 'complete' });
+      const project = await projects.getProject(id);
+      expect(project.publishKit.master).toEqual(previous.master);
+      expect(project.audioAnalysis).toEqual(mix);
+      expect(await readFile(source.path)).toEqual(master);
+      expect(project.publishKit.exports.map(e => e.kind)).toEqual(['x-1080p', 'preview-720p', 'teaser', 'vertical-9x16']);
+      for (const e of project.publishKit.exports) {
+        const path = join(PATHS.videos, e.filename);
+        const timeline = await mediaTimeline(path);
+        expect(timeline.video).toEqual(timelines.get(e.kind).video);
+        expect(timeline.audioEnd).toBeCloseTo(timelines.get(e.kind).audioEnd, 3);
+        const isNative = e.kind === 'vertical-9x16' && layout === 'native';
+        const measured = await deliveredAudio(path, { checkFades: Boolean(e.endSec), startSec: isNative ? 0.375 : 0, endSec: timeline.audioEnd });
+        expect(e.loudness.targetLufs).toBe(-14);
+        expect(e.loudness.integratedLufs).toBe(Math.round(measured.integratedLufs * 10) / 10);
+        expect(e.loudness.truePeakDb).toBe(Math.round(measured.truePeakDb * 10) / 10);
+        expect(measured.truePeakDb).toBeLessThanOrEqual(-1.5);
+        if (e.endSec) {
+          expect(e.startSec).toBeGreaterThan(0);
+          expect(measured.integratedLufs).toBeCloseTo(-14, 0);
+        } else {
+          expect(measured.integratedLufs).toBeLessThan(-16);
+        }
+      }
+      expect(project.publishKit.exports.find(e => e.kind === 'vertical-9x16').layout).toBe(layout);
+    } finally {
+      native?.mockRestore();
+    }
+  });
+
+  it.skipIf(!ffmpeg)('keeps the previous kit and removes unfinished copies when Web mastering fails or is cancelled', { timeout: 120000 }, async () => {
+    const id = await documentRendered();
+    const first = await kit.startPublishKitBuild(id);
+    expect((await buildEnded(first.jobId)).type).toBe('complete');
+    const previous = (await projects.getProject(id)).publishKit;
+    const previousFiles = await publishFiles();
+    // Three copies have already been mastered when the native cut turns out to be silent.
+    const native = vi.spyOn(excerptRender, 'renderSeekedWindow').mockImplementation(async (_project, { outputPath }) => {
+      const made = await runFfmpegProcess({ bin: ffmpeg, args: ['-hide_banner', '-loglevel', 'error',
+        '-f', 'lavfi', '-i', 'color=s=180x320:r=1:d=1', '-f', 'lavfi', '-i', 'anullsrc=r=8000:d=1',
+        '-c:v', 'libx264', '-c:a', 'aac', '-y', outputPath,
+      ] });
+      expect(made.ok).toBe(true);
+      return { width: 180, height: 320 };
+    });
+    try {
+      const { jobId } = await kit.startPublishKitBuild(id, { loudnessPreset: 'web' });
+      expect(await buildEnded(jobId)).toMatchObject({ type: 'error', error: expect.stringMatching(/Vertical.*Web mastering failed: Soundtrack is silent/) });
+      expect((await projects.getProject(id)).publishKit).toEqual(previous);
+      expect(await publishFiles()).toEqual(previousFiles);
+    } finally {
+      native.mockRestore();
+    }
+
+    const measure = vi.spyOn(ffmpegService, 'reportMasteredLoudness').mockImplementation(({ signal }) => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }));
+    try {
+      const { jobId } = await kit.startPublishKitBuild(id, { loudnessPreset: 'web' });
+      const ended = buildEnded(jobId);
+      await vi.waitFor(() => expect(measure).toHaveBeenCalled(), { timeout: 30000 });
+      expect(kit.cancelPublishKitBuild(jobId)).toBe(true);
+      expect(await ended).toEqual({ type: 'canceled', error: 'Publishing kit build cancelled' });
+      expect((await projects.getProject(id)).publishKit).toEqual(previous);
+      expect(await publishFiles()).toEqual(previousFiles);
+    } finally {
+      measure.mockRestore();
+    }
+  });
 
   it.skipIf(!ffmpeg)('renders the 9:16 cut natively when the composition lays itself out at that frame', { timeout: 120000 }, async () => {
     const id = await documentRendered();

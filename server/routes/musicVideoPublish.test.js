@@ -23,6 +23,7 @@ const sinks = vi.hoisted(() => ({
   previewPublishPost: vi.fn(async () => ({ rows: [], missing: [] })),
   prepareCrossLinkEdit: vi.fn(async () => ({ target: 'youtube', links: [] })),
   capturePublishKitFrame: vi.fn(async () => ({ project: { id: 'synthetic' } })),
+  startPublishKitBuild: vi.fn(async () => ({ jobId: 'mvpk-example' })),
   draftPublishKitCopy: vi.fn(async () => ({ project: { drafted: true } })),
   updatePublishKitCopy: vi.fn(async () => ({ project: { patched: true } })),
   buildThumbnailPaintPrompt: vi.fn(() => ({ prompt: 'synthetic prompt' })),
@@ -32,7 +33,8 @@ const sinks = vi.hoisted(() => ({
 vi.mock('../services/musicVideo/publish/index.js', async original => ({ ...await original(),
   previewPublishPost: sinks.previewPublishPost, prepareCrossLinkEdit: sinks.prepareCrossLinkEdit }));
 vi.mock('../services/musicVideo/publishKit.js', async original => ({ ...await original(),
-  capturePublishKitFrame: sinks.capturePublishKitFrame, draftPublishKitCopy: sinks.draftPublishKitCopy, updatePublishKitCopy: sinks.updatePublishKitCopy }));
+  capturePublishKitFrame: sinks.capturePublishKitFrame, startPublishKitBuild: sinks.startPublishKitBuild,
+  draftPublishKitCopy: sinks.draftPublishKitCopy, updatePublishKitCopy: sinks.updatePublishKitCopy }));
 vi.mock('../services/musicVideo/youtubeThumbnail.js', async original => ({ ...await original(),
   buildThumbnailPaintPrompt: sinks.buildThumbnailPaintPrompt, addYoutubeThumbnailTest: sinks.addYoutubeThumbnailTest, removeYoutubeThumbnailTest: sinks.removeYoutubeThumbnailTest }));
 
@@ -51,6 +53,16 @@ beforeAll(async () => {
 });
 beforeEach(() => { auth.authenticated = true; vi.clearAllMocks(); });
 afterAll(cleanupTempDataRoots);
+
+it('accepts Web mastering on an explicit build and defaults a bodyless request to As mixed', async () => {
+  const path = `${base}/publish-kit/build`;
+  expect((await request(app).post(path).send({ loudnessPreset: '-14' })).status).toBe(400);
+  expect(sinks.startPublishKitBuild).not.toHaveBeenCalled();
+  expect((await request(app).post(path)).body).toEqual({ jobId: 'mvpk-example' });
+  expect(sinks.startPublishKitBuild).toHaveBeenLastCalledWith(projectId, { loudnessPreset: 'as-mixed' });
+  expect((await request(app).post(path).send({ loudnessPreset: 'web' })).body).toEqual({ jobId: 'mvpk-example' });
+  expect(sinks.startPublishKitBuild).toHaveBeenLastCalledWith(projectId, { loudnessPreset: 'web' });
+});
 
 describe('POST /:id/publish/:target/cross-links', () => {
   it('refuses an unauthenticated caller before touching the browser', async () => {

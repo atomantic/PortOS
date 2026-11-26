@@ -462,8 +462,8 @@ export const findFfprobe = async () => {
 
 // Run ffprobe with the given args and return its trimmed stdout, or '' when
 // ffprobe is unavailable or the call fails. Collapses the shared discover →
-// spawn → catch-default → trim boilerplate behind the three ffprobe-based
-// probes below (duration, frame count, audio-stream presence) so they can't
+// spawn → catch-default → trim boilerplate behind the ffprobe-based
+// probes below so they can't
 // drift on the env/timeout/error-handling contract.
 const runFfprobe = async (args, timeout = 5000) => {
   const ffprobe = await findFfprobe();
@@ -511,6 +511,18 @@ export const probeVideoAudioPresence = async (videoPath) => {
   const output = (result.stdout || '').trim();
   return output === '' ? false : /^\d+$/.test(output) ? true : null;
 };
+
+/** Audio samples on the container timeline, excluding any AAC decoder padding. */
+export async function probeVideoAudioSampleCount(videoPath) {
+  const stdout = await runFfprobe([
+    '-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=sample_rate,duration',
+    '-of', 'default=noprint_wrappers=1', videoPath,
+  ]);
+  const rate = Number(stdout.match(/^sample_rate=(.+)$/m)?.[1]);
+  const duration = Number(stdout.match(/^duration=(.+)$/m)?.[1]);
+  const count = Math.round(rate * duration);
+  return Number.isSafeInteger(count) && count > 0 ? count : null;
+}
 
 // Single-video thumbnail extraction. Seeks to mid-clip rather than frame 0
 // because LTX-2 renders fade IN from black: the first ~0.5s is near-zero
@@ -923,17 +935,20 @@ function loudnormApplyFilter(raw) {
 
 /**
  * Measure-then-apply for one audio source. Resolves `{ filter, before }`:
- * `filter` is the linear loudnorm to splice into the encode's `-af`, `before`
- * the rounded pre-master numbers. Throws, naming the cause, when the source
- * cannot be measured or is silent.
+ * `filter` goes into the encode's `-af`, `before` holds the rounded pre-master
+ * numbers. Preserve dynamics when mastering an already approved mix: achieve
+ * as much gain as the peak budget allows without changing its envelope.
  */
-export async function planLoudnessMaster(options) {
+export async function planLoudnessMaster({ preserveDynamics = false, ...options }) {
   const result = await measureLoudness(options);
   if (!result.ok) throw new Error(`Audio mastering could not measure the soundtrack: ${result.reason}`);
   if (!(result.raw.integratedLufs > SILENT_LUFS)) {
     throw new Error(`Soundtrack is silent: measured ${Number.isFinite(result.raw.integratedLufs) ? `${result.measured.integratedLufs} LUFS` : 'no signal'} (below ${SILENT_LUFS} LUFS)`);
   }
-  return { filter: loudnormApplyFilter(result.raw), before: result.measured };
+  if (!preserveDynamics) return { filter: loudnormApplyFilter(result.raw), before: result.measured };
+  const { integratedLufs, truePeakDb } = result.raw;
+  const gain = Math.min(MASTER_LOUDNESS.targetLufs - integratedLufs, MASTER_LOUDNESS.truePeakDb - AAC_HEADROOM_DB - truePeakDb);
+  return { filter: `volume=${gain.toFixed(2)}dB`, before: result.measured };
 }
 
 /**

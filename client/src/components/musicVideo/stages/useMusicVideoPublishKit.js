@@ -64,7 +64,7 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
   const attachedJobs = useRef(new Set());
 
   const job = useSseJobSlot({
-    startRequest: () => buildMusicVideoPublishKit(projectId, { silent: true }),
+    startRequest: input => buildMusicVideoPublishKit(projectId, { ...input, silent: true }),
     eventsUrl: musicVideoPublishKitEventsUrl,
     cancelRequest: cancelMusicVideoPublishKit,
     readPercent,
@@ -205,7 +205,7 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
     dcp: { active: dcpJob.active, stage: dcpJob.stage, build: input => dcpJob.start(input, projectId), cancel: dcpJob.cancel },
     building: job.active,
     progress: job.active ? job.percent : 0,
-    build: () => job.start({}, projectId),
+    build: (input = {}) => job.start(input, projectId),
     cancelBuild: job.cancel,
     drafting,
     saving,

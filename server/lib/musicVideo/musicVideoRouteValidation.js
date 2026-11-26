@@ -586,6 +586,10 @@ export const musicVideoSocialCutsQuerySchema = z.object({
 
 // #9281: publishing kit — per-platform copy edits, the copy draft request, the chosen thumbnail.
 const kitText = (max) => z.string().max(max);
+export const musicVideoPublishKitBuildSchema = z.object({
+  loudnessPreset: z.enum(['as-mixed', 'web']).default('as-mixed'),
+});
+
 export const musicVideoPublishCopyPatchSchema = z.object({
   youtube: z.object({ title: kitText(100), description: kitText(5000), tags: z.array(kitText(60)).max(30) }).partial().strict().optional(),
   shorts: z.object({ title: kitText(100), description: kitText(5000) }).partial().strict().optional(),
