@@ -339,7 +339,7 @@ the generative runs. A source that "needs a trim" is a refusal by construction
 | Pre-submit plan + the inline Lanczos pass | `server/services/videoGen/upscaleVideo.js` |
 | Generative job lifecycle (enqueue / run / cancel) | `server/services/videoGen/upscaleJob.js` |
 | Pad and crop-back / audio re-mux | `server/services/videoGen/upscaleFfmpeg.js` |
-| Routes | `server/routes/videoGen.js` |
+| Routes | `server/routes/videoGenUpscale.js` |
 | Adapter registry entry (`pixel-upscale`) | `server/lib/icLoraWeights.js` |
 | Shared runner contract | `scripts/ml/_upscale_contract.py` |
 | Runners | `scripts/ml/upscale_ltx25.py` (MLX) · `scripts/ml/upscale_ltx25_cuda.py` (CUDA) |

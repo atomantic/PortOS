@@ -99,7 +99,7 @@ shows `Speed profile: fast — reduced: teacache unavailable`).
 | The declarative table + all resolution logic | `server/lib/videoSpeedProfiles.js` |
 | Attached to registry entries at load | `applyVideoSpeedProfiles` in `server/lib/mediaModels.js` |
 | Durable on disk for existing installs | `scripts/migrations/295-video-speed-profiles.js` |
-| Request field | `speedProfileId` in `LOCAL_ONLY_VIDEO_PARAMS` (`server/routes/videoGen.js`) |
+| Request field | `speedProfileId` in `LOCAL_ONLY_VIDEO_PARAMS` (`server/lib/videoGenValidation.js`) |
 | Applied to the render | `resolveVideoSpeedProfile` + `resolveVideoSampler` defined in `server/lib/videoSpeedProfiles.js`, applied in `server/services/videoGen/generateVideo.js` (and `chainedVideo.js`) |
 | Runner levers + capability probe | `--speed-profile` / `--teacache` / `--require-adapter` in `scripts/ml/generate_ltx2.py` |
 | Outcome parsed back | `SPEEDPROFILE:` in `server/services/videoGen/generateVideoHelpers.js` |
