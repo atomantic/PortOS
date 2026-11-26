@@ -83,7 +83,7 @@ function Avatar({ avatarStyle, agentState, speaking, riggedAvatars, background =
   return <CoSCharacter state={agentState} speaking={speaking} />;
 }
 
-/** Shown in place of the panel (and the expand bar) until the status read settles. */
+/** Shared status loading and retry UI. */
 export function CosStatusPlaceholder({ failed, onRetry }) {
   if (failed) {
     return (
@@ -319,9 +319,11 @@ export default function CosAgentPanel({ cos, activeTab, riggedAvatars, desktopCo
   if (typeof cos.status?.running !== 'boolean') {
     return (
       <div className="min-w-0 overflow-hidden border-b cos-wide:border-r border-port-border">
-        <div className={desktopCollapsed ? 'cos-wide:hidden' : ''}>
-          <CosStatusPlaceholder failed={cos.statusReadFailed} onRetry={cos.fetchData} />
-        </div>
+        {activeTab !== 'config' && (
+          <div className={desktopCollapsed ? 'cos-wide:hidden' : ''}>
+            <CosStatusPlaceholder failed={cos.statusReadFailed} onRetry={cos.fetchData} />
+          </div>
+        )}
       </div>
     );
   }
