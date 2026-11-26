@@ -1,9 +1,7 @@
 /**
- * #15552: a pr-watcher run whose dispatched PR merged between the poll and the
- * spawn correctly reports no-action-needed. Finalize must accept that only after
- * the forge confirms every stamped target is non-open, and must keep scoring a
- * no-op against a still-open PR as incomplete (operators customize pr-watcher
- * into commit-pushing flows, so it is not a general no-commit type).
+ * A watcher can deliver solely by merging its dispatched PRs (#19338). A stale
+ * selection can also yield no-action-needed when each PR was merged or closed
+ * (#15552). Both outcomes require forge evidence to pass without new commits.
  */
 
 // The goal-fidelity gate reaches a local model at completion; pinned off here.
@@ -55,13 +53,14 @@ vi.mock('../provider/providerStatus.js', () => ({
   markProviderUnavailable: vi.fn(async () => null),
 }));
 
+const resolveUndeliveredTaskUpdateMock = vi.fn(async (_task, outcome) => ({ status: 'pending', metadata: { taskOutcome: outcome } }));
 const resolveFailedTaskUpdateMock = vi.fn(async (_task, analysis) => ({
   status: 'pending',
   metadata: { lastErrorCategory: analysis?.category || null },
 }));
 vi.mock('./agentErrorAnalysis.js', () => ({
   resolveFailedTaskUpdate: (...args) => resolveFailedTaskUpdateMock(...args),
-  resolveUndeliveredTaskUpdate: vi.fn(async (_task, outcome) => ({ status: 'pending', metadata: { taskOutcome: outcome } })),
+  resolveUndeliveredTaskUpdate: (...args) => resolveUndeliveredTaskUpdateMock(...args),
   resolveTypeFailureSignal: vi.fn(() => ({ record: 'skip' })),
 }));
 
@@ -70,8 +69,9 @@ vi.mock('../../lib/gitCommitProbe.js', () => ({ committedDuringRun: vi.fn(async 
 vi.mock('./agentRunTracking.js', () => ({ createAgentRun: vi.fn(), completeAgentRun: vi.fn(async () => null) }));
 vi.mock('../taskTypeHooks.js', () => ({
   isProgrammaticIoTaskType: vi.fn(() => false),
-  resolveTaskHookType: vi.fn(() => 'pr-watcher'),
+  resolveTaskHookType: vi.fn(task => task.metadata?.analysisType),
   declaresNoCommitCriterion: vi.fn(() => false),
+  isClaimFlowDispatch: vi.fn(() => false),
   getTaskOutputHook: vi.fn(async () => null),
   getTaskOutputPayloadPredicate: vi.fn(async () => null),
 }));
@@ -79,6 +79,7 @@ vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () 
 vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent: vi.fn(async () => ({ appended: true })) }));
 vi.mock('./agentSummaryExtraction.js', () => ({ extractFinalSummary: vi.fn(() => null) }));
 
+import { committedDuringRun } from '../../lib/gitCommitProbe.js';
 import { finalizeAgent } from './agentFinalization.js';
 
 const REPO = 'example-owner/example-repo';
@@ -90,6 +91,11 @@ const watcherTask = (prNumbers = [7]) => ({
 });
 const noOpSentinel = JSON.stringify({ summary: 'PR already merged.', taskOutcome: {
   status: 'no-action-needed', reason: 'The listed PR is already MERGED with CI green.',
+} });
+
+const completedSentinel = JSON.stringify({ summary: 'Merged the selected PRs.', taskOutcome: {
+  status: 'completed', reason: 'The selected PRs were merged.',
+  prWatcherTargets: { repoFullName: 'someone/else', repoHost: 'github.com', prNumbers: [9] },
 } });
 
 const finalize = (overrides = {}) => finalizeAgent({
@@ -140,5 +146,57 @@ describe('finalizeAgent — pr-watcher no-op against an already-settled selectio
     await finalize(overrides);
     expect(completion()).toMatchObject({ success: false, taskOutcome: { status: 'incomplete' } });
     expect(completion().validationPassed).not.toBe(true);
+  });
+});
+
+describe('finalizeAgent — completed PR watcher delivery (#19338)', () => {
+  it('settles all dispatched merges without probing commits or scheduling a retry', async () => {
+    await finalize({ task: watcherTask([7, 8]), finalSummary: completedSentinel });
+    expect(completion()).toMatchObject({ success: true, validationPassed: true,
+      taskOutcome: { status: 'completed' } });
+    const repo = { cwd: '/example/worktree', env: null, repoSpec: `github.com/${REPO}` };
+    expect(getPullRequestStateMock.mock.calls).toEqual([['7', repo], ['8', repo]]);
+    expect(committedDuringRun).not.toHaveBeenCalled();
+    expect(updateTaskMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ status: 'completed' }), 'internal');
+    expect(resolveUndeliveredTaskUpdateMock).not.toHaveBeenCalled();
+    expect(resolveFailedTaskUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['OPEN', 'CLOSED', null])('falls back to the commit criterion when one target has state %s', async (state) => {
+    getPullRequestStateMock
+      .mockResolvedValueOnce({ status: 'known', state: 'MERGED', detail: null })
+      .mockResolvedValueOnce({ status: state ? 'known' : 'unavailable', state });
+    await finalize({ task: watcherTask([7, 8]), finalSummary: completedSentinel });
+    expect(getPullRequestStateMock.mock.calls.map(([ref]) => ref)).toEqual(['7', '8']);
+    expect(committedDuringRun).toHaveBeenCalledOnce();
+    expect(completion()).toMatchObject({ success: false, validationPassed: false, taskOutcome: { status: 'incomplete' } });
+    expect(resolveUndeliveredTaskUpdateMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['origin points to another repository', { host: 'github.com', fullName: 'someone/else' }, watcherTask()],
+    ['origin points to a different forge', { host: 'github.example.com', fullName: REPO }, watcherTask()],
+    ['dispatch lacks stamped targets', { host: 'github.com', fullName: REPO }, { ...watcherTask(), metadata: { analysisType: 'pr-watcher' } }],
+    ['task is not a PR watcher', { host: 'github.com', fullName: REPO }, { ...watcherTask(), metadata: { ...watcherTask().metadata, analysisType: 'code-quality' } }],
+  ])('falls back to the commit criterion when %s', async (_reason, origin, task) => {
+    getOriginInfoMock.mockResolvedValue(origin);
+    await finalize({ task, finalSummary: completedSentinel });
+    expect(getPullRequestStateMock).not.toHaveBeenCalled();
+    expect(committedDuringRun).toHaveBeenCalledOnce();
+    expect(completion()).toMatchObject({ success: false, validationPassed: false, taskOutcome: { status: 'incomplete' } });
+  });
+
+  it('accepts an actual run commit when a watcher has unresolved targets', async () => {
+    getPullRequestStateMock.mockResolvedValue({ status: 'known', state: 'OPEN' });
+    committedDuringRun.mockResolvedValueOnce(true);
+    await finalize({ finalSummary: completedSentinel });
+    expect(committedDuringRun).toHaveBeenCalledOnce();
+    expect(completion()).toMatchObject({ success: true, validationPassed: true, taskOutcome: { status: 'completed' } });
+  });
+
+  it('does not verify merges after an unsuccessful run', async () => {
+    await finalize({ success: false, exitCode: 1, finalSummary: completedSentinel });
+    expect(getPullRequestStateMock).not.toHaveBeenCalled();
+    expect(completion()).toMatchObject({ success: false, taskOutcome: { status: 'incomplete' } });
   });
 });
