@@ -39,9 +39,10 @@ import { API_REGISTRY } from './apiRegistry.js';
 import { escapeRegExp } from './textUtils.js';
 
 export const HOST_CONTROL_GET_ROUTES = Object.freeze([
-  // Live camera and microphone feeds (#11272).
+  // Live camera and microphone feeds (#11272) and host device enumeration (#19025).
   'GET /api/media/video',
   'GET /api/media/audio',
+  'GET /api/media/devices',
   // Tailcat serve capabilities (the remote ingress and its bearer address) and device trust.
   'GET /api/instances/peers/tailcat/serve',
   'GET /api/instances/peers/tailcat/devices',
@@ -95,6 +96,15 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/apps/:id/logs',
   // Runs `brew update --quiet` and host runtime probes on `fresh=1` or cache miss (#18224).
   'GET /api/update/software/homebrew',
+  // Host runtime probes and repository inspection (#19025).
+  'GET /api/git/submodules/status',
+  'GET /api/git/:appId',
+  'GET /api/rigging/readiness',
+  'GET /api/image-gen/setup/moss-install',
+  'GET /api/voice/facetime/status',
+  'GET /api/update/software',
+  'GET /api/update/node-runtime',
+  'GET /api/docker-containment/status',
 ]);
 
 const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);

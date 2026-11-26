@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { callRoute, hostControlApp, REMOTE_ADDRESS } from './hostControlTestHarness.js';
+import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
@@ -17,11 +18,26 @@ const makeLogProcess = () => {
 };
 
 const auth = vi.hoisted(() => ({ enabled: false }));
+const peer = vi.hoisted(() => ({
+  id: 'example-peer',
+  instanceId: 'example-instance',
+  syncSecret: 'example-pair-secret-0123456789-abcdef',
+}));
 const effects = vi.hoisted(() => ({
   getLogs: vi.fn(async (name, lines) => `${name}:${lines}`),
   spawnPm2: vi.fn(),
   getBrowserLogs: vi.fn(async (lines) => ({ stdout: `browser:${lines}`, stderr: '' })),
   getHomebrewStatus: vi.fn(async ({ fresh }) => ({ available: true, fresh, packages: [] })),
+  getSubmoduleOverview: vi.fn(async () => ({})),
+  getGitInfo: vi.fn(async () => ({})),
+  listDevices: vi.fn(async () => ({ video: [], audio: [] })),
+  getRiggingReadiness: vi.fn(async () => ({})),
+  diagnoseMossRuntime: vi.fn(async () => ({})),
+  checkFaceTimeSetup: vi.fn(async () => ({})),
+  getSoftwareInventory: vi.fn(async () => ({})),
+  getNodeRuntimeStatus: vi.fn(async () => ({})),
+  getDockerContainmentStatus: vi.fn(async () => ({})),
+  listHarnesses: vi.fn(async () => []),
 }));
 
 vi.mock('../services/auth.js', async (importOriginal) => ({
@@ -34,11 +50,11 @@ vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn(async () => ({})),
 }));
 vi.mock('../services/instanceIdentity.js', () => ({
-  loadData: vi.fn(async () => ({ peers: [] })),
+  loadData: vi.fn(async () => ({ peers: [peer] })),
 }));
 vi.mock('../services/apps.js', () => ({
   getAllApps: vi.fn(async () => [{ id: 'app-001', pm2ProcessNames: ['example-api'] }]),
-  getAppById: vi.fn(async (id) => (id === 'app-001' ? { id: 'app-001', pm2ProcessNames: ['example-api'] } : null)),
+  getAppById: vi.fn(async (id) => (id === 'app-001' ? { id: 'app-001', repoPath: '/example/repo', pm2ProcessNames: ['example-api'] } : null)),
   notifyAppsChanged: vi.fn(),
   PORTOS_APP_ID: 'portos-default',
 }));
@@ -98,7 +114,7 @@ vi.mock('../services/appListEnrichment.js', () => ({
 }));
 vi.mock('../services/updateChecker.js', () => ({}));
 vi.mock('../services/nodeRuntime.js', () => ({
-  getNodeRuntimeStatus: vi.fn(),
+  getNodeRuntimeStatus: effects.getNodeRuntimeStatus,
   repairStartup: vi.fn(),
   startNodeUpdate: vi.fn(),
   startPm2Update: vi.fn(),
@@ -110,11 +126,44 @@ vi.mock('../services/updatePreflight.js', () => ({
   getPersistentMindImageWorkGuard: vi.fn(),
 }));
 
+vi.mock('../services/gitSubmodules.js', () => ({ getSubmoduleOverview: effects.getSubmoduleOverview }));
+vi.mock('../services/git/status.js', () => ({ getGitInfo: effects.getGitInfo }));
+vi.mock('../services/git/sync.js', () => ({}));
+vi.mock('../services/git/cleanup.js', () => ({}));
+vi.mock('../services/cos/cosAgentLifecycle.js', () => ({}));
+vi.mock('../services/mediaService.js', () => ({ default: { listDevices: effects.listDevices } }));
+vi.mock('../services/rigging/readiness.js', () => ({ getRiggingReadiness: effects.getRiggingReadiness }));
+vi.mock('../services/rigging/autoSkin.js', () => ({}));
+vi.mock('../services/rigging/retarget.js', () => ({}));
+vi.mock('../services/imageGen/mossRuntime.js', () => ({ diagnoseMossRuntime: effects.diagnoseMossRuntime }));
+vi.mock('../services/imageGen/mossInstall.js', () => ({}));
+vi.mock('../services/voice/facetimeBridge.js', () => ({ checkSetup: effects.checkFaceTimeSetup }));
+vi.mock('../services/voice/callSession.js', () => ({}));
+vi.mock('../services/voice/bootstrap.js', () => ({}));
+vi.mock('../services/voice/profileBenchmarks.js', () => ({}));
+vi.mock('../services/voice/fineTuning.js', () => ({}));
+vi.mock('../services/modelObservation.js', () => ({
+  observeModelMutations: () => (_req, _res, next) => next(),
+  observeModelResource: (_key, read) => ({ read }),
+}));
+vi.mock('../services/softwareInventory.js', () => ({ getSoftwareInventory: effects.getSoftwareInventory }));
+vi.mock('../services/dockerContainment.js', () => ({ getDockerContainmentStatus: effects.getDockerContainmentStatus }));
+vi.mock('../services/instanceFeatures.js', () => ({ isInstanceFeatureEnabled: vi.fn(async () => true) }));
+vi.mock('../services/harnesses.js', () => ({ listHarnesses: effects.listHarnesses }));
+vi.mock('../services/harnessActionStream.js', () => ({}));
+
 const mounts = [
   ['/api/logs', (await import('./logs.js')).default],
   ['/api/browser', (await import('./browser.js')).default],
   ['/api/apps', (await import('./apps/lifecycle.js')).default],
   ['/api/update', (await import('./update.js')).default],
+  ['/api/git', (await import('./git.js')).default],
+  ['/api/media', (await import('./media.js')).default],
+  ['/api/rigging', (await import('./rigging.js')).default],
+  ['/api/image-gen/setup', (await import('./imageGenSetup.js')).default],
+  ['/api/voice', (await import('./voice.js')).default],
+  ['/api/docker-containment', (await import('./dockerContainment.js')).default],
+  ['/api/harnesses', (await import('./harnesses.js')).default],
 ];
 
 const routes = [
@@ -123,13 +172,24 @@ const routes = [
   ['/api/browser/logs', effects.getBrowserLogs],
   ['/api/apps/app-001/logs', effects.getLogs],
   ['/api/update/software/homebrew?fresh=1', effects.getHomebrewStatus],
+  ['/api/git/submodules/status', effects.getSubmoduleOverview],
+  ['/api/git/app-001', effects.getGitInfo],
+  ['/api/media/devices', effects.listDevices],
+  ['/api/rigging/readiness', effects.getRiggingReadiness],
+  ['/api/rigging/readiness?refresh=1', effects.getRiggingReadiness],
+  ['/api/image-gen/setup/moss-install', effects.diagnoseMossRuntime],
+  ['/api/voice/facetime/status', effects.checkFaceTimeSetup],
+  ['/api/update/software', effects.getSoftwareInventory],
+  ['/api/update/software?fresh=1', effects.getSoftwareInventory],
+  ['/api/update/node-runtime', effects.getNodeRuntimeStatus],
+  ['/api/docker-containment/status', effects.getDockerContainmentStatus],
+  ['/api/harnesses?fresh=1', effects.listHarnesses],
 ];
 
 const expectNoSideEffects = () => {
-  expect(effects.getLogs).not.toHaveBeenCalled();
-  expect(effects.spawnPm2).not.toHaveBeenCalled();
-  expect(effects.getBrowserLogs).not.toHaveBeenCalled();
-  expect(effects.getHomebrewStatus).not.toHaveBeenCalled();
+  for (const [name, effect] of Object.entries(effects)) {
+    expect(effect, name).not.toHaveBeenCalled();
+  }
 };
 
 beforeEach(() => {
@@ -138,8 +198,8 @@ beforeEach(() => {
   effects.spawnPm2.mockImplementation(makeLogProcess);
 });
 
-describe('process-spawning and host-mutating GET routes (#18224)', () => {
-  it('refuses remote password-free callers with 403 HOST_CONTROL_FORBIDDEN before spawning pm2 or brew', async () => {
+describe('process-spawning and host-mutating GET routes', () => {
+  it('refuses remote password-free callers before probing the host', async () => {
     const app = await hostControlApp(REMOTE_ADDRESS, mounts);
     for (const [path] of routes) {
       const response = await callRoute(app, ['get', path, undefined]);
@@ -155,6 +215,22 @@ describe('process-spawning and host-mutating GET routes (#18224)', () => {
     for (const [path] of routes) {
       const response = await callRoute(app, ['get', path, undefined], { Authorization: basic });
       expect([response.status, response.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expectNoSideEffects();
+  });
+
+  it.each([false, true])('refuses paired peers before probing the host (auth enabled: %s)', async (enabled) => {
+    auth.enabled = enabled;
+    const headers = {
+      [PEER_INSTANCE_HEADER]: peer.instanceId,
+      [PEER_AUTH_HEADER]: derivePeerAuthToken(peer.syncSecret, peer.instanceId),
+    };
+    // On protected installs, the federation scope check rejects the peer before host control runs.
+    const code = enabled ? 'PEER_SCOPE_FORBIDDEN' : 'HOST_CONTROL_FORBIDDEN';
+    const app = await hostControlApp(REMOTE_ADDRESS, mounts);
+    for (const [path] of routes) {
+      const response = await callRoute(app, ['get', path], headers);
+      expect([response.status, response.body.code], path).toEqual([403, code]);
     }
     expectNoSideEffects();
   });

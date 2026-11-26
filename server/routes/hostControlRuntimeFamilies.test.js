@@ -172,6 +172,7 @@ import harnessRoutes from './harnesses.js';
 import localLlmRoutes from './localLlm.js';
 import { updateConfig, launchBrowser } from '../services/browserService.js';
 import { streamHarnessAction } from '../services/harnessActionStream.js';
+import { listHarnesses } from '../services/harnesses.js';
 import { installBackend, getStatus, listModels, installModel } from '../services/localLlm.js';
 import { runOpenCodeAgentBenchmark } from '../services/localModelAgentBenchmark.js';
 import { updateSettingsWith } from '../services/settings.js';
@@ -226,5 +227,14 @@ describe('operator authority for browser, harness and local-runtime management',
     for (const path of ['/api/browser/config', '/api/harnesses', '/api/local-llm/status', '/api/local-llm/catalog?backend=ollama']) {
       expect((await callRoute(app, ['get', path])).status, path).toBe(200);
     }
+    expect(listHarnesses).toHaveBeenCalledExactlyOnceWith({ fresh: false });
+  });
+
+  it('requires host control for a forced harness refresh', async () => {
+    const path = '/api/harnesses?fresh=1';
+    await expectRemoteRefusal(mounts, ['get', path, undefined, listHarnesses]);
+    const app = await hostControlApp('127.0.0.1', mounts);
+    expect((await callRoute(app, ['get', path])).status).toBe(200);
+    expect(listHarnesses).toHaveBeenCalledExactlyOnceWith({ fresh: true });
   });
 });
