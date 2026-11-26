@@ -434,11 +434,11 @@ async function installLockedMtplx(onProgress) {
       // A failed sync may have written the entry point before all dependencies.
       // Do not advertise that partial runtime as installed on the next poll.
       if (args[0] === 'pip') await unlink(mtplxManagedBinary()).catch((error) => { if (error.code !== 'ENOENT') throw error; });
-      throw new ServerError(`MTPLX install failed: ${result.error}`, { status: 500, code: 'MTPLX_INSTALL_FAILED' });
+      throw new ServerError(`MTPLX install failed: ${result.error}`, { status: 502, code: 'MTPLX_INSTALL_FAILED' });
     }
   }
   if (!findCommandOnPath(mtplxManagedBinary())) {
-    throw new ServerError('MTPLX installation did not create an executable. Retry the runtime installation.', { status: 500, code: 'MTPLX_INSTALL_FAILED' });
+    throw new ServerError('MTPLX installation did not create an executable. Retry the runtime installation.', { status: 502, code: 'MTPLX_INSTALL_FAILED' });
   }
   return { success: true, message: 'MTPLX installed' };
 }

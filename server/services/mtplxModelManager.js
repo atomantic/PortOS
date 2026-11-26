@@ -293,7 +293,7 @@ export async function removeMtplxModel(model) {
     }
     throw new ServerError(
       `Failed to remove ${repo}: ${spawnFailureDetail(result, `mtplx exited with code ${result.code}`)}`,
-      { status: 500 }
+      { status: 502, code: 'INTERNAL_ERROR' }
     );
   }
 

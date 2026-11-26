@@ -18,21 +18,14 @@
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { assertHostControl } from '../services/authGate.js';
 import { streamHarnessAction } from '../services/harnessActionStream.js';
 import { listHarnesses, refreshHarnessModels } from '../services/harnesses.js';
-import { harnessActionSchema, harnessRefreshSchema } from '../lib/providerValidation.js';
+import { harnessActionSchema, harnessListQuerySchema, harnessRefreshSchema, harnessReviewUpdateSchema } from '../lib/providerValidation.js';
 
 const router = Router();
-const listQuerySchema = z.object({ fresh: z.string().optional() });
-const reviewUpdateSchema = harnessRefreshSchema.extend({
-  expectedVersion: z.string().max(100).regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/),
-  candidateVersion: z.string().max(100).regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/),
-  ticket: z.string().uuid(),
-});
 
 /**
  * The whole page in one round trip. `?fresh=1` bypasses both the runtime status
@@ -41,7 +34,7 @@ const reviewUpdateSchema = harnessRefreshSchema.extend({
  * waiting out a cache.
  */
 router.get('/', asyncHandler(async (req, res) => {
-  const { fresh: freshParam } = validateRequest(listQuerySchema, req.query);
+  const { fresh: freshParam } = validateRequest(harnessListQuerySchema, req.query);
   const fresh = freshParam === '1';
   if (fresh) assertHostControl(req);
   res.json({ harnesses: await listHarnesses({ fresh }) });
@@ -57,7 +50,7 @@ router.get('/update-reference', asyncHandler(async (req, res) => {
 
 // Inline update uses the same guarded stream, pinned to the reviewed executable.
 router.post('/review-update', asyncHandler(async (req, res) => {
-  const { runtime, expectedVersion, candidateVersion, ticket } = validateRequest(reviewUpdateSchema, req.query);
+  const { runtime, expectedVersion, candidateVersion, ticket } = validateRequest(harnessReviewUpdateSchema, req.query);
   const { getRuntimeUpdateReviewSnapshot } = await import('../services/runtimeUpdateReview.js');
   const row = getRuntimeUpdateReviewSnapshot().items.find(item => item.id === `harness:${runtime}` && !item.unverified);
   if (!row?.harnessUpdate?.updatable || row.harnessUpdate.installedVersion !== expectedVersion || row.harnessUpdate.candidateVersion !== candidateVersion) {
