@@ -93,9 +93,9 @@ describe.skipIf(!canRun)('production review in a real browser (Chrome, ffmpeg an
       build,
       recordedRoot: client,
       temp: ui,
-      config: { configFile: false, root: ui, plugins: [react()], css: { postcss: { plugins: [tailwind({ base: client })] } }, build: { outDir: join(ui, 'dist'), emptyOutDir: true }, logLevel: 'warn' },
+      config: { configFile: false, root: ui, publicDir: join(client, 'public'), plugins: [react()], css: { postcss: { plugins: [tailwind({ base: client })] } }, build: { outDir: join(ui, 'dist'), emptyOutDir: true }, logLevel: 'warn' },
     });
-    const app = express(); const staticFiles = createRecordedStaticServer(express); app.use(express.json()); app.use('/api/music-video', router); app.use('/data/videos', staticFiles.serve(PATHS.videos)); app.use('/fonts', staticFiles.serve(join(client, 'public/fonts'))); app.use(staticFiles.serve(join(ui, 'dist'))); app.use(errorMiddleware);
+    const app = express(); const staticFiles = createRecordedStaticServer(express); app.use(express.json()); app.use('/api/music-video', router); app.use('/data/videos', staticFiles.serve(PATHS.videos)); app.use(staticFiles.serve(join(ui, 'dist'))); app.use(errorMiddleware);
     server = await staticFiles.start(app);
     proc = spawn(chrome, _testChromeCaptureArgs(join(PATHS.data, 'test-chrome')), { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
     endpoint = new URL(await _waitForTestChrome(proc)).origin.replace('ws:', 'http:');
@@ -104,6 +104,8 @@ describe.skipIf(!canRun)('production review in a real browser (Chrome, ffmpeg an
     const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await page.evaluate(() => document.fonts.ready);
+    expect(await page.evaluate(async () => Promise.all(['Inter-Regular.woff2', 'Inter-Medium.woff2', 'Inter-SemiBold.woff2', 'Inter-Bold.woff2', 'IBMPlexMono-Regular.woff2', 'IBMPlexMono-Medium.woff2', 'IBMPlexMono-SemiBold.woff2', 'GeistPixel-Square.woff2', 'GeistPixel-Grid.woff2'].map(async file => (await fetch(`/fonts/${file}`)).ok)))).toEqual(Array(9).fill(true));
     expect(await page.locator('input[type=password]').count()).toBe(0);
     await page.getByRole('button', { name: 'Approve art direction', exact: true }).waitFor();
     await page.waitForFunction(() => ![...document.querySelectorAll('button')].find(b => b.textContent === 'Approve art direction')?.disabled);

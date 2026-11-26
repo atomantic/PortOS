@@ -90,9 +90,9 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
       build,
       recordedRoot: client,
       temp: ui,
-      config: { configFile: false, root: ui, plugins: [react()], css: { postcss: { plugins: [tailwind({ base: client })] } }, build: { outDir: join(ui, 'dist'), emptyOutDir: true }, logLevel: 'warn' },
+      config: { configFile: false, root: ui, publicDir: join(client, 'public'), plugins: [react()], css: { postcss: { plugins: [tailwind({ base: client })] } }, build: { outDir: join(ui, 'dist'), emptyOutDir: true }, logLevel: 'warn' },
     });
-    const app = express(); const staticFiles = createRecordedStaticServer(express); app.use(express.json()); app.get('/api/providers', (req,res)=>res.json({activeProvider:'stub-provider',providers:[{id:'stub-provider',name:'Synthetic author',type:'api',enabled:true,models:['fixture-model'],defaultModel:'fixture-model',toolFreeOneShot:true}]})); app.use('/api/music-video', router); app.use('/data/videos', staticFiles.serve(PATHS.videos)); app.use('/fonts', staticFiles.serve(join(client, 'public/fonts'))); app.use(staticFiles.serve(join(ui, 'dist'))); app.use(errorMiddleware);
+    const app = express(); const staticFiles = createRecordedStaticServer(express); app.use(express.json()); app.get('/api/providers', (req,res)=>res.json({activeProvider:'stub-provider',providers:[{id:'stub-provider',name:'Synthetic author',type:'api',enabled:true,models:['fixture-model'],defaultModel:'fixture-model',toolFreeOneShot:true}]})); app.use('/api/music-video', router); app.use('/data/videos', staticFiles.serve(PATHS.videos)); app.use(staticFiles.serve(join(ui, 'dist'))); app.use(errorMiddleware);
     server = await staticFiles.start(app);
     proc = spawn(chrome, _testChromeCaptureArgs(join(PATHS.data, 'test-chrome')), { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
     endpoint = new URL(await _waitForTestChrome(proc)).origin.replace('ws:', 'http:');
@@ -132,6 +132,8 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
       }
     };
     await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await page.evaluate(() => document.fonts.ready);
+    expect(await page.evaluate(async () => Promise.all(['Inter-Regular.woff2', 'Inter-Medium.woff2', 'Inter-SemiBold.woff2', 'Inter-Bold.woff2', 'IBMPlexMono-Regular.woff2', 'IBMPlexMono-Medium.woff2', 'IBMPlexMono-SemiBold.woff2', 'GeistPixel-Square.woff2', 'GeistPixel-Grid.woff2'].map(async file => (await fetch(`/fonts/${file}`)).ok)))).toEqual(Array(9).fill(true));
     expect(await page.getByLabel('Design and composition media').count()).toBe(0); // media mode is chosen in Setup only
     await page.getByText('Document source', { exact: true }).click();
     await page.getByLabel('Authoring renderer').selectOption('three');
