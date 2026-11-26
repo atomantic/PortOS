@@ -2,8 +2,8 @@
  * Owner-only storage for OAuth secrets and tokens: directory 0700, files 0600.
  *
  * mkdir's mode is umask-masked and ignored for existing dirs, so chmod enforces
- * it; atomicWrite preserves an old file's mode, so chmod follows each write.
- * Best-effort: chmod is a no-op on Windows and must not break the auth flow.
+ * it on existing directories. Secure files use an explicit mode before
+ * the temporary inode is written or renamed into place.
  */
 import { mkdir, chmod } from 'fs/promises';
 import { atomicWrite } from './fileCore.js';
@@ -20,6 +20,5 @@ export async function ensureSecureDir(dir) {
 }
 
 export async function writeSecureJson(file, data) {
-  await atomicWrite(file, data);
-  await tighten(file, 0o600);
+  await atomicWrite(file, data, { mode: 0o600 });
 }

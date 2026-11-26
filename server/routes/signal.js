@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { z } from 'zod';
+import { signalConversationSchema, signalBlocklistSchema, signalBlocklistHandlesSchema, signalListSchema } from '../lib/signalValidation.js';
 import * as signalManage from '../services/signalManage.js';
 
 import { asyncHandler } from '../lib/errorHandler.js';
@@ -31,29 +31,27 @@ router.post('/sync', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-const listSchema = z.object({ q: z.string().max(200).optional(), limit: z.coerce.number().int().min(1).max(2000).optional() });
 router.get('/conversations', asyncHandler(async (req, res) => {
-  const options = await validateRequest(listSchema, req.query);
+  const options = await validateRequest(signalListSchema, req.query);
   res.json({ conversations: await signalManage.listConversations(options) });
 }));
-const conversationSchema = z.object({ conversationId: z.string().trim().min(1).max(1000), purgeExisting: z.boolean().optional() });
 router.post('/purge', asyncHandler(async (req, res) => {
-  const body = await validateRequest(conversationSchema, req.body);
+  const body = await validateRequest(signalConversationSchema, req.body);
   res.json(await signalManage.purgeConversation(body.conversationId));
 }));
 router.post('/blocklist/conversations', asyncHandler(async (req, res) => {
-  const body = await validateRequest(conversationSchema, req.body);
+  const body = await validateRequest(signalConversationSchema, req.body);
   res.json(await signalManage.blockConversation(body.conversationId, body));
 }));
 router.get('/blocklist', asyncHandler(async (req, res) => {
   res.json(await signalManage.readBlocklist());
 }));
-const blocklistSchema = z.object({
-  handles: z.array(z.string().trim().min(1).max(200)).max(5000),
-  conversationIds: z.array(z.string().trim().min(1).max(1000)).max(5000),
-});
+router.post('/blocklist/handles', asyncHandler(async (req, res) => {
+  const { handles, purgeExisting } = await validateRequest(signalBlocklistHandlesSchema, req.body);
+  res.json(await signalManage.addBlockedHandles(handles, { purgeExisting }));
+}));
 router.put('/blocklist', asyncHandler(async (req, res) => {
-  const body = await validateRequest(blocklistSchema, req.body);
+  const body = await validateRequest(signalBlocklistSchema, req.body);
   res.json(await signalManage.setBlocklist(body));
 }));
 export default router;

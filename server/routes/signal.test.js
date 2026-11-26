@@ -3,7 +3,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
-vi.mock('../services/signalManage.js', () => ({ blockConversation: vi.fn(), purgeConversation: vi.fn() }));
+vi.mock('../services/signalManage.js', () => ({ blockConversation: vi.fn(), purgeConversation: vi.fn(), addBlockedHandles: vi.fn() }));
 vi.mock('../services/signalSync.js', () => ({ checkSetup: vi.fn(), getStatus: vi.fn(), runSync: vi.fn() }));
 
 import * as signalManage from '../services/signalManage.js';
@@ -58,5 +58,18 @@ describe('/api/signal', () => {
     const ok = await request(app).post('/api/signal/purge').send({ conversationId: ' abc ' });
     expect(ok.body).toEqual({ purged: 2 });
     expect(signalManage.purgeConversation).toHaveBeenCalledWith('abc');
+  });
+  it('validates handle additions and forwards the explicit purge request', async () => {
+    const path = '/api/signal/blocklist/handles';
+    const bad = await request(app).post(path).send({ handles: [' '], purgeExisting: true });
+    expect(bad.status).toBe(400);
+    expect(signalManage.addBlockedHandles).not.toHaveBeenCalled();
+
+    const result = { handles: ['blocked@example.com'], added: [], purged: 2, touchpoints: 1 };
+    signalManage.addBlockedHandles.mockResolvedValue(result);
+    const ok = await request(app).post(path).send({ handles: ' blocked@example.com ', purgeExisting: true });
+    expect(ok.status).toBe(200);
+    expect(ok.body).toEqual(result);
+    expect(signalManage.addBlockedHandles).toHaveBeenCalledExactlyOnceWith('blocked@example.com', { purgeExisting: true });
   });
 });

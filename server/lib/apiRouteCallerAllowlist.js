@@ -213,6 +213,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     // docs/features/agent-skills.md (P5 surfaces): the Skill Registry routes, for agents and API callers.
     '/api/skills/config',
     '/api/skills/manage',
+    // docs/features/privacy-center.md documents purging imported Signal data by handle.
+    'POST /api/signal/blocklist/handles',
     // scripts/ops/reconcile-maintenance-reservations.mjs confirms terminal runner ownership.
     '/api/system/maintenance/runner-owner/:agentId',
     '/api/universe-builder/:id/canon/backfill-descriptions',

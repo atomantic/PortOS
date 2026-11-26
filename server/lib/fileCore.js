@@ -289,7 +289,7 @@ export async function ensureDirs(dirs) {
  * await atomicWrite(FILE, { version: 1, items: [] });
  * await atomicWrite(LOG_FILE, 'raw string content');
  */
-export async function atomicWrite(filePath, data, { onStage } = {}) {
+export async function atomicWrite(filePath, data, { onStage, mode } = {}) {
   // #6176 — the filesystem analogue of db.js's row-write backstop. Refuses
   // before any bytes are produced, so a leaking suite cannot even leave a temp
   // file behind in the real tree.
@@ -309,13 +309,15 @@ export async function atomicWrite(filePath, data, { onStage } = {}) {
   // (a crash between write and chmod would otherwise leave a readable copy, and
   // a local user could race-read it during the window). A trailing chmod pins
   // the exact mode in case the umask tightened the create below it. New files
-  // (stat fails with ENOENT) keep the umask default, exactly as before.
+  // (stat fails with ENOENT) keep the umask default. An explicit mode applies
+  // before bytes are written, including when replacing an existing file.
   const existingMode = await stat(filePath).then((s) => s.mode & 0o777, (err) => {
     // An unreadable mode is not an absent file: defaulting here could replace
     // an owner-only store with a more permissive inode.
     if (err.code === 'ENOENT') return null;
     throw err;
   });
+  const writeMode = mode ?? existingMode;
   const tmp = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   const renameWithWindowsRetries = async (from, to, {
     attempts = WIN_RETRY_ATTEMPTS,
@@ -353,8 +355,8 @@ export async function atomicWrite(filePath, data, { onStage } = {}) {
     // Own cleanup from that first write, and publish only once its mode is set.
     // `flush` fsyncs the temp file's bytes before the handle closes, so the
     // rename below never publishes an inode the disk has not yet received.
-    await writeFile(tmp, payload, { ...(existingMode !== null ? { mode: existingMode } : {}), flush: durableWrites });
-    if (existingMode !== null) await chmod(tmp, existingMode);
+    await writeFile(tmp, payload, { ...(writeMode !== null ? { mode: writeMode } : {}), flush: durableWrites });
+    if (writeMode !== null) await chmod(tmp, writeMode);
     onStage?.('replace');
     await replace();
   } catch (err) {
