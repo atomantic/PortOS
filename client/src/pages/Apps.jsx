@@ -27,7 +27,7 @@ import { PORTOS_APP_ID } from '../services/apiCore.js';
 import { useSocketResource } from '../hooks/useSocketResource';
 import { getLaunchUrls } from '../services/appUrls';
 import { formatCount } from '../utils/formatters';
-import { NON_PM2_TYPES, getAppTypeLabel } from '../components/apps/constants';
+import { NON_PM2_TYPES, PORTOS_STOP_WARNING, getAppTypeLabel } from '../components/apps/constants';
 
 const APP_EVENTS = ['apps:changed'];
 
@@ -45,6 +45,8 @@ const fetchQualitySummaries = async ({ signal }) => {
 
 export default function Apps() {
   const [retrying, setRetrying] = useState(false);
+  const [confirmingStop, setConfirmingStop] = useState(false);
+  const stopTriggerRef = useRef(null);
   const [confirmingDelete, setConfirmingDelete] = useState(null);
   const [actionLoading, setActionLoading] = useState({});
   const [nativeLaunchLoading, setNativeLaunchLoading] = useState({});
@@ -274,6 +276,7 @@ export default function Apps() {
           <div className="space-y-4">
             {displayedApps.map(app => {
               const isNonPm2 = NON_PM2_TYPES.has(app.type);
+              const isPortOS = app.id === PORTOS_APP_ID;
               const launchUrls = getLaunchUrls(app);
               const primaryLaunchUrl = launchUrls.https || launchUrls.http;
               return (
@@ -350,7 +353,8 @@ export default function Apps() {
                         {app.overallStatus === 'online' ? (
                           <>
                             <button
-                              onClick={() => handleStop(app)}
+                              ref={isPortOS ? stopTriggerRef : undefined}
+                              onClick={isPortOS ? () => setConfirmingStop(true) : () => handleStop(app)}
                               disabled={actionLoading[app.id]}
                               className="px-3 py-1.5 min-h-[44px] bg-port-error/20 text-port-error enabled:hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-error"
                               aria-label={`Stop ${app.name}`}
@@ -476,6 +480,23 @@ export default function Apps() {
                       </div>
                     </div>
                   </div>
+
+                  {isPortOS && !isNonPm2 && app.overallStatus === 'online' && confirmingStop && (
+                    <InlineConfirmRow
+                      className="mt-3"
+                      autoFocus
+                      tone="warning"
+                      question={PORTOS_STOP_WARNING}
+                      confirmText="Stop PortOS"
+                      confirmDisabled={Boolean(actionLoading[app.id])}
+                      returnFocusRef={stopTriggerRef}
+                      onConfirm={() => {
+                        setConfirmingStop(false);
+                        handleStop(app);
+                      }}
+                      onCancel={() => setConfirmingStop(false)}
+                    />
+                  )}
 
                   {confirmingDelete === app.id && (
                     <InlineConfirmRow

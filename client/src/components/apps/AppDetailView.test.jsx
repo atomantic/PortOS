@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 
 const socketHandlers = new Map();
@@ -68,7 +69,7 @@ vi.mock('./tabs/QualityTab', () => ({ default: () => <div data-testid="tab-quali
 vi.mock('./LaunchVideoPanel', () => ({ default: () => <div data-testid="tab-launch-video" /> }));
 vi.mock('./tabs/UpdateTab', () => ({ default: () => <div data-testid="tab-update" /> }));
 
-import { getApp, launchNativeApp, buildApp } from '../../services/apiApps.js';
+import { getApp, launchNativeApp, buildApp, stopApp } from '../../services/apiApps.js';
 import { getProcessesList } from '../../services/apiCommands.js';
 import AppDetailView, { APP_DETAIL_TAB_ICONS } from './AppDetailView';
 import { APP_DETAIL_TABS } from './constants';
@@ -180,6 +181,42 @@ describe('AppDetailView header title', () => {
     await screen.findByRole('heading', { name: APP.name });
     expect(screen.queryByText(/example-backend/)).toBeNull();
     expect(screen.queryByText(/example-worker/)).toBeNull();
+  });
+});
+
+describe('AppDetailView Stop action', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    stopApp.mockResolvedValue({});
+  });
+
+  it('asks for confirmation before stopping PortOS and restores focus on cancel', async () => {
+    const user = userEvent.setup();
+    getApp.mockResolvedValue({ ...APP, id: PORTOS_APP_ID, name: 'PortOS', overallStatus: 'online' });
+    renderDetail(`/apps/${PORTOS_APP_ID}/overview`);
+
+    const trigger = await screen.findByRole('button', { name: 'Stop' });
+    await user.click(trigger);
+    expect(stopApp).not.toHaveBeenCalled();
+    expect(screen.getByRole('group', { name: 'Stop PortOS? This shuts down the web UI and requires terminal access to start again.' })).toHaveFocus();
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(stopApp).not.toHaveBeenCalled();
+    expect(trigger).toHaveFocus();
+
+    await user.click(trigger);
+    await user.click(screen.getByRole('button', { name: 'Stop PortOS' }));
+    expect(stopApp).toHaveBeenCalledExactlyOnceWith(PORTOS_APP_ID);
+  });
+
+  it('stops other managed apps immediately', async () => {
+    const user = userEvent.setup();
+    getApp.mockResolvedValue({ ...APP, overallStatus: 'online' });
+    renderDetail();
+
+    await user.click(await screen.findByRole('button', { name: 'Stop' }));
+    expect(stopApp).toHaveBeenCalledExactlyOnceWith(APP.id);
+    expect(screen.queryByRole('group', { name: /^Stop PortOS\?/ })).toBeNull();
   });
 });
 
