@@ -62,15 +62,26 @@ function foldConfigs(owner, key, customizations) {
     const currentEdited = isPlainObject(current) && Object.keys(customizations(current, domain, domain)).length > 0;
     const selected = currentEdited ? null : edited[0];
     if (selected) {
-      const [, original, fields] = selected;
+      const [id, original, fields] = selected;
       configs[domain] = { ...current, ...fields };
+      if (key !== 'taskTypeOverrides' && DEFAULT_FIX_PROFILES.has(id)) {
+        // The new filing default must not change the selected schedule's mode
+        // or disable delivery options that the old profile inherited from its
+        // app. The sanitizer drops nulls after the store merges domain defaults.
+        configs[domain].taskMetadata = {
+          fileIssues: false,
+          useWorktree: original.taskMetadata?.useWorktree ?? null,
+          openPR: original.taskMetadata?.openPR ?? null,
+          ...fields.taskMetadata,
+        };
+      }
       if (original.createdAt) configs[domain].createdAt = original.createdAt;
     } else if (!current && key === 'taskTypeOverrides' && aliases.length) {
       // Preserve an explicit legacy disable even when the destination has no entry.
       configs[domain] = aliases[0][1];
     }
-    for (const [id, original, fields] of edited) {
-      if (id === selected?.[0] || (selected && isDeepStrictEqual(fields, selected[2]))) continue;
+    for (const [id, original] of edited) {
+      if (id === selected?.[0]) continue;
       // One domain has one cadence and one prompt. Preserve conflicting edits
       // verbatim for recovery without running a second schedule.
       owner.retiredAuditConfigs ??= {};

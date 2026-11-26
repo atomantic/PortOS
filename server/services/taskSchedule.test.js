@@ -241,6 +241,20 @@ describe('taskSchedule', () => {
     expect(schedule.executions).toEqual({ 'task:code-simplification': { count: 8, perApp: {} } })
   })
 
+  it('keeps the effective fix mode and inherited delivery of a customized retired schedule', async () => {
+    mockSchedule({
+      tasks: {
+        'performance-efficiency': DEFAULT_TASK_INTERVALS['performance-efficiency'],
+        performance: { type: 'cron', cronExpression: '0 5 * * 2', taskMetadata: { fileIssues: false, openPR: true } },
+      },
+    })
+    const { tasks } = await loadSchedule()
+    expect(tasks['performance-efficiency']).toMatchObject({
+      type: 'cron', cronExpression: '0 5 * * 2',
+      taskMetadata: { fileIssues: false, useWorktree: null, openPR: true },
+    })
+  })
+
   describe('feature-gated shipped tasks', () => {
     it('associates both shipped JIRA tasks with the JIRA instance feature', () => {
       expect(DEFAULT_TASK_INTERVALS['jira-sprint-manager'].feature).toBe('jira')
