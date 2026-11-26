@@ -89,7 +89,9 @@ describe('shot-card clip body validation', () => {
       await renderSceneClips(project, input);
       expect(clipQueue.submit.mock.calls[0][0]).toMatchObject({ mode: 'ic-ingredients-25', numFrames: 217 });
       clipQueue.submit.mockClear();
-      await expect(renderSceneClips(project, { ...input, target: { numFrames: 121 } })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_TOO_LONG' });
+      await expect(renderSceneClips(project, { ...input, target: { numFrames: 121 } })).rejects.toMatchObject({
+        code: 'MUSIC_VIDEO_CLIP_TOO_LONG', status: 422, message: expect.stringMatching(/too long for one LTX reference clip/),
+      });
       project.scenes[1].endSec = 100;
       await expect(renderSceneClips(project, input)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_TOO_LONG' });
       expect(clipQueue.submit).not.toHaveBeenCalled();
@@ -97,6 +99,30 @@ describe('shot-card clip body validation', () => {
       models.mockRestore();
     }
   });
+  it('uses the same LTX inputs in short-form final-tier and prepared clip requests', async () => {
+    const mediaModels = await import('../../lib/mediaModels.js');
+    const models = vi.spyOn(mediaModels, 'getVideoModels').mockReturnValue([{ id: 'example-ltx', runtime: 'ltx25' }]);
+    try {
+      clipQueue.submit.mockClear();
+      const scene = { sceneId: 'source', startSec: 0, endSec: 4, clipLengthSec: 8, referenceImageId: 'start.png', prompt: 'The rider turns',
+        setReference: { subjectId: 'pier', greyboxShotId: 'wide' }, omittedCatalogSubjectIds: ['pier'] };
+      const project = {
+        id: 'mv-card', videoSettings: { backend: 'local', modelId: 'example-ltx', generationMode: 'ltxReferences' }, scenes: [scene],
+        visualSpec: { references: [{ id: 'lead', imageId: 'lead.png', role: 'character', condition: true }] },
+      };
+      await renderSceneClips(project, { sceneId: 'source', tier: 'final' });
+      const expected = { mode: 'ic-ingredients-25', numFrames: 193, icReferenceImageFiles: ['lead.png'] };
+      const [short] = clipQueue.submit.mock.calls[0];
+      expect(short).toMatchObject({ ...expected, musicVideo: { tier: 'final', expectedClipReferenceFiles: ['lead.png'] } });
+
+      await renderSceneClips(project, { sceneId: 'source', backend: 'local', prompt: scene.prompt, sourceImageFile: scene.referenceImageId,
+        mode: 'ic-ingredients-25', numFrames: 193, musicVideo: JSON.stringify({ compose: true }) });
+      expect(clipQueue.submit.mock.calls[1][0]).toMatchObject({ ...expected, musicVideo: { expectedClipReferenceFiles: ['lead.png'] } });
+    } finally {
+      models.mockRestore();
+    }
+  });
+
   it('requests enough hosted footage for every return to a shared source', async () => {
     for (const [backend, field, seconds] of [['fal', 'falDuration', 10], ['runway', 'runwayDuration', 9], ['grok', 'grokDuration', 10]]) {
       clipQueue.submit.mockClear();

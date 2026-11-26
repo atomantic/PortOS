@@ -76,6 +76,35 @@ describe('useMusicVideoSceneMedia clip batch (#10153)', () => {
     for (const [body] of generateVideo.mock.calls) expect(body.tier).toBeUndefined();
   });
 
+  it('queues matching LTX inputs for card Render and batch with an omitted greybox set', async () => {
+    generateVideo.mockResolvedValue({ status: 'queued', jobId: 'ltx-job' });
+    const scene = { ...project.scenes[0], clipLengthSec: 8,
+      setReference: { subjectId: 'pier', greyboxShotId: 'wide' }, omittedCatalogSubjectIds: ['pier'] };
+    const matchingProject = {
+      ...project, scenes: [scene],
+      visualSpec: { references: [{ id: 'lead', imageId: 'lead.png', role: 'character', condition: true }] },
+    };
+    const ltxSettings = {
+      settings: { backend: 'local', modelId: 'example-ltx', generationMode: 'ltxReferences' },
+      models: [{ id: 'example-ltx', runtime: 'ltx25' }],
+    };
+    const { result } = renderHook(() => useMusicVideoSceneMedia({
+      project: matchingProject, videoSettings: ltxSettings, applyScenePatch: vi.fn(),
+    }));
+    act(() => result.current.generateMissingVideos());
+    await flush();
+    fire('video-gen:completed', { generationId: 'ltx-job' });
+    await act(() => result.current.generateSceneVideo(scene, {
+      card: { prompt: 'Reference sheet: Rider.\n\nGenerated video: A rider turns',
+        ltxReferences: true, expectedClipReferenceFiles: ['lead.png'], expectedClipReferenceLabels: ['Rider'] },
+    }));
+
+    expect(generateVideo).toHaveBeenCalledTimes(2);
+    for (const [body] of generateVideo.mock.calls) {
+      expect(body).toMatchObject({ mode: 'ic-ingredients-25', numFrames: 193, icReferenceImageFiles: ['lead.png'] });
+    }
+  });
+
   it('Cancel remaining cancels every unfinished job and clears the spinners through the canceled event', async () => {
     let n = 0;
     generateVideo.mockImplementation(() => Promise.resolve({ status: 'queued', jobId: `job-${n++}` }));
