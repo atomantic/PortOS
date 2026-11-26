@@ -28,6 +28,7 @@ import {
   normalizeAuditTaskType,
   auditCapabilityRequirement,
 } from '../lib/auditCatalog.js';
+import { CONSOLIDATED_AUDIT_DOMAINS } from '../lib/auditDomains.js';
 import {
   CLAIM_DRAIN_TASK_TYPES,
   buildBusySlots,
@@ -338,6 +339,12 @@ export async function collectBusyOccupancies(app, { ignoreTaskTypes = [] } = {})
   return sources;
 }
 
+function legacyAuditMembers(taskTypes) {
+  return new Set(Object.entries(CONSOLIDATED_AUDIT_DOMAINS)
+    .filter(([domain]) => taskTypes.includes(domain))
+    .flatMap(([, { members }]) => members));
+}
+
 const CLAIM_OFFSET_CHOICES = [1, 2, 3, 4, 5, 6, 8, 12];
 
 /**
@@ -404,16 +411,17 @@ export async function buildQualitySchedulePlan(app, formOptions = {}, { hydrate 
     : formOptions;
   const settings = resolveQualityScheduleOptions(options);
   // Explicit requests from older clients still select their original task profile.
-  // A domain plan must leave all other legacy cadences in place and avoid their slots.
   const requested = Array.isArray(options.taskTypes) ? options.taskTypes : null;
   const plannedTypes = [...new Set([...AUDIT_TASK_TYPE_LIST, ...(requested || [])])].filter(type => Object.hasOwn(AUDIT_EXECUTION_PROFILES, type));
   // Independent: the repository scan and the schedule read share no input.
-  const [{ checks, capabilities, scanned, complete }, sources] = await Promise.all([
+  const [{ checks, capabilities, scanned, complete }, occupancies] = await Promise.all([
     resolveQualityChecks(app, plannedTypes),
     collectBusyOccupancies(app, { ignoreTaskTypes: [...plannedTypes, ...CLAIM_DRAIN_TASK_TYPES] }),
   ]);
 
   const taskTypes = requested ?? checks.filter(check => check.applicable).map(check => check.taskType);
+  const replacedTypes = legacyAuditMembers(taskTypes);
+  const sources = occupancies.filter(({ taskType }) => !replacedTypes.has(taskType));
 
   const fileIssuesByType = options.fileIssuesByType || {};
   let plan = planQualitySchedule({ taskTypes, fileIssuesByType, busy: buildBusySlots(sources, settings), options: settings });
@@ -454,8 +462,8 @@ export async function buildQualitySchedulePlan(app, formOptions = {}, { hydrate 
  *
  * Checks the user left out are DISABLED rather than left alone — the form is
  * the whole picture of the app's quality cadence, so an audit dropped from the
- * selection must stop running. Only the audit types and the claim drain are
- * touched; every other task type the app has configured is left exactly as it is.
+ * selection must stop running. A domain that gets a slot also replaces its
+ * enabled legacy members, except members explicitly selected in the plan.
  *
  * @param {object} app - The managed app record
  * @param {object} [options] - The same option bag `buildQualitySchedulePlan` takes
@@ -483,6 +491,12 @@ export async function applyQualitySchedulePlan(app, options = {}) {
       // Clearing the interval alongside `enabled: false` keeps a stale cron
       // from reviving on the next manual enable.
       : { enabled: false, interval: null };
+  }
+  for (const taskType of legacyAuditMembers([...scheduled.keys()])) {
+    // A member explicitly selected by an older client already has its own patch.
+    if (!Object.hasOwn(patches, taskType) && existing[taskType]?.enabled === true) {
+      patches[taskType] = { enabled: false, interval: null };
+    }
   }
   if (plan.claim) patches[plan.claim.taskType] = { enabled: true, interval: plan.claim.cron };
   // Retire a drain an earlier plan planted. Without this, switching the drain

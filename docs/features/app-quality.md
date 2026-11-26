@@ -358,9 +358,9 @@ this app plus every install-wide type whether or not it is, each perpetual drain
 recheck cadence, and the app's own cron overrides — where a per-app cadence
 REPLACES the global one, as `shouldRunTask` reads it), pads each by an hour before
 and two after, and places slots in the free cells nearest an even spacing. That
-is what keeps an audit out of a 03:30 nightly release window. The types the plan
-is about to rewrite are excluded from that collection, so re-running the form
-does not treat last week's plan as an obstacle to this week's. A window cannot
+is what keeps an audit out of a 03:30 nightly release window. The planner
+excludes the cadence it is about to rewrite, including legacy audits covered
+by the selected domains. A window cannot
 wrap past midnight; asking for one is reported rather than silently collapsed.
 
 **Delivery and the claim drain.** Each check either files issues or implements the
@@ -369,19 +369,21 @@ default** — 11 audits ship `defaultFileIssues: false`, and a form-wide default
 would silently contradict every other dispatch path — with a form-wide override
 and a per-check override above it. When at least one check files issues, one claim
 job — `claim-work` by default, which routes to whichever tracker the app resolves
-to — is scheduled a few hours after each check as a single daily cron (with the
-shipped defaults, `0 3,9,15,21 * * *`), so the issues an audit files get worked
-before the next audit runs. Its placement only ever moves later **in the same
-day** than the check it follows — a daily cron that wrapped past midnight would
-run before every audit, not after — and the slot is dropped rather than wrapped
-when the day has no room left. No claim drain is scheduled when every selected
+to — is scheduled a few hours after each check as a single daily cron, so the
+issues an audit files get worked before the next audit runs. The planner prefers
+audit hours that leave room for the requested claim delay before midnight. If
+only later audit hours are available, it keeps the audit and reports a dropped
+claim slot when the follow-up cannot fit on the same day. No claim drain is
+scheduled when every selected
 check implements its own fixes, and Apply retires a drain an earlier plan planted
 when the drain is switched off or switched to another type (recognized by the
 cron shape this planner emits, so a claim cadence set by hand survives).
 
 Nothing is written until **Apply**, which is also the whole picture: the selected
-checks are enabled with their planned cron and delivery mode, and audit types
-left out are disabled with their stale cron cleared. Other task types are
-untouched. Endpoints: `GET /api/apps/:id/quality-schedule`,
+checks are enabled with their planned cron and delivery mode, and unselected
+domains are disabled with their stale crons cleared. Apply also disables the
+enabled legacy members of each domain that receives a slot and clears their
+crons. Legacy audits that an older client explicitly selects still receive
+their own slots. Endpoints: `GET /api/apps/:id/quality-schedule`,
 `POST /api/apps/:id/quality-schedule/preview` (read-only re-plan), and
 `POST /api/apps/:id/quality-schedule/apply`.
