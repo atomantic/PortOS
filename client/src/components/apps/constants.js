@@ -4,6 +4,8 @@
 import { PORTOS_APP_ID } from '../../lib/appIdentity.js';
 import { APP_FEATURE_IDS, INSTANCE_FEATURES } from '../../../../server/lib/instanceFeatureRegistry.js';
 
+export const PORTOS_STOP_WARNING = 'Stop PortOS? This shuts down the web UI and requires terminal access to start again.';
+
 export const NON_PM2_TYPES = new Set(['ios-native', 'macos-native', 'xcode', 'swift']);
 
 // The app-config text input / select styling. Shared so a restyle of these forms

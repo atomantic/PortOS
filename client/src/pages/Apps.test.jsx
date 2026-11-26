@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
@@ -48,10 +48,11 @@ vi.mock('../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
 }));
 
-import { getApps, deleteApp, archiveApp, getAppQualitySummaries, unarchiveApp } from '../services/apiApps.js';
+import { getApps, deleteApp, archiveApp, getAppQualitySummaries, stopApp, unarchiveApp } from '../services/apiApps.js';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import Apps from './Apps';
+import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 
 const ARCHIVED_APP = { ...APPS[0], archived: true };
 
@@ -77,6 +78,29 @@ describe('Apps row action hierarchy', () => {
     expect(screen.getByRole('button', { name: 'Stop Example App' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /^Remove from PortOS$/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Archive$/ })).toBeNull();
+  });
+
+  it('requires confirmation to stop PortOS and keeps ordinary app stops immediate', async () => {
+    const user = userEvent.setup();
+    getApps.mockResolvedValue([...APPS, { ...APPS[0], id: PORTOS_APP_ID, name: 'PortOS' }]);
+    await renderApps();
+
+    const trigger = screen.getByRole('button', { name: 'Stop PortOS' });
+    await user.click(trigger);
+
+    expect(stopApp).not.toHaveBeenCalled();
+    expect(screen.getByRole('group', { name: 'Stop PortOS? This shuts down the web UI and requires terminal access to start again.' })).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(stopApp).not.toHaveBeenCalled();
+    expect(trigger).toHaveFocus();
+
+    await user.click(trigger);
+    const confirmation = screen.getByRole('group', { name: /^Stop PortOS\?/ });
+    await user.click(within(confirmation).getByRole('button', { name: 'Stop PortOS' }));
+    expect(stopApp).toHaveBeenCalledExactlyOnceWith(PORTOS_APP_ID);
+
+    await user.click(screen.getByRole('button', { name: 'Stop Example App' }));
+    expect(stopApp).toHaveBeenLastCalledWith(APPS[0].id);
   });
 
   it('renders the app name as a link to its detail route', async () => {

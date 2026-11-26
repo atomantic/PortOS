@@ -6,6 +6,9 @@ import BrailleSpinner from '../../BrailleSpinner';
 import { FormField } from '../../ui/FormField';
 import ProcessLogLines, { LogStreamBadge } from '../../ui/ProcessLogLines';
 import ListLoadError from '../../ui/ListLoadError';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import { PORTOS_APP_ID } from '../../../lib/appIdentity.js';
+import { PORTOS_STOP_WARNING } from '../constants';
 import { useProcessSnapshot } from '../../../hooks/useProcessSnapshot';
 import { useProcessLogs } from '../../../hooks/useProcessLogs';
 import { copyToClipboard } from '../../../lib/clipboard';
@@ -23,6 +26,8 @@ const getStatusClasses = (status) => {
 export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
   const [expandedProcess, setExpandedProcess] = useState(null);
   const [restarting, setRestarting] = useState({});
+  const [confirmingStop, setConfirmingStop] = useState(null);
+  const stopTriggerRef = useRef(null);
   const [tailLines, setTailLines] = useState(500);
   const [fullscreen, setFullscreen] = useState(false);
   const logsRef = useRef(null);
@@ -49,6 +54,16 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
     const result = await applyProcessAction(name, action, appId).catch(() => null);
     if (result) applySnapshot(result.processes);
     setRestarting(prev => ({ ...prev, [name]: false }));
+  };
+
+  const requestStop = (event, name) => {
+    // The global Processes page reads the default PM2 home without an app id.
+    if (appId === PORTOS_APP_ID || (!appId && (name === 'portos-server' || name === 'portos-ui'))) {
+      stopTriggerRef.current = event.currentTarget;
+      setConfirmingStop({ appId, processName: name });
+      return;
+    }
+    pm2Action('stop', name);
   };
 
   // No explicit clear here — useProcessLogs resets its buffer whenever
@@ -93,7 +108,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
           </button>
         </div>
 
-        <div className="bg-port-card border border-port-border rounded-xl overflow-hidden overflow-x-auto">
+        <div className="@container bg-port-card border border-port-border rounded-xl overflow-hidden overflow-x-auto">
           <table className="w-full min-w-[700px]" aria-label="PM2 processes">
             <thead className="bg-port-border/50">
               <tr>
@@ -152,7 +167,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
                               {restarting[proc.name] ? '...' : 'Restart'}
                             </button>
                             <button
-                              onClick={() => pm2Action('stop', proc.name)}
+                              onClick={event => requestStop(event, proc.name)}
                               disabled={restarting[proc.name]}
                               className="px-2 py-1 text-xs pointer-coarse:min-h-11 bg-port-error/20 text-port-error hover:bg-port-error/30 rounded disabled:opacity-50"
                             >
@@ -171,6 +186,27 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
                       </div>
                     </td>
                   </tr>
+                  {proc.status === 'online' && confirmingStop?.appId === appId && confirmingStop?.processName === proc.name && (
+                    <tr>
+                      <td colSpan={9} className="px-4 py-2">
+                        {/* Keep both actions visible when the table is scrolled horizontally. */}
+                        <InlineConfirmRow
+                          className="sticky left-4 max-w-[calc(100cqw-2rem)]"
+                          autoFocus
+                          tone="warning"
+                          question={PORTOS_STOP_WARNING}
+                          confirmText={`Stop ${proc.name}`}
+                          confirmDisabled={Boolean(restarting[proc.name])}
+                          returnFocusRef={stopTriggerRef}
+                          onConfirm={() => {
+                            setConfirmingStop(null);
+                            pm2Action('stop', proc.name);
+                          }}
+                          onCancel={() => setConfirmingStop(null)}
+                        />
+                      </td>
+                    </tr>
+                  )}
                   {expandedProcess === proc.name && (
                     <tr>
                       <td colSpan={9} className="p-0">
