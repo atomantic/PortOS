@@ -13,12 +13,13 @@
 import { Router } from 'express';
 import { asyncHandler } from '../../lib/errorHandler.js';
 import { loadApp } from './shared.js';
-import { listPublishBindingsForApp } from '../../services/sprites/publish.js';
 
 const router = Router();
 
 // GET /api/apps/:id/sprite-bindings - sprite records publishing into this app
 router.get('/:id/sprite-bindings', loadApp, asyncHandler(async (req, res) => {
+  // Publishing initializes the animation track store. A broken store must only fail this route.
+  const { listPublishBindingsForApp } = await import('../../services/sprites/publish.js');
   const bindings = await listPublishBindingsForApp(req.params.id);
   res.json({ bindings });
 }));
