@@ -36,6 +36,33 @@ describe('story export interaction', () => {
     await waitFor(() => expect(api.startLoomExport).toHaveBeenCalledWith('loom', expect.objectContaining({ episodeIds: ['two', 'one'], includeCharacters: true, includeVoice: true, allowDraft: true }), { silent: true }));
   });
 
+  it.each([false, true])('prunes deleted episodes on reopen (deletion observed while closed: %s)', async observedWhileClosed => {
+    const deleted = { id: 'deleted', title: 'Deleted episode' };
+    const removed = { id: 'removed', title: 'Manually removed episode' };
+    const original = { ...loom, episodes: [...loom.episodes, deleted, removed] };
+    const updated = { ...loom, episodes: [...loom.episodes, removed] };
+    const close = vi.fn();
+    const { rerender } = render(<LoomExportModal loom={original} onClose={close} />);
+    fireEvent.click(screen.getByLabelText('Move episode 2 up'));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[3]);
+    await waitFor(() => expect(screen.getByText('Build ZIP')).toBeEnabled());
+
+    api.preflightLoomExport.mockClear();
+    rerender(<LoomExportModal loom={original} open={false} onClose={close} />);
+    if (observedWhileClosed) rerender(<LoomExportModal loom={updated} open={false} onClose={close} />);
+    expect(api.preflightLoomExport).not.toHaveBeenCalled();
+
+    rerender(<LoomExportModal loom={updated} open onClose={close} />);
+    await waitFor(() => expect(screen.getByText('Build ZIP')).toBeEnabled());
+    expect(screen.queryByText(deleted.id)).toBeNull();
+    expect(screen.getByRole('button', { name: `Add ${removed.title}` })).toBeEnabled();
+    expect(api.preflightLoomExport).toHaveBeenCalledTimes(1);
+    const selection = expect.objectContaining({ episodeIds: ['two', 'one'] });
+    expect(api.preflightLoomExport).toHaveBeenCalledWith('loom', selection, { silent: true });
+    fireEvent.click(screen.getByText('Build ZIP'));
+    await waitFor(() => expect(api.startLoomExport).toHaveBeenCalledWith('loom', selection, { silent: true }));
+  });
+
   it('filters other jobs and stale revisions, displays failures and downloads only the selected completed job', async () => {
     api.downloadLoomExport.mockResolvedValue(new Blob(['zip']));
     render(<LoomExportModal loom={loom} onClose={vi.fn()} />);

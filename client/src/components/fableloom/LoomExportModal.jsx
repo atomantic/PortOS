@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Modal from '../ui/Modal';
 import * as api from '../../services/apiFableLoom.js';
 import socket from '../../services/socket';
@@ -20,21 +20,32 @@ export default function LoomExportModal({ loom, open = true, onClose }) {
   const [jobError, setJobError] = useState('');
   const [busy, setBusy] = useState(false);
   const mounted = useMounted();
+  const episodeIds = useMemo(() => {
+    const availableIds = new Set(loom.episodes.map(episode => episode.id));
+    return options.episodeIds.filter(id => availableIds.has(id));
+  }, [loom.episodes, options.episodeIds]);
+  const selectionNeedsPruning = episodeIds.length !== options.episodeIds.length;
+  // Reopening can coincide with a deletion, before the pruning effect has updated options.
+  const canPreflight = open && !selectionNeedsPruning && episodeIds.length > 0;
   const identity = JSON.stringify([loom, options]);
   const controller = useRef(null);
   useSocketSubscription('fableloom', { enabled: open || !!jobId, onResubscribe: () => controller.current?.() });
 
   useEffect(() => {
+    if (selectionNeedsPruning) setOptions(previous => ({ ...previous, episodeIds }));
+  }, [episodeIds, selectionNeedsPruning]);
+
+  useEffect(() => {
     let active = true;
     setPreflight(null);
     setError('');
-    if (open && options.episodeIds.length) {
+    if (canPreflight) {
       api.preflightLoomExport(loom.id, options, { silent: true }).then(result => {
         if (active) setPreflight({ identity, ...result });
       }).catch(err => { if (active) setError(err.message); });
     }
     return () => { active = false; };
-  }, [loom.id, identity, options, open]);
+  }, [loom.id, identity, options, canPreflight]);
 
   useEffect(() => {
     let active = true;
@@ -84,8 +95,9 @@ export default function LoomExportModal({ loom, open = true, onClose }) {
   }, [open, jobId, loom.id]);
 
   const change = patch => setOptions(previous => ({ ...previous, ...patch }));
+  const checked = !selectionNeedsPruning && preflight?.identity === identity ? preflight : null;
   const start = async () => {
-    if (busy || !preflight?.canBuild || preflight.identity !== identity) return;
+    if (busy || !checked?.canBuild) return;
     setBusy(true);
     setError('');
     await api.startLoomExport(loom.id, options, { silent: true }).then(result => {
@@ -109,7 +121,6 @@ export default function LoomExportModal({ loom, open = true, onClose }) {
     }).catch(err => { if (mounted.current) setError(err.message); });
     if (mounted.current) setBusy(false);
   };
-  const checked = preflight?.identity === identity ? preflight : null;
   const findings = checked?.findings || [];
   const running = jobId && (!job || !terminal(job));
   return <Modal open={open} onClose={onClose} size="lg" ariaLabel="Export story" panelClassName="bg-port-card border border-port-border rounded-lg p-4 space-y-4">
@@ -117,14 +128,14 @@ export default function LoomExportModal({ loom, open = true, onClose }) {
     <p className="text-sm text-port-text-muted">Build a static ZIP for handoff. Draft assets are refused by default. Voice requires character opt-in and approved voice references.</p>
     <fieldset disabled={busy || !!running} className="space-y-3">
       <legend>Episodes in package order</legend>
-      {options.episodeIds.map((id, index) => <div key={id} className="flex flex-wrap items-center gap-2 text-sm">
+      {episodeIds.map((id, index) => <div key={id} className="flex flex-wrap items-center gap-2 text-sm">
         <span className="min-w-0 flex-1 break-words">{loom.episodes.find(e => e.id === id)?.title || id}</span>
         <button disabled={index === 0} aria-label={`Move episode ${index + 1} up`} onClick={() => {
-          const ids = [...options.episodeIds]; [ids[index - 1], ids[index]] = [ids[index], ids[index - 1]]; change({ episodeIds: ids });
+          const ids = [...episodeIds]; [ids[index - 1], ids[index]] = [ids[index], ids[index - 1]]; change({ episodeIds: ids });
         }}>Up</button>
-        <button onClick={() => change({ episodeIds: options.episodeIds.filter(value => value !== id) })}>Remove</button>
+        <button onClick={() => change({ episodeIds: episodeIds.filter(value => value !== id) })}>Remove</button>
       </div>)}
-      {loom.episodes.filter(e => !options.episodeIds.includes(e.id)).map(e => <button key={e.id} className="text-sm mr-2" onClick={() => change({ episodeIds: [...options.episodeIds, e.id] })}>Add {e.title || e.id}</button>)}
+      {loom.episodes.filter(e => !episodeIds.includes(e.id)).map(e => <button key={e.id} className="text-sm mr-2" onClick={() => change({ episodeIds: [...episodeIds, e.id] })}>Add {e.title || e.id}</button>)}
       <div className="flex flex-wrap gap-4">
         {[['includePlayer', 'Reference player'], ['includeCharacters', 'Character inputs'], ['includeVoice', 'Approved voice references'], ['includeWebm', 'WebM alternative (web profiles only)'], ['allowDraft', 'Allow draft assets (not production approval)']].map(([key, label]) => <label key={key} htmlFor={`export-${key}`} className="flex items-center gap-2 text-sm">
           <input id={`export-${key}`} type="checkbox" checked={!!options[key]} disabled={(key === 'includeVoice' && !options.includeCharacters) || (key === 'includeWebm' && options.mediaProfile === 'source')}
@@ -137,7 +148,7 @@ export default function LoomExportModal({ loom, open = true, onClose }) {
       </select>
     </fieldset>
     <div aria-live="polite" className="space-y-2 text-sm">
-      <p>{!options.episodeIds.length ? 'Select at least one episode.' : !checked ? 'Checking server gates…' : checked.canBuild ? 'Preflight passed. Build rechecks source files and gates.' : 'Resolve the findings before building.'}</p>
+      <p>{!episodeIds.length ? 'Select at least one episode.' : !checked ? 'Checking server gates…' : checked.canBuild ? 'Preflight passed. Build rechecks source files and gates.' : 'Resolve the findings before building.'}</p>
       <div className="flex flex-wrap gap-2">{gates.map(gate => <span key={gate} className="border border-port-border rounded px-2 py-1">{gate}: {!checked ? 'checking' : findings.some(f => f.gate === gate && f.severity === 'error') ? 'blocked' : findings.some(f => f.gate === gate) ? 'warning' : 'passed'}</span>)}</div>
       {findings.map((finding, index) => <p key={index} className="break-words">{finding.severity}: {finding.message}</p>)}
       {job && <p>Job {job.jobId}: {job.status} · {formatCount(job.progress.completed)} / {formatCount(job.progress.total)} assets{job.sizeReport ? ` · ZIP ${formatBytes(job.sizeReport.archiveBytes)}` : ''}</p>}
@@ -147,7 +158,7 @@ export default function LoomExportModal({ loom, open = true, onClose }) {
       {jobError && <p role="alert">{jobError}</p>}
     </div>
     <div className="flex flex-wrap gap-3">
-      <button disabled={busy || !!running || !preflight?.canBuild || preflight.identity !== identity} onClick={start} className="rounded bg-port-accent px-3 py-2 text-white disabled:opacity-50">Build ZIP</button>
+      <button disabled={busy || !!running || !checked?.canBuild} onClick={start} className="rounded bg-port-accent px-3 py-2 text-white disabled:opacity-50">Build ZIP</button>
       {running && <button disabled={busy} onClick={cancel} className="rounded border border-port-border px-3 py-2">Cancel export</button>}
       {jobId && (error || jobError) && <button onClick={() => { controller.current?.(); }} className="rounded border border-port-border px-3 py-2">Refresh selected job</button>}
       {job?.jobId === jobId && job?.status === 'completed' && <button disabled={busy} onClick={download} className="rounded border border-port-border px-3 py-2">Download selected ZIP</button>}
