@@ -1,7 +1,7 @@
 /**
  * The image-based-lighting and render-profile half of the procedural sculpt contract (`threejsModel.js`), kept DEPENDENCY-FREE.
  *
- * `spec.lights` are punctual (they light a surface but give it nothing to REFLECT) and every reflective PBR channel (`metalness`, `transmission`, `clearcoat`, `iridescence`) reads off an environment or nothing: a conductor with no environment renders near-black however plausible its values, so a refinement pass is tempted to author implausible values back in. The client mirrors this in `client/src/lib/threejsEnvironment.js` (its suite asserts the two agree), hence no imports: `threejsModel.js` pulls in `zod`, which the client CI job doesn't install. Both presets are built locally from three's primitives; PortOS never fetches an HDR to render a local model.
+ * `spec.lights` are punctual (they light a surface but give it nothing to REFLECT) and every reflective PBR channel (`metalness`, `transmission`, `clearcoat`, `iridescence`) reads off an environment or nothing: a conductor with no environment renders near-black however plausible its values, so a refinement pass is tempted to author implausible values back in. The sculpt preview and exported factory share this contract. Both presets are built locally from three's primitives; PortOS never fetches an HDR to render a local model.
  */
 
 export const THREEJS_ENVIRONMENT_PRESETS = ['none', 'neutral', 'studio'];

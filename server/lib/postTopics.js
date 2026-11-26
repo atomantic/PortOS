@@ -38,6 +38,8 @@
  * existed behaves exactly as it did.
  */
 
+import { MORSE_DRILL_TYPES } from './morseModes.js';
+
 export const POST_TOPICS = [
   {
     id: 'math',
@@ -90,7 +92,7 @@ export const POST_TOPICS = [
     label: 'Morse',
     module: null,
     surface: 'standalone',
-    drillTypes: ['morse-copy', 'morse-head-copy', 'morse-send'],
+    drillTypes: MORSE_DRILL_TYPES,
   },
 ];
 

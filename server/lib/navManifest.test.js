@@ -1,3 +1,4 @@
+import { MORSE_MODE_IDS } from './morseModes.js';
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -50,7 +51,7 @@ const TABBED_PAGES = [
   // path, which is how the two-deep Elements modes are declared.
   { prefix: '/post', file: 'client/src/components/meatspace/tabs/PostTab.jsx', kind: 'switch', switchVar: 'tab',
     nestedIdSources: [
-      { parent: 'morse', file: 'client/src/components/meatspace/post/trainerModes.js', constName: 'MORSE_MODES' },
+      { parent: 'morse', ids: MORSE_MODE_IDS },
       { parent: 'memory', file: 'client/src/components/meatspace/tabs/PostTab.jsx', constName: 'MEMORY_SUBROUTES' },
       { parent: 'memory/elements', file: 'client/src/components/meatspace/post/trainerModes.js', constName: 'ELEMENTS_PRACTICE_MODES' },
       { parent: 'wordplay', file: 'client/src/components/meatspace/post/WordplayTrainer.jsx', constName: 'GAME_MODES' },
@@ -99,8 +100,8 @@ function extractConstIds(filePath, constName) {
 
 // The set of absolute tab paths a page serves under its own prefix.
 function extractTabPaths(filePath, { kind, switchVar, prefix, section, nestedIdSources }) {
-  const nested = (nestedIdSources || []).flatMap(({ parent, file, constName: c }) =>
-    extractConstIds(path.join(REPO_ROOT, file), c).map((id) => `${prefix}/${parent}/${id}`));
+  const nested = (nestedIdSources || []).flatMap(({ parent, file, constName: c, ids }) =>
+    (ids ?? extractConstIds(path.join(REPO_ROOT, file), c)).map((id) => `${prefix}/${parent}/${id}`));
   if (kind === 'switch') {
     const src = fs.readFileSync(filePath, 'utf8');
     return [...extractSwitchTabs(src, switchVar).map((id) => `${prefix}/${id}`), ...nested];

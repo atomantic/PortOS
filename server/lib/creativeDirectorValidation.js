@@ -5,6 +5,7 @@
  * The directive `goal` cap it enforces comes from `creativeBriefLimits.js`.
  */
 
+import { IMPORTER_CONTENT_TYPES, IMPORTER_SOURCE_CHAR_LIMIT } from './importerContentTypes.js';
 import { z } from 'zod';
 import { EFFORT_LEVELS } from './provider/providerModels.js';
 import { ASPECT_RATIOS, QUALITIES, PROJECT_STATUSES, SCENE_STATUSES, PLAN_STEP_STATUSES, VIDEO_REVIEW_CHECKPOINTS } from './creativeDirectorPresets.js';
@@ -478,15 +479,8 @@ export const creativeDirectorPlanStepActionSchema = z.object({
 // sanitizer, not get stripped at the schema gate.
 // ---------------------------------------------------------------------------
 
-export const IMPORTER_CONTENT_TYPES = Object.freeze([
-  'short-story', 'novel', 'screenplay', 'comic-script',
-]);
-
-// Hard ceiling at the schema layer (mirrors writersRoomDraftSaveSchema). The
-// orchestrator's IMPORTER_SOURCE_CHAR_LIMIT matches this 5MB ceiling and
-// returns a friendlier error; the real operational limit is dynamic — the
-// active provider's context window.
-const importerSourceField = z.string().min(1).max(5_000_000);
+// The schema ceiling and orchestrator's explicit check use the same character limit.
+const importerSourceField = z.string().min(1).max(IMPORTER_SOURCE_CHAR_LIMIT);
 
 // Per-issue verbatim-excerpt ceiling (seeds stages.prose / stages.comicScript /
 // stages.teleplay).

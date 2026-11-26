@@ -4,6 +4,7 @@
  */
 
 import { z } from 'zod';
+import { MORSE_DRILL_TYPES, MORSE_MODE_IDS } from './morseModes.js';
 import { CACHEABLE_TYPES, COGNITIVE_DRILL_TYPES, LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from './postDrillTypes.js';
 import { validateCognitivePair } from './postCognitiveConfig.js';
 import { TOPIC_IDS } from './postTopics.js';
@@ -132,7 +133,6 @@ const DRILL_TYPES = [...MATH_DRILL_TYPES, ...LLM_DRILL_TYPES, ...MEMORY_DRILL_TY
 // pass validation there but silently mis-score as a failed math drill instead
 // of being rejected. Morse and rhetoric only ever post through
 // trainingEntrySchema below.
-const MORSE_DRILL_TYPES = ['morse-copy', 'morse-head-copy', 'morse-send'];
 // Rhetoric is a standalone training surface. It never enters a scored POST
 // session; its self-score and optional evaluator report use the shared training
 // log endpoint for streaks and progress reporting.
@@ -630,7 +630,7 @@ const morseRoundItemSchema = z.object({
 
 // A completed copy/head-copy/send round the client submits on finish.
 export const morseRoundSchema = z.object({
-  mode: z.enum(['copy', 'head-copy', 'send']),
+  mode: z.enum(MORSE_MODE_IDS),
   kochLevel: z.number().int().min(1).max(MORSE_MAX_KOCH_LEVEL).optional(),
   wpm: z.number().min(1).max(100).optional(),
   farnsworthWpm: z.number().min(1).max(100).optional(),
