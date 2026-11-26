@@ -1,3 +1,4 @@
+import { taskCardLabel } from '../cardRecordLabels';
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { Ban, GripVertical } from 'lucide-react';
 import toast from '../../ui/Toast';
@@ -30,7 +31,7 @@ const APPROVAL_REASON_HINTS = {
 
 export const taskRowId = (taskId, source) => `cos-task-${source}-${encodeURIComponent(taskId)}`;
 
-export default function TaskItem({ task, agent = null, liveOutput, isSystem, spawning = false, waiting = false, unconfirmed = null, retryIdentity, retryIdentityLoading = false, selected = false, onRefresh, onTaskUnblocked, onTaskDeleted, providers, providersLoaded, durations, dragHandleProps, apps, instances = null, onEditingChange }) {
+export default function TaskItem({ task, recordLabel = taskCardLabel(task), agent = null, liveOutput, isSystem, spawning = false, waiting = false, unconfirmed = null, retryIdentity, retryIdentityLoading = false, selected = false, onRefresh, onTaskUnblocked, onTaskDeleted, providers, providersLoaded, durations, dragHandleProps, apps, instances = null, onEditingChange }) {
   // System tasks live in the internal queue. Every task mutation must name that
   // source; otherwise the API's user-queue default searches the user queue and
   // reports the system task as missing.
@@ -192,6 +193,8 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
 
   return (
     <div
+      role="group"
+      aria-label={`Task: ${recordLabel}`}
       id={taskRowId(task.id, taskSource)}
       tabIndex={selected ? -1 : undefined}
       aria-current={selected ? 'true' : undefined}
@@ -222,7 +225,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
             {...dragHandleProps}
             className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 mt-0.5 cursor-grab active:cursor-grabbing text-gray-500 hover:text-gray-300 transition-colors touch-none"
             title="Drag to reorder"
-            aria-label="Drag to reorder"
+            aria-label={`Drag to reorder task ${task.id}`}
           >
             <GripVertical size={16} aria-hidden="true" />
           </button>

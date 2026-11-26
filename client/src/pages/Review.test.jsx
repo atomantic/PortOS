@@ -557,7 +557,7 @@ describe('Review Hub queue-card triage (#3282)', () => {
     render(<Review />);
     expect(await screen.findByText('Full example task context')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Review run and give feedback' })).not.toBeInTheDocument();
-    fireEvent.click(await screen.findByRole('button', { name: 'Mark as helpful' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Mark as helpful: agent-example' }));
     await waitFor(() => expect(submitCosAgentFeedback).toHaveBeenCalledWith('agent-example', { rating: 'positive', comment: undefined }, { silent: true }));
     expect(routerState.navigate).not.toHaveBeenCalled();
   });
@@ -578,7 +578,7 @@ describe('Review Hub queue-card triage (#3282)', () => {
     expect(screen.queryByText('Example diagnostic output')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Show full transcript' }));
     expect(await screen.findByText('Example diagnostic output')).toBeInTheDocument();
-    fireEvent.click(await screen.findByRole('button', { name: label }));
+    fireEvent.click(await screen.findByRole('button', { name: `${label}: agent-example` }));
     await waitFor(() => expect(submitCosAgentFeedback).toHaveBeenCalledWith('agent-example', { rating, comment: undefined }, { silent: true }));
     await waitFor(() => expect(routerState.navigate).toHaveBeenCalledWith('/review?view=today', { replace: true }));
     expect(resolveReviewQueueItem).not.toHaveBeenCalled();
@@ -590,10 +590,10 @@ describe('Review Hub queue-card triage (#3282)', () => {
     getCosAgent.mockRejectedValueOnce(new Error('Unavailable'));
     render(<Review />);
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load this agent run');
-    expect(screen.queryByRole('button', { name: 'Mark as helpful' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Mark as helpful: agent-example' })).not.toBeInTheDocument();
     getCosAgent.mockResolvedValue({ id: 'agent-example', status: 'completed', metadata: { taskType: 'user' } });
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    expect(await screen.findByRole('button', { name: 'Mark as helpful' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Mark as helpful: agent-example' })).toBeInTheDocument();
   });
 
   it('renders the full markdown behind Show more, height-capped', async () => {

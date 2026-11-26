@@ -1,3 +1,4 @@
+import { cardRecordLabels, taskCardLabel } from '../cardRecordLabels';
 import { usePagedCollection } from '../../../hooks/usePagedCollection';
 import InfiniteScrollFooter from '../../ui/InfiniteScrollFooter';
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
@@ -291,6 +292,8 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], ag
     onRefresh();
   }, [onRefresh, onTaskAdded]);
 
+  const taskLabels = cardRecordLabels([...userTasksLocal, ...cosTasks].map(task => [task.id, taskCardLabel(task)]));
+
   const isUserLoading = tasks?.user == null;
   const isCosLoading = tasks?.cos == null;
   const isQueueLoading = isUserLoading || isCosLoading;
@@ -325,7 +328,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], ag
       const { task, section } = entry;
       const spawning = agentsLoaded && !agentsError && isSpawning(task);
       const agent = section !== 'unconfirmed' && (task.status === 'in_progress' || spawning) ? taskAgent(task) : null;
-      const props = { task, agent, spawning, liveOutput: liveOutputs[runningAgentByTaskId.get(task.id)?.id],
+      const props = { task, recordLabel: taskLabels.get(task.id), agent, spawning, liveOutput: liveOutputs[runningAgentByTaskId.get(task.id)?.id],
         waiting: section === 'pending' && task.status === 'in_progress',
         unconfirmed: section === 'unconfirmed' ? unconfirmedReason(task) : null,
         retryIdentity: section === 'unconfirmed' && agentsLoaded && !agentsError && !selfInstanceId

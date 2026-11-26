@@ -196,8 +196,8 @@ describe('JobsTab / JobCard Run Now disable behavior (#4036)', () => {
     render(<JobsTab apps={[]} providers={[]} />);
     await screen.findByText('Test Job');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Disable job' }));
-    expect(await screen.findByRole('button', { name: 'Enable job' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Disable job Test Job' }));
+    expect(await screen.findByRole('button', { name: 'Enable job Test Job' })).toBeInTheDocument();
     expect(screen.getByText('0 enabled / 1 total')).toBeInTheDocument();
     expect(api.getCosJobs).toHaveBeenCalledTimes(1);
   });

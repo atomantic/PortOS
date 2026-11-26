@@ -42,6 +42,9 @@ const renderCard = (job) => render(
 describe('JobCard machine output', () => {
   it('wraps the read-only legacy command so a long single-line value stays fully readable', () => {
     renderCard(SCRIPT_JOB);
+    expect(screen.getByRole('group', { name: 'Job Legacy handler' })).toContainElement(
+      screen.getByRole('button', { name: 'Disable job Legacy handler' }),
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
 
     const pre = screen.getByText(LONG_COMMAND);

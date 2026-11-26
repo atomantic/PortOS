@@ -167,6 +167,7 @@ export function TaskMetadataFields({ data, onChange }) {
  */
 export default function JobCard({
   job,
+  recordLabel = job.name?.trim() || job.id,
   apps = [],
   providers,
   activeProviderId,
@@ -327,7 +328,7 @@ export default function JobCard({
     && (hasNextRunAt(job) ? Date.now() >= new Date(job.nextRunAt).getTime() : !job.lastRun);
 
   return (
-    <div className={`flex flex-col bg-port-card border rounded-lg transition-colors ${
+    <div role="group" aria-label={`Job ${recordLabel}`} className={`flex flex-col bg-port-card border rounded-lg transition-colors ${
       job.enabled ? 'border-port-border' : 'border-port-border/50 opacity-60'
     }`}>
       <div className="flex items-start gap-3 p-4">
@@ -335,7 +336,7 @@ export default function JobCard({
           onClick={() => onToggle(job.id)}
           className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 transition-colors ${job.enabled ? 'text-port-success' : 'text-gray-600'}`}
           title={job.enabled ? 'Disable job' : 'Enable job'}
-          aria-label={job.enabled ? 'Disable job' : 'Enable job'}
+          aria-label={`${job.enabled ? 'Disable' : 'Enable'} job ${recordLabel}`}
         >
           {job.enabled ? <ToggleRight size={24} /> : <ToggleLeft size={24} />}
         </button>
@@ -607,7 +608,7 @@ export default function JobCard({
               {isConfirming(job.id) ? (
                 <InlineConfirmRow
                   autoFocus
-                  aria-label={`Confirm delete job ${job.name || job.id}`}
+                  aria-label={`Confirm delete job ${recordLabel}`}
                   returnFocusRef={deleteButtonRef}
                   question="Delete this job? This cannot be undone."
                   confirmTitle="Confirm delete"

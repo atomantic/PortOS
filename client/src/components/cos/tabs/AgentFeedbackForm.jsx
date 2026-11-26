@@ -60,7 +60,7 @@ export default function AgentFeedbackForm({ agent, remote, onFeedbackChange }) {
                 : 'text-gray-500 hover:text-port-success hover:bg-port-success/10'
             } disabled:opacity-50`}
             title="Helpful"
-            aria-label="Mark as helpful"
+            aria-label={`Mark as helpful: ${agent.id}`}
             aria-pressed={feedbackState === 'positive'}
           >
             <ThumbsUp size={14} />
@@ -74,7 +74,7 @@ export default function AgentFeedbackForm({ agent, remote, onFeedbackChange }) {
                 : 'text-gray-500 hover:text-port-error hover:bg-port-error/10'
             } disabled:opacity-50`}
             title="Not helpful"
-            aria-label="Mark as not helpful"
+            aria-label={`Mark as not helpful: ${agent.id}`}
             aria-pressed={feedbackState === 'negative'}
           >
             <ThumbsDown size={14} />
@@ -83,7 +83,7 @@ export default function AgentFeedbackForm({ agent, remote, onFeedbackChange }) {
             onClick={() => setShowFeedbackComment(!showFeedbackComment)}
             className="min-h-[44px] min-w-[44px] flex items-center justify-center p-1.5 rounded text-gray-500 hover:text-white hover:bg-port-border/50 transition-colors"
             title={feedbackState ? 'Add feedback detail' : 'Add feedback comment'}
-            aria-label={feedbackState ? 'Add feedback detail' : 'Add feedback comment'}
+            aria-label={`${feedbackState ? 'Add feedback detail' : 'Add feedback comment'}: ${agent.id}`}
             aria-expanded={showFeedbackComment}
           >
             <MessageSquare size={14} />

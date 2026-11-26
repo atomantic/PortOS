@@ -3,7 +3,7 @@ import { useSortable } from '../../../lib/dnd/index.js';
 import { dndTransformToCss } from '../../../lib/dndTransform';
 import TaskItem from './TaskItem';
 
-export default function SortableTaskItem({ task, sortable = true, group, hidden = false, agent, liveOutput, spawning, waiting, unconfirmed, retryIdentity, retryIdentityLoading, selected = false, onRefresh, onTaskUnblocked, onTaskDeleted, providers, providersLoaded, durations, apps, instances }) {
+export default function SortableTaskItem({ task, recordLabel, sortable = true, group, hidden = false, agent, liveOutput, spawning, waiting, unconfirmed, retryIdentity, retryIdentityLoading, selected = false, onRefresh, onTaskUnblocked, onTaskDeleted, providers, providersLoaded, durations, apps, instances }) {
   const [isEditing, setIsEditing] = useState(false);
   const {
     attributes,
@@ -25,6 +25,7 @@ export default function SortableTaskItem({ task, sortable = true, group, hidden 
     <div ref={setNodeRef} style={style} data-task-group={group} hidden={hidden}>
       <TaskItem
         task={task}
+        recordLabel={recordLabel}
         agent={agent}
         liveOutput={liveOutput}
         spawning={spawning}
