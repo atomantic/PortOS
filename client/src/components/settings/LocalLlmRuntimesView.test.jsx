@@ -18,6 +18,7 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
   startMtplxServer: vi.fn(),
   stopMtplxServer: vi.fn(),
   installMtplx: vi.fn(),
+  uninstallMtplx: vi.fn(),
   getManagedInklingRuntimeStatus: vi.fn(),
   saveSplashContextWindow: vi.fn(),
   controlManagedInklingRuntime: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
   startSlotstreamServer: vi.fn(),
   stopSlotstreamServer: vi.fn(),
   installSlotstream: vi.fn(),
+  uninstallSlotstream: vi.fn(),
   downloadSlotstreamModel: vi.fn(),
   cancelSlotstreamModelDownload: vi.fn(),
   searchMtplxModels: vi.fn().mockResolvedValue({ models: [], error: null }),
@@ -547,6 +549,27 @@ describe('LocalLlmRuntimesView runtime servers', () => {
 
     // `null` (not a repo id the card invented) = MTPLX's own verified default.
     await waitFor(() => expect(pullMtplxModel).toHaveBeenCalledWith(null, { silent: true }));
+  });
+
+  it('confirms Slotstream uninstall and refreshes the runtime row without touching checkpoints', async () => {
+    const { getSlotstreamServerStatus, uninstallSlotstream } = await import('../../services/apiLocalLlm.js');
+    const idle = { supported: true, installed: true, running: false, cachedModels: ['checkpoint'], canUninstall: true };
+    getSlotstreamServerStatus.mockResolvedValue(idle);
+    uninstallSlotstream.mockImplementationOnce(async () => {
+      getSlotstreamServerStatus.mockResolvedValue({ ...idle, installed: false, canUninstall: false });
+      return { success: true, message: 'Slotstream uninstalled' };
+    });
+    await renderRuntimes();
+    const button = await screen.findByRole('button', { name: 'Uninstall' });
+    fireEvent.click(button);
+    const dialog = screen.getByRole('dialog', { name: 'Uninstall Slotstream' });
+    expect(within(dialog).getByText(/Downloaded checkpoints, provider presets, and launch settings are kept/)).toBeVisible();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(uninstallSlotstream).not.toHaveBeenCalled();
+    fireEvent.click(button);
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Uninstall Slotstream' })).getByRole('button', { name: 'Uninstall' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Uninstall' })).not.toBeInTheDocument());
+    expect(uninstallSlotstream).toHaveBeenCalledTimes(1);
   });
 
   it('clears a cancelled Slotstream download without a failure or completion toast', async () => {

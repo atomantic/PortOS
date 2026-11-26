@@ -6,7 +6,7 @@ import { join, resolve } from 'path';
 
 import {
   verifyVideoPlayable, safeUnder, runFfmpegProcess, hasAudioStream, buildTrimConcatArgs,
-  probeVideoStreamInfo, findFfmpeg, installEncodedVideo, probeMediaTags,
+  probeVideoStreamInfo, probeVideoGeometry, findFfmpeg, installEncodedVideo, probeMediaTags,
   BT709_TAG_FILTER, BT709_CONTAINER_ARGS, bt709TagFilter, supportsSetparamsFilter, __resetSetparamsProbe,
 } from './ffmpeg.js';
 
@@ -90,6 +90,7 @@ describe('probeVideoStreamInfo', () => {
     });
     if (!made.ok) return;
     const info = await probeVideoStreamInfo(clip);
+    expect(await probeVideoGeometry(clip)).toEqual({ width: 96, height: 64, fps: 10, numFrames: 10, durationSec: 1 });
     expect(await probeMediaTags(clip)).toMatchObject({ comment: '{"prompt":"Paper boat","seed":42}' });
     expect(info.width).toBe(96);
     expect(info.height).toBe(64);

@@ -10,6 +10,7 @@ import { getSettings } from '../settings.js';
 import { parseQuotaDeferral, formatDeferral } from '../../lib/imageQuotaSignal.js';
 import { CLOUD_IMAGE_GEN_MODES, CLOUD_VIDEO_GEN_MODES, mediaJobExecutionLane, mediaJobSwimlane } from '../../lib/generationModes.js';
 import { isRemoteMediaJob } from './remoteMediaJob.js';
+import { wakeWorker } from './workerSignal.js';
 
 // Cloud-CLI jobs (Codex/Grok/Agy images, Grok videos) run in the parallel cloud
 // lane — each render shells out to its own external child spending remote
@@ -66,6 +67,7 @@ export const getCodexParallelLimit = () => codexParallelLimit;
 export function setCodexParallelLimit(n) {
   codexParallelLimit = clampParallel(n);
   parallelLimits.set('image:codex', codexParallelLimit);
+  wakeWorker();
   return codexParallelLimit;
 }
 
@@ -96,6 +98,7 @@ function _setParallelLimit(target, modeOrN, maybeN) {
   const clamped = clampParallel(n);
   if (kind && mode) {
     parallelLimits.set(`${kind}:${mode}`, clamped);
+    wakeWorker();
   }
   if (kind === 'image' && mode === 'codex') {
     codexParallelLimit = clamped;
@@ -188,6 +191,7 @@ function _recordRateLimitCooldown(target, errorTextOrMode, payloadOrReset, now =
     expiresAt,
     cause: errStr.slice(0, 200),
   });
+  wakeWorker();
   console.log(`⚠️ media-job: ${key} received 429 / rate-limit — lowering effective limit to ${effectiveLimit} for cool-down (${Math.round(duration / 1000)}s)`);
   return true;
 }
@@ -266,6 +270,7 @@ export function recordQuotaCooldown(job, errorText) {
   // shorter remaining wait, and taking it would release the queue early.
   if (deferral.resumeAt <= existing) return;
   quotaCooldowns.set(mode, deferral.resumeAt);
+  wakeWorker();
   console.log(`⏳ media-job: ${mode} quota exhausted — holding queued ${mode} renders for ${formatDeferral(deferral.resetsInMs)}`);
 }
 

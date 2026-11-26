@@ -22,7 +22,7 @@
  *     outside PortOS.
  */
 
-import { readFile, unlink } from 'fs/promises';
+import { lstat, readFile, rm, unlink } from 'fs/promises';
 import { release } from 'os';
 import { join } from 'path';
 import { sleep } from '../lib/fileUtils.js';
@@ -355,6 +355,7 @@ export async function getMtplxServerStatus({ includeLogs } = {}) {
     runtimeVersion,
     lockedVersion,
     runtimeManaged: managedRuntime,
+    canUninstall: managedRuntime && !mtplxInstallation && !mtplxUninstalling && !base.running && base.managed === false,
     runtimeOutdated,
     // The tuning flags the running daemon was LAUNCHED with, rendered by the
     // catalog that owns the transport rather than re-derived in the UI. A
@@ -393,8 +394,12 @@ export async function getMtplxServerStatus({ includeLogs } = {}) {
  * Ready external installs remain usable through resolveMtplxBinary().
  */
 let mtplxInstallation = null;
+let mtplxUninstalling = false;
 const mtplxProgressListeners = new Set();
 export function installMtplx({ onProgress = () => {} } = {}) {
+  if (mtplxUninstalling) {
+    return Promise.reject(new ServerError('MTPLX is being uninstalled.', { status: 409 }));
+  }
   if (!supportsMtplxInstall()) {
     return Promise.reject(new ServerError(MTPLX_UNSUPPORTED_REASON, { status: 400, code: 'MTPLX_UNSUPPORTED_PLATFORM' }));
   }
@@ -410,6 +415,35 @@ export function installMtplx({ onProgress = () => {} } = {}) {
     });
   }
   return mtplxInstallation.finally(() => { mtplxProgressListeners.delete(listener); });
+}
+
+export async function uninstallMtplx() {
+  if (mtplxInstallation || mtplxUninstalling) {
+    throw new ServerError('MTPLX already has an installation change in progress.', { status: 409 });
+  }
+  mtplxUninstalling = true;
+  try {
+    return await onDemand.runStart(removeMtplxVenv);
+  } finally {
+    mtplxUninstalling = false;
+  }
+}
+
+async function removeMtplxVenv() {
+  const venv = mtplxVenvDir();
+  const stat = await lstat(venv).catch((error) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!stat?.isDirectory() || resolveMtplxBinary() !== mtplxManagedBinary()) {
+    throw new ServerError('There is no PortOS-managed MTPLX environment to uninstall.', {
+      status: 409, code: 'MTPLX_NOT_MANAGED',
+    });
+  }
+  const { port: savedPort } = await onDemand.savedLaunch();
+  await daemon.assertStoppedForUninstall({ label: 'MTPLX', codePrefix: 'MTPLX', savedPort });
+  await rm(venv, { recursive: true });
+  return { success: true, message: 'PortOS-managed MTPLX uninstalled. Checkpoints and provider settings were kept.' };
 }
 
 async function installLockedMtplx(onProgress) {

@@ -26,15 +26,16 @@ import { jobLane, jobSwimlane, laneLimits, laneTotalLimits, refreshCodexParallel
 import {
   queue, cloudRunning, remoteRunning, archive, videoHolds, mediaJobEvents, recoveringJobs, terminalOperations,
   getRunningJob, findJob, runningJobs, listJobs, isTopazUpscale, resetQueueStateForTests,
-  dispatchOperations, laneOperations, recoveryState, testLifecycleDisposals, workerState,
+  dispatchOperations, laneOperations, recoveryState, testLifecycleDisposals,
 } from './state.js';
+import { workerState } from './workerSignal.js';
 import {
   admitCompletion, persistTerminalTransition, persist, restoreQueueSnapshot, isPersistBlocked,
   hasPendingTransitions, configureTerminalTransitions, settlePersistChain, resetPersistenceForTests,
 } from './persistence.js';
 import { ensureSseEntry, broadcastTerminalSse, recomputeQueuePositions, resetSseForTests } from './sse.js';
 import { assertMusicVideoJobPolicy, getGenModuleForJob, installVideoExecutionRecorder, JOB_KINDS } from './execution.js';
-import { prepareQueuedVideos, quiesceMediaJobQueue, runJobNow as runScheduledJobNow, settleQueuedJob, startWorker } from './scheduler.js';
+import { prepareQueuedVideos, quiesceMediaJobQueue, runJobNow as runScheduledJobNow, settleQueuedJob, startWorker, wakeWorker } from './scheduler.js';
 import { loadMediaRuntimeModule } from '../bootHookRegistry.js';
 
 // The admission contract lives in ./admission.js so producers that cannot
@@ -377,6 +378,7 @@ async function enqueueJobLocked({ kind, params, owner = null }) {
   }
   broadcastSse(ensureSseEntry(id), { type: 'queued', position: job.position });
   mediaJobEvents.emit('enqueued', job);
+  wakeWorker();
   startWorker(enqueueJob);
   console.log(`📥 media-job [${id.slice(0, 8)}] ${kind} queued (position ${job.position})`);
   return { jobId: id, position: job.position, status: 'queued' };
@@ -400,7 +402,10 @@ export function isVideoModelHeld(modelId, runtime) {
 export async function resumeVideoHold(holdId) {
   if (!videoHolds.resume(holdId)) return false;
   videoHolds.updateQueued(queue);
-  await persist();
+  // Queue the cleared hold snapshot before dispatching any newly eligible jobs.
+  const saved = persist();
+  wakeWorker();
+  await saved;
   return true;
 }
 

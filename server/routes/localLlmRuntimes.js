@@ -16,11 +16,11 @@ import {
   waitForLlamaServerReady,
 } from '../services/llamaServerManager.js'
 import { onDemandRuntimeAppNames } from '../lib/managedRuntimeApps.js'
-import { getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx, waitForMtplxReady } from '../services/mtplxServerManager.js'
+import { getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx, uninstallMtplx, waitForMtplxReady } from '../services/mtplxServerManager.js'
 import { getSplashRuntimeStatus } from '../services/splashRuntimeStatus.js'
-import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer } from '../services/splashServerManager.js'
-import { getMkserveRuntimeStatus, installMkserve, startMkserveServer, stopMkserveServer } from '../services/mkserveRuntimeManager.js'
-import { getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream, waitForSlotstreamReady } from '../services/slotstreamServerManager.js'
+import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer, uninstallSplashRuntime } from '../services/splashServerManager.js'
+import { getMkserveRuntimeStatus, installMkserve, startMkserveServer, stopMkserveServer, uninstallMkserve } from '../services/mkserveRuntimeManager.js'
+import { getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream, uninstallSlotstream, waitForSlotstreamReady } from '../services/slotstreamServerManager.js'
 import { cancelSlotstreamModelDownload, downloadSlotstreamModel } from '../services/slotstreamModelManager.js'
 import { searchMtplxCatalog, pullMtplxModel, removeMtplxModel } from '../services/mtplxModelManager.js'
 import { saveProcessList } from '../services/pm2.js'
@@ -58,6 +58,7 @@ const runtimeAdapters = {
     waitForReady: waitForMtplxReady,
     stop: stopMtplxServer,
     install: installMtplx,
+    uninstall: uninstallMtplx,
     installError: 'Install failed',
   },
   slotstream: {
@@ -68,6 +69,7 @@ const runtimeAdapters = {
     waitForReady: waitForSlotstreamReady,
     stop: stopSlotstreamServer,
     install: installSlotstream,
+    uninstall: uninstallSlotstream,
     installError: 'Install failed',
   },
   splash: {
@@ -78,6 +80,7 @@ const runtimeAdapters = {
     stop: stopSplashServer,
     install: installSplashRuntime,
     upgrade: installSplashRuntime,
+    uninstall: uninstallSplashRuntime,
   },
   mkserve: {
     label: 'mkserve',
@@ -87,6 +90,7 @@ const runtimeAdapters = {
     stop: stopMkserveServer,
     install: installMkserve,
     upgrade: installMkserve,
+    uninstall: uninstallMkserve,
   },
 }
 
@@ -152,6 +156,12 @@ const installRoute = (runtime) => asyncHandler(async (req, res) => {
   res.json(result)
 })
 
+const uninstallRoute = (runtime) => asyncHandler(async (_req, res) => {
+  const result = await runtimeAdapters[runtime].uninstall()
+  resetProviderReadinessCache()
+  res.json(result)
+})
+
 // Downloads outlive a browser request. Keep progress and the last failure
 // available from Status as well as the socket, so reopening the tab is safe.
 const bundleOperations = new Map()
@@ -173,13 +183,13 @@ const bundleActionRoute = (runtime, action) => asyncHandler(async (req, res) => 
     operation.message = `${label}: ${message}`
     emit('progress', operation.message, scope)
   }
-  report({ install: 'Preparing installation', upgrade: 'Preparing update', start: 'Starting', stop: 'Stopping' }[action])
+  report({ install: 'Preparing installation', upgrade: 'Preparing update', start: 'Starting', stop: 'Stopping', uninstall: 'Removing runtime files' }[action])
   res.status(202).json({ operation })
   void Promise.resolve().then(() => run({ onProgress: report })).then(
     () => {
       bundleOperations.delete(runtime)
       resetProviderReadinessCache()
-      const done = { install: 'installation complete', upgrade: 'update complete', start: 'start completed', stop: 'stopped' }[action]
+      const done = { install: 'installation complete', upgrade: 'update complete', start: 'start completed', stop: 'stopped', uninstall: 'uninstalled' }[action]
       emit('complete', `${label}: ${done}.`, scope)
       // Their start only resolves once the model answers, so no readiness wait.
       if (action === 'start') refreshRuntimeModels(req, runtime)
@@ -204,23 +214,27 @@ router.get('/mtplx/status', statusRoute('mtplx'))
 router.post('/mtplx/start', startRoute('mtplx'))
 router.post('/mtplx/stop', stopRoute('mtplx'))
 router.post('/mtplx/install', installRoute('mtplx'))
+router.post('/mtplx/uninstall', uninstallRoute('mtplx'))
 
 router.get('/slotstream/status', statusRoute('slotstream'))
 router.post('/slotstream/start', startRoute('slotstream'))
 router.post('/slotstream/stop', stopRoute('slotstream'))
 router.post('/slotstream/install', installRoute('slotstream'))
+router.post('/slotstream/uninstall', uninstallRoute('slotstream'))
 
 router.get('/splash/status', statusRoute('splash'))
 router.post('/splash/install', bundleActionRoute('splash', 'install'))
 router.post('/splash/upgrade', bundleActionRoute('splash', 'upgrade'))
 router.post('/splash/start', bundleActionRoute('splash', 'start'))
 router.post('/splash/stop', bundleActionRoute('splash', 'stop'))
+router.post('/splash/uninstall', bundleActionRoute('splash', 'uninstall'))
 
 router.get('/mkserve/status', statusRoute('mkserve'))
 router.post('/mkserve/install', bundleActionRoute('mkserve', 'install'))
 router.post('/mkserve/upgrade', bundleActionRoute('mkserve', 'upgrade'))
 router.post('/mkserve/start', bundleActionRoute('mkserve', 'start'))
 router.post('/mkserve/stop', bundleActionRoute('mkserve', 'stop'))
+router.post('/mkserve/uninstall', bundleActionRoute('mkserve', 'uninstall'))
 
 router.put('/splash/context', asyncHandler(async (req, res) => {
   const { contextWindow } = validateRequest(splashContextSchema, req.body ?? {})

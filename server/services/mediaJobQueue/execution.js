@@ -16,8 +16,9 @@ import { canRequestCancellation, claimTerminalOutcome, createJobHandlers } from 
 import { isCloudImageJob, isLocalFinishReplay, jobLane } from './limits.js';
 import {
   dispatchOperations, findJob, isRemoteReconcile, isTopazUpscale, testLifecycleDisposals,
-  trackOperation, trackTerminalOperation, workerState,
+  trackOperation, trackTerminalOperation,
 } from './state.js';
+import { wakeWorker, workerState } from './workerSignal.js';
 import {
   isUnderUploadsRoot, normalizeTempPaths, admitCompletion, stageTerminalTransition,
   persistTerminalTransition, persist, announceTerminalTransition, releaseStagedUploads,
@@ -392,8 +393,10 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane, enqueu
     if (!disposable || !isRemoteMediaJob(job)) return;
     if (job.params?.remotePeerReservation === true) {
       job.params = { ...job.params, remotePeerReservation: false };
-      try { await persist(); }
-      catch (_error) {
+      try {
+        await persist();
+        wakeWorker();
+      } catch (_error) {
         job.params = { ...job.params, remotePeerReservation: true };
         maintenance.markResourceUnsettled('media', job.id);
         return;

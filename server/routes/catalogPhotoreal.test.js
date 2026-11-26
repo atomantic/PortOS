@@ -4,7 +4,7 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
 vi.mock('../services/catalog/catalogPhotoreal.js', () => ({
-  getPhotorealStatus: vi.fn(), openPhotorealBlend: vi.fn(), photorealBlendPath: vi.fn(), startPhotorealRender: vi.fn(),
+  cancelPhotorealRender: vi.fn(), getPhotorealStatus: vi.fn(), openPhotorealBlend: vi.fn(), photorealBlendPath: vi.fn(), startPhotorealRender: vi.fn(),
 }));
 vi.mock('../services/catalog/catalogPhotorealLook.js', () => ({
   draftPhotorealLook: vi.fn(), previewPhotorealLookPrompt: vi.fn(), savePhotorealLook: vi.fn(),
@@ -12,7 +12,7 @@ vi.mock('../services/catalog/catalogPhotorealLook.js', () => ({
 vi.mock('../services/photorealTextures.js', () => ({
   installTexture: vi.fn(), listInstalledTextures: vi.fn(), searchTextures: vi.fn(),
 }));
-const { openPhotorealBlend, photorealBlendPath, startPhotorealRender } = await import('../services/catalog/catalogPhotoreal.js');
+const { cancelPhotorealRender, openPhotorealBlend, photorealBlendPath, startPhotorealRender } = await import('../services/catalog/catalogPhotoreal.js');
 const { installTexture, searchTextures } = await import('../services/photorealTextures.js');
 const { savePhotorealLook } = await import('../services/catalog/catalogPhotorealLook.js');
 const router = (await import('./catalog.js')).default;
@@ -61,6 +61,18 @@ describe('photoreal routes', () => {
       { shotIds: ['wide', 'booth'], engine: 'eevee', flythroughSeconds: 600 },
     ]) expect((await request(app).post(`${base}/render`).send(body)).status).toBe(400);
     expect(startPhotorealRender).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels the current render or a specified job with validated input', async () => {
+    cancelPhotorealRender.mockResolvedValue({ id: 'pr-1', state: 'canceled' });
+    const canceled = await request(app).post(`${base}/cancel`).send({ jobId: 'pr-1' });
+    expect(canceled.status).toBe(200);
+    expect(canceled.body).toEqual({ id: 'pr-1', state: 'canceled' });
+    expect(cancelPhotorealRender).toHaveBeenLastCalledWith('example-place', 'pr-1');
+    expect((await request(app).post(`${base}/cancel`)).status).toBe(200);
+    expect(cancelPhotorealRender).toHaveBeenLastCalledWith('example-place', undefined);
+    expect((await request(app).post(`${base}/cancel`).send({ jobId: 123 })).status).toBe(400);
+    expect(cancelPhotorealRender).toHaveBeenCalledTimes(2);
   });
 
   it('answers 404 for a .blend that has not been built', async () => {

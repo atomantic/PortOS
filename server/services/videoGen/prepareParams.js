@@ -16,12 +16,10 @@
  *   - reference limits, LoRA and speed-profile validation, and chunk settings
  *
  * On failure it unlinks every durable copy staged so far plus every multipart
- * temp file, then throws `ServerError` so the route's asyncHandler middleware
- * translates it into a 4xx/5xx response.
+ * temp file before returning the original error to the caller.
  *
- * `body` is mutated in place for the one field the legacy handler defaulted
- * (`mode` → 'fflf' when keyframes are supplied without an explicit mode); the
- * resolved value is also returned as `mode` so callers never need to re-read it.
+ * Preparation may normalize `body` in place, including the default mode for
+ * keyframes, project-derived dimensions and the offset for pre-sliced audio.
  */
 
 import { existsSync } from 'fs';
@@ -286,16 +284,8 @@ export const cleanupMultipartTemp = async (uploads) => {
  * Run `fn`, releasing everything staged so far if it throws or rejects, then
  * rethrow the original error unchanged (#3326).
  *
- * Per the repo's no-try/catch convention a rejected await bubbles straight to
- * the error middleware — skipping the explicit `cleanupStaged()` calls at each
- * throw site and orphaning every durable copy written so far (the job is never
- * enqueued, so the worker's cleanup never runs either). This wrapper is the
- * sanctioned exception for the same reason the `ensureDir` guard below is: the
- * cleanup is a resource-release obligation, not error handling. One guard
- * covers every rejection point at once and stays correct as new awaits appear.
- *
+ * @param {() => Promise<void>} cleanupStaged - releases request-owned files
  * @param {() => Promise<any>|any} fn - work that may leave staged files behind
- * @param {() => Promise<void>} cleanupStaged - rollback hook (idempotent)
  */
 export const withStagedRollback = async (cleanupStaged, fn) => {
   try {
@@ -367,133 +357,114 @@ export function resolveRequestedVideoBackend({ body, uploads, settings, localOnl
  *   `withStagedRollback`.
  */
 export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys }) {
-  const settings = await getSettings();
-  const backend = resolveRequestedVideoBackend({ body, uploads, settings, localOnlyParamKeys });
-  assertReactorNegativePromptSupported(backend, body.negativePrompt);
-  if (backend !== VIDEO_GEN_MODE.LOCAL && body.continuityStrategy != null) {
-    await cleanupMultipartTemp(uploads);
-    throw new ServerError('Explicit continuation strategy requires a local video backend.', {
-      status: 400, code: 'VIDEO_CONTINUITY_UNSUPPORTED',
-    });
-  }
-  const guidanceError = storyboardGuidanceRequestError({ body, uploads, backend });
-  if (guidanceError) {
-    await cleanupMultipartTemp(uploads);
-    throw guidanceError;
-  }
-  const referenceUploadsError = referenceImageUploadsError({ backend, body, uploads });
-  if (referenceUploadsError) {
-    await cleanupMultipartTemp(uploads);
-    throw referenceUploadsError;
-  }
-  const runwaySpecial = backend === VIDEO_GEN_MODE.RUNWAY && RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode);
-  if (!runwaySpecial && (RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode) || uploads.runwayVideo || uploads.runwayCharacterVideo)) {
-    await cleanupMultipartTemp(uploads);
-    throw new ServerError('Runway video inputs require the matching Runway video workflow.', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  // A loose reference (#4874) is a LOCAL-runtime capability. The model gate
-  // further down asks whether the chosen model's runtime can honor it — but an
-  // explicit `backend: 'grok'` never reaches that runtime at all: grok's
-  // image_to_video always anchors, and its short-circuit below drops every
-  // local-only knob. Rejecting here (before any staging) is what keeps
-  // "Inspire" from quietly returning an anchored clip from the cloud lane.
-  if (backend !== VIDEO_GEN_MODE.LOCAL && !isDefaultI2vReferenceMode(body.i2vReferenceMode)) {
-    await cleanupMultipartTemp(uploads);
-    throw new ServerError(
-      `The ${backend} backend always anchors a reference image as frame one — switch to a local LTX-2.5 model, or use the Anchor reference mode.`,
-      { status: 400, code: 'I2V_REFERENCE_MODE_UNSUPPORTED' },
-    );
-  }
-  const pythonPath = settings.imageGen?.local?.pythonPath || null;
-  const { model: effectiveModel, modelId: effectiveModelId } = await selectPreparationModel(body.modelId, () => settings)
-    .catch(async (error) => { await cleanupMultipartTemp(uploads); throw error; });
-  await validateVideoLoraStages({ ...body, loras: body.loraFilenames }, effectiveModel, backend)
-    .catch(async (error) => { await cleanupMultipartTemp(uploads); throw error; });
-  // Hosted renders can run without a local model when the caller omitted it.
-  if (!effectiveModel && (backend === VIDEO_GEN_MODE.LOCAL || body.modelId !== undefined)) {
-    await cleanupMultipartTemp(uploads);
-    throw new ServerError(
-      unknownVideoModelMessage(effectiveModelId),
-      { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
-    );
-  }
-  // A local Music Video shot: sized to the project's aspect, and checked
-  // against the model its kind of shot needs (musicVideoLocalModels.js).
-  let musicVideoContractMode = null;
-  if (backend === VIDEO_GEN_MODE.LOCAL && body.musicVideo?.projectId) {
-    // A clip's own audio never reaches the music video (the song does), so a
-    // model that always renders its audio track is not asked to mute it.
-    if (effectiveModel?.supportsDisableAudio === false) delete body.disableAudio;
-    const unsized = body.width == null && body.height == null;
-    const audioOnlyModel = !!effectiveModel && (!body.mode || body.mode === 'image') && !localModelRendersCutaway(effectiveModel);
-    const project = unsized || audioOnlyModel
-      ? await Promise.resolve().then(() => getMusicVideoProject(body.musicVideo.projectId))
-        .catch(async (error) => { await cleanupMultipartTemp(uploads); throw error; })
-      : null;
-    // Left unsized it would render the model's 768x512 (3:2) default,
-    // cropping its 16:9 still and leaving side gaps in a 16:9 video.
-    if (project && unsized) {
-      const endFrame = body.mode === 'fflf' || !!body.lastImageFile || !!uploads.lastImage;
-      Object.assign(body, musicVideoLocalClipSize(project, effectiveModel, { endFrame }));
-    }
-    const scene = project?.scenes?.find((entry) => entry.sceneId === body.musicVideo.sceneId);
-    if (scene && audioOnlyModel) {
-      // An audio-only model (MiniMax H3 Ref2VA) renders a performance shot as
-      // the a2v job the performance step builds from the still and the song
-      // slice after staging, so its contract is checked as that render.
-      if (isPerformanceScene(scene) && localModelRendersPerformance(effectiveModel)) musicVideoContractMode = 'a2v';
-      else {
-        await cleanupMultipartTemp(uploads);
-        throw new ServerError(
-          `${effectiveModel.name} renders lip-sync and music-driven shots only, from the still and the song. Pick an image-to-video model such as LTX-2.5 for this cutaway.`,
-          { status: 400, code: 'MUSIC_VIDEO_MODEL_NEEDS_PERFORMANCE_SHOT' },
-        );
-      }
-    }
-  }
-  // A Grok shot sent without a size names no resolution_name, so Grok falls back
-  // to its 480p default (848x480 at 16:9); size it to the project's frame instead.
-  if (backend === VIDEO_GEN_MODE.GROK && body.musicVideo?.projectId && body.width == null && body.height == null) {
-    const project = await Promise.resolve().then(() => getMusicVideoProject(body.musicVideo.projectId))
-      .catch(async (error) => { await cleanupMultipartTemp(uploads); throw error; });
-    if (project) Object.assign(body, musicVideoFrameGenSize(project));
-  }
-  // Reference inputs condition a local reference-to-video model only; a hosted
-  // lane would enqueue an ordinary render that silently ignores them.
-  const hostedReferenceError = hostedReferenceInputsError({ backend, body, uploads });
-  if (hostedReferenceError) {
-    await cleanupMultipartTemp(uploads);
-    throw hostedReferenceError;
-  }
-
-  // Track every durable file we've already copied into PATHS.uploads so a
-  // *later* staging failure can roll them back. Without this, staging
-  // sourceImage successfully then failing on lastImage would leave the
-  // sourceImage durable copy orphaned (the job is never enqueued, so the
-  // worker's cleanup never runs).
+  // Keep ownership here until preparation succeeds and the caller can enqueue.
   const stagedDurablePaths = [];
   const cleanupStaged = async () => {
     for (const p of stagedDurablePaths) await unlinkGuarded(p).catch(() => {});
     await cleanupMultipartTemp(uploads);
   };
 
-  // #3326 — shared validators and lookups can reject after earlier uploads
-  // have been copied. Guard the entire staging region to release those files.
-  return withStagedRollback(cleanupStaged, () => resolvePreparedParams({
-    body, uploads, settings, backend, pythonPath,
-    effectiveModel: runwaySpecial ? null : effectiveModel, effectiveModelId, stagedDurablePaths, cleanupStaged, musicVideoContractMode,
-  }));
+  return withStagedRollback(cleanupStaged, async () => {
+    const settings = await getSettings();
+    const backend = resolveRequestedVideoBackend({ body, uploads, settings, localOnlyParamKeys });
+    assertReactorNegativePromptSupported(backend, body.negativePrompt);
+    if (backend !== VIDEO_GEN_MODE.LOCAL && body.continuityStrategy != null) {
+      throw new ServerError('Explicit continuation strategy requires a local video backend.', {
+        status: 400, code: 'VIDEO_CONTINUITY_UNSUPPORTED',
+      });
+    }
+    const guidanceError = storyboardGuidanceRequestError({ body, uploads, backend });
+    if (guidanceError) {
+      throw guidanceError;
+    }
+    const referenceUploadsError = referenceImageUploadsError({ backend, body, uploads });
+    if (referenceUploadsError) {
+      throw referenceUploadsError;
+    }
+    const runwaySpecial = backend === VIDEO_GEN_MODE.RUNWAY && RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode);
+    if (!runwaySpecial && (RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode) || uploads.runwayVideo || uploads.runwayCharacterVideo)) {
+      throw new ServerError('Runway video inputs require the matching Runway video workflow.', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    // A loose reference (#4874) is a LOCAL-runtime capability. The model gate
+    // further down asks whether the chosen model's runtime can honor it — but an
+    // explicit `backend: 'grok'` never reaches that runtime at all: grok's
+    // image_to_video always anchors, and its short-circuit below drops every
+    // local-only knob. Rejecting here (before any staging) is what keeps
+    // "Inspire" from quietly returning an anchored clip from the cloud lane.
+    if (backend !== VIDEO_GEN_MODE.LOCAL && !isDefaultI2vReferenceMode(body.i2vReferenceMode)) {
+      throw new ServerError(
+        `The ${backend} backend always anchors a reference image as frame one — switch to a local LTX-2.5 model, or use the Anchor reference mode.`,
+        { status: 400, code: 'I2V_REFERENCE_MODE_UNSUPPORTED' },
+      );
+    }
+    const pythonPath = settings.imageGen?.local?.pythonPath || null;
+    const { model: effectiveModel, modelId: effectiveModelId } = await selectPreparationModel(body.modelId, () => settings);
+    await validateVideoLoraStages({ ...body, loras: body.loraFilenames }, effectiveModel, backend);
+    // Hosted renders can run without a local model when the caller omitted it.
+    if (!effectiveModel && (backend === VIDEO_GEN_MODE.LOCAL || body.modelId !== undefined)) {
+      throw new ServerError(
+        unknownVideoModelMessage(effectiveModelId),
+        { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
+      );
+    }
+    // A local Music Video shot: sized to the project's aspect, and checked
+    // against the model its kind of shot needs (musicVideoLocalModels.js).
+    let musicVideoContractMode = null;
+    if (backend === VIDEO_GEN_MODE.LOCAL && body.musicVideo?.projectId) {
+      // A clip's own audio never reaches the music video (the song does), so a
+      // model that always renders its audio track is not asked to mute it.
+      if (effectiveModel?.supportsDisableAudio === false) delete body.disableAudio;
+      const unsized = body.width == null && body.height == null;
+      const audioOnlyModel = !!effectiveModel && (!body.mode || body.mode === 'image') && !localModelRendersCutaway(effectiveModel);
+      const project = unsized || audioOnlyModel
+        ? await getMusicVideoProject(body.musicVideo.projectId)
+        : null;
+      // Left unsized it would render the model's 768x512 (3:2) default,
+      // cropping its 16:9 still and leaving side gaps in a 16:9 video.
+      if (project && unsized) {
+        const endFrame = body.mode === 'fflf' || !!body.lastImageFile || !!uploads.lastImage;
+        Object.assign(body, musicVideoLocalClipSize(project, effectiveModel, { endFrame }));
+      }
+      const scene = project?.scenes?.find((entry) => entry.sceneId === body.musicVideo.sceneId);
+      if (scene && audioOnlyModel) {
+        // An audio-only model (MiniMax H3 Ref2VA) renders a performance shot as
+        // the a2v job the performance step builds from the still and the song
+        // slice after staging, so its contract is checked as that render.
+        if (isPerformanceScene(scene) && localModelRendersPerformance(effectiveModel)) musicVideoContractMode = 'a2v';
+        else {
+          throw new ServerError(
+            `${effectiveModel.name} renders lip-sync and music-driven shots only, from the still and the song. Pick an image-to-video model such as LTX-2.5 for this cutaway.`,
+            { status: 400, code: 'MUSIC_VIDEO_MODEL_NEEDS_PERFORMANCE_SHOT' },
+          );
+        }
+      }
+    }
+    // A Grok shot sent without a size names no resolution_name, so Grok falls back
+    // to its 480p default (848x480 at 16:9); size it to the project's frame instead.
+    if (backend === VIDEO_GEN_MODE.GROK && body.musicVideo?.projectId && body.width == null && body.height == null) {
+      const project = await getMusicVideoProject(body.musicVideo.projectId);
+      if (project) Object.assign(body, musicVideoFrameGenSize(project));
+    }
+    // Reference inputs condition a local reference-to-video model only; a hosted
+    // lane would enqueue an ordinary render that silently ignores them.
+    const hostedReferenceError = hostedReferenceInputsError({ backend, body, uploads });
+    if (hostedReferenceError) {
+      throw hostedReferenceError;
+    }
+
+    return resolvePreparedParams({
+      body, uploads, settings, backend, pythonPath,
+      effectiveModel: runwaySpecial ? null : effectiveModel, effectiveModelId,
+      stagedDurablePaths, cleanupStaged, musicVideoContractMode,
+    });
+  });
 }
 
-// Ensure the durable uploads dir exists before staging. Wrapped in
-// try/catch so a permission/disk failure here still cleans up the
-// multipart temp uploads instead of leaking them in the OS temp dir.
-async function ensureUploadsDir({ uploads, cleanupStaged }) {
+async function ensureUploadsDir(uploads) {
   if (!(uploads.sourceImage || uploads.lastImage || uploads.audioFile || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]) || VIDEO_REFERENCE_IMAGE_FIELDS.some((field) => uploads[field]) || uploads.icReference || uploads.runwayVideo || uploads.runwayCharacterVideo)) return;
   try {
     await ensureDir(PATHS.uploads);
   } catch (err) {
-    await cleanupStaged();
     throw new ServerError(
       `Failed to prepare uploads directory: ${err.message}`,
       { status: 500, code: 'VIDEO_GEN_UPLOADS_DIR_FAILED' },
@@ -508,16 +479,13 @@ async function ensureUploadsDir({ uploads, cleanupStaged }) {
 // single-chunk renders (the chain orchestrator pins keyframes only on
 // chunk 0; chaining ≥2 chunks with N keyframes has no defined semantic).
 // Returns null when the request carries no multi-keyframe list.
-async function resolveKeyframeAnchors({
-  body, sourceImagePath, lastImagePath, cleanupStaged,
-}) {
+function resolveKeyframeAnchors({ body, sourceImagePath, lastImagePath }) {
   if (!body.keyframes || body.keyframes.length < 2) return null;
-  const reject = async (message, code) => {
-    await cleanupStaged();
+  const reject = (message, code) => {
     throw new ServerError(message, { status: 400, code });
   };
   if (body.mode && body.mode !== 'fflf') {
-    await reject(`keyframes is only valid with mode='fflf' (got mode='${body.mode}').`, 'KEYFRAMES_MODE_MISMATCH');
+    reject(`keyframes is only valid with mode='fflf' (got mode='${body.mode}').`, 'KEYFRAMES_MODE_MISMATCH');
   }
   // Reject mixing keyframes with the legacy 2-keyframe inputs — the
   // worker would silently ignore sourceImage/lastImage when keyframes is
@@ -526,7 +494,7 @@ async function resolveKeyframeAnchors({
   // pick one shape per request. Covers both upload paths and the
   // gallery-resolved file fields.
   if (sourceImagePath || lastImagePath || body.sourceImageFile || body.lastImageFile) {
-    await reject(
+    reject(
       'keyframes cannot be combined with sourceImage / lastImage inputs — pass each anchor frame as a keyframes[] entry instead.',
       'KEYFRAMES_LEGACY_INPUTS_CONFLICT',
     );
@@ -546,15 +514,15 @@ async function resolveKeyframeAnchors({
   for (let i = 0; i < body.keyframes.length; i++) {
     const kf = body.keyframes[i];
     const path = resolveGalleryImage(kf.file);
-    if (!path) await reject(`keyframes[${i}].file not found in gallery: ${kf.file}`, 'KEYFRAME_GALLERY_MISS');
+    if (!path) reject(`keyframes[${i}].file not found in gallery: ${kf.file}`, 'KEYFRAME_GALLERY_MISS');
     if (kf.index <= prevIndex) {
-      await reject(`keyframes indices must be strictly ascending; got ${prevIndex} then ${kf.index}`, 'KEYFRAME_INDICES_NOT_ASCENDING');
+      reject(`keyframes indices must be strictly ascending; got ${prevIndex} then ${kf.index}`, 'KEYFRAME_INDICES_NOT_ASCENDING');
     }
     if (kf.index > effectiveNumFrames - 1) {
       const numFramesLabel = body.numFrames != null
         ? `numFrames ${body.numFrames}`
         : `default numFrames ${DEFAULT_NUM_FRAMES}`;
-      await reject(`keyframes[${i}].index ${kf.index} >= ${numFramesLabel}`, 'KEYFRAME_INDEX_OUT_OF_RANGE');
+      reject(`keyframes[${i}].index ${kf.index} >= ${numFramesLabel}`, 'KEYFRAME_INDEX_OUT_OF_RANGE');
     }
     resolved.push({ path, index: kf.index });
     prevIndex = kf.index;
@@ -564,26 +532,11 @@ async function resolveKeyframeAnchors({
 
 // Local audio is queue-owned whether supplied as an upload or copied from a
 // project song. Keep source selection and durable ownership in one step.
-async function prepareLocalAudio({ body, uploads, numFrames, stageUploadDurable, stagedDurablePaths, cleanupStaged }) {
+async function prepareLocalAudio({ body, uploads, numFrames, stageUploadDurable, stageDurableCopy }) {
   // Music-video a2v jobs reuse an existing library track rather than uploading
   // the same song for every cut. Copy it into the queue-owned uploads area so
   // the worker may safely delete its input on completion without ever touching
   // the source track under data/music.
-  const stageExistingAudioDurable = async (sourcePath) => {
-    const ext = extname(sourcePath) || '.bin';
-    const durablePath = join(PATHS.uploads, `video-audio-${randomUUID()}${ext}`);
-    await copyFileGuarded(sourcePath, durablePath).catch(async (err) => {
-      await unlinkGuarded(durablePath).catch(() => {});
-      await cleanupStaged();
-      throw new ServerError(
-        `Failed to stage project audio: ${err.message}`,
-        { status: 500, code: 'VIDEO_GEN_AUDIO_STAGE_FAILED' },
-      );
-    });
-    stagedDurablePaths.push(durablePath);
-    return durablePath;
-  };
-
   let audioFilePath = null;
   let audioProject = null;
   if (uploads.audioFile) {
@@ -595,14 +548,12 @@ async function prepareLocalAudio({ body, uploads, numFrames, stageUploadDurable,
     const project = await getMusicVideoProject(body.musicVideo.projectId);
     const sceneExists = project?.scenes?.some((scene) => scene.sceneId === body.musicVideo.sceneId);
     if (!project || !sceneExists) {
-      await cleanupStaged();
       throw new ServerError('Music-video project or scene not found', { status: 404, code: 'NOT_FOUND' });
     }
     const track = project.trackId ? await getTrack(project.trackId) : null;
     const filename = track?.audioFilename || project.uploadedAudioFilename;
     const sourceAudioPath = filename ? safeUnder(PATHS.music, filename) : null;
     if (!sourceAudioPath || !existsSync(sourceAudioPath)) {
-      await cleanupStaged();
       throw new ServerError('Music-video project audio is unavailable', { status: 400, code: 'VIDEO_GEN_PROJECT_AUDIO_MISSING' });
     }
     const startSample = Math.round((Number(body.audioStartSec) || 0) * 48000);
@@ -614,7 +565,11 @@ async function prepareLocalAudio({ body, uploads, numFrames, stageUploadDurable,
     // Exact PCM provenance has a bounded window; longer local inputs retain
     // the worker's full-song/offset contract without claiming a clip digest.
     if (!body._suppliedAudio && exactWindow) audioProject = project;
-    else audioFilePath = await stageExistingAudioDurable(sourceAudioPath);
+    else {
+      audioFilePath = await stageDurableCopy(sourceAudioPath, extname(sourceAudioPath), 'audio', {
+        message: 'Failed to stage project audio', code: 'VIDEO_GEN_AUDIO_STAGE_FAILED',
+      });
+    }
   }
   return { audioFilePath, audioProject };
 }
@@ -667,7 +622,7 @@ function validateResolvedReferences(model, { sourceImagePath, referenceImagePath
   if (error) throw error;
 }
 
-async function resolveAudioFrameCount({ body, audioFilePath, effectiveModel, effectiveNumFrames, cleanupStaged }) {
+async function resolveAudioFrameCount({ body, audioFilePath, effectiveModel, effectiveNumFrames }) {
   // A direct-upload LTX-2.5 A2V request follows the whole audio file. The MLX
   // pipeline still requires an explicit 8n+1 frame canvas, so derive that canvas
   // from the durable upload rather than trusting browser metadata (or forcing an
@@ -681,7 +636,6 @@ async function resolveAudioFrameCount({ body, audioFilePath, effectiveModel, eff
     && !body.musicVideo) {
     const durationSeconds = await probeVideoDuration(audioFilePath);
     if (durationSeconds == null) {
-      await cleanupStaged();
       throw new ServerError(
         'Could not read the uploaded audio duration. Upload a valid WAV, MP3, M4A, AAC, FLAC, or OGG file.',
         { status: 400, code: 'VIDEO_GEN_AUDIO_DURATION_UNREADABLE' },
@@ -692,7 +646,6 @@ async function resolveAudioFrameCount({ body, audioFilePath, effectiveModel, eff
     const maxNumFrames = Number(effectiveModel.maxNumFrames);
     if (!Number.isInteger(frameStride) || frameStride <= 0
       || !Number.isInteger(maxNumFrames) || maxNumFrames <= 0) {
-      await cleanupStaged();
       throw new ServerError(
         `${effectiveModel.name} is missing its duration-driven frameStride/maxNumFrames contract.`,
         { status: 500, code: 'VIDEO_MODEL_MISCONFIGURED' },
@@ -700,7 +653,6 @@ async function resolveAudioFrameCount({ body, audioFilePath, effectiveModel, eff
     }
     effectiveNumFrames = audioDurationToFrames(durationSeconds, fps, frameStride);
     if (effectiveNumFrames > maxNumFrames) {
-      await cleanupStaged();
       throw new ServerError(
         `${effectiveModel.name} supports up to ${(maxNumFrames / fps).toFixed(1)}s in one audio-to-video render; this file is ${durationSeconds.toFixed(1)}s. Use MiniMax H3 Ref2VA for longer audio, or trim the file.`,
         { status: 400, code: 'VIDEO_GEN_AUDIO_TOO_LONG' },
@@ -711,8 +663,8 @@ async function resolveAudioFrameCount({ body, audioFilePath, effectiveModel, eff
 }
 
 async function prepareVideoReferences({
-  body, uploads, effectiveModel, sourceImagePath, getHistory, resolveHistoryVideoPath,
-  stageUploadDurable, extraUploadedTempPaths, cleanupStaged,
+  body, uploads, effectiveModel, sourceImagePath, getHistory,
+  stageUploadDurable, extraUploadedTempPaths,
 }) {
   // The backend and capability-dependent model are already resolved here, and
   // hosted/peer submissions have taken their own lanes. Add cast sheets only
@@ -742,7 +694,6 @@ async function prepareVideoReferences({
       const file = body.referenceImageFiles[i];
       const path = resolveGalleryImage(file);
       if (!path) {
-        await cleanupStaged();
         throw new ServerError(
           `referenceImageFiles[${i}] not found in gallery: ${file}`,
           { status: 400, code: 'VIDEO_REFERENCE_IMAGE_GALLERY_MISS' },
@@ -760,7 +711,7 @@ async function prepareVideoReferences({
     const history = await getHistory();
     referenceVideoPaths = [];
     for (const id of body.referenceVideoIds) {
-      referenceVideoPaths.push(await resolveHistoryVideoPath(id, {
+      referenceVideoPaths.push(resolveHistoryVideoPath(id, {
         history,
         label: 'referenceVideoIds entry',
         notFoundCode: 'VIDEO_REFERENCE_CLIP_NOT_FOUND',
@@ -868,7 +819,7 @@ function assertIcLoraRequest({ icSpec, body, uploads, backend }) {
  * exactly one branch contributes and each entry resolves 1:1 or throws.
  */
 async function resolveIcReferencePaths({
-  icSpec, body, icReferenceUploadPath, getHistory, resolveHistoryVideoPath, cleanupStaged,
+  icSpec, body, icReferenceUploadPath, getHistory,
 }) {
   if (icSpec.referenceKind === 'image') {
     if (icSpec.mode === 'ic-ingredients-25' && body.musicVideo?.sceneId) {
@@ -892,7 +843,6 @@ async function resolveIcReferencePaths({
       const file = body.icReferenceImageFiles[i];
       const path = resolveGalleryImage(file);
       if (!path) {
-        await cleanupStaged();
         throw new ServerError(
           `icReferenceImageFiles[${i}] not found in gallery: ${file}`,
           { status: 400, code: 'IC_LORA_REFERENCE_GALLERY_MISS' },
@@ -906,7 +856,7 @@ async function resolveIcReferencePaths({
   const history = await getHistory();
   const paths = [];
   for (const id of body.icReferenceVideoIds || []) {
-    paths.push(await resolveHistoryVideoPath(id, {
+    paths.push(resolveHistoryVideoPath(id, {
       history,
       label: 'icReferenceVideoIds entry',
       notFoundCode: 'IC_LORA_REFERENCE_NOT_FOUND',
@@ -961,52 +911,33 @@ async function resolvePreparedParams({
   body, uploads, settings, backend, pythonPath,
   effectiveModel, effectiveModelId, stagedDurablePaths, cleanupStaged, musicVideoContractMode = null,
 }) {
-  // Stage a multipart upload into data/uploads so the queue worker can find
-  // it after a server restart — the OS temp dir gets reaped on reboot, and a
-  // persisted `queued` job may replay long after the original POST. Worker
-  // unlinks the durable file when the job completes or cancels. Throws
-  // ServerError on copy failure (and cleans up every staged file + multipart
-  // temp upload so a mid-flight failure doesn't leak under /tmp + data/uploads).
-  const stageUploadDurable = async (file, kind) => {
-    // ffmpeg opens a staged file by its bytes, so a playlist posing as audio
-    // or an image never reaches the duration probe or the render.
-    await assertFileNotMediaManifest(file.path).catch(async (err) => {
-      await cleanupStaged();
-      throw err;
-    });
-    const ext = extname(file.originalname || file.path) || '.bin';
-    const durablePath = join(PATHS.uploads, `video-${kind}-${randomUUID()}${ext}`);
-    try {
-      await copyFileGuarded(file.path, durablePath);
-    } catch (err) {
-      await unlinkGuarded(durablePath).catch(() => {});
-      await cleanupStaged();
-      throw new ServerError(
-        `Failed to stage upload to durable location: ${err.message}`,
-        { status: 500, code: 'VIDEO_GEN_UPLOAD_STAGE_FAILED' },
-      );
-    }
-    await unlinkGuarded(file.path).catch(() => {});
+  const stageDurableCopy = async (sourcePath, ext, kind, { message, code }) => {
+    const durablePath = join(PATHS.uploads, `video-${kind}-${randomUUID()}${ext || '.bin'}`);
+    // Register the destination first so rollback also owns a partial copy.
     stagedDurablePaths.push(durablePath);
+    try {
+      await copyFileGuarded(sourcePath, durablePath);
+    } catch (err) {
+      throw new ServerError(`${message}: ${err.message}`, { status: 500, code });
+    }
     return durablePath;
   };
 
-  // Resolution precedence on each frame side: a fresh upload always wins over
-  // a gallery filename so users can override a stale gallery pick by dropping
-  // in a new file without first clearing the picker.
-  //
-  // Cleanup plumbing: `uploadedTempPath` (single, legacy) is RESERVED for the
-  // start-frame upload — that field shape is what already-persisted jobs from
-  // before this route change carry, so keeping its semantics stable means
-  // those replays still clean up correctly. Every additional upload (today:
-  // just `lastImage`) flows through `uploadedTempPaths` as an array. The
-  // worker walks both fields when unlinking on terminal events.
+  const stageUploadDurable = async (file, kind) => {
+    // ffmpeg reads the bytes, so reject manifests before the probe or render.
+    await assertFileNotMediaManifest(file.path);
+    const durablePath = await stageDurableCopy(file.path, extname(file.originalname || file.path), kind, {
+      message: 'Failed to stage upload to durable location', code: 'VIDEO_GEN_UPLOAD_STAGE_FAILED',
+    });
+    await unlinkGuarded(file.path).catch(() => {});
+    return durablePath;
+  };
+
   // Mode/upload pairing checks BEFORE staging so a rejected request only
   // unlinks the OS temp file (cheap) instead of also unlinking a freshly-
   // copied 100MB durable file under data/uploads (wasted disk I/O on every
   // bad request).
   if (body.mode === 'a2v' && !uploads.audioFile && !body.musicVideo) {
-    await cleanupStaged();
     throw new ServerError(
       'a2v mode requires an audioFile upload or a music-video project audio source.',
       { status: 400, code: 'VIDEO_GEN_AUDIO_REQUIRED' },
@@ -1016,11 +947,9 @@ async function resolvePreparedParams({
   // audio clip (no Music Video scene needed).
   const falSourceAudio = body.backend === VIDEO_GEN_MODE.FAL && !!getFalVideoModel(body.falModelId)?.audioInput;
   if (falSourceAudio && !uploads.audioFile && !body.musicVideo) {
-    await cleanupStaged();
     throw new ServerError('A fal.ai source-audio model needs an audioFile upload (the audio it follows).', { status: 400, code: 'VIDEO_GEN_AUDIO_REQUIRED' });
   }
   if (uploads.audioFile && body.mode !== 'a2v' && !falSourceAudio) {
-    await cleanupStaged();
     throw new ServerError(
       `audioFile upload is only valid with mode='a2v' (got mode='${body.mode || 'unset'}').`,
       { status: 400, code: 'VIDEO_GEN_AUDIO_MODE_MISMATCH' },
@@ -1057,22 +986,43 @@ async function resolvePreparedParams({
 
   // Persist Wan's validated count so the worker uses the same default.
   const isWan = effectiveModel?.runtime === 'wan22' || effectiveModel?.runtime === 'wan22_cuda';
-  let effectiveNumFrames = isWan ? validatedNumFrames : body.numFrames;
+  const effectiveNumFrames = isWan ? validatedNumFrames : body.numFrames;
 
-  // A missing panel or reference refuses before any upload is staged.
-  let guidance;
-  try {
-    guidance = resolveStoryboardGuidanceInputs(body);
-  } catch (error) {
-    await cleanupStaged();
-    throw error;
-  }
+  // Resolve the panel before copying any uploads.
+  const guidance = resolveStoryboardGuidanceInputs(body);
+  const primary = await stagePrimaryMedia({
+    body, uploads, settings, backend, effectiveModel, declaredMode, contractParams,
+    effectiveNumFrames, guidance, falSourceAudio, stageUploadDurable, stageDurableCopy,
+    stagedDurablePaths, cleanupStaged,
+  });
+  if (primary.hostedParams) return primary.hostedParams;
+
+  const { icReferenceUploadPath, ...primaryMedia } = primary;
+  const references = await resolveReferenceInputs({
+    body, uploads, effectiveModel, icSpec, icReferenceUploadPath, stageUploadDurable,
+    sourceImagePath: primaryMedia.sourceImagePath,
+    lastImagePath: primaryMedia.lastImagePath,
+    extraUploadedTempPaths: primaryMedia.uploadedTempPaths,
+  });
+  return assembleQueuedVideoParams({
+    body, backend, pythonPath, effectiveModel, effectiveModelId, icSpec, primaryMedia, references,
+  });
+}
+
+async function stagePrimaryMedia({
+  body, uploads, settings, backend, effectiveModel, declaredMode, contractParams,
+  effectiveNumFrames, guidance, falSourceAudio, stageUploadDurable, stageDurableCopy,
+  stagedDurablePaths, cleanupStaged,
+}) {
+  // A fresh upload wins over the gallery pick on either side. Preserve the
+  // legacy queue ownership field for the start frame, with other owned
+  // media tracked in uploadedTempPaths.
   let sourceImagePath = null;
   let lastImagePath = null;
   let icReferenceUploadPath = null;
   let uploadedTempPath = null;
   const extraUploadedTempPaths = [];
-  await ensureUploadsDir({ uploads, cleanupStaged });
+  await ensureUploadsDir(uploads);
   if (uploads.sourceImage) {
     sourceImagePath = await stageUploadDurable(uploads.sourceImage, 'source');
     uploadedTempPath = sourceImagePath;
@@ -1080,7 +1030,6 @@ async function resolvePreparedParams({
     sourceImagePath = resolveGalleryImage(body.sourceImageFile);
   }
   if (declaredMode === 'ic-ingredients-25' && body.sourceImageFile && !sourceImagePath) {
-    await cleanupStaged();
     throw new ServerError('The selected opening frame is missing or could not be resolved. Choose it again.',
       { status: 400, code: 'IC_LORA_SOURCE_MISSING' });
   }
@@ -1092,7 +1041,6 @@ async function resolvePreparedParams({
   // that ignores the frame the director chose. Reject instead, so a stale/deleted
   // reference frame surfaces as a clear error rather than a wrong-looking clip.
   if (body.musicVideo && !sourceImagePath && !body.guidanceImageFile) {
-    await cleanupStaged();
     throw new ServerError(
       'Music Video scene render needs a resolvable reference frame (sourceImageFile) — the scene\'s frame is missing or could not be resolved.',
       { status: 400, code: 'MUSIC_VIDEO_SOURCE_REQUIRED' },
@@ -1113,22 +1061,23 @@ async function resolvePreparedParams({
   if (hosted) {
     const { usable, extras } = hosted.prepare(settings);
     if (!usable) {
-      await cleanupStaged();
       throw new ServerError(hosted.errorMessage, { status: 400, code: hosted.errorCode });
     }
     const staged = await hosted.stageInputs({
-      body, uploads, sourceImagePath, falSourceAudio, stageUploadDurable, cleanupStaged, settings,
+      body, uploads, sourceImagePath, falSourceAudio, stageUploadDurable, settings,
     });
     return {
-      backend,
-      ...extras,
-      effectiveModel: { id: backend, supportedModes: ['text', 'image'] },
-      sourceImagePath,
-      uploadedTempPath,
-      ...staged,
-      ...guidance,
-      discardSourceImage,
-      cleanupStaged,
+      hostedParams: {
+        backend,
+        ...extras,
+        effectiveModel: { id: backend, supportedModes: ['text', 'image'] },
+        sourceImagePath,
+        uploadedTempPath,
+        ...staged,
+        ...guidance,
+        discardSourceImage,
+        cleanupStaged,
+      },
     };
   }
 
@@ -1141,11 +1090,11 @@ async function resolvePreparedParams({
   }
   const audioInput = await prepareLocalAudio({
     body, uploads, numFrames: effectiveNumFrames ?? effectiveModel.defaultFrames ?? DEFAULT_NUM_FRAMES,
-    stageUploadDurable, stagedDurablePaths, cleanupStaged,
+    stageUploadDurable, stageDurableCopy,
   });
   let { audioFilePath } = audioInput;
   effectiveNumFrames = await resolveAudioFrameCount({
-    body, audioFilePath, effectiveModel, effectiveNumFrames, cleanupStaged,
+    body, audioFilePath, effectiveModel, effectiveNumFrames,
   });
   let audioConditioning = null;
   if (audioInput.audioProject) {
@@ -1160,7 +1109,7 @@ async function resolvePreparedParams({
       scene: { startSec, endSec: startSec + (effectiveNumFrames - 1) / fps },
       numFrames: effectiveNumFrames,
       fps,
-    }).catch(async (error) => { await cleanupStaged(); throw error; });
+    });
     audioFilePath = window.audioFilePath;
     audioConditioning = window.audioConditioning;
     stagedDurablePaths.push(audioFilePath);
@@ -1177,36 +1126,40 @@ async function resolvePreparedParams({
     extraUploadedTempPaths.push(icReferenceUploadPath);
   }
 
-  const resolvedKeyframes = await resolveKeyframeAnchors({
-    body, sourceImagePath, lastImagePath, cleanupStaged,
-  });
-
-  // Resolve a render-history id to its on-disk video under data/videos/.
-  // Shared by native extend and the IC-LoRA reference channel: both let the
-  // user point at a prior render, and both must reject a missing/tampered id
-  // rather than silently degrading to a text render (which would produce
-  // wrong-looking content with no error). `label` names the field in the error
-  // so the two callers stay distinguishable.
-  const resolveHistoryVideoPath = async (id, { history, label, notFoundCode, missingFileCode }) => {
-    const videoEntry = history.find((h) => h.id === id);
-    if (!videoEntry) {
-      // cleanupStaged covers durable copies that may have been written
-      // before this validation point — these modes and image uploads are
-      // mutually exclusive in the UI but the route doesn't enforce that,
-      // so be defensive.
-      await cleanupStaged();
-      throw new ServerError(`${label} not found in history: ${id}`, { status: 404, code: notFoundCode });
-    }
-    const candidate = safeUnder(PATHS.videos, videoEntry.filename);
-    if (!candidate || !existsSync(candidate)) {
-      await cleanupStaged();
-      throw new ServerError(
-        `${label} resolved to a missing file: ${videoEntry.filename}`,
-        { status: 404, code: missingFileCode },
-      );
-    }
-    return candidate;
+  return {
+    effectiveNumFrames,
+    sourceImagePath,
+    lastImagePath,
+    audioFilePath,
+    ...(audioConditioning ? { audioConditioning } : {}),
+    icReferenceUploadPath,
+    uploadedTempPath,
+    uploadedTempPaths: extraUploadedTempPaths,
+    discardSourceImage,
+    cleanupStaged,
   };
+}
+
+function resolveHistoryVideoPath(id, { history, label, notFoundCode, missingFileCode }) {
+  const videoEntry = history.find((entry) => entry.id === id);
+  if (!videoEntry) {
+    throw new ServerError(`${label} not found in history: ${id}`, { status: 404, code: notFoundCode });
+  }
+  const candidate = safeUnder(PATHS.videos, videoEntry.filename);
+  if (!candidate || !existsSync(candidate)) {
+    throw new ServerError(
+      `${label} resolved to a missing file: ${videoEntry.filename}`,
+      { status: 404, code: missingFileCode },
+    );
+  }
+  return candidate;
+}
+
+async function resolveReferenceInputs({
+  body, uploads, effectiveModel, icSpec, icReferenceUploadPath, stageUploadDurable,
+  sourceImagePath, lastImagePath, extraUploadedTempPaths,
+}) {
+  const resolvedKeyframes = resolveKeyframeAnchors({ body, sourceImagePath, lastImagePath });
 
   // Render history is read by both the extend and IC reference paths. Load it
   // lazily and at most once — the file grows with every render, so a request
@@ -1218,7 +1171,7 @@ async function resolvePreparedParams({
   // extendFromVideoPath.
   let extendFromVideoPath = null;
   if (body.extendFromVideoId) {
-    extendFromVideoPath = await resolveHistoryVideoPath(body.extendFromVideoId, {
+    extendFromVideoPath = resolveHistoryVideoPath(body.extendFromVideoId, {
       history: await getHistory(),
       label: 'extendFromVideoId',
       notFoundCode: 'EXTEND_SOURCE_NOT_FOUND',
@@ -1228,15 +1181,21 @@ async function resolvePreparedParams({
 
   const icReferencePaths = icSpec
     ? await resolveIcReferencePaths({
-      icSpec, body, icReferenceUploadPath, getHistory, resolveHistoryVideoPath, cleanupStaged,
+      icSpec, body, icReferenceUploadPath, getHistory,
     })
     : null;
 
   const { referenceImagePaths, referenceVideoPaths, referenceAudioPaths } = await prepareVideoReferences({
-    body, uploads, effectiveModel, sourceImagePath, getHistory, resolveHistoryVideoPath,
-    stageUploadDurable, extraUploadedTempPaths, cleanupStaged,
+    body, uploads, effectiveModel, sourceImagePath, getHistory,
+    stageUploadDurable, extraUploadedTempPaths,
   });
 
+  return { resolvedKeyframes, extendFromVideoPath, icReferencePaths, referenceImagePaths, referenceVideoPaths, referenceAudioPaths };
+}
+
+async function assembleQueuedVideoParams({
+  body, backend, pythonPath, effectiveModel, effectiveModelId, icSpec, primaryMedia, references,
+}) {
   // Collapse the parallel loraFilenames/loraScales arrays into the internal
   // `[{ filename, scale }]` shape the service (resolveVideoLoras) and the
   // resume param echo consume. A defaulted scale keeps the worker contract
@@ -1253,8 +1212,13 @@ async function resolvePreparedParams({
   // also hard-rejects an explicit chunks>1 above; this covers the default.
   const effectiveChunks = (body.mode === 'a2v' || icSpec) ? 1 : (body.chunks ?? 1);
   await validateVideoLorasAndSpeed(effectiveModel, {
-    ...body, loras, sourceImagePath, lastImagePath, keyframes: resolvedKeyframes,
-    extendFromVideoPath, audioFilePath,
+    ...body,
+    loras,
+    sourceImagePath: primaryMedia.sourceImagePath,
+    lastImagePath: primaryMedia.lastImagePath,
+    keyframes: references.resolvedKeyframes,
+    extendFromVideoPath: references.extendFromVideoPath,
+    audioFilePath: primaryMedia.audioFilePath,
   });
 
   const { effectiveChunkPrompts, effectiveContextFrames, continuation } = resolveChainSettings({
@@ -1266,26 +1230,13 @@ async function resolvePreparedParams({
     pythonPath,
     effectiveModel,
     effectiveModelId,
-    effectiveNumFrames,
     mode: body.mode,
-    sourceImagePath,
-    lastImagePath,
-    audioFilePath,
-    ...(audioConditioning ? { audioConditioning } : {}),
-    icReferencePaths,
-    referenceImagePaths,
-    referenceVideoPaths,
-    referenceAudioPaths,
-    resolvedKeyframes,
-    extendFromVideoPath,
-    uploadedTempPath,
-    uploadedTempPaths: extraUploadedTempPaths,
+    ...primaryMedia,
+    ...references,
     loras,
     effectiveChunks,
     effectiveChunkPrompts,
     effectiveContextFrames,
     continuation,
-    discardSourceImage,
-    cleanupStaged,
   };
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import { Cpu, Box, Play, Square, Download, ArrowUpCircle, Power, PowerOff, RefreshCw, Save, Settings2, ExternalLink, Server } from 'lucide-react';
+import { Cpu, Box, Play, Square, Download, ArrowUpCircle, Power, PowerOff, RefreshCw, Save, Settings2, ExternalLink, Server, Trash2 } from 'lucide-react';
 import RuntimeLogDisclosure from './RuntimeLogDisclosure.jsx';
 import BrailleSpinner from '../BrailleSpinner';
 import ContextWindowSelect from '../ui/ContextWindowSelect.jsx';
@@ -29,6 +29,7 @@ const STATE_META = {
   updating: { label: 'Updating', cls: 'bg-port-accent/20 text-port-accent', dot: 'bg-port-accent animate-pulse' },
   starting: { label: 'Starting', cls: 'bg-port-accent/20 text-port-accent', dot: 'bg-port-accent animate-pulse' },
   stopping: { label: 'Stopping', cls: 'bg-port-accent/20 text-port-accent', dot: 'bg-port-accent animate-pulse' },
+  uninstalling: { label: 'Uninstalling', cls: 'bg-port-accent/20 text-port-accent', dot: 'bg-port-accent animate-pulse' },
   error: { label: 'Needs attention', cls: 'bg-port-error/20 text-port-error', dot: 'bg-port-error' },
   unknown: { label: 'Status unavailable', cls: 'bg-gray-500/20 text-gray-400', dot: 'bg-gray-500' },
   running: { label: 'Running', cls: 'bg-port-success/20 text-port-success', dot: 'bg-port-success animate-pulse' },
@@ -289,6 +290,13 @@ function ServerRow({ row, busy, actionInProgress, selected, hideActions, childre
           >
             {actionInProgress === `runtime-upgrade-${row.id}` ? <BrailleSpinner /> : <ArrowUpCircle size={12} />}
             {row.latestVersion ? `Update to v${row.latestVersion}` : 'Update'}
+          </button>
+        )}
+        {!hideActions && row.onUninstall && (
+          <button type="button" onClick={row.onUninstall} disabled={busy} className={neutralBtn}
+            title={`Uninstall ${row.label}`}>
+            {actionInProgress === `runtime-uninstall-${row.id}` ? <BrailleSpinner /> : <Trash2 size={12} />}
+            Uninstall
           </button>
         )}
         {row.updateUrl && (

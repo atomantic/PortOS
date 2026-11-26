@@ -13,12 +13,13 @@ vi.mock('./mkserveRuntimeInstall.js', async (importOriginal) => ({
   ...await importOriginal(),
   readMkserveInstall: vi.fn(),
   installPinnedMkserve: vi.fn(),
+  removeMkserveRelease: vi.fn(),
 }));
 
 import { isPortInUse } from '../lib/platform.js';
 import { execPm2, getAppStatusStrict } from './pm2.js';
-import { installPinnedMkserve, mkserveInstallPaths, readMkserveInstall, MKSERVE_BUNDLE, MKSERVE_VERSION } from './mkserveRuntimeInstall.js';
-import { MKSERVE_APP, MKSERVE_MODEL, getMkserveRuntimeStatus, installMkserve, startMkserveServer, stopMkserveServer } from './mkserveRuntimeManager.js';
+import { installPinnedMkserve, mkserveInstallPaths, readMkserveInstall, removeMkserveRelease, MKSERVE_BUNDLE, MKSERVE_VERSION } from './mkserveRuntimeInstall.js';
+import { MKSERVE_APP, MKSERVE_MODEL, getMkserveRuntimeStatus, installMkserve, startMkserveServer, stopMkserveServer, uninstallMkserve } from './mkserveRuntimeManager.js';
 
 const modelRevision = 'a'.repeat(40);
 const installed = {
@@ -46,6 +47,19 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('managed mkserve lifecycle', () => {
+  it('only uninstalls the PortOS release when the process manager and port are clear', async () => {
+    readMkserveInstall.mockResolvedValue(installed);
+    isPortInUse.mockResolvedValueOnce(true);
+    await expect(uninstallMkserve()).rejects.toThrow(/free its port/);
+    getAppStatusStrict.mockResolvedValueOnce({ status: 'stopped', args: ['external app'] });
+    await expect(uninstallMkserve()).rejects.toMatchObject({ code: 'MKSERVE_NAME_IN_USE' });
+    expect(removeMkserveRelease).not.toHaveBeenCalled();
+    await expect(getMkserveRuntimeStatus()).resolves.toMatchObject({ state: 'stopped', canUninstall: true });
+    await expect(uninstallMkserve()).resolves.toMatchObject({ success: true });
+    expect(removeMkserveRelease).toHaveBeenCalledExactlyOnceWith(installed);
+    expect(execPm2).not.toHaveBeenCalled();
+  });
+
   it('installs without launching, refuses concurrent Start, then moves from missing to stopped', async () => {
     let finishInstall;
     installPinnedMkserve.mockImplementation(() => new Promise((resolve) => { finishInstall = resolve; }));

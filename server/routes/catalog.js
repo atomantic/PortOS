@@ -1,4 +1,4 @@
-import { previzBuildJobStartSchema, previzBuildJobFinishSchema, catalogGreyboxDraftSchema, catalogGreyboxSaveSchema, catalogWorldSaveSchema, catalogGreyboxCaptureSchema, catalogGreyboxRenderSchema, catalogPhotorealRenderSchema, catalogPhotorealOpenSchema, catalogPhotorealLookDraftSchema, catalogPhotorealLookSaveSchema, catalogPhotorealTextureIdSchema, catalogPhotorealTextureSearchSchema } from '../lib/catalog/catalogGreyboxValidation.js';
+import { previzBuildJobStartSchema, previzBuildJobFinishSchema, catalogGreyboxDraftSchema, catalogGreyboxSaveSchema, catalogWorldSaveSchema, catalogGreyboxCaptureSchema, catalogGreyboxRenderSchema, catalogPhotorealCancelSchema, catalogPhotorealRenderSchema, catalogPhotorealOpenSchema, catalogPhotorealLookDraftSchema, catalogPhotorealLookSaveSchema, catalogPhotorealTextureIdSchema, catalogPhotorealTextureSearchSchema } from '../lib/catalog/catalogGreyboxValidation.js';
 import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.js';
 // Creative Ingredients Catalog HTTP routes, mounted at /api/catalog. Backs
 // the Catalog page, Ingest workflow, picker integrations, and peer sync.
@@ -24,7 +24,7 @@ import { embedIngredient, embedBatch, ingredientEmbedSeed, getEmbeddingsConfig }
 import { extractIngredientsForScrap } from '../services/catalog/catalogExtraction.js';
 import { listPrevizJobs, startPrevizJob, finishPrevizJob } from '../services/previzJobs.js';
 import { captureGreyboxShot, draftGreybox, previewGreyboxPrompt, renderGreyboxShot, saveGreybox, saveWorld } from '../services/catalog/catalogGreybox.js';
-import { getPhotorealStatus, openPhotorealBlend, photorealBlendPath, startPhotorealRender } from '../services/catalog/catalogPhotoreal.js';
+import { cancelPhotorealRender, getPhotorealStatus, openPhotorealBlend, photorealBlendPath, startPhotorealRender } from '../services/catalog/catalogPhotoreal.js';
 import { installTexture, listInstalledTextures, searchTextures } from '../services/photorealTextures.js';
 import { draftPhotorealLook, previewPhotorealLookPrompt, savePhotorealLook } from '../services/catalog/catalogPhotorealLook.js';
 import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalog/catalogIngestSources.js';
@@ -793,6 +793,11 @@ router.get('/ingredients/:id/photoreal', asyncHandler(async (req, res) => {
 router.post('/ingredients/:id/photoreal/render', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogPhotorealRenderSchema, req.body);
   res.status(202).json(await startPhotorealRender(req.params.id, body));
+}));
+
+router.post('/ingredients/:id/photoreal/cancel', asyncHandler(async (req, res) => {
+  const { jobId } = validateRequest(catalogPhotorealCancelSchema, req.body ?? {});
+  res.json(await cancelPhotorealRender(req.params.id, jobId));
 }));
 
 // Photoreal look (materials, lights, atmosphere): AI draft is a preview only.

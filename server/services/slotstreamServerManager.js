@@ -18,7 +18,7 @@
 import { randomUUID } from 'crypto';
 import { chmod, copyFile, lstat, mkdir, mkdtemp, rename, rm } from 'fs/promises';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { sleep } from '../lib/fileUtils.js';
 import { LOCAL_RUNTIMES, localEndpointPort, localRuntimeKind, isLocalInstanceEndpoint } from '../lib/localProviderRuntime.js';
@@ -78,6 +78,30 @@ const slotstreamLogs = createDaemonLogFiles(SLOTSTREAM_APP);
 
 let currentConfig = null;
 let lastExitError = null;
+let installationChange = null;
+
+function changeSlotstreamInstallation(work) {
+  if (installationChange) {
+    throw new ServerError('Slotstream already has an installation change in progress.', { status: 409 });
+  }
+  installationChange = Promise.resolve().then(work).finally(() => { installationChange = null; });
+  return installationChange;
+}
+
+async function slotstreamInstallFile() {
+  const bin = slotstreamBinDir();
+  const binary = join(bin, 'slotstream');
+  const entry = (path) => lstat(path).catch((error) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  // A PATH lookup may resolve to Homebrew or a symlink. Neither establishes
+  // ownership. Only a regular file at our release-install location is removable.
+  for (const directory of [dirname(bin), bin]) {
+    if (!(await entry(directory))?.isDirectory()) return null;
+  }
+  return (await entry(binary))?.isFile() ? binary : null;
+}
 
 const probeEndpoint = async (endpoint) =>
   (await probeOpenAiModels(endpoint, { timeoutMs: PROBE_TIMEOUT_MS })).reachable;
@@ -183,6 +207,7 @@ export async function getSlotstreamServerStatus({ includeLogs } = {}) {
   const installed = Boolean(binaryPath);
   const supported = installed || isAppleSilicon();
   const base = await daemon.getStatusBase({ installed, includeLogs });
+  const ownedBinary = installed && await slotstreamInstallFile().catch(() => null);
   const saved = await savedLaunchConfig();
   const cache = installed ? await listSlotstreamCachedModels() : { models: null, error: null };
   // The SAVED override, never the running config: `--memory-gb` is always on
@@ -193,6 +218,7 @@ export async function getSlotstreamServerStatus({ includeLogs } = {}) {
   return {
     ...base,
     supported,
+    canUninstall: Boolean(ownedBinary) && !installationChange && !base.running && base.managed === false,
     unsupportedReason: supported ? null : SLOTSTREAM_UNSUPPORTED_REASON,
     idleMinutes: await onDemand.idleMinutes(),
     keepLoaded: await onDemand.keepLoaded(),
@@ -214,7 +240,11 @@ export async function getSlotstreamServerStatus({ includeLogs } = {}) {
  * before extracting, never pipes a remote script to a shell, and never
  * fetches model weights.
  */
-export async function installSlotstream({ onProgress = () => {} } = {}) {
+export async function installSlotstream(options = {}) {
+  return changeSlotstreamInstallation(() => installPinnedSlotstream(options));
+}
+
+async function installPinnedSlotstream({ onProgress = () => {} } = {}) {
   const emit = (message) => onProgress({ event: 'progress', message });
   if (!isAppleSilicon()) {
     throw new ServerError(SLOTSTREAM_UNSUPPORTED_REASON, { status: 400, code: 'SLOTSTREAM_UNSUPPORTED_PLATFORM' });
@@ -282,6 +312,25 @@ export async function installSlotstream({ onProgress = () => {} } = {}) {
   } finally {
     await rm(workDir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Require an idle runtime; don't kill a process to remove its executable.
+ * Share the wake/start slot so an inference request cannot launch it midway.
+ */
+export async function uninstallSlotstream() {
+  return changeSlotstreamInstallation(() => onDemand.runStart(async () => {
+    const binary = await slotstreamInstallFile();
+    if (!binary) {
+      throw new ServerError('Slotstream is not installed at the PortOS release location.', {
+        status: 409, code: 'SLOTSTREAM_NOT_MANAGED',
+      });
+    }
+    const { port: savedPort } = await savedLaunchConfig();
+    await daemon.assertStoppedForUninstall({ label: 'Slotstream', codePrefix: 'SLOTSTREAM', savedPort });
+    await rm(binary);
+    return { success: true, message: 'Slotstream uninstalled. Checkpoints and provider settings were kept.' };
+  }));
 }
 
 /**

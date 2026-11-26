@@ -8,7 +8,7 @@ import { setTimeout as sleep } from 'timers/promises';
 import { isPortInUse } from '../lib/platform.js';
 import { clearJlistCache, execPm2, getAppStatusStrict } from './pm2.js';
 import {
-  installPinnedSplash, probeSplashEndpoint, readInstalledSplashVersion, splashLaunchArgs, splashLaunchPrefix, SPLASH_UNSUPPORTED_REASON,
+  installPinnedSplash, probeSplashEndpoint, readInstalledSplashVersion, removeSplashRelease, splashLaunchArgs, splashLaunchPrefix, SPLASH_UNSUPPORTED_REASON,
   SPLASH_VERSION, supportsManagedSplash,
 } from './splashManagedRuntime.js';
 
@@ -55,6 +55,7 @@ export async function getSplashManagedState({ includeLogs = false } = {}) {
   const repairRecommended = owned && ['errored', 'stopped'].includes(app.status);
   return {
     installed: Boolean(version),
+    canUninstall: Boolean(version && !daemon.operation() && (app?.status === 'not_found' || repairRecommended)),
     requestedContextWindow,
     version,
     targetVersion: SPLASH_VERSION,
@@ -143,6 +144,22 @@ export function startSplashServer({ onProgress = () => {} } = {}) {
       },
     });
     return { success: true, message: 'Splash is ready with Inkling 2 Mini.' };
+  });
+}
+
+export function uninstallSplashRuntime() {
+  return withSplashOperation('uninstall', async () => {
+    const version = await readInstalledSplashVersion();
+    if (!version) throw fail('There is no PortOS-managed Splash release to uninstall.');
+    const status = await daemon.requireStatus(version);
+    const stoppedOwned = status.owned && ['stopped', 'errored'].includes(status.app.status);
+    if ((!stoppedOwned && status.app.status !== 'not_found') || await daemon.hasListener()) {
+      throw fail('Stop Splash and free its port before uninstalling. PortOS will not alter an external server.');
+    }
+    if (stoppedOwned) await daemon.remove(status);
+    await removeSplashRelease(version);
+    startTimedOut = false;
+    return { success: true, message: 'Splash uninstalled. Model files were kept.' };
   });
 }
 

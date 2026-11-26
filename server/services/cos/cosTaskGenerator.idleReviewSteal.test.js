@@ -13,7 +13,7 @@
  * These pin the hand-off: the steal binds the pre-agent progress reporter to
  * that card, and carries the card id out to the tier — the only place the
  * admission decision is final, and therefore the only place that may close it
- * (cosDequeue#closeStolenIdleReviewCard).
+ * (cosDequeueAdmission#closeStolenIdleReviewCard).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -226,7 +226,7 @@ describe('idle review stealing a queued on-demand request', () => {
 
   it('keeps activity through idle-tier closure and clears it on failure', async () => {
     const { isPreflightActive } = await import('../preflightActivity.js');
-    const { admitIdleReviewTask } = await import('./cosDequeue.js');
+    const { admitIdleReviewTask } = await import('./cosDequeueAdmission.js');
     const taskStore = await import('./cosTaskStore.js');
     const spy = vi.spyOn(taskStore, 'getCosApprovalView').mockResolvedValue({ autoApprovedCount: 0 });
     const entered = Promise.withResolvers();
@@ -248,7 +248,7 @@ describe('idle review stealing a queued on-demand request', () => {
 
   it('transfers an admitted stolen card to the periodic evaluator through dispatch', async () => {
     const { beginPreflightActivity, isPreflightActive } = await import('../preflightActivity.js');
-    const { admitIdleReviewTask } = await import('./cosDequeue.js');
+    const { admitIdleReviewTask } = await import('./cosDequeueAdmission.js');
     const taskStore = await import('./cosTaskStore.js');
     const generator = await import('./cosImprovementTasks.js');
     const task = { id: 'stolen-task', metadata: { app: 'example-app' } };

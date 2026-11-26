@@ -1,6 +1,7 @@
 import { watch, mkdirSync } from 'node:fs';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { assertNotRealDataWrite } from '../lib/testDataIsolation.js';
+import { wakeWorker } from './mediaJobQueue/workerSignal.js';
 
 let watcher;
 let timer;
@@ -36,7 +37,10 @@ function emitReadiness(next) {
 
 function emitChanges() {
   boundIo?.emit('maintenance:changed');
-  emitReadiness(readinessProjection());
+  const readiness = readinessProjection();
+  // The updater can release its hold in a separate process.
+  if (readiness.state === 'normal') wakeWorker();
+  emitReadiness(readiness);
   if (!watcher && boundIo) bindMaintenanceIo(boundIo);
 }
 
