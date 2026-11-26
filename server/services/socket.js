@@ -559,13 +559,24 @@ function setupCosEventForwarding() {
     dashboardEvents.on(event, () => broadcastToCos(event, {}));
   }
   nativeUsageEvents.on('updated', () => getIo()?.emit('usage:native-history-updated', {}));
-  settingsEvents.on('settings:updated', () => {
+  let memoryModels;
+  settingsEvents.on('settings:updated', settings => {
+    const nextMemoryModels = JSON.stringify([
+      settings?.memoryClassifier?.providerId, settings?.memoryClassifier?.model,
+      settings?.embeddings?.provider, settings?.embeddings?.model,
+    ]);
+    if (nextMemoryModels !== memoryModels) {
+      memoryModels = nextMemoryModels;
+      emitToOperators('memory:models:changed', {});
+    }
     getIo()?.emit('backup:changed', {});
     getIo()?.emit('jev:policy', {});
   });
   // A failed restore also invalidates policy: clients must show the strict
   // read failure instead of continuing to offer stale safety settings.
   settingsEvents.on('settings:invalidated', () => {
+    memoryModels = undefined;
+    emitToOperators('memory:models:changed', {});
     getIo()?.emit('jev:policy', {});
   });
   for (const [source, target] of [

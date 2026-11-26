@@ -268,10 +268,10 @@ describe('socket.js — initSocket', () => {
     expect(io.emitted).toEqual([['usage-backfill:updated', {}]]);
   });
 
-  it('invalidates Jev policy after an unreadable settings restore without forwarding content', () => {
+  it('invalidates Jev policy and memory status after an unreadable settings restore without forwarding content', () => {
     io.emitted.length = 0;
     settingsEvents.emit('settings:invalidated', { privateContent: 'Example settings' });
-    expect(io.emitted).toEqual([['jev:policy', {}]]);
+    expect(io.emitted).toEqual([['memory:models:changed', {}], ['jev:policy', {}]]);
   });
 
   it('invalidates Eidoverse projection progress without world content', () => {
@@ -405,7 +405,12 @@ describe('socket.js — initSocket', () => {
     subscriber.emitted.length = 0;
     previousIo.emitted.length = 0;
     io.emitted.length = 0;
-    settingsEvents.emit('settings:updated', { privateContent: 'Example settings' });
+    const memoryClassifier = { providerId: 'ollama', model: 'qwen3:8b' };
+    settingsEvents.emit('settings:updated', { memoryClassifier, privateContent: 'Example settings' });
+    expect(io.emitted).toEqual([['memory:models:changed', {}], ['backup:changed', {}], ['jev:policy', {}]]);
+    expect(io.excepted).toContainEqual(['memory:models:changed', 'peer-sockets']);
+    io.emitted.length = 0;
+    settingsEvents.emit('settings:updated', { memoryClassifier, privateContent: 'Unrelated settings edit' });
     expect(io.emitted).toEqual([['backup:changed', {}], ['jev:policy', {}]]);
     dashboardEvents.emit('goals:changed', { privateContent: 'Example goal' });
     dashboardEvents.emit('cos:day:changed', { privateContent: 'Example day' });

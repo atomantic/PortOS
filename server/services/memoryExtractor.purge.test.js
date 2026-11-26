@@ -15,7 +15,7 @@ vi.mock('./domainUsage.js', () => ({
   getDomainBudgetStatus: async () => ({ withinBudget: true }), recordDomainUsage: async () => {}
 }));
 vi.mock('./memoryClassifier.js', () => ({
-  isAvailable: async () => false, getConfig: async () => ({ fallbackToPatterns: true })
+  getConfig: async () => ({ fallbackToPatterns: true })
 }));
 vi.mock('./memoryEmbeddings.js', () => ({ generateMemoryEmbedding: async () => null }));
 

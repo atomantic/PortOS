@@ -53,6 +53,11 @@ vi.mock('../services/memorySync.js', () => ({
   applyRemoteChanges: vi.fn()
 }));
 
+vi.mock('../services/provider/providers.js', () => ({
+  getProviderById: vi.fn(),
+}));
+vi.mock('../lib/openAiModelsProbe.js', () => ({ probeOpenAiModels: vi.fn() }));
+
 // The real peer-pull gate runs; only the peer registry and settings it reads
 // are stubbed, as in routes/dataSync.test.js.
 const peers = [];
@@ -71,8 +76,35 @@ import { ensureBackend, getMemories, getTimeline, archiveMemory, purgeMemory, ap
 import { checkHealth } from '../lib/db.js';
 import * as memorySync from '../services/memorySync.js';
 import { findRecentRunsUsingMemory } from '../services/memoryRunUsage.js';
+import * as embeddings from '../services/memoryEmbeddings.js';
+import { getProviderById } from '../services/provider/providers.js';
+import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 
 describe('Memory Routes', () => {
+  it.each([
+    { probe: { reachable: true, models: ['qwen3:8b'] }, available: true },
+    { probe: { reachable: true, models: ['different-model'] }, available: false },
+    { probe: { reachable: true, error: 'authentication required', models: null }, available: false },
+    { probe: { reachable: false }, available: false },
+  ])('includes the selected classifier reachability alongside embeddings ($probe)', async ({ probe, available }) => {
+    const app = express();
+    app.use('/api/memory', memoryRoutes);
+    settings = { memoryClassifier: { providerId: 'ollama', model: 'qwen3:8b' } };
+    embeddings.checkAvailability.mockResolvedValue({ available: true, embeddingModel: 'synthetic-embed' });
+    getProviderById.mockResolvedValue({ id: 'ollama', type: 'api', enabled: true, endpoint: 'http://127.0.0.1:11434/v1' });
+    probeOpenAiModels.mockResolvedValue(probe);
+
+    const res = await request(app).get('/api/memory/embeddings/status');
+    settings = {};
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      available: true,
+      embeddingModel: 'synthetic-embed',
+      classifier: { available, disabled: false },
+    });
+    expect(probeOpenAiModels).toHaveBeenCalledWith('http://127.0.0.1:11434/v1', expect.any(Object));
+  });
+
   it('GET /:id/runs lists recent runs that used the memory (#10495)', async () => {
     const app = express();
     app.use('/api/memory', memoryRoutes);

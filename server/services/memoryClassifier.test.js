@@ -134,7 +134,7 @@ describe('memoryClassifier', () => {
 
     function mockClassification(content, models = [{ id: configuredModel, type: 'llm', state: 'loaded' }]) {
       fetchWithTimeout.mockImplementation(async (url, options) => {
-        if (url === `${baseUrl}/api/v0/models`) return Response.json({ data: models });
+        if (url === `${baseUrl}/v1/models` || url === `${baseUrl}/api/v0/models`) return Response.json({ data: models });
         if (url === `${baseUrl}/api/v1/models/load`) return Response.json({});
         if (url !== endpoint) throw new Error(`Unexpected classifier request: ${url}`);
         const prompt = JSON.parse(options.body).messages.at(-1).content;
@@ -248,10 +248,10 @@ describe('memoryClassifier', () => {
 
       const loadUrl = `${baseUrl}/api/v1/models/load`;
       expect(fetchWithTimeout.mock.calls.map(([url]) => url)).toEqual([
-        `${baseUrl}/api/v0/models`, ...(shouldLoad ? [loadUrl] : []), endpoint
+        `${baseUrl}/v1/models`, `${baseUrl}/api/v0/models`, ...(shouldLoad ? [loadUrl] : []), endpoint
       ]);
       if (shouldLoad) {
-        expect(fetchWithTimeout.mock.calls[1][1]).toMatchObject({
+        expect(fetchWithTimeout.mock.calls[2][1]).toMatchObject({
           method: 'POST',
           body: JSON.stringify({ model: expectedModel })
         });
@@ -262,14 +262,14 @@ describe('memoryClassifier', () => {
     it('skips the health request when disabled', async () => {
       await classifier.updateConfig({ enabled: false });
 
-      await expect(classifier.isAvailable()).resolves.toBe(false);
+      await expect(classifier.getClassifierAvailability()).resolves.toEqual({ available: false, disabled: true });
       expect(fetchWithTimeout).not.toHaveBeenCalled();
     });
 
     it.each([200, 503])('reports availability from the models endpoint with HTTP %i', async status => {
       fetchWithTimeout.mockResolvedValue(new Response(null, { status }));
 
-      await expect(classifier.isAvailable()).resolves.toBe(status === 200);
+      await expect(classifier.getClassifierAvailability()).resolves.toEqual({ available: status === 200, disabled: false });
       expect(fetchWithTimeout).toHaveBeenCalledExactlyOnceWith(
         `${baseUrl}/v1/models`, { method: 'GET' }, expect.any(Number)
       );
@@ -278,7 +278,7 @@ describe('memoryClassifier', () => {
     it('reports unavailable when the models endpoint cannot be reached', async () => {
       fetchWithTimeout.mockRejectedValue(new Error('Connection refused'));
 
-      await expect(classifier.isAvailable()).resolves.toBe(false);
+      await expect(classifier.getClassifierAvailability()).resolves.toEqual({ available: false, disabled: false });
     });
   });
 });

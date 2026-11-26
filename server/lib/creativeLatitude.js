@@ -191,6 +191,7 @@ export const OPERATIONAL_RUN_SOURCES = Object.freeze([
   'jira-status-report',
   'jira-title',
   'loop', // user-authored recurring prompts — one tag for every kind, so it can't be split
+  'memory-classifier',
   'memory-embedding-summary',
   'meatspace-post-rhetoric-evaluator',
   'model-benchmark',

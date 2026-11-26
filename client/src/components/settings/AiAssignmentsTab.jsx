@@ -1,6 +1,6 @@
 import ListLoadError from '../ui/ListLoadError';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { ArrowRight, Bot, RefreshCw, Save, Search } from 'lucide-react';
 import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
@@ -63,7 +63,8 @@ export default function AiAssignmentsTab() {
   const [data, setData] = useState({ providers: [], assignments: [] });
   const [drafts, setDrafts] = useState({});
   const isLg = useMediaQuery('(min-width: 1024px)');
-  const [query, setQuery] = useState('');
+  const [searchParams] = useSearchParams();
+  const [query, setQuery] = useState(() => searchParams.get('q') || '');
   const [area, setArea] = useState('all');
   const [assignmentType, setAssignmentType] = useState('all');
   const [providerFilter, setProviderFilter] = useState('');
@@ -292,13 +293,13 @@ export default function AiAssignmentsTab() {
               const nextDefault = assignmentDefaultModel(entry, data.providers, nextProviderId, visionIdsByProvider);
               setDraft(entry.id, { providerId: nextProviderId, model: entry.modelEditable === false ? draft.model : nextDefault, effort: '' });
             }}
-            emptyProviderOption="Default / unset"
+            emptyProviderOption={entry.providerPlaceholder || 'Default / unset'}
             // A composed route is not in `providerOptions`, so the
             // seeding above resolves to a blank model and the row runs
             // the service's own default. On a vision row that default
             // may be text-only, so composing is offered only where a
             // blank model pin is safe.
-            compose={entry.modelFilter !== 'vision' && entry.modelEditable !== false}
+            compose={entry.providerOptions == null && entry.modelFilter !== 'vision' && entry.modelEditable !== false}
             composeMethods={entry.providerTypes}
           />
         )}

@@ -1181,7 +1181,6 @@
         "gptoss-20b"
       ],
       "defaultModel": "gptoss-20b",
-      "memoryClassifierModel": "gptoss-20b",
       "timeout": 300000,
       "enabled": true,
       "envVars": {},

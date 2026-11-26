@@ -13,6 +13,9 @@ import { getVoiceConfig, updateVoiceConfig } from './voice/config.js';
 import { isPlainObject } from '../lib/objects.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { effortLevelsForProvider } from '../lib/provider/providerModels.js';
+import { isToolFreeOneShotProvider } from '../lib/provider/providerVendors.js';
+import { memoryClassifierSettingsSchema } from '../lib/instanceSettingsValidation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 
 const textProviderTypes = ['api', 'cli', 'tui'];
 const cliProviderTypes = ['cli', 'tui'];
@@ -62,6 +65,7 @@ const makeEntry = ({
   effortEditable = false,
   providerTypes = textProviderTypes,
   providerOptions = null,
+  providerPlaceholder = null,
   modelOptions = null,
   // Optional client-side model-list filter key. `'vision'` tells the AI
   // Assignments / Creative Director pickers to restrict LOCAL backends
@@ -91,6 +95,7 @@ const makeEntry = ({
   effortEditable,
   providerTypes,
   providerOptions,
+  providerPlaceholder,
   modelOptions,
   modelFilter,
   needsTools,
@@ -112,7 +117,7 @@ const patchSettingsPath = async (path, value) => {
   await updateSettings({ [top]: root });
 };
 
-const addSettingsEntries = async (entries) => {
+const addSettingsEntries = async (entries, providers) => {
   const settings = await getSettings();
   const voice = await getVoiceConfig().catch(() => settings.voice || {});
   const messages = settings.messages || {};
@@ -128,6 +133,24 @@ const addSettingsEntries = async (entries) => {
     providerTypes: [],
     notes: 'Powers semantic search for the creative catalog and memory (Brain, Chief of Staff retrieval). Until saved, memory keeps the legacy Chief of Staff embedding config.',
     link: '/models/embeddings',
+  }));
+
+  entries.push(makeEntry({
+    id: 'settings.memoryClassifier',
+    area: 'Memory & Catalog',
+    label: 'Memory extraction model',
+    source: 'settings.memoryClassifier',
+    providerId: settings.memoryClassifier?.providerId,
+    model: settings.memoryClassifier?.model,
+    providerOptions: [
+      { id: 'none', name: 'Disabled' },
+      ...providers.filter(isToolFreeOneShotProvider).map(p => ({
+        id: p.id, name: p.name, enabled: p.enabled !== false,
+      })),
+    ],
+    providerPlaceholder: 'Legacy LM Studio',
+    providerTypes: ['api', 'cli'],
+    notes: 'Classifies agent output using a provider that can run without tools. Disabled skips AI classification and keeps the configured pattern fallback.',
   }));
 
   for (const [key, label] of [
@@ -479,7 +502,7 @@ export async function getAiAssignments() {
   // exists to prevent (docs/MODEL_ACCESS.md).
   const providersData = await getSelectableProviders();
   const entries = [];
-  await addSettingsEntries(entries);
+  await addSettingsEntries(entries, providersData.providers);
   await addRecordEntries(entries);
   return {
     providers: providersData.providers.map((p) => {
@@ -550,6 +573,21 @@ export async function updateAiAssignment(id, payload = {}) {
 
   if (id === 'settings.embeddings') {
     await updateSettings({ embeddings: { provider: nextProviderId || 'none', model: nextModel } });
+    return getAiAssignments();
+  }
+
+  if (id === 'settings.memoryClassifier') {
+    const assignment = validateRequest(memoryClassifierSettingsSchema, {
+      providerId: nextProviderId,
+      model: nextProviderId && nextProviderId !== 'none' ? nextModel : null,
+    });
+    if (assignment.providerId && assignment.providerId !== 'none') {
+      const provider = await getProviderById(assignment.providerId);
+      if (!isToolFreeOneShotProvider(provider) || provider.enabled === false) {
+        throw new ServerError('Choose an enabled provider that can run without tools', { status: 400, code: 'VALIDATION_ERROR' });
+      }
+    }
+    await updateSettings({ memoryClassifier: assignment });
     return getAiAssignments();
   }
 

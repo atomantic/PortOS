@@ -9,7 +9,7 @@ import { createMemory, searchMemories, getMemories, withPendingMemories } from '
 import { generateMemoryEmbedding } from './memoryEmbeddings.js';
 import { cosEvents } from './cos/cosEvents.js';
 import * as notifications from './notifications.js';
-import { classifyMemories, getConfig, isAvailable as isClassifierAvailable } from './memoryClassifier.js';
+import { classifyMemories, getConfig } from './memoryClassifier.js';
 import { getDomainAutonomyMode } from './cos/cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 
@@ -267,8 +267,7 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
   const allMemories = [];
   let llmResult;
 
-  const classifierAvailable = await isClassifierAvailable().catch(() => false);
-  if (classifierAvailable && task) {
+  if (task) {
     llmResult = await classifyMemories(task, output).catch(err => {
       console.log(`⚠️ LLM memory classification failed: ${err.message}`);
       return null;
