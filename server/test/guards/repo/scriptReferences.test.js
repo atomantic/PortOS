@@ -92,7 +92,7 @@ describe('scripts/ reference guard (#16089, #16909)', () => {
     expect(isSiblingTest('scripts/foo.py', 'scripts/foo.test.js')).toBe(true);
     expect(isSiblingTest('scripts/setup-voice.ps1', 'scripts/setup-voice.ps1.test.js')).toBe(true);
     expect(isSiblingTest('scripts/setup-voice.ps1', 'scripts/setup-voice.test.js')).toBe(true);
-    expect(isSiblingTest('scripts/fixtures/minimax_h3_history.py', 'scripts/_minimax_h3_mlx_history.test.js')).toBe(false);
+    expect(isSiblingTest('scripts/fixtures/minimax_h3_history.py', 'scripts/ml/_minimax_h3_mlx_history.test.js')).toBe(false);
     expect(isSiblingTest('scripts/foo.js', 'server/foo.test.js')).toBe(false);
   });
 

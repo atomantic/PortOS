@@ -331,7 +331,7 @@ describe('setup preserves the selected database', () => {
     expect(result.calls.some(([command]) => command === KEG_PSQL)).toBe(true);
     expect(result.calls.some((call) => call.includes('setup-native'))).toBe(expectSetup);
   });
-  // Pairs with scripts/ecosystemEnv.test.js "mode precedence matches setup" (#10758).
+  // Pairs with server/test/guards/repo/ecosystemEnv.test.js "mode precedence matches setup" (#10758).
   it.each([
     ['docker', 'native', true],
     ['native', 'docker', false],

@@ -52,7 +52,7 @@ schedulers, denoising and unpacking, with small synthetic model components:
 Reproduce after installing the pinned dependencies into a separate test venv:
 set `PORTOS_TEST_PYTHON` to its interpreter and `TORCHINDUCTOR_CACHE_DIR` to an
 owned temporary cache, then run
-`npm test --prefix server -- ../scripts/minimax_h3_cuda_history.test.js`.
+`npm test --prefix server -- ../scripts/ml/minimax_h3_cuda_history.test.js`.
 
 ## Fidelity remains unavailable
 

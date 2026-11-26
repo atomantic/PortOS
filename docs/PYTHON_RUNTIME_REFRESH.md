@@ -94,7 +94,7 @@ version, marker, hash block and provenance comment stays byte-identical.
    records. Check response counts, errors and pagination; an unreadable or
    partial response is not a clean result.
 8. Run the profile's installer, adapter and pins tests (for example
-   `scripts/_minimax_h3_mlx_pins.test.js`) and hash-required dry install plans
+   `scripts/ml/_minimax_h3_mlx_pins.test.js`) and hash-required dry install plans
    for each declared target. Dry plans select artifacts without executing those
    runtimes; native or model execution claims need their own validation.
    `scripts/ml/cooled_runtime_probe.py` is an opt-in offline probe (SentencePiece,
