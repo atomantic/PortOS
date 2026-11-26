@@ -33,10 +33,7 @@ export default function ProviderPresetsTab({
   recovering,
   addingTuiMode,
   servingModel,
-  codexAccount,
-  codexModels,
-  codexAccountLoading,
-  codexLoginLoading,
+  codex,
   loadError,
   modelPinReloadKey,
   showSamples,
@@ -81,13 +78,6 @@ export default function ProviderPresetsTab({
   onAutoSetupRuntime,
   onUseServedModel,
   onServeWantedModel,
-  onCodexCheckAccount,
-  onCodexSignIn,
-  onCodexCancelLogin,
-  onCodexLogout,
-  onCodexRefreshModels,
-  onCodexCopyCode,
-  onCodexEnable,
 }) {
   return (
     <>
@@ -372,17 +362,7 @@ export default function ProviderPresetsTab({
                       onUseServedModel={onUseServedModel}
                       onServeWantedModel={onServeWantedModel}
                       servingModel={Boolean(servingModel[provider.id])}
-                      codexAccount={isCodexSubscriptionProvider(provider) ? codexAccount : undefined}
-                      codexModels={codexModels}
-                      codexAccountLoading={codexAccountLoading}
-                      codexLoginLoading={codexLoginLoading}
-                      onCodexCheckAccount={onCodexCheckAccount}
-                      onCodexSignIn={onCodexSignIn}
-                      onCodexCancelLogin={onCodexCancelLogin}
-                      onCodexLogout={onCodexLogout}
-                      onCodexRefreshModels={onCodexRefreshModels}
-                      onCodexCopyCode={onCodexCopyCode}
-                      onCodexEnable={() => onCodexEnable(provider)}
+                      codex={isCodexSubscriptionProvider(provider) ? codex : undefined}
                     />
                   ))}
                 </CollapsibleSection>
