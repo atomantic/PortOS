@@ -16,7 +16,7 @@ import { assertRenderCleanupIdle } from './renderCleanupActivity.js';
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
 import { copyFile, rename, unlink, writeFile } from 'fs/promises';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -255,24 +255,30 @@ async function beginPublishKitBuild(projectId, jobId, loudnessPreset) {
     // ffmpeg wrote the kit's files in place; the row that first names them
     // commits under a backup lease (#9982). Stale files go only after it.
     signal.throwIfAborted();
-    await withBackupAssetPublication(() => mutateProjectRecord(projectId, (current) => {
-      signal.throwIfAborted();
-      job.committing = true;
-      const kit = projectPublishKit(current);
-      return { project: { ...current, publishKit: {
-        ...kit,
-        builtAt: new Date().toISOString(),
-        master: { filename: entry.filename, renderHistoryId: project.renderHistoryId },
-        exports: encodes.map(({ kind, label, filename, width, height, window, layout, fitReason, loudness }) => ({ kind, label, filename, width, height, ...(window ? { startSec: window.startSec, endSec: window.endSec } : {}), ...(layout ? { layout } : {}), ...(layout === 'fit' && fitReason ? { fitReason } : {}), ...(loudness ? { loudness } : {}) })),
-        thumbnails,
-        thumbnail: thumbnails.includes(kit.thumbnail) ? kit.thumbnail : (thumbnails[0] || null),
-        captionsFilename,
-        chapters: buildChapters(current),
-      } } };
-    }), waitForBackup('kit build', signal)).catch(err => {
+    await withBackupAssetPublication(() => {
+      if (signal.aborted) return;
+      return mutateProjectRecord(projectId, (current) => {
+        // Cancellation while waiting for the record lock is a settled no-op.
+        if (signal.aborted) return { project: current, skipPersist: true };
+        job.committing = true;
+        const kit = projectPublishKit(current);
+        return { project: { ...current, publishKit: {
+          ...kit,
+          builtAt: new Date().toISOString(),
+          master: { filename: entry.filename, renderHistoryId: project.renderHistoryId },
+          exports: encodes.map(({ kind, label, filename, width, height, window, layout, fitReason, loudness }) => ({ kind, label, filename, width, height, ...(window ? { startSec: window.startSec, endSec: window.endSec } : {}), ...(layout ? { layout } : {}), ...(layout === 'fit' && fitReason ? { fitReason } : {}), ...(loudness ? { loudness } : {}) })),
+          thumbnails,
+          thumbnail: thumbnails.includes(kit.thumbnail) ? kit.thumbnail : (thumbnails[0] || null),
+          captionsFilename,
+          chapters: buildChapters(current),
+        } } };
+      });
+    }, waitForBackup('kit build', signal)).catch(err => {
       if (!signal.aborted) projectBuilds.markUnsettled(projectId);
       throw err;
     });
+    signal.throwIfAborted();
+    job.published = true;
     await releaseKitFiles(staleFiles, [...encodes.map(e => e.filename), ...thumbnails, captionsFilename]);
   };
 
@@ -283,8 +289,15 @@ async function beginPublishKitBuild(projectId, jobId, loudnessPreset) {
     broadcastSse(job, { type: 'complete', result: { projectId } });
     closeJobAfterDelay(jobs, jobId);
   }).catch(async (err) => {
-    // A write that entered the record transform may already have committed.
-    if (!job.committing) await Promise.all([...pendingFiles].map(path => unlink(path).catch(() => {})));
+    if (!job.committing) {
+      await Promise.all([...pendingFiles].map(path => unlink(path).catch(() => {})));
+    } else if (!job.published && !err.backupPublicationUncertain) {
+      // A failed mutation can have committed before record presentation failed.
+      // Reconcile against saved references, including any clones of the kit.
+      await releaseKitFiles([...pendingFiles].map(path => basename(path))).catch(() => {
+        console.error(`❌ Could not reconcile publishing kit files [${tag}] after the record write failed`);
+      });
+    }
     const canceled = signal.aborted;
     job.status = canceled ? 'canceled' : 'error';
     projectBuilds.delete(projectId);

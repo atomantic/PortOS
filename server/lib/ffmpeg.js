@@ -462,9 +462,8 @@ export const findFfprobe = async () => {
 
 // Run ffprobe with the given args and return its trimmed stdout, or '' when
 // ffprobe is unavailable or the call fails. Collapses the shared discover →
-// spawn → catch-default → trim boilerplate behind the ffprobe-based
-// probes below so they can't
-// drift on the env/timeout/error-handling contract.
+// spawn → catch-default → trim boilerplate so probes share the same
+// env/timeout/error-handling contract.
 const runFfprobe = async (args, timeout = 5000) => {
   const ffprobe = await findFfprobe();
   if (!ffprobe) return '';

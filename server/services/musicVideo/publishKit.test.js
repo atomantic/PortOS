@@ -281,7 +281,7 @@ describe('publishing kit build (#9281)', () => {
     }
   });
 
-  it('waits out a backup cut longer than the default wait before saving a finished kit build (#18718)', async () => {
+  it.each(['complete', 'canceled'])('reports %s when a finished kit waits behind a backup cut (#18718)', async (outcome) => {
     const { acquireBackupSnapshotCut, _backupSnapshotWaitersForTests } = await import('../../lib/backupSnapshotBoundary.js');
     const { id } = await projects.createProject({ name: 'Example Backup Wait' });
     await mkdir(PATHS.videos, { recursive: true });
@@ -299,11 +299,13 @@ describe('publishing kit build (#9281)', () => {
       while (_backupSnapshotWaitersForTests().publications < 1) await new Promise(resolve => setImmediate(resolve));
       await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
       expect((await projects.getProject(id)).publishKit?.exports ?? []).toEqual([]);
+      if (outcome === 'canceled') expect(kit.cancelPublishKitBuild(jobId)).toBe(true);
       releaseCut();
       await vi.advanceTimersByTimeAsync(1000);
       vi.useRealTimers();
-      expect((await ended).type).toBe('complete');
-      expect((await projects.getProject(id)).publishKit.exports.length).toBeGreaterThan(0);
+      expect((await ended).type).toBe(outcome);
+      const exports = (await projects.getProject(id)).publishKit?.exports ?? [];
+      expect(exports.length > 0).toBe(outcome === 'complete');
     } finally {
       vi.useRealTimers();
       releaseCut();
@@ -841,4 +843,48 @@ it.skipIf(!ffmpeg)('preserves stale kit files and retires admission after a term
     try { expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true); }
     finally { maintenance.deferredUpdate.finish(update.id, false); }
   } finally { list.mockRestore(); }
+});
+
+it.each(['before commit', 'after commit'])('reconciles files after a kit record mutation fails %s', async (failure) => {
+  const { id } = await projects.createProject({ name: 'Example Publish Failure' });
+  await mkdir(PATHS.videos, { recursive: true });
+  await writeFile(join(PATHS.videos, 'publication-master.mp4'), 'synthetic master');
+  await writeFile(join(PATHS.videos, 'previous-preview.mp4'), 'synthetic previous kit');
+  await saveHistory([{ id: 'publication-render', filename: 'publication-master.mp4', durationSec: 1 }]);
+  const previous = { builtAt: '2026-01-01T00:00:00.000Z', exports: [{ filename: 'previous-preview.mp4' }] };
+  const mutateRecord = projects.mutateProjectRecord;
+  await mutateRecord(id, current => ({ project: { ...current, renderHistoryId: 'publication-render', publishKit: previous } }));
+  const find = vi.spyOn(ffmpegService, 'findFfmpeg').mockResolvedValue('example-ffmpeg');
+  const paths = [];
+  const encode = vi.spyOn(ffmpegService, 'runFfmpegProcess').mockImplementation(async ({ args }) => {
+    const path = args.at(-1);
+    await writeFile(path, 'synthetic output');
+    paths.push(path);
+    return { ok: true };
+  });
+  const mutate = vi.spyOn(projects, 'mutateProjectRecord').mockImplementationOnce(async (id, transform) => {
+    if (failure === 'after commit') await mutateRecord(id, transform);
+    else transform(await projects.getProject(id));
+    throw new Error('Synthetic mutation failure');
+  });
+  try {
+    const { jobId } = await kit.startPublishKitBuild(id);
+    expect(await buildEnded(jobId)).toEqual({ type: 'error', error: 'Synthetic mutation failure' });
+    const project = await projects.getProject(id);
+    expect(paths.length).toBeGreaterThan(0);
+    if (failure === 'after commit') {
+      expect(project.publishKit.master.renderHistoryId).toBe('publication-render');
+      for (const e of project.publishKit.exports) expect(existsSync(join(PATHS.videos, e.filename))).toBe(true);
+    } else {
+      expect(project.publishKit).toEqual(previous);
+      for (const path of paths) expect(existsSync(path)).toBe(false);
+    }
+    expect(await readFile(join(PATHS.videos, previous.exports[0].filename), 'utf8')).toBe('synthetic previous kit');
+  } finally {
+    mutate.mockRestore();
+    encode.mockRestore();
+    find.mockRestore();
+    await maintenance.finishResource('settlement', 'Output publication');
+    await maintenance.finishResource('render:music-video-publish-kit', id);
+  }
 });
