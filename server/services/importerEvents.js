@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 
 // Stage-progress bus for the importer's analyze phase. `analyzeImport` runs
@@ -65,4 +66,24 @@ export function getImporterProgressFrames() {
 export function emitImporterProgress(frame) {
   recordImporterFrame(frame);
   importerEvents.emit('progress', frame);
+}
+
+/**
+ * One importer progress run: a fresh `runId` plus an `emitProgress(frame)` that
+ * stamps it on each frame and broadcasts via `emitImporterProgress`. The client
+ * uses `runId` to ignore stragglers from a prior run. Emitting is best-effort
+ * UI sugar — a listener throwing must never abort the importer, so the emit
+ * swallows + logs at this boundary. Shared by the analyze phase and the
+ * commit-time reformat pass so both runs broadcast identically.
+ */
+export function makeImporterProgressEmitter() {
+  const runId = randomUUID();
+  const emitProgress = (frame) => {
+    try {
+      emitImporterProgress({ runId, ...frame });
+    } catch (err) {
+      console.error(`❌ importer progress emit failed: ${err.message}`);
+    }
+  };
+  return { runId, emitProgress };
 }

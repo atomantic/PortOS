@@ -280,7 +280,7 @@ export const FEATURE_AREAS = Object.freeze([
       'server/lib/{story,storyboard,universe,fable,series,editorial,manuscript,deck,mood,pipeline,writers,rounds,bible}*',
       'server/lib/editorial/**',
       'server/services/{pipeline,rounds,writersRoom,storyBuilder,universe,storyboard,deck,mood,fableLoom,games,importer,authors,sharing,bible,series}*',
-      'server/services/{pipeline,writersRoom,storyBuilderStore,universeBuilder,storyboards,moodBoard,fableLoom,games,authors,sharing}/**',
+      'server/services/{pipeline,writersRoom,storyBuilderStore,universeBuilder,storyboards,moodBoard,fableLoom,games,importer,authors,sharing}/**',
       'client/src/pages/{Pipeline,Rounds,RoundEditor,RoundsGuide,WritersRoom,StoryBuilder,Storyboard,Universe,Deck,Mood,FableLoom,Game,Importer,Authors,Sharing,StartStory}*',
       'client/src/components/{pipeline,writers-room,storyBuilder,universe,universeBuilder,storyboards,decks,moodBoard,fableloom,games,sharing}/**',
     ],
