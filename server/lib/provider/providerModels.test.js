@@ -58,6 +58,7 @@ import {
   pickAntigravityRelayModel,
   resolveInjectedTuiModel
 } from './providerModels.js';
+import { PROVIDER_EFFORT_LEVELS } from '../aiToolkit/validation.js';
 import { readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -607,6 +608,10 @@ describe('providerModels', () => {
   });
 
   describe('EFFORT_LEVELS', () => {
+    it('stays in parity with the aiToolkit provider validation mirror', () => {
+      expect(PROVIDER_EFFORT_LEVELS).toEqual(EFFORT_LEVELS);
+    });
+
     // The union is the STORED/API vocabulary, not a CLI ladder. It stays a
     // superset of every ladder so an effort persisted by an older install (or an
     // older ladder on this one) still validates after an update — the clamp in

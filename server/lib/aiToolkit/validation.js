@@ -35,8 +35,8 @@ export const providerRoutingSchema = z.object({
 // Mirrors the runner's getMimeType keys; anything else is rejected.
 const ALLOWED_SCREENSHOT_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
 
-// Local mirror (toolkit is self-contained) of server/lib/provider/providerModels.js and client/src/utils/providerModels.js.
-const PROVIDER_EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+// Local mirror of server/lib/provider/providerModels.js; the toolkit stays self-contained.
+export const PROVIDER_EFFORT_LEVELS = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
 const providerEffort = z.preprocess(
   (value) => (typeof value === 'string' && value.trim() === '' ? null : value),

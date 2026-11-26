@@ -12,6 +12,7 @@ import { CODEX_CLI_ID, CODEX_CONFIGURED_DEFAULT, CODEX_TUI_ID, isCodexCommand } 
 import { commandBasename } from '../aiToolkit/internal/commandBasename.js';
 import { CURSOR_TUI_ID, isCursorCommand } from '../aiToolkit/internal/cursor.js';
 import { isPiCommand } from '../aiToolkit/internal/pi.js';
+import { extractBakedModel } from '../aiToolkit/internal/bakedModel.js';
 
 export { ANTIGRAVITY_CONFIGURED_DEFAULT, CODEX_CONFIGURED_DEFAULT, commandBasename };
 
@@ -962,18 +963,4 @@ export function applyLeanClaudeArgs(provider, args, command = provider?.command)
 }
 
 /** Extract the pinned model id from provider.args when a model flag is baked in. */
-export function extractBakedModel(args) {
-  if (!Array.isArray(args)) return null;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (typeof a !== 'string') continue;
-    if (a === '--model' || a === '-m') {
-      const next = args[i + 1];
-      if (typeof next === 'string' && next.length > 0 && !next.startsWith('-')) return next;
-      return null;
-    }
-    if (a.startsWith('--model=')) return a.slice('--model='.length) || null;
-    if (a.startsWith('-m=')) return a.slice('-m='.length) || null;
-  }
-  return null;
-}
+export { extractBakedModel };
