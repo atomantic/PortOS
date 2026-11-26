@@ -399,11 +399,6 @@ export async function startAutonomousVideo(input, { autoApproveAuthorized = fals
   return { project: out.project, run: presentAutonomousRun(out.run) };
 }
 
-export async function getAutonomousRun(projectId) {
-  const { run } = await requireRun(projectId);
-  return { run: presentAutonomousRun(run) };
-}
-
 const assertResumable = (run) => {
   // A run canceled while it waited on production can pick up again: resume adopts the
   // director's own production run, or starts a new one from the brief.

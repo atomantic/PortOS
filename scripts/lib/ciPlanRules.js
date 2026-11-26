@@ -8,6 +8,7 @@
 
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { OPERATOR_SCRIPT_CALLER_FILES } from '../../server/lib/apiRouteCallerAllowlist.js';
 import { CATALOG_DIRS } from '../lib-catalog.js';
 import { SERVER_LINT_RE } from './serverLintSurface.js';
 import { resolveDbTestFiles } from './dbTestFiles.js';
@@ -646,8 +647,11 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
   // what a scoped plan let merge before this rule existed (#5898). The
   // route-graph guard (a route file nothing mounts) is a structural guard
   // check (server/test/guards/modules/apiRouteGraph.test.js) and rides every plan.
-  if (changedFiles.some((path) => /^server\/.*\.js$/.test(path) || /^server\/lib\/.*\.generated\.json$/.test(path) || /^client\/src\/services\/api.*\.js$/.test(path))) {
+  const changedApiSources = changedFiles.some((path) => /^server\/.*\.js$/.test(path) || /^server\/lib\/.*\.generated\.json$/.test(path) || /^client\/src\/services\/api.*\.js$/.test(path));
+  if (changedApiSources || changedFiles.some((path) => OPERATOR_SCRIPT_CALLER_FILES.includes(path))) {
     add('server/lib/apiRouteParity.test.js');
+  }
+  if (changedApiSources) {
     add('scripts/generate-prompt-stage-call-sites.test.js');
   }
   // The fresh-install schema check reads init-db.sql and its base file rather

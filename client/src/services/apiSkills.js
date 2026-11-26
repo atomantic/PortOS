@@ -3,7 +3,7 @@
  *
  * Every wrapper takes `options` (e.g. `{ silent: true }`) so a caller that owns
  * its error UI suppresses request()'s default toast. `editSkill` is the human
- * edit route, which a skill's lock does not stop; agents use `/skills/manage`.
+ * edit route, which a skill's lock does not stop; agents use the `skills.manage` tool.
  */
 
 import { request } from './apiCore.js';

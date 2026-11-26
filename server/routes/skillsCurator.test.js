@@ -31,7 +31,7 @@ vi.mock('../services/autonomousJobs.js', () => ({
 
 const { authGate, hostControlRouteGate } = await import('../services/authGate.js');
 const { default: skillsRoutes } = await import('./skills.js');
-const { viewSkill } = await import('../services/skills/skillService.js');
+const { manageSkill, viewSkill } = await import('../services/skills/skillService.js');
 const { appendLedgerEntry, captureSkillDir, compactLedger, readLedgerEntries } = await import('../services/skills/skillLedger.js');
 
 const app = express();
@@ -47,9 +47,9 @@ const usageFile = () => join(skillsDir(), '.usage.json');
 const skillMd = (name, body = 'Follow the steps.') => `---\nname: ${name}\ndescription: ${name} procedure\n---\n\n# ${name}\n\n${body}\n`;
 const daysAgo = (days) => new Date(Date.now() - days * DAY_MS).toISOString();
 
-const agentCreate = (name, body) => request(app).post('/api/skills/manage').send({ action: 'create', name, content: skillMd(name, body) });
+const agentCreate = (name, body) => agentManage({ action: 'create', name, content: skillMd(name, body) });
 const userEdit = (body) => request(app).post('/api/skills/edit').send(body);
-const agentManage = (body) => request(app).post('/api/skills/manage').send(body);
+const agentManage = (body) => manageSkill(body, { actor: 'agent' });
 const lifecycle = (ref, action) => request(app).post(`/api/skills/${encodeURIComponent(ref)}/${action}`).send({});
 const listed = async (id) => (await request(app).get('/api/skills')).body.skills.find((skill) => skill.id === id);
 const readUsageFile = async () => JSON.parse(await readFile(usageFile(), 'utf8'));
@@ -69,12 +69,12 @@ afterAll(() => cleanupTempDataRoots());
 
 describe('usage telemetry', () => {
   it('counts views, agent loads and patches, and records provenance', async () => {
-    expect((await agentCreate('deploy')).status).toBe(200);
+    expect(await agentCreate('deploy')).toMatchObject({ ok: true });
     expect((await listed('local:deploy')).usage).toMatchObject({ createdBy: 'agent', state: 'active', viewCount: 0, useCount: 0, patchCount: 0 });
 
     expect((await request(app).get('/api/skills/view?ref=deploy')).status).toBe(200);
     await viewSkill({ ref: 'deploy' }, { actor: 'agent' });
-    expect((await agentManage({ action: 'patch', name: 'deploy', oldString: 'Follow', newString: 'Run' })).status).toBe(200);
+    expect(await agentManage({ action: 'patch', name: 'deploy', oldString: 'Follow', newString: 'Run' })).toMatchObject({ ok: true });
 
     const { usage } = await listed('local:deploy');
     expect(usage).toMatchObject({ viewCount: 2, useCount: 1, patchCount: 1 });
@@ -95,10 +95,9 @@ describe('usage telemetry', () => {
     // Reads still work; the count is skipped.
     expect((await request(app).get('/api/skills/view?ref=deploy')).status).toBe(200);
 
-    const agentPatch = await agentManage({ action: 'patch', name: 'deploy', oldString: 'Follow', newString: 'Run' });
-    expect(agentPatch.status).toBe(503);
-    expect(agentPatch.body.code).toBe('SKILL_USAGE_UNREADABLE');
-    expect((await agentCreate('another')).status).toBe(503);
+    await expect(agentManage({ action: 'patch', name: 'deploy', oldString: 'Follow', newString: 'Run' }))
+      .rejects.toMatchObject({ status: 503, code: 'SKILL_USAGE_UNREADABLE' });
+    await expect(agentCreate('another')).rejects.toMatchObject({ status: 503 });
     expect((await userEdit({ action: 'create', name: 'mine', content: skillMd('mine') })).status).toBe(503);
     // A human edit proceeds; a delete cannot verify the pin, so it is refused.
     expect((await userEdit({ action: 'patch', name: 'deploy', oldString: 'Follow', newString: 'Run' })).status).toBe(200);
@@ -121,23 +120,21 @@ describe('pin and lock guards', () => {
       { action: 'remove_file', name: 'deploy', path: 'references/a.md' },
       { action: 'delete', name: 'deploy' },
     ]) {
-      const refused = await agentManage(body);
-      expect(refused.status).toBe(423);
-      expect(refused.body.code).toBe('SKILL_LOCKED');
+      await expect(agentManage(body)).rejects.toMatchObject({ status: 423, code: 'SKILL_LOCKED' });
     }
     expect((await request(app).get('/api/skills/view?ref=deploy')).status).toBe(200);
     expect((await userEdit({ action: 'patch', name: 'deploy', oldString: 'Follow', newString: 'Run' })).status).toBe(200);
     expect(await readFile(join(skillsDir(), 'deploy', 'SKILL.md'), 'utf8')).toContain('Run the steps.');
 
     await lifecycle('deploy', 'unlock');
-    expect((await agentManage({ action: 'patch', name: 'deploy', oldString: 'Run', newString: 'Do' })).status).toBe(200);
+    expect(await agentManage({ action: 'patch', name: 'deploy', oldString: 'Run', newString: 'Do' })).toMatchObject({ ok: true });
   });
 
   it('lets an agent improve a pinned skill but refuses deleting or archiving it', async () => {
     await agentCreate('deploy');
     await lifecycle('deploy', 'pin');
-    expect((await agentManage({ action: 'patch', name: 'deploy', oldString: 'Follow', newString: 'Run' })).status).toBe(200);
-    expect((await agentManage({ action: 'delete', name: 'deploy' })).body.code).toBe('SKILL_PINNED');
+    expect(await agentManage({ action: 'patch', name: 'deploy', oldString: 'Follow', newString: 'Run' })).toMatchObject({ ok: true });
+    await expect(agentManage({ action: 'delete', name: 'deploy' })).rejects.toMatchObject({ code: 'SKILL_PINNED' });
     expect((await userEdit({ action: 'delete', name: 'deploy' })).status).toBe(409);
     expect((await lifecycle('deploy', 'archive')).body.code).toBe('SKILL_PINNED');
   });
@@ -286,7 +283,7 @@ describe('mutation ledger', () => {
     const [deletion] = await ledger();
     await rollback(deletion.id);
     expect((await listed('local:deploy')).usage).toMatchObject({ locked: true, createdBy: 'agent', state: 'active' });
-    expect((await agentManage({ action: 'patch', name: 'deploy', oldString: 'Follow', newString: 'Run' })).status).toBe(423);
+    await expect(agentManage({ action: 'patch', name: 'deploy', oldString: 'Follow', newString: 'Run' })).rejects.toMatchObject({ status: 423 });
 
     // Rolling back a create removes the skill and its row.
     await userEdit({ action: 'create', name: 'fresh', content: skillMd('fresh') });

@@ -18,15 +18,6 @@ import {
 const router = Router();
 
 /**
- * GET /api/digital-twin/enrich/categories
- * List all enrichment categories
- */
-router.get('/enrich/categories', asyncHandler(async (req, res) => {
-  const categories = digitalTwinService.getEnrichmentCategories();
-  res.json(categories);
-}));
-
-/**
  * GET /api/digital-twin/enrich/progress
  * Get enrichment progress
  */

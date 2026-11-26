@@ -5,7 +5,7 @@ import { validateRequest } from '../lib/validateRequest.js';
 import { PATHS, pathExists } from '../lib/fileUtils.js';
 import { musicVideoCharacterStyleParamsSchema, musicVideoCharacterStyleReferenceSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import {
-  getCharacterStyleDetail, listCharacterStyles, setCharacterStyleReferenceImage,
+  listCharacterStyles, setCharacterStyleReferenceImage,
 } from '../services/musicVideo/characterStyles.js';
 
 // Built-in Music Video character styles (server/lib/musicVideo/musicVideoCharacterStyles.js).
@@ -15,12 +15,6 @@ const router = Router();
 
 router.get('/', asyncHandler(async (req, res) => {
   res.json(await listCharacterStyles());
-}));
-
-router.get('/:id', asyncHandler(async (req, res) => {
-  // An unknown id fails the enum, so a 400 here is "no such style".
-  const { id } = validateRequest(musicVideoCharacterStyleParamsSchema, req.params);
-  res.json(await getCharacterStyleDetail(id));
 }));
 
 router.put('/:id/reference', asyncHandler(async (req, res) => {

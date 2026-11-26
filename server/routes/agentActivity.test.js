@@ -14,7 +14,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../services/agent/agentRunEventLog.js', () => mocks);
 vi.mock('../services/agent/agentRunReconciler.js', () => mocks);
 const activityMocks = vi.hoisted(() => ({
-  getRecentActivities: vi.fn(async () => []),
   getActivityTimeline: vi.fn(async () => []),
   getAgentStats: vi.fn(async () => ({})),
   cleanupOldActivity: vi.fn(async () => 0),
@@ -125,48 +124,6 @@ describe('/run-events/reconcile', () => {
 describe('activity route validation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  describe('GET /', () => {
-    it('clamps the list limit server-side', async () => {
-      expect((await get('/?limit=999999')).status).toBe(400);
-      expect((await get('/?limit=0')).status).toBe(400);
-      expect(activityMocks.getRecentActivities).not.toHaveBeenCalled();
-    });
-
-    it('parses agentIds into a capped array, not a raw split', async () => {
-      const res = await get('/?limit=10&agentIds=a-1,%20a-2%20');
-      expect(res.status).toBe(200);
-      expect(activityMocks.getRecentActivities).toHaveBeenCalledWith({
-        limit: 10,
-        agentIds: ['a-1', 'a-2'],
-        action: undefined,
-      });
-    });
-
-    it('treats a blank filter value as absent, not as a 400', async () => {
-      const res = await get('/?action=&agentIds=');
-      expect(res.status).toBe(200);
-      expect(activityMocks.getRecentActivities).toHaveBeenCalledWith({
-        limit: 50,
-        agentIds: undefined,
-        action: undefined,
-      });
-    });
-
-    it('rejects an agentIds batch past the cap', async () => {
-      const tooMany = Array.from({ length: 51 }, (_, i) => `a${i}`).join(',');
-      expect((await get(`/?agentIds=${tooMany}`)).status).toBe(400);
-    });
-
-    it('defaults limit and passes absent filters as null', async () => {
-      await get('/');
-      expect(activityMocks.getRecentActivities).toHaveBeenCalledWith({
-        limit: 50,
-        agentIds: undefined,
-        action: undefined,
-      });
-    });
   });
 
   describe('GET /timeline', () => {

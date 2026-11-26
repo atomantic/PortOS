@@ -74,13 +74,6 @@ router.get('/jobs', asyncHandler(async (req, res) => {
   res.json({ jobs: jobsWithGates, stats, registeredGates: getRegisteredGates(), dataInputCatalog: getTaskDataInputCatalog() });
 }));
 
-// GET /api/cos/jobs/incidents - Deduplicated failure incidents (open first, then resolved), newest first
-router.get('/jobs/incidents', asyncHandler(async (req, res) => {
-  const { listJobIncidents } = await loadIncidents();
-  const incidents = await listJobIncidents();
-  res.json({ incidents });
-}));
-
 // POST /api/cos/jobs/incidents/:id/ack - Acknowledge an open incident (silences reminders until a new signature appears)
 router.post('/jobs/incidents/:id/ack', asyncHandler(async (req, res) => {
   const { acknowledgeJobIncident } = await loadIncidents();

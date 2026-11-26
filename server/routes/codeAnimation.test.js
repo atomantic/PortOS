@@ -7,7 +7,7 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
 import { createHash } from 'crypto';
 import { canonicalStringify } from '../lib/objects.js';
-import { createCodeAnimationPackage, CODE_ANIMATION_PACKAGE_LIMITS } from '../lib/codeAnimationPackage.js';
+import { codeAnimationPackageSchema, createCodeAnimationPackage, summarizeCodeAnimationPackage, CODE_ANIMATION_PACKAGE_LIMITS } from '../lib/codeAnimationPackage.js';
 import { JSON_BODY_LIMIT } from '../lib/uploadLimits.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
@@ -341,19 +341,18 @@ describe('Code Animation portable packages', () => {
       files: value.files.map(({ path, sha256 }) => ({ path, sha256 })).sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0) }));
     return value;
   };
-  const validate = (value) => request(makeApp()).post('/api/code-animation/packages/validate').send(value);
 
   it('serves the original Blender starter as an unchanged data-only package', async () => {
     const response = await request(makeApp()).get('/api/code-animation/packages/starter/blender');
     expect(response.status).toBe(200);
     expect(response.body.manifest).toMatchObject({ renderer: { kind: 'blender', version: LATEST_BLENDER_VERSION, engine: 'CYCLES' }, format: { width: 1920, height: 1080, fps: 24, durationSeconds: 10 } });
-    expect((await validate(response.body)).body.executed).toBe(false);
+    expect(codeAnimationPackageSchema.safeParse(response.body).success).toBe(true);
     expect(response.body.files[0].content).toContain('def build_scene(config):');
     expect(runPromptThroughProvider).not.toHaveBeenCalled();
     expect(enqueueJob).not.toHaveBeenCalled();
     const foreignAuthority = structuredClone(response.body);
     foreignAuthority.manifest.renderer.executionMode = 'trusted-local';
-    expect((await validate(rehash(foreignAuthority))).status).toBe(400);
+    expect(codeAnimationPackageSchema.safeParse(rehash(foreignAuthority)).success).toBe(false);
   });
 
   it('serves the vendored three.js modules the sandboxed preview inlines (#10464)', async () => {
@@ -381,17 +380,15 @@ describe('Code Animation portable packages', () => {
       brief: { concept: 'A brass toy takes flight', cast: 'A mechanical beetle', onScreenText: 'Takeoff' },
       format: savedJob().frame, execution: { requested: null, effective: null }, seed: null });
     expect(JSON.stringify(response.body)).not.toMatch(/local-provider|local-run|local-universe|local-path|api\/uploads/);
-    const checked = await validate(response.body);
-    expect(checked.status).toBe(200);
-    expect(checked.body).toMatchObject({ revisionHash: response.body.revisionHash, fileCount: 1, executed: false });
+    const checked = codeAnimationPackageSchema.parse(response.body);
+    expect(summarizeCodeAnimationPackage(checked)).toMatchObject({ revisionHash: response.body.revisionHash, fileCount: 1, executed: false });
     expect((await request(app).get(`/api/code-animation/generate/${id}`)).body.html).toBe(html);
   });
 
-  it('validates Blender/binary packages without reading, writing, generating, or executing work', async () => {
+  it('validates Blender/binary packages without reading, writing, generating, or executing work', () => {
     const value = pkg();
-    const checked = await validate(value);
-    expect(checked.status).toBe(200);
-    expect(checked.body).toEqual({ schemaVersion: 1, revisionHash: value.revisionHash,
+    const checked = summarizeCodeAnimationPackage(codeAnimationPackageSchema.parse(value));
+    expect(checked).toEqual({ schemaVersion: 1, revisionHash: value.revisionHash,
       renderer: value.manifest.renderer, fileCount: 2, totalBytes: Buffer.byteLength(value.files[0].content) + 3, executed: false });
     expect(readCodeAnimationHtml).not.toHaveBeenCalled();
     expect(saveCodeAnimationHtml).not.toHaveBeenCalled();
@@ -402,24 +399,22 @@ describe('Code Animation portable packages', () => {
     value.files.reverse();
     value.files[1].content = Buffer.from(value.files[1].content).toString('base64');
     value.files[1].encoding = 'base64';
-    expect((await validate(value)).body.revisionHash).toBe(checked.body.revisionHash);
+    expect(codeAnimationPackageSchema.parse(value).revisionHash).toBe(checked.revisionHash);
     value.files[1].content = Buffer.from('changed source').toString('base64');
-    expect((await validate(value)).status).toBe(400);
+    expect(codeAnimationPackageSchema.safeParse(value).success).toBe(false);
     rehash(value);
-    const changed = await validate(value);
-    expect(changed.status).toBe(200);
-    expect(changed.body.revisionHash).not.toBe(checked.body.revisionHash);
+    expect(codeAnimationPackageSchema.parse(value).revisionHash).not.toBe(checked.revisionHash);
   });
 
   it.each(['../scene.py', '/scene.py', 'C:/scene.py', 'src\\scene.py', 'src//scene.py',
     'src/./scene.py', 'src/%2e%2e/scene.py', 'src/scene.py.', 'src/CON.py', '.git/config'])
-  ('rejects portable path escape/ambiguity: %s', async (path) => {
+  ('rejects portable path escape/ambiguity: %s', (path) => {
     const value = pkg();
     value.files[0].path = path;
     value.manifest.entrypoints[0].path = path;
-    const response = await validate(rehash(value));
-    expect(response.status).toBe(400);
-    expect(response.body.context.details.some(({ message }) => message.includes('portable relative package path'))).toBe(true);
+    const result = codeAnimationPackageSchema.safeParse(rehash(value));
+    expect(result.success).toBe(false);
+    expect(result.error.issues.some(({ message }) => message.includes('portable relative package path'))).toBe(true);
   });
 
   it.each([
@@ -435,36 +430,36 @@ describe('Code Animation portable packages', () => {
     ['late event', (v) => { v.manifest.events[0].atSeconds = 16; }],
     ['noncanonical base64', (v) => { v.files[1].content += '!'; }],
     ['invalid UTF-8 text', (v) => { v.files[0].content = '\ud800'; }],
-  ])('rejects malformed packages: %s', async (_name, mutate) => {
+  ])('rejects malformed packages: %s', (_name, mutate) => {
     const value = pkg();
     mutate(value);
-    expect((await validate(rehash(value))).status).toBe(400);
+    expect(codeAnimationPackageSchema.safeParse(rehash(value)).success).toBe(false);
   });
 
-  it('rejects a stale revision digest even when every file digest is correct', async () => {
+  it('rejects a stale revision digest even when every file digest is correct', () => {
     const value = pkg();
     value.manifest.seed = 43;
-    const response = await validate(value);
-    expect(response.status).toBe(400);
-    expect(response.body.context.details).toEqual([{ path: 'revisionHash', message: 'Revision digest does not match the package' }]);
+    const result = codeAnimationPackageSchema.safeParse(value);
+    expect(result.success).toBe(false);
+    expect(result.error.issues).toContainEqual(expect.objectContaining({ path: ['revisionHash'], message: 'Revision digest does not match the package' }));
   });
 
-  it('enforces decoded per-file, aggregate, and file-count bounds with correct hashes', async () => {
+  it('enforces decoded per-file, aggregate, and file-count bounds with correct hashes', () => {
     const value = pkg();
     value.files[0].content = 'é'.repeat(CODE_ANIMATION_PACKAGE_LIMITS.fileBytes / 2 + 1);
-    const oversized = await validate(rehash(value));
-    expect(oversized.status).toBe(400);
-    expect(oversized.body.context.details).toContainEqual({ path: 'files.0.content', message: 'File exceeds the decoded byte limit' });
+    const oversized = codeAnimationPackageSchema.safeParse(rehash(value));
+    expect(oversized.success).toBe(false);
+    expect(oversized.error.issues).toContainEqual(expect.objectContaining({ path: ['files', 0, 'content'], message: 'File exceeds the decoded byte limit' }));
     value.files = Array.from({ length: 5 }, (_, i) => ({ ...pkg().files[0], path: `file${i}.py`,
       content: 'a'.repeat(CODE_ANIMATION_PACKAGE_LIMITS.fileBytes) }));
     value.manifest.entrypoints[0].path = 'file0.py';
     value.manifest.assets = [];
     value.manifest.audio = { kind: 'silence' };
-    const aggregate = await validate(rehash(value));
-    expect(aggregate.status).toBe(400);
-    expect(aggregate.body.context.details).toContainEqual({ path: 'files', message: 'Package exceeds the decoded byte limit' });
+    const aggregate = codeAnimationPackageSchema.safeParse(rehash(value));
+    expect(aggregate.success).toBe(false);
+    expect(aggregate.error.issues).toContainEqual(expect.objectContaining({ path: ['files'], message: 'Package exceeds the decoded byte limit' }));
     value.files = Array.from({ length: 65 }, (_, i) => ({ ...pkg().files[0], path: `file${i}.py` }));
-    expect((await validate(rehash(value))).status).toBe(400);
+    expect(codeAnimationPackageSchema.safeParse(rehash(value)).success).toBe(false);
   });
 
   it('reports unavailable jobs and declares external/procedural audio without fetching it', async () => {

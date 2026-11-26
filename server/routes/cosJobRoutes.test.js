@@ -119,14 +119,6 @@ describe('CoS Job Routes', () => {
       expect(response.body.jobs.map(job => job.openIncident?.id ?? null)).toEqual(['new', null]);
     });
 
-    it('lists incidents without colliding with GET /jobs/:id', async () => {
-      listJobIncidents.mockResolvedValueOnce([{ id: 'i1', jobId: 'j1' }]);
-      const response = await request(app).get('/api/cos/jobs/incidents');
-      expect(response.status).toBe(200);
-      expect(response.body.incidents).toEqual([{ id: 'i1', jobId: 'j1' }]);
-      expect(autonomousJobs.getJob).not.toHaveBeenCalled();
-    });
-
     it('acknowledges an open incident and 404s an unknown one', async () => {
       acknowledgeJobIncident.mockResolvedValueOnce({ id: 'i1', state: 'acknowledged' });
       const ok = await request(app).post('/api/cos/jobs/incidents/i1/ack');

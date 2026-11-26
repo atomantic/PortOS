@@ -77,13 +77,16 @@ async function terminal(id, start) {
 
 describe.skipIf(!ready)('Revision-bound sound public workflows', () => {
   it('keeps v1 packages compatible and validates versioned sound timelines at the public import boundary', async () => {
-    expect((await post('/packages/validate', packageOf({ kind: 'silence' }))).body.schemaVersion).toBe(1);
+    const legacy = await create({ kind: 'silence' });
+    expect(packageOf({ kind: 'silence' }).schemaVersion).toBe(1);
     const versioned = packageOf();
-    expect((await post('/packages/validate', versioned)).body.schemaVersion).toBe(2);
-    expect((await post('/packages/validate', { ...versioned, schemaVersion: 1 })).status).toBe(400);
+    expect(versioned.schemaVersion).toBe(2);
+    await create();
+    const importPath = `/projects/${legacy.project.id}/import`;
+    expect((await post(importPath, { ...versioned, schemaVersion: 1 })).status).toBe(400);
     const outside = structuredClone(versioned);
     outside.manifest.audio.events[0].atSeconds = 2;
-    expect((await post('/packages/validate', outside)).status).toBe(400);
+    expect((await post(importPath, outside)).status).toBe(400);
   });
 
   it('persists deterministic audio despite render failure, and rejects stale event/revision evidence with identical source bytes', async () => {

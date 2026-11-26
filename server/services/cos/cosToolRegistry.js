@@ -706,22 +706,9 @@ export const executeCosToolCall = async ({ call, authority, context = {} }) => {
     expiresAt: Date.now() + IDEMPOTENCY_RETENTION_MS,
   });
   pruneToolCallFingerprints();
-  toolCalls.set(parsedCall.requestId, { fingerprint, promise,
-    ...(tool.adapter.kind.startsWith('reports.') ? { reportAppId: args.appId } : {}),
-  });
+  toolCalls.set(parsedCall.requestId, { fingerprint, promise });
   trimCallResults();
   return promise;
-};
-
-export const getCosToolCall = async (requestId) => {
-  const entry = toolCalls.get(requestId);
-  if (!entry) return null;
-  const result = await entry.promise;
-  if (entry.reportAppId) {
-    const { assertProcessAuditAccess } = await import('../persistent/persistentMindProcessAudit.js');
-    await assertProcessAuditAccess(entry.reportAppId);
-  }
-  return result;
 };
 
 export const __testing = { VOICE_ADAPTERS, resolveTool, toolCalls, toolCallFingerprints };

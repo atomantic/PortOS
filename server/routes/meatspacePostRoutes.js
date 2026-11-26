@@ -19,7 +19,6 @@ import {
   memoryItemUpdateSchema,
   memoryPracticeSchema,
   memoryMasteryAttestationSchema,
-  memoryDrillRequestSchema,
   morseRoundSchema,
   morseLevelUpdateSchema,
   LLM_DRILL_TYPES,
@@ -427,16 +426,6 @@ router.get('/post/memory-items', asyncHandler(async (req, res) => {
 }));
 
 /**
- * GET /api/meatspace/post/memory-items/due
- * List memory items currently due for spaced-repetition review (nextReview <= now),
- * most-overdue first. Declared before /:id so "due" isn't captured as an id.
- */
-router.get('/post/memory-items/due', asyncHandler(async (req, res) => {
-  const items = await memoryService.getDueMemoryItems();
-  res.json(items);
-}));
-
-/**
  * GET /api/meatspace/post/memory-items/:id
  * Get a single memory item
  */
@@ -517,17 +506,6 @@ router.get('/post/memory-items/:id/chunk-mastery', asyncHandler(async (req, res)
   const item = await memoryService.getMemoryItem(req.params.id);
   if (!item) throw new ServerError('Memory item not found', { status: 404, code: 'NOT_FOUND' });
   res.json(memoryService.getChunkMasteryOrder(item));
-}));
-
-/**
- * POST /api/meatspace/post/memory-drill
- * Generate a memory drill for a POST session
- */
-router.post('/post/memory-drill', asyncHandler(async (req, res) => {
-  const data = validateRequest(memoryDrillRequestSchema, req.body);
-  const drill = await memoryService.generateMemoryDrill(data, await postService.getPostConfig());
-  if (!drill) throw new ServerError('No memory items available', { status: 400, code: 'NO_MEMORY_ITEMS' });
-  res.json(drill);
 }));
 
 export default router;

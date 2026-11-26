@@ -57,7 +57,6 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/cos/gsd/projects/:appId/phases',
   'GET /api/cos/gsd/projects/:appId/documents/:docName',
   // Runs host process, forge and runtime probes (#19495).
-  'GET /api/ports/scan',
   'GET /api/commands/processes',
   'GET /api/github/accounts/:id/status',
   'GET /api/apps/:id/issues',
@@ -109,15 +108,10 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   // is operator work (#12488, #18224); browser and harness update checks belong
   // to the gated installers (#8798).
   'GET /api/browser/update-preflight',
-  'GET /api/browser/pages',
   'GET /api/browser/downloads/:name',
   'GET /api/browser/logs',
-  // CDP connection metadata, PM2 status, and host filesystem paths.
-  'GET /api/browser/version',
-  'GET /api/browser/process',
+  // Browser configuration includes private host filesystem paths.
   'GET /api/browser/config',
-  // Lists saved website-login metadata across household subjects.
-  'GET /api/browser/vault/logins',
   'GET /api/harnesses/update-reference',
   // The private FableLoom package an export produced.
   'GET /api/fableloom/:id/export/:jobId/download',

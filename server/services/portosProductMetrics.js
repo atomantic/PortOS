@@ -328,14 +328,3 @@ export async function getProductMetricsSource(options = {}) {
   const result = await getProductEngagement(options);
   return JSON.stringify(toProductMetricsAggregate(result)).slice(0, SOURCE_MAX_CHARS);
 }
-
-/** Return the user-facing daily action projection for the dashboard/toast. */
-export async function getDailyActions(options = {}) {
-  const result = await getProductEngagement(options);
-  return {
-    today: result.today,
-    actions: result.actions,
-    metrics: toProductMetricsAggregate(result),
-    checkedAt: result.checkedAt,
-  };
-}

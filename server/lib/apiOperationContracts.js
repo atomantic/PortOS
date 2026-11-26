@@ -12,12 +12,11 @@ import {
 } from './apiContractSchemas.js';
 import { writersRoomWorksQuerySchema, writersRoomWorksResponseSchema } from './pipelineValidation.js';
 import { TTS_ENGINE_IDS } from './voiceEngines.js';
-import { cosToolCallSchema } from './cos/cosToolContracts.js';
 import { agentContextMcpInboundSchema } from './agent/agentContextValidation.js';
 import { settingsSlicePatchSchema } from './settingsValidation.js';
 import { signalBlocklistHandlesSchema } from './signalValidation.js';
 import {
-  gitBranchBodySchema, gitBranchComparisonBodySchema, gitCommitBodySchema, gitCommitsBodySchema,
+  gitBranchBodySchema, gitBranchComparisonBodySchema, gitCommitBodySchema,
   gitDeleteBranchBodySchema, gitDiffBodySchema, gitOptionalBranchBodySchema, gitPathBodySchema,
   gitCleanupMergedBodySchema, gitRemoteBranchesBodySchema, gitStageBodySchema
 } from './gitValidation.js';
@@ -100,7 +99,6 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
 
   '/api/git/status': gitWriteOperation('Read git status for a path', gitPathBodySchema),
   '/api/git/diff': gitWriteOperation('Read the working-tree or staged diff', gitDiffBodySchema),
-  '/api/git/commits': gitWriteOperation('List recent commits', gitCommitsBodySchema),
   '/api/git/stage': gitWriteOperation('Stage files', gitStageBodySchema),
   '/api/git/unstage': gitWriteOperation('Unstage files', gitStageBodySchema),
   '/api/git/commit': gitWriteOperation('Create a commit', gitCommitBodySchema),
@@ -318,27 +316,6 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
         { name: 'format', in: 'query', schema: { type: 'string', enum: ['portos', 'openai', 'anthropic', 'mcp'] } },
       ],
       responses: { 200: { description: 'Versioned semantic tool catalog' }, 304: { description: 'Catalog ETag is unchanged' } },
-    },
-  },
-  '/api/cos/tools/call': {
-    post: {
-      summary: 'Call a semantic CoS tool',
-      description: 'Execute one allowlisted tool. Mutations require a trusted authenticated UI session or process-local Persistent Mind authority.',
-      requestBody: jsonBody(cosToolCallSchema),
-      responses: {
-        200: { description: 'Normalized tool result' },
-        400: { description: 'Invalid call or arguments' },
-        403: { description: 'Scope, capability, or authentication denied' },
-        409: { description: 'Idempotency conflict' },
-        422: { description: 'Tool execution failed' },
-      },
-    },
-  },
-  '/api/cos/tools/calls/:requestId': {
-    get: {
-      summary: 'Read a semantic tool result',
-      description: 'Read the normalized result retained for a prior process-local request id.',
-      responses: { 200: { description: 'Normalized tool result' }, 404: { description: 'Unknown or expired request id' } },
     },
   },
 });

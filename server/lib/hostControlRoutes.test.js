@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { hostControlGetRouteFor, isHostControlRoute } from './hostControlRoutes.js';
 
 describe('isHostControlRoute (#16018)', () => {
-  it.each(['version', 'process', 'config'])('classifies managed browser %s reads as host control', (endpoint) => {
+  it.each(['config', 'logs', 'update-preflight'])('classifies managed browser %s reads as host control', (endpoint) => {
     const path = `/api/browser/${endpoint}`;
     expect(hostControlGetRouteFor('GET', path)).toBe(`GET ${path}`);
     expect(isHostControlRoute('HEAD', path)).toBe(true);

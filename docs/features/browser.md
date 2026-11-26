@@ -38,12 +38,7 @@ portos-browser (PM2 process)
 | POST | `/api/browser/stop` | Stop browser via PM2 |
 | POST | `/api/browser/restart` | Restart browser via PM2 |
 | GET | `/api/browser/health` | Quick health check |
-| GET | `/api/browser/process` | PM2 process details |
-| GET | `/api/browser/pages` | List open CDP pages |
-| GET | `/api/browser/version` | CDP version info |
 | GET | `/api/browser/logs` | Recent PM2 logs |
-| GET | `/api/browser/vault/logins` | Website-login fill candidates (metadata only; `?origin=` for one exact origin) |
-| POST | `/api/browser/vault/fill` | Model-blind credential fill into one tab (`{ targetId, loginId, fields?, selectors? }`) |
 
 ## Security
 
@@ -51,7 +46,7 @@ Browser management relies on PortOS's network-level access control (see [Securit
 
 ## Model-blind website-login fill
 
-`POST /api/browser/vault/fill` (and the `browser.vault.fill` agent tool) types a saved [Privacy Vault website login](./privacy-center.md#website-logins) into one managed-browser tab without the caller ever seeing it. `fields` defaults to `identifier` and `password`; request `totp` on the 2FA step for the current code. The response is metadata only, for example `{ ok, origin, filledFields, identifierFilled, totpFilled, submitted: false }`, and the form is never submitted.
+The `browser.vault.fill` agent tool types a saved [Privacy Vault website login](./privacy-center.md#website-logins) into one managed-browser tab without the caller ever seeing it. `fields` defaults to `identifier` and `password`; request `totp` on the 2FA step for the current code. The response is metadata only, for example `{ ok, origin, filledFields, identifierFilled, totpFilled, submitted: false }`, and the form is never submitted.
 
 The fill fails closed:
 

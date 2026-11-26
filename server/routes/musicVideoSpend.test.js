@@ -12,6 +12,8 @@ import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+import { projectSpend } from '../lib/musicVideo/musicVideoSpend.js';
+import { currentRun } from '../lib/musicVideo/musicVideoSummary.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { buildHiggsfieldVideoRequest } from '../lib/higgsfieldVideoModels.js';
 
@@ -47,7 +49,11 @@ const complete = async (job) => {
   mediaJobEvents.emit('completed', { status: 'completed', completedAt: '2026-11-16T00:00:00.000Z', ...job });
   await hook.drain();
 };
-const spend = async () => (await request(app).get(`/api/music-video/${project.id}/spend`)).body;
+const spend = async () => {
+  const response = await request(app).get(`/api/music-video/${project.id}`);
+  expect(response.status).toBe(200);
+  return { renderSpend: response.body.renderSpend, spend: projectSpend(response.body, currentRun(response.body)) };
+};
 const laneRow = (body, lane) => body.spend.lanes.find((row) => row.lane === lane);
 
 beforeEach(async () => {
@@ -76,9 +82,6 @@ describe('music video render spend', () => {
     expect(body.spend.spentUsd).toBe(1.3235);
     expect(laneRow(body, 'higgsfield')).toMatchObject({ usd: 1.3235, count: 1, unpriced: 0 });
     expect(pushed).toEqual([{ projectId: project.id, renderSpend: body.renderSpend }]);
-    // A project read carries the same summary, so the header pill shows it without a spend call.
-    const read = await request(app).get(`/api/music-video/${project.id}`);
-    expect(read.body.renderSpend).toEqual(body.renderSpend);
   });
 
   it('counts generic-route renders that never became a take, and prices an import once', async () => {

@@ -40,8 +40,6 @@ vi.mock('../services/browserService.js', () => ({
   getHealthStatus: vi.fn(),
   getRecentLogs: vi.fn(async () => ({ stdout: '', stderr: '' })),
 }));
-const fillWebsiteLogin = vi.fn(async ({ targetId, loginId }) => ({ ok: true, targetId, loginId, filledFields: ['identifier', 'password'] }));
-vi.mock('../services/browserVaultFill.js', () => ({ fillWebsiteLogin: (...a) => fillWebsiteLogin(...a) }));
 vi.mock('../services/browserUpdateRestart.js', () => ({
   prepareBrowserUpdateRestart: vi.fn(),
   confirmBrowserUpdateRestart: vi.fn(),
@@ -235,28 +233,5 @@ describe('GET /api/browser/logs — lines query', () => {
     expect(browserService.getRecentLogs).toHaveBeenLastCalledWith(50);
     await request(makeApp()).get('/api/browser/logs?lines=200');
     expect(browserService.getRecentLogs).toHaveBeenLastCalledWith(200);
-  });
-});
-
-describe('POST /api/browser/vault/fill — request contract (#17397)', () => {
-  const LOGIN_ID = '00000000-0000-4000-8000-0000000000ee';
-  const fill = (body) => request(makeApp()).post('/api/browser/vault/fill').send(body);
-
-  it.each([
-    ['a non-uuid login id', { targetId: 'tab-1', loginId: 'not-a-uuid' }],
-    ['a target id with path characters', { targetId: '../json/new', loginId: LOGIN_ID }],
-    ['an unknown fill field', { targetId: 'tab-1', loginId: LOGIN_ID, fields: ['credit_card'] }],
-    ['a caller-supplied secret', { targetId: 'tab-1', loginId: LOGIN_ID, password: 'nope' }],
-    ['a selector for an unknown field', { targetId: 'tab-1', loginId: LOGIN_ID, selectors: { submit: '#go' } }],
-  ])('rejects %s before any fill', async (_label, body) => {
-    expect((await fill(body)).status).toBe(400);
-    expect(fillWebsiteLogin).not.toHaveBeenCalled();
-  });
-
-  it('forwards a valid request and returns the metadata result', async () => {
-    const r = await fill({ targetId: 'tab-1', loginId: LOGIN_ID, fields: ['totp'], selectors: { totp: '#otp' } });
-    expect(r.status).toBe(200);
-    expect(fillWebsiteLogin).toHaveBeenCalledWith({ targetId: 'tab-1', loginId: LOGIN_ID, fields: ['totp'], selectors: { totp: '#otp' } });
-    expect(r.body).toMatchObject({ ok: true, filledFields: ['identifier', 'password'] });
   });
 });

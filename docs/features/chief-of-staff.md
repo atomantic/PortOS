@@ -507,7 +507,6 @@ Storage, retention and the privacy posture are in the header of [`persistentMind
 | GET /api/cos/learning/dashboard | Get the Learning tab snapshot, including feedback and reviewer verdicts |
 | GET /api/cos/digest | Get weekly digest |
 | GET /api/cos/mind/journal | Persistent Mind decision journal, filterable by `kind` and `status` |
-| GET /api/cos/jobs/incidents | Deduplicated autonomous-job failure incidents, newest first |
 | POST /api/cos/jobs/incidents/:id/ack | Acknowledge an open incident (silences reminders for that signature) |
 | POST /api/cos/mind/journal/:id/correct | Settle (`resolve`) or retire (`retire`) one journal entry the mind got wrong — a status transition, never a delete |
 
