@@ -11,6 +11,7 @@ import { PINNED_DB_IMAGE } from './lib/dbImage.js';
 const script = fileURLToPath(new URL('./ci-install-db-tools.sh', import.meta.url));
 const PACKAGE_FILE = 'libcodec2_1_amd64.deb';
 const PACKAGE_BYTES = 'verified package';
+const COMPANION_FILE = 'libcodec2-extra_1_amd64.deb';
 const PACKAGE_HASH = createHash('sha256').update(PACKAGE_BYTES).digest('hex');
 
 const RUNNER_SOURCES = `Types: deb
@@ -56,6 +57,7 @@ function run(mirror, cache, { includePostgres = true } = {}) {
   if (cache === 'warm' || cache === 'corrupt') {
     // Equal size catches the case apt's own existing-archive check accepts.
     writeFileSync(join(packageCache, PACKAGE_FILE), cache === 'warm' ? PACKAGE_BYTES : 'untrusted bytes!');
+    writeFileSync(join(packageCache, COMPANION_FILE), PACKAGE_BYTES);
   }
   mkdirSync(join(root, 'etc/apt/sources.list.d'), { recursive: true });
   writeFileSync(join(root, 'etc/os-release'), 'VERSION_CODENAME=noble\n');
@@ -70,7 +72,18 @@ function run(mirror, cache, { includePostgres = true } = {}) {
   fake('curl', `
 echo curl >> '${log}'
 while [ $# -gt 0 ]; do [ "$1" = -o ] && echo key > "$2"; shift; done`);
-  fake('sha256sum', 'if [ "$(uname -s)" = Darwin ]; then exec shasum -a 256 "$@"; fi\nexec /usr/bin/sha256sum "$@"');
+  fake('sha256sum', `
+echo sha256sum >> '${log}'
+if [ "$(uname -s)" = Darwin ]; then exec shasum -a 256 "$@"; fi
+exec /usr/bin/sha256sum "$@"`);
+  fake('install', `
+if [[ "$1 $2 $3" = "-m 644 -t" ]]; then
+  echo "restore $(($# - 5)) files" >> '${log}'
+  target="$4"
+  shift 5
+  exec /usr/bin/install -m 644 "$@" "$target"
+fi
+exec /usr/bin/install "$@"`);
   const stall = { ok: 'false', slowRunner: `grep -q azure '${sourcesFile}'`, dead: 'true' }[mirror];
   fake('timeout', `
 [ "$1" = --kill-after=10 ] || exit 2
@@ -98,16 +111,23 @@ if [[ " $* " = *" update "* ]]; then
 fi
 if ${stall}; then exit 124; fi
 if [[ " $* " = *" --print-uris "* ]]; then
-  echo "'https://example.com/${PACKAGE_FILE}' ${PACKAGE_FILE} ${PACKAGE_BYTES.length} SHA256:${PACKAGE_HASH}"
+  for file in '${PACKAGE_FILE}' '${COMPANION_FILE}'; do
+    echo "'https://example.com/$file' $file ${PACKAGE_BYTES.length} SHA256:${PACKAGE_HASH}"
+  done
 elif [[ " $* " = *" --download-only "* ]]; then
-  if [[ ! -f '${archives}/${PACKAGE_FILE}' ]]; then
-    echo 'download ${PACKAGE_FILE}' >> '${log}'
-    printf '%s' '${PACKAGE_BYTES}' > '${archives}/${PACKAGE_FILE}'
-  fi
+  for file in '${PACKAGE_FILE}' '${COMPANION_FILE}'; do
+    if [[ ! -f '${archives}/'"$file" ]]; then
+      echo "download $file" >> '${log}'
+      printf '%s' '${PACKAGE_BYTES}' > '${archives}/'"$file"
+    fi
+  done
   mkdir -p '${archives}/partial'
   echo incomplete > '${archives}/partial/unfinished.deb'
 elif [[ " $* " = *" --no-download "* ]]; then
-  [[ "$(cat '${archives}/${PACKAGE_FILE}')" = '${PACKAGE_BYTES}' ]] || exit 1
+  [[ "$DEBIAN_FRONTEND $NEEDRESTART_MODE $NEEDRESTART_SUSPEND" = "noninteractive l 1" ]] || exit 1
+  for file in '${PACKAGE_FILE}' '${COMPANION_FILE}'; do
+    [[ "$(cat '${archives}/'"$file")" = '${PACKAGE_BYTES}' ]] || exit 1
+  done
 fi`);
 
   const result = spawnSync('/bin/bash', [script], {
@@ -134,7 +154,9 @@ fi`);
     pgdg: existsSync(pgdg) ? read(pgdg) : null,
     fetchedPgKey: read(log).includes('curl'),
     githubPath: read(githubPath),
-    downloaded: read(log).includes(`download ${PACKAGE_FILE}`),
+    downloaded: read(log).split('\n').filter(line => line.startsWith('download ')),
+    checksumCalls: read(log).split('\n').filter(line => line === 'sha256sum').length,
+    restoreCalls: read(log).split('\n').filter(line => line.startsWith('restore ')),
     cachedPackage: read(join(packageCache, PACKAGE_FILE)),
     cachedPartial: existsSync(join(packageCache, 'unfinished.deb')),
   };
@@ -142,7 +164,7 @@ fi`);
   return out;
 }
 
-const INSTALL_FROM_CACHE = 'apt-get install -y --no-download postgresql-client-17 ffmpeg';
+const INSTALL_FROM_CACHE = 'apt-get install -y --no-install-recommends --no-download postgresql-client-17 ffmpeg';
 
 describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
   it('installs the service-major client from the signed PostgreSQL repository', () => {
@@ -150,10 +172,11 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.pgdg).toBe('deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main\n');
     expect(result.rawCalls[0]).toContain('-o Acquire::Languages=none');
+    expect(result.rawCalls.at(-1)).toContain('-o Dpkg::Options::=--force-unsafe-io');
     expect(result.sourceparts).toEqual([]);
     expect(result.calls).toEqual([
       'apt-get update',
-      'apt-get install -y --download-only postgresql-client-17 ffmpeg',
+      'apt-get install -y --no-install-recommends --download-only postgresql-client-17 ffmpeg',
       INSTALL_FROM_CACHE,
     ]);
     expect(result.sources).toBe(RUNNER_SOURCES);
@@ -169,9 +192,9 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     expect(result.sourceparts).toEqual([['ubuntu.sources']]);
     expect(result.calls).toEqual([
       'apt-get update',
-      'apt-get --print-uris install -y ffmpeg',
-      'apt-get install -y --download-only ffmpeg',
-      'apt-get install -y --no-download ffmpeg',
+      'apt-get --print-uris install -y --no-install-recommends ffmpeg',
+      'apt-get install -y --no-install-recommends --download-only ffmpeg',
+      'apt-get install -y --no-install-recommends --no-download ffmpeg',
     ]);
     expect(result.sources).toBe(RUNNER_SOURCES);
     expect(result.githubPath).toBe('');
@@ -185,8 +208,8 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     expect(result.calls).toEqual([
       'apt-get update',
       'apt-get update',
-      'apt-get --print-uris install -y postgresql-client-17 ffmpeg',
-      'apt-get install -y --download-only postgresql-client-17 ffmpeg',
+      'apt-get --print-uris install -y --no-install-recommends postgresql-client-17 ffmpeg',
+      'apt-get install -y --no-install-recommends --download-only postgresql-client-17 ffmpeg',
       INSTALL_FROM_CACHE,
     ]);
     // The primary stall spends 45s of fake time, leaving 345s of the one
@@ -214,18 +237,21 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
   it('saves complete downloads on a cold cache and reuses verified bytes on a warm cache', () => {
     const cold = run('ok', 'cold');
     expect(cold.status, cold.stderr).toBe(0);
-    expect(cold.downloaded).toBe(true);
+    expect(cold.downloaded).toEqual([`download ${PACKAGE_FILE}`, `download ${COMPANION_FILE}`]);
+    expect(cold.checksumCalls).toBe(0);
     expect(cold.cachedPackage).toBe(PACKAGE_BYTES);
     expect(cold.cachedPartial).toBe(false);
 
     const warm = run('ok', 'warm');
     expect(warm.status, warm.stderr).toBe(0);
-    expect(warm.downloaded).toBe(false);
+    expect(warm.downloaded).toEqual([]);
+    expect(warm.checksumCalls).toBe(1);
+    expect(warm.restoreCalls).toEqual(['restore 2 files']);
     expect(warm.stdout).toContain(`Reused verified APT package ${PACKAGE_FILE}`);
     expect(warm.calls).toEqual([
       'apt-get update',
-      'apt-get --print-uris install -y postgresql-client-17 ffmpeg',
-      'apt-get install -y --download-only postgresql-client-17 ffmpeg',
+      'apt-get --print-uris install -y --no-install-recommends postgresql-client-17 ffmpeg',
+      'apt-get install -y --no-install-recommends --download-only postgresql-client-17 ffmpeg',
       INSTALL_FROM_CACHE,
     ]);
     expect(warm.budgets).toEqual([45, 45, 45]);
@@ -235,7 +261,9 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
   it('downloads a replacement for a same-size cache entry that fails signed-index hash verification', () => {
     const result = run('ok', 'corrupt');
     expect(result.status, result.stderr).toBe(0);
-    expect(result.downloaded).toBe(true);
+    expect(result.downloaded).toEqual([`download ${PACKAGE_FILE}`]);
+    expect(result.checksumCalls).toBe(1);
+    expect(result.restoreCalls).toEqual(['restore 1 files']);
     expect(result.stdout).toContain('Ignoring invalid cached APT package');
     expect(result.cachedPackage).toBe(PACKAGE_BYTES);
   });

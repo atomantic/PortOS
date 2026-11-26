@@ -32,6 +32,7 @@ case "$INCLUDE_POSTGRES" in
   *) echo "INCLUDE_POSTGRES must be true or false" >&2; exit 1 ;;
 esac
 APT_OPTS=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Languages=none)
+APT_INSTALL_OPTS=(install -y --no-install-recommends)
 APT_SOURCE_OPTS=()
 APT_SOURCEPARTS_DIR=''
 cleanup() {
@@ -77,27 +78,40 @@ bounded() {
 # whose SHA256 matches the current signed index, never cached indexes or state.
 restore_archives() {
   [[ -n "${APT_PACKAGE_CACHE:-}" ]] || return 0
-  local manifest _uri filename _size hash
+  local manifest _uri filename _size hash result
+  local checksums=() verified=()
   manifest=$(bounded "$1" sudo apt-get "${APT_OPTS[@]}" \
     -o "Dir::Cache::archives=${ARCHIVES}/verify-empty" -o Acquire::ForceHash=sha256 \
-    --print-uris install -y "${PACKAGES[@]}") || return
-  sudo install -d "$ARCHIVES"
+    --print-uris "${APT_INSTALL_OPTS[@]}" "${PACKAGES[@]}") || return
   while read -r _uri filename _size hash; do
-    [[ "$hash" =~ ^SHA256:[a-fA-F0-9]{64}$ && "$filename" != */* ]] || continue
+    [[ "$hash" =~ ^SHA256:[a-fA-F0-9]{64}$ && "$filename" =~ ^[a-zA-Z0-9][a-zA-Z0-9.+_~%:-]*\.deb$ ]] || continue
     [[ -f "${APT_PACKAGE_CACHE}/${filename}" ]] || continue
-    if printf '%s  %s\n' "${hash#SHA256:}" "${APT_PACKAGE_CACHE}/${filename}" | sha256sum --check --status; then
-      sudo install -m 644 "${APT_PACKAGE_CACHE}/${filename}" "${ARCHIVES}/${filename}"
-      echo "♻️ Reused verified APT package ${filename}"
-    else
-      echo "♻️ Ignoring invalid cached APT package ${filename}; APT will download it again"
-    fi
+    checksums+=("${hash#SHA256:}  ${filename}")
   done <<< "$manifest"
+  (( ${#checksums[@]} > 0 )) || return 0
+
+  # A mismatch makes sha256sum exit nonzero but leaves the other results usable.
+  while IFS= read -r result; do
+    case "$result" in
+      *': OK')
+        filename=${result%: OK}
+        verified+=("${APT_PACKAGE_CACHE}/${filename}")
+        echo "♻️ Reused verified APT package ${filename}"
+        ;;
+      *': FAILED'*)
+        echo "♻️ Ignoring invalid cached APT package ${result%%: FAILED*}; APT will download it again"
+        ;;
+    esac
+  done < <(cd "$APT_PACKAGE_CACHE" && printf '%s\n' "${checksums[@]}" | LC_ALL=C sha256sum --check 2>/dev/null)
+  (( ${#verified[@]} > 0 )) || return 0
+  sudo install -d "$ARCHIVES" &&
+    sudo install -m 644 -t "$ARCHIVES" -- "${verified[@]}"
 }
 
 download_by() {
   bounded "$1" sudo apt-get "${APT_OPTS[@]}" update &&
     restore_archives "$1" &&
-    bounded "$1" sudo apt-get "${APT_OPTS[@]}" install -y --download-only "${PACKAGES[@]}"
+    bounded "$1" sudo apt-get "${APT_OPTS[@]}" "${APT_INSTALL_OPTS[@]}" --download-only "${PACKAGES[@]}"
 }
 
 if [[ "$INCLUDE_POSTGRES" == true ]]; then
@@ -125,7 +139,11 @@ if ! download_by "$PRIMARY_BUDGET"; then
     fail "Packages did not download from the runner mirror or ${OFFICIAL_ARCHIVE} within ${TOTAL_BUDGET}s."
 fi
 
-sudo apt-get ${APT_SOURCE_OPTS[@]+"${APT_SOURCE_OPTS[@]}"} -o APT::Keep-Downloaded-Packages=true install -y --no-download "${PACKAGES[@]}" || fail "Downloaded packages did not install."
+# A disposable runner doesn't need a kernel/service restart scan after installing test tools.
+sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 \
+  apt-get ${APT_SOURCE_OPTS[@]+"${APT_SOURCE_OPTS[@]}"} -o APT::Keep-Downloaded-Packages=true \
+  -o Dpkg::Options::=--force-unsafe-io "${APT_INSTALL_OPTS[@]}" --no-download "${PACKAGES[@]}" ||
+  fail "Downloaded packages did not install."
 if [[ -n "${APT_PACKAGE_CACHE:-}" ]]; then
   mkdir -p "$APT_PACKAGE_CACHE"
   # Only completed .debs enter the Actions cache, never partial downloads/locks.

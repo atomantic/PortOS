@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CLIENT_BROWSER_SHARD_OWNERS, LOCAL_PRUNE_INTERVAL_MS, MEMO_UNRECORDED_LINE_LIMIT, VITEST_PROJECT_NAMES,
-  clearVitestDependencies, createToolVersionResolver, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, pruneTestMemo, readVitestDependencies,
+  clearVitestDependencies, createToolVersionResolver, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, prepareMemoRun, pruneTestMemo, readVitestDependencies,
   SERVER_HEAVY_SHARD_OWNERS, recordTestMemo, seedVitestDependencies, serverShardSlice, vitestDependenciesPath, vitestShardHashInput, vitestShardRange, vitestShardSlice, writeSelectionFile,
 } from './testMemoRunner.js';
 import { EXCLUSIVE_CAPTURE_TESTS, EXCLUSIVE_TESTS, vitestCaptureProjects } from '../vitestCiPool.js';
@@ -219,6 +219,32 @@ describe('planTestMemo and recordTestMemo', () => {
   const plan = (overrides = {}) => planTestMemo({
     scope: 'server', mode: 'files', repoFiles: TESTS.map((t) => `server/${t}`), repoSources: [], memoDir, repoRoot: root,
     env: { NODE_ENV: 'test' }, platform: 'linux', arch: 'x64', nodeVersion: '24.1.0', listTests: () => TESTS, ...overrides,
+  });
+
+  it('records only unchanged inputs from the preplanned run after setup', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-memo-resume-repo-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-resume-store-'));
+    writeRepo(root, FILES);
+    const changed = 'server/lib/a.test.js';
+    const unchanged = 'server/lib/c.test.js';
+    const prepared = prepareMemoRun([changed, unchanged], {
+      scope: 'server', memoDir, repoRoot: root,
+    });
+    writeRepo(root, { 'server/lib/a.js': 'export const a = 2;\n' });
+
+    const { written, unrecorded } = recordTestMemo({
+      scope: 'server', repoRoot: root, memoDir, plan: prepared, passed: prepared.run,
+      dependencies: new Map([[changed, [changed, 'server/lib/a.js']], [unchanged, [unchanged]]]), source: 'ci',
+    });
+    expect(written).toBe(2);
+    expect(unrecorded).toEqual([{
+      test: changed, declared: false,
+      reason: 'floor key: an input changed while the run was in flight; recorded key: an input changed while the run was in flight',
+    }]);
+    expect(readMemoRecord(memoDir, 'server', changed)).toBeNull();
+    expect(readMemoRecord(memoDir, 'server', unchanged).modules).toEqual([unchanged]);
+    expect(plan({ env: process.env, platform: process.platform, arch: process.arch, nodeVersion: process.versions.node,
+      repoFiles: [changed, unchanged] }).run).toEqual([changed]);
   });
 
   // #18634, the safety property of a `test-memo: git-fixture` suite: it is

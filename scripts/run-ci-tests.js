@@ -16,7 +16,7 @@ import { browserShardSlice } from './lib/browserSuites.js';
 import { browserProfileAcceptedVerdicts, browserTestProfileArgs, browserTestProfileFiles, assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES } from './lib/browserTestProfiles.js';
 import {
   clearVitestDependencies, createToolVersionResolver, currentCommit, fileResultsFromReport, findVitestDependenciesFile,
-  memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, pruneTestMemo, readVitestDependencies, recordTestMemo, seedVitestDependencies, writeSelectionFile,
+  memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, prepareMemoRun, pruneTestMemo, readVitestDependencies, recordTestMemo, seedVitestDependencies, writeSelectionFile,
 } from './lib/testMemoRunner.js';
 import { saveFactsCache } from './lib/testMemo/factsCache.js';
 import { hasMemoEntries, resolveMemoDir } from './lib/testMemoStore.js';
@@ -520,6 +520,8 @@ function warmTestChrome() {
 
 async function main() {
   const cliArgs = process.argv.slice(2);
+  const preplannedPath = process.env.PORTOS_CI_PREPLANNED_RUN;
+  delete process.env.PORTOS_CI_PREPLANNED_RUN;
   const checkRemaining = cliArgs.includes('--check-remaining');
   const checkCtc = cliArgs.includes('--check-ctc');
   const positionalArgs = cliArgs.filter(arg => arg !== '--check-remaining' && arg !== '--check-ctc');
@@ -571,6 +573,12 @@ async function main() {
     process.exit(2);
   }
 
+  const browserJob = process.env.PORTOS_CI_BROWSER_OWNER === 'browser';
+  const beforeAudioSetup = browserJob && checkRemaining && process.env.PORTOS_CI_BEFORE_AUDIO_SETUP === '1';
+  if (preplannedPath && (!browserJob || scope !== 'server' || mode !== 'files' || beforeAudioSetup || checkCtc)) {
+    throw new Error('Preplanned runs require the post-audio browser files job.');
+  }
+
   if (mode === 'files' && selectedFiles.length === 0) {
     const deferredOnly = profile === 'smoke' && inputFiles.length > 0
       && inputFiles.every(file => BROWSER_FIDELITY_ONLY_FILES.includes(file));
@@ -614,30 +622,39 @@ async function main() {
   // related set can exceed the Windows command-line limit.
   const caseFilter = browserProfileArgs();
   const acceptVerdictsFrom = profile !== undefined ? browserProfileAcceptedVerdicts(profile) : [];
-  const browserJob = process.env.PORTOS_CI_BROWSER_OWNER === 'browser';
   const toolVersion = createToolVersionResolver({ verifyAudioPair: browserJob });
-  const beforeAudioSetup = browserJob && checkRemaining && process.env.PORTOS_CI_BEFORE_AUDIO_SETUP === '1';
-  const plan = planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard, caseFilter, acceptVerdictsFrom,
-    ...(browserJob ? {
-      shardSlice: (files, shard) => browserShardSlice(files, shard, profile),
-      requireToolVersions: true,
-      planBeforeClientSetup: checkRemaining,
-      freshToolVersion: createToolVersionResolver({ verifyAudioPair: true }),
-    } : {}),
-    provisionableTool: beforeAudioSetup && hasMemoEntries(memoDir) ? 'ffmpeg' : undefined,
-    toolVersion });
-  if (memoDir) {
-    console.log(memoSummaryLine(plan));
-    // The next run's planner starts from these parsed facts; a pull request's store is discarded.
-    if (!checkRemaining && !readOnlyMemo && plan.factsCache) saveFactsCache(memoDir, scope, plan.factsCache);
-    if (process.env.PORTOS_TEST_MEMO_VERBOSE === '1') {
-      for (const { test, via, from } of plan.skipped) console.log(`🧠   skipped ${test} (${via} key${from ? `, ${from} verdict` : ''})`);
+  const analysisOptions = { scope, repoRoot, memoDir, caseFilter, toolVersion,
+    ...(browserJob ? { requireToolVersions: true, freshToolVersion: createToolVersionResolver({ verifyAudioPair: true }) } : {}) };
+  let plan;
+  if (preplannedPath && !checkRemaining) {
+    const run = JSON.parse(readFileSync(preplannedPath, 'utf8'));
+    const owned = new Set(shard ? browserShardSlice(repoFiles, { repoRoot, scope, ...shard }, profile) : repoFiles);
+    if (!Array.isArray(run) || run.length === 0 || new Set(run).size !== run.length || run.some(test => !owned.has(test))) {
+      throw new Error('Invalid preplanned browser test selection for this shard.');
+    }
+    console.log(`Using the post-audio selection of ${run.length} browser test files.`);
+    plan = prepareMemoRun(run, { ...analysisOptions, memoDir: readOnlyMemo ? null : memoDir });
+  } else {
+    plan = planTestMemo({ ...analysisOptions, mode, repoFiles, repoSources, shard, acceptVerdictsFrom,
+      ...(browserJob ? {
+        shardSlice: (files, shard) => browserShardSlice(files, shard, profile),
+        planBeforeClientSetup: checkRemaining,
+      } : {}),
+      provisionableTool: beforeAudioSetup && hasMemoEntries(memoDir) ? 'ffmpeg' : undefined });
+    if (memoDir) {
+      console.log(memoSummaryLine(plan));
+      if (process.env.PORTOS_TEST_MEMO_VERBOSE === '1') {
+        for (const { test, via, from } of plan.skipped) console.log(`🧠   skipped ${test} (${via} key${from ? `, ${from} verdict` : ''})`);
+      }
     }
   }
+  // A trusted planning step can warm the post-audio recheck and the test run.
+  if (memoDir && !readOnlyMemo && plan.factsCache) saveFactsCache(memoDir, scope, plan.factsCache);
   if (checkRemaining) {
     console.log(plan.run.length === 0
       ? `No ${scope} tests left to run${shard ? ' in this shard' : ''}.`
       : `Remaining ${scope} tests${shard ? ` (shard ${process.env.CI_SHARD})` : ''}: ${plan.run.length}.`);
+    if (preplannedPath) writeFileSync(preplannedPath, JSON.stringify(plan.run));
     writeStepOutput('remaining', String(plan.run.length));
     // Once any file definitely needs to run, the normal runner will replan
     // after setup. Only a potentially empty shard needs a separate check.

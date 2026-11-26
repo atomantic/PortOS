@@ -607,6 +607,7 @@ jobs:
           CI_TEST_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).browser_files) }}
           PORTOS_REQUIRE_BROWSER_SUITES: '1'
           PORTOS_TEST_QUIET: 1
+          PORTOS_CI_PREPLANNED_RUN: ${{ runner.temp }}/portos-browser-run.json
         run: node scripts/run-ci-tests.js server --check-remaining
 
       # The test runner reads the runner's Chrome tree into the page cache
@@ -634,6 +635,7 @@ jobs:
           CI_TEST_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).browser_files) }}
           PORTOS_REQUIRE_BROWSER_SUITES: '1'
           PORTOS_TEST_QUIET: 1
+          PORTOS_CI_PREPLANNED_RUN: ${{ steps.browser-plan.outputs.recheck == 'true' && format('{0}/portos-browser-run.json', runner.temp) || '' }}
         run: node scripts/watch-ci-tests.js server
 
       - name: Save the test memo

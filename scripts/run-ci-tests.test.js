@@ -108,6 +108,51 @@ it('hands Vitest the selection as a file, sliced by the runner for the matrix sh
   }
 }, 150_000);
 
+it.skipIf(process.platform === 'win32')('hands the post-audio browser selection to the supervised runner and rejects files owned by another shard', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'portos-preplanned-browser-'));
+  const preplanned = join(fixture, 'browser-run.json');
+  const output = join(fixture, 'github-output');
+  const owned = 'server/services/musicVideo/animaticCapture.browser.test.js';
+  const otherShard = 'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js';
+  try {
+    installFakeNpm(fixture, [
+      REPORTING_NPM,
+      'const report = process.argv.find(arg => arg.startsWith("--outputFile.json=")).slice("--outputFile.json=".length);',
+      'require("fs").writeFileSync(report, JSON.stringify({ numPassedTests: 1, numFailedTests: 0, testResults: [] }));',
+    ].join('\n'));
+    const invoke = (script, args = []) => spawnSync(process.execPath, [join(import.meta.dirname, script), 'server', ...args], {
+      encoding: 'utf8', timeout: 120000,
+      env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, CI: '',
+        CI_TEST_MODE: 'files', CI_SHARD: '3/7', CI_TEST_FILES: JSON.stringify([owned, otherShard]),
+        PORTOS_CI_BROWSER_OWNER: 'browser', PORTOS_BROWSER_TEST_PROFILE: 'full', PORTOS_TEST_MEMO: 'off',
+        PORTOS_CI_PREPLANNED_RUN: preplanned, PORTOS_CI_BEFORE_AUDIO_SETUP: '',
+        PORTOS_CI_DIAGNOSTICS_DIR: join(fixture, 'diagnostics'),
+        GITHUB_OUTPUT: output, GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '',
+      },
+    });
+
+    const recheck = invoke('run-ci-tests.js', ['--check-remaining']);
+    expect(recheck.status, recheck.stderr).toBe(0);
+    expect(readFileSync(output, 'utf8')).toBe('remaining=1\n');
+    expect(JSON.parse(readFileSync(preplanned, 'utf8'))).toEqual([owned]);
+
+    const run = invoke('watch-ci-tests.js');
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toContain('Using the post-audio selection of 1 browser test files.');
+    const { args, selection } = JSON.parse(run.stdout.split('\n').find(line => line.startsWith('{"args"')));
+    expect(args).toContain('--testNamePattern=^(?!.*\\[local-performance\\]).*$');
+    expect(selection).toEqual({ include: [toWorkspacePath('server', owned)], exclude: [] });
+
+    writeFileSync(preplanned, JSON.stringify([otherShard]));
+    const invalid = invoke('run-ci-tests.js');
+    expect(invalid.status).toBe(1);
+    expect(invalid.stderr).toContain('Invalid preplanned browser test selection for this shard.');
+    expect(invalid.stdout).not.toContain('{"args"');
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+}, 150_000);
+
 it('runs the db scope through the server workspace\'s test:db:ci script with the same selection file', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'portos-db-scope-'));
   try {
@@ -254,15 +299,19 @@ describe('test memo through the real runner', () => {
       expect(coldPlan.status, coldPlan.stderr).toBe(0);
       expect(coldPlan.stdout).not.toContain('RAN ');
       expect(readFileSync(outputFile, 'utf8')).toBe('remaining=1\n');
+      expect(existsSync(join(memoDir, 'facts', `${scope}.json`))).toBe(true);
 
       const record = invoke([]);
       expect(record.status, record.stderr).toBe(0);
       expect(record.stdout).toContain('RAN ');
 
       writeFileSync(outputFile, '');
+      const factsPath = join(memoDir, 'facts', `${scope}.json`);
+      rmSync(factsPath);
       const warmPlan = invoke(['--check-remaining'], { GITHUB_EVENT_NAME: 'pull_request' });
       expect(warmPlan.status, warmPlan.stderr).toBe(0);
       expect(warmPlan.stdout).toContain('skipped 1 of 1 selected files');
+      expect(existsSync(factsPath)).toBe(false);
       expect(warmPlan.stdout).toContain(`No ${scope} tests left to run.`);
       expect(warmPlan.stdout).not.toContain('RAN ');
       expect(readFileSync(outputFile, 'utf8')).toBe('remaining=0\n');
@@ -855,6 +904,8 @@ describe('ci.yml shard wiring', () => {
     const recheckStep = body.slice(recheckIndex, clientIndex);
     expect(recheckStep).toContain("if: steps.browser-plan.outputs.recheck == 'true'");
     expect(recheckStep).toContain('run: node scripts/run-ci-tests.js server --check-remaining');
+    expect(recheckStep).toContain('PORTOS_CI_PREPLANNED_RUN: ${{ runner.temp }}/portos-browser-run.json');
+    expect(step).toContain("PORTOS_CI_PREPLANNED_RUN: ${{ steps.browser-plan.outputs.recheck == 'true' && format('{0}/portos-browser-run.json', runner.temp) || '' }}");
     for (const name of ['PORTOS_TEST_MEMO_DIR', 'CI_TEST_MODE', 'CI_SHARD', 'PORTOS_CI_BROWSER_OWNER',
       'CI_TEST_FILES', 'PORTOS_REQUIRE_BROWSER_SUITES', 'PORTOS_TEST_QUIET']) {
       const envLine = step.match(new RegExp(`^ +${name}: .+$`, 'm'))?.[0];
