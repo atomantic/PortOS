@@ -127,16 +127,6 @@ function isImplementationDetail(content) {
   return false;
 }
 
-/**
- * Extract task-related context
- * Only extracts if the output reveals something about user preferences
- */
-function extractTaskContext(_task, _output, _success) {
-  // Task completion summaries are not useful memories — they're git history.
-  // Only the LLM classifier should extract user-insight memories from task output.
-  return [];
-}
-
 const normalizeText = s => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
 
 /**
@@ -166,7 +156,8 @@ async function findExistingDuplicate(embedding, content, pendingMemories) {
   if (embedding) {
     const results = await searchMemories(embedding, {
       minRelevance: DEDUP_SIMILARITY_THRESHOLD,
-      limit: 3
+      limit: 3,
+      excludePersistentMind: true,
     }).catch(err => {
       console.log(`⚠️ Dedup vector search failed: ${err.message}`);
       return { memories: [] };
@@ -295,22 +286,6 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
     // Extract patterns from text
     const patterns = extractPatterns(output);
     allMemories.push(...patterns);
-
-    // Extract task context (but only if meaningful, not just task echoes)
-    if (task) {
-      const taskContext = extractTaskContext(task, output, true);
-      // Filter out low-quality task context memories
-      const filtered = taskContext.filter(m => {
-        // Reject memories that just echo the task description
-        if (m.content.startsWith(`Task "${task.description.substring(0, 50)}`)) return false;
-        // Reject memories that are just "## Summary" or similar
-        if (/^(##?\s*)?Summary\s*$/i.test(m.content)) return false;
-        // Reject very short memories
-        if (m.content.length < 30) return false;
-        return true;
-      });
-      allMemories.push(...filtered);
-    }
   }
 
   // Deduplicate
@@ -326,7 +301,7 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
   // Pass a high limit to avoid relying on the default pagination (50) — dedup
   // should see the full pending backlog so duplicates aren't missed when the
   // queue grows.
-  const pendingForDedup = await getMemories({ status: 'pending_approval', limit: 1000 })
+  const pendingForDedup = await getMemories({ status: 'pending_approval', limit: 1000, excludePersistentMind: true })
     .catch(err => {
       console.log(`⚠️ Failed to load pending memories for dedup: ${err.message}`);
       return { memories: [] };

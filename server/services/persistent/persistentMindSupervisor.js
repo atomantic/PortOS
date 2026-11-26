@@ -607,7 +607,7 @@ async function turnCanContinue(turnId, generation, signal) {
 }
 
 async function recordTurnProfile(turnId, prepared) {
-  await mutateMindState((mind) => {
+  const result = await mutateMindState((mind) => {
     if (mind.activeTurn?.id !== turnId) return { mind };
     return {
       mind: {
@@ -619,8 +619,10 @@ async function recordTurnProfile(turnId, prepared) {
           effort: prepared.effort || null,
         },
       },
+      value: true,
     };
   });
+  if (result.value) emitMindStatus(result.state);
 }
 
 async function heartbeat(turnId, generation) {

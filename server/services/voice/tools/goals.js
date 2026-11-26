@@ -68,6 +68,7 @@ export const GOALS_TOOLS = [
 
   {
     name: 'goal_update_progress',
+    hostControl: true,
     description:
       'Update the progress percent on an active goal. Use when the user says "bump my jacket goal to 40 percent", "set my estate goal to 25", "I\'m halfway done with X". Matches the goal by fuzzy title match — if multiple match, the most relevant wins but the alternatives are reported back.',
     parameters: {
@@ -108,6 +109,7 @@ export const GOALS_TOOLS = [
 
   {
     name: 'goal_log_note',
+    hostControl: true,
     description:
       'Attach a free-form progress note to an EXISTING NAMED GOAL (without changing the percent). ' +
       'ONLY use when the user explicitly references a specific goal by its title or short name — phrasings like "log on my <goal> goal that I talked to Y", "add a note to my jacket goal — found the pattern", "update my estate goal: signed the papers". ' +

@@ -21,6 +21,8 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 });
 
 vi.mock('../lib/db.js', () => ({ query: vi.fn() }));
+vi.mock('./mkserveRuntimeManager.js', () => ({ getMkserveRuntimeStatus: async () => ({ supported: false }) }));
+vi.mock('./splashRuntimeStatus.js', () => ({ getSplashRuntimeStatus: async () => ({ installed: true, supported: true, state: 'running' }) }));
 const { query } = await import('../lib/db.js');
 
 const { purgeCategory, getCategoryDetail } = await import('./dataManager.js');
@@ -92,6 +94,62 @@ describe('purgeCategory — item-scoped categories (#3327)', () => {
   it('still refuses the whole-category form even though the directory exists', async () => {
     await expect(purgeCategory('images')).rejects.toThrow(/only supports per-item purge/);
     expect(existsSync(dataPath('images', 'render-0001.png'))).toBe(true);
+  });
+});
+
+describe('Data Manager rebuildable cache policy', () => {
+  beforeEach(() => {
+    for (const dir of ['runtimes/splash', 'mkserve', 'codex-usage-inventory', 'unknown']) {
+      mkdirSync(dataPath('cache', dir), { recursive: true });
+      writeFileSync(dataPath('cache', dir, 'keep.bin'), 'fixture');
+    }
+    writeFileSync(dataPath('cache', 'accelerando.html'), 'book');
+    writeFileSync(dataPath('cache', 'runtime-update-review.json'), '{}');
+    mkdirSync(dataPath('codex-sources'));
+    writeFileSync(dataPath('codex-sources', 'session.jsonl'), 'source');
+  });
+
+  it('shows runtime state separately from the rebuildable scan cache', async () => {
+    const detail = await getCategoryDetail('cache');
+    expect(detail).toMatchObject({ mixed: true, purgeScope: 'items' });
+    const entries = Object.fromEntries(detail.items.map(item => [item.name, item]));
+    expect(entries.runtimes).toMatchObject({
+      canPurge: false,
+      sourceHref: '/models/llms-runtimes',
+      description: expect.stringContaining('Splash: running'),
+    });
+    expect(entries.mkserve.canPurge).toBe(false);
+    expect(entries['codex-usage-inventory']).toMatchObject({ canPurge: true, description: expect.stringContaining('session logs') });
+    expect(entries.unknown.canPurge).toBe(false);
+  });
+
+  it('blocks old bulk requests and direct removal of runtime, unknown, or state entries', async () => {
+    await expect(purgeCategory('cache')).rejects.toMatchObject({ code: 'CATEGORY_ITEM_PURGE_ONLY' });
+    for (const entry of ['runtimes', 'mkserve', 'unknown', 'runtime-update-review.json']) {
+      await expect(purgeCategory('cache', { subPath: entry })).rejects.toMatchObject({ code: 'CATEGORY_ITEM_PROTECTED' });
+      expect(existsSync(dataPath('cache', entry))).toBe(true);
+    }
+    await expect(purgeCategory('cache', { subPath: 'runtimes/splash' })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    expect(existsSync(dataPath('cache', 'runtimes', 'splash', 'keep.bin'))).toBe(true);
+  });
+
+  it('clears a single rebuildable entry without removing Codex session logs or runtime data', async () => {
+    await expect(purgeCategory('cache', { subPath: 'codex-usage-inventory' }))
+      .resolves.toEqual({ category: 'cache', subPath: 'codex-usage-inventory' });
+    expect(existsSync(dataPath('cache', 'codex-usage-inventory'))).toBe(false);
+    expect(existsSync(dataPath('cache', 'runtimes', 'splash', 'keep.bin'))).toBe(true);
+    expect(existsSync(dataPath('codex-sources', 'session.jsonl'))).toBe(true);
+    expect(existsSync(dataPath('cache', 'accelerando.html'))).toBe(true);
+  });
+
+  it('refuses a redirected allowed entry or directory using an allowed filename', async () => {
+    rmSync(dataPath('cache', 'codex-usage-inventory'), { recursive: true });
+    symlinkSync(dataPath('codex-sources'), dataPath('cache', 'codex-usage-inventory'), 'junction');
+    await expect(purgeCategory('cache', { subPath: 'codex-usage-inventory' })).rejects.toMatchObject({ code: 'CATEGORY_ITEM_PROTECTED' });
+    expect(existsSync(dataPath('codex-sources', 'session.jsonl'))).toBe(true);
+    rmSync(dataPath('cache', 'accelerando.html'));
+    mkdirSync(dataPath('cache', 'accelerando.html'));
+    await expect(purgeCategory('cache', { subPath: 'accelerando.html' })).rejects.toMatchObject({ code: 'CATEGORY_ITEM_PROTECTED' });
   });
 });
 

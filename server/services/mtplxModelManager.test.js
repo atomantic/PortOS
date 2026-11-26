@@ -229,7 +229,7 @@ describe('mtplxModelManager', () => {
       vi.spyOn(bufferedSpawnModule, 'bufferedSpawn').mockResolvedValue({
         success: false, code: 1, stdout: '', stderr: 'error: model not cached', timedOut: false,
       });
-      await expect(removeMtplxModel('Example/Qwen-MTP')).rejects.toThrow(/error: model not cached/);
+      await expect(removeMtplxModel('Example/Qwen-MTP')).rejects.toMatchObject({ status: 502, message: expect.stringMatching(/error: model not cached/) });
     });
   });
   // `mtplx pull` writes to MTPLX's own store (`~/.mtplx/models/<org>--<name>`), so a

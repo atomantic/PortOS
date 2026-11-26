@@ -72,8 +72,8 @@ async function holdTask(task, reason) {
   if (task.metadata?.jobId) {
     cosEvents.emit('job:spawn-failed', { jobId: task.metadata.jobId, reason: 'held' });
   }
-  // Unpersisted tasks (feature-agent runs) hold a pending pointer that only a
-  // lifecycle event clears; a held dispatch emits none of the usual ones.
+  // Feature Agents use this event to reconcile pending pointers, including
+  // legacy pointers to scheduled tasks that were never persisted.
   cosEvents.emit('task:held', { taskId: task.id, reason });
 }
 

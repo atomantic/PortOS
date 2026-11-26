@@ -1,7 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { runInNewContext } from 'node:vm';
-import { extractDeclaration } from '../lib/mirrorParity.js';
 import { ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
 
 // cos.js drags in a giant dependency graph (PM2, fs, sockets…) — mock it
@@ -129,27 +126,23 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     });
   });
 
-  it('does not dispatch an investigation for a known text-only model used with an image', async () => {
-    const source = readFileSync(new URL('./bootstrap.js', import.meta.url), 'utf8')
-      .replace('onRunFailed: (metadata, error) => {', 'function failureHook(metadata, error) {');
-    const hook = runInNewContext(`${extractDeclaration(source, 'failureHook')}; failureHook`, { errorEvents, ERROR_CATEGORIES, Date });
-    const observed = vi.fn();
-    errorEvents.on('error', observed);
-    try {
-      hook({ id: 'image-run', providerName: 'Ollama', providerId: 'ollama', model: 'text-model',
-        errorAnalysis: { category: ERROR_CATEGORIES.IMAGE_UNSUPPORTED } }, 'The selected model does not support image inputs.');
-      expect(observed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-        code: 'AI_PROVIDER_IMAGE_UNSUPPORTED', severity: 'warning', canAutoFix: false,
-      }));
-    } finally { errorEvents.off('error', observed); }
-    // Older emitters can still send the generic event; the autofixer must also
-    // recognize the structured category in that path.
+  it('does not investigate a text-only model receiving an image through a generic failure event', async () => {
     errorEvents.emit('error', {
       code: 'AI_PROVIDER_EXECUTION_FAILED', severity: 'error', canAutoFix: true,
       context: { provider: 'Ollama', model: 'text-model', errorAnalysis: { category: ERROR_CATEGORIES.IMAGE_UNSUPPORTED } },
     });
     await escalateProviderFailure({ context: { provider: 'Ollama', model: 'text-model', errorAnalysis: { category: ERROR_CATEGORIES.IMAGE_UNSUPPORTED } } });
     await vi.advanceTimersByTimeAsync(5500);
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'AI_RUNTIME_BUDGET_EXHAUSTED', 'AI_OUTPUT_LIMIT_EXCEEDED', 'AI_PROVIDER_CONTENT_REFUSED', 'AI_PROVIDER_IMAGE_UNSUPPORTED',
+  ])('does not investigate %s warnings', async (code) => {
+    errorEvents.emit('error', {
+      code, severity: 'warning', canAutoFix: false, context: { provider: 'Example CLI', model: 'm-1' },
+    });
+    await vi.advanceTimersByTimeAsync(6000);
     expect(addTask).not.toHaveBeenCalled();
   });
 
@@ -183,31 +176,6 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     } finally {
       logSpy.mockRestore();
     }
-  });
-
-  it.each([
-    ['runtime-budget-exhausted', 'AI_RUNTIME_BUDGET_EXHAUSTED'],
-    ['output-limit', 'AI_OUTPUT_LIMIT_EXCEEDED'],
-  ])('publishes %s as a warning without an investigation', async (category, code) => {
-    // Execute the real bootstrap hook without booting daemons/DB/schedulers.
-    const source = readFileSync(new URL('./bootstrap.js', import.meta.url), 'utf8')
-      .replace('onRunFailed: (metadata, error) => {', 'function failureHook(metadata, error) {');
-    const declaration = extractDeclaration(source, 'failureHook');
-    expect(declaration).toBeTruthy();
-    const hook = runInNewContext(`${declaration}; failureHook`, { errorEvents, ERROR_CATEGORIES, Date });
-    const observed = vi.fn();
-    errorEvents.on('error', observed);
-    try {
-      hook({ id: 'budget-run', providerName: 'Example API', providerId: 'example-api', model: 'm-1',
-        timeoutBound: 'absolute', timeoutOrigin: 'caller-budget', runtimeBudgetMs: 120000,
-        errorAnalysis: { category } }, 'Caller budget exhausted');
-      expect(observed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-        code, severity: 'warning', canAutoFix: false,
-        context: expect.objectContaining({ timeoutOrigin: 'caller-budget', runtimeBudgetMs: 120000 }),
-      }));
-      await vi.advanceTimersByTimeAsync(6000);
-      expect(addTask).not.toHaveBeenCalled();
-    } finally { errorEvents.off('error', observed); }
   });
 
   it('does not investigate caller budgets or poison dedupe for a later provider fault', async () => {

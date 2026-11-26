@@ -126,7 +126,7 @@ export const LOCAL_RUNTIME_DESCRIPTORS = {
     capabilities: PM2_CAPABILITIES,
     copy: {
       idleRelease: 'Minutes of PortOS inactivity after which llama.cpp unloads the model in place and reloads it on the next request. 0 = keep it resident. Applies from the next start.',
-      install: 'llama.cpp installed',
+      install: (r) => r?.message || 'llama.cpp installed successfully',
       upgrade: (r) => r?.note || 'llama.cpp updated',
       stop: (r) => r?.message || 'llama-server stopped',
     },

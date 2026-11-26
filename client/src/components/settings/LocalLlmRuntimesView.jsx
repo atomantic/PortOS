@@ -123,7 +123,6 @@ export default function LocalLlmRuntimesView({ view } = {}) {
   // stop one (#7414 moved every other lifecycle control here).
   const [fleetHostStatus, setFleetHostStatus] = useState(null);
   const { confirm: downloadConfirm, request: requestWeightDownload, cancel: cancelDownloadConfirm, confirmRun: runDownloadConfirm } = useDownloadPreflightConfirm();
-  const [llamaLoading, setLlamaLoading] = useState(false);
   const [llamaPresetId, setLlamaPresetId] = useState(DEFAULT_SPEC_PRESET_ID);
   const [llamaForm, setLlamaForm] = useState({
     model: '',
@@ -221,10 +220,28 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     status, loading, loadStatus, runAction, installBackend: installRuntimeBackend,
     actionInProgress, busy, progressMsg, confirmAction, setConfirmAction,
   } = useLocalLlmStatus({ onRefresh: refreshRuntimes });
+  const llamaBusy = actionInProgress?.endsWith('-llama');
   const runRuntimeAction = (id, action, payload) => {
+    if (busy) return;
     const { api, kind, copy } = LOCAL_RUNTIME_DESCRIPTORS[id];
     const invoke = () => action === 'start' ? api.start(payload ?? {}) : api[action]();
     const key = `runtime-${action}-${id}`;
+    if (id === 'llama' && action !== 'upgrade') {
+      const failureMessage = `Failed to ${action} ${action === 'install' ? 'llama.cpp' : 'llama-server'}`;
+      const options = { silent: true };
+      return runAction(key, async () => {
+        const result = await (action === 'start' ? api.start(payload, options) : api[action](options));
+        if (!result?.success) throw new Error(result?.message || result?.error || failureMessage);
+        return result;
+      }, action === 'start'
+        ? (result) => `llama-server started (PID ${result.pid}) on port ${payload.port}`
+        : copy[action], {
+        onError: (err) => {
+          if (!err?.toasted) toast.error(err?.message || failureMessage);
+          loadRuntime('llama');
+        },
+      });
+    }
     if (kind === 'bundle') {
       return runAction(key, async () => {
         const result = await invoke();
@@ -594,9 +611,10 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     }
   };
 
-  const handleStartLlama = async (e) => {
+  const handleStartLlama = (e) => {
     e?.preventDefault?.();
     // Submitting with Enter bypasses the disabled button, so re-check here.
+    if (busy) return;
     if (llamaModelMissing) {
       toast.error('Please specify a base model path (e.g. models/Qwen3.8-27B-Q4_K_M.gguf)');
       return;
@@ -605,7 +623,6 @@ export default function LocalLlmRuntimesView({ view } = {}) {
       toast.error(`${llamaStartBlockedReason} — the GGUF isn't on this machine yet.`);
       return;
     }
-    setLlamaLoading(true);
     const config = { ...llamaForm };
     for (const [field, fallback] of Object.entries(LLAMA_NUMBER_DEFAULTS)) {
       if (!Number.isFinite(config[field])) config[field] = fallback;
@@ -616,52 +633,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     for (const field of LLAMA_TUNING_FIELDS) {
       if (config[field] === '' || config[field] === null) delete config[field];
     }
-    try {
-      const res = await LOCAL_RUNTIME_DESCRIPTORS.llama.api.start(config);
-      if (res?.success) {
-        toast.success(`llama-server started (PID ${res.pid}) on port ${config.port}`);
-      }
-      loadRuntime('llama');
-    } catch (err) {
-      toast.error(err?.message || 'Failed to start llama-server');
-      loadRuntime('llama');
-    } finally {
-      setLlamaLoading(false);
-    }
-  };
-
-  const handleStopLlama = async () => {
-    setLlamaLoading(true);
-    try {
-      const res = await LOCAL_RUNTIME_DESCRIPTORS.llama.api.stop();
-      if (res?.success) {
-        toast.success(res.message || 'llama-server stopped');
-      } else {
-        toast.error(res?.message || 'Could not stop server');
-      }
-      loadRuntime('llama');
-    } catch (err) {
-      toast.error(err?.message || 'Failed to stop llama-server');
-      loadRuntime('llama');
-    } finally {
-      setLlamaLoading(false);
-    }
-  };
-
-  const handleInstallLlama = async () => {
-    setLlamaLoading(true);
-    try {
-      const res = await LOCAL_RUNTIME_DESCRIPTORS.llama.api.install();
-      if (res?.success) {
-        toast.success(res.message || 'llama.cpp installed successfully');
-      }
-      loadRuntime('llama');
-    } catch (err) {
-      toast.error(err?.message || 'Failed to install llama.cpp');
-      loadRuntime('llama');
-    } finally {
-      setLlamaLoading(false);
-    }
+    return runRuntimeAction('llama', 'start', config);
   };
 
   const handlePresetSelect = (presetId) => {
@@ -705,10 +677,10 @@ export default function LocalLlmRuntimesView({ view } = {}) {
       )}
       <h2 id="llm-runtimes-heading" className="sr-only">Runtimes</h2>
       {/* One start/stop/install surface for every local server PortOS can run */}
-      {(progressMsg || busy || llamaLoading || mtplxDownload || slotstreamDownload || Object.keys(llamaDownloads).length > 0) && (
+      {(progressMsg || busy || mtplxDownload || slotstreamDownload || Object.keys(llamaDownloads).length > 0) && (
         <div role="status" className="flex flex-wrap items-center gap-3 rounded-lg border border-port-accent/30 p-3 text-sm text-port-accent">
           <BrailleSpinner />{progressMsg || 'Runtime work in progress'}
-          {(llamaLoading || Object.keys(llamaDownloads).length > 0) && <Link className="underline" to={`/models/llms-runtimes/llama${search}`}>llama.cpp progress</Link>}
+          {(llamaBusy || Object.keys(llamaDownloads).length > 0) && <Link className="underline" to={`/models/llms-runtimes/llama${search}`}>llama.cpp progress</Link>}
           {mtplxDownload && <Link className="underline" to={`/models/llms-runtimes/mtplx${search}`}>MTPLX progress</Link>}
           {slotstreamDownload && <Link className="underline" to={`/models/llms-runtimes/slotstream${search}`}>Slotstream progress</Link>}
         </div>
@@ -872,12 +844,12 @@ export default function LocalLlmRuntimesView({ view } = {}) {
           <div className="flex items-center gap-3">
             <button
               onClick={() => loadRuntime('llama')}
-              disabled={llamaLoading}
+              disabled={busy}
               className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white transition-colors"
               title="Refresh llama-server status"
               aria-label="Refresh llama-server status"
             >
-              <RefreshCw size={13} className={llamaLoading ? 'animate-spin' : ''} />
+              <RefreshCw size={13} className={llamaBusy ? 'animate-spin' : ''} />
             </button>
             <Link
               to="/ai"
@@ -939,11 +911,11 @@ export default function LocalLlmRuntimesView({ view } = {}) {
                   hid the Stop button for a server PortOS does own. */}
               {llamaStatus.managed === true ? (
                 <button
-                  onClick={handleStopLlama}
-                  disabled={llamaLoading}
+                  onClick={() => runRuntimeAction('llama', 'stop')}
+                  disabled={busy}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-port-error/20 hover:bg-port-error/30 text-port-error text-xs font-medium rounded-lg transition-colors disabled:opacity-50 shrink-0"
                 >
-                  {llamaLoading ? <BrailleSpinner /> : <PowerOff size={13} />}
+                  {llamaBusy ? <BrailleSpinner /> : <PowerOff size={13} />}
                   Stop Server
                 </button>
               ) : llamaStatus.managed === false ? (
@@ -1018,7 +990,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
                     onDownload={handleDownloadSpecModel}
                     onCancel={handleCancelSpecModelDownload}
                     onDelete={handleDeleteSpecModel}
-                    disabled={llamaLoading}
+                    disabled={busy}
                   />
                 ))}
               </div>
@@ -1223,7 +1195,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
                 )}
                 <button
                   type="submit"
-                  disabled={llamaLoading || llamaStartBlocked}
+                  disabled={busy || llamaStartBlocked}
                   title={llamaModelMissing
                     ? 'Target Base Model (GGUF Path) is required before the server can start'
                     : llamaStartBlocked
@@ -1231,7 +1203,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
                       : 'Launch llama-server with these settings'}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent text-xs font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                 >
-                  {llamaLoading ? <BrailleSpinner /> : <Power size={13} />}
+                  {llamaBusy ? <BrailleSpinner /> : <Power size={13} />}
                   Start Speculative Server
                 </button>
               </div>
@@ -1248,11 +1220,11 @@ export default function LocalLlmRuntimesView({ view } = {}) {
               </p>
             </div>
             <button
-              onClick={handleInstallLlama}
-              disabled={llamaLoading}
+              onClick={() => runRuntimeAction('llama', 'install')}
+              disabled={busy}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent text-xs font-medium rounded-lg transition-colors disabled:opacity-50 shrink-0"
             >
-              {llamaLoading ? <BrailleSpinner /> : <Download size={13} />}
+              {llamaBusy ? <BrailleSpinner /> : <Download size={13} />}
               Install llama.cpp
             </button>
           </div>

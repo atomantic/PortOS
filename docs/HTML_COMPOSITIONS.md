@@ -302,8 +302,6 @@ preserved to keep document lettering readable. Source assets are unchanged;
 selecting a grade does not infer a look from references or invoke a provider.
 Saving the selection gates rendering until the server has accepted it.
 
-See the [synthetic visual validation and remaining acceptance](validation/9302-music-video-grade.md).
-
 ## Layered-template additions
 
 In **Compose → Film look → Template additions**, set the beat reaction (pulse

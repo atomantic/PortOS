@@ -10,6 +10,7 @@ import { fableLoomRunEvents } from './fableLoom/runEvents.js';
 import { trainingEvents } from './loraTraining/events.js';
 import { authEvents, isAuthEnabled, verifyRequestSession } from './auth.js';
 import { verifyPeerToken } from './authGate.js';
+import { PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { usageBackfillEvents } from './usageBackfillEvents.js';
 import { eidoverseWorldEvents } from './eidoverseWorldEvents.js';
 import { layaMlxEvents } from './layaMlxEvents.js';
@@ -1900,5 +1901,82 @@ describe('voice socket host-control boundary (#19169)', () => {
       await socket.middleware([event], next);
       expect(next).toHaveBeenCalledExactlyOnceWith();
     }
+  });
+});
+
+describe('command stream and peer relay authorization (#19353)', () => {
+  let io;
+  let socket;
+  const outputEvent = 'command:example-id:data';
+  const output = { data: 'synthetic output', stream: 'stdout' };
+
+  const connectSocket = ({ local = false, authMethod, headers = {} } = {}) => {
+    socket = makeSocket();
+    socket.data = { portosLocalConnection: local, portosAuthMethod: authMethod };
+    socket.handshake.headers = headers;
+    socket.disconnect = vi.fn();
+    socket.use = (middleware) => { socket.middleware = middleware; };
+    io.connect(socket);
+  };
+
+  const dispatch = async (event) => {
+    const next = vi.fn(() => socket.handlers[event]());
+    await socket.middleware([event], next);
+    return next;
+  };
+
+  beforeEach(() => {
+    io = makeIo();
+    initSocket(io);
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    vi.mocked(verifyRequestSession).mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    socket.handlers.disconnect();
+    authEvents.removeAllListeners('sessions:revoked-all');
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    vi.mocked(verifyRequestSession).mockResolvedValue(false);
+  });
+
+  it('refuses a remote password-free command subscriber before it receives output', async () => {
+    connectSocket();
+    expect(await dispatch('command:subscribe')).not.toHaveBeenCalled();
+    expect(socket.emitted).toContainEqual(['command:error', expect.objectContaining({ code: 'HOST_CONTROL_FORBIDDEN' })]);
+    broadcastToCommandSubscribers(outputEvent, output);
+    expect(socket.emitted).not.toContainEqual([outputEvent, output]);
+  });
+
+  it.each([
+    ['local password-free connection', { local: true }],
+    ['operator session', { headers: { cookie: 'portos_session=example-operator-session' }, authMethod: 'session' }],
+    ['agent session', { headers: { authorization: 'Bearer example-agent-session' }, authMethod: 'session' }],
+  ])('delivers command output to a subscribed %s', async (_name, connection) => {
+    if (connection.authMethod === 'session') {
+      vi.mocked(isAuthEnabled).mockResolvedValue(true);
+      vi.mocked(verifyRequestSession).mockImplementation(async ({ headers }) => headers === connection.headers);
+    }
+    connectSocket(connection);
+    expect(await dispatch('command:subscribe')).toHaveBeenCalledExactlyOnceWith();
+    expect(socket.emitted).toContainEqual(['command:subscribed']);
+    broadcastToCommandSubscribers(outputEvent, output);
+    expect(socket.emitted).toContainEqual([outputEvent, output]);
+  });
+
+  it('disconnects an authenticated peer before adding it to the command stream', async () => {
+    vi.mocked(isAuthEnabled).mockResolvedValue(true);
+    connectSocket({ authMethod: 'peer' });
+    expect(await dispatch('command:subscribe')).not.toHaveBeenCalled();
+    expect(socket.disconnect).toHaveBeenCalledWith(true);
+    broadcastToCommandSubscribers(outputEvent, output);
+    expect(socket.emitted).not.toContainEqual([outputEvent, output]);
+  });
+
+  it('limits password-free peer relays to allowed subscriptions even over a local connection', async () => {
+    connectSocket({ local: true, headers: { [PEER_INSTANCE_HEADER.toLowerCase()]: 'example-peer' } });
+    expect(await dispatch('cos:subscribe')).toHaveBeenCalledExactlyOnceWith();
+    expect(socket.emitted).toContainEqual(['cos:subscribed']);
+    expect(await dispatch('notifications:subscribe')).not.toHaveBeenCalled();
+    expect(socket.disconnect).toHaveBeenCalledWith(true);
   });
 });

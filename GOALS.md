@@ -28,11 +28,11 @@ Build a persistent digital twin — a machine-readable representation of identit
 
 ### 5. Creative Production Suite
 
-Make it easier to create than to consume. PortOS is an end-to-end creative studio: **Writers Room** (distraction-free prose with timed exercises and AI passes for summary, extraction, expansion, prose-to-script, media planning); **Universe Builder** (world bible generation, characters, locations, items, factions, and lore on a lockable canon canvas); **Series Pipeline** (multi-issue/episode production for comics, episodic video, and novel chapters with arc shapes, volume + season outlines, story bible, and per-stage prompts); **Creative Director** (treatment → scene plan → render orchestration for short films); **Image Gen** (FLUX, Z-Image, A1111, external endpoints); **Video Gen** (LTX text-to-video, image-to-video, audio-to-video, extend); **Timeline Editor** (stitch, composite, trim clips and audio); and asset/model management (Collections, LoRAs with Civitai sync, HuggingFace model cache, Image Cleaner). External work flows **in** through the **Importer** (analyze novels, screenplays, comics into structured Universes or Pipeline series). Finished work flows **out** through **Sharing** (cloud-synced buckets for cross-network distribution of universes, series, characters, and media). The Digital Twin briefs every creative tool on voice and taste so output reflects the user's authentic style.
+Make it easier to create than to consume. PortOS is an end-to-end creative studio: **Writers Room** (distraction-free prose with timed exercises and AI passes for summary, extraction, expansion, prose-to-script, media planning); **Universe Builder** (world bible generation, characters, locations, items, factions, and lore on a lockable canon canvas); **Series Pipeline** (multi-issue/episode production for comics, episodic video, and novel chapters with arc shapes, volume + season outlines, story bible, and per-stage prompts); **Creative Director** (treatment → scene plan → render orchestration for short films); **Image Gen** (FLUX, Z-Image, A1111, external endpoints); **Video Gen** (LTX text-to-video, image-to-video, audio-to-video, extend); **Timeline Editor** (stitch, composite, trim clips and audio); **Music Studio** (generate and design tracks); **Music Videos** (plan, review, and render videos from tracks); and asset/model management (Collections, LoRAs with Civitai sync, HuggingFace model cache, Image Cleaner). External work flows **in** through the **Importer** (analyze novels, screenplays, comics into structured Universes or Pipeline series). Finished work flows **out** through **Sharing** (cloud-synced buckets for cross-network distribution of universes, series, characters, and media). The Digital Twin briefs every creative tool on voice and taste so output reflects the user's authentic style.
 
 ### 6. Developer Productivity Toolkit
 
-Web-based shell, git tools, process monitoring, browser control (CDP/Playwright), action history, AI run tracking, in-app code runner, submodule tracking, reference-repo indexing, and prompt management. Everything a developer needs for daily work, accessible from any device. The toolkit doubles as a vehicle for **exploring the evolving world of software engineering** — every new AI provider, agent framework, or modeling technique gets a first-class integration so the user can build with it, not just read about it. CyberCity 3D visualization brings the running system to life.
+Web-based shell, git tools, process monitoring, browser control (CDP/Playwright), action history, AI run tracking, in-app code runner, submodule tracking, reference-repo indexing, and prompt management. Everything a developer needs for daily work, accessible from any device. The toolkit doubles as a vehicle for **exploring the evolving world of software engineering** — every new AI provider, agent framework, or modeling technique gets a first-class integration so the user can build with it, not just read about it. The optional [Eidoverse Worlds](./docs/features/eidoverse.md) integration projects PortOS resources into a private 3D world.
 
 ### 7. Self-Improving Intelligence
 
@@ -66,8 +66,6 @@ Sharpen the mind alongside everything else. **POST** delivers a daily 5-minute s
 
 - **Multi-Modal Identity Capture**: Voice, video, and image-based identity modeling beyond text
 - **Chronotype-Aware Scheduling**: Align task scheduling to natural energy patterns derived from genome sleep markers
-- **Music & Audio Production**: audio mixing and podcast studio (deferred until 128GB hardware arrives)
-- **Federated Sharing**: Direct peer-to-peer distribution between PortOS instances on the same Tailnet, beyond the cloud-bucket-based Sharing system
 
 ## Non-Goals
 
@@ -79,7 +77,7 @@ Sharpen the mind alongside everything else. **POST** delivers a daily 5-minute s
 
 ## Target Users
 
-PortOS is built for Adam Eivy — a single developer managing active git repos, orchestrating AI workflows, and building a persistent digital identity on a local machine. It's a personal tool designed around one person's workflows, preferences, and ambitions. While open source (MIT), it's not designed for general adoption or onboarding other users.
+PortOS is built for a single developer managing active git repos, orchestrating AI workflows, and building a persistent digital identity on a local machine. The open-source project (MIT) is designed around one person's workflows, preferences, and ambitions.
 
 ## Current State
 
@@ -94,12 +92,12 @@ The active roadmap lives in the GitHub issue tracker — open issues labeled
 | Autonomous AI Orchestration | Ongoing | CoS, agent runner, skill system, autonomous jobs, task learning all operational. Continuous refinement. |
 | Personal Knowledge Management | Ongoing | Brain capture, semantic memory, weekly digests, memory classification all complete. Quality tuning continues. |
 | Digital Identity Modeling | Ongoing | Soul, digital twin, identity orchestrator (M42 P1-P4), behavioral feedback, taste profiling, autobiography, Ask Yourself all shipped. Rule-based cross-insights engine (M42 P5) shipped. |
-| Creative Production Suite | Ongoing | Writers Room, Universe Builder, Series Pipeline, Creative Director, Image Gen, Video Gen, Timeline Editor, Collections, LoRAs, Importer, Sharing all shipped. FLUX.2 multi-reference, whole-episode audio, rich-text prose editor, episodic-video provider expansion in flight. |
-| Developer Productivity Toolkit | Complete | Shell, git, browser, history, usage, JIRA, code runner, submodules, reference repos, CyberCity all shipped. |
+| Creative Production Suite | Ongoing | Writers Room, Universe Builder, Series Pipeline, Creative Director, Image Gen, Video Gen, Timeline Editor, Collections, LoRAs, Importer, and Sharing are available. Music Studio supports ACE-Step and MiniMax Music 3 generation, Music Designer renders with SuperCollider, and Music Videos supports planning, revision review, and rendering. |
+| Developer Productivity Toolkit | Complete | Shell, git, browser, history, usage, JIRA, code runner, submodules, and reference repos are available. Eidoverse Worlds is an optional integration. |
 | Self-Improving Intelligence | Ongoing | Task learning, self-improvement analysis, autonomous jobs, self-healing metrics active. |
 | Full Digital Autonomy | Ongoing | Agent tools, Moltworld, scheduling, skill system operational. Expanding platform coverage and autonomy tiers. |
 | Knowledge Legacy | Ongoing | Autobiography, genome, behavioral profiles, written work, built worlds captured. Portable Legacy Export bundle (Digital Twin → Legacy Bundle) ships a self-contained Markdown + JSON + manifest archive, with optional rendered PDF. Richer key-decisions sourcing and deeper domain coverage continue. |
-| Anywhere Access | Complete | Tailscale integration working. Mobile-responsive UI. All features accessible remotely. |
+| Anywhere Access | Complete | Tailscale provides private access with a mobile-responsive UI. Configured federation channels sync supported records between the user's own instances. |
 | Health & Longevity | Ongoing | MeatSpace shipped with death clock, LEV tracker, alcohol/blood/body/epigenetic/eye/genome/lifestyle tracking. Apple Health integration shipped (live ingest, metrics/correlation queries, bulk XML/clinical import). |
 | Personal Productivity & Life Management | Ongoing | Calendar (agenda/day/week/month/lifetime/review), Messages inbox + drafts, voice agent, Telegram bot, OpenClaw operator chat all shipped. Proactive CoS speech triggers and voice-tool coverage expanding. |
 | Cognitive Training & Lifelong Learning | Ongoing | POST (math/wordplay/memory/verbal/imagination), Morse, Rapid Reader, Wiki shipped. Adding more training domains and integrating cross-domain insights (e.g. genome-informed cognitive load patterns). |

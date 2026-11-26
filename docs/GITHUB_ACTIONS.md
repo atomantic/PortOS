@@ -84,7 +84,7 @@ as composite actions under `.github/actions/`:
 | `setup-server` | `server`, `database`, `browser`, `windows-server`, `macos-native` | Node 26, the cached and stamped `server/node_modules`, the trusted rebuild, the Vitest transform cache |
 | `setup-client` | `client`, `lint`, `browser` | Node 26 (unless `setup-node: 'false'`), the cached `client/node_modules` |
 | `test-memo` | `server`, `client`, `database`, `browser`, `windows-server` | The memo restore and its key lineage; jobs save with `steps.test-memo.outputs.key` |
-| `diff-base` | `server`, `client`, `windows-server` | `scripts/ci-base-sha.js` (the `impact` job wraps the same script in its stage diagnostics) |
+| `diff-base` | `server`, `client`, `windows-server` | `scripts/ci-base-sha.js` (the `impact` job runs the same script directly) |
 | `db-tools` | `database`, `browser` | The APT download cache and `scripts/ci-install-db-tools.sh` for a given `pg-major` |
 
 Every `run:` step in an action names `shell: bash`, as composite actions
@@ -462,47 +462,13 @@ in the root AGENTS.md; combined-tree guards remain available for investigation.
 3. For monorepos, add package.json update steps for each workspace
 4. Update the changelog file path pattern if different
 
-### Impact job command and finalization evidence
+### Impact job finalization
 
-The `impact` job records the fixed stages `admission`, `base`, `hidden-content`,
-`import-case`, `plan`, and `syntax`
-through `scripts/ci-impact-diagnostics.js`. Each stage logs its start and direct
-child `exit`/`close` status and elapsed milliseconds. Its original stdout, GitHub
-command files, environment inputs and nonzero status pass through; a signal or
-spawn failure remains a failure. No additional provider calls or retries occur.
-
-A random marker inherited only by that stage's command lets Linux `/proc` scans
-count surviving same-user owned processes after close and at the final
-`always()` checkpoint. The scan is limited to 4,096 process entries and one second
-per snapshot. Public evidence contains only fixed stage names, numeric statuses,
-signals, elapsed time, counts and coverage. Markers, PIDs, host paths, environment
-values and raw command lines are not published. Private per-stage records stay
-under the runner's temporary directory; they are not uploaded as artifacts.
-
-`coverage=partial|unavailable`, missing records, or missing events mean unknown,
-not clean. Even complete coverage is a point-in-time observation of processes
-that retained their inherited marker; it cannot prove the absence of work that
-removed its marker. Nonzero owned counts are evidence to investigate, not
-permission to kill a process. The observer signals/deletes nothing and does not
-claim to repair an orphan. A settlement change needs a reproduced owner and a
-causal negative control first.
-
-The final checkpoint precedes checkout post-actions and the runner's own
-finalization. Interpret the first unconfirmed boundary in order: stage start →
-command exit → command close → owned-process snapshot → checkout post-action →
-runner `Complete job` → overall job result. A successful repository checkpoint
-cannot attest the later runner/result-service handoff. Keep the ten-minute impact
-timeout, and fail-closed `CI Gate`.
-
-#### Retained evidence rule
-
-An impact job whose last retained log line is runner orphan cleanup, with every
-step later read back as successful, proves nothing about the runner/job-result
-handoff: that boundary stays unconfirmed. Neither a repository-created orphan nor
-a specific upstream incident has been proved. Preserve the cancelled attempt; a
-recurrence needs the fixed-stage evidence plus the runner's completion, queue and
-transport diagnostics (sensitive fields redacted) before changing lifecycle
-behavior or attributing a GitHub incident.
+The impact job runs each command in its own GitHub Actions step. Successful
+steps establish that those commands finished. The runner’s checkout cleanup
+and job-result handoff follow the steps. Use the job result and runner logs
+to investigate a stall at that boundary. The ten-minute impact timeout bounds
+the job, and CI Gate requires a successful result.
 
 ## Test runs report every failure
 

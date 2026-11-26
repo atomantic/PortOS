@@ -140,7 +140,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {latest.error && <p role="alert" className="text-port-error">{latest.error.message || 'Unable to refresh memory'} <button type="button" onClick={latest.refetch}>Retry memory</button></p>}
+          {latest.error && <p role="alert" className="text-port-error">{latest.error.message || 'Unable to refresh memory'} <button type="button" onClick={latest.refetch} className="ml-2 rounded-lg border border-port-border px-3 py-1.5 text-sm text-gray-300 hover:bg-port-border/70 focus:outline-hidden focus:ring-2 focus:ring-port-accent">Retry memory</button></p>}
           {!loaded && !latest.error && <p role="status">Loading memory…</p>}
           {(newerRevision || retired) && <p role="status" className="text-port-warning">
             {retired ? 'This memory has been retired.' : 'A newer revision exists.'} Your draft and loaded version are preserved. Close and reopen to load the latest revision.
@@ -149,12 +149,13 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
           {/* Type */}
           <div>
             <span className="block text-sm text-gray-400 mb-2">Type</span>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Memory type">
               {MEMORY_TYPES.map(type => (
                 <button
                   key={type}
                   type="button"
                   onClick={() => setFormData({ ...formData, type })}
+                  aria-pressed={formData.type === type}
                   className={`px-3 py-1.5 text-sm rounded-lg border transition-colors ${
                     formData.type === type
                       ? MEMORY_TYPE_COLORS[type]
@@ -213,8 +214,12 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
                 <option value="patterns">Patterns</option>
                 <option value="conventions">Conventions</option>
                 <option value="preferences">Preferences</option>
+                <option value="values">Values</option>
                 <option value="system">System</option>
                 <option value="project">Project</option>
+                {!['other', 'codebase', 'workflow', 'tools', 'architecture', 'patterns', 'conventions', 'preferences', 'values', 'system', 'project'].includes(formData.category) && (
+                  <option value={formData.category}>{formData.category}</option>
+                )}
               </select>
             </FormField>
             <FormField label="Associated App" className="flex-1" labelClassName="block text-sm text-gray-400 mb-2">
@@ -224,9 +229,13 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
                 className="w-full px-3 py-3 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
               >
                 <option value="">None (General)</option>
+                {formData.sourceAppId === 'brain' && <option value="brain">Brain</option>}
                 {apps?.map(app => (
                   <option key={app.id} value={app.id}>{app.name}</option>
                 ))}
+                {formData.sourceAppId && formData.sourceAppId !== 'brain' && !apps?.some(app => app.id === formData.sourceAppId) && (
+                  <option value={formData.sourceAppId}>{getAppName(formData.sourceAppId, apps, formData.sourceAppId)}</option>
+                )}
               </select>
             </FormField>
           </div>
@@ -244,7 +253,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
                   <button
                     type="button"
                     onClick={() => handleRemoveTag(tag)}
-                    aria-label="Delete"
+                    aria-label={`Remove tag ${tag}`}
                     className="min-h-[44px] min-w-[44px] flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
                   >
                     <Trash2 size={14} />
@@ -266,7 +275,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
                 type="button"
                 onClick={handleAddTag}
                 disabled={!newTag.trim()}
-                aria-label="Add"
+                aria-label="Add tag"
                 className="px-4 py-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-port-border hover:bg-port-border/70 text-gray-300 rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Plus size={20} />

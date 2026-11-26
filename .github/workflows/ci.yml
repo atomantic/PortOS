@@ -78,7 +78,7 @@ jobs:
       # A red impact job keeps CI Gate red; skipped test jobs are not evidence.
       # Re-running this run is GitHub's writer-only, exact-SHA release control.
       - name: Require maintainer release for Dependabot
-        run: node scripts/ci-impact-diagnostics.js admission -- node scripts/ci-dependabot-admission.js
+        run: node scripts/ci-dependabot-admission.js
 
       # Reads the base commit off HEAD^1 rather than the event payload, so a
       # depth-2 clone is enough for every three-dot diff downstream. Exports
@@ -93,7 +93,7 @@ jobs:
         env:
           CI_GATED_BASE_LOOKUP: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.full != true }}
           GITHUB_TOKEN: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.full != true && github.token || '' }}
-        run: node scripts/ci-impact-diagnostics.js base -- node scripts/ci-base-sha.js
+        run: node scripts/ci-base-sha.js
 
       # Before any reviewer — human or model — reads this diff. Pattern
       # matching over the added lines only: invisible Unicode and compressed or
@@ -101,13 +101,13 @@ jobs:
       # approving it, so a hit fails the run rather than being reported. Every
       # other job needs this one, so the whole suite stops here.
       - name: Scan the diff for hidden content
-        run: node scripts/ci-impact-diagnostics.js hidden-content -- node scripts/scan-diff-hidden-content.js
+        run: node scripts/scan-diff-hidden-content.js
 
       # Linux resolves `./Foo.js` only as spelled; macOS and Windows do not, so
       # a macOS-only run cannot see that failure. Checked here on every pull
       # request.
       - name: Check relative imports match the tracked path case
-        run: node scripts/ci-impact-diagnostics.js import-case -- node scripts/check-import-case.js
+        run: node scripts/check-import-case.js
 
       - name: Resolve the pinned database image
         id: db-image
@@ -124,17 +124,11 @@ jobs:
           # The planner turns a PR into `release` into a full plan: that PR is
           # the single gate a release ships behind, so it never runs scoped.
           CI_BASE_REF: ${{ github.base_ref }}
-        run: node scripts/ci-impact-diagnostics.js plan -- node scripts/ci-test-plan.js
+        run: node scripts/ci-test-plan.js
 
       # The entry-point syntax check must not ride a skippable job.
       - name: Check server entry-point syntax
-        run: node scripts/ci-impact-diagnostics.js syntax -- node --check server/index.js
-
-      # This precedes checkout post-actions and runner finalization; it cannot
-      # attest that the hosted runner acknowledged the completed job.
-      - name: Record impact process settlement
-        if: always()
-        run: node scripts/ci-impact-diagnostics.js settlement
+        run: node --check server/index.js
 
   server:
     # Sharded on a full plan — see docs/CI_TEST_SELECTION.md "Full-suite sharding".

@@ -82,6 +82,24 @@ describe('DataDog Service', () => {
   });
 
   describe('upsertInstance', () => {
+    it('preserves concurrent upserts and deletes', async () => {
+      let stored = { instances: {} };
+      readJSONFile.mockImplementation(async () => structuredClone(stored));
+      writeFile.mockImplementation(async (_path, serialized) => {
+        await new Promise((resolve) => setImmediate(resolve));
+        stored = JSON.parse(serialized);
+      });
+
+      await Promise.all([
+        upsertInstance('one', { name: 'One', site: 'api.datadoghq.com', apiKey: '1' }),
+        upsertInstance('two', { name: 'Two', site: 'api.datadoghq.com', apiKey: '2' })
+      ]);
+      expect(Object.keys(stored.instances).sort()).toEqual(['one', 'two']);
+
+      await Promise.all([deleteInstance('one'), deleteInstance('two')]);
+      expect(stored).toEqual({ instances: {} });
+    });
+
     it('should create a new instance', async () => {
       const result = await upsertInstance('new-dd', {
         name: 'New DD',

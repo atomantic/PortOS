@@ -742,7 +742,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     await waitFor(() => {
       expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({
         model: 'models/my-model.gguf',
-      }));
+      }), { silent: true });
     });
   });
 
@@ -815,7 +815,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
         draftModel: 'models/Qwen3.8-27B-DSpark-bf16.gguf',
         specType: 'draft-dspark',
         parallel: 1,
-      }));
+      }), { silent: true });
     });
   });
 
@@ -873,7 +873,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     fireEvent.click(screen.getByRole('button', { name: /Start Speculative Server/ }));
 
     await waitFor(() => {
-      expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({ nGpuLayers: 99 }));
+      expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({ nGpuLayers: 99 }), { silent: true });
     });
   });
 
@@ -890,7 +890,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     fireEvent.click(screen.getByRole('button', { name: /Start Speculative Server/ }));
 
     await waitFor(() => {
-      expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({ nGpuLayers: 0 }));
+      expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({ nGpuLayers: 0 }), { silent: true });
     });
   });
 
@@ -906,7 +906,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     fireEvent.click(screen.getByRole('button', { name: /Start Speculative Server/ }));
 
     await waitFor(() => {
-      expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({ alias: 'dspark' }));
+      expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({ alias: 'dspark' }), { silent: true });
     });
   });
 
@@ -986,7 +986,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
       expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({
         model: 'models/Example-Vision-27B-Q4_K_M.gguf',
         projector: 'models/Example-Vision-27B-mmproj-Q8_0.gguf',
-      }));
+      }), { silent: true });
     });
   });
 
@@ -1007,7 +1007,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     expect(startBtn).toBeEnabled();
     fireEvent.click(startBtn);
     await waitFor(() => {
-      expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({ projector: '' }));
+      expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({ projector: '' }), { silent: true });
     });
   });
 
@@ -1163,19 +1163,34 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     expect(link).toHaveAttribute('href', 'https://huggingface.co/models?search=dspark_qwen3_8b_block7-bf16');
   });
 
-  it('renders install button and triggers install when llama-server is not installed', async () => {
+  it.each(['detail', 'roster'])('locks both install controls during a failing %s install', async (source) => {
     const { getLlamaServerStatus, installLlamaServer } = await import('../../services/apiLocalLlm.js');
+    const toast = (await import('../ui/Toast')).default;
     getLlamaServerStatus.mockResolvedValue({ installed: false, running: false, managed: false, presets: specPresets() });
+    const pending = Promise.withResolvers();
+    installLlamaServer.mockReturnValueOnce(pending.promise);
 
     await renderRuntimes();
 
-    const installBtn = await screen.findByRole('button', { name: /Install llama\.cpp/ });
-    expect(installBtn).toBeInTheDocument();
-    fireEvent.click(installBtn);
+    const detail = await screen.findByRole('button', { name: 'Install llama.cpp' });
+    const card = screen.getByRole('heading', { name: 'Local Runtime Servers' }).closest('div.bg-port-card');
+    const row = within(card).getByText('llama.cpp').closest('div.flex.flex-col');
+    const roster = within(row).getByRole('button', { name: /^Install/ });
+    fireEvent.click(source === 'detail' ? detail : roster);
 
-    await waitFor(() => {
-      expect(installLlamaServer).toHaveBeenCalled();
+    expect(installLlamaServer).toHaveBeenCalledWith({ silent: true });
+    expect(detail).toBeDisabled();
+    expect(roster).toBeDisabled();
+
+    await act(async () => {
+      if (source === 'detail') pending.reject(new Error('Package manager failed'));
+      else pending.resolve({ success: false, message: 'Package manager failed' });
     });
+
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith('Package manager failed');
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(detail).toBeEnabled();
+    expect(roster).toBeEnabled();
   });
 
   it('names the install command the SERVER reports, not a hardcoded Homebrew one', async () => {
@@ -1243,7 +1258,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     fireEvent.click(stopBtn);
 
     await waitFor(() => {
-      expect(stopLlamaServer).toHaveBeenCalled();
+      expect(stopLlamaServer).toHaveBeenCalledWith({ silent: true });
     });
   });
 

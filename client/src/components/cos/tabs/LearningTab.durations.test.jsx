@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { taskTypeDurationRows } from './LearningTab';
+import { taskTypeDurationRows } from './learning/LearningDurationsSection';
 
 const row = (avgDurationMs, completed) => ({
   avgDurationMs,

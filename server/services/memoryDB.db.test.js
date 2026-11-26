@@ -523,6 +523,18 @@ describe.skipIf(!runDb)('memoryDB listing filters (#3447)', () => {
     await query('DELETE FROM memories WHERE id = ANY($1::uuid[])', [[matched.id, other.id]]);
   });
 
+  it('breaks timestamp ties by id so offset pages have stable membership', async () => {
+    const idOrder = [brainFact.id, studioPreference.id].sort();
+    await query('UPDATE memories SET created_at = $1 WHERE id = ANY($2::uuid[])',
+      [brainFact.createdAt, idOrder]);
+
+    const first = await memoryDB.getMemories({ limit: 1 });
+    const second = await memoryDB.getMemories({ limit: 1, offset: 1 });
+    expect(first.total).toBe(2);
+    expect(second.total).toBe(2);
+    expect([...first.memories, ...second.memories].map(memory => memory.id)).toEqual(idOrder);
+  });
+
   it('sorts and paginates while reporting the unpaginated total', async () => {
     const page = await memoryDB.getMemories({ sortBy: 'importance', sortOrder: 'desc', limit: 1 });
     expect(page.total).toBe(2);

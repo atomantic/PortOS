@@ -7,6 +7,7 @@ import { getPersistentMindThinkingRequestCatalog, cancelPersistentMindThinkingRe
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
 import { PERSISTENT_MIND_LIMITS } from '../lib/persistent/persistentMind.js';
 import { MAX_SCREENSHOT_BYTES } from '../lib/uploadLimits.js';
@@ -420,25 +421,56 @@ router.get('/mind/tools', asyncHandler(async (_req, res) => {
   });
 }));
 
-router.get('/mind/runtime', asyncHandler(async (_req, res) => {
+// The two machine-local HTTP views need the same expensive telemetry. Share
+// pending work and the just-completed sample, but never reuse it across routes
+// with different turn, prompt, or residency inputs.
+const MIND_RUNTIME_TTL_MS = 2_000;
+let mindRuntimeSample;
+
+function readMindRuntime({ state, profile, prompt, provider }) {
+  const turn = state.activeTurn;
+  const backend = provider ? localRuntimeForProvider(provider) : null;
+  const usageLimitRetryAt = persistentMindUsageLimitRetryAt();
+  const key = JSON.stringify([
+    turn?.id, turn?.startedAt, turn?.heartbeatAt, turn?.providerId, turn?.model,
+    profile.providerId, profile.model, prompt.identity, prompt.instructions,
+    Boolean(provider), backend?.kind, backend?.endpoint, provider?.apiKey, usageLimitRetryAt,
+  ]);
+  if (mindRuntimeSample?.key === key && Date.now() < mindRuntimeSample.expiresAt) {
+    return mindRuntimeSample.promise;
+  }
+  const sample = { key, expiresAt: Infinity, promise: null };
+  sample.promise = inspectPersistentMindRuntime({ state, profile, prompt, provider, usageLimitRetryAt }).then(
+    (runtime) => {
+      sample.expiresAt = Date.now() + MIND_RUNTIME_TTL_MS;
+      return runtime;
+    },
+    (error) => {
+      if (mindRuntimeSample === sample) mindRuntimeSample = undefined;
+      throw error;
+    },
+  );
+  mindRuntimeSample = sample;
+  return sample.promise;
+}
+
+async function readMindRuntimeInputs() {
   const [root, state] = await Promise.all([loadState(), getPersistentMindState()]);
   const prompt = normalizePersistentMindPrompt(root.config?.persistentMindPrompt);
   const profile = normalizePersistentMindProfile(root.config?.persistentMindProfile);
   const providerId = state.activeTurn?.providerId || profile.providerId;
   const provider = providerId ? await getProviderById(providerId) : null;
-  res.json(await inspectPersistentMindRuntime({
-    state, profile, prompt, provider, usageLimitRetryAt: persistentMindUsageLimitRetryAt(),
-  }));
+  return { root, state, prompt, profile, provider };
+}
+
+router.get('/mind/runtime', asyncHandler(async (_req, res) => {
+  res.json(await readMindRuntime(await readMindRuntimeInputs()));
 }));
 
 router.get('/mind/visibility', asyncHandler(async (req, res) => {
   const { refresh = false } = validateRequest(visibilityReadSchema, req.query);
-  const [root, state] = await Promise.all([loadState(), getPersistentMindState()]);
-  const prompt = normalizePersistentMindPrompt(root.config?.persistentMindPrompt);
-  const profile = normalizePersistentMindProfile(root.config?.persistentMindProfile);
-  const providerId = state.activeTurn?.providerId || profile.providerId;
-  const provider = providerId ? await getProviderById(providerId) : null;
-  res.json(await readPersistentMindVisibility({ root, state, profile, prompt, provider, force: refresh }));
+  const inputs = await readMindRuntimeInputs();
+  res.json(await readPersistentMindVisibility({ ...inputs, runtime: readMindRuntime(inputs), force: refresh }));
 }));
 
 router.post('/mind/memories', asyncHandler(async (req, res) => {

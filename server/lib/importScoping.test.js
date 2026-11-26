@@ -60,6 +60,12 @@ const staticImportClosure = (entry) => walkImportClosure(entry, closureIo);
 const abs = (relative) => join(SERVER_DIR, ...relative.split('/'));
 const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs(target));
 
+it('keeps boot sequencing independent of service imports', () => {
+  const { statics, deferred, computed } = moduleSpecifiers(readText(abs('services/bootstrapSequence.js')));
+  expect([...statics, ...deferred]).toEqual([]);
+  expect(computed).toBe(false);
+});
+
 // The reusable engine cannot acquire Music Video persistence or finishing through an indirect import.
 it('keeps every shared film module outside the Music Video service graph', () => {
   for (const name of readdirSync(abs('services/film')).filter((name) => name.endsWith('.js') && !name.endsWith('.test.js'))) {
@@ -119,6 +125,16 @@ describe('instance identity stays a leaf (#6836)', () => {
   });
 });
 
+it.each(['agentResumePointers.js', 'agentFollowUpSpawning.js'])(
+  '%s keeps the CoS daemon and cleanup facade outside its static closure',
+  (name) => {
+    const entry = `services/agent/${name}`;
+    expect(reaches(entry, 'services/cos/cosTaskStore.js')).toBe(true);
+    expect(reaches(entry, 'services/cos/cos.js')).toBe(false);
+    expect(reaches(entry, 'services/agent/agentWorktreeCleanup.js')).toBe(false);
+  },
+);
+
 // `vitest related` follows dynamic imports, so a lazy import() narrows the
 // static closure above but not CI selection. Each row is an edge cut from the
 // dynamically connected CoS cluster (#12285): the entry must import its target
@@ -155,6 +171,8 @@ const SELECTION_CUTS = [
     'signals host changes through the fleetHostSignal.js leaf'],
   ['services/promptRunner.js', 'services/autoFixer.js',
     'reports fallback lifecycle through handlers initAutoFixer() registers in providerRecoveryHooks.js'],
+  ['lib/agent/agentErrorPatterns.js', /^services\//,
+    'classifies failure signatures without loading CoS services or task stores'],
   // #17499: lazy imports whose target statically imported the importer.
   ['services/cos/cos.js', 'services/agent/agentManagement.js',
     'recovers orphans through handlers registerBootHooks() registers in bootHookRegistry.js'],

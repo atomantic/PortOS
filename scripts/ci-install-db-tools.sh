@@ -34,32 +34,21 @@ case "$INCLUDE_POSTGRES" in
 esac
 APT_OPTS=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Languages=none)
 APT_INSTALL_OPTS=(install -y --no-install-recommends)
-APT_SOURCE_OPTS=()
-APT_SOURCEPARTS_DIR=''
-cleanup() {
-  if [[ -n "$APT_SOURCEPARTS_DIR" ]]; then
-    rm -rf "$APT_SOURCEPARTS_DIR"
-  fi
-}
-trap cleanup EXIT
-
-if [[ "$INCLUDE_POSTGRES" == false ]]; then
-  # Browser jobs only need ffmpeg from Ubuntu system repos; omit unrelated
-  # third-party runner repos (e.g. packages.microsoft.com) so apt-get update
-  # does not spend budget downloading their indexes. Symlink so mirror fallback
-  # edits to ubuntu.sources take effect immediately.
-  APT_SOURCEPARTS_DIR=$(mktemp -d)
-  chmod 755 "$APT_SOURCEPARTS_DIR"
-  shopt -s nullglob
-  for src in "${ROOT}/etc/apt/sources.list.d/"ubuntu*.sources "${ROOT}/etc/apt/sources.list.d/"ubuntu*.list; do
-    [[ -f "$src" ]] || continue
-    src_dir=$(cd "$(dirname "$src")" && pwd)
-    ln -s "${src_dir}/$(basename "$src")" "${APT_SOURCEPARTS_DIR}/$(basename "$src")"
-  done
-  shopt -u nullglob
-  APT_SOURCE_OPTS=(-o "Dir::Etc::sourceparts=${APT_SOURCEPARTS_DIR}")
-  APT_OPTS+=("${APT_SOURCE_OPTS[@]}")
-fi
+# Use only the Ubuntu sources and, for DB jobs, the signed PGDG source.
+# Link the runner's Ubuntu files so mirror fallback can replace them in place.
+APT_SOURCEPARTS_DIR=$(mktemp -d)
+trap 'rm -rf -- "$APT_SOURCEPARTS_DIR"' EXIT
+chmod 755 "$APT_SOURCEPARTS_DIR"
+ubuntu_sourceparts=()
+shopt -s nullglob
+for src in "${ROOT}/etc/apt/sources.list.d/"ubuntu*.sources "${ROOT}/etc/apt/sources.list.d/"ubuntu*.list; do
+  [[ -f "$src" ]] || continue
+  ubuntu_sourceparts+=("$src")
+  ln -s "$src" "${APT_SOURCEPARTS_DIR}/${src##*/}"
+done
+shopt -u nullglob
+APT_SOURCE_OPTS=(-o "Dir::Etc::sourceparts=${APT_SOURCEPARTS_DIR}")
+APT_OPTS+=("${APT_SOURCE_OPTS[@]}")
 ARCHIVES="${ROOT}/var/cache/apt/archives"
 BROWSER_RUNTIME=''
 BROWSER_READY=false
@@ -85,10 +74,15 @@ prepare_browser_runtime() {
   multiarch=$(dpkg-architecture -qDEB_HOST_MULTIARCH) || return
   BROWSER_RUNTIME=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/portos-ffmpeg.XXXXXXXX") || return
   mkdir "$BROWSER_RUNTIME/packages" "$BROWSER_RUNTIME/payload" "$BROWSER_RUNTIME/bin" || return
-  # Give each extractor its own tree, then assemble the runtime with hard links.
+  # Batch archives per shell, keeping each archive in a separate tree for assembly.
   # shellcheck disable=SC2016 # The extractor shell expands its own arguments.
-  printf '%s\0' "$@" | xargs -0 -P 4 -n 1 bash -c \
-    'dpkg-deb --extract "$2" "$1/${2##*/}"' _ "$BROWSER_RUNTIME/packages" || return
+  printf '%s\0' "$@" | xargs -0 -P 4 -n 20 bash -ec '
+    destination=$1
+    shift
+    for archive; do
+      dpkg-deb --extract "$archive" "$destination/${archive##*/}"
+    done
+  ' _ "$BROWSER_RUNTIME/packages" || return
   cp -al -- "$BROWSER_RUNTIME/packages/"*/. "$BROWSER_RUNTIME/payload/" || return
   libdir="$BROWSER_RUNTIME/payload/usr/lib/$multiarch"
   # Ubuntu's libpulse0 places libpulsecommon in a separate loader directory.
@@ -172,8 +166,7 @@ if [[ "$INCLUDE_POSTGRES" == true ]]; then
   sudo curl --fail --silent --show-error --connect-timeout 15 --max-time 30 --retry 4 --retry-all-errors --retry-delay 3 --retry-max-time 100 -o "$keyring" https://www.postgresql.org/media/keys/ACCC4CF8.asc
   # shellcheck source=/dev/null
   . "${ROOT}/etc/os-release"
-  echo "deb [signed-by=${keyring#"$ROOT"}] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" |
-    sudo tee "${ROOT}/etc/apt/sources.list.d/pgdg.list" >/dev/null
+  echo "deb [signed-by=${keyring#"$ROOT"}] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" > "${APT_SOURCEPARTS_DIR}/pgdg.list"
 fi
 
 if ! download_by "$PRIMARY_BUDGET"; then
@@ -181,7 +174,7 @@ if ! download_by "$PRIMARY_BUDGET"; then
   sources=()
   while IFS= read -r source; do
     sources+=("$source")
-  done < <(grep -lE "$RUNNER_MIRROR" "${ROOT}/etc/apt/sources.list" "${ROOT}/etc/apt/sources.list.d/"*.sources 2>/dev/null || true)
+  done < <(grep -lE "$RUNNER_MIRROR" "${ROOT}/etc/apt/sources.list" ${ubuntu_sourceparts[@]+"${ubuntu_sourceparts[@]}"} 2>/dev/null || true)
   (( ${#sources[@]} > 0 )) || fail "The runner mirror was slow and no Ubuntu source names it, so there is no mirror to replace."
   sudo sed -i -E "s#${RUNNER_MIRROR}#${OFFICIAL_ARCHIVE}#g" "${sources[@]}"
   download_by "$TOTAL_BUDGET" ||
@@ -196,7 +189,7 @@ fi
 # A disposable runner doesn't need a kernel/service restart scan after installing test tools.
 install_started=$SECONDS
 sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 \
-  apt-get ${APT_SOURCE_OPTS[@]+"${APT_SOURCE_OPTS[@]}"} -o APT::Keep-Downloaded-Packages=true \
+  apt-get "${APT_SOURCE_OPTS[@]}" -o APT::Keep-Downloaded-Packages=true \
   -o Dpkg::Options::=--force-unsafe-io "${APT_INSTALL_OPTS[@]}" --no-download "${PACKAGES[@]}" ||
   fail "Downloaded packages did not install."
 echo "⏱ APT packages installed in $((SECONDS - install_started))s"

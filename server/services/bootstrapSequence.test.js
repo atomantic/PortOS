@@ -1,12 +1,8 @@
 /**
  * Executable coverage for the boot ORDER (#3451).
  *
- * `bootstrap.js` says its ordering is load-bearing, and every install depends on
- * that ordering being right — but the file can't be imported under test (it
- * pulls the whole service graph, and its steps open a listener, a database, and
- * agent workers). `bootstrapSequence.js` exists so the ordering can be run for
- * real with injected doubles: nothing here touches the network, the filesystem,
- * PostgreSQL, or an AI provider.
+ * These tests isolate phase ordering with injected steps. bootstrap.test.js
+ * exercises the real bindings with isolated service dependencies.
  *
  * Assertions are on the recorded CALL SEQUENCE, not on "each step ran" — a
  * refactor that reorders two steps is exactly the regression this guards.
@@ -15,10 +11,6 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { readFileSync } from 'fs';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import { stripCommentsAndNormalize } from '../lib/mirrorParity.js';
 import {
   runPreRouteSequence,
   initCosAfterSpawner,
@@ -32,8 +24,6 @@ import {
   gateStepsForSmokeBoot,
   SMOKE_BOOT_DISABLED_STEPS
 } from './bootstrapSequence.js';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /** Records the order steps run in. `impl` lets a step return a value/promise. */
 const createRecorder = () => {
@@ -1059,66 +1049,5 @@ describe('runPostListenSequence — inside the listen callback', () => {
     }));
     expect(recorder.calls).not.toContain('startPolling');
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Post-startup init failed'));
-  });
-});
-
-/**
- * Source contract. The behavioural tests above run the sequence with doubles;
- * these assert the properties that only the real files can carry — that boot is
- * silent on the LLM front, and that the tested ordering is the one that actually
- * runs on a real install.
- */
-describe('boot source contract', () => {
-  const read = (rel) => stripCommentsAndNormalize(readFileSync(join(__dirname, rel), 'utf-8').replace(/\r\n/g, '\n'));
-  const BOOTSTRAP = read('bootstrap.js');
-  const SEQUENCE = read('bootstrapSequence.js');
-
-  // Every entry point that dispatches work to an AI provider. AGENTS.md's
-  // "No cold-bootstrap LLM calls": a fresh install coming online must be silent
-  // until the user asks for AI-backed work. Boot may ARM a scheduler (which
-  // gates on user config before it ever fires) but must never call these.
-  const PROVIDER_CALLS = [
-    'runStagedLLM',
-    'runInlineLLM',
-    'runStageScopedInlineLLM',
-    'runPromptThroughProvider',
-    'executeCliRun',
-    'executeTuiRun',
-    'executeApiRun',
-    'createRun'
-  ];
-
-  for (const [label, src] of [['bootstrap.js', BOOTSTRAP], ['bootstrapSequence.js', SEQUENCE]]) {
-    it(`${label} queues no AI provider call at boot`, () => {
-      for (const name of PROVIDER_CALLS) {
-        // A bare reference (e.g. handing executeCliRun to setCliRunner) is fine —
-        // registering a runner is not invoking one. Only an invocation fails.
-        expect(src, `${label} invokes ${name}() during boot`).not.toMatch(new RegExp(`\\b${name}\\s*\\(`));
-      }
-    });
-  }
-
-  it('bootstrapSequence.js imports nothing — every dependency is injected', () => {
-    // An import here would both defeat the "runs without a real install"
-    // property these tests rely on and let a service sneak into the boot path
-    // untested.
-    expect(SEQUENCE).not.toMatch(/\bimport\s/);
-  });
-
-  it('bootstrap.js gates every boot phase on the smoke flag (#8343)', () => {
-    // Dropping one of these leaves the smoke arming that phase's schedulers,
-    // agent recovery, or peer sync against whatever install it booted from.
-    for (const phase of ['preRoute', 'postRoute', 'postListen']) {
-      expect(BOOTSTRAP, `bootstrap.js never gates the ${phase} phase for the boot smoke`)
-        .toMatch(new RegExp(`'${phase}', (smokeBoot|isSmokeBoot\\(\\))\\)`));
-    }
-  });
-
-  it('bootstrap.js delegates its ordering to the tested sequence module', () => {
-    expect(BOOTSTRAP).toMatch(/from '\.\/bootstrapSequence\.js'/);
-    for (const fn of ['runPreRouteSequence', 'runPostRouteSequence', 'runPostListenSequence', 'runDatabasePhase']) {
-      expect(BOOTSTRAP, `bootstrap.js never calls ${fn}() — the tested ordering would be dead code`)
-        .toMatch(new RegExp(`\\b${fn}\\s*\\(`));
-    }
   });
 });

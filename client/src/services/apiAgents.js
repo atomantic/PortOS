@@ -331,6 +331,7 @@ export const getCosWhileAwayActivity = (since, options) =>
 
 // CoS Learning
 export const getCosLearning = (options = {}) => request('/cos/learning', options);
+export const getCosLearningDashboard = (options = {}) => request('/cos/learning/dashboard', options);
 export const getCosLearningDurations = (options = {}) => request('/cos/learning/durations', options);
 export const getCosLearningSkipped = (options = {}) => request('/cos/learning/skipped', options);
 export const getCosLearningPerformance = (options = {}) => request('/cos/learning/performance', options);

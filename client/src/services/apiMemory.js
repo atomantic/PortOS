@@ -28,7 +28,7 @@ export const updateMemory = (id, data, options = {}) => request(`/memory/${id}`,
   body: JSON.stringify(data),
   ...options
 });
-export const deleteMemory = (id, hard = false) => request(`/memory/${id}?hard=${hard}`, { method: 'DELETE' });
+export const deleteMemory = (id, hard = false, options = {}) => request(`/memory/${id}?hard=${hard}`, { method: 'DELETE', ...options });
 export const searchMemories = (query, options = {}, requestOptions = {}) => request('/memory/search', {
   method: 'POST',
   body: JSON.stringify({ query, ...options }),

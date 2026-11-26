@@ -184,6 +184,7 @@ const reasonCodes = (visibility) => [
 /**
  * Build the shared visibility object. `apps` and `providers` are injectable so
  * callers can reuse one registry snapshot; omitted values are read normally.
+ * HTTP callers may pass their shared runtime sample or its pending promise.
  */
 export async function readPersistentMindVisibility({
   root = {},
@@ -192,15 +193,16 @@ export async function readPersistentMindVisibility({
   prompt = null,
   provider = null,
   apps,
+  runtime,
   force = false,
   now = Date.now,
   dependencies,
 } = {}) {
   const timestamp = typeof now === 'function' ? now() : now;
   const capturedAt = new Date(Number.isFinite(timestamp) ? timestamp : Date.now()).toISOString();
-  const appsResult = Array.isArray(apps) ? { value: apps, ok: true } : await safePromise(getActiveApps());
-  const [runtimeResult, orientationResult, reportAccessResult] = await Promise.all([
-    safePromise(inspectPersistentMindRuntime({ state: state || root.persistentMind, profile, prompt, provider })),
+  const [appsResult, runtimeResult, orientationResult, reportAccessResult] = await Promise.all([
+    Array.isArray(apps) ? { value: apps, ok: true } : safePromise(getActiveApps()),
+    safePromise(runtime ?? inspectPersistentMindRuntime({ state: state || root.persistentMind, profile, prompt, provider })),
     safePromise(import('./persistentMindOrientation.js').then(({ readPersistentMindOrientation }) => readPersistentMindOrientation(root))),
     safePromise(import('./persistentMindProcessAudit.js').then(({ readProcessAuditAccess }) => readProcessAuditAccess({ root }))),
   ]);
@@ -220,8 +222,7 @@ export async function readPersistentMindVisibility({
   }));
   const workspaceEntries = workspaceResult.ok && Array.isArray(workspaceResult.value) ? workspaceResult.value : [];
   const workspaces = workspaceProjection(workspaceEntries);
-  const runtime = runtimeResult.value;
-  const projectedRuntime = runtimeProjection(runtime);
+  const projectedRuntime = runtimeProjection(runtimeResult.value);
   const visibility = {
     schemaVersion: PERSISTENT_MIND_VISIBILITY_SCHEMA_VERSION,
     capturedAt,
@@ -246,7 +247,7 @@ export async function readPersistentMindVisibility({
     },
     runtime: projectedRuntime,
     harness: projectedRuntime.harness || harnessProjection(provider),
-    provider: providerProjection(provider, runtime),
+    provider: providerProjection(provider, runtimeResult.value),
     actions: actionProjection(capabilities, reportAccessResult.value || { granted: false, reasonCode: 'report-access-unknown', reason: 'Report authorization could not be established.', apps: [] }),
     scheduler: schedulerProjection(root),
     orientation: orientationResult.value || { status: 'unknown' },

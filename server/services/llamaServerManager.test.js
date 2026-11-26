@@ -669,6 +669,23 @@ describe('llamaServerManager', () => {
     expect(result.success).toBe(true);
   });
 
+  it('ignores package manager output after install failure', async () => {
+    vi.spyOn(commandExistsModule, 'commandExists').mockResolvedValue(true);
+    const child = fakeSpawnProcess();
+    vi.spyOn(childProcess, 'spawn').mockReturnValue(child);
+    const onProgress = vi.fn();
+    const install = installLlamaServer({ onProgress });
+    const failure = expect(install).rejects.toThrow('spawn failed');
+    await Promise.resolve();
+
+    child.stdout.emit('data', 'before failure');
+    child.emit('error', new Error('spawn failed'));
+    await failure;
+    child.stderr.emit('data', 'late output');
+
+    expect(onProgress.mock.calls.map(([frame]) => frame.event)).toEqual(['start', 'progress']);
+  });
+
   it('rejects install when Homebrew is missing', async () => {
     vi.spyOn(commandExistsModule, 'commandExists').mockResolvedValue(false);
 
@@ -720,7 +737,7 @@ describe('llamaServerManager', () => {
       return child;
     });
 
-    await expect(installLlamaServer()).rejects.toThrow(/Could not symlink bin\/llama-server/);
+    await expect(installLlamaServer()).rejects.toMatchObject({ status: 502, message: expect.stringMatching(/Could not symlink bin\/llama-server/) });
   });
 
   it('rejects instead of hanging when the link spawn throws synchronously', async () => {
@@ -737,7 +754,7 @@ describe('llamaServerManager', () => {
       return child;
     });
 
-    await expect(installLlamaServer()).rejects.toThrow(/Failed to verify the llama\.cpp install: spawn EACCES/);
+    await expect(installLlamaServer()).rejects.toMatchObject({ status: 502, message: expect.stringMatching(/Failed to verify the llama\.cpp install: spawn EACCES/) });
   });
 
   it('rejects with a `brew link` hint when linking does not resolve the binary', async () => {

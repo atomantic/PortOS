@@ -139,10 +139,7 @@ function registerSubscriber(socket, namespace, set) {
 // subscribe/unsubscribe events the relay needs to receive `cos:agent:*`
 // broadcasts and realtime `peer:sync:event` frames (room membership only; the
 // frames themselves are filtered per peer and category on the way out). Every
-// other event, including any `shell:*`/host-control event, still requires a
-// real operator session and disconnects a peer-authenticated socket exactly as
-// it did before. Keep this list minimal — do not add a mutating or
-// host-affecting event here.
+// other event disconnects the peer relay, even on a password-free install.
 const PEER_RELAY_ALLOWED_EVENTS = new Set(['cos:subscribe', 'cos:unsubscribe', 'peer:sync:subscribe', 'peer:sync:unsubscribe']);
 
 // Events that execute on the host — an interactive PTY, keystrokes into the
@@ -152,14 +149,14 @@ const PEER_RELAY_ALLOWED_EVENTS = new Set(['cos:subscribe', 'cos:unsubscribe', '
 // LAN/tailnet socket is refused (#8708). Every `shell:*` and `iterm:*` event
 // is included by prefix, as is every `generated-preview:*` event except `close`
 // (open launches a headless browser/ffmpeg, command can record into the
-// gallery); read-only subscriptions stay open to remote sockets.
+// gallery). Command and log subscriptions stream host output.
 // `error:recover` queues a recovery agent that runs shell commands (#8716).
 // Detection can bootstrap a PM2 daemon while inspecting an app-specific home.
 // Voice host slots, dictation, and proactive output require operator authority.
 // The HTTP twin of this set is isHostControlRoute in lib/hostControlRoutes.js.
 const HOST_CONTROL_SOCKET_EVENTS = new Set([
   'app:update', 'app:standardize', 'app:deploy', 'standardize:start', 'detect:start', 'error:recover', 'logs:subscribe',
-  'agent-processes:subscribe',
+  'agent-processes:subscribe', 'command:subscribe',
   'voice:call:attach', 'voice:call:audio', 'voice:call:hangup', 'voice:capture:start', 'voice:dictation:set',
   'voice:output:available', 'voice:output:claim',
 ]);
@@ -187,6 +184,7 @@ const hostControlRefusal = (event, payload) => {
   if (event === 'detect:start') return ['detect:complete', { success: false, ...refusal }];
   if (event === 'logs:subscribe') return ['logs:error', { ...refusal, processName: payload?.processName }];
   if (event === 'agent-processes:subscribe') return ['agent-processes:error', refusal];
+  if (event === 'command:subscribe') return ['command:error', refusal];
   return [`${event}:error`, { ...refusal, appId: payload?.appId }];
 };
 
@@ -197,6 +195,10 @@ function registerAuthHandlers(socket, _io) {
   if (typeof socket.use === 'function') {
     socket.use(async ([event, payload], next) => {
       try {
+        if (isPeerSocket(socket) && !PEER_RELAY_ALLOWED_EVENTS.has(event)) {
+          socket.disconnect(true);
+          return;
+        }
         if (!(await isAuthEnabled())) {
           if (!isHostControlSocketEvent(event) || socketHasHostControl(socket)) return next();
           console.log(`🚫 Refused host-control socket event ${event} from a non-local connection`);

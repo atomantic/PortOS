@@ -1,4 +1,3 @@
-import { resolvePersistentMindChosenName } from '../lib/persistent/persistentMindChosenName.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -15,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   preparePersistentMindContext: vi.fn(),
   promotePersistentMindMemory: vi.fn(),
   readPersistentMindMemories: vi.fn(),
+  readPersistentMindName: vi.fn(),
+  readAllProtectedPersistentMindMemories: vi.fn(),
   readPersistentMindReflection: vi.fn(async () => ({ state: 'empty', source: null, inspected: null })),
   readPersistentMindRollups: vi.fn(),
   updatePersistentMindMemory: vi.fn(),
@@ -55,7 +56,8 @@ vi.mock('../services/persistent/persistentMindContext.js', () => ({
   promotePersistentMindMemory: mocks.promotePersistentMindMemory,
   readPersistentMindMemories: mocks.readPersistentMindMemories,
   readPersistentMindReflection: mocks.readPersistentMindReflection,
-  readPersistentMindName: async () => resolvePersistentMindChosenName(await mocks.readPersistentMindMemories()),
+  readPersistentMindName: mocks.readPersistentMindName,
+  readAllProtectedPersistentMindMemories: mocks.readAllProtectedPersistentMindMemories,
   readPersistentMindRollups: mocks.readPersistentMindRollups,
   updatePersistentMindMemory: mocks.updatePersistentMindMemory,
 }));
@@ -167,15 +169,14 @@ describe('persistent mind routes', () => {
   });
 
   it('projects the current protected name without changing trajectory identity or exposing memory records', async () => {
-    mocks.readPersistentMindMemories.mockResolvedValue([
-      { content: 'My chosen name is Earlier.', protection: 'core-identity' },
-      { content: 'Example Star', tags: ['mind:chosen-name', 'mind:core-identity'] },
-    ]);
+    mocks.readPersistentMindName.mockResolvedValue('Example Star');
     const res = await get('/mind');
     expect(res.status).toBe(200);
     expect(res.body.identity).toEqual({ mindId: 'cos-persistent-mind', name: 'Example Star' });
     expect(res.body.memories).toBeUndefined();
-    mocks.readPersistentMindMemories.mockResolvedValue([]);
+    expect(mocks.readPersistentMindName).toHaveBeenCalledExactlyOnceWith('cos-persistent-mind');
+    expect(mocks.readPersistentMindMemories).not.toHaveBeenCalled();
+    mocks.readPersistentMindName.mockResolvedValue(null);
     expect((await get('/mind')).body.identity.name).toBeNull();
   });
 
@@ -197,6 +198,8 @@ describe('persistent mind routes', () => {
     mocks.getProviderById.mockResolvedValue({ id: 'demo', type: 'api' });
     mocks.resolveImageCapability.mockResolvedValue({ status: 'unknown', reason: 'No authoritative metadata.', settingsPath: '/settings?tab=ai-providers' });
     mocks.readPersistentMindMemories.mockResolvedValue([{ id: 'memory-1', content: 'A durable fact', sourceAgentId: 'cos-persistent-mind' }]);
+    mocks.readPersistentMindName.mockResolvedValue(null);
+    mocks.readAllProtectedPersistentMindMemories.mockResolvedValue([]);
     mocks.readPersistentMindRollups.mockResolvedValue([]);
     mocks.readPersistentMindJournal.mockResolvedValue([]);
     mocks.preparePersistentMindContext.mockResolvedValue({ text: '# Context', chars: 9, approximateTokens: 3, summaryState: 'empty' });
@@ -485,6 +488,37 @@ describe('persistent mind routes', () => {
     }));
   });
 
+  it('shares in-flight and recently completed runtime work across runtime and visibility', async () => {
+    const state = {
+      enabled: true, started: true, status: 'thinking',
+      activeTurn: { id: 'shared-runtime-turn', providerId: 'demo', model: 'demo-model' },
+    };
+    mocks.getPersistentMindState.mockResolvedValue(state);
+    const runtime = { observedAt: '2026-09-01T00:30:00.000Z', inference: { turnId: 'shared-runtime-turn' } };
+    let finishRuntime;
+    mocks.inspectPersistentMindRuntime.mockReturnValueOnce(new Promise(resolve => { finishRuntime = resolve; }));
+    const visibilityFromSample = async ({ runtime: sample }) => ({ observedAt: (await sample).observedAt });
+    mocks.readPersistentMindVisibility
+      .mockImplementationOnce(visibilityFromSample)
+      .mockImplementationOnce(visibilityFromSample);
+
+    const responses = Promise.all([get('/mind/runtime'), get('/mind/visibility')]);
+    try {
+      await vi.waitFor(() => expect(mocks.readPersistentMindVisibility).toHaveBeenCalledTimes(1));
+    } finally {
+      finishRuntime(runtime);
+    }
+    const [runtimeResponse, visibilityResponse] = await responses;
+    expect(runtimeResponse.body).toEqual(runtime);
+    expect(visibilityResponse.body).toEqual({ observedAt: runtime.observedAt });
+    expect((await get('/mind/visibility')).body).toEqual({ observedAt: runtime.observedAt });
+    expect(mocks.inspectPersistentMindRuntime).toHaveBeenCalledTimes(1);
+
+    mocks.getPersistentMindState.mockResolvedValue({ ...state, activeTurn: null });
+    expect((await get('/mind/runtime')).status).toBe(200);
+    expect(mocks.inspectPersistentMindRuntime).toHaveBeenCalledTimes(2);
+  });
+
   it('serves the shared environment visibility projection and accepts an explicit refresh', async () => {
     const res = await get('/mind/visibility?refresh=true');
     expect(res.status).toBe(200);
@@ -718,7 +752,7 @@ describe('persistent mind routes', () => {
   });
 
   it('refuses the whole export when a selected scope cannot be read', async () => {
-    mocks.readPersistentMindMemories.mockRejectedValue(new Error('memory backend is unavailable'));
+    mocks.readAllProtectedPersistentMindMemories.mockRejectedValue(new Error('memory backend is unavailable'));
     const res = await post('/mind/bundle/export', { scopes: ['profile', 'memories'], passphrase: 'an example bundle passphrase' });
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('MIND_BUNDLE_SCOPE_UNREADABLE');

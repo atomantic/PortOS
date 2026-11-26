@@ -1152,7 +1152,7 @@ export const AGENT_OUTPUT_TAIL_BYTES = 512 * 1024;
  *          null when the file is missing or unreadable. `totalBytes` is the
  *          size of the WHOLE transcript on disk, not of the window returned.
  */
-async function readAgentTranscriptTail(outputFile, { limit, maxBytes }) {
+export async function readAgentTranscriptTail(outputFile, { limit = AGENT_OUTPUT_TAIL_LINES, maxBytes = AGENT_OUTPUT_TAIL_BYTES } = {}) {
   // Stat separately from the tail read: the caller needs the FULL on-disk size
   // for the truncation marker, and `readFileTail` only hands back the window.
   const info = await stat(outputFile).catch(() => null);

@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
-export const DEPENDENCY_LOCKFILES = ['package-lock.json', 'server/package-lock.json', 'client/package-lock.json', 'browser/package-lock.json'];
+export const DEPENDENCY_LOCKFILES = ['package-lock.json', 'server/package-lock.json', 'client/package-lock.json'];
 
 export const pendingReconcilePath = dataDir => join(dataDir, 'dependency-reconcile-pending.json');
 

@@ -1224,6 +1224,11 @@ describe('persistent mind supervisor', () => {
     // The selection lives on the message, so the stored default is untouched.
     expect(mock.root.config.persistentMindProfile).toMatchObject({ providerId: 'example-cloud', model: 'example-model' });
 
+    expect(mock.emitted).toContainEqual(['persistent-mind:status', expect.objectContaining({
+      activeTurnId: run.mock.calls[0][0].turnId,
+      activeRoute: { providerId: 'example-alt', model: 'alt-model', effort: 'max' },
+    })]);
+
     const modelRequests = mock.appendMindEvent.mock.calls
       .map(([event]) => event)
       .filter((event) => event.kind === 'mind.model.request');

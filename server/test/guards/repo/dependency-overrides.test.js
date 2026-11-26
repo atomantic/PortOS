@@ -106,28 +106,22 @@ describe('dependency override parity across manifests (#2848)', () => {
       // ws 8.23.0 bounds pending automatic Pongs (upstream ace7248f); older
       // releases let a peer that stops reading exhaust memory with Ping frames.
       'ws': '8.23.0',
-      'protobufjs': '7.6.5', // GHSA-j3f2-48v5-ccww
       'body-parser': '2.3.0', // GHSA-v422-hmwv-36x6
       // GHSA-52cp-r559-cp3m, then GHSA-5p4m-2wfm-xmqj (quadratic CPU in !!omap
       // resolution, CVE-2026-59870) which covers 4.0.0–4.3.0 — the previous 4.3.0
       // floor is itself vulnerable. GHSA-2883-xcg3-v3hh then covers 4.3.1,
       // so the 4.x line must be at least 4.3.2.
       'js-yaml': '4.3.2',
-      'tar': '7.5.21', // GHSA-vmf3-w455-68vh et al
       // GHSA-2v37-7h3g-55p8 (zero-size custom generators loop forever). Only reachable
       // via postcss, which asks for ^3.3.16 — the 3.x line is the one to floor.
       'nanoid': '3.3.17',
-      // GHSA-f88m-g3jw-g9cj (libvips CVE-2026-33327/33328/35590/35591). Pinned in
-      // server/ only, so the parity assertion above never sees it — this floor is
-      // the sole guard against a downgrade back onto the vulnerable 0.34.x line
-      // that @huggingface/transformers still requests.
+      // GHSA-f88m-g3jw-g9cj (libvips CVE-2026-33327/33328/35590/35591). The server
+      // pins sharp directly; this floor catches a downgrade of that dependency.
       'sharp': '0.35.0',
       // GHSA-8r9p-f939-6h3c and GHSA-q3jh-wrc6-jgq8 (credential headers leak across
       // cross-origin redirects); 1.16.0 was itself the fix for the previous advisory.
       // GHSA-mrwp-f3q8-3g9p also covers 1.16.1 (cross-realm sensitive-header arrays).
-      'follow-redirects': '1.16.2',
-      // GHSA-g3hv-75wg-m249 (globparts amplification at optimizationLevel >= 2).
-      'minimatch': '11.0.1'
+      'follow-redirects': '1.16.2'
     };
 
     const EXACT_VERSION = /^\d+\.\d+\.\d+$/;

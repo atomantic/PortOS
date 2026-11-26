@@ -148,7 +148,7 @@ const managedRuntimeRequests = {
   llama: {
     status: (options) => request('/local-llm/llama-server/status', options),
     install: (options) => request('/local-llm/llama-server/install', { ...options, method: 'POST' }),
-    start: (config) => request('/local-llm/llama-server/start', { method: 'POST', body: JSON.stringify(config) }),
+    start: (config, options) => request('/local-llm/llama-server/start', { ...options, method: 'POST', body: JSON.stringify(config) }),
     stop: (options) => request('/local-llm/llama-server/stop', { ...options, method: 'POST' }),
     upgrade: (options) => request('/local-llm/llama-server/upgrade', { ...options, method: 'POST' }),
   },
@@ -250,8 +250,8 @@ export const getLlamaServerUpdateStatus = (options) =>
   request('/local-llm/llama-server/update-status', options);
 
 export const startLlamaServer = managedRuntimeRequests.llama.start;
-export const stopLlamaServer = () => managedRuntimeRequests.llama.stop();
-export const installLlamaServer = () => managedRuntimeRequests.llama.install();
+export const stopLlamaServer = managedRuntimeRequests.llama.stop;
+export const installLlamaServer = managedRuntimeRequests.llama.install;
 
 // Upgrade a package-manager-installed binary. The server restarts a managed
 // llama-server using its existing launch configuration.

@@ -23,6 +23,9 @@ const machineLocalCredentialRestoreExcludes = [
   '--exclude=/[sS][pP][oO][tT][iI][fF][yY]/[tT][oO][kK][eE][nN][sS].[jJ][sS][oO][nN]',
   '--exclude=/[sS][pP][oO][tT][iI][fF][yY]/[cC][aA][cC][hH][eE]',
   '--exclude=/[oO][pP][eE][nN][cC][lL][aA][wW]',
+  '--exclude=/[jJ][iI][rR][aA].[jJ][sS][oO][nN]',
+  '--exclude=/[dD][aA][tT][aA][dD][oO][gG].[jJ][sS][oO][nN]',
+  '--exclude=/[aA][uU][tT][hH]-[sS][eE][sS][sS][iI][oO][nN][sS].[jJ][sS][oO][nN]',
 ];
 
 // snapshotId validation + rsync filter construction + settings cache re-sync.

@@ -32,6 +32,9 @@ export const DEFAULT_EXCLUDES = [
   { path: '/spotify/credentials.json', reason: 'Machine-local Spotify OAuth client credentials', overridable: false },
   { path: '/spotify/tokens.json', reason: 'Machine-local Spotify OAuth tokens — reauthorized per host', overridable: false },
   { path: '/spotify/cache/', reason: 'Machine-local Spotify raw response cache', overridable: false },
+  { path: '/jira.json', reason: 'Machine-local Jira API token — never export credentials', overridable: false },
+  { path: '/datadog.json', reason: 'Machine-local DataDog API and application keys — never export credentials', overridable: false },
+  { path: '/auth-sessions.json', reason: 'Machine-local authentication session hashes — never export active sessions', overridable: false },
   { path: '/openclaw/', reason: 'Machine-local OpenClaw credentials', overridable: false },
   { path: '/backup-admission/', reason: 'Machine-local publication ownership and snapshot fences', overridable: false },
   { path: '/image-thumbnails/', reason: 'Regenerable image grid previews', overridable: false },
@@ -242,6 +245,7 @@ export const OS_METADATA_RSYNC_EXCLUDES = [...OS_METADATA_FILES, '._*'].map(name
 const RESTORE_PRESERVED_FILES = Object.freeze([
   'certs', 'tailcat-serve.json', 'tailcat-serve.addr', 'tailcat-forwards.json',
   'calendar/google-auth', 'spotify/credentials.json', 'spotify/tokens.json', 'spotify/cache', 'openclaw',
+  'jira.json', 'datadog.json', 'auth-sessions.json',
   'database-authority.json', 'database-restore-recovery.json', 'database-maintenance',
   '.peer-execution-authority-lock', 'migrations.lock', 'peer-execution', 'peer-execution-catalog.json', 'peer-execution-grants.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance', 'backup-admission', 'cos/agents/.branch-policy-revision',
 ]);
