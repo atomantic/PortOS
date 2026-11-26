@@ -193,18 +193,24 @@ export const registerAppHandlers = (socket, io) => {
     sendActiveOperations();
   }
 
-  socket.on('app:deploy:cancel', async (rawData) => {
-    const data = validateSocketData(appDeployCancelSchema, rawData, socket, 'app:deploy:cancel');
-    if (!data) return;
+  // The acknowledgement describes this request. The deploy keeps its own
+  // progress and terminal events, including when the request loses a race.
+  socket.on('app:deploy:cancel', async (...args) => {
+    const acknowledge = args.at(-1);
+    const reply = typeof acknowledge === 'function' ? acknowledge : null;
+    const parsed = appDeployCancelSchema.safeParse(args[0]);
+    if (!parsed.success) {
+      reply?.({ ok: false, code: 'VALIDATION_ERROR', message: 'appId is required' });
+      return;
+    }
 
     try {
       const { cancelDeploy } = await import('../services/appDeployer.js');
-      if (!cancelDeploy(data.appId)) {
-        socket.emit('app:deploy:cancel:error', { appId: data.appId, message: 'No active deploy to cancel' });
-      }
+      if (cancelDeploy(parsed.data.appId)) reply?.({ ok: true });
+      else reply?.({ ok: false, code: 'NO_ACTIVE_DEPLOY', message: 'No active deploy to cancel' });
     } catch (err) {
       console.error(`❌ Socket handler error [app:deploy:cancel]: ${err.message}`);
-      socket.emit('app:deploy:cancel:error', { appId: data.appId, message: err.message });
+      reply?.({ ok: false, code: 'DEPLOY_CANCEL_FAILED', message: 'Could not cancel deploy' });
     }
   });
 

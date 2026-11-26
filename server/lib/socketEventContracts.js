@@ -665,7 +665,7 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   'fableloom:production:run': loomRunSnapshot(true),
   'fableloom:shots:run': loomRunSnapshot(false),
   'app:deploy': input(appDeploySchema, 'Deploy a managed app with allowlisted flags.'),
-  'app:deploy:cancel': input(appDeployCancelSchema, 'Cancel the active deploy for a managed app.'),
+  'app:deploy:cancel': input(appDeployCancelSchema, 'Request cancellation of an active deploy. The acknowledgement reports acceptance or an error code.'),
   'app:standardize': input(appStandardizeSchema, 'Standardize one registered app.'),
   'app:update': input(appUpdateSchema, 'Run the update lifecycle for one registered app.'),
   'detect:start': input(detectStartSchema, 'Start streamed application detection.'),

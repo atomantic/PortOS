@@ -192,7 +192,8 @@ function registerAuthHandlers(socket, _io) {
   // time, so every inbound event re-verifies an enabled session. With auth
   // off, host-control events still need a local connection.
   if (typeof socket.use === 'function') {
-    socket.use(async ([event, payload], next) => {
+    socket.use(async (packet, next) => {
+      const [event, payload] = packet;
       try {
         if (isPeerSocket(socket) && !PEER_RELAY_ALLOWED_EVENTS.has(event)) {
           socket.disconnect(true);
@@ -201,7 +202,13 @@ function registerAuthHandlers(socket, _io) {
         if (!(await isAuthEnabled())) {
           if (!isHostControlSocketEvent(event) || socketHasHostControl(socket)) return next();
           console.log(`🚫 Refused host-control socket event ${event} from a non-local connection`);
-          socket.emit(...hostControlRefusal(event, payload));
+          const [channel, refusal] = hostControlRefusal(event, payload);
+          if (event === 'app:deploy:cancel') {
+            const acknowledge = packet.at(-1);
+            if (typeof acknowledge === 'function') acknowledge({ ok: false, ...refusal });
+          } else {
+            socket.emit(channel, refusal);
+          }
           // After the refusal so the client settles on the error before the close.
           if (event.startsWith('generated-preview:')) await closeGeneratedPreviewsForSocket(socket.id);
           return;
