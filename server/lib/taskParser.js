@@ -16,7 +16,7 @@
 // rewritten to `task-<id>` on the next read, so the producer can no longer
 // address its record (and the queue may see a SECOND task). Those best-effort
 // reads and writes miss SILENTLY.
-const INTERNAL_PREFIXES = ['sys-', 'app-improve-', 'cd-', 'preflight-', 'self-improve-'];
+const INTERNAL_PREFIXES = ['sys-', 'app-improve-', 'cd-', 'preflight-', 'self-improve-', 'fa-run-'];
 const ALL_KNOWN_PREFIXES = ['task-', ...INTERNAL_PREFIXES];
 
 export const hasKnownPrefix = (id) => ALL_KNOWN_PREFIXES.some(p => id?.startsWith(p));

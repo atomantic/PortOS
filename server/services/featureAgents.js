@@ -114,6 +114,7 @@ export async function updateFeatureAgent(id, updates) {
     data.agents[idx] = merged;
     await writeData(data);
     console.log(`🤖 Feature agent updated: ${merged.name} (${id})`);
+    cosEvents.emit(`${EVT}:status`, { id, status: merged.status, name: merged.name });
     return merged;
   });
 }
@@ -128,6 +129,7 @@ export async function deleteFeatureAgent(id) {
     if (idx === -1) return false;
 
     const agent = data.agents[idx];
+    await terminateActiveFeatureAgentRun(agent);
     data.agents.splice(idx, 1);
     await writeData(data);
 
@@ -236,11 +238,12 @@ export async function resumeFeatureAgent(id) {
  * Stop a feature agent fully
  */
 export async function stopFeatureAgent(id) {
-  return withLock(async () => {
+  return withBackupAssetPublication(() => withLock(async () => {
     const data = await readData();
     const idx = data.agents.findIndex(a => a.id === id);
     if (idx === -1) return null;
 
+    await terminateActiveFeatureAgentRun(data.agents[idx]);
     data.agents[idx].status = 'draft';
     data.agents[idx].currentAgentId = null;
     data.agents[idx].updatedAt = new Date().toISOString();
@@ -249,7 +252,7 @@ export async function stopFeatureAgent(id) {
     console.log(`🤖 Feature agent stopped: ${data.agents[idx].name} (${id})`);
     cosEvents.emit(`${EVT}:status`, { id, status: 'draft', name: data.agents[idx].name });
     return data.agents[idx];
-  });
+  }));
 }
 
 /**
@@ -264,58 +267,56 @@ export async function triggerFeatureAgent(id) {
   // same immediate-dispatch path below.
   if (agent.status === 'draft' || agent.status === 'paused') {
     agent = await activateFeatureAgent(id);
+    if (!agent) return null;
   }
 
-  agent = await withLock(async () => {
+  const queued = await queueFeatureAgentTask(generateTaskFromFeatureAgent(agent), { force: true });
+  if (!queued) return null;
+  if (queued.reason) return { triggered: false, ...queued };
+
+  const { task, agent: queuedAgent } = queued;
+  console.log(`🤖 Feature agent force-triggered: ${queuedAgent.name} (${id})`);
+  return { triggered: true, started: true, agent: queuedAgent, taskId: task.id };
+}
+
+// Persist both the queued task and its pointer before dispatch can start.
+// Stop and Delete take the same lock, including while CoS is starting a process.
+export async function queueFeatureAgentTask(task, { force = false } = {}) {
+  return withLock(async () => {
     const data = await readData();
-    const idx = data.agents.findIndex(a => a.id === id);
-    if (idx === -1) return null;
-    if (data.agents[idx].currentAgentId) return data.agents[idx];
-    data.agents[idx].lastRunAt = null;
-    data.agents[idx].updatedAt = new Date().toISOString();
+    const agent = data.agents.find(candidate => candidate.id === task.metadata.featureAgentId);
+    if (!agent || (agent.status !== 'active' && !(force && agent.status === 'error'))) return null;
+    if (agent.currentAgentId) {
+      return { reason: 'Feature agent already has a run in progress', agent, taskId: agent.currentAgentId };
+    }
+
+    const { addTask } = await import('./cos/cosTaskStore.js');
+    const persisted = await addTask(task, 'internal', { raw: true, suppressDequeue: true });
+    if (!persisted?.id) return { reason: 'Feature agent run was not queued', agent };
+    if (persisted.duplicate && persisted.metadata?.featureAgentId !== agent.id) {
+      return { reason: 'An equivalent task already belongs to another workflow', agent };
+    }
+    if (persisted.duplicate && persisted.status !== 'pending') {
+      return { reason: `Feature agent run is already ${persisted.status}`, agent, taskId: persisted.id };
+    }
+
+    agent.currentAgentId = persisted.id;
+    if (force) agent.lastRunAt = null;
+    agent.updatedAt = new Date().toISOString();
     await writeData(data);
-    return data.agents[idx];
+
+    if (force) {
+      const { forceSpawnTask } = await import('./cos/cos.js');
+      const result = await forceSpawnTask(persisted.id);
+      if (result?.error) {
+        await deleteFeatureAgentTask(persisted.id);
+        agent.currentAgentId = null;
+        await writeData(data);
+        return { reason: result.error, agent, taskId: persisted.id };
+      }
+    }
+    return { task: { ...persisted, taskType: 'internal' }, agent };
   });
-  if (!agent) return null;
-
-  if (agent.currentAgentId) {
-    return {
-      triggered: false,
-      reason: 'Feature agent already has a run in progress',
-      agent,
-      taskId: agent.currentAgentId
-    };
-  }
-
-  const task = generateTaskFromFeatureAgent(agent);
-  const { addTask } = await import('./cos/cosTaskStore.js');
-  const { forceSpawnTask } = await import('./cos/cos.js');
-  const persisted = await addTask(task, 'internal', { raw: true, suppressDequeue: true });
-  if (!persisted?.id) {
-    return { triggered: false, reason: 'Feature agent run was not queued', agent };
-  }
-
-  // A previous scheduler evaluation can leave an equivalent pending task in
-  // COS-TASKS.md. Reuse it and force-spawn it rather than reporting a trigger
-  // that only reset the feature-agent timestamps.
-  if (persisted.duplicate && persisted.status !== 'pending') {
-    return {
-      triggered: false,
-      reason: `Feature agent run is already ${persisted.status}`,
-      agent,
-      taskId: persisted.id
-    };
-  }
-
-  await setCurrentAgent(id, persisted.id);
-  const spawnResult = await forceSpawnTask(persisted.id);
-  if (spawnResult?.error) {
-    await clearPendingAgentTask(id, persisted.id);
-    return { triggered: false, reason: spawnResult.error, agent, taskId: persisted.id };
-  }
-
-  console.log(`🤖 Feature agent force-triggered: ${agent.name} (${id})`);
-  return { triggered: true, started: true, agent, taskId: persisted.id };
 }
 
 /**
@@ -375,13 +376,14 @@ export function generateTaskFromFeatureAgent(agent) {
 /**
  * Record run completion and update agent state
  */
-export async function recordRunCompletion(id, runData) {
+async function recordRunCompletion(id, runData, { id: agentId, taskId }) {
   return withLock(async () => {
     const data = await readData();
     const idx = data.agents.findIndex(a => a.id === id);
     if (idx === -1) return null;
 
     const agent = data.agents[idx];
+    if (!agent.currentAgentId || (agent.currentAgentId !== agentId && agent.currentAgentId !== taskId)) return null;
     agent.lastRunAt = new Date().toISOString();
     agent.runCount = (agent.runCount || 0) + 1;
     agent.currentAgentId = null;
@@ -435,11 +437,16 @@ export async function getFeatureAgentOutput(id) {
   const agent = await getFeatureAgent(id);
   if (!agent?.currentAgentId) return null;
 
-  const outputFile = join(PATHS.cosAgents, agent.currentAgentId, 'output.txt');
-  if (!existsSync(outputFile)) return null;
-
-  const content = await readFile(outputFile, 'utf-8').catch(() => '');
-  return { agentId: agent.currentAgentId, output: content };
+  const agentId = agent.currentAgentId;
+  const { getAgentDir, loadAgentIndex } = await import('./cos/cosAgentIndex.js');
+  const { readAgentTranscriptTail } = await import('./cos/cosAgentLifecycle.js');
+  const options = { limit: 500 };
+  let tail = await readAgentTranscriptTail(join(getAgentDir(agentId), 'output.txt'), options);
+  if (!tail) {
+    const date = (await loadAgentIndex()).get(agentId);
+    if (date) tail = await readAgentTranscriptTail(join(getAgentDir(agentId, date), 'output.txt'), options);
+  }
+  return tail ? { agentId, output: tail.lines.join('\n') } : null;
 }
 
 /**
@@ -502,20 +509,58 @@ ${skillTemplate ? `## Skill Guidelines\n${skillTemplate}\n` : ''}
 `;
 }
 
-/**
- * Mark a feature agent as having a pending task (prevents duplicate spawns).
- * The pendingTaskId is used temporarily until the real CoS agent spawns,
- * at which point currentAgentId is set via the agent:spawned listener below.
- */
-export async function setCurrentAgent(id, taskId) {
-  return withLock(async () => {
-    const data = await readData();
-    const idx = data.agents.findIndex(a => a.id === id);
-    if (idx === -1) return;
-    data.agents[idx].currentAgentId = taskId;
-    data.agents[idx].updatedAt = new Date().toISOString();
-    await writeData(data);
-  });
+async function deleteFeatureAgentTask(taskId) {
+  const { deleteTask } = await import('./cos/cosTaskStore.js');
+  const result = await deleteTask(taskId, 'internal');
+  if (result.error && result.error !== 'Task not found') throw new Error(result.error);
+}
+
+async function terminateActiveFeatureAgentRun(agent) {
+  const pointer = agent.currentAgentId;
+  if (!pointer) return;
+
+  const { getAgents, getAgentRecord, isLiveAgentRecord } = await import('./cos/cosAgentLifecycle.js');
+  const record = await getAgentRecord(pointer);
+  const continuation = isQueuedContinuation(record) ? record.result.resumedTaskId : null;
+  const taskId = continuation ?? record?.taskId ?? pointer;
+  // The task can already own a process while its agent:spawned listener waits
+  // to take this lock. Match only this feature's run before using that agent id.
+  const owner = isLiveAgentRecord(record) ? record : (await getAgents()).find(run =>
+    isLiveAgentRecord(run) && run.taskId === taskId && run.metadata?.featureAgentId === agent.id);
+  if (owner) {
+    const { killAgent } = await import('./agent/agentManagement.js');
+    try {
+      await killAgent(owner.id);
+    } catch (error) {
+      if (error.status !== 404 || error.code !== 'NOT_FOUND') throw error;
+      const retired = await getAgentRecord(owner.id);
+      if (isQueuedContinuation(retired)) {
+        await deleteFeatureAgentTask(retired.result.resumedTaskId);
+        return;
+      }
+      if (retired?.status === 'completed') return;
+    }
+    // killAgent blocks the task for manual retry. A feature run being stopped
+    // here must release that task's dedup slot so the feature can run again.
+    if (owner.taskId) await deleteFeatureAgentTask(owner.taskId);
+    return;
+  }
+  if (!record || continuation) await deleteFeatureAgentTask(taskId);
+}
+
+export async function withFeatureAgentDispatch(task, spawn) {
+  return withBackupAssetPublication(() => withLock(async () => {
+    const agent = await getFeatureAgent(task.metadata.featureAgentId);
+    if (!agent?.currentAgentId) return null;
+    if (agent.currentAgentId !== task.id) {
+      // The continuation can reach dequeue before the completion listener has
+      // moved the pointer from the retired agent back to the queued task.
+      const { getAgentRecord } = await import('./cos/cosAgentLifecycle.js');
+      const previous = await getAgentRecord(agent.currentAgentId);
+      if (!isQueuedContinuation(previous) || previous.result.resumedTaskId !== task.id) return null;
+    }
+    return spawn();
+  }));
 }
 
 // Move a feature agent's pointer from the run that just handed off to the task its
@@ -532,31 +577,21 @@ async function handOffCurrentAgent(id, retiredAgentId, continuationTaskId) {
   });
 }
 
-async function clearPendingAgentTask(id, taskId) {
-  return withLock(async () => {
-    const data = await readData();
-    const idx = data.agents.findIndex(a => a.id === id);
-    if (idx === -1 || data.agents[idx].currentAgentId !== taskId) return;
-    data.agents[idx].currentAgentId = null;
-    data.agents[idx].updatedAt = new Date().toISOString();
-    await writeData(data);
-  });
-}
-
 // Listen for agent:spawned events to update currentAgentId from the
 // temporary task ID to the real CoS agent ID (needed for output streaming).
 cosEvents.on('agent:spawned', async (agentData) => {
-  if (!agentData?.taskId) return;
-  // Check if this task belongs to a feature agent
-  const taskId = agentData.taskId;
-  const data = await readData().catch(() => null);
-  if (!data) return;
-  const fa = data.agents.find(a => a.currentAgentId === taskId);
-  if (!fa) return;
-  await setCurrentAgent(fa.id, agentData.id).catch(err => {
+  if (!agentData?.taskId || !agentData.metadata?.featureAgentRun) return;
+  await withLock(async () => {
+    const data = await readData();
+    const fa = data.agents.find(a => a.id === agentData.metadata.featureAgentId && a.currentAgentId === agentData.taskId);
+    if (!fa) return;
+    fa.currentAgentId = agentData.id;
+    fa.updatedAt = new Date().toISOString();
+    await writeData(data);
+    cosEvents.emit(`${EVT}:status`, { id: fa.id, status: fa.status, name: fa.name });
+  }).catch(err => {
     console.log(`⚠️ Failed to update feature agent currentAgentId: ${err.message}`);
   });
-  cosEvents.emit(`${EVT}:status`, { id: fa.id, status: fa.status, name: fa.name });
 });
 
 // Feature-agent tasks are ordinary CoS agents at runtime. Keep the persistent
@@ -603,25 +638,37 @@ cosEvents.on('agent:completed', async (agentData) => {
   await recordRunCompletion(featureAgentId, {
     status: success ? 'working' : 'error',
     summary: success ? 'Feature agent run completed' : agentData.result?.error || 'Feature agent run failed'
-  }).catch(err => {
+  }, agentData).catch(err => {
     console.log(`⚠️ Failed to record feature agent completion: ${err.message}`);
   });
 });
 
-async function releasePendingTask(taskId) {
+async function releasePendingTask(taskId, { retainQueued = true } = {}) {
   if (!taskId) return;
-  const data = await readData().catch(() => null);
-  const agent = data?.agents?.find(candidate => candidate.currentAgentId === taskId);
-  if (!agent) return;
-  await clearPendingAgentTask(agent.id, taskId).catch(err => {
+  return withLock(async () => {
+    const data = await readData();
+    const agent = data.agents.find(candidate => candidate.currentAgentId === taskId);
+    if (!agent) return;
+    if (retainQueued) {
+      const { getTaskById } = await import('./cos/cosTaskStore.js');
+      const task = await getTaskById(taskId);
+      if (task?.status === 'pending') return;
+    }
+    agent.currentAgentId = null;
+    agent.updatedAt = new Date().toISOString();
+    await writeData(data);
+  }).catch(err => {
     console.log(`⚠️ Failed to clear feature agent pending task: ${err.message}`);
   });
 }
 
-// Provider/worktree setup can fail before a CoS agent record exists, so no
-// completion event will clear the temporary task pointer. Release that pointer
-// when the spawn path reports the task-level error. A held dispatch
-// (`task:held`) drops the unpersisted task the same way; lastRunAt
-// stays untouched so the agent is due again on the next dequeue.
+// A held or failed dispatch may be retried while its task is still pending.
+// Release legacy unpersisted pointers and terminal setup failures so their
+// feature agent can be scheduled again.
 cosEvents.on('agent:error', (agentData) => releasePendingTask(agentData?.taskId));
 cosEvents.on('task:held', (held) => releasePendingTask(held?.taskId));
+cosEvents.on('tasks:changed', (change) => {
+  if (change?.action === 'deleted' && change.type === 'internal') {
+    return releasePendingTask(change.taskId, { retainQueued: false });
+  }
+});

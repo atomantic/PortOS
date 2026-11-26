@@ -207,7 +207,7 @@ export async function admitFeatureAgentTasks({
 }, { canSpawn, emitSpawn, trackSpawn }) {
   if (spawnedCount() >= autonomousSlotCeiling || hasPendingUserTasks || cosAutonomyMode !== 'execute') return;
 
-  const { getDueFeatureAgents, generateTaskFromFeatureAgent, setCurrentAgent } = await import('../featureAgents.js');
+  const { getDueFeatureAgents, generateTaskFromFeatureAgent, queueFeatureAgentTask } = await import('../featureAgents.js');
   const dueAgents = await getDueFeatureAgents().catch(err => {
     emitLog('debug', `Feature agents check failed: ${err.message}`);
     return [];
@@ -216,9 +216,13 @@ export async function admitFeatureAgentTasks({
     if (spawnedCount() >= autonomousSlotCeiling) break;
     const task = generateTaskFromFeatureAgent(fa);
     if (!canSpawn(task, autonomousSlotCeiling)) continue;
-    emitSpawn(task);
-    trackSpawn(task);
-    await setCurrentAgent(fa.id, task.id).catch(() => {});
+    const queued = await queueFeatureAgentTask(task).catch(err => {
+      emitLog('warn', `Feature agent queue failed: ${err.message}`, { featureAgentId: fa.id });
+      return null;
+    });
+    if (!queued?.task) continue;
+    emitSpawn(queued.task);
+    trackSpawn(queued.task);
     emitLog('info', `Feature agent due: ${fa.name}`, { featureAgentId: fa.id });
   }
 }
