@@ -4,7 +4,7 @@
 
 import { homedir } from 'os';
 import { join } from 'path';
-import { getSettings, updateSettings } from '../settings.js';
+import { getSettings, updateSettingsWith } from '../settings.js';
 import { deepMerge } from '../../lib/objects.js';
 import { expandHome } from '../../lib/fileUtils.js';
 import { migrateRetiredTtsConfig } from '../../lib/voiceEngines.js';
@@ -177,7 +177,7 @@ export const VOICE_DEFAULTS = Object.freeze({
 export const expandPath = expandHome;
 
 // Tiny in-memory cache so hot paths (per-turn enabled check in voice sockets)
-// don't hit disk on every dispatch. Invalidated on updateVoiceConfig and
+// don't hit disk on every dispatch. Refreshed on updateVoiceConfig and invalidated
 // manually via invalidateVoiceConfigCache() from the reconcile flow.
 let cachedConfig = null;
 
@@ -200,14 +200,15 @@ export const getVoiceConfig = async () => {
 export const invalidateVoiceConfigCache = () => { cachedConfig = null; };
 
 export const updateVoiceConfig = async (patch) => {
-  const settings = await getSettings();
-  const current = deepMerge(VOICE_DEFAULTS, stripRetiredKeys(settings.voice));
-  const next = deepMerge(current, stripRetiredKeys(patch));
-  next.tts = migrateRetiredTtsConfig(next.tts);
-  if (next.tts.retiredEngine === null) delete next.tts.retiredEngine;
-  await updateSettings({ voice: next });
-  cachedConfig = next;
-  return next;
+  const { voice } = await updateSettingsWith((settings) => {
+    const current = deepMerge(VOICE_DEFAULTS, stripRetiredKeys(settings.voice));
+    const next = deepMerge(current, stripRetiredKeys(patch));
+    next.tts = migrateRetiredTtsConfig(next.tts);
+    if (next.tts.retiredEngine === null) delete next.tts.retiredEngine;
+    return { ...settings, voice: next };
+  });
+  cachedConfig = voice;
+  return voice;
 };
 
 export const voiceHome = () => VOICE_HOME;
