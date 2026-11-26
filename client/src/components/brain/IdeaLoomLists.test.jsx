@@ -148,6 +148,24 @@ describe('IdeaLoomLists', () => {
     expect(await screen.findByLabelText('Idea 1')).toBeTruthy();
   });
 
+  it('keeps idea inputs mounted while typing and reordering, and marks the active list', async () => {
+    getIdeaLoomLists.mockResolvedValue([storedList()]);
+    renderPanel('/brain/ideas?list=list-1');
+
+    const selectedList = await screen.findByRole('button', { name: /Launch ideas/ });
+    expect(selectedList).toHaveAttribute('aria-current', 'true');
+    const input = await screen.findByLabelText('Idea 1');
+    input.focus();
+    for (const character of 'First idea') {
+      fireEvent.change(input, { target: { value: `${input.value}${character}` } });
+      expect(screen.getByLabelText('Idea 1')).toBe(input);
+      expect(input).toHaveFocus();
+    }
+    fireEvent.click(screen.getByLabelText('Move idea 2 up'));
+    expect(screen.getByLabelText('Idea 2')).toBe(input);
+    expect(input).toHaveFocus();
+  });
+
   it('offers explicit exchange controls only for a configured vault', async () => {
     getIdeaLoomSettings.mockResolvedValue({ enabled: true, obsidianVaultId: 'vault-1', autoSync: false });
     getIdeaLoomLists.mockResolvedValue([storedList()]);
