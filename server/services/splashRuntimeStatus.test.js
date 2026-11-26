@@ -2,6 +2,10 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const getSplashManagedState = vi.hoisted(() => vi.fn());
 vi.mock('./splashServerManager.js', () => ({ getSplashManagedState }));
 
+vi.mock('../lib/processEnv.js', async (importOriginal) => ({
+  ...await importOriginal(), findCommandOnPath: () => '/usr/local/bin/splash',
+}));
+
 const host = { platform: 'darwin', arch: 'arm64', macVersion: '27.2.0', cpuModel: 'Apple M5 Max' };
 beforeEach(() => getSplashManagedState.mockReset().mockResolvedValue({ installed: false, managed: false }));
 
@@ -62,4 +66,12 @@ it.each([
   vi.stubGlobal('fetch', fetch);
   expect(await getSplashRuntimeStatus(unsupported)).toMatchObject({ supported: false, state: 'unsupported' });
   expect(fetch).not.toHaveBeenCalled();
+});
+
+it('reports a managed install as stopped and a PATH-only install as missing', async () => {
+  vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('not bound')));
+  expect(await getSplashRuntimeStatus(host)).toMatchObject({ installed: false, state: 'missing' });
+
+  getSplashManagedState.mockResolvedValue({ installed: true, managed: false });
+  expect(await getSplashRuntimeStatus(host)).toMatchObject({ installed: true, state: 'stopped' });
 });

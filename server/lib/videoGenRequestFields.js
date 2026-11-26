@@ -5,6 +5,9 @@
 
 export const MAX_VIDEO_BATCH_SIZE = 20;
 
+export const UPSCALE_METHODS = Object.freeze(['lanczos', 'ltx']);
+export const DEFAULT_UPSCALE_METHOD = 'lanczos';
+
 // Request fields that only local video runtimes understand. Their Zod schemas
 // stay in `lib/videoGenValidation.js`, while this domain-level list lets
 // submission logic decide whether a request can be routed to a Grok pin without

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import BrokerCaseDrawer from './BrokerCaseDrawer.jsx';
 
 // Pins the blocked-case contract: an explainer with a manual-check link built
@@ -63,6 +64,38 @@ describe('BrokerCaseDrawer — sealed identity evidence (#8333)', () => {
     expect(onEraseEvidence).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /^erase$/i }));
     expect(onEraseEvidence).toHaveBeenCalledWith(foundCase);
+  });
+
+  it('preserves the erase trigger and restores keyboard focus after Cancel', async () => {
+    const user = userEvent.setup();
+    const onEraseEvidence = vi.fn();
+    const props = { open: true, caseData: foundCase, broker, onEraseEvidence };
+    const { rerender } = render(<BrokerCaseDrawer {...props} />);
+    const matchBasis = screen.getByText('Match basis: name+location');
+    const trigger = screen.getByRole('button', { name: 'Erase identity evidence' });
+
+    trigger.focus();
+    await user.keyboard('{Enter}');
+
+    expect(trigger.isConnected).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Erase identity evidence' })).toBeNull();
+    expect(screen.getByText('Match basis: name+location')).toBe(matchBasis);
+    const confirmation = screen.getByRole('group', { name: 'Confirm erasing identity evidence' });
+    expect(confirmation).toHaveFocus();
+
+    rerender(<BrokerCaseDrawer {...props} identity={{ matched_name: 'Example Person' }} />);
+    expect(screen.getByText('Matched: Example Person')).toBeTruthy();
+    expect(confirmation).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Erase', exact: true })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    await user.keyboard('{Enter}');
+
+    expect(screen.getByRole('button', { name: 'Erase identity evidence' })).toBe(trigger);
+    expect(trigger).toHaveFocus();
+    expect(confirmation.isConnected).toBe(false);
+    expect(onEraseEvidence).not.toHaveBeenCalled();
   });
 
   it('offers no erase control once the evidence is gone', () => {

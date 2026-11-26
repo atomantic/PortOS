@@ -218,9 +218,23 @@
       }
     }
   },
-  // GritQL plugins cover rules Biome 2.5 has no native equivalent for. This one
-  // replaces three @eslint-react rules and applies everywhere under src/.
-  "plugins": ["./lint-react-legacy-apis.grit"],
+  // Restrict application conventions to production source, as the retired
+  // Vitest guards did. The formatter wrapper owns the locale-specific calls.
+  "plugins": [
+    "./lint-react-legacy-apis.grit",
+    {
+      "path": "./lint-no-global-shadow.grit",
+      "includes": ["src/**", "!src/**/*.test.js", "!src/**/*.test.jsx"]
+    },
+    {
+      "path": "./lint-no-view-interval.grit",
+      "includes": ["src/components/**", "src/pages/**", "!src/**/*.test.js", "!src/**/*.test.jsx"]
+    },
+    {
+      "path": "./lint-use-shared-number-formatters.grit",
+      "includes": ["src/**", "!src/utils/formatters.js", "!src/**/*.test.js", "!src/**/*.test.jsx"]
+    }
+  ],
   "overrides": [
     {
       // The randomUUID ban (formerly `no-restricted-syntax`) is scoped by negated

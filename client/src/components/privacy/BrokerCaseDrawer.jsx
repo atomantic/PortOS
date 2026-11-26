@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { RotateCw, ExternalLink, CheckCircle2, XCircle, ListChecks, Eraser } from 'lucide-react';
 import Drawer from '../Drawer';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
@@ -8,6 +8,15 @@ import { isHttpUrl } from '../../utils/urlNormalize';
 
 // Action icon by descriptor `icon` token (positive resolution vs dismiss).
 const ACTION_ICONS = { check: CheckCircle2, x: XCircle };
+
+function Row({ label, children }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[11px] uppercase tracking-wide text-gray-500">{label}</span>
+      <div className="text-sm text-gray-200 break-words">{children}</div>
+    </div>
+  );
+}
 
 // Read-only case inspector + manual controls (issue #2146). Deep-linked open
 // state is owned by the parent (a `?case=<id>` search param), so this component
@@ -24,6 +33,7 @@ export default function BrokerCaseDrawer({
 }) {
   // Keyed by case id so an armed confirm never carries over to another case.
   const [confirmEraseId, setConfirmEraseId] = useState(null);
+  const eraseTriggerRef = useRef(null);
   const confirmErase = Boolean(caseData?.id) && confirmEraseId === caseData.id;
   // Stale/deleted deep link — the case is gone but the URL still points at it.
   const notFound = open && !caseData;
@@ -43,13 +53,6 @@ export default function BrokerCaseDrawer({
   const state = caseData?.state;
   const isBlocked = state === 'blocked';
   const actions = manualCaseActions(state, caseData?.allowedTransitions);
-
-  const Row = ({ label, children }) => (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-[11px] uppercase tracking-wide text-gray-500">{label}</span>
-      <div className="text-sm text-gray-200 break-words">{children}</div>
-    </div>
-  );
 
   return (
     <Drawer
@@ -146,24 +149,30 @@ export default function BrokerCaseDrawer({
               </a>
             )}
             {hasSealedEvidence && onEraseEvidence && (
-              confirmErase ? (
-                <InlineConfirmRow
-                  className="mt-2"
-                  question="Erase the matched name, location, and search/listing links for this case? A later scan can record them again."
-                  confirmText="Erase"
-                  onConfirm={() => { setConfirmEraseId(null); onEraseEvidence(caseData); }}
-                  onCancel={() => setConfirmEraseId(null)}
-                />
-              ) : (
+              <>
                 <button
+                  ref={eraseTriggerRef}
                   type="button"
                   onClick={() => setConfirmEraseId(caseData.id)}
+                  hidden={confirmErase}
                   disabled={busy}
                   className="mt-2 inline-flex items-center gap-1 text-xs text-gray-400 hover:text-port-error disabled:opacity-50"
                 >
                   <Eraser size={12} /> Erase identity evidence
                 </button>
-              )
+                {confirmErase && (
+                  <InlineConfirmRow
+                    className="mt-2"
+                    question="Erase the matched name, location, and search/listing links for this case? A later scan can record them again."
+                    confirmText="Erase"
+                    autoFocus
+                    aria-label="Confirm erasing identity evidence"
+                    returnFocusRef={eraseTriggerRef}
+                    onConfirm={() => { setConfirmEraseId(null); onEraseEvidence(caseData); }}
+                    onCancel={() => setConfirmEraseId(null)}
+                  />
+                )}
+              </>
             )}
           </Row>
 

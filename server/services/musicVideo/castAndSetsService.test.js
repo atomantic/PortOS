@@ -2250,6 +2250,12 @@ it('holds approval for a changed greybox camera and releases it when the change 
   await projects.mutateProjectRecord(project.id, (p) => ({ project: { ...p, castAndSets: {
     status: 'review', revision: 1, direction: DIRECTION, plan: {}, images: {},
   } } }));
+  const mixed = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({
+    sets: [{ id: 'lab', setReference: { subjectId: 'place-example', greyboxShotId: 'wide' } }],
+    props: [{ name: 'Notebook', description: 'A pocket notebook' }],
+  });
+  expect(mixed.status).toBe(400);
+  expect(mixed.body.context.details).toContainEqual({ path: '', message: 'Save greybox selections separately from direction edits.' });
   const beforeJobs = jobs.length;
   const result = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'lab', setReference: { subjectId: 'place-example', greyboxShotId: 'wide' } }] });
   await service.__settleCastAndSetsForTests();

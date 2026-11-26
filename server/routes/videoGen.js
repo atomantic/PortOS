@@ -16,12 +16,12 @@ import { updateVideoPoster, createSharingCopy } from '../services/videoGen/poste
 import { basename } from 'path';
 import os from 'os';
 import { randomUUID } from 'crypto';
-import { z } from 'zod';
 import { resolveGalleryImage } from '../lib/fileUtils.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { createVideoHistoryItemRead, historyRecordIdSchema } from './videoHistoryRead.js';
 import { optionalUpload, optionalUploadFields } from '../lib/multipart.js';
 import { validateRequest } from '../lib/validateRequest.js';
+import { registerArtifactRoutes } from '../lib/modelArtifactRoutes.js';
 import { VIDEO_BACKEND_DISCLOSURES } from '../lib/videoDisclosure.js';
 import { getSettings } from '../services/settings.js';
 import { deleteVideoHostedCopy } from '../services/hostedRenderRemoteDelete.js';
@@ -45,11 +45,6 @@ import {
   resolveFflfLtx2PixelBudget,
 } from '../services/videoGen/local.js';
 import { readHistorySnapshot } from '../services/videoGen/history.js';
-// The method enum comes from the pure contract module rather than through
-// local.js's re-export: it is a constant, and reading it off the mockable
-// provider surface would make every suite that mocks local.js responsible for
-// re-declaring it just so this file's route schemas can be built.
-import { UPSCALE_METHODS, DEFAULT_UPSCALE_METHOD } from '../services/videoGen/upscalePlan.js';
 import { enqueueLtxUpscale } from '../services/videoGen/upscaleJob.js';
 import { quoteTopaz } from '../services/videoGen/topazQuote.js';
 import { assertNoPendingTopaz, enqueueTopazUpscale, reconcileTopazStatus, recoverTopazResult } from '../services/videoGen/topazJob.js';
@@ -57,9 +52,7 @@ import { enqueueStitch } from '../services/videoGen/stitchJob.js';
 import { trimHistoryItem } from '../services/videoGen/trim.js';
 import { handheldHistoryItem } from '../services/videoGen/handheld.js';
 import { enqueueVertical } from '../services/videoGen/verticalJob.js';
-import { VERTICAL_RATIO_IDS } from '../lib/verticalReframe.js';
 import { extendHistoryClip } from '../services/videoGen/extendHosted.js';
-import { HANDHELD_SEED_MAX } from '../lib/handheldCamera.js';
 import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
 import { submitVideoGenJob } from '../services/videoGen/submitJob.js';
 import { previewVideoPrompt } from '../services/videoGen/promptPreview.js';
@@ -82,7 +75,6 @@ import {
 import { startHfDownloadStream } from '../services/hfDownloadStream.js';
 import { openSseStream } from '../lib/sseDownload.js';
 import { saveUploadedGalleryVideo, saveUploadedGalleryVideoFile } from '../services/videoUpload.js';
-import { JSON_BODY_LIMIT_BYTES } from '../lib/uploadLimits.js';
 import { effectiveJobPrompt } from '../lib/federatedMediaWire.js';
 import { isRemoteMediaJob } from '../services/mediaJobQueue/remoteMediaJob.js';
 import {
@@ -95,10 +87,16 @@ import { deleteMediaAnywhere, cancelPendingDelete } from '../services/mediaRemot
 import { assertMediaDeletable } from '../services/mediaUsage.js';
 import { getProject } from '../services/musicVideo/projects.js';
 import {
-  hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema,
+  hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadParamsSchema,
   icLoraDownloadParamsSchema, textEncoderDownloadParamsSchema, videoCancelBodySchema, videoExtendBodySchema
 } from '../lib/mediaGenerationValidation.js';
-import { generateBodySchema, promptPreviewBodySchema, statusQuerySchema } from '../lib/videoGenValidation.js';
+import {
+  batchIdParamsSchema, generateBodySchema, handheldBodySchema, historyIdSchema, overnightBodySchema,
+  overnightQuerySchema, posterSchema, promptPreviewBodySchema, speedProfileDownloadQuerySchema,
+  statusQuerySchema, stitchBodySchema, topazJobParamsSchema, topazQuoteBodySchema, topazTokenBodySchema,
+  trimBodySchema, updatePromptSchema, uploadVideoSchema, upscaleMethodSchema, verticalBodySchema,
+  visibilitySchema,
+} from '../lib/videoGenValidation.js';
 
 const router = Router();
 
@@ -307,8 +305,7 @@ router.get('/model-context', asyncHandler(async (_req, res) => {
   res.json(await videoModelContext());
 }));
 
-const sharedTextEncoderCacheStatus = async () => {
-  const repo = getTextEncoderRepo();
+const sharedTextEncoderCacheStatus = async (repo = getTextEncoderRepo()) => {
   if (!isHfRepoId(repo)) return { repo, cached: true, sizeBytes: 0, integrity: null };
   return { repo, ...await repoCacheStatus(repo) };
 };
@@ -392,218 +389,132 @@ router.get('/models/status', asyncHandler(async (_req, res) => {
   res.json({ models, textEncoder, textEncoderOptions, icLoras });
 }));
 
-// POST /models/verify — force an integrity re-scan on demand. `deep:true` adds
-// the per-file sha256 comparison (slower; reads every weight byte) on top of
-// the cheap structural check the status poll already runs. With no `modelId`
-// it scans every cached model + the text encoder.
-const verifyBodySchema = z.object({
-  modelId: z.string().min(1).optional(),
-  deep: z.boolean().optional(),
-});
-router.post('/models/verify', asyncHandler(async (req, res) => {
-  const parsed = verifyBodySchema.safeParse(req.body || {});
-  if (!parsed.success) failValidation(parsed);
-  const { modelId, deep = false } = parsed.data;
-  const repos = reposToVerify(modelId);
-  if (modelId && repos.length === 0) {
-    throw new ServerError(`Unknown video model: ${modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
-  }
-  const results = await Promise.all(repos.map((target) => verifyDownloadTarget(target, { deep })));
-  res.json({ deep, models: results.map((r) => ({ repo: r.repoId, ...summarizeVerify(r) })) });
-}));
+const videoModelFromId = (modelId) => {
+  const model = listVideoModels().find((entry) => entry.id === modelId);
+  if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
+  return model;
+};
 
-// POST /models/:modelId/repair — delete the flagged (corrupt/truncated) weight
-// files for the model's repo(s) so the existing resumable HF fetch path
-// re-downloads them. Returns the deleted-file list; the client then re-triggers
-// the normal `/models/:id/download` SSE stream to pull clean copies with
-// progress. `deep:true` uses the sha256 comparison to decide what's corrupt.
-router.post('/models/:modelId/repair', asyncHandler(async (req, res) => {
-  const model = listVideoModels().find((m) => m.id === req.params.modelId);
-  if (!model) throw new ServerError(`Unknown video model: ${req.params.modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
-  const parsed = z.object({ deep: z.boolean().optional() }).safeParse(req.body || {});
-  if (!parsed.success) failValidation(parsed);
-  const deep = parsed.data.deep || false;
-  const repos = reposToVerify(model.id);
-  if (repos.length === 0) {
+const requireVideoModelTargets = (model, targets) => {
+  if (targets.length === 0) {
     throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
   }
-  const repaired = await Promise.all(repos.map((target) => repairDownloadTarget(target, { deep })));
-  const deleted = repaired.flatMap((r) => r.deleted.map((name) => ({ repo: r.repoId, name })));
-  res.json({ deep, deleted, repos: [...new Set(repos.map((target) => target.repo))] });
-}));
+  return targets;
+};
 
-router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
-  validateRequest(modelDownloadQuerySchema, req.query);
-  const { modelId } = validateRequest(modelDownloadParamsSchema, req.params);
-  const model = listVideoModels().find((m) => m.id === modelId);
-  if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
-  res.json({ id: model.id, ...await modelCacheStatus(model) });
-}));
+registerArtifactRoutes(router, {
+  mount: (router, { status, download, repair, verify }) => {
+    router.post('/models/verify', verify);
+    router.post('/models/:modelId/repair', repair);
+    router.get('/models/:modelId/download', status);
+    router.post('/models/:modelId/download', download);
+  },
+  paramsSchema: modelDownloadParamsSchema,
+  downloadQuerySchema: speedProfileDownloadQuerySchema,
+  resolve: ({ modelId }) => videoModelFromId(modelId),
+  status: async (model) => ({ id: model.id, ...await modelCacheStatus(model) }),
+  download: async (model, { speedProfileId, ...stream }) => {
+    const repos = requireVideoModelTargets(model, modelDownloadTargets(model, { speedProfileId }));
+    const runtimeInfo = BYOV_RUNTIME_INFO[model.runtime];
+    const pythonPath = runtimeInfo?.hfDownloadPython !== false
+      && await isByovRuntimeReady(model.runtime)
+      ? runtimeInfo.venvPython
+      : null;
+    await startHfDownloadStream({ ...stream, repos, pythonPath });
+  },
+  repair: async (model, { deep }) => {
+    const repos = requireVideoModelTargets(model, reposToVerify(model.id));
+    const repaired = await Promise.all(repos.map((target) => repairDownloadTarget(target, { deep })));
+    const deleted = repaired.flatMap((r) => r.deleted.map((name) => ({ repo: r.repoId, name })));
+    return { deleted, repos: [...new Set(repos.map((target) => target.repo))] };
+  },
+  verify: async ({ modelId, deep }) => {
+    const repos = reposToVerify(modelId);
+    if (modelId && repos.length === 0) {
+      throw new ServerError(`Unknown video model: ${modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
+    }
+    const results = await Promise.all(repos.map((target) => verifyDownloadTarget(target, { deep })));
+    return results.map((r) => ({ repo: r.repoId, ...summarizeVerify(r) }));
+  },
+});
 
-const speedProfileDownloadQuerySchema = modelDownloadQuerySchema.extend({ speedProfileId: z.string().min(1).max(64).optional() });
-router.post('/models/:modelId/download', asyncHandler(async (req, res) => {
-  const { force, speedProfileId } = validateRequest(speedProfileDownloadQuerySchema, req.query);
-  const { modelId } = validateRequest(modelDownloadParamsSchema, req.params);
-  const model = listVideoModels().find((m) => m.id === modelId);
-  if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
-  const repos = modelDownloadTargets(model, { speedProfileId });
-  if (repos.length === 0) throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
-  const runtimeInfo = BYOV_RUNTIME_INFO[model.runtime];
-  const pythonPath = runtimeInfo?.hfDownloadPython !== false
-    && await isByovRuntimeReady(model.runtime)
-    ? runtimeInfo.venvPython
-    : null;
-  await startHfDownloadStream({ req, res, repos, pythonPath, force });
-}));
+// Remix weights are keyed by mode. Exact-file specs try the official repo then
+// the mirror, pinning both filename and any revision. A snapshot of the gated
+// Ingredients repo can fail, and its aggregate mirror can fill the user's disk.
+registerArtifactRoutes(router, {
+  mount: (router, { status, download, repair }) => {
+    router.get('/ic-loras/:mode/download', status);
+    router.post('/ic-loras/:mode/download', download);
+    router.post('/ic-loras/:mode/repair', repair);
+  },
+  paramsSchema: icLoraDownloadParamsSchema,
+  resolve: ({ mode }) => icLoraSpecFromParam(mode),
+  status: icLoraCacheStatus,
+  download: (spec, stream) => {
+    if (!icLoraProbesExactFile(spec)) return startHfDownloadStream({ ...stream, repo: spec.repo });
+    return startHfDownloadStream({
+      ...stream,
+      fallbacks: icLoraWeightCandidates(spec)
+        .map((c) => ({ repo: c.repo, only: [c.filename], revision: c.revision })),
+      // An unrelated weight in the aggregate mirror can make the repo look cached.
+      cachedFile: async () => !!(await findCachedIcLoraWeight(spec)),
+    });
+  },
+  repair: async (spec, { deep }) => {
+    // Repo-wide repair would touch unrelated weights in an aggregate mirror.
+    if (icLoraProbesExactFile(spec)) {
+      const found = await findCachedIcLoraWeight(spec);
+      if (!found) return { deleted: [], repos: [spec.repo] };
+      await repairCachedFile(found.path);
+      return { deleted: [{ repo: found.repo, name: found.filename }], repos: [found.repo] };
+    }
+    const result = await repairModelCache(spec.repo, { deep });
+    return { deleted: result.deleted.map((name) => ({ repo: result.repoId, name })), repos: [spec.repo] };
+  },
+});
 
-// IC-LoRA remix weights (issue #3100) get their own download/repair pair for
-// the same reason the text encoder does: they're required by the render path
-// but are NOT listVideoModels() entries, so the model-id-keyed routes above
-// can't reach them. Keyed by the PortOS remix mode ('ic-control', …) so the
-// client uses the same identifier it puts in the render payload.
-// Download one IC weight. An exact-file spec is fetched SINGLE-FILE and only ever
-// single-file. For Ingredients that is because the official repo is gated (an
-// anonymous pull 401s) and its un-gated mirror is the ~708 GB `DeepBeepMeep/LTX-2`
-// aggregate, so a snapshot of either would either fail or fill the user's disk;
-// for a revision-pinned spec it is because the pinned commit and filename are the
-// whole point of the pin. Candidates are tried in order (official → mirror) so a
-// user WITH an HF token gets the first-party weight and a user without one still
-// succeeds via the mirror — no token, no extra button. The exact filename is
-// pinned so a mirror can't hand back a sibling weight.
-//
-// A spec with NO mirror (the LTX-2.5 upscaler) therefore has exactly one
-// candidate: a gated failure surfaces with its actionable "accept the license"
-// message rather than being downgraded on the way to a fallback that isn't there.
-router.get('/ic-loras/:mode/download', asyncHandler(async (req, res) => {
-  validateRequest(modelDownloadQuerySchema, req.query);
-  const { mode } = validateRequest(icLoraDownloadParamsSchema, req.params);
-  res.json(await icLoraCacheStatus(icLoraSpecFromParam(mode)));
-}));
+// Per-render text encoder alternatives only need the files pinned in the
+// registry. The shared LTX encoder below is selected once for the install.
+registerArtifactRoutes(router, {
+  mount: (router, { status, download, repair }) => {
+    router.get('/text-encoders/:id/download', status);
+    router.post('/text-encoders/:id/download', download);
+    router.post('/text-encoders/:id/repair', repair);
+  },
+  paramsSchema: textEncoderDownloadParamsSchema,
+  resolve: ({ id }) => textEncoderFromParam(id),
+  status: textEncoderCacheStatus,
+  download: (entry, stream) => startHfDownloadStream({ ...stream, repos: [textEncoderDownloadTarget(entry)] }),
+  repair: async (entry, { deep }) => {
+    const result = await repairDownloadTarget(textEncoderDownloadTarget(entry), { deep });
+    return { deleted: result.deleted.map((name) => ({ repo: entry.repo, name })), repos: [entry.repo] };
+  },
+});
 
-router.post('/ic-loras/:mode/download', asyncHandler(async (req, res) => {
-  const { force } = validateRequest(modelDownloadQuerySchema, req.query);
-  const { mode } = validateRequest(icLoraDownloadParamsSchema, req.params);
-  const spec = icLoraSpecFromParam(mode);
-  if (!icLoraProbesExactFile(spec)) {
-    await startHfDownloadStream({ req, res, repo: spec.repo, force });
-    return;
-  }
-  await startHfDownloadStream({
-    req,
-    res,
-    fallbacks: icLoraWeightCandidates(spec)
-      .map((c) => ({ repo: c.repo, only: [c.filename], revision: c.revision })),
-    // The repo-wide `cached` verdict is meaningless for the aggregate mirror (it
-    // reports cached as soon as ANY unrelated weight is resident), so gate the
-    // already-have short-circuit on this exact weight instead.
-    cachedFile: async () => !!(await findCachedIcLoraWeight(spec)),
-    force,
-  });
-}));
-
-router.post('/ic-loras/:mode/repair', asyncHandler(async (req, res) => {
-  const spec = icLoraSpecFromParam(req.params.mode);
-  const parsed = z.object({ deep: z.boolean().optional() }).safeParse(req.body || {});
-  if (!parsed.success) failValidation(parsed);
-  const deep = parsed.data.deep || false;
-  // A mirrored spec is single-file by construction, and repairModelCache walks
-  // the WHOLE snapshot — against the 708 GB aggregate mirror that would stat (and
-  // under `deep`, hash) every unrelated LTX weight the user has. Delete just this
-  // weight and let the single-file download re-fetch it.
-  if (icLoraProbesExactFile(spec)) {
-    const found = await findCachedIcLoraWeight(spec);
-    if (!found) return res.json({ deep, deleted: [], repos: [spec.repo] });
-    await repairCachedFile(found.path);
-    return res.json({ deep, deleted: [{ repo: found.repo, name: found.filename }], repos: [found.repo] });
-  }
-  const result = await repairModelCache(spec.repo, { deep });
-  res.json({ deep, deleted: result.deleted.map((name) => ({ repo: result.repoId, name })), repos: [spec.repo] });
-}));
-
-// Substitutable prompt conditioners (lib/videoTextEncoders.js) get their own
-// download/repair pair for the same reason the IC-LoRA weights do: the render
-// path depends on them but they are NOT listVideoModels() entries, so the
-// model-id-keyed routes can't reach them. Keyed by the registry id the client
-// also puts in the render payload.
-//
-// Distinct from the /text-encoder/* pair below, which is the SHARED LTX encoder
-// (one repo, install-wide, selected in the media-models registry). These are
-// per-model alternatives chosen per render.
-// Always the entry's pinned file list, never a snapshot: these repos publish
-// more than the loader can read — INT8 ConvRot / NVFP4 quantizations and 50-63
-// generation tails in a repack, the language layers past the conditioning depth
-// in an upstream checkpoint — so a repo-wide pull would cost ~130 GB for ~48 GB
-// of usable weights.
-router.get('/text-encoders/:id/download', asyncHandler(async (req, res) => {
-  validateRequest(modelDownloadQuerySchema, req.query);
-  const { id } = validateRequest(textEncoderDownloadParamsSchema, req.params);
-  res.json(await textEncoderCacheStatus(textEncoderFromParam(id)));
-}));
-
-router.post('/text-encoders/:id/download', asyncHandler(async (req, res) => {
-  const { force } = validateRequest(modelDownloadQuerySchema, req.query);
-  const { id } = validateRequest(textEncoderDownloadParamsSchema, req.params);
-  const entry = textEncoderFromParam(id);
-  await startHfDownloadStream({
-    req,
-    res,
-    repos: [textEncoderDownloadTarget(entry)],
-    force,
-  });
-}));
-
-router.post('/text-encoders/:id/repair', asyncHandler(async (req, res) => {
-  const entry = textEncoderFromParam(req.params.id);
-  const parsed = z.object({ deep: z.boolean().optional() }).safeParse(req.body || {});
-  if (!parsed.success) failValidation(parsed);
-  const deep = parsed.data.deep || false;
-  const result = await repairDownloadTarget(textEncoderDownloadTarget(entry), { deep });
-  res.json({
-    deep,
-    deleted: result.deleted.map((name) => ({ repo: entry.repo, name })),
-    repos: [entry.repo],
-  });
-}));
-
-// POST /text-encoder/repair — delete the flagged (corrupt/truncated) weight
-// files for the active text encoder repo so the existing /text-encoder/download
-// SSE re-fetches clean copies. The encoder is shared across all video renders
-// and is NOT a listVideoModels() entry, so the model-id-keyed
-// /models/:modelId/repair can't cover it — this scalar route does. A local-path
-// encoder (e.g. an LM Studio install) isn't an HF repo and has nothing to
-// repair through the cache.
-router.post('/text-encoder/repair', asyncHandler(async (req, res) => {
+const downloadableTextEncoderRepo = () => {
   const repo = getTextEncoderRepo();
   if (!isHfRepoId(repo)) {
     throw new ServerError('Active text encoder is a local-path entry, not an HF repo.', { status: 400, code: 'NOT_DOWNLOADABLE' });
   }
-  const parsed = z.object({ deep: z.boolean().optional() }).safeParse(req.body || {});
-  if (!parsed.success) failValidation(parsed);
-  const deep = parsed.data.deep || false;
-  const result = await repairModelCache(repo, { deep });
-  res.json({ deep, deleted: result.deleted.map((name) => ({ repo: result.repoId, name })), repos: [repo] });
-}));
+  return repo;
+};
 
-// Text encoder pre-fetch. The Gemma encoder is a separate ~7-25 GB pull from
-// the video model itself, so it gets its own button on the video form.
-router.get('/text-encoder/download', asyncHandler(async (req, res) => {
-  validateRequest(modelDownloadQuerySchema, req.query);
-  res.json(await sharedTextEncoderCacheStatus());
-}));
-
-router.post('/text-encoder/download', asyncHandler(async (req, res) => {
-  const { force } = validateRequest(modelDownloadQuerySchema, req.query);
-  const repo = getTextEncoderRepo();
-  // Local-path encoders (LM Studio) are not downloadable — they're served
-  // off disk and the status endpoint already reports cached: true for them.
-  if (!isHfRepoId(repo)) {
-    throw new ServerError('Active text encoder is a local-path entry, not an HF repo.', { status: 400, code: 'NOT_DOWNLOADABLE' });
-  }
-  // `?force=1` (sent by the repair-initiated re-download) re-fetches even when
-  // the repo still looks cached — a deleted shard from a multi-file encoder
-  // would otherwise be skipped.
-  await startHfDownloadStream({ req, res, repo, force });
-}));
+registerArtifactRoutes(router, {
+  mount: (router, { status, download, repair }) => {
+    router.post('/text-encoder/repair', repair);
+    router.get('/text-encoder/download', status);
+    router.post('/text-encoder/download', download);
+  },
+  // A local-path encoder is available for rendering but has no HF cache to modify.
+  resolve: downloadableTextEncoderRepo,
+  status: sharedTextEncoderCacheStatus,
+  resolveStatus: () => getTextEncoderRepo(),
+  download: (repo, stream) => startHfDownloadStream({ ...stream, repo }),
+  repair: async (repo, { deep }) => {
+    const result = await repairModelCache(repo, { deep });
+    return { deleted: result.deleted.map((name) => ({ repo: result.repoId, name })), repos: [repo] };
+  },
+});
 
 // What Generate would send to the model, built by the render's own code (#11317).
 router.post('/prompt-preview', optionalUploadFields([]), asyncHandler(async (req, res) => {
@@ -640,15 +551,6 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
 
 // Overnight local clip batches (#15498): queue each shot × local reference model
 // as its Shot card Render, held until `startAt`; anything still waiting at `stopBy` is dropped.
-const overnightBodySchema = z.object({
-  projectId: z.string().min(1).max(200),
-  sceneIds: z.array(z.string().min(1).max(200)).min(1).max(200),
-  modelIds: z.array(z.string().min(1).max(256)).min(1).max(4),
-  startAt: z.string().datetime().optional(),
-  stopBy: z.string().datetime().optional(),
-}).refine((b) => !b.startAt || !b.stopBy || Date.parse(b.stopBy) > Date.parse(b.startAt),
-  { message: 'The stop-by time must be after the start time', path: ['stopBy'] });
-
 router.post('/overnight', asyncHandler(async (req, res) => {
   const { projectId, sceneIds, modelIds, startAt, stopBy } = validateRequest(overnightBodySchema, req.body ?? {});
   const [{ musicVideoClipReferences }, { overnightModelKind, overnightRenderBodies }] = await Promise.all([
@@ -681,14 +583,14 @@ router.post('/overnight', asyncHandler(async (req, res) => {
 }));
 
 router.get('/overnight', asyncHandler(async (req, res) => {
-  const { projectId } = validateRequest(z.object({ projectId: z.string().min(1).max(200) }), req.query);
+  const { projectId } = validateRequest(overnightQuerySchema, req.query);
   const { overnightBatches } = await import('../services/musicVideo/overnightRenders.js');
   res.json({ batches: overnightBatches(listJobs({ kind: 'video' }), projectId) });
 }));
 
 // Cancel a batch's remaining jobs; a running render is stopped too, finished takes stay.
 router.delete('/overnight/:batchId', asyncHandler(async (req, res) => {
-  const { batchId } = validateRequest(z.object({ batchId: z.string().uuid() }), req.params);
+  const { batchId } = validateRequest(batchIdParamsSchema, req.params);
   const live = listJobs({ kind: 'video' }).filter((job) => job.params?.musicVideo?.batchId === batchId
     && (job.status === 'queued' || job.status === 'running'));
   let canceled = 0;
@@ -914,11 +816,6 @@ router.post('/cancel', asyncHandler(async (req, res) => {
   res.json({ ok: false, reason: 'no active or queued video render' });
 }));
 
-const updatePromptSchema = z.object({ prompt: z.string().max(8000) });
-// `hidden` is required: reading an absent body as `false` turned a malformed
-// request into a silent unhide.
-const visibilitySchema = z.object({ hidden: z.boolean() });
-
 router.get('/history', asyncHandler(async (req, res) => {
   // No query keeps the legacy full array; see historyList.js for the opt-in form.
   if (!isHistoryListQuery(req.query)) return res.json(await withMediaFileSizes(await loadHistory(), 'video'));
@@ -933,12 +830,6 @@ router.get('/history/:id', createVideoHistoryItemRead(getHistoryItem));
 // POST /api/image-gen/upload. Lands the bytes under PATHS.videos with a
 // `source: 'upload'` history entry so the file federates via the peer-sync
 // asset manifest (unlike POST /api/uploads → data/uploads/, which does not).
-// Legacy base64 callers retain the JSON transport bounds; multipart files bypass them.
-const uploadVideoSchema = z.object({
-  data: z.string().min(1).max(JSON_BODY_LIMIT_BYTES),
-  filename: z.string().max(255).optional(),
-});
-
 router.post('/upload', optionalUpload('file'), asyncHandler(async (req, res) => {
   if (req.file) {
     try {
@@ -987,7 +878,6 @@ router.post('/history/:id/visibility', asyncHandler(async (req, res) => {
   res.json(await setHistoryItemHidden(parsedId.data, body.data.hidden));
 }));
 
-const posterSchema = z.object({ atSec: z.number().finite().nullable() });
 router.patch('/history/:id/poster', asyncHandler(async (req, res) => {
   const parsed = historyRecordIdSchema.safeParse(req.params.id);
   if (!parsed.success) failValidation(parsed);
@@ -1018,57 +908,39 @@ router.patch('/history/:id/prompt', asyncHandler(async (req, res) => {
   res.json(await updateHistoryItemPrompt(parsedId.data, body.data.prompt));
 }));
 
-// Render jobs use UUID history ids, while shared-gallery uploads use an
-// `upload-<uuid8>` id. These operations derive a NEW artifact path from the
-// resolved record (an anchor frame, an upscale, a stitch output) rather than
-// merely reading or mutating the row, so they hold the tighter of the two
-// contracts and accept only the two id forms this install can mint.
-const historyIdSchema = z.string().regex(
-  /^(?:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}|upload-[a-f0-9]{8})$/i,
-  'invalid history id',
-);
-
 router.post('/last-frame/:id', asyncHandler(async (req, res) => {
   const parsed = historyIdSchema.safeParse(req.params.id);
   if (!parsed.success) failValidation(parsed);
   res.json(await extractLastFrame(parsed.data));
 }));
 
-// The method choice, shared by the action's body and the plan endpoint's query
-// so the two can never disagree on what is accepted or what an omission means.
-// An absent method is exactly Lanczos, so every pre-#6509 client keeps its
-// current behavior without sending anything new.
-const upscaleMethodSchema = z.object({
-  method: z.enum(UPSCALE_METHODS).default(DEFAULT_UPSCALE_METHOD),
-});
-
 router.post('/upscale/:id/topaz/quote', asyncHandler(async (req, res) => {
   const parsed = historyIdSchema.safeParse(req.params.id);
   if (!parsed.success) failValidation(parsed);
-  const body = validateRequest(z.object({ model: z.enum(['proteus', 'starlight']).default('proteus') }), req.body ?? {});
+  const body = validateRequest(topazQuoteBodySchema, req.body ?? {});
   assertNoPendingTopaz(parsed.data);
   res.json({ ok: true, quote: await quoteTopaz(parsed.data, body.model) });
 }));
 
 router.get('/upscale/topaz/jobs/:jobId/status', asyncHandler(async (req, res) => {
-  const { jobId } = validateRequest(z.object({ jobId: z.string().uuid() }), req.params);
+  const { jobId } = validateRequest(topazJobParamsSchema, req.params);
   res.json({ ok: true, ...await reconcileTopazStatus(jobId) });
 }));
 
 router.post('/upscale/topaz/jobs/:jobId/cancel', asyncHandler(async (req, res) => {
-  const { jobId } = validateRequest(z.object({ jobId: z.string().uuid() }), req.params);
+  const { jobId } = validateRequest(topazJobParamsSchema, req.params);
   res.json({ ok: true, ...await reconcileTopazStatus(jobId, { cancelRemote: true }) });
 }));
 
 router.post('/upscale/topaz/jobs/:jobId/recover', asyncHandler(async (req, res) => {
-  const { jobId } = validateRequest(z.object({ jobId: z.string().uuid() }), req.params);
+  const { jobId } = validateRequest(topazJobParamsSchema, req.params);
   res.json({ ok: true, job: await recoverTopazResult(jobId) });
 }));
 
 router.post('/upscale/:id/topaz', asyncHandler(async (req, res) => {
   const parsed = historyIdSchema.safeParse(req.params.id);
   if (!parsed.success) failValidation(parsed);
-  const body = validateRequest(z.object({ token: z.string().uuid() }), req.body ?? {});
+  const body = validateRequest(topazTokenBodySchema, req.body ?? {});
   res.json({ ok: true, job: await enqueueTopazUpscale(parsed.data, body.token) });
 }));
 
@@ -1106,11 +978,6 @@ router.post('/upscale/:id', asyncHandler(async (req, res) => {
 // Keep a frame range of a clip: `startSec` drops the frames before it, `endSec`
 // the frames from it on. Like an upscale, it writes a NEW gallery row and
 // leaves the source clip untouched.
-const trimBodySchema = z.object({
-  startSec: z.number().finite().positive().max(3600).optional(),
-  endSec: z.number().finite().positive().max(3600).optional(),
-}).refine((b) => b.startSec !== undefined || b.endSec !== undefined, { message: 'startSec or endSec is required' })
-  .refine((b) => b.startSec === undefined || b.endSec === undefined || b.endSec > b.startSec, { message: 'endSec must be after startSec', path: ['endSec'] });
 router.post('/history/:id/trim', asyncHandler(async (req, res) => {
   const parsed = historyIdSchema.safeParse(req.params.id);
   if (!parsed.success) failValidation(parsed);
@@ -1121,11 +988,6 @@ router.post('/history/:id/trim', asyncHandler(async (req, res) => {
 // Re-shoot a clip as if handheld (lib/handheldCamera.js): zoomed in a little,
 // with the margin swaying, rolling and bobbing with footsteps. Like a trim, it
 // writes a NEW gallery row and leaves the source clip untouched.
-const handheldBodySchema = z.object({
-  shake: z.number().finite().min(0).max(1),
-  steps: z.number().finite().min(0).max(1),
-  seed: z.number().int().min(1).max(HANDHELD_SEED_MAX).optional(),
-}).strict();
 router.post('/history/:id/handheld', asyncHandler(async (req, res) => {
   const parsed = historyIdSchema.safeParse(req.params.id);
   if (!parsed.success) failValidation(parsed);
@@ -1135,7 +997,6 @@ router.post('/history/:id/handheld', asyncHandler(async (req, res) => {
 
 // "Make it vertical" (lib/verticalReframe.js): the clip centred over a blurred copy of itself on
 // a 9:16, 4:5 or 1:1 canvas. Queued as a media job; a repeat request returns the live job.
-const verticalBodySchema = z.object({ ratio: z.enum(VERTICAL_RATIO_IDS) }).strict();
 router.post('/history/:id/vertical', asyncHandler(async (req, res) => {
   const parsed = historyIdSchema.safeParse(req.params.id);
   if (!parsed.success) failValidation(parsed);
@@ -1150,10 +1011,6 @@ router.post('/history/:id/extend', asyncHandler(async (req, res) => {
   const body = validateRequest(videoExtendBodySchema, req.body ?? {});
   res.json(await extendHistoryClip(parsed.data, body));
 }));
-
-const stitchBodySchema = z.object({
-  videoIds: z.array(historyIdSchema).min(2).max(20),
-});
 
 router.post('/stitch', asyncHandler(async (req, res) => {
   const parsed = stitchBodySchema.safeParse(req.body || {});

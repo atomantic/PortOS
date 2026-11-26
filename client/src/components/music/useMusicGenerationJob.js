@@ -93,6 +93,7 @@ export default function useMusicGenerationJob({ track, onGenerated, onDiscovered
     if (!isGenerating) return undefined;
     const startedAt = activeJob?.startedAt ? Date.parse(activeJob.startedAt) : Date.now();
     setElapsedSec(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+    // biome-ignore lint/plugin/lint-no-view-interval: Elapsed-time clock for a running generation (job state arrives through socket events).
     const timer = setInterval(() => {
       if (mountedRef.current) setElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
     }, 1000);
