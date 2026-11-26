@@ -108,7 +108,7 @@ replaces the adapter and records the removal in `docs/DEPS.md`.
    regenerate `server/package-lock.json` (expect the 57 entries listed in the
    study to disappear; run `npm ls` to confirm nothing else pulled them);
    `docs/DEPS.md`: delete the row if the dependency never merged, otherwise a
-   `REPLACED` row pointing here (the `server/test/guards/repo/deps-doc.test.js` parity guard accepts
+   `REPLACED` row pointing here (the `server/test/guards/repo/docsIntegrity.test.js` parity guard accepts
    either); update the recycling paragraph of `docs/IMAGE_GALLERY.md`
    (per-file Finder Put Back, original names in Linux trash, Windows refusal on
    volumes without a Recycle Bin); add the Linux adapter to the storage/ops

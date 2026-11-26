@@ -4,7 +4,7 @@
  * A handful of tests assert over the *tracked tree* rather than over anything
  * they import: they shell out to `git grep` / `git ls-files`, read the matched
  * files as text, and fail when some unrelated file anywhere in the repo breaks
- * a convention. `server/test/guards/repo/agent-instructions-files.test.js` is the archetype.
+ * a convention. `server/test/guards/repo/docsIntegrity.test.js` is the archetype.
  *
  * A second shape has the same problem from the opposite direction: a test
  * reads ONE specific file from the *other* runner's tree with `readFileSync`
@@ -107,7 +107,7 @@ describe('tree guards are selected by filename (#5055, #16085, #16553)', () => {
   it('runs every check inside a subject runner and keeps other guards to the reviewed list', () => {
     const checksIn = ({ dir }) => guardCheckModules(join(REPO_ROOT, dir)).map((name) => `${dir}/${name}`);
     const checks = GUARD_CHECK_DIRS.flatMap(checksIn);
-    for (const check of ['server/test/guards/repo/agent-instructions-files.test.js', 'server/test/guards/runtime/logLevelConventions.test.js',
+    for (const check of ['server/test/guards/repo/docsIntegrity.test.js', 'server/test/guards/runtime/logLevelConventions.test.js',
       'client/src/test/guards/a11y/controlNames.test.js', 'client/src/test/guards/ui/timeouts.test.js']) {
       expect(checks).toContain(check);
     }
