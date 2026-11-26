@@ -281,6 +281,18 @@ describe('analyzeAgentFailure — ERROR_PATTERNS classification', () => {
       expect(analyzeAgentFailure(output, { id: 't' }, 'x', options)).toMatchObject({ category: 'auth-error', origin: 'provider' });
     });
 
+    it('classifies an input-ready deadline that fired mid sign-in as a provider auth-error', () => {
+      const waiting = '⠏ Waiting for Example login in your browser…\r⠋ Waiting for Example login in your browser…\r⠙ Waiting for Example login in your browser…\n';
+      const output = withLead(`⠧ Starting Example authentication…\nComplete Example login:\nhttps://sso.example.com/authorize?state=x\n${waiting}`);
+      const analysis = analyzeAgentFailure(output, { id: 't' }, 'x', { completionReason: 'tui-not-ready', completionError: 'claude did not present an input prompt within 45s, so no prompt was sent.' });
+      expect(analysis).toMatchObject({ category: 'auth-error', origin: 'provider', actionable: false, requiresFallback: true, completionReason: 'tui-not-ready' });
+    });
+
+    it('keeps the startup verdict when the run got past the sign-in spinner', () => {
+      const output = withLead('⠙ Waiting for Example login in your browser…\nSigned in.\nWelcome to the CLI, loading workspace and plugins now');
+      expect(analyzeAgentFailure(output, { id: 't' }, 'x', { completionReason: 'tui-not-ready', completionError: 'x' }).category).toBe('startup-failure');
+    });
+
     it('does not promote a transcript that only quotes the spinner line', () => {
       const output = withLead('The log said "Starting Example authentication…" and then the tests failed: test failed: expected 1 to be 2');
       // The pre-existing loose `authentication` rule may still match, but only as
