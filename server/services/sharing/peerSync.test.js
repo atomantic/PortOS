@@ -3989,6 +3989,33 @@ describe('peerSync', () => {
       }
     });
 
+    it('preserves a collection owned by another record through the registered store', async () => {
+      const record = { id: 'u1' };
+      const linkedCollection = { id: 'col-1', universeId: record.id, items: [] };
+      vi.mocked(getCollection).mockResolvedValue({ ...linkedCollection, universeId: 'u-other' });
+
+      await pushFromPairedPeer({ kind: 'universe', record, linkedCollection, sourceInstanceId: 'peer-a' });
+
+      expect(getCollection).toHaveBeenCalledWith(linkedCollection.id, { includeDeleted: true });
+      expect(mergeUniversesFromSync).toHaveBeenCalledWith([record], expect.anything());
+      expect(mergeMediaCollectionsFromSync).not.toHaveBeenCalled();
+    });
+
+    it('preserves an existing track through the registered track store', async () => {
+      enableMusicVideoPeer();
+      const record = { id: 'mv-1', trackId: 'track-1' };
+      const linkedTrack = { id: record.trackId, title: 'Incoming title' };
+      vi.mocked(getTrack).mockResolvedValue({ ...linkedTrack, title: 'Local title' });
+
+      await pushFromPairedPeer({
+        kind: 'musicVideoProject', record, linkedTrack, sourceInstanceId: 'peer-a', portosMeta: CURRENT_PORTOS_META,
+      });
+
+      expect(getTrack).toHaveBeenCalledWith(linkedTrack.id, { includeDeleted: true });
+      expect(mergeMusicVideoProjectsFromSync).toHaveBeenCalledWith([record], expect.anything());
+      expect(mergeTracksFromSync).not.toHaveBeenCalled();
+    });
+
     it('dispatches series pushes through mergeSeriesFromSync AND mergeIssuesFromSync for bundled issues', async () => {
       await pushFromPairedPeer({
         kind: 'series',
