@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import { StrictMode, useState } from 'react';
+import userEvent from '@testing-library/user-event';
 
 import InlineConfirmRow from './InlineConfirmRow';
 
@@ -123,6 +125,33 @@ describe('InlineConfirmRow', () => {
     expect(wrapper.getAttribute('tabindex')).toBe('-1');
     expect(document.activeElement).toBe(wrapper);
     expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'Delete' }));
+  });
+
+  it.each([true, false])('restores focus to the opener on Cancel (autoFocus %s)', async (autoFocus) => {
+    const user = userEvent.setup();
+    function Actions() {
+      const [armed, setArmed] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setArmed(true)}>Delete note</button>
+          {armed && (
+            <InlineConfirmRow question="Delete this note?" autoFocus={autoFocus} onCancel={() => setArmed(false)} />
+          )}
+        </>
+      );
+    }
+
+    render(<StrictMode><Actions /></StrictMode>);
+    const trigger = screen.getByRole('button', { name: 'Delete note' });
+    trigger.focus();
+    await user.keyboard('{Enter}');
+    expect(autoFocus ? screen.getByRole('group', { name: 'Delete this note?' }) : trigger).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Delete' })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(trigger).toHaveFocus();
   });
 
   it('falls back to the box variant for an unknown variant value', () => {

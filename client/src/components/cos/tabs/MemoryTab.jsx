@@ -476,6 +476,8 @@ export default function MemoryTab({ apps = [] }) {
                 {isConfirming(memory.id) && (
                   <InlineConfirmRow
                     className="mt-3"
+                    autoFocus
+                    aria-label={`Confirm archive memory ${(memory.summary || memory.content || memory.id).slice(0, 100)}`}
                     question="Archive this memory? It will be hidden from active memory and search. Its contents remain stored."
                     confirmText="Archive"
                     confirmTitle="Confirm archive"
