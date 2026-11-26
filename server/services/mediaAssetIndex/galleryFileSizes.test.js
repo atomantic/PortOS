@@ -51,3 +51,27 @@ it('distinguishes a measured empty file from missing, unreadable and unsafe file
   for (const item of page.items.filter(item => item.filename !== 'empty.png')) expect(item).not.toHaveProperty('fileSizeBytes');
   expect(state.stat.mock.calls).toHaveLength(3);
 });
+
+it('filters by actual video size before paging, counts and visibility', async () => {
+  const video = (id, filename, date, fields = {}) => ({ id, filename, createdAt: `2026-01-${date}`, ...fields });
+  for (const [filename, bytes] of [['small.mp4', 100], ['big.mp4', 101], ['older.mp4', 500], ['hidden.mp4', 300]]) {
+    await writeFile(join(state.root, 'videos', filename), Buffer.alloc(bytes));
+  }
+  const readImages = vi.fn(async () => [{ filename: 'anything.png', fileSizeBytes: 900 }]);
+  const options = { media: true, kind: 'all', summary: true, compact: true, hidden: false, limit: 1,
+    videoSizeOverBytes: 100, videoSnapshot: [
+      video('small', 'small.mp4', '06', { fileSizeBytes: 999 }),
+      video('missing', 'missing.mp4', '05', { fileSizeBytes: 999 }),
+      video('hidden', 'hidden.mp4', '04', { hidden: true }),
+      video('big', 'big.mp4', '03'),
+      video('older', 'older.mp4', '02'),
+      video('alias', 'older.mp4', '01'),
+    ] };
+  const first = await listGalleryPage(options, readImages);
+  expect(first).toMatchObject({ total: 3, hiddenTotal: 1, counts: { all: 3, image: 0, video: 3 },
+    items: [{ kind: 'video', data: { id: 'big', fileSizeBytes: 101 } }] });
+  expect(readImages).not.toHaveBeenCalled();
+  expect(state.stat.mock.calls.map(([path]) => path)).toHaveLength(5); // unique files, no repeat for the page
+  const second = await listGalleryPage({ ...options, offset: 1 }, readImages);
+  expect(second.items).toMatchObject([{ kind: 'video', data: { id: 'older', fileSizeBytes: 500 } }]);
+});

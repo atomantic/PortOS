@@ -587,6 +587,10 @@ describe('Image Gen Routes', () => {
       expect(empty.body).toEqual({ items: [], total: 0, limit: 60, offset: 0 });
     });
 
+    it.each(['0', '-1', '1.5', 'Infinity', '9007199254740992'])('rejects an invalid video size threshold %s', async value => {
+      expect((await request(app).get(`/api/image-gen/gallery?videoSizeOverBytes=${value}`)).status).toBe(400);
+    });
+
     it('filters the gallery to original files on this machine when requested', async () => {
       const items = [{ filename: 'local-filter.png' }, { filename: 'hosted-filter.png' }];
       imageGen.local.listGallery.mockResolvedValue(items);

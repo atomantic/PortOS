@@ -120,6 +120,28 @@ describe('bounded media history', () => {
     expect(screen.getByRole('button', { name: 'Images 61' })).toBeInTheDocument();
   });
 
+  it('requests size thresholds from the server and clears them when switching to Images', async () => {
+    const listAll = fetchPage.getMockImplementation();
+    fetchPage.mockImplementation(async filters => {
+      if (!filters.videoSizeOverBytes) return listAll(filters);
+      return { items: [], total: 0, limit: 60, offset: 0, counts: { all: 0, image: 0, video: 0 } };
+    });
+    open();
+    await screen.findByText('Picture 0');
+    const size = screen.getByRole('combobox', { name: 'Video file size' });
+    for (const [label, bytes] of [['Over 100 MB', 100 * 1024 ** 2], ['Over 1 GB', 1024 ** 3]]) {
+      fireEvent.change(size, { target: { value: screen.getByRole('option', { name: label }).value } });
+      await waitFor(() => expect(fetchPage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ kind: 'video', videoSizeOverBytes: bytes, offset: 0 }), { silent: true }));
+    }
+    expect(await screen.findByText('No videos on this machine match this size filter.')).toBeInTheDocument();
+    expect(screen.queryByText('Picture 0')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Images 0' }));
+    await screen.findByText('Picture 0');
+    expect(size).toHaveValue('');
+    expect(fetchPage.mock.lastCall[0]).not.toHaveProperty('videoSizeOverBytes');
+  });
+
   it('keeps the previously unseen last item reachable after deletion shifts offsets', async () => {
     open();
     await screen.findByText('Picture 0');

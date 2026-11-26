@@ -12,6 +12,7 @@ export function createImageGalleryHandlers(listGallery = async () => (await impo
     starred: z.enum(['true', 'false']).optional().transform(v => v === 'true'),
     localOnly: z.enum(['true', 'false']).optional().transform(v => v === 'true'),
     rating: z.enum(['good', 'bad']).optional(),
+    videoSizeOverBytes: z.coerce.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
     summary: z.enum(['true', 'false']).optional().transform(v => v === 'true'),
     // Opt-in card projection for migrated consumers; omitted keeps full records.
     compact: z.enum(['true', 'false']).optional().transform(v => v === 'true'),
