@@ -373,7 +373,7 @@ describe('git base versus worktree head', () => {
     write('server/new.test.js', "import './heavy.js';\n");
 
     const head = measureWorkingTree(root);
-    const base = measureGitTree(root, sha, head.texts);
+    const base = measureGitTree(root, sha, head);
     expect(head.texts.get('server/wide.js')).toContain('./heavy.js');
     expect(base.texts.get('server/wide.js')).toBe('export const wide = 1;\n');
     expect(base.tests.get('server/keep.test.js').has('server/heavy.js')).toBe(false);
@@ -384,6 +384,26 @@ describe('git base versus worktree head', () => {
     expect(report.newSuiteContribution).toBe(2);
     expect(report.ok).toBe(true);
     expect(report.largestNewDependencies[0]).toMatchObject({ module: 'server/heavy.js', newReach: 1, closureSize: 1 });
+  });
+
+  it('reuses only closures with identical reachable edges across revisions', () => {
+    const { root, write, commit } = repo();
+    write('server/index.js', "import './cycle.js';");
+    write('server/cycle.js', "import './index.js';\nimport './added.js';\n");
+    write('server/keep.test.js', "import './cycle.js';");
+    write('server/other.test.js', 'export const other = 1;');
+    const sha = commit();
+
+    write('server/added.js', 'export const added = 1;');
+    const head = measureWorkingTree(root);
+    const base = measureGitTree(root, sha, head);
+    const independentBase = measureGitTree(root, sha);
+
+    expect(base.tests).toEqual(independentBase.tests);
+    expect(base.bootClosure).toEqual(independentBase.bootClosure);
+    expect(base.tests.get('server/other.test.js')).toBe(head.tests.get('server/other.test.js'));
+    expect(base.tests.get('server/keep.test.js').has('server/added.js')).toBe(false);
+    expect(head.bootClosure.has('server/added.js')).toBe(true);
   });
 
   it('fails closed when the base commit cannot be listed', () => {

@@ -135,7 +135,7 @@ function closureOf(entry, resolved) {
  *
  * @returns {{ tests: Map<string, Set<string>>, deps: Map<string, string[]>, texts: Map<string, string|null>, bootClosure: Set<string>|null, testCount: number, total: number }}
  */
-export function measureClosures(testFiles, readText, { bootEntry = BOOT_ENTRY } = {}) {
+export function measureClosures(testFiles, readText, { bootEntry = BOOT_ENTRY, reuseFrom = null } = {}) {
   const textCache = new Map();
   const read = (rel) => {
     if (textCache.has(rel)) return textCache.get(rel);
@@ -165,15 +165,33 @@ export function measureClosures(testFiles, readText, { bootEntry = BOOT_ENTRY } 
     return next;
   };
 
+  // Verify outgoing edges against this reader, including targets that only
+  // exist in one tree. If none of a closure's members changed, the original
+  // walk still reaches exactly the same files, even across cycles.
+  const changedEdges = new Set();
+  if (reuseFrom) {
+    for (const [file, previous] of reuseFrom.deps) {
+      const current = resolved(file);
+      if (previous.length !== current.length || previous.some((target, i) => target !== current[i])) {
+        changedEdges.add(file);
+      }
+    }
+  }
+  const closure = (entry, previous) => (previous?.isDisjointFrom(changedEdges)
+    ? previous : closureOf(entry, resolved));
   const tests = new Map();
   let total = 0;
   for (const file of testFiles) {
     if (read(file) == null) continue;
-    const closure = closureOf(file, resolved);
-    tests.set(file, closure);
-    total += closure.size;
+    const reached = closure(file, reuseFrom?.tests.get(file));
+    tests.set(file, reached);
+    total += reached.size;
   }
-  const bootClosure = bootEntry && read(bootEntry) != null ? closureOf(bootEntry, resolved) : null;
+  const previousBoot = reuseFrom?.bootClosure;
+  // The first member is the entry of the original walk.
+  const sameBootEntry = previousBoot?.values().next().value === bootEntry;
+  const bootClosure = bootEntry && read(bootEntry) != null
+    ? closure(bootEntry, sameBootEntry ? previousBoot : null) : null;
   return { tests, deps, texts: textCache, bootClosure, testCount: tests.size, total };
 }
 
@@ -554,10 +572,10 @@ function readBlobs(repoRoot, sha, paths) {
 }
 
 /**
- * `headTexts` is the head measurement's text map: a path git reports as
- * unchanged is the same bytes in the worktree, so it need not be read again.
+ * An optional worktree measurement supplies the text of unchanged paths and
+ * the closures that can be reused after checking their edges against the base.
  */
-export function measureGitTree(repoRoot, sha, headTexts = null) {
+export function measureGitTree(repoRoot, sha, head = null) {
   const tree = listTree(repoRoot, sha);
   const testFiles = [...tree].filter(isServerTest).sort();
   // git diff exits 1 when the trees differ and 0 when they do not. Above 1 is a real failure.
@@ -577,7 +595,7 @@ export function measureGitTree(repoRoot, sha, headTexts = null) {
     if (dirty.has(rel)) {
       throw importGrowthBaseError(`Base file ${rel} differs from the worktree but its blob was not loaded from ${String(sha).slice(0, 12)}.`);
     }
-    const shared = headTexts?.get(rel);
+    const shared = head?.texts.get(rel);
     if (typeof shared === 'string') return shared;
     const abs = join(repoRoot, ...rel.split('/'));
     if (!existsSync(abs)) {
@@ -585,7 +603,7 @@ export function measureGitTree(repoRoot, sha, headTexts = null) {
     }
     return fromDisk(rel);
   };
-  return measureClosures(testFiles, readText);
+  return measureClosures(testFiles, readText, { reuseFrom: head });
 }
 
 /**
@@ -618,7 +636,7 @@ export function evaluateWorkingTreeImportGrowth({
     );
   }
   const baseStart = now();
-  const base = measureGitTree(repoRoot, baseRef.sha, head.texts);
+  const base = measureGitTree(repoRoot, baseRef.sha, head);
   const baseCollectMs = Math.round(now() - baseStart);
   if (base.testCount < MIN_SERVER_TESTS) {
     throw importGrowthBaseError(
