@@ -5,6 +5,7 @@ import { castSetsInspectionInputs, currentCastSetsInspection, sameCastSetsInspec
 import { requireProject } from './requireProject.js';
 import { mutateProjectRecord } from './projects.js';
 import { findProductionRun, assertProductionActive, reserveProductionReview } from './production.js';
+import { matchesCastAndSetsStage } from './castAndSets.js';
 
 const MAX_ATTEMPTS = 2;
 export { reviewRenderedImage as reviewCastSetsImage } from '../imageRenderInspection.js';
@@ -22,10 +23,11 @@ function unavailableOutcome(error, reviewer, run) {
   return { verdict: 'unreviewed', discrepancy: `Vision unavailable: ${reason}`, providerId, model };
 }
 
-export async function inspectCastAndSetsImages(projectId, { processId, resolveReviewer, reviewImage, publish, retryImage }) {
+export async function inspectCastAndSetsImages(projectId, { stage, resolveReviewer, reviewImage, publish, retryImage }) {
   const original = await requireProject(projectId);
-  const revision = original.castAndSets.revision;
-  const owned = (p) => p.castAndSets?.processId === processId && p.castAndSets.revision === revision && p.castAndSets.status === 'imaging';
+  const revision = stage.revision;
+  const owned = (p) => matchesCastAndSetsStage(p.castAndSets, stage);
+  if (!owned(original)) return;
   for (const key of Object.keys(original.castAndSets.plan || {})) {
     for (;;) {
       const project = await requireProject(projectId);
