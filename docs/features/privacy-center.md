@@ -54,6 +54,20 @@ A vault grant never implies a broker purpose, and a scan grant never implies sub
 
 ---
 
+## Historical Digital Twin cleanup
+
+On older installs, a test response could repeat a shared fact in a scorer prompt, its output, or a saved feedback excerpt. Unsharing, replacing or deleting a Vault fact now scrubs these local copies when the scorer template or feedback type identifies them. Existing backup snapshots and other installations have their own copies.
+
+Operators can also run cleanup without changing a Vault record. The endpoint accepts an operator or delegated agent session through the normal API. This command lists completed Digital Twin runs and saved test-response excerpts.
+
+```sh
+node scripts/portos-api.js post /api/privacy/twin-history/cleanup '{"action":"list"}'
+```
+
+The inventory returns UUIDs, dates and scorer classifications. For a known self-subject fact, submit `{"action":"scrub","recordId":"<vault-record-uuid>"}` to the same endpoint. This removes exact values from recognized scorer prompts, previews, outputs, diagnostics and test-response snippets. Sensitive Vault types are excluded.
+
+Custom or incomplete scorer templates may appear as `unclassified`. When the original fact is gone or the template is unrecognized, use the date and UUID to identify the intended item. Submit `{"action":"delete","kind":"run","id":"<run-uuid>"}` to delete that completed Digital Twin run, or use `"kind":"feedback"` to erase that excerpt while retaining its rating. Mutations report the number of changed items. After a failure, repeat the operation to finish the remaining changes.
+
 ## Security Model & Data Flow
 
 ```mermaid

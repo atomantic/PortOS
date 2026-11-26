@@ -209,6 +209,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/music-video/character-styles/:id',
     '/api/ports/allocate',
     '/api/ports/scan',
+    // docs/features/privacy-center.md uses portos-api.js to clean historical Digital Twin artifacts.
+    'POST /api/privacy/twin-history/cleanup',
     // docs/features/agent-skills.md (P5 surfaces): the Skill Registry routes, for agents and API callers.
     '/api/skills/config',
     '/api/skills/manage',
