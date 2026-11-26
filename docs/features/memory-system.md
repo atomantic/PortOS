@@ -16,7 +16,7 @@ Semantic memory system for the Chief of Staff that stores facts, learnings, obse
 ## Features
 
 1. **Six Memory Types**: fact, learning, observation, decision, preference, context
-2. **Semantic Search**: LM Studio embeddings for similarity-based retrieval
+2. **Semantic Search**: Configured embeddings provider for similarity-based retrieval
 3. **LLM Classification**: Intelligent memory extraction with quality filtering (M31)
 4. **Auto-Extraction**: Memories extracted from successful agent task completions
 5. **Auto-Injection**: Relevant memories injected into agent prompts before execution
@@ -209,7 +209,7 @@ Before agent task execution:
 | POST /api/memory/link | Link two memories |
 | POST /api/memory/consolidate | Manually merge similar memories (supports `dryRun`) |
 | DELETE /api/memory/expired | Manually clear expired memories |
-| GET /api/memory/embeddings/status | LM Studio connection status |
+| GET /api/memory/embeddings/status | Embedding and classifier availability |
 | GET /api/memory/backend/status | Active storage backend status |
 | GET /api/memory/sync | File↔DB sync status |
 | POST /api/memory/sync | Trigger file↔DB sync |
@@ -247,7 +247,7 @@ store.
 | `server/services/memoryBackend.js` | Backend switcher (Postgres primary, file test-only) |
 | `server/services/memoryDB.js` | Core CRUD, search, lifecycle (PostgreSQL + pgvector) |
 | `server/services/memory.js` | File-backed CRUD (test-only backend) |
-| `server/services/memoryEmbeddings.js` | LM Studio embedding generation |
+| `server/services/memoryEmbeddings.js` | Configured embeddings provider integration |
 | `server/services/memoryExtractor.js` | Extract memories from agent output |
 | `server/services/memoryClassifier.js` | LLM-based classification service |
 | `server/services/memoryRetriever.js` | Retrieve and format for injection |
