@@ -150,7 +150,9 @@ export function vitestCaptureProjects(test, { cacheDir, selection = { include: n
         name: 'parallel',
         include,
         exclude: [...exclude, ...exclusiveTests],
-        sequence: { groupOrder: 0 },
+        // Isolated order-0 files are scheduled after explicitly ordered
+        // groups when Vitest has only one worker. Keep ordinary work first.
+        sequence: { groupOrder: 1 },
       },
     },
     {
@@ -163,7 +165,7 @@ export function vitestCaptureProjects(test, { cacheDir, selection = { include: n
         include: captureInclude,
         exclude,
         fileParallelism: false,
-        sequence: { groupOrder: 1 },
+        sequence: { groupOrder: 2 },
       },
     },
   ];
