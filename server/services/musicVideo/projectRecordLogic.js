@@ -231,14 +231,14 @@ export function cloneProjectRecord(source, {
   const version = sourceVersion + 1;
   const baseName = nameMatch?.[1]?.trim() || source.name || 'Music Video';
   const sceneIdMap = new Map();
-  const scenes = (source.scenes || []).map((scene, order) => ({
+  const scenes = (source.scenes || []).map(({ imageTreatments, ...scene }, order) => ({
     ...scene,
     sceneId: mintCloneSceneId(scene, sceneIdMap),
     order,
     referenceImageId: includeGeneratedMedia ? (scene.referenceImageId ?? null) : null,
     videoHistoryId: includeGeneratedMedia ? (scene.videoHistoryId ?? null) : null,
     endImageId: includeGeneratedMedia ? (scene.endImageId ?? null) : null,
-    ...(includeGeneratedMedia && scene.imageTreatments?.length ? { imageTreatments: structuredClone(scene.imageTreatments) } : {}),
+    ...(includeGeneratedMedia && imageTreatments !== undefined ? { imageTreatments } : {}),
     ...(scene.photoSequence ? { photoSequence: includeGeneratedMedia ? scene.photoSequence : { ...scene.photoSequence, enabled: false, imageIds: [], ...(scene.photoSequence.layouts ? { layouts: [] } : {}) } } : {}),
     // Takes are immutable pointers to shared media, so a media-keeping clone
     // carries the whole candidate history; a clean clone starts empty.
@@ -437,7 +437,8 @@ export function applyProjectPatch(project, patch) {
   };
   // #8988: a bed is mixed UNDER the song — the song itself can't be its bed.
   const masterTrackId = 'trackId' in patch ? patch.trackId : project.trackId;
-  if (timedPatch.soundBed && masterTrackId && timedPatch.soundBed.trackId === masterTrackId) {
+  const soundBed = 'soundBed' in timedPatch ? timedPatch.soundBed : project.soundBed;
+  if (('trackId' in patch || 'soundBed' in timedPatch) && masterTrackId && soundBed?.trackId === masterTrackId) {
     throw new ServerError('The sound-design bed must be a different track from the song', { status: 422, code: 'SOUND_BED_IS_MASTER' });
   }
   const conceptMergedPatch = ('concept' in timedPatch && timedPatch.concept && project.concept)

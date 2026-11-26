@@ -8,6 +8,7 @@ import { isPerformanceScene, planShotSplit, shotSplitLimit } from '../../lib/mus
 import { ensureSceneTakes, keepCodeClipWithItsClip, TAKE_SLOT } from './takes.js';
 import { normalizeFilmLook } from '../../lib/filmLook.js';
 import { normalizeTemplateEffects } from '../../lib/musicVideo/musicVideoTemplateEffects.js';
+import { isEndFrameImageEffect } from '../../lib/musicVideo/musicVideoImageEffects.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 import { MUSIC_VIDEO_EDGED_WIPES, sceneWipe, varyWipes } from '../../lib/musicVideo/musicVideoWipes.js';
 import { anchorShotsToSungLyrics, carryStoryboardApproval, dropStaleStoryboardRows } from './productionReview.js';
@@ -470,6 +471,9 @@ export function reorderScenes(project, orderedIds) {
   if (orderedIds.length !== scenes.length || !orderedIds.every((id) => byId.has(id)) || new Set(orderedIds).size !== orderedIds.length) {
     throw new ServerError('Reorder must list each existing scene id exactly once', { status: 400, code: 'VALIDATION_ERROR' });
   }
+  if (orderedIds.some((id, i) => isPreMusicShot(byId.get(id)) !== isPreMusicShot(scenes[i]))) {
+    throw new ServerError('Reorder shots within the cold open or within the song. To change when a shot plays, edit its Before the song setting.', { status: 400, code: 'MUSIC_VIDEO_REORDER_PRE_MUSIC' });
+  }
   // The scene whose slot each moved scene now fills.
   const slotOwner = new Map(orderedIds.map((id, i) => [id, scenes[i]]));
   const nextScenes = orderedIds.map((id, i) => ({
@@ -581,6 +585,11 @@ export function applySceneSplit(project, sceneId, plannedPieces, { preserveClip 
         sectionIndex: scene.sectionIndex ?? null,
         visualIntent: scene.visualIntent ?? null,
         visualLayer: scene.visualLayer ?? 'footage',
+        cardText: scene.cardText ?? null,
+        cardColor: scene.cardColor ?? null,
+        textZone: scene.textZone ?? null,
+        imageEffect: scene.imageEffect ?? null,
+        imageEffectSec: scene.imageEffectSec ?? null,
         ...(scene.stillMove ? { stillMove: scene.stillMove } : {}),
         ...(scene.photoSequence ? { photoSequence: scene.photoSequence } : {}),
         ...(scene.imageTreatments?.length ? { imageTreatments: scene.imageTreatments } : {}),
@@ -600,6 +609,8 @@ export function applySceneSplit(project, sceneId, plannedPieces, { preserveClip 
       ...(scene.direction ? { direction: structuredClone(scene.direction) } : {}),
       ...(needsBeat ? { beatNeedsReview: true } : {}),
       referenceImageId: scene.referenceImageId ?? null,
+      ...(scene.visualLayer === 'still' && isEndFrameImageEffect(scene.imageEffect) && scene.endImageId
+        ? { endImageId: scene.endImageId, ...(scene.endFrameOff === true ? { endFrameOff: true } : {}) } : {}),
     };
     return { ...seeded, takes: ensureSceneTakes(seeded, now, 'manual') };
   });
