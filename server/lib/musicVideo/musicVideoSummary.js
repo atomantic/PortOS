@@ -11,6 +11,7 @@
  * / spend / preview rules mirror `client/src/lib/musicVideoStages.js` and
  * `musicVideoPreview.js`, which still derive them for a full record.
  */
+import { isLayeredComposition, sceneTakeProblems } from './musicVideoLayers.js';
 import { latestMusicVideoReviewDraft } from './musicVideoReviewDraft.js';
 import { supersededStillsCheckpoint } from './musicVideoAutonomous.js';
 import { currentRun, selectCurrentStage, shotsFacts } from './musicVideoStageSelection.js';
@@ -130,11 +131,8 @@ export function summarizeMusicVideoProject(project, readiness) {
   const preview = projectPreview(project);
   const video = project.videoSettings || {};
   const concept = project.concept || {};
-  const selectedTakeMarkedBad = scenes.some((s) => s.selectedTakeMarkedBad || (project.assetMarks && (
-    (s.referenceImageId && project.assetMarks[`image:${s.referenceImageId}`] === 'bad') ||
-    (s.endImageId && project.assetMarks[`image:${s.endImageId}`] === 'bad') ||
-    (s.videoHistoryId && project.assetMarks[`video:${s.videoHistoryId}`] === 'bad')
-  )));
+  const takeContext = { layered: isLayeredComposition(project), scenes, assetMarks: project.assetMarks };
+  const selectedTakeMarkedBad = scenes.some(scene => sceneTakeProblems(scene, takeContext).bad);
   return {
     id: project.id,
     name: project.name,

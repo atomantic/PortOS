@@ -783,6 +783,7 @@ describe('the shot asset manager', () => {
     await addTake(sceneA.sceneId, { kind: 'image', assetId: 'start-c.png', source: 'generated' });
     const unmatched = await mark('start-b.png', 'bad');
     expect(unmatched.body.scenes[0]).toMatchObject({ referenceImageId: 'start-c.png', videoHistoryId: 'clip-b', selectedTakeMarkedBad: true });
+    expect(unmatched.body.changes).toContainEqual(expect.objectContaining({ slot: 'video', action: 'flagged', reason: 'clip-frame-mismatch' }));
     await mark('start-b.png', null);
     expect((await reload()).scenes.find((scene) => scene.sceneId === sceneA.sceneId).selectedTakeMarkedBad).toBe(true);
     const restored = await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/${b.body.take.takeId}/select`).send({ expectedSelectedAssetId: 'start-c.png' });
@@ -907,7 +908,7 @@ describe('the shot asset manager', () => {
     expect(markRes.body.scenes.find((entry) => entry.sceneId === sceneA.sceneId).selectedTakeMarkedBad).toBe(true);
 
     const { sceneRenderReady } = await import('../lib/musicVideo/musicVideoLayers.js');
-    expect(sceneRenderReady(scene)).toBe(false);
+    expect(sceneRenderReady(scene, { assetMarks: stored.assetMarks })).toBe(false);
 
     const { productionReadiness } = await import('../services/musicVideo/productionReview.js');
     const readiness = productionReadiness(stored);

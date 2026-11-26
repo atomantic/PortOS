@@ -278,7 +278,7 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
     : !(project.audioAnalysis?.durationSec > 0) ? 'Analyze the master song first'
       : film && !film.total ? 'Sync the shots from the film scripts in Blender film first'
         : film && !film.ready ? `Render every shot at final quality in Blender film first (${formatCount(film.finalReady)} of ${formatCount(film.total)} ready)` : '';
-  const readySceneCount = scenes.filter((scene) => sceneRenderReady(scene, { layered, scenes })).length;
+  const readySceneCount = scenes.filter((scene) => sceneRenderReady(scene, { layered, scenes, assetMarks: project.assetMarks })).length;
   const noAudio = noAudioOf(project);
   const codeDuration = Math.max(
     project.audioAnalysis?.durationSec || 0,

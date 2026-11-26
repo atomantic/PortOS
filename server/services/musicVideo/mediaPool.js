@@ -277,6 +277,7 @@ export function markPoolAssets(project, keys, mark, options = {}) {
           label: scene.label || null,
           action: 'flagged',
           flagged: true,
+          ...(assetMarks[`video:${oldAssetId}`] !== 'bad' && { reason: 'clip-frame-mismatch' }),
           role: 'video',
           slot: 'video',
           kind: 'video',

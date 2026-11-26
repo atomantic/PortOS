@@ -109,9 +109,9 @@ export default function AssetsStage({ board }) {
       const summaries = result.changes.map((c) => {
         const shotNum = shotNumbers.get(c.sceneId);
         const name = shotNum ? `Shot ${shotNum}` : (c.label || 'Shot');
-        return c.action === 'moved' || c.moved
-          ? `${name} moved to next take`
-          : `${name} flagged (selected take marked bad)`;
+        if (c.action === 'moved' || c.moved) return `${name} moved to next take`;
+        if (c.reason === 'clip-frame-mismatch') return `${name} kept a clip made from a different start frame`;
+        return `${name} flagged (selected take marked bad)`;
       });
       const toastText = summaries.join(' · ');
       let undoing = false;
