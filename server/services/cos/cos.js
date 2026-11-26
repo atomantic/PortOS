@@ -330,7 +330,7 @@ export function start() {
 async function runStart() {
   if (isDaemonRunning()) {
     emitLog('info', '⏭️ CoS already running');
-    return { success: false, error: 'Already running' };
+    return { success: true, unchanged: true };
   }
 
   emitLog('info', 'Starting Chief of Staff daemon...');
@@ -582,7 +582,7 @@ export async function stop() {
   // (#11860). Let the start settle so Stop tears down a fully started daemon.
   if (daemonStartPromise) await daemonStartPromise.catch(() => {});
   if (!isDaemonRunning()) {
-    return { success: false, error: 'Not running' };
+    return { success: true, unchanged: true };
   }
 
   await teardownDaemon();
@@ -621,7 +621,7 @@ export async function pause(reason = null) {
     const state = await loadState();
 
     if (state.paused) {
-      return { success: false, error: 'Already paused' };
+      return { success: true, unchanged: true, pausedAt: state.pausedAt };
     }
 
     state.paused = true;
@@ -633,7 +633,7 @@ export async function pause(reason = null) {
     cosEvents.emit('status:paused', { paused: true, pausedAt: state.pausedAt, reason });
     return { success: true, pausedAt: state.pausedAt };
   });
-  if (result.success) await handlePersistentMindGlobalPause(reason || 'Chief of Staff paused');
+  if (result.success && !result.unchanged) await handlePersistentMindGlobalPause(reason || 'Chief of Staff paused');
   return result;
 }
 
@@ -645,7 +645,7 @@ export async function resume() {
     const state = await loadState();
 
     if (!state.paused) {
-      return { success: false, error: 'Not paused' };
+      return { success: true, unchanged: true };
     }
 
     state.paused = false;
@@ -659,7 +659,7 @@ export async function resume() {
   });
 
   // Trigger immediate task dequeue on resume (outside lock to avoid holding it)
-  if (result.success && isDaemonRunning()) {
+  if (!result.unchanged && isDaemonRunning()) {
     await handlePersistentMindGlobalResume();
     setTimeout(() => scheduleDequeue(), RESUME_DEQUEUE_DELAY_MS);
   }
