@@ -417,7 +417,63 @@ describe('restoreSnapshot manifest verification', () => {
       });
     }
 
-    for (const subdirFilter of ['database-authority.json', './database-authority.json', 'database-authority.json/', 'Database-Authority.json', 'database-restore-recovery.json', './Database-Restore-Recovery.json/', './.Database-Restore-Recovery-Fixture.Pending', 'certs', './Certs/', 'certs/key.pem']) {
+    for (const withManifest of [true, false]) {
+      it(`keeps maintenance and migration fences and scratch local (manifest=${withManifest})`, async context => {
+        await withRealRsync(context, async () => {
+          const paths = [
+            'database-maintenance/operation.json',
+            'database-authority-fixture.pending',
+            withManifest ? '.peer-execution-authority-lock/owner.json' : '.peer-execution-authority-lock',
+            '.peer-execution-authority-fixture.pending',
+            '.peer-execution-adoption-fixture.pending',
+            'migrations.lock/.transition',
+            'migrations.applied.json.tmp-123',
+          ];
+          const snapshotPaths = withManifest ? paths.map(path => path.toUpperCase()) : paths;
+          const ledger = 'migrations.applied.json';
+          const nested = 'brain/migrations.lock/record.json';
+          const portablePaths = [ledger, nested];
+          const roots = [...new Set(paths.map(path => path.split('/')[0]))];
+          const hashes = {};
+          for (const path of portablePaths) hashes[path] = await writeSnapshotFile(path, 'portable snapshot bytes');
+          for (const path of snapshotPaths) await writeSnapshotFile(path, 'old machine-local bytes');
+          if (withManifest) await writeManifest(hashes);
+
+          try {
+            const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
+            expect(preview.changedFiles).toHaveLength(portablePaths.length);
+            await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+            for (const path of [...roots, ...snapshotPaths]) {
+              expect(existsSync(joinPath(PATHS.data, path))).toBe(false);
+            }
+            for (const path of portablePaths) {
+              expect(await realFs.readFile(joinPath(PATHS.data, path), 'utf8')).toBe('portable snapshot bytes');
+            }
+
+            for (const path of paths) {
+              const localPath = joinPath(PATHS.data, path);
+              await realFs.mkdir(dirname(localPath), { recursive: true });
+              await realFs.writeFile(localPath, 'current machine-local bytes');
+            }
+            await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+            for (const path of paths) {
+              expect(await realFs.readFile(joinPath(PATHS.data, path), 'utf8')).toBe('current machine-local bytes');
+            }
+          } finally {
+            for (const path of [...roots, ...portablePaths]) {
+              await realFs.rm(joinPath(PATHS.data, path), { recursive: true, force: true });
+            }
+          }
+        });
+      });
+    }
+
+    for (const subdirFilter of ['database-authority.json', './database-authority.json', 'database-authority.json/', 'Database-Authority.json', 'database-restore-recovery.json', './Database-Restore-Recovery.json/', './.Database-Restore-Recovery-Fixture.Pending', 'certs', './Certs/', 'certs/key.pem',
+      './Database-Maintenance/', 'database-maintenance/operation.json', 'Database-Authority-fixture.Pending',
+      './.Peer-Execution-Authority-Lock/', '.peer-execution-authority-lock/owner.json',
+      '.Peer-Execution-Authority-fixture.Pending', '.Peer-Execution-Adoption-fixture.Pending',
+      './Migrations.Lock/', 'migrations.lock/.transition', 'Migrations.Applied.Json.Tmp-123',
+    ]) {
       it(`refuses an explicit ${subdirFilter} selection before verification or transfer, for preview and execution alike`, async () => {
         await seedSnapshot();
         for (const dryRun of [true, false]) {
