@@ -1,14 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { buildPersonMatchIndex } from '../lib/tribeMatch.js';
 import { mergeContacts, buildContactIndex } from './contactsSync.js';
-import { enrichTribeFromContacts } from './tribeContacts.js';
 import * as tribe from './tribe.js';
 import {
   matchContactToPerson,
-  computePhoneEmailFill,
+  enrichTribeFromContacts,
 } from './tribeContacts.js';
 
-vi.mock('./tribe.js', () => ({ listPeople: vi.fn(), updatePerson: vi.fn() }));
+vi.mock('./tribe.js', async (orig) => ({ ...(await orig()), listPeople: vi.fn() }));
 vi.mock('./humanActivity.js', () => ({}));
 vi.mock('./contactsSync.js', async (orig) => {
   const actual = await orig();
@@ -58,9 +57,9 @@ describe('tribeContacts pure helpers', () => {
   });
 
   it('computes only missing phones/emails', () => {
-    const fill = computePhoneEmailFill(
+    const fill = tribe.computePhoneEmailFill(
       { phones: ['+15551112222'], emails: [] },
-      { phones: ['+15551112222', '+15553334444'], emails: ['bob@x.com'] },
+      { phones: ['555-111-2222', '(555) 333-4444', '+15553334444'], emails: [' BOB@X.COM ', 'bob@x.com'] },
     );
     expect(fill.addPhones).toEqual(['+15553334444']);
     expect(fill.addEmails).toEqual(['bob@x.com']);
@@ -68,7 +67,7 @@ describe('tribeContacts pure helpers', () => {
   });
 
   it('returns null when nothing to add', () => {
-    expect(computePhoneEmailFill(
+    expect(tribe.computePhoneEmailFill(
       { phones: ['+15551112222'], emails: ['bob@x.com'] },
       { phones: ['+15551112222'], emails: ['bob@x.com'] },
     )).toBeNull();
