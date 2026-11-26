@@ -281,6 +281,53 @@ describe('LoomNodeEditor scene media', () => {
     ));
   });
 
+  it('resets storyboard approval for a replacement image and preserves unsaved shot notes', async () => {
+    const user = userEvent.setup();
+    updateLoomNode.mockResolvedValue({ id: 'loom-1' });
+    const [node] = makeNodes([]);
+    node.visualCanon = {
+      mode: 'locked',
+      characterAppearances: [],
+      objectIds: [],
+      shotNotes: 'Original notes',
+      storyboardImageApproved: true,
+    };
+    const editor = (currentNode) => (
+      <LoomNodeEditor
+        loom={loom}
+        episode={{ id: 'ep-1', startNodeId: 'n1', nodes: [currentNode] }}
+        node={currentNode}
+        onLoomUpdate={vi.fn()}
+        onClearSelection={() => {}}
+      />
+    );
+    const { rerender } = render(editor(node));
+
+    const approval = screen.getByRole('checkbox', { name: 'Approve storyboard image for video' });
+    expect(approval).toBeChecked();
+
+    const notes = screen.getByLabelText('Shot continuity notes');
+    await user.clear(notes);
+    await user.type(notes, 'Keep the gate in frame');
+    expect(updateLoomNode).not.toHaveBeenCalled();
+
+    rerender(editor({
+      ...node,
+      image: 'scene-replacement.png',
+      visualCanon: { ...node.visualCanon, storyboardImageApproved: false },
+    }));
+
+    expect(approval).not.toBeChecked();
+    expect(notes).toHaveValue('Keep the gate in frame');
+
+    await user.tab();
+    expect(updateLoomNode).toHaveBeenCalledExactlyOnceWith(
+      'loom-1', 'ep-1', 'n1',
+      { visualCanon: { ...node.visualCanon, shotNotes: 'Keep the gate in frame', storyboardImageApproved: false } },
+      { silent: true },
+    );
+  });
+
   it('offers the canonical protagonist as a one-click visual-cast binding', async () => {
     const user = userEvent.setup();
     updateLoomNode.mockResolvedValue({ id: 'loom-1' });
