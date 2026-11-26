@@ -4,6 +4,7 @@ const { request } = await import('../lib/testHelper.js');
 
 // Shrink the upload cap so an oversized clone body fits express.json's default limit.
 vi.mock('../lib/uploadLimits.js', async (importActual) => ({ ...(await importActual()), MAX_BASE64_UPLOAD_BYTES: 8 }));
+vi.mock('../services/voice/aukRuntime.js', () => ({ cancelAukSetup: vi.fn() }));
 vi.mock('../services/voice/studio.js', () => ({ createStudioVoice: vi.fn(), assignStudioVoice: vi.fn() }));
 
 // Mock all voice service modules before importing the router so the route
@@ -788,6 +789,15 @@ describe('Voice Routes', () => {
 });
 
 describe('Voice Studio HTTP contract', () => {
+  it('returns the current runtime status after canceling setup', async () => {
+    const { cancelAukSetup } = await import('../services/voice/aukRuntime.js');
+    const status = { supported: true, ready: false, state: 'canceled', stage: 'Setup canceled', error: null };
+    cancelAukSetup.mockResolvedValue(status);
+    const result = await request(buildApp()).post('/api/voice/studio/setup/cancel').send({});
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual(status);
+    expect(cancelAukSetup).toHaveBeenCalledOnce();
+  });
   it('validates controls before generation and emits only a payload-free invalidation after success', async () => {
     const { createStudioVoice } = await import('../services/voice/studio.js');
     const emit = vi.fn();

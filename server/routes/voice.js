@@ -358,6 +358,11 @@ router.post('/studio/setup', asyncHandler(async (req, res) => {
   const { startAukSetup } = await import('../services/voice/aukRuntime.js');
   res.status(202).json(startAukSetup(() => notifyStudio(req)));
 }));
+router.post('/studio/setup/cancel', asyncHandler(async (req, res) => {
+  validateRequest(facetimeActionSchema, req.body || {});
+  const { cancelAukSetup } = await import('../services/voice/aukRuntime.js');
+  res.json(await cancelAukSetup());
+}));
 router.post('/studio/unload', asyncHandler(async (req, res) => {
   validateRequest(facetimeActionSchema, req.body || {});
   const { unloadAuk } = await import('../services/voice/aukRuntime.js');

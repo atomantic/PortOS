@@ -72,6 +72,7 @@ export const controlFaceTime = (action, options) => api.post(`/voice/facetime/${
 // Voice Studio: local reusable character voices and explicit runtime setup.
 export const getVoiceStudioStatus = options => api.get('/voice/studio/status', options);
 export const setupVoiceStudio = options => api.post('/voice/studio/setup', {}, options);
+export const cancelVoiceStudioSetup = options => api.post('/voice/studio/setup/cancel', {}, options);
 export const unloadVoiceStudio = options => api.post('/voice/studio/unload', {}, options);
 export const designStudioVoice = (payload, options) => api.post('/voice/studio/design', payload, options);
 export const assignStudioVoice = (id, payload, options) => api.post(
