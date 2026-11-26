@@ -15,7 +15,6 @@ import {
   providerModeSelectionPolicy,
 } from '../../utils/providers';
 import { PR_COMPLETION_OPTIONS, prCompletionMerges, prCompletionOption } from './constants';
-import { clickableProps, onActivateKeyDown } from '../../lib/a11yKeyboard';
 import { slashdoLabel } from '../../lib/slashdoCatalog';
 
 // Opt-ins for a PR that a required code-owner review blocks (server: resolveAutoApprovePR / resolveAdminMerge).
@@ -92,23 +91,24 @@ function TaskTemplates({ form }) {
       {state.showTemplates && (
         <div className="flex flex-wrap gap-2">
           {state.templates.map((template) => (
-            <div
-              key={template.id}
-              onClick={() => applyTemplate(template)}
-              {...clickableProps(() => applyTemplate(template))}
-              onKeyDown={onActivateKeyDown(() => applyTemplate(template))}
-              className="group relative flex items-center gap-1 px-3 py-1.5 bg-port-card border border-port-border rounded-lg text-sm text-gray-300 hover:text-white hover:border-port-accent/50 transition-colors cursor-pointer"
-              title={template.slashdoCommand ? `${slashdoLabel(template.slashdoCommand)} — ${template.context || template.description}` : template.description}
-            >
-              <span>{template.icon || '📝'}</span>
-              <span className="max-w-[120px] truncate">{template.name}</span>
-              {template.slashdoCommand && <span className="hidden @sm:inline text-xs text-port-accent/80 font-mono">{slashdoLabel(template.slashdoCommand)}</span>}
-              {template.useCount > 0 && <span className="text-xs text-gray-600">({template.useCount})</span>}
+            <div key={template.id} className="group relative">
+              <button
+                type="button"
+                onClick={() => applyTemplate(template)}
+                className="flex items-center gap-1 px-3 py-1.5 bg-port-card border border-port-border rounded-lg text-sm text-gray-300 hover:text-white hover:border-port-accent/50 transition-colors cursor-pointer"
+                title={template.slashdoCommand ? `${slashdoLabel(template.slashdoCommand)} — ${template.context || template.description}` : template.description}
+              >
+                <span aria-hidden="true">{template.icon || '📝'}</span>
+                <span className="max-w-[120px] truncate">{template.name}</span>
+                {template.slashdoCommand && <span className="hidden @sm:inline text-xs text-port-accent/80 font-mono">{slashdoLabel(template.slashdoCommand)}</span>}
+                {template.useCount > 0 && <span className="text-xs text-gray-600">({template.useCount})</span>}
+              </button>
               {!template.isBuiltin && (
                 <button
-                  onClick={(event) => deleteTemplate(template.id, event)}
+                  type="button"
+                  onClick={() => deleteTemplate(template.id)}
                   className="flex [@media(hover:hover)]:md:opacity-0 [@media(hover:hover)]:md:pointer-events-none md:group-hover:opacity-100 md:group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-opacity absolute -top-3 -right-3 w-11 h-11 items-center justify-center"
-                  aria-label="Delete template"
+                  aria-label={`Delete template ${template.name}`}
                 >
                   <span className="flex w-4 h-4 bg-port-error rounded-full items-center justify-center">
                     <X size={10} />
@@ -730,7 +730,7 @@ export default function TaskAddFormView({ form, compact = false, queueFirst = fa
         <TaskUploadControls form={form} />
         <TaskUploadPreviews form={form} />
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <button type="button" onClick={() => setField('configurationOpen', !state.configurationOpen)} aria-expanded={state.configurationOpen} aria-controls="task-configuration" className="min-h-[44px] px-3 py-2 text-sm text-port-accent border border-port-border rounded-lg">
+          <button type="button" onClick={() => setField('configurationOpen', !state.configurationOpen)} aria-expanded={state.configurationOpen} aria-controls={state.configurationOpen ? 'task-configuration' : undefined} className="min-h-[44px] px-3 py-2 text-sm text-port-accent border border-port-border rounded-lg">
             Task configuration
           </button>
           <TaskSubmitButton form={form} variant="queue" />

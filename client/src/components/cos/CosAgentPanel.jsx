@@ -101,13 +101,13 @@ export function CosStatusPlaceholder({ failed, onRetry }) {
 }
 
 // The phone-width header that toggles the panel body.
-function MobilePanelToggle({ status, agentState, collapsed, onToggle, className = '' }) {
+function MobilePanelToggle({ status, agentState, collapsed, onToggle, controls, className = '' }) {
   return (
     <button
       onClick={onToggle}
       className={`${className ? `${className} ` : ''}flex items-center justify-between w-full px-3 py-2 bg-port-card/60 border-b border-port-accent-2/20 min-h-[40px]`}
       aria-expanded={!collapsed}
-      aria-controls="cos-agent-panel"
+      aria-controls={controls}
     >
       <div className="flex items-center gap-2">
         <h2 className="text-base font-bold" style={COS_TITLE_STYLE}>CoS</h2>
@@ -176,9 +176,9 @@ function CollapsedPanel({ cos, mobileCollapsed, onToggleMobile }) {
     <>
       <div className="hidden cos-wide:block overflow-hidden min-w-0" />
       <div className="cos-wide:hidden border-b border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40">
-        <MobilePanelToggle status={cos.status} agentState={cos.agentState} collapsed={mobileCollapsed} onToggle={onToggleMobile} />
+        <MobilePanelToggle status={cos.status} agentState={cos.agentState} collapsed={mobileCollapsed} onToggle={onToggleMobile} controls={mobileCollapsed ? undefined : 'cos-agent-panel'} />
         {!mobileCollapsed && (
-          <div className="flex flex-1 min-w-0 p-2">
+          <div id="cos-agent-panel" className="flex flex-1 min-w-0 p-2">
             {/* Mobile Stats Grid */}
             <div className="flex-1 grid grid-cols-2 gap-1.5 relative z-10 content-center">
               <CosStatsCards cos={cos} variant="collapsed" />
@@ -209,7 +209,7 @@ function FullPanel({ cos, riggedAvatars, onToggleDesktop, mobileCollapsed, onTog
       </button>
 
       {/* Mobile Collapse Toggle Header */}
-      <MobilePanelToggle className="cos-wide:hidden" status={status} agentState={agentState} collapsed={mobileCollapsed} onToggle={onToggleMobile} />
+      <MobilePanelToggle className="cos-wide:hidden" status={status} agentState={agentState} collapsed={mobileCollapsed} onToggle={onToggleMobile} controls="cos-agent-panel" />
 
       {/* Collapsible Content */}
       <div

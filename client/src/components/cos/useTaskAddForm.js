@@ -647,8 +647,7 @@ export default function useTaskAddForm({
     }
   };
 
-  const deleteTemplate = async (templateId, event) => {
-    event.stopPropagation();
+  const deleteTemplate = async (templateId) => {
     const result = await deleteCosTaskTemplate(templateId, { silent: true }).catch((error) => {
       toast.error(error.message);
       return null;
