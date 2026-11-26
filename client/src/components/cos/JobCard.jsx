@@ -1,5 +1,5 @@
 import { sortByLabel } from '../../lib/sortByLabel.js';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { AlertTriangle, Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLeft, ToggleRight, Edit3, Save, X, Terminal } from 'lucide-react';
 import toast from '../ui/Toast';
 import { updateCosJob, acknowledgeCosJobIncident } from '../../services/apiAgents.js';
@@ -192,6 +192,7 @@ export default function JobCard({
   // the card happened to mount with.
   const [runValues, setRunValues] = useState(null);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
+  const deleteButtonRef = useRef(null);
   const hasFixedApp = typeof fixedAppId === 'string' && fixedAppId.length > 0;
   const isShell = job.type === 'shell';
   const isScript = job.type === 'script';
@@ -602,9 +603,12 @@ export default function JobCard({
                   <pre className="mt-2 p-3 bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 font-mono whitespace-pre-wrap break-words max-h-48 overflow-y-auto">{job.promptTemplate}</pre>
                 </details>
               )}
-              <JobNotepad jobId={job.id} />
+              <JobNotepad jobId={job.id} jobName={job.name} />
               {isConfirming(job.id) ? (
                 <InlineConfirmRow
+                  autoFocus
+                  aria-label={`Confirm delete job ${job.name || job.id}`}
+                  returnFocusRef={deleteButtonRef}
                   question="Delete this job? This cannot be undone."
                   confirmTitle="Confirm delete"
                   cancelTitle="Cancel delete"
@@ -614,6 +618,7 @@ export default function JobCard({
               ) : (
                 <div className="flex justify-end">
                   <button
+                    ref={deleteButtonRef}
                     onClick={() => requestDelete(job.id)}
                     className="flex items-center gap-1 px-2 py-1 text-xs text-red-400/60 hover:text-red-400 transition-colors"
                   >

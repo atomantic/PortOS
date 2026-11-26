@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { MemoryRouter } from 'react-router';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { formatCompositeId } from '../../../utils/providerRef.js';
 
 const api = vi.hoisted(() => ({
@@ -53,6 +54,19 @@ beforeEach(() => {
 });
 
 describe('TaskItem task source', () => {
+  it('returns keyboard focus to Delete task after cancelling the confirmation', async () => {
+    const user = userEvent.setup();
+    render(<TaskItem task={{ ...task, status: 'completed' }} providers={providers} />);
+    screen.getByRole('button', { name: 'Delete task' }).focus();
+    await user.keyboard('{Enter}');
+    expect(screen.getByRole('group', { name: 'Confirm delete task' })).toHaveFocus();
+    await user.tab();
+    await user.tab();
+    await user.keyboard('{Enter}');
+    expect(screen.getByRole('button', { name: 'Delete task' })).toHaveFocus();
+    expect(api.deleteCosTask).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['delivery cleanup', { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-owner' }, /Cleanup must finish/],
     ['retry cleanup', { retryPendingCleanup: 'agent-owner' }, /Cleanup must finish/],

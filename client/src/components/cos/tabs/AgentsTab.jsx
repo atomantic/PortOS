@@ -377,6 +377,8 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
           {confirmingClear && (
             <InlineConfirmRow
               className="mb-3"
+              autoFocus
+              aria-label="Confirm clear all completed agents"
               question="Clear ALL completed agents, including records outside the current filter and unloaded pages? This cannot be undone."
               confirmText="Clear all"
               confirmTitle="Confirm clear all completed agents"

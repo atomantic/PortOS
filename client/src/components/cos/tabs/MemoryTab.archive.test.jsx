@@ -24,15 +24,6 @@ vi.mock('../../../hooks/useProviderModels', () => ({
 }));
 vi.mock('./MemoryTimeline', () => ({ default: () => null }));
 vi.mock('./MemoryEditModal', () => ({ default: () => null }));
-vi.mock('../../ui/InlineConfirmRow', () => ({
-  default: ({ question, confirmText, onConfirm, onCancel }) => (
-    <div>
-      <p>{question}</p>
-      <button type="button" onClick={onConfirm}>{confirmText}</button>
-      <button type="button" onClick={onCancel}>Cancel</button>
-    </div>
-  ),
-}));
 
 import { getCosConfig } from '../../../services/apiAgents.js';
 import {
@@ -76,11 +67,17 @@ describe('MemoryTab archive confirmation', () => {
     renderTab();
 
     await screen.findAllByText('A synthetic test memory');
-    await user.click(screen.getByRole('button', { name: 'Archive memory' }));
+    const trigger = screen.getByRole('button', { name: 'Archive memory' });
+    trigger.focus();
+    await user.keyboard('{Enter}');
 
     expect(screen.getByText('Archive this memory? It will be hidden from active memory and search. Its contents remain stored.')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Archive' })).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('group', { name: 'Confirm archive memory A synthetic test memory' })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Archive' })).toHaveFocus();
+    await user.tab();
+    await user.keyboard('{Enter}');
+    expect(trigger).toHaveFocus();
     expect(deleteMemory).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole('button', { name: 'Archive memory' }));
