@@ -88,6 +88,7 @@ vi.mock('../services/slotstreamModelManager.js', () => ({
 vi.mock('../services/mtplxModelManager.js', () => ({
   searchMtplxCatalog: vi.fn(),
   pullMtplxModel: vi.fn(),
+  cancelMtplxModelPull: vi.fn(),
   previewMtplxPull: vi.fn(),
   removeMtplxModel: vi.fn(),
 }));
@@ -191,6 +192,7 @@ vi.mock('../services/lmStudioManager.js', () => ({
 import browserRoutes from './browser.js';
 import harnessRoutes from './harnesses.js';
 import localLlmRoutes from './localLlm.js';
+import { cancelMtplxModelPull } from '../services/mtplxModelManager.js';
 import { uninstallSlotstream } from '../services/slotstreamServerManager.js';
 import { updateConfig, launchBrowser } from '../services/browserService.js';
 import { streamHarnessAction } from '../services/harnessActionStream.js';
@@ -208,7 +210,9 @@ const mounts = [
   ['/api/local-llm', localLlmRoutes],
 ];
 
+const mtplxCancel = ['post', '/api/local-llm/mtplx/models/pull/cancel', undefined, cancelMtplxModelPull];
 const writes = [
+  mtplxCancel,
   ['post', '/api/local-llm/capability-tests/run', { backend: 'ollama', modelId: 'example-model', testId: 'sandbox-repair' }, runCapabilityTest],
   ['put', '/api/browser/config', { chromePath: '/opt/example/bin/chrome', headless: true }, updateConfig],
   ['post', '/api/browser/launch', {}, launchBrowser],
@@ -234,9 +238,10 @@ describe('operator authority for browser, harness and local-runtime management',
     runLocalLlmTest.mockResolvedValue({ text: 'example answer' });
   });
 
-  it('refuses a remote caller before a runtime install', async () => {
+  it('refuses a remote caller before a runtime install or MTPLX pull cancellation', async () => {
     await expectRemoteRefusal(mounts, ['post', '/api/local-llm/install-backend', { backend: 'ollama' }, installBackend]);
     await expectRemoteRefusal(mounts, ['post', '/api/local-llm/slotstream/uninstall', {}, uninstallSlotstream]);
+    await expectRemoteRefusal(mounts, mtplxCancel);
   });
 
   it('preserves local and delegated-agent runtime management and inference', async () => {

@@ -31,6 +31,7 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
   cancelSlotstreamModelDownload: vi.fn(),
   searchMtplxModels: vi.fn().mockResolvedValue({ models: [], error: null }),
   pullMtplxModel: vi.fn(),
+  cancelMtplxModelPull: vi.fn(),
   removeMtplxModel: vi.fn(),
   saveRuntimeStartupList: vi.fn(),
   getLlamaServerStatus: vi.fn().mockResolvedValue({ installed: false, running: false }),
@@ -79,10 +80,12 @@ import {
   controlManagedInklingRuntime,
   switchLocalLlmBackend,
   installLocalLlmBackend,
+  getMtplxServerStatus,
 } from '../../services/apiLocalLlm.js';
 import { getSystemCapabilities, patchSettingsSlice } from '../../services/apiSystem.js';
 import { getFleetLlmHost, stopFleetLlmHost } from '../../services/apiProviders';
 import socket from '../../services/socket';
+import toast from '../ui/Toast';
 import { clickStartDownload } from '../../test/downloadPreflightConfirm.js';
 import LocalLlmRuntimesView from './LocalLlmRuntimesView.jsx';
 import {
@@ -146,6 +149,7 @@ beforeEach(() => {
     lmstudio: { installed: false, available: false, modelCount: 0, models: [] },
   });
   getLocalLlmCatalog.mockResolvedValue({ models: [] });
+  getMtplxServerStatus.mockResolvedValue({ installed: false, running: false, supported: true, cachedModels: [] });
   getManagedInklingRuntimeStatus.mockResolvedValue({ supported: true, state: 'missing', installed: false });
   getSystemCapabilities.mockResolvedValue({
     platform: 'darwin',
@@ -393,6 +397,45 @@ describe('runtime selection workflow', () => {
     expect(screen.getByLabelText('Current route')).toHaveTextContent('/models/llms-runtimes/llama');
     expect(screen.getByRole('heading', { name: 'Runtime configuration' })).toHaveFocus();
     expect(screen.getByRole('button', { name: /Install llama.cpp/ })).toBeVisible();
+  });
+
+  it('discovers MTPLX checkpoints only on first selection and cancels a pull while busy', async () => {
+    const { searchMtplxModels, pullMtplxModel, cancelMtplxModelPull } = await import('../../services/apiLocalLlm.js');
+    const transfer = Promise.withResolvers();
+    getMtplxServerStatus.mockResolvedValue({ installed: true, running: false, supported: true, cachedModels: [] });
+    pullMtplxModel.mockReturnValueOnce(transfer.promise);
+    cancelMtplxModelPull.mockResolvedValueOnce({ success: true, cancelled: true });
+    await renderRuntimes(null);
+
+    const selectMtplx = () => fireEvent.click(within(screen.getByRole('group', { name: 'MTPLX' })).getByRole('button', { name: 'Configure' }));
+    expect(searchMtplxModels).not.toHaveBeenCalled();
+    await act(async () => selectMtplx());
+    expect(searchMtplxModels).toHaveBeenCalledExactlyOnceWith({ query: '' }, { silent: true });
+    fireEvent.click(screen.getByRole('link', { name: 'All runtimes' }));
+    await act(async () => selectMtplx());
+    expect(searchMtplxModels).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download default checkpoint' }));
+    await clickStartDownload();
+    expect(pullMtplxModel).toHaveBeenCalledExactlyOnceWith(null, { silent: true });
+    const receiveProgress = socket.on.mock.calls.find(([event]) => event === 'mtplx:download')[1];
+    act(() => receiveProgress({ event: 'start', model: null, message: 'Resolving…' }));
+    expect(screen.getByRole('button', { name: /Download default checkpoint/ })).toBeDisabled();
+
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    expect(cancel).toBeEnabled();
+    await act(async () => fireEvent.click(cancel));
+    expect(cancelMtplxModelPull).toHaveBeenCalledExactlyOnceWith({ silent: true });
+    expect(screen.getByRole('progressbar', { name: /Downloading MTPLX default checkpoint/ })).toBeVisible();
+
+    await act(async () => {
+      receiveProgress({ event: 'cancelled', model: null });
+      transfer.resolve({ success: false, cancelled: true, model: null });
+    });
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Download default checkpoint' })).toBeEnabled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it('retains a launch draft and download cancellation across selection and history', async () => {

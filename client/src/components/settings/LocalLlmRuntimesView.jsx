@@ -4,6 +4,7 @@ import { RefreshCw, Link2, Copy } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatBytes } from '../../utils/formatters';
+import useAsyncAction from '../../hooks/useAsyncAction';
 import useDownloadPreflightConfirm from '../../hooks/useDownloadPreflightConfirm';
 import useLocalLlmStatus from '../../hooks/useLocalLlmStatus';
 import {
@@ -14,6 +15,7 @@ import {
   controlLmStudioService,
   searchMtplxModels,
   pullMtplxModel,
+  cancelMtplxModelPull,
   removeMtplxModel,
   saveSplashContextWindow,
   downloadSlotstreamModel,
@@ -333,14 +335,24 @@ export default function LocalLlmRuntimesView({ view } = {}) {
   const startMtplxPull = (model) => runAction(
     model ? `mtplx-pull-${model}` : 'mtplx-pull',
     () => pullMtplxModel(model, { silent: true }).then((r) => {
+      if (r?.cancelled) return r;
       if (r?.success === false) throw new Error(r.error || 'Download failed');
+      toast.success(`${r?.model || 'Default checkpoint'} downloaded`);
       return r;
     }),
-    (r) => `${r?.model || 'Default checkpoint'} downloaded`,
-    { onError: (err) => toast.error(`MTPLX download failed: ${err.message}`) },
-  ).then(() => {
-    clearMtplxDownload();
+    null,
+    { onError: (err) => {
+      if (err.code === 'MTPLX_PULL_FAILED') clearMtplxDownload();
+      toast.error(`MTPLX download failed: ${err.message}`);
+    } },
+  ).then((result) => {
+    if (result) clearMtplxDownload();
     return loadRuntime('mtplx');
+  });
+  const [cancelMtplxPull, cancellingMtplxPull] = useAsyncAction(async () => {
+    const result = await cancelMtplxModelPull({ silent: true });
+    if (result.cancelled) toast.info('Cancelling checkpoint download…');
+    else toast.info('No checkpoint download is running');
   });
   const mtplxPull = (model) => requestWeightDownload({
     title: 'Download MTPLX checkpoint',
@@ -531,6 +543,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
       {/* MTPLX — PM2-managed native-MTP runtime (Apple Silicon) */}
       <div hidden={selectedRuntime !== 'mtplx'}>
         <MtplxServerCard
+          visible={selectedRuntime === 'mtplx'}
           status={mtplxStatus}
           loading={loading}
           busy={busy}
@@ -543,6 +556,8 @@ export default function LocalLlmRuntimesView({ view } = {}) {
           onUninstall={() => runtimeAction('mtplx', 'uninstall')}
           onSearchModels={mtplxSearch}
           onPullModel={mtplxPull}
+          onCancelPull={cancelMtplxPull}
+          cancellingPull={cancellingMtplxPull}
           onRemoveModel={mtplxRemove}
           download={mtplxDownload}
         />
