@@ -33,9 +33,8 @@ import { toPgJson } from '../lib/pgJson.js';
 
 const protectedMindMemoryTags = Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS);
 
-// Every column rowToMemory reads except `embedding`. Batch peeks omit that
-// pgvector value unless a caller asks for it; parsing 768 floats per row is
-// the cost these reads exist to avoid.
+// Every column rowToMemory reads except `embedding`. Include the pgvector
+// value only when needed to avoid transferring and parsing 768 floats per row.
 const MEMORY_READ_COLUMNS = `id, version, archive_reason, last_review, review_origin, type, content, summary, category, tags,
   source_task_id, source_agent_id, source_app_id, embedding_model, confidence, importance, access_count, last_accessed,
   created_at, updated_at, expires_at, status, origin_instance_id`;
@@ -311,10 +310,10 @@ export async function upsertBrainMemory(key, data, embedding = null, legacyId = 
 }
 
 /**
- * Get a memory by ID
+ * Read a memory without loading its embedding or recording access.
  */
 export async function peekMemory(id) {
-  const result = await query('SELECT * FROM memories WHERE id = $1', [id]);
+  const result = await query(`SELECT ${MEMORY_READ_COLUMNS} FROM memories WHERE id = $1`, [id]);
   if (result.rows.length === 0) return null;
   return rowToMemory(result.rows[0]);
 }
@@ -324,7 +323,7 @@ export function withPendingMemories(ids, publish) {
   return withTransaction(async client => {
     const unique = memoryIdList(ids);
     const { rows } = await client.query(
-      "SELECT * FROM memories WHERE id = ANY($1::uuid[]) AND status = 'pending_approval' ORDER BY id FOR UPDATE",
+      `SELECT ${MEMORY_READ_COLUMNS} FROM memories WHERE id = ANY($1::uuid[]) AND status = 'pending_approval' ORDER BY id FOR UPDATE`,
       [unique]
     );
     const byId = new Map(rows.map(row => [row.id, rowToMemory(row)]));
@@ -354,7 +353,7 @@ export async function recordMemoryAccess(ids) {
 }
 
 export async function getMemory(id) {
-  const result = await query('SELECT * FROM memories WHERE id = $1', [id]);
+  const result = await query(`SELECT ${MEMORY_READ_COLUMNS}, embedding FROM memories WHERE id = $1`, [id]);
   if (result.rows.length === 0) return null;
 
   // Update access stats
@@ -392,9 +391,10 @@ export async function getMemoryVersions(id, { limit = 20, offset = 0 } = {}) {
 }
 
 export async function getMemoryVersion(id, version) {
-  const current = await peekMemory(id);
-  if (!current) return null;
-  if (current.version === version) return current;
+  const { rows: [current] } = await query(
+    `SELECT ${MEMORY_READ_COLUMNS}, embedding FROM memories WHERE id = $1 AND version = $2`, [id, version]
+  );
+  if (current) return rowToMemory(current);
   const result = await query(
     'SELECT memory_id AS id, version, content, summary, type, category, tags, changed_by AS "changedBy", change_reason AS "changeReason", created_at AS "createdAt" FROM memory_versions WHERE memory_id = $1 AND version = $2',
     [id, version]
@@ -1305,7 +1305,7 @@ export async function flushBM25Index() {
 // Keep the read-time SQL formula aligned with fadedPersistentMindMemoryImportance.
 export async function selectMindMemoryForReview(mindId) {
   const result = await query(`
-    SELECT * FROM memories
+    SELECT ${MEMORY_READ_COLUMNS} FROM memories
     WHERE source_agent_id = $1 AND status = 'active'
       AND NOT (COALESCE(tags, '{}'::text[]) && $2::text[])
       AND created_at < NOW() - INTERVAL '30 days'
