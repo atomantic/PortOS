@@ -9,6 +9,7 @@ import {
 } from '../../services/apiSystem.js';
 import Banner from '../ui/Banner';
 import BrailleSpinner from '../BrailleSpinner';
+import ListLoadError from '../ui/ListLoadError';
 import PageSkeleton from '../ui/PageSkeleton';
 import Pill from '../ui/Pill';
 import ToggleSwitch from '../ToggleSwitch';
@@ -21,8 +22,15 @@ import {
 } from '../usage/SubscriptionSavingsCard';
 import { useQuotaUpdates } from '../../hooks/useQuotaUpdates';
 import useLatestRequest from '../../hooks/useLatestRequest.js';
+import useListResource from '../../hooks/useListResource';
 import useUrlParams from '../../hooks/useUrlParams';
 import { USAGE_PERIOD_OPTIONS, resolveUsagePeriod, DEFAULT_USAGE_PERIOD } from '../../lib/usagePeriods';
+
+async function fetchPlans() {
+  const data = await getSubscriptions({ silent: true });
+  if (!Array.isArray(data?.families)) throw new Error('Invalid subscriptions response');
+  return data.families;
+}
 
 /**
  * Subscriptions — which AI plans this install pays for, whether each is on, and
@@ -196,17 +204,13 @@ export default function SubscriptionsTab() {
   const [searchParams, updateParams] = useUrlParams();
   const period = resolveUsagePeriod(searchParams.get('period'));
 
-  const [rows, setRows] = useState(null);
+  const { items: rows, state: plansState, error: plansError, retry: retryPlans, setItems: setRows } =
+    useListResource(fetchPlans, { retainOnRetry: true });
   const [savings, setSavings] = useState(null);
   const [quotas, setQuotas] = useState(null);
   const [drafts, setDrafts] = useState({});
   const [busyFamily, setBusyFamily] = useState(null);
   const beginSavingsLoad = useLatestRequest();
-
-  const loadPlans = useCallback(async () => {
-    const data = await getSubscriptions({ silent: true }).catch(() => null);
-    if (data?.families) setRows(data.families);
-  }, []);
 
   const loadSavings = useCallback(async () => {
     const isCurrent = beginSavingsLoad();
@@ -226,9 +230,8 @@ export default function SubscriptionsTab() {
   // Window-INDEPENDENT reads, once. `loadQuotas` is deliberately not awaited
   // with the rows: it is a CLI scrape per family and must never gate the page.
   useEffect(() => {
-    loadPlans();
     loadQuotas();
-  }, [loadPlans, loadQuotas]);
+  }, [loadQuotas]);
 
   // Window-dependent read, re-run per period click — and only this one.
   useEffect(() => { loadSavings(); }, [loadSavings]);
@@ -350,18 +353,19 @@ export default function SubscriptionsTab() {
         ))}
       </div>
 
-      {!rows && (
+      {plansState === 'error' && <ListLoadError what="subscriptions" error={plansError} onRetry={retryPlans} />}
+      {plansState === 'loading' && rows.length === 0 && (
         <PageSkeleton header="none" label="Loading subscriptions" layout="grid" gridColsClass="grid-cols-1 lg:grid-cols-2" cards={4} />
       )}
 
-      {rows?.length === 0 && (
+      {plansState === 'ready' && rows.length === 0 && (
         <p className="text-sm text-gray-500">
           No subscriptions to manage — configure a Claude, Codex, Antigravity or Grok provider, or record a plan price,
           and it will appear here.
         </p>
       )}
 
-      {rows?.length > 0 && (
+      {rows.length > 0 && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start" aria-label="AI subscriptions">
           {rows.map((row) => (
             <SubscriptionRow
