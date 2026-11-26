@@ -3444,7 +3444,7 @@ it('selects live restore for DB risks and its real closure, separately from gene
   const planFor = (source) => githubPlanOutput(buildCiTestPlan([source], inputs));
   for (const source of ['scripts/rehearsal-scratch-db.js', 'scripts/lib/migrationFiles.js', 'server/lib/databaseMaintenanceSchema.js',
     'server/services/backupDatabaseDump.js', 'server/services/backupDatabaseDump.restore.live.test.js', 'scripts/lib/dbImage.js',
-    'server/scripts/init-db.sql', 'server/services/backupDatabaseReset.js']) {
+    'server/scripts/init-db.sql', 'server/services/backupDatabaseReset.js', 'server/routes/catalogIngest.js']) {
     expect(planFor(source), source).toMatchObject({ full: false, db: true, db_live_restore: true });
   }
   expect(planFor('docker-compose.yml')).toMatchObject({ full: true, db: true, db_live_restore: true });
