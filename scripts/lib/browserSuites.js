@@ -127,17 +127,19 @@ const FULL_SHARD_OWNERS = {
   'server/services/codeAnimation/poster.realBrowser.test.js': 1,
 };
 
-// The visual runner varied from 90s to 144s in cold smoke. With the timed
-// flash case now on the timeline runner, give the visual runner the shorter
-// generation suite and pair film look with animatic capture. Keep GPU and
-// catalog work on separate runners because both vary by host.
+// Animatic and film look took 115s and 30s on the same runner in smoke
+// run 45804297540. Separate them and use shorter work to balance the GPU,
+// HTML composition, and visual runners across the observed cold runs.
 const FULL_SHARD_SMOKE_OVERRIDES = {
-  'server/lib/filmLook.browser.test.js': 3,
-  'server/services/codeAnimation/export.realBrowser.test.js': 5,
+  'server/lib/filmLook.browser.test.js': 5,
+  'server/services/codeAnimation/export.realBrowser.test.js': 3,
   'server/services/greyboxRender.browser.test.js': 7,
   'server/services/musicVideo/documentRenderGeneration.browser.test.js': 1,
   'server/services/musicVideo/documentVignette.browser.test.js': 7,
+  'server/services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js': 6,
+  'server/services/musicVideo/publish/x.browser.test.js': 2,
   'server/services/musicVideo/publish/sunoHook.browser.test.js': 7,
+  'server/services/musicVideo/overlayTextService.browser.test.js': 7,
   'server/services/codeAnimation/poster.realBrowser.test.js': 6,
 };
 
