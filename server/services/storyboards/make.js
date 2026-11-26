@@ -23,7 +23,7 @@ import { promptAddition } from '../../lib/modelInput.js';
 import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../../lib/creativeLatitude.js';
 import {
   effectiveRecipe, imageNodePrompt, nodeInputValue, panelNodeState, RECIPE_LIMITS, recipeRunOrder, sanitizeRecipe, STORYBOARD_RENDER_SIZES,
-  upstreamNode,
+  settledImageFrameCount, upstreamNode,
 } from '../../lib/storyboardRecipe.js';
 import { newStoryboardEntityId, STORYBOARD_LIMITS } from '../../lib/storyboardVocabulary.js';
 import { getStoryboard, mutateStoryboard } from './index.js';
@@ -261,7 +261,7 @@ async function runImageNode(board, panelId, node, { frameRef = null, count: fram
   // The run id lands before any job is queued, so a frame that finishes or
   // fails at once is already counted against this run.
   await mutateStoryboard(board.id, (draft) => patchNodeState(draft, panelId, node.id, {
-    status: 'queued', error: '', runId, frameCount: count, jobIds: [], failedJobIds: [], takeIds: [], sentPrompt: prompt,
+    status: 'queued', error: '', runId, frameCount: count, jobIds: [], completedJobIds: [], failedJobIds: [], takeIds: [], sentPrompt: prompt,
     sentRefs, promptAdditions, providerId: node.settings.imageMode || '', model: node.settings.imageModelId || '',
     selectOnLand, runAt: new Date().toISOString(),
   }));
@@ -339,15 +339,19 @@ export async function correctPanel(storyboardId, panelId, { takeId, note }) {
   return next;
 }
 
-const settledStatus = (state) => (state.takeIds.length + state.failedJobIds.length >= state.frameCount
+const settledStatus = (state) => (settledImageFrameCount(state) >= state.frameCount
   ? (state.takeIds.length ? 'done' : 'failed')
   : 'queued');
 
-/** Completion: the frame becomes a panel take (selection unchanged). Null when the panel is gone. */
+const hasSettledJob = (state, jobId) => state.completedJobIds.includes(jobId) || state.failedJobIds.includes(jobId);
+
+/** Completion: the frame becomes a panel take. Null if it cannot add a take or has already settled. */
 export async function attachPanelFrame({ storyboardId, panelId, nodeId, runId, jobId, filename }) {
   let takeId = null;
-  const { board } = await mutateStoryboard(storyboardId, (draft) => {
+  const { board, result } = await mutateStoryboard(storyboardId, (draft) => {
     const { panel } = locate(draft, panelId);
+    const state = panelNodeState(panel, nodeId);
+    if (state.runId === runId && hasSettledJob(state, jobId)) return false;
     // A full panel (a manual take or another run filled it meanwhile) drops
     // the frame, counted as failed so the node still settles.
     if (panel.takes.length >= STORYBOARD_LIMITS.takes) {
@@ -360,20 +364,20 @@ export async function attachPanelFrame({ storyboardId, panelId, nodeId, runId, j
       if (current.runId !== runId) return null;
       // A redraw-all run asked for its first frame to become the panel's art.
       if (current.selectOnLand && !current.takeIds.length) panel.selectedTakeId = takeId;
-      const next = { ...current, takeIds: [...current.takeIds, takeId] };
+      const next = { ...current, completedJobIds: [...current.completedJobIds, jobId], takeIds: [...current.takeIds, takeId] };
       return { ...next, status: settledStatus(next) };
     });
   }).catch((err) => {
     if (err?.code === 'NOT_FOUND') return { board: null };
     throw err;
   });
-  if (!board) return null;
+  if (!board || result === false) return null;
   announce(storyboardId, panelId, nodeId, takeId ? 'frame' : 'failed');
   return takeId ? { takeId } : null;
 }
 
 function countFailed(current, runId, jobId, reason) {
-  if (current.runId !== runId || current.failedJobIds.includes(jobId)) return null;
+  if (current.runId !== runId || hasSettledJob(current, jobId)) return null;
   const next = { ...current, failedJobIds: [...current.failedJobIds, jobId], error: String(reason).slice(0, RECIPE_LIMITS.error) };
   return { ...next, status: settledStatus(next) };
 }
@@ -381,11 +385,11 @@ function countFailed(current, runId, jobId, reason) {
 /** A failed or canceled frame is counted, and the node settles when its last frame does. */
 export async function failPanelFrame({ storyboardId, panelId, nodeId, runId, jobId }, status, error) {
   const reason = status === 'canceled' ? 'A frame was canceled' : (error || 'A frame failed');
-  await mutateStoryboard(storyboardId, (draft) => patchNodeState(draft, panelId, nodeId, (current) => countFailed(current, runId, jobId, reason)))
+  const outcome = await mutateStoryboard(storyboardId, (draft) => patchNodeState(draft, panelId, nodeId, (current) => countFailed(current, runId, jobId, reason)))
     .catch((err) => {
       if (err?.code !== 'NOT_FOUND') throw err;
     });
-  announce(storyboardId, panelId, nodeId, 'failed', reason);
+  if (outcome?.result) announce(storyboardId, panelId, nodeId, 'failed', reason);
 }
 
 // Make empty panels: one batch per board at a time, in memory only (a restart

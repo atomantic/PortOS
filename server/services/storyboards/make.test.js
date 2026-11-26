@@ -158,6 +158,63 @@ describe('storyboard panel maker', () => {
     expect(nodeState(board, 'node-image')).toMatchObject({ status: 'done', takeIds: panel.takes.slice(1).map((t) => t.id), failedJobIds: ['job-4'] });
   });
 
+  it.each([
+    ['completes', 'done'],
+    ['fails', 'failed'],
+  ])('unlocks redraw after an earlier take is deleted and the last frame %s', async (outcome, status) => {
+    const { id, panelId } = await boardWithPanel({ action: 'Doors' }, { writer: false });
+    const panelPath = `/${id}/panels/${panelId}`;
+    const recipe = effectiveRecipe((await api('get', `/${id}`)).body);
+    recipe.nodes.find((node) => node.id === 'node-image').settings.count = 2;
+    expect((await api('put', `/${id}/recipe`, { recipe })).status).toBe(200);
+    expect((await api('post', `${panelPath}/make/node-image/run`)).status).toBe(200);
+
+    const tag = enqueue.mock.calls[0][0].params.storyboardPanelRender;
+    const first = { ...tag, jobId: 'job-1', filename: 'first.png' };
+    const { takeId } = await attachPanelFrame(first);
+    const deleted = await api('delete', `${panelPath}/takes/${takeId}`);
+    expect(deleted.status).toBe(200);
+    expect(nodeState(deleted.body, 'node-image')).toMatchObject({ status: 'queued', takeIds: [] });
+    expect((await api('post', `${panelPath}/draw`)).status).toBe(409);
+
+    const last = { ...tag, jobId: 'job-2', filename: 'last.png' };
+    if (outcome === 'completes') await attachPanelFrame(last);
+    else await failPanelFrame(last, 'failed', 'Out of quota');
+
+    const { body: board } = await api('get', `/${id}`);
+    expect(nodeState(board, 'node-image').status).toBe(status);
+    const redraw = await api('post', `${panelPath}/draw`);
+    expect(redraw.status).toBe(200);
+    expect(nodeState(redraw.body, 'node-image').completedJobIds).toEqual([]);
+  });
+
+  it('counts a re-delivered frame only once, even when its take was deleted', async () => {
+    const { id, panelId } = await boardWithPanel({ action: 'Doors' }, { writer: false });
+    const panelPath = `/${id}/panels/${panelId}`;
+    const recipe = effectiveRecipe((await api('get', `/${id}`)).body);
+    recipe.nodes.find((node) => node.id === 'node-image').settings.count = 2;
+    expect((await api('put', `/${id}/recipe`, { recipe })).status).toBe(200);
+    expect((await api('post', `${panelPath}/make/node-image/run`)).status).toBe(200);
+
+    const tag = enqueue.mock.calls[0][0].params.storyboardPanelRender;
+    const first = { ...tag, jobId: 'job-1', filename: 'first.png' };
+    const { takeId } = await attachPanelFrame(first);
+    await attachPanelFrame(first);
+    const { body: beforeDelete } = await api('get', `/${id}`);
+    expect(nodeState(beforeDelete, 'node-image')).toMatchObject({
+      status: 'queued', takeIds: [takeId], completedJobIds: ['job-1'],
+    });
+
+    expect((await api('delete', `${panelPath}/takes/${takeId}`)).status).toBe(200);
+    await attachPanelFrame(first);
+    await failPanelFrame(first, 'failed', 'Duplicate terminal notification');
+    const { body: afterDelete } = await api('get', `/${id}`);
+    expect(afterDelete.beats[0].panels[0].takes).toEqual([]);
+    expect(nodeState(afterDelete, 'node-image')).toMatchObject({
+      status: 'queued', takeIds: [], completedJobIds: ['job-1'], failedJobIds: [],
+    });
+  });
+
   // Uniquely catches a Codex draw sending more refs than its tool accepts, or the cap dropping the set first (#14381).
   it('caps a Codex draw at five references, keeping the place ahead of the cast', async () => {
     const castIds = Array.from({ length: 6 }, (_, i) => `cat-example-${i + 1}`);
