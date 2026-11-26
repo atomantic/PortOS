@@ -1,4 +1,5 @@
 import { sortByLabel } from '../../lib/sortByLabel.js';
+import { uuidv4 } from '../../lib/uuid.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowDown, ArrowUp, CheckCircle2, Download, Plus, RotateCcw, Save, Trash2, Upload, X } from 'lucide-react';
 import { getNotesVaults } from '../../services/apiNotes.js';
@@ -29,6 +30,7 @@ const fetchLists = async () => {
 };
 
 const emptyList = () => ({ title: '', prompt: '', category: '', help: '', status: 'draft', ideas: [] });
+const hydrateIdeas = (ideas = []) => ideas.map((text) => ({ key: uuidv4(), text }));
 
 // Every outcome the server can report. Anything that is not a clean
 // imported/exported/skipped result needs the user's attention, so the summary
@@ -45,7 +47,7 @@ const toPayload = (draft) => ({
   category: (draft.category || '').trim(),
   status: draft.status === 'completed' ? 'completed' : 'draft',
   help: (draft.help || '').trim(),
-  ideas: (draft.ideas || []).map((idea) => idea.trim()).filter(Boolean),
+  ideas: (draft.ideas || []).map(({ text }) => text.trim()).filter(Boolean),
 });
 
 // A successful integration read can still leave vault sync unavailable for local lists.
@@ -100,7 +102,7 @@ export default function IdeaLoomLists() {
   const notice = settings && !settingsError ? integrationNotice(settings) : null;
   const selected = useMemo(() => lists.find((list) => list.id === selectedId) || null, [lists, selectedId]);
   useEffect(() => {
-    if (selected) setDraft({ ...selected, ideas: [...(selected.ideas || [])] });
+    if (selected) setDraft({ ...selected, ideas: hydrateIdeas(selected.ideas || []) });
   }, [selected]);
 
   // `overrides` lets a one-click action (completing a list) persist through the
@@ -123,7 +125,7 @@ export default function IdeaLoomLists() {
     setLists((current) => next.id
       ? current.map((list) => list.id === saved.id ? saved : list)
       : [...current, saved]);
-    setDraft({ ...saved, ideas: [...(saved.ideas || [])] });
+    setDraft({ ...saved, ideas: hydrateIdeas(saved.ideas || []) });
     select(saved.id);
     toast.success(next.id ? 'List saved' : 'List created');
   }, () => draft?.id);
@@ -150,7 +152,7 @@ export default function IdeaLoomLists() {
   });
   const addIdea = () => {
     if (!ideaText.trim()) return;
-    updateDraft('ideas', [...(draft?.ideas || []), ideaText.trim()]);
+    updateDraft('ideas', [...(draft?.ideas || []), { key: uuidv4(), text: ideaText.trim() }]);
     setIdeaText('');
   };
 
@@ -213,7 +215,7 @@ export default function IdeaLoomLists() {
         </div>}
         {exchangeResult && <p role="status" className="mb-3 text-xs text-gray-400">Last exchange: {RESULT_KEYS.map((key) => `${exchangeResult[key] || 0} ${key}`).join(' · ')}</p>}
         <div className="space-y-1">
-          {lists.map((list) => <button key={list.id} type="button" onClick={() => select(list.id)} className={`w-full rounded p-3 text-left ${selected?.id === list.id ? 'bg-port-accent/20 text-white' : 'text-gray-300 hover:bg-port-border/50'}`}>
+          {lists.map((list) => <button key={list.id} type="button" onClick={() => select(list.id)} aria-current={selected?.id === list.id ? 'true' : undefined} className={`w-full rounded p-3 text-left ${selected?.id === list.id ? 'bg-port-accent/20 text-white' : 'text-gray-300 hover:bg-port-border/50'}`}>
             <span className="block truncate text-sm font-medium">{list.title}</span><span className="text-xs text-gray-500">{list.status === 'completed' ? 'Completed' : 'Draft'} · {(list.ideas || []).length} ideas</span>
           </button>)}
           {listsState === 'error' && <ListLoadError what="IdeaLoom lists" error={listsError} onRetry={refreshLists} />}
@@ -233,7 +235,7 @@ export default function IdeaLoomLists() {
             <Field label="Help" value={draft.help || ''} onChange={(value) => updateDraft('help', value)} className="sm:col-span-2" />
             <label className="text-sm text-gray-300" htmlFor="idealoom-status">Status<select id="idealoom-status" value={draft.status || 'draft'} onChange={(event) => updateDraft('status', event.target.value)} className="mt-1 block min-h-[44px] w-full rounded border border-port-border bg-port-bg px-3 text-white"><option value="draft">Draft</option><option value="completed">Completed</option></select></label>
           </div>
-          <div className="mt-5"><h3 className="mb-2 text-sm font-medium text-white">Ordered ideas</h3><div className="space-y-2">{(draft.ideas || []).map((idea, index) => <div className="flex items-center gap-1" key={`${index}-${idea}`}><span className="w-6 text-right text-xs text-gray-500">{index + 1}.</span><input value={idea} onChange={(event) => { const ideas = [...draft.ideas]; ideas[index] = event.target.value; updateDraft('ideas', ideas); }} aria-label={`Idea ${index + 1}`} className="min-h-[44px] min-w-0 flex-1 rounded border border-port-border bg-port-bg px-3 text-sm text-white" /><button type="button" onClick={() => moveIdea(index, -1)} disabled={index === 0} className="min-h-[44px] min-w-[44px] text-gray-400 disabled:opacity-30" aria-label={`Move idea ${index + 1} up`}><ArrowUp size={16} /></button><button type="button" onClick={() => moveIdea(index, 1)} disabled={index === draft.ideas.length - 1} className="min-h-[44px] min-w-[44px] text-gray-400 disabled:opacity-30" aria-label={`Move idea ${index + 1} down`}><ArrowDown size={16} /></button><button type="button" onClick={() => updateDraft('ideas', draft.ideas.filter((_, itemIndex) => itemIndex !== index))} className="min-h-[44px] min-w-[44px] text-gray-400 hover:text-port-error" aria-label={`Remove idea ${index + 1}`}><X size={16} /></button></div>)}</div>
+          <div className="mt-5"><h3 className="mb-2 text-sm font-medium text-white">Ordered ideas</h3><div className="space-y-2">{(draft.ideas || []).map((idea, index) => <div className="flex items-center gap-1" key={idea.key}><span className="w-6 text-right text-xs text-gray-500">{index + 1}.</span><input value={idea.text} onChange={(event) => { const ideas = [...draft.ideas]; ideas[index] = { ...ideas[index], text: event.target.value }; updateDraft('ideas', ideas); }} aria-label={`Idea ${index + 1}`} className="min-h-[44px] min-w-0 flex-1 rounded border border-port-border bg-port-bg px-3 text-sm text-white" /><button type="button" onClick={() => moveIdea(index, -1)} disabled={index === 0} className="min-h-[44px] min-w-[44px] text-gray-400 disabled:opacity-30" aria-label={`Move idea ${index + 1} up`}><ArrowUp size={16} /></button><button type="button" onClick={() => moveIdea(index, 1)} disabled={index === draft.ideas.length - 1} className="min-h-[44px] min-w-[44px] text-gray-400 disabled:opacity-30" aria-label={`Move idea ${index + 1} down`}><ArrowDown size={16} /></button><button type="button" onClick={() => updateDraft('ideas', draft.ideas.filter((_, itemIndex) => itemIndex !== index))} className="min-h-[44px] min-w-[44px] text-gray-400 hover:text-port-error" aria-label={`Remove idea ${index + 1}`}><X size={16} /></button></div>)}</div>
             <div className="mt-2 flex gap-2"><input value={ideaText} onChange={(event) => setIdeaText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addIdea(); } }} aria-label="New idea" placeholder="Add an idea" className="min-h-[44px] min-w-0 flex-1 rounded border border-port-border bg-port-bg px-3 text-sm text-white" /><button type="button" onClick={addIdea} aria-label="Add idea" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-[44px] rounded px-3 text-port-accent hover:bg-port-accent/10"><Plus size={16} /></button></div>
           </div>
           <div className="mt-5 flex flex-wrap gap-2"><button type="button" onClick={() => save()} className="flex min-h-[44px] items-center gap-2 rounded bg-port-accent/20 px-3 text-sm text-port-accent hover:bg-port-accent/30"><Save size={16} />Save list</button>{draft.id && <button type="button" onClick={() => save({ status: draft.status === 'completed' ? 'draft' : 'completed' })} aria-label={draft.status === 'completed' ? 'Mark list draft' : 'Mark list completed'} className="flex min-h-[44px] items-center gap-2 rounded px-3 text-sm text-gray-300 hover:bg-port-border/50"><CheckCircle2 size={16} />Mark {draft.status === 'completed' ? 'draft' : 'completed'}</button>}</div>
