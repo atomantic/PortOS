@@ -117,7 +117,7 @@ describe('system activity invalidation', () => {
     hooks.onRunCanceled({ runId: 'run-1' });
     expect(hooks.onRunUnreported({ runId: 'run-2' })).toBe('unreported kept');
 
-    const io = { emit: vi.fn() };
+    const io = { except: () => ({ emit: vi.fn() }) };
     const app = { id: 'app-1', name: 'Example', repoPath: 'app-1' };
     expect(claimAppOperation(io, app, 'update').ok).toBe(true);
     endAppOperation(io, 'app-1', 'failure');

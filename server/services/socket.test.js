@@ -122,6 +122,7 @@ import * as shellService from './shell.js';
 import { getProviderById } from './provider/providers.js';
 import { updateApp as runAppUpdate } from './appUpdater.js';
 import { analyzeApp, standardizeRefusalFor } from './pm2Standardizer.js';
+import { handleErrorRecovery } from './autoFixer.js';
 import { registerVoiceHandlers } from '../sockets/voice.js';
 
 // Build a minimal fake socket with per-event handler capture
@@ -137,28 +138,41 @@ function makeSocket(id = 'sock-1') {
     emit(event, ...args) { emitted.push([event, ...args]); },
     removeAllListeners: vi.fn(),
     setMaxListeners: vi.fn(),
-    join(room) { this.rooms.push(room); },
-    rooms: [],
+    join(room) { this.rooms.add(room); },
+    rooms: new Set(),
     data: {},
     handshake: { headers: {} }
   };
 }
 
 // Build a minimal fake io that captures the connection handler
-function makeIo() {
+function makeIo({ deliverBroadcasts = false } = {}) {
   let connectionHandler = null;
   const emitted = [];
   const excepted = [];
+  const sockets = [];
+  const broadcast = (event, args, excludedRoom) => {
+    emitted.push([event, ...args]);
+    for (const socket of sockets) {
+      if (!socket.rooms.has(excludedRoom)) socket.emit(event, ...args);
+    }
+  };
   return {
     connectionHandler: () => connectionHandler,
-    emit(event, ...args) { emitted.push([event, ...args]); },
-    except(room) { return { emit: (event, ...args) => { emitted.push([event, ...args]); excepted.push([event, room]); } }; },
+    emit(event, ...args) { broadcast(event, args); },
+    except(room) {
+      return { emit: (event, ...args) => {
+        excepted.push([event, room]);
+        broadcast(event, args, room);
+      } };
+    },
     excepted,
     emitted,
     on(event, fn) {
       if (event === 'connection') connectionHandler = fn;
     },
     connect(socket) {
+      if (deliverBroadcasts) sockets.push(socket);
       if (connectionHandler) connectionHandler(socket);
     }
   };
@@ -226,6 +240,28 @@ describe('socket.js — initSocket', () => {
     queueListeners.brain.filter(([event]) => event === 'classified').forEach(([, handler]) => handler({ entryId: 'example' }));
     expect(io.emitted).toContainEqual(['brain:classified', { entryId: 'example' }]);
     expect(io.excepted).toContainEqual(['brain:classified', 'peer-sockets']);
+  });
+
+  it('delivers error recovery requests to operators while excluding paired peers', async () => {
+    const deliveryIo = makeIo({ deliverBroadcasts: true });
+    initSocket(deliveryIo);
+    const operator = makeSocket('operator');
+    const peer = makeSocket('peer');
+    peer.data.portosAuthMethod = 'peer';
+    createdSockets.push(operator, peer);
+    deliveryIo.connect(operator);
+    deliveryIo.connect(peer);
+    expect(operator.emitted).toContainEqual(['app:operations:active', { operations: [] }]);
+    expect(peer.emitted.some(([event]) => event === 'app:operations:active')).toBe(false);
+    handleErrorRecovery.mockResolvedValueOnce({ id: 'example-task' });
+
+    const request = { code: 'EXAMPLE_ERROR', context: { source: 'Example app' } };
+    await operator.handlers['error:recover'](request);
+
+    expect(operator.emitted).toContainEqual(['error:recover:requested', {
+      ...request, taskId: 'example-task', timestamp: expect.any(Number),
+    }]);
+    expect(peer.emitted.some(([event]) => event === 'error:recover:requested')).toBe(false);
   });
 
   it('invalidates active memories after approval/rejection only for CoS subscribers', () => {

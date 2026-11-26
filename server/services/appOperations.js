@@ -11,6 +11,7 @@
  * restart PortOS while App Management is mid-deploy of something else).
  */
 
+import { emitToOperatorsOn } from './socketIo.js';
 import { noteSystemActivity } from './systemActivityNotify.js';
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
@@ -79,7 +80,7 @@ export const claimAppOperation = (io, app, type) => {
   admissionByOperation.set(operation, { permit, supervisorPid: null });
   try {
     for (const key of operationKeys(app)) setOperationKey(key, operation);
-    io.emit('app:operations:active', activeOperationsPayload());
+    emitToOperatorsOn(io, 'app:operations:active', activeOperationsPayload());
     noteSystemActivity('appOperations', 'start');
     return { ok: true, operation };
   } catch (error) {
@@ -132,7 +133,7 @@ export const endAppOperation = (io, appId, phase = 'completion', expected = null
     if (op === operation) activeAppOperations.delete(key);
   }
   void settleAdmissionEventually(admissionByOperation.get(operation)?.permit, 'App operation');
-  io.emit('app:operations:active', activeOperationsPayload());
+  emitToOperatorsOn(io, 'app:operations:active', activeOperationsPayload());
   const activityPhase = END_PHASES.has(phase) ? phase : 'completion';
   noteSystemActivity('appOperations', activityPhase);
   // Ending the last operation is the queue drain. A second note in the same

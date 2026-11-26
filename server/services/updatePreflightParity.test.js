@@ -78,7 +78,7 @@ const makeSocketHarness = () => {
     on: (event, fn) => { handlers.set(event, fn); },
     emit: (event, payload) => { emitted.push({ event, payload }); },
   };
-  const io = { emit: (event, payload) => { emitted.push({ event, payload }); } };
+  const io = { except: () => ({ emit: (event, payload) => { emitted.push({ event, payload }); } }) };
   registerAppHandlers(socket, io);
   return {
     fireUpdate: (payload) => handlers.get('app:update')(payload),

@@ -64,7 +64,7 @@ describe('real automatic activity check', () => {
     createMaintenanceJournal(dirname(maintenance.directory)).transaction(state => state.operations.push({
       id: randomUUID(), kind: 'media', resource: 'old-job', pid: oldPid, startedAt: '2026-10-07T04:40:53.785Z',
     }));
-    const { operation } = claimAppOperation({ emit: vi.fn() }, { id: 'portos-default', name: 'PortOS' }, 'update');
+    const { operation } = claimAppOperation({ except: () => ({ emit: vi.fn() }) }, { id: 'portos-default', name: 'PortOS' }, 'update');
     const update = maintenance.deferredUpdate.request();
     await handOffAppOperation(operation, update.ownerPid);
     expect(listActiveAppOperations()).toHaveLength(1);
