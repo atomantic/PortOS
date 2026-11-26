@@ -166,7 +166,7 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
           {isFalMode && backend.falCatalog && <FalCatalogStatus catalog={backend.falCatalog} />}
           {isAgyMode && backend.agy.error && (
             <p role="status" className="text-xs text-port-warning">
-              {backend.agy.error} — renders will use the model saved in Settings → Image Gen.
+              {backend.agy.error} — renders will use the model saved in Media Gen Settings.
             </p>
           )}
 
@@ -354,7 +354,7 @@ function ImageGenPostProcessOptions({ fields, settings, mode }) {
     <div className="flex flex-col gap-1 text-xs text-gray-400">
       <label
         className="flex items-center gap-2 cursor-pointer select-none"
-        title="Lossless strip of the gpt-image C2PA provenance chunk. Pixels untouched. Overrides the saved Settings → Image Gen default for this render only."
+        title="Lossless strip of the gpt-image C2PA provenance chunk. Pixels untouched. Overrides the saved Media Gen Settings default for this render only."
       >
         <input
           type="checkbox"

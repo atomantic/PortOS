@@ -5,7 +5,7 @@
  *
  * The backend resolves through the render-target ladder
  * (`RENDER_TARGET.DECK`): per-request mode → the deck's own `imageMode` /
- * `imageModelId` pin → Settings → Image Gen "Deck card renders" default →
+ * `imageModelId` pin → Media Gen Settings → Defaults "Deck card renders" default →
  * the install-wide mode. Batch rendering against the synchronous `external`
  * SD-API backend is rejected up front, as the universe batch renderer does.
  */
@@ -62,7 +62,7 @@ export async function renderDeckCards(deckId, { cardIds, onlyMissing = false, mo
   });
   if (!QUEUEABLE_IMAGE_MODES.includes(mode)) {
     throw new ServerError(
-      'Deck rendering requires a queueable image backend (local, codex, grok or agy) — pin one on the deck or in Settings → Image Gen',
+      'Deck rendering requires a queueable image backend (local, codex, grok or agy) — pin one on the deck or in Media Gen Settings → Defaults',
       { status: 400, code: 'DECK_EXTERNAL_UNSUPPORTED' },
     );
   }

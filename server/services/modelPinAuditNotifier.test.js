@@ -39,7 +39,7 @@ const pin = (id, overrides = {}) => ({
   providerIds: ['antigravity-cli'],
   model: 'retired-model-1',
   label: 'Agy CLI image model',
-  location: 'Settings → Media Gen → Image Gen',
+  location: 'Media Gen Settings',
   href: '/media/image?settings=1',
   ...overrides,
 });
@@ -110,7 +110,7 @@ describe('reportRetiredModelPins', () => {
     expect(first.metadata.pinId).toBe('settings:imageGen.agy.model');
     expect(first.description).toContain('Agy CLI image model');
     expect(first.description).toContain('retired-model-1');
-    expect(first.description).toContain('Settings → Media Gen → Image Gen');
+    expect(first.description).toContain('Media Gen Settings');
     expect(first.link).toBe('/media/image?settings=1');
     expect(second.link).toBe('/cos/schedule');
     expect(second.metadata.pinId).toBe('task:brain-sync');

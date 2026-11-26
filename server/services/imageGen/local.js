@@ -133,10 +133,10 @@ async function preflightLocalModel(params) {
   }
   // Both flux2 and z-image runners resolve their own Python via the FLUX.2
   // venv — only the legacy mflux/imagine_win path needs the user-configured
-  // Settings > Image Gen pythonPath.
+  // Python path from Media Gen Settings → Local.
   if (usesMossSwift(model)) await assertRuntimeReady('MOSS_NOT_READY');
   if (!usesTorchVenv(model) && !usesMossSwift(model) && !usesFlux3(model) && !usesMinimaxH3Image(model) && !pythonPath) {
-    throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
+    throw new ServerError('Python path not configured — set it in Media Gen Settings → Local', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
   }
   // Health, not mere presence. buildArgs below only checks that the shared
   // torch venv's python BINARY exists, so a venv left half-installed (killed
@@ -148,7 +148,7 @@ async function preflightLocalModel(params) {
     const healthy = await isFlux2VenvHealthy(model.pipelineClass).catch(() => null);
     if (healthy === false) {
       throw new ServerError(
-        `The shared torch image runtime is not installed or healthy (expected at ${FLUX2_VENV_DEFAULT}). Install it from Settings › Image Gen › Local, then retry. FLUX.2, Z-Image, ERNIE, HiDream and Qwen all render through it.`,
+        `The shared torch image runtime is not installed or healthy (expected at ${FLUX2_VENV_DEFAULT}). Install it from Media Gen Settings → Local, then retry. FLUX.2, Z-Image, ERNIE, HiDream and Qwen all render through it.`,
         // Same code buildArgs throws when the venv's python is missing outright:
         // "the shared torch runtime is not usable" is one state to a caller,
         // whether it is absent or broken.

@@ -390,7 +390,7 @@ Draft visual bindings can select a character image from the gallery. This fixed 
 
 Reactor FastH3 uses a live SDK session: upload the storyboard image, enqueue one
 shot, play it once, capture its video and native audio, then disconnect. Configure
-an API key in Settings > Video Gen and render. On the first authorized render,
+an API key in **Settings → Credentials** and render. On the first authorized render,
 PortOS automatically downloads a checksum-verified runtime manager, private
 Python 3.12, and the pinned Reactor SDK. Preparation appears in job status and
 finishes before a paid session opens. Failed or incomplete installations are

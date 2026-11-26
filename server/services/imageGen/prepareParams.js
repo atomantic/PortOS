@@ -94,8 +94,8 @@ const MIME_TO_EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '
 
 /**
  * Select the model a local render will actually use. An omitted model prefers
- * the install-wide pin (`settings.imageGen.local.modelId`, set on Settings →
- * Media → Local), then the shipped Qwen-Image 2.1 default — each only when it can
+ * the install-wide pin (`settings.imageGen.local.modelId`, set in Media Gen Settings →
+ * Local), then the shipped Qwen-Image 2.1 default — each only when it can
  * actually run on this host; otherwise it falls through to the first
  * compatible catalog entry.
  *

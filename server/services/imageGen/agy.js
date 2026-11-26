@@ -114,7 +114,7 @@ const AGY_TOOL = IMAGE_TOOL_NAMES[IMAGE_GEN_MODE.AGY];
 const AGY_SUBAGENT = 'image-generator';
 
 const AGY_NO_IMAGE_HINT =
-  'Agy returned no image — the selected model may not expose image-generator or generate_image, or the model declined. Check Settings → Image Gen → Agy CLI.';
+  'Agy returned no image — the selected model may not expose image-generator or generate_image, or the model declined. Check Media Gen Settings → Agy CLI.';
 
 export const noImageReason = (stdoutTail = '') => buildNoImageReason(stdoutTail, {
   hint: AGY_NO_IMAGE_HINT,

@@ -979,8 +979,8 @@ describe('codex provider — noImageReason (no-image diagnostics)', () => {
   });
 
   it('falls back to session/settings guidance when codex said nothing usable', () => {
-    expect(codex.noImageReason('')).toMatch(/Check the Codex session and Settings/i);
-    expect(codex.noImageReason('codex\nuser\n----\ntokens used\n42')).toMatch(/Check the Codex session and Settings/i);
+    expect(codex.noImageReason('')).toMatch(/Check the Codex session and Media Gen Settings → Codex CLI/i);
+    expect(codex.noImageReason('codex\nuser\n----\ntokens used\n42')).toMatch(/Check the Codex session and Media Gen Settings → Codex CLI/i);
   });
 
   it('strips ANSI escape codes from the surfaced narration', () => {

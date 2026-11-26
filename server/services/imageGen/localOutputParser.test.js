@@ -78,7 +78,7 @@ describe('classifyLocalRenderFailure', () => {
     const lines = ['ImportError: cannot import name Pipeline from diffusers'];
     expect(classifyLocalRenderFailure({ lines, usesTorchVenv: true })).toEqual({
       userKind: 'torch_runtime_broken', userRepo: null,
-      userMessage: expect.stringContaining('Reinstall it from Settings'), invalidateTorchHealth: true,
+      userMessage: expect.stringContaining('Reinstall it from Media Gen Settings → Local'), invalidateTorchHealth: true,
     });
     expect(classifyLocalRenderFailure({ lines, usesTorchVenv: false })).toEqual({
       userKind: null, userRepo: null, userMessage: null, invalidateTorchHealth: false,

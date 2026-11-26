@@ -7,7 +7,7 @@ const FIELD = 'w-full max-w-full bg-port-bg border border-port-border rounded-lg
 
 // Per-record render pin editor (#3231 Phase 3) — one row pinning a record's
 // default image backend and the model that backend renders on. Mirrors the
-// Settings → Image Gen "Render defaults" row, and ANY backend change clears
+// Media Gen Settings "Render defaults" row, and ANY backend change clears
 // the pinned model — model ids are namespaced per provider, and the server's
 // leak guard can't catch a mode+model pinned together (see ImageGenTab).
 //

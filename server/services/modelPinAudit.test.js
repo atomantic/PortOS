@@ -90,7 +90,7 @@ describe('auditModelPins', () => {
       id: 'settings:imageGen.agy.model',
       providerIds: ['antigravity-cli'],
       model: 'gemini-3.5-flash-low',
-      location: 'Settings → Media Gen → Image Gen',
+      location: 'Media Gen Settings',
     });
     // Offered as BASE ids — the effort tier rides on `--effort`, so listing both
     // suffixed variants would read as two models to choose between.

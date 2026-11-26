@@ -19,7 +19,7 @@ const STALE = {
     providerIds: ['antigravity-cli'],
     model: 'gemini-3.5-flash-low',
     label: 'Agy CLI image model',
-    location: 'Settings → Media Gen → Image Gen',
+    location: 'Media Gen Settings',
     href: '/media/image?settings=1',
   }],
   providers: {
@@ -41,7 +41,7 @@ describe('RetiredModelPinsPanel', () => {
     // page it deep-links to name the same row the same way.
     expect(await screen.findByText('Agy image model:')).toBeTruthy();
     expect(screen.getByText('gemini-3.5-flash-low')).toBeTruthy();
-    expect(screen.getByText(/Settings → Media Gen → Image Gen/)).toBeTruthy();
+    expect(screen.getByText(/Media Gen Settings/)).toBeTruthy();
     expect(screen.getByText(/Now offered: gemini-3.6-flash/)).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open setting' })).toHaveAttribute(
       'href', '/media/image?settings=1',
@@ -57,7 +57,7 @@ describe('RetiredModelPinsPanel', () => {
         providerIds: ['antigravity-cli'],
         model: 'gemini-3.5-flash-low',
         label: 'universe-bible render model',
-        location: 'Settings → Media Gen → Render Defaults',
+        location: 'Media Gen Settings → Defaults',
       }],
       providers: {},
     });

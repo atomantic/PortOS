@@ -569,7 +569,7 @@ describe('fableLoom production service', () => {
         {}, 'Recorded visual conditioning names unsupported video backend "mystery".'],
       ['a recorded Grok video while Grok is disabled', { kind: 'video', backend: 'grok', modelId: 'm' },
         { imageGen: { grok: { enabled: false } } },
-        'Recorded visual conditioning requires Grok video, which is disabled in Settings → Image Gen.'],
+        'Recorded visual conditioning requires Grok video, which is disabled in Media Gen Settings.'],
       ['an unsupported image backend', { kind: 'image', backend: 'mystery', modelId: 'm' },
         {}, 'Recorded visual conditioning names unsupported image backend "mystery".'],
       ['a disabled cloud image provider', { kind: 'image', backend: 'fal', modelId: 'm' },

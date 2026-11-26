@@ -488,22 +488,22 @@ function resolveVideoBackend(settings, render, recordedConditioning = null) {
   const requested = render.videoMode;
   const mode = requested ? resolveVideoMode(requested, settings) : resolveVideoMode(null, settings);
   if (requested === VIDEO_GEN_MODE.GROK && mode !== VIDEO_GEN_MODE.GROK) {
-    throw new ServerError('Grok video is disabled — enable Grok in Settings → Image Gen first', {
+    throw new ServerError('Grok video is disabled — enable Grok in Media Gen Settings first', {
       status: 400,
       code: 'GROK_VIDEO_DISABLED',
     });
   }
   if (requested === VIDEO_GEN_MODE.FAL && mode !== VIDEO_GEN_MODE.FAL) {
-    throw new ServerError('No fal.ai API key configured — set it in Settings → Video Gen first', {
+    throw new ServerError('No fal.ai API key configured — set it in Settings → Credentials first', {
       status: 400,
       code: 'FAL_VIDEO_DISABLED',
     });
   }
   if (requested === VIDEO_GEN_MODE.REACTOR && mode !== VIDEO_GEN_MODE.REACTOR) {
-    throw new ServerError('Reactor video is not configured — set an API key in Settings → Video Gen.', { status: 400, code: 'REACTOR_NOT_CONFIGURED' });
+    throw new ServerError('Reactor video is not configured — set an API key in Settings → Credentials.', { status: 400, code: 'REACTOR_NOT_CONFIGURED' });
   }
   if (requested === VIDEO_GEN_MODE.RUNWAY && mode !== VIDEO_GEN_MODE.RUNWAY) {
-    throw new ServerError('No Runway API key configured — set it in Settings → Video Gen first', { status: 400, code: 'RUNWAY_NOT_CONFIGURED' });
+    throw new ServerError('No Runway API key configured — set it in Settings → Credentials first', { status: 400, code: 'RUNWAY_NOT_CONFIGURED' });
   }
   return mode;
 }
@@ -1029,7 +1029,7 @@ function recordedVideoIssue(capability, settings) {
     return `Recorded visual conditioning names unsupported video backend "${capability.backend || 'unknown'}".`;
   }
   return capability.backend === VIDEO_GEN_MODE.GROK && settings.imageGen?.grok?.enabled !== true
-    ? 'Recorded visual conditioning requires Grok video, which is disabled in Settings → Image Gen.'
+    ? 'Recorded visual conditioning requires Grok video, which is disabled in Media Gen Settings.'
     : null;
 }
 
@@ -1094,7 +1094,7 @@ function renderEnvironmentIssues(render, settings) {
       mode: render.imageMode,
     }).cloud;
     if (imageProvider && !imageProvider.enabled) {
-      issues.push(`${render.imageMode} image generation is disabled in Settings → Image Gen.`);
+      issues.push(`${render.imageMode} image generation is disabled in Media Gen Settings.`);
     }
   }
   if (render.imageMode === IMAGE_GEN_MODE.LOCAL || render.imageModel) {
@@ -1105,7 +1105,7 @@ function renderEnvironmentIssues(render, settings) {
   }
   if (render.videoMode === VIDEO_GEN_MODE.GROK
     && settings.imageGen?.grok?.enabled !== true) {
-    issues.push('Grok video is disabled in Settings → Image Gen.');
+    issues.push('Grok video is disabled in Media Gen Settings.');
   }
   if (render.videoMode === VIDEO_GEN_MODE.LOCAL || render.videoModel) {
     const videoModelId = render.videoModel || settings.videoGen?.defaultModelId;

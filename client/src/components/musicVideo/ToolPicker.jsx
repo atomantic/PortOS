@@ -9,7 +9,7 @@ import { getVideoGenModelContext } from '../../services/apiImageVideo.js';
 
 const GROUPS = [['image', 'Image'], ['video', 'Video'], ['code', 'Code']];
 const LOCAL_VIDEO_TOOL_ID = 'video:local';
-// Codex image gen always uses the PortOS Codex Imagegen config (Settings → Image Gen),
+// Codex image gen always uses the PortOS Codex Imagegen config (Media Gen Settings),
 // so it takes no per-run model pin.
 const NO_MODEL_PIN_TOOL_IDS = new Set(['image:codex']);
 /**

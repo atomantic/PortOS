@@ -134,7 +134,7 @@ export default function LookAroundPanel({ ingredientId, media, readOnly = false,
           {plan && (
             <div className="space-y-2 rounded border border-port-border bg-port-bg p-3 text-xs">
               <p className="text-white">{plan.modelLabel}: {plan.seconds}s{plan.resolution ? ` at ${plan.resolution}` : ''}, about {priceText(plan.estimatedCostUsd)}</p>
-              {!plan.configured && <p className="text-port-warning">Add a fal.ai API key in Settings &gt; Video Gen to render.</p>}
+              {!plan.configured && <p className="text-port-warning">Add a fal.ai API key in Settings → Credentials to render.</p>}
               <label htmlFor={ids.prompt} className="block text-gray-400">Prompt {plan.promptIsDefault ? '(written by PortOS for this move; edit to send your own)' : '(your words, sent as written)'}</label>
               <textarea id={ids.prompt} rows={5} maxLength={20000} className={`${FIELD} text-xs`} value={prompt ?? plan.prompt}
                 onChange={(e) => { setPrompt(e.target.value); setPlan((prev) => (prev ? { ...prev, stale: true } : prev)); }} />

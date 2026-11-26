@@ -82,7 +82,7 @@ export async function renderUniverseJobs(universeId, body, mapServiceError) {
   // an orphaned media collection behind when we discover this mid-loop below.
   if (!QUEUEABLE_IMAGE_MODES.includes(mode)) {
     throw new ServerError(
-      'Batch render requires local, codex, or grok mode — switch image-gen mode in Settings → Image Gen',
+      'Batch render requires local, codex, or grok mode — switch image-gen mode in Media Gen Settings → Backend',
       { status: 400, code: 'WORLD_BUILDER_EXTERNAL_UNSUPPORTED' },
     );
   }

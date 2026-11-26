@@ -180,7 +180,7 @@ export {
 
 export { MODE_LABELS };
 
-// The Settings → Image Gen → Defaults rows are `RENDER_TARGET_OPTIONS`, declared beside the alphabet in `server/lib/renderTargets.js`.
+// The Media Gen Settings → Defaults rows are `RENDER_TARGET_OPTIONS`, declared beside the alphabet in `server/lib/renderTargets.js`.
 export { RENDER_TARGET_OPTIONS } from '../../../server/lib/renderTargets.js';
 
 // True when a video backend renders in a provider's cloud rather than on the

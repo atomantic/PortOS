@@ -25,7 +25,7 @@ export function useVideoGenServiceStatus() {
   const [modelContextRequest, setModelContextRequest] = useState({ state: 'loading', context: null, error: null });
   const { context: modelContext } = modelContextRequest;
   // Grok Build CLI video backend (#2859 phase 2) — surfaced only when the
-  // user enabled Grok in Settings → Image Gen (one toggle covers image +
+  // user enabled Grok in Media Gen Settings (one toggle covers image +
   // video). 'local' keeps every existing flow untouched.
   const [grokEnabled, setGrokEnabled] = useState(false);
   const models = useMemo(() => modelContext?.models || [], [modelContext]);

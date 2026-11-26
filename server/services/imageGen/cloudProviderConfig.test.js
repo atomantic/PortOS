@@ -168,7 +168,7 @@ describe('resolveCloudProviderConfig', () => {
     expect(cloud.connectionReason).toMatch(/Grok Imagegen is disabled/);
     expect(cloud.disabledError.status).toBe(400);
     expect(cloud.disabledError.code).toBe('GROK_IMAGEGEN_DISABLED');
-    expect(cloud.disabledError.message).toMatch(/Settings → Image Gen/);
+    expect(cloud.disabledError.message).toMatch(/Media Gen Settings/);
   });
 
   it('treats a missing settings slice as disabled rather than throwing', () => {
