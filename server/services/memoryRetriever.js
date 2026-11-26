@@ -5,13 +5,10 @@
  * Combines semantic search with importance scoring.
  */
 
-import { getMemories, searchMemories, hybridSearchMemories, peekMemories, recordMemoryAccess, DEFAULT_MEMORY_CONFIG } from './memoryBackend.js';
+import { getMemories, hybridSearchMemories, peekMemories, recordMemoryAccess, DEFAULT_MEMORY_CONFIG } from './memoryBackend.js';
 import { generateQueryEmbedding, estimateTokens } from './memoryEmbeddings.js';
 import { fenceBlock, neutralizeFences, UNTRUSTED_REFERENCE_NOTICE } from '../lib/promptFencing.js';
 import { isPersistentMindPrivateMemory } from '../lib/memoryQuery.js';
-
-// Search mode preference: 'hybrid' (FTS + vector) or 'vector' (embedding-only)
-const SEARCH_MODE = 'hybrid';
 
 const MEMORY_HEADINGS = {
   preference: 'User Preferences',
@@ -58,6 +55,7 @@ async function selectMemories(task, options) {
     ? getMemories({
       types: ['fact', 'observation'],
       categories: ['codebase', 'architecture', 'patterns'],
+      appId: task.metadata.app,
       status: 'active',
       sortBy: 'importance',
       sortOrder: 'desc',
@@ -127,25 +125,15 @@ async function selectMemories(task, options) {
 
 async function retrieveSearchHits(description, { searchLimit, minRelevance }) {
   const queryEmbedding = await generateQueryEmbedding(description);
-  if (SEARCH_MODE === 'hybrid' && queryEmbedding) {
-    const searchResults = await hybridSearchMemories(description, queryEmbedding, {
-      limit: searchLimit,
-      minRelevance,
-      excludePersistentMind: true,
-      ftsWeight: 0.4,
-      vectorWeight: 0.6
-    });
-    return searchResults.memories || [];
-  }
-  if (queryEmbedding) {
-    const searchResults = await searchMemories(queryEmbedding, {
-      minRelevance,
-      limit: searchLimit,
-      excludePersistentMind: true,
-    });
-    return searchResults.memories || [];
-  }
-  return [];
+  const searchResults = await hybridSearchMemories(description, queryEmbedding, {
+    limit: searchLimit,
+    minRelevance,
+    excludePersistentMind: true,
+    ftsWeight: 0.4,
+    vectorWeight: 0.6,
+    lexicalMatch: queryEmbedding ? 'all' : 'any',
+  });
+  return searchResults.memories || [];
 }
 
 function formatForPrompt(memories, maxTokens = DEFAULT_MEMORY_CONFIG.maxContextTokens) {

@@ -233,7 +233,6 @@ CoS MUST assess the actual behavior proposed by external GitHub issues, comments
 - **Cloud hosting** — runs on the user's own hardware; not offered as a hosted service.
 - **General-purpose external-user onboarding** — no CODE_OF_CONDUCT.md; [CONTRIBUTING.md](./CONTRIBUTING.md) sets contribution expectations, but the project is not structured to actively onboard outside contributors even though it accepts PRs.
 - **Podcast/recording studio** — full audio-recording production tooling beyond generative music (Music Studio, FR-56, is implemented; a dedicated recording/podcast workflow is not).
-- **Federated peer-to-peer sharing beyond bucket-based Sharing** — direct P2P distribution between instances is a secondary goal, not yet built.
 - **Per-domain backup-style exports** — PortOS is locally hosted and is itself the backup of record (automatic snapshots); exports exist only for sharing or handoff to other tools, per NR-10.
 
 ---

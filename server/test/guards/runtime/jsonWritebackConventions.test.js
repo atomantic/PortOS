@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
-import { scanJsonWriteback, reconcileJsonWriteback, mayReadJsonFile, buildJsonReadWrapperRegistry } from '../../jsonWritebackScan.js';
+import { scanJsonWriteback, reconcileJsonWriteback, mayReadJsonFile, mayWriteJsonFile, buildJsonReadWrapperRegistry } from '../../jsonWritebackScan.js';
 import { JSON_WRITEBACK_EXCEPTIONS } from '../../jsonWritebackExceptions.js';
 import { readText, REPO_ROOT, trackedFiles } from '../../../../scripts/lib/guardCorpus.js';
 
@@ -10,9 +10,6 @@ const serverRoot = join(REPO_ROOT, 'server');
 function sourceFiles() {
   return trackedFiles(serverRoot, ['*.js']).filter(path => !path.endsWith('.test.js'));
 }
-
-// An imported alias still spells the exported name unless it uses an escape.
-const mayWriteJsonFile = source => source.includes('atomicWrite') || source.includes('\\u');
 
 // Regression: a newly introduced fallback cannot silently become a write-back
 // base. Existing exceptions must disappear when their source pair disappears.
@@ -35,6 +32,7 @@ describe('syntax scanner regression contracts', () => {
     const sources = [
       "import { readJSONFile as read } from './fileUtils.js'; read(A, {}); atomicWrite(A, {});",
       "import { readJSONFileStrict as read } from './fileUtils.js'; read(A, {}); atomicWrite(A, {});",
+      "import { writeSecureJson as write } from './secureAuthStore.js'; readJSONFile(A, {}); write(A, {});",
       String.raw`import { readJSON\u0046ile as read } from './fileUtils.js'; read(A, {}); atomicWrite(A, {});`,
       String.raw`import { atomic\u0057rite as write } from './fileUtils.js'; readJSONFile(A, {}); write(A, {});`,
     ];
