@@ -32,6 +32,30 @@ const TYPE_ICONS = { 'outlook-calendar': Globe, 'google-calendar': Calendar };
 const SYNC_STATUS_CLASS = { partial: 'text-port-warning', error: 'text-port-error' };
 const TYPE_LABELS = { 'outlook-calendar': 'Outlook Calendar (API)', 'google-calendar': 'Google Calendar' };
 
+function SubcalendarColor({ name, color, disabled, onSave }) {
+  // Keep the preview out of the account so other controls cannot persist it.
+  const [draft, setDraft] = useState(null);
+  const displayedColor = draft ?? color;
+
+  return (
+    <label className="relative w-4 h-4 shrink-0 cursor-pointer" title="Change color">
+      <div className="w-4 h-4 rounded-full border border-port-border" style={{ backgroundColor: displayedColor }} />
+      <input
+        aria-label={`Change color for ${name}`}
+        type="color"
+        value={displayedColor}
+        disabled={disabled}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => {
+          setDraft(null);
+          if (draft !== null && draft !== color.toLowerCase()) onSave(draft);
+        }}
+        className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+      />
+    </label>
+  );
+}
+
 export default function ConfigTab({ accounts, setAccounts }) {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: '', type: 'outlook-calendar', email: '' });
@@ -172,14 +196,6 @@ export default function ConfigTab({ accounts, setAccounts }) {
 
   const toggleExpand = (id) => {
     setExpandedAccounts(prev => ({ ...prev, [id]: !prev[id] }));
-  };
-
-  // Update subcalendar field locally only (no API call) — used for color picker dragging
-  const handleSubcalendarLocal = (account, calendarId, field, value) => {
-    const subcalendars = (account.subcalendars || []).map(sc =>
-      sc.calendarId === calendarId ? { ...sc, [field]: value } : sc
-    );
-    setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, subcalendars } : a));
   };
 
   // Update subcalendar field and persist to server
@@ -585,17 +601,12 @@ export default function ConfigTab({ accounts, setAccounts }) {
                           }`}
                         >
                           <div className="flex items-center gap-2 min-w-0 flex-1">
-                            <label className="relative w-4 h-4 shrink-0 cursor-pointer" title="Change color">
-                              <div className="w-4 h-4 rounded-full border border-port-border" style={{ backgroundColor: sc.color || DEFAULT_AVATAR_COLOR }} />
-                              <input
-                                aria-label={`Change color for ${sc.name}`}
-                                type="color"
-                                value={sc.color || DEFAULT_AVATAR_COLOR}
-                                onInput={(e) => handleSubcalendarLocal(account, sc.calendarId, 'color', e.target.value)}
-                                onChange={(e) => handleSubcalendarToggle(account, sc.calendarId, 'color', e.target.value)}
-                                className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
-                              />
-                            </label>
+                            <SubcalendarColor
+                              name={sc.name}
+                              color={sc.color || DEFAULT_AVATAR_COLOR}
+                              disabled={savingSubcals === account.id}
+                              onSave={(color) => handleSubcalendarToggle(account, sc.calendarId, 'color', color)}
+                            />
                             <div className="min-w-0">
                               <div className={`text-xs font-medium truncate ${sc.dormant ? 'text-gray-500' : 'text-gray-300'}`}>
                                 {sc.name}
