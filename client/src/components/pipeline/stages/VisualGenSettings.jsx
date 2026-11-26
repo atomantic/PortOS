@@ -15,6 +15,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Sparkles } from 'lucide-react';
+import { PROVIDERS_PAGE_BREADCRUMB } from '../../../../../server/lib/navManifest.js';
 import { getSettings } from '../../../services/apiSystem.js';
 import { listImageModels } from '../../../services/apiImageVideo.js';
 import { getProviders } from '../../../services/apiProviders.js';
@@ -145,7 +146,7 @@ function VisualGenSettingsBody({ cfg, update, stageLabel, systemSettings, settin
         </div>
         {providersLoaded && providers.length === 0 ? (
           <p className="text-[10px] text-gray-600 italic">
-            No enabled providers — add one in Models → Providers.
+            No enabled providers — add one in {PROVIDERS_PAGE_BREADCRUMB}.
           </p>
         ) : (
           <>

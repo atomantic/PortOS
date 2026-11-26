@@ -495,7 +495,7 @@ export default function App() {
             <Route path="storyboards/:id/panel/:panelId" element={<StoryboardDetail />} />
             <Route path="decks" element={<Decks />} />
             <Route path="universes" element={<Universes />} />
-            <Route path="universes/new" element={<UniverseBuilder />} />
+            <Route path="universes/new" element={<UniverseBuilder create />} />
             <Route path="universes/:universeId" element={<UniverseBuilder />} />
             <Route path="universes/:universeId/sync" element={<SyncView kind="universe" param="universeId" backPath="/universes" />} />
             <Route path="writers-room" element={<WritersRoom />} />

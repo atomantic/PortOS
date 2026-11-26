@@ -96,9 +96,9 @@ const parseBriefingMarkdown = (content) => {
 const renderLine = (line, idx) => {
   if (line.type === 'subheading') {
     return (
-      <h5 key={idx} className="text-sm font-semibold text-port-accent mt-3 mb-1">
+      <h4 key={idx} className="text-sm font-semibold text-port-accent mt-3 mb-1">
         {line.text}
-      </h5>
+      </h4>
     );
   }
 
@@ -303,7 +303,7 @@ export default function BriefingTab() {
             <div className="bg-gradient-to-r from-port-accent/10 to-transparent border border-port-accent/20 rounded-lg p-4">
               <div className="flex items-center gap-2">
                 <Calendar className="w-4 h-4 text-port-accent" />
-                <h4 className="text-base font-semibold text-white">{parsed.title}</h4>
+                <h3 className="text-base font-semibold text-white">{parsed.title}</h3>
               </div>
             </div>
           )}
@@ -314,7 +314,7 @@ export default function BriefingTab() {
             const isExpanded = expandedSections[idx] !== false;
             return (
               <div key={idx} className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-                <h4>
+                <h3>
                   <button
                     type="button"
                     aria-expanded={isExpanded}
@@ -325,7 +325,7 @@ export default function BriefingTab() {
                     <SectionIcon size={16} className="text-port-accent" />
                     <span className="font-medium text-white text-sm">{section.title}</span>
                   </button>
-                </h4>
+                </h3>
                 {isExpanded && (
                   <div className="px-4 pb-3 pt-0">
                     {section.lines.map((line, lineIdx) => renderLine(line, lineIdx))}

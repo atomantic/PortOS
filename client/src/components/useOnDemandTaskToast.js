@@ -5,6 +5,7 @@
  */
 
 import { createElement, useEffect } from 'react';
+import { ABUSE_GUARD_PAGE_BREADCRUMB } from '../../../server/lib/navManifest.js';
 import MaintenanceRunStatus, { maintenanceRunProgress } from './cos/tabs/schedule/MaintenanceRunStatus';
 import toast from './ui/Toast';
 import socket from '../services/socket';
@@ -45,8 +46,8 @@ const PR_REVIEWER_REASON_LABELS = {
   'no-external-open-prs': 'no open external pull requests to review',
   'target-pull-request-not-reviewable': "that pull request isn't eligible right now (not open against the default branch, or authored by a trusted collaborator)",
   'security-scan-report-pending': 'a security scan for this pull request is already in progress',
-  'security-guard-process-failed': 'Prompt Guard stopped before an agent started. Open Models → LLMs → Abuse Guard to check or repair setup, then retry Untrusted:Review. The failure record is in CoS → Tasks',
-  'security-guard-not-ready': "the local model-abuse classifier (Models → Abuse Guard) isn't ready — finish or repair its setup, then try again",
+  'security-guard-process-failed': `Prompt Guard stopped before an agent started. Open ${ABUSE_GUARD_PAGE_BREADCRUMB} to check or repair setup, then retry Untrusted:Review. The failure record is in CoS → Tasks`,
+  'security-guard-not-ready': `the local model-abuse classifier (${ABUSE_GUARD_PAGE_BREADCRUMB}) isn't ready — finish or repair its setup, then try again`,
 };
 
 // Maintenance also records ordinary queue waits in `reason`. Only these exact

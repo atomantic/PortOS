@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
+import { PROVIDERS_PAGE_BREADCRUMB } from '../../../../../server/lib/navManifest.js';
 import {
   Play,
   Brain,
@@ -400,7 +401,7 @@ export default function PersonalityTab() {
             <ListLoadError what="AI providers" error={providersResource.error} onRetry={providersResource.retry} />
           )}
           {providersResource.state === 'ready' && providers.length === 0 && (
-            <p className="text-sm text-gray-500">No enabled AI providers. Configure one in Models → Providers.</p>
+            <p className="text-sm text-gray-500">No enabled AI providers. Configure one in {PROVIDERS_PAGE_BREADCRUMB}.</p>
           )}
           {providers.map((provider) => (
             <div key={provider.id} className="space-y-2">

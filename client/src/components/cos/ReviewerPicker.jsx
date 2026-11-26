@@ -22,7 +22,7 @@ import {
 import { isToolFreeReviewer, prioritizeToolFreeReviewers } from '../../../../server/lib/reviewerConfig.js';
 import { effortLevelsForProvider, effectiveModelFor, isTuiProvider } from '../../utils/providers';
 import { isApplyCapableReviewer, isProviderReviewer, normalizeReviewerSlug } from '../../lib/reviewerPins';
-import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
+import { getNavPageForPath, PROVIDERS_PAGE_BREADCRUMB } from '../../../../server/lib/navManifest.js';
 // The SAME map the readiness cards link by (`LOCAL_RUNTIMES[*].manageUrl` reads
 // from it), taken from the server leaf rather than mirrored — the mirror is what
 // #7414 had to chase. Imported here because these hints must name the page that
@@ -307,7 +307,7 @@ export default function ReviewerPicker({
     if (modelOptions?.providerDisabled?.[token]) {
       return {
         label: 'disabled',
-        title: `${labelFor(token)}'s provider records are all switched off in Models → Providers, so this machine isn't set up to use it. Adding it still works — the review loop spawns its CLI directly, and a federated peer may have it enabled.`
+        title: `${labelFor(token)}'s provider records are all switched off in ${PROVIDERS_PAGE_BREADCRUMB}, so this machine isn't set up to use it. Adding it still works — the review loop spawns its CLI directly, and a federated peer may have it enabled.`
       };
     }
     return null;

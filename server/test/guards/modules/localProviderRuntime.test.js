@@ -31,13 +31,6 @@ describe('shipped copy names a Models page by route, never by literal (#7419)', 
   // "Models → LLMs" doesn't already say correctly.
   const ALLOWLISTED_FILES = new Set([
     'server/lib/navManifest.js',
-    // These route labels are now first-level destinations in the Models section.
-    'client/src/components/cos/ReviewerPicker.jsx',
-    'client/src/components/cos/tabs/schedule/PipelineStageConfig.jsx',
-    'client/src/components/digital-twin/tabs/PersonalityTab.jsx',
-    'client/src/components/pipeline/stages/VisualGenSettings.jsx',
-    'client/src/components/settings/CodeReviewersTab.jsx',
-    'client/src/components/useOnDemandTaskToast.js',
   ]);
 
   /**

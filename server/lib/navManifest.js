@@ -39,6 +39,7 @@ export const SECTION_FEATURE = new Map([
 ]);
 
 export const PROVIDERS_PAGE_PATH = '/ai/presets';
+export const ABUSE_GUARD_PAGE_PATH = '/models/llms/abuse';
 
 const RAW_NAV_COMMANDS = [
   { id: 'nav.dashboard', path: '/', label: 'Dashboard', section: 'Main' },
@@ -386,7 +387,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.models.code-reviewers.follow-up', path: '/models/code-reviewers/follow-up', label: 'Reviewer follow-up', section: 'Models' },
   { id: 'nav.settings.embeddings', path: '/models/embeddings', label: 'Embeddings', section: 'Models', tabId: 'embeddings', navGroup: 'Library', previousPaths: ['/settings/embeddings'] },
   { id: 'nav.settings.local-llm', path: '/models/llms', label: 'Model Library', section: 'Models', tabId: 'llms', navGroup: 'Library', previousPaths: ['/settings/local-llm'] },
-  { id: 'nav.models.llms.abuse', path: '/models/llms/abuse', label: 'Abuse Guard', section: 'Models', tabId: 'abuse', navGroup: 'Policies' },
+  { id: 'nav.models.llms.abuse', path: ABUSE_GUARD_PAGE_PATH, label: 'Abuse Guard', section: 'Models', tabId: 'abuse', navGroup: 'Policies' },
   { id: 'nav.models.llms.jev', path: '/models/decision-classifiers/jev', label: 'Jev', section: 'Models', parentPath: '/models/decision-classifiers', previousPaths: ['/models/llms/jev'] },
   { id: 'nav.models.jev.try', path: '/models/decision-classifiers/jev/try', label: 'Jev Try a decision', section: 'Models' },
   { id: 'nav.models.jev.integrations', path: '/models/decision-classifiers/jev/integrations', label: 'Jev Integrations', section: 'Models' },
@@ -585,6 +586,7 @@ export const getNavPageForPath = (pathname) => {
 };
 
 export const PROVIDERS_PAGE_BREADCRUMB = getNavPageForPath(PROVIDERS_PAGE_PATH)?.breadcrumb ?? 'the Providers page';
+export const ABUSE_GUARD_PAGE_BREADCRUMB = getNavPageForPath(ABUSE_GUARD_PAGE_PATH)?.breadcrumb ?? 'the Abuse Guard page';
 
 // Expand the `{page}` token user-facing copy writes instead of a breadcrumb,
 // resolved from `runtime.manageUrl` (or any object carrying that field) via

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { CircleHelp, ListTree, ScanSearch } from 'lucide-react';
+import { PROVIDERS_PAGE_BREADCRUMB } from '../../../../server/lib/navManifest.js';
 import toast from '../ui/Toast';
 import Banner from '../ui/Banner';
 import Drawer from '../Drawer';
@@ -282,7 +283,7 @@ export default function CodeReviewersTab({ view } = {}) {
         <>
           {Object.entries(reviewerConfigFaults).map(([reviewer, fault]) => (
             <Banner key={`config-${reviewer}`} tone="warning" size="sm" align="start">
-              {reviewer}: the last review attempt failed ({fault.code}). {fault.message || CONFIG_FAULT_REMEDIES[fault.code] || 'Enable or configure the reviewer in Models → Providers.'} The next successful review clears this warning.
+              {reviewer}: the last review attempt failed ({fault.code}). {fault.message || CONFIG_FAULT_REMEDIES[fault.code] || `Enable or configure the reviewer in ${PROVIDERS_PAGE_BREADCRUMB}.`} The next successful review clears this warning.
             </Banner>
           ))}
           {reviewerIdentities.filter((entry) => entry.status === 'missing').map((entry) => (

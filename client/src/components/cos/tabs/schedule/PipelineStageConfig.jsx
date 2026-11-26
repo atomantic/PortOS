@@ -1,4 +1,4 @@
-import { PROVIDERS_PAGE_BREADCRUMB, PROVIDERS_PAGE_PATH } from '../../../../../../server/lib/navManifest.js';
+import { ABUSE_GUARD_PAGE_BREADCRUMB, ABUSE_GUARD_PAGE_PATH, PROVIDERS_PAGE_BREADCRUMB, PROVIDERS_PAGE_PATH } from '../../../../../../server/lib/navManifest.js';
 import { useMemo } from 'react';
 import { Link } from 'react-router';
 import {
@@ -216,7 +216,7 @@ export default function PipelineStageConfig({ taskType, config, providers, provi
                   <p className="mt-1">Server-side checks on each external PR&apos;s complete title, description, and diff for content a human reviewer would miss — invisible or direction-control Unicode, comments GitHub never renders that address a model — and for obvious model-directed harm: instruction overrides, decode-and-follow or download-and-run instructions, credential exfiltration, and attempts to steer the review verdict. No model, tools, repository checkout, or GitHub credentials are involved.</p>
                   <p className="mt-1 text-gray-500">
                     The pinned Llama Prompt Guard 2 classifier is required by default. Install and configure it on{' '}
-                    <Link to="/models/abuse" className="underline hover:text-port-accent">Models → Abuse Guard</Link>.
+                    <Link to={ABUSE_GUARD_PAGE_PATH} className="underline hover:text-port-accent">{ABUSE_GUARD_PAGE_BREADCRUMB}</Link>.
                   </p>
                 </div>
               )}
