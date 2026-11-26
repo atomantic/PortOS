@@ -64,11 +64,11 @@ import {
   waitForLlamaServerReady,
 } from '../services/llamaServerManager.js'
 import { onDemandRuntimeAppNames } from '../lib/managedRuntimeApps.js'
-import { getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx, waitForMtplxReady } from '../services/mtplxServerManager.js'
+import { getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx, uninstallMtplx, waitForMtplxReady } from '../services/mtplxServerManager.js'
 import { getSplashRuntimeStatus } from '../services/splashRuntimeStatus.js'
-import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer } from '../services/splashServerManager.js'
-import { getMkserveRuntimeStatus, installMkserve, startMkserveServer, stopMkserveServer } from '../services/mkserveRuntimeManager.js'
-import { getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream, waitForSlotstreamReady } from '../services/slotstreamServerManager.js'
+import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer, uninstallSplashRuntime } from '../services/splashServerManager.js'
+import { getMkserveRuntimeStatus, installMkserve, startMkserveServer, stopMkserveServer, uninstallMkserve } from '../services/mkserveRuntimeManager.js'
+import { getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream, uninstallSlotstream, waitForSlotstreamReady } from '../services/slotstreamServerManager.js'
 import { cancelSlotstreamModelDownload, downloadSlotstreamModel, previewSlotstreamDownload } from '../services/slotstreamModelManager.js'
 import { searchMtplxCatalog, pullMtplxModel, previewMtplxPull, removeMtplxModel } from '../services/mtplxModelManager.js'
 import { saveProcessList } from '../services/pm2.js'
@@ -1151,6 +1151,12 @@ router.post('/mtplx/stop', asyncHandler(async (_req, res) => {
   res.json(result)
 }))
 
+router.post('/mtplx/uninstall', asyncHandler(async (_req, res) => {
+  const result = await uninstallMtplx()
+  resetProviderReadinessCache()
+  res.json(result)
+}))
+
 // POST /api/local-llm/mtplx/install — install the private hash-locked MTPLX runtime
 router.post('/mtplx/install', asyncHandler(async (req, res) => {
   const emit = emitter(req)
@@ -1228,13 +1234,13 @@ const runtimeActionRoute = (runtime, label, action, run) => asyncHandler(async (
     operation.message = `${label}: ${message}`
     emit('progress', operation.message, scope)
   }
-  report({ install: 'Preparing installation', upgrade: 'Preparing update', start: 'Starting', stop: 'Stopping' }[action])
+  report({ install: 'Preparing installation', upgrade: 'Preparing update', start: 'Starting', stop: 'Stopping', uninstall: 'Removing runtime files' }[action])
   res.status(202).json({ operation })
   void Promise.resolve().then(() => run({ onProgress: report })).then(
     () => {
       inklingOperations.delete(runtime)
       resetProviderReadinessCache()
-      const done = { install: 'installation complete', upgrade: 'update complete', start: 'start completed', stop: 'stopped' }[action]
+      const done = { install: 'installation complete', upgrade: 'update complete', start: 'start completed', stop: 'stopped', uninstall: 'uninstalled' }[action]
       emit('complete', `${label}: ${done}.`, scope)
       // Their start only resolves once the model answers, so no readiness wait.
       if (action === 'start') refreshRuntimeModels(req, runtime)
@@ -1262,12 +1268,14 @@ router.post('/splash/install', runtimeActionRoute('splash', 'Splash', 'install',
 router.post('/splash/upgrade', runtimeActionRoute('splash', 'Splash', 'upgrade', installSplashRuntime))
 router.post('/splash/start', runtimeActionRoute('splash', 'Splash', 'start', startSplashServer))
 router.post('/splash/stop', runtimeActionRoute('splash', 'Splash', 'stop', stopSplashServer))
+router.post('/splash/uninstall', runtimeActionRoute('splash', 'Splash', 'uninstall', uninstallSplashRuntime))
 
 router.get('/mkserve/status', runtimeStatusRoute('mkserve', getMkserveRuntimeStatus))
 router.post('/mkserve/install', runtimeActionRoute('mkserve', 'mkserve', 'install', installMkserve))
 router.post('/mkserve/upgrade', runtimeActionRoute('mkserve', 'mkserve', 'upgrade', installMkserve))
 router.post('/mkserve/start', runtimeActionRoute('mkserve', 'mkserve', 'start', startMkserveServer))
 router.post('/mkserve/stop', runtimeActionRoute('mkserve', 'mkserve', 'stop', stopMkserveServer))
+router.post('/mkserve/uninstall', runtimeActionRoute('mkserve', 'mkserve', 'uninstall', uninstallMkserve))
 
 // GET /api/local-llm/slotstream/status — binary, process, memory plan, cache, logs.
 router.get('/slotstream/status', asyncHandler(async (_req, res) => {
@@ -1307,6 +1315,12 @@ router.post('/slotstream/install', asyncHandler(async (req, res) => {
     })
   resetProviderReadinessCache()
   emit('complete', 'Slotstream installed')
+  res.json(result)
+}))
+
+router.post('/slotstream/uninstall', asyncHandler(async (_req, res) => {
+  const result = await uninstallSlotstream()
+  resetProviderReadinessCache()
   res.json(result)
 }))
 

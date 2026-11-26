@@ -41,6 +41,15 @@ async function seedPrevious(record = previous) {
 }
 
 describe('mkserve pinned installation', () => {
+  it('removes the selected release and install marker without removing the checkpoint', async () => {
+    const paths = await seedPrevious();
+    await api.removeMkserveRelease(await api.readMkserveInstall());
+    await expect(access(paths.work)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(access(marker())).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(api.readMkserveInstall()).resolves.toBeNull();
+    expect(await readFile(join(paths.weights, 'weights'), 'utf8')).toBe('abc');
+  });
+
   it('does not activate an update or run a substituted download after a digest mismatch', async () => {
     await seedPrevious();
     runStreamingCommand.mockImplementation(async (file, args) => {
