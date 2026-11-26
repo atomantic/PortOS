@@ -12,7 +12,7 @@
  * failure (not on per-row content errors) — those bubble up as the
  * `BULK_IMPORT_PARSE_FAILED` error.
  *
- * `INGREDIENT_TYPES` + `PRIMARY_CONTENT_KEY_BY_TYPE` derive from the shared
+ * `INGREDIENT_TYPE_IDS` + `PRIMARY_CONTENT_KEY_BY_TYPE` derive from the shared
  * type registry (`catalogTypes.js`, a pure no-side-effect module) so a new
  * type flows through bulk import/export automatically. A bulk-import row's
  * body paragraph / CSV `description` column lands in each type's
@@ -24,13 +24,12 @@
 
 import { CATALOG_TYPES, INGREDIENT_TYPE_IDS } from './catalogTypes.js';
 
-export const INGREDIENT_TYPES = INGREDIENT_TYPE_IDS;
 
 export const PRIMARY_CONTENT_KEY_BY_TYPE = Object.freeze(
   Object.fromEntries(CATALOG_TYPES.map((t) => [t.id, t.primaryContentKey])),
 );
 
-const TYPE_LOWER = new Set(INGREDIENT_TYPES);
+const TYPE_LOWER = new Set(INGREDIENT_TYPE_IDS);
 
 function normalizeType(raw) {
   if (typeof raw !== 'string') return null;

@@ -19,7 +19,7 @@ import * as manuscriptFix from '../../services/pipeline/manuscriptFix.js';
 import * as completenessRunner from '../../services/pipeline/manuscriptCompletenessRunner.js';
 import { getReviewWithStaleness } from '../../services/pipeline/editorial/checkRunner.js';
 import { recordTrendSnapshot } from '../../services/pipeline/editorialScore.js';
-import { readReadinessGate, mergeSeverityWeights } from '../../lib/editorial/index.js';
+import { readReadinessGate, mergeSeverityWeights } from '../../lib/editorial/severityConfig.js';
 import { getSettings } from '../../services/settings.js';
 import { mapServiceError, providerOverrideShape } from './shared.js';
 

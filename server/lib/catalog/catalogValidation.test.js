@@ -10,7 +10,6 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  INGREDIENT_TYPES,
   REF_KINDS,
   catalogScrapCreateSchema,
   catalogIngredientCreateSchema,
@@ -24,7 +23,6 @@ import {
   catalogBulkImportSchema,
   catalogExportQuerySchema,
   catalogRelationLinkSchema,
-  RELATION_KINDS,
   catalogMediaAttachSchema,
   catalogMediaDetachSchema,
   catalogPortraitSetSchema,
@@ -34,13 +32,13 @@ import {
   catalogUserTypeSchema,
   catalogUserTypesSettingsSchema,
 } from './catalogValidation.js';
-import { setUserCatalogTypes } from './catalogTypes.js';
+import { INGREDIENT_TYPE_IDS, RELATION_KIND_IDS, setUserCatalogTypes } from './catalogTypes.js';
 import { afterEach } from 'vitest';
 
 describe('catalogValidation — ingredient types & ref kinds', () => {
-  it('exposes the six v1 ingredient types as a frozen list', () => {
-    expect(INGREDIENT_TYPES).toEqual(['character', 'place', 'object', 'idea', 'scene', 'concept']);
-    expect(Object.isFrozen(INGREDIENT_TYPES)).toBe(true);
+  it('uses the six v1 ingredient types as a frozen list', () => {
+    expect(INGREDIENT_TYPE_IDS).toEqual(['character', 'place', 'object', 'idea', 'scene', 'concept']);
+    expect(Object.isFrozen(INGREDIENT_TYPE_IDS)).toBe(true);
   });
 
   it('exposes the documented ref kinds (universe/series/issue/work/creative-director/music-video/storyboard)', () => {
@@ -81,7 +79,7 @@ describe('catalogValidation — catalogScrapCreateSchema', () => {
 
 describe('catalogValidation — catalogIngredientCreateSchema', () => {
   it('accepts every v1 type', () => {
-    for (const t of INGREDIENT_TYPES) {
+    for (const t of INGREDIENT_TYPE_IDS) {
       const out = catalogIngredientCreateSchema.parse({ type: t, name: 'X' });
       expect(out.type).toBe(t);
     }
@@ -511,9 +509,9 @@ describe('catalogValidation — catalogExportQuerySchema', () => {
 
 describe('catalogValidation — relation kinds & catalogRelationLinkSchema', () => {
   it('exposes the relation kinds as a frozen list including the documented set', () => {
-    expect(Object.isFrozen(RELATION_KINDS)).toBe(true);
+    expect(Object.isFrozen(RELATION_KIND_IDS)).toBe(true);
     for (const k of ['appears-in', 'lives-in', 'created-by', 'parent-of', 'variant-of', 'references']) {
-      expect(RELATION_KINDS).toContain(k);
+      expect(RELATION_KIND_IDS).toContain(k);
     }
   });
 
@@ -523,7 +521,7 @@ describe('catalogValidation — relation kinds & catalogRelationLinkSchema', () 
   });
 
   it('accepts every registered relation kind', () => {
-    for (const k of RELATION_KINDS) {
+    for (const k of RELATION_KIND_IDS) {
       expect(() => catalogRelationLinkSchema.parse({ toId: 'x', kind: k })).not.toThrow();
     }
   });

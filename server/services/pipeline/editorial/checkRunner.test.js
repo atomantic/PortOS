@@ -106,7 +106,7 @@ const { buildCompletenessContext, collectManuscriptSections, completenessSourceH
 const { getSeriesCanon } = await import('../seriesCanon.js');
 const { getSeries } = await import('../series.js');
 const { getSettings } = await import('../../settings.js');
-const { listChecks, getCheck } = await import('../../../lib/editorial/index.js');
+const { listChecks, getCheck } = await import('../../../lib/editorial/checkRegistry.js');
 const { listIssuesForSeries } = await import('../issues.js');
 
 // Build a `pipelineEditorialChecks.checks` map that disables every check
