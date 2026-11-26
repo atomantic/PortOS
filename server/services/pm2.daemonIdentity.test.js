@@ -1,27 +1,33 @@
-import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-const mock = vi.hoisted(() => ({ clients: [], construct: vi.fn() }));
+const mock = vi.hoisted(() => ({
+  clients: [],
+  construct: vi.fn(),
+  socketPath: '/tmp/example-pm2/rpc.sock',
+  socketExists: false,
+}));
+vi.mock('fs', async original => {
+  const fs = await original();
+  return {
+    ...fs,
+    existsSync: path => path === mock.socketPath ? mock.socketExists : fs.existsSync(path),
+  };
+});
 vi.mock('pm2', () => ({ default: { custom: function () { mock.construct(); return mock.clients.shift(); } } }));
 import { getDaemonIdentity, listExistingProcessesStrict } from './pm2.js';
 
-const directory = mkdtempSync(join(tmpdir(), 'pm2-identity-'));
-const socketPath = join(directory, 'rpc.sock');
-const originalSocket = process.env.PM2_DAEMON_RPC_PORT;
-
-beforeEach(() => { process.env.PM2_DAEMON_RPC_PORT = socketPath; });
+beforeEach(() => {
+  vi.stubEnv('PM2_HOME', '/tmp/example-pm2');
+  vi.stubEnv('PM2_DAEMON_RPC_PORT', mock.socketPath);
+  vi.stubEnv('PM2_DAEMON_PUB_PORT', undefined);
+  vi.stubEnv('PM2_INTERACTOR_RPC_PORT', undefined);
+});
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
   mock.clients.length = 0;
   mock.construct.mockClear();
-  rmSync(socketPath, { force: true });
-});
-afterAll(() => {
-  if (originalSocket === undefined) delete process.env.PM2_DAEMON_RPC_PORT;
-  else process.env.PM2_DAEMON_RPC_PORT = originalSocket;
-  rmSync(directory, { recursive: true, force: true });
+  mock.socketExists = false;
 });
 
 it.skipIf(process.platform === 'win32')('does not construct a PM2 client when no daemon socket exists', async () => {
@@ -31,7 +37,7 @@ it.skipIf(process.platform === 'win32')('does not construct a PM2 client when no
 });
 
 it('reads the process list from an existing daemon without starting or reconnecting one', async () => {
-  writeFileSync(socketPath, 'fixture');
+  mock.socketExists = true;
   const client = {
     connect: vi.fn(), disconnect: vi.fn(callback => callback(null)),
     Client: { launchRPC: vi.fn(callback => callback(null)), client_sock: { connected: true },
@@ -47,7 +53,7 @@ it('reads the process list from an existing daemon without starting or reconnect
 });
 
 it('reads an existing daemon over RPC without invoking PM2 connect or start', async () => {
-  writeFileSync(socketPath, 'fixture');
+  mock.socketExists = true;
   const client = {
     connect: vi.fn(),
     disconnect: vi.fn((callback) => callback(null)),
@@ -68,7 +74,7 @@ it('reads an existing daemon over RPC without invoking PM2 connect or start', as
 
 it('closes a disconnected RPC attempt at the deadline without starting a daemon', async () => {
   vi.useFakeTimers();
-  writeFileSync(socketPath, 'fixture');
+  mock.socketExists = true;
   const client = {
     connect: vi.fn(), disconnect: vi.fn(),
     Client: { launchRPC: vi.fn(), client_sock: { connected: false, close: vi.fn() } },
