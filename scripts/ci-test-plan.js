@@ -206,90 +206,12 @@ function buildSuitePlan(changedFiles, {
   const changed = uniqueSorted(changedFiles.filter(Boolean));
   const trackedSet = new Set(trackedFiles);
 
-  // Full validation widens the primary jobs; Windows still proves only its
-  // supported native boundary, including scheduled and release validation.
-  if (forceFull) {
-    return fullPlan(changed, forceFullReason, { appRouteOnly, trackedSet, windowsRelevant: true });
-  }
+  const { earlyPlan, relevant } = selectEarlySuitePlan(changed, trackedSet, {
+    forceFull, forceFullReason, appRouteOnly, dependencyChanges,
+  });
+  if (earlyPlan) return earlyPlan;
 
-  // EVERY matching trigger, not just the reported one, and computed BEFORE the
-  // first full-plan branch. The reason line is the first match in sorted-path
-  // order, but the Windows decision is the OR over all of them, so a diff that
-  // trips two triggers must escalate if EITHER does. Two ways this goes wrong
-  // if the OR is skipped: an alphabetically earlier client-only trigger
-  // (client/vite.config.js) reported ahead of server/index.js, and the App.jsx
-  // branch below returning before the triggers are even looked at — which
-  // downgraded Windows for an App.jsx PR that also bumped a lockfile.
-  const { fullTriggers, windowsNote } = fullTriggersFor(changed, dependencyChanges);
-  const fullTrigger = fullTriggers.at(0);
-  const triggersEscalateWindows = fullTriggers.some((trigger) => trigger.windowsRelevant);
-
-  const appCompositionChanged = changed.includes('client/src/App.jsx');
-  if (appCompositionChanged && !appRouteOnly) {
-    // The composition root itself is client-only, but the rest of the diff may
-    // not be.
-    return fullPlan(changed, 'client composition root changed: client/src/App.jsx', {
-      appRouteOnly,
-      trackedSet,
-      windowsRelevant: triggersEscalateWindows,
-      windowsNote,
-    });
-  }
-
-  if (fullTrigger) {
-    return fullPlan(changed, `${fullTrigger.reason}: ${fullTrigger.path}`, {
-      appRouteOnly,
-      trackedSet,
-      windowsRelevant: triggersEscalateWindows,
-      windowsNote,
-    });
-  }
-
-  const dataOnly = changed.length > 0 && changed.every(isGeneratedData);
-  const alwaysRun = dataOnly ? [] : alwaysRunTests(trackedSet);
-
-  const relevant = changed.filter((path) => !isDocumentationOnly(path) && !isGeneratedData(path));
-  if (relevant.length === 0) {
-    const { server: alwaysRunServer, client: alwaysRunClient } = splitByRunner(alwaysRun);
-    const reason = dataOnly ? 'generated data-only change'
-      : changed.length ? 'documentation-only change' : 'no changed files';
-    const plan = {
-      full: false,
-      reason,
-      changedFiles: changed,
-      server: alwaysRunServer.length > 0 ? { mode: 'files', files: alwaysRunServer, sources: [] } : skippedRunner(),
-      client: alwaysRunClient.length > 0 ? { mode: 'files', files: alwaysRunClient, sources: [] } : skippedRunner(),
-      browserFiles: browserSuitesIn(alwaysRun),
-      db: false,
-      dbLiveRestore: false,
-      lint: { mode: 'skip', files: [] },
-      build: false,
-      smoke: false,
-      windows: false,
-      windowsMode: 'skip',
-      windowsFiles: [],
-      windowsSources: [],
-    };
-    return finishPlan(plan, { appRouteOnly });
-  }
-
-  const executable = relevant.filter(isExecutable);
-  const fixtureTests = [];
-  const unknown = [];
-  const missingFixtureOwners = [];
-  for (const path of relevant) {
-    if (isExecutable(path)) continue;
-    const owner = fixtureOwnerFor(path);
-    if (!owner) {
-      unknown.push(path);
-      continue;
-    }
-    if (owner.tests.some((test) => !trackedSet.has(test) || !runnerForTest(test))) {
-      missingFixtureOwners.push(path);
-      continue;
-    }
-    fixtureTests.push(...owner.tests);
-  }
+  const { executable, fixtureTests, unknown, missingFixtureOwners } = classifyNonExecutableChanges(relevant, trackedSet);
   if (unknown.length > 0) {
     return fullPlan(changed, `unclassified changed file: ${unknown[0]}`, { appRouteOnly, trackedSet });
   }
@@ -304,19 +226,156 @@ function buildSuitePlan(changedFiles, {
   // file passed as an exact Vitest selector makes the runner exit non-zero on
   // an otherwise-valid deletion PR — trackedSet (git ls-files) excludes it.
   const directTests = executable.filter(isTestFile).filter((path) => trackedSet.has(path));
+  const { jsSources, pythonSources, serverSources, clientSources, serverSeeds, unscopedReason } =
+    classifySources(executable, trackedSet, clientDependencies);
+  if (unscopedReason) return fullPlan(changed, unscopedReason, { appRouteOnly, trackedSet });
+
+  const hasServerSource = serverSources.length > 0;
+  const hasClientSource = clientSources.length > 0;
+  const hasServerSeed = serverSeeds.length > 0;
+  const serverFeatures = uniqueSorted(serverSources.map(featureDirectory).filter(Boolean));
+  const clientFeatures = uniqueSorted(clientSources.map(featureDirectory).filter(Boolean));
+  const { selectedTests, serverFiles, clientFiles, missingPythonContract } = collectExplicitTests({
+    changed, trackedFiles, trackedSet, directTests, fixtureTests, serverSeeds,
+    serverFeatures, clientFeatures, pythonSources, jsSources, clientTestDependencies, pathContractTests,
+  });
+  if (missingPythonContract) {
+    return fullPlan(changed, `python script with no parsing contract: ${missingPythonContract}`, { appRouteOnly, trackedSet });
+  }
+
+  const server = buildRunnerSelection(serverFiles, serverSources);
+  const client = buildRunnerSelection(clientFiles, clientSources);
+
+  const dbTests = new Set(resolveDbTestFiles(trackedFiles));
+  const dbLiveRestore = executable.some((path) => DB_RISK_RULES.some((rule) => rule.test(path)))
+    || serverSources.some((path) => dbLiveRestoreInputs === null || dbLiveRestoreInputs.includes(path));
+  const db = dbLiveRestore || selectedTests.some((path) => dbTests.has(path))
+    || serverSources.some((path) => dbDependencies === null || dbDependencies.includes(path));
+
+  const windows = hasWindowsRiskFile(changed);
+  const windowsMode = windows ? 'files' : 'skip';
+
+  const reason = selectScopedReason({
+    serverFeatures, clientFeatures, serverSources, clientSources, pythonSources, jsSources, fixtureTests, serverSeeds,
+  });
+
+  // Deleted paths cannot be passed as exact lint selectors.
+  const lintFiles = changed.filter((path) => isLintSurface(path) && trackedSet.has(path));
+
+  return finishPlan({
+    full: false,
+    reason,
+    changedFiles: changed,
+    server,
+    client,
+    browserFiles: browserSuitesIn([
+      ...serverFiles,
+      ...BROWSER_SUITES.filter((suite) => trackedSet.has(suite)
+        && serverSources.some((source) => browserDependencies[suite] === null
+          || browserDependencies[suite]?.includes(source))),
+    ]),
+    db,
+    dbLiveRestore,
+    lint: { mode: lintFiles.length > 0 ? 'files' : 'skip', files: lintFiles },
+    build: hasClientSource,
+    smoke: hasServerSource || hasServerSeed,
+    windows,
+    windowsMode,
+    windowsFiles: windows ? windowsContractTests(trackedSet) : [],
+    windowsSources: [],
+  }, { appRouteOnly, serverReach, clientReach, clientBrowserReach });
+}
+
+function selectEarlySuitePlan(changed, trackedSet, {
+  forceFull, forceFullReason, appRouteOnly, dependencyChanges,
+}) {
+  // Full validation widens the primary jobs; Windows still proves only its
+  // supported native boundary, including scheduled and release validation.
+  if (forceFull) {
+    return { earlyPlan: fullPlan(changed, forceFullReason, { appRouteOnly, trackedSet, windowsRelevant: true }) };
+  }
+
+  // App.jsx or the first trigger determines the reason; Windows considers all
+  // triggers. An App.jsx edit or an earlier client-only trigger must preserve
+  // Windows coverage for a lockfile or server entry-point change in the diff.
+  const { fullTriggers, windowsNote } = fullTriggersFor(changed, dependencyChanges);
+  const fullTrigger = fullTriggers.at(0);
+  const appCompositionChanged = changed.includes('client/src/App.jsx') && !appRouteOnly;
+  if (appCompositionChanged || fullTrigger) {
+    const reason = appCompositionChanged
+      ? 'client composition root changed: client/src/App.jsx'
+      : `${fullTrigger.reason}: ${fullTrigger.path}`;
+    const windowsRelevant = fullTriggers.some((trigger) => trigger.windowsRelevant);
+    return { earlyPlan: fullPlan(changed, reason, { appRouteOnly, trackedSet, windowsRelevant, windowsNote }) };
+  }
+
+  const relevant = changed.filter((path) => !isDocumentationOnly(path) && !isGeneratedData(path));
+  if (relevant.length > 0) return { relevant };
+
+  const dataOnly = changed.length > 0 && changed.every(isGeneratedData);
+  const alwaysRun = dataOnly ? [] : alwaysRunTests(trackedSet);
+
+  const { server: alwaysRunServer, client: alwaysRunClient } = splitByRunner(alwaysRun);
+  const reason = dataOnly ? 'generated data-only change'
+    : changed.length ? 'documentation-only change' : 'no changed files';
+  const plan = {
+    full: false,
+    reason,
+    changedFiles: changed,
+    server: buildRunnerSelection(alwaysRunServer, []),
+    client: buildRunnerSelection(alwaysRunClient, []),
+    browserFiles: browserSuitesIn(alwaysRun),
+    db: false,
+    dbLiveRestore: false,
+    lint: { mode: 'skip', files: [] },
+    build: false,
+    smoke: false,
+    windows: false,
+    windowsMode: 'skip',
+    windowsFiles: [],
+    windowsSources: [],
+  };
+  return { earlyPlan: finishPlan(plan, { appRouteOnly }) };
+}
+
+function classifyNonExecutableChanges(relevant, trackedSet) {
+  const executable = [];
+  const fixtureTests = [];
+  const unknown = [];
+  const missingFixtureOwners = [];
+  for (const path of relevant) {
+    if (isExecutable(path)) {
+      executable.push(path);
+      continue;
+    }
+    const owner = fixtureOwnerFor(path);
+    if (!owner) {
+      unknown.push(path);
+      continue;
+    }
+    if (owner.tests.some((test) => !trackedSet.has(test) || !runnerForTest(test))) {
+      missingFixtureOwners.push(path);
+      continue;
+    }
+    fixtureTests.push(...owner.tests);
+  }
+  return { executable, fixtureTests, unknown, missingFixtureOwners };
+}
+
+function classifySources(executable, trackedSet, clientDependencies) {
   const sourceFiles = executable.filter((path) => !isTestFile(path));
-  const unsupportedSources = sourceFiles.filter((path) => (
+  const unsupportedSource = sourceFiles.find((path) => (
     !isServerRunnerFile(path) && !isServerSeed(path) && !path.startsWith('client/')
   ));
-  if (unsupportedSources.length > 0) {
-    return fullPlan(changed, `unmapped executable surface: ${unsupportedSources[0]}`, { appRouteOnly, trackedSet });
+  if (unsupportedSource) {
+    return { unscopedReason: `unmapped executable surface: ${unsupportedSource}` };
   }
-  const deletedSources = sourceFiles.filter((path) => !trackedSet.has(path));
-  if (deletedSources.length > 0) {
+  const deletedSource = sourceFiles.find((path) => !trackedSet.has(path));
+  if (deletedSource) {
     // `vitest related` needs a real source path. A deleted module can still
     // affect importers, so widening is safer than silently dropping its side of
     // the graph.
-    return fullPlan(changed, `deleted executable source: ${deletedSources[0]}`, { appRouteOnly, trackedSet });
+    return { unscopedReason: `deleted executable source: ${deletedSource}` };
   }
   // Python scripts never enter the import graph or a feature directory: their
   // only selector is the per-script contract list, so they leave the JS-only
@@ -324,25 +383,28 @@ function buildSuitePlan(changedFiles, {
   const pythonSources = sourceFiles.filter(isPythonScript);
   const jsSources = sourceFiles.filter((path) => !isPythonScript(path));
   if (clientDependencies === null && jsSources.some((path) => path.startsWith('server/lib/'))) {
-    return fullPlan(changed, 'client dependency discovery unresolved', { appRouteOnly, trackedSet });
+    return { unscopedReason: 'client dependency discovery unresolved' };
   }
   const clientDependencySet = new Set(clientDependencies || []);
-  const isClientSource = (path) => path.startsWith('client/') || clientDependencySet.has(path);
-  const serverSources = jsSources.filter(isServerRunnerFile);
-  const clientSources = jsSources.filter(isClientSource);
-  const serverSeeds = jsSources.filter(isServerSeed);
-  const hasServerSource = serverSources.length > 0;
-  const hasClientSource = clientSources.length > 0;
-  const hasServerSeed = serverSeeds.length > 0;
-  const serverFeatures = uniqueSorted(serverSources.map(featureDirectory).filter(Boolean));
-  const clientFeatures = uniqueSorted(clientSources.map(featureDirectory).filter(Boolean));
-  const features = uniqueSorted([...serverFeatures, ...clientFeatures]);
+  return {
+    jsSources,
+    pythonSources,
+    serverSources: jsSources.filter(isServerRunnerFile),
+    clientSources: jsSources.filter((path) => path.startsWith('client/') || clientDependencySet.has(path)),
+    serverSeeds: jsSources.filter(isServerSeed),
+  };
+}
+
+function collectExplicitTests({
+  changed, trackedFiles, trackedSet, directTests, fixtureTests, serverSeeds,
+  serverFeatures, clientFeatures, pythonSources, jsSources, clientTestDependencies, pathContractTests,
+}) {
   const selectedTests = [
     ...directTests,
     ...fixtureTests,
     ...serverSeeds.flatMap((seed) => serverSeedTestsFor(seed, trackedSet)),
     ...structuralTestsFor(changed, trackedSet),
-    ...alwaysRun,
+    ...alwaysRunTests(trackedSet),
     ...toolingTestsFor(changed, trackedSet),
     ...Object.entries(clientTestDependencies)
       .filter(([test, dependencies]) => trackedSet.has(test) && runnerForTest(test) === 'client'
@@ -355,7 +417,7 @@ function buildSuitePlan(changedFiles, {
     const pythonTests = (pathContractTests[script] || [])
       .filter((path) => trackedSet.has(path) && runnerForTest(path));
     if (pythonTests.length === 0) {
-      return fullPlan(changed, `python script with no parsing contract: ${script}`, { appRouteOnly, trackedSet });
+      return { missingPythonContract: script };
     }
     selectedTests.push(...pythonTests);
   }
@@ -395,67 +457,28 @@ function buildSuitePlan(changedFiles, {
   const serverFiles = uniqueSorted(runnable.filter((path) => runnerForTest(path) === 'server'));
   const clientFiles = uniqueSorted(runnable.filter((path) => runnerForTest(path) === 'client'));
 
-  // Feature-name matches, basename contracts, direct tests and guards are
-  // additive explicit selectors; they never replace import-graph traversal. A
-  // nested feature leaf can be consumed by a differently named test in another
-  // area, so any behavioral source in a runner takes one 'related' invocation.
-  // Only a test-only diff keeps exact-file selection.
-  const serverMode = serverSources.length > 0 ? 'related' : 'files';
-  const clientMode = clientSources.length > 0 ? 'related' : 'files';
+  return { selectedTests, serverFiles, clientFiles };
+}
 
-  const server = serverFiles.length > 0
-    ? { mode: serverMode, files: serverFiles, sources: serverMode === 'related' ? serverSources : [] }
-    : hasServerSource
-      ? { mode: 'related', files: [], sources: serverSources }
-      : skippedRunner();
-  const client = clientFiles.length > 0
-    ? { mode: clientMode, files: clientFiles, sources: clientMode === 'related' ? clientSources : [] }
-    : hasClientSource
-      ? { mode: 'related', files: [], sources: clientSources }
-      : skippedRunner();
+// Explicit selectors are additive to import-graph traversal. Any behavioral
+// source needs a related invocation, even without an explicit test match.
+function buildRunnerSelection(files, sources) {
+  if (sources.length > 0) return { mode: 'related', files, sources };
+  if (files.length > 0) return { mode: 'files', files, sources: [] };
+  return skippedRunner();
+}
 
-  const dbTests = new Set(resolveDbTestFiles(trackedFiles));
-  const dbLiveRestore = executable.some((path) => DB_RISK_RULES.some((rule) => rule.test(path)))
-    || serverSources.some((path) => dbLiveRestoreInputs === null || dbLiveRestoreInputs.includes(path));
-  const db = dbLiveRestore || selectedTests.some((path) => dbTests.has(path))
-    || serverSources.some((path) => dbDependencies === null || dbDependencies.includes(path));
-
-  const windows = hasWindowsRiskFile(changed);
-  const windowsMode = windows ? 'files' : 'skip';
-
-  let reason = 'Vitest related-test fallback';
-  if (features.length) reason = `targeted features: ${features.join(', ')}`;
-  else if (jsSources.length === 0 && pythonSources.length > 0) reason = 'python script parsing contracts';
-  else if (jsSources.length === 0 && fixtureTests.length > 0) reason = 'text fixture owners';
-  else if (serverSources.length === 0 && clientSources.length === 0 && pythonSources.length === 0 && hasServerSeed) reason = 'server seed contracts';
-
-  return finishPlan({
-    full: false,
-    reason,
-    changedFiles: changed,
-    server,
-    client,
-    browserFiles: browserSuitesIn([
-      ...serverFiles,
-      ...BROWSER_SUITES.filter((suite) => trackedSet.has(suite)
-        && serverSources.some((source) => browserDependencies[suite] === null
-          || browserDependencies[suite]?.includes(source))),
-    ]),
-    db,
-    dbLiveRestore,
-    lint: {
-      // Same deleted-path guard as directTests above — ESLint given a
-      // nonexistent explicit path exits non-zero instead of skipping it.
-      mode: changed.some((path) => isLintSurface(path) && trackedSet.has(path)) ? 'files' : 'skip',
-      files: changed.filter((path) => isLintSurface(path) && trackedSet.has(path)),
-    },
-    build: hasClientSource,
-    smoke: hasServerSource || hasServerSeed,
-    windows,
-    windowsMode,
-    windowsFiles: windows ? windowsContractTests(trackedSet) : [],
-    windowsSources: [],
-  }, { appRouteOnly, serverReach, clientReach, clientBrowserReach });
+function selectScopedReason({
+  serverFeatures, clientFeatures, serverSources, clientSources, pythonSources, jsSources, fixtureTests, serverSeeds,
+}) {
+  const features = uniqueSorted([...serverFeatures, ...clientFeatures]);
+  if (features.length) return `targeted features: ${features.join(', ')}`;
+  if (jsSources.length === 0 && pythonSources.length > 0) return 'python script parsing contracts';
+  if (jsSources.length === 0 && fixtureTests.length > 0) return 'text fixture owners';
+  if (serverSources.length === 0 && clientSources.length === 0 && pythonSources.length === 0 && serverSeeds.length > 0) {
+    return 'server seed contracts';
+  }
+  return 'Vitest related-test fallback';
 }
 
 /** The derived fields every plan carries: per-suite reasons and shard matrices. */
