@@ -259,7 +259,11 @@ async function wakeManagedMtpxForRefresh(serviceSlug) {
     console.log('🚄 MTPLX catalog refresh refused — the server is stopped and has no saved launch line');
     throw new ServerError(
       expandPageToken('MTPLX is stopped and has no saved launch line — open the MTPLX card in {page} to start it and save its launch line, then refresh again.', LOCAL_RUNTIMES.mtplx),
-      { status: 409, code: 'MTPLX_STOPPED' },
+      {
+        status: 409,
+        code: 'MTPLX_STOPPED',
+        context: { refreshNotice: { runtime: 'mtplx', manageUrl: LOCAL_RUNTIMES.mtplx.manageUrl } },
+      },
     );
   }
   const { ready, reason } = await ensureMtplxRunning();

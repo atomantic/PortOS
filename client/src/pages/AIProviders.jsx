@@ -617,10 +617,12 @@ export default function AIProviders() {
         toast.error('Failed to refresh models - provider may not support this feature');
       }
     } catch (error) {
-      // The typed stopped result the card renders inline — nothing toasts, so
-      // the card is the one place the fix is named.
-      if (error?.code === 'MTPLX_STOPPED') {
-        setRefreshNotice(prev => ({ ...prev, [id]: { message: error.message } }));
+      // Older servers sent only the MTPLX code. Structured notices let
+      // other runtimes direct users to setup without adding client error codes.
+      const metadata = error?.context?.refreshNotice;
+      const notice = metadata ?? (error?.code === 'MTPLX_STOPPED' ? { runtime: 'mtplx' } : null);
+      if (notice) {
+        setRefreshNotice(prev => ({ ...prev, [id]: { ...notice, message: error.message } }));
       } else {
         toast.error(`Error refreshing models: ${error.message}`);
       }
@@ -983,10 +985,19 @@ export default function AIProviders() {
           recovering={recovering}
           addingTuiMode={addingTuiMode}
           servingModel={servingModel}
-          codexAccount={codexAccount}
-          codexModels={codexModels}
-          codexAccountLoading={codexAccountLoading}
-          codexLoginLoading={codexLoginLoading}
+          codex={{
+            account: codexAccount,
+            models: codexModels,
+            loading: codexAccountLoading,
+            loginLoading: codexLoginLoading,
+            onCheck: () => loadCodexAccount(true),
+            onSignIn: handleCodexSignIn,
+            onCancel: handleCancelCodexLogin,
+            onLogout: handleCodexLogout,
+            onRefreshModels: () => loadCodexModels(true),
+            onCopyCode: handleCopyCodexDeviceCode,
+            onEnable: handleEnableCodexSubscription,
+          }}
           loadError={loadError}
           modelPinReloadKey={modelPinReloadKey}
           showSamples={showSamples}
@@ -1031,13 +1042,6 @@ export default function AIProviders() {
           onAutoSetupRuntime={setSettingUpRuntime}
           onUseServedModel={handleUseServedModel}
           onServeWantedModel={handleServeWantedModel}
-          onCodexCheckAccount={() => loadCodexAccount(true)}
-          onCodexSignIn={handleCodexSignIn}
-          onCodexCancelLogin={handleCancelCodexLogin}
-          onCodexLogout={handleCodexLogout}
-          onCodexRefreshModels={() => loadCodexModels(true)}
-          onCodexCopyCode={handleCopyCodexDeviceCode}
-          onCodexEnable={handleEnableCodexSubscription}
         />
       )}
       </Suspense>

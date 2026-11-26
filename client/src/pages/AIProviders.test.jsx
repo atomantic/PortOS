@@ -2219,6 +2219,31 @@ describe('AIProviders model refresh', () => {
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
   });
 
+  it('uses the management URL and label supplied by a non-MTPLX refresh refusal', async () => {
+    api.getProviders.mockResolvedValue({
+      activeProvider: null,
+      providers: [{
+        id: 'splash', name: 'Splash', type: 'api', endpoint: 'http://127.0.0.1:19001/v1',
+        enabled: true, splashBacked: true, canRefreshModels: true, models: [],
+      }],
+    });
+    api.refreshProviderModels.mockRejectedValue(Object.assign(new Error('Splash needs a saved launch configuration.'), {
+      code: 'RUNTIME_SETUP_REQUIRED',
+      context: { refreshNotice: {
+        manageUrl: '/models/llms-runtimes/splash#setup',
+        manageLabel: 'Open Splash setup',
+      } },
+    }));
+
+    await renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Refresh Models' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Splash needs a saved launch configuration.');
+    expect(screen.getByRole('link', { name: 'Open Splash setup' }))
+      .toHaveAttribute('href', '/models/llms-runtimes/splash#setup');
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
   // The root cause under the refresh button, which the other four reload paths
   // on this page share: `loadData` flipped `loading` on unconditionally, so ANY
   // reload after a click swapped the whole list for the page skeleton and

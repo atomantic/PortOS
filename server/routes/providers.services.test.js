@@ -433,6 +433,7 @@ describe('managed MTPLX before a derived-preset catalog refresh', () => {
     const res = await request(app()).post('/api/providers/opencode-mtplx/refresh-models');
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('MTPLX_STOPPED');
+    expect(res.body.context.refreshNotice).toEqual({ runtime: 'mtplx', manageUrl: '/models/llms-runtimes/mtplx' });
     expect(res.body.error).toContain('Runtimes');
     expect(mtplxManager.ensureMtplxRunning).not.toHaveBeenCalled();
     expect(probe).not.toHaveBeenCalled();
