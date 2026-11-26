@@ -1155,8 +1155,8 @@ function recordedKeyVerdict(a, testRel, recorded, fixtures, baseClosure, served)
  * which lets related selection narrow it. `served` maps a test to the files
  * its real-browser fixture served (`analyzeTest`).
  */
-export function computeTestMemoKeys(testFiles, { fs, workspace, env, platform, arch, nodeVersion, toolVersion, caseFilter, listFiles, records = new Map(), digests = new Map(), served = new Map(), factsCache = null }) {
-  const analyzer = createTestMemoAnalyzer({ fs, workspaceRel: workspace, env, platform, arch, nodeVersion, toolVersion, caseFilter, listFiles, factsCache });
+export function computeTestMemoKeys(testFiles, { fs, workspace, env, platform, arch, nodeVersion, toolVersion, caseFilter, listFiles, records = new Map(), digests = new Map(), served = new Map(), factsCache = null, planBeforeClientSetup = false }) {
+  const analyzer = createTestMemoAnalyzer({ fs, workspaceRel: workspace, env, platform, arch, nodeVersion, toolVersion, caseFilter, listFiles, factsCache, planBeforeClientSetup });
   const baseClosure = analyzer.workspaceBase(WORKSPACE_BASE_INPUTS[workspace] ?? [], WORKSPACE_SETUP_ENTRIES[workspace] ?? []);
   const out = new Map();
   for (const test of testFiles) {

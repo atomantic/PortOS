@@ -2,32 +2,17 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, watch, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const WORKSPACE_DIRS = Object.freeze({
-  server: new URL('../../server/', import.meta.url),
-  client: new URL('../../client/', import.meta.url),
-});
-const WORKSPACE_CONFIGS = Object.freeze({
-  server: new URL('../../server/vitest.config.js', import.meta.url),
-  client: new URL('../../client/vitest.config.js', import.meta.url),
-});
-
-function workspaceUrl(map, workspace) {
-  const url = map[workspace];
-  if (!url) throw new Error(`Unknown Vitest fixture workspace: ${workspace}`);
-  return url;
-}
-
-export function createVitestTempFixture(host, workspace, body, config = 'vitest.config.js') {
-  const workspaceDir = workspaceUrl(WORKSPACE_DIRS, workspace);
-  const configUrl = config === 'vitest.config.js' ? workspaceUrl(WORKSPACE_CONFIGS, workspace)
-    : new URL(config, workspaceDir);
-  const workspacePath = fileURLToPath(workspaceDir);
+export function createVitestTempFixture(host, workspace, body, configUrl) {
+  if (!(configUrl instanceof URL) || configUrl.protocol !== 'file:') throw new Error('Vitest fixture requires an explicit local config URL');
+  const configPath = fileURLToPath(configUrl);
+  const config = basename(configPath);
+  const workspacePath = dirname(configPath);
   const root = join(host, 'fixture');
   mkdirSync(root);
-  symlinkSync(fileURLToPath(new URL('node_modules', workspaceDir)), join(root, 'node_modules'),
+  symlinkSync(join(workspacePath, 'node_modules'), join(root, 'node_modules'),
     process.platform === 'win32' ? 'junction' : 'dir');
   mkdirSync(join(root, 'src/test'), { recursive: true });
   writeFileSync(join(root, 'src/test/setup.js'), '');
@@ -68,7 +53,7 @@ export function createVitestTempFixture(host, workspace, body, config = 'vitest.
   delete env.VITEST_POOL_ID;
   delete env.VITEST_WORKER_ID;
   return {
-    args: [fileURLToPath(new URL('node_modules/vitest/vitest.mjs', workspaceDir)), 'run', '--configLoader', 'runner',
+    args: [join(workspacePath, 'node_modules/vitest/vitest.mjs'), 'run', '--configLoader', 'runner',
       '--config', fileURLToPath(configUrl), '--root', root, '--maxWorkers', '1'],
     options: { cwd: workspacePath, env, encoding: 'utf8', timeout: 20000 },
   };
@@ -247,7 +232,7 @@ export function runFixtureToCompletion({ args, options }, ceilingMs = FIXTURE_RU
  * WATCH_READY_MS. Caller cancellation stops readiness; returning waits for the
  * killed watcher to close. FIXTURE_CLOSE_UNCONFIRMED means retain the host.
  */
-export async function runWatchConfigRestart(host, workspace, inspect, { signal } = {}) {
+export async function runWatchConfigRestart(host, workspace, configUrl, inspect, { signal } = {}) {
   const callerCancellation = () => Object.assign(fixtureAborted(signal, 'watch fixture cancelled by caller'), { code: 'FIXTURE_CALLER_CANCELLED' });
   if (signal?.aborted) throw callerCancellation();
   const marks = join(host, 'marks');
@@ -259,13 +244,13 @@ export async function runWatchConfigRestart(host, workspace, inspect, { signal }
       const record = JSON.stringify({ root: first, owner: fs.readFileSync(join(first, '.owner.pid'), 'utf8') });
       fs.writeFileSync(join(marks, 'pending'), record);
       fs.renameSync(join(marks, 'pending'), join(marks, 'run-' + n + '.json'));
-  `);
+  `, configUrl);
   // A wrapper config in the fixture is the file the watcher restarts on; it
   // loads the workspace's actual config, so editing it never touches the repo.
   // Real path: the watcher reports canonical paths (macOS tmpdir is a symlink),
   // and a config file it cannot match is a plain rerun, not a restart.
   const wrapper = join(realpathSync(host), 'fixture', 'vitest.config.mjs');
-  writeFileSync(wrapper, `export { default } from ${JSON.stringify(fileURLToPath(workspaceUrl(WORKSPACE_CONFIGS, workspace)))};\n`);
+  writeFileSync(wrapper, `export { default } from ${JSON.stringify(fileURLToPath(configUrl))};\n`);
   const cfg = args.indexOf('--config') + 1;
   args[cfg] = wrapper;
   args[args.indexOf('--root') + 1] = dirname(wrapper);

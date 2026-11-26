@@ -20,7 +20,8 @@ describe('real client runner temp lifecycle', () => {
         const body = outcome === 'failure' ? "expect(true).toBe(false);"
           : outcome === 'leak' ? "writeFileSync(join(tmpdir(), 'fixture-leak'), 'unexpected');"
             : 'expect(true).toBe(true);';
-        const { args, options } = createVitestTempFixture(host, workspace, body);
+        const clientConfig = new URL('../../vitest.config.js', import.meta.url);
+        const { args, options } = createVitestTempFixture(host, workspace, body, clientConfig);
         const result = spawnSync(process.execPath, args, options);
         expect(result.error).toBeUndefined();
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(outcome === 'success' ? 0 : 1);
@@ -54,7 +55,7 @@ describe('real client runner temp lifecycle', () => {
   it('client watch-config restart re-stamps the live owner so a later sweep keeps the root', async () => {
     const host = mkdtempSync(join(tmpdir(), 'vrt-'));
     try {
-      await runWatchConfigRestart(host, 'client', ({ first, restarted, pid }) => {
+      await runWatchConfigRestart(host, 'client', new URL('../../vitest.config.js', import.meta.url), ({ first, restarted, pid }) => {
         // The restart reused the pathname and the main process re-stamped it.
         expect(restarted.root).toBe(first.root);
         expect(restarted.owner.split(' ')[0]).toBe(String(pid));

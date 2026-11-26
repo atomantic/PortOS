@@ -9,6 +9,8 @@ vi.mock('node:child_process', () => ({ spawn: vi.fn(), spawnSync: vi.fn() }));
 import { spawn } from 'node:child_process';
 import { runFixtureToCompletion, runWatchConfigRestart } from './vitestTempRootFixture.js';
 
+const SERVER_CONFIG = new URL('../../server/vitest.config.js', import.meta.url);
+
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 describe('watch fixture process settlement', () => {
@@ -39,7 +41,7 @@ describe('watch fixture process settlement', () => {
     let inspected;
     const inspection = new Promise(resolve => { inspected = resolve; });
     let settled = false;
-    const pending = runWatchConfigRestart(host, 'server', () => { inspected(); return 'inspected'; });
+    const pending = runWatchConfigRestart(host, 'server', SERVER_CONFIG, () => { inspected(); return 'inspected'; });
     pending.then(() => { settled = true; }, () => { settled = true; });
     await inspection;
     await tick();
@@ -56,7 +58,7 @@ describe('watch fixture process settlement', () => {
   it('cancels readiness but still waits for process close before returning', async () => {
     const child = fixture({ ready: false });
     const controller = new AbortController();
-    const pending = runWatchConfigRestart(host, 'server', () => {}, { signal: controller.signal });
+    const pending = runWatchConfigRestart(host, 'server', SERVER_CONFIG, () => {}, { signal: controller.signal });
     const result = pending.catch(error => error);
     controller.abort();
     await tick();
@@ -68,7 +70,7 @@ describe('watch fixture process settlement', () => {
   it('preserves premature exit when caller cancellation arrives during settlement', async () => {
     const child = fixture({ ready: false });
     const controller = new AbortController();
-    const pending = runWatchConfigRestart(host, 'server', () => {}, { signal: controller.signal });
+    const pending = runWatchConfigRestart(host, 'server', SERVER_CONFIG, () => {}, { signal: controller.signal });
     const result = pending.catch(error => error);
     child.emit('exit', 1, null);
     await tick();
@@ -96,7 +98,7 @@ describe('watch fixture process settlement', () => {
     const child = fixture({ ready: false });
     vi.useFakeTimers();
     const controller = new AbortController();
-    const pending = runWatchConfigRestart(host, 'server', () => {}, { signal: controller.signal });
+    const pending = runWatchConfigRestart(host, 'server', SERVER_CONFIG, () => {}, { signal: controller.signal });
     const result = pending.catch(error => error);
     controller.abort();
     await vi.advanceTimersByTimeAsync(2000);

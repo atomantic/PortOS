@@ -14,7 +14,7 @@ const fixtureModule = new URL('./lib/vitestTempRootFixture.js', import.meta.url)
 function fixture(host, name, body, configSource, loader) {
   const directory = join(host, name);
   mkdirSync(directory);
-  const result = createVitestTempFixture(directory, 'server', body);
+  const result = createVitestTempFixture(directory, 'server', body, new URL('../server/vitest.config.js', import.meta.url));
   Object.assign(result.options.env, { TMPDIR: host, TMP: host, TEMP: host });
   const index = result.args.indexOf('--config') + 1;
   const config = result.args[index];

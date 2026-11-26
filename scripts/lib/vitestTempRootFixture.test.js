@@ -15,7 +15,8 @@ describe('createVitestTempFixture', () => {
   it('pins the nested workspace config pool to one worker', () => {
     const host = mkdtempSync(join(tmpdir(), 'fixture-worker-budget-'));
     try {
-      const { args, options } = createVitestTempFixture(host, 'server', '');
+      const serverConfig = new URL('../../server/vitest.config.js', import.meta.url);
+      const { args, options } = createVitestTempFixture(host, 'server', '', serverConfig);
       expect(options.env.PORTOS_PREGATE_MAX_WORKERS).toBe('1');
       expect(args).toContain('--maxWorkers');
       expect(args.at(-1)).toBe('1');
