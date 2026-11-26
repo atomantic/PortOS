@@ -265,8 +265,8 @@ const PERSON_LIST_ORDER = `CASE ring WHEN 'support' THEN 1 WHEN 'core' THEN 2 WH
        COALESCE(last_contact_on, DATE '1900-01-01') ASC,
        name ASC`;
 
-export async function listPeople(options = {}) {
-  await ensureReady();
+export async function listPeople(options = {}, { client } = {}) {
+  if (!client) await ensureReady();
   const conditions = ['deleted = FALSE'];
   const params = [];
   let idx = 1;
@@ -286,7 +286,7 @@ export async function listPeople(options = {}) {
   // No touchpoint/memory-link counts here: they cost 2N correlated subqueries
   // per list, no client view reads them, and `rowToPerson` already defaults both
   // to 0 when the column is absent. Detail views get them from getPerson() (#6024).
-  const result = await query(
+  const result = await (client ?? { query }).query(
     `SELECT *
      FROM tribe_people
      WHERE ${conditions.join(' AND ')}
