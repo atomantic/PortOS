@@ -48,7 +48,7 @@ const elapsed = (startedAt, now = Date.now()) => {
 };
 const eta = (etaMs) => (Number.isFinite(etaMs) && etaMs >= 0 ? `~${Math.ceil(etaMs / 60000)}m` : null);
 
-function JobRow({ job, onCancel }) {
+function JobRow({ job, onCancel, now }) {
   const tag = job.params?.musicStudio;
   const kind = job.kind;
   const label = tag?.title || job.params?.characterName || job.params?.prompt || `${kind} render`;
@@ -66,7 +66,7 @@ function JobRow({ job, onCancel }) {
         <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${job.status === 'running' ? 'bg-port-accent/15 text-port-accent' : 'bg-port-warning/15 text-port-warning'}`}><Icon size={14} aria-hidden="true" /></span>
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${job.status === 'running' ? 'animate-pulse bg-port-accent' : 'bg-port-warning'}`} aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate text-gray-200" title={label}>{label}</span>
-        <span className="shrink-0 font-mono text-[10px] text-gray-500">{job.status === 'queued' ? `#${job.position || '—'}` : elapsed(job.startedAt)}{eta(job.etaMs) ? ` · ${eta(job.etaMs)}` : ''}</span>
+        <span className="shrink-0 font-mono text-[10px] text-gray-500">{job.status === 'queued' ? `#${job.position || '—'}` : elapsed(job.startedAt, now)}{eta(job.etaMs) ? ` · ${eta(job.etaMs)}` : ''}</span>
         <Link to={target} title={`Open ${kind} activity`} aria-label={`Open ${kind} activity`} className="text-gray-500 opacity-70 transition-opacity hover:text-port-accent group-hover:opacity-100"><ExternalLink size={13} /></Link>
         <button type="button" onClick={() => onCancel(job.id)} title="Cancel render" aria-label={`Cancel ${label}`} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-port-warning"><X size={13} /></button>
       </div>
@@ -104,7 +104,6 @@ function ActiveProcessingWidget() {
   const imageTo3d = data?.extras?.imageTo3d || [];
   const mind = data?.mind;
   const llm = data?.llm;
-  const now = useTimeTick(1000);
   const ollama = telemetry?.ollama ?? data?.ollama;
   const appOperations = data?.appOperations || [];
   // Renders outside the media queue (music video, video timeline, Code Animation).
@@ -119,6 +118,8 @@ function ActiveProcessingWidget() {
   const confirmed = status === 'ready';
   const idle = confirmed && activity?.idle === true;
   const runningJobs = jobs.filter((job) => job.status !== 'queued').length + renders.length;
+  const hasTimedActivity = runningJobs > 0 || (llm?.runs?.length || 0) > 0 || Boolean(mind?.thinking);
+  const now = useTimeTick(1000, { enabled: visible && hasTimedActivity });
   return (
     // @container on the widget's OWN root: a dashboard cell is ~250px wide on a
     // 2560px screen, so a viewport breakpoint here would pin the four-up metric
@@ -131,7 +132,7 @@ function ActiveProcessingWidget() {
       {!confirmed && !data ? <p className="text-xs text-gray-500">Checking render lanes…</p> : !data ? <p className="text-xs text-gray-500">Activity unknown</p> : <>
         {!idle ? <div className="mb-3 grid grid-cols-2 gap-1.5 text-center @xs:grid-cols-5"><Metric icon={Bot} value={activeAgents} label="agents" /><Metric icon={Layers3} value={runningJobs} label="rendering" /><Metric icon={Cpu} value={llm?.trusted === false ? '?' : formatCount(llm?.active || 0)} label="LLM" /><Metric icon={Brain} value={mind?.thinking ? 'yes' : 'no'} label="thinking" /><Metric icon={Cpu} value={gpu?.laneBusy ? 'busy' : 'ready'} label="GPU" /></div> : null}
         {idle ? <Link to="/system-resources/overview" className="flex items-center justify-between rounded-lg border border-port-border bg-port-bg px-3 py-3 text-xs text-gray-400 transition-colors hover:border-port-accent/50 hover:text-gray-200"><span>Nothing is running</span><span>GPU {gpu?.status === 'available' ? 'ready' : gpu?.status || 'unknown'} →</span></Link> : null}
-        <div className="space-y-1.5">{jobs.map((job) => <JobRow key={job.id} job={job} onCancel={cancel} />)}</div>
+        <div className="space-y-1.5">{jobs.map((job) => <JobRow key={job.id} job={job} onCancel={cancel} now={now} />)}</div>
         {renders.map((render, index) => <LaneRow key={`render-${render.kind}-${index}`} to={render.to || '/system-resources/overview'} icon={Film} label={render.noun ? render.noun.charAt(0).toUpperCase() + render.noun.slice(1) : 'Render'} detail={elapsed(render.startedAt, now)} />)}
         {(llm?.runs || []).map((run) => <LaneRow key={`llm-${run.runId}`} to={`/cos/runs?run=${encodeURIComponent(run.runId)}`} icon={Cpu} label={`${run.providerId || 'LLM'} · ${run.model || 'default model'} · ${run.source || 'run'}`} detail={elapsed(run.startedAt, now)} />)}
         {llm?.active > (llm?.runs?.length || 0) ? <LaneRow to="/cos/runs" icon={Cpu} label="Additional LLM runs" detail={formatCount(llm.active - (llm?.runs?.length || 0))} /> : null}
@@ -144,7 +145,7 @@ function ActiveProcessingWidget() {
             to="/cos/mind"
             icon={Brain}
             label={mind.thinking ? 'Persistent Mind is thinking' : 'Persistent Mind has queued work'}
-            detail={[mind.thinking ? elapsed(mind.thinkingSince) : null, mind.queued ? `${mind.queued} queued` : null].filter(Boolean).join(' · ')}
+            detail={[mind.thinking ? elapsed(mind.thinkingSince, now) : null, mind.queued ? `${mind.queued} queued` : null].filter(Boolean).join(' · ')}
           />
         ) : null}
         {activeAgents || data.agents?.queued ? (

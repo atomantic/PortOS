@@ -266,7 +266,7 @@ export default function Review() {
             )}
             {queue && !showLegacyReviewSurface && <span className="text-sm text-port-text">{queue.partial || queueError ? 'At least ' : ''}{formatCount(queueItems.filter(item => item.required === true).length)} required</span>}
             {queueLoading && !queue && <span role="status">Loading actions…</span>}
-            {queueError && <span role="alert">Actions unavailable{queue ? ' — showing last known actions' : ''}. <button onClick={fetchQueue}>Retry</button></span>}
+            {queueError && <span role="alert">Actions unavailable{queue ? ' — showing last known actions' : ''}. <button type="button" onClick={fetchQueue} className="inline-flex items-center rounded border border-port-border px-2 py-1 text-xs text-gray-300 hover:text-white pointer-coarse:min-h-11">Retry</button></span>}
           </section>
           {!showLegacyReviewSurface && <ReviewHistoryDisclosure briefing={briefing} counts={counts} showBriefing={false} />}
 

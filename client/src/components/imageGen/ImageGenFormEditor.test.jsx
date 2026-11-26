@@ -64,6 +64,12 @@ function renderEditor({
 }
 
 describe('ImageGenFormEditor submit guard', () => {
+  it('names the batch size control and hides its multiplication glyph', () => {
+    renderEditor({ derived: { isAsyncMode: true } });
+    expect(screen.getByRole('spinbutton', { name: 'Batch size' })).toBeInTheDocument();
+    expect(screen.getByText('×', { selector: 'span[aria-hidden="true"]' })).toBeInTheDocument();
+  });
+
   it('allows a ready render and can queue more while generating', () => {
     renderEditor({ generation: { generating: true } });
     expect(screen.getByRole('button', { name: 'Queue' })).toBeEnabled();

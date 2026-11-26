@@ -307,7 +307,7 @@ export default function ReviewerPicker({
     if (modelOptions?.providerDisabled?.[token]) {
       return {
         label: 'disabled',
-        title: `${labelFor(token)}'s provider records are all switched off in Settings → AI Providers, so this machine isn't set up to use it. Adding it still works — the review loop spawns its CLI directly, and a federated peer may have it enabled.`
+        title: `${labelFor(token)}'s provider records are all switched off in Models → Providers, so this machine isn't set up to use it. Adding it still works — the review loop spawns its CLI directly, and a federated peer may have it enabled.`
       };
     }
     return null;

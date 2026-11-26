@@ -46,7 +46,7 @@ const PR_REVIEWER_REASON_LABELS = {
   'target-pull-request-not-reviewable': "that pull request isn't eligible right now (not open against the default branch, or authored by a trusted collaborator)",
   'security-scan-report-pending': 'a security scan for this pull request is already in progress',
   'security-guard-process-failed': 'Prompt Guard stopped before an agent started. Open Models → LLMs → Abuse Guard to check or repair setup, then retry Untrusted:Review. The failure record is in CoS → Tasks',
-  'security-guard-not-ready': "the local model-abuse classifier (Settings → Models → LLMs → Abuse Guard) isn't ready — finish or repair its setup, then try again",
+  'security-guard-not-ready': "the local model-abuse classifier (Models → Abuse Guard) isn't ready — finish or repair its setup, then try again",
 };
 
 // Maintenance also records ordinary queue waits in `reason`. Only these exact

@@ -229,7 +229,7 @@ export default function BriefingTab() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <Newspaper className="w-5 h-5 text-port-accent" />
-          <h3 className="text-lg font-semibold text-white">Daily Briefing</h3>
+          <h2 className="text-lg font-semibold text-white">Daily Briefing</h2>
           {briefings.length > 0 && (
             <select
               aria-label="Date"

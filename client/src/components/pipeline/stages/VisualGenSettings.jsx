@@ -145,7 +145,7 @@ function VisualGenSettingsBody({ cfg, update, stageLabel, systemSettings, settin
         </div>
         {providersLoaded && providers.length === 0 ? (
           <p className="text-[10px] text-gray-600 italic">
-            No enabled providers — add one in Settings → AI Providers.
+            No enabled providers — add one in Models → Providers.
           </p>
         ) : (
           <>

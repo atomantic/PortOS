@@ -484,7 +484,7 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
     <div className="mx-auto max-w-6xl space-y-7 pb-6">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h3 className="text-lg font-semibold text-port-text">Chief of Staff settings</h3>
+          <h2 className="text-lg font-semibold text-port-text">Chief of Staff settings</h2>
           <p className="mt-1 max-w-2xl text-sm text-port-text-muted">
             Configure capacity, automatic work, the persistent mind, and supporting services. Domain guardrails are the authoritative autonomy controls.
           </p>

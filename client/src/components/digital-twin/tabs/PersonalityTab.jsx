@@ -400,7 +400,7 @@ export default function PersonalityTab() {
             <ListLoadError what="AI providers" error={providersResource.error} onRetry={providersResource.retry} />
           )}
           {providersResource.state === 'ready' && providers.length === 0 && (
-            <p className="text-sm text-gray-500">No enabled AI providers. Configure one in Settings → AI Providers.</p>
+            <p className="text-sm text-gray-500">No enabled AI providers. Configure one in Models → Providers.</p>
           )}
           {providers.map((provider) => (
             <div key={provider.id} className="space-y-2">

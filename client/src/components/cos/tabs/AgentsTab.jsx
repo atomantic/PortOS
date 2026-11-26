@@ -295,7 +295,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
       {/* Active Agents */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-lg font-semibold text-white">Active Agents</h3>
+          <h2 className="text-lg font-semibold text-white">Active Agents</h2>
           {runningAgents.length > 0 && (
             <span className="text-sm text-port-accent animate-pulse">
               {runningAgents.length} running

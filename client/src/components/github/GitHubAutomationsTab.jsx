@@ -30,7 +30,7 @@ function modeHint(account) {
   if (account.mode === 'observe') return 'Records a decision for each notification and marks closed, merged or folded threads done; changes nothing else on GitHub.';
   const where = account.trust === 'private'
     ? 'Text goes only to local AI providers unless you allow others in Accounts.'
-    : 'Text goes to the GitHub notifications provider in Models › LLMs › Abuse Guard.';
+    : 'Text goes to the GitHub notifications provider in Models › Abuse Guard.';
   const assist = `Screens and sorts notifications no rule decided, marks CI noise and closed threads done. Never acts on outside or suspect threads. ${where}`;
   if (account.mode !== 'autopilot') return assist;
   const handoff = account.trust === 'private' && !account.allowAgents

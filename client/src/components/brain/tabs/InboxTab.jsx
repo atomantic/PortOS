@@ -575,16 +575,18 @@ export default function InboxTab({ onRefresh, settings }) {
         {needsReviewEntries.length > 0 ? (
           <div>
             <button
+              type="button"
               onClick={() => setShowNeedsReview(!showNeedsReview)}
-              className="flex items-center gap-2 text-port-warning font-medium mb-2"
+              className="flex items-center gap-2 text-port-warning font-medium mb-2 pointer-coarse:min-h-11"
+              aria-expanded={showNeedsReview}
+              aria-controls="brain-inbox-needs-review"
             >
               {showNeedsReview ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
               <AlertCircle size={16} />
               Needs Review ({serverCounts?.needs_review ?? needsReviewEntries.length})
             </button>
 
-            {showNeedsReview && (
-              <div className="space-y-2">
+            <div id="brain-inbox-needs-review" hidden={!showNeedsReview} className="space-y-2">
                 {needsReviewEntries.map(entry => (
                   <div
                     key={entry.id}
@@ -709,8 +711,7 @@ export default function InboxTab({ onRefresh, settings }) {
                     )}
                   </div>
                 ))}
-              </div>
-            )}
+            </div>
           </div>
         ) : (
           <div className="hidden @5xl/inbox:flex items-center gap-2 p-3 bg-port-card border border-port-border rounded-lg text-sm text-gray-500">
@@ -843,16 +844,18 @@ export default function InboxTab({ onRefresh, settings }) {
         {/* Filed entries */}
         <div>
           <button
+            type="button"
             onClick={() => setShowFiled(!showFiled)}
             className="inline-flex items-center gap-2 text-port-success font-medium mb-2 pointer-coarse:min-h-11"
+            aria-expanded={showFiled}
+            aria-controls="brain-inbox-filed"
           >
             {showFiled ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
             <CheckCircle size={16} />
             Filed ({filedEntries.length})
           </button>
 
-          {showFiled && (
-            <div className="space-y-2">
+          <div id="brain-inbox-filed" hidden={!showFiled} className="space-y-2">
               {filedEntries.map(entry => {
                 const destInfo = destinationInfo(entry);
                 const DestIcon = destInfo.icon;
@@ -1000,24 +1003,25 @@ export default function InboxTab({ onRefresh, settings }) {
               {filedEntries.length === 0 && (
                 <p className="text-gray-500 text-sm">{paged.loaded ? 'No filed entries yet. Start capturing thoughts above.' : 'Inbox history is not available yet. You can capture thoughts above.'}</p>
               )}
-            </div>
-          )}
+          </div>
         </div>
 
         {/* Done entries */}
         {doneEntries.length > 0 && (
           <div className="mt-4">
             <button
+              type="button"
               onClick={() => setShowDone(!showDone)}
               className="inline-flex items-center gap-2 text-gray-400 font-medium mb-2 pointer-coarse:min-h-11"
+              aria-expanded={showDone}
+              aria-controls="brain-inbox-done"
             >
               {showDone ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
               <CheckCheck size={16} />
               Done ({doneEntries.length})
             </button>
 
-            {showDone && (
-              <div className="space-y-2">
+            <div id="brain-inbox-done" hidden={!showDone} className="space-y-2">
                 {doneEntries.map(entry => {
                   const destInfo = destinationInfo(entry);
                   const DestIcon = destInfo.icon;
@@ -1080,8 +1084,7 @@ export default function InboxTab({ onRefresh, settings }) {
                     </div>
                   );
                 })}
-              </div>
-            )}
+            </div>
           </div>
         )}
 

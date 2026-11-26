@@ -47,6 +47,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.eidoverse.solo', path: '/eidoverse/solo', label: 'Eidoverse World Only', section: 'Main', feature: 'eidoverse' },
   { id: 'nav.eidoverse', path: '/eidoverse', label: 'Eidoverse', section: 'Main', feature: 'eidoverse', previousPaths: ['/openworld', '/openworld/*', '/city', '/city/*'], preservePreviousPathSuffix: false },
   { id: 'nav.apps', path: '/apps', label: 'Apps', section: 'Main' },
+  { id: 'nav.apps.create', path: '/apps/create', label: 'Create App', section: 'Main', parentPath: '/apps' },
   // Submodules are per-app (a tab on the app detail page), so this entry is
   // explicitly PortOS's own — the only repo whose app id is a fixed constant.
   // Every other app reaches its tab from /apps/<id>/submodules.
@@ -80,6 +81,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.create.code-animation.production', path: '/code-animation/production', label: 'Code Animation Production', section: 'Create' },
   { id: 'nav.create.creative-director', path: '/creative-director', label: 'Creative Director', section: 'Create', parentPath: '/create/media', previousPaths: ['/video', '/video/:id', '/video/:id/:tab', '/video/:id/:tab/:sceneId', '/media/creative-director', '/media/creative-director/:id', '/media/creative-director/:id/:tab', '/media/creative-director/:id/:tab/:sceneId'] },
   { id: 'nav.create.creative-commission', path: '/creative-commission', label: 'Creative Commissions', section: 'Create', parentPath: '/create/media' },
+  { id: 'nav.create.creative-commission.new', path: '/creative-commission/new', label: 'New Creative Commission', section: 'Create' },
   { id: 'nav.create.fableloom', path: '/fableloom', label: 'FableLoom', section: 'Create', parentPath: '/create/story' },
   { id: 'nav.create.game', path: '/game', label: 'Game', section: 'Create' },
   { id: 'nav.create.music-video', path: '/music-video', label: 'Music Video', section: 'Create', parentPath: '/create/media', previousPaths: ['/media/music-video', '/media/music-video/:projectId', '/media/music-video/*'] },
@@ -105,6 +107,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.create.authors', path: '/authors', label: 'Authors', section: 'Create' },
   { id: 'nav.create.voice-studio', path: '/voices', label: 'Voice Studio', section: 'Create' },
   { id: 'nav.create.universe-builder', path: '/universes', label: 'Universes', section: 'Create', previousPaths: ['/media/universe-builder', '/media/universe-builder/:universeId', '/universe-builder', '/universe-builder/:universeId'] },
+  { id: 'nav.create.universe-builder.new', path: '/universes/new', label: 'New Universe', section: 'Create' },
   { id: 'nav.create.importer', path: '/importer', label: 'Importer', section: 'Create', parentPath: '/create/story' },
   { id: 'nav.create.pipeline', path: '/pipeline', label: 'Series Pipeline', section: 'Create', parentPath: '/create/story' },
   { id: 'nav.create.pipeline.editorial-checks', path: '/pipeline/editorial-checks', label: 'Editorial Checks', section: 'Create', parentPath: '/create/story' },
@@ -139,8 +142,10 @@ const RAW_NAV_COMMANDS = [
   // own URL so a card can be linked and reached from ⌘K and voice; the retired
   // Backend Connections drawer (#6369) redirects onto Services.
   { id: 'nav.settings.providers', path: PROVIDERS_PAGE_PATH, label: 'Providers', section: 'Models', tabId: 'providers', navGroup: 'Connect', previousPaths: ['/ai'] },
+  { id: 'nav.settings.providers.new', path: '/ai/presets/new', label: 'New Provider Preset', section: 'Models' },
   { id: 'nav.ai.harnesses', path: '/ai/harnesses', label: 'Harnesses', section: 'Models', tabId: 'harnesses', navGroup: 'Connect', previousPaths: ['/models/harnesses'] },
   { id: 'nav.ai.services', path: '/ai/services', label: 'AI Services', section: 'Models', tabId: 'services', navGroup: 'Connect', previousPaths: ['/ai/connections', '/ai/connections/:connectionId'] },
+  { id: 'nav.ai.services.new', path: '/ai/services/new', label: 'New AI Service', section: 'Models' },
   { id: 'nav.settings.fleet-llm', path: '/ai/fleet', label: 'Fleet LLM Setup', section: 'Settings' },
 
   { id: 'nav.brain.inbox', path: '/brain/inbox', label: 'Inbox', section: 'Brain', tabGroup: 'brain', tabId: 'inbox' },
@@ -166,6 +171,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.rapid-reader', path: '/rapid-reader', label: 'Rapid Reader', section: 'Brain' },
   // No 'songs'/'song' aliases — those already resolve to nav.create.rounds (first-declared wins).
   { id: 'nav.brain.songbook', path: '/songbook', label: 'SongBook', section: 'Brain' },
+  { id: 'nav.brain.songbook.import', path: '/songbook/import', label: 'Import SongBook', section: 'Brain' },
 
   { id: 'nav.calendar.agenda', path: '/calendar/agenda', label: 'Agenda', section: 'Calendar', tabGroup: 'calendar', tabId: 'agenda' },
   { id: 'nav.calendar.day', path: '/calendar/day', label: 'Day', section: 'Calendar', tabGroup: 'calendar', tabId: 'day' },
@@ -193,6 +199,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.cos.health', path: '/cos/health', label: 'Health', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'health' },
   { id: 'nav.cos.config', path: '/cos/config', label: 'Config', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'config' },
   { id: 'nav.feature-agents', path: '/feature-agents', label: 'Feature Agents', section: 'Chief of Staff' },
+  { id: 'nav.feature-agents.create', path: '/feature-agents/create', label: 'Create Feature Agent', section: 'Chief of Staff' },
   { id: 'nav.cos.mind-tools', path: '/cos/mind?panel=tools', label: 'Mind Tools', section: 'Chief of Staff', previousPaths: ['/cos/tools', '/cos/mind/tools'] },
   { id: 'nav.social-agents', path: '/agents', label: 'Social Agents', section: 'Chief of Staff' },
 

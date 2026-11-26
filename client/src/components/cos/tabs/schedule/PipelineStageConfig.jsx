@@ -216,7 +216,7 @@ export default function PipelineStageConfig({ taskType, config, providers, provi
                   <p className="mt-1">Server-side checks on each external PR&apos;s complete title, description, and diff for content a human reviewer would miss — invisible or direction-control Unicode, comments GitHub never renders that address a model — and for obvious model-directed harm: instruction overrides, decode-and-follow or download-and-run instructions, credential exfiltration, and attempts to steer the review verdict. No model, tools, repository checkout, or GitHub credentials are involved.</p>
                   <p className="mt-1 text-gray-500">
                     The pinned Llama Prompt Guard 2 classifier is required by default. Install and configure it on{' '}
-                    <Link to="/models/llms/abuse" className="underline hover:text-port-accent">Models → LLMs → Abuse Guard</Link>.
+                    <Link to="/models/abuse" className="underline hover:text-port-accent">Models → Abuse Guard</Link>.
                   </p>
                 </div>
               )}

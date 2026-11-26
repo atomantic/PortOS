@@ -226,7 +226,7 @@ export default function JobsTab() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold text-white">System Tasks</h3>
+          <h2 className="text-lg font-semibold text-white">System Tasks</h2>
           <p className="text-sm text-gray-500 mt-1">
             Recurring system-level jobs — AI agents and shell commands
           </p>
