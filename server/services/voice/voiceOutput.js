@@ -6,11 +6,13 @@
 // follows focus (the client emits `voice:output:claim`); on the primary's disconnect
 // it is promoted to the most recently focused tab.
 //
-// Only announcing sockets are eligible: a federated peer's relay client never
-// announces, so it can't be elected and swallow audio. A PRE-UPGRADE client bundle
-// also never announces; the `emitVoiceOutput` fallback covers that.
+// Announcing sockets are eligible for election. A pre-upgrade client bundle
+// never announces, so it uses the authorized fallback in `emitVoiceOutput`.
 //
 // In-memory and re-entrancy-free; no locking (see AGENTS.md trust model).
+
+import { socketHasCurrentHostControl } from '../authGate.js';
+import { PEER_SOCKET_ROOM } from '../socketIo.js';
 
 // Announced candidate sockets; iteration (connection) order is only the tiebreak when none has claimed.
 const candidates = new Set();
@@ -31,12 +33,13 @@ const forget = (socket) => {
 
 // Pick the promotion successor: the live candidate with the most recent claim, or
 // the latest-connected live one when none has claimed. Prunes dead candidates.
-const pickSuccessor = () => {
+const pickSuccessor = (isEligible = isLive) => {
   let latest = null;         // connection-order fallback
   let bestClaimed = null;
   let bestSeq = -1;
   for (const s of candidates) {
     if (!isLive(s)) { forget(s); continue; }
+    if (!isEligible(s)) continue;
     latest = s;
     const seq = claimSeq.get(s) ?? -1;
     if (seq > bestSeq) { bestSeq = seq; bestClaimed = s; }
@@ -101,35 +104,41 @@ export const releaseVoiceOutput = (socket) => {
 // The current proactive-output recipient, or null when no candidate tab is
 // registered. Lazily promotes when there is no primary (or it went stale) and
 // notifies the elected tab so its indicator doesn't read "muted" while playing.
-export const getVoiceOutputSocket = () => {
-  if (isLive(primary) && candidates.has(primary)) return primary;
-  primary = pickSuccessor();
+export const getVoiceOutputSocket = (isEligible = isLive) => {
+  if (isLive(primary) && candidates.has(primary) && isEligible(primary)) return primary;
+  primary = pickSuccessor(isEligible);
   if (primary) primary.emit('voice:output:primary', { primary: true });
   return primary;
 };
 
-// Route one voice-output event to the single designated recipient.
-//
-// Falls back to `io.emit` ONLY when no announced candidate exists. In normal
-// operation every current-bundle tab announces, so this broadcast is never taken.
-// It exists for a PRE-UPGRADE tab (server updated, tab not reloaded) that speaks
-// the same `voice:speak` event but never announces; it also harmlessly reaches
-// peer-relay sockets, which ignore `voice:speak`.
-//
-// Accepted limitation: if a pre-upgrade tab coexists with a current tab, the
-// current tab wins and the old one is excluded until it reloads. Dual-protocol
-// routing is not worth carrying for a brief upgrade window.
-export const emitVoiceOutput = (io, event, payload) => {
-  const target = getVoiceOutputSocket();
+// Check authority after synthesis, including for tabs whose registration predated
+// session expiry. The peer room also marks relays on password-free installs.
+export const emitVoiceOutput = async (io, event, payload) => {
+  const eligible = new Set();
+  const sockets = io?.sockets?.sockets;
+  if (sockets) {
+    await Promise.all(Array.from(sockets.values(), async (socket) => {
+      if (!socket.rooms.has(PEER_SOCKET_ROOM) && await socketHasCurrentHostControl(socket)) {
+        eligible.add(socket);
+      }
+    }));
+  }
+
+  const target = getVoiceOutputSocket((socket) => eligible.has(socket));
   if (target) {
     target.emit(event, payload);
     return { delivered: true, socketId: target.id ?? null };
   }
-  if (io) {
-    io.emit(event, payload);
-    return { delivered: true, broadcast: true };
+
+  // Older clients play voice:speak without announcing. Limit this fallback to
+  // authorized, still-connected sockets in the default namespace.
+  let fallbackCount = 0;
+  for (const socket of eligible) {
+    if (!isLive(socket)) continue;
+    socket.emit(event, payload);
+    fallbackCount++;
   }
-  return { delivered: false };
+  return fallbackCount ? { delivered: true, fallbackCount } : { delivered: false };
 };
 
 // Test helper — reset module state between cases.

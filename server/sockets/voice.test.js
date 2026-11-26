@@ -61,6 +61,7 @@ const { transcribe } = await import('../services/voice/stt.js');
 const { synthesize } = await import('../services/voice/tts.js');
 const { runTurn } = await import('../services/voice/pipeline.js');
 const { isAuthEnabled, verifyRequestSession } = await import('../services/auth.js');
+const { PEER_SOCKET_ROOM } = await import('../services/socketIo.js');
 const { getVoiceConfig } = await import('../services/voice/config.js');
 const {
   attachHost: attachCallHost,
@@ -319,6 +320,16 @@ describe('voice:text turn recovery', () => {
 
 describe('voice:output single-recipient wiring', () => {
   const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const makeIo = (...sockets) => ({
+    emit: vi.fn(),
+    sockets: {
+      sockets: new Map(sockets.map((socket, index) => {
+        Object.assign(socket, { id: String(index), data: { portosLocalConnection: true } });
+        socket.rooms ??= new Set();
+        return [socket.id, socket];
+      })),
+    },
+  });
   beforeEach(() => __resetVoiceOutput());
 
   it('registers a candidate only after the tab announces voice:output:available', () => {
@@ -334,15 +345,17 @@ describe('voice:output single-recipient wiring', () => {
     expect(getVoiceOutputSocket()).toBe(socket);
   });
 
-  it('a connection that never announces is never elected primary', () => {
-    const relay = makeFakeSocket(); // stands in for a peer-relay Socket.IO client
+  it('a relay that never announces receives no output belonging to the primary', async () => {
+    const relay = makeFakeSocket();
+    relay.rooms = new Set([PEER_SOCKET_ROOM]);
     const tab = makeFakeSocket();
     registerVoiceHandlers(relay);
     registerVoiceHandlers(tab);
     tab.fire('voice:output:available');
     // Even though the relay connected, output routes to the real tab.
-    const io = { emit: () => { throw new Error('must not broadcast'); } };
-    emitVoiceOutput(io, 'voice:speak', { sentence: 'ping' });
+    const io = makeIo(relay, tab);
+    await emitVoiceOutput(io, 'voice:speak', { sentence: 'ping' });
+    expect(io.emit).not.toHaveBeenCalled();
     expect(relay.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(0);
     expect(tab.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(1);
   });
@@ -358,8 +371,9 @@ describe('voice:output single-recipient wiring', () => {
     b.fire('voice:output:claim');
     await flush();
 
-    const io = { emit: () => { throw new Error('must not broadcast'); } };
-    emitVoiceOutput(io, 'voice:speak', { sentence: 'ping' });
+    const io = makeIo(a, b);
+    await emitVoiceOutput(io, 'voice:speak', { sentence: 'ping' });
+    expect(io.emit).not.toHaveBeenCalled();
     expect(a.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(0);
     expect(b.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(1);
   });
