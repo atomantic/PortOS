@@ -3,6 +3,13 @@
 PortOS uses a test-impact-aware CI workflow plus a release workflow that cannot
 publish until the complete CI suite has passed on the exact tree being released.
 
+## Related CI references
+
+- [Local pregate](PREGATE.md) covers pre-push checks, receipts, and process cleanup.
+- [Test selection and sizing](CI_TEST_SELECTION.md) covers impact planning, runner budgets, and install reuse.
+- [Windows and macOS native jobs](CI_NATIVE_JOBS.md) covers platform contracts and cancellation recovery.
+- [Hidden-content gate](CI_HIDDEN_CONTENT_GATE.md) covers required repository scans.
+
 ## Release Dependabot CI after review
 
 Dependabot pull requests start with a small checkout/admission check only.
@@ -51,7 +58,7 @@ tree, so `main` is also tested after the merge:
 | Scheduled 09:17 and 21:17 UTC | Full suite — catches what no commit caused (dependency or runner changes) |
 | `workflow_dispatch` | Full suite |
 
-A release therefore pays for one full run (on its PR), not three.
+A release runs the full suite on its PR. [Generated snapshot pushes](#ci-for-generated-snapshot-pushes) can skip the test matrix on `main`.
 
 ## Branch Strategy
 
@@ -104,8 +111,6 @@ inputs against the action's metadata while it lints `ci.yml`;
 action files, and any change under `.github/actions/` makes the impact plan
 full, Windows included.
 
-The hidden-content gate moved to [CI_HIDDEN_CONTENT_GATE.md](CI_HIDDEN_CONTENT_GATE.md).
-
 ### The bundled `lib/slashdo` submodule
 
 `server/lib/slashdoLoader.test.js` and `server/lib/slashdoInvocation.test.js`
@@ -122,15 +127,6 @@ nothing for the fetch. When the key is true, the two contract suites fail
 the job instead of silently skipping if the submodule still isn't there
 (`CI_EXPECT_SLASHDO_SUBMODULE`); outside that signal — a local checkout, or a
 CI run that never needed it — they keep the documented skip.
-
-### Local equivalent: `npm run pregate`
-
-`scripts/pregate.js` runs the same planner as CI over the committed, uncommitted
-and untracked diff and hands its plan to the same runners. What it selects, its
-`--full` plan and receipt, interrupt and Windows behavior, and test process
-containment: [PREGATE.md](PREGATE.md).
-
-Test selection, runner tuning and install reuse details moved to [CI_TEST_SELECTION.md](CI_TEST_SELECTION.md).
 
 ### Required checks
 
@@ -255,12 +251,6 @@ The selected work is split across parallel jobs:
   Ordinary PR smoke runs cannot publish it, and neither can any run whose plan is not full. It mirrors `CI Gate`'s result. This is the check the release workflow
   looks for; see "Reusing the release PR's CI run" below.
 
-Test selection, runner tuning and install reuse details moved to [CI_TEST_SELECTION.md](CI_TEST_SELECTION.md).
-
-Windows and macOS native job details moved to [CI_NATIVE_JOBS.md](CI_NATIVE_JOBS.md).
-
-Test selection, runner tuning and install reuse details moved to [CI_TEST_SELECTION.md](CI_TEST_SELECTION.md).
-
 ### Full CI
 
 The complete server, client, DB, lint, build, and smoke suite runs:
@@ -278,7 +268,20 @@ The complete server, client, DB, lint, build, and smoke suite runs:
 - from manual workflow dispatch;
 - as a reusable workflow called by a release whose tree has no verifiable gate.
 
-Windows and macOS native job details moved to [CI_NATIVE_JOBS.md](CI_NATIVE_JOBS.md).
+### CI for generated snapshot pushes
+
+The quality snapshot (`.quality.json`) merges in its own PR. When the newest
+green run is exactly the push's first parent (`CI_PREDECESSOR_GREEN_SHA` from
+`scripts/ci-base-sha.js`) and the complete two-tree diff contains only
+generated-data paths, the planner runs the impact job and `CI Gate`, skips
+the test jobs, and names the first parent in the plan reason. The diff uses
+`--no-renames` so any rename into another path is visible. A missing or
+non-parent green run, an empty or unreadable diff, or any other changed path
+keeps the full plan.
+
+The generated-data plan is `native_gated` and publishes no `Full CI Gate`.
+Main health requires a complete run with successful `Server tests` jobs to
+close a "main is red" issue.
 
 ### Failures do not cancel other jobs
 
@@ -303,10 +306,6 @@ only `success` or `skipped` per job; `scripts/verify-ci-status.js` accepts a
 `Full CI Gate` only at `success`; and PortOS's auto-merge watcher
 (`server/services/prWatcher.js`) counts only `SUCCESS`/`NEUTRAL`/`SKIPPED` as
 green.
-
-Windows and macOS native job details moved to [CI_NATIVE_JOBS.md](CI_NATIVE_JOBS.md).
-
-Test selection, runner tuning and install reuse details moved to [CI_TEST_SELECTION.md](CI_TEST_SELECTION.md).
 
 ## Runtime image security (`runtime-image-security.yml`)
 
