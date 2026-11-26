@@ -60,7 +60,7 @@ describe('scheduled task prompt catalog', () => {
       expect(push, forge).toBeGreaterThan(validation);
       expect(prompt).toContain('npm run pregate && git push origin claim/issue-${NUM}');
       expect(prompt).toContain('On failure or changed HEAD, rerun');
-      expect(prompt).toContain('Other repos follow own docs');
+      expect(prompt).toContain('Other repos follow docs');
     }
   });
 });
