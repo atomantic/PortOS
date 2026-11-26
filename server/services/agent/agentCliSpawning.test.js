@@ -1517,6 +1517,26 @@ describe('stream error containment', () => {
     }));
   });
 
+  it.each([
+    ['downgraded success', { success: false }, false, false],
+    ['proven empty branch', { success: true, branchProvenEmpty: true }, true, true],
+  ])('hands the finalize verdict to cleanup for %s', async (_case, verdict, success, branchProvenEmpty) => {
+    const { finalizeAgent } = await import('./agentFinalization.js');
+    finalizeAgent.mockClear();
+    finalizeAgent.mockResolvedValueOnce(verdict);
+
+    const spawnPromise = spawnDirectly(minimalArgs);
+    await vi.waitFor(() => expect(fakeProcess.listenerCount('close')).toBeGreaterThan(0), { interval: 5 });
+    fakeProcess.emit('close', 0);
+    await spawnPromise;
+    await vi.waitFor(() => expect(runSpawnerCompletionCleanup).toHaveBeenCalledOnce(), { interval: 5 });
+
+    expect(finalizeAgent).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ success: true }));
+    expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: minimalArgs.agentId, success, branchProvenEmpty,
+    }));
+  });
+
   // The dispatch releases the retry hold with this verdict (#3368 — its ordering
   // after worktree cleanup is pinned in agentCompletionCleanup.test.js). What
   // this pins is that the close handler hands it the REAL verdict: a hardcoded

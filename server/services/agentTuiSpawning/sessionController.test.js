@@ -191,6 +191,23 @@ describe('TUI session controller — teardown owns its own machinery (#8021)', (
     expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining(`${label} drain failed`), { agentId: 'agent-8021' });
   });
 
+  it.each([
+    ['proven empty branch', { success: true, branchProvenEmpty: true }, true, true],
+    ['no proof of an empty branch', { success: true }, true, false],
+    ['downgraded success', { success: false }, false, false],
+  ])('passes the finalize verdict to cleanup for %s', async (_case, verdict, success, branchProvenEmpty) => {
+    const { controller, finalizeAgent, runCompletionCleanup } = makeController();
+    finalizeAgent.mockResolvedValueOnce(verdict);
+
+    controller.attachSession({ sessionId: 'session-abcdef12', pid: 4242 });
+    await controller.handleExit({ exitCode: 0, killed: false });
+
+    expect(finalizeAgent).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ success: true }));
+    expect(runCompletionCleanup).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      agentId: 'agent-8021', success, branchProvenEmpty,
+    }));
+  });
+
   it('holds error analysis and completion until the raw PTY spool drain settles', async () => {
     let releaseDrain;
     const drainRaw = vi.fn(() => new Promise((resolve) => { releaseDrain = resolve; }));
