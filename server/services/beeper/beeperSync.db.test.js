@@ -632,7 +632,10 @@ describe.skipIf(!runDb)('beeperSync against Postgres', () => {
          RETURNING id`,
         [OTHER_ACCOUNT_ID, `${OTHER_ACCOUNT_ID}-chat-0`],
       );
-      const otherMsgIds = Array.from({ length: 10 }, (_, j) => `${OTHER_ACCOUNT_ID}-m${j}`);
+      // Place unrelated IDs before each target chat's messages, inside the batch bounds.
+      // An ID-only scan would walk those rows before finding each chat's first match.
+      const otherMsgIds = Array.from({ length: 512 }, (_, j) =>
+        `${explainAccount}-c${j % targetConvs.length}-distractor-${j}`);
       await query(
         `INSERT INTO beeper_messages (id, conversation_id, body)
          SELECT id, $2, 'Other body' FROM unnest($1::text[]) AS id`,
@@ -688,7 +691,8 @@ describe.skipIf(!runDb)('beeperSync against Postgres', () => {
       expect(batchPlan).not.toMatch(/Seq Scan/);
       const batchIndexLine = batchPlan.split('\n').find((line) => line.includes('idx_beeper_messages_conversation_id'));
       expect(batchIndexLine).toMatch(/actual rows=4 loops=2\b/);
-      // No inner sort in the LATERAL probe, and the outer limit bounds rows to <= targetConvs * limit (8), never full history.
+      // Only the outer ordering needs a sort. Each inner limit contributes four rows.
+      expect(batchPlan.match(/^\s*->\s+Sort\s/gm)).toHaveLength(1);
       expect(batchPlan).toMatch(/Nested Loop.*actual rows=8 loops=1/);
 
       const { rows: selected } = await query(batchSql, [explainAccount, '', 4, upperBound]);
