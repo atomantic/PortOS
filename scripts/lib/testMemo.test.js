@@ -2229,6 +2229,23 @@ describe('data-only JS files and bounded dynamic imports (#16902)', () => {
     expect(mocked.floor.memoizable).toBe(false);
   });
 
+  it('walks a recorded mock entry again when native code loads its real implementation', () => {
+    const test = 'server/lib/a.test.js';
+    const entry = 'scripts/entry.js';
+    const reader = 'scripts/reader.js';
+    const files = {
+      ...BASE,
+      [test]: "vi.mock('node:fs', () => ({}));\nvi.mock('../../scripts/entry.js', () => ({}));\nrequire('../../scripts/entry.js');",
+      [entry]: "export * from './reader.js';",
+      [reader]: "import { readdirSync, readFileSync } from 'node:fs';\nfor (const file of readdirSync(join(__dirname, 'fixtures'))) readFileSync(join(__dirname, 'fixtures', file));",
+      'scripts/fixtures/example.txt': 'example',
+    };
+    const records = new Map([[test, [test, entry]]]);
+    expect(keyOf(files, test, { records }).recorded).toMatchObject({
+      memoizable: false, reasons: expect.arrayContaining([`${reader}: relies on a directory listing, which ${test} mocks`]),
+    });
+  });
+
   it('resolves migration runner dynamic imports using default parameters and scanners while ignoring migration tests', () => {
     const files = {
       ...BASE,

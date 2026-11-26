@@ -756,16 +756,22 @@ function gather(a, roots, { walk, testRel = null, stop = null, followMockOnly = 
   // in full even when the roots are a recorded set.
   const stack = [...roots].map((rel) => ({ rel, walkEdges: walk, configEdge: false }));
   const visited = new Map();
+  const walked = new Map();
   while (stack.length) {
     const { rel, walkEdges, configEdge: fromConfig } = stack.pop();
     if (stop?.has(rel)) continue;
     const configEdge = fromConfig || NESTED_VITEST_CONFIGS.has(rel);
     const context = configEdge ? 2 : 1;
+    const f = factsFor(a, rel);
+    // A recorded entry can also be required or spawned outside Vitest. That
+    // later visit must walk its imports even if its own facts were folded.
+    if (walkEdges && !((walked.get(rel) ?? 0) & context)) {
+      walked.set(rel, (walked.get(rel) ?? 0) | context);
+      for (const dep of f.modules) if (followMockOnly || !f.mockOnly.has(dep)) stack.push({ rel: dep, walkEdges: true, configEdge });
+    }
     if ((visited.get(rel) ?? 0) & context) continue;
     visited.set(rel, (visited.get(rel) ?? 0) | context);
     g.members.add(rel);
-    const f = factsFor(a, rel);
-    if (walkEdges) for (const dep of f.modules) if (followMockOnly || !f.mockOnly.has(dep)) stack.push({ rel: dep, walkEdges: true, configEdge });
     for (const side of f.sideModules) {
       if (f.dataModules.has(side) && f.unresolvedEdges.length === 0) g.inputs.add(side);
       else stack.push({ rel: side, walkEdges: true, configEdge });
@@ -867,9 +873,11 @@ function gitReason({ gitFixture, gitRefusal, gitMember }) {
 function collectRunningMocks(a, g, roots, { walk, stop }) {
   const running = [...roots].map((rel) => ({ rel, walkEdges: walk }));
   const ran = new Set();
+  const walked = new Set();
   while ((g.trusting.length || g.namedTrusts.length) && running.length) {
     const { rel, walkEdges } = running.pop();
-    if (ran.has(rel) || stop?.has(rel)) continue;
+    if (stop?.has(rel) || (ran.has(rel) && (!walkEdges || walked.has(rel)))) continue;
+    if (walkEdges) walked.add(rel);
     ran.add(rel);
     const f = factsFor(a, rel);
     for (const target of f.mocked) g.mocked.add(target);
