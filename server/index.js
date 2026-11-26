@@ -220,7 +220,6 @@ const importerRoutes = createLazyRouter(() => import('./routes/importer.js'));
 const storyBuilderRoutes = createLazyRouter(() => import('./routes/storyBuilder.js'));
 const imageVideoModelsRoutes = createLazyRouter(() => import('./routes/imageVideoModels.js'));
 const lorasRoutes = createLazyRouter(() => import('./routes/loras.js'));
-const loraTrainingRoutes = createLazyRouter(() => import('./routes/loraTraining.js'));
 const sdapiRoutes = createLazyRouter(() => import('./routes/sdapi.js'));
 const midiRuntimeRoutes = createLazyRouter(() => import('./routes/midiRuntime.js'));
 
@@ -528,7 +527,6 @@ app.use('/api/story-builder', storyBuilderRoutes);
 app.use('/api/image-video/models', imageVideoModelsRoutes);
 app.use('/api/loras', lorasRoutes);
 app.use('/api/data-maintenance', dataMaintenanceRoutes);
-app.use('/api/lora-training', loraTrainingRoutes);
 // AUTOMATIC1111-compatible surface for tailnet clients — gated by
 // settings.imageGen.expose.a1111 so it returns 403 unless the user opted in.
 app.use('/sdapi/v1', sdapiRoutes);

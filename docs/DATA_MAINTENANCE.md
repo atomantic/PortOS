@@ -9,6 +9,7 @@ archive retention and whole-checkout cleanup are separate workflows.
 
 LoRA training is retired. New training, dataset generation/captioning, resume and
 media-queue retries are refused. Old training page URLs and `/settings/data-maintenance` lead to Models → LoRAs.
+The legacy `/api/lora-training` routes have been removed.
 Use the reference-image inputs supported by your chosen image model for new work.
 PortOS does not convert a training dataset or checkpoint into a reference-image
 workflow automatically, and the page offers no unsupported Upgrade action.
