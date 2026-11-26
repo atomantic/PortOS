@@ -24,10 +24,29 @@ const renderNav = () => render(
   </MemoryRouter>,
 );
 
+const renderMobileDrawer = () => render(
+  <MemoryRouter initialEntries={['/']}>
+    <SidebarNav collapsed setCollapsed={() => {}} mobileOpen closeMobileNav={() => {}} desktopNav={false} />
+  </MemoryRouter>,
+);
+
 describe('SidebarNav accessibility', () => {
   it('names the primary navigation landmark', () => {
     renderNav();
     expect(screen.getByRole('navigation', { name: 'Primary navigation' })).toBeTruthy();
+  });
+
+  it('shows Pinned and Recent sections in the mobile drawer when the desktop sidebar is collapsed', () => {
+    window.localStorage.setItem('portos-nav-pinned', JSON.stringify(['/brain/inbox']));
+    window.localStorage.setItem('portos-nav-recent', JSON.stringify(['/calendar/agenda', '/']));
+
+    renderMobileDrawer();
+
+    const nav = screen.getByRole('navigation', { name: 'Primary navigation' });
+    expect(within(nav).getByTestId('pinned-section')).toBeTruthy();
+    expect(within(nav).getByTestId('recent-section')).toBeTruthy();
+    expect(within(nav).getByRole('link', { name: /Inbox/ })).toBeTruthy();
+    expect(within(nav).getByRole('link', { name: /Agenda/ })).toBeTruthy();
   });
 
   it('reflects section expansion in aria-expanded on the chevron toggles', () => {
