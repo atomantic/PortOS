@@ -111,11 +111,6 @@ export default function ActionDetailDrawer({
   const externalState = item.meta?.externalState;
   const pullRequestUrl = safeExternalHttpUrl(item.meta?.reviewLoopPRUrl);
   const updateDraft = (patch) => setDraft((previous) => ({ ...previous, ...patch }));
-  const resolve = async (operation, input = {}) => {
-    const ok = await onResolve(item, operation, input);
-    if (ok) onClose();
-  };
-
   return (
     <Drawer
       open
@@ -243,7 +238,7 @@ export default function ActionDetailDrawer({
                   <button
                     key={operation.id}
                     type="button"
-                    onClick={() => resolve(operation.id)}
+                    onClick={() => onResolve(item, operation.id)}
                     className="inline-flex items-center gap-2 rounded bg-port-success/10 border border-port-success/30 px-3.5 py-2 text-sm font-medium text-port-success hover:bg-port-success/20 transition-colors"
                   >
                     <Check size={14} /> {operation.label}
@@ -255,11 +250,7 @@ export default function ActionDetailDrawer({
             <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
               <QueueTriageControls
                 item={item}
-                onTriage={async (...args) => {
-                  const ok = await onTriage?.(...args);
-                  if (ok) onClose();
-                  return ok;
-                }}
+                onTriage={onTriage}
                 disabled={triagePending}
               />
 

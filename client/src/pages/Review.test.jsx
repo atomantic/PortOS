@@ -646,6 +646,82 @@ describe('Review Hub queue-card triage (#3282)', () => {
   });
 });
 
+describe.each([
+  ['resolve', resolveReviewQueueItem, 'Mark resolved', 'complete'],
+  ['triage', triageReviewQueueItem, 'Dismiss this recommendation', 'dismiss'],
+])('Review Hub %s navigation', (_kind, mutate, button, operation) => {
+  const action = {
+    ...TRIAGE_RECOMMENDATION,
+    operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
+  };
+  const commitment = {
+    id: 'todo:example',
+    source: 'todo',
+    sourceRef: 'example',
+    title: 'Another commitment',
+    summary: 'Original notes',
+    operations: [],
+  };
+  const queue = (...items) => ({ items, sources: {}, partial: false });
+
+  async function startOperation() {
+    const mutation = Promise.withResolvers();
+    routerState.actionId = action.id;
+    getReviewQueue.mockResolvedValueOnce(queue(action, commitment));
+    mutate.mockReturnValueOnce(mutation.promise);
+    const page = render(<Review />);
+    const drawer = within(await screen.findByRole('dialog', { name: action.title }));
+    fireEvent.click(drawer.getByRole('button', { name: button }));
+    expect(mutate).toHaveBeenCalledWith(action.id, { operation });
+    return { ...page, mutation };
+  }
+
+  it('preserves a newer action and its unsaved draft when the mutation finishes', async () => {
+    const { rerender, mutation } = await startOperation();
+    routerState.actionId = commitment.id;
+    rerender(<Review />);
+    const drawer = within(await screen.findByRole('dialog', { name: commitment.title }));
+    fireEvent.change(drawer.getByLabelText('Notes'), { target: { value: 'Unsaved notes' } });
+
+    getReviewQueue.mockResolvedValueOnce(queue(commitment));
+    await act(async () => mutation.resolve({}));
+
+    expect(getReviewQueue).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(action.title)).not.toBeInTheDocument();
+    expect(routerState.navigate).not.toHaveBeenCalled();
+    expect(drawer.getByLabelText('Notes')).toHaveValue('Unsaved notes');
+  });
+
+  it('preserves a newer view of the same action when the queue refresh finishes', async () => {
+    const { rerender, mutation } = await startOperation();
+    const refresh = Promise.withResolvers();
+    getReviewQueue.mockReturnValueOnce(refresh.promise);
+    await act(async () => mutation.resolve({}));
+    expect(getReviewQueue).toHaveBeenLastCalledWith({ view: 'today', silent: true });
+
+    routerState.searchParams = new URLSearchParams('view=all');
+    getReviewQueue.mockResolvedValueOnce(queue(action, commitment));
+    rerender(<Review />);
+    await screen.findByRole('dialog', { name: action.title });
+    await act(async () => refresh.resolve(queue(commitment)));
+
+    expect(getReviewQueue).toHaveBeenCalledTimes(3);
+    expect(getReviewQueue).toHaveBeenLastCalledWith({ view: 'all', silent: true });
+    expect(routerState.navigate).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: action.title })).toBeInTheDocument();
+  });
+
+  it('closes the originating route even when the refreshed queue removes its action', async () => {
+    const { mutation } = await startOperation();
+    getReviewQueue.mockResolvedValueOnce(queue(commitment));
+    await act(async () => mutation.resolve({}));
+
+    expect(getReviewQueue).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('dialog', { name: action.title })).not.toBeInTheDocument();
+    expect(routerState.navigate).toHaveBeenCalledExactlyOnceWith('/review?view=today', { replace: true });
+  });
+});
+
 describe('Actions commitments workspace (#7739)', () => {
   it.each([
     ['threads', updateThread, 'notes', ['Local status', 'Priority', 'Next action', 'Due date']],
