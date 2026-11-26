@@ -4,7 +4,7 @@
 
 import { request } from './apiCore.js';
 
-export const getDashboardLayouts = () => request('/dashboard/layouts');
+export const getDashboardLayouts = (options) => request('/dashboard/layouts', options);
 
 // All mutations of dashboard-layouts.json are serialized through a single
 // module-level promise tail so concurrent callers (Dashboard auto-window,

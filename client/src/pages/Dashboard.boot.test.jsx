@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../services/socket', async () => {
@@ -89,6 +89,45 @@ describe('Dashboard first paint', () => {
     expect(screen.getByTitle('Reorder, move and resize widgets')).toBeInTheDocument();
   });
 
+  it('reports server health as text before and after the first health read', async () => {
+    api.getDashboardLayouts.mockResolvedValue({ layouts: [LAYOUT], activeLayoutId: 'mine' });
+    api.getSystemHealth.mockRejectedValueOnce(new Error('Offline'));
+
+    renderPage();
+
+    expect(screen.getByText('Checking server')).toHaveAttribute('role', 'status');
+    expect(await screen.findByText('Server offline')).toHaveAttribute('role', 'status');
+  });
+
+  it('recovers a failed layouts read through Retry and restores picker focus on Escape', async () => {
+    api.getDashboardLayouts
+      .mockRejectedValueOnce(new Error('Layout read failed'))
+      .mockResolvedValueOnce({ layouts: [LAYOUT], activeLayoutId: 'mine' });
+    renderPage();
+
+    expect(await screen.findByText('Layouts: Layout read failed')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    const picker = await screen.findByRole('button', { name: 'Dashboard layout: Mine' });
+    expect(screen.queryByText('Layouts: Layout read failed')).not.toBeInTheDocument();
+    expect(await screen.findByText('Server online')).toHaveAttribute('role', 'status');
+
+    fireEvent.click(picker);
+    const menu = screen.getByRole('group', { name: 'Dashboard layout menu' });
+    const choice = within(menu).getByRole('button', { name: 'Mine' });
+    choice.focus();
+    const onWindowKey = vi.fn();
+    window.addEventListener('keydown', onWindowKey, { once: true });
+    try {
+      fireEvent.keyDown(choice, { key: 'Escape' });
+      expect(onWindowKey).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('keydown', onWindowKey);
+    }
+    expect(picker).toHaveFocus();
+    expect(picker).toHaveAttribute('aria-expanded', 'false');
+    expect(menu).not.toBeInTheDocument();
+  });
+
   describe('apps read states', () => {
     const APPS_LAYOUT = { id: 'mine', name: 'Mine', widgets: ['apps', 'quick-stats'], grid: [] };
     const app = { id: 'a1', name: 'Alpha', overallStatus: 'online', archived: false };
@@ -100,8 +139,8 @@ describe('Dashboard first paint', () => {
       api.getApps.mockRejectedValueOnce(new Error('503 down')).mockResolvedValueOnce([app]);
       renderPage();
 
-      const retries = await screen.findAllByRole('button', { name: 'Retry' });
-      expect(retries.length).toBe(2);
+      await waitFor(() => expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(2));
+      const retries = screen.getAllByRole('button', { name: 'Retry' });
       expect(screen.queryByText('No apps registered')).not.toBeInTheDocument();
       expect(screen.queryByText('Add App')).not.toBeInTheDocument();
       expect(screen.queryByText('Total Apps')).not.toBeInTheDocument();
