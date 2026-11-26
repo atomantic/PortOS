@@ -1,3 +1,4 @@
+// test-memo: git-fixture
 /**
  * The import-case guard catches the one Linux-only module failure a
  * case-insensitive filesystem (a macOS pregate run) cannot see. It must flag a specifier that

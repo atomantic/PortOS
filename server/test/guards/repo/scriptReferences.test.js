@@ -19,6 +19,7 @@ import { guardCorpus, REPO_ROOT, trackedFiles } from '../../../../scripts/lib/gu
 export const CANDIDATE_SCRIPT = /^scripts\/(?:[^/]+|(?:ml|ops|fixtures|experiments)\/.+)$/;
 export const VITEST_COLLECTED = /\.test\.js$/;
 export const HISTORICAL = /^(?:\.changelog|docs\/decisions|scripts\/migrations)\//;
+const LIKELY_POINTER = /^(?:\.github\/|docs\/|scripts\/|server\/(?:AGENTS\.md$|lib\/|routes\/|services\/)|client\/src\/|package\.json$)/;
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export function isSiblingTest(candidate, file) {
@@ -63,7 +64,14 @@ export function unreferencedScripts(candidates, corpus) {
   const keys = referenceKeys(candidates);
   const pattern = keyPattern(keys.keys());
   const repo = guardCorpus();
+  // Most references come from workflows, docs, scripts and application code.
+  // Search those first and retain the full fallback for any outstanding script.
+  const likely = [];
+  const rest = [];
   for (const path of corpus) {
+    (LIKELY_POINTER.test(path) ? likely : rest).push(path);
+  }
+  for (const path of [...likely, ...rest]) {
     // Tracked symlinks (.claude/commands/do/*) point into the lib/slashdo submodule; a symlink holds no text of its own.
     if (!repo.lstat(path).isFile()) continue;
     // A binary asset (git's NUL-in-the-first-8000-bytes heuristic) holds no pointer to a script.
@@ -124,6 +132,12 @@ describe('scripts/ reference guard (#16089, #16909)', () => {
   it('files Python sidecars and requirements under scripts/ml', () => {
     const rootFiles = trackedFiles(REPO_ROOT).filter((path) => /^scripts\/[^/]+$/.test(path));
     expect(rootFiles.filter((path) => path.endsWith('.py') || /^scripts\/requirements-.*\.txt$/.test(path))).toEqual([]);
+  });
+
+  it('searches fallback files for unresolved scripts and reports orphans', () => {
+    const documented = 'scripts/lib-catalog.js'; // Referenced from root AGENTS.md.
+    const orphan = 'scripts/fixtures/unreferenced-example.py';
+    expect(unreferencedScripts([documented, orphan], ['docs/SCRIPTS.md', 'AGENTS.md'])).toEqual([orphan]);
   });
 
   it('every script is referenced by code, a workflow, package.json or a live doc', () => {

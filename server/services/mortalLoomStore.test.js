@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { homedir, tmpdir } from 'os';
+import { join } from 'path';
 import { pinPlatform } from '../lib/testHelper.js';
 
+const TEST_STORE_PATH = join(tmpdir(), 'portos-mortal-loom-unit', 'MortalLoom.json');
 let existsResult = true;
 // Queue of return values for sequential existsSync() calls. When empty, falls
 // back to `existsResult`. Used to simulate ENOENT races where the file exists
@@ -12,7 +15,8 @@ const statMock = vi.fn();
 const writeFileMock = vi.fn();
 const spawnMock = vi.fn();
 
-vi.mock('fs', () => ({
+vi.mock('fs', async importOriginal => ({
+  ...(await importOriginal()),
   existsSync: vi.fn(() => (existsQueue.length ? existsQueue.shift() : existsResult)),
 }));
 
@@ -79,7 +83,7 @@ beforeEach(() => {
   writeFileMock.mockReset();
   spawnMock.mockReset();
   icloud._resetICloudFileStateForTest(); // clears the shared brctl-missing flag + in-flight/dedupe state
-  settings = { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } };
+  settings = { mortalloom: { enabled: true, path: TEST_STORE_PATH } };
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -330,11 +334,11 @@ describe('updateStore', () => {
     let caught;
     await store.updateStore((s) => { s.goals.push({ id: 'x' }); }).catch((err) => { caught = err; });
     expect(caught).toBeDefined();
-    expect(caught.message).not.toContain('/icloud/MortalLoom.json');
+    expect(caught.message).not.toContain(TEST_STORE_PATH);
     expect(caught.message).not.toContain('/');
     // The full path still goes to server logs for diagnostics.
     expect(console.error).toHaveBeenCalledWith(
-      expect.stringContaining('/icloud/MortalLoom.json')
+      expect.stringContaining(TEST_STORE_PATH)
     );
   });
 
@@ -443,7 +447,7 @@ describe('updateStore — iCloud on-demand materialize (darwin)', () => {
       return s.goals.length;
     });
 
-    expect(spawnMock).toHaveBeenCalledWith('brctl', ['download', '/icloud/MortalLoom.json'], expect.objectContaining({ shell: false }));
+    expect(spawnMock).toHaveBeenCalledWith('brctl', ['download', TEST_STORE_PATH], expect.objectContaining({ shell: false }));
     expect(result).toBe(2);
     expect(writeFileMock).toHaveBeenCalledTimes(1);
     const written = JSON.parse(writeFileMock.mock.calls[0][1]);
@@ -682,7 +686,7 @@ describe('initMortalLoomStore — brctl pinning', () => {
   // ubiquity path, so it would be (correctly) declined and never spawn. The
   // literal `/Library/Mobile Documents/` substring makes isHealablePath resolve
   // without a `realpath` (fs is mocked here), so these paths spawn as expected.
-  const ubiq = (name) => `/Users/example/Library/Mobile Documents/iCloud~net~example~App/Documents/${name}`;
+  const ubiq = (name) => join(tmpdir(), `portos-mortal-loom-unit/Library/Mobile Documents/iCloud~net~example~App/Documents/${name}`);
 
   const makeFakeChild = () => {
     const handlers = {};
@@ -994,7 +998,7 @@ describe('initMortalLoomStore — brctl pinning', () => {
     restorePlatform = pinPlatform('darwin');
 
     spawnMock.mockReturnValue(makeFakeChild());
-    settings = { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } };
+    settings = { mortalloom: { enabled: true, path: TEST_STORE_PATH } };
     await store.initMortalLoomStore();
     expect(spawnMock).not.toHaveBeenCalled();
   });
@@ -1034,7 +1038,7 @@ describe('initMortalLoomStore — brctl pinning', () => {
 // scoped to `/Library/Mobile Documents/` so it can't misfire on the ordinary
 // `/icloud/...` fixture path the rest of this suite uses.
 describe('evicted (dataless) iCloud store', () => {
-  const UBIQUITY_PATH = '/Users/example/Library/Mobile Documents/iCloud~net~example~App/Documents/MortalLoom.json';
+  const UBIQUITY_PATH = join(tmpdir(), 'portos-mortal-loom-unit/Library/Mobile Documents/iCloud~net~example~App/Documents/MortalLoom.json');
   // Dataless: real byte length, zero blocks allocated locally.
   const DATALESS_STATS = { size: 503098, blocks: 0, mtime: new Date('2026-08-08T14:35:00Z') };
   let platformSpy;
@@ -1238,4 +1242,31 @@ it('clears blood-pressure fields the date upsert would skip when passed null', a
   await store.mlClearHealthMetricFields('2026-04-03', ['bloodPressureSystolic', 'bloodPressureDiastolic']);
   expect(persisted.healthMetrics.find(row => row.date === '2026-04-03')).toBeUndefined();
   expect(await store.mlClearHealthMetricFields('2026-04-09', ['bloodPressureSystolic', 'bloodPressureDiastolic'])).toBeNull();
+});
+
+describe('external store test isolation', () => {
+  it.each([undefined, join(tmpdir(), '..', 'MortalLoom.json')])(
+    'refuses to read or write default and non-scratch files (%s)', async path => {
+      settings = { mortalloom: { enabled: true, path } };
+      expect(await store.isMortalLoomEnabled()).toBe(false);
+      expect(await store.readStore()).toBeNull();
+      await expect(store.mlReplace('goals', [])).rejects.toThrow('isolated temporary store');
+      expect(readFileMock).not.toHaveBeenCalled();
+      expect(writeFileMock).not.toHaveBeenCalled();
+    });
+
+  it('refuses a scratch-looking path whose directory links outside the temp root', async () => {
+    const { mkdtemp, symlink, rm } = await vi.importActual('fs/promises');
+    const scratch = await mkdtemp(join(tmpdir(), 'portos-mortal-loom-escape-'));
+    try {
+      const outside = join(scratch, 'outside');
+      await symlink(homedir(), outside, 'junction');
+      settings = { mortalloom: { enabled: true, path: join(outside, 'MortalLoom.json') } };
+      await expect(store.mlReplace('goals', [])).rejects.toThrow('isolated temporary store');
+      expect(readFileMock).not.toHaveBeenCalled();
+      expect(writeFileMock).not.toHaveBeenCalled();
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
 });

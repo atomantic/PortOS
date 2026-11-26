@@ -1,3 +1,4 @@
+// test-memo: never — the live Docker engine and public registry are outside the key.
 /**
  * LIVE evidence for the Docker containment profile (#12844): a real local
  * Linux engine, the pinned Node image, real install and validate runs. Opt-in,

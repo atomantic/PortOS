@@ -631,6 +631,22 @@ async function executeScheduledAction({ scheduleId, schedule, timestamp }) {
     return;
   }
 
+  if (account.agentId !== schedule.agentId) {
+    console.log('⏸️ Refusing scheduled action - account does not belong to the agent');
+    await agentActivity.logActivity({
+      agentId: schedule.agentId,
+      accountId: schedule.accountId,
+      scheduleId,
+      action: schedule.action.type,
+      params: schedule.action.params,
+      status: 'failed',
+      error: 'Account does not belong to this agent',
+      code: 'ACCOUNT_AGENT_MISMATCH',
+      timestamp
+    });
+    return;
+  }
+
   // Check account status
   if (account.status !== 'active') {
     console.log(`⏸️ Skipping action - account not active: ${account.status}`);

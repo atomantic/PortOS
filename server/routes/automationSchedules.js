@@ -10,8 +10,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { automationSchedulesListQuerySchema, automationScheduleSchema, automationScheduleUpdateSchema } from '../lib/agent/agentValidation.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import * as automationScheduler from '../services/automationScheduler.js';
-import * as platformAccounts from '../services/platformAccounts.js';
-import * as agentPersonalities from '../services/agent/agentPersonalities.js';
+import { validateScheduleOwner } from '../services/agent/automationScheduleOwner.js';
 import { logAction } from '../services/history.js';
 
 const toggleScheduleSchema = z.object({
@@ -62,24 +61,7 @@ router.post('/', asyncHandler(async (req, res) => {
   console.log('📅 POST /api/agents/schedules');
 
   const data = validateRequest(automationScheduleSchema, req.body);
-
-  // Verify agent exists
-  const agent = await agentPersonalities.getAgentById(data.agentId);
-  if (!agent) {
-    throw new ServerError('Agent not found', { status: 404, code: 'AGENT_NOT_FOUND' });
-  }
-
-  // Verify account exists and belongs to agent
-  const account = await platformAccounts.getAccountById(data.accountId);
-  if (!account) {
-    throw new ServerError('Account not found', { status: 404, code: 'ACCOUNT_NOT_FOUND' });
-  }
-  if (account.agentId !== data.agentId) {
-    throw new ServerError('Account does not belong to this agent', {
-      status: 400,
-      code: 'ACCOUNT_AGENT_MISMATCH'
-    });
-  }
+  await validateScheduleOwner(data);
 
   const schedule = await automationScheduler.createSchedule(data);
   await logAction('create', 'automation-schedule', schedule.id, {

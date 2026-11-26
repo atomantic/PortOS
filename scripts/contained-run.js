@@ -24,13 +24,13 @@
  * 1 for anything else. Builtins only.
  */
 
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { writeFileSync } from 'node:fs';
+import { applyPatch, resolveWorktree } from '../lib/containedWorktree.js';
 import { selectApplicablePatch } from '../server/lib/dockerContainment.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { requestApi, resolveCredentials } from './portos-api.js';
+
+export { applyPatch, resolveWorktree };
 
 export const USAGE = `Usage:
   contained-run --phase install|validate [--cwd <dir>] [--timeout-minutes <n>] [--apply-patch] [--patch-out <file>] -- <command...>
@@ -71,28 +71,6 @@ export function parseArgs(argv) {
   if (rest.length === 0) throw new Error('a command after -- is required');
   options.command = rest.length === 1 ? rest[0] : rest.map(shellQuote).join(' ');
   return options;
-}
-
-/** The repository root holding `cwd` (the mounted worktree), else `cwd` itself. */
-export function resolveWorktree(cwd) {
-  try {
-    return realpathSync(execFileSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
-  } catch {
-    return realpathSync(cwd);
-  }
-}
-
-/** `git apply` the returned patch in the worktree, checking it first so a bad patch never half-lands. */
-export function applyPatch(worktree, patch) {
-  const dir = mkdtempSync(join(tmpdir(), 'portos-contained-patch-'));
-  const file = join(dir, 'changes.patch');
-  try {
-    writeFileSync(file, patch.endsWith('\n') ? patch : `${patch}\n`);
-    execFileSync('git', ['-C', worktree, 'apply', '--check', file], { stdio: ['ignore', 'ignore', 'pipe'] });
-    execFileSync('git', ['-C', worktree, 'apply', file], { stdio: ['ignore', 'ignore', 'pipe'] });
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
 }
 
 export async function main(argv = process.argv.slice(2), env = process.env, deps = {}) {

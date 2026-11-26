@@ -1,6 +1,6 @@
-// Exercises scripts/db.sh ensure_pgvector_for_pg17 through `setup-native` using
-// stubbed macOS Homebrew/git/make executables and a temporary build root.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+// Exercises pgvector pin verification with stubbed macOS Homebrew/git/make,
+// including the full setup-native entry point for a build and a SHA mismatch.
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,7 +21,7 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh pgvector commit SHA
   let pkglibdir;
   let stubLog;
 
-  beforeEach(() => {
+  beforeAll(() => {
     root = mkdtempSync(join(tmpdir(), 'portos-db-pgvector-'));
     tmpRoot = join(root, 'tmp');
     const binDir = join(root, 'bin');
@@ -30,17 +30,15 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh pgvector commit SHA
     stubLog = join(root, 'stub.log');
 
     mkdirSync(join(root, 'scripts', 'lib'), { recursive: true });
-    mkdirSync(tmpRoot, { recursive: true });
     mkdirSync(binDir, { recursive: true });
     mkdirSync(pg17Bin, { recursive: true });
-    mkdirSync(pkglibdir, { recursive: true });
 
     copyFileSync(join(here, 'db.sh'), join(root, 'scripts', 'db.sh'));
+    copyFileSync(join(here, 'lib', 'dbPgvector.sh'), join(root, 'scripts', 'lib', 'dbPgvector.sh'));
     copyFileSync(join(here, 'lib', 'envFile.cjs'), join(root, 'scripts', 'lib', 'envFile.cjs'));
     copyFileSync(join(here, 'lib', 'databaseSettings.cjs'), join(root, 'scripts', 'lib', 'databaseSettings.cjs'));
     writeFileSync(join(root, 'package.json'), '{"type":"module"}');
     writeFileSync(join(root, '.env'), 'PGMODE=native\n');
-    writeFileSync(stubLog, '');
 
     symlinkSync(process.execPath, join(binDir, 'node'));
     executable(join(binDir, 'uname'), '#!/bin/sh\necho Darwin\n');
@@ -136,11 +134,20 @@ fi
 `);
   });
 
-  afterEach(() => {
+  beforeEach(() => {
+    // Each scenario starts with an empty build area, keg library and command log.
+    for (const dir of [tmpRoot, pkglibdir]) {
+      rmSync(dir, { recursive: true, force: true });
+      mkdirSync(dir);
+    }
+    writeFileSync(stubLog, '');
+  });
+
+  afterAll(() => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  const runSetupNative = (overrides = {}) => spawnSync('bash', [join(root, 'scripts', 'db.sh'), 'setup-native'], {
+  const runBash = (args, overrides) => spawnSync('bash', args, {
     cwd: root,
     encoding: 'utf8',
     env: {
@@ -157,8 +164,17 @@ fi
     },
   });
 
+  const runPinCheck = (overrides) => runBash(['-c', `
+    set -euo pipefail
+    log() { printf '%s\\n' "$1"; }
+    warn() { printf '%s\\n' "$1"; }
+    err() { printf '%s\\n' "$1" >&2; }
+    source scripts/lib/dbPgvector.sh
+    ensure_pgvector_for_pg17
+  `, 'pgvector-pin-check'], overrides);
+
   it('fetches, verifies, and compiles the pinned commit SHA for a supported pgvector release', () => {
-    const result = runSetupNative();
+    const result = runBash(['scripts/db.sh', 'setup-native']);
 
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain('pgvector 0.8.7 built and installed for PostgreSQL 17');
@@ -181,7 +197,7 @@ fi
   it('skips fetching and building when the PostgreSQL 17 vector library is already present', () => {
     writeFileSync(join(pkglibdir, 'vector.dylib'), '');
 
-    const result = runSetupNative();
+    const result = runPinCheck();
 
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain('pgvector library present for PostgreSQL 17');
@@ -194,7 +210,7 @@ fi
     ['missing version token', { STUB_PGVECTOR_VERSIONS: 'pgvector' }, 'Cannot determine the installed Homebrew pgvector version'],
     ['empty brew version output', { STUB_PGVECTOR_VERSIONS: '' }, 'Cannot determine the installed Homebrew pgvector version'],
   ])('fails closed before fetching or running make on %s', (_, overrides, expectedMessage) => {
-    const result = runSetupNative(overrides);
+    const result = runPinCheck(overrides);
 
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain(expectedMessage);
@@ -206,7 +222,7 @@ fi
 
   it('fails closed and cleans up build_dir without running make when HEAD does not match the pinned SHA', () => {
     const mismatchedSha = 'deadbeef'.repeat(5);
-    const result = runSetupNative({ STUB_ACTUAL_SHA: mismatchedSha });
+    const result = runBash(['scripts/db.sh', 'setup-native'], { STUB_ACTUAL_SHA: mismatchedSha });
 
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain('commit verification failed');
@@ -220,7 +236,7 @@ fi
   });
 
   it('fails closed and cleans up build_dir without running make when git fetch fails', () => {
-    const result = runSetupNative({ STUB_GIT_FETCH_RC: '1' });
+    const result = runPinCheck({ STUB_GIT_FETCH_RC: '1' });
 
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain(`Could not fetch pinned pgvector 0.8.7 commit ${PINNED_0_8_7}`);
@@ -231,8 +247,8 @@ fi
   });
 
   it('maps only valid semver releases to 40-char lowercase hex commit SHAs', () => {
-    const dbScript = readFileSync(join(here, 'db.sh'), 'utf8');
-    const block = dbScript.match(/pinned_pgvector_commit\(\)\s*\{([\s\S]*?)\n\}/)?.[1];
+    const pgvectorScript = readFileSync(join(here, 'lib', 'dbPgvector.sh'), 'utf8');
+    const block = pgvectorScript.match(/pinned_pgvector_commit\(\)\s*\{([\s\S]*?)\n\}/)?.[1];
     expect(block).toBeTruthy();
 
     const entries = [...block.matchAll(/^\s*([^)\s*]+)\)\s*echo\s+"([^"]+)"\s*;;$/gm)]

@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react';
-import { TEMPLATE_EFFECT_CONTROLS, templateEffects } from '../../../../server/lib/musicVideo/musicVideoTemplateEffects.js';
+import { DEFAULT_NEW_PROJECT_TEMPLATE_EFFECTS, TEMPLATE_EFFECT_CONTROLS, templateEffects } from '../../../../server/lib/musicVideo/musicVideoTemplateEffects.js';
 import { shotFilmLook } from '../../../../server/lib/musicVideo/musicVideoFilmLook.js';
 import { normalizeFilmLook } from '../../lib/filmLook.js';
 import { formatCount } from '../../utils/formatters.js';
@@ -38,7 +38,7 @@ export default function TemplateEffectsControls({ project, scene = null, onChang
       <div className="flex flex-wrap gap-3">
         <button type="button" onClick={() => commit({ templateEffects: Object.fromEntries(TEMPLATE_EFFECT_CONTROLS.map(({ id }) => [id, 0])) })}
           className="min-h-[44px] text-port-accent pointer-fine:sm:min-h-0">Turn all off</button>
-        <button type="button" onClick={() => commit({ templateEffects: null })}
+        <button type="button" onClick={() => commit({ templateEffects: scene ? null : { ...DEFAULT_NEW_PROJECT_TEMPLATE_EFFECTS } })}
           className="min-h-[44px] text-port-accent pointer-fine:sm:min-h-0">{scene ? 'Follow video for all' : 'Restore template defaults'}</button>
       </div>
     </fieldset>
