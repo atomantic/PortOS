@@ -250,7 +250,7 @@ const runner = createHostedImageJobRunner({ mode: MODE, provider: 'fal.ai', logN
 export const { getActiveJob, getActiveJobs, attachSseClient, cancel, cancelAll } = runner;
 const { finalizeJobFailure, finalizeCanceled } = runner;
 
-const noKeyReason = 'No fal.ai API key configured — add it under Settings → Image Gen → Defaults (shared with the fal.ai video backend) or set FAL_KEY';
+const noKeyReason = 'No fal.ai API key configured — add it under Settings → Credentials (shared with the fal.ai video backend) or set FAL_KEY';
 
 /**
  * Connection probe that never spends money: confirm a key is configured, then

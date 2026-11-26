@@ -70,7 +70,7 @@ const editableRemixModel = (models, defaultModelId) => {
  *     fallback. Deliberately NOT `getVideoGenStatus()`: that route shells out
  *     to python, and the picker must not wait on the interpreter probe.
  *   - `availableLoras` — the installed LoRA library, for name resolution.
- *   - `grokEnabled` — the Settings → Image Gen toggle that reveals the
+ *   - `grokEnabled` — the Media Gen Settings toggle that reveals the
  *     Local/Grok backend switch.
  *   - `remoteSubmissionFields` — `{ mediaProviderPeerId, mediaProviderEngine,
  *     modelId }` from `useFederatedMediaTarget` when the user picked a peer as

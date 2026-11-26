@@ -172,7 +172,7 @@ export async function resolveRegenBackend({ sourceModelId } = {}) {
     }
   }
   const reason = !fluxVenvHealthy && !mfluxReady
-    ? 'No local FLUX runner is installed. Set up the FLUX.2 venv in Settings → Image Gen to enable image regeneration.'
+    ? 'No local FLUX runner is installed. Set up the FLUX.2 venv in Media Gen Settings → Local to enable image regeneration.'
     : 'No local FLUX model on this machine supports image-to-image regeneration.';
   return { available: false, reason };
 }

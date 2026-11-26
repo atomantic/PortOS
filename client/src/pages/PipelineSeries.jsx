@@ -639,7 +639,7 @@ function BibleSidebar({ series, universes, universesError, universesRetry, patch
         />
         <p className="text-[11px] text-gray-500 mt-1">
           Pins this series' visual renders to one backend (and, for Codex/Agy, a model).
-          Leave on Auto to follow Settings → Image Gen.
+          Leave on Auto to follow Media Gen Settings.
         </p>
       </Field>
 

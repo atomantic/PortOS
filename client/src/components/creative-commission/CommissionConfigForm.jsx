@@ -467,7 +467,7 @@ function RenderBackendSection({ ability, generation, patchForm }) {
       <h3 className="text-sm font-semibold text-gray-200">Render backend</h3>
       <p className="text-xs text-gray-500">
         Which backend actually renders each run. Leave on <strong className="text-gray-400">Auto</strong> to
-        follow your install&apos;s Settings → Image Gen defaults. Pin{' '}
+        follow your install&apos;s Media Gen Settings defaults. Pin{' '}
         <strong className="text-gray-400">Local</strong> to also choose the model each render uses; the cloud
         backends pick their own.
       </p>
@@ -502,7 +502,7 @@ function RenderBackendSection({ ability, generation, patchForm }) {
                 </select>
                 {unavailable && (
                   <p className="text-xs text-port-warning mt-1">
-                    This backend is disabled in Settings → Image Gen — runs fall back to the default until you enable it.
+                    This backend is disabled in Media Gen Settings — runs fall back to the default until you enable it.
                   </p>
                 )}
               </div>

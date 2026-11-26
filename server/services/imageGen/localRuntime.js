@@ -5,7 +5,7 @@
  *
  * The answer used to be computed in three places that disagreed: the status
  * probe behind the Image Gen banner (which probed the shared torch venv), the
- * Settings › Image Gen › Local panel (which probed only the mflux interpreter's
+ * Media Gen Settings → Local panel (which probed only the mflux interpreter's
  * pip packages, and so reported "All required packages installed" while the
  * selected FLUX.2 default was unrenderable), and the renderer (which checked
  * only that the venv's python BINARY existed, letting a broken venv fail as a

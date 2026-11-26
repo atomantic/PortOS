@@ -108,7 +108,7 @@ describe('selectLocalImageModel', () => {
     expect(selectLocalImageModel(undefined, models).id).toBe('custom');
   });
 
-  // The install-wide pin (settings.imageGen.local.modelId, Settings → Media →
+  // The install-wide pin (settings.imageGen.local.modelId, Media Gen Settings →
   // Local). Without this rung the setting is a control that silently does
   // nothing for any render whose body omits modelId.
   it('prefers the install pin when the caller omits a model', () => {

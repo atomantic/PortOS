@@ -79,7 +79,7 @@ export const visualReferenceRole = (count) => (count === 1
   : 'visual references for style, characters, and subject matter');
 
 /**
- * Cloud image backends the user has enabled in Settings → Image Gen, hoisted so callers
+ * Cloud image backends the user has enabled in Media Gen Settings, hoisted so callers
  * outside the dispatcher don't re-encode how a backend is enabled.
  */
 export const enabledCloudImageModes = (settings) =>

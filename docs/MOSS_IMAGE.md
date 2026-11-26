@@ -11,7 +11,7 @@ PortOS offers **MOSS Image SFT Preview**, using a pinned community Swift/MLX por
 - No image editing, reference images, LoRAs, regeneration or quantization options in this profile.
 - Prompt token counts include the chat template. More than 4096 tokens are rejected before weights load; PortOS never silently truncates the text.
 
-Choose the MOSS model under Settings → Image Gen → Local. Its runtime status offers **Install MOSS Swift runtime**, then a separate **Download / repair MOSS weights (27.2 GB)** action. The model download badge uses the same pinned download. Rendering requires both actions to have succeeded; it does not fetch missing assets implicitly.
+Choose the MOSS model under **Media Gen Settings → Local**. Its runtime status offers **Install MOSS Swift runtime**, then a separate **Download / repair MOSS weights (27.2 GB)** action. The model download badge uses the same pinned download. Rendering requires both actions to have succeeded; it does not fetch missing assets implicitly.
 
 Allow 10 GiB of free space for the source build, plus 27,219,783,878 bytes for the selected weight/configuration files. A first Xcode Metal compiler installation may require additional space; if `xcrun metal --version` fails, install the Metal Toolchain through Xcode or Apple's `xcodebuild -downloadComponent MetalToolchain`. PortOS reports this prerequisite and does not install system toolchains automatically.
 

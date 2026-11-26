@@ -214,7 +214,7 @@ async function generateVideoPrepared({
   const effectiveSettings = settings || (providedApiKey ? null : await getSettings().catch(() => null));
   const apiKey = providedApiKey || resolveFalApiKey(effectiveSettings);
   if (!apiKey) {
-    throw new ServerError('No fal.ai API key configured — set it in Settings > Video Gen or the FAL_KEY env var', { status: 400, code: 'FAL_NOT_CONFIGURED' });
+    throw new ServerError('No fal.ai API key configured — set it in Settings → Credentials or the FAL_KEY env var', { status: 400, code: 'FAL_NOT_CONFIGURED' });
   }
 
   const filename = `${jobId}.mp4`;

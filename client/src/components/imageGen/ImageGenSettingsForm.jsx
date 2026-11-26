@@ -66,7 +66,7 @@ export default function ImageGenSettingsForm({
 
   const noBackend = availableBackends.length === 0 ? (
     <div className="text-[11px] text-port-warning bg-port-warning/10 border border-port-warning/40 rounded px-2 py-1.5">
-      No image gen backend configured. Open Settings → Image Gen to enable a local, external, or cloud CLI backend.
+      No image gen backend configured. Open Media Gen Settings to enable a local, external, or cloud CLI backend.
     </div>
   ) : null;
 
@@ -98,7 +98,7 @@ export default function ImageGenSettingsForm({
         </p>
       ) : isFal ? (
         <p className="text-[10px] text-gray-500 mt-1">
-          fal.ai renders on the model chosen in Settings → Image Gen → fal.ai (or this surface&rsquo;s
+          fal.ai renders on the model chosen in Media Gen Settings → fal.ai (or this surface&rsquo;s
           render pin) and is billed per image. Reference images route to that model&rsquo;s edit
           endpoint; resolution maps to the model&rsquo;s nearest supported size.
         </p>

@@ -183,10 +183,10 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
       if (!isLtx25Model(pickedModel)) return 'LTX 2.5 References requires an LTX 2.5 local model';
     }
     if (pick.backend === 'fal' && !falEnabled) {
-      return 'No fal.ai API key configured — set it in Settings → Video Gen (or the FAL_KEY env var) first';
+      return 'No fal.ai API key configured — set it in Settings → Credentials (or the FAL_KEY env var) first';
     }
     if (pick.backend === 'runway' && !runwayEnabled) {
-      return 'No Runway API key configured — set it in Settings → Video Gen (or the RUNWAYML_API_SECRET env var) first';
+      return 'No Runway API key configured — set it in Settings → Credentials (or the RUNWAYML_API_SECRET env var) first';
     }
     if (pick.backend === 'higgsfield' && !higgsfieldEnabled) return 'No Higgsfield credential configured — set it in Settings → Credentials first';
     if (pick.backend === 'google' && !googleEnabled) return 'No Google credential configured — set it in Settings → Credentials first';

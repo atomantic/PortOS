@@ -1202,9 +1202,9 @@ describe('videoGen routes', () => {
     });
 
     it.each([
-      ['grok', 'GROK_IMAGEGEN_DISABLED', 'Grok Imagegen is disabled — enable it in Settings → Image Gen first'],
-      ['fal', 'FAL_NOT_CONFIGURED', 'No fal.ai API key configured — set it in Settings → Video Gen (or the FAL_KEY env var) first'],
-      ['reactor', 'REACTOR_NOT_CONFIGURED', 'No reactor.inc API key configured — set it in Settings → Video Gen (or the REACTOR_API_KEY env var) first'],
+      ['grok', 'GROK_IMAGEGEN_DISABLED', 'Grok Imagegen is disabled — enable it in Media Gen Settings first'],
+      ['fal', 'FAL_NOT_CONFIGURED', 'No fal.ai API key configured — set it in Settings → Credentials (or the FAL_KEY env var) first'],
+      ['reactor', 'REACTOR_NOT_CONFIGURED', 'No reactor.inc API key configured — set it in Settings → Credentials (or the REACTOR_API_KEY env var) first'],
     ])('preserves %s availability errors after staging a source', async (backend, code, message) => {
       const { getSettings } = await import('../services/settings.js');
       vi.stubEnv('FAL_KEY', '');

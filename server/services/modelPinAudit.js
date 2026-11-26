@@ -128,7 +128,7 @@ function collectImageGenPins({ settings }) {
     providerId,
     model: settings?.imageGen?.[mode]?.model,
     label: `${label} image model`,
-    location: 'Settings → Media Gen → Image Gen',
+    location: 'Media Gen Settings',
     href: '/media/image?settings=1',
   }));
 }
@@ -152,7 +152,7 @@ function collectRenderDefaultPins({ settings }) {
       providerId: pinnedModeProviderId(mode),
       model: normalizeRenderPinValue(entry?.imageModel),
       label: `${target} render model`,
-      location: 'Settings → Media Gen → Render Defaults',
+      location: 'Media Gen Settings → Defaults',
       href: '/media/image?settings=1',
     });
   });

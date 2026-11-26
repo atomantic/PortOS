@@ -131,7 +131,7 @@ export async function runSceneRender(project, scene) {
       status: 'failed',
       evaluation: {
         accepted: false,
-        notes: `Local video generation is not configured — set settings.imageGen.local.pythonPath in Settings > Image Gen.${detail}`,
+        notes: `Local video generation is not configured — set settings.imageGen.local.pythonPath in Media Gen Settings → Local.${detail}`,
         sampledAt: new Date().toISOString(),
       },
     });

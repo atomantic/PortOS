@@ -618,7 +618,7 @@ async function validateAndResolveLocalInputs(params) {
   // out of the runtimes they just installed. Routes/videoGen.js reads the same
   // module-level set.
   if (!pythonPath && !BYOV_VIDEO_RUNTIMES.has(model.runtime)) {
-    throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' });
+    throw new ServerError('Python path not configured — set it in Media Gen Settings → Local', { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' });
   }
   // Every runner resolves its weights from a HuggingFace repo id EXCEPT the
   // legacy CUDA helper, which hardcodes Lightricks/LTX-Video. A user-edited

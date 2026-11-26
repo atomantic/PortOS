@@ -128,7 +128,7 @@ async function generateVideoPrepared({
   // Re-resolved from live settings, never threaded through persisted job params.
   const apiKey = providedApiKey || resolveRunwayApiKey(effectiveSettings);
   if (!apiKey) {
-    throw new ServerError('No Runway API key configured — set it in Settings → Video Gen (or the RUNWAYML_API_SECRET env var)', { status: 400, code: 'RUNWAY_NOT_CONFIGURED' });
+    throw new ServerError('No Runway API key configured — set it in Settings → Credentials (or the RUNWAYML_API_SECRET env var)', { status: 400, code: 'RUNWAY_NOT_CONFIGURED' });
   }
   const requestSpec = {
     modelId, prompt, negativePrompt, seconds: duration, aspectRatio: frameAspect || aspectRatio, width, height, resolution,

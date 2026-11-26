@@ -296,7 +296,7 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
     stageInputs: stageCastReferenceImages,
     validateRetry: (params) => assertAnchoredReference(VIDEO_GEN_MODE.GROK, params),
     errorCode: 'GROK_IMAGEGEN_DISABLED',
-    errorMessage: 'Grok Imagegen is disabled — enable it in Settings → Image Gen first',
+    errorMessage: 'Grok Imagegen is disabled — enable it in Media Gen Settings first',
     buildParams: (body, prepared) => ({
       grokPath: prepared.grok.grokPath,
       aspectRatio: body.visualConditioning?.render?.parameters?.aspectRatio || prepared.grok.aspectRatio,
@@ -315,7 +315,7 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
     stageInputs: stageFalInputs,
     validateRetry: (params) => assertAnchoredReference(VIDEO_GEN_MODE.FAL, params),
     errorCode: 'FAL_NOT_CONFIGURED',
-    errorMessage: 'No fal.ai API key configured — set it in Settings → Video Gen (or the FAL_KEY env var) first',
+    errorMessage: 'No fal.ai API key configured — set it in Settings → Credentials (or the FAL_KEY env var) first',
     // The model, resolution and audio flag are resolved against the curated
     // catalog by videoGen/fal.js (an unsupported resolution falls back to the
     // model's default there); provider audio is off unless asked for.
@@ -344,7 +344,7 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
     stageInputs: stageRunwayInputs,
     validateRetry: (params) => assertAnchoredReference(VIDEO_GEN_MODE.RUNWAY, params),
     errorCode: 'RUNWAY_NOT_CONFIGURED',
-    errorMessage: 'No Runway API key configured — set it in Settings → Video Gen (or the RUNWAYML_API_SECRET env var) first',
+    errorMessage: 'No Runway API key configured — set it in Settings → Credentials (or the RUNWAYML_API_SECRET env var) first',
     // The model, length and size are resolved against the curated catalog by videoGen/runway.js.
     buildParams: (body, prepared) => ({
       modelId: body.runwayModelId,
@@ -429,7 +429,7 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
     stageInputs: NO_STAGED_INPUTS,
     validateRetry: (params) => assertAnchoredReference(VIDEO_GEN_MODE.REACTOR, params),
     errorCode: 'REACTOR_NOT_CONFIGURED',
-    errorMessage: 'No reactor.inc API key configured — set it in Settings → Video Gen (or the REACTOR_API_KEY env var) first',
+    errorMessage: 'No reactor.inc API key configured — set it in Settings → Credentials (or the REACTOR_API_KEY env var) first',
     buildParams: (body) => ({
       continueFromClipId: body.reactorClipId,
       seconds: body.reactorSeconds,

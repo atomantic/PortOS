@@ -67,7 +67,7 @@ export const MEDIA_TOOLS = [
             ? 'Codex'
             : requestedMode === IMAGE_GEN_MODE.GROK ? 'Grok'
               : requestedMode === IMAGE_GEN_MODE.FAL ? 'fal.ai' : 'Agy';
-          return { ok: false, summary: `${label} Imagegen is disabled — enable it in Settings → Image Gen first.` };
+          return { ok: false, summary: `${label} Imagegen is disabled — enable it in Media Gen Settings first.` };
         }
       }
       // LLMs/tool callers often hand back numeric args as strings ("512").

@@ -147,7 +147,7 @@ export function classifyLocalRenderFailure({ lines, usesTorchVenv }) {
     if (importBroken) {
       invalidateTorchHealth = true;
       userKind = 'torch_runtime_broken';
-      userMessage = `The shared torch image runtime at ${FLUX2_VENV_DEFAULT} could not import its packages. Reinstall it from Settings › Image Gen › Local, then retry this render.`;
+      userMessage = `The shared torch image runtime at ${FLUX2_VENV_DEFAULT} could not import its packages. Reinstall it from Media Gen Settings → Local, then retry this render.`;
     }
   }
   // Legacy mflux-generate is a pre-built binary, so it doesn't emit the

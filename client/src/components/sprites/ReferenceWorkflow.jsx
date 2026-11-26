@@ -546,7 +546,7 @@ export default function ReferenceWorkflow({
       )}
       {!backendsError && noBackend && (
         <p className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-2 text-xs text-port-warning">
-          No image backend configured — enable Codex or Grok, or set a local Python path, in Settings → Image Gen to generate references.
+          No image backend configured — enable Codex or Grok, or set a local Python path, in Media Gen Settings to generate references.
         </p>
       )}
 

@@ -724,7 +724,7 @@ export async function buildSheetRenderParams({
     params = { ...baseParams, pythonPath: settings.imageGen?.local?.pythonPath || null, modelId };
   } else {
     throw new ServerError(
-      `Character reference sheet rendering needs codex or local image-gen mode (currently: ${activeMode}). External SD-API doesn't support the multi-zone layout this renderer produces — switch in Settings → Image Gen.`,
+      `Character reference sheet rendering needs codex or local image-gen mode (currently: ${activeMode}). External SD-API doesn't support the multi-zone layout this renderer produces — switch in Media Gen Settings → Backend.`,
       { status: 400, code: 'UNIVERSE_CHARACTER_SHEET_UNSUPPORTED_MODE' },
     );
   }
