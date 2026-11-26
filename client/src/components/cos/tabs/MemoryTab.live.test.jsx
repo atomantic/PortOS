@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router';
 
 vi.mock('../../../services/apiAgents.js', () => ({
@@ -136,6 +136,44 @@ describe('MemoryTab graph filters', () => {
     await waitFor(() => expect(getMemories).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'pending_approval', appId: 'brain' }), expect.any(Object)
     ));
+  });
+});
+
+describe('MemoryTab accessible controls', () => {
+  it('announces the current view and names the clear-search action', async () => {
+    searchMemories.mockResolvedValue({ memories: [] });
+    renderTab();
+    const group = within(screen.getByRole('group', { name: 'Memory view' }));
+    const list = group.getByRole('button', { name: 'List', pressed: true });
+    const timeline = group.getByRole('button', { name: 'Timeline', pressed: false });
+    const graph = group.getByRole('button', { name: 'Graph', pressed: false });
+    for (const button of [list, timeline, graph]) expect(button).toHaveAttribute('type', 'button');
+    fireEvent.click(timeline);
+    expect(timeline).toHaveAttribute('aria-pressed', 'true');
+    expect(list).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(graph);
+    expect(graph).toHaveAttribute('aria-pressed', 'true');
+    expect(timeline).toHaveAttribute('aria-pressed', 'false');
+    await screen.findByText('Graph view');
+    fireEvent.click(list);
+    const search = screen.getByRole('textbox', { name: 'Search memories' });
+    fireEvent.change(search, { target: { value: 'synthetic query' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await screen.findByText('No memories found for this search');
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+    expect(search).toHaveValue('');
+    await screen.findByText('No memories yet.');
+  });
+
+  it('names each pending action with its own memory summary or content', async () => {
+    const second = { ...pending, id: 'synthetic-pending-2', summary: 'Another pending summary' };
+    getMemories.mockImplementation(async params => ({ memories: params.status ? [pending, second] : [] }));
+    renderTab();
+    await screen.findByText('Pending Approval (2)');
+    for (const action of ['Edit before approving', 'Approve memory', 'Reject memory']) {
+      expect(screen.getByRole('button', { name: `${action}: A synthetic pending memory` })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: `${action}: Another pending summary` })).toBeInTheDocument();
+    }
   });
 });
 
@@ -289,7 +327,7 @@ describe('independent approval/count availability', () => {
     getMemoryStats.mockRejectedValue(new Error('Synthetic stats failure'));
     renderTab();
     expect(await screen.findByText('A synthetic pending memory')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Approve memory' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Approve memory: A synthetic pending memory' })).toBeEnabled();
     expect(screen.getByText(/— active memories/)).toBeInTheDocument();
     getMemoryStats.mockResolvedValue({ active: 1, pendingApproval: 1 });
     await dispatch('connect');
