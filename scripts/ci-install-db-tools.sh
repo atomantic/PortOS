@@ -79,7 +79,8 @@ bounded() {
 restore_archives() {
   [[ -n "${APT_PACKAGE_CACHE:-}" ]] || return 0
   local manifest _uri filename _size hash result
-  local checksums=() verified=()
+  local cached=("$APT_PACKAGE_CACHE/"*.deb) checksums=() verified=()
+  [[ -f "${cached[0]:-}" ]] || return 0
   manifest=$(bounded "$1" sudo apt-get "${APT_OPTS[@]}" \
     -o "Dir::Cache::archives=${ARCHIVES}/verify-empty" -o Acquire::ForceHash=sha256 \
     --print-uris "${APT_INSTALL_OPTS[@]}" "${PACKAGES[@]}") || return
@@ -109,9 +110,13 @@ restore_archives() {
 }
 
 download_by() {
-  bounded "$1" sudo apt-get "${APT_OPTS[@]}" update &&
-    restore_archives "$1" &&
-    bounded "$1" sudo apt-get "${APT_OPTS[@]}" "${APT_INSTALL_OPTS[@]}" --download-only "${PACKAGES[@]}"
+  local started=$SECONDS
+  bounded "$1" sudo apt-get "${APT_OPTS[@]}" update || return
+  echo "⏱ APT indexes refreshed in $((SECONDS - started))s"
+  started=$SECONDS
+  restore_archives "$1" || return
+  bounded "$1" sudo apt-get "${APT_OPTS[@]}" "${APT_INSTALL_OPTS[@]}" --download-only "${PACKAGES[@]}" || return
+  echo "⏱ APT archives ready in $((SECONDS - started))s"
 }
 
 if [[ "$INCLUDE_POSTGRES" == true ]]; then
@@ -140,17 +145,26 @@ if ! download_by "$PRIMARY_BUDGET"; then
 fi
 
 # A disposable runner doesn't need a kernel/service restart scan after installing test tools.
+install_started=$SECONDS
 sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 \
   apt-get ${APT_SOURCE_OPTS[@]+"${APT_SOURCE_OPTS[@]}"} -o APT::Keep-Downloaded-Packages=true \
   -o Dpkg::Options::=--force-unsafe-io "${APT_INSTALL_OPTS[@]}" --no-download "${PACKAGES[@]}" ||
   fail "Downloaded packages did not install."
-if [[ -n "${APT_PACKAGE_CACHE:-}" ]]; then
-  mkdir -p "$APT_PACKAGE_CACHE"
-  # Only completed .debs enter the Actions cache, never partial downloads/locks.
+echo "⏱ APT packages installed in $((SECONDS - install_started))s"
+# Pull requests only restore the cache. Copying 80+ archives back on those
+# runners delays the next step and cannot refresh the shared cache.
+if [[ -n "${APT_PACKAGE_CACHE:-}" && "${GITHUB_EVENT_NAME:-}" != pull_request ]]; then
+  stage_started=$SECONDS
+  archives=()
   for archive in "$ARCHIVES/"*.deb; do
     [[ -f "$archive" ]] || continue
-    install -m 644 "$archive" "$APT_PACKAGE_CACHE/"
+    archives+=("$archive")
   done
+  if (( ${#archives[@]} > 0 )); then
+    mkdir -p "$APT_PACKAGE_CACHE"
+    install -m 644 -t "$APT_PACKAGE_CACHE" -- "${archives[@]}"
+    echo "⏱ APT archives staged for caching in $((SECONDS - stage_started))s"
+  fi
 fi
 if [[ "$INCLUDE_POSTGRES" == true ]]; then
   echo "/usr/lib/postgresql/${PG_MAJOR}/bin" >> "$GITHUB_PATH"

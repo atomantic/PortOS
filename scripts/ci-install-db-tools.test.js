@@ -36,7 +36,7 @@ Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 // Inject a Bash clock and watchdog instead of sleeping against 1–3 second
 // budgets: startup/source rewriting consumed those budgets under load, and
 // macOS does not ship GNU timeout. The real script still computes deadlines.
-function run(mirror, cache, { includePostgres = true } = {}) {
+function run(mirror, cache, { includePostgres = true, event = 'push' } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ci-db-tools-'));
   const bin = join(dir, 'bin');
   const root = join(dir, 'root');
@@ -78,8 +78,10 @@ if [ "$(uname -s)" = Darwin ]; then exec shasum -a 256 "$@"; fi
 exec /usr/bin/sha256sum "$@"`);
   fake('install', `
 if [[ "$1 $2 $3" = "-m 644 -t" ]]; then
-  echo "restore $(($# - 5)) files" >> '${log}'
   target="$4"
+  kind=stage
+  [[ "$target" != '${archives}' ]] || kind=restore
+  echo "$kind $(($# - 5)) files" >> '${log}'
   shift 5
   exec /usr/bin/install -m 644 "$@" "$target"
 fi
@@ -139,6 +141,7 @@ fi`);
       TEST_CLOCK: clock,
       ...(includePostgres ? { PG_MAJOR: '17' } : { INCLUDE_POSTGRES: 'false' }),
       GITHUB_PATH: githubPath,
+      GITHUB_EVENT_NAME: event,
       ...(cache ? { APT_PACKAGE_CACHE: packageCache } : {}),
     },
   });
@@ -157,6 +160,7 @@ fi`);
     downloaded: read(log).split('\n').filter(line => line.startsWith('download ')),
     checksumCalls: read(log).split('\n').filter(line => line === 'sha256sum').length,
     restoreCalls: read(log).split('\n').filter(line => line.startsWith('restore ')),
+    stageCalls: read(log).split('\n').filter(line => line.startsWith('stage ')),
     cachedPackage: read(join(packageCache, PACKAGE_FILE)),
     cachedPartial: existsSync(join(packageCache, 'unfinished.deb')),
   };
@@ -208,20 +212,19 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     expect(result.calls).toEqual([
       'apt-get update',
       'apt-get update',
-      'apt-get --print-uris install -y --no-install-recommends postgresql-client-17 ffmpeg',
       'apt-get install -y --no-install-recommends --download-only postgresql-client-17 ffmpeg',
       INSTALL_FROM_CACHE,
     ]);
     // The primary stall spends 45s of fake time, leaving 345s of the one
     // total deadline for all fallback commands (no per-command reset).
-    expect(result.budgets).toEqual([45, 345, 345, 345]);
+    expect(result.budgets).toEqual([45, 345, 345]);
     expect(result.githubPath).toBe('/usr/lib/postgresql/17/bin\n');
 
     // Mirror failover also works with Ubuntu-only source filtering.
     const browser = run('slowRunner', 'cold', { includePostgres: false });
     expect(browser.status, browser.stderr).toBe(0);
     expect(browser.sourceparts).toEqual([['ubuntu.sources'], ['ubuntu.sources']]);
-    expect(browser.budgets).toEqual([45, 345, 345, 345]);
+    expect(browser.budgets).toEqual([45, 345, 345]);
   });
 
   it('fails as an installation failure once the whole budget is spent', () => {
@@ -239,6 +242,8 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     expect(cold.status, cold.stderr).toBe(0);
     expect(cold.downloaded).toEqual([`download ${PACKAGE_FILE}`, `download ${COMPANION_FILE}`]);
     expect(cold.checksumCalls).toBe(0);
+    expect(cold.budgets).toEqual([45, 45]);
+    expect(cold.stageCalls).toEqual(['stage 2 files']);
     expect(cold.cachedPackage).toBe(PACKAGE_BYTES);
     expect(cold.cachedPartial).toBe(false);
 
@@ -256,6 +261,21 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     ]);
     expect(warm.budgets).toEqual([45, 45, 45]);
     expect(warm.pgdg).toContain('[signed-by=');
+  });
+
+  it('uses a verified PR cache hit and skips outbound staging on both hits and misses', () => {
+    for (const cache of ['cold', 'warm']) {
+      const result = run('ok', cache, { includePostgres: false, event: 'pull_request' });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stageCalls).toEqual([]);
+      if (cache === 'cold') {
+        expect(result.restoreCalls).toEqual([]);
+        expect(result.downloaded).toEqual([`download ${PACKAGE_FILE}`, `download ${COMPANION_FILE}`]);
+      } else {
+        expect(result.restoreCalls).toEqual(['restore 2 files']);
+        expect(result.downloaded).toEqual([]);
+      }
+    }
   });
 
   it('downloads a replacement for a same-size cache entry that fails signed-index hash verification', () => {
@@ -290,7 +310,7 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
         }
       }
       expect(identify).toContain('. /etc/os-release');
-      expect(identify).toContain('prefix="apt-debs-v1-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-${toolset}-${{ hashFiles(\'scripts/ci-install-db-tools.sh\') }}-"');
+      expect(identify).toContain('prefix="apt-debs-v1-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-${toolset}-"');
       expect(identify).toContain('echo "prefix=$prefix" >> "$GITHUB_OUTPUT"');
       expect(identify).toContain('echo "key=${prefix}$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"');
       expect(cache).toContain('uses: actions/cache@');
