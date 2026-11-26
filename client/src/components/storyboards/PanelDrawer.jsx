@@ -543,17 +543,17 @@ export default function PanelDrawer({ open, board, found, panelNumber, sketchNon
       {!found ? (
         <p className="text-sm text-gray-400">This panel is no longer on the storyboard.</p>
       ) : activeTab === 'make' ? (
-        <PanelMakeTab board={board} found={found} sketchNonce={sketchNonce} handlers={handlers} />
+        <PanelMakeTab key={found.panel.id} board={board} found={found} sketchNonce={sketchNonce} handlers={handlers} />
       ) : activeTab === 'cast' ? (
-        <CastTab panel={found.panel} onPatch={handlers.onPatch} />
+        <CastTab key={found.panel.id} panel={found.panel} onPatch={handlers.onPatch} />
       ) : activeTab === 'notes' ? (
         <div>
           <label htmlFor={`panel-${found.panel.id}-notes`} className={labelClass}>Notes</label>
-          <CommitField id={`panel-${found.panel.id}-notes`} multiline minHeightClass="min-h-[10rem]" value={found.panel.notes}
+          <CommitField key={found.panel.id} id={`panel-${found.panel.id}-notes`} multiline minHeightClass="min-h-[10rem]" value={found.panel.notes}
             maxLength={STORYBOARD_LIMITS.notes} onCommit={(notes) => handlers.onPatch({ notes })} />
         </div>
       ) : (
-        <ShotTab board={board} found={found} panelNumber={panelNumber} sketchNonce={sketchNonce} busy={busy} handlers={handlers} timing={timing} songTiming={songTiming} />
+        <ShotTab key={found.panel.id} board={board} found={found} panelNumber={panelNumber} sketchNonce={sketchNonce} busy={busy} handlers={handlers} timing={timing} songTiming={songTiming} />
       )}
     </Drawer>
   );
