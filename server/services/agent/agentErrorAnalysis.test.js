@@ -266,6 +266,29 @@ describe('analyzeAgentFailure — ERROR_PATTERNS classification', () => {
     expect(analysis.message).toContain('gemini-3.6-flash');
   });
 
+  describe('launcher interactive sign-in in an unattended run', () => {
+    const options = { completionReason: 'shell-exit', completionError: 'Process exited with code 1' };
+    const spin = '⠼ Starting Example authentication… ⠴ Starting Example authentication… ⠦ Starting Example authentication… ';
+
+    it('classifies the callback-port collision as a provider auth-error, not unknown', () => {
+      const analysis = analyzeAgentFailure(withLead(`${spin}listen EADDRINUSE: address already in use 127.0.0.1:8787`), { id: 't' }, 'x', options);
+      expect(analysis).toMatchObject({ category: 'auth-error', origin: 'provider', actionable: false, requiresFallback: true });
+      expect(analysis.message).toContain('8787');
+    });
+
+    it('classifies the unanswered browser login timeout the same way', () => {
+      const output = withLead('⠧ Waiting for Example login in your browser…\nError: Example login timed out after five minutes');
+      expect(analyzeAgentFailure(output, { id: 't' }, 'x', options)).toMatchObject({ category: 'auth-error', origin: 'provider' });
+    });
+
+    it('does not promote a transcript that only quotes the spinner line', () => {
+      const output = withLead('The log said "Starting Example authentication…" and then the tests failed: test failed: expected 1 to be 2');
+      // The pre-existing loose `authentication` rule may still match, but only as
+      // output-scan, which never benches the provider.
+      expect(analyzeAgentFailure(output, { id: 't' }, 'x', options).origin).not.toBe('provider');
+    });
+  });
+
   it('classifies a 401/authentication error as actionable auth-error', () => {
     const analysis = analyzeAgentFailure(withLead('API Error: 401 Unauthorized — authentication failed'), { id: 't' }, 'x');
     expect(analysis.category).toBe('auth-error');

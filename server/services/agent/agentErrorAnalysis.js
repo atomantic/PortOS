@@ -273,6 +273,32 @@ export const ERROR_PATTERNS = [
     })
   },
   {
+    // A credential-brokering launcher (`<wrapper> run <harness> -- …`) whose
+    // cached sign-in expired and could not be refreshed falls back to an
+    // INTERACTIVE browser OAuth login: it paints a spinner, binds a fixed
+    // loopback callback port and waits up to five minutes for a human. In an
+    // unattended run nobody signs in, so the first spawn times out and every
+    // concurrent spawn dies at once on `listen EADDRINUSE` for that port. Both
+    // lines carry the word "authentication", but a structural completion
+    // reason (shell-exit) discards that loose output-scan match, so the run
+    // landed in `unknown`, burned three retries and filed an investigation for
+    // what only a human sign-in fixes. Gated on the spinner chrome AND its
+    // terminal failure so a transcript that merely quotes either line does not
+    // bench a healthy provider. Non-actionable + provider origin: the provider
+    // is benched for the auth cooldown and the retry resolves onto a fallback.
+    pattern: /[⠀-⣿][^\S\n]*(?:Starting [\w .-]{1,40} authentication|Waiting for [\w .-]{1,40} login in your browser)…[\s\S]{0,4000}?(?:listen EADDRINUSE: address already in use (?:127\.0\.0\.1|localhost|\[?::1\]?):(\d+)|login timed out after \w+ minutes?)/i,
+    category: 'auth-error',
+    actionable: false,
+    origin: 'provider',
+    extract: (match) => ({
+      message: match[1]
+        ? `Provider launcher needs an interactive browser sign-in (callback port ${match[1]} already held by another waiting run)`
+        : 'Provider launcher needs an interactive browser sign-in that no one completed',
+      suggestedFix: "The provider launcher's cached credential expired and could not refresh. Sign in once interactively with the launcher's own credential command, then retry; meanwhile the provider is benched and runs use the fallback.",
+      requiresFallback: true
+    })
+  },
+  {
     pattern: /API Error: 401|authentication|unauthorized/i,
     category: 'auth-error',
     actionable: true,
