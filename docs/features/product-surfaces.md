@@ -118,7 +118,7 @@ An end-to-end creative production suite for authors, worldbuilders, filmmakers, 
 | **SongBook** | `/songbook` | Interactive chord charts, guitar tablature, lyric repertoire, and auto-scrolling practice sheet music. | — |
 | **Creative Director** | `/creative-director` | Multi-scene episodic video production orchestrator: turn briefs into treatments, storyboards, render plans, and completed episodes. | — |
 | **Creative Commissions** | `/creative-commission` | Standing briefs and scheduled/nightly autonomous media generation aligning with personal taste profiles and feedback. A universe and/or mood board can be picked as the style source: each run loads its style tags and reference images as the Creative Director's art-direction base, attaches those images to vision scene evaluation, and conditions local image renders on them. | — |
-| **Music Video Studio** | `/music-video` | Develop a music video from song and storyboard through shots and final render. Work step by step or start with one prompt in Autonomous, then prepare a release kit from the approved render. | [Autonomous Music Video](./music-video-autonomous.md), [Blender Production](./music-video-blender.md), [Publish Kit](./music-video-publish-kit.md) |
+| **Music Video Studio** | `/music-video` | Develop a music video from song and storyboard through shots and final render. Work step by step or start with one prompt in Autonomous, then prepare a release kit from the approved render. | [Music Video](./music-video.md) |
 | **Sharing & Conflict Resolution** | `/sharing`, `/sharing/duplicates`, `/sharing/conflicts` | Collaborative asset exchange via cloud storage buckets (Google Drive, Dropbox, iCloud, Syncthing) with duplicate reconciliation and conflict recovery journals. | — |
 
 ---

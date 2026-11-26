@@ -5,179 +5,41 @@ description: Author a PortOS music video as a Blender film — Python scripts th
 
 # Authoring a Blender film in PortOS
 
-A project with render style **Blender film** (`composition.mode: "blender"`) is made from Python you write. PortOS
-runs it inside Blender, per shot. The scripts are the source of truth for the shot list. Full reference:
-[docs/features/music-video-blender.md](../../../docs/features/music-video-blender.md).
+1. Choose **Blender film** and analyze the song. Read
+   `GET /api/music-video/:id/blender` using the PortOS API client. Resolve
+   `tool.ready` through the saved execution configuration if needed.
+   Trusted local scripts run with the operator's full host access. Work with
+   reviewed local source.
+2. Generate a starter with `POST .../blender/workspace`. Read `song.json` for
+   timing and edit `src/film.py` and its local dependencies. Use the starter
+   for `describe`, `build_shot` and `frame`. Place ordered shot boundaries
+   on the frame grid and plan complete coverage, any pre-song lead-in and
+   handles needed by transitions. Leave managed manifest and render files
+   to PortOS. Use the [model library workflow](../../../docs/features/blender-models.md)
+   to bring in a locally staged model.
+3. **Sync shots from scripts** (`POST .../blender/sync`). Follow the background
+   job and resolve reported problems. Replacing unrelated Board scenes
+   requires an explicit replacement choice. Re-sync when shot inventory,
+   option declarations or fps change.
+4. Render stills for composition, then contact sheets and previews for timing.
+   Compare a timing reference to a PortOS sheet on its matching grid when the
+   director has attached one. Watch continuous preview against the master and
+   review shot notes. The render endpoint accepts `quality: 'still'`,
+   `'sheet'`, `'preview'` or `'final'`. Read stale reasons and job logs to
+   identify what needs a new render.
+5. Assemble a preview cut with `POST .../blender/cut` when a portable review
+   draft is needed. Inspect the film and current creative-review basis.
+   Verify lyrics or mark the song instrumental, then complete the art and
+   storyboard review using the authenticated session and genuine evidence.
+6. Render all current final shots, then use **Final render**
+   (`POST /api/music-video/:id/render`) to join them with the song. Resolve
+   gaps, stale shots and missing handles surfaced by readiness. Clear
+   rendered frames only when requested. Prepared drafts and final files can
+   remain local. The human handles public Suno and social publication.
 
-**The scripts run as the operator, with full access to this machine.** Write only what the film needs. Never run
-source you did not write or review, and never fetch code at render time.
-
-## Where things are
-
-`GET /api/music-video/:id/blender` returns the state; `workspace.path` is the folder on this machine:
-
-```
-<workspace>/src/film.py     entry point (plus any modules, folders and assets you add)
-<workspace>/song.json       the song: read it, never write it
-<workspace>/manifest.json   the last synced shot list
-<workspace>/renders/        PortOS output: frames, shot videos, stills, cuts, logs
-```
-
-3D models from the library: `POST .../blender/models` with `{ kind: "image-to-3d" | "threejs", id }` copies a snapshot into `src/models/<slug>.glb` (or `.js`). In a shot, `from portos_film import models; root, actions = models.load(ctx, "<slug>", height=1.8)` imports it under one empty, scales to a height in meters, stands it on z = 0 and returns the named actions. Loaded models make the shot stale when the file changes; no `deps` entry needed.
-
-Call the API with `node scripts/portos-api.js` (see the `portos-api` skill). Edit files in `src/` directly, or with
-`PUT /api/music-video/:id/blender/file`. No workspace yet: `POST /api/music-video/:id/blender/workspace` copies a
-working three-shot starter. Read it before writing your own.
-
-## The film contract
-
-```python
-def describe(ctx) -> dict:            # {"title": ..., "shots": [...], "options": [...]}  (options are optional)
-def build_shot(ctx, shot) -> None:    # build the bpy scene: objects, materials, lights, a camera (scene.camera)
-def frame(ctx, shot, t, frame):       # optional: pose everything for song time t, before each frame renders
-```
-
-Each shot: `id` (letters, digits, `_`, `-`; unique), `label`, `start`, `end` (seconds on the song, on the frame
-grid, in order, no overlap), optional `handles: {"in": sec, "out": sec}` (each 0–4 s on the frame grid; on a song
-shot `handles.in <= start`), and for the storyboard `summary`, `action`, `staging`, `camera`, `transition`.
-
-A lead-in is shots with `start < 0` that form one contiguous run ending exactly at 0, each 0.5–120 s and at most
-120 s together (`{"id": "s000", "start": -6.0, "end": 0.0}`). A gap, a shot that crosses 0, or a longer run is
-refused at sync and the message names the shot. `build_shot` and `frame` get that negative `t` and song frame.
-`ctx.seconds_to_frame` and `ctx.frame_to_seconds` accept them. Before 0, `portos_film.music` answers no beat
-(`nearest_beat` is `None`, ranges are empty, `pulse` is `0.0`, `bar_at` is `(0, 0.0)`); time 0 is unchanged.
-Frame files use an `m` prefix (`frame_m000144.png`, `handle_in_m000024.png`) and stills `tm` (`tm000006000.png`).
-Sync mirrors each lead-in shot to a Board scene marked before the song, of the shot's length. Edit its sound with
-the Board's cold-open controls; the film supplies the picture only. The cut, the live preview and the final play
-the lead-in first, then the song, so they run longer by the lead-in and the song starts at that offset. The title
-card and timed effects stay on the song clock.
-Imported source files are tracked automatically; use `deps` (files and folders under `src/`) to add data and assets.
-
-**Handles & cut effects.** Assembled cuts, excerpts and the final draw `fade-black` inside each shot's own frames,
-`beat-toggle` using the incoming shot's `in` handle, and `dissolve` centred on the cut by blending the outgoing `out`
-handle with the incoming `in` handle (wipes stay undrawn). A shot declaring `handles` gets extra frames rendered for
-`[start - in, start)` and `[end, end + out)` by calling `frame()` for those times (so the scene must be valid slightly
-outside `[start, end)`); changing only handles marks the shot stale (`handles`) and resumes existing frames. Missing
-handles for a dissolve or beat toggle block the final render (`409`).
-
-`ctx`: `song`, `options`, `fps`, `width`, `height`, `scale`, `samples`, `quality`, `engine`, `workspace`, `src`,
-`out_dir`, `shot`, `log()`, `seconds_to_frame()`, `frame_to_seconds()`.
-
-**Code shots and layers.** A shot may set `"renderer": "code"` and `"entry": "code/s020.js"` instead of drawing in
-Blender. A Blender shot may add up to eight `"layers": [{"entry", "place": "over"|"under", "blend": "normal"|"screen"|"add"|"multiply"}]`.
-The entry is an ES module under `src/` exporting `render(ctx, env)`. `env` is `{ t, localT, frame, song, width, height }`
-(`localT` is negative inside an in-handle). `ctx` is Canvas 2D, or `{ THREE, scene, camera, renderer }` when the shot
-sets `"space": "three"` (canvas is the default and is omitted). Layers are canvas only. Every frame is a pure function
-of song time. The module and its static imports join that shot's stale hash; bare `three` is host-provided and is not
-hashed. Preview plates are JPEG on black; finals and layers are PNG with the layer's alpha, composited at encode.
-A blend uses that alpha as coverage. Dissolves and beat toggles read the same composite from `renders/<shot>/<quality>/handles/`.
-A Blender plate is opaque, so an `under` layer stays hidden on it. A film that does not import `bpy`, `bmesh` or
-`mathutils`, including an import nested in a function or a branch, syncs with system Python and renders with no Blender; `describe` is still required, `build_shot` is not.
-Code runs in the browser sandbox with no host access. Full contract: the feature doc.
-
-**Film options.** To let the director choose something without editing code (a look, a palette, a debug overlay),
-declare it in `describe`'s `options` (at most 24): `{"key", "label", "type": "choice" | "boolean" | "number" |
-"text", "default", "help"?, "choices"?: [{"value", "label"}] (choice), "min"?, "max"?, "step"? (number)}`. Every
-call then reads `ctx.options[key]`: the default, or the value the director saved under Film options. In `describe`
-use `ctx.options.get(key, fallback)`: on the first sync nothing is declared yet. Changing an option makes every
-render stale, so declare an option only for a choice worth re-rendering for. Set one through the API with
-`PUT /api/music-video/:id/blender/settings` `{ "options": { "<key>": value } }` only when the director asked.
-
-Rules that keep a film renderable:
-
-- The scene starts empty for every shot. PortOS sets engine, size, frame rate, samples and the frame range before
-  `build_shot`, and size, frame rate and output format again after it. Do not set them. Look, color management and
-  the compositor are yours.
-- Make every frame a pure function of song time. Renders stop and resume on any frame, and shots render in
-  parallel processes, so nothing may depend on an earlier frame or shot. Bake or avoid live simulation.
-- Frame numbers are song frames: frame `f` is `f / fps` seconds into the song, and a lead-in frame is negative.
-  In `describe`, use `ctx.frame_to_seconds(f)` for exact boundaries. The `start` and `end` passed to `build_shot`
-  and `frame` are exactly on that grid: the first frame's `t` equals `shot["start"]`, so
-  `stepped(t - shot["start"], ctx.fps)` starts on the first pose. The manifest keeps six-decimal times for display
-  and stale comparisons.
-- Target Blender 5: the EEVEE engine id is `BLENDER_EEVEE` (use `ctx.engine`), `scene.node_tree` is gone (the
-  compositor is `scene.compositing_node_group`), `Action.fcurves` is gone, and materials and worlds already have
-  node trees. Build meshes with `bmesh` and `bpy.data`, not `bpy.ops`, where you can.
-- Use `portos_film.music` (`beats`, `downbeats`, `sections`, `nearest_beat`, `beats_between`, `pulse`,
-  `bar_time(song, bar, beat=0.0)`, `bar_at(song, t)`, `phrases(song, bars=4)`,
-  `onsets(song, band="low", min_gap=0.12, sensitivity=1.5)`, `swell(song, band, t, window=2.0)`,
-  `envelope(song, "low"|"mid"|"high"|"rms", t)`, `cue_words`, `words_between`) and `portos_film.timing` (`ease`,
-  `clamp`, `remap`, `stepped` for on-twos holds). They read `song.json`; do not parse audio yourself.
-- Lyrics are not drawn for you. Typography is part of the film.
-- PortOS hands `build_shot` and `frame` the shot from `describe`, with `start` and `end` restored to the exact
-  frame grid. Do not rely on a key you
-  dropped from `describe`, and load anything a shot needs from `ctx` (the song above all) before any code path
-  that looks a shot up without one: a process-wide cache primed without `ctx.song` has no lyrics. A film that
-  renders in your own runner can still fail here, so render one still through PortOS before queueing a batch.
-- End the last shot on the last whole frame inside the song (`floor(durationSec * fps) / fps`), not on the
-  song's length rounded to the grid: a shot ending past the song fails the storyboard check.
-- The film carries no title. The project's title card (Look step) is laid over cuts, excerpts and the final
-  render in a corner the director picks: keep that corner clear of faces and type in the windows it shows.
-- Treat Blender's "Shadow buffer full" log line as a failed shot (shadows drop out though frames are written);
-  raise `scene.eevee.shadow_pool_size` in the film's look setup.
-
-## The loop
-
-1. **Sync**: `POST /api/music-video/:id/blender/sync` answers `202 { job }` and runs `describe` in the background.
-   Read the state until that job is `done`. An `error` job carries `error`, `problems` (every refused shot or
-   option) and `logFile`. A `409 MUSIC_VIDEO_BLENDER_SCENES_CONFLICT` means the Board has shots the film did not
-   make: ask the director before sending `{ "replaceScenes": true }`.
-2. **Stills & Contact sheets**:
-   - Stills: `POST /api/music-video/:id/blender/render` with `{ "quality": "still", "shotIds": [...] }` (or `times`
-     in song seconds). Look at the image before going further: lit, framed, the subject readable.
-   - Contact sheets (motion review): `POST /api/music-video/:id/blender/render` with
-     `{ "quality": "sheet", "shotIds": [...], "sheet": { "every": 3, "columns": 6, "range": [startSec, endSec] } }`.
-     Always review motion from contact sheets rendered through PortOS (stills alone cannot establish motion, and a
-     separate local runner does not pass PortOS's exact shot timing). A current preview is tiled as it stands; a code
-     shot with no current preview draws its own frames, and a code layer is painted onto the tiles. Neither needs Blender.
-   - Motion references (timing only): read `motionReferences` in the state. Each `{ id, filename, inSec, outSec, speed,
-     note, missing, strip }` has a `strip.path` image tiled on the contact sheet's grid (same columns, same time step
-     scaled by `speed`); open it beside the sheet and compare timing column by column (which foot moves first, how long
-     it is airborne). `POST .../blender/shots/<shotId>/motion-references/<refId>/strip` with `{ "sheet": <sheet.file> }`
-     lines one up with a specific sheet. Never use a reference as the look, and attach one only when the director asked
-     (`PUT .../shots/<shotId>/motion-references`); they never mark a render out of date.
-3. **Previews**: `{ "quality": "preview" }` renders every shot that has no current preview, so send it again after
-   each edit: it takes the shots that went stale and any not rendered yet, and skips the rest (`skipped`).
-   `"onlyStale": true` narrows it to renders that exist and went stale; `"force": true` re-renders current ones.
-4. **Preview cut**: `POST /api/music-video/:id/blender/cut` with `{ "quality": "preview", "animatic": true }` puts the
-   whole film with the song in front of the director as the review draft.
-5. **Notes**: read `notes` in the state (per shot: text and `todo`, `wip`, `review`, `approved`). Fix what they say;
-   set a status with `PUT /api/music-video/:id/blender/shots/:shotId/note` only when the director asked you to.
-6. **Finals**: `{ "quality": "final" }` once the previews are approved.
-7. **Final render**: `POST /api/music-video/:id/render`. It refuses until every shot has a complete, current final.
-
-Jobs run in the background. Watch `jobs` in the state; a failed job's `logFile` (read it with
-`GET /api/music-video/:id/blender/media`) holds the Python traceback. Renders are **stale** when a shot's `deps`,
-a code module it imports, times, the render settings or a film option changed (`staleReasons` says which); re-sync
-after changing the shot list, the options a film declares, or the frame rate (renders are refused until then).
-
-Rendered frames are large. `GET /api/music-video/:id/blender/usage` says what the workspace takes;
-`POST /api/music-video/:id/blender/frames/clear` removes the frames of finished renders (their videos stay). Clear
-them only when the director asks.
-
-## What the pipeline still requires
-
-The film does not replace the production review. Before the final render the project needs an approved art
-direction (with an HTML or image guide), verified lyric timing (or an instrumental song), and an approved
-storyboard: every shot with `action` or `summary`, `staging` and a transition, and shots covering the whole song.
-Approvals need an authenticated session and honest review evidence; never approve on the director's behalf
-unless asked. Publishing stays manual.
-
-## If Blender is not ready
-
-`tool.ready: false` in the state carries the reason (`tool.reason`). Two different things can be behind it:
-
-- **The execution mode is the operator's choice.** Never change it. A `409 MUSIC_VIDEO_BLENDER_NEEDS_TRUSTED_LOCAL`
-  (or `tool.executionMode: "contained"`) means Blender is in contained mode, where a film cannot render: tell the
-  operator and stop.
-- **The execution check is only a self-test of the saved configuration.** It runs PortOS's own probe scripts and a
-  fixed test scene, never the film, and changes no setting. PortOS re-runs it by itself after a restart, so a ready
-  film normally stays ready. When `tool.ready` is false for a check reason (the check has not run in this server
-  process, the Blender app or engine changed since the last check, or the test render failed), an authenticated
-  session may run it: `POST /api/code-animation/execution/probe`, then read `lanes.blender` in the answer (or
-  `tool` in the film state). If it still is not ready, report `lanes.blender.reason` to the operator and stop:
-  do not edit the Blender path, mode or engine to get past it.
-
-## Review and publication authority
-
-**Creative review and public publication are separate.** Configured, authenticated agents may create music videos, review art/storyboards/proofs, resolve feedback, render final files and prepare drafts without per-approval prompts; review decisions bind to exact revisions and genuine inspection evidence with server-derived audit identity. Only public Suno publication and social-media posting need the human. Provider permissions, quotas, budgets and purchase authorization still apply.
+- [Music Video Blender contract](../../../docs/features/music-video.md#blender-films)
+- [Starter film](../../../server/services/film/py/starter/film.py) and
+  [timing helpers](../../../server/services/film/py/portos_film/timing.py)
+- [Film request schemas](../../../server/lib/musicVideo/musicVideoBlenderValidation.js),
+  [Blender router](../../../server/routes/musicVideoBlender.js) and
+  [driver](../../../server/services/film/py/portos_blender_driver.py)

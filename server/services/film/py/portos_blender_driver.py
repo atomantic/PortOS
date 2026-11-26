@@ -6,9 +6,9 @@ Runs inside Blender (4.2 or newer), started by PortOS:
         --python portos_blender_driver.py -- job.json
 
 It loads a project's film (`<src>/film.py`) and either lists its shots
-(`mode: "describe"`) or renders shots frame by frame (`mode: "render"`). The
-film contract and the job fields are documented in
-docs/features/music-video-blender.md. Films never import PortOS server code;
+(`mode: "describe"`) or renders shots frame by frame (`mode: "render"`).
+See docs/features/music-video.md#blender-films for the authoring contract.
+Films never import PortOS server code;
 the helpers they may import live beside this file in `portos_film`.
 
 Every film call receives a context `ctx`. Besides the song and the frame
