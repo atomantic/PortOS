@@ -38,6 +38,7 @@ function Harness({ assignment, musicTaste } = {}) {
   return (
     <>
     <output data-testid="assignment">{JSON.stringify(form.assignment)}</output>
+    <output data-testid="music-taste-source">{form.musicTaste.source}</output>
     <CommissionConfigForm
       form={form}
       patchForm={(path, value) => setForm((prev) => patchFormState(prev, path, value))}
@@ -67,10 +68,13 @@ beforeEach(() => {
 });
 
 describe('CommissionConfigForm music taste controls', () => {
-  it('exposes the source, window, anchors, exploration, engine, and model', async () => {
+  it('shows the taste source and exposes window, anchors, exploration, engine, and model', async () => {
     render(<Harness />);
     expect(screen.getByRole('checkbox', { name: /use my digital twin music taste/i })).toBeChecked();
-    expect(screen.getByLabelText('Taste source')).toHaveValue('digital-twin');
+    expect(screen.getByText('Taste source: Digital Twin profile')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Taste source')).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Taste source' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('music-taste-source')).toHaveTextContent('digital-twin');
     expect(screen.getByLabelText('Listening window')).toHaveValue('month');
     expect(screen.getByLabelText('Anchors per run')).toHaveValue(3);
     expect(screen.getByLabelText('Exploration (%)')).toHaveValue(20);
