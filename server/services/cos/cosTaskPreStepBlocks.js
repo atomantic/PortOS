@@ -1106,8 +1106,8 @@ export async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedul
   }
 
   metadata.forgeMaintenanceVersion = FORGE_MAINTENANCE_VERSION;
-  // Finalize re-checks exactly these PRs on the forge when the run reports a
-  // no-op, so a selection that merged before spawn is not scored a failure.
+  // Finalize checks this selection on the forge when the watcher reports
+  // delivery or a stale selection.
   const targets = prWatcherTargetsMetadata(check.newPrs, check.repoFullName, check.repoHost);
   if (targets) metadata.prWatcherTargets = targets;
   const block = prWatcher.formatPullRequestsForPrompt(check.newPrs, {

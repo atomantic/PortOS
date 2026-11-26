@@ -53,13 +53,14 @@ vi.mock('../provider/providerStatus.js', () => ({
   markProviderUnavailable: vi.fn(async () => null),
 }));
 
+const resolveUndeliveredTaskUpdateMock = vi.fn(async (_task, outcome) => ({ status: 'pending', metadata: { taskOutcome: outcome } }));
 const resolveFailedTaskUpdateMock = vi.fn(async (_task, analysis) => ({
   status: 'pending',
   metadata: { lastErrorCategory: analysis?.category || null },
 }));
 vi.mock('./agentErrorAnalysis.js', () => ({
   resolveFailedTaskUpdate: (...args) => resolveFailedTaskUpdateMock(...args),
-  resolveUndeliveredTaskUpdate: vi.fn(async (_task, outcome) => ({ status: 'pending', metadata: { taskOutcome: outcome } })),
+  resolveUndeliveredTaskUpdate: (...args) => resolveUndeliveredTaskUpdateMock(...args),
   resolveTypeFailureSignal: vi.fn(() => ({ record: 'skip' })),
 }));
 
@@ -152,12 +153,15 @@ describe('finalizeAgent — PR watcher forge completion', () => {
   it.each([
     [51, [50, 1]],
     [PR_WATCHER_LIST_LIMIT - 1, [50, 50, 50, 49]],
-  ])('accepts %i merged PRs without probing watcher-checkout commits', async (count, batchSizes) => {
+  ])('accepts %i merged PRs without probing commits or scheduling a retry', async (count, batchSizes) => {
     const numbers = targetNumbers(count);
     await finalize({ task: watcherTask(numbers), finalSummary: completedSentinel });
     expect(completion()).toMatchObject({ success: true, validationPassed: true, taskOutcome: { status: 'completed' } });
     expect(committedDuringRun).not.toHaveBeenCalled();
     expectBatches(numbers, batchSizes);
+    expect(updateTaskMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ status: 'completed' }), 'internal');
+    expect(resolveUndeliveredTaskUpdateMock).not.toHaveBeenCalled();
+    expect(resolveFailedTaskUpdateMock).not.toHaveBeenCalled();
   });
 
   it('accepts no-action-needed across batches with both merged and closed PRs', async () => {
@@ -197,6 +201,35 @@ describe('finalizeAgent — PR watcher forge completion', () => {
     expect(completion().validationPassed).toBe(false);
     expect(committedDuringRun).toHaveBeenCalledExactlyOnceWith(WORKSPACE, expect.any(Number));
     expectBatches(numbers, [50, 1]);
+    expect(resolveUndeliveredTaskUpdateMock).toHaveBeenCalledOnce();
+  });
+
+  it('accepts an actual run commit when a later batch has an open target', async () => {
+    const numbers = targetNumbers(51);
+    const last = numbers.at(-1);
+    execGhMock.mockImplementationOnce(async args => JSON.stringify(batchResult(args)));
+    execGhMock.mockResolvedValueOnce(JSON.stringify({
+      data: { repository: { nameWithOwner: REPO, [`p${last}`]: { number: last, state: 'OPEN' } } },
+    }));
+    committedDuringRun.mockResolvedValueOnce(true);
+    await finalize({ task: watcherTask(numbers), finalSummary: completedSentinel });
+    expectBatches(numbers, [50, 1]);
+    expect(committedDuringRun).toHaveBeenCalledExactlyOnceWith(WORKSPACE, expect.any(Number));
+    expect(completion()).toMatchObject({ success: true, validationPassed: true, taskOutcome: { status: 'completed' } });
+  });
+
+  it('requires the stamped repository and host to match independently', async () => {
+    const task = watcherTask();
+    Object.assign(task.metadata.prWatcherTargets, { repoFullName: NAME, repoHost: `${HOST}/${OWNER}` });
+    await finalize({ task, finalSummary: completedSentinel });
+    expect(execGhMock).not.toHaveBeenCalled();
+    expect(completion()).toMatchObject({ success: false, validationPassed: false, taskOutcome: { status: 'incomplete' } });
+  });
+
+  it('does not verify a reported merge after an unsuccessful run', async () => {
+    await finalize({ success: false, exitCode: 1, finalSummary: completedSentinel });
+    expect(execGhMock).not.toHaveBeenCalled();
+    expect(completion()).toMatchObject({ success: false, taskOutcome: { status: 'incomplete' } });
   });
 
   it('keeps a stale selection incomplete while any stamped target is open', async () => {

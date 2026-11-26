@@ -11,7 +11,10 @@ export function prWatcherTargetsMetadata(prs, repoFullName, repoHost) {
     ? { repoFullName, repoHost, prNumbers } : null;
 }
 
-/** A completed run owes every merge. A stale selection can also acknowledge closed PRs. */
+/** Verify the server-stamped dispatch targets against their forge repository.
+ * A completed run owes a merge for each target. A stale selection can also
+ * acknowledge closed PRs.
+ */
 export async function verifyPrWatcherTargetsSettled(task, workspacePath, outcomeStatus) {
   if (outcomeStatus !== 'completed' && outcomeStatus !== 'no-action-needed') return null;
   const meta = task?.metadata;
@@ -23,9 +26,9 @@ export async function verifyPrWatcherTargetsSettled(task, workspacePath, outcome
     || !targets.prNumbers.every(number => Number.isSafeInteger(number) && number > 0)) return null;
   const { getOriginInfo } = await import('../lib/gitRemote.js');
   const origin = await getOriginInfo(workspacePath);
-  const { githubRepoSpec } = await import('../lib/workTracker.js');
+  const { githubApiHost, githubRepoSpec } = await import('../lib/workTracker.js');
   const repoSpec = githubRepoSpec(origin);
-  if (repoSpec !== `${targets.repoHost}/${targets.repoFullName}`) return null;
+  if (!repoSpec || origin.fullName !== targets.repoFullName || githubApiHost(origin.host) !== targets.repoHost) return null;
   const [host, owner, repo] = repoSpec.split('/');
   const { resolveForgeForRepo } = await import('./forgeAuth.js');
   const forge = await resolveForgeForRepo(workspacePath).catch(() => null);
