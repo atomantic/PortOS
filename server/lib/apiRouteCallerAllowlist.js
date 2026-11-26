@@ -179,6 +179,9 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/dashboard/daily-actions',
     '/api/database/maintenance/preflight',
     '/api/database/switch',
+    // docs/features/media-operation-control.md documents inspecting and stopping an active deck prompt run.
+    'POST /api/decks/:id/generate-prompts/cancel',
+    'GET /api/decks/:id/generate-prompts/status',
     '/api/digital-twin/enrich/categories',
     '/api/docker-containment/run',
     '/api/eidoverse/world/controllers/:id/riddle',
@@ -187,6 +190,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/git/commits',
     '/api/managed-visitor-admin',
     '/api/managed-visitor-admin/:appId/credential',
+    // docs/features/media-operation-control.md documents stopping a consolidation run.
+    'POST /api/media/collections/:id/primary/cancel',
     '/api/meatspace/post/memory-drill',
     // docs/features/post.md route table (spaced-repetition due list).
     '/api/meatspace/post/memory-items/due',
@@ -199,6 +204,9 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/memory/timeline',
     // docs/features/music-video-autonomous.md#production-and-spend: documented API reads.
     '/api/music-video/:id/production-runs/:runId',
+    // docs/features/media-operation-control.md documents inspecting and stopping active photo research.
+    'GET /api/music-video/:id/research',
+    'POST /api/music-video/:id/research/cancel',
     '/api/music-video/:id/spend',
     // docs/API.md: the full character style, for API callers; the client reads the list.
     '/api/music-video/character-styles/:id',

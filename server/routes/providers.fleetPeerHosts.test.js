@@ -69,6 +69,27 @@ describe('this host\'s inbound usage and stop controls', () => {
     expect(res.headers['cache-control']).toBe('no-store');
   });
 
+  it('identifies the same setup holder when another setup or a stop is refused', async () => {
+    const app = buildApp();
+    const release = Promise.withResolvers();
+    fleetLlmHost.configureFleetLlmHost.mockReturnValueOnce(release.promise);
+    fleetLlmHost.getFleetLlmHostStatus.mockResolvedValueOnce({ enabled: true });
+    const pending = request(app).post('/api/providers/fleet-host/setup').then(response => response);
+    try {
+      await vi.waitFor(() => expect(fleetLlmHost.configureFleetLlmHost).toHaveBeenCalledTimes(1));
+      const busy = await request(app).post('/api/providers/fleet-host/setup');
+      expect(busy.status).toBe(409);
+      expect(busy.body).toMatchObject({ code: 'SETUP_BUSY', context: { holder: { runId: expect.any(String), kind: 'fleet-host' } } });
+      const stop = await request(app).post('/api/providers/fleet-host/stop');
+      expect(stop.status).toBe(409);
+      expect(stop.body).toMatchObject({ code: 'SETUP_BUSY', context: busy.body.context });
+      expect(fleetLlmHost.disableFleetLlmHost).not.toHaveBeenCalled();
+    } finally {
+      release.resolve({ success: true });
+      await pending;
+    }
+  });
+
   it('stops the host and returns what happened', async () => {
     fleetLlmHost.disableFleetLlmHost.mockImplementation(async ({ emit }) => {
       emit('Closing the shared API queue — no new peer requests will be admitted.');

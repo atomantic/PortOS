@@ -153,9 +153,9 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     } },
   },
   'music-video:research-seed': {
-    direction: 'server-to-client', summary: 'Research and seed for a shot (sceneId) or cameo (cameoId) started, imported photos (with the saved project), or failed.',
+    direction: 'server-to-client', summary: 'Research and seed for a shot (sceneId) or cameo (cameoId) started, imported photos (with the saved project), was canceled, or failed.',
     payloadSchema: { type: 'object', required: ['projectId', 'status'], properties: {
-      projectId: { type: 'string' }, sceneId: { type: 'string' }, cameoId: { type: 'string' }, status: { type: 'string', enum: ['running', 'done', 'failed'] },
+      projectId: { type: 'string' }, runId: { type: 'string' }, sceneId: { type: 'string' }, cameoId: { type: 'string' }, status: { type: 'string', enum: ['running', 'done', 'failed', 'canceled'] },
       subject: { type: 'string' }, added: { type: 'integer' }, error: { type: 'string' }, project: { type: 'object' },
     }, additionalProperties: false },
   },

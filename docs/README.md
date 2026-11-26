@@ -89,6 +89,7 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 
 ## Feature deep dives (`features/`)
 
+- [Media operation status and cancellation](./features/media-operation-control.md) — find and stop active consolidation, prompt generation and photo research runs
 - [Music Video private sharing copy](./features/music-video-sharing-copy.md) — source-bound 720p downloads strictly under 100 MB, private local export and media queue lifecycle
 - [Music Video Publish kit](./features/music-video-publish-kit.md) — As mixed and measured Web loudness for release downloads
 - [Music Video cinema DCP](./MUSIC_VIDEO_DCP.md) — local cinema export, verification and venue delivery guidance

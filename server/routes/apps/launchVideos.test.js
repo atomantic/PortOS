@@ -88,7 +88,7 @@ describe('user-triggered launch videos', () => {
     addTask.mockResolvedValue({ id: 'task-example', duplicate: true });
     const duplicate = await submit({ tone: 'parody' });
     expect(duplicate.status).toBe(409);
-    expect(duplicate.body.code).toBe('LAUNCH_VIDEO_ACTIVE');
+    expect(duplicate.body).toMatchObject({ code: 'LAUNCH_VIDEO_ACTIVE', context: { taskId: 'task-example' } });
   });
 
   it('asks one run for several aspect ratios of the same film, keeping the single-format contract for one (#8960)', async () => {
@@ -340,7 +340,7 @@ describe('README publication admission', () => {
     expect(prompt).toContain('for gif remove docs/assets/launch-video.mp4 and docs/assets/launch-video-poster.jpg');
     expect(prompt).toContain('"format":"gif"');
     addTask.mockResolvedValue({ id: 'task-example', duplicate: true });
-    expect((await publish({ videoId: video.id })).body.code).toBe('LAUNCH_VIDEO_PUBLISH_ACTIVE');
+    expect((await publish({ videoId: video.id })).body).toMatchObject({ code: 'LAUNCH_VIDEO_PUBLISH_ACTIVE', context: { taskId: 'task-example' } });
   });
 
   it('passes the audio-preserving format and rejects unsupported publishing modes', async () => {

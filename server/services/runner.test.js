@@ -1901,6 +1901,26 @@ describe('executeCliRun — in-flight Ollama registration', () => {
     await flushMicrotasks();
   });
 
+  it('checks admission after waiting for the Ollama daemon and releases a refused hold', async () => {
+    const { beginOllamaAgentWork } = await import('./ollamaAgentContext.js');
+    const prepared = Promise.withResolvers();
+    const release = vi.fn();
+    const controller = new AbortController();
+    beginOllamaAgentWork.mockReturnValueOnce(prepared.promise);
+
+    const running = executeCliRun({
+      runId: 'ollama-canceled', provider: ollamaProvider, prompt: 'Example', workspacePath: TEST_WORKSPACE,
+      beforeExecute: () => controller.signal.throwIfAborted(),
+    });
+    const settled = expect(running).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.waitFor(() => expect(beginOllamaAgentWork).toHaveBeenCalledWith(ollamaProvider));
+    controller.abort();
+    prepared.resolve(release);
+    await settled;
+    expect(release).toHaveBeenCalledOnce();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it('does not register a cloud CLI run', async () => {
     const { beginOllamaAgentWork } = await import('./ollamaAgentContext.js');
     const child = makeChild();
