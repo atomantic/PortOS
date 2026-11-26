@@ -36,7 +36,6 @@ const AGENT_CLI_SRC = normalizeEol(readFileSync(join(__dirname, 'agentCliSpawnin
 const AGENT_TUI_SRC = normalizeEol(readFileSync(join(__dirname, '../agentTuiSpawning/sessionController.js'), 'utf-8'));
 const AGENT_LIFECYCLE_SRC = normalizeEol(readFileSync(join(__dirname, 'agentLifecycle.js'), 'utf-8'));
 const AGENT_RUN_FINALIZE_SRC = normalizeEol(readFileSync(join(__dirname, 'agentRunFinalize.js'), 'utf-8'));
-const AGENT_MANAGEMENT_SRC = normalizeEol(readFileSync(join(__dirname, 'agentManagement.js'), 'utf-8'));
 
 // The lifecycle ledger is a real file writer (data/cos/run-events.jsonl). Mocked
 // so the sweep's telemetry lands in a spy instead of the developing install's
@@ -165,6 +164,7 @@ vi.mock('../creativeDirector/planAdvance.js', () => ({ advanceAfterPlanStepSettl
 vi.mock('../creativeDirector/completionHook.js', () => ({ advanceAfterSceneSettled: vi.fn().mockResolvedValue(undefined) }));
 
 import { handleOrphanedTask, pauseAgent, resumeAgent, relaunchAgent, settleOrphanedCreativeDirectorRun, cleanupOrphanedAgents, killAgent, getAgentProcessStats } from './agentManagement.js';
+import { flushRunnerOutputBatcher } from './agentRunnerOutputBatchers.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import * as fileUtils from '../../lib/fileUtils.js';
 import { retireDeadAgent, stampLiExecutionVerdict } from './agentFinalization.js';
@@ -2426,37 +2426,6 @@ describe('close-handler skip-finalization — source contract', () => {
   });
 });
 
-describe('kill drains batched output before completion — source contract', () => {
-  function fnBody(src, signature) {
-    const start = src.indexOf(signature);
-    if (start === -1) return '';
-    const braceStart = src.indexOf('{', start);
-    let depth = 0;
-    for (let i = braceStart; i < src.length; i++) {
-      if (src[i] === '{') depth++;
-      else if (src[i] === '}') { depth--; if (depth === 0) return src.slice(braceStart, i + 1); }
-    }
-    return '';
-  }
-
-  it('terminateRunnerAgent flushes the runner output batcher before completeAgent', () => {
-    const body = fnBody(AGENT_MANAGEMENT_SRC, 'async function terminateRunnerAgent');
-    expect(body).toMatch(/flushRunnerOutputBatcher\(agentId\)/);
-    const flushPos = body.indexOf('flushRunnerOutputBatcher(agentId)');
-    const completePos = body.indexOf('completeAgent(');
-    expect(flushPos, 'runner batcher must drain before completeAgent').toBeGreaterThan(-1);
-    expect(flushPos).toBeLessThan(completePos);
-  });
-
-  it('killAgent (direct) drains agent.flushOutput before completeAgent', () => {
-    const body = fnBody(AGENT_MANAGEMENT_SRC, 'export async function killAgent');
-    expect(body).toMatch(/agent\.flushOutput\?\.\(\)/);
-    const flushPos = body.indexOf('agent.flushOutput?.()');
-    const completePos = body.indexOf('completeAgent(');
-    expect(flushPos).toBeLessThan(completePos);
-  });
-});
-
 // A server restart kills every agent PTY without running a completion hook, so
 // the ONLY thing that retires those runs is this sweep. Before its retry carried a
 // resume pointer, every restart-killed task was re-dispatched to a fresh agent
@@ -3231,6 +3200,28 @@ describe('lifecycle ledger — pause and interruption', () => {
     // The terminate teardown drops the entry and its in-flight Ollama hold (#17342).
     expect(runnerAgents.has('runner-1')).toBe(false);
     expect(releaseOllamaWork).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['runner', 'direct'])('awaits the %s output flush before completing a killed agent', async mode => {
+    const agentId = 'agent-flush';
+    const flushed = vi.fn();
+    const flush = async () => {
+      await Promise.resolve();
+      flushed();
+    };
+    if (mode === 'runner') {
+      runnerAgents.set(agentId, {});
+      killAgentViaRunner.mockResolvedValueOnce({ success: true });
+      flushRunnerOutputBatcher.mockImplementationOnce(flush);
+    } else {
+      activeAgents.set(agentId, { process: fakeChildProcess(), flushOutput: flush });
+    }
+
+    await killAgent(agentId);
+
+    expect(flushed).toHaveBeenCalledOnce();
+    expect(markAgentComplete).toHaveBeenCalledWith(agentId, expect.objectContaining({ success: false }));
+    expect(flushed.mock.invocationCallOrder[0]).toBeLessThan(markAgentComplete.mock.invocationCallOrder[0]);
   });
 
   it('writes nothing for a kill aimed at an agent that is already gone', async () => {
