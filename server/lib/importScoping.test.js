@@ -155,6 +155,8 @@ const SELECTION_CUTS = [
     'signals host changes through the fleetHostSignal.js leaf'],
   ['services/promptRunner.js', 'services/autoFixer.js',
     'reports fallback lifecycle through handlers initAutoFixer() registers in providerRecoveryHooks.js'],
+  ['lib/agent/agentErrorPatterns.js', /^services\//,
+    'classifies failure signatures without loading CoS services or task stores'],
   // #17499: lazy imports whose target statically imported the importer.
   ['services/cos/cos.js', 'services/agent/agentManagement.js',
     'recovers orphans through handlers registerBootHooks() registers in bootHookRegistry.js'],
