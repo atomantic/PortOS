@@ -124,6 +124,7 @@ vi.mock('../../lib/gitCommitProbe.js', async importOriginal => ({
 
 import { handleAgentCompletion, spawnViaRunner } from './agentLifecycle.js';
 import { committedDuringRun } from '../../lib/gitCommitProbe.js';
+import { resolveForgeTokenEnv } from '../forgeAuth.js';
 import { spawnAgentViaRunner, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from '../cos/cosRunnerClient.js';
 import { completeAgent, updateAgent } from '../cos/cosAgentLifecycle.js';
 import { completeAgentRun } from './agentRunTracking.js';
@@ -482,6 +483,32 @@ describe('spawnViaRunner — credentials in the env delta', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     runnerAgents.clear();
+  });
+
+  it('POSTs the workspace owner GH_TOKEN to the runner', async () => {
+    const opts = runnerOpts();
+    vi.mocked(resolveForgeTokenEnv).mockResolvedValueOnce({ GH_TOKEN: 'workspace-owner-token' });
+    vi.mocked(spawnAgentViaRunner).mockResolvedValueOnce({ pid: 4242 });
+
+    await spawnViaRunner('agent-1', { id: 'task-1' }, opts);
+
+    expect(resolveForgeTokenEnv).toHaveBeenCalledWith(opts.workspacePath);
+    expect(spawnAgentViaRunner).toHaveBeenCalledWith(expect.objectContaining({
+      envVars: expect.objectContaining({ GH_TOKEN: 'workspace-owner-token' }),
+    }));
+  });
+
+  it('uses an explicit provider GH_TOKEN without resolving workspace credentials', async () => {
+    const opts = runnerOpts();
+    opts.provider.envVars.GH_TOKEN = 'provider-token';
+    vi.mocked(spawnAgentViaRunner).mockResolvedValueOnce({ pid: 4242 });
+
+    await spawnViaRunner('agent-1', { id: 'task-1' }, opts);
+
+    expect(resolveForgeTokenEnv).not.toHaveBeenCalled();
+    expect(spawnAgentViaRunner).toHaveBeenCalledWith(expect.objectContaining({
+      envVars: expect.objectContaining({ GH_TOKEN: 'provider-token' }),
+    }));
   });
 
   // The runner is a separate long-lived PM2 process that composes its child env

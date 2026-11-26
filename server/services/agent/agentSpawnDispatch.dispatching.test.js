@@ -69,6 +69,7 @@ import { execGh } from '../github.js';
 import { createAgentRun } from './agentRunTracking.js';
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import { updateTask } from '../cos/cosTaskStore.js';
+import { emitLog } from '../cos/cosEvents.js';
 import { registerAgent, updateAgent } from '../cos/cosAgentLifecycle.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../../lib/hostShutdown.js';
 
@@ -278,6 +279,50 @@ describe('dispatchAgentRun ownership window', () => {
     f.updateResult = { error: 'Task not found' };
     await dispatchAgentRun(context);
     expect(spawnDirectly.mock.calls[0][0].task).toBe(context.task);
+  });
+
+  it('logs a refused task dispatch write and does not start the agent', async () => {
+    f.updateResult = { error: 'write refused' };
+
+    await expect(dispatchAgentRun(newContext())).resolves.toBeNull();
+
+    expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('write refused'), {
+      taskId: task.id,
+      error: 'write refused',
+    });
+    expect(spawnDirectly).not.toHaveBeenCalled();
+  });
+
+  it('releases dispatch protection without launching or discarding the checkout when the task write fails', async () => {
+    const context = newContext();
+    context.claimAcquired = true;
+    f.prep.worktreeInfo = { branchName: 'prepared-branch' };
+    const runner = vi.fn();
+    vi.mocked(updateTask).mockRejectedValueOnce(new Error('task write failed'));
+
+    await expect(dispatchAgentRun(context, { spawnViaRunner: runner })).resolves.toBeNull();
+
+    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'in_progress' }), 'user', expect.any(Object));
+    expect(spawnDirectly).not.toHaveBeenCalled();
+    expect(spawnTuiAgent).not.toHaveBeenCalled();
+    expect(runner).not.toHaveBeenCalled();
+    expect(context.cleanupOnError).toHaveBeenCalledWith('Failed to update task status');
+    expect(context.claimAcquired).toBe(false);
+    expect(context.spawnWorktree).toBeNull();
+    expect(isProtected()).toBe(false);
+  });
+
+  it('registers a TUI agent in runner mode and hands it to the durable spawner', async () => {
+    f.tui = true;
+    f.provider = { id: 'example-tui', type: 'tui', command: 'codex' };
+    setUseRunner(true);
+
+    await dispatchAgentRun(newContext());
+
+    expect(registerAgent).toHaveBeenCalledWith('agent-x', task.id, expect.objectContaining({
+      executionMode: 'runner-tui',
+    }));
+    expect(spawnTuiAgent).toHaveBeenCalledWith(expect.objectContaining({ useDurableRunner: true }));
   });
 
   it('protects the agent while registration is pending and releases once handed off', async () => {
