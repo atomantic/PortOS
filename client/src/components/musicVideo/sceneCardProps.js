@@ -116,6 +116,7 @@ export function normalizeSceneCardProps({ position, composition, media, takes, a
     onRejectUnusedTakes: pick(actions, legacy, 'onRejectUnusedTakes', null),
     onSwapFrames: pick(actions, legacy, 'onSwapFrames', null),
     onMarkTake: pick(actions, legacy, 'onMarkTake', null),
+    onMoveTake: pick(actions, legacy, 'onMoveTake', null),
     onCheckTake: pick(actions, legacy, 'onCheckTake', null),
     onPoolMarked: pick(actions, legacy, 'onPoolMarked', null),
     onImportTake: pick(actions, legacy, 'onImportTake'),
