@@ -62,6 +62,8 @@ describe('isHostControlRoute (#16018)', () => {
     expect(hostControlGetRouteFor('GET', '/api/browser/logs')).toBe('GET /api/browser/logs');
     expect(hostControlGetRouteFor('GET', '/api/apps/app-001/logs')).toBe('GET /api/apps/:id/logs');
     expect(hostControlGetRouteFor('GET', '/api/update/software/homebrew')).toBe('GET /api/update/software/homebrew');
+    expect(hostControlGetRouteFor('GET', '/api/agents')).toBe('GET /api/agents');
+    expect(hostControlGetRouteFor('GET', '/api/agents/4242')).toBe('GET /api/agents/:pid');
     for (const path of [
       '/api/logs/portos-server',
       '/api/browser/logs',

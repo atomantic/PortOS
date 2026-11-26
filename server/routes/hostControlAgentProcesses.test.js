@@ -1,7 +1,8 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { expectAuthorizedWorkflows } from './hostControlTestHarness.js';
+import { expectAuthorizedWorkflows, expectRemoteRefusal } from './hostControlTestHarness.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { getRunningAgents, getProcessInfo } from '../services/agent/agents.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-agent-process-authority-') }));
@@ -30,6 +31,18 @@ beforeEach(() => {
 });
 
 describe('agent process router behind the default-deny gate (#16114)', () => {
+  it('allows local and delegated agent reads of running agents and process details', async () => {
+    await expectAuthorizedWorkflows({ auth, mounts, workflows: [
+      ['get', '/api/agents', undefined, getRunningAgents, 200],
+      ['get', '/api/agents/4242', undefined, getProcessInfo, 200],
+    ] });
+  });
+
+  it('refuses remote password-free reads before process inspection', async () => {
+    await expectRemoteRefusal(mounts, ['get', '/api/agents', undefined, getRunningAgents]);
+    await expectRemoteRefusal(mounts, ['get', '/api/agents/4242', undefined, getProcessInfo]);
+  });
+
   it('still kills for a local operator and a delegated agent session', async () => {
     await expectAuthorizedWorkflows({ auth, mounts, workflows: [['delete', '/api/agents/4242', undefined, effects.killProcess, 200]] });
     expect(effects.killProcess).toHaveBeenLastCalledWith(4242);

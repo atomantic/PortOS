@@ -96,6 +96,9 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/apps/:id/logs',
   // Runs `brew update --quiet` and host runtime probes on `fresh=1` or cache miss (#18224).
   'GET /api/update/software/homebrew',
+  // Enumerates host processes and exposes full command lines and agent prompts (#19170).
+  'GET /api/agents',
+  'GET /api/agents/:pid',
   // Host runtime probes and repository inspection (#19025).
   'GET /api/git/submodules/status',
   'GET /api/git/:appId',

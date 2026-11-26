@@ -1756,6 +1756,50 @@ describe('logs:subscribe host-control boundary (#19168)', () => {
   });
 });
 
+describe('agent-processes:subscribe host-control boundary (#19170)', () => {
+  let io;
+  const connectedSocket = ({ local = false, headers = {} } = {}) => {
+    const socket = makeSocket();
+    socket.data.portosLocalConnection = local;
+    socket.handshake.headers = headers;
+    socket.use = (fn) => { socket.middleware = fn; };
+    socket.runEvent = async (event, payload) => {
+      const next = vi.fn();
+      await socket.middleware([event, payload], next);
+      if (next.mock.calls.length) await socket.handlers[event](payload);
+      return next;
+    };
+    io.connect(socket);
+    return socket;
+  };
+
+  beforeEach(() => {
+    io = makeIo();
+    initSocket(io);
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    vi.mocked(verifyRequestSession).mockResolvedValue(false);
+  });
+
+  it('refuses remote password-free subscriptions before dispatch and permits unsubscribe', async () => {
+    const socket = connectedSocket();
+    const next = await socket.runEvent('agent-processes:subscribe');
+    expect(next).not.toHaveBeenCalled();
+    expect(socket.emitted).toContainEqual(['agent-processes:error', expect.objectContaining({ code: 'HOST_CONTROL_FORBIDDEN' })]);
+    expect(await socket.runEvent('agent-processes:unsubscribe')).toHaveBeenCalled();
+  });
+
+  it('dispatches local password-free and authenticated agent sessions', async () => {
+    const local = connectedSocket({ local: true });
+    expect(await local.runEvent('agent-processes:subscribe')).toHaveBeenCalled();
+
+    vi.mocked(isAuthEnabled).mockResolvedValue(true);
+    const headers = { authorization: 'Bearer example-agent-session' };
+    vi.mocked(verifyRequestSession).mockImplementation(async (request) => request.headers === headers);
+    const agent = connectedSocket({ headers });
+    expect(await agent.runEvent('agent-processes:subscribe')).toHaveBeenCalled();
+  });
+});
+
 
 describe('voice socket host-control boundary (#19169)', () => {
   const hostEvents = [

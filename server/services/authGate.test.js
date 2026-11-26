@@ -881,6 +881,8 @@ describe('host control by default on /api writes (#16018)', () => {
     app.use(hostControlRouteGate);
     app.use(express.json());
     app.use('/api/runs', createRunsRoutes(runner));
+    const { default: agentsRoutes } = await import('../routes/agents.js');
+    app.use('/api/agents', agentsRoutes);
     const settings = express.Router();
     settings.get('/', ok);
     settings.put('/', ok);
@@ -934,6 +936,10 @@ describe('host control by default on /api writes (#16018)', () => {
     const listing = await request(app).get('/api/scaffold/directories');
     expect(listing.status).toBe(403);
     expect(listing.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    for (const path of ['/api/agents', '/api/agents/4242']) {
+      const response = await request(app).get(path);
+      expect([response.status, response.body.code], path).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
     expect(runner.createRun).not.toHaveBeenCalled();
     expect(runner.executeCliRun).not.toHaveBeenCalled();
     expect(sink).not.toHaveBeenCalled();
