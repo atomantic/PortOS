@@ -8,6 +8,7 @@ import {
   loadJSON
 } from './store.js';
 import { applyFreshTimeHorizons } from './longevity.js';
+import { getHorizonYears } from './goalHorizons.js';
 
 const INSIGHT_RULES = [
   {
@@ -129,8 +130,7 @@ const INSIGHT_RULES = [
       if (!activeGoals.length) return null;
 
       const { yearsRemaining, percentLifeComplete } = longevity.timeHorizons;
-      const horizonYears = { '1-year': 1, '3-year': 3, '5-year': 5, '10-year': 10, 'lifetime': yearsRemaining };
-      const atRiskGoals = activeGoals.filter(g => (horizonYears[g.horizon] ?? 999) > yearsRemaining * 0.8);
+      const atRiskGoals = activeGoals.filter(g => g.horizon !== 'lifetime' && getHorizonYears(g.horizon, longevity.timeHorizons) > yearsRemaining * 0.8);
 
       if (!atRiskGoals.length) {
         return {
