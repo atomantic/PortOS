@@ -71,8 +71,8 @@ and cannot be converted to a weekly usage percentage. The final CLI JSON supplie
 oversized result remains unknown. A cybersecurity-policy
 refusal stops the scanner and outer request without continuation, retry or fallback.
 
-The scanner POST has no elapsed timeout and uses the existing transport dispatcher
-without undici's header/body inactivity ceilings. The canonical loopback curl request
+The scanner POST uses Node’s HTTP transport without elapsed, header or body
+inactivity timeouts. The canonical loopback curl request
 also disables its elapsed timeout. The HTTP servers and dev proxy impose no response
 wait cutoff on this route; incoming-request/header and keep-alive limits do not
 limit a scan after its request body has arrived. Status and Stop calls retain their

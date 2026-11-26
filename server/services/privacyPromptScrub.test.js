@@ -18,6 +18,9 @@ import { cleanHistoricalTwinArtifacts } from './privacyTwinHistory.js';
 import { scrubRevokedPrivacyFacts } from './privacyPromptScrub.js';
 import { createOutputSpooler } from './agentTuiSpawning/outputSpooler.js';
 
+const { providerRequest } = vi.hoisted(() => ({ providerRequest: vi.fn() }));
+vi.mock('../lib/aiToolkit/internal/streamTransport.js', () => ({ requestProviderStream: providerRequest }));
+
 vi.mock('./cos/cosAgentLifecycle.js', () => ({ updateAgent: vi.fn(async () => {}), appendAgentOutputLines: vi.fn() }));
 vi.mock('../lib/tuiHandshake.js', async actual => ({ ...await actual(), RAW_SPOOL_MAX_BYTES: 256 }));
 
@@ -105,7 +108,7 @@ beforeEach(async () => {
 afterEach(async () => {
   fixtures.failWrite = null;
   vi.unstubAllEnvs();
-  vi.unstubAllGlobals();
+  providerRequest.mockReset();
   vi.restoreAllMocks();
   if (root) await rm(root, { recursive: true, force: true });
 });
@@ -456,7 +459,7 @@ describe('vault revocation and API run publication', () => {
     const { runId, runDir } = await runner.createRun({ providerId: provider.id, provider, prompt: request });
     const stream = new TransformStream();
     const fetch = vi.fn(async () => new Response(stream.readable));
-    vi.stubGlobal('fetch', fetch);
+    providerRequest.mockImplementation(fetch);
     const settled = Promise.withResolvers();
     await runner.executeApiRun({ runId, provider, prompt: request, onSettled: settled.resolve });
     expect(JSON.parse(fetch.mock.calls[0][1].body).messages[0].content).toBe(request);

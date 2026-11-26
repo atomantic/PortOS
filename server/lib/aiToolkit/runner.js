@@ -16,10 +16,7 @@ import { describeTransportError, fetchWithPreHeaderRetry, isReplaySafeLocalReque
 // a leaf module so a host's own backstop timer can read the absolute bound
 // without dragging this file's fs/child_process closure with it.
 import { DEFAULT_API_RUN_TIMEOUT_MS, apiRunAbsoluteTimeoutMs } from './internal/runTimeouts.js';
-// undici arms its own 300s header/body ceilings under every fetch, which raced
-// — and beat — the two above. The streaming request goes through a dispatcher
-// with those disabled so the run's declared bounds are the only ones.
-import { streamTransportDispatcher } from './internal/streamTransport.js';
+import { requestProviderStream } from './internal/streamTransport.js';
 import { createRunLifecycle } from './internal/runLifecycle.js';
 import { createRunFinalizer } from './internal/runFinalizer.js';
 import { resolveWindowsExecutable, prepareWindowsSafeSpawn } from './internal/windowsSafeSpawn.js';
@@ -851,14 +848,9 @@ export function createRunnerService(config = {}) {
           return null;
         })
         : null;
-      const sendOnce = (apiKey) => fetchWithPreHeaderRetry(() => fetch(nativeOllamaUrl || `${provider.endpoint}/chat/completions`, {
-            method: 'POST',
+      const sendOnce = (apiKey) => fetchWithPreHeaderRetry(() => requestProviderStream(nativeOllamaUrl || `${provider.endpoint}/chat/completions`, {
             headers: apiKey ? { ...headers, Authorization: `Bearer ${apiKey}` } : headers,
             signal: controller.signal,
-            // Hands the request undici's ceilings disabled, leaving `stallTimeout`
-            // / `absoluteTimeout` above as the run's only bounds — see
-            // ./internal/streamTransport.js for what fired first without it.
-            dispatcher: streamTransportDispatcher(),
             body: JSON.stringify(requestBody)
           }), {
             signal: controller.signal,

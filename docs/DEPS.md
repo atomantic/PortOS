@@ -45,7 +45,6 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `socket.io-client` | 1 | KEEP | server-to-client | Paired with socket.io |
 | `trash` | — | REPLACED | Recoverable image/video history deletion (`server/lib/trashFiles.js`) | Issue #12246 → PortOS-owned adapters in `server/lib/nativeTrash.js` / `nativeTrashXdg.js` (ADR `docs/decisions/2026-10-18-native-trash-without-dependency.md`): `osascript` + `NSFileManager.trashItemAtURL` per file on macOS, Windows PowerShell 5.1 + shell32 `SHFileOperationW` with a fixed-drive pre-flight, freedesktop Trash 1.0 on `node:fs` for Linux. Removed the package's 57 lockfile entries, its ad-hoc-signed macOS binary and unsigned Windows executable |
 | `three` | 1 | KEEP | code film rendering | Supplies the Three.js runtime for generated film pages |
-| `undici` | 1 | KEEP | HTTP client | Node core team project |
 | `ws` | 1 | KEEP | remote desktop + browser WebSockets | Foundational WebSocket transport; also used transitively by Socket.IO |
 | `zod` | 1 | KEEP | input validation | Widely-audited |
 | **Server devDependencies** | | | | |
