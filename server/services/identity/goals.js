@@ -20,6 +20,7 @@ import {
 import { applyFreshTimeHorizons, deriveLongevity } from './longevity.js';
 import { tombstoneGoal } from './goalTombstones.js';
 import { getActiveProvider, getProviderById } from '../provider/providers.js';
+import { getHorizonYears } from './goalHorizons.js';
 
 /**
  * Read the longevity snapshot with `timeHorizons` re-derived against today (#4122).
@@ -31,11 +32,6 @@ async function loadLongevityFor(goals) {
 }
 
 // === Pure Functions (exported for testing) ===
-
-function getHorizonYears(horizon, timeHorizons) {
-  const map = { '1-year': 1, '3-year': 3, '5-year': 5, '10-year': 10, '20-year': 20, 'lifetime': timeHorizons.yearsRemaining };
-  return map[horizon] ?? 5;
-}
 
 /**
  * Compute time feasibility for a goal based on its linked activities.
