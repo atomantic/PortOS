@@ -122,7 +122,7 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
         {others.length > 0 && (
           <li>
             <button type="button" onClick={() => setAdding((open) => !open)} disabled={locked || full} aria-expanded={adding}
-              title={full ? `Up to ${MUSIC_VIDEO_MAX_REFERENCE_CHOICES} references` : 'Send another character or set'}
+              title={full ? `Up to ${MUSIC_VIDEO_MAX_REFERENCE_CHOICES} references` : 'Send another reference'}
               className={`${CHIP} px-2 disabled:opacity-50`}>
               <Plus size={12} aria-hidden="true" /> Add
             </button>
@@ -135,7 +135,8 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
       {!locked && musicVideoMissingFrameLinkedPicks(project, scene, castMedia).length > 0 && <p className="text-[11px] text-port-warning">A picked cast reference is unavailable, so frames will not render. Reload to try again, or use Back to auto.</p>}
       {notOffered.length > 0 && <p className="text-[11px] text-port-warning">Left out of new renders because the catalog check-in does not offer {notOffered.map(nameOf).join(', ')}. Offer {notOffered.length === 1 ? 'it' : 'them'} on the catalog record, add a replacement here, or use Back to auto.</p>}
       {chosen.length === 0 && <p className="text-[11px] text-port-text-muted">No shot references selected. Mood-board images may fill available slots.</p>}
-      <SceneReferencePicker open={adding && !full} references={others} label="References to add" hint={PICKER_HINT} onClose={() => setAdding(false)}
+      <SceneReferencePicker open={adding && !full} references={others} label="References to add" hint={PICKER_HINT}
+        onClose={() => { setAdding(false); setPreview(null); }} onFilterChange={() => setPreview(null)}
         tileProps={(ref) => ({ disabled: locked, onClick: unlessLongPress(() => { set([...ids, ref.id]); setAdding(false); setPreview(null); }), ...previewProps(ref) })}>
         {adding && previewFigure}
       </SceneReferencePicker>
