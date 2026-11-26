@@ -103,8 +103,9 @@ you are already on.
    binds a port with an empty cache — and the button becomes **Download the
    default model & start MTPLX**. That runs `mtplx pull` (MTPLX's own default
    verified checkpoint, a multi-gigabyte download) and then starts the server,
-   with the download's progress streaming into the same modal. To use a
-   different MTP checkpoint instead, search for and download it on the MTPLX
+   with the download's progress streaming into the same modal. The checkpoint
+   appears in **Models → Status** as soon as the download succeeds, even if the
+   server fails to start. To use a different MTP checkpoint, download it on the MTPLX
    card in Models → Runtimes, then **Save configuration** there.
 
 Then, either way:

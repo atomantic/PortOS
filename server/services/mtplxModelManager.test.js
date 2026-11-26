@@ -264,9 +264,8 @@ describe('mtplxModelManager', () => {
   });
   // `mtplx pull` writes to MTPLX's own store (`~/.mtplx/models/<org>--<name>`), so a
   // checkpoint it fetches is recorded under the `mtplx` backend, the same identity
-  // the store scan gives it. Recording lives in this manager because BOTH
-  // entry points reach it — the model-pull route and the readiness checklist's
-  // default-checkpoint fetch — and neither would have recorded on its own.
+  // the store scan gives it. Both the model-pull route and the readiness
+  // checklist use the same registration step.
   describe('model manifest', () => {
     it('records a named pull under its MTPLX store directory name', async () => {
       vi.spyOn(streamingSpawn, 'runStreamingCommand').mockResolvedValue({ success: true });
@@ -281,10 +280,13 @@ describe('mtplxModelManager', () => {
       }));
     });
 
-    it('records what actually landed when the default checkpoint was pulled by no name', async () => {
-      vi.spyOn(streamingSpawn, 'runStreamingCommand').mockResolvedValue({ success: true });
+    it('records the reported default checkpoint when other checkpoints are already cached', async () => {
+      vi.spyOn(streamingSpawn, 'runStreamingCommand').mockImplementation(async (_binary, _args, onLine) => {
+        onLine(JSON.stringify({ event: 'result', repo_id: 'Example/Default-MTP' }));
+        return { success: true };
+      });
       mtplxModels.listMtplxCachedModels.mockResolvedValue({
-        models: [{ repo_id: 'Example/Default-MTP' }], error: null,
+        models: [{ repo_id: 'Example/Default-MTP' }, { repo_id: 'Example/Existing-MTP' }], error: null,
       });
 
       await pullMtplxModel({});
@@ -292,6 +294,7 @@ describe('mtplxModelManager', () => {
       expect(modelManifest.recordModelInstall).toHaveBeenCalledWith(expect.objectContaining({
         id: 'mtplx:Example--Default-MTP',
       }));
+      expect(modelManifest.recordModelInstall).toHaveBeenCalledTimes(1);
     });
 
     it('records nothing when the pull failed', async () => {

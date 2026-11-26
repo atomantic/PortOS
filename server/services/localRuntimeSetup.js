@@ -37,7 +37,7 @@ import { runStreamingCommand } from '../lib/streamingSpawn.js';
 import { installLlamaServer } from './llamaServerManager.js';
 import { installMtplx, startMtplxServer, MTPLX_UNSUPPORTED_REASON } from './mtplxServerManager.js';
 import { installSlotstream, startSlotstreamServer, SLOTSTREAM_UNSUPPORTED_REASON } from './slotstreamServerManager.js';
-import { previewMtplxPull } from './mtplxModelManager.js';
+import { isMtplxRepoId, previewMtplxPull, registerMtplxDownload } from './mtplxModelManager.js';
 import { MANAGED_RUNTIME_APPS } from '../lib/managedRuntimeApps.js';
 import { syncRuntimeProviderModels } from './localRuntimeProviderSync.js';
 import { assertDownloadFits } from '../lib/downloadPreflight.js';
@@ -152,7 +152,15 @@ async function pullMtplxDefaultCheckpoint({ emit, isCancelled }) {
   emit('Downloading MTPLX\'s default verified checkpoint. This is a multi-gigabyte download and can take a long while — leave this window open to watch it.');
   // `mtplx pull` redraws one line with a bare `\r`, so split on it. `isCancelled` is load-bearing: this step can run for HOURS
   // while the route holds its single-setup lock, so closing the modal must stop the download.
-  return runStreamingCommand(binary, ['pull'], emit, { timeoutMs: WEIGHTS_TIMEOUT_MS, splitRe: PROGRESS_SPLIT_RE, isCancelled });
+  let checkpoint = null;
+  const result = await runStreamingCommand(binary, ['pull'], (line) => {
+    // MTPLX's plain-text pull summary names the resolved Hugging Face repo.
+    const repoId = line.startsWith('model: ') ? line.slice(7) : null;
+    if (isMtplxRepoId(repoId)) checkpoint = repoId;
+    emit(line);
+  }, { timeoutMs: WEIGHTS_TIMEOUT_MS, splitRe: PROGRESS_SPLIT_RE, isCancelled });
+  if (result.success) await registerMtplxDownload(checkpoint);
+  return result;
 }
 
 async function runManagedStep(run, { emit, isCancelled }, onProgress = emit) {
