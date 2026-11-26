@@ -115,8 +115,10 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
     ? await getProviderById(providerOverride)
     : await getActiveProvider();
 
-  if (!provider) {
-    throw new Error('No AI provider available');
+  if (!provider?.enabled) {
+    throw new Error(providerOverride
+      ? `Provider ${providerOverride} not found or disabled`
+      : 'No enabled AI provider available');
   }
 
   const model = modelOverride || provider.defaultModel;
@@ -303,9 +305,13 @@ export async function processEnrichmentAnswer(data) {
     ? await getProviderById(providerOverride)
     : await getActiveProvider();
 
+  if (providerOverride && !provider?.enabled) {
+    throw new Error(`Provider ${providerOverride} not found or disabled`);
+  }
+
   let formattedContent = `### ${question}\n\n${answer}\n\n`;
 
-  if (provider) {
+  if (provider?.enabled) {
     const prompt = await buildPrompt('soul-enrichment-process', {
       category,
       categoryLabel: config.label,
