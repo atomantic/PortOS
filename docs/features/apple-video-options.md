@@ -42,7 +42,7 @@ for both conversion and inference rather than using MLX’s uniform ladder.
 Missing, mismatched or unsupported contracts fail before rendering.
 SIMD attention remains opt-in upstream; these choices use the reference path.
 
-V2's own weights do accept a first or last frame in ComfyUI (`MiniMaxH3ImageToVideo` on `FastVideo/FastVideo-FastH3-Comfy`). The pinned MLX entry does not, and no other MLX checkpoint is this student. Image and first/last-frame requests stay on the MiniMax H3 MLX rows. The search and the contract to wait for are in [FastH3 V2 image-to-video](../research/2026-09-22-fasth3-v2-mlx-i2v.md).
+V2's own weights do accept a first or last frame in ComfyUI (`MiniMaxH3ImageToVideo` on `FastVideo/FastVideo-FastH3-Comfy`). The pinned MLX entry does not, and no other MLX checkpoint is this student. Image and first/last-frame requests stay on the MiniMax H3 MLX rows.
 
 FastH3 Omni (FastVideo's merged OmniRef MLX runtime) is installed from the same
 Video Gen download button, which fetches five pinned pieces: the BF16
@@ -75,7 +75,7 @@ environment can replace the source scene: image conditioning does not guarantee
 continuity. In a controlled synthetic comparison, motion-only clips retained
 the scene through five seconds, while a conflicting snowy-forest prompt replaced
 it. These observations cover one source and seed, not a guarantee for arbitrary
-images. See the [sampled frames and validation details](../research/minimax-h3-continuity.md#hardware-validation-on-2026-09-27).
+images.
 
 Animation presets now include **Rotoscope cinematic** and **Unreal stylized
 cinema**. These describe a visual treatment in the generation prompt; they do

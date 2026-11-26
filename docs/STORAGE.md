@@ -28,7 +28,7 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 **Where it lives.** PostgreSQL via `server/lib/db.js` + `server/scripts/init-db.sql`. Service modules own the storage adapter (e.g. `server/services/catalog/catalogDB.js`, `server/services/memoryDB.js`).
 
 
-**Create domains in PostgreSQL.** Universes, pipeline series/issues, Story Builder sessions, Writers Room metadata, Creative Director projects, catalog refs, and `media_assets` are `db-primary` in PostgreSQL (see `server/scripts/init-db.sql`); historical Create-domain schema design notes are archived in [`docs/plans/archive/2026-06-07-create-relational-schema-design.md`](./plans/archive/2026-06-07-create-relational-schema-design.md).
+**Create domains in PostgreSQL.** Universes, pipeline series/issues, Story Builder sessions, Writers Room metadata, Creative Director projects, catalog refs, and `media_assets` are `db-primary` in PostgreSQL (see `server/scripts/init-db.sql`).
 
 ---
 

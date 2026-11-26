@@ -2,7 +2,7 @@
  * Spotify OAuth (#2152) — authorization-code flow with refresh tokens for the
  * machine-local Spotify listening-history ingestion (see spotifySync.js).
  *
- * Design constraints (docs/plans/archive/2026-07-04-human-activity-tracking.md):
+ * Design constraints:
  *
  * - **Zero new dependencies.** Spotify has no first-party Node SDK we need — the
  *   token exchange is two `fetch` POSTs to `accounts.spotify.com`, so we own the

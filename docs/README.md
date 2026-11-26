@@ -120,30 +120,27 @@ Start with the [product surface map](./features/product-surfaces.md) ([repo-stud
 
 App management: [app-wizard](./features/app-wizard.md) · [app-quality](./features/app-quality.md) · [autofixer](./features/autofixer.md) · [browser](./features/browser.md) · [error-handling](./features/error-handling.md) · [jira-sprint-manager](./features/jira-sprint-manager.md)
 
-Chief of Staff: [chief-of-staff](./features/chief-of-staff.md) · [branch-reconciliation](./features/branch-reconciliation.md) · [autonomous-job-reliability](./features/autonomous-job-reliability.md) · [cos-agent-runner](./features/cos-agent-runner.md) · [self-improvement-audits](./features/self-improvement-audits.md) · [agent-context](./features/agent-context.md) · [agent-skills](./features/agent-skills.md) · [memory-system](./features/memory-system.md) · [claude-ollama](./features/claude-ollama.md) · [grok-box-local-mind](./features/grok-box-local-mind.md) · [fleet-llm-host](./features/fleet-llm-host.md) · [mtplx](./features/mtplx.md) · [slotstream](./features/slotstream.md) · [dflash2](./features/dflash2.md) ([DSpark vs DFlash 2](./research/2026-08-19-dspark-vs-dflash2.md), [Ternary Bonsai 2 27B](./research/2026-09-18-ternary-bonsai-2-27b.md), [Inkling 2 Mini](./research/2026-11-21-inkling-2-mini.md)) · [qwen38-rtx3090](./features/qwen38-rtx3090.md) ([3090 bring-up](./research/2026-08-21-qwen38-rtx3090-vllm.md)) · [sglang-qwen38](./features/sglang-qwen38.md) ([SGLang Hopper/Blackwell evaluation](./research/2026-08-21-sglang-qwen38-27b.md)) · [prompt-manager](./features/prompt-manager.md) · [development-watchdog](./features/development-watchdog.md) · [review-queue](./features/review-queue.md)
+Chief of Staff: [chief-of-staff](./features/chief-of-staff.md) · [branch-reconciliation](./features/branch-reconciliation.md) · [autonomous-job-reliability](./features/autonomous-job-reliability.md) · [cos-agent-runner](./features/cos-agent-runner.md) · [self-improvement-audits](./features/self-improvement-audits.md) · [agent-context](./features/agent-context.md) · [agent-skills](./features/agent-skills.md) · [memory-system](./features/memory-system.md) · [claude-ollama](./features/claude-ollama.md) · [grok-box-local-mind](./features/grok-box-local-mind.md) · [fleet-llm-host](./features/fleet-llm-host.md) · [mtplx](./features/mtplx.md) · [slotstream](./features/slotstream.md) · [dflash2](./features/dflash2.md) · [qwen38-rtx3090](./features/qwen38-rtx3090.md) · [sglang-qwen38](./features/sglang-qwen38.md) · [prompt-manager](./features/prompt-manager.md) · [development-watchdog](./features/development-watchdog.md) · [review-queue](./features/review-queue.md)
 
 Federation: [peer-administration](./features/peer-administration.md) · [tailcat-peers](./features/tailcat-peers.md) · Models: [decision-classifiers](./features/decision-classifiers.md)
 - [Persistent Mind continuous play + local context](./features/persistent-mind-continuous-play.md) — explore/invent playbook and mind-adjustable `numCtx` clamps
 
-Identity & self: [digital-twin](./features/digital-twin.md) · [identity-system](./features/identity-system.md) · [soul-system](./features/soul-system.md) · [privacy-center](./features/privacy-center.md) · [post](./features/post.md) (insights design spike: [plans/2026-06-03](./plans/archive/2026-06-03-cross-domain-insights-engine.md))
+Identity & self: [digital-twin](./features/digital-twin.md) · [identity-system](./features/identity-system.md) · [soul-system](./features/soul-system.md) · [privacy-center](./features/privacy-center.md) · [post](./features/post.md)
 
 Knowledge: [brain-system](./features/brain-system.md) · [untrusted messages and GitHub automation](./features/messages-security.md) · [scope adherence](./features/scope-adherence.md)
 
 Create: [writers-room](./features/writers-room.md) · [creative-director-video](./features/creative-director-video.md) · [apple-video-options](./features/apple-video-options.md) · [qwen-image-21](./features/qwen-image-21.md) · [fableloom](./features/fableloom.md) · [FableLoom runtime v1](./features/fableloom-runtime-v1.md) · [FableLoom export v1](./features/fableloom-export-v1.md) · [Eidoverse Worlds integration](./features/eidoverse.md) ([guest travel](./features/eidoverse-guest-travel.md), [discovery](./features/eidoverse-discovery.md)) · [Eidoverse music-video renderer](./EIDOVERSE_VIDEO.md) · [sprite-export-contract](./features/sprite-export-contract.md) · [video-text-encoders](./features/video-text-encoders.md) · [video-speed-profiles](./features/video-speed-profiles.md) ([H3 LightX2V on CUDA](./MINIMAX_H3_LIGHTX2V.md)) · [LTX A2V LoRA stages](./features/ltx-a2v-lora-stages.md) · [video-render-batches](./features/video-render-batches.md) · [video-upscale](./features/video-upscale.md)
 
-Comms & voice: [beeper](./features/beeper.md) ([mirror](./features/beeper-mirror.md)) · [messages-browser-send](./features/messages-browser-send.md) · [openclaw-operator-chat](./features/openclaw-operator-chat.md) ([pre-build audit](./research/2026-03-31-openclaw-operator-chat-audit.md)) · [stacker-news](./features/stacker-news.md) · [voice](./features/voice.md) ([Jev feasibility](./research/2026-09-30-jev-voice-feasibility.md))
+Comms & voice: [beeper](./features/beeper.md) ([mirror](./features/beeper-mirror.md)) · [messages-browser-send](./features/messages-browser-send.md) · [openclaw-operator-chat](./features/openclaw-operator-chat.md) · [stacker-news](./features/stacker-news.md) · [voice](./features/voice.md)
 
 ## Point-in-time records
 
 - [Explicit Music Video render pools](decisions/2026-10-04-music-video-render-pools.md) — proposed initial shot placement and supplied-audio conditioning; final composition export remains local.
 - [CoS agent permission posture](decisions/2026-10-06-cos-agent-permission-posture.md) — why unattended agents keep full-bypass instead of vendor auto-approve modes, and where stricter modes apply.
-- [Native trash feasibility study](research/2026-10-18-native-trash-feasibility.md) — can PortOS recycle media without the `trash` package: per-platform comparison, executed macOS/Linux proofs, the Windows acceptance checks, and the regression matrix.
 - [Recycle media through OS facilities PortOS owns](decisions/2026-10-18-native-trash-without-dependency.md) — replace `trash@10.1.1` with `osascript`/JXA, PowerShell + `SHFileOperationW`, and an owned XDG adapter; implementation plan and Windows validation gate.
 - [Docker containment for untrusted install and test runs](decisions/2026-10-21-docker-containment.md) — local-only engine policy, per-run egress proxy for installs, `--network none` validation, and no host fallback.
 
-- **[plans/](./plans/README.md)** — dated design plans (`YYYY-MM-DD-<slug>.md`), archived on approval before implementation. Kept only while a living doc or ADR links them. See [provider connections and harnesses](./plans/archive/2026-09-06-provider-connections-and-harnesses.md) for stable executable routes, migration and management flows.
 - **decisions/** — ADRs (`YYYY-MM-DD-<slug>.md`), e.g. the [Postgres-as-primary-datastore decision](./decisions/2026-06-07-postgres-as-primary-datastore.md) and what may cross the federation layer ([user-controlled federation](./decisions/2026-09-19-user-controlled-federation.md), [Privacy Center storage](./decisions/2026-08-08-privacy-records-machine-local.md), [federated visual prompts](./decisions/2026-08-20-federated-visual-prompts.md), [conditioning crosses to an allowlisted peer](./decisions/2026-08-22-federated-media-input-assets.md), [AI usage metrics federate on by default](./decisions/2026-09-01-federated-usage-metrics.md), [Eidoverse guest chat](./decisions/2026-09-05-eidoverse-guest-chat.md), [numeric PortOS quality federation](./decisions/2026-09-10-portos-quality-federation.md), [federated Eidoverse foundations](./decisions/2026-09-18-federated-eidoverse-foundations.md)), why H3 [ships the draft-decode gates without an asset](./decisions/2026-08-30-h3-draft-decoder-asset.md), and why closed-set decisions run on a [local entailment model that abstains](./decisions/2026-09-18-local-jev-decision-service.md).
-- **research/** — investigation tools and incident write-ups (e.g. the [H3 scene-continuity comparison](./research/minimax-h3-continuity.md), [H3 vision precision investigation](./research/minimax-h3-vision-precision.md), [UX design audit](./research/UX_DESIGN_AUDIT.md), [page layout audit](./research/PAGE_LAYOUT_AUDIT.md), [mflux GPU-watchdog panic](./research/2026-06-13-mflux-training-watchdog-panic.md) and [local LLM performance audit](./research/2026-08-22-local-llm-performance-audit.md)).
 
 ## Other
 
@@ -168,7 +165,7 @@ Comms & voice: [beeper](./features/beeper.md) ([mirror](./features/beeper-mirror
 
 ## All other documents
 
-Generated by `node scripts/sync-docs-index.js` from every `docs/**/*.md` the tables above do not link (plans under `plans/archive/` excluded); do not hand-edit.
+Generated by `node scripts/sync-docs-index.js` from every `docs/**/*.md` the tables above do not link; do not hand-edit.
 
 <!-- docs-index:begin (generated by scripts/sync-docs-index.js; do not edit) -->
 
@@ -187,31 +184,6 @@ Generated by `node scripts/sync-docs-index.js` from every `docs/**/*.md` the tab
 - [ADR: Diegetic FaceTime Is an Optional Story Transport, Never the Session Authority](./decisions/2026-08-30-diegetic-facetime-transport.md)
 - [System alerts report actionable failures](./decisions/2026-09-21-actionable-system-alerts.md)
 - [ADR: Add SuperCollider as an optional offline code-audio engine](./decisions/2026-10-01-supercollider-code-audio.md)
-
-**plans**
-
-- [Owner-coordinated catalog identity](./plans/2026-10-18-catalog-shared-canonical-identity.md)
-- [Local-first merge gate: make pregate the authority for own-agent PRs](./plans/2026-10-18-ci-local-first-merge-gate.md)
-- [CoS task queue to PostgreSQL](./plans/2026-10-20-cos-task-queue-to-postgres.md)
-- [Casting detail loading](./plans/2026-10-25-casting-detail-performance.md)
-- [Shared character workspace](./plans/2026-10-25-character-workspace.md)
-- [Creative catalog primitives and universe context](./plans/2026-10-25-creative-primitives.md)
-- [Place greybox: a 3D layout reference on Environments](./plans/2026-10-25-place-greybox.md)
-- [Native playback for shipped-template composition previews](./plans/2026-11-09-native-composition-preview.md)
-
-**research**
-
-- [POSThuman Web Version: Feature Review & Integration Recommendation](./research/2026-03-06-posthuman-web-feature-review.md)
-- [Validation: torch FLUX.2 LoRA trainer on CUDA](./research/2026-08-05-torch-flux2-lora-cuda-validation.md)
-- [Feasibility spike: Krea Realtime 14B as a local Apple Silicon video backend](./research/2026-08-09-krea-realtime-apple-silicon.md)
-- [Qwen3.8 27B MLX options on macOS](./research/2026-08-16-qwen38-mlx-macos.md)
-- [DFlash 2 speculative decoding — can PortOS run Qwen this way?](./research/2026-08-19-dflash2-speculative-decoding.md)
-- [FastH3 VSA data-free preview: CUDA bring-up and Apple Silicon watch](./research/2026-08-28-fasth3-vsa-datafree.md)
-- [Qwen3.8-Flash-Next on Apple M5 Max](./research/2026-08-28-qwen38-flash-next-m5-max.md)
-- [macOS “Install out of sync” research](./research/2026-09-03-macos-install-out-of-sync.md)
-- [Local models for private security assessments](./research/2026-09-06-private-security-models.md)
-- [FastH3 V2 image-to-video: no Apple Silicon model can take the adapter](./research/2026-09-22-fasth3-v2-mlx-i2v.md)
-- [MiniMax H3 CUDA history adapter](./research/minimax-h3-cuda-history.md)
 
 **themes**
 

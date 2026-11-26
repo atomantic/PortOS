@@ -13,8 +13,7 @@
  * colliding with generator-computed metadata are dropped with a warning.
  *
  * `HOOK_MODULES` is the single registration point (lazy imports); `input: false`
- * marks input owned by an earlier coordinator phase. See
- * docs/plans/archive/2026-07-09-programmatic-io-scheduled-tasks.md.
+ * marks input owned by an earlier coordinator phase.
  */
 
 import { isFalsyMeta, isTruthyMeta } from './agent/agentState.js';

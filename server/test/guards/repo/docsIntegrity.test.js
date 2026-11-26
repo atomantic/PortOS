@@ -130,7 +130,6 @@ const IMPORT_BODY = '@AGENTS.md\n';
 // for the migrations and the prompt-integrity snapshot, break the exact matching
 // they perform against what an older version actually wrote.
 const EXCLUDED_PREFIXES = [
-  'docs/plans/',
   'data/',
   'lib/slashdo/',
   'scripts/migrations/',

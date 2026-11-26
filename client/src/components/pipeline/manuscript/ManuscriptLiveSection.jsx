@@ -8,8 +8,7 @@
  * Why a backdrop instead of a rich editor: the save/version/accept pipeline
  * round-trips plain strings, and anchors are verbatim substrings — a transparent
  * mirror div with identical monospace metrics paints underlines exactly under
- * the words with zero changes to the editing/persistence path. See the plan at
- * docs/plans/archive/2026-06-06-manuscript-editor-inline-feedback.md.
+ * the words with zero changes to the editing/persistence path.
  */
 
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';

@@ -2,8 +2,8 @@
  * Tool-call / reasoning parser flags every local runtime MUST carry to serve a Qwen3-family model to a CoS coding agent.
  *
  * A table, not prose: the spelling is runtime-specific and the failure SILENT (the server starts and the model answers, but tool markup returns as assistant text with `tool_calls: null`, so the agent never reads or writes a file, with no error naming the parser).
- * Measured: vLLM on the 3090 preset needs `--tool-call-parser qwen3_xml` (`docs/research/2026-08-21-qwen38-rtx3090-vllm.md`; `hermes` LOOKS right since the template emits `<tool_call>` markers, but Qwen3.8 writes XML `<function=name><parameter=path>…`, not Hermes JSON, and vLLM accepts the flag then parses nothing);
- * SGLang's verified cells ship `--tool-call-parser qwen3_coder` AND `--reasoning-parser qwen3` (`docs/research/2026-08-21-sglang-qwen38-27b.md`; without the latter the thinking block leaks into the reply). One table PortOS owns; every launch path reads it.
+ * Measured: vLLM on the 3090 preset needs `--tool-call-parser qwen3_xml` (`hermes` LOOKS right since the template emits `<tool_call>` markers, but Qwen3.8 writes XML `<function=name><parameter=path>…`, not Hermes JSON, and vLLM accepts the flag then parses nothing);
+ * SGLang's verified cells ship `--tool-call-parser qwen3_coder` AND `--reasoning-parser qwen3` (without the latter the thinking block leaks into the reply). One table PortOS owns; every launch path reads it.
  * Do NOT auto-detect the parser from the chat template (how `hermes` got chosen): its markers describe how the model is PROMPTED, not how it ANSWERS; extend only from a runtime's own verified launch line.
  * Adding a runtime: add a row (the builder is generic). A row with both parsers `null` POSITIVELY asserts no equivalent flag exists (why `llama` is listed); an unknown runtime throws rather than serving parser-less, which is indistinguishable from working until a session is wasted.
  */

@@ -804,7 +804,7 @@ on the worker.
 `GET /playback` supplies the same structured song, scene and composition drawing
 data as the renderer, without document code or media files. The dock refreshes
 that data when its drawing inputs change. Every other document
-keeps the worker for playback too. Design record: [native composition preview](plans/2026-11-09-native-composition-preview.md).
+keeps the worker for playback too.
 
 `documentTemplateParity.browser.test.js` compares the native player's visible
 picture with the unchanged shipped engine at fixed song frames: finish, footage

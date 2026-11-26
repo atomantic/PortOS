@@ -8,7 +8,7 @@
  * token, or, for a Python module, its stem (`import ltx25_reference`). Exempt:
  * `*.test.js`, which the server Vitest run collects through `../scripts/**` globs.
  * Sibling tests (`<stem>.test.js`, `<stem>_test.py`), migrations (`scripts/migrations/*`),
- * changelogs, decision records (ADRs), concluded plans, and research docs do not count:
+ * changelogs and decision records (ADRs) do not count:
  * a historical mention or self-test is not a pointer for the next reader.
  * No allowlist: document the script or delete it.
  */
@@ -18,7 +18,7 @@ import { guardCorpus, REPO_ROOT, trackedFiles } from '../../../../scripts/lib/gu
 
 export const CANDIDATE_SCRIPT = /^scripts\/(?:[^/]+|(?:ml|ops|fixtures|experiments)\/.+)$/;
 export const VITEST_COLLECTED = /\.test\.js$/;
-export const HISTORICAL = /^docs\/(?:decisions|plans|research)\/|^scripts\/migrations\//;
+export const HISTORICAL = /^docs\/decisions\/|^scripts\/migrations\//;
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export function isSiblingTest(candidate, file) {
@@ -98,20 +98,17 @@ describe('scripts/ reference guard (#16089, #16909)', () => {
 
   it('filters historical documents and migrations out of the live reference corpus', () => {
     expect(HISTORICAL.test('docs/decisions/2026-09-19-federation.md')).toBe(true);
-    expect(HISTORICAL.test('docs/plans/archive/2026-07-18-synthid-adversarial-jamming-experiment.md')).toBe(true);
-    expect(HISTORICAL.test('docs/research/minimax-h3-continuity.md')).toBe(true);
     expect(HISTORICAL.test('scripts/migrations/444-minimax-h3-cuda-lightx2v.js')).toBe(true);
     expect(HISTORICAL.test('docs/SCRIPTS.md')).toBe(false);
     expect(HISTORICAL.test('server/index.js')).toBe(false);
   });
 
-  it('catches scripts only referenced by their own sibling test or concluded plans, and covers scripts/{fixtures,experiments}/**', () => {
+  it('catches scripts only referenced by their own sibling test or decision records, and covers scripts/{fixtures,experiments}/**', () => {
     // Sibling test reference is ignored by isSiblingTest
     expect(isSiblingTest('scripts/orphan.js', 'scripts/orphan.test.js')).toBe(true);
     expect(isSiblingTest('scripts/orphan.py', 'scripts/orphan_test.py')).toBe(true);
     // Historical paths and migrations are rejected by the corpus filter
-    expect(HISTORICAL.test('docs/plans/archive/2026-07-18-synthid-adversarial-jamming-experiment.md')).toBe(true);
-    expect(HISTORICAL.test('docs/research/minimax-h3-continuity.md')).toBe(true);
+    expect(HISTORICAL.test('docs/decisions/design.md')).toBe(true);
     expect(HISTORICAL.test('scripts/migrations/001-init.js')).toBe(true);
     // Candidate pattern covers subdirectories fixtures and experiments
     expect(CANDIDATE_SCRIPT.test('scripts/fixtures/minimax_h3_history.py')).toBe(true);

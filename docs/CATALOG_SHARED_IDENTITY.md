@@ -106,8 +106,6 @@ The feature adds boot schema, owner-scoped reservations and read projections,
 server protocol endpoints and client controls. It needs an authorized server/client
 deployment and restart. Boot does not accept, commit or recover an agreement.
 
-The design record is
-[owner-coordinated catalog identity](plans/2026-10-18-catalog-shared-canonical-identity.md).
 Persisted tests exercise stale plans, concurrent writes, authenticated owners,
 retry and restart behavior, unavailable peers, canonical reads, preserved exports
 and guarded recovery.

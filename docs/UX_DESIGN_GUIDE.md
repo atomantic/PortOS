@@ -1,6 +1,6 @@
 # PortOS workspace design guide
 
-Status: reviewed design specification v1, 2026-09-20, for incremental implementation. The review preserves icon-prefixed desktop navigation and the CoS-style compact mobile icon row as explicit product requirements. This is not a claim that existing pages implement the specification. The [audit](research/UX_DESIGN_AUDIT.md) records the evidence. Existing accessibility, routing, privacy, and behavior contracts in `client/src/AGENTS.md` remain binding. The rollout history is in epic [#7791](https://github.com/atomantic/PortOS/issues/7791).
+Status: reviewed design specification v1, 2026-09-20, for incremental implementation. The review preserves icon-prefixed desktop navigation and the CoS-style compact mobile icon row as explicit product requirements. This is not a claim that existing pages implement the specification. Existing accessibility, routing, privacy, and behavior contracts in `client/src/AGENTS.md` remain binding. The rollout history is in epic [#7791](https://github.com/atomantic/PortOS/issues/7791).
 
 ## 1. The product experience
 
@@ -157,7 +157,7 @@ Use focused behavior tests at rendered interactions and route boundaries plus vi
 
 ## Sources and rationale
 
-The page families, spacing, and navigation grouping are PortOS design defaults based on the [repository/live audit](research/UX_DESIGN_AUDIT.md), not externally mandated rules.
+The page families, spacing, and navigation grouping are PortOS design defaults.
 
 - [NN/g: Progressive disclosure](https://www.nngroup.com/articles/progressive-disclosure/) supports moving secondary detail behind explicit requests while keeping primary work clear. Disclosure does not justify hiding sibling destinations.
 - [W3C: Reflow](https://www.w3.org/WAI/WCAG22/Understanding/reflow.html) explains narrow-width/zoom reflow and the exception for two-dimensional tables within their own scroll region.
@@ -198,7 +198,7 @@ Adoption is incremental. CoS uses the shared request and footer primitives; Medi
 
 ## Config drawers
 
-Settings-over-a-feature surfaces use the shared `client/src/components/Drawer.jsx`, never a hand-rolled `fixed inset-y-0 right-0` clone (design record: `docs/plans/archive/2026-07-01-drawer-ux-redesign.md`).
+Settings-over-a-feature surfaces use the shared `client/src/components/Drawer.jsx`, never a hand-rolled `fixed inset-y-0 right-0` clone.
 
 - **Size**: `size` is `sm` 520px, `md` 640px, `lg` 720→880px, `xl` up to 1100px; widen large forms so they lay out in columns, keep small dialogs `sm`. Mobile is always full-width. `widthClass` is a back-compat override.
 - **Tabs**: a large surface (many fields or groups, e.g. Edit App) uses `tabs={[{ id, label, icon?, count? }]}` + `activeTab`/`onTabChange` and renders only the active tab. A medium form that should stay fully visible uses labeled sections instead (`ImageGenSettingsForm`'s `grouped` prop).

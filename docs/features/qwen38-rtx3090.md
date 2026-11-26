@@ -352,9 +352,8 @@ workload that fits.
 5. Assign the provider to a CoS agent task.
 
 **Turn thinking off for agent work.** Qwen3.8's tool-call format is markedly more
-reliable with `enable_thinking: false`, and every measurement in the
-[bring-up record](../research/2026-08-21-qwen38-rtx3090-vllm.md) was taken that
-way. The provider card's **Generation Defaults** block is where you set it:
+reliable with `enable_thinking: false`, the setting used for the bring-up
+measurements. Set it in the provider card's **Generation Defaults** block.
 PortOS emits the toggle as `chat_template_kwargs.enable_thinking` on the spawned
 OpenCode's `agent.build`, which is how vLLM takes it. Temperature ~0.7 is the
 matching default for coding work.
@@ -427,12 +426,8 @@ concurrent server result.
   engine patch. That conclusion still holds; what changed is that upstream froze
   a working container for this exact card, so PortOS points at it instead of
   building it.
-- [The 3090 bring-up record](../research/2026-08-21-qwen38-rtx3090-vllm.md) — the
-  measurements behind the numbers above, and how each required setting was found.
-- [SGLang Qwen3.8-27B](./sglang-qwen38.md) — the Hopper / Blackwell path that
-  shipped from that evaluation. It does **not** replace this container: the
-  SGLang cookbook publishes no 3090 cell, so Ampere 24 GB stays here. The two
+- [SGLang Qwen3.8-27B](./sglang-qwen38.md) — the Hopper and Blackwell path. The
+  SGLang cookbook publishes no 3090 cell, so Ampere 24 GB uses vLLM. The two
   also spell the tool-call parser differently (`qwen3_xml` here,
-  `qwen3_coder` there), which fails silently if crossed. Background:
-  [the evaluation note](../research/2026-08-21-sglang-qwen38-27b.md).
+  `qwen3_coder` there), which fails silently if crossed.
 - [docs/PORTS.md](../PORTS.md) — why `:18020` sits outside the 5553–5569 range.
