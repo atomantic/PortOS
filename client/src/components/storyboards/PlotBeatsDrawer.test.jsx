@@ -39,4 +39,17 @@ describe('PlotBeatsDrawer plot save', () => {
     expect(onBoard).not.toHaveBeenCalled();
     expect(textarea).toHaveValue('A new plot');
   });
+
+  it('skips blur saves when the plot exceeds the character limit', async () => {
+    const onBoard = vi.fn();
+    render(<PlotBeatsDrawer open board={board} onClose={() => {}} onBoard={onBoard} />);
+    const textarea = screen.getByLabelText('Plot summary');
+    fireEvent.change(textarea, { target: { value: 'x'.repeat(20_001) } });
+    fireEvent.blur(textarea);
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('shorten it to send it'));
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(onBoard).not.toHaveBeenCalled();
+  });
 });
