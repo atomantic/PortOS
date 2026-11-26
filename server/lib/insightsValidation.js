@@ -1,7 +1,23 @@
-/** Zod request schemas for insight refreshes and weekly goal scorecards. */
+/** Zod schemas for insight refreshes, generated themes and weekly goal scorecards. */
 
 import { z } from 'zod';
 import { providerRefSchema } from './zodCompat.js';
+
+const themeEvidenceSchema = z.object({
+  preference: z.string().catch(''),
+  domain: z.string().catch(''),
+  connection: z.string().catch(''),
+});
+
+export const insightThemeSchema = z.object({
+  title: z.string().trim().min(1),
+  narrative: z.preprocess(value => value ?? '', z.coerce.string().catch('')),
+  evidence: z.array(z.unknown()).catch([]).transform(items => items.flatMap(item => {
+    const parsed = themeEvidenceSchema.safeParse(item);
+    return parsed.success ? [parsed.data] : [];
+  })),
+  strength: z.enum(['strong', 'moderate', 'tentative']).catch('tentative'),
+});
 
 export const insightRefreshSchema = z.object({
   providerId: providerRefSchema.optional(),

@@ -76,6 +76,23 @@ describe('insightsService read paths — disk-only, no provider call', () => {
     expect(result).toEqual({ available: false, reason: 'not_generated' });
   });
 
+  it('treats a legacy wrapped cache as not generated', async () => {
+    readJSONFile.mockResolvedValue({ themes: { themes: [{ title: 'Wrapped theme' }] } });
+
+    await expect(getThemeAnalysis()).resolves.toEqual({ available: false, reason: 'not_generated' });
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it('normalizes legacy theme strengths when reading the cache', async () => {
+    readJSONFile.mockResolvedValue({ themes: [{ title: 'First' }, { title: 'Second', strength: 42 }] });
+
+    const result = await getThemeAnalysis();
+
+    expect(result.available).toBe(true);
+    expect(result.themes.map(theme => theme.strength)).toEqual(['tentative', 'tentative']);
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
   it('getCrossDomainNarrative performs no provider call (returns not_generated when uncached)', async () => {
     const result = await getCrossDomainNarrative();
     expect(callProviderAISimple).not.toHaveBeenCalled();
@@ -90,7 +107,7 @@ describe('insightsService read paths — disk-only, no provider call', () => {
 // completion overwrites a real cached theme/narrative with nothing. The shared
 // aiProvider transport classifies that as an error — these assert the callers
 // actually honour it and leave the cache alone.
-describe('insightsService generation — a provider error never overwrites the cache', () => {
+describe('insightsService generation', () => {
   const CACHED_THEMES = {
     themes: [{ title: 'Cached theme', strength: 'strong', narrative: 'prior', evidence: [] }],
     generatedAt: '2020-01-01T00:00:00.000Z',
@@ -132,9 +149,26 @@ describe('insightsService generation — a provider error never overwrites the c
     expect(atomicWrite).not.toHaveBeenCalled();
   });
 
+  it.each(['{"themes":[null,{"title":"  "},{"title":9}]}', 'null', '[]', 'plain text'])(
+    'rejects unusable themes without replacing the cache (%s)',
+    async text => {
+      callProviderAISimple.mockResolvedValue({ text });
+
+      await expect(generateThemeAnalysis()).resolves.toEqual({ available: false, reason: 'invalid_response' });
+      expect(atomicWrite).not.toHaveBeenCalled();
+      await expect(getThemeAnalysis()).resolves.toEqual({ ...CACHED_THEMES, available: true });
+    },
+  );
+
   it.each([
     ['/themes/refresh', '[{"title":"New theme","strength":"strong"}]', {
-      themes: [{ title: 'New theme', strength: 'strong' }],
+      themes: [{ title: 'New theme', narrative: '', evidence: [], strength: 'strong' }],
+    }],
+    ['/themes/refresh', '{"themes":[null,{"title":"New theme","strength":7,"narrative":42,"evidence":[null,[],{"preference":"Sparse arrangements","domain":"Music","connection":{}}]}]}', {
+      themes: [{
+        title: 'New theme', narrative: '42', strength: 'tentative',
+        evidence: [{ preference: 'Sparse arrangements', domain: 'Music', connection: '' }],
+      }],
     }],
     ['/narrative/refresh', 'New cross-domain narrative.', {
       text: 'New cross-domain narrative.',
