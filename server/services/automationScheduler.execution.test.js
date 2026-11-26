@@ -20,7 +20,7 @@ vi.mock('./agent/agentActivity.js', () => ({
 }));
 vi.mock('./platformAccounts.js', () => ({
   getAccountWithCredentials: async () => ({
-    platform: 'moltbook', status: 'active', credentials: { apiKey: 'synthetic-key' },
+    agentId: 'example-agent', platform: 'moltbook', status: 'active', credentials: { apiKey: 'synthetic-key' },
   }),
   recordActivity: async () => {},
 }));

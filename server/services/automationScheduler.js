@@ -10,6 +10,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { PATHS, createCachedStore } from '../lib/fileUtils.js';
 import * as eventScheduler from './eventScheduler.js';
 import * as agentActivity from './agent/agentActivity.js';
+import { validateScheduleOwner } from './agent/automationScheduleOwner.js';
 import { getUserTimezone } from './userTimezone.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -117,7 +118,7 @@ export async function createSchedule(scheduleData) {
 export async function updateSchedule(id, updates) {
   let schedule = null;
   let wasEnabled = false;
-  await store.mutate((data) => {
+  await store.mutate(async (data) => {
     if (!data.schedules[id]) return data;
 
     const { id: _id, createdAt: _createdAt, ...cleanUpdates } = updates;
@@ -129,6 +130,11 @@ export async function updateSchedule(id, updates) {
       createdAt: data.schedules[id].createdAt,
       updatedAt: new Date().toISOString()
     };
+
+    // Validate against the same serialized snapshot used for the write.
+    if (cleanUpdates.agentId !== undefined || cleanUpdates.accountId !== undefined) {
+      await validateScheduleOwner(schedule);
+    }
 
     if (cleanUpdates.schedule) {
       schedule.rolledIntervalMs = null;

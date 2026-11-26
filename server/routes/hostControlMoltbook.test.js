@@ -86,6 +86,7 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
 
 import { PATHS } from '../lib/fileUtils.js';
 import { createSession } from '../services/auth.js';
+import { logAction } from '../services/history.js';
 import * as personalities from '../services/agent/agentPersonalities.js';
 import * as scheduler from '../services/automationScheduler.js';
 import { cancelAll } from '../services/eventScheduler.js';
@@ -140,6 +141,7 @@ beforeEach(async () => {
   await mkdir(PATHS.agentPersonalities, { recursive: true });
   await writeFile(join(PATHS.agentPersonalities, 'agents.json'), JSON.stringify({ agents: {
     [ids.agentId]: { name: 'Example Bot', enabled: true, personality: { style: 'casual' } },
+    'other-agent': { name: 'Other Bot', enabled: true },
   } }));
   await writeFile(join(PATHS.agentPersonalities, 'schedules.json'), JSON.stringify({ schedules: {
     'example-schedule': scheduleBody,
@@ -149,6 +151,49 @@ beforeEach(async () => {
 });
 
 afterEach(() => { cancelAll(); });
+
+describe('Schedule update ownership', () => {
+  const path = '/schedules/example-schedule';
+  const otherPair = { agentId: 'other-agent', accountId: 'other-account' };
+
+  beforeEach(() => {
+    effects.getAccountById.mockImplementation(async accountId => ({
+      [ids.accountId]: { agentId: ids.agentId },
+      [otherPair.accountId]: { agentId: otherPair.agentId },
+    })[accountId] ?? null);
+  });
+
+  it.each([
+    [{ agentId: 'missing-agent' }, 404, 'AGENT_NOT_FOUND'],
+    [{ accountId: 'missing-account' }, 404, 'ACCOUNT_NOT_FOUND'],
+    [{ accountId: otherPair.accountId }, 400, 'ACCOUNT_AGENT_MISMATCH'],
+    [{ agentId: otherPair.agentId }, 400, 'ACCOUNT_AGENT_MISMATCH'],
+  ])('refuses %j with %i %s before saving or auditing', async (updates, status, code) => {
+    const before = await savedState();
+    const response = await call(appFor('127.0.0.1'), ['put', path, updates]);
+    expect([response.status, response.body.code]).toEqual([status, code]);
+    expect(await savedState()).toEqual(before);
+    expect(logAction).not.toHaveBeenCalled();
+  });
+
+  it('persists a reassignment when both new IDs form a valid pair', async () => {
+    const response = await call(appFor('127.0.0.1'), ['put', path, otherPair]);
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ ...scheduleBody, ...otherPair });
+    scheduler.invalidateCache();
+    expect(await scheduler.getScheduleById('example-schedule')).toMatchObject(otherPair);
+    expect(logAction).toHaveBeenCalledExactlyOnceWith('update', 'automation-schedule', 'example-schedule',
+      { agentId: otherPair.agentId, action: 'post' });
+  });
+
+  it('lets the operator disable a legacy schedule without resolving its relationships', async () => {
+    effects.getAccountById.mockResolvedValue(null);
+    const response = await call(appFor('127.0.0.1'), ['put', path, { enabled: false }]);
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ ...ids, enabled: false });
+    expect(effects.getAccountById).not.toHaveBeenCalled();
+  });
+});
 
 // The refusal/principal matrix lives in services/authGate.test.js and
 // server/test/guards/modules/hostControlCoverage.test.js; this keeps one refusal and the authorized

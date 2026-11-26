@@ -69,6 +69,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => ({
 import * as agentActivity from './agentActivity.js';
 import * as platformAccounts from '../platformAccounts.js';
 import * as agentPersonalities from './agentPersonalities.js';
+import { createMoltbookClient } from '../../integrations/moltbook/index.js';
 import { generatePost, generateComment, generateReply, assertMoltbookCommentProvider } from './agentContentGenerator.js';
 import { init } from './agentActionExecutor.js';
 
@@ -80,6 +81,7 @@ const makeSchedule = (actionType, params = {}) => ({
 
 const makeAccount = (platform = 'moltbook') => ({
   id: 'acc-1',
+  agentId: 'agent-1',
   platform,
   status: 'active',
   credentials: { apiKey: 'test-key', username: 'testuser', agentId: 'mw-agent-1' }
@@ -125,6 +127,22 @@ describe('agentActionExecutor', () => {
   // Registered executor — account/agent validation
   // ===========================================================================
   describe('registered executor', () => {
+    it('fails a stored schedule whose active account belongs to another agent', async () => {
+      platformAccounts.getAccountWithCredentials.mockResolvedValue({ ...makeAccount(), agentId: 'other-agent' });
+      agentPersonalities.getAgentById.mockResolvedValue(makeAgent());
+
+      const entry = await runAction('post', { aiGenerate: true });
+
+      expect(entry).toMatchObject({
+        scheduleId: 's1',
+        status: 'failed',
+        code: 'ACCOUNT_AGENT_MISMATCH'
+      });
+      expect(createMoltbookClient).not.toHaveBeenCalled();
+      expect(generatePost).not.toHaveBeenCalled();
+      expect(platformAccounts.recordActivity).not.toHaveBeenCalled();
+    });
+
     it('should log failure when account not found', async () => {
       platformAccounts.getAccountWithCredentials.mockResolvedValue(null);
 
