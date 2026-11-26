@@ -45,18 +45,24 @@ describe('browser shard ownership', () => {
       const files = browserTestProfileFiles(profile, BROWSER_SUITES);
       const shards = Array.from({ length: count }, (_, index) => browserShardSlice(files, { index: index + 1, count }, profile));
       expect(shards.every(shard => shard.length > 0)).toBe(true);
-      expect(shards.find(shard => shard.includes(visual))).toEqual([visual, 'server/services/musicVideo/overlayTextService.browser.test.js']);
+      const overlay = 'server/services/musicVideo/overlayTextService.browser.test.js';
+      const visualShard = profile === 'smoke'
+        ? [visual, 'server/services/musicVideo/documentRenderGeneration.browser.test.js', overlay]
+        : [visual, overlay, 'server/services/codeAnimation/poster.realBrowser.test.js'];
+      expect(shards.find(shard => shard.includes(visual))).toEqual(visualShard);
     }
   });
 
   it.each([
+    ['server/lib/filmLook.browser.test.js', 6, 3],
+    ['server/services/codeAnimation/export.realBrowser.test.js', 6, 5],
     ['server/services/musicVideo/overlayTextService.browser.test.js', 1, 1],
-    ['server/services/codeAnimation/poster.realBrowser.test.js', 2, 6],
-    ['server/services/musicVideo/documentRenderGeneration.browser.test.js', 3, 7],
+    ['server/services/codeAnimation/poster.realBrowser.test.js', 1, 6],
+    ['server/services/musicVideo/documentRenderGeneration.browser.test.js', 3, 1],
     ['server/services/musicVideo/publish/sunoHook.browser.test.js', 3, 7],
     ['server/services/greyboxRender.browser.test.js', 4, 7],
     ['server/routes/catalogGreyboxViewer.browser.test.js', 7, 7],
-    ['server/services/musicVideo/documentVignette.browser.test.js', 6, 5],
+    ['server/services/musicVideo/documentVignette.browser.test.js', 2, 7],
     ['server/routes/musicVideoProductionReview.browser.test.js', 6, 6],
   ])('keeps %s on its balanced broad owner for each profile', (file, full, smoke) => {
     const count = FULL_BROWSER_SHARD_COUNT;

@@ -61,6 +61,8 @@ export const ffmpeg = await findFfmpeg();
 // Imported discovery helpers can initialize mocked paths even on a skip.
 export const prerequisites = { 'Chrome with H.264': await chromeWithH264(chrome), ffmpeg };
 
+export const near = (actual, expected, tolerance) => actual.forEach((v, i) => expect(Math.abs(v - expected[i])).toBeLessThan(tolerance));
+
 export let browser, PATHS, encodeDocumentComposition, prepareDocumentRender, importDocumentTemplate;
 export let buildDocumentPreview, PREVIEW_MEDIA_BUDGET_BYTES, projects;
 
