@@ -36,6 +36,15 @@ const renderCard = (provider, daemonReadiness = null, props = {}) => render(
 );
 
 describe('ProviderCard context window', () => {
+  it('keeps disabled providers readable without dimming the whole card', () => {
+    renderCard(wrapper({ enabled: false }), null, {
+      cardState: { state: PROVIDER_CARD_STATE.DISABLED, missing: [] },
+    });
+    const card = screen.getByText('DISABLED').closest('[data-provider-id]');
+    expect(card.className).toContain('bg-port-bg/40');
+    expect(card.className).not.toMatch(/opacity-/);
+  });
+
   it('labels the blanket 128K as an assumption, not a measured window', () => {
     // Printing it bare made a 1M-context model look like PortOS had capped it,
     // with nothing on screen to say the number was a guess or how to fix it.

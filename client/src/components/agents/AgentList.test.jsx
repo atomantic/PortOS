@@ -64,6 +64,18 @@ describe('AgentList', () => {
     expect(screen.getByRole('heading', { name: 'Create New Agent' })).toBeInTheDocument();
   });
 
+  it('shows disabled agents clearly without reducing card opacity', async () => {
+    getAgentPersonalities.mockResolvedValue([{
+      id: 'agent-1', name: 'Example Agent', enabled: false, description: 'Example description',
+      personality: { style: 'friendly' },
+    }]);
+    render(<MemoryRouter><AgentList /></MemoryRouter>);
+    const disabled = await screen.findByText('Disabled');
+    const card = disabled.closest('a');
+    expect(card.className).not.toMatch(/opacity-/);
+    expect(card).toHaveTextContent('Example Agent');
+  });
+
   it('wraps the page header and stacks the create form below sm', async () => {
     render(<MemoryRouter><AgentList /></MemoryRouter>);
     const heading = await screen.findByRole('heading', { name: 'Social Agents' });

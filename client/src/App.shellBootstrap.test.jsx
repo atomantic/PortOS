@@ -2,6 +2,7 @@ import { StrictMode, memo } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router';
+import { getNavPageForPath } from '../../server/lib/navManifest.js';
 import App from './App.jsx';
 import { ThemeProvider } from './components/ThemeContext.jsx';
 import { useSidebarContext } from './components/SidebarContext.jsx';
@@ -75,7 +76,7 @@ it('keeps cold shell requests bounded and isolates bell and rail updates from th
   render(<StrictMode><ThemeProvider><RouterProvider router={router} /></ThemeProvider></StrictMode>);
   await act(async () => {});
 
-  expect(document.title).toBe('PortOS: Example');
+  expect(document.title).toBe(`${getNavPageForPath('/apps').breadcrumb} · PortOS: Example`);
   expect(screen.getByRole('heading', { name: '/apps' })).toBeInTheDocument();
   expect(calls.toSorted()).toEqual(['/api/notifications', '/api/review/queue', '/api/shell/bootstrap']);
 

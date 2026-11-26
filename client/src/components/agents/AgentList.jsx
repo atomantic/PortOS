@@ -418,7 +418,7 @@ export default function AgentList() {
                 key={agent.id}
                 to={`/agents/${agent.id}`}
                 className={`block p-4 bg-port-card border rounded-lg transition-colors hover:border-port-accent/50 ${
-                  agent.enabled ? 'border-port-border' : 'border-port-border/50 opacity-60'
+                  agent.enabled ? 'border-port-border' : 'border-port-border/50'
                 }`}
               >
                 <div className="flex items-center gap-3 mb-3">
@@ -429,7 +429,10 @@ export default function AgentList() {
                     {agent.avatar?.emoji || '🤖'}
                   </div>
                   <div className="min-w-0">
-                    <h2 className="font-semibold text-white truncate">{agent.name}</h2>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <h2 className="font-semibold text-white truncate">{agent.name}</h2>
+                      {!agent.enabled && <span className="shrink-0 text-xs px-2 py-0.5 rounded bg-gray-500/20 text-gray-400">Disabled</span>}
+                    </div>
                     <p className="text-sm text-gray-400 truncate">{agent.description || 'No description'}</p>
                   </div>
                 </div>
@@ -453,13 +456,7 @@ export default function AgentList() {
                 <div className="flex items-center gap-3 text-xs text-gray-500">
                   <span>{pluralize(accountCounts[agent.id] || 0, 'account')}</span>
                   <span>{scheduleCounts[agent.id] || 0} schedules</span>
-                  <span className={`ml-auto px-2 py-0.5 rounded ${
-                    agent.enabled
-                      ? 'bg-port-success/20 text-port-success'
-                      : 'bg-port-border text-gray-400'
-                  }`}>
-                    {agent.enabled ? 'Enabled' : 'Disabled'}
-                  </span>
+                  {agent.enabled && <span className="ml-auto px-2 py-0.5 rounded bg-port-success/20 text-port-success">Enabled</span>}
                 </div>
               </Link>
             ))}

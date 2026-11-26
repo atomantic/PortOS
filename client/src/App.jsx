@@ -3,13 +3,14 @@ import { isPublicGuestRoute } from './lib/publicGuestRoutes';
 import { Routes, Route, Navigate, useLocation, useParams } from 'react-router';
 import Layout from './components/Layout';
 import { FullWidthMain, PaddedMain } from './components/PageShell';
-import { getSettings, updateSettings, getSelfInstance } from './services/apiSystem.js';
+import { getSettings, updateSettings } from './services/apiSystem.js';
 import { NAV_COMMANDS } from '../../server/lib/navManifest.js';
 import { previousPathRedirects, previousPathTarget } from './lib/previousPaths';
 import PageLoader from './components/PageLoader';
 import useFeatureUsageBeacon from './components/featureUsage/useFeatureUsageBeacon';
 import { readShellBootstrap } from './services/shellBootstrap.js';
 import { lazyWithReload } from './utils/lazyWithReload';
+import useDocumentTitle from './hooks/useDocumentTitle.js';
 
 // Direct links to other pages should not download the dashboard's grid/editor.
 const Dashboard = lazyWithReload(() => import('./pages/Dashboard'));
@@ -242,26 +243,11 @@ function useTimezoneBootstrap(enabled = true) {
   }, [enabled]);
 }
 
-// Stamp the machine's instance name into the browser tab so multiple federated
-// installs are distinguishable at a glance — "PortOS: {name}". Falls back to the
-// static "PortOS" title (set in index.html) when the name is missing/unfetchable.
-function useDocumentTitle(enabled = true) {
-  useEffect(() => {
-    if (!enabled) return;
-    let cancelled = false;
-    readShellBootstrap('selfInstance', () => getSelfInstance({ silent: true })).then((self) => {
-      const name = self?.name?.trim();
-      if (!cancelled && name) document.title = `PortOS: ${name}`;
-    }).catch(() => null);
-    return () => { cancelled = true; };
-  }, [enabled]);
-}
-
 export default function App() {
   const { pathname } = useLocation();
   const isHostedAudienceRoute = isPublicGuestRoute(pathname);
   useTimezoneBootstrap(!isHostedAudienceRoute);
-  useDocumentTitle(!isHostedAudienceRoute);
+  useDocumentTitle(pathname, !isHostedAudienceRoute);
   useFeatureUsageBeacon(!isHostedAudienceRoute);
 
   const routeContent = (
