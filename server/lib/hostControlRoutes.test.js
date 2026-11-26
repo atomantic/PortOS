@@ -8,6 +8,14 @@ describe('isHostControlRoute (#16018)', () => {
     expect(isHostControlRoute('HEAD', path)).toBe(true);
   });
 
+  it('matches nested repository document paths on GET and HEAD (#19495)', () => {
+    const route = 'GET /api/apps/:id/documents/*docPath';
+    const path = '/API/Apps/example-app/Documents/docs/guide.md';
+    expect(hostControlGetRouteFor('GET', path)).toBe(route);
+    expect(hostControlGetRouteFor('HEAD', path + '//')).toBe(route);
+    expect(hostControlGetRouteFor('GET', '/api/apps/example-app/documents-preview')).toBeNull();
+  });
+
   it('gates every /api write by default, whatever its family or spelling', () => {
     for (const [method, path] of [
       ['POST', '/api/apps/example-app/start'],

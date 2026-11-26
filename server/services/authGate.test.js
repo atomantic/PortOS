@@ -921,6 +921,40 @@ describe('host control by default on /api writes (#16018)', () => {
     return ['Authorization', `Bearer ${PORTOS_API_TOKEN}`];
   };
 
+  it.each(['remote', 'basic', 'local', 'session', 'agent'])('checks %s authority for host repository and runtime reads (#19495)', async (authority) => {
+    const paths = [
+      '/api/apps/example-app/documents',
+      '/api/apps/example-app/documents/docs/guide.md',
+      '/api/apps/example-app/vite-host-check',
+      '/api/cos/gsd/projects',
+      '/api/cos/gsd/projects/example-app',
+      '/api/cos/gsd/projects/example-app/phases',
+      '/api/cos/gsd/projects/example-app/documents/ROADMAP.md',
+      '/api/ports/scan',
+      '/api/commands/processes',
+      '/api/github/accounts/example-account/status',
+      '/api/apps/example-app/issues',
+      '/api/apps/example-app/pull-requests',
+      '/api/apps/example-app/work-items',
+      '/api/apps/example-app/lane-health',
+      '/api/devtools/video-download/yt-dlp',
+      '/api/midi-runtime/install',
+      '/api/music/setup/runtime-install',
+      '/api/html-pages/runs/example-run/pages/0/path',
+    ];
+    const header = authority === 'remote' ? null : await authorityHeader(authority);
+    const { app, sink } = await buildApp(authority === 'local' ? '127.0.0.1' : '192.0.2.10');
+    app.get(paths, (req, res) => { sink(req.path); res.json({ ok: true }); });
+    const allowed = authority !== 'remote' && authority !== 'basic';
+    for (const path of paths) {
+      const response = await send(app, 'get', path, undefined, header);
+      expect(response.status, path).toBe(allowed ? 200 : 403);
+      if (!allowed) expect(response.body.code, path).toBe('HOST_CONTROL_FORBIDDEN');
+      expect((await send(app, 'head', path, undefined, header)).status, path).toBe(allowed ? 200 : 403);
+    }
+    expect(sink).toHaveBeenCalledTimes(allowed ? paths.length * 2 : 0);
+  });
+
   it('refuses a remote password-free caller on every write and sensitive GET before any sink', async () => {
     const { app, runner, sink } = await buildApp();
     for (const suffix of ['', '/', '//']) {
