@@ -133,14 +133,14 @@ export const effortArg = (route) => (route?.effort ? { effort: route.effort } : 
  * one; best-effort — a failed write never fails the stage it describes.
  * Returns the persisted project, or null when nothing was written.
  */
-export async function recordLlmRoute(projectId, stage, route) {
+export async function recordLlmRoute(projectId, stage, route, isCurrent = null) {
   if (!route) return null;
   try {
     const { mutateProjectRecord } = await import('./projects.js');
     const at = new Date().toISOString();
-    const written = await mutateProjectRecord(projectId, (current) => (current.automation
+    const written = await mutateProjectRecord(projectId, (current) => (current.automation && (!isCurrent || isCurrent(current))
       ? { project: { ...current, automation: { ...current.automation, routes: { ...(current.automation.routes || {}), [stage]: { ...route, at } } } }, written: true }
-      : { project: current, written: false }));
+      : { project: current, written: false, skipPersist: true }));
     return written?.written ? written.project : null;
   } catch (err) {
     console.warn(`⚠️ Music Video ${stage}: could not record the LLM route for ${projectId}: ${err.message}`);
