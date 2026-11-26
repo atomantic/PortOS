@@ -178,8 +178,8 @@ async function saveEnrichmentDocument({ targetPath, previousContent }, content, 
     try {
       if (previousContent === null) await unlink(targetPath);
       else await atomicWrite(targetPath, previousContent);
-    } catch (restoreErr) {
-      console.error(`❌ Digital twin enrichment restore failed: ${restoreErr.message}`);
+    } catch {
+      console.error('❌ Digital twin enrichment restore failed');
     }
     throw err;
   }
@@ -277,7 +277,7 @@ async function processScaleAnswerLeased(data) {
   digitalTwinEvents.emit('traits:updated', meta.traits);
   digitalTwinEvents.emit('confidence:calculated', meta.confidence);
 
-  console.log(`📊 Scale answer processed: ${scaleQuestionId}=${scaleValue} → ${scaleDef.dimension} confidence=${meta.confidence.dimensions[scaleDef.dimension]}`);
+  console.log(`📊 Scale answer processed for ${category} (${scaleDef.dimension})`);
 
   return {
     category,
@@ -387,7 +387,7 @@ async function persistEnrichmentAnswer(category, config, formattedContent) {
 
   digitalTwinEvents.emit('confidence:calculated', meta.confidence);
 
-  console.log(`🧬 Enrichment answer processed for ${category}${dimension ? ` → ${dimension} confidence=${meta.confidence.dimensions[dimension]}` : ''}`);
+  console.log(`🧬 Enrichment answer processed for ${category}${dimension ? ` (${dimension})` : ''}`);
 
   return {
     category,

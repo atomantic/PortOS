@@ -57,11 +57,11 @@ import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
  */
 
 import { meatspaceEvents } from './meatspace/meatspaceEvents.js';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { documentFilenameSchema } from '../lib/digitalTwinSchemas.js';
 import { readdir, readFile, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
-import { atomicWrite, readJSONFile, ensureDir, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, readJSONFile, ensureDir, PATHS, unreadableStoreError } from '../lib/fileUtils.js';
 import { canonicalSnapshotChecksum } from '../lib/snapshotChecksum.js';
 import { canonicalStringify, isPlainObject } from '../lib/objects.js';
 import { normalizeTombstones, mergeTombstones, isTombstoned, pruneTombstones, tombstonesEqual } from '../lib/tombstones.js';
@@ -869,16 +869,16 @@ export async function getDigitalTwinSnapshot() {
   const { withMetaLock } = await import('./digital-twin-meta.js');
   const [identity, chronotype, longevity, feedback, taste, tasteObserved, chronotypeObserved, [meta, documents], stories, socialAccounts] =
     await Promise.all([
-      readJSONFile(IDENTITY_FILE, null, { strict: true }),
-      readJSONFile(CHRONOTYPE_FILE, null, { strict: true }),
-      readJSONFile(LONGEVITY_FILE, null, { strict: true }),
-      readJSONFile(FEEDBACK_FILE, null, { strict: true }),
-      readJSONFile(TASTE_FILE, null, { strict: true }),
-      readJSONFile(TASTE_OBSERVED_FILE, null, { strict: true }),
-      readJSONFile(CHRONOTYPE_OBSERVED_FILE, null, { strict: true }),
-      withMetaLock(() => Promise.all([readJSONFile(META_FILE, null, { strict: true }), readMarkdownDocuments()])),
-      readJSONFile(AUTOBIO_STORIES_FILE, null, { strict: true }),
-      readJSONFile(SOCIAL_ACCOUNTS_FILE, null, { strict: true }),
+      readSyncStore(IDENTITY_FILE),
+      readSyncStore(CHRONOTYPE_FILE),
+      readSyncStore(LONGEVITY_FILE),
+      readSyncStore(FEEDBACK_FILE),
+      readSyncStore(TASTE_FILE),
+      readSyncStore(TASTE_OBSERVED_FILE),
+      readSyncStore(CHRONOTYPE_OBSERVED_FILE),
+      withMetaLock(() => Promise.all([readSyncStore(META_FILE), readMarkdownDocuments()])),
+      readSyncStore(AUTOBIO_STORIES_FILE),
+      readSyncStore(SOCIAL_ACCOUNTS_FILE),
     ]);
   // includePrivacyContext is machine-local: never on the wire or in checksums.
   let wireMeta = meta;
@@ -891,11 +891,19 @@ export async function getDigitalTwinSnapshot() {
   return { data, checksum: canonicalSnapshotChecksum(data) };
 }
 
+// Sync stores have fixed filenames. Keep only the filename in diagnostics.
+function readSyncStore(path) {
+  return readJSONFile(path, null, { strict: true, logError: false }).catch(err => {
+    if (err.code === 'UNREADABLE_STORE') throw unreadableStoreError(basename(path));
+    throw err;
+  });
+}
+
 // --- Apply ---
 
 async function applyMerge(path, remote, mergeFn, { dir } = {}) {
   if (remote === undefined || remote === null) return 0;
-  const local = await readJSONFile(path, null, { strict: true });
+  const local = await readSyncStore(path);
   const { merged, changed } = mergeFn(local, remote);
   if (!changed) return 0;
   if (dir) await ensureDir(dir);
@@ -932,12 +940,11 @@ async function reapTombstonedDocuments(suppressed) {
     if (!existsSync(filePath)) continue;
     // A file we can't remove (permissions, or it vanished between the check and
     // the call) must not abort the rest of the sync — report and move on.
-    const removed = await unlink(filePath).then(() => true, (err) => {
-      console.error(`❌ Digital twin sync: could not remove deleted document ${name}: ${err.message}`);
+    const removed = await unlink(filePath).then(() => true, () => {
+      console.error('❌ Digital twin sync: could not remove deleted document');
       return false;
     });
     if (!removed) continue;
-    console.log(`🧬 Digital twin sync: removed deleted document ${name}`);
     count++;
   }
   return count;
@@ -976,8 +983,7 @@ async function applyDocuments(documents, { suppressed, localStamps, remoteStamps
       const previous = await readFile(filePath, 'utf-8');
       if (previous === content) continue;
       await atomicWrite(filePath, content);
-      result.replaced.push({ name, filePath, previous });
-      console.log(`🧬 Digital twin sync: updated document ${name} from a newer peer edit`);
+      result.replaced.push({ filePath, previous });
     } else {
       await ensureDir(DIR);
       await atomicWrite(filePath, content);
@@ -988,9 +994,9 @@ async function applyDocuments(documents, { suppressed, localStamps, remoteStamps
 }
 
 async function restoreReplacedDocuments(replaced) {
-  for (const { name, filePath, previous } of replaced) {
-    await atomicWrite(filePath, previous).catch((err) => {
-      console.error(`❌ Digital twin sync: could not restore document ${name}: ${err.message}`);
+  for (const { filePath, previous } of replaced) {
+    await atomicWrite(filePath, previous).catch(() => {
+      console.error('❌ Digital twin sync: could not restore document');
     });
   }
 }
