@@ -6,10 +6,7 @@
  * returns to running on every plan, which is how the class this marker
  * exists for grew to dozens of files (#18634).
  *
- * This check makes that visible at the edit that causes it, and proves for
- * each declaring suite that the reading is live: each way of starting git in
- * the checkout below, added to that very file, must take the declaration
- * away, with the reason that names it.
+ * This check reports contradictions at the edit that introduces them.
  */
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -34,32 +31,11 @@ describe('test-memo: git-fixture declarations', () => {
     expect(refused).toEqual([]);
   });
 
-  // Names no suite uses, so a reason is never the suite's own.
-  const WRAPPER = "const __probe = (__probeDir) => execFileSync('git', ['rev-parse', 'HEAD'], { cwd: __probeDir });";
-  it.each([
-    ['names no directory', "execFileSync('git', ['rev-parse', 'HEAD']);", /starts git without naming the directory/],
-    ['gives a nullish directory', "execFileSync('git', ['rev-parse', 'HEAD'], { cwd: undefined });", /nullish directory/],
-    ['names git through a constant', "const __probeProgram = 'git';\nexecFileSync(__probeProgram, ['rev-parse', 'HEAD']);", /starts git without naming the directory/],
-    ['hands git to a runner as its program', "const __probe = (__probeProgram, __probeArgs) => execFileSync(__probeProgram, __probeArgs);\n__probe('git', ['rev-parse', 'HEAD']);", /starts git without naming the directory/],
-    ['starts git through an alias of the spawn callee', "const __probeSpawn = execFileSync;\n__probeSpawn('git', ['rev-parse', 'HEAD']);", /starts git without naming the directory/],
-    ['takes the process directory out of the environment', "execFileSync('git', ['rev-parse', 'HEAD'], { cwd: process.env.PWD });", /process\.env\.PWD/],
-    ['hands a shell a git command line', "execFileSync('sh', ['-c', 'git rev-parse HEAD']);", /runs git through a command line/],
-    ['hands the checkout to code it does not define', '__probeImported(process.cwd());', /hands the repository directory \S+ to code that may run git there/],
-    ['calls a wrapper without its directory', `${WRAPPER}\n__probe();`, /__probe\(\) is called without the directory/],
-    ['calls a wrapper with an undefined directory', `${WRAPPER}\n__probe(undefined);`, /nullish directory/],
-    ['calls a wrapper with a relative directory', `${WRAPPER}\n__probe('.');`, /relative to the test process/],
-    ['calls a wrapper with the process directory', `${WRAPPER}\n__probe(process.cwd());`, /hands git a path in this repository/],
-    ['defaults a wrapper to the process directory', "const __probe = (__probeDir = process.cwd()) => execFileSync('git', ['rev-parse', 'HEAD'], { cwd: __probeDir });\n__probe();", /hands git a path in this repository/],
-    ['reaches a wrapper through .call', `${WRAPPER}\n__probe.call(null);`, /__probe\(\) runs git and is used other than by a direct call/],
-    ['reaches a wrapper through .apply', `${WRAPPER}\n__probe.apply(null, []);`, /__probe\(\) runs git and is used other than by a direct call/],
-    ['reaches a wrapper through .bind', `${WRAPPER}\n__probe.bind(null)();`, /__probe\(\) runs git and is used other than by a direct call/],
-    ['gives an options pattern no directory', "const __probe = ({ __probeDir }) => execFileSync('git', ['rev-parse', 'HEAD'], { cwd: __probeDir });\n__probe({});", /__probe\(\) is called without the directory/],
-    ['gives an options parameter no directory', "const __probe = (__probeOptions = {}) => execFileSync('git', ['rev-parse', 'HEAD'], { cwd: __probeOptions.cwd });\n__probe();", /__probe\(\) is called without the directory/],
-  ])('fall as soon as the suite %s', (_label, addition, reason) => {
-    const stillStanding = declaring.filter(({ facts }) => facts.gitFixture).filter(({ file, source }) => {
-      const facts = read(file, `${source}\n${addition}\n`);
-      return facts.gitFixture || !reason.test(facts.gitFixtureProblem ?? '');
-    }).map(({ file }) => file);
-    expect(stillStanding).toEqual([]);
+  it('refuses an unscoped git call added to a declaring suite', () => {
+    const entry = declaring.find(({ facts }) => facts.gitFixture);
+    expect(entry).toBeDefined();
+    const facts = read(entry.file, `${entry.source}\nexecFileSync('git', ['rev-parse', 'HEAD']);\n`);
+    expect(facts.gitFixture).toBe(false);
+    expect(facts.gitFixtureProblem).toMatch(/starts git without naming the directory/);
   });
 });

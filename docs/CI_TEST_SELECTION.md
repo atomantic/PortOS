@@ -165,17 +165,7 @@ nothing for this workspace, so a restored tree is usable as-is.
 Five jobs install the server workspace through the `setup-server` action —
 `server`, `database`, `browser`, `windows-server` and `macos-native`. `setup-node`'s `cache: npm` only preserves `~/.npm`, the
 tarball cache, so `npm ci` still wipes and repopulates a ~570 MB
-`node_modules` on each of them. Two changes cut that.
-
-**Skip the CUDA execution provider.** onnxruntime-node bundles its CPU binaries
-in the npm tarball, but its postinstall *downloads* the CUDA EP — several
-hundred MB — on linux-x64 whenever `libonnxruntime_providers_cuda.so` is
-absent. `server/.npmrc` pins `ignore-scripts=true`, so that runs inside
-`scripts/trusted-rebuilds.js`, on the Linux server-installing jobs, every run.
-No hosted runner has an NVIDIA GPU to use it with. Setting
-`ONNXRUNTIME_NODE_INSTALL_CUDA=skip` on the rebuild step removes the download
-outright, and inference is unaffected. This is the largest single saving here,
-and it costs no cache budget.
+`node_modules` on each of them.
 
 **Cache the installed tree**, keyed on `runner.os`, `runner.arch`, the Node
 major, and a hash of `server/package-lock.json`, `server/package.json`,
@@ -209,10 +199,8 @@ contract; the parts that are not obvious:
   It has to be an extrinsic mark because "was this rebuilt?" is not answerable
   by inspecting the tree. With today's versions the rebuild is close to a
   no-op: node-pty and sharp ship prebuilt bindings inside their tarballs (there
-  is no `build/` directory even in a fully rebuilt tree), onnxruntime-node
-  bundles its CPU binaries, and protobufjs only regenerates a bundle nothing
-  requires. `require()`-ing those packages therefore succeeds on a
-  never-rebuilt tree and proves nothing. That is a property of the current
+  is no `build/` directory even in a fully rebuilt tree). Importing those
+  packages succeeds before rebuilding. That is a property of the current
   versions, not a guarantee — a release that drops a prebuild for the runner's
   platform, or an install under `npm_config_build_from_source` (which makes
   node-pty's install script *delete* the prebuilds), puts the rebuild back on
@@ -228,13 +216,8 @@ contract; the parts that are not obvious:
   would mean granting the workflow `actions: write`, which is not worth it when
   the worst case is already just the pre-cache cost.
 
-  Two residual cases are accepted rather than defended. A rebuild in which only
-  a `fatal: false` group failed exits 0, so a partially-rebuilt tree is marked
-  and shared — where before, each job rebuilt from scratch and a transient
-  failure degraded exactly one run. Today that is inert: with the CUDA download
-  skipped onnxruntime-node's script early-exits, and protobufjs only
-  regenerates a bundle nothing requires. And the dependency entry physically
-  contains `node_modules/.vite`, so those artifacts are stored in both entries;
+  The dependency entry also contains `node_modules/.vite`, so those artifacts
+  are stored in both entries.
   `!` exclusions do not fix it, because `@actions/cache` resolves `path` with
   `implicitDescendants: false` — a bare directory pattern is archived whole and
   a sibling negation has nothing to subtract.
