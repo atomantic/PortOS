@@ -56,6 +56,10 @@ export default function SongMarkers({ track, time, onSeek, onChange }) {
     pendingRef.current += 1;
     queueRef.current = queueRef.current
       .then(() => onChange(next))
+      .then((result) => {
+        const savedTrack = result?.board?.tempTrack ?? result?.tempTrack;
+        if (savedTrack) trackRef.current = savedTrack;
+      })
       .catch(() => {})
       .finally(() => {
         pendingRef.current -= 1;
