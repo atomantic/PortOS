@@ -53,6 +53,7 @@ import {
 } from '../../services/apiModelPerformance';
 import { localModelAssessmentPath } from '../../lib/localModelAssessmentKey';
 import LocalModelAssessments from './LocalModelAssessments.jsx';
+import { LOCAL_RUNTIME_LABELS } from '../../../../server/lib/modelPinMembership.js';
 
 // The measure drawer's target lives in the URL, so every render needs a router.
 // `currentUrl()` reads back what the panel wrote, which is what the deep-link
@@ -431,6 +432,17 @@ describe('LocalModelAssessments', () => {
     await renderPanel();
     expect(await screen.findByText(/Could not list installed models for LM Studio/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'View runtimes' })).toHaveAttribute('href', '/models/llms-runtimes');
+  });
+
+  it('falls back to every shared runtime label and displays unrecognized IDs as given', async () => {
+    getLocalLlmAssessments.mockResolvedValue(report({
+      runtimes: [],
+      listErrors: [...Object.keys(LOCAL_RUNTIME_LABELS), 'constructor'],
+    }));
+    await renderPanel();
+
+    const warning = await screen.findByText(/Could not list installed models for/);
+    expect(warning).toHaveTextContent([...Object.values(LOCAL_RUNTIME_LABELS), 'constructor'].join(', '));
   });
 
   it('omits inactive runtimes from the performance roster', async () => {
