@@ -253,6 +253,9 @@ describe('fineTuning', () => {
       modelRevision: revisionFor(20),
     });
 
+    queryMock.mockResolvedValueOnce({ rows: [{ data: { ...PROFILE, id: 'another-profile' } }] });
+    await expect(promoteCheckpoint({ profileId: 'another-profile', jobId: startRes.jobId, checkpointId: '100' }))
+      .rejects.toMatchObject({ code: 'JOB_NOT_FOUND' });
     const promoteRes = await promoteCheckpoint({
       profileId: PROFILE.id,
       jobId: startRes.jobId,

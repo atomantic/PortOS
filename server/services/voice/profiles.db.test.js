@@ -2,7 +2,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { checkHealth, close, ensureSchema, query } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
-import { getVoiceProfile, saveProfileBenchmark } from './profiles.js';
+import { getVoiceProfile, promoteVoiceProfile, saveProfileBenchmark } from './profiles.js';
 
 const health = await checkHealth().catch(() => ({ connected: false }));
 const runDb = requireDbOrSkip('voice profile qualification', health.connected, 'Postgres unavailable');
@@ -10,8 +10,26 @@ const id = `voice-test-${randomUUID()}`;
 
 describe.skipIf(!runDb)('voice profile qualification persistence', () => {
   afterAll(async () => {
-    await query('DELETE FROM voice_profiles WHERE id = $1', [id]);
+    await query('DELETE FROM voice_profiles WHERE id = ANY($1::text[])', [[id, id + '-draft', id + '-approved']]);
     await close();
+  });
+
+  it('approves the selected draft and retires its sibling without losing its stored voice data', async () => {
+    await ensureSchema();
+    const sourceAssets = [{ filename: 'example.wav', transcript: 'An invented sentence.' }];
+    for (const status of ['draft', 'approved']) {
+      const profile = {
+        id: id + '-' + status, version: 1, binding: { universeId: id, characterId: 'example-promotion' },
+        approval: { status, benchmarkRevision: 4 }, sourceAssets,
+      };
+      await query(`INSERT INTO voice_profiles (id, universe_id, character_id, approval_status, data)
+        VALUES ($1, $2, 'example-promotion', $3, $4::jsonb)`, [profile.id, id, status, JSON.stringify(profile)]);
+    }
+    await promoteVoiceProfile(id + '-draft');
+    expect(await getVoiceProfile(id + '-draft')).toMatchObject({ version: 2, approval: { status: 'approved' } });
+    expect(await getVoiceProfile(id + '-approved')).toMatchObject({
+      version: 1, sourceAssets, approval: { status: 'retired', approvedAt: null, benchmarkRevision: 4 },
+    });
   });
 
   it('persists route evidence together and rejects stale revisions', async () => {

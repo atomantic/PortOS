@@ -188,7 +188,7 @@ const persistJob = (jobState) => {
  */
 async function loadJob(jobId, profileId) {
   const active = activeJobs.get(jobId);
-  if (active) return active.withdrawn ? null : active;
+  if (active) return active.withdrawn || (profileId && active.profileId !== profileId) ? null : active;
   if (!profileId || !JOB_ID_RE.test(jobId)) return null;
   const { ok, value } = await readJSONFileStrict(jobRecordPath(profileId, jobId), null);
   if (!ok || (value !== null && !isJobRecord(value))) {
@@ -197,6 +197,7 @@ async function loadJob(jobId, profileId) {
       code: 'JOB_RECORD_UNREADABLE',
     });
   }
+  if (value && value.profileId !== profileId) return null;
   // Reported, not rewritten: the sidecar stays exactly as the run left it.
   if (value?.status === 'running') return { ...value, status: 'interrupted', error: value.error || INTERRUPTED_ERROR };
   return value;
@@ -614,26 +615,26 @@ export async function cancelActiveJobsForProfile(profileId) {
  * Explicitly promote a selected checkpoint to the character's voice profile.
  */
 export async function promoteCheckpoint({ profileId, jobId, checkpointId }) {
-  const job = await loadJob(jobId, profileId);
-  if (!job) {
-    throw new ServerError('Fine-tuning job not found', { status: 404, code: 'JOB_NOT_FOUND' });
-  }
-  const ckpt = job.checkpoints.find((c) => c.id === checkpointId || String(c.step) === String(checkpointId));
-  if (!ckpt) {
-    throw new ServerError(`Checkpoint not found: ${checkpointId}`, { status: 404, code: 'CHECKPOINT_NOT_FOUND' });
-  }
-  const blockedReason = promotionBlockedReason(job, ckpt);
-  if (blockedReason) {
-    throw new ServerError(blockedReason, { status: 409, code: 'CHECKPOINT_UNVERIFIED' });
-  }
+  return promoteFineTunedProfile({ profileId }, async () => {
+    const job = await loadJob(jobId, profileId);
+    if (!job) {
+      throw new ServerError('Fine-tuning job not found', { status: 404, code: 'JOB_NOT_FOUND' });
+    }
+    const ckpt = job.checkpoints.find((c) => c.id === checkpointId || String(c.step) === String(checkpointId));
+    if (!ckpt) {
+      throw new ServerError(`Checkpoint not found: ${checkpointId}`, { status: 404, code: 'CHECKPOINT_NOT_FOUND' });
+    }
+    const blockedReason = promotionBlockedReason(job, ckpt);
+    if (blockedReason) {
+      throw new ServerError(blockedReason, { status: 409, code: 'CHECKPOINT_UNVERIFIED' });
+    }
 
-  return promoteFineTunedProfile({
-    profileId,
-    universeId: job.universeId,
-    characterId: job.characterId,
-    checkpointPath: ckpt.checkpointPath,
-    checkpointId: ckpt.id,
-    modelRevision: ckpt.modelRevision,
-    step: ckpt.step,
+    return {
+      universeId: job.universeId,
+      characterId: job.characterId,
+      checkpointPath: ckpt.checkpointPath,
+      modelRevision: ckpt.modelRevision,
+      step: ckpt.step,
+    };
   });
 }
