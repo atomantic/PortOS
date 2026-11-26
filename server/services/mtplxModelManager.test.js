@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
+  cancelMtplxModelPull,
   isMtplxRepoId,
   parseMtplxPullFrame,
   pullMtplxModel,
@@ -164,6 +165,35 @@ describe('mtplxModelManager', () => {
       const result = await pullMtplxModel({ model: 'Example/Qwen-MTP', onProgress: (f) => frames.push(f) });
       expect(result).toEqual({ success: false, model: 'Example/Qwen-MTP', error: 'disk full' });
       expect(frames.at(-1)).toMatchObject({ event: 'error', message: 'disk full' });
+    });
+
+    it('cancels the process group, emits one terminal frame and releases the transfer slot', async () => {
+      const commandResult = Promise.withResolvers();
+      const commandStarted = Promise.withResolvers();
+      const run = vi.spyOn(streamingSpawn, 'runStreamingCommand').mockImplementationOnce((_binary, _args, _onLine, options) => {
+        commandStarted.resolve(options);
+        return commandResult.promise;
+      });
+      const frames = [];
+      const model = 'Example/Qwen-MTP';
+      expect(cancelMtplxModelPull()).toBe(false);
+      const pull = pullMtplxModel({ model, onProgress: (frame) => frames.push(frame) });
+      const options = await commandStarted.promise;
+      expect(options.processGroup).toBe(true);
+      expect(options.isCancelled()).toBe(false);
+      await expect(pullMtplxModel()).rejects.toMatchObject({ status: 409, code: 'MTPLX_PULL_BUSY' });
+
+      expect(cancelMtplxModelPull()).toBe(true);
+      expect(options.isCancelled()).toBe(true);
+      expect(cancelMtplxModelPull()).toBe(false);
+      commandResult.resolve({ success: false, error: 'cancelled' });
+      await expect(pull).resolves.toEqual({ success: false, cancelled: true, model });
+      expect(frames.map(({ event }) => event)).toEqual(['start', 'cancelled']);
+      expect(modelManifest.recordModelInstall).not.toHaveBeenCalled();
+      expect(cancelMtplxModelPull()).toBe(false);
+
+      run.mockResolvedValueOnce({ success: true });
+      await expect(pullMtplxModel()).resolves.toMatchObject({ success: true });
     });
 
     it('forwards progress lines but swallows upstream\'s own terminal frames', async () => {

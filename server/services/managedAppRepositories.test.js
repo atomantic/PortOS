@@ -381,6 +381,98 @@ describe('managed app repository topology', () => {
     });
   });
 
+  it('shares concurrent repository and fork comparison probes for one checkout', async () => {
+    const results = await Promise.all([
+      getManagedAppRepositorySources(app),
+      getManagedAppRepositorySources(app),
+      getManagedAppRepositorySources(app),
+    ]);
+
+    expect(results[0].sources[0].forkVsUpstream).toMatchObject({ available: true, behind: 2 });
+    expect(results[1]).toEqual(results[0]);
+    expect(results[2]).toEqual(results[0]);
+    expect(mock.execGh.mock.calls.map(([args]) => args[1])).toEqual([
+      'repos/example-owner/example-app',
+      'repos/example-org/example-app/compare/example-org%3Amain...example-owner%3Amain',
+    ]);
+  });
+
+  it('keeps permission-bearing metadata separate for different checkouts of the same origin', async () => {
+    mock.execGh.mockImplementation(async (_args, _timeout, { cwd }) => JSON.stringify({
+      fullName: forkOrigin.fullName,
+      canPush: cwd === REPO,
+    }));
+
+    const [primary, other] = await Promise.all([
+      resolveRepositoryTopology(REPO),
+      resolveRepositoryTopology('/example/other'),
+    ]);
+
+    expect(primary.origin.canPush).toBe(true);
+    expect(other.origin.canPush).toBe(false);
+    expect(mock.execGh).toHaveBeenCalledTimes(2);
+  });
+
+  it('evicts old entries from both repository caches at their size limit', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const read = async index => {
+        const fullName = `example-owner/fork-${index}`;
+        mock.getOriginInfo.mockResolvedValue({ ...forkOrigin, fullName, repo: `fork-${index}` });
+        mock.execGh.mockImplementation(async args => args[1].includes('/compare/')
+          ? JSON.stringify({ ahead: 0, behind: 1 })
+          : JSON.stringify({ fullName, sourceFullName: 'example-org/example-app', sourceDefaultBranch: `branch-${index}` }));
+        await getManagedAppRepositorySources(app);
+        vi.setSystemTime(Date.now() + 1);
+      };
+
+      for (let index = 0; index <= 256; index++) await read(index);
+
+      mock.execGh.mockClear();
+      await read(256);
+      expect(mock.execGh).not.toHaveBeenCalled();
+      await read(0);
+      expect(mock.execGh.mock.calls.map(([args]) => args[1])).toEqual([
+        'repos/example-owner/fork-0',
+        'repos/example-org/example-app/compare/example-org%3Abranch-0...example-owner%3Abranch-0',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refreshes expired comparisons and retries after a shared failed request', async () => {
+    await getManagedAppRepositorySources(app);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 3 * 60_000);
+      mock.execGh.mockClear();
+      mock.execGh.mockRejectedValueOnce(new Error('GitHub temporarily unavailable'));
+      const results = await Promise.all([getManagedAppRepositorySources(app), getManagedAppRepositorySources(app)]);
+
+      expect(results.map(result => result.sources[0].forkVsUpstream.available)).toEqual([false, false]);
+      expect(mock.execGh).toHaveBeenCalledTimes(1);
+      const retry = await getManagedAppRepositorySources(app);
+      expect(retry.sources[0].forkVsUpstream).toMatchObject({ available: true, behind: 2 });
+      expect(mock.execGh).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops last-known topology after the metadata retention window', async () => {
+    await resolveRepositoryTopology(REPO);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 24 * 60 * 60_000);
+      mock.execGh.mockRejectedValue(new Error('GitHub temporarily unavailable'));
+
+      await expect(resolveRepositoryTopology(REPO)).resolves.toMatchObject({ available: false, upstream: null });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reuses the last known upstream when a later GitHub lookup is throttled', async () => {
     const first = await getManagedAppRepositorySources(app);
     expect(first.sources[0].upstream).toMatchObject({ fullName: 'example-org/example-app' });

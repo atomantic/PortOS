@@ -221,7 +221,7 @@ to each command. This explicit target does not depend on the inherited
 Generic reservations contain no parent, destination, run, or batch identity. The
 operator must trace the owning workflow and explain how its records relate to
 the **selected** reservation. Use the repository's
-[backup publication guide](BACKUP_PUBLICATION_ADMISSION.md) or search the
+[backup consistency guide](BACKUP.md#backup-or-restore-blocked-by-a-publication) or search the
 source for `withBackupAssetPublication` to trace the owner's lease boundary.
 For toolkit writers, follow the injected `withAssetPublication` callback from
 `server/services/bootstrap.js`. For delegated runtime writes, trace

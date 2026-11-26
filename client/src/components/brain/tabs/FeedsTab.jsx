@@ -23,7 +23,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 import { timeAgo } from '../../../utils/formatters';
 import { pluralize } from '../../../lib/textUtils';
-import { normalizeUrl } from '../../../utils/urlNormalize';
+import { isHttpUrl, normalizeUrl } from '../../../utils/urlNormalize';
 import LoadFailedState from '../../ui/LoadFailedState';
 import ListLoadError from '../../ui/ListLoadError';
 import useLatestRequest from '../../../hooks/useLatestRequest.js';
@@ -33,7 +33,8 @@ export default function FeedsTab({ onRefresh }) {
   const [adding, setAdding] = useState(false);
   const [feeds, setFeeds] = useState([]);
   const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [feedsLoading, setFeedsLoading] = useState(true);
+  const [initialItemsLoading, setInitialItemsLoading] = useState(true);
   const [feedsFailed, setFeedsFailed] = useState(false);
   const [itemsError, setItemsError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -41,19 +42,23 @@ export default function FeedsTab({ onRefresh }) {
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
   const inputRef = useRef(null);
+  const pendingReads = useRef(new Set());
+  const beginFeedsLoad = useLatestRequest();
   const beginItemsLoad = useLatestRequest();
 
   const fetchFeeds = useCallback(async () => {
+    const isCurrent = beginFeedsLoad();
     try {
       const data = await getFeeds();
+      if (!isCurrent()) return;
       setFeedsFailed(false);
       setFeeds(data || []);
-      return true;
     } catch {
-      setFeedsFailed(true);
-      return false;
+      if (isCurrent()) setFeedsFailed(true);
+    } finally {
+      if (isCurrent()) setFeedsLoading(false);
     }
-  }, []);
+  }, [beginFeedsLoad]);
 
   const fetchItems = useCallback(async () => {
     const isCurrent = beginItemsLoad();
@@ -65,12 +70,18 @@ export default function FeedsTab({ onRefresh }) {
     } catch (error) {
       if (!isCurrent()) return;
       setItemsError(error instanceof Error ? error : new Error('Request failed'));
+    } finally {
+      if (isCurrent()) setInitialItemsLoading(false);
     }
   }, [selectedFeedId, unreadOnly, beginItemsLoad]);
 
   useEffect(() => {
-    Promise.all([fetchFeeds(), fetchItems()]).then(() => setLoading(false));
-  }, [fetchFeeds, fetchItems]);
+    fetchFeeds();
+  }, [fetchFeeds]);
+
+  useEffect(() => {
+    fetchItems();
+  }, [fetchItems]);
 
   const handleAddFeed = async (e) => {
     e.preventDefault();
@@ -127,19 +138,19 @@ export default function FeedsTab({ onRefresh }) {
     }
   };
 
-  const handleMarkRead = async (itemId) => {
-    const ok = await markFeedItemRead(itemId).then(() => true, () => false);
-    if (!ok) return;
-    // Track which feed to update before modifying items state
-    setItems(prev => {
-      const item = prev.find(i => i.id === itemId);
-      if (item && !item.read) {
-        setFeeds(fPrev => fPrev.map(f =>
-          f.id === item.feedId ? { ...f, unreadCount: Math.max(0, f.unreadCount - 1) } : f
-        ));
-      }
-      return prev.map(i => i.id === itemId ? { ...i, read: true } : i);
-    });
+  const handleMarkRead = async ({ id, feedId }) => {
+    if (pendingReads.current.has(id)) return;
+    pendingReads.current.add(id);
+    try {
+      const ok = await markFeedItemRead(id).then(() => true, () => false);
+      if (!ok) return;
+      setItems(prev => prev.map(item => item.id === id ? { ...item, read: true } : item));
+      setFeeds(prev => prev.map(feed =>
+        feed.id === feedId ? { ...feed, unreadCount: Math.max(0, feed.unreadCount - 1) } : feed
+      ));
+    } finally {
+      pendingReads.current.delete(id);
+    }
   };
 
   const handleMarkAllRead = async () => {
@@ -156,14 +167,18 @@ export default function FeedsTab({ onRefresh }) {
     toast.success('Marked all as read');
   };
 
-  const handleItemClick = async (item) => {
-    if (!item.read) handleMarkRead(item.id);
+  const handleItemClick = (item) => {
+    if (!isHttpUrl(item.link)) {
+      toast.error('Feed links must use HTTP or HTTPS.');
+      return;
+    }
+    if (!item.read) handleMarkRead(item);
     window.open(item.link, '_blank', 'noopener,noreferrer');
   };
 
   const totalUnread = feeds.reduce((sum, f) => sum + (f.unreadCount || 0), 0);
 
-  if (loading) {
+  if (feedsLoading || initialItemsLoading) {
     return (
       <div className="flex items-center justify-center h-64">
         <BrailleSpinner text="Loading" />
@@ -190,6 +205,7 @@ export default function FeedsTab({ onRefresh }) {
             type="submit"
             disabled={adding || !inputUrl.trim()}
             className="px-4 py-3 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 min-h-[48px]"
+            aria-label={adding ? 'Subscribing...' : 'Subscribe to feed'}
             title={adding ? 'Subscribing...' : 'Subscribe to feed'}
           >
             {adding ? (
@@ -255,7 +271,7 @@ export default function FeedsTab({ onRefresh }) {
       </div>
 
       {feedsFailed ? (
-        <LoadFailedState title="Could not load feeds." hint="Your subscriptions may still be available." onRetry={async () => { setLoading(true); await fetchFeeds(); setLoading(false); }} />
+        <LoadFailedState title="Could not load feeds." hint="Your subscriptions may still be available." onRetry={() => { setFeedsLoading(true); return fetchFeeds(); }} />
       ) : feeds.length === 0 ? (
         <div className="text-center py-12 text-gray-500">
           <Rss className="w-12 h-12 mx-auto mb-3 opacity-30" />

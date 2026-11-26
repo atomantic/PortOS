@@ -73,9 +73,12 @@ function getMode() {
   return settings.mode;
 }
 
+const PROBE_OPTIONS = { stdio: 'pipe', timeout: 10_000, windowsHide: true };
+const SETUP_OPTIONS = { stdio: 'inherit', timeout: 120_000, windowsHide: true };
+
 function hasDocker() {
   try {
-    execFileSync('docker', ['--version'], { stdio: 'pipe' });
+    execFileSync('docker', ['--version'], PROBE_OPTIONS);
     return true;
   } catch {
     return false;
@@ -84,7 +87,7 @@ function hasDocker() {
 
 function isDockerRunning() {
   try {
-    execFileSync('docker', ['info'], { stdio: 'pipe' });
+    execFileSync('docker', ['info'], PROBE_OPTIONS);
     return true;
   } catch {
     return false;
@@ -93,7 +96,7 @@ function isDockerRunning() {
 
 function hasCompose() {
   try {
-    execFileSync('docker', ['compose', 'version'], { stdio: 'pipe' });
+    execFileSync('docker', ['compose', 'version'], PROBE_OPTIONS);
     return true;
   } catch {
     return false;
@@ -143,7 +146,7 @@ function isPortOSDbReady(port = PG_PORT_NATIVE) {
         // intact but every vector query failing, and must not pass as ready.
         "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'memories' AND '[1]'::vector IS NOT NULL LIMIT 1"
       ],
-      { stdio: 'pipe', env: PG_CHILD_ENV }
+      { ...PROBE_OPTIONS, env: PG_CHILD_ENV }
     ).toString();
     return output.trim() === '1';
   } catch {
@@ -166,13 +169,13 @@ function pgVersionNum(text) {
 function isRunningServerStale(port = PG_PORT_NATIVE) {
   if (process.platform !== 'darwin') return false;
   try {
-    const prefix = execFileSync('brew', ['--prefix', 'postgresql@17'], { stdio: 'pipe' }).toString().trim();
-    const installed = pgVersionNum(execFileSync(join(prefix, 'bin', 'pg_config'), ['--version'], { stdio: 'pipe' }).toString());
+    const prefix = execFileSync('brew', ['--prefix', 'postgresql@17'], PROBE_OPTIONS).toString().trim();
+    const installed = pgVersionNum(execFileSync(join(prefix, 'bin', 'pg_config'), ['--version'], PROBE_OPTIONS).toString());
     const kegPsql = join(prefix, 'bin', 'psql');
     const running = Number(execFileSync(
       existsSync(kegPsql) ? kegPsql : resolvePsqlBinary(),
       ['-X', '-h', PG_HOST, '-p', String(port), '-U', PG_USER, '-d', PG_DATABASE, '-tAc', 'SHOW server_version_num'],
-      { stdio: 'pipe', env: PG_CHILD_ENV },
+      { ...PROBE_OPTIONS, env: PG_CHILD_ENV },
     ).toString().trim());
     return Boolean(installed && running && Math.floor(running / 10000) === Math.floor(installed / 10000) && running !== installed);
   } catch {
@@ -198,7 +201,7 @@ function isDockerSchemaReady() {
       'docker',
       ['compose', 'exec', '-T', 'db', 'psql', '-X', '-U', PG_USER, '-d', PG_DATABASE, '-tAc',
         "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'memories' LIMIT 1"],
-      { stdio: 'pipe', cwd: rootDir, env: COMPOSE_ENV }
+      { ...PROBE_OPTIONS, cwd: rootDir, env: COMPOSE_ENV }
     ).toString();
     return output.trim() === '1';
   } catch {
@@ -220,7 +223,7 @@ function waitForHealth(maxAttempts = 30) {
   for (let i = 0; i < maxAttempts; i++) {
     try {
       execFileSync('docker', ['compose', 'exec', '-T', 'db', 'pg_isready', '-h', '127.0.0.1', '-U', PG_USER], {
-        stdio: 'pipe',
+        ...PROBE_OPTIONS,
         cwd: rootDir,
         env: COMPOSE_ENV
       });
@@ -303,7 +306,7 @@ function setupNativePostgres() {
     // role/db/port that isPortOSDbReady() probes. db.sh itself doesn't
     // source .env — without this, customized creds in .env would mismatch.
     execFileSync(resolveBashBinary(), [dbScript, 'setup-native'], {
-      stdio: 'inherit',
+      ...SETUP_OPTIONS,
       cwd: rootDir,
       env: PG_CHILD_ENV
     });
@@ -394,7 +397,7 @@ if (!hasCompose()) {
 console.log('🐳 Reconciling PostgreSQL container configuration...');
 try {
   execFileSync('docker', ['compose', 'up', '-d', 'db'], {
-    stdio: 'inherit',
+    ...SETUP_OPTIONS,
     cwd: rootDir,
     env: COMPOSE_ENV
   });

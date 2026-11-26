@@ -662,7 +662,7 @@ describe('Actions commitments workspace (#7739)', () => {
     const fields = ['Title', 'Notes', ...extraFields];
     const detail = Promise.withResolvers();
     if (source === 'threads') {
-      getThread.mockReturnValueOnce(detail.promise).mockResolvedValueOnce({ ...item, notes: item.summary });
+      getThread.mockReturnValueOnce(detail.promise).mockResolvedValueOnce({ id: item.sourceRef, title: item.title, notes: item.summary });
     }
     const queue = { partial: false, sources: {}, items: [item] };
     getReviewQueue.mockResolvedValueOnce(queue);
@@ -837,6 +837,122 @@ describe('Actions commitments workspace (#7739)', () => {
     await waitFor(() => expect(routerState.navigate).toHaveBeenCalledWith(
       '/review/threads%3Athread-1?view=today',
     ));
+  });
+});
+
+describe('Review thread drawer', () => {
+  const firstThread = { id: 'first-thread', title: 'First thread', status: 'waiting', priority: 'high', nextAction: 'Review the example', notes: 'Keep these notes' };
+  const secondThread = { id: 'second-thread', title: 'Second thread', status: 'open', priority: 'normal', nextAction: 'Check the result', notes: 'Second thread notes' };
+  const queueItem = (thread) => ({ id: `threads:${thread.id}`, source: 'threads', sourceRef: thread.id, title: thread.title, operations: [] });
+  const showThreads = (threads) => {
+    const items = threads.map(queueItem);
+    const queue = { items, sources: {}, partial: false };
+    getReviewQueue.mockResolvedValueOnce(queue);
+    routerState.actionId = items[0].id;
+    return queue;
+  };
+
+  it('blocks editing and saving until a failed detail request is retried successfully', async () => {
+    const firstRead = Promise.withResolvers();
+    const retryRead = Promise.withResolvers();
+    const dueAt = new Date(2026, 10, 26).toISOString();
+    const full = { ...firstThread, dueAt };
+    const queue = showThreads([firstThread]);
+    getThread.mockReturnValueOnce(firstRead.promise).mockReturnValueOnce(retryRead.promise);
+    getReviewQueue.mockResolvedValueOnce(queue);
+    updateThread.mockResolvedValueOnce({ ...full, title: 'Updated thread' });
+    render(<Review />);
+
+    const drawer = within(await screen.findByRole('dialog', { name: firstThread.title }));
+    const save = drawer.getByRole('button', { name: 'Save changes' });
+    const expectEditingBlocked = () => {
+      for (const name of ['Title', 'Local status', 'Priority', 'Next action', 'Due date', 'Notes']) {
+        expect(drawer.getByLabelText(name)).toBeDisabled();
+      }
+      expect(save).toBeDisabled();
+      fireEvent.click(save);
+      expect(updateThread).not.toHaveBeenCalled();
+    };
+
+    expect(drawer.getByRole('status')).toHaveTextContent('Loading thread details');
+    expectEditingBlocked();
+    await act(async () => firstRead.reject(new Error('Read failed')));
+    expect(drawer.queryByRole('status')).not.toBeInTheDocument();
+    expect(drawer.getByRole('alert')).toHaveTextContent('Commitment details could not be loaded');
+    expectEditingBlocked();
+
+    fireEvent.click(drawer.getByRole('button', { name: 'Retry' }));
+    expect(getThread).toHaveBeenCalledTimes(2);
+    expect(getThread).toHaveBeenLastCalledWith(firstThread.id, { silent: true });
+    expect(drawer.queryByRole('alert')).not.toBeInTheDocument();
+    expect(drawer.getByRole('status')).toHaveTextContent('Loading thread details');
+    expectEditingBlocked();
+
+    await act(async () => retryRead.resolve(full));
+    expect(drawer.queryByRole('status')).not.toBeInTheDocument();
+    expect(drawer.getByLabelText('Notes')).toHaveValue(full.notes);
+    expect(save).toBeEnabled();
+    fireEvent.change(drawer.getByLabelText('Title'), { target: { value: 'Updated thread' } });
+    fireEvent.click(save);
+    await waitFor(() => expect(save).toBeEnabled());
+    expect(updateThread).toHaveBeenCalledExactlyOnceWith(firstThread.id, {
+      title: 'Updated thread',
+      status: full.status,
+      priority: full.priority,
+      nextAction: full.nextAction,
+      dueAt,
+      notes: full.notes,
+    }, { silent: true });
+  });
+
+  it('keeps a new drawer editable during an earlier save and ignores the earlier completion', async () => {
+    const firstSave = Promise.withResolvers();
+    const secondSave = Promise.withResolvers();
+    const queue = showThreads([firstThread, secondThread]);
+    getThread.mockResolvedValueOnce(firstThread).mockResolvedValueOnce(secondThread);
+    getReviewQueue.mockResolvedValueOnce(queue);
+    updateThread.mockReturnValueOnce(firstSave.promise).mockReturnValueOnce(secondSave.promise);
+    const { rerender } = render(<Review />);
+
+    const first = within(await screen.findByRole('dialog', { name: firstThread.title }));
+    await waitFor(() => expect(first.getByLabelText('Notes')).toHaveValue(firstThread.notes));
+    fireEvent.click(first.getByRole('button', { name: 'Save changes' }));
+
+    routerState.actionId = queueItem(secondThread).id;
+    rerender(<Review />);
+    const second = within(await screen.findByRole('dialog', { name: secondThread.title }));
+    await waitFor(() => expect(second.getByLabelText('Notes')).toHaveValue(secondThread.notes));
+    fireEvent.change(second.getByLabelText('Notes'), { target: { value: 'Second thread edit' } });
+    fireEvent.click(second.getByRole('button', { name: 'Save changes' }));
+    expect(updateThread.mock.calls.map(([id]) => id)).toEqual([firstThread.id, secondThread.id]);
+
+    await act(async () => firstSave.resolve({ ...firstThread, notes: 'First saved notes' }));
+    expect(second.getByLabelText('Notes')).toHaveValue('Second thread edit');
+    expect(second.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+    expect(getReviewQueue).toHaveBeenCalledTimes(1);
+
+    await act(async () => secondSave.resolve({ ...secondThread, notes: 'Second saved notes' }));
+    expect(second.getByLabelText('Notes')).toHaveValue('Second saved notes');
+    expect(second.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+    expect(getReviewQueue).toHaveBeenCalledTimes(2);
+  });
+
+  it('discards a thread detail response that arrives after switching records', async () => {
+    const firstRead = Promise.withResolvers();
+    showThreads([firstThread, secondThread]);
+    getThread.mockReturnValueOnce(firstRead.promise).mockResolvedValueOnce(secondThread);
+    const { rerender } = render(<Review />);
+    const first = within(await screen.findByRole('dialog', { name: firstThread.title }));
+    expect(first.getByRole('status')).toHaveTextContent('Loading thread details');
+
+    routerState.actionId = queueItem(secondThread).id;
+    rerender(<Review />);
+    const second = within(await screen.findByRole('dialog', { name: secondThread.title }));
+    await waitFor(() => expect(second.getByLabelText('Notes')).toHaveValue(secondThread.notes));
+
+    await act(async () => firstRead.resolve(firstThread));
+    expect(second.getByLabelText('Notes')).toHaveValue(secondThread.notes);
+    expect(second.getByRole('button', { name: 'Save changes' })).toBeEnabled();
   });
 });
 

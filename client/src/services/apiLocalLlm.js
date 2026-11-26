@@ -239,6 +239,9 @@ export const searchMtplxModels = (params = {}, options) => {
 export const pullMtplxModel = (model = null, options) =>
   request('/local-llm/mtplx/models/pull', { method: 'POST', body: JSON.stringify(model ? { model } : {}), ...options });
 
+export const cancelMtplxModelPull = (options) =>
+  request('/local-llm/mtplx/models/pull/cancel', { method: 'POST', ...options });
+
 export const removeMtplxModel = (model) =>
   request('/local-llm/mtplx/models/remove', { method: 'POST', body: JSON.stringify({ model }) });
 
