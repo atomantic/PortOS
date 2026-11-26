@@ -34,6 +34,7 @@ import {
   deleteMemory,
 } from '../../../services/apiMemory.js';
 import MemoryTab from './MemoryTab';
+import toast from '../../ui/Toast';
 
 const memory = {
   id: 'synthetic-memory-1',
@@ -54,7 +55,7 @@ function renderTab() {
 beforeEach(() => {
   vi.clearAllMocks();
   getCosConfig.mockResolvedValue({});
-  getMemories.mockResolvedValue({ memories: [memory] });
+  getMemories.mockResolvedValue({ memories: [memory], total: 1 });
   getMemoryStats.mockResolvedValue({ active: 1, pendingApproval: 0 });
   getEmbeddingStatus.mockResolvedValue({ available: false });
   getMemoryBackendStatus.mockResolvedValue({ backend: 'postgres' });
@@ -82,7 +83,23 @@ describe('MemoryTab archive confirmation', () => {
 
     await user.click(screen.getByRole('button', { name: 'Archive memory: A synthetic test memory' }));
     await user.click(screen.getByRole('button', { name: 'Archive' }));
-    // The wrapper's default hard=false keeps this existing archive request soft.
-    await waitFor(() => expect(deleteMemory).toHaveBeenCalledWith(memory.id));
+    await waitFor(() => expect(deleteMemory).toHaveBeenCalledWith(memory.id, false, { silent: true }));
+    await waitFor(() => expect(trigger).not.toBeInTheDocument());
+    expect(getMemories).toHaveBeenCalledTimes(2);
+    expect(getMemoryStats).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports an archive rejection once and keeps the row without refetching', async () => {
+    deleteMemory.mockRejectedValueOnce(new Error('Synthetic archive failure'));
+    const user = userEvent.setup();
+    renderTab();
+
+    const trigger = await screen.findByRole('button', { name: 'Archive memory: A synthetic test memory' });
+    await user.click(trigger);
+    await user.click(screen.getByRole('button', { name: 'Archive' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledExactlyOnceWith('Synthetic archive failure'));
+    expect(trigger).toBeInTheDocument();
+    expect(getMemories).toHaveBeenCalledTimes(2);
   });
 });

@@ -504,7 +504,7 @@ export async function getMemories(options = {}) {
   const dataResult = await query(
     `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id, source_agent_id
      FROM memories ${where}
-     ORDER BY ${sortBy} ${sortOrder}
+     ORDER BY ${sortBy} ${sortOrder}, id ASC
      LIMIT $${paramIdx++} OFFSET $${paramIdx++}`,
     [...params, limit, offset]
   );
