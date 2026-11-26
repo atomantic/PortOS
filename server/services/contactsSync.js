@@ -14,8 +14,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { readdirSync, statSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { expandHome, dataPath, atomicWrite, unlinkGuarded, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
+import { expandHome, dataPath, unlinkGuarded, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
 import { writeSecureJson } from '../lib/secureAuthStore.js';
+import { scrubHomePath } from '../lib/homePath.js';
 import { identityFromHandle, normalizeIdentifier, normalizePhone } from '../lib/tribeMatch.js';
 import { fullDiskAccessDetails } from '../lib/fullDiskAccess.js';
 
@@ -401,13 +402,22 @@ export async function readSyncState() {
   const raw = await tryReadFile(statePath());
   const parsed = raw ? safeJSONParse(raw, null, { allowArray: false }) : null;
   return {
-    lastRunAt: parsed?.lastRunAt || null,
-    lastResult: parsed?.lastResult || null,
+    lastRunAt: parsed?.lastRunAt ? scrubHomePath(parsed.lastRunAt) : null,
+    lastResult: parsed?.lastResult ? scrubSyncValue(parsed.lastResult) : null,
   };
 }
 
+function scrubSyncValue(value) {
+  if (typeof value === 'string') return scrubHomePath(value);
+  if (Array.isArray(value)) return value.map(scrubSyncValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, scrubSyncValue(entry)]));
+  }
+  return value;
+}
+
 async function writeSyncState(state) {
-  await atomicWrite(statePath(), JSON.stringify(state, null, 2));
+  await writeSecureJson(statePath(), JSON.stringify(scrubSyncValue(state), null, 2));
 }
 
 // ---------------------------------------------------------------------------
@@ -424,7 +434,7 @@ export async function checkSetup() {
     paths = discoverAddressBookPaths(root);
   } catch (err) {
     const fullDiskAccessRequired = isPermissionError(err);
-    return {
+    return scrubSyncValue({
       ok: false,
       root,
       error: err?.message || 'Failed to scan AddressBook directory',
@@ -432,16 +442,16 @@ export async function checkSetup() {
       ...(fullDiskAccessRequired
         ? await fullDiskAccessDetails()
         : { remediation: `Could not scan ${root}: ${err?.message || 'unknown error'}` }),
-    };
+    });
   }
   if (paths.length === 0) {
-    return {
+    return scrubSyncValue({
       ok: false,
       root,
       paths: [],
       error: 'No AddressBook-v22.abcddb found',
       remediation: `No Contacts databases under ${root}. Open the macOS Contacts app at least once, or check CONTACTS_AB_ROOT.`,
-    };
+    });
   }
   // Probe the largest source for a real permission signal.
   let best = { path: paths[0], n: 0 };
@@ -453,14 +463,14 @@ export async function checkSetup() {
   }
   const probe = readAddressBookDb(best.path);
   if (!probe.ok) {
-    return {
+    return scrubSyncValue({
       ok: false,
       root,
       paths,
       error: probe.error,
       fullDiskAccessRequired: probe.permission,
       ...(probe.permission ? await fullDiskAccessDetails() : { remediation: probe.error }),
-    };
+    });
   }
   // Count across all sources (cheap open).
   let totalRaw = 0;
@@ -472,13 +482,13 @@ export async function checkSetup() {
       totalRaw += r.contacts.length;
     }
   }
-  return {
+  return scrubSyncValue({
     ok: true,
     root,
     paths,
     sourceCount: sourcesOk,
     rawContactRows: totalRaw,
-  };
+  });
 }
 
 /**
@@ -487,7 +497,7 @@ export async function checkSetup() {
 let syncInFlight = null;
 export async function runSync() {
   if (syncInFlight) return syncInFlight;
-  syncInFlight = doRunSync().finally(() => { syncInFlight = null; });
+  syncInFlight = doRunSync().then(scrubSyncValue).finally(() => { syncInFlight = null; });
   return syncInFlight;
 }
 
