@@ -34,7 +34,10 @@ import { deleteIssue, ensureIssueWithId, listIssues, listIssuesForSeries } from 
 import { reformatManuscriptText } from './pipeline/manuscriptFix.js';
 import { sanitizeArc, sanitizeSeasonList, buildSeason, ARC_SHAPE_IDS, ARC_ROLES } from '../lib/storyArc.js';
 import { COMIC_NUM, COMIC_HEADER_TAIL } from '../lib/comicScriptParser.js';
-import { IMPORTER_CONTENT_TYPES, IMPORTER_PROSE_EXCERPT_MAX } from '../lib/creativeDirectorValidation.js';
+import { IMPORTER_PROSE_EXCERPT_MAX } from '../lib/creativeDirectorValidation.js';
+import { CLASSIFY_SOURCE_HEAD_CHARS, IMPORTER_CONTENT_TYPES, IMPORTER_SOURCE_CHAR_LIMIT } from '../lib/importerContentTypes.js';
+
+export { CLASSIFY_SOURCE_HEAD_CHARS, IMPORTER_SOURCE_CHAR_LIMIT };
 // Re-export the per-issue excerpt ceiling so callers/tests can reference the
 // same value the mechanical comic split validates against.
 export { IMPORTER_PROSE_EXCERPT_MAX };
@@ -78,17 +81,6 @@ export const ANALYZE_STAGES = [
 // under the toolkit's configurable MAX_TIMEOUT ceiling. Passed as `timeoutOverride`
 // on every analyze stage call.
 export const ANALYZE_STAGE_TIMEOUT_MS = 1_200_000;
-
-// Sanity ceiling on the source corpus — matches the schema-layer abuse guard
-// (`importerSourceField`, 5MB) so the importer doesn't impose an *artificial*
-// product cap below it. A 5M-char source (~3,000 pages) is far beyond any real
-// book — even War & Peace is ~3.2M. The real operational limit is dynamic: the
-// active provider's context window, since the whole corpus still goes into one
-// extraction call. Sources that fit the ceiling but overflow the chosen model's
-// window will fail at the provider until the chunked-extraction follow-up lands
-// ("Create Suite — Importer page") — pick a large-context provider or
-// trim the source in the meantime.
-export const IMPORTER_SOURCE_CHAR_LIMIT = 5_000_000;
 
 // Per-content-type defaults when the user doesn't pass `targetIssueCount`.
 // `null` means "let the LLM decide" — short stories collapse to one; novels
@@ -667,10 +659,6 @@ async function proposeIssues({ seriesName, contentType, source, typeFlags, arcSu
 }
 
 const CLASSIFIER_CONFIDENCES = new Set(['high', 'medium', 'low']);
-// 4K chars is roughly 1 200 tokens — enough to see chapter markers, scene
-// headings, and panel breaks. Exported so the client can trim its payload
-// to match (no point shipping 196KB of body the server will discard).
-export const CLASSIFY_SOURCE_HEAD_CHARS = 4_000;
 
 /**
  * Lightweight pre-pass that classifies a source's content type so the

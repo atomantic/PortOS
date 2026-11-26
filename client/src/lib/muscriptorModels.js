@@ -1,19 +1,2 @@
-// `MUSCRIPTOR_MODELS` (audio → MIDI size tiers `small`/`medium`/`large`) + `DEFAULT_MUSCRIPTOR_MODEL`.
-//
-// Single source consumed by the transcribe `<select>`s in `ProjectActionGroups.jsx` and
-// `ReferenceAnalysis.jsx`. Mirrors the server's `MUSCRIPTOR_MODELS` in
-// `server/services/audioMidiTranscription.js`.
-//
-// Single source of truth for the MuScriptor audio → MIDI model-size tiers.
-// Consumed by the two transcription trigger points:
-//   - components/musicVideo/ProjectActionGroups.jsx — the source-track `MIDI` button's size <select>.
-//   - components/songs/ReferenceAnalysis.jsx — the reference-audio Transcribe
-//     MIDI button's size <select>.
-// Larger tiers are higher quality but slower and pull a bigger weight file on
-// first use; `medium` is the balanced default. The server's z.enum in
-// server/lib/musicVideo/musicVideoValidation.js imports MUSCRIPTOR_MODELS from
-// server/lib/muscriptorModels.js, which a parity test pins to the Python
-// runner's choices — add a tier there and here together.
-export const MUSCRIPTOR_MODELS = ['small', 'medium', 'large'];
-
-export const DEFAULT_MUSCRIPTOR_MODEL = 'medium';
+/** MuScriptor transcription model choices for source and reference audio. */
+export { MUSCRIPTOR_MODELS, DEFAULT_MUSCRIPTOR_MODEL } from '../../../server/lib/muscriptorModels.js';

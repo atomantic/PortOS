@@ -33,7 +33,7 @@ import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { PATHS, shortId } from '../lib/fileUtils.js';
 import { importFileToDir } from '../lib/uploads.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
-import { MUSCRIPTOR_MODELS } from '../lib/muscriptorModels.js';
+import { DEFAULT_MUSCRIPTOR_MODEL, MUSCRIPTOR_MODELS } from '../lib/muscriptorModels.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { hfChildEnv } from './hfToken.js';
 import { trackedRenderMap } from './renderActivity.js';
@@ -50,7 +50,7 @@ const MUSCRIPTOR_SCRIPT = join(__dirname, '../../scripts/ml/transcribe_muscripto
 // MuScriptor model sizes (weights auto-download on first use). Medium is the
 // library default — a quality/speed balance; small is the CPU-friendly tier.
 export { MUSCRIPTOR_MODELS };
-export const DEFAULT_MUSCRIPTOR_MODEL = 'medium';
+export { DEFAULT_MUSCRIPTOR_MODEL };
 
 /** Clamp a requested model size onto the known set (route validates shape; this guards the value). */
 export const resolveMuscriptorModel = (model) =>

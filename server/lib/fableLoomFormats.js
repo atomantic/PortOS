@@ -23,6 +23,13 @@ export const isLoomFormat = (value) => LOOM_FORMATS.includes(value);
 /** Normalize a stored/incoming format, falling back to the default. */
 export const asLoomFormat = (value) => (isLoomFormat(value) ? value : LOOM_FORMAT_DEFAULT);
 
+/**
+ * Rewrite only written scenes in a different format. A title-only placeholder
+ * has no authored beat to preserve.
+ */
+export const sceneNeedsReformat = (node, target) =>
+  typeof node?.prose === 'string' && !!node.prose.trim() && node.format !== target;
+
 // What each stage is told about the `prose` field it generates. Written as
 // prompt bullets: the templates render them under their own heading.
 const SCENE_CONTRACTS = Object.freeze({
