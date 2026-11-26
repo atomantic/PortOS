@@ -70,6 +70,16 @@ describe('processAgentCompletion - memory extraction', () => {
     expect(appActivity.startAppCooldown).toHaveBeenCalledExactlyOnceWith('example-app', 1800000);
   });
 
+  it.each([
+    { claimFlow: 'true' },
+    { analysisType: 'claim-issue' },
+    { taskAnalysisType: 'claim-issue-gitlab' },
+  ])('does not learn from a claim transcript (%j)', async metadata => {
+    await processAgentCompletion(agentId, { ...task, metadata: { ...task.metadata, ...metadata } }, true, 'transcript '.repeat(30));
+    expect(extractAndStoreMemories).not.toHaveBeenCalled();
+    expect(appActivity.startAppCooldown).toHaveBeenCalledWith('example-app', 1800000);
+  });
+
   it('does not extract memories from a failed run with long output', async () => {
     await processAgentCompletion(agentId, task, false, 'x'.repeat(200));
     expect(extractAndStoreMemories).not.toHaveBeenCalled();

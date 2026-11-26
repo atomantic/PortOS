@@ -18,8 +18,8 @@ Semantic memory system for the Chief of Staff that stores facts, learnings, obse
 1. **Six Memory Types**: fact, learning, observation, decision, preference, context
 2. **Semantic Search**: Configured embeddings provider for similarity-based retrieval
 3. **LLM Classification**: Intelligent memory extraction with quality filtering (M31)
-4. **Auto-Extraction**: Memories extracted from successful agent task completions
-5. **Auto-Injection**: Relevant memories injected into agent prompts before execution
+4. **Auto-Extraction**: Eligible successful agent completions can propose memories; issue-claim lifecycles are excluded.
+5. **Auto-Injection**: Background CoS tasks can recall a few memories from their own app, not from a global pool.
 6. **Persistent Mind Reflection**: Stored importance changes through edits. For reflection,
    the Mind considers active standard memories it owns that are older than 30 days and
    lack a verdict on the current version. The reflection score starts at stored importance
@@ -183,13 +183,20 @@ Memories are extracted from agent output:
 
 ## Memory Injection
 
-Before agent task execution:
+An issue claim uses the tracker item, repository instructions, and explicit
+handoff context. CoS does not automatically add stored memories or Digital Twin
+context to that prompt, and it does not mine the claim transcript for memories.
 
-1. Generate embedding for task description
-2. Find semantically similar memories (>0.7 relevance)
-3. Include high-importance user preferences
-4. Include relevant codebase facts
-5. Format as markdown section in agent prompt
+Other eligible CoS jobs with an app and task description search active memories
+from that exact app, up to three hits within the prompt budget. An unscoped task
+or a search without matches contributes no memory section. Global preferences and
+high-importance rows are not automatic fallbacks. Voice, manual memory search,
+and Persistent Mind recall keep their separate context rules.
+
+The CoS run card's **Memories sent** means that the listed memory versions
+contributed text to the prompt; it does not imply that the model relied on them.
+Classification of other eligible runs receives deduplication examples only from
+the same app. Existing memories and run lineage are not modified.
 
 ## API Endpoints
 
