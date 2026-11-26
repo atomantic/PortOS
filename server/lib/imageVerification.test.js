@@ -4,9 +4,10 @@ import {
   DEFAULT_VERIFICATION_PROFILES,
   verificationProfileSchema,
   buildMultiAspectVerificationPrompt,
-  buildDefectConfirmationPrompt,
+  buildBatchDefectConfirmationPrompt,
+  MAX_CONFIRMATION_DEFECTS,
   parseVerificationResponse,
-  parseConfirmationResponse,
+  parseBatchConfirmationResponse,
   VERIFIER_REVIEWER_MODELS,
   normalizeReviewerModel,
 } from './imageVerification.js';
@@ -60,19 +61,18 @@ describe('buildMultiAspectVerificationPrompt', () => {
   });
 });
 
-describe('buildDefectConfirmationPrompt', () => {
-  it('formats skeptical confirmation request', () => {
-    const prompt = buildDefectConfirmationPrompt({
-      claim: '6 fingers on right hand',
+describe('buildBatchDefectConfirmationPrompt', () => {
+  it('assigns stable indices and caps the requested claims', () => {
+    const defects = Array.from({ length: MAX_CONFIRMATION_DEFECTS + 2 }, (_, index) => ({
+      claim: `Claim ${index}`,
       dimension: 'hands_and_fingers',
       region: 'lower-right corner',
-      prompt: 'Man holding a revolver',
-    });
+    }));
+    const prompt = buildBatchDefectConfirmationPrompt({ defects, prompt: 'A person waving' });
 
-    expect(prompt).toContain('Dimension: hands_and_fingers');
-    expect(prompt).toContain('Claim: 6 fingers on right hand');
-    expect(prompt).toContain('Region: lower-right corner');
-    expect(prompt).toContain('Automated first looks frequently hallucinate defects');
+    const claims = JSON.parse(prompt.split('\n').find((line) => line.startsWith('Claims: ')).slice('Claims: '.length));
+    expect(claims).toEqual(defects.slice(0, MAX_CONFIRMATION_DEFECTS).map((defect, index) => ({ ...defect, index })));
+    expect(prompt).toContain('A person waving');
   });
 });
 
@@ -137,29 +137,43 @@ describe('parseVerificationResponse', () => {
   });
 });
 
-describe('parseConfirmationResponse', () => {
-  it('parses confirmed defect', () => {
+describe('parseBatchConfirmationResponse', () => {
+  it('parses out-of-order confirmations and rejections from fenced JSON', () => {
     const raw = JSON.stringify({
-      confirmed: true,
-      region: 'lower-left hand',
-      note: 'Undeniable sixth digit plainly visible',
+      verdicts: [
+        { index: 2, confirmed: false, region: null, note: ' Normal occlusion ' },
+        { index: 0, confirmed: true, region: ' lower-left hand ', note: 'Sixth digit visible' },
+      ],
     });
-
-    const res = parseConfirmationResponse(raw);
-    expect(res.confirmed).toBe(true);
-    expect(res.region).toBe('lower-left hand');
-    expect(res.note).toContain('sixth digit');
+    expect(parseBatchConfirmationResponse(`Here is the assessment:\n\`\`\`json\n${raw}\n\`\`\``, 3)).toEqual({
+      verdicts: [
+        { index: 2, confirmed: false, region: null, note: 'Normal occlusion' },
+        { index: 0, confirmed: true, region: 'lower-left hand', note: 'Sixth digit visible' },
+      ],
+    });
   });
 
-  it('parses rejected defect (false alarm)', () => {
+  it('discards duplicate, malformed and out-of-range entries independently', () => {
     const raw = JSON.stringify({
-      confirmed: false,
-      region: null,
-      note: 'Normal hand, 5th finger was just shadowed',
+      verdicts: [
+        { index: 0, confirmed: true },
+        { index: 0, confirmed: false },
+        { index: 1, confirmed: 'true' },
+        { index: -1, confirmed: true },
+        { index: '2', confirmed: true },
+        { index: MAX_CONFIRMATION_DEFECTS, confirmed: true },
+        null,
+        { index: 3, confirmed: true, region: 20, note: [] },
+      ],
     });
+    expect(parseBatchConfirmationResponse(raw, MAX_CONFIRMATION_DEFECTS + 1)).toEqual({
+      verdicts: [{ index: 3, confirmed: true, region: null, note: '' }],
+    });
+  });
 
-    const res = parseConfirmationResponse(raw);
-    expect(res.confirmed).toBe(false);
+  it('returns no verdicts if the response is missing or invalid', () => {
+    expect(parseBatchConfirmationResponse('not JSON', 2)).toEqual({ verdicts: [] });
+    expect(parseBatchConfirmationResponse('{"verdicts":{}}', 2)).toEqual({ verdicts: [] });
   });
 });
 
