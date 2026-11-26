@@ -65,6 +65,7 @@ vi.mock('./agentCompletionCleanup.js', () => ({
   replayAgentCompletionCleanup: vi.fn().mockResolvedValue(undefined),
 }));
 
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { handleAgentCompletion } from './agentLifecycle.js';
 import { runnerAgents, completingAgents, pausedAgents } from './agentState.js';
 import { completeAgent, getAgent, getAgentRecord } from '../cos/cosAgentLifecycle.js';
@@ -117,11 +118,13 @@ describe('handleAgentCompletion — pause guard (data-loss guard)', () => {
   it('drops both map entries so the pause is consumed and the slot is reclaimable', async () => {
     pausedAgents.set('agent-paused', { pausedAt: Date.now(), reason: 'user' });
     runnerAgents.set('agent-paused', { task: { id: 'task-1' } });
+    const reservation = maintenance.admit('agent', 'agent-paused');
 
     await handleAgentCompletion('agent-paused', 143, false, 1000);
 
     expect(pausedAgents.has('agent-paused')).toBe(false);
     expect(runnerAgents.has('agent-paused')).toBe(false);
+    expect(reservation.isCurrent()).toBe(false);
   });
 
   // Bypass probe: with the pause flag absent, the SAME call must reach a
@@ -151,8 +154,11 @@ describe('handleAgentCompletion — post-restart recovery hand-off', () => {
       metadata: { workspacePath: '/repo/wt' },
     });
     getTaskById.mockResolvedValue({ id: 'task-9', status: 'running', taskType: 'user' });
+    const reservation = maintenance.admit('agent', 'agent-gone');
 
     await handleAgentCompletion('agent-gone', 0, true, 500);
+
+    expect(reservation.isCurrent()).toBe(false);
 
     // `retireDeadAgent` (#8440) is the single retirement step list — this only
     // checks the router hands it the right facts; its own step order and the

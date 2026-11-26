@@ -154,7 +154,12 @@ export async function clearCompletedAgents() {
     }
     await Promise.all(removals);
 
-    for (const id of removableStateIds) await releaseAgentReservation(id);
+    const purgedAgentIds = new Set(removableStateIds);
+    for (const [id] of removedIndexEntries) {
+      // Archive-only records can no longer settle their own reservations.
+      if (!state.agents[id]) purgedAgentIds.add(id);
+    }
+    for (const id of purgedAgentIds) await releaseAgentReservation(id);
     cosEvents.emit('agents:changed', { action: 'cleared-completed', cleared: totalCleared, retained: retainedIds.size });
     return { cleared: totalCleared, retained: retainedIds.size };
   }));

@@ -127,6 +127,7 @@ import { getActiveAgentsFromRunner } from '../cos/cosRunnerClient.js';
 import { cleanupAgentWorktree } from './agentWorktreeCleanup.js';
 import { activeAgents, runnerAgents } from './agentState.js';
 import { syncRunnerAgents } from './agentRunnerSync.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { handleAgentCompletion } from './agentLifecycle.js';
 
 const report = { version: 1, findings: [{ key: 'example-candidate', title: 'Reviewed example candidate',
@@ -203,6 +204,7 @@ describe('recovered runner audit completion (#11526)', () => {
     expect(fixture.trace.indexOf('quality')).toBeLessThan(fixture.trace.indexOf('complete'));
     expect(fixture.trace.indexOf('complete')).toBeLessThan(fixture.trace.indexOf('cleanup'));
     expect(runnerAgents.has(run.agentId)).toBe(false);
+    expect(maintenance.finishResource).toHaveBeenCalledExactlyOnceWith('agent', run.agentId);
     await expect(readFile(join(run.workspacePath, `.agent-done-${run.agentId}`))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readFile(join(run.primaryPath, `.agent-done-${run.agentId}`), 'utf8')).toBe(sentinel({ version: 1, findings: [] }, 12));
   });
