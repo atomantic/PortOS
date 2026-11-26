@@ -55,6 +55,9 @@ export function createVitestTempFixture(host, workspace, body, config = 'vitest.
     });
   `);
   const env = { ...process.env, TMPDIR: host, TMP: host, TEMP: host, NODE_DISABLE_COMPILE_CACHE: '1' };
+  // The nested run uses the real workspace config; pin its pool budget so it
+  // cannot depend on this install's local CoS worker setting.
+  env.PORTOS_PREGATE_MAX_WORKERS = '1';
   // These synthetic lifecycle fixtures never use a database. A private,
   // unprovisioned test name keeps the real DB config from queuing behind an
   // unrelated portos_test run before temp-root assertions can execute.

@@ -9,7 +9,21 @@ vi.mock('node:fs', async original => {
   return { ...actual, watch: vi.fn(actual.watch) };
 });
 
-import { runFixtureToCompletion, waitForFixtureReady } from './vitestTempRootFixture.js';
+import { createVitestTempFixture, runFixtureToCompletion, waitForFixtureReady } from './vitestTempRootFixture.js';
+
+describe('createVitestTempFixture', () => {
+  it('pins the nested workspace config pool to one worker', () => {
+    const host = mkdtempSync(join(tmpdir(), 'fixture-worker-budget-'));
+    try {
+      const { args, options } = createVitestTempFixture(host, 'server', '');
+      expect(options.env.PORTOS_PREGATE_MAX_WORKERS).toBe('1');
+      expect(args).toContain('--maxWorkers');
+      expect(args.at(-1)).toBe('1');
+    } finally {
+      rmSync(host, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('waitForFixtureReady', () => {
   it('resolves for a file that is already present and for one that appears later', async () => {

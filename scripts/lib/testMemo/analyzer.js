@@ -36,6 +36,13 @@ const localState = (target) => target === 'data' || target.startsWith('data/');
 const underGit = (rel) => rel === '.git' || rel.startsWith('.git/');
 
 const CLIENT_LOCKFILE = 'client/package-lock.json';
+const NESTED_VITEST_CONFIGS = new Set([
+  'server/vitest.config.js',
+  'server/vitest.config.db.js',
+  'client/vitest.config.js',
+]);
+const NESTED_VITEST_FIXTURE = 'scripts/lib/vitestTempRootFixture.js';
+const COS_WORKER_BUDGET = 'scripts/lib/cosWorkerBudget.js';
 
 function lockedClientPackages(fs) {
   if (fs.kind('client/node_modules') !== null) return null;
@@ -739,21 +746,34 @@ function gather(a, roots, { walk, testRel = null, stop = null, followMockOnly = 
     gitRefusal: null, // why the test's own `git-fixture` declaration was refused
     gitMember: null, // the first other member that spawns git
   };
+  const nestedFixtureSource = a.fs.read(NESTED_VITEST_FIXTURE)?.toString('utf8') ?? '';
+  const nestedFixtureConfig = roots.length === 1
+    && factsFor(a, roots[0]).modules.has(NESTED_VITEST_FIXTURE)
+    && /env\.PORTOS_PREGATE_MAX_WORKERS\s*=\s*['"]1['"]/.test(nestedFixtureSource)
+    && /['"]--maxWorkers['"]\s*,\s*['"]1['"]/.test(nestedFixtureSource);
   // A side module (read as text, spawned, loaded natively or as a worker)
   // is never narrowed by the recording: it and its own closure are walked
   // in full even when the roots are a recorded set.
-  const stack = [...roots].map((rel) => ({ rel, walkEdges: walk }));
+  const stack = [...roots].map((rel) => ({ rel, walkEdges: walk, configEdge: false }));
+  const visited = new Map();
   while (stack.length) {
-    const { rel, walkEdges } = stack.pop();
-    if (g.members.has(rel) || stop?.has(rel)) continue;
+    const { rel, walkEdges, configEdge: fromConfig } = stack.pop();
+    if (stop?.has(rel)) continue;
+    const configEdge = fromConfig || NESTED_VITEST_CONFIGS.has(rel);
+    const context = configEdge ? 2 : 1;
+    if ((visited.get(rel) ?? 0) & context) continue;
+    visited.set(rel, (visited.get(rel) ?? 0) | context);
     g.members.add(rel);
     const f = factsFor(a, rel);
-    if (walkEdges) for (const dep of f.modules) if (!g.members.has(dep) && (followMockOnly || !f.mockOnly.has(dep))) stack.push({ rel: dep, walkEdges: true });
+    if (walkEdges) for (const dep of f.modules) if (followMockOnly || !f.mockOnly.has(dep)) stack.push({ rel: dep, walkEdges: true, configEdge });
     for (const side of f.sideModules) {
       if (f.dataModules.has(side) && f.unresolvedEdges.length === 0) g.inputs.add(side);
-      else if (!g.members.has(side)) stack.push({ rel: side, walkEdges: true });
+      else stack.push({ rel: side, walkEdges: true, configEdge });
     }
-    foldMember(a, g, rel, f, testRel);
+    // The nested fixture pins its child pool to one worker, so this workspace
+    // config's host-only budget lookup cannot change the child test result.
+    // Keep the source member in the key; only its Git probe is excluded here.
+    foldMember(a, g, rel, f, testRel, nestedFixtureConfig && configEdge && rel === COS_WORKER_BUDGET);
   }
   collectRunningMocks(a, g, roots, { walk, stop });
   reportVoidedTrusts(a, g);
@@ -768,7 +788,7 @@ function gather(a, roots, { walk, testRel = null, stop = null, followMockOnly = 
 }
 
 /** Fold one closure member's own facts into the gathering `g`. */
-function foldMember(a, g, rel, f, testRel) {
+function foldMember(a, g, rel, f, testRel, nestedConfigPolicy = false) {
   for (const input of f.inputs) g.inputs.add(input);
   for (const tool of f.tools) g.tools.add(tool);
   const ownsTrees = testRel === null || gitRuleApplies(rel, testRel);
@@ -808,7 +828,7 @@ function foldMember(a, g, rel, f, testRel) {
     foldDataTree(g, dir, data);
   }
   if (f.never) g.never = true;
-  if (f.git) {
+  if (f.git && !nestedConfigPolicy) {
     if (ownsTrees) foldGitUse(g, rel, f, testRel);
     else g.tools.add('git');
   }
