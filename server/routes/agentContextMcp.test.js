@@ -63,6 +63,27 @@ describe('agentContextMcp route', () => {
     expect(response.body.enabled).toBe(false);
   });
 
+  it('rejects remote Vite proxy clients while allowing direct and proxied local requests', async () => {
+    const remoteManifest = await request(buildApp())
+      .get('/api/agent-context/manifest')
+      .set('X-PortOS-Dev-Proxy-Client-Address', '192.0.2.10');
+    expect(remoteManifest.status).toBe(403);
+    expect(remoteManifest.body.code).toBe('AGENT_CONTEXT_LOCAL_ONLY');
+
+    const remoteMcp = await mcpPost({ jsonrpc: '2.0', id: 1, method: 'ping' })
+      .set('X-PortOS-Dev-Proxy-Client-Address', '192.0.2.10');
+    expect(remoteMcp.status).toBe(403);
+    expect(remoteMcp.body.code).toBe('AGENT_CONTEXT_LOCAL_ONLY');
+
+    const directManifest = await request(buildApp()).get('/api/agent-context/manifest');
+    expect(directManifest.status).toBe(200);
+
+    const localProxyMcp = await mcpPost({ jsonrpc: '2.0', id: 2, method: 'ping' })
+      .set('X-PortOS-Dev-Proxy-Client-Address', '127.0.0.5');
+    expect(localProxyMcp.status).toBe(200);
+    expect(localProxyMcp.body.result).toEqual({});
+  });
+
   it('rejects MCP calls while disabled and rejects non-loopback Origins', async () => {
     mocks.getAgentContextManifest.mockResolvedValue({ ...enabledManifest, enabled: false });
     const disabled = await mcpPost({ jsonrpc: '2.0', id: 1, method: 'ping' });
