@@ -37,7 +37,6 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `socket.io` | 1 | KEEP | realtime | Foundational |
 | `socket.io-client` | 1 | KEEP | server-to-client | Paired with socket.io |
 | `three` | 1 | KEEP | code film rendering | Supplies the Three.js runtime for generated film pages |
-| `undici` | 1 | KEEP | HTTP client | Node core team project |
 | `ws` | 1 | KEEP | remote desktop + browser WebSockets | Foundational WebSocket transport; also used transitively by Socket.IO |
 | `zod` | 1 | KEEP | input validation | Widely-audited |
 | **Server devDependencies** | | | | |

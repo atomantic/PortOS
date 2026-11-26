@@ -485,7 +485,7 @@ const FEED_HEADERS = {
 // keeps feeds' historical block-all-private posture (an arbitrary user-added
 // feed URL must not be aimable at the home network) while gaining the
 // connect-time IP PIN that closes the DNS-rebinding TOCTOU (#2046): the
-// hostname is resolved once and undici connects to exactly that vetted address,
+// hostname is resolved once and the transport connects to that vetted address,
 // re-validated and re-pinned on every redirect hop. `throwOnUnsafe: false`
 // preserves this module's contract of returning null on any failure (so addFeed
 // surfaces the friendly "Could not fetch feed" message rather than a bubbled

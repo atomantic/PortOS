@@ -1,3 +1,6 @@
+import http from 'node:http';
+import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 
 // Capture the mock socket at creation time so clearAllMocks() doesn't lose it.
@@ -24,7 +27,6 @@ vi.mock('../../lib/fetchWithTimeout.js', () => ({
 
 import { io } from 'socket.io-client';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
-import { streamTransportDispatcher } from '../../lib/aiToolkit/internal/streamTransport.js';
 import {
   initCosRunnerConnection,
   onCosRunnerEvent,
@@ -61,38 +63,50 @@ describe('cosRunnerClient', () => {
   });
 
   it('keeps one silent scanner request open without elapsed or transport inactivity ceilings', async () => {
-    const { fetchWithTimeout: actualFetch } = await vi.importActual('../../lib/fetchWithTimeout.js');
     const evidence = { status: 'interrupted', timeLimitSeconds: 'unlimited', cleanup: 'confirmed' };
-    let finish;
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
-    fetchWithTimeout.mockImplementationOnce(actualFetch);
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const request = Object.assign(new EventEmitter(), { end: vi.fn() });
+    const requestSpy = vi.spyOn(http, 'request').mockReturnValueOnce(request);
+    vi.useFakeTimers();
     try {
-      const pending = requestSecurityScanViaRunner('agent-example', { input: { prompt: 'Audit source.', paths: ['.'] } });
-      await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledOnce());
-      const options = fetchSpy.mock.calls[0][1];
-      expect(options.dispatcher).toBe(streamTransportDispatcher());
-      expect(fetchWithTimeout).toHaveBeenCalledWith(expect.stringContaining('/security-scan'), expect.any(Object), 0);
+      const input = { prompt: 'Audit source.', paths: ['.'] };
+      const pending = requestSecurityScanViaRunner('agent-example', { input });
+      expect(requestSpy).toHaveBeenCalledOnce();
+      const [target, options, respond] = requestSpy.mock.calls[0];
+      expect(target.pathname).toBe('/agents/agent-example/security-scan');
+      expect(options).toEqual({
+        agent: false,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(JSON.stringify(input)) },
+      });
+      expect(request.end).toHaveBeenCalledWith(JSON.stringify(input));
+      expect(fetchWithTimeout).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
       await vi.advanceTimersByTimeAsync(48 * 60 * 60 * 1000);
-      expect(options.signal.aborted).toBe(false);
-      finish(mockResponse(true, { evidence }));
-      expect(await pending).toEqual({ evidence });
-      expect(fetchSpy).toHaveBeenCalledOnce();
+      respond(Object.assign(Readable.from([Buffer.from(JSON.stringify({ evidence }))]), { statusCode: 200 }));
+      await expect(pending).resolves.toEqual({ evidence });
+      expect(requestSpy).toHaveBeenCalledOnce();
     } finally {
-      fetchSpy.mockRestore();
+      requestSpy.mockRestore();
       vi.useRealTimers();
     }
   });
 
   it('surfaces a broken scanner connection once while status and Stop retain bounded waits', async () => {
-    fetchWithTimeout.mockRejectedValueOnce(new Error('synthetic connection loss'));
-    await expect(requestSecurityScanViaRunner('agent-example', { input: { prompt: 'Audit source.', paths: ['.'] } })).rejects.toThrow('synthetic connection loss');
-    expect(fetchWithTimeout).toHaveBeenCalledOnce();
-    fetchWithTimeout.mockResolvedValue(mockResponse(true, { evidence: { status: 'interrupted' } }));
-    await requestSecurityScanViaRunner('agent-example');
-    await requestSecurityScanViaRunner('agent-example', { stop: true });
-    expect(fetchWithTimeout).toHaveBeenNthCalledWith(2, expect.stringContaining('/security-scan'), { method: 'GET' }, 15000);
-    expect(fetchWithTimeout).toHaveBeenNthCalledWith(3, expect.stringContaining('/security-scan/stop'), { method: 'POST' }, 15000);
+    const request = Object.assign(new EventEmitter(), { end: vi.fn() });
+    const requestSpy = vi.spyOn(http, 'request').mockReturnValueOnce(request);
+    try {
+      const pending = requestSecurityScanViaRunner('agent-example', { input: { prompt: 'Audit source.', paths: ['.'] } });
+      request.emit('error', new Error('synthetic connection loss'));
+      await expect(pending).rejects.toThrow('synthetic connection loss');
+      expect(requestSpy).toHaveBeenCalledOnce();
+      fetchWithTimeout.mockResolvedValue(mockResponse(true, { evidence: { status: 'interrupted' } }));
+      await requestSecurityScanViaRunner('agent-example');
+      await requestSecurityScanViaRunner('agent-example', { stop: true });
+      expect(fetchWithTimeout).toHaveBeenNthCalledWith(1, expect.stringContaining('/security-scan'), { method: 'GET' }, 15000);
+      expect(fetchWithTimeout).toHaveBeenNthCalledWith(2, expect.stringContaining('/security-scan/stop'), { method: 'POST' }, 15000);
+    } finally {
+      requestSpy.mockRestore();
+    }
   });
 
   // ===========================================================================
