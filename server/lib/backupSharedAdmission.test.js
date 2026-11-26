@@ -249,7 +249,7 @@ describe('shared snapshot admission between real server and runner processes', (
     expect(rejected.message).toContain(dir);
     expect(rejected.message).toContain('uncertain');
     expect(rejected.message).toContain(unreadable);
-    expect(rejected.message).toContain('docs/BACKUP_PUBLICATION_ADMISSION.md#interrupted-ownership-recovery');
+    expect(rejected.message).toContain('docs/BACKUP.md#interrupted-ownership-recovery');
     expect(readdirSync(leasesDir(path)).sort()).toEqual(['broken', 'seeded']);
   });
 
