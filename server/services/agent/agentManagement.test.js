@@ -19,7 +19,6 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
-import { EventEmitter } from 'node:events';
 import { ChildProcess } from '../../lib/childProcess.js';
 import { pinPlatform } from '../../lib/testHelper.js';
 import { EventEmitter } from 'node:events';
