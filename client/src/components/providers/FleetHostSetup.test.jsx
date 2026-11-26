@@ -39,7 +39,8 @@ describe('dedicated model host setup', () => {
  // under it has to open that page. It pointed at /models/llms, which #7414 left
  // holding the weights catalog and no server controls at all.
  it.each([
-  ['mtplx', '/models/llms-runtimes'],
+  ['mtplx', '/models/llms-runtimes/mtplx'],
+  ['llama', '/models/llms-runtimes/llama'],
   // vLLM has no PortOS page of its own; the runtimes tab is still where every
   // local server this host CAN manage lives, so the button must not go dead.
   ['vllm', '/models/llms-runtimes'],
@@ -48,7 +49,8 @@ describe('dedicated model host setup', () => {
   api.getFleetLlmHost.mockResolvedValue({ ...state, recommendation: { ...state.recommendation, runtime } });
   api.getFleetPeerHosts.mockResolvedValue({ hosts: [] });
   render(<MemoryRouter><FleetHostSetup /></MemoryRouter>);
-  expect(await screen.findByRole('link', { name: 'Manage model servers' })).toHaveAttribute('href', href);
+  await screen.findByText(state.recommendation.reason);
+  expect(screen.getByRole('link', { name: 'Manage model servers' })).toHaveAttribute('href', href);
  });
 
  // The reported bug: the host was enabled from this page, the machine was

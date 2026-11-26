@@ -2,6 +2,7 @@
 // discoverable, but these controls never stop it or replace its files.
 import { cpus, release, totalmem } from 'node:os';
 import { PORTS } from '../lib/ports.js';
+import { MKSERVE_CONTEXT, MKSERVE_ORIGIN } from '../lib/mkserveRuntime.js';
 import { sleep } from '../lib/fileCore.js';
 import { MANAGED_RUNTIME_APPS } from '../lib/managedRuntimeApps.js';
 import { createBundleDaemon, pm2ArgValue } from '../lib/managedDaemon.js';
@@ -17,7 +18,7 @@ export { MKSERVE_MODEL };
 export const MKSERVE_APP = MANAGED_RUNTIME_APPS.mkserve.app;
 const HOST = '127.0.0.1';
 const PORT = PORTS.MKSERVE;
-const ORIGIN = 'http://' + HOST + ':' + PORT;
+const ORIGIN = MKSERVE_ORIGIN;
 const ENDPOINT = ORIGIN + '/v1';
 const START_TIMEOUT_MS = 180_000;
 export const MKSERVE_UNSUPPORTED_REASON = 'mkserve is supported on Apple M5 Max with macOS 26 or later and at least 36 GB of unified memory.';
@@ -39,7 +40,7 @@ function onProgress(callback, message) {
 const launchArgs = (paths) => [
   ...mkserveLaunchEnvironment(), paths.python, '-m', 'mkserve', 'serve', MKSERVE_MODEL,
   '--card', 'm5max', '--engine', 'offline-c', '--mode', 'native', '--prefill', 'fast',
-  '--max-context', '32768', '--max-batch', '1', '--host', HOST, '--port', String(PORT),
+  '--max-context', String(MKSERVE_CONTEXT), '--max-batch', '1', '--host', HOST, '--port', String(PORT),
   '--model-dir', paths.weights, '--workdir', paths.build,
 ];
 
@@ -147,7 +148,7 @@ export function installMkserve({ onProgress: progress, repair = false, signal } 
 const waitUntilReady = () => daemon.waitUntilReady({
   probe: async () => {
     const live = await probeMkserve();
-    return live?.engine === 'offline-c' && live.maxContext === 32768;
+    return live?.engine === 'offline-c' && live.maxContext === MKSERVE_CONTEXT;
   },
   exited: (status) => {
     daemon.assertNameAvailable(status);

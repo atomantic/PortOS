@@ -353,7 +353,7 @@ describe('getProviderReadiness', () => {
       { findCommand: () => null, probe: unreachable() },
     );
     restore();
-    expect(readiness.manageUrl).toBe('/models/llms-runtimes');
+    expect(readiness.manageUrl).toBe('/models/llms-runtimes/mtplx');
     // Setup lives in the PortOS UI — the payload never points at a vendor doc.
     expect(readiness.docsUrl).toBeUndefined();
     expect(readiness.setup).toMatchObject({ runtime: 'mtplx', action: 'install-start', blockedReason: null });

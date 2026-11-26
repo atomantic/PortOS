@@ -286,7 +286,7 @@ export const generationControlsFor = (provider) => {
   const gateway = isGatewayBackedProvider(provider);
   // LM Studio forwards temperature/top_p, but reasoning belongs to the LOADED model instance (THINKING_STYLE.lmstudio on the server: no toggle).
   const lmstudio = provider?.lmstudioBacked === true;
-  const splash = provider?.splashBacked === true;
+  const inkling = provider?.splashBacked === true || provider?.mkserveBacked === true;
   const local = isOllamaBackedProvider(provider) || hasLocalRuntimeMarker(provider);
   if (!local && !gateway) return null;
   if (isClaudeCommandProvider(provider)) {
@@ -296,5 +296,5 @@ export const generationControlsFor = (provider) => {
       : null;
   }
   // LM Studio joins the gateways in having no forwardable thinking signal.
-  return { temperature: true, topP: true, thinking: !gateway && !lmstudio && !splash };
+  return { temperature: true, topP: true, thinking: !gateway && !lmstudio && !inkling };
 };

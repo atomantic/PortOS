@@ -34,7 +34,7 @@ const finiteNumber = (value, min, max) => {
 export function apiGenerationOptions(provider) {
   const ollama = isOllamaBackedProvider(provider);
   const lmstudio = provider?.lmstudioBacked === true;
-  const splash = provider?.splashBacked === true;
+  const inkling = provider?.splashBacked === true || provider?.mkserveBacked === true;
   if (!ollama && !hasLocalRuntimeMarker(provider)) return {};
   // Only Ollama defaults to 0.6; other backends keep their own until pinned.
   const temperature = finiteNumber(provider.temperature, 0, 2) ?? (ollama ? 0.6 : undefined);
@@ -43,9 +43,8 @@ export function apiGenerationOptions(provider) {
     ...(temperature === undefined ? {} : { temperature }),
     ...(topP === undefined ? {} : { top_p: topP }),
     // Ollama takes a native `think` boolean; llama.cpp / MTPLX / vLLM / SGLang
-    // use the chat template. LM Studio takes neither (reasoning is a property of
-    // the loaded model instance).
-    ...(typeof provider.thinking !== 'boolean' || lmstudio || splash
+    // use the chat template. LM Studio and the Inkling runtimes take neither.
+    ...(typeof provider.thinking !== 'boolean' || lmstudio || inkling
       ? {}
       : ollama
         ? { think: provider.thinking }

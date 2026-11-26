@@ -88,14 +88,14 @@ describe('provider sample generator', () => {
       'opencode-ollama', 'opencode-ollama-tui', 'opencode-lmstudio', 'opencode-lmstudio-tui',
       'opencode-mtplx', 'opencode-mtplx-tui', 'opencode-llama-tui',
       'opencode-vllm', 'opencode-vllm-tui', 'opencode-sglang', 'opencode-sglang-tui',
-      'claude-sglang', 'claude-sglang-tui', 'opencode-splash', 'claude-splash',
+      'claude-sglang', 'claude-sglang-tui', 'opencode-splash', 'opencode-splash-tui', 'opencode-mkserve', 'opencode-mkserve-tui', 'claude-splash',
       'orcarouter', 'opencode-orcarouter', 'openrouter', 'opencode-openrouter', 'opencode-openrouter-tui',
       'nvidia-nim', 'opencode-nvidia-nim', 'opencode-nvidia-nim-tui', 'opencode-orcarouter-tui',
       'opencode-zen', 'opencode-zen-cli', 'opencode-zen-tui',
       'codex', 'codex-tui', 'codex-ollama', 'codex-lmstudio',
       'claude-code-tui', 'claude-code-tui-bedrock',
       'antigravity-tui', 'antigravity-cli',
-      'cerebras', 'lmstudio', 'ollama', 'mtplx', 'splash', 'slotstream',
+      'cerebras', 'lmstudio', 'ollama', 'mtplx', 'mkserve', 'splash', 'slotstream',
       'grok', 'grok-cli', 'grok-tui', 'kimi-cli', 'kimi-tui', 'cursor-cli', 'cursor-tui',
     ];
     expect([...PROVIDER_ORDER].sort()).toEqual([...SHIPPED_IDS].sort());

@@ -489,13 +489,33 @@ describe('mtplxServerManager', () => {
     const servedModel = () => { const launch = execPm2Calls.filter((a) => a[0] === 'start').pop(); return launch[launch.indexOf('--model') + 1]; };
 
     it('serves the asked-for pack while fn runs, then puts the previous pack back', async () => {
+      vi.spyOn(mtplxModels, 'listMtplxCachedModels').mockResolvedValue({
+        models: [{ repo_id: 'Example/Qwen-MTP' }, { repo_id: 'Example/Other-MTP' }], error: null,
+      });
       await startMtplxServer({ port: 8010 });
       let during = null;
-      const out = await runOnMtplxCheckpoint('Example/Other-MTP', async (served) => { during = { served, model: servedModel() }; return 'done'; });
+      const out = await runOnMtplxCheckpoint('Example/Other-MTP', async (served, endpoint) => {
+        during = { served, endpoint, model: servedModel() };
+        return 'done';
+      }, { requireCached: true });
       expect(out).toBe('done');
-      expect(during).toEqual({ served: 'served-Example/Other-MTP', model: 'Example/Other-MTP' });
+      expect(during).toEqual({ served: 'served-Example/Other-MTP', endpoint: 'http://127.0.0.1:8010/v1', model: 'Example/Other-MTP' });
       expect(servedModel()).toBe('Example/Qwen-MTP');
       expect(pm2State?.status).toBe('online');
+    });
+
+    it('refuses incomplete and absent checkpoint IDs before changing the daemon', async () => {
+      vi.spyOn(mtplxModels, 'listMtplxCachedModels').mockResolvedValue({
+        models: [{ repo_id: 'Example/Partial-MTP', validation: { ok: false } }], error: null,
+      });
+      const run = vi.fn();
+      for (const model of ['Example/Partial-MTP', 'Example/Not-Cached']) {
+        await expect(runOnMtplxCheckpoint(model, run, { requireCached: true })).rejects.toMatchObject({
+          status: 400, code: 'MTPLX_NO_CACHED_MODEL',
+        });
+      }
+      expect(execPm2Calls.map(([verb]) => verb)).not.toContain('start');
+      expect(run).not.toHaveBeenCalled();
     });
 
     it('does not relaunch when the pack is already serving', async () => {
@@ -587,8 +607,7 @@ describe('mtplxServerManager', () => {
       const saved = { port: 8000, model: 'Example/Qwen-MTP', tuning: { depth: 2 } };
       settingsStore = { localLlm: { mtplx: { launch: saved } } };
       await expect(runOnMtplxCheckpoint('Example/Other-MTP', async () => {
-        // The switch itself persists its own line while the bench runs.
-        expect(settingsStore.localLlm.mtplx.launch.model).toBe('Example/Other-MTP');
+        expect(settingsStore.localLlm.mtplx.launch).toEqual(saved);
         throw new Error('page failed');
       })).rejects.toThrow('page failed');
       expect(pm2State?.status).not.toBe('online');

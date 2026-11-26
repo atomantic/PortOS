@@ -110,7 +110,7 @@ export const LOCAL_RUNTIMES = Object.freeze({
     id: 'mkserve',
     label: LOCAL_RUNTIME_LABELS.mkserve,
     command: 'mkserve',
-    defaultBaseUrl: `http://127.0.0.1:${PORTS.MKSERVE}/v1`,
+    defaultBaseUrl: opencodeLocalBaseUrl('mkserve'),
     manageUrl: LOCAL_RUNTIME_MANAGE_URLS.mkserve,
     docsUrl: 'https://github.com/atomantic/PortOS/blob/main/docs/features/mkserve.md',
     modelsHint: 'Install and start mkserve on {page}; it serves one fixed model.',

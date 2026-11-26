@@ -24,15 +24,15 @@ export const LOCAL_RUNTIME_LABELS = Object.freeze({
  * because the client cannot import the endpoint half. `null` = no PortOS page (operator-owned compose).
  */
 export const LOCAL_RUNTIME_MANAGE_URLS = Object.freeze({
-  llama: '/models/llms-runtimes',
+  llama: '/models/llms-runtimes/llama',
   ollama: '/models/llms',
   lmstudio: '/models/llms',
   vllm: null,
   sglang: null,
-  slotstream: '/models/llms-runtimes',
+  slotstream: '/models/llms-runtimes/slotstream',
   splash: '/models/llms-runtimes/splash',
   mkserve: '/models/llms-runtimes/mkserve',
-  mtplx: '/models/llms-runtimes',
+  mtplx: '/models/llms-runtimes/mtplx',
 });
 
 // Default ports of the two local backends; an endpoint-only provider aimed at one on this instance maps to it.
@@ -69,7 +69,7 @@ export function localRuntimeKind(provider) {
   if (namespace) return namespace;
   if (provider?.id === 'slotstream' || /slotstream/i.test(provider?.name || '')) return 'slotstream';
   if (Number(localEndpointPort(provider?.endpoint)) === PORTS.SLOTSTREAM) return 'slotstream';
-  // Same shape as Slotstream's arm above: no `*Backed` marker, a PortOS-dedicated loopback port.
+  // Older custom mkserve records can predate the marker.
   if (provider?.id === 'mkserve' || /mkserve/i.test(provider?.name || '') || Number(localEndpointPort(provider?.endpoint)) === PORTS.MKSERVE) return 'mkserve';
   // The shipped `mtplx` record carries no marker (`mtplxBacked` only rides the CLI wrappers); `id` is its
   // one signal. No port arm: MTPLX's port is user-configurable with a generic default (`:8000`), unlike
