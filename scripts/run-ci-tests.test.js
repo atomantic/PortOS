@@ -296,9 +296,9 @@ describe('test memo through the real runner', () => {
       expect(trustedPr.stdout).not.toContain('RAN ');
 
       // A passed file that stores nothing says why on a trusted run (#16545). The
-      // stuck file spawns git, so neither key exists (any other undeclared reason
-      // serves equally). A declared guard is only counted.
-      const stuck = 'scripts/check-import-case.test.js';
+      // stuck file can read checkout Git state, so neither key exists. A
+      // declared guard is only counted.
+      const stuck = 'scripts/ci-base-sha.test.js';
       const [guard] = getAlwaysRunTests();
       const unrecorded = { CI_TEST_FILES: JSON.stringify([stuck, guard]), PORTOS_TEST_MEMO_DIR: join(fixture, 'unrecorded-memo') };
       const trusted = run(unrecorded);

@@ -117,6 +117,8 @@ that reads this checkout another way (`git log` on the repository, a script
 of the checkout run through a path the analyzer cannot follow), one whose
 verdict needs something no key names (a live Docker engine, the network),
 and one that hands real git a machine path it did not create.
+The live Docker containment suite depends on the engine and public registry,
+so its dedicated workflow runs the suite directly on every selected job.
 
 `server/test/guards/repo/git-fixture-suites.test.js` reads every declaring
 suite on every run: a declaration the file contradicts fails there instead

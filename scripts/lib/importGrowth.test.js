@@ -1,3 +1,4 @@
+// test-memo: git-fixture
 /**
  * Base-relative import-growth contract (#7993).
  *
@@ -12,7 +13,6 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { fileURLToPath } from 'url';
 import { staticImportClosure, staticImportSpecifiers, staticImportSpecifiersFromSource } from '../../server/lib/staticImportGraph.js';
 import {
   BOOT_CLOSURE_GROWTH_LIMIT,
@@ -33,8 +33,6 @@ import {
   resolveImportGrowthBase,
   resolveRepoSpecifier,
 } from './importGrowth.js';
-
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 function sourceMap(files) {
   const map = new Map(Object.entries(files));
@@ -268,7 +266,7 @@ describe('one analyzer for base and head', () => {
 describe('missing base history', () => {
   it('does not fall through when CI_BASE_SHA is set and does not resolve', () => {
     expect(() => resolveImportGrowthBase({
-      repoRoot: REPO_ROOT,
+      repoRoot: tmpdir(),
       env: { CI_BASE_SHA: 'not-a-commit' },
       revParse: () => null,
       mergeBase: () => 'should-not-be-used',
@@ -277,7 +275,7 @@ describe('missing base history', () => {
 
   it('does not replace a missing Actions base with the remote default branch', () => {
     expect(() => resolveImportGrowthBase({
-      repoRoot: REPO_ROOT,
+      repoRoot: tmpdir(),
       env: { GITHUB_ACTIONS: 'true' },
       revParse: () => null,
       mergeBase: () => 'origin-main',
@@ -286,7 +284,7 @@ describe('missing base history', () => {
 
   it('fails a local run whose merge-base cannot be resolved', () => {
     expect(() => resolveImportGrowthBase({
-      repoRoot: REPO_ROOT,
+      repoRoot: tmpdir(),
       env: {},
       revParse: () => null,
       mergeBase: () => null,
@@ -296,7 +294,7 @@ describe('missing base history', () => {
 
   it('uses CI_BASE_SHA when it resolves, including on Actions', () => {
     expect(resolveImportGrowthBase({
-      repoRoot: REPO_ROOT,
+      repoRoot: tmpdir(),
       env: { CI_BASE_SHA: 'abc', GITHUB_ACTIONS: 'true' },
       revParse: (_root, rev) => (rev === 'abc' ? 'abcabc' : null),
       mergeBase: () => null,
@@ -310,7 +308,7 @@ describe('release aggregates', () => {
   it('skips a pull request into release and the push that lands it', () => {
     expect(importGrowthSkipReason({ GITHUB_BASE_REF: 'release' })).toMatch(/release cycle/);
     expect(importGrowthSkipReason({ GITHUB_EVENT_NAME: 'push', GITHUB_REF_NAME: 'release' })).toMatch(/release cycle/);
-    expect(evaluateWorkingTreeImportGrowth({ repoRoot: REPO_ROOT, env: { GITHUB_BASE_REF: 'release' } }))
+    expect(evaluateWorkingTreeImportGrowth({ repoRoot: tmpdir(), env: { GITHUB_BASE_REF: 'release' } }))
       .toEqual({ ok: true, skipped: expect.stringMatching(/release cycle/) });
     expect(formatImportGrowthReport({ ok: true, skipped: 'x' })).toMatch(/not measured/);
   });
@@ -338,33 +336,37 @@ describe('git base versus worktree head', () => {
     while (roots.length) rmSync(roots.pop(), { recursive: true, force: true });
   });
 
+  function git(root, ...args) {
+    return execFileSync('git', args, { cwd: root, encoding: 'utf8' });
+  }
+
+  function commit(root) {
+    git(root, 'add', '-A');
+    git(root, 'commit', '-qm', 'fixture');
+    return git(root, 'rev-parse', 'HEAD').trim();
+  }
+
   function repo() {
     const root = mkdtempSync(join(tmpdir(), 'portos-import-git-'));
     roots.push(root);
-    const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
-    git('init', '-q');
+    git(root, 'init', '-q');
     mkdirSync(join(root, 'empty-hooks'));
-    git('config', 'core.hooksPath', join(root, 'empty-hooks'));
-    git('config', 'user.email', 'agent@example.com');
-    git('config', 'user.name', 'Example Agent');
-    git('config', 'commit.gpgsign', 'false');
+    git(root, 'config', 'core.hooksPath', join(root, 'empty-hooks'));
+    git(root, 'config', 'user.email', 'agent@example.com');
+    git(root, 'config', 'user.name', 'Example Agent');
+    git(root, 'config', 'commit.gpgsign', 'false');
     const write = (rel, body) => {
       mkdirSync(join(root, dirname(rel)), { recursive: true });
       writeFileSync(join(root, rel), body);
     };
-    const commit = () => {
-      git('add', '-A');
-      git('commit', '-qm', 'fixture');
-      return git('rev-parse', 'HEAD').trim();
-    };
-    return { root, git, write, commit };
+    return { root, write };
   }
 
   it('reads the base blob for a dirty file and counts a new test file separately', () => {
-    const { root, write, commit } = repo();
+    const { root, write } = repo();
     write('server/wide.js', 'export const wide = 1;\n');
     write('server/keep.test.js', "import './wide.js';\n");
-    const sha = commit();
+    const sha = commit(root);
 
     write('server/wide.js', "import './heavy.js';\nexport const wide = 1;\n");
     write('server/heavy.js', 'export const heavy = 1;\n');
@@ -385,18 +387,18 @@ describe('git base versus worktree head', () => {
   });
 
   it('fails closed when the base commit cannot be listed', () => {
-    const { root, write, commit } = repo();
+    const { root, write } = repo();
     write('server/a.test.js', 'export const a = 1;\n');
-    commit();
+    commit(root);
     expect(() => measureGitTree(root, 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef')).toThrow(/does not pass/);
   });
 
   it('treats a rename as a wash when the closure does not gain modules', () => {
-    const { root, git, write, commit } = repo();
+    const { root, write } = repo();
     write('server/old.js', 'export const leaf = 1;\n');
     write('server/keep.test.js', "import './old.js';\n");
-    const sha = commit();
-    git('mv', 'server/old.js', 'server/renamed.js');
+    const sha = commit(root);
+    git(root, 'mv', 'server/old.js', 'server/renamed.js');
     write('server/keep.test.js', "import './renamed.js';\n");
     const report = compareImportGrowth(measureGitTree(root, sha), measureWorkingTree(root));
     expect(report.existingSuiteGrowth).toBe(0);
@@ -404,10 +406,10 @@ describe('git base versus worktree head', () => {
   });
 
   it('measures server/index.js boot-closure growth across git base and dirty worktree', () => {
-    const { root, write, commit } = repo();
+    const { root, write } = repo();
     write('server/index.js', "import './boot-a.js';\n");
     write('server/boot-a.js', 'export const a = 1;\n');
-    const sha = commit();
+    const sha = commit(root);
 
     const extraImports = Array.from({ length: 16 }, (_, i) => {
       write(`server/extra-${i}.js`, `export const e = ${i};\n`);

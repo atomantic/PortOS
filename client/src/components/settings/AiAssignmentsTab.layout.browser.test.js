@@ -12,6 +12,11 @@ const chrome = resolveTestChrome();
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const PATH = 'ai-assignments-layout-test';
 
+async function loadAssignments(page, origin) {
+  await page.goto(`${origin}${PATH}`, { waitUntil: 'domcontentloaded' });
+  await page.getByLabel('Model for Production planning model a').waitFor({ state: 'visible' });
+}
+
 const API = `
   const providers = [{ id: 'example', name: 'Example provider', type: 'api', enabled: true, defaultModel: 'example-model', models: ['example-model', 'example-model-with-a-rather-long-name-for-a-phone-width-select'] }];
   const entry = (id) => ({ id, area: 'Creative Director', label: 'Production planning model ' + id, source: 'settings.creativeDirector.plan.with.a.long.path.' + id, link: '/settings/example',
@@ -29,6 +34,8 @@ describe.skipIf(!chrome)('AI assignments layout in Chromium', () => {
     fixture = await startBrowserFixture({
       name: 'ai-assignments-layout-15179', createServer, chromium,
       launchOptions: { executablePath: chrome, args: ['--mute-audio'] },
+      // Compile the cold Vite graph within the fixture's bounded setup.
+      warmup: loadAssignments,
       viteConfig: (temp) => ({
         configFile: false, root, cacheDir: join(temp, 'vite-cache'),
         optimizeDeps: { entries: ['src/components/settings/AiAssignmentsTab.jsx'], include: ['react', 'react-dom/client', 'react-router', 'lucide-react'] },
@@ -72,8 +79,7 @@ describe.skipIf(!chrome)('AI assignments layout in Chromium', () => {
     const context = await fixture.browser.newContext({ viewport: { width, height: 900 } });
     const page = await context.newPage();
     page.setDefaultTimeout(5000);
-    await page.goto(`${fixture.origin}${PATH}`, { waitUntil: 'domcontentloaded' });
-    await page.getByLabel('Model for Production planning model a').waitFor({ state: 'visible' });
+    await loadAssignments(page, fixture.origin);
     return { context, page };
   };
 
