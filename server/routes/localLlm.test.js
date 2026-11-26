@@ -7,7 +7,7 @@ import localLlmRoutes from './localLlm.js';
 import { decide } from '../services/jev.js';
 import { installLaya, scoreLaya } from '../services/layaMlx.js';
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js';
-import { listModels, listVisionModels, listToolUseModels, installModel, cancelModelInstall, switchBackend } from '../services/localLlm.js';
+import { listModels, listVisionModels, listToolUseModels, installModel, cancelModelInstall, switchBackend, migrateBackend } from '../services/localLlm.js';
 import { enrichCatalogWithVariants, applyMeasuredFit } from '../services/huggingFaceCatalog.js';
 import { getMeasuredFits } from '../services/localModelAssessmentStore.js';
 import { listEndpointRuntimeModels } from '../services/localRuntimeEndpoints.js';
@@ -917,6 +917,30 @@ describe('measured assessments wiring', () => {
     expect(app.get('io').emit).toHaveBeenCalledWith('localLlm:progress', {
       scope: 'assessment', backend: 'ollama', modelId: 'example-model:14b', event: 'start', sampleIndex: 1, sampleCount: 3,
     });
+  });
+
+  it('POST /assessments/run returns 503 when an endpoint runtime is unconfigured', async () => {
+    runAssessment.mockRejectedValueOnce(new ServerError('No endpoint is configured for the llama runtime', {
+      status: 503,
+      code: 'LOCAL_LLM_ENDPOINT_MISSING',
+      context: { backend: 'llama' },
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/local-llm/assessments/run')
+      .send({ backend: 'llama', modelId: 'example-model:7b' });
+
+    expect(res.status).toBe(503);
+    expect(res.body).toMatchObject({ code: 'LOCAL_LLM_ENDPOINT_MISSING', context: { backend: 'llama' } });
+  });
+
+  it('POST /migrate returns 502 when a backend is unavailable', async () => {
+    migrateBackend.mockResolvedValueOnce({ success: false, error: 'Source backend is unavailable' });
+
+    const res = await request(makeApp()).post('/api/local-llm/migrate').send({ to: 'ollama' });
+
+    expect(res.status).toBe(502);
+    expect(res.body).toMatchObject({ error: 'Source backend is unavailable', code: 'BAD_GATEWAY' });
   });
 
   it('runs the explicit OpenCode agent benchmark with a bounded timeout', async () => {

@@ -722,7 +722,7 @@ router.post('/migrate', asyncHandler(async (req, res) => {
   const result = await migrateBackend(to, { mode, onProgress: ({ event, message }) => emit(event, message) })
   if (!result.success) {
     emit('error', result.error || 'Migration failed')
-    throw new ServerError(result.error || 'Migration failed', { status: 500 })
+    throw new ServerError(result.error || 'Migration failed', { status: 502 })
   }
   res.json(result)
 }))
