@@ -14,6 +14,7 @@ import { clearSubjectIdentityEvidence } from './privacyBrokers.js';
 import { createRunnerService } from '../lib/aiToolkit/runner.js';
 import { withRuntimeFileTurn } from '../lib/runtimeFilePublication.js';
 import { deleteSubject } from './privacySubjects.js';
+import { cleanHistoricalTwinArtifacts } from './privacyTwinHistory.js';
 import { scrubRevokedPrivacyFacts } from './privacyPromptScrub.js';
 import { createOutputSpooler } from './agentTuiSpawning/outputSpooler.js';
 
@@ -75,7 +76,7 @@ beforeEach(async () => {
   warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   error = vi.spyOn(console, 'error').mockImplementation(() => {});
   root = await mkdtemp(join(tmpdir(), 'privacy-prompt-scrub-'));
-  Object.assign(fixtures.paths, { cosAgents: join(root, 'agents'), runs: join(root, 'runs') });
+  Object.assign(fixtures.paths, { cosAgents: join(root, 'agents'), runs: join(root, 'runs'), digitalTwin: join(root, 'digital-twin') });
   paths = {
     agent: join(fixtures.paths.cosAgents, '2026-01-01', 'agent-example'),
     flatAgent: join(fixtures.paths.cosAgents, 'agent-active'),
@@ -328,6 +329,110 @@ describe('privacy vault mutations and existing local run artifacts', () => {
   it('does not clear broker identity evidence when only shareWithTwin is revoked', async () => {
     await updateVaultRecord('record-example', { shareWithTwin: false });
     expect(clearSubjectIdentityEvidence).not.toHaveBeenCalled();
+  });
+});
+
+describe('historical Digital Twin cleanup', () => {
+  const runId = '00000000-0000-4000-8000-000000000012';
+  const otherId = '00000000-0000-4000-8000-000000000013';
+  const entryId = '00000000-0000-4000-8000-000000000014';
+  const time = '2026-01-01T00:00:00.000Z';
+  const feedbackFile = () => join(fixtures.paths.digitalTwin, 'feedback.json');
+  const runFile = (id, name) => join(fixtures.paths.runs, id, name);
+  const read = path => readFile(path, 'utf8');
+  const scrub = () => cleanHistoricalTwinArtifacts({ action: 'scrub', recordId: '00000000-0000-4000-8000-000000000015' });
+  const remove = (kind, id) => cleanHistoricalTwinArtifacts({ action: 'delete', kind, id });
+  const feedbackEntries = [
+    { id: entryId, contentType: 'test_response', createdAt: time, contentSnippet: output, context: survivor },
+    { id: otherId, contentType: 'enrichment', contentSnippet: output },
+  ];
+  const createRun = async (id, request, props = {}) => {
+    const metadata = { id, type: 'ai', source: 'digital-twin', startTime: time, endTime: time,
+      prompt: request.slice(0, 500), outputSize: Buffer.byteLength(output),
+      error: output, errorAnalysis: { message: output }, ...props };
+    await Promise.all(Object.entries({
+      'metadata.json': JSON.stringify(metadata), 'prompt.txt': request, 'output.txt': output, 'tui-response.txt': output,
+    }).map(([name, value]) => writeFixture(runFile(id, name), value)));
+  };
+  const scorerTemplate = async stage => (await readFile(new URL(`../../data.reference/prompts/stages/${stage}.md`, import.meta.url), 'utf8'))
+    .replace(/{{(?:response|transcript)}}/g, fact).replace(/{{[^}]+}}/g, 'example');
+  beforeEach(async () => {
+    await writeFixture(feedbackFile(), JSON.stringify({ entries: feedbackEntries }));
+  });
+
+  it.each([
+    ['soul-test-scorer', 'behavioral'],
+    ['adversarial-boundary-scorer', 'adversarial'],
+    ['values-alignment-scorer', 'values'],
+    ['multi-turn-consistency-scorer', 'multi-turn'],
+  ])('erases an exact fact from %s and typed feedback, preserving other records', async (stage, scorer) => {
+    const request = await scorerTemplate(stage);
+    await createRun(runId, request);
+    await createRun(otherId, request, { source: 'example-unrelated' });
+    const doc = join(fixtures.paths.digitalTwin, 'documents', 'example.md');
+    await writeFixture(doc, output);
+    expect(await cleanHistoricalTwinArtifacts({ action: 'list' })).toEqual({
+      candidates: [
+        { kind: 'run', id: runId, date: time, scorer },
+        { kind: 'feedback', id: entryId, date: time },
+      ],
+    });
+    expect(await scrub()).toEqual({ changed: 2 });
+    expect(await scrub()).toEqual({ changed: 0 });
+    expect(await read(runFile(runId, 'prompt.txt'))).toBe(request.replaceAll(fact, '[redacted]'));
+    const cleanedOutput = output.replace(fact, '[redacted]');
+    for (const name of ['tui-response.txt', 'output.txt']) {
+      expect(await read(runFile(runId, name))).toBe(cleanedOutput);
+      expect(await read(runFile(otherId, name))).toBe(output);
+    }
+    expect(JSON.parse(await read(runFile(runId, 'metadata.json')))).toMatchObject({
+      prompt: request.replaceAll(fact, '[redacted]').slice(0, 500), outputSize: Buffer.byteLength(cleanedOutput),
+      error: cleanedOutput, errorAnalysis: { message: cleanedOutput },
+    });
+    expect(JSON.parse(await read(feedbackFile())).entries).toEqual([
+      { ...feedbackEntries[0], contentSnippet: cleanedOutput }, feedbackEntries[1],
+    ]);
+    expect(await read(doc)).toBe(output);
+    expect([log, warn, error].flatMap(spy => spy.mock.calls.flat()).join('\n')).not.toContain(fact);
+  });
+
+  it('deletes a selected completed Digital Twin run or feedback excerpt when the value is lost', async () => {
+    await createRun(runId, output);
+    await createRun(otherId, output, { endTime: null });
+    expect(await scrub()).toEqual({ changed: 1 });
+    expect(await read(runFile(runId, 'output.txt'))).toBe(output);
+    expect((await cleanHistoricalTwinArtifacts({ action: 'list' })).candidates[0]).toEqual({
+      kind: 'run', id: runId, date: time, scorer: 'unclassified',
+    });
+    fixtures.query.mockResolvedValue({ rows: [] });
+    await expect(scrub()).rejects.toMatchObject({ code: 'PRIVACY_ARTIFACT_NOT_FOUND' });
+    await expect(remove('run', otherId)).rejects.toMatchObject({ code: 'PRIVACY_ARTIFACT_NOT_FOUND' });
+    await expect(remove('feedback', otherId)).rejects.toMatchObject({ code: 'PRIVACY_ARTIFACT_NOT_FOUND' });
+    expect(await remove('run', runId)).toEqual({ changed: 1 });
+    await expect(read(runFile(runId, 'prompt.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await remove('feedback', entryId)).toEqual({ changed: 1 });
+    expect(await remove('feedback', entryId)).toEqual({ changed: 0 });
+    expect(JSON.parse(await read(feedbackFile())).entries).toEqual([
+      { ...feedbackEntries[0], contentSnippet: '' }, feedbackEntries[1],
+    ]);
+    expect(await read(runFile(otherId, 'output.txt'))).toBe(output);
+  });
+
+  it('retains retry evidence after a partial revocation and keeps failed reads private', async () => {
+    const request = await scorerTemplate('adversarial-boundary-scorer');
+    await createRun(runId, request);
+    fixtures.failWrite = runFile(runId, 'prompt.txt');
+    await expect(deleteVaultRecord('record-example')).rejects.toMatchObject({ code: 'PRIVACY_RUN_SCRUB_FAILED' });
+    await deleteVaultRecord('record-example');
+    expect(await read(runFile(runId, 'prompt.txt'))).toBe(request.replaceAll(fact, '[redacted]'));
+    expect(JSON.parse(await read(feedbackFile())).entries[0].contentSnippet).toBe(output.replace(fact, '[redacted]'));
+    await writeFixture(feedbackFile(), fact);
+    const failure = await scrub().catch(e => e);
+    expect(failure).toMatchObject({ code: 'PRIVACY_RUN_SCRUB_FAILED', stack: failure.message });
+    expect(await read(feedbackFile())).toBe(fact);
+    const report = [failure.message, ...[log, warn, error].flatMap(spy => spy.mock.calls.flat())].join('\n');
+    expect(report).not.toContain(fact);
+    expect(report).not.toContain(root);
   });
 });
 

@@ -6,75 +6,15 @@
  * Tracks feedback patterns and adjusts document weights for confidence scoring.
  */
 
-import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
-import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { bucketFor } from '../lib/objects.js';
 import { digitalTwinEvents } from './digital-twin.js';
+import { loadFeedback, queueFeedbackWrite, readFeedbackFresh, saveFeedback } from './feedbackStore.js';
 
-const DIGITAL_TWIN_DIR = PATHS.digitalTwin;
-const FEEDBACK_FILE = join(DIGITAL_TWIN_DIR, 'feedback.json');
+export { applyFeedbackMerge } from './feedbackStore.js';
 
 function now() {
   return new Date().toISOString();
-}
-
-// =============================================================================
-// DATA ACCESS
-// =============================================================================
-
-let feedbackCache = null;
-
-// Peer sync (digital-twin-sync) and local mutators share feedback.json; every
-// read-modify-write runs in this queue against a fresh read so neither side
-// overwrites the other from a stale cache.
-const queueFeedbackWrite = createFileWriteQueue();
-
-function defaultFeedback() {
-  return {
-    version: '1.0.0',
-    entries: [],
-    stats: { totalFeedback: 0, soundsLikeMe: 0, doesntSoundLikeMe: 0 },
-    documentWeightAdjustments: {},
-    lastCalculatedAt: null
-  };
-}
-
-// Strict: ENOENT yields the default, but an unreadable or malformed file throws
-// so a mutator never replaces user feedback it failed to parse.
-async function readFeedbackFresh() {
-  return (await readJSONFile(FEEDBACK_FILE, null, { strict: true })) ?? defaultFeedback();
-}
-
-async function loadFeedback() {
-  if (feedbackCache) return feedbackCache;
-  feedbackCache = await readFeedbackFresh();
-  return feedbackCache;
-}
-
-async function saveFeedback(data) {
-  await ensureDir(DIGITAL_TWIN_DIR);
-  data.updatedAt = now();
-  await atomicWrite(FEEDBACK_FILE, data);
-  feedbackCache = data;
-}
-
-/**
- * Apply a peer-sync merge to feedback.json inside the write queue. `mergeFn(local)`
- * returns `{ merged, changed }`; the cache is replaced with what was written.
- * Returns whether anything was written.
- */
-export function applyFeedbackMerge(mergeFn) {
-  return queueFeedbackWrite(async () => {
-    const local = await readJSONFile(FEEDBACK_FILE, null, { strict: true });
-    const { merged, changed } = mergeFn(local);
-    if (!changed) return false;
-    await ensureDir(DIGITAL_TWIN_DIR);
-    await atomicWrite(FEEDBACK_FILE, merged);
-    feedbackCache = merged;
-    return true;
-  });
 }
 
 // =============================================================================
