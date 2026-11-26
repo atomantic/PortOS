@@ -1,11 +1,11 @@
 // vi.mock() calls are hoisted by Vitest before import evaluation, but are placed
 // at the top for clarity and to match the convention in other test files.
 
-// ── Listener-guard suite support (see "CoS event listener rejection guards").
+// ── Listener-guard suite support (see "CoS event listeners").
 // `initSpawner()` wires the real `task:ready` listener onto
 // the shared `cosEvents` emitter; these mocks keep that wiring off the network,
-// the runner socket and the agent store, and let a single test force the one
-// rejection it is about.
+// the runner socket and the agent store, and let tests drive events installed
+// by the real spawner.
 const listenerGuardState = vi.hoisted(() => ({ loadStateError: null }));
 
 vi.mock('./provider/providerStatus.js', async (importOriginal) => ({
@@ -52,11 +52,15 @@ vi.mock('./agent/agentOrchestrator.js', async (importOriginal) => {
   return {
     ...actual,
     spawnAgentForTask: vi.fn().mockResolvedValue(undefined),
+    completeAgent: vi.fn().mockResolvedValue(undefined),
   };
 });
 
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
-import { isTruthyMeta, isFalsyMeta } from './agent/agentState.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
+import { onCosRunnerEvent } from './cos/cosRunnerClient.js';
+import { completeAgent } from './agent/agentOrchestrator.js';
+import { isTruthyMeta, isFalsyMeta, runnerAgents } from './agent/agentState.js';
 import { cosEvents } from './cos/cosEvents.js';
 import { initSpawner } from './subAgentSpawner.js';
 import { applyAppWorktreeDefault } from './cos/cosImprovementTasks.js';
@@ -224,23 +228,17 @@ describe('Worktree & metadata flag helpers', () => {
 });
 
 
-/**
- * `cosEvents` is a plain `EventEmitter` — it neither awaits nor catches what a
- * listener returns, so an `async` listener passed straight to `.on` turns any
- * rejection into a process-level `unhandledRejection`. For `task:ready`, the one
- * chokepoint every spawn emitter funnels through, that also means the queued
- * task is silently never dispatched and the failure carries no task id.
- *
- * These two cases pin the wrapper: they fail if the `.catch` is dropped, or if a
- * new `await` is added ahead of the listener's inner `try`.
- */
-describe('CoS event listener rejection guards', () => {
+describe('CoS event listeners', () => {
+  let handleRunnerError;
   let logs;
   let unhandled;
   const collectLog = entry => logs.push(entry);
   const collectUnhandled = reason => unhandled.push(reason);
 
   beforeAll(async () => {
+    vi.mocked(onCosRunnerEvent).mockImplementation((event, handler) => {
+      if (event === 'agent:error') handleRunnerError = handler;
+    });
     await initSpawner();
   });
 
@@ -257,6 +255,24 @@ describe('CoS event listener rejection guards', () => {
     listenerGuardState.loadStateError = null;
   });
 
+  it('settles the maintenance reservation on a runner error before work starts', async () => {
+    const agentId = 'agent-runner-startup-error';
+    const reservation = maintenance.admit('agent', agentId);
+    runnerAgents.set(agentId, {});
+    try {
+      await handleRunnerError({ agentId, error: 'Example runner startup failure' });
+
+      expect(completeAgent).toHaveBeenCalledWith(agentId, expect.objectContaining({ success: false }));
+      expect(runnerAgents.has(agentId)).toBe(false);
+      expect(reservation.isCurrent()).toBe(false);
+    } finally {
+      runnerAgents.delete(agentId);
+      await reservation.finish();
+    }
+  });
+
+  // EventEmitter ignores listener promises, so an unhandled dispatch rejection
+  // would leave the task queued without any task-specific diagnostic.
   it('logs a task:ready dispatch failure with the task id instead of leaking a rejection', async () => {
     listenerGuardState.loadStateError = new Error('state read failed');
 

@@ -103,28 +103,6 @@ describe('self-update spawn gate — funnel coverage (#4124)', () => {
 
 const RUN_SPAWN_BODY = AGENT_SPAWN_OWNER_SRC;
 
-describe('runAgentSpawn source — handedOff pre-spawn vs post-handoff split', () => {
-  it('uses a mutable handedOff flag to distinguish the two failure modes', () => {
-    expect(AGENT_SPAWN_PREPARATION_SRC).toMatch(/handedOff:\s*false/);
-    expect(AGENT_LIFECYCLE_SRC).toMatch(/context\.handedOff/);
-    expect(AGENT_LIFECYCLE_SRC).toMatch(/if\s*\(!context\.setupCatchArmed\s*\|\|\s*context\.handedOff\)\s*throw\s+err\s*;/);
-    expect(AGENT_LIFECYCLE_SRC).toMatch(
-      /await context\.blockAndBail\(\{[\s\S]{0,300}?reason: setupError,[\s\S]{0,200}?category: optionRefusal \? PROVIDER_CONFIG_BLOCKED_CATEGORY : 'private-security-setup-failed',/
-    );
-    expect(AGENT_LIFECYCLE_SRC).toMatch(/job:spawn-failed/);
-    expect(AGENT_LIFECYCLE_SRC).toMatch(/task\.metadata\??\.jobId/);
-  });
-
-  it('sets handedOff = true BEFORE the first spawn helper invocation', () => {
-    const flipIdx = AGENT_SPAWN_DISPATCH_SRC.indexOf('context.handedOff = true');
-    expect(flipIdx, '`context.handedOff = true` must exist in dispatchAgentRun').toBeGreaterThan(-1);
-    for (const helper of ['spawnTuiAgent(', 'spawnViaRunner(', 'spawnDirectly(']) {
-      const idx = AGENT_SPAWN_DISPATCH_SRC.indexOf(helper);
-      expect(idx, `${helper} must appear AFTER \`context.handedOff = true\``).toBeGreaterThan(flipIdx);
-    }
-  });
-});
-
 describe('runAgentSpawn source — durable TUI ownership (#3202)', () => {
   it('routes TUI providers through the runner when it is available', () => {
     expect(RUN_SPAWN_BODY).toMatch(

@@ -142,6 +142,7 @@ afterAll(() => {
   rmSync(maintenanceTestDir, { recursive: true, force: true });
 });
 
+vi.mock('./agentMaintenanceReservations.js', { spy: true });
 vi.mock('../deadOwnerReservations.js', () => ({
   reconcileDeadOwnerReservations: vi.fn(() => ({ marked: 0, released: 0 })),
 }));
@@ -168,6 +169,7 @@ import { completeAgentRun } from './agentRunTracking.js';
 import * as fileUtils from '../../lib/fileUtils.js';
 import { retireDeadAgent, stampLiExecutionVerdict } from './agentFinalization.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { reconcileStaleAgentReservations } from './agentMaintenanceReservations.js';
 import { cleanupAgentWorktree, resolveTaskResumePatch } from './agentWorktreeCleanup.js';
 import { getAgents, updateAgent, getAgentRecord, readAgentRecordOrUnreadable, AGENT_RECORD_UNREADABLE, completeAgent as markAgentComplete } from '../cos/cosAgentLifecycle.js';
 import { updateRun, getProject } from '../creativeDirector/local.js';
@@ -244,6 +246,7 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
     releaseProbe([]);
     await Promise.all([first, second]);
     expect(getAgents).toHaveBeenCalledTimes(1);
+    expect(reconcileStaleAgentReservations).toHaveBeenCalledExactlyOnceWith({ agents: [] });
   });
 
   it('does not reap runner-owned agents while the runner probe is unavailable', async () => {
@@ -3221,6 +3224,7 @@ describe('lifecycle ledger — pause and interruption', () => {
 
     await killAgent('runner-1');
 
+    expect(maintenance.finishResource).toHaveBeenCalledExactlyOnceWith('agent', 'runner-1');
     expect(ledgerCalls('run.interrupted')).toEqual([expect.objectContaining({
       runId: 'run-9', agentId: 'runner-1', data: expect.objectContaining({ mode: 'runner' })
     })]);

@@ -247,6 +247,7 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => {
 import { existsSync, statSync } from 'fs';
 import { readFile, rm } from 'fs/promises';
 import { execFile } from '../../lib/childProcess.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
 import {
   PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
@@ -1238,6 +1239,43 @@ describe('spawnTuiAgent runtime', () => {
     await capturedOnExit({ exitCode: 0, killed: false });
     await clean;
     expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+  });
+
+  it('keeps the reservation after physical exit until completion cleanup finishes', async () => {
+    const cleanupStarted = Promise.withResolvers();
+    const cleanup = Promise.withResolvers();
+    vi.mocked(runSpawnerCompletionCleanup).mockImplementationOnce(() => {
+      cleanupStarted.resolve();
+      return cleanup.promise;
+    });
+    const spawnPromise = runSpawn();
+    await flushMicrotasks();
+
+    const exited = capturedOnExit({ exitCode: 0, killed: false });
+    try {
+      await cleanupStarted.promise;
+      expect(maintenance.finishResource).not.toHaveBeenCalled();
+    } finally {
+      cleanup.resolve();
+      await exited;
+      await spawnPromise;
+    }
+    expect(maintenance.finishResource).toHaveBeenCalledExactlyOnceWith('agent', 'agent-1');
+  });
+
+  it('keeps the reservation after synthetic exit cleanup until the PTY physically exits', async () => {
+    const spawnPromise = runSpawn({ useDurableRunner: true });
+    await flushMicrotasks();
+    const { ptyProcess } = await vi.mocked(spawnTuiSessionViaRunner).mock.results[0].value;
+    const [[physicalExit]] = vi.mocked(ptyProcess.onExit).mock.calls;
+
+    await capturedOnExit({ exitCode: 0, killed: true });
+    await spawnPromise;
+    expect(runSpawnerCompletionCleanup).toHaveBeenCalledOnce();
+    expect(maintenance.finishResource).not.toHaveBeenCalled();
+
+    physicalExit();
+    expect(maintenance.finishResource).toHaveBeenCalledExactlyOnceWith('agent', 'agent-1');
   });
 
   // ── CoS agents stay alive while provider output is silent ────────────────────
