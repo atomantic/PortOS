@@ -34,7 +34,7 @@ import { buildVendorSpawnConfig } from '../../lib/provider/providerVendors.js';
 import { resolveCliModel, providerSuppliesGithubToken, isOllamaClaudeProvider } from '../../lib/provider/providerModels.js';
 import { resolveForgeTokenEnv } from '../forgeAuth.js';
 import { resolveAgentCliCwd } from '../../lib/spawnCwd.js';
-import { prepareCliSpawn, killProcessTree, guardChildStdin, deliverChildStdin } from '../../lib/bufferedSpawn.js';
+import { prepareCliSpawn, killProcessTree, guardChildStdin, deliverChildStdin, pendingWindowsProcessTreeExit } from '../../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../../lib/cliChildEnv.js';
 import { applyCredentialBootstrap, needsProcessGroup, trackDetachedGroup } from '../../lib/credentialBootstrap.js';
 import { resolvePrOwnership } from '../../lib/slashdoInvocation.js';
@@ -335,7 +335,9 @@ async function handleDirectCliClose(ctx, code) {
     // Drain queued writes, flush the parser tails and persist output.txt BEFORE
     // finalize and before any early return (a still-pending stdout/stderr write
     // would otherwise land after the terminal record or clobber the final output).
+    const treeExit = pendingWindowsProcessTreeExit(claudeProcess);
     await pipeline.finish();
+    if (treeExit) await treeExit;
 
     // The teardown both in-process spawners share: paused early return, then
     // the host-shutdown abandon gate, the user-termination consume, the

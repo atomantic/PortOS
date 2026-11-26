@@ -10,6 +10,7 @@ import { requireProject } from './requireProject.js';
 import { musicVideoEvents } from './events.js';
 import {
   assertCastAndSetsApprovable,
+  matchesCastAndSetsStage,
   presentCastAndSets,
   setCastAndSetsStatus,
 } from './castAndSets.js';
@@ -106,10 +107,11 @@ export const settleAndRebase = (next, now) => {
 };
 
 /** Approve & continue. Returns `{ project, stage }`. */
-export async function approveCastAndSetsCheckin(projectId, input, { catalog, refreshSheet }) {
-  if (isCatalogCheckin(await requireProject(projectId))) return approveCatalogCheckin(projectId, input, catalog);
+export async function approveCastAndSetsCheckin(projectId, input, { catalog, refreshSheet, expected = null }) {
+  if (!expected && isCatalogCheckin(await requireProject(projectId))) return approveCatalogCheckin(projectId, input, catalog);
   const now = new Date().toISOString();
   const out = await mutateProjectRecord(projectId, async (current) => {
+    if (expected && !matchesCastAndSetsStage(current.castAndSets, expected)) return { project: current, skipPersist: true };
     assertLegacyCheckin(current);
     assertCastAndSetsApprovable(current);
     const pending = await pendingGreyboxState(current, catalog);
@@ -118,10 +120,11 @@ export async function approveCastAndSetsCheckin(projectId, input, { catalog, ref
     const ready = { ...current, castAndSets: { ...current.castAndSets, greyboxPending: false, greyboxPendingSetIds: [], greyboxLegacyPendingSetIds: [] } };
     return settleAndRebase(applyApproval(ready, now), now);
   });
+  if (out.skipPersist) return null;
   console.log(`✅ Music Video Cast & Sets ${short(projectId)} approved (r${out.stage.revision})`);
   publish(projectId, out.project);
   queueCheckinCastToCatalog(projectId);
-  if (!input.sheetRendered) refreshSheet(projectId);
+  if (!input.sheetRendered) refreshSheet(projectId, out.stage);
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }
 

@@ -84,17 +84,17 @@
     "server/services/fableLoom/weave.js"
   ],
   "importer-arc-extract": [
-    "server/services/importer.js",
+    "server/services/importer/importerAnalyze.js",
     "server/services/pipeline/arcPlanner/manuscriptDerive.js"
   ],
   "importer-canon-extract": [
-    "server/services/importer.js"
+    "server/services/importer/importerAnalyze.js"
   ],
   "importer-classify": [
-    "server/services/importer.js"
+    "server/services/importer/importerAnalyze.js"
   ],
   "importer-issue-proposal": [
-    "server/services/importer.js"
+    "server/services/importer/importerAnalyze.js"
   ],
   "manuscript-reformat": [
     "server/lib/creativeLatitude.js",

@@ -53,7 +53,7 @@ vi.mock('./localAnimationRender.js', () => ({
 }));
 
 const attachTuiWalkResult = vi.fn(async () => {});
-vi.mock('./walk.js', () => ({
+vi.mock('./walkGeneration.js', () => ({
   attachTuiWalkResult: (...args) => attachTuiWalkResult(...args),
 }));
 

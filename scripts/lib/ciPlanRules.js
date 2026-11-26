@@ -295,7 +295,7 @@ export const DB_RISK_RULES = [
   /^server\/scripts\/.*db/i,
   /^server\/services\/(?:.*\/)?[^/]*DB(?:\/|\.|$)/i,
   /^server\/services\/.*\.db\.test\.js$/i,
-  /^server\/routes\/catalog\.js$/i,
+  /^server\/routes\/catalog(?:Ingest|Ingredients|Media|Scenes|Stories|Types)?\.js$/i,
   /^scripts\/(?:init-db\.sql|migrations\/.*(?:db|postgres|catalog|privacy))/i,
 ];
 

@@ -14,7 +14,7 @@ import { getTrackState } from './animationTrackWorkflow.js';
 import { resolveSpriteAssetPath } from './paths.js';
 import { loadManifest } from './reference.js';
 import { getRecord } from './records.js';
-import { resolveChromaKey } from './walk.js';
+import { resolveChromaKey } from './animationWorkflow.js';
 import { verifyPackagedFrames } from './walkFrames.js';
 import { decodeTransparentSpriteSource, sha256Buffer } from './walkPostprocess.js';
 

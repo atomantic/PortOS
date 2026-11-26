@@ -34,7 +34,9 @@ import {
   castAndSetsCheckinMode,
   dispatchableImageKeys,
   linkCastAndSetsJob,
+  matchesCastAndSetsStage,
   presentCastAndSets,
+  releaseCastAndSetsImage,
   reserveCastAndSetsImage,
   resumeCastAndSetsOnProject,
   setCastAndSetsDirection,
@@ -83,11 +85,12 @@ const defaults = {
   runPrompt: async (opts) => (await import('../promptRunner.js')).runPromptThroughProvider(opts),
   getSettings: async () => getSettings(),
   enqueue: async (job) => (await import('../mediaJobQueue/index.js')).enqueueJob(job),
-  queueSnapshot: async (jobId, { projectId, key, revision } = {}) => {
+  queueSnapshot: async (jobId, { projectId, key, revision, createdAt } = {}) => {
     const queue = await import('../mediaJobQueue/index.js');
     const matches = jobId ? [] : queue.listJobs({ kind: 'image', owner: `music-video-cast-sets:${projectId}` }).filter((job) => {
       const tag = job.params?.musicVideo;
-      return tag?.projectId === projectId && tag?.castAndSets?.key === key && tag?.castAndSets?.revision === revision && !tag.castAndSets.editRequestId;
+      return tag?.projectId === projectId && tag?.castAndSets?.key === key && tag?.castAndSets?.revision === revision
+        && (tag.castAndSets.createdAt == null || tag.castAndSets.createdAt === createdAt) && !tag.castAndSets.editRequestId;
     });
     return { ...queue.getMediaRecoveryActivity(), job: jobId ? queue.getJob(jobId) : null, matches };
   },
@@ -112,7 +115,7 @@ async function reconcileOldCastSetsJobs(projectId) {
   if (!stage || (stage.processId === PROCESS_ID && stage.status !== 'failed')) return;
   for (const [key, image] of Object.entries(stage.images || {})) {
     if (image.status !== 'queued' || (!image.jobId && stage.processId === PROCESS_ID)) continue;
-    const snapshot = await castAndSetsDeps.queueSnapshot(image.jobId, { projectId, key, revision: stage.revision });
+    const snapshot = await castAndSetsDeps.queueSnapshot(image.jobId, { projectId, key, revision: stage.revision, createdAt: stage.createdAt });
     const matches = image.jobId ? [] : (snapshot.matches || []);
     if (!snapshot.trusted || (!snapshot.job && !matches.length && snapshot.pending)) throw new ServerError('The media queue is still recovering. Check queued images again when it is ready.', { status: 409, code: 'CAST_SETS_QUEUE_UNAVAILABLE' });
     if (matches.length > 1 && matches.some((job) => !['completed', 'failed', 'canceled'].includes(job.status) || mediaRecoveryPending(job))) {
@@ -124,18 +127,26 @@ async function reconcileOldCastSetsJobs(projectId) {
       continue;
     }
     const tag = job?.params?.musicVideo;
-    const tagMatches = tag?.projectId === projectId && tag?.castAndSets?.key === key && tag?.castAndSets?.revision === stage.revision;
+    const tagMatches = tag?.projectId === projectId && tag?.castAndSets?.key === key && tag?.castAndSets?.revision === stage.revision
+      && (tag.castAndSets.createdAt == null || tag.castAndSets.createdAt === stage.createdAt);
     const filename = tagMatches && job.status === 'completed' && resolveGalleryImage(job.result?.filename) ? job.result.filename : null;
     const error = tagMatches ? (job.error || 'The previous image job ended without a recoverable image')
       : snapshot.matches?.length > 1 ? 'Several previous image jobs matched this slot; review them before retrying' : 'The previous image job is no longer in the queue history';
     const runKnown = tagMatches && (project.productionRuns || []).some((run) => run.id === tag.productionRunId);
-    await onCastAndSetsImageSettled({ projectId, key, revision: stage.revision, jobId: image.jobId || job?.id || null, filename, error,
+    await onCastAndSetsImageSettled({ projectId, key, revision: stage.revision, createdAt: stage.createdAt, jobId: image.jobId || job?.id || null, filename, error,
       status: job?.status, ...(runKnown ? { productionRunId: tag.productionRunId, productionStepKey: tag.productionStepKey } : {}) });
   }
 }
 
-async function fail(projectId, reason, error = null) {
-  const out = await mutateProjectRecord(projectId, (current) => setCastAndSetsStatus(refundUnusedCheckinSteps(current), 'failed', { reason, error, extra: { failedFromStatus: current.castAndSets?.status } }));
+const skippedWrite = (project) => ({ project, skipPersist: true });
+
+const ownsStage = (project, stage) => matchesCastAndSetsStage(project?.castAndSets, stage);
+
+async function fail(projectId, stage, reason, error = null) {
+  const out = await mutateProjectRecord(projectId, (current) => ownsStage(current, stage)
+    ? setCastAndSetsStatus(refundUnusedCheckinSteps(current), 'failed', { reason, error, extra: { failedFromStatus: stage.status } })
+    : skippedWrite(current));
+  if (out.skipPersist) return;
   console.error(`❌ Music Video Cast & Sets ${short(projectId)} failed: ${reason}`);
   publish(projectId, out.project);
   return out;
@@ -183,14 +194,15 @@ async function loadContext(project) {
  * plan. `notes` (a revision) are sent with the current direction; `forceKeys`
  * are image keys the director flagged directly.
  */
-export async function runDirection(projectId, { providerId, model, effort, notes = [], forceKeys = [] } = {}) {
+export async function runDirection(projectId, expected, { providerId, model, effort, notes = [], forceKeys = [] } = {}) {
   const project = await requireProject(projectId);
+  if (!ownsStage(project, expected)) return;
   const stage = project.castAndSets;
   const { board, moodImages, track } = await loadContext(project);
   // Request pin > the brief's Cast & Sets pin > its direction LLM > an eligible TUI provider > the active one (llmRoute.js).
   const { provider, selectedModel, route } = await castAndSetsDeps.resolveProvider({ providerId, model, effort, automation: project.automation, stage: 'castAndSets' }).catch(() => ({ provider: null }));
-  if (!provider) return fail(projectId, 'No AI provider is available for the creative direction');
-  if (provider.enabled === false) return fail(projectId, `The ${provider.name || provider.id} provider is disabled`);
+  if (!provider) return fail(projectId, expected, 'No AI provider is available for the creative direction');
+  if (provider.enabled === false) return fail(projectId, expected, `The ${provider.name || provider.id} provider is disabled`);
   const previous = stage?.direction || null;
   // A revision keeps the medium it was directed in; a fresh pass resolves it
   // from the project's policy and tools, so a saved direction is never
@@ -201,18 +213,19 @@ export async function runDirection(projectId, { providerId, model, effort, notes
   const feedback = stage?.feedback || [];
   const standing = feedback.length > 0;
   const prompt = buildCastAndSetsPrompt(project, { moodImages, board, track, previous: notes.length ? previous : null, notes, medium, feedback, guides: directorArtGuides(project), midi: await loadProjectMidiDigest(project) }) + productionFeedbackContext(project);
+  if (!ownsStage(await requireProject(projectId), expected)) return;
   let text;
   try {
     ({ text } = await castAndSetsDeps.runPrompt({ provider, model: selectedModel, ...effortArg(route), prompt, source: 'music-video-cast-sets' }));
   } catch (err) {
-    return fail(projectId, 'The creative direction call failed', err.message);
+    return fail(projectId, expected, 'The creative direction call failed', err.message);
   }
-  await recordLlmRoute(projectId, 'castAndSets', route);
+  await recordLlmRoute(projectId, 'castAndSets', route, (current) => ownsStage(current, expected));
   const parsed = parseCastAndSetsResponse(text);
-  if (!parsed) return fail(projectId, 'The creative direction answer had no usable JSON');
+  if (!parsed) return fail(projectId, expected, 'The creative direction answer had no usable JSON');
   const sections = songSections(project);
   const merged = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, medium, fixedCast: fixedSupportingCast(project), fixedProps: fixedProps(project) });
-  if (merged.missing.length) return fail(projectId, `The creative direction answer is missing: ${merged.missing.join(', ')}`);
+  if (merged.missing.length) return fail(projectId, expected, `The creative direction answer is missing: ${merged.missing.join(', ')}`);
   const direction = withCheckedFormSubjects(project, merged.direction, notes.length ? previous : null);
   // The scene look set plates and in-set frames carry. While the director's sheet feedback
   // stands, the look line rewritten to agree with it wins; otherwise the
@@ -221,7 +234,7 @@ export async function runDirection(projectId, { providerId, model, effort, notes
   // and scene, which then lands in every empty set plate.
   direction.look = (standing && (parsed.look || previous?.look)) || direction.look || trimTo(project.concept?.style, 500) || '';
   // Mood board images inform the direction as text only, never as image references.
-  return writePlan(projectId, { direction, forceKeys, changes: previous ? describeDirectionChanges(previous, direction) : null, directedInputs: castAndSetsStoryInputs(project) });
+  return writePlan(projectId, expected, { direction, forceKeys, changes: previous ? describeDirectionChanges(previous, direction) : null, directedInputs: castAndSetsStoryInputs(project) });
 }
 
 /**
@@ -256,8 +269,9 @@ export async function currentImagePlan(project, direction) {
 }
 
 /** (Re)build the plan from the stage's direction + accumulated per-image notes, then dispatch. */
-export async function writePlan(projectId, { direction = null, forceKeys = [], changes = null, directedInputs = null } = {}) {
+export async function writePlan(projectId, expected, { direction = null, forceKeys = [], changes = null, directedInputs = null } = {}) {
   const project = await requireProject(projectId);
+  if (!ownsStage(project, expected)) return;
   const stage = project.castAndSets;
   const nextDirection = await withoutBoardLook(project, direction || stage.direction);
   const { codeOnly, plan } = await currentImagePlan(project, nextDirection);
@@ -267,10 +281,9 @@ export async function writePlan(projectId, { direction = null, forceKeys = [], c
   const run = stage.productionRunId ? (project.productionRuns || []).find((r) => r.id === stage.productionRunId) : null;
   const preferred = run?.pool?.find((r) => r.kind === 'image') || stage.route || null;
   const route = codeOnly ? (stage.route || null) : await chooseCastAndSetsRoute(project, { preferred, settings });
-  if (!route && !codeOnly && !stage.feedbackRenderPlan) return fail(projectId, 'No enabled image backend is allowed for the Cast & Sets images — enable Codex (or another image tool in the brief) and resume');
+  if (!route && !codeOnly && !stage.feedbackRenderPlan) return fail(projectId, expected, 'No enabled image backend is allowed for the Cast & Sets images — enable Codex (or another image tool in the brief) and resume');
   const out = await mutateProjectRecord(projectId, (current) => {
-    assertLegacyCheckin(current);
-    if (current.castAndSets?.revision !== stage.revision) throw new ServerError('The check-in changed while its image plan was being prepared', { status: 409, code: 'CAST_SETS_PLAN_STALE' });
+    if (!ownsStage(current, expected)) return skippedWrite(current);
     const next = setCastAndSetsDirection(current, { direction: nextDirection, plan, route, renderKeys });
     const savedStage = { ...next.stage, greyboxPending: false, greyboxPendingSetIds: [], greyboxLegacyPendingSetIds: [],
       ...(directedInputs ? { directedInputs } : {}),
@@ -279,10 +292,11 @@ export async function writePlan(projectId, { direction = null, forceKeys = [], c
     };
     return { project: { ...next.project, castAndSets: savedStage }, stage: savedStage };
   });
+  if (out.skipPersist) return;
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} r${out.stage.revision}: ${renderKeys.length} image(s) to render${route ? ` on ${route.mode}` : ' (code-only, no image backend)'}`);
   publish(projectId, out.project);
   if (out.stage.feedbackRenderPlan) return out;
-  return advance(projectId);
+  return advance(projectId, out.stage);
 }
 
 export const keyNotesText = (keyNotes = {}) => Object.fromEntries(Object.entries(keyNotes).map(([k, list]) => [k, list.join('; ')]));
@@ -335,7 +349,7 @@ export async function imageJobParams(settings, route, common) {
   return { ...params, pythonPath: local.pythonPath, ...(local.selectedModel?.id ? { modelId: local.selectedModel.id } : {}) };
 }
 
-async function enqueueImage(project, stage, key) {
+async function prepareImage(project, stage, key) {
   const item = stage.plan[key];
   const referenceImagePaths = await referencePaths(stage, item);
   if (item.setReference?.greyboxShotId) {
@@ -352,7 +366,7 @@ async function enqueueImage(project, stage, key) {
     // The completion hook files the result by this tag. No `sceneId`, so the
     // scene-frame hook ignores the job.
     musicVideo: {
-      projectId: project.id, castAndSets: { key, revision: stage.revision },
+      projectId: project.id, castAndSets: { key, revision: stage.revision, createdAt: stage.createdAt },
       ...(stage.productionRunId ? {
         productionRunId: stage.productionRunId,
         productionStepKey: checkinStep(project, stage, key)?.key,
@@ -389,8 +403,7 @@ async function enqueueImage(project, stage, key) {
     submittedReferencesTruncated: submittedReferences.length > MAX_SUBMITTED_REFERENCES,
     submittedRevision: stage.revision,
   };
-  const sent = await castAndSetsDeps.enqueue({ kind: 'image', params, owner: `music-video-cast-sets:${project.id}` });
-  return { ...sent, submission };
+  return { job: { kind: 'image', params, owner: `music-video-cast-sets:${project.id}` }, submission };
 }
 
 // Check-in slots use the existing production ledger; the revision separates
@@ -403,14 +416,15 @@ function checkinStep(project, stage, key) {
 
 // Images never submitted must not remain charged after the check-in ends.
 export function refundUnusedCheckinSteps(project) {
-  const runId = project.castAndSets?.productionRunId;
+  const stage = project.castAndSets;
+  const runId = stage?.productionRunId;
   if (!runId) return project;
   const run = (project.productionRuns || []).find((item) => item.id === runId);
   if (!run) return project;
   let next = project;
   for (const step of run.steps) {
-    if (step.kind === 'checkin' && step.status === 'reserved'
-      && project.castAndSets.images?.[step.sceneId]?.status !== 'queued') {
+    if (step.kind === 'checkin' && step.revisionId === String(stage.revision) && step.status === 'reserved'
+      && stage.images?.[step.sceneId]?.status !== 'queued') {
       next = settleProductionStep(next, runId, step.key, {
         status: 'refused', error: 'The check-in stopped before this image was submitted',
       }).project;
@@ -420,12 +434,12 @@ export function refundUnusedCheckinSteps(project) {
 }
 
 /** Reserve the WHOLE pending plan in one write before any job can be queued. */
-async function reserveCheckinPlan(projectId) {
+async function reserveCheckinPlan(projectId, expected) {
   return mutateProjectRecord(projectId, (current) => {
-    assertLegacyCheckin(current);
+    if (!ownsStage(current, expected)) return skippedWrite(current);
     const stage = current.castAndSets;
-    if (!stage?.productionRunId) return { project: current };
     const run = findProductionRun(current, stage.productionRunId);
+    if (run.status !== 'running') return skippedWrite(current);
     let next = current;
     for (const [key, image] of Object.entries(stage.images)) {
       if (image.status !== 'pending') continue;
@@ -440,30 +454,35 @@ async function reserveCheckinPlan(projectId) {
   });
 }
 
-async function dispatchKey(projectId, key) {
+async function dispatchKey(project, stage, key) {
+  const projectId = project.id;
+  const prepared = await prepareImage(project, stage, key).catch((error) => ({ error }));
   const reserved = await mutateProjectRecord(projectId, (current) => {
-    assertLegacyCheckin(current);
-    if (current.castAndSets?.productionRunId) {
-      const run = findProductionRun(current, current.castAndSets.productionRunId);
-      if (run.status !== 'running' || checkinStep(current, current.castAndSets, key)?.status !== 'reserved') {
-        throw new ServerError('The production run is not dispatching this image', { status: 409, code: 'CAST_SETS_NOT_RUNNING' });
-      }
+    const live = current.castAndSets;
+    if (!ownsStage(current, stage) || live.images[key]?.status !== 'pending'
+      || !live.plan[key]?.deps.every((dep) => live.images[dep]?.status === 'done')) return skippedWrite(current);
+    if (live.productionRunId) {
+      const run = findProductionRun(current, live.productionRunId);
+      if (run.status !== 'running' || checkinStep(current, live, key)?.status !== 'reserved') return skippedWrite(current);
     }
     return reserveCastAndSetsImage(current, key, { processId: PROCESS_ID });
-  })
-    .catch((err) => ({ error: err }));
-  if (reserved.error) {
-    if (['CAST_SETS_IMAGE_BUSY', 'CAST_SETS_NOT_RUNNING', 'CAST_SETS_FEEDBACK_PENDING'].includes(reserved.error.code)) return;
-    throw reserved.error;
-  }
+  });
+  if (reserved.skipPersist) return;
   const productionStep = reserved.stage.productionRunId ? checkinStep(reserved.project, reserved.stage, key) : null;
   const runId = reserved.stage.productionRunId;
-  const sent = await enqueueImage(reserved.project, reserved.stage, key).catch((err) => ({ error: err }));
+  // The slot is durable before submission. Start admission under the same
+  // record lock as skip/rebuild, then release it while the queue persists.
+  const sent = prepared.error ? prepared : await mutateProjectRecord(projectId, (current) => {
+    const live = current.castAndSets;
+    if (!ownsStage(current, stage) || live.images[key]?.status !== 'queued'
+      || (runId && findProductionRun(current, runId).status !== 'running')) return skippedWrite(current);
+    return { ...skippedWrite(current), admission: castAndSetsDeps.enqueue(prepared.job).catch((error) => ({ error })) };
+  }).then((out) => out.admission);
   if (sent?.error || !sent?.jobId) {
     const reason = sent?.error?.message || 'The image job was not queued';
     const out = await mutateProjectRecord(projectId, (current) => {
-    assertLegacyCheckin(current);
       const next = productionStep ? settleProductionStep(current, runId, productionStep.key, { status: 'refused', error: reason }).project : current;
+      if (!ownsStage(current, stage)) return next === current ? skippedWrite(current) : { project: next };
       // This route cannot carry the required inputs, so retrying it cannot
       // succeed and may otherwise leave the final pending key without a wakeup.
       const retryable = sent?.error?.code !== 'CAST_SETS_ROUTE_INELIGIBLE';
@@ -471,23 +490,21 @@ async function dispatchKey(projectId, key) {
       if (settled.stage?.status === 'failed') settled.project = refundUnusedCheckinSteps(settled.project);
       return settled;
     });
-    console.warn(`⚠️ Music Video Cast & Sets ${short(projectId)} ${key} refused: ${reason}`);
-    // A refusal has no later job-completion event to wake the retry. Request
-    // another pass only for the same pending revision, without awaiting the
-    // current coalesced advance (which would wait on itself).
-    if (out.changed && out.stage?.status === 'imaging' && out.stage.revision === reserved.stage.revision
-      && out.stage.processId === PROCESS_ID && out.stage.images?.[key]?.status === 'pending') {
-      const live = advancing.get(projectId);
-      if (live) live.again = true;
-    }
+    if (out.skipPersist) return;
+    if (out.changed) console.warn(`⚠️ Music Video Cast & Sets ${short(projectId)} ${key} refused: ${reason}`);
     publish(projectId, out.project);
-    return;
+    // No completion event follows a refusal. Wake another pass for this stage.
+    return out.changed && ownsStage(out.project, stage) && out.stage.images?.[key]?.status === 'pending';
   }
   const linked = await mutateProjectRecord(projectId, (current) => {
-    assertLegacyCheckin(current);
     const next = productionStep ? settleProductionStep(current, runId, productionStep.key, { status: 'queued', jobId: sent.jobId }).project : current;
-    return linkCastAndSetsJob(next, key, sent.jobId, sent.submission);
+    const image = current.castAndSets?.images?.[key];
+    if (!ownsStage(current, stage) || (image?.status !== 'queued' && image?.jobId !== sent.jobId)) {
+      return next === current ? skippedWrite(current) : { project: next };
+    }
+    return linkCastAndSetsJob(next, key, sent.jobId, prepared.submission);
   });
+  if (linked.skipPersist) return;
   publish(projectId, linked.project);
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} ${key} → ${reserved.stage.route.mode} job ${String(sent.jobId).slice(0, 8)}`);
 }
@@ -507,16 +524,20 @@ export async function __settleCastAndSetsForTests() {
  * Dispatch every image whose inputs are ready; assemble the sheet once every
  * image is done. Concurrent calls for one project coalesce.
  */
-export function advance(projectId) {
+export function advance(projectId, stage) {
   const live = advancing.get(projectId);
-  if (live) { live.again = true; return live.promise; }
-  const entry = { again: false, promise: null };
+  if (live) {
+    if (!live.pending.some((queued) => matchesCastAndSetsStage(queued, stage))) live.pending.push(stage);
+    return live.promise;
+  }
+  const entry = { pending: [stage], promise: null };
   entry.promise = (async () => {
     try {
-      do {
-        entry.again = false;
-        await advanceOnce(projectId);
-      } while (entry.again);
+      while (entry.pending.length) {
+        const expected = entry.pending.shift();
+        const retry = await withFailure('The image advance', projectId, expected, () => advanceOnce(projectId, expected));
+        if (retry && !entry.pending.some((queued) => matchesCastAndSetsStage(queued, expected))) entry.pending.push(expected);
+      }
     } finally {
       advancing.delete(projectId);
     }
@@ -533,12 +554,11 @@ function checkinPlanSize(stage) {
 }
 
 // Retakes keep the revision and only replace the flagged key, not its dependents.
-async function retryInspectedImage(projectId, { key, inputs, inspectionId, note }) {
+async function retryInspectedImage(projectId, expected, { key, inputs, inspectionId, note }) {
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
-  const eligible = (current) => current.castAndSets?.status === 'imaging'
+  const eligible = (current) => ownsStage(current, expected)
     && !current.castAndSets.manualImageEditReview
-    && current.castAndSets.processId === PROCESS_ID && current.castAndSets.revision === stage.revision
     && current.castAndSets.productionRunId === stage.productionRunId && stage.productionRunId
     && current.castAndSets.images[key]?.renderQualityRetry?.revision !== stage.revision
     && currentCastSetsInspection(current.castAndSets, key)?.id === inspectionId
@@ -547,8 +567,7 @@ async function retryInspectedImage(projectId, { key, inputs, inspectionId, note 
   const keyNotes = { ...stage.keyNotes, [key]: [...(stage.keyNotes?.[key] || []), note].slice(-CAST_SETS_MAX_KEY_NOTES) };
   const { plan } = await currentImagePlan({ ...project, castAndSets: { ...stage, keyNotes } }, stage.direction);
   const out = await mutateProjectRecord(projectId, (current) => {
-    assertLegacyCheckin(current);
-    if (!eligible(current)) return { project: current, changed: false };
+    if (!eligible(current)) return skippedWrite(current);
     const run = findProductionRun(current, stage.productionRunId);
     if (run.status !== 'running') return { project: current, changed: false };
     const live = current.castAndSets;
@@ -563,17 +582,17 @@ async function retryInspectedImage(projectId, { key, inputs, inspectionId, note 
   if (out.changed) publish(projectId, out.project);
 }
 
-async function advanceOnce(projectId) {
+async function advanceOnce(projectId, expected) {
   let project = await requireProject(projectId);
   let stage = project.castAndSets;
-  if (!stage || stage.feedbackRenderPlan || stage.processId !== PROCESS_ID || stage.status !== 'imaging') return;
+  if (!ownsStage(project, expected) || stage.feedbackRenderPlan || stage.processId !== PROCESS_ID || stage.status !== 'imaging') return;
   if (allCastAndSetsImagesDone(stage)) {
     const { inspectCastAndSetsImages } = await import('./castAndSetsInspection.js');
-    await inspectCastAndSetsImages(projectId, { processId: PROCESS_ID, resolveReviewer: castAndSetsDeps.resolveReviewer, reviewImage: castAndSetsDeps.reviewImage, publish, retryImage: (opts) => retryInspectedImage(projectId, opts) });
+    await inspectCastAndSetsImages(projectId, { stage: expected, resolveReviewer: castAndSetsDeps.resolveReviewer, reviewImage: castAndSetsDeps.reviewImage, publish, retryImage: (opts) => retryInspectedImage(projectId, expected, opts) });
     const fresh = await requireProject(projectId);
-    if (fresh.castAndSets?.revision !== stage.revision || fresh.castAndSets.status !== 'imaging' || fresh.castAndSets.processId !== PROCESS_ID) return;
+    if (!ownsStage(fresh, expected)) return;
     if (allCastAndSetsImagesDone(fresh.castAndSets)) {
-      await assemble(projectId);
+      await assemble(projectId, expected);
       return;
     }
     project = fresh;
@@ -582,36 +601,47 @@ async function advanceOnce(projectId) {
   if (stage.productionRunId) {
     const run = findProductionRun(project, stage.productionRunId);
     if (run.status !== 'running') return;
-    const reserved = await reserveCheckinPlan(projectId).catch((error) => ({ error }));
+    const reserved = await reserveCheckinPlan(projectId, expected).catch((error) => ({ error }));
+    if (reserved.skipPersist) return;
     if (reserved.error) {
       const limit = ['PRODUCTION_SPEND_LIMIT', 'PRODUCTION_BUDGET_EXHAUSTED'].includes(reserved.error.code);
       const reason = limit ? `${checkinPlanSize(stage)}: ${reserved.error.message}. Raise the run's limit and resume.` : reserved.error.message;
       const out = await mutateProjectRecord(projectId, (current) => {
-    assertLegacyCheckin(current);
+        if (!ownsStage(current, expected) || findProductionRun(current, stage.productionRunId).status !== 'running') return skippedWrite(current);
         const failed = setCastAndSetsStatus(refundUnusedCheckinSteps(current), 'failed', { reason });
         return haltProduction(failed.project, stage.productionRunId, {
           status: limit ? 'limit-reached' : 'blocked', reason,
         });
       });
+      if (out.skipPersist) return;
       musicVideoEvents.emit('production', { projectId, runId: out.run.id, run: out.run, action: { type: 'idle' }, project: out.project });
       publish(projectId, out.project);
       return;
     }
+    project = reserved.project;
+    stage = project.castAndSets;
   }
   const keys = dispatchableImageKeys(stage);
-  for (const key of keys) await dispatchKey(projectId, key);
-  if (keys.length) publish(projectId, await requireProject(projectId));
+  let retry = false;
+  for (const key of keys) {
+    if (await dispatchKey(project, stage, key)) retry = true;
+  }
+  return retry;
 }
 
 // An unexpected error (not a ServerError the stage raised on purpose) logs its
 // top frames, so a failure like a stack overflow names where it happened.
 const where = (err) => (err instanceof ServerError || !err?.stack ? '' : ` at ${err.stack.split('\n').slice(1, 4).map((l) => l.trim()).join(' < ')}`);
 
-export function inBackground(label, projectId, fn) {
-  const work = Promise.resolve().then(fn).catch(async (err) => {
+function withFailure(label, projectId, expected, fn) {
+  return Promise.resolve().then(fn).catch(async (err) => {
     console.error(`❌ Music Video Cast & Sets ${short(projectId)} ${label} failed: ${err.message}${where(err)}`);
-    await fail(projectId, `${label} failed: ${err.message}`).catch((recordErr) => console.error(`❌ Music Video Cast & Sets ${projectId} ${label} failed and its failure could not be recorded: ${recordErr.message}`));
-  }).finally(() => backgroundWork.delete(work));
+    await fail(projectId, expected, `${label} failed: ${err.message}`).catch((recordErr) => console.error(`❌ Music Video Cast & Sets ${projectId} ${label} failed and its failure could not be recorded: ${recordErr.message}`));
+  });
+}
+
+export function inBackground(label, projectId, expected, fn) {
+  const work = withFailure(label, projectId, expected, fn).finally(() => backgroundWork.delete(work));
   backgroundWork.add(work);
 }
 
@@ -666,57 +696,61 @@ const renderStageSheet = async (project, stage, status) => renderCastAndSetsShee
 // an immediate edit's re-assembly would otherwise race, failing the edited stage.
 const queueSheetSave = createKeyCachedQueue();
 
-async function assemble(projectId) {
-  const marked = await mutateProjectRecord(projectId, (current) => setCastAndSetsStatus(current, 'assembling'));
+async function assemble(projectId, expected) {
+  const marked = await mutateProjectRecord(projectId, (current) => ownsStage(current, expected) && allCastAndSetsImagesDone(current.castAndSets)
+    ? setCastAndSetsStatus(current, 'assembling') : skippedWrite(current));
+  if (marked.skipPersist) return;
   publish(projectId, marked.project);
-  const project = marked.project;
-  const stage = marked.stage;
-  const mode = castAndSetsCheckinMode(project);
-  const autoApprove = mode === 'auto' && !stage.manualImageEditReview && !castSetsInspectionBlockers(stage).length;
-  const html = await renderStageSheet(project, stage, autoApprove ? 'approved' : 'review');
-  const { saveGeneratedDevArtifact } = await import('./devArtifactService.js');
-  const existing = stage.artifactId && (project.devArtifacts || []).some((a) => a.id === stage.artifactId && !a.deleted) ? stage.artifactId : null;
-  const { artifact } = await queueSheetSave(projectId, () => saveGeneratedDevArtifact(projectId, {
-    artifactId: existing,
-    kind: 'cast-sets',
-    title: `Cast & Sets — ${stage.direction?.protagonist?.name || project.name}`,
-    html,
-    source: 'cast-and-sets',
-  }));
-  const out = await mutateProjectRecord(projectId, (current) => setCastAndSetsStatus(current, 'review', {
-    extra: { artifactId: artifact.id, artifactVersion: artifact.version },
-  }));
-  console.log(`🎭 Music Video Cast & Sets ${short(projectId)} sheet v${artifact.version} ready (${autoApprove ? 'auto-approve' : 'waiting for check-in'})`);
-  if (autoApprove) return approveCastAndSetsCheckin(projectId, { sheetRendered: true }, { catalog: castAndSetsDeps.catalog });
-  publish(projectId, out.project);
-  return out;
+  return withFailure('The sheet assembly', projectId, marked.stage, async () => {
+    const { project, stage } = marked;
+    const autoApprove = castAndSetsCheckinMode(project) === 'auto' && !stage.manualImageEditReview && !castSetsInspectionBlockers(stage).length;
+    const html = await renderStageSheet(project, stage, autoApprove ? 'approved' : 'review');
+    const { saveGeneratedDevArtifact } = await import('./devArtifactService.js');
+    const existing = stage.artifactId && (project.devArtifacts || []).some((a) => a.id === stage.artifactId && !a.deleted) ? stage.artifactId : null;
+    const out = await queueSheetSave(projectId, () => saveGeneratedDevArtifact(projectId, {
+      artifactId: existing,
+      kind: 'cast-sets',
+      title: `Cast & Sets — ${stage.direction?.protagonist?.name || project.name}`,
+      html,
+      source: 'cast-and-sets',
+      isCurrent: (current) => ownsStage(current, stage),
+      attach: (current, artifact) => setCastAndSetsStatus(current, 'review', {
+        extra: { artifactId: artifact.id, artifactVersion: artifact.version },
+      }).project,
+    }));
+    if (!out) return;
+    console.log(`🎭 Music Video Cast & Sets ${short(projectId)} sheet v${out.artifact.version} ready (${autoApprove ? 'auto-approve' : 'waiting for check-in'})`);
+    if (autoApprove) {
+      const review = out.project.castAndSets;
+      return withFailure('The automatic check-in', projectId, review,
+        () => approveCastAndSetsCheckin(projectId, { sheetRendered: true }, { catalog: castAndSetsDeps.catalog, expected: review }));
+    }
+    publish(projectId, out.project);
+    return out;
+  });
 }
 
 // A sheet rendered for review still asks its check-in questions; once approved,
 // save it again as an approved version that drops them.
-function refreshApprovedSheet(projectId) {
-  return queueSheetSave(projectId, () => saveApprovedSheet(projectId));
-}
-
-async function saveApprovedSheet(projectId) {
+async function saveApprovedSheet(projectId, expected) {
   const project = await requireProject(projectId);
+  if (!ownsStage(project, expected)) return;
   const stage = project.castAndSets;
-  if (isCatalogCheckin(project) || stage?.status !== 'approved' || !stage.artifactId) return;
+  if (!stage.artifactId) return;
   if (!(project.devArtifacts || []).some((a) => a.id === stage.artifactId && !a.deleted)) return;
   const html = await renderStageSheet(project, stage, 'approved');
   const { saveGeneratedDevArtifact } = await import('./devArtifactService.js');
-  const { artifact } = await saveGeneratedDevArtifact(projectId, {
+  const out = await saveGeneratedDevArtifact(projectId, {
     artifactId: stage.artifactId, kind: 'cast-sets', title: null, html, status: 'approved', source: 'cast-and-sets',
+    isCurrent: (current) => ownsStage(current, expected) && current.castAndSets.artifactId === stage.artifactId,
+    attach: (current, artifact) => ({ ...current, castAndSets: { ...current.castAndSets, artifactVersion: artifact.version } }),
   });
-  const out = await mutateProjectRecord(projectId, (current) => (current.castAndSets?.status === 'approved' && current.castAndSets.artifactId === artifact.id
-    ? { project: { ...current, castAndSets: { ...current.castAndSets, artifactVersion: artifact.version } } }
-    : { project: current }));
-  publish(projectId, out.project);
+  if (out) publish(projectId, out.project);
 }
 
 // Not inBackground: a failed re-save must not mark the approved stage failed.
-export function queueApprovedSheetRefresh(projectId) {
-  const work = refreshApprovedSheet(projectId)
+export function queueApprovedSheetRefresh(projectId, stage) {
+  const work = queueSheetSave(projectId, () => saveApprovedSheet(projectId, stage))
     .catch((err) => console.error(`❌ Music Video Cast & Sets ${short(projectId)}: saving the approved sheet failed: ${err.message}`))
     .finally(() => backgroundWork.delete(work));
   backgroundWork.add(work);
@@ -732,7 +766,7 @@ export async function startCastAndSets(projectId, { providerId, model, effort, p
   const out = await mutateProjectRecord(projectId, (current) => startCastAndSetsOnProject(current, { processId: PROCESS_ID, productionRunId }));
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} started (r${out.stage.revision})`);
   publish(projectId, out.project);
-  inBackground('The creative direction', projectId, () => runDirection(projectId, { providerId, model, effort }));
+  inBackground('The creative direction', projectId, out.stage, () => runDirection(projectId, out.stage, { providerId, model, effort }));
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }
 
@@ -744,12 +778,12 @@ export async function resumeCastAndSets(projectId, { providerId, model, effort }
   console.log(`▶️ Music Video Cast & Sets ${short(projectId)} resumed (${out.stage.status})`);
   publish(projectId, out.project);
   if (out.stage.feedbackRenderPlan?.phase === 'ready') return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
-  inBackground('The resume', projectId, () => {
-    if (out.stage.feedbackRenderPlan?.kind === 'image') return writePlan(projectId, { forceKeys: out.stage.feedbackRenderPlan.forceKeys || [] });
-    if (out.stage.feedbackRenderPlan?.kind === 'direction' && out.stage.direction && !(out.stage.notesApplied || []).length) return writePlan(projectId);
-    if (out.stage.status === 'directing') return runDirection(projectId, { providerId, model, effort, notes: out.stage.notesApplied || [] });
-    if (out.stage.status === 'assembling') return assemble(projectId);
-    return advance(projectId);
+  inBackground('The resume', projectId, out.stage, () => {
+    if (out.stage.feedbackRenderPlan?.kind === 'image') return writePlan(projectId, out.stage, { forceKeys: out.stage.feedbackRenderPlan.forceKeys || [] });
+    if (out.stage.feedbackRenderPlan?.kind === 'direction' && out.stage.direction && !(out.stage.notesApplied || []).length) return writePlan(projectId, out.stage);
+    if (out.stage.status === 'directing') return runDirection(projectId, out.stage, { providerId, model, effort, notes: out.stage.notesApplied || [] });
+    if (out.stage.status === 'assembling') return assemble(projectId, out.stage);
+    return advance(projectId, out.stage);
   });
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }
@@ -759,40 +793,54 @@ export async function resumeCastAndSets(projectId, { providerId, model, effort }
  * Settles its key (idempotent) and, when the stage is dispatching in this
  * process, continues. Returns true when the record changed.
  */
-export async function onCastAndSetsImageSettled({ projectId, key, editRequestId = null, jobId = null, filename = null, error = null, revision = null, productionRunId = null, productionStepKey = null, status = null }) {
+export async function onCastAndSetsImageSettled({ projectId, key, editRequestId = null, jobId = null, filename = null, error = null, revision = null, createdAt = null, productionRunId = null, productionStepKey = null, status = null }) {
   const project = await getProject(projectId);
-  if (isCatalogCheckin(project)) return false;
+  if (!project) return false;
   if (editRequestId) {
-    if (!project) return false;
+    if (isCatalogCheckin(project)) return false;
     return settleCastSetsImageEdit({ projectId, key, editRequestId, jobId, filename, error, status, productionRunId, productionStepKey }, publish);
   }
-  if (!project?.castAndSets?.images?.[key]) return false;
   const out = await mutateProjectRecord(projectId, (current) => {
-    assertLegacyCheckin(current);
-    if (revision != null && revision !== current.castAndSets?.revision) return { project: current, changed: false };
-    const next = productionRunId && productionStepKey
+    const stage = current.castAndSets;
+    // Submitted work can settle its original ledger entry after a rebuild or
+    // skip. Only the stage that queued it may take the image or its failure.
+    const run = (current.productionRuns || []).find((item) => item.id === productionRunId);
+    const step = run?.steps.find((item) => item.key === productionStepKey);
+    const next = step?.kind === 'checkin' && step.sceneId === key && (revision == null || step.revisionId === String(revision))
+      && (!step.jobId || step.jobId === jobId)
       ? settleProductionStep(current, productionRunId, productionStepKey, {
         status: filename ? 'completed' : status === 'canceled' ? 'canceled' : 'failed', jobId, error,
       }).project : current;
+    const sameStage = stage && !isCatalogCheckin(current) && (createdAt == null || stage.createdAt === createdAt)
+      && (revision == null || revision === stage.revision);
+    const image = stage?.images?.[key];
+    // Skips saved by older builds can still have a queued slot. Release only
+    // that slot so the finished job no longer blocks a switch to the catalog.
+    if (sameStage && stage.status === 'skipped' && image?.status === 'queued' && (!image.jobId || image.jobId === jobId)) {
+      return { project: { ...next, castAndSets: { ...stage, images: { ...stage.images, [key]: releaseCastAndSetsImage(image) } } } };
+    }
+    const canSettle = sameStage && (['imaging', 'failed'].includes(stage.status) || (stage.status === 'review' && stage.feedbackRenderPlan?.phase === 'ready'));
+    if (!canSettle) return next === current ? skippedWrite(current) : { project: next };
     const settled = settleCastAndSetsImage(next, key, { jobId, filename, error, revision });
+    if (!settled.changed && next === current) return skippedWrite(current);
     if (settled.stage?.status === 'failed') settled.project = refundUnusedCheckinSteps(settled.project);
     // A job queued before a resume hold may finish, but its failure must join
     // the reviewed plan instead of scheduling a retry behind the director's back.
     const plan = settled.stage?.feedbackRenderPlan;
     if (settled.changed && !filename && plan?.phase === 'ready') {
-      const image = settled.stage.images[key];
+      const settledImage = settled.stage.images[key];
       const held = { ...settled.stage, status: 'review', stopReason: null,
-        images: { ...settled.stage.images, [key]: { ...image, status: 'pending', jobId: null, failures: 0 } },
+        images: { ...settled.stage.images, [key]: { ...settledImage, status: 'pending', jobId: null, failures: 0 } },
         feedbackRenderPlan: { ...plan, keys: [...new Set([...plan.keys, key])] } };
       settled.stage = held;
       settled.project = { ...settled.project, castAndSets: held };
     }
     return settled;
   });
+  if (!out.skipPersist) publish(projectId, out.project);
   if (!out.changed) return false;
-  publish(projectId, out.project);
   if (out.stage?.processId === PROCESS_ID && out.stage.status === 'imaging') {
-    advance(projectId).catch((err) => console.error(`❌ Music Video Cast & Sets ${short(projectId)} could not continue: ${err.message}${where(err)}`));
+    void advance(projectId, out.stage);
   }
   return true;
 }

@@ -6,10 +6,9 @@ import { musicVideoMediaMode } from '../../lib/musicVideo/musicVideoMediaPolicy.
  * and the file store in devArtifactStore.js.
  *
  * Every record write goes through `mutateProjectRecord`, so it runs against the
- * freshest project under the backend's write serialization. A file is written
- * BEFORE its record update (a version number is reserved by reading the record
- * first); when the update is refused the file is removed again, so a failed
- * import leaves nothing behind.
+ * freshest project under the backend's write serialization. An upload stages
+ * its bytes before the record write. A stage-owned sheet writes its file and
+ * attaches its version only after its stage guard passes under the record lock.
  */
 
 import { extname } from 'path';
@@ -58,11 +57,13 @@ export async function getDevArtifact(projectId, artifactId) {
  */
 async function storeVersion(projectId, {
   artifactId = null, kind, title, ext, buffer = null, tempPath = null, source, status = null, notes = [],
+  isCurrent = null, attach = null,
 }) {
   const canonicalExt = canonicalDevArtifactExt(ext);
   const mimeType = devArtifactTypeFor(canonicalExt);
   if (!mimeType) throw new ServerError('Unsupported file type — accepted: HTML, Markdown, MP4, PNG, JPG', { status: 400, code: 'VALIDATION_ERROR' });
   const project = await requireProject(projectId);
+  if (isCurrent && !isCurrent(project)) return null;
   // Code-only projects refuse images and clips as *document* assets, and the art guide must be
   // code-authored (productionReview.js checks the selected guide's type). Storyboards and
   // animatics are review evidence — frames and clips rendered FROM the code — so they are
@@ -74,10 +75,10 @@ async function storeVersion(projectId, {
   const id = artifactId || newDevArtifactId();
   const version = nextDevArtifactVersion(project, artifactId);
   const out = await withBackupAssetPublication(async () => {
-    const { file, bytes } = await writeDevArtifactFile({
-      projectId, artifactId: id, version, ext: canonicalExt, buffer, tempPath,
-    });
-    return mutateProjectRecord(projectId, (current) => {
+    const fileInput = { projectId, artifactId: id, version, ext: canonicalExt, buffer, tempPath };
+    let saved = isCurrent ? null : await writeDevArtifactFile(fileInput);
+    return mutateProjectRecord(projectId, async (current) => {
+      if (isCurrent && !isCurrent(current)) return { project: current, skipPersist: true };
       if (musicVideoMediaMode(current) !== musicVideoMediaMode(project)) {
         throw new ServerError('Media mode changed during the artifact upload — try again', { status: 409, code: 'DEV_ARTIFACT_CONFLICT' });
       }
@@ -86,14 +87,18 @@ async function storeVersion(projectId, {
       if (nextDevArtifactVersion(current, artifactId) !== version) {
         throw new ServerError('Another version of this artifact was saved at the same time — try again', { status: 409, code: 'DEV_ARTIFACT_CONFLICT' });
       }
-      return addDevArtifactVersion(current, {
+      saved ??= await writeDevArtifactFile(fileInput);
+      const { file, bytes } = saved;
+      const next = addDevArtifactVersion(current, {
         artifactId, id: artifactId ? null : id, kind, title, file, mimeType, bytes, source, status, notes,
       });
+      return attach ? { ...next, project: attach(next.project, next.artifact) } : next;
     }).catch(async (err) => {
-      await discardDevArtifactFile(file);
+      if (saved) await discardDevArtifactFile(saved.file);
       throw err;
     });
   });
+  if (out.skipPersist) return null;
   console.log(`🗂️ Music Video dev artifact ${out.artifact.id.slice(4, 12)} v${version} saved for ${projectId.slice(0, 11)} (${out.artifact.kind}, ${mimeType})`);
   publish(projectId, out.project, out.artifact);
   return { project: out.project, artifact: out.artifact };
@@ -122,9 +127,9 @@ export async function importDevArtifact(projectId, { tempPath, originalName, art
 }
 
 /** Save generated HTML (e.g. the Cast & Sets sheet) as a new artifact or version. */
-export async function saveGeneratedDevArtifact(projectId, { artifactId = null, kind, title, html, status = null, source = 'generated' }) {
+export async function saveGeneratedDevArtifact(projectId, { artifactId = null, kind, title, html, status = null, source = 'generated', isCurrent, attach }) {
   return storeVersion(projectId, {
-    artifactId, kind, title, ext: 'html', buffer: Buffer.from(html, 'utf8'), source, status,
+    artifactId, kind, title, ext: 'html', buffer: Buffer.from(html, 'utf8'), source, status, isCurrent, attach,
   });
 }
 
