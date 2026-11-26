@@ -40,6 +40,41 @@ import {
 import { renameCollectionForSeries, unlinkCollectionsForSeries } from '../mediaCollections.js';
 import { isNonBlankStr, isStr, trimTo } from '../../lib/textUtils.js';
 import { codedError } from '../../lib/codedError.js';
+import {
+  SERIES_NAME_MAX as NAME_MAX,
+  FACT_REFERENCE_MAX,
+  STYLE_PROMPT_OVERRIDE_MAX,
+  STYLE_PROMPT_OVERRIDE_MODES,
+  STYLE_PROMPT_OVERRIDE_MODE_DEFAULT,
+  AUTHOR_MAX,
+  AUTHOR_ID_MAX,
+  UNIVERSE_ID_MAX,
+  WRITERS_ROOM_WORK_ID_MAX,
+  TARGET_FORMATS,
+  ISSUE_COUNT_TARGET_MAX,
+  MANUSCRIPT_TYPES,
+  LOCKABLE_STAGES,
+  ARC_LOCKABLE_FIELDS,
+  AUTOPILOT_LLM_STAGE_KINDS,
+} from '../../lib/pipelineSeriesConfig.js';
+
+export {
+  NAME_MAX,
+  FACT_REFERENCE_MAX,
+  STYLE_PROMPT_OVERRIDE_MAX,
+  STYLE_PROMPT_OVERRIDE_MODES,
+  STYLE_PROMPT_OVERRIDE_MODE_DEFAULT,
+  AUTHOR_MAX,
+  AUTHOR_ID_MAX,
+  UNIVERSE_ID_MAX,
+  WRITERS_ROOM_WORK_ID_MAX,
+  TARGET_FORMATS,
+  ISSUE_COUNT_TARGET_MAX,
+  MANUSCRIPT_TYPES,
+  LOCKABLE_STAGES,
+  ARC_LOCKABLE_FIELDS,
+  AUTOPILOT_LLM_STAGE_KINDS,
+};
 
 // Storage backend dispatcher (#1015). Series records moved from per-record
 // `data/pipeline-series/{id}/index.json` (collectionStore) to one-row-per-series
@@ -57,23 +92,7 @@ export const ERR_DUPLICATE = 'PIPELINE_SERIES_DUPLICATE';
 
 export const SERIES_ID_RE = /^ser-[A-Za-z0-9-]+$/;
 
-export const NAME_MAX = 200;
 export { LOGLINE_MAX, PREMISE_MAX, STYLE_NOTES_MAX };
-// Author-supplied real-world fact reference (#1588) — the ground-truth facts the
-// opt-in `research.fact-accuracy` editorial check reconciles the prose against
-// (e.g. "Paris is the capital of France"; physiological limits). Generous cap so
-// a grounded historical/SFF series can paste a sizable fact sheet.
-export const FACT_REFERENCE_MAX = 8000;
-export const STYLE_PROMPT_OVERRIDE_MAX = 1000;
-// How `stylePromptOverride` composes with the universe's style influences:
-//   'prepend'  — override leads, universe trails (the historical default
-//                — slight deviation, universe still visible)
-//   'append'   — universe leads, override trails (universe-dominant)
-//   'override' — universe style is dropped entirely (full spinoff look)
-// Default 'prepend' so existing series migrate forward without a writer
-// pass and the field can be absent in JSON.
-export const STYLE_PROMPT_OVERRIDE_MODES = Object.freeze(['prepend', 'append', 'override']);
-export const STYLE_PROMPT_OVERRIDE_MODE_DEFAULT = 'prepend';
 // Title/logo design concept — prose description injected into cover + TV
 // title-screen prompts as the "logo design" cue. Generated from the universe's
 // style notes on series creation; editable in the bible.
@@ -84,33 +103,6 @@ export { TITLE_LOGO_MAX };
 // scanning every issue at read time. Server-set/derived only — never accepted
 // from a route body. Sized to RENDER_FILENAME_MAX (renderSlot.js).
 export const COVER_IMAGE_MAX = 500;
-export const AUTHOR_MAX = 120;
-// FK to an Author persona (auth-<uuid>). The `author` string above stays as a
-// denormalized byline so a federated series renders the cover correctly even
-// when the peer lacks the (local-only) author record. Empty/cleared → null.
-export const AUTHOR_ID_MAX = 64;
-export const UNIVERSE_ID_MAX = 64;
-export const WRITERS_ROOM_WORK_ID_MAX = 64;
-export const TARGET_FORMATS = Object.freeze(['comic', 'tv', 'comic+tv']);
-export const ISSUE_COUNT_TARGET_MAX = 999;
-
-// The manuscript format the series is authored/finalized in first — the source
-// of truth the other two formats are generated from. Stored as the stage id so
-// it maps straight onto the issue stages. `null` = not chosen yet; the
-// manuscript editor falls back to auto-detecting the dominant drafted stage.
-// Mirrors MANUSCRIPT_STAGES in arcPlanner.js (kept local to avoid an import
-// cycle — series.js is imported by arcPlanner.js).
-export const MANUSCRIPT_TYPES = Object.freeze(['comicScript', 'teleplay', 'prose']);
-
-export const LOCKABLE_STAGES = Object.freeze(['arc']);
-
-// Per-field arc lock targets. Each field can be individually frozen so
-// `resolveVerifyIssues` / `commitSeasonsWithRemap` rewrite unlocked fields
-// while preserving locked ones verbatim. Sibling to the binary `locked.arc`
-// (which freezes everything); the two stack — `locked.arc: true` always wins.
-export const ARC_LOCKABLE_FIELDS = Object.freeze([
-  'logline', 'summary', 'protagonistArc', 'themes', 'shape', 'readerMap', 'tickingClock', 'foreshadowing',
-]);
 
 // Series Autopilot run marker (full autonomous mode). A thin, persisted
 // breadcrumb of the in-memory orchestrator run (server/services/pipeline/
@@ -131,26 +123,6 @@ const AUTOPILOT_RESIDUAL_MAX = 50;
 // record then silently drops, and the two would disagree about what was thrown
 // away. The residual cap needs no such export: nothing emits residual pre-bounded.
 export const AUTOPILOT_DISCARDED_MAX = 20;
-export const AUTOPILOT_LLM_STAGE_KINDS = Object.freeze([
-  'characterFoundation',
-  'generateArc',
-  'repairArcStructure',
-  'verifyArcSpine',
-  'generateEpisodes',
-  'foundationGate',
-  'verifyArc',
-  'beatSheet',
-  'beatContinuity',
-  'textStages',
-  'pilotDraft',
-  'pilotReview',
-  'scriptVerify',
-  'editorialReview',
-  'reverseOutline',
-  'editorialChecks',
-  'revisionCycle',
-  'produceTeaser',
-]);
 
 const sanitizeAutopilotLlmRoute = (raw) => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;

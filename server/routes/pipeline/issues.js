@@ -6,10 +6,27 @@
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
+import {
+  issuePatchSchema,
+  generateSchema,
+  stageProgressParamsSchema,
+  visualGenerateSchema,
+  comicPageRenderSchema,
+  comicPageRefineSchema,
+  episodeVideoSchema,
+  sceneVideoSchema,
+  promptRefineSchema,
+  imagePromptsSchema,
+  extractScenesSchema,
+  extractComicPagesSchema,
+  extractCanonFromScriptSchema,
+  describeCanonFromProseSchema,
+  comicPagePatchSchema,
+  autoRunSchema,
+  restoreSchema,
+} from '../../lib/pipelineValidation.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validateRequest.js';
-import { storyboardSceneSchema } from '../../lib/pipelineValidation.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as issuesSvc from '../../services/pipeline/issues.js';
 import { generateStage } from '../../services/pipeline/textStages.js';
@@ -26,321 +43,21 @@ import {
   generateComicPanelImagePrompts,
   generateStoryboardSceneImagePrompts,
 } from '../../services/pipeline/visualStages.js';
-import { IMAGE_PROMPT_CANDIDATE_MAX } from '../../services/pipeline/refineHelpers.js';
 import {
   extractCanonFromProse, summarizeCanonExtraction,
   describeCanonFromProse, summarizeDescribeGaps,
 } from '../../services/universeCanon.js';
 import { getSeriesCanon } from '../../services/pipeline/seriesCanon.js';
 import { startEpisodeVideoForIssue } from '../../services/pipeline/episodeVideo.js';
-import { COMIC_PAGE_VARIANTS } from '../../services/pipeline/owners.js';
-import { ASPECT_RATIOS, QUALITIES } from '../../lib/creativeDirectorPresets.js';
-import { QUEUEABLE_IMAGE_MODES } from '../../services/imageGen/modes.js';
-import { extractScenes, scenesFromBeatSheet, SOURCE_KIND } from '../../services/sceneExtractor.js';
+import { extractScenes, scenesFromBeatSheet } from '../../services/sceneExtractor.js';
 import { resolveSeriesLlmOverride } from '../../lib/seriesLlmOverride.js';
 import { parseComicScript } from '../../lib/comicScriptParser.js';
-import {
-  LENGTH_PROFILE_NAMES,
-  CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX,
-} from '../../lib/issueLength.js';
 import { ARC_ROLES } from '../../lib/storyArc.js';
 import { mapServiceError, countExtractedCanon } from './shared.js';
 
 import textStageRecoveryRouter from './textStageRecovery.js';
-import { imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE } from '../../lib/sharedSchemas.js';
 
 const router = Router();
-
-// ---- Issue schemas ----
-
-const stageInputSchema = z.object({
-  status: z.enum(issuesSvc.STAGE_STATUSES).optional(),
-  input: z.string().max(issuesSvc.STAGE_INPUT_MAX).optional(),
-  output: z.string().max(issuesSvc.STAGE_OUTPUT_MAX).optional(),
-  errorMessage: z.string().max(issuesSvc.STAGE_NOTES_MAX).optional(),
-  locked: z.boolean().optional(),
-});
-
-// Strict base arm for the stage-record union below — a bare text-stage patch
-// (only base fields) validates here, but a payload carrying any visual/audio
-// extra key fails this arm and is routed to the matching specific arm instead
-// of being silently key-stripped. The non-strict `stageInputSchema` stays the
-// `.extend()` base for the specific arms (they re-apply `.strict()` themselves).
-const baseStageStrictSchema = stageInputSchema.strict();
-
-// Light per-cue arm for the audio stage (issue #863). The service-side
-// `sanitizeAudioCue` enforces the real shape (ids, time sentinels, gain clamp);
-// here we only bound sizes so a corrupt payload can't balloon the request.
-const audioCueInputSchema = z.object({
-  id: z.string().trim().max(issuesSvc.AUDIO_CUE_ID_MAX).optional(),
-  label: z.string().max(issuesSvc.AUDIO_CUE_LABEL_MAX).nullable().optional(),
-  prompt: z.string().max(issuesSvc.AUDIO_CUE_PROMPT_MAX).nullable().optional(),
-  engine: z.string().trim().max(issuesSvc.AUDIO_CUE_ENGINE_MAX).nullable().optional(),
-  startSec: z.number().nullable().optional(),
-  endSec: z.number().nullable().optional(),
-  trackFilename: z.string().trim().max(issuesSvc.AUDIO_FILENAME_MAX).nullable().optional(),
-  durationSec: z.number().nullable().optional(),
-  gain: z.number().nullable().optional(),
-}).strip();
-
-// Visual stage records also accept pages/scenes/cdProjectId/videoPath — those
-// are arbitrary structured artifacts written by the visual UI. Keep the
-// validation light here so the artifact shape can evolve without a schema
-// migration; the service-level sanitizer caps array length.
-const visualStageInputSchema = stageInputSchema.extend({
-  pages: z.array(z.any()).max(200).optional(),
-  // Scenes stay passthrough (the rich scene shape evolves freely), but each
-  // scene's shots[] is validated through storyboardSceneSchema so a bad
-  // shotType/screenDirection enum is rejected at the route (#1315) instead of
-  // persisting unnormalized. Non-storyboard visual stages simply carry no shots.
-  scenes: z.array(storyboardSceneSchema).max(200).optional(),
-  cdProjectId: z.string().trim().max(64).nullable().optional(),
-  videoPath: z.string().trim().max(1000).nullable().optional(),
-  aspectRatio: z.enum(ASPECT_RATIOS).nullable().optional(),
-  quality: z.enum(QUALITIES).nullable().optional(),
-  // Per-stage gen config — image mode + optional pinned model + optional
-  // refine-LLM override. Sanitizer drops the field entirely when nothing
-  // is set, so a `null` here clears it.
-  genConfig: z.object({
-    imageMode: z.enum(['auto', ...QUEUEABLE_IMAGE_MODES]).optional(),
-    imageModelId: z.string().trim().max(200).nullable().optional(),
-    refineProvider: z.string().trim().max(200).nullable().optional(),
-    refineModel: z.string().trim().max(200).nullable().optional(),
-    applyCharacterLoras: z.boolean().optional(),
-  }).nullable().optional(),
-  // Comic-issue front cover. Only meaningful on the comicPages stage; the
-  // service-side sanitizer drops the field on other visual stages.
-  cover: z.object({
-    script: z.string().max(8000).optional(),
-    imageJobId: z.string().trim().max(200).nullable().optional(),
-    prompt: z.string().max(16_000).nullable().optional(),
-  }).nullable().optional(),
-  // Comic-issue back cover — identical shape to `cover`. Only meaningful
-  // on the comicPages stage. The render route + filename hook treat the
-  // two slots symmetrically; only the rendered prompt differs (no
-  // masthead, explicit no-text negative — back covers are illustration-
-  // only).
-  backCover: z.object({
-    script: z.string().max(8000).optional(),
-    imageJobId: z.string().trim().max(200).nullable().optional(),
-    prompt: z.string().max(16_000).nullable().optional(),
-  }).nullable().optional(),
-}).strict();
-
-// Audio stage payloads carry lines[] (voice-over per dialogue line), a nullable
-// music descriptor, the whole-episode `audioMode` selector, and arc-driven
-// `cues[]` (issue #863). Light validation — the sanitizer in
-// services/pipeline/issues.js enforces per-line / per-music / per-cue shape.
-// Without this arm in the union below, audio PATCHes fall through and the
-// base/visual arms strip lines/music/audioMode/cues.
-//
-// `.strict()` is load-bearing here: the union arms below all share the same
-// optional base fields, so a plain object parses against *any* arm and Zod's
-// default key-stripping would let an audio payload match the visual arm FIRST,
-// silently dropping audioMode/cues. Strict arms reject unknown keys, so an
-// audio payload (with audioMode/cues/lines/music) only validates against THIS
-// arm and reaches the audio sanitizer intact.
-const audioStageInputSchema = stageInputSchema.extend({
-  lines: z.array(z.any()).max(1000).optional(),
-  music: z.any().nullable().optional(),
-  audioMode: z.enum(issuesSvc.AUDIO_MODES).optional(),
-  cues: z.array(audioCueInputSchema).max(issuesSvc.AUDIO_CUES_MAX).optional(),
-}).strict();
-
-const issuePatchSchema = z.object({
-  title: z.string().trim().min(1).max(issuesSvc.TITLE_MAX).optional(),
-  number: z.number().int().min(1).max(9999).optional(),
-  status: z.enum(issuesSvc.ISSUE_STATUSES).optional(),
-  // Phase 2 of Story Arc Planning: optional pointer back to a season +
-  // ordinal within that season. `null` clears the assignment.
-  seasonId: z.string().trim().min(1).max(issuesSvc.SEASON_ID_MAX).nullable().optional(),
-  arcPosition: z.number().int().min(0).max(issuesSvc.ARC_POSITION_MAX).nullable().optional(),
-  arcRole: z.enum(ARC_ROLES).nullable().optional(),
-  // Per-issue length profile. Drives the prompt-template size targets
-  // (beats / prose words / page count / minute count). pageTarget +
-  // minutesTarget are only meaningful when lengthProfile === 'custom'.
-  lengthProfile: z.enum(LENGTH_PROFILE_NAMES).optional(),
-  pageTarget: z.number().int().min(CUSTOM_PAGE_MIN).max(CUSTOM_PAGE_MAX).nullable().optional(),
-  minutesTarget: z.number().int().min(CUSTOM_MINUTE_MIN).max(CUSTOM_MINUTE_MAX).nullable().optional(),
-  // Stage-record arms are all `.strict()` (see audioStageInputSchema above):
-  // every arm shares the same optional base fields, so a non-strict arm would
-  // accept (and key-strip) a payload meant for a sibling arm. With strict arms
-  // a payload only validates against the arm whose extra keys it actually
-  // carries — visual payloads (pages/scenes/…) reach the visual arm, audio
-  // payloads (lines/music/audioMode/cues) reach the audio arm, and bare
-  // text-stage patches (status/output/locked only) fall through to the base.
-  // Order is now defensive rather than load-bearing, but we still place the
-  // more-specific arms first; the bare base last.
-  stages: z.record(z.string(), z.union([visualStageInputSchema, audioStageInputSchema, baseStageStrictSchema])).optional(),
-  ephemeral: z.boolean().optional(),
-}).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
-
-const generateSchema = z.object({
-  seedInput: z.string().max(issuesSvc.STAGE_INPUT_MAX).optional(),
-  providerId: z.string().trim().max(80).optional(),
-  model: z.string().trim().max(200).optional(),
-  // Explicit source stages to feed the generation (backport support: generate
-  // any stage FROM any other populated stage). Omit for the conventional
-  // forward source. The service drops the target itself and empty stages.
-  sourceStageIds: z.array(z.enum(issuesSvc.TEXT_STAGE_IDS)).optional(),
-});
-
-// Path params for the text-stage progress stream. The stage must be a text
-// stage — a visual/audio stage has no text-generation channel to attach to.
-const stageProgressParamsSchema = z.object({
-  id: z.string().trim().min(1).max(200),
-  stageId: z.enum(issuesSvc.TEXT_STAGE_IDS),
-});
-
-const visualGenerateSchema = z.object({
-  description: z.string().trim().min(1).max(8000),
-  // Matched against the series places bible when present.
-  slugline: z.string().trim().max(200).optional(),
-  negativePrompt: z.string().trim().max(2000).optional(),
-  extraStyle: z.string().trim().max(2000).optional(),
-  mode: z.enum(QUEUEABLE_IMAGE_MODES).optional(),
-  modelId: z.string().trim().max(64).optional(),
-  width: imageEdgeSchema,
-  height: imageEdgeSchema,
-  steps: z.number().int().min(1).max(150).optional(),
-  cfgScale: z.number().min(0).max(30).optional(),
-  guidance: z.number().min(0).max(30).optional(),
-  seed: z.number().int().min(0).optional(),
-  // Per-scene wardrobe picks threaded from the storyboards UI — the generic
-  // visual route has no scene index, so the client sends the selected
-  // appearances directly. Each pins one canon character to one of its
-  // wardrobes; the prompt builder appends the wardrobe after the character's
-  // physical description.
-  characterAppearances: z.array(z.object({
-    characterId: z.string().trim().min(1).max(120),
-    wardrobeId: z.string().trim().min(1).max(120).nullable().optional(),
-  })).max(50).optional(),
-  // Per-render opt-out for trained character-LoRA auto-apply (local mode).
-  applyCharacterLoras: z.boolean().optional().default(true),
-}).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
-
-// Full-comic-page render: same knobs as panel render minus `description` /
-// `slugline` (the prompt is built server-side from the page's panels[] so it
-// stays in sync with whatever the script-extractor produced).
-const comicPageRenderSchema = z.object({
-  negativePrompt: z.string().trim().max(2000).optional(),
-  extraStyle: z.string().trim().max(2000).optional(),
-  mode: z.enum(QUEUEABLE_IMAGE_MODES).optional(),
-  modelId: z.string().trim().max(64).optional(),
-  width: imageEdgeSchema,
-  height: imageEdgeSchema,
-  steps: z.number().int().min(1).max(150).optional(),
-  cfgScale: z.number().min(0).max(30).optional(),
-  guidance: z.number().min(0).max(30).optional(),
-  seed: z.number().int().min(0).optional(),
-  // See covers.js's makeCoverRenderSchema for the proof/final semantics.
-  target: z.enum(COMIC_PAGE_VARIANTS).optional().default('proof'),
-  useProofAsBase: z.boolean().optional().default(false),
-  // Consistency reference: re-render this page using an adjacent ('prior'/'next')
-  // or explicit (0-based index) already-rendered page as a reference image, so a
-  // continuing scene keeps incidental/un-described characters + environment
-  // consistent. Resolved + bounds-checked in enqueueVisualComicPage.
-  //   - omitted / 'auto' → auto-chain off the prior page within the same scene,
-  //     render fresh across a scene boundary (the default).
-  //   - 'none' → force a fresh render with no reference, even mid-scene.
-  //   - 'prior' / 'next' / <index> → explicit reference (errors if unrendered).
-  referencePage: z.union([z.enum(['prior', 'next', 'auto', 'none']), z.number().int().min(0)]).optional(),
-  // Per-render opt-out for trained character-LoRA auto-apply (local mode).
-  applyCharacterLoras: z.boolean().optional().default(true),
-}).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
-
-// Per-page "Refine" — a small image-to-image correction to an already-rendered
-// page (issue #1534). `instruction` is the user's free-text change; the LLM
-// adjusts the page's stored render prompt and the page re-renders i2i from its
-// own existing image. The render-tuning fields mirror comicPageRenderSchema,
-// minus the compose-from-source-only `useProofAsBase` / `referencePage` /
-// `applyCharacterLoras` (a from-self refine has no proof-vs-final base choice
-// and no fresh character matching). `target` selects which rendered variant to
-// refine; absent → server auto-picks (final when present, else proof).
-const comicPageRefineSchema = z.object({
-  instruction: z.string().trim().min(1).max(2000),
-  providerId: z.string().trim().max(80).optional(),
-  model: z.string().trim().max(200).optional(),
-  target: z.enum(COMIC_PAGE_VARIANTS).optional(),
-  // i2i denoise — low preserves the page, just enough to apply the change.
-  initImageStrength: z.number().min(0).max(1).optional(),
-  negativePrompt: z.string().trim().max(2000).optional(),
-  // No `extraStyle`: the refine renders the LLM-adjusted prompt verbatim and
-  // skips composeComicPagePrompt, so a style suffix would be silently dropped.
-  mode: z.enum(QUEUEABLE_IMAGE_MODES).optional(),
-  modelId: z.string().trim().max(64).optional(),
-  width: imageEdgeSchema,
-  height: imageEdgeSchema,
-  steps: z.number().int().min(1).max(150).optional(),
-  cfgScale: z.number().min(0).max(30).optional(),
-  guidance: z.number().min(0).max(30).optional(),
-  seed: z.number().int().min(0).optional(),
-}).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
-
-const episodeVideoSchema = z.object({
-  aspectRatio: z.enum(ASPECT_RATIOS).optional(),
-  quality: z.enum(QUALITIES).optional(),
-  modelId: z.string().trim().max(64).optional(),
-  force: z.boolean().optional(),
-});
-
-// Single-scene video render. Lighter schema than episodeVideo because there
-// is no stitch step — just one t2v render against the scene's existing
-// description.
-const sceneVideoSchema = z.object({
-  aspectRatio: z.enum(ASPECT_RATIOS).optional(),
-  modelId: z.string().trim().max(64).optional(),
-  negativePrompt: z.string().trim().max(2000).optional(),
-  extraStyle: z.string().trim().max(2000).optional(),
-});
-
-// Provider/model picker for the LLM-driven panel/scene prompt refine. Both
-// are optional — server falls back to the active provider + stage default.
-const promptRefineSchema = z.object({
-  providerId: z.string().trim().max(80).optional(),
-  model: z.string().trim().max(200).optional(),
-});
-
-// Same picker plus a `count` for the non-destructive N-candidate fan-out
-// (issue #904). `count` is clamped server-side to IMAGE_PROMPT_CANDIDATE_MAX,
-// but bound it here too so an out-of-range value is a clean 400 rather than a
-// silently-clamped surprise.
-const imagePromptsSchema = promptRefineSchema.extend({
-  count: z.number().int().min(1).max(IMAGE_PROMPT_CANDIDATE_MAX).optional().default(3),
-});
-
-// Source for scene extraction: which text stage to read from (`prose` →
-// granular paragraph-grain breakdown via `writers-room-script`; `teleplay`
-// → slugline-grain parse via `pipeline-extract-scenes`). `force` overrides
-// the "you have N hand-curated scenes already" guard.
-// Enum values match `SOURCE_KIND` verbatim so the route forwards `body.from`
-// straight through — same string also names the issue's text stage.
-const extractScenesSchema = z.object({
-  from: z.enum([SOURCE_KIND.PROSE, SOURCE_KIND.TELEPLAY]).optional().default(SOURCE_KIND.TELEPLAY),
-  providerOverride: z.string().trim().max(80).optional(),
-  modelOverride: z.string().trim().max(128).optional(),
-  force: z.boolean().optional(),
-});
-
-const extractComicPagesSchema = z.object({
-  force: z.boolean().optional(),
-});
-
-const extractCanonFromScriptSchema = z.object({
-  providerOverride: z.string().trim().max(80).optional(),
-  model: z.string().trim().max(128).optional(),
-});
-
-const describeCanonFromProseSchema = z.object({
-  providerOverride: z.string().trim().max(80).optional(),
-  model: z.string().trim().max(128).optional(),
-  // Nouns to backfill — typically the appears-in-this-issue entries that lack
-  // a description. The server re-validates each against the universe canon.
-  targets: z.array(z.object({
-    id: z.string().trim().min(1).max(80),
-    kind: z.enum(['character', 'place', 'object']),
-  })).min(1).max(500),
-});
 
 // Stages whose `output` can be mined for canon. `prose` is the conventional
 // source (auto-extracted post-generation); `comicScript`/`teleplay` let the
@@ -355,23 +72,6 @@ const CANON_EXTRACT_STAGES = Object.freeze(['prose', 'comicScript', 'teleplay'])
 // to the same `extractBible` machinery the importer uses, keeping the
 // per-call corpus comfortably inside provider context windows.
 const EXTRACT_CANON_CORPUS_MAX = 200_000;
-
-const comicPagePatchSchema = z.object({
-  rawText: z.string().max(40000),
-});
-
-const autoRunSchema = z.object({
-  providerId: z.string().trim().max(80).optional(),
-  model: z.string().trim().max(200).optional(),
-  force: z.boolean().optional(),
-  // Optional opt-in to extend the auto-run past text stages: kicks off the
-  // episodeVideo handoff to Creative Director once scripts are done. Burns
-  // GPU minutes, so default is off.
-  includeVideo: z.boolean().optional(),
-  aspectRatio: z.enum(ASPECT_RATIOS).optional(),
-  quality: z.enum(QUALITIES).optional(),
-  modelId: z.string().trim().max(64).optional(),
-});
 
 // =====================
 // Issue routes
@@ -429,9 +129,6 @@ router.get('/issues/:id/stages/:stageId/generate/progress', (req, res) => {
 
 // Restore a prior text-stage version from history. See
 // issuesSvc.restoreStageFromHistory for the reversibility semantics.
-const restoreSchema = z.object({
-  runId: z.string().trim().min(1).max(200),
-});
 router.post('/issues/:id/stages/:stageId/restore', asyncHandler(async (req, res) => {
   const { id, stageId } = req.params;
   if (!issuesSvc.TEXT_STAGE_IDS.includes(stageId)) {

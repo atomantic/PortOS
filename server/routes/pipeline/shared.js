@@ -1,10 +1,9 @@
 /**
  * Shared plumbing for the pipeline sub-routers: the service-error → HTTP
- * status map, the provider/model override schema fragment, and the canon
+ * status map and the canon
  * extraction count helper used by both the arc and issue routers.
  */
 
-import { z } from 'zod';
 import { createServiceErrorMapper } from '../../lib/errorHandler.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as issuesSvc from '../../services/pipeline/issues.js';
@@ -52,13 +51,6 @@ const SERVICE_ERROR_STATUS = {
 // failed (via buildCascadeContext) so the UI can tell the user exactly what
 // didn't move.
 export const mapServiceError = createServiceErrorMapper(SERVICE_ERROR_STATUS, buildCascadeContext);
-
-// Arc / season-episodes / verify — Phase 3 of Story Arc Planning. The LLM
-// calls share a provider/model override shape.
-export const providerOverrideShape = {
-  providerOverride: z.string().trim().max(80).optional(),
-  modelOverride: z.string().trim().max(200).optional(),
-};
 
 // Collapses the `extractCanonFromProse` result-shape trio used by both the
 // season-episodes continuity extract and the manual script-stage extract.

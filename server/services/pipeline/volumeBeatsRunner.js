@@ -32,13 +32,14 @@ import { listIssues, isStageReady } from './issues.js';
 import { getSeries } from './series.js';
 import { compareIssuesByPosition } from './arcPlanner.js';
 import { getSeason } from './seasons.js';
+import { VOLUME_BEATS_MODES } from '../../lib/pipelineSeriesConfig.js';
+
+export { VOLUME_BEATS_MODES };
 
 // Shared SSE run-lifecycle keyed by seasonId. This runner keeps its own error
 // frame + per-issue catch inside `work`, so the factory's generic catch is only
 // the safety net.
 const runner = createSseRunner({ logLabel: 'pipeline volume-beats' });
-
-export const VOLUME_BEATS_MODES = Object.freeze(['skip-existing', 'regenerate-all']);
 
 export function isVolumeBeatsRunActive(seasonId) {
   return runner.isActive(seasonId);

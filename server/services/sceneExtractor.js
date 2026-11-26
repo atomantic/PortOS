@@ -22,8 +22,9 @@ import { runStagedLLM } from './stageRunner.js';
 import { BIBLE_KIND, pickPromptFields } from '../lib/storyBible.js';
 import { normalizeShotType, normalizeScreenDirection } from '../lib/shotGrammar.js';
 import { isStr, trimTo } from '../lib/textUtils.js';
+import { SOURCE_KIND } from '../lib/pipelineIssueConfig.js';
 
-export const SOURCE_KIND = Object.freeze({ PROSE: 'prose', TELEPLAY: 'teleplay' });
+export { SOURCE_KIND };
 
 const STAGE_FOR_SOURCE = Object.freeze({
   [SOURCE_KIND.PROSE]: 'writers-room-script',

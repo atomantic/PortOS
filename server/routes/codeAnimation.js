@@ -26,13 +26,21 @@ import codeAnimationFilms from './codeAnimationFilms.js';
 import { soundAssetSchema, stageProductionSoundAsset } from '../services/codeAnimation/soundAssets.js';
 import { ensureCodeAnimationSoundtrackTrack, startCodeAnimationSoundtrack } from '../services/codeAnimation/soundtrack.js';
 import { preflightProductionProject } from '../services/codeAnimation/preflight.js';
-import { z } from 'zod';
+import {
+  briefSchema,
+  generateSchema,
+  briefIdeaSchema,
+  jobsPageSchema,
+  exportParamsSchema,
+  projectPageSchema,
+  revisionParamsSchema,
+  soundtrackSchema,
+  revisionBodySchema,
+  stageRunParamsSchema,
+  acceptRunBodySchema,
+} from '../lib/codeAnimationValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { EFFORT_LEVELS } from '../lib/provider/providerModels.js';
-import { emptyToNull } from '../lib/zodCompat.js';
-import { filmStyleIdSchema } from '../lib/filmStyleGrammarValidation.js';
-import { getFilmStyleGrammar } from '../lib/filmStyleGrammars.js';
 import {
   buildCodeAnimationRequest,
   cancelCodeAnimationGeneration,
@@ -60,113 +68,9 @@ import {
   listProductionProjects, getProductionHistory, importProductionPackage,
   acceptProductionSource, exportProductionPackage, exportProductionBrief,
 } from '../services/codeAnimation/projects.js';
-import {
-  CODE_ANIMATION_ASPECT_RATIOS,
-  CODE_ANIMATION_LIMITS,
-  CODE_ANIMATION_RENDERERS,
-  CODE_ANIMATION_RESOLUTIONS,
-} from '../services/codeAnimation/prompt.js';
 
 const router = Router();
 router.use('/films', codeAnimationFilms);
-const L = CODE_ANIMATION_LIMITS;
-
-// An upload basename as POST /api/uploads returns it — never a path.
-const uploadFilenameSchema = z.string().trim().min(1).max(256)
-  .regex(/^[^/\\]+$/, 'filename must be an upload basename');
-const optionalId = z.preprocess(emptyToNull, z.string().trim().min(1).max(128).nullable().optional());
-
-// Optional film style grammar (#10253): kebab-case id that must exist in the catalog.
-const styleGrammarIdSchema = z.preprocess(emptyToNull, filmStyleIdSchema
-  .refine((id) => !!getFilmStyleGrammar(id), 'Unknown film style grammar')
-  .nullable().optional());
-
-const formatSchema = z.object({
-  durationSeconds: z.number().int().min(L.durationMin).max(L.durationMax).default(20),
-  aspectRatio: z.enum(Object.keys(CODE_ANIMATION_ASPECT_RATIOS)).default('16:9'),
-  resolution: z.enum(Object.keys(CODE_ANIMATION_RESOLUTIONS)).default('1080p'),
-  fps: z.number().int().refine((fps) => L.fpsOptions.includes(fps), 'Unsupported frame rate').default(30),
-});
-
-const uploadAudioSchema = z.object({
-  source: z.literal('upload').optional().default('upload'),
-  filename: uploadFilenameSchema,
-  label: z.string().trim().max(200).default(''),
-  durationSeconds: z.number().positive().max(60 * 60).nullable().optional(),
-  notes: z.string().trim().max(L.audioNotesMax).default(''),
-});
-
-const trackAudioSchema = z.object({
-  source: z.literal('track'),
-  trackId: z.string().trim().min(1).max(128),
-  label: z.string().trim().max(200).optional(),
-  durationSeconds: z.number().positive().max(60 * 60).nullable().optional(),
-  notes: z.string().trim().max(L.audioNotesMax).default(''),
-});
-
-const audioSchema = z.union([trackAudioSchema, uploadAudioSchema]).nullable().optional();
-
-const briefSchema = z.object({
-  title: z.string().trim().max(L.titleMax).default(''),
-  concept: z.string().trim().min(1, 'Describe what happens in the animation').max(L.conceptMax),
-  // The lead characters' design bible — what the coding model rigs.
-  cast: z.string().trim().max(L.castMax).default(''),
-  onScreenText: z.string().trim().max(L.textMax).default(''),
-  // Refinements on top of the universe style — the universe is the art direction.
-  styleNotes: z.string().trim().max(L.styleNotesMax).default(''),
-  styleGrammarId: styleGrammarIdSchema,
-  format: formatSchema.prefault({}),
-  renderer: z.enum(CODE_ANIMATION_RENDERERS).default('auto'),
-  interactive: z.boolean().default(false),
-  soundtrack: z.enum(['none', 'procedural']).default('none'),
-  universeId: optionalId,
-  // Absent → follow the universe's linked board; '' / null → no board.
-  moodBoardId: optionalId,
-  includeMoodBoardImages: z.boolean().default(true),
-  referenceImages: z.array(z.object({
-    filename: uploadFilenameSchema,
-    label: z.string().trim().max(200).default(''),
-    note: z.string().trim().max(L.referenceNoteMax).default(''),
-  })).max(L.referenceImagesMax).default([]),
-  // A Media History video (data/videos basename) studied as the quality bar.
-  referenceVideo: z.object({
-    filename: uploadFilenameSchema,
-    label: z.string().trim().max(200).default(''),
-    note: z.string().trim().max(L.referenceNoteMax).default(''),
-  }).strict().nullable().optional(),
-  audio: audioSchema,
-  // A finished animation this one forks and extends (its HTML rides the prompt).
-  baseJobId: z.string().uuid().nullable().optional(),
-}).strict();
-
-const generateSchema = briefSchema.extend({
-  seedIdea: z.string().trim().max(L.seedIdeaMax).default(''),
-  providerId: z.string().trim().min(1).max(128),
-  model: z.string().trim().max(256).optional(),
-  effort: z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable().optional()),
-}).strict();
-
-// Writing the brief needs only the art-direction selections plus whatever the
-// artist has typed so far — never the uploads or audio, which condition the
-// picture, not the story.
-const briefIdeaSchema = z.object({
-  universeId: optionalId,
-  moodBoardId: optionalId,
-  styleGrammarId: styleGrammarIdSchema,
-  seedIdea: z.string().trim().max(L.seedIdeaMax).default(''),
-  // The same brief, partially filled — derived from briefSchema so the field
-  // caps are stated once, with `concept` relaxed because there may be none yet.
-  current: briefSchema
-    .pick({ title: true, cast: true, onScreenText: true, styleNotes: true })
-    .extend({ concept: z.string().trim().max(L.conceptMax).default('') })
-    .prefault({}),
-  // Only the two the writer's prompt reads — the renderer, fps, and resolution
-  // condition the picture, not the story.
-  format: formatSchema.pick({ durationSeconds: true, aspectRatio: true }).prefault({}),
-  providerId: z.string().trim().max(128).optional(),
-  model: z.string().trim().max(256).optional(),
-  effort: z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable().optional()),
-}).strict();
 
 router.get('/options', (_req, res) => {
   res.json(getCodeAnimationOptions());
@@ -196,19 +100,12 @@ router.post('/generate', asyncHandler(async (req, res) => {
   res.status(202).json(await startCodeAnimationGeneration(input));
 }));
 
-const jobsPageSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(1000).optional(),
-  cursor: z.string().min(1).max(256).optional(),
-}).strict();
-
 router.get('/jobs', asyncHandler(async (req, res) => {
   // Existing query-less callers retain the array contract.
   res.json(Object.keys(req.query).length === 0
     ? await listCodeAnimationJobs()
     : await pageCodeAnimationJobs(validateRequest(jobsPageSchema, req.query)));
 }));
-
-const exportParamsSchema = z.object({ id: z.string().uuid() }).strict();
 
 router.get('/jobs/:id/poster', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);
@@ -240,12 +137,6 @@ router.delete('/jobs/:id', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);
   res.json(await deleteCodeAnimationJob(id));
 }));
-
-const projectPageSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(50),
-  cursor: z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/).optional(),
-}).strict();
-const revisionParamsSchema = exportParamsSchema.extend({ revisionId: z.string().uuid() });
 
 router.get('/projects', asyncHandler(async (req, res) => {
   res.json(await listProductionProjects(validateRequest(projectPageSchema, req.query)));
@@ -279,7 +170,7 @@ router.post('/projects/:id/sound-assets', asyncHandler(async (req, res) => {
 }));
 router.post('/projects/:id/accept', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);
-  const { revisionId } = validateRequest(z.object({ revisionId: z.string().uuid() }).strict(), req.body);
+  const { revisionId } = validateRequest(revisionBodySchema, req.body);
   res.json(await acceptProductionSource(id, revisionId));
 }));
 // An explicit, user-started stage run (style frame → pilot → inspect → repair → final).
@@ -290,7 +181,7 @@ router.post('/projects/:id/stage-runs', asyncHandler(async (req, res) => {
   res.status(202).json(run);
 }));
 router.post('/projects/:id/stage-runs/:runId/cancel', asyncHandler(async (req, res) => {
-  const { id, runId } = validateRequest(z.object({ id: z.string().uuid(), runId: z.string().uuid() }).strict(), req.params);
+  const { id, runId } = validateRequest(stageRunParamsSchema, req.params);
   res.json(cancelProductionStageRun(id, runId));
 }));
 router.get('/projects/:id/acceptance', asyncHandler(async (req, res) => {
@@ -300,7 +191,7 @@ router.get('/projects/:id/acceptance', asyncHandler(async (req, res) => {
 // Explicit promotion of one finished run's video; frozen to its source/audio/render hashes.
 router.post('/projects/:id/accepted-output', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);
-  const { runId } = validateRequest(z.object({ runId: z.string().uuid() }).strict(), req.body);
+  const { runId } = validateRequest(acceptRunBodySchema, req.body);
   res.json(await acceptProductionOutput(id, runId));
 }));
 router.get('/projects/:id/brief', asyncHandler(async (req, res) => {
@@ -339,12 +230,6 @@ router.get('/:id/package', asyncHandler(async (req, res) => {
 // Generate (or regenerate) a soundtrack for a finished animation with a local
 // music engine, without re-running the animation code. 202: the render runs on
 // the audio media lane; progress rides audio-gen:* for `mediaJobId`.
-const soundtrackSchema = z.object({
-  prompt: z.string().max(8000).refine((value) => value.trim().length > 0, 'Describe the soundtrack'),
-  engine: z.string().trim().min(1).max(80),
-  modelId: z.string().trim().min(1).max(256).optional(),
-  instrumentalOnly: z.boolean().default(true),
-}).strict();
 
 router.post('/:id/soundtrack', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);

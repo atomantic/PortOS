@@ -6,74 +6,24 @@
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
+import {
+  arcGenerateSchema,
+  seasonEpisodesGenerateSchema,
+  arcVerifySchema,
+  volumeVerifySchema,
+  volumeBeatsGenerateSchema,
+  arcResolveSchema,
+  arcDeriveSchema,
+  arcDeriveCommitSchema,
+} from '../../lib/pipelineValidation.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validateRequest.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as arcPlanner from '../../services/pipeline/arcPlanner.js';
 import * as volumeBeatsRunner from '../../services/pipeline/volumeBeatsRunner.js';
-import { mapServiceError, providerOverrideShape } from './shared.js';
+import { mapServiceError } from './shared.js';
 
 const router = Router();
-
-// The first two arc passes also accept `commit: true` to persist the LLM
-// output (skipping the preview/confirm step).
-const arcGenerateSchema = z.object({ ...providerOverrideShape, commit: z.boolean().optional() });
-const seasonEpisodesGenerateSchema = z.object({ ...providerOverrideShape, commit: z.boolean().optional() });
-const arcVerifySchema = z.object(providerOverrideShape);
-// Volume / season verify shares the same provider/model override shape.
-const volumeVerifySchema = z.object(providerOverrideShape);
-
-// Volume beat-sheets bulk generator. `mode` defaults to skip-existing so a
-// rerun on a partially-expanded volume only fills empty slots; the explicit
-// 'regenerate-all' is the "blow away every beat sheet" path.
-const volumeBeatsGenerateSchema = z.object({
-  ...providerOverrideShape,
-  mode: z.enum(volumeBeatsRunner.VOLUME_BEATS_MODES).optional().default('skip-existing'),
-});
-
-// Auto-resolve verification findings. `findings` empty/omitted = re-verify
-// first then resolve everything; otherwise the LLM only addresses the
-// caller-supplied subset (per-finding "Resolve" buttons).
-const verifyFindingSchema = z.object({
-  severity: z.enum(['high', 'medium', 'low']).optional(),
-  location: z.string().trim().max(200).optional(),
-  problem: z.string().trim().min(1).max(2000),
-  suggestion: z.string().trim().max(2000).optional(),
-});
-const arcResolveSchema = z.object({
-  ...providerOverrideShape,
-  findings: z.array(verifyFindingSchema).max(50).optional(),
-});
-
-// Back-derive arc/bible/structure from the existing issue manuscripts. The
-// preview pass just needs the override shape; the commit pass carries the
-// (possibly user-edited) proposal so the LLM is NOT re-run on confirm.
-const arcDeriveSchema = z.object(providerOverrideShape);
-const arcDeriveCommitSchema = z.object({
-  arc: z.object({
-    logline: z.string().max(500).optional(),
-    summary: z.string().max(8000).optional(),
-    protagonistArc: z.string().max(8000).optional(),
-    themes: z.array(z.string().max(200)).max(50).optional(),
-    shape: z.string().max(80).nullable().optional(),
-  }).optional(),
-  bible: z.object({
-    logline: z.string().max(500).optional(),
-    premise: z.string().max(seriesSvc.PREMISE_MAX).optional(),
-    issueCountTarget: z.number().int().min(0).max(9999).optional(),
-  }).optional(),
-  volume: z.object({
-    title: z.string().max(300).optional(),
-    logline: z.string().max(1000).optional(),
-    synopsis: z.string().max(8000).optional(),
-  }).optional(),
-  issues: z.array(z.object({
-    id: z.string().min(1).max(120),
-    title: z.string().max(300).optional(),
-    synopsis: z.string().max(8000).optional(),
-  })).max(200).optional(),
-});
 
 // Top-of-arc generation: proposes `series.arc` + `series.seasons[]` from the
 // series bible. With `commit: true` persists the result in one shot; default

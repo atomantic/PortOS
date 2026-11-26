@@ -1,5 +1,8 @@
 import { runStagedLLM } from '../stageRunner.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { IMAGE_PROMPT_CANDIDATE_MAX } from '../../lib/pipelineIssueConfig.js';
+
+export { IMAGE_PROMPT_CANDIDATE_MAX };
 
 // Pass `logTag: null` to suppress the default runId log so a caller that
 // needs a context-rich line (e.g. universeCharacterExpand wants the
@@ -44,11 +47,6 @@ export function trimChanges(raw, limit = 12) {
     ? raw.map((c) => String(c).slice(0, 240)).filter(Boolean).slice(0, limit)
     : [];
 }
-
-// Upper bound on how many image-prompt candidates a single fan-out request
-// may ask for. Each candidate is an independent LLM call, so the cap keeps a
-// runaway `count` from spawning dozens of provider hits in one click.
-export const IMAGE_PROMPT_CANDIDATE_MAX = 6;
 
 // Fan-out wrapper around `runPromptRefine`: run the same refine template N
 // times in parallel and collect the distinct candidate prompts. Sampling

@@ -1,11 +1,28 @@
 import { emitToOperatorsOn } from '../services/socketIo.js';
-import { messageInboxRead, messageDetailRead, messageParamsSchema } from './messageInboxRead.js';
+import { messageInboxRead, messageDetailRead } from './messageInboxRead.js';
 import express from 'express';
-import { z } from 'zod';
+import {
+  createAccountSchema,
+  updateAccountSchema,
+  createDraftSchema,
+  updateDraftSchema,
+  reconcileDraftSchema,
+  generateDraftSchema,
+  evaluateMessagesSchema,
+  updateSelectorsSchema,
+  draftListQuerySchema,
+  testTokenQuerySchema,
+  messageParamsSchema,
+  MESSAGE_TOKEN_PROVIDERS,
+  messageSyncBodySchema,
+  messageFetchFullBodySchema,
+  messageActionBodySchema,
+  messageTokenProviderBodySchema,
+} from '../lib/messagesValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { UUID_RE } from '../lib/fileUtils.js';
-import { MESSAGE_ACCOUNT_TRANSPORT, MESSAGE_ACCOUNT_TYPES, sendViaForAccountType } from '../lib/messageTransport.js';
+import { MESSAGE_ACCOUNT_TRANSPORT, sendViaForAccountType } from '../lib/messageTransport.js';
 import { normalizeEmail } from '../lib/messageRecipientEmail.js';
 import * as messageAccounts from '../services/messageAccounts.js';
 import * as messageSync from '../services/messageSync.js';
@@ -15,10 +32,6 @@ import { getSelectors, updateSelectors, testSelectors, launchProvider } from '..
 import { evaluateMessages, generateReplyBody } from '../services/messageEvaluator.js';
 import { executeAction } from '../services/messageActions.js';
 import { getToken, getTokenStatus, testApi, clearTokenCache } from '../services/messageTokenExtractor.js';
-import {
-  MESSAGE_TOKEN_PROVIDERS, messageSyncBodySchema, messageFetchFullBodySchema, messageActionBodySchema,
-  messageTokenProviderBodySchema
-} from '../lib/messageValidation.js';
 
 const router = express.Router();
 
@@ -26,75 +39,6 @@ const router = express.Router();
 // When the result set hits this cap the response includes truncated:true so
 // callers know there may be un-refreshed messages beyond the limit.
 const FULL_BODY_REFRESH_LIMIT = 1000;
-
-// === Validation Schemas ===
-const createAccountSchema = z.object({
-  name: z.string().min(1),
-  type: z.enum(MESSAGE_ACCOUNT_TYPES),
-  email: z.union([z.string().email(), z.literal('')]).optional().default(''),
-  syncConfig: z.object({
-    maxMessages: z.number().int().positive().optional(),
-    // Per-account reply-detection ingestion (Gmail sent mail → timeline). #2796.
-    ingestSent: z.boolean().optional()
-  }).optional()
-});
-
-const updateAccountSchema = z.object({
-  name: z.string().min(1).optional(),
-  email: z.union([z.string().email(), z.literal('')]).optional(),
-  enabled: z.boolean().optional(),
-  // Gmail send-as aliases (#2831). Server-populated on sync, not typically set by the
-  // client; accepted here for schema parity so a round-tripped account payload validates.
-  sendAsAliases: z.array(z.string()).optional(),
-  syncConfig: z.object({
-    maxMessages: z.number().int().positive().optional(),
-    // Per-account reply-detection ingestion (Gmail sent mail → timeline). #2796.
-    ingestSent: z.boolean().optional()
-  }).optional()
-});
-
-const createDraftSchema = z.object({
-  accountId: z.string().guid(),
-  replyToMessageId: z.string().nullish(),
-  threadId: z.string().nullish(),
-  to: z.array(z.string()).optional().default([]),
-  cc: z.array(z.string()).optional().default([]),
-  subject: z.string().optional().default(''),
-  body: z.string().optional().default(''),
-  generatedBy: z.enum(['ai', 'manual']).optional().default('manual'),
-  sendVia: z.enum(['api', 'playwright']).optional()
-});
-
-const updateDraftSchema = z.object({
-  to: z.array(z.string()).optional(),
-  cc: z.array(z.string()).optional(),
-  subject: z.string().optional(),
-  body: z.string().optional(),
-  status: z.enum(['draft', 'pending_review', 'approved']).optional()
-});
-
-const reconcileDraftSchema = z.object({
-  attemptId: z.string().guid(),
-  outcome: z.enum(['sent', 'not_sent'])
-});
-
-const generateDraftSchema = z.object({
-  accountId: z.string().guid(),
-  replyToMessageId: z.string().nullish(),
-  threadId: z.string().nullish(),
-  context: z.string().optional().default(''),
-  instructions: z.string().optional().default(''),
-  useVoice: z.boolean().optional()
-});
-
-const evaluateMessagesSchema = z.object({
-  accountId: z.string().guid().optional(),
-  messageIds: z.array(z.string().trim().min(1).max(1024)).min(1).max(100).optional()
-});
-
-const updateSelectorsSchema = z.object({
-  selectors: z.record(z.string())
-});
 
 // === Account Routes ===
 router.get('/accounts', asyncHandler(async (req, res) => {
@@ -180,8 +124,6 @@ router.post('/evaluate', asyncHandler(async (req, res) => {
 }));
 
 // === Draft Routes ===
-const draftListQuerySchema = z.object({ accountId: z.string().optional(), status: z.string().optional() });
-const testTokenQuerySchema = z.object({ top: z.string().optional() });
 
 router.get('/drafts', asyncHandler(async (req, res) => {
   const { accountId, status } = validateRequest(draftListQuerySchema, req.query);

@@ -18,7 +18,6 @@
  * data/pipeline-issues/{id}/index.json (PG-backed via the store facade).
  */
 
-
 import { getIssuesStore, stripRunHistoryFromIssue } from './issuesStore/store.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { IMAGE_GEN_MODE, QUEUEABLE_IMAGE_MODES } from '../imageGen/modes.js';
@@ -46,6 +45,41 @@ import {
   VISUAL_STAGE_IDS,
 } from '../../lib/pipelineStages.js';
 import { isStr, trimTo } from '../../lib/textUtils.js';
+import {
+  ISSUE_TITLE_MAX as TITLE_MAX,
+  SEASON_ID_MAX,
+  ARC_POSITION_MAX,
+  STAGE_INPUT_MAX,
+  STAGE_OUTPUT_MAX,
+  STAGE_NOTES_MAX,
+  STAGE_STATUSES,
+  ISSUE_STATUSES,
+  AUDIO_FILENAME_MAX,
+  AUDIO_MODES,
+  AUDIO_CUE_ID_MAX,
+  AUDIO_CUE_LABEL_MAX,
+  AUDIO_CUE_PROMPT_MAX,
+  AUDIO_CUE_ENGINE_MAX,
+  AUDIO_CUES_MAX,
+} from '../../lib/pipelineIssueConfig.js';
+
+export {
+  TITLE_MAX,
+  SEASON_ID_MAX,
+  ARC_POSITION_MAX,
+  STAGE_INPUT_MAX,
+  STAGE_OUTPUT_MAX,
+  STAGE_NOTES_MAX,
+  STAGE_STATUSES,
+  ISSUE_STATUSES,
+  AUDIO_FILENAME_MAX,
+  AUDIO_MODES,
+  AUDIO_CUE_ID_MAX,
+  AUDIO_CUE_LABEL_MAX,
+  AUDIO_CUE_PROMPT_MAX,
+  AUDIO_CUE_ENGINE_MAX,
+  AUDIO_CUES_MAX,
+};
 
 // Storage backend dispatcher (#1015). Issue records moved from per-record
 // `data/pipeline-issues/{id}/index.json` (collectionStore) to one-row-per-issue
@@ -117,15 +151,7 @@ export const ERR_STAGE_LOCKED = 'PIPELINE_STAGE_LOCKED';
 
 const ISSUE_ID_RE = /^iss-[A-Za-z0-9-]+$/;
 
-export const TITLE_MAX = 300;
 export const SERIES_ID_MAX = 64;
-export const SEASON_ID_MAX = 64;
-// Issues fall back to position 0 when un-numbered; the cap keeps a runaway
-// LLM payload from inflating the field unbounded.
-export const ARC_POSITION_MAX = 9999;
-export const STAGE_INPUT_MAX = 200_000;   // ~200kB — fits a long prose draft
-export const STAGE_OUTPUT_MAX = 400_000;  // ~400kB — fits a long comic script
-export const STAGE_NOTES_MAX = 4000;
 export const ISSUES_PER_RESPONSE_MAX = 1000;
 // How many prior versions of a text stage to retain for the diff modal.
 // Each entry holds the full prior input+output, so the upper bound is
@@ -145,8 +171,6 @@ export function isStageReady(stage) {
   if (stage.status !== 'ready' && stage.status !== 'edited') return false;
   return !!(stage.output && stage.output.trim());
 }
-export const STAGE_STATUSES = Object.freeze(['empty', 'generating', 'ready', 'edited', 'needs-review', 'error']);
-export const ISSUE_STATUSES = Object.freeze(['draft', 'running', 'needs-review', 'shipped']);
 
 const emptyStage = () => ({
   status: 'empty',
@@ -468,7 +492,6 @@ const sanitizeVisualStage = (raw, stageId = null) => {
 // flashback voice, etc.).
 const AUDIO_LINE_TEXT_MAX = 4000;
 const AUDIO_LINES_MAX = 1000;
-export const AUDIO_FILENAME_MAX = 500;
 const AUDIO_LINE_ID_MAX = 80;
 // Cap a per-line VO offset at a generous episode length so a corrupted record
 // can't push an `adelay` filter into absurd territory. Two hours is far beyond
@@ -531,27 +554,12 @@ const sanitizeMusicTrack = (raw) => {
   return { source, trackFilename, label };
 };
 
-// Which strategy drives the episode's non-dialogue audio (issue #863):
-//   per-clip       — keep each stitched clip's own soundtrack (today's default)
-//   silent         — strip any bed
-//   generated      — assemble the arc-driven cues[] onto the timeline
-//   uploaded-track — loop the single `music` pointer under the whole episode
-export const AUDIO_MODES = Object.freeze(['per-clip', 'silent', 'generated', 'uploaded-track']);
 // Read-side default: an absent / unknown audioMode collapses to 'per-clip' —
 // today's behavior — so an un-migrated record (or one synced from an older,
 // audioMode-unaware peer) reads correctly before migration 067 stamps the
 // explicit value. Never let "absent" become a wrong mode (AGENTS.md sentinel
 // discipline).
 export const sanitizeAudioMode = (raw) => (AUDIO_MODES.includes(raw) ? raw : 'per-clip');
-
-// Per-cue field caps. Exported so the route's light Zod arm references the
-// same numbers (the sanitizer below is authoritative; the route only guards
-// against payload ballooning) and can't silently drift if these change.
-export const AUDIO_CUE_ID_MAX = 80;
-export const AUDIO_CUE_LABEL_MAX = 200;
-export const AUDIO_CUE_PROMPT_MAX = 8000;
-export const AUDIO_CUE_ENGINE_MAX = 80;
-export const AUDIO_CUES_MAX = 200;
 
 // Per-cue gain override. `null` = "use the stage / global default", distinct
 // from `0` ("muted"). Clamped to a sane 0..4 range so a corrupted value can't
@@ -719,7 +727,6 @@ async function renumberInline(state, seriesId, fromSeasonId = null, preloadedSer
     fromSeasonId,
   });
 }
-
 
 // Internal helpers shared across issueCrud / issueStages / issueSync. Exported
 // here (rather than inline) so the split modules can reach the single store
