@@ -166,11 +166,12 @@ describe('cloneProjectRecord', () => {
   });
 
   it('can fork the board without carrying generated media', () => {
+    const treatment = { imageId: 'frame.png', type: 'quartz', date: '1985-07-14' };
     const source = {
       ...baseProject(),
       version: 2,
       rootProjectId: 'mv-root',
-      scenes: [{ sceneId: 'old', order: 0, referenceImageId: 'frame.png', videoHistoryId: 'clip-1' }],
+      scenes: [{ sceneId: 'old', order: 0, referenceImageId: 'frame.png', videoHistoryId: 'clip-1', imageTreatments: [treatment] }],
     };
     const clone = cloneProjectRecord(source, {
       id: 'mv-3',
@@ -185,6 +186,8 @@ describe('cloneProjectRecord', () => {
       name: 'Test MV v3',
     });
     expect(clone.scenes[0]).toMatchObject({ referenceImageId: null, videoHistoryId: null, takes: [] });
+    expect(clone.scenes[0]).not.toHaveProperty('imageTreatments');
+    expect(cloneProjectRecord(source, { id: 'mv-4', now: '2026-01-03T00:00:00.000Z' }).scenes[0].imageTreatments).toEqual([treatment]);
   });
 });
 
@@ -195,6 +198,8 @@ describe('applyProjectPatch', () => {
     expect(bedded.soundBed).toEqual({ trackId: 'trk-rain', volume: 0.33 });
     expect(applyProjectPatch(bedded, { soundBed: null }).soundBed).toBeNull();
     expect(() => applyProjectPatch(withSong, { soundBed: { trackId: 'trk-song' } })).toThrow(expect.objectContaining({ code: 'SOUND_BED_IS_MASTER' }));
+    expect(() => applyProjectPatch(bedded, { trackId: 'trk-rain' })).toThrow(expect.objectContaining({ code: 'SOUND_BED_IS_MASTER' }));
+    expect(applyProjectPatch(bedded, { trackId: 'trk-rain', soundBed: null })).toMatchObject({ trackId: 'trk-rain', soundBed: null });
   });
 
   it('merges fields and bumps updatedAt', () => {
@@ -1398,9 +1403,26 @@ describe('shots before the song', () => {
     expect(replanned.scenes.map((s) => [s.sceneId === scene.sceneId, s.order, !!s.preMusic])).toEqual([[true, 0, true], [false, 1, false]]);
     expect(scenes.map((s) => s.prompt)).toEqual(['Rink lights']);
     expect(() => splitScene(replanned, scene.sceneId, { atSec: 1 })).toThrow(/no song time to split/);
+    expect(() => reorderScenes(replanned, [scenes[0].sceneId, scene.sceneId]))
+      .toThrow(expect.objectContaining({ code: 'MUSIC_VIDEO_REORDER_PRE_MUSIC' }));
+    expect(() => mergeNextScene(replanned, scene.sceneId))
+      .toThrow(expect.objectContaining({ code: 'MUSIC_VIDEO_MERGE_PRE_MUSIC' }));
+    expect(() => mergePreviousScene(replanned, scenes[0].sceneId))
+      .toThrow(expect.objectContaining({ code: 'MUSIC_VIDEO_MERGE_PRE_MUSIC' }));
     const { updated: back } = applySceneUpdate(replanned, scene.sceneId, { preMusic: null });
     expect(back.preMusic).toBeNull();
   });
+});
+
+it.each([
+  { visualLayer: 'card', cardText: 'Interlude', cardColor: '#112233', textZone: 'upper-left' },
+  { visualLayer: 'still', imageEffect: 'end-fade', imageEffectSec: 1, endImageId: 'end.png', filmLook: { preset: 'vhs' } },
+])('retains $visualLayer rendering inputs on both sides of a split', (visual) => {
+  const scene = { sceneId: 'original', order: 0, startSec: 0, endSec: 4, ...visual };
+  const { scenes } = splitScene({ ...baseProject(), scenes: [scene] }, scene.sceneId, { atSec: 2 });
+  expect(scenes).toHaveLength(2);
+  expect(scenes[0]).toMatchObject(visual);
+  expect(scenes[1]).toMatchObject(visual);
 });
 
 // Uniquely catches a cue-list edit leaving section markers on the wrong line (#14380).
