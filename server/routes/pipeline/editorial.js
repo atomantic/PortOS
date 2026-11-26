@@ -18,13 +18,12 @@ import {
 import {
   resolveCheckState,
   readChecksSlice,
-  readReadinessGate,
   getCheckById,
   readCustomCheckDefs,
   isCustomCheckId,
   CUSTOM_CHECK_ID_PREFIX,
-  mergeSeverityWeights,
-} from '../../lib/editorial/index.js';
+} from '../../lib/editorial/checkRegistry.js';
+import { readReadinessGate, mergeSeverityWeights } from '../../lib/editorial/severityConfig.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as issuesSvc from '../../services/pipeline/issues.js';
 import * as editorialAnalysis from '../../services/pipeline/editorialAnalysis.js';

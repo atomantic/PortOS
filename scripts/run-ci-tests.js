@@ -758,7 +758,7 @@ async function main() {
     // Related mode can reach beyond CI_TEST_FILES. Use its full candidate
     // inventory, which the runner partitions before checking related reach.
     const { slice } = planTestMemo({ scope, mode: mode === 'related' ? 'full' : mode, repoFiles, repoRoot, shard, memoDir: null });
-    writeStepOutput('required', String(slice.includes('scripts/align_lyrics_ctc.test.js')));
+    writeStepOutput('required', String(slice.includes('scripts/ml/align_lyrics_ctc.test.js')));
     return;
   }
   // process.exitCode, not process.exit(): the runner streams the child's

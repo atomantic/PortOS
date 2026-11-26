@@ -6,6 +6,7 @@
  * Emits WebSocket progress events every 10k records.
  */
 
+import { emitToOperatorsOn } from './socketIo.js';
 import { createReadStream } from 'fs';
 import { unlink } from 'fs/promises';
 import { extractDateStr, readDayFile, writeDayFile, upsertPoints, queueHealthDayMutation } from './appleHealthIngest.js';
@@ -320,7 +321,7 @@ export async function importAppleHealthXml(filePath, io = null, { flushInterval 
           processedRecords++;
 
           if (processedRecords % 10000 === 0) {
-            io?.emit('health:xml:progress', { processed: processedRecords });
+            emitToOperatorsOn(io, 'health:xml:progress', { processed: processedRecords });
             console.log(`🍎 XML import progress: ${processedRecords} records`);
           }
 
@@ -367,7 +368,7 @@ export async function importAppleHealthXml(filePath, io = null, { flushInterval 
     await unlink(filePath).catch(() => {});
   }
 
-  io?.emit('health:xml:complete', { days: allDays.size, records: processedRecords });
+  emitToOperatorsOn(io, 'health:xml:complete', { days: allDays.size, records: processedRecords });
   console.log(`🍎 XML import complete: ${processedRecords} records across ${allDays.size} days`);
 
   return { days: allDays.size, records: processedRecords };

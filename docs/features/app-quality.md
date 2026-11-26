@@ -156,72 +156,14 @@ reverted".
 
 ## Coverage review
 
-The existing catalog already separates conventional quality, cyclomatic
-complexity, cognitive load, structural drift, module hygiene, dead code and
-duplication, dependencies, typing, API contracts, runtime safety, error handling,
-observability, performance, test coverage, test quality and documentation.
-Security and data/upgrade safety cover their respective trust and persistence
-boundaries. Product-facing coverage comes from UX (including onboarding and
-successful task completion), UI bugs, console errors, accessibility,
-mobile/responsive behavior and copy clarity.
+The [audit catalog](self-improvement-audits.md#active-audit-domains) assigns
+each kind of finding to one scheduled domain. For example, reliability and
+error handling covers failure recovery from a single call through process
+restart. Data integrity and safety owns damaged persisted records and executed
+upgrade or restore rehearsals. The infrastructure and development environment
+domain covers CI and local toolchains and inspects deployment configuration
+where the repository provides it.
 
-Those lenses grew out of a web app with a UI, so five service and
-data-platform lenses cover what a backend API, data platform, or infrastructure
-repository is judged on and nothing above owns:
-
-| Category | Owns | Distinct from |
-| --- | --- | --- |
-| `infrastructure` | IaC, containers, orchestration, platform manifests, CI: exposure, identity grants, secrets, pinning, resource limits and probes, state config, CI supply chain, environment drift | `security` (application code), `dependency-updates` |
-| `data-integrity` | Runtime data correctness: idempotency under retry/redelivery, partial writes, lost updates, boundary validation, schema evolution of stored data, semantic corruption, pagination, retention reach, transfer checks | `data-safety` (upgrades, migrations, destructive defaults, backups) |
-| `reliability` | System behavior under restart, overload and multiple instances: shutdown draining, truthful health checks, backpressure, job leasing/checkpoints, startup fragility, mixed-version deploys | `error-handling` (per-call timeouts, retries, fallbacks) |
-| `privacy` | Personal/sensitive data: operational exposure, third-party minimization, API over-exposure, retention, erasure reach, real data in fixtures — under the project's documented sharing model | `security` (authz, injection) |
-| `cost-efficiency` | Metered spend: repeated paid/model calls, unrequested provider work, retry multiplication, unbounded cloud scans, storage growth, over-provisioning, egress | `performance` (latency, throughput) |
-
-All five default to file-issues. `infrastructure` is gated on deployment
-configuration being present; the others apply to any repository and report
-`not-applicable` when they do not. The same pass broadened five existing
-prompts for services: `security` (tenant isolation, SSRF, unsafe
-deserialization), `performance` (query plans, streaming, batch shape, pools,
-partition pruning, cold start), `api-contract` (framework-neutral; spec drift,
-breaking changes, idempotency keys, pagination bounds), `observability`
-(correlation, alertable metrics, truthful health, audit trails) and
-`data-safety` (backup restorability, bulk/backfill safety, retention reach).
-
-`upgrade-rehearsal` is `data-safety`'s executed counterpart: it builds scratch
-installs from migration-test fixture shapes, runs the migration runner and a
-backup restore against them, and boots the result, so a failure only an
-executed path shows (#6182, #12044, #12046, #12049) is caught without touching
-live data. On a host with Postgres it also round-trips the database: backup,
-then `restorePostgres` into a second throwaway `portos_rehearsal_<id>_test`
-database made and dropped by `scripts/rehearsal-scratch-db.js` (#12906); with
-no reachable Postgres it falls back to the file path and reports Postgres as
-uncovered.
-
-`over-engineering` is the removal counterpart of the proportionality check every
-audit carries: other lanes may not propose a new validation layer, archive,
-ledger, retry or recovery workflow, or slower process without a measured harm,
-while this lane hunts the machinery already added — verification of state the
-code host or CI system already owns, archives and retry layers with no reachable
-failure, guards that add CI or local gate time without catching a real
-regression, and docs that mandate such processes. Findings are removals or
-simplifications with measured cost (CI minutes, agent turnaround, local gate
-time, maintenance), plus corrected instruction text. It names no single code
-host or platform, defaults to file-issues, and applies to any repository.
-`simplify` owns code that nothing runs and copy-paste duplication.
-
-Two gap lenses cover defects every page-walking and code-shape audit reads as
-intentional or never reaches:
-
-| Category | Owns | Distinct from |
-| --- | --- | --- |
-| `feature-completeness` | Work started and never finished: stubs and 501s reachable from the UI, permanently disabled or "coming soon" controls, UI/doc promises the code does not keep, settings nothing reads, capabilities with no entry point, server events nobody hears, deferred work with no live tracker item. Decides finish, hide, or remove | `simplify` (code with no user meaning), `ui-bugs` (finished controls that fail) |
-| `workflow-recovery` | Multi-step workflows judged from the server's in-progress states: a visible resume/cancel/reattach exit after a failed follow-up step or a reload, busy refusals that carry the holder's id, waits that time out, duplicate-preventing markers kept on the server | `ui-bugs` (one click on a fresh page), `error-handling` (per-call failures), `reliability` (process restart) |
-
-Both default to file-issues and apply to any repository. Deterministic
-contract breaks in untyped client code (a call to a member the imported module
-lacks, a test mock defining members the real module lacks, a browser
-`confirm()`) are not left to an audit: `client/src/test/guards/ui/moduleContractConventions.test.js`
-fails CI on them.
 Real-user product outcomes such as retention or satisfaction cannot be inferred
 reliably from a source audit and are not fabricated into this codebase score.
 A future distinct category must register both its scheduled prompt and a
@@ -347,7 +289,7 @@ weekly schedule form despite its skip reason is saved with
 lane runs it; the flag is cleared when a later plan finds the check applies.
 
 **When.** The selection is spread across the week as evenly as it allows — the
-30 shipped checks become five slots a day, filled 5,5,4,4,4,4,4 so no day is
+16 shipped domains use up to three slots a day so no day is
 left empty — ordered so each one follows the audits `AUDIT_SUGGESTED_AFTER` names
 as its predecessors, and laid out in clock order within each day so that sequence
 survives. Asking for more checks per day uses fewer days; asking for fewer than
@@ -359,15 +301,12 @@ recheck cadence, and the app's own cron overrides — where a per-app cadence
 REPLACES the global one, as `shouldRunTask` reads it), pads each by an hour before
 and two after, and places slots in the free cells nearest an even spacing. That
 is what keeps an audit out of a 03:30 nightly release window. The planner
-excludes the cadence it is about to rewrite, including legacy audits covered
-by the selected domains. A window cannot
+excludes the audit cadence it is about to rewrite. A window cannot
 wrap past midnight; asking for one is reported rather than silently collapsed.
 
 **Delivery and the claim drain.** Each check either files issues or implements the
 fix (`taskMetadata.fileIssues`). The form defaults to **each check's own catalog
-default** — 11 audits ship `defaultFileIssues: false`, and a form-wide default
-would silently contradict every other dispatch path — with a form-wide override
-and a per-check override above it. When at least one check files issues, one claim
+default**, with a form-wide override and a per-check override above it. When at least one check files issues, one claim
 job — `claim-work` by default, which routes to whichever tracker the app resolves
 to — is scheduled a few hours after each check as a single daily cron, so the
 issues an audit files get worked before the next audit runs. The planner prefers
@@ -381,9 +320,7 @@ cron shape this planner emits, so a claim cadence set by hand survives).
 
 Nothing is written until **Apply**, which is also the whole picture: the selected
 checks are enabled with their planned cron and delivery mode, and unselected
-domains are disabled with their stale crons cleared. Apply also disables the
-enabled legacy members of each domain that receives a slot and clears their
-crons. Legacy audits that an older client explicitly selects still receive
-their own slots. Endpoints: `GET /api/apps/:id/quality-schedule`,
+domains are disabled with their stale crons cleared. Requests from older
+clients resolve to the matching domain and share one slot. Endpoints: `GET /api/apps/:id/quality-schedule`,
 `POST /api/apps/:id/quality-schedule/preview` (read-only re-plan), and
 `POST /api/apps/:id/quality-schedule/apply`.

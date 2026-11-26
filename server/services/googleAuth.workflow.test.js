@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { join } from 'node:path';
 
@@ -92,9 +93,9 @@ describe('Google OAuth deadline through message workflows', () => {
     ownedPromises.push(refreshError);
     const firstTokenSignal = await tokenStarted.promise;
     const syncStarted = Promise.withResolvers();
-    const sync = syncAccount(fixture.account.id, { emit: event => {
+    const sync = syncAccount(fixture.account.id, recordingOperatorIo(event => {
       if (event === 'messages:sync:started') syncStarted.resolve();
-    } });
+    }));
     ownedPromises.push(sync);
     await syncStarted.promise;
     const send = sendGmail(fixture.account, { id: 'example-draft', to: ['alice@example.com'] });

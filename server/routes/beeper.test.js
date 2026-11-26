@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -672,7 +673,7 @@ describe('GET /api/beeper/conversations/:id and its messages', () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const app = buildApp();
-      app.set('io', { emit });
+      app.set('io', recordingOperatorIo(emit));
       const res = await request(app).get(`/api/beeper/conversations/${CONV_ID}`);
       expect(res.status).toBe(404);
       // Still reaches the error broadcast — item 1's envelope/broadcast

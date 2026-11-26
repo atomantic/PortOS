@@ -119,16 +119,16 @@ it.each(['draft', 'inherit', undefined])('carries the browser delivery choice %s
 
 describe('manual maintenance run', () => {
   it('runs a check the user chose by name even where it does not apply', async () => {
-    state.inapplicable = { 'mobile-responsive': 'no user interface found in this repository' };
-    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['mobile-responsive'], explicitCheck: true });
+    state.inapplicable = { 'design-usability': 'no user interface found in this repository' };
+    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['design-usability'], explicitCheck: true });
     expect(run.steps[0].overrides.params).toMatchObject({ runInapplicableAudit: true });
-    expect(dispatchedTypes()).toEqual(['mobile-responsive']);
+    expect(dispatchedTypes()).toEqual(['design-usability']);
   });
   // The regression: a refused request would leave the step pending, so the run
   // re-dispatched an audit that could never apply on every evaluation.
   it('completes an inapplicable audit as skipped without dispatching it, then moves on', async () => {
-    state.inapplicable = { 'mobile-responsive': 'no user interface found in this repository' };
-    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['mobile-responsive', 'security'] });
+    state.inapplicable = { 'design-usability': 'no user interface found in this repository' };
+    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['design-usability', 'security'] });
     expect(dispatchedTypes()).toEqual(['security']);
     const stored = await getMaintenanceRun(run.id);
     expect(stored.completed[run.steps[0].id]).toBeTruthy();
@@ -141,15 +141,15 @@ describe('manual maintenance run', () => {
   });
 
   it.each(['file-issues', 'fix'])('runs only selected quality checks in %s mode with pinned overrides', async (mode) => {
-    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', mode, taskTypes: ['security', 'documentation'] });
-    expect(run.steps.map(step => step.taskRef.taskType)).toEqual(['security', 'documentation']);
+    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', mode, taskTypes: ['security', 'documentation-content'] });
+    expect(run.steps.map(step => step.taskRef.taskType)).toEqual(['security', 'documentation-content']);
     for (const step of run.steps) {
       expect(step.drain).toBe(false);
       expect(step.overrides).toMatchObject({ providerId: 'codex', model: 'gpt-5', effort: 'high', params: { fileIssues: mode === 'file-issues' } });
     }
     await __onMaintenanceAgentCompleted(agentFor(run, 0));
     await __onMaintenanceAgentCompleted(agentFor(run, 1));
-    expect(dispatchedTypes()).toEqual(['security', 'documentation']);
+    expect(dispatchedTypes()).toEqual(['security', 'documentation-content']);
     expect((await getMaintenanceRun(run.id)).status).toBe('completed');
   });
 
@@ -177,25 +177,25 @@ describe('manual maintenance run', () => {
 
   it('walks the whole ladder to completion on agent completions and drain probes, never touching the burn plan', async () => {
     const { run, result } = await start();
-    expect(result).toMatchObject({ dispatched: true, taskType: 'better-structural-drift' });
+    expect(result).toMatchObject({ dispatched: true, taskType: 'architecture-maintainability' });
     expect(run).toMatchObject({ status: 'running', familyId: 'codex', active: { stepId: run.steps[0].id, requestId: 'demand-1' } });
     expect(run.steps.map((step) => step.taskRef.taskType)).toEqual(MAINTENANCE_SEQUENCE_TYPES);
     expect(invokeQuotaBurnStep).toHaveBeenCalledWith(expect.objectContaining({
       maintenanceRunId: run.id, family: { id: 'codex' },
-      step: expect.objectContaining({ runOnce: true, taskRef: { kind: 'builtin', taskType: 'better-structural-drift', appId: 'app-1' }, overrides: { providerId: 'codex', model: 'gpt-5', effort: 'high', params: { fileIssues: true } } }),
+      step: expect.objectContaining({ runOnce: true, taskRef: { kind: 'builtin', taskType: 'architecture-maintainability', appId: 'app-1' }, overrides: { providerId: 'codex', model: 'gpt-5', effort: 'high', params: { fileIssues: true } } }),
     }));
 
     // The audit finishes → the drain is probed → the backlog is actionable → a claim goes out.
     await __onMaintenanceAgentCompleted(agentFor(run, 0));
-    expect(dispatchedTypes()).toEqual(['better-structural-drift', 'claim-issue']);
+    expect(dispatchedTypes()).toEqual(['architecture-maintainability', 'claim-issue']);
     expect((await getMaintenanceRun(run.id)).completed).toHaveProperty(run.steps[0].id);
     // The claim finishes with issues left → the drain repeats, ignoring the task that just finished.
     await __onMaintenanceAgentCompleted(agentFor(run, 1));
-    expect(dispatchedTypes()).toEqual(['better-structural-drift', 'claim-issue', 'claim-issue']);
+    expect(dispatchedTypes()).toEqual(['architecture-maintainability', 'claim-issue', 'claim-issue']);
     // Backlog empty → the drain is done and the next audit goes out in the same evaluation.
     state.probe = { drained: true };
     await __onMaintenanceAgentCompleted(agentFor(run, 1));
-    expect(dispatchedTypes().at(-1)).toBe('simplify');
+    expect(dispatchedTypes().at(-1)).toBe('feature-completeness');
     expect((await getMaintenanceRun(run.id)).completed).toHaveProperty(run.steps[1].id);
 
     // Finish every remaining audit; every drain reports empty.
@@ -209,7 +209,7 @@ describe('manual maintenance run', () => {
 
   it('holds on its own queued, running or blocked work and on a failed audit, then advances once the retried task succeeds', async () => {
     const { run } = await start();
-    state.requests = [{ id: 'demand-1', taskType: 'better-structural-drift', burn: { maintenanceRunId: run.id } }];
+    state.requests = [{ id: 'demand-1', taskType: 'architecture-maintainability', burn: { maintenanceRunId: run.id } }];
     expect(await evaluateMaintenanceRun(run.id)).toMatchObject({ dispatched: false, reason: expect.stringContaining('demand-1') });
     state.requests = [];
     state.tasks = [{ id: 'task-0', status: 'in_progress', metadata: { quotaBurnFamily: 'codex', quotaBurnMaintenanceRunId: run.id } }];
@@ -247,7 +247,7 @@ describe('manual maintenance run', () => {
       state.tasks = [{ ...state.tasks[0], status: 'completed', metadata: { ...state.tasks[0].metadata, resolution: 'auto-expired' } }];
     }, 'expired after failing'],
   ])('stops instead of re-dispatching when the failed step task is %s, and reruns only on an explicit resume', async (_case, dismiss, how) => {
-    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['copy'], explicitCheck: true });
+    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['documentation-content'], explicitCheck: true });
     await __onMaintenanceAgentSpawned(agentFor(run, 0));
     state.tasks = [{ id: 'task-0', status: 'blocked', metadata: { quotaBurnFamily: 'codex', quotaBurnMaintenanceRunId: run.id } }];
     await __onMaintenanceAgentCompleted(agentFor(run, 0, false));
@@ -258,29 +258,29 @@ describe('manual maintenance run', () => {
     await __retryMaintenanceRuns();
     expect(await getMaintenanceRun(run.id)).toMatchObject({
       status: 'stopped', active: null, finishedAt: expect.any(String),
-      reason: `stopped: the copy task task-0 ${how} — start the check again to rerun it`,
+      reason: `stopped: the documentation-content task task-0 ${how} — start the check again to rerun it`,
     });
     expect(state.invoked).toHaveLength(1);
 
     const { run: resumed, result } = await resumeMaintenanceRun(run.id);
     expect(resumed.status).toBe('running');
-    expect(result).toMatchObject({ dispatched: true, taskType: 'copy' });
+    expect(result).toMatchObject({ dispatched: true, taskType: 'documentation-content' });
     expect(state.invoked).toHaveLength(2);
   });
 
   // Before any agent spawns, only the accepted handoff names the step's task.
   it('stops when the accepted step task is deleted before an agent ever picked it up', async () => {
     const { getOnDemandHandoffs } = await import('./onDemandHandoff.js');
-    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['copy'], explicitCheck: true });
+    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['documentation-content'], explicitCheck: true });
     getOnDemandHandoffs.mockResolvedValue({ 'demand-1': { request: { id: 'demand-1', burn: { maintenanceRunId: run.id } }, status: 'accepted', taskId: 'task-0', claimedAt: new Date().toISOString() } });
     await __retryMaintenanceRuns();
-    expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'stopped', reason: expect.stringContaining('copy task task-0 was deleted') });
+    expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'stopped', reason: expect.stringContaining('documentation-content task task-0 was deleted') });
     expect(state.invoked).toHaveLength(1);
     getOnDemandHandoffs.mockResolvedValue({});
   });
 
   it('does not mistake a step task that aged out of the working set for a deleted one', async () => {
-    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['copy'], explicitCheck: true });
+    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['documentation-content'], explicitCheck: true });
     await __onMaintenanceAgentSpawned(agentFor(run, 0));
     state.history = [{ id: 'task-0', status: 'completed', metadata: { quotaBurnMaintenanceRunId: run.id } }];
     await __retryMaintenanceRuns();
@@ -356,7 +356,7 @@ describe('manual maintenance run', () => {
     await Promise.all([sweep, completion]);
     const afterCompletion = await getMaintenanceRun(run.id);
     expect(afterCompletion.completed).toHaveProperty(run.steps[0].id);
-    expect(dispatchedTypes()).toEqual(['better-structural-drift', 'claim-issue']);
+    expect(dispatchedTypes()).toEqual(['architecture-maintainability', 'claim-issue']);
     // A Stop clicked while a dispatch is in flight sticks: the walk cannot write
     // the snapshot status back over it.
     state.tasks = [];
@@ -397,7 +397,7 @@ describe('manual maintenance run', () => {
   describe('a provider outside every subscription family', () => {
     it('starts a run and dispatches it unfamilied, crediting no window', async () => {
       const { run, result } = await startMaintenanceRun({ appId: 'app-1', providerId: 'opencode-tui', model: 'local-model' });
-      expect(result).toMatchObject({ dispatched: true, taskType: 'better-structural-drift' });
+      expect(result).toMatchObject({ dispatched: true, taskType: 'architecture-maintainability' });
       expect(run).toMatchObject({ status: 'running', familyId: null, claimFamilyId: null });
       expect(state.invoked.at(-1)).toMatchObject({
         maintenanceRunId: run.id,
@@ -474,7 +474,7 @@ it('files findings consecutively and finishes without claiming when claims are d
   }
   expect(dispatchedTypes()).toEqual(MAINTENANCE_TASK_ORDER);
   expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'completed' });
-  expect((await listMaintenanceRuns())[0].steps).toHaveLength(7);
+  expect((await listMaintenanceRuns())[0].steps).toHaveLength(6);
 });
 
 // A different subscription family must survive storage and dispatch, including
@@ -501,8 +501,8 @@ it('dispatches independent quality runs while another run is pending and resumes
   const { run: ladder } = await start();
   state.requests = [{ id: 'demand-1', burn: { maintenanceRunId: ladder.id } }];
   const { run: security } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', taskTypes: ['security'] });
-  const { run: performance } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', taskTypes: ['performance'], mode: 'fix' });
-  expect(dispatchedTypes()).toEqual(['better-structural-drift', 'security', 'performance']);
+  const { run: performance } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', taskTypes: ['performance-efficiency'], mode: 'fix' });
+  expect(dispatchedTypes()).toEqual(['architecture-maintainability', 'security', 'performance-efficiency']);
   await stopMaintenanceRun(security.id);
   expect((await getMaintenanceRun(performance.id)).status).toBe('running');
   expect((await resumeMaintenanceRun(security.id)).run.status).toBe('running');
@@ -513,14 +513,14 @@ it('dispatches independent quality runs while another run is pending and resumes
 });
 
 it('preserves draft delivery across persisted resume, provider edits and step completion', async () => {
-  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-6-astra', effort: 'medium', mode: 'fix', prCompletion: 'draft', taskTypes: ['security', 'documentation'] });
+  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-6-astra', effort: 'medium', mode: 'fix', prCompletion: 'draft', taskTypes: ['security', 'documentation-content'] });
   expect((await getMaintenanceRun(run.id)).prCompletion).toBe('draft');
   await stopMaintenanceRun(run.id);
   await resumeMaintenanceRun(run.id);
   await updateMaintenanceStep(run.id, run.steps[1].id, { providerId: 'codex', model: 'gpt-6-astra', effort: 'medium' });
   await __onMaintenanceAgentCompleted(agentFor(run, 0));
   expect(state.invoked.at(-1).step.overrides).toMatchObject({ model: 'gpt-6-astra', effort: 'medium', params: { fileIssues: false, useWorktree: true, openPR: true, prCompletion: 'draft' } });
-  expect((await getMaintenanceRun(run.id)).steps.map(s => s.taskRef.taskType)).toEqual(['security', 'documentation']);
+  expect((await getMaintenanceRun(run.id)).steps.map(s => s.taskRef.taskType)).toEqual(['security', 'documentation-content']);
 });
 
 

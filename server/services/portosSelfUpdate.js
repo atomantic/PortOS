@@ -1,4 +1,5 @@
 /** Shared authenticated launcher; the script supervisor owns deferred admission. */
+import { emitToOperatorsOn } from './socketIo.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { launchUpdate } from './updateExecutor.js';
@@ -113,7 +114,7 @@ async function startSelfUpdate({
 
   const emit = (step, stepStatus, message) => {
     if (io) {
-      io.emit('portos:update:step', { step, status: stepStatus, message, timestamp: Date.now() });
+      emitToOperatorsOn(io, 'portos:update:step', { step, status: stepStatus, message, timestamp: Date.now() });
     }
     onStep?.(step, stepStatus, message);
   };
@@ -122,7 +123,7 @@ async function startSelfUpdate({
 
   const reportFailure = (err) => {
     console.error(`❌ Update launch failed for ${tag}: ${err.message}`);
-    io?.emit('portos:update:error', { message: err.message, step: 'unknown' });
+    emitToOperatorsOn(io, 'portos:update:error', { message: err.message, step: 'unknown' });
   };
   const launch = await launchUpdate(tag, emit, { forceCleanWorkspaces, ...(automatic ? { automatic } : {}), ...(acknowledgeInterruption ? { acknowledgeInterruption } : {}), ...(acknowledgePersistentMindImageBackup ? { acknowledgePersistentMindImageBackup } : {}), ...(peerExecution ? { peerExecution } : {}) }).catch(err => {
     reportFailure(err);
@@ -130,7 +131,7 @@ async function startSelfUpdate({
   });
   if (!launch.started) {
     const result = launch.result;
-    io?.emit('portos:update:error', { message: result.errorMessage ?? 'Update failed', step: result.failedStep ?? 'unknown' });
+    emitToOperatorsOn(io, 'portos:update:error', { message: result.errorMessage ?? 'Update failed', step: result.failedStep ?? 'unknown' });
     throw new ServerError(result.errorMessage || 'PortOS update failed to launch',
       { status: 409, code: result.errorCode || 'UPDATE_LAUNCH_FAILED' });
   }
@@ -143,13 +144,13 @@ async function startSelfUpdate({
     // The client polls /api/system/health instead of relying on it.
     if (!io) return;
     if (result.success) {
-      io.emit('portos:update:complete', {
+      emitToOperatorsOn(io, 'portos:update:complete', {
         success: true,
         newVersion: result.version || tag.replace(/^v/, ''),
         versionKnown: !!result.version,
       });
     } else {
-      io.emit('portos:update:error', { message: result.errorMessage ?? 'Update failed', step: result.failedStep ?? 'unknown', ...(result.errorCode ? { code: result.errorCode } : {}) });
+      emitToOperatorsOn(io, 'portos:update:error', { message: result.errorMessage ?? 'Update failed', step: result.failedStep ?? 'unknown', ...(result.errorCode ? { code: result.errorCode } : {}) });
     }
   }).catch(reportFailure);
 

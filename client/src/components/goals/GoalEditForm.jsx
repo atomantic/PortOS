@@ -7,7 +7,7 @@ import {
 import Pill from '../ui/Pill';
 import { FormField } from '../ui/FormField';
 import { CATEGORY_CONFIG, HORIZON_OPTIONS, GOAL_TYPE_OPTIONS, MAX_TAGS } from './goalConstants';
-import { FEATURE_AREAS, FEATURE_AREA_IDS, getGoalFeatureAreas } from '../../lib/goalFeatureMap';
+import { GOAL_FEATURE_AREAS, FEATURE_AREA_IDS, getGoalFeatureAreas } from '../../lib/goalFeatureMap';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 
 // Resolve a feature-area icon NAME (kept as a string in goalFeatureMap.js so
@@ -37,14 +37,14 @@ export default function GoalEditForm({
       && Array.isArray(features)
       && features.some((feature) => feature?.id === featureId && feature.enabled === true))
   );
-  const isAreaEnabled = (id) => isFeatureAvailable(FEATURE_AREAS[id]?.feature);
+  const isAreaEnabled = (id) => isFeatureAvailable(GOAL_FEATURE_AREAS[id]?.feature);
   // Gate the greyed category-default hint on whether any LOCALLY-KNOWN area is
   // selected — not on raw array length. A version-skewed goal can carry only
   // forward-unknown ids (from a newer peer); those render no visible button and
   // getGoalFeatureAreas filters them, so the Daily Driver still falls back to the
   // category default. Keying on length would hide the hint in that case and lie
   // about the actual behavior (issue #2679).
-  const hasKnownSelection = selectedAreas.some(id => FEATURE_AREAS[id] && isAreaEnabled(id));
+  const hasKnownSelection = selectedAreas.some(id => GOAL_FEATURE_AREAS[id] && isAreaEnabled(id));
   // Category default shown (greyed) when no known override is set, so the user
   // sees which areas the Daily Driver will deep-link to by default.
   const categoryDefaultLabels = getGoalFeatureAreas({ category: form.category }, isFeatureAvailable)
@@ -221,7 +221,7 @@ export default function GoalEditForm({
         </p>
         <div role="group" aria-labelledby="feature-areas-label" className="flex flex-wrap gap-1 mt-1">
           {FEATURE_AREA_IDS.filter(isAreaEnabled).map(id => {
-            const area = FEATURE_AREAS[id];
+            const area = GOAL_FEATURE_AREAS[id];
             const Icon = AREA_ICONS[area.icon] || Target;
             const active = selectedAreas.includes(id);
             return (

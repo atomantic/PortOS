@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { EventEmitter } from 'events';
 import { resolve } from 'path';
 import express from 'express';
@@ -24,7 +25,8 @@ vi.mock('../services/history.js', () => ({
 
 // Command output reaches only subscribed sockets (#12019); the route never
 // touches the global io instance.
-vi.mock('../services/socketIo.js', () => ({
+vi.mock('../services/socketIo.js', async (importOriginal) => ({
+  ...await importOriginal(),
   broadcastToCommandSubscribers: vi.fn(),
 }));
 
@@ -92,7 +94,7 @@ function createChildProcess() {
   return child;
 }
 
-function createApp(io = { emit: vi.fn() }, { remoteAddress, withAuthGate = true } = {}) {
+function createApp(io = recordingOperatorIo(), { remoteAddress, withAuthGate = true } = {}) {
   const app = express();
   app.set('io', io);
   app.use(express.json());

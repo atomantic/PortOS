@@ -1,3 +1,4 @@
+import { emitToOperatorsOn } from '../services/socketIo.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -247,7 +248,7 @@ router.post('/node-runtime/startup', asyncHandler(async (req, res) => {
   if (!fixed) {
     throw new ServerError('Start-on-boot can\'t be updated from PortOS here. Run the command shown instead.', { status: 409, code: 'STARTUP_NOT_FIXABLE' });
   }
-  req.app.get('io')?.emit('portos:node-runtime:changed', { reason: 'startup' });
+  emitToOperatorsOn(req.app.get('io'), 'portos:node-runtime:changed', { reason: 'startup' });
   runtimeUpdateEvents.emit('changed');
   res.json({ fixed });
 }));

@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 
 import { readFile, writeFile, rm } from 'fs/promises';
@@ -304,7 +305,7 @@ describe('calendar:sync:started is always paired with a terminal event', () => {
   it('emits completed with status skipped when the Outlook token is unavailable', async () => {
     getAccount.mockResolvedValue({ id: ACCOUNT_ID, name: 'Example Account', enabled: true, type: 'outlook-calendar' });
     syncOutlookCalendarApi.mockResolvedValue(null);
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     expect(await syncAccount(ACCOUNT_ID, io)).toMatchObject({ status: 'skipped' });
     expect(io.emit).toHaveBeenCalledWith('calendar:sync:completed', {
       accountId: ACCOUNT_ID, newEvents: 0, pruned: 0, status: 'skipped',
@@ -314,7 +315,7 @@ describe('calendar:sync:started is always paired with a terminal event', () => {
 
   it('emits completed with status push-only for google-calendar accounts', async () => {
     getAccount.mockResolvedValue({ id: ACCOUNT_ID, name: 'Example Account', enabled: true, type: 'google-calendar' });
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     expect(await syncAccount(ACCOUNT_ID, io)).toMatchObject({ status: 'push-only' });
     expect(io.emit).toHaveBeenCalledWith('calendar:sync:completed', {
       accountId: ACCOUNT_ID, newEvents: 0, pruned: 0, status: 'push-only',

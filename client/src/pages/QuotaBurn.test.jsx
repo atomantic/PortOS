@@ -1173,5 +1173,5 @@ it('saves and enables the maintenance sequence before starting, and never runs a
   const patch = saveQuotaBurn.mock.calls.at(-1)[0];
   expect(patch.enabled).toBe(true);
   expect(patch.families.grok).toMatchObject({ enabled: true, sequence: true });
-  expect(patch.families.grok.jobs).toHaveLength(13);
+  expect(patch.families.grok.jobs).toHaveLength(11);
 });

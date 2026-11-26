@@ -3,6 +3,7 @@
  * Uses the shared Google OAuth client from googleAuth.js (same credentials as Calendar).
  */
 
+import { emitToOperatorsOn } from './socketIo.js';
 import { messageLogError } from '../lib/messageLogError.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import crypto from 'crypto';
@@ -312,7 +313,7 @@ export async function syncGmail(account, cache, io, options = {}) {
       }
       return { messages: listed, nextPageToken: data.nextPageToken || null };
     },
-    { onProgress: (current) => io?.emit('messages:sync:progress', { accountId: account.id, current, total: totalCap }) },
+    { onProgress: (current) => emitToOperatorsOn(io, 'messages:sync:progress', { accountId: account.id, current, total: totalCap }) },
   );
   // Sent-coverage fail-closed signal (#2820): the sent pass hit its ceiling with
   // more pages remaining, so an older reply may be un-ingested this scan. Reported
@@ -330,7 +331,7 @@ export async function syncGmail(account, cache, io, options = {}) {
   let detailFetchFailures = 0;
 
   for (let i = 0; i < messageIds.length; i += FETCH_BATCH_SIZE) {
-    io?.emit('messages:sync:progress', { accountId: account.id, current: i, total: messageIds.length });
+    emitToOperatorsOn(io, 'messages:sync:progress', { accountId: account.id, current: i, total: messageIds.length });
 
     const batch = messageIds.slice(i, i + FETCH_BATCH_SIZE);
     const results = await Promise.all(batch.map(({ id: gmailId }) =>

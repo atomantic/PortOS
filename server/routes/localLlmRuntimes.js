@@ -28,6 +28,7 @@ import { getSpecDecodePresetStatus, downloadSpecDecodeModel, cancelSpecDecodeMod
 import { SPEC_TYPE_SUGGESTIONS } from '../lib/specDecodePresets.js'
 import { resetProviderReadinessCache } from '../services/provider/providerReadiness.js'
 import { syncRuntimeProviderModels } from '../services/localRuntimeProviderSync.js'
+import { emitToOperatorsOn } from '../services/socketIo.js'
 import { requestHasHostControl } from '../services/authGate.js'
 import { localLlmProgress as emitter } from './localLlmProgress.js'
 
@@ -146,7 +147,7 @@ const installRoute = (runtime) => asyncHandler(async (req, res) => {
   const io = req.app.get('io')
   const emit = emitter(req)
   // llama.cpp forwards the full package-manager frame, including structured data.
-  const onProgress = label ? ({ event, message }) => emit(event, message) : (frame) => io?.emit('localLlm:progress', frame)
+  const onProgress = label ? ({ event, message }) => emit(event, message) : (frame) => emitToOperatorsOn(io, 'localLlm:progress', frame)
   const result = await install({ onProgress }).catch((err) => {
     emit('error', `${installError}: ${err.message}`)
     throw err
@@ -262,7 +263,7 @@ router.post('/llama-server/download-model', asyncHandler(async (req, res) => {
   const result = await downloadSpecDecodeModel({
     presetId,
     role,
-    onProgress: (frame) => io?.emit('llamaServer:download', frame),
+    onProgress: (frame) => emitToOperatorsOn(io, 'llamaServer:download', frame),
   })
   res.json(result)
 }))
@@ -292,7 +293,7 @@ router.post('/llama-server/download-model/remove', asyncHandler(async (req, res)
 // launch configuration. An externally-started process is left alone.
 router.post('/llama-server/upgrade', asyncHandler(async (req, res) => {
   const io = req.app.get('io')
-  const onProgress = (data) => io?.emit('localLlm:progress', data)
+  const onProgress = (data) => emitToOperatorsOn(io, 'localLlm:progress', data)
   const result = await upgradeLlamaServer({ onProgress }).catch((err) => {
     onProgress({ event: 'error', message: `llama.cpp update failed: ${err.message}` })
     throw err
@@ -325,7 +326,7 @@ router.get('/mtplx/models/search', asyncHandler(async (req, res) => {
 router.post('/mtplx/models/pull', asyncHandler(async (req, res) => {
   const { model } = validateRequest(localLlmMtplxPullSchema, req.body)
   const io = req.app.get('io')
-  const result = await pullMtplxModel({ model, onProgress: (frame) => io?.emit('mtplx:download', frame) })
+  const result = await pullMtplxModel({ model, onProgress: (frame) => emitToOperatorsOn(io, 'mtplx:download', frame) })
   if (!result.success) {
     throw new ServerError(result.error || 'MTPLX checkpoint pull failed', { status: 502, code: 'MTPLX_PULL_FAILED' })
   }
@@ -354,7 +355,7 @@ router.post('/mtplx/models/remove', asyncHandler(async (req, res) => {
 router.post('/slotstream/models/download', asyncHandler(async (req, res) => {
   const { model } = validateRequest(localLlmSlotstreamDownloadSchema, req.body)
   const io = req.app.get('io')
-  const result = await downloadSlotstreamModel({ model, onProgress: (frame) => io?.emit('slotstream:download', frame) })
+  const result = await downloadSlotstreamModel({ model, onProgress: (frame) => emitToOperatorsOn(io, 'slotstream:download', frame) })
   if (result.cancelled === true) {
     return res.json({ success: false, cancelled: true, model: result.model })
   }

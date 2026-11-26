@@ -1,3 +1,4 @@
+import { emitToOperatorsOn } from './socketIo.js';
 import { readOutlookMessageRow, browserSummaryId, browserDetailIdentities, messageIngestionIdentity } from '../lib/messageBrowserIdentity.js';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
@@ -106,7 +107,7 @@ export async function syncPlaywright(account, cache, io, options = {}) {
   // Find the provider page in CDP browser
   const page = await findOrOpenPage(targetUrl).catch(() => null);
   if (!page) {
-    io?.emit('messages:sync:progress', { accountId: account.id, current: 0, total: 0 });
+    emitToOperatorsOn(io, 'messages:sync:progress', { accountId: account.id, current: 0, total: 0 });
     console.log(`📧 No CDP browser available — launch browser first`);
     return { messages: [], status: 'no-browser' };
   }
@@ -114,7 +115,7 @@ export async function syncPlaywright(account, cache, io, options = {}) {
   // Check for auth/login page
   if (isAuthPage(page)) {
     console.log(`📧 Auth required for ${account.type} — login page detected`);
-    io?.emit('messages:sync:auth-required', { accountId: account.id });
+    emitToOperatorsOn(io, 'messages:sync:auth-required', { accountId: account.id });
     return { messages: [], status: 'auth-required' };
   }
 
@@ -132,7 +133,7 @@ export async function syncPlaywright(account, cache, io, options = {}) {
   }
   if (!extracted || !Array.isArray(extracted)) {
     console.log(`📧 No messages extracted from ${account.type} page`);
-    io?.emit('messages:sync:progress', { accountId: account.id, current: 0, total: 0 });
+    emitToOperatorsOn(io, 'messages:sync:progress', { accountId: account.id, current: 0, total: 0 });
     return { messages: [], status: 'extraction-failed' };
   }
 
@@ -173,7 +174,7 @@ export async function syncPlaywright(account, cache, io, options = {}) {
   for (let i = 0; i < extracted.length; i++) {
     const msg = extracted[i];
     const extId = browserSummaryId(msg.date || '', msg.from || '', msg.subject || '');
-    io?.emit('messages:sync:progress', { accountId: account.id, current: i + 1, total: extracted.length });
+    emitToOperatorsOn(io, 'messages:sync:progress', { accountId: account.id, current: i + 1, total: extracted.length });
 
     // Skip detail fetch if we already have full body cached
     const cached = fullMessages.filter(m => msg.providerRowId

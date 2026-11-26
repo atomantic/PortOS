@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { EventEmitter } from 'node:events';
 import { registerModelObservationSocket } from '../services/modelObservation.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -235,7 +236,7 @@ vi.mock('../services/settings.js', () => ({
 function makeApp(auth) {
   const app = express();
   app.use(express.json({ limit: '3mb' }));
-  app.set('io', { emit: vi.fn() });
+  app.set('io', recordingOperatorIo());
   app.use((req, _res, next) => {
     req.portosAuthContext = auth;
     next();
@@ -1232,7 +1233,7 @@ describe('llama-server routes', () => {
     expect(res.status).toBe(400);
   });
 
-  it('ends install progress when llama.cpp installation rejects', async () => {
+  it('ends operator-only install progress when llama.cpp installation rejects', async () => {
     const { installLlamaServer } = await import('../services/llamaServerManager.js');
     const start = { event: 'start', message: 'Installing llama.cpp via Homebrew…' };
     installLlamaServer.mockImplementationOnce(async ({ onProgress }) => {
@@ -1240,11 +1241,15 @@ describe('llama-server routes', () => {
       throw new ServerError('package manager exited', { status: 502 });
     });
     const app = makeApp();
+    const operatorEmit = vi.fn();
+    const broadcast = vi.fn();
+    app.set('io', { ...recordingOperatorIo(operatorEmit), emit: broadcast });
 
     const res = await request(app).post('/api/local-llm/llama-server/install');
 
     expect(res.status).toBe(502);
-    const progressCalls = app.get('io').emit.mock.calls.filter(([event]) => event === 'localLlm:progress');
+    expect(broadcast).not.toHaveBeenCalled();
+    const progressCalls = operatorEmit.mock.calls.filter(([event]) => event === 'localLlm:progress');
     expect(progressCalls).toEqual([
       ['localLlm:progress', start],
       ['localLlm:progress', { event: 'error', message: 'llama.cpp install failed: package manager exited' }],

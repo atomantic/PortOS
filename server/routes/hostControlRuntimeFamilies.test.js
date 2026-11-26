@@ -24,7 +24,6 @@ vi.mock('../services/settings.js', () => ({
 vi.mock('../services/browserService.js', () => ({
   updateConfig: vi.fn(async body => body),
   launchBrowser: vi.fn(async () => ({ running: true })),
-  getConfig: vi.fn(async () => ({})),
 }));
 vi.mock('../services/browserStatus.js', () => ({ getBrowserStatusSnapshot: vi.fn() }));
 vi.mock('../services/harnessActionStream.js', () => ({
@@ -250,7 +249,7 @@ describe('operator authority for browser, harness and local-runtime management',
 
   it('keeps remote status and catalog reads open', async () => {
     const app = await hostControlApp('192.0.2.10', mounts);
-    for (const path of ['/api/browser/config', '/api/harnesses', '/api/local-llm/status', '/api/local-llm/catalog?backend=ollama']) {
+    for (const path of ['/api/harnesses', '/api/local-llm/status', '/api/local-llm/catalog?backend=ollama']) {
       expect((await callRoute(app, ['get', path])).status, path).toBe(200);
     }
     expect(listHarnesses).toHaveBeenCalledExactlyOnceWith({ fresh: false });

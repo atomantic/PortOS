@@ -18,7 +18,7 @@
  */
 
 import { auditDomainFor } from './auditDomains.js';
-import { AUDIT_EXECUTION_PROFILES } from './auditCatalog.js';
+import { AUDIT_DEFINITIONS } from './auditCatalog.js';
 
 export const LANE_HEALTH_WINDOW_DAYS = 60;
 export const LANE_REFILE_WINDOW_DAYS = 30;
@@ -26,8 +26,22 @@ export const LANE_HEALTH_FLAGGED_LIMIT = 10;
 const DAY_MS = 86_400_000;
 const MIN_SHA_PREFIX = 7;
 
+// These historical forge labels still identify findings from retired profiles.
+export const HISTORICAL_LANE_LABELS = {
+  'architecture-maintainability': ['code-quality', 'structural-drift', 'module-hygiene', 'typing'],
+  'code-simplification': ['simplify', 'over-engineering', 'complexity', 'cognitive-load'],
+  'ui-runtime-bugs': ['app-bug', 'ui-bug', 'console', 'ui-lifecycle'],
+  'reliability-error-handling': ['resilience', 'runtime-safety', 'reliability', 'workflow', 'observability'],
+  'data-integrity-safety': ['data-safety', 'data-integrity', 'upgrade-rehearsal'],
+  'test-quality-coverage': ['test-gap', 'test-quality'],
+  'performance-efficiency': ['perf', 'cost'],
+  'infrastructure-environment': ['infrastructure', 'dev-environment'],
+  'design-usability': ['design', 'ux', 'mobile'],
+  'documentation-content': ['docs', 'copy'],
+};
+
 /** The audit lanes as `{ id, label, metricLabel, issueLabel }`, catalog order. */
-export function auditLanes(definitions = AUDIT_EXECUTION_PROFILES) {
+export function auditLanes(definitions = AUDIT_DEFINITIONS) {
   return Object.entries(definitions)
     .filter(([, definition]) => definition?.filing?.metricLabel)
     .map(([id, { label, filing }]) => ({ id, label, metricLabel: filing.metricLabel, issueLabel: filing.issueLabel }));
@@ -45,10 +59,14 @@ function labelNames(labels) {
 /** Lane ids an issue's labels attribute it to; the shared category label yields to a specific lane label. */
 function attributeIssueLanes(issue, lanes = auditLanes()) {
   const labels = new Set(labelNames(issue?.labels));
-  const carried = lanes.filter((lane) => labels.has(lane.metricLabel));
-  return carried
-    .filter((lane) => !carried.some((other) => other !== lane && other.issueLabel === lane.metricLabel && other.metricLabel !== lane.metricLabel))
-    .map((lane) => lane.id);
+  const carried = lanes.flatMap(lane => [lane.metricLabel, ...(HISTORICAL_LANE_LABELS[lane.id] || [])]
+    .filter(label => labels.has(label)).map(label => ({ ...lane, matchedLabel: label })));
+  return [...new Set(carried
+    .filter(lane => !carried.some(other => other.matchedLabel !== lane.matchedLabel
+      && (other.issueLabel === lane.matchedLabel
+        || (other.matchedLabel === 'observability' && lane.matchedLabel === 'code-quality')
+        || (other.matchedLabel === 'copy' && lane.matchedLabel === 'ux'))))
+    .map(lane => lane.id))];
 }
 
 // A repository-relative source path with at least one directory and an
@@ -173,11 +191,7 @@ export function computeLaneHealth({
   const refileMs = refileDays * DAY_MS;
   const byLane = new Map(lanes.map((lane) => [lane.id, []]));
   for (const issue of issues) {
-    const owners = attributeIssueLanes(issue, lanes);
-    // A multi-labelled issue still counts once in its domain. Keep the original
-    // profiles separate for callers running their saved legacy schedules.
-    const reportIds = new Set([...owners, ...owners.map(auditDomainFor)]);
-    for (const id of reportIds) byLane.get(id)?.push(issue);
+    for (const id of attributeIssueLanes(issue, lanes)) byLane.get(id)?.push(issue);
   }
 
   const rows = lanes.map((lane) => {
@@ -261,7 +275,7 @@ export function computeLaneHealth({
     // Newest first, so the agent sees what it most recently got wrong.
     flagged.reverse();
     return { id: lane.id, label: lane.label, metricLabel: lane.metricLabel,
-      ...(auditDomainFor(lane.id) !== lane.id && { legacyAuditDomain: auditDomainFor(lane.id) }), ...counts, flagged: flagged.slice(0, flaggedLimit), flaggedTotal: flagged.length };
+      ...counts, flagged: flagged.slice(0, flaggedLimit), flaggedTotal: flagged.length };
   });
 
   return { windowDays, refileDays, from: new Date(from).toISOString(), to: new Date(now).toISOString(), lanes: rows };
@@ -269,7 +283,7 @@ export function computeLaneHealth({
 
 /** One lane's row, by task type, from a computed report. */
 export function laneHealthFor(report, taskType) {
-  return report?.lanes?.find((lane) => lane.id === taskType) || null;
+  return report?.lanes?.find((lane) => lane.id === auditDomainFor(taskType)) || null;
 }
 
 /** Plain-prose reason for a flagged issue, the same in the prompt block and the UI. */

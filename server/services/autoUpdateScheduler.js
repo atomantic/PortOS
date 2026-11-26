@@ -32,6 +32,7 @@
  * one that can occur is the repair agent in step 4, which is itself switchable.
  */
 
+import { emitToOperatorsOn } from './socketIo.js';
 import { join, resolve } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
@@ -80,7 +81,7 @@ function invalidateStatus() {
   statusTimer = setTimeout(() => {
     statusTimer = null;
     try {
-      ioRef?.emit('portos:auto-update:changed', {});
+      emitToOperatorsOn(ioRef, 'portos:auto-update:changed', {});
     } catch (err) {
       console.error(`❌ Auto-update status notify failed: ${err.message}`);
     }

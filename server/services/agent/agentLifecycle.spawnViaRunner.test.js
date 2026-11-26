@@ -18,11 +18,6 @@
  * for a failure the task did not cause. It now runs the same
  * finalizeAgent → releaseRetryHold chain the TUI `finish()` does, which is
  * pinned at the same seam in agentTuiSpawning.test.js.
- *
- * Lives in its own file because agentLifecycle.test.js deliberately imports no
- * part of the orchestrator graph — it reads the source as a string. Driving the
- * real function needs the leaves mocked, which would change that file's whole
- * character.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -134,7 +129,7 @@ import { getTaskById, updateTask } from '../cos/cosTaskStore.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { handleOrphanedTask } from './agentManagement.js';
-import { runnerAgents } from './agentState.js';
+import { dropRunnerAgent, runnerAgents } from './agentState.js';
 
 const REJECTION = 'Command not allowed: grok. Permitted commands: claude, codex';
 
@@ -496,6 +491,36 @@ describe('spawnViaRunner — credentials in the env delta', () => {
     expect(spawnAgentViaRunner).toHaveBeenCalledWith(expect.objectContaining({
       envVars: expect.objectContaining({ GH_TOKEN: 'workspace-owner-token' }),
     }));
+  });
+
+  it('sends the OpenCode model declaration over the provider env and preserves forge credentials', async () => {
+    const opts = {
+      ...runnerOpts(),
+      model: 'qwen3:32b',
+      provider: {
+        id: 'opencode-ollama', command: 'opencode', ollamaBacked: true,
+        envVars: { API_KEY: 'provider-setting', OPENCODE_CONFIG_CONTENT: '{"permission":"deny"}' },
+      },
+      cliConfig: { command: 'opencode', args: ['--model', 'ollama/qwen3:32b'] },
+    };
+    vi.mocked(resolveForgeTokenEnv).mockResolvedValueOnce({ GH_TOKEN: 'workspace-owner-token', API_KEY: 'forge-default' });
+    vi.mocked(spawnAgentViaRunner).mockResolvedValueOnce({ pid: 4242 });
+
+    try {
+      expect(await spawnViaRunner('agent-1', { id: 'task-1' }, opts)).toBe('agent-1');
+
+      const [request] = vi.mocked(spawnAgentViaRunner).mock.lastCall;
+      expect(request.cliArgs).toEqual(['--model', 'ollama/qwen3:32b']);
+      expect(request.envVars).toMatchObject({
+        GH_TOKEN: 'workspace-owner-token', API_KEY: 'provider-setting', OPENCODE_CONFIG_CONTENT: expect.any(String),
+      });
+      const openCode = JSON.parse(request.envVars.OPENCODE_CONFIG_CONTENT);
+      expect(openCode).toMatchObject({
+        permission: { '*': 'deny' }, provider: { ollama: { models: { 'qwen3:32b': expect.any(Object) } } },
+      });
+    } finally {
+      dropRunnerAgent('agent-1');
+    }
   });
 
   it('uses an explicit provider GH_TOKEN without resolving workspace credentials', async () => {

@@ -226,9 +226,9 @@ it('populates the canonical audit ladder with perpetual drains and refuses incom
   }]));
   const groups = buildQuotaBurnTaskCatalog({ schedule: { tasks } });
   const jobs = maintenanceSequence(groups, 'app1', 'sequence');
-  expect(jobs).toHaveLength(13);
+  expect(jobs).toHaveLength(11);
   expect(jobs.filter(job => !job.drain).map(job => job.taskRef.taskType)).toEqual(MAINTENANCE_TASK_ORDER);
-  expect(jobs.filter(job => job.drain)).toHaveLength(6);
+  expect(jobs.filter(job => job.drain)).toHaveLength(5);
   expect(jobs.every(job => job.runOnce && job.taskRef.appId === 'app1')).toBe(true);
   expect(jobs[0].overrides.params).toEqual({ fileIssues: true });
   expect(jobs.at(-1).overrides.params).toEqual({ fileIssues: false, useWorktree: true, openPR: true });

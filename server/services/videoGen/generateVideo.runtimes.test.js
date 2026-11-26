@@ -712,7 +712,7 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
 
   // Reusable prompt embeddings (#5443). The keying, retention and every
   // degradation path are unit-tested against the runner in
-  // scripts/generate_minimax_h3.test.js; what this pins is that the render
+  // scripts/ml/generate_minimax_h3.test.js; what this pins is that the render
   // boundary WIRES the cache at all, and that it stays on the MLX lane — the
   // diffusers CUDA runner has no such flag and would exit on an unknown one.
   it.each([

@@ -10,6 +10,7 @@
  * Lives in its own file so `./humanActivity.js` can be mocked wholesale without
  * affecting the rest of messageSync.test.js.
  */
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../lib/fileUtils.js', () => ({
@@ -96,7 +97,7 @@ describe('repairActivityAliasParticipants (#2855)', () => {
 // must therefore run first, and the persist must be skipped when it fails.
 describe('syncAccount alias repair/persist ordering (#2855)', () => {
   const ACCT = '22222222-2222-2222-2222-222222222222';
-  const mockIo = { emit: vi.fn() };
+  const mockIo = recordingOperatorIo();
 
   const runSync = async ({ storedAliases, fetchedAliases }) => {
     getAccount.mockResolvedValue({

@@ -789,7 +789,9 @@ jobs:
           npm ci --ignore-scripts --prefix server
 
       - name: Run the Node compatibility contract
-        run: npm run test:fast --prefix server -- ../scripts/checkNodeVersion.test.js ../scripts/node-version-drift.guard.test.js
+        run: |
+          npm run test:fast --prefix server -- ../scripts/checkNodeVersion.test.js
+          npm run test:fast --prefix server -- test/guards/repo.guard.test.js -t node-version-drift
 
       - name: Use the Node 22 security minimum
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

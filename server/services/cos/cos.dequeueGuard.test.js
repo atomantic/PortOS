@@ -6,9 +6,7 @@
  * unhandled rejection, which `setupProcessErrorHandlers` classifies
  * `severity: 'critical'` and broadcasts to every connected browser.
  *
- * This is the behavioural half of the guard (the structural half — "no bare
- * `setImmediate(() => dequeueNextTask())` is ever re-added" — lives in
- * cos.test.js). It drives the REAL listener registered by `init()` with a
+ * This drives the real listener registered by `init()` with a
  * `loadState` that rejects, and asserts each failed cycle is logged and never
  * reaches the process-level unhandled-rejection handler.
  *

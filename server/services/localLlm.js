@@ -1,3 +1,4 @@
+import { emitToOperatorsOn } from './socketIo.js';
 import { localBackendForProvider } from '../lib/modelPinMembership.js'
 import { isLocalInstanceHost } from '../lib/localEndpoint.js'
 import { localModelSafety } from '../lib/localModelSafety.js';
@@ -1251,7 +1252,7 @@ export async function syncLocalProviderModels({ backend, force = false, provider
         return false
       }))))
   const changed = results.some(Boolean)
-  if (changed) providersIo?.emit('providers:changed')
+  if (changed) emitToOperatorsOn(providersIo, 'providers:changed')
   return changed
 }
 

@@ -5,6 +5,7 @@
  * `featureUsageDb.db.test.js` (`npm run test:db`). Instance-feature detectors are stubbed to "no answer" so the suite never probes the host.
  */
 
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import express from 'express';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -29,7 +30,7 @@ const { writeSettingsFile } = bindSettingsFile(tempRoot);
 
 const USAGE_FILE = join(tempRoot, 'feature-usage-days.json');
 const DAY_MS = 24 * 60 * 60 * 1000;
-const io = { emit: vi.fn() };
+const io = recordingOperatorIo();
 
 const buildApp = ({ withIo = false } = {}) => {
   const app = express();

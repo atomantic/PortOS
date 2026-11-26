@@ -240,18 +240,18 @@ describe('composable skill template routing', () => {
   it.each([true, false])('preserves comment maintenance in API/native prompts with fileIssues=%s', async (fileIssues) => {
     const { modeContractFor } = await import('../../lib/auditCatalog.js');
     const mode = modeContractFor(fileIssues);
-    const description = DEFAULT_TASK_PROMPTS['better-cognitive-load']
+    const description = DEFAULT_TASK_PROMPTS['code-simplification']
       .replaceAll('{appName}', 'Example App')
       .replaceAll('{repoPath}', '/workspace/example-app')
       .replace('{modeInstructions}', mode);
     const task = makeTask({ description, metadata: {
-      analysisType: 'better-cognitive-load', noCodeOutput: fileIssues,
+      analysisType: 'code-simplification', noCodeOutput: fileIssues,
     } });
     for (const providerType of ['api', 'tui', 'cli']) {
       const prompt = await buildAgentPrompt(task, {}, '/workspace/example-app', null, { providerType });
-      expect(prompt).toContain('Excessive code comments');
-      expect(prompt).toContain('Preserve licenses, tool directives, meaningful type/JSDoc metadata');
-      expect(prompt).toContain('review the diff for behavior preservation');
+      expect(prompt).toContain('Keep comments that explain invariants, safety rationale, external contracts, and justified workarounds');
+      expect(prompt).toContain('Preserve licenses, tool directives, and meaningful type or JSDoc metadata');
+      expect(prompt).toContain('Preserve observable behavior');
       expect(prompt).not.toContain('{modeInstructions}');
       expect(prompt).not.toMatch(/add (?:clear |helpful )?comments/i);
     }
@@ -320,14 +320,14 @@ describe('composable skill template routing', () => {
     expect(exhausted.metadata.failureCount).toBe(MAX_TASK_RETRIES);
   });
 
-  it('keeps the final module-hygiene mission generic across API and TUI/CLI paths', async () => {
-    const description = DEFAULT_TASK_PROMPTS['module-hygiene']
+  it('keeps the architecture and maintainability mission generic across API and TUI/CLI paths', async () => {
+    const description = DEFAULT_TASK_PROMPTS['architecture-maintainability']
       .replaceAll('{appName}', 'Example App')
       .replaceAll('{repoPath}', '/workspace/example-app')
       .replace('{modeInstructions}', '## Mode: file issues, change nothing');
     const task = makeTask({
       description,
-      metadata: { analysisType: 'module-hygiene', noCodeOutput: true },
+      metadata: { analysisType: 'architecture-maintainability', noCodeOutput: true },
     });
 
     const lightPrompt = buildLightContextPrompt(
@@ -345,9 +345,9 @@ describe('composable skill template routing', () => {
     );
 
     for (const prompt of [lightPrompt, apiPrompt]) {
-      expect(prompt).toMatch(/crossing one is never a\s+finding by itself/);
-      expect(prompt).toContain('Reuse-search proof');
-      expect(prompt).toContain('closed tracker items, and merged changes');
+      expect(prompt).toContain('module ownership, contracts, types and duplicated sources of truth');
+      expect(prompt).toContain('Recommended next audits');
+      expect(prompt).toContain('Leave local simplification of otherwise sound code to code-simplification');
       expect(prompt).not.toContain('{appName}');
       expect(prompt).not.toContain('{repoPath}');
       expect(prompt).not.toContain('{modeInstructions}');
@@ -355,8 +355,7 @@ describe('composable skill template routing', () => {
       expect(prompt).not.toContain('client/src/lib/README.md');
       expect(prompt).not.toContain('localhost:5555');
     }
-    expect(apiPrompt).toContain('## Task-Type Skill Guidelines');
-    expect(apiPrompt).toContain('Thresholds nominate; evidence decides');
+    expect(apiPrompt).not.toContain('## Task-Type Skill Guidelines');
     expect(lightPrompt).not.toContain('## Task-Type Skill Guidelines');
   });
 });

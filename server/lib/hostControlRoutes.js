@@ -91,6 +91,10 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/browser/pages',
   'GET /api/browser/downloads/:name',
   'GET /api/browser/logs',
+  // CDP connection metadata, PM2 status, and host filesystem paths.
+  'GET /api/browser/version',
+  'GET /api/browser/process',
+  'GET /api/browser/config',
   // Lists saved website-login metadata across household subjects.
   'GET /api/browser/vault/logins',
   'GET /api/harnesses/update-reference',

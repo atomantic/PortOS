@@ -1,3 +1,4 @@
+import { emitToOperatorsOn } from '../services/socketIo.js';
 import * as callSession from '../services/voice/callSession.js';
 import { voiceObservation } from '../services/localModelObservations.js';
 import { observeModelMutations } from '../services/modelObservation.js';
@@ -172,7 +173,7 @@ router.put('/config', asyncHandler(async (req, res) => {
   if (next.enabled && next.tts?.retiredEngine && !reconciliation?.skipped && !reconciliation?.error && !reconciliation?.setupRequired) {
     next = await updateVoiceConfig({ tts: { retiredEngine: null } });
   }
-  req.app.get('io')?.emit('voice:config:changed', {
+  emitToOperatorsOn(req.app.get('io'), 'voice:config:changed', {
     enabled: next.enabled,
     sttEngine: next.stt?.engine,
     sttLanguage: next.stt?.language,
@@ -329,7 +330,7 @@ const studioAssignmentSchema = z.object({
   universeId: z.string().trim().min(1).max(160),
   characterId: z.string().trim().min(1).max(160),
 }).strict();
-const notifyStudio = req => req.app.get('io')?.emit('voice-studio:changed', {});
+const notifyStudio = req => emitToOperatorsOn(req.app.get('io'), 'voice-studio:changed', {});
 // Include legacy character-editor mutations so an open library stays current.
 router.use('/profiles', (req, res, next) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') res.once('finish', () => {

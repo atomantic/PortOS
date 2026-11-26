@@ -2,54 +2,32 @@
   "DEFAULT_TASK_PROMPTS": {
     "accessibility": "46f628a44a919bb788de8761e86ca0e1",
     "api-contract": "d52e00ec53eb5618df1a769efccc08f3",
-    "app-bugs": "34741422196f77c3f7c96ed36668aa87",
     "app-launch-video": "271c1e8bc301ba02b4a2207e0abf8573",
-    "architecture-maintainability": "692ffab2d2b5ca8e47bceb7106a92ce8",
-    "better-cognitive-load": "882bbda803edcdef5a4308521050f8fd",
-    "better-complexity": "c99f67b43ff54a1c8cf0176c721d9c06",
+    "architecture-maintainability": "4ae2e57c71b2b4eacc10c0c362578e6e",
     "better-dependency-freedom": "b0a95a02a2234fb6bbdce5c3dcd2eda4",
-    "better-dev-environment": "e05d605223bce14a31f642604a9149a1",
-    "better-runtime-safety": "730600eda10659de8877efd28a865202",
-    "better-structural-drift": "ce8b7ba26e5567275b7667d082c3125a",
-    "better-test-quality": "8e305f986e9c9066da5db2aee76fc024",
     "branch-cleanup": "3ae50eec50fe2dea33575c5ab6d56716",
     "branch-reconcile": "84e3e34112ed761c85df1f58c8c6faed",
     "claim-issue": "afc56c6e40eb622a515205063528615f",
     "claim-issue-gitlab": "aeb870b664b6d59ba6790d81863ab5fb",
     "claim-issue-jira": "fb4f5524eb45173a07d7b821e9fc53ae",
-    "code-quality": "175fab48fc713b71b4f0574b7cc5fe0b",
     "code-reviewer-implement": "0f3459ff958f97ace12f61430ede70d7",
     "code-reviewer-review": "aa8fbd3878dfd441955f2182c22a1699",
-    "code-simplification": "b5b3e33757e8e2276078ad3a04cf5d1c",
-    "console-errors": "5a7f6fd0b119db9d0e01c7f44a7a061c",
-    "copy": "6a0959e898d37fb4d4d7445dfc8008c9",
-    "cost-efficiency": "239bad18c51b50c80599d30b2fb0ad15",
-    "data-integrity": "064bd15eb2924430aadb669296c1dcc7",
-    "data-integrity-safety": "88f04dc08a0ded74334340a55718780a",
-    "data-safety": "9e930585587a475901a4673427c9d87f",
+    "code-simplification": "25808aba8a4de844dbdffd6ed7d92f78",
+    "data-integrity-safety": "d9c363d05c466eee9d4a6fca1dba5367",
     "dependency-updates": "506e50b0dbbb5a39d729ee20a8b2fc40",
-    "design": "118ab916feb90ff079f6e6449f60e7fe",
-    "design-usability": "2f2ac069e237d6bb4e636b770f48ff93",
+    "design-usability": "41d417c6ddbb39ece01b4948281c90f0",
     "do-release": "66febb7665c69c70a27a7155a55bcff1",
     "do-replan": "35660eb7b43e4259a6a9253ed288a1db",
-    "documentation": "c94797b4bd3a0d554e225888ed48b76b",
-    "documentation-content": "56a061129844152dec3803071782ebe8",
-    "error-handling": "416b4e9aa2c1fcc3bfea7a2d38814ae5",
+    "documentation-content": "5847a6fb92d52e9901b481a8f8d21a12",
     "feature-completeness": "00d8916cc6032e74817657375375115b",
     "feature-ideas": "d5300180b45a1019326ab740ce1a3c28",
-    "infrastructure": "f019bab508f95278ea00c33d69f85818",
-    "infrastructure-environment": "6ec99c3ffba5781be144aa827c917983",
+    "infrastructure-environment": "9f7153382a3fdce024d13f82b5b63910",
     "issue-reconcile": "9d5cc3e28e85d2eac8347e04f3162007",
     "jira-sprint-manager": "312d718789a93a2435a64d73b36b0eda",
     "jira-status-report": "c07a41f489d0c0d429912276dc0c0642",
     "media-render-research": "5164eda916760e6f3604b0c80a5f33ec",
-    "mobile-responsive": "a1ad3c87dc4c2fc55a3f041f0f61e726",
     "model-comparison-refresh": "39fe161cc111664e860a2447a9afddb1",
-    "module-hygiene": "1637fd164737e20db284fe5c2b440453",
-    "observability": "243e58bcfae2759f82caf3ff6c8fc9c5",
-    "over-engineering": "fadf29ccd1bad774a5b8918ac21fa8d1",
-    "performance": "199e7e4cc0429f8d96380b31563400dc",
-    "performance-efficiency": "2d439c747131e4f8c481be91afe85452",
+    "performance-efficiency": "629fddf942e005847197e864f66483c2",
     "plan-feature": "f586392c97f2725eac868cd8f268e775",
     "plan-task": "de878963a1325ae796c74e81ba8deafb",
     "plan-task-claim": "6cfee4d1575f521042a97a9af77a6b4b",
@@ -61,74 +39,43 @@
     "privacy": "71fd4422a7d1c67e405eb6cfb3acc426",
     "reference-watch": "bc92833dd816f0f66759de8c0db1e758",
     "refresh-local-llm-catalog": "a02928079b46bf9323274db7b135834b",
-    "reliability": "f2468e63d460d435448e2a013fb9438d",
-    "reliability-error-handling": "0e39238736d2871ea33af03159963c00",
+    "reliability-error-handling": "6ce2b7bfb7777e3098c492f9ec1087fd",
     "repo-sync": "0a648d35d43b023b758226b9c709c8ea",
     "security": "8c8f84a625d6bc4b7d6ce485f0a631e5",
-    "simplify": "6b74e0f8b20935ef7ccc143316ffb397",
     "stash-cleanup": "1c12bac5aac6bb27008c40981e7db08c",
-    "test-coverage": "1956a18f937cda50343dfa4259d1af30",
-    "test-quality-coverage": "bef6502f8636efe71f9103891ae3f698",
-    "typing": "bd7cb874b2784395280b116369c7e7ac",
-    "ui-bugs": "06baf650e41fce12aaa59c66030c0357",
-    "ui-lifecycle": "d156882c73593a54c0fd5754eb4c6fa0",
-    "ui-runtime-bugs": "b66c005c2788a74a4aa042472f6d752a",
-    "upgrade-rehearsal": "7c6106afde09d7606dea62a5db372fe9",
-    "user-action-review": "28c1b49e5ca806568077f56fe982ce08",
-    "ux": "19eb00a46482a1eac391b89fecc5eae3",
-    "workflow-recovery": "005985edd090c7adc0a4a287bdda31eb"
+    "test-quality-coverage": "0ddf30e8cb672c4e154cca715201766d",
+    "ui-runtime-bugs": "172f2c0441d4c7133b8e8962cf39d482",
+    "user-action-review": "28c1b49e5ca806568077f56fe982ce08"
   },
   "PROMPT_VERSIONS": {
     "accessibility": 5,
     "api-contract": 2,
-    "app-bugs": 1,
     "app-launch-video": 8,
-    "architecture-maintainability": 1,
-    "better-cognitive-load": 2,
-    "better-complexity": 2,
+    "architecture-maintainability": 2,
     "better-dependency-freedom": 2,
-    "better-dev-environment": 2,
-    "better-runtime-safety": 4,
-    "better-structural-drift": 2,
-    "better-test-quality": 2,
     "branch-cleanup": 4,
     "branch-reconcile": 13,
     "claim-issue": 81,
     "claim-issue-gitlab": 71,
     "claim-issue-jira": 32,
-    "code-quality": 6,
     "code-reviewer-a": 1,
     "code-reviewer-b": 1,
-    "code-simplification": 1,
-    "console-errors": 4,
-    "copy": 1,
-    "cost-efficiency": 1,
-    "data-integrity": 3,
-    "data-integrity-safety": 1,
-    "data-safety": 4,
+    "code-simplification": 2,
+    "data-integrity-safety": 2,
     "dependency-updates": 12,
-    "design": 1,
-    "design-usability": 1,
+    "design-usability": 2,
     "do-release": 29,
     "do-replan": 2,
-    "documentation": 9,
-    "documentation-content": 1,
-    "error-handling": 4,
+    "documentation-content": 2,
     "feature-completeness": 1,
     "feature-ideas": 12,
-    "infrastructure": 3,
-    "infrastructure-environment": 1,
+    "infrastructure-environment": 2,
     "issue-reconcile": 15,
     "jira-sprint-manager": 2,
     "jira-status-report": 3,
     "media-render-research": 1,
-    "mobile-responsive": 4,
     "model-comparison-refresh": 7,
-    "module-hygiene": 3,
-    "observability": 2,
-    "over-engineering": 1,
-    "performance": 8,
-    "performance-efficiency": 1,
+    "performance-efficiency": 2,
     "plan-feature": 7,
     "plan-task": 30,
     "plan-task-claim": 8,
@@ -137,22 +84,13 @@
     "privacy": 2,
     "reference-watch": 5,
     "refresh-local-llm-catalog": 5,
-    "reliability": 2,
-    "reliability-error-handling": 1,
+    "reliability-error-handling": 2,
     "repo-sync": 1,
     "security": 7,
-    "simplify": 4,
     "stash-cleanup": 2,
-    "test-coverage": 4,
-    "test-quality-coverage": 1,
-    "typing": 3,
-    "ui-bugs": 4,
-    "ui-lifecycle": 3,
-    "ui-runtime-bugs": 1,
-    "upgrade-rehearsal": 6,
-    "user-action-review": 3,
-    "ux": 10,
-    "workflow-recovery": 2
+    "test-quality-coverage": 2,
+    "ui-runtime-bugs": 2,
+    "user-action-review": 3
   },
   "REFERENCE_WATCH_AUDITED_VERSION": 5,
   "PREVIOUS_DEFAULT_PROMPTS": {
@@ -175,28 +113,25 @@
       "e355d37fb682c1f6c2ad4c031a7988a7",
       "d9ce59c884841cdfcab7139d05778e74"
     ],
-    "better-cognitive-load": [
-      "a1fe22f6ef936131456c55a6b0623204"
-    ],
-    "better-complexity": [
-      "c92b99080d0453d70bb26a412fb48ce9"
+    "architecture-maintainability": [
+      "62752723eba7a39aa94e010911923cc8",
+      "b1cce8f89218844746746ceb576553c1",
+      "c34792a374dd9868e6381557da582dc1",
+      "6762542233cdffb86d4e2244945bf52b",
+      "dc69db26844c074393a59b5a32331676",
+      "175fab48fc713b71b4f0574b7cc5fe0b",
+      "941389a1f1c8983eef4f87af1241fbf9",
+      "ce8b7ba26e5567275b7667d082c3125a",
+      "3b7671cd44f719d4b2116b96a279e6d0",
+      "e4ba7f0375bf816b85564bcc6545474d",
+      "1637fd164737e20db284fe5c2b440453",
+      "d8fd1423cf2a523b528ed7d2d7a2bb55",
+      "1f2758ce0bb62d789a21aec241549531",
+      "bd7cb874b2784395280b116369c7e7ac",
+      "692ffab2d2b5ca8e47bceb7106a92ce8"
     ],
     "better-dependency-freedom": [
       "8a79c8be829f926bbc7720ee29818d53"
-    ],
-    "better-dev-environment": [
-      "62523b82066e70ff1c786da22ccf0372"
-    ],
-    "better-runtime-safety": [
-      "4259ab85dd3eaf8efb16a250187bd857",
-      "1038ac5008cb52e418460f53f262ad22",
-      "444c7104f32a8cd1c1ddb7a15b275512"
-    ],
-    "better-structural-drift": [
-      "941389a1f1c8983eef4f87af1241fbf9"
-    ],
-    "better-test-quality": [
-      "ab53a477cd194a5c4fbda09d901a3775"
     ],
     "branch-cleanup": [
       "60f132e83570a7a4559a7adf7af1b883",
@@ -405,27 +340,33 @@
       "82e6ec42bf29bfb7044e40f0d8b9f105",
       "232dffb9064dba1b054c8bf103c4351d"
     ],
-    "code-quality": [
-      "62752723eba7a39aa94e010911923cc8",
-      "b1cce8f89218844746746ceb576553c1",
-      "c34792a374dd9868e6381557da582dc1",
-      "6762542233cdffb86d4e2244945bf52b",
-      "dc69db26844c074393a59b5a32331676"
+    "code-simplification": [
+      "2a048214d1dd3b75bee9ae1a38fa1589",
+      "3144f78ff48104926f5fce059dc3f7ff",
+      "2eee5529c3bb57d04ba823eed3f5f6ff",
+      "6b74e0f8b20935ef7ccc143316ffb397",
+      "fadf29ccd1bad774a5b8918ac21fa8d1",
+      "c92b99080d0453d70bb26a412fb48ce9",
+      "c99f67b43ff54a1c8cf0176c721d9c06",
+      "a1fe22f6ef936131456c55a6b0623204",
+      "882bbda803edcdef5a4308521050f8fd",
+      "b5b3e33757e8e2276078ad3a04cf5d1c"
     ],
-    "console-errors": [
-      "23b1a2e33cb414f27d4002b51d315e83",
-      "3e3f690729ead5e312927ae4bce330c0",
-      "2b6ed595287f0742bed9ecba6788afe6",
-      "eec33a9293f9393019917a6632dd964e"
-    ],
-    "data-integrity": [
-      "5fcc4f5044101e89da5bbf4890c11a1c",
-      "0b361db688338b9cd0fa70cfedd28e56"
-    ],
-    "data-safety": [
+    "data-integrity-safety": [
       "86b07f51abdbcbe7016f840b5bb0cd9b",
       "eb97988dfc16d4c655f1834acc91d665",
-      "25e79bc34cfadeab3cc3969a6c3421c2"
+      "25e79bc34cfadeab3cc3969a6c3421c2",
+      "9e930585587a475901a4673427c9d87f",
+      "5fcc4f5044101e89da5bbf4890c11a1c",
+      "0b361db688338b9cd0fa70cfedd28e56",
+      "064bd15eb2924430aadb669296c1dcc7",
+      "ef9d54fa653d6639abd4707b4f392d8d",
+      "e53a4cb57cdc7b5876d709bcd8a68132",
+      "9fddc216c6de8385d4d1dda42fd70cb9",
+      "eed59316cc30bbaf033869065cd0889b",
+      "a86ee94bf5e13362e67380fae3dfe4d2",
+      "7c6106afde09d7606dea62a5db372fe9",
+      "88f04dc08a0ded74334340a55718780a"
     ],
     "dependency-updates": [
       "020d66b93698341c556eca1eee851bee",
@@ -440,6 +381,24 @@
       "8ce4e7e33c5c7554b89af7d35a471c31",
       "f6fdcd359c66bc49485ba057ba243f57",
       "9fd54b2e77fc90ca17e166ed1bd908ac"
+    ],
+    "design-usability": [
+      "118ab916feb90ff079f6e6449f60e7fe",
+      "e03d03fc7c16faa5b5db93be2896b9ad",
+      "ac11f692eae40ffe8ddeaeaccbcf75e9",
+      "b8c0bde4075685625443a405b2c70b50",
+      "f90b5f38a7c6264e0d40919a2933ba4c",
+      "9f346b8be4408c5a8207d9a8b6080ff0",
+      "bb8670c1e6eb28434ad2d45b6dc62177",
+      "41b02e644f3dc5dcb713700c56a56454",
+      "14d790bd65e540d00786ecb4e787a61e",
+      "7a717ced5a1c8df4d76c1f6987747792",
+      "19eb00a46482a1eac391b89fecc5eae3",
+      "636bdc17fa39ed2f2e27623284c8e04c",
+      "16d8e7f63a673a2de48994c0ac08ef3d",
+      "eb7f6b307bccd15199c74d7aff5c21c3",
+      "a1ad3c87dc4c2fc55a3f041f0f61e726",
+      "2f2ac069e237d6bb4e636b770f48ff93"
     ],
     "do-release": [
       "655180dfbab22e11fab79072ac49c9d6",
@@ -474,7 +433,7 @@
     "do-replan": [
       "59a57f1bb445138c30ab4fa23630c6f8"
     ],
-    "documentation": [
+    "documentation-content": [
       "b6540f4ba13832226fd0c85cf1955f99",
       "074ea22140f8f6a02c7e40a6bc7b0614",
       "658395fa391df5a0fefaaebdf8dbedb7",
@@ -483,12 +442,10 @@
       "b375f95ae2274f03d06ba5ceff5705d8",
       "246be4932c277fa0ec0ab365beb3baad",
       "a30e3bfba8cd13369ccaf806a3534a79",
-      "1a89cf4a93e57746b68a1ce496b73305"
-    ],
-    "error-handling": [
-      "26225ac04f2f35feb61151b2e6474465",
-      "9afba2e99b90a8d5771c75e7f0615d96",
-      "137b371f38398042c0a2c7e2279c92ce"
+      "1a89cf4a93e57746b68a1ce496b73305",
+      "c94797b4bd3a0d554e225888ed48b76b",
+      "6a0959e898d37fb4d4d7445dfc8008c9",
+      "56a061129844152dec3803071782ebe8"
     ],
     "feature-ideas": [
       "abc098e3acf4eb6b9d1211680ec0440f",
@@ -503,9 +460,13 @@
       "d3282f16da29efe2d53595b3b34778bc",
       "804f62f1dadadbfa8a0bcd4aff16b2e8"
     ],
-    "infrastructure": [
+    "infrastructure-environment": [
       "b4ad755eb115b82679c601a0df1ffd7b",
-      "bd31db72a371136f6c32d119d76c0281"
+      "bd31db72a371136f6c32d119d76c0281",
+      "f019bab508f95278ea00c33d69f85818",
+      "62523b82066e70ff1c786da22ccf0372",
+      "e05d605223bce14a31f642604a9149a1",
+      "6ec99c3ffba5781be144aa827c917983"
     ],
     "issue-reconcile": [
       "6f33db6ad0b57c36909229694b78891a",
@@ -530,11 +491,6 @@
       "9d374a9d8ccb92c5c8fd0aa9899e79a5",
       "9e4f35b5a9372c4f50f1e10f7ec8050d"
     ],
-    "mobile-responsive": [
-      "636bdc17fa39ed2f2e27623284c8e04c",
-      "16d8e7f63a673a2de48994c0ac08ef3d",
-      "eb7f6b307bccd15199c74d7aff5c21c3"
-    ],
     "model-comparison-refresh": [
       "dc1702b07c7fb8be6165feb776d5acb6",
       "7de58f49e5cea22a4282fb37bc9f37ab",
@@ -543,14 +499,7 @@
       "d20535b87ecc953056b0d24750b749b4",
       "8bf1212a8cd7403b19a5e54f42f5d699"
     ],
-    "module-hygiene": [
-      "3b7671cd44f719d4b2116b96a279e6d0",
-      "e4ba7f0375bf816b85564bcc6545474d"
-    ],
-    "observability": [
-      "fdb4d77df5891cfb653a5da2553ecf8a"
-    ],
-    "performance": [
+    "performance-efficiency": [
       "c8224243c15f6897ee04be25d172f021",
       "4fea5eb3585bdc150980934b289016bc",
       "672bd3958b12afb0f382bcebb6dc3b33",
@@ -558,7 +507,10 @@
       "b69bf4cbd2b3c272b5650608c62cede3",
       "8b297d723f9f39154c9cf6d501738494",
       "4f8ddada54d7c6f31b7fb35aeb0f29db",
-      "b5a221d23042b7751d5ece776399b403"
+      "b5a221d23042b7751d5ece776399b403",
+      "199e7e4cc0429f8d96380b31563400dc",
+      "239bad18c51b50c80599d30b2fb0ad15",
+      "2d439c747131e4f8c481be91afe85452"
     ],
     "plan-feature": [
       "9fbc2a2ded8f4533d1f0f6b9cb780b34",
@@ -629,8 +581,22 @@
       "ca7324a0f2251a66b46ea534940c9da8",
       "9741ca6a8419fcdea2743e3b64781a8b"
     ],
-    "reliability": [
-      "2a99be77b8f34653f4b926db0a773ea5"
+    "reliability-error-handling": [
+      "26225ac04f2f35feb61151b2e6474465",
+      "9afba2e99b90a8d5771c75e7f0615d96",
+      "137b371f38398042c0a2c7e2279c92ce",
+      "416b4e9aa2c1fcc3bfea7a2d38814ae5",
+      "4259ab85dd3eaf8efb16a250187bd857",
+      "1038ac5008cb52e418460f53f262ad22",
+      "444c7104f32a8cd1c1ddb7a15b275512",
+      "730600eda10659de8877efd28a865202",
+      "2a99be77b8f34653f4b926db0a773ea5",
+      "f2468e63d460d435448e2a013fb9438d",
+      "628d2ec51c3cd3d8bbd76eacb212dada",
+      "005985edd090c7adc0a4a287bdda31eb",
+      "fdb4d77df5891cfb653a5da2553ecf8a",
+      "243e58bcfae2759f82caf3ff6c8fc9c5",
+      "0e39238736d2871ea33af03159963c00"
     ],
     "security": [
       "b199739b21a8c45ed3778b2339ebf55f",
@@ -641,57 +607,38 @@
       "f09a7b5894f8221b466add6d5d68c77c",
       "a66f5ec9d0ed0b42b6e59087783eb9fb"
     ],
-    "simplify": [
-      "2a048214d1dd3b75bee9ae1a38fa1589",
-      "3144f78ff48104926f5fce059dc3f7ff",
-      "2eee5529c3bb57d04ba823eed3f5f6ff"
-    ],
     "stash-cleanup": [
       "f9de8b10937919ceb6656fbdb70179c4"
     ],
-    "test-coverage": [
+    "test-quality-coverage": [
       "ec70fb2b8e193b6a98bec2fbf337b190",
       "c2b0f0dee5bc881239684e706ea88324",
       "0d8359170529da12cd63356610b2e220",
-      "36beffc0c2959be5d818ded54b3fe298"
+      "36beffc0c2959be5d818ded54b3fe298",
+      "1956a18f937cda50343dfa4259d1af30",
+      "ab53a477cd194a5c4fbda09d901a3775",
+      "8e305f986e9c9066da5db2aee76fc024",
+      "bef6502f8636efe71f9103891ae3f698"
     ],
-    "typing": [
-      "d8fd1423cf2a523b528ed7d2d7a2bb55",
-      "1f2758ce0bb62d789a21aec241549531"
-    ],
-    "ui-bugs": [
+    "ui-runtime-bugs": [
+      "34741422196f77c3f7c96ed36668aa87",
       "01d2a7e034713195f33071f2c71a3c99",
       "def9ad96bd74ab397233f234d79a1974",
-      "073bea13a94b0266c53b5f55bb2344b9"
-    ],
-    "ui-lifecycle": [
+      "073bea13a94b0266c53b5f55bb2344b9",
+      "06baf650e41fce12aaa59c66030c0357",
+      "23b1a2e33cb414f27d4002b51d315e83",
+      "3e3f690729ead5e312927ae4bce330c0",
+      "2b6ed595287f0742bed9ecba6788afe6",
+      "eec33a9293f9393019917a6632dd964e",
+      "5a7f6fd0b119db9d0e01c7f44a7a061c",
       "14b3816d1bcc10f0d7d6357e55cc5e69",
-      "d2eaa653e57897d3fb8b6c52c2c18e38"
-    ],
-    "upgrade-rehearsal": [
-      "ef9d54fa653d6639abd4707b4f392d8d",
-      "e53a4cb57cdc7b5876d709bcd8a68132",
-      "9fddc216c6de8385d4d1dda42fd70cb9",
-      "eed59316cc30bbaf033869065cd0889b",
-      "a86ee94bf5e13362e67380fae3dfe4d2"
+      "d2eaa653e57897d3fb8b6c52c2c18e38",
+      "d156882c73593a54c0fd5754eb4c6fa0",
+      "b66c005c2788a74a4aa042472f6d752a"
     ],
     "user-action-review": [
       "945a716d446d26a03e2805d28bd1ae16",
       "1a083430e43f60cdd586cfffbdebc583"
-    ],
-    "ux": [
-      "e03d03fc7c16faa5b5db93be2896b9ad",
-      "ac11f692eae40ffe8ddeaeaccbcf75e9",
-      "b8c0bde4075685625443a405b2c70b50",
-      "f90b5f38a7c6264e0d40919a2933ba4c",
-      "9f346b8be4408c5a8207d9a8b6080ff0",
-      "bb8670c1e6eb28434ad2d45b6dc62177",
-      "41b02e644f3dc5dcb713700c56a56454",
-      "14d790bd65e540d00786ecb4e787a61e",
-      "7a717ced5a1c8df4d76c1f6987747792"
-    ],
-    "workflow-recovery": [
-      "628d2ec51c3cd3d8bbd76eacb212dada"
     ]
   }
 }

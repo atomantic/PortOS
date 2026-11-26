@@ -48,7 +48,7 @@ import { runStageScopedInlineLLM } from '../stageRunner.js';
 import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../../lib/creativeLatitude.js';
 import { promptAddition } from '../../lib/modelInput.js';
 import { getDomainMode } from '../../lib/domainAutonomy.js';
-import { readReadinessGate, mergeSeverityWeights } from '../../lib/editorial/index.js';
+import { readReadinessGate, mergeSeverityWeights } from '../../lib/editorial/severityConfig.js';
 import { loadState } from '../cos/cosState.js';
 import { getSettings } from '../settings.js';
 import { getDomainBudgetStatus, recordDomainUsage } from '../domainUsage.js';

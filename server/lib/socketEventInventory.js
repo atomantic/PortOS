@@ -20,14 +20,15 @@ const SOCKET_CALL_RE = /\bsocket\??\.(on|once|emit)\(\s*(`(?:[^`\\]|\\.)*`|'(?:[
 // Server emit receivers: the `io` aliases the services bind, `getIo()`, and the
 // `req.app.get('io')` route form. Room/namespace hops (`.to/.in/.except/.of`) may
 // sit between the receiver and `.emit(` (one level of nested call parens allowed).
-const SERVER_EMIT_RECEIVER = String.raw`(?:\b(?:io|ioInstance|boundIo|providersIo|ioRef|ns)|\bgetIo\(\)|\.get\(\s*['"]io['"]\s*\))`;
+const SERVER_EMIT_RECEIVER = String.raw`(?:\b(?:io|ioInstance|boundIo|providersIo|ioRef|ns|job\.io)|\bgetIo\(\)|\.get\(\s*['"]io['"]\s*\))`;
 const SERVER_EMIT_HOPS = String.raw`(?:\??\.(?:to|in|except|of)\((?:[^()]|\([^()]*\))*\))*`;
 const EVENT_NAME_SOURCE = /(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/.source;
 const SERVER_EMIT_RE = new RegExp(
   `${SERVER_EMIT_RECEIVER}\\??${SERVER_EMIT_HOPS}\\??\\.emit\\(\\s*${EVENT_NAME_SOURCE}`,
   'g',
 );
-const OPERATOR_EMIT_RE = new RegExp(String.raw`\b(?:emitToOperatorsOn\(\s*io\s*,|emitToOperators\()\s*${EVENT_NAME_SOURCE}`, 'g');
+const OPERATOR_EMIT_RE = new RegExp(String.raw`\b(?:emitToOperatorsOn\(\s*(?:req\.app)?${SERVER_EMIT_RECEIVER}\??${SERVER_EMIT_HOPS}\s*,|emitToOperators\()\s*${EVENT_NAME_SOURCE}`, 'g');
+const TOOLKIT_EMIT_RE = new RegExp(String.raw`\bemit\?\.\(\s*${EVENT_NAME_SOURCE}`, 'g');
 const SERVER_BROADCAST_RE = /\bbroadcastTo(?!Set\b)[A-Za-z]*\(\s*(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/g;
 // Quoted colon-namespaced names. Clients often listen through constant arrays
 // (`const EVENTS = ['brain:changed']`) rather than a literal `socket.on(...)`, so
@@ -91,6 +92,9 @@ const scanSocketEventSource = (source, filePath, repoRoot) => {
   if (side === 'server') {
     for (const match of source.matchAll(SERVER_EMIT_RE)) record(match, 'emit', match[1]);
     for (const match of source.matchAll(OPERATOR_EMIT_RE)) record(match, 'emit', match[1]);
+    if (path.startsWith('server/lib/aiToolkit/')) {
+      for (const match of source.matchAll(TOOLKIT_EMIT_RE)) record(match, 'emit', match[1]);
+    }
     for (const match of source.matchAll(SERVER_BROADCAST_RE)) record(match, 'emit', match[1]);
     for (const match of source.matchAll(REGISTER_SUBSCRIBER_RE)) {
       for (const suffix of ['subscribe', 'unsubscribe']) {

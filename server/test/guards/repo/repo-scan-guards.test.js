@@ -59,8 +59,6 @@ const sourceOf = (rel) => readText(join(REPO_ROOT, rel));
  */
 const SCANNERS_WITHOUT_SUFFIX = new Map([
   ['scripts/ensure-deps.test.js', 'selected by structuralTestsFor on ENSURE_DEPS_INPUTS; behavioural temp-directory suite (#16086)'],
-  // `.ps1` is an unclassified changed file and forces the complete suite.
-  ['scripts/ps1-bom.test.js', 'selected by the unclassified-file full-suite trigger for *.ps1'],
   ['server/cos-runner/spawnFailure.test.js', 'walks a temporary runner data root to snapshot it'],
   ['server/services/musicVideo/compositionDocument.lyricType.test.js', 'walks a staged composition document under a temporary data root'],
   ['server/services/worktreeReap.test.js', 'walks temporary git repositories to snapshot them'],
@@ -71,15 +69,6 @@ const SERVER_CHECK_DIRS = GUARD_CHECK_DIRS.filter(({ dir }) => dir.startsWith('s
 /** The Vitest workspace a guard directory belongs to, and its path inside it (the form the config globs match). */
 const workspaceOf = (path) => (path.startsWith('client/') ? 'client' : 'server');
 const inWorkspace = (path) => path.slice(workspaceOf(path).length + 1);
-
-/**
- * `*.guard.test.js` files that are not a runner, and why. A new scan belongs in a
- * `<workspace>/…/test/guards/<subject>/` directory: a separate file costs its own
- * worker and its own pass over the tree on every plan (#16996).
- */
-const STANDALONE_GUARDS = new Map([
-  ['scripts/node-version-drift.guard.test.js', "ci.yml's minimum-Node job runs it by path on the lowest supported Node line"],
-]);
 
 /**
  * The hand-rolled walkers that scanned the tree unseen before #16553, as
@@ -101,10 +90,9 @@ describe('tree guards are selected by filename (#5055, #16085, #16553)', () => {
     expect(getGuardTests()).toEqual(guardTestFiles(REPO_ROOT));
     expect(getGuardTests()).toEqual(trackedTests.filter(isGuardTest).sort());
     for (const { runner } of GUARD_CHECK_DIRS) expect(getGuardTests()).toContain(runner);
-    expect(getGuardTests()).toContain('scripts/node-version-drift.guard.test.js');
   });
 
-  it('runs every check inside a subject runner and keeps other guards to the reviewed list', () => {
+  it('runs every check inside a subject runner and keeps every guard in a subject runner', () => {
     const checksIn = ({ dir }) => guardCheckModules(join(REPO_ROOT, dir)).map((name) => `${dir}/${name}`);
     const checks = GUARD_CHECK_DIRS.flatMap(checksIn);
     for (const check of ['server/test/guards/repo/agent-instructions-files.test.js', 'server/test/guards/runtime/logLevelConventions.test.js',
@@ -117,9 +105,7 @@ describe('tree guards are selected by filename (#5055, #16085, #16553)', () => {
     expect(trackedChecks.filter((p) => !isGuardCheck(p) && !isGuardTest(p)), 'outside a subject directory, so no runner loads it').toEqual([]);
     expect(trackedChecks.filter((p) => isGuardCheck(p) && !checks.includes(p)), 'tracked but not loaded').toEqual([]);
     const runners = new Set(GUARD_CHECK_DIRS.map(({ runner }) => runner));
-    expect(getGuardTests().filter((p) => !runners.has(p) && !STANDALONE_GUARDS.has(p)),
-      'move the scan into a test/guards/<subject>/ directory, or list it in STANDALONE_GUARDS with the reason').toEqual([]);
-    expect([...STANDALONE_GUARDS.keys()].filter((p) => !getGuardTests().includes(p)), 'dead entries').toEqual([]);
+    expect(getGuardTests().filter((p) => !runners.has(p))).toEqual([]);
   });
 
   it('collects every runner, and no check module, as a suite', () => {

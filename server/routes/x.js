@@ -1,3 +1,4 @@
+import { emitToOperatorsOn } from '../services/socketIo.js';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
@@ -14,7 +15,7 @@ const requireId = (value, label = 'ID') => {
 const requireAccount = async (id) => {
   if (!(await x.getAccount(id))) throw new ServerError('X account not found', { status: 404 });
 };
-const emitChanged = (req, accountId) => req.app.get('io')?.emit('x:changed', { accountId });
+const emitChanged = (req, accountId) => emitToOperatorsOn(req.app.get('io'), 'x:changed', { accountId });
 
 router.get('/accounts', asyncHandler(async (_req, res) => res.json({ accounts: await x.listAccounts() })));
 

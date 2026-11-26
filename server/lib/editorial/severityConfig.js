@@ -1,5 +1,5 @@
 /**
- * Editorial severity configuration — the frozen DEFAULT severity weights and per-gate
+ * Editorial readiness settings and severity configuration — the frozen DEFAULT severity weights and per-gate
  * blocking-severity sets, plus pure merge/resolve/sanitize helpers that let a SERIES
  * override either without clobbering defaults when no override is set. Pure; the severity
  * enum is `CHECK_SEVERITIES` so gate, weights and blocking sets cannot drift.
@@ -11,6 +11,15 @@
  */
 
 import { CHECK_SEVERITIES } from './checkInfra/taxonomy.js';
+
+// The editorial-health readiness gate (#1316) the autopilot loop + UI read as
+// "manuscript clean". Returns the raw stored value (or null) — the caller
+// resolves an unknown/absent value to the default via `resolveReadinessGate` in
+// editorialScore.js (kept there so the gate vocabulary lives with the scorer).
+export const readReadinessGate = (settings) => {
+  const gate = settings?.pipelineEditorialChecks?.readinessGate;
+  return typeof gate === 'string' && gate ? gate : null;
+};
 
 // Severity penalty weights (editorialScore.SEVERITY_WEIGHTS re-exports this): a draft
 // starts at 100 and loses points per OPEN finding.

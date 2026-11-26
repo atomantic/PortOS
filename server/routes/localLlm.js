@@ -1,3 +1,4 @@
+import { emitToOperatorsOn } from '../services/socketIo.js';
 import { loadedObservation } from '../services/localModelObservations.js';
 import { observeModelMutations } from '../services/modelObservation.js';
 /**
@@ -818,7 +819,7 @@ router.post('/assessments/run', asyncHandler(async (req, res) => {
   // renders every long local-LLM operation. The extra fields (`scope`, `backend`,
   // `modelId`, `sampleIndex`/`sampleCount`) let a listener tell an assessment
   // frame from a model pull streaming on the same event.
-  const onProgress = (frame) => io?.emit('localLlm:progress', frame)
+  const onProgress = (frame) => emitToOperatorsOn(io, 'localLlm:progress', frame)
   res.json(await runAssessment({ backend, modelId, contextTokens, tuning, signal: abortSignalFromResponse(res), onProgress }))
 }))
 
@@ -851,8 +852,8 @@ router.post('/assessments/sweep', asyncHandler(async (req, res) => {
   // count the consent gate named would stop being the count that runs.
   const status = await startSweep({
     scope, contextTokens, backend, modelId, tunings,
-    onProgress: (frame) => io?.emit('localLlm:progress', frame),
-    onChange: (state) => io?.emit('localLlm:sweep:changed', state),
+    onProgress: (frame) => emitToOperatorsOn(io, 'localLlm:progress', frame),
+    onChange: (state) => emitToOperatorsOn(io, 'localLlm:sweep:changed', state),
   })
   // A refused start (one already running, or nothing to measure) is a 409, not a
   // silent no-op that would leave the page waiting for progress that never comes.
@@ -870,8 +871,8 @@ router.post('/assessments/benchmark', asyncHandler(async (req, res) => {
   const io = req.app.get('io')
   const status = await startSweep({
     models,
-    onProgress: (frame) => io?.emit('localLlm:progress', frame),
-    onChange: (state) => io?.emit('localLlm:sweep:changed', state),
+    onProgress: (frame) => emitToOperatorsOn(io, 'localLlm:progress', frame),
+    onChange: (state) => emitToOperatorsOn(io, 'localLlm:sweep:changed', state),
   })
   if (status.rejected) throw new ServerError(status.rejected, { status: 409, context: { models: models.length } })
   res.json(status)
@@ -930,7 +931,7 @@ router.post('/capability-tests/run', asyncHandler(async (req, res) => {
   // `scope: 'capability-test'` field plus backend/model/test is what lets a
   // listener tell these frames from a model pull streaming on the same event —
   // and the `output` frames are what render the agent transcript live.
-  const onProgress = (frame) => io?.emit('localLlm:progress', frame)
+  const onProgress = (frame) => emitToOperatorsOn(io, 'localLlm:progress', frame)
   res.json(await runCapabilityTest({
     backend, modelId, testId, onProgress, signal: abortSignalFromResponse(res),
   }))

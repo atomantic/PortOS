@@ -46,10 +46,10 @@ const deps = {
   ingredient: async (id) => (await import('../catalogDB/ingredients.js')).getIngredient(id),
   resolveImage: (image) => resolveImageInputPath(image),
   emit: (payload) => import('../socketIo.js')
-    .then(({ getIo }) => getIo()?.emit('storyboard:make', payload))
+    .then(({ emitToOperators }) => emitToOperators('storyboard:make', payload))
     .catch((err) => console.error(`❌ storyboard:make emit failed: ${err.message}`)),
   emitBatch: (payload) => import('../socketIo.js')
-    .then(({ getIo }) => getIo()?.emit('storyboard:make-batch', payload))
+    .then(({ emitToOperators }) => emitToOperators('storyboard:make-batch', payload))
     .catch((err) => console.error(`❌ storyboard:make-batch emit failed: ${err.message}`)),
 };
 export const __setDepsForTests = (overrides) => Object.assign(deps, overrides);

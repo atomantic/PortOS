@@ -40,6 +40,9 @@ vi.mock('./cosState.js', async (importOriginal) => ({
   loadState: vi.fn(async () => structuredClone(persisted)),
   saveState: vi.fn(async (s) => { persisted = structuredClone(s); }),
   withStateLock: vi.fn(async (fn) => fn()),
+  withConfigLock: vi.fn(async (fn) => fn()),
+  loadConfig: vi.fn(async () => structuredClone(persisted.config)),
+  saveConfig: vi.fn(async config => { persisted.config = structuredClone(config); return config; }),
 }));
 
 const boot = { cleanupOrphanedAgents: vi.fn(async () => 0) };
@@ -104,7 +107,9 @@ vi.mock('../prWatcher.js', () => ({
   cancelHandoffFollowUps: () => { handoffFollowUp.gate = null; },
 }));
 
-const { start, stop, pause, resume, init, getStatus, resumeDeferredCompletions } = await import('./cos.js');
+vi.mock('../userActionScheduleLog.js', () => ({ logCosScheduleUpdate: async () => {} }));
+
+const { start, stop, pause, resume, init, getStatus, resumeDeferredCompletions, updateConfig } = await import('./cos.js');
 // The daemon reaches agent recovery only through the handlers bootHooks.js registers at boot.
 (await import('../bootHookRegistry.js')).registerCosOrphanRecoveryHandlers({
   cleanupOrphanedAgents: (...args) => boot.cleanupOrphanedAgents(...args),
@@ -234,6 +239,20 @@ describe('CoS daemon start/stop lifecycle (#11860)', () => {
 
     expect(shutdownPersistentMindSupervisor).not.toHaveBeenCalled();
     expect(statuses).toEqual([]);
+  });
+
+  it('suspends and re-arms Persistent Mind as CoS autonomy changes', async () => {
+    setDaemonRunning(true);
+    handlePersistentMindGlobalPause.mockClear();
+    handlePersistentMindGlobalResume.mockClear();
+
+    await updateConfig({ domainAutonomy: { cos: 'dry-run' } });
+    expect(handlePersistentMindGlobalPause).toHaveBeenCalledExactlyOnceWith('CoS autonomy changed to dry-run');
+    expect(handlePersistentMindGlobalResume).not.toHaveBeenCalled();
+
+    await updateConfig({ domainAutonomy: { cos: 'execute' } });
+    expect(handlePersistentMindGlobalResume).toHaveBeenCalledOnce();
+    expect(handlePersistentMindGlobalPause).toHaveBeenCalledOnce();
   });
 
   it('repeated pause() preserves the initial pause and does not pause Persistent Mind again', async () => {

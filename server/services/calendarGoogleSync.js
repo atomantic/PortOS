@@ -1,3 +1,4 @@
+import { emitToOperatorsOn } from './socketIo.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { createHash } from 'crypto';
 import { getAccount, updateSyncStatus, updateSubcalendars, mergeDiscoveredSubcalendars } from './calendarAccounts.js';
@@ -186,7 +187,7 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
     return { newCount, updatedCount, pruned, total: cache.events.length };
   }, { status, events: normalized });
 
-  io?.emit('calendar:sync:completed', {
+  emitToOperatorsOn(io, 'calendar:sync:completed', {
     accountId,
     calendarId,
     calendarName,
@@ -244,7 +245,7 @@ async function runMcpSyncAccount(accountId, io) {
   const enabledCalendars = (account.subcalendars || []).filter(sc => sc.enabled && !sc.dormant);
   if (enabledCalendars.length === 0) throw new ServerError('No enabled subcalendars', { status: 400 });
 
-  io?.emit('calendar:sync:started', { accountId, method: 'mcp' });
+  emitToOperatorsOn(io, 'calendar:sync:started', { accountId, method: 'mcp' });
   console.log(`📅 Starting MCP sync for account ${accountId} (${enabledCalendars.length} calendars)`);
 
   const { pastDate, futureDate } = getSyncDateRange();
@@ -339,7 +340,7 @@ Include the full events arrays as returned by gcal_list_events, with every field
     const reason = cliPartial ? cliReason : summarizeReasons(incompleteReasons);
 
     await updateSyncStatus(accountId, status);
-    io?.emit('calendar:sync:completed', {
+    emitToOperatorsOn(io, 'calendar:sync:completed', {
       accountId,
       newEvents: totalNew,
       updated: totalUpdated,
@@ -366,7 +367,7 @@ Include the full events arrays as returned by gcal_list_events, with every field
 
   return runSync().catch(async (error) => {
     console.error(`❌ MCP sync failed for account ${accountId}${error.code ? ` code=${error.code}` : ''}`);
-    io?.emit('calendar:sync:failed', { accountId, error: error.message, method: 'mcp' });
+    emitToOperatorsOn(io, 'calendar:sync:failed', { accountId, error: error.message, method: 'mcp' });
     await updateSyncStatus(accountId, 'error').catch(() => {});
     throw error instanceof ServerError ? error : new ServerError(error.message, { status: 502 });
   });
@@ -418,7 +419,7 @@ export async function mcpDiscoverCalendars(accountId, io) {
   if (account.type !== 'google-calendar') throw new ServerError('Not a Google Calendar account', { status: 400 });
 
   console.log(`📅 Discovering Google calendars for account ${accountId} via MCP`);
-  io?.emit('calendar:sync:progress', { accountId, message: 'Discovering calendars via Claude...' });
+  emitToOperatorsOn(io, 'calendar:sync:progress', { accountId, message: 'Discovering calendars via Claude...' });
 
   const prompt = `You have access to Google Calendar MCP tools. Call gcal_list_calendars to list all available calendars. If there are more pages (nextPageToken), fetch all pages.
 
@@ -490,7 +491,7 @@ async function runConfiguredMcp(prompt, io, accountId) {
     onData: (chunk, stream) => {
       // Emit progress for UI feedback when the model starts listing events.
       if (stream === 'stderr' && chunk.includes('gcal_list_events')) {
-        io?.emit('calendar:sync:progress', { accountId, message: 'Fetching calendar events...' });
+        emitToOperatorsOn(io, 'calendar:sync:progress', { accountId, message: 'Fetching calendar events...' });
       }
     },
   });

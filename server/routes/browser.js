@@ -88,13 +88,18 @@ const updateConfigSchema = z.object({
 // GET /api/browser - Full browser status
 router.get('/', asyncHandler(async (req, res) => {
   const status = await getBrowserStatusSnapshot();
-  // Page titles/URLs and saved filenames come from the signed-in profile; only
-  // a caller who may drive that profile (see HOST_CONTROL_GET_ROUTES) sees them.
   if (requestHasHostControl(req)) return res.json(status);
+  // The snapshot includes raw CDP metadata, host paths and process details.
+  // Publish only the fields needed to show basic browser health remotely.
   res.json({
-    ...status,
+    connected: status.connected,
+    processRunning: status.processRunning,
+    status: status.status,
+    headless: status.headless,
+    process: { status: status.process?.status },
     pages: [],
-    downloads: { ...status.downloads, files: [] },
+    pageCount: status.pageCount,
+    downloads: { files: [] },
     contentRedacted: true,
   });
 }));

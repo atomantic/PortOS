@@ -4,7 +4,7 @@ import { DEFAULT_TASK_PROMPTS } from './prompts.js';
 import { PROMPT_VERSIONS } from './versions.js';
 import { RETIRED_CONSOLE_ERRORS_PROMPT } from './retiredPromptFixtures.js';
 
-const taskType = 'console-errors';
+const taskType = 'ui-runtime-bugs';
 const prompt = DEFAULT_TASK_PROMPTS[taskType];
 const promptVersion = PROMPT_VERSIONS[taskType];
 const retired = RETIRED_CONSOLE_ERRORS_PROMPT;
