@@ -73,6 +73,60 @@ const neverMemoized = (test, repoRoot, alwaysRun) => {
 /** True when a changed source is a member or a non-module input of the verdict's closure. */
 const reachesClosure = (info, sources) => sources.some((rel) => info.closure.has(rel) || info.inputs.has(rel));
 
+function createMemoRunAnalysis({ scope, repoRoot, env = process.env, platform, arch, nodeVersion, toolVersion, freshToolVersion = toolVersion,
+  requireToolVersions, planBeforeClientSetup, caseFilter = [], acceptVerdictsFrom, listFiles = listRepositoryFiles, factsCache }) {
+  const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, requireToolVersions, planBeforeClientSetup, caseFilter, acceptVerdictsFrom, listFiles: () => listFiles(repoRoot), factsCache };
+  // Built on first use: a plan whose candidates are all unmemoizable never pays for the base closure.
+  let primary = null;
+  const analyze = (test, recorded, digests = null, served = null) => {
+    if (!primary) {
+      const analyzer = createTestMemoAnalyzer(options);
+      primary = { analyzer, baseClosure: analyzer.workspaceBase(WORKSPACE_BASE_INPUTS[scope], WORKSPACE_SETUP_ENTRIES[scope]) };
+    }
+    return primary.analyzer.analyzeTest(test, { baseClosure: primary.baseClosure, recorded, digests, served });
+  };
+  // A second analyzer with empty caches re-reads every input after the run,
+  // so an entry is written only for inputs that did not change meanwhile.
+  let fresh = null;
+  const freshAnalyze = (test, recorded, served = null) => {
+    if (!fresh) {
+      const again = createTestMemoAnalyzer({ ...options, toolVersion: freshToolVersion });
+      fresh = { analyzer: again, baseClosure: again.workspaceBase(WORKSPACE_BASE_INPUTS[scope], WORKSPACE_SETUP_ENTRIES[scope]) };
+    }
+    return fresh.analyzer.analyzeTest(test, { baseClosure: fresh.baseClosure, recorded, served });
+  };
+  // Digests for a new record come from the post-run analyzer, whose key matched the pre-run one.
+  const moduleDigest = (rel) => fresh?.analyzer.moduleDigest(rel) ?? null;
+
+  return { analyze, freshAnalyze, moduleDigest, caseFiltered: caseFilter.length > 0 };
+}
+
+/**
+ * A browser recheck has already selected this shard. Snapshot only the
+ * suites that will execute, using the installed tools and client packages
+ * before running Vitest so trusted CI can still verify and record results.
+ */
+export function prepareMemoRun(run, { memoDir, ...options }) {
+  if (!memoDir) return { run };
+  const { scope, repoRoot } = options;
+  const factsCache = loadFactsCache(memoDir, scope);
+  const analysis = createMemoRunAnalysis({ ...options, factsCache });
+  const alwaysRun = new Set(getAlwaysRunTests());
+  const unmemoizable = new Set();
+  const verdicts = new Map();
+  for (const test of run) {
+    if (neverMemoized(test, repoRoot, alwaysRun)) {
+      unmemoizable.add(test);
+      continue;
+    }
+    const record = readMemoRecord(memoDir, scope, test);
+    const info = analysis.analyze(test, record?.modules ?? null, null, record?.served ?? null);
+    // Capture the static floor now. recordTestMemo compares it after Vitest.
+    verdicts.set(test, { floor: info.floor });
+  }
+  return { ...analysis, run, unmemoizable, verdicts, factsCache };
+}
+
 /**
  * The runner's selection and memo verdicts for one workspace. Verdicts cover
  * only owned candidates. For related plans, selection is also local to the
@@ -101,28 +155,9 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   const alwaysRun = new Set(getAlwaysRunTests());
   const unmemoizable = new Set(mode === 'files' || (mode === 'full' && memoDir)
     ? owned.filter((test) => neverMemoized(test, repoRoot, alwaysRun)) : []);
-  const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, requireToolVersions, planBeforeClientSetup, caseFilter, acceptVerdictsFrom, listFiles: () => listFiles(repoRoot), factsCache };
-  // Built on first use: a plan whose candidates are all unmemoizable never pays for the base closure.
-  let primary = null;
-  const analyze = (test, recorded, digests = null, served = null) => {
-    if (!primary) {
-      const analyzer = createTestMemoAnalyzer(options);
-      primary = { analyzer, baseClosure: analyzer.workspaceBase(WORKSPACE_BASE_INPUTS[scope], WORKSPACE_SETUP_ENTRIES[scope]) };
-    }
-    return primary.analyzer.analyzeTest(test, { baseClosure: primary.baseClosure, recorded, digests, served });
-  };
-  // A second analyzer with empty caches re-reads every input after the run,
-  // so an entry is written only for inputs that did not change meanwhile.
-  let fresh = null;
-  const freshAnalyze = (test, recorded, served = null) => {
-    if (!fresh) {
-      const again = createTestMemoAnalyzer({ ...options, toolVersion: freshToolVersion });
-      fresh = { analyzer: again, baseClosure: again.workspaceBase(WORKSPACE_BASE_INPUTS[scope], WORKSPACE_SETUP_ENTRIES[scope]) };
-    }
-    return fresh.analyzer.analyzeTest(test, { baseClosure: fresh.baseClosure, recorded, served });
-  };
-  // Digests for a new record come from the post-run analyzer, whose key matched the pre-run one.
-  const moduleDigest = (rel) => fresh?.analyzer.moduleDigest(rel) ?? null;
+  const analysis = createMemoRunAnalysis({ scope, repoRoot, env, platform, arch, nodeVersion, toolVersion, freshToolVersion,
+    requireToolVersions, planBeforeClientSetup, caseFilter, acceptVerdictsFrom, listFiles, factsCache });
+  const { analyze } = analysis;
 
   // Closures are needed to look up memo entries and to resolve a related
   // plan. With the memo off, a full or files plan is just its list — the
@@ -182,7 +217,7 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
     }
   }
   const narrowed = mode === 'related' ? [...verdicts.values()].filter((info) => info.narrowed).length : 0;
-  return { selected, slice, run, skipped, unsettled, unmemoizable, unanalyzed, narrowed, analyze, freshAnalyze, moduleDigest, verdicts, caseFiltered: caseFilter.length > 0, factsCache };
+  return { selected, slice, run, skipped, unsettled, unmemoizable, unanalyzed, narrowed, ...analysis, verdicts, factsCache };
 }
 
 export function memoSummaryLine(plan) {

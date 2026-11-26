@@ -28,7 +28,9 @@ runs:
         if [[ "$INCLUDE_POSTGRES" == true ]]; then
           toolset="pg${PG_MAJOR}-ffmpeg"
         fi
-        prefix="apt-debs-v1-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-${toolset}-${{ hashFiles('scripts/ci-install-db-tools.sh') }}-"
+        prefix="apt-debs-v1-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-${toolset}-"
+        # The format and toolset define compatibility. Each restored archive
+        # is verified against today's signed index, even across helper edits.
         echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
         # Refresh immutable entries daily as signed package indexes evolve.
         echo "key=${prefix}$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
