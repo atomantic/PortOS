@@ -3,6 +3,17 @@
 /** Pragmatic healthy floor of the 85-95 target band; chasing 100/100 is discouraged. */
 export const QUALITY_HEALTHY_THRESHOLD = 85;
 
+/** Scoring anchors shared by the audit prompt and Quality tab. */
+export const QUALITY_SCORE_BANDS = Object.freeze([
+  ['96–100', 'Exceptional quality demonstrated by inspection (optional)'],
+  ['90–95', 'High quality, with no verified material defects'],
+  ['85–89', 'Healthy, with minor localized polish only'],
+  ['75–84', 'Mostly healthy, with localized moderate defects in secondary paths'],
+  ['60–74', 'Material defects contained within a feature area'],
+  ['40–59', 'Systemic or recurring defects across core workflows'],
+  ['0–39', 'Severe core workflow breakage, data loss, or verified reachable exploits'],
+]);
+
 /** A run's weight halves every this many days, so remediated pre-fix runs stop pinning the score. Feature-area usage decays on the same clock. */
 export const QUALITY_RECENCY_HALF_LIFE_DAYS = 7;
 

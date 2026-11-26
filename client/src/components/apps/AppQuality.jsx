@@ -11,7 +11,7 @@ import { formatDateShort } from '../../utils/formatters';
 import { publishAppQualitySnapshot } from '../../services/apiApps';
 import toast from '../ui/Toast';
 import InfoTooltip from '../ui/InfoTooltip';
-import { QUALITY_HEALTHY_THRESHOLD } from '../../../../server/lib/auditDomains.js';
+import { QUALITY_HEALTHY_THRESHOLD, QUALITY_SCORE_BANDS } from '../../../../server/lib/auditDomains.js';
 import OverflowMenu from '../ui/OverflowMenu';
 import Drawer from '../Drawer';
 import useDrawerTab from '../../hooks/useDrawerTab';
@@ -131,9 +131,9 @@ export default function AppQuality({ app, detail = false }) {
               {score != null && score >= QUALITY_HEALTHY_THRESHOLD && <span className="rounded-full border border-port-success/40 bg-port-success/10 px-2 py-0.5 text-xs font-medium text-port-success">Target met ({QUALITY_HEALTHY_THRESHOLD}+)</span>}
               <InfoTooltip label="How the quality score works" placement="below" align="start" width={320}>
                 <p>Recency-weighted equal-weight mean of the category scores. Each category uses up to three qualifying runs from the last 30 days, weighted by confidence with a seven-day half-life. A newer qualifying run supersedes an older slice if it shares the primary path or covers all of the older slice’s paths. Qualifying assessments have broad coverage, medium or high confidence, and a score for the slice as reviewed before any fixes in that run.</p>
-                <p className="mt-1.5">Each run rates the whole slice it deep-reviewed using the severity, prevalence, and reach of verified defects. 96–100 exceptional quality demonstrated by inspection · 88–95 clean, healthy slice without speculative hardening · 85–87 healthy with minor polish remaining · 75–84 one or two localized defects in secondary paths · 70–74 material but contained defects with wider impact than isolated secondary-path defects · 40–69 recurring or systemic defects across multiple files or in core paths · 0–39 severe core workflow breakage, data loss, or verified reachable exploits. A run with no findings can score below 100.</p>
-                <p className="mt-1.5">Target: 85–95 is healthy. Categories at {QUALITY_HEALTHY_THRESHOLD}+ are not flagged; chasing 100/100 invites over-engineering.</p>
-                {federation && <p className="mt-1.5">Unified scores include eligible peer and release snapshot runs. Local slices take precedence on the same UTC day and supersede older peer and snapshot runs. Offline peers do not contribute.</p>}
+                <p className="mt-1.5">Each run rates the whole slice it deep-reviewed using the severity, prevalence, and reach of verified defects. {QUALITY_SCORE_BANDS.map(([band, meaning]) => `${band} ${meaning}`).join(' · ')}.</p>
+                <p className="mt-1.5">The target is {QUALITY_HEALTHY_THRESHOLD}–95. A clean slice with zero material findings scores 90–95. Extra hardening or micro-optimizations to chase 100 are unnecessary.</p>
+                {federation && <p className="mt-1.5">Unified scores include eligible peer and release snapshot runs. A strictly newer peer or snapshot run can contribute alongside a same-day local slice. Local slices supersede older imported scores. Offline peers do not contribute.</p>}
                 {score == null && !hasAssessments && <p className="mt-1.5">Maintenance tasks only supply a score when they return a valid quality report. Earlier runs are not scored retroactively.</p>}
               </InfoTooltip>
             </h3>
@@ -222,6 +222,8 @@ function CategoryRow({ category, below, runLink }) {
     ...(category.sourcePeerId ? [{ id: 'instances', label: 'View instances', to: instancePeerLink(category.sourcePeerId) }] : []),
   ];
   const inapplicable = category.applicable === false;
+  const qualified = category.window ? windowRuns > 0 : !category.stale && category.coverage === 'broad' && category.confidence !== 'low';
+  const targetMet = !inapplicable && qualified && category.score >= QUALITY_HEALTHY_THRESHOLD;
   // A consolidated domain names each folded-in series that has a run, so a legacy
   // profile (e.g. one now inside a broader domain) stays visible by name.
   const measuredMembers = (category.members || []).filter(member => member.assessedAt);
@@ -249,6 +251,7 @@ function CategoryRow({ category, below, runLink }) {
         <span className={`font-semibold sm:font-normal ${inapplicable ? 'text-gray-500' : 'text-white'}`}>
           {category.score == null ? '—' : `${category.score}/100`}
         </span>
+        {targetMet && <span className="block text-xs font-medium text-port-success">Target met</span>}
       </td>
       <td className="text-xs text-gray-400 col-span-1 min-w-0 sm:table-cell sm:py-1.5 sm:px-2">
         {evidence}

@@ -178,8 +178,10 @@ describe('scheduled audit measurement workflow', () => {
     expect(parseAuditSlice(`AUDIT_SLICE: ${'x'.repeat(600)}`)).toHaveLength(500);
     expect(parseAuditSlice(null)).toBeNull();
 
-    const read = vi.fn().mockResolvedValue({ rows: [{ assessed_at: new Date('2026-09-10T10:00:00Z'), slice: 'server/services', report: { version: 2, sliceScore: 62 } }] });
-    expect(await readRecentAuditSlices('portos-default', 'react-lifecycle', { query: read })).toEqual([{ assessedAt: '2026-09-10T10:00:00.000Z', slice: 'server/services', sliceScore: 62 }]);
+    const read = vi.fn().mockResolvedValue({ rows: [{ assessed_at: new Date('2026-09-10T10:00:00Z'), slice: 'server/services', report: { version: 2, sliceScore: 62, worstSeverity: 5 } },
+      { assessed_at: new Date('2026-09-09T10:00:00Z'), slice: 'server/routes', report: { version: 1, score: 90, worstSeverity: 0 } }] });
+    expect(await readRecentAuditSlices('portos-default', 'react-lifecycle', { query: read })).toEqual([{ assessedAt: '2026-09-10T10:00:00.000Z', slice: 'server/services', sliceScore: 62, worstSeverity: 5 },
+      { assessedAt: '2026-09-09T10:00:00.000Z', slice: 'server/routes', sliceScore: 90, worstSeverity: 0 }]);
     expect(read.mock.calls[0][0]).toMatch(/slice IS NOT NULL/);
     expect(read.mock.calls[0][1]).toEqual(['portos-default', ['ui-lifecycle', 'react-lifecycle'], AUDIT_SLICE_HISTORY_RUNS]);
     await readRecentAuditSlices('portos-default', 'ui-runtime-bugs', { query: read });
@@ -331,18 +333,25 @@ describe('scheduled audit measurement workflow', () => {
   });
 
   it.each([
-    [{ sourcePeerId: 'peer-a' }, '2026-09-10T09:00:00Z'],
-    [{ sourcePeerId: 'peer-a' }, '2026-09-10T13:00:00Z'],
-    [{ sourcePeerName: 'Release snapshot' }, '2026-09-10T13:00:00Z'],
-  ])('gives a qualifying local slice precedence over same-day imported evidence (%j, %s)', (source, importedAt) => {
+    [{ sourcePeerId: 'peer-a' }, '2026-09-10T09:00:00Z', false],
+    [{ sourcePeerId: 'peer-a' }, '2026-09-10T10:00:00Z', false],
+    [{}, '2026-09-10T13:00:00Z', false],
+    [{ sourcePeerId: 'peer-a' }, '2026-09-10T13:00:00Z', true],
+    [{ sourcePeerName: 'Release snapshot' }, '2026-09-10T13:00:00Z', true],
+  ])('lets strictly newer imported evidence lead the same-day window (%j, %s)', (source, importedAt, leads) => {
     const now = Date.parse('2026-09-10T16:00:00Z');
     const local = { category: 'security', assessedAt: '2026-09-10T10:00:00Z',
       report: sliceReport({ category: 'security', sliceScore: 92, worstSeverity: 1 }) };
     const imported = { category: 'security', assessedAt: importedAt,
       report: report({ category: 'security', score: 50 }), ...source };
     const daily = dailyQualityRecords([local, imported]);
+    const latest = leads ? imported : local;
+    const expectedScore = leads ? 71 : 92;
     expect(summarizeAppQuality(daily, now).categories.find(c => c.id === 'security'))
-      .toMatchObject({ score: 92, window: { runs: 1, worstSeverity: 1 } });
+      .toMatchObject({ assessedAt: latest.assessedAt, runScore: leads ? 50 : 92,
+        sourcePeerId: latest.sourcePeerId ?? null, sourcePeerName: latest.sourcePeerName ?? null,
+        score: expectedScore, window: { runs: leads ? 2 : 1, worstSeverity: leads ? 8 : 1 } });
+    expect(buildAppQualityHistory(daily, 1, now).points[0].categories.security.score).toBe(expectedScore);
 
     // A partial local scan cannot displace a qualifying imported run.
     const partial = { ...local, report: { ...local.report, coverage: 'partial', scannedFiles: 50 } };
@@ -432,9 +441,9 @@ describe('scheduled audit measurement workflow', () => {
     const instructions = auditQualityInstructions('code-quality');
     expect(instructions).toContain(`Before rotating to a new offender, prefer to re-verify a slice in audit-slice-history that scored below ${QUALITY_HEALTHY_THRESHOLD} once its filed issues are closed`);
     expect(instructions).toContain('A finding that led you to choose the slice is only one part of that evidence.');
-    expect(instructions).toContain('88–95: Clean, healthy slice without speculative hardening');
-    expect(instructions).toContain('75–84: One or two localized defects in secondary paths');
-    expect(instructions).toContain('40–69: Recurring or systemic defects across multiple files or in core paths');
+    expect(instructions).toContain('For a clean slice with worstSeverity 0, score 90–95.');
+    expect(instructions).toContain('75–84: Mostly healthy, with localized moderate defects in secondary paths');
+    expect(instructions).toContain('40–59: Systemic or recurring defects across core workflows');
     expect(instructions).toContain('0–39: Severe core workflow breakage, data loss, or verified reachable exploits');
     expect(instructions).toContain('Score the whole reviewed slice proportionally');
     expect(instructions).toContain('The pragmatic target band is 85–95. Avoid speculative hardening');

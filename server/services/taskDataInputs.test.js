@@ -72,14 +72,15 @@ describe('taskDataInputs', () => {
   it('renders the lane\'s recent audit slices, an empty history, and an unreadable store without a forge call', async () => {
     const resolveTracker = vi.fn();
     const listAuditSlices = vi.fn().mockResolvedValue([
-      { assessedAt: '2026-09-10T10:00:00.000Z', slice: 'server/services/auth, server/lib/commandSecurity.js', sliceScore: 60 },
+      { assessedAt: '2026-09-10T10:00:00.000Z', slice: 'server/services/auth, server/lib/commandSecurity.js', sliceScore: 60, worstSeverity: 7 },
       { assessedAt: '2026-09-03T10:00:00.000Z', slice: 'client/src/components/apps' },
     ]);
     const options = { app: APP, taskType: 'better-runtime-safety', dependencies: { resolveTracker, listAuditSlices } };
     const [section] = await resolveTaskDataInputs(['audit-slice-history'], options);
     expect(section.label).toBe('Recent audit slices');
-    expect(section.content).toContain(`Recently audited by this lane (prefer to re-verify a slice that scored below ${QUALITY_HEALTHY_THRESHOLD} once its filed issues are closed and its fixes are present. Rotate to uncovered areas when no such slice needs re-verification):`);
-    expect(section.content).toContain('- 2026-09-10 (score: 60): server/services/auth, server/lib/commandSecurity.js');
+    expect(section.content).toContain('Open issue count for this lane is unavailable.');
+    expect(section.content).toContain(`For each slice below ${QUALITY_HEALTHY_THRESHOLD}, check its own filed issues and verify the fixes in the checkout before rotating.`);
+    expect(section.content).toContain('- 2026-09-10 (score: 60, worst severity: 7/10): server/services/auth, server/lib/commandSecurity.js');
     expect(section.content).toContain('- 2026-09-03: client/src/components/apps');
     expect(listAuditSlices).toHaveBeenCalledWith('app-1', 'better-runtime-safety');
     expect(resolveTracker).not.toHaveBeenCalled();
@@ -93,6 +94,27 @@ describe('taskDataInputs', () => {
     await resolveTaskDataInputs(['audit-slice-history'], { ...options, app: { id: null, name: 'PortOS', repoPath: '/repo' } });
     expect(listAuditSlices).toHaveBeenLastCalledWith('portos-default', 'better-runtime-safety');
     expect((await resolveTaskDataInputs(['audit-slice-history'], { ...options, taskType: 'plan-feature' }))[0].content).toContain('applies to audit lanes only');
+  });
+
+  it('shares the selected lane-health read with slice history and preserves slices when the tracker fails', async () => {
+    const report = { ok: true, from: '2026-09-10T12:00:00Z', truncated: false,
+      lanes: [{ id: 'security', open: 0, flagged: [] }] };
+    const dependencies = {
+      resolveTracker: vi.fn().mockResolvedValue({ forge: 'gh', host: 'github.com' }),
+      resolveTokenEnv: vi.fn().mockResolvedValue({}),
+      listAuditSlices: vi.fn().mockResolvedValue([{ assessedAt: '2026-09-15', slice: 'server/routes', sliceScore: 72, worstSeverity: 4 }]),
+      collectLaneHealth: vi.fn().mockResolvedValueOnce(report)
+        .mockResolvedValueOnce({ ...report, truncated: true, lanes: [{ id: 'security', open: 3, flagged: [] }] })
+        .mockRejectedValueOnce(new Error('offline')),
+    };
+    const read = async () => (await resolveTaskDataInputs(['audit-slice-history', 'lane-health'],
+      { app: APP, taskType: 'security', dependencies }))[0].content;
+    expect(await read()).toContain('For issues filed by this lane since 2026-09-10, 0 remain open.');
+    expect(await read()).toContain('3 remain open (truncated issue history)');
+    const unavailable = await read();
+    expect(unavailable).toContain('Open issue count for this lane is unavailable.');
+    expect(unavailable).toContain('2026-09-15 (score: 72, worst severity: 4/10): server/routes');
+    expect(dependencies.collectLaneHealth).toHaveBeenCalledTimes(3);
   });
 
   it('resolves selected sources in configured order and reuses one forge resolution', async () => {

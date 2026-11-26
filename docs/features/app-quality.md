@@ -39,13 +39,17 @@ led to selecting the slice is one part of that evidence.
 
 | Score | Meaning |
 | --- | --- |
-| 96–100 | Exceptional quality demonstrated by inspection |
-| 88–95 | Clean, healthy slice without speculative hardening |
-| 85–87 | Healthy with minor polish remaining |
-| 75–84 | One or two localized defects in secondary paths |
-| 70–74 | Material but contained defects with wider impact than isolated secondary-path defects |
-| 40–69 | Recurring or systemic defects across multiple files or in core paths |
+| 96–100 | Exceptional quality demonstrated by inspection (optional) |
+| 90–95 | High quality, with no verified material defects |
+| 85–89 | Healthy, with minor localized polish only |
+| 75–84 | Mostly healthy, with localized moderate defects in secondary paths |
+| 60–74 | Material defects contained within a feature area |
+| 40–59 | Systemic or recurring defects across core workflows |
 | 0–39 | Severe core workflow breakage, data loss, or verified reachable exploits |
+
+Score a clean slice with zero material findings at **90–95**. This is the pragmatic
+ceiling. Deduct points only for demonstrated harm. Optional scores above 95
+never require speculative hardening, defensive layers or micro-optimizations.
 
 Worst-finding severity is a separate 0–10 value (higher is worse; 0 means no
 material finding verified). An issue being filed, or one fix being made, is not
@@ -68,21 +72,21 @@ the same canonical primary path (the first listed segment), or when the newer
 slice covers all of the older slice's comma-separated segments. Paths match
 exactly or by directory prefix at a slash boundary after normalizing case,
 whitespace, and slash notation. Distinct slices may contribute on the same UTC
-day. For each audit category and UTC day, the window
-takes at most one slice-less run and gives a retained slice precedence, even
-over a later slice-less run that day. Peer and release snapshot rows omit slice
-names. These rows can fill otherwise eligible days when there is no qualifying
-local slice or their timestamp is at least as recent as the newest qualifying
-local slice in the category window's eligible set.
-The pragmatic target band is **85–95**, and the healthy threshold is **85**.
+day. Each category can contribute at most one slice-less run per UTC day.
+Peer and snapshot runs omit slice names and yield to newer local slices. A
+strictly newer peer or snapshot run can lead the window alongside an earlier
+same-day slice. Named slices win equal timestamps. Same-day local slice-less
+runs yield to retained named slices.
+The pragmatic target band is **85–95**. A qualifying category score of **85**
+or above displays **Target met** in the breakdown.
 The breakdown shows how many runs fed the figure and the worst severity any of
 them found; the row's coverage, confidence, date, slice and summary describe the
-newest run. A newer partial run does not erase a fresh scored one. With no
-eligible run the row shows the newest run's own score beside its stale, partial
+newest run, taking the window leader when same-day qualifying evidence competes.
+A newer partial run does not erase a fresh scored one. With no eligible run the row shows the newest run's own score beside its stale, partial
 or low-confidence label and does not contribute. The overall score is the
 rounded, equal-weight average of the contributing category scores. Broad means
-the signal scan covered the entire declared eligible inventory; deep
-investigation still stays bounded. Partial, stale, low-confidence, unavailable
+the signal scan covered at least 95% of the declared eligible inventory. Deep
+investigation stays bounded. Partial, stale, low-confidence, unavailable
 and inapplicable assessments remain visible but do not contribute. Missing
 categories do not count as 100. The contributing category count is shown beside
 the score so a single good category cannot imply complete coverage. Its denominator is the number of categories that **apply** to the
@@ -119,9 +123,11 @@ audit batch is enabled automatically. The summary also carries one
 `slice` column (null for runs that predate it, or the v2 report's `slice` when
 the line is missing). Every audit lane preloads its last eight slices for the
 app through the `audit-slice-history` task data input ("Recent audit slices")
-to identify remediated slices that need re-verification and uncovered areas
-for future runs. The `ux` and `module-hygiene` prompts read that block for their
-route and slice choice. Peers and the `.quality.json` snapshot
+with each recorded score and worst severity. When lane health is selected, the
+history includes the number of open issues filed by that lane in the observed
+tracker window. Truncated and unavailable reads are labeled. For a below-target
+slice, check its own issues and the fixes in the checkout before re-verification.
+The `ux` and `module-hygiene` prompts read that block for their route and slice choice. Peers and the `.quality.json` snapshot
 receive the numeric v1 wire shape with a v2 run's `sliceScore` in `score`, so
 older installs can read it. Exports set `scannedFiles` to `totalFiles` for
 qualifying broad rows to satisfy older readers' equal-count rule. PostgreSQL and

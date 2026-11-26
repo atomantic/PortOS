@@ -33,8 +33,9 @@ it('shows zero as a real score up front and keeps the scoring explanation in a t
   expect(tooltip).toHaveTextContent(/up to three qualifying runs from the last 30 days/);
   expect(tooltip).toHaveTextContent(/seven-day half-life/);
   expect(tooltip).toHaveTextContent(/supersedes an older slice if it shares the primary path or covers all of the older slice’s paths/);
-  expect(tooltip).toHaveTextContent('96–100 exceptional quality demonstrated by inspection · 88–95 clean, healthy slice without speculative hardening · 85–87 healthy with minor polish remaining · 75–84 one or two localized defects in secondary paths · 70–74 material but contained defects with wider impact than isolated secondary-path defects · 40–69 recurring or systemic defects across multiple files or in core paths · 0–39 severe core workflow breakage, data loss, or verified reachable exploits');
-  expect(tooltip).not.toHaveTextContent(/70–89/);
+  expect(tooltip).toHaveTextContent('96–100 Exceptional quality demonstrated by inspection (optional) · 90–95 High quality, with no verified material defects · 85–89 Healthy, with minor localized polish only · 75–84 Mostly healthy, with localized moderate defects in secondary paths · 60–74 Material defects contained within a feature area · 40–59 Systemic or recurring defects across core workflows · 0–39 Severe core workflow breakage, data loss, or verified reachable exploits');
+  expect(tooltip).toHaveTextContent('A clean slice with zero material findings scores 90–95');
+  expect(tooltip).toHaveTextContent('to chase 100 are unnecessary');
   // Metrics-only visitors never see the run or schedule forms until they ask.
   expect(screen.queryByText('Runner')).not.toBeInTheDocument();
   expect(screen.queryByText('Schedule form')).not.toBeInTheDocument();
@@ -275,13 +276,17 @@ it('uses responsive classes for mobile cards and desktop table layout', async ()
 
 it('never flags healthy categories as below the composite and shows the target-met pill', async () => {
   const app = { id: 'example', quality: { score: 93, categories: [
-    { id: 'ux', label: 'UX', score: 90, coverage: 'broad', confidence: 'high' },
-    { id: 'security', label: 'Security', score: 80, coverage: 'broad', confidence: 'high' },
+    { id: 'ux', label: 'UX', score: 85, coverage: 'broad', confidence: 'high' },
+    { id: 'privacy', label: 'Privacy', score: 95, coverage: 'partial', window: { runs: 0 } },
+    { id: 'security', label: 'Security', score: 84, coverage: 'broad', confidence: 'high' },
   ] } };
   render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
   await screen.findByText(/No scored assessments/);
   expect(screen.getByText('Target met (85+)')).toBeInTheDocument();
   const rowFor = name => screen.getAllByRole('row').find(row => within(row).queryByRole('rowheader')?.textContent === name);
+  expect(within(rowFor('UX')).getByText('Target met')).toBeInTheDocument();
+  expect(within(rowFor('Privacy')).queryByText('Target met')).not.toBeInTheDocument();
+  expect(within(rowFor('Security')).queryByText('Target met')).not.toBeInTheDocument();
   expect(rowFor('UX').className).not.toContain('bg-port-warning/10');
   expect(rowFor('Security').className).toContain('bg-port-warning/10');
 });

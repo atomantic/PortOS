@@ -324,21 +324,29 @@ const INPUT_LOADERS = {
       : forgeUnavailable('Open pull requests', forge, result);
   },
   // The slice rotation record (#12090): what this lane deep-reviewed lately,
-  // so the agent prefers other areas. A self-directed PortOS task carries no
+  // for re-verification and rotation. A self-directed PortOS task carries no
   // app id; its measurements are stored under PortOS's own.
-  'audit-slice-history': async ({ app, deps, taskType }) => {
+  'audit-slice-history': async ({ app, deps, taskType, laneHealth }) => {
     if (!isAuditTaskType(taskType)) return 'This input applies to audit lanes only; no slice history applies to this task.';
     const runs = await deps.listAuditSlices(app?.id || PORTOS_APP_ID, taskType)
       .catch(() => null);
     if (runs === null) return unavailableMessage('Recent audit slices', 'measurement store unavailable');
     if (!runs.length) return 'No slice recorded for this lane on this app yet; choose the slice by evidence and name it in AUDIT_SLICE.';
-    const lines = runs.map(({ assessedAt, slice, sliceScore }) => `- ${assessedAt.slice(0, 10)}${Number.isFinite(sliceScore) ? ` (score: ${sliceScore})` : ''}: ${redactPii(scrubSecretTokens(slice)).slice(0, 300)}`);
-    return truncateWithNotice(`Recently audited by this lane (prefer to re-verify a slice that scored below ${QUALITY_HEALTHY_THRESHOLD} once its filed issues are closed and its fixes are present. Rotate to uncovered areas when no such slice needs re-verification):\n${lines.join('\n')}`, MAX_INPUT_CHARS);
+    const report = await laneHealth;
+    const lane = report?.ok && laneHealthFor(report, normalizeAuditTaskType(taskType));
+    const tracker = lane
+      ? `For issues filed by this lane since ${report.from.slice(0, 10)}, ${lane.open} remain open${report.truncated ? ' (truncated issue history)' : ''}.`
+      : 'Open issue count for this lane is unavailable.';
+    const lines = runs.map(({ assessedAt, slice, sliceScore, worstSeverity }) => {
+      const evidence = [Number.isFinite(sliceScore) && `score: ${sliceScore}`, Number.isFinite(worstSeverity) && `worst severity: ${worstSeverity}/10`].filter(Boolean);
+      return `- ${assessedAt.slice(0, 10)}${evidence.length ? ` (${evidence.join(', ')})` : ''}: ${redactPii(scrubSecretTokens(slice)).slice(0, 300)}`;
+    });
+    return truncateWithNotice(`Recently audited by this lane:\n${tracker} For each slice below ${QUALITY_HEALTHY_THRESHOLD}, check its own filed issues and verify the fixes in the checkout before rotating. A lane-wide count alone cannot establish a slice's remediation status.\n${lines.join('\n')}`, MAX_INPUT_CHARS);
   },
-  'lane-health': async ({ app, deps, forge, taskType }) => {
+  'lane-health': async ({ forge, taskType, laneHealth }) => {
     if (!isAuditTaskType(taskType)) return 'This input applies to audit lanes only; no lane health applies to this task.';
     if (!forge) return unavailableMessage('Lane health', 'repository forge is unavailable');
-    const result = await deps.collectLaneHealth(app, { forge, taskType });
+    const result = await laneHealth;
     return result.ok ? renderLaneHealth(result, taskType) : forgeUnavailable('Lane health', forge, result);
   },
   'closed-unmerged-pull-requests': async ({ app, deps, forge }) => {
@@ -382,11 +390,15 @@ export async function resolveTaskDataInputs(inputIds, { app, taskMetadata = {}, 
     ? await resolveForgeContext(app, deps).catch(() => null)
     : null;
 
+  // Reuse the selected lane-health input. Slice history alone stays a local read.
+  const laneHealth = selected.includes('lane-health') && forge && isAuditTaskType(taskType)
+    ? Promise.resolve().then(() => deps.collectLaneHealth(app, { forge, taskType })).catch(() => ({ ok: false }))
+    : null;
   const sections = await Promise.all(selected.map(async (id) => {
     const definition = definitions.get(id);
     const loader = INPUT_LOADERS[id];
     if (!definition || !loader) return null;
-    const content = await loader({ app, deps, forge, taskMetadata, taskType, trustedPullRequestData }).catch(() => unavailableMessage(definition.label));
+    const content = await loader({ app, deps, forge, laneHealth, taskMetadata, taskType, trustedPullRequestData }).catch(() => unavailableMessage(definition.label));
     return { id, label: definition.label, content };
   }));
   return sections.filter(Boolean);
