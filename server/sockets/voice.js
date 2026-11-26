@@ -52,6 +52,7 @@ import {
   detachCaptureHost,
   endCapture,
   getCaptureHost,
+  getCaptureState,
   isCaptureActive,
   recordUtterance,
   setCaptureStateListener,
@@ -687,7 +688,7 @@ export const registerVoiceHandlers = (socket) => {
   // plays anything back. Stopping finalizes whatever is still buffered in the
   // endpointer, then writes the transcript to the journal and the inbox.
   // ---------------------------------------------------------------------------
-  const capture = { endpointer: null, queue: Promise.resolve(), stopping: null };
+  const capture = { endpointer: null, queue: Promise.resolve(), stopping: null, ctrl: null };
 
   const emitCaptureState = (snapshot) => socket.emit('voice:capture:state', snapshot);
 
@@ -695,10 +696,12 @@ export const registerVoiceHandlers = (socket) => {
     try {
       const { text } = await transcribe(
         pcmToWavBuffer(pcmToFloat(utterance.pcm), { sampleRate: CALL_AUDIO_SAMPLE_RATE }),
-        { mimeType: 'audio/wav' },
+        { mimeType: 'audio/wav', signal: capture.ctrl?.signal },
       );
+      if (capture.ctrl?.signal.aborted) return;
       if (text) emitCaptureState(recordUtterance(text));
     } catch (err) {
+      if (capture.ctrl?.signal.aborted) return;
       console.error(`🎙️ capture transcribe failed: ${err.message}`);
       socket.emit('voice:error', { stage: 'capture', message: err.message });
     }
@@ -725,10 +728,11 @@ export const registerVoiceHandlers = (socket) => {
     }
     const started = startCapture(socket);
     if (!started.ok) {
-      socket.emit('voice:capture:state', { error: started.reason, hostAttached: true, active: false, state: 'idle' });
+      emitCaptureState({ ...getCaptureState(), error: started.reason });
       return;
     }
     capture.endpointer = createCallEndpointer(vadEndpointerOptions(config));
+    capture.ctrl = new AbortController();
     capture.queue = Promise.resolve();
     setCaptureStateListener(emitCaptureState);
     emitCaptureState(started.state);
@@ -742,10 +746,12 @@ export const registerVoiceHandlers = (socket) => {
       capture.stopping = (async () => {
         // Finalize whatever speech is still buffered rather than dropping the
         // last few seconds of the meeting on the floor.
-        const pending = capture.endpointer?.flush();
+        const endpointer = capture.endpointer;
+        capture.endpointer = null;
+        const pending = endpointer?.flush();
         if (pending) enqueueCaptureUtterance(pending);
         await capture.queue.catch(() => {});
-        capture.endpointer = null;
+        capture.ctrl = null;
         const ended = await endCapture('stopped');
         emitCaptureState(ended);
         emitCaptureState(await detachCaptureHost(socket));
@@ -788,7 +794,8 @@ export const registerVoiceHandlers = (socket) => {
     // Same for meeting capture — best-effort, no final flush of whatever was
     // still mid-utterance (matches the call path above, which drops its own
     // in-flight endpointer buffer on disconnect the same way).
-    if (getCaptureHost() === socket) {
+    if (getCaptureHost() === socket && !capture.stopping) {
+      capture.ctrl?.abort();
       capture.endpointer = null;
       detachCaptureHost(socket).catch((err) => console.error(`❌ voice capture detach failed: ${err.message}`));
     }
