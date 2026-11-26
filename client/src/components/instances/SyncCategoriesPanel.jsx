@@ -104,7 +104,7 @@ export default function SyncCategoriesPanel({ peer, onRefresh }) {
   const makeMutual = async () => {
     const result = await reciprocatePeer(peer.id, { silent: true }).catch(() => null);
     if (result?.ok) toast.success(`Asked ${peer.name} to sync the same categories back`);
-    else toast.error(`Couldn't reach ${peer.name} to make sync mutual — try again when it's online`);
+    else toast.error(result?.error || result?.message || `Couldn't reach ${peer.name} to make sync mutual — try again when it's online`);
     onRefresh();
   };
 

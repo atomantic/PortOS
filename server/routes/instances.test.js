@@ -27,6 +27,7 @@ vi.mock('../services/instances.js', async (importOriginal) => ({
   acceptPeerSyncSecretFromPeer: vi.fn(),
   updatePeer: vi.fn(),
   addPeer: vi.fn(),
+  enqueueReciprocalSync: vi.fn(),
   sanitizePeerForClient: vi.fn((peer) => peer),
   getAssignableInstances: vi.fn(),
   getPeers: vi.fn(),
@@ -112,6 +113,35 @@ describe('GET /api/instances/peers/:id/query', () => {
     expect(res.status).toBe(status);
     expect(res.body).toMatchObject({ code, error });
     expect(instances.queryPeer).toHaveBeenLastCalledWith('peer-1', '/api/apps');
+  });
+});
+
+describe('POST /api/instances/peers/:id/reciprocate', () => {
+  beforeEach(() => {
+    instances.getPeers.mockResolvedValue([{ id: 'peer-1' }]);
+  });
+
+  it.each([
+    ['no-peer-identity', 409, 'PEER_NOT_READY'],
+    ['no-categories', 409, 'PEER_NOT_READY'],
+    ['http-403', 502, 'PEER_RECIPROCATE_FAILED'],
+    ['fetch failed', 502, 'PEER_RECIPROCATE_FAILED'],
+  ])('maps %s to HTTP %i with its reason', async (reason, status, code) => {
+    instances.enqueueReciprocalSync.mockResolvedValueOnce({ ok: false, reason });
+
+    const res = await request(buildApp()).post('/api/instances/peers/peer-1/reciprocate');
+
+    expect(res.status).toBe(status);
+    expect(res.body).toMatchObject({ code, context: { reason } });
+  });
+
+  it('passes successful reciprocation through as 200 JSON', async () => {
+    instances.enqueueReciprocalSync.mockResolvedValueOnce({ ok: true });
+
+    const res = await request(buildApp()).post('/api/instances/peers/peer-1/reciprocate');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
   });
 });
 

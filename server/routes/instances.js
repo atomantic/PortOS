@@ -488,6 +488,18 @@ router.post('/peers/:id/reciprocate', asyncHandler(async (req, res) => {
   // on toggle) so a manual "Make mutual" can't race an in-flight toggle send and
   // land a stale map. The queue re-reads the freshest persisted categories.
   const result = await instances.enqueueReciprocalSync(peer.id);
+  if (result?.ok === false) {
+    const reason = result.reason || 'unknown';
+    const peerReadyFailure = reason === 'no-peer-identity' || reason === 'no-categories';
+    throw new ServerError(
+      peerReadyFailure ? 'Peer is not ready to reciprocate sync categories' : 'Peer reciprocation failed',
+      {
+        status: peerReadyFailure ? 409 : 502,
+        code: peerReadyFailure ? 'PEER_NOT_READY' : 'PEER_RECIPROCATE_FAILED',
+        context: { reason },
+      },
+    );
+  }
   res.json(result ?? { ok: false, reason: 'no-result' });
 }));
 
