@@ -21,6 +21,7 @@ import {
   localLlmModelTargetSchema,
   localLlmCatalogQuerySchema,
   localLlmLoadedQuerySchema,
+  manualGuardScanSchema,
   localLlmDeleteSchema,
   localLlmSwitchSchema,
   localLlmUnloadSchema,
@@ -75,7 +76,7 @@ import { getSpecDecodePresetStatus, downloadSpecDecodeModel, previewSpecDecodeDo
 import { SPEC_TYPE_SUGGESTIONS } from '../lib/specDecodePresets.js'
 import { resetProviderReadinessCache } from '../services/provider/providerReadiness.js'
 import { syncRuntimeProviderModels } from '../services/localRuntimeProviderSync.js'
-import { MODEL_ABUSE_GUARD, manualGuardScanSchema } from '../lib/modelAbuseGuard.js'
+import { MODEL_ABUSE_GUARD } from '../lib/modelAbuseGuard.js'
 import { JEV_MODEL, jevDecideRequestSchema } from '../lib/jev.js'
 import { jevHeadActionRequestSchema, jevHeadTrainRequestSchema } from '../lib/jevHead.js'
 import { getCatalog, searchCatalog } from '../lib/localLlmCatalog.js'

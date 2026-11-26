@@ -14,7 +14,6 @@
 
 import { createHash } from 'node:crypto';
 import { escapeRegExp } from './textUtils.js';
-import { z } from 'zod';
 
 /**
  * Static contract for PortOS's model-abuse boundary.
@@ -158,9 +157,6 @@ export function modelAbuseGuardStageReadiness({
 // Read the complete supplied item up to this bound. Never truncate and then
 // treat the prefix as a trustworthy verdict.
 export const MODEL_ABUSE_GUARD_MAX_INPUT_CHARS = 2_000_000;
-export const manualGuardScanSchema = z.object({
-  content: z.string().min(1).max(MODEL_ABUSE_GUARD_MAX_INPUT_CHARS).refine(value => value.trim().length > 0),
-}).strict();
 // Compact chunk metadata is still proportional to the number of windows. Keep
 // the bound above the worst case for a complete 2M-character scan so a valid
 // long input cannot be mistaken for a failed/partial verdict.

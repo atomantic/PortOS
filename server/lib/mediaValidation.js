@@ -189,6 +189,9 @@ export const localLlmCatalogQuerySchema = z.object({
   variants: localLlmBooleanQuerySchema.optional(),
 });
 export const localLlmLoadedQuerySchema = z.object({ fresh: localLlmBooleanQuerySchema.optional() });
+export const manualGuardScanSchema = z.object({
+  content: z.string().min(1).max(2_000_000).refine(value => value.trim().length > 0),
+}).strict();
 export const localLlmSwitchSchema = z.object({ to: localLlmBackendSchema });
 // Migrate moves models from the OTHER backend onto `to` (bidirectional, never
 // flips the default marker). `mode` picks how the GGUF lands on disk: 'link'
