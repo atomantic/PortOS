@@ -21,6 +21,7 @@ vi.mock('../services/memoryBackend.js', () => ({
   archiveMemory: vi.fn(),
   purgeMemory: vi.fn(),
   searchMemories: vi.fn(),
+  hybridSearchMemories: vi.fn(),
   consolidateMemories: vi.fn(),
   linkMemories: vi.fn(),
   clearExpired: vi.fn(),
@@ -38,8 +39,7 @@ vi.mock('../services/memoryEmbeddings.js', () => ({
   generateQueryEmbedding: vi.fn(),
   generateMemoryEmbedding: vi.fn(),
   checkAvailability: vi.fn(),
-  resolveEmbeddingSource: vi.fn(),
-  embeddingsSettingsPage: () => 'Models → Embeddings'
+  resolveEmbeddingSource: vi.fn()
 }));
 
 vi.mock('../services/memoryRunUsage.js', () => ({
@@ -71,7 +71,7 @@ vi.mock('../services/settings.js', async () => ({
 }));
 
 import { PEER_INSTANCE_ID_HEADER } from '../services/sharing/peerPullAuthorization.js';
-import { ensureBackend, getMemories, getTimeline, archiveMemory, purgeMemory, linkMemories } from '../services/memoryBackend.js';
+import { ensureBackend, getMemories, getTimeline, archiveMemory, purgeMemory, linkMemories, searchMemories, hybridSearchMemories } from '../services/memoryBackend.js';
 import { checkHealth } from '../lib/db.js';
 import * as memorySync from '../services/memorySync.js';
 import { findRecentRunsUsingMemory } from '../services/memoryRunUsage.js';
@@ -126,6 +126,42 @@ describe('Memory Routes', () => {
     vi.clearAllMocks();
     settings = {};
     peers.length = 0;
+  });
+
+  describe('POST /search', () => {
+    const filters = { types: ['fact'], categories: ['codebase'], tags: ['build'], appId: 'example-app', limit: 3, offset: 6 };
+    const query = 'build instructions';
+
+    it('uses lexical search with the requested filters when the embedding is unavailable', async () => {
+      const result = { memories: [{ id: 'lexical-hit', searchMethod: 'fts' }], total: 7 };
+      embeddings.generateQueryEmbedding.mockResolvedValue(null);
+      hybridSearchMemories.mockResolvedValue(result);
+
+      const response = await request(app).post('/api/memory/search').send({ query, ...filters });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ ...result, searchMode: 'lexical' });
+      expect(hybridSearchMemories).toHaveBeenCalledExactlyOnceWith(query, null, { ...filters, lexicalMatch: 'any' });
+      expect(searchMemories).not.toHaveBeenCalled();
+    });
+
+    it('uses semantic search and the requested relevance threshold when an embedding is available', async () => {
+      const embedding = [0.1, 0.2];
+      const result = { memories: [{ id: 'semantic-hit', similarity: 0.91 }], total: 7 };
+      embeddings.generateQueryEmbedding.mockResolvedValue(embedding);
+      searchMemories.mockResolvedValue(result);
+
+      const response = await request(app).post('/api/memory/search').send({ query, ...filters, minRelevance: 0.85 });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ ...result, searchMode: 'semantic' });
+      expect(embeddings.generateQueryEmbedding).toHaveBeenCalledExactlyOnceWith(query, {
+        types: filters.types,
+        categories: filters.categories,
+      });
+      expect(searchMemories).toHaveBeenCalledExactlyOnceWith(embedding, { ...filters, minRelevance: 0.85 });
+      expect(hybridSearchMemories).not.toHaveBeenCalled();
+    });
   });
 
   describe('DELETE /api/memory/:id', () => {
@@ -621,14 +657,5 @@ describe('Memory embedding config API (#18296)', () => {
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({ source: 'settings', provider: 'ollama', model: 'nomic-embed-text', disabled: false });
     expect(embeddings.checkAvailability).not.toHaveBeenCalled();
-  });
-
-  it('search names the disabled setting instead of blaming LM Studio', async () => {
-    const embeddings = await import('../services/memoryEmbeddings.js');
-    embeddings.generateQueryEmbedding.mockResolvedValue(null);
-    embeddings.resolveEmbeddingSource.mockResolvedValue({ source: 'settings', provider: 'none', model: null, endpoint: null, disabled: true });
-    const response = await request(await makeApp()).post('/api/memory/search').send({ query: 'anything' });
-    expect(response.status).toBe(503);
-    expect(JSON.stringify(response.body)).toContain('Models → Embeddings');
   });
 });
