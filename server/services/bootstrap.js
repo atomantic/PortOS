@@ -31,6 +31,7 @@ import { isSmokeBoot } from '../lib/runtimeEnv.js';
 import { readPortosEnvValue } from '../lib/portosEnv.js';
 import { join } from 'path';
 import { resolveInstallRoot } from '../lib/dataRoot.js';
+import { tightenSecureFile } from '../lib/secureAuthStore.js';
 import { withRuntimeFileTurn } from '../lib/runtimeFilePublication.js';
 import { redactStoredPrivacyPrompt, trackPrivateRunOutput } from '../lib/privacyPrompt.js';
 import { PORTS } from '../lib/ports.js';
@@ -288,6 +289,14 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
         if (!smokeBoot) throw err;
         console.error(`❌ Smoke boot: migration run failed, refusing to report ready: ${err?.stack ?? err}`);
         return exit(1);
+      } finally {
+        // An upgrade or older snapshot can leave credential stores at their
+        // previous default mode even when no application write is pending.
+        await Promise.all(['settings.json', 'managed-visitor-credentials.json'].map(file =>
+          tightenSecureFile(join(dataDir, file)).catch(error => {
+            console.warn(`⚠️ Could not restrict permissions on ${file}: ${error.code || 'error'}`);
+          })
+        ));
       }
       // Local recovery only: no mail, browser, or LLM provider calls.
       await initializeMessageDrafts();

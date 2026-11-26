@@ -1,7 +1,7 @@
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { registerLateBoundService } from '../lib/lateBoundServices.js';
 import express from 'express';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
@@ -58,6 +58,16 @@ beforeEach(async () => {
   expect(response.status).toBe(200); credentials = response.body;
 });
 afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
+it.skipIf(process.platform === 'win32')('keeps new and rotated credential stores owner-only', async () => {
+  const file = join(directory, 'credentials.json');
+  expect((await stat(file)).mode & 0o777).toBe(0o600);
+
+  await chmod(file, 0o644);
+  const response = await request(app).post(`/api/managed-visitor-admin/${appId}/credential`).send(credentialInput);
+  expect(response.status).toBe(200);
+  expect((await stat(file)).mode & 0o777).toBe(0o600);
+});
+
 it('requires separate app credentials with optional password off/on and grants no owner or protected ordinary API authority', async () => {
   for (const enabled of [false, true]) {
     shared.enabled = enabled;
