@@ -112,9 +112,14 @@ export async function resolvePeopleByIdentities(scopes = []) {
  * check before writing `beeper_participants.tribe_person_id`, including the
  * no-durable-handle case where `linkIdentity` below is never reached.
  */
-export async function assertPersonLinkable(personId) {
-  await ensureReady();
-  const result = await query(`SELECT deleted FROM tribe_people WHERE id = $1`, [personId]);
+export async function assertPersonLinkable(personId, { client } = {}) {
+  if (!client) await ensureReady();
+  // FOR SHARE conflicts with the UPDATE that soft-deletes the person; the FK's
+  // key-share lock alone would let that UPDATE commit mid-link.
+  const result = await (client ?? { query }).query(
+    `SELECT deleted FROM tribe_people WHERE id = $1${client ? ' FOR SHARE' : ''}`,
+    [personId],
+  );
   const row = result.rows[0];
   if (!row || row.deleted) throw new ServerError('Person not found', { status: 404 });
 }
@@ -131,10 +136,7 @@ export async function listIdentitiesForPerson(personId) {
 /**
  * Claim a `(kind, network, handle)` identity for a person. Re-linking an
  * already-claimed identity to a DIFFERENT person moves ownership (`DO UPDATE`)
- * rather than erroring — there is no unlink UI yet (#10's "Not yet specified"
- * list), and a single-user install has no concurrent-writer race to defend
- * against (root AGENTS.md Security Model), so "the last explicit link wins"
- * is the simplest correct behavior until an unlink/merge flow exists. Because
+ * rather than erroring, so the last explicit link wins. Because
  * that move is silent at the database level (the audit trigger on this table
  * only captures hard deletes — there is no `deleted` column to tombstone-flip
  * on — so a `person_id` UPDATE leaves no `record_audit` row either), the
@@ -151,22 +153,22 @@ export async function listIdentitiesForPerson(personId) {
  */
 export async function linkIdentity({
   personId, kind, network = '', handle, source = '',
-}) {
+}, { client } = {}) {
   if (!personId) throw new ServerError('personId is required', { status: 400, code: 'BAD_REQUEST' });
   if (!kind || !handle) throw new ServerError('kind and handle are required', { status: 400, code: 'BAD_REQUEST' });
   if (NETWORK_SCOPED_KINDS.has(kind) && !network) {
     throw new ServerError(`network is required to link a ${kind} identity`, { status: 400, code: 'BAD_REQUEST' });
   }
-  await ensureReady();
-  await assertPersonLinkable(personId);
+  await assertPersonLinkable(personId, { client });
 
-  const existing = await query(
+  const db = client ?? { query };
+  const existing = await db.query(
     `SELECT person_id FROM tribe_identities WHERE kind = $1 AND network = $2 AND handle = $3`,
     [kind, network, handle],
   );
   const previousPersonId = existing.rows[0]?.person_id || null;
 
-  const result = await query(
+  const result = await db.query(
     `INSERT INTO tribe_identities (person_id, kind, network, handle, source, linked_at)
      VALUES ($1, $2, $3, $4, $5, NOW())
      ON CONFLICT (kind, network, handle)
@@ -193,8 +195,8 @@ export async function linkIdentity({
  * Returns the deleted identity, or `null` when `id` does not exist (the
  * route turns that into a 404).
  */
-export async function unlinkIdentity(id) {
-  await ensureReady();
-  const result = await query(`DELETE FROM tribe_identities WHERE id = $1 RETURNING *`, [id]);
+export async function unlinkIdentity(id, { client } = {}) {
+  if (!client) await ensureReady();
+  const result = await (client ?? { query }).query(`DELETE FROM tribe_identities WHERE id = $1 RETURNING *`, [id]);
   return result.rows[0] ? rowToIdentity(result.rows[0]) : null;
 }

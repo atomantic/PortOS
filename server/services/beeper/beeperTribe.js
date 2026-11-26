@@ -45,7 +45,7 @@
  * participant, so deriving touchpoints from messages (never from the roster)
  * is correct for a 1:1 chat too, not just a group.
  */
-import { ensureSchema, query } from '../../lib/db.js';
+import { ensureSchema, query, withTransaction } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
   classifyNetworkHandle, buildPersonMatchIndex, matchPerson, resolveLinkedPersonId,
@@ -97,14 +97,14 @@ function rowToParticipant(row) {
   };
 }
 
-export async function getParticipant(conversationId, sourceUserId) {
-  await ensureReady();
-  const result = await query(
+export async function getParticipant(conversationId, sourceUserId, { client, forUpdate = false } = {}) {
+  if (!client) await ensureReady();
+  const result = await (client ?? { query }).query(
     `SELECT p.*, c.network, c.account_id, tp.deleted AS tribe_person_deleted
      FROM beeper_participants p
      JOIN beeper_conversations c ON c.id = p.conversation_id
      LEFT JOIN tribe_people tp ON tp.id = p.tribe_person_id
-     WHERE p.conversation_id = $1 AND p.source_user_id = $2`,
+     WHERE p.conversation_id = $1 AND p.source_user_id = $2${forUpdate ? ' FOR UPDATE OF p' : ''}`,
     [conversationId, sourceUserId],
   );
   return rowToParticipant(result.rows[0]);
@@ -485,8 +485,8 @@ export async function upsertConversationParticipants(conversationId, participant
  * normalized; `classifyNetworkHandle` is the only correct comparator, and the
  * candidate set is just the displaced person's own linked rows.
  */
-async function clearDisplacedParticipantCaches(displacedPersonId, scope) {
-  const { rows } = await query(
+async function clearDisplacedParticipantCaches(displacedPersonId, scope, client) {
+  const { rows } = await client.query(
     `SELECT p.conversation_id, p.source_user_id, p.handle, c.network
      FROM beeper_participants p
      JOIN beeper_conversations c ON c.id = p.conversation_id
@@ -502,7 +502,7 @@ async function clearDisplacedParticipantCaches(displacedPersonId, scope) {
   });
   for (const row of stale) {
     // one displaced person's own rows carrying one handle; a handful at most
-    await query(
+    await client.query(
       `UPDATE beeper_participants SET tribe_person_id = NULL, updated_at = NOW()
        WHERE conversation_id = $1 AND source_user_id = $2 AND tribe_person_id = $3`,
       [row.conversation_id, row.source_user_id, displacedPersonId],
@@ -524,8 +524,8 @@ async function clearDisplacedParticipantCaches(displacedPersonId, scope) {
  * here is an exact column comparison (a `source_user_id` is opaque and stored
  * raw), so no normalizing comparator is needed.
  */
-async function clearDisplacedBeeperUserCaches(displacedPersonId, scope) {
-  const result = await query(
+async function clearDisplacedBeeperUserCaches(displacedPersonId, scope, client) {
+  const result = await client.query(
     `UPDATE beeper_participants p SET tribe_person_id = NULL, updated_at = NOW()
      FROM beeper_conversations c
      WHERE c.id = p.conversation_id
@@ -533,6 +533,30 @@ async function clearDisplacedBeeperUserCaches(displacedPersonId, scope) {
     [displacedPersonId, scope.network, scope.handle],
   );
   return result.rowCount ?? 0;
+}
+
+async function clearIdentityCaches(personId, scope, client) {
+  if (scope.kind === BEEPER_USER_KIND) {
+    return clearDisplacedBeeperUserCaches(personId, scope, client);
+  }
+  return clearDisplacedParticipantCaches(personId, scope, client);
+}
+
+async function withParticipantLinkTransaction(operation) {
+  await ensureReady();
+  return withTransaction(async (client) => {
+    // A handle can be shared across conversations and accounts. Serialize
+    // explicit link edits before locking any rows so they cannot lock each
+    // other's cache rows or both report a fresh claim on the same identity.
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['portos:beeper-tribe-links']);
+    return operation(client);
+  });
+}
+
+async function lockParticipant(conversationId, sourceUserId, client) {
+  const participant = await getParticipant(conversationId, sourceUserId, { client, forUpdate: true });
+  if (!participant) throw new ServerError('Participant not found', { status: 404 });
+  return participant;
 }
 
 /**
@@ -549,8 +573,8 @@ async function clearDisplacedBeeperUserCaches(displacedPersonId, scope) {
  * handle be linked under the wrong scope, or with none at all).
  *
  * Refuses to link a soft-deleted `personId` (`tribeIdentities.assertPersonLinkable`)
- * BEFORE the handle branch, so the no-durable-handle case — where
- * `linkIdentity` is never called — is covered too. Returns
+ * before writing any claims or cache, including participants linked through
+ * the cache alone. Returns
  * `{ ...participant, displacedPersonId }`: when the handle was already
  * claimed by a DIFFERENT person, that person's id, so the ownership move
  * (silent at the DB/audit-trigger level — see `tribeIdentities.linkIdentity`)
@@ -569,17 +593,21 @@ export async function linkParticipant({
   conversationId, sourceUserId, personId, source = 'user',
 }) {
   if (!personId) throw new ServerError('personId is required', { status: 400, code: 'BAD_REQUEST' });
-  await ensureReady();
-  await tribeIdentities.assertPersonLinkable(personId);
-  const participant = await getParticipant(conversationId, sourceUserId);
-  if (!participant) throw new ServerError('Participant not found', { status: 404 });
+  return withParticipantLinkTransaction(async (client) => {
+    await tribeIdentities.assertPersonLinkable(personId, { client });
+    const participant = await lockParticipant(conversationId, sourceUserId, client);
+    return linkLockedParticipant(client, participant, { personId, source });
+  });
+}
 
+async function linkLockedParticipant(client, participant, { personId, source }) {
+  const { conversationId, sourceUserId } = participant;
   let displacedPersonId = null;
   const scope = identityScopeFor(participant);
   if (scope) {
-    const identity = await tribeIdentities.linkIdentity({ personId, ...scope, source });
+    const identity = await tribeIdentities.linkIdentity({ personId, ...scope, source }, { client });
     displacedPersonId = identity.displacedPersonId;
-    if (displacedPersonId) await clearDisplacedParticipantCaches(displacedPersonId, scope);
+    if (displacedPersonId) await clearDisplacedParticipantCaches(displacedPersonId, scope, client);
   }
 
   // ALWAYS claim the beeper-user identity too (#96) — this is the half that
@@ -591,14 +619,14 @@ export async function linkParticipant({
   // second participant elsewhere can also present.
   const beeperUserScope = beeperUserScopeFor(participant);
   if (beeperUserScope) {
-    const identity = await tribeIdentities.linkIdentity({ personId, ...beeperUserScope, source });
+    const identity = await tribeIdentities.linkIdentity({ personId, ...beeperUserScope, source }, { client });
     if (identity.displacedPersonId) {
-      await clearDisplacedBeeperUserCaches(identity.displacedPersonId, beeperUserScope);
+      await clearDisplacedBeeperUserCaches(identity.displacedPersonId, beeperUserScope, client);
       displacedPersonId = displacedPersonId || identity.displacedPersonId;
     }
   }
 
-  const result = await query(
+  const result = await client.query(
     `UPDATE beeper_participants SET tribe_person_id = $3, updated_at = NOW()
      WHERE conversation_id = $1 AND source_user_id = $2
      RETURNING *`,
@@ -607,6 +635,7 @@ export async function linkParticipant({
     if (err?.code === '23503') throw new ServerError('Person not found', { status: 404 });
     throw err;
   });
+  if (result.rowCount === 0) throw new ServerError('Participant not found', { status: 404 });
   return { ...rowToParticipant(result.rows[0]), displacedPersonId };
 }
 
@@ -636,85 +665,67 @@ export async function linkParticipant({
  * posture. Throws 404 only when the participant row itself does not exist.
  */
 export async function unlinkParticipant({ conversationId, sourceUserId }) {
-  await ensureReady();
-  const participant = await getParticipant(conversationId, sourceUserId);
-  if (!participant) throw new ServerError('Participant not found', { status: 404 });
+  return withParticipantLinkTransaction(async (client) => {
+    const participant = await lockParticipant(conversationId, sourceUserId, client);
+    const personId = participant.tribePersonId;
+    if (!personId) {
+      return { participant, unlinkedPersonId: null, removedClaims: 0 };
+    }
 
-  const personId = participant.tribePersonId;
-  if (!personId) {
-    return { participant, unlinkedPersonId: null, removedClaims: 0 };
-  }
+    let removedClaims = 0;
+    const scope = identityScopeFor(participant);
+    const beeperUserScope = beeperUserScopeFor(participant);
+    for (const claim of [scope, beeperUserScope]) {
+      if (!claim) continue;
+      const result = await client.query(
+        `DELETE FROM tribe_identities WHERE person_id = $1 AND kind = $2 AND network = $3 AND handle = $4`,
+        [personId, claim.kind, claim.network, claim.handle],
+      );
+      removedClaims += result.rowCount;
+      if (result.rowCount > 0) await clearIdentityCaches(personId, claim, client);
+    }
 
-  let removedClaims = 0;
-
-  const scope = identityScopeFor(participant);
-  if (scope) {
-    const result = await query(
-      `DELETE FROM tribe_identities WHERE person_id = $1 AND kind = $2 AND network = $3 AND handle = $4`,
-      [personId, scope.kind, scope.network, scope.handle],
+    // Clear the locked target even if it had no backing claim.
+    const result = await client.query(
+      `UPDATE beeper_participants SET tribe_person_id = NULL, updated_at = NOW()
+       WHERE conversation_id = $1 AND source_user_id = $2`,
+      [conversationId, sourceUserId],
     );
-    const deleted = result.rowCount ?? 0;
-    removedClaims += deleted;
-    if (deleted) await clearDisplacedParticipantCaches(personId, scope);
-  }
+    if (result.rowCount === 0) throw new ServerError('Participant not found', { status: 404 });
 
-  const beeperUserScope = beeperUserScopeFor(participant);
-  if (beeperUserScope) {
-    const result = await query(
-      `DELETE FROM tribe_identities WHERE person_id = $1 AND kind = $2 AND network = $3 AND handle = $4`,
-      [personId, beeperUserScope.kind, beeperUserScope.network, beeperUserScope.handle],
-    );
-    const deleted = result.rowCount ?? 0;
-    removedClaims += deleted;
-    if (deleted) await clearDisplacedBeeperUserCaches(personId, beeperUserScope);
-  }
-
-  // Belt-and-braces: null THIS participant's own cache regardless of whether
-  // either reuse call above happened to cover it (both are gated on their
-  // own DELETE having actually removed a row).
-  await query(
-    `UPDATE beeper_participants SET tribe_person_id = NULL, updated_at = NOW()
-     WHERE conversation_id = $1 AND source_user_id = $2 AND tribe_person_id = $3`,
-    [conversationId, sourceUserId, personId],
-  );
-
-  const updated = await getParticipant(conversationId, sourceUserId);
-  return { participant: updated, unlinkedPersonId: personId, removedClaims };
+    const updated = await getParticipant(conversationId, sourceUserId, { client });
+    return { participant: updated, unlinkedPersonId: personId, removedClaims };
+  });
 }
 
 /**
  * Create a new Tribe person from a participant's own display name and link
- * it — the other half of #10 decision 4 ("can also create a new Tribe
- * person"). Never invoked automatically; always an explicit user action. The
- * network named in `notes` (display only) is the participant's OWN
- * conversation's network, joined server-side — never caller-supplied.
+ * it as one explicit user action (#10 decision 4).
  *
- * Delegates the whole write to `linkParticipant`, so the new person gets the
+ * Uses the same link write as `linkParticipant`, so the new person gets the
  * same durable `kind='beeper-user'` claim any hand-link does (#96).
  */
 export async function createPersonAndLinkParticipant({
   conversationId, sourceUserId, name, ring = 'tribe', relationship = '', source = 'user',
 }) {
-  const participant = await getParticipant(conversationId, sourceUserId);
-  if (!participant) throw new ServerError('Participant not found', { status: 404 });
-  const personName = String(name || participant.displayName || '').trim();
-  if (!personName) throw new ServerError('name is required', { status: 400, code: 'BAD_REQUEST' });
+  return withParticipantLinkTransaction(async (client) => {
+    const participant = await lockParticipant(conversationId, sourceUserId, client);
+    const personName = String(name || participant.displayName || '').trim();
+    if (!personName) throw new ServerError('name is required', { status: 400, code: 'BAD_REQUEST' });
 
-  const person = await tribe.createPerson({
-    name: personName,
-    ring,
-    relationship,
-    // Just "Imported from Beeper": the network is shown by the person form's "Linked on Beeper" block
-    // (`listPersonIdentitiesWithConversations`), so a later second network leaves no stale mention in Notes.
-    notes: 'Imported from Beeper',
-    channel: 'Beeper',
+    const person = await tribe.createPerson({
+      name: personName,
+      ring,
+      relationship,
+      // The person form's "Linked on Beeper" block shows the current network.
+      notes: 'Imported from Beeper',
+      channel: 'Beeper',
+    }, { client });
+    const { displacedPersonId, ...linked } = await linkLockedParticipant(client, participant, { personId: person.id, source });
+    return {
+      person, participant: linked, created: true, displacedPersonId,
+    };
   });
-  const { displacedPersonId, ...linked } = await linkParticipant({
-    conversationId, sourceUserId, personId: person.id, source,
-  });
-  return {
-    person, participant: linked, created: true, displacedPersonId: displacedPersonId || null,
-  };
 }
 
 /**
@@ -897,14 +908,10 @@ export async function listPersonIdentitiesWithConversations(personId) {
  * turns that into a 404).
  */
 export async function unlinkIdentity(id) {
-  await ensureReady();
-  const identity = await tribeIdentities.unlinkIdentity(id);
-  if (!identity) return null;
-  const scope = { kind: identity.kind, network: identity.network, handle: identity.handle };
-  if (identity.kind === BEEPER_USER_KIND) {
-    await clearDisplacedBeeperUserCaches(identity.personId, scope);
-  } else {
-    await clearDisplacedParticipantCaches(identity.personId, scope);
-  }
-  return identity;
+  return withParticipantLinkTransaction(async (client) => {
+    const identity = await tribeIdentities.unlinkIdentity(id, { client });
+    if (!identity) return null;
+    await clearIdentityCaches(identity.personId, identity, client);
+    return identity;
+  });
 }

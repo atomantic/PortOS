@@ -42,9 +42,8 @@ function participantRow(row) {
   };
 }
 
-vi.mock('../../lib/db.js', () => ({
-  ensureSchema: vi.fn(async () => {}),
-  query: vi.fn(async (sql, params = []) => {
+vi.mock('../../lib/db.js', () => {
+  const query = vi.fn(async (sql, params = []) => {
     seenSql.push(sql);
     const s = sql.replace(/\s+/g, ' ').trim();
 
@@ -176,16 +175,19 @@ vi.mock('../../lib/db.js', () => ({
     }
     if (/^UPDATE beeper_participants SET tribe_person_id = NULL/.test(s)) {
       const row = db.participants.get(pKey(params[0], params[1]));
-      if (row && row.tribe_person_id === params[2]) row.tribe_person_id = null;
-      return { rows: [] };
+      if (!row || (params.length === 3 && row.tribe_person_id !== params[2])) {
+        return { rows: [], rowCount: 0 };
+      }
+      row.tribe_person_id = null;
+      return { rows: [], rowCount: 1 };
     }
     if (/^UPDATE beeper_participants SET tribe_person_id = \$3/.test(s)) {
       const row = db.participants.get(pKey(params[0], params[1]));
-      if (!row) return { rows: [] };
+      if (!row) return { rows: [], rowCount: 0 };
       if (/tribe_person_id IS NULL OR EXISTS/.test(s)
           && row.tribe_person_id && !db.people.get(row.tribe_person_id)?.deleted) return { rows: [] };
       row.tribe_person_id = params[2];
-      return { rows: [participantRow(row)] };
+      return { rows: [participantRow(row)], rowCount: 1 };
     }
     // unlinkParticipant's claim releases (#97 part B) — deletes ONLY when the
     // claim is still owned by the given person, mirroring the real SQL's own
@@ -198,8 +200,17 @@ vi.mock('../../lib/db.js', () => ({
       return { rows: [], rowCount: 1 };
     }
     throw new Error(`unmocked SQL: ${s.slice(0, 120)}`);
-  }),
-}));
+  });
+  return {
+    ensureSchema: vi.fn(async () => {}),
+    query,
+    withTransaction: async (operation) => operation({
+      query: (sql, params) => sql.startsWith('SELECT pg_advisory_xact_lock')
+        ? Promise.resolve({ rows: [] })
+        : query(sql, params),
+    }),
+  };
+});
 
 const listPeople = vi.fn(async () => []);
 vi.mock('../tribe.js', () => ({
@@ -689,7 +700,7 @@ describe('createPersonAndLinkParticipant notes text (#99)', () => {
     expect(tribeService.createPerson).toHaveBeenCalledWith(expect.objectContaining({
       notes: 'Imported from Beeper',
       channel: 'Beeper',
-    }));
+    }), expect.objectContaining({ client: expect.objectContaining({ query: expect.any(Function) }) }));
   });
 });
 

@@ -85,6 +85,165 @@ async function makePerson(name) {
   return person;
 }
 
+// Fault only the selected write. PostgreSQL executes the preceding writes
+// and the enclosing BEGIN/COMMIT/ROLLBACK on the real transaction client.
+async function withParticipantUpdateFault(matches, replacement, operation) {
+  const original = pg.Client.prototype.query;
+  const spy = vi.spyOn(pg.Client.prototype, 'query').mockImplementation(function faultParticipantUpdate(sql, params, ...rest) {
+    if (typeof sql === 'string' && matches(sql)) {
+      return original.call(this, replacement(sql), params, ...rest);
+    }
+    return original.call(this, sql, params, ...rest);
+  });
+  try {
+    return await operation();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+const isLinkUpdate = (sql) => sql.startsWith('UPDATE beeper_participants SET tribe_person_id = $3')
+  && sql.includes('RETURNING *');
+const isBeeperUserCacheClear = (sql) => sql.startsWith('UPDATE beeper_participants p SET tribe_person_id = NULL');
+const failingWrite = () => 'SELECT 1 / 0 FROM (VALUES ($1::text, $2::text, $3::text)) AS input';
+
+describe.skipIf(!runDb)('Beeper participant link transactions (#19178)', () => {
+  async function makeParticipant(sourceUserId) {
+    await makeAccount();
+    const conversationId = await makeConversation(sourceUserId, { network: 'discord' });
+    await beeperTribe.upsertParticipant({
+      conversationId, sourceUserId, handle: `@${sourceUserId.replaceAll('-', '_')}`,
+      displayName: 'Example Participant', observedVia: 'participant-list',
+    });
+    return { conversationId, sourceUserId };
+  }
+
+  it('rolls back a newly created person when its participant link fails', async () => {
+    const participant = await makeParticipant('create-rollback');
+    const name = `${nonce} Create Rollback`;
+    await withParticipantUpdateFault(isLinkUpdate, failingWrite, async () => {
+      await expect(beeperTribe.createPersonAndLinkParticipant({ ...participant, name }))
+        .rejects.toMatchObject({ code: '22012' });
+    });
+    expect((await query('SELECT id FROM tribe_people WHERE name = $1', [name])).rows).toEqual([]);
+    expect(await beeperTribe.getParticipant(participant.conversationId, participant.sourceUserId))
+      .toMatchObject({ tribePersonId: null });
+  });
+
+  it('rejects creating a person for an absent participant without leaving a person row', async () => {
+    const { conversationId } = await makeParticipant('create-absent');
+    const name = `${nonce} Create Absent`;
+    await expect(beeperTribe.createPersonAndLinkParticipant({ conversationId, sourceUserId: 'missing', name }))
+      .rejects.toMatchObject({ status: 404, message: 'Participant not found' });
+    expect((await query('SELECT id FROM tribe_people WHERE name = $1', [name])).rows).toEqual([]);
+  });
+
+  it.each([
+    ['a failed update', failingWrite, { code: '22012' }],
+    ['a zero-row update', (sql) => sql.replace('RETURNING *', 'AND FALSE RETURNING *'), { status: 404, message: 'Participant not found' }],
+  ])('restores both displaced claims and the cache after %s', async (_case, replacement, error) => {
+    const participant = await makeParticipant(`link-rollback-${error.code ?? error.status}`);
+    const originalOwner = await makePerson('Example Original Owner');
+    const newOwner = await makePerson('Example New Owner');
+    await beeperTribe.linkParticipant({ ...participant, personId: originalOwner.id });
+    const originalClaims = await tribeIdentities.listIdentitiesForPerson(originalOwner.id);
+    expect(originalClaims).toHaveLength(2);
+
+    await withParticipantUpdateFault(isLinkUpdate, replacement, async () => {
+      await expect(beeperTribe.linkParticipant({ ...participant, personId: newOwner.id }))
+        .rejects.toMatchObject(error);
+    });
+
+    expect(new Set(await tribeIdentities.listIdentitiesForPerson(originalOwner.id))).toEqual(new Set(originalClaims));
+    expect(await tribeIdentities.listIdentitiesForPerson(newOwner.id)).toEqual([]);
+    expect(await beeperTribe.getParticipant(participant.conversationId, participant.sourceUserId))
+      .toMatchObject({ tribePersonId: originalOwner.id });
+  });
+
+  it('waits for a concurrent soft delete and refuses to link to the deleted person', async () => {
+    const participant = await makeParticipant('link-soft-delete');
+    const person = await makePerson('Example Concurrently Deleted Person');
+
+    const { outcome } = await database.withTransaction(async (deleter) => {
+      await deleter.query('UPDATE tribe_people SET deleted = TRUE WHERE id = $1', [person.id]);
+      let signalLookup;
+      const lookup = new Promise((resolve) => { signalLookup = resolve; });
+      const original = pg.Client.prototype.query;
+      const spy = vi.spyOn(pg.Client.prototype, 'query').mockImplementation(function observeLookup(sql, ...args) {
+        const result = original.call(this, sql, ...args);
+        if (typeof sql === 'string' && sql.startsWith('SELECT deleted FROM tribe_people WHERE id')) {
+          signalLookup(this.processID);
+        }
+        return result;
+      });
+      const outcome = Promise.allSettled([beeperTribe.linkParticipant({ ...participant, personId: person.id })]);
+      try {
+        const pid = await Promise.race([lookup, outcome.then(() => { throw new Error('Link finished before checking the person'); })]);
+        await expect.poll(async () => {
+          const { rows: [lock] } = await deleter.query('SELECT pg_backend_pid() = ANY(pg_blocking_pids($1)) AS blocked', [pid]);
+          return lock.blocked;
+        }).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+      return { outcome };
+    });
+
+    expect(await outcome).toEqual([{ status: 'rejected', reason: expect.objectContaining({ status: 404, message: 'Person not found' }) }]);
+    expect(await tribeIdentities.listIdentitiesForPerson(person.id)).toEqual([]);
+    expect(await beeperTribe.getParticipant(participant.conversationId, participant.sourceUserId))
+      .toMatchObject({ tribePersonId: null });
+  });
+
+  it('serializes explicit links sharing a handle and account user across conversations', async () => {
+    const first = await makeParticipant('concurrent-shared-link');
+    const second = {
+      conversationId: await makeConversation('concurrent-shared-link-again', { network: 'discord' }),
+      sourceUserId: first.sourceUserId,
+    };
+    const participant = await beeperTribe.getParticipant(first.conversationId, first.sourceUserId);
+    await beeperTribe.upsertParticipant({
+      ...second, handle: participant.handle, displayName: participant.displayName, observedVia: 'participant-list',
+    });
+    const firstPerson = await makePerson('Example First Link Candidate');
+    const secondPerson = await makePerson('Example Second Link Candidate');
+
+    const links = await Promise.all([
+      beeperTribe.linkParticipant({ ...first, personId: firstPerson.id }),
+      beeperTribe.linkParticipant({ ...second, personId: secondPerson.id }),
+    ]);
+
+    const initial = links.find((link) => link.displacedPersonId === null);
+    const replacement = links.find((link) => link.displacedPersonId === initial.tribePersonId);
+    expect(await tribeIdentities.listIdentitiesForPerson(initial.tribePersonId)).toEqual([]);
+    expect(await tribeIdentities.listIdentitiesForPerson(replacement.tribePersonId)).toHaveLength(2);
+    expect(await beeperTribe.getParticipant(initial.conversationId, initial.sourceUserId))
+      .toMatchObject({ tribePersonId: null });
+    expect(await beeperTribe.getParticipant(replacement.conversationId, replacement.sourceUserId))
+      .toMatchObject({ tribePersonId: replacement.tribePersonId });
+  });
+
+  it.each([
+    ['unlinkParticipant', (participant) => beeperTribe.unlinkParticipant(participant)],
+    ['unlinkIdentity', (_participant, identity) => beeperTribe.unlinkIdentity(identity.id)],
+  ])('%s restores deleted claims when a cache clear fails', async (operation, unlink) => {
+    const participant = await makeParticipant(operation);
+    const person = await makePerson('Example Unlink Owner');
+    await beeperTribe.linkParticipant({ ...participant, personId: person.id });
+    const claims = await tribeIdentities.listIdentitiesForPerson(person.id);
+    expect(claims).toHaveLength(2);
+    const beeperUser = claims.find((claim) => claim.kind === 'beeper-user');
+
+    await withParticipantUpdateFault(isBeeperUserCacheClear, failingWrite, async () => {
+      await expect(unlink(participant, beeperUser)).rejects.toMatchObject({ code: '22012' });
+    });
+
+    expect(new Set(await tribeIdentities.listIdentitiesForPerson(person.id))).toEqual(new Set(claims));
+    expect(await beeperTribe.getParticipant(participant.conversationId, participant.sourceUserId))
+      .toMatchObject({ tribePersonId: person.id });
+  });
+});
+
 describe.skipIf(!runDb)('beeperTribe (#34)', () => {
   it('a counterparty with a phone links to an existing Tribe person without creating a duplicate', async () => {
     await makeAccount();

@@ -291,12 +291,12 @@ export async function getPerson(id) {
   return result.rows[0] ? rowToPerson(result.rows[0]) : null;
 }
 
-export async function createPerson(data) {
-  await ensureReady();
+export async function createPerson(data, { client } = {}) {
+  if (!client) await ensureReady();
   const id = data.id || uuidv4();
   const ring = data.ring || 'tribe';
   const cadenceDays = data.cadenceDays ?? DEFAULT_RING_CADENCE[ring] ?? 45;
-  const result = await query(
+  const result = await (client ?? { query }).query(
     `INSERT INTO tribe_people (
       id, name, relationship, ring, cadence_days, last_contact_on, channel,
       energy, tags, emails, phones, next_move, notes, updated_at
