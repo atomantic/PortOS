@@ -40,6 +40,7 @@ export const formatResetsAt = (resetsAt) => {
   if (!resetsAt || !/^\d{4}-\d{2}-\d{2}T/.test(resetsAt)) return resetsAt;
   const d = new Date(resetsAt);
   if (Number.isNaN(d.getTime())) return resetsAt;
+  // biome-ignore lint/plugin/lint-use-shared-number-formatters: This local reset timestamp omits the year and weekday.
   const local = d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   const relative = formatResetCountdown(d);
   return relative ? `${local} (${relative})` : local;

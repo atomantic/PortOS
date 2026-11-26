@@ -49,6 +49,7 @@ export default function ExercisePanel({ activeWork, onClose, editorDirty = false
   // 1Hz tick while a session is running
   useEffect(() => {
     if (!active) return;
+    // biome-ignore lint/plugin/lint-no-view-interval: Elapsed-time clock tick; no I/O.
     tickRef.current = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(tickRef.current);
   }, [active]);

@@ -18,6 +18,18 @@ import { providerRefSchema } from './zodCompat.js';
  * `zodCompat.js` holds Zod-version compatibility helpers; this holds PortOS-domain vocabulary (render pins, model-id charset, clip lengths, path safety).
  */
 
+// Model-cache reads and explicit download streams share the same URL contract.
+export const modelDownloadQuerySchema = z.object({
+  force: z.enum(['0', '1']).optional().transform(value => value === '1'),
+});
+
+// Deep integrity checks additionally compare each file's SHA-256.
+export const modelRepairBodySchema = z.object({ deep: z.boolean().optional() });
+export const modelVerifyBodySchema = z.object({
+  modelId: z.string().min(1).optional(),
+  deep: z.boolean().optional(),
+});
+
 // Optional author-owned story intent, shared by Pipeline and other story consumers.
 export const seriesDesignSchema = z.object({
   mode: z.enum(SERIES_DESIGN_MODES),

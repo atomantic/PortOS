@@ -1,10 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('../lib/db.js', () => ({ query: vi.fn() }));
+vi.mock('../lib/db.js', () => ({ query: vi.fn(), withTransaction: vi.fn() }));
 vi.mock('./cos/cosTaskStore.js', () => ({ addTask: vi.fn() }));
 
+const { query, withTransaction } = await import('../lib/db.js');
+const { cosEvents } = await import('./cos/cosEvents.js');
+const { githubNotificationEvents } = await import('./githubNotificationEvents.js');
 const { addTask } = await import('./cos/cosTaskStore.js');
-const { queueNotificationResolveTask } = await import('./githubNotificationResolveTask.js');
+const { queueNotificationResolveTask, startNotificationResolveListener } = await import('./githubNotificationResolveTask.js');
 const { queueSecurityFixTask } = await import('./githubSecurityFixTask.js');
 
 const account = { id: 'acct-1', host: 'github.com', login: 'octocat' };
@@ -105,5 +108,71 @@ describe('queueNotificationResolveTask', () => {
       githubSecurityFix: { repo: 'octocat/app' },
     });
     expect(addTask.mock.calls[0][0]).not.toHaveProperty('noCodeOutput');
+  });
+});
+
+describe('notification resolve spawn failure', () => {
+  const rows = [
+    { account_id: 'acct-1', thread_id: '4242' },
+    { account_id: 'acct-2', thread_id: '4243' },
+  ];
+  const transactionQuery = vi.fn();
+  const changed = vi.fn();
+  const payload = { taskId: 'task-1', agentId: 'agent-1', error: 'spawn failed' };
+  const deliver = () => Promise.all(cosEvents.listeners('agent:error').map((listener) => listener(payload)));
+
+  beforeEach(() => {
+    startNotificationResolveListener();
+    transactionQuery.mockReset().mockResolvedValueOnce({ rows }).mockResolvedValueOnce({});
+    vi.mocked(query).mockClear();
+    vi.mocked(withTransaction).mockReset().mockImplementation((run) => run({ query: transactionQuery }));
+    changed.mockClear();
+    githubNotificationEvents.on('changed', changed);
+  });
+
+  afterEach(() => {
+    githubNotificationEvents.off('changed', changed);
+    vi.restoreAllMocks();
+  });
+
+  it('batches the audit events on the update transaction and notifies after commit', async () => {
+    vi.mocked(withTransaction).mockImplementationOnce(async (run) => {
+      const result = await run({ query: transactionQuery });
+      expect(changed).not.toHaveBeenCalled();
+      return result;
+    });
+
+    await deliver();
+
+    expect(query).not.toHaveBeenCalled();
+    expect(withTransaction).toHaveBeenCalledTimes(1);
+    expect(transactionQuery).toHaveBeenCalledTimes(2);
+    expect(transactionQuery).toHaveBeenNthCalledWith(1, expect.stringContaining('UPDATE github_notifications'), [
+      'task-1', expect.any(String),
+    ]);
+    expect(transactionQuery).toHaveBeenNthCalledWith(2, expect.stringMatching(/INSERT INTO github_notification_events[\s\S]+FROM unnest/i), [
+      ['acct-1', 'acct-2'], ['4242', '4243'],
+      JSON.stringify({ lane: 'notification-resolve', taskId: 'task-1', agentId: 'agent-1' }),
+    ]);
+    expect(changed.mock.calls).toEqual([[{ accountId: 'acct-1' }], [{ accountId: 'acct-2' }]]);
+  });
+
+  it('propagates an audit insert failure to the transaction for rollback and emits no changes', async () => {
+    const failure = new Error('audit write failed');
+    transactionQuery.mockReset().mockResolvedValueOnce({ rows }).mockRejectedValueOnce(failure);
+    const transaction = vi.mocked(withTransaction);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let pending;
+    transaction.mockImplementationOnce((run) => {
+      pending = run({ query: transactionQuery });
+      return pending;
+    });
+
+    await deliver();
+
+    expect(transactionQuery).toHaveBeenCalledTimes(2);
+    await expect(pending).rejects.toBe(failure);
+    expect(changed).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining(failure.message));
   });
 });

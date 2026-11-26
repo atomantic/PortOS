@@ -64,7 +64,7 @@ async function assertMetaWritable() {
 async function saveMeta(meta) {
   await ensureGenomeDir();
   await assertMetaWritable();
-  await atomicWrite(META_FILE, meta);
+  await atomicWrite(META_FILE, meta, { mode: 0o600 });
   noteReadinessChanged();
 }
 
@@ -153,7 +153,7 @@ async function storeGenomeUnqueued(content, filename, index, build) {
   await assertMetaWritable();
 
   // Save raw file
-  await atomicWrite(RAW_FILE, content);
+  await atomicWrite(RAW_FILE, content, { mode: 0o600 });
 
   // Cache the index
   snpIndex = index;

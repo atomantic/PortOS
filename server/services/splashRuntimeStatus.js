@@ -1,6 +1,5 @@
 /** Combines Splash readiness on the default loopback endpoint with PortOS process ownership. */
 
-import { findCommandOnPath } from '../lib/processEnv.js';
 import { SPLASH_MODEL, SPLASH_ORIGIN } from '../lib/splashRuntime.js';
 import { probeSplashEndpoint, SPLASH_UNSUPPORTED_REASON, supportsManagedSplash } from './splashManagedRuntime.js';
 import { getSplashManagedState } from './splashServerManager.js';
@@ -15,6 +14,6 @@ export async function getSplashRuntimeStatus(host, options) {
     if (endpointState.state === 'external' && endpointState.model === SPLASH_MODEL) return { ...status, state: 'running' };
     return { ...status, state: managedState.startTimedOut ? 'not-ready' : 'starting' };
   }
-  if (endpointState.state === 'missing' && (managedState.installed || findCommandOnPath('splash'))) return { ...status, state: 'stopped' };
+  if (endpointState.state === 'missing' && managedState.installed === true) return { ...status, state: 'stopped' };
   return status;
 }

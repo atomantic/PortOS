@@ -12,6 +12,7 @@ vi.mock('./PersistentMindMaintainerControls', () => ({ default: () => null }));
 const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
 vi.mock('../../services/socket', () => ({ default: socket }));
 const handlers = new Map();
+const emitServer = (event, payload) => handlers.get(event)?.forEach(handler => handler(payload));
 const source = { id: 'example-source', version: 3, content: '  Exact source wording.  ', status: 'active', protection: 'standard' };
 
 beforeEach(() => {
@@ -26,7 +27,7 @@ beforeEach(() => {
   getPersistentMindReflection.mockResolvedValue({ state: 'pending', source, inspected: null });
 });
 
-it('shows inspect-only pending prose, then its real provenance and lesson after a memory event without polling', async () => {
+it('shows inspect-only pending prose, then its real provenance and lesson after a persisted memory review', async () => {
   const { unmount } = render(<MemoryRouter><PersistentMindContextPanel view="context" /></MemoryRouter>);
   expect(await screen.findByText('Pending · optional', { exact: false })).toBeInTheDocument();
   expect(screen.getByText('Exact source wording.').textContent).toBe(source.content);
@@ -37,12 +38,20 @@ it('shows inspect-only pending prose, then its real provenance and lesson after 
     providerId: 'example-provider', model: 'example-model', reviewedAt: '2026-01-01T12:00:00.000Z'
   } } } };
   getPersistentMindReflection.mockResolvedValue({ state: 'empty', source: null, inspected: reviewed });
-  await act(async () => { for (const handler of handlers.get('cos:memory:updated') || []) handler({ id: source.id }); });
+  await act(async () => {
+    for (const kind of ['wake', 'model', 'thought', 'reply', 'completion', 'mind.capability.result']) {
+      emitServer('cos:mind:event', { kind, data: {} });
+    }
+  });
+  expect(getPersistentMindReflection).toHaveBeenCalledTimes(1);
+  await act(async () => emitServer('cos:mind:event', { kind: 'mind.capability.result', data: { memoryReview: { memoryId: source.id } } }));
+  expect(getPersistentMindReflection).toHaveBeenCalledTimes(2);
   expect(await screen.findByText('Settled · learn', { exact: false })).toBeInTheDocument();
   expect(screen.getByText(/example-provider \/ example-model/)).toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'Linked lesson' })).toHaveAttribute('href', '/cos/memory/example-lesson');
   expect(getPersistentMindReflection).toHaveBeenLastCalledWith(expect.objectContaining({ silent: true }));
   unmount();
+  expect(handlers.get('cos:mind:event').size).toBe(0);
   expect(handlers.get('cos:memory:updated').size).toBe(0);
 });
 
@@ -52,7 +61,7 @@ it('distinguishes a store failure from an honest empty reflection', async () => 
   expect(await screen.findByText('Reflection unavailable')).toBeInTheDocument();
   expect(screen.queryByText('No eligible memory awaiting reflection.')).not.toBeInTheDocument();
   getPersistentMindReflection.mockResolvedValue({ state: 'empty', source: null });
-  await act(async () => { for (const handler of handlers.get('cos:memory:updated') || []) handler({ id: source.id }); });
+  await act(async () => emitServer('cos:memory:updated', { id: source.id }));
   await waitFor(() => expect(screen.getByText('No eligible memory awaiting reflection.')).toBeInTheDocument());
 });
 
@@ -105,4 +114,34 @@ it('renders the context window breakdown bar, provenance badges and pin notice w
   expect(screen.getAllByText('Tool definitions').length).toBeGreaterThan(0);
   expect(screen.getByText(/recipes \(2 tools\)/)).toBeInTheDocument();
   expect(getPersistentMindContext).toHaveBeenCalledTimes(1);
+});
+
+it('reconciles reflection on memory and config changes, reconnect and reshow', async () => {
+  const { unmount } = render(<MemoryRouter><PersistentMindContextPanel view="context" /></MemoryRouter>);
+  await screen.findByText('Pending · optional', { exact: false });
+  expect(getPersistentMindReflection).toHaveBeenCalledTimes(1);
+
+  for (const event of ['cos:memory:created', 'cos:memory:updated', 'cos:memory:deleted', 'cos:config:changed', 'connect']) {
+    const before = getPersistentMindReflection.mock.calls.length;
+    await act(async () => emitServer(event, { id: source.id }));
+    expect(getPersistentMindReflection).toHaveBeenCalledTimes(before + 1);
+  }
+
+  const before = getPersistentMindReflection.mock.calls.length;
+  const show = async (value) => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value });
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+  };
+  try {
+    await show('hidden');
+    await act(async () => emitServer('cos:config:changed'));
+    expect(getPersistentMindReflection).toHaveBeenCalledTimes(before);
+    await show('visible');
+    expect(getPersistentMindReflection).toHaveBeenCalledTimes(before + 1);
+    unmount();
+    await act(async () => emitServer('connect'));
+    expect(getPersistentMindReflection).toHaveBeenCalledTimes(before + 1);
+  } finally {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+  }
 });

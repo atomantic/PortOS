@@ -12,8 +12,13 @@ const execFileAsync = promisify(execFile);
 const XCODE_TYPES = new Set(['ios-native', 'macos-native', 'xcode']);
 
 // Shared Xcode project constants
-export const XCODE_TEAM_ID = 'TYQ32QCF6K';
-export const XCODE_BUNDLE_PREFIX = 'net.shadowpuppet';
+// These values are written into generated project files and a shell-sourced template.
+const teamId = process.env.XCODE_TEAM_ID?.trim() ?? '';
+const bundlePrefix = process.env.XCODE_BUNDLE_PREFIX?.trim() ?? '';
+export const XCODE_TEAM_ID = /^[A-Z0-9]{10}$/.test(teamId) ? teamId : 'YOUR_TEAM_ID';
+export const XCODE_BUNDLE_PREFIX = /^[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+$/.test(bundlePrefix)
+  ? bundlePrefix
+  : 'com.example';
 export const toBundleId = (name) => {
   const sanitized = name.replace(/[^a-zA-Z0-9]/g, '');
   return `${XCODE_BUNDLE_PREFIX}.${sanitized || 'app'}`;

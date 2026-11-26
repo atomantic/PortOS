@@ -618,6 +618,7 @@ export default function VoiceWidget({ config, claimHeld }) {
   const pollLevel = handsFree && stage !== 'idle';
   useEffect(() => {
     if (!pollLevel) return undefined;
+    // biome-ignore lint/plugin/lint-no-view-interval: Samples the in-memory VAD RMS level every 100ms; no I/O.
     const id = setInterval(() => {
       const v = getVadLevel();
       setLevel((prev) => (Math.abs(prev - v) > 0.002 ? v : prev));

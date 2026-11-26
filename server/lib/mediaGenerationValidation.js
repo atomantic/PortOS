@@ -32,10 +32,6 @@ export const videoDownloadSchema = z.object({
 
 export const imageVisibilityBodySchema = z.object({ hidden: z.boolean().default(false) });
 
-// Model-cache reads and explicit download streams share the same URL contract.
-export const modelDownloadQuerySchema = z.object({
-  force: z.enum(['0', '1']).optional().transform(value => value === '1'),
-});
 export const modelDownloadParamsSchema = z.object({ modelId: z.string().min(1).max(256) });
 export const icLoraDownloadParamsSchema = z.object({ mode: z.string().min(1).max(256) });
 export const textEncoderDownloadParamsSchema = z.object({ id: z.string().min(1).max(256) });

@@ -52,6 +52,17 @@ describe('ProviderReadiness', () => {
     expect(screen.queryByText(/setup incomplete/)).toBeNull();
   });
 
+  it('lets the operator start a stopped managed runtime from the standby banner', () => {
+    const setup = { runtime: 'splash', label: 'Splash', action: 'start', actionLabel: 'Start Splash' };
+    const onAutoSetup = vi.fn();
+    renderWithRouter(
+      <ProviderReadiness readiness={readiness({ label: 'Splash', standby: true, setup })} onAutoSetup={onAutoSetup} />,
+    );
+    expect(screen.getByText('Splash installed · standby')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Start Splash' }));
+    expect(onAutoSetup).toHaveBeenCalledWith(setup);
+  });
+
   it('counts only the unmet requirements, and shows each fix', () => {
     renderWithRouter(<ProviderReadiness readiness={readiness()} />);
     // The `server` failure plus the `model` check that could not be evaluated —

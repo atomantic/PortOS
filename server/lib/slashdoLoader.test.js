@@ -9,11 +9,9 @@ const { fixtureRoot } = await vi.hoisted(async () => {
   const { join } = await import('path');
   return { fixtureRoot: mkdtempSync(join(tmpdir(), 'slashdo-loader-')) };
 });
-vi.mock('./fileUtils.js', async importOriginal => {
+vi.mock('./paths.js', async importOriginal => {
   const actual = await importOriginal();
-  return { ...actual, PATHS: { ...actual.PATHS,
-    slashdo: fixtureRoot, slashdoResolved: `${fixtureRoot}/resolved`,
-  } };
+  return { ...actual, PATHS: { ...actual.PATHS, slashdoResolved: `${fixtureRoot}/resolved` } };
 });
 import { loadSlashdoLib, loadSlashdoFile, loadSlashdoBundle, writeResolvedSlashdoBody } from './slashdoLoader.js';
 import { requireSlashdoSubmoduleInCi } from './testHelper.js';
@@ -21,6 +19,7 @@ import { requireSlashdoSubmoduleInCi } from './testHelper.js';
 const source = fileURLToPath(new URL('../../lib/slashdo/src', import.meta.url));
 const hasSubmodule = existsSync(join(source, 'transformer.js'));
 requireSlashdoSubmoduleInCi(hasSubmodule);
+const fixtureOptions = { slashdoDir: fixtureRoot };
 const write = (path, body) => {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, body);
@@ -37,13 +36,27 @@ describe.skipIf(!hasSubmodule)('slashdo rendering adapter', () => {
     const lib = 'run "$PROMPT" $& $`tail\n<!-- if:teams -->IN_PROCESS<!-- else -->SUBPROCESS<!-- /if:teams -->';
     write(join(fixtureRoot, 'lib/example.md'), lib);
     write(join(fixtureRoot, 'commands/do/example.md'), '---\ndescription: Example\n---\n!`cat ~/.claude/lib/example.md`');
-    const body = await loadSlashdoFile('example', { stripFrontmatter: true });
+    const body = await loadSlashdoFile('example', { ...fixtureOptions, stripFrontmatter: true });
     expect(body).toContain('run "$PROMPT" $& $`tail');
     expect(body).toContain('SUBPROCESS');
     expect(body).not.toContain('IN_PROCESS');
     expect(body).not.toContain('description:');
-    expect(await loadSlashdoLib('example', { teams: true })).toContain('IN_PROCESS');
-    expect(await loadSlashdoLib('example')).toContain('SUBPROCESS');
+    expect(await loadSlashdoLib('example', { ...fixtureOptions, teams: true })).toContain('IN_PROCESS');
+    expect(await loadSlashdoLib('example', fixtureOptions)).toContain('SUBPROCESS');
+  });
+
+  it('keeps command and library caches scoped to their slashdo roots', async () => {
+    const bundledHelp = await loadSlashdoFile('help');
+    const bundledRecipe = await loadSlashdoLib('model-tiers');
+    expect(bundledHelp).toBeTruthy();
+    expect(bundledRecipe).toBeTruthy();
+
+    write(join(fixtureRoot, 'commands/do/help.md'), 'Fixture help');
+    write(join(fixtureRoot, 'lib/model-tiers.md'), 'Fixture model tiers');
+    expect(await loadSlashdoFile('help', fixtureOptions)).toBe('Fixture help');
+    expect(await loadSlashdoLib('model-tiers', fixtureOptions)).toBe('Fixture model tiers');
+    expect(await loadSlashdoFile('help')).toBe(bundledHelp);
+    expect(await loadSlashdoLib('model-tiers')).toBe(bundledRecipe);
   });
 
   it('renders the bundled scoped review without rejecting it or enabling public edits', async () => {
@@ -52,7 +65,7 @@ describe.skipIf(!hasSubmodule)('slashdo rendering adapter', () => {
     cpSync(join(root, 'lib'), join(fixtureRoot, 'lib'), { recursive: true });
     const recipe = readFileSync(new URL('../../lib/slashdo/lib/local-agent-review-loop.md', import.meta.url), 'utf8');
     write(join(fixtureRoot, 'lib/scoped-review.md'), recipe);
-    const body = await loadSlashdoLib('scoped-review');
+    const body = await loadSlashdoLib('scoped-review', fixtureOptions);
     const prompt = buildReviewLoopFollowUpSection(
       { reviewLoopReviewers: ['claude', 'antigravity', 'codex'], reviewLoopReviewerApplies: true },
       { localOnly: true, baseBranch: 'main', localAgentLoopBody: body },
@@ -74,7 +87,7 @@ describe.skipIf(!hasSubmodule)('slashdo rendering adapter', () => {
     const root = fileURLToPath(new URL('../../lib/slashdo/', import.meta.url));
     cpSync(join(root, 'lib'), join(fixtureRoot, 'lib'), { recursive: true });
     write(join(fixtureRoot, 'commands/do/release.md'), readFileSync(join(root, 'commands/do/release.md'), 'utf8'));
-    const bundle = await loadSlashdoBundle('release', { stripFrontmatter: true });
+    const bundle = await loadSlashdoBundle('release', { ...fixtureOptions, stripFrontmatter: true });
     const staged = await writeResolvedSlashdoBody('release', bundle.body, { files: bundle.files });
     const body = readFileSync(staged, 'utf8');
     expect(body.indexOf('## Select the Project Release Procedure')).toBeGreaterThanOrEqual(0);
@@ -94,7 +107,7 @@ describe.skipIf(!hasSubmodule)('slashdo rendering adapter', () => {
     write(join(fixtureRoot, 'lib/recipe.md'), 'Recipe\n!read lib/required.md\nSee `lib/unrelated.md`.');
     write(join(fixtureRoot, 'lib/required.md'), 'Required verification');
     write(join(fixtureRoot, 'lib/unrelated.md'), 'Unrelated reviewer workflow');
-    const body = await loadSlashdoLib('recipe');
+    const body = await loadSlashdoLib('recipe', fixtureOptions);
     expect(body).toContain('Required verification');
     expect(body).not.toContain('Unrelated reviewer workflow');
     expect(body).not.toContain('!read');
@@ -105,8 +118,8 @@ describe.skipIf(!hasSubmodule)('slashdo rendering adapter', () => {
     write(join(fixtureRoot, 'lib/audit.md'), 'Required audit phase\n!read lib/verify.md');
     write(join(fixtureRoot, 'lib/verify.md'), 'Required verification');
     write(join(fixtureRoot, 'lib/local-agent-review-loop.md'), 'Required local review');
-    const full = await loadSlashdoBundle('phases');
-    const pruned = await loadSlashdoBundle('phases', { skipIncludes: ['local-agent-review-loop'] });
+    const full = await loadSlashdoBundle('phases', fixtureOptions);
+    const pruned = await loadSlashdoBundle('phases', { ...fixtureOptions, skipIncludes: ['local-agent-review-loop'] });
     const fullPath = await writeResolvedSlashdoBody('phases', full.body, { files: full.files });
     const prunedPath = await writeResolvedSlashdoBody('phases', pruned.body, { files: pruned.files });
     expect(fullPath).not.toBe(prunedPath);
@@ -115,16 +128,16 @@ describe.skipIf(!hasSubmodule)('slashdo rendering adapter', () => {
     expect(readFileSync(join(dirname(fullPath), 'lib/verify.md'), 'utf8')).toContain('Required verification');
     expect(pruned.files).not.toHaveProperty('local-agent-review-loop.md');
     expect(full.files).toHaveProperty('local-agent-review-loop.md');
-    const eager = await loadSlashdoFile('phases');
+    const eager = await loadSlashdoFile('phases', fixtureOptions);
     expect(eager).toContain('Required verification');
     expect(eager).toContain('Required local review');
     expect(eager).not.toContain('!read');
   });
 
   it('distinguishes absent commands from missing required dependencies', async () => {
-    expect(await loadSlashdoFile('no-such-command')).toBeNull();
+    expect(await loadSlashdoFile('no-such-command', fixtureOptions)).toBeNull();
     write(join(fixtureRoot, 'commands/do/broken.md'), '!read lib/no-such-library.md');
-    await expect(loadSlashdoBundle('broken')).rejects.toThrow();
+    await expect(loadSlashdoBundle('broken', fixtureOptions)).rejects.toThrow();
   });
 });
 

@@ -173,6 +173,16 @@ describe('Video Gen integrity routes', () => {
     expect(sseDownload.start).not.toHaveBeenCalled();
   });
 
+  it('validates the speed profile only when starting a model download', async () => {
+    const path = '/api/video-gen/models/ltx2_unified/download?speedProfileId=';
+    const status = await request(app).get(path);
+    expect(status.status).toBe(200);
+    const download = await request(app).post(path);
+    expect(download.status).toBe(400);
+    expect(download.body.code).toBe('VALIDATION_ERROR');
+    expect(sseDownload.start).not.toHaveBeenCalled();
+  });
+
   it('rejects unknown POST targets with JSON before opening a stream', async () => {
     for (const path of ['models/unknown', 'text-encoders/unknown', 'ic-loras/unknown']) {
       const response = await request(app).post(`/api/video-gen/${path}/download`);

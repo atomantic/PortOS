@@ -14,6 +14,7 @@ export default function BrailleSpinner({ text, className = '' }) {
       setFrame(0);
       return undefined;
     }
+    // biome-ignore lint/plugin/lint-no-view-interval: Advances the spinner glyph; no I/O.
     const id = setInterval(() => setFrame(f => (f + 1) % FRAMES.length), INTERVAL_MS);
     return () => clearInterval(id);
   }, [reducedMotion]);
