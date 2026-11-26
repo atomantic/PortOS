@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
 import DataManager from './DataManager';
 import { formatBytes } from '../utils/formatters';
 vi.mock('../components/dataManager/CosStoragePanel', () => ({ default: ({ onMaintenanceComplete }) => <button onClick={onMaintenanceComplete}>Complete recording cleanup</button> }));
@@ -28,6 +28,11 @@ vi.mock('../services/apiPeerSync.js', () => ({
 
 const toastMock = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), warning: vi.fn(), error: vi.fn() }));
 vi.mock('../components/ui/Toast', () => ({ default: toastMock }));
+vi.mock('../hooks/useMediaUsages', () => ({ useMediaUsages: () => ({}), refreshMediaUsages: async () => {} }));
+vi.mock('../services/apiProviders', async (original) => ({
+  ...await original(),
+  getProviders: async () => [],
+}));
 vi.mock('../services/socket', () => ({ default: { connected: true, on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 
 const UNKNOWN_DESCRIPTION = "Not classified — PortOS doesn't know if this is safe to remove";
@@ -252,6 +257,57 @@ describe('DataManager per-item purge (#3327)', () => {
     // vanish for every deletable category on an older peer.
     expandRow('Legacy');
     await waitFor(() => expect(screen.getByRole('button', { name: /Purge/ })).toBeInTheDocument());
+  });
+});
+
+describe('DataManager runtime storage and rebuildable caches', () => {
+  it('keeps runtime files and unknown entries out of bulk and per-entry cleanup', async () => {
+    const label = 'Local Runtimes and Caches';
+    getDataOverview.mockResolvedValue({ ...scopedOverview, categories: [
+      { key: 'cache', label, path: 'data/cache', archivable: false, deletable: true, purgeScope: 'items', mixed: true, size: 2000, fileCount: 2 },
+    ] });
+    getDataCategory.mockResolvedValue({ key: 'cache', items: [
+      { name: 'runtimes', label: 'Local model runtimes and weights', sourceHref: '/models/llms-runtimes', description: 'Splash: running.', canPurge: false, type: 'directory', size: 1700 },
+      { name: 'codex-usage-inventory', label: 'Codex usage scan cache', description: 'Rebuilt from Codex session logs.', canPurge: true, type: 'directory', size: 300 },
+    ] });
+    purgeDataCategory.mockClear().mockResolvedValue({ category: 'cache', subPath: 'codex-usage-inventory' });
+    render(<DataManager />);
+    await screen.findAllByText(label);
+    expandRow(label);
+    const table = await screen.findByRole('table', { name: `${label} contents` });
+    expect(within(table).getByRole('link', { name: 'Local model runtimes and weights' })).toHaveAttribute('href', '/models/llms-runtimes');
+    expect(within(table).getByText('Splash: running.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Purge' })).not.toBeInTheDocument();
+    expect(within(table).queryByRole('button', { name: /Delete runtimes from/ })).not.toBeInTheDocument();
+    fireEvent.click(within(table).getByRole('button', { name: /Delete codex-usage-inventory from/ }));
+    fireEvent.click(within(table).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(purgeDataCategory).toHaveBeenCalledExactlyOnceWith('cache', { subPath: 'codex-usage-inventory' }));
+  });
+});
+
+describe('DataManager video file previews', () => {
+  it('opens the standard media viewer without navigating away or requiring a history record', async () => {
+    const name = 'music-video-excerpt-example.mp4';
+    const path = `/data/videos/${name}`;
+    getDataOverview.mockResolvedValue({ ...scopedOverview, categories: [
+      { key: 'videos', label: 'Videos', path: 'data/videos', archivable: true, deletable: true, purgeScope: 'items', size: 2000, fileCount: 1 },
+    ] });
+    getDataCategory.mockResolvedValue({ key: 'videos', items: [
+      { name, type: 'file', sourceHref: path, size: 2000 },
+    ] });
+    render(<DataManager />);
+    await screen.findAllByText('Videos');
+    expandRow('Videos');
+    const table = await screen.findByRole('table', { name: 'Videos contents' });
+    fireEvent.click(within(table).getByRole('button', { name }));
+    const modal = await screen.findByRole('dialog', { name });
+    const video = modal.querySelector('video');
+    expect(video).toHaveAttribute('src', path);
+    expect(video).toHaveAttribute('controls');
+    expect(screen.getByRole('heading', { name: 'Data Manager' })).toBeInTheDocument();
+    fireEvent.click(within(modal).getAllByRole('button', { name: 'Close', exact: true })[0]);
+    expect(screen.queryByRole('dialog', { name })).not.toBeInTheDocument();
+    expect(within(table).getByRole('button', { name })).toBeInTheDocument();
   });
 });
 

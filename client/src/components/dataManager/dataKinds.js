@@ -44,6 +44,14 @@ export const DATA_KINDS = {
     swatch: 'bg-port-success',
     tone: 'success',
   },
+  mixed: {
+    label: 'Mixed',
+    hint: 'Contains installed or retained files as well as rebuildable caches',
+    tile: 'bg-port-accent/10 hover:bg-port-accent/20',
+    edge: 'border-port-accent/50',
+    swatch: 'bg-port-accent',
+    tone: 'accent',
+  },
   unclassified: {
     label: 'Unclassified',
     hint: 'Unknown directory — actions withheld',
@@ -54,10 +62,11 @@ export const DATA_KINDS = {
   },
 };
 
-export const DATA_KIND_ORDER = ['reclaimable', 'userFiles', 'archivable', 'protected', 'unclassified'];
+export const DATA_KIND_ORDER = ['reclaimable', 'userFiles', 'archivable', 'protected', 'mixed', 'unclassified'];
 
 export function dataKindOf(cat) {
   if (cat?.classified === false) return 'unclassified';
+  if (cat?.mixed || cat?.key === 'cache') return 'mixed';
   if (cat?.deletable) return cat.purgeScope === 'items' ? 'userFiles' : 'reclaimable';
   if (cat?.archivable) return 'archivable';
   return 'protected';

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react';
 import { HardDrive, RefreshCw, Archive, Trash2, ChevronDown, ChevronRight, FolderOpen, File, Package } from 'lucide-react';
 import { getTombstoneSweepStatus, sweepTombstonesNow } from '../services/apiPeerSync.js';
 import {
@@ -25,6 +25,8 @@ import DataTreemap from '../components/dataManager/DataTreemap';
 import CosStoragePanel from '../components/dataManager/CosStoragePanel';
 import DataSelectionPanel from '../components/dataManager/DataSelectionPanel';
 import { DATA_KINDS, DATA_KIND_ORDER, HATCH_STYLE, dataKindOf } from '../components/dataManager/dataKinds';
+
+const MediaLightbox = lazy(() => import('../components/media/MediaLightbox.jsx'));
 
 // Plural labels for tombstone record kinds — shared between the in-page
 // TombstoneGcSection toast and `scripts/ops/gc-tombstones-now.js` (the CLI
@@ -219,7 +221,16 @@ function SizeBar({ size, maxSize, color }) {
   );
 }
 
-function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, detail, onArchive, onPurge, onConfirmPurge, onCancelPurge, onDeleteItem, onRemoveItem, deletingItem, confirmingPurge, archiving, purging }) {
+function CategoryFileName({ item, onPreview }) {
+  if (!item.sourceHref) return <span className="block truncate">{item.label || item.name}</span>;
+  const style = 'block max-w-full truncate text-left text-port-accent hover:underline';
+  if (onPreview && /\.(mp4|m4v|webm|mov)$/i.test(item.name)) {
+    return <button type="button" className={style} onClick={() => onPreview(item)} title={`Preview ${item.name}`}>{item.label || item.name}</button>;
+  }
+  return <a href={item.sourceHref} className={style} title={`Open source for ${item.name}`}>{item.label || item.name}</a>;
+}
+
+function CategoryRow({ onVideoPreview, onMaintenanceComplete, cat, maxSize, onExpand, expanded, detail, onArchive, onPurge, onConfirmPurge, onCancelPurge, onDeleteItem, onRemoveItem, deletingItem, confirmingPurge, archiving, purging }) {
   // Directories with no CATEGORIES entry come back with `classified: false` and
   // no Archive/Purge flags. Say why the buttons are missing in outcome terms so
   // the row reads as a deliberate safety stance, not a broken row (#3285).
@@ -232,7 +243,8 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
   // table (#3327). Older servers omit `purgeScope` entirely — treat that as the
   // legacy category-wide behavior rather than silently dropping the button.
   const [removingItems, setRemovingItems] = useState(new Set());
-  const itemScoped = cat.deletable && cat.purgeScope === 'items';
+  const mixedCache = cat.key === 'cache';
+  const itemScoped = cat.deletable && (cat.purgeScope === 'items' || mixedCache);
   const itemColumns = cat.deletable ? 'minmax(160px, 1fr) 80px 60px 120px' : 'minmax(160px, 1fr) 80px 60px';
   const categoryPurgeable = cat.deletable && !itemScoped;
   // Some reproducible-scratch categories hold the working state of a job that is
@@ -317,7 +329,9 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
               ))}
               {itemScoped && (
                 <span className="text-xs text-gray-500">
-                  These files are the only copy, so there is no whole-category purge — delete individual entries from the list below.
+                  {mixedCache
+                    ? 'Only entries marked Rebuildable cache can be cleared. Open the runtime entry to manage installations and models.'
+                    : 'These files are the only copy, so there is no whole-category purge — delete individual entries from the list below.'}
                 </span>
               )}
               {!cat.archivable && !cat.deletable && (
@@ -356,8 +370,9 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
                           <div role="cell" className="p-2 pl-3 text-gray-300 flex items-center gap-1.5">
                             {item.type === 'directory' ? <FolderOpen size={11} className="text-port-accent shrink-0" /> : <File size={11} className="text-gray-500 shrink-0" />}
                             <div className="min-w-0">
-                              {item.sourceHref ? <a href={item.sourceHref} className="block truncate text-port-accent hover:underline" title={`Open source for ${item.name}`}>{item.label || item.name}</a> : <span className="block truncate">{item.label || item.name}</span>}
+                              <CategoryFileName item={item} onPreview={cat.key === 'videos' ? onVideoPreview : undefined} />
                               {item.label && item.label !== item.name && <span className="block truncate text-gray-500" title={item.name}>{item.name}</span>}
+                              {mixedCache && <span className="block font-medium text-gray-400">{item.canPurge ? 'Rebuildable cache' : 'Kept by Data Manager'}</span>}
                               {(item.description || item.sourceUnavailable) && <span className="block text-gray-500">{item.description || item.sourceUnavailable}</span>}
                             </div>
                           </div>
@@ -365,7 +380,9 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
                           <div role="cell" className="p-2 pr-3 text-right text-gray-500">{item.type === 'directory' ? (item.fileCount == null ? 'Unavailable' : formatCount(item.fileCount)) : '—'}</div>
                           {cat.deletable && (
                             <div role="cell" className="p-2 pr-3 text-right">
-                              {itemScoped && item.type === 'directory' ? (
+                              {mixedCache && !item.canPurge ? (
+                                <span className="text-gray-600" title="This entry is kept by Data Manager">—</span>
+                              ) : !mixedCache && itemScoped && item.type === 'directory' ? (
                                 // Subdirectories of these categories are another
                                 // feature's working state (in-flight render
                                 // control dirs, scratch), not user assets — the
@@ -491,6 +508,15 @@ export default function DataManager() {
   const [loading, setLoading] = useState(true);
   const [expandedCat, setExpandedCat] = useState(null);
   const [detail, setDetail] = useState(null);
+  const [videoPreview, setVideoPreview] = useState(null);
+  const openVideoPreview = (item) => setVideoPreview({
+    kind: 'video',
+    key: `data-manager:video:${item.name}`,
+    label: item.label || item.name,
+    filename: item.name,
+    downloadUrl: item.sourceHref,
+    fileSizeBytes: item.size,
+  });
   const [archiving, setArchiving] = useState(null);
   const [purging, setPurging] = useState(null);
   const [confirmPurge, setConfirmPurge] = useState(null);
@@ -789,6 +815,7 @@ export default function DataManager() {
                   expanded={expandedCat === cat.key}
                   detail={expandedCat === cat.key ? detail : null}
                   onExpand={handleExpand}
+                  onVideoPreview={openVideoPreview}
                   onArchive={handleArchive}
                   onMaintenanceComplete={reconcileCosStorage}
                   onPurge={setConfirmPurge}
@@ -825,6 +852,11 @@ export default function DataManager() {
           </div>
         </div>
       </div>
+      {videoPreview && (
+        <Suspense fallback={null}>
+          <MediaLightbox item={videoPreview} onClose={() => setVideoPreview(null)} />
+        </Suspense>
+      )}
     </div>
   );
 }
