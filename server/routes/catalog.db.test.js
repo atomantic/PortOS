@@ -850,6 +850,53 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
     await query('DELETE FROM universes WHERE id = $1', [UNI]).catch(() => {});
   });
 
+  it('commits 25 tagged canon drafts and all 300 auto-relations in fewer than 65 SQL round trips', async () => {
+    const universeRef = `commit-budget-${NONCE}`;
+    const operationKey = randomUUID();
+    receiptKeys.add(operationKey);
+    const scrap = await catalogDB.createScrap({ rawText: 'Example query budget source' });
+    createdScrapIds.add(scrap.id);
+    await query(`INSERT INTO universes (id, name, data) VALUES ($1, $2, jsonb_build_object('id', $1::text, 'name', $2::text))`,
+      [universeRef, 'Example query budget universe']);
+    const tag = `Batch Probe ${NONCE}`;
+    const accepted = Array.from({ length: 25 }, (_, i) => ({
+      type: ['character', 'place', 'object'][i % 3],
+      name: `Example draft ${i}`,
+      tags: [i === 0 ? tag : tag.toUpperCase()],
+      ...(i === 0 ? { span: { start: 1, end: 4 } } : {}),
+    }));
+    try {
+      const queries = vi.spyOn(pg.Client.prototype, 'query');
+      let roundTrips;
+      const ingredients = await catalogDB.commitScrap({ scrapId: scrap.id, universeRef, operationKey, accepted })
+        .finally(() => {
+          roundTrips = queries.mock.calls.length;
+          queries.mockRestore();
+        });
+      const ids = ingredients.map(({ id }) => id);
+      ids.forEach(id => createdIngredientIds.add(id));
+      expect(roundTrips).toBeGreaterThan(0);
+      expect(roundTrips).toBeLessThan(65);
+      expect(ingredients.map(({ name }) => name)).toEqual(accepted.map(({ name }) => name));
+      for (const ingredient of ingredients) expect(ingredient.tags).toContain(tag);
+      const sources = await catalogDB.listSourcesForScrap(scrap.id);
+      expect(sources).toHaveLength(25);
+      expect(sources.find(({ ingredientId }) => ingredientId === ids[0]).span).toEqual({ start: 1, end: 4 });
+      expect(sources.find(({ ingredientId }) => ingredientId === ids[1]).span).toBeNull();
+      const { rows: edges } = await query(`SELECT from_id, to_id, kind FROM catalog_ingredient_relations
+        WHERE from_id = ANY($1::text[]) AND NOT deleted`, [ids]);
+      const sorted = [...ids].sort();
+      expect(new Set(edges.map(({ from_id, to_id, kind }) => `${from_id}:${to_id}:${kind}`))).toEqual(
+        new Set(sorted.flatMap((from, i) => sorted.slice(i + 1).map(to => `${from}:${to}:related-to`))),
+      );
+      const { rows: [universe] } = await query('SELECT data FROM universes WHERE id = $1', [universeRef]);
+      expect(['characters', 'places', 'objects'].map(field => universe.data[field].map(({ ingredientId }) => ingredientId)))
+        .toEqual(['character', 'place', 'object'].map(type => ingredients.filter(ingredient => ingredient.type === type).map(({ id }) => id)));
+    } finally {
+      await query('DELETE FROM universes WHERE id = $1', [universeRef]);
+    }
+  });
+
   it('replays a lost response and concurrent commits without duplicating the batch, and rejects changed input', async () => {
     const scrap = await catalogDB.createScrap({ rawText: 'Example receipt source' });
     createdScrapIds.add(scrap.id);
