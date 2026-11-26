@@ -486,7 +486,11 @@ export async function spawnNpm(scope, script, extraArgs, label, {
 function guardBudgetStatus(files, results, loads, { enforce }) {
   const watched = new Set(files);
   const timed = guardDurations(results.filter(({ file }) => watched.has(file)), loads);
-  if (enforce && Object.keys(timed).length > 0) console.log(`Guard timings (ms): ${JSON.stringify(timed)}`);
+  if (enforce) {
+    for (const [name, ms] of Object.entries(timed)) {
+      console.log(`⏱️ Guard timing ${name.replace(/[\r\n]/g, ' ')} ${ms.toFixed(1)}ms`);
+    }
+  }
   const slowest = Object.entries(timed).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([file, durationMs]) => ({ file, durationMs }));
   if (slowest.length > 0) console.log(`⏱️ Guards, slowest of ${Object.keys(timed).length}: ${describeGuardDurations(slowest)} (budget ${(CI_GUARD_BUDGET_MS / 1000).toFixed(1)}s).`);
   const over = overBudgetGuards(timed, CI_GUARD_BUDGET_MS);

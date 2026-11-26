@@ -801,12 +801,13 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
       expect(enforced.stderr).toContain(`❌ Guard over its time budget: ${over}`);
       expect(ranSets(enforced.stdout)).toEqual([[guardSelector, 'test/guards/repo.guard.test.js'], [`../${scheduled}`], [`../${other}`]]);
       const timings = enforced.stdout.split('\n')
-        .filter(line => line.startsWith('Guard timings (ms): '))
-        .map(line => JSON.parse(line.slice('Guard timings (ms): '.length)));
-      expect(timings).toEqual([
-        { [guard]: 6500, [`${runner} > slowCheck`]: 4500, [`${runner} > fastCheck`]: 4605 },
-        { [scheduled]: 10 },
-      ]);
+        .filter(line => line.startsWith('⏱️ Guard timing '));
+      expect(timings.sort()).toEqual([
+        `⏱️ Guard timing ${guard} 6500.0ms`,
+        `⏱️ Guard timing ${runner} > slowCheck 4500.0ms`,
+        `⏱️ Guard timing ${runner} > fastCheck 4605.0ms`,
+        `⏱️ Guard timing ${scheduled} 10.0ms`,
+      ].sort());
 
       const slowScheduled = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: `../${scheduled}` });
       expect(slowScheduled.status).toBe(1);
@@ -819,7 +820,7 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
         expect(reported.status, reported.stderr).toBe(0);
         expect(ranSets(reported.stdout)).toEqual([[guardSelector, `../${other}`, `../${scheduled}`, 'test/guards/repo.guard.test.js'].sort()]);
         expect(reported.stdout).toContain(`::warning title=Guard over its time budget::${over}`);
-        expect(reported.stdout).not.toContain('Guard timings (ms): ');
+        expect(reported.stdout).not.toContain('⏱️ Guard timing ');
         expect(reported.stderr).not.toContain('Guard over its time budget');
       }
 
