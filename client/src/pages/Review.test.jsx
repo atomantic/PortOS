@@ -159,6 +159,7 @@ import {
   triageReviewQueueItem,
   getReviewItems,
   getReviewBriefing,
+  updateReviewItem,
 } from '../services/apiReview.js';
 import { getHarnessUpdateReference } from '../services/apiHarnesses.js';
 import {
@@ -169,7 +170,7 @@ import {
   reviewGitHubDeployment,
 } from '../services/apiGithub.js';
 import { addCosTask, getCosAgent, submitCosAgentFeedback } from '../services/apiAgents.js';
-import { createThread } from '../services/apiBrainThreads.js';
+import { createThread, getThread, updateThread } from '../services/apiBrainThreads.js';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import { __resetActionQueue } from '../hooks/useActionQueue';
@@ -646,6 +647,64 @@ describe('Review Hub queue-card triage (#3282)', () => {
 });
 
 describe('Actions commitments workspace (#7739)', () => {
+  it.each([
+    ['threads', updateThread, 'notes', ['Local status', 'Priority', 'Next action', 'Due date']],
+    ['todo', updateReviewItem, 'description', []],
+  ])('locks %s commitment fields during saves and preserves the draft on failure', async (source, update, notesKey, extraFields) => {
+    const item = {
+      id: `${source}:example`,
+      source,
+      sourceRef: 'example',
+      title: 'Example commitment',
+      summary: 'Original notes',
+      operations: [],
+    };
+    const fields = ['Title', 'Notes', ...extraFields];
+    const detail = Promise.withResolvers();
+    if (source === 'threads') {
+      getThread.mockReturnValueOnce(detail.promise).mockResolvedValueOnce({ ...item, notes: item.summary });
+    }
+    const queue = { partial: false, sources: {}, items: [item] };
+    getReviewQueue.mockResolvedValueOnce(queue);
+    routerState.actionId = item.id;
+
+    render(<Review />);
+    const drawer = within(await screen.findByRole('dialog'));
+    if (source === 'threads') {
+      expect(drawer.getByLabelText('Notes')).toBeDisabled();
+      await act(async () => detail.reject(new Error('Example detail read failed')));
+      expect(drawer.getByRole('alert')).toHaveTextContent('Commitment details could not be loaded');
+      expect(drawer.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+      fireEvent.click(drawer.getByRole('button', { name: 'Retry' }));
+    }
+    await waitFor(() => expect(drawer.getByLabelText('Notes')).toHaveValue(item.summary));
+    fireEvent.change(drawer.getByLabelText('Notes'), { target: { value: 'Draft notes' } });
+
+    const failed = Promise.withResolvers();
+    const successful = Promise.withResolvers();
+    update.mockReturnValueOnce(failed.promise).mockReturnValueOnce(successful.promise);
+    fireEvent.click(drawer.getByRole('button', { name: 'Save changes' }));
+    expect(drawer.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+    for (const field of fields) expect(drawer.getByLabelText(field)).toBeDisabled();
+
+    await act(async () => failed.reject(new Error('Example save failed')));
+    expect(drawer.getByLabelText('Notes')).toHaveValue('Draft notes');
+    for (const field of fields) expect(drawer.getByLabelText(field)).toBeEnabled();
+
+    fireEvent.click(drawer.getByRole('button', { name: 'Save changes' }));
+    expect(update).toHaveBeenLastCalledWith(
+      item.sourceRef,
+      expect.objectContaining({ [notesKey]: 'Draft notes' }),
+      { silent: true },
+    );
+    expect(drawer.getByLabelText('Notes')).toBeDisabled();
+    getReviewQueue.mockResolvedValueOnce(queue);
+    await act(async () => successful.resolve({ title: item.title, [notesKey]: 'Saved notes' }));
+    expect(drawer.getByLabelText('Notes')).toHaveValue('Saved notes');
+    for (const field of fields) expect(drawer.getByLabelText(field)).toBeEnabled();
+    expect(drawer.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+  });
+
   it('keeps stored-item filters and bulk actions out of the canonical queue header', async () => {
     const canonicalItem = {
       id: 'health:required-example', source: 'health', sourceLabel: 'Health anomalies',

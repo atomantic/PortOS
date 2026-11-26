@@ -35,6 +35,9 @@ export default function ActionDetailDrawer({
 }) {
   const isThread = item?.source === 'threads';
   const isTodo = item?.source === 'todo';
+  const needsThreadDetail = isThread && Boolean(item.sourceRef);
+  const [detailStatus, setDetailStatus] = useState('loading');
+  const [detailRetry, setDetailRetry] = useState(0);
   const [record, setRecord] = useState(item);
   const [draft, setDraft] = useState(() => (isThread ? threadDraft(item) : {
     title: item?.title || '',
@@ -49,17 +52,20 @@ export default function ActionDetailDrawer({
       title: item.title || '',
       description: item.summary || '',
     });
-    if (isThread && item.sourceRef) {
+    if (needsThreadDetail) {
       getThread(item.sourceRef, { silent: true })
         .then((full) => {
           if (cancelled) return;
           setRecord(full);
           setDraft(threadDraft(full));
+          setDetailStatus('ready');
         })
-        .catch(() => null);
+        .catch(() => {
+          if (!cancelled) setDetailStatus('error');
+        });
     }
     return () => { cancelled = true; };
-  }, [item?.id, item?.sourceRef, isThread]);
+  }, [item?.id, item?.sourceRef, isThread, needsThreadDetail, detailRetry]);
 
   const [save, saving] = useAsyncAction(async () => {
     if (!item || !draft || (!isThread && !isTodo)) return null;
@@ -132,8 +138,8 @@ export default function ActionDetailDrawer({
         )}
 
         {(isThread || isTodo) && (
-          <section className="space-y-3">
-            <h3 className="text-sm font-semibold text-white">Edit commitment</h3>
+          <fieldset disabled={saving || (needsThreadDetail && detailStatus !== 'ready')} className="min-w-0 space-y-3 disabled:opacity-60">
+            <legend className="mb-3 text-sm font-semibold text-white">Edit commitment</legend>
             <label className="block text-xs text-gray-400" htmlFor="action-detail-title">
               Title
               <input
@@ -187,10 +193,19 @@ export default function ActionDetailDrawer({
                 <textarea id="action-detail-description" rows={5} value={draft.description} onChange={(e) => updateDraft({ description: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white resize-y" />
               </label>
             )}
-            <button type="button" onClick={save} disabled={saving || !draft?.title?.trim()} className="inline-flex items-center gap-2 rounded border border-port-accent/40 px-3 py-2 text-sm text-port-accent hover:bg-port-accent/10 disabled:opacity-50">
+            <button type="button" onClick={save} disabled={!draft?.title?.trim()} className="inline-flex items-center gap-2 rounded border border-port-accent/40 px-3 py-2 text-sm text-port-accent hover:bg-port-accent/10 disabled:opacity-50">
               <Save size={14} /> {saving ? 'Saving…' : 'Save changes'}
             </button>
-          </section>
+          </fieldset>
+        )}
+        {needsThreadDetail && detailStatus === 'error' && (
+          <div role="alert" className="flex items-center gap-2 text-sm text-port-warning">
+            Commitment details could not be loaded.
+            <button type="button" className="rounded border border-current px-3 py-2" onClick={() => {
+              setDetailStatus('loading');
+              setDetailRetry((attempt) => attempt + 1);
+            }}>Retry</button>
+          </div>
         )}
 
         <QueueInvestigation item={item} />
