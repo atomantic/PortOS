@@ -4,6 +4,12 @@
 
 import { Router } from 'express';
 import * as taskLearning from '../services/taskLearning.js';
+import { loadLearningData, loadDismissedRecommendations } from '../services/taskLearning/store.js';
+import { summarizeLearningInsights, listDismissedRecommendations } from '../services/taskLearning/insights.js';
+import { summarizeTaskDurations } from '../services/taskLearning/durations.js';
+import { findLowSuccessTaskTypes, summarizeConfidenceLevels, summarizePerformance, summarizeRoutingAccuracy } from '../services/taskLearning/routing.js';
+import { getFeedbackStats } from '../services/cos/cosAgentFeedback.js';
+import { getReviewerVerdictStats } from '../services/reviewerVerdicts.js';
 import * as weeklyDigest from '../services/weeklyDigest.js';
 import { loadState } from '../services/cos/cosState.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
@@ -12,6 +18,28 @@ import { validateRequest } from '../lib/validateRequest.js';
 import { limitQuerySchema, parsePagination } from '../lib/queryValidation.js';
 
 const router = Router();
+
+// GET /api/cos/learning/dashboard - Read a single snapshot for the Learning tab
+router.get('/learning/dashboard', asyncHandler(async (req, res) => {
+  const [data, dismissed, [state, feedback, reviewerVerdicts]] = await Promise.all([
+    loadLearningData(),
+    loadDismissedRecommendations(),
+    Promise.allSettled([loadState(), getFeedbackStats(), getReviewerVerdictStats()]),
+  ]);
+
+  // A failed auxiliary read is distinct from a successful empty section.
+  res.json({
+    learning: summarizeLearningInsights(data, dismissed),
+    performance: summarizePerformance(data),
+    skipped: lowSuccessResponse(findLowSuccessTaskTypes(data)),
+    durations: summarizeTaskDurations(data),
+    routing: summarizeRoutingAccuracy(data),
+    confidence: state.status === 'fulfilled' ? summarizeConfidenceLevels(data, state.value.config?.confidenceAutoApproval) : null,
+    feedback: feedback.status === 'fulfilled' ? feedback.value : null,
+    dismissed: listDismissedRecommendations(dismissed),
+    reviewerVerdicts: reviewerVerdicts.status === 'fulfilled' ? reviewerVerdicts.value : null,
+  });
+}));
 
 // GET /api/cos/learning - Get learning insights
 router.get('/learning', asyncHandler(async (req, res) => {
@@ -33,8 +61,11 @@ router.post('/learning/backfill', asyncHandler(async (req, res) => {
 
 // GET /api/cos/learning/skipped - Get historical low-success recommendations (legacy endpoint name)
 router.get('/learning/skipped', asyncHandler(async (req, res) => {
-  const skipped = await taskLearning.getSkippedTaskTypes();
-  res.json({
+  res.json(lowSuccessResponse(await taskLearning.getSkippedTaskTypes()));
+}));
+
+function lowSuccessResponse(skipped) {
+  return {
     advisoryOnly: true,
     lowSuccessCount: skipped.length,
     skippedCount: skipped.length, // Legacy field; not scheduler state.
@@ -42,8 +73,8 @@ router.get('/learning/skipped', asyncHandler(async (req, res) => {
     message: skipped.length > 0
       ? 'These task types have low historical success rates; this recommendation does not pause scheduling'
       : 'No task types currently have low-success recommendations'
-  });
-}));
+  };
+}
 
 // POST /api/cos/learning/reset/:taskType - Reset learning data for a specific task type
 router.post('/learning/reset/:taskType', asyncHandler(async (req, res) => {

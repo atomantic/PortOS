@@ -5,14 +5,7 @@ import { MemoryRouter } from 'react-router';
 import LearningTab from './LearningTab';
 
 const api = vi.hoisted(() => ({
-  getCosLearning: vi.fn(),
-  getCosLearningPerformance: vi.fn(),
-  getCosLearningSkipped: vi.fn(),
-  getCosLearningDurations: vi.fn(),
-  getCosLearningRouting: vi.fn(),
-  getCosLearningConfidence: vi.fn(),
-  getCosFeedbackStats: vi.fn(),
-  getDismissedCosRecommendations: vi.fn(),
+  getCosLearningDashboard: vi.fn(),
   getReviewerVerdictStats: vi.fn(),
   resetCosTaskTypeLearning: vi.fn(),
 }));
@@ -23,18 +16,13 @@ const toast = vi.hoisted(() => ({
 }));
 
 vi.mock('../../../services/apiAgents.js', () => ({
-  getCosLearning: api.getCosLearning,
-  getCosLearningPerformance: api.getCosLearningPerformance,
-  getCosLearningSkipped: api.getCosLearningSkipped,
-  getCosLearningDurations: api.getCosLearningDurations,
-  getCosLearningRouting: api.getCosLearningRouting,
-  getCosLearningConfidence: api.getCosLearningConfidence,
-  getCosFeedbackStats: api.getCosFeedbackStats,
-  getDismissedCosRecommendations: api.getDismissedCosRecommendations,
+  getCosLearningDashboard: api.getCosLearningDashboard,
   resetCosTaskTypeLearning: api.resetCosTaskTypeLearning,
 }));
 vi.mock('../../../services/apiCodeReview.js', () => ({ getReviewerVerdictStats: api.getReviewerVerdictStats }));
 vi.mock('../../ui/Toast', () => ({ default: toast }));
+
+const dashboard = {};
 
 const renderTab = () => render(
   <MemoryRouter>
@@ -45,23 +33,23 @@ const renderTab = () => render(
 describe('LearningTab — Requires Approval controls', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getCosLearning.mockResolvedValue({
+    dashboard.learning = {
       totals: { completed: 60, succeeded: 5, avgDurationMs: 60000 },
       recommendations: []
-    });
-    api.getCosLearningPerformance.mockResolvedValue({
+    };
+    dashboard.performance = {
       topPerformers: [],
       needsAttention: [{ taskType: 'internal-task', successRate: 10, completed: 30, avgDurationMin: 5 }],
       skipped: []
-    });
-    api.getCosLearningSkipped.mockResolvedValue({ skippedCount: 0, skippedTypes: [] });
-    api.getCosLearningDurations.mockResolvedValue({});
-    api.getCosLearningRouting.mockResolvedValue({ byModelTier: {} });
-    api.getCosFeedbackStats.mockResolvedValue({ total: 0 });
-    api.getDismissedCosRecommendations.mockResolvedValue({ dismissed: [] });
-    api.getReviewerVerdictStats.mockResolvedValue({ runs: 0, reports: 0, byReviewer: [], bySize: [] });
+    };
+    dashboard.skipped = { skippedCount: 0, skippedTypes: [] };
+    dashboard.durations = {};
+    dashboard.routing = { byModelTier: {} };
+    dashboard.feedback = { total: 0 };
+    dashboard.dismissed = [];
+    dashboard.reviewerVerdicts = { runs: 0, reports: 0, byReviewer: [], bySize: [] };
     api.resetCosTaskTypeLearning.mockResolvedValue({ reset: true });
-    api.getCosLearningConfidence.mockResolvedValue({
+    dashboard.confidence = {
       levels: {
         high: [],
         medium: [],
@@ -73,7 +61,9 @@ describe('LearningTab — Requires Approval controls', () => {
       },
       thresholds: { highThreshold: 80, lowThreshold: 50, minSamples: 5 },
       summary: { high: 0, medium: 0, low: 2, new: 0, total: 2, requireApproval: 2 }
-    });
+    };
+    api.getCosLearningDashboard.mockImplementation(async () => ({ ...dashboard }));
+    api.getReviewerVerdictStats.mockImplementation(async () => dashboard.reviewerVerdicts);
   });
 
   it('renders Requires Approval table with Mark resolved on each row and link to Tasks tab', async () => {
@@ -94,6 +84,8 @@ describe('LearningTab — Requires Approval controls', () => {
 
     await user.click(markInternalTaskBtn);
     expect(api.resetCosTaskTypeLearning).toHaveBeenCalledWith('internal-task');
+    expect(api.getCosLearningDashboard).toHaveBeenCalledTimes(2);
+    expect(api.getReviewerVerdictStats).not.toHaveBeenCalled();
   });
 
   it('provides Mark all resolved button when multiple items require approval', async () => {

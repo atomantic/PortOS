@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { runsLabel } from './LearningTab';
+import { runsLabel } from './learning/learningPresentation';
 
 // Evidence pairing (issue #2617): a recency-windowed rate must be labeled with
 // the window's own sample count, never the lifetime total — "0% across 200

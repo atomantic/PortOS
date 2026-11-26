@@ -158,10 +158,8 @@ export const isDescendantOf = (node, ancestor) => {
 
 // Conditional renders deliberately not announced, keyed by guard EXPRESSION so an edit above can't retire or resurrect an entry.
 export const JUSTIFIED_SILENT_ERROR_RENDERS = new Map([
-  // Wraps <AppOperationBanner>, which declares role="status" itself (a one-file walk can't see across the import).
-  // `expandedSections.errors` is a disclosure toggle over static historical categories, not a status message.
-  ['src/components/cos/tabs/LearningTab.jsx', new Set([
-    'expandedSections.errors',
+  // These conditions reveal static historical categories inside a disclosure.
+  ['src/components/cos/tabs/learning/LearningErrorsSection.jsx', new Set([
     // Both render INSIDE that disclosure: static analytics, already on screen when the section opens.
     'error.affectedTypes?.length > 0',
     'err.details',

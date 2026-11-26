@@ -5,14 +5,7 @@ import { MemoryRouter } from 'react-router';
 import LearningTab from './LearningTab';
 
 const api = vi.hoisted(() => ({
-  getCosLearning: vi.fn(),
-  getCosLearningPerformance: vi.fn(),
-  getCosLearningSkipped: vi.fn(),
-  getCosLearningDurations: vi.fn(),
-  getCosLearningRouting: vi.fn(),
-  getCosLearningConfidence: vi.fn(),
-  getCosFeedbackStats: vi.fn(),
-  getDismissedCosRecommendations: vi.fn(),
+  getCosLearningDashboard: vi.fn(),
   getReviewerVerdictStats: vi.fn(),
   backfillCosLearning: vi.fn(),
 }));
@@ -31,71 +24,95 @@ const socket = vi.hoisted(() => {
 });
 
 vi.mock('../../../services/apiAgents.js', () => ({
-  getCosLearning: api.getCosLearning,
-  getCosLearningPerformance: api.getCosLearningPerformance,
-  getCosLearningSkipped: api.getCosLearningSkipped,
-  getCosLearningDurations: api.getCosLearningDurations,
-  getCosLearningRouting: api.getCosLearningRouting,
-  getCosLearningConfidence: api.getCosLearningConfidence,
-  getCosFeedbackStats: api.getCosFeedbackStats,
-  getDismissedCosRecommendations: api.getDismissedCosRecommendations,
+  getCosLearningDashboard: api.getCosLearningDashboard,
   backfillCosLearning: api.backfillCosLearning,
 }));
 vi.mock('../../../services/apiCodeReview.js', () => ({ getReviewerVerdictStats: api.getReviewerVerdictStats }));
 vi.mock('../../../services/socket', () => ({ default: socket }));
 vi.mock('../../ui/Toast');
 
+const dashboard = {};
+
 const renderTab = () => render(<MemoryRouter><LearningTab /></MemoryRouter>);
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.getCosLearning.mockResolvedValue({ totals: { completed: 12, succeeded: 10, failed: 2, successRate: 83 }, recommendations: [] });
-  api.getCosLearningPerformance.mockResolvedValue({ topPerformers: [], needsAttention: [] });
-  api.getCosLearningSkipped.mockResolvedValue({ skippedCount: 0, skippedTypes: [] });
-  api.getCosLearningDurations.mockResolvedValue({});
-  api.getCosLearningRouting.mockResolvedValue({ matrix: [] });
-  api.getCosLearningConfidence.mockResolvedValue({});
-  api.getCosFeedbackStats.mockResolvedValue({ total: 0 });
-  api.getDismissedCosRecommendations.mockResolvedValue({ dismissed: [] });
-  api.getReviewerVerdictStats.mockResolvedValue({ runs: 0, reports: 0, byReviewer: [], bySize: [] });
+  dashboard.learning = { totals: { completed: 12, succeeded: 10, failed: 2, successRate: 83 }, recommendations: [] };
+  dashboard.performance = { topPerformers: [], needsAttention: [] };
+  dashboard.skipped = { skippedCount: 0, skippedTypes: [] };
+  dashboard.durations = {};
+  dashboard.routing = { matrix: [] };
+  dashboard.confidence = {};
+  dashboard.feedback = { total: 0 };
+  dashboard.dismissed = [];
+  dashboard.reviewerVerdicts = { runs: 0, reports: 0, byReviewer: [], bySize: [] };
+  api.getCosLearningDashboard.mockImplementation(async () => ({ ...dashboard }));
+  api.getReviewerVerdictStats.mockImplementation(async () => dashboard.reviewerVerdicts);
 });
 
 describe('LearningTab failed reads', () => {
   // A failed summary read used to say "No learning data available yet" and offer
   // Backfill History, as if the install had never recorded a completed task.
-  it('shows a failed summary read with Retry, not the empty state and Backfill', async () => {
-    api.getCosLearning.mockRejectedValueOnce(new Error('Synthetic learning failure'));
+  it('shows Retry and hides empty-state controls when the first read fails', async () => {
+    api.getCosLearningDashboard.mockRejectedValueOnce(new Error('Synthetic learning failure'));
     renderTab();
 
     expect(await screen.findByText('Could not load learning analytics')).toBeInTheDocument();
     expect(screen.queryByText('No learning data available yet.')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Backfill History/ })).not.toBeInTheDocument();
-    expect(api.getCosLearning).toHaveBeenCalledWith({ silent: true });
+    expect(api.getCosLearningDashboard).toHaveBeenCalledWith({ silent: true });
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('Tasks Analyzed')).toBeInTheDocument();
     expect(screen.queryByText('Could not load learning analytics')).not.toBeInTheDocument();
   });
 
-  it('names a failed section read instead of showing its counts as zero', async () => {
-    api.getCosLearningSkipped.mockRejectedValueOnce(new Error('Synthetic skipped failure'));
+  it('names a failed section while keeping the rest of the dashboard visible', async () => {
+    api.getCosLearningDashboard.mockResolvedValueOnce({ ...dashboard, confidence: null });
     renderTab();
 
-    expect(await screen.findByText(/Could not load some learning sections \(low-success history\)/)).toBeInTheDocument();
-    expect(screen.getByText('not loaded')).toBeInTheDocument();
-    expect(screen.queryByText('due to low success')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    expect(await screen.findByText('Tasks Analyzed')).toBeInTheDocument();
+    expect(await screen.findByText(/Could not load some learning sections \(confidence\)/)).toBeInTheDocument();
+    expect(screen.getByText('Tasks Analyzed')).toBeInTheDocument();
+    expect(screen.queryByText('Confidence & Autonomy')).not.toBeInTheDocument();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry' })));
     expect(screen.queryByText(/Could not load some learning sections/)).not.toBeInTheDocument();
+  });
+
+  it('uses one dashboard request per load and keeps the snapshot on refresh failure', async () => {
+    renderTab();
+    expect(await screen.findByText('Tasks Analyzed')).toBeInTheDocument();
+    expect(api.getCosLearningDashboard).toHaveBeenCalledTimes(1);
+    expect(api.getReviewerVerdictStats).not.toHaveBeenCalled();
+
+    api.getCosLearningDashboard.mockRejectedValueOnce(new Error('Synthetic refresh failure'));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByText('Could not load learning analytics')).toBeInTheDocument();
+    expect(screen.getByText('Tasks Analyzed')).toBeInTheDocument();
+    expect(api.getCosLearningDashboard).toHaveBeenCalledTimes(2);
+    expect(api.getReviewerVerdictStats).not.toHaveBeenCalled();
+  });
+
+  it('reloads the dashboard once after backfilling history', async () => {
+    api.getCosLearningDashboard.mockResolvedValueOnce({
+      ...dashboard, learning: { totals: { completed: 0 }, recommendations: [] },
+    });
+    api.backfillCosLearning.mockResolvedValueOnce({ success: true });
+    renderTab();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Backfill History' }));
+    expect(await screen.findByText('Tasks Analyzed')).toBeInTheDocument();
+    expect(api.backfillCosLearning).toHaveBeenCalledTimes(1);
+    expect(api.getCosLearningDashboard).toHaveBeenCalledTimes(2);
+    expect(api.getReviewerVerdictStats).not.toHaveBeenCalled();
   });
 
   // StrictMode mounts twice, so two batches overlap; the older one failing after
   // the newer one succeeded must not replace the loaded view with an error.
   it('ignores an older batch that fails after a newer one loaded', async () => {
     let failFirst;
-    api.getCosLearning
+    api.getCosLearningDashboard
       .mockImplementationOnce(() => new Promise((_, reject) => { failFirst = reject; }))
-      .mockResolvedValueOnce({ totals: { completed: 12, succeeded: 10, failed: 2, successRate: 83 }, recommendations: [] });
+      .mockResolvedValueOnce({ ...dashboard });
     render(<StrictMode><MemoryRouter><LearningTab /></MemoryRouter></StrictMode>);
 
     expect(await screen.findByText('Tasks Analyzed')).toBeInTheDocument();
@@ -106,9 +123,9 @@ describe('LearningTab failed reads', () => {
 });
 
 it('labels low success as historical advice rather than automatic skipping', async () => {
-  api.getCosLearningSkipped.mockResolvedValue({
+  dashboard.skipped = {
     skippedCount: 1, skippedTypes: [{ taskType: 'pr-watcher', successRate: 13, completed: 8 }]
-  });
+  };
   renderTab();
   expect(await screen.findByText('Low-Success History')).toBeInTheDocument();
   expect(screen.getByText(/not a scheduler pause/)).toBeInTheDocument();
@@ -118,7 +135,7 @@ it('labels low success as historical advice rather than automatic skipping', asy
 
 describe('LearningTab reviewer verdicts', () => {
   it('shows clean rate per reviewer and per diff size once runs recorded verdicts', async () => {
-    api.getReviewerVerdictStats.mockResolvedValue({
+    dashboard.reviewerVerdicts = {
       runs: 3, reports: 4,
       byReviewer: [{ reviewer: 'codex', reports: 4, clean: 1, findings: 3, cleanRate: 25, runs: 3, avgRounds: 1.3 }],
       bySize: [
@@ -126,7 +143,7 @@ describe('LearningTab reviewer verdicts', () => {
         { bucket: 'm', label: '101-500 lines', reports: 3, clean: 0, findings: 3, cleanRate: 0 },
         { bucket: 'unknown', label: 'Size not reported', reports: 0, clean: 0, findings: 0, cleanRate: null },
       ],
-    });
+    };
     renderTab();
 
     expect(await screen.findByText('Reviewer Verdicts')).toBeInTheDocument();
@@ -141,11 +158,11 @@ describe('LearningTab reviewer verdicts', () => {
     expect(await screen.findByText('Tasks Analyzed')).toBeInTheDocument();
     expect(screen.queryByText('Reviewer Verdicts')).not.toBeInTheDocument();
 
-    api.getReviewerVerdictStats.mockResolvedValue({
+    dashboard.reviewerVerdicts = {
       runs: 1, reports: 1,
       byReviewer: [{ reviewer: 'codex', reports: 1, clean: 0, findings: 1, cleanRate: 0, runs: 1, avgRounds: 1 }],
       bySize: [{ bucket: 's', label: '21-100 lines', reports: 1, clean: 0, findings: 1, cleanRate: 0 }],
-    });
+    };
     await act(async () => { socket.receive('cos:reviewer-verdict:recorded', { agentId: 'agent-example', reviewer: 'codex', verdict: 'findings' }); });
 
     expect(await screen.findByText('Reviewer Verdicts')).toBeInTheDocument();
@@ -162,7 +179,7 @@ describe('LearningTab reviewer verdicts', () => {
     renderTab();
     expect(await screen.findByText('Tasks Analyzed')).toBeInTheDocument();
 
-    api.getReviewerVerdictStats.mockResolvedValue(recorded);
+    dashboard.reviewerVerdicts = recorded;
     await act(async () => { socket.receive('connect'); });
     expect(await screen.findByText('Reviewer Verdicts')).toBeInTheDocument();
 
@@ -176,17 +193,34 @@ describe('LearningTab reviewer verdicts', () => {
   });
 
   it('shows recorded verdicts even before task learning has completed tasks, and names unreadable runs', async () => {
-    api.getCosLearning.mockResolvedValue({ totals: { completed: 0, succeeded: 0, failed: 0, successRate: 0 }, recommendations: [] });
-    api.getReviewerVerdictStats.mockResolvedValue({
+    dashboard.learning = { totals: { completed: 0, succeeded: 0, failed: 0, successRate: 0 }, recommendations: [] };
+    dashboard.reviewerVerdicts = {
       runs: 1, reports: 1, unreadableRuns: 2,
       byReviewer: [{ reviewer: 'codex', reports: 1, clean: 1, findings: 0, cleanRate: 100, runs: 1, avgRounds: 1 }],
       bySize: [{ bucket: 'xs', label: '0-20 lines', reports: 1, clean: 1, findings: 0, cleanRate: 100 }],
-    });
+    };
     renderTab();
 
     expect(await screen.findByText('No learning data available yet.')).toBeInTheDocument();
     expect(screen.getByText('Reviewer Verdicts')).toBeInTheDocument();
     expect(screen.getByText(/2 archived runs could not be read/)).toBeInTheDocument();
+  });
+
+  it('keeps a newer socket verdict when the dashboard resolves later', async () => {
+    let finishDashboard;
+    api.getCosLearningDashboard.mockImplementationOnce(() => new Promise(resolve => {
+      finishDashboard = resolve;
+    }));
+    renderTab();
+
+    api.getReviewerVerdictStats.mockResolvedValueOnce({
+      runs: 1, reports: 1,
+      byReviewer: [{ reviewer: 'latest-reviewer', reports: 1, clean: 1, findings: 0, cleanRate: 100, runs: 1, avgRounds: 1 }],
+      bySize: [],
+    });
+    await act(async () => socket.receive('cos:agents:changed', {}));
+    await act(async () => finishDashboard({ ...dashboard }));
+    expect(screen.getByText('latest-reviewer')).toBeInTheDocument();
   });
 
   it('re-reads reviewer verdicts when agent runs change', async () => {
@@ -206,7 +240,7 @@ describe('LearningTab reviewer verdicts', () => {
 });
 
 it('reports disclosure state and names its analytics tables and row actions', async () => {
-  api.getCosLearning.mockResolvedValue({
+  dashboard.learning = {
     totals: { completed: 12, succeeded: 10, failed: 2, successRate: 83 },
     recommendations: [],
     insights: {
@@ -214,21 +248,21 @@ it('reports disclosure state and names its analytics tables and row actions', as
       commonErrors: [{ category: 'Timeout', count: 2 }],
     },
     standingLearnings: [{ message: 'Example operating note' }],
-  });
-  api.getCosLearningConfidence.mockResolvedValue({ summary: { total: 1 }, thresholds: {}, levels: {} });
-  api.getCosLearningSkipped.mockResolvedValue({
+  };
+  dashboard.confidence = { summary: { total: 1 }, thresholds: {}, levels: {} };
+  dashboard.skipped = {
     skippedCount: 1, skippedTypes: [{ taskType: 'example-task', successRate: 13, completed: 8 }],
-  });
-  api.getDismissedCosRecommendations.mockResolvedValue({ dismissed: [{ id: 'example-recommendation' }] });
+  };
+  dashboard.dismissed = [{ id: 'example-recommendation' }];
   const duration = { avgDurationMs: 60000, completed: 12, successRate: 83 };
-  api.getCosLearningDurations.mockResolvedValue({ 'example-task': duration, _overall: duration });
+  dashboard.durations = { 'example-task': duration, _overall: duration };
   const tier = { tier: 'light', successRate: 75, succeeded: 3, failed: 1 };
-  api.getCosLearningRouting.mockResolvedValue({
+  dashboard.routing = {
     matrix: [
       { taskType: 'example-task', tiers: [tier, { ...tier, tier: 'medium' }] },
       { taskType: 'other-task', tiers: [tier] },
     ],
-  });
+  };
   renderTab();
   await screen.findByText('Tasks Analyzed');
 
