@@ -123,6 +123,37 @@ beforeEach(() => {
 });
 
 describe('StoryboardDetail', () => {
+  it('resets drawer and make-empty confirmation state when navigating between boards', async () => {
+    api.getStoryboard.mockImplementation((id) => Promise.resolve(board({
+      id, name: id, plot: `${id} plot`,
+      beats: [{ ...board().beats[0], panels: [panel(`${id}-panel`)] }],
+    })));
+    api.getStoryboardMakeEmpty.mockImplementation(() => Promise.resolve({ batch: null, panelCount: 1, steps: [{ type: 'image', title: 'Image', model: 'Example', frames: 1 }] }));
+    render(
+      <MemoryRouter initialEntries={['/storyboards/sb-1?plot=open']}>
+        <Routes>
+          <Route path="/storyboards/:id" element={<StoryboardDetail />} />
+          <Route path="/storyboards/:id/panel/:panelId" element={<StoryboardDetail />} />
+        </Routes>
+        <Link to="/storyboards/sb-2">Open second board</Link>
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+
+    const plot = await screen.findByLabelText('Plot summary');
+    fireEvent.change(plot, { target: { value: 'Unsaved first board plot' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Close beats from plot' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Make empty panels' }));
+    expect(await screen.findByLabelText('Make empty panels')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('link', { name: 'Open second board' }));
+    expect(await screen.findByRole('button', { name: 'Beats from plot' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Make empty panels')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Beats from plot' }));
+    expect(await screen.findByLabelText('Plot summary')).toHaveValue('sb-2 plot');
+  });
+
   // Uniquely catches the embedded editor losing its board-first view, the side panel's previous / next panel,
   // or the music video's panel growing back timing, dialogue or camera fields its shots own.
   it('opens a music video\'s board as the panel grid and steps between panels in the side panel', async () => {

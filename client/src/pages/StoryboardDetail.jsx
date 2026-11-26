@@ -9,5 +9,5 @@ import StoryboardEditor from '../components/storyboards/StoryboardEditor';
 
 export default function StoryboardDetail() {
   const { id, panelId } = useParams();
-  return <StoryboardEditor boardId={id} panelId={panelId} boardPath={`/storyboards/${id}`} />;
+  return <StoryboardEditor key={id} boardId={id} panelId={panelId} boardPath={`/storyboards/${id}`} />;
 }
