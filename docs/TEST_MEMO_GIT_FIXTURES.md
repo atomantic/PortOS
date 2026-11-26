@@ -70,9 +70,9 @@ contradicts it (`scripts/lib/testMemo/gitFixture.js`):
   callee. The git rule reads the program the same way for a file that
   declares nothing;
 - a git call that names no directory: no `cwd` in a literal options object
-  no spread can replace, and no leading `-C <dir>` in a literal argument
-  array. Without one git runs where the test process does, inside the
-  checkout;
+  with no later spread or computed property that could replace it, and no
+  leading `-C <dir>` in a literal argument array. Without one git runs where
+  the test process does, inside the checkout;
 - a relative literal, or a spelled `null`/`undefined`, that can become that
   directory (git then runs where the test process does, inside the
   checkout): written in place, assigned to a name the directory is read

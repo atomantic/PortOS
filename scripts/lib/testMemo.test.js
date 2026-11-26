@@ -2255,12 +2255,12 @@ describe('data-only JS files and bounded dynamic imports (#16902)', () => {
         "import { fileURLToPath } from 'node:url';",
         "const __dirname = dirname(fileURLToPath(import.meta.url));",
         "export const DEFAULT_MIGRATIONS_DIR = join(__dirname, '..', 'migrations');",
-        "export { scanMigrationFiles } from './migrationFiles.js';",
       ].join('\n'),
       'scripts/run-migrations.js': [
         "import { join } from 'node:path';",
         "import { pathToFileURL } from 'node:url';",
-        "import { DEFAULT_MIGRATIONS_DIR, scanMigrationFiles } from './lib/migrationLedger.js';",
+        "import { DEFAULT_MIGRATIONS_DIR } from './lib/migrationLedger.js';",
+        "import { scanMigrationFiles } from './lib/migrationFiles.js';",
         "export async function runMigrations({ migrationsDir = DEFAULT_MIGRATIONS_DIR, through = null } = {}) {",
         "  return runPending({ migrationsDir, through });",
         "}",
@@ -2288,6 +2288,15 @@ describe('data-only JS files and bounded dynamic imports (#16902)', () => {
       'scripts/migrations/001-init.js': 'export async function up() { return 1; }\n',
     }).get('server/lib/a.test.js');
     expect(edited.floor.key).not.toBe(first.floor.key);
+
+    const test = 'server/lib/a.test.js';
+    const withMock = spec => analyze({ ...files, [test]: `vi.mock('${spec}', () => ({}));
+${files[test]}` }).get(test);
+    expect(withMock('node:fs/promises').floor.memoizable).toBe(true);
+    expect(withMock('../../scripts/lib/migrationFiles.js').floor).toMatchObject({
+      memoizable: false,
+      reasons: expect.arrayContaining(['scripts/run-migrations.js: names a path through scripts/lib/migrationFiles.js, which the test mocks']),
+    });
   });
 
   it('keys shipped SQL and JS migrations even when the recorded run only loads the DB runner', () => {

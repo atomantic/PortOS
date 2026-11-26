@@ -1,3 +1,4 @@
+// test-memo: git-fixture
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { spawn as nodeSpawn } from 'node:child_process';

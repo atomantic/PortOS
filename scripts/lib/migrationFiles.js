@@ -1,8 +1,13 @@
 /** File selection shared by the real migration runners and read-only rehearsal. */
 import { readdir } from 'node:fs/promises';
 
+// Only a portable migration basename may reach a read or import, including
+// when a caller supplies a mocked directory listing.
+export const isShippedMigrationName = (name) => typeof name === 'string'
+  && /^\d+-.*\.js$/.test(name) && !/[/\\:]/.test(name) && !name.endsWith('.test.js');
+
 export async function scanMigrationFiles(directory) {
-  return (await readdir(directory)).filter(name => /^\d+-.*\.js$/.test(name) && !name.endsWith('.test.js')).sort();
+  return (await readdir(directory)).filter(isShippedMigrationName).sort();
 }
 
 export async function scanDatabaseMigrationFiles(directory) {

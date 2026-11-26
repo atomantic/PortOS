@@ -15,8 +15,17 @@ describe('git-fixture contradictions', () => {
     expect(probeFacts(PROBE_FIXTURE).gitFixture).toBe(true);
   });
 
+  it('accepts an explicit fixture directory after an options spread', () => {
+    const source = `${PROBE_FIXTURE}
+runCommand('git', ['status'], { ...options, cwd: repo });`;
+    expect(probeFacts(source).gitFixture).toBe(true);
+  });
+
   const PROBE_WRAPPER = "const __probe = (__probeDir) => runCommand('git', ['rev-parse', 'HEAD'], { cwd: __probeDir });";
   it.each([
+    ['can override its fixture directory through a later spread', "runCommand('git', ['status'], { cwd: repo, ...options });", /starts git without naming the directory/],
+    ['can override its fixture directory through a computed property', "runCommand('git', ['status'], { cwd: repo, [key]: value });", /starts git without naming the directory/],
+    ['can override its fixture directory through a duplicate property', "runCommand('git', ['status'], { cwd: repo, cwd: undefined });", /nullish directory/],
     ['names no directory', "runCommand('git', ['rev-parse', 'HEAD']);", /starts git without naming the directory/],
     ['gives a nullish directory', "runCommand('git', ['rev-parse', 'HEAD'], { cwd: undefined });", /nullish directory/],
     ['names git through a constant', "const __probeProgram = 'git';\nrunCommand(__probeProgram, ['rev-parse', 'HEAD']);", /starts git without naming the directory/],

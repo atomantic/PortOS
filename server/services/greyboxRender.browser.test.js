@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
@@ -21,9 +20,9 @@ vi.mock('./browserService.js', () => ({ loadConfig: async () => ({ chromePath: r
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const client = join(root, 'client');
-const requireClient = createRequire(join(client, 'package.json'));
+const clientBundler = resolveClientBundler(root);
 const chrome = resolveTestChrome();
-const canRun = browserSuiteCanRun('Greybox capture parity', { Chrome: chrome, clientBundler: resolveClientBundler(root) });
+const canRun = browserSuiteCanRun('Greybox capture parity', { Chrome: chrome, clientBundler });
 // As with previewIsolation.egress.test.js, the real OS-jail proof runs only on
 // hosts providing its mechanism. Other hosts still run browser pixel parity.
 const isolatedHost = process.platform === 'darwin' && existsSync('/usr/bin/sandbox-exec')
@@ -63,8 +62,7 @@ describe.skipIf(!canRun)('greybox captures in real Chrome', () => {
   } });
   beforeAll(() => setup.run(async (phase) => {
     ({ html, script } = await phase('bundle', getGreyboxCapturePage));
-    const { createServer } = await import(pathToFileURL(requireClient.resolve('vite')).href);
-    const { default: react } = await import(pathToFileURL(requireClient.resolve('@vitejs/plugin-react')).href);
+    const { createServer, react } = await import('../../client/src/test/greyboxVite.js');
     await phase('vite', async () => {
       const cacheDir = join(lazyTempDataRoot('portos-greybox-render-'), 'vite-cache');
       server = await startRecordedViteServer({

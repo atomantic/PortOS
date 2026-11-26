@@ -6,6 +6,7 @@
  */
 
 import { posix } from 'node:path';
+import { isShippedMigrationName } from '../migrationFiles.js';
 import { PATH_WITHIN_MODULES, VARIABLE_VALUES_LIMIT } from './constants.js';
 
 export const UNKNOWN = Object.freeze({ k: 'unknown' });
@@ -90,10 +91,10 @@ const tailValue = (lit, containment = UNBOUNDED, post = '') => ({ k: 'tail', lit
  * from a recursive listing) or a generated id (`randomUUID()`). Joined under
  * a directory it stays inside it, and so does any run of such names.
  */
-const isMigrationFile = (name) => /^\d+-.*\.js$/.test(name) && !name.endsWith('.test.js');
 const isDbMigrationFile = (name) => /\.(sql|js)$/.test(name) && !name.endsWith('.test.js') && !name.startsWith('_');
 export const LISTED_NAME = Object.freeze(tailValue('', { open: false, trust: ['fs'] }));
-export const MIGRATION_LISTED_NAME = Object.freeze(tailValue('', { open: false, trust: ['fs'], filter: isMigrationFile }));
+// The scanner validates its own output, including entries returned by mocked fs.
+export const MIGRATION_LISTED_NAME = Object.freeze(tailValue('', { open: false, filter: isShippedMigrationName }));
 export const DB_MIGRATION_LISTED_NAME = Object.freeze(tailValue('', { open: false, trust: ['fs'], filter: isDbMigrationFile }));
 export const GENERATED_NAME = Object.freeze(tailValue('', { open: false, trust: ['crypto'] }));
 /** Literal text that can climb out of a directory when it follows a variable part: a `..` segment, under either separator. */
@@ -327,7 +328,7 @@ export function guardedJoin(args) {
 
 /** The elements of an array are directory-entry names (`LISTED_NAME`); a finite set is a `string[]`. */
 export const LISTED = Object.freeze({ listed: true });
-export const MIGRATION_LISTED = Object.freeze({ listed: true, filter: isMigrationFile });
+export const MIGRATION_LISTED = Object.freeze({ listed: true, filter: isShippedMigrationName });
 export const DB_MIGRATION_LISTED = Object.freeze({ listed: true, filter: isDbMigrationFile });
 export const isListedDomain = (domain) => domain === LISTED || domain === MIGRATION_LISTED || domain === DB_MIGRATION_LISTED;
 
