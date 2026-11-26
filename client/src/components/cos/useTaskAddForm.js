@@ -5,7 +5,7 @@
  * Use when: `TaskAddForm` and any future surface that needs the same task-entry state machine.
  */
 
-import { useEffect, useMemo, useReducer, useRef } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { shortClaudeModelName } from '../../utils/formatters';
 import toast from '../ui/Toast';
 import {
@@ -245,7 +245,19 @@ export default function useTaskAddForm({
   } = useAssignableInstances();
   const { isFeatureEnabled } = useInstanceFeatures();
   const quickTemplatesEnabled = isFeatureEnabled('cos-task-templates');
-  const reviewerModelOptions = useReviewerModelOptions();
+  const loadedReviewerModelOptions = useReviewerModelOptions();
+  const [createdReviewerProviders, setCreatedReviewerProviders] = useState([]);
+  const reviewerModelOptions = useMemo(() => ({
+    ...loadedReviewerModelOptions,
+    providers: [
+      ...loadedReviewerModelOptions.providers,
+      ...createdReviewerProviders.filter(entry => !loadedReviewerModelOptions.providers.some(provider => provider.id === entry.id)),
+    ],
+  }), [loadedReviewerModelOptions, createdReviewerProviders]);
+  const rememberReviewerProvider = (selection) => setCreatedReviewerProviders(previous => [
+    ...previous.filter(entry => entry.id !== selection.id),
+    selection,
+  ]);
   const submittingRef = useRef(false);
   const descriptionRef = useRef(null);
   const templateAppChangeRef = useRef(false);
@@ -809,6 +821,7 @@ export default function useTaskAddForm({
     refreshInstances,
     quickTemplatesEnabled,
     reviewerModelOptions,
+    rememberReviewerProvider,
     enabledProviders,
     apiOnlyProviders,
     selectedApp,

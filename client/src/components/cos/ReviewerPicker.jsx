@@ -169,6 +169,7 @@ export default function ReviewerPicker({
   reviewerApplies = false,
   defaults = null,
   onChange,
+  onProviderSelectionCreated,
   disabled = false,
   showRunFlags = true,
   showReviewers = true,
@@ -183,9 +184,7 @@ export default function ReviewerPicker({
   // interactive TUI session, so TUI records are not offered as new reviewers.
   // A TUI reviewer saved earlier keeps its row and label.
   const reviewerProviderOptions = providerRecords.filter(provider => !isTuiProvider(provider));
-  const labelFor = (token) => isProviderReviewer(token)
-    ? providerRecords.find(provider => `provider:${provider.id}` === token)?.name || token.slice(9)
-    : reviewerLabel(token);
+  const labelFor = (token) => reviewerLabel(token, providerRecords);
   const [usernameInput, setUsernameInput] = useState('');
   const [usernameError, setUsernameError] = useState('');
   // Reviewers whose Model cell the user switched to free text by picking the
@@ -409,7 +408,8 @@ export default function ReviewerPicker({
     const current = latestConfiguration.current;
     // A removed/reselected reviewer or changed model/effort supersedes this save.
     if (current.selectionVersions.get(token) !== requestedSelection) return;
-    setCreatedSelections((previous) => [...previous.filter((entry) => entry.id !== selection.id), selection]);
+    if (onProviderSelectionCreated) onProviderSelectionCreated(selection);
+    else setCreatedSelections(previous => [...previous.filter(entry => entry.id !== selection.id), selection]);
     const nextToken = `provider:${selection.id}`;
     const remap = (map) => Object.fromEntries(Object.entries(map).map(([key, value]) => [key.toLowerCase() === token.toLowerCase() ? nextToken : key, value]));
     current.emit({ reviewers: [...new Set(current.selected.map((reviewer) => reviewer === token ? nextToken : reviewer))],
