@@ -15,7 +15,12 @@ export default function LayoutPicker({ layouts, activeLayoutId, onSelect, onEdit
   useEffect(() => {
     if (!open) return;
     const onDocClick = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
-    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      setOpen(false);
+      btnRef.current?.focus();
+    };
     document.addEventListener('mousedown', onDocClick);
     document.addEventListener('keydown', onKey);
     return () => {
