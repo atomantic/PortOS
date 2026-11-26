@@ -10,7 +10,7 @@ import TouchDragHint from '../../graph3d/TouchDragHint';
 import BrailleSpinner from '../../BrailleSpinner';
 import { useSocketResource } from '../../../hooks/useSocketResource';
 import usePrefersReducedMotion from '../../../hooks/usePrefersReducedMotion';
-import { formatDateNumeric, formatPercent } from '../../../utils/formatters';
+import { formatCount, formatDateNumeric, formatPercent } from '../../../utils/formatters';
 
 const TYPE_HEX = {
   fact: '#3b82f6',
@@ -56,8 +56,10 @@ export default function MemoryGraph() {
     },
     { namespace: 'cos', events: MEMORY_EVENTS }
   );
-  const [selection, setSelectedNode] = useState(null);
-  const selectedNode = graphData?.nodes?.find(node => node.id === selection?.id) || null;
+  const [selectedId, setSelectedId] = useState(null);
+  const selectedNode = graphData?.nodes?.find(node => node.id === selectedId) || null;
+  const nodePicker = useRef(null);
+  const detailsPanel = useRef(null);
   const detail = useSocketResource(
     ({ signal }) => getMemory(selectedNode.id, { signal, silent: true }),
     {
@@ -72,13 +74,9 @@ export default function MemoryGraph() {
   const reducedMotion = usePrefersReducedMotion();
   const motionSettings = graphMotionSettings(reducedMotion);
 
-  const graphRef = useRef(null);
-
   const graph = useMemo(() => {
-    if (!graphData?.nodes?.length) { graphRef.current = null; return null; }
-    const g = buildGraph(graphData.nodes, graphData.edges);
-    graphRef.current = g;
-    return g;
+    if (!graphData?.nodes?.length) return null;
+    return buildGraph(graphData.nodes, graphData.edges);
   }, [graphData, layoutKey]);
 
   const adjacentIds = useMemo(() => {
@@ -98,7 +96,7 @@ export default function MemoryGraph() {
     ? connectedEdges.map(e => {
         const otherId = e.source === selectedNode.id ? e.target : e.source;
         const n = graph.idMap.get(otherId);
-        return n ? { ...n, edgeType: e.type, linkType: e.linkType, weight: e.weight } : null;
+        return n ? { ...n, edgeKey: `${e.source}:${e.target}:${e.type}:${e.linkType}`, edgeType: e.type, linkType: e.linkType, weight: e.weight } : null;
       }).filter(Boolean)
     : [];
 
@@ -107,7 +105,7 @@ export default function MemoryGraph() {
   // that landed on nothing — see useGraphCanvasInteraction); re-selecting the
   // current node toggles it off.
   const handleSelect = useCallback((node) => {
-    setSelectedNode(prev => (node && prev?.id !== node.id ? node : null));
+    setSelectedId(prev => (node && prev !== node.id ? node.id : null));
   }, []);
 
   // Pointer/tap/tooltip wiring shared with BrainGraph — see
@@ -146,15 +144,29 @@ export default function MemoryGraph() {
   }
 
   return (
-    <div className="space-y-3">
+    <section aria-label="Memory relationship graph" className="space-y-3">
       {error && <div role="alert">Unable to refresh memory graph. <button onClick={refetch}>Retry</button></div>}
       {/* Stats bar */}
-      <div className="flex items-center justify-between bg-port-card border border-port-border rounded-lg px-4 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 bg-port-card border border-port-border rounded-lg px-4 py-2">
         <span className="text-sm text-gray-400">
-          {graphData.nodes.length} nodes &middot; {graphData.edges.length} connections
+          {formatCount(graphData.nodes.length)} {graphData.nodes.length === 1 ? 'node' : 'nodes'}
+          {' · '}
+          {formatCount(graphData.edges.length)} {graphData.edges.length === 1 ? 'connection' : 'connections'}
         </span>
+        <select
+          ref={nodePicker}
+          aria-label="Select memory node"
+          value={selectedNode?.id ?? ''}
+          onChange={event => setSelectedId(event.target.value || null)}
+          className="min-w-0 max-w-full sm:max-w-xs rounded-lg border border-port-border bg-port-bg px-3 py-1.5 text-sm text-white focus-visible:ring-2 focus-visible:ring-port-accent"
+        >
+          <option value="">Select memory node</option>
+          {graphData.nodes.map(node => (
+            <option key={node.id} value={node.id}>{node.summary || node.id}</option>
+          ))}
+        </select>
         <button
-          onClick={() => { setSelectedNode(null); setLayoutKey(k => k + 1); }}
+          onClick={() => { setSelectedId(null); setLayoutKey(k => k + 1); }}
           className="px-3 py-1.5 min-h-[36px] text-xs bg-port-border text-gray-400 hover:text-white rounded-lg transition-colors"
         >
           Re-layout
@@ -274,7 +286,7 @@ export default function MemoryGraph() {
 
       {/* Detail panel */}
       {selectedNode && (
-        <div className="bg-port-card border border-port-border rounded-lg p-4">
+        <section ref={detailsPanel} tabIndex={-1} aria-label="Memory details" className="bg-port-card border border-port-border rounded-lg p-4">
           <div className="flex items-start justify-between gap-3 mb-3">
             <div>
               <div className="flex items-center gap-2 mb-2">
@@ -305,22 +317,27 @@ export default function MemoryGraph() {
               )}
             </div>
             <button
-              onClick={() => setSelectedNode(null)}
-              className="text-gray-500 hover:text-white transition-colors p-1 shrink-0"
+              type="button"
+              aria-label="Close memory details"
+              onClick={() => { setSelectedId(null); nodePicker.current?.focus(); }}
+              className="text-gray-500 hover:text-white transition-colors p-1 shrink-0 min-h-[44px] min-w-[44px]"
             >
               &times;
             </button>
           </div>
           {connectedNodes.length > 0 && (
             <div>
-              <p className="text-xs text-gray-500 mb-2">{connectedNodes.length} connections</p>
+              <p className="text-xs text-gray-500 mb-2">
+                {formatCount(connectedNodes.length)} {connectedNodes.length === 1 ? 'connection' : 'connections'}
+              </p>
               <div className="space-y-1.5 max-h-48 overflow-y-auto">
                 {connectedNodes.map(cn => (
                   <button
-                    key={cn.id}
+                    key={cn.edgeKey}
+                    type="button"
                     onClick={() => {
-                      const node = graphRef.current?.idMap.get(cn.id);
-                      if (node) setSelectedNode(node);
+                      setSelectedId(cn.id);
+                      detailsPanel.current?.focus();
                     }}
                     className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded hover:bg-port-border/50 transition-colors"
                   >
@@ -334,8 +351,8 @@ export default function MemoryGraph() {
               </div>
             </div>
           )}
-        </div>
+        </section>
       )}
-    </div>
+    </section>
   );
 }

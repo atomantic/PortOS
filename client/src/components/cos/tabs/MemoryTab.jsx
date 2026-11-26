@@ -181,10 +181,12 @@ export default function MemoryTab({ apps = [] }) {
             {embeddingStatus?.available ? ' * Embeddings online' : ' * Embeddings offline'}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div role="group" aria-label="Memory view" className="flex gap-2">
           {['list', 'timeline', 'graph'].map(v => (
             <button
               key={v}
+              type="button"
+              aria-pressed={view === v}
               onClick={() => setView(v)}
               className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
                 view === v ? 'bg-port-accent text-white' : 'bg-port-border text-gray-400 hover:text-white'
@@ -215,8 +217,9 @@ export default function MemoryTab({ apps = [] }) {
         </button>
         {submittedSearch && (
           <button
+            type="button"
             onClick={() => { setSubmittedSearch(''); setSearchQuery(''); }}
-            aria-label="Close"
+            aria-label="Clear search"
             className="px-2 py-1.5 flex items-center justify-center bg-port-border text-gray-400 hover:text-white rounded-lg transition-colors min-h-[44px] min-w-[44px]"
           >
             <X size={18} />
@@ -279,71 +282,75 @@ export default function MemoryTab({ apps = [] }) {
       {pendingMemories.length > 0 && (
         <div className="space-y-3">
           <h3 className="text-lg font-semibold text-yellow-500">Pending Approval ({pendingMemories.length})</h3>
-          {pendingMemories.map(memory => (
-            <div key={memory.id} className="bg-port-card border border-yellow-500/50 rounded-lg p-4">
-              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-2 mb-2">
-                    <span className={`px-2 py-1 text-xs rounded-full border ${MEMORY_TYPE_COLORS[memory.type]}`}>
-                      {memory.type}
-                    </span>
-                    <span className="text-xs text-gray-500">{memory.category}</span>
-                    <span className="text-xs text-yellow-400">
-                      {formatPercent((memory.confidence || 0) * 100, { decimals: 0 })} confidence
-                    </span>
-                  </div>
-                  <p className="text-white text-sm whitespace-pre-wrap">{memory.summary || memory.content}</p>
-                  {memory.tags?.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-2">
-                      {memory.tags.map(tag => (
-                        <span key={tag} className="px-2 py-1 text-xs bg-port-border rounded text-gray-400">
-                          {tag}
-                        </span>
-                      ))}
+          {pendingMemories.map(memory => {
+            const summary = memory.summary || memory.content || '';
+            const snippet = summary.length > 100 ? `${summary.slice(0, 100)}…` : summary;
+            return (
+              <div key={memory.id} className="bg-port-card border border-yellow-500/50 rounded-lg p-4">
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 mb-2">
+                      <span className={`px-2 py-1 text-xs rounded-full border ${MEMORY_TYPE_COLORS[memory.type]}`}>
+                        {memory.type}
+                      </span>
+                      <span className="text-xs text-gray-500">{memory.category}</span>
+                      <span className="text-xs text-yellow-400">
+                        {formatPercent((memory.confidence || 0) * 100, { decimals: 0 })} confidence
+                      </span>
                     </div>
-                  )}
-                  <div className="text-xs text-gray-500 mt-2 flex flex-wrap gap-2">
-                    <span>{formatDateNumeric(memory.createdAt)}</span>
-                    {getAppName(memory.sourceAppId, apps) && (
-                      <>
-                        <span>*</span>
-                        <span className="text-port-accent">{getAppName(memory.sourceAppId, apps)}</span>
-                      </>
+                    <p className="text-white text-sm whitespace-pre-wrap">{summary}</p>
+                    {memory.tags?.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {memory.tags.map(tag => (
+                          <span key={tag} className="px-2 py-1 text-xs bg-port-border rounded text-gray-400">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
                     )}
+                    <div className="text-xs text-gray-500 mt-2 flex flex-wrap gap-2">
+                      <span>{formatDateNumeric(memory.createdAt)}</span>
+                      {getAppName(memory.sourceAppId, apps) && (
+                        <>
+                          <span>*</span>
+                          <span className="text-port-accent">{getAppName(memory.sourceAppId, apps)}</span>
+                        </>
+                      )}
+                    </div>
                   </div>
-                </div>
-                <div className="flex gap-2 sm:flex-col md:flex-row">
-                  <button
-                    onClick={() => navigate(`/cos/memory/${encodeURIComponent(memory.id)}`)}
-                    disabled={actionInFlight === memory.id}
-                    className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-port-accent/20 text-port-accent hover:bg-port-accent/30 active:bg-port-accent/40 rounded-lg transition-colors disabled:opacity-50"
-                    title="Edit before approving"
-                    aria-label="Edit before approving"
-                  >
-                    <Pencil size={20} />
-                  </button>
-                  <button
-                    onClick={() => handleApprove(memory.id)}
-                    disabled={!!actionInFlight}
-                    className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-port-success/20 text-port-success hover:bg-port-success/30 active:bg-port-success/40 rounded-lg transition-colors disabled:opacity-50"
-                    title="Approve"
-                    aria-label="Approve memory"
-                  >
-                    {actionInFlight === memory.id ? <BrailleSpinner /> : <Check size={20} />}
-                  </button>
-                  <button
-                    onClick={() => handleReject(memory.id)}
-                    disabled={!!actionInFlight}
-                    className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-red-500/20 text-red-400 hover:bg-red-500/30 active:bg-red-500/40 rounded-lg transition-colors disabled:opacity-50"
-                    title="Reject"
-                    aria-label="Reject memory"
-                  >
-                    {actionInFlight === memory.id ? <BrailleSpinner /> : <XCircle size={20} />}
-                  </button>
+                  <div className="flex gap-2 sm:flex-col md:flex-row">
+                    <button
+                      onClick={() => navigate(`/cos/memory/${encodeURIComponent(memory.id)}`)}
+                      disabled={actionInFlight === memory.id}
+                      className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-port-accent/20 text-port-accent hover:bg-port-accent/30 active:bg-port-accent/40 rounded-lg transition-colors disabled:opacity-50"
+                      title="Edit before approving"
+                      aria-label={`Edit before approving: ${snippet}`}
+                    >
+                      <Pencil size={20} />
+                    </button>
+                    <button
+                      onClick={() => handleApprove(memory.id)}
+                      disabled={!!actionInFlight}
+                      className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-port-success/20 text-port-success hover:bg-port-success/30 active:bg-port-success/40 rounded-lg transition-colors disabled:opacity-50"
+                      title="Approve"
+                      aria-label={`Approve memory: ${snippet}`}
+                    >
+                      {actionInFlight === memory.id ? <BrailleSpinner /> : <Check size={20} />}
+                    </button>
+                    <button
+                      onClick={() => handleReject(memory.id)}
+                      disabled={!!actionInFlight}
+                      className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-red-500/20 text-red-400 hover:bg-red-500/30 active:bg-red-500/40 rounded-lg transition-colors disabled:opacity-50"
+                      title="Reject"
+                      aria-label={`Reject memory: ${snippet}`}
+                    >
+                      {actionInFlight === memory.id ? <BrailleSpinner /> : <XCircle size={20} />}
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

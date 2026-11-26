@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act, fireEvent } from '@testing-library/react';
+import { render, screen, act, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 // The three.js stack can't run in jsdom (no WebGL context), and none of it is
@@ -146,7 +146,7 @@ describe('hover tooltip placement', () => {
     // pushed a ~320px tooltip almost entirely off-screen.
     await hoverNode(GRAPH.nodes[0], { x: 360, y: 200 });
 
-    const tooltip = tooltipOf(screen.getByText('first'));
+    const tooltip = tooltipOf(screen.getByText('first', { selector: 'p' }));
     // 375 - 320 (tooltip width) - 8 (gutter) = 47.
     expect(tooltip.style.left).toBe('47px');
     expect(tooltip.style.maxWidth).toBe('320px');
@@ -157,7 +157,7 @@ describe('hover tooltip placement', () => {
     await renderGraph();
     await hoverNode(GRAPH.nodes[1], { x: 100, y: 4 });
 
-    const tooltip = tooltipOf(screen.getByText('second'));
+    const tooltip = tooltipOf(screen.getByText('second', { selector: 'p' }));
     expect(tooltip.style.left).toBe('112px');
     // `y - 12` would be -8, floating the tooltip above the window.
     expect(tooltip.style.top).toBe('8px');
@@ -166,7 +166,7 @@ describe('hover tooltip placement', () => {
   it('is suppressed on a coarse pointer rather than flashing under a finger', async () => {
     await renderGraph();
     await hoverNode(GRAPH.nodes[0], { x: 100, y: 100 });
-    expect(tooltipOf(screen.getByText('first'))).toHaveClass('pointer-coarse:hidden');
+    expect(tooltipOf(screen.getByText('first', { selector: 'p' }))).toHaveClass('pointer-coarse:hidden');
   });
 });
 
@@ -206,7 +206,9 @@ describe('touch tap-to-select', () => {
     fireEvent.pointerUp(canvas, { pointerType: 'touch', clientX: 52, clientY: 51 });
     await act(async () => {});
 
-    expect(await screen.findByText('second')).toBeInTheDocument();
+    const details = screen.getByRole('region', { name: 'Memory details' });
+    expect(within(details).getByText('second')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Select memory node' })).toHaveValue('n2');
   });
 });
 
@@ -235,6 +237,48 @@ describe('edge appearance (graph3d extraction)', () => {
 
 
 describe('selection detail identity', () => {
+  it('opens details from the keyboard-accessible picker and keeps focus while traversing and closing', async () => {
+    const user = userEvent.setup();
+    getMemoryGraph.mockResolvedValue({
+      ...GRAPH,
+      edges: [...GRAPH.edges, { ...GRAPH.edges[0], linkType: 'applies-to' }],
+    });
+    await renderGraph();
+    const graph = screen.getByRole('region', { name: 'Memory relationship graph' });
+    const picker = within(graph).getByRole('combobox', { name: 'Select memory node' });
+    expect(within(picker).getByRole('option', { name: 'first' })).toBeInTheDocument();
+    expect(within(picker).getByRole('option', { name: 'second' })).toBeInTheDocument();
+    await user.tab();
+    expect(picker).toHaveFocus();
+    await user.selectOptions(picker, 'n1');
+    const details = within(graph).getByRole('region', { name: 'Memory details' });
+    const close = within(details).getByRole('button', { name: 'Close memory details' });
+    expect(within(details).getByText('first')).toBeInTheDocument();
+    expect(within(details).getByRole('button', { name: 'second applies-to' })).toBeInTheDocument();
+    expect(close).toHaveAttribute('type', 'button');
+    expect(close).toHaveClass('min-h-[44px]', 'min-w-[44px]');
+    expect(sceneElement.props.selectedId).toBe('n1');
+
+    await user.tab(); // Re-layout
+    await user.tab(); // Legend
+    await user.tab(); // Close details
+    await user.tab();
+    expect(within(details).getByRole('button', { name: 'second linked' })).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(picker).toHaveValue('n2');
+    expect(sceneElement.props.selectedId).toBe('n2');
+    expect(details).toHaveFocus();
+    expect(within(details).getByText('second')).toBeInTheDocument();
+    expect(within(details).getAllByRole('button', { name: /^first / })).toHaveLength(2);
+    expect(within(details).queryByRole('button', { name: /^second / })).not.toBeInTheDocument();
+    await user.tab();
+    expect(close).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(picker).toHaveFocus();
+    expect(picker).toHaveValue('');
+    expect(details).not.toBeInTheDocument();
+  });
+
   it('shows the new summary while detail is pending and ignores cleared late responses', async () => {
     let resolveNext;
     getMemory.mockResolvedValueOnce({ content: 'Alpha memory body', tags: ['alpha-tag'], createdAt: '2026-01-02' })
@@ -247,7 +291,7 @@ describe('selection detail identity', () => {
     expect(screen.queryByText('Alpha memory body')).not.toBeInTheDocument();
     expect(screen.queryByText('alpha-tag')).not.toBeInTheDocument();
     expect(screen.queryByText(/Created:/)).not.toBeInTheDocument();
-    expect(screen.getByText('second')).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Memory details' })).getByText('second')).toBeInTheDocument();
     await act(async () => { sceneElement.props.onSelect(null); });
     await act(async () => { resolveNext({ content: 'Late memory body' }); });
     expect(screen.queryByText('Late memory body')).not.toBeInTheDocument();
@@ -274,8 +318,9 @@ describe('live graph reconciliation', () => {
     expect(screen.getByTestId('graph-canvas')).toBe(canvas);
     await act(async () => { resolveGraph(GRAPH); });
     expect(getMemoryGraph).toHaveBeenCalledTimes(3);
-    expect(screen.getByText(/1 nodes/)).toBeInTheDocument();
+    expect(screen.getByText(/1 node · 0 connections/)).toBeInTheDocument();
     expect(screen.queryByText('Remote detail')).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Select memory node' })).toHaveValue('');
     expect(screen.getByTestId('graph-canvas')).toBe(canvas);
     getMemoryGraph.mockResolvedValue({});
     await dispatch('cos:memory:updated', { id: 'n2' });
@@ -288,7 +333,7 @@ describe('live graph reconciliation', () => {
     await act(async () => {});
     getMemoryGraph.mockResolvedValue({ nodes: [GRAPH.nodes[0]], edges: [] });
     await dispatch('connect');
-    expect(screen.getByText(/1 nodes/)).toBeInTheDocument();
+    expect(screen.getByText(/1 node · 0 connections/)).toBeInTheDocument();
     const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
     const calls = getMemoryGraph.mock.calls.length;
