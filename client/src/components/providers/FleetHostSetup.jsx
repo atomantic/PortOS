@@ -139,16 +139,10 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
       </div>
     );
   }
-  // The banner above names the page that manages the recommended runtime, so
-  // this button has to open that same page. It pointed at `/models/llms`
-  // because that page WAS the local-server surface; #7414 made it the weights
-  // catalog, which has no start/stop control at all — so on an Apple Silicon
-  // host the banner said "Models → Runtimes" and the button under it went
-  // somewhere with no MTPLX card. vLLM has no PortOS page and an unrecognized
-  // host has no recommendation, and both still belong on the runtimes tab:
-  // it is where every local server PortOS DOES manage lives.
+  // Open the recommended runtime when PortOS manages it. Otherwise offer the
+  // overview so the user can find the servers PortOS can manage on this host.
   const manageHref = LOCAL_RUNTIME_MANAGE_URLS[status?.recommendation?.runtime]
-    ?? LOCAL_RUNTIME_MANAGE_URLS.llama;
+    ?? '/models/llms-runtimes';
 
   return (
     <div className="space-y-4">
