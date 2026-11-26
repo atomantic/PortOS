@@ -72,7 +72,7 @@ beforeEach(async () => {
   await store.setProjectAnalysis(project.id, { durationSec: 20, bpm: 120, beats: [0, 1], downbeats: [0], sections: [{ startSec: 0, endSec: 20, label: 'Chorus' }] });
   await store.updateProject(project.id, { lyricCues: [{ id: 'line-a', text: 'Example chorus', startSec: 1, endSec: 3,
     words: [{ w: 'Example', startSec: 1, endSec: 2, conf: 'matched' }, { w: 'chorus', startSec: 2, endSec: 3, conf: 'matched' }] }] });
-  const scene = await store.addProjectScene(project.id, { label: 'Chorus', startSec: 0, endSec: 20, prompt: 'A paper figure opens a painted doorway.' });
+  const { scenes: [scene] } = await store.addProjectScenes(project.id, [{ label: 'Chorus', startSec: 0, endSec: 20, prompt: 'A paper figure opens a painted doorway.' }]);
   const { artifact } = await saveGeneratedDevArtifact(project.id, { kind: 'cast-sets', title: 'Example visual sheet', html: '<html><body><svg><circle r="30" cx="40" cy="40"/></svg></body></html>' });
   draft = { cast: 'Paper figure with an angular silhouette.', environments: 'Layered painted doorway.',
     visualLanguage: 'Indigo and cream; bold readable type with open lyric space.', motionLanguage: 'The camera follows the opening doorway; the chorus expands the room.',
@@ -495,7 +495,7 @@ describe('document-bound storyboard revision', () => {
     const entered = Promise.withResolvers();
     const held = Promise.withResolvers();
     planner.mockImplementationOnce(async () => {
-      await store.addProjectScene(project.id, { label: 'Board row', startSec: 0, endSec: 20 });
+      await store.addProjectScenes(project.id, [{ label: 'Board row', startSec: 0, endSec: 20 }]);
       entered.resolve(); await held.promise;
     });
     const preparing = Promise.resolve(request(app).post(`${base}/production-review/prepare`).send({}));

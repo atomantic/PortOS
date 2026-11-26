@@ -88,7 +88,7 @@ describe('music-video scene completion hooks → takes', () => {
     musicVideoEvents.on('scene-video', onVideo);
     musicVideoEvents.on('scene-failure', onFailure);
     project = await projects.createProject({ name: 'Example Video' });
-    scene = await projects.addProjectScene(project.id, { prompt: 'a lighthouse at dusk' });
+    ({ scenes: [scene] } = await projects.addProjectScenes(project.id, [{ prompt: 'a lighthouse at dusk' }]));
   });
 
   afterEach(() => {
@@ -336,7 +336,7 @@ describe('music-video scene completion hooks → takes', () => {
   });
 
   it('a late completion cannot resurrect a deleted scene or a deleted project', async () => {
-    const other = await projects.addProjectScene(project.id, { prompt: 'second scene' });
+    const { scenes: [other] } = await projects.addProjectScenes(project.id, [{ prompt: 'second scene' }]);
     await boardEdits.deleteScene(project.id, scene.sceneId);
     mediaJobEvents.emit('completed', imageJob(project.id, scene.sceneId, 'late.png'));
     // A render for the surviving scene proves the hook ran past the failed one.
@@ -391,7 +391,7 @@ describe('music-video scene completion hooks → takes', () => {
     it('does not record a cancel as a failure', async () => {
       mediaJobEvents.emit('canceled', { ...imageJob(project.id, scene.sceneId, 'x.png'), status: 'canceled', error: 'Canceled' });
       // A later failure for the surviving scene proves the cancel was processed first.
-      const other = await projects.addProjectScene(project.id, { prompt: 'second' });
+      const { scenes: [other] } = await projects.addProjectScenes(project.id, [{ prompt: 'second' }]);
       mediaJobEvents.emit('failed', { ...imageJob(project.id, other.sceneId, 'y.png'), status: 'failed', error: 'boom' });
       await waitFor(() => emitted.some((e) => e.event === 'scene-failure'));
       expect((await sceneOf(project.id, scene.sceneId)).lastFailure).toBeUndefined();
@@ -417,7 +417,7 @@ describe('music-video scene completion hooks → takes', () => {
     });
 
     it('a failure for a deleted scene is dropped without resurrecting it', async () => {
-      const other = await projects.addProjectScene(project.id, { prompt: 'second' });
+      const { scenes: [other] } = await projects.addProjectScenes(project.id, [{ prompt: 'second' }]);
       await boardEdits.deleteScene(project.id, scene.sceneId);
       mediaJobEvents.emit('failed', { ...imageJob(project.id, scene.sceneId, 'late.png'), status: 'failed', error: 'late' });
       mediaJobEvents.emit('failed', { ...imageJob(project.id, other.sceneId, 'kept.png'), status: 'failed', error: 'kept' });

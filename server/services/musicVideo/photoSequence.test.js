@@ -10,7 +10,7 @@ vi.mock('../../lib/paths.js', async original => makePathsProxy(await original(),
 }));
 const { PATHS } = await import('../../lib/paths.js');
 const projects = await import('./projectsFile.js');
-const { applySceneUpdate, replaceScenes, splitScene } = await import('./projectsLogic.js');
+const { addScenes, applySceneUpdate, replaceScenes, splitScene } = await import('./projectsLogic.js');
 const { resolveSceneClips, buildMusicVideoFfmpegArgs } = await import('./render.js');
 const { resolveSceneMedia, buildDocumentData } = await import('./documentRender.js');
 const { scenePhotoSequence, photoSequenceIndex } = await import('../../lib/musicVideo/musicVideoImageEffects.js');
@@ -29,7 +29,7 @@ const scene = { sceneId: 'photos', order: 0, startSec: 0, endSec: 2, visualLayer
 it('saves/reopens the ordered sequence, preserves edits and restores an ordinary still when disabled', async () => {
   const created = await projects.createProject({ name: 'Synthetic photo sequence' });
   const { sceneId: _sceneId, order: _order, ...input } = scene;
-  const added = await projects.addProjectScene(created.id, input);
+  const { scenes: [added] } = await projects.mutateProjectRecord(created.id, (current) => addScenes(current, [input]));
   const reopened = await projects.getProject(created.id);
   expect(reopened.scenes[0].photoSequence).toEqual(sequence);
   expect(replaceScenes(reopened, [{ startSec: 0, endSec: 2, prompt: 'Replanned' }]).scenes[0].photoSequence).toEqual(sequence);
@@ -38,7 +38,7 @@ it('saves/reopens the ordered sequence, preserves edits and restores an ordinary
   const reordered = applySceneUpdate(reopened, added.sceneId, { photoSequence: { ...sequence, imageIds: [...ids].reverse() } }).project;
   expect(captureMusicVideoEvidence(reordered)).not.toEqual(before);
   expect(captureMusicVideoEvidence(applySceneUpdate(reopened, added.sceneId, { photoSequence: { ...sequence, intervalFrames: 3 } }).project)).not.toEqual(before);
-  await projects.updateScene(created.id, added.sceneId, { photoSequence: { ...sequence, enabled: false } });
+  await projects.mutateProjectRecord(created.id, (current) => applySceneUpdate(current, added.sceneId, { photoSequence: { ...sequence, enabled: false } }));
   const disabled = (await projects.getProject(created.id)).scenes[0];
   expect(disabled.photoSequence.imageIds).toEqual(ids);
   expect(scenePhotoSequence(disabled)).toBeNull();
@@ -164,7 +164,7 @@ const stacked = { ...sequence, overlapFrames: 12, layouts: prints };
 it('saves, validates and fingerprints overlap and per-photo layouts', async () => {
   const created = await projects.createProject({ name: 'Synthetic photo stack' });
   const { sceneId: _sceneId, order: _order, ...input } = { ...scene, photoSequence: stacked };
-  const added = await projects.addProjectScene(created.id, input);
+  const { scenes: [added] } = await projects.mutateProjectRecord(created.id, (current) => addScenes(current, [input]));
   const reopened = await projects.getProject(created.id);
   expect(reopened.scenes[0].photoSequence).toEqual(stacked);
   expect(splitScene(reopened, added.sceneId, { atSec: 1 }).project.scenes.map(s => s.photoSequence)).toEqual([stacked, stacked]);

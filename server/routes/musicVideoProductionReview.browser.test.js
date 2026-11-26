@@ -56,7 +56,7 @@ describe.skipIf(!canRun)('production review in a real browser (Chrome, ffmpeg an
     const p = await store.createProject({ name: 'Example paper doorway', uploadedAudioFilename: 'synthetic-master.wav', composition: { mode: 'code' } });
     await store.setProjectAnalysis(p.id, { durationSec: 10, bpm: 120, beats: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], downbeats: [0, 4, 8], sections: [{ id: 'chorus', label: 'Chorus', startSec: 0, endSec: 10 }] });
     await store.updateProject(p.id, { lyricCues: [{ id: 'line', text: 'Open the doorway', startSec: 1, endSec: 7, words: [{ conf: 'matched', w: 'Open', startSec: 1, endSec: 3 }, { conf: 'matched', w: 'the', startSec: 3, endSec: 4 }, { conf: 'matched', w: 'doorway', startSec: 4, endSec: 7 }] }] });
-    const scene = await store.addProjectScene(p.id, { label: 'Chorus', startSec: 0, endSec: 10, prompt: 'A paper doorway opens onto a copper sky.' });
+    const { scenes: [scene] } = await store.addProjectScenes(p.id, [{ label: 'Chorus', startSec: 0, endSec: 10, prompt: 'A paper doorway opens onto a copper sky.' }]);
     const { buildCodeTimeline } = await import('../services/musicVideo/codeTimeline.js');
     const sectionId = buildCodeTimeline(await store.getProject(p.id)).sections[0].id;
     await store.updateProject(p.id, { composition: { mode: 'code', codeVideo: { sections: [{ id: sectionId, source: `function render(ctx, env) {
