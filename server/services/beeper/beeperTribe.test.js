@@ -866,7 +866,7 @@ describe('logSenderTouchpoints batch deduplication', () => {
       happenedAt: first.sentAt, channel: 'Example channel', summary: '',
       source: 'message', dedupeKey: 'beeper:2026-10-03',
       metadata: { network: 'discord', conversationId: CONVERSATION },
-    });
+    }, { client: undefined });
   });
 
   it('shares a person/day across sender identities while keeping people and UTC days separate', async () => {
@@ -939,7 +939,7 @@ describe('touchpoint roster reuse', () => {
 
     expect(await beeperTribe.logSenderTouchpoints([candidate(), candidate(OTHER_CONVERSATION)], { personIndex }))
       .toEqual({ created: 1, matched: 1 });
-    expect(tribeService.autoCreateTouchpoint).toHaveBeenCalledWith(CLAIMING_PERSON, expect.objectContaining({ dedupeKey: 'beeper:2026-09-02' }));
+    expect(tribeService.autoCreateTouchpoint).toHaveBeenCalledWith(CLAIMING_PERSON, expect.objectContaining({ dedupeKey: 'beeper:2026-09-02' }), { client: undefined });
     expect(listPeople).toHaveBeenCalledTimes(1);
   });
 
@@ -1103,7 +1103,7 @@ describe('query-count reduction and batched upsertConversationParticipants (#181
     expect(tpResult).toEqual({ matched: 2, created: 2 });
     expect(seenSql).toEqual([]);
     expect(listPeople).not.toHaveBeenCalled();
-    expect(tribeService.autoCreateTouchpoint).toHaveBeenCalledWith(CLAIMING_PERSON, expect.any(Object));
-    expect(tribeService.autoCreateTouchpoint).toHaveBeenCalledWith(LEGACY_PHONE_PERSON, expect.any(Object));
+    expect(tribeService.autoCreateTouchpoint).toHaveBeenCalledWith(CLAIMING_PERSON, expect.any(Object), { client: undefined });
+    expect(tribeService.autoCreateTouchpoint).toHaveBeenCalledWith(LEGACY_PHONE_PERSON, expect.any(Object), { client: undefined });
   });
 });

@@ -57,7 +57,10 @@ vi.mock('./beeperCredentials.js', async (importOriginal) => {
 
 vi.mock('../instanceFeatures.js', () => ({ isInstanceFeatureEnabled: async () => true }));
 const { runBeeperSweep, reconcileBeeperEvent, upsertMirroredMessage, normalizeMessageRow, normalizeAttachmentRows } = await import('./beeperSync.js');
-const { listMessages: readThread } = await import('./beeperConversations.js');
+const { listMessages: readThread, purgeConversation } = await import('./beeperConversations.js');
+const beeperTribe = await import('./beeperTribe.js');
+const { createPerson } = await import('../tribe.js');
+const { linkIdentity } = await import('../tribeIdentities.js');
 const { beeperSocketEvents } = await import('./beeperSocketEvents.js');
 
 let dbReady = false;
@@ -412,14 +415,11 @@ describe.skipIf(!runDb)('beeperSync against Postgres', () => {
       if (pathname === '/v1/bridges') return jsonResponse(BRIDGES);
       if (pathname === '/v1/chats') return jsonResponse({ items: [purgedChat], hasMore: false });
       if (/\/messages$/.test(pathname)) {
-        await query(
-          'DELETE FROM beeper_conversations WHERE account_id = $1 AND source_chat_id = $2',
+        const { rows: [{ id }] } = await query(
+          'SELECT id FROM beeper_conversations WHERE account_id = $1 AND source_chat_id = $2',
           [ACCOUNT_ID, purgedChatId],
         );
-        await query(
-          'DELETE FROM beeper_sync_cursors WHERE account_id = $1 AND chat_id = $2',
-          [ACCOUNT_ID, purgedChatId],
-        );
+        await purgeConversation(id);
         return jsonResponse({ items: [], hasMore: false, newestCursor: 'cursor-after-purge' });
       }
       throw new Error(`unexpected fetch: ${url}`);
@@ -439,6 +439,42 @@ describe.skipIf(!runDb)('beeperSync against Postgres', () => {
     // Nothing resurrects the watermark, so the next sweep sees a never-swept
     // chat and mirrors it from scratch — what the purge confirmation promises.
     expect(cursor.rows).toHaveLength(0);
+  });
+
+  it('writes no sender touchpoints when purge wins after the sweep resolves its sender', async () => {
+    const chatId = `${nonce}-chat-purged-with-sender`;
+    const person = await createPerson({ name: 'Example Purge Sender' });
+    const senderId = `${nonce}-user`;
+    const resolved = beeperTribe.upsertConversationParticipants;
+    let conversationId;
+    const participants = vi.spyOn(beeperTribe, 'upsertConversationParticipants');
+    try {
+      await linkIdentity({ personId: person.id, kind: 'beeper-user', network: ACCOUNT_ID, handle: senderId });
+      participants.mockImplementationOnce(async (...args) => {
+        const result = await resolved(...args);
+        expect(result.resolvedPersonIds.get(senderId)).toBe(person.id);
+        [conversationId] = args;
+        await purgeConversation(conversationId);
+        return result;
+      });
+      installFetch({
+        chats: { items: [{ ...chatFixture('2026-09-05T10:00:00.000Z'), id: chatId }], hasMore: false },
+        messages: { items: [{ ...messageFixture(), chatID: chatId, id: `${chatId}-message` }], hasMore: false },
+      });
+
+      await runBeeperSweep({ reason: 'db-test' });
+
+      expect(conversationId).toBeTruthy();
+      expect((await query('SELECT id FROM beeper_conversations WHERE id = $1', [conversationId])).rows).toEqual([]);
+      const touchpoints = await query(
+        `SELECT id FROM tribe_touchpoints WHERE person_id = $1 AND metadata->>'conversationId' = $2`,
+        [person.id, conversationId],
+      );
+      expect(touchpoints.rows).toEqual([]);
+    } finally {
+      participants.mockRestore();
+      await query('DELETE FROM tribe_people WHERE id = $1', [person.id]);
+    }
   });
 
   // `is_sender` is the only inbound/outbound signal a chat surface has —

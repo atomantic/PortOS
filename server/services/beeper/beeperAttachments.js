@@ -806,36 +806,18 @@ export async function sweepBeeperAttachments() {
   };
 }
 
-/**
- * Byte cleanup for a conversation whose mirror is being purged.
- *
- * Called BEFORE the rows go, because the reference check reads them: a file is
- * unlinked only once no row outside this conversation still points at it. The
- * caller deletes the conversation row afterwards and the FK cascade takes the
- * attachment rows with it.
- */
-export async function purgeConversationAttachments(conversationId) {
-  const owned = await query(
-    `SELECT DISTINCT local_path FROM beeper_attachments
-      WHERE conversation_id = $1 AND local_path IS NOT NULL`,
-    [conversationId],
-  );
-  const paths = (owned?.rows || []).map((row) => row.local_path);
-  if (paths.length === 0) return { removedFiles: 0, freedBytes: 0, failedUnlinks: 0 };
-
-  // Drop this conversation's claims first so the shared-reference check below
-  // sees only rows that will SURVIVE the purge.
-  await query(
-    `UPDATE beeper_attachments SET local_path = NULL, fetched_at = NULL, updated_at = NOW()
-      WHERE conversation_id = $1 AND local_path IS NOT NULL`,
-    [conversationId],
-  );
-
+/** Clean up attachment paths after the owning rows have been deleted. */
+export async function unlinkPathsIfUnreferenced(paths) {
   let removedFiles = 0;
   let freedBytes = 0;
   let failedUnlinks = 0;
   for (const relativePath of paths) {
-    const { removed, bytes, failed } = await unlinkIfUnreferenced(relativePath);
+    const { removed, bytes, failed } = await unlinkIfUnreferenced(relativePath).catch((error) => {
+      // The purge has committed. Leave bytes for the orphan sweep if their
+      // current references could not be checked.
+      console.error(`❌ Beeper attachment cleanup failed for ${relativePath}: ${error.message}`);
+      return { removed: false, bytes: 0, failed: true };
+    });
     if (failed) failedUnlinks += 1;
     if (removed) {
       removedFiles += 1;

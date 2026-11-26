@@ -44,6 +44,9 @@ const withTransactionMock = vi.fn(async (fn) => {
       txCalls.push(text.trim().split('\n')[0].trim());
       txWrites.push({ text, params });
       if (txFailPattern && txFailPattern.test(text)) throw new Error('simulated write failure');
+      if (text.includes('FROM beeper_conversations') && text.includes('FOR KEY SHARE')) {
+        return { rows: [{ id: params[0] }] };
+      }
       if (text.includes('FROM beeper_messages') && text.includes('FOR UPDATE')) {
         return {
           rows: storedMessageRows.filter(
@@ -592,7 +595,11 @@ describe('cursor transactionality', () => {
     },
   };
 
-  it('commits message rows, attachment rows and the cursor in one transaction, cursor last', async () => {
+  it('commits messages, attachments, sender touchpoints and the cursor in one transaction, cursor last', async () => {
+    logSenderTouchpointsMock.mockImplementationOnce(async () => {
+      txCalls.push('sender touchpoints');
+      return { created: 0, matched: 0 };
+    });
     installFetch({
       chatPages: [ONE_CHAT],
       messagePages: {
@@ -623,7 +630,12 @@ describe('cursor transactionality', () => {
     const cursorIndex = txCalls.findIndex((sql) => sql.includes('INSERT INTO beeper_sync_cursors'));
     expect(messageIndex).toBeGreaterThan(0);
     expect(attachmentIndex).toBeGreaterThan(messageIndex);
-    expect(cursorIndex).toBeGreaterThan(attachmentIndex);
+    const touchpointIndex = txCalls.indexOf('sender touchpoints');
+    expect(touchpointIndex).toBeGreaterThan(attachmentIndex);
+    expect(cursorIndex).toBeGreaterThan(touchpointIndex);
+    expect(logSenderTouchpointsMock).toHaveBeenCalledWith(
+      expect.any(Array), expect.objectContaining({ client: expect.objectContaining({ query: expect.any(Function) }) }),
+    );
   });
 
   it('persists isSender on the message row, and never downgrades a stored TRUE', async () => {

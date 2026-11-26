@@ -18,10 +18,18 @@
  * Every fixture value is invented per root
  * AGENTS.md Sensitive Data & Privacy — no real handle, name, or content.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import * as database from '../../lib/db.js';
 import { checkHealth, ensureSchema, close, query, withTransaction } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
-import { listConversations, listMessages } from './beeperConversations.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+import { attachmentsRoot } from './beeperAttachments.js';
+import { listConversations, listMessages, purgeConversation } from './beeperConversations.js';
+
+vi.mock('../../lib/fileUtils.js', async (original) =>
+  makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-beeper-purge-') }));
 
 let dbReady = false;
 let skipReason = '';
@@ -134,6 +142,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  cleanupTempDataRoots();
   if (dbReady) {
     await query('DELETE FROM beeper_accounts WHERE account_id = $1', [ACCOUNT_ID]).catch(() => {});
     await close();
@@ -301,5 +310,81 @@ describe.skipIf(!runDb)('beeper conversation/message list query plans (audit clu
     const plan = await explainPlan(candidateSql);
     expect(plan).toMatch(/Index Scan.*idx_beeper_attachments_eviction_candidates/s);
     expect(plan).not.toMatch(/\bSort\b/);
+  });
+});
+
+describe.skipIf(!runDb)('Beeper conversation purge', () => {
+  async function seedPurgeFixture(scenario) {
+    const seed = async (label, paths) => {
+      const chatId = `${nonce}-${scenario}-${label}`;
+      const messageId = `${chatId}-message`;
+      const { rows: [{ id }] } = await query(
+        `INSERT INTO beeper_conversations (account_id, network, source_chat_id, title, type)
+         VALUES ($1, $2, $3, 'Purge fixture', 'single') RETURNING id`,
+        [ACCOUNT_ID, NETWORK, chatId],
+      );
+      await query(
+        `INSERT INTO beeper_messages (id, conversation_id, sent_at)
+         VALUES ($1, $2, NOW())`,
+        [messageId, id],
+      );
+      await query(
+        `INSERT INTO beeper_attachments (conversation_id, message_id, idx, local_path, unavailable_at)
+         SELECT $1, $2, i - 1, path, NOW() FROM unnest($3::text[]) WITH ORDINALITY AS files(path, i)`,
+        [id, messageId, paths],
+      );
+      return id;
+    };
+
+    const unshared = scenario === 'rollback' ? `ac/${'ac'.repeat(32)}.png` : `ad/${'ad'.repeat(32)}.png`;
+    const shared = scenario === 'rollback' ? `bc/${'bc'.repeat(32)}.png` : `bd/${'bd'.repeat(32)}.png`;
+    const bytes = Buffer.from('example attachment bytes');
+    for (const path of [unshared, shared]) {
+      const file = join(attachmentsRoot(), path);
+      await mkdir(dirname(file), { recursive: true });
+      await writeFile(file, bytes);
+    }
+    return {
+      removed: await seed('removed', [unshared, shared]),
+      survivor: await seed('survivor', [shared]),
+      unshared, shared, bytes,
+    };
+  }
+
+  const pathsFor = async (id) => (await query(
+    'SELECT local_path FROM beeper_attachments WHERE conversation_id = $1 ORDER BY idx',
+    [id],
+  )).rows.map((row) => row.local_path);
+
+  it('preserves local-only bytes and their references if the purge transaction rolls back', async () => {
+    const { removed, unshared, shared, bytes } = await seedPurgeFixture('rollback');
+    const realWithTransaction = database.withTransaction;
+    const transaction = vi.spyOn(database, 'withTransaction').mockImplementationOnce((run) =>
+      realWithTransaction(async (client) => {
+        await run(client);
+        throw new Error('purge transaction interrupted');
+      }));
+    try {
+      await expect(purgeConversation(removed)).rejects.toThrow('purge transaction interrupted');
+    } finally {
+      transaction.mockRestore();
+    }
+
+    expect(await pathsFor(removed)).toEqual([unshared, shared]);
+    expect(await readFile(join(attachmentsRoot(), unshared))).toEqual(bytes);
+    expect(await readFile(join(attachmentsRoot(), shared))).toEqual(bytes);
+  });
+
+  it('unlinks unshared bytes after commit and leaves shared bytes readable', async () => {
+    const { removed, survivor, unshared, shared, bytes } = await seedPurgeFixture('commit');
+
+    await expect(purgeConversation(removed)).resolves.toEqual({
+      purged: true, conversationId: removed, messagesRemoved: 1, filesRemoved: 1, bytesFreed: bytes.length,
+    });
+
+    expect(await pathsFor(removed)).toEqual([]);
+    expect(await pathsFor(survivor)).toEqual([shared]);
+    await expect(readFile(join(attachmentsRoot(), unshared))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(join(attachmentsRoot(), shared))).toEqual(bytes);
   });
 });
