@@ -15,7 +15,7 @@ function Search() {
 describe('MusicVideoFilingSelect', () => {
   it('shows the video handed over in the URL and keeps the URL in step with a new pick', async () => {
     render(
-      <MemoryRouter initialEntries={['/video/generate?musicVideo=mv-a']}>
+      <MemoryRouter initialEntries={['/media/video?musicVideo=mv-a']}>
         <MusicVideoFilingSelect />
         <Search />
       </MemoryRouter>,

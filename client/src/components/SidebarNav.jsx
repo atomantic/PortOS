@@ -37,7 +37,7 @@ const SECTION_PRESENTATION = {
   Calendar: { icon: CalendarDays, defaultTo: '/calendar/agenda' },
   'Chief of Staff': { icon: Crown, defaultTo: '/cos/tasks' },
   Comms: { icon: MessagesSquare, defaultTo: '/messages/inbox' },
-  Create: { icon: Sparkles, defaultTo: '/create/media' },
+  Create: { icon: Sparkles, defaultTo: '/media' },
   'Dev Tools': { icon: Terminal },
   Health: { icon: Heart, defaultTo: '/meatspace/overview' },
   Models: { icon: Cpu, defaultTo: '/models/llms' },

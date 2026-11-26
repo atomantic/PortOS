@@ -820,6 +820,13 @@ describe('nav coverage — every navigable App.jsx route has a manifest entry', 
   it('still declares the previous paths of the pages already moved', () => {
     const declared = new Set(NAV_COMMANDS.flatMap((c) => c.previousPaths || []));
     const missing = [
+      '/video/generate',
+      '/imessage/:chatKey',
+      '/devtools/agents',
+      '/media/threejs',
+      '/media/threejs/:id',
+      '/create/media',
+      '/create/story',
       '/settings/local-llm',   // #4736 — Local LLM management left Settings
       '/models/llms/runtimes', // #7414 — Runtimes left the LLMs pill bar for its own tab
       '/media/models',         // #4728 — the rest of model management left Create/Settings/Dev Tools
@@ -932,7 +939,7 @@ describe('nav contract — POST Practice Library links are registered destinatio
 it('routes video browsing and production aliases to Creative Director', () => {
   expect(resolveNavCommand('video').path).toBe('/creative-director');
   expect(resolveNavCommand('browse-video').path).toBe('/creative-director');
-  expect(resolveNavCommand('generate-video').path).toBe('/video/generate');
+  expect(resolveNavCommand('generate-video').path).toBe('/media/video');
   expect(resolveNavCommand('create-video').path).toBe('/creative-director');
   expect(resolveNavCommand('video-production').path).toBe('/creative-director');
 });

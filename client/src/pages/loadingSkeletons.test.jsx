@@ -122,7 +122,7 @@ describe('page loading states reserve their layout', () => {
 // loudly if one comes back.
 // ---------------------------------------------------------------------------
 const RENDERED = [
-  ['AgentsPage', () => import('./AgentsPage').then((m) => m.AgentsPage), '/devtools/agents', '/devtools/agents', 'Scanning for AI agents'],
+  ['ProcessesPage (AI Agents)', () => import('./ProcessesPage'), '/devtools/processes/agents', '/devtools/processes/agents', 'Scanning for AI agents'],
   ['AIProviders', () => import('./AIProviders'), '/ai', '/ai', 'Loading providers'],
   ['BrainScanReport', () => import('./BrainScanReport'), '/brain/links/:id/scan-report', '/brain/links/l1/scan-report', 'Loading scan report'],
   ['BlenderModelDetail', () => import('./BlenderModelDetail'), '/3d/blender/:id/:tab?', '/3d/blender/bmodel-1', 'Loading Blender model'],

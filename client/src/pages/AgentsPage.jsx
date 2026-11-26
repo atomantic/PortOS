@@ -1,6 +1,5 @@
 import { useState, useCallback, useEffect, Fragment } from 'react';
 import toast from '../components/ui/Toast';
-import PageHeader from '../components/PageHeader';
 import { RefreshCw, XCircle, Cpu, MemoryStick, Terminal } from 'lucide-react';
 import { getAgents, killAgent } from '../services/apiAgents.js';
 import { useSocketResource } from '../hooks/useSocketResource';
@@ -100,37 +99,21 @@ export function AgentsPage() {
   const totalMemory = agents.reduce((sum, a) => sum + (a.memory || 0), 0);
 
   if (loading) {
-    return (
-      <PageSkeleton
-        header="bar"
-        fullHeight
-        padded
-        label="Scanning for AI agents"
-        headerRowClass="flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-        titleWidthClass="w-56"
-        cards={3}
-        sidebar={false}
-      />
-    );
+    return <PageSkeleton label="Scanning for AI agents" cards={3} sidebar={false} />;
   }
 
   return (
-    <div className="flex h-full flex-col">
-      <PageHeader
-        icon={Cpu}
-        title="AI Agents"
-        actions={<>
+    <div className="space-y-4 lg:space-y-6">
+      <div className="flex justify-end">
         <button
+          type="button"
           onClick={refetch}
           className="flex items-center justify-center gap-2 px-3 py-1.5 sm:px-4 sm:py-2 bg-port-card border border-port-border hover:border-gray-500 text-white text-sm rounded-lg transition-colors"
         >
           <RefreshCw size={14} className="sm:w-4 sm:h-4" />
-          <span className="sm:inline">Refresh</span>
+          Refresh
         </button>
-        </>}
-      />
-      <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
-      <div className="space-y-4 lg:space-y-6">
+      </div>
 
       {initialLoadFailed ? (
         <ListLoadError what="AI agents" error={error} onRetry={refetch} />
@@ -413,8 +396,6 @@ export function AgentsPage() {
         </div>
       </div>
       </>}
-    </div>
-      </div>
     </div>
   );
 }
