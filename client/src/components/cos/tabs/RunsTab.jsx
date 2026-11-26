@@ -1,7 +1,7 @@
 import ExecutionOptionsAttribution from '../../providers/ExecutionOptionsAttribution.jsx';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { Trash2, RotateCcw, ScrollText, Square } from 'lucide-react';
+import { Copy, Trash2, RotateCcw, ScrollText, Square } from 'lucide-react';
 import {
   getRuns,
   getRun,
@@ -20,8 +20,7 @@ import Banner from '../../ui/Banner';
 import ListLoadError from '../../ui/ListLoadError';
 import useListResource from '../../../hooks/useListResource';
 import ProcessLogModal from '../../ui/ProcessLogModal';
-import { writeClipboardSilently } from '../../../lib/clipboard';
-import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard.js';
+import { copyToClipboard } from '../../../lib/clipboard';
 
 const runEventsPath = TABS.find(({ id }) => id === 'run-events').to;
 
@@ -146,8 +145,7 @@ export default function RunsTab() {
     return matchesSource && matchesStatus;
   });
 
-  const handleDelete = async (id, e) => {
-    e.stopPropagation();
+  const handleDelete = async (id) => {
     const deleted = await deleteRun(id).catch(() => null);
     if (!deleted && deleted !== undefined) return;
     supersedeRefresh();
@@ -157,8 +155,7 @@ export default function RunsTab() {
     if (pinRef.current?.run?.id === id) dropPin();
   };
 
-  const handleStop = async (id, e) => {
-    e.stopPropagation();
+  const handleStop = async (id) => {
     setStoppingIds((prev) => new Set(prev).add(id));
     const stopped = await stopRun(id).then(() => true).catch(() => false);
     if (!stopped) {
@@ -296,8 +293,7 @@ export default function RunsTab() {
   }, [startPinnedRead]);
   refreshPinnedRef.current = refreshPinned;
 
-  const handleResume = async (run, e) => {
-    e.stopPropagation();
+  const handleResume = async (run) => {
     // Fetch details if not already loaded
     let details = expandedDetails[run.id];
     if (!details) {
@@ -364,101 +360,102 @@ export default function RunsTab() {
     }
   };
 
-  const renderRun = (run) => (
-    <div key={run.id}>
+  const renderRun = (run) => {
+    const expanded = expandedId === run.id;
+    const detailsId = `run-details-${run.id}`;
+    const runLabel = [run.providerName, run.model, `(${run.id})`].filter(Boolean).join(' ');
+    const stopLabel = stoppingIds.has(run.id) ? 'Stopping run' : 'Stop run';
+
+    return <div key={run.id}>
       <div
-        className="p-3 sm:p-4 hover:bg-port-border/20 cursor-pointer group"
-        onClick={() => toggleExpand(run.id)}
-        {...clickableProps(() => toggleExpand(run.id))}
-        onKeyDown={onActivateKeyDown(() => toggleExpand(run.id))}
+        className="flex flex-wrap items-center gap-2 sm:gap-4 p-3 sm:p-4"
         data-testid={`run-row-${run.id}`}
       >
-        <div className="flex flex-wrap items-center gap-2 sm:gap-4">
-          <div className="flex items-center gap-3 flex-1 basis-64 min-w-0">
+        <button
+          type="button"
+          className="flex items-center gap-3 flex-1 basis-64 min-w-0 min-h-11 rounded text-left hover:bg-port-border/20 focus-visible:outline-2 focus-visible:outline-port-accent"
+          onClick={() => toggleExpand(run.id)}
+          aria-expanded={expanded}
+          aria-controls={expanded ? detailsId : undefined}
+        >
+          <span className="sr-only">Run details for</span>
+          <span aria-hidden="true" className={`shrink-0 text-gray-400 transition-transform ${expanded ? 'rotate-90' : ''}`}>▶</span>
+          <span aria-hidden="true" className="text-xl shrink-0">🤖</span>
+          <span className="flex-1 min-w-0">
+            <span className="flex flex-wrap items-center gap-x-2 gap-y-1 [overflow-wrap:anywhere]">
+              <span className="font-medium text-white">{run.providerName}</span>
+              <span className="text-gray-500 text-sm">{run.model}</span>
+              <ExecutionOptionsAttribution value={run.executionOptions} />
+              {run.source === 'cos-agent' && (
+                <span className="text-xs text-port-accent-2 bg-port-accent-2/10 px-2 py-0.5 rounded">
+                  CoS
+                </span>
+              )}
+              {run.workspaceName && (
+                <span className="text-xs text-port-accent bg-port-accent/10 px-2 py-0.5 rounded">
+                  {run.workspaceName}
+                </span>
+              )}
+              {run.duration && (
+                <span className="text-xs text-cyan-400 font-mono">{formatRuntime(run.duration)}</span>
+              )}
+            </span>
+            <span className="block text-xs text-gray-500 font-mono truncate mt-1">
+              {run.prompt?.substring(0, 100)}{run.prompt?.length > 100 ? '...' : ''}
+            </span>
+          </span>
+        </button>
+        <div className="flex flex-wrap items-center gap-3 min-w-0">
+          <span className="inline-flex items-center gap-1.5 text-sm text-gray-400 shrink-0">
+            <span aria-hidden="true" className={`w-2 h-2 rounded-full shrink-0 ${run.success ? 'bg-port-success' : run.success === false ? 'bg-port-error' : 'bg-port-warning'}`} />
+            {run.success ? 'Succeeded' : run.success === false ? 'Failed' : 'Running'}
+          </span>
+          <span className="text-sm text-gray-500 shrink-0">{formatTime(run.startTime)}</span>
+          {run.success === false && (
             <button
               type="button"
-              className="text-gray-400 hover:text-white shrink-0"
-              onClick={(event) => {
-                event.stopPropagation();
-                toggleExpand(run.id);
-              }}
-              aria-label={expandedId === run.id ? 'Collapse run details' : 'Expand run details'}
+              onClick={() => setLogModalRun(run)}
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent transition-colors"
+              title="View system logs"
+              aria-label={`View system logs for run ${runLabel}`}
+              data-testid={`view-logs-${run.id}`}
             >
-              <span className={`inline-block transition-transform ${expandedId === run.id ? 'rotate-90' : ''}`}>▶</span>
+              <ScrollText size={14} aria-hidden="true" />
             </button>
-            <span className="text-xl shrink-0">🤖</span>
-            <div className="flex-1 min-w-0">
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <span className="font-medium text-white">{run.providerName}</span>
-                <span className="text-gray-500 text-sm">{run.model}</span>
-                <ExecutionOptionsAttribution value={run.executionOptions} />
-                {run.source === 'cos-agent' && (
-                  <span className="text-xs text-port-accent-2 bg-port-accent-2/10 px-2 py-0.5 rounded">
-                    CoS
-                  </span>
-                )}
-                {run.workspaceName && (
-                  <span className="text-xs text-port-accent bg-port-accent/10 px-2 py-0.5 rounded">
-                    {run.workspaceName}
-                  </span>
-                )}
-                {run.duration && (
-                  <span className="text-xs text-cyan-400 font-mono">{formatRuntime(run.duration)}</span>
-                )}
-              </div>
-              <div className="text-xs text-gray-500 font-mono truncate mt-1">
-                {run.prompt?.substring(0, 100)}{run.prompt?.length > 100 ? '...' : ''}
-              </div>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-3 min-w-0">
-            <span className="inline-flex items-center gap-1.5 text-sm text-gray-400 shrink-0">
-              <span aria-hidden="true" className={`w-2 h-2 rounded-full shrink-0 ${run.success ? 'bg-port-success' : run.success === false ? 'bg-port-error' : 'bg-port-warning'}`} />
-              {run.success ? 'Succeeded' : run.success === false ? 'Failed' : 'Running'}
-            </span>
-            <span className="text-sm text-gray-500 shrink-0">{formatTime(run.startTime)}</span>
-            {run.success === false && (
-              <button
-                onClick={(e) => { e.stopPropagation(); setLogModalRun(run); }}
-                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent transition-colors"
-                title="View system logs"
-                aria-label="View system logs"
-                data-testid={`view-logs-${run.id}`}
-              >
-                <ScrollText size={14} />
-              </button>
-            )}
-            {run.success !== null && (
-              <button
-                onClick={(e) => handleResume(run, e)}
-                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent transition-colors"
-                title="Resume run" aria-label="Resume run"
-                data-testid={`resume-run-${run.id}`}
-              >
-                <RotateCcw size={14} />
-              </button>
-            )}
-            {run.success === null && (
-              <button
-                onClick={(e) => handleStop(run.id, e)}
-                disabled={stoppingIds.has(run.id)}
-                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors disabled:opacity-40"
-                title={stoppingIds.has(run.id) ? 'Stopping run' : 'Stop run'}
-                aria-label={stoppingIds.has(run.id) ? 'Stopping run' : 'Stop run'}
-                data-testid={`stop-run-${run.id}`}
-              >
-                <Square size={14} fill="currentColor" />
-              </button>
-            )}
+          )}
+          {run.success !== null && (
             <button
-              onClick={(e) => handleDelete(run.id, e)}
-              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
-              title="Delete run" aria-label="Delete run"
-              data-testid={`delete-run-${run.id}`}
+              type="button"
+              onClick={() => handleResume(run)}
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent transition-colors"
+              title="Resume run" aria-label={`Resume run ${runLabel}`}
+              data-testid={`resume-run-${run.id}`}
             >
-              <Trash2 size={14} />
+              <RotateCcw size={14} aria-hidden="true" />
             </button>
-          </div>
+          )}
+          {run.success === null && (
+            <button
+              type="button"
+              onClick={() => handleStop(run.id)}
+              disabled={stoppingIds.has(run.id)}
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors disabled:opacity-40"
+              title={stopLabel}
+              aria-label={`${stopLabel} ${runLabel}`}
+              data-testid={`stop-run-${run.id}`}
+            >
+              <Square size={14} aria-hidden="true" fill="currentColor" />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => handleDelete(run.id)}
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
+            title="Delete run" aria-label={`Delete run ${runLabel}`}
+            data-testid={`delete-run-${run.id}`}
+          >
+            <Trash2 size={14} aria-hidden="true" />
+          </button>
         </div>
       </div>
 
@@ -491,25 +488,22 @@ export default function RunsTab() {
       })()}
 
       {/* Expanded Details */}
-      {expandedId === run.id && (
-        <div className="px-4 pb-4 bg-port-bg border-t border-port-border">
+      {expanded && (
+        <div id={detailsId} className="px-4 pb-4 bg-port-bg border-t border-port-border">
           <div className="pt-4 space-y-4">
             {/* Execution ID */}
             <div className="mb-4">
               <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Execution ID</div>
-              <div className="flex items-center gap-2">
-                <code className="text-xs text-gray-400 font-mono select-all">{run.id}</code>
+              <div className="flex flex-wrap items-center gap-2">
+                <code className="text-xs text-gray-400 font-mono select-all [overflow-wrap:anywhere]">{run.id}</code>
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    writeClipboardSilently(run.id);
-                  }}
-                  className="p-1 text-gray-500 hover:text-white transition-colors"
+                  type="button"
+                  onClick={() => copyToClipboard(run.id, 'Execution ID copied to clipboard')}
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-white transition-colors"
                   title="Copy execution ID"
+                  aria-label="Copy execution ID"
                 >
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                  </svg>
+                  <Copy size={12} aria-hidden="true" />
                 </button>
                 {run.source === 'cos-agent' && (
                   <Link to={`${runEventsPath}?${new URLSearchParams({ run: run.id })}`}
@@ -607,8 +601,8 @@ export default function RunsTab() {
           </div>
         </div>
       )}
-    </div>
-  );
+    </div>;
+  };
 
   return (
     <div className="space-y-4 lg:space-y-6">
@@ -616,17 +610,18 @@ export default function RunsTab() {
         <h2 className="text-lg sm:text-xl font-bold text-white">Recent Runs</h2>
         {failedCount > 0 && (
           <button
+            type="button"
             onClick={handleClearFailed}
             className="flex items-center gap-2 px-3 py-1.5 text-sm bg-port-error/20 hover:bg-port-error/30 text-port-error rounded-lg transition-colors self-end sm:self-auto"
           >
-            <Trash2 size={14} />
+            <Trash2 size={14} aria-hidden="true" />
             Clear Failed ({failedCount})
           </button>
         )}
       </div>
 
       {/* Source Filter */}
-      <div className="flex flex-wrap gap-1.5 sm:gap-2">
+      <div role="group" aria-label="Filter runs by source" className="flex flex-wrap gap-1.5 sm:gap-2">
         {[
           { value: 'all', label: 'All' },
           { value: 'devtools', label: 'DevTools' },
@@ -634,6 +629,8 @@ export default function RunsTab() {
         ].map(filter => (
           <button
             key={filter.value}
+            type="button"
+            aria-pressed={sourceFilter === filter.value}
             onClick={() => setSourceFilter(filter.value)}
             className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
               sourceFilter === filter.value
@@ -647,7 +644,7 @@ export default function RunsTab() {
       </div>
 
       {/* Status Filter */}
-      <div className="flex flex-wrap gap-1.5 sm:gap-2">
+      <div role="group" aria-label="Filter runs by status" className="flex flex-wrap gap-1.5 sm:gap-2">
         {[
           { value: 'all', label: 'All Status' },
           { value: 'success', label: 'Success' },
@@ -656,6 +653,8 @@ export default function RunsTab() {
         ].map(filter => (
           <button
             key={filter.value}
+            type="button"
+            aria-pressed={statusFilter === filter.value}
             onClick={() => setStatusFilter(filter.value)}
             className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
               statusFilter === filter.value
