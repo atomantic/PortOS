@@ -32,19 +32,38 @@ export default function SongMarkers({ track, time, onSeek, onChange }) {
   const [lyricsText, setLyricsText] = useState(null);
   const queueRef = useRef(Promise.resolve());
   const pendingRef = useRef(0);
+  const trackRef = useRef(track);
+  const draftRef = useRef(track);
+  trackRef.current = track;
 
   useEffect(() => {
-    if (!pendingRef.current) setDraft(track);
+    trackRef.current = track;
+    if (!pendingRef.current) {
+      draftRef.current = track;
+      setDraft(track);
+    }
   }, [track]);
 
   const save = (patch) => {
-    const next = { ...draft, ...patch };
+    const next = {
+      ...draftRef.current,
+      filename: trackRef.current.filename,
+      name: trackRef.current.name,
+      ...patch,
+    };
+    draftRef.current = next;
     setDraft(next);
     pendingRef.current += 1;
     queueRef.current = queueRef.current
       .then(() => onChange(next))
       .catch(() => {})
-      .finally(() => { pendingRef.current -= 1; });
+      .finally(() => {
+        pendingRef.current -= 1;
+        if (!pendingRef.current) {
+          draftRef.current = trackRef.current;
+          setDraft(trackRef.current);
+        }
+      });
   };
 
   const now = round(time);
