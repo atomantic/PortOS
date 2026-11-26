@@ -6,12 +6,12 @@ Semantic memory system for the Chief of Staff that stores facts, learnings, obse
 
 - **Memory Backend** (`server/services/memoryBackend.js`): Selects the storage backend — `memoryDB.js` (PostgreSQL + pgvector) for real installs; `memory.js` (JSON files) is a test-only escape hatch (`MEMORY_BACKEND=file` / `NODE_ENV=test`), not a supported deployment mode
 - **Memory DB Service** (`server/services/memoryDB.js`): Primary CRUD, search, and lifecycle operations against PostgreSQL
-- **Embeddings Service** (`server/services/memoryEmbeddings.js`): LM Studio integration for vector generation
+- **Embeddings Service** (`server/services/memoryEmbeddings.js`): Configured embeddings provider integration for vector generation
 - **Memory Extractor** (`server/services/memoryExtractor.js`): Extract memories from agent output
 - **Memory Classifier** (`server/services/memoryClassifier.js`): LLM-based quality filtering
 - **Memory Retriever** (`server/services/memoryRetriever.js`): Context injection for agent prompts
 - **Memory Routes** (`server/routes/memory.js`): REST API endpoints
-- **Memory Tab** (`ChiefOfStaff.jsx`): UI with list, timeline, and graph views
+- **Memory Tab** (`client/src/components/cos/tabs/MemoryTab.jsx`): UI with list, timeline, and graph views
 
 ## Features
 
@@ -28,7 +28,7 @@ Semantic memory system for the Chief of Staff that stores facts, learnings, obse
    for review.
 7. **Manual Maintenance**: API calls consolidate similar memories or clear expired memories.
 8. **Real-time Updates**: WebSocket events for memory changes
-9. **Graph Visualization**: D3.js relationship graph (planned)
+9. **Graph Visualization**: React Three Fiber relationship graph (`client/src/components/cos/tabs/MemoryGraph.jsx`)
 
 ## Persistent Mind message recall
 
@@ -179,7 +179,7 @@ Memories are extracted from agent output:
 1. The configured classifier analyzes the task and agent output for memories.
 2. When classification is disabled, unavailable, or fails, extraction uses pattern matching if `fallbackToPatterns` is enabled.
 3. In execute mode, memories with confidence of at least 0.85 are saved automatically.
-4. Memories with confidence from 0.7 up to 0.85 are queued for approval. In dry-run mode, higher-confidence memories also go to the queue.
+4. Memories with confidence from 0.7 up to (but below) 0.85 are queued for approval; lower-confidence memories are dropped. In dry-run mode for the `memory` autonomy domain, every memory that passes this quality filter—including high-confidence memories that would otherwise be auto-saved—is sent to approval.
 
 ## Memory Injection
 
@@ -228,25 +228,15 @@ Before agent task execution:
 
 ## Setup Requirements
 
-**LM Studio** must be running with an embedding model loaded:
+Configure the embedding backend under **Models → Embeddings**. Select an embedding
+provider (Ollama, LM Studio, or **Disabled**) and its model. The memory system
+uses that shared embedding setting; no particular local server is required when
+embeddings are disabled or another provider is selected. Configure the memory
+classifier separately under **Settings → AI Assignments → Memory & Catalog**.
 
-1. Download and install [LM Studio](https://lmstudio.ai/)
-2. Load an embedding model: `text-embedding-nomic-embed-text-v2-moe` (recommended)
-3. Load a classification model: `gptoss-20b` or similar
-4. Start the local server on port 1234 (default)
-5. The memory system will automatically connect
-
-## LM Studio Configuration
-
-```javascript
-memory: {
-  embeddingEndpoint: 'http://localhost:1234/v1/embeddings',
-  embeddingModel: 'text-embedding-nomic-embed-text-v2-moe',
-  embeddingDimension: 768,
-  maxContextTokens: 2000,
-  minRelevanceThreshold: 0.7
-}
-```
+Memory injection has a fixed budget of 2,000 tokens and uses a relevance floor
+of 0.7. These are implementation limits, not settings in the CoS configuration
+store.
 
 ## Implementation Files
 

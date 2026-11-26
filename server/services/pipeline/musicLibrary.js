@@ -2,15 +2,14 @@
  * Background-music library for the pipeline audio stage.
  *
  * Storage model: a single shared directory at `PATHS.music`. Every track —
- * uploaded today, locally generated tomorrow — lives here under a deterministic
+ * uploaded or locally generated — lives here under a deterministic
  * basename. The library list is just `readdir + stat` filtered to known audio
  * extensions. No JSON index — the filesystem is the source of truth, which
  * keeps the library robust across server restarts and direct file drops.
  *
- * Provider strategy mirrors `audio.js`: **local-first**. User-upload is the
- * always-available path (zero infra). Local MusicGen via a Python sidecar
- * (4c.2 follow-up) and a 3rd-party Suno stub (4c.3) plug in as sibling
- * sources behind the same library list — the AudioStage picker doesn't
+ * Provider strategy mirrors `audio.js`: **local-first**. User uploads, tracks
+ * already in the library, and locally generated MusicGen output plug in as
+ * sibling sources behind the same library list — the AudioStage picker doesn't
  * care which one wrote the bytes.
  */
 
@@ -31,8 +30,8 @@ import { assertFileNotMediaManifest } from '../../lib/uploads.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 
 // Mirror of the sanitizer's MUSIC_SOURCES set in `services/pipeline/issues.js`.
-// Exported so routes don't sprinkle bare strings; `'gen'` is reserved for the
-// next sub-phase (local MusicGen sidecar / 3rd-party Suno stub).
+// Exported so routes don't sprinkle bare strings across upload, library, and
+// local-generator flows.
 export const MUSIC_SOURCE = Object.freeze({
   UPLOAD: 'upload',
   LIBRARY: 'library',
