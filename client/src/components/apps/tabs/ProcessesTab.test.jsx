@@ -18,8 +18,6 @@ vi.mock('../../../hooks/useProcessLogs', () => ({
 
 vi.mock('../../../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
 vi.mock('../../BrailleSpinner', () => ({ default: () => null }));
-vi.mock('../../ui/FormField', () => ({ FormField: ({ children }) => children }));
-vi.mock('../../ui/ProcessLogLines', () => ({ default: () => null, LogStreamBadge: () => null }));
 // `formatCount` is deliberately NOT stubbed — a stub that returns the raw
 // number would make the "N lines" assertions blind to a grouping regression.
 vi.mock('../../../utils/formatters', async (importOriginal) => ({
@@ -131,12 +129,32 @@ describe('ProcessesTab', () => {
     expect(screen.getByText('0 processes')).toBeTruthy();
   });
 
-  it('passes its app id to the expanded process log subscription', () => {
+  it('keeps the active log viewer outside the metrics table and wires its controls', () => {
+    const clear = vi.fn();
+    const retry = vi.fn();
+    useProcessLogs.mockReturnValue({ logs: [], status: 'error', clear, retry });
     render(<ProcessesTab appId="app-1" pm2ProcessNames={['example-api']} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Expand details for example-api' }));
+    const trigger = screen.getByRole('button', { name: 'Expand details for example-api' });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(trigger);
 
+    const table = screen.getByRole('table', { name: 'PM2 processes' });
+    const viewer = screen.getByRole('region', { name: 'Live logs for example-api' });
+    expect(table.parentElement.nextElementSibling).toBe(viewer);
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
     expect(useProcessLogs).toHaveBeenLastCalledWith('example-api', { lines: 500, appId: 'app-1' });
+
+    fireEvent.change(within(viewer).getByLabelText('Tail lines:'), { target: { value: '250' } });
+    expect(useProcessLogs).toHaveBeenLastCalledWith('example-api', { lines: 250, appId: 'app-1' });
+    fireEvent.click(within(viewer).getByRole('button', { name: 'Clear' }));
+    fireEvent.click(within(viewer).getByRole('button', { name: 'Retry' }));
+    expect(clear).toHaveBeenCalledOnce();
+    expect(retry).toHaveBeenCalledOnce();
+
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('region', { name: 'Live logs for example-api' })).toBeNull();
   });
 
   it('copies the current live log snapshot from both viewers in display order', () => {

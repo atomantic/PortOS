@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, Fragment } from 'react';
+import { useState, useEffect, useRef, useId, Fragment } from 'react';
 import Modal from '../../ui/Modal';
 import { Maximize2, X } from 'lucide-react';
 import { applyProcessAction } from '../../../services/apiCommands.js';
@@ -30,6 +30,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
   const stopTriggerRef = useRef(null);
   const [tailLines, setTailLines] = useState(500);
   const [fullscreen, setFullscreen] = useState(false);
+  const logsHeadingId = useId();
   const logsRef = useRef(null);
   const fullscreenLogsRef = useRef(null);
   const fullscreenButtonRef = useRef(null);
@@ -207,64 +208,6 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
                       </td>
                     </tr>
                   )}
-                  {expandedProcess === proc.name && (
-                    <tr>
-                      <td colSpan={9} className="p-0">
-                        <div className="bg-port-bg border-t border-port-border">
-                          <div className="flex items-center justify-between px-4 py-2 border-b border-port-border">
-                            <div className="flex items-center gap-3">
-                              <span className="text-xs text-gray-400">Live logs for {proc.name}</span>
-                              <LogStreamBadge status={status} />
-                            </div>
-                            <div className="flex items-center gap-3">
-                              <FormField className="flex items-center gap-2" label="Tail lines:" labelClassName="text-xs text-gray-500">
-                                <select
-                                  value={tailLines}
-                                  onChange={(e) => setTailLines(Number(e.target.value))}
-                                  className="px-2 py-1 text-xs bg-port-card border border-port-border rounded text-white"
-                                >
-                                  <option value={100}>100</option>
-                                  <option value={250}>250</option>
-                                  <option value={500}>500</option>
-                                  <option value={1000}>1000</option>
-                                  <option value={2000}>2000</option>
-                                </select>
-                              </FormField>
-                              <span className="text-xs text-gray-600">{formatCount(logs.length)} lines</span>
-                              <button
-                                onClick={clearLogs}
-                                className="min-h-[44px] min-w-[44px] px-1 text-xs text-gray-500 hover:text-white"
-                              >
-                                Clear
-                              </button>
-                              <button
-                                onClick={copyLogs}
-                                disabled={logs.length === 0}
-                                className="min-h-[44px] min-w-[44px] px-1 text-xs text-gray-500 hover:text-white disabled:opacity-50 disabled:hover:text-gray-500"
-                              >
-                                Copy logs
-                              </button>
-                              <button
-                                ref={fullscreenButtonRef}
-                                onClick={() => setFullscreen(true)}
-                                className="min-h-[44px] px-1 text-xs text-gray-500 hover:text-white flex items-center gap-1"
-                                title="Fullscreen"
-                              >
-                                <Maximize2 size={12} />
-                                Fullscreen
-                              </button>
-                            </div>
-                          </div>
-                          <div
-                            ref={logsRef}
-                            className="h-[32rem] overflow-auto p-3 font-mono text-xs"
-                          >
-                            <ProcessLogLines logs={logs} status={status} statusDetail={statusDetail} onRetry={retry} showTimestamps />
-                          </div>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
                 </Fragment>
               ))}
               {filteredProcesses.length === 0 && (
@@ -277,6 +220,60 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
             </tbody>
           </table>
         </div>
+        {filteredProcesses.some(proc => proc.name === expandedProcess) && (
+          <section aria-labelledby={logsHeadingId} className="min-w-0 rounded-xl border border-port-border bg-port-bg">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 border-b border-port-border">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 id={logsHeadingId} className="text-xs text-gray-400 wrap-anywhere">Live logs for {expandedProcess}</h3>
+                <LogStreamBadge status={status} />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <FormField className="flex items-center gap-2" label="Tail lines:" labelClassName="text-xs text-gray-500">
+                  <select
+                    value={tailLines}
+                    onChange={(e) => setTailLines(Number(e.target.value))}
+                    className="px-2 py-1 text-xs bg-port-card border border-port-border rounded text-white"
+                  >
+                    <option value={100}>100</option>
+                    <option value={250}>250</option>
+                    <option value={500}>500</option>
+                    <option value={1000}>1000</option>
+                    <option value={2000}>2000</option>
+                  </select>
+                </FormField>
+                <span className="text-xs text-gray-600">{formatCount(logs.length)} lines</span>
+                <button
+                  onClick={clearLogs}
+                  className="min-h-[44px] min-w-[44px] px-1 text-xs text-gray-500 hover:text-white"
+                >
+                  Clear
+                </button>
+                <button
+                  onClick={copyLogs}
+                  disabled={logs.length === 0}
+                  className="min-h-[44px] min-w-[44px] px-1 text-xs text-gray-500 hover:text-white disabled:opacity-50 disabled:hover:text-gray-500"
+                >
+                  Copy logs
+                </button>
+                <button
+                  ref={fullscreenButtonRef}
+                  onClick={() => setFullscreen(true)}
+                  className="min-h-[44px] px-1 text-xs text-gray-500 hover:text-white flex items-center gap-1"
+                  title="Fullscreen"
+                >
+                  <Maximize2 size={12} />
+                  Fullscreen
+                </button>
+              </div>
+            </div>
+            <div
+              ref={logsRef}
+              className="h-[32rem] overflow-auto p-3 font-mono text-xs"
+            >
+              <ProcessLogLines logs={logs} status={status} statusDetail={statusDetail} onRetry={retry} showTimestamps />
+            </div>
+          </section>
+        )}
       </div>
 
       {/* <Modal> portals to <body>: glass-theme card backdrop-filters would otherwise size a fixed overlay to the card (#4151). */}
