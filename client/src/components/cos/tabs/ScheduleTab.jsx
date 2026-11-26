@@ -142,7 +142,7 @@ export default function ScheduleTab({ apps, appsStatus, onReadApps, providers, p
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="text-gray-500">Loading schedule...</div>
+        <div role="status" className="text-gray-500">Loading schedule...</div>
       </div>
     );
   }

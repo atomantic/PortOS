@@ -146,7 +146,7 @@ export function ConversationItem({ event, thoughts, thoughtOnly, selectedEventId
   return (
     <li className={`flex flex-col ${outgoing ? 'items-end' : 'items-start'}`}>
       {!outgoing && <span className="mb-1 ml-2 text-[11px] font-medium text-port-text-muted">Chief of Staff</span>}
-      <div className={`max-w-[86%] overflow-hidden ${outgoing ? 'rounded-[1.25rem] rounded-br-md bg-port-accent text-white' : 'rounded-[1.25rem] rounded-bl-md bg-port-border/55 text-port-text'} ${selected ? 'ring-2 ring-port-accent/80 ring-offset-2 ring-offset-port-card' : ''}`}>
+      <div className={`max-w-[86%] overflow-hidden ${outgoing ? 'rounded-[1.25rem] rounded-br-md bg-port-accent text-white' : 'rounded-[1.25rem] rounded-bl-md bg-port-border/60 text-port-text'} ${selected ? 'ring-2 ring-port-accent/80 ring-offset-2 ring-offset-port-card' : ''}`}>
         <button
           type="button"
           onClick={() => onSelect(event.eventId)}
@@ -159,7 +159,7 @@ export function ConversationItem({ event, thoughts, thoughtOnly, selectedEventId
         <MessageImages images={safeMessageImages(event)} compact />
         {thoughts.length > 0 && (
           <details className={`border-t ${outgoing ? 'border-white/20' : 'border-port-text/10'}`}>
-            <summary className="cursor-pointer px-3.5 py-2 text-xs font-medium opacity-75 hover:opacity-100">
+            <summary className={`cursor-pointer px-3.5 py-2 text-xs font-medium ${outgoing ? '' : 'text-port-text-muted'}`}>
               {thoughts.length} {thoughts.length === 1 ? 'thought' : 'thoughts'}
             </summary>
             <div className={`space-y-1.5 border-t px-2 py-2 ${outgoing ? 'border-white/20' : 'border-port-text/10'}`}>
@@ -170,7 +170,7 @@ export function ConversationItem({ event, thoughts, thoughtOnly, selectedEventId
                   onClick={() => onSelect(thought.eventId)}
                   aria-current={thought.eventId === selectedEventId ? 'true' : undefined}
                   aria-label={`${eventLabel(thought.kind)} · ${formatDateTime(thought.at)}`}
-                  className={`block w-full rounded-xl px-2 py-1.5 text-left text-xs leading-5 opacity-75 hover:bg-black/10 hover:opacity-100 ${thought.eventId === selectedEventId ? 'ring-1 ring-current' : ''}`}
+                  className={`block w-full rounded-xl px-2 py-1.5 text-left text-xs leading-5 ${outgoing ? 'hover:bg-black/10' : 'text-port-text-muted hover:bg-port-border/20'} ${thought.eventId === selectedEventId ? 'ring-1 ring-current' : ''}`}
                 >
                   {eventText(thought) || thought.kind}
                 </button>

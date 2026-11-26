@@ -229,6 +229,7 @@ describe('AgentCard runtime presentation', () => {
       <MemoryRouter><AgentCard agent={{ ...runningAgent, status: 'paused' }} paused durations={durationHistory} /></MemoryRouter>
     );
     expect(screen.getByText('Paused')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: `Agent ${runningAgent.id}` }).className).not.toMatch(/\bopacity-/);
     expect(screen.queryByText(/complete$/)).not.toBeInTheDocument();
     expect(screen.getByText('30s')).toBeInTheDocument();
 
@@ -236,6 +237,7 @@ describe('AgentCard runtime presentation', () => {
       <MemoryRouter><AgentCard agent={agent} completed durations={durationHistory} /></MemoryRouter>
     );
     expect(screen.getByText('1h 0m')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: `Agent ${agent.id}` }).className).not.toMatch(/\bopacity-/);
     expect(screen.queryByText(/complete$/)).not.toBeInTheDocument();
     expect(screen.getByTitle((value) => value.includes('2026'))).toBeInTheDocument();
   });
