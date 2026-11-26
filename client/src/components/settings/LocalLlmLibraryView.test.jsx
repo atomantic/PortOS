@@ -61,6 +61,7 @@ import {
   deleteLocalLlmModel,
   getLocalLlmStatus,
   getLocalLlmCatalog,
+  getLocalLlmHuggingFaceSearch,
   installLocalLlmBackend,
   installLocalLlmModel,
   cancelLocalLlmInstall,
@@ -449,6 +450,23 @@ describe('LocalLlmLibraryView recommendations', () => {
     expect(screen.getByText('Security specialist')).toBeInTheDocument();
     expect(screen.queryByText('Security candidate')).toBeNull();
     expect(screen.queryByRole('note')).toBeNull();
+  });
+
+  it('searches Hugging Face with the selected category and keeps the query when switching sources', async () => {
+    getLocalLlmHuggingFaceSearch.mockResolvedValue({ models: [] });
+    await renderLibrary();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hugging Face' }));
+    const query = screen.getByPlaceholderText('Search Hugging Face GGUF models…');
+    fireEvent.change(query, { target: { value: 'example' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Audio & Music' }));
+
+    expect(screen.getByPlaceholderText('Search Hugging Face audio models…')).toHaveValue('example');
+    await waitFor(() => expect(getLocalLlmHuggingFaceSearch)
+      .toHaveBeenCalledWith('ollama', 'example', 'audio', 18, { silent: true }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Recommended', exact: true }));
+    expect(screen.getByPlaceholderText('Search the Ollama catalog…')).toHaveValue('example');
   });
 
   it('links a gated curated model to Hugging Face so its terms can be accepted', async () => {

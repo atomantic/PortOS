@@ -498,6 +498,7 @@ export const FEATURE_AREAS = Object.freeze([
       'server/services/backup/**',
       'client/src/pages/{Settings,Login,Capability,SystemHealth}*',
       'client/src/components/settings/!(DockerContainment*|Rigging*|MortalLoom*|voice)',
+      'client/src/components/settings/{assessments,library}/**',
     ],
   }),
 ]);
