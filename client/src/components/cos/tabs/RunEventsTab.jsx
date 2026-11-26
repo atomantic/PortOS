@@ -246,6 +246,7 @@ export default function RunEventsTab() {
               <li key={projection.id}>
                 <button
                   type="button"
+                  aria-current={projection.id === selectedId ? 'true' : undefined}
                   onClick={() => select(projection.id)}
                   className={`w-full rounded border px-3 py-2 text-left transition-colors ${
                     projection.id === selectedId

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route, useNavigate } from 'react-router';
 
 // Regression coverage for #2519 — the page-level Force Evaluate handler must
@@ -1433,15 +1434,20 @@ it('compacts the mobile persona on entering Tasks until the user chooses its siz
   expect(toggle()).toHaveAttribute('aria-expanded', 'true');
 });
 
-it('retains the saved persona collapse preference and exposes operational identity', async () => {
+it('preserves focus after a keyboard toggle and saves the persona collapse preference', async () => {
+  const user = userEvent.setup();
   localStorage.setItem('cos-panel-collapsed', 'true');
   await renderSettledAt('tasks');
-  fireEvent.click(screen.getByRole('button', { name: 'Expand CoS panel' }));
+  const expand = screen.getByRole('button', { name: 'Expand CoS panel' });
+  expect(expand).not.toHaveFocus();
+  expand.focus();
+  await user.keyboard('{Enter}');
   expect(localStorage.getItem('cos-panel-collapsed')).toBe('false');
-  expect(screen.getByRole('button', { name: 'Collapse CoS panel' })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Collapse CoS panel' }));
+  const collapse = screen.getByRole('button', { name: 'Collapse CoS panel' });
+  expect(collapse).toHaveFocus();
+  await user.keyboard('{Enter}');
   expect(localStorage.getItem('cos-panel-collapsed')).toBe('true');
-  expect(screen.getByRole('button', { name: 'Expand CoS panel' })).toHaveTextContent('CoS');
+  expect(screen.getByRole('button', { name: 'Expand CoS panel' })).toHaveFocus();
   localStorage.removeItem('cos-panel-collapsed');
 });
 

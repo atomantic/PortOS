@@ -116,6 +116,20 @@ describe('TaskAddForm responsive layout', () => {
     expect(api.getCosPopularTemplates).not.toHaveBeenCalled();
   });
 
+  it('announces execution mode and the current queue position', async () => {
+    const user = userEvent.setup();
+    render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={vi.fn()} />);
+
+    const mode = within(screen.getByRole('group', { name: 'Execution mode' }));
+    expect(mode.getByRole('button', { name: 'Direct', pressed: true })).toBeInTheDocument();
+    await user.click(mode.getByRole('button', { name: 'Orchestrated', pressed: false }));
+    expect(mode.getByRole('button', { name: 'Orchestrated', pressed: true })).toBeInTheDocument();
+    expect(mode.getByRole('button', { name: 'Direct', pressed: false })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Queue: Bottom' }));
+    expect(screen.getByRole('button', { name: 'Queue: Top' })).toBeInTheDocument();
+  });
+
   it('can submit the full form with Quick Templates disabled', async () => {
     localStorage.clear();
     featureGate.quickTemplatesEnabled = false;

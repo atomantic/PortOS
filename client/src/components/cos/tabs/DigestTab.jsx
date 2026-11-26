@@ -457,24 +457,26 @@ export default function DigestTab() {
                 <span className="text-xs text-gray-500">({currentDigest.issues.length})</span>
               </button>
               {expandedSections.issues && (
-                <div className="space-y-2">
+                <ul className="space-y-2" role="list">
                   {currentDigest.issues.map((issue, idx) => (
-                    <Banner
-                      key={idx}
-                      tone="error"
-                      size="md"
-                      align="center"
-                      actions={<span className="text-xs text-gray-500">{issue.count}x</span>}
-                    >
-                      <span className="font-medium">{issue.error}</span>
-                      {issue.tasks?.length > 0 && (
-                        <div className="text-xs text-gray-500 mt-2">
-                          Affected: {issue.tasks.map(t => t.description || t.id).join(', ')}
-                        </div>
-                      )}
-                    </Banner>
+                    <li key={idx}>
+                      <Banner
+                        role={undefined}
+                        tone="error"
+                        size="md"
+                        align="center"
+                        actions={<span className="text-xs text-gray-500">{issue.count}x</span>}
+                      >
+                        <span className="font-medium">{issue.error}</span>
+                        {issue.tasks?.length > 0 && (
+                          <div className="text-xs text-gray-500 mt-2">
+                            Affected: {issue.tasks.map(t => t.description || t.id).join(', ')}
+                          </div>
+                        )}
+                      </Banner>
+                    </li>
                   ))}
-                </div>
+                </ul>
               )}
             </div>
           )}

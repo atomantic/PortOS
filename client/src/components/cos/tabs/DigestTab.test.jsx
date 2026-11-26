@@ -205,6 +205,8 @@ it('reports digest disclosure state and names the task-type table', async () => 
   });
   renderTab();
   await screen.findByRole('button', { name: /^Insights/ });
+  expect(screen.getByText('Example error').closest('li')).toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
   for (const [name, initiallyExpanded] of [
     [/^Insights/, true],

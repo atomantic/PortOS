@@ -119,7 +119,7 @@ function BriefingConfig({ config, onChange }) {
             }`} />
             <div>
               <div className="font-medium">{opt.label}</div>
-              <div className="text-xs opacity-60">{opt.desc}</div>
+              <div className="text-xs text-port-text-muted">{opt.desc}</div>
             </div>
           </button>
         ))}
@@ -329,7 +329,7 @@ export default function JobCard({
 
   return (
     <div role="group" aria-label={`Job ${recordLabel}`} className={`flex flex-col bg-port-card border rounded-lg transition-colors ${
-      job.enabled ? 'border-port-border' : 'border-port-border/50 opacity-60'
+      job.enabled ? 'border-port-border' : 'border-port-border/50'
     }`}>
       <div className="flex items-start gap-3 p-4">
         <button
@@ -344,6 +344,7 @@ export default function JobCard({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-white font-medium truncate">{job.name}</span>
+            {!job.enabled && <span className="px-1.5 py-0.5 bg-port-bg text-port-text-muted text-xs rounded">Disabled</span>}
             {isDue && (
               <span className="px-1.5 py-0.5 bg-port-warning/20 text-port-warning text-xs rounded">Due</span>
             )}

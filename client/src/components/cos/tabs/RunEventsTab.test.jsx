@@ -134,7 +134,8 @@ describe('RunEventsTab', () => {
     const user = userEvent.setup();
     renderTab();
 
-    await user.click(await screen.findByText('run-a'));
+    await user.click(await screen.findByRole('button', { name: /^run-a/, current: false }));
+    expect(screen.getByRole('button', { name: /^run-a/, current: true })).toBeInTheDocument();
 
     expect(api.getRunEventDiagnostic).toHaveBeenCalledWith('run-a', { silent: true });
   });

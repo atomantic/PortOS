@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import { sortByLabel } from '../../lib/sortByLabel.js';
 import { Plus, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket, GitBranch, GitMerge, GitPullRequest, ShieldCheck, Wand2 } from 'lucide-react';
 import ProviderModelSelector from '../ProviderModelSelector';
@@ -230,10 +231,11 @@ function TaskTypeFields({ form, compact, queueFirst }) {
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-port-border/40">
-        <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-400">
-          <span>Execution:</span>
+        <div role="group" aria-label="Execution mode" className="flex flex-wrap items-center gap-1.5 text-xs text-gray-400">
+          <span aria-hidden="true">Execution:</span>
           <button
             type="button"
+            aria-pressed={state.orchestrationMode === 'direct'}
             onClick={() => setField('orchestrationMode', 'direct')}
             className={`px-2.5 py-1 rounded text-xs transition-colors ${state.orchestrationMode === 'direct' ? 'bg-port-accent text-white font-medium' : 'bg-port-border/40 text-gray-400 hover:text-white'}`}
           >
@@ -241,6 +243,7 @@ function TaskTypeFields({ form, compact, queueFirst }) {
           </button>
           <button
             type="button"
+            aria-pressed={state.orchestrationMode === 'orchestrated'}
             onClick={() => setField('orchestrationMode', 'orchestrated')}
             className={`px-2.5 py-1 rounded text-xs transition-colors ${state.orchestrationMode === 'orchestrated' ? 'bg-port-accent text-white font-medium' : 'bg-port-border/40 text-gray-400 hover:text-white'}`}
           >
@@ -632,6 +635,8 @@ function TaskCompletionFields({ form }) {
 }
 
 function TaskTemplateFields({ form, compact }) {
+  const positionId = useId();
+  const positionLabelId = `${positionId}-label`;
   const { state, quickTemplatesEnabled, setField, saveAsTemplate } = form;
   return (
     <>
@@ -653,8 +658,14 @@ function TaskTemplateFields({ form, compact }) {
       {!compact && (
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-2 mr-auto">
-            <label htmlFor="add-position" className="text-sm text-gray-400">Queue:</label>
-            <button id="add-position" type="button" onClick={() => setField('addToTop', !state.addToTop)} className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm transition-colors min-h-[44px] ${state.addToTop ? 'bg-port-accent/20 text-port-accent border border-port-accent/50' : 'bg-port-bg text-gray-400 border border-port-border'}`} aria-pressed={state.addToTop}>
+            <span id={positionLabelId} className="text-sm text-gray-400">Queue:</span>
+            <button
+              id={positionId}
+              aria-labelledby={`${positionLabelId} ${positionId}`}
+              type="button"
+              onClick={() => setField('addToTop', !state.addToTop)}
+              className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm transition-colors min-h-[44px] ${state.addToTop ? 'bg-port-accent/20 text-port-accent border border-port-accent/50' : 'bg-port-bg text-gray-400 border border-port-border'}`}
+            >
               {state.addToTop ? 'Top' : 'Bottom'}
             </button>
           </div>
