@@ -447,6 +447,7 @@ describe('auth service', () => {
   });
 
   it('stores sessions hashed at rest (plaintext token never lands in the file)', async () => {
+    const { statSync } = await import('fs');
     const { join } = await import('path');
     const auth = await import('./auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
@@ -454,6 +455,7 @@ describe('auth service', () => {
     const raw = readFileSync(join(tempRoot, 'auth-sessions.json'), 'utf8');
     expect(raw).not.toContain(token);
     expect(raw).toContain('tokenHash');
+    expect(statSync(join(tempRoot, 'auth-sessions.json')).mode & 0o777).toBe(0o600);
   });
 
   it('revokes old sessions when a step after the hash write fails (#12018)', async () => {
