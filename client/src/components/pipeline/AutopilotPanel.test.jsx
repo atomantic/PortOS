@@ -128,6 +128,36 @@ describe('AutopilotPanel', () => {
     expect(listPipelineIssues).toHaveBeenCalledWith('sA', { silent: true });
   });
 
+  it('discards a finished run’s refresh when the user switches series before it resolves', async () => {
+    getPipelineAutopilotStatus.mockResolvedValueOnce({ active: true, start: { runId: 'rA', mode: 'execute' } });
+    let resolveSeries;
+    let resolveIssues;
+    getPipelineSeries.mockImplementationOnce(() => new Promise((resolve) => { resolveSeries = resolve; }));
+    listPipelineIssues.mockImplementationOnce(() => new Promise((resolve) => { resolveIssues = resolve; }));
+    const view = renderPanel({ id: 'sA', targetFormat: 'comic' });
+    await screen.findByRole('button', { name: /pause safely/i });
+
+    sseLatest = { type: 'complete', runId: 'rA' };
+    rerenderSeries(view, 'sA');
+    await waitFor(() => expect(listPipelineIssues).toHaveBeenCalledWith('sA', { silent: true }));
+
+    sseLatest = null;
+    const onSeriesUpdate = vi.fn();
+    const onIssuesUpdate = vi.fn();
+    view.rerender(
+      <MemoryRouter>
+        <AutopilotPanel series={{ id: 'sB', targetFormat: 'comic' }} onSeriesUpdate={onSeriesUpdate} onIssuesUpdate={onIssuesUpdate} />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      resolveSeries({ id: 'sA' });
+      resolveIssues([{ id: 'issue-a' }]);
+    });
+
+    expect(onSeriesUpdate).not.toHaveBeenCalled();
+    expect(onIssuesUpdate).not.toHaveBeenCalled();
+  });
+
   it('does not activate series B when a start for series A resolves after the switch', async () => {
     let resolveStart;
     startPipelineAutopilot.mockImplementationOnce(() => new Promise((resolve) => { resolveStart = resolve; }));
