@@ -209,8 +209,12 @@ export const registerVoiceHandlers = (socket) => {
       }
     } catch (err) {
       if (signal.aborted) return;
-      console.error(`🎙️  ${errorStage} failed: ${err.message}`);
-      socket.emit('voice:error', { stage: errorStage, message: err.message });
+      if (err.code === 'HOST_CONTROL_FORBIDDEN') {
+        socket.emit('voice:error', { stage: errorStage, code: err.code, message: err.message });
+      } else {
+        console.error(`🎙️  ${errorStage} failed: ${err.message}`);
+        socket.emit('voice:error', { stage: errorStage, message: err.message });
+      }
       socket.emit('voice:idle', { reason: 'error' });
     }
   };
