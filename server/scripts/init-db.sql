@@ -1827,6 +1827,8 @@ CREATE TABLE IF NOT EXISTS pipeline_issues (
 
 CREATE INDEX IF NOT EXISTS idx_issues_series ON pipeline_issues (series_id, number) WHERE deleted = FALSE;
 
+CREATE INDEX IF NOT EXISTS idx_issues_series_all ON pipeline_issues (series_id, number);
+
 CREATE INDEX IF NOT EXISTS idx_issues_season ON pipeline_issues (season_id) WHERE season_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_issues_updated ON pipeline_issues (updated_at);

@@ -169,6 +169,34 @@ describe.skipIf(!runDb)('pipeline issues DB adapter round-trip', () => {
     expect(ordered.map((r) => r.id)).toEqual(['iss-a', 'iss-b']);
   });
 
+  it('plans selective raw series reads using the index that includes tombstones', async () => {
+    // Give the planner enough distinct series to prefer an index at normal cost settings.
+    await query(`INSERT INTO pipeline_issues (id, series_id, number)
+      SELECT 'iss-fixture-' || n, 'ser-fixture-' || n, 1 FROM generate_series(1, 10000) AS n`);
+    const live = I('iss-live');
+    const tombstone = I('iss-dead', { seriesId: 'ser-2', deleted: true });
+    await db.writeRaw(live.id, live);
+    await db.writeRaw(tombstone.id, tombstone);
+    await query('ANALYZE pipeline_issues');
+
+    const querySpy = vi.spyOn(dbConnection, 'query');
+    try {
+      expect(await db.listRawBySeries('ser-2')).toEqual([tombstone]);
+      expect(await db.listRawBySeriesIds(['ser-1', 'ser-2'])).toEqual(
+        expect.arrayContaining([live, tombstone]),
+      );
+      const calls = querySpy.mock.calls.slice();
+      expect(calls).toHaveLength(2);
+      for (const [sql, params] of calls) {
+        const { rows } = await query(`EXPLAIN ${sql}`, params);
+        const plan = rows.map((row) => row['QUERY PLAN']).join('\n');
+        expect(plan).toMatch(/(?:Index Scan using|Bitmap Index Scan on) idx_issues_series_all\b/);
+      }
+    } finally {
+      querySpy.mockRestore();
+    }
+  });
+
   it('listRawBySeriesIds returns only the requested series', async () => {
     await db.writeRaw('iss-1', I('iss-1', { seriesId: 'ser-1' }));
     await db.writeRaw('iss-2', I('iss-2', { seriesId: 'ser-2' }));
