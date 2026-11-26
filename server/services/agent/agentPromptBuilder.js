@@ -347,9 +347,8 @@ function fillReconcileAgentId(task, agentId) {
  *
  * - **Light** (`tui` / `cli`): minimal prompt — task description, attached
  *   context, screenshot paths, worktree/jira/pipeline coordinates, and the
- *   completion-workflow contract. Memory, AGENTS.md, digital twin, tools
- *   summary, planning context, skill templates, and compaction warnings are
- *   deliberately omitted because the agent can fetch them itself.
+ *   completion-workflow contract, plus eligible Memory and Digital Twin
+ *   context. Native agents load repository instructions and tools themselves.
  * - **Full** (`api`): kitchen-sink prompt with memory + AGENTS.md + digital
  *   twin + tools + skills + planning + git hygiene. The leading
  *   "# Chief of Staff Agent Briefing" header is dropped from both modes.
@@ -384,9 +383,9 @@ function fillReconcileAgentId(task, agentId) {
  *   `{ userPrompt, systemPrompt }` (see `buildLightContextPromptParts`) instead
  *   of a single string, for providers spawned with `--append-system-prompt-file`.
  *   Ignored on the full/api path, which always returns a string.
- * @param {object} [options.promptTrace] - Out-parameter: the full path sets
+ * @param {object} [options.promptTrace] - Out-parameter: both paths set
  *   `promptTrace.injectedMemories` to the `[{ id, version, relevance }]` list
- *   whose text went into the prompt. Untouched on the light path (no memory).
+ *   whose text went into the prompt.
  */
 // The app's "Use auto-merge" setting rides on the task metadata so every
 // merge-owning section reads one value; an explicit per-task choice wins.
@@ -541,35 +540,33 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
     codeReviewDefaults, defaultReviewers,
   });
 
-  if (LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) {
-    const forgeCli = await resolveManualForgeCli(workspaceDir, worktreeInfo, task);
-    const lightOptions = { isTui, providerId, providerCommand, providerModel, leanMode, agentId, defaultReviewers, codeReviewDefaults, localAgentLoopBody: localAgentLoopBodyForInline, localAgentLoopBodyPath, forgeCli, promptTrace: options.promptTrace || null, workflowScopeStagedPath };
+  const taskFlags = resolveTaskMetadataFlags(task, worktreeInfo);
+  // Both public-review postures must stay isolated from the install's private
+  // context, even when a sandboxed stage can run commands.
+  const skipPersonalContext = taskFlags.noCodeOutput || isPublicReviewRestrictedProfile(task.metadata?.executionProfile);
+  // Creative Director tasks supply their own creative tools and instructions.
+  const skipDevContext = !!task.metadata?.creativeDirector;
+  const [{ memorySection, digitalTwinSection, injectedMemories }, forgeCli, agentInstructionsSection] = await Promise.all([
+    skipPersonalContext ? { memorySection: null, digitalTwinSection: null, injectedMemories: [] } : loadPersonalContext(task, config),
+    hasFileTools ? resolveManualForgeCli(workspaceDir, worktreeInfo, task) : null,
+    hasFileTools || skipDevContext ? null : getAgentInstructionsContext(workspaceDir)
+      .catch(err => { console.log(`⚠️ Agent instructions retrieval failed: ${err.message}`); return null; }),
+  ]);
+  // Hand the memory lineage to the caller that creates the run record (#10495).
+  if (options.promptTrace) options.promptTrace.injectedMemories = injectedMemories;
+
+  if (hasFileTools) {
+    const lightOptions = {
+      isTui, providerId, providerCommand, providerModel, leanMode, agentId, defaultReviewers, codeReviewDefaults,
+      localAgentLoopBody: localAgentLoopBodyForInline, localAgentLoopBodyPath, forgeCli,
+      promptTrace: options.promptTrace || null, workflowScopeStagedPath, memorySection, digitalTwinSection,
+    };
     return finalizePrompt(options.split === true
       ? buildLightContextPromptParts(task, workspaceDir, worktreeInfo, lightOptions)
       : buildLightContextPrompt(task, workspaceDir, worktreeInfo, lightOptions));
   }
 
-  // Creative Director tasks (scene evaluation, treatment/plan run via API) judge
-  // generated content rather than writing PortOS code — shared below by both
-  // `skipDevContext` (the repo's instruction files plus memory / digital-twin /
-  // onboard-tools are pure noise for that prompt) and `noCodeOutput` (the
-  // deliverable is an HTTP PATCH, not a commit).
-  const isCreativeDirectorTask = !!task.metadata?.creativeDirector;
-  // Full path: API providers read no instruction file natively, so always include it —
-  // except for Creative Director tasks, per above. Memory, digital-twin, and the
-  // onboard-tools catalog are the same category of dev-oriented noise for a
-  // vision/PATCH task (#4650) — CD evaluate uses native Read + HTTP PATCH, and
-  // CD plan already receives creative-tool specs via `getToolSpecs()` in its
-  // own prompt, not this section.
-  const skipDevContext = isCreativeDirectorTask;
-  // Architect doctrine for an orchestrated run (#5992). '' for every direct-mode
-  // task, which is the default, so this is inert unless a profile is configured.
   const orchestrationSection = buildOrchestrationDoctrineSection(task);
-  const { memorySection, injectedMemories, agentInstructionsSection, digitalTwinSection } = await loadDeveloperContext(
-    task, config, workspaceDir, skipDevContext,
-  );
-  // Hand the memory lineage to the caller that creates the run record (#10495).
-  if (options.promptTrace) options.promptTrace.injectedMemories = injectedMemories;
 
   // Build context compaction section if task is retrying after a context-limit failure
   const compactionSection = task.metadata?.compaction?.needed ? buildCompactionSection(task) : '';
@@ -581,7 +578,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
     willOpenPR, claimFlow, portosMergesBranch, prCompletion, simplifyEnabled, isReadOnly,
     discardWorktree, noCodeOutput, externalRepositoryOutput, toolFreeReasoning, sentinelPayloadOutput, noChangeSuccess,
     isReviewLoopFollowUp, isWorktreeOnExistingBranch,
-  } = resolveTaskMetadataFlags(task, worktreeInfo);
+  } = taskFlags;
   const whenDone = task.metadata?.whenDone === 'commit-push' ? 'commit-push' : 'leave-uncommitted';
 
   // Build pipeline context section if this is a pipeline stage
@@ -820,26 +817,20 @@ function worktreeBranchSuffix(worktreeInfo, isWorktreeOnExistingBranch) {
   return isWorktreeOnExistingBranch ? ' *(pre-existing PR branch)*' : '';
 }
 
-/** Load independent developer context concurrently, unless this is a content-only task. */
-async function loadDeveloperContext(task, config, workspaceDir, skipDevContext) {
-  if (skipDevContext) {
-    return { memorySection: null, injectedMemories: [], agentInstructionsSection: null, digitalTwinSection: null };
-  }
+async function loadPersonalContext(task, config) {
   let injectedMemories = [];
   const twinMaxTokens = config.digitalTwin?.maxContextTokens || config.soul?.maxContextTokens;
-  const [memorySection, agentInstructionsSection, digitalTwinSection] = await Promise.all([
+  const [memorySection, digitalTwinSection] = await Promise.all([
     getMemorySection(task, {
       maxTokens: config.memory?.maxContextTokens || 2000,
       onInjected: (injected) => { injectedMemories = injected; },
     })
       .catch(err => { console.log(`⚠️ Memory retrieval failed: ${err.message}`); return null; }),
-    getAgentInstructionsContext(workspaceDir)
-      .catch(err => { console.log(`⚠️ Agent instructions retrieval failed: ${err.message}`); return null; }),
     // Empty when the Digital Twin 'auto-inject into CoS' setting is off. Omitting maxTokens lets the saved twin setting apply.
     getDigitalTwinForPrompt({ ...(twinMaxTokens ? { maxTokens: twinMaxTokens } : {}), personaId: 'active' })
       .catch(err => { console.log(`⚠️ Digital twin context retrieval failed: ${err.message}`); return null; }),
   ]);
-  return { memorySection, injectedMemories, agentInstructionsSection, digitalTwinSection };
+  return { memorySection, injectedMemories, digitalTwinSection };
 }
 
 /**
@@ -1066,13 +1057,11 @@ Begin working on the task now.`;
  * Build the **light-context** prompt for agents that have native filesystem
  * tools and agent-instruction loading (Claude Code, Codex, Antigravity — `tui` or `cli`).
  *
- * The agent already has direct access to the project, so we don't paste in:
- *   memory dumps, AGENTS.md contents, digital twin, tools summary,
- *   `.planning/` snippets, auto-matched skill templates, or compaction
- *   warnings. We just hand it the task, any user-attached context/screenshots/attachments,
- *   and the PortOS-specific contract bits it can't infer (worktree branch,
- *   JIRA ticket, pipeline predecessors, completion-sentinel protocol,
- *   review-loop follow-up procedure).
+ * Includes the task, attached context, eligible Memory and Digital Twin
+ * references, and workflow details the agent cannot infer from the checkout
+ * (such as the completion-sentinel protocol). Repository instructions, tools
+ * summaries, planning snippets, skill templates and compaction warnings stay
+ * out of this prompt.
  *
  * Falls back gracefully when worktree/jira/pipeline metadata is absent — only
  * the present sections render.
@@ -1085,7 +1074,7 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, option
 /**
  * Split variant of `buildLightContextPrompt` for providers with a real system
  * channel (Claude Code's `--append-system-prompt-file`): the task-specific
- * content (description, context, screenshots, attachments) becomes the user
+ * content (including Memory and Digital Twin references) becomes the user
  * prompt, and the PortOS operating contract (worktree/pipeline/JIRA
  * coordinates + completion workflow) rides in the system prompt where models
  * weight it as instructions rather than conversation. Section content is
@@ -1106,7 +1095,11 @@ This run must leave its changes in a DRAFT pull request for human review. This o
 
 const BEGIN_WORKING_LINE = 'Begin working on the task now.';
 
-function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = true, providerId = null, providerCommand = null, providerModel = null, leanMode = false, agentId = null, defaultReviewers, codeReviewDefaults, localAgentLoopBody = null, localAgentLoopBodyPath = null, forgeCli = null, promptTrace = null, workflowScopeStagedPath = null } = {}) {
+function buildLightContextSections(task, workspaceDir, worktreeInfo, {
+  isTui = true, providerId = null, providerCommand = null, providerModel = null, leanMode = false, agentId = null,
+  defaultReviewers, codeReviewDefaults, localAgentLoopBody = null, localAgentLoopBodyPath = null,
+  forgeCli = null, promptTrace = null, workflowScopeStagedPath = null, memorySection = null, digitalTwinSection = null,
+} = {}) {
   // Idempotent with the reconcile in buildAgentPrompt; also protects the
   // directly-exported buildLightContextPrompt/Parts entry points.
   task = reconcileSplitContext(task);
@@ -1223,6 +1216,8 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
 
   if (taskBlock.screenshots) taskSections.push(taskBlock.screenshots);
   if (taskBlock.attachments) taskSections.push(taskBlock.attachments);
+  if (memorySection) taskSections.push(memorySection);
+  if (digitalTwinSection) taskSections.push(digitalTwinSection);
 
   // --- Unattended run ----------------------------------------------------
   // First contract section, and unconditional: the light path is the one that

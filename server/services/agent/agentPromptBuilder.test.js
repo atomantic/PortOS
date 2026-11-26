@@ -23,10 +23,8 @@ vi.mock('os', async (importOriginal) => ({
   homedir: () => homeStub.dir,
 }));
 
-// Mock heavy dependencies used by the full (api) prompt path so the API-routing
-// regression test doesn't try to hit the memory DB, digital-twin services, or
-// disk-based slashdo loaders. Light-path tests don't invoke these at all, so
-// the mocks are no-ops for them.
+// Stub personal context retrieval so prompt tests never access the memory DB
+// or local Digital Twin documents.
 vi.mock('../memoryRetriever.js', () => ({
   getMemorySection: vi.fn().mockResolvedValue(null),
 }));
@@ -1031,16 +1029,14 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/You are an autonomous agent/);
     });
 
-    it('does NOT paste memory, AGENTS.md, digital-twin, tools-summary, planning, or skill blocks', () => {
-      // Light path is synchronous and reads NONE of these — proving it by
-      // checking the rendered output has no section headings for them.
-      const prompt = buildLightContextPrompt(makeTask({
-        metadata: { context: 'extra detail', app: 'comics' }
-      }), '/repo', null);
-      expect(prompt).not.toMatch(/## CLAUDE\.md Instructions/);
-      expect(prompt).not.toMatch(/## Relevant Memory/);
-      expect(prompt).not.toMatch(/## Digital Twin/);
-      expect(prompt).not.toMatch(/## Onboard Tools/);
+    it('omits repository instructions, tools, planning, and skill blocks', async () => {
+      vi.mocked(getToolsSummaryForPrompt).mockClear();
+      const prompt = await buildAgentPrompt(makeTask({
+        metadata: { context: 'extra detail', app: 'comics' },
+      }), {}, '/repo', null, { providerType: 'cli' });
+      expect(prompt).not.toContain('## Agent Instructions');
+      expect(getToolsSummaryForPrompt).not.toHaveBeenCalled();
+      expect(prompt).not.toContain('## Available Tools');
       expect(prompt).not.toMatch(/## Project Planning Context/);
       expect(prompt).not.toMatch(/## Task-Type Skill Guidelines/);
       expect(prompt).not.toMatch(/## Context Compaction Required/);
@@ -2952,6 +2948,87 @@ describe('unnecessary dispatch contract', () => {
   it('does not grant the contract based on task prose', () => {
     const prompt = buildLightContextPrompt(makeTask({ description: '[Auto] Investigate agent failure' }), '/r', null, {});
     expect(prompt).not.toContain('## Unnecessary dispatch investigation');
+  });
+});
+
+describe('buildAgentPrompt — Memory and Digital Twin context', () => {
+  const memorySection = 'Memory reference data: Prefer accessible controls';
+  const twinSection = 'Digital twin reference data: Prefer concise labels';
+  const injected = [{ id: 'mem-example', version: 2, relevance: 0.8 }];
+
+  it.each(['tui', 'cli'])('includes both references and records memory lineage for %s', async (providerType) => {
+    vi.mocked(getMemorySection).mockImplementationOnce(async (_task, { onInjected }) => {
+      onInjected(injected);
+      return memorySection;
+    });
+    vi.mocked(getDigitalTwinForPrompt).mockResolvedValueOnce(twinSection);
+    const promptTrace = {};
+    const prompt = await buildAgentPrompt(makeTask(), {}, '/r', null, { providerType, promptTrace });
+
+    expect(prompt).toContain(memorySection);
+    expect(prompt).toContain(twinSection);
+    expect(getDigitalTwinForPrompt).toHaveBeenLastCalledWith({ personaId: 'active' });
+    expect(promptTrace.injectedMemories).toEqual(injected);
+  });
+
+  it('includes memory alone when Twin auto-injection returns an empty section', async () => {
+    vi.mocked(getMemorySection).mockResolvedValueOnce(memorySection);
+    vi.mocked(getDigitalTwinForPrompt).mockResolvedValueOnce('');
+    const prompt = await buildAgentPrompt(makeTask(), {}, '/r', null, { providerType: 'tui' });
+    expect(prompt).toContain(memorySection);
+    expect(prompt).not.toContain('Digital twin reference data');
+  });
+
+  it('places both references after attachments in the split user prompt', async () => {
+    vi.mocked(getMemorySection).mockResolvedValueOnce(memorySection);
+    vi.mocked(getDigitalTwinForPrompt).mockResolvedValueOnce(twinSection);
+    const task = makeTask({ metadata: { attachments: [{ path: '/example/spec.md' }] } });
+    const { userPrompt, systemPrompt } = await buildAgentPrompt(task, {}, '/r', null, {
+      providerType: 'tui', providerCommand: 'claude', split: true,
+    });
+
+    const attachedPath = '- `/example/spec.md` (/example/spec.md)';
+    expect(userPrompt).toContain([attachedPath, memorySection, twinSection].join('\n\n'));
+    expect(systemPrompt).not.toContain(memorySection);
+    expect(systemPrompt).not.toContain(twinSection);
+    expect(systemPrompt).toContain(UNATTENDED_RUN_RULE);
+  });
+
+  describe.each(['tui', 'cli', 'api'])('%s task exclusions', (providerType) => {
+    it.each([
+      ['Creative Director', { creativeDirector: { kind: 'evaluate' } }],
+      ['no-code output', { noCodeOutput: true }],
+      ['tool-free public review', { executionProfile: 'public-review-gate' }],
+      ['sandboxed public review', { executionProfile: 'public-review-actions' }],
+    ])('skips both retrievals for %s', async (_label, metadata) => {
+      vi.mocked(getMemorySection).mockClear();
+      vi.mocked(getDigitalTwinForPrompt).mockClear();
+      const promptTrace = { injectedMemories: injected };
+      await buildAgentPrompt(makeTask({ metadata }), {}, '/r', null, { providerType, promptTrace });
+
+      expect(getMemorySection).not.toHaveBeenCalled();
+      expect(getDigitalTwinForPrompt).not.toHaveBeenCalled();
+      expect(promptTrace.injectedMemories).toEqual([]);
+    });
+  });
+
+  it.each([
+    ['Memory', getMemorySection, getDigitalTwinForPrompt, twinSection],
+    ['Digital twin context', getDigitalTwinForPrompt, getMemorySection, memorySection],
+  ])('omits a failed %s retrieval without changing the rest of the light prompt', async (label, failing, available, section) => {
+    const render = () => buildAgentPrompt(makeTask(), {}, '/r', null, { providerType: 'tui' });
+    vi.mocked(available).mockResolvedValueOnce(section);
+    const baseline = await render();
+    vi.mocked(available).mockResolvedValueOnce(section);
+    vi.mocked(failing).mockRejectedValueOnce(new Error('unavailable'));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(await render()).toBe(baseline);
+      expect(baseline).toContain(section);
+      expect(log).toHaveBeenCalledWith(`⚠️ ${label} retrieval failed: unavailable`);
+    } finally {
+      log.mockRestore();
+    }
   });
 });
 
