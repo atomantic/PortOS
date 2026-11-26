@@ -12,28 +12,25 @@
 import { spawn, spawnSync } from 'child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, rmSync, writeSync } from 'fs';
-import { readFile } from 'node:fs/promises';
 import { constants, homedir, tmpdir } from 'os';
 import { setTimeout as delay } from 'timers/promises';
 import { execFileSync } from 'child_process';
 import { dirname, join, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../server/lib/aiToolkit/internal/windowsSafeSpawn.js';
-import { buildCiTestPlan, getAlwaysRunTests, PROMPT_STAGE_GUARD, FULL_SUITE_SHARDS, structuralTestsFor, TOOLING_TESTS } from './ci-test-plan.js';
-import { EXCLUSIVE_TESTS } from './vitestCiPool.js';
-import { toRepoPath } from './lib/workspaceTests.js';
-import { guardRunnerFor, isGuardTest } from './lib/guardScanners.js';
+import { buildCiTestPlan, getAlwaysRunTests, PROMPT_STAGE_GUARD, FULL_SUITE_SHARDS } from './ci-test-plan.js';
+import { isGuardTest } from './lib/guardScanners.js';
 import { assertNodeVersion } from './checkNodeVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { needsBrowserFidelity } from './lib/browserFidelity.js';
-import { BROWSER_SUITES } from './lib/browserSuites.js';
-import { resolveDbTestFiles } from './lib/dbTestFiles.js';
-import { moduleSpecifiers, resolveModuleCandidates } from './lib/moduleGraph.js';
 import { cosWorkerBudget, readMaxConcurrentAgents } from './lib/cosWorkerBudget.js';
 import { ACTIONLINT_VERSION, probeActionlint, selectWorkflowFiles } from './lib/actionlint.js';
 import { CI_GUARD_BUDGET_MS, GUARD_BUDGET_MS, describeGuardDurations, overBudgetGuards, readGuardDurations } from './lib/guardBudget.js';
+import { downgradeFullPlan, focusedLocalPlan, RELATED_SUITE_CAP, SECOND_HOP_RUN_CAP } from './lib/pregateFocusedPlan.js';
 import { buildPregateReport, createWorkingTreeHasher, PREGATE_REPORT_PATH, writePregateReport } from './lib/pregateReport.js';
 import { dependencyConsistencyProblems } from './lib/workspaceDependencies.js';
+
+export { downgradeFullPlan, focusedLocalPlan, RELATED_SUITE_CAP, SECOND_HOP_RUN_CAP };
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const IS_WIN32 = process.platform === 'win32';
@@ -314,271 +311,6 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, baseRef, sk
   }
 
   return stages;
-}
-
-/**
- * Replace a full-suite plan with the always-run guards.
- *
- * A full plan is CI's answer to "this diff could break anything", which is
- * correct there and unusable here — the complete suite is far longer than
- * anyone runs before a push, so the honest local default is the subset that
- * catches always-run and diff-selected structural guards, plus a line saying
- * what was dropped. The resource flags stay as the planner set them so the
- * summary can still name what CI will run; `--full` opts back in.
- */
-export function downgradeFullPlan(plan, trackedFiles, changedFiles = []) {
-  const tracked = new Set(trackedFiles);
-  const structuralGuards = structuralTestsFor(changedFiles, tracked);
-  const serverStructuralGuards = structuralGuards.filter((path) => !path.startsWith('client/'));
-  const clientStructuralGuards = structuralGuards.filter((path) => path.startsWith('client/'));
-  // Client tree guards join the local gate by their suffix, the same name the
-  // planner selects them by, so there is no second list (guards under hooks/ included).
-  // Selected like CI (ciPlanRules): only when the plan is full or a client source changed.
-  const touchesClient = plan.full || changedFiles.some((path) => /^client\/src\/.*\.jsx?$/.test(path));
-  const clientGuards = touchesClient
-    ? trackedFiles.filter((path) => path.startsWith('client/src/') && isGuardTest(path))
-    : [];
-  return {
-    ...plan,
-    full: false,
-    server: {
-      mode: 'files',
-      files: [...new Set([...getAlwaysRunTests(trackedFiles).filter((path) => tracked.has(path)), ...serverStructuralGuards])],
-      sources: [],
-    },
-    client: {
-      mode: clientGuards.length > 0 || clientStructuralGuards.length > 0 ? 'files' : 'skip',
-      files: [...new Set([...clientGuards, ...clientStructuralGuards])],
-      sources: [],
-    },
-    // A scoped plan already lints only its changed files; only a full plan lints everything.
-    lint: plan.full ? { mode: 'full', files: [] } : plan.lint,
-  };
-}
-
-/** Suites one changed source may add through a differently named import or mock, per hop. */
-export const RELATED_SUITE_CAP = 25;
-
-/** Suites the second hop may add to one run, across every changed source (#16863). */
-export const SECOND_HOP_RUN_CAP = 60;
-
-// Suites that cost tens of seconds each (nested runners, real git, the planner's own matrix):
-// the Vitest pool already runs them one at a time, and the planner selects the tooling ones
-// for a diff under their owner paths. A transitive edge is too weak a reason to pay for them here.
-const HEAVY_SUITES = new Set([...TOOLING_TESTS, ...EXCLUSIVE_TESTS.map(path => toRepoPath('server', path))]);
-
-const MODULE_FILE = /\.[cm]?[jt]sx?$/;
-const escapeRegExp = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const baseName = path => path.slice(path.lastIndexOf('/') + 1).replace(MODULE_FILE, '');
-
-// Overlap file reads without queuing an open for every file in the checkout.
-const FOCUSED_READ_LIMIT = 32;
-
-async function scanTexts(files, readText, visit) {
-  let next = 0;
-  const workers = Array.from({ length: Math.min(files.length, FOCUSED_READ_LIMIT) }, async () => {
-    while (next < files.length) {
-      const file = files[next++];
-      const text = await readText(file);
-      if (text != null) visit(file, text);
-    }
-  });
-  await Promise.all(workers);
-}
-
-/**
- * Text a file must contain to import `target`: its base name, or for a directory
- * index (`dir/index.js`) the directory name or a bare `'.'`/`'..'` specifier,
- * because `import './dir'` never spells "index".
- */
-function importNeedles(target) {
-  const name = baseName(target);
-  if (name !== 'index') return [escapeRegExp(name)];
-  const dir = target.split('/').slice(-2, -1)[0];
-  return [escapeRegExp(name), ...(dir ? [escapeRegExp(dir)] : []), '[\'"`]\\.{1,2}[\'"`]'];
-}
-
-/**
- * Which of `files` reference each of `targets` through a relative import,
- * `import()` or `vi.mock` specifier that resolves to it, read through the
- * shared module graph's extractor and resolver (`scripts/lib/moduleGraph.js`).
- * A file the tokenizer cannot read counts as a referrer of every target it
- * spells, so an unknown edge set widens the local run instead of hiding a suite.
- *
- * @returns {Map<string, string[]>} target -> sorted, de-duplicated referrers
- */
-async function referrersOf(targets, files, readText) {
-  if (!targets.length) return new Map();
-  const referrers = new Map(targets.map(target => [target, new Set()]));
-  const known = new Set(targets);
-  // Cheap prefilter: a resolved specifier always spells one of the target's needles.
-  const needles = new Map(targets.map(target => [target, new RegExp(importNeedles(target).join('|'))]));
-  const spelled = new RegExp([...new Set(targets.flatMap(importNeedles))].join('|'));
-  await scanTexts(files, readText, (file, text) => {
-    if (!spelled.test(text)) return;
-    let specs;
-    try {
-      specs = moduleSpecifiers(text, file);
-    } catch {
-      for (const [target, needle] of needles) if (target !== file && needle.test(text)) referrers.get(target).add(file);
-      return;
-    }
-    for (const spec of [...specs.statics, ...specs.deferred, ...specs.mocked]) {
-      for (const target of resolveModuleCandidates(file, spec, known)) {
-        if (target !== file) referrers.get(target).add(file);
-      }
-    }
-  });
-  return new Map([...referrers].map(([target, set]) => [target, [...set].sort()]));
-}
-
-/**
- * Which of `files` spell each changed non-module file as a quoted string literal, which is how a
- * test reads it (`readFileSync(join(ROOT, 'package.json'))`) without importing it. A test that
- * spells the full repo-relative path matches. A bare base name matches only when it cannot be
- * confused with another file: always for a repo-root file (its base name is its path), otherwise
- * only while at most RELATED_SUITE_CAP suites spell it, so a nested `server/package.json`
- * edit is not answered by every suite that mentions `'package.json'`. Tests that spell the
- * full path or more of the changed files come first when the cap bites.
- *
- * @returns {Map<string, string[]>} changed file -> ranked, de-duplicated readers
- */
-async function textReaders(changed, files, readText) {
-  const quoted = name => new RegExp(`['"\`](?:\\.{0,2}/)?${escapeRegExp(name)}['"\`]`);
-  const spells = new Map();
-  for (const path of changed) {
-    const byPath = quoted(path);
-    const byName = quoted(path.slice(path.lastIndexOf('/') + 1));
-    spells.set(path, { byPath, byName, root: !path.includes('/'), full: new Set(), name: new Set() });
-  }
-  await scanTexts(files, readText, (file, text) => {
-    for (const entry of spells.values()) {
-      if (entry.byPath.test(text)) entry.full.add(file);
-      else if (entry.byName.test(text)) entry.name.add(file);
-    }
-  });
-  const weight = new Map();
-  for (const { full, name } of spells.values()) for (const file of [...full, ...name]) weight.set(file, (weight.get(file) ?? 0) + 1);
-  const order = (a, b) => (weight.get(b) - weight.get(a)) || (a < b ? -1 : a > b ? 1 : 0);
-  return new Map([...spells].map(([path, { root, full, name }]) => {
-    const byName = root || name.size <= RELATED_SUITE_CAP ? [...name] : [];
-    return [path, [...[...full].sort(order), ...byName.sort(order)]];
-  }));
-}
-
-/**
- * Local selection owns the edited tests, same-stem siblings, and tests within
- * two import hops of a changed source (#16863). Hop one is a test whose
- * relative import, `import()` or `vi.mock` specifier resolves to the source (a
- * route suite mocking the service it fronts); hop two is a test that references
- * a non-test module that does (a prompt-assembly suite reaching a prompt
- * section through the builder that imports it). A changed non-module file
- * (JSON, a shell or PowerShell script, a doc) has no import edge, so a third
- * selector adds suites that spell its path, or an unambiguous name, as a quoted
- * string literal (`textReaders`). Deeper reach and broader integration coverage
- * remain with hosted CI, which walks the whole graph.
- *
- * Caps keep the local gate short: each hop adds at most RELATED_SUITE_CAP
- * suites per changed source (the text selector per changed file), and the second hop at most SECOND_HOP_RUN_CAP per
- * run, nearest hop first (hop one is never displaced) and never a HEAVY_SUITES
- * member. Whatever a cap leaves out is recorded in `relatedOverflow` and
- * reported as skipped.
- */
-export async function focusedLocalPlan(plan, trackedFiles, changedFiles, readText = readRepoText) {
-  const local = downgradeFullPlan(plan, trackedFiles, changedFiles);
-  const tracked = new Set(trackedFiles);
-  const tests = trackedFiles.filter(path => /\.test\.[cm]?[jt]sx?$/.test(path));
-  const resourceTests = new Set([...BROWSER_SUITES, ...resolveDbTestFiles(tests)]);
-  const unitTests = new Set(tests.filter(path => !resourceTests.has(path) && !/(?:\.(?:db|browser|live)\.test\.|\/db\.test\.)/.test(path)));
-  const focused = new Set();
-  const changedSources = [];
-  const changedData = [];
-  for (const path of changedFiles) {
-    if (unitTests.has(path)) focused.add(path);
-    if (!MODULE_FILE.test(path)) {
-      if (tracked.has(path)) changedData.push(path);
-      continue;
-    }
-    if (/\.test\./.test(path)) continue;
-    if (tracked.has(path)) changedSources.push(path);
-    const stem = path.replace(MODULE_FILE, '');
-    for (const suffix of ['.test.js', '.test.jsx', '.test.ts', '.test.tsx', '.test.mjs', '.test.cjs']) {
-      const test = `${stem}${suffix}`;
-      if (unitTests.has(test)) focused.add(test);
-    }
-  }
-  const relatedOverflow = [];
-  const testTexts = new Map();
-  const readWithTestMemo = path => {
-    // Only test files are scanned again by later passes.
-    if (!unitTests.has(path)) return readText(path);
-    if (!testTexts.has(path)) testTexts.set(path, readText(path));
-    return testTexts.get(path);
-  };
-  const addCapped = (source, tests, hop, budget = RELATED_SUITE_CAP) => {
-    const fresh = tests.filter(test => !focused.has(test));
-    const take = fresh.slice(0, Math.min(RELATED_SUITE_CAP, budget));
-    take.forEach(test => { focused.add(test); });
-    if (fresh.length > take.length) relatedOverflow.push({ source, count: fresh.length - take.length, hop });
-    return take.length;
-  };
-  const candidateTests = () => [...unitTests].filter(path => !focused.has(path));
-  if (changedSources.length) {
-    // Direct test references and intermediary modules share one read pass.
-    const changed = new Set(changedSources);
-    const modules = trackedFiles.filter(path => MODULE_FILE.test(path) && !/\.test\./.test(path) && !changed.has(path));
-    const firstHop = await referrersOf(changedSources, [...candidateTests(), ...modules], readWithTestMemo);
-    const importerSources = new Map();
-    for (const [source, referrers] of firstHop) {
-      const tests = [];
-      for (const file of referrers) {
-        if (unitTests.has(file)) tests.push(file);
-        else importerSources.set(file, [...(importerSources.get(file) ?? []), source]);
-      }
-      addCapped(source, tests, 1);
-    }
-
-    // Hop two: tests that reference a non-test module importing a changed source.
-    const viaImporter = await referrersOf([...importerSources.keys()].sort(), candidateTests().filter(test => !HEAVY_SUITES.has(test)), readWithTestMemo);
-    // An importer's own suite (same stem) is its owner, so it outranks the rest when a cap bites.
-    const secondHop = new Map(changedSources.map(source => [source, new Map()]));
-    for (const [importer, tests] of viaImporter) {
-      const stem = `${importer.replace(MODULE_FILE, '')}.`;
-      for (const source of importerSources.get(importer)) {
-        for (const test of tests) secondHop.get(source).set(test, Math.min(secondHop.get(source).get(test) ?? 1, test.startsWith(stem) ? 0 : 1));
-      }
-    }
-    let budget = SECOND_HOP_RUN_CAP;
-    for (const [source, ranked] of secondHop) {
-      const ordered = [...ranked].sort(([a, rankA], [b, rankB]) => rankA - rankB || (a < b ? -1 : a > b ? 1 : 0)).map(([test]) => test);
-      budget -= addCapped(source, ordered, 2, budget);
-    }
-  }
-  // Text selector: tests that read a changed non-module file leave no import edge, so they are
-  // found by the file's spelled path or name instead (#16866). Runs after the import hops, so a
-  // suite selected for an import never counts against it.
-  if (changedData.length) {
-    const candidates = candidateTests().filter(test => !HEAVY_SUITES.has(test));
-    const found = await textReaders(changedData, candidates, readWithTestMemo);
-    for (const [source, tests] of found) addCapped(source, tests, 'text');
-  }
-  // A structural guard check runs only inside its runner (#16996): the Vitest configs
-  // exclude its directory, so a changed or source-reading check selects the runner.
-  const runnable = [...focused].map(path => guardRunnerFor(path) ?? path).filter(path => tracked.has(path));
-  for (const scope of ['server', 'client']) {
-    const files = [...new Set([...local[scope].files, ...runnable.filter(path => scope === 'client' ? path.startsWith('client/') : !path.startsWith('client/'))])];
-    local[scope] = { mode: files.length ? 'files' : 'skip', files, sources: [] };
-  }
-  local.relatedOverflow = relatedOverflow;
-  return local;
-}
-
-async function readRepoText(path) {
-  try {
-    return await readFile(join(REPO_ROOT, path), 'utf8');
-  } catch {
-    return null;
-  }
 }
 
 const git = (args, cwd = REPO_ROOT, input) => execFileSync('git', args, {
@@ -1074,6 +806,160 @@ function pregatePlanFromRaw(raw) {
   };
 }
 
+async function resolveInitialPlan({ options, baseSha, changedFiles, indexFiles, workingTreeFiles }) {
+  const changedOnDisk = new Set(workingTreeFiles);
+  const trackedFiles = indexFiles.filter(path => !changedOnDisk.has(path) || existsSync(join(REPO_ROOT, path)));
+  const presentFiles = [...new Set([...trackedFiles, ...workingTreeFiles.filter(path => existsSync(join(REPO_ROOT, path)))])].sort();
+  const downgraded = !options.full && !options.guardsOnly;
+  // The pure planner supplies direct resource risk and suite ownership for the
+  // focused summary. The hosted reach/closure/input walks belong to --full.
+  let plan;
+  if (options.full) {
+    plan = pregatePlanFromRaw(runCiTestPlan(baseSha, changedFiles));
+  } else if (options.guardsOnly) {
+    plan = { reason: 'structural guards', browser: { files: [] } };
+  } else {
+    const { browserFiles, ...summary } = buildCiTestPlan(changedFiles, {
+      trackedFiles: presentFiles,
+      linuxContainmentInputs: [],
+      supercolliderLiveInputs: [],
+      dockerContainmentLiveInputs: [],
+    });
+    plan = { ...summary, browser: { files: browserFiles } };
+  }
+  console.log(`📋 ${changedFiles.length} changed file(s) — ${plan.reason}.`);
+
+  const guardPlan = downgradeFullPlan(plan, downgraded ? presentFiles : trackedFiles, changedFiles);
+  const structuralFiles = new Set([...guardPlan.server.files, ...guardPlan.client.files]);
+  if (options.guardsOnly) plan = { ...guardPlan, lint: { mode: 'skip', files: [] } };
+  if (downgraded) {
+    plan = await focusedLocalPlan(plan, presentFiles, changedFiles, undefined, { basePlan: { ...guardPlan } });
+    console.log('ℹ️ Local validation: lint, structural guards and focused tests only. Hosted CI owns broad coverage; pass --full for the complete CI plan locally.');
+  }
+
+  describeBrowserSelection(plan.browser.files).forEach((line) => { console.log(line); });
+
+  return { plan, guardPlan, structuralFiles, downgraded };
+}
+
+/** Stages for the suites that stay here, with actions for covered prerequisites. */
+function planPregateStages(plan, { options, downgraded, baseSha, baseRef, guardPlan }, prerequisites = {}, databaseEnv = {}) {
+  // actionlint is a local tool probe, not a resource suite: it needs no Chrome or DB.
+  const tools = { actionlint: workflowLintSelected(plan) ? probeActionlint() : null, ...prerequisites };
+  const uncovered = uncoveredSuites(plan, { options, downgraded, prerequisites: tools });
+  const skip = Object.fromEntries(uncovered.map(({ suite }) => [suite, true]));
+  const stages = resolvePlanStages(plan, { skipLint: options.skipLint, baseSha, baseRef, skip, databaseEnv,
+    guardPlan: options.full ? guardPlan : null });
+  return { uncovered, stages: options.guardsOnly
+    ? stages.filter(stage => stage.suite === 'server' || stage.suite === 'client')
+      .map(stage => ({ ...stage, env: { ...stage.env, PORTOS_TEST_MEMO: 'off' } }))
+    : stages };
+}
+
+const stageResult = (stage) => ({ ...stage, command: describeStageCommand(stage), status: 'not-run', durationMs: 0 });
+
+async function runStageBatch(results, { owner, structuralFiles, initialHashError }) {
+  for (const result of results) {
+    if (owner.signal || (initialHashError && result.suite !== 'scan')) break;
+    console.log(`▶️ ${result.name}`);
+    const timedGuards = new Set(result.files?.filter(file => structuralFiles.has(file) || isGuardTest(file)));
+    const durationsDir = timedGuards.size ? mkdtempSync(join(tmpdir(), 'portos-pregate-durations-')) : null;
+    const durationsPath = durationsDir && join(durationsDir, 'durations.json');
+    if (durationsPath) result.env = { ...result.env, PORTOS_PREGATE_DURATIONS_PATH: durationsPath };
+    const started = Date.now();
+    const outcome = await runStage(result, owner);
+    result.durationMs = Date.now() - started;
+    if (durationsDir) {
+      // The runner reports all test durations in mixed stages. Only charge
+      // structural files and their individual runner checks to the guard budget.
+      result.guardDurations = Object.fromEntries(Object.entries(readGuardDurations(durationsPath))
+        .filter(([name]) => timedGuards.has(name.split(' > ', 1)[0])));
+      rmSync(durationsDir, { recursive: true, force: true });
+    }
+    const verdict = stageOutcomeVerdict(result, outcome);
+    if (verdict) return verdict;
+    if (durationsDir) reportSlowGuards(result);
+    result.status = 'passed';
+    result.exitCode = 0;
+    console.log(`✔️ ${result.name} passed in ${formatDuration(result.durationMs)}.`);
+  }
+  return null;
+}
+
+async function runPregateStages(plan, stagePlanOptions, initialStages, runOptions) {
+  const { owner, initialHashError } = runOptions;
+  const { downgraded } = stagePlanOptions;
+  const initialResults = initialStages.stages.map(stageResult);
+  const firstDeferred = initialResults.findIndex((result) => !result.guard && result.suite !== 'scan');
+
+  // Even prerequisite probes may start Chrome. Defer them until every early
+  // guard has passed, retaining not-run resource stages on an early failure.
+  const early = firstDeferred === -1 ? initialResults : initialResults.slice(0, firstDeferred);
+  const earlyVerdict = await runStageBatch(early, runOptions);
+  if (firstDeferred === -1 || earlyVerdict || owner.signal || initialHashError) {
+    return { results: initialResults, uncovered: initialStages.uncovered, verdict: earlyVerdict };
+  }
+
+  const { prerequisites, databaseEnv } = await probeResourceSuites(plan, stagePlanOptions);
+  const { uncovered, stages } = planPregateStages(plan, stagePlanOptions, prerequisites, databaseEnv);
+  announceUncovered(uncovered, downgraded);
+  const deferred = stages.slice(firstDeferred).map(stageResult);
+  const verdict = await runStageBatch(deferred, runOptions);
+  return { results: [...early, ...deferred], uncovered, verdict };
+}
+
+function finalizePregateReceipt(plan, { results, uncovered, verdict }, {
+  options, repo, tree, hashWorkingTree, initiallyClean, initialHashError,
+  downgraded, maxWorkers, startedAt, owner,
+}) {
+  const { baseRef, baseSha, head: headSha } = repo;
+  let { failure, exitCode } = verdict ?? { failure: null, exitCode: 0 };
+  // A signal after the last stage ran (e.g. during its group sweep) leaves the
+  // completed run's receipt; it is reported below and still ends the process.
+  if (owner.signal && !failure && results.some((stage) => stage.status === 'not-run')) {
+    writeSync(2, `❌ Pregate incomplete: owner_pid=${process.pid} received_signal=${owner.signal} between stages.\n`);
+    failure = `❌ Pregate incomplete: cancelled by ${owner.signal} before every stage ran.`;
+    exitCode = 128 + constants.signals[owner.signal];
+  }
+
+  let treeAfterRun = null;
+  try {
+    if (initialHashError) throw new Error(initialHashError);
+    const after = initiallyClean ? worktreeStatus() : null;
+    treeAfterRun = after?.head === headSha && after.files.length === 0 && after.conflicts.length === 0
+      ? repo.tree
+      : hashWorkingTree();
+  } catch (error) {
+    failure ??= `❌ Cannot hash the working tree for the receipt: ${error.message}`;
+    if (exitCode === 0) exitCode = 2;
+  }
+  const report = buildPregateReport({
+    plan,
+    options: { base: baseRef, full: options.full, skipLint: options.skipLint, skipDb: options.skipDb, skipBrowser: options.skipBrowser, skipBuild: options.skipBuild, skipSmoke: options.skipSmoke },
+    base: { ref: baseRef, sha: baseSha },
+    head: { sha: headSha },
+    tree,
+    treeAfterRun,
+    stages: results,
+    skipped: uncovered,
+    downgraded,
+    runtime: { node: process.version, platform: process.platform, arch: process.arch, maxWorkers },
+    startedAt,
+    finishedAt: new Date().toISOString(),
+  });
+  if (!options.guardsOnly) writePregateReport(REPO_ROOT, report);
+  // Synchronous: a piped stderr is written asynchronously, and the self-signal
+  // below would drop these lines before they flush.
+  if (tree !== null && !report.treeStable && !failure) {
+    failure = `❌ The working tree changed while pregate ran (${tree.slice(0, 12)} → ${treeAfterRun?.slice(0, 12) ?? 'unhashable'}); rerun on the resulting tree.`;
+    exitCode = 1;
+  }
+  if (failure) writeSync(2, `${failure}\n${options.guardsOnly ? '' : `📄 Receipt: ${PREGATE_REPORT_PATH}\n`}`);
+  else if (owner.signal) writeSync(2, `⚠️ Received ${owner.signal} after every stage passed; the receipt records that completed run.\n`);
+
+  return { failure, exitCode };
+}
+
 async function main() {
   let options;
   try {
@@ -1120,55 +1006,13 @@ async function main() {
     }
   }
 
-  const changedOnDisk = new Set(workingTreeFiles);
-  const trackedFiles = indexFiles.filter(path => !changedOnDisk.has(path) || existsSync(join(REPO_ROOT, path)));
-  const presentFiles = [...new Set([...trackedFiles, ...workingTreeFiles.filter(path => existsSync(join(REPO_ROOT, path)))])].sort();
-  const downgraded = !options.full && !options.guardsOnly;
-  // The pure planner supplies direct resource risk and suite ownership for the
-  // focused summary. The hosted reach/closure/input walks belong to --full.
-  let plan;
-  if (options.full) {
-    plan = pregatePlanFromRaw(runCiTestPlan(baseSha, changedFiles));
-  } else if (options.guardsOnly) {
-    plan = { reason: 'structural guards', browser: { files: [] } };
-  } else {
-    const { browserFiles, ...summary } = buildCiTestPlan(changedFiles, {
-      trackedFiles: presentFiles,
-      linuxContainmentInputs: [],
-      supercolliderLiveInputs: [],
-      dockerContainmentLiveInputs: [],
-    });
-    plan = { ...summary, browser: { files: browserFiles } };
-  }
-  console.log(`📋 ${changedFiles.length} changed file(s) — ${plan.reason}.`);
-
-  const guardPlan = downgradeFullPlan(plan, downgraded ? presentFiles : trackedFiles, changedFiles);
-  const structuralFiles = new Set([...guardPlan.server.files, ...guardPlan.client.files]);
-  if (options.guardsOnly) plan = { ...guardPlan, lint: { mode: 'skip', files: [] } };
-  if (downgraded) {
-    plan = await focusedLocalPlan(plan, presentFiles, changedFiles);
-    console.log('ℹ️ Local validation: lint, structural guards and focused tests only. Hosted CI owns broad coverage; pass --full for the complete CI plan locally.');
-  }
-
-  describeBrowserSelection(plan.browser.files).forEach((line) => { console.log(line); });
-
-  /** Stages for the suites that stay here, after the uncovered ones are announced. */
-  const planStages = (prerequisites, databaseEnv) => {
-    // actionlint is a local tool probe, not a resource suite: it needs no Chrome or DB.
-    const tools = { actionlint: workflowLintSelected(plan) ? probeActionlint() : null, ...prerequisites };
-    const uncovered = uncoveredSuites(plan, { options, downgraded, prerequisites: tools });
-    const skip = Object.fromEntries(uncovered.map(({ suite }) => [suite, true]));
-    const stages = resolvePlanStages(plan, { skipLint: options.skipLint, baseSha, baseRef, skip, databaseEnv,
-      guardPlan: options.full ? guardPlan : null });
-    return { uncovered, stages: options.guardsOnly
-      ? stages.filter(stage => stage.suite === 'server' || stage.suite === 'client')
-        .map(stage => ({ ...stage, env: { ...stage.env, PORTOS_TEST_MEMO: 'off' } }))
-      : stages };
-  };
-
+  const { plan, guardPlan, structuralFiles, downgraded } = await resolveInitialPlan({
+    options, baseSha, changedFiles, indexFiles, workingTreeFiles,
+  });
+  const stagePlanOptions = { options, downgraded, baseSha, baseRef, guardPlan };
   if (options.planOnly) {
     // Prerequisites are probed at run time; here every selected suite is a stage.
-    const { uncovered, stages } = planStages({}, {});
+    const { uncovered, stages } = planPregateStages(plan, stagePlanOptions);
     announceUncovered(uncovered, downgraded);
     stages.forEach((stage) => {
       console.log(`• ${stage.name}: ${describeStageCommand(stage)}`);
@@ -1188,100 +1032,19 @@ async function main() {
   }
   const { PORTOS_PREGATE_MAX_WORKERS: maxWorkers } = pregateWorkerEnv(process.env, dirname(repo.commonDir));
 
-  let { uncovered, stages } = planStages({}, {});
-
+  const initialStages = planPregateStages(plan, stagePlanOptions);
   const startedAt = new Date().toISOString();
   const owner = installOwnerCancellation();
   if (tree !== null) console.log(`🌳 Validating working tree ${tree.slice(0, 12)} at HEAD ${headSha.slice(0, 9)}.`);
 
-  const stageResult = (stage) => ({ ...stage, command: describeStageCommand(stage), status: 'not-run', durationMs: 0 });
-  const results = stages.map(stageResult);
-  let exitCode = 0;
-  let failure = null;
-  let probed = false;
-  for (let index = 0; index < results.length; index += 1) {
-    if (failure || owner.signal) break;
-    let result = results[index];
-    if (initialHashError && result.suite !== 'scan') break;
-    // Even prerequisite probes may start Chrome. Defer them until every early
-    // guard has passed, retaining not-run resource stages on an early failure.
-    if (!probed && !result.guard && result.suite !== 'scan') {
-      const { prerequisites, databaseEnv } = await probeResourceSuites(plan, { options, downgraded });
-      ({ uncovered, stages } = planStages(prerequisites, databaseEnv));
-      announceUncovered(uncovered, downgraded);
-      results.splice(index, results.length - index, ...stages.slice(index).map(stageResult));
-      probed = true;
-      result = results[index];
-      if (!result || owner.signal) break;
-    }
-    console.log(`▶️ ${result.name}`);
-    const timedGuards = new Set(result.files?.filter(file => structuralFiles.has(file) || isGuardTest(file)));
-    const durationsDir = timedGuards.size ? mkdtempSync(join(tmpdir(), 'portos-pregate-durations-')) : null;
-    const durationsPath = durationsDir && join(durationsDir, 'durations.json');
-    if (durationsPath) result.env = { ...result.env, PORTOS_PREGATE_DURATIONS_PATH: durationsPath };
-    const started = Date.now();
-    const outcome = await runStage(result, owner);
-    result.durationMs = Date.now() - started;
-    if (durationsDir) {
-      // The runner reports all test durations in mixed stages. Only charge
-      // structural files and their individual runner checks to the guard budget.
-      result.guardDurations = Object.fromEntries(Object.entries(readGuardDurations(durationsPath))
-        .filter(([name]) => timedGuards.has(name.split(' > ', 1)[0])));
-      rmSync(durationsDir, { recursive: true, force: true });
-    }
-    const verdict = stageOutcomeVerdict(result, outcome);
-    if (verdict) {
-      ({ failure, exitCode } = verdict);
-    } else {
-      if (durationsDir) reportSlowGuards(result);
-      result.status = 'passed';
-      result.exitCode = 0;
-      console.log(`✔️ ${result.name} passed in ${formatDuration(result.durationMs)}.`);
-    }
-  }
-
-  // A signal after the last stage ran (e.g. during its group sweep) leaves the
-  // completed run's receipt; it is reported below and still ends the process.
-  if (owner.signal && !failure && results.some((stage) => stage.status === 'not-run')) {
-    writeSync(2, `❌ Pregate incomplete: owner_pid=${process.pid} received_signal=${owner.signal} between stages.\n`);
-    failure = `❌ Pregate incomplete: cancelled by ${owner.signal} before every stage ran.`;
-    exitCode = 128 + constants.signals[owner.signal];
-  }
-
-  let treeAfterRun = null;
-  try {
-    if (initialHashError) throw new Error(initialHashError);
-    const after = initiallyClean ? worktreeStatus() : null;
-    treeAfterRun = after?.head === headSha && after.files.length === 0 && after.conflicts.length === 0
-      ? repo.tree
-      : hashWorkingTree();
-  } catch (error) {
-    failure ??= `❌ Cannot hash the working tree for the receipt: ${error.message}`;
-    if (exitCode === 0) exitCode = 2;
-  }
-  const report = buildPregateReport({
-    plan,
-    options: { base: baseRef, full: options.full, skipLint: options.skipLint, skipDb: options.skipDb, skipBrowser: options.skipBrowser, skipBuild: options.skipBuild, skipSmoke: options.skipSmoke },
-    base: { ref: baseRef, sha: baseSha },
-    head: { sha: headSha },
-    tree,
-    treeAfterRun,
-    stages: results,
-    skipped: uncovered,
-    downgraded,
-    runtime: { node: process.version, platform: process.platform, arch: process.arch, maxWorkers },
-    startedAt,
-    finishedAt: new Date().toISOString(),
+  const stageRun = await runPregateStages(plan, stagePlanOptions, initialStages, {
+    owner, structuralFiles, initialHashError,
   });
-  if (!options.guardsOnly) writePregateReport(REPO_ROOT, report);
-  // Synchronous: a piped stderr is written asynchronously, and the self-signal
-  // below would drop these lines before they flush.
-  if (tree !== null && !report.treeStable && !failure) {
-    failure = `❌ The working tree changed while pregate ran (${tree.slice(0, 12)} → ${treeAfterRun?.slice(0, 12) ?? 'unhashable'}); rerun on the resulting tree.`;
-    exitCode = 1;
-  }
-  if (failure) writeSync(2, `${failure}\n${options.guardsOnly ? '' : `📄 Receipt: ${PREGATE_REPORT_PATH}\n`}`);
-  else if (owner.signal) writeSync(2, `⚠️ Received ${owner.signal} after every stage passed; the receipt records that completed run.\n`);
+  const { results, uncovered } = stageRun;
+  const { failure, exitCode } = finalizePregateReceipt(plan, stageRun, {
+    options, repo, tree, hashWorkingTree, initiallyClean, initialHashError,
+    downgraded, maxWorkers, startedAt, owner,
+  });
 
   owner.release();
   // Every owned group has settled and the receipt is written; end the way the
