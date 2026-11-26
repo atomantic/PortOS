@@ -248,6 +248,8 @@ export const catalogDdl = [
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_catalog_merge_source_active
        ON catalog_ingredient_merges (source_id) WHERE restored_at IS NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_merge_survivor
+       ON catalog_ingredient_merges (survivor_id)`,
     `CREATE OR REPLACE FUNCTION catalog_resolve_ingredient_id(requested_id TEXT)
        RETURNS TEXT LANGUAGE SQL STABLE AS $$
          SELECT COALESCE((SELECT survivor_id FROM catalog_ingredient_merges

@@ -19,6 +19,7 @@ import { query } from '../../lib/db.js';
 import { resolveRefs } from '../catalog/catalogRefResolver.js';
 import { assertCatalogIdentityWritable, assertCatalogAssociationRemovable, assertCatalogRelationRemovable } from './identityAccess.js';
 import { announceAssetsChanged, rowToRef, rowToSource, rowToIngredient, MEMBERS_CTE } from './shared.js';
+import { INGREDIENT_LIGHT_COLS } from './ingredients.js';
 import { catalogReferenceRole } from '../../lib/catalog/catalogTypes.js';
 import { toPgJson } from '../../lib/pgJson.js';
 
@@ -52,7 +53,7 @@ export async function listSourcesForIngredient(ingredientId) {
     `SELECT s.*, sc.title AS scrap_title
        FROM catalog_identity_read_sources s
        LEFT JOIN catalog_scraps sc ON sc.id = s.scrap_id
-      WHERE catalog_canonical_ingredient_id(s.ingredient_id) = catalog_canonical_ingredient_id($1)`,
+      WHERE s.ingredient_id = ANY(catalog_identity_member_ids($1))`,
     [ingredientId],
   );
   return result.rows.map((row) => ({ ...rowToSource(row), scrapTitle: row.scrap_title ?? null }));
@@ -244,12 +245,14 @@ const exportIngredientCte = `WITH active AS (
 ) `;
 
 export async function listIngredientsForRef(refKind, refId, { preserveIdentity = false, includeRetained = false } = {}) {
+  const ingredientCols = INGREDIENT_LIGHT_COLS.split(', ').map((column) => `i.${column}`).join(', ');
   const result = await query(
-    `${includeRetained ? exportIngredientCte : ''}SELECT DISTINCT i.*, r.role
+    `${includeRetained ? exportIngredientCte : ''}SELECT DISTINCT ON (i.id, r.role) ${ingredientCols}, r.role
        FROM ${includeRetained ? 'export_ingredients' : 'catalog_ingredients'} i
        JOIN ${includeRetained ? exportRefRows : preserveIdentity ? 'catalog_ingredient_refs' : 'catalog_identity_read_refs'} r ON ${preserveIdentity ? 'r.ingredient_id' : 'catalog_canonical_ingredient_id(r.ingredient_id)'} = i.id
        WHERE r.ref_kind = $1 AND r.ref_id = $2
-         AND r.deleted = false AND i.deleted = false${preserveIdentity ? '' : ' AND i.id = catalog_canonical_ingredient_id(i.id)'}`,
+         AND r.deleted = false AND i.deleted = false${preserveIdentity ? '' : ' AND i.id = catalog_canonical_ingredient_id(i.id)'}
+       ORDER BY i.id, r.role`,
     [refKind, refId],
   );
   return result.rows.map((row) => ({ ingredient: rowToIngredient(row), role: row.role }));
