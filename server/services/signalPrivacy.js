@@ -1,7 +1,8 @@
 import { z } from 'zod';
 // Machine-local exclusions share a queue with sync so a completed privacy change
 // cannot be followed by an older in-flight batch writing excluded records.
-import { dataPath, atomicWrite, readJSONFileStrict, unreadableStoreError } from '../lib/fileUtils.js';
+import { dataPath, readJSONFileStrict, unreadableStoreError } from '../lib/fileUtils.js';
+import { writeSecureJson } from '../lib/secureAuthStore.js';
 import { identityFromHandle } from '../lib/tribeMatch.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 
@@ -35,7 +36,7 @@ export async function writeBlocklist({ handles, conversationIds }) {
     conversationIds: unique(conversationIds, (v) => String(v).trim()),
     updatedAt: new Date().toISOString(),
   };
-  await atomicWrite(dataPath('signal-blocklist.json'), JSON.stringify(payload, null, 2));
+  await writeSecureJson(dataPath('signal-blocklist.json'), payload);
   return payload;
 }
 export function filterBlockedMessages(messages, blocklist) {

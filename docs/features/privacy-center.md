@@ -68,6 +68,16 @@ The inventory returns UUIDs, dates and scorer classifications. For a known self-
 
 Custom or incomplete scorer templates may appear as `unclassified`. When the original fact is gone or the template is unrecognized, use the date and UUID to identify the intended item. Submit `{"action":"delete","kind":"run","id":"<run-uuid>"}` to delete that completed Digital Twin run, or use `"kind":"feedback"` to erase that excerpt while retaining its rating. Mutations report the number of changed items. After a failure, repeat the operation to finish the remaining changes.
 
+## Purge imported Signal activity by handle
+
+Call `POST /api/signal/blocklist/handles` with one handle or an array of handles. Pass `purgeExisting: true` to erase matching imported activity and any touchpoints and audit snapshots for conversations this leaves empty. Signal Desktop keeps the original messages.
+
+```sh
+node scripts/portos-api.js post /api/signal/blocklist/handles '{"handles":["+12025550123"],"purgeExisting":true}'
+```
+
+The response includes the saved blocklist, newly `added` handles, and the counts of `purged` activity events and removed `touchpoints`. Repeating the request also checks handles already on the list.
+
 ## Security Model & Data Flow
 
 ```mermaid

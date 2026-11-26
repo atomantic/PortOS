@@ -3,7 +3,8 @@ import { z } from 'zod';
 // cannot be followed by an older in-flight batch writing excluded records.
 // The reader refuses unreadable/malformed bytes (instead of serving an empty
 // list) so sync fails closed and a write never clobbers a store it could not read.
-import { dataPath, atomicWrite, readJSONFileStrict, unreadableStoreError } from '../lib/fileUtils.js';
+import { dataPath, readJSONFileStrict, unreadableStoreError } from '../lib/fileUtils.js';
+import { writeSecureJson } from '../lib/secureAuthStore.js';
 import { identityFromHandle } from '../lib/tribeMatch.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 
@@ -43,6 +44,6 @@ export async function readBlocklist() {
 
 export async function writeBlocklist(handles) {
   const payload = { handles: uniqueKeys(handles), updatedAt: new Date().toISOString() };
-  await atomicWrite(dataPath(BLOCKLIST_FILE), JSON.stringify(payload, null, 2));
+  await writeSecureJson(dataPath(BLOCKLIST_FILE), payload);
   return payload;
 }

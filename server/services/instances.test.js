@@ -287,7 +287,7 @@ describe('instances.js', () => {
       expect(secure).toMatchObject({ transport: 'tailcat', protocol: 'https' });
       expect(plain).toMatchObject({ transport: 'tailcat', protocol: 'http' });
       expect(classic).not.toHaveProperty('protocol');
-      expect(atomicWrite).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ peers: [secure, plain, classic] }));
+      expect(atomicWrite).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ peers: [secure, plain, classic] }), { mode: 0o600 });
     });
 
     it('logs and skips the self-announce when instances data becomes unreadable (#12978)', async () => {
@@ -1974,7 +1974,7 @@ describe('instances.js', () => {
         address: '127.0.0.1', port: 15555, host: null, transport: 'tailcat', status: 'online'
       });
       expect(result.peer.directions).toEqual(['outbound', 'inbound']);
-      expect(atomicWrite).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ peers: [result.peer] }));
+      expect(atomicWrite).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ peers: [result.peer] }), { mode: 0o600 });
     });
 
     it.each(['localhost', 'api.localhost', '127.0.0.1', '169.254.169.254'])(

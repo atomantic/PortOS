@@ -15,6 +15,7 @@ import { TTS_ENGINE_IDS } from './voiceEngines.js';
 import { cosToolCallSchema } from './cos/cosToolContracts.js';
 import { agentContextMcpInboundSchema } from './agent/agentContextValidation.js';
 import { settingsSlicePatchSchema } from './settingsValidation.js';
+import { signalBlocklistHandlesSchema } from './signalValidation.js';
 import {
   gitBranchBodySchema, gitBranchComparisonBodySchema, gitCommitBodySchema, gitCommitsBodySchema,
   gitDeleteBranchBodySchema, gitDiffBodySchema, gitOptionalBranchBodySchema, gitPathBodySchema,
@@ -49,6 +50,19 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
         400: { description: 'Invalid path, partial settings, or interpreter', 'x-portos-error-codes': ['VALIDATION_ERROR', 'INVALID_PYTHON_PATH'] },
         403: { description: 'Caller lacks host authority for a protected change', 'x-portos-error-codes': ['HOST_CONTROL_FORBIDDEN'] },
         500: { description: 'Persisted settings could not be read or written', 'x-portos-error-codes': ['INTERNAL_ERROR'] },
+      },
+    },
+  },
+  '/api/signal/blocklist/handles': {
+    post: {
+      summary: 'Block Signal handles and optionally purge imported activity',
+      description: 'Add handles to the local blocklist. With purgeExisting, erase matching imported activity and the touchpoints and audit snapshots for conversations left empty.',
+      requestBody: jsonBody(signalBlocklistHandlesSchema),
+      responses: {
+        200: { description: 'Saved blocklist, added handles, and purge counts' },
+        400: { description: 'Invalid request body', 'x-portos-error-codes': ['VALIDATION_ERROR'] },
+        403: { description: 'Caller lacks operator access', 'x-portos-error-codes': ['HOST_CONTROL_FORBIDDEN'] },
+        500: { description: 'Blocklist or activity update failed', 'x-portos-error-codes': ['UNREADABLE_STORE', 'INTERNAL_ERROR'] },
       },
     },
   },
