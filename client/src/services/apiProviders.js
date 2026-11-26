@@ -75,9 +75,10 @@ export const setActiveProvider = (id) => request('/providers/active', {
   method: 'PUT',
   body: JSON.stringify({ id })
 }).then(invalidateAfter);
-export const createProvider = (data) => request('/providers', {
+export const createProvider = (data, options = {}) => request('/providers', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options,
 }).then(invalidateAfter);
 export const updateProvider = (id, data, options = {}) => request(`/providers/${id}`, {
   method: 'PUT',
