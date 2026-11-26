@@ -3,6 +3,7 @@ import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { Toaster, toast } from '../../ui/Toast';
+import { deleteRun, deleteFailedRuns } from '../../../services/apiRuns.js';
 import RunsTab, { runLogProcessName } from './RunsTab';
 
 vi.mock('../../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
@@ -80,6 +81,55 @@ describe('RunsTab accessibility', () => {
       await user.tab();
       expect(control).toHaveFocus();
     }
+  });
+
+  it('requires a separate confirmation to stop and delete a running run', async () => {
+    const user = userEvent.setup();
+    deleteRun.mockResolvedValueOnce({ success: true });
+    renderTab();
+    const row = within(await screen.findByTestId('run-row-running-example'));
+    const deleteButton = () => row.getByRole('button', { name: /^Delete run/ });
+
+    deleteButton().focus();
+    await user.keyboard('{Enter}');
+    const confirmation = within(row.getByRole('group', { name: /^Confirm stop and delete run/ }));
+    expect(confirmation.getByText('Stop and delete?')).toBeVisible();
+    expect(row.queryByRole('button', { name: /^Stop run/ })).not.toBeInTheDocument();
+    await user.keyboard('{Enter}');
+    expect(deleteRun).not.toHaveBeenCalled();
+
+    await user.click(confirmation.getByRole('button', { name: 'Cancel' }));
+    expect(deleteButton()).toBeVisible();
+    expect(deleteRun).not.toHaveBeenCalled();
+
+    await user.click(deleteButton());
+    await user.click(row.getByRole('button', { name: 'Delete', exact: true }));
+    expect(deleteRun).toHaveBeenCalledExactlyOnceWith(runningRun.id);
+    expect(screen.queryByTestId('run-row-running-example')).not.toBeInTheDocument();
+  });
+
+  it('describes the install-wide scope and requires confirmation before clearing failed runs', async () => {
+    const user = userEvent.setup();
+    deleteFailedRuns.mockResolvedValueOnce({ deletedCount: 20 });
+    renderTab();
+    const clear = await screen.findByRole('button', { name: 'Clear Failed', exact: true });
+    const question = 'Delete every failed run on this install? This removes their prompts and output.';
+
+    await user.click(clear);
+    const confirmation = screen.getByRole('group', { name: question });
+    expect(confirmation).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(deleteFailedRuns).not.toHaveBeenCalled();
+
+    await user.click(within(confirmation).getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByTestId('run-row-failed-example')).toBeVisible();
+    expect(deleteFailedRuns).not.toHaveBeenCalled();
+
+    await user.click(clear);
+    await user.click(screen.getByRole('button', { name: 'Delete failed runs' }));
+    expect(deleteFailedRuns).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('run-row-failed-example')).not.toBeInTheDocument();
+    expect(screen.getByTestId('run-row-running-example')).toBeVisible();
   });
 
   it('copies the selected execution ID and announces success', async () => {

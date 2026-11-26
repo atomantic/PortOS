@@ -111,6 +111,7 @@ describe('RunsTab ?run= deep link', () => {
     api.deleteRun.mockResolvedValue({ ok: true });
     api.getRuns.mockResolvedValue({ runs: [RUNS[1]] });
     await act(async () => { fireEvent.click(within(screen.getByTestId('run-row-run-a')).getByRole('button', { name: 'Delete run demo (run-a)' })); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Delete', exact: true })); });
     await act(async () => { finishStale({ runs: RUNS }); });
     expect(screen.queryByText('first prompt')).not.toBeInTheDocument();
     expect(screen.getByText('second prompt')).toBeInTheDocument();
@@ -239,6 +240,7 @@ describe('RunsTab ?run= deep link', () => {
     renderTab('/cos/runs');
     expect(await screen.findByText('Showing the newest 2 of 3 runs')).toBeInTheDocument();
     await act(async () => { fireEvent.click(screen.getByTestId('delete-run-run-a')); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Delete', exact: true })); });
     expect(screen.getByText('Showing the newest 1 of 2 runs')).toBeInTheDocument();
   });
 
