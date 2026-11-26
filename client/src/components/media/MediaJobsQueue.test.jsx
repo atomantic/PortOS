@@ -1445,6 +1445,31 @@ it('keeps edited prompt text when the retry is refused', async () => {
   expect(prompt).toHaveValue('  edited  ');
 });
 
+it.each([
+  [{ guidanceScale: 3.25 }, /CFG Scale/],
+  [{ steps: 151 }, /Steps/],
+])('submits only the prompt change with saved sampler values %o', async (samplerParams, field) => {
+  const job = {
+    id: 'failed-video-sampler', kind: 'video', status: 'failed',
+    params: { mode: 'text', prompt: 'original prompt', ...samplerParams },
+  };
+  listQueueMediaJobs.mockResolvedValue([job]);
+  const user = userEvent.setup();
+  render(<MediaJobsQueue kind="video" />);
+  await expandReel(user);
+  await user.click(await screen.findByLabelText('Edit and retry'));
+
+  const samplerInput = screen.getByLabelText(field);
+  expect(samplerInput.checkValidity()).toBe(false);
+
+  const prompt = screen.getByRole('textbox', { name: /^prompt$/i });
+  await user.clear(prompt);
+  await user.type(prompt, 'revised prompt');
+  await user.click(await findEnabledByRole('button', { name: /Retry with changes/i }));
+
+  expect(retryMediaJob).toHaveBeenCalledWith(job.id, { prompt: 'revised prompt' }, { silent: true });
+});
+
 it('submits a style-only video retry with an empty authored prompt', async () => {
   const job = { id: 'video-style-only', kind: 'video', status: 'failed', params: { mode: 'grok', prompt: 'Woodcut', retryPrompt: '' } };
   listQueueMediaJobs.mockResolvedValue([job]);
