@@ -1,4 +1,5 @@
 /** Read and validate immutable composition documents and shipped templates. */
+import { readLayeredEngine } from './layeredEngineSource.js';
 import { createHash } from 'node:crypto';
 import { lstat, readdir, readFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -229,8 +230,10 @@ export async function collectTemplateFiles(templateId) {
   if (!MUSIC_VIDEO_DOCUMENT_TEMPLATES.includes(templateId)) throw refuse('Unknown composition template', 'VALIDATION_ERROR', 400);
   const { files } = await collectTree(documentTemplateDirectory(templateId), { excludeTests: true });
   if (templateId === 'layered') {
+    const data = await readLayeredEngine();
     // Export and browser preview use the same classic script as the native client.
     files.push({ rel: 'cameraRig.js', abs: fileURLToPath(SHIPPED_CAMERA_RIG), size: (await stat(SHIPPED_CAMERA_RIG)).size });
+    return files.map(file => file.rel === 'engine.js' ? { rel: file.rel, data, size: data.length } : file);
   }
   return files;
 }
@@ -242,7 +245,7 @@ export async function collectTemplateFiles(templateId) {
  */
 export async function readTemplateDocumentFiles(templateId = 'layered') {
   const files = await collectTemplateFiles(templateId);
-  return new Map((await withSharedImageEffects(await withSharedLyricType(files))).map((file) => [file.rel, { abs: file.abs, size: file.size }]));
+  return new Map((await withSharedImageEffects(await withSharedLyricType(files))).map(({ rel, ...file }) => [rel, file]));
 }
 
 /**

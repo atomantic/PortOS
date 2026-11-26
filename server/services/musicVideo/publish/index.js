@@ -7,6 +7,7 @@
  * preparation runs in a serialized, dedicated browser tab. Existing drafts can
  * be discarded or replaced.
  */
+import { ACCOUNT_OPTION } from '../../../lib/musicVideo/musicVideoPublishAccount.js';
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
 import { stat } from 'node:fs/promises';
@@ -210,7 +211,6 @@ async function withCovers(target, payload, deps) {
 }
 
 /** Options named once under Where you post: DistroKid's artist, Substack's publication. */
-const ACCOUNT_OPTION = { distrokid: 'artistName', substack: 'publication' };
 function withPlatformDefaults(target, options, platforms) {
   const key = ACCOUNT_OPTION[target];
   if (!key || options?.[key]) return options;

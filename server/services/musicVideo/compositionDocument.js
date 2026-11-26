@@ -1,3 +1,4 @@
+import { readLayeredEngine } from './layeredEngineSource.js';
 import { createRequire } from 'node:module';
 import { generatedCanvasPlaybackEngine } from './generatedCanvasPlayback.js';
 import { generatedThreePlaybackEngine } from './generatedThreePlayback.js';
@@ -317,7 +318,7 @@ export async function stageGeneratedDocument(projectId, generatedFiles, { verify
   const index = await readFile(join(TEMPLATE_ROOT, 'layered', 'index.html'), 'utf8');
   const marker = '<script src="engine.js"></script>';
   if (!index.includes(marker)) throw new Error('Layered template has no engine script');
-  const originalEngine = await readFile(join(TEMPLATE_ROOT, 'layered', 'engine.js'));
+  const originalEngine = files.find(file => file.rel === 'engine.js').data;
   const staged = files.filter((file) => file.rel !== 'index.html' && file.rel !== 'engine.js');
   staged.push({ rel: 'engine.js', data: generatedCanvasPlaybackEngine(originalEngine) },
     { rel: 'engine-reference.js', data: originalEngine },
@@ -381,7 +382,7 @@ export function upgradeDocumentEngine(projectId, directory) {
     const dir = await requireDocument(project);
     const { files } = await collectTree(dir);
     const engine = files.find(file => file.rel === 'engine.js');
-    const shipped = await readFile(join(TEMPLATE_ROOT, 'layered', 'engine.js'));
+    const shipped = await readLayeredEngine();
     const prior = engine ? await readFile(engine.abs) : null;
     if (!prior) throw refuse('This document has no supported layered engine', 'COMPOSITION_ENGINE_CUSTOM', 409);
     const generated = project.composition.document.source?.kind === 'generated';

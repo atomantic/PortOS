@@ -1,3 +1,4 @@
+import { readLayeredEngine } from '../../layeredEngineSource.js';
 import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -6,7 +7,7 @@ import { browserSuiteCanRun, resolveTestChrome } from '../../../../lib/browserSu
 import { startOwnedBrowserFixture } from '../../../../test/browserFixture.js';
 import { gateAutoReview } from '../../autoReviewJudge.js';
 
-const engine = readFileSync(new URL('./engine.js', import.meta.url), 'utf8');
+const engine = (await readLayeredEngine()).toString('utf8');
 const lyricType = readFileSync(new URL('../shared/lyricType.js', import.meta.url), 'utf8');
 
 const chrome = resolveTestChrome();

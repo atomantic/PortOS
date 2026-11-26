@@ -1,4 +1,5 @@
 /** Revision-bound creative approvals. Technical renders never imply approval. */
+import { GUIDE_MIME_TYPES } from '../../lib/musicVideo/musicVideoGuideMimeTypes.js';
 import { randomUUID } from 'node:crypto';
 import { canonicalSnapshotChecksum as hash } from '../../lib/snapshotChecksum.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -633,7 +634,6 @@ function characterReferenceAdvice(project) {
 
 const ART_GUIDE_FIELDS = [['cast', 'Cast guide'], ['environments', 'Environment guide'],
   ['visualLanguage', 'Visual guide and mood board'], ['motionLanguage', 'Motion guide']];
-const GUIDE_MIME_TYPES = ['text/html', 'image/png', 'image/jpeg'];
 
 // Art direction: open change requests, every guide written, and a visual sheet the render mode accepts.
 function artDirectionProblems(project, review, draft) {

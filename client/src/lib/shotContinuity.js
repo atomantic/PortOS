@@ -15,13 +15,7 @@
 // `visual.shot-continuity` editorial check also runs, so the inline warning and
 // the manuscript-review finding can never disagree. Only the composer below is
 // client-only (the server emits findings in a different shape).
-import { findAxisReversals, findShotTypeMonotony } from '../../../server/lib/editorial/shotContinuity.js';
-
-
-
-// Screen-direction → reader-facing label, mirroring the server check's
-// DIRECTION_LABEL so the inline warning and the editorial-run finding read the same.
-const DIRECTION_LABEL = { left: 'screen-left', right: 'screen-right', neutral: 'head-on' };
+import { findAxisReversals, findShotTypeMonotony, DIRECTION_LABEL } from '../../../server/lib/editorial/shotContinuity.js';
 
 /**
  * Compose the inline, render-gating continuity warnings for ONE storyboard scene

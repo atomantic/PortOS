@@ -1,3 +1,4 @@
+import { DOCUMENT_PALETTE } from '../../../../server/lib/musicVideo/musicVideoDocumentPalette.js';
 import { documentCameraView } from '../../../../server/lib/musicVideo/musicVideoDocumentCamera.js';
 import { narrativeFrameState } from '../../../../server/lib/musicVideo/musicVideoNarrativeEvents.js';
 import { imageEffectState, IMAGE_EFFECT_FOG_COLOR } from '../../../../server/lib/musicVideo/musicVideoImageEffects.js';
@@ -14,7 +15,7 @@ export function createDocumentTemplateDrawing(canvas, data, rig) {
   const U = Math.min(W, H) / 1080;
   const MV = data;
   const style = data.composition?.style || {};
-  const C = { ink: '#07090a', paper: style.color || '#eef1ea', dim: 'rgba(238,241,234,.62)', faint: 'rgba(238,241,234,.28)', accent: '#ff5a1f', ok: '#b8d63a', alert: '#ff2a2a' };
+  const C = { ...DOCUMENT_PALETTE, paper: style.color || DOCUMENT_PALETTE.paper };
   const F = { stencil: px => `900 ${px}px "MV Stencil", Impact, sans-serif`, mono: (px, w = 400) => `${w} ${px}px "MV Mono", Menlo, monospace` };
   const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
   const lerp = (a, b, k) => a + (b - a) * k;

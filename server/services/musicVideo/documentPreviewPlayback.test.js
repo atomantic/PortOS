@@ -1,3 +1,4 @@
+import { readLayeredEngine } from './layeredEngineSource.js';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -18,6 +19,7 @@ afterAll(async () => { await Promise.all(roots.map(root => rm(root, { recursive:
 async function staged() {
   const root = await mkdtemp(join(tmpdir(), 'preview-playback-contract-')); roots.push(root);
   await cp(join(templates, 'layered'), root, { recursive: true });
+  await writeFile(join(root, 'engine.js'), await readLayeredEngine());
   await cp(join(templates, 'shared'), root, { recursive: true });
   await cp(new URL('../../lib/musicVideo/cameraRig.js', import.meta.url), join(root, 'cameraRig.js'));
   await cp(new URL('../../lib/musicVideo/musicVideoImageEffects.js', import.meta.url), join(root, 'musicVideoImageEffects.js'));
@@ -27,13 +29,14 @@ async function staged() {
 describe('recognized staged composition playback capability', () => {
   it('adapts only the disposable canonical copy, preserving the exact seek body and source template', async () => {
     const root = await staged(), sourcePath = join(templates, 'layered/engine.js');
-    const original = await readFile(sourcePath, 'utf8'), index = await readFile(join(root, 'index.html'));
+    const original = (await readLayeredEngine()).toString('utf8'), index = await readFile(join(root, 'index.html'));
+    const template = await readFile(sourcePath, 'utf8');
     const receipt = await adaptStagedDocumentPreview(root);
     expect(receipt).toMatchObject({ adapted: true, adapterVersion: 1, mediaTiming: 'staged-output-v1', fps: 30 });
     const adapted = await readFile(join(root, 'engine.js'), 'utf8');
     const exact = original.slice(original.indexOf('    async seek(t,'), original.lastIndexOf('\n})();'));
     expect(adapted).toContain(exact);
-    expect(await readFile(sourcePath, 'utf8')).toBe(original);
+    expect(await readFile(sourcePath, 'utf8')).toBe(template);
     expect(await readFile(join(root, 'index.html'))).toEqual(index);
     expect(receipt.originalEngineSha256).not.toBe(receipt.stagedEngineSha256);
     // The serialized bridge is a valid script without loading a browser.

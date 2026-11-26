@@ -11,19 +11,12 @@
  * and text fields buffer via useFieldDraft and commit on blur.
  */
 
+import { ATTACHMENT_ROLES } from '../../../../server/lib/storyBibleRoles.js';
 import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useState } from 'react';
 import { ChevronDown, ChevronRight, Plus, Trash2, Heart } from 'lucide-react';
 import { BIBLE_LIMITS as L } from '../../lib/bibleLimits';
 import useFieldDraft from '../../hooks/useFieldDraft';
-
-// Mirrors `ATTACHMENT_ROLES` in server/lib/storyBible.js (#1288). The server
-// sanitizer coerces an unrecognized value to 'custom', so adding a token here
-// without the server side just means the UI offers a value the server folds
-// back to custom.
-const ATTACHMENT_ROLES = Object.freeze([
-  'talisman', 'macguffin', 'memento', 'tool', 'symbol', 'custom',
-]);
 
 const SELECT_CLASS = 'flex-1 min-w-0 px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-white disabled:opacity-50';
 const INPUT_CLASS = 'w-full px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-white disabled:opacity-50';

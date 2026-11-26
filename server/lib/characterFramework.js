@@ -193,3 +193,7 @@ export const CHARACTER_SLIDER_AXES = Object.freeze(['proactivity', 'likability',
 export const RELATIONSHIP_LINK_TYPES = Object.freeze([
   'ally', 'antagonist', 'rival', 'mentor', 'love-interest', 'family', 'custom',
 ]);
+
+export const RELATIONSHIP_OPPOSITION_AXES = Object.freeze([
+  'winner/loser', 'smart/dumb', 'hunter/prey', 'predator/prey', 'custom',
+]);

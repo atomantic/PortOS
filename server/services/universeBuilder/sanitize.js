@@ -10,6 +10,8 @@
  * re-exports this module so existing import paths keep working.
  */
 
+import { BIBLE_KEYS } from '../../lib/universeCanon.js';
+import { WORLD_CATEGORIES, WORLD_CATEGORY_DEFAULT_KINDS } from '../../lib/universeWorldCategories.js';
 import { normalizeUniverseVisualProfile } from '../../lib/universeVisualProfile.js';
 import { randomUUID } from 'crypto';
 import { basename } from 'path';
@@ -120,31 +122,15 @@ export const isInfluenceLockField = (key) => INFLUENCE_LOCK_FIELDS.includes(key)
 // so the Phase C UI renders it under the right tab without needing a per-bucket
 // picker. The default `characters` bucket was retired in schema v4 — canon
 // owns characters now; any pre-v4 variations are folded into universe.characters[].
-export const WORLD_CATEGORIES = Object.freeze([
-  'landscapes',
-  'environments',
-  'structures',
-  'vehicles',
-]);
+export { WORLD_CATEGORIES, WORLD_CATEGORY_DEFAULT_KINDS };
 
 // Valid values for a category's `kind`. Tagged onto each category so the UI
 // knows which canon trunk to render it under. `other` is the sink for
 // un-classified custom buckets; an "Auto-sort" UI action LLM-classifies them
 // into one of the 3 real kinds.
-export const CATEGORY_KINDS = Object.freeze(['characters', 'places', 'objects', 'other']);
+export const CATEGORY_KINDS = Object.freeze([...BIBLE_KEYS, 'other']);
 export const DEFAULT_CATEGORY_KIND = 'other';
 
-
-// Built-in default categories carry a known kind so they land under the right
-// trunk in the UI without user intervention. Custom keys not in this map fall
-// to DEFAULT_CATEGORY_KIND ('other') unless the input carries an explicit
-// valid `kind`.
-export const WORLD_CATEGORY_DEFAULT_KINDS = Object.freeze({
-  landscapes: 'places',
-  environments: 'places',
-  structures: 'places',
-  vehicles: 'objects',
-});
 
 // Resolve a category's kind. Precedence: explicit valid kind on the input wins;
 // otherwise the built-in default map; otherwise DEFAULT_CATEGORY_KIND.

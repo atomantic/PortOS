@@ -1,3 +1,4 @@
+import { ASPECT_RATIOS, QUALITIES } from '../../../server/lib/creativeDirectorPresets.js';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { Plus, Film, Trash2, Play, Pause, FlaskConical, Sparkles, Wand2, SlidersHorizontal } from 'lucide-react';
@@ -28,8 +29,6 @@ import ProjectPreview from '../components/creative-director/ProjectPreview.jsx';
 import { describeCreativeDirectorStatus } from '../lib/creativeDirectorStatus.js';
 import { useSingleFlight } from '../hooks/useSingleFlight';
 
-const ASPECT_RATIOS = ['16:9', '9:16', '1:1'];
-const QUALITIES = ['draft', 'standard', 'high'];
 
 const STATUS_COLORS = {
   draft: 'bg-port-border text-port-text',
