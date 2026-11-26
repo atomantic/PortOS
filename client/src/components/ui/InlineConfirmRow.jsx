@@ -32,6 +32,7 @@ const VARIANTS = {
 export default function InlineConfirmRow({
   question,
   confirmText = 'Delete',
+  confirmDisabled = false,
   cancelText = 'Cancel',
   confirmTitle,
   cancelTitle,
@@ -91,8 +92,9 @@ export default function InlineConfirmRow({
         <button
           type="button"
           onClick={onConfirm}
+          disabled={confirmDisabled}
           title={confirmTitle}
-          className={`min-w-0 min-h-9 pointer-coarse:min-h-11 px-2 py-1 text-xs rounded transition-colors ${t.confirm}`}
+          className={`min-w-0 min-h-9 pointer-coarse:min-h-11 px-2 py-1 text-xs rounded transition-colors disabled:opacity-50 ${t.confirm}`}
         >
           {confirmText}
         </button>

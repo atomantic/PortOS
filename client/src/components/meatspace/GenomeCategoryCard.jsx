@@ -68,6 +68,8 @@ export default function GenomeCategoryCard({ category: _category, label, emoji, 
     <div className={`border rounded-lg ${headerColor}`}>
       {/* Category header */}
       <button
+        type="button"
+        aria-expanded={expanded}
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center justify-between px-3 py-2.5 text-left hover:bg-white/5 transition-colors rounded-t-lg"
       >
