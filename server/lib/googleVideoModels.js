@@ -143,7 +143,7 @@ export function buildGoogleVideoRequest({
   if (lastImage && !image) throw refuse('An end frame needs a start frame');
   if (lastImage && !model.endFrame) throw refuse(`${model.label} takes no end frame; use Veo 3.1`);
   const route = refs.length ? 'reference' : image ? 'image' : 'text';
-  const text = String(prompt ?? '').trim();
+  const text = String(prompt ?? '');
   // The image route is the one where the start frame can carry the whole instruction.
   if (!text && route !== 'image') throw refuse('Prompt is required');
   let sec = nearestLength(model, seconds);
@@ -157,10 +157,10 @@ export function buildGoogleVideoRequest({
   const audio = generateAudio === true;
   const seedNum = typeof seed === 'number' ? seed : (typeof seed === 'string' && seed.trim() ? Number(seed) : NaN);
   const validSeed = Number.isInteger(seedNum) && seedNum >= 0 && seedNum <= 4_294_967_295 ? seedNum : null;
-  const negative = typeof negativePrompt === 'string' ? negativePrompt.trim() : '';
+  const negative = typeof negativePrompt === 'string' ? negativePrompt : '';
 
   const instance = {
-    ...(text ? { prompt: text } : {}),
+    ...(text.trim() ? { prompt: text } : {}),
     ...(route === 'image' ? { image: inlineImage(image) } : {}),
     ...(route === 'image' && lastImage ? { lastFrame: inlineImage(lastImage) } : {}),
     ...(route === 'reference' ? { referenceImages: refs.map((img) => ({ image: inlineImage(img), referenceType: 'asset' })) } : {}),
@@ -171,7 +171,7 @@ export function buildGoogleVideoRequest({
     resolution: tier,
     generateAudio: audio,
     ...(ratio ? { aspectRatio: ratio } : {}),
-    ...(negative ? { negativePrompt: negative } : {}),
+    ...(negative.trim() ? { negativePrompt: negative } : {}),
     ...(validSeed != null ? { seed: validSeed } : {}),
   };
   return {
