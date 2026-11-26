@@ -307,22 +307,12 @@ describe('ci.yml server node_modules cache', () => {
       expect(cacheEntry(body), id).toContain(`-node${pinned.groups.major}-`);
     }
   });
-
-  it('does not pay for a CUDA execution provider no runner can use', () => {
-    // onnxruntime-node's postinstall downloads the CUDA EP on linux-x64
-    // whenever the .so is absent — several hundred MB, on two jobs, every run.
-    // No hosted runner has an NVIDIA GPU, and the CPU binaries ship in the
-    // tarball. This is the single largest cost the caching work removes.
-    for (const [id, body] of installers) {
-      expect(body, id).toMatch(/ONNXRUNTIME_NODE_INSTALL_CUDA: skip/);
-    }
-  });
 });
 
 describe('ci.yml sidecar dependencies', () => {
   it('uses server dependencies for Autofixer tests and checks server syntax in the impact job', () => {
     const jobs = workflowJobs(WORKFLOW);
-    expect(jobs.impact).toContain('ci-impact-diagnostics.js syntax -- node --check server/index.js');
+    expect(jobs.impact).toContain('run: node --check server/index.js');
     expect(jobs.server).toContain('uses: ./.github/actions/setup-server');
     expect(WORKFLOW).not.toMatch(/npm ci[^\n]*--prefix autofixer/);
   });

@@ -121,6 +121,7 @@ if [[ " $* " = *" update "* ]]; then
     if [[ "$arg" == Dir::Etc::sourceparts=* ]]; then
       sp="\${arg#Dir::Etc::sourceparts=}"
       echo "sourceparts $(ls -1 "$sp" | tr '\\n' ',')" >> '${log}'
+      if [[ -f "$sp/pgdg.list" ]]; then cp "$sp/pgdg.list" '${dir}/pgdg.list'; fi
     fi
   done
 fi
@@ -160,7 +161,7 @@ fi`);
     },
   });
   const read = (file) => readFileSync(file, { encoding: 'utf8', flag: 'a+' });
-  const pgdg = join(root, 'etc/apt/sources.list.d/pgdg.list');
+  const pgdg = join(dir, 'pgdg.list');
   const out = {
     ...result,
     budgets: read(log).split('\n').filter((line) => line.startsWith('timeout ')).map((line) => Number(line.split(' ')[1])),
@@ -192,7 +193,8 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     expect(result.pgdg).toBe('deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main\n');
     expect(result.rawCalls[0]).toContain('-o Acquire::Languages=none');
     expect(result.rawCalls.at(-1)).toContain('-o Dpkg::Options::=--force-unsafe-io');
-    expect(result.sourceparts).toEqual([]);
+    expect(result.sourceparts).toEqual([['pgdg.list', 'ubuntu.sources']]);
+    for (const call of result.rawCalls) expect(call).toContain('-o Dir::Etc::sourceparts=');
     expect(result.calls).toEqual([
       'apt-get update',
       'apt-get install -y --no-install-recommends --download-only postgresql-client-17 ffmpeg',
