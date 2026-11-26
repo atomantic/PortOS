@@ -388,6 +388,7 @@ export {
 // pr-watcher owns trusted remediation. Legacy filter values remain accepted
 // server-side for compatibility; every dispatch enforces collaborator trust.
 export const PR_AUTHOR_FILTER_OPTIONS = [
+  { value: 'self', label: 'Only PRs you opened', description: 'Only PRs opened by the signed-in operator are eligible for PR remediation.' },
   { value: 'trusted', label: 'Owner and write collaborators', description: 'Verified repository collaborators and the signed-in operator; external PRs use PR Reviewer' }
 ];
 
