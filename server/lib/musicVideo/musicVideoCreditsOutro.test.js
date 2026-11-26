@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { createRequire } from 'node:module';
+import { runInNewContext } from 'node:vm';
 import { creditsOutroPrefill, creditsOutroSeconds, drawCreditsOutro, normalizeCreditsOutro } from './musicVideoCreditsOutro.js';
 import { endingParts, endingPartAt, endingSeconds } from './musicVideoEnding.js';
+import { musicVideoProjectUpdateSchema } from './musicVideoRouteValidation.js';
 
 describe('credits ending', () => {
   it('keeps every line as typed, drops empty ones and clamps its length', () => {
@@ -24,7 +27,7 @@ describe('credits ending', () => {
       year: 2026,
     });
     expect(credits).toMatchObject({
-      enabled: true, title: 'Example Song', artist: 'E. Artist', footer: '© 2026 E. Artist',
+      enabled: true, title: 'Example Song', artist: 'E. Artist', quoteTitle: false, footer: '© 2026 E. Artist',
       lines: [
         { role: 'Directed by', name: 'E. Artist' }, { role: 'Music by', name: 'E. Artist' },
         { role: 'Produced by', name: 'E. Artist' }, { role: 'From the album', name: 'Example Album' },
@@ -32,6 +35,45 @@ describe('credits ending', () => {
     });
     const bare = creditsOutroPrefill({ project: { name: 'Example Song v2' }, year: 2026 });
     expect(bare).toMatchObject({ title: 'Example Song', artist: '', footer: '' });
+  });
+
+  it('uses the saved optional performer, title treatment, and block styling in the inlined final-render page', async () => {
+    // Load native source so Vitest's rewritten imports don't leak into toString().
+    const { endingPageSource } = createRequire(import.meta.url)('./musicVideoEnding.js');
+    const record = {
+      enabled: true, layout: 'grid', title: 'Example song', artist: 'Example artist', showPerformer: false, quoteTitle: false,
+      titleFont: 'condensed', bodyFont: 'mono', textColor: '#FFDDBB', labelColor: '#AA5577', backgroundColor: '#160C20',
+      lines: [{ role: 'Starring', name: 'First Name\r\nSecond Name' }, { role: 'A note', name: 'Third line\nFourth line' }],
+      footer: 'Made in the rain',
+    };
+    const project = musicVideoProjectUpdateSchema.parse({ creditsOutro: record });
+    const parts = endingParts(project);
+    expect(parts[0].credits.lines[0].name).toBe('First Name\nSecond Name');
+    expect(creditsOutroSeconds({ enabled: true, artist: 'Hidden artist', showPerformer: false })).toBe(0);
+    expect(musicVideoProjectUpdateSchema.safeParse({ creditsOutro: { titleFont: 'arbitrary', textColor: 'red' } }).success).toBe(false);
+    const render = (inputParts) => {
+      const drawn = [];
+      const backgrounds = [];
+      const ctx = {
+        measureText: (s) => ({ width: s.length * 10 }), save() {}, restore() {}, setTransform() {},
+        fillText(text, x, y) { drawn.push({ text, x, y, font: this.font, color: this.fillStyle }); },
+        fillRect() { backgrounds.push(this.fillStyle); },
+      };
+      const env = { document: { getElementById: () => ({ getContext: () => ctx }) }, requestAnimationFrame: (cb) => cb() };
+      runInNewContext(endingPageSource({ parts: inputParts, stats: {}, width: 1280, height: 720, fps: 24, durationSec: 10 }), env);
+      return env.portosComposition.seek(5).then(() => ({ drawn, backgrounds }));
+    };
+    const { drawn, backgrounds } = await render(parts);
+    expect(drawn.map(({ text }) => text)).toEqual(['Example song', 'STARRING', 'First Name', 'Second Name', 'A NOTE', 'Third line', 'Fourth line', 'Made in the rain']);
+    expect(drawn[0]).toMatchObject({ font: expect.stringContaining('MV Credits Condensed'), color: '#ffddbb' });
+    expect(drawn[1]).toMatchObject({ font: expect.stringContaining('MV Credits Mono'), color: '#aa5577' });
+    expect(drawn[2].x).toBe(drawn[3].x);
+    expect(drawn[3].y).toBeGreaterThan(drawn[2].y);
+    expect(drawn[5].x).not.toBe(drawn[2].x);
+    expect(drawn.at(-1).y).toBeGreaterThan(drawn[6].y);
+    expect(backgrounds).toEqual(['#160c20']);
+    const legacy = await render(endingParts({ creditsOutro: { enabled: true, title: 'Old title', artist: 'Old artist' } }));
+    expect(legacy.drawn.map(({ text }) => text)).toEqual(['“Old title”', 'PERFORMED BY', 'OLD ARTIST']);
   });
 
   it('plays after the floor on one clock', () => {
