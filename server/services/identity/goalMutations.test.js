@@ -133,6 +133,34 @@ describe('shared goal document writers', () => {
     await expect(goals.acceptGoalPhases('missing', [])).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 
+  it('stamps a todo completion once, preserves it on repeat, and clears it when reopened', async () => {
+    const todo = await todos.addTodo('example', { title: 'Practice' });
+
+    const completed = await todos.updateTodo('example', todo.id, { status: 'done' });
+    const completedAt = completed.completedAt;
+    expect(completedAt).toEqual(expect.any(String));
+
+    const repeated = await todos.updateTodo('example', todo.id, { status: 'done' });
+    expect(repeated.completedAt).toBe(completedAt);
+
+    const reopened = await todos.updateTodo('example', todo.id, { status: 'in-progress' });
+    expect(reopened.completedAt).toBeNull();
+  });
+
+  it('returns null when updating or deleting a todo under an unknown goal', async () => {
+    expect(await todos.updateTodo('missing', 'todo-1', { title: 'No goal' })).toBeNull();
+    expect(await todos.deleteTodo('missing', 'todo-1')).toBeNull();
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it('stores explicit todo priority and estimate and applies defaults when omitted', async () => {
+    const prioritized = await todos.addTodo('example', { title: 'Long run', priority: 'high', estimateMinutes: 90 });
+    expect(prioritized).toMatchObject({ priority: 'high', estimateMinutes: 90 });
+
+    const defaults = await todos.addTodo('example', { title: 'Stretch' });
+    expect(defaults).toMatchObject({ priority: 'medium', estimateMinutes: null });
+  });
+
   it('mirrors the serialized final document and keeps explicit imports local', async () => {
     h.mirror = [goal()];
     await Promise.all([todos.addTodo('example', { title: 'Mirrored todo' }), goals.updateGoalProgress('example', 50)]);
