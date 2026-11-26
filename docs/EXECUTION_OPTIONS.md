@@ -70,7 +70,7 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/digital-twin/tabs/InterviewTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/digital-twin/tabs/PersonalityTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/digital-twin/tabs/VoiceStyleTab.jsx` | Shared structured options or saved provider reference |
-| `client/src/components/fableloom/LoomEditorialAutomation.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/fableloom/EditorialRunControls.jsx` | Provider, model and effort go to the editorial request. Autopilot stores the route on the run. |
 | `client/src/components/fableloom/LoomEpisodeFeedback.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/fableloom/LoomEpisodeOutlinePlanner.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/fableloom/LoomSeriesPlan.jsx` | Shared structured options or saved provider reference |
