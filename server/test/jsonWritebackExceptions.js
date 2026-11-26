@@ -30,6 +30,14 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "No failed-read write-back: an unreadable or non-object metadata file returns null before the repair write."
   },
   {
+    "key": "contactsSync.js :: cachePath ( )",
+    "reason": "Cache-only: sync builds the complete cache from the macOS Contacts databases; readContactCache serves lookups and never supplies the next write."
+  },
+  {
+    "key": "contactsSync.js :: statePath ( )",
+    "reason": "Rebuildable status: a lost last-run record only resets the displayed run status; the next sync rewrites it."
+  },
+  {
     "key": "cos/cosAgentCompletionIndex.js :: orderFilePath ( )",
     "reason": "Derived projection: an absent or corrupt file reads as empty and is backfilled from the archive metadata."
   },
