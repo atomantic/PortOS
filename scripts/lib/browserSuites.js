@@ -85,8 +85,8 @@ const FOUR_SHARD_OWNERS = {
 };
 
 // Cold hosted smoke/full runs 45795873594 and 45795861168 measured each
-// file in the serial capture or parallel project. Keep the longest visual
-// suite on its own and overlap the large parallel suites on a runner with
+// file in the serial capture or parallel project. Pair the visual suite
+// with a short capture and overlap the large parallel suites on a runner with
 // few captures. In cold full run 45798710246, catalog capture added 54s
 // after parallel work, so give it the shorter authoring runner and spread
 // that runner's other work. The two projects run in sequence on each runner.
@@ -95,7 +95,7 @@ const FULL_SHARD_OWNERS = {
   'server/lib/filmLookGpu.browser.test.js': 5,
   'server/lib/musicVideo/musicVideoTitleCard.browser.test.js': 5,
   'server/routes/catalogGreyboxViewer.browser.test.js': 7,
-  'server/routes/musicVideoProductionReview.browser.test.js': 5,
+  'server/routes/musicVideoProductionReview.browser.test.js': 6,
   'server/routes/musicVideoRichAuthoring.browser.test.js': 7,
   'server/routes/musicVideoSongRevision.browser.test.js': 6,
   'server/services/codeAnimation/export.realBrowser.test.js': 6,
@@ -111,7 +111,7 @@ const FULL_SHARD_OWNERS = {
   'server/services/musicVideo/documentRenderGeneration.browser.test.js': 3,
   'server/services/musicVideo/documentTemplateParity.browser.test.js': 6,
   'server/services/musicVideo/documentFilmLook.browser.test.js': 6,
-  'server/services/musicVideo/documentVignette.browser.test.js': 5,
+  'server/services/musicVideo/documentVignette.browser.test.js': 6,
   'server/services/musicVideo/filmLookFinish.browser.test.js': 6,
   'server/services/musicVideo/documentTemplates/layered/engine.controls.browser.test.js': 5,
   'server/services/musicVideo/documentTemplates/layered/engine.overlay.browser.test.js': 4,
@@ -123,20 +123,20 @@ const FULL_SHARD_OWNERS = {
   'server/services/musicVideo/publish/sunoHook.browser.test.js': 3,
   'server/routes/manualUpdateRecovery.browser.test.js': 7,
   'server/routes/autofixerUi.browser.test.js': 7,
-  'server/services/musicVideo/overlayTextService.browser.test.js': 2,
+  'server/services/musicVideo/overlayTextService.browser.test.js': 1,
   'server/services/codeAnimation/poster.realBrowser.test.js': 2,
 };
 
 // With authoring omitted, smoke can absorb generation, greybox, and Suno
-// on the catalog runner. Move the smaller captures off the HTML composition
-// runner to fill the shorter GPU run (cold smoke 45798697644).
+// on the catalog runner. GPU capture varied from 52s to 83s in cold smoke
+// runs 45798697644 and 45800605421. Smoke moves poster to the parity runner
+// and leaves vignette with GPU.
 const FULL_SHARD_SMOKE_OVERRIDES = {
-  'server/routes/musicVideoProductionReview.browser.test.js': 6,
   'server/services/greyboxRender.browser.test.js': 7,
   'server/services/musicVideo/documentRenderGeneration.browser.test.js': 7,
+  'server/services/musicVideo/documentVignette.browser.test.js': 5,
   'server/services/musicVideo/publish/sunoHook.browser.test.js': 7,
-  'server/services/musicVideo/overlayTextService.browser.test.js': 5,
-  'server/services/codeAnimation/poster.realBrowser.test.js': 5,
+  'server/services/codeAnimation/poster.realBrowser.test.js': 6,
 };
 
 // Moving the serial GPU suite (82s on smoke run 45081031945) splits it from
