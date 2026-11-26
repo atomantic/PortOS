@@ -117,6 +117,18 @@ afterEach(() => {
 });
 
 describe('IssuesTab', () => {
+  it('offers one-click reset after issue filters hide every result', async () => {
+    await renderTab();
+    const search = screen.getByRole('searchbox', { name: 'Filter issues' });
+    fireEvent.change(search, { target: { value: 'missing issue' } });
+
+    expect(await screen.findByText(/No open issues match/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Reset filters' }));
+
+    expect(await screen.findByText('Crash on save')).toBeInTheDocument();
+    expect(search).toHaveValue('');
+  });
+
   it('auto-queries open issues on mount and renders title, labels, and assignees', async () => {
     await renderTab();
 
@@ -128,6 +140,17 @@ describe('IssuesTab', () => {
     expect(screen.getByTitle('Something is broken')).toHaveTextContent('bug');
     expect(screen.getByText(/alice/)).toBeInTheDocument();
     expect(screen.getByText('acme/widget')).toBeInTheDocument();
+  });
+
+  it('keeps the expand chevron grouped with issue title and metadata at narrow widths', async () => {
+    await renderTab();
+
+    const chevron = await screen.findByRole('button', { name: 'Expand description for issue 42' });
+    const title = screen.getByText('Crash on save');
+    const rowContent = chevron.parentElement;
+
+    expect(rowContent).toHaveClass('flex', 'items-start', 'gap-2', 'flex-1', 'min-w-0');
+    expect(rowContent).toContainElement(title);
   });
 
   it('renders the issue link as a button with accessible name, external URL, and touch target', async () => {
@@ -790,8 +813,9 @@ describe('IssuesTab', () => {
     fireEvent.click(screen.getByRole('button', { name: /in-progress/ }));
     fireEvent.click(screen.getByRole('button', { name: 'blocked (2)' }));
 
-    // The tinted div is the row root — exactly 4 levels above the title button.
-    const rowOf = (title) => screen.getByText(title).closest('div').parentElement.parentElement.parentElement;
+    // The container-query row owns the tint; inner content can be regrouped for
+    // responsive layout without changing which element is graded.
+    const rowOf = (title) => screen.getByText(title).closest('[class*="@container"]');
     expect(rowOf('Crash on save').classList.contains('bg-port-card')).toBe(true);
     expect(rowOf('Being worked right now').classList.contains('bg-port-warning/10')).toBe(true);
     expect(rowOf('Waiting on a dependency').classList.contains('bg-port-error/10')).toBe(true);

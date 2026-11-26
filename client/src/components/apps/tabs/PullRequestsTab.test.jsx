@@ -156,6 +156,18 @@ afterEach(() => {
 });
 
 describe('PullRequestsTab', () => {
+  it('offers one-click search clearing when no pull requests match', async () => {
+    await renderTab();
+    const search = screen.getByRole('searchbox', { name: 'Filter pull requests' });
+    fireEvent.change(search, { target: { value: 'missing request' } });
+
+    expect(await screen.findByText(/No open .* match/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+
+    expect(await screen.findByText('Fix the save path')).toBeInTheDocument();
+    expect(search).toHaveValue('');
+  });
+
   it('loads open requests and renders review, check, merge, author, and branch state', async () => {
     await renderTab();
 
