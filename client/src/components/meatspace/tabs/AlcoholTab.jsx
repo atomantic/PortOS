@@ -366,6 +366,8 @@ export default function AlcoholTab() {
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Log a Drink</h3>
           {drinkButtons && <button
+            type="button"
+            aria-expanded={managingButtons}
             onClick={() => setManagingButtons(v => !v)}
             className={`flex items-center gap-1 px-2 py-1 text-xs rounded-lg transition-colors ${
               managingButtons ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-gray-300'

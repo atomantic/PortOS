@@ -101,10 +101,12 @@ export default function AlcoholChart({ sex = 'male', onRefreshKey, onViewChange 
           Daily Consumption
         </h2>
         <div className="flex items-center gap-3">
-          <div className="flex gap-1">
+          <div className="flex gap-1" role="group" aria-label="Alcohol chart units">
             {['grams', 'drinks'].map(u => (
               <button
                 key={u}
+                type="button"
+                aria-pressed={unit === u}
                 onClick={() => setUnit(u)}
                 className={`px-2 py-1 min-h-[40px] text-xs rounded transition-colors ${
                   unit === u
@@ -117,10 +119,12 @@ export default function AlcoholChart({ sex = 'male', onRefreshKey, onViewChange 
             ))}
           </div>
           <div className="w-px h-4 bg-port-border" />
-          <div className="flex gap-1">
+          <div className="flex gap-1" role="group" aria-label="Alcohol chart date range">
             {VIEWS.map(v => (
               <button
                 key={v.id}
+                type="button"
+                aria-pressed={view === v.id}
                 onClick={() => { setView(v.id); onViewChange?.(v.id); }}
                 className={`px-2 py-1 min-h-[40px] text-xs rounded transition-colors ${
                   view === v.id

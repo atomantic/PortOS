@@ -119,10 +119,12 @@ export default function LifestyleTab() {
               </span>
             )}
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2" role="group" aria-label="Biological Sex">
             {SEX_OPTIONS.map(opt => (
               <button
                 key={opt.label}
+                type="button"
+                aria-pressed={sex === opt.value}
                 onClick={() => setSex(opt.value)}
                 className={`px-3 py-1.5 text-sm rounded-lg border ${
                   sex === opt.value
@@ -161,6 +163,8 @@ export default function LifestyleTab() {
               {SMOKING_OPTIONS.map(opt => (
                 <button
                   key={opt.value}
+                  type="button"
+                  aria-pressed={lifestyle?.smokingStatus === opt.value}
                   onClick={() => updateField('smokingStatus', opt.value)}
                   className={`px-3 py-1.5 text-sm rounded-lg border ${
                     lifestyle?.smokingStatus === opt.value
@@ -224,6 +228,8 @@ export default function LifestyleTab() {
               {DIET_OPTIONS.map(opt => (
                 <button
                   key={opt.value}
+                  type="button"
+                  aria-pressed={lifestyle?.dietQuality === opt.value}
                   onClick={() => updateField('dietQuality', opt.value)}
                   className={`px-3 py-1.5 text-sm rounded-lg border ${
                     lifestyle?.dietQuality === opt.value
@@ -243,6 +249,8 @@ export default function LifestyleTab() {
               {STRESS_OPTIONS.map(opt => (
                 <button
                   key={opt.value}
+                  type="button"
+                  aria-pressed={lifestyle?.stressLevel === opt.value}
                   onClick={() => updateField('stressLevel', opt.value)}
                   className={`px-3 py-1.5 text-sm rounded-lg border ${
                     lifestyle?.stressLevel === opt.value

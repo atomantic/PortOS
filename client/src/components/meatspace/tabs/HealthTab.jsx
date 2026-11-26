@@ -129,10 +129,12 @@ export default function HealthTab() {
   return (
     <div className="space-y-4">
       {/* Range selector */}
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1" role="group" aria-label="Health date range">
         {RANGES.map(r => (
           <button
             key={r.id}
+            type="button"
+            aria-pressed={range === r.id}
             onClick={() => setRange(r.id)}
             className={`px-3 py-1.5 text-sm rounded-lg transition-colors font-medium ${
               range === r.id

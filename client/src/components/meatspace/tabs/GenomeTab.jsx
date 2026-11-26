@@ -606,8 +606,10 @@ export default function GenomeTab() {
 
       {/* Status overview — tappable filter pills */}
       {markers.length > 0 && (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Genome marker status">
           <button
+            type="button"
+            aria-pressed={statusFilter === 'all'}
             onClick={() => setStatusFilter('all')}
             className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
               statusFilter === 'all'
@@ -620,6 +622,8 @@ export default function GenomeTab() {
           {STATUS_FILTERS.map(({ key, label, active, inactive }) => statusCounts[key] > 0 && (
             <button
               key={key}
+              type="button"
+              aria-pressed={statusFilter === key}
               onClick={() => setStatusFilter(statusFilter === key ? 'all' : key)}
               className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
                 statusFilter === key ? active : inactive
@@ -854,10 +858,12 @@ export default function GenomeTab() {
 
             {/* Filters */}
             <div className="flex flex-wrap gap-2">
-              <div className="flex gap-1 text-xs">
+              <div className="flex gap-1 text-xs" role="group" aria-label="ClinVar severity">
                 {['all', 'pathogenic', 'risk_factor', 'drug_response', 'protective'].map(f => (
                   <button
                     key={f}
+                    type="button"
+                    aria-pressed={clinvarFilter === f}
                     onClick={() => setClinvarFilter(f)}
                     className={`px-2 py-1 rounded border transition-colors ${
                       clinvarFilter === f
@@ -889,13 +895,15 @@ export default function GenomeTab() {
                   .filter(f => clinvarFilter === 'all' || f.severity === clinvarFilter)
                   .filter(f => f.reviewStars >= clinvarStarFilter)
                   .slice(0, 200)
-                  .map((finding, i) => {
+                  .map(finding => {
                     const sev = SEVERITY_LABELS[finding.severity] || SEVERITY_LABELS.risk_factor;
-                    const isOpen = clinvarExpanded[`cv-${i}`];
+                    const isOpen = Boolean(clinvarExpanded[finding.rsid]);
                     return (
-                      <div key={`${finding.rsid}-${i}`} className="border-b border-port-border/50 last:border-b-0">
+                      <div key={finding.rsid} className="border-b border-port-border/50 last:border-b-0">
                         <button
-                          onClick={() => setClinvarExpanded(prev => ({ ...prev, [`cv-${i}`]: !prev[`cv-${i}`] }))}
+                          type="button"
+                          aria-expanded={isOpen}
+                          onClick={() => setClinvarExpanded(prev => ({ ...prev, [finding.rsid]: !prev[finding.rsid] }))}
                           className="w-full flex items-center justify-between p-2.5 text-left hover:bg-white/5 transition-colors text-sm"
                         >
                           <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -906,8 +914,13 @@ export default function GenomeTab() {
                             </span>
                           </div>
                           <div className="flex items-center gap-2 shrink-0 ml-2">
-                            <span className="text-xs text-yellow-500" title={STAR_LABELS[finding.reviewStars] || ''}>
-                              {'★'.repeat(finding.reviewStars)}{'☆'.repeat(4 - finding.reviewStars)}
+                            <span
+                              role="img"
+                              aria-label={`${finding.reviewStars} of 4 stars: ${STAR_LABELS[finding.reviewStars]}`}
+                              className="text-xs text-yellow-500"
+                              title={STAR_LABELS[finding.reviewStars]}
+                            >
+                              <span aria-hidden="true">{'★'.repeat(finding.reviewStars)}{'☆'.repeat(4 - finding.reviewStars)}</span>
                             </span>
                           </div>
                         </button>

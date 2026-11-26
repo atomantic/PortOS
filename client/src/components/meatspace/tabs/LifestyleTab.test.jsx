@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 
 vi.mock('../../../services/apiMeatspace.js', () => ({
   getMeatspaceConfig: vi.fn(),
@@ -47,4 +47,18 @@ it('keeps a loaded profile when an older Retry read fails after a newer one succ
   await act(async () => { rejectOlder(new Error('late')); });
   expect(screen.queryByRole('alert')).toBeNull();
   expect(screen.getByRole('button', { name: /Save/ })).toBeTruthy();
+});
+
+it('exposes the selected profile and questionnaire answers inside their named groups', async () => {
+  getMeatspaceConfig.mockResolvedValueOnce({ sex: 'female', lifestyle: { smokingStatus: 'former' } });
+  render(<LifestyleTab />);
+
+  const profile = within(await screen.findByRole('group', { name: 'Biological Sex' }));
+  expect(profile.getByRole('button', { name: 'Female', pressed: true })).toBeInTheDocument();
+  const smoking = within(screen.getByRole('group', { name: 'Smoking Status' }));
+  const former = smoking.getByRole('button', { name: 'Former', pressed: true });
+  const never = smoking.getByRole('button', { name: 'Never', pressed: false });
+  fireEvent.click(never);
+  expect(never).toHaveAttribute('aria-pressed', 'true');
+  expect(former).toHaveAttribute('aria-pressed', 'false');
 });
