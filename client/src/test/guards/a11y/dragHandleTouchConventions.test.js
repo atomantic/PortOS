@@ -16,7 +16,7 @@ const CLIENT_ROOT = join(REPO_ROOT, 'client');
 const TOUCH_SENSOR_EXEMPT = {
   // Each segment block is the drag source inside the overflow-x lane; touch
   // picks it up on a long press so a swipe still scrolls the lane.
-  'src/components/media/VideoTimelineLanes.jsx': 'src/pages/VideoTimelineEditor.jsx',
+  'src/components/media/VideoTimelineLanes.jsx': 'src/components/media/VideoTimelineTracks.jsx',
 };
 
 const LISTENER_SPREAD = /\{\.\.\.(?:[A-Za-z_$][\w$]*\.)?(?:[\w$]*[lL]isteners|dragHandleProps)\}/g;
