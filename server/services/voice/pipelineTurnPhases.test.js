@@ -124,6 +124,61 @@ describe('runTurn tool execution', () => {
     expect(events.filter(({ event }) => event === 'voice:tool')).toHaveLength(3);
   });
 
+  it('cancels in-flight and queued TTS when the second model iteration fails', async () => {
+    const audio = Promise.withResolvers();
+    mocks.synthesize.mockReturnValueOnce(audio.promise);
+    mocks.streamChat.mockImplementationOnce(async (_messages, { onDelta }) => {
+      onDelta('First sentence. Second sentence.');
+      return completion('First sentence. Second sentence.', [toolCall('time_now', '{}')]);
+    }).mockRejectedValueOnce(new Error('Model connection failed'));
+    mocks.dispatchTool.mockResolvedValueOnce({ ok: true });
+    const signal = new AbortController().signal;
+    const emit = vi.fn();
+
+    await expect(runTurn({ text: 'What time is it?', state: {}, signal, emit }))
+      .rejects.toThrow('Model connection failed');
+    expect(mocks.streamChat).toHaveBeenCalledTimes(2);
+    expect(mocks.synthesize).toHaveBeenCalledExactlyOnceWith('First sentence.', { signal: expect.any(AbortSignal) });
+    expect(mocks.synthesize.mock.calls[0][1].signal.aborted).toBe(true);
+    expect(signal.aborted).toBe(false);
+    expect(emit.mock.calls.filter(([event]) => event === 'voice:tts:cancel'))
+      .toEqual([['voice:tts:cancel', { reason: 'error' }]]);
+
+    // The synthesizer may finish after abort if it hasn't observed the signal yet.
+    audio.resolve({ wav: Buffer.alloc(8), latencyMs: 7 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.synthesize).toHaveBeenCalledTimes(1);
+    expect(emit).not.toHaveBeenCalledWith('voice:tts:audio', expect.anything());
+  });
+
+  it.each([
+    ['a trailing reply', false, 'Let me check'],
+    ['a confirmation preamble', true, 'Let me check'],
+    ['the synthetic confirmation prompt', true, 'Confirm the requested action?'],
+  ])('completes the turn when synthesis fails for %s', async (_case, confirmation, failingSentence) => {
+    const trailing = 'Let me check';
+    const prompt = 'Confirm the requested action?';
+    const reply = confirmation ? prompt : trailing;
+    mocks.streamChat.mockImplementationOnce(async (_messages, { onDelta }) => {
+      onDelta(trailing);
+      return completion(trailing, confirmation ? [toolCall('ui_click', '{"label":"Delete example"}')] : []);
+    });
+    if (confirmation) mocks.dispatchTool.mockResolvedValueOnce({ ok: true, confirmation_required: true, summary: prompt });
+    mocks.synthesize.mockImplementation(async sentence => {
+      if (sentence === failingSentence) throw new Error('Synthesis unavailable');
+      return { wav: Buffer.alloc(8), latencyMs: 7 };
+    });
+    const emit = vi.fn();
+
+    await expect(runTurn({ text: 'Check the example', state: {}, emit }))
+      .resolves.toEqual({ transcript: 'Check the example', reply });
+    expect(emit).toHaveBeenCalledWith('voice:error', { stage: 'tts', message: 'Synthesis unavailable' });
+    expect(emit).not.toHaveBeenCalledWith('voice:tts:audio', expect.objectContaining({ sentence: failingSentence }));
+    expect(emit).toHaveBeenCalledWith('voice:llm:delta', { delta: reply });
+    expect(emit).toHaveBeenCalledWith('voice:llm:done', expect.objectContaining({ text: reply }));
+    expect(emit).toHaveBeenLastCalledWith('voice:idle', { reason: 'turn-complete' });
+  });
+
   it('skips UI refresh, sibling tools and further model calls when dispatch aborts the turn', async () => {
     const controller = new AbortController();
     mocks.streamChat.mockResolvedValue(completion('', [
@@ -178,6 +233,23 @@ describe('runTurn dictation routing', () => {
     expect(events[2].payload).toEqual({ sentence: 'Dictation off.', wav: Buffer.alloc(8), latencyMs: 7 });
     expect(mocks.appendJournal).not.toHaveBeenCalled();
     expect(mocks.streamChat).not.toHaveBeenCalled();
+  });
+
+  it('completes the stop reply even when synthesis fails', async () => {
+    const state = { dictation: { enabled: true, date: '2026-01-01' } };
+    const emit = vi.fn();
+    mocks.synthesize.mockRejectedValueOnce(new Error('Synthesis unavailable'));
+
+    await expect(runTurn({ text: 'stop dictation', source: 'voice', state, emit }))
+      .resolves.toEqual({ transcript: 'stop dictation', reply: 'Dictation off.' });
+    expect(state.dictation).toEqual({ enabled: false, date: null });
+    expect(emit.mock.calls.slice(1)).toEqual([
+      ['voice:dictation', { enabled: false }],
+      ['voice:error', { stage: 'tts', message: 'Synthesis unavailable' }],
+      ['voice:llm:delta', { delta: 'Dictation off.' }],
+      ['voice:llm:done', { text: 'Dictation off.' }],
+      ['voice:idle', { reason: 'turn-complete' }],
+    ]);
   });
 
   it('keeps typed requests on the conversational path while dictation is enabled', async () => {
