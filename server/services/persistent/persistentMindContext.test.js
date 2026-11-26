@@ -251,6 +251,31 @@ describe('current-message memory recall', () => {
 });
 
 describe('chosen identity continuity', () => {
+  it('reads an unnamed mind with bounded, count-free name queries and no hydration', async () => {
+    expect(await readPersistentMindName()).toBeNull();
+    expect(mock.memoryApi.getMemories).toHaveBeenCalledTimes(2);
+    expect(mock.memoryApi.getMemories).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      sourceAgentId: 'cos-persistent-mind', tags: ['mind:chosen-name'], includeCount: false, limit: 1,
+    }));
+    expect(mock.memoryApi.getMemories).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      sourceAgentId: 'cos-persistent-mind', tags: ['mind:core-identity', 'name'], includeCount: false, limit: 12,
+    }));
+    expect(mock.memoryApi.peekMemories).not.toHaveBeenCalled();
+    expect(mock.memoryApi.peekMemory).not.toHaveBeenCalled();
+  });
+
+  it('preserves a legacy prose name and prefers it over an ordinary name memory', async () => {
+    const legacy = { id: 'identity', status: 'active', sourceAgentId: 'cos-persistent-mind',
+      content: 'My chosen name is Example Star.', tags: ['mind:core-identity'], importance: 0.3 };
+    const ordinary = { ...legacy, id: 'ordinary', content: 'My name is Other.', tags: ['name'], importance: 0.9 };
+    mock.memoryApi.getMemories.mockResolvedValueOnce({ memories: [] })
+      .mockResolvedValueOnce({ memories: [ordinary, legacy] });
+    mock.memoryApi.peekMemories.mockResolvedValue([ordinary, legacy]);
+
+    expect(await readPersistentMindName()).toBe('Example Star');
+    expect(mock.memoryApi.peekMemories).toHaveBeenCalledExactlyOnceWith(['ordinary', 'identity']);
+  });
+
   it('selects and later renames one protected record across reload, cleanup and provider changes', async () => {
     const records = new Map();
     mock.memoryApi.getMemories.mockImplementation(async ({ offset = 0 }) => ({ memories: [...records.values()].filter((m) => m.status === 'active').slice(offset, offset + 100) }));
@@ -799,6 +824,9 @@ describe('continuation note', () => {
     expect(context.text.split(NOTE)).toHaveLength(2);
     expect(context.text).toContain('Written by this mind at 2026-01-02T00:00:00.000Z, turn turn-1, on provider-a/model-a.');
     expect(context.continuationNote).toMatchObject({ state: 'included', content: NOTE, version: 1 });
+    expect(mock.memoryApi.getMemories).toHaveBeenCalledWith(expect.objectContaining({
+      tags: ['mind:continuation-note'], includeCount: false, limit: 1,
+    }));
     expect(mock.history).toHaveLength(1);
     expect(JSON.stringify(mock.history)).not.toContain('the draft');
   });
