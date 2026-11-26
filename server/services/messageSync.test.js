@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createHash } from 'crypto';
 
@@ -475,7 +476,7 @@ describe('deleteCache', () => {
 // ─── syncAccount ───
 
 describe('syncAccount', () => {
-  const mockIo = { emit: vi.fn() };
+  const mockIo = recordingOperatorIo();
 
   beforeEach(() => {
     mockIo.emit.mockClear();
@@ -1141,11 +1142,11 @@ describe('full inbox coverage contract', () => {
   it('keeps full Gmail bodies in the cache and broadcasts only progress until the saved completion', async () => {
     const count = 200; // Gmail's full-sync transport ceiling.
     const body = 'x'.repeat(8192);
-    const io = { emit: vi.fn((event) => {
+    const io = recordingOperatorIo(vi.fn((event) => {
       if (event === 'messages:sync:completed') {
         expect(saved.messages.filter(message => message.bodyText === body)).toHaveLength(count);
       }
-    }) };
+    }));
     gmailApi.list.mockImplementation(async ({ q, pageToken, maxResults }) => {
       const start = Number(pageToken || 0);
       const end = Math.min(start + maxResults, count);

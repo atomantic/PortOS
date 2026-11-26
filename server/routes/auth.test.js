@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { readFileSync, writeFileSync } from 'fs';
@@ -94,7 +95,7 @@ describe('auth routes', () => {
   it('POST /api/auth/password sets first-time password and returns a cookie', async () => {
     const app = await buildApp();
     const emit = vi.fn();
-    app.set('io', { emit });
+    app.set('io', recordingOperatorIo(emit));
     const res = await request(app)
       .post('/api/auth/password')
       .send({ newPassword: 'correct-horse' });
@@ -286,7 +287,7 @@ describe('auth routes', () => {
     const emit = vi.fn();
     const { errorEvents } = await import('../lib/errorHandler.js');
     errorEvents.once('error', () => {});
-    app.set('io', { emit });
+    app.set('io', recordingOperatorIo(emit));
     const bad = await request(app)
       .delete('/api/auth/password')
       .send({ currentPassword: 'nope' });

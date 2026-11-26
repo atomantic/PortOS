@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -41,7 +42,7 @@ const running = process.version;
 const [major, minor, patch] = running.slice(1).split('.').map(Number);
 const NEXT = `v${major}.${minor}.${patch + 1}`;
 const nodeBinary = join(NVM_DIR, 'versions', 'node', NEXT, 'bin', 'node');
-const io = { emit: vi.fn() };
+const io = recordingOperatorIo();
 
 const readPin = () => readFileSync(ENV_PATH, 'utf8');
 

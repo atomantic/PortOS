@@ -1,3 +1,4 @@
+import { emitToOperatorsOn } from './socketIo.js';
 import { execFile, spawn } from '../lib/childProcess.js';
 import { userInfo } from 'os';
 import { existsSync, mkdirSync, createReadStream } from 'fs';
@@ -145,7 +146,7 @@ function _parseDbMode(stdout) {
 }
 
 function emitProgress(io, event, message) {
-  io?.emit('database:progress', { event, message });
+  emitToOperatorsOn(io, 'database:progress', { event, message });
 }
 
 /**
@@ -581,7 +582,7 @@ async function probeServerMajor(port, env) {
  * backend remains running throughout the operation.
  */
 async function syncDatabaseImpl(io) {
-  const emit = (event, data) => io?.emit('database:progress', { event, ...data });
+  const emit = (event, data) => emitToOperatorsOn(io, 'database:progress', { event, ...data });
 
   const statusResult = await runDbScript(['status']);
   const currentMode = statusResult.exitCode === 0

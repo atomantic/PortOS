@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // The direct Google API path projects each `events.list` item into a smaller
@@ -148,7 +149,7 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
       ? Promise.resolve({ data: { items: [apiItem({ start: { dateTime: '2026-03-02T10:00:00-05:00' } })] } })
       : Promise.reject(new Error('calendar permission revoked')));
     createCalendarApi.mockReturnValue({ listEvents: list });
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
 
     const result = await apiSyncAccount(ACCOUNT_ID, io);
 
@@ -177,7 +178,7 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
     getAccount.mockResolvedValue(accountWithCalendars());
     const list = vi.fn().mockRejectedValue(new Error('temporary Google outage'));
     createCalendarApi.mockReturnValue({ listEvents: list });
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
 
     await expect(apiSyncAccount(ACCOUNT_ID, io)).rejects.toThrow('Google API sync failed for all calendars');
     expect(pushSyncEvents).not.toHaveBeenCalled();
@@ -195,7 +196,7 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
   it('records rejected OAuth lookup and emits failure, then releases the account lock for retry', async () => {
     const authError = Object.assign(new Error('OAuth token refresh failed'), { code: 'EAUTH' });
     getAuthenticatedClient.mockRejectedValueOnce(authError);
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
 
     await expect(apiSyncAccount(ACCOUNT_ID, io)).rejects.toBe(authError);
     expect(updateSyncStatus).toHaveBeenLastCalledWith(ACCOUNT_ID, 'error');

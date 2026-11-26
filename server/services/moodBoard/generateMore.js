@@ -38,7 +38,7 @@ function publicJob(job) {
 function update(job, patch) {
   Object.assign(job, patch, { revision: ++revision });
   const payload = publicJob(job);
-  import('../socketIo.js').then(({ getIo }) => getIo()?.emit('mood-board:generate', payload))
+  import('../socketIo.js').then(({ emitToOperators }) => emitToOperators('mood-board:generate', payload))
     .catch((err) => console.error(`❌ Mood board generation progress failed: ${err.message}`));
 }
 

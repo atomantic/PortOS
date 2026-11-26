@@ -82,13 +82,15 @@ describe('Socket.IO event inventory', () => {
       ns.to(room).emit('shape:ns', {});
       emitToOperatorsOn(io, 'shape:operator-io', {});
       emitToOperators('shape:operator-global', {});
+      emitToOperatorsOn(req.app.get('io'), 'shape:operator-route', {});
+      emitToOperatorsOn(getIo()?.except(room), 'shape:operator-except', {});
     `);
     write(root, 'client/src/empty.js', 'export default {};');
     const { events } = await buildSocketEventInventory({ repoRoot: root });
     expect(events.filter((e) => e.serverEmitted).map((e) => e.event).sort()).toEqual([
       'shape:bound', 'shape:except', 'shape:getio', 'shape:providers', 'shape:ref',
       'shape:room', 'shape:route', 'shape:route-strict', 'shape:ns',
-      'shape:operator-io', 'shape:operator-global',
+      'shape:operator-io', 'shape:operator-global', 'shape:operator-route', 'shape:operator-except',
     ].sort());
   });
 

@@ -9,6 +9,7 @@
  * independent of whether the initiating client stays mounted.
  */
 
+import { emitToOperatorsOn } from '../socketIo.js';
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { sleep } from '../../lib/fileUtils.js';
@@ -68,7 +69,7 @@ const publicJob = (job) => ({
 // or break the serialized browser queue. Disconnected clients recover by GET.
 const emitJob = (job) => {
   try {
-    job.io?.emit('fableloom:fal-video:changed', publicJob(job));
+    emitToOperatorsOn(job.io, 'fableloom:fal-video:changed', publicJob(job));
   } catch {
     console.error('❌ Could not broadcast fal.ai browser job status');
   }

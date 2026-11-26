@@ -1,3 +1,4 @@
+import { emitToOperatorsOn } from '../services/socketIo.js';
 import { runtimeUpdateEvents } from '../services/runtimeUpdateEvents.js';
 import { freshQuerySchema, runtimeQuerySchema, providerReadinessQuerySchema, providerReadinessSetupQuerySchema, providerServeModelQuerySchema } from '../lib/queryValidation.js';
 import { EXECUTION_OPTION_DEFINITIONS } from '../lib/executionOptions.js';
@@ -311,7 +312,7 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
       res.once('finish', () => {
         if (res.statusCode < 400) {
-          req.app.get('io')?.emit('providers:changed');
+          emitToOperatorsOn(req.app.get('io'), 'providers:changed');
           if (typeof req.body?.enabled === 'boolean' || req.method === 'DELETE'
             || (req.method === 'POST' && ['/', '/presets', '/:id/derive', '/:id/modes/tui'].includes(req.route?.path))) {
             runtimeUpdateEvents.emit('changed');

@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { EventEmitter } from 'node:events';
 import { registerModelObservationSocket } from '../services/modelObservation.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -234,7 +235,7 @@ vi.mock('../services/settings.js', () => ({
 function makeApp() {
   const app = express();
   app.use(express.json({ limit: '3mb' }));
-  app.set('io', { emit: vi.fn() });
+  app.set('io', recordingOperatorIo());
   app.use('/api/local-llm', localLlmRoutes);
   return app;
 }

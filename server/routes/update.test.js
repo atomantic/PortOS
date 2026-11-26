@@ -3,6 +3,7 @@ vi.mock('../services/activeProcessing.js', () => { const activity = vi.fn(async 
   mind: { trusted: true, thinking: false, queued: 0 }, llm: { trusted: true, active: 0 },
   extras: { imageTo3d: [] }, appOperations: [], renders: [], backup: { inProgress: false },
 })); return { getSystemActivity: activity, getObservedUpdateActivity: activity }; });
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -60,7 +61,7 @@ import updateRoutes from './update.js';
 
 // The execute route streams all progress over `req.app.get('io')`; without one
 // attached, every socket emission in the route is a silent no-op and untestable.
-const mockIo = { emit: vi.fn() };
+const mockIo = recordingOperatorIo();
 
 // Attaching `io` also routes every error response through `errorEvents`, and a
 // Node EventEmitter THROWS the payload when 'error' is emitted with no listener

@@ -14,6 +14,7 @@
  * pipeline storyboard scene). Both are issue #2036.
  */
 
+import { emitToOperatorsOn } from '../services/socketIo.js';
 import { Router } from 'express';
 import { asyncHandler, ServerError, createServiceErrorMapper } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
@@ -47,7 +48,7 @@ router.put('/:key', asyncHandler(async (req, res) => {
   const sketch = await svc.saveSketch(req.params.key, body).catch((err) => { throw mapServiceError(err); });
   // Broadcast so other open views (History, Collections, other tabs) can drop a
   // stale "has annotation" badge or refresh without a manual reload.
-  req.app.get('io')?.emit('media:sketch:updated', { key: req.params.key, sketch });
+  emitToOperatorsOn(req.app.get('io'), 'media:sketch:updated', { key: req.params.key, sketch });
   res.json({ key: req.params.key, sketch });
 }));
 

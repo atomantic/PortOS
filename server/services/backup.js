@@ -13,6 +13,7 @@
  * importing this module; submodules never import it.
  */
 
+import { emitToOperatorsOn } from './socketIo.js';
 import { dashboardEvents } from './dashboardEvents.js';
 import { spawn } from '../lib/childProcess.js';
 import { access, lstat, mkdir, readdir, stat, unlink, writeFile } from 'fs/promises';
@@ -168,7 +169,7 @@ async function runAdmittedBackup(destPath, io, { excludePaths, disabledDefaultEx
       console.error(`❌ Backup status persistence failed: transition=error snapshot=${snapshotId ?? 'none'} code=${code}`);
     });
     dashboardEvents.emit('backup:changed');
-    if (io) io.emit('backup:failed', { snapshotId, error: err.message });
+    emitToOperatorsOn(io, 'backup:failed', { snapshotId, error: err.message });
     throw err;
   };
 
@@ -228,7 +229,7 @@ async function runAdmittedBackup(destPath, io, { excludePaths, disabledDefaultEx
     const dataDestDir = join(snapshotDir, 'data');
 
     console.log(`💾 Backup starting: snapshot ${snapshotId} (excluding ${effectiveExcludes.length} paths)`);
-    if (io) io.emit('backup:started', { snapshotId });
+    emitToOperatorsOn(io, 'backup:started', { snapshotId });
     await ensureDir(dataDestDir);
     setActiveSnapshotId(snapshotId);
     await writeFile(markerPath(snapshotDir), BACKUP_PROCESS_START_ID);
@@ -301,7 +302,7 @@ async function runAdmittedBackup(destPath, io, { excludePaths, disabledDefaultEx
     // A crash before the reservation clears must still leave the slot due.
     if (status === 'ok') await saveState({ lastSuccessfulRun: lastRun });
 
-    if (io) io.emit('backup:completed', { snapshotId, filesChanged: changedFiles.length, status, pgBackup: pgResult, restoreWarning, error });
+    emitToOperatorsOn(io, 'backup:completed', { snapshotId, filesChanged: changedFiles.length, status, pgBackup: pgResult, restoreWarning, error });
 
     // Loud-on-failure: surface a degraded DB dump as a warning toast, even on
     // unattended scheduled runs (which pass io=null) via the module-level io.

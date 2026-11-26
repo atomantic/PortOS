@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -22,7 +23,7 @@ const { default: mediaAnnotationsRoutes } = await import('./mediaAnnotations.js'
 // With an io on the app, the error middleware also raises errorEvents 'error',
 // which throws on an EventEmitter with no listener; the server registers one at boot.
 errorEvents.on('error', () => {});
-const io = { emit: vi.fn() };
+const io = recordingOperatorIo();
 const app = express();
 app.set('io', io);
 app.use(express.json());

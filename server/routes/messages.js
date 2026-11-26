@@ -1,3 +1,4 @@
+import { emitToOperatorsOn } from '../services/socketIo.js';
 import { messageInboxRead, messageDetailRead, messageParamsSchema } from './messageInboxRead.js';
 import express from 'express';
 import { z } from 'zod';
@@ -104,7 +105,7 @@ router.get('/accounts', asyncHandler(async (req, res) => {
 router.post('/accounts', asyncHandler(async (req, res) => {
   const data = validateRequest(createAccountSchema, req.body);
   const account = await messageAccounts.createAccount(data);
-  req.app.get('io')?.emit('messages:changed', {});
+  emitToOperatorsOn(req.app.get('io'), 'messages:changed', {});
   res.status(201).json(account);
 }));
 
@@ -115,7 +116,7 @@ router.put('/accounts/:id', asyncHandler(async (req, res) => {
   const updates = validateRequest(updateAccountSchema, req.body);
   const account = await messageAccounts.updateAccount(req.params.id, updates);
   if (!account) throw new ServerError('Account not found', { status: 404 });
-  req.app.get('io')?.emit('messages:changed', {});
+  emitToOperatorsOn(req.app.get('io'), 'messages:changed', {});
   res.json(account);
 }));
 
@@ -134,7 +135,7 @@ router.delete('/accounts/:id', asyncHandler(async (req, res) => {
   await humanActivity.deleteEvents({ accountId: req.params.id });
   await deleteAutoTouchpoints({ accountId: req.params.id });
   await messageAccounts.deleteAccount(req.params.id);
-  req.app.get('io')?.emit('messages:changed', {});
+  emitToOperatorsOn(req.app.get('io'), 'messages:changed', {});
   res.status(204).send();
 }));
 
@@ -201,7 +202,7 @@ router.post('/drafts', asyncHandler(async (req, res) => {
   }
   data.sendVia = derivedSendVia;
   const draft = await messageDrafts.createDraft(data);
-  req.app.get('io')?.emit('messages:draft:created', { draftId: draft.id });
+  emitToOperatorsOn(req.app.get('io'), 'messages:draft:created', { draftId: draft.id });
   res.status(201).json(draft);
 }));
 
@@ -258,7 +259,7 @@ router.post('/drafts/generate', asyncHandler(async (req, res) => {
     generatedBy: 'ai',
     sendVia: sendViaForAccountType(account.type) ?? 'playwright'
   });
-  req.app.get('io')?.emit('messages:draft:created', { draftId: draft.id });
+  emitToOperatorsOn(req.app.get('io'), 'messages:draft:created', { draftId: draft.id });
   res.status(201).json(draft);
 }));
 
@@ -287,7 +288,7 @@ router.post('/drafts/:id/reconcile', asyncHandler(async (req, res) => {
   }
   const data = validateRequest(reconcileDraftSchema, req.body);
   const draft = await messageDrafts.reconcileDraftSend(req.params.id, data);
-  req.app.get('io')?.emit('messages:changed', {});
+  emitToOperatorsOn(req.app.get('io'), 'messages:changed', {});
   res.json(draft);
 }));
 
@@ -408,7 +409,7 @@ router.post('/:accountId/:messageId/refresh', asyncHandler(async (req, res) => {
     const status = result.error === 'no-browser' || result.error === 'auth-required' ? 503 : 502;
     throw new ServerError(result.message || result.error, { status });
   }
-  req.app.get('io')?.emit('messages:changed', {});
+  emitToOperatorsOn(req.app.get('io'), 'messages:changed', {});
   res.json(result);
 }));
 
@@ -426,7 +427,7 @@ router.post('/fetch-full/:accountId', asyncHandler(async (req, res) => {
   const toRefresh = force ? allResult.messages : allResult.messages.filter(m => m.bodyFull === false);
   const { updated } = await messageSync.refreshMessages(accountId, toRefresh.map(msg => msg.id));
 
-  if (updated > 0) req.app.get('io')?.emit('messages:changed', {});
+  if (updated > 0) emitToOperatorsOn(req.app.get('io'), 'messages:changed', {});
   res.json({ updated, total: toRefresh.length, truncated });
 }));
 
@@ -436,7 +437,7 @@ router.post('/accounts/:id/cache/clear', asyncHandler(async (req, res) => {
     throw new ServerError('Invalid account ID format', { status: 400 });
   }
   await messageSync.deleteCache(req.params.id);
-  req.app.get('io')?.emit('messages:changed', {});
+  emitToOperatorsOn(req.app.get('io'), 'messages:changed', {});
   res.status(204).send();
 }));
 
@@ -447,7 +448,7 @@ router.post('/:accountId/:messageId/action', asyncHandler(async (req, res) => {
   const { accountId, messageId } = parsed.data;
   const { action } = validateRequest(messageActionBodySchema, req.body);
   const result = await executeAction(accountId, messageId, action);
-  req.app.get('io')?.emit('messages:changed', {});
+  emitToOperatorsOn(req.app.get('io'), 'messages:changed', {});
   res.json(result);
 }));
 

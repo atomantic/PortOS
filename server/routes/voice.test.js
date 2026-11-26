@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 const { request } = await import('../lib/testHelper.js');
@@ -108,7 +109,7 @@ const DEFAULT_CFG = {
   tts: { engine: 'kokoro', rate: 1, kokoro: { modelId: 'kokoro-test', dtype: 'q8' } },
 };
 
-const buildApp = ({ io = { emit: () => {} } } = {}) => {
+const buildApp = ({ io = recordingOperatorIo(() => {}) } = {}) => {
   const app = express();
   // A local caller on a password-free install holds host control, so PUT
   // /config reconciles (#13055); hostControlVoiceConfig.test.js covers the rest.
@@ -382,10 +383,10 @@ describe('Voice Routes', () => {
       const emit = vi.fn();
       const personality = { name: 'Example', speechStyle: 'calm' };
       config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG, llm: { usePersonality: true, personality } });
-      await request(buildApp({ io: { emit } })).put('/api/voice/config').send({ enabled: true });
+      await request(buildApp({ io: recordingOperatorIo(emit) })).put('/api/voice/config').send({ enabled: true });
       expect(emit).toHaveBeenLastCalledWith('voice:config:changed', expect.objectContaining({ personality }));
       config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG, llm: { usePersonality: false, personality } });
-      await request(buildApp({ io: { emit } })).put('/api/voice/config').send({ enabled: true });
+      await request(buildApp({ io: recordingOperatorIo(emit) })).put('/api/voice/config').send({ enabled: true });
       expect(emit).toHaveBeenLastCalledWith('voice:config:changed', expect.objectContaining({ personality: null }));
     });
 
@@ -407,7 +408,7 @@ describe('Voice Routes', () => {
         },
       };
 
-      const res = await request(buildApp({ io: { emit } })).put('/api/voice/config').send(patch);
+      const res = await request(buildApp({ io: recordingOperatorIo(emit) })).put('/api/voice/config').send(patch);
 
       expect(res.status).toBe(200);
       expect(config.updateVoiceConfig).toHaveBeenCalledWith(patch);
@@ -817,7 +818,7 @@ describe('Voice Studio HTTP contract', () => {
   it('validates controls before generation and emits only a payload-free invalidation after success', async () => {
     const { createStudioVoice } = await import('../services/voice/studio.js');
     const emit = vi.fn();
-    const app = buildApp({ io: { emit } });
+    const app = buildApp({ io: recordingOperatorIo(emit) });
     createStudioVoice.mockResolvedValue({ id: 'voice-example', label: 'Example voice' });
     const invalid = await request(app).post('/api/voice/studio/design').send({ label: 'Example', instructions: 'Alto', text: 'Hello', pitchSemitones: 99 });
     expect(invalid.status).toBe(400);

@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -72,7 +73,7 @@ describe('X routes', () => {
     const id = '00000000-0000-4000-8000-000000000010';
     const accountId = '00000000-0000-4000-8000-000000000001';
     const emit = vi.fn();
-    app.set('io', { emit });
+    app.set('io', recordingOperatorIo(emit));
     const updated = { id, accountId, body: 'Revised draft', state: 'draft' };
     x.updateDraft.mockResolvedValueOnce(updated);
     const response = await request(app).patch(`/api/x/drafts/${id}`).send({ body: ' Revised draft ' });
@@ -99,7 +100,7 @@ describe('X routes', () => {
     const id = '00000000-0000-4000-8000-000000000010';
     const accountId = '00000000-0000-4000-8000-000000000001';
     const emit = vi.fn();
-    app.set('io', { emit });
+    app.set('io', recordingOperatorIo(emit));
     x.deleteDraft.mockResolvedValueOnce(accountId).mockResolvedValueOnce(null);
 
     expect((await request(app).delete('/api/x/drafts/invalid')).status).toBe(400);

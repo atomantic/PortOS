@@ -11,6 +11,7 @@
  * image-ref is a /data/image-refs file (see mediaAnnotationKey on the client).
  */
 
+import { emitToOperatorsOn } from '../services/socketIo.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, createServiceErrorMapper } from '../lib/errorHandler.js';
@@ -44,7 +45,7 @@ router.patch('/:key', asyncHandler(async (req, res) => {
   // browser tabs) reflects the change without a manual refresh. Payload mirrors
   // the GET shape: `entry` is `{ own, others }` (with own=null when the local
   // author cleared their entry but peer notes remain).
-  req.app.get('io')?.emit('media:annotation:updated', { key: req.params.key, entry });
+  emitToOperatorsOn(req.app.get('io'), 'media:annotation:updated', { key: req.params.key, entry });
   res.json({ key: req.params.key, entry });
 }));
 

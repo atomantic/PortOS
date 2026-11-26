@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../../test/recordingOperatorIo.js';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 
 const { tempData } = vi.hoisted(() => {
@@ -82,10 +83,6 @@ const SWEEPS = [
   peers.syncEidoverseFoundationsWithAllPeers,
 ];
 
-function ioMock() {
-  return { emit: vi.fn() };
-}
-
 describe('sharing/index lifecycle', () => {
   afterEach(async () => {
     vi.useRealTimers();
@@ -104,7 +101,7 @@ describe('sharing/index lifecycle', () => {
     vi.useFakeTimers();
     const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const io = ioMock();
+    const io = recordingOperatorIo();
     try {
       const updatedBefore = recordEvents.listenerCount('updated');
       await sharing.initSharing({ io });
@@ -163,7 +160,7 @@ describe('sharing/index lifecycle', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     peers.syncCosHistoryWithAllPeers.mockRejectedValueOnce(new Error('history down'));
     try {
-      await sharing.initSharing({ io: ioMock() });
+      await sharing.initSharing({ io: recordingOperatorIo() });
       await vi.advanceTimersByTimeAsync(19_999);
       for (const fn of SWEEPS) expect(fn).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
@@ -186,7 +183,7 @@ describe('sharing/index lifecycle', () => {
     try {
       const updatedBefore = recordEvents.listenerCount('updated');
       const deletedBefore = recordEvents.listenerCount('deleted');
-      await sharing.initSharing({ io: ioMock() });
+      await sharing.initSharing({ io: recordingOperatorIo() });
       const callsAtInit = peers.syncMediaLibraryWithAllPeers.mock.calls.length;
 
       await sharing.shutdownSharing();
@@ -205,7 +202,7 @@ describe('sharing/index lifecycle', () => {
       expect(readSpy).not.toHaveBeenCalled();
       expect(listLocalAuthorAnnotations).not.toHaveBeenCalled();
 
-      await sharing.initSharing({ io: ioMock() });
+      await sharing.initSharing({ io: recordingOperatorIo() });
       expect(recordEvents.listenerCount('updated')).toBe(updatedBefore + 1);
       expect(localAnnotationListeners).toHaveLength(1);
       recordEvents.emit('updated', { recordKind: 'universe', recordId: 'rec-1' });
@@ -221,7 +218,7 @@ describe('sharing/index lifecycle', () => {
       expect(readSpy.mock.calls.length).toBe(readsAfterOne);
       readSpy.mockRestore();
 
-      await sharing.initSharing({ io: ioMock() });
+      await sharing.initSharing({ io: recordingOperatorIo() });
       expect(attachAllWatchers).toHaveBeenCalledTimes(3);
       expect(localAnnotationListeners).toHaveLength(1);
     } finally {

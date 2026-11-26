@@ -9,7 +9,7 @@ export function createRunsRoutes(runnerService, options = {}) {
   // real ServerError + asyncHandler so thrown errors normalize into
   // `{ error, code, timestamp, context? }` and route to errorMiddleware).
   // Standalone, the toolkit's own defaults serialize the same envelope.
-  const { asyncHandler = defaultAsyncHandler, io = null, ServerError = ToolkitHttpError, withRunAdmission = handler => handler } = options;
+  const { asyncHandler = defaultAsyncHandler, io = null, emit = io?.emit?.bind(io), ServerError = ToolkitHttpError, withRunAdmission = handler => handler } = options;
 
   router.get('/', asyncHandler(async (req, res) => {
     const query = validate(runsListQuerySchema, req.query);
@@ -117,16 +117,16 @@ export function createRunsRoutes(runnerService, options = {}) {
         prompt,
         workspacePath,
         onData: (data) => {
-          io?.emit(`run:${runId}:data`, data);
+          emit?.(`run:${runId}:data`, data);
         },
         onComplete: (finalMetadata) => {
           console.log(`✅ Run complete: ${runId}, success: ${finalMetadata.success}`);
-          io?.emit(`run:${runId}:complete`, finalMetadata);
+          emit?.(`run:${runId}:complete`, finalMetadata);
         },
         timeout: effectiveTimeout,
       })).catch(error => {
         console.error(`❌ Run ${runId} executor failed: ${error.message}`);
-        io?.emit(`run:${runId}:complete`, { id: runId, success: false, error: error.message });
+        emit?.(`run:${runId}:complete`, { id: runId, success: false, error: error.message });
       });
     } else if (provider.type === 'api') {
       void Promise.resolve(runnerService.executeApiRun({
@@ -137,15 +137,15 @@ export function createRunsRoutes(runnerService, options = {}) {
         workspacePath,
         screenshots: safeScreenshots,
         onData: (data) => {
-          io?.emit(`run:${runId}:data`, data);
+          emit?.(`run:${runId}:data`, data);
         },
         onComplete: (finalMetadata) => {
-          io?.emit(`run:${runId}:complete`, finalMetadata);
+          emit?.(`run:${runId}:complete`, finalMetadata);
         },
         timeout: effectiveTimeout,
       })).catch(error => {
         console.error(`❌ Run ${runId} executor failed: ${error.message}`);
-        io?.emit(`run:${runId}:complete`, { id: runId, success: false, error: error.message });
+        emit?.(`run:${runId}:complete`, { id: runId, success: false, error: error.message });
       });
     } else if (provider.type === 'tui' && typeof runnerService.executeTuiRun === 'function') {
       void Promise.resolve(runnerService.executeTuiRun({
@@ -154,16 +154,16 @@ export function createRunsRoutes(runnerService, options = {}) {
         prompt,
         workspacePath,
         onData: (data) => {
-          io?.emit(`run:${runId}:data`, data);
+          emit?.(`run:${runId}:data`, data);
         },
         onComplete: (finalMetadata) => {
           console.log(`✅ Run complete: ${runId}, success: ${finalMetadata.success}`);
-          io?.emit(`run:${runId}:complete`, finalMetadata);
+          emit?.(`run:${runId}:complete`, finalMetadata);
         },
         timeout: effectiveTimeout,
       })).catch(error => {
         console.error(`❌ Run ${runId} executor failed: ${error.message}`);
-        io?.emit(`run:${runId}:complete`, { id: runId, success: false, error: error.message });
+        emit?.(`run:${runId}:complete`, { id: runId, success: false, error: error.message });
       });
     } else {
       throw new ServerError(`Unsupported provider type: ${provider.type}`, {

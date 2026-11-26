@@ -1,3 +1,4 @@
+import { emitToOperatorsOn } from '../services/socketIo.js';
 import { Router } from 'express';
 import { paginationQuerySchema, parsePagination } from '../lib/queryValidation.js';
 import { z } from 'zod';
@@ -168,14 +169,14 @@ router.get('/outreach', asyncHandler(async (req, res) => {
 router.post('/outreach/draft', asyncHandler(async (req, res) => {
   const data = validateRequest(outreachDraftSchema, req.body);
   const result = await tribeOutreach.generateOutreachDraft(data);
-  req.app.get('io')?.emit('messages:draft:created', { draftId: result.draft.id });
+  emitToOperatorsOn(req.app.get('io'), 'messages:draft:created', { draftId: result.draft.id });
   res.status(201).json(result);
 }));
 
 router.post('/people', asyncHandler(async (req, res) => {
   const data = validateRequest(personSchema, req.body);
   const person = await tribe.createPerson(data);
-  req.app.get('io')?.emit('tribe:changed', { personId: person.id });
+  emitToOperatorsOn(req.app.get('io'), 'tribe:changed', { personId: person.id });
   res.status(201).json(person);
 }));
 
@@ -195,14 +196,14 @@ router.put('/people/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(personUpdateSchema, req.body);
   const person = await tribe.updatePerson(req.params.id, data);
   if (!person) throw new ServerError('Person not found', { status: 404 });
-  req.app.get('io')?.emit('tribe:changed', { personId: person.id });
+  emitToOperatorsOn(req.app.get('io'), 'tribe:changed', { personId: person.id });
   res.json(person);
 }));
 
 router.delete('/people/:id', asyncHandler(async (req, res) => {
   const deleted = await tribe.deletePerson(req.params.id);
   if (!deleted) throw new ServerError('Person not found', { status: 404 });
-  req.app.get('io')?.emit('tribe:changed', { personId: req.params.id });
+  emitToOperatorsOn(req.app.get('io'), 'tribe:changed', { personId: req.params.id });
   res.json({ success: true });
 }));
 
@@ -215,7 +216,7 @@ router.get('/people/:id/touchpoints', asyncHandler(async (req, res) => {
 router.post('/people/:id/touchpoints', asyncHandler(async (req, res) => {
   const data = validateRequest(touchpointSchema, req.body);
   const touchpoint = await tribe.createTouchpoint(req.params.id, data);
-  req.app.get('io')?.emit('tribe:changed', { personId: req.params.id });
+  emitToOperatorsOn(req.app.get('io'), 'tribe:changed', { personId: req.params.id });
   res.status(201).json(touchpoint);
 }));
 
@@ -228,13 +229,13 @@ router.post('/people/:id/memories', asyncHandler(async (req, res) => {
   const { memoryId, note } = validateRequest(memoryLinkSchema, req.body);
   await tribe.linkMemory(req.params.id, memoryId, note);
   const links = await tribe.listMemoryLinks(req.params.id);
-  req.app.get('io')?.emit('tribe:changed', { personId: req.params.id });
+  emitToOperatorsOn(req.app.get('io'), 'tribe:changed', { personId: req.params.id });
   res.status(201).json({ links });
 }));
 
 router.delete('/people/:id/memories/:memoryId', asyncHandler(async (req, res) => {
   await tribe.unlinkMemory(req.params.id, req.params.memoryId);
-  req.app.get('io')?.emit('tribe:changed', { personId: req.params.id });
+  emitToOperatorsOn(req.app.get('io'), 'tribe:changed', { personId: req.params.id });
   res.json({ success: true });
 }));
 
@@ -249,7 +250,7 @@ router.post('/beeper/link', asyncHandler(async (req, res) => {
   const { displacedPersonId, ...participant } = await beeperTribe.linkParticipant({
     conversationId, sourceUserId, personId,
   });
-  req.app.get('io')?.emit('tribe:changed', { personId });
+  emitToOperatorsOn(req.app.get('io'), 'tribe:changed', { personId });
   res.json({ participant, displacedPersonId: displacedPersonId || null });
 }));
 
@@ -265,7 +266,7 @@ router.delete('/beeper/link', asyncHandler(async (req, res) => {
   const { participant, unlinkedPersonId, removedClaims } = await beeperTribe.unlinkParticipant({
     conversationId, sourceUserId,
   });
-  if (unlinkedPersonId) req.app.get('io')?.emit('tribe:changed', { personId: unlinkedPersonId });
+  if (unlinkedPersonId) emitToOperatorsOn(req.app.get('io'), 'tribe:changed', { personId: unlinkedPersonId });
   res.json({ participant, unlinkedPersonId, removedClaims });
 }));
 
@@ -274,7 +275,7 @@ router.delete('/beeper/link', asyncHandler(async (req, res) => {
 router.post('/beeper/link-new', asyncHandler(async (req, res) => {
   const data = validateRequest(beeperCreateAndLinkSchema, req.body);
   const result = await beeperTribe.createPersonAndLinkParticipant(data);
-  req.app.get('io')?.emit('tribe:changed', { personId: result.person.id });
+  emitToOperatorsOn(req.app.get('io'), 'tribe:changed', { personId: result.person.id });
   res.status(201).json(result);
 }));
 
@@ -284,7 +285,7 @@ router.post('/beeper/link-new', asyncHandler(async (req, res) => {
 router.delete('/beeper/identities/:identityId', asyncHandler(async (req, res) => {
   const identity = await beeperTribe.unlinkIdentity(req.params.identityId);
   if (!identity) throw new ServerError('Identity not found', { status: 404 });
-  req.app.get('io')?.emit('tribe:changed', { personId: identity.personId });
+  emitToOperatorsOn(req.app.get('io'), 'tribe:changed', { personId: identity.personId });
   res.json({ success: true });
 }));
 

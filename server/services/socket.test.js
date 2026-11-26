@@ -152,21 +152,23 @@ function makeIo({ deliverBroadcasts = false } = {}) {
   const emitted = [];
   const excepted = [];
   const sockets = [];
-  const broadcast = (event, args, excludedRoom) => {
+  const broadcast = (event, args, excluded = []) => {
     emitted.push([event, ...args]);
     for (const socket of sockets) {
-      if (!socket.rooms.has(excludedRoom)) socket.emit(event, ...args);
+      if (!excluded.some(room => socket.rooms.has(room))) socket.emit(event, ...args);
     }
   };
+  const excluding = (...rooms) => ({
+    except: (room) => excluding(...rooms, room),
+    emit(event, ...args) {
+      for (const room of rooms) excepted.push([event, room]);
+      broadcast(event, args, rooms);
+    },
+  });
   return {
     connectionHandler: () => connectionHandler,
     emit(event, ...args) { broadcast(event, args); },
-    except(room) {
-      return { emit: (event, ...args) => {
-        excepted.push([event, room]);
-        broadcast(event, args, room);
-      } };
-    },
+    except: excluding,
     excepted,
     emitted,
     on(event, fn) {

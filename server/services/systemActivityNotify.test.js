@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { armSystemActivityWatchers } from './systemActivityWatchers.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { claimAppOperation, endAppOperation, __resetAppOperations } from './appOperations.js';
@@ -45,7 +46,7 @@ describe('system activity invalidation', () => {
   it('coalesces a burst into one frame that carries no snapshot', () => {
     vi.useFakeTimers();
     const emit = vi.fn();
-    bindSystemActivityIo({ emit });
+    bindSystemActivityIo(recordingOperatorIo(emit));
     noteSystemActivity('media', 'start');
     noteSystemActivity('media', 'completion');
     noteSystemActivity('agents', 'queued');

@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -70,7 +71,7 @@ describe('Tribe Routes', () => {
     emit = vi.fn();
     app = express();
     app.use(express.json());
-    app.set('io', { emit });
+    app.set('io', recordingOperatorIo(emit));
     app.use('/api/tribe', tribeRoutes);
     vi.clearAllMocks();
   });

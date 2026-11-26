@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { basename } from 'path';
@@ -424,7 +425,7 @@ describe('Google provider event identity', () => {
     'skips unidentified %s events on every replay and resumes windowed pruning on a clean batch',
     async (_provider, sync) => {
       accounts.get(ACCOUNT).subcalendars = [{ calendarId: 'a', name: 'Work', enabled: true }];
-      const io = { emit: vi.fn() };
+      const io = recordingOperatorIo();
       const start = { dateTime: new Date(Date.now() - 120_000).toISOString() };
       const end = { dateTime: new Date(Date.now() - 60_000).toISOString() };
       const valid = { id: 'stable', summary: 'Finished meeting', start, end, organizer: { email: 'alice@example.com' } };

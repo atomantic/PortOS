@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import os from 'os';
 import path from 'path';
@@ -1714,7 +1715,7 @@ describe('syncLocalProviderModels', () => {
 
   beforeEach(() => {
     emit.mockClear();
-    svc.bindLocalLlmIo({ emit });
+    svc.bindLocalLlmIo(recordingOperatorIo(emit));
     mocks.providers.refreshProviderModelsBatch.mockImplementation(async (ids) => [
       { ids: [...ids], leadId: ids[0], status: 'updated' },
     ]);

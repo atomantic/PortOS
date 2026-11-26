@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { mkdtempSync, rmSync } from 'fs';
@@ -41,7 +42,7 @@ const drafts = await import('../services/messageDrafts.js');
 const sync = await import('../services/messageSync.js');
 const { default: routes } = await import('./messages.js');
 
-const io = { emit: vi.fn() };
+const io = recordingOperatorIo();
 const app = express();
 app.use(express.json());
 app.set('io', io);

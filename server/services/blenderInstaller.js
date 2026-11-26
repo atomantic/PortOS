@@ -6,6 +6,7 @@
  * and re-runs the execution check. A failed check restores the previous executable;
  * the previous install is never removed.
  */
+import { emitToOperatorsOn } from './socketIo.js';
 import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { mkdir, mkdtemp, readdir, rename, rm, stat } from 'node:fs/promises';
@@ -147,7 +148,7 @@ export async function startBlenderInstall({ io, acknowledgeBusy = false, deps = 
   if (!offer) throw new ServerError('Could not find a verified Blender release on download.blender.org.', { status: 502, code: 'BLENDER_RELEASE_UNAVAILABLE' });
   await assertIdle({ acknowledgeBusy, action: 'Switching Blender changes the renderer for new Code Animation renders' });
 
-  const emit = (step, status, message) => io?.emit(BLENDER_PROGRESS_EVENT, { step, status, message, version: offer.version });
+  const emit = (step, status, message) => emitToOperatorsOn(io, BLENDER_PROGRESS_EVENT, { step, status, message, version: offer.version });
   currentJob = { version: offer.version, startedAt: new Date().toISOString() };
   Promise.resolve().then(async () => {
     const work = await mkdtemp(join(tmpdir(), 'portos-blender-'));
@@ -226,7 +227,7 @@ export async function startBlenderInstall({ io, acknowledgeBusy = false, deps = 
       if (mounted) await run('/usr/bin/hdiutil', ['detach', mount, '-force']).catch(() => null);
       await rm(work, { recursive: true, force: true }).catch(() => null);
       currentJob = null;
-      io?.emit('software:changed', { reason: 'blender' });
+      emitToOperatorsOn(io, 'software:changed', { reason: 'blender' });
     }
   });
   return { started: true, version: offer.version };
