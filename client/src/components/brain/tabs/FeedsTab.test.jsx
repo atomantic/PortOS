@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { StrictMode } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({
   getFeeds: vi.fn(), refreshAllFeeds: vi.fn(), getFeedItems: vi.fn(), removeFeed: vi.fn(),
@@ -10,6 +11,8 @@ vi.mock('../../../services/apiMessages.js', () => api);
 vi.mock('../../ui/Toast', () => ({ default: toast }));
 
 import FeedsTab from './FeedsTab';
+
+afterEach(() => vi.restoreAllMocks());
 
 describe('FeedsTab loading', () => {
   beforeEach(() => {
@@ -117,5 +120,71 @@ describe('FeedsTab rejected mutations', () => {
     await waitFor(() => expect(api.markFeedItemRead).toHaveBeenCalled());
     await Promise.resolve();
     expect(screen.getByTitle('Mark all as read')).toBeInTheDocument();
+  });
+});
+
+describe('FeedsTab item interactions', () => {
+  const item = {
+    id: 'item-1', feedId: 'feed-1', title: 'Example Item',
+    link: 'https://example.com/a', read: false, fetchedAt: '2026-01-01T00:00:00Z',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getFeeds.mockResolvedValue([{ id: 'feed-1', title: 'Example Feed', unreadCount: 3 }]);
+    api.getFeedItems.mockResolvedValue([item]);
+    vi.spyOn(window, 'open').mockImplementation(() => null);
+  });
+
+  it('decrements the unread count once under StrictMode even when clicked twice', async () => {
+    api.markFeedItemRead.mockResolvedValue({});
+    render(<StrictMode><FeedsTab /></StrictMode>);
+
+    const itemButton = await screen.findByRole('button', { name: /Example Item/ });
+    expect(screen.getByRole('button', { name: /All feeds/ })).toHaveTextContent('3');
+    fireEvent.click(itemButton);
+    fireEvent.click(itemButton);
+
+    expect(api.markFeedItemRead).toHaveBeenCalledExactlyOnceWith(item.id);
+    expect(window.open).toHaveBeenCalledWith(item.link, '_blank', 'noopener,noreferrer');
+    await waitFor(() => expect(screen.getByRole('button', { name: /All feeds/ })).toHaveTextContent('2'));
+    expect(screen.queryByTitle('Mark all as read')).not.toBeInTheDocument();
+  });
+
+  it.each(['javascript:', 'file:', 'data:'])('refuses a feed link with the %s scheme', async (link) => {
+    api.getFeedItems.mockResolvedValue([{ ...item, link }]);
+    render(<FeedsTab />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Example Item/ }));
+
+    expect(toast.error).toHaveBeenCalledWith('Feed links must use HTTP or HTTPS.');
+    expect(window.open).not.toHaveBeenCalled();
+    expect(api.markFeedItemRead).not.toHaveBeenCalled();
+  });
+
+  it('labels the subscribe button and only reloads items when filters change', async () => {
+    render(<FeedsTab />);
+
+    const subscribe = await screen.findByRole('button', { name: 'Subscribe to feed' });
+    expect(subscribe).toHaveAttribute('aria-label', 'Subscribe to feed');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Unread' })));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: /^Example Feed / })));
+
+    expect(api.getFeeds).toHaveBeenCalledTimes(1);
+    expect(api.getFeedItems.mock.calls).toEqual([
+      [{ feedId: null, unreadOnly: false }],
+      [{ feedId: null, unreadOnly: true }],
+      [{ feedId: 'feed-1', unreadOnly: true }],
+    ]);
+  });
+
+  it('ignores a subscription response superseded by the StrictMode remount', async () => {
+    const stale = Promise.withResolvers();
+    api.getFeeds.mockReturnValueOnce(stale.promise);
+    render(<StrictMode><FeedsTab /></StrictMode>);
+
+    expect(await screen.findByRole('button', { name: /^Example Feed / })).toBeInTheDocument();
+    await act(async () => stale.resolve([]));
+    expect(screen.getByRole('button', { name: /^Example Feed / })).toBeInTheDocument();
   });
 });

@@ -629,6 +629,7 @@ export default function LinksTab({ onRefresh }) {
             type="submit"
             disabled={sending || !inputUrl.trim()}
             className="px-4 py-3 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 min-h-[48px]"
+            aria-label={sending ? 'Saving...' : 'Save link'}
             title={sending ? 'Saving...' : 'Save link'}
           >
             {sending ? (

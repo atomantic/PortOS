@@ -61,8 +61,6 @@ afterAll(() => {
 const ALLOWED = {
   'src/components/QuickBrainCapture.jsx':
     'seededRef latches on the first run, so the fetch fires at most once per mount',
-  'src/components/brain/tabs/FeedsTab.jsx':
-    'setLoading(false) is a load-finished latch, not a response written into state',
   'src/components/codeAnimation/CodeAnimationGallery.jsx':
     'deps are [items] of one fixed gallery query; each poster answer is applied by its own job id, so none can land under another record',
   'src/components/imageGen/useImageGenPageRuntime.js':

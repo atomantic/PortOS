@@ -245,7 +245,9 @@ describe('LinksTab link creation form', () => {
       target: { value: '  Read this later  ' },
     });
     await act(async () => {
-      fireEvent.click(screen.getByTitle('Save link'));
+      const save = screen.getByRole('button', { name: 'Save link' });
+      expect(save).toHaveAttribute('aria-label', 'Save link');
+      fireEvent.click(save);
       await Promise.resolve();
     });
 
