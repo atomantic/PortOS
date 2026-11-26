@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { ENRICHMENT_CATEGORIES, SCALE_QUESTIONS } from './digital-twin-constants.js';
 
 const tempRoot = createTempDataRoot('portos-dt-meta-concurrency-');
 const twinDir = join(tempRoot, 'digital-twin');
@@ -21,13 +22,13 @@ vi.mock('../lib/fileUtils.js', async () => {
 
 // Provider calls are held open on `providerGate` so a test can edit meta.json
 // while a run is mid-flight; the answer depends on which prompt asked.
-const providerState = vi.hoisted(() => ({ gate: Promise.resolve(), started: 0 }));
+const providerState = vi.hoisted(() => ({ gate: Promise.resolve(), prompts: [] }));
 vi.mock('./digital-twin-helpers.js', async () => {
   const actual = await vi.importActual('./digital-twin-helpers.js');
   return {
     ...actual,
     callProviderAI: async (_provider, _model, prompt) => {
-      providerState.started += 1;
+      providerState.prompts.push(prompt);
       await providerState.gate;
       if (prompt === 'twin-trait-extractor') {
         return { text: JSON.stringify({ bigFive: { O: 0.9 }, valuesHierarchy: [], communicationProfile: {} }) };
@@ -38,16 +39,21 @@ vi.mock('./digital-twin-helpers.js', async () => {
   };
 });
 vi.mock('./provider/providers.js', () => ({ getProviderById: async () => ({ id: 'p', enabled: true }) }));
-vi.mock('./promptService.js', () => ({ buildPrompt: async (name) => name }));
-vi.mock('./digital-twin-context.js', () => ({
-  getDigitalTwinForPrompt: async () => 'identity',
-  getDigitalTwinContextWithDocs: async () => ({ content: 'identity', documentsUsed: [] })
+vi.mock('./promptService.js', () => ({
+  buildPrompt: async (name, data) => {
+    if (name === 'soul-test-generator') return data.soulContent;
+    if (name === 'soul-enrichment') return data.existingSoul;
+    return name;
+  }
 }));
+const getPrivacyTwinContext = vi.hoisted(() => vi.fn().mockResolvedValue('# Identity Facts (Privacy Vault)\n- Legal name: Skylar Example'));
+vi.mock('./privacyTwinContext.js', () => ({ getPrivacyTwinContext }));
 
 const { createDocument, updateDocument, deleteDocument } = await import('./digital-twin-documents.js');
 const { createPersona, deletePersona } = await import('./digital-twin-personas.js');
 const { loadMeta, saveMeta, updateSettings, cache, digitalTwinEvents } = await import('./digital-twin-meta.js');
-const { analyzeTraits, calculateConfidence } = await import('./digital-twin-analysis.js');
+const { analyzeTraits, calculateConfidence, generateDynamicTests } = await import('./digital-twin-analysis.js');
+const { generateEnrichmentQuestion } = await import('./digital-twin-enrichment.js');
 const { runTests } = await import('./digital-twin-testing.js');
 const { runValuesAlignmentTests } = await import('./digital-twin-values-testing.js');
 const { runAdversarialTests } = await import('./digital-twin-adversarial-testing.js');
@@ -67,7 +73,8 @@ beforeEach(async () => {
   await saveMeta({ version: '1.0.0', documents: [], deletedDocuments: [], personas: [], deletedPersonas: [], settings: {} });
   coldCache();
   providerState.gate = Promise.resolve();
-  providerState.started = 0;
+  providerState.prompts = [];
+  getPrivacyTwinContext.mockClear();
   // Every save drops the cache again, so each overlapping caller that is not
   // serialized re-reads its own snapshot from disk.
   digitalTwinEvents.removeAllListeners('meta:changed');
@@ -144,7 +151,7 @@ describe('digital twin analysis and test runs keep edits saved while they ran (#
     let release;
     providerState.gate = new Promise((resolve) => { release = resolve; });
     const run = start();
-    await vi.waitFor(() => expect(providerState.started).toBeGreaterThan(0));
+    await vi.waitFor(() => expect(providerState.prompts).not.toHaveLength(0));
     coldCache();
     await createDocument({ filename: 'NEW.md', title: 'New', category: 'core', content: '# New\n' });
     const persona = await createPersona({ name: 'Mid', instructions: 'Created mid-run.' });
@@ -182,5 +189,42 @@ describe('digital twin analysis and test runs keep edits saved while they ran (#
     const meta = readMeta();
     expect(meta[field]).toHaveLength(1);
     expect(meta.personas.map((p) => p.id)).toEqual([persona.id]);
+  });
+});
+
+describe('Digital Twin workflows exclude Privacy Vault facts (#19027)', () => {
+  const soulText = 'I value patience and curiosity.';
+
+  beforeEach(async () => {
+    const category = 'core_memories';
+    const questionCount = ENRICHMENT_CATEGORIES[category].questions.length;
+    const scaleAnswers = SCALE_QUESTIONS.filter(question => question.category === category)
+      .map(question => [question.id, 3]);
+    const meta = await loadMeta();
+    await saveMeta({
+      ...meta,
+      settings: { ...meta.settings, autoInjectToCoS: false, includePrivacyContext: true },
+      enrichment: {
+        ...meta.enrichment,
+        questionsAnswered: { [category]: questionCount },
+        scaleQuestionsAnswered: Object.fromEntries(scaleAnswers),
+      },
+    });
+    await createDocument({ filename: 'SOUL.md', title: 'Soul', category: 'core', content: soulText.repeat(10) });
+    for (const [name, body] of Object.entries(SUITES)) writeFileSync(join(twinDir, name), body);
+  });
+
+  it.each([
+    ['enrichment', () => generateEnrichmentQuestion('core_memories', 'p', 'm')],
+    ['dynamic test generation', () => generateDynamicTests('p', 'm')],
+    ['behavioral tests', () => runTests('p', 'm')],
+    ['adversarial tests', () => runAdversarialTests('p', 'm')],
+    ['values alignment tests', () => runValuesAlignmentTests('p', 'm')],
+    ['multi-turn tests', () => runMultiTurnTests('p', 'm')],
+  ])('sends twin documents without reading vault facts for %s', async (_name, run) => {
+    await run();
+    expect(getPrivacyTwinContext).not.toHaveBeenCalled();
+    expect(providerState.prompts[0]).toContain(soulText);
+    expect(providerState.prompts.join('\n')).not.toContain('Skylar Example');
   });
 });

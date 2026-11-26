@@ -1,7 +1,7 @@
 /**
  * Gating tests for Privacy Vault injection into the digital twin prompt
- * (issue #2147). Verifies the GLOBAL gate (includePrivacyContext): the block
- * is fetched + injected only when the setting is on. loadMeta and the privacy
+ * (issues #2147 and #19027). The global setting enables injection, and a caller
+ * can opt out without decrypting the vault. loadMeta and the privacy
  * context builder are mocked — no fs docs, no DB.
  */
 
@@ -15,7 +15,7 @@ const getPrivacyTwinContext = vi.fn();
 vi.mock('./digital-twin-meta.js', () => ({ loadMeta: (...a) => loadMeta(...a) }));
 vi.mock('./privacyTwinContext.js', () => ({ getPrivacyTwinContext: (...a) => getPrivacyTwinContext(...a) }));
 
-const { getDigitalTwinForPrompt } = await import('./digital-twin-context.js');
+const { getDigitalTwinContextWithDocs, getDigitalTwinForPrompt } = await import('./digital-twin-context.js');
 
 function metaWith(settings) {
   return { settings: { autoInjectToCoS: true, maxContextTokens: 4000, ...settings }, documents: [], personas: [], traits: {} };
@@ -33,6 +33,13 @@ describe('getDigitalTwinForPrompt privacy gate', () => {
     const out = await getDigitalTwinForPrompt();
     expect(getPrivacyTwinContext).not.toHaveBeenCalled();
     expect(out).not.toContain('Privacy Vault');
+  });
+
+  it('skips vault retrieval when the caller opts out even with the setting on', async () => {
+    loadMeta.mockResolvedValue(metaWith({ includePrivacyContext: true }));
+    const result = await getDigitalTwinContextWithDocs({ includePrivacyContext: false });
+    expect(getPrivacyTwinContext).not.toHaveBeenCalled();
+    expect(result).toEqual({ content: '', documentsUsed: [] });
   });
 
   it('injects the privacy block when includePrivacyContext is on', async () => {
