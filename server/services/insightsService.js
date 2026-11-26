@@ -12,6 +12,7 @@
  */
 
 import { join } from 'path';
+import { insightThemeSchema } from '../lib/insightsValidation.js';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, unlinkGuarded } from '../lib/fileUtils.js';
 import { getGenomeSummary } from './genome.js';
 import { getBloodTests } from './meatspace/meatspaceHealth.js';
@@ -297,17 +298,26 @@ export async function getGenomeHealthCorrelations() {
   };
 }
 
+function normalizeThemes(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries.flatMap(entry => {
+    const parsed = insightThemeSchema.safeParse(entry);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
 /**
  * INS-02: Return cached taste-identity themes (no generation).
- * Returns { available: false, reason: 'not_generated' } if no cache exists.
+ * Returns { available: false, reason: 'not_generated' } if no usable cache exists.
  */
 export async function getThemeAnalysis() {
   // Cache: explicit generation replaces themes entirely from authoritative source records.
   const cached = await readJSONFile(THEMES_FILE, null);
-  if (!cached) {
+  const themes = normalizeThemes(cached?.themes);
+  if (!themes.length) {
     return { available: false, reason: 'not_generated' };
   }
-  return { ...cached, available: true };
+  return { ...cached, themes, available: true };
 }
 
 /**
@@ -370,7 +380,16 @@ Example format:
     return { available: false, reason: result.error };
   }
 
-  const themes = parseLLMJSON(result.text);
+  let parsed;
+  try {
+    parsed = parseLLMJSON(result.text);
+  } catch {
+    return { available: false, reason: 'invalid_response' };
+  }
+  const themes = normalizeThemes(Array.isArray(parsed) ? parsed : parsed?.themes);
+  if (!themes.length) {
+    return { available: false, reason: 'invalid_response' };
+  }
 
   await ensureDir(INSIGHTS_DIR);
   const output = {
