@@ -34,6 +34,7 @@ export default function StoryboardPlayer({ board, sketchNonce, onTempTrack, song
   const clockRef = useRef({ base: 0, at: 0 });
   const timeRef = useRef(0);
   const startingRef = useRef(false);
+  const unlockRef = useRef(null);
   const track = board.tempTrack;
   const audioSrc = song?.src || (track ? getUploadUrl(track.filename) : null);
   const lines = song ? song.lines || [] : track?.lines || [];
@@ -41,10 +42,21 @@ export default function StoryboardPlayer({ board, sketchNonce, onTempTrack, song
   const soundEnd = audible ? songStartSec + audioDuration : 0;
   const duration = Math.max(panelsEnd, soundEnd);
 
+  const clearUnlock = useCallback(() => {
+    const unlock = unlockRef.current;
+    if (!unlock) return;
+    unlockRef.current = null;
+    unlock.audio.muted = false;
+  }, []);
+
   useEffect(() => {
     setAudioDuration(0);
     setAudioMissing(false);
-  }, [audioSrc]);
+    return () => {
+      unlockRef.current?.audio.pause();
+      clearUnlock();
+    };
+  }, [audioSrc, clearUnlock]);
 
   // The sound at board time `t`: playing from the matching song time while
   // the song runs, waiting at its start before it.
@@ -53,15 +65,17 @@ export default function StoryboardPlayer({ board, sketchNonce, onTempTrack, song
     if (!audio || !audible) return;
     if (t >= songStartSec && t < soundEnd) {
       audio.currentTime = t - songStartSec;
+      clearUnlock();
       if (start && audio.paused && !startingRef.current) {
         startingRef.current = true;
         audio.play().catch(() => {}).finally(() => { startingRef.current = false; });
       }
     } else {
       audio.pause();
+      clearUnlock();
       if (t < songStartSec) audio.currentTime = 0;
     }
-  }, [audible, songStartSec, soundEnd]);
+  }, [audible, songStartSec, soundEnd, clearUnlock]);
 
   const seek = useCallback((t) => {
     const next = Math.max(0, Math.min(t, duration));
@@ -79,15 +93,18 @@ export default function StoryboardPlayer({ board, sketchNonce, onTempTrack, song
       let t;
       // While the sound plays it is the clock; before it starts, past its
       // end (or with none) the panels keep time on their own.
-      if (audio && !audio.paused && !audio.ended) {
+      if (audio && !unlockRef.current && !audio.paused && !audio.ended) {
         t = songStartSec + audio.currentTime;
         clockRef.current = { base: t, at: now };
       } else {
         t = clockRef.current.base + (now - clockRef.current.at) / 1000;
-        // The prelude has run out: the song starts here.
-        if (audio && audible && audio.paused && !startingRef.current && t >= songStartSec && t < soundEnd && audio.currentTime === 0) cueAudio(t, true);
+        // A pending unlock can take over as soon as the prelude ends.
+        if (audio && audible && t >= songStartSec && t < soundEnd &&
+          (unlockRef.current || (audio.paused && !startingRef.current && audio.currentTime === 0))) cueAudio(t, true);
       }
       if (t >= duration) {
+        unlockRef.current?.audio.pause();
+        clearUnlock();
         timeRef.current = duration;
         setTime(duration);
         setPlaying(false);
@@ -99,7 +116,7 @@ export default function StoryboardPlayer({ board, sketchNonce, onTempTrack, song
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [playing, duration, songStartSec, soundEnd, audible, cueAudio]);
+  }, [playing, duration, songStartSec, soundEnd, audible, cueAudio, clearUnlock]);
 
   const play = () => {
     const from = timeRef.current >= duration ? 0 : timeRef.current;
@@ -109,14 +126,23 @@ export default function StoryboardPlayer({ board, sketchNonce, onTempTrack, song
     const audio = audioRef.current;
     if (audio && audible && from < songStartSec) {
       // Phones only let sound start from a tap: unlock it now, silently, for when the song comes in.
+      const unlock = { audio };
+      unlockRef.current = unlock;
       audio.muted = true;
-      audio.play().then(() => { audio.pause(); audio.currentTime = 0; }).catch(() => {}).finally(() => { audio.muted = false; });
+      audio.play().then(() => {
+        if (unlockRef.current !== unlock) return;
+        audio.pause();
+        audio.currentTime = 0;
+      }).catch(() => {}).finally(() => {
+        if (unlockRef.current === unlock) clearUnlock();
+      });
     } else cueAudio(from, true);
     setPlaying(true);
   };
 
   const pause = () => {
     audioRef.current?.pause();
+    clearUnlock();
     setPlaying(false);
   };
 
