@@ -18,10 +18,14 @@ import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { whichFirst } from '../../lib/processEnv.js';
 import { PORTS } from '../../lib/ports.js';
 import { inspectVoiceAsset, isManagedVoiceAsset, isVoiceAssetUsable } from '../../lib/voiceModelAssets.js';
+import { createMutex } from '../../lib/asyncMutex.js';
 
 export const pexec = promisify(execFile);
 
 export const WHISPER_APP = 'portos-whisper';
+
+// Reconcile holds this lock across setup and uses the internal PM2 operations.
+const withVoiceLifecycle = createMutex();
 
 // Thin re-export of the shared PATH probe so voice callers keep the local name.
 export const which = (bin) => whichFirst(bin);
@@ -110,7 +114,7 @@ export const runSetupScript = async (cfg) => {
  * the Settings voice-picker so users can audition voices as they browse the
  * catalog rather than waiting for Save & Reconcile.
  */
-export const downloadPiperVoice = async (voiceId, currentCfg) => {
+export const downloadPiperVoice = (voiceId, currentCfg) => withVoiceLifecycle(async () => {
   if (!voiceId || typeof voiceId !== 'string') throw new Error('voiceId required');
   const voicePath = piperVoiceTildePath(voiceId);
   const absVoicePath = expandPath(voicePath);
@@ -130,7 +134,7 @@ export const downloadPiperVoice = async (voiceId, currentCfg) => {
     throw new Error(`Piper voice ${voiceId} is still not usable after setup (${after.reason || after.state})`);
   }
   return { downloaded: true, voicePath };
-};
+});
 
 const isWhisperRunning = async () => {
   const status = await getAppStatus(WHISPER_APP).catch(() => null);
@@ -178,7 +182,7 @@ const waitForWhisper = async (host, port, timeoutMs = 8000) => {
   return false;
 };
 
-export const startWhisper = async (cfg) => {
+const startWhisperProcess = async (cfg) => {
   const whisperBin = await which('whisper-server');
   if (!whisperBin) throw new Error('whisper-server not on PATH — run scripts/setup-voice.sh');
   const modelPath = expandPath(cfg.stt.modelPath);
@@ -228,12 +232,15 @@ export const startWhisper = async (cfg) => {
   return { name: WHISPER_APP, host, port, modelPath };
 };
 
-export const stopWhisper = async () => {
+const stopWhisperProcess = async () => {
   if (!(await isWhisperRunning())) return { skipped: true };
   await execPm2(['delete', WHISPER_APP]).catch(() => {});
   console.log(`🛑 voice: ${WHISPER_APP} stopped`);
   return { stopped: true };
 };
+
+export const startWhisper = (cfg) => withVoiceLifecycle(() => startWhisperProcess(cfg));
+export const stopWhisper = () => withVoiceLifecycle(stopWhisperProcess);
 
 /**
  * The first model in `ids` that is fast, non-reasoning and tool-capable.
@@ -377,24 +384,43 @@ export const preloadModel = async (cfg) => {
     return { skipped: 'already-loaded', model: target };
   }
 
-  // The load blocks until ready (5–30 s cold). Run fire-and-forget so
-  // reconcile returns immediately; whisper/TTS can come up in parallel.
+  // Keep provisioning in flight until the load completes, when a later pass
+  // can observe the resident model. Reconcile does not await provisioning.
   console.log(`🎙️  voice: preloading ${target} (warming GPU/cache for first turn)`);
-  backend.load(target)
-    .then((result) => (result?.ok
-      ? console.log(`🎙️  voice: ${target} loaded and ready`)
-      : console.warn(`🎙️  voice: preload ${target} failed: ${result?.reason || 'unknown'}`)))
-    .catch((err) => console.warn(`🎙️  voice: preload ${target} failed: ${err.message}`));
-  return { preloading: target };
+  const result = await backend.load(target).catch((err) => ({ reason: err.message }));
+  if (!result?.ok) {
+    console.warn(`🎙️  voice: preload ${target} failed: ${result?.reason || 'unknown'}`);
+    return { failed: target };
+  }
+  console.log(`🎙️  voice: ${target} loaded and ready`);
+  return { loaded: target };
 };
 
+let modelProvisioning = null;
+let pendingModelConfig = null;
 
-/**
- * Reconcile PM2 state with desired voice.enabled. Called from
- * PUT /api/voice/config and at server boot.
- */
-export const reconcile = async (cfg, { allowSetup = true } = {}) => {
-  if (!cfg.enabled) return stopWhisper();
+const drainModelProvisioning = async () => {
+  try {
+    // Keep just the newest pending config while a pass is active.
+    while (pendingModelConfig) {
+      const cfg = pendingModelConfig;
+      pendingModelConfig = null;
+      await ensureToolCapableModel(cfg).catch((err) => {
+        console.warn(`🎙️  voice: ensureToolCapableModel failed: ${err.message}`);
+      });
+      await preloadModel(cfg).catch((err) => {
+        console.warn(`🎙️  voice: preloadModel failed: ${err.message}`);
+      });
+    }
+  } finally {
+    modelProvisioning = null;
+  }
+};
+
+const reconcileVoice = async (cfg, { allowSetup = true } = {}) => {
+  // Disabled voice or a retired-engine boot can supersede a pending pass.
+  pendingModelConfig = null;
+  if (!cfg.enabled) return stopWhisperProcess();
   // A retired-engine upgrade must wait for the user's Save & Reconcile action.
   // Do not turn a normal restart into a new binary/model download.
   if (!allowSetup && cfg.tts?.retiredEngine === 'kokoro') {
@@ -404,28 +430,21 @@ export const reconcile = async (cfg, { allowSetup = true } = {}) => {
       // Keep an already-provisioned speech recognizer available while TTS
       // waits for consent. No setup scripts or LLM preloads run on this path.
       if (cfg.stt?.engine === 'web-speech') {
-        await stopWhisper().catch(() => null);
+        await stopWhisperProcess().catch(() => null);
       } else if (bins.whisper && models.sttModel && (!cfg.stt.coreml || models.coreml)) {
-        return { ...await startWhisper(cfg), setupRequired: 'piper' };
+        return { ...await startWhisperProcess(cfg), setupRequired: 'piper' };
       }
       return { setupRequired: 'piper' };
     }
   }
 
-  // Don't block reconcile on this — it can take minutes on first install.
-  // The user will see a clear log line and their first turn may fail with the
-  // new `voice:error` hint until the model finishes downloading, but voice
-  // STT + TTS + whisper are ready immediately. Once install resolves (or
-  // immediately if no install was needed), pre-warm the chosen model so the
-  // first voice turn doesn't pay a 5-30s cold-load.
-  ensureToolCapableModel(cfg)
-    .catch((err) => {
-      console.warn(`🎙️  voice: ensureToolCapableModel failed: ${err.message}`);
-    })
-    .then(() => preloadModel(cfg))
-    .catch((err) => {
-      console.warn(`🎙️  voice: preloadModel failed: ${err.message}`);
+  // A first install can take minutes. Keep it off the lifecycle queue.
+  pendingModelConfig = cfg;
+  if (!modelProvisioning) {
+    modelProvisioning = drainModelProvisioning().catch((err) => {
+      console.warn(`🎙️  voice: model provisioning failed: ${err.message}`);
     });
+  }
 
   const bins = await verifyBinaries(cfg);
   const models = verifyModels(cfg);
@@ -445,9 +464,9 @@ export const reconcile = async (cfg, { allowSetup = true } = {}) => {
       console.warn(`🎙️  voice: incomplete model download (${repair.join(', ')}) — run Save & Reconcile in Settings → Voice to repair`);
       const setupRequired = repair.join(',');
       if (webSpeech) {
-        await stopWhisper().catch(() => null);
+        await stopWhisperProcess().catch(() => null);
       } else if (!repair.includes('whisper') && bins.whisper && models.sttModel && !coremlMissing) {
-        return { ...await startWhisper(cfg), setupRequired };
+        return { ...await startWhisperProcess(cfg), setupRequired };
       }
       return { setupRequired };
     }
@@ -473,7 +492,7 @@ export const reconcile = async (cfg, { allowSetup = true } = {}) => {
   if (webSpeech) {
     if (piperMissing) await runSetupScript(cfg);
     else await adoptReceipts();
-    await stopWhisper().catch(() => null);
+    await stopWhisperProcess().catch(() => null);
     return { skipped: 'web-speech', piperProvisioned: piperMissing };
   }
 
@@ -481,5 +500,8 @@ export const reconcile = async (cfg, { allowSetup = true } = {}) => {
   if (piperMissing || sttMissing) await runSetupScript(cfg);
   else await adoptReceipts();
 
-  return startWhisper(cfg);
+  return startWhisperProcess(cfg);
 };
+
+/** Reconcile PM2 and model assets from Save & Reconcile or server boot. */
+export const reconcile = (cfg, options) => withVoiceLifecycle(() => reconcileVoice(cfg, options));
