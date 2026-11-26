@@ -49,4 +49,18 @@ describe('scheduled task prompt catalog', () => {
     expect(link).toBeGreaterThan(transition);
     expect(handoff).toBeGreaterThan(link);
   });
+
+  it('requires successful exact-head validation before publishing claims', () => {
+    for (const forge of ['github', 'gitlab']) {
+      const prompt = composeClaimIssuePrompt({ forge });
+      const validation = prompt.indexOf('Before pushing, validate final HEAD per repo docs');
+      const push = prompt.indexOf('Push `claim/issue-${NUM}`');
+
+      expect(validation, forge).toBeGreaterThan(-1);
+      expect(push, forge).toBeGreaterThan(validation);
+      expect(prompt).toContain('npm run pregate && git push origin claim/issue-${NUM}');
+      expect(prompt).toContain('On failure or changed HEAD, rerun');
+      expect(prompt).toContain('Other repos follow own docs');
+    }
+  });
 });

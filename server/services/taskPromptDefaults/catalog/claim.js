@@ -268,7 +268,9 @@ function claimPublication(forge, { review, leaveOpen, draft }) {
     : '`glab mr view --output json` reports `draft: true`';
   return `## Phase 6 — Publish and validate
 
-Push \`claim/issue-\${NUM}\`, confirm \`git log --oneline @{u}..HEAD\` is empty, and open the ${change} non-interactively with ${create}. Summarize the change and test plan. For a complete fix use \`Closes #\${NUM}\`; for partial scope use \`Refs #\${NUM}\` and a Remaining section. Verify the published description contains the intended trailer, updating it if necessary.${draft ? ` Verify ${draftCheck}; if not, preserve the claim and report the publication failure.` : ''} This flow does NOT touch PLAN.md.
+Before pushing, validate final HEAD per repo docs. PortOS: \`npm run pregate && git push origin claim/issue-\${NUM}\`. On failure or changed HEAD, rerun. Other repos follow own docs.
+
+Push \`claim/issue-\${NUM}\`, verify the upstream is current, then open the ${change} with ${create}. Include a test plan and \`Closes #\${NUM}\` (or \`Refs #\${NUM}\` plus Remaining for partial work); verify the trailer.${draft ? ` Verify ${draftCheck}; if not, preserve the claim and report failure.` : ''}
 
 ${review ? `${claimPublishedReview(forge)}
 
