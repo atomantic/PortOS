@@ -841,6 +841,15 @@ describe('socket.js — initSocket', () => {
     expect(io.emitted).toEqual([['review:queue:changed']]);
   });
 
+  it.each(['memory:deleted', 'memory:approval-needed'])(
+    'invalidates Actions globally when %s changes',
+    (event) => {
+      io.emitted.length = 0;
+      queueListeners.cos.filter(([name]) => name === event).forEach(([, listener]) => listener({ id: 'example', privateContent: 'not forwarded' }));
+      expect(io.emitted).toEqual([['review:queue:changed']]);
+    }
+  );
+
   // The three agent-record events leave through the same listing projection as
   // `GET /api/cos/agents`. Without it the socket refills the CoS agents list with
   // unprojected rows — transcript and whole pasted prompt — moments after the

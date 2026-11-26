@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LockKeyhole, RefreshCw, ShieldCheck } from 'lucide-react';
-import { getPersistentMindTools } from '../services/apiAgents.js';
-import BrailleSpinner from '../components/BrailleSpinner';
-import Banner from '../components/ui/Banner';
-import PersistentMindRecipeLibrary from '../components/cos/PersistentMindRecipeLibrary';
-import PersistentMindTaskAccessControls from '../components/cos/PersistentMindTaskAccessControls';
-import PersistentMindTaskModelAllowlistControls from '../components/cos/PersistentMindTaskModelAllowlistControls';
-import PersistentMindSandboxControls from '../components/cos/PersistentMindSandboxControls';
-import PersistentMindToolExposureControls from '../components/cos/PersistentMindToolExposureControls';
+import { getPersistentMindTools } from '../../services/apiAgents.js';
+import BrailleSpinner from '../BrailleSpinner';
+import Banner from '../ui/Banner';
+import PersistentMindRecipeLibrary from './PersistentMindRecipeLibrary';
+import PersistentMindTaskAccessControls from './PersistentMindTaskAccessControls';
+import PersistentMindTaskModelAllowlistControls from './PersistentMindTaskModelAllowlistControls';
+import PersistentMindSandboxControls from './PersistentMindSandboxControls';
+import PersistentMindToolExposureControls from './PersistentMindToolExposureControls';
 
 export default function PersistentMindTools({ onCapabilitiesChange, onSavingChange }) {
   const [data, setData] = useState(null);
