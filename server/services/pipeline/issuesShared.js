@@ -688,7 +688,7 @@ async function readState(options) {
   return { issues: await store().loadAll(options) };
 }
 
-// Series-scoped read — uses the indexed `idx_issues_series` query (PG) so a
+// Series-scoped read — uses the indexed `idx_issues_series_all` query (PG) so a
 // per-series scan doesn't load + sanitize every issue in the install. Callers
 // that already filter by seriesId in JS should source from here instead.
 async function readStateForSeries(seriesId, options) {

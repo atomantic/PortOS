@@ -91,8 +91,8 @@ export async function listRaw({ withHistory = true } = {}) {
 }
 
 /**
- * Raw `data` JSONB for one series only — uses the `idx_issues_series
- * (series_id, number)` index instead of scanning + sanitizing the whole table.
+ * Raw `data` JSONB for one series only — can use the unfiltered
+ * `idx_issues_series_all (series_id, number)` index.
  * Returns live/ephemeral/tombstones (the service applies the `deleted` filter),
  * matching `listRaw`'s contract but scoped.
  */
