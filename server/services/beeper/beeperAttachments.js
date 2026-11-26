@@ -80,6 +80,9 @@ const queueAttachment = createRecordWriteQueue();
 const publishAttachment = (path, work) => withBackupAssetPublication(() => queueAttachment(path, work));
 
 const notFound = () => new ServerError('Attachment not found', { status: 404, code: 'NOT_FOUND' });
+const attachmentChanged = () => new ServerError('Attachment changed while it was being opened', {
+  status: 409, code: 'ATTACHMENT_CHANGED',
+});
 
 const toIso = (value) => (value ? new Date(value).toISOString() : null);
 
@@ -329,11 +332,11 @@ async function streamAssetToStore(mxcId, { maxBytes, extension, baseUrl, token, 
 }
 
 async function markUnavailable(row, message) {
-  await query(
+  return query(
     `UPDATE beeper_attachments
         SET unavailable_at = NOW(), fetch_error = $3, updated_at = NOW()
-      WHERE message_id = $1 AND idx = $2`,
-    [row.message_id, row.idx, String(message || '').slice(0, 500)],
+      WHERE message_id = $1 AND idx = $2 AND mxc_id = $4`,
+    [row.message_id, row.idx, String(message || '').slice(0, 500), row.mxc_id],
   );
 }
 
@@ -362,11 +365,17 @@ export async function ensureAttachmentBytes(messageId, idx, { force = false, cli
     // The row claims bytes the disk no longer has (a Data Manager purge, a
     // restore from a backup that excluded them). Heal the row rather than
     // 404ing, then fall through and re-acquire.
-    await query(
-      `UPDATE beeper_attachments SET local_path = NULL, fetched_at = NULL, updated_at = NOW()
-        WHERE message_id = $1 AND idx = $2`,
-      [row.message_id, row.idx],
-    );
+    await publishAttachment(row.local_path, async () => {
+      // A concurrent download can reinstall identical bytes at the same path.
+      // Recheck while holding its publication queue before clearing the claim.
+      if (await pathExists(filePath)) throw attachmentChanged();
+      const result = await query(
+        `UPDATE beeper_attachments SET local_path = NULL, fetched_at = NULL, updated_at = NOW()
+          WHERE message_id = $1 AND idx = $2 AND local_path = $3`,
+        [row.message_id, row.idx, row.local_path],
+      );
+      if (result.rowCount === 0) throw attachmentChanged();
+    });
   }
 
   if (!row.mxc_id) {
@@ -401,21 +410,25 @@ export async function ensureAttachmentBytes(messageId, idx, { force = false, cli
     // states both.
     await query(
       `UPDATE beeper_attachments SET byte_length = $3, updated_at = NOW()
-        WHERE message_id = $1 AND idx = $2`,
-      [row.message_id, row.idx, head.bytes],
+        WHERE message_id = $1 AND idx = $2 AND mxc_id = $4`,
+      [row.message_id, row.idx, head.bytes, row.mxc_id],
     );
     throw tooLarge(head.bytes);
   }
 
   const extension = attachmentExtension({ mimeType: row.mime_type, fileName: row.file_name });
-  const stored = await streamAssetToStore(row.mxc_id, { maxBytes, extension, baseUrl, token, commit: stored => query(
-    `UPDATE beeper_attachments
-        SET local_path = $3, byte_length = $4,
-            fetched_at = NOW(), last_viewed_at = NOW(),
-            unavailable_at = NULL, fetch_error = NULL, updated_at = NOW()
-      WHERE message_id = $1 AND idx = $2`,
-    [row.message_id, row.idx, stored.relativePath, stored.bytes],
-  ) }).catch(async err => {
+  const stored = await streamAssetToStore(row.mxc_id, { maxBytes, extension, baseUrl, token, commit: async stored => {
+    const result = await query(
+      `UPDATE beeper_attachments
+          SET local_path = $3, byte_length = $4,
+              fetched_at = NOW(), last_viewed_at = NOW(),
+              unavailable_at = NULL, fetch_error = NULL, updated_at = NOW()
+        WHERE message_id = $1 AND idx = $2 AND mxc_id = $5
+        RETURNING local_path`,
+      [row.message_id, row.idx, stored.relativePath, stored.bytes, row.mxc_id],
+    );
+    if (result.rowCount === 0) throw attachmentChanged();
+  } }).catch(async err => {
     if (err?.code === 'ASSET_UNAVAILABLE') await markUnavailable(row, err.message);
     throw err;
   });
@@ -524,16 +537,19 @@ export async function backfillAttachments({ limit = 500 } = {}) {
 /**
  * Drop one row's claim on its bytes, unlinking the file only when no OTHER row
  * still points at it (content addressing means several usually do).
- * @returns {Promise<{ removed: boolean, bytes: number, failed: boolean }>}
+ * @returns {Promise<{ removed: boolean, bytes: number, failed: boolean } | null>}
  */
 async function releaseRowBytes(row) {
   const relativePath = row.local_path;
   return publishAttachment(relativePath, async () => {
-    await query(
+    const result = await query(
       `UPDATE beeper_attachments SET local_path = NULL, fetched_at = NULL, updated_at = NOW()
-        WHERE message_id = $1 AND idx = $2`,
-      [row.message_id, row.idx],
+        WHERE message_id = $1 AND idx = $2 AND local_path = $3 AND mxc_id = $4
+          AND keep = FALSE AND unavailable_at IS NULL
+        RETURNING message_id`,
+      [row.message_id, row.idx, relativePath, row.mxc_id],
     );
+    if (result.rowCount === 0) return null;
     return unlinkIfUnreferencedNow(relativePath);
   });
 }
@@ -618,8 +634,8 @@ export async function evictToBudget() {
     }
     const probe = await headAsset(row.mxc_id, clientOptions).then(() => null).catch((err) => err);
     if (probe?.code === 'ASSET_UNAVAILABLE') {
-      await markUnavailable(row, probe.message);
-      keptUnavailable += 1;
+      const result = await markUnavailable(row, probe.message);
+      if (result.rowCount > 0) keptUnavailable += 1;
       continue;
     }
     // Any other probe failure (Beeper closed, a transport blip) is not
@@ -630,7 +646,9 @@ export async function evictToBudget() {
     // `freed` is 0 when the unlink failed, so the reclaimed total never counts
     // bytes that are still on disk — and `used` does not drop either, which is
     // what keeps the loop from believing it has made room it has not made.
-    const { bytes: freed, failed } = await releaseRowBytes(row);
+    const released = await releaseRowBytes(row);
+    if (!released) continue;
+    const { bytes: freed, failed } = released;
     evicted += 1;
     if (failed) failedUnlinks += 1;
     reclaimedBytes += freed;

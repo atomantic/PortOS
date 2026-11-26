@@ -149,8 +149,6 @@ describe('ensureAttachmentBytes — the lazy mirror', () => {
       const flat = String(sql).replace(/\s+/g, ' ');
       if (flat.includes('FROM beeper_attachments WHERE message_id')) return { rows: [row] };
       if (flat.includes('SET local_path = $3')) {
-        // No `sha256` column write (audit cluster 06 decision 3) — the UPDATE
-        // is `local_path, byte_length`, so `params` is 4-long.
         row = { ...row, local_path: params[2], byte_length: params[3] };
         return { rows: [] };
       }
@@ -195,7 +193,7 @@ describe('ensureAttachmentBytes — the lazy mirror', () => {
     await expect(ensureAttachmentBytes('msg-example-1', 0)).rejects.toMatchObject({ code: 'ATTACHMENT_TOO_LARGE' });
     const write = vi.mocked(query).mock.calls.find(([sql]) => String(sql).includes('SET byte_length = $3'));
     expect(write).toBeTruthy();
-    expect(write[1]).toEqual(['msg-example-1', 0, 41 * 1024 * 1024]);
+    expect(write[1]).toEqual(['msg-example-1', 0, 41 * 1024 * 1024, attachmentRow().mxc_id]);
   });
 
   it('abandons a transfer that goes silent mid-stream instead of holding the file open', async () => {
@@ -433,7 +431,7 @@ describe('evictToBudget — least-recently-viewed, guarded by a HEAD', () => {
           ? { rows: [{ message_id: 'msg-example-1', idx: 0, mxc_id: 'mxc://example.invalid/abc', local_path: relPath, byte_length: 16 }] }
           : { rows: [] };
       }
-      if (flat.includes('SET unavailable_at = NOW()')) { marked.push(flat); return { rows: [] }; }
+      if (flat.includes('SET unavailable_at = NOW()')) { marked.push(flat); return { rows: [], rowCount: 1 }; }
       return { rows: [] };
     });
     vi.mocked(headAsset).mockRejectedValue(unavailableError());
