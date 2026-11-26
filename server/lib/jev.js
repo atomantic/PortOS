@@ -197,7 +197,7 @@ export const JEV_FAILURE_CODES = Object.freeze([
 // ── Wire contract ─────────────────────────────────────────────────────────
 
 /**
- * What a caller may ask the sidecar to score. Also the route-input schema:
+ * What a caller may ask the sidecar to score. The decision route extends this schema:
  * `routes/localLlm.js` validates against it from HERE rather than through
  * a shared validation module: re-exporting it there would put this module into the
  * static import closure of every suite that reaches that module, for one schema one
@@ -215,6 +215,11 @@ export const jevScoreRequestSchema = z.object({
     .max(JEV_MAX_HYPOTHESES),
   minMargin: z.number().min(0).max(1).optional(),
 }).strict();
+
+// A decision needs a runner-up to compute the margin; raw scoring accepts one hypothesis.
+export const jevDecideRequestSchema = jevScoreRequestSchema.extend({
+  hypotheses: jevScoreRequestSchema.shape.hypotheses.min(2),
+});
 
 const probability = z.number().min(0).max(1);
 

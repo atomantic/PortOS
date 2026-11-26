@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import localLlmRoutes from './localLlm.js';
+import { decide } from '../services/jev.js';
+import { installLaya, scoreLaya } from '../services/layaMlx.js';
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js';
 import { listModels, listVisionModels, listToolUseModels, installModel, cancelModelInstall, switchBackend } from '../services/localLlm.js';
 import { enrichCatalogWithVariants, applyMeasuredFit } from '../services/huggingFaceCatalog.js';
@@ -54,6 +56,16 @@ vi.mock('../services/localLlm.js', () => ({
   installBackend: vi.fn(),
   upgradeBackend: vi.fn(),
   controlOllamaServer: vi.fn(),
+}));
+
+vi.mock('../services/jev.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  decide: vi.fn(),
+}));
+
+vi.mock('../services/layaMlx.js', () => ({
+  installLaya: vi.fn(),
+  scoreLaya: vi.fn(),
 }));
 
 vi.mock('../services/modelAbuseGuard.js', () => ({
@@ -222,6 +234,89 @@ function makeApp() {
   app.use('/api/local-llm', localLlmRoutes);
   return app;
 }
+
+describe('managed scorer routes', () => {
+  const post = (path, body = {}) => request(makeApp()).post(`/api/local-llm/${path}`).send(body);
+  const premise = 'A duplicate invoice arrived.';
+  const options = ['billing', 'sales'];
+  const jevRequest = { premise, hypotheses: options };
+  const layaRequest = { premise, instructions: 'Choose a department.', options };
+
+  beforeEach(() => {
+    decide.mockReset();
+    installLaya.mockReset();
+    scoreLaya.mockReset();
+  });
+
+  it('accepts a Laya install with HTTP 202', async () => {
+    const result = { ok: true, installing: true };
+    installLaya.mockResolvedValueOnce(result);
+    const res = await post('laya-mlx/install');
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual(result);
+  });
+
+  it.each([
+    ['laya-unsupported', 400],
+    ['laya-busy', 409],
+  ])('returns %s as a Laya install refusal', async (code, status) => {
+    installLaya.mockResolvedValueOnce({ ok: false, code });
+    const res = await post('laya-mlx/install');
+    expect(res.status).toBe(status);
+    expect(res.body).toMatchObject({ error: expect.any(String), code });
+  });
+
+  it.each([
+    ['laya-request-invalid', 400],
+    ['laya-unsupported', 400],
+    ['laya-context-too-long', 400],
+    ['laya-disabled', 403],
+    ['laya-busy', 409],
+    ['laya-not-ready', 503],
+    ['laya-response-invalid', 502],
+    ['laya-scoring-failed', 502],
+  ])('returns %s as a Laya scoring failure', async (code, status) => {
+    scoreLaya.mockResolvedValueOnce({ ok: false, code });
+    const res = await post('laya-mlx/score', layaRequest);
+    expect(res.status).toBe(status);
+    expect(res.body).toMatchObject({ error: expect.any(String), code });
+  });
+
+  it.each([
+    ['jev-request-invalid', 400],
+    ['jev-premise-too-large', 400],
+    ['jev-not-installed', 503],
+    ['jev-start-failed', 503],
+    ['jev-timeout', 504],
+    ['jev-response-invalid', 502],
+    ['jev-head-revision-mismatch', 502],
+  ])('returns %s as a Jev scoring failure', async (code, status) => {
+    decide.mockResolvedValueOnce({ ok: false, code });
+    const res = await post('jev/score', jevRequest);
+    expect(res.status).toBe(status);
+    expect(res.body).toMatchObject({ error: expect.any(String), code });
+  });
+
+  it('validates the Jev decision input before calling the scorer', async () => {
+    const res = await post('jev/score', { ...jevRequest, hypotheses: [options[0]] });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: expect.any(String), code: 'VALIDATION_ERROR' });
+    expect(decide).not.toHaveBeenCalled();
+  });
+
+  it('returns successful decisions as HTTP 200 with the service payload', async () => {
+    const result = { ok: true, choice: 'billing', margin: 0.8, abstained: false };
+    decide.mockResolvedValueOnce(result);
+    scoreLaya.mockResolvedValueOnce(result);
+    const jev = await post('jev/score', { ...jevRequest, minMargin: 0.2 });
+    expect(jev.status).toBe(200);
+    expect(jev.body).toEqual(result);
+    expect(decide).toHaveBeenCalledWith({ premise, options, minMargin: 0.2 });
+    const laya = await post('laya-mlx/score', layaRequest);
+    expect(laya.status).toBe(200);
+    expect(laya.body).toEqual(result);
+  });
+});
 
 describe('local LLM playground routes', () => {
   beforeEach(() => {
