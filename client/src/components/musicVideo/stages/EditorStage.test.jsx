@@ -9,8 +9,6 @@ import { render, screen, fireEvent, within, act, waitFor } from '@testing-librar
 import { MemoryRouter } from 'react-router';
 import { listMusicVideoProjects, renderMusicVideoExcerpt } from '../../../services/apiMusicVideo.js';
 
-import { getVideoHistoryItem } from '../../../services/apiImageVideo.js';
-
 installMusicVideoPageHooks();
 
 const PROJECT = {
@@ -63,7 +61,6 @@ describe('MusicVideo editor page', () => {
       scenes: [...PROJECT.scenes, { sceneId: 'lead', order: -1, preMusic: { durationSec: 3 }, prompt: 'Cold open' }],
     };
     listMusicVideoProjects.mockResolvedValue([fixture]);
-    getVideoHistoryItem.mockResolvedValueOnce({ filename: 'final.mp4', songStartSec: lead, songDurationSec: 10, fps: 24 });
     renderAt('/music-video/mv-1/editor');
     await screen.findByRole('option', { name: 'Final render' });
     fireEvent.change(screen.getByLabelText('Preview source'), { target: { value: 'final' } });
