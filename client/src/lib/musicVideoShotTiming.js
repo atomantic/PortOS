@@ -6,12 +6,4 @@
  * coverage math, imported rather than copied so the board and the server's
  * submission gate cannot disagree.
  */
-import { grokCoverage, shotRequestSpanSec } from '../../../server/lib/musicVideo/musicVideoShotTiming.js';
-
-/** The duration a shot card submits, including its per-shot override. */
-export function grokSceneRequestDuration(scene, settings, target = null, scenes = null) {
-  const span = shotRequestSpanSec(scene, scenes);
-  return target?.grokDuration || (span != null ? grokCoverage(span).requestSec : settings?.grokDuration);
-}
-
-export { SOURCE_AUDIO_LIPSYNC, SOURCE_AUDIO_MUSIC, CLIP_LENGTH_SEC_RANGE, clipLengthChoices, shotRequestSpanSec, clipAudioOffsetSec, falSceneTake, falTakeRequestFields, grokCoverage, isPerformanceScene, meteredModelLabel, meteredSceneTake, performanceBlockedReason, performanceCapability, planPerformanceWindow, planPerformanceRepair, runwaySceneTake, runwayTakeRequestFields, sceneRenderShot, selectedPerformanceInstruction, shotSplitLimit } from '../../../server/lib/musicVideo/musicVideoShotTiming.js';
+export { SOURCE_AUDIO_LIPSYNC, SOURCE_AUDIO_MUSIC, CLIP_LENGTH_SEC_RANGE, clipLengthChoices, shotRequestSpanSec, clipAudioOffsetSec, falSceneTake, falTakeRequestFields, grokCoverage, grokSceneRequestDuration, isPerformanceScene, meteredModelLabel, meteredSceneTake, performanceBlockedReason, performanceCapability, planPerformanceWindow, planPerformanceRepair, runwaySceneTake, runwayTakeRequestFields, sceneRenderShot, selectedPerformanceInstruction, shotSplitLimit } from '../../../server/lib/musicVideo/musicVideoShotTiming.js';

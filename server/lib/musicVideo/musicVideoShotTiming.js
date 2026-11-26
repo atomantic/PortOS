@@ -392,6 +392,12 @@ export function grokCoverage(spanSec) {
   return { requestSec, uncoveredSec, needsSplit: uncoveredSec > 0 };
 }
 
+/** The duration a shot card submits, including its per-shot override. */
+export function grokSceneRequestDuration(scene, settings, target = null, scenes = null) {
+  const span = shotRequestSpanSec(scene, scenes);
+  return target?.grokDuration || (span != null ? grokCoverage(span).requestSec : settings?.grokDuration);
+}
+
 /**
  * Phrase intents overlapping a cutaway shot, as approximate clip-relative motion
  * prose for providers that take no timed controls (Grok's CLI lane). The timing

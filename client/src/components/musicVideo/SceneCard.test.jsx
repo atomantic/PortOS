@@ -1578,6 +1578,21 @@ describe('project LTX 2.5 References mode on the shot card (#15482)', () => {
   });
 });
 
+it('leaves the expected clip references empty for a frame-only Higgsfield render', () => {
+  const scene = { sceneId: 's1', prompt: 'A rider turns', referenceImageId: 'start.png',
+    clipReferenceIds: ['lead'], startSec: 0, endSec: 4, takes: [] };
+  const project = { id: 'mv-card', scenes: [scene], visualSpec: {
+    references: [{ id: 'lead', imageId: 'lead.png', role: 'character', condition: true }],
+  } };
+  const onGenerateVideo = vi.fn();
+  render(<SceneCard scene={scene} project={project} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()}
+    onGenerateVideo={onGenerateVideo} falVideoSettings={{ backend: 'higgsfield' }} />);
+  show('Clip');
+  fireEvent.click(screen.getByRole('checkbox', { name: /tick for plain image-to-video/ }));
+  fireEvent.click(screen.getByRole('button', { name: /^Render(?: draft)?$/i }));
+  expect(onGenerateVideo.mock.calls[0][1].card).toMatchObject({ frameRoute: 'image', expectedClipReferenceFiles: [] });
+});
+
 it('does not offer LTX references for a storyboard clip that cannot carry them', () => {
   const scene = { sceneId: 's1', panelId: 'panel-1', panelArt: 'panel.png', prompt: 'The rider turns',
     clipReferenceIds: ['rider'], startSec: 0, endSec: 4, takes: [] };

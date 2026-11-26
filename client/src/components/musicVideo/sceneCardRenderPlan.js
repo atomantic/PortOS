@@ -1,6 +1,7 @@
 import { getHiggsfieldVideoModel, HIGGSFIELD_DEFAULT_VIDEO_MODEL } from '../../../../server/lib/higgsfieldVideoModels.js';
 import { getGoogleVideoModel, GOOGLE_DEFAULT_VIDEO_MODEL } from '../../../../server/lib/googleVideoModels.js';
 import { isMusicVideoSetOmitted, musicVideoGreyboxReference } from '../../../../server/lib/musicVideo/musicVideoGreybox.js';
+import { LTX_REFERENCES_MAX_REFERENCES } from '../../../../server/lib/musicVideo/musicVideoClipRequest.js';
 import { sceneRenderTierChoices } from '../../../../server/lib/musicVideo/musicVideoRenderTier.js';
 import { musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoClipReferenceChoices, musicVideoSceneCastIds } from '../../../../server/lib/musicVideo/musicVideoConditioning.js';
 import { LTX_REFERENCES_GENERATION_MODE, isLtx25Model, ltxReferenceSheetPrefix, ltxReferencesUnavailableReason } from '../../lib/musicVideoLtxReferences.js';
@@ -86,7 +87,8 @@ function computeClipConditioning({ project, scene, castMedia, referenceBackend, 
   const startFrameLayout = referenceBackend === 'grok' && !storyboardDefault && renderInputs.startFrameLayout === true;
   // Higgsfield sends a frame plus sheets as the first reference image; ticking this renders plain image-to-video instead.
   const higgsfieldFrameOnly = referenceBackend === 'higgsfield' && renderInputs.frameRoute === 'image';
-  const referenceCapacity = useLtxReferences ? 8 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel, { endFrame: runwayEndFrameOn, startFrameLayout });
+  const referenceCapacity = useLtxReferences ? LTX_REFERENCES_MAX_REFERENCES
+    : higgsfieldFrameOnly ? 0 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel, { endFrame: runwayEndFrameOn, startFrameLayout });
   const castIds = referenceCapacity > 0 && castMedia ? musicVideoSceneCastIds(project, scene) : [];
   const guidesPending = castIds.some((id) => castMedia[id] === undefined);
   // A failed read (null) would otherwise send the clip without the member's guides.

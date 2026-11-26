@@ -11,12 +11,10 @@
 // the project-wide `generationMode` value, the card's shared prompt prefix, and the reasons
 // the shot card cannot offer the option.
 
-export const LTX_REFERENCES_GENERATION_MODE = 'ltxReferences';
-export const LTX_REFERENCES_IC_MODE = 'ic-ingredients-25';
-export const LTX_REFERENCES_MIN_FRAMES = 121;
-export const LTX_REFERENCES_MAX_REFERENCES = 8;
+import { isLtx25Model } from '../../../server/lib/musicVideo/musicVideoClipRequest.js';
 
-export const isLtx25Model = (model) => model?.runtime === 'ltx25';
+export { LTX_REFERENCES_GENERATION_MODE, LTX_REFERENCES_IC_MODE, isLtx25Model } from '../../../server/lib/musicVideo/musicVideoClipRequest.js';
+export const LTX_REFERENCES_MIN_FRAMES = 121;
 
 /** The reference-sheet lead-in the render prompt carries (and the card previews). */
 export const ltxReferenceSheetPrefix = (labels) => `Reference sheet: ${labels.join(', ')}.\n\nGenerated video: `;
