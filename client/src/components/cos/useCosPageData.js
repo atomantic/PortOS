@@ -61,6 +61,24 @@ function mergeAgentRecords(base, update) {
   };
 }
 
+function pruneBlockedTaskInsight(prev, taskId) {
+  if (!Array.isArray(prev)) return prev;
+  return prev.flatMap(insight => {
+    if (insight.type !== 'blocked' || !Array.isArray(insight.tasks)) return [insight];
+    const remaining = insight.tasks.filter(task => task.id !== taskId);
+    if (remaining.length === insight.tasks.length) return [insight];
+    if (remaining.length === 0) return [];
+    const firstRemaining = remaining[0];
+    return [{
+      ...insight,
+      title: `${remaining.length} blocked task${remaining.length > 1 ? 's' : ''}`,
+      description: firstRemaining.blocker || firstRemaining.description || insight.description,
+      count: remaining.length,
+      tasks: remaining,
+    }];
+  });
+}
+
 // How long the avatar keeps "speaking" after an event that gives it something to
 // say. Exported so tests drain the timer by this value rather than a literal —
 // a hardcoded drain that no longer covers the timer lets a state update escape
@@ -721,8 +739,9 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       // Track active agent metadata for dynamic avatar resolution
       if (data?.metadata) setActiveAgentMeta(data.metadata);
       // Initialize empty output buffer for new agent
-      if (data?.agentId || data?.id) {
-        setLiveOutputs(prev => ({ ...prev, [data.agentId || data.id]: [] }));
+      const id = data?.id || data?.agentId;
+      if (needsRef.current.agents && id) {
+        setLiveOutputs(prev => ({ ...prev, [id]: [] }));
       }
       fetchQueue();
     };
@@ -774,9 +793,10 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       // Clear active agent metadata so avatar reverts to default
       setActiveAgentMeta(null);
       // Clean up live output buffer for completed agent to prevent memory growth
-      if (data?.agentId) {
+      if (id) {
         setLiveOutputs(prev => {
-          const { [data.agentId]: _, ...rest } = prev;
+          if (!(id in prev)) return prev;
+          const { [id]: _, ...rest } = prev;
           return rest;
         });
       }
@@ -962,23 +982,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
         cos: unblockSlice(prev.cos)
       };
     });
-    setInsights(prev => {
-      if (!Array.isArray(prev)) return prev;
-      return prev.flatMap(insight => {
-        if (insight.type !== 'blocked' || !Array.isArray(insight.tasks)) return [insight];
-        const remaining = insight.tasks.filter(task => task.id !== taskId);
-        if (remaining.length === insight.tasks.length) return [insight];
-        if (remaining.length === 0) return [];
-        const firstRemaining = remaining[0];
-        return [{
-          ...insight,
-          title: `${remaining.length} blocked task${remaining.length > 1 ? 's' : ''}`,
-          description: firstRemaining.blocker || firstRemaining.description || insight.description,
-          count: remaining.length,
-          tasks: remaining,
-        }];
-      });
-    });
+    setInsights(prev => pruneBlockedTaskInsight(prev, taskId));
   }, []);
 
   const handleTaskDeleted = useCallback((taskId, taskSource) => {
@@ -1009,23 +1013,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       }
       return { ...prev, user: deleteSlice(prev.user), cos: deleteSlice(prev.cos) };
     });
-    setInsights(prev => {
-      if (!Array.isArray(prev)) return prev;
-      return prev.flatMap(insight => {
-        if (insight.type !== 'blocked' || !Array.isArray(insight.tasks)) return [insight];
-        const remaining = insight.tasks.filter(task => task.id !== taskId);
-        if (remaining.length === insight.tasks.length) return [insight];
-        if (remaining.length === 0) return [];
-        const firstRemaining = remaining[0];
-        return [{
-          ...insight,
-          title: `${remaining.length} blocked task${remaining.length > 1 ? 's' : ''}`,
-          description: firstRemaining.blocker || firstRemaining.description || insight.description,
-          count: remaining.length,
-          tasks: remaining,
-        }];
-      });
-    });
+    setInsights(prev => pruneBlockedTaskInsight(prev, taskId));
   }, []);
 
   // A successful task POST returns the persisted task synchronously. Insert it
