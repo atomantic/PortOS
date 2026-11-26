@@ -631,6 +631,9 @@ export async function spawnTuiAgent({
     registerSpawnedAgent(pid, {
       fullCommand: tuiConfig.commandLine,
       agentId,
+      providerCommand: provider.command,
+      providerId: provider.id,
+      providerName: provider.name,
       taskId: task.id,
       model,
       workspacePath: cwd,

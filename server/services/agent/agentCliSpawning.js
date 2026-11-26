@@ -553,6 +553,9 @@ export async function spawnDirectly({
     registerSpawnedAgent(spawnedPid, {
       fullCommand,
       agentId,
+      providerCommand: provider.command,
+      providerId: provider.id,
+      providerName: provider.name,
       taskId: task.id,
       model,
       workspacePath: cwd,

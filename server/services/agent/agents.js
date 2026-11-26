@@ -1,6 +1,7 @@
 import { exec, execFile } from '../../lib/childProcess.js';
+import { basename } from 'node:path';
 import { promisify } from 'util';
-import { getSpawnedAgent } from './agentState.js';
+import { getSpawnedAgent, getSpawnedAgentPids } from './agentState.js';
 import { killAgent } from './agentOrchestrator.js';
 
 const execAsync = promisify(exec);
@@ -8,27 +9,34 @@ const execAsync = promisify(exec);
 // single argv element instead of through a shell command line.
 const execFileAsync = promisify(execFile);
 
-// Agent process patterns to detect
-const AGENT_PATTERNS = [
-  { name: 'Claude', pattern: 'claude', command: 'claude' },
-  { name: 'Codex', pattern: 'codex', command: 'codex' },
-  { name: 'Antigravity', pattern: 'agy', command: 'agy' },
-  { name: 'Gemini', pattern: 'gemini', command: 'gemini' },
-  { name: 'Aider', pattern: 'aider', command: 'aider' },
-  { name: 'Cursor', pattern: 'cursor', command: 'cursor' },
-  { name: 'Copilot', pattern: 'copilot', command: 'copilot' }
-];
+// Cursor's CLI name differs from the agent type exposed by the API.
+const AGENT_PROGRAMS = new Map([
+  ['claude', { name: 'Claude', type: 'claude' }],
+  ['codex', { name: 'Codex', type: 'codex' }],
+  ['agy', { name: 'Antigravity', type: 'agy' }],
+  ['gemini', { name: 'Gemini', type: 'gemini' }],
+  ['aider', { name: 'Aider', type: 'aider' }],
+  ['cursor-agent', { name: 'Cursor', type: 'cursor' }],
+  ['copilot', { name: 'Copilot', type: 'copilot' }]
+]);
+const INTERPRETERS = new Set(['node', 'bun', 'deno', 'python', 'python3', 'sh', 'bash', 'zsh', 'env']);
 
-/**
- * Decide whether a matched process line is a real AI-agent CLI or an OS/UI
- * helper that only happens to share a substring with an agent name.
- *
- * Brand detection is a coarse substring match, so `cursor` also matches macOS
- * native helpers like the TextInputUI framework's `CursorUIViewService.xpc`
- * (a text-caret UI service, NOT the Cursor AI editor). Those live under system
- * framework / XPC-service / app-bundle paths that no agent CLI is ever invoked
- * from, so we exclude the whole class rather than blacklisting one binary.
- */
+function normalizeProgramName(name) {
+  return name.toLowerCase().replace(/\.(?:js|mjs|cjs|exe)$/, '');
+}
+
+function agentProgramName(command) {
+  const [executable, ...args] = command.split(/\s+/);
+  const program = normalizeProgramName(basename(executable));
+  if (!INTERPRETERS.has(program)) return program;
+
+  const scriptIndex = args.findIndex(arg => !arg.startsWith('-'));
+  if (scriptIndex === -1) return '';
+  // Inline commands and source text don't identify a script file.
+  if (args.slice(0, scriptIndex).some(arg => /^(?:-[cep]|--(?:eval|print))(?:=|$)/.test(arg))) return '';
+  return normalizeProgramName(basename(args[scriptIndex]));
+}
+
 export function isAgentProcessCommand(command) {
   if (!command) return false;
   // Our own scanner and the grep it pipes through.
@@ -47,40 +55,35 @@ export function isAgentProcessCommand(command) {
  * Get list of running agent processes
  */
 export async function getRunningAgents() {
-  const agents = [];
+  const agents = new Map();
   const snapshot = await readProcessSnapshot();
 
-  for (const agent of AGENT_PATTERNS) {
-    snapshot.forEach(entry => {
-      if (!entry.matchText.includes(agent.pattern)) return;
-      const { matchText: _matchText, ...proc } = entry;
-      // Enrich with spawned command data if available
-      const spawnedData = getSpawnedAgent(proc.pid);
+  for (const { programName, ...proc } of snapshot) {
+    if (agents.has(proc.pid)) continue;
+    const spawnedData = getSpawnedAgent(proc.pid);
+    const agent = spawnedData
+      ? AGENT_PROGRAMS.get(agentProgramName(spawnedData.providerCommand || spawnedData.fullCommand || ''))
+      : AGENT_PROGRAMS.get(programName);
+    if (!spawnedData && !agent) continue;
 
-      agents.push({
-        ...proc,
-        agentName: agent.name,
-        agentType: agent.command,
-        // Override command with full command if we have it
-        command: spawnedData?.fullCommand || proc.command,
-        // Include additional metadata if available
-        ...(spawnedData && {
-          agentId: spawnedData.agentId,
-          taskId: spawnedData.taskId,
-          model: spawnedData.model,
-          workspacePath: spawnedData.workspacePath,
-          prompt: spawnedData.prompt,
-          registeredAt: spawnedData.registeredAt,
-          source: 'cos'
-        })
-      });
+    agents.set(proc.pid, {
+      ...proc,
+      agentName: agent?.name ?? spawnedData?.providerName ?? 'CoS',
+      agentType: agent?.type ?? spawnedData?.providerId ?? 'cos',
+      command: spawnedData?.fullCommand || proc.command,
+      ...(spawnedData && {
+        agentId: spawnedData.agentId,
+        taskId: spawnedData.taskId,
+        model: spawnedData.model,
+        workspacePath: spawnedData.workspacePath,
+        prompt: spawnedData.prompt,
+        registeredAt: spawnedData.registeredAt,
+        source: 'cos'
+      })
     });
   }
 
-  // Sort by start time (newest first)
-  agents.sort((a, b) => b.startTime - a.startTime);
-
-  return agents;
+  return [...agents.values()].sort((a, b) => b.startTime - a.startTime);
 }
 
 /** Acquire once per request; classification never launches another probe. */
@@ -114,17 +117,12 @@ async function readUnixSnapshot() {
       if (!Number.isInteger(pid) || pid <= 0 || !Number.isFinite(ppid)
         || !Number.isFinite(cpu) || !Number.isFinite(mem)) continue;
 
-      // Skip grep, our own scanner, macOS app bundles, and the system
-      // framework / XPC helpers that only match a name substring (e.g. the
-      // native CursorUIViewService, not the Cursor AI editor).
-      if (!isAgentProcessCommand(command)) continue;
-
       // Parse elapsed time to get start time
       const runtime = parseElapsedTime(etime);
       if (!Number.isFinite(runtime)) continue;
 
       processes.push({
-        matchText: command.toLowerCase(),
+        programName: isAgentProcessCommand(command) ? agentProgramName(command) : '',
         pid,
         ppid,
         cpu,
@@ -144,8 +142,10 @@ async function readUnixSnapshot() {
  * Find processes on Windows
  */
 async function readWindowsSnapshot() {
-  // Patterns are private fixed literals; match Name, never command-line arguments.
-  const filter = AGENT_PATTERNS.map(({ pattern }) => `Name LIKE '%${pattern}%'`).join(' OR ');
+  // Include registered wrappers without querying command-line arguments.
+  const nameFilters = [...AGENT_PROGRAMS.keys()].map(program => `Name LIKE '%${program}%'`);
+  const pidFilters = getSpawnedAgentPids().filter(Number.isSafeInteger).map(pid => `ProcessId = ${pid}`);
+  const filter = [...nameFilters, ...pidFilters].join(' OR ');
 
   // WMIC, not PowerShell CIM, was the original implementation here — but
   // Microsoft removed wmic.exe from Windows 11 (it is gone entirely on 24H2+
@@ -201,7 +201,7 @@ async function readWindowsSnapshot() {
     const runtime = Date.now() - startTime;
 
     processes.push({
-      matchText: row.Name.toLowerCase(),
+      programName: normalizeProgramName(row.Name),
       pid,
       ppid: parseInt(row.ParentProcessId, 10) || 0,
       // Win32_Process carries no CPU% column (the old wmic query asked for a
