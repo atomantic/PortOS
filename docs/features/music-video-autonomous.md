@@ -243,6 +243,18 @@ The Suno adapter fills the form through `placeholder` / role selectors and reads
 
 Progress is pushed over the `music-video:autonomous` socket event (`{ projectId, runId, run, project }`).
 
+### Production and spend
+
+Use the production endpoints to run the video stage for an existing project and
+inspect its progress. The spend endpoint reports the project's render costs
+across production runs.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/music-video/:id/production-runs` | Start a server-owned production run (201). |
+| `GET` | `/api/music-video/:id/production-runs/:runId` | Read that production run by ID. |
+| `GET` | `/api/music-video/:id/spend` | Read the render ledger and estimated spend by lane, including unpriced renders and manual adjustments. |
+
 ## Scheduled task: `music-video-autopilot`
 
 A programmatic scheduled task (no agent). Each run picks the **oldest active Brain idea no earlier run used** (optionally only ideas carrying one of `ideaTags`), turns it into the prompt and starts an autonomous run with the task's saved settings (`taskMetadata.musicVideoAutopilot`: `songSource`, `localFallback`, `suno`, `tools`, `models`, `budgetUsd`, `limits`, `checkpoints`, `instrumental`, `guidance`, `llm`, `llmStages`, `lyricsReview`, `authoring`, `ideaTags`). Set a cadence on its Schedule card; Run Now fires it once.

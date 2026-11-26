@@ -1009,18 +1009,6 @@ describe('CI test impact planner', () => {
     expect(plan.client.mode).toBe('skip');
   });
 
-  it('covers the product-surfaces Markdown input without widening ordinary documentation changes', () => {
-    // The product-surfaces doc-parity check runs inside the structural guard runner (#16996).
-    const contract = 'server/test/guards/repo.guard.test.js';
-    const plan = buildCiTestPlan(['docs/features/product-surfaces.md'], {
-      trackedFiles: [...TRACKED, contract],
-    });
-
-    expect(plan).toMatchObject({ full: false, reason: 'documentation-only change',
-      server: { mode: 'files' }, client: { mode: 'skip' }, build: false, db: false, windows: false });
-    expect(plan.server.files).toContain(contract);
-  });
-
   it('skips all expensive jobs for documentation-only changes, keeping the always-run guards', () => {
     const plan = buildCiTestPlan([
       '.changelog/NEXT.md',

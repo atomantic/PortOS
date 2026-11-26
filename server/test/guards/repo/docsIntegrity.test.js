@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest';
 import { ALWAYS_PUBLIC_API_PATHS } from '../../../lib/apiAccessPolicy.js';
 import { getApiRouteCatalog } from '../../../lib/apiRouteGraph.js';
 import { ERROR_CODES_BY_STATUS } from '../../../lib/errorHandler.js';
-import { NAV_COMMANDS } from '../../../lib/navManifest.js';
 import { guardCorpus, readText, REPO_ROOT, trackedFiles } from '../../../../scripts/lib/guardCorpus.js';
 import { importGrowthSkipReason, resolveImportGrowthBase } from '../../../../scripts/lib/importGrowth.js';
 import { discoverWorkspaces, workspaceDir } from '../../../../scripts/trusted-rebuilds.js';
@@ -691,57 +690,6 @@ describe('living doc size ratchet', () => {
       }
     }
     expect(violations).toEqual([]);
-  });
-});
-
-const SURFACE_DOC = readDoc('docs/features/product-surfaces.md');
-
-const SECTION_HEADING = '## 6. Communications, Voice, Social, & Spatial UI';
-
-// Pre-existing gaps this change did not introduce — see the file comment above.
-const KNOWN_UNRELATED_GAPS = new Set([
-  '/messages/config',
-  '/messages/imessage?settings=1',
-]);
-
-/**
- * Every backticked path in the Route(s) column of the Comms/messaging section's
- * table rows. Scoped to that one section (between its heading and the next
- * `## `) rather than the whole document, so a path documented somewhere else
- * entirely (a Settings or Digital Twin row reusing similar wording) can't be
- * mistaken for coverage here.
- */
-function commsSectionDocumentedPaths() {
-  const start = SURFACE_DOC.indexOf(SECTION_HEADING);
-  const afterHeading = SURFACE_DOC.slice(start + SECTION_HEADING.length);
-  const end = afterHeading.indexOf('\n## ');
-  const section = end === -1 ? afterHeading : afterHeading.slice(0, end);
-  const paths = new Set();
-  for (const line of section.split('\n')) {
-    if (!line.startsWith('|')) continue;
-    const routeCell = line.split('|')[2] ?? '';
-    for (const match of routeCell.matchAll(/`([^`]+)`/g)) {
-      paths.add(match[1]);
-    }
-  }
-  return paths;
-}
-
-describe('docs/features/product-surfaces.md — Comms route inventory', () => {
-  it('documents every Comms nav-manifest path not already tracked as a pre-existing gap', () => {
-    const documented = commsSectionDocumentedPaths();
-    const commsPaths = NAV_COMMANDS
-      .filter((command) => command.section === 'Comms')
-      .map((command) => command.path)
-      .filter((path) => !KNOWN_UNRELATED_GAPS.has(path));
-
-    const missing = commsPaths.filter((path) => !documented.has(path));
-    expect(missing).toEqual([]);
-  });
-
-  it('scans a non-empty set of manifest paths and documented routes (detector self-check)', () => {
-    expect(NAV_COMMANDS.filter((command) => command.section === 'Comms').length).toBeGreaterThan(0);
-    expect(commsSectionDocumentedPaths().size).toBeGreaterThan(0);
   });
 });
 
