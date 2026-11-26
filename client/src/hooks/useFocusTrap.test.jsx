@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 
 import useFocusTrap from './useFocusTrap.js';
@@ -75,6 +76,39 @@ describe('useFocusTrap', () => {
   it('moves focus to the first focusable element on activation', () => {
     render(<Dialog active />);
     expect(document.activeElement).toBe(screen.getByText('first'));
+  });
+
+  it('honors a Tab handled by a focused child before the document trap', () => {
+    function DialogWithOwnedKey() {
+      const ref = useRef(null);
+      useFocusTrap(true, ref);
+      return (
+        <div ref={ref}>
+          <button>First</button>
+          <button onKeyDown={event => event.preventDefault()}>Owns Tab</button>
+        </div>
+      );
+    }
+    render(<DialogWithOwnedKey />);
+    const child = screen.getByRole('button', { name: 'Owns Tab' });
+    child.focus();
+
+    expect(fireEvent.keyDown(child, { key: 'Tab' })).toBe(false);
+    expect(document.activeElement).toBe(child);
+  });
+
+  it.each(['menu', 'tooltip'])('yields to a portaled %s outside the trapped container', role => {
+    render(
+      <>
+        <Dialog active />
+        {createPortal(<div role={role} tabIndex={-1} />, document.body)}
+      </>
+    );
+    const layer = screen.getByRole(role);
+    layer.focus();
+
+    expect(fireEvent.keyDown(layer, { key: 'Tab' })).toBe(true);
+    expect(document.activeElement).toBe(layer);
   });
 
   describe('with an initialFocusRef aimed outside the tab order', () => {
