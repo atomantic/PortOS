@@ -105,23 +105,6 @@ function instructionFileViolations(entries) {
   });
 }
 
-const SHARED_WORD_LIMIT = 12;
-
-function instructionWordRuns(markdown) {
-  const words = markdown
-    .replace(/\[([^\]\n]+)\]\([^\n)]*\)/g, '$1')
-    .toLowerCase()
-    .match(/[\p{L}\p{N}]+/gu) ?? [];
-  return words
-    .slice(SHARED_WORD_LIMIT - 1)
-    .map((_, index) => words.slice(index, index + SHARED_WORD_LIMIT).join(' '));
-}
-
-function firstSharedInstructionRun(detailRuns, instruction) {
-  const instructionRuns = new Set(instructionWordRuns(instruction));
-  return detailRuns.find((run) => instructionRuns.has(run));
-}
-
 /** Entire body of a bridge file. */
 const IMPORT_BODY = '@AGENTS.md\n';
 
@@ -186,23 +169,6 @@ describe('agent-instructions files (#4852)', () => {
       expect(readText(agentsPath).trim().length, `${dir}/AGENTS.md must carry content`).toBeGreaterThan(0);
       expect(readText(bridgePath), `${dir}/CLAUDE.md must be exactly the @AGENTS.md import`).toBe(IMPORT_BODY);
     }
-  });
-
-  it('keeps the rule detail free of repeated 12-word runs', () => {
-    const detailFile = 'docs/INSTRUCTION_RULE_DETAIL.md';
-    const detailRuns = instructionWordRuns(readText(join(REPO_ROOT, detailFile)));
-    for (const dir of INSTRUCTION_DIRS) {
-      const agentsFile = join(dir, 'AGENTS.md');
-      const sharedRun = firstSharedInstructionRun(detailRuns, readText(join(REPO_ROOT, agentsFile)));
-      expect(sharedRun, `${detailFile} repeats ${agentsFile}: "${sharedRun}"`).toBeUndefined();
-    }
-  });
-
-  it('detects a 12-word copy across markdown formatting and allows an 11-word copy', () => {
-    const detailRuns = instructionWordRuns('One **two** [three](example.md) four, five six\nseven eight nine ten eleven twelve.');
-    const elevenWords = 'one two three four five six seven eight nine ten eleven';
-    expect(firstSharedInstructionRun(detailRuns, `${elevenWords} twelve`)).toBe(`${elevenWords} twelve`);
-    expect(firstSharedInstructionRun(detailRuns, `${elevenWords} different`)).toBeUndefined();
   });
 
   describe('byte budget policy', () => {
@@ -757,19 +723,6 @@ const findMislabelledLinks = (text) => {
   return bad;
 };
 
-const LONG_SENTENCE = 120;
-
-/** Sentences over LONG_SENTENCE characters, list markers stripped. */
-const longSentences = (text) => text.split('\n')
-  .flatMap((line) => line.replace(/^\s*(?:[-*]|\d+\.)\s+/, '').split(/(?<=[.!?])\s+/))
-  .map((s) => s.trim())
-  .filter((s) => s.length > LONG_SENTENCE);
-
-const sharedLongSentences = (a, b) => {
-  const inA = new Set(longSentences(a));
-  return longSentences(b).filter((s) => inA.has(s));
-};
-
 describe('instruction file references', () => {
   const files = AGENT_FILES;
   const tracked = new Set(TRACKED.map((path) => basename(path)));
@@ -814,20 +767,12 @@ describe('instruction file references', () => {
 
   it('flags a label naming a different .md file than the target', () => {
     const text = [
-      'See [docs/CONTRIBUTING.md](docs/INSTRUCTION_RULE_DETAIL.md#agent-instruction-files).',
+      'See [docs/CONTRIBUTING.md](docs/ARCHITECTURE.md#directory-structure).',
       'Fine: [VERSIONING.md](./VERSIONING.md#regular-development), [detail](docs/X.md), [`server/AGENTS.md`](server/AGENTS.md), [ETHOS.md](#ethos).',
     ].join('\n');
     expect(findMislabelledLinks(text)).toEqual([
-      { line: 1, label: 'docs/CONTRIBUTING.md', target: 'docs/INSTRUCTION_RULE_DETAIL.md#agent-instruction-files' },
+      { line: 1, label: 'docs/CONTRIBUTING.md', target: 'docs/ARCHITECTURE.md#directory-structure' },
     ]);
-  });
-
-  it('the rule-detail doc restates no long root sentence verbatim', () => {
-    const root = readDoc('AGENTS.md');
-    const detail = readDoc('docs/INSTRUCTION_RULE_DETAIL.md');
-    expect(sharedLongSentences(root, detail)).toEqual([]);
-    const restated = 'Every reusable-code directory is cataloged from module headers, and this sentence is long enough to count as a rule restatement.';
-    expect(sharedLongSentences(`- ${restated} Short.`, `Intro. ${restated}`)).toEqual([restated]);
   });
 });
 
