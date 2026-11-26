@@ -689,11 +689,11 @@ describe('instruction file references', () => {
 
   it('flags a label naming a different .md file than the target', () => {
     const text = [
-      'See [docs/CONTRIBUTING.md](docs/ARCHITECTURE.md#directory-structure).',
+      'See [CONTRIBUTING.md](docs/ARCHITECTURE.md#directory-structure).',
       'Fine: [VERSIONING.md](./VERSIONING.md#regular-development), [detail](docs/X.md), [`server/AGENTS.md`](server/AGENTS.md), [ETHOS.md](#ethos).',
     ].join('\n');
     expect(findMislabelledLinks(text)).toEqual([
-      { line: 1, label: 'docs/CONTRIBUTING.md', target: 'docs/ARCHITECTURE.md#directory-structure' },
+      { line: 1, label: 'CONTRIBUTING.md', target: 'docs/ARCHITECTURE.md#directory-structure' },
     ]);
   });
 });

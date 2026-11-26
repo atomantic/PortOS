@@ -40,7 +40,7 @@ Vitest sets `NODE_ENV=test`. Set `PORTOS_TEST_MEMO=off` to bypass passed-input r
 
 ## Test Strategy: Value Over Assertion Count
 
-Test at the highest practical public boundary. Use unit tests where they cheaply cover behavior the boundary cannot ([policy](docs/CONTRIBUTING.md#test-strategy-value-over-assertion-count)).
+Test at the highest practical public boundary. Use unit tests where they cheaply cover behavior the boundary cannot ([policy](CONTRIBUTING.md#test-strategy-value-over-assertion-count)).
 
 ## Security Model
 

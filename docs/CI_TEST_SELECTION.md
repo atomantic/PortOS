@@ -34,8 +34,8 @@ uncapped forks oversubscribe those cores during transform. Locally, Vitest worke
 are `cores / maxConcurrentAgents` from the CoS settings (`scripts/lib/cosWorkerBudget.js`),
 capped at 4, so concurrent worktree gates share one host budget; lower
 **max concurrent agents** in the app to ease load — no env var. A focused file
-run is not the full-suite result (`docs/CONTRIBUTING.md`). `npm run pregate`
-passes the derived value to its stages. The client caps Vitest at three
+run is evidence for the selected tests ([testing guide](../CONTRIBUTING.md#testing)).
+`npm run pregate` passes the derived value to its stages. The client caps Vitest at three
 workers, leaving one runner core for Chromium and DOM spikes. File-level
 parallelism stays on; the DB suite already serializes
 files because those tests share one Postgres.
