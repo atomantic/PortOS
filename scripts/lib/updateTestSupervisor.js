@@ -25,9 +25,11 @@ export function installUpdateTestSupervisor(repo, { standalone = false } = {}) {
   }
   const supervisor = new URL('../deferred-update.mjs', import.meta.url).href;
   const admission = new URL('../../server/lib/maintenanceAdmission.js', import.meta.url).href;
+  const legacyActivity = new URL('./legacyUpdateActivity.mjs', import.meta.url).href;
   writeFileSync(join(repo, 'scripts/deferred-update.mjs'), `
 import { runDeferredUpdate, enterUpdate, settleInterruptedUpdate } from ${JSON.stringify(supervisor)};
 import { createMaintenanceAdmission } from ${JSON.stringify(admission)};
+import { observedDatabaseRestoreProcess, snapshotLegacyProcesses } from ${JSON.stringify(legacyActivity)};
 import { existsSync } from 'node:fs';
 const admission = createMaintenanceAdmission(${JSON.stringify(join(repo, 'data'))}, {
   assertWrite: path => { if (path !== ${JSON.stringify(join(repo, 'data/workflow-maintenance'))}) throw new Error('Unexpected fixture write'); },
@@ -42,6 +44,10 @@ else {
   process.on('SIGTERM', () => controller.abort());
   process.on('SIGINT', () => controller.abort());
   process.exitCode = await runDeferredUpdate({ admission, cwd: ${JSON.stringify(repo)}, signal: controller.signal,
+    // Keep real updater process attribution, but keep unrelated PostgreSQL
+    // restores (including the serial DB tests) out of this fixture's inventory.
+    legacySnapshot: async platform => (await snapshotLegacyProcesses(platform))
+      .filter(row => !observedDatabaseRestoreProcess([row])),
     observeWork: async () => existsSync(${JSON.stringify(join(repo, 'observed-running-work'))}) ? [{ kind: 'render:example', label: '1 render running', count: 1 }] : [],
     policy: command === '--interrupt' ? 'interrupt' : command === '--automatic' ? 'automatic' : 'manual' });
 }

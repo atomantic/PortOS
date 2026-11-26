@@ -1,3 +1,4 @@
+// test-memo: git-fixture — git only runs in temporary repositories created for this suite.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync, mkdirSync } from 'node:fs';

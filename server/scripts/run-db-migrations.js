@@ -44,20 +44,6 @@ const DEFAULT_MIGRATIONS_DIR = join(__dirname, 'db-migrations');
 // and SYNC_FEED_LOCK_KEY (8315001).
 export const DB_MIGRATIONS_LOCK_KEY = 5977003;
 
-async function loadMigrationExecutor(migrationsDir, file) {
-  const fullPath = join(migrationsDir, file);
-  if (file.endsWith('.sql')) {
-    const sql = await readFile(fullPath, 'utf-8');
-    return (client) => client.query(sql);
-  }
-  const mod = await import(pathToFileURL(fullPath).href);
-  const migration = (mod?.default && typeof mod.default.up === 'function') ? mod.default : mod;
-  if (!migration || typeof migration.up !== 'function') {
-    throw new Error(`DB migration "${file}" does not export an up() function`);
-  }
-  return (client) => migration.up(client);
-}
-
 /**
  * Apply pending DB migrations.
  *
@@ -86,7 +72,22 @@ export async function runDbMigrations({
   for (const file of files) {
     if (applied.has(file)) continue;
 
-    const applyMigration = await loadMigrationExecutor(migrationsDir, file);
+    // Keep file loads in the scanner's loop so test memo keys include the
+    // shipped migration directory while custom migration directories still work.
+    const fullPath = join(migrationsDir, file);
+    let applyMigration;
+    if (file.endsWith('.sql')) {
+      const sql = await readFile(fullPath, 'utf-8');
+      applyMigration = (client) => client.query(sql);
+    } else {
+      const mod = await import(pathToFileURL(fullPath).href);
+      const migration = (mod?.default && typeof mod.default.up === 'function') ? mod.default : mod;
+      if (typeof migration.up !== 'function') {
+        throw new Error(`DB migration "${file}" does not export an up() function`);
+      }
+      applyMigration = (client) => migration.up(client);
+    }
+
     // Acquire a transaction-scoped advisory lock and re-check schema_migrations
     // before running the migration body so overlapping boots/CLI runs cannot
     // race on the same migration or hit duplicate-key 23505 on insert.

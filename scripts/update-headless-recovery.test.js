@@ -1,3 +1,4 @@
+// test-memo: git-fixture — git only runs in temporary repositories created for this suite.
 import { writeDependencyHashes } from './lib/dependencyReceipts.js';
 import { installUpdateTestSupervisor } from './lib/updateTestSupervisor.js';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -12,8 +13,9 @@ import { makeGitSandbox, destroyGitSandbox, SKIP_HEAVY_INTEGRATION } from '../se
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const WINDOWS = process.platform === 'win32';
 const SHIM = WINDOWS ? 'update.ps1' : 'update.sh';
-const windowsSpawnHelpers = 'server/lib/aiToolkit/internal/windowsSafeSpawn.js';
-const ecosystem = JSON.parse(execFileSync(process.execPath, ['-p', "JSON.stringify(require('./ecosystem.config.cjs').apps.map(x => x.name))"], { cwd: REPO_ROOT, encoding: 'utf8' }));
+const ecosystem = JSON.parse(execFileSync(process.execPath, ['-p',
+  'JSON.stringify(require(process.argv[1]).apps.map(x => x.name))', join(REPO_ROOT, 'ecosystem.config.cjs'),
+], { encoding: 'utf8' }));
 const productionApps = ecosystem.filter(name => name !== 'portos-ui').join(',');
 
 // Everything update.sh shells out to between the pm2 delete and the pm2 start.
@@ -60,7 +62,8 @@ async function makeSandbox({
   if (!withoutDeps) mkdirSync(join(repo, 'node_modules', 'pm2', 'bin'), { recursive: true });
 
   installUpdateTestSupervisor(repo);
-  for (const file of [SHIM, 'scripts/update.mjs', 'scripts/lib/dependencyReceipts.js', 'scripts/lib/workspaceDependencies.js', windowsSpawnHelpers]) {
+  for (const file of ['update.sh', 'update.ps1', 'scripts/update.mjs', 'scripts/lib/dependencyReceipts.js',
+    'scripts/lib/workspaceDependencies.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js']) {
     mkdirSync(dirname(join(repo, file)), { recursive: true });
     copyFileSync(join(REPO_ROOT, file), join(repo, file));
   }
@@ -650,7 +653,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('shared updater headless-install guard',
       expect(hashes.root).toBe(dependencyReceipt(box.repo));
       expect(hashes.server).toBe(dependencyReceipt(join(box.repo, 'server')));
       attachEnsureDeps(box.repo);
-      const output = execFileSync(process.execPath, ['scripts/ensure-deps.js'], { cwd: box.repo, encoding: 'utf8' });
+      const output = execFileSync(process.execPath, [join(box.repo, 'scripts', 'ensure-deps.js')], { cwd: box.repo, encoding: 'utf8' });
       expect(output).not.toMatch(/reinstall|installing/i);
       for (const rel of ['node_modules/npm-ran', 'client/node_modules/npm-ran', 'server/node_modules/npm-ran']) {
         expect(existsSync(join(box.repo, rel))).toBe(false);
@@ -678,7 +681,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('shared updater headless-install guard',
       const hashes = JSON.parse(readFileSync(join(box.repo, 'data', 'deps-hashes.json'), 'utf8'));
       expect(hashes.server).toBe(dependencyReceipt(join(box.repo, 'server')));
       attachEnsureDeps(box.repo);
-      const output = execFileSync(process.execPath, ['scripts/ensure-deps.js'], { cwd: box.repo, encoding: 'utf8' });
+      const output = execFileSync(process.execPath, [join(box.repo, 'scripts', 'ensure-deps.js')], { cwd: box.repo, encoding: 'utf8' });
       expect(output).not.toMatch(/reinstall|installing/i);
       expect(existsSync(join(box.repo, 'server', 'node_modules', 'npm-ran'))).toBe(false);
     } finally {
