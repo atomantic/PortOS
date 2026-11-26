@@ -187,8 +187,11 @@ router.get('/', asyncHandler(async (req, res) => {
 // Shared music library — every uploaded/generated track sits here. The studio
 // uses it to attach an existing track to a record without re-uploading. Routed
 // before /:id so the literal `library` segment can't be read as a track id.
-router.get('/library', asyncHandler(async (_req, res) => {
-  res.json({ tracks: await listMusicLibrary() });
+router.get('/library', asyncHandler(async (req, res) => {
+  const page = validateRequest(paginationQuerySchema, req.query);
+  const libraryTracks = await listMusicLibrary();
+  if (!isPaginationRequested(page)) return res.json({ tracks: libraryTracks });
+  res.json(paginateArray(libraryTracks, page, { maxLimit: 500 }));
 }));
 
 // YouTube audio import (#1945): download + extract a track's audio via yt-dlp,

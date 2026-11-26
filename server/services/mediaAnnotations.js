@@ -61,7 +61,7 @@ function sanitizeAuthorEntry(raw) {
 
 // Safety net for a stale install: migration 014 rewrites the file once, but a
 // hand-edited or pre-014 file still parses correctly here. Identity inputs
-// (`localInstanceId`, `defaultAuthorName`) are resolved ONCE per readAll() and
+// (`localInstanceId`, `defaultAuthorName`) are resolved ONCE per readAnnotations() and
 // passed in — when the file holds N legacy entries the previous shape paid
 // N awaits on getInstanceId() + N on resolveLocalAuthorName() while every
 // call returned the same value.
@@ -77,7 +77,7 @@ function liftLegacyEntry(rawEntry, { localInstanceId, defaultAuthorName }) {
   return { authors: { [localInstanceId]: { ...author, authorName } } };
 }
 
-async function readAll() {
+async function readAnnotations({ kind, keys } = {}) {
   await ensureDir(PATHS.data);
   const raw = await readJSONFile(STATE_PATH, DEFAULT_STATE, { logError: false, strict: true });
   const annotations = raw && typeof raw.annotations === 'object' && raw.annotations !== null
@@ -100,9 +100,11 @@ async function readAll() {
   // don't have a real local identity, otherwise we'd just rename the phantom.
   const healUnknownAuthor = localInstanceId && localInstanceId !== UNKNOWN_INSTANCE_ID;
   const out = {};
-  for (const [key, value] of Object.entries(annotations)) {
-    if (!isValidKey(key)) continue;
-    const lifted = liftLegacyEntry(value, liftCtx);
+  const kindPrefix = kind && `${kind}:`;
+  const selectedKeys = keys ? new Set(keys) : Object.keys(annotations);
+  for (const key of selectedKeys) {
+    if (!isValidKey(key) || (kindPrefix && !key.startsWith(kindPrefix)) || !Object.hasOwn(annotations, key)) continue;
+    const lifted = liftLegacyEntry(annotations[key], liftCtx);
     if (!lifted || !lifted.authors || typeof lifted.authors !== 'object') continue;
     const authors = {};
     for (const [instanceId, sub] of Object.entries(lifted.authors)) {
@@ -135,9 +137,9 @@ function projectForLocal(authorsMap, localInstanceId) {
   return { own, others };
 }
 
-export async function listAnnotations() {
+export async function listAnnotations(filters) {
   const [all, localInstanceId] = await Promise.all([
-    readAll(),
+    readAnnotations(filters),
     getInstanceId().catch(() => UNKNOWN_INSTANCE_ID),
   ]);
   const out = {};
@@ -150,7 +152,7 @@ export async function listAnnotations() {
 /** Used by sharing/annotationsSync.js to project just the local-author entries for export. */
 export async function listLocalAuthorAnnotations() {
   const [all, localInstanceId] = await Promise.all([
-    readAll(),
+    readAnnotations(),
     getInstanceId().catch(() => UNKNOWN_INSTANCE_ID),
   ]);
   const out = {};
@@ -165,7 +167,7 @@ export async function listLocalAuthorAnnotations() {
  * Per-author LWW: a peer payload only ever rewrites its own `instanceId`
  * sub-entry, never another author's. Returns the changed keys AND the
  * post-merge `{ own, others }` projection for each — so callers can broadcast
- * without paying for a second readAll() per key.
+ * without paying for a second readAnnotations() per key.
  *
  * `payload` shape: `{ instanceId, authorName, annotations: { [key]: { starred, note, updatedAt } } }`.
  */
@@ -183,7 +185,7 @@ export async function mergePeerAnnotations(payload) {
     if (peerInstanceId === localInstanceId) return { changed: [], projections: new Map() };
     const incoming = payload.annotations && typeof payload.annotations === 'object'
       ? payload.annotations : {};
-    const all = await readAll();
+    const all = await readAnnotations();
     const changed = [];
     const clampUpdatedAtTo = Date.now();
     for (const [key, rawEntry] of Object.entries(incoming)) {
@@ -271,7 +273,7 @@ export async function setAnnotation(key, patch) {
 
   return queueWrite(async () => {
     const [all, localInstanceId, authorName] = await Promise.all([
-      readAll(),
+      readAnnotations(),
       getInstanceId(),
       resolveLocalAuthorName().catch(() => ''),
     ]);
