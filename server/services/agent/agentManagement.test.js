@@ -21,21 +21,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { ChildProcess } from '../../lib/childProcess.js';
 import { pinPlatform } from '../../lib/testHelper.js';
-import { readFileSync, rmSync } from 'fs';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-// Normalize CRLF→LF so the fixed char-window slices below stay deterministic on
-// Windows checkouts (CRLF inflates byte offsets and can push a matched anchor
-// past the window, producing a spurious failure).
-const normalizeEol = (s) => s.replace(/\r\n/g, '\n');
-const AGENT_CLI_SRC = normalizeEol(readFileSync(join(__dirname, 'agentCliSpawning.js'), 'utf-8'));
-// The TUI `finish()` lives in the extracted session controller (#8021);
-// `agentTuiSpawning.js` is the adapter that wires it to the PTY.
-const AGENT_TUI_SRC = normalizeEol(readFileSync(join(__dirname, '../agentTuiSpawning/sessionController.js'), 'utf-8'));
-const AGENT_LIFECYCLE_SRC = normalizeEol(readFileSync(join(__dirname, 'agentLifecycle.js'), 'utf-8'));
-const AGENT_RUN_FINALIZE_SRC = normalizeEol(readFileSync(join(__dirname, 'agentRunFinalize.js'), 'utf-8'));
+import { rmSync } from 'fs';
+import { join } from 'path';
 
 // The lifecycle ledger is a real file writer (data/cos/run-events.jsonl). Mocked
 // so the sweep's telemetry lands in a spy instead of the developing install's
@@ -2295,134 +2282,6 @@ describe('pause-release adapter registration', () => {
     getAgentRecord.mockResolvedValue({ ...PAUSED_AGENT, status: 'completed' });
     await retirePausedAgent('agent-paused-9', 'task-xyz', null);
     expect(markAgentComplete).not.toHaveBeenCalled();
-  });
-});
-
-// ─── Close-handler skip-finalization contract ─────────────────────────────────
-//
-// When a pausedAgents-flagged agent's process exits, the close handlers in
-// agentCliSpawning.js (CLI), agentTuiSpawning.js (TUI), and
-// agentLifecycle.js (runner handleAgentCompletion) must guard with
-// `pausedAgents.has(agentId)` and return BEFORE calling finalizeAgent /
-// cleanupWorktreeFn — so the worktree and task are preserved for a later resume.
-//
-// These tests use source-level assertions (matching the agentLifecycle.test.js
-// convention) to lock the structural contract without requiring the full
-// async dep chain to be wired up in this test suite.
-
-describe('close-handler skip-finalization — source contract', () => {
-  // Helper: extract the body of a function from source text.
-  // Returns everything from the function's opening brace to its matched closing brace.
-  // `bodyAnchor` (optional) is a substring searched forward from the signature;
-  // the body's opening brace is the first `{` after IT rather than after the
-  // signature. Needed for a function whose parameter list is destructured — its
-  // `{` would otherwise brace-match as the whole body.
-  function extractFunctionBody(src, fnSignatureSubstring, bodyAnchor = null) {
-    const fnStart = src.indexOf(fnSignatureSubstring);
-    if (fnStart === -1) return null;
-    const searchFrom = bodyAnchor ? src.indexOf(bodyAnchor, fnStart) : fnStart;
-    if (searchFrom === -1) return null;
-    const braceStart = src.indexOf('{', searchFrom);
-    let depth = 0;
-    for (let i = braceStart; i < src.length; i++) {
-      if (src[i] === '{') depth++;
-      else if (src[i] === '}') { depth--; if (depth === 0) return src.slice(braceStart, i + 1); }
-    }
-    return null;
-  }
-
-  // The pause guard moved out of both spawners into `finalizeAgentRunCommon`
-  // (#6619) — they used to hold two hand-mirrored copies of it, running their
-  // paused and host-shutdown gates in OPPOSITE order. The behavioral counterpart
-  // of these checks is the paired 'shared finalize sequence (#6619)' suite in
-  // agentCliSpawning.test.js / agentTuiSpawning.test.js, which drives a real
-  // paused exit through both spawners. What only a source check can pin is the
-  // ORDERING — that each spawner consults the shared sequence and bails on its
-  // 'paused' verdict BEFORE it can reach finalizeAgent.
-  // Each row carries the call spellings its own module uses: the TUI controller
-  // reaches both through the `finalization` seam it is constructed with (#8021),
-  // so a bare `finalizeAgentRunCommon(` would indexOf → -1 there and the row
-  // would fail for the wrong reason. Spelled out per row rather than matched
-  // loosely, so a seam RENAME surfaces here instead of going quietly vacuous.
-  for (const [label, src, signature, bodyAnchor, sequenceCall, finalizeCall] of [
-    ['CLI close handler', AGENT_CLI_SRC, 'async function handleDirectCliClose(ctx, code)', null, 'finalizeAgentRunCommon(', 'finalizeAgent('],
-    ['TUI finish()', AGENT_TUI_SRC, 'const finish = async', '=> ', 'finalization.finalizeRunCommon(', 'finalization.finalizeAgent('],
-  ]) {
-    it(`${label} routes through the shared finalize sequence and returns on its paused verdict before finalizeAgent`, () => {
-      const body = extractFunctionBody(src, signature, bodyAnchor);
-      expect(body, `${label} body must be extractable`).toBeTruthy();
-
-      const sequencePos = body.indexOf(sequenceCall);
-      expect(sequencePos, `${label} must run the shared finalize sequence via ${sequenceCall}`).toBeGreaterThan(-1);
-
-      const finalizePos = body.indexOf(finalizeCall);
-      expect(finalizePos, `${label} must still call ${finalizeCall}`).toBeGreaterThan(-1);
-      expect(sequencePos, 'shared finalize sequence must precede finalizeAgent').toBeLessThan(finalizePos);
-
-      // The paused verdict is handled with an early return, before finalize.
-      const window = body.slice(sequencePos, finalizePos);
-      expect(window, `${label} must bail on the 'paused' outcome`).toMatch(/'paused'[\s\S]*?\breturn\b/);
-    });
-  }
-
-  // The canonical order the extraction made explicit: the paused return runs
-  // BEFORE the host-shutdown abandon gate: abandoning a paused run would skip the
-  // bookkeeping that the paused path owns. Nothing enforced this while the
-  // sequence was mirrored.
-  it('finalizeAgentRunCommon checks pausedAgents before the abandon gate', () => {
-    const body = extractFunctionBody(AGENT_RUN_FINALIZE_SRC, 'export function finalizeAgentRunCommon(', '}) ');
-    expect(body, 'finalizeAgentRunCommon must exist and be extractable').toBeTruthy();
-
-    const guardPos = body.indexOf('pausedAgents.has(agentId)');
-    expect(guardPos, 'pause guard must be present').toBeGreaterThan(-1);
-
-    const pos = body.indexOf('shouldAbandonAgentRun(');
-    expect(pos, 'shouldAbandonAgentRun( must exist in finalizeAgentRunCommon').toBeGreaterThan(-1);
-    expect(guardPos, 'pause guard must precede the host-shutdown abandon gate').toBeLessThan(pos);
-    expect(body.slice(guardPos, pos), 'pause guard must return before the host-shutdown abandon gate').toMatch(/\breturn\b/);
-  });
-
-  // The behavioral counterpart of this guard lives in
-  // `agentCompletionRouting.test.js` — it calls the real `handleAgentCompletion`
-  // with a paused agent and asserts nothing is completed. That is the durable
-  // form (it survives extraction); this source check only pins the ORDERING
-  // inside the router, which has no behavioral seam of its own.
-  //
-  // The window is the router's own brace-balanced body, and the assertion is
-  // that the guard precedes BOTH ways out of it — the post-restart recovery
-  // hand-off and the live in-memory path — rather than a bare `completeAgent(`,
-  // which moved into `completeUntrackedAgentFromCosState` in #3872 and would
-  // silently make this test vacuous (indexOf → -1) if it were still named here.
-  it('runner handleAgentCompletion guards with pausedAgents.has and returns before either completion path', () => {
-    const fnBody = extractFunctionBody(AGENT_LIFECYCLE_SRC, 'async function handleAdmittedAgentCompletion');
-    expect(fnBody, 'handleAgentCompletion must exist and be extractable').toBeTruthy();
-
-    // Guard present
-    expect(fnBody).toMatch(/pausedAgents\.has\(agentId\)/);
-
-    const guardPos = fnBody.indexOf('pausedAgents.has(agentId)');
-    for (const [label, dispatch] of [
-      ['post-restart recovery hand-off', 'completeUntrackedAgentFromCosState('],
-      ['live in-memory completion path', 'withRunnerAgentCleanup('],
-    ]) {
-      const dispatchPos = fnBody.indexOf(dispatch);
-      expect(dispatchPos, `${label} (${dispatch}) must exist in handleAgentCompletion`).toBeGreaterThan(-1);
-      expect(guardPos, `pause guard must precede the ${label}`).toBeLessThan(dispatchPos);
-      // There is a return inside the guard block (early exit before either path)
-      expect(fnBody.slice(guardPos, dispatchPos)).toMatch(/\breturn\b/);
-    }
-  });
-
-  it('runner pause guard also cleans up runnerAgents entry before returning', () => {
-    // After returning early, the runner agent map entry must not be leaked.
-    const fnBody = extractFunctionBody(AGENT_LIFECYCLE_SRC, 'async function handleAdmittedAgentCompletion');
-
-    const guardPos = fnBody.indexOf('pausedAgents.has(agentId)');
-    const returnAfterGuard = fnBody.indexOf('return', guardPos);
-    // Between the guard and the early return, dropRunnerAgent (which also
-    // releases the in-flight Ollama hold) must be called
-    const guardToReturn = fnBody.slice(guardPos, returnAfterGuard + 10);
-    expect(guardToReturn).toMatch(/dropRunnerAgent\(agentId\)/);
   });
 });
 

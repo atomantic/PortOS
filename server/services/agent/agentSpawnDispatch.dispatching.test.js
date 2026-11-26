@@ -36,6 +36,12 @@ vi.mock('./agentPromptBuilder.js', () => ({
   isClaimFlowTask: () => false,
   promptOpensOwnPr: () => false,
 }));
+vi.mock('../modelAbuseGuard.js', async (importOriginal) => ({
+  ...await importOriginal(), validatePublicReviewModel: vi.fn(async () => ({ ok: true })),
+}));
+vi.mock('../publicReviewSpawnInput.js', () => ({
+  loadPublicReviewSpawnInput: vi.fn(async () => ({ promptData: { pullRequests: [] } })),
+}));
 vi.mock('../workspaceContext.js', () => ({ snapshotOnRepoSwitch: vi.fn() }));
 vi.mock('./agentProviderResolution.js', () => ({
   resolveAgentProviderAndModel: async () => ({
@@ -94,6 +100,27 @@ beforeEach(() => {
   f.tui = false;
 });
 
+
+it('registers the instance identity and headless public review posture for a TUI provider', async () => {
+  f.tui = true;
+  f.provider = { id: 'grok-tui', type: 'tui', command: 'grok' };
+  const context = newContext();
+  context.task = { ...task, metadata: {
+    executionProfile: 'public-review-gate',
+    pipeline: { securityScan: { completed: true, status: 'passed', safePrCount: 1 } },
+  } };
+
+  expect(await dispatchAgentRun(context)).toBe(context.agentId);
+
+  expect(registerAgent).toHaveBeenCalledExactlyOnceWith(context.agentId, task.id, expect.objectContaining({
+    instanceId: context.instanceId,
+    publicReviewPosture: 'no-tool',
+    workspacePath: f.prep.workspacePath,
+    executionMode: 'direct',
+  }));
+  expect(spawnDirectly).toHaveBeenCalledOnce();
+  expect(spawnTuiAgent).not.toHaveBeenCalled();
+});
 
 it('passes TUI prompt memory lineage to the run and agent records', async () => {
   f.tui = true;

@@ -12,9 +12,7 @@
  * included in the gate's in-flight term, so a second job in that window sees the
  * reservation and is withheld.
  *
- * Unlike the source-level regression guards in cos.test.js, these tests exercise
- * the REAL executeScheduledJob (the race lives in the await interleaving, which a
- * pure inline copy can't reproduce). We deterministically reproduce the window by
+ * These tests reproduce the await interleaving in executeScheduledJob by
  * parking the first job at its first post-reservation await, then running the
  * second job to completion while the first sits in the window. The only un-mocked
  * dependency is the pure `remainingActionBudget` math — everything with I/O is
@@ -135,7 +133,9 @@ import { getUpcomingTasks } from '../taskSchedule.js';
 import { getJob } from '../autonomousJobs.js';
 import { emitLog } from './cosEvents.js';
 import { getDomainBudgetStatus } from '../domainUsage.js';
+import { getDomainMode } from '../../lib/domainAutonomy.js';
 import { canQueueImprovementTasks } from './cosState.js';
+import { queueEligibleImprovementTasks } from './cosImprovementTasks.js';
 
 beforeEach(() => {
   daemonRunning = true;
@@ -388,6 +388,19 @@ it('wakes at a future app deadline even while the task is ready for another app'
 // into a misleadingly "complete" []) when app inventory/override/readiness
 // reads fail. cosJobScheduler owns that failure — it must retry soon instead
 // of falling back to the 1h default, which could sleep through a cron minute.
+it.each([false, true])('the improvement timer honors scheduler queue admission (%s)', async allowed => {
+  getScheduledEvent.mockReturnValue(null);
+  getUpcomingTasks.mockResolvedValue([]);
+  canQueueImprovementTasks.mockReturnValueOnce(allowed);
+  queueEligibleImprovementTasks.mockClear();
+
+  await scheduleNextImprovementCheck();
+  await scheduleEvent.mock.lastCall[0].handler();
+
+  expect(queueEligibleImprovementTasks).toHaveBeenCalledTimes(allowed ? 1 : 0);
+  expect(scheduleEvent.mock.lastCall[0].id).toBe('cos-improvement-check');
+});
+
 describe('scheduleNextImprovementCheck — getUpcomingTasks input failure (#7527)', () => {
   beforeEach(async () => {
     // Reset the module-level "input unavailable" transition flag to a known
@@ -566,6 +579,18 @@ describe('handleJobSpawnFailed — no 1s re-fire loop after a failed dispatch', 
     expect(scheduleEvent).toHaveBeenCalledTimes(1);
     expect(scheduleEvent.mock.calls[0][0].delayMs).toBeGreaterThan(60000);
   });
+});
+
+it.each(['off', 'dry-run'])('records the skip before re-arming a scheduled job in %s mode', async mode => {
+  scheduleEvent.mockClear();
+  getDomainMode.mockReturnValueOnce(mode);
+
+  await executeScheduledJob('job-a');
+
+  expect(generateTaskFromJob).not.toHaveBeenCalled();
+  expect(recordJobGateSkip).toHaveBeenCalledExactlyOnceWith('job-a');
+  expect(scheduleEvent).toHaveBeenCalledWith(expect.objectContaining({ id: 'job:job-a' }));
+  expect(recordJobGateSkip.mock.invocationCallOrder[0]).toBeLessThan(scheduleEvent.mock.invocationCallOrder[0]);
 });
 
 describe('executeScheduledJob — pre-dispatch preflight', () => {
