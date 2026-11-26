@@ -518,11 +518,21 @@ async function adoptRestoredLegacyLedger(legacyLedger) {
   }
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const parkedAs = `${basename(current)}.pre-restore-${stamp}`;
-  const parked = await rename(current, join(dirname(current), parkedAs)).then(
+  const parkedPath = join(dirname(current), parkedAs);
+  const parked = await rename(current, parkedPath).then(
     () => true,
     error => { if (error.code === 'ENOENT') return false; throw error; },
   );
-  await rename(legacy, current);
+  try {
+    await rename(legacy, current);
+  } catch (error) {
+    if (parked) {
+      await rename(parkedPath, current).catch(rollbackError => {
+        console.error(`❌ Restore could not roll back the live migration ledger from ${parkedAs}: ${rollbackError.code ?? 'unknown error'}`);
+      });
+    }
+    throw error;
+  }
   console.log(`📦 Restore adopted the snapshot's pre-May-2026 migration ledger${parked ? `; previous ledger parked as ${parkedAs}` : ''}`);
   return { status: 'adopted', parkedAs: parked ? parkedAs : null };
 }
