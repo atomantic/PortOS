@@ -125,6 +125,36 @@ describe('durable remote source-audio settlement', () => {
     videoGenEvents.emit('completed', { generationId: next.jobId, remoteInputsDisposable: true });
   });
 
+  it('retries a retained reservation at its retry deadline after reconciliation fails', async () => {
+    vi.useFakeTimers();
+    try {
+      stubs.generateVideoRemote.mockResolvedValue({});
+      const first = await mediaJobQueue.enqueueJob({ kind: 'video', params: { remoteMedia: remoteVideoMediaParams() } });
+      await flush();
+      const next = await mediaJobQueue.enqueueJob({ kind: 'video', params: { remoteMedia: remoteVideoMediaParams() } });
+      const fail = () => videoGenEvents.emit('failed', {
+        generationId: first.jobId, error: 'Peer disabled', remoteInputsDisposable: false,
+      });
+      fail();
+      await flush();
+      expect(stubs.generateVideoRemote.mock.calls.map(([params]) => params.jobId)).toEqual([first.jobId, first.jobId]);
+      fail();
+      await flush();
+      expect(mediaJobQueue.getJob(first.jobId).status).toBe('failed');
+      expect(mediaJobQueue.getJob(next.jobId).status).toBe('queued');
+
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(stubs.generateVideoRemote).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      await flush();
+      expect(stubs.generateVideoRemote.mock.calls.map(([params]) => params.jobId)).toEqual([first.jobId, first.jobId, first.jobId]);
+      expect(mediaJobQueue.getJob(next.jobId).status).toBe('queued');
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps reconciliation SSE live across the prior attempt cleanup and a reconnect', async () => {
     const first = await startAudioJob();
     const client = () => {
