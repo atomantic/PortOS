@@ -7,6 +7,9 @@ const machineLocalCredentialPaths = [
   '/spotify/tokens.json',
   '/spotify/cache/',
   '/openclaw/',
+  '/jira.json',
+  '/datadog.json',
+  '/auth-sessions.json',
 ];
 
 describe('Machine-local OAuth and OpenClaw backup exclusions (#19173)', () => {
@@ -31,6 +34,9 @@ describe('Machine-local OAuth and OpenClaw backup exclusions (#19173)', () => {
     ['spotify/tokens.json', 'SPOTIFY/TOKENS.JSON'],
     ['spotify/cache', 'Spotify/Cache/raw/response.json'],
     ['openclaw', 'OpenClaw/profiles/default/token.json'],
+    ['jira.json', 'JIRA.JSON'],
+    ['datadog.json', 'Datadog.JSON'],
+    ['auth-sessions.json', 'AUTH-SESSIONS.JSON'],
   ])('preserves %s and nested paths case-insensitively', (root, nested) => {
     expect(isRestorePreservedPath(root)).toBe(true);
     expect(isRestorePreservedPath(nested)).toBe(true);

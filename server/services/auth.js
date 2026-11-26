@@ -10,7 +10,8 @@ import { join } from 'path';
 import { EventEmitter } from 'events';
 import { randomBytes } from 'crypto';
 import { stat } from 'fs/promises';
-import { atomicWrite, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { writeSecureJson } from '../lib/secureAuthStore.js';
 import {
   COOKIE_NAME,
   SESSION_TTL_MS,
@@ -124,7 +125,7 @@ const writeSessions = async () => {
   for (const [tokenHash, { expiresAt, label, id }] of sessions) {
     tokens.push({ tokenHash, expiresAt, label, id });
   }
-  await atomicWrite(SESSIONS_FILE, JSON.stringify({ tokens }, null, 2) + '\n');
+  await writeSecureJson(SESSIONS_FILE, JSON.stringify({ tokens }, null, 2) + '\n');
   try {
     sessionsFileStamp = fileStamp(await stat(SESSIONS_FILE));
   } catch {

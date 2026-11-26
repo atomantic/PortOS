@@ -14,10 +14,6 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "No non-strict write-back: mutations use the strict default; only the listing sweep passes strict:false and skips unreadable members."
   },
   {
-    "key": "auth.js :: SESSIONS_FILE",
-    "reason": "Rebuildable: a lost session file only signs browsers out (login mints new sessions); it never grants access."
-  },
-  {
     "key": "claudeChangelog.js :: STATE_FILE",
     "reason": "Cache-only: feed polling replaces the feed cache and its polling/seen cursors; there is no user-edit writer."
   },
