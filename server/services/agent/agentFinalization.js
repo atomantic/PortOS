@@ -1303,11 +1303,13 @@ export async function applyDeliverySettlement(ctx, forgeOutcome) {
     ? await import('../runtimeVerification.js')
       .then(({ verifyRuntimeVerificationContinuation }) => verifyRuntimeVerificationContinuation(task, agentId))
       .catch(() => null) : null;
-  // #15552: a pr-watcher target that merged between poll and spawn leaves a
-  // correct no-op; the forge, not the agent's report, establishes that.
-  const prWatcherTargetsSettled = forgeVerifiable && verdict.success && reportedTaskOutcome?.status === 'no-action-needed'
+  // A watcher can deliver entirely on the forge. Its report selects the check
+  // for a merge or a stale selection, and dispatch metadata binds the targets.
+  const outcomeStatus = reportedTaskOutcome?.status;
+  const prWatcherTargetsSettled = forgeVerifiable && verdict.success && resolveTaskHookType(preHookTask) === 'pr-watcher'
+    && (outcomeStatus === 'completed' || outcomeStatus === 'no-action-needed')
     ? await import('../prWatcherCompletion.js')
-      .then(({ verifyPrWatcherTargetsSettled }) => verifyPrWatcherTargetsSettled(task, workspacePath))
+      .then(({ verifyPrWatcherTargetsSettled }) => verifyPrWatcherTargetsSettled(preHookTask, workspacePath, outcomeStatus))
       .catch(() => null) : null;
 
   // Success-criteria validation (issue #2344): stamp an explicit pass/fail (or
