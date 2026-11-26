@@ -27,6 +27,7 @@ import { staticImportClosure } from '../server/lib/staticImportGraph.js';
 import { readCiJobs } from './lib/ciWorkflowJobs.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
+import { isGateToolingTest } from './lib/ciPlanRules.js';
 
 // Capture the planner's stderr so a spawn adds nothing to the run's output; a
 // failing spawn still reports it on the thrown error.
@@ -202,19 +203,20 @@ describe('gate-tooling tests in a related plan', () => {
   // End to end through the memo walk: the planner's list plus planTestMemo, over the real
   // tree. Without the runner's narrowing, pregate.test.js (an open read) and
   // run-ci-tests.test.js (an unresolved edge) are selected for this diff.
-  it('keeps them out of the memo-resolved selection for an unrelated diff', async () => {
+  it('keeps both the integration and split planner suites out of memo-resolved selection for an unrelated diff', async () => {
     const { planTestMemo } = await import('./lib/testMemoRunner.js');
     const { toWorkspacePath } = await import('./lib/workspaceTests.js');
+    const toolingTests = inputs.trackedFiles.filter(isGateToolingTest);
     const resolve = (path) => {
       const plan = relatedPlan(path);
       return planTestMemo({
         scope: 'server', mode: plan.server.mode, repoFiles: plan.server.files, repoSources: plan.server.sources,
         memoDir: null, repoRoot: REPO_ROOT, env: process.env, platform: process.platform, arch: process.arch, nodeVersion: process.version,
         // Only the tooling suites need analysis here; the rest of the inventory adds time, not coverage.
-        listTests: () => TOOLING_TESTS.map((test) => toWorkspacePath('server', test)),
+        listTests: () => toolingTests.map((test) => toWorkspacePath('server', test)),
       }).selected;
     };
-    expect(resolve('server/services/maintenanceRun.js').filter((path) => TOOLING_TESTS.includes(path))).toEqual([]);
+    expect(resolve('server/services/maintenanceRun.js').filter(isGateToolingTest)).toEqual([]);
   }, 120_000);
 });
 

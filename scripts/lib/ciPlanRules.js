@@ -269,6 +269,12 @@ export const TOOLING_TESTS = [
   'scripts/workspaceCaches.test.js',
 ];
 
+// Split planner suites contain synthetic path literals like the integration suite.
+// Their real dependencies select them; unrelated tooling diffs need no explicit selector.
+const PLANNER_MODULE_TEST_RE = /^scripts\/lib\/ciPlan(?:Rules|Inputs|Dependencies|Output)\.test\.js$/;
+
+export const isGateToolingTest = (path) => TOOLING_TESTS.includes(path) || PLANNER_MODULE_TEST_RE.test(path);
+
 // Paths whose edit can break a tooling test with no import edge reaching it: the
 // scripts and workflows themselves, every dependency manifest, the Vitest configs,
 // and the Vitest environment modules the real configs load in the fixtures' child runs.
