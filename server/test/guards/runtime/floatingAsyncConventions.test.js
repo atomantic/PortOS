@@ -11,7 +11,15 @@ import { guardCorpus, readText, REPO_ROOT, trackedFiles } from '../../../../scri
 
 const SERVER_ROOT = join(REPO_ROOT, 'server');
 
-const parseSource = (src) => parse(src, { sourceType: 'module', errorRecovery: true, allowReturnOutsideFunction: true, attachComment: false });
+// Only diagnostics need a line number. Babel's node offsets let us compute it
+// on a hit without allocating a location object for every node in the tree.
+const parseSource = (src) => parse(src, {
+  sourceType: 'module',
+  errorRecovery: true,
+  allowReturnOutsideFunction: true,
+  attachComment: false,
+  locations: false,
+});
 
 const isAsyncInit = (node) => (
   (node?.type === 'ArrowFunctionExpression' || node?.type === 'FunctionExpression') && node.async === true
@@ -28,12 +36,13 @@ function walkStatements(node, visit) {
   if (!node || typeof node.type !== 'string' || NO_STATEMENTS.has(node.type)) return;
   if (node.type === 'ExpressionStatement') visit(node);
   for (const key in node) {
-    if (key === 'loc' || key === 'extra' || key === 'comments' || key === 'errors') continue;
     const child = node[key];
+    if (child === null || typeof child !== 'object') continue;
     if (Array.isArray(child)) {
       for (const c of child) walkStatements(c, visit);
+    } else if (typeof child.type === 'string') {
+      walkStatements(child, visit);
     }
-    else if (child && typeof child === 'object') walkStatements(child, visit);
   }
 }
 
@@ -74,7 +83,7 @@ function moduleBindings(body, dir) {
 
 function summarizeSource(src, dir) {
   const { program } = parseSource(src);
-  return { ...moduleBindings(program.body, dir), program };
+  return { ...moduleBindings(program.body, dir), program, src };
 }
 
 /**
@@ -145,7 +154,7 @@ function createFloatingAsyncScanner(readSource = (file) => readText(file), onPar
     const values = relativeLiteralValues(src);
     return values === null || values.some((value) => asyncExportsOf(resolve(dir, value)).size > 0);
   };
-  const findCalls = ({ local, imports, program }, dir) => {
+  const findCalls = ({ local, imports, program, src }, dir) => {
     const importedAsync = new Map();
     const isAsyncImport = (name) => {
       if (!importedAsync.has(name)) {
@@ -164,7 +173,8 @@ function createFloatingAsyncScanner(readSource = (file) => readText(file), onPar
       if (call.type !== 'CallExpression' || call.callee.type !== 'Identifier') return;
       const name = call.callee.name;
       if (local.has(name) || (imports.has(name) && isAsyncImport(name))) {
-        hits.push(`line ${node.loc.start.line}: ${name}()`);
+        const line = src.slice(0, node.start).split(/\r\n?|[\n\u2028\u2029]/).length;
+        hits.push(`line ${line}: ${name}()`);
       }
     });
     return hits;
@@ -174,7 +184,7 @@ function createFloatingAsyncScanner(readSource = (file) => readText(file), onPar
     findInFile: (file) => {
       let summary = summaryOf(file);
       if (summary.hits) return summary.hits;
-      if (summary.src !== undefined) {
+      if (!summary.program) {
         if (!mayImportAsync(summary.src, dirname(file))) {
           summaries.set(file, { exported: summary.exported, hits: [] });
           return [];
@@ -235,6 +245,11 @@ describe('the floating-async recognizer', () => {
   it('flags a bare call to a local async function, declaration or arrow', () => {
     expect(findFloatingAsyncCalls('async function f() {}\nfunction g() { f(); }')).toEqual(['line 2: f()']);
     expect(findFloatingAsyncCalls('const f = async () => {};\nf();')).toEqual(['line 2: f()']);
+  });
+
+  it('reports the statement start across every JavaScript line terminator', () => {
+    const source = 'async function f() {}\r\n// one\r// two\u2028// three\u2029(\nf)();';
+    expect(findFloatingAsyncCalls(source)).toEqual(['line 5: f()']);
   });
 
   it('accepts await, void, a trailing .catch, and a returned or assigned promise', () => {
