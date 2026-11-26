@@ -54,7 +54,7 @@ describe.skipIf(!chrome)('optional Look greybox references in Chromium', () => {
                   return { project: next, stage: next.castAndSets };
                 };
                 return h(MemoryRouter, null, h('main', { style: { maxWidth: '900px', margin: '0 auto', padding: '8px' } },
-                  h(CastAndSetsCheckin, { project, busy: false, onEditDirection: edit, onApprove: () => { window.approvals = (window.approvals || 0) + 1; }, onRegenerate: () => {}, onSkip: () => {} })));
+                  h(CastAndSetsCheckin, { project, busy: false, imageActions: { onEditDirection: edit }, sheetActions: { onApprove: () => { window.approvals = (window.approvals || 0) + 1; }, onRegenerate: () => {}, onSkip: () => {} } })));
               }
               createRoot(document.getElementById('root')).render(h(Fixture));
             `;

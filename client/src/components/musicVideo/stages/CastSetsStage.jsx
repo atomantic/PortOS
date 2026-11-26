@@ -49,7 +49,7 @@ export default function CastSetsStage({ board }) {
   const catalogBusy = locked || castSets.busy || kickoff.running;
   const canApproveCatalog = !!catalog.checkin && !catalog.checkin.problems.length && !catalog.checkin.approved;
 
-  const { changes: castingChanges, loadError: castingChangesError, retry: retryCastingChanges } = useMusicVideoCastingChanges(project);
+  const casting = useMusicVideoCastingChanges(project);
   return (
     <div className="min-w-0 space-y-3">
       <p id="mv-setup-direction" className="px-1 text-xs text-port-text-muted" style={ANCHOR_STYLE}>
@@ -90,38 +90,41 @@ export default function CastSetsStage({ board }) {
         <CastAndSetsCheckin
           id={CAST_CHECKIN_ANCHOR}
           project={project}
-          stale={board.productionReadiness?.castAndSets?.stale || null}
-          storyStale={board.productionReadiness?.castAndSets?.storyStale || null}
-          castingChanges={castingChanges}
-          castingChangesError={castingChangesError}
-          onRetryCastingChanges={retryCastingChanges}
-          busy={locked || castSets.busy || kickoff.running}
-          onOpenSheet={board.openArtifact}
-          onOpenPreview={board.openPreview}
-          onApprove={board.approveCastAndSets}
-          onAcknowledgeImage={castSets.acknowledgeImage}
-          onReinspectImages={castSets.reinspectImages}
-          onRegenerate={() => castSets.regenerate()}
-          onRegenerateImages={castSets.regenerateImages}
-          onEditDirection={castSets.editDirection}
-          onUseImage={castSets.useImage}
-          onEditImage={castSets.editImage}
-          onAcceptImageEdit={castSets.acceptImageEdit}
-          onDiscardImageEdit={castSets.discardImageEdit}
-          onRefresh={castSets.refresh}
-          onApplyFeedback={castSets.applyFeedback}
-          onRenderFeedback={castSets.renderFeedback}
-          onRefreshFeedbackRenderer={castSets.refreshFeedbackRenderer}
-          onRemoveFeedback={castSets.removeFeedback}
-          onRemoveImageFeedback={castSets.removeImageFeedback}
-          onRegenerateWithNotes={castSets.regenerate}
-          onResume={() => castSets.resume()}
-          onRebuild={() => castSets.start()}
-          onReconfirm={() => castSets.reconfirm()}
-          onRevert={board.onRevertApproval ? (field) => board.onRevertApproval('castAndSets', field) : undefined}
-          onSkip={board.skipCastAndSets}
-          onDiscard={castSets.discard}
-          onRebuildFromStory={() => castSets.rebuildFromStory(project.castAndSets.status)}
+          busy={catalogBusy}
+          readiness={board.productionReadiness?.castAndSets ?? undefined}
+          casting={casting}
+          sheetActions={{
+            onOpenSheet: board.openArtifact,
+            onApprove: board.approveCastAndSets,
+            onRegenerate: () => castSets.regenerate(),
+            onRegenerateWithNotes: castSets.regenerate,
+            onResume: () => castSets.resume(),
+            onRebuild: () => castSets.start(),
+            onReconfirm: () => castSets.reconfirm(),
+            onRevert: board.onRevertApproval ? (field) => board.onRevertApproval('castAndSets', field) : undefined,
+            onSkip: board.skipCastAndSets,
+            onDiscard: castSets.discard,
+            onRebuildFromStory: () => castSets.rebuildFromStory(project.castAndSets.status),
+          }}
+          imageActions={{
+            onOpenPreview: board.openPreview,
+            onAcknowledgeImage: castSets.acknowledgeImage,
+            onReinspectImages: castSets.reinspectImages,
+            onRegenerateImages: castSets.regenerateImages,
+            onEditDirection: castSets.editDirection,
+            onUseImage: castSets.useImage,
+            onEditImage: castSets.editImage,
+            onAcceptImageEdit: castSets.acceptImageEdit,
+            onDiscardImageEdit: castSets.discardImageEdit,
+            onRefresh: castSets.refresh,
+          }}
+          feedbackActions={{
+            onApply: castSets.applyFeedback,
+            onRender: castSets.renderFeedback,
+            onRefreshRenderer: castSets.refreshFeedbackRenderer,
+            onRemove: castSets.removeFeedback,
+            onRemoveImage: castSets.removeImageFeedback,
+          }}
         />
       ) : (
         // Build lives on the step's checklist (and the header); this keeps only the way out.
