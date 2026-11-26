@@ -48,7 +48,6 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 | [PM2.md](./PM2.md) | Recommended PM2 ecosystem patterns for sub-projects |
 | [SECURITY_RISK_ASSESSMENT.md](./SECURITY_RISK_ASSESSMENT.md) | Threat boundaries, security finding dispositions and external-content screening |
 | [DEEP-AUDITS.md](./DEEP-AUDITS.md) | Persistent audit coverage, independent passes, checkpoint/resume and completion rules |
-| [DEEP-AUDITS-LEGACY.md](./DEEP-AUDITS-LEGACY.md) | Legacy (historical) exhaustive Deep audit records and their stored evidence format; new launches no longer run this workflow |
 | [QUOTA-BURN.md](./QUOTA-BURN.md) | Quota-burn automation — spending subscription-backed CLI quota before expiry |
 | [AI_PROVIDERS.md](./AI_PROVIDERS.md) | The AI Providers page: a run composed from Harness × Method × Service × Model × Effort, its Presets / Harnesses / Services views, compatibility matrix, derived vs legacy presets, and what federates (nothing) |
 | [PROVIDER_COMPOSITION.md](./PROVIDER_COMPOSITION.md) | Composite provider ids (`harness.method@service[+bootstrap]`): the grammar, per-harness enablement, bootstrap apps, how every run path resolves one, and the preset-only surfaces |

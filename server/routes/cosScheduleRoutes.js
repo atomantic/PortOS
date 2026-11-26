@@ -331,14 +331,6 @@ router.post('/schedule/branch-reconcile/checkouts/retire', asyncHandler(async (r
 
 // Manual maintenance runs — the Schedule tab's "Run maintenance now"; see
 // services/maintenanceRun.js for why this is not a quota burn.
-router.get('/schedule/deep-audits/:id', asyncHandler(async (req, res) => {
-  const { getDeepAuditLedger } = await import('../services/deepAudit.js');
-  const ledger = await getDeepAuditLedger(req.params.id);
-  if (!ledger) throw new ServerError('Deep audit not found', { status: 404 });
-  const { deepAuditProgress } = await import('../lib/deepAudit.js');
-  res.json({ ...ledger, progress: deepAuditProgress(ledger) });
-}));
-
 router.get('/schedule/maintenance-runs', asyncHandler(async (_req, res) => {
   res.json({ runs: await listMaintenanceRuns() });
 }));

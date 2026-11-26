@@ -3,10 +3,8 @@ import { join, relative, resolve } from 'node:path';
 
 /**
  * Remove data/cos/deep-audit-checkpoints: per-agent assignment, ledger and
- * report files of the Deep certification engine retired in #16910. No code
- * reads or writes them; GET /api/cos/schedule/deep-audits/:id serves the
- * `deep_audit_ledgers` rows they were imported into. One install held 686 MB,
- * copied into every backup. A symlink or non-directory is left alone.
+ * report files of the Deep certification engine retired in #16910. Only the checkpoint
+ * directory is eligible for removal. A symlink or non-directory is left alone.
  */
 export async function removeDeepAuditCheckpoints({ rootDir }) {
   const dataDir = resolve(rootDir, 'data');
