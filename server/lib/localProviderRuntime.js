@@ -101,8 +101,10 @@ export const LOCAL_RUNTIMES = Object.freeze({
     defaultBaseUrl: opencodeLocalBaseUrl('splash'),
     manageUrl: LOCAL_RUNTIME_MANAGE_URLS.splash,
     docsUrl: 'https://github.com/incoai/splash/blob/1.7.2/docs/server.md',
-    modelsHint: 'Start Splash in a terminal using the command on {page} and wait for its model to load.',
+    modelsHint: 'Choose Start on the Splash card in {page} and wait for its model to load.',
     servesOneModel: true,
+    standbyWhenStopped: true,
+    standbyDetail: 'Start Splash here or on {page} when you want to use its cached Inkling 2 Mini model.',
   }),
   mkserve: Object.freeze({
     id: 'mkserve',
@@ -113,6 +115,8 @@ export const LOCAL_RUNTIMES = Object.freeze({
     docsUrl: 'https://github.com/atomantic/PortOS/blob/main/docs/features/mkserve.md',
     modelsHint: 'Install and start mkserve on {page}; it serves one fixed model.',
     servesOneModel: true,
+    standbyWhenStopped: true,
+    standbyDetail: 'Start mkserve here or on {page} when you want to use its cached Inkling 2 Mini model.',
   }),
   slotstream: Object.freeze({
     id: 'slotstream',

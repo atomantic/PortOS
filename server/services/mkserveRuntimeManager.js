@@ -19,11 +19,11 @@ const PORT = PORTS.MKSERVE;
 const ORIGIN = 'http://' + HOST + ':' + PORT;
 const ENDPOINT = ORIGIN + '/v1';
 const START_TIMEOUT_MS = 180_000;
-const SUPPORTED_REASON = 'mkserve is supported on Apple M5 Max with macOS 26 or later and at least 36 GB of unified memory.';
+export const MKSERVE_UNSUPPORTED_REASON = 'mkserve is supported on Apple M5 Max with macOS 26 or later and at least 36 GB of unified memory.';
 const ACTIVE = new Set(['online', 'launching', 'stopping', 'waiting restart']);
 let operation = null;
 
-function supportsMkserve() {
+export function supportsMkserve() {
   return process.platform === 'darwin' && process.arch === 'arm64'
     && Number(release().split('.')[0]) >= 25
     && cpus()[0]?.model === 'Apple M5 Max' && totalmem() >= 36 * 2 ** 30;
@@ -38,7 +38,7 @@ function onProgress(callback, message) {
 }
 
 function runOperation(state, action) {
-  if (!supportsMkserve()) throw error(SUPPORTED_REASON, 400, 'UNSUPPORTED_PLATFORM');
+  if (!supportsMkserve()) throw error(MKSERVE_UNSUPPORTED_REASON, 400, 'UNSUPPORTED_PLATFORM');
   if (operation) throw error('Another mkserve operation is already running.');
   operation = state;
   return action().finally(() => { operation = null; });
@@ -104,7 +104,7 @@ async function portInUse() {
 export async function getMkserveRuntimeStatus() {
   const supported = supportsMkserve();
   const base = { supported, endpoint: ENDPOINT, installed: false, version: null, availableVersion: MKSERVE_VERSION, updateAvailable: false };
-  if (!supported) return { ...base, state: 'unsupported', reason: SUPPORTED_REASON };
+  if (!supported) return { ...base, state: 'unsupported', reason: MKSERVE_UNSUPPORTED_REASON };
   const [installed, app, health] = await Promise.all([readMkserveInstall(), getAppStatusStrict(MKSERVE_APP), probeMkserve()]);
   const status = { ...base, installed: !!installed, version: installed?.version ?? null,
     updateAvailable: !!installed && installed.bundle !== MKSERVE_BUNDLE };
