@@ -38,6 +38,8 @@ import {
 } from '../services/apiCatalog';
 import { listUniverseNames } from '../services/apiUniverseBuilder';
 import { listPipelineSeriesNames } from '../services/apiPipeline';
+import useClickOutside from '../hooks/useClickOutside';
+import useEscapeKey from '../hooks/useEscapeKey';
 import useListResource from '../hooks/useListResource';
 import ListLoadError from '../components/ui/ListLoadError';
 import CatalogCard from '../components/catalog/CatalogCard';
@@ -133,19 +135,36 @@ export default function Catalog() {
   // without a re-fetch (selection can span grid + albums).
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [selectedItems, setSelectedItems] = useState(() => new Map());
-  const [remixMenuOpen, setRemixMenuOpen] = useState(false);
-  const [addMenuOpen, setAddMenuOpen] = useState(false);
-  const [addMode, setAddMode] = useState('membership');
+  const [activePopover, setActivePopover] = useState(null);
+  const remixTriggerRef = useRef(null);
+  const ownerTriggerRef = useRef(null);
+  const membershipTriggerRef = useRef(null);
+  const popoverRef = useRef(null);
+  const remixMenuOpen = activePopover === 'remix';
+  const ownerMenuOpen = activePopover === 'owner';
+  const membershipMenuOpen = activePopover === 'membership';
+  const addMenuOpen = ownerMenuOpen || membershipMenuOpen;
+  const popoverOpen = selectedIds.size > 0 && activePopover !== null;
+  const togglePopover = (id) => setActivePopover((open) => open === id ? null : id);
+  const dismissPopover = () => {
+    const trigger = remixMenuOpen ? remixTriggerRef : ownerMenuOpen ? ownerTriggerRef : membershipTriggerRef;
+    setActivePopover(null);
+    trigger.current?.focus();
+  };
+
+  // A click fires after the pointer's default focus change.
+  useClickOutside([remixTriggerRef, ownerTriggerRef, membershipTriggerRef, popoverRef], popoverOpen, dismissPopover, { event: 'click' });
+  useEscapeKey(popoverOpen, dismissPopover);
   const [showForm, setShowForm] = useState(false);
   const fetchPlaceUniverses = useCallback(() => listUniverseNames({ silent: true }), []);
   const placeUniversesResource = useListResource(fetchPlaceUniverses, { enabled: addMenuOpen || showForm });
   const fetchPlaceSeries = useCallback(() => listPipelineSeriesNames({ silent: true }), []);
-  const placeSeriesResource = useListResource(fetchPlaceSeries, { enabled: addMenuOpen && addMode === 'membership' });
+  const placeSeriesResource = useListResource(fetchPlaceSeries, { enabled: membershipMenuOpen });
   const placeTargets = useMemo(() => ({
     universes: placeUniversesResource.items.map((u) => ({ refKind: 'universe', refId: u.id, label: u.name || '(untitled universe)' })),
     series: placeSeriesResource.items.map((s) => ({ refKind: 'series', refId: s.id, label: s.name || '(untitled series)' })),
   }), [placeUniversesResource.items, placeSeriesResource.items]);
-  const placeTargetsLoading = addMenuOpen && (placeUniversesResource.state === 'loading' || addMode === 'membership' && placeSeriesResource.state === 'loading');
+  const placeTargetsLoading = placeUniversesResource.state === 'loading' || membershipMenuOpen && placeSeriesResource.state === 'loading';
 
   // Inline create form.
   const [form, setForm] = useState({ type: 'character', name: '', content: '', universeId: '' });
@@ -216,8 +235,7 @@ export default function Catalog() {
   const clearSelection = useCallback(() => {
     setSelectedIds(new Set());
     setSelectedItems(new Map());
-    setRemixMenuOpen(false);
-    setAddMenuOpen(false);
+    setActivePopover(null);
   }, []);
 
   const fetchListPage = useCallback((offset) =>
@@ -483,7 +501,7 @@ export default function Catalog() {
   const handleRemix = (target) => {
     const ingredientIds = [...selectedIds];
     if (ingredientIds.length === 0) return;
-    setRemixMenuOpen(false);
+    setActivePopover(null);
     // Drop any pending query→URL mirror write first — left free to fire
     // after this navigation, it could clobber the remix destination back to
     // this page's own list route (#8187).
@@ -496,18 +514,18 @@ export default function Catalog() {
   // raw → placed loop without leaving the page.
   const handleAddToRef = async (refKind, refId, label) => {
     const list = [...selectedItems.values()];
-    setAddMenuOpen(false);
+    setActivePopover(null);
     if (list.length === 0) return;
     let ok = 0;
     let fail = 0;
     let failureReason = '';
     await Promise.all(list.map((ing) =>
-      (addMode === 'owner' ? setCatalogUniverseOwner(ing.id, refId, { silent: true })
+      (ownerMenuOpen ? setCatalogUniverseOwner(ing.id, refId, { silent: true })
         : linkCatalogIngredient(ing.id, { refKind, refId, role: catalogReferenceRole(ing.type, refKind) }, { silent: true }))
         .then(() => { ok += 1; dropSelection(ing.id); })
         .catch((error) => { fail += 1; failureReason ||= error.message; }),
     ));
-    if (ok > 0) toast.success(addMode === 'owner' ? `Set ${label} as owner of ${ok} primitive${ok === 1 ? '' : 's'}` : `Added ${ok} ingredient${ok === 1 ? '' : 's'} to ${label}`);
+    if (ok > 0) toast.success(ownerMenuOpen ? `Set ${label} as owner of ${ok} primitive${ok === 1 ? '' : 's'}` : `Added ${ok} ingredient${ok === 1 ? '' : 's'} to ${label}`);
     if (fail > 0) toast.error(`Could not update ${fail} primitive${fail === 1 ? '' : 's'}: ${failureReason}`);
     loadFacets();
     setDataVersion((v) => v + 1);
@@ -519,13 +537,8 @@ export default function Catalog() {
   // facet arrays, which only list refs that already have catalog links. A
   // freshly-created (still empty) universe/series must be a valid destination.
   // The resources enable while the menu is open and retain independent retries.
-  const openAddMenu = () => {
-    setAddMode('membership');
-    setRemixMenuOpen(false);
-    setAddMenuOpen((o) => !o);
-  };
   const noPlaceTargets = placeUniversesResource.state === 'ready' && placeTargets.universes.length === 0
-    && (addMode === 'owner' || placeSeriesResource.state === 'ready' && placeTargets.series.length === 0);
+    && (ownerMenuOpen || placeSeriesResource.state === 'ready' && placeTargets.series.length === 0);
 
   // Stable so the grid's per-card render (up to PAGE_SIZE cards) doesn't
   // allocate a fresh arrow per card every render.
@@ -552,6 +565,78 @@ export default function Catalog() {
     >
       <CatalogTypesTab />
     </Drawer>
+  );
+
+  const placementPopover = addMenuOpen && (
+    // The bar is pinned to the bottom of the viewport and the menu
+    // opens upward, so cap it against the viewport rather than a
+    // fixed 18rem — in landscape that would run off the top.
+    // Same non-menu call as the Remix list above (#7265): a named
+    // group of plain buttons, reachable by Tab — no arrow-key
+    // roving focus is implemented here.
+    <div
+      ref={popoverRef}
+      role="group"
+      aria-label={ownerMenuOpen ? 'Set owning universe' : 'Add to universe or series'}
+      className="absolute bottom-full mb-2 left-0 right-0 sm:left-auto sm:min-w-[220px] max-h-[60vh] sm:max-h-72 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-lg"
+    >
+      {placeTargetsLoading && placeTargets.universes.length === 0 && (!membershipMenuOpen || placeTargets.series.length === 0) ? (
+        <p className="px-3 py-2 text-sm"><BrailleSpinner text="Loading…" /></p>
+      ) : noPlaceTargets ? (
+        <p className="px-3 py-2 text-sm text-gray-500">{ownerMenuOpen ? 'No universes yet.' : 'No universes or series yet.'}</p>
+      ) : (
+        <>
+          {placeUniversesResource.state === 'error' ? (
+            <ListLoadError what="universes" error={placeUniversesResource.error} onRetry={placeUniversesResource.retry} className="m-2" />
+          ) : null}
+          {membershipMenuOpen && placeSeriesResource.state === 'error' ? (
+            <ListLoadError what="series" error={placeSeriesResource.error} onRetry={placeSeriesResource.retry} className="m-2" />
+          ) : null}
+          {placeUniversesResource.state === 'loading' && placeTargets.universes.length === 0 ? (
+            <p className="px-3 py-2 text-sm text-gray-500">Loading universes…</p>
+          ) : null}
+          {membershipMenuOpen && placeSeriesResource.state === 'loading' && placeTargets.series.length === 0 ? (
+            <p className="px-3 py-2 text-sm text-gray-500">Loading series…</p>
+          ) : null}
+          {placeUniversesResource.state === 'ready' && placeTargets.universes.length === 0 ? (
+            <p className="px-3 py-2 text-sm text-gray-500">No universes yet.</p>
+          ) : null}
+          {placeTargets.universes.length > 0 && (
+            <>
+              <p className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-gray-500">Universes</p>
+              {placeTargets.universes.map((t) => (
+                <button
+                  key={`u-${t.refId}`}
+                  type="button"
+                  onClick={() => handleAddToRef(t.refKind, t.refId, t.label)}
+                  className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-port-bg hover:text-white"
+                >
+                  {t.label}
+                </button>
+              ))}
+            </>
+          )}
+          {membershipMenuOpen && placeTargets.series.length > 0 && (
+            <>
+              <p className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-gray-500">Series</p>
+              {placeTargets.series.map((t) => (
+                <button
+                  key={`s-${t.refId}`}
+                  type="button"
+                  onClick={() => handleAddToRef(t.refKind, t.refId, t.label)}
+                  className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-port-bg hover:text-white"
+                >
+                  {t.label}
+                </button>
+              ))}
+            </>
+          )}
+          {membershipMenuOpen && placeSeriesResource.state === 'ready' && placeTargets.series.length === 0 ? (
+            <p className="px-3 py-2 text-sm text-gray-500">No series yet.</p>
+          ) : null}
+        </>
+      )}
+    </div>
   );
 
   return (
@@ -957,12 +1042,13 @@ export default function Catalog() {
               bar on a phone instead of hanging off a ~90px button and running
               past the viewport edge. Anything that gives an element between the
               menu and this row a containing block — `relative`, `transform`,
-              `filter`, `contain` — silently re-anchors both menus. */}
+              `filter`, `contain` — silently re-anchors the menus. */}
           <div className="relative flex flex-wrap items-center gap-2">
             <div className="flex-1 sm:relative sm:flex-none">
               <button
                 type="button"
-                onClick={() => { setRemixMenuOpen((o) => !o); setAddMenuOpen(false); }}
+                ref={remixTriggerRef}
+                onClick={() => togglePopover('remix')}
                 aria-expanded={remixMenuOpen}
                 aria-label="Remix into…"
                 className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-3 py-2 min-h-[40px] rounded-lg bg-port-accent hover:bg-port-accent/90 text-white text-sm font-medium"
@@ -977,6 +1063,7 @@ export default function Catalog() {
                 // conveys "a list of actions"; aria-expanded on the trigger
                 // carries the disclosure.
                 <ul
+                  ref={popoverRef}
                   aria-label="Remix targets"
                   className="absolute bottom-full mb-2 left-0 right-0 sm:left-auto sm:min-w-[180px] bg-port-card border border-port-border rounded-lg shadow-lg overflow-hidden"
                 >
@@ -994,13 +1081,24 @@ export default function Catalog() {
                 </ul>
               )}
             </div>
-            <button type="button" onClick={() => { setAddMode('owner'); setAddMenuOpen(true); setRemixMenuOpen(false); }}
-              className="min-h-[40px] px-3 py-2 text-xs rounded border border-port-border text-port-accent hover:bg-port-bg">Set owning universe…</button>
+            <div className="sm:relative">
+              <button
+                type="button"
+                ref={ownerTriggerRef}
+                onClick={() => togglePopover('owner')}
+                aria-expanded={ownerMenuOpen}
+                className="min-h-[40px] px-3 py-2 text-xs rounded border border-port-border text-port-accent hover:bg-port-bg"
+              >
+                Set owning universe…
+              </button>
+              {ownerMenuOpen && placementPopover}
+            </div>
             <div className="flex-1 sm:relative sm:flex-none">
               <button
                 type="button"
-                onClick={openAddMenu}
-                aria-expanded={addMenuOpen}
+                ref={membershipTriggerRef}
+                onClick={() => togglePopover('membership')}
+                aria-expanded={membershipMenuOpen}
                 aria-label="Add to universe/series…"
                 title="Place the selected ingredients into a universe or series"
                 className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-3 py-2 min-h-[40px] rounded-lg border border-port-border bg-port-card hover:bg-port-bg text-white text-sm font-medium disabled:opacity-50"
@@ -1008,76 +1106,7 @@ export default function Catalog() {
                 <FolderPlus size={16} className="shrink-0" aria-hidden="true" />
                 <span className="truncate">Add<span className="hidden sm:inline"> to universe/series…</span></span>
               </button>
-              {addMenuOpen && (
-                // The bar is pinned to the bottom of the viewport and the menu
-                // opens upward, so cap it against the viewport rather than a
-                // fixed 18rem — in landscape that would run off the top.
-                // Same non-menu call as the Remix list above (#7265): a named
-                // group of plain buttons, reachable by Tab — no arrow-key
-                // roving focus is implemented here.
-                <div
-                  role="group"
-                  aria-label={addMode === 'owner' ? 'Set owning universe' : 'Add to universe or series'}
-                  className="absolute bottom-full mb-2 left-0 right-0 sm:left-auto sm:min-w-[220px] max-h-[60vh] sm:max-h-72 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-lg"
-                >
-                  {placeTargetsLoading && placeTargets.universes.length === 0 && placeTargets.series.length === 0 ? (
-                    <p className="px-3 py-2 text-sm"><BrailleSpinner text="Loading…" /></p>
-                  ) : noPlaceTargets ? (
-                    <p className="px-3 py-2 text-sm text-gray-500">No universes or series yet.</p>
-                  ) : (
-                    <>
-                      {placeUniversesResource.state === 'error' ? (
-                        <ListLoadError what="universes" error={placeUniversesResource.error} onRetry={placeUniversesResource.retry} className="m-2" />
-                      ) : null}
-                      {placeSeriesResource.state === 'error' ? (
-                        <ListLoadError what="series" error={placeSeriesResource.error} onRetry={placeSeriesResource.retry} className="m-2" />
-                      ) : null}
-                      {placeUniversesResource.state === 'loading' && placeTargets.universes.length === 0 ? (
-                        <p className="px-3 py-2 text-sm text-gray-500">Loading universes…</p>
-                      ) : null}
-                      {placeSeriesResource.state === 'loading' && placeTargets.series.length === 0 ? (
-                        <p className="px-3 py-2 text-sm text-gray-500">Loading series…</p>
-                      ) : null}
-                      {placeUniversesResource.state === 'ready' && placeTargets.universes.length === 0 ? (
-                        <p className="px-3 py-2 text-sm text-gray-500">No universes yet.</p>
-                      ) : null}
-                      {placeTargets.universes.length > 0 && (
-                        <>
-                          <p className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-gray-500">Universes</p>
-                          {placeTargets.universes.map((t) => (
-                            <button
-                              key={`u-${t.refId}`}
-                              type="button"
-                              onClick={() => handleAddToRef(t.refKind, t.refId, t.label)}
-                              className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-port-bg hover:text-white"
-                            >
-                              {t.label}
-                            </button>
-                          ))}
-                        </>
-                      )}
-                      {addMode === 'membership' && placeTargets.series.length > 0 && (
-                        <>
-                          <p className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-gray-500">Series</p>
-                          {placeTargets.series.map((t) => (
-                            <button
-                              key={`s-${t.refId}`}
-                              type="button"
-                              onClick={() => handleAddToRef(t.refKind, t.refId, t.label)}
-                              className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-port-bg hover:text-white"
-                            >
-                              {t.label}
-                            </button>
-                          ))}
-                        </>
-                      )}
-                      {placeSeriesResource.state === 'ready' && placeTargets.series.length === 0 ? (
-                        <p className="px-3 py-2 text-sm text-gray-500">No series yet.</p>
-                      ) : null}
-                    </>
-                  )}
-                </div>
-              )}
+              {membershipMenuOpen && placementPopover}
             </div>
             <button
               type="button"
