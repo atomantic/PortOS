@@ -39,7 +39,11 @@ export default function LayaMlxPanel() {
   const run = (action) => {
     setBusy(true);
     setError('');
-    return action().catch(() => setError('The request failed. Check the connection and retry.')).finally(() => setBusy(false));
+    return action().catch((err) => {
+      setError(typeof err?.code === 'string' && err.code.startsWith('laya-')
+        ? errorLabel(err.code)
+        : 'The request failed. Check the connection and retry.');
+    }).finally(() => setBusy(false));
   };
   const toggle = () => run(() => updateInstanceFeature('laya-mlx', !feature.enabled, { silent: true })
     .then(value => publishInstanceFeatures(value.features, { groups: value.groups })));

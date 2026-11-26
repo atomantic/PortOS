@@ -35,6 +35,22 @@ it('scores only on explicit action and clears stale results when input changes',
   fireEvent.change(screen.getByLabelText('Premise'), { target: { value: 'Another input' } });
   expect(screen.queryByText('Choice: billing')).not.toBeInTheDocument();
 });
+it('explains an HTTP refusal when starting an install', async () => {
+  mocks.install.mockRejectedValueOnce(Object.assign(new Error('Installation could not start.'), { code: 'laya-busy' }));
+  render(<LayaMlxPanel />);
+  await screen.findByText(/Runtime: installed/);
+  fireEvent.click(screen.getByRole('button', { name: 'Repair Laya-MLX' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('A Laya operation is already running.');
+});
+it('explains an HTTP scoring failure using its code', async () => {
+  mocks.score.mockRejectedValueOnce(Object.assign(new Error('Scoring failed.'), { code: 'laya-context-too-long' }));
+  render(<LayaMlxPanel />);
+  await screen.findByText(/Runtime: installed/);
+  fireEvent.change(screen.getByLabelText('Premise'), { target: { value: 'Duplicate invoice' } });
+  fireEvent.change(screen.getByLabelText(/Options/), { target: { value: 'billing\nsales' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Run experiment' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('The input exceeds this model’s token budget.');
+});
 it('keeps setup discoverable while disabled and publishes confirmed enablement', async () => {
   mocks.enabled = false;
   mocks.toggle.mockResolvedValue({ features: [{ id: 'laya-mlx', enabled: true }], groups: [] });

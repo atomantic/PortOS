@@ -206,7 +206,7 @@ describe('JevPanel try-it box', () => {
 
   it('shows a failure code beside the input rather than swallowing it', async () => {
     ready();
-    scoreJev.mockRejectedValue(new Error('jev-timeout'));
+    scoreJev.mockRejectedValue(Object.assign(new Error('Jev could not score the request.'), { code: 'jev-timeout' }));
     await renderPanel();
     fill('Some text.', 'first\nsecond');
     fireEvent.click(screen.getByRole('button', { name: 'Score' }));

@@ -73,7 +73,7 @@ import { SPEC_TYPE_SUGGESTIONS } from '../lib/specDecodePresets.js'
 import { resetProviderReadinessCache } from '../services/provider/providerReadiness.js'
 import { syncRuntimeProviderModels } from '../services/localRuntimeProviderSync.js'
 import { MODEL_ABUSE_GUARD, MODEL_ABUSE_GUARD_MAX_INPUT_CHARS } from '../lib/modelAbuseGuard.js'
-import { JEV_MODEL, jevScoreRequestSchema } from '../lib/jev.js'
+import { JEV_MODEL, jevDecideRequestSchema } from '../lib/jev.js'
 import { jevHeadActionRequestSchema, jevHeadTrainRequestSchema } from '../lib/jevHead.js'
 import { z } from 'zod'
 import { getCatalog, searchCatalog, isBackend } from '../lib/localLlmCatalog.js'
@@ -127,16 +127,37 @@ const router = Router()
 router.use(observeModelMutations('loaded-models', 'provider-readiness'));
 const layaService = () => import('../services/layaMlx.js')
 
+const layaFailureStatuses = new Map([
+  ['laya-request-invalid', 400],
+  ['laya-unsupported', 400],
+  ['laya-context-too-long', 400],
+  ['laya-disabled', 403],
+  ['laya-busy', 409],
+  ['laya-not-ready', 503],
+])
+
 router.get('/laya-mlx/status', asyncHandler(async (_req, res) => {
   res.json(await (await layaService()).getLayaStatus())
 }))
 router.post('/laya-mlx/install', asyncHandler(async (_req, res) => {
-  res.status(202).json(await (await layaService()).installLaya())
+  const result = await (await layaService()).installLaya()
+  if (result?.ok !== true) {
+    const code = result?.code || 'laya-install-failed'
+    const status = layaFailureStatuses.get(code) ?? 502
+    throw new ServerError('Laya-MLX could not start installation.', { status, code })
+  }
+  res.status(202).json(result)
 }))
 router.post('/laya-mlx/score', asyncHandler(async (req, res) => {
   const { layaScoreRequestSchema } = await import('../lib/layaMlx.js')
   const input = validateRequest(layaScoreRequestSchema, req.body)
-  res.json(await (await layaService()).scoreLaya(input, abortSignalFromResponse(res)))
+  const result = await (await layaService()).scoreLaya(input, abortSignalFromResponse(res))
+  if (!result?.ok) {
+    const code = result?.code || 'laya-scoring-failed'
+    const status = layaFailureStatuses.get(code) ?? 502
+    throw new ServerError('Laya-MLX could not score the request.', { status, code })
+  }
+  res.json(result)
 }))
 
 const emitter = (req) => {
@@ -409,11 +430,25 @@ router.post('/jev/install/cancel', asyncHandler(async (_req, res) => {
 }))
 
 // An explicit operator action in the same request, per the AI Provider Usage
+const jevScoreFailureStatuses = new Map([
+  ['jev-request-invalid', 400],
+  ['jev-premise-too-large', 400],
+  ['jev-not-installed', 503],
+  ['jev-start-failed', 503],
+  ['jev-timeout', 504],
+])
+
 // Policy: this is the only path that starts the sidecar, and it starts it
 // because someone asked for a score.
 router.post('/jev/score', asyncHandler(async (req, res) => {
-  const { premise, hypotheses, minMargin } = validateRequest(jevScoreRequestSchema, req.body)
-  res.json(await decide({ premise, options: hypotheses, minMargin }))
+  const { premise, hypotheses, minMargin } = validateRequest(jevDecideRequestSchema, req.body)
+  const result = await decide({ premise, options: hypotheses, minMargin })
+  if (!result?.ok) {
+    const code = result?.code || 'jev-response-invalid'
+    const status = jevScoreFailureStatuses.get(code) ?? 502
+    throw new ServerError('Jev could not score the request.', { status, code })
+  }
+  res.json(result)
 }))
 
 // Free the resident weights without waiting out the idle timer.

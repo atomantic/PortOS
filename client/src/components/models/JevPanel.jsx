@@ -158,7 +158,7 @@ export default function JevPanel() {
       .then((result) => setDecision(result))
       // A failing score is shown in the result box beside the button rather
       // than as a toast: the operator is iterating on this input right here.
-      .catch((error) => setDecision({ ok: false, code: error.message || 'jev-request-invalid' }))
+      .catch((error) => setDecision({ ok: false, code: error?.code || error?.message || 'jev-request-invalid' }))
       .finally(() => { setScoring(false); loadStatus(); });
   };
 
