@@ -3,6 +3,8 @@ import { Link } from 'react-router';
 import { ExternalLink } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import KeyFileButton from './KeyFileButton';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
+import useConfirmDelete from '../../hooks/useConfirmDelete';
 import { getCredentialInventory, saveCredential } from '../../services/apiSystem.js';
 
 const SOURCE_LABEL = {
@@ -26,8 +28,10 @@ export function CredentialsTab() {
   const [drafts, setDrafts] = useState({});
   const [saving, setSaving] = useState(null);
   const [receipt, setReceipt] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete } = useConfirmDelete();
 
   const saveKey = (id, value) => {
+    cancelDelete();
     setSaving(id);
     setReceipt({ id, message: 'Saving…' });
     saveCredential(id, value, { silent: true }).then(row => {
@@ -145,8 +149,18 @@ export function CredentialsTab() {
                   <div className="flex flex-wrap gap-2">
                     <button type="button" disabled={saving !== null || !drafts[credential.id]?.trim()}
                       onClick={() => saveKey(credential.id, drafts[credential.id])} className="px-3 py-2 rounded bg-port-border disabled:opacity-50">Save key</button>
-                    <button type="button" disabled={saving !== null || credential.source !== 'settings'}
-                      onClick={() => saveKey(credential.id, '')} className="px-3 py-2 rounded bg-port-border disabled:opacity-50">Clear saved key</button>
+                    {isConfirming(credential.id) ? (
+                      <ConfirmButtonPair
+                        ariaLabel={`Clear the saved ${credential.label} key?`}
+                        prompt="Clear saved key?"
+                        confirmText="Clear key"
+                        onConfirm={() => saveKey(credential.id, '')}
+                        onCancel={cancelDelete}
+                      />
+                    ) : (
+                      <button type="button" disabled={saving !== null || credential.source !== 'settings'}
+                        onClick={() => requestDelete(credential.id)} className="px-3 py-2 rounded bg-port-border disabled:opacity-50">Clear saved key</button>
+                    )}
                   </div>
                   {receipt?.id === credential.id && <p role="status" className="text-sm">{receipt.message}</p>}
                 </div>

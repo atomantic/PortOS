@@ -126,12 +126,12 @@ it('keeps loaded agent rows visible and offers retry after a refresh fails', asy
   render(<AgentsPage />);
   await flush();
   expect(screen.getAllByText('example agent').length).toBeGreaterThan(0);
-  expect(screen.getAllByRole('button', { name: 'Kill' }).length).toBeGreaterThan(0);
+  expect(screen.getAllByRole('button', { name: 'Kill Example agent process 123' })).toHaveLength(2);
 
   getAgents.mockRejectedValueOnce(new Error('refresh offline'));
   await flush(() => socket.receive('connect'));
   expect(screen.getByRole('alert')).toHaveTextContent('refresh offline');
   expect(screen.getAllByText('example agent').length).toBeGreaterThan(0);
-  expect(screen.getAllByRole('button', { name: 'Kill' }).length).toBeGreaterThan(0);
+  expect(screen.getAllByRole('button', { name: 'Kill Example agent process 123' })).toHaveLength(2);
   expect(screen.queryByText('No AI agents currently running')).not.toBeInTheDocument();
 });

@@ -3,6 +3,7 @@ import { AlertTriangle, KeyRound, Check, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import Modal from '../ui/Modal';
 import Banner from '../ui/Banner';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { FormField } from '../ui/FormField';
 import { setCivitaiAuth, clearCivitaiAuth } from '../../services/apiImageVideo.js';
 
@@ -37,10 +38,12 @@ export default function CivitaiAuthModal({ pendingUrl, message, auth, onClose, o
   const [apiKey, setApiKey] = useState('');
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [confirmingClear, setConfirmingClear] = useState(false);
 
   const handleSave = async (e) => {
     e?.preventDefault?.();
-    if (!apiKey.trim() || saving) return;
+    if (!apiKey.trim() || saving || clearing) return;
+    setConfirmingClear(false);
     setSaving(true);
     await setCivitaiAuth(apiKey.trim(), { silent: true })
       .then((updated) => {
@@ -59,6 +62,7 @@ export default function CivitaiAuthModal({ pendingUrl, message, auth, onClose, o
   };
 
   const handleClear = async () => {
+    setConfirmingClear(false);
     setClearing(true);
     await clearCivitaiAuth({ silent: true })
       .then((updated) => {
@@ -107,28 +111,36 @@ export default function CivitaiAuthModal({ pendingUrl, message, auth, onClose, o
             onChange={(e) => setApiKey(e.target.value)}
             placeholder={auth?.hasKey ? '•••• key already set — paste a new one to replace' : 'paste your Civitai API key'}
             className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600 font-mono"
-            disabled={saving}
+            disabled={saving || clearing}
             autoFocus
           />
         </FormField>
-        <div className="flex items-center gap-2 pt-1">
+        <div className="flex flex-wrap items-center gap-2 pt-1">
           <button
             type="submit"
-            disabled={saving || !apiKey.trim()}
+            disabled={saving || clearing || !apiKey.trim()}
             className="flex-1 bg-port-accent text-white px-4 py-2 rounded text-sm font-medium hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {saving ? 'Saving…' : (pendingUrl ? 'Save key & retry install' : 'Save key')}
           </button>
-          {auth?.hasKey && auth?.source === 'settings' && (
+          {auth?.hasKey && auth?.source === 'settings' && (confirmingClear ? (
+            <ConfirmButtonPair
+              ariaLabel="Clear saved Civitai key?"
+              prompt="Clear saved key?"
+              confirmText="Clear key"
+              onConfirm={handleClear}
+              onCancel={() => setConfirmingClear(false)}
+            />
+          ) : (
             <button
               type="button"
-              onClick={handleClear}
-              disabled={clearing}
+              onClick={() => setConfirmingClear(true)}
+              disabled={saving || clearing}
               className="px-3 py-2 rounded text-xs text-port-error hover:bg-port-error/10 border border-port-error/30 disabled:opacity-50"
             >
               {clearing ? 'Clearing…' : 'Clear'}
             </button>
-          )}
+          ))}
         </div>
       </form>
     </Modal>

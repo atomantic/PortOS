@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const mock = vi.hoisted(() => ({
@@ -126,7 +126,14 @@ it('saves and clears a write-only key with immediate feedback and no displayed s
   await waitFor(() => expect(input.value).toBe(''));
   expect(mock.saveCredential).toHaveBeenCalledWith('huggingface', 'hf_example', { silent: true });
   fireEvent.click(screen.getByRole('button', { name: 'Clear saved key' }));
+  const confirmation = () => within(screen.getByRole('group', { name: 'Clear the saved Hugging Face key?' }));
+  expect(mock.saveCredential).toHaveBeenCalledTimes(1);
+  fireEvent.click(confirmation().getByRole('button', { name: 'Cancel' }));
+  expect(mock.saveCredential).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button', { name: 'Clear saved key' }));
+  fireEvent.click(confirmation().getByRole('button', { name: 'Clear key' }));
   await waitFor(() => expect(mock.saveCredential).toHaveBeenCalledWith('huggingface', '', { silent: true }));
+  expect(await screen.findByText('Saved key cleared. External credentials may still apply.')).toBeInTheDocument();
 });
 
 it('loads a downloaded key file into the write-only draft and saves its contents', async () => {
