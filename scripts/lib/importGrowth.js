@@ -38,10 +38,8 @@
  * with too few test files to be the real suite, or a base blob git cannot
  * read throws `ImportGrowthBaseError`. None of those become a zero delta.
  *
- * Wall-clock is not a gate. `benchmarkProxySplit` reports a synthetic
- * collection walk and a synthetic execution loop as separate numbers so the
- * two costs stay distinguishable; the live report's collect timings are the
- * same kind of evidence. Neither is compared to a threshold.
+ * Wall-clock is not a gate. Live report collect timings are evidence about the
+ * guard reading source; they are not compared to a threshold.
  */
 
 import { spawnSync } from 'child_process';
@@ -82,7 +80,7 @@ export const BOOT_CLOSURE_GROWTH_LIMIT = 15;
 export const HEAVY_REGRESSION_BAND = Math.floor(REGRESSION_6156 / 2);
 
 /** Below this, a measurement is not the server suite — passing would be vacuous. */
-export const MIN_SERVER_TESTS = 1_000;
+const MIN_SERVER_TESTS = 1_000;
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
 const SOURCE_EXT = /\.(?:[cm]?js|jsx|tsx?)$/;
@@ -101,7 +99,7 @@ export function cachedStaticImportSpecifiers(text) {
 
 const PROXY_NOTE = 'Static closure sizes are a proxy for import cost, not a count of observed module instantiations.';
 
-export function importGrowthBaseError(message) {
+function importGrowthBaseError(message) {
   const error = new Error(message);
   error.name = 'ImportGrowthBaseError';
   error.code = 'IMPORT_GROWTH_BASE_UNAVAILABLE';
@@ -179,7 +177,7 @@ export function measureClosures(testFiles, readText, { bootEntry = BOOT_ENTRY } 
   return { tests, deps, texts: textCache, bootClosure, testCount: tests.size, total };
 }
 
-export function closureSizeFromDeps(entry, deps) {
+function closureSizeFromDeps(entry, deps) {
   return closureOf(entry, (rel) => deps.get(rel) || []).size;
 }
 
@@ -359,45 +357,6 @@ export function formatImportGrowthReport(report) {
   return lines.join('\n');
 }
 
-/**
- * Synthetic collection-versus-execution split.
- * Collection is the static closure walk. Execution is a separate loop over
- * the measured result. Both are returned so a caller can report them apart;
- * nothing here decides pass/fail from either number.
- */
-export function benchmarkProxySplit({ modules = 30 } = {}) {
-  const files = new Map();
-  for (let i = 0; i < modules; i += 1) {
-    const prev = i === 0 ? '' : `import './m${i - 1}.js';\n`;
-    files.set(`synth/m${i}.js`, `${prev}export const n = ${i};\n`);
-  }
-  files.set('synth/suite.test.js', `import './m${modules - 1}.js';\n`);
-  const readText = (rel) => files.get(rel) ?? null;
-  const collectStart = performance.now();
-  const measured = measureClosures(['synth/suite.test.js'], readText);
-  const collectionMs = performance.now() - collectStart;
-  const executeStart = performance.now();
-  let executed = 0;
-  for (const closure of measured.tests.values()) executed += closure.size;
-  const executionMs = performance.now() - executeStart;
-  return {
-    collectionMs,
-    executionMs,
-    executed,
-    environment: {
-      node: process.version,
-      platform: process.platform,
-      synthetic: true,
-      modules,
-    },
-    limitations: [
-      'collectionMs times the static closure walk on an in-memory synthetic graph, not Vitest transforming the server suite',
-      'executionMs times a loop over that walk\'s result, not test bodies',
-      'neither number is a CI pass/fail threshold; the gate is existing-suite proxy growth',
-      PROXY_NOTE,
-    ],
-  };
-}
 
 function git(repoRoot, args, { input, encoding = 'utf8', maxBuffer = 64 * 1024 * 1024 } = {}) {
   const result = spawnSync('git', args, {

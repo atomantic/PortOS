@@ -23,7 +23,7 @@ command('--terminal', id, String(process.pid), '0');
 /** Use the actual updater and its builtin-only imports in an offline test checkout. */
 export function installUpdateContract(root) {
   installUpdateTestSupervisor(root, { standalone: true });
-  for (const path of ['update.sh', 'update.ps1', 'scripts/update.mjs', 'scripts/lib/dependencyReceipts.js',
+  for (const path of ['update.sh', 'update.ps1', 'scripts/update.mjs', 'scripts/lib/dependencyReceipts.js', 'scripts/lib/dependencyReconcile.js',
     'scripts/lib/workspaceDependencies.js', 'server/lib/gitStaleLock.js',
     'server/lib/homePath.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js']) {
     const target = join(root, path);

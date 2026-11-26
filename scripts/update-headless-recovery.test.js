@@ -62,7 +62,7 @@ async function makeSandbox({
   if (!withoutDeps) mkdirSync(join(repo, 'node_modules', 'pm2', 'bin'), { recursive: true });
 
   installUpdateTestSupervisor(repo);
-  for (const file of ['update.sh', 'update.ps1', 'scripts/update.mjs', 'scripts/lib/dependencyReceipts.js',
+  for (const file of ['update.sh', 'update.ps1', 'scripts/update.mjs', 'scripts/lib/dependencyReceipts.js', 'scripts/lib/dependencyReconcile.js',
     'scripts/lib/workspaceDependencies.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js']) {
     mkdirSync(dirname(join(repo, file)), { recursive: true });
     copyFileSync(join(REPO_ROOT, file), join(repo, file));
