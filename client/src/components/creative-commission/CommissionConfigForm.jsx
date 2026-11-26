@@ -336,10 +336,8 @@ function MusicTasteSection({ musicTaste, patchForm }) {
       {musicTaste.enabled && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
-            <label className={labelCls} htmlFor="commission-music-taste-source">Taste source</label>
-            <select id="commission-music-taste-source" className={inputCls} value="digital-twin" disabled>
-              <option value="digital-twin">Digital Twin profile</option>
-            </select>
+            <span className={labelCls}>Taste source</span>
+            <p className="text-sm text-gray-300">Taste source: Digital Twin profile</p>
           </div>
           <div>
             <label className={labelCls} htmlFor="commission-music-taste-window">Listening window</label>

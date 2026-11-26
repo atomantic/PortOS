@@ -768,3 +768,21 @@ describe('DailyLogTab mobile toolbar', () => {
     });
   });
 });
+
+describe('DailyLogTab activity digest settings', () => {
+  it('saves bounded catch-up days on blur and displays the last auto-draft date', async () => {
+    api.getActivityDigestSettings.mockResolvedValue({ catchUpDays: 3, lastRunDate: '2026-07-15' });
+    api.updateActivityDigestSettings.mockResolvedValue({ catchUpDays: 30, lastRunDate: '2026-07-15' });
+    await renderTab();
+    await act(async () => { fireEvent.click(screen.getByLabelText('Daily log settings')); await vi.advanceTimersByTimeAsync(0); });
+    const field = screen.getByLabelText('Catch-up days (0–30)');
+    expect(field).toHaveValue(3);
+    expect(screen.getByText('Last auto-draft: 2026-07-15')).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.change(field, { target: { value: '99' } });
+      fireEvent.blur(field);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(api.updateActivityDigestSettings).toHaveBeenCalledWith({ catchUpDays: 30 });
+  });
+});

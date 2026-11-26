@@ -826,6 +826,27 @@ export default function DailyLogTab() {
                   className="bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
                 />
               </FormField>
+              <FormField label="Catch-up days (0–30)" labelClassName="block text-xs text-gray-400 mb-1">
+                <input
+                  id="digest-catch-up-days"
+                  type="number"
+                  min="0"
+                  max="30"
+                  step="1"
+                  value={digestSettings?.catchUpDays ?? 3}
+                  onChange={(e) => setDigestSettings((s) => ({ ...(s || {}), catchUpDays: e.target.value === '' ? '' : Number(e.target.value) }))}
+                  onBlur={(e) => {
+                    if (e.target.value === '') return;
+                    const value = Math.max(0, Math.min(30, Math.trunc(Number(e.target.value))));
+                    e.target.value = String(value);
+                    saveDigestSettings({ catchUpDays: value });
+                  }}
+                  className="bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
+                />
+              </FormField>
+              {digestSettings?.lastRunDate && (
+                <p className="text-xs text-gray-500">Last auto-draft: {digestSettings.lastRunDate}</p>
+              )}
               <p className="text-[10px] text-gray-600">
                 {digestProvider && !supportsStrictToolFreeOneShot(digestProvider)
                   ? `${digestProvider.name || digestProvider.id} cannot run tool-free, so drafts stay a structured summary with no AI narrative. The digest quotes other people's calendar and message text, so only API or tool-free providers draft it.`
