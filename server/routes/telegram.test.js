@@ -10,11 +10,15 @@ vi.mock('../services/settings.js', () => ({
 }));
 vi.mock('../services/telegram.js', () => ({
   getStatus: vi.fn(() => ({ connected: true })),
-  updateCachedForwardTypes: vi.fn()
+  updateCachedForwardTypes: vi.fn(),
+  init: vi.fn(async () => {}),
+  cleanup: vi.fn(async () => {})
 }));
 vi.mock('../services/telegramBridge.js', () => ({
   getStatus: vi.fn(() => ({ connected: true, hasBotToken: true, hasChatId: true })),
-  updateCachedForwardTypes: vi.fn()
+  updateCachedForwardTypes: vi.fn(),
+  init: vi.fn(async () => true),
+  cleanup: vi.fn(async () => {})
 }));
 
 const { getSettings, updateSettingsWith } = await import('../services/settings.js');
@@ -46,5 +50,31 @@ describe('Telegram forwarding catalog contract', () => {
     const cleared = await request(app).put('/api/telegram/forward-types').send({ forwardTypes: [] });
     expect(cleared.status).toBe(200);
     expect(settings.telegram.forwardTypes).toEqual([]);
+  });
+
+  it.each(['manual', 'mcp-bridge'])('returns the status forwarding payload when switching to %s', async method => {
+    const forwardTypes = ['health_issue', 'unknown_saved_type'];
+    let settings = {
+      telegram: { method: method === 'manual' ? 'mcp-bridge' : 'manual', forwardTypes },
+      secrets: { telegram: { token: 'test-token' } }
+    };
+    getSettings.mockImplementation(async () => settings);
+    updateSettingsWith.mockImplementation(async update => { settings = update(settings); return settings; });
+
+    const status = await request(app).get('/api/telegram/status');
+    const switched = await request(app).put('/api/telegram/method').send({ method });
+
+    expect(switched.status).toBe(200);
+    expect(switched.body.forwardTypes).toEqual(status.body.forwardTypes);
+    expect(switched.body.availableForwardTypes).toEqual(status.body.availableForwardTypes);
+  });
+
+  it('rejects manual bot configuration while the MCP bridge is active', async () => {
+    getSettings.mockResolvedValue({ telegram: { method: 'mcp-bridge' } });
+
+    const response = await request(app).put('/api/telegram/config').send({ token: 'test-token', chatId: '12345678' });
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('TELEGRAM_METHOD_MISMATCH');
   });
 });

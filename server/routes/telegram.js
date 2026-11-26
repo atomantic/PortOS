@@ -77,7 +77,9 @@ router.put('/method', asyncHandler(async (req, res) => {
       ...status,
       hasToken: status.hasBotToken,
       hasChatId: status.hasChatId,
-      initialized: bridgeOk
+      initialized: bridgeOk,
+      forwardTypes: settings.telegram?.forwardTypes || [],
+      availableForwardTypes: AVAILABLE_FORWARD_TYPES
     });
   } else {
     // Stop bridge, start manual bot
@@ -91,7 +93,9 @@ router.put('/method', asyncHandler(async (req, res) => {
       method,
       ...status,
       hasToken: !!settings.secrets?.telegram?.token,
-      hasChatId: !!settings.telegram?.chatId
+      hasChatId: !!settings.telegram?.chatId,
+      forwardTypes: settings.telegram?.forwardTypes || [],
+      availableForwardTypes: AVAILABLE_FORWARD_TYPES
     });
   }
 }));
@@ -100,6 +104,13 @@ router.put('/method', asyncHandler(async (req, res) => {
 router.put('/config', asyncHandler(async (req, res) => {
   const { token, chatId } = validateRequest(telegramConfigSchema, req.body);
   const settings = await getSettings();
+
+  if (settings.telegram?.method === 'mcp-bridge') {
+    throw new ServerError('Manual Telegram configuration is unavailable while the MCP bridge is active', {
+      status: 409,
+      code: 'TELEGRAM_METHOD_MISMATCH'
+    });
+  }
 
   // Preserve existing token if a new one wasn't provided
   const finalToken = token || settings.secrets?.telegram?.token;

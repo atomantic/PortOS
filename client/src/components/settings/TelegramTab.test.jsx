@@ -34,6 +34,13 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('Telegram forwarding settings', () => {
+  it('documents every manual bot command', async () => {
+    getTelegramStatus.mockResolvedValue({ connected: false });
+    render(<TelegramTab />);
+
+    expect(await screen.findByText(/Self-hosted polling bot with \/status, \/goals, \/checkin, \/agents, \/help commands/)).toBeInTheDocument();
+  });
+
   it('shows an inline retry instead of the configuration form when settings fail to load', async () => {
     getSettings.mockRejectedValueOnce(new Error('Network unavailable'));
     getTelegramStatus.mockResolvedValue({ connected: false });
