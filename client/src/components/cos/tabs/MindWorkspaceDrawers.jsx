@@ -10,7 +10,7 @@ import PersistentMindSessions from '../PersistentMindSessions';
 import PersistentMindThinkingRequests from '../PersistentMindThinkingRequests';
 import PersistentMindThinkingPresets from '../PersistentMindThinkingPresets';
 import PersistentMindVisibilityPanel from '../PersistentMindVisibilityPanel';
-import PersistentMindTools from '../../../pages/PersistentMindTools';
+import PersistentMindToolsPanel from '../PersistentMindToolsPanel';
 import { formatDateTime } from '../../../utils/formatters';
 import { ActionButton, eventLabel, eventText, MIND_PANEL_TABS, MessageImages, safeMessageImages } from './MindPanelParts.jsx';
 
@@ -97,7 +97,7 @@ export default function MindWorkspaceDrawers({
           />
         </div>}
         {(visitedPanels.has('tools') || activePanel === 'tools') && <div hidden={activePanel !== 'tools'}>
-            <PersistentMindTools onCapabilitiesChange={updateCapabilities} onSavingChange={setCapabilitiesSaving} />
+            <PersistentMindToolsPanel onCapabilitiesChange={updateCapabilities} onSavingChange={setCapabilitiesSaving} />
         </div>}
         {(visitedPanels.has('models') || activePanel === 'models') && <div hidden={activePanel !== 'models'} className="space-y-6">
           <PersistentMindThinkingRequests

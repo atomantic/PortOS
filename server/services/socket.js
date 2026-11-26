@@ -841,7 +841,7 @@ function setupPeerAgentEventForwarding() {
 function setupReviewEventForwarding() {
   // Global invalidations reach the bell/dashboard even without a CoS room
   // subscription. They carry no record payload and are never peer-forwarded.
-  for (const event of ['tasks:changed', 'agent:completed', 'agent:feedback', 'memory:approved', 'memory:rejected']) {
+  for (const event of ['tasks:changed', 'agent:completed', 'agent:feedback', 'memory:approved', 'memory:rejected', 'memory:deleted', 'memory:approval-needed']) {
     cosEvents.on(event, () => {
       if (getIo()) getIo().emit('review:queue:changed');
     });

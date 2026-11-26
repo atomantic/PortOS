@@ -10,15 +10,15 @@ const api = vi.hoisted(() => ({
   updateCosConfig: vi.fn(),
 }));
 
-vi.mock('../services/apiAgents.js', () => ({
+vi.mock('../../services/apiAgents.js', () => ({
   getPersistentMindTools: api.getPersistentMindTools,
   getMindRecipes: api.getMindRecipes,
   updateCosConfig: api.updateCosConfig,
 }));
-vi.mock('../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
-vi.mock('../components/ui/Toast');
+vi.mock('../../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
+vi.mock('../ui/Toast');
 
-import PersistentMindTools from './PersistentMindTools';
+import PersistentMindTools from './PersistentMindToolsPanel';
 
 const response = (overrides = {}) => ({
   schemaVersion: 1,
