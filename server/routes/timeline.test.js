@@ -77,6 +77,7 @@ vi.mock('../services/humanActivity.js', () => ({
   eraseEvents: vi.fn(async () => ({ deleted: 4 })),
   listSourceCounts: vi.fn(async () => [{ source: 'location', eventCount: 4, earliestAt: null, latestAt: null }]),
 }));
+vi.mock('../services/spotifyAuth.js', () => ({ clearAuth: vi.fn(async () => ({ cleared: true })) }));
 
 import { importSpotifyHistory } from '../services/spotifyImport.js';
 import { importTakeoutLocationHistory } from '../services/takeoutLocationImport.js';
@@ -85,6 +86,7 @@ import { importWhatsappHistory } from '../services/whatsappImport.js';
 import { importBrowserHistory } from '../services/browserHistoryImport.js';
 import { importGmailMbox } from '../services/gmailMboxImport.js';
 import * as humanActivity from '../services/humanActivity.js';
+import * as spotifyAuth from '../services/spotifyAuth.js';
 import timelineRoutes from './timeline.js';
 
 function makeApp() {
@@ -470,6 +472,15 @@ describe('timeline erase routes (#12987)', () => {
     expect(r.status).toBe(200);
     expect(r.body).toEqual({ deleted: 4 });
     expect(humanActivity.eraseEvents).toHaveBeenCalledWith({ source: 'location', from: '2026-01-01T00:00:00.000Z' });
+  });
+
+  it('clears Spotify local stores only after an unbounded Spotify erasure', async () => {
+    await request(app).delete('/api/timeline/events?source=spotify');
+    expect(spotifyAuth.clearAuth).toHaveBeenCalledTimes(1);
+
+    await request(app).delete('/api/timeline/events?source=spotify&kind=media.listen');
+    await request(app).delete('/api/timeline/events?source=spotify&from=2026-01-01T00:00:00.000Z');
+    expect(spotifyAuth.clearAuth).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a missing or empty source without deleting', async () => {
