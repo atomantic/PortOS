@@ -1478,6 +1478,59 @@ describe('videoGen routes', () => {
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 
+    it.each([
+      { backend: 'google', providerSettings: { apiKey: 'example-google-key', projectId: 'example-project' },
+        form: { googleModelId: 'veo-3.1-generate-001', googleDuration: 8, googleResolution: '1080p', googleGenerateAudio: true } },
+      { backend: 'higgsfield', providerSettings: { apiKey: 'example-higgsfield-key' },
+        form: { higgsfieldModelId: 'bytedance/seedance-2.5', higgsfieldDuration: 5, higgsfieldResolution: '1080p',
+          higgsfieldGenerateAudio: true, sourceImageFile: 'opening.png' } },
+    ])('previews the same $backend prompt record the queued render uses', async ({ backend, providerSettings, form }) => {
+      const { getSettings } = await import('../services/settings.js');
+      const { googleVideoSentPrompt } = await import('../services/videoGen/google.js');
+      const { higgsfieldVideoSentPrompt } = await import('../services/videoGen/higgsfield.js');
+      const builders = { google: googleVideoSentPrompt, higgsfield: higgsfieldVideoSentPrompt };
+      const providerConfig = { videoGen: { [backend]: providerSettings } };
+      getSettings.mockResolvedValueOnce(providerConfig).mockResolvedValueOnce(providerConfig);
+      const body = {
+        backend, ...form, prompt: 'A fox runs through film grain', negativePrompt: 'motion blur',
+        referenceImageFiles: ['fox.png', 'forest.png'], promptAdditions: [style],
+      };
+
+      const preview = await request(app).post('/api/video-gen/prompt-preview').send(body);
+      expect(preview.status).toBe(200);
+      expect(copyFile).not.toHaveBeenCalled();
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+
+      const submitted = await request(app).post('/api/video-gen/').send(body);
+      expect(submitted.status).toBe(200);
+      const { params } = mediaJobQueue.enqueueJob.mock.calls[0][0];
+      const { record } = builders[backend]({
+        ...params, seconds: params.duration, hasImage: !!params.sourceImagePath,
+        referenceCount: params.referenceImagePaths.length,
+      });
+      expect(preview.body).toEqual({ backend, ...record });
+    });
+
+    it('refuses an express-mode Google key in preview and submission', async () => {
+      vi.stubEnv('GOOGLE_CLOUD_PROJECT', '');
+      try {
+        const { getSettings } = await import('../services/settings.js');
+        const expressSettings = { videoGen: { google: { apiKey: 'example-google-key' } } };
+        getSettings.mockResolvedValueOnce(expressSettings).mockResolvedValueOnce(expressSettings);
+        const body = { backend: 'google', prompt: 'A fox runs' };
+
+        const preview = await request(app).post('/api/video-gen/prompt-preview').send(body);
+        const submitted = await request(app).post('/api/video-gen/').send(body);
+        expect(preview.status).toBe(400);
+        expect(submitted.status).toBe(400);
+        expect(preview.body).toMatchObject({ code: 'GOOGLE_PROJECT_REQUIRED', error: expect.stringMatching(/express mode/) });
+        expect(submitted.body).toMatchObject({ code: preview.body.code, error: preview.body.error });
+        expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
     it('shows the grok agent prompt, its instructions chip and the form\'s chips without queueing', async () => {
       const { getSettings } = await import('../services/settings.js');
       getSettings.mockResolvedValueOnce(settings);

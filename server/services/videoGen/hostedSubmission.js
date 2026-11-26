@@ -169,6 +169,13 @@ async function stageHiggsfieldInputs(ctx) {
   return { ...references, lastImagePath: endFrame.path, ...(endFrame.owned ? { uploadedTempPaths: [endFrame.path] } : {}) };
 }
 
+export function googleVideoProjectError(settings, modelId) {
+  const config = resolveGoogleConfig(settings);
+  const model = getGoogleVideoModel(modelId || GOOGLE_DEFAULT_VIDEO_MODEL);
+  const message = model && googleExpressModeRefusal(config, model);
+  return message ? new ServerError(message, { status: 400, code: 'GOOGLE_PROJECT_REQUIRED' }) : null;
+}
+
 // Veo renders from a prompt, a start frame (optionally with an end frame) or,
 // on Veo 3.1, gallery asset reference images. The catalog dry run refuses a
 // combination the chosen model cannot take before anything is staged.
@@ -178,11 +185,10 @@ async function stageGoogleInputs(ctx) {
     await cleanupStaged();
     throw new ServerError(message, { status: 400, code });
   };
-  const config = resolveGoogleConfig(ctx.settings || await getSettings().catch(() => null));
-  const model = getGoogleVideoModel(body.googleModelId || GOOGLE_DEFAULT_VIDEO_MODEL);
-  if (model) {
-    const expressRefusal = googleExpressModeRefusal(config, model);
-    if (expressRefusal) await refuse(expressRefusal, 'GOOGLE_PROJECT_REQUIRED');
+  const projectError = googleVideoProjectError(ctx.settings || await getSettings().catch(() => null), body.googleModelId);
+  if (projectError) {
+    await cleanupStaged();
+    throw projectError;
   }
   if (uploads.audioFile) await refuse('Google Veo takes no source audio; turn on Provider audio instead.');
   const hasEndFrame = !!uploads.lastImage || !!body.lastImageFile;
