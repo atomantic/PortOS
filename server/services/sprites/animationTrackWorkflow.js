@@ -582,7 +582,7 @@ async function approveTrackRunImpl(trackId, recordId, { direction: requested, ru
 /**
  * Drop one facing's approval because the reference it was rendered from changed.
  *
- * Called from the reference-unlock paths in `walk.js`: a revised anchor or a
+ * Called from the reference-unlock paths in `walkLocks.js`: a revised anchor or a
  * regenerated turnaround must not leave a stale approved clip standing, since
  * the atlas would then compile frames drawn from an image that no longer exists.
  * Returns true when something was actually invalidated.

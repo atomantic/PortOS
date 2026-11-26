@@ -11,7 +11,7 @@ vi.mock('../mediaJobQueue/index.js', () => ({ mediaJobEvents: {}, listJobs: () =
 const collect = vi.fn();
 vi.mock('./localAnimationRender.js', () => ({ collectLocalAnimationClip: (...args) => collect(...args) }));
 const attach = vi.fn();
-vi.mock('./walk.js', () => ({ attachTuiWalkResult: (...args) => attach(...args) }));
+vi.mock('./walkGeneration.js', () => ({ attachTuiWalkResult: (...args) => attach(...args) }));
 vi.mock('./animationTrackWorkflow.js', () => ({ attachTrackTuiResult: (...args) => attach(...args) }));
 const { __testing: { settleSpriteAnimationJob } } = await import('./localAnimationJobHook.js');
 afterAll(() => rm(root, { recursive: true, force: true }));

@@ -92,7 +92,7 @@ async function settleSpriteAnimationJob(job) {
       await collectLocalAnimationClip({ jobId: job.id, videoAbs, label });
     }
     if (track === WALK_TRACK) {
-      const { attachTuiWalkResult } = await import('./walk.js');
+      const { attachTuiWalkResult } = await import('./walkGeneration.js');
       await attachTuiWalkResult(recordId, runId, videoAbs);
     } else {
       const { attachTrackTuiResult } = await import('./animationTrackWorkflow.js');

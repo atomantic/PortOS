@@ -9,7 +9,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { keyChannelSplit } from './chromaKey.js';
 import { resolveSpriteAssetPath } from './paths.js';
 import { loadManifest } from './reference.js';
-import { resolveChromaKey } from './walk.js';
+import { resolveChromaKey } from './animationWorkflow.js';
 import { decodeTransparentSpriteSource, sha256Buffer } from './walkPostprocess.js';
 
 export const PRESENTATION_PORTRAIT_SIZE = 512;

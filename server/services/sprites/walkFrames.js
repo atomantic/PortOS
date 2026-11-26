@@ -2,7 +2,7 @@
  * Sprites — the single definition of "this run manifest's packaged frames are
  * valid" (issue #3001).
  *
- * Approve (walk.js#approveWalkDirectionImpl) and compile
+ * Approve (walkLocks.js#approveWalkDirectionImpl) and compile
  * (atlas.js#validateForCompile) both gate on the same artifact — the per-frame
  * PNGs a packaged walk manifest declares — but used to define validity twice,
  * with the more permissive approve gate running FIRST. So a direction could
