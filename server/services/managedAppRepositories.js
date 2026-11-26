@@ -1,4 +1,6 @@
 import { basename, join } from 'path';
+import { createBoundedStateMap } from '../lib/boundedStateMap.js';
+import { createSingleFlight } from '../lib/singleFlight.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { pathExists, safeJSONParse } from '../lib/fileUtils.js';
 import { getOriginInfo, parseGitRemoteUrl, readRemoteUrl } from '../lib/gitRemote.js';
@@ -56,12 +58,15 @@ function remoteIdentity(url) {
 // asked GitHub again, and a throttled or offline forge then blanked the
 // upstream identity the page had already shown. Successful answers are reused
 // inside the fresh window and kept as the last-known answer after it, so a
-// failed lookup degrades to that answer instead of to "unknown". In-memory
-// only: a restart simply asks again.
+// failed lookup can still use that answer within the retention window.
 const METADATA_FRESH_MS = 10 * 60_000;
 const COMPARE_FRESH_MS = 3 * 60_000;
-const metadataCache = new Map();
-const compareCache = new Map();
+const METADATA_RETENTION_MS = 24 * 60 * 60_000;
+const MAX_CACHE_ENTRIES = 256;
+const metadataCache = createBoundedStateMap({ maxSize: MAX_CACHE_ENTRIES, ttlMs: METADATA_RETENTION_MS });
+const compareCache = createBoundedStateMap({ maxSize: MAX_CACHE_ENTRIES, ttlMs: COMPARE_FRESH_MS });
+const metadataInFlight = createSingleFlight();
+const compareInFlight = createSingleFlight();
 
 export function resetRepositoryMetadataCache() {
   metadataCache.clear();
@@ -75,33 +80,39 @@ const metadataLookupError = (error) => (/rate limit/i.test(error?.ghStderr || er
 async function githubRepositoryMetadata(repoPath, origin) {
   if (!origin?.fullName || !isGithubHost(origin.host)) return { metadata: null, error: null };
   const host = githubApiHost(origin.host);
-  const key = `${host}/${origin.fullName.toLowerCase()}`;
+  // Checkouts of the same repository can pin different forge accounts.
+  const key = JSON.stringify([repoPath, host, origin.fullName.toLowerCase()]);
   const cached = metadataCache.get(key);
-  if (cached && Date.now() - cached.at < METADATA_FRESH_MS) return { metadata: cached.metadata, error: null };
-  const forge = await resolveForgeForRepo(repoPath);
-  let failure = null;
-  const raw = await execGh([
-    'api', ...(host === 'github.com' ? [] : ['--hostname', host]),
-    `repos/${origin.fullName}`, '--jq',
-    '{fullName: .full_name, defaultBranch: .default_branch, isFork: .fork, '
-      + 'canPush: .permissions.push, '
-      + 'parentFullName: .parent.full_name, parentDefaultBranch: .parent.default_branch, '
-      + 'sourceFullName: .source.full_name, sourceDefaultBranch: .source.default_branch}',
-  ], GH_TIMEOUT_MS, {
-    cwd: repoPath,
-    env: forge?.env || process.env,
-  }).catch((error) => {
-    failure = error;
-    return null;
+  const age = cached ? Date.now() - cached.at : Infinity;
+  if (age < METADATA_FRESH_MS) return { metadata: cached.metadata, error: null };
+  const retained = age < METADATA_RETENTION_MS ? cached : null;
+  if (cached && !retained) metadataCache.delete(key);
+  return metadataInFlight.run(key, async () => {
+    const forge = await resolveForgeForRepo(repoPath);
+    let failure = null;
+    const raw = await execGh([
+      'api', ...(host === 'github.com' ? [] : ['--hostname', host]),
+      `repos/${origin.fullName}`, '--jq',
+      '{fullName: .full_name, defaultBranch: .default_branch, isFork: .fork, '
+        + 'canPush: .permissions.push, '
+        + 'parentFullName: .parent.full_name, parentDefaultBranch: .parent.default_branch, '
+        + 'sourceFullName: .source.full_name, sourceDefaultBranch: .source.default_branch}',
+    ], GH_TIMEOUT_MS, {
+      cwd: repoPath,
+      env: forge?.env || process.env,
+    }).catch((error) => {
+      failure = error;
+      return null;
+    });
+    const parsed = safeJSONParse(raw, null);
+    if (parsed && typeof parsed.fullName === 'string') {
+      metadataCache.set(key, { metadata: parsed, at: Date.now() });
+      return { metadata: parsed, error: null };
+    }
+    if (retained) return { metadata: retained.metadata, error: null };
+    console.log(`⏭️ GitHub repository lookup for ${origin.fullName} unavailable: ${(failure?.ghStderr || failure?.message || 'unparseable response').split('\n')[0]}`);
+    return { metadata: null, error: metadataLookupError(failure) };
   });
-  const parsed = safeJSONParse(raw, null);
-  if (parsed && typeof parsed.fullName === 'string') {
-    metadataCache.set(key, { metadata: parsed, at: Date.now() });
-    return { metadata: parsed, error: null };
-  }
-  if (cached) return { metadata: cached.metadata, error: null };
-  console.log(`⏭️ GitHub repository lookup for ${origin.fullName} unavailable: ${(failure?.ghStderr || failure?.message || 'unparseable response').split('\n')[0]}`);
-  return { metadata: null, error: metadataLookupError(failure) };
 }
 
 /**
@@ -166,35 +177,38 @@ async function compareForkWithUpstream(checkout, repoPath) {
   const upstreamOwner = checkout.upstream.owner;
   const originOwner = checkout.origin.owner;
   const basehead = encodeURIComponent(`${upstreamOwner}:${branch}...${originOwner}:${branch}`);
-  const forge = await resolveForgeForRepo(repoPath);
   const host = githubApiHost(checkout.origin.host);
   // The compare endpoint is a core-quota read, and the Git tab plus the
   // Eidoverse banner both ask for it on every visit. Ahead/behind does not
   // move in the seconds between those mounts.
-  const compareKey = `${host}/${checkout.upstream.fullName}/${basehead}`;
+  const compareKey = JSON.stringify([repoPath, host, checkout.upstream.fullName, checkout.origin.fullName, basehead]);
   const cachedCompare = compareCache.get(compareKey);
   if (cachedCompare && Date.now() - cachedCompare.at < COMPARE_FRESH_MS) return cachedCompare.value;
-  const raw = await execGh([
-    'api', ...(host === 'github.com' ? [] : ['--hostname', host]),
-    `repos/${checkout.upstream.fullName}/compare/${basehead}`, '--jq',
-    '{status: .status, ahead: .ahead_by, behind: .behind_by}',
-  ], GH_TIMEOUT_MS, {
-    cwd: repoPath,
-    env: { ...(forge?.env || process.env), GH_HOST: host },
-  }).catch(() => null);
-  const parsed = safeJSONParse(raw, null);
-  if (!parsed || !Number.isInteger(parsed.ahead) || !Number.isInteger(parsed.behind)) {
-    return { available: false, ahead: null, behind: null, state: 'unknown', error: 'Could not compare the fork with canonical upstream' };
-  }
-  const value = {
-    available: true,
-    ahead: parsed.ahead,
-    behind: parsed.behind,
-    state: comparisonState(parsed.ahead, parsed.behind),
-    error: null,
-  };
-  compareCache.set(compareKey, { at: Date.now(), value });
-  return value;
+  if (cachedCompare) compareCache.delete(compareKey);
+  return compareInFlight.run(compareKey, async () => {
+    const forge = await resolveForgeForRepo(repoPath);
+    const raw = await execGh([
+      'api', ...(host === 'github.com' ? [] : ['--hostname', host]),
+      `repos/${checkout.upstream.fullName}/compare/${basehead}`, '--jq',
+      '{status: .status, ahead: .ahead_by, behind: .behind_by}',
+    ], GH_TIMEOUT_MS, {
+      cwd: repoPath,
+      env: { ...(forge?.env || process.env), GH_HOST: host },
+    }).catch(() => null);
+    const parsed = safeJSONParse(raw, null);
+    if (!parsed || !Number.isInteger(parsed.ahead) || !Number.isInteger(parsed.behind)) {
+      return { available: false, ahead: null, behind: null, state: 'unknown', error: 'Could not compare the fork with canonical upstream' };
+    }
+    const value = {
+      available: true,
+      ahead: parsed.ahead,
+      behind: parsed.behind,
+      state: comparisonState(parsed.ahead, parsed.behind),
+      error: null,
+    };
+    compareCache.set(compareKey, { at: Date.now(), value });
+    return value;
+  });
 }
 
 async function inspectCheckout({ id, label, repoPath }) {
