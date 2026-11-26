@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { basename } from 'path';
 
 /**
  * Tests for tools.js
@@ -11,31 +12,24 @@ const mockToolFiles = new Map();
 
 vi.mock('fs/promises', () => ({
   readdir: vi.fn(async () => [...mockToolFiles.keys()]),
-  unlink: vi.fn().mockResolvedValue(undefined),
+  unlink: vi.fn(async (path) => { mockToolFiles.delete(basename(path)); }),
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
   ensureDir: vi.fn().mockResolvedValue(undefined),
-  atomicWrite: vi.fn().mockResolvedValue(undefined),
+  atomicWrite: vi.fn(async (path, tool) => { mockToolFiles.set(basename(path), tool); }),
   PATHS: { tools: '/fake/tools' },
-  readJSONFile: vi.fn(async (path) => {
-    // tools.js composes this with path.join, so split on either separator —
-    // a '/'-only split returns the whole Windows path and misses every key.
-    const filename = path.split(/[\\/]/).pop();
-    return mockToolFiles.get(filename) ?? null;
-  }),
+  readJSONFile: vi.fn(async (path) => mockToolFiles.get(basename(path)) ?? null),
 }));
 
 import { readdir } from 'fs/promises';
 import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
-import { getTools, getEnabledTools, registerTool, deleteTool } from './tools.js';
+import { getTool, getTools, getEnabledTools, registerTool, updateTool, deleteTool } from './tools.js';
 
 beforeEach(async () => {
   vi.clearAllMocks();
   mockToolFiles.clear();
   // Reset the module-level cache by triggering invalidation via deleteTool.
-  // We call it with a non-existent id (unlink is mocked to resolve) so the
-  // only side-effect is the invalidateCache() call inside deleteTool.
   await deleteTool('__reset__');
 });
 
@@ -77,6 +71,26 @@ describe('tools.js — getTools', () => {
     expect(readdir).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the post-update list when an invalidated disk load finishes late', async () => {
+    const oldTool = { id: 'late', name: 'Before' };
+    mockToolFiles.set('late.json', oldTool);
+    const started = Promise.withResolvers();
+    const staleRead = Promise.withResolvers();
+    readJSONFile.mockImplementationOnce(() => {
+      started.resolve();
+      return staleRead.promise;
+    });
+
+    const oldList = getTools();
+    await started.promise;
+    await updateTool('late', { name: 'After' });
+    expect(await getTools()).toEqual([expect.objectContaining({ name: 'After' })]);
+
+    staleRead.resolve(oldTool);
+    await oldList;
+    expect(await getTools()).toEqual([expect.objectContaining({ name: 'After' })]);
+  });
+
   it('filters by enabled flag in getEnabledTools', async () => {
     // beforeEach already cleared cache and mockToolFiles
     mockToolFiles.clear();
@@ -102,8 +116,27 @@ describe('tools.js — registerTool', () => {
 
     // Cache should be invalidated — next getTools() must re-read disk
     readdir.mockClear();
-    mockToolFiles.set('new-tool.json', { id: 'new-tool', name: 'New', category: 'test', enabled: true });
     await getTools();
     expect(readdir).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('tools.js — overlapping mutations', () => {
+  it('applies concurrent patches to the newly registered tool', async () => {
+    await Promise.all([
+      registerTool({ id: 'concurrent', name: 'Tool', category: 'test' }),
+      updateTool('concurrent', { description: 'Updated' }),
+      updateTool('concurrent', { enabled: false }),
+    ]);
+    expect(await getTool('concurrent')).toMatchObject({ name: 'Tool', description: 'Updated', enabled: false });
+  });
+
+  it('does not recreate a tool after an overlapping deletion', async () => {
+    await registerTool({ id: 'deleted', name: 'Tool', category: 'test' });
+    await Promise.all([
+      updateTool('deleted', { description: 'Updated' }),
+      deleteTool('deleted'),
+    ]);
+    expect(await getTool('deleted')).toBeNull();
   });
 });
