@@ -119,6 +119,16 @@ describe('instance identity stays a leaf (#6836)', () => {
   });
 });
 
+it.each(['agentResumePointers.js', 'agentFollowUpSpawning.js'])(
+  '%s keeps the CoS daemon and cleanup facade outside its static closure',
+  (name) => {
+    const entry = `services/agent/${name}`;
+    expect(reaches(entry, 'services/cos/cosTaskStore.js')).toBe(true);
+    expect(reaches(entry, 'services/cos/cos.js')).toBe(false);
+    expect(reaches(entry, 'services/agent/agentWorktreeCleanup.js')).toBe(false);
+  },
+);
+
 // `vitest related` follows dynamic imports, so a lazy import() narrows the
 // static closure above but not CI selection. Each row is an edge cut from the
 // dynamically connected CoS cluster (#12285): the entry must import its target

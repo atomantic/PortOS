@@ -88,7 +88,7 @@ export function _createInvestigationDependencyWait(deps = {}) {
   const released = deps.released || (async owner => !getActiveAgentIds().includes(owner.id));
   const pointer = deps.pointer || (async owner => {
     const m = owner.metadata;
-    const { resolveResumePointer } = await import('./agent/agentWorktreeCleanup.js');
+    const { resolveResumePointer } = await import('./agent/agentResumePointers.js');
     const found = await resolveResumePointer(m.sourceWorkspace, m.worktreeBranch, m.workspacePath);
     return found?.branchName === m.worktreeBranch && found.worktreePath === m.workspacePath
       ? { existingBranch: found.branchName, resumeWorktreePath: found.worktreePath, resumedFromAgentId: owner.id } : null;
