@@ -241,6 +241,7 @@ export function useAgentFeedbackToast() {
 
   // Clean up old entries periodically (keep last 50)
   useEffect(() => {
+    // biome-ignore lint/plugin/lint-no-view-interval: Trims an in-memory shown-feedback set every minute; no I/O.
     const cleanup = setInterval(() => {
       const entries = Array.from(shownFeedbackFor.current);
       if (entries.length > 50) {
