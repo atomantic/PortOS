@@ -19,7 +19,7 @@ const STATUS_TEXT = {
 
 // HTTP and socket results share one terminal decision, including older frames
 // with no status. An error body must never be mistaken for legacy success.
-function outcome(result, label, successText) {
+export function outcome(result, label, successText) {
   const status = result?.status ?? (result?.error ? 'error' : 'success');
   const reason = result?.reason || result?.error || STATUS_TEXT[status] || status;
   if (status === 'success') return { type: 'success', text: successText(result ?? {}), refresh: true };

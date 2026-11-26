@@ -17,6 +17,7 @@ import { pluralize } from '../../lib/textUtils';
 import MessageDetail from './MessageDetail';
 import { supportedMessageActions } from './messageActionCapabilities';
 import AddToThreadButton from '../threads/AddToThreadButton';
+import { outcome } from '../../hooks/useAccountSyncStatus';
 import { messageReadState, partitionAccountsBySyncMode } from '../../lib/messageSyncModes';
 import LoadFailedState from '../ui/LoadFailedState';
 import { useSocketResource } from '../../hooks/useSocketResource';
@@ -60,17 +61,8 @@ export const fetchFullToastMessage = ({ updated = 0, total = 0, truncated = fals
   return truncated ? `${base} — more remain, run again to continue` : base;
 };
 
-/**
- * Newest `lastSyncAt` across the given accounts, or `null` when none has ever
- * synced. `null` here means "never synced" — never "synced and found nothing".
- * Timestamps are compared as parsed dates rather than lexicographically, so a
- * stamp written with a UTC offset can't sort ahead of a newer `Z` one; an
- * unparseable stamp is skipped (worst case the caller offers a sync that isn't
- * strictly needed, rather than rendering "last synced never").
- * @param {Array<{lastSyncAt?: string|null}>} accounts
- * @returns {string|null} ISO timestamp or null
- */
-export function latestSyncAt(accounts) {
+// Compare parsed dates so timestamps with offsets sort correctly.
+export function latestSyncAttempt(accounts) {
   if (!Array.isArray(accounts)) return null;
   let newest = null;
   let newestMs = -Infinity;
@@ -79,7 +71,7 @@ export function latestSyncAt(accounts) {
     if (!stamp) continue;
     const ms = new Date(stamp).getTime();
     if (!Number.isFinite(ms) || ms <= newestMs) continue;
-    newest = stamp;
+    newest = account;
     newestMs = ms;
   }
   return newest;
@@ -92,11 +84,15 @@ export function latestSyncAt(accounts) {
  * had an account configured (#3281).
  *
  * `accounts === null` is the load-failed / not-loaded sentinel and is distinct
- * from `[]` ("loaded, and there are genuinely no accounts"); likewise a null
- * `lastSyncAt` means "never synced", not "synced and found nothing".
+ * from `[]` ("loaded, and there are genuinely no accounts"). A null
+ * `lastAttempt` means the view has no recorded sync attempt.
  */
-export function InboxEmptyState({ accounts, lastSyncAt, hasFilters, syncing, onSync, onClearFilters, syncMode = 'unread' }) {
+export function InboxEmptyState({ accounts, lastAttempt, hasFilters, syncing, onSync, onClearFilters, syncMode = 'unread' }) {
   const navigate = useNavigate();
+  const lastSyncAt = lastAttempt?.lastSyncAt;
+  const lastOutcome = lastAttempt?.lastSyncStatus
+    ? outcome({ status: lastAttempt.lastSyncStatus, reason: lastAttempt.reason }, 'Sync', () => '')
+    : null;
   // The label names the mode `onSync` will actually run — a Teams-only view has no unread sync.
   const syncLabel = syncMode === 'full' ? 'Full Sync' : 'Sync Unread';
 
@@ -127,6 +123,21 @@ export function InboxEmptyState({ accounts, lastSyncAt, hasFilters, syncing, onS
         >
           <Settings size={14} />
           Add an account
+        </button>
+      )
+    };
+
+    if (lastOutcome && !lastOutcome.refresh) return {
+      Icon: AlertTriangle,
+      title: 'Last sync did not finish',
+      hint: `${lastAttempt.name}: ${lastOutcome.text}`,
+      action: (
+        <button
+          onClick={() => navigate('/messages/sync')}
+          className={`${EMPTY_ACTION_CLASS} bg-port-accent/10 text-port-accent hover:bg-port-accent/20`}
+        >
+          <RefreshCw size={14} />
+          Open Sync
         </button>
       )
     };
@@ -202,11 +213,8 @@ export default function InboxTab({ accounts }) {
   const [detailAttempt, setDetailAttempt] = useState(0);
   const [evaluating, setEvaluating] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  // accountId -> ISO timestamp for syncs that succeeded in this session, so the
-  // empty state stops saying "never synced" without waiting for the parent to
-  // refetch accounts. Keyed by account because the account filter narrows which
-  // accounts the empty state is speaking about.
-  const [syncedAtById, setSyncedAtById] = useState({});
+  // Keep local outcomes until the account list reflects the attempt.
+  const [attemptsById, setAttemptsById] = useState({});
   const [fetchingFull, setFetchingFull] = useState(false);
   const [actionInProgress, setActionInProgress] = useState(null);
   const debounceRef = useRef(null);
@@ -308,7 +316,8 @@ export default function InboxTab({ accounts }) {
     setSyncing(true);
     let totalNew = 0;
     let totalPruned = 0;
-    const syncedNow = {};
+    let anySynced = false;
+    const attempts = {};
     for (const acct of targets) {
       toast(`Syncing ${acct.name} (${mode})...`, { icon: '📧' });
       const result = await syncMessageAccount(acct.id, mode, { silent: true }).catch(err => {
@@ -316,7 +325,16 @@ export default function InboxTab({ accounts }) {
         return null;
       });
       if (!result) continue;
-      syncedNow[acct.id] = new Date().toISOString();
+      const terminal = outcome(result, 'Sync', () => '');
+      attempts[acct.id] = {
+        name: acct.name,
+        lastSyncAt: new Date().toISOString(),
+        lastSyncStatus: result.status,
+        reason: result.reason,
+      };
+      if (terminal.type !== 'success') toast[terminal.type](`${acct.name}: ${terminal.text}`);
+      if (!terminal.refresh) continue;
+      anySynced = true;
       if (result.newMessages) totalNew += result.newMessages;
       if (result.pruned) totalPruned += result.pruned;
     }
@@ -324,10 +342,8 @@ export default function InboxTab({ accounts }) {
     // Reconcile any completion skipped during this local batch, even if an
     // HTTP response was lost after another account's cache was saved.
     fetchMessages();
-    // Every account failing is not a completed sync — stay quiet, and leave the
-    // "never synced" state intact so the empty state keeps offering the retry.
-    if (Object.keys(syncedNow).length === 0) return;
-    setSyncedAtById(prev => ({ ...prev, ...syncedNow }));
+    setAttemptsById(prev => ({ ...prev, ...attempts }));
+    if (!anySynced) return;
     const parts = [`${totalNew} new`];
     if (totalPruned > 0) parts.push(`${totalPruned} removed`);
     toast.success(`Sync complete — ${parts.join(', ')}`);
@@ -413,22 +429,18 @@ export default function InboxTab({ accounts }) {
     [messages]
   );
 
-  // Scope the "have we ever synced?" answer to the accounts the current view can
-  // show — with an account filter on, another account's sync says nothing about
-  // this one. A sync that landed in this session wins over the (not-yet-refetched)
-  // account timestamps; absent both, these accounts have genuinely never synced.
   // Enabled accounts a sync action in the current view would run on, and which
   // sync actions that scope still offers (no unread action for a Teams-only view).
   const supportsBodyRefresh = accountList.some(a => a.id === selectedAccount && a.supportsBodyRefresh === true);
   const syncTargets = useMemo(() => accountList.filter(a => a.enabled && (!selectedAccount || a.id === selectedAccount)), [accountList, selectedAccount]);
   const unreadSyncExcluded = useMemo(() => partitionAccountsBySyncMode(syncTargets, 'unread').excluded, [syncTargets]);
   const offerUnreadSync = syncTargets.length === 0 || unreadSyncExcluded.length < syncTargets.length;
-  const lastSyncAt = useMemo(() => {
+  const lastAttempt = useMemo(() => {
     const scoped = selectedAccount
       ? accountList.filter(a => a.id === selectedAccount)
       : accountList;
-    return latestSyncAt(scoped.map(a => ({ lastSyncAt: syncedAtById[a.id] || a.lastSyncAt })));
-  }, [accountList, selectedAccount, syncedAtById]);
+    return latestSyncAttempt(scoped.flatMap(account => [account, attemptsById[account.id]]));
+  }, [accountList, selectedAccount, attemptsById]);
   // Search and account are applied server-side in fetchMessages, the triage tab
   // client-side — all three narrow what the list can show, so all three make
   // "nothing here" a filtering result rather than an empty mailbox.
@@ -597,7 +609,7 @@ export default function InboxTab({ accounts }) {
       {visibleMessages.length === 0 && !loading && !loadFailed && (
         <InboxEmptyState
           accounts={accounts}
-          lastSyncAt={lastSyncAt}
+          lastAttempt={lastAttempt}
           hasFilters={hasFilters}
           syncing={syncing}
           syncMode={offerUnreadSync ? 'unread' : 'full'}
