@@ -151,7 +151,7 @@ function JobScheduleForm({ node, timezone, onSaved }) {
 export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSaved }) {
   if (!node) {
     return (
-      <aside className="rounded-lg border border-port-border/60 bg-port-card/40 p-5 text-center text-sm text-gray-500">
+      <aside aria-label="Schedule editor" className="rounded-lg border border-port-border/60 bg-port-card/40 p-5 text-center text-sm text-gray-500">
         Select a track or a launch marker to edit its schedule here.
       </aside>
     );
@@ -161,7 +161,7 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
   const Icon = isJob ? Bot : GitBranch;
 
   return (
-    <aside className="rounded-lg border border-port-border bg-port-card/70 shadow-xl lg:sticky lg:top-4">
+    <aside aria-label={`Schedule editor for ${node.label}`} className="rounded-lg border border-port-border bg-port-card/70 shadow-xl lg:sticky lg:top-4">
       <div className="flex items-start justify-between gap-3 border-b border-port-border/60 p-4">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-gray-500">

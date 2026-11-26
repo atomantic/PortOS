@@ -78,7 +78,7 @@ describe('WorkflowTab perpetual runtime bars', () => {
     await screen.findByText('branch-reconcile');
 
     // An hour of a 24h horizon — the old full-horizon band left `right: 0%`.
-    const live = screen.getByLabelText(/^Draining since/);
+    const live = screen.getByTitle(/^Draining since/);
     expect(pct(live.style.left)).toBeCloseTo(0, 3);
     expect(pct(live.style.right)).toBeCloseTo(95.8333, 3);
     expect(live).toHaveTextContent('draining');
@@ -86,9 +86,10 @@ describe('WorkflowTab perpetual runtime bars', () => {
 
     // The future recurrence sits at its own start, and only the live drain
     // carries the word — a scheduled bar is an outline.
-    const upcoming = screen.getByLabelText(/^Drain starts/);
+    const upcoming = screen.getByTitle(/^Drain starts/);
     expect(pct(upcoming.style.left)).toBeCloseTo(25, 3);
     expect(pct(upcoming.style.right)).toBeCloseTo(70.8333, 3);
     expect(upcoming).not.toHaveTextContent('draining');
+    expect(screen.getByRole('button', { name: /^branch-reconcile/ })).toHaveAccessibleDescription(/Draining since/);
   });
 });
