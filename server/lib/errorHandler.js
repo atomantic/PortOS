@@ -470,7 +470,8 @@ export function errorMiddleware(err, req, res, next) {
   const route = `${req.method} ${routePath(req)}`;
   if (isServerFault(error)) {
     console.error(`❌ Server error [${route}]: ${errorMessage(error)}${causeSuffix(error)}`);
-    if (err.stack) console.error(err.stack);
+    const stack = error.originalStack || error.stack;
+    if (stack) console.error(stack);
   } else {
     console.log(`🚫 Server refused [${route}] ${error.status}: ${errorMessage(error)}${causeSuffix(error)}`);
   }
