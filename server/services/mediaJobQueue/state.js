@@ -44,16 +44,6 @@ export function setRunningJob(job) {
   running = job;
 }
 
-// Once quiesced, no path promotes a waiting job or re-arms the worker.
-// Waiting jobs stay durably queued for the next process.
-export const workerState = {
-  started: false,
-  operation: null,
-  wake: null,
-  quiesced: false,
-  resettingForTests: false,
-};
-
 export const recoveryState = { initPromise: null, inventoryReady: false };
 export const testLifecycleDisposals = new Set();
 export const laneOperations = new Set();

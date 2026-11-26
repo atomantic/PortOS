@@ -3,7 +3,7 @@ import { improvementSources as IMP_SRC } from '../../test/cosImprovementSources.
  * Tests for the dry-run eligibility helpers in cosTaskGenerator.js.
  *
  * `selectDryRunAutoApproved` is the shared, non-mutating pass both spawn
- * engines (`dequeueNextTask` in cos.js and `evaluateTasks` here) use to log
+ * engines (`dequeueNextTask` in cosDequeue.js and `evaluateTasks` here) use to log
  * exactly the auto-approved system tasks execute mode WOULD spawn — applying
  * the same global-slot / max-spawns / cooldown / per-project gates against
  * virtual capacity, without blocking, persisting, or emitting anything. The
@@ -104,7 +104,7 @@ import { normalizeWorkItemRef, buildTargetWorkItemBlock, buildPrefetchedIssueCon
 import { cosEvents } from './cosEvents.js';
 import { DEFAULT_TASK_INTERVALS, getTaskInterval } from '../taskSchedule.js';
 import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
-import { createDequeueCapacity } from './cosDequeue.js';
+import { createDequeueCapacity } from './cosDequeueAdmission.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GEN_SRC = readFileSync(join(__dirname, 'cosTaskGenerator.js'), 'utf-8');
@@ -121,6 +121,8 @@ const CLAIM_SRC = readFileSync(join(__dirname, 'cosTaskClaimWork.js'), 'utf-8');
 // neither break it nor silently disarm it.
 const LAYER_SRC = `${GEN_SRC}\n${IMP_SRC}\n${CLAIM_SRC}\n${PRESTEP_SRC}`;
 const COS_SRC = readFileSync(join(__dirname, 'cos.js'), 'utf-8');
+const DEQUEUE_SRC = readFileSync(join(__dirname, 'cosDequeue.js'), 'utf-8');
+const REFILL_SRC = readFileSync(join(__dirname, 'cosPerpetualRefill.js'), 'utf-8');
 // The ONE Priority-0 on-demand loop body both engines delegate to (#6618).
 const DRAIN_SRC = readFileSync(join(__dirname, '../onDemandDrain.js'), 'utf-8');
 
@@ -213,7 +215,7 @@ describe('dry-run hook wiring matches the shared execute path', () => {
   };
 
   it('both engines delegate Priority 2 to admitAutoApprovedSystemTasks', () => {
-    expect(between(COS_SRC, 'async function spawnDequeuePriority2AutoApproved', '/**\n * Priority 3'))
+    expect(between(DEQUEUE_SRC, 'async function spawnDequeuePriority2AutoApproved', '/**\n * Priority 3'))
       .toContain('admitAutoApprovedSystemTasks(');
     expect(between(GEN_SRC, 'async function spawnPriority2AutoApproved', '/**\n * Background:'))
       .toContain('admitAutoApprovedSystemTasks(');
@@ -225,7 +227,7 @@ describe('dry-run hook wiring matches the shared execute path', () => {
     // source-order check against each body. Now both are thin adapters over the
     // one shared pass — this pins the delegation itself, not the ladder's order,
     // which the shared pass's own tests below cover.
-    expect(between(COS_SRC, 'async function spawnDequeuePriority1UserTasks', 'async function spawnDequeuePriority2AutoApproved'))
+    expect(between(DEQUEUE_SRC, 'async function spawnDequeuePriority1UserTasks', 'async function spawnDequeuePriority2AutoApproved'))
       .toContain('admitPendingUserTasks(');
     expect(between(GEN_SRC, 'async function spawnPriority1UserTasks', 'async function recordPendingUserDeferral'))
       .toContain('admitPendingUserTasks(');
@@ -245,7 +247,7 @@ describe('dry-run hook wiring matches the shared execute path', () => {
 describe('both on-demand engines delegate to the shared drain', () => {
   for (const [engine, src, projectCounts, projectLimit] of [
     ['cosTaskGenerator.spawnPriority0OnDemand', () => GEN_SRC, 'spawnProjectCounts', 'perProjectLimit'],
-    ['cos.spawnDequeuePriority0OnDemand', () => COS_SRC, 'capacity.spawnProjectCounts', 'capacity.perProjectLimit'],
+    ['cosDequeue.spawnDequeuePriority0OnDemand', () => DEQUEUE_SRC, 'capacity.spawnProjectCounts', 'capacity.perProjectLimit'],
   ]) {
     it(`${engine} calls drainOnDemandRequests and owns no request loop of its own`, () => {
       const text = src();
@@ -338,7 +340,7 @@ describe('isConfiguredApprovalRequired', () => {
 // selection, BEFORE the engine emits `task:ready` + trackSpawn. Otherwise that
 // task (often the highest-priority pick) consumes this instance's spawn slot
 // every cycle (the spawn guard then returns null, spawning nothing) and starves
-// later runnable tasks. Both spawn engines (dequeueNextTask in cos.js,
+// later runnable tasks. Both spawn engines (dequeueNextTask in cosDequeue.js,
 // evaluateTasks here) must apply it, in both their execute loops AND their
 // dry-run plan. `getSkipReason` answers both halves in one call.
 describe('not-runnable-here skip during candidate selection (#1650, #4520)', () => {
@@ -346,13 +348,12 @@ describe('not-runnable-here skip during candidate selection (#1650, #4520)', () 
     // Both the Priority-1 (admitPendingUserTasks) and Priority-2
     // (admitAutoApprovedSystemTasks) shared passes live here (#7523) and both
     // consult getSkipReason, so this is the one module that needs the import.
-    // cos.js no longer imports it directly — dequeueNextTask's Priority-1 tier
-    // delegates to admitPendingUserTasks instead of re-checking the lease itself.
+    // The dequeue tier reaches the lease check through admitPendingUserTasks.
     expect(GEN_SRC).toMatch(/import\s*\{[^}]*getSkipReason[^}]*\}\s*from\s*'\.\/cosTaskClaim\.js'/);
   });
 
   it('both engines resolve this instance id once per cycle via ensureInstanceId', () => {
-    expect(COS_SRC).toContain('const instanceId = await ensureInstanceId();');
+    expect(DEQUEUE_SRC).toContain('const instanceId = await ensureInstanceId();');
     expect(GEN_SRC).toContain('const instanceId = await ensureInstanceId();');
   });
 
@@ -959,7 +960,7 @@ describe('selectDryRunAutoApproved', () => {
 
 // admitPendingUserTasks is the one ordered Priority-1 admission pass shared by
 // evaluateTasks (spawnPriority1UserTasks, cosTaskGenerator.js) and
-// dequeueNextTask (spawnDequeuePriority1UserTasks, cos.js) — #7523. Both
+// dequeueNextTask (spawnDequeuePriority1UserTasks, cosDequeue.js) — #7523. Both
 // engines used to hand-mirror the not-runnable-here / approval / max-spawn /
 // capacity ladder; the delegation itself is pinned by the source guard above,
 // and these are the behavioral boundary tests against the shared pass both
@@ -1695,8 +1696,8 @@ describe('ignoreTaskId reaches the in-flight-counting gates (#3179)', () => {
 describe('ignoreTaskId reaches BOTH completion-continuation generators (#3179)', () => {
   it('cos.js passes the completing task id into the dequeue that follows the refill', () => {
     expect(COS_SRC).toContain('dequeueNextTask({ ignoreTaskId: agent?.taskId })');
-    expect(COS_SRC).toMatch(/async function dequeueNextTask\(\{ ignoreTaskId = null \} = \{\}\)/);
-    expect(COS_SRC).toContain('ignoreTaskId: ctx.ignoreTaskId');
+    expect(DEQUEUE_SRC).toMatch(/async function dequeueNextTask\(\{ ignoreTaskId = null \} = \{\}\)/);
+    expect(DEQUEUE_SRC).toContain('ignoreTaskId: ctx.ignoreTaskId');
   });
 });
 
@@ -1847,7 +1848,7 @@ describe('pr-reviewer security preflight wiring', () => {
  */
 describe('automated drain refills do not clear their own convergence brakes', () => {
   it('the refill stamps origin: refill', () => {
-    expect(COS_SRC).toMatch(/queuePerpetualRefill\(plan\.taskType, plan\.appId\)/);
+    expect(REFILL_SRC).toMatch(/queuePerpetualRefill\(plan\.taskType, plan\.appId\)/);
   });
 
   // A drain path calling the reset primitives directly is the exact regression,
@@ -1856,6 +1857,8 @@ describe('automated drain refills do not clear their own convergence brakes', ()
   for (const [where, src] of [
     ['onDemandDrain', () => DRAIN_SRC],
     ['cos.js', () => COS_SRC],
+    ['cosDequeue.js', () => DEQUEUE_SRC],
+    ['cosPerpetualRefill.js', () => REFILL_SRC],
     ['cosTaskGenerator.js', () => GEN_SRC],
     ['cosImprovementTasks.js', () => IMP_SRC],
   ]) {

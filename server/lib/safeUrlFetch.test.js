@@ -1,12 +1,12 @@
 /**
  * Tests for the SSRF-guarded public-URL fetch helpers. The DNS resolver and the
- * underlying fetchWithTimeout are mocked so the guard + redirect-revalidation
+ * underlying HTTP request are mocked so the guard + redirect-revalidation
  * logic is exercised without a network.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import http from 'node:http';
-import { Dispatcher1Wrapper } from 'undici';
+import { gzipSync } from 'node:zlib';
+import { closeLoopbackServer, startLoopbackServer } from './testHelper.js';
 
 const lookupMock = vi.fn();
 vi.mock('dns/promises', () => ({
@@ -15,13 +15,13 @@ vi.mock('dns/promises', () => ({
 }));
 
 const fetchMock = vi.fn();
-vi.mock('./fetchWithTimeout.js', () => ({
-  fetchWithTimeout: (...a) => fetchMock(...a),
+vi.mock('./pinnedHttpRequest.js', () => ({
+  pinnedHttpRequest: (...a) => fetchMock(...a),
 }));
 
 const {
   isPublicHttpUrlSafe, assertPublicHttpUrl, fetchPublicText, fetchPublicBinary, buildPinnedLookup,
-  buildPinnedDispatcher, resolvePublicUrl,
+  fetchPublicResponse, resolvePublicUrl,
 } = await import('./safeUrlFetch.js');
 
 const res = ({ ok = true, status = 200, headers = {}, text = '', body = new ArrayBuffer(0) } = {}) => ({
@@ -140,6 +140,16 @@ describe('fetchPublicText', () => {
     expect(await fetchPublicText('https://example.com/feed.rss')).toBe('ok');
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+  it('discards both redirect bodies and stops after one hop', async () => {
+    const cancel = vi.fn().mockResolvedValue();
+    fetchMock
+      .mockResolvedValueOnce({ ...res({ status: 301, headers: { location: '/second' } }), body: { cancel } })
+      .mockResolvedValueOnce({ ...res({ status: 307, headers: { location: '/third' } }), body: { cancel } });
+    await expect(fetchPublicResponse('https://example.com/first')).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(cancel).toHaveBeenCalledTimes(2);
+  });
+
   it('drops a redirect to a blocked host (fails closed)', async () => {
     fetchMock.mockResolvedValueOnce(res({ status: 302, headers: { location: 'http://169.254.169.254/x' } }));
     expect(await fetchPublicText('https://example.com/feed.rss')).toBeNull();
@@ -153,9 +163,9 @@ describe('fetchPublicText', () => {
 });
 
 describe('connect-time IP pinning (DNS-rebinding TOCTOU, #1859)', () => {
-  it('pins the vetted address, ignoring the hostname undici would re-resolve', () => {
+  it('pins the vetted address, ignoring the hostname Node would re-resolve', () => {
     const lookup = buildPinnedLookup('93.184.216.34', 4);
-    // undici asks with { all: true } → array of { address, family } entries.
+    // Node can ask with { all: true } → array of { address, family } entries.
     let all;
     lookup('evil.example.com', { all: true }, (_e, addrs) => { all = addrs; });
     expect(all).toEqual([{ address: '93.184.216.34', family: 4 }]);
@@ -165,20 +175,23 @@ describe('connect-time IP pinning (DNS-rebinding TOCTOU, #1859)', () => {
     expect(single).toEqual(['93.184.216.34', 4]);
   });
 
-  it('derives the family from the address when undici omits it', () => {
+  it('derives the family when the validation result omits it', () => {
     const lookup = buildPinnedLookup('2606:2800:220:1:248:1893:25c8:1946');
     let single;
     lookup('h', {}, (_e, addr, fam) => { single = [addr, fam]; });
     expect(single).toEqual(['2606:2800:220:1:248:1893:25c8:1946', 6]);
   });
 
-  it('hands the fetch a dispatcher pinned to the validation-time address', async () => {
+  it('hands the request a lookup pinned to the validation-time address', async () => {
     // Validation resolves the host to a PUBLIC ip; the connection is pinned to
     // that exact address so a connect-time rebind to a private ip is impossible.
     lookupMock.mockResolvedValue({ address: '93.184.216.34', family: 4 });
     fetchMock.mockResolvedValue(res({ text: 'ok' }));
     await fetchPublicText('https://rebind.example.com/x');
-    expect(fetchMock.mock.calls[0][1].dispatcher).toBeInstanceOf(Dispatcher1Wrapper);
+    const lookup = fetchMock.mock.calls[0][1].lookup;
+    const callback = vi.fn();
+    lookup('example.com', { all: true }, callback);
+    expect(callback).toHaveBeenCalledWith(null, [{ address: '93.184.216.34', family: 4 }], 4);
   });
 
   it('fails closed when the validation lookup fails (no unpinned connect-time re-resolve)', async () => {
@@ -191,23 +204,40 @@ describe('connect-time IP pinning (DNS-rebinding TOCTOU, #1859)', () => {
     expect(await isPublicHttpUrlSafe('https://unresolvable.example.com/x')).toBe(false);
   });
 
-  // End-to-end proof the mechanism actually defeats rebinding: a hostname that
-  // never resolves in real DNS still reaches the server, so undici MUST have
-  // used our pinned address rather than re-resolving at connect time.
-  // Uses the PRODUCTION dispatcher factory (not a hand-rolled `new Agent(...)`)
-  // against the runtime's global fetch — the same pairing fetchWithTimeout makes
-  // — so this also proves the undici-8 dispatcher is accepted by the built-in
-  // fetch of whichever Node runs the suite (see buildPinnedDispatcher's note on
-  // the v7/v8 request-handler contract).
-  it('undici connects to the pinned address for a non-resolving hostname', async () => {
-    const server = http.createServer((req, res2) => res2.end(`host:${req.headers.host}`));
-    await new Promise((r) => server.listen(0, '127.0.0.1', r));
-    const { port } = server.address();
-    const dispatcher = buildPinnedDispatcher('127.0.0.1', 4);
-    const out = await fetch(`http://rebind.invalid:${port}/`, { dispatcher });
-    expect(await out.text()).toBe(`host:rebind.invalid:${port}`); // Host preserved, IP pinned
-    await dispatcher.close();
-    await new Promise((r) => server.close(r));
+  it('connects to the pinned address for a non-resolving hostname and decodes gzip', async () => {
+    const { pinnedHttpRequest } = await vi.importActual('./pinnedHttpRequest.js');
+    const server = await startLoopbackServer((req, response) => {
+      response.writeHead(200, { 'Content-Encoding': 'gzip', 'Content-Type': 'text/plain' });
+      response.end(gzipSync(`host:${req.headers.host}`));
+    });
+    try {
+      const { port } = server.address();
+      // Exercise the real transport directly. At the public boundary the guard
+      // rejects loopback before transport, as tested above.
+      const response = await pinnedHttpRequest(`http://pin.example.invalid:${port}/`, {
+        lookup: buildPinnedLookup('127.0.0.1', 4),
+      }, 1000);
+      expect(response.headers.get('content-type')).toBe('text/plain');
+      await expect(response.text()).resolves.toBe(`host:pin.example.invalid:${port}`);
+    } finally {
+      await closeLoopbackServer(server);
+    }
+  });
+
+  it('keeps the deadline armed while the response body is stalled', async () => {
+    const { pinnedHttpRequest } = await vi.importActual('./pinnedHttpRequest.js');
+    const server = await startLoopbackServer((_req, response) => {
+      response.write('partial');
+    });
+    try {
+      const response = await pinnedHttpRequest(`http://127.0.0.1:${server.address().port}/`, {}, 500);
+      const reader = response.body.getReader();
+      expect(new TextDecoder().decode((await reader.read()).value)).toBe('partial');
+      await expect(reader.read()).rejects.toMatchObject({ code: 'ECONNRESET' });
+    } finally {
+      server.closeAllConnections();
+      await closeLoopbackServer(server);
+    }
   });
 });
 
@@ -299,7 +329,7 @@ describe('resolvePublicUrl', () => {
     expect(lookupMock.mock.calls.map(([host]) => host)).toEqual(['pin.it', 'api.pinterest.com', 'www.pinterest.com']);
     expect(fetchMock).toHaveBeenCalledTimes(3);
     for (const [, options, timeout] of fetchMock.mock.calls) {
-      expect(options).toMatchObject({ redirect: 'manual', dispatcher: expect.any(Dispatcher1Wrapper) });
+      expect(options.lookup).toBeTypeOf('function');
       expect(timeout).toBeLessThanOrEqual(8000);
     }
     expect(cancel).toHaveBeenCalledTimes(3);

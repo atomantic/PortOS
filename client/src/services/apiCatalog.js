@@ -395,6 +395,9 @@ export const saveCatalogPhotorealLook = (id, look, { source, ...options } = {}) 
 export const startCatalogPhotorealRender = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/photoreal/render`, { method: 'POST', body: JSON.stringify(body), ...options });
 
+export const cancelCatalogPhotorealRender = (id, jobId, options) =>
+  request(`/catalog/ingredients/${enc(id)}/photoreal/cancel`, { method: 'POST', body: JSON.stringify({ jobId }), ...options });
+
 export const openCatalogPhotorealBlend = (id, options) =>
   request(`/catalog/ingredients/${enc(id)}/photoreal/open`, { method: 'POST', body: '{}', ...options });
 

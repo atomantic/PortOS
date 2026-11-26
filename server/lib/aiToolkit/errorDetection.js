@@ -323,7 +323,7 @@ const ERROR_PATTERNS = [
     // purpose — `analyzeError` also scans an agent's entire CLI screen, where
     // "… terminated" is ordinary prose, and only a cause-less transport
     // rejection ever arrives as that single word on its own.
-    pattern: /ECONNREFUSED|ENOTFOUND|network error|connection refused|timeout|ETIMEDOUT|GOAWAY|UND_ERR_SOCKET|ERR_STREAM_PREMATURE_CLOSE|^terminated$|TypeError: terminated/i,
+    pattern: /ECONNREFUSED|ECONNRESET|EPIPE|ENOTFOUND|network error|connection refused|timeout|ETIMEDOUT|GOAWAY|UND_ERR_SOCKET|ERR_STREAM_PREMATURE_CLOSE|^terminated$|TypeError: terminated/i,
     category: ERROR_CATEGORIES.NETWORK_ERROR,
     requiresFallback: false,
     actionable: false,

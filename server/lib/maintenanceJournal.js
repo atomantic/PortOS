@@ -78,8 +78,8 @@ export function createMaintenanceJournal(dataDir = PATHS.data, { io = fs, assert
       return validate(JSON.parse(io.readFileSync(file, 'utf8')));
     } catch (err) { throw unavailable(err); }
   };
-  // status()/held() are polled several times a second (media drain loop, spawn
-  // gates); re-parsing a journal that carries every settled operation allocated
+  // Repeated status()/held() checks (e.g. spawn gates) used to re-parse a
+  // journal that carries every settled operation, allocating
   // ~400 KB per call. Writers publish by renaming a new file into place, so any
   // change gives it a new identity; the stat is taken before the read, so a
   // racing publish can only cost a re-parse. Read-only: transactions mutate the

@@ -77,65 +77,75 @@ export async function streamVideoRuntimeInstall({
   isResponseEnded,
 }) {
   const info = BYOV_RUNTIME_INFO[runtime];
-  let child = null;
-  let installLog = null;
-  let aborted = false;
-  let finished = false;
-  let installFailure = null;
-
-  // Register before any readiness/revision await. Those probes can take tens
-  // of seconds on a damaged venv; closing the modal during one must prevent a
-  // multi-gigabyte installer from starting unattended.
-  onDisconnect(() => {
-    if (isResponseEnded()) return;
-    aborted = true;
-    installLog?.cancel();
-    if (info && runtimeInstallInFlight.get(info.id) === null) {
-      runtimeInstallInFlight.delete(info.id);
-    }
-    stopSetupScript(child);
-  });
-
   if (!info) {
     send({ type: 'error', message: `Unknown runtime: ${runtime}` });
     return safeEnd();
   }
 
-  // Reserve synchronously before any await. The null placeholder is replaced
-  // by the child once spawned and released by every early-return path.
   if (runtimeInstallInFlight.has(info.id)) {
     send({ type: 'error', message: `Another ${info.label} install is already running. Wait for it to finish or restart PortOS.` });
     return safeEnd();
   }
-  runtimeInstallInFlight.set(info.id, null);
+  const reservation = { child: null };
+  runtimeInstallInFlight.set(info.id, reservation);
+  const releaseReservation = () => {
+    if (runtimeInstallInFlight.get(info.id) === reservation) {
+      runtimeInstallInFlight.delete(info.id);
+    }
+  };
+  let installLog = null;
+  let aborted = false;
+  let finished = false;
+  let installFailure = null;
 
-  const alreadyInstalled = isByovRuntimeInstalled(info.id);
-  const alreadyCurrent = alreadyInstalled && await isByovRuntimeCurrent(info.id);
-  if (aborted) return safeEnd();
-  const alreadyReady = alreadyCurrent && await isByovRuntimeReady(info.id);
-  if (aborted) return safeEnd();
-  if (alreadyInstalled && alreadyReady && alreadyCurrent) {
-    runtimeInstallInFlight.delete(info.id);
-    send({ type: 'log', message: `${info.label} already installed at ${info.venvPython}` });
-    send({ type: 'complete', message: 'Already installed — nothing to do.' });
-    return safeEnd();
-  }
+  // A disconnect during a slow preflight can release the slot immediately.
+  // Once spawned, keep it until the child closes so a retry cannot race it.
+  onDisconnect(() => {
+    if (isResponseEnded() || aborted) return;
+    aborted = true;
+    installLog?.cancel();
+    if (!reservation.child) releaseReservation();
+    else if (!finished) stopSetupScript(reservation.child);
+  });
 
-  // An install can add/remove packages or update a checkout. Invalidate every
-  // runtime-derived cache before spawning so later status reads re-probe it.
-  invalidateByovReadyCache(info.id);
-  invalidateByovLoraCapabilityCache(info.id);
-  invalidateRuntimeFingerprintCache(info.id);
+  try {
+    const alreadyInstalled = isByovRuntimeInstalled(info.id);
+    const alreadyCurrent = alreadyInstalled && await isByovRuntimeCurrent(info.id);
+    if (aborted) return;
+    const alreadyReady = alreadyCurrent && await isByovRuntimeReady(info.id);
+    if (aborted) return;
+    if (alreadyReady) {
+      releaseReservation();
+      send({ type: 'log', message: `${info.label} already installed at ${info.venvPython}` });
+      send({ type: 'complete', message: 'Already installed — nothing to do.' });
+      return safeEnd();
+    }
 
-  if (!existsSync(SETUP_IMAGE_VIDEO_SCRIPT)) {
-    runtimeInstallInFlight.delete(info.id);
-    send({ type: 'error', message: `Installer script not found at ${SETUP_IMAGE_VIDEO_SCRIPT}` });
+    // An install can add/remove packages or update a checkout. Invalidate every
+    // runtime-derived cache before spawning so later status reads re-probe it.
+    invalidateByovReadyCache(info.id);
+    invalidateByovLoraCapabilityCache(info.id);
+    invalidateRuntimeFingerprintCache(info.id);
+
+    if (!existsSync(SETUP_IMAGE_VIDEO_SCRIPT)) {
+      releaseReservation();
+      send({ type: 'error', message: `Installer script not found at ${SETUP_IMAGE_VIDEO_SCRIPT}` });
+      return safeEnd();
+    }
+  } catch (err) {
+    releaseReservation();
+    if (aborted) return;
+    send({ type: 'error', message: `${info.label} install preflight failed: ${err.message}` });
     return safeEnd();
   }
 
   send({ type: 'log', message: `▸ Starting ${info.label} install via ${info.installEnvVar}=1 bash scripts/setup-image-video.sh` });
   installLog = createInstallLogger({ installer: info.label, target: info.venvPython });
-  const emit = (event) => { installLog.onEvent(event); send(event); };
+  const emit = (event) => {
+    if (aborted) return;
+    installLog.onEvent(event);
+    send(event);
+  };
   installLog.start();
   const installEnv = {
     [info.installEnvVar]: '1',
@@ -143,14 +153,14 @@ export async function streamVideoRuntimeInstall({
   };
 
   try {
-    child = spawnSetupScript(installEnv);
+    reservation.child = spawnSetupScript(installEnv);
   } catch (err) {
     finished = true;
-    runtimeInstallInFlight.delete(info.id);
+    releaseReservation();
     emit({ type: 'error', message: `Installer failed to spawn: ${err.message}` });
     return safeEnd();
   }
-  runtimeInstallInFlight.set(info.id, child);
+  const child = reservation.child;
 
   // Bare carriage returns are progress redraws. Surface each as a log line,
   // while createLineReader still stitches chunks split mid-line.
@@ -178,28 +188,32 @@ export async function streamVideoRuntimeInstall({
   child.on('error', (err) => {
     if (finished) return;
     finished = true;
-    runtimeInstallInFlight.delete(info.id);
+    releaseReservation();
+    if (aborted) return;
     emit({ type: 'error', message: `Installer failed to spawn: ${err.message}` });
     safeEnd();
   });
   child.on('close', async (code) => {
     if (finished) return;
+    finished = true;
+    releaseReservation();
     try {
       stdoutReader.flush();
       stderrReader.flush();
-      finished = true;
-      runtimeInstallInFlight.delete(info.id);
+      if (aborted) return;
       // Exit 0 is not proof of a usable install: network failures and partial
       // package writes can still leave a binary with a broken import surface.
       const binaryPresent = isByovRuntimeInstalled(info.id);
       const current = binaryPresent && await isByovRuntimeCurrent(info.id);
+      if (aborted) return;
       const packagesReady = current && await isByovRuntimeReady(info.id);
+      if (aborted) return;
       if (code === 0 && binaryPresent && packagesReady && current) {
         emit({ type: 'complete', message: `${info.label} ready: ${info.venvPython}` });
       } else if (code === 0 && !binaryPresent) {
         emit({ type: 'error', message: 'Installer exited 0 but the runtime is still missing. Review the log above, then use Repair in this panel.' });
       } else if (code === 0) {
-        emit({ type: 'error', message: packagesReady
+        emit({ type: 'error', message: !current
           ? 'Installer exited 0 but the runtime is still on an outdated revision. Review the source-update log above, then use Repair in this panel.'
           : `Installer exited 0 but the runtime can't import its core packages. Review the package errors above, then use Repair in this panel.` });
       } else {
@@ -207,6 +221,7 @@ export async function streamVideoRuntimeInstall({
       }
       safeEnd();
     } catch (err) {
+      if (aborted) return;
       console.error(`❌ ${info.label} install completion check failed: ${err.message}`);
       emit({ type: 'error', message: `${info.label} install completion check failed: ${err.message}` });
       safeEnd();
