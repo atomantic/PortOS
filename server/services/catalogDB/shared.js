@@ -297,16 +297,23 @@ export const CANONICAL_REFS_CTE = `canonical_refs AS MATERIALIZED (
 // set) reads as false, so NOT (inSet(…)) also matches the old NOT EXISTS.
 export const inSet = (expr, subquery) => `(${expr} IN (${subquery})) IS TRUE`;
 
-// `(board_id, cid)` for every catalog record a live storyboard panel uses as
-// cast, environment or object. A storyboard's story membership is these plus
-// its `storyboard` refs; panels hold bare ids, so this is read, never synced.
-export const STORYBOARD_PANEL_MEMBERS_SQL = `SELECT s.id AS board_id, catalog_canonical_ingredient_id(member.id) AS cid
-    FROM storyboards s
-    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(s.data->'beats', '[]'::jsonb)) beat
-    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(beat->'panels', '[]'::jsonb)) panel
-    CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(panel->'castIds', '[]'::jsonb)
-      || COALESCE(panel->'environmentIds', '[]'::jsonb) || COALESCE(panel->'objectIds', '[]'::jsonb)) member(id)
-   WHERE s.deleted = false`;
+// Panels hold bare ids, so this is read, never synced. Resolve a repeated
+// cast member once per board (or per universe for collection filing).
+export const storyboardPanelMembersSql = ({ memberIdsSql, byUniverse = false } = {}) => `
+  SELECT raw.${byUniverse ? 'universe_id' : 'board_id'}, catalog_canonical_ingredient_id(raw.id) AS cid
+    FROM (
+      SELECT DISTINCT ${byUniverse ? 's.universe_id' : 's.id AS board_id'}, member.id
+        FROM storyboards s
+        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(s.data->'beats', '[]'::jsonb)) beat
+        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(beat->'panels', '[]'::jsonb)) panel
+        CROSS JOIN LATERAL (SELECT COALESCE(panel->'castIds', '[]'::jsonb)
+          || COALESCE(panel->'environmentIds', '[]'::jsonb) || COALESCE(panel->'objectIds', '[]'::jsonb) AS ids) members
+        CROSS JOIN LATERAL jsonb_array_elements_text(members.ids) member(id)
+       WHERE s.deleted = false
+         ${byUniverse ? 'AND s.universe_id IS NOT NULL' : ''}
+         ${memberIdsSql ? `AND members.ids ?| ${memberIdsSql} AND member.id = ANY(${memberIdsSql})` : ''}
+    ) raw`;
+export const STORYBOARD_PANEL_MEMBERS_SQL = storyboardPanelMembersSql();
 
 // Predicates over CANONICAL_REFS_CTE (the statement must include it).
 // HAS_LIVE_HOMING_REF: at least one homing ref whose target still resolves.
