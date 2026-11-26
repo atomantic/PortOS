@@ -20,7 +20,7 @@ vi.mock('../components/ui/Toast');
 
 import Loops from './Loops';
 import socket from '../services/socket';
-import { getLoops, stopLoop } from '../services/apiLoops.js';
+import { createLoop, getLoops, stopLoop } from '../services/apiLoops.js';
 import toast from '../components/ui/Toast';
 
 describe('Loops action feedback (#8621)', () => {
@@ -85,6 +85,25 @@ describe('Loops new-loop form label associations', () => {
     expect(input.id).toBeTruthy();
     expect(label.getAttribute('for')).toBe(input.id);
   });
+});
+
+it('preserves the submitted prompt and prevents whitespace-only submissions', async () => {
+  const user = userEvent.setup();
+  render(<Loops />);
+  const input = await screen.findByLabelText('Loop prompt');
+  const start = screen.getByRole('button', { name: 'Start Loop' });
+
+  await user.click(input);
+  await user.paste('  \t\n');
+  expect(start).toBeDisabled();
+  await user.click(start);
+  expect(createLoop).not.toHaveBeenCalled();
+
+  const prompt = '    example\n\n';
+  await user.clear(input);
+  await user.paste(prompt);
+  await user.click(start);
+  expect(createLoop).toHaveBeenCalledWith(expect.objectContaining({ prompt }));
 });
 
 describe('Loops index empty state', () => {

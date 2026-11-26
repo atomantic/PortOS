@@ -6,6 +6,10 @@ import { FAL_FEATURED_EDIT_MODEL_IDS } from '../../lib/imageGenBackends';
 
 vi.mock('../../services/apiImageVideo.js', () => ({ previewImagePrompt: vi.fn(async (body) => ({ sentPrompt: `${body.prompt}\nSinger stands at the "rail" mark, waving`, promptAdditions: [{ id: 'greybox-figure-0', label: 'Greybox figure 1', text: 'Singer stands at the "rail" mark, waving' }] })) }));
 
+vi.mock('../../hooks/useFalImageCatalog.js', () => ({
+  useFalImageCatalog: () => ({ models: [], bundled: true, stale: true, truncated: false, refresh: () => Promise.resolve() }),
+}));
+
 const scene = { sceneId: 's1', referenceImageId: 'start.png', endImageId: 'end.png', framePrompt: 'Door opens', endFramePrompt: 'Door shut', takes: [] };
 // A remembered frame service would add a Model control beside From.
 beforeEach(() => localStorage.clear());
@@ -298,14 +302,18 @@ it('Use end frame off hides the end frame and keeps its selection for switching 
   expect(screen.getByRole('textbox', { name: 'End frame prompt' }).value).toBe('Door shut');
 });
 
-// Catches a Refine box that can only render on the project's image service.
-it('switches the image service from inside the Refine form and sends it with the refine', () => {
+it('uses the shared Render on control for Refine and offers only its one-off edit model inside the form', () => {
   const onGenerate = vi.fn();
   const shot = { ...scene, takes: [{ takeId: 'candidate', kind: 'image', assetId: 'candidate.png', status: 'candidate' }] };
   frames({ project: { id: 'mv-example' }, scene: shot, onGenerateFrame: onGenerate });
   fireEvent.click(within(screen.getAllByRole('listitem').find((item) => item.querySelector('img')?.getAttribute('src') === '/data/images/candidate.png')).getByRole('button', { name: 'Refine take' }));
   const form = within(screen.getByRole('textbox', { name: /What to change/ }).closest('form'));
-  fireEvent.change(form.getAllByRole('combobox')[0], { target: { value: 'grok' } });
+  expect(form.getAllByRole('combobox')).toEqual([form.getByLabelText('Edit with')]);
+  const renderOn = screen.getByRole('combobox', { name: 'Render on' });
+  fireEvent.change(renderOn, { target: { value: 'fal' } });
+  expect(form.queryByRole('combobox')).toBeNull();
+  fireEvent.change(renderOn, { target: { value: 'grok' } });
+  expect(form.getByRole('combobox', { name: 'Edit with' })).toBeInTheDocument();
   fireEvent.change(screen.getByRole('textbox', { name: /What to change/ }), { target: { value: 'Raise the hand' } });
   fireEvent.click(screen.getByRole('button', { name: /Render refined/ }));
   expect(onGenerate).toHaveBeenLastCalledWith(shot, expect.objectContaining({ refine: 'Raise the hand', imageTarget: { mode: 'grok' } }));

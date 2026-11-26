@@ -1,6 +1,6 @@
 import { Link } from 'react-router';
 import ProviderModelSelector from '../ProviderModelSelector';
-import { filterSelectableModels, isApiProvider, isCodexSubscriptionProvider, isLocalEndpoint, isProcessProvider, providerTypeClass } from '../../utils/providers';
+import { filterSelectableModels, isApiProvider, isCodexSubscriptionProvider, isLocalEndpoint, isProcessProvider, providerTypeClass, runtimeBadgeMeta } from '../../utils/providers';
 import { formatCount } from '../../utils/formatters';
 import ListLoadError from '../ui/ListLoadError';
 import EmptyState from '../EmptyState';
@@ -10,6 +10,7 @@ import LocalPersistentMindSetupCard from '../settings/LocalPersistentMindSetupCa
 import DefaultProviderHelper from './DefaultProviderHelper';
 import FleetHostSetup from './FleetHostSetup';
 import ProviderCard from './ProviderCard';
+import ProviderRuntimeBadge from './ProviderRuntimeBadge.jsx';
 import ProviderCompatibilityMatrix from './ProviderCompatibilityMatrix';
 import MoaPresetsSection from './MoaPresetsSection';
 import ProviderEnvVars from './ProviderEnvVars';
@@ -150,26 +151,7 @@ export default function ProviderPresetsTab({
                       <span className={`text-xs px-2 py-0.5 rounded ${providerTypeClass(provider.type)}`}>
                         {provider.type.toUpperCase()}
                       </span>
-                      {provider.llamaBacked && (
-                        <span className="text-xs px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                          LLAMA.CPP / DFLASH
-                        </span>
-                      )}
-                      {provider.vllmBacked && (
-                        <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                          vLLM / DFLASH2
-                        </span>
-                      )}
-                      {provider.sglangBacked && (
-                        <span className="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                          SGLANG
-                        </span>
-                      )}
-                      {provider.mtplxBacked && (
-                        <span className="text-xs px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
-                          MTPLX
-                        </span>
-                      )}
+                      <ProviderRuntimeBadge meta={runtimeBadgeMeta(provider)} />
                       {!provider.enabled && (
                         <span className="text-xs px-2 py-0.5 rounded bg-gray-500/20 text-gray-400">
                           DISABLED

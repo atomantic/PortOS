@@ -1,6 +1,6 @@
 import { plateReviewEvidence, plateRequirements } from '../../../../server/lib/musicVideo/musicVideoPlateEvidence.js';
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 
 const take = (takeId, assetId, extra = {}) => ({ takeId, kind: 'image', assetId, status: 'candidate', source: 'generated', ...extra });
@@ -13,7 +13,33 @@ it('flags a clip whose external cast guides cannot be tracked', () => {
   expect(screen.getByText(/Cast guide changes are not tracked/)).toBeTruthy();
 });
 
+it('keeps legacy takes without an ID out of the note editor', () => {
+  render(<SceneTakeStrip scene={{ ...scene, takes: [] }} kind="image" />);
+  expect(screen.getByRole('button', { name: 'View frame take full size' })).toBeInTheDocument();
+  expect(screen.queryByRole('textbox', { name: 'Take note' })).toBeNull();
+});
+
 describe('rejecting a take versus marking it bad', () => {
+  it('focuses the note when rejecting or editing and saves it on Enter', () => {
+    const onReview = vi.fn();
+    const shot = { ...scene, takes: [scene.takes[0], { ...scene.takes[1], note: 'Existing note' }] };
+    render(<SceneTakeStrip scene={shot} kind="image" onReview={onReview} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+    expect(onReview).toHaveBeenCalledWith(shot.takes[0], { status: 'rejected' });
+
+    const input = screen.getByRole('textbox', { name: 'Take note' });
+    expect(input).toHaveFocus();
+    fireEvent.change(input, { target: { value: '  Try another angle  ' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onReview).toHaveBeenCalledWith(shot.takes[0], { note: 'Try another angle' });
+    expect(screen.queryByRole('textbox', { name: 'Take note' })).toBeNull();
+
+    const rejectedCard = within(screen.getByRole('button', { name: 'Restore' }).closest('li'));
+    fireEvent.click(rejectedCard.getByRole('button', { name: 'Edit take note' }));
+    expect(rejectedCard.getByRole('textbox', { name: 'Take note' })).toHaveFocus();
+    expect(rejectedCard.getByRole('textbox', { name: 'Take note' })).toHaveValue('Existing note');
+  });
+
   // Uniquely catches a take rejected from this shot reading as bad, or the Bad toggle not reaching the project-wide mark.
   it('offers Restore on a rejected take without a label, and marks or clears bad on its own', () => {
     const onMark = vi.fn();
@@ -65,7 +91,9 @@ it('shows a verdict only after a check, opens it to the misses, and checks a fra
   })) }));
   rerender(<SceneTakeStrip scene={{ ...fresh }} kind="image" onCheck={onCheck} checking={new Set()} />);
   expect(screen.queryByText('There is no chair.')).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: 'Issues (1)' }));
+  const verdict = screen.getByRole('button', { name: 'Issues (1)' });
+  expect(verdict).toHaveClass('pointer-coarse:min-h-11');
+  fireEvent.click(verdict);
   expect(screen.getByText('There is no chair.')).toBeInTheDocument();
 });
 

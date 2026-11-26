@@ -803,7 +803,7 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
 
         {/* Nav items */}
         <nav aria-label="Primary navigation" className="flex-1 py-4 overflow-y-auto overflow-x-hidden min-w-0">
-          {!collapsed && (pinned.length > 0 || recent.length > 0) && (
+          {!sidebarCollapsed && (pinned.length > 0 || recent.length > 0) && (
             <div className="mb-2">
               {pinned.length > 0 && (
                 <div className="mb-2" data-testid="pinned-section">

@@ -18,7 +18,7 @@ import { guardCorpus, REPO_ROOT, trackedFiles } from '../../../../scripts/lib/gu
 
 export const CANDIDATE_SCRIPT = /^scripts\/(?:[^/]+|(?:ml|ops|fixtures|experiments)\/.+)$/;
 export const VITEST_COLLECTED = /\.test\.js$/;
-export const HISTORICAL = /^docs\/decisions\/|^scripts\/migrations\//;
+export const HISTORICAL = /^(?:\.changelog|docs\/decisions|scripts\/migrations)\//;
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export function isSiblingTest(candidate, file) {
@@ -99,6 +99,8 @@ describe('scripts/ reference guard (#16089, #16909)', () => {
   it('filters historical documents and migrations out of the live reference corpus', () => {
     expect(HISTORICAL.test('docs/decisions/2026-09-19-federation.md')).toBe(true);
     expect(HISTORICAL.test('scripts/migrations/444-minimax-h3-cuda-lightx2v.js')).toBe(true);
+    expect(HISTORICAL.test('.changelog/RELEASE.md')).toBe(true);
+    expect(HISTORICAL.test('.changelog/README.md')).toBe(true);
     expect(HISTORICAL.test('docs/SCRIPTS.md')).toBe(false);
     expect(HISTORICAL.test('server/index.js')).toBe(false);
   });

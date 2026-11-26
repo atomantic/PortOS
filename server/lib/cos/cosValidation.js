@@ -442,7 +442,7 @@ export const goalFidelityFalsePositiveSchema = z.object({
 // =============================================================================
 
 export const createLoopSchema = z.object({
-  prompt: z.string().trim().min(1),
+  prompt: z.string().refine(value => value.trim().length > 0, 'Prompt is required'),
   interval: z.union([z.string().min(1), z.number().positive()])
     .refine(isValidLoopInterval, `Interval must be between ${MIN_INTERVAL_MS / 1000} seconds and ${Math.floor(MAX_INTERVAL_MS / 86_400_000)} days`),
   name: z.string().optional(),

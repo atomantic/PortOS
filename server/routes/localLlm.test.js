@@ -19,6 +19,7 @@ import { getLoadedModels, unloadModel } from '../services/ollamaManager.js';
 import { getLoadedModels as getLoadedLmStudioModels, getLastLoadedModelsError as getLmStudioResidencyError } from '../services/lmStudioManager.js';
 import { getSettings, readSettingsStrict, updateSettingsWith } from '../services/settings.js';
 import { localLlmCompareSchema, localLlmTestSchema } from '../lib/mediaValidation.js';
+import { getSplashRuntimeStatus } from '../services/splashRuntimeStatus.js';
 import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer, uninstallSplashRuntime } from '../services/splashServerManager.js';
 import { getMkserveRuntimeStatus, installMkserve, startMkserveServer, stopMkserveServer, uninstallMkserve } from '../services/mkserveRuntimeManager.js';
 import { ServerError, errorEvents } from '../lib/errorHandler.js';
@@ -232,10 +233,14 @@ vi.mock('../services/settings.js', () => ({
   settingsEvents: { on: vi.fn(), emit: vi.fn(), setMaxListeners: vi.fn() },
 }));
 
-function makeApp() {
+function makeApp(auth) {
   const app = express();
   app.use(express.json({ limit: '3mb' }));
   app.set('io', recordingOperatorIo());
+  app.use((req, _res, next) => {
+    req.portosAuthContext = auth;
+    next();
+  });
   app.use('/api/local-llm', localLlmRoutes);
   return app;
 }
@@ -1228,7 +1233,7 @@ describe('llama-server routes', () => {
     expect(res.status).toBe(400);
   });
 
-  it('ends install progress when llama.cpp installation rejects', async () => {
+  it('ends operator-only install progress when llama.cpp installation rejects', async () => {
     const { installLlamaServer } = await import('../services/llamaServerManager.js');
     const start = { event: 'start', message: 'Installing llama.cpp via Homebrew…' };
     installLlamaServer.mockImplementationOnce(async ({ onProgress }) => {
@@ -1236,11 +1241,15 @@ describe('llama-server routes', () => {
       throw new ServerError('package manager exited', { status: 502 });
     });
     const app = makeApp();
+    const operatorEmit = vi.fn();
+    const broadcast = vi.fn();
+    app.set('io', { ...recordingOperatorIo(operatorEmit), emit: broadcast });
 
     const res = await request(app).post('/api/local-llm/llama-server/install');
 
     expect(res.status).toBe(502);
-    const progressCalls = app.get('io').emit.mock.calls.filter(([event]) => event === 'localLlm:progress');
+    expect(broadcast).not.toHaveBeenCalled();
+    const progressCalls = operatorEmit.mock.calls.filter(([event]) => event === 'localLlm:progress');
     expect(progressCalls).toEqual([
       ['localLlm:progress', start],
       ['localLlm:progress', { event: 'error', message: 'llama.cpp install failed: package manager exited' }],
@@ -1356,6 +1365,28 @@ describe('local LLM catalog and loaded query validation', () => {
     expect(res.body.code).toBe('VALIDATION_ERROR');
     expect(getLoadedModels).not.toHaveBeenCalled();
   });
+});
+
+it.each([
+  ['splash', getSplashRuntimeStatus],
+  ['mkserve', getMkserveRuntimeStatus],
+])('GET /%s/status includes runtime logs for operator sessions only', async (id, readStatus) => {
+  const statusWithLogs = { supported: true, state: 'running', recentLogs: ['fixture output'] };
+  const statusWithoutLogs = { ...statusWithLogs, recentLogs: [] };
+  const path = `/api/local-llm/${id}/status`;
+  const peer = { enabled: true, authenticated: true, method: 'peer' };
+  const operator = { ...peer, method: 'session' };
+
+  readStatus.mockResolvedValueOnce(statusWithoutLogs).mockResolvedValueOnce(statusWithLogs);
+  const remote = await request(makeApp(peer)).get(path);
+  expect(remote.status).toBe(200);
+  expect(remote.body).toMatchObject(statusWithoutLogs);
+  expect(readStatus).toHaveBeenLastCalledWith({ includeLogs: false });
+
+  const delegated = await request(makeApp(operator)).get(path);
+  expect(delegated.status).toBe(200);
+  expect(delegated.body).toMatchObject(statusWithLogs);
+  expect(readStatus).toHaveBeenLastCalledWith({ includeLogs: true });
 });
 
 describe.each([

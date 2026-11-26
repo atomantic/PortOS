@@ -70,16 +70,21 @@ describe('GeneralTab unsaved changes', () => {
     );
   });
 
-  it('guards edits made against the displayed fallback after loading fails', async () => {
+  it('shows a retry state after a failed load and never exposes blank editable settings', async () => {
     getSettings.mockRejectedValueOnce(new Error('settings offline'));
-    const router = await renderTab({ expectedTimezone: null });
-    fireEvent.change(screen.getByLabelText('Timezone (IANA)'), {
-      target: { value: 'America/New_York' },
-    });
+    render(<RouterProvider router={createMemoryRouter([
+      { path: '/settings/general', element: <GeneralTab /> },
+    ], { initialEntries: ['/settings/general'] })} />);
 
-    expect(within(timezoneCard()).getByText('Unsaved changes')).toBeInTheDocument();
-    await navigate(router, '/settings/security');
-    expect(screen.getByText(CONFIRM)).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load general settings');
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
+    expect(screen.queryByLabelText('Timezone (IANA)')).toBeNull();
+    expect(screen.queryByLabelText('Latitude (-90 to 90)')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getByDisplayValue('UTC')).toBeInTheDocument());
+    expect(screen.getByLabelText('Latitude (-90 to 90)')).toHaveValue(String(SETTINGS.location.lat));
+    expect(getSettings).toHaveBeenCalledTimes(2);
   });
 
   it('ignores an older StrictMode load failure after the current load succeeds', async () => {

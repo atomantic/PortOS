@@ -237,6 +237,16 @@ describe('runtime selection workflow', () => {
     expect(switchLocalLlmBackend).not.toHaveBeenCalled();
   });
 
+  it.each(['splash', 'mkserve'])('shows the recent managed server logs for %s', async (id) => {
+    getManagedInklingRuntimeStatus.mockResolvedValue({
+      supported: true, installed: true, state: 'running', managed: true, recentLogs: ['Fixture startup log'],
+    });
+    await renderRuntimes(id);
+
+    fireEvent.click(await screen.findByRole('button', { name: /view server logs/i }));
+    expect(screen.getByText('Fixture startup log')).toBeVisible();
+  });
+
   it('saves the requested Splash window when stopped and separately displays the live served window', async () => {
     getManagedInklingRuntimeStatus.mockResolvedValue({ supported: true, state: 'stopped', installed: true, requestedContextWindow: 65536 });
     let finishSave;
