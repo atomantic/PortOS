@@ -1341,6 +1341,17 @@ describe('managed runtime provider-model refresh after a user lifecycle action',
     expect((await post(path)).status).toBe(200);
     expect(syncRuntimeProviderModels).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['llama-server/stop', stopLlamaServer],
+    ['mtplx/stop', stopMtplxServer],
+    ['slotstream/stop', stopSlotstreamServer],
+  ])('%s reports an externally owned daemon as a conflict', async (path, stop) => {
+    stop.mockResolvedValueOnce({ success: false, message: 'An external process is listening.', code: 'EXTERNAL_PROCESS_RUNNING' });
+    const res = await request(makeApp()).post(`/api/local-llm/${path}`);
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ error: 'An external process is listening.', code: 'EXTERNAL_PROCESS_RUNNING' });
+  });
 });
 
 it('validates and saves the Splash next-start context through the runtime route', async () => {

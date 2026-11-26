@@ -1045,6 +1045,7 @@ router.post('/llama-server/start', asyncHandler(async (req, res) => {
 // POST /api/local-llm/llama-server/stop — stop managed llama-server
 router.post('/llama-server/stop', asyncHandler(async (_req, res) => {
   const result = await stopLlamaServer()
+  if (result?.success === false) throw new ServerError(result.message || 'Could not stop runtime', { status: 409, code: result.code || 'EXTERNAL_PROCESS_RUNNING' })
   resetProviderReadinessCache()
   res.json(result)
 }))
@@ -1110,6 +1111,7 @@ router.post('/mtplx/start', asyncHandler(async (req, res) => {
 // POST /api/local-llm/mtplx/stop — stop the managed MTPLX process
 router.post('/mtplx/stop', asyncHandler(async (_req, res) => {
   const result = await stopMtplxServer()
+  if (result?.success === false) throw new ServerError(result.message || 'Could not stop runtime', { status: 409, code: result.code || 'EXTERNAL_PROCESS_RUNNING' })
   resetProviderReadinessCache()
   res.json(result)
 }))
@@ -1253,6 +1255,7 @@ router.post('/slotstream/start', asyncHandler(async (req, res) => {
 
 router.post('/slotstream/stop', asyncHandler(async (_req, res) => {
   const result = await stopSlotstreamServer()
+  if (result?.success === false) throw new ServerError(result.message || 'Could not stop runtime', { status: 409, code: result.code || 'EXTERNAL_PROCESS_RUNNING' })
   resetProviderReadinessCache()
   res.json(result)
 }))
