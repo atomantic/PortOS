@@ -8,7 +8,6 @@ import { mergeModelLists, mergeObservedContextWindows, withRuntimeContextWindow,
 import Banner from '../ui/Banner';
 import Drawer from '../Drawer';
 import useDrawerTab from '../../hooks/useDrawerTab';
-import { providerModelCatalog } from '../../utils/providerModelAccess';
 import { buildProviderPayload, findProviderFormError, initialProviderFormData, liveHardwareFor, liveModelsFor } from './providerFormData';
 import ProviderConnectionTab from './ProviderConnectionTab';
 import ProviderModelsTab from './ProviderModelsTab';
@@ -29,8 +28,9 @@ const PROVIDER_FORM_TABS = [
 const PROVIDER_FORM_TAB_IDS = PROVIDER_FORM_TABS.map(t => t.id);
 
 export default function ProviderForm({ provider, daemonReadiness = null, onClose, onSave, onEditProvider, allProviders = [], localModels = { ollama: [], lmstudio: [], ctxById: {}, hardwareCompatibilityByBackend: {} }, runnerAllowedCommands = null }) {
-  const [modelsText, setModelsText] = useState(() => providerModelCatalog(provider).join(', '));
-  const [formData, setFormData] = useState(() => initialProviderFormData(provider));
+  const [initialForm] = useState(() => initialProviderFormData(provider));
+  const [modelsText, setModelsText] = useState(() => initialForm.models.join(', '));
+  const [formData, setFormData] = useState(initialForm);
   const [harnessContextDraft, setHarnessContextDraft] = useState(null);
 
   const [activeTab, setActiveTab] = useDrawerTab('providerTab', 'connection', PROVIDER_FORM_TAB_IDS);
@@ -136,6 +136,10 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     onSave();
   });
 
+  const isDirty = JSON.stringify(formData) !== JSON.stringify(initialForm)
+    || modelsText !== initialForm.models.join(', ')
+    || Boolean(harnessContextDraft || newEnvKey || newEnvValue || newEnvSecret || alsoTui || tuiArgs);
+
   const handleSubmit = (e) => {
     e.preventDefault();
 
@@ -169,9 +173,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
       tabs={PROVIDER_FORM_TABS}
       activeTab={activeTab}
       onTabChange={setActiveTab}
-      // A long multi-tab config form: an accidental Esc or backdrop click
-      // mid-edit would discard work across every tab.
-      closeOnEsc={false}
+      closeOnEsc={!isDirty && !saving && !converting}
       closeOnBackdrop={false}
     >
         {/* The Drawer body remounts per active tab (key={currentTab}), so this

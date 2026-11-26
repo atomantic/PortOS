@@ -791,6 +791,17 @@ describe('fleet LLM setup walkthrough', () => {
   });
 });
 
+const withFailedSampleRequest = async (status, body, run) => {
+  const { createProvider } = await vi.importActual('../services/apiProviders.js');
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+    new Response(JSON.stringify(body), { status }));
+  try {
+    await api.createProvider.withImplementation(createProvider, run);
+  } finally {
+    fetchMock.mockRestore();
+  }
+};
+
 describe('handleAddSample error handling', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -809,21 +820,21 @@ describe('handleAddSample error handling', () => {
     });
   });
 
-  it('resets addingSample state and re-enables button if api.createProvider rejects', async () => {
-    api.createProvider.mockRejectedValue(new Error('Failed to create provider'));
-
+  it.each([
+    [400, { error: 'Invalid sample' }, 'Failed to add provider: Invalid sample'],
+    [403, { code: 'HOST_CONTROL_FORBIDDEN', error: 'Connect as the operator' }, 'Connect as the operator'],
+  ])('shows one toast and re-enables Add after HTTP %i', async (status, body, message) => {
     await renderPage();
-
     await clickLoadSamples();
+    const addButton = await screen.findByRole('button', { name: 'Add' });
 
-    const addBtn = await screen.findByRole('button', { name: 'Add' });
-    fireEvent.click(addBtn);
+    await withFailedSampleRequest(status, body, async () => {
+      await act(async () => { fireEvent.click(addButton); });
 
-    expect(api.createProvider).toHaveBeenCalledWith(expect.objectContaining({ id: 'sample-1' }));
-
-    const reEnabledAddBtn = await screen.findByRole('button', { name: 'Add' });
-    expect(reEnabledAddBtn).not.toBeDisabled();
-    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('Failed to add provider: Failed to create provider'));
+      expect(api.createProvider).toHaveBeenCalledWith(expect.objectContaining({ id: 'sample-1' }), { silent: true });
+      expect(screen.getByRole('button', { name: 'Add' })).toBeEnabled();
+      expect(toast.error).toHaveBeenCalledExactlyOnceWith(message);
+    });
   });
 
   it('renders sample preset envVars using ProviderEnvVars with collapse affordance', async () => {
@@ -856,7 +867,7 @@ describe('handleAddSample error handling', () => {
   });
 });
 
-describe('handleAddAllSamples partial failure handling', () => {
+describe('handleAddAllSamples error handling', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.getApps.mockResolvedValue([]);
@@ -873,6 +884,23 @@ describe('handleAddAllSamples partial failure handling', () => {
         { id: 'sample-2', name: 'Sample AI 2', type: 'api', enabled: true, endpoint: 'https://api.sample2.com', models: ['model-2'] },
         { id: 'sample-3', name: 'Sample AI 3', type: 'api', enabled: true, endpoint: 'https://api.sample3.com', models: ['model-3'] },
       ]
+    });
+  });
+
+  it.each([
+    [400, { error: 'Invalid sample' }, 3, 'Failed to add 3 providers'],
+    [403, { code: 'HOST_CONTROL_FORBIDDEN', error: 'Connect as the operator' }, 1, 'Connect as the operator'],
+  ])('shows one toast and keeps the samples after HTTP %i', async (status, body, attempts, message) => {
+    await renderPage();
+    await clickLoadSamples();
+    const addAll = await screen.findByRole('button', { name: 'Add All (3)' });
+
+    await withFailedSampleRequest(status, body, async () => {
+      await act(async () => { fireEvent.click(addAll); });
+
+      expect(api.createProvider).toHaveBeenCalledTimes(attempts);
+      expect(toast.error).toHaveBeenCalledExactlyOnceWith(message);
+      expect(screen.getByRole('button', { name: 'Add All (3)' })).toBeEnabled();
     });
   });
 
@@ -2467,7 +2495,10 @@ it('shares readiness subscriptions and reconciles events, reconnect and tab show
     expect(api.getProviderReadiness).toHaveBeenCalledTimes(count);
     api.getProviderReadiness.mockRejectedValueOnce(new Error('unavailable'));
     await act(async () => { socketEvent('provider-readiness:changed'); });
-    expect(screen.getByText(/Provider readiness status unavailable/)).toBeInTheDocument();
+    const warning = screen.getByText(/Provider readiness status unavailable/).closest('[role="status"]');
+    expect(warning).toHaveClass('text-port-warning');
+    expect(warning).not.toHaveAttribute('variant');
+    expect(warning.querySelector('svg[aria-hidden="true"]')).toBeInTheDocument();
     expect(api.getProviderReadiness).toHaveBeenCalledTimes(count + 1);
     await act(async () => { socketEvent('connect'); });
     expect(api.getProviderReadiness).toHaveBeenCalledTimes(count + 2);
