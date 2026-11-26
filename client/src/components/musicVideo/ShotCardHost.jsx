@@ -154,6 +154,8 @@ export default function ShotCardHost({ board, sceneId, storyboard = null, onStor
         onSplit: board.onSplitScene,
         onMergeNext: board.onMergeNextScene,
         onMergePrevious: board.onMergePreviousScene,
+        onUndoBoardEdit: board.onUndoBoardEdit,
+        undoingBoard: board.undoingBoard,
         onMoveStart: board.onMoveSceneStart,
         onMoveEnd: board.onMoveSceneEnd,
         onRepairPerformance: ['code', 'document', 'blender'].includes(mode) ? null : board.onRepairPerformance,

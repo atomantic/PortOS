@@ -254,6 +254,7 @@ export default function SceneCard({
           scene={scene} project={project} posterSrc={position.posterSrc} shotName={position.shotName} fieldId={fieldId}
           frameReadiness={frameReadiness} clipPlayback={clipPlayback} attention={attention}
           locked={locked} doneSaving={doneSaving} onSetDone={actions.onSetDone} onToggleDone={setDone}
+          onUndoBoardEdit={actions.onUndoBoardEdit} undoingBoard={actions.undoingBoard}
           stepShot={position.stepShot} onClose={actions.onClose}
           generatingLane={renderPlan.generatingLane} generatingFrame={media.generatingFrame}
           generatingVideo={media.generatingVideo} frameProgress={media.frameProgress} clipJobs={renderPlan.clipJobs}

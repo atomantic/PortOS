@@ -288,10 +288,10 @@ export async function probeRemoteSize(url, { headers = {}, fetchImpl = fetch, si
   return empty;
 }
 
-export async function verifyDownloadHash(filePath, expectedSha256) {
+export async function verifyDownloadHash(filePath, expectedSha256, { signal } = {}) {
   const want = normalizeSha256(expectedSha256);
   if (!want) return { ok: true, skipped: true };
-  const actual = (await sha256File(filePath)).toLowerCase();
+  const actual = (await sha256File(filePath, { signal })).toLowerCase();
   if (actual !== want) return { ok: false, expected: want, actual };
   return { ok: true, expected: want, actual };
 }
@@ -477,7 +477,7 @@ export async function streamResumableDownload({
       },
     });
 
-    await pipeline(Readable.fromWeb(res.body), counter, createWriteStream(tmpPath, { flags })).catch(async (err) => {
+    await pipeline(Readable.fromWeb(res.body), counter, createWriteStream(tmpPath, { flags }), { signal }).catch(async (err) => {
       if (isCancelled()) {
         await rm(tmpPath, { force: true }).catch(() => {});
         await rm(etagPath, { force: true }).catch(() => {});
@@ -497,7 +497,8 @@ export async function streamResumableDownload({
       );
     }
 
-    const check = await verifyDownloadHash(tmpPath, expectedSha256);
+    clearIdleTimer();
+    const check = await verifyDownloadHash(tmpPath, expectedSha256, { signal });
     if (!check.ok) {
       await rm(tmpPath, { force: true }).catch(() => {});
       await rm(etagPath, { force: true }).catch(() => {});
@@ -505,6 +506,7 @@ export async function streamResumableDownload({
     }
 
     if (finalize) {
+      signal?.throwIfAborted();
       await rename(tmpPath, destPath);
       await rm(etagPath, { force: true }).catch(() => {});
     }

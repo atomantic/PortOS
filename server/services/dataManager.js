@@ -271,9 +271,9 @@ async function describeManagedRuntime(item, dirPath) {
   const splashDirectory = item.name === 'runtimes'
     && (await lstat(join(dirPath, 'runtimes', 'splash')).catch(() => null))?.isDirectory();
   const read = splashDirectory
-    ? async () => (await import('./splashRuntimeStatus.js')).getSplashRuntimeStatus()
+    ? async () => (await import('./splashRuntimeStatus.js')).getSplashRuntimeStatus({ includeLogs: false })
     : item.name === 'mkserve'
-      ? async () => (await import('./mkserveRuntimeManager.js')).getMkserveRuntimeStatus()
+      ? async () => (await import('./mkserveRuntimeManager.js')).getMkserveRuntimeStatus({ includeLogs: false })
       : null;
   if (!read) return;
   const status = await read().catch(() => null);

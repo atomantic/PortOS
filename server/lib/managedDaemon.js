@@ -93,9 +93,13 @@ export function createDaemonLogBuffer({ maxLines = DEFAULT_MAX_LINES } = {}) {
   };
 }
 
-async function recentPm2Logs(execPm2, target, logs) {
-  const output = await execPm2(['logs', target, '--nostream', '--lines', String(logs.maxLines)]).catch(() => null);
-  return logs.withPm2Logs(`${output?.stdout || ''}\n${output?.stderr || ''}`);
+/** Tail a verified PM2 process ID so a same-named process's output stays private. */
+async function readManagedPm2LogTail(pmId, execPm2) {
+  const maxLines = 40;
+  const result = await execPm2(['logs', String(pmId), '--nostream', '--lines', String(maxLines)], { timeoutMs: 3000 }).catch(() => null);
+  return `${result?.stdout ?? ''}\n${result?.stderr ?? ''}`.split('\n')
+    .map((line) => line.trimEnd()).filter(Boolean).slice(-maxLines)
+    .map((line) => line.slice(-2000));
 }
 
 /**
@@ -175,12 +179,9 @@ export function createDaemonWatcher({
     const config = recoverConfig(pm2Status);
     const resolvedEndpoint = endpointFor(config);
     const reachable = await probe(resolvedEndpoint);
-    let recentLogs = [];
-    if (includeLogs) {
-      recentLogs = pm2Status && pm2Status.status !== 'not_found'
-        ? await recentPm2Logs(execPm2, appName, logs)
-        : logs.snapshot();
-    }
+    const pm2Logs = includeLogs && pm2Status && pm2Status.status !== 'not_found'
+      ? await execPm2(['logs', appName, '--nostream', '--lines', String(logs.maxLines)]).catch(() => null)
+      : null;
 
     return {
       installed,
@@ -192,7 +193,7 @@ export function createDaemonWatcher({
       endpoint: resolvedEndpoint,
       config: isManagedActive || (isReadFailed && preserveConfigOnReadFailure) ? config : null,
       runAtStartup: savedApps === null ? null : savedApps.includes(appName),
-      recentLogs,
+      recentLogs: includeLogs ? logs.withPm2Logs(`${pm2Logs?.stdout || ''}\n${pm2Logs?.stderr || ''}`) : [],
       lastExitError: isReadFailed ? 'Failed to read PM2 status' : includeLogs ? getLastExitError() : null,
       releaseReason: isManagedActive ? null : (idleDaemons.get(appName)?.releaseReason ?? null),
     };
@@ -496,7 +497,6 @@ export function createBundleDaemon({
   pollMs,
 }) {
   let operation = null;
-  const logs = createDaemonLogBuffer();
 
   const read = async (identity) => {
     const app = await getAppStatusStrict(appName);
@@ -535,7 +535,7 @@ export function createBundleDaemon({
         .finally(() => { operation = null; });
     },
     operation: () => operation,
-    recentLogs: ({ app, owned }) => owned ? recentPm2Logs(execPm2, String(app.pm_id), logs) : [],
+    recentLogs: ({ app, owned }) => owned ? readManagedPm2LogTail(app.pm_id, execPm2) : [],
     async remove({ app, owned }, options) {
       if (!owned) throw unsupportedStop();
       const args = ['delete', String(app.pm_id)];

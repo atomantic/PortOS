@@ -20,8 +20,11 @@ listener it did not start.
 managed mkserve before updating. The update reuses the verified checkpoint if the
 model revision has not changed; a failed update does not activate a partial
 installation. Once the new bundle is active, PortOS removes the superseded
-managed bundle and any checkpoint it replaced. Interrupted checkpoint downloads
-can resume when you retry.
+managed bundle and any checkpoint it replaced. The runtime card shows checkpoint
+bytes and percent as the download runs. Choose **Cancel** to stop an install or
+update. Retrying resumes the interrupted checkpoint download when possible.
+If mkserve exits with an engine error, **Repair** clears and rebuilds the
+current engine cache using the local checkpoint.
 
 The build and checkpoint are reproducible caches under `data/cache/mkserve`,
 excluded from PortOS backups. The engine is pinned to the reviewed upstream
@@ -29,4 +32,5 @@ excluded from PortOS backups. The engine is pinned to the reviewed upstream
 The [model files](https://huggingface.co/thinkingmachines/Inkling-2-Mini/tree/c9d028302cd0f035fdf8e7e91f089a4ce94d2195)
 are verified against pinned SHA-256 digests, including the DSpark draft head.
 
-mkserve can be measured on **Models → Performance**, and its PM2 log (`portos-mkserve`) is readable through the PortOS logs API.
+Use **View server logs** on the runtime card to see recent output from the
+PortOS-managed mkserve process. Measure mkserve on **Models → Performance**.

@@ -9,7 +9,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { isPortInUse } from '../lib/platform.js';
 import {
   MKSERVE_BUNDLE, MKSERVE_MODEL, MKSERVE_VERSION, installPinnedMkserve, isMkserveRevision,
-  mkserveInstallPaths, mkserveLaunchEnvironment, readMkserveInstall, removeMkserveRelease,
+  mkserveInstallPaths, mkserveLaunchEnvironment, readMkserveInstall, rebuildMkserveEngine, removeMkserveRelease,
 } from './mkserveRuntimeInstall.js';
 import { clearJlistCache, execPm2, getAppStatusStrict } from './pm2.js';
 
@@ -94,10 +94,10 @@ async function probeMkserve() {
   return found ? { model: found.id, engine: health.engine, maxContext: health.max_context } : null;
 }
 
-export async function getMkserveRuntimeStatus({ includeLogs = false } = {}) {
+export async function getMkserveRuntimeStatus({ includeLogs = true } = {}) {
   const supported = supportsMkserve();
   const base = { supported, endpoint: ENDPOINT, installed: false, version: null, availableVersion: MKSERVE_VERSION, updateAvailable: false };
-  if (!supported) return { ...base, state: 'unsupported', reason: MKSERVE_UNSUPPORTED_REASON };
+  if (!supported) return { ...base, recentLogs: [], state: 'unsupported', reason: MKSERVE_UNSUPPORTED_REASON };
   const [installed, process, health] = await Promise.all([readMkserveInstall(), daemon.read(), probeMkserve()]);
   const { app, owned: managed, active } = process;
   const status = { ...base, installed: !!installed, version: installed?.version ?? null,
@@ -110,10 +110,13 @@ export async function getMkserveRuntimeStatus({ includeLogs = false } = {}) {
   }
   if (managed && active) return { ...status, managed: true, state: 'starting' };
   if (await daemon.hasListener()) return { ...status, managed: false, state: 'unrecognized', reason: 'Another service is using port ' + PORT + '.' };
-  if (managed && app.status === 'errored') {
-    return { ...status, managed: true, state: 'error', canUninstall: Boolean(installed), reason: 'mkserve exited. Check its PM2 logs before restarting.' };
+  // PM2 records a crash as stopped when --no-autorestart is set. The PortOS
+  // Stop action deletes the entry, so an owned stopped entry still merits Repair.
+  if (managed && ['errored', 'stopped'].includes(app.status)) {
+    return { ...status, managed: true, state: 'error', canUninstall: Boolean(installed), repairRecommended: true,
+      reason: 'mkserve exited. Check its PM2 logs or use Repair to rebuild the engine.' };
   }
-  const canUninstall = Boolean(installed && (app?.status === 'not_found' || (managed && app.status === 'stopped')));
+  const canUninstall = Boolean(installed && app?.status === 'not_found');
   return { ...status, managed, canUninstall, state: installed ? 'stopped' : 'missing' };
 }
 
@@ -122,14 +125,21 @@ function runOperation(state, run) {
   return daemon.withOperation(state, run);
 }
 
-export function installMkserve({ onProgress: progress } = {}) {
+export function installMkserve({ onProgress: progress, repair = false, signal } = {}) {
   return runOperation('installing', async (setOperation) => {
     const installed = await readMkserveInstall();
-    if (installed?.bundle === MKSERVE_BUNDLE) return { success: true, message: 'mkserve is up to date' };
+    signal?.throwIfAborted();
+    const current = installed?.bundle === MKSERVE_BUNDLE;
+    if (current && !repair) return { success: true, message: 'mkserve is up to date' };
     if (installed) setOperation('updating');
     const { active } = await requireAppStatus();
     if (active) throw error('Stop the managed mkserve server before updating or repairing it.');
-    await installPinnedMkserve((message) => onProgress(progress, message), installed);
+    const emit = (message) => onProgress(progress, message);
+    if (current) {
+      await rebuildMkserveEngine(installed, emit, { repair: true, signal });
+      return { success: true, message: 'mkserve repaired' };
+    }
+    await installPinnedMkserve(emit, installed, { signal });
     return { success: true, message: installed ? 'mkserve updated' : 'mkserve installed' };
   });
 }

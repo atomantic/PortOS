@@ -1368,9 +1368,9 @@ describe('local LLM catalog and loaded query validation', () => {
 });
 
 it.each([
-  ['splash', getSplashRuntimeStatus, (options) => [undefined, options]],
-  ['mkserve', getMkserveRuntimeStatus, (options) => [options]],
-])('GET /%s/status includes runtime logs for operator sessions only', async (id, readStatus, getArgs) => {
+  ['splash', getSplashRuntimeStatus],
+  ['mkserve', getMkserveRuntimeStatus],
+])('GET /%s/status includes runtime logs for operator sessions only', async (id, readStatus) => {
   const statusWithLogs = { supported: true, state: 'running', recentLogs: ['fixture output'] };
   const statusWithoutLogs = { ...statusWithLogs, recentLogs: [] };
   const path = `/api/local-llm/${id}/status`;
@@ -1381,12 +1381,12 @@ it.each([
   const remote = await request(makeApp(peer)).get(path);
   expect(remote.status).toBe(200);
   expect(remote.body).toMatchObject(statusWithoutLogs);
-  expect(readStatus).toHaveBeenLastCalledWith(...getArgs({ includeLogs: false }));
+  expect(readStatus).toHaveBeenLastCalledWith({ includeLogs: false });
 
   const delegated = await request(makeApp(operator)).get(path);
   expect(delegated.status).toBe(200);
   expect(delegated.body).toMatchObject(statusWithLogs);
-  expect(readStatus).toHaveBeenLastCalledWith(...getArgs({ includeLogs: true }));
+  expect(readStatus).toHaveBeenLastCalledWith({ includeLogs: true });
 });
 
 describe.each([
@@ -1436,6 +1436,38 @@ describe.each([
     expect(stop).toHaveBeenCalledOnce();
   });
 
+  it('cancels only the addressed installation and keeps its slot until teardown', async () => {
+    const app = makeApp();
+    let signal;
+    let finish;
+    const transfer = new Promise((_resolve, reject) => { finish = () => reject(signal.reason); });
+    install.mockImplementationOnce((options) => {
+      signal = options.signal;
+      return transfer;
+    });
+    const accepted = await mutate(app, 'upgrade');
+    expect(accepted.status).toBe(202);
+    const { operation } = accepted.body;
+    try {
+      expect((await mutate(app, 'cancel').send({ operationId: '61d3819b-c7ab-476c-be68-81355beebdae' })).body).toEqual({ cancelled: false });
+      expect(signal.aborted).toBe(false);
+      expect((await mutate(app, 'cancel').send({ operationId: operation.id })).body).toMatchObject({
+        cancelled: true, operation: { id: operation.id, cancelling: true },
+      });
+      expect(signal.aborted).toBe(true);
+      expect((await readStatus(app)).body.operation).toMatchObject({ cancelling: true });
+      expect((await mutate(app, 'install')).status).toBe(409);
+      expect((await mutate(app, 'uninstall')).status).toBe(409);
+    } finally {
+      finish();
+    }
+    expect((await readStatus(app)).body).toMatchObject({ operation: null, lastError: null });
+    expect((await mutate(app, 'cancel')).body).toEqual({ cancelled: false });
+    expect(app.get('io').emit).toHaveBeenCalledWith(
+      'localLlm:progress', expect.objectContaining({ event: 'cancelled', runtime: id, operation: null }),
+    );
+  });
+
   it('accepts uninstall and reports its scoped completion without launching the server', async () => {
     const app = makeApp();
     uninstall.mockClear().mockResolvedValueOnce({ success: true });
@@ -1462,6 +1494,27 @@ describe.each([
       'localLlm:progress', expect.objectContaining({ event: 'error', runtime: id }),
     );
   });
+});
+
+it('accepts the repair flag only on mkserve Install and requires operator authority for status logs', async () => {
+  const app = makeApp();
+  installMkserve.mockClear().mockResolvedValueOnce({});
+  const accepted = await request(app).post('/api/local-llm/mkserve/install').send({ repair: true });
+  expect(accepted.status).toBe(202);
+  expect(accepted.body.operation.action).toBe('repair');
+  expect(installMkserve).toHaveBeenCalledWith(expect.objectContaining({ repair: true }));
+  expect((await request(app).post('/api/local-llm/mkserve/start').send({ repair: true })).status).toBe(400);
+  expect((await request(app).post('/api/local-llm/splash/install').send({ repair: true })).status).toBe(400);
+  expect((await request(app).get('/api/local-llm/mkserve/status')).status).toBe(200);
+  expect(getMkserveRuntimeStatus).toHaveBeenLastCalledWith({ includeLogs: false });
+  const operatorApp = express();
+  operatorApp.use((req, _res, next) => {
+    req.portosAuthContext = { enabled: true, authenticated: true, method: 'session' };
+    next();
+  });
+  operatorApp.use('/api/local-llm', localLlmRoutes);
+  expect((await request(operatorApp).get('/api/local-llm/mkserve/status')).status).toBe(200);
+  expect(getMkserveRuntimeStatus).toHaveBeenLastCalledWith({ includeLogs: true });
 });
 
 

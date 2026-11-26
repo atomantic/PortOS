@@ -343,3 +343,45 @@ describe('BoardStage board panels', () => {
     duplicateKeys.mockRestore();
   });
 });
+
+describe('BoardStage undo controls', () => {
+  it('offers Undo in the board header, open shot drawer header, and on Cmd/Ctrl+Z outside inputs', () => {
+    const onUndoBoardEdit = vi.fn();
+    const scenes = [scene(1), scene(2)];
+    const withUndo = board(scenes, {
+      activeSceneId: 's1',
+      boardUndo: { count: 2, label: 'merge with next' },
+      onUndoBoardEdit,
+    });
+    withUndo.project = { ...withUndo.project, boardUndo: { count: 2, label: 'merge with next' } };
+    renderBoard(withUndo);
+
+    // Board header + open shot drawer header both expose Undo for the last edit.
+    const undoButtons = screen.getAllByRole('button', { name: 'Undo merge with next' });
+    expect(undoButtons).toHaveLength(2);
+    expect(undoButtons[0].textContent).toContain('Undo (2)');
+
+    fireEvent.click(undoButtons[0]);
+    expect(onUndoBoardEdit).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(undoButtons[1]);
+    expect(onUndoBoardEdit).toHaveBeenCalledTimes(2);
+
+    // Cmd+Z triggers undo when focus is not in a text input.
+    fireEvent.keyDown(window, { key: 'z', metaKey: true });
+    expect(onUndoBoardEdit).toHaveBeenCalledTimes(3);
+
+    // Cmd+Z inside an input/textarea keeps native text undo instead of triggering board undo.
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    input.focus();
+    fireEvent.keyDown(input, { key: 'z', metaKey: true });
+    expect(onUndoBoardEdit).toHaveBeenCalledTimes(3);
+    input.remove();
+  });
+
+  it('hides Undo when there are no recorded board edits', () => {
+    renderBoard(board([scene(1)], { onUndoBoardEdit: vi.fn() }));
+    expect(screen.queryByRole('button', { name: /^Undo/ })).toBeNull();
+  });
+});

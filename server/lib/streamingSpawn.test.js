@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { runStreamingCommand } from './streamingSpawn.js';
 import { isProcessAlive } from '../test/processAlive.js';
 
@@ -54,6 +54,24 @@ describe('runStreamingCommand', () => {
 
     expect(result).toEqual({ success: false, error: 'cancelled' });
   }, 20_000);
+
+  it('does not spawn an aborted command and waits for a running command to close on abort', async () => {
+    const controller = new AbortController();
+    let pid;
+    const running = runStreamingCommand(
+      NODE, ['-e', 'console.log(process.pid); setTimeout(() => {}, 60000)'],
+      (line) => { pid = Number(line); controller.abort(); },
+      { signal: controller.signal, timeoutMs: 10_000 },
+    );
+    expect(await running).toEqual({ success: false, error: 'cancelled' });
+    expect(pid).toBeGreaterThan(0);
+    expect(isProcessAlive(pid)).toBe(false);
+    const spawnImpl = vi.fn();
+    expect(await runStreamingCommand(NODE, [], undefined, { signal: controller.signal, spawnImpl })).toEqual({
+      success: false, error: 'cancelled',
+    });
+    expect(spawnImpl).not.toHaveBeenCalled();
+  });
 
   it('treats a throwing cancellation check as "not cancelled" rather than crashing', async () => {
     // The poll fires outside the Express request lifecycle: an uncaught throw

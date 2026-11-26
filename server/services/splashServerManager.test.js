@@ -46,6 +46,7 @@ vi.mock('./splashManagedRuntime.js', async (original) => ({
 
 import { getSplashManagedState, installSplashRuntime, saveSplashContextWindow, SPLASH_APP, startSplashServer, stopSplashServer, uninstallSplashRuntime } from './splashServerManager.js';
 import { SPLASH_VERSION, splashRoot } from './splashManagedRuntime.js';
+import { getSplashRuntimeStatus } from './splashRuntimeStatus.js';
 
 const mockedApp = (rest = {}) => ({ name: SPLASH_APP, status: 'not_found', ...rest });
 
@@ -90,6 +91,28 @@ afterEach(async () => {
   await rm(mocks.data, { recursive: true, force: true });
 });
 
+it('tails the verified Splash process and caps the log lines and line length', async () => {
+  await installSplashRuntime();
+  await startSplashServer();
+  mocks.pm2 = { ...mocks.pm2, status: 'errored' };
+  mocks.probe.mockResolvedValue({ state: 'missing' });
+  mocks.pm2Command.mockClear().mockResolvedValue({
+    stdout: Array.from({ length: 50 }, (_, index) => `line ${index}`).join('\n'),
+    stderr: `prefix${' '.repeat(2100)}engine failed\n`,
+  });
+  const status = await getSplashRuntimeStatus();
+  expect(status).toMatchObject({ repairRecommended: true });
+  expect(status.recentLogs).toHaveLength(40);
+  expect(status.recentLogs[0]).toBe('line 11');
+  expect(status.recentLogs.at(-1)).toHaveLength(2000);
+  expect(status.recentLogs.at(-1)).toMatch(/engine failed$/);
+  expect(mocks.pm2Command).toHaveBeenCalledWith(['logs', '42', '--nostream', '--lines', '40'], { timeoutMs: 3000 });
+  mocks.pm2Command.mockClear();
+  mocks.pm2 = { ...mocks.pm2, args: ['unrelated'] };
+  await expect(getSplashRuntimeStatus()).resolves.toMatchObject({ recentLogs: [] });
+  expect(mocks.pm2Command).not.toHaveBeenCalled();
+});
+
 it('installs the verified bundle and checkpoint, starts only from cache, and stops only the owned PM2 instance', async () => {
   await expect(getSplashManagedState()).resolves.toMatchObject({ installed: false, managed: false, requestedContextWindow: 65536 });
   await expect(startSplashServer()).rejects.toMatchObject({ code: 'SPLASH_NOT_INSTALLED' });
@@ -114,10 +137,10 @@ it('installs the verified bundle and checkpoint, starts only from cache, and sto
   const status = await getSplashManagedState({ includeLogs: true });
   expect(status).toMatchObject({ installed: true, managed: true });
   const { recentLogs } = status;
-  expect(recentLogs).toHaveLength(100);
-  expect(recentLogs[0]).toBe('fixture line 10');
+  expect(recentLogs).toHaveLength(40);
+  expect(recentLogs[0]).toBe('fixture line 70');
   expect(recentLogs.at(-1)).toBe('fixture line 109');
-  expect(mocks.pm2Command).toHaveBeenCalledWith(['logs', '42', '--nostream', '--lines', '100']);
+  expect(mocks.pm2Command).toHaveBeenCalledWith(['logs', '42', '--nostream', '--lines', '40'], { timeoutMs: 3000 });
   await expect(installSplashRuntime()).rejects.toThrow('Stop the PortOS-managed Splash');
   expect(mocks.download).toHaveBeenCalledTimes(1);
   await stopSplashServer();

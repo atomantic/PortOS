@@ -81,7 +81,7 @@ and `CI Gate` passes once the impact job's diff scan does. Two kinds of test qua
   file is always some *other* file the guard sees only as a path string. Left
   off the list they are structurally unselectable and can sit red on `main`
   while every PR reports green (issue #5055).
-- **Doc-parity guards** — `server/test/guards/repo/api-doc.test.js` and `server/test/guards/repo/deps-doc.test.js`
+- **Doc-parity guards** — `server/test/guards/repo/docsIntegrity.test.js`
   compare a `.md` with source they read rather than import
   (the route graph, the dependency manifests). The `.md` is documentation-only
   to the planner and the source has no import edge to the guard, so a docs-only

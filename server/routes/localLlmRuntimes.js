@@ -1,9 +1,10 @@
+import { randomUUID } from 'node:crypto'
 import { Router } from 'express'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
 import { validateRequest } from '../lib/validateRequest.js'
 import {
   localLlmLlamaServerStartSchema, localLlmMtplxStartSchema, localLlmSlotstreamStartSchema,
-  managedInklingActionSchema, splashContextSchema, localLlmSpecModelDownloadSchema,
+  managedInklingActionSchema, managedInklingCancelSchema, mkserveInstallSchema, splashContextSchema, localLlmSpecModelDownloadSchema,
   localLlmMtplxSearchSchema, localLlmMtplxPullSchema, localLlmMtplxRemoveSchema, localLlmSlotstreamDownloadSchema,
 } from '../lib/mediaValidation.js'
 import {
@@ -76,7 +77,7 @@ const runtimeAdapters = {
   splash: {
     label: 'Splash',
     background: true,
-    status: (options) => getSplashRuntimeStatus(undefined, options),
+    status: getSplashRuntimeStatus,
     start: startSplashServer,
     stop: stopSplashServer,
     install: installSplashRuntime,
@@ -90,6 +91,7 @@ const runtimeAdapters = {
     start: startMkserveServer,
     stop: stopMkserveServer,
     install: installMkserve,
+    installSchema: mkserveInstallSchema,
     upgrade: installMkserve,
     uninstall: uninstallMkserve,
   },
@@ -114,7 +116,7 @@ const statusRoute = (runtime) => asyncHandler(async (req, res) => {
   const { status: readStatus, background } = runtimeAdapters[runtime]
   const status = await readStatus({ includeLogs: requestHasHostControl(req) })
   res.json(background ? {
-    ...status, operation: bundleOperations.get(runtime) ?? null, lastError: bundleErrors.get(runtime) ?? null,
+    ...status, operation: bundleOperations.get(runtime)?.operation ?? null, lastError: bundleErrors.get(runtime) ?? null,
   } : status)
 })
 
@@ -168,42 +170,65 @@ const uninstallRoute = (runtime) => asyncHandler(async (_req, res) => {
 const bundleOperations = new Map()
 const bundleErrors = new Map()
 const bundleActionRoute = (runtime, action) => asyncHandler(async (req, res) => {
-  const { label, [action]: run } = runtimeAdapters[runtime]
-  validateRequest(managedInklingActionSchema, req.body ?? {})
+  const { label, [action]: run, installSchema } = runtimeAdapters[runtime]
+  const schema = action === 'install' && installSchema ? installSchema : managedInklingActionSchema
+  const options = validateRequest(schema, req.body ?? {})
   if (bundleOperations.has(runtime)) {
     throw new ServerError(`${label} already has an operation in progress.`, { status: 409 })
   }
   const emit = emitter(req)
   const scope = { runtime }
-  const operation = { action, message: '' }
+  const controller = ['install', 'upgrade'].includes(action) ? new AbortController() : null
+  const operation = { id: randomUUID(), action: options.repair ? 'repair' : action, message: '' }
   bundleErrors.delete(runtime)
-  bundleOperations.set(runtime, operation)
+  bundleOperations.set(runtime, { operation, controller })
   const report = (progress) => {
     const message = typeof progress === 'string' ? progress : progress?.message
-    if (!message || bundleOperations.get(runtime) !== operation) return
+    if (!message || controller?.signal.aborted || bundleOperations.get(runtime)?.operation !== operation) return
     operation.message = `${label}: ${message}`
-    emit('progress', operation.message, scope)
+    emit('progress', operation.message, { ...scope, operation: { ...operation } })
   }
-  report({ install: 'Preparing installation', upgrade: 'Preparing update', start: 'Starting', stop: 'Stopping', uninstall: 'Removing runtime files' }[action])
+  report({ install: 'Preparing installation', repair: 'Preparing repair', upgrade: 'Preparing update', start: 'Starting', stop: 'Stopping', uninstall: 'Removing runtime files' }[operation.action])
   res.status(202).json({ operation })
-  void Promise.resolve().then(() => run({ onProgress: report })).then(
+  void Promise.resolve().then(() => run({ ...options, onProgress: report, signal: controller?.signal })).then(
     () => {
       bundleOperations.delete(runtime)
       resetProviderReadinessCache()
-      const done = { install: 'installation complete', upgrade: 'update complete', start: 'start completed', stop: 'stopped', uninstall: 'uninstalled' }[action]
-      emit('complete', `${label}: ${done}.`, scope)
+      const done = { install: 'installation complete', repair: 'repair complete', upgrade: 'update complete', start: 'start completed', stop: 'stopped', uninstall: 'uninstalled' }[operation.action]
+      emit('complete', `${label}: ${done}.`, { ...scope, operation: null, lastError: null })
       // Their start only resolves once the model answers, so no readiness wait.
       if (action === 'start') refreshRuntimeModels(req, runtime)
     },
     (err) => {
       bundleOperations.delete(runtime)
       resetProviderReadinessCache()
+      if (controller?.signal.aborted && (err === controller.signal.reason || err?.name === 'AbortError')) {
+        emit('cancelled', `${label}: ${operation.action === 'repair' ? 'Repair' : 'Installation'} cancelled.`, { ...scope, operation: null, lastError: null })
+        return
+      }
       const message = err instanceof ServerError ? (err.responseMessage || err.message) : 'Operation failed. See PortOS server logs for details.'
       if (!(err instanceof ServerError)) console.error(`❌ ${label} ${action} failed: ${err?.message ?? 'Unknown error'}`)
       bundleErrors.set(runtime, message)
-      emit('error', `${label}: ${message}`, scope)
+      emit('error', `${label}: ${message}`, { ...scope, operation: null, lastError: message })
     },
   )
+})
+
+const bundleCancelRoute = (runtime) => asyncHandler(async (req, res) => {
+  const { label } = runtimeAdapters[runtime]
+  const { operationId } = validateRequest(managedInklingCancelSchema, req.body ?? {})
+  const active = bundleOperations.get(runtime)
+  if (!active?.controller || (operationId && active.operation.id !== operationId)) {
+    return res.json({ cancelled: false })
+  }
+  const { controller, operation } = active
+  if (!controller.signal.aborted) {
+    controller.abort()
+    operation.cancelling = true
+    operation.message = `${label}: Cancelling ${operation.action === 'repair' ? 'repair' : 'installation'}…`
+    emitter(req)('progress', operation.message, { runtime, operation: { ...operation } })
+  }
+  res.json({ cancelled: true, operation })
 })
 
 router.get('/llama-server/status', statusRoute('llama'))
@@ -226,6 +251,7 @@ router.post('/slotstream/uninstall', uninstallRoute('slotstream'))
 router.get('/splash/status', statusRoute('splash'))
 router.post('/splash/install', bundleActionRoute('splash', 'install'))
 router.post('/splash/upgrade', bundleActionRoute('splash', 'upgrade'))
+router.post('/splash/cancel', bundleCancelRoute('splash'))
 router.post('/splash/start', bundleActionRoute('splash', 'start'))
 router.post('/splash/stop', bundleActionRoute('splash', 'stop'))
 router.post('/splash/uninstall', bundleActionRoute('splash', 'uninstall'))
@@ -233,6 +259,7 @@ router.post('/splash/uninstall', bundleActionRoute('splash', 'uninstall'))
 router.get('/mkserve/status', statusRoute('mkserve'))
 router.post('/mkserve/install', bundleActionRoute('mkserve', 'install'))
 router.post('/mkserve/upgrade', bundleActionRoute('mkserve', 'upgrade'))
+router.post('/mkserve/cancel', bundleCancelRoute('mkserve'))
 router.post('/mkserve/start', bundleActionRoute('mkserve', 'start'))
 router.post('/mkserve/stop', bundleActionRoute('mkserve', 'stop'))
 router.post('/mkserve/uninstall', bundleActionRoute('mkserve', 'uninstall'))

@@ -78,7 +78,11 @@ export default function LocalLlmRuntimesView({ view } = {}) {
   const [statuses, setStatuses] = useState({});
   const { llama: llamaStatus, mtplx: mtplxStatus, slotstream: slotstreamStatus } = statuses;
   const statusRequests = useRef({});
+  const bundleProgress = useRef({});
   const [runtimeConfirm, setRuntimeConfirm] = useState(null);
+  const confirmationCopy = runtimeConfirm?.action === 'uninstall'
+    ? runtimeConfirm.descriptor.copy.uninstallDetail
+    : runtimeConfirm?.action === 'repair' && runtimeConfirm.descriptor.copy.repair;
   // The dedicated Qwen host is a docker container rather than a PM2 process, so
   // it is not part of the shared local-LLM status payload — but it IS a local
   // model server, and this is the page an operator comes to when they want to
@@ -89,10 +93,17 @@ export default function LocalLlmRuntimesView({ view } = {}) {
   const loadRuntime = useCallback(async (id) => {
     const { api, kind } = LOCAL_RUNTIME_DESCRIPTORS[id];
     const requestId = Symbol(id);
+    const progressAtRequest = bundleProgress.current[id];
     statusRequests.current[id] = requestId;
     const result = await api.status({ silent: true }).catch(() => null);
     if (statusRequests.current[id] !== requestId) return result;
-    if (result || kind === 'bundle') setStatuses((previous) => ({ ...previous, [id]: result }));
+    if (result || kind === 'bundle') {
+      setStatuses((previous) => {
+        if (bundleProgress.current[id] === progressAtRequest) return { ...previous, [id]: result };
+        const { operation, lastError } = previous[id] ?? {};
+        return { ...previous, [id]: { ...(result ?? previous[id]), operation, lastError } };
+      });
+    }
     // Keep version/package-manager probing off the lifecycle status critical path.
     if (result?.installed && api.updateStatus) {
       api.updateStatus({ silent: true }).then((update) => {
@@ -111,6 +122,22 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     delete statusRequests.current[id];
     setStatuses((previous) => ({ ...previous, [id]: { ...previous[id], ...result } }));
   };
+
+  const applyBundleProgress = useCallback(({ runtime: id, event, message, operation, lastError }) => {
+    if (LOCAL_RUNTIME_DESCRIPTORS[id]?.kind !== 'bundle') return;
+    bundleProgress.current[id] = Symbol(id);
+    setStatuses((previous) => {
+      const current = previous[id];
+      if (operation === undefined && event === 'progress') {
+        if (!current?.operation) return previous;
+        return { ...previous, [id]: { ...current, operation: { ...current.operation, message } } };
+      }
+      return {
+        ...previous,
+        [id]: { ...current, operation: operation ?? null, lastError: lastError ?? null },
+      };
+    });
+  }, []);
 
   const [mtplxDownload, clearMtplxDownload] = useRuntimeDownloadProgress('mtplx:download', () => loadRuntime('mtplx'));
   const [slotstreamDownload, clearSlotstreamDownload] = useRuntimeDownloadProgress('slotstream:download', () => loadRuntime('slotstream'));
@@ -143,12 +170,12 @@ export default function LocalLlmRuntimesView({ view } = {}) {
   const {
     status, loading, loadStatus, runAction, installBackend: installRuntimeBackend,
     actionInProgress, busy, progressMsg, confirmAction, setConfirmAction,
-  } = useLocalLlmStatus({ onRefresh: refreshRuntimes });
+  } = useLocalLlmStatus({ onRefresh: refreshRuntimes, onProgress: applyBundleProgress });
   const llamaBusy = actionInProgress?.endsWith('-llama');
+  const activeBundles = descriptors.filter(({ id, kind }) => kind === 'bundle' && statuses[id]?.operation);
   const runRuntimeAction = (id, action, payload) => {
     if (busy) return;
     const { api, kind, copy } = LOCAL_RUNTIME_DESCRIPTORS[id];
-    const invoke = () => action === 'start' ? api.start(payload ?? {}) : api[action]();
     const key = `runtime-${action}-${id}`;
     if (id === 'llama' && action !== 'upgrade') {
       const failureMessage = `Failed to ${action} ${action === 'install' ? 'llama.cpp' : 'llama-server'}`;
@@ -168,11 +195,16 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     }
     if (kind === 'bundle') {
       return runAction(key, async () => {
-        const result = await invoke();
-        mergeRuntimeStatus(id, { ...result, lastError: null });
+        const progressAtRequest = bundleProgress.current[id];
+        const result = await (action === 'cancel' ? api.cancel(payload) : api[action]());
+        // A socket frame may arrive before the HTTP response for the same action.
+        if (result?.operation && bundleProgress.current[id] === progressAtRequest) {
+          mergeRuntimeStatus(id, { operation: result.operation, lastError: null });
+        }
         return result;
       });
     }
+    const invoke = () => action === 'start' ? api.start(payload ?? {}) : api[action]();
     return runAction(key, invoke, copy?.[action]).then(() => loadRuntime(id));
   };
   const runtimeAction = (id, action, payload) => {
@@ -186,7 +218,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
   const confirmRuntimeAction = () => {
     const { descriptor, action } = runtimeConfirm;
     setRuntimeConfirm(null);
-    runRuntimeAction(descriptor.id, action === 'repair' ? 'install' : action);
+    runRuntimeAction(descriptor.id, action);
   };
   const updateSplashContext = (contextWindow) => runAction(
     'runtime-context-splash',
@@ -341,14 +373,8 @@ export default function LocalLlmRuntimesView({ view } = {}) {
         <Modal open onClose={() => setRuntimeConfirm(null)} size="sm" usePortal
           ariaLabel={`${RUNTIME_CHANGE_LABELS[runtimeConfirm.action]} ${runtimeConfirm.descriptor.label}`}>
           <div className="rounded-xl border border-port-border bg-port-card p-5 space-y-4">
-            {runtimeConfirm.action === 'uninstall' ? (
-              <p className="text-sm text-white">{runtimeConfirm.descriptor.copy.uninstallDetail}</p>
-            ) : (
-              <>
-                <p className="text-sm text-white">{runtimeConfirm.descriptor.copy.download}</p>
-                <p className="text-xs text-gray-400">This stages the PortOS-supported version. Existing providers and other runtimes are not changed.</p>
-              </>
-            )}
+            <p className="text-sm text-white">{confirmationCopy || runtimeConfirm.descriptor.copy.download}</p>
+            {!confirmationCopy && <p className="text-xs text-gray-400">This stages the PortOS-supported version. Existing providers and other runtimes are not changed.</p>}
             <div className="flex flex-wrap justify-end gap-2">
               <button type="button" onClick={() => setRuntimeConfirm(null)} className="min-h-[44px] rounded border border-port-border px-3 text-sm text-gray-300">Cancel</button>
               <button type="button" onClick={confirmRuntimeAction} disabled={busy} className="min-h-[44px] rounded bg-port-accent px-3 text-sm text-white disabled:opacity-50">
@@ -360,12 +386,15 @@ export default function LocalLlmRuntimesView({ view } = {}) {
       )}
       <h2 id="llm-runtimes-heading" className="sr-only">Runtimes</h2>
       {/* One start/stop/install surface for every local server PortOS can run */}
-      {(progressMsg || busy || mtplxDownload || slotstreamDownload || llamaDownloading) && (
+      {(progressMsg || busy || mtplxDownload || slotstreamDownload || activeBundles.length > 0 || llamaDownloading) && (
         <div role="status" className="flex flex-wrap items-center gap-3 rounded-lg border border-port-accent/30 p-3 text-sm text-port-accent">
-          <BrailleSpinner />{progressMsg || 'Runtime work in progress'}
+          <BrailleSpinner />{progressMsg || statuses[activeBundles[0]?.id]?.operation?.message || 'Runtime work in progress'}
           {(llamaBusy || llamaDownloading) && <Link className="underline" to={`/models/llms-runtimes/llama${search}`}>llama.cpp progress</Link>}
           {mtplxDownload && <Link className="underline" to={`/models/llms-runtimes/mtplx${search}`}>MTPLX progress</Link>}
           {slotstreamDownload && <Link className="underline" to={`/models/llms-runtimes/slotstream${search}`}>Slotstream progress</Link>}
+          {activeBundles.map(({ id, label }) => (
+            <Link key={id} className="underline" to={`/models/llms-runtimes/${id}${search}`}>{label} progress</Link>
+          ))}
         </div>
       )}
       <div className="@container">

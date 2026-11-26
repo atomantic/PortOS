@@ -216,6 +216,8 @@ export const localLlmLmStudioServiceSchema = z.object({ action: z.enum(['start',
 // These curated runtimes never accept a host, port, executable, or artifact
 // override from an HTTP request.
 export const managedInklingActionSchema = z.strictObject({});
+export const mkserveInstallSchema = z.strictObject({ repair: z.boolean().optional() });
+export const managedInklingCancelSchema = z.strictObject({ operationId: z.uuid().optional() });
 
 export const splashContextSchema = z.strictObject({
   contextWindow: z.number().refine(isSplashContextWindow, 'Choose a supported Splash context window'),

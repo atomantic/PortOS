@@ -80,15 +80,17 @@ function guardedProgress(onProgress) {
   };
 }
 
-export function installSplashRuntime({ onProgress = () => {} } = {}) {
+export function installSplashRuntime({ onProgress = () => {}, signal } = {}) {
   return withSplashOperation('install', async () => {
     const version = await readInstalledSplashVersion();
+    signal?.throwIfAborted();
     if (version) {
       const status = await daemon.requireStatus(version);
+      signal?.throwIfAborted();
       if (status.owned && status.active) throw fail('Stop the PortOS-managed Splash server before updating it.');
       if (status.owned) await daemon.remove(status);
     }
-    await installPinnedSplash({ previousVersion: version, emit: guardedProgress(onProgress) });
+    await installPinnedSplash({ previousVersion: version, emit: guardedProgress(onProgress), signal });
     return { success: true, message: `Splash ${SPLASH_VERSION} and Inkling 2 Mini are installed. Start Splash when ready.` };
   });
 }
