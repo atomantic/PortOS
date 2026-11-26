@@ -244,6 +244,25 @@ export const ERROR_PATTERNS = [
     })
   },
   {
+    // The same launcher sign-in, caught before it fails on its own: the TUI
+    // spawner's 45s input-ready deadline (`tui-not-ready`) fires while the
+    // launcher is still painting its "waiting for login" spinner, well inside
+    // its five-minute timeout, so neither terminal line above ever reaches the
+    // transcript. The generic startup-failure verdict then burned three retries
+    // on the same provider and filed an investigation for a human-only fix.
+    // Anchored to the END of the window: only a run that died still waiting on
+    // the sign-in matches, never one that quotes the spinner and moved on.
+    pattern: /[⠀-⣿][^\S\n]*Waiting for [\w .-]{1,40} login in your browser…\s*$/i,
+    category: 'auth-error',
+    actionable: false,
+    origin: 'provider',
+    extract: () => ({
+      message: 'Provider launcher is waiting on an interactive browser sign-in that no one can complete',
+      suggestedFix: "The provider launcher's cached credential expired and could not refresh, so it stopped at a browser login before the CLI ever started. Sign in once interactively with the launcher's own credential command, then retry; meanwhile the provider is benched and runs use the fallback.",
+      requiresFallback: true
+    })
+  },
+  {
     pattern: /API Error: 401|authentication|unauthorized/i,
     category: 'auth-error',
     actionable: true,
