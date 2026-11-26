@@ -194,7 +194,7 @@ function streamMultipart(req, boundary, acceptedNames, maxSize, fileFilter, next
       const mimeMatch = headerStr.match(/Content-Type:\s*([^\r\n]+)/i);
       currentFileMimetype = mimeMatch ? mimeMatch[1].trim() : 'application/octet-stream';
       if (isMatchingFile) {
-        // `fieldname` matches multer's API contract — videoGen.js's filter
+        // `fieldname` matches multer's API contract — videoGenRender.js's filter
         // dispatches on it to enforce per-field MIME rules (image/* on
         // sourceImage|lastImage, audio/* on audioFile).
         const fileMeta = { fieldname: currentName, originalname: currentFilename, mimetype: currentFileMimetype };
@@ -205,7 +205,7 @@ function streamMultipart(req, boundary, acceptedNames, maxSize, fileFilter, next
           // body and can't pause headers indefinitely without buffering
           // unbounded bytes for the next part. (multer's docs allow async
           // filters, but in this codebase all callers — appleHealth.js
-          // and videoGen.js — are sync. We surface a clear error if a
+          // and videoGenRender.js — are sync. We surface a clear error if a
           // future async filter slips in instead of crashing on `fr.err`
           // dereference.)
           let fr = null;
