@@ -56,13 +56,9 @@ export const rememberTtsSentence = (recent, sentence, { now = Date.now(), window
 };
 
 // Per-socket echo buffers registered by `sockets/voice.js`. Server-emitted
-// proactive speech (`speakProactive`) broadcasts to every connected client
-// but has no socket context of its own, so it can't reach into a single
-// socket's `state.recentTts`. This module-scope registry lets the proactive
-// path write a remembered sentence into every active socket's buffer in one
-// call, so the next user turn picks up echoed proactive audio and drops it
-// just like an in-turn TTS line. Single-instance app, so a process-wide
-// registry is fine.
+// proactive speech can bleed into the microphone of any active voice tab.
+// The registry lets every tab recognize the spoken sentence as echo, even
+// when the audio played through a different tab.
 const echoBuffers = new Set();
 
 export const registerEchoBuffer = (buf) => {

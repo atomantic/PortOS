@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Stub config + tts + timezone before importing the module — the pure-function
 // branches need no mocks but speakProactive integration does.
+vi.mock('../authGate.js', () => ({
+  socketHasCurrentHostControl: vi.fn(async (socket) => socket.data?.portosLocalConnection === true),
+}));
 vi.mock('./config.js', () => ({
   getVoiceConfig: vi.fn(async () => ({
     enabled: true,
@@ -149,8 +152,16 @@ describe('speakProactive', () => {
   const makeIo = () => {
     const emit = vi.fn();
     const socketEmit = vi.fn();
-    registerVoiceOutputCandidate({ id: 'recipient', connected: true, emit: socketEmit });
-    return { io: { emit }, emit, socketEmit };
+    const socket = {
+      id: 'recipient',
+      connected: true,
+      rooms: new Set(),
+      data: { portosLocalConnection: true },
+      emit: socketEmit,
+    };
+    registerVoiceOutputCandidate(socket);
+    const sockets = new Map([[socket.id, socket]]);
+    return { io: { emit, sockets: { sockets } }, emit, socketEmit };
   };
 
   beforeEach(() => __resetVoiceOutput());
@@ -206,6 +217,13 @@ describe('speakProactive', () => {
     expect(payload.wav).toBeInstanceOf(Buffer);
     expect(payload.priority).toBe('normal');
     expect(payload.source).toBe('cos');
+  });
+
+  it('returns no-recipient when no socket is eligible for speech', async () => {
+    const io = { emit: vi.fn(), sockets: { sockets: new Map() } };
+    const result = await speakProactive({ io, text: 'Example reminder' });
+    expect(result).toEqual({ ok: false, reason: 'no-recipient' });
+    expect(io.emit).not.toHaveBeenCalled();
   });
 
   it('registers the spoken sentence in every registered echo buffer', async () => {
