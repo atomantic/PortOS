@@ -66,7 +66,7 @@ export function formatSetupGuide(guide, { localUrl, setupUrl } = {}) {
   lines.push('', 'AI provider setup (enable at least one runnable option):');
   lines.push('  • Subscription CLI: use a CLI you already installed and authenticated (Claude Code, Codex, or Antigravity).');
   lines.push('  • API provider: add the key for the paid provider you intend to use.');
-  lines.push('  • Local/private: install Ollama or LM Studio plus a model under Models → LLMs.');
+  lines.push('  • Local/private: install Ollama or LM Studio under Models → Runtimes and download a model under Models → Model Library.');
   lines.push('  PortOS marks missing CLIs, keys, runtimes, and models in the Setup page; it never enables a paid provider automatically.');
   if (setupUrl) lines.push(`  Open setup: ${setupUrl}`);
   if (guide.trustedUrl) lines.push('', `Trusted PortOS URL: ${guide.trustedUrl}`);

@@ -95,6 +95,8 @@ describe('setup walkthrough formatting', () => {
     expect(output).toContain('Subscription CLI');
     expect(output).toContain('API provider');
     expect(output).toContain('Local/private');
+    expect(output).toContain('Models → Runtimes');
+    expect(output).toContain('Models → Model Library');
     expect(output).toContain('Open setup: http://localhost:5555/capabilities');
     expect(output).toContain('Local PortOS URL: http://localhost:5555');
   });
