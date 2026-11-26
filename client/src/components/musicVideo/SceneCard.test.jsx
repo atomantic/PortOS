@@ -6,7 +6,7 @@ vi.mock('../../hooks/useFilmLookPresets.js', () => ({ default: () => ({ presets:
 vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: vi.fn(() => ({})) }));
 vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({ ...(await importOriginal()), getMusicVideoMediaPool: vi.fn(async () => ({ items: [] })) }));
 vi.mock('../../services/apiImageVideo.js', async (importOriginal) => ({
-  ...(await importOriginal()), previewImagePrompt: vi.fn(async (body) => ({ sentPrompt: body.prompt, promptAdditions: [] })), previewVideoPrompt: vi.fn(async () => ({ backend: 'grok', sentPrompt: 'Cast reference preview', promptAdditions: [] })),
+  ...(await importOriginal()), getVideoHistoryItem: vi.fn(async () => null), previewImagePrompt: vi.fn(async (body) => ({ sentPrompt: body.prompt, promptAdditions: [] })), previewVideoPrompt: vi.fn(async () => ({ backend: 'grok', sentPrompt: 'Cast reference preview', promptAdditions: [] })),
 }));
 vi.mock('../../services/apiTracks.js', async (importOriginal) => ({ ...(await importOriginal()), listTracks: vi.fn(async () => []) }));
 import SceneCard from './SceneCard.jsx';
@@ -26,6 +26,22 @@ beforeEach(() => {
   localStorage.clear();
   useVideoFileSrc.mockReturnValue({});
   previewVideoPrompt.mockClear();
+});
+
+it.each([
+  ['Frames', 'image', 'alternate.png'],
+  ['Clip', 'video', 'alternate-clip'],
+])('offers Move on an unused take in the %s tab', (tab, kind, assetId) => {
+  const onMoveTake = vi.fn();
+  const take = { takeId: 'alternate', assetId, kind, status: 'candidate' };
+  const scene = { sceneId: 's1', order: 0, startSec: 0, endSec: 4, referenceImageId: 'frame.png', videoHistoryId: 'clip', takes: [take] };
+  const project = { id: 'mv-1', scenes: [scene, { sceneId: 's2', order: 1 }] };
+  render(<SceneCard scene={scene} project={project} position={{ index: 0 }}
+    actions={{ onGenerateEndFrame: vi.fn(), onReviewTake: vi.fn(), onSelectTake: vi.fn(), onMoveTake, onEditLocal: vi.fn(), onSave: vi.fn() }} />);
+  show(tab);
+  fireEvent.click(screen.getByRole('button', { name: 'Move', exact: true }));
+  fireEvent.change(screen.getByRole('combobox', { name: 'Move take to shot' }), { target: { value: 's2' } });
+  expect(onMoveTake).toHaveBeenCalledWith(scene, expect.objectContaining({ takeId: 'alternate', kind }), 's2');
 });
 
 it('holds Render while clip references are saving or failed and releases it after a retry', async () => {
