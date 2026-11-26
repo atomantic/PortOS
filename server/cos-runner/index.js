@@ -31,6 +31,8 @@ import { ensureDir as defaultEnsureDir, PATHS } from '../lib/fileUtils.js';
 import {
   prepareCliSpawn as defaultPrepareCliSpawn,
   killProcessTree as defaultKillProcessTree,
+  confirmWindowsProcessTreeExit,
+  pendingWindowsProcessTreeExit,
   guardChildStdin as defaultGuardChildStdin,
   deliverChildStdin as defaultDeliverChildStdin,
 } from '../lib/bufferedSpawn.js';
@@ -742,6 +744,8 @@ export function createCosRunner(deps = {}) {
     claudeProcess.on('close', lifecycle.agentExit(agentId, agent, async (code) => {
       cleanupPromptFile();
       try {
+        const treeExit = pendingWindowsProcessTreeExit(claudeProcess);
+        if (treeExit) await treeExit;
         agent.exited = true;
         await agent.stopSecurityScan?.();
         // Cancel any pending SIGKILL timer — process already exited.
@@ -882,7 +886,9 @@ export function createCosRunner(deps = {}) {
 
     console.log(`💀 Force killing agent ${agentId} (PID: ${agent.pid})`);
     await agent.stopSecurityScan?.();
-    killProcessTree(agent.process, 'SIGKILL');
+    const treeExit = confirmWindowsProcessTreeExit(agent.process, proc.platform === 'win32');
+    if (treeExit) await treeExit;
+    else killProcessTree(agent.process, 'SIGKILL');
 
     // Clean up immediately
     activeAgents.delete(agentId);
