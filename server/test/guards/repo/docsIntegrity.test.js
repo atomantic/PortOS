@@ -647,8 +647,6 @@ const RATCHET_SLACK_BYTES = 2 * 1024;
 // Each ceiling must stay within 2 KB of the file's actual size so shrinking
 // a doc forces its entry down or out.
 const SIZE_RATCHET_CEILINGS = {
-  'BACKUP.md': 48200,
-  'BACKUP_PUBLICATION_ADMISSION.md': 41800,
   'HTML_COMPOSITIONS.md': 67233,
   'TROUBLESHOOTING.md': 46000,
   'FEDERATED_MEDIA_PROVIDERS.md': 45625,
