@@ -473,12 +473,14 @@ const finishPlan = (plan, options = {}) => {
     fansOut(runner, plan[runner], reachSelected[runner], browserSuites[runner]) ? 'full' : plan[runner].mode,
     FULL_SUITE_SHARDS[runner],
   );
+  const browserSuitesSelected = plan.browserFiles.length;
+  const browserShardCount = browserSuitesSelected >= FULL_SUITE_SHARDS.browser ? FULL_SUITE_SHARDS.browser
+    : browserSuitesSelected >= 4 ? 4
+      : browserSuitesSelected > 1 ? 2 : 1;
   const shards = {
     server: linuxShards('server'),
     client: linuxShards('client'),
-    // Four shards put the serial-capture backlog on separate runners; see
-    // scripts/lib/browserSuites.js for the balanced owner tables.
-    browser: plan.browserFiles.length >= 4 ? [1, 2, 3, 4] : plan.browserFiles.length > 1 ? [1, 2] : [1],
+    browser: shardIndexes('full', browserShardCount),
     // The native contract set stays on one runner and never follows the
     // application import graph, even when the primary jobs run full suites.
     windows: [1],

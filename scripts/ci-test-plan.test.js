@@ -2011,7 +2011,7 @@ describe('CI test impact planner', () => {
     expect(full.shards).toEqual({
       server: shardIndexes('full', FULL_SUITE_SHARDS.server),
       client: [1, 2, 3, 4, 5, 6],
-      browser: [1, 2, 3, 4],
+      browser: [1, 2, 3, 4, 5, 6, 7],
       windows: shardIndexes('full', FULL_SUITE_SHARDS.windows),
     });
     const scoped = buildCiTestPlan(['server/services/auth.js'], { trackedFiles: TRACKED });
@@ -2025,6 +2025,16 @@ describe('CI test impact planner', () => {
     expect(exactWindows).toMatchObject({ windowsMode: 'files', shards: { windows: [1] } });
     const docsOnly = buildCiTestPlan(['docs/README.md'], { trackedFiles: TRACKED });
     expect(docsOnly.shards).toEqual({ server: [1], client: [1], browser: [1], windows: [1] });
+  });
+
+  it.each([
+    [0, [1]], [1, [1]], [2, [1, 2]], [3, [1, 2]],
+    [4, [1, 2, 3, 4]], [6, [1, 2, 3, 4]], [7, [1, 2, 3, 4, 5, 6, 7]],
+  ])('chooses browser runners for %i selected suites without widening coverage', (suiteCount, shards) => {
+    const browserFiles = BROWSER_SUITES.slice(0, suiteCount);
+    const plan = buildCiTestPlan(browserFiles, { trackedFiles: [...TRACKED, ...BROWSER_SUITES] });
+    expect(plan.browserFiles).toEqual([...browserFiles].sort());
+    expect(plan.shards.browser).toEqual(shards);
   });
 
   it('never selects a model-capability fixture sandbox as a suite on a feature-name match', () => {

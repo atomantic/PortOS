@@ -417,7 +417,8 @@ under the run's own key only.
 
 Smoke can use a different stable shard assignment. Smoke jobs read all trusted
 full-run browser shard lineages, so a suite that moves can still reuse its
-former owner's verdict.
+former owner's verdict. The seven-shard browser matrix uses the matching
+four-shard cache lineage when a current lineage has not been seeded.
 Full-profile jobs keep their per-partition restore and save behavior.
 
 `smoke` skips `[fidelity]` cases and `full` skips `[local-performance]` ones.

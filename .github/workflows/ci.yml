@@ -535,8 +535,8 @@ jobs:
     # Owns the registered browser suites; the Linux unit job excludes that
     # exact registry. PRs run the smoke profile; scheduled, release and
     # dispatched runs run the complete profile. No Postgres: the suites run on
-    # the file backend under NODE_ENV=test. The planner uses one shard for one
-    # suite, two for two or three, and four for four or more. Quiet-project
+    # the file backend under NODE_ENV=test. The planner keeps one-, two-, and
+    # four-shard scoped plans and gives broad plans seven runners. Quiet-project
     # sequencing and the per-runner watchdog are unchanged.
     name: Browser suites (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: impact
@@ -561,7 +561,7 @@ jobs:
         with:
           vitest-key-suffix: -browser-${{ matrix.shard }}of${{ strategy.job-total }}
 
-      # Smoke can use all four trusted full-run lineages because smaller
+      # Smoke can use every trusted full-run lineage because smaller
       # selections can use different shard owners. Per-test keys still require
       # compatible inputs and coverage.
       - name: Restore the test memo
@@ -570,7 +570,8 @@ jobs:
         with:
           suite: browser
           partition: browser-${{ matrix.shard }}of${{ strategy.job-total }}
-          merge-shards: ${{ env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '4' || '0' }}
+          merge-shards: ${{ env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '7' || '0' }}
+          legacy-shards: '4'
 
       # Plan before installing ffmpeg/client deps so shards 100% covered by the
       # memo skip both. Uses the same env keys as the test step below.
