@@ -3,6 +3,7 @@ import { Check, ExternalLink, Save } from 'lucide-react';
 import Drawer from '../Drawer';
 import GitHubNotificationCard from '../github/GitHubNotificationCard';
 import useAsyncAction from '../../hooks/useAsyncAction';
+import useMounted from '../../hooks/useMounted';
 import { localDateKey } from '../../utils/formatters';
 import { getThread, updateThread } from '../../services/apiBrainThreads.js';
 import { updateReviewItem } from '../../services/apiReview.js';
@@ -35,36 +36,51 @@ export default function ActionDetailDrawer({
 }) {
   const isThread = item?.source === 'threads';
   const isTodo = item?.source === 'todo';
+  const threadRef = isThread ? item.sourceRef : null;
+  // Review keys the drawer by action ID, so a switch disposes this save's owner.
+  const mounted = useMounted();
   const [record, setRecord] = useState(item);
   const [draft, setDraft] = useState(() => (isThread ? threadDraft(item) : {
     title: item?.title || '',
     description: item?.summary || '',
   }));
 
+  const [threadLoadState, setThreadLoadState] = useState(() => {
+    if (!isThread) return 'idle';
+    return threadRef ? 'loading' : 'error';
+  });
+  const [threadLoadAttempt, setThreadLoadAttempt] = useState(0);
+  const canEdit = (isThread && threadLoadState === 'ready') || isTodo;
+
   useEffect(() => {
-    if (!item) return;
+    if (!threadRef) return;
     let cancelled = false;
-    setRecord(item);
-    setDraft(isThread ? threadDraft(item) : {
-      title: item.title || '',
-      description: item.summary || '',
-    });
-    if (isThread && item.sourceRef) {
-      getThread(item.sourceRef, { silent: true })
-        .then((full) => {
-          if (cancelled) return;
-          setRecord(full);
-          setDraft(threadDraft(full));
-        })
-        .catch(() => null);
-    }
+    getThread(threadRef, { silent: true })
+      .then((full) => {
+        if (cancelled) return;
+        if (full?.id !== threadRef) {
+          setThreadLoadState('error');
+          return;
+        }
+        setRecord(full);
+        setDraft(threadDraft(full));
+        setThreadLoadState('ready');
+      })
+      .catch(() => {
+        if (!cancelled) setThreadLoadState('error');
+      });
     return () => { cancelled = true; };
-  }, [item?.id, item?.sourceRef, isThread]);
+  }, [threadRef, threadLoadAttempt]);
+
+  const retryThreadLoad = () => {
+    setThreadLoadState('loading');
+    setThreadLoadAttempt((attempt) => attempt + 1);
+  };
 
   const [save, saving] = useAsyncAction(async () => {
-    if (!item || !draft || (!isThread && !isTodo)) return null;
+    if (!canEdit || !draft.title.trim()) return null;
     const updated = isThread
-      ? await updateThread(item.sourceRef, {
+      ? await updateThread(threadRef, {
         title: draft.title.trim(),
         status: draft.status,
         priority: draft.priority,
@@ -76,6 +92,7 @@ export default function ActionDetailDrawer({
         title: draft.title.trim(),
         description: draft.description.trim(),
       }, { silent: true });
+    if (!mounted.current) return updated;
     setRecord((previous) => ({ ...previous, ...updated }));
     setDraft(isThread ? threadDraft({ ...record, ...updated }) : {
       title: updated.title || '',
@@ -134,62 +151,77 @@ export default function ActionDetailDrawer({
         {(isThread || isTodo) && (
           <section className="space-y-3">
             <h3 className="text-sm font-semibold text-white">Edit commitment</h3>
-            <label className="block text-xs text-gray-400" htmlFor="action-detail-title">
-              Title
-              <input
-                id="action-detail-title"
-                value={draft?.title || ''}
-                onChange={(e) => updateDraft({ title: e.target.value })}
-                className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white"
-              />
-            </label>
-            {isThread ? (
-              <>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <label className="block text-xs text-gray-400" htmlFor="action-detail-status">
-                    Local status
-                    <select id="action-detail-status" value={draft.status} onChange={(e) => updateDraft({ status: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white">
-                      <option value="open">Open</option>
-                      <option value="waiting">Waiting</option>
-                      <option value="someday">Someday</option>
-                      <option value="done">Done</option>
-                      <option value="archived">Archived</option>
-                    </select>
-                  </label>
-                  <label className="block text-xs text-gray-400" htmlFor="action-detail-priority">
-                    Priority
-                    <select id="action-detail-priority" value={draft.priority} onChange={(e) => updateDraft({ priority: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white">
-                      <option value="urgent">Urgent</option>
-                      <option value="high">High</option>
-                      <option value="normal">Normal</option>
-                      <option value="low">Low</option>
-                    </select>
-                  </label>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <label className="block text-xs text-gray-400" htmlFor="action-detail-next-action">
-                    Next action
-                    <input id="action-detail-next-action" value={draft.nextAction} onChange={(e) => updateDraft({ nextAction: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white" />
-                  </label>
-                  <label className="block text-xs text-gray-400" htmlFor="action-detail-due">
-                    Due date
-                    <input id="action-detail-due" type="date" value={draft.dueAt} onChange={(e) => updateDraft({ dueAt: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white" />
-                  </label>
-                </div>
-                <label className="block text-xs text-gray-400" htmlFor="action-detail-notes">
-                  Notes
-                  <textarea id="action-detail-notes" rows={5} value={draft.notes} onChange={(e) => updateDraft({ notes: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white resize-y" />
-                </label>
-              </>
-            ) : (
-              <label className="block text-xs text-gray-400" htmlFor="action-detail-description">
-                Notes
-                <textarea id="action-detail-description" rows={5} value={draft.description} onChange={(e) => updateDraft({ description: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white resize-y" />
-              </label>
+            {threadLoadState === 'loading' && (
+              <p role="status" className="text-sm text-gray-400">Loading thread details…</p>
             )}
-            <button type="button" onClick={save} disabled={saving || !draft?.title?.trim()} className="inline-flex items-center gap-2 rounded border border-port-accent/40 px-3 py-2 text-sm text-port-accent hover:bg-port-accent/10 disabled:opacity-50">
-              <Save size={14} /> {saving ? 'Saving…' : 'Save changes'}
-            </button>
+            {threadLoadState === 'error' && (
+              <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-port-warning">
+                Could not load thread details.
+                {threadRef && (
+                  <button type="button" onClick={retryThreadLoad} className="rounded border border-port-warning/40 px-3 py-2 hover:bg-port-warning/10">
+                    Retry
+                  </button>
+                )}
+              </div>
+            )}
+            <fieldset disabled={!canEdit} className="space-y-3 disabled:opacity-60">
+              <label className="block text-xs text-gray-400" htmlFor="action-detail-title">
+                Title
+                <input
+                  id="action-detail-title"
+                  value={draft?.title || ''}
+                  onChange={(e) => updateDraft({ title: e.target.value })}
+                  className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white"
+                />
+              </label>
+              {isThread ? (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <label className="block text-xs text-gray-400" htmlFor="action-detail-status">
+                      Local status
+                      <select id="action-detail-status" value={draft.status} onChange={(e) => updateDraft({ status: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white">
+                        <option value="open">Open</option>
+                        <option value="waiting">Waiting</option>
+                        <option value="someday">Someday</option>
+                        <option value="done">Done</option>
+                        <option value="archived">Archived</option>
+                      </select>
+                    </label>
+                    <label className="block text-xs text-gray-400" htmlFor="action-detail-priority">
+                      Priority
+                      <select id="action-detail-priority" value={draft.priority} onChange={(e) => updateDraft({ priority: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white">
+                        <option value="urgent">Urgent</option>
+                        <option value="high">High</option>
+                        <option value="normal">Normal</option>
+                        <option value="low">Low</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <label className="block text-xs text-gray-400" htmlFor="action-detail-next-action">
+                      Next action
+                      <input id="action-detail-next-action" value={draft.nextAction} onChange={(e) => updateDraft({ nextAction: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white" />
+                    </label>
+                    <label className="block text-xs text-gray-400" htmlFor="action-detail-due">
+                      Due date
+                      <input id="action-detail-due" type="date" value={draft.dueAt} onChange={(e) => updateDraft({ dueAt: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white" />
+                    </label>
+                  </div>
+                  <label className="block text-xs text-gray-400" htmlFor="action-detail-notes">
+                    Notes
+                    <textarea id="action-detail-notes" rows={5} value={draft.notes} onChange={(e) => updateDraft({ notes: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white resize-y" />
+                  </label>
+                </>
+              ) : (
+                <label className="block text-xs text-gray-400" htmlFor="action-detail-description">
+                  Notes
+                  <textarea id="action-detail-description" rows={5} value={draft.description} onChange={(e) => updateDraft({ description: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white resize-y" />
+                </label>
+              )}
+              <button type="button" onClick={save} disabled={!canEdit || saving || !draft.title.trim()} className="inline-flex items-center gap-2 rounded border border-port-accent/40 px-3 py-2 text-sm text-port-accent hover:bg-port-accent/10 disabled:opacity-50">
+                <Save size={14} /> {saving ? 'Saving…' : 'Save changes'}
+              </button>
+            </fieldset>
           </section>
         )}
 

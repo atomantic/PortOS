@@ -375,6 +375,7 @@ export default function Review() {
         </div>
       </div>
       <ActionDetailDrawer
+        key={selectedAction?.id || 'closed'}
         item={selectedAction}
         onClose={() => navigate(`/review?view=${actionView}`, { replace: true })}
         onResolve={handleQueueResolve}
