@@ -67,7 +67,7 @@ function LoraCard({ lora, onDelete, onMeasured, deleting, deleteConfirm }) {
   // LoRAs (ltx-video, minimax-h3) deep-link to Video Gen — routing them to Image
   // Gen would preselect a video adapter into an incompatible image render.
   const isVideoLora = isVideoLoraFamily(family);
-  const testHref = `${isVideoLora ? '/video/generate' : '/media/image'}?lora=${encodeURIComponent(lora.filename)}`;
+  const testHref = `${isVideoLora ? '/media/video' : '/media/image'}?lora=${encodeURIComponent(lora.filename)}`;
   // The confirm pair also stays mounted while the delete is in flight (the hook
   // disarms the moment it fires), so the spinner replaces the row rather than
   // flashing the trash icon back for the duration of the request.

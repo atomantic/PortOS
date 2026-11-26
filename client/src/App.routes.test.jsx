@@ -20,6 +20,7 @@ import shellSnapshot from './test/pageShellSnapshot.json';
 vi.mock('./utils/lazyWithReload', () => ({
   lazyWithReload: (loader) => {
     const page = String(loader).match(/pages\/(\w+)/)?.[1] ?? 'unknown';
+    if (page === 'Media3DWorkspace') return Outlet;
     return function PageProbe() {
       const { pathname, search, hash } = useLocation();
       return <pre data-testid="page" data-page={page}>{`${pathname}${search}${hash}`}</pre>;
@@ -72,6 +73,13 @@ describe('previous-path redirects', () => {
     ['/casting?scope=example', '/catalog/casting?scope=example', 'CreativeLibrary'],
     ['/environments', '/catalog/environments', 'CreativeLibrary'],
     ['/objects', '/catalog/objects', 'CreativeLibrary'],
+    ['/imessage/chat%3Bexample?keep=1#msg', '/messages/imessage/chat%3Bexample?keep=1#msg', 'Messages'],
+    ['/devtools/agents', '/devtools/processes/agents', 'ProcessesPage'],
+    ['/media/threejs', '/3d/threejs', 'ThreejsModels'],
+    ['/media/threejs/example-model?image=example.png#preview', '/3d/threejs/example-model?image=example.png#preview', 'ThreejsModelDetail'],
+    ['/media/3d/example-model', '/3d/example-model', 'Media3DDetail'],
+    ['/create/media', '/media', 'MediaGen'],
+    ['/create/story', '/writers-room', 'WritersRoom'],
   ])('keeps %s on its original feature', (from, to, pageName) => {
     const page = renderAt(from);
     expect(page.dataset.page).toBe(pageName);

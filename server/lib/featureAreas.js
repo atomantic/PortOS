@@ -192,7 +192,6 @@ export const FEATURE_AREAS = Object.freeze([
     id: 'imessage', label: 'iMessage', instanceFeatureId: 'imessage',
     codeGlobs: [
       'server/{routes,services}/imessage*',
-      'client/src/pages/IMessage.jsx',
       'client/src/components/messages/IMessage*',
     ],
   }),
@@ -256,7 +255,7 @@ export const FEATURE_AREAS = Object.freeze([
   }),
   area({
     id: 'media-gen', label: 'Media generation',
-    navPathPrefixes: ['/create/media', '/media', '/video', '/html-pages', '/code-animation', '/sprites', '/3d'],
+    navPathPrefixes: ['/media', '/video', '/html-pages', '/code-animation', '/sprites', '/3d'],
     codeGlobs: [
       'server/routes/{image,media,video,htmlPages,htmlComposition,codeAnimation,sprites,threejs,loras,sdapi}*',
       'server/lib/mediaModels/**',
@@ -272,7 +271,7 @@ export const FEATURE_AREAS = Object.freeze([
   area({
     id: 'story-studio', label: 'Story studio',
     navPathPrefixes: [
-      '/create/story', '/start-story', '/story-builder', '/rounds', '/writers-room', '/pipeline', '/sharing',
+      '/start-story', '/story-builder', '/rounds', '/writers-room', '/pipeline', '/sharing',
       '/importer', '/authors', '/universes', '/decks', '/mood-boards', '/storyboards', '/voices', '/fableloom', '/game',
     ],
     codeGlobs: [

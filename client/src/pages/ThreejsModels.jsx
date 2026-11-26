@@ -103,7 +103,7 @@ export default function ThreejsModels() {
       return null;
     });
     setCreating(false);
-    if (created) navigate(`/media/threejs/${encodeURIComponent(created.id)}`);
+    if (created) navigate(`/3d/threejs/${encodeURIComponent(created.id)}`);
   };
 
   return (
@@ -111,8 +111,8 @@ export default function ThreejsModels() {
       <header className="flex items-start gap-3">
         <Box className="mt-0.5 h-7 w-7 shrink-0 text-port-accent" />
         <div>
-          {/* h2, not h1 — the MediaGen shell route already owns the page <h1>
-              ("Media Gen") and this tab content mounts inside it (#7245). */}
+          {/* h2, not h1 — the 3D workspace already owns the page <h1>
+              ("3D") and this tab content mounts inside it (#7245). */}
           <h2 className="text-xl font-semibold text-white">Three.js Models</h2>
           <p className="mt-1 text-sm text-gray-400">
             Reconstruct a gallery image as validated procedural geometry, preview it live, and export a standalone Three.js factory.
@@ -234,7 +234,7 @@ export default function ThreejsModels() {
             {models.map((model) => (
               <Link
                 key={model.id}
-                to={`/media/threejs/${encodeURIComponent(model.id)}`}
+                to={`/3d/threejs/${encodeURIComponent(model.id)}`}
                 className="flex gap-3 rounded-xl border border-port-border bg-port-card p-3 hover:border-port-accent"
               >
                 <div className="h-20 w-20 shrink-0 overflow-hidden rounded-lg bg-port-bg">

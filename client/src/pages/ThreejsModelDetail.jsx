@@ -431,7 +431,7 @@ export default function ThreejsModelDetail() {
       toast.error(error.message || 'Delete failed');
       return false;
     });
-    if (ok) navigate('/media/threejs');
+    if (ok) navigate('/3d/threejs');
   };
 
   if (loading) {
@@ -445,7 +445,7 @@ export default function ThreejsModelDetail() {
     return (
       <div className="py-12 text-center">
         <p className="mb-3 text-gray-400">{error ? 'Could not load this model. Return to this tab or reconnect to retry.' : 'That Three.js model does not exist.'}</p>
-        <Link to="/media/threejs" className="text-port-accent hover:underline">Back to models</Link>
+        <Link to="/3d/threejs" className="text-port-accent hover:underline">Back to models</Link>
       </div>
     );
   }
@@ -541,12 +541,12 @@ export default function ThreejsModelDetail() {
     <div className="mx-auto max-w-7xl space-y-4">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <Link to="/media/threejs" className="mb-2 inline-flex items-center gap-1 text-xs text-gray-500 hover:text-white">
+          <Link to="/3d/threejs" className="mb-2 inline-flex items-center gap-1 text-xs text-gray-500 hover:text-white">
             <ArrowLeft className="h-3.5 w-3.5" /> Three.js Models
           </Link>
           <div className="flex items-center gap-2">
             <Box className="h-6 w-6 text-port-accent" />
-            <h1 className="text-xl font-semibold text-white">{record.name}</h1>
+            <h2 className="text-xl font-semibold text-white">{record.name}</h2>
             <span className={`rounded px-2 py-0.5 text-[10px] uppercase ${
               record.status === 'ready' ? 'bg-port-success/15 text-port-success'
                 : record.status === 'failed' ? 'bg-port-error/15 text-port-error'
