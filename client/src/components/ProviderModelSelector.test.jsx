@@ -681,6 +681,27 @@ it('keeps a saved TUI pin visible with a reason under a CLI/API-only caller poli
       expect(screen.queryByText('Thinking effort')).not.toBeInTheDocument();
     });
 
+    it('clears unsupported effort when switching to a model with no tiers', () => {
+      const onModelChange = vi.fn();
+      const onEffortChange = vi.fn();
+      const view = renderEffort({ effort: 'high', onModelChange, onEffortChange });
+
+      fireEvent.change(screen.getAllByRole('combobox')[1], { target: { value: 'claude-sonnet-4-6' } });
+
+      expect(onModelChange).toHaveBeenCalledWith('claude-sonnet-4-6');
+      expect(onEffortChange).toHaveBeenCalledWith('');
+      view.rerender(<ProviderModelSelector
+        providers={AGY}
+        selectedProviderId="antigravity-cli"
+        selectedModel="claude-sonnet-4-6"
+        availableModels={['gemini-3.6-flash', 'gemini-3.1-pro', 'claude-sonnet-4-6']}
+        effort=""
+        onEffortChange={onEffortChange}
+        onModelChange={onModelChange}
+      />);
+      expect(screen.queryByLabelText('Thinking effort')).not.toBeInTheDocument();
+    });
+
     it('hides itself for a provider with no effort control', () => {
       renderSelector({
         providers: [{ id: 'ollama', name: 'Ollama', endpoint: 'http://localhost:11434' }],
