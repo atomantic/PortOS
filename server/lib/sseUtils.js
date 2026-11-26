@@ -131,7 +131,7 @@ export const createJobFailureFinalizer = ({
   jobs, activeJobs, activeSlots, label, events,
   failedPayload = (jobId, reason) => ({ generationId: jobId, error: reason }),
 }) => {
-  const finalize = (job, jobId, slotOwner, reason, { force = false } = {}) => {
+  const finalize = (job, jobId, slotOwner, reason, { force = false, code } = {}) => {
     // Idempotent except under `force` — spawn failures fire 'error' AND a
     // follow-up 'close', so both paths reach this finalizer, and a caller
     // whose success path can throw AFTER stamping 'complete' passes `force`
@@ -143,10 +143,11 @@ export const createJobFailureFinalizer = ({
     // Provider errors can echo private prompts and input URLs. Keep the details
     // on the job channel; operational logs need only the backend and job id.
     console.error(`❌ ${label} failed [${jobId.slice(0, 8)}]`);
+    const details = code ? { code } : {};
     dispatchTerminalEvent(
       jobId,
-      () => broadcastSse(job, { type: 'error', error: reason }),
-      () => events.emit('failed', failedPayload(jobId, reason, slotOwner)),
+      () => broadcastSse(job, { type: 'error', error: reason, ...details }),
+      () => events.emit('failed', { ...failedPayload(jobId, reason, slotOwner), ...details }),
     );
     closeJobAfterDelay(jobs, jobId);
   };
