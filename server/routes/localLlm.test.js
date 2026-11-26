@@ -1489,16 +1489,40 @@ describe.each([
     );
   });
 
-  it('surfaces actionable refusal after accepting a background start', async () => {
+  it.each(['install', 'start'])('clears a failed background %s and its error on retry', async (action) => {
     const app = makeApp();
-    start.mockRejectedValueOnce(new ServerError('Preset port is occupied. Stop the external process first.', { status: 409 }));
-    expect((await mutate(app, 'start')).status).toBe(202);
-    expect((await readStatus(app)).body).toMatchObject({
-      operation: null, lastError: 'Preset port is occupied. Stop the external process first.',
-    });
-    expect(app.get('io').emit).toHaveBeenCalledWith(
-      'localLlm:progress', expect.objectContaining({ event: 'error', runtime: id }),
-    );
+    const run = { install, start }[action];
+    const message = 'Runtime is busy. Stop the external process first.';
+    const failure = Promise.withResolvers();
+    void failure.promise.catch(() => {});
+    run.mockReturnValueOnce(failure.promise);
+    try {
+      const accepted = await mutate(app, action);
+      expect(accepted.status).toBe(202);
+      expect((await readStatus(app)).body).toMatchObject({
+        operation: { id: accepted.body.operation.id, action }, lastError: null,
+      });
+    } finally {
+      failure.reject(new ServerError(message, { status: 409 }));
+    }
+
+    expect((await readStatus(app)).body).toMatchObject({ operation: null, lastError: message });
+    expect(app.get('io').emit).toHaveBeenCalledWith('localLlm:progress', expect.objectContaining({
+      event: 'error', runtime: id, operation: null, lastError: message,
+    }));
+
+    const retry = Promise.withResolvers();
+    run.mockReturnValueOnce(retry.promise);
+    try {
+      const accepted = await mutate(app, action);
+      expect(accepted.status).toBe(202);
+      expect((await readStatus(app)).body).toMatchObject({
+        operation: { id: accepted.body.operation.id, action }, lastError: null,
+      });
+    } finally {
+      retry.resolve({ success: true });
+    }
+    expect((await readStatus(app)).body).toMatchObject({ operation: null, lastError: null });
   });
 });
 
