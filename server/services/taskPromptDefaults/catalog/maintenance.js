@@ -293,6 +293,8 @@ Triage and implement JIRA tickets for {appName}:
 
 Repository: {repoPath}
 
+Use {portosApiUrl} as the base URL for the paths below. Supply the authenticated PortOS API headers for every request (\`Authorization: Bearer $PORTOS_API_TOKEN\`).
+
 ## Phase 1 — Triage
 
 1. Call GET /api/apps to find the app config for {appName} (match by name or repoPath)
@@ -326,7 +328,7 @@ Do NOT comment on JIRA tickets directly — all action items go to the Review Hu
 Generate a JIRA status report for {appName} (App ID: {appId}).
 
 1. Call the PortOS API to generate a fresh status report:
-   curl -X POST {portosApiUrl}/api/jira/reports/generate -H "Content-Type: application/json" -d '{"appId": "{appId}"}'
+   curl -X POST {portosApiUrl}/api/jira/reports/generate -H "Authorization: Bearer \${PORTOS_API_TOKEN:-}" -H "Content-Type: application/json" -d '{"appId": "{appId}"}'
 2. The report will be automatically saved and available at /devtools/jira/reports
 
 This task runs on a schedule and generates status reports summarizing:

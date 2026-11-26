@@ -58,8 +58,11 @@ Open the thumbnail file (Read tool) and inspect the frame.
 
 Issue ONE PATCH to record your verdict, then exit. Do not request renders, do not call last-frame, do not create follow-up tasks — the server handles all of that.
 
+{{> portos-api-auth }}
+
 ```
 PATCH {{apiUrl}}/api/creative-director/{{project.id}}/scene/{{scene.sceneId}}
+Authorization: Bearer $PORTOS_API_TOKEN
 Content-Type: application/json
 ```
 
@@ -80,6 +83,7 @@ Content-Type: application/json
 Then (and ONLY in the accepted case) add the rendered video to the project's collection:
 ```
 POST {{apiUrl}}/api/media/collections/{{project.collectionId}}/items
+Authorization: Bearer $PORTOS_API_TOKEN
 Content-Type: application/json
 
 { "kind": "video", "ref": "{{scene.renderedJobId}}" }

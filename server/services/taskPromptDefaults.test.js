@@ -522,16 +522,25 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // back into the default origin it was rendered with, so an uncustomized stored
   // copy must still read as shipped (and so upgrade). Hashing folds every origin
   // into one placeholder (see the custom-origin case above).
-  it.each(['jira-status-report', 'user-action-review'])(
-    '%s: the pre-token body rendered with the default origin still reads as a shipped default',
-    key => {
-      const current = DEFAULT_TASK_PROMPTS[key];
-      expect(current).toContain('{portosApiUrl}');
-      expect(current).not.toContain('localhost:5555');
-      const retired = current.replaceAll('{portosApiUrl}', 'http://localhost:5555');
-      expect(promptMatchesShippedDefault(retired, key)).toBe(true);
-    },
-  );
+  it('recognizes shipped Jira reports saved before the bearer header and URL token', () => {
+    const key = 'jira-status-report';
+    const current = DEFAULT_TASK_PROMPTS[key];
+    const header = ' -H "Authorization: Bearer ${PORTOS_API_TOKEN:-}"';
+    expect(current).toContain(header);
+    expect(current).toContain('{portosApiUrl}');
+    expect(current).not.toContain('localhost:5555');
+    const retired = current.replace(header, '').replaceAll('{portosApiUrl}', 'http://localhost:5555');
+    expect(promptMatchesShippedDefault(retired, key)).toBe(true);
+  });
+
+  it('recognizes shipped user action reviews saved before the URL token', () => {
+    const key = 'user-action-review';
+    const current = DEFAULT_TASK_PROMPTS[key];
+    expect(current).toContain('{portosApiUrl}');
+    expect(current).not.toContain('localhost:5555');
+    const retired = current.replaceAll('{portosApiUrl}', 'http://localhost:5555');
+    expect(promptMatchesShippedDefault(retired, key)).toBe(true);
+  });
 
   it('recognizes the actual pre-token Jira claim and preserves a customized copy', () => {
     const key = 'claim-issue-jira';

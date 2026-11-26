@@ -8,6 +8,8 @@ You are acting as my Chief of Staff, triaging and implementing JIRA tickets for 
 
 This job runs Monday-Friday. It triages all sprint tickets first, then implements the top-priority ready ticket.
 
+Use {portosApiUrl} as the base URL for the paths below. Supply the authenticated PortOS API headers for every request (`Authorization: Bearer $PORTOS_API_TOKEN`).
+
 ## Steps
 
 ### Phase 1 — Triage
