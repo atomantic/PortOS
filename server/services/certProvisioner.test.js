@@ -1,7 +1,9 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { certExpiresAtFromPem } from '../../lib/certMeta.js';
 
 const { tempRoot } = await vi.hoisted(async () => {
   const { createTempDataRoot } = await import('../lib/mockPathsDataRoot.js');
@@ -29,8 +31,11 @@ const CERT_DIR = join(tempRoot, 'certs');
 const CERT = join(CERT_DIR, 'cert.pem');
 const KEY = join(CERT_DIR, 'key.pem');
 const META = join(CERT_DIR, 'meta.json');
+const LIVE_FILES = [CERT, KEY, META];
+const HOST = 'host.example.ts.net';
+const PREVIOUS_ISSUANCE = '2025-01-01T00:00:00.000Z';
 
-const runningStatus = (dns = 'host.example.ts.net.') =>
+const runningStatus = (dns = `${HOST}.`) =>
   JSON.stringify({ BackendState: 'Running', Self: { DNSName: dns } });
 
 // Routes the two CLI invocations; `cert` may write the files like the real CLI.
@@ -40,17 +45,54 @@ const stubCli = ({ status, cert }) => {
       if (status instanceof Error) return cb(status);
       return cb(null, { stdout: status });
     }
-    if (cert instanceof Error) return cb(cert);
-    cert?.();
+    const failure = typeof cert === 'function' ? cert(args) : cert;
+    if (failure) return cb(failure);
     return cb(null, { stdout: '' });
   });
 };
-const writeCertFiles = (mtimeSec) => () => {
+
+function makePair(name) {
+  const key = join(tempRoot, `${name}.key.pem`);
+  const cert = join(tempRoot, `${name}.cert.pem`);
+  execFileSync('openssl', [
+    'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes',
+    '-keyout', key, '-out', cert, '-days', '30', '-subj', `/CN=${HOST}`
+  ], { stdio: 'ignore' });
+  return { cert: readFileSync(cert), key: readFileSync(key) };
+}
+
+let currentPair;
+let replacement;
+beforeAll(() => {
+  currentPair = makePair('current');
+  replacement = makePair('replacement');
+});
+
+function seedLivePair() {
   mkdirSync(CERT_DIR, { recursive: true });
-  writeFileSync(CERT, 'cert');
-  writeFileSync(KEY, 'key');
-  utimesSync(CERT, mtimeSec, mtimeSec);
-};
+  writeFileSync(CERT, currentPair.cert);
+  writeFileSync(KEY, currentPair.key);
+  writeFileSync(META, JSON.stringify({
+    mode: 'tailscale',
+    hostname: HOST,
+    issuedAt: PREVIOUS_ISSUANCE,
+    certMtime: statSync(CERT).mtimeMs,
+    expiresAt: certExpiresAtFromPem(currentPair.cert)
+  }));
+}
+
+function writeStaged(args, { cert, key }) {
+  const [, certArg, keyArg] = args;
+  const certPath = certArg.slice('--cert-file='.length);
+  const keyPath = keyArg.slice('--key-file='.length);
+  expect(dirname(certPath)).toBe(dirname(keyPath));
+  expect(dirname(dirname(certPath))).toBe(CERT_DIR);
+  if (cert) writeFileSync(certPath, cert);
+  if (key) writeFileSync(keyPath, key);
+}
+
+const readLiveFiles = () => LIVE_FILES.map(path => readFileSync(path));
+const expectNoStage = () => expect(readdirSync(CERT_DIR).sort()).toEqual(['cert.pem', 'key.pem', 'meta.json']);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -117,34 +159,74 @@ describe('provisionTailscaleCert failure reasons', () => {
     expect((await provisionTailscaleCert()).message).toBe('tailscale cert failed: rate limited!');
   });
 
-  it('cert-files-missing when the CLI succeeds without writing files', async () => {
-    stubCli({ status: runningStatus(), cert: () => {} });
-    expect(await provisionTailscaleCert()).toMatchObject({ ok: false, reason: 'cert-files-missing' });
-    expect(existsSync(META)).toBe(false);
+  it.each([
+    ['timeout after one write', () => ({ cert: replacement.cert }), new Error('timed out'), 'tailscale-cert-failed'],
+    ['missing key', () => ({ cert: replacement.cert }), null, 'cert-files-missing'],
+    ['missing cert', () => ({ key: replacement.key }), null, 'cert-files-missing'],
+    ['mismatched pair', () => ({ cert: replacement.cert, key: currentPair.key }), null, 'tailscale-cert-failed'],
+    ['empty key', () => ({ cert: replacement.cert, key: Buffer.alloc(0) }), null, 'tailscale-cert-failed'],
+  ])('preserves the installed files after %s', async (_problem, stagedPair, failure, reason) => {
+    seedLivePair();
+    const before = readLiveFiles();
+    stubCli({ status: runningStatus(), cert: args => {
+      writeStaged(args, stagedPair());
+      return failure;
+    } });
+    expect(await provisionTailscaleCert()).toMatchObject({ ok: false, reason });
+    expect(readLiveFiles()).toEqual(before);
+    expectNoStage();
   });
 });
 
 describe('provisionTailscaleCert success', () => {
-  it('strips the trailing dot, passes cert/key paths, and persists meta.json', async () => {
-    stubCli({ status: runningStatus(), cert: writeCertFiles(2_000_000) });
+  it('runs both bounded CLI stages and installs a validated replacement and metadata', async () => {
+    seedLivePair();
+    stubCli({ status: runningStatus(), cert: args => writeStaged(args, replacement) });
     const result = await provisionTailscaleCert();
-    expect(result).toMatchObject({ ok: true, mode: 'tailscale', hostname: 'host.example.ts.net', wroteNew: true });
-    const certCall = execFile.mock.calls.find(c => c[1][0] === 'cert');
-    expect(certCall[1]).toEqual(['cert', `--cert-file=${CERT}`, `--key-file=${KEY}`, 'host.example.ts.net']);
+    expect(result).toMatchObject({ ok: true, mode: 'tailscale', hostname: HOST, wroteNew: true });
+    const [, statusArgs, statusOptions] = execFile.mock.calls[0];
+    const [, certArgs, certOptions] = execFile.mock.calls[1];
+    expect(statusArgs).toEqual(['status', '--json']);
+    expect(statusOptions).toMatchObject({ timeout: 5000, killSignal: 'SIGKILL' });
+    expect(certArgs[3]).toBe(HOST);
+    expect(certOptions).toMatchObject({ timeout: 60_000, killSignal: 'SIGKILL' });
+    expect(readFileSync(CERT)).toEqual(replacement.cert);
+    expect(readFileSync(KEY)).toEqual(replacement.key);
     const meta = JSON.parse(readFileSync(META, 'utf8'));
-    expect(meta).toMatchObject({ mode: 'tailscale', hostname: 'host.example.ts.net', certMtime: 2_000_000_000 });
+    expect(meta).toMatchObject({
+      mode: 'tailscale',
+      hostname: HOST,
+      certMtime: statSync(CERT).mtimeMs,
+      expiresAt: certExpiresAtFromPem(replacement.cert)
+    });
     expect(Number.isNaN(Date.parse(meta.issuedAt))).toBe(false);
-    expect(meta).toHaveProperty('expiresAt', null); // fixture cert is not a parseable PEM
+    expect(meta.issuedAt).not.toBe(PREVIOUS_ISSUANCE);
+    expectNoStage();
   });
 
-  it('wroteNew is false when the CLI leaves cert.pem untouched', async () => {
-    writeCertFiles(2_000_000)();
-    stubCli({ status: runningStatus(), cert: () => {} });
-    expect((await provisionTailscaleCert()).wroteNew).toBe(false);
+  it('keeps a valid cached pair and its metadata untouched', async () => {
+    seedLivePair();
+    const before = readLiveFiles();
+    const mtimes = LIVE_FILES.map(path => statSync(path).mtimeMs);
+    stubCli({ status: runningStatus(), cert: args => writeStaged(args, currentPair) });
+    expect(await provisionTailscaleCert()).toMatchObject({ ok: true, wroteNew: false });
+    expect(readLiveFiles()).toEqual(before);
+    expect(LIVE_FILES.map(path => statSync(path).mtimeMs)).toEqual(mtimes);
+    expectNoStage();
+  });
+
+  it('treats concurrent requests for the same replacement as one change', async () => {
+    seedLivePair();
+    stubCli({ status: runningStatus(), cert: args => writeStaged(args, replacement) });
+    const results = await Promise.all([provisionTailscaleCert(), provisionTailscaleCert()]);
+    expect(results.map(result => result.wroteNew)).toEqual([true, false]);
+    expect(readFileSync(CERT)).toEqual(replacement.cert);
+    expect(readFileSync(KEY)).toEqual(replacement.key);
+    expectNoStage();
   });
 
   it('requiresRestart follows the boot-time HTTPS state on every run', async () => {
-    stubCli({ status: runningStatus(), cert: writeCertFiles(2_000_000) });
+    stubCli({ status: runningStatus(), cert: args => writeStaged(args, replacement) });
     const first = await provisionTailscaleCert();
     const second = await provisionTailscaleCert();
     expect([first.requiresRestart, second.requiresRestart]).toEqual([true, true]);

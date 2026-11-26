@@ -24,19 +24,17 @@ const execFileAsync = promisify(execFile);
 const CERT_PATHS = certPaths(PATHS.data);
 const RENEW_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
-let inFlight = false;
+let inFlight = null;
 
-async function renewOnce(httpsServer) {
+function renewOnce(httpsServer, trigger) {
   if (inFlight) {
     console.log(`ℹ️ cert renewer: previous renewal still running, skipping`);
-    return;
+    return inFlight;
   }
-  inFlight = true;
-  try {
-    await renewLocked(httpsServer);
-  } finally {
-    inFlight = false;
-  }
+  inFlight = renewLocked(httpsServer)
+    .catch(err => console.error(`❌ cert renewer ${trigger}: ${err.message}`))
+    .finally(() => { inFlight = null; });
+  return inFlight;
 }
 
 async function renewLocked(httpsServer) {
@@ -72,18 +70,19 @@ async function renewLocked(httpsServer) {
 
 const NOOP = () => {};
 
-// Returns a teardown that stops the daily timer (a no-op when nothing was scheduled).
+// Teardown stops future ticks and lets callers await any running renewal.
 export function initCertRenewer(httpsServer) {
   if (!httpsServer || typeof httpsServer.setSecureContext !== 'function') return NOOP;
   const meta = readCertMeta(CERT_PATHS.meta);
   if (!meta || meta.mode !== 'tailscale') return NOOP;
 
-  renewOnce(httpsServer).catch(err => console.error(`❌ cert renewer initial run: ${err.message}`));
-  const timer = setInterval(() => {
-    renewOnce(httpsServer).catch(err => console.error(`❌ cert renewer: ${err.message}`));
-  }, RENEW_INTERVAL_MS);
+  renewOnce(httpsServer, 'initial run');
+  const timer = setInterval(() => renewOnce(httpsServer, 'scheduled run'), RENEW_INTERVAL_MS);
   timer.unref();
 
   console.log(`🔒 cert renewer: scheduled daily renewal for ${meta.hostname}`);
-  return () => clearInterval(timer);
+  return () => {
+    clearInterval(timer);
+    return inFlight;
+  };
 }
