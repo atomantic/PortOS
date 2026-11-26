@@ -1,10 +1,9 @@
 // Pinned, resumable installation of mkserve and the official Inkling 2 Mini.
 import { constants } from 'node:fs';
 import { access, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
-import { Agent as HttpsAgent, get as httpsGet } from 'node:https';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { Readable } from 'node:stream';
+import { createArtifactHttpTransport } from '../lib/artifactHttpTransport.js';
 import { spawn } from '../lib/childProcess.js';
 import { atomicWrite, sha256File, sha256Text } from '../lib/fileCore.js';
 import { assessDownloadPreflight, assertDownloadFits, etagPathFor, partialPathFor, streamResumableDownload } from '../lib/downloadPreflight.js';
@@ -145,34 +144,6 @@ async function verifyAndPublish(partial, final, expectedHash, label, emit, signa
   await rename(partial, final);
 }
 
-// Preserve the installer's artifact proxy and CA-file configuration without
-// changing the HTTP dispatcher used by other PortOS requests.
-async function checkpointTransport(signal) {
-  const env = artifactDownloadEnv();
-  const proxy = env.https_proxy || env.HTTPS_PROXY || env.all_proxy || env.ALL_PROXY;
-  const caFile = env.CURL_CA_BUNDLE || env.SSL_CERT_FILE;
-  if (!proxy && !caFile) return fetch;
-  if (proxy && !/^https?:\/\//i.test(proxy)) {
-    throw runFailure('The mkserve checkpoint download requires an HTTP or HTTPS proxy.');
-  }
-  const agent = new HttpsAgent({
-    keepAlive: false,
-    proxyEnv: { HTTPS_PROXY: proxy, NO_PROXY: env.no_proxy || env.NO_PROXY },
-    ca: caFile ? await readFile(caFile, { signal }) : undefined,
-  });
-  return (url, options) => new Promise((resolve, reject) => {
-    const request = httpsGet(url, { agent, headers: options.headers, signal: options.signal }, (response) => {
-      const { statusCode: status, statusMessage: statusText } = response;
-      resolve({
-        status, statusText, ok: status >= 200 && status < 300,
-        headers: new Headers(response.headers),
-        body: Readable.toWeb(response),
-      });
-    });
-    request.on('error', reject);
-  });
-}
-
 async function fetchCheckpoint(url, options, transport) {
   let target = new URL(url);
   for (let redirects = 0; redirects <= 20; redirects += 1) {
@@ -259,7 +230,10 @@ async function assertCheckpointFits(weights) {
 async function installCheckpoint(weights, emit, signal) {
   let transportPromise;
   const transport = async (url, options) => {
-    transportPromise ??= checkpointTransport(signal);
+    transportPromise ??= createArtifactHttpTransport(artifactDownloadEnv(), { signal: options.signal }).catch((error) => {
+      options.signal?.throwIfAborted();
+      throw runFailure(error.message);
+    });
     return (await transportPromise)(url, options);
   };
   for (const [name, expectedSize, expectedHash] of CHECKPOINT) {
