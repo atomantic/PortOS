@@ -135,6 +135,17 @@ it.each(['agentResumePointers.js', 'agentFollowUpSpawning.js'])(
   },
 );
 
+it.each([
+  ['services/agent/agentOrphanRecovery.js', 'services/agent/agentProcessProbe.js', 'services/agent/agentManagement.js'],
+  ['services/agent/agentProcessProbe.js', 'lib/childProcess.js', 'services/agent/agentOrphanRecovery.js'],
+  ['services/cos/cosDequeue.js', 'services/cos/cosDequeueAdmission.js', 'services/cos/cos.js'],
+  ['services/cos/cosOrphanReset.js', 'services/cos/cosTaskStore.js', 'services/cos/cos.js'],
+  ['services/cos/cosPerpetualRefill.js', 'services/cos/cosTaskStore.js', 'services/cos/cos.js'],
+])('%s reaches %s without loading %s', (entry, dependency, orchestrator) => {
+  expect(reaches(entry, dependency)).toBe(true);
+  expect(reaches(entry, orchestrator)).toBe(false);
+});
+
 // `vitest related` follows dynamic imports, so a lazy import() narrows the
 // static closure above but not CI selection. Each row is an edge cut from the
 // dynamically connected CoS cluster (#12285): the entry must import its target
