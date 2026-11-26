@@ -6,6 +6,9 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
  * that manages agent spawning to prevent orphaned processes.
  */
 
+import http from 'node:http';
+import https from 'node:https';
+import { Readable } from 'node:stream';
 import { io } from 'socket.io-client';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { readResponseJson } from '../../lib/readResponseJson.js';
@@ -451,16 +454,39 @@ export async function spawnAgentViaRunner(options) {
   return readRunnerJson(response);
 }
 
+async function postScannerRequest(path, input) {
+  const target = new URL(`${COS_RUNNER_URL}${path}`);
+  if (target.username || target.password) throw new TypeError('Scanner runner URL credentials are not supported');
+  const transport = target.protocol === 'https:' ? https : http;
+  const body = JSON.stringify(input);
+  // The runner owns the scan lifecycle, including silent scans. A one-shot
+  // request has no elapsed/idle ceiling and sends the prompt only to this URL.
+  const res = await new Promise((resolve, reject) => {
+    const req = transport.request(target, {
+      agent: false,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    }, resolve);
+    req.on('error', reject);
+    req.on('upgrade', (_res, socket) => {
+      socket.destroy();
+      reject(new Error('Unexpected scanner protocol upgrade'));
+    });
+    req.end(body);
+  });
+  const status = res.statusCode;
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    text: () => new Response(Readable.toWeb(res, { strategy: { highWaterMark: 0 } })).text(),
+  };
+}
+
 export async function requestSecurityScanViaRunner(agentId, { input, stop = false } = {}) {
   const path = `/agents/${encodeURIComponent(agentId)}/security-scan${stop ? '/stop' : ''}`;
-  // A scanner may validly stay silent indefinitely. Its owned process lifecycle
-  // settles this request; neither fetch nor undici may impose an elapsed/idle cap.
-  const dispatcher = input ? (await import('../../lib/aiToolkit/internal/streamTransport.js')).streamTransportDispatcher() : null;
-  const response = await fetchWithTimeout(`${COS_RUNNER_URL}${path}`, {
-    method: input || stop ? 'POST' : 'GET',
-    ...(dispatcher ? { dispatcher } : {}),
-    ...(input ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) } : {}),
-  }, input ? 0 : 15000);
+  const response = input
+    ? await postScannerRequest(path, input)
+    : await fetchWithTimeout(`${COS_RUNNER_URL}${path}`, { method: stop ? 'POST' : 'GET' }, 15000);
   const result = await readRunnerJson(response);
   if (!response.ok) throw Object.assign(new Error(result.error || 'Scanner runner unavailable'), { status: response.status });
   return result;

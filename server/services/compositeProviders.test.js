@@ -14,6 +14,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+const { providerRequest } = vi.hoisted(() => ({ providerRequest: vi.fn() }));
+vi.mock('../lib/aiToolkit/internal/streamTransport.js', () => ({ requestProviderStream: providerRequest }));
+
 const graphState = vi.hoisted(() => ({ current: { connections: [], bindings: [], routes: [] }, enabled: true }));
 const settingsState = vi.hoisted(() => ({ current: {} }));
 const runtimeState = vi.hoisted(() => ({ current: {} }));
@@ -146,7 +149,7 @@ describe('materializeComposite — the run paths', () => {
     let i = 0;
     const body = { getReader: () => ({ read: async () => (i < chunks.length ? { done: false, value: chunks[i++] } : { done: true, value: undefined }) }) };
     const fetch = vi.fn(async () => ({ ok: true, body }));
-    vi.stubGlobal('fetch', fetch);
+    providerRequest.mockImplementation(fetch);
     const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) } });
     let done;
     const completed = new Promise((r) => { done = r; });
@@ -157,7 +160,7 @@ describe('materializeComposite — the run paths', () => {
     expect(url).toBe('https://integrate.api.nvidia.com/v1/chat/completions');
     expect(init.headers.Authorization).toBe('Bearer nim-key');
     expect(JSON.parse(init.body).model).toBe('nvidia/example-nemotron');
-    vi.unstubAllGlobals();
+    providerRequest.mockReset();
     await rm(dataDir, { recursive: true, force: true });
   });
 

@@ -35,6 +35,7 @@ import {
   queue, cloudRunning, remoteRunning, archive, videoHolds, mediaJobEvents, recoveringJobs, terminalOperations,
   getRunningJob, findJob, listJobs, swimlanePositions, trackTerminalOperation, isTopazUpscale,
 } from './state.js';
+import { wakeWorker } from './workerSignal.js';
 import { broadcastTerminalSse, closeArchivedJobSse } from './sse.js';
 import { loadMediaRuntimeModule } from '../bootHookRegistry.js';
 
@@ -287,6 +288,7 @@ async function acknowledgeWrittenTransitions(transitions) {
     Object.assign(job, job.durabilityPending);
     delete job.durabilityPending;
     delete job.persistenceError;
+    if (job.params?.remotePeerReservation === true) wakeWorker();
     await acknowledge();
   }
 }

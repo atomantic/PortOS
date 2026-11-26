@@ -282,6 +282,16 @@ describe('tasks:changed scheduler wake', () => {
     } finally { dequeueStarted.mockRestore(); }
   });
 
+  it('dispatches a task returned to pending by the requeue event', async () => {
+    const task = pendingTask('released-retry');
+    mocks.userPending = [task];
+
+    cosEvents.emit('tasks:changed', { action: 'requeued', type: 'user', previousStatus: 'in_progress', task });
+
+    await vi.waitFor(() => expect(readyIds(emit)).toEqual([task.id]));
+    expect(mocks.drainCalls).toBe(1);
+  });
+
   it.each(['added', 'approved', 'requeued'])('leaves a suppressed %s event to its caller', async action => {
     mocks.onDemand = [pendingTask('od-1')];
     cosEvents.emit('tasks:changed', { action, type: 'user', suppressDequeue: true, task: pendingTask('explicit') });

@@ -198,7 +198,7 @@ router.post('/foundations/:id/adopt', asyncHandler(async (req, res) => {
 // --- Controllers: the executable world-controller install surface (#7456,
 // #7488) --------------------------------------------------------------------
 // Everything here is the same projection the `eidoverse.controllers` mind-tool
-// group in `services/cos/cosToolRegistry.js` already exposes, reached this time
+// group in `services/cos/tools/eidoverseTools.js` already exposes, reached this time
 // from the UI rather than a mind: `describeControllerDefinitions()` and
 // `summarizeControllerInstall()` stay the ONE projection either caller reads,
 // so a UI/tool drift is impossible by construction rather than by discipline.

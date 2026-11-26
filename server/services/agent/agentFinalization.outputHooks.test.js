@@ -97,7 +97,7 @@ import { processAgentCompletion } from './agentCompletion.js';
 import { MAX_TASK_RETRIES, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const MANAGEMENT_SOURCE = readFileSync(join(__dirname, 'agentManagement.js'), 'utf8');
+const ORPHAN_RECOVERY_SOURCE = readFileSync(join(__dirname, 'agentOrphanRecovery.js'), 'utf8');
 const LIFECYCLE_SOURCE = readFileSync(join(__dirname, 'agentLifecycle.js'), 'utf8');
 const TASK = {
   id: 'sys-example',
@@ -1345,13 +1345,14 @@ it('finishes extended Deep with an honest partial summary through ordinary compl
 });
 
 describe('recovery path wiring (#3182, #8440)', () => {
-  // Both recovery paths (the orphan sweep in agentManagement.js and post-restart
+  // Both recovery paths (the orphan sweep in agentOrphanRecovery.js and post-restart
   // recovery in agentLifecycle.js) call the shared `retireDeadAgent` (#8440) for
   // this step list now, so the ordering guard moved to pin ITS body instead of
   // each caller's inlined copy.
   it('both recovery paths retire through the shared retireDeadAgent', () => {
-    const sweepStart = MANAGEMENT_SOURCE.indexOf('async function runCleanupOrphanedAgents');
-    const sweepBody = MANAGEMENT_SOURCE.slice(sweepStart, sweepStart + 12_000);
+    const sweepStart = ORPHAN_RECOVERY_SOURCE.indexOf('async function runCleanupOrphanedAgents');
+    expect(sweepStart).toBeGreaterThan(-1);
+    const sweepBody = ORPHAN_RECOVERY_SOURCE.slice(sweepStart, sweepStart + 12_000);
     expect(sweepBody).toMatch(/await retireDeadAgent\(/);
 
     const recoveryStart = LIFECYCLE_SOURCE.indexOf('Completing untracked agent');

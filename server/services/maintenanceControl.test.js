@@ -28,6 +28,8 @@ vi.mock('../lib/maintenanceAdmission.js', async () => {
   return { ...actual, maintenance: gate.admission };
 });
 import { bindMaintenanceIo, _getMaintenanceWatcher, resumeMaintenance, wakeAfterMaintenance } from './maintenanceControl.js';
+import { createMaintenanceAdmission } from '../lib/maintenanceAdmission.js';
+import * as workerSignal from './mediaJobQueue/workerSignal.js';
 
 afterAll(() => {
   _getMaintenanceWatcher()?.close();
@@ -80,11 +82,19 @@ describe('maintenance notifications', () => {
     expect(count('maintenance:readiness')).toBe(2);
     expect(sent.filter(e => e.name === 'maintenance:readiness')[1].payload).toEqual({ state: 'ready', blockerCount: 0 });
 
-    // Leaving the hold returns to normal.
+    // A separate journal writer releases the hold without this process's event bus.
     const { hold } = maintenance.status();
-    maintenance.resume({ id: hold.id, revision: hold.revision });
-    await notifyJournalChange();
-    expect(count('maintenance:readiness')).toBe(3);
+    const separateAdmission = createMaintenanceAdmission(gate.root);
+    const wake = vi.spyOn(workerSignal, 'wakeWorker');
+    try {
+      separateAdmission.resume({ id: hold.id, revision: hold.revision });
+      expect(wake).not.toHaveBeenCalled();
+      await notifyJournalChange();
+      expect(wake).toHaveBeenCalledOnce();
+      expect(count('maintenance:readiness')).toBe(3);
+    } finally {
+      wake.mockRestore();
+    }
 
     // Nothing private is broadcast.
     expect(JSON.stringify(sent)).not.toMatch(/resource-that-must-not-leak|pid|owner|hold/i);

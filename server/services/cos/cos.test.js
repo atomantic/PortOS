@@ -15,7 +15,7 @@ import { registerCosOrphanRecoveryHandlers } from '../bootHookRegistry.js';
 import { firstLine } from './cosTaskStore.js';
 import { retryHoldMetadata, RETRY_HOLD_GRACE_MS } from '../../lib/taskRetryHold.js';
 import { canQueueImprovementTasks, DEFAULT_STATE } from './cosState.js';
-import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isUserTaskRunnableUnattended } from './cosDequeue.js';
+import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isUserTaskRunnableUnattended } from './cosDequeueAdmission.js';
 import { parseTasksMarkdown } from '../../lib/legacyTaskMarkdown.js';
 import { storedForm } from '../../lib/cos/cosTaskRows.js';
 import {
@@ -36,7 +36,7 @@ import { PERSISTENT_MIND_SCHEMA_VERSION } from '../../lib/persistent/persistentM
 
 /**
  * Build the REAL per-cycle capacity tracker (`createDequeueCapacity` from
- * cosDequeue.js) from a fixture state — the same tracker `dequeueNextTask`
+ * cosDequeueAdmission.js) from a fixture state — the same tracker `dequeueNextTask`
  * constructs. Exposes `availableSlots`, `perProjectLimit`, `spawnProjectCounts`,
  * and the `canSpawn`/`trackSpawn` closure the scheduler enforces. `spawned` is a
  * live numeric getter (not an array), so the drain harness below keeps its own

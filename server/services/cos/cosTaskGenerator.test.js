@@ -2,7 +2,7 @@
  * Tests for the dry-run eligibility helpers in cosTaskGenerator.js.
  *
  * `selectDryRunAutoApproved` is the shared, non-mutating pass both spawn
- * engines (`dequeueNextTask` in cos.js and `evaluateTasks` here) use to log
+ * engines (`dequeueNextTask` in cosDequeue.js and `evaluateTasks` here) use to log
  * exactly the auto-approved system tasks execute mode WOULD spawn — applying
  * the same global-slot / max-spawns / cooldown / per-project gates against
  * virtual capacity, without blocking, persisting, or emitting anything. The
@@ -104,7 +104,7 @@ import { normalizeWorkItemRef, buildTargetWorkItemBlock, buildPrefetchedIssueCon
 import { cosEvents } from './cosEvents.js';
 import { DEFAULT_TASK_INTERVALS, getTaskInterval } from '../taskSchedule.js';
 import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
-import { createDequeueCapacity } from './cosDequeue.js';
+import { createDequeueCapacity } from './cosDequeueAdmission.js';
 
 const task = (id, metadata = {}) => ({ id, metadata });
 const noCooldown = () => Promise.resolve(false);

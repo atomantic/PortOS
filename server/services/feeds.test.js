@@ -3,7 +3,6 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { Dispatcher1Wrapper } from 'undici';
 
 let tmpRoot;
 
@@ -18,8 +17,8 @@ vi.mock('../lib/fileUtils.js', async () => {
 // once via dns.lookup and PINS the connection to that vetted address, so these
 // tests drive the same rebinding-pin path production uses.
 const fetchMock = vi.fn();
-vi.mock('../lib/fetchWithTimeout.js', () => ({
-  fetchWithTimeout: (...args) => fetchMock(...args),
+vi.mock('../lib/pinnedHttpRequest.js', () => ({
+  pinnedHttpRequest: (...args) => fetchMock(...args),
 }));
 
 const lookupMock = vi.fn();
@@ -293,15 +292,18 @@ describe('addFeed', () => {
     const result = await feeds.addFeed('https://v6only.example.com/rss');
     expect(result.error).toBeUndefined();
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    // Connection is pinned to the vetted address (undici would otherwise re-resolve).
-    expect(fetchMock.mock.calls[0][1].dispatcher).toBeInstanceOf(Dispatcher1Wrapper);
+    const callback = vi.fn();
+    fetchMock.mock.calls[0][1].lookup('v6only.example.com', { all: true }, callback);
+    expect(callback).toHaveBeenCalledWith(null, [{ address: '2606:4700:4700::1111', family: 6 }], 6);
   });
 
   it('pins the connection to the vetted address (rebinding TOCTOU closed)', async () => {
     fetchMock.mockResolvedValue(makeResponse({ body: RSS_FIXTURE }));
     lookupMock.mockResolvedValue({ address: '93.184.216.34', family: 4 });
     await feeds.addFeed('https://rebind.example.com/rss');
-    expect(fetchMock.mock.calls[0][1].dispatcher).toBeInstanceOf(Dispatcher1Wrapper);
+    const callback = vi.fn();
+    fetchMock.mock.calls[0][1].lookup('rebind.example.com', {}, callback);
+    expect(callback).toHaveBeenCalledWith(null, '93.184.216.34', 4);
   });
 
   it('follows a single safe redirect to the new URL', async () => {
@@ -312,7 +314,7 @@ describe('addFeed', () => {
     expect(result.error).toBeUndefined();
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[1][0]).toBe('https://example.com/final.xml');
-    expect(fetchMock.mock.calls[1][1].redirect).toBe('error');
+    expect(fetchMock.mock.calls[1][1].lookup).toBeTypeOf('function');
   });
 
   it('rejects redirects to private IPs without making the second fetch', async () => {

@@ -4,7 +4,10 @@ import { join, basename } from 'path';
 import { tmpdir } from 'os';
 import EventEmitter from 'events';
 import { ChildProcess } from 'child_process';
-import { pinPlatform } from '../testHelper.js';
+import { closeLoopbackServer, pinPlatform, startLoopbackServer } from '../testHelper.js';
+
+const { providerRequest } = vi.hoisted(() => ({ providerRequest: vi.fn() }));
+vi.mock('./internal/streamTransport.js', () => ({ requestProviderStream: providerRequest }));
 
 const IS_WIN32 = process.platform === 'win32';
 
@@ -32,7 +35,6 @@ const fsPromises = await import('fs/promises');
 const { atomicWrite } = await import('./internal/atomicWrite.js');
 const { createRunnerService } = await import('./runner.js');
 const { createRunLifecycle } = await import('./internal/runLifecycle.js');
-const { streamTransportDispatcher } = await import('./internal/streamTransport.js');
 
 describe('AI Toolkit runner service', () => {
   const tempDirs = [];
@@ -43,6 +45,7 @@ describe('AI Toolkit runner service', () => {
     // that never fires. No-op when the test used real timers.
     vi.useRealTimers();
     vi.restoreAllMocks();
+    providerRequest.mockReset();
     for (const dir of tempDirs.splice(0)) {
       await rm(dir, { recursive: true, force: true });
     }
@@ -58,7 +61,7 @@ describe('AI Toolkit runner service', () => {
     const prompt = 'Public part plus private fact';
     const reader = { read: async () => ({ done: true }), cancel: async () => {}, releaseLock() {} };
     const providerFetch = vi.fn(async () => ({ ok: true, body: { getReader: () => reader } }));
-    vi.stubGlobal('fetch', providerFetch);
+    providerRequest.mockImplementation(providerFetch);
     try {
       const { runId, runDir } = await runner.createRun({ providerId: provider.id, provider, prompt, source: 'digital-twin' });
       const settled = Promise.withResolvers();
@@ -72,7 +75,7 @@ describe('AI Toolkit runner service', () => {
       });
       expect(onRunCreated).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'Public part plus redaction notice' }));
     } finally {
-      vi.unstubAllGlobals();
+      providerRequest.mockReset();
     }
   });
 
@@ -94,7 +97,7 @@ describe('AI Toolkit runner service', () => {
     const providerFetch = vi.fn()
       .mockResolvedValueOnce({ ok: false, status: 429, text: async () => 'slow down' })
       .mockResolvedValueOnce({ ok: true, body: { getReader: () => reader } });
-    vi.stubGlobal('fetch', providerFetch);
+    providerRequest.mockImplementation(providerFetch);
     try {
       const { runId } = await runner.createRun({ providerId: provider.id, provider, prompt: 'hello' });
       const settled = Promise.withResolvers();
@@ -114,7 +117,7 @@ describe('AI Toolkit runner service', () => {
       expect(metadata.success).toBe(false);
       expect(metadata.error).toContain('429');
     } finally {
-      vi.unstubAllGlobals();
+      providerRequest.mockReset();
     }
   });
 
@@ -127,7 +130,7 @@ describe('AI Toolkit runner service', () => {
     const hook = new Promise(resolve => { releaseHook = resolve; });
     const cleanup = new Promise(resolve => { releaseReader = resolve; });
     const reader = { read: vi.fn(async () => ({ done: true })), cancel: vi.fn(() => cleanup), releaseLock: vi.fn() };
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, body: { getReader: () => reader } })));
+    providerRequest.mockImplementation(vi.fn(async () => ({ ok: true, body: { getReader: () => reader } })));
     const completed = vi.fn(); const settled = vi.fn(); const failed = vi.fn();
     const runner = createRunnerService({ dataDir, hooks: { onRunCompleted: () => hook } });
     await runner.executeApiRun({ runId: 'settlement', provider: { id: 'example', endpoint: 'https://api.example.com/v1' },
@@ -158,7 +161,7 @@ describe('AI Toolkit runner service', () => {
       beforeDispatch = await readFile(metadataPath, 'utf8');
       return { success: true };
     });
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true,
+    providerRequest.mockImplementation(vi.fn(async () => ({ ok: true,
       body: { getReader: () => ({ read: async () => ({ done: true }) }) },
     })));
     const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady } });
@@ -303,7 +306,7 @@ describe('AI Toolkit runner service', () => {
     const onComplete = vi.fn();
     const onRunFailed = vi.fn();
     const fetch = vi.fn();
-    vi.stubGlobal('fetch', fetch);
+    providerRequest.mockImplementation(fetch);
 
     const runner = createRunnerService({
       dataDir,
@@ -349,7 +352,7 @@ describe('AI Toolkit runner service', () => {
     const onRunFailed = vi.fn();
     const onRunCanceled = vi.fn();
     const onComplete = vi.fn();
-    const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const fetch = vi.fn(); providerRequest.mockImplementation(fetch);
     const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady, onRunFailed, onRunCanceled } });
     const execution = runner.executeApiRun({ runId: 'run-admission', provider: { id: 'local', endpoint: 'http://localhost:11434/v1' },
       prompt: 'hello', beforeExecute: () => { if (!active) throw new Error('Production stopped'); }, onComplete });
@@ -372,7 +375,7 @@ describe('AI Toolkit runner service', () => {
       defaultModel: 'poolside/laguna-xs-2.1',
     };
     const fetch = vi.fn();
-    vi.stubGlobal('fetch', fetch);
+    providerRequest.mockImplementation(fetch);
     const runner = createRunnerService({
       dataDir,
       hooks: {
@@ -413,7 +416,7 @@ describe('AI Toolkit runner service', () => {
     const socketError = Object.assign(new TypeError('fetch failed'), {
       cause: { code: 'ECONNREFUSED', message: 'connect ECONNREFUSED 192.0.2.10:8000' },
     });
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(socketError));
+    providerRequest.mockImplementation(vi.fn().mockRejectedValue(socketError));
 
     const runner = createRunnerService({
       dataDir,
@@ -455,7 +458,7 @@ describe('AI Toolkit runner service', () => {
       })
     };
     const fetch = vi.fn(async () => ({ ok: true, body }));
-    vi.stubGlobal('fetch', fetch);
+    providerRequest.mockImplementation(fetch);
     return fetch;
   };
 
@@ -470,7 +473,7 @@ describe('AI Toolkit runner service', () => {
   it('forwards normalized 429 headers to provider status', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);
-    vi.stubGlobal('fetch', vi.fn(async () => ({
+    providerRequest.mockImplementation(vi.fn(async () => ({
       ok: false,
       status: 429,
       statusText: 'Too Many Requests',
@@ -541,7 +544,7 @@ describe('AI Toolkit runner service', () => {
   it('keeps a rate-limit failure compatible with a partial provider status service', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);
-    vi.stubGlobal('fetch', vi.fn(async () => ({
+    providerRequest.mockImplementation(vi.fn(async () => ({
       ok: false,
       status: 429,
       statusText: 'Too Many Requests',
@@ -574,7 +577,7 @@ describe('AI Toolkit runner service', () => {
         ? { done: false, value: encoder.encode(frames[i++]) }
         : { done: true, value: undefined }),
     }) } }));
-    vi.stubGlobal('fetch', fetch);
+    providerRequest.mockImplementation(fetch);
     return fetch;
   };
 
@@ -827,7 +830,7 @@ describe('AI Toolkit runner service', () => {
           ? { done: false, value: chunks[index++] }
           : { done: true } }) },
       });
-    vi.stubGlobal('fetch', fetch);
+    providerRequest.mockImplementation(fetch);
 
     const runner = createRunnerService({
       dataDir,
@@ -919,7 +922,7 @@ describe('AI Toolkit runner service', () => {
       };
       return { ok: true, body };
     });
-    vi.stubGlobal('fetch', fetch);
+    providerRequest.mockImplementation(fetch);
 
     const runner = createRunnerService({
       dataDir,
@@ -962,44 +965,37 @@ describe('AI Toolkit runner service', () => {
     expect(metadata.error).toMatch(/no stream progress/i);
   });
 
-  // Those two bounds are only authoritative if nothing UNDERNEATH them expires
-  // first. undici arms its own `headersTimeout`/`bodyTimeout` on every fetch —
-  // both 300000ms, the same number as the default stall bound — one layer
-  // closer to the socket, so it won every race: a provider that went quiet
-  // finalized as `network-error` with no `timeoutBound` stamped for the bench
-  // decision, and a `provider.timeout` raised past five minutes was silently
-  // capped. The streaming request has to go out on the dispatcher that
-  // disables them (./internal/streamTransport.js).
-  it('sends the streaming request through the ceiling-free transport dispatcher', async () => {
+  it('runs a provider completion through the native streaming transport', async () => {
+    const { requestProviderStream } = await vi.importActual('./internal/streamTransport.js');
+    providerRequest.mockImplementation(requestProviderStream);
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);
-
-    const fetch = vi.fn(async () => ({
-      ok: true,
-      body: { getReader: () => ({ read: async () => ({ done: true }), cancel: async () => {} }) }
-    }));
-    vi.stubGlobal('fetch', fetch);
-
-    const runner = createRunnerService({
-      dataDir,
-      hooks: { ensureProviderReady: async () => ({ success: true }) }
+    const received = vi.fn();
+    const server = await startLoopbackServer(async (req, res) => {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      received(req.method, req.url, JSON.parse(body));
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.end('data: {"choices":[{"delta":{"content":"streamed reply"}}]}\n\ndata: [DONE]\n\n');
     });
-
-    let done;
-    const completed = new Promise((resolve) => { done = resolve; });
-    await runner.executeApiRun({
-      runId: 'run-dispatcher',
-      provider: runReady(),
-      model: null,
-      prompt: 'hi',
-      workspacePath: process.cwd(),
-      screenshots: [],
-      onData: undefined,
-      onComplete: (m) => done(m)
-    });
-    await completed;
-
-    expect(fetch.mock.calls[0][1].dispatcher).toBe(streamTransportDispatcher());
+    try {
+      const endpoint = `http://127.0.0.1:${server.address().port}/v1`;
+      const provider = runReady({ id: 'example', name: 'Example', endpoint });
+      const runner = createRunnerService({ dataDir, providerService: {} });
+      const prompt = 'Test the transport';
+      const { runId } = await runner.createRun({ providerId: provider.id, provider, prompt });
+      const settled = Promise.withResolvers();
+      await runner.executeApiRun({ runId, provider, prompt, onSettled: settled.resolve });
+      await settled.promise;
+      expect(received).toHaveBeenCalledExactlyOnceWith('POST', '/v1/chat/completions', expect.objectContaining({
+        stream: true,
+        messages: [{ role: 'user', content: prompt }],
+      }));
+      await expect(runner.getRunOutput(runId)).resolves.toBe('streamed reply');
+    } finally {
+      server.closeAllConnections();
+      await closeLoopbackServer(server);
+    }
   });
 
   it('bounds a run whose provider-readiness hook never resolves (fetch never reached)', async () => {
@@ -1010,7 +1006,7 @@ describe('AI Toolkit runner service', () => {
     // fetch, so aborting the controller alone can't release the slot. The
     // wall-clock timer must finalize the run independently.
     const fetch = vi.fn();
-    vi.stubGlobal('fetch', fetch);
+    providerRequest.mockImplementation(fetch);
     const runner = createRunnerService({
       dataDir,
       hooks: { ensureProviderReady: () => new Promise(() => {}) }
@@ -1057,9 +1053,8 @@ describe('AI Toolkit runner service', () => {
         body: {
           getReader: () => ({
             read: () => new Promise((_resolve, reject) => {
-              // Reject with the signal's own reason, exactly as undici does —
-              // for a reason-less `abort()` that is Node's DOMException whose
-              // message is "This operation was aborted".
+              // Check that a bare abort without a reason still counts as a
+              // user cancel when Stop initiated it.
               const fail = () => reject(signal.reason);
               if (signal.aborted) return fail();
               signal.addEventListener('abort', fail, { once: true });
@@ -1069,7 +1064,7 @@ describe('AI Toolkit runner service', () => {
         }
       };
     });
-    vi.stubGlobal('fetch', fetch);
+    providerRequest.mockImplementation(fetch);
 
     const onRunFailed = vi.fn();
     const onRunCanceled = vi.fn();
@@ -1154,7 +1149,7 @@ describe('AI Toolkit runner service', () => {
         }
       };
     });
-    vi.stubGlobal('fetch', fetch);
+    providerRequest.mockImplementation(fetch);
 
     const onRunFailed = vi.fn();
     const runner = createRunnerService({
@@ -1204,7 +1199,7 @@ describe('AI Toolkit runner service', () => {
       if (signal.aborted) return fail();
       signal.addEventListener('abort', fail, { once: true });
     }));
-    vi.stubGlobal('fetch', fetch);
+    providerRequest.mockImplementation(fetch);
 
     const onRunFailed = vi.fn();
     const runner = createRunnerService({
@@ -1258,7 +1253,7 @@ describe('AI Toolkit runner service', () => {
     let stopAccepted = null;
     const frame = (text) => new TextEncoder()
       .encode(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n`);
-    vi.stubGlobal('fetch', vi.fn(async () => {
+    providerRequest.mockImplementation(vi.fn(async () => {
       let sent = false;
       return {
         ok: true,
@@ -1315,7 +1310,7 @@ describe('AI Toolkit runner service', () => {
     expect(onRunFailed).not.toHaveBeenCalled();
   });
   // A `data:` frame is NOT guaranteed to arrive whole: the reader hands back
-  // arbitrary byte-sized chunks (~8KB from undici), so a long frame — a
+  // arbitrary byte-sized chunks, so a long frame — a
   // reasoning model's `delta.reasoning`, a big content burst — routinely
   // straddles two reads. Parsing per-chunk instead of per-LINE fed JSON.parse a
   // half frame and threw `Unterminated string in JSON at position 8064`,
@@ -1333,7 +1328,7 @@ describe('AI Toolkit runner service', () => {
       encoder.encode('data: [DONE]\n'),
     ];
     let i = 0;
-    vi.stubGlobal('fetch', vi.fn(async () => ({
+    providerRequest.mockImplementation(vi.fn(async () => ({
       ok: true,
       body: { getReader: () => ({ read: async () => (i < chunks.length
         ? { done: false, value: chunks[i++] }
@@ -1362,7 +1357,7 @@ describe('AI Toolkit runner service', () => {
     const frames = ['data: {"choices":[{"delta":{"content":"{}"}}]}\n',
       'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n', 'data: [DONE]\n'];
     let index = 0;
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, body: { getReader: () => ({
+    providerRequest.mockImplementation(vi.fn(async () => ({ ok: true, body: { getReader: () => ({
       read: async () => index < frames.length
         ? { done: false, value: new TextEncoder().encode(frames[index++]) } : { done: true },
     }) } })));
@@ -1386,7 +1381,7 @@ describe('AI Toolkit runner service', () => {
     const cut = frame.indexOf(0xe2) + 1;
     const chunks = [frame.slice(0, cut), frame.slice(cut), encoder.encode('data: [DONE]\n')];
     let i = 0;
-    vi.stubGlobal('fetch', vi.fn(async () => ({
+    providerRequest.mockImplementation(vi.fn(async () => ({
       ok: true,
       body: { getReader: () => ({ read: async () => (i < chunks.length
         ? { done: false, value: chunks[i++] }
@@ -1419,7 +1414,7 @@ describe('AI Toolkit runner service', () => {
       encoder.encode('data: [DONE]\r\n'),
     ];
     let i = 0;
-    vi.stubGlobal('fetch', vi.fn(async () => ({
+    providerRequest.mockImplementation(vi.fn(async () => ({
       ok: true,
       body: { getReader: () => ({ read: async () => (i < chunks.length
         ? { done: false, value: chunks[i++] }
@@ -1454,7 +1449,7 @@ describe('AI Toolkit runner service', () => {
       encoder.encode('data: [DONE]\n'),
     ];
     let i = 0;
-    vi.stubGlobal('fetch', vi.fn(async () => ({
+    providerRequest.mockImplementation(vi.fn(async () => ({
       ok: true,
       body: { getReader: () => ({ read: async () => (i < chunks.length
         ? { done: false, value: chunks[i++] }
@@ -1491,7 +1486,7 @@ describe('AI Toolkit runner service', () => {
       encoder.encode('data: [DONE]\n'),
     ];
     let i = 0;
-    vi.stubGlobal('fetch', vi.fn(async () => ({
+    providerRequest.mockImplementation(vi.fn(async () => ({
       ok: true,
       body: { getReader: () => ({ read: async () => (i < chunks.length
         ? { done: false, value: chunks[i++] }
@@ -1528,7 +1523,7 @@ describe('AI Toolkit runner service', () => {
       encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { reasoning: 'thought so far' } }] })}\n`),
     ];
     let i = 0;
-    vi.stubGlobal('fetch', vi.fn(async () => ({
+    providerRequest.mockImplementation(vi.fn(async () => ({
       ok: true,
       body: { getReader: () => ({ read: async () => (i < chunks.length
         ? { done: false, value: chunks[i++] }
@@ -1558,7 +1553,12 @@ describe('AI Toolkit runner service', () => {
   // `.cause`. It matched nothing, so the run persisted `errorCategory: null`,
   // which the host's cascade reads as UNKNOWN and escalates to a tier-4
   // investigation task instead of a bounded retry.
-  it('classifies a mid-stream transport drop as a network error, not UNKNOWN', async () => {
+  it.each([
+    ['a native socket error', Object.assign(new Error('aborted'), { code: 'ECONNRESET' })],
+    ['a Fetch error with a nested cause', Object.assign(new TypeError('terminated'), {
+      cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }),
+    })],
+  ])('classifies a mid-stream drop reported as %s as a network error', async (_kind, midStreamDrop) => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);
     const encoder = new TextEncoder();
@@ -1566,15 +1566,11 @@ describe('AI Toolkit runner service', () => {
       encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'Here' } }] })}\n`),
     ];
     let i = 0;
-    // undici's exact shape: an opaque outer TypeError over a coded cause.
-    const midStreamDrop = () => Object.assign(new TypeError('terminated'), {
-      cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }),
-    });
-    vi.stubGlobal('fetch', vi.fn(async () => ({
+    providerRequest.mockImplementation(vi.fn(async () => ({
       ok: true,
       body: { getReader: () => ({ read: async () => (i < chunks.length
         ? { done: false, value: chunks[i++] }
-        : Promise.reject(midStreamDrop())) }) },
+        : Promise.reject(midStreamDrop)) }) },
     })));
     const runner = createRunnerService({
       dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
@@ -1592,7 +1588,7 @@ describe('AI Toolkit runner service', () => {
     expect(metadata.errorCategory).toBe('network-error');
     // The flattened chain, not the opaque outer message, is what the run record
     // and any investigation task quote.
-    expect(metadata.error).toContain('UND_ERR_SOCKET');
+    expect(metadata.error).toContain(midStreamDrop.cause?.code ?? midStreamDrop.code);
   });
 
   // The hidden channel is named `reasoning_content` by NVIDIA NIM, vLLM and the
@@ -1614,7 +1610,7 @@ describe('AI Toolkit runner service', () => {
       encoder.encode('data: [DONE]\n'),
     ];
     let i = 0;
-    vi.stubGlobal('fetch', vi.fn(async () => ({
+    providerRequest.mockImplementation(vi.fn(async () => ({
       ok: true,
       body: { getReader: () => ({ read: async () => (i < chunks.length
         ? { done: false, value: chunks[i++] }
@@ -1651,7 +1647,7 @@ describe('AI Toolkit runner service', () => {
     const frame = encoder.encode(
       `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: 'partial thinking' } }] })}\n`);
     let sent = false;
-    vi.stubGlobal('fetch', vi.fn(async () => ({
+    providerRequest.mockImplementation(vi.fn(async () => ({
       ok: true,
       body: { getReader: () => ({ read: async () => {
         if (sent) return new Promise(() => {});
@@ -1688,7 +1684,7 @@ describe('AI Toolkit runner service', () => {
   it('finalizes a timeout that fires before any response, with no reasoning to salvage', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);
-    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+    providerRequest.mockImplementation(vi.fn(() => new Promise(() => {})));
     const runner = createRunnerService({
       dataDir, hooks: { ensureProviderReady: () => new Promise(() => {}) },
     });
@@ -1740,7 +1736,7 @@ describe('AI Toolkit runner service', () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);
     let finishRead;
-    vi.stubGlobal('fetch', vi.fn(async (_url, { signal }) => ({ ok: true,
+    providerRequest.mockImplementation(vi.fn(async (_url, { signal }) => ({ ok: true,
       body: { getReader: () => ({ read: () => new Promise((resolve, reject) => {
         finishRead = resolve;
         signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
@@ -1790,7 +1786,7 @@ describe('AI Toolkit runner service', () => {
     const FRAMES = 20;
     const INTERVAL_MS = 400;
     const STALL_MS = 1000;
-    vi.stubGlobal('fetch', vi.fn(async (_url, opts) => ({
+    providerRequest.mockImplementation(vi.fn(async (_url, opts) => ({
       ok: true,
       body: { getReader: () => clockDrivenReader({ intervalMs: INTERVAL_MS, frames: FRAMES, signal: opts.signal }) },
     })));
@@ -1829,7 +1825,7 @@ describe('AI Toolkit runner service', () => {
 
     // 55s between frames keeps the 120s no-progress bound permanently re-armed
     // (and never lands on the same tick as the 30-minute cap).
-    vi.stubGlobal('fetch', vi.fn(async (_url, opts) => ({
+    providerRequest.mockImplementation(vi.fn(async (_url, opts) => ({
       ok: true,
       body: { getReader: () => clockDrivenReader({ intervalMs: 55_000, signal: opts.signal }) },
     })));
@@ -1863,7 +1859,7 @@ describe('AI Toolkit runner service', () => {
     vi.useFakeTimers();
     const request = vi.fn(async (_url, opts) => ({ ok: true,
       body: { getReader: () => clockDrivenReader({ intervalMs: 1000, signal: opts.signal, delta: { reasoning_content: 'thinking' } }) } }));
-    vi.stubGlobal('fetch', request);
+    providerRequest.mockImplementation(request);
     const failed = vi.fn();
     const completeSpy = vi.fn(value => complete(value));
     const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }), onRunFailed: failed } });
@@ -1895,7 +1891,7 @@ describe('AI Toolkit runner service', () => {
     tempDirs.push(dataDir);
     vi.useFakeTimers();
 
-    vi.stubGlobal('fetch', vi.fn(async (_url, opts) => ({
+    providerRequest.mockImplementation(vi.fn(async (_url, opts) => ({
       ok: true,
       body: { getReader: () => clockDrivenReader({ intervalMs: 600_000, signal: opts.signal }) },
     })));
@@ -1933,7 +1929,7 @@ describe('AI Toolkit runner service', () => {
       encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'tail' } }] })}`),
     ];
     let i = 0;
-    vi.stubGlobal('fetch', vi.fn(async () => ({
+    providerRequest.mockImplementation(vi.fn(async () => ({
       ok: true,
       body: { getReader: () => ({ read: async () => (i < chunks.length
         ? { done: false, value: chunks[i++] }
@@ -2352,7 +2348,7 @@ describe('AI Toolkit runner — built-in executeCliRun spawn (#1865)', () => {
 describe('AI Toolkit run history listing (#16557)', () => {
   const tempDirs = [];
   afterEach(async () => {
-    vi.unstubAllGlobals();
+    providerRequest.mockReset();
     for (const dir of tempDirs.splice(0)) await rm(dir, { recursive: true, force: true });
   });
 
@@ -2393,7 +2389,7 @@ describe('AI Toolkit run history listing (#16557)', () => {
 
     // In-process finalize through the toolkit's own API run path.
     const reader = { read: vi.fn(async () => ({ done: true })), cancel: vi.fn(), releaseLock: vi.fn() };
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, body: { getReader: () => reader } })));
+    providerRequest.mockImplementation(vi.fn(async () => ({ ok: true, body: { getReader: () => reader } })));
     const settled = new Promise(resolve => runner.executeApiRun({ runId: 'open',
       provider: { id: 'example', endpoint: 'https://api.example.com/v1' }, prompt: 'Example', onSettled: resolve }));
     await settled;
