@@ -22,6 +22,11 @@ vi.mock('./extendSplice.js', () => fx.extendSpliceFactory());
 vi.mock('../../lib/lipsyncAlign.js', () => fx.lipsyncAlignFactory());
 vi.mock('../hfToken.js', () => fx.hfTokenFactory());
 vi.mock('../../lib/hfCache.js', async (original) => fx.hfCacheFactory(original));
+// The file mocks below cannot read a real maintenance journal.
+vi.mock('../../lib/databaseMaintenanceJournal.js', async importOriginal => ({
+  ...await importOriginal(),
+  assertDatabaseAdmission: () => {},
+}));
 vi.mock('fs', () => fx.fsFactory());
 vi.mock('../../lib/frameQuality.js', async (importOriginal) => fx.frameQualityFactory(importOriginal));
 vi.mock('./runtimes.js', async (importOriginal) => fx.runtimesFactory(importOriginal));
@@ -80,6 +85,29 @@ describe('stitchVideos — history provenance', () => {
       historyKey,
     });
   };
+
+  it('publishes the finished encode after a long backup cut', async () => {
+    const { acquireBackupSnapshotCut, _backupSnapshotWaitersForTests } = await import('../../lib/backupSnapshotBoundary.js');
+    const { videoGenEvents } = await import('./events.js');
+    const activity = vi.fn();
+    videoGenEvents.on('activity', activity);
+    const release = await acquireBackupSnapshotCut();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const work = stitchHistory({}, {});
+    const settled = vi.fn();
+    void work.then(settled, settled);
+    try {
+      await vi.waitFor(() => expect(_backupSnapshotWaitersForTests().publications).toBe(1));
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(activity).toHaveBeenCalled();
+      expect(settled).not.toHaveBeenCalled();
+    } finally {
+      release();
+      vi.useRealTimers();
+      videoGenEvents.off('activity', activity);
+    }
+    expect(await work).toMatchObject({ chainedFrom: ['chunk-a', 'chunk-b'] });
+  });
 
   it('inherits every render dial and provenance field from the first chunk', async () => {
     const chunkRenderConfig = {

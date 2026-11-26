@@ -24,6 +24,7 @@ import { resolveYtDlpBinaries, downloadAudioToTempMp3, cleanupYtDlpTemp } from '
 import { attachReferenceAudio } from './rounds.js';
 import { trackedRenderMap } from './renderActivity.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
+import { FINISHED_OUTPUT_ADMISSION_MS } from '../lib/backupPublicationWait.js';
 
 // Reference performances are short clips — bound resource use so a mistyped
 // link to a long archive/livestream can't download + transcode unbounded.
@@ -129,7 +130,10 @@ export async function startReferenceAudioImport(url, { roundId = null, reference
       // round row first names the imported file, so it commits under the backup
       // lease (#9982): a row that waits out a cut names only bytes it copied.
       const attached = roundId && referenceId
-        ? await withBackupAssetPublication(() => attachReferenceAudio(roundId, referenceId, filename)).catch((err) => {
+        ? await withBackupAssetPublication(() => attachReferenceAudio(roundId, referenceId, filename), {
+            timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
+            onWait: () => console.log(`⏸️ Reference-audio import ${shortId(jobId)} waiting for the backup to finish before attaching`),
+          }).catch((err) => {
             console.error(`❌ Reference-audio import ${shortId(jobId)} could not attach ${filename}: ${err?.message || err}`);
             return false;
           })

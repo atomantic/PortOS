@@ -477,6 +477,9 @@ const LOCAL_RENDER_STALE_MS = 24 * 60 * 60_000;
 // from `postprocessingStartedAt`, NOT `createdAt`; see the branch below.
 const PACKAGING_STALE_MS = GROK_RENDER_STALE_MS;
 
+// The TUI has ended, but this process still owns the attach while admission is closed.
+export const activeTuiAttachments = new Set();
+
 /**
  * Read-time normalization of a run stuck at `rendering`, shared by both lanes
  * and never persisted.
@@ -506,6 +509,7 @@ const PACKAGING_STALE_MS = GROK_RENDER_STALE_MS;
  * server was down for longer than its TTL, or an attach that threw.
  */
 export const normalizeStaleAnimationRun = (run, errorMessage) => {
+  if (activeTuiAttachments.has(`${run?.characterId}/${run?.id}`)) return run;
   // `postprocessing` needs the same treatment as `rendering`, and a TIGHTER
   // window: it is bounded LOCAL work (decode the clip, align, despill, pack), so
   // a run still in it long afterwards means the process doing that work died.

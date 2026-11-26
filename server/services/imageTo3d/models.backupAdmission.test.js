@@ -5,12 +5,15 @@
  * and stamps the row in one workflow. A cut copies files before it dumps rows,
  * so it must never land between a file write and the row that names it.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdir, readFile, writeFile as writeMesh } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { cleanupTempDataRoots, lazyTempDataRoot } from '../../lib/mockPathsDataRoot.js';
 
 const { writeFile } = vi.hoisted(() => ({ writeFile: vi.fn(() => Promise.resolve()) }));
 
 vi.mock('../../lib/fileUtils.js', () => ({
-  PATHS: { imageTo3d: '/mock/data/image-to-3d' },
+  PATHS: { imageTo3d: lazyTempDataRoot('portos-image3d-backup-') },
   resolveGalleryImage: vi.fn((filename) => `/mock/data/images/${filename}`),
   ensureDir: vi.fn(() => Promise.resolve()),
   rmGuarded: vi.fn(() => Promise.resolve()),
@@ -48,9 +51,12 @@ vi.mock('./db.js', () => ({
 }));
 
 const store = await import('./db.js');
+const { runTrellis2Generate } = await import('./trellis2.js');
 const { startGeneration, saveModelUsdz } = await import('./models.js');
 const { drainActivityNotesForTests } = await import('../systemActivityNotify.js');
-const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
+const { acquireBackupSnapshotCut, _backupSnapshotWaitersForTests } = await import('../../lib/backupSnapshotBoundary.js');
+const { PATHS, rmGuarded } = await import('../../lib/fileUtils.js');
+afterAll(() => cleanupTempDataRoots());
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
 const usdzBytes = Buffer.from([0x50, 0x4b, 0x03, 0x04, 1, 2, 3]);
@@ -165,17 +171,28 @@ describe('image-to-3D render completion and a backup cut', () => {
     await vi.waitFor(() => expect(current.status).toBe('ready'));
   });
 
-  it('keeps the ready commit out of a cut: the dumped row is still generating', async () => {
+  it('keeps a finished mesh and its generating row through a long cut, then marks it ready', async () => {
     current = { ...readyRecord(), status: 'draft', assetPath: null };
+    const mesh = join(PATHS.imageTo3d, 'image3d-example', 'model.glb');
+    runTrellis2Generate.mockImplementationOnce(({ outputPath }) => ({
+      promise: mkdir(dirname(outputPath), { recursive: true }).then(() => writeMesh(outputPath, 'mesh output')),
+      kill: vi.fn(),
+    }));
     const release = await acquireBackupSnapshotCut();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     try {
       await startGeneration('image3d-example');
-      await settle();
-      // The render finished, but its commit waits for the cut to close.
+      await vi.waitFor(() => expect(_backupSnapshotWaitersForTests().publications).toBe(1));
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
       expect(current.status).toBe('generating');
+      expect(await readFile(mesh, 'utf8')).toBe('mesh output');
     } finally {
+      vi.useRealTimers();
       release();
     }
     await vi.waitFor(() => expect(current.status).toBe('ready'));
+    expect(current.assetPath).toBe('/data/image-to-3d/image3d-example/model.glb');
+    expect(rmGuarded).not.toHaveBeenCalledWith(mesh, expect.anything());
+    expect(await readFile(mesh, 'utf8')).toBe('mesh output');
   });
 });

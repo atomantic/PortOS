@@ -22,6 +22,11 @@ vi.mock('./extendSplice.js', () => fx.extendSpliceFactory());
 vi.mock('../../lib/lipsyncAlign.js', () => fx.lipsyncAlignFactory());
 vi.mock('../hfToken.js', () => fx.hfTokenFactory());
 vi.mock('../../lib/hfCache.js', async (original) => fx.hfCacheFactory(original));
+// The file mocks below cannot read a real maintenance journal.
+vi.mock('../../lib/databaseMaintenanceJournal.js', async importOriginal => ({
+  ...await importOriginal(),
+  assertDatabaseAdmission: () => {},
+}));
 vi.mock('fs', () => fx.fsFactory());
 vi.mock('../../lib/frameQuality.js', async (importOriginal) => fx.frameQualityFactory(importOriginal));
 vi.mock('./runtimes.js', async (importOriginal) => fx.runtimesFactory(importOriginal));
@@ -63,6 +68,24 @@ describe('upscaleHistoryItem — render duration', () => {
     const { upscaleHistoryItem } = await import('./local.js');
     return upscaleHistoryItem(SOURCE_ID);
   };
+
+  it('publishes the finished encode after a long backup cut', async () => {
+    const { acquireBackupSnapshotCut, _backupSnapshotWaitersForTests } = await import('../../lib/backupSnapshotBoundary.js');
+    const release = await acquireBackupSnapshotCut();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const work = upscaleFrom({});
+    const settled = vi.fn();
+    void work.then(settled, settled);
+    try {
+      await vi.waitFor(() => expect(_backupSnapshotWaitersForTests().publications).toBe(1));
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(settled).not.toHaveBeenCalled();
+    } finally {
+      release();
+      vi.useRealTimers();
+    }
+    expect(await work).toMatchObject({ upscaledFrom: SOURCE_ID });
+  });
 
   it('times its own ffmpeg pass instead of inheriting the source render', async () => {
     const upscaled = await upscaleFrom({

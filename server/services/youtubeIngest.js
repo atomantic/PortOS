@@ -56,6 +56,7 @@ import {
   unlinkGuarded,
 } from '../lib/fileUtils.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
+import { FINISHED_OUTPUT_ADMISSION_MS } from '../lib/backupPublicationWait.js';
 import { findFfmpeg } from '../lib/ffmpeg.js';
 import { findYtDlp } from '../lib/ytdlp.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
@@ -632,6 +633,9 @@ export async function startYoutubeIngest({
           await copyFileGuarded(result.outPath, audioStagingPath);
           if (job.canceled) throw new Error('canceled');
           await renameGuarded(audioStagingPath, audioPath);
+        }, {
+          timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
+          onWait: () => console.log(`⏸️ YouTube ingest audio ${shortId(jobId)} waiting for the backup to finish before saving`),
         });
         const bytes = await stat(audioPath).then((s) => s.size).catch(() => null);
         landed.audio = { path: audioPath, bytes };

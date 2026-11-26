@@ -1,4 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterAll, describe, it, expect, vi, beforeEach } from 'vitest';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { acquireBackupSnapshotCut, _backupSnapshotWaitersForTests } from '../lib/backupSnapshotBoundary.js';
 
 // Mock the history store so listDownloads/deleteDownload can be exercised
 // without touching disk, and mock the owner-aware delete so deleteDownload's
@@ -11,11 +13,25 @@ vi.mock('fs/promises', async (importOriginal) => ({ ...await importOriginal(), a
 vi.mock('./videoGen/history.js', () => ({
   loadHistory: vi.fn(async () => historyStore.items),
   saveHistory: vi.fn(async (h) => { historyStore.items = h; }),
+  mutateVideoHistory: vi.fn(async (mutate) => { historyStore.items = mutate(historyStore.items); }),
 }));
+vi.mock('../lib/fileUtils.js', async importOriginal => makePathsProxy(await importOriginal(), {
+  dataRoot: () => lazyTempDataRoot('portos-video-download-backup-'),
+}));
+vi.mock('../lib/ffmpeg.js', async importOriginal => ({
+  ...await importOriginal(),
+  generateThumbnail: vi.fn(async () => 'download-test.jpg'),
+  probeVideoDuration: vi.fn(async () => 42),
+}));
+vi.mock('./ytdlpVideoImport.js', async importOriginal => ({
+  ...await importOriginal(),
+  downloadVideoToDir: vi.fn(),
+}));
+vi.mock('./externalMediaCollection.js', () => ({ fileExternalMedia: vi.fn(async () => {}) }));
 vi.mock('./mediaRemoteDelete.js', () => ({ deleteMediaAnywhere }));
 vi.mock('./videoGen/events.js', () => ({ videoGenEvents: { emit: vi.fn() } }));
 
-import { access } from 'fs/promises';
+import { access, mkdir, readFile, readdir, writeFile } from 'fs/promises';
 import { PATHS } from '../lib/fileUtils.js';
 import { join } from 'path';
 
@@ -26,10 +42,51 @@ import {
   deleteDownload,
   buildDownloadHistoryEntry,
   cancelVideoDownload,
+  downloadVideoIntoLibrary,
   listActiveVideoDownloads,
   __testing,
 } from './videoDownload.js';
+import { downloadVideoToDir } from './ytdlpVideoImport.js';
+import { videoGenEvents } from './videoGen/events.js';
 import { listActiveRenders } from './renderActivity.js';
+
+afterAll(() => cleanupTempDataRoots());
+
+it('keeps downloaded bytes through a long backup and then records exactly one history entry', async () => {
+  vi.clearAllMocks();
+  historyStore.items = [];
+  const id = 'download-test';
+  const filename = `downloaded-${id}.mp4`;
+  const path = join(PATHS.videos, filename);
+  downloadVideoToDir.mockImplementationOnce(async () => {
+    await mkdir(PATHS.videos, { recursive: true });
+    await writeFile(path, 'downloaded output');
+    return { outcome: 'complete', filename, title: 'Example clip' };
+  });
+  const release = await acquireBackupSnapshotCut();
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  const settled = vi.fn();
+  const publishing = downloadVideoIntoLibrary({
+    id, url: 'https://youtu.be/example0001', ytDlp: 'yt-dlp', ffmpeg: 'ffmpeg',
+  });
+  void publishing.then(settled, settled);
+  try {
+    await vi.waitFor(() => expect(_backupSnapshotWaitersForTests().publications).toBe(1));
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(settled).not.toHaveBeenCalled();
+    expect(historyStore.items).toEqual([]);
+    expect(await readFile(path, 'utf8')).toBe('downloaded output');
+  } finally {
+    vi.useRealTimers();
+    release();
+  }
+  const result = await publishing;
+  expect(result).toMatchObject({ outcome: 'complete', entry: { id, filename, source: 'download' } });
+  expect(historyStore.items).toEqual([result.entry]);
+  expect(videoGenEvents.emit).toHaveBeenCalledWith('completed', expect.objectContaining({ generationId: id, filename }));
+  expect(await readdir(PATHS.videos)).toEqual([filename]);
+  expect(await readFile(path, 'utf8')).toBe('downloaded output');
+});
 
 describe('videoDownload URL allowlist', () => {
   it('accepts YouTube watch, shorts, and youtu.be', () => {

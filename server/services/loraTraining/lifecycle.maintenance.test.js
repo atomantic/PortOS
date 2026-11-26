@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
@@ -36,8 +37,14 @@ vi.mock('../mediaJobQueue/index.js', () => ({
   assertMediaQueueRoom: vi.fn(), enqueueJob: vi.fn(), getJob: () => fixture.queueJob, mediaJobEvents: new EventEmitter(),
 }));
 vi.mock('./displayPower.js', () => ({ sleepDisplayForTraining: vi.fn(), wakeDisplay: vi.fn() }));
+vi.mock('./checkpoints.js', async importOriginal => ({
+  ...await importOriginal(),
+  selectDeployableCheckpoint: async () => ({ buffer: Buffer.from('synthetic adapter'), step: 10 }),
+}));
+vi.mock('../loras.js', async importOriginal => ({ ...await importOriginal(), writeLoraSidecar: vi.fn() }));
 
 const { runTraining, initLoraTraining, cancel, trainingEvents } = await import('./index.js');
+const { acquireBackupSnapshotCut, _backupSnapshotWaitersForTests } = await import('../../lib/backupSnapshotBoundary.js');
 const { createMaintenanceAdmission } = await import('../../lib/maintenanceAdmission.js');
 const { isReattachable, spawnDetached, reapDetached } = await import('../../lib/detachedSpawn.js');
 const { claimHeavyLocalJob } = await import('../../lib/heavyJobClaim.js');
@@ -65,6 +72,40 @@ afterEach(() => { vi.useRealTimers(); trainingEvents.removeAllListeners(); });
 afterAll(cleanupTempDataRoots);
 
 describe('training physical settlement under maintenance', () => {
+  it('publishes a surviving trainer’s finished adapter after a long backup cut', async () => {
+    const jobId = 'example-job';
+    const permit = fixture.admission.admit('media', jobId);
+    const completed = vi.fn();
+    const failed = vi.fn();
+    const activity = vi.fn();
+    trainingEvents.on('completed', completed);
+    trainingEvents.on('failed', failed);
+    trainingEvents.on('activity', activity);
+    await permit.run(() => runTraining({ jobId, runId: 'example-run', reattach: true }));
+    const release = await acquireBackupSnapshotCut();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      fixture.child.stdout.emit('data', 'RESULT:{"adapter_path":"adapter.safetensors","steps":10}\n');
+      fixture.child.exitCode = 0;
+      fixture.child.emit('close', 0, null);
+      await vi.waitFor(() => expect(_backupSnapshotWaitersForTests().publications).toBe(1));
+      activity.mockClear();
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(activity).toHaveBeenCalledWith({ generationId: jobId });
+      expect(completed).not.toHaveBeenCalled();
+      expect(failed).not.toHaveBeenCalled();
+    } finally {
+      release();
+      vi.useRealTimers();
+    }
+    await vi.waitFor(() => expect(completed).toHaveBeenCalledOnce());
+    const [{ loraFilename }] = completed.mock.calls[0];
+    expect(fixture.save).toHaveBeenCalledWith('example-run', expect.objectContaining({
+      status: 'completed', output: expect.objectContaining({ loraFilename }),
+    }));
+    expect(await readFile(join(PATHS.loras, loraFilename), 'utf8')).toBe('synthetic adapter');
+    await permit.finish();
+  });
   it('keeps a live survivor observable when a second historical run is replayed', async () => {
     const first = fixture.child;
     const second = new EventEmitter();

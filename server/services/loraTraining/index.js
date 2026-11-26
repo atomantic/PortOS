@@ -12,6 +12,7 @@ import { platform } from 'os';
 import { PATHS, ensureDir, shortId, copyFileGuarded, writeFileGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 
 import { reattachDetached, isReattachable } from '../../lib/detachedSpawn.js';
@@ -513,6 +514,12 @@ async function finalizeTraining({ jobId, runId, code, signal, state, stallKilled
       });
       await flipDatasetAfterRun(run, { trained: true, loraFilename: filename });
       return registered;
+    }, {
+      timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
+      onWait: () => {
+        console.log(`⏸️ Training [${shortId(jobId)}] waiting for the backup to finish before saving`);
+        trainingEvents.emit('activity', { generationId: jobId });
+      },
     });
     if (selection.autoSelected) console.log(`⚠️ training [${shortId(jobId)}] ${selection.reason} (size ${sizeBytes ?? '?'}B)`);
     console.log(`✅ training [${shortId(jobId)}] complete — registered ${filename} @ step ${selection.step}`);

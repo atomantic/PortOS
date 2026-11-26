@@ -1,4 +1,5 @@
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 import { discardUnpublishedVideo } from './generateVideoHelpers.js';
 /** Lossless hand stitching and trim-aware chained-video assembly. */
 
@@ -18,6 +19,7 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import { sanitizeContinuation } from '../../lib/videoContinuationProvenance.js';
 import { loadHistory, mutateVideoHistory } from './history.js';
+import { videoGenEvents } from './events.js';
 
 // Wall-clock render timing (#5878) for a CHAINED render's stitched entry. A
 // chain writes its chunk rows `hidden: true`, so this is the only row the user
@@ -366,5 +368,11 @@ export async function stitchVideos(videoIds, opts = {}) {
       if (!committed) await discardUnpublishedVideo({ jobId: id, outputPath: outPath });
       throw error;
     }
+  }, {
+    timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
+    onWait: () => {
+      console.log(`⏸️ Video stitch [${id.slice(0, 8)}] waiting for the backup to finish before saving`);
+      videoGenEvents.emit('activity', { generationId: id });
+    },
   });
 }
