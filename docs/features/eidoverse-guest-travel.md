@@ -325,9 +325,9 @@ correctly. `GET /api/eidoverse/world/foundations` returns it on every entry,
 and the mind tools' `summarizeFoundation()` projection carries `provenance`,
 `inheritance`, and `lineage` too — the same identity fields a candidate
 envelope was already authorized to carry, now surfaced consistently
-everywhere a foundation is read. `GET /api/eidoverse/world/foundations/:id`
-names a locally-authored record by its plain id and an inherited copy by
-`?originInstanceId=<origin>` (#7626): an inherited copy lives under a
+everywhere a foundation is read. The `eidoverse.foundation` mind tool names a
+locally-authored record by its plain id and an inherited copy by its
+`originInstanceId` (#7626): an inherited copy lives under a
 separate ledger key precisely so it can share a human-readable id with a
 local vernacular foundation without colliding, so the ORIGIN is what
 disambiguates the two. The `peer:<origin>:<id>` storage key itself stays
@@ -365,17 +365,15 @@ panel and retyping it — the "go read the author's transcript" path this whole
 area exists to replace, and one that keeps no attribution. Two verbs close
 that.
 
-**Read one.** `eidoverse.foundation` (mind tool, `manageEidoverse`, read) and
-`GET /api/eidoverse/world/foundations/:id` return `detailFoundation()` — every
+**Read one.** The `eidoverse.foundation` mind tool (`manageEidoverse`, read) returns `detailFoundation()` — every
 field `summarizeFoundation()` carries, plus `body` and `disclosure`. The LIST
 projection still omits both, deliberately: a list of whole bodies is kilobytes
 of substance per entry riding into a prompt to answer a question about ids,
 and which body to read is a decision made after the list. `style` is omitted
 in both — it is this install's cosmetics and never leaves.
 
-**Adopt.** `eidoverse.adopt` (mind tool, `manageEidoverse` **and**
-`installEidoverseControllers`) and `POST
-/api/eidoverse/world/foundations/:id/adopt` stand an INHERITED foundation up
+**Adopt.** The `eidoverse.adopt` mind tool (`manageEidoverse` **and**
+`installEidoverseControllers`) stands an INHERITED foundation up
 as something that runs here. `planFoundationAdoption()` decides per kind:
 
 | kind | what adopting does |

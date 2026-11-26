@@ -102,7 +102,6 @@ data/digital-twin/
 | GET /api/digital-twin/tests | Get test suite |
 | POST /api/digital-twin/tests/run | Run single-model tests |
 | POST /api/digital-twin/tests/run-multi | Run multi-model tests |
-| GET /api/digital-twin/enrich/categories | List enrichment categories |
 | POST /api/digital-twin/enrich/question | Get next question |
 | POST /api/digital-twin/enrich/answer | Submit answer |
 | POST /api/digital-twin/export | Export soul |

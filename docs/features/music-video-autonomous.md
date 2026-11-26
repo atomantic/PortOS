@@ -237,7 +237,6 @@ The Suno adapter fills the form through `placeholder` / role selectors and reads
 | Method | Path | |
 |---|---|---|
 | `POST` | `/api/music-video/autonomous` | Start (202 `{ project, run }`). Body: `prompt` plus optional `songSource` (`suno` default, or `local`), `localFallback`, `suno` (Suno form options), `tools`, `models` (per-tool model pin), `budgetUsd`, `limits`, `checkpoints`, `instrumental`, `guidance`, `providerId`/`model`/`effort` (the direction LLM), `llmStages` (per-stage LLM pins), `lyricsReview`, `authoring` (code-rendered video), `autoApprove` (authenticated planning grant, see Production review), `orchestrator` (authenticated; see Orchestrated mode). |
-| `GET` | `/api/music-video/:id/autonomous` | The run. |
 | `POST` | `/api/music-video/:id/autonomous/resume` | Approve the checkpoint, retry the stage that stopped, or resume an interrupted run. Optional `lyrics`, `style`, `suno` edits; `models` and `limits` patches; `retakeSong: true` at the song checkpoint; `autoApprove` to grant or revoke automatic planning approvals using the authenticated session. |
 | `POST` | `/api/music-video/:id/autonomous/stop` / `cancel` | Pause / cancel (also stops/cancels its production run). |
 
@@ -251,9 +250,8 @@ across production runs.
 
 | Method | Path | Purpose |
 |---|---|---|
+| `GET` | `/api/music-video/:id` | Read the project, including its runs and render ledger. |
 | `POST` | `/api/music-video/:id/production-runs` | Start a server-owned production run (201). |
-| `GET` | `/api/music-video/:id/production-runs/:runId` | Read that production run by ID. |
-| `GET` | `/api/music-video/:id/spend` | Read the render ledger and estimated spend by lane, including unpriced renders and manual adjustments. |
 
 ## Scheduled task: `music-video-autopilot`
 

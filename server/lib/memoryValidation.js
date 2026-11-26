@@ -4,7 +4,6 @@
 
 import { z } from 'zod';
 import { partialWithoutDefaults } from './zodCompat.js';
-import { MEMORY_LINK_TYPES } from './memoryLinkTypes.js';
 
 // Memory ids are directory names in the file-backed store. Keep route input
 // constrained to one plain path segment before it reaches any filesystem code.
@@ -128,37 +127,7 @@ const emptyToUndefined = (inner) => z.preprocess(
   inner
 );
 
-// A `YYYY-MM-DD` string can match the shape and still name a day that doesn't
-// exist (`2026-02-30`). `Date.parse` rolls those over instead of failing, so
-// round-trip the parts — otherwise Postgres is the one that rejects the date,
-// as a 500 rather than a 400.
-const isRealCalendarDate = (v) => {
-  const [year, month, day] = v.split('-').map(Number);
-  const parsed = new Date(Date.UTC(year, month - 1, day));
-  // Date.UTC maps a 0-99 year onto 1900-1999; re-set it so a year like 0026
-  // compares against itself rather than 1926.
-  parsed.setUTCFullYear(year);
-  return parsed.getUTCFullYear() === year
-    && parsed.getUTCMonth() === month - 1
-    && parsed.getUTCDate() === day;
-};
-
-// `startDate`/`endDate` reach Postgres as `created_at >= $n` bind params, so a
-// bare calendar date is as usable as a full timestamp — accept either. The
-// datetime branch allows a `+HH:MM` offset, not just a `Z` suffix, since either
-// is a legitimate serialization of the same instant. A bare date means midnight
-// at both ends of the range, matching how these bounds have always been read —
-// pass a full timestamp to include part of a day.
-const dateBoundary = z.union([
-  z.string().datetime({ offset: true }),
-  z.string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, 'must be an ISO datetime or YYYY-MM-DD date')
-    .refine(isRealCalendarDate, 'must be a real calendar date')
-]);
-
 // List/filter query schema (GET /api/memory — validated against req.query).
-// `limit` caps at 500 to match the timeline schema and the ceiling this route
-// has always enforced via parsePagination's maxLimit.
 export const memoryListSchema = z.object({
   types: csvList(z.array(memoryTypeEnum).optional()),
   categories: csvList(z.array(z.string().max(100)).optional()),
@@ -171,38 +140,6 @@ export const memoryListSchema = z.object({
   sortBy: emptyToUndefined(z.enum(['createdAt', 'updatedAt', 'importance', 'accessCount']).optional().default('createdAt')),
   sortOrder: emptyToUndefined(z.enum(['asc', 'desc']).optional().default('desc'))
 });
-
-// Timeline query schema (GET /api/memory/timeline — validated against req.query)
-export const memoryTimelineSchema = z.object({
-  startDate: emptyToUndefined(dateBoundary.optional()),
-  endDate: emptyToUndefined(dateBoundary.optional()),
-  types: csvList(z.array(memoryTypeEnum).optional()),
-  // Both timeline backends filter on appId (including the `__not_brain`
-  // sentinel the CoS Memory tab uses); it was unreachable while the handler
-  // hand-built its options object.
-  appId: emptyToUndefined(z.string().max(100).optional()),
-  limit: numeric(z.number().int().min(1).max(500).optional().default(100))
-});
-
-// Memory consolidation request schema
-export const memoryConsolidateSchema = z.object({
-  similarityThreshold: z.number().min(0.5).max(1).optional().default(0.9),
-  dryRun: z.boolean().optional().default(false),
-  reason: z.string().max(2000).optional()
-});
-
-// Link memories request schema
-export const memoryLinkSchema = z.object({
-  sourceId: z.string().guid(),
-  targetId: z.string().guid(),
-  // Omitted means the legacy symmetric 'related' link, so older clients keep working.
-  linkType: z.enum(MEMORY_LINK_TYPES).optional(),
-  note: z.string().max(2000).optional(),
-  createdBy: z.string().trim().min(1).max(100).optional()
-}).refine(
-  (v) => v.sourceId !== v.targetId || (v.linkType ?? 'related') === 'related',
-  { message: 'A directed link needs two different memories', path: ['targetId'] }
-);
 
 // Single sync memory item schema (incoming from remote peer)
 const syncMemoryItemSchema = z.object({

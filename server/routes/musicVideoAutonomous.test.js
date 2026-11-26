@@ -102,7 +102,7 @@ beforeEach(() => {
   service.__setAutonomousDepsForTests(stageDoubles());
 });
 
-const get = async (id) => (await request(app).get(`/api/music-video/${id}/autonomous`)).body.run;
+const get = async (id) => (await request(app).get(`/api/music-video/${id}`)).body.autonomousRun;
 
 async function approveSyntheticStoryboard(id) {
   await projects.setProjectAnalysis(id, { durationSec: 20, bpm: 120, beats: [0, 1], downbeats: [0],
@@ -297,7 +297,7 @@ describe('POST /api/music-video/autonomous', () => {
     expect((await request(app).post(`/api/music-video/${id}/autonomous/resume`)).status).toBe(409);
 
     const plain = await projects.createProject({ name: 'Hand made' });
-    expect((await request(app).get(`/api/music-video/${plain.id}/autonomous`)).status).toBe(404);
+    expect((await request(app).post(`/api/music-video/${plain.id}/autonomous/resume`)).status).toBe(404);
   });
 });
 

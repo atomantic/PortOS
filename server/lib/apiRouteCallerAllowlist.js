@@ -17,11 +17,20 @@ export const ROUTE_CALLER_CLASSES = Object.freeze({
   'agent-facing': 'Named in an agent skill, prompt template or generated agent prompt that tells a spawned agent to call it.',
   'external-client': 'Third-party tools that speak an established API (the A1111-compatible /sdapi surface), not PortOS clients.',
   'oauth-callback': 'The redirect target of a third-party OAuth flow; the browser arrives here from the provider.',
-  'operator-script': 'Called by a script under scripts/, or named in an operator-facing doc (a curl workflow or a feature route table) for a caller outside the browser.',
+  'operator-script': 'Invoked by first-party operator tooling with a call site checked by API route parity.',
+  'operator-workflow': 'Required by a specific supported manual setup, recovery, or data-management workflow. Cite the workflow and why the operation is needed.',
   'client-dynamic': 'Called from client code that builds a path segment at run time; the entry\'s comment names the call site.',
   'server-reference': 'Referenced by a server module (a loopback or provider-compatible request path); the reference was found by text search and not individually traced.',
   'legacy-client-compat': 'Kept for a client build that predates the current routes: a deployed client/dist can lag the server across an upgrade.',
 });
+
+// These sources are parsed by route parity and select that check when edited.
+export const OPERATOR_SCRIPT_CALLER_FILES = Object.freeze([
+  'scripts/contained-run.js',
+  'scripts/ops/reconcile-maintenance-reservations.mjs',
+  'scripts/portos-acp.js',
+  'server/scripts/moltworld-explore.mjs',
+]);
 
 export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
   peer: Object.freeze([
@@ -125,8 +134,6 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/cos/tasks/internal',
     // server/services/autonomousJobs/defaults.js: the generated job prompts tell the agent to call it.
     '/api/cos/tasks/user',
-    '/api/cos/tools/call',
-    '/api/cos/tools/calls/:requestId',
     '/api/creative-director/:id/plan',
     '/api/creative-director/:id/treatment',
     '/api/datadog/instances/:id',
@@ -134,13 +141,16 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/human-actions/plans',
     '/api/jira/instances/:id',
     '/api/jira/instances/:id/tickets',
+    // server/services/eidoverseControllerDefinitions/riddleLedger.controller.js advertises this action.
+    'POST /api/eidoverse/world/controllers/:id/riddle',
     '/api/jira/instances/:instanceId/epics/:epicKey/children',
     '/api/jira/instances/:instanceId/sprints/:sprintId/issues',
     '/api/jira/instances/:instanceId/tickets/:ticketId',
     '/api/jira/instances/:instanceId/tickets/:ticketId/comments',
     '/api/jira/instances/:instanceId/tickets/:ticketId/labels',
     '/api/providers/comparison/import',
-    '/api/review/todo',
+    // server/services/taskPromptDefaults/catalog/{claimJira,maintenance}.js: Jira triage records operator follow-ups.
+    'POST /api/review/todo',
     '/api/user-actions',
     // docs/API_TOOL_CONTRACT.md and docs/features/agent-context.md document the MCP endpoint local agents call.
     '/api/agent-context/mcp',
@@ -151,83 +161,57 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/spotify/oauth/callback',
   ]),
   'operator-script': Object.freeze([
-    // docs/API.md names the activity feed mount for API callers; the browser reads its sub-routes.
-    '/api/agents/activity',
-    '/api/agents/tools/moltworld/queue/:id/complete',
-    '/api/agents/tools/moltworld/queue/:id/fail',
-    '/api/apple-health/days/:date',
-    '/api/brain/youtube/ingests/:videoId/transcript',
-    '/api/browser/pages',
-    '/api/browser/process',
-    '/api/browser/vault/fill',
-    '/api/browser/vault/logins',
-    '/api/browser/version',
-    '/api/code-animation/packages/validate',
-    '/api/code-animation/projects/:id/sound-assets',
-    // Operator/API erasure path for data/contacts-cache.json + sync state (#18130).
-    '/api/contacts/cache',
-    '/api/cos/agents/:id/release-candidate',
-    // docs/features/chief-of-staff.md route table.
-    '/api/cos/jobs/incidents',
-    '/api/cos/mind/maintainer/watchdog',
-    // scripts/portos-acp.js (docs/ACP.md): the ACP stdio adapter's live Persistent Mind feed; the browser uses Socket.IO.
-    '/api/cos/mind/stream',
-    '/api/cos/schedule/maintenance-runs/:id/resume',
-    '/api/cos/schedule/maintenance-runs/:id/steps/:stepId',
-    '/api/cos/schedule/release-synchronization/operator-reset',
-    '/api/cos/schedule/release-synchronization/verify-delivery',
-    '/api/dashboard/daily-actions',
-    '/api/database/maintenance/preflight',
-    '/api/database/switch',
-    // docs/features/media-operation-control.md documents inspecting and stopping an active deck prompt run.
-    'POST /api/decks/:id/generate-prompts/cancel',
+    // server/scripts/moltworld-explore.mjs settles claimed queue items.
+    'POST /api/agents/tools/moltworld/queue/:id/complete',
+    'POST /api/agents/tools/moltworld/queue/:id/fail',
+    // scripts/portos-acp.js subscribes to the Persistent Mind SSE feed.
+    'GET /api/cos/mind/stream',
+    // scripts/contained-run.js submits a contained command.
+    'POST /api/docker-containment/run',
+    // scripts/ops/reconcile-maintenance-reservations.mjs confirms terminal runner ownership.
+    'GET /api/system/maintenance/runner-owner/:agentId',
+  ]),
+  'operator-workflow': Object.freeze([
+    // Dedicated Apple Health day and contacts cache erasure operations.
+    'DELETE /api/apple-health/days/:date',
+    'DELETE /api/contacts/cache',
+    // docs/CODE_ANIMATION_PACKAGES.md: stage owner-supplied audio into a package revision.
+    'POST /api/code-animation/projects/:id/sound-assets',
+    // docs/VERSIONING.md: release ownership and verification commands used by delegated release runs.
+    'POST /api/cos/agents/:id/release-candidate',
+    'POST /api/cos/schedule/release-synchronization/verify-delivery',
+    // docs/VERSIONING.md: recover an operation after the operator reconciles its target.
+    'POST /api/cos/schedule/release-synchronization/operator-reset',
+    // docs/features/development-watchdog.md: run a dry scan and inspect its receipt.
+    'GET /api/cos/mind/maintainer/watchdog',
+    'POST /api/cos/mind/maintainer/watchdog',
+    // docs/QUOTA-BURN.md: CLI-only maintenance resume and pending-step re-pinning.
+    'POST /api/cos/schedule/maintenance-runs/:id/resume',
+    'PATCH /api/cos/schedule/maintenance-runs/:id/steps/:stepId',
+    // docs/STORAGE.md: advisory backend migration check.
+    'POST /api/database/maintenance/preflight',
+    // docs/features/eidoverse-guest-travel.md: remove an owned foundation after withdrawing its publication.
+    'DELETE /api/eidoverse/world/foundations/:id',
+    // docs/features/managed-visitors.md: list, provision, and revoke app visitor credentials.
+    'GET /api/managed-visitor-admin',
+    'DELETE /api/managed-visitor-admin/:appId/credential',
+    'POST /api/managed-visitor-admin/:appId/credential',
+    // docs/features/media-operation-control.md: identify and stop a specific active deck prompt run.
     'GET /api/decks/:id/generate-prompts/status',
-    '/api/digital-twin/enrich/categories',
-    '/api/docker-containment/run',
-    '/api/eidoverse/world/controllers/:id/riddle',
-    '/api/eidoverse/world/foundations/:id/adopt',
-    '/api/film-styles/:id/prompt',
-    '/api/git/commits',
-    '/api/managed-visitor-admin',
-    '/api/managed-visitor-admin/:appId/credential',
-    // docs/features/media-operation-control.md documents stopping a consolidation run.
+    'POST /api/decks/:id/generate-prompts/cancel',
+    // docs/features/media-operation-control.md: stop consolidation at the next file boundary.
     'POST /api/media/collections/:id/primary/cancel',
-    '/api/meatspace/post/memory-drill',
-    // docs/features/post.md route table (spaced-repetition due list).
-    '/api/meatspace/post/memory-items/due',
-    // docs/features/memory-system.md route table (memory maintenance endpoints, #18655).
-    '/api/memory/categories',
-    '/api/memory/consolidate',
-    '/api/memory/expired',
-    '/api/memory/link',
-    '/api/memory/tags',
-    '/api/memory/timeline',
-    // docs/features/music-video-autonomous.md#production-and-spend: documented API reads.
-    '/api/music-video/:id/production-runs/:runId',
-    // docs/features/media-operation-control.md documents inspecting and stopping active photo research.
+    // docs/features/media-operation-control.md: identify and stop a specific active photo research run.
     'GET /api/music-video/:id/research',
     'POST /api/music-video/:id/research/cancel',
-    '/api/music-video/:id/spend',
-    // docs/API.md: the full character style, for API callers; the client reads the list.
-    '/api/music-video/character-styles/:id',
-    '/api/ports/allocate',
-    '/api/ports/scan',
-    // docs/features/privacy-center.md uses portos-api.js to clean historical Digital Twin artifacts.
+    // docs/features/privacy-center.md: erase historical Twin and imported Signal records.
     'POST /api/privacy/twin-history/cleanup',
-    // docs/features/agent-skills.md (P5 surfaces): the Skill Registry routes, for agents and API callers.
-    '/api/skills/config',
-    '/api/skills/manage',
-    // docs/features/privacy-center.md documents purging imported Signal data by handle.
     'POST /api/signal/blocklist/handles',
-    // scripts/ops/reconcile-maintenance-reservations.mjs confirms terminal runner ownership.
-    '/api/system/maintenance/runner-owner/:agentId',
-    '/api/universe-builder/:id/canon/backfill-descriptions',
-    // docs/features/eidoverse-guest-travel.md documents GET and DELETE.
-    '/api/eidoverse/world/foundations/:id',
-    // docs/features/music-video-autonomous.md route table.
-    '/api/music-video/:id/autonomous',
-    // docs/features/app-wizard.md route table.
-    '/api/scaffold',
+    // docs/features/app-wizard.md: raw scaffold request for explicit ports and forge provisioning.
+    'POST /api/scaffold',
+    // docs/features/agent-skills.md: manage external skill directories and curator thresholds.
+    'GET /api/skills/config',
+    'PUT /api/skills/config',
   ]),
   'client-dynamic': Object.freeze([
     // client/src/pages/CharacterSheet.jsx: charPost builds `/character${path}`.
@@ -270,7 +254,5 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
   'legacy-client-compat': Object.freeze([
     // Universe pickers in older client builds request full records (before #17115).
     'GET /api/universe-builder',
-    '/api/voice/tts/status',
-    '/api/voice/tts/unload',
   ]),
 });

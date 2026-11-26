@@ -568,22 +568,6 @@ router.post('/speak', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// GET /api/voice/tts/status
-router.get('/tts/status', asyncHandler(async (_req, res) => {
-  res.json({
-    kokoro: {
-      state: 'lazy',
-      retired: true,
-      loadedKey: null,
-    },
-  });
-}));
-
-// POST /api/voice/tts/unload
-router.post('/tts/unload', asyncHandler(async (_req, res) => {
-  res.json({ unloaded: false, retired: true });
-}));
-
 const whisperActionSchema = z.object({
   action: z.enum(['start', 'stop']),
 });

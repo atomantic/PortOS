@@ -12,18 +12,11 @@ import * as agentActivity from '../services/agent/agentActivity.js';
 import * as runEventLog from '../services/agent/agentRunEventLog.js';
 import * as runReconciler from '../services/agent/agentRunReconciler.js';
 import {
-  agentActivityQuerySchema, agentActivityTimelineQuerySchema, agentActivityAgentParamsSchema,
+  agentActivityTimelineQuerySchema, agentActivityAgentParamsSchema,
   agentActivityStatsQuerySchema
 } from '../lib/agentActivityValidation.js';
 
 const router = Router();
-
-// GET / - Get recent activity across all agents
-router.get('/', asyncHandler(async (req, res) => {
-  const { limit, agentIds, action } = validateRequest(agentActivityQuerySchema, req.query);
-
-  res.json(await agentActivity.getRecentActivities({ limit, agentIds, action }));
-}));
 
 // GET /timeline - Get activity timeline (for infinite scroll)
 router.get('/timeline', asyncHandler(async (req, res) => {

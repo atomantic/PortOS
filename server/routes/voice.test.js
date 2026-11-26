@@ -653,22 +653,6 @@ describe('Voice Routes', () => {
     });
   });
 
-  describe('GET /api/voice/tts/status', () => {
-    it('returns an inert compatibility snapshot for retired Kokoro', async () => {
-      const res = await request(buildApp()).get('/api/voice/tts/status');
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual({ kokoro: { state: 'lazy', loadedKey: null, retired: true } });
-    });
-  });
-
-  describe('POST /api/voice/tts/unload', () => {
-    it('keeps unload safe for cached clients', async () => {
-      const res = await request(buildApp()).post('/api/voice/tts/unload');
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual({ unloaded: false, retired: true });
-    });
-  });
-
   describe('POST /api/voice/whisper', () => {
     it('stops whisper and invalidates the health cache', async () => {
       const res = await request(buildApp()).post('/api/voice/whisper').send({ action: 'stop' });

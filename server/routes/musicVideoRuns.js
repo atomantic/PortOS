@@ -11,8 +11,8 @@ import { validateRequest } from '../lib/validateRequest.js';
 import { musicVideoDependencyRepairSchema, musicVideoRevisionStartSchema, musicVideoRevisionReleaseSchema, musicVideoAutoReviewStartSchema, musicVideoAutoReviewResumeSchema, musicVideoProductionStartSchema, musicVideoProductionResumeSchema, musicVideoAutonomousStartSchema, musicVideoAutonomousResumeSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { getDependencyImpact, startDependencyRepair, startRevision, resumeRevision, cancelRevision, releaseRevisionSection } from '../services/musicVideo/revisionService.js';
 import { startAutoReview, resumeAutoReview, stopAutoReview, cancelAutoReview } from '../services/musicVideo/autoReviewService.js';
-import { startProduction, resumeProduction, stopProduction, cancelProduction, getProduction } from '../services/musicVideo/productionService.js';
-import { startAutonomousVideo, getAutonomousRun, resumeAutonomousVideo, stopAutonomousVideo, cancelAutonomousVideo } from '../services/musicVideo/autonomousService.js';
+import { startProduction, resumeProduction, stopProduction, cancelProduction } from '../services/musicVideo/productionService.js';
+import { startAutonomousVideo, resumeAutonomousVideo, stopAutonomousVideo, cancelAutonomousVideo } from '../services/musicVideo/autonomousService.js';
 
 const router = Router();
 
@@ -87,10 +87,6 @@ router.post('/:id/production-runs', asyncHandler(async (req, res) => {
   res.status(201).json(await startProduction(req.params.id, { ...input, reviewer: { providerId, model } }));
 }));
 
-router.get('/:id/production-runs/:runId', asyncHandler(async (req, res) => {
-  res.json(await getProduction(req.params.id, req.params.runId));
-}));
-
 router.post('/:id/production-runs/:runId/resume', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoProductionResumeSchema, req.body || {});
   res.json(await resumeProduction(req.params.id, req.params.runId, input));
@@ -122,10 +118,6 @@ router.post('/autonomous', asyncHandler(async (req, res) => {
   const { password: _password, ...input } = validateRequest(musicVideoAutonomousStartSchema, req.body || {});
   const autoApproveAuthorized = await authorizeAutoApprove(req, input.autoApprove, input.orchestrator);
   res.status(202).json(await startAutonomousVideo(input, { autoApproveAuthorized }));
-}));
-
-router.get('/:id/autonomous', asyncHandler(async (req, res) => {
-  res.json(await getAutonomousRun(req.params.id));
 }));
 
 // Resume a parked/failed/interrupted run, or approve the checkpoint it waits on.

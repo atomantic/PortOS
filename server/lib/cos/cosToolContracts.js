@@ -71,7 +71,6 @@ export const cosToolCatalogQuerySchema = z.object({
   format: z.enum(['portos', 'openai', 'anthropic', 'mcp']).optional().default('portos'),
 }).strict();
 
-export const cosToolCallParamsSchema = z.object({ requestId: cosToolRequestIdSchema }).strict();
 
 export const persistentMindToolCallSchema = cosToolCallSchema
   .omit({ type: true, version: true, requestId: true })

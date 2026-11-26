@@ -14,7 +14,7 @@ import { validateRequest } from '../lib/validateRequest.js';
 import {
   submoduleStatusQuerySchema, submoduleUpdateSchema, gitDeleteBranchBodySchema, gitPathBodySchema,
   gitCleanupMergedBodySchema, gitStageBodySchema, gitCommitBodySchema, gitBranchBodySchema,
-  gitOptionalBranchBodySchema, gitBranchComparisonBodySchema, gitDiffBodySchema, gitCommitsBodySchema,
+  gitOptionalBranchBodySchema, gitBranchComparisonBodySchema, gitDiffBodySchema,
   gitRemoteBranchesBodySchema
 } from '../lib/gitValidation.js';
 
@@ -118,14 +118,6 @@ router.post('/diff', asyncHandler(async (req, res) => {
   assertAllowedWorkspace(path);
   const diff = await gitStatus.getDiff(path, staged);
   res.json({ diff });
-}));
-
-// POST /api/git/commits - Get recent commits
-router.post('/commits', asyncHandler(async (req, res) => {
-  const { path, limit } = validateRequest(gitCommitsBodySchema, req.body);
-  assertAllowedWorkspace(path);
-  const commits = await gitStatus.getCommits(path, limit);
-  res.json({ commits });
 }));
 
 // POST /api/git/stage - Stage files

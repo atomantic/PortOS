@@ -95,7 +95,6 @@ const mounts = [
 ];
 const recordId = 'c0ffee00-0000-4000-8000-000000000001';
 const routes = [
-  ['/api/browser/vault/logins', reads.listWebsiteLogins],
   ['/api/privacy/subjects', reads.listSubjects],
   [`/api/privacy/subjects/${recordId}`, reads.getSubject],
   [`/api/privacy/subjects/${recordId}/consents`, reads.listSubjectConsents],

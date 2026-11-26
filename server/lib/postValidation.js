@@ -606,12 +606,6 @@ export const memoryMasteryAttestationSchema = z.object({
   acknowledged: z.literal(true),
 });
 
-export const memoryDrillRequestSchema = z.object({
-  mode: z.enum(['fill-blank', 'sequence', 'element-flash']).optional().default('fill-blank'),
-  memoryItemId: z.string().optional(),
-  count: z.number().int().min(1).max(30).optional().default(5),
-});
-
 // =============================================================================
 // MORSE TRAINER PROGRESS VALIDATION
 // =============================================================================

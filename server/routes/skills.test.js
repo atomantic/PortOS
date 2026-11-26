@@ -142,46 +142,46 @@ describe('progressive reads', () => {
 describe('local-tier management', () => {
   it('creates, patches, writes files, lints and deletes a local skill', async () => {
     const app = buildApp();
-    const created = await request(app).post('/api/skills/manage').send({ action: 'create', name: 'release', category: 'ops', content: '---\nname: release\n---\n# Release\n' });
+    const created = await request(app).post('/api/skills/edit').send({ action: 'create', name: 'release', category: 'ops', content: '---\nname: release\n---\n# Release\n' });
     expect(created.status).toBe(200);
     expect(created.body.skill.id).toBe('local:ops/release');
     expect(created.body.warnings.map((warning) => warning.code)).toEqual(['missing-description']);
 
-    const duplicate = await request(app).post('/api/skills/manage').send({ action: 'create', name: 'release', content: '# again' });
+    const duplicate = await request(app).post('/api/skills/edit').send({ action: 'create', name: 'release', content: '# again' });
     expect(duplicate.status).toBe(409);
-    const reserved = await request(app).post('/api/skills/manage').send({ action: 'create', name: 'other', category: 'references', content: '# x' });
+    const reserved = await request(app).post('/api/skills/edit').send({ action: 'create', name: 'other', category: 'references', content: '# x' });
     expect(reserved.body.code).toBe('SKILL_INVALID');
-    const nested = await request(app).post('/api/skills/manage').send({ action: 'create', name: 'other', category: 'local-only', content: '# x' });
+    const nested = await request(app).post('/api/skills/edit').send({ action: 'create', name: 'other', category: 'local-only', content: '# x' });
     expect(nested.body.code).toBe('SKILL_INVALID');
 
-    const patched = await request(app).post('/api/skills/manage').send({ action: 'patch', name: 'release', oldString: 'name: release\n', newString: 'name: release\ndescription: Cut a release\n' });
+    const patched = await request(app).post('/api/skills/edit').send({ action: 'patch', name: 'release', oldString: 'name: release\n', newString: 'name: release\ndescription: Cut a release\n' });
     expect(patched.body).toMatchObject({ ok: true, replacements: 1, warnings: [] });
-    const noMatch = await request(app).post('/api/skills/manage').send({ action: 'patch', name: 'release', oldString: 'absent', newString: 'x' });
+    const noMatch = await request(app).post('/api/skills/edit').send({ action: 'patch', name: 'release', oldString: 'absent', newString: 'x' });
     expect(noMatch.body.code).toBe('SKILL_PATCH_NO_MATCH');
-    const breaks = await request(app).post('/api/skills/manage').send({ action: 'patch', name: 'release', oldString: 'description: Cut a release', newString: 'description: [broken' });
+    const breaks = await request(app).post('/api/skills/edit').send({ action: 'patch', name: 'release', oldString: 'description: Cut a release', newString: 'description: [broken' });
     expect(breaks.body.code).toBe('SKILL_INVALID');
 
-    const wrote = await request(app).post('/api/skills/manage').send({ action: 'write_file', name: 'release', path: 'references/steps.md', content: '1. tag' });
+    const wrote = await request(app).post('/api/skills/edit').send({ action: 'write_file', name: 'release', path: 'references/steps.md', content: '1. tag' });
     expect(wrote.status).toBe(200);
-    const escapeResponse = await request(app).post('/api/skills/manage').send({ action: 'write_file', name: 'release', path: '../../escape.md', content: 'x' });
+    const escapeResponse = await request(app).post('/api/skills/edit').send({ action: 'write_file', name: 'release', path: '../../escape.md', content: 'x' });
     expect(escapeResponse.body.code).toBe('SKILL_PATH_INVALID');
     const view = await request(app).get(`/api/skills/view?${new URLSearchParams({ ref: 'release', file: 'references/steps.md' })}`);
     expect(view.body.content).toBe('1. tag');
 
-    expect((await request(app).post('/api/skills/manage').send({ action: 'remove_file', name: 'release', path: 'references/steps.md' })).status).toBe(200);
-    expect((await request(app).post('/api/skills/manage').send({ action: 'delete', name: 'release' })).body).toMatchObject({ ok: true, deleted: true });
+    expect((await request(app).post('/api/skills/edit').send({ action: 'remove_file', name: 'release', path: 'references/steps.md' })).status).toBe(200);
+    expect((await request(app).post('/api/skills/edit').send({ action: 'delete', name: 'release' })).body).toMatchObject({ ok: true, deleted: true });
     expect((await request(app).get(`/api/skills/view?${new URLSearchParams({ ref: 'release' })}`)).status).toBe(404);
   });
 
   it('never manages a non-local tier and rejects mixed-action arguments', async () => {
-    const external = await request(buildApp()).post('/api/skills/manage').send({ action: 'delete', name: 'triage' });
+    const external = await request(buildApp()).post('/api/skills/edit').send({ action: 'delete', name: 'triage' });
     expect(external.status).toBe(404);
-    const mixed = await request(buildApp()).post('/api/skills/manage').send({ action: 'delete', name: 'local-only', content: 'x' });
+    const mixed = await request(buildApp()).post('/api/skills/edit').send({ action: 'delete', name: 'local-only', content: 'x' });
     expect(mixed.status).toBe(400);
   });
 
   it('refuses a remote password-free caller on writes and keeps the local operator workflow', async () => {
-    const remote = await request(buildApp('192.0.2.10')).post('/api/skills/manage').send({ action: 'create', name: 'remote', content: '# x' });
+    const remote = await request(buildApp('192.0.2.10')).post('/api/skills/edit').send({ action: 'create', name: 'remote', content: '# x' });
     expect(remote.status).toBe(403);
     expect(remote.body.code).toBe('HOST_CONTROL_FORBIDDEN');
     const config = await request(buildApp('192.0.2.10')).put('/api/skills/config').send({ externalDirs: ['/tmp'] });

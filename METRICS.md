@@ -14,9 +14,8 @@ should make the next user action easier or more visible.
 
 The live values are derived by the read-only
 `server/services/portosProductMetrics.js` service from the local POST,
-creative-commission, and Creative Director stores. The dashboard projection is
-available at `GET /api/dashboard/daily-actions`; its `metrics` object preserves
-an explicit `unavailable` status when a source cannot be read.
+creative-commission, and Creative Director stores. The metrics preserve an
+explicit `unavailable` status when a source cannot be read.
 
 Layered Intelligence gathers the same aggregate values as its PortOS-only
 `productMetrics` source. It receives counts and ages, not commission names,

@@ -85,10 +85,3 @@ export const filmStylePartsSchema = z.union([
 ]);
 
 export const filmStyleParamsSchema = z.object({ id: filmStyleIdSchema });
-
-/** `?parts=motion,camera` (comma-separated) or absent/`all` → the renderer `parts` option. */
-export const filmStylePromptQuerySchema = z.object({
-  parts: z.string().trim().max(200).optional()
-    .transform(value => (!value || value === 'all' ? 'all' : value.split(',').map(part => part.trim())))
-    .pipe(filmStylePartsSchema),
-});

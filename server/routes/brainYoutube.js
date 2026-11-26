@@ -68,15 +68,6 @@ router.get('/ingests/:videoId', asyncHandler(async (req, res) => {
   res.json(record);
 }));
 
-/** GET /api/brain/youtube/ingests/:videoId/transcript — the stored markdown. */
-router.get('/ingests/:videoId/transcript', asyncHandler(async (req, res) => {
-  const markdown = await ingest.getTranscript(req.params.videoId);
-  if (markdown === null) {
-    throw new ServerError('No transcript is stored for this video', { status: 404, code: 'TRANSCRIPT_NOT_FOUND' });
-  }
-  res.type('text/markdown').send(markdown);
-}));
-
 /** DELETE /api/brain/youtube/ingests/:videoId — drops local files + the note. */
 router.delete('/ingests/:videoId', asyncHandler(async (req, res) => {
   const removed = await ingest.deleteIngest(req.params.videoId);

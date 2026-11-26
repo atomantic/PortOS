@@ -58,7 +58,7 @@ Configurable memory training for songs, poems, sequences, speeches, or any order
 - **Built-in content**: Tom Lehrer's "The Elements" (code-embedded, id `elements-song`, non-deletable) with per-line element mappings and a specialized `ElementsSong.jsx` UI with periodic-table visualization.
 - **Custom items**: users add any text/song/sequence; the system chunks it into progressive recall exercises.
 - **Practice modes** (`MemoryPractice.jsx`): `learn` (progressive reveal), `fill-blank`, `sequence` (continue from a starting point), `speed-run`, and `spaced` (spaced-repetition mode focusing the weakest chunks with graduated hints).
-- **Spaced repetition**: an SM-2-inspired scheduler tracks per-chunk `ease`/`intervalDays`/`nextReview` (ease clamped 1.3–5, intervals capped at 365 days, misses reset to relearn). `GET /post/memory-items/due` surfaces what's due; per-item and per-chunk mastery are queryable.
+- **Spaced repetition**: an SM-2-inspired scheduler tracks per-chunk `ease`/`intervalDays`/`nextReview` (ease clamped 1.3–5, intervals capped at 365 days, misses reset to relearn). Per-item and per-chunk mastery are queryable.
 
 ## Scoring
 
@@ -116,10 +116,8 @@ All under `/api/meatspace` (`server/routes/meatspacePostRoutes.js`):
 - `POST /post/training/runs` — atomic, idempotent completed training-run save
 - `POST /post/training`, `GET /post/training/{stats,entries}` — one-entry compatibility adapter and training reads
 - `GET/POST /post/memory-items`, `GET/PUT/DELETE /post/memory-items/:id` — memory item CRUD
-- `GET /post/memory-items/due` — spaced-repetition due list
 - `POST /post/memory-items/:id/practice` — submit practice result, update mastery
 - `GET /post/memory-items/:id/{mastery,chunk-mastery}` — mastery breakdowns
-- `POST /post/memory-drill` — generate memory drills
 
 ## UI Components
 

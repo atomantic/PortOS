@@ -186,7 +186,6 @@ import {
   __testing,
   buildPersistentMindToolPrompt,
   executeCosToolCall,
-  getCosToolCall,
   formatCosToolCatalog,
   getCosToolCatalog,
 } from './cosToolRegistry.js';
@@ -1029,7 +1028,7 @@ describe('cosToolRegistry', () => {
         expect(mocks.executeTasks).not.toHaveBeenCalled();
         expect(mocks.delegateSandbox).not.toHaveBeenCalled();
         expect(mocks.adapter.assertAuditAccess).not.toHaveBeenCalled();
-        await expect(getCosToolCall(requestId)).resolves.toBeNull();
+        expect(__testing.toolCalls.has(requestId)).toBe(false);
       },
     );
 

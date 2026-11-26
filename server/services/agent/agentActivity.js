@@ -132,44 +132,6 @@ export async function getActivities(agentId, options = {}) {
 }
 
 /**
- * Get recent activities across all agents
- */
-export async function getRecentActivities(options = {}) {
-  const { limit = 50, agentIds = null, action = null } = options;
-
-  const today = getDateString();
-  const activities = [];
-
-  // Get list of agent directories
-  await ensureActivityDir();
-  let agentDirs = [];
-
-  if (existsSync(ACTIVITY_DIR)) {
-    const entries = await readdir(ACTIVITY_DIR, { withFileTypes: true });
-    agentDirs = entries.filter(e => e.isDirectory()).map(e => e.name);
-  }
-
-  // Filter to specific agents if provided
-  if (agentIds) {
-    agentDirs = agentDirs.filter(d => agentIds.includes(d));
-  }
-
-  // Load today's activities from each agent
-  for (const agentId of agentDirs) {
-    const data = await loadActivity(agentId, today);
-    for (const activity of data.activities || []) {
-      if (!action || activity.action === action) {
-        activities.push({ agentId, ...activity });
-      }
-    }
-  }
-
-  // Sort and limit
-  activities.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-  return activities.slice(0, limit);
-}
-
-/**
  * Get today's action count for an account (for rate limiting)
  */
 export async function getTodayActionCount(accountId, action) {

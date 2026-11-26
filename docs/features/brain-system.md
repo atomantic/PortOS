@@ -202,7 +202,6 @@ video/audio switches (a transcript-only ingest works without it).
 | GET /api/brain/youtube/ingest/active | Ingests still running, so a page that was left can watch or cancel one |
 | GET /api/brain/youtube/ingests | List ingests, newest first |
 | GET/DELETE /api/brain/youtube/ingests/:videoId | One ingest / forget it |
-| GET /api/brain/youtube/ingests/:videoId/transcript | Stored transcript markdown |
 | GET/PUT /api/brain/youtube/settings | Ingest vault/folder + option defaults |
 
 ## Prompt Templates

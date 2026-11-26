@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { filmStyleParamsSchema, filmStylePromptQuerySchema } from '../lib/filmStyleGrammarValidation.js';
+import { filmStyleParamsSchema } from '../lib/filmStyleGrammarValidation.js';
 import {
-  FILM_STYLE_GRAMMARS, getFilmStyleGrammar, renderFilmStyleGrammarPrompt, summarizeFilmStyleGrammar,
+  FILM_STYLE_GRAMMARS, getFilmStyleGrammar, summarizeFilmStyleGrammar,
 } from '../lib/filmStyleGrammars.js';
 
 // Read-only film style grammar catalog (#10252). The list is the picker
@@ -20,13 +20,6 @@ router.get('/:id', asyncHandler(async (req, res) => {
   const grammar = getFilmStyleGrammar(id);
   if (!grammar) throw new ServerError('Film style grammar not found', { status: 404, code: 'NOT_FOUND' });
   res.json(grammar);
-}));
-
-router.get('/:id/prompt', asyncHandler(async (req, res) => {
-  const { id } = validateRequest(filmStyleParamsSchema, req.params);
-  const { parts } = validateRequest(filmStylePromptQuerySchema, req.query);
-  if (!getFilmStyleGrammar(id)) throw new ServerError('Film style grammar not found', { status: 404, code: 'NOT_FOUND' });
-  res.json({ id, parts, prompt: renderFilmStyleGrammarPrompt(id, { parts }) });
 }));
 
 export default router;

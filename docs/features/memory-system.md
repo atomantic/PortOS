@@ -208,14 +208,8 @@ the same app. Existing memories and run lineage are not modified.
 | PUT /api/memory/:id | Update memory |
 | DELETE /api/memory/:id | Delete (soft) memory |
 | POST /api/memory/search | Searches semantically when embeddings are available and by text otherwise. Returns `searchMode` as `semantic` or `lexical`. |
-| GET /api/memory/categories | List categories |
-| GET /api/memory/tags | List tags |
-| GET /api/memory/timeline | Timeline view data |
 | GET /api/memory/graph | Graph visualization data |
 | GET /api/memory/stats | Memory statistics |
-| POST /api/memory/link | Link two memories |
-| POST /api/memory/consolidate | Manually merge similar memories (supports `dryRun`) |
-| DELETE /api/memory/expired | Manually clear expired memories |
 | GET /api/memory/embeddings/status | Embedding and classifier availability |
 | GET /api/memory/backend/status | Active storage backend status |
 | GET /api/memory/sync | File↔DB sync status |

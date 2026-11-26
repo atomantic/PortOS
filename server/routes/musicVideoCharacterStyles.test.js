@@ -20,14 +20,10 @@ app.use(errorMiddleware);
 describe('/api/music-video/character-styles', () => {
   beforeEach(() => { settings = {}; pathExists.mockReset().mockResolvedValue(true); });
 
-  it('lists the catalog and returns a style with its rendered sheet prompt', async () => {
+  it('lists the catalog', async () => {
     const list = await request(app).get('/api/music-video/character-styles');
     expect(list.status).toBe(200);
     expect(list.body.find((s) => s.id === 'claudia-slopcore')).toMatchObject({ characterName: 'Claudia', referenceImageId: null });
-    const detail = await request(app).get('/api/music-video/character-styles/claudia-slopcore');
-    expect(detail.body.sheetPrompt).toContain('eight-pointed star hair clip');
-    expect(detail.body.sheetPrompt).not.toContain('{identity}');
-    expect((await request(app).get('/api/music-video/character-styles/no-such-style')).status).toBe(400);
   });
 
   it('sets and clears this install\'s character sheet, refusing a missing gallery image', async () => {

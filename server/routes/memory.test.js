@@ -71,7 +71,7 @@ vi.mock('../services/settings.js', async () => ({
 }));
 
 import { PEER_INSTANCE_ID_HEADER } from '../services/sharing/peerPullAuthorization.js';
-import { ensureBackend, getMemories, getTimeline, archiveMemory, purgeMemory, linkMemories, searchMemories, hybridSearchMemories } from '../services/memoryBackend.js';
+import { ensureBackend, getMemories, archiveMemory, purgeMemory, searchMemories, hybridSearchMemories } from '../services/memoryBackend.js';
 import { checkHealth } from '../lib/db.js';
 import * as memorySync from '../services/memorySync.js';
 import { findRecentRunsUsingMemory } from '../services/memoryRunUsage.js';
@@ -506,100 +506,11 @@ describe('Memory Routes', () => {
   // TIMELINE
   // ===========================================================================
 
-  describe('GET /api/memory/timeline', () => {
-    it('should pass the default limit through', async () => {
-      getTimeline.mockResolvedValue({});
-
-      const response = await request(app).get('/api/memory/timeline');
-
-      expect(response.status).toBe(200);
-      expect(getTimeline).toHaveBeenCalledWith({ limit: 100 });
-    });
-
-    it('should pass validated date range, types and limit', async () => {
-      getTimeline.mockResolvedValue({});
-
-      const response = await request(app)
-        .get('/api/memory/timeline?startDate=2026-01-01T00:00:00.000Z&endDate=2026-01-31&types=fact&limit=5');
-
-      expect(response.status).toBe(200);
-      expect(getTimeline).toHaveBeenCalledWith({
-        startDate: '2026-01-01T00:00:00.000Z',
-        endDate: '2026-01-31',
-        types: ['fact'],
-        limit: 5
-      });
-    });
-
-    it('should reject a malformed date boundary', async () => {
-      const response = await request(app).get('/api/memory/timeline?startDate=yesterday');
-
-      expect(response.status).toBe(400);
-      expect(response.body.error).toMatch(/Validation failed/);
-      expect(getTimeline).not.toHaveBeenCalled();
-    });
-
-    it('should reject a limit above the 500 ceiling', async () => {
-      const response = await request(app).get('/api/memory/timeline?limit=501');
-
-      expect(response.status).toBe(400);
-      expect(getTimeline).not.toHaveBeenCalled();
-    });
-
-    it('should forward the appId filter to the backend', async () => {
-      getTimeline.mockResolvedValue({});
-
-      const response = await request(app).get('/api/memory/timeline?appId=__not_brain');
-
-      expect(response.status).toBe(200);
-      expect(getTimeline).toHaveBeenCalledWith({ appId: '__not_brain', limit: 100 });
-    });
-
-    it('should reject a date that matches the shape but is not a real day', async () => {
-      const response = await request(app).get('/api/memory/timeline?startDate=2026-02-30');
-
-      expect(response.status).toBe(400);
-      expect(getTimeline).not.toHaveBeenCalled();
-    });
-  });
-
   it('returns 404 for the retired POST /api/memory/decay endpoint', async () => {
     const response = await request(app).post('/api/memory/decay').send({ decayRate: 0.01 });
     expect(response.status).toBe(404);
   });
 
-  describe('POST /api/memory/link', () => {
-    const sourceId = '550e8400-e29b-41d4-a716-446655440000';
-    const targetId = '550e8400-e29b-41d4-a716-446655440001';
-
-    it('passes a typed link and its note through to the backend', async () => {
-      linkMemories.mockResolvedValue({ success: true, sourceId, targetId, linkType: 'supersedes', linkId: 'id-1' });
-
-      const response = await request(app).post('/api/memory/link')
-        .send({ sourceId, targetId, linkType: 'supersedes', note: 'newer decision' });
-
-      expect(response.status).toBe(200);
-      expect(linkMemories).toHaveBeenCalledWith(sourceId, targetId, { linkType: 'supersedes', note: 'newer decision', createdBy: undefined });
-    });
-
-    it('keeps an untyped legacy call valid (backend defaults it to related)', async () => {
-      linkMemories.mockResolvedValue({ success: true, sourceId, targetId, linkType: 'related', linkId: 'id-2' });
-
-      const response = await request(app).post('/api/memory/link').send({ sourceId, targetId });
-
-      expect(response.status).toBe(200);
-      expect(linkMemories).toHaveBeenCalledWith(sourceId, targetId, { linkType: undefined, note: undefined, createdBy: undefined });
-    });
-
-    it('rejects an unknown link type and a directed self-link with 400', async () => {
-      const unknown = await request(app).post('/api/memory/link').send({ sourceId, targetId, linkType: 'befriends' });
-      const self = await request(app).post('/api/memory/link').send({ sourceId, targetId: sourceId, linkType: 'supersedes' });
-
-      expect(unknown.status).toBe(400);
-      expect(self.status).toBe(400);
-      expect(linkMemories).not.toHaveBeenCalled();
-    });
-  });
 });
 
 describe('Memory version API', () => {

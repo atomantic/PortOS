@@ -309,18 +309,6 @@ export async function getStatus() {
   };
 }
 
-/**
- * Backend changes require a coordinated stop and verified restart. Neither a
- * snapshot nor a mode-only switch can rebind this process's existing pool.
- */
-async function switchDatabaseImpl() {
-  // Re-enable only with the durable, verified offline cutover in #8805.
-  throw new ServerError(
-    'Database migration and switching are temporarily unavailable: a coordinated shutdown and restart is required to preserve writes. Keep using the current backend; backups remain available.',
-    { status: 409, code: 'DATABASE_CUTOVER_UNAVAILABLE' }
-  );
-}
-
 const pgUser = POOL_CONFIG.user;
 const pgDb = POOL_CONFIG.database;
 const pgPassword = POOL_CONFIG.password;
@@ -879,8 +867,6 @@ async function fixDatabaseImpl() {
     error: result.exitCode !== 0 ? (result.stderr || result.stdout) : undefined
   };
 }
-
-export const switchDatabase = (options, io) => withDatabaseOperation(() => switchDatabaseImpl(options, io));
 
 export const syncDatabase = (io) => withDatabaseOperation(() => syncDatabaseImpl(io));
 

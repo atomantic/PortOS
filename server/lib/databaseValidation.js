@@ -1,26 +1,10 @@
 /**
- * Zod schemas for the database, data-manager and port-allocation routes.
+ * Zod schemas for the database and data-manager routes.
  *
  * Moved out of the retired catch-all validation.js (#16828); the route family that consumes these schemas imports this module directly.
  */
 
 import { z } from 'zod';
-
-// POST /api/ports/allocate — reserve N free ports. `count` accepts a number or
-// a numeric string (the UI may send either) and defaults to 1 when absent,
-// matching the prior `parseInt(count) || 1` behavior — but non-numeric garbage
-// now 400s instead of silently collapsing to 1. The preprocess only forwards
-// number|string so `z.coerce` can't quietly turn a boolean (`true → 1`) or an
-// array (`[5] → 5`) into a valid count.
-export const portsAllocateSchema = z.object({
-  count: z.preprocess(
-    (v) => {
-      if (v === undefined) return 1;
-      return (typeof v === 'number' || typeof v === 'string') ? v : NaN;
-    },
-    z.coerce.number().int().min(1).max(10)
-  )
-});
 
 // DELETE /api/data/:category — purge a category, or one entry inside it.
 // `subPath` names a single top-level entry of the category directory; omitting
@@ -41,12 +25,6 @@ export const dataPurgeSchema = z.object({
 });
 
 const DB_BACKENDS = ['docker', 'native'];
-
-// POST /api/database/switch — switch active backend, optionally migrating data.
-export const databaseSwitchSchema = z.object({
-  target: z.enum(DB_BACKENDS),
-  migrate: z.boolean().optional()
-});
 
 // POST /api/database/maintenance/preflight — advisory only; never accepts a cutover.
 export const databaseMaintenancePreflightSchema = z.object({

@@ -29,16 +29,4 @@ describe('/api/film-styles', () => {
     expect((await request(app).get('/api/film-styles/Not_Kebab')).status).toBe(400);
   });
 
-  it('previews the rendered prompt for comma-separated parts and rejects unknown parts', async () => {
-    const { id } = FILM_STYLE_GRAMMARS[0];
-    const response = await request(app).get(`/api/film-styles/${id}/prompt?parts=motion, sound`);
-    expect(response.status).toBe(200);
-    expect(response.body.parts).toEqual(['motion', 'sound']);
-    expect(response.body.prompt).toContain('Motion:');
-    expect(response.body.prompt).not.toContain('Colour:');
-
-    expect((await request(app).get(`/api/film-styles/${id}/prompt`)).body.parts).toBe('all');
-    expect((await request(app).get(`/api/film-styles/${id}/prompt?parts=palette`)).status).toBe(400);
-    expect((await request(app).get('/api/film-styles/no-such-style/prompt')).status).toBe(404);
-  });
 });
