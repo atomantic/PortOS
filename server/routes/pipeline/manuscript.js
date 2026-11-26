@@ -21,7 +21,8 @@ import { getReviewWithStaleness } from '../../services/pipeline/editorial/checkR
 import { recordTrendSnapshot } from '../../services/pipeline/editorialScore.js';
 import { readReadinessGate, mergeSeverityWeights } from '../../lib/editorial/severityConfig.js';
 import { getSettings } from '../../services/settings.js';
-import { mapServiceError, providerOverrideShape } from './shared.js';
+import { providerOverrideShape } from '../../lib/pipelineValidation.js';
+import { mapServiceError } from './shared.js';
 
 const router = Router();
 

@@ -48,6 +48,17 @@ import { runStagedLLM, resolveJudgeForStage } from '../stageRunner.js';
 import { getStage } from '../promptService.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo } from '../../lib/textUtils.js';
+import {
+  CANDIDATE_COUNT_DEFAULT,
+  CANDIDATE_COUNT_MIN,
+  CANDIDATE_COUNT_MAX,
+} from '../../lib/pipelineSeriesConfig.js';
+
+export {
+  CANDIDATE_COUNT_DEFAULT,
+  CANDIDATE_COUNT_MIN,
+  CANDIDATE_COUNT_MAX,
+};
 
 const CANON_LIST_MAX = 24; // cap per canon kind in the brief — keeps the prompt tight
 // Cap on the authored-psychology block. The roster above stays a scannable
@@ -56,12 +67,6 @@ const CANON_LIST_MAX = 24; // cap per canon kind in the brief — keeps the prom
 const CHARACTER_FOUNDATION_MAX = 8;
 const EXISTING_SERIES_MAX = 30;
 const FACET_MAX = 1000; // per-facet char cap (hook / world / conflictEngine / cost / tension / theme)
-
-// How many candidate concepts to generate. Default 5 (mid of the issue's 4–6);
-// clamped so a stray option can't spawn a wall of concepts or a single one.
-export const CANDIDATE_COUNT_DEFAULT = 5;
-export const CANDIDATE_COUNT_MIN = 2;
-export const CANDIDATE_COUNT_MAX = 8;
 
 // Shipped, genre-neutral anti-generic banlist — the exhausted default-mode ideas
 // a reader who has seen a thousand pitches scrolls past. Merged with the

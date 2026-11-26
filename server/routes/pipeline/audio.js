@@ -6,7 +6,17 @@
 
 import { unlink } from 'fs/promises';
 import { Router } from 'express';
-import { z } from 'zod';
+import {
+  ttsPreviewSchema,
+  ttsNarrateSchema,
+  ttsNarrateSegmentSchema,
+  ttsNarrateSegmentRescoreSchema,
+  extractAudioLinesSchema,
+  lineEditSchema,
+  lineRenderSchema,
+  musicAttachSchema,
+  createPipelineMusicSchemas,
+} from '../../lib/pipelineValidation.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validateRequest.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
@@ -43,6 +53,8 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { mapServiceError } from './shared.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 
+const { musicGenerateSchema, cuesGenerateSchema, cueRenderSchema } = createPipelineMusicSchemas(ENGINES);
+
 const router = Router();
 
 // Merged voice list across every supported TTS engine (Kokoro + Piper today;
@@ -55,10 +67,6 @@ router.get('/tts/voices', asyncHandler(async (_req, res) => {
 // Audition a voice before binding it to a character. Returns the rendered
 // WAV inline so the picker can <audio> it without persisting anything. Body:
 // { voiceId, text? } — text defaults to a short generic sample.
-const ttsPreviewSchema = z.object({
-  voiceId: z.string().trim().min(1).max(200),
-  text: z.string().trim().max(500).optional(),
-});
 const DEFAULT_PREVIEW_TEXT = 'The morning fog burned off slow that day, and nothing felt quite the same after.';
 router.post('/tts/preview', asyncHandler(async (req, res) => {
   const body = validateRequest(ttsPreviewSchema, req.body ?? {});
@@ -80,13 +88,6 @@ router.post('/tts/preview', asyncHandler(async (req, res) => {
 // and returns per-segment audio + duration + readability flags so the
 // manuscript editor can play a karaoke-style read-along. Non-destructive — the
 // WAVs land in PATHS.audio exactly like /tts/preview + the dialogue render.
-const ttsNarrateSchema = z.object({
-  // Do NOT trim: the segment start/end offsets are computed against this exact
-  // string and the client slices its original `content` with them, so trimming
-  // here would shift every span. narrateProse rejects all-whitespace text.
-  text: z.string().min(1).max(12000),
-  voiceId: z.string().trim().max(200).optional(),
-});
 router.post('/tts/narrate', asyncHandler(async (req, res) => {
   const body = validateRequest(ttsNarrateSchema, req.body ?? {});
   const result = await narrateProse({ text: body.text, voiceId: body.voiceId })
@@ -98,11 +99,6 @@ router.post('/tts/narrate', asyncHandler(async (req, res) => {
 // (the read-aloud modal never persists them), so this is stateless: the client
 // sends the segment text back and gets fresh audio + a fresh spoken-text check.
 // `expectedSpeech` is the user's accepted recognizer spelling for the segment.
-const ttsNarrateSegmentSchema = z.object({
-  text: z.string().trim().min(1).max(4000),
-  voiceId: z.string().trim().max(200).optional(),
-  expectedSpeech: z.string().trim().max(4000).nullable().optional(),
-});
 router.post('/tts/narrate/segment', asyncHandler(async (req, res) => {
   const body = validateRequest(ttsNarrateSegmentSchema, req.body ?? {});
   const result = await synthesizeToFile({
@@ -122,11 +118,6 @@ router.post('/tts/narrate/segment', asyncHandler(async (req, res) => {
 // "Accept as spoken" for a narration segment: re-score the segment's stored
 // `heard` text against a new `expectedSpeech` target. No STT call — mirrors the
 // audio-line PATCH. A segment with nothing heard stays `unverified`.
-const ttsNarrateSegmentRescoreSchema = z.object({
-  text: z.string().trim().min(1).max(4000),
-  heard: z.string().max(4000),
-  expectedSpeech: z.string().trim().max(4000).nullable().optional(),
-});
 router.patch('/tts/narrate/segment', asyncHandler(async (req, res) => {
   const body = validateRequest(ttsNarrateSegmentRescoreSchema, req.body ?? {});
   const expectedSpeech = body.expectedSpeech || null;
@@ -141,7 +132,6 @@ router.patch('/tts/narrate/segment', asyncHandler(async (req, res) => {
 // stages.audio.lines[]. `force: true` replaces existing lines wholesale;
 // the default refuses overwrite when lines[] is already populated so a
 // stray click can't wipe a user's manual edits.
-const extractAudioLinesSchema = z.object({ force: z.boolean().optional() });
 router.post('/issues/:id/stages/audio/extract-lines', asyncHandler(async (req, res) => {
   const body = validateRequest(extractAudioLinesSchema, req.body ?? {});
   const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
@@ -177,15 +167,6 @@ router.post('/issues/:id/stages/audio/extract-lines', asyncHandler(async (req, r
 // — the server merges against the freshest persisted record inside the
 // per-issue write queue. Patch fields are intentionally narrow (text +
 // voiceIdOverride); the per-line audio fields are owned by the render path.
-const lineEditSchema = z.object({
-  text: z.string().max(4000).optional(),
-  voiceIdOverride: z.string().trim().max(200).nullable().optional(),
-  // Per-line VO start offset (seconds into the stitched episode). null clears
-  // the placement so the muxer skips the line. The sanitizer clamps the range.
-  offsetSec: z.number().min(0).max(7200).nullable().optional(),
-  // Accepted recognizer spelling ("Ay-Ai" for "AI"); null clears it (#10250).
-  expectedSpeech: z.string().trim().max(4000).nullable().optional(),
-});
 router.patch('/issues/:id/stages/audio/lines/:lineIdx', asyncHandler(async (req, res) => {
   const lineIdx = Number(req.params.lineIdx);
   if (!Number.isInteger(lineIdx) || lineIdx < 0) {
@@ -235,7 +216,6 @@ router.patch('/issues/:id/stages/audio/lines/:lineIdx', asyncHandler(async (req,
 //   2. line.voiceIdOverride   (per-line override saved on the issue)
 //   3. character.voiceId      (linked-universe canon binding via getSeriesCanon)
 //   4. (none → uses the configured default voice via synthesize())
-const lineRenderSchema = z.object({ voiceId: z.string().trim().max(200).optional() });
 router.post('/issues/:id/stages/audio/lines/:lineIdx/render', asyncHandler(async (req, res) => {
   const lineIdx = Number(req.params.lineIdx);
   if (!Number.isInteger(lineIdx) || lineIdx < 0) {
@@ -419,23 +399,9 @@ router.get('/audio/music/generators', asyncHandler(async (_req, res) => {
   });
 }));
 
-// Every model id across all engines — the schema validates `modelId` against
-// this union and `generateMusic` resolves it within the chosen engine (falling
-// back to that engine's default for a mismatched id).
-const ALL_MODEL_IDS = Object.values(ENGINES).flatMap((e) => e.models.map((m) => m.id));
-// The widest duration window across engines; per-engine clamping happens in the
-// service, so the schema just rejects absurd values.
-const MAX_ENGINE_DURATION = Math.max(...Object.values(ENGINES).map((e) => e.maxDurationSec));
-
 // Generate a background-music track with the selected backend and attach it to
 // the issue as a `source: 'gen'` track. The generated WAV lands in the shared
 // music library, so it's reusable across issues exactly like an upload.
-const musicGenerateSchema = z.object({
-  prompt: z.string().max(800).refine((value) => value.trim().length > 0, 'prompt is required'),
-  engine: z.enum(Object.keys(ENGINES)).optional(),
-  durationSec: z.number().min(1).max(MAX_ENGINE_DURATION).optional(),
-  modelId: z.enum(ALL_MODEL_IDS).optional(),
-});
 router.post('/issues/:id/stages/audio/music/generate', asyncHandler((req, res) => maintenance.run('pipeline-audio', req.params.id, async () => {
   const body = validateRequest(musicGenerateSchema, req.body ?? {});
   // Guard the (expensive) generation behind a 404 check first — generating a
@@ -496,10 +462,6 @@ router.post('/issues/:id/stages/audio/music/upload', musicUpload, asyncHandler(a
   res.json({ issue: updatedIssue, stage, music: stage.music, sizeBytes });
 }));
 
-const musicAttachSchema = z.object({
-  trackFilename: z.string().trim().min(1).max(500),
-  label: z.string().trim().max(200).nullable().optional(),
-});
 router.post('/issues/:id/stages/audio/music/attach', asyncHandler(async (req, res) => {
   const body = validateRequest(musicAttachSchema, req.body ?? {});
   // Single-file stat instead of full library listing — one syscall vs. N+1.
@@ -550,12 +512,6 @@ router.delete('/issues/:id/stages/audio/music', asyncHandler(async (req, res) =>
 // cues already exist (mirrors the extract-lines / extract-scenes overwrite
 // guard). Already-rendered cue audio is carried forward by label so re-deriving
 // doesn't silently invalidate every rendered WAV.
-const cuesGenerateSchema = z.object({
-  engine: z.enum(Object.keys(ENGINES)).optional(),
-  providerOverride: z.string().trim().max(80).optional(),
-  modelOverride: z.string().trim().max(128).optional(),
-  force: z.boolean().optional(),
-});
 router.post('/issues/:id/stages/audio/cues/generate', asyncHandler(async (req, res) => {
   const body = validateRequest(cuesGenerateSchema, req.body ?? {});
   const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
@@ -605,11 +561,6 @@ router.post('/issues/:id/stages/audio/cues/generate', asyncHandler(async (req, r
 // render route. The duration is the cue's placed timeline span (endSec-startSec)
 // when placed, else the requested durationSec, else the engine default —
 // per-engine clampDuration in generateMusic guards the final value.
-const cueRenderSchema = z.object({
-  engine: z.enum(Object.keys(ENGINES)).optional(),
-  durationSec: z.number().min(1).max(MAX_ENGINE_DURATION).optional(),
-  modelId: z.enum(ALL_MODEL_IDS).optional(),
-});
 router.post('/issues/:id/stages/audio/cues/:cueIdx/render', asyncHandler((req, res) => maintenance.run('pipeline-audio', req.params.id, async () => {
   const cueIdx = Number(req.params.cueIdx);
   if (!Number.isInteger(cueIdx) || cueIdx < 0) {

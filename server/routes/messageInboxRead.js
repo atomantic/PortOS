@@ -1,10 +1,9 @@
 // Shared production inbox route, without sync, send, browser or AI endpoints.
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { UUID_RE } from '../lib/fileUtils.js';
 import * as messageSync from '../services/messageSync.js';
-import { messageInboxQuerySchema } from '../lib/messageValidation.js';
+import { messageInboxQuerySchema, messageParamsSchema } from '../lib/messagesValidation.js';
 import { parsePagination } from '../lib/queryValidation.js';
 
 export const messageInboxRead = asyncHandler(async (req, res) => {
@@ -22,12 +21,6 @@ export const messageInboxRead = asyncHandler(async (req, res) => {
     offset: parsedOffset
   });
   res.json(result);
-});
-
-
-export const messageParamsSchema = z.object({
-  accountId: z.string().guid(),
-  messageId: z.string().min(1)
 });
 
 export const messageDetailRead = asyncHandler(async (req, res) => {

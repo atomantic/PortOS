@@ -8,7 +8,20 @@ import { Router } from 'express';
 import { isRemoteRequest } from '../lib/requestOrigin.js';
 import { verifyRequestSession } from '../services/auth.js';
 import { isCrossOrigin } from '../../lib/portosAuthCore.js';
-import { z } from 'zod';
+import {
+  instanceIdSchema,
+  addPeerSchema,
+  updatePeerSchema,
+  announceSchema,
+  querySchema,
+  reciprocalSyncSchema,
+  pairSecretSchema,
+  syncStatusQuerySchema,
+  updateSelfSchema,
+  addTailcatPeerSchema,
+  retryTailcatForwardSchema,
+  ensureTailcatServeSchema,
+} from '../lib/instancesValidation.js';
 import * as instances from '../services/instances.js';
 import { getSelf, updateSelf } from '../services/instanceIdentity.js';
 // Lazy: the sync orchestrator pulls ~30 modules a boot that never syncs doesn't need.
@@ -16,18 +29,14 @@ const loadSyncOrchestrator = () => import('../services/syncOrchestrator.js');
 import { getFullSyncCoverageForPeer } from '../services/sharing/peerSync.js';
 import { provisionTailscaleCert } from '../services/certProvisioner.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { DEFAULT_PEER_PORT, DEFAULT_TAILCAT_REMOTE_PORT, PORTS } from '../lib/ports.js';
 import * as tailcatPeer from '../services/tailcatPeer.js';
 import * as tailcatServe from '../services/tailcatServe.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
-import { federatedMediaPeerSettingsSchema } from '../lib/federatedMediaValidation.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { tailcatDeviceApprovalSchema, tailcatDeviceEnforcementSchema } from '../lib/tailcatValidation.js';
-import { isBlockedIngestHost } from '../lib/safeUrlFetch.js';
 import { PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { isPeerBasicBootstrapRequest } from '../lib/apiAccessPolicy.js';
 import { requestHasHostControl } from '../services/authGate.js';
-import { optionalBooleanMap } from '../lib/zodCompat.js';
 
 const router = Router();
 
@@ -60,87 +69,6 @@ router.use(asyncHandler(async (req, _res, next) => {
     status: 403, code: 'PEER_SETTINGS_OPERATOR_REQUIRED',
   });
 }));
-
-// Optional HTTP Basic credential for a peer behind an auth proxy. `null` clears
-// it; an object sets it. The service's sanitizePeerAuth does the final
-// normalize: the password is the secret that defines the credential, so a
-// payload with a password stores it (username optional — password-only is
-// valid Basic auth), both fields blank is a clear, and a username-only payload
-// is ignored (it's most likely a redacted client peer being round-tripped, and
-// must not wipe a stored password).
-const peerAuthSchema = z.object({
-  username: z.string().max(256).optional(),
-  password: z.string().max(2048).optional()
-}).nullable().optional();
-
-// Validation schemas
-const addPeerSchema = z.object({
-  address: z.string()
-    .regex(/^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/, 'Must be a valid IP address')
-    .refine(ip => !isBlockedIngestHost(ip), 'Loopback, unspecified and link-local addresses are not allowed'),
-  port: z.number().int().min(1).max(65535).default(DEFAULT_PEER_PORT),
-  name: z.string().optional(),
-  host: z.string().optional(),
-  auth: peerAuthSchema
-});
-
-// Derive accepted keys from the service owner so new categories survive validation.
-const syncCategoriesSchema = z.object(
-  optionalBooleanMap(Object.keys(instances.DEFAULT_SYNC_CATEGORIES))
-).optional();
-
-const updatePeerSchema = z.object({
-  name: z.string().optional(),
-  enabled: z.boolean().optional(),
-  syncEnabled: z.boolean().optional(),
-  // Full-sync ("mirror everything") mode: implies every current + future sync
-  // category and back-subscribes all subscribable records to this peer.
-  fullSync: z.boolean().optional(),
-  syncCategories: syncCategoriesSchema,
-  // How Media Collection bytes arrive from this peer (mirrors MEDIA_SYNC_MODES
-  // in services/instances.js): copied locally or hosted
-  // by the peer and streamed on demand.
-  mediaSyncMode: z.enum(['copy', 'host']).optional(),
-  // Standing grant: this paired peer may delete media on this machine (default on).
-  mediaDeleteAllowed: z.boolean().optional(),
-  // Accept empty string to clear; any other string is validated/normalized in the service
-  host: z.string().optional().nullable(),
-  auth: peerAuthSchema,
-  // Explicit consumer opt-in + model allowlist for using this peer as a media
-  // provider. Provider-side sharing remains independently configured there.
-  mediaProvider: federatedMediaPeerSettingsSchema.optional(),
-  syncSecret: z.string().min(32).max(256).nullable().optional(),
-});
-
-const announceSchema = z.object({
-  port: z.number().int().min(1).max(65535),
-  instanceId: z.string().guid(),
-  name: z.string().optional(),
-  // Tailscale-issued DNS name announcing peer reaches itself at; receiver
-  // stores it on the peer record so callbacks use https://<host>:<port>.
-  host: z.string().optional().nullable()
-});
-
-const querySchema = z.object({
-  path: z.string().startsWith('/api/', 'Path must start with /api/')
-});
-
-// Reciprocal sync request from a peer: it enabled `syncCategories` toward us
-// and asks us to mirror them so the sync is bidirectional. instanceId is the
-// announcing peer's identity (matched against our peer record).
-const reciprocalSyncSchema = z.object({
-  instanceId: z.string().guid(),
-  // `.unwrap()` strips the `.optional()` from the shared schema so the
-  // syncCategories KEY is required. An empty `{}` still parses (all fields are
-  // optional) and simply no-ops downstream in applyReciprocalSync
-  // (sanitizeSyncCategories returns null → changed:false).
-  syncCategories: syncCategoriesSchema.unwrap(),
-  // Optional: a full-sync peer asks us to mirror everything back. Absent from
-  // older peers (they reciprocate via the all-on syncCategories map instead).
-  fullSync: z.boolean().optional()
-});
-
-const pairSecretSchema = z.object({ syncSecret: z.string().min(32).max(256) });
 
 // GET /api/instances — list self + all peers
 router.get('/', asyncHandler(async (req, res) => {
@@ -183,12 +111,6 @@ router.get('/assignable', asyncHandler(async (req, res) => {
 // unscoped (global) response. Mirror the lenient trim + length-cap the sibling
 // /api/sync/* routes already apply (forPeerOf in dataSync.js): any non-empty
 // string is a valid key; absent/blank/array → unscoped.
-const syncStatusQuerySchema = z.object({
-  forPeer: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim().length > 0 ? v.trim().slice(0, 128) : undefined),
-    z.string().optional()
-  )
-});
 router.get('/sync-status', asyncHandler(async (req, res) => {
   const { forPeer } = validateRequest(syncStatusQuerySchema, req.query);
   const status = await (await loadSyncOrchestrator()).getSyncStatus({ includeChecksums: true, forPeer });
@@ -235,13 +157,6 @@ router.get('/self', asyncHandler(async (req, res) => {
 }));
 
 // PUT /api/instances/self — update display name and/or the new-peer full-sync default
-const updateSelfSchema = z.object({
-  name: z.string().min(1).optional(),
-  // Default full-sync ("mirror everything") mode for peers added from now on.
-  defaultPeerFullSync: z.boolean().optional()
-}).refine((d) => d.name !== undefined || d.defaultPeerFullSync !== undefined, {
-  message: 'Provide name and/or defaultPeerFullSync'
-});
 router.put('/self', asyncHandler(async (req, res) => {
   const data = validateRequest(updateSelfSchema, req.body);
   const updated = await updateSelf(data.name, { defaultPeerFullSync: data.defaultPeerFullSync });
@@ -277,14 +192,6 @@ router.post('/peers/announce', asyncHandler(async (req, res) => {
   });
 }));
 
-const addTailcatPeerSchema = z.object({
-  tcAddress: z.string().trim().min(24).max(2048),
-  protocol: z.enum(['http', 'https']).default('http'),
-  name: z.string().optional(),
-  auth: peerAuthSchema,
-  remotePort: z.number().int().min(1).max(65535).default(DEFAULT_TAILCAT_REMOTE_PORT),
-});
-
 // POST /api/instances/peers/tailcat — add a peer via tailcat forward (no Tailscale account).
 // Starts `tailcat forward <tc> LOCAL:5565` (LOCAL defaults to 15555) and registers
 // a loopback peer. The classic POST /peers path still rejects 127/8.
@@ -309,10 +216,7 @@ router.get('/peers/tailcat/forwards', asyncHandler(async (_req, res) => {
 // using the stored capability, registering its peer if the original add never got
 // that far.
 router.post('/peers/tailcat/forwards/:id/retry', asyncHandler(async (req, res) => {
-  const data = validateRequest(z.object({
-    remotePort: z.number().int().min(1).max(65535).optional(),
-    tcAddress: z.string().trim().min(24).max(2048).refine(tailcatPeer.isValidTcAddress, 'Invalid Tailcat address').optional(),
-  }), req.body || {});
+  const data = validateRequest(retryTailcatForwardSchema, req.body || {});
   const peer = await tailcatPeer.retryTailcatForward(req.params.id, data);
   // A repaired tunnel must not leave the peer in yesterday's probe backoff.
   // Probe also distinguishes a usable tunnel from missing peer credentials.
@@ -326,7 +230,6 @@ router.delete('/peers/tailcat/forwards/:id', asyncHandler(async (req, res) => {
   res.json(await tailcatPeer.forgetTailcatForward(req.params.id));
 }));
 
-
 // GET /api/instances/peers/tailcat/serve — this node's managed tailcat serve status.
 // Returns the full tc address when known so the operator can Copy it out of band
 // (our own serve capability — unlike peer forwards, which stay redacted).
@@ -337,10 +240,7 @@ router.get('/peers/tailcat/serve', asyncHandler(async (req, res) => {
 
 // POST /api/instances/peers/tailcat/serve — ensure serve is running for the remote ingress only.
 router.post('/peers/tailcat/serve', asyncHandler(async (req, res) => {
-  const data = validateRequest(z.object({
-    localPort: z.literal(PORTS.TAILCAT_INGRESS).optional(),
-    keyName: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/).optional(),
-  }), req.body || {});
+  const data = validateRequest(ensureTailcatServeSchema, req.body || {});
   const status = await tailcatServe.ensureTailcatServe(data);
   res.status(200).json(status);
 }));
@@ -354,7 +254,6 @@ router.post('/peers/tailcat/serve/retry', asyncHandler(async (_req, res) => {
 router.delete('/peers/tailcat/serve', asyncHandler(async (_req, res) => {
   res.json(await tailcatServe.stopTailcatServe({ disable: true }));
 }));
-
 
 async function requireTailcatOperator(req) {
   if (isCrossOrigin(req) || !(await verifyRequestSession(req) || requestHasHostControl(req))) {
@@ -467,7 +366,7 @@ router.post('/peers/pair-secret', asyncHandler(async (req, res) => {
   }
   const { syncSecret } = validateRequest(pairSecretSchema, req.body || {});
   const instanceId = req.get(PEER_INSTANCE_HEADER);
-  if (!z.string().guid().safeParse(instanceId).success) {
+  if (!instanceIdSchema.safeParse(instanceId).success) {
     throw new ServerError('A valid peer instance identity is required for pairing.', {
       status: 400, code: 'PEER_IDENTITY_REQUIRED',
     });
