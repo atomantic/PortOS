@@ -203,8 +203,8 @@ export const installSlotstream = () => managedRuntimeRequests.slotstream.install
 // the status payload, or a Hugging Face `owner/name`. Byte progress arrives on
 // the `slotstream:download` socket event, not in this response — the transfer
 // outlives the request.
-export const downloadSlotstreamModel = (model) =>
-  request('/local-llm/slotstream/models/download', { method: 'POST', body: JSON.stringify({ model }) });
+export const downloadSlotstreamModel = (model, options) =>
+  request('/local-llm/slotstream/models/download', { method: 'POST', body: JSON.stringify({ model }), ...options });
 
 // Stop the named checkpoint's download. The bytes already moved are kept, so a
 // later download resumes rather than restarting.
@@ -228,8 +228,8 @@ export const searchMtplxModels = (params = {}, options) => {
 // Omitting `model` fetches MTPLX's own verified default checkpoint. Byte
 // progress arrives on the `mtplx:download` socket event, not in this response —
 // a multi-GB transfer resolves only when the weights are on disk.
-export const pullMtplxModel = (model = null) =>
-  request('/local-llm/mtplx/models/pull', { method: 'POST', body: JSON.stringify(model ? { model } : {}) });
+export const pullMtplxModel = (model = null, options) =>
+  request('/local-llm/mtplx/models/pull', { method: 'POST', body: JSON.stringify(model ? { model } : {}), ...options });
 
 export const removeMtplxModel = (model) =>
   request('/local-llm/mtplx/models/remove', { method: 'POST', body: JSON.stringify({ model }) });

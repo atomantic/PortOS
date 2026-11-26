@@ -314,6 +314,7 @@ describe('downloadSlotstreamModel', () => {
     await expect(download).resolves.toMatchObject({
       success: false,
       cancelled: false,
+      status: 504,
       code: 'SLOTSTREAM_METADATA_TIMEOUT',
     });
     expect(frames.at(-1)).toMatchObject({ event: 'error' });
@@ -350,6 +351,7 @@ describe('downloadSlotstreamModel', () => {
     await expect(download).resolves.toMatchObject({
       success: false,
       cancelled: true,
+      status: null,
       code: 'SLOTSTREAM_DOWNLOAD_CANCELLED',
     });
     expect(frames.at(-1).event).toBe('cancelled');
