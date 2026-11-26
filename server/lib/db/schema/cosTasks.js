@@ -22,6 +22,7 @@ export const cosTasksDdl = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_cos_tasks_open ON cos_tasks (source, status) WHERE status <> 'completed'`,
   `CREATE INDEX IF NOT EXISTS idx_cos_tasks_completed ON cos_tasks (source, completed_at DESC NULLS LAST, task_id DESC) WHERE status = 'completed'`,
+  `CREATE INDEX IF NOT EXISTS idx_cos_tasks_completed_id ON cos_tasks (source, task_id DESC) WHERE status = 'completed'`,
   `CREATE TABLE IF NOT EXISTS cos_task_lists (
     source TEXT PRIMARY KEY CHECK (source IN ('user', 'internal')),
     version BIGINT NOT NULL DEFAULT 0
