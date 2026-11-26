@@ -6,6 +6,7 @@ import {Plus, Trash2, ChevronDown, ChevronRight,
 import BrailleSpinner from '../BrailleSpinner';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import ListLoadError from '../ui/ListLoadError';
+import StatusPill from '../ui/Pill';
 import useListResource from '../../hooks/useListResource';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import {
@@ -284,9 +285,12 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
                   onClick={() => setExpandedTracked(prev => ({ ...prev, [key]: !prev[key] }))}
                   className="w-full flex items-center gap-3 p-3 text-left hover:bg-white/5 transition-colors"
                 >
-                  <Icon size={16} className={intervention.active ? 'text-port-success' : 'text-gray-600'} />
-                  <span className={`text-sm font-medium flex-1 ${intervention.active ? 'text-white' : 'text-gray-500'}`}>
-                    {intervention.name}
+                  <Icon aria-hidden="true" size={16} className={intervention.active ? 'shrink-0 text-port-success' : 'shrink-0 text-gray-600'} />
+                  <span className="flex flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className={`text-sm font-medium ${intervention.active ? 'text-white' : 'text-gray-500'}`}>
+                      {intervention.name}
+                    </span>
+                    {!intervention.active && <StatusPill size="xs">Paused</StatusPill>}
                   </span>
                   {intervention.dosage && (
                     <span className="text-xs text-gray-500">{intervention.dosage}</span>

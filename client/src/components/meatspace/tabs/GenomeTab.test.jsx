@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor, cleanup } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, cleanup, within } from '@testing-library/react';
 import { afterEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
 
@@ -214,5 +214,35 @@ describe('ClinVar status failure vs unsynced', () => {
     expect(screen.getByRole('button', { name: 'Re-sync' })).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Sync ClinVar Database' })).not.toBeInTheDocument();
+  });
+});
+
+it('exposes the full status of collapsed markers and shows badges for non-typical results', async () => {
+  const results = [
+    ['major_concern', 'Major Concern', 'Major'],
+    ['concern', 'Concern', 'Concern'],
+    ['beneficial', 'Beneficial', 'Beneficial'],
+    ['not_found', 'Not Found', 'Not Found'],
+    ['typical', 'Typical', null],
+  ];
+  getGenomeSummary.mockResolvedValueOnce({
+    uploaded: true,
+    savedMarkers: Object.fromEntries(results.map(([status], index) => [
+      `marker-${index}`, { category: 'longevity', status, name: `Marker ${index}` },
+    ])),
+  });
+  render(<GenomeTab />);
+  fireEvent.click(await screen.findByRole('button', { name: /Longevity/ }));
+
+  results.forEach(([, label, badgeLabel], index) => {
+    const tile = screen.getByRole('button', { name: `${label}: Marker ${index}`, expanded: false });
+    if (badgeLabel) {
+      const badge = within(tile).getByText(badgeLabel, { exact: true });
+      expect(badge).toBeVisible();
+      expect(badge).toHaveAttribute('aria-hidden', 'true');
+    } else {
+      expect(within(tile).getByText('Typical:')).toHaveClass('sr-only');
+      expect(within(tile).queryByText('Typical', { exact: true })).not.toBeInTheDocument();
+    }
   });
 });

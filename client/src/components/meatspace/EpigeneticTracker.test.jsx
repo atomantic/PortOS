@@ -109,3 +109,16 @@ describe('EpigeneticTracker delete (#17354)', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Removed Omega-3'));
   });
 });
+
+it('shows and announces Paused only on paused interventions', async () => {
+  getEpigeneticRecommendations.mockResolvedValue({ recommendations: [] });
+  getEpigeneticInterventions.mockResolvedValue({ interventions: {
+    a: { name: 'Intervention A', active: false },
+    b: { name: 'Intervention B', active: true },
+  } });
+  render(<EpigeneticTracker markerCategories={CATEGORIES} />);
+
+  expect(await screen.findByRole('button', { name: 'Intervention A Paused' })).toBeInTheDocument();
+  expect(screen.getByText('Paused')).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Intervention B' })).toBeInTheDocument();
+});
