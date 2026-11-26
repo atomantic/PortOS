@@ -14,7 +14,7 @@
  *
  * Split out of the former 4,004-line peerSync.js (#1830).
  */
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { readdir, stat } from 'fs/promises';
 import { createHash } from 'crypto';
 import { sidecarPathForImage } from '../../lib/assetHash.js';
@@ -152,7 +152,10 @@ async function hashCachedLibraryAsset(name, kind, dir) {
   if (!safeName) return null;
   const fullPath = join(dir, safeName);
   const st = await stat(fullPath).catch(() => null);
-  if (!st || !st.isFile()) return null;
+  if (!st?.isFile()) {
+    libraryFlatHashCache.delete(fullPath);
+    return null;
+  }
   const cached = libraryFlatHashCache.get(fullPath);
   if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached.entry;
   const entry = await hashSimpleAsset(safeName, kind, dir);
@@ -214,11 +217,10 @@ export async function buildMediaLibraryManifest({ models = false, tombstones = f
     if (truncated) break;
     if (excluded.has(kind) || (kind === 'model' && !models)) continue;
     const names = await readdir(dir).catch(() => []); // missing dir → empty (nothing of that kind yet)
-    if (kind === 'image') {
-      const imagePaths = new Set(names.map(name => join(dir, name)));
-      for (const fullPath of libraryImageCache.keys()) {
-        if (!imagePaths.has(fullPath)) libraryImageCache.delete(fullPath);
-      }
+    const cache = kind === 'image' ? libraryImageCache : libraryFlatHashCache;
+    const livePaths = new Set(names.map(name => join(dir, name)));
+    for (const fullPath of cache.keys()) {
+      if (dirname(fullPath) === dir && !livePaths.has(fullPath)) cache.delete(fullPath);
     }
     // Bound speculative hashing near the manifest cap while filling holes
     // left by skipped files. The mapper preserves the original selection order.
