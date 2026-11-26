@@ -20,6 +20,7 @@
  * try/catch) — callers own their boundary.
  */
 
+import { CHECK_SEVERITIES as SEVERITIES } from '../../lib/editorial/checkInfra/taxonomy.js';
 import { join } from 'path';
 import { assertValidSeriesId } from '../../lib/pipelineIds.js';
 import { PATHS, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
@@ -35,7 +36,6 @@ export { READINESS_GATES, DEFAULT_READINESS_GATE };
 // telemetry — they do NOT ride peer sync, so this is install-local.)
 const SCHEMA_VERSION = 1;
 
-const SEVERITIES = Object.freeze(['high', 'medium', 'low']);
 
 // Transparent severity penalty weights. A draft starts at 100 and loses points
 // per OPEN finding: a `high` finding costs as much as a dozen `low` nits. These

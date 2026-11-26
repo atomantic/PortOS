@@ -9,6 +9,7 @@
  * compiler/linter, since `composeEpisodeClips` pulls in server-only imports
  * (fs paths, SSE registry) that can't ship to the browser.
  */
+import { CONTINUOUS_VIDEO_BACKENDS } from '../../../../server/lib/continuousVideoBackends.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckCircle2, XCircle, Loader2, Plus, Trash2, Sparkles, Film, Square,
@@ -25,7 +26,6 @@ import { useAsyncAction } from '../../hooks/useAsyncAction';
 import toast from '../ui/Toast';
 import { uuidv4 } from '../../lib/uuid.js';
 
-const CONTINUOUS_VIDEO_BACKENDS = ['local', 'reactor', 'fal'];
 const PREVIEW_DEBOUNCE_MS = 500;
 
 // `sceneIndex:beatIndex` is a stable clip identity across recompiles — the

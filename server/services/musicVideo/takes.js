@@ -1,3 +1,4 @@
+import { TAKE_SLOT } from '../../lib/musicVideo/musicVideoLayers.js';
 import { currentPlateEvidence, plateFrameRole, plateRequirementBasis } from '../../lib/musicVideo/musicVideoPlateEvidence.js';
 import { assertMusicVideoMedia } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 /**
@@ -33,8 +34,7 @@ import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
 
-// `endImage` (#11173): an optional style-break end frame a fal clip ends on.
-export const TAKE_SLOT = Object.freeze({ image: 'referenceImageId', video: 'videoHistoryId', endImage: 'endImageId' });
+export { TAKE_SLOT };
 
 /** `codeClip` describes the clip it was set on: another clip in the slot is not code-rendered. */
 export function keepCodeClipWithItsClip(before, after) {

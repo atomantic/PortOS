@@ -1,3 +1,4 @@
+import { readLayeredEngine } from '../../layeredEngineSource.js';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -7,7 +8,7 @@ import { chromium } from 'playwright-core';
 import { browserSuiteCanRun, resolveTestChrome } from '../../../../lib/browserSuiteGate.js';
 import { startOwnedBrowserFixture } from '../../../../test/browserFixture.js';
 
-const engine = readFileSync(new URL('./engine.js', import.meta.url), 'utf8');
+const engine = (await readLayeredEngine()).toString('utf8');
 // Frozen shipped engine: compare both engines in the same browser, since canvas rasterization differs across OS/Chrome builds.
 const priorEngine = readFileSync(new URL('../../../../routes/fixtures/musicVideoLayeredEngineBeforeTemplateControls.txt', import.meta.url), 'utf8');
 const rig = readFileSync(new URL('../../../../lib/musicVideo/cameraRig.js', import.meta.url), 'utf8');

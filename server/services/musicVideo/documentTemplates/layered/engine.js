@@ -49,10 +49,7 @@
 
   // ---------- palette & type (edit freely) ----------
   const style = MV.composition?.style || {};
-  const C = {
-    ink: '#07090a', paper: style.color || '#eef1ea', dim: 'rgba(238,241,234,.62)', faint: 'rgba(238,241,234,.28)',
-    accent: '#ff5a1f', ok: '#b8d63a', alert: '#ff2a2a',
-  };
+  const C = /* PORTOS_LAYERED_PALETTE */ { paper: style.color };
   const F = {
     stencil: (px) => `900 ${px}px "MV Stencil", Impact, sans-serif`,
     cond: (px, w = 500) => `${w} ${px}px "MV Cond", "Arial Narrow", sans-serif`,
