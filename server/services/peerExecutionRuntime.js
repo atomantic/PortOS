@@ -5,6 +5,7 @@
  * federated or restored from snapshots. Strict bounded schema; absent grants nothing, and generations are
  * fenced by the permanent PostgreSQL floors and the non-rewound epoch. No seed or migration creates authority.
  */
+import { emitToOperatorsOn } from './socketIo.js';
 import { watch, mkdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -43,7 +44,7 @@ async function compose() {
   const version = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).version;
   const receiver = createPeerExecutionReceiver({ ledger, grants, coordinator, caller: peerAdminCaller, version, terminalProofs, identityLock: withInstanceIdentityLock,
     adapters: { prepare: adapters.preparePeerExecution, run: adapters.runPeerExecution, reconcile: adapters.reconcilePeerExecution },
-    changed: () => io?.emit('peer-execution:changed'),
+    changed: () => emitToOperatorsOn(io, 'peer-execution:changed'),
     resume: async input => (await import('./maintenanceControl.js')).resumeMaintenance(input) });
   const result = { ...receiver, ledger, coordinator };
   const rawKick = receiver.kick;

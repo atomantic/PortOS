@@ -11,6 +11,7 @@
  * read that the live-activity inspector polls only while it is visible.
  */
 
+import { emitToOperatorsOn } from './socketIo.js';
 import { isTestRunner } from '../lib/runtimeEnv.js';
 
 const ACTIVITY_SOURCES = new Set([
@@ -46,10 +47,10 @@ export function flushSystemActivity() {
   }
   const note = pending;
   pending = null;
-  if (!note || !io || typeof io.emit !== 'function') return;
+  if (!note || !io) return;
   seq += 1;
   try {
-    io.emit('system:activity', { seq, source: note.source, phase: note.phase });
+    emitToOperatorsOn(io, 'system:activity', { seq, source: note.source, phase: note.phase });
   } catch (err) {
     console.error(`❌ system activity notify failed: ${err.message}`);
   }

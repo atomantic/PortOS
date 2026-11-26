@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,7 +13,7 @@ const flush = () => new Promise((resolve) => { setTimeout(resolve, 0); });
 
 function makeIo() {
   const frames = [];
-  return { frames, io: { emit: (event, payload) => frames.push([event, payload]) } };
+  return { frames, io: recordingOperatorIo((event, payload) => frames.push([event, payload])) };
 }
 
 /** Resolves once the job's `software:changed` lands. */

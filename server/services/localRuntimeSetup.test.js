@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { pinPlatform } from '../lib/testHelper.js';
 
@@ -322,7 +323,7 @@ describe('runLocalRuntimeSetup', () => {
 
   it('refreshes the presets fronting a managed runtime once its start is confirmed, and only then', async () => {
     pathLookup.findCommandOnPath.mockReturnValue('/opt/homebrew/bin/mtplx');
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     const restore = pinPlatform('darwin');
     probe.probeOpenAiModels.mockResolvedValueOnce(unreachable).mockResolvedValueOnce(unreachable).mockResolvedValueOnce(reachable(['mtplx']));
     await runLocalRuntimeSetup('mtplx', { endpoint: 'http://127.0.0.1:8000/v1', io });

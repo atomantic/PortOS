@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { rmSync, watch } from 'node:fs';
 
@@ -35,7 +36,7 @@ afterAll(() => {
 });
 
 const sent = [];
-const io = { emit: (name, payload) => sent.push({ name, payload }) };
+const io = recordingOperatorIo((name, payload) => sent.push({ name, payload }));
 const count = name => sent.filter(e => e.name === name).length;
 afterEach(() => {
   vi.useRealTimers();

@@ -15,6 +15,7 @@
  * Selectors derived from live Playwright MCP walkthrough of Google Cloud Console (2026-03-14).
  * Google Auth Platform uses Angular Material components — selectors target ARIA roles and text.
  */
+import { emitToOperatorsOn } from './socketIo.js';
 import { findOrOpenPage, evaluateOnPage, getPages } from './messagePlaywrightSync.js';
 import { navigateToUrl } from './browserService.js';
 import { saveCredentials, getAuthUrl, OAUTH_REDIRECT_URI } from './googleAuth.js';
@@ -110,14 +111,14 @@ async function fillByName(page, name, value) {
 
 export async function startAutoConfig(io) {
   console.log('📅 Starting Google OAuth auto-configuration via CDP browser');
-  io?.emit('calendar:google:autoconfig', { step: 'launching', message: 'Opening Google Cloud Console...' });
+  emitToOperatorsOn(io, 'calendar:google:autoconfig', { step: 'launching', message: 'Opening Google Cloud Console...' });
 
   const page = await findOrOpenPage('https://console.cloud.google.com');
   if (!page) {
     throw new ServerError('Failed to open browser. Ensure portos-browser is running.', { status: 503 });
   }
 
-  io?.emit('calendar:google:autoconfig', { step: 'login', message: 'Google Cloud Console opened. Log in and select a project, then click Continue.' });
+  emitToOperatorsOn(io, 'calendar:google:autoconfig', { step: 'login', message: 'Google Cloud Console opened. Log in and select a project, then click Continue.' });
   console.log('📅 Google Cloud Console opened in CDP browser');
   return { status: 'started', message: 'Log in and select your project, then click Continue.' };
 }
@@ -133,7 +134,7 @@ export async function runSteps(steps) {
 export async function runAutomatedSetup(userEmail, io, requestId) {
   console.log('📅 Running automated Google OAuth setup via CDP');
   const emit = (step, message) => {
-    io?.emit('calendar:google:autoconfig', { step, message, ...(requestId ? { requestId } : {}) });
+    emitToOperatorsOn(io, 'calendar:google:autoconfig', { step, message, ...(requestId ? { requestId } : {}) });
     console.log(`📅 Auto-config: ${message}`);
   };
 

@@ -1,3 +1,4 @@
+import { emitToOperatorsOn } from './socketIo.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getAuthenticatedClient } from './googleAuth.js';
 import { createCalendarApi } from './calendarApi.js';
@@ -24,7 +25,7 @@ async function runApiSyncAccount(accountId, io) {
   const enabledCalendars = (account.subcalendars || []).filter(sc => sc.enabled && !sc.dormant);
   if (enabledCalendars.length === 0) throw new ServerError('No enabled subcalendars', { status: 400 });
 
-  io?.emit('calendar:sync:started', { accountId, method: 'api' });
+  emitToOperatorsOn(io, 'calendar:sync:started', { accountId, method: 'api' });
   console.log(`📅 Starting Google API sync for account ${accountId} (${enabledCalendars.length} calendars)`);
 
   try {
@@ -40,7 +41,7 @@ async function runApiSyncAccount(accountId, io) {
     const results = [];
 
     const fetchResults = await Promise.allSettled(enabledCalendars.map(async (sc) => {
-      io?.emit('calendar:sync:progress', { accountId, message: `Fetching ${sc.name}...` });
+      emitToOperatorsOn(io, 'calendar:sync:progress', { accountId, message: `Fetching ${sc.name}...` });
       const allEvents = [];
       let pageToken;
       do {
@@ -131,7 +132,7 @@ async function runApiSyncAccount(accountId, io) {
     const status = issues.length ? 'partial' : 'success';
     const reason = issues.length ? summarizeApiIssues(issues) : undefined;
     await updateSyncStatus(accountId, status);
-    io?.emit('calendar:sync:completed', {
+    emitToOperatorsOn(io, 'calendar:sync:completed', {
       accountId, newEvents: totalNew, updated: totalUpdated, pruned: totalPruned, status, method: 'api',
       ...(reason ? { reason } : {}),
       ...(failures.length ? { failedCalendars: failures } : {}),
@@ -142,7 +143,7 @@ async function runApiSyncAccount(accountId, io) {
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
     console.error(`❌ Google API sync failed for account ${accountId}${failure.code ? ` code=${failure.code}` : ''}`);
-    io?.emit('calendar:sync:failed', { accountId, error: failure.message, method: 'api', ...(failure.calendars ? { calendars: failure.calendars } : {}) });
+    emitToOperatorsOn(io, 'calendar:sync:failed', { accountId, error: failure.message, method: 'api', ...(failure.calendars ? { calendars: failure.calendars } : {}) });
     await Promise.resolve().then(() => updateSyncStatus(accountId, 'error')).catch(() => {});
     throw error instanceof Error ? error : failure;
   }

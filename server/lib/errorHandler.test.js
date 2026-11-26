@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   ServerError,
@@ -304,9 +305,7 @@ describe('errorHandler.js', () => {
       const listener = vi.fn();
       errorEvents.on('error', listener);
 
-      const mockIo = {
-        emit: vi.fn()
-      };
+      const mockIo = recordingOperatorIo();
       const error = new ServerError('Test error');
 
       emitErrorEvent(mockIo, error);
@@ -321,7 +320,7 @@ describe('errorHandler.js', () => {
       const listener = vi.fn();
       errorEvents.on('error', listener);
 
-      const mockIo = { emit: vi.fn() };
+      const mockIo = recordingOperatorIo();
       const error = new ServerError('Test error', {
         context: { apiKey: 'secret-123', safe: 'visible' },
       });
@@ -406,7 +405,7 @@ describe('errorHandler.js', () => {
     });
 
     it('catches a thrown ServerError, emits, and responds with status + body', async () => {
-      const io = { emit: vi.fn() };
+      const io = recordingOperatorIo();
       const { req, res } = makeReqRes(io);
       const events = [];
       trackListener((err, ctx) => events.push({ err, ctx }));
@@ -432,7 +431,7 @@ describe('errorHandler.js', () => {
     });
 
     it('normalizes a plain thrown Error to a 500 INTERNAL_ERROR response', async () => {
-      const io = { emit: vi.fn() };
+      const io = recordingOperatorIo();
       const { req, res } = makeReqRes(io);
 
       const handler = asyncHandler(async () => {
@@ -448,7 +447,7 @@ describe('errorHandler.js', () => {
     });
 
     it('answers a missing Postgres extension library with a 503 and one log line, no stack', async () => {
-      const { req, res } = makeReqRes({ emit: vi.fn() });
+      const { req, res } = makeReqRes(recordingOperatorIo());
       // The shape db.js's translateExtensionLibraryError throws.
       const coded = Object.assign(new Error('PostgreSQL cannot load the "vector" extension library … run: npm run setup:db'), {
         status: 503, code: 'DB_EXTENSION_UNAVAILABLE',
@@ -470,7 +469,7 @@ describe('errorHandler.js', () => {
     // chain WITHOUT reporting locally — errorMiddleware logs/emits it once and
     // then lets finalhandler destroy the socket.
     it('delegates to next() without reporting when the handler throws mid-stream', async () => {
-      const io = { emit: vi.fn() };
+      const io = recordingOperatorIo();
       const { req, res } = makeReqRes(io);
       res.headersSent = true;
       const next = vi.fn();
@@ -498,7 +497,7 @@ describe('errorHandler.js', () => {
     });
 
     it('does not touch res when the wrapped handler resolves successfully', async () => {
-      const { req, res } = makeReqRes({ emit: vi.fn() });
+      const { req, res } = makeReqRes(recordingOperatorIo());
 
       const handler = asyncHandler(async () => 'ok');
       await handler(req, res, vi.fn());
@@ -738,7 +737,7 @@ describe('errorHandler.js', () => {
 
     it('emits the socket event with the sanitized context when io is supplied', () => {
       const res = makeRes();
-      const io = { emit: vi.fn() };
+      const io = recordingOperatorIo();
       // `errorEvents` is an EventEmitter — an 'error' emit with no listener
       // re-throws, so subscribe for the duration of this assertion.
       const listener = vi.fn();

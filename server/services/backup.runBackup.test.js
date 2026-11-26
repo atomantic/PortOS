@@ -1,4 +1,5 @@
 /** Backup service suite: runBackup lifecycle, snapshot cut failures and retention pruning. Shared mocks and helpers live in backup.test.fixture.js (#16215). */
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { maintenanceFence, snapshotCutSeam, machineHost, fakeProc, DUMP_HEADER, DUMP_TABLES, DUMP_TRAILER, COMPLETE_DUMP } from './backup.test.fixture.js';
 import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
 import { rmSync } from 'fs';
@@ -106,7 +107,7 @@ describe('runBackup lifecycle', () => {
       if (!fileMode) delete process.env.MEMORY_BACKEND;
       getBackendName.mockReturnValue(fileMode ? 'file' : 'postgres');
       checkHealth.mockResolvedValue({ connected: !fileMode, hasSchema: !fileMode });
-      const io = { emit: vi.fn() };
+      const io = recordingOperatorIo();
       const oldSnapshot = joinPath(destRoot, 'snapshots', machineHost, '2020-01-01T00-00-00');
       await fsp.mkdir(joinPath(oldSnapshot, 'data'), { recursive: true });
       await fsp.writeFile(joinPath(oldSnapshot, 'manifest.json'), JSON.stringify({
@@ -289,7 +290,7 @@ describe('runBackup lifecycle', () => {
   });
 
   it('rsyncs, writes a manifest and state, and emits started/completed', async () => {
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
 
@@ -534,7 +535,7 @@ describe('runBackup lifecycle', () => {
     ['dump stat', 'EIO'],
   ])('fails on %s %s and succeeds after repair', async (operation, code) => {
     const fsp = await actualFs();
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     const pending = runBackup(destRoot, io);
@@ -590,7 +591,7 @@ describe('runBackup lifecycle', () => {
     const fsp = await actualFs();
     await fsp.mkdir(joinPath(dataRoot, 'backup'), { recursive: true });
     await fsp.writeFile(joinPath(dataRoot, 'backup', 'state.json'), JSON.stringify({ status: 'ok', lastRun: priorRun }));
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     const pending = runBackup(destRoot, io);
@@ -612,7 +613,7 @@ describe('runBackup lifecycle', () => {
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     getServerMajorVersion.mockResolvedValue(null);
     const fsp = await actualFs();
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     const rsync = fakeProc();
     const pg = fakeProc();
     spawn.mockReturnValueOnce(rsync).mockReturnValueOnce(pg);
@@ -638,7 +639,7 @@ describe('runBackup lifecycle', () => {
   });
 
   it('returns { skipped: true } for a concurrent call without a second rsync', async () => {
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
 
@@ -646,7 +647,7 @@ describe('runBackup lifecycle', () => {
     await waitFor(() => spawn.mock.calls.length === 1, 'first rsync spawn');
 
     // Second call while the first is mid-flight.
-    const second = { emit: vi.fn() };
+    const second = recordingOperatorIo();
     await expect(runBackup(destRoot, second)).resolves.toEqual({ skipped: true });
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(second.emit).not.toHaveBeenCalled();
@@ -661,7 +662,7 @@ describe('runBackup lifecycle', () => {
     const { maintenance } = await import('../lib/maintenanceAdmission.js');
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
-    const pending = runBackup(destRoot, { emit: vi.fn() });
+    const pending = runBackup(destRoot, recordingOperatorIo());
     await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
     const update = maintenance.deferredUpdate.request();
     try {
@@ -685,7 +686,7 @@ describe('runBackup lifecycle', () => {
       const permit = admit(...args);
       return { ...permit, identify: () => { throw new Error('cannot identify backup'); } };
     });
-    await expect(runBackup(destRoot, { emit: vi.fn() })).rejects.toThrow('cannot identify backup');
+    await expect(runBackup(destRoot, recordingOperatorIo())).rejects.toThrow('cannot identify backup');
     expect(spawn).not.toHaveBeenCalled();
     expect(maintenance.operations().some(op => op.kind === 'backup')).toBe(false);
   });
@@ -696,7 +697,7 @@ describe('runBackup lifecycle', () => {
   it('isBackupInProgress reflects the in-process run, false before and after', async () => {
     expect(isBackupInProgress()).toBe(false);
 
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
 
@@ -715,7 +716,7 @@ describe('runBackup lifecycle', () => {
   // a complete backup. Driven through the real runBackup rather than a stubbed
   // marker so the guard is tested against the state that actually gates it.
   it('refuses to download or restore the snapshot currently being written', async () => {
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     const { openSnapshotStream: open, restoreSnapshot: restore } = await import('./backup.js');
@@ -739,7 +740,7 @@ describe('runBackup lifecycle', () => {
   });
 
   it('persists a failed snapshot across restart, blocks both restores, and keeps salvage download available', async () => {
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
 
@@ -807,7 +808,7 @@ describe('runBackup lifecycle', () => {
     await fsp.writeFile(joinPath(dataRoot, 'backup', 'state.json'), JSON.stringify({
       status: 'ok', lastSnapshotId: oldIds[1], lastRun: priorRun, error: null,
     }));
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     const pending = runBackup(destRoot, io, { retentionCount: 1 });
@@ -850,7 +851,7 @@ describe('runBackup lifecycle', () => {
   it('retains a durable guard when completion state and failure-marker persistence both fail', async () => {
     const fsp = await actualFs();
     const { atomicWrite } = await import('../lib/fileUtils.js');
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     const pending = runBackup(destRoot, io);
@@ -880,7 +881,7 @@ describe('runBackup lifecycle', () => {
   });
 
   it('retains incomplete guards when the failed marker cannot be written while releasing the process lock', async () => {
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
 
@@ -921,7 +922,7 @@ describe('runBackup lifecycle', () => {
   });
 
   it('on rsync failure: releases the lock, records status error, emits backup:failed, and rethrows', async () => {
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
 
@@ -971,7 +972,7 @@ describe('runBackup lifecycle', () => {
       return realSetTimeout(callback, delay, ...args);
     });
 
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     const pending = runBackup(destRoot, io);
@@ -1004,7 +1005,7 @@ describe('runBackup lifecycle', () => {
   });
 
   it('on PostgreSQL setup failure: releases the lock, records status error, and permits retry', async () => {
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     const firstProc = fakeProc();
     spawn.mockReturnValue(firstProc);
     checkHealth.mockRejectedValueOnce(new Error('database health unavailable'));
@@ -1069,7 +1070,7 @@ describe('runBackup lifecycle', () => {
     await fsp.writeFile(joinPath(dataRoot, 'backup', 'state.json'), JSON.stringify({
       lastRun: priorRun, lastSnapshotId: 'previous-snapshot', status: 'ok', error: null,
     }));
-    const io = { emit: vi.fn() };
+    const io = recordingOperatorIo();
     const cause = Object.assign(new Error('private destination detail'), { code });
     fs.access.mockRejectedValueOnce(cause);
     const attemptStarted = Date.now();
@@ -1156,7 +1157,7 @@ describe('runBackup lifecycle', () => {
           const dump = fakeProc();
           spawn.mockClear().mockReturnValueOnce(rsync);
           if (!failDump) spawn.mockReturnValueOnce(dump);
-          const io = { emit: vi.fn() };
+          const io = recordingOperatorIo();
           const pending = runBackup(destRoot, io, { retentionCount: 2 });
           await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
           const id = io.emit.mock.calls.find(([event]) => event === 'backup:started')[1].snapshotId;
@@ -1232,7 +1233,7 @@ describe('runBackup lifecycle', () => {
       await fsp.mkdir(joinPath(directoryDump, 'portos-db.sql'));
       const otherMachine = await seedSnapshot('previous-machine', '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
 
-      const io = { emit: vi.fn() };
+      const io = recordingOperatorIo();
       delete process.env.MEMORY_BACKEND;
       checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
       getBackendName.mockReturnValue('postgres');
@@ -1313,7 +1314,7 @@ describe('runBackup lifecycle', () => {
       const { withBackupAssetPublication } = await import('../lib/backupSnapshotBoundary.js');
       const warning = vi.fn();
       errorEvents.once('error', warning);
-      const io = { emit: vi.fn() };
+      const io = recordingOperatorIo();
       const pending = runBackup(destRoot, io, { retentionCount: 1 });
       await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
       const snapshotId = io.emit.mock.calls.find(([event]) => event === 'backup:started')[1].snapshotId;
@@ -1363,7 +1364,7 @@ describe('runBackup lifecycle', () => {
       spawn.mockReturnValueOnce(rsync).mockReturnValueOnce(pgDump);
       const { errorEvents } = await import('../lib/errorHandler.js');
       errorEvents.once('error', () => {});
-      const io = { emit: vi.fn() };
+      const io = recordingOperatorIo();
       const pending = runBackup(destRoot, io, { retentionCount: 1 });
       await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
       const snapshotId = io.emit.mock.calls.find(([event]) => event === 'backup:started')[1].snapshotId;
@@ -1396,7 +1397,7 @@ describe('runBackup lifecycle', () => {
       const rsync = fakeProc();
       const pgDump = fakeProc();
       spawn.mockReturnValueOnce(rsync).mockReturnValueOnce(pgDump);
-      const io = { emit: vi.fn() };
+      const io = recordingOperatorIo();
       const pending = runBackup(destRoot, io, { retentionCount: 1 });
       await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
       rsync.emit('close', 0);
@@ -1430,7 +1431,7 @@ describe('runBackup lifecycle', () => {
       await waitFor(() => spawn.mock.calls.length === 1, 'restore rsync spawn');
 
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      const pending = runBackup(destRoot, { emit: vi.fn() }, { retentionCount: 1 });
+      const pending = runBackup(destRoot, recordingOperatorIo(), { retentionCount: 1 });
       await waitFor(() => spawn.mock.calls.length === 2, 'backup rsync spawn');
       backupRsync.emit('close', 0);
 
@@ -1446,7 +1447,7 @@ describe('runBackup lifecycle', () => {
     it('keeps tolerating live source files that vanish mid-backup (rsync exit 24)', async () => {
       const rsync = fakeProc();
       spawn.mockReturnValue(rsync);
-      const pending = runBackup(destRoot, { emit: vi.fn() });
+      const pending = runBackup(destRoot, recordingOperatorIo());
       await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
       rsync.emit('close', 24);
 
@@ -1458,7 +1459,7 @@ describe('runBackup lifecycle', () => {
       const old = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
       const rsync = fakeProc();
       spawn.mockReturnValue(rsync);
-      const pending = runBackup(destRoot, { emit: vi.fn() }, { retentionCount: 1 });
+      const pending = runBackup(destRoot, recordingOperatorIo(), { retentionCount: 1 });
       await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
       rsync.emit('close', 0);
 
@@ -1479,7 +1480,7 @@ describe('runBackup lifecycle', () => {
 
       const rsync = fakeProc();
       spawn.mockReturnValue(rsync);
-      const pending = runBackup(destRoot, { emit: vi.fn() }, { retentionCount: 2 });
+      const pending = runBackup(destRoot, recordingOperatorIo(), { retentionCount: 2 });
       await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
       rsync.emit('close', 0);
       const result = await pending;
@@ -1563,7 +1564,7 @@ describe('runBackup lifecycle', () => {
       const old1 = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
       const old2 = await seedSnapshot(machineHost, '2020-01-02T00-00-00', { generatedAt: '2020-01-02T00:00:00.000Z' });
 
-      const io = { emit: vi.fn() };
+      const io = recordingOperatorIo();
       const proc = fakeProc();
       spawn.mockReturnValue(proc);
       const pending = runBackup(destRoot, io, { retentionCount: null });

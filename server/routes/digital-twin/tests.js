@@ -5,6 +5,7 @@
  * (POST), and a history (GET) endpoint against `/api/digital-twin`.
  */
 
+import { emitToOperatorsOn } from '../../services/socketIo.js';
 import { Router } from 'express';
 import * as digitalTwinService from '../../services/digital-twin.js';
 import { asyncHandler } from '../../lib/errorHandler.js';
@@ -64,9 +65,7 @@ router.post('/tests/run-multi', asyncHandler(async (req, res) => {
       // Emit progress via Socket.IO. `requestId` (when the caller sent one) lets
       // the client attribute the frame to its own batch; the final response
       // below stays the same array for callers that don't listen.
-      if (io) {
-        io.emit('digital-twin:test-progress', { requestId, providerId, model, result });
-      }
+      emitToOperatorsOn(io, 'digital-twin:test-progress', { requestId, providerId, model, result });
 
       return { providerId, model, ...result };
     })

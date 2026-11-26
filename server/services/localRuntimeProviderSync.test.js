@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const providers = vi.hoisted(() => ({ listProviders: vi.fn(), refreshProviderModelsBatch: vi.fn() }));
@@ -16,7 +17,7 @@ describe('syncRuntimeProviderModels', () => {
   let io;
   beforeEach(() => {
     vi.clearAllMocks();
-    io = { emit: vi.fn() };
+    io = recordingOperatorIo();
     providers.listProviders.mockResolvedValue([
       mtplxApi('mtplx'),
       mtplxOpencode('opencode-mtplx-tui', 'http://127.0.0.1:8000/v1'),

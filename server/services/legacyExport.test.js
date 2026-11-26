@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { afterAll, describe, it, expect, vi } from 'vitest';
 import { Readable, Writable } from 'stream';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -307,7 +308,7 @@ describe('buildLegacyZip', () => {
 
   it('emits legacy-export socket events when io is provided', async () => {
     const events = [];
-    const io = { emit: (e, p) => events.push([e, p]) };
+    const io = recordingOperatorIo((e, p) => events.push([e, p]));
     await buildLegacyZip({ io });
     expect(events.map(e => e[0])).toEqual(
       expect.arrayContaining(['legacy-export:started', 'legacy-export:progress', 'legacy-export:completed']),

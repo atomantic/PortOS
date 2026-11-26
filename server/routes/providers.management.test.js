@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -182,7 +183,7 @@ describe('provider configuration invalidation', () => {
       getProviderById: vi.fn().mockResolvedValue(CLAUDE_OLLAMA), updateProvider: vi.fn().mockResolvedValue({ ...CLAUDE_OLLAMA, enabled: false }) });
     const updates = vi.spyOn(runtimeUpdateEvents, 'emit');
     const emit = vi.fn();
-    app.set('io', { emit });
+    app.set('io', recordingOperatorIo(emit));
     expect((await request(app).get('/api/providers')).status).toBe(200);
     expect(emit).not.toHaveBeenCalledWith('providers:changed');
     expect(updates).not.toHaveBeenCalled();

@@ -1,3 +1,4 @@
+import { emitToOperatorsOn } from './socketIo.js';
 import { messageLogError } from '../lib/messageLogError.js';
 import { sendViaForAccountType } from '../lib/messageTransport.js';
 import { planDelivery } from '../lib/messageBrowserCompose.js';
@@ -84,14 +85,14 @@ export async function sendDraft(draftId, io) {
 
     if (result?.success) {
       await finishDraftSend(draftId, draft.sendAttemptId, true);
-      io?.emit('messages:draft:sent', { draftId });
-      io?.emit('messages:changed', {});
+      emitToOperatorsOn(io, 'messages:draft:sent', { draftId });
+      emitToOperatorsOn(io, 'messages:changed', {});
       console.log(`📧 Draft sent successfully: ${draft.id}`);
     } else if (result?.deliveryUnknown) {
       // The transport cannot say whether it left. Park the draft in the same
       // human-reconciled state a crash leaves — never `failed`, which can be re-approved and resent.
       await finishDraftSend(draftId, draft.sendAttemptId, 'delivery_unknown').catch(err => console.warn(`⚠️ Failed to mark draft delivery unknown: ${messageLogError(err)}`));
-      io?.emit('messages:changed', {});
+      emitToOperatorsOn(io, 'messages:changed', {});
       console.warn(`⚠️ Draft delivery unconfirmed: ${draft.id} awaits reconciliation`);
       return { success: false, status: result.status ?? 502, code: 'DELIVERY_UNKNOWN', error: result.error };
     } else {

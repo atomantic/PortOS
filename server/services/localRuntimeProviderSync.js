@@ -8,6 +8,7 @@
  * makes for Ollama/LM Studio. It never rejects: the start it follows must not fail or wait on it.
  */
 
+import { emitToOperatorsOn } from './socketIo.js';
 import { refreshProviderModelsBatch, listProviders } from './provider/providers.js';
 import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
 
@@ -16,7 +17,7 @@ import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
 const slots = new Map();
 
 /**
- * @param {{ kind: string, io?: {emit: Function}|null, waitForReady?: (() => Promise<{ready?: boolean, reason?: string|null}>)|null }} opts
+ * @param {{ kind: string, io?: {except: Function}|null, waitForReady?: (() => Promise<{ready?: boolean, reason?: string|null}>)|null }} opts
  *   `waitForReady`: pass it when the start returned before the endpoint answered; the refresh runs only once it
  *   resolves `ready`. A dead or never-answering runtime is not evidence the model set changed.
  * @returns {Promise<boolean>} true when a catalog was rewritten
@@ -73,6 +74,6 @@ async function syncOnce({ kind, io, waitForReady }) {
     }
   }
   const changed = groups.some((group) => group.status === 'updated');
-  if (changed) io?.emit('providers:changed');
+  if (changed) emitToOperatorsOn(io, 'providers:changed');
   return changed;
 }

@@ -1,3 +1,4 @@
+import { emitToOperatorsOn } from './socketIo.js';
 import { watch, mkdirSync } from 'node:fs';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { assertNotRealDataWrite } from '../lib/testDataIsolation.js';
@@ -27,7 +28,7 @@ function emitReadiness(next) {
     && lastReadiness.agentDiskPressure === next.agentDiskPressure) return;
   const recoveredDisk = lastReadiness?.agentDiskPressure && !next.agentDiskPressure && next.state === 'normal';
   lastReadiness = next;
-  boundIo?.emit('maintenance:readiness', next);
+  emitToOperatorsOn(boundIo, 'maintenance:readiness', next);
   if (recoveredDisk) {
     import('./cos/cos.js').then(({ dequeueNextTask }) => dequeueNextTask())
       .catch(error => console.error(`❌ CoS dequeue after disk recovery failed: ${error.message}`));
@@ -35,7 +36,7 @@ function emitReadiness(next) {
 }
 
 function emitChanges() {
-  boundIo?.emit('maintenance:changed');
+  emitToOperatorsOn(boundIo, 'maintenance:changed');
   emitReadiness(readinessProjection());
   if (!watcher && boundIo) bindMaintenanceIo(boundIo);
 }

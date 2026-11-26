@@ -4,6 +4,7 @@
  * Falls back to Playwright scraping if token extraction fails.
  */
 
+import { emitToOperatorsOn } from './socketIo.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import crypto from 'crypto';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
@@ -56,7 +57,7 @@ export async function syncOutlookApi(account, cache, io, options = {}) {
 
   while (url && messages.length < maxMessages) {
     page++;
-    io?.emit('messages:sync:progress', { accountId: account.id, current: messages.length, total: maxMessages, page });
+    emitToOperatorsOn(io, 'messages:sync:progress', { accountId: account.id, current: messages.length, total: maxMessages, page });
 
     const response = await fetchWithTimeout(url, {
       headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.body-content-type="Text"' }

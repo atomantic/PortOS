@@ -1,3 +1,4 @@
+import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -423,7 +424,7 @@ describe('Messages Routes', () => {
 
     it('returns screening/setup failures without persisting or announcing a fake AI draft', async () => {
       const emit = vi.fn();
-      app.set('io', { emit });
+      app.set('io', recordingOperatorIo(emit));
       messageAccounts.getAccount.mockResolvedValue({ id: VALID_UUID, type: 'gmail' });
       messageSync.getMessage.mockResolvedValue({ id: 'message-example', bodyText: 'Example message.', from: { email: 'alice@example.com' } });
       generateReplyBody.mockRejectedValue(new ServerError('Configure a local API provider in Models > LLMs > Abuse Guard.', { status: 422, code: 'untrusted-content-provider-unavailable' }));
@@ -537,7 +538,7 @@ describe('Messages Routes', () => {
   describe('POST /api/messages/drafts/:id/reconcile', () => {
     it('validates the mailbox outcome and attempt identity, returns the updated draft, and emits only invalidation', async () => {
       const emit = vi.fn();
-      app.set('io', { emit });
+      app.set('io', recordingOperatorIo(emit));
       const updated = { id: DRAFT_UUID, status: 'draft', sendAttemptId: DRAFT_UUID_2 };
       messageDrafts.reconcileDraftSend.mockResolvedValue(updated);
       const data = { attemptId: DRAFT_UUID_2, outcome: 'not_sent' };
@@ -891,7 +892,7 @@ describe('message action refusals', () => {
     const { executeAction: actualExecuteAction } = await vi.importActual('../services/messageActions.js');
     const app = express();
     const emit = vi.fn();
-    app.set('io', { emit });
+    app.set('io', recordingOperatorIo(emit));
     app.use(express.json());
     app.use('/api/messages', messagesRoutes);
     messageAccounts.getAccount.mockResolvedValueOnce({ type: 'teams' });
@@ -906,7 +907,7 @@ describe('message action refusals', () => {
   it('preserves both IDs and returns a typed 409 without broadcasting a change', async () => {
     const app = express();
     const emit = vi.fn();
-    app.set('io', { emit });
+    app.set('io', recordingOperatorIo(emit));
     app.use(express.json());
     app.use('/api/messages', messagesRoutes);
     executeAction.mockRejectedValueOnce(new ServerError('Sync the account and retry.', { status: 409, code: 'MESSAGE_IDENTITY_CONFLICT' }));
