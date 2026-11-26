@@ -8,6 +8,7 @@ import { treatmentBasis } from './treatment.js';
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 import { musicVideoPrevizSchema, musicVideoSceneCreateSchema } from '../../lib/musicVideo/musicVideoValidation.js';
 import { musicVideoProjectCreateSchema, musicVideoProjectUpdateSchema } from '../../lib/musicVideo/musicVideoRouteValidation.js';
+import { DEFAULT_NEW_PROJECT_TEMPLATE_EFFECTS } from '../../lib/musicVideo/musicVideoTemplateEffects.js';
 
 const baseProject = () => buildProjectRecord({ name: 'Test MV' }, { id: 'mv-1', now: '2026-01-01T00:00:00.000Z' });
 
@@ -1442,10 +1443,13 @@ describe('applyProjectPatch lyric marker remap', () => {
   });
 });
 
-// Pins zero/inheritance across validated record writes, cloning and proof invalidation.
+// Pins defaults, zero/inheritance across validated record writes, cloning and proof invalidation.
 describe('layered template controls', () => {
-  it('stores video and shot choices, keeps them in clones, and invalidates proof while preserving the film look', () => {
-    expect(baseProject()).not.toHaveProperty('templateEffects');
+  it('stamps restrained defaults on new projects, merges partial create overrides, keeps them in clones, and invalidates proof while preserving the film look', () => {
+    expect(baseProject().templateEffects).toEqual(DEFAULT_NEW_PROJECT_TEMPLATE_EFFECTS);
+    expect(buildProjectRecord({ name: 'Partial', templateEffects: { grain: 0.12 } }, { id: 'mv-p', now: 'n' }).templateEffects)
+      .toEqual({ ...DEFAULT_NEW_PROJECT_TEMPLATE_EFFECTS, grain: 0.12 });
+    expect(buildProjectRecord({ name: 'Legacy', templateEffects: null }, { id: 'mv-l', now: 'n' }).templateEffects).toBeNull();
     const settings = { beatReaction: 0, footagePush: 0, grain: 0, vignette: 0, stillMotion: 0 };
     const input = musicVideoProjectCreateSchema.parse({ name: 'Example', templateEffects: settings });
     let project = buildProjectRecord(input, { id: 'mv-example', now: 'n' });
