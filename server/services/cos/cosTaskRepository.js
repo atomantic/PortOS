@@ -103,9 +103,9 @@ function makePgBackend(db) {
     },
     async getTask(taskId, source) {
       const { rows } = await query(
-        `SELECT source, task, position FROM cos_tasks WHERE task_id = $1 AND ($2::text IS NULL OR source = $2)
+        `SELECT source, task, position FROM cos_tasks WHERE task_id = $1 AND source = ANY($2::text[])
          ORDER BY (source = 'user') DESC LIMIT 1`,
-        [taskId, source],
+        [taskId, source ? [source] : SOURCES],
       );
       return rows[0] ? { source: rows[0].source, task: rows[0].task, position: rows[0].position } : null;
     },
@@ -137,8 +137,8 @@ function makePgBackend(db) {
       return withTransaction(async (client) => {
         await lockVersions(client);
         const { rows } = await client.query(
-          'DELETE FROM cos_tasks WHERE task_id = $1 AND ($2::text IS NULL OR source = $2) RETURNING source',
-          [taskId, source],
+          'DELETE FROM cos_tasks WHERE task_id = $1 AND source = ANY($2::text[]) RETURNING source',
+          [taskId, source ? [source] : SOURCES],
         );
         if (rows.length > 0) await bumpVersions(client, [...new Set(rows.map((row) => row.source))]);
         return rows.length;

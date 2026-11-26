@@ -30,6 +30,65 @@ describe.skipIf(!runDb)('cos_tasks repository on PostgreSQL', () => {
   });
 });
 
+describe.skipIf(!runDb)('cos_tasks repository query plans', () => {
+  it('uses the primary key for source-less access and the partial index for ordered history', async () => {
+    await withTransaction(async (client) => {
+      // Shadow the shared tables with fixed statistics and the shipped indexes.
+      await client.query('CREATE TEMP TABLE cos_tasks (LIKE public.cos_tasks INCLUDING ALL) ON COMMIT DROP');
+      await client.query('CREATE TEMP TABLE cos_task_lists (LIKE public.cos_task_lists INCLUDING ALL) ON COMMIT DROP');
+      await client.query(`INSERT INTO cos_tasks (source, task_id, status, position, task)
+        SELECT source, lpad(n::text, 5, '0'),
+               CASE WHEN n % 4 = 0 THEN 'pending' ELSE 'completed' END, n, '{}'
+        FROM unnest(ARRAY['user', 'internal']) AS sources(source), generate_series(1, 6000) AS ids(n)`);
+      await client.query('ANALYZE cos_tasks');
+
+      const plans = [];
+      const explainAndQuery = async (sql, params) => {
+        if (sql.includes('FROM cos_tasks ')) {
+          const { rows: [{ 'QUERY PLAN': [{ Plan }] }] } = await client.query(`EXPLAIN (FORMAT JSON) ${sql}`, params);
+          plans.push(Plan);
+        }
+        return client.query(sql, params);
+      };
+      const backend = __makePgCosTaskBackend({
+        query: explainAndQuery,
+        withTransaction: (fn) => fn({ query: explainAndQuery }),
+      });
+
+      expect(await backend.getTask('00001', null)).toMatchObject({ source: 'user' });
+      expect(await backend.deleteById('00001', null)).toBe(2);
+      expect(await backend.pageCompleted('user', { before: '05000', offset: 0, limit: 25 })).toHaveLength(25);
+
+      const planNodes = (node) => [node, ...(node.Plans ?? []).flatMap(planNodes)];
+      const { rows: [{ indexrelid: primaryIndex }] } = await client.query(
+        "SELECT indexrelid::regclass::text AS indexrelid FROM pg_index WHERE indrelid = 'pg_temp.cos_tasks'::regclass AND indisprimary",
+      );
+      for (const plan of plans.slice(0, 2)) {
+        const nodes = planNodes(plan);
+        expect(nodes).toContainEqual(expect.objectContaining({
+          'Node Type': expect.stringMatching(/^(?:Bitmap )?Index Scan$/),
+          'Index Name': primaryIndex,
+          'Index Cond': expect.stringMatching(/source.*task_id/),
+        }));
+        expect(nodes).not.toContainEqual(expect.objectContaining({ 'Node Type': 'Seq Scan' }));
+      }
+
+      expect(plans).toHaveLength(3);
+      const pagingNodes = planNodes(plans[2]);
+      const { rows: [{ indexname: pagingIndex }] } = await client.query(`
+        SELECT indexname FROM pg_indexes
+        WHERE schemaname = (SELECT nspname FROM pg_namespace WHERE oid = pg_my_temp_schema())
+          AND tablename = 'cos_tasks'
+          AND indexdef LIKE '%(source, task_id DESC) WHERE (status = %'`);
+      expect(pagingNodes).toContainEqual(expect.objectContaining({
+        'Node Type': 'Index Scan',
+        'Index Name': pagingIndex,
+      }));
+      expect(pagingNodes).not.toContainEqual(expect.objectContaining({ 'Node Type': expect.stringMatching(/Sort$/) }));
+    });
+  });
+});
+
 // PostgreSQL refuses a lone surrogate in jsonb and NUL in jsonb/text; the file
 // stores these queues came from accepted both (#12815).
 describe.skipIf(!runDb)('cos_tasks repository text PostgreSQL would refuse', () => {
