@@ -15,7 +15,8 @@
 
 import { createDailyReminderScheduler } from '../dailyReminderScheduler.js';
 import { isLocalDay } from '../../lib/timezone.js';
-import { getPostConfig, getPostSessions, postConfigEvents } from './meatspacePost.js';
+import { getPostConfig, postConfigEvents } from './postConfig.js';
+import { getPostSessions } from './postSessionHistory.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from '../notifications.js';
 import { claimQueueDelivery } from '../reviewQueueDelivery.js';
 
